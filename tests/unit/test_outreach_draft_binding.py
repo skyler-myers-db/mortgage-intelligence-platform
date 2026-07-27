@@ -803,3 +803,61 @@ def test_campaign_approval_persists_proof_binding_and_replays_before_borrower_fe
     ]
     assert len(approval_inserts) == 1
     borrower_fetch.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("field", "changed_value"),
+    [
+        ("offer_code", "nurture"),
+        ("evidence_ids", ["ev-001"]),
+        ("draft_body", "Please review this governed option. Reply to review your options."),
+        ("draft_subject", "A different governed mortgage review"),
+        ("assigned_to_email", "loan.officer@entrada.ai"),
+        ("follow_up_in_days", 7),
+        ("bulk_id", "77777777-7777-4777-8777-777777777777"),
+        ("bulk_rationale", "A different governed bulk rationale"),
+    ],
+)
+def test_campaign_approval_idempotency_rejects_each_governed_payload_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_lakebase_client,
+    field: str,
+    changed_value: object,
+) -> None:
+    _install_campaign_rows(monkeypatch, fake_lakebase_client)
+    draft = _draft(
+        campaign_id=CAMPAIGN_A,
+        variant_name="Primary",
+        headers={"X-Forwarded-Email": OWNER},
+    )
+    monkeypatch.setattr(settings, "app_env", "production")
+    request_payload = _approval(
+        draft,
+        request_id="66666666-6666-4666-8666-666666666666",
+    )
+    headers = {"X-Forwarded-Email": OWNER}
+    first = client.post("/api/outreach/approve", json=request_payload, headers=headers)
+    assert first.status_code == 200, first.text
+
+    repo = app.dependency_overrides[get_outreach_repository]()
+    borrower_fetch = MagicMock(
+        side_effect=AssertionError("payload mismatch queried mutable UC borrower")
+    )
+    monkeypatch.setattr(repo, "find_borrower", borrower_fetch)
+    conflict = client.post(
+        "/api/outreach/approve",
+        json={**request_payload, field: changed_value},
+        headers=headers,
+    )
+
+    assert conflict.status_code == 409, (field, conflict.text)
+    assert conflict.json()["detail"] == (
+        "request_id already belongs to a different outreach decision"
+    )
+    approval_inserts = [
+        params
+        for sql, params in fake_lakebase_client.executes
+        if "INSERT INTO mip_app.approvals" in sql
+    ]
+    assert len(approval_inserts) == 1
+    borrower_fetch.assert_not_called()

@@ -3232,6 +3232,9 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
     --expected-client-id "$APP_SP_CLIENT_ID"
     --expected-scim-id "$APP_SP_SCIM_ID"
   )
+  export MIP_DEPLOYMENT_APP_OBJECT_ID="$APP_OBJECT_ID"
+  export MIP_DEPLOYMENT_APP_APPLICATION_ID="$APP_SP_CLIENT_ID"
+  export MIP_DEPLOYMENT_APP_SCIM_ID="$APP_SP_SCIM_ID"
   # shellcheck disable=SC2031  # Bounded account subshell does not change parent value.
   if same_identity_casefold \
     "$DATABRICKS_ACCOUNT_CLIENT_ID" "$APP_SP_CLIENT_ID"; then
@@ -4104,6 +4107,12 @@ if [[ "$APP_SIGNED_BLUE_AVAILABLE" -eq 1 ]]; then
       ;;
   esac
 fi
+if [[ -n "${_EXISTING_APP_ID:-}" && "$APP_UPGRADE_STATE" == "first_install" ]]; then
+  step "stop the exact unsigned rebase App before legacy proxy ACL migration"
+  run "$PYTHON" -m tools.databricks.stop_app_fail_closed \
+    --app-name "$_GRANTS_APP_NAME" \
+    "${APP_EXPECTED_IDENTITY_ARGS[@]}"
+fi
 step "grant and globally audit the dedicated Supervisor proxy caller"
 if [[ "$DRY_RUN" -eq 0 ]]; then
   AGENT_PROXY_ACCESS_MUTATED=1
@@ -4172,7 +4181,8 @@ run converge_agent_proxy_boundary \
   "${AGENT_PROXY_ACCESS_PRESERVE_ARGS[@]}"
 step "prove dual-authority agent-proxy Unity Catalog boundary"
 run_with_account_identity \
-  run_with_agent_proxy_credentials \
+  run_with_proof_signing_authority \
+    run_with_agent_proxy_credentials \
     "$PYTHON" -m tools.databricks.verify_agent_proxy_uc_boundary_dual_authority \
   --application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID" \
   --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL" \
@@ -4354,7 +4364,8 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
     fi
     step "prove dual-authority agent-runtime UC boundary before cutover"
     run_with_account_identity \
-      run_with_agent_runtime_credentials \
+      run_with_proof_signing_authority \
+        run_with_agent_runtime_credentials \
         "$PYTHON" -m tools.databricks.verify_agent_runtime_uc_boundary_dual_authority \
       --application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
       --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL" \
@@ -4811,7 +4822,8 @@ if [[ "$DRY_RUN" -eq 0 && "$FINAL_APP_PROVEN" -eq 1 ]]; then
     "$MIP_AGENT_SUPERVISOR_ENDPOINT_ID"
   step "re-prove final dual-authority agent-proxy Unity Catalog boundary"
   run_with_account_identity \
-    run_with_agent_proxy_credentials \
+    run_with_proof_signing_authority \
+      run_with_agent_proxy_credentials \
       "$PYTHON" -m tools.databricks.verify_agent_proxy_uc_boundary_dual_authority \
     --application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID" \
     --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL" \

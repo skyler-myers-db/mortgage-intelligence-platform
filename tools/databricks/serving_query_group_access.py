@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
-from collections.abc import Collection, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -30,16 +30,6 @@ class ManagedQueryGroupState:
     member_ids: tuple[str, ...]
 
 
-def _rule_value(value: object, name: str) -> object:
-    if isinstance(value, dict):
-        return value.get(name)
-    return getattr(value, name, None)
-
-
-def _rule_items(value: object) -> tuple[object, ...]:
-    return tuple(value) if isinstance(value, list | tuple) else ()
-
-
 def assert_managed_query_group_administration_isolated(
     client: Any,
     *,
@@ -54,12 +44,13 @@ def assert_managed_query_group_administration_isolated(
     An empty group may be intentionally retained while a nondeletable endpoint
     still names it in an ACL. That group remains associated with the identity
     through its deterministic name and external ID, so it must receive the
-    same administration proof as an active one-member group. Reject unrelated
-    membership as well as direct, nested-group, self-group, or broad manager
-    delegation to the protected identity. ``authoritative_effective_groups``
-    must be the target identity's own SCIM ``groups`` projection; workspace
-    admin group inventory is not authoritative under Automatic Identity
-    Management because it can omit account-only parent groups.
+    same administration proof as an active one-member group.
+
+    These groups are deliberately workspace-local. Workspace-local groups have
+    no account rule set; their credential-side management denial is proved by
+    an idempotent Workspace Groups SCIM PATCH in ``identity_boundary_probes``.
+    This admin-side check binds the exact resource plane, rejects unrelated
+    membership, and proves the target is not a workspace administrator.
     """
 
     account = account_id.strip()
@@ -105,45 +96,21 @@ def assert_managed_query_group_administration_isolated(
         effective_groups[group_id] = group_name
         effective_ids.add(canonical_id)
         effective_names.add(canonical_name)
-    protected_ids = {
-        principal.casefold(),
-        principal_id.casefold(),
-        state.contract.id.casefold(),
-        state.contract.name.casefold(),
-        *(group_id.casefold() for group_id in effective_groups),
-        *(group_name.casefold() for group_name in effective_groups.values()),
-    }
-    rule_name = (
-        f"accounts/{account}/groups/{state.contract.id}/ruleSets/default"
-    )
-    response = client.account_access_control_proxy.get_rule_set(rule_name, "")
-    response_name = str(_rule_value(response, "name") or "").strip()
-    etag = str(_rule_value(response, "etag") or "").strip()
-    rules = _rule_items(_rule_value(response, "grant_rules"))
-    if response_name != rule_name or not etag or len(rules) > 100:
+    group = _hydrated_group(client, group_id=state.contract.id)
+    meta = getattr(group, "meta", None)
+    resource_type = str(
+        getattr(getattr(meta, "resource_type", None), "value", None)
+        or getattr(meta, "resource_type", "")
+        or ""
+    ).strip()
+    if resource_type != "WorkspaceGroup":
         raise RuntimeError(
-            "managed serving-query group administration rule set is incomplete or unbounded"
+            "managed serving-query group is not bound to workspace-local SCIM"
         )
-    for rule in rules:
-        role = str(_rule_value(rule, "role") or "").strip().casefold()
-        principals = _rule_items(_rule_value(rule, "principals"))
-        if not role or not principals or len(principals) > 100:
-            raise RuntimeError(
-                "managed serving-query group administration rule is incomplete or unbounded"
-            )
-        if not any(token in role for token in ("admin", "manager", "owner")):
-            continue
-        for raw_principal in principals:
-            value = str(raw_principal or "").strip().casefold()
-            leaf = value.rstrip("/").rsplit("/", 1)[-1]
-            if (
-                not value
-                or leaf in {"*", "all", "all-users", "account-users", "users"}
-                or leaf in protected_ids
-            ):
-                raise RuntimeError(
-                    "managed serving-query member has effective group-administration authority"
-                )
+    if any(name.casefold() == "admins" for name in effective_groups.values()):
+        raise RuntimeError(
+            "managed serving-query member has workspace-administration authority"
+        )
     return state
 
 
@@ -306,6 +273,7 @@ def retire_managed_query_group(
     endpoint_id: str,
     application_id: str,
     service_principal_id: str,
+    assert_single_writer: Callable[[], None],
 ) -> bool:
     """Delete an endpoint-orphaned group only from a safe exact member state.
 
@@ -326,6 +294,7 @@ def retire_managed_query_group(
     members = set(state.member_ids)
     if members not in ({principal_id}, set()):
         raise RuntimeError("managed serving-query group contains an unrelated member")
+    assert_single_writer()
     client.groups.delete(state.contract.id)
     if (
         inspect_managed_query_group(
@@ -340,14 +309,15 @@ def retire_managed_query_group(
     return True
 
 
-def ensure_managed_query_membership(
+def ensure_managed_query_group(
     client: Any,
     *,
     endpoint_id: str,
     application_id: str,
     service_principal_id: str,
-) -> ManagedQueryGroup:
-    """Create the endpoint-bound group and atomically add its sole member."""
+    assert_single_writer: Callable[[], None] | None = None,
+) -> ManagedQueryGroupState:
+    """Create or bind the exact endpoint group without activating access."""
 
     principal_id = service_principal_id.strip()
     if not principal_id:
@@ -362,6 +332,8 @@ def ensure_managed_query_membership(
             endpoint_id=endpoint_id,
             application_id=application_id,
         )
+        if assert_single_writer is not None:
+            assert_single_writer()
         group = client.groups.create(
             display_name=name,
             external_id=managed_query_group_external_id(
@@ -381,7 +353,37 @@ def ensure_managed_query_membership(
     members = _member_ids(group)
     if members.difference({principal_id}):
         raise RuntimeError("managed serving-query group contains an unrelated member")
+    return ManagedQueryGroupState(
+        contract=contract,
+        member_ids=tuple(sorted(members)),
+    )
+
+
+def ensure_managed_query_membership(
+    client: Any,
+    *,
+    endpoint_id: str,
+    application_id: str,
+    service_principal_id: str,
+    assert_single_writer: Callable[[], None] | None = None,
+) -> ManagedQueryGroup:
+    """Create the endpoint-bound group and atomically add its sole member."""
+
+    principal_id = service_principal_id.strip()
+    if not principal_id:
+        raise ValueError("service-principal SCIM ID is required")
+    state = ensure_managed_query_group(
+        client,
+        endpoint_id=endpoint_id,
+        application_id=application_id,
+        service_principal_id=principal_id,
+        assert_single_writer=assert_single_writer,
+    )
+    contract = state.contract
+    members = set(state.member_ids)
     if principal_id not in members:
+        if assert_single_writer is not None:
+            assert_single_writer()
         client.groups.patch(
             id=contract.id,
             operations=[
@@ -392,7 +394,6 @@ def ensure_managed_query_membership(
             ],
             schemas=[_PATCH_SCHEMA],
         )
-        group = _hydrated_group(client, group_id=contract.id)
     postflight = assert_managed_query_group_members(
         client,
         endpoint_id=endpoint_id,
@@ -409,6 +410,7 @@ def remove_managed_query_membership(
     endpoint_id: str,
     application_id: str,
     service_principal_id: str,
+    assert_single_writer: Callable[[], None] | None = None,
 ) -> bool:
     """Atomically remove one identity from its endpoint-bound query group."""
 
@@ -435,6 +437,8 @@ def remove_managed_query_membership(
                 "the exact service principal"
             )
         return False
+    if assert_single_writer is not None:
+        assert_single_writer()
     client.groups.patch(
         id=contract.id,
         operations=[

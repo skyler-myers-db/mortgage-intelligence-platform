@@ -1479,14 +1479,14 @@ def test_converge_app_gateway_permissions_grants_outer_and_revokes_bypasses(monk
     monkeypatch.setattr(
         provision_agentic_resources,
         "grant_direct_can_query",
-        lambda _workspace, *, endpoint_name, service_principal: grants.append(
+        lambda _workspace, *, endpoint_name, service_principal, **_kwargs: grants.append(
             (endpoint_name, service_principal)
         ),
     )
     monkeypatch.setattr(
         provision_agentic_resources,
         "revoke_direct_permissions",
-        lambda _workspace, *, endpoint_name, service_principal, missing_ok: (
+        lambda _workspace, *, endpoint_name, service_principal, missing_ok, **_kwargs: (
             revocations.append((endpoint_name, service_principal, missing_ok)) or True
         ),
     )

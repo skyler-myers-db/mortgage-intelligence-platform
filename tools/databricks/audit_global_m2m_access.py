@@ -12,6 +12,8 @@ from tools.databricks.agent_runtime_access import (
     audit_global_no_genie_access,
 )
 from tools.databricks.identity_boundary_probes import (
+    ManagedWorkspaceGroupBinding,
+    managed_workspace_group_binding,
     probe_target_managed_query_group_administration_boundary,
 )
 from tools.databricks.oauth_credential_boundary import (
@@ -136,7 +138,11 @@ def _audit_managed_query_group_governance(
     denial remains an additional proof for every live endpoint-bound group.
     """
 
-    managed_groups_by_endpoint: dict[str, str] = {}
+    if not (account_id or "").strip():
+        raise RuntimeError(
+            "target-credential access governance requires the Databricks account id"
+        )
+    managed_groups_by_endpoint: dict[str, ManagedWorkspaceGroupBinding] = {}
     seen_names: set[str] = set()
     seen_endpoint_ids: set[str] = set()
     summaries = tuple(workspace.serving_endpoints.list())  # type: ignore[attr-defined]
@@ -170,19 +176,26 @@ def _audit_managed_query_group_governance(
             missing_ok=True,
         )
         if state is not None:
-            group_id = state.contract.id
+            binding = managed_workspace_group_binding(
+                workspace,
+                group_id=state.contract.id,
+            )
             if (
-                not group_id
-                or group_id in managed_groups_by_endpoint.values()
+                binding.name != state.contract.name
+                or binding.external_id != state.contract.external_id
+            ):
+                raise RuntimeError(
+                    "managed serving-query group immutable contract drifted"
+                )
+            if (
+                not binding.id
+                or binding.id
+                in {candidate.id for candidate in managed_groups_by_endpoint.values()}
             ):
                 raise RuntimeError(
                     "managed serving-query group immutable identity is ambiguous"
                 )
-            managed_groups_by_endpoint[endpoint_id] = group_id
-    if not (account_id or "").strip():
-        raise RuntimeError(
-            "target-credential access governance requires the Databricks account id"
-        )
+            managed_groups_by_endpoint[endpoint_id] = binding
     principal_id = _service_principal_scim_id(
         workspace,
         application_id=application_id,
@@ -208,8 +221,14 @@ def _audit_managed_query_group_governance(
             expected_workspace_scim_id=principal_id,
             workspace_host=workspace_host,
             account_id=str(account_id),
-            group_ids=tuple(sorted(managed_groups_by_endpoint.values())),
+            group_bindings=tuple(
+                sorted(
+                    managed_groups_by_endpoint.values(),
+                    key=lambda binding: binding.id,
+                )
+            ),
             assert_single_writer=assert_single_writer,
+            admin_workspace=workspace,
         )
     except RuntimeError:
         raise

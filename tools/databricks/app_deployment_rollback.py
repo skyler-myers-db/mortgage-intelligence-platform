@@ -67,6 +67,7 @@ from tools.databricks.converge_campaign_treatment_access import (
     Mode,
     converge_campaign_treatment_access,
 )
+from tools.databricks.deployment_lease_authority import held_assertion_from_env
 from tools.databricks.export_gateway_runtime_contract import (
     ExactGatewayRuntimeProof,
     resolve_exact_resource_proof,
@@ -423,12 +424,25 @@ def _converge_rollback_endpoint_acl(
     revoke_endpoints: tuple[str, ...] = (),
 ) -> None:
     principal, principal_id = _app_identity(workspace, app_name=app_name)
+    assertion: Callable[[], None] | None = None
+
+    def assert_single_writer() -> None:
+        nonlocal assertion
+        if assertion is None:
+            assertion = held_assertion_from_env(
+                workspace,
+                operation="signed App rollback Gateway ACL mutation",
+            )
+        else:
+            assertion()
+
     preserve_blue_and_revoke_managed_candidates(
         workspace,
         blue_endpoint=_rollback_gateway_endpoint(record),
         app_client_id=principal,
         app_scim_id=principal_id,
         candidate_endpoints=revoke_endpoints,
+        assert_before_mutation=assert_single_writer,
     )
 
 

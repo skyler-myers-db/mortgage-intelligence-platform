@@ -338,6 +338,7 @@ def provision(
     _pre_app_cleanup: _PreAppCleanupState | None = None,
     credential_boundary_factory: Callable[..., Any] | None = None,
     credential_writer_application_id: str | None = None,
+    gateway_mutation_assertion: Callable[[], None] | None = None,
 ) -> ProvisionResult:
     """Provision or refresh the M2M SP and return a structured result.
 
@@ -424,7 +425,6 @@ def provision(
             raise SystemExit(f"Invalid GitHub Actions secret name: {name!r}")
 
     client = client_factory()
-
     resolved_app_url = app_url.strip() if app_url else None
     if mint_secret and app_url_secret_name and not pre_app_bootstrap and not resolved_app_url:
         resolved_app_url = _resolve_live_app_url(client, app_name=app_name)
@@ -625,7 +625,6 @@ def provision(
             effective_group_names=set(effective_groups.values()),
             identity_role=identity_role,
         )
-
     created_lakebase_role = False
     if lakebase_instance:
         created_lakebase_role = _ensure_lakebase_service_principal_role(
@@ -633,7 +632,6 @@ def provision(
             instance_name=lakebase_instance,
             application_id=sp.application_id,
         )
-
     granted_can_query = False
     obsolete_gateway_endpoints = set(revoke_gateway_endpoints)
     if gateway_endpoint:
@@ -645,6 +643,7 @@ def provision(
             sp.application_id,
             sp_id=sp.id,
             effective_group_names=set(effective_groups.values()),
+            assert_single_writer=gateway_mutation_assertion,
         )
         granted_can_query = True
     for obsolete_endpoint in sorted(
@@ -657,6 +656,7 @@ def provision(
                 sp.application_id,
                 sp_id=sp.id,
                 effective_group_names=set(effective_groups.values()),
+                assert_single_writer=gateway_mutation_assertion,
             )
 
     granted_warehouse_can_use = False

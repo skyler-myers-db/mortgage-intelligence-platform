@@ -102,6 +102,10 @@ def test_revoke_managed_passes_the_pinned_scim_id_and_exact_endpoint(
 ) -> None:
     workspace = _workspace()
     observed: list[dict[str, object]] = []
+
+    def fence() -> None:
+        return None
+
     monkeypatch.setattr(
         access,
         "assert_workspace_admin_inventory_identity",
@@ -119,6 +123,7 @@ def test_revoke_managed_passes_the_pinned_scim_id_and_exact_endpoint(
         application_id=APPLICATION_ID,
         expected_scim_id=SCIM_ID,
         expected_inventory_principal="admin@example.com",
+        assert_single_writer=fence,
     )
 
     assert observed == [
@@ -128,6 +133,7 @@ def test_revoke_managed_passes_the_pinned_scim_id_and_exact_endpoint(
             "service_principal": APPLICATION_ID,
             "service_principal_id": SCIM_ID,
             "missing_ok": False,
+            "assert_single_writer": fence,
         }
     ]
 
@@ -155,6 +161,7 @@ def test_revoke_managed_refuses_scim_drift_before_mutation(
             application_id=APPLICATION_ID,
             expected_scim_id=SCIM_ID,
             expected_inventory_principal="admin@example.com",
+            assert_single_writer=lambda: None,
         )
 
     assert revoked == []
@@ -202,13 +209,19 @@ def test_cli_routes_exact_managed_revoke(
     monkeypatch.setattr(access, "WorkspaceClient", lambda: workspace)
     monkeypatch.setattr(
         access,
+        "held_assertion_from_env",
+        lambda *_args, **_kwargs: (lambda: None),
+    )
+    monkeypatch.setattr(
+        access,
         "revoke_managed",
         lambda client,
         *,
         endpoint,
         application_id,
         expected_scim_id,
-        expected_inventory_principal: observed.append(
+        expected_inventory_principal,
+        assert_single_writer: observed.append(
             (
                 client,
                 endpoint,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from databricks.sdk.errors import ResourceDoesNotExist
@@ -190,6 +191,7 @@ def test_empty_exact_managed_group_cannot_claim_active_signed_blue() -> None:
             blue_endpoint="retired-blue",
             app_client_id="app-client",
             app_scim_id="app-scim-id",
+            assert_before_mutation=lambda: None,
         )
 
 
@@ -267,6 +269,7 @@ def test_blue_is_preserved_while_reserved_managed_candidate_is_revoked_exactly(
             blue_endpoint="blue",
             app_client_id="app-client",
             app_scim_id="app-scim-id",
+            assert_before_mutation=lambda: None,
         )
         == "legacy"
     )
@@ -303,6 +306,7 @@ def test_mixed_candidate_is_rejected_before_any_managed_mutation(
             app_client_id="app-client",
             app_scim_id="app-scim-id",
             candidate_endpoints=("candidate",),
+            assert_before_mutation=lambda: None,
         )
 
     assert revoked == []
@@ -586,11 +590,12 @@ def test_retirement_revoke_mutates_only_exact_managed_membership(
         "inspect_app_gateway_access_mode",
         lambda *_a, **_kw: mode,
     )
-    monkeypatch.setattr(
-        access,
-        "revoke_direct_permissions",
-        lambda *_a, **kw: events.append(f"revoke:{kw['service_principal_id']}") or True,
-    )
+    def revoke(*_args: object, **kwargs: Any) -> bool:
+        kwargs["assert_single_writer"]()
+        events.append(f"revoke:{kwargs['service_principal_id']}")
+        return True
+
+    monkeypatch.setattr(access, "revoke_direct_permissions", revoke)
 
     assert (
         access.revoke_managed_app_access(

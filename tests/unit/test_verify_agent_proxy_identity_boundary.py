@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import replace
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from urllib.parse import unquote
 
 import pytest
@@ -11,6 +11,10 @@ from databricks.sdk.errors import PermissionDenied, ResourceDoesNotExist
 from databricks.sdk.service.apps import ComputeState
 
 from tools.databricks import verify_agent_proxy_identity_boundary as boundary
+from tools.databricks.agent_proxy_capability_group_access import (
+    managed_agent_proxy_group_external_id,
+    managed_agent_proxy_group_name,
+)
 from tools.databricks.serving_query_group_access import (
     managed_query_group_external_id,
     managed_query_group_name,
@@ -288,6 +292,45 @@ class _Statements:
 
 
 def _inventory() -> AgentProxyBoundaryInventory:
+    query_binding = boundary.ManagedWorkspaceGroupBinding(
+        id="managed-query-group-id",
+        name=PROXY_QUERY_GROUP,
+        external_id=managed_query_group_external_id(
+            endpoint_id="gateway-id",
+            application_id=PROXY_ID,
+        ),
+        resource_type="WorkspaceGroup",
+    )
+    supervisor_group_name = managed_agent_proxy_group_name(
+        resource_kind="supervisor",
+        resource_id=TARGET_SUPERVISOR,
+        application_id=PROXY_ID,
+    )
+    supervisor_binding = boundary.ManagedWorkspaceGroupBinding(
+        id="managed-supervisor-group-id",
+        name=supervisor_group_name,
+        external_id=managed_agent_proxy_group_external_id(
+            resource_kind="supervisor",
+            resource_id=TARGET_SUPERVISOR,
+            application_id=PROXY_ID,
+        ),
+        resource_type="WorkspaceGroup",
+    )
+    genie_group_name = managed_agent_proxy_group_name(
+        resource_kind="genie",
+        resource_id=TARGET_GENIE,
+        application_id=PROXY_ID,
+    )
+    genie_binding = boundary.ManagedWorkspaceGroupBinding(
+        id="managed-genie-group-id",
+        name=genie_group_name,
+        external_id=managed_agent_proxy_group_external_id(
+            resource_kind="genie",
+            resource_id=TARGET_GENIE,
+            application_id=PROXY_ID,
+        ),
+        resource_type="WorkspaceGroup",
+    )
     return AgentProxyBoundaryInventory(
         app_url="https://mip-app.databricksapps.com",
         app_names=("mip-app", "unrelated-app"),
@@ -304,7 +347,11 @@ def _inventory() -> AgentProxyBoundaryInventory:
         genie_space_ids=(TARGET_GENIE, "genie-other"),
         serving_endpoint_names=("gateway", "unrelated-endpoint"),
         foundation_endpoint_names=(),
-        managed_query_group_ids=("managed-query-group-id",),
+        managed_query_group_ids=(
+            "managed-query-group-id",
+            "managed-supervisor-group-id",
+            "managed-genie-group-id",
+        ),
         reviewed_supervisor_bindings=((TARGET_SUPERVISOR, "gateway", "gateway-id"),),
         reviewed_query_group_bindings=(
             (
@@ -317,6 +364,27 @@ def _inventory() -> AgentProxyBoundaryInventory:
                 ),
             ),
         ),
+        reviewed_capability_group_bindings=(
+            (
+                "supervisor",
+                TARGET_SUPERVISOR,
+                supervisor_group_name,
+                supervisor_binding.id,
+                supervisor_binding.external_id,
+            ),
+            (
+                "genie",
+                TARGET_GENIE,
+                genie_group_name,
+                genie_binding.id,
+                genie_binding.external_id,
+            ),
+        ),
+        managed_query_group_bindings=(
+            query_binding,
+            supervisor_binding,
+            genie_binding,
+        ),
     )
 
 
@@ -325,16 +393,54 @@ def _admin_inventory_workspace(
     supervisor_endpoint: str = "gateway",
     managed_groups: tuple[object, ...] | None = None,
 ) -> object:
-    groups = managed_groups or (
+    groups = managed_groups or tuple(
         SimpleNamespace(
-            id="managed-query-group-id",
-            display_name=PROXY_QUERY_GROUP,
-            external_id=managed_query_group_external_id(
-                endpoint_id="gateway-id",
-                application_id=PROXY_ID,
+            id=group_id,
+            display_name=name,
+            external_id=external_id,
+            meta=SimpleNamespace(resource_type="WorkspaceGroup"),
+        )
+        for group_id, name, external_id in (
+            (
+                "managed-query-group-id",
+                PROXY_QUERY_GROUP,
+                managed_query_group_external_id(
+                    endpoint_id="gateway-id",
+                    application_id=PROXY_ID,
+                ),
             ),
-        ),
+            (
+                "managed-supervisor-group-id",
+                managed_agent_proxy_group_name(
+                    resource_kind="supervisor",
+                    resource_id=TARGET_SUPERVISOR,
+                    application_id=PROXY_ID,
+                ),
+                managed_agent_proxy_group_external_id(
+                    resource_kind="supervisor",
+                    resource_id=TARGET_SUPERVISOR,
+                    application_id=PROXY_ID,
+                ),
+            ),
+            (
+                "managed-genie-group-id",
+                managed_agent_proxy_group_name(
+                    resource_kind="genie",
+                    resource_id=TARGET_GENIE,
+                    application_id=PROXY_ID,
+                ),
+                managed_agent_proxy_group_external_id(
+                    resource_kind="genie",
+                    resource_id=TARGET_GENIE,
+                    application_id=PROXY_ID,
+                ),
+            ),
+        )
     )
+    for group in groups:
+        if not hasattr(group, "meta"):
+            group.meta = SimpleNamespace(resource_type="WorkspaceGroup")
+    by_id = {str(group.id): group for group in groups}
     return SimpleNamespace(
         apps=SimpleNamespace(
             list=lambda: iter((SimpleNamespace(name="mip-app"),)),
@@ -349,7 +455,10 @@ def _admin_inventory_workspace(
             list_database_instances=lambda: iter((SimpleNamespace(name="lakebase-target"),))
         ),
         warehouses=SimpleNamespace(list=lambda: iter((SimpleNamespace(id=TARGET_WAREHOUSE),))),
-        groups=SimpleNamespace(list=lambda **_kwargs: iter(groups)),
+        groups=SimpleNamespace(
+            list=lambda **_kwargs: iter(groups),
+            get=lambda group_id: by_id[group_id],
+        ),
         api_client=SimpleNamespace(
             do=lambda *_args, **_kwargs: {
                 "supervisor_agent_id": TARGET_SUPERVISOR,
@@ -487,7 +596,7 @@ def test_admin_inventory_rejects_duplicate_managed_group_identity(
         external_id=f"{expected_external}:other",
     )
 
-    with pytest.raises(RuntimeError, match="inventory is ambiguous"):
+    with pytest.raises(RuntimeError, match="ambiguous|drifted"):
         collect_admin_inventory(
             _admin_inventory_workspace(managed_groups=(first, second)),
             app_name="mip-app",
@@ -553,7 +662,23 @@ def _workspace(
                     SimpleNamespace(
                         value="managed-query-group-id",
                         display=PROXY_QUERY_GROUP,
-                    )
+                    ),
+                    SimpleNamespace(
+                        value="managed-supervisor-group-id",
+                        display=managed_agent_proxy_group_name(
+                            resource_kind="supervisor",
+                            resource_id=TARGET_SUPERVISOR,
+                            application_id=PROXY_ID,
+                        ),
+                    ),
+                    SimpleNamespace(
+                        value="managed-genie-group-id",
+                        display=managed_agent_proxy_group_name(
+                            resource_kind="genie",
+                            resource_id=TARGET_GENIE,
+                            application_id=PROXY_ID,
+                        ),
+                    ),
                 ],
             )
         ),
@@ -589,8 +714,8 @@ def _workspace(
             target_genie_permissions_succeeds=target_genie_permissions_succeeds,
         ),
         genie=_Genie(expose_non_target=expose_non_target_genie),
-        account_access_control_proxy=SimpleNamespace(
-            get_rule_set=(lambda *_args: object()) if group_manager_succeeds else _denied
+        groups=SimpleNamespace(
+            patch=(lambda **_kwargs: object()) if group_manager_succeeds else _denied
         ),
         serving_endpoints=SimpleNamespace(
             get=endpoint_metadata,
@@ -608,6 +733,10 @@ def _account(*, admin_succeeds: bool = False) -> object:
 
 def _admin_workspace(*, state: object = ComputeState.STOPPED) -> object:
     permission = SimpleNamespace(permission_level="CAN_MANAGE", inherited=True)
+    managed_groups = {
+        group.id: group
+        for group in _admin_inventory_workspace().groups.list()
+    }
     return SimpleNamespace(
         apps=SimpleNamespace(
             get=lambda _name: SimpleNamespace(
@@ -641,6 +770,9 @@ def _admin_workspace(*, state: object = ComputeState.STOPPED) -> object:
                     ),
                 )
             )
+        ),
+        groups=SimpleNamespace(
+            get=lambda group_id: managed_groups[group_id]
         ),
     )
 
@@ -721,24 +853,28 @@ def test_proxy_boundary_rejects_managed_query_group_manager_authority() -> None:
         _verify(_workspace(group_manager_succeeds=True))
 
 
-def test_managed_query_group_probe_binds_account_and_group_ids() -> None:
-    observed: list[tuple[str, str]] = []
+def test_managed_query_group_probe_binds_workspace_group_and_same_name() -> None:
+    observed: list[dict[str, object]] = []
 
-    def denied(name: str, etag: str) -> object:
-        observed.append((name, etag))
+    def denied(**kwargs: object) -> object:
+        observed.append(kwargs)
         raise PermissionDenied("denied")
 
-    workspace = SimpleNamespace(account_access_control_proxy=SimpleNamespace(get_rule_set=denied))
-    boundary._verify_managed_group_denial(
-        workspace,
-        account_id="account-id",
-        group_ids=("group-one", "group-two"),
+    binding = boundary.ManagedWorkspaceGroupBinding(
+        id="group-one",
+        name="managed-one",
+        external_id="mip:serving-query:one",
+        resource_type="WorkspaceGroup",
+    )
+    boundary.verify_managed_query_group_administration_denied(
+        SimpleNamespace(groups=SimpleNamespace(patch=denied)),
+        group_bindings=(binding,),
     )
 
-    assert observed == [
-        ("accounts/account-id/groups/group-one/ruleSets/default", ""),
-        ("accounts/account-id/groups/group-two/ruleSets/default", ""),
-    ]
+    assert observed[0]["id"] == "group-one"
+    operation = cast(list[object], observed[0]["operations"])[0]
+    assert operation.path == "displayName"  # type: ignore[attr-defined]
+    assert operation.value == "managed-one"  # type: ignore[attr-defined]
 
 
 def test_proxy_boundary_accepts_only_authenticated_system_ai_foundation_metadata() -> None:
@@ -1141,6 +1277,12 @@ def _foundation_details() -> object:
 
 
 def _global_denial_inventory() -> boundary.AgentProxyCustomerResourceDenialInventory:
+    binding = boundary.ManagedWorkspaceGroupBinding(
+        id="managed-query-group-id",
+        name="mip-serving-query-managed",
+        external_id="mip:serving-query:managed",
+        resource_type="WorkspaceGroup",
+    )
     return boundary.AgentProxyCustomerResourceDenialInventory(
         supervisor_ids=("supervisor-hidden",),
         genie_space_ids=("genie-hidden",),
@@ -1149,6 +1291,7 @@ def _global_denial_inventory() -> boundary.AgentProxyCustomerResourceDenialInven
             ("foundation", "", "", True),
         ),
         managed_query_group_ids=("managed-query-group-id",),
+        managed_query_group_bindings=(binding,),
     )
 
 
@@ -1199,9 +1342,11 @@ def _global_denial_workspace(
             get_permissions=endpoint_permissions,
         ),
         genie=SimpleNamespace(get_space=genie_get),
-        account_access_control_proxy=SimpleNamespace(
-            get_rule_set=(
-                (lambda *_args: object()) if successful_read == "group-manager" else _denied
+        groups=SimpleNamespace(
+            patch=(
+                (lambda **_kwargs: object())
+                if successful_read == "group-manager"
+                else _denied
             )
         ),
     )
@@ -1300,16 +1445,18 @@ def test_global_denial_rejects_misclassified_foundation_endpoint() -> None:
 def test_global_denial_admin_inventory_is_target_free_and_classifies_foundation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    group = SimpleNamespace(
+        id="managed-query-group-id",
+        display_name="mip-serving-query-endpoint-proxy",
+        external_id="mip:serving-query:group",
+        meta=SimpleNamespace(resource_type="WorkspaceGroup"),
+    )
     workspace = SimpleNamespace(
         groups=SimpleNamespace(
-            list=lambda **_kwargs: iter(
-                (
-                    SimpleNamespace(
-                        id="managed-query-group-id",
-                        display_name="mip-serving-query-endpoint-proxy",
-                    ),
-                )
-            )
+            list=lambda **_kwargs: iter((group,)),
+            get=lambda group_id: group
+            if group_id == "managed-query-group-id"
+            else pytest.fail(group_id),
         ),
         serving_endpoints=SimpleNamespace(
             list=lambda: iter(

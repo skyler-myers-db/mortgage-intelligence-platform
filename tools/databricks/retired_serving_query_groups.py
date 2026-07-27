@@ -71,6 +71,7 @@ def retire_endpoint_query_groups(
             endpoint_id=endpoint_id,
             application_id=application_id,
             service_principal_id=scim_id,
+            assert_single_writer=assert_single_writer,
         )
 
 
@@ -106,7 +107,6 @@ def revoke_live_managed_query_access(
         )
     if mode == "none":
         return mode
-    assert_single_writer()
     if endpoint_identity(workspace, endpoint_name) != expected_endpoint:
         raise RuntimeError("live managed-query endpoint identity drifted before membership revoke")
     remove_managed_query_membership(
@@ -114,6 +114,7 @@ def revoke_live_managed_query_access(
         endpoint_id=endpoint_id,
         application_id=application_id,
         service_principal_id=scim_id,
+        assert_single_writer=assert_single_writer,
     )
     if endpoint_identity(workspace, endpoint_name) != expected_endpoint:
         raise RuntimeError("live managed-query endpoint identity drifted during membership revoke")

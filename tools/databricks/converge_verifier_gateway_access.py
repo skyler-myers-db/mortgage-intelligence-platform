@@ -7,6 +7,7 @@ import argparse
 import os
 import re
 import shlex
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -15,6 +16,7 @@ from databricks.sdk import WorkspaceClient
 from tools.databricks.audit_global_m2m_access import (
     assert_workspace_admin_inventory_identity,
 )
+from tools.databricks.deployment_lease_authority import held_assertion_from_env
 from tools.databricks.serving_endpoint_acl import revoke_direct_permissions
 
 _IDENTITY_ID_RE = re.compile(r"[A-Za-z0-9._-]{1,128}")
@@ -101,6 +103,7 @@ def revoke_managed(
     application_id: str,
     expected_scim_id: str,
     expected_inventory_principal: str,
+    assert_single_writer: Callable[[], None],
 ) -> bool:
     """Remove only the exact verifier's managed membership from one endpoint."""
 
@@ -121,6 +124,7 @@ def revoke_managed(
         service_principal=observed_application_id,
         service_principal_id=expected_id,
         missing_ok=False,
+        assert_single_writer=assert_single_writer,
     )
 
 
@@ -151,12 +155,17 @@ def main(argv: list[str] | None = None) -> int:
         )
         print("verifier immutable Gateway identity capture: PASS")
         return 0
+    assert_single_writer = held_assertion_from_env(
+        workspace,
+        operation="verifier Gateway compensation",
+    )
     revoke_managed(
         workspace,
         endpoint=args.endpoint,
         application_id=args.application_id,
         expected_scim_id=args.expected_scim_id,
         expected_inventory_principal=args.expected_inventory_principal,
+        assert_single_writer=assert_single_writer,
     )
     print("verifier green managed Gateway membership compensation: PASS")
     return 0

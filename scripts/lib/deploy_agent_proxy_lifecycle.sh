@@ -8,7 +8,8 @@ converge_agent_proxy_boundary() {
   local supervisor_endpoint="${3:?Supervisor endpoint is required}"
   local supervisor_endpoint_id="${4:?Supervisor endpoint ID is required}"
   shift 4
-  "$PYTHON" -m tools.databricks.agent_proxy_access \
+  run_with_proof_signing_authority \
+    "$PYTHON" -m tools.databricks.agent_proxy_access \
     --mode "$mode" \
     --supervisor-id "$supervisor_id" \
     --supervisor-endpoint "$supervisor_endpoint" \
@@ -84,7 +85,8 @@ converge_signed_blue_agent_proxy_boundary() {
 
 deny_all_agent_proxy_access() {
   local failed=0
-  "$PYTHON" -m tools.databricks.agent_proxy_access \
+  run_with_proof_signing_authority \
+    "$PYTHON" -m tools.databricks.agent_proxy_access \
     --mode deny-all \
     --application-id "${DATABRICKS_AGENT_PROXY_CLIENT_ID:?agent-proxy identity is required}" \
     --expected-inventory-principal "${DEPLOY_INVENTORY_PRINCIPAL:?inventory principal is required}" \

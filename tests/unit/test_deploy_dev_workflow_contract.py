@@ -1431,6 +1431,102 @@ def test_app_rollback_nested_authorities_export_scoped_credentials(
     assert "proof-secret" not in result.stdout + result.stderr
 
 
+def test_dual_authority_uc_wrappers_export_exact_bounded_credentials(
+    tmp_path: Path,
+) -> None:
+    probe = tmp_path / "uc-authority-probe.py"
+    proxy_result = tmp_path / "proxy-authority.json"
+    runtime_result = tmp_path / "runtime-authority.json"
+    names = (
+        "DATABRICKS_ACCOUNT_CLIENT_ID",
+        "DATABRICKS_ACCOUNT_CLIENT_SECRET",
+        "MIP_AI_GATEWAY_PROOF_SIGNING_KEY",
+        "DATABRICKS_AGENT_PROXY_CLIENT_ID",
+        "DATABRICKS_AGENT_PROXY_CLIENT_SECRET",
+        "DATABRICKS_AGENT_PROXY_CREDENTIAL_ID",
+        "DATABRICKS_AGENT_RUNTIME_CLIENT_ID",
+        "DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET",
+        "DATABRICKS_CLIENT_SECRET",
+    )
+    probe.write_text(
+        "import json, os, sys\n"
+        f"names = {names!r}\n"
+        "with open(sys.argv[1], 'w', encoding='utf-8') as handle:\n"
+        "    json.dump({name: os.environ.get(name) for name in names}, handle)\n",
+        encoding="utf-8",
+    )
+    command = textwrap.dedent(
+        f"""
+        set -euo pipefail
+        DRY_RUN=0
+        DIM=""
+        RED=""
+        RST=""
+        DATABRICKS_ACCOUNT_CLIENT_ID=account-client
+        DATABRICKS_ACCOUNT_CLIENT_SECRET=account-secret
+        MIP_AI_GATEWAY_PROOF_SIGNING_KEY=proof-secret
+        DATABRICKS_AGENT_PROXY_CLIENT_ID=proxy-client
+        DATABRICKS_AGENT_PROXY_CLIENT_SECRET=proxy-secret
+        DATABRICKS_AGENT_PROXY_CREDENTIAL_ID=proxy-credential
+        DATABRICKS_AGENT_RUNTIME_CLIENT_ID=runtime-client
+        DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET=runtime-secret
+        DATABRICKS_CLIENT_SECRET=unrelated-secret
+        export -n {' '.join(names)}
+        run() {{ "$@"; }}
+        {_shell_function("run_with_account_identity")}
+        {_shell_function("run_with_proof_signing_authority")}
+        {_shell_function("run_with_agent_proxy_credentials")}
+        {_shell_function("run_with_agent_runtime_credentials")}
+        run_with_account_identity \
+          run_with_proof_signing_authority \
+            run_with_agent_proxy_credentials \
+              {shlex.quote(sys.executable)} {shlex.quote(str(probe))} \
+              {shlex.quote(str(proxy_result))}
+        run_with_account_identity \
+          run_with_proof_signing_authority \
+            run_with_agent_runtime_credentials \
+              {shlex.quote(sys.executable)} {shlex.quote(str(probe))} \
+              {shlex.quote(str(runtime_result))}
+        """
+    )
+    env = {key: value for key, value in os.environ.items() if key not in names}
+
+    result = subprocess.run(
+        ["bash", "-c", command],
+        cwd=REPO,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    proxy = json.loads(proxy_result.read_text(encoding="utf-8"))
+    runtime = json.loads(runtime_result.read_text(encoding="utf-8"))
+    assert proxy == {
+        "DATABRICKS_ACCOUNT_CLIENT_ID": "account-client",
+        "DATABRICKS_ACCOUNT_CLIENT_SECRET": "account-secret",
+        "MIP_AI_GATEWAY_PROOF_SIGNING_KEY": "proof-secret",
+        "DATABRICKS_AGENT_PROXY_CLIENT_ID": "proxy-client",
+        "DATABRICKS_AGENT_PROXY_CLIENT_SECRET": "proxy-secret",
+        "DATABRICKS_AGENT_PROXY_CREDENTIAL_ID": "proxy-credential",
+        "DATABRICKS_AGENT_RUNTIME_CLIENT_ID": None,
+        "DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET": None,
+        "DATABRICKS_CLIENT_SECRET": None,
+    }
+    assert runtime == {
+        "DATABRICKS_ACCOUNT_CLIENT_ID": "account-client",
+        "DATABRICKS_ACCOUNT_CLIENT_SECRET": "account-secret",
+        "MIP_AI_GATEWAY_PROOF_SIGNING_KEY": "proof-secret",
+        "DATABRICKS_AGENT_PROXY_CLIENT_ID": None,
+        "DATABRICKS_AGENT_PROXY_CLIENT_SECRET": None,
+        "DATABRICKS_AGENT_PROXY_CREDENTIAL_ID": None,
+        "DATABRICKS_AGENT_RUNTIME_CLIENT_ID": "runtime-client",
+        "DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET": "runtime-secret",
+        "DATABRICKS_CLIENT_SECRET": None,
+    }
+
+
 def test_lakebase_bootstrap_receives_only_explicit_fresh_m2m_control_names() -> None:
     helper = _shell_function("run_with_lakebase_bootstrap_authority")
 
@@ -2299,7 +2395,15 @@ def test_deploy_uses_isolated_identity_for_agent_resource_ownership() -> None:
     assert "--supervisor-endpoint" in pre_cutover_proxy_block
     proxy_uc_block = runtime_block[proxy_uc_audit : proxy_uc_audit + 700]
     assert "run_with_account_identity" in proxy_uc_block
+    assert "run_with_proof_signing_authority" in proxy_uc_block
     assert "run_with_agent_proxy_credentials" in proxy_uc_block
+    runtime_uc_audit = runtime_block.index(
+        'step "prove dual-authority agent-runtime UC boundary before cutover"'
+    )
+    runtime_uc_block = runtime_block[runtime_uc_audit : runtime_uc_audit + 900]
+    assert "run_with_account_identity" in runtime_uc_block
+    assert "run_with_proof_signing_authority" in runtime_uc_block
+    assert "run_with_agent_runtime_credentials" in runtime_uc_block
     assert "--expected-serving-permission CAN_MANAGE" in runtime_block
     assert "--expected-serving-permission CAN_QUERY" in runtime_block
     assert '--genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}"' in runtime_block
@@ -2332,6 +2436,12 @@ def test_deploy_uses_isolated_identity_for_agent_resource_ownership() -> None:
         "tools.databricks.verify_agent_proxy_uc_boundary_dual_authority"
         in script[final_proxy_audit:proxy_secret_cleanup]
     )
+    final_proxy_uc_block = script[
+        final_proxy_uc_audit:final_proxy_identity_boundary
+    ]
+    assert "run_with_account_identity" in final_proxy_uc_block
+    assert "run_with_proof_signing_authority" in final_proxy_uc_block
+    assert "run_with_agent_proxy_credentials" in final_proxy_uc_block
     assert (
         "tools.databricks.verify_agent_proxy_identity_boundary"
         in script[final_proxy_identity_boundary:proxy_secret_cleanup]
@@ -5686,6 +5796,16 @@ def test_agent_proxy_acl_lifecycle_is_bound_and_compensated_before_lease_release
         < first_mutation
     )
     assert "AGENT_PROXY_ACCESS_MUTATED=1" not in script[lease_acquired:proxy_compensation_armed]
+    exact_identity_export = script.index(
+        'export MIP_DEPLOYMENT_APP_OBJECT_ID="$APP_OBJECT_ID"'
+    )
+    unsigned_rebase_stop = script.index(
+        'step "stop the exact unsigned rebase App before legacy proxy ACL migration"'
+    )
+    assert exact_identity_export < unsigned_rebase_stop < proxy_compensation_armed
+    stop_block = script[unsigned_rebase_stop:proxy_compensation_armed]
+    assert "tools.databricks.stop_app_fail_closed" in stop_block
+    assert '"${APP_EXPECTED_IDENTITY_ARGS[@]}"' in stop_block
     helper = _shell_function("converge_agent_proxy_boundary")
     for required in (
         "--supervisor-endpoint",
@@ -5753,6 +5873,10 @@ def test_agent_proxy_acl_lifecycle_is_bound_and_compensated_before_lease_release
     assert "--customer-resource-denial" in deny_all
     assert "--account-id" in deny_all
     assert "run_with_agent_proxy_credentials" in deny_all
+    assert "run_with_proof_signing_authority" in deny_all
+    assert "run_with_proof_signing_authority" in _shell_function(
+        "converge_agent_proxy_boundary"
+    )
 
     trap = _shell_function("restore_rendered_sql_fail_closed")
     assert trap.index("compensate_agent_proxy_access") < trap.index(
@@ -6258,6 +6382,7 @@ DATABRICKS_ACCOUNT_ID=account-id
 DEPLOY_INVENTORY_PRINCIPAL=admin@example.com
 run_with_account_identity() {{ "$@"; }}
 run_with_agent_proxy_credentials() {{ "$@"; }}
+run_with_proof_signing_authority() {{ "$@"; }}
 {_shell_function("deny_all_agent_proxy_access")}
 deny_all_agent_proxy_access
 """,

@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import sys
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from typing import Any
 
 from backend.agents.gateway_contract import DEFAULT_GATEWAY_ENDPOINT, LEGACY_GATEWAY_ENDPOINT
+from tools.databricks.deployment_lease_authority import held_assertion_from_env
 
 DOCS_RUNBOOK = "docs/security/m2m-oauth-setup.md"
 
@@ -462,6 +463,7 @@ def grant_can_query_on_endpoint(
     *,
     sp_id: str,
     effective_group_names: set[str],
+    assert_single_writer: Callable[[], None] | None = None,
 ) -> None:
     """Converge the verifier's exact, group-aware CAN_QUERY grant."""
 
@@ -470,12 +472,16 @@ def grant_can_query_on_endpoint(
     _diag(f"resolving serving endpoint id for endpoint={endpoint_name!r}")
     try:
         _diag(f"granting CAN_QUERY on endpoint={endpoint_name!r} to verifier identity")
+        assertion = assert_single_writer or held_assertion_from_env(
+            client, operation="M2M serving-endpoint ACL mutation"
+        )
         grant_direct_can_query(
             client,
             endpoint_name=endpoint_name,
             service_principal=sp_application_id,
             service_principal_id=sp_id,
             effective_group_names=effective_group_names,
+            assert_single_writer=assertion,
         )
     except Exception as exc:  # noqa: BLE001
         raise wrap_admin_error(exc, step="update serving endpoint permissions") from exc
@@ -488,12 +494,16 @@ def revoke_can_query_on_obsolete_endpoint(
     *,
     sp_id: str,
     effective_group_names: set[str],
+    assert_single_writer: Callable[[], None] | None = None,
 ) -> None:
     """Remove and disprove direct or group-derived access to an obsolete endpoint."""
 
     from tools.databricks.serving_endpoint_acl import revoke_direct_permissions
 
     try:
+        assertion = assert_single_writer or held_assertion_from_env(
+            client, operation="M2M serving-endpoint ACL mutation"
+        )
         removed = revoke_direct_permissions(
             client,
             endpoint_name=endpoint_name,
@@ -501,6 +511,7 @@ def revoke_can_query_on_obsolete_endpoint(
             missing_ok=True,
             service_principal_id=sp_id,
             effective_group_names=effective_group_names,
+            assert_single_writer=assertion,
         )
         _diag(
             f"{'revoked' if removed else 'verified absent'} verifier query access "

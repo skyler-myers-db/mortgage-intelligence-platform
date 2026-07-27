@@ -3,19 +3,47 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 from urllib.parse import quote
 
 from databricks.sdk import WorkspaceClient
+from tools.databricks.agent_proxy_acl_support import (
+    field as _field,
+)
+from tools.databricks.agent_proxy_acl_support import (
+    items as _items,
+)
+from tools.databricks.agent_proxy_acl_support import (
+    text as _text,
+)
+from tools.databricks.agent_proxy_acl_support import (
+    wait_exact_capability_projection as _wait_exact_capability_projection,
+)
+from tools.databricks.agent_proxy_capability_convergence import (
+    converge_genie_acl as _converge_genie_acl,
+)
+from tools.databricks.agent_proxy_capability_convergence import (
+    converge_supervisor_agent_acls as _converge_supervisor_agent_acls,
+)
+from tools.databricks.agent_proxy_capability_denial import (
+    revoke_all_genie_acls as _revoke_all_genie_acls,
+)
+from tools.databricks.agent_proxy_capability_denial import (
+    revoke_all_managed_capability_memberships as _revoke_all_managed_capability_memberships,
+)
+from tools.databricks.agent_proxy_capability_denial import (
+    revoke_all_supervisor_agent_acls as _revoke_all_supervisor_agent_acls,
+)
 from tools.databricks.agent_runtime_access import (
-    _genie_spaces,
     assert_runtime_creator,
-    audit_global_genie_access,
-    audit_global_no_genie_access,
 )
 from tools.databricks.audit_global_m2m_access import (
     assert_workspace_admin_inventory_identity,
+)
+from tools.databricks.deployment_lease_authority import held_assertion_from_env
+from tools.databricks.legacy_permissions_acl_cleanup import (
+    stopped_deployment_app_assertion,
 )
 from tools.databricks.m2m_access_policy import resolve_effective_groups
 from tools.databricks.serving_endpoint_acl import (
@@ -24,47 +52,6 @@ from tools.databricks.serving_endpoint_acl import (
     inspect_exact_query_access_mode,
     revoke_all_direct_permissions,
 )
-
-
-def _field(value: object, name: str) -> object:
-    if isinstance(value, Mapping):
-        return value.get(name)
-    return getattr(value, name, None)
-
-
-def _text(value: object) -> str:
-    return str(getattr(value, "value", value) or "").strip()
-
-
-def _items(value: object) -> list[object]:
-    if value is None:
-        return []
-    if not isinstance(value, list):
-        raise RuntimeError("Supervisor Agent ACL inventory is malformed")
-    return value
-
-
-def _levels(entry: object, *, direct_only: bool = False) -> set[str]:
-    return {
-        _text(_field(permission, "permission_level")).upper()
-        for permission in _items(_field(entry, "all_permissions"))
-        if not direct_only or _field(permission, "inherited") is not True
-    }
-
-
-def _principal_entries(permissions: object, application_id: str) -> list[object]:
-    return [
-        entry
-        for entry in _items(_field(permissions, "access_control_list"))
-        if _text(_field(entry, "service_principal_name")) == application_id
-    ]
-
-
-def _principal_entry(permissions: object, application_id: str) -> object | None:
-    matches = _principal_entries(permissions, application_id)
-    if len(matches) > 1:
-        raise RuntimeError("ACL contains duplicate entries for the agent-proxy service principal")
-    return matches[0] if matches else None
 
 
 def _service_principal_id(workspace: Any, *, application_id: str) -> str:
@@ -109,28 +96,6 @@ def _supervisor_agents(workspace: Any) -> dict[str, str]:
         if page_token in seen:
             raise RuntimeError("Supervisor Agent inventory pagination cycled")
         seen.add(page_token)
-
-
-def _assert_agent_acl(
-    permissions: object,
-    *,
-    application_id: str,
-    effective_group_names: set[str],
-    expect_query: bool,
-) -> None:
-    entry = _principal_entry(permissions, application_id)
-    direct = _levels(entry or {}, direct_only=True)
-    effective = _levels(entry or {})
-    expected = {"CAN_QUERY"} if expect_query else set()
-    if direct != expected or effective != expected:
-        raise RuntimeError("agent-proxy Supervisor Agent ACL postflight failed")
-    inherited_groups = {
-        _text(_field(candidate, "group_name"))
-        for candidate in _items(_field(permissions, "access_control_list"))
-        if _text(_field(candidate, "group_name")) in effective_group_names and _levels(candidate)
-    }
-    if inherited_groups:
-        raise RuntimeError("agent-proxy has inherited Supervisor Agent access")
 
 
 def _supervisor_binding(
@@ -224,131 +189,6 @@ def _reviewed_bindings(
     )
 
 
-def _converge_supervisor_agent_acls(
-    workspace: Any,
-    *,
-    agents: dict[str, str],
-    reviewed_ids: set[str],
-    application_id: str,
-    effective_group_names: set[str],
-    audit_only: bool,
-) -> None:
-    for agent_id in sorted(agents):
-        path = f"/api/2.0/permissions/supervisor-agents/{quote(agent_id, safe='')}"
-        permissions = workspace.api_client.do("GET", path)
-        expect_query = agent_id in reviewed_ids
-        try:
-            _assert_agent_acl(
-                permissions,
-                application_id=application_id,
-                effective_group_names=effective_group_names,
-                expect_query=expect_query,
-            )
-            continue
-        except RuntimeError:
-            if audit_only:
-                raise
-        entry = _principal_entry(permissions, application_id)
-        direct = _levels(entry or {}, direct_only=True)
-        desired = {"CAN_QUERY"} if expect_query else set()
-        if direct != desired:
-            workspace.api_client.do(
-                "PATCH",
-                path,
-                body={
-                    "access_control_list": [
-                        {
-                            "service_principal_name": application_id,
-                            "permission_level": ("CAN_QUERY" if expect_query else "NO_PERMISSIONS"),
-                        }
-                    ]
-                },
-            )
-    for agent_id in sorted(agents):
-        permissions = workspace.api_client.do(
-            "GET",
-            f"/api/2.0/permissions/supervisor-agents/{quote(agent_id, safe='')}",
-        )
-        _assert_agent_acl(
-            permissions,
-            application_id=application_id,
-            effective_group_names=effective_group_names,
-            expect_query=agent_id in reviewed_ids,
-        )
-
-
-def _converge_genie_acl(
-    workspace: Any,
-    *,
-    genie_space_id: str,
-    application_id: str,
-    service_principal_id: str,
-    effective_group_names: set[str],
-    audit_only: bool,
-) -> None:
-    spaces = _genie_spaces(workspace)
-    if genie_space_id not in spaces:
-        raise RuntimeError("reviewed Genie space is absent from global inventory")
-    if audit_only:
-        for space_id in sorted(spaces):
-            permissions = workspace.api_client.do(
-                "GET",
-                f"/api/2.0/permissions/genie/{quote(space_id, safe='')}",
-            )
-            _principal_entry(permissions, application_id)
-        audit_global_genie_access(
-            workspace,
-            reviewed_genie_space_id=genie_space_id,
-            application_id=application_id,
-            service_principal_id=service_principal_id,
-            effective_group_names=effective_group_names,
-        )
-        return
-    for space_id in sorted(spaces):
-        path = f"/api/2.0/permissions/genie/{quote(space_id, safe='')}"
-        permissions = workspace.api_client.do("GET", path)
-        entry = _principal_entry(permissions, application_id)
-        direct = _levels(entry or {}, direct_only=True)
-        effective = _levels(entry or {})
-        inherited_groups = {
-            _text(_field(candidate, "group_name"))
-            for candidate in _items(_field(permissions, "access_control_list"))
-            if _text(_field(candidate, "group_name")) in effective_group_names
-            and _levels(candidate)
-        }
-        expected = {"CAN_RUN"} if space_id == genie_space_id else set()
-        if direct == expected and effective == expected and not inherited_groups:
-            continue
-        if direct != expected:
-            workspace.api_client.do(
-                "PATCH",
-                path,
-                body={
-                    "access_control_list": [
-                        {
-                            "service_principal_name": application_id,
-                            "permission_level": (
-                                "CAN_RUN" if space_id == genie_space_id else "NO_PERMISSIONS"
-                            ),
-                        }
-                    ]
-                },
-            )
-    for space_id in sorted(spaces):
-        permissions = workspace.api_client.do(
-            "GET",
-            f"/api/2.0/permissions/genie/{quote(space_id, safe='')}",
-        )
-        _principal_entry(permissions, application_id)
-    audit_global_genie_access(
-        workspace,
-        reviewed_genie_space_id=genie_space_id,
-        application_id=application_id,
-        service_principal_id=service_principal_id,
-        effective_group_names=effective_group_names,
-    )
-
-
 def grant_and_audit_agent_proxy_access(
     workspace: Any,
     *,
@@ -362,6 +202,8 @@ def grant_and_audit_agent_proxy_access(
     preserved_supervisor_bindings: tuple[tuple[str, str, str], ...] = (),
     legacy_pinned_supervisor_endpoints: tuple[str, ...] = (),
     audit_only: bool = False,
+    assert_single_writer: Callable[[], None],
+    assert_legacy_cleanup_quiesced: Callable[[], None],
 ) -> None:
     """Converge and prove the exact Supervisor, endpoint, and Genie boundary."""
 
@@ -431,16 +273,24 @@ def grant_and_audit_agent_proxy_access(
         agents=agents,
         reviewed_ids=reviewed_ids,
         application_id=proxy_id,
-        effective_group_names=group_names,
+        service_principal_id=principal_id,
         audit_only=audit_only,
+        assert_single_writer=assert_single_writer,
+        assert_legacy_cleanup_quiesced=assert_legacy_cleanup_quiesced,
     )
     _converge_genie_acl(
         workspace,
         genie_space_id=genie_space_id,
         application_id=proxy_id,
         service_principal_id=principal_id,
-        effective_group_names=group_names,
         audit_only=audit_only,
+        assert_single_writer=assert_single_writer,
+        assert_legacy_cleanup_quiesced=assert_legacy_cleanup_quiesced,
+    )
+    group_names = _wait_exact_capability_projection(
+        workspace,
+        application_id=proxy_id,
+        service_principal_id=principal_id,
     )
     if audit_only:
         audit_global_serving_endpoint_access(
@@ -460,104 +310,8 @@ def grant_and_audit_agent_proxy_access(
             service_principal_id=principal_id,
             effective_group_names=group_names,
             legacy_pinned_endpoint_names=observed_legacy_pins,
+            assert_single_writer=assert_single_writer,
         )
-
-
-def _revoke_all_supervisor_agent_acls(
-    workspace: Any,
-    *,
-    agents: dict[str, str],
-    application_id: str,
-    effective_group_names: set[str],
-) -> None:
-    errors: list[str] = []
-    for agent_id in sorted(agents):
-        path = f"/api/2.0/permissions/supervisor-agents/{quote(agent_id, safe='')}"
-        try:
-            permissions = workspace.api_client.do("GET", path)
-            entries = _principal_entries(permissions, application_id)
-            if any(_levels(entry, direct_only=True) for entry in entries):
-                workspace.api_client.do(
-                    "PATCH",
-                    path,
-                    body={
-                        "access_control_list": [
-                            {
-                                "service_principal_name": application_id,
-                                "permission_level": "NO_PERMISSIONS",
-                            }
-                        ]
-                    },
-                )
-        except Exception as exc:  # noqa: BLE001 - attempt every independent revoke
-            errors.append(f"Supervisor {agent_id}: {type(exc).__name__}: {exc}")
-    for agent_id in sorted(agents):
-        try:
-            permissions = workspace.api_client.do(
-                "GET",
-                f"/api/2.0/permissions/supervisor-agents/{quote(agent_id, safe='')}",
-            )
-            _assert_agent_acl(
-                permissions,
-                application_id=application_id,
-                effective_group_names=effective_group_names,
-                expect_query=False,
-            )
-        except Exception as exc:  # noqa: BLE001 - collect the complete postflight
-            errors.append(f"Supervisor postflight {agent_id}: {type(exc).__name__}: {exc}")
-    if errors:
-        raise RuntimeError("Supervisor deny-all did not converge: " + "; ".join(errors))
-
-
-def _revoke_all_genie_acls(
-    workspace: Any,
-    *,
-    application_id: str,
-    service_principal_id: str,
-    effective_group_names: set[str],
-) -> None:
-    errors: list[str] = []
-    spaces = _genie_spaces(workspace)
-    for space_id in sorted(spaces):
-        path = f"/api/2.0/permissions/genie/{quote(space_id, safe='')}"
-        try:
-            permissions = workspace.api_client.do("GET", path)
-            entries = _principal_entries(permissions, application_id)
-            if any(_levels(entry, direct_only=True) for entry in entries):
-                workspace.api_client.do(
-                    "PATCH",
-                    path,
-                    body={
-                        "access_control_list": [
-                            {
-                                "service_principal_name": application_id,
-                                "permission_level": "NO_PERMISSIONS",
-                            }
-                        ]
-                    },
-                )
-        except Exception as exc:  # noqa: BLE001 - attempt every independent revoke
-            errors.append(f"Genie {space_id}: {type(exc).__name__}: {exc}")
-    for space_id in sorted(spaces):
-        try:
-            permissions = workspace.api_client.do(
-                "GET",
-                f"/api/2.0/permissions/genie/{quote(space_id, safe='')}",
-            )
-            _principal_entry(permissions, application_id)
-        except Exception as exc:  # noqa: BLE001 - collect the complete postflight
-            errors.append(f"Genie duplicate postflight {space_id}: {type(exc).__name__}: {exc}")
-    try:
-        audit_global_no_genie_access(
-            workspace,
-            application_id=application_id,
-            service_principal_id=service_principal_id,
-            effective_group_names=effective_group_names,
-        )
-    except Exception as exc:  # noqa: BLE001 - include postflight with mutation errors
-        errors.append(f"Genie postflight: {type(exc).__name__}: {exc}")
-    if errors:
-        raise RuntimeError("Genie deny-all did not converge: " + "; ".join(errors))
 
 
 def revoke_and_audit_agent_proxy_access(
@@ -565,6 +319,8 @@ def revoke_and_audit_agent_proxy_access(
     *,
     application_id: str,
     expected_inventory_principal: str,
+    assert_single_writer: Callable[[], None],
+    assert_legacy_cleanup_quiesced: Callable[[], None],
 ) -> None:
     """Revoke all direct proxy capability and prove the global zero boundary."""
 
@@ -584,6 +340,7 @@ def revoke_and_audit_agent_proxy_access(
                 workspace,
                 service_principal=proxy_id,
                 effective_group_names=set(),
+                assert_single_writer=assert_single_writer,
             ),
         ),
         (
@@ -592,7 +349,10 @@ def revoke_and_audit_agent_proxy_access(
                 workspace,
                 agents=_supervisor_agents(workspace),
                 application_id=proxy_id,
+                service_principal_id="",
                 effective_group_names=set(),
+                assert_single_writer=assert_single_writer,
+                assert_legacy_cleanup_quiesced=assert_legacy_cleanup_quiesced,
             ),
         ),
         (
@@ -602,6 +362,8 @@ def revoke_and_audit_agent_proxy_access(
                 application_id=proxy_id,
                 service_principal_id="",
                 effective_group_names=set(),
+                assert_single_writer=assert_single_writer,
+                assert_legacy_cleanup_quiesced=assert_legacy_cleanup_quiesced,
             ),
         ),
     )
@@ -614,7 +376,17 @@ def revoke_and_audit_agent_proxy_access(
     group_names: set[str] | None = None
     try:
         principal_id = _service_principal_id(workspace, application_id=proxy_id)
-        group_names = set(resolve_effective_groups(workspace, sp_id=principal_id).values())
+        _revoke_all_managed_capability_memberships(
+            workspace,
+            application_id=proxy_id,
+            service_principal_id=principal_id,
+            assert_single_writer=assert_single_writer,
+        )
+        group_names = _wait_exact_capability_projection(
+            workspace,
+            application_id=proxy_id,
+            service_principal_id=principal_id,
+        )
     except Exception as exc:  # noqa: BLE001 - report after every direct revoke was attempted
         failures["identity inventory"] = f"identity inventory: {type(exc).__name__}: {exc}"
     if principal_id is not None and group_names is not None:
@@ -626,6 +398,7 @@ def revoke_and_audit_agent_proxy_access(
                     service_principal=proxy_id,
                     service_principal_id=principal_id,
                     effective_group_names=group_names,
+                    assert_single_writer=assert_single_writer,
                 ),
             ),
             (
@@ -634,7 +407,10 @@ def revoke_and_audit_agent_proxy_access(
                     workspace,
                     agents=_supervisor_agents(workspace),
                     application_id=proxy_id,
+                    service_principal_id=principal_id,
                     effective_group_names=group_names,
+                    assert_single_writer=assert_single_writer,
+                    assert_legacy_cleanup_quiesced=assert_legacy_cleanup_quiesced,
                 ),
             ),
             (
@@ -644,6 +420,8 @@ def revoke_and_audit_agent_proxy_access(
                     application_id=proxy_id,
                     service_principal_id=principal_id,
                     effective_group_names=group_names,
+                    assert_single_writer=assert_single_writer,
+                    assert_legacy_cleanup_quiesced=assert_legacy_cleanup_quiesced,
                 ),
             ),
         )
@@ -657,6 +435,13 @@ def revoke_and_audit_agent_proxy_access(
         raise RuntimeError(
             "agent-proxy global denial is unproven: " + "; ".join(failures.values())
         )
+
+
+def _deployment_lease_assertion(workspace: Any) -> Callable[[], None]:
+    return held_assertion_from_env(
+        workspace,
+        operation="agent-proxy ACL mutation",
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -674,13 +459,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--runtime-application-id")
     parser.add_argument("--expected-inventory-principal", required=True)
     args = parser.parse_args(argv)
+    workspace = WorkspaceClient()
+    assert_single_writer = _deployment_lease_assertion(workspace)
+    assert_legacy_cleanup_quiesced = stopped_deployment_app_assertion(workspace)
     if args.mode == "deny-all":
         if args.legacy_pinned_supervisor_endpoint:
             parser.error("--legacy-pinned-supervisor-endpoint is invalid with deny-all")
         revoke_and_audit_agent_proxy_access(
-            WorkspaceClient(),
+            workspace,
             application_id=args.application_id,
             expected_inventory_principal=args.expected_inventory_principal,
+            assert_single_writer=assert_single_writer,
+            assert_legacy_cleanup_quiesced=assert_legacy_cleanup_quiesced,
         )
         print("[agent-proxy] global Supervisor, Genie, and serving denial: PASS")
         return 0
@@ -707,7 +497,7 @@ def main(argv: list[str] | None = None) -> int:
             "--preserve-supervisor-endpoint-id are required together"
         )
     grant_and_audit_agent_proxy_access(
-        WorkspaceClient(),
+        workspace,
         supervisor_id=args.supervisor_id,
         supervisor_endpoint=args.supervisor_endpoint,
         supervisor_endpoint_id=args.supervisor_endpoint_id,
@@ -718,6 +508,8 @@ def main(argv: list[str] | None = None) -> int:
         preserved_supervisor_bindings=((preserve_values,) if preserve_values[0] else ()),
         legacy_pinned_supervisor_endpoints=tuple(args.legacy_pinned_supervisor_endpoint),
         audit_only=args.mode == "audit",
+        assert_single_writer=assert_single_writer,
+        assert_legacy_cleanup_quiesced=assert_legacy_cleanup_quiesced,
     )
     print("[agent-proxy] exact Supervisor, endpoint, and Genie ACL boundary: PASS")
     return 0

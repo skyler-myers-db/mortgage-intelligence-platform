@@ -812,6 +812,7 @@ def preserve_blue_and_revoke_managed_candidates(
     app_client_id: str,
     app_scim_id: str,
     candidate_endpoints: Collection[str] = (),
+    assert_before_mutation: Callable[[], None],
 ) -> AppGatewayAccessMode:
     """Preserve blue exactly and remove only exact managed candidate membership."""
 
@@ -859,6 +860,7 @@ def preserve_blue_and_revoke_managed_candidates(
             service_principal=app_client_id,
             service_principal_id=app_scim_id,
             missing_ok=True,
+            assert_single_writer=assert_before_mutation,
         )
     return blue_mode
 
@@ -881,12 +883,12 @@ def revoke_managed_app_access(
         app_scim_id=app_scim_id,
     )
     if mode not in {"legacy", "mixed"}:
-        assert_before_mutation()
         revoke_direct_permissions(
             workspace,
             endpoint_name=endpoint_name,
             service_principal=app_client_id,
             service_principal_id=app_scim_id,
             missing_ok=missing_ok,
+            assert_single_writer=assert_before_mutation,
         )
     return mode

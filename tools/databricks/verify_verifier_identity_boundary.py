@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
 """Exercise the AI Gateway verifier identity's effective denial boundary.
 
-Workspace SCIM is not authoritative when Databricks automatic identity
-management hides nested account membership. This release gate therefore runs
-read-only control-plane and metadata probes as the verifier identity. It never
-invokes a non-target model, executes SQL on a non-target warehouse, or mutates
-permissions.
+The gate uses target-credential probes because admin-side SCIM can hide nested
+account membership. It never invokes non-target models or SQL, or changes permissions.
 """
 
 from __future__ import annotations
@@ -13,19 +10,17 @@ from __future__ import annotations
 import argparse
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
 from functools import partial
 from typing import Any
-from urllib.parse import quote
-from uuid import uuid4
 
 import requests
 
-from backend.services.capability_serving_probes import query_serving_endpoint_with_proof
 from databricks.sdk import AccountClient, WorkspaceClient
 from databricks.sdk.service.sql import ExecuteStatementRequestOnWaitTimeout
 from tools.databricks import identity_boundary_probes as boundary_probes
-from tools.databricks.agent_runtime_access import _genie_spaces
+from tools.databricks.agent_proxy_identity_inventory_groups import (
+    collect_managed_proxy_workspace_groups,
+)
 from tools.databricks.audit_global_m2m_access import (
     assert_workspace_admin_inventory_identity,
 )
@@ -37,15 +32,17 @@ from tools.databricks.m2m_workspace_auth import (
     bind_exact_workspace_m2m_auth,
     reviewed_databricks_account_origin,
 )
-from tools.databricks.serving_endpoint_acl import is_platform_foundation_endpoint
+from tools.databricks.verifier_customer_resource_denial import (
+    VerifierCustomerResourceDenialInventory,
+    collect_admin_customer_resource_denial_inventory,
+    verify_customer_resource_denial_boundary,
+)
 
 _RELATION_RE = re.compile(
     r"^(?P<catalog>[A-Za-z_][A-Za-z0-9_]*)\."
     r"(?P<schema>[A-Za-z_][A-Za-z0-9_]*)\."
     r"(?P<table>[A-Za-z_][A-Za-z0-9_]*)$"
 )
-_MAX_GLOBAL_INVENTORY = 1000
-_DENIAL_PROMPT = "Confirm readiness without calling tools or including borrower data."
 
 
 def _text(value: object, name: str) -> str:
@@ -65,120 +62,6 @@ def _expect_denied(label: str, operation: Callable[[], object]) -> None:
             return
         raise RuntimeError(f"{label} was inconclusive: {type(exc).__name__}: {exc}") from exc
     raise RuntimeError(f"{label} unexpectedly succeeded")
-
-
-@dataclass(frozen=True)
-class VerifierCustomerResourceDenialInventory:
-    serving_endpoints: tuple[tuple[str, str, str, bool], ...]
-    genie_space_ids: tuple[str, ...]
-
-
-def _bounded_unique(values: list[str], *, label: str) -> tuple[str, ...]:
-    if (
-        len(values) > _MAX_GLOBAL_INVENTORY
-        or any(not value for value in values)
-        or len(values) != len(set(values))
-    ):
-        raise RuntimeError(f"{label} inventory is empty, duplicated, or unbounded")
-    return tuple(sorted(values))
-
-
-def collect_admin_customer_resource_denial_inventory(
-    workspace: Any,
-) -> VerifierCustomerResourceDenialInventory:
-    """Capture customer serving targets, foundation metadata, and all Genie targets."""
-
-    names = _bounded_unique(
-        [_text(item, "name") for item in workspace.serving_endpoints.list()],
-        label="serving endpoint",
-    )
-    endpoints: list[tuple[str, str, str, bool]] = []
-    for name in names:
-        details = workspace.serving_endpoints.get(name)
-        foundation = is_platform_foundation_endpoint(details)
-        endpoint_id = _text(details, "id")
-        task = _text(details, "task")
-        if not foundation and (_text(details, "name") != name or not endpoint_id or not task):
-            raise RuntimeError(
-                f"non-foundation serving endpoint {name!r} lacks identity or query protocol"
-            )
-        endpoints.append((name, endpoint_id, task, foundation))
-    genie_ids = _bounded_unique(list(_genie_spaces(workspace)), label="Genie")
-    return VerifierCustomerResourceDenialInventory(
-        serving_endpoints=tuple(endpoints),
-        genie_space_ids=genie_ids,
-    )
-
-
-def verify_customer_resource_denial_boundary(
-    *,
-    workspace: Any,
-    inventory: VerifierCustomerResourceDenialInventory,
-    expected_application_id: str,
-) -> None:
-    """Prove no customer-serving or Genie capability for the verifier credential.
-
-    System foundation endpoints are metadata-classified only because their
-    invocation protocol is not a customer serving securable.
-    """
-
-    me = workspace.current_user.me()
-    authenticated = {
-        value for value in (_text(me, "application_id"), _text(me, "user_name")) if value
-    }
-    if authenticated != {expected_application_id}:
-        raise RuntimeError(
-            "authenticated verifier identity does not match the configured application id"
-        )
-    for name, endpoint_id, task, foundation in inventory.serving_endpoints:
-        if foundation:
-            try:
-                details = workspace.serving_endpoints.get(name)
-            except Exception as exc:  # noqa: BLE001 - classify provider denial
-                if _is_denied(exc):
-                    continue
-                raise RuntimeError(
-                    f"foundation endpoint metadata {name} was inconclusive: "
-                    f"{type(exc).__name__}: {exc}"
-                ) from exc
-            if not is_platform_foundation_endpoint(details):
-                raise RuntimeError(
-                    f"visible endpoint {name!r} is not a system.ai foundation endpoint"
-                )
-            continue
-        _expect_denied(
-            f"serving endpoint metadata {name}",
-            partial(workspace.serving_endpoints.get, name),
-        )
-        _expect_denied(
-            f"serving endpoint permission administration {name}",
-            partial(workspace.serving_endpoints.get_permissions, endpoint_id),
-        )
-        _expect_denied(
-            f"serving endpoint query capability {name}",
-            partial(
-                query_serving_endpoint_with_proof,
-                workspace,
-                name,
-                task=task,
-                prompt=_DENIAL_PROMPT,
-                client_request_id=f"mip-verifier-denial-{uuid4().hex}",
-                max_tokens=16,
-            ),
-        )
-    for space_id in inventory.genie_space_ids:
-        _expect_denied(
-            f"Genie space metadata {space_id}",
-            partial(workspace.genie.get_space, space_id),
-        )
-        _expect_denied(
-            f"Genie permission administration {space_id}",
-            partial(
-                workspace.api_client.do,
-                "GET",
-                f"/api/2.0/permissions/genie/{quote(space_id, safe='')}",
-            ),
-        )
 
 
 def _state(response: object) -> str:
@@ -617,7 +500,7 @@ def verify_boundary(
     account: Any,
     expected_application_id: str,
     account_id: str,
-    managed_query_group_ids: tuple[str, ...],
+    managed_query_group_bindings: tuple[boundary_probes.ManagedWorkspaceGroupBinding, ...],
     app_name: str,
     app_url: str,
     protected_service_principal_id: str,
@@ -641,7 +524,9 @@ def verify_boundary(
             "authenticated verifier identity does not match the configured application id"
         )
     boundary_probes.verify_managed_query_group_administration_denied(
-        workspace, account_id=account_id, group_ids=managed_query_group_ids
+        workspace,
+        group_bindings=managed_query_group_bindings,
+        admin_workspace=admin_workspace,
     )
 
     _expect_denied(
@@ -836,7 +721,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     admin_workspace = WorkspaceClient()
     customer_inventory: VerifierCustomerResourceDenialInventory | None = None
-    managed_query_group_ids: tuple[str, ...] = ()
+    managed_query_group_bindings: tuple[boundary_probes.ManagedWorkspaceGroupBinding, ...] = ()
     if args.customer_resource_denial:
         assert_workspace_admin_inventory_identity(
             admin_workspace,
@@ -844,8 +729,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         customer_inventory = collect_admin_customer_resource_denial_inventory(admin_workspace)
     else:
-        managed_query_group_ids = boundary_probes.collect_attached_managed_query_group_ids(
-            admin_workspace, expected_application_id=args.expected_application_id
+        managed_query_group_bindings = collect_managed_proxy_workspace_groups(
+            admin_workspace
         )
     client_id, client_secret = bind_exact_workspace_m2m_auth(
         admin_workspace=admin_workspace,
@@ -861,6 +746,7 @@ def main(argv: list[str] | None = None) -> int:
             workspace=workspace,
             inventory=customer_inventory,
             expected_application_id=args.expected_application_id,
+            admin_workspace=admin_workspace,
         )
         print(
             "verifier customer-created serving and Genie denial boundary: PASS "
@@ -879,7 +765,7 @@ def main(argv: list[str] | None = None) -> int:
         account=account,
         expected_application_id=args.expected_application_id,
         account_id=args.account_id,
-        managed_query_group_ids=managed_query_group_ids,
+        managed_query_group_bindings=managed_query_group_bindings,
         app_name=args.app_name,
         app_url=args.app_url,
         protected_service_principal_id=args.protected_service_principal_id,

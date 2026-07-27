@@ -290,12 +290,14 @@ def test_managed_query_group_retirement_is_exact_and_idempotent() -> None:
         endpoint_id="managed-id",
         application_id="app-sp",
         service_principal_id="sp-id",
+        assert_single_writer=lambda: None,
     )
     assert not retire_managed_query_group(
         client,
         endpoint_id="managed-id",
         application_id="app-sp",
         service_principal_id="sp-id",
+        assert_single_writer=lambda: None,
     )
 
 
@@ -314,7 +316,31 @@ def test_managed_query_group_retirement_rejects_unrelated_member() -> None:
             endpoint_id="managed-id",
             application_id="app-sp",
             service_principal_id="sp-id",
+            assert_single_writer=lambda: None,
         )
+
+
+def test_managed_query_group_delete_rechecks_lease_after_hydration() -> None:
+    groups = _Groups()
+    _seed_managed_group(
+        groups,
+        endpoint="managed",
+        application_id="app-sp",
+        member_ids=("sp-id",),
+    )
+
+    with pytest.raises(RuntimeError, match="deployment lease lost"):
+        retire_managed_query_group(
+            _client(_Serving(), groups),
+            endpoint_id="managed-id",
+            application_id="app-sp",
+            service_principal_id="sp-id",
+            assert_single_writer=lambda: (_ for _ in ()).throw(
+                RuntimeError("deployment lease lost")
+            ),
+        )
+
+    assert "group-1" in groups.by_id
 
 
 def test_remove_managed_query_membership_requires_exact_scim_id() -> None:
@@ -410,6 +436,91 @@ def test_grant_creates_group_acl_and_atomic_membership() -> None:
     assert serving.replaced == []
 
 
+def test_serving_group_create_requires_live_lease_at_mutation_boundary() -> None:
+    class _NoCreateAfterLeaseLoss(_Groups):
+        def create(self, *, display_name: str, external_id: str) -> object:
+            pytest.fail(
+                f"lease loss must prevent group create: {display_name=} {external_id=}"
+            )
+
+    serving = _Serving()
+    groups = _NoCreateAfterLeaseLoss()
+    with pytest.raises(RuntimeError, match="deployment lease lost"):
+        grant_direct_can_query(
+            _client(serving, groups),
+            endpoint_name="outer",
+            service_principal="app-sp",
+            service_principal_id="sp-id",
+            effective_group_names=set(),
+            assert_single_writer=lambda: (_ for _ in ()).throw(
+                RuntimeError("deployment lease lost")
+            ),
+        )
+
+    assert serving.updated == []
+    assert groups.patch_calls == []
+
+
+def test_serving_acl_update_rechecks_lease_after_group_hydration() -> None:
+    serving = _Serving()
+    groups = _Groups()
+    _seed_managed_group(
+        groups,
+        endpoint="outer",
+        application_id="app-sp",
+        member_ids=(),
+    )
+
+    with pytest.raises(RuntimeError, match="deployment lease lost"):
+        grant_direct_can_query(
+            _client(serving, groups),
+            endpoint_name="outer",
+            service_principal="app-sp",
+            service_principal_id="sp-id",
+            effective_group_names=set(),
+            assert_single_writer=lambda: (_ for _ in ()).throw(
+                RuntimeError("deployment lease lost")
+            ),
+        )
+
+    assert serving.updated == []
+    assert groups.patch_calls == []
+
+
+def test_serving_membership_patch_rechecks_lease_after_acl_read() -> None:
+    group_name = managed_query_group_name(
+        endpoint_id="outer-id",
+        application_id="app-sp",
+    )
+    serving = _Serving(
+        ServingEndpointPermissions(
+            access_control_list=[_group_entry(group_name, "CAN_QUERY")]
+        )
+    )
+    groups = _Groups()
+    _seed_managed_group(
+        groups,
+        endpoint="outer",
+        application_id="app-sp",
+        member_ids=(),
+    )
+
+    with pytest.raises(RuntimeError, match="deployment lease lost"):
+        grant_direct_can_query(
+            _client(serving, groups),
+            endpoint_name="outer",
+            service_principal="app-sp",
+            service_principal_id="sp-id",
+            effective_group_names=set(),
+            assert_single_writer=lambda: (_ for _ in ()).throw(
+                RuntimeError("deployment lease lost")
+            ),
+        )
+
+    assert serving.updated == []
+    assert groups.patch_calls == []
+
+
 def test_grant_postflight_rejects_member_added_with_endpoint_acl() -> None:
     serving = _Serving()
     groups = _Groups()
@@ -420,7 +531,7 @@ def test_grant_postflight_rejects_member_added_with_endpoint_acl() -> None:
         )
 
     serving.on_update = inject_unrelated_member
-    with pytest.raises(RuntimeError, match="membership contract drifted"):
+    with pytest.raises(RuntimeError, match="unrelated member"):
         grant_direct_can_query(
             _client(serving, groups),
             endpoint_name="outer",

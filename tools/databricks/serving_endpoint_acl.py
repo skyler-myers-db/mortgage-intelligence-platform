@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection
+from collections.abc import Callable, Collection
 from typing import Any, Literal
 
 from databricks.sdk.errors import NotFound, ResourceDoesNotExist
@@ -13,6 +13,7 @@ from databricks.sdk.service.serving import (
 from tools.databricks.m2m_access_policy import resolve_effective_groups
 from tools.databricks.serving_query_group_access import (
     assert_managed_query_group_members,
+    ensure_managed_query_group,
     ensure_managed_query_membership,
     inspect_managed_query_group,
     managed_query_group_name,
@@ -566,15 +567,12 @@ def grant_direct_can_query(
     service_principal: str,
     service_principal_id: str | None = None,
     effective_group_names: set[str] | None = None,
+    assert_single_writer: Callable[[], None] | None = None,
 ) -> None:
     """Grant CAN_QUERY through an atomically revocable endpoint-bound group."""
-
     endpoint_id = _endpoint_id(client, endpoint_name, missing_ok=False)
     assert endpoint_id is not None
-    principal_id = service_principal_id or _service_principal_id(
-        client,
-        service_principal,
-    )
+    principal_id = service_principal_id or _service_principal_id(client, service_principal)
     permissions = client.serving_endpoints.get_permissions(endpoint_id)
     direct_entry = _principal_entry(permissions, service_principal)
     if direct_entry is not None and _all_levels(direct_entry):
@@ -583,20 +581,19 @@ def grant_direct_can_query(
             f"{endpoint_name!r}; the provider has no atomic principal delete"
         )
     managed_group = managed_query_group_name(
-        endpoint_id=endpoint_id,
-        application_id=service_principal,
+        endpoint_id=endpoint_id, application_id=service_principal
     )
-    ensure_managed_query_membership(
-        client,
-        endpoint_id=endpoint_id,
-        application_id=service_principal,
-        service_principal_id=principal_id,
+    ensure_managed_query_group(
+        client, endpoint_id=endpoint_id, application_id=service_principal,
+        service_principal_id=principal_id, assert_single_writer=assert_single_writer,
     )
     group_entry = _exact_group_entry(permissions, managed_group)
     if (
         _direct_level(group_entry or object()) != "CAN_QUERY"
         or _all_levels(group_entry or object()) != {"CAN_QUERY"}
     ):
+        if assert_single_writer is not None:
+            assert_single_writer()
         client.serving_endpoints.update_permissions(
             endpoint_id,
             access_control_list=[
@@ -606,6 +603,10 @@ def grant_direct_can_query(
                 )
             ],
         )
+    ensure_managed_query_membership(
+        client, endpoint_id=endpoint_id, application_id=service_principal,
+        service_principal_id=principal_id, assert_single_writer=assert_single_writer,
+    )
     permissions = client.serving_endpoints.get_permissions(endpoint_id)
     assert_managed_query_group_members(
         client,
@@ -650,6 +651,7 @@ def revoke_direct_permissions(
     missing_ok: bool = False,
     service_principal_id: str | None = None,
     effective_group_names: set[str] | None = None,
+    assert_single_writer: Callable[[], None] | None = None,
 ) -> bool:
     """Atomically remove one identity from its managed endpoint query group.
 
@@ -672,6 +674,7 @@ def revoke_direct_permissions(
         endpoint_id=endpoint_id,
         application_id=service_principal,
         service_principal_id=principal_id,
+        assert_single_writer=assert_single_writer,
     )
     postflight = client.serving_endpoints.get_permissions(endpoint_id)
     group_names = (
@@ -710,6 +713,7 @@ def converge_exact_direct_can_query(
     service_principal_id: str | None = None,
     effective_group_names: set[str] | None = None,
     legacy_pinned_endpoint_names: Collection[str] = (),
+    assert_single_writer: Callable[[], None] | None = None,
 ) -> None:
     """Converge managed CAN_QUERY while preserving reviewed legacy pins read-only."""
 
@@ -785,6 +789,7 @@ def converge_exact_direct_can_query(
             missing_ok=True,
             service_principal_id=principal_id,
             effective_group_names=group_names,
+            assert_single_writer=assert_single_writer,
         )
     for name in sorted(reviewed - legacy_pinned):
         grant_direct_can_query(
@@ -793,6 +798,7 @@ def converge_exact_direct_can_query(
             service_principal=principal,
             service_principal_id=principal_id,
             effective_group_names=group_names,
+            assert_single_writer=assert_single_writer,
         )
     audited_groups.update(
         _effective_group_names(
@@ -818,6 +824,7 @@ def revoke_all_direct_permissions(
     service_principal: str,
     service_principal_id: str | None = None,
     effective_group_names: set[str] | None = None,
+    assert_single_writer: Callable[[], None] | None = None,
 ) -> None:
     """Remove every managed membership and prove no customer-serving access."""
 
@@ -865,6 +872,7 @@ def revoke_all_direct_permissions(
                 missing_ok=True,
                 service_principal_id=principal_id,
                 effective_group_names=group_names,
+                assert_single_writer=assert_single_writer,
             )
         except Exception as exc:  # noqa: BLE001 - attempt every endpoint revoke
             errors.append(f"{name}: {type(exc).__name__}: {exc}")

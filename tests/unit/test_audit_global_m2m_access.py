@@ -500,8 +500,9 @@ def test_target_membership_proof_runs_without_managed_query_groups(
                 "expected_workspace_scim_id": "app-scim",
                 "workspace_host": "https://workspace.cloud.databricks.com",
                 "account_id": "account-id",
-                "group_ids": (),
+                "group_bindings": (),
                 "assert_single_writer": credential_lease,
+                "admin_workspace": workspace,
             },
         }
     ]
@@ -546,10 +547,27 @@ def test_managed_group_governance_uses_exact_endpoint_and_principal_ids(
         "inspect_managed_query_group",
         lambda *_args, endpoint_id, **_kwargs: (
             SimpleNamespace(
-                contract=SimpleNamespace(id=f"{endpoint_id}-group")
+                contract=SimpleNamespace(
+                    id=f"{endpoint_id}-group",
+                    name=f"{endpoint_id}-managed",
+                    external_id=f"mip:serving-query:{endpoint_id}",
+                )
             )
             if endpoint_id in {"green-immutable", "retired-empty-immutable"}
             else None
+        ),
+    )
+    monkeypatch.setattr(
+        audit,
+        "managed_workspace_group_binding",
+        lambda _workspace, *, group_id: audit.ManagedWorkspaceGroupBinding(
+            id=group_id,
+            name=f"{group_id.removesuffix('-group')}-managed",
+            external_id=(
+                "mip:serving-query:"
+                f"{group_id.removesuffix('-immutable-group')}-immutable"
+            ),
+            resource_type="WorkspaceGroup",
         ),
     )
     monkeypatch.setattr(
@@ -583,11 +601,22 @@ def test_managed_group_governance_uses_exact_endpoint_and_principal_ids(
                 "expected_workspace_scim_id": "app-scim",
                 "workspace_host": "https://workspace.cloud.databricks.com",
                 "account_id": "account-id",
-                "group_ids": (
-                    "green-immutable-group",
-                    "retired-empty-immutable-group",
+                "group_bindings": (
+                    audit.ManagedWorkspaceGroupBinding(
+                        id="green-immutable-group",
+                        name="green-immutable-managed",
+                        external_id="mip:serving-query:green-immutable",
+                        resource_type="WorkspaceGroup",
+                    ),
+                    audit.ManagedWorkspaceGroupBinding(
+                        id="retired-empty-immutable-group",
+                        name="retired-empty-immutable-managed",
+                        external_id="mip:serving-query:retired-empty-immutable",
+                        resource_type="WorkspaceGroup",
+                    ),
                 ),
                 "assert_single_writer": credential_lease,
+                "admin_workspace": workspace,
             },
         }
     ]
@@ -613,7 +642,7 @@ def test_managed_group_governance_uses_exact_endpoint_and_principal_ids(
     ]
 
 
-def test_empty_group_rejects_hidden_account_parent_manager_from_target_probe() -> None:
+def test_empty_group_rejects_workspace_admin_from_target_probe() -> None:
     endpoint_id = "retired-endpoint-id"
     application_id = "app-client"
     managed_group = SimpleNamespace(
@@ -627,8 +656,8 @@ def test_empty_group_rejects_hidden_account_parent_manager_from_target_probe() -
             application_id=application_id,
         ),
         members=[],
+        meta=SimpleNamespace(resource_type="WorkspaceGroup"),
     )
-    rule_name = "accounts/account-id/groups/managed-group-id/ruleSets/default"
     workspace = SimpleNamespace(
         config=SimpleNamespace(host="https://workspace.cloud.databricks.com"),
         serving_endpoints=SimpleNamespace(
@@ -647,18 +676,6 @@ def test_empty_group_rejects_hidden_account_parent_manager_from_target_probe() -
             if group_id == managed_group.id
             else (_ for _ in ()).throw(AssertionError(group_id)),
         ),
-        account_access_control_proxy=SimpleNamespace(
-            get_rule_set=lambda name, etag: SimpleNamespace(
-                name=name if name == rule_name else "",
-                etag="rule-etag" if etag == "" else "",
-                grant_rules=[
-                    SimpleNamespace(
-                        role="roles/group.manager",
-                        principals=["groups/hidden-account-parent-id"],
-                    )
-                ],
-            )
-        ),
     )
     account = SimpleNamespace(
         service_principals=SimpleNamespace(
@@ -668,7 +685,7 @@ def test_empty_group_rejects_hidden_account_parent_manager_from_target_probe() -
         )
     )
 
-    with pytest.raises(RuntimeError, match="administration authority"):
+    with pytest.raises(RuntimeError, match="workspace-administration authority"):
         audit._audit_managed_query_group_governance(
             workspace,
             account_id="account-id",
@@ -676,6 +693,6 @@ def test_empty_group_rejects_hidden_account_parent_manager_from_target_probe() -
             assert_single_writer=lambda: None,
             account_factory=lambda: account,
             effective_group_probe=lambda *_args, **_kwargs: {
-                "hidden-account-parent-id": "hidden-account-parent"
+                "workspace-admins-id": "admins"
             },
         )

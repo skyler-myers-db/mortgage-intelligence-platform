@@ -2539,6 +2539,7 @@ def test_retired_endpoint_group_cleanup_is_exact_and_idempotent() -> None:
             members=([SimpleNamespace(value=scim_id)] if application_id == "app-client" else []),
         )
     deletes: list[str] = []
+    events: list[str] = []
 
     class _Groups:
         def list(self, *, filter: str) -> list[object]:
@@ -2546,9 +2547,12 @@ def test_retired_endpoint_group_cleanup_is_exact_and_idempotent() -> None:
             return [group for group in by_id.values() if group.display_name == expected_name]
 
         def get(self, group_id: str) -> object:
+            events.append(f"get:{group_id}")
             return by_id[group_id]
 
         def delete(self, group_id: str) -> None:
+            assert events[-1] == "lease"
+            events.append(f"delete:{group_id}")
             deletes.append(group_id)
             del by_id[group_id]
 
@@ -2558,20 +2562,29 @@ def test_retired_endpoint_group_cleanup_is_exact_and_idempotent() -> None:
         ),
         groups=_Groups(),
     )
-    leases: list[str] = []
     kwargs = {
         "workspace": workspace,
         "endpoint_name": OLD_GATEWAY,
         "endpoint_id": OLD_GATEWAY_ID,
         "principals": tuple(applications.items()),
-        "assert_single_writer": lambda: leases.append("lease"),
+        "assert_single_writer": lambda: events.append("lease"),
     }
 
     retired_groups.retire_endpoint_query_groups(**kwargs)
+    first_pass_events = tuple(events)
     retired_groups.retire_endpoint_query_groups(**kwargs)
 
     assert deletes == ["group-app-client", "group-verifier-client"]
-    assert leases == ["lease", "lease", "lease", "lease"]
+    for group_id in deletes:
+        delete_index = first_pass_events.index(f"delete:{group_id}")
+        assert first_pass_events[delete_index - 2 : delete_index + 1] == (
+            f"get:{group_id}",
+            "lease",
+            f"delete:{group_id}",
+        )
+    assert not any(
+        event.startswith(("get:", "delete:")) for event in events[len(first_pass_events) :]
+    )
     assert by_id == {}
 
 

@@ -6,7 +6,7 @@ import os
 import re
 import time
 from collections.abc import Callable, Iterable
-from functools import partial
+from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
@@ -16,6 +16,7 @@ from backend.services.capability_serving_probes import (
 )
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.errors import Unauthenticated
+from databricks.sdk.service.iam import Patch, PatchOp, PatchSchema
 from tools.databricks.ai_gateway_tool_trace import is_cold_start_error
 from tools.databricks.authorization_denial import is_authorization_denied
 from tools.databricks.oauth_credential_creation import (
@@ -47,6 +48,17 @@ _QUERY_PROMPT = (
     "Confirm that the governed Mortgage Growth Agent is ready for a "
     "human-review-only workflow. Do not call tools or include borrower data."
 )
+_PATCH_SCHEMA = PatchSchema.URN_IETF_PARAMS_SCIM_API_MESSAGES_2_0_PATCH_OP
+
+
+@dataclass(frozen=True)
+class ManagedWorkspaceGroupBinding:
+    """Admin-attested identity of one workspace-local capability group."""
+
+    id: str
+    name: str
+    external_id: str
+    resource_type: str
 
 
 def _text(value: object, name: str) -> str:
@@ -104,11 +116,102 @@ def exact_agent_responses_endpoint_id(details: object, *, endpoint: str) -> str:
     return endpoint_id
 
 
-def collect_attached_managed_query_group_ids(
+def _workspace_group_binding(group: object) -> ManagedWorkspaceGroupBinding:
+    meta = (
+        group.get("meta")
+        if isinstance(group, dict)
+        else getattr(group, "meta", None)
+    )
+    binding = ManagedWorkspaceGroupBinding(
+        id=_text(group, "id"),
+        name=_text(group, "display_name") or _text(group, "displayName"),
+        external_id=_text(group, "external_id") or _text(group, "externalId"),
+        resource_type=(
+            _text(meta or {}, "resource_type")
+            or _text(meta or {}, "resourceType")
+        ),
+    )
+    if (
+        not binding.id
+        or not binding.name
+        or not binding.external_id
+        or binding.resource_type != "WorkspaceGroup"
+    ):
+        raise RuntimeError(
+            "managed serving-query group is not an exact workspace-local group"
+        )
+    return binding
+
+
+def managed_workspace_group_binding(
+    workspace: Any,
+    *,
+    group_id: str,
+) -> ManagedWorkspaceGroupBinding:
+    """Hydrate and bind one exact workspace-local group by immutable ID."""
+
+    reviewed_id = group_id.strip()
+    if not reviewed_id:
+        raise ValueError("managed workspace-group ID is required")
+    binding = _workspace_group_binding(workspace.groups.get(reviewed_id))
+    if binding.id != reviewed_id:
+        raise RuntimeError("managed workspace-group immutable identity drifted")
+    return binding
+
+
+def collect_managed_workspace_group_bindings(
+    workspace: Any,
+    *,
+    prefix_contracts: tuple[tuple[str, str], ...],
+) -> tuple[ManagedWorkspaceGroupBinding, ...]:
+    """Bind every workspace-local group matching reviewed name/external prefixes."""
+
+    if (
+        not prefix_contracts
+        or len(prefix_contracts) != len(set(prefix_contracts))
+        or any(not name or not external for name, external in prefix_contracts)
+    ):
+        raise ValueError("managed workspace-group prefix contracts are required")
+    summaries = tuple(workspace.groups.list(attributes="id,displayName"))
+    if len(summaries) > _MAX_INVENTORY:
+        raise RuntimeError("managed workspace-group inventory is unbounded")
+    bindings: list[ManagedWorkspaceGroupBinding] = []
+    for summary in summaries:
+        name = _text(summary, "display_name") or _text(summary, "displayName")
+        matches = tuple(
+            contract
+            for contract in prefix_contracts
+            if name.startswith(contract[0])
+        )
+        if not matches:
+            continue
+        if len(matches) != 1:
+            raise RuntimeError("managed workspace-group name contract is ambiguous")
+        binding = managed_workspace_group_binding(
+            workspace,
+            group_id=_text(summary, "id"),
+        )
+        if (
+            binding.name != name
+            or not binding.external_id.startswith(matches[0][1])
+        ):
+            raise RuntimeError("managed workspace-group immutable contract drifted")
+        bindings.append(binding)
+    ids = tuple(binding.id.casefold() for binding in bindings)
+    names = tuple(binding.name.casefold() for binding in bindings)
+    if (
+        len(ids) != len(set(ids))
+        or len(names) != len(set(names))
+    ):
+        raise RuntimeError("managed workspace-group inventory is ambiguous")
+    return tuple(sorted(bindings, key=lambda binding: binding.id))
+
+
+def collect_attached_managed_query_group_bindings(
     workspace: Any,
     *,
     expected_application_id: str,
-) -> tuple[str, ...]:
+) -> tuple[ManagedWorkspaceGroupBinding, ...]:
     """Inventory every managed serving-query group associated with one exact SP.
 
     Active groups are associated by exact membership. Empty retired groups are
@@ -181,7 +284,7 @@ def collect_attached_managed_query_group_ids(
     summaries = tuple(workspace.groups.list(attributes="id,displayName"))
     if len(summaries) > _MAX_INVENTORY:
         raise RuntimeError("managed serving-query group inventory is unbounded")
-    attached: list[str] = []
+    attached: list[ManagedWorkspaceGroupBinding] = []
     seen_group_ids: set[str] = set()
     seen_group_names: set[str] = set()
     for summary in summaries:
@@ -199,10 +302,11 @@ def collect_attached_managed_query_group_ids(
         seen_group_ids.add(group_id)
         seen_group_names.add(name)
         group = workspace.groups.get(group_id)
-        external_id = _text(group, "external_id")
+        binding = _workspace_group_binding(group)
+        external_id = binding.external_id
         if (
-            _text(group, "id") != group_id
-            or _text(group, "display_name") != name
+            binding.id != group_id
+            or binding.name != name
             or _MANAGED_GROUP_EXTERNAL_ID_RE.fullmatch(
                 external_id
             )
@@ -218,47 +322,102 @@ def collect_attached_managed_query_group_ids(
         if associated_external_id is not None and external_id != associated_external_id:
             raise RuntimeError("managed serving-query group deterministic contract drifted")
         if principal_id in member_ids or associated_external_id is not None:
-            attached.append(group_id)
-    return _bounded_unique(
-        attached,
-        label="attached managed serving-query group",
-        allow_empty=True,
+            attached.append(binding)
+    identities = tuple(binding.id for binding in attached)
+    names = tuple(binding.name.casefold() for binding in attached)
+    if (
+        len(attached) > _MAX_INVENTORY
+        or len(identities) != len(set(identities))
+        or len(names) != len(set(names))
+    ):
+        raise RuntimeError(
+            "attached managed serving-query group inventory is ambiguous"
+        )
+    return tuple(sorted(attached, key=lambda binding: binding.id))
+
+
+def collect_attached_managed_query_group_ids(
+    workspace: Any,
+    *,
+    expected_application_id: str,
+) -> tuple[str, ...]:
+    """Compatibility projection for callers that only persist immutable IDs."""
+
+    return tuple(
+        binding.id
+        for binding in collect_attached_managed_query_group_bindings(
+            workspace,
+            expected_application_id=expected_application_id,
+        )
     )
 
 
 def verify_managed_query_group_administration_denied(
     workspace: Any,
     *,
-    account_id: str,
-    group_ids: tuple[str, ...],
+    group_bindings: tuple[ManagedWorkspaceGroupBinding, ...],
+    admin_workspace: Any | None = None,
 ) -> None:
-    """Prove the authenticated identity cannot administer each attached group."""
+    """Prove the identity cannot administer exact workspace-local groups.
 
-    account_identifier = account_id.strip()
-    if not account_identifier:
-        raise ValueError("Databricks account ID is required for managed-group denial")
-    reviewed = _bounded_unique(
-        group_ids,
-        label="attached managed serving-query group",
-        allow_empty=True,
-    )
-    for group_id in reviewed:
-        operation = partial(
-            workspace.account_access_control_proxy.get_rule_set,
-            f"accounts/{account_identifier}/groups/{group_id}/ruleSets/default",
-            "",
+    A same-name SCIM replacement is semantically idempotent. Success therefore
+    proves forbidden group-management authority without changing the reviewed
+    contract, while an authorization denial proves the intended boundary.
+    """
+
+    reviewed_ids = tuple(binding.id for binding in group_bindings)
+    reviewed_names = tuple(binding.name.casefold() for binding in group_bindings)
+    if (
+        len(group_bindings) > _MAX_INVENTORY
+        or len(reviewed_ids) != len(set(reviewed_ids))
+        or len(reviewed_names) != len(set(reviewed_names))
+        or any(
+            not binding.id
+            or not binding.name
+            or not binding.external_id
+            or binding.resource_type != "WorkspaceGroup"
+            for binding in group_bindings
         )
+    ):
+        raise RuntimeError(
+            "attached managed workspace-group inventory is ambiguous"
+        )
+
+    def assert_admin_snapshot(binding: ManagedWorkspaceGroupBinding) -> None:
+        if admin_workspace is None:
+            return
+        observed = _workspace_group_binding(admin_workspace.groups.get(binding.id))
+        if observed != binding:
+            raise RuntimeError(
+                "managed serving-query workspace-group contract changed during "
+                "administration proof"
+            )
+
+    for binding in group_bindings:
+        assert_admin_snapshot(binding)
         try:
-            operation()
+            workspace.groups.patch(
+                id=binding.id,
+                operations=[
+                    Patch(
+                        op=PatchOp.REPLACE,
+                        path="displayName",
+                        value=binding.name,
+                    )
+                ],
+                schemas=[_PATCH_SCHEMA],
+            )
         except Exception as exc:  # noqa: BLE001 - classify provider authorization
             if is_authorization_denied(exc, allow_hidden_resource=True):
+                assert_admin_snapshot(binding)
                 continue
             raise RuntimeError(
                 "managed serving-query group administration "
-                f"{group_id} was inconclusive: {type(exc).__name__}: {exc}"
+                f"{binding.id} was inconclusive: {type(exc).__name__}: {exc}"
             ) from exc
         raise RuntimeError(
-            f"managed serving-query group administration {group_id} unexpectedly succeeded"
+            "managed serving-query group administration "
+            f"{binding.id} unexpectedly succeeded"
         )
 
 
@@ -270,8 +429,9 @@ def probe_target_managed_query_group_administration_boundary(
     expected_workspace_scim_id: str,
     workspace_host: str,
     account_id: str,
-    group_ids: tuple[str, ...],
+    group_bindings: tuple[ManagedWorkspaceGroupBinding, ...],
     assert_single_writer: Callable[[], None],
+    admin_workspace: Any | None = None,
     workspace_factory: Callable[..., Any] = WorkspaceClient,
 ) -> dict[str, str]:
     """Prove exact target credentials cannot administer their managed groups.
@@ -279,8 +439,8 @@ def probe_target_managed_query_group_administration_boundary(
     Workspace-admin SCIM can omit account-level nested memberships under
     Automatic Identity Management. Mint a bounded one-use credential for the
     target service principal, bind it to the exact workspace identity, capture
-    its own authoritative ``groups`` projection, and execute the read-only
-    group-administration denial probe under those same credentials. The
+    its own authoritative ``groups`` projection, and execute a semantically
+    idempotent group-administration denial probe under those same credentials. The
     temporary credential must be deleted even when any proof fails.
     """
 
@@ -296,10 +456,14 @@ def probe_target_managed_query_group_administration_boundary(
             "account principal, application, workspace principal, and host are required"
         )
     reviewed_group_ids = _bounded_unique(
-        group_ids,
+        (binding.id for binding in group_bindings),
         label="attached managed serving-query group",
         allow_empty=True,
     )
+    if tuple(sorted(reviewed_group_ids)) != tuple(
+        sorted(binding.id for binding in group_bindings)
+    ):
+        raise RuntimeError("attached managed workspace-group inventory is ambiguous")
     credential: ExactOAuthCredential | None = None
     probe_error: BaseException | None = None
     effective_groups: dict[str, str] = {}
@@ -379,8 +543,8 @@ def probe_target_managed_query_group_administration_boundary(
             group_names.add(group_name.casefold())
         verify_managed_query_group_administration_denied(
             target_workspace,
-            account_id=account_identifier,
-            group_ids=reviewed_group_ids,
+            group_bindings=group_bindings,
+            admin_workspace=admin_workspace,
         )
     except BaseException as exc:
         probe_error = exc

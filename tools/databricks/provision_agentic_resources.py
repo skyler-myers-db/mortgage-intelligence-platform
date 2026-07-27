@@ -333,11 +333,11 @@ def _converge_app_gateway_permissions(
     ).strip()
     if not service_principal:
         raise RuntimeError(f"app service principal not found for {app_name!r}")
-    assert_single_writer()
     grant_direct_can_query(
         workspace,
         endpoint_name=gateway_endpoint,
         service_principal=service_principal,
+        assert_single_writer=assert_single_writer,
     )
     print(
         f"[agentic] granted CAN_QUERY on {gateway_endpoint} "
@@ -365,12 +365,12 @@ def _converge_app_gateway_permissions(
                 "until green proof"
             )
             continue
-        assert_single_writer()
         removed = revoke_direct_permissions(
             workspace,
             endpoint_name=obsolete_endpoint,
             service_principal=service_principal,
             missing_ok=obsolete_endpoint != supervisor_endpoint,
+            assert_single_writer=assert_single_writer,
         )
         print(
             f"[agentic] {'revoked' if removed else 'verified absent'} direct App ACL "

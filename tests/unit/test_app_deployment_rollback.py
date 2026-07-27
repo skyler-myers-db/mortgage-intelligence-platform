@@ -2054,6 +2054,8 @@ def test_restore_preserves_legacy_blue_and_revokes_only_managed_candidate(
         revoke_endpoints=("unverified-green",),
     )
 
+    assert len(calls) == 1
+    assert callable(calls[0].pop("assert_before_mutation"))
     assert calls == [
         {
             "blue_endpoint": "green-gateway",

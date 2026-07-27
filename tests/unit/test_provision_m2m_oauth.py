@@ -651,6 +651,7 @@ def _provision(client: MagicMock, **overrides: object):
             lambda *_args, **_kwargs: nullcontext(lambda: None)
         ),
         "credential_writer_application_id": "deployment-writer-client",
+        "gateway_mutation_assertion": lambda: None,
     }
     kwargs.update(overrides)
     role_defaults = pmo.IDENTITY_DEFAULTS[kwargs["identity_role"]]
@@ -2910,6 +2911,7 @@ def test_verifier_gateway_grant_fails_closed_without_endpoint_id() -> None:
             "verifier-application-id",
             sp_id="verifier-scim-id",
             effective_group_names=set(),
+            assert_single_writer=lambda: None,
         )
 
     client.serving_endpoints.update_permissions.assert_not_called()

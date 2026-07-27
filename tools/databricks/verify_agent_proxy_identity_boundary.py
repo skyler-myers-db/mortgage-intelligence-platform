@@ -17,6 +17,10 @@ from backend.services.capability_serving_probes import query_serving_endpoint_wi
 from databricks.sdk import AccountClient, WorkspaceClient
 from databricks.sdk.service.sql import ExecuteStatementRequestOnWaitTimeout
 from tools.databricks.agent_proxy_access import _supervisor_agents
+from tools.databricks.agent_proxy_identity_inventory_groups import (
+    collect_managed_proxy_workspace_groups,
+    reviewed_agent_proxy_capability_group_bindings,
+)
 from tools.databricks.agent_runtime_access import _genie_spaces
 from tools.databricks.audit_global_m2m_access import (
     assert_workspace_admin_inventory_identity,
@@ -25,19 +29,25 @@ from tools.databricks.authenticated_app_denial import (
     verify_authenticated_app_denial,
 )
 from tools.databricks.authorization_denial import is_authorization_denied
+from tools.databricks.identity_boundary_probes import (
+    ManagedWorkspaceGroupBinding,
+    verify_managed_query_group_administration_denied,
+)
 from tools.databricks.m2m_workspace_auth import (
     bind_exact_workspace_m2m_auth,
     reviewed_databricks_account_origin,
 )
 from tools.databricks.serving_endpoint_acl import is_platform_foundation_endpoint
 from tools.databricks.serving_query_authorization_convergence import (
+    _groups as _projected_identity_groups,
+)
+from tools.databricks.serving_query_authorization_convergence import (
     is_exact_target_supervisor_response,
     query_serving_endpoint_after_authorization,
+    wait_for_managed_query_group_projection,
     wait_for_reviewed_query_group_projections,
 )
 from tools.databricks.serving_query_group_access import (
-    MANAGED_QUERY_GROUP_EXTERNAL_ID_PREFIX,
-    MANAGED_QUERY_GROUP_PREFIX,
     managed_query_group_external_id,
     managed_query_group_name,
 )
@@ -150,6 +160,8 @@ class AgentProxyBoundaryInventory:
     managed_query_group_ids: tuple[str, ...]
     reviewed_supervisor_bindings: tuple[tuple[str, str, str], ...]
     reviewed_query_group_bindings: tuple[tuple[str, str, str, str], ...]
+    reviewed_capability_group_bindings: tuple[tuple[str, str, str, str, str], ...] = ()
+    managed_query_group_bindings: tuple[ManagedWorkspaceGroupBinding, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -158,47 +170,7 @@ class AgentProxyCustomerResourceDenialInventory:
     genie_space_ids: tuple[str, ...]
     serving_endpoints: tuple[tuple[str, str, str, bool], ...]
     managed_query_group_ids: tuple[str, ...]
-
-
-def _managed_query_group_ids(workspace: Any) -> tuple[str, ...]:
-    return _bounded_unique(
-        (
-            _text(group, "id")
-            for group in workspace.groups.list(attributes="id,displayName")
-            if _text(group, "display_name").startswith(MANAGED_QUERY_GROUP_PREFIX)
-        ),
-        label="managed serving-query group",
-        allow_empty=True,
-    )
-
-
-def _managed_query_group_inventory(workspace: Any) -> tuple[tuple[str, str, str], ...]:
-    groups = tuple(
-        (
-            _text(group, "id"),
-            _text(group, "display_name"),
-            _text(group, "external_id"),
-        )
-        for group in workspace.groups.list(
-            attributes="id,displayName,externalId"
-        )
-        if _text(group, "display_name").startswith(MANAGED_QUERY_GROUP_PREFIX)
-    )
-    ids = tuple(group_id.casefold() for group_id, _name, _external_id in groups)
-    names = tuple(name.casefold() for _group_id, name, _external_id in groups)
-    if (
-        len(groups) > _MAX_INVENTORY
-        or any(
-            not group_id
-            or not name
-            or not external_id.startswith(MANAGED_QUERY_GROUP_EXTERNAL_ID_PREFIX)
-            for group_id, name, external_id in groups
-        )
-        or len(ids) != len(set(ids))
-        or len(names) != len(set(names))
-    ):
-        raise RuntimeError("managed serving-query group inventory is ambiguous")
-    return tuple(sorted(groups))
+    managed_query_group_bindings: tuple[ManagedWorkspaceGroupBinding, ...] = ()
 
 
 def collect_admin_customer_resource_denial_inventory(workspace: Any) -> AgentProxyCustomerResourceDenialInventory:
@@ -223,11 +195,13 @@ def collect_admin_customer_resource_denial_inventory(workspace: Any) -> AgentPro
                 f"non-foundation serving endpoint {name!r} lacks identity or query protocol"
             )
         endpoints.append((name, endpoint_id, task, foundation))
+    managed_groups = collect_managed_proxy_workspace_groups(workspace)
     return AgentProxyCustomerResourceDenialInventory(
         supervisor_ids=supervisor_ids,
         genie_space_ids=genie_space_ids,
         serving_endpoints=tuple(endpoints),
-        managed_query_group_ids=_managed_query_group_ids(workspace),
+        managed_query_group_ids=tuple(group.id for group in managed_groups),
+        managed_query_group_bindings=managed_groups,
     )
 
 
@@ -321,7 +295,13 @@ def collect_admin_inventory(
         if _text(endpoint, "name") != endpoint_name or endpoint_id != expected_endpoint_id:
             raise RuntimeError("configured Supervisor endpoint identity drifted")
         reviewed_bindings.append((candidate_id, endpoint_name, endpoint_id))
-    managed_groups = _managed_query_group_inventory(workspace)
+    managed_groups = collect_managed_proxy_workspace_groups(workspace)
+    reviewed_capability_groups = reviewed_agent_proxy_capability_group_bindings(
+        managed_groups,
+        reviewed_supervisor_bindings=tuple(reviewed_bindings),
+        genie_space_id=genie_space_id,
+        expected_application_id=expected_application_id,
+    )
     reviewed_query_groups: list[tuple[str, str, str, str]] = []
     for _candidate_id, _endpoint_name, endpoint_id in reviewed_bindings:
         expected_name = managed_query_group_name(
@@ -335,15 +315,15 @@ def collect_admin_inventory(
         matches = tuple(
             group
             for group in managed_groups
-            if group[1] == expected_name and group[2] == expected_external_id
+            if group.name == expected_name and group.external_id == expected_external_id
         )
         if len(matches) != 1:
             raise RuntimeError(
                 "reviewed managed serving-query group contract drifted"
             )
-        group_id, group_name, external_id = matches[0]
+        matched = matches[0]
         reviewed_query_groups.append(
-            (endpoint_id, group_name, group_id, external_id)
+            (endpoint_id, matched.name, matched.id, matched.external_id)
         )
     genie_space_ids = _bounded_unique(_genie_spaces(workspace), label="Genie")
     serving_endpoint_names = _bounded_unique(
@@ -384,9 +364,11 @@ def collect_admin_inventory(
         genie_space_ids=genie_space_ids,
         serving_endpoint_names=serving_endpoint_names,
         foundation_endpoint_names=foundation_endpoint_names,
-        managed_query_group_ids=tuple(group[0] for group in managed_groups),
+        managed_query_group_ids=tuple(group.id for group in managed_groups),
         reviewed_supervisor_bindings=tuple(reviewed_bindings),
         reviewed_query_group_bindings=tuple(reviewed_query_groups),
+        reviewed_capability_group_bindings=reviewed_capability_groups,
+        managed_query_group_bindings=managed_groups,
     )
 
 
@@ -469,20 +451,6 @@ def _verify_target_supervisor_query(
         )
 
 
-def _verify_managed_group_denial(
-    workspace: Any, *, account_id: str, group_ids: tuple[str, ...]
-) -> None:
-    for group_id in group_ids:
-        _expect_denied(
-            f"managed serving-query group administration {group_id}",
-            partial(
-                workspace.account_access_control_proxy.get_rule_set,
-                f"accounts/{account_id}/groups/{group_id}/ruleSets/default",
-                "",
-            ),
-        )
-
-
 def verify_target_query_boundary(
     *,
     workspace: Any,
@@ -494,6 +462,7 @@ def verify_target_query_boundary(
     supervisor_endpoint_id: str,
     genie_space_id: str,
     preserved_supervisor_bindings: tuple[tuple[str, str, str], ...] = (),
+    admin_workspace: Any | None = None,
     sleep: Callable[[float], object] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
 ) -> None:
@@ -504,8 +473,10 @@ def verify_target_query_boundary(
     }
     if authenticated != {expected_application_id}:
         raise RuntimeError("authenticated agent-proxy identity does not match its application id")
-    _verify_managed_group_denial(
-        workspace, account_id=account_id, group_ids=inventory.managed_query_group_ids
+    verify_managed_query_group_administration_denied(
+        workspace,
+        group_bindings=inventory.managed_query_group_bindings,
+        admin_workspace=admin_workspace,
     )
     requested_bindings = (
         (supervisor_id, supervisor_endpoint, supervisor_endpoint_id),
@@ -521,6 +492,17 @@ def verify_target_query_boundary(
         sleep=sleep,
         clock=clock,
     )
+    for _kind, _resource_id, group_name, group_id, _external_id in (
+        inventory.reviewed_capability_group_bindings
+    ):
+        wait_for_managed_query_group_projection(
+            workspace,
+            expected_application_id=expected_application_id,
+            expected_group_name=group_name,
+            expected_group_id=group_id,
+            sleep=sleep,
+            clock=clock,
+        )
     for candidate in inventory.supervisor_ids:
         _expect_denied(
             f"Supervisor definition metadata {candidate}",
@@ -586,16 +568,32 @@ def verify_customer_resource_denial_boundary(
     inventory: AgentProxyCustomerResourceDenialInventory,
     expected_application_id: str,
     account_id: str,
+    admin_workspace: Any | None = None,
 ) -> None:
-    """Prove no customer capability; foundation invocation is not asserted."""
+    """Prove no customer capability."""
     me = workspace.current_user.me()
     authenticated = {
         value for value in (_text(me, "application_id"), _text(me, "user_name")) if value
     }
     if authenticated != {expected_application_id}:
         raise RuntimeError("authenticated agent-proxy identity does not match its application id")
-    _verify_managed_group_denial(
-        workspace, account_id=account_id, group_ids=inventory.managed_query_group_ids
+    managed_ids = {
+        binding.id for binding in inventory.managed_query_group_bindings
+    }
+    managed_names = {
+        binding.name for binding in inventory.managed_query_group_bindings
+    }
+    if any(
+        group_id in managed_ids or group_name in managed_names
+        for group_id, group_name in _projected_identity_groups(me)
+    ):
+        raise RuntimeError(
+            "agent-proxy retains a managed customer-capability group"
+        )
+    verify_managed_query_group_administration_denied(
+        workspace,
+        group_bindings=inventory.managed_query_group_bindings,
+        admin_workspace=admin_workspace,
     )
     for supervisor_id in inventory.supervisor_ids:
         _expect_denied(
@@ -741,6 +739,7 @@ def verify_boundary(
         supervisor_endpoint_id=supervisor_endpoint_id,
         genie_space_id=genie_space_id,
         preserved_supervisor_bindings=preserved_supervisor_bindings,
+        admin_workspace=admin_workspace,
     )
 
 
@@ -837,6 +836,7 @@ def main(argv: list[str] | None = None) -> int:
             inventory=collect_admin_customer_resource_denial_inventory(admin_workspace),
             expected_application_id=args.expected_application_id,
             account_id=args.account_id,
+            admin_workspace=admin_workspace,
         )
     else:
         inventory = collect_admin_inventory(
@@ -863,6 +863,7 @@ def main(argv: list[str] | None = None) -> int:
                 supervisor_endpoint_id=args.supervisor_endpoint_id,
                 genie_space_id=args.genie_space_id,
                 preserved_supervisor_bindings=preserved_bindings,
+                admin_workspace=admin_workspace,
             )
         else:
             proxy_account = AccountClient(
