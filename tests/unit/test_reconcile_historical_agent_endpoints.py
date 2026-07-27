@@ -195,8 +195,16 @@ class _Groups:
     def __init__(self) -> None:
         self.details: dict[str, Any] = {}
         self.deleted: list[str] = []
+        self.stale_reads_after_delete = 0
+        self._pending_deletes: dict[str, int] = {}
 
     def list(self, *, filter: str | None = None) -> list[Any]:
+        for group_id, remaining in tuple(self._pending_deletes.items()):
+            if remaining == 0:
+                self.details.pop(group_id, None)
+                del self._pending_deletes[group_id]
+            else:
+                self._pending_deletes[group_id] = remaining - 1
         values = list(self.details.values())
         if filter is None:
             return values
@@ -212,7 +220,10 @@ class _Groups:
 
     def delete(self, group_id: str) -> None:
         self.deleted.append(group_id)
-        del self.details[group_id]
+        if self.stale_reads_after_delete:
+            self._pending_deletes[group_id] = self.stale_reads_after_delete
+        else:
+            del self.details[group_id]
 
 
 class _Client:
@@ -2010,7 +2021,7 @@ def test_cleanup_retires_exact_group_before_its_endpoint() -> None:
 
     assert client.groups.deleted == [group_id]
     assert client.serving_endpoints.get(endpoint_name).id == endpoint_id
-    assert lease_checks == ["lease"]
+    assert lease_checks == ["lease", "lease"]
 
     # A process can die here. Retry observes the exact endpoint and absent group,
     # performs no hash/prefix sweep, and remains idempotent.
@@ -2023,7 +2034,344 @@ def test_cleanup_retires_exact_group_before_its_endpoint() -> None:
         assert_single_writer=lambda: lease_checks.append("unexpected"),
     )
     assert client.groups.deleted == [group_id]
-    assert lease_checks == ["lease"]
+    assert lease_checks == ["lease", "lease"]
+
+
+@pytest.mark.parametrize("response_lost_after_commit", [False, True])
+def test_cleanup_waits_for_delayed_scim_group_deletion(
+    monkeypatch: pytest.MonkeyPatch,
+    response_lost_after_commit: bool,
+) -> None:
+    endpoint_name = "historical-endpoint"
+    endpoint_id = "historical-endpoint-id"
+    application_id = "app-client"
+    scim_id = "app-scim"
+    group_id = "exact-group-id"
+    client = _Client(
+        {
+            endpoint_name: SimpleNamespace(
+                id=endpoint_id,
+                creator=_RUNTIME,
+            ),
+        },
+        [],
+    )
+    group_name = managed_query_group_name(
+        endpoint_id=endpoint_id,
+        application_id=application_id,
+    )
+    client.groups.details[group_id] = SimpleNamespace(
+        id=group_id,
+        display_name=group_name,
+        external_id=managed_query_group_external_id(
+            endpoint_id=endpoint_id,
+            application_id=application_id,
+        ),
+        members=[SimpleNamespace(value=scim_id)],
+    )
+    client.groups.stale_reads_after_delete = 2
+    client.serving_endpoints.permissions[endpoint_id] = SimpleNamespace(
+        access_control_list=[_query_permission(group_name)]
+    )
+    if response_lost_after_commit:
+        committed_delete = client.groups.delete
+
+        def lose_delete_response(target_group_id: str) -> None:
+            committed_delete(target_group_id)
+            raise TimeoutError("SCIM response was lost after commit")
+
+        monkeypatch.setattr(client.groups, "delete", lose_delete_response)
+    sleeps: list[float] = []
+
+    cleanup._retire_live_endpoint_query_groups(
+        client,
+        endpoint_name=endpoint_name,
+        endpoint_id=endpoint_id,
+        endpoint_creator=_RUNTIME,
+        principals=((application_id, scim_id),),
+        assert_single_writer=lambda: None,
+        timeout_s=10,
+        sleep=sleeps.append,
+    )
+
+    assert client.groups.deleted == [group_id]
+    assert group_id not in client.groups.details
+    assert sleeps == [2, 2, 2, 2, 2]
+    assert client.serving_endpoints.get(endpoint_name).id == endpoint_id
+
+
+def test_cleanup_rechecks_lease_immediately_before_group_delete() -> None:
+    endpoint_name = "historical-endpoint"
+    endpoint_id = "historical-endpoint-id"
+    application_id = "app-client"
+    scim_id = "app-scim"
+    group_id = "exact-group-id"
+    client = _Client(
+        {
+            endpoint_name: SimpleNamespace(
+                id=endpoint_id,
+                creator=_RUNTIME,
+            ),
+        },
+        [],
+    )
+    group_name = managed_query_group_name(
+        endpoint_id=endpoint_id,
+        application_id=application_id,
+    )
+    client.groups.details[group_id] = SimpleNamespace(
+        id=group_id,
+        display_name=group_name,
+        external_id=managed_query_group_external_id(
+            endpoint_id=endpoint_id,
+            application_id=application_id,
+        ),
+        members=[SimpleNamespace(value=scim_id)],
+    )
+    client.serving_endpoints.permissions[endpoint_id] = SimpleNamespace(
+        access_control_list=[_query_permission(group_name)]
+    )
+    lease_checks = 0
+
+    def lose_lease_at_mutation_boundary() -> None:
+        nonlocal lease_checks
+        lease_checks += 1
+        if lease_checks == 2:
+            raise RuntimeError("deployment lease lost")
+
+    with pytest.raises(RuntimeError, match="deployment lease lost"):
+        cleanup._retire_live_endpoint_query_groups(
+            client,
+            endpoint_name=endpoint_name,
+            endpoint_id=endpoint_id,
+            endpoint_creator=_RUNTIME,
+            principals=((application_id, scim_id),),
+            assert_single_writer=lose_lease_at_mutation_boundary,
+        )
+
+    assert lease_checks == 2
+    assert client.groups.deleted == []
+    assert group_id in client.groups.details
+
+
+def test_cleanup_rejects_same_name_replacement_during_group_postflight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    endpoint_name = "historical-endpoint"
+    endpoint_id = "historical-endpoint-id"
+    application_id = "app-client"
+    scim_id = "app-scim"
+    group_id = "exact-group-id"
+    replacement_id = "replacement-group-id"
+    client = _Client(
+        {
+            endpoint_name: SimpleNamespace(
+                id=endpoint_id,
+                creator=_RUNTIME,
+            ),
+        },
+        [],
+    )
+    group_name = managed_query_group_name(
+        endpoint_id=endpoint_id,
+        application_id=application_id,
+    )
+    external_id = managed_query_group_external_id(
+        endpoint_id=endpoint_id,
+        application_id=application_id,
+    )
+    client.groups.details[group_id] = SimpleNamespace(
+        id=group_id,
+        display_name=group_name,
+        external_id=external_id,
+        members=[SimpleNamespace(value=scim_id)],
+    )
+    client.serving_endpoints.permissions[endpoint_id] = SimpleNamespace(
+        access_control_list=[_query_permission(group_name)]
+    )
+
+    def replace_after_delete(target_group_id: str) -> None:
+        assert target_group_id == group_id
+        client.groups.deleted.append(target_group_id)
+        del client.groups.details[target_group_id]
+        client.groups.details[replacement_id] = SimpleNamespace(
+            id=replacement_id,
+            display_name=group_name,
+            external_id=external_id,
+            members=[SimpleNamespace(value=scim_id)],
+        )
+
+    monkeypatch.setattr(client.groups, "delete", replace_after_delete)
+
+    with pytest.raises(RuntimeError, match="deterministic binding changed"):
+        cleanup._retire_live_endpoint_query_groups(
+            client,
+            endpoint_name=endpoint_name,
+            endpoint_id=endpoint_id,
+            endpoint_creator=_RUNTIME,
+            principals=((application_id, scim_id),),
+            assert_single_writer=lambda: None,
+            sleep=lambda _seconds: None,
+        )
+
+    assert client.groups.deleted == [group_id]
+    assert replacement_id in client.groups.details
+    assert client.serving_endpoints.get(endpoint_name).id == endpoint_id
+
+
+def test_cleanup_does_not_accept_transient_false_group_absence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    endpoint_name = "historical-endpoint"
+    endpoint_id = "historical-endpoint-id"
+    application_id = "app-client"
+    scim_id = "app-scim"
+    group_id = "exact-group-id"
+    client = _Client(
+        {
+            endpoint_name: SimpleNamespace(
+                id=endpoint_id,
+                creator=_RUNTIME,
+            ),
+        },
+        [],
+    )
+    group_name = managed_query_group_name(
+        endpoint_id=endpoint_id,
+        application_id=application_id,
+    )
+    client.groups.details[group_id] = SimpleNamespace(
+        id=group_id,
+        display_name=group_name,
+        external_id=managed_query_group_external_id(
+            endpoint_id=endpoint_id,
+            application_id=application_id,
+        ),
+        members=[SimpleNamespace(value=scim_id)],
+    )
+    client.serving_endpoints.permissions[endpoint_id] = SimpleNamespace(
+        access_control_list=[_query_permission(group_name)]
+    )
+    deletion_attempted = False
+    exact_reads = 0
+    bound_reads = 0
+    original_get = client.groups.get
+    original_list = client.groups.list
+
+    def no_op_delete(target_group_id: str) -> None:
+        nonlocal deletion_attempted
+        assert target_group_id == group_id
+        deletion_attempted = True
+        client.groups.deleted.append(target_group_id)
+
+    def transient_get(target_group_id: str) -> Any:
+        nonlocal exact_reads
+        if deletion_attempted and target_group_id == group_id:
+            exact_reads += 1
+            if exact_reads == 1:
+                raise NotFound("transient exact-ID false absence")
+        return original_get(target_group_id)
+
+    def transient_list(*, filter: str | None = None) -> list[Any]:
+        nonlocal bound_reads
+        if deletion_attempted:
+            bound_reads += 1
+            if bound_reads == 1:
+                return []
+        return original_list(filter=filter)
+
+    monkeypatch.setattr(client.groups, "delete", no_op_delete)
+    monkeypatch.setattr(client.groups, "get", transient_get)
+    monkeypatch.setattr(client.groups, "list", transient_list)
+    now = [0.0]
+
+    def advance(seconds: float) -> None:
+        now[0] += seconds
+
+    with pytest.raises(RuntimeError, match="retirement did not converge"):
+        cleanup._retire_live_endpoint_query_groups(
+            client,
+            endpoint_name=endpoint_name,
+            endpoint_id=endpoint_id,
+            endpoint_creator=_RUNTIME,
+            principals=((application_id, scim_id),),
+            assert_single_writer=lambda: None,
+            timeout_s=3,
+            sleep=advance,
+            clock=lambda: now[0],
+        )
+
+    assert client.groups.deleted == [group_id]
+    assert group_id in client.groups.details
+    assert client.serving_endpoints.get(endpoint_name).id == endpoint_id
+
+
+def test_cleanup_bounds_uncommitted_scim_group_deletion_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    endpoint_name = "historical-endpoint"
+    endpoint_id = "historical-endpoint-id"
+    application_id = "app-client"
+    scim_id = "app-scim"
+    group_id = "exact-group-id"
+    client = _Client(
+        {
+            endpoint_name: SimpleNamespace(
+                id=endpoint_id,
+                creator=_RUNTIME,
+            ),
+        },
+        [],
+    )
+    group_name = managed_query_group_name(
+        endpoint_id=endpoint_id,
+        application_id=application_id,
+    )
+    client.groups.details[group_id] = SimpleNamespace(
+        id=group_id,
+        display_name=group_name,
+        external_id=managed_query_group_external_id(
+            endpoint_id=endpoint_id,
+            application_id=application_id,
+        ),
+        members=[SimpleNamespace(value=scim_id)],
+    )
+    client.serving_endpoints.permissions[endpoint_id] = SimpleNamespace(
+        access_control_list=[_query_permission(group_name)]
+    )
+    delete_attempts: list[str] = []
+
+    def fail_before_commit(target_group_id: str) -> None:
+        delete_attempts.append(target_group_id)
+        raise TimeoutError("SCIM delete did not commit")
+
+    monkeypatch.setattr(client.groups, "delete", fail_before_commit)
+    now = [0.0]
+    sleeps: list[float] = []
+
+    def advance(seconds: float) -> None:
+        sleeps.append(seconds)
+        now[0] += seconds
+
+    with pytest.raises(
+        RuntimeError,
+        match="historical managed query group delete failed and absence is unproven",
+    ):
+        cleanup._retire_live_endpoint_query_groups(
+            client,
+            endpoint_name=endpoint_name,
+            endpoint_id=endpoint_id,
+            endpoint_creator=_RUNTIME,
+            principals=((application_id, scim_id),),
+            assert_single_writer=lambda: None,
+            timeout_s=3,
+            sleep=advance,
+            clock=lambda: now[0],
+        )
+
+    assert delete_attempts == [group_id]
+    assert group_id in client.groups.details
+    assert sleeps == [2, 2]
 
 
 def test_cleanup_refuses_unattached_colliding_group_without_mutation() -> None:

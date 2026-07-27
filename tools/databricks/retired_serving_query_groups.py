@@ -14,6 +14,9 @@ from tools.databricks.serving_query_group_access import (
     remove_managed_query_membership,
     retire_managed_query_group,
 )
+from tools.databricks.workspace_group_deletion import (
+    WORKSPACE_GROUP_DELETION_TIMEOUT_SECONDS,
+)
 
 
 def exact_service_principal_scim_id(workspace: Any, *, application_id: str) -> str:
@@ -47,6 +50,9 @@ def retire_endpoint_query_groups(
     endpoint_id: str,
     principals: tuple[tuple[str, str], ...],
     assert_single_writer: Callable[[], None],
+    timeout_s: int = WORKSPACE_GROUP_DELETION_TIMEOUT_SECONDS,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
 ) -> None:
     """Delete exact groups only while their immutable endpoint remains absent."""
 
@@ -58,20 +64,29 @@ def retire_endpoint_query_groups(
         raise ValueError("complete application and SCIM identities are required for group retirement")
     if len({application_id for application_id, _scim_id in normalized}) != len(normalized):
         raise ValueError("managed query group retirement applications must be distinct")
-    for application_id, scim_id in normalized:
+
+    def assert_endpoint_absent() -> None:
         try:
             workspace.serving_endpoints.get(endpoint_name)
         except (NotFound, ResourceDoesNotExist):
-            pass
-        else:
-            raise RuntimeError("managed query group cannot retire before its endpoint is absent")
-        assert_single_writer()
+            return
+        raise RuntimeError(
+            "managed query group cannot retire before its endpoint is absent "
+            "or after it has reappeared"
+        )
+
+    for application_id, scim_id in normalized:
+        assert_endpoint_absent()
         retire_managed_query_group(
             workspace,
             endpoint_id=endpoint_id,
             application_id=application_id,
             service_principal_id=scim_id,
+            assert_endpoint_absent=assert_endpoint_absent,
             assert_single_writer=assert_single_writer,
+            timeout_s=timeout_s,
+            sleep=sleep,
+            clock=clock,
         )
 
 

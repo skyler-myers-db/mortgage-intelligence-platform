@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import time
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from typing import Any
 
 from databricks.sdk.errors import NotFound, ResourceDoesNotExist
 from databricks.sdk.service.iam import Patch, PatchOp, PatchSchema
+from tools.databricks.workspace_group_deletion import (
+    WORKSPACE_GROUP_DELETION_TIMEOUT_SECONDS,
+    delete_workspace_group_and_wait,
+)
 
 MANAGED_QUERY_GROUP_PREFIX = "mip-serving-query-"
 MANAGED_QUERY_GROUP_EXTERNAL_ID_PREFIX = "mip:serving-query:"
@@ -207,6 +212,48 @@ def _member_ids(group: object) -> set[str]:
     return members
 
 
+def _group_state(
+    group: object,
+    *,
+    endpoint_id: str,
+    application_id: str,
+) -> ManagedQueryGroupState:
+    return ManagedQueryGroupState(
+        contract=_assert_group_contract(
+            group,
+            endpoint_id=endpoint_id,
+            application_id=application_id,
+        ),
+        member_ids=tuple(sorted(_member_ids(group))),
+    )
+
+
+def inspect_managed_query_group_by_id(
+    client: Any,
+    *,
+    group_id: str,
+    endpoint_id: str,
+    application_id: str,
+    missing_ok: bool = False,
+) -> ManagedQueryGroupState | None:
+    """Rehydrate an expected managed group through its immutable SCIM ID."""
+
+    immutable_id = group_id.strip()
+    if not immutable_id:
+        raise ValueError("managed serving-query group immutable ID is required")
+    try:
+        group = _hydrated_group(client, group_id=immutable_id)
+    except (NotFound, ResourceDoesNotExist) as exc:
+        if missing_ok:
+            return None
+        raise RuntimeError("managed serving-query group is missing") from exc
+    return _group_state(
+        group,
+        endpoint_id=endpoint_id,
+        application_id=application_id,
+    )
+
+
 def inspect_managed_query_group(
     client: Any,
     *,
@@ -230,14 +277,10 @@ def inspect_managed_query_group(
         if missing_ok:
             return None
         raise RuntimeError("managed serving-query group is missing")
-    contract = _assert_group_contract(
+    return _group_state(
         group,
         endpoint_id=endpoint_id,
         application_id=application_id,
-    )
-    return ManagedQueryGroupState(
-        contract=contract,
-        member_ids=tuple(sorted(_member_ids(group))),
     )
 
 
@@ -273,11 +316,16 @@ def retire_managed_query_group(
     endpoint_id: str,
     application_id: str,
     service_principal_id: str,
+    assert_endpoint_absent: Callable[[], None],
     assert_single_writer: Callable[[], None],
+    timeout_s: int = WORKSPACE_GROUP_DELETION_TIMEOUT_SECONDS,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
 ) -> bool:
     """Delete an endpoint-orphaned group only from a safe exact member state.
 
-    The caller must separately prove the bound serving endpoint is absent.
+    The supplied callback must prove endpoint absence at the mutation boundary
+    and throughout the bounded deletion postflight.
     """
 
     principal_id = service_principal_id.strip()
@@ -295,17 +343,41 @@ def retire_managed_query_group(
     if members not in ({principal_id}, set()):
         raise RuntimeError("managed serving-query group contains an unrelated member")
     assert_single_writer()
-    client.groups.delete(state.contract.id)
-    if (
-        inspect_managed_query_group(
+    if inspect_managed_query_group_by_id(
+        client,
+        group_id=state.contract.id,
+        endpoint_id=endpoint_id,
+        application_id=application_id,
+    ) != state or inspect_managed_query_group(
+        client,
+        endpoint_id=endpoint_id,
+        application_id=application_id,
+    ) != state:
+        raise RuntimeError("managed serving-query group changed before deletion")
+    delete_workspace_group_and_wait(
+        client,
+        group_id=state.contract.id,
+        expected_state=state,
+        inspect_exact_state=lambda: inspect_managed_query_group_by_id(
+            client,
+            group_id=state.contract.id,
+            endpoint_id=endpoint_id,
+            application_id=application_id,
+            missing_ok=True,
+        ),
+        inspect_bound_state=lambda: inspect_managed_query_group(
             client,
             endpoint_id=endpoint_id,
             application_id=application_id,
             missing_ok=True,
-        )
-        is not None
-    ):
-        raise RuntimeError("managed serving-query group retirement did not converge")
+        ),
+        assert_deletion_context=assert_endpoint_absent,
+        assert_single_writer=assert_single_writer,
+        resource_label="managed serving-query group",
+        timeout_s=timeout_s,
+        sleep=sleep,
+        clock=clock,
+    )
     return True
 
 

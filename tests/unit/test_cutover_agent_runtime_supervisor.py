@@ -2548,6 +2548,8 @@ def test_retired_endpoint_group_cleanup_is_exact_and_idempotent() -> None:
 
         def get(self, group_id: str) -> object:
             events.append(f"get:{group_id}")
+            if group_id not in by_id:
+                raise ResourceDoesNotExist("deleted")
             return by_id[group_id]
 
         def delete(self, group_id: str) -> None:
@@ -2568,6 +2570,7 @@ def test_retired_endpoint_group_cleanup_is_exact_and_idempotent() -> None:
         "endpoint_id": OLD_GATEWAY_ID,
         "principals": tuple(applications.items()),
         "assert_single_writer": lambda: events.append("lease"),
+        "sleep": lambda _seconds: None,
     }
 
     retired_groups.retire_endpoint_query_groups(**kwargs)
@@ -2586,6 +2589,71 @@ def test_retired_endpoint_group_cleanup_is_exact_and_idempotent() -> None:
         event.startswith(("get:", "delete:")) for event in events[len(first_pass_events) :]
     )
     assert by_id == {}
+
+
+def test_retired_endpoint_group_cleanup_rejects_transient_endpoint_absence() -> None:
+    application_id = "app-client"
+    scim_id = "app-scim-id"
+    group_id = f"group-{application_id}"
+    by_id = {
+        group_id: SimpleNamespace(
+            id=group_id,
+            display_name=managed_query_group_name(
+                endpoint_id=OLD_GATEWAY_ID,
+                application_id=application_id,
+            ),
+            external_id=managed_query_group_external_id(
+                endpoint_id=OLD_GATEWAY_ID,
+                application_id=application_id,
+            ),
+            members=[SimpleNamespace(value=scim_id)],
+        )
+    }
+    deletes: list[str] = []
+
+    class _Groups:
+        def list(self, *, filter: str) -> list[object]:
+            expected_name = filter.removeprefix("displayName eq '").removesuffix("'")
+            return [
+                group
+                for group in by_id.values()
+                if group.display_name == expected_name
+            ]
+
+        def get(self, target_group_id: str) -> object:
+            return by_id[target_group_id]
+
+        def delete(self, target_group_id: str) -> None:
+            deletes.append(target_group_id)
+            del by_id[target_group_id]
+
+    endpoint_reads = 0
+
+    def transient_endpoint_get(_name: str) -> object:
+        nonlocal endpoint_reads
+        endpoint_reads += 1
+        if endpoint_reads == 1:
+            raise ResourceDoesNotExist("transient false absence")
+        return SimpleNamespace(id=OLD_GATEWAY_ID)
+
+    workspace = SimpleNamespace(
+        serving_endpoints=SimpleNamespace(get=transient_endpoint_get),
+        groups=_Groups(),
+    )
+
+    with pytest.raises(RuntimeError, match="after it has reappeared"):
+        retired_groups.retire_endpoint_query_groups(
+            workspace,
+            endpoint_name=OLD_GATEWAY,
+            endpoint_id=OLD_GATEWAY_ID,
+            principals=((application_id, scim_id),),
+            assert_single_writer=lambda: None,
+            sleep=lambda _seconds: None,
+        )
+
+    assert endpoint_reads == 2
+    assert deletes == []
+    assert group_id in by_id
 
 
 def test_retired_endpoint_group_cleanup_rejects_unrelated_member() -> None:

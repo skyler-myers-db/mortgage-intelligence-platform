@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from databricks.sdk.errors import NotFound
 from databricks.sdk.service.serving import (
     ServingEndpointAccessControlResponse,
     ServingEndpointPermission,
@@ -81,6 +82,8 @@ class _Groups:
         return group
 
     def get(self, group_id: str) -> object:
+        if group_id not in self.by_id:
+            raise NotFound("missing")
         return self.by_id[group_id]
 
     def patch(self, **kwargs: object) -> None:
@@ -290,14 +293,18 @@ def test_managed_query_group_retirement_is_exact_and_idempotent() -> None:
         endpoint_id="managed-id",
         application_id="app-sp",
         service_principal_id="sp-id",
+        assert_endpoint_absent=lambda: None,
         assert_single_writer=lambda: None,
+        sleep=lambda _seconds: None,
     )
     assert not retire_managed_query_group(
         client,
         endpoint_id="managed-id",
         application_id="app-sp",
         service_principal_id="sp-id",
+        assert_endpoint_absent=lambda: None,
         assert_single_writer=lambda: None,
+        sleep=lambda _seconds: None,
     )
 
 
@@ -316,6 +323,7 @@ def test_managed_query_group_retirement_rejects_unrelated_member() -> None:
             endpoint_id="managed-id",
             application_id="app-sp",
             service_principal_id="sp-id",
+            assert_endpoint_absent=lambda: None,
             assert_single_writer=lambda: None,
         )
 
@@ -335,12 +343,100 @@ def test_managed_query_group_delete_rechecks_lease_after_hydration() -> None:
             endpoint_id="managed-id",
             application_id="app-sp",
             service_principal_id="sp-id",
+            assert_endpoint_absent=lambda: None,
             assert_single_writer=lambda: (_ for _ in ()).throw(
                 RuntimeError("deployment lease lost")
             ),
         )
 
     assert "group-1" in groups.by_id
+
+
+def test_managed_query_group_delete_rechecks_lease_after_final_state_read() -> None:
+    groups = _Groups()
+    _seed_managed_group(
+        groups,
+        endpoint="managed",
+        application_id="app-sp",
+        member_ids=("sp-id",),
+    )
+    lease_checks = 0
+
+    def lose_lease_at_mutation_boundary() -> None:
+        nonlocal lease_checks
+        lease_checks += 1
+        if lease_checks == 2:
+            raise RuntimeError("deployment lease lost")
+
+    with pytest.raises(RuntimeError, match="deployment lease lost"):
+        retire_managed_query_group(
+            _client(_Serving(), groups),
+            endpoint_id="managed-id",
+            application_id="app-sp",
+            service_principal_id="sp-id",
+            assert_endpoint_absent=lambda: None,
+            assert_single_writer=lose_lease_at_mutation_boundary,
+            sleep=lambda _seconds: None,
+        )
+
+    assert lease_checks == 2
+    assert "group-1" in groups.by_id
+
+
+def test_managed_query_group_retirement_waits_for_delayed_scim_visibility(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    groups = _Groups()
+    _seed_managed_group(
+        groups,
+        endpoint="managed",
+        application_id="app-sp",
+        member_ids=("sp-id",),
+    )
+    deleting = False
+    postflight_cycles = 0
+    original_get = groups.get
+    original_list = groups.list
+    deletes: list[str] = []
+
+    def delayed_delete(group_id: str) -> None:
+        nonlocal deleting
+        deletes.append(group_id)
+        deleting = True
+
+    def delayed_get(group_id: str) -> object:
+        if deleting and postflight_cycles >= 2:
+            raise NotFound("delayed SCIM absence")
+        return original_get(group_id)
+
+    def delayed_list(**kwargs: object) -> object:
+        nonlocal postflight_cycles
+        if not deleting:
+            return original_list(**kwargs)
+        visible = postflight_cycles < 2
+        postflight_cycles += 1
+        return original_list(**kwargs) if visible else iter(())
+
+    monkeypatch.setattr(groups, "delete", delayed_delete)
+    monkeypatch.setattr(groups, "get", delayed_get)
+    monkeypatch.setattr(groups, "list", delayed_list)
+    sleeps: list[float] = []
+
+    assert retire_managed_query_group(
+        _client(_Serving(), groups),
+        endpoint_id="managed-id",
+        application_id="app-sp",
+        service_principal_id="sp-id",
+        assert_endpoint_absent=lambda: None,
+        assert_single_writer=lambda: None,
+        timeout_s=20,
+        sleep=sleeps.append,
+        clock=lambda: 0,
+    )
+
+    assert deletes == ["group-1"]
+    assert postflight_cycles == 5
+    assert sleeps == [2, 2, 2, 2]
 
 
 def test_remove_managed_query_membership_requires_exact_scim_id() -> None:

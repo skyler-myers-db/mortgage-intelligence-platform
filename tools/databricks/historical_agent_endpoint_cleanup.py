@@ -17,6 +17,11 @@ from tools.databricks.historical_agent_endpoint_types import (
 from tools.databricks.serving_query_group_access import (
     ManagedQueryGroupState,
     inspect_managed_query_group,
+    inspect_managed_query_group_by_id,
+)
+from tools.databricks.workspace_group_deletion import (
+    WORKSPACE_GROUP_DELETION_TIMEOUT_SECONDS,
+    delete_workspace_group_and_wait,
 )
 
 
@@ -125,6 +130,9 @@ def _retire_live_endpoint_query_groups(
     endpoint_creator: str,
     principals: tuple[tuple[str, str], ...],
     assert_single_writer: Callable[[], None],
+    timeout_s: int = 120,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
 ) -> None:
     """Delete exact groups before their attested endpoint can become absent.
 
@@ -190,29 +198,56 @@ def _retire_live_endpoint_query_groups(
             )
         ):
             raise RuntimeError("historical endpoint, group, or ACL changed at deletion boundary")
-        try:
-            client.groups.delete(expected_state.contract.id)
-        except Exception:  # noqa: BLE001 - prove whether an ambiguous delete committed
+        def assert_endpoint_exact() -> None:
+            current_endpoint = client.serving_endpoints.get(endpoint_name)
             if (
-                inspect_managed_query_group(
-                    client,
-                    endpoint_id=endpoint_id,
-                    application_id=application_id,
-                    missing_ok=True,
+                _item_text(current_endpoint, "id"),
+                _item_text(current_endpoint, "creator"),
+            ) != expected_endpoint:
+                raise RuntimeError(
+                    "historical endpoint changed during group deletion postflight"
                 )
-                is not None
-            ):
-                raise
-        if (
-            inspect_managed_query_group(
+
+        def inspect_exact_state(
+            application_id: str = application_id,
+            expected_state: ManagedQueryGroupState = expected_state,
+        ) -> ManagedQueryGroupState | None:
+            assert_endpoint_exact()
+            return inspect_managed_query_group_by_id(
+                client,
+                group_id=expected_state.contract.id,
+                endpoint_id=endpoint_id,
+                application_id=application_id,
+                missing_ok=True,
+            )
+
+        def inspect_bound_state(
+            application_id: str = application_id,
+        ) -> ManagedQueryGroupState | None:
+            assert_endpoint_exact()
+            return inspect_managed_query_group(
                 client,
                 endpoint_id=endpoint_id,
                 application_id=application_id,
                 missing_ok=True,
             )
-            is not None
-        ):
-            raise RuntimeError("historical managed query group retirement did not converge")
+
+        delete_workspace_group_and_wait(
+            client,
+            group_id=expected_state.contract.id,
+            expected_state=expected_state,
+            inspect_exact_state=inspect_exact_state,
+            inspect_bound_state=inspect_bound_state,
+            assert_deletion_context=assert_endpoint_exact,
+            assert_single_writer=assert_single_writer,
+            resource_label="historical managed query group",
+            timeout_s=min(
+                timeout_s,
+                WORKSPACE_GROUP_DELETION_TIMEOUT_SECONDS,
+            ),
+            sleep=sleep,
+            clock=clock,
+        )
         current_endpoint = client.serving_endpoints.get(endpoint_name)
         if (
             _item_text(current_endpoint, "id"),
@@ -390,6 +425,11 @@ def _cleanup_supervisor_proof(
                 ),
             ),
             assert_single_writer=assert_single_writer,
+            timeout_s=min(
+                timeout_s,
+                WORKSPACE_GROUP_DELETION_TIMEOUT_SECONDS,
+            ),
+            sleep=sleep,
         )
     if supervisor_live:
         assert_single_writer()
@@ -490,6 +530,11 @@ def cleanup_runtime_endpoints(
             endpoint_creator=gateway.creator,
             principals=gateway_principals,
             assert_single_writer=assert_single_writer,
+            timeout_s=min(
+                timeout_s,
+                WORKSPACE_GROUP_DELETION_TIMEOUT_SECONDS,
+            ),
+            sleep=sleep,
         )
         _delete_endpoint_exact(
             client,
