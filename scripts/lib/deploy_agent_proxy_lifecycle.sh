@@ -97,7 +97,8 @@ deny_all_agent_proxy_access() {
     --expected-application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID" \
     --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL" \
     --account-id "$DATABRICKS_ACCOUNT_ID" \
-    --customer-resource-denial || failed=1
+    --customer-resource-denial \
+    --wait-customer-resource-denial || failed=1
   return "$failed"
 }
 

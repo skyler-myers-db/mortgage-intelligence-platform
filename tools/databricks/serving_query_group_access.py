@@ -150,6 +150,17 @@ def _hydrated_group(client: Any, *, group_id: str) -> object:
     group = client.groups.get(group_id)
     if str(getattr(group, "id", "") or "").strip() != group_id:
         raise RuntimeError("managed serving-query group immutable ID drifted")
+    meta = group.get("meta") if isinstance(group, dict) else getattr(group, "meta", None)
+    raw_resource_type = (
+        meta.get("resourceType")
+        if isinstance(meta, dict)
+        else getattr(meta, "resource_type", None)
+    )
+    resource_type = str(
+        getattr(raw_resource_type, "value", raw_resource_type) or ""
+    ).strip()
+    if resource_type != "WorkspaceGroup":
+        raise RuntimeError("managed serving-query group is not workspace-local SCIM")
     return group
 
 

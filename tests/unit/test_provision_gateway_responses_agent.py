@@ -3843,6 +3843,7 @@ def test_completed_redeploy_reuses_gateway_with_exact_app_and_verifier_groups(
                 application_id=application_id,
             ),
             members=[SimpleNamespace(value=f"{application_id}-scim")],
+            meta=SimpleNamespace(resource_type="WorkspaceGroup"),
         )
         for application_id in applications
     }

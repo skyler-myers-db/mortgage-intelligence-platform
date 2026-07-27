@@ -2001,6 +2001,7 @@ def test_cleanup_retires_exact_group_before_its_endpoint() -> None:
             application_id=application_id,
         ),
         members=[SimpleNamespace(value=scim_id)],
+        meta=SimpleNamespace(resource_type="WorkspaceGroup"),
     )
     client.serving_endpoints.permissions[endpoint_id] = SimpleNamespace(
         access_control_list=[_query_permission(group_name)]
@@ -2068,6 +2069,7 @@ def test_cleanup_waits_for_delayed_scim_group_deletion(
             application_id=application_id,
         ),
         members=[SimpleNamespace(value=scim_id)],
+        meta=SimpleNamespace(resource_type="WorkspaceGroup"),
     )
     client.groups.stale_reads_after_delete = 2
     client.serving_endpoints.permissions[endpoint_id] = SimpleNamespace(
@@ -2127,6 +2129,7 @@ def test_cleanup_rechecks_lease_immediately_before_group_delete() -> None:
             application_id=application_id,
         ),
         members=[SimpleNamespace(value=scim_id)],
+        meta=SimpleNamespace(resource_type="WorkspaceGroup"),
     )
     client.serving_endpoints.permissions[endpoint_id] = SimpleNamespace(
         access_control_list=[_query_permission(group_name)]
@@ -2185,6 +2188,7 @@ def test_cleanup_rejects_same_name_replacement_during_group_postflight(
         display_name=group_name,
         external_id=external_id,
         members=[SimpleNamespace(value=scim_id)],
+        meta=SimpleNamespace(resource_type="WorkspaceGroup"),
     )
     client.serving_endpoints.permissions[endpoint_id] = SimpleNamespace(
         access_control_list=[_query_permission(group_name)]
@@ -2199,6 +2203,7 @@ def test_cleanup_rejects_same_name_replacement_during_group_postflight(
             display_name=group_name,
             external_id=external_id,
             members=[SimpleNamespace(value=scim_id)],
+            meta=SimpleNamespace(resource_type="WorkspaceGroup"),
         )
 
     monkeypatch.setattr(client.groups, "delete", replace_after_delete)
@@ -2248,6 +2253,7 @@ def test_cleanup_does_not_accept_transient_false_group_absence(
             application_id=application_id,
         ),
         members=[SimpleNamespace(value=scim_id)],
+        meta=SimpleNamespace(resource_type="WorkspaceGroup"),
     )
     client.serving_endpoints.permissions[endpoint_id] = SimpleNamespace(
         access_control_list=[_query_permission(group_name)]
@@ -2335,6 +2341,7 @@ def test_cleanup_bounds_uncommitted_scim_group_deletion_failure(
             application_id=application_id,
         ),
         members=[SimpleNamespace(value=scim_id)],
+        meta=SimpleNamespace(resource_type="WorkspaceGroup"),
     )
     client.serving_endpoints.permissions[endpoint_id] = SimpleNamespace(
         access_control_list=[_query_permission(group_name)]
@@ -2400,6 +2407,7 @@ def test_cleanup_refuses_unattached_colliding_group_without_mutation() -> None:
             application_id=application_id,
         ),
         members=[SimpleNamespace(value=scim_id)],
+        meta=SimpleNamespace(resource_type="WorkspaceGroup"),
     )
 
     with pytest.raises(RuntimeError, match="not bound to the exact live endpoint ACL"):
@@ -2442,6 +2450,7 @@ def test_cleanup_rechecks_exact_acl_after_lease_before_group_mutation() -> None:
             application_id=application_id,
         ),
         members=[SimpleNamespace(value=scim_id)],
+        meta=SimpleNamespace(resource_type="WorkspaceGroup"),
     )
     client.serving_endpoints.permissions[endpoint_id] = SimpleNamespace(
         access_control_list=[_query_permission(group_name)]
@@ -2479,6 +2488,7 @@ def test_cleanup_never_sweeps_hash_shaped_group_without_a_live_endpoint() -> Non
             application_id=application_id,
         ),
         members=[SimpleNamespace(value="app-scim")],
+        meta=SimpleNamespace(resource_type="WorkspaceGroup"),
     )
     empty = inventory.RuntimeEndpointInventory(1, _RUNTIME, (), ())
 

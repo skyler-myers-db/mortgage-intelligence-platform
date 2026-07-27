@@ -49,6 +49,7 @@ class _Groups:
                 members=(
                     [] if member_id is None else [SimpleNamespace(value=member_id)]
                 ),
+                meta=SimpleNamespace(resource_type="WorkspaceGroup"),
             )
 
     def list(self, **kwargs: object) -> list[object]:

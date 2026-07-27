@@ -267,12 +267,7 @@ def _workspace(
                         )
                     ]
                 )
-                if kwargs
-                == {
-                    "attributes": (
-                        "id,displayName,meta,entitlements,roles,externalId"
-                    )
-                }
+                if kwargs == {"attributes": ("id,displayName,meta,entitlements,roles,externalId")}
                 else iter([])
             )
         ),
@@ -328,8 +323,7 @@ def _add_managed_online_catalog(
             [
                 SimpleNamespace(
                     name="information_schema",
-                    full_name=information_schema_full_name
-                    or f"{catalog}.information_schema",
+                    full_name=information_schema_full_name or f"{catalog}.information_schema",
                     owner=information_schema_owner or owner,
                 )
             ]
@@ -340,9 +334,7 @@ def _add_managed_online_catalog(
 
     original_function_list = workspace.functions.list
     workspace.functions.list = lambda selected, schema, **kwargs: (
-        iter([])
-        if selected == catalog
-        else original_function_list(selected, schema, **kwargs)
+        iter([]) if selected == catalog else original_function_list(selected, schema, **kwargs)
     )
 
     original_table_list = workspace.tables.list
@@ -351,8 +343,7 @@ def _add_managed_online_catalog(
             [
                 SimpleNamespace(
                     name="tables",
-                    full_name=information_table_full_name
-                    or f"{catalog}.information_schema.tables",
+                    full_name=information_table_full_name or f"{catalog}.information_schema.tables",
                     owner=information_table_owner or owner,
                 ),
                 *(
@@ -374,9 +365,7 @@ def _add_managed_online_catalog(
 
     original_volume_list = workspace.volumes.list
     workspace.volumes.list = lambda selected, schema, **kwargs: (
-        iter([])
-        if selected == catalog
-        else original_volume_list(selected, schema, **kwargs)
+        iter([]) if selected == catalog else original_volume_list(selected, schema, **kwargs)
     )
 
 
@@ -439,9 +428,7 @@ def _account() -> object:
         ),
         groups=SimpleNamespace(
             list=lambda **_kwargs: iter([account_users]),
-            get=lambda group_id: account_users
-            if group_id == "account-users-id"
-            else None,
+            get=lambda group_id: account_users if group_id == "account-users-id" else None,
         ),
         metastore_assignments=SimpleNamespace(
             list=lambda _metastore_id: iter([WORKSPACE_ID, OTHER_WORKSPACE_ID])
@@ -509,9 +496,7 @@ def _runtime_groups(additional: dict[str, str] | None = None) -> dict[str, str]:
 
 def test_foreign_catalog_binding_policy_rejects_ambiguous_json() -> None:
     with pytest.raises(ValueError, match="duplicate key"):
-        auditor.parse_foreign_catalog_binding_policy(
-            '{"version":1,"version":1,"catalogs":{}}'
-        )
+        auditor.parse_foreign_catalog_binding_policy('{"version":1,"version":1,"catalogs":{}}')
 
 
 @pytest.mark.parametrize(
@@ -693,6 +678,89 @@ def test_foreign_uc_control_plane_rejects_runtime_non_system_account_group() -> 
         )
 
 
+def test_foreign_uc_control_plane_accepts_only_exact_reviewed_workspace_group() -> None:
+    proof = _audit(
+        _workspace(),
+        target_groups_probe=lambda *_args, **_kwargs: _runtime_groups(
+            {"capability-group-id": "mip-agent-proxy-cap-reviewed"}
+        ),
+        allowed_workspace_groups={"capability-group-id": "mip-agent-proxy-cap-reviewed"},
+    )
+
+    assert proof.application_id == APPLICATION_ID
+
+
+def test_foreign_uc_control_plane_rejects_reviewed_workspace_group_drift() -> None:
+    with pytest.raises(RuntimeError, match="forbidden ordinary account group"):
+        _audit(
+            _workspace(),
+            target_groups_probe=lambda *_args, **_kwargs: _runtime_groups(
+                {"capability-group-id": "mip-agent-proxy-cap-replaced"}
+            ),
+            allowed_workspace_groups={"capability-group-id": "mip-agent-proxy-cap-reviewed"},
+        )
+
+
+def test_foreign_uc_control_plane_never_admits_an_account_group_as_workspace_local() -> None:
+    account = _account()
+    account_users = next(account.groups.list())
+    ordinary_group = SimpleNamespace(
+        id="ordinary-group-id",
+        display_name="ordinary-group",
+        members=[SimpleNamespace(value=ACCOUNT_SCIM_ID)],
+    )
+    account.groups.list = lambda **_kwargs: iter([account_users, ordinary_group])
+    account.groups.get = lambda group_id: (
+        ordinary_group if group_id == ordinary_group.id else account_users
+    )
+
+    with pytest.raises(RuntimeError, match="collides with the account group plane"):
+        _audit(
+            _workspace(),
+            account_factory=lambda: account,
+            target_groups_probe=lambda *_args, **_kwargs: _runtime_groups(
+                {"ordinary-group-id": "ordinary-group"}
+            ),
+            allowed_workspace_groups={"ordinary-group-id": "ordinary-group"},
+        )
+
+
+@pytest.mark.parametrize(
+    ("account_group_id", "account_group_name"),
+    (
+        ("capability-group-id", "unrelated-account-group"),
+        ("different-account-group-id", "mip-agent-proxy-cap-reviewed"),
+    ),
+)
+def test_foreign_uc_control_plane_rejects_nonmember_account_group_collisions(
+    account_group_id: str,
+    account_group_name: str,
+) -> None:
+    account = _account()
+    account_users = next(account.groups.list())
+    nonmember_group = SimpleNamespace(
+        id=account_group_id,
+        display_name=account_group_name,
+        members=[],
+    )
+    account.groups.list = lambda **_kwargs: iter([account_users, nonmember_group])
+    account.groups.get = lambda group_id: (
+        nonmember_group if group_id == nonmember_group.id else account_users
+    )
+
+    with pytest.raises(RuntimeError, match="collides with the account group plane"):
+        _audit(
+            _workspace(),
+            account_factory=lambda: account,
+            target_groups_probe=lambda *_args, **_kwargs: _runtime_groups(
+                {"capability-group-id": "mip-agent-proxy-cap-reviewed"}
+            ),
+            allowed_workspace_groups={
+                "capability-group-id": "mip-agent-proxy-cap-reviewed"
+            },
+        )
+
+
 def test_foreign_uc_control_plane_accepts_implicit_account_users_baseline() -> None:
     account = _account()
     account.groups.list = lambda **_kwargs: iter([])
@@ -713,9 +781,7 @@ def test_foreign_uc_control_plane_accepts_implicit_account_users_baseline() -> N
 def test_foreign_uc_control_plane_accepts_exact_workspace_users_system_group() -> None:
     proof = _audit(
         _workspace(),
-        target_groups_probe=lambda *_args, **_kwargs: {
-            WORKSPACE_USERS_GROUP_ID: "users"
-        },
+        target_groups_probe=lambda *_args, **_kwargs: {WORKSPACE_USERS_GROUP_ID: "users"},
     )
 
     assert proof.application_id == APPLICATION_ID
@@ -728,9 +794,7 @@ def test_foreign_uc_control_plane_rejects_missing_workspace_users_membership() -
     ):
         _audit(
             _workspace(),
-            target_groups_probe=lambda *_args, **_kwargs: {
-                "account-users-id": "account users"
-            },
+            target_groups_probe=lambda *_args, **_kwargs: {"account-users-id": "account users"},
         )
 
 
@@ -741,9 +805,7 @@ def test_foreign_uc_control_plane_rejects_mismatched_workspace_users_id() -> Non
     ):
         _audit(
             _workspace(),
-            target_groups_probe=lambda *_args, **_kwargs: {
-                "different-users-id": "users"
-            },
+            target_groups_probe=lambda *_args, **_kwargs: {"different-users-id": "users"},
         )
 
 
@@ -754,9 +816,7 @@ def test_foreign_uc_control_plane_rejects_mismatched_workspace_users_name() -> N
     ):
         _audit(
             _workspace(),
-            target_groups_probe=lambda *_args, **_kwargs: {
-                WORKSPACE_USERS_GROUP_ID: "Users"
-            },
+            target_groups_probe=lambda *_args, **_kwargs: {WORKSPACE_USERS_GROUP_ID: "Users"},
         )
 
 
@@ -866,9 +926,7 @@ def test_foreign_uc_control_plane_rejects_unproven_workspace_users_identity(
 def test_foreign_uc_control_plane_accepts_target_omitted_account_users_baseline() -> None:
     proof = _audit(
         _workspace(),
-        target_groups_probe=lambda *_args, **_kwargs: {
-            WORKSPACE_USERS_GROUP_ID: "users"
-        },
+        target_groups_probe=lambda *_args, **_kwargs: {WORKSPACE_USERS_GROUP_ID: "users"},
     )
 
     assert proof.application_id == APPLICATION_ID
@@ -909,7 +967,9 @@ def test_foreign_uc_control_plane_uses_one_frozen_target_group_snapshot() -> Non
     ]
 
 
-def test_foreign_uc_control_plane_rejects_dynamic_target_group_absent_from_account_members() -> None:
+def test_foreign_uc_control_plane_rejects_dynamic_target_group_absent_from_account_members() -> (
+    None
+):
     account = _account()
     account.groups.list = lambda **_kwargs: iter([])
     account.groups.get = lambda _group_id: None
@@ -969,9 +1029,7 @@ def test_foreign_uc_control_plane_rejects_duplicate_account_group_display_names(
         members=[],
     )
     account.groups.list = lambda **_kwargs: iter([account_users, duplicate])
-    account.groups.get = lambda group_id: (
-        duplicate if group_id == duplicate.id else account_users
-    )
+    account.groups.get = lambda group_id: (duplicate if group_id == duplicate.id else account_users)
 
     with pytest.raises(RuntimeError, match="duplicate display name"):
         _audit(_workspace(), account_factory=lambda: account)
@@ -1043,9 +1101,7 @@ def test_foreign_uc_control_plane_rejects_noncanonical_target_with_empty_invento
     account = _account()
     if plane == "workspace":
         target = next(
-            workspace.service_principals.list(
-                filter=f'applicationId eq "{APPLICATION_ID}"'
-            )
+            workspace.service_principals.list(filter=f'applicationId eq "{APPLICATION_ID}"')
         )
         setattr(target, attribute, value)
         workspace.service_principals.list = lambda **_kwargs: iter([target])
@@ -1072,9 +1128,7 @@ def test_foreign_uc_control_plane_rejects_inactive_target_with_empty_inventory(
     account = _account()
     if plane == "workspace":
         target = next(
-            workspace.service_principals.list(
-                filter=f'applicationId eq "{APPLICATION_ID}"'
-            )
+            workspace.service_principals.list(filter=f'applicationId eq "{APPLICATION_ID}"')
         )
         target.active = False
         workspace.service_principals.list = lambda **_kwargs: iter([target])
@@ -1228,11 +1282,7 @@ def test_foreign_uc_control_plane_requires_zero_managed_online_metadata_access(
     privilege: str,
 ) -> None:
     workspace = _workspace(
-        {
-            (securable_type, full_name): [
-                _assignment(privilege, principal="account users")
-            ]
-        }
+        {(securable_type, full_name): [_assignment(privilege, principal="account users")]}
     )
     _add_managed_online_catalog(workspace)
 
@@ -1593,8 +1643,7 @@ def test_foreign_uc_control_plane_does_not_mask_workspace_owner_ambiguity() -> N
     system_group_list = workspace.groups.list
     workspace.groups.list = lambda **kwargs: (
         system_group_list(**kwargs)
-        if kwargs.get("attributes")
-        == "id,displayName,meta,entitlements,roles,externalId"
+        if kwargs.get("attributes") == "id,displayName,meta,entitlements,roles,externalId"
         else iter([SimpleNamespace(id="workspace-owner-group-id", display_name=owner)])
     )
     account = _account()
@@ -1679,8 +1728,7 @@ def test_foreign_uc_control_plane_rejects_workspace_group_account_user_collision
     workspace.users.list = lambda **_kwargs: iter([])
     workspace.groups.list = lambda **kwargs: (
         system_group_list(**kwargs)
-        if kwargs.get("attributes")
-        == "id,displayName,meta,entitlements,roles,externalId"
+        if kwargs.get("attributes") == "id,displayName,meta,entitlements,roles,externalId"
         else iter(
             [
                 SimpleNamespace(
@@ -1995,8 +2043,7 @@ def test_foreign_uc_control_plane_rejects_implicit_account_users_owner(
     system_group_list = workspace.groups.list
     workspace.groups.list = lambda **kwargs: (
         system_group_list(**kwargs)
-        if kwargs.get("attributes")
-        == "id,displayName,meta,entitlements,roles,externalId"
+        if kwargs.get("attributes") == "id,displayName,meta,entitlements,roles,externalId"
         else iter([SimpleNamespace(display_name="account users", id="account-users-id")])
     )
     account = _account()
@@ -2307,18 +2354,14 @@ def test_binding_excluded_account_users_id_rejects_when_membership_is_implicit()
 
 def test_foreign_uc_control_plane_accepts_binding_excluded_hidden_children() -> None:
     workspace = _workspace(
-        {
-            ("schema", "hidden.private"): [
-                _assignment("USE_SCHEMA", principal="account users")
-            ]
-        },
+        {("schema", "hidden.private"): [_assignment("USE_SCHEMA", principal="account users")]},
         extra_catalogs=[
             SimpleNamespace(
                 name="hidden",
                 isolation_mode="ISOLATED",
                 owner=FOREIGN_OWNER,
             )
-        ]
+        ],
     )
     workspace.workspace_bindings.get_bindings = lambda _type, name: iter(
         [
@@ -2457,11 +2500,7 @@ def test_foreign_uc_control_plane_rejects_binding_excluded_runtime_ownership() -
 
 def test_foreign_uc_control_plane_skips_binding_excluded_registered_model_grants() -> None:
     workspace = _workspace(
-        {
-            ("function", "hidden.private.model"): [
-                _assignment("EXECUTE", principal="account users")
-            ]
-        },
+        {("function", "hidden.private.model"): [_assignment("EXECUTE", principal="account users")]},
         extra_catalogs=[
             SimpleNamespace(
                 name="hidden",
@@ -2684,8 +2723,7 @@ def test_foreign_uc_control_plane_uses_target_credential_for_group_ownership() -
     system_group_list = workspace.groups.list
     workspace.groups.list = lambda **kwargs: (
         system_group_list(**kwargs)
-        if kwargs.get("attributes")
-        == "id,displayName,meta,entitlements,roles,externalId"
+        if kwargs.get("attributes") == "id,displayName,meta,entitlements,roles,externalId"
         else iter([SimpleNamespace(display_name="runtime-owners", id="owner-group-id")])
     )
 
@@ -2696,13 +2734,9 @@ def test_foreign_uc_control_plane_uses_target_credential_for_group_ownership() -
         display_name="runtime-owners",
         members=[],
     )
-    account.groups.list = lambda **_kwargs: iter(
-        [account_users, account_owner_group]
-    )
+    account.groups.list = lambda **_kwargs: iter([account_users, account_owner_group])
     account.groups.get = lambda group_id: (
-        account_owner_group
-        if group_id == "owner-group-id"
-        else account_users
+        account_owner_group if group_id == "owner-group-id" else account_users
     )
     calls: list[tuple[str, str, str, str]] = []
 

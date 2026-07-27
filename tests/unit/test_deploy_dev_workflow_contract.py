@@ -2397,6 +2397,9 @@ def test_deploy_uses_isolated_identity_for_agent_resource_ownership() -> None:
     assert "run_with_account_identity" in proxy_uc_block
     assert "run_with_proof_signing_authority" in proxy_uc_block
     assert "run_with_agent_proxy_credentials" in proxy_uc_block
+    assert "--supervisor-id" in proxy_uc_block
+    assert "--supervisor-endpoint-id" in proxy_uc_block
+    assert "--genie-space-id" in proxy_uc_block
     runtime_uc_audit = runtime_block.index(
         'step "prove dual-authority agent-runtime UC boundary before cutover"'
     )
@@ -2436,12 +2439,13 @@ def test_deploy_uses_isolated_identity_for_agent_resource_ownership() -> None:
         "tools.databricks.verify_agent_proxy_uc_boundary_dual_authority"
         in script[final_proxy_audit:proxy_secret_cleanup]
     )
-    final_proxy_uc_block = script[
-        final_proxy_uc_audit:final_proxy_identity_boundary
-    ]
+    final_proxy_uc_block = script[final_proxy_uc_audit:final_proxy_identity_boundary]
     assert "run_with_account_identity" in final_proxy_uc_block
     assert "run_with_proof_signing_authority" in final_proxy_uc_block
     assert "run_with_agent_proxy_credentials" in final_proxy_uc_block
+    assert "--supervisor-id" in final_proxy_uc_block
+    assert "--supervisor-endpoint-id" in final_proxy_uc_block
+    assert "--genie-space-id" in final_proxy_uc_block
     assert (
         "tools.databricks.verify_agent_proxy_identity_boundary"
         in script[final_proxy_identity_boundary:proxy_secret_cleanup]
@@ -5796,9 +5800,7 @@ def test_agent_proxy_acl_lifecycle_is_bound_and_compensated_before_lease_release
         < first_mutation
     )
     assert "AGENT_PROXY_ACCESS_MUTATED=1" not in script[lease_acquired:proxy_compensation_armed]
-    exact_identity_export = script.index(
-        'export MIP_DEPLOYMENT_APP_OBJECT_ID="$APP_OBJECT_ID"'
-    )
+    exact_identity_export = script.index('export MIP_DEPLOYMENT_APP_OBJECT_ID="$APP_OBJECT_ID"')
     unsigned_rebase_stop = script.index(
         'step "stop the exact unsigned rebase App before legacy proxy ACL migration"'
     )
@@ -5871,12 +5873,11 @@ def test_agent_proxy_acl_lifecycle_is_bound_and_compensated_before_lease_release
     assert "tools.databricks.agent_proxy_access" in deny_all
     assert "tools.databricks.verify_agent_proxy_identity_boundary" in deny_all
     assert "--customer-resource-denial" in deny_all
+    assert "--wait-customer-resource-denial" in deny_all
     assert "--account-id" in deny_all
     assert "run_with_agent_proxy_credentials" in deny_all
     assert "run_with_proof_signing_authority" in deny_all
-    assert "run_with_proof_signing_authority" in _shell_function(
-        "converge_agent_proxy_boundary"
-    )
+    assert "run_with_proof_signing_authority" in _shell_function("converge_agent_proxy_boundary")
 
     trap = _shell_function("restore_rendered_sql_fail_closed")
     assert trap.index("compensate_agent_proxy_access") < trap.index(

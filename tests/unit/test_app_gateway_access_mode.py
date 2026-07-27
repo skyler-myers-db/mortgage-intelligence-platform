@@ -46,6 +46,7 @@ def _workspace(
             application_id=application_id,
         ),
         members=[] if member_id is None else [SimpleNamespace(value=member_id)],
+        meta=SimpleNamespace(resource_type="WorkspaceGroup"),
     )
     return SimpleNamespace(
         serving_endpoints=SimpleNamespace(

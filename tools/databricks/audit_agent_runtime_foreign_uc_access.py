@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 from typing import Any
@@ -55,11 +55,7 @@ _DEFAULT_TARGET_GROUPS_PROBE = target_identity_groups_probe
 
 def _exact_owner(item: object, *, context: str) -> str:
     owner = getattr(item, "owner", None)
-    if (
-        not isinstance(owner, str)
-        or not owner
-        or owner != owner.strip()
-    ):
+    if not isinstance(owner, str) or not owner or owner != owner.strip():
         raise RuntimeError(f"{context} returned a noncanonical owner")
     return owner
 
@@ -74,10 +70,7 @@ def _assert_no_foreign_ownership(
 ) -> None:
     """Reject direct or target-credential-proven group ownership of foreign objects."""
 
-    owners = {
-        _exact_owner(item, context="foreign UC object inventory")
-        for item in objects
-    }
+    owners = {_exact_owner(item, context="foreign UC object inventory") for item in objects}
     policy = ApprovedOwnerPolicy(
         workspace=workspace,
         target=target,
@@ -223,12 +216,12 @@ def parse_foreign_catalog_binding_policy(raw: str) -> dict[str, CatalogBindingEv
     return policy
 
 
-def _account_group_evidence(
+def _account_group_inventory_evidence(
     account: Any,
     *,
     target_scim_id: str,
-) -> tuple[dict[str, str], dict[str, str]]:
-    """Return positive account memberships and immutable system-group aliases."""
+) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
+    """Return effective, system, and complete account-group evidence."""
 
     groups_by_id: dict[str, tuple[str, tuple[str, ...]]] = {}
     group_ids_by_name: dict[str, str] = {}
@@ -270,7 +263,25 @@ def _account_group_evidence(
     return (
         {group_id: groups_by_id[group_id][0] for group_id in effective_ids},
         system_groups,
+        {
+            group_id: display_name
+            for group_id, (display_name, _members) in groups_by_id.items()
+        },
     )
+
+
+def _account_group_evidence(
+    account: Any,
+    *,
+    target_scim_id: str,
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Retain the effective/system compatibility contract for other auditors."""
+
+    effective, system, _inventory = _account_group_inventory_evidence(
+        account,
+        target_scim_id=target_scim_id,
+    )
+    return effective, system
 
 
 def _normalized_target_groups(value: object) -> dict[str, str]:
@@ -325,15 +336,11 @@ def _snapshot_membership_probe(
         implicit_name = implicit_system_groups.get(group_id)
         if implicit_name is not None:
             if implicit_name.casefold() != group_name.casefold():
-                raise RuntimeError(
-                    "managed system group snapshot returned a mismatched group name"
-                )
+                raise RuntimeError("managed system group snapshot returned a mismatched group name")
             return True
         if group_name.casefold() == "account users":
             if implicit_system_groups:
-                raise RuntimeError(
-                    "managed system group snapshot returned a mismatched group id"
-                )
+                raise RuntimeError("managed system group snapshot returned a mismatched group id")
             return True
         observed_name = effective_groups.get(group_id)
         if observed_name is not None:
@@ -343,9 +350,7 @@ def _snapshot_membership_probe(
                 )
             return True
         if any(name.casefold() == group_name.casefold() for name in effective_groups.values()):
-            raise RuntimeError(
-                "credentialed target group snapshot returned a mismatched group id"
-            )
+            raise RuntimeError("credentialed target group snapshot returned a mismatched group id")
         return False
 
     return probe
@@ -374,9 +379,7 @@ def _assert_no_binding_denied_runtime_ownership(
             context="binding-denied foreign UC object inventory",
         )
         if owner.casefold() in owner_aliases:
-            raise RuntimeError(
-                "agent-runtime service principal cannot own governed UC objects"
-            )
+            raise RuntimeError("agent-runtime service principal cannot own governed UC objects")
 
 
 def _assert_runtime_workspace_assignment_boundary(
@@ -386,9 +389,11 @@ def _assert_runtime_workspace_assignment_boundary(
     target_scim_ids: set[str],
     account_target_scim_id: str,
     account_effective_groups: dict[str, str],
+    account_group_inventory: dict[str, str],
     effective_target_groups: dict[str, str],
     implicit_system_groups: dict[str, str],
     workspace_system_groups: dict[str, str],
+    allowed_workspace_groups: dict[str, str],
     metastore_id: str,
     workspace_id: str,
     approved_foreign_workspace_ids: set[str],
@@ -403,49 +408,40 @@ def _assert_runtime_workspace_assignment_boundary(
             continue
         observed_name = effective_target_groups.get(group_id)
         if observed_name is None or observed_name.casefold() != group_name.casefold():
-            raise RuntimeError(
-                "agent-runtime account and credentialed group identities disagree"
-            )
+            raise RuntimeError("agent-runtime account and credentialed group identities disagree")
     target_group_ids_by_name = {
-        group_name.casefold(): group_id
-        for group_id, group_name in effective_target_groups.items()
+        group_name.casefold(): group_id for group_id, group_name in effective_target_groups.items()
     }
     for group_id, group_name in workspace_system_groups.items():
         observed_name = effective_target_groups.get(group_id)
         observed_id = target_group_ids_by_name.get(group_name.casefold())
-        if (
-            observed_name is None
-            or observed_name != group_name
-            or observed_id != group_id
-        ):
-            raise RuntimeError(
-                "agent-runtime workspace users system group identity disagrees"
-            )
+        if observed_name is None or observed_name != group_name or observed_id != group_id:
+            raise RuntimeError("agent-runtime workspace users system group identity disagrees")
     for group_id, group_name in implicit_system_groups.items():
         observed_name = effective_target_groups.get(group_id)
         observed_id = target_group_ids_by_name.get(group_name.casefold())
-        if (
-            observed_name is not None
-            and observed_name.casefold() != group_name.casefold()
-        ) or (observed_id is not None and observed_id != group_id):
-            raise RuntimeError(
-                "agent-runtime managed system group identities disagree"
-            )
+        if (observed_name is not None and observed_name.casefold() != group_name.casefold()) or (
+            observed_id is not None and observed_id != group_id
+        ):
+            raise RuntimeError("agent-runtime managed system group identities disagree")
     effective_groups = dict(effective_target_groups)
     ordinary_groups = {
         group_id: name
         for group_id, name in effective_groups.items()
-        if name.casefold() != _ACCOUNT_USERS_GROUP
-        and group_id not in workspace_system_groups
+        if name.casefold() != _ACCOUNT_USERS_GROUP and group_id not in workspace_system_groups
     }
-    if ordinary_groups:
-        raise RuntimeError(
-            "agent-runtime has forbidden ordinary account group membership"
-        )
+    account_group_names = {
+        group_name.casefold() for group_name in account_group_inventory.values()
+    }
+    if set(allowed_workspace_groups).intersection(account_group_inventory) or any(
+        group_name.casefold() in account_group_names
+        for group_name in allowed_workspace_groups.values()
+    ):
+        raise RuntimeError("a reviewed workspace group collides with the account group plane")
+    if ordinary_groups != allowed_workspace_groups:
+        raise RuntimeError("agent-runtime has forbidden ordinary account group membership")
     if not implicit_system_groups and "account users" not in target_group_ids_by_name:
-        raise RuntimeError(
-            "agent-runtime managed system group identity could not be proven"
-        )
+        raise RuntimeError("agent-runtime managed system group identity could not be proven")
     assignment_group_ids = {*effective_groups, *implicit_system_groups}
     assignment_group_names = {
         *(name.casefold() for name in effective_groups.values()),
@@ -468,9 +464,7 @@ def _assert_runtime_workspace_assignment_boundary(
         for assignment in account.workspace_assignment.list(int(assigned_workspace_id)):
             principal = getattr(assignment, "principal", None)
             principal_id = _text(getattr(principal, "principal_id", None))
-            service_principal_name = _text(
-                getattr(principal, "service_principal_name", None)
-            )
+            service_principal_name = _text(getattr(principal, "service_principal_name", None))
             group_name = _text(getattr(principal, "group_name", None))
             user_name = _text(getattr(principal, "user_name", None))
             permissions = tuple(
@@ -484,15 +478,11 @@ def _assert_runtime_workspace_assignment_boundary(
                 or sum(bool(value) for value in (service_principal_name, group_name, user_name))
                 != 1
             ):
-                raise RuntimeError(
-                    "agent-runtime workspace assignment inventory is incomplete"
-                )
+                raise RuntimeError("agent-runtime workspace assignment inventory is incomplete")
             direct_id_match = principal_id in normalized_target_ids
             direct_name_match = service_principal_name.casefold() == application_id.casefold()
             if direct_name_match != direct_id_match:
-                raise RuntimeError(
-                    "agent-runtime workspace assignment identity fields disagree"
-                )
+                raise RuntimeError("agent-runtime workspace assignment identity fields disagree")
             group_id_match = principal_id in assignment_group_ids
             group_name_match = group_name.casefold() in assignment_group_names
             if group_id_match != group_name_match:
@@ -577,6 +567,7 @@ def audit_foreign_uc_access(
     group_membership_probe: Callable[[Any, str, str, str, str], bool] | None = None,
     target_groups_probe: Callable[..., dict[str, str]] = target_identity_groups_probe,
     assert_single_writer: Callable[[], None] | None = None,
+    allowed_workspace_groups: Mapping[str, str] | None = None,
 ) -> ControlPlaneForeignCatalogProof:
     """Prove zero target-principal access on every ordinary foreign catalog."""
 
@@ -595,9 +586,7 @@ def audit_foreign_uc_access(
         workspace,
         expected_principal=inventory_principal,
     )
-    binding_policy = parse_foreign_catalog_binding_policy(
-        foreign_catalog_binding_policy
-    )
+    binding_policy = parse_foreign_catalog_binding_policy(foreign_catalog_binding_policy)
     account = account_factory()
     workspace_target = workspace_target_identity(
         workspace,
@@ -615,10 +604,7 @@ def audit_foreign_uc_access(
         "workspace_host": workspace_host,
     }
     if target_groups_probe is _DEFAULT_TARGET_GROUPS_PROBE:
-        credential_lease = (
-            assert_single_writer
-            or held_deployment_credential_assertion(workspace)
-        )
+        credential_lease = assert_single_writer or held_deployment_credential_assertion(workspace)
         probe_kwargs["assert_single_writer"] = credential_lease
     effective_target_groups = _normalized_target_groups(
         target_groups_probe(
@@ -628,7 +614,14 @@ def audit_foreign_uc_access(
             **probe_kwargs,
         )
     )
-    account_effective_groups, implicit_system_groups = _account_group_evidence(
+    normalized_allowed_workspace_groups = _normalized_target_groups(
+        dict(allowed_workspace_groups or {})
+    )
+    (
+        account_effective_groups,
+        implicit_system_groups,
+        account_group_inventory,
+    ) = _account_group_inventory_evidence(
         account,
         target_scim_id=account_target_scim_id,
     )
@@ -662,9 +655,11 @@ def audit_foreign_uc_access(
         target_scim_ids={account_target_scim_id, workspace_target.scim_id},
         account_target_scim_id=account_target_scim_id,
         account_effective_groups=account_effective_groups,
+        account_group_inventory=account_group_inventory,
         effective_target_groups=effective_target_groups,
         implicit_system_groups=implicit_system_groups,
         workspace_system_groups=workspace_system_groups,
+        allowed_workspace_groups=normalized_allowed_workspace_groups,
         metastore_id=metastore_id,
         workspace_id=workspace_id,
         approved_foreign_workspace_ids=approved_foreign_workspace_ids,
@@ -826,9 +821,7 @@ def audit_foreign_uc_access(
         catalog=mip_catalog,
         metastore_id=metastore_id,
         workspace_id=workspace_id,
-        grant_audited_catalogs=frozenset(
-            set(foreign_catalogs) - set(binding_denied_catalogs)
-        ),
+        grant_audited_catalogs=frozenset(set(foreign_catalogs) - set(binding_denied_catalogs)),
         binding_denied_catalogs=tuple(
             binding_denied_catalogs[name] for name in sorted(binding_denied_catalogs)
         ),
@@ -843,9 +836,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--foreign-catalog-binding-policy-json",
         default=os.environ.get("MIP_UC_FOREIGN_CATALOG_BINDING_POLICY", ""),
-        help=(
-            "Exact versioned JSON contract for ordinary catalogs denied by workspace binding."
-        ),
+        help=("Exact versioned JSON contract for ordinary catalogs denied by workspace binding."),
     )
     parser.add_argument(
         "--allow-missing-mip-catalog",

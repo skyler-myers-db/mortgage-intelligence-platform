@@ -1189,6 +1189,7 @@ def _managed_group(
             application_id=application_id,
         ),
         members=([SimpleNamespace(value=principal_id)] if principal_id is not None else []),
+        meta=SimpleNamespace(resource_type="WorkspaceGroup"),
     )
 
 
@@ -2537,6 +2538,7 @@ def test_retired_endpoint_group_cleanup_is_exact_and_idempotent() -> None:
                 application_id=application_id,
             ),
             members=([SimpleNamespace(value=scim_id)] if application_id == "app-client" else []),
+            meta=SimpleNamespace(resource_type="WorkspaceGroup"),
         )
     deletes: list[str] = []
     events: list[str] = []
@@ -2607,6 +2609,7 @@ def test_retired_endpoint_group_cleanup_rejects_transient_endpoint_absence() -> 
                 application_id=application_id,
             ),
             members=[SimpleNamespace(value=scim_id)],
+            meta=SimpleNamespace(resource_type="WorkspaceGroup"),
         )
     }
     deletes: list[str] = []
@@ -2668,6 +2671,7 @@ def test_retired_endpoint_group_cleanup_rejects_unrelated_member() -> None:
             application_id="app-client",
         ),
         members=[SimpleNamespace(value="unrelated-scim-id")],
+        meta=SimpleNamespace(resource_type="WorkspaceGroup"),
     )
     deleted: list[str] = []
     workspace = SimpleNamespace(

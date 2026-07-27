@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any, cast
@@ -541,12 +542,8 @@ def test_admin_inventory_rejects_same_name_endpoint_id_replacement(
 def test_admin_inventory_rejects_managed_group_wrong_external_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        boundary, "_supervisor_agents", lambda _workspace: {TARGET_SUPERVISOR: ""}
-    )
-    monkeypatch.setattr(
-        boundary, "_genie_spaces", lambda _workspace: {TARGET_GENIE: ""}
-    )
+    monkeypatch.setattr(boundary, "_supervisor_agents", lambda _workspace: {TARGET_SUPERVISOR: ""})
+    monkeypatch.setattr(boundary, "_genie_spaces", lambda _workspace: {TARGET_GENIE: ""})
     group = SimpleNamespace(
         id="managed-query-group-id",
         display_name=PROXY_QUERY_GROUP,
@@ -573,12 +570,8 @@ def test_admin_inventory_rejects_duplicate_managed_group_identity(
     monkeypatch: pytest.MonkeyPatch,
     duplicate_field: str,
 ) -> None:
-    monkeypatch.setattr(
-        boundary, "_supervisor_agents", lambda _workspace: {TARGET_SUPERVISOR: ""}
-    )
-    monkeypatch.setattr(
-        boundary, "_genie_spaces", lambda _workspace: {TARGET_GENIE: ""}
-    )
+    monkeypatch.setattr(boundary, "_supervisor_agents", lambda _workspace: {TARGET_SUPERVISOR: ""})
+    monkeypatch.setattr(boundary, "_genie_spaces", lambda _workspace: {TARGET_GENIE: ""})
     expected_external = managed_query_group_external_id(
         endpoint_id="gateway-id",
         application_id=PROXY_ID,
@@ -733,10 +726,7 @@ def _account(*, admin_succeeds: bool = False) -> object:
 
 def _admin_workspace(*, state: object = ComputeState.STOPPED) -> object:
     permission = SimpleNamespace(permission_level="CAN_MANAGE", inherited=True)
-    managed_groups = {
-        group.id: group
-        for group in _admin_inventory_workspace().groups.list()
-    }
+    managed_groups = {group.id: group for group in _admin_inventory_workspace().groups.list()}
     return SimpleNamespace(
         apps=SimpleNamespace(
             get=lambda _name: SimpleNamespace(
@@ -771,9 +761,7 @@ def _admin_workspace(*, state: object = ComputeState.STOPPED) -> object:
                 )
             )
         ),
-        groups=SimpleNamespace(
-            get=lambda group_id: managed_groups[group_id]
-        ),
+        groups=SimpleNamespace(get=lambda group_id: managed_groups[group_id]),
     )
 
 
@@ -1343,11 +1331,7 @@ def _global_denial_workspace(
         ),
         genie=SimpleNamespace(get_space=genie_get),
         groups=SimpleNamespace(
-            patch=(
-                (lambda **_kwargs: object())
-                if successful_read == "group-manager"
-                else _denied
-            )
+            patch=((lambda **_kwargs: object()) if successful_read == "group-manager" else _denied)
         ),
     )
 
@@ -1403,6 +1387,148 @@ def test_global_denial_rejects_authenticated_identity_mismatch() -> None:
             expected_application_id=PROXY_ID,
             account_id="account-id",
         )
+
+
+@pytest.mark.parametrize(
+    ("group_id", "group_name"),
+    (
+        ("forged-group-id", "mip-serving-query-managed"),
+        ("managed-query-group-id", "forged-group-name"),
+    ),
+)
+def test_global_denial_rejects_partial_managed_group_identity_collisions(
+    group_id: str,
+    group_name: str,
+) -> None:
+    workspace = _global_denial_workspace()
+    workspace.current_user.me = lambda: SimpleNamespace(
+        application_id=PROXY_ID,
+        user_name=PROXY_ID,
+        groups=[SimpleNamespace(value=group_id, display=group_name)],
+    )
+
+    with pytest.raises(RuntimeError, match="group identity drifted") as exc_info:
+        boundary.verify_customer_resource_denial_boundary(
+            workspace=workspace,
+            inventory=_global_denial_inventory(),
+            expected_application_id=PROXY_ID,
+            account_id="account-id",
+        )
+
+    assert exc_info.type is RuntimeError
+
+
+def test_global_denial_classifies_only_exact_managed_group_pair_as_pending() -> None:
+    workspace = _global_denial_workspace()
+    workspace.current_user.me = lambda: SimpleNamespace(
+        application_id=PROXY_ID,
+        user_name=PROXY_ID,
+        groups=[
+            SimpleNamespace(
+                value="managed-query-group-id",
+                display="mip-serving-query-managed",
+            )
+        ],
+    )
+
+    with pytest.raises(boundary.ManagedCustomerCapabilityProjectionPending):
+        boundary.verify_customer_resource_denial_boundary(
+            workspace=workspace,
+            inventory=_global_denial_inventory(),
+            expected_application_id=PROXY_ID,
+            account_id="account-id",
+        )
+
+
+def test_global_denial_wait_uses_a_fresh_client_until_projection_converges(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clients = iter(["stale-client", "fresh-client"])
+    observed: list[str] = []
+    sleeps: list[float] = []
+
+    def verify(*, workspace: str, **_kwargs: object) -> None:
+        observed.append(workspace)
+        if workspace == "stale-client":
+            raise boundary.ManagedCustomerCapabilityProjectionPending("stale")
+
+    monkeypatch.setattr(
+        boundary,
+        "verify_customer_resource_denial_boundary",
+        verify,
+    )
+
+    boundary.wait_for_customer_resource_denial_boundary(
+        probe=lambda: boundary.verify_customer_resource_denial_boundary(
+            workspace=next(clients),
+            inventory=_global_denial_inventory(),
+            expected_application_id=PROXY_ID,
+            account_id="account-id",
+            admin_workspace=object(),
+        ),
+        sleep=lambda seconds: sleeps.append(seconds),
+        clock=lambda: 0.0,
+    )
+
+    assert observed == ["stale-client", "fresh-client"]
+    assert sleeps == [2.0]
+
+
+def test_global_denial_wait_times_out_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = iter([0.0, 121.0])
+    monkeypatch.setattr(
+        boundary,
+        "verify_customer_resource_denial_boundary",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            boundary.ManagedCustomerCapabilityProjectionPending("stale")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="projection did not converge"):
+        boundary.wait_for_customer_resource_denial_boundary(
+            probe=lambda: boundary.verify_customer_resource_denial_boundary(
+                workspace=object(),
+                inventory=_global_denial_inventory(),
+                expected_application_id=PROXY_ID,
+                account_id="account-id",
+                admin_workspace=object(),
+            ),
+            sleep=lambda _seconds: None,
+            clock=lambda: next(clock),
+            timeout_seconds=120.0,
+        )
+
+
+def test_global_denial_wait_never_retries_a_nonprojection_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def verify(**_kwargs: object) -> None:
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("customer resource unexpectedly readable")
+
+    monkeypatch.setattr(
+        boundary,
+        "verify_customer_resource_denial_boundary",
+        verify,
+    )
+
+    with pytest.raises(RuntimeError, match="unexpectedly readable"):
+        boundary.wait_for_customer_resource_denial_boundary(
+            probe=lambda: boundary.verify_customer_resource_denial_boundary(
+                workspace=object(),
+                inventory=_global_denial_inventory(),
+                expected_application_id=PROXY_ID,
+                account_id="account-id",
+                admin_workspace=object(),
+            ),
+        )
+
+    assert calls == 1
 
 
 def test_global_denial_rejects_contradictory_identity_fields() -> None:
@@ -1581,11 +1707,76 @@ def test_global_denial_cli_requires_no_deployment_target(
     assert "foundation invocation not asserted" in output
 
 
+def test_global_denial_cli_wait_rebuilds_the_proxy_client_for_each_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DATABRICKS_HOST", "https://workspace.cloud.databricks.com")
+    monkeypatch.setenv("DATABRICKS_AGENT_PROXY_CLIENT_ID", PROXY_ID)
+    monkeypatch.setenv("DATABRICKS_AGENT_PROXY_CLIENT_SECRET", "proxy-secret")
+    clients: list[object] = []
+
+    def workspace_client() -> object:
+        client = SimpleNamespace(
+            ordinal=len(clients),
+            config=SimpleNamespace(host="https://workspace.cloud.databricks.com"),
+        )
+        clients.append(client)
+        return client
+
+    observed: list[object] = []
+
+    def verify(*, workspace: object, **_kwargs: object) -> None:
+        observed.append(workspace)
+        if len(observed) == 1:
+            raise boundary.ManagedCustomerCapabilityProjectionPending("stale")
+
+    def wait(*, probe: Callable[[], None]) -> None:
+        with pytest.raises(boundary.ManagedCustomerCapabilityProjectionPending):
+            probe()
+        probe()
+
+    monkeypatch.setattr(boundary, "WorkspaceClient", workspace_client)
+    monkeypatch.setattr(
+        boundary,
+        "assert_workspace_admin_inventory_identity",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        boundary,
+        "collect_admin_customer_resource_denial_inventory",
+        lambda _workspace: _global_denial_inventory(),
+    )
+    monkeypatch.setattr(
+        boundary,
+        "verify_customer_resource_denial_boundary",
+        verify,
+    )
+    monkeypatch.setattr(boundary, "wait_for_customer_resource_denial_boundary", wait)
+
+    assert (
+        boundary.main(
+            [
+                "--expected-application-id",
+                PROXY_ID,
+                "--expected-inventory-principal",
+                "reviewed-admin@example.com",
+                "--account-id",
+                "account-id",
+                "--customer-resource-denial",
+                "--wait-customer-resource-denial",
+            ]
+        )
+        == 0
+    )
+
+    assert len(clients) == 3
+    assert clients[0] not in observed
+    assert observed == clients[1:]
+
+
 def test_global_denial_cli_requires_reviewed_inventory_principal() -> None:
     with pytest.raises(SystemExit, match="expected-inventory-principal"):
-        boundary.main(
-            ["--expected-application-id", PROXY_ID, "--customer-resource-denial"]
-        )
+        boundary.main(["--expected-application-id", PROXY_ID, "--customer-resource-denial"])
 
 
 def test_global_denial_cli_requires_account_id() -> None:

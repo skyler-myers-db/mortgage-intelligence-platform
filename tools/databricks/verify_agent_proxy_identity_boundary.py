@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -17,6 +16,11 @@ from backend.services.capability_serving_probes import query_serving_endpoint_wi
 from databricks.sdk import AccountClient, WorkspaceClient
 from databricks.sdk.service.sql import ExecuteStatementRequestOnWaitTimeout
 from tools.databricks.agent_proxy_access import _supervisor_agents
+from tools.databricks.agent_proxy_denial_projection import (
+    ManagedCustomerCapabilityProjectionPending,
+    wait_for_customer_resource_denial_boundary,
+)
+from tools.databricks.agent_proxy_identity_boundary_cli import parser as _parser
 from tools.databricks.agent_proxy_identity_inventory_groups import (
     collect_managed_proxy_workspace_groups,
     reviewed_agent_proxy_capability_group_bindings,
@@ -173,7 +177,9 @@ class AgentProxyCustomerResourceDenialInventory:
     managed_query_group_bindings: tuple[ManagedWorkspaceGroupBinding, ...] = ()
 
 
-def collect_admin_customer_resource_denial_inventory(workspace: Any) -> AgentProxyCustomerResourceDenialInventory:
+def collect_admin_customer_resource_denial_inventory(
+    workspace: Any,
+) -> AgentProxyCustomerResourceDenialInventory:
     """Capture customer agent resources plus classified foundation metadata."""
     supervisor_ids = _bounded_unique(
         _supervisor_agents(workspace), label="Supervisor", allow_empty=True
@@ -318,13 +324,9 @@ def collect_admin_inventory(
             if group.name == expected_name and group.external_id == expected_external_id
         )
         if len(matches) != 1:
-            raise RuntimeError(
-                "reviewed managed serving-query group contract drifted"
-            )
+            raise RuntimeError("reviewed managed serving-query group contract drifted")
         matched = matches[0]
-        reviewed_query_groups.append(
-            (endpoint_id, matched.name, matched.id, matched.external_id)
-        )
+        reviewed_query_groups.append((endpoint_id, matched.name, matched.id, matched.external_id))
     genie_space_ids = _bounded_unique(_genie_spaces(workspace), label="Genie")
     serving_endpoint_names = _bounded_unique(
         (_text(item, "name") for item in workspace.serving_endpoints.list()),
@@ -492,9 +494,13 @@ def verify_target_query_boundary(
         sleep=sleep,
         clock=clock,
     )
-    for _kind, _resource_id, group_name, group_id, _external_id in (
-        inventory.reviewed_capability_group_bindings
-    ):
+    for (
+        _kind,
+        _resource_id,
+        group_name,
+        group_id,
+        _external_id,
+    ) in inventory.reviewed_capability_group_bindings:
         wait_for_managed_query_group_projection(
             workspace,
             expected_application_id=expected_application_id,
@@ -577,17 +583,22 @@ def verify_customer_resource_denial_boundary(
     }
     if authenticated != {expected_application_id}:
         raise RuntimeError("authenticated agent-proxy identity does not match its application id")
-    managed_ids = {
-        binding.id for binding in inventory.managed_query_group_bindings
-    }
-    managed_names = {
-        binding.name for binding in inventory.managed_query_group_bindings
-    }
-    if any(
-        group_id in managed_ids or group_name in managed_names
-        for group_id, group_name in _projected_identity_groups(me)
-    ):
-        raise RuntimeError(
+    bindings = inventory.managed_query_group_bindings
+    managed_groups = {binding.id: binding.name for binding in bindings}
+    managed_ids_by_name = {binding.name: binding.id for binding in bindings}
+    projected_managed_groups: set[tuple[str, str]] = set()
+    for group_id, group_name in _projected_identity_groups(me):
+        expected_name = managed_groups.get(group_id)
+        expected_id = managed_ids_by_name.get(group_name)
+        if expected_name is None and expected_id is None:
+            continue
+        if expected_name != group_name or expected_id != group_id:
+            raise RuntimeError(
+                "agent-proxy managed customer-capability group identity drifted"
+            )
+        projected_managed_groups.add((group_id, group_name))
+    if projected_managed_groups:
+        raise ManagedCustomerCapabilityProjectionPending(
             "agent-proxy retains a managed customer-capability group"
         )
     verify_managed_query_group_administration_denied(
@@ -743,36 +754,11 @@ def verify_boundary(
     )
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--expected-application-id", required=True)
-    parser.add_argument("--expected-inventory-principal")
-    parser.add_argument("--account-host")
-    parser.add_argument("--account-id")
-    parser.add_argument("--app-name")
-    parser.add_argument("--app-url")
-    parser.add_argument("--lakebase-instance")
-    parser.add_argument("--warehouse-id")
-    parser.add_argument("--supervisor-id")
-    parser.add_argument("--supervisor-endpoint")
-    parser.add_argument("--supervisor-endpoint-id")
-    parser.add_argument("--preserve-supervisor-id")
-    parser.add_argument("--preserve-supervisor-endpoint")
-    parser.add_argument("--preserve-supervisor-endpoint-id")
-    parser.add_argument("--genie-space-id")
-    parser.add_argument("--target-query-only", action="store_true")
-    parser.add_argument("--customer-resource-denial", action="store_true")
-    parser.add_argument(
-        "--allow-attested-app-401",
-        action="store_true",
-        help="Accept target-App 401 only with a stable independent admin attestation.",
-    )
-    return parser
-
-
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     denial_mode = args.customer_resource_denial
+    if args.wait_customer_resource_denial and not denial_mode:
+        raise SystemExit("--wait-customer-resource-denial requires --customer-resource-denial")
     if denial_mode and args.target_query_only:
         raise SystemExit("--customer-resource-denial conflicts with --target-query-only")
     if denial_mode and not args.expected_inventory_principal:
@@ -829,17 +815,29 @@ def main(argv: list[str] | None = None) -> int:
         client_secret_env="DATABRICKS_AGENT_PROXY_CLIENT_SECRET",
         label="agent-proxy",
     )
-    proxy_workspace = WorkspaceClient()
     if denial_mode:
-        verify_customer_resource_denial_boundary(
-            workspace=proxy_workspace,
-            inventory=collect_admin_customer_resource_denial_inventory(admin_workspace),
-            expected_application_id=args.expected_application_id,
-            account_id=args.account_id,
-            admin_workspace=admin_workspace,
-        )
+        denial_inventory = collect_admin_customer_resource_denial_inventory(admin_workspace)
+        if args.wait_customer_resource_denial:
+            wait_for_customer_resource_denial_boundary(
+                probe=lambda: verify_customer_resource_denial_boundary(
+                    workspace=WorkspaceClient(),
+                    inventory=denial_inventory,
+                    expected_application_id=args.expected_application_id,
+                    account_id=args.account_id,
+                    admin_workspace=admin_workspace,
+                ),
+            )
+        else:
+            verify_customer_resource_denial_boundary(
+                workspace=WorkspaceClient(),
+                inventory=denial_inventory,
+                expected_application_id=args.expected_application_id,
+                account_id=args.account_id,
+                admin_workspace=admin_workspace,
+            )
     else:
-        inventory = collect_admin_inventory(
+        proxy_workspace = WorkspaceClient()
+        positive_inventory = collect_admin_inventory(
             admin_workspace,
             app_name=args.app_name,
             app_url=args.app_url,
@@ -855,7 +853,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.target_query_only:
             verify_target_query_boundary(
                 workspace=proxy_workspace,
-                inventory=inventory,
+                inventory=positive_inventory,
                 expected_application_id=args.expected_application_id,
                 account_id=args.account_id,
                 supervisor_id=args.supervisor_id,
@@ -876,7 +874,7 @@ def main(argv: list[str] | None = None) -> int:
             verify_boundary(
                 workspace=proxy_workspace,
                 account=proxy_account,
-                inventory=inventory,
+                inventory=positive_inventory,
                 expected_application_id=args.expected_application_id,
                 account_id=args.account_id,
                 app_name=args.app_name,
@@ -894,6 +892,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print("agent-proxy effective authorization boundary: PASS")
     return 0
+
 
 if __name__ == "__main__":
     raise SystemExit(main())

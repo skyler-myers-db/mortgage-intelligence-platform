@@ -103,6 +103,15 @@ def test_workspace_group_admin_boundary_rejects_wrong_resource_plane() -> None:
         )
 
 
+def test_managed_query_inspection_rejects_wrong_resource_plane() -> None:
+    with pytest.raises(RuntimeError, match="workspace-local SCIM"):
+        access.inspect_managed_query_group(
+            _client(resource_type="Group"),
+            endpoint_id="endpoint-id",
+            application_id="app-client",
+        )
+
+
 def test_managed_group_governance_rejects_unrelated_members() -> None:
     with pytest.raises(RuntimeError, match="neither active nor safely retired"):
         access.assert_managed_query_group_administration_isolated(

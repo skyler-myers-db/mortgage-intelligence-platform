@@ -273,6 +273,7 @@ def _make_client(
                     application_id=endpoint_principal,
                 ),
                 members=[SimpleNamespace(value=endpoint_sp_id)],
+                meta=SimpleNamespace(resource_type="WorkspaceGroup"),
             )
         )
     groups_by_id = {str(group.id): group for group in group_values if getattr(group, "id", None)}
@@ -292,6 +293,7 @@ def _make_client(
             display_name=display_name,
             external_id=external_id,
             members=[],
+            meta=SimpleNamespace(resource_type="WorkspaceGroup"),
         )
         group_values.append(group)
         groups_by_id[group.id] = group

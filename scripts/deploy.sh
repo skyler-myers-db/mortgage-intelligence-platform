@@ -4051,6 +4051,7 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
 fi
 AGENT_PROXY_PRESERVE_ARGS=()
 AGENT_PROXY_ACCESS_PRESERVE_ARGS=()
+AGENT_PROXY_UC_PRESERVE_ARGS=()
 if [[ "$APP_SIGNED_BLUE_AVAILABLE" -eq 1 ]]; then
   case "$MIP_APP_ROLLBACK_PROXY_MODE" in
     legacy-proxyless)
@@ -4094,6 +4095,10 @@ if [[ "$APP_SIGNED_BLUE_AVAILABLE" -eq 1 ]]; then
           --preserve-supervisor-id "$MIP_APP_ROLLBACK_SUPERVISOR_ID"
           --preserve-supervisor-endpoint "$MIP_APP_ROLLBACK_SUPERVISOR_ENDPOINT"
           --preserve-supervisor-endpoint-id "$MIP_APP_ROLLBACK_SUPERVISOR_ENDPOINT_ID"
+        )
+        AGENT_PROXY_UC_PRESERVE_ARGS+=(
+          --supervisor-id "$MIP_APP_ROLLBACK_SUPERVISOR_ID"
+          --supervisor-endpoint-id "$MIP_APP_ROLLBACK_SUPERVISOR_ENDPOINT_ID"
         )
       fi
       AGENT_PROXY_ACCESS_PRESERVE_ARGS+=(
@@ -4186,7 +4191,12 @@ run_with_account_identity \
     "$PYTHON" -m tools.databricks.verify_agent_proxy_uc_boundary_dual_authority \
   --application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID" \
   --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL" \
-  --catalog "${MIP_DEFAULT_CATALOG:-mip}"
+  --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
+  --supervisor-id "${MIP_AGENT_SUPERVISOR_ID:-dry-run-supervisor}" \
+  --supervisor-endpoint-id \
+    "${MIP_AGENT_SUPERVISOR_ENDPOINT_ID:-dry-run-supervisor-endpoint-id}" \
+  "${AGENT_PROXY_UC_PRESERVE_ARGS[@]}" \
+  --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}"
 _AGENT_PROXY_BOUNDARY_APP_URL="${MIP_APP_URL:-}"
 if [[ "$DRY_RUN" -eq 1 && -z "$_AGENT_PROXY_BOUNDARY_APP_URL" ]]; then
   _AGENT_PROXY_BOUNDARY_APP_URL="https://dry-run.databricksapps.com"
@@ -4827,7 +4837,10 @@ if [[ "$DRY_RUN" -eq 0 && "$FINAL_APP_PROVEN" -eq 1 ]]; then
       "$PYTHON" -m tools.databricks.verify_agent_proxy_uc_boundary_dual_authority \
     --application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID" \
     --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL" \
-    --catalog "${MIP_DEFAULT_CATALOG:-mip}"
+    --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
+    --supervisor-id "$MIP_AGENT_SUPERVISOR_ID" \
+    --supervisor-endpoint-id "$MIP_AGENT_SUPERVISOR_ENDPOINT_ID" \
+    --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}"
   step "re-prove final agent-proxy target query and negative boundary after blue retirement"
   run_with_account_identity \
     run_with_agent_proxy_credentials \

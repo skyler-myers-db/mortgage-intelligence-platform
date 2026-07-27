@@ -77,6 +77,7 @@ class _Groups:
             display_name=display_name,
             external_id=external_id,
             members=[],
+            meta=SimpleNamespace(resource_type="WorkspaceGroup"),
         )
         self.by_id[group.id] = group
         return group

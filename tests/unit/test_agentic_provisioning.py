@@ -126,6 +126,7 @@ def _supervisor_workspace(
                     application_id=application_id,
                 ),
                 members=[SimpleNamespace(value=scim_id)],
+                meta=SimpleNamespace(resource_type="WorkspaceGroup"),
             )
             principals[scim_id] = SimpleNamespace(
                 id=scim_id,
