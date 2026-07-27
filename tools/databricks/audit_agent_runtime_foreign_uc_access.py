@@ -460,7 +460,8 @@ def _assert_runtime_workspace_assignment_boundary(
         raise RuntimeError("foreign catalog policy references an invalid metastore workspace")
     for assigned_workspace_id in sorted(metastore_workspace_ids):
         direct_assignments: list[tuple[str, ...]] = []
-        group_assignments: list[tuple[str, ...]] = []
+        reviewed_group_assignments: dict[str, list[tuple[str, ...]]] = {}
+        forbidden_group_assignments: list[tuple[str, tuple[str, ...]]] = []
         for assignment in account.workspace_assignment.list(int(assigned_workspace_id)):
             principal = getattr(assignment, "principal", None)
             principal_id = _text(getattr(principal, "principal_id", None))
@@ -501,9 +502,21 @@ def _assert_runtime_workspace_assignment_boundary(
             if direct_id_match:
                 direct_assignments.append(permissions)
             if group_name_match:
-                group_assignments.append(permissions)
+                if principal_id in allowed_workspace_groups:
+                    reviewed_group_assignments.setdefault(principal_id, []).append(permissions)
+                else:
+                    forbidden_group_assignments.append((principal_id, permissions))
         expected_direct = [("USER",)] if assigned_workspace_id == workspace_id else []
-        if direct_assignments != expected_direct or group_assignments:
+        expected_reviewed_groups = (
+            {group_id: [("USER",)] for group_id in allowed_workspace_groups}
+            if assigned_workspace_id == workspace_id
+            else {}
+        )
+        if (
+            direct_assignments != expected_direct
+            or reviewed_group_assignments != expected_reviewed_groups
+            or forbidden_group_assignments
+        ):
             raise RuntimeError(
                 "agent-runtime has an unexpected account workspace assignment on "
                 f"{assigned_workspace_id}"

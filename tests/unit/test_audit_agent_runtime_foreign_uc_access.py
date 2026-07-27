@@ -467,6 +467,40 @@ def _audit(workspace: Any, **kwargs: Any) -> object:
     )
 
 
+def _add_workspace_group_assignments(
+    account: Any,
+    groups: dict[str, str],
+    *,
+    workspace_id: str = WORKSPACE_ID,
+    permissions: tuple[str, ...] = ("USER",),
+) -> None:
+    original = account.workspace_assignment.list
+
+    def assignments(selected_workspace_id: int) -> object:
+        existing = list(original(selected_workspace_id))
+        if str(selected_workspace_id) != workspace_id:
+            return iter(existing)
+        return iter(
+            [
+                *existing,
+                *(
+                    SimpleNamespace(
+                        permissions=list(permissions),
+                        principal=SimpleNamespace(
+                            principal_id=group_id,
+                            service_principal_name="",
+                            group_name=group_name,
+                            user_name="",
+                        ),
+                    )
+                    for group_id, group_name in groups.items()
+                ),
+            ]
+        )
+
+    account.workspace_assignment.list = assignments
+
+
 def _platform_only_workspace() -> object:
     workspace = _workspace()
     catalogs = [
@@ -679,15 +713,75 @@ def test_foreign_uc_control_plane_rejects_runtime_non_system_account_group() -> 
 
 
 def test_foreign_uc_control_plane_accepts_only_exact_reviewed_workspace_group() -> None:
+    account = _account()
+    reviewed_groups = {"capability-group-id": "mip-agent-proxy-cap-reviewed"}
+    _add_workspace_group_assignments(account, reviewed_groups)
+
     proof = _audit(
         _workspace(),
+        account_factory=lambda: account,
         target_groups_probe=lambda *_args, **_kwargs: _runtime_groups(
-            {"capability-group-id": "mip-agent-proxy-cap-reviewed"}
+            reviewed_groups
         ),
-        allowed_workspace_groups={"capability-group-id": "mip-agent-proxy-cap-reviewed"},
+        allowed_workspace_groups=reviewed_groups,
     )
 
     assert proof.application_id == APPLICATION_ID
+
+
+@pytest.mark.parametrize(
+    ("workspace_id", "permissions"),
+    (
+        (WORKSPACE_ID, ("ADMIN",)),
+        (OTHER_WORKSPACE_ID, ("USER",)),
+    ),
+)
+def test_foreign_uc_control_plane_rejects_reviewed_group_assignment_outside_exact_boundary(
+    workspace_id: str,
+    permissions: tuple[str, ...],
+) -> None:
+    account = _account()
+    reviewed_groups = {"capability-group-id": "mip-agent-proxy-cap-reviewed"}
+    _add_workspace_group_assignments(
+        account,
+        reviewed_groups,
+        workspace_id=workspace_id,
+        permissions=permissions,
+    )
+
+    with pytest.raises(RuntimeError, match="unexpected account workspace assignment"):
+        _audit(
+            _workspace(),
+            account_factory=lambda: account,
+            target_groups_probe=lambda *_args, **_kwargs: _runtime_groups(reviewed_groups),
+            allowed_workspace_groups=reviewed_groups,
+        )
+
+
+def test_foreign_uc_control_plane_rejects_missing_reviewed_group_assignment() -> None:
+    reviewed_groups = {"capability-group-id": "mip-agent-proxy-cap-reviewed"}
+
+    with pytest.raises(RuntimeError, match="unexpected account workspace assignment"):
+        _audit(
+            _workspace(),
+            target_groups_probe=lambda *_args, **_kwargs: _runtime_groups(reviewed_groups),
+            allowed_workspace_groups=reviewed_groups,
+        )
+
+
+def test_foreign_uc_control_plane_rejects_duplicate_reviewed_group_assignment() -> None:
+    account = _account()
+    reviewed_groups = {"capability-group-id": "mip-agent-proxy-cap-reviewed"}
+    _add_workspace_group_assignments(account, reviewed_groups)
+    _add_workspace_group_assignments(account, reviewed_groups)
+
+    with pytest.raises(RuntimeError, match="unexpected account workspace assignment"):
+        _audit(
+            _workspace(),
+            account_factory=lambda: account,
+            target_groups_probe=lambda *_args, **_kwargs: _runtime_groups(reviewed_groups),
+            allowed_workspace_groups=reviewed_groups,
+        )
 
 
 def test_foreign_uc_control_plane_rejects_reviewed_workspace_group_drift() -> None:
