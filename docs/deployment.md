@@ -242,8 +242,37 @@ The deployment-wide App fence is an append-only signed generation chain under
 takeover each contend on the one deterministic successor path with Workspace
 Files create-without-overwrite; no authoritative generation is overwritten or
 deleted. A signed head file is only a read accelerator, so stale, missing, or
-corrupt hint state falls back to the canonical chain and cannot select a
-winner. Active leases have a six-hour absolute lifetime. Keep every retired
+corrupt hint state cannot select a winner. Legacy v2/v4 chains can be resolved
+from their canonical base with an authenticated scan bounded by
+`MAX_CANONICAL_GENERATIONS`; v5 publishes an immutable locator bound to a
+canonical signed v5 generation (normally the first), with a distinct 64 KiB
+envelope cap around its bounded 32 KiB holder map, so automatic fallback reads
+remain bounded and fail closed instead of rescanning heartbeat history.
+Protocol-v5
+acquisition/takeover generations also bind an exact,
+bounded holder map to immutable Ed25519-signed recovery checkpoints whose
+Workspace Files paths contain the app name, chain UUID, and full checkpoint
+digest. Each holder entry carries its durable root, newest checkpoint digest,
+candidate count, last acquisition generation and lease ID, preceding
+checkpoint digest, and signing-key epoch. A
+checkpoint carries that holder's acquisition/takeover lease IDs newest-first
+and the preceding checkpoint digest. Renewal and release preserve both the
+holder map and current recovery digest byte-for-byte, so thousands of
+heartbeats do not copy or rescan cumulative recovery history.
+
+The first v4-to-v5 acquisition authenticates the retained legacy chain and
+creates one linked checkpoint per historical acquisition before its new
+checkpoint. Every later v5 recovery authenticates the canonical lease head,
+the selected holder's current digest-addressed checkpoint, and its immediate
+predecessor when one is named. The predecessor must carry the exact candidate
+tail, root, count, holder, earlier generation sequence, and non-regressing key
+epoch. Missing, malformed, oversized, cross-app,
+cross-chain, signature-invalid, or head-divergent checkpoint state authorizes
+nothing. Immutable checkpoint uploads use create-without-overwrite plus exact
+readback after ambiguous timeouts. A losing acquisition may leave an
+unreferenced immutable checkpoint, but cannot publish a lease successor or
+alter another holder's map entry; checkpoint history is never deleted. Active
+leases have a six-hour absolute lifetime. Keep every retired
 public key, oldest first, in the public GitHub Actions variable
 `MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS`; private keys are still destroyed
 at retirement. Each successor records the public-key epoch and rejects epoch
@@ -255,6 +284,21 @@ present its exact root for an expired takeover even when no first-install
 journal exists. A stranded legacy v2 fence is migrated append-only only after
 its expiry plus the five-minute quiescence margin and that exact durable
 recovery authority.
+
+If a v5 chain has more than the automatic 64-successor fallback window and its
+mutable `.head` or unsigned `.protocol-v5` locator is missing or corrupt, the
+signed holder may run
+`python -m tools.databricks.app_deployment_lease repair-head --app-name
+"$MIP_APP_NAME"`. This exceptional command scans and authenticates the complete
+immutable chain up to `MAX_CANONICAL_GENERATIONS`, re-proves the exact protected
+root ACL, re-anchors a missing/corrupt unsigned locator to the authenticated
+canonical head, publishes the non-authoritative `.head` hint, and requires exact
+readback plus canonical download postflight. It never rewrites a signed
+generation or checkpoint. The normal resolver remains bounded after repair.
+If a v5 acquisition commits but locator publication fails, compensation must
+authenticate or publish the immutable locator before appending a terminal
+release; persistent locator failure leaves the signed acquisition active for
+this governed repair path and never creates a markerless terminal v5 record.
 
 Before the first Apps API create, deploy writes a signed, lease-bound ownership
 journal under `/.mip-deployment-leases/<app>.first-install.json`. Journal v3

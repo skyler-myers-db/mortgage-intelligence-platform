@@ -515,14 +515,40 @@ re-proven before the first Lakebase recovery mutation. An absent or unstable
 first-install App is rejected.
 
 The lease is released from normal deployment cleanup without discarding
-same-deployer recovery authority. Before the next acquire, the append-only
-signed generation chain is authenticated and every lease ID in the current
-same-holder recovery-root lineage is exported newest-first, including across a
-runtime-writer rotation. A different deployer identity receives no authority
-from that lineage, but an intervening released-lease handoff cannot erase the
-original holder's signed recovery route; a returning holder resumes its most
-recent root. Runtime identity is rebound by manifest classification and
-reauthorization rather than by hiding signed ancestors. The deployment probes
+same-deployer recovery authority. Protocol-v5 lease generations bind a bounded
+holder map to immutable, signed, digest-addressed recovery checkpoints under
+the protected lease root. Acquire/takeover advances exactly the acquiring
+holder's checkpoint from its previous candidate list; renew/release preserve
+the complete map and recovery digest exactly. The first v4-to-v5 acquire scans
+the authenticated legacy chain and materializes its acquisition history as a
+linked immutable checkpoint chain. Thereafter recovery authenticates the
+canonical head, the selected-holder checkpoint, and its immediately preceding
+checkpoint when present. The predecessor must be the exact signed candidate
+tail with the same root and holder, an exact decremented count, an earlier
+acquisition generation, and a non-regressing signing-key epoch. Recovery then
+exports every lease ID in that
+same-holder recovery-root lineage newest-first, including across a
+runtime-writer or signing-key rotation. The checkpoint path and signed body are
+both bound to the exact app and lease chain. Missing, corrupt, oversized,
+cross-boundary, or metadata-divergent checkpoint evidence fails closed; the
+mutable `.head` accelerator is never recovery authority by itself.
+
+Automatic v5 fallback remains bounded to 64 successors even when `.head` is
+missing or corrupt. The signed holder's exceptional `repair-head` command may
+scan the full immutable generation chain up to `MAX_CANONICAL_GENERATIONS`,
+after which it re-proves the exact protected-root ACL, replaces a missing or
+corrupt unsigned locator with one bound to the authenticated canonical head,
+overwrites the non-authoritative head hint, and requires exact postflight. A committed v5
+acquisition whose immutable locator publication fails cannot be compensated to
+a terminal release until that locator is durably authenticated; persistent
+failure therefore leaves an active signed fence for governed repair, never a
+markerless terminal record.
+
+A different deployer identity receives no authority from that lineage, but an
+intervening released-lease handoff cannot erase the original holder's signed
+recovery route; a returning holder resumes its most recent root. Runtime
+identity is rebound by manifest classification and reauthorization rather than
+by hiding signed ancestors. The deployment probes
 each lineage fence until it finds the newest incomplete operation, a signed
 completion, or proves all candidates absent. Discovery is read-only: only the
 winner of the immutable lease successor race changes the shared root ACL, so a

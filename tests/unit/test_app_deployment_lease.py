@@ -17,6 +17,9 @@ from databricks.sdk.service.workspace import ImportFormat
 from backend.services.ai_gateway_proof_attestation import derive_gateway_proof_verify_key
 from tools.databricks import app_deployment_lease as lease
 from tools.databricks import app_deployment_lease_cli as lease_cli
+from tools.databricks import (
+    app_deployment_lease_recovery_checkpoint as recovery_checkpoint,
+)
 from tools.databricks import app_first_install_journal as first_install
 from tools.databricks import app_first_install_recovery as first_install_recovery
 from tools.databricks.app_first_install_audit import AppCreateAuditProof
@@ -208,14 +211,17 @@ def test_later_lease_recovers_exact_journaled_app_after_creator_process_loss(
     lease.release(workspace, app_name="mip-app", lease_id=first_lease)
     retry_lease = lease.acquire(workspace, app_name="mip-app", source_git_sha="b" * 40)
 
-    assert first_install.status(
-        workspace,
-        app_name="mip-app",
-        lease_id=retry_lease,
-        source_git_sha="b" * 40,
-        rollback_scope="mip-app-rollback",
-        expected_lakebase_instance="mip-lakebase",
-    ) == "recover"
+    assert (
+        first_install.status(
+            workspace,
+            app_name="mip-app",
+            lease_id=retry_lease,
+            source_git_sha="b" * 40,
+            rollback_scope="mip-app-rollback",
+            expected_lakebase_instance="mip-lakebase",
+        )
+        == "recover"
+    )
     first_install.delete_recoverable(
         workspace,
         app_name="mip-app",
@@ -235,9 +241,7 @@ def test_process_loss_before_app_identity_claim_recovers_from_server_audit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = _workspace()
-    creation_lease = lease.acquire(
-        workspace, app_name="mip-app", source_git_sha="a" * 40
-    )
+    creation_lease = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40)
     marked = first_install.prepare(
         workspace,
         app_name="mip-app",
@@ -250,14 +254,17 @@ def test_process_loss_before_app_identity_claim_recovers_from_server_audit(
     lease.release(workspace, app_name="mip-app", lease_id=creation_lease)
     retry_lease = lease.acquire(workspace, app_name="mip-app", source_git_sha="b" * 40)
 
-    assert first_install.status(
-        workspace,
-        app_name="mip-app",
-        lease_id=retry_lease,
-        source_git_sha="b" * 40,
-        rollback_scope="mip-app-rollback",
-        expected_lakebase_instance="mip-lakebase",
-    ) == "unclaimed"
+    assert (
+        first_install.status(
+            workspace,
+            app_name="mip-app",
+            lease_id=retry_lease,
+            source_git_sha="b" * 40,
+            rollback_scope="mip-app-rollback",
+            expected_lakebase_instance="mip-lakebase",
+        )
+        == "unclaimed"
+    )
     monkeypatch.setattr(
         first_install_recovery,
         "find_app_create_proof",
@@ -280,14 +287,17 @@ def test_process_loss_before_app_identity_claim_recovers_from_server_audit(
     assert record["claim_proof_kind"] == "system_access_audit"
     assert record["create_audit_event_id"] == "audit-event-id"
     assert record["create_audit_request_id"] == "audit-request-id"
-    assert first_install.status(
-        workspace,
-        app_name="mip-app",
-        lease_id=retry_lease,
-        source_git_sha="b" * 40,
-        rollback_scope="mip-app-rollback",
-        expected_lakebase_instance="mip-lakebase",
-    ) == "recover"
+    assert (
+        first_install.status(
+            workspace,
+            app_name="mip-app",
+            lease_id=retry_lease,
+            source_git_sha="b" * 40,
+            rollback_scope="mip-app-rollback",
+            expected_lakebase_instance="mip-lakebase",
+        )
+        == "recover"
+    )
     first_install.delete_recoverable(
         workspace,
         app_name="mip-app",
@@ -306,9 +316,7 @@ def test_present_unclaimed_app_polls_until_audit_evidence_arrives(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = _workspace()
-    creation_lease = lease.acquire(
-        workspace, app_name="mip-app", source_git_sha="a" * 40
-    )
+    creation_lease = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40)
     marked = first_install.prepare(
         workspace,
         app_name="mip-app",
@@ -318,9 +326,7 @@ def test_present_unclaimed_app_polls_until_audit_evidence_arrives(
     )
     workspace.apps.app = _journaled_app(marked)
     lease.release(workspace, app_name="mip-app", lease_id=creation_lease)
-    retry_lease = lease.acquire(
-        workspace, app_name="mip-app", source_git_sha="b" * 40
-    )
+    retry_lease = lease.acquire(workspace, app_name="mip-app", source_git_sha="b" * 40)
     record = first_install._download(workspace, app_name="mip-app")
     assert record is not None
     visible = False
@@ -410,9 +416,7 @@ def test_stale_lease_cannot_commit_audit_identity_claim(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = _workspace()
-    creation_lease = lease.acquire(
-        workspace, app_name="mip-app", source_git_sha="a" * 40
-    )
+    creation_lease = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40)
     marked = first_install.prepare(
         workspace,
         app_name="mip-app",
@@ -422,9 +426,7 @@ def test_stale_lease_cannot_commit_audit_identity_claim(
     )
     workspace.apps.app = _journaled_app(marked)
     lease.release(workspace, app_name="mip-app", lease_id=creation_lease)
-    retry_lease = lease.acquire(
-        workspace, app_name="mip-app", source_git_sha="b" * 40
-    )
+    retry_lease = lease.acquire(workspace, app_name="mip-app", source_git_sha="b" * 40)
 
     def lose_lease_during_audit(*_args: object, **_kwargs: object) -> AppCreateAuditProof:
         lease.release(workspace, app_name="mip-app", lease_id=retry_lease)
@@ -436,9 +438,7 @@ def test_stale_lease_cannot_commit_audit_identity_claim(
             app_id="app-object-id",
         )
 
-    monkeypatch.setattr(
-        first_install_recovery, "find_app_create_proof", lose_lease_during_audit
-    )
+    monkeypatch.setattr(first_install_recovery, "find_app_create_proof", lose_lease_during_audit)
     with pytest.raises(RuntimeError, match="lease (?:was released|ownership or source changed)"):
         first_install_recovery.recover_unclaimed_from_audit(
             workspace,
@@ -458,9 +458,7 @@ def test_stale_lease_cannot_delete_claimed_first_install_app(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = _workspace()
-    deployment_lease = lease.acquire(
-        workspace, app_name="mip-app", source_git_sha="a" * 40
-    )
+    deployment_lease = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40)
     marked = first_install.prepare(
         workspace,
         app_name="mip-app",
@@ -502,9 +500,7 @@ def test_same_metadata_replacement_before_identity_claim_is_never_claimed_or_del
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = _workspace()
-    creation_lease = lease.acquire(
-        workspace, app_name="mip-app", source_git_sha="a" * 40
-    )
+    creation_lease = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40)
     marked = first_install.prepare(
         workspace,
         app_name="mip-app",
@@ -539,14 +535,17 @@ def test_same_metadata_replacement_before_identity_claim_is_never_claimed_or_del
             warehouse_id="warehouse-id",
         )
     monkeypatch.setattr(first_install, "_load_record", _missing_rollback)
-    assert first_install.status(
-        workspace,
-        app_name="mip-app",
-        lease_id=creation_lease,
-        source_git_sha="a" * 40,
-        rollback_scope="mip-app-rollback",
-        expected_lakebase_instance="mip-lakebase",
-    ) == "unclaimed"
+    assert (
+        first_install.status(
+            workspace,
+            app_name="mip-app",
+            lease_id=creation_lease,
+            source_git_sha="a" * 40,
+            rollback_scope="mip-app-rollback",
+            expected_lakebase_instance="mip-lakebase",
+        )
+        == "unclaimed"
+    )
     with pytest.raises(RuntimeError, match="not eligible for unsigned recovery"):
         first_install.delete_recoverable(
             workspace,
@@ -565,9 +564,7 @@ def test_identity_claim_accepts_workspace_upload_that_commits_then_times_out(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = _workspace()
-    creation_lease = lease.acquire(
-        workspace, app_name="mip-app", source_git_sha="a" * 40
-    )
+    creation_lease = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40)
     marked = first_install.prepare(
         workspace,
         app_name="mip-app",
@@ -586,23 +583,24 @@ def test_identity_claim_accepts_workspace_upload_that_commits_then_times_out(
     _claim_created_app(workspace, lease_id=creation_lease)
     monkeypatch.setattr(first_install, "_load_record", _missing_rollback)
 
-    assert first_install.status(
-        workspace,
-        app_name="mip-app",
-        lease_id=creation_lease,
-        source_git_sha="a" * 40,
-        rollback_scope="mip-app-rollback",
-        expected_lakebase_instance="mip-lakebase",
-    ) == "recover"
+    assert (
+        first_install.status(
+            workspace,
+            app_name="mip-app",
+            lease_id=creation_lease,
+            source_git_sha="a" * 40,
+            rollback_scope="mip-app-rollback",
+            expected_lakebase_instance="mip-lakebase",
+        )
+        == "recover"
+    )
 
 
 def test_identity_claim_timeout_before_commit_remains_unclaimed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = _workspace()
-    creation_lease = lease.acquire(
-        workspace, app_name="mip-app", source_git_sha="a" * 40
-    )
+    creation_lease = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40)
     marked = first_install.prepare(
         workspace,
         app_name="mip-app",
@@ -620,23 +618,24 @@ def test_identity_claim_timeout_before_commit_remains_unclaimed(
         _claim_created_app(workspace, lease_id=creation_lease)
     monkeypatch.setattr(first_install, "_load_record", _missing_rollback)
 
-    assert first_install.status(
-        workspace,
-        app_name="mip-app",
-        lease_id=creation_lease,
-        source_git_sha="a" * 40,
-        rollback_scope="mip-app-rollback",
-        expected_lakebase_instance="mip-lakebase",
-    ) == "unclaimed"
+    assert (
+        first_install.status(
+            workspace,
+            app_name="mip-app",
+            lease_id=creation_lease,
+            source_git_sha="a" * 40,
+            rollback_scope="mip-app-rollback",
+            expected_lakebase_instance="mip-lakebase",
+        )
+        == "unclaimed"
+    )
 
 
 def test_recovery_accepts_app_delete_that_commits_then_times_out(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = _workspace()
-    deployment_lease = lease.acquire(
-        workspace, app_name="mip-app", source_git_sha="a" * 40
-    )
+    deployment_lease = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40)
     marked = first_install.prepare(
         workspace,
         app_name="mip-app",
@@ -672,9 +671,7 @@ def test_recovery_refuses_app_delete_timeout_before_commit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = _workspace()
-    deployment_lease = lease.acquire(
-        workspace, app_name="mip-app", source_git_sha="a" * 40
-    )
+    deployment_lease = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40)
     marked = first_install.prepare(
         workspace,
         app_name="mip-app",
@@ -815,14 +812,17 @@ def test_matching_signed_app_state_cannot_be_deleted_as_first_install_recovery(
         },
     )
 
-    assert first_install.status(
-        workspace,
-        app_name="mip-app",
-        lease_id=deployment_lease,
-        source_git_sha="a" * 40,
-        rollback_scope="mip-app-rollback",
-        expected_lakebase_instance="mip-lakebase",
-    ) == "signed"
+    assert (
+        first_install.status(
+            workspace,
+            app_name="mip-app",
+            lease_id=deployment_lease,
+            source_git_sha="a" * 40,
+            rollback_scope="mip-app-rollback",
+            expected_lakebase_instance="mip-lakebase",
+        )
+        == "signed"
+    )
     with pytest.raises(RuntimeError, match="not eligible for unsigned recovery"):
         first_install.delete_recoverable(
             workspace,
@@ -868,22 +868,25 @@ def test_orphaned_first_install_intent_is_cleared_only_after_window_and_audit(
     )
     record = first_install._download(workspace, app_name="mip-app")
     assert record is not None
-    assert record["create_authorized_until"] == (
-        NOW + first_install.CREATE_AUTHORIZATION_WINDOW
-    ).isoformat()
+    assert (
+        record["create_authorized_until"]
+        == (NOW + first_install.CREATE_AUTHORIZATION_WINDOW).isoformat()
+    )
     assert timedelta(minutes=120) > (
-        first_install.CREATE_AUTHORIZATION_WINDOW
-        + first_install.AUDIT_SETTLEMENT_DELAY
+        first_install.CREATE_AUTHORIZATION_WINDOW + first_install.AUDIT_SETTLEMENT_DELAY
     )
     monkeypatch.setattr(lease, "_now", lambda: NOW)
-    assert first_install.status(
-        workspace,
-        app_name="mip-app",
-        lease_id=deployment_lease,
-        source_git_sha="a" * 40,
-        rollback_scope="mip-app-rollback",
-        expected_lakebase_instance="mip-lakebase",
-    ) == "orphan_unclaimed"
+    assert (
+        first_install.status(
+            workspace,
+            app_name="mip-app",
+            lease_id=deployment_lease,
+            source_git_sha="a" * 40,
+            rollback_scope="mip-app-rollback",
+            expected_lakebase_instance="mip-lakebase",
+        )
+        == "orphan_unclaimed"
+    )
     monkeypatch.setattr(
         first_install_recovery,
         "find_app_create_proof",
@@ -946,14 +949,17 @@ def test_authenticated_delete_converges_an_orphaned_app_delete() -> None:
     _claim_created_app(workspace, lease_id=deployment_lease)
     workspace.apps.app = None
 
-    assert first_install.status(
-        workspace,
-        app_name="mip-app",
-        lease_id=deployment_lease,
-        source_git_sha="a" * 40,
-        rollback_scope="mip-app-rollback",
-        expected_lakebase_instance="mip-lakebase",
-    ) == "orphan_claimed"
+    assert (
+        first_install.status(
+            workspace,
+            app_name="mip-app",
+            lease_id=deployment_lease,
+            source_git_sha="a" * 40,
+            rollback_scope="mip-app-rollback",
+            expected_lakebase_instance="mip-lakebase",
+        )
+        == "orphan_claimed"
+    )
 
     first_install.delete_recoverable(
         workspace,
@@ -1079,9 +1085,7 @@ def test_assertion_accepts_same_lease_renewal_during_acl_validation() -> None:
                     record,
                     operation="renew",
                     changes={
-                        "expires_at": (
-                            NOW + lease.LEASE_TTL + timedelta(minutes=1)
-                        ).isoformat()
+                        "expires_at": (NOW + lease.LEASE_TTL + timedelta(minutes=1)).isoformat()
                     },
                 ),
             )
@@ -1297,17 +1301,13 @@ def test_process_death_after_first_generation_commit_repairs_exact_acl(
 
     monkeypatch.setattr(lease, "_ensure_protected_root", process_killed)
     with pytest.raises(SystemExit, match="process death"):
-        lease.acquire(
-            workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW
-        )
+        lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
 
     committed = lease._download(workspace, app_name="mip-app")
     assert committed is not None
     assert committed["state"] == "active"
     monkeypatch.setattr(lease, "_ensure_protected_root", original)
-    recovery = lease.lease_support.recovery_root(
-        lease, workspace, app_name="mip-app"
-    )
+    recovery = lease.lease_support.recovery_root(lease, workspace, app_name="mip-app")
     assert recovery == committed["recovery_root_lease_id"]
     retry = lease.acquire(
         workspace,
@@ -1373,8 +1373,130 @@ def test_head_hint_failure_never_rolls_back_authoritative_generation() -> None:
     assert lease._download(workspace, app_name="mip-app")["lease_id"] == lease_id
 
 
+def test_protocol_marker_postcommit_failure_compensates_to_recoverable_release() -> None:
+    workspace = _workspace()
+    original_upload = workspace.workspace.upload
+    marker_attempts = 0
+
+    def fail_first_marker(
+        path: str,
+        content: io.BytesIO,
+        *,
+        format: ImportFormat,
+        overwrite: bool,
+    ) -> None:
+        nonlocal marker_attempts
+        if path.endswith(".protocol-v5"):
+            marker_attempts += 1
+            if marker_attempts == 1:
+                raise OSError("injected locator failure after lease commit")
+        original_upload(path, content, format=format, overwrite=overwrite)
+
+    workspace.workspace.upload = fail_first_marker
+
+    with pytest.raises(RuntimeError, match="locator upload failed without an exact commit"):
+        lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+
+    current = lease._download(workspace, app_name="mip-app")
+    assert current is not None and current["state"] == "released"
+    assert marker_attempts == 2
+    assert (
+        recovery_checkpoint.read_protocol_anchor(
+            lease,
+            workspace,
+            app_name="mip-app",
+        )
+        is not None
+    )
+
+
+def test_persistent_protocol_marker_failure_never_appends_markerless_release() -> None:
+    workspace = _workspace()
+    original_upload = workspace.workspace.upload
+
+    def fail_marker(
+        path: str,
+        content: io.BytesIO,
+        *,
+        format: ImportFormat,
+        overwrite: bool,
+    ) -> None:
+        if path.endswith(".protocol-v5"):
+            raise OSError("injected persistent locator failure")
+        original_upload(path, content, format=format, overwrite=overwrite)
+
+    workspace.workspace.upload = fail_marker
+
+    with pytest.raises(
+        RuntimeError,
+        match="acquisition failed and signed compensation did not complete",
+    ):
+        lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+
+    base = lease._read_record(
+        workspace,
+        path=lease._path("mip-app"),
+        app_name="mip-app",
+    )
+    assert base is not None and base["state"] == "active"
+    assert (
+        lease._successor_path("mip-app", str(base["generation_id"])) not in workspace.workspace.data
+    )
+    assert (
+        recovery_checkpoint._protocol_marker_path(lease, "mip-app") not in workspace.workspace.data
+    )
+    assert workspace.workspace.set_permissions_calls > 0
+
+    # The surviving signed active fence is deliberately authoritative. Once
+    # the marker provider recovers, the signed holder can repair only the
+    # mutable locator without weakening or rewriting that immutable record.
+    workspace.workspace.upload = original_upload
+    repaired = lease.lease_support.repair_head_hint(
+        lease,
+        workspace,
+        app_name="mip-app",
+    )
+    assert repaired == base
+    assert lease._download(workspace, app_name="mip-app") == base
+    assert recovery_checkpoint._protocol_marker_path(lease, "mip-app") in workspace.workspace.data
+
+
+def test_first_v5_acquire_creates_parent_before_checkpoint_upload() -> None:
+    workspace = _workspace()
+    created_roots: set[str] = set()
+    original_upload = workspace.workspace.upload
+
+    def track_mkdirs(path: str) -> None:
+        created_roots.add(path)
+
+    def require_parent(
+        path: str,
+        content: io.BytesIO,
+        *,
+        format: ImportFormat,
+        overwrite: bool,
+    ) -> None:
+        if path.startswith(f"{lease.LEASE_ROOT}/") and lease.LEASE_ROOT not in created_roots:
+            raise ResourceDoesNotExist("parent directory is missing")
+        original_upload(path, content, format=format, overwrite=overwrite)
+
+    workspace.workspace.mkdirs = track_mkdirs
+    workspace.workspace.upload = require_parent
+
+    lease_id = lease.acquire(
+        workspace,
+        app_name="mip-app",
+        source_git_sha="a" * 40,
+        now=NOW,
+    )
+    current = lease._download(workspace, app_name="mip-app")
+    assert current is not None and current["lease_id"] == lease_id
+    assert lease.LEASE_ROOT in created_roots
+
+
 def test_ambiguous_upload_never_deletes_a_different_persisted_record() -> None:
     workspace = _workspace()
+    original_upload = workspace.workspace.upload
 
     def replace_then_timeout(
         path: str,
@@ -1385,19 +1507,38 @@ def test_ambiguous_upload_never_deletes_a_different_persisted_record() -> None:
     ) -> None:
         assert format is ImportFormat.AUTO
         assert overwrite is False
+        if path.endswith((".recovery-index", ".protocol-v5")):
+            original_upload(path, content, format=format, overwrite=overwrite)
+            return
         candidate = json.loads(content.read())
         replacement_id = "11111111-1111-4111-8111-111111111111"
-        replacement = lease._sign(
-            {
-                key: value
-                for key, value in candidate.items()
-                if key not in {"attestation_verify_key", "attestation_signature"}
-            }
-            | {
-                "lease_id": replacement_id,
-                "recovery_root_lease_id": replacement_id,
-            }
+        replacement_unsigned = {
+            key: value
+            for key, value in candidate.items()
+            if key not in {"attestation_verify_key", "attestation_signature"}
+        } | {
+            "lease_id": replacement_id,
+            "recovery_root_lease_id": replacement_id,
+        }
+        replacement_checkpoint = recovery_checkpoint._checkpoint_value(
+            lease,
+            replacement_unsigned,
+            candidates=[replacement_id],
+            previous_digest="",
         )
+        replacement_digest, signed_checkpoint = recovery_checkpoint._persist(
+            lease,
+            workspace,
+            value=replacement_checkpoint,
+        )
+        replacement_unsigned["recovery_index_digest"] = replacement_digest
+        replacement_unsigned["holder_recovery_heads"] = {
+            replacement_unsigned["holder"]: recovery_checkpoint._entry(
+                signed_checkpoint,
+                replacement_digest,
+            )
+        }
+        replacement = lease._sign(replacement_unsigned)
         workspace.workspace.data[path] = json.dumps(replacement, sort_keys=True).encode()
         raise TimeoutError("injected timeout with replacement")
 
@@ -1500,9 +1641,7 @@ def test_signed_lease_keeps_exact_recovery_root_without_first_install_journal() 
         source_git_sha="a" * 40,
         now=NOW,
     )
-    recovery = lease.lease_support.recovery_root(
-        lease, workspace, app_name="mip-app"
-    )
+    recovery = lease.lease_support.recovery_root(lease, workspace, app_name="mip-app")
     assert recovery == creation_lease
 
     retry = lease.acquire(
@@ -1517,28 +1656,20 @@ def test_signed_lease_keeps_exact_recovery_root_without_first_install_journal() 
 
 def test_released_lease_allows_clean_handoff_to_a_new_deployer_identity() -> None:
     workspace = _workspace()
-    first = lease.acquire(
-        workspace, app_name="mip-app", source_git_sha="a" * 40
-    )
+    first = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40)
     lease.release(workspace, app_name="mip-app", lease_id=first)
     workspace.current_user.me = lambda: SimpleNamespace(
         user_name="replacement-deployer@example.com"
     )
 
-    assert lease.lease_support.recovery_root(
-        lease, workspace, app_name="mip-app"
-    ) == ""
-    second = lease.acquire(
-        workspace, app_name="mip-app", source_git_sha="b" * 40
-    )
+    assert lease.lease_support.recovery_root(lease, workspace, app_name="mip-app") == ""
+    second = lease.acquire(workspace, app_name="mip-app", source_git_sha="b" * 40)
     assert lease._download(workspace, app_name="mip-app")["lease_id"] == second
 
 
 def test_released_lease_preserves_same_deployer_recovery_lineage() -> None:
     workspace = _workspace()
-    first = lease.acquire(
-        workspace, app_name="mip-app", source_git_sha="a" * 40
-    )
+    first = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40)
     lease.release(workspace, app_name="mip-app", lease_id=first)
 
     recovery, candidates = lease.lease_support.recovery_context(
@@ -1567,9 +1698,7 @@ def test_recovery_root_cli_exports_every_same_deployer_candidate(
     tmp_path: Path,
 ) -> None:
     workspace = _workspace()
-    first = lease.acquire(
-        workspace, app_name="mip-app", source_git_sha="a" * 40
-    )
+    first = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40)
     lease.release(workspace, app_name="mip-app", lease_id=first)
     second = lease.acquire(
         workspace,
@@ -1581,20 +1710,20 @@ def test_recovery_root_cli_exports_every_same_deployer_candidate(
     monkeypatch.setattr(lease, "WorkspaceClient", lambda: workspace)
     output = tmp_path / "recovery.env"
 
-    assert lease.main(
-        [
-            "recovery-root",
-            "--app-name",
-            "mip-app",
-            "--out-env",
-            str(output),
-        ]
-    ) == 0
-
-    values = dict(
-        line.split("=", 1)
-        for line in output.read_text(encoding="utf-8").splitlines()
+    assert (
+        lease.main(
+            [
+                "recovery-root",
+                "--app-name",
+                "mip-app",
+                "--out-env",
+                str(output),
+            ]
+        )
+        == 0
     )
+
+    values = dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines())
     assert values["MIP_APP_DEPLOYMENT_RECOVERY_ROOT"] == first
     assert values["MIP_APP_DEPLOYMENT_RECOVERY_LEASE_ID"] == second
     assert values["MIP_APP_DEPLOYMENT_RECOVERY_CANDIDATES"] == f"{second},{first}"
@@ -1630,16 +1759,12 @@ def test_released_lineage_remains_discoverable_after_runtime_writer_rotation() -
 
 def test_original_holder_can_recover_lineage_after_released_actor_handoff() -> None:
     workspace = _workspace()
-    first = lease.acquire(
-        workspace, app_name="mip-app", source_git_sha="a" * 40
-    )
+    first = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40)
     lease.release(workspace, app_name="mip-app", lease_id=first)
     workspace.current_user.me = lambda: SimpleNamespace(
         user_name="replacement-deployer@example.com"
     )
-    assert lease.lease_support.recovery_context(
-        lease, workspace, app_name="mip-app"
-    ) == ("", [])
+    assert lease.lease_support.recovery_context(lease, workspace, app_name="mip-app") == ("", [])
     replacement = lease.acquire(
         workspace,
         app_name="mip-app",
@@ -1647,15 +1772,18 @@ def test_original_holder_can_recover_lineage_after_released_actor_handoff() -> N
         writer_application_id="replacement-runtime-writer",
     )
     lease.release(workspace, app_name="mip-app", lease_id=replacement)
-    workspace.current_user.me = lambda: SimpleNamespace(
-        user_name="deployer@example.com"
-    )
+    workspace.current_user.me = lambda: SimpleNamespace(user_name="deployer@example.com")
 
     recovery, candidates = lease.lease_support.recovery_context(
         lease, workspace, app_name="mip-app"
     )
     assert recovery == first
     assert candidates == [first]
+    before_resumption = lease._download(workspace, app_name="mip-app")
+    assert before_resumption is not None
+    replacement_head = before_resumption["holder_recovery_heads"][
+        "replacement-deployer@example.com"
+    ]
     resumed = lease.acquire(
         workspace,
         app_name="mip-app",
@@ -1668,6 +1796,16 @@ def test_original_holder_can_recover_lineage_after_released_actor_handoff() -> N
     )
     assert recovery == first
     assert candidates == [resumed, first]
+    after_resumption = lease._download(workspace, app_name="mip-app")
+    assert after_resumption is not None
+    assert set(after_resumption["holder_recovery_heads"]) == {
+        "deployer@example.com",
+        "replacement-deployer@example.com",
+    }
+    assert (
+        after_resumption["holder_recovery_heads"]["replacement-deployer@example.com"]
+        == replacement_head
+    )
 
 
 def test_losing_historical_holder_cannot_overwrite_winning_lease_acl(
@@ -1681,9 +1819,7 @@ def test_losing_historical_holder_cannot_overwrite_winning_lease_acl(
         writer_application_id="writer-a",
     )
     lease.release(workspace, app_name="mip-app", lease_id=first)
-    workspace.current_user.me = lambda: SimpleNamespace(
-        user_name="holder-b@example.com"
-    )
+    workspace.current_user.me = lambda: SimpleNamespace(user_name="holder-b@example.com")
     second = lease.acquire(
         workspace,
         app_name="mip-app",
@@ -1693,9 +1829,7 @@ def test_losing_historical_holder_cannot_overwrite_winning_lease_acl(
     lease.release(workspace, app_name="mip-app", lease_id=second)
 
     thread_identity = threading.local()
-    workspace.current_user.me = lambda: SimpleNamespace(
-        user_name=thread_identity.holder
-    )
+    workspace.current_user.me = lambda: SimpleNamespace(user_name=thread_identity.holder)
     barrier = threading.Barrier(2)
     real_create = lease._create_generation
 
@@ -1819,9 +1953,10 @@ def test_renewal_converges_when_same_lease_successor_wins_race(
     )
 
     assert raced is True
-    assert lease._download(workspace, app_name="mip-app")["expires_at"] == (
-        NOW + timedelta(hours=5)
-    ).isoformat()
+    assert (
+        lease._download(workspace, app_name="mip-app")["expires_at"]
+        == (NOW + timedelta(hours=5)).isoformat()
+    )
 
 
 def test_renewal_rejects_wrong_source_or_lease() -> None:
@@ -1956,9 +2091,7 @@ def test_delegated_writer_cannot_renew_acl_attestation() -> None:
 
 def test_holder_heartbeat_keeps_writer_attestation_fresh_at_lifetime_cap() -> None:
     workspace = _workspace()
-    lease_id = lease.acquire(
-        workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW
-    )
+    lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     lease.renew(
         workspace,
         app_name="mip-app",
@@ -2011,34 +2144,47 @@ def test_holder_heartbeat_keeps_writer_attestation_fresh_at_lifetime_cap() -> No
 
 def test_pre_acl_field_v4_chain_keeps_original_parent_digest_compatible() -> None:
     workspace = _workspace()
-    lease.acquire(
-        workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW
-    )
+    lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     base_path = lease._path("mip-app")
     current_base = json.loads(workspace.workspace.data[base_path])
     legacy_base_unsigned = {
         key: value
         for key, value in current_base.items()
-        if key not in {
+        if key
+        not in {
             "acl_attested_at",
             "attestation_verify_key",
             "attestation_signature",
+            "recovery_index_digest",
+            "holder_recovery_heads",
         }
     }
+    legacy_base_unsigned["version"] = lease.LEGACY_LEASE_VERSION
     legacy_base = lease._sign(legacy_base_unsigned)
     workspace.workspace.data[base_path] = json.dumps(legacy_base).encode()
     workspace.workspace.data[lease._head_path("mip-app")] = json.dumps(legacy_base).encode()
+    del workspace.workspace.data[recovery_checkpoint._protocol_marker_path(lease, "mip-app")]
     normalized_base = lease._verify(legacy_base)
     legacy_child_unsigned = lease._next_transition(
         normalized_base,
         operation="renew",
         changes={"expires_at": (NOW + timedelta(hours=5)).isoformat()},
     )
+    invalid_upgrade = lease._verify(
+        lease._sign(
+            {
+                **legacy_child_unsigned,
+                "version": lease.LEASE_VERSION,
+                "recovery_index_digest": current_base["recovery_index_digest"],
+                "holder_recovery_heads": current_base["holder_recovery_heads"],
+            }
+        )
+    )
+    with pytest.raises(RuntimeError, match="successor lineage"):
+        lease._validate_transition(normalized_base, invalid_upgrade)
     legacy_child_unsigned.pop("acl_attested_at")
     legacy_child = lease._sign(legacy_child_unsigned)
-    child_path = lease._successor_path(
-        "mip-app", str(normalized_base["generation_id"])
-    )
+    child_path = lease._successor_path("mip-app", str(normalized_base["generation_id"]))
     workspace.workspace.data[child_path] = json.dumps(legacy_child).encode()
     del workspace.workspace.data[lease._head_path("mip-app")]
 
@@ -2047,6 +2193,62 @@ def test_pre_acl_field_v4_chain_keeps_original_parent_digest_compatible() -> Non
     assert head is not None
     assert head["generation_id"] == legacy_child["generation_id"]
     assert head["acl_attested_at"] == (NOW + timedelta(hours=1)).isoformat()
+
+
+def test_legacy_lease_json_keeps_whitespace_compatibility_but_rejects_duplicates() -> None:
+    workspace = _workspace()
+    lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    base_path = lease._path("mip-app")
+    v5 = json.loads(workspace.workspace.data[base_path])
+    v4_unsigned = {
+        key: value
+        for key, value in v5.items()
+        if key
+        not in {
+            "attestation_verify_key",
+            "attestation_signature",
+            "recovery_index_digest",
+            "holder_recovery_heads",
+        }
+    }
+    v4_unsigned["version"] = lease.LEGACY_LEASE_VERSION
+    v4 = lease._sign(v4_unsigned)
+    v2_unsigned = {
+        "version": 2,
+        "app_name": "mip-app",
+        "lease_id": v4["lease_id"],
+        "source_git_sha": v4["source_git_sha"],
+        "holder": v4["holder"],
+        "writer_application_id": v4["writer_application_id"],
+        "acquired_at": v4["acquired_at"],
+        "expires_at": v4["expires_at"],
+    }
+    private = Ed25519PrivateKey.from_private_bytes(bytes(range(32)))
+    v2 = {
+        **v2_unsigned,
+        "attestation_verify_key": derive_gateway_proof_verify_key(SIGNING_KEY),
+        "attestation_signature": lease._encode(private.sign(lease._message(v2_unsigned))),
+    }
+
+    for legacy in (v2, v4):
+        workspace.workspace.data[base_path] = json.dumps(legacy, indent=2).encode()
+        assert (
+            lease._read_record(
+                workspace,
+                path=base_path,
+                app_name="mip-app",
+            )
+            is not None
+        )
+
+    canonical = json.dumps(v4, sort_keys=True, separators=(",", ":")).encode()
+    workspace.workspace.data[base_path] = b'{"app_name":"shadow-app",' + canonical[1:]
+    with pytest.raises(RuntimeError, match="contains duplicate JSON keys"):
+        lease._read_record(
+            workspace,
+            path=base_path,
+            app_name="mip-app",
+        )
 
 
 def test_tampered_lease_cannot_be_replaced_or_released() -> None:
@@ -2230,6 +2432,56 @@ def test_two_expired_takeover_contenders_have_one_atomic_successor_winner() -> N
     assert current is not None
     assert current["lease_id"] == winners[0]
     assert current["operation"] == "takeover"
+    referenced = {
+        entry["recovery_index_digest"] for entry in current["holder_recovery_heads"].values()
+    }
+    persisted_indexes = {
+        path.rsplit(".", 2)[1]
+        for path in workspace.workspace.data
+        if path.endswith(".recovery-index")
+    }
+    winner_index = recovery_checkpoint._read(
+        lease,
+        workspace,
+        app_name="mip-app",
+        chain_id=current["chain_id"],
+        digest=current["recovery_index_digest"],
+    )
+    lineage_indexes = referenced | {winner_index["previous_recovery_index_digest"]}
+    assert lineage_indexes < persisted_indexes
+    assert len(persisted_indexes - lineage_indexes) == 1
+
+
+def test_signed_takeover_transition_cannot_change_holder_identity() -> None:
+    workspace = _workspace()
+    lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    parent = lease._download(workspace, app_name="mip-app")
+    assert parent is not None
+    acquired_at = parent["expires_at"]
+    child = lease._sign(
+        lease._next_transition(
+            parent,
+            operation="takeover",
+            changes={
+                "state": "active",
+                "lease_id": "11111111-1111-4111-8111-111111111111",
+                "holder": "other-deployer@example.com",
+                "source_git_sha": "b" * 40,
+                "acquired_at": acquired_at,
+                "acl_attested_at": acquired_at,
+                "expires_at": (
+                    datetime.fromisoformat(str(acquired_at)) + lease.LEASE_TTL
+                ).isoformat(),
+            },
+        )
+    )
+    Ed25519PrivateKey.from_private_bytes(bytes(range(32))).public_key().verify(
+        lease._decode(str(child["attestation_signature"]), length=64),
+        lease._message(child),
+    )
+
+    with pytest.raises(RuntimeError, match="takeover transition is invalid"):
+        lease._validate_transition(parent, child)
 
 
 def test_stale_and_corrupt_head_hints_cannot_override_canonical_successor() -> None:
@@ -2247,18 +2499,24 @@ def test_stale_and_corrupt_head_hints_cannot_override_canonical_successor() -> N
     assert renewed is not None
 
     workspace.workspace.data[lease._head_path("mip-app")] = stale
-    assert lease._download(workspace, app_name="mip-app")["generation_id"] == renewed[
-        "generation_id"
-    ]
+    assert (
+        lease._download(workspace, app_name="mip-app")["generation_id"] == renewed["generation_id"]
+    )
     workspace.workspace.data[lease._head_path("mip-app")] = b"not-json"
-    assert lease._download(workspace, app_name="mip-app")["generation_id"] == renewed[
-        "generation_id"
-    ]
+    assert (
+        lease._download(workspace, app_name="mip-app")["generation_id"] == renewed["generation_id"]
+    )
 
 
 def test_head_hint_bounds_reads_after_more_than_4096_historical_generations() -> None:
     workspace = _workspace()
     lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    initial = lease._download(workspace, app_name="mip-app")
+    assert initial is not None
+    recovery_fields = {
+        "recovery_index_digest": initial["recovery_index_digest"],
+        "holder_recovery_heads": initial["holder_recovery_heads"],
+    }
     for _ in range(4097):
         parent = lease._download(workspace, app_name="mip-app")
         assert parent is not None
@@ -2285,6 +2543,202 @@ def test_head_hint_bounds_reads_after_more_than_4096_historical_generations() ->
     assert current is not None
     assert current["generation_seq"] == 4097
     assert calls <= 3
+    assert {
+        "recovery_index_digest": current["recovery_index_digest"],
+        "holder_recovery_heads": current["holder_recovery_heads"],
+    } == recovery_fields
+    assert len([path for path in workspace.workspace.data if path.endswith(".recovery-index")]) == 1
+    workspace.workspace.data[lease._head_path("mip-app")] = b"not-json"
+    calls = 0
+    with pytest.raises(RuntimeError, match="exceeds its safety bound"):
+        lease._download(workspace, app_name="mip-app")
+    assert calls <= lease.MAX_SUCCESSORS_AFTER_HINT + 4
+    del workspace.workspace.data[recovery_checkpoint._protocol_marker_path(lease, "mip-app")]
+    calls = 0
+    with pytest.raises(RuntimeError, match="exceeds its safety bound"):
+        lease._download(workspace, app_name="mip-app")
+    assert calls <= lease.MAX_SUCCESSORS_AFTER_HINT + 4
+    workspace.workspace.data[lease._head_path("mip-app")] = json.dumps(current).encode()
+    lease.release(workspace, app_name="mip-app", lease_id=current["lease_id"])
+    released = lease._download(workspace, app_name="mip-app")
+    assert released is not None
+    assert {
+        "recovery_index_digest": released["recovery_index_digest"],
+        "holder_recovery_heads": released["holder_recovery_heads"],
+    } == recovery_fields
+
+
+@pytest.mark.parametrize("corrupt", (False, True))
+def test_repair_head_explicitly_scans_beyond_v5_automatic_bound(
+    monkeypatch: pytest.MonkeyPatch,
+    corrupt: bool,
+) -> None:
+    workspace = _workspace()
+    lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    for _ in range(lease.MAX_SUCCESSORS_AFTER_HINT + 1):
+        parent = lease._download(workspace, app_name="mip-app")
+        assert parent is not None
+        lease._create_generation(
+            workspace,
+            app_name="mip-app",
+            record=lease._next_transition(
+                parent,
+                operation="renew",
+                changes={"expires_at": parent["expires_at"]},
+            ),
+        )
+    current = lease._download(workspace, app_name="mip-app")
+    assert current is not None
+    head_path = lease._head_path("mip-app")
+    if corrupt:
+        workspace.workspace.data[head_path] = b"not-json"
+    else:
+        del workspace.workspace.data[head_path]
+    calls = 0
+    original_download = workspace.workspace.download
+
+    def counted(path: str) -> io.BytesIO:
+        nonlocal calls
+        calls += 1
+        return original_download(path)
+
+    workspace.workspace.download = counted
+    with pytest.raises(RuntimeError, match="exceeds its safety bound"):
+        lease._download(workspace, app_name="mip-app")
+    assert calls <= lease.MAX_SUCCESSORS_AFTER_HINT + 4
+
+    monkeypatch.setattr(lease, "WorkspaceClient", lambda: workspace)
+    assert lease.main(["repair-head", "--app-name", "mip-app"]) == 0
+    assert (
+        lease._read_record(
+            workspace,
+            path=head_path,
+            app_name="mip-app",
+        )
+        == current
+    )
+    assert lease._download(workspace, app_name="mip-app") == current
+
+
+def test_repair_head_rejects_actor_other_than_signed_holder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _workspace()
+    lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    head_path = lease._head_path("mip-app")
+    del workspace.workspace.data[head_path]
+    workspace.current_user.me = lambda: SimpleNamespace(user_name="other@example.com")
+    monkeypatch.setattr(lease, "WorkspaceClient", lambda: workspace)
+
+    with pytest.raises(RuntimeError, match="signed App deployment lease holder"):
+        lease.main(["repair-head", "--app-name", "mip-app"])
+
+    assert head_path not in workspace.workspace.data
+
+
+@pytest.mark.parametrize("head_state", ("missing", "corrupt"))
+def test_repair_head_replaces_corrupt_v5_locator(
+    monkeypatch: pytest.MonkeyPatch,
+    head_state: str,
+) -> None:
+    workspace = _workspace()
+    lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    current = lease._download(workspace, app_name="mip-app")
+    assert current is not None
+    head_path = lease._head_path("mip-app")
+    marker_path = recovery_checkpoint._protocol_marker_path(lease, "mip-app")
+    workspace.workspace.data[marker_path] = b"not-json"
+    if head_state == "missing":
+        del workspace.workspace.data[head_path]
+    else:
+        workspace.workspace.data[head_path] = b"not-json"
+    monkeypatch.setattr(lease, "WorkspaceClient", lambda: workspace)
+
+    assert lease.main(["repair-head", "--app-name", "mip-app"]) == 0
+    assert (
+        recovery_checkpoint.read_protocol_anchor(
+            lease,
+            workspace,
+            app_name="mip-app",
+        )
+        == current
+    )
+    assert (
+        lease._read_record(
+            workspace,
+            path=head_path,
+            app_name="mip-app",
+        )
+        == current
+    )
+    assert lease._download(workspace, app_name="mip-app") == current
+
+
+@pytest.mark.parametrize("operation", ("sign", "verify"))
+def test_top_level_key_epoch_rejects_json_boolean(operation: str) -> None:
+    workspace = _workspace()
+    lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    current = lease._download(workspace, app_name="mip-app")
+    assert current is not None
+    unsigned = {
+        key: value
+        for key, value in current.items()
+        if key not in {"attestation_verify_key", "attestation_signature"}
+    }
+    unsigned["key_epoch"] = False
+
+    with pytest.raises(RuntimeError, match=r"signing(?:-key epoch| metadata) is invalid"):
+        if operation == "sign":
+            lease._sign(unsigned)
+        else:
+            private = Ed25519PrivateKey.from_private_bytes(bytes(range(32)))
+            forged = {
+                **unsigned,
+                "attestation_verify_key": current["attestation_verify_key"],
+            }
+            forged["attestation_signature"] = lease._encode(private.sign(lease._message(forged)))
+            lease._verify(forged)
+
+
+@pytest.mark.parametrize("version", (2.0, 4.0, 5.0, False, True))
+def test_top_level_lease_version_requires_exact_json_integer(version: object) -> None:
+    workspace = _workspace()
+    lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    current = lease._download(workspace, app_name="mip-app")
+    assert current is not None
+    forged = {**current, "version": version}
+    private = Ed25519PrivateKey.from_private_bytes(bytes(range(32)))
+    forged["attestation_signature"] = lease._encode(private.sign(lease._message(forged)))
+
+    with pytest.raises(RuntimeError, match="App deployment lease is invalid"):
+        lease._verify(forged)
+
+
+@pytest.mark.parametrize("version", (5.0, True))
+def test_create_generation_rejects_inexact_version_before_upload(version: object) -> None:
+    workspace = _workspace()
+    lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    current = lease._download(workspace, app_name="mip-app")
+    assert current is not None
+    invalid = {
+        key: value
+        for key, value in {**current, "version": version}.items()
+        if key not in {"attestation_verify_key", "attestation_signature"}
+    }
+    upload_calls = 0
+
+    def reject_upload(*_args: object, **_kwargs: object) -> None:
+        nonlocal upload_calls
+        upload_calls += 1
+
+    workspace.workspace.upload = reject_upload
+    with pytest.raises(RuntimeError, match="signing metadata is invalid"):
+        lease._create_generation(
+            workspace,
+            app_name="mip-app",
+            record=invalid,
+        )
+    assert upload_calls == 0
 
 
 def test_three_signing_key_epochs_keep_append_only_history_verifiable(
@@ -2324,6 +2778,12 @@ def test_three_signing_key_epochs_keep_append_only_history_verifiable(
     assert current is not None
     assert current["lease_id"] == third
     assert current["key_epoch"] == 2
+    recovery, candidates = lease.lease_support.recovery_context(
+        lease, workspace, app_name="mip-app"
+    )
+    assert recovery == first
+    assert candidates == [third, second, first]
+    assert current["holder_recovery_heads"]["deployer@example.com"]["key_epoch"] == 2
 
 
 def test_three_key_epochs_keep_first_install_recovery_journal_verifiable(
@@ -2340,9 +2800,7 @@ def test_three_key_epochs_keep_first_install_recovery_journal_verifiable(
 
     monkeypatch.setenv("MIP_AI_GATEWAY_PROOF_SIGNING_KEY", signing_keys[0])
     monkeypatch.setenv("MIP_AI_GATEWAY_PROOF_VERIFY_KEY", verify_keys[0])
-    creation_lease = lease.acquire(
-        workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW
-    )
+    creation_lease = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     first_install.prepare(
         workspace,
         app_name="mip-app",
@@ -2352,9 +2810,7 @@ def test_three_key_epochs_keep_first_install_recovery_journal_verifiable(
         now=NOW,
     )
 
-    monkeypatch.setenv(
-        "MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS", ",".join(verify_keys[:2])
-    )
+    monkeypatch.setenv("MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS", ",".join(verify_keys[:2]))
     monkeypatch.setenv("MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY", verify_keys[1])
     monkeypatch.setenv("MIP_AI_GATEWAY_PROOF_SIGNING_KEY", signing_keys[2])
     monkeypatch.setenv("MIP_AI_GATEWAY_PROOF_VERIFY_KEY", verify_keys[2])
@@ -2425,6 +2881,670 @@ def test_expired_legacy_v2_lease_migrates_only_after_grace_and_exact_authority()
     assert after["operation"] == "acquire"
 
 
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        ("missing", "is missing"),
+        ("corrupt", "not valid JSON"),
+        ("noncanonical", "not canonical JSON"),
+        ("duplicate-key", "contains duplicate JSON keys"),
+        ("oversized", "is oversized"),
+        ("signature", "signature is invalid"),
+    ),
+)
+def test_v5_recovery_checkpoint_storage_failures_close_recovery(
+    mutation: str,
+    message: str,
+) -> None:
+    workspace = _workspace()
+    lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease.release(workspace, app_name="mip-app", lease_id=lease_id)
+    record = lease._download(workspace, app_name="mip-app")
+    assert record is not None
+    path = recovery_checkpoint.checkpoint_path(
+        lease,
+        "mip-app",
+        record["chain_id"],
+        record["recovery_index_digest"],
+    )
+    if mutation == "missing":
+        del workspace.workspace.data[path]
+    elif mutation == "corrupt":
+        workspace.workspace.data[path] = b"not-json"
+    elif mutation == "noncanonical":
+        workspace.workspace.data[path] = json.dumps(
+            json.loads(workspace.workspace.data[path]),
+            sort_keys=True,
+        ).encode()
+    elif mutation == "duplicate-key":
+        canonical = workspace.workspace.data[path]
+        workspace.workspace.data[path] = canonical.replace(
+            b'{"app_name":',
+            b'{"app_name":"shadow-app","app_name":',
+            1,
+        )
+    elif mutation == "signature":
+        invalid = json.loads(workspace.workspace.data[path])
+        invalid["attestation_signature"] = lease._encode(bytes(64))
+        workspace.workspace.data[path] = recovery_checkpoint._canonical(invalid)
+    else:
+        workspace.workspace.data[path] = b"{" + b"x" * (
+            recovery_checkpoint.MAX_CHECKPOINT_BYTES + 1
+        )
+
+    with pytest.raises(RuntimeError, match=message):
+        lease.lease_support.recovery_context(lease, workspace, app_name="mip-app")
+
+
+@pytest.mark.parametrize("version", (True, 1.0))
+def test_v5_checkpoint_version_requires_exact_json_integer(version: object) -> None:
+    workspace = _workspace()
+    lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    record = lease._download(workspace, app_name="mip-app")
+    assert record is not None
+    original = recovery_checkpoint._read(
+        lease,
+        workspace,
+        app_name="mip-app",
+        chain_id=record["chain_id"],
+        digest=record["recovery_index_digest"],
+    )
+    unsigned = {
+        key: value
+        for key, value in original.items()
+        if key not in {"attestation_verify_key", "attestation_signature"}
+    }
+    forged = {**unsigned, "version": version}
+    private = Ed25519PrivateKey.from_private_bytes(bytes(range(32)))
+    forged["attestation_verify_key"] = original["attestation_verify_key"]
+    forged["attestation_signature"] = lease._encode(
+        private.sign(recovery_checkpoint._message(forged))
+    )
+    digest = recovery_checkpoint.checkpoint_digest(forged)
+    workspace.workspace.data[
+        recovery_checkpoint.checkpoint_path(
+            lease,
+            "mip-app",
+            record["chain_id"],
+            digest,
+        )
+    ] = recovery_checkpoint._canonical(forged)
+
+    with pytest.raises(RuntimeError, match="recovery index version is invalid"):
+        recovery_checkpoint._read(
+            lease,
+            workspace,
+            app_name="mip-app",
+            chain_id=record["chain_id"],
+            digest=digest,
+        )
+
+
+@pytest.mark.parametrize("version", (True, 1.0))
+def test_v5_checkpoint_persist_rejects_inexact_version_before_upload(
+    version: object,
+) -> None:
+    workspace = _workspace()
+    lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    record = lease._download(workspace, app_name="mip-app")
+    assert record is not None
+    checkpoint = recovery_checkpoint._read(
+        lease,
+        workspace,
+        app_name="mip-app",
+        chain_id=record["chain_id"],
+        digest=record["recovery_index_digest"],
+    )
+    unsigned = {
+        key: value
+        for key, value in {**checkpoint, "version": version}.items()
+        if key not in {"attestation_verify_key", "attestation_signature"}
+    }
+    upload_calls = 0
+
+    def reject_upload(*_args: object, **_kwargs: object) -> None:
+        nonlocal upload_calls
+        upload_calls += 1
+
+    workspace.workspace.upload = reject_upload
+    with pytest.raises(RuntimeError, match="recovery signing metadata is invalid"):
+        recovery_checkpoint._persist(lease, workspace, value=unsigned)
+    assert upload_calls == 0
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        ("noncanonical", "not canonical JSON"),
+        ("duplicate-key", "contains duplicate JSON keys"),
+    ),
+)
+def test_v5_protocol_locator_rejects_inexact_json(
+    mutation: str,
+    message: str,
+) -> None:
+    workspace = _workspace()
+    lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    path = recovery_checkpoint._protocol_marker_path(lease, "mip-app")
+    canonical = workspace.workspace.data[path]
+    if mutation == "noncanonical":
+        workspace.workspace.data[path] = json.dumps(
+            json.loads(canonical),
+            sort_keys=True,
+        ).encode()
+    else:
+        workspace.workspace.data[path] = canonical.replace(
+            b'{"anchor_generation_id":',
+            b'{"anchor_generation_id":"11111111-1111-4111-8111-111111111111",'
+            b'"anchor_generation_id":',
+            1,
+        )
+    del workspace.workspace.data[lease._head_path("mip-app")]
+
+    with pytest.raises(RuntimeError, match=message):
+        lease._download(workspace, app_name="mip-app")
+
+
+@pytest.mark.parametrize("version", (True, 1.0))
+def test_v5_protocol_locator_version_requires_exact_json_integer(version: object) -> None:
+    workspace = _workspace()
+    lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    path = recovery_checkpoint._protocol_marker_path(lease, "mip-app")
+    marker = json.loads(workspace.workspace.data[path])
+    marker["version"] = version
+    workspace.workspace.data[path] = recovery_checkpoint._canonical(marker)
+
+    with pytest.raises(RuntimeError, match="v5 locator is invalid"):
+        recovery_checkpoint.read_protocol_anchor(
+            lease,
+            workspace,
+            app_name="mip-app",
+        )
+
+
+def test_v5_protocol_locator_accepts_maximum_holder_map_envelope() -> None:
+    workspace = _workspace()
+    lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    current = lease._download(workspace, app_name="mip-app")
+    assert current is not None
+    unsigned = {
+        key: value
+        for key, value in current.items()
+        if key not in {"attestation_verify_key", "attestation_signature"}
+    }
+    entry = dict(unsigned["holder_recovery_heads"][unsigned["holder"]])
+    unsigned["holder_recovery_heads"] = {unsigned["holder"]: entry}
+    for index in range(recovery_checkpoint.MAX_RECOVERY_HOLDERS - 1):
+        holder = f"holder-{index:02d}-" + "x" * 94
+        unsigned["holder_recovery_heads"][holder] = dict(entry)
+    signed = lease._verify(lease._sign(unsigned))
+    assert (
+        len(recovery_checkpoint._canonical(signed["holder_recovery_heads"]))
+        <= recovery_checkpoint.MAX_RECOVERY_HEADS_BYTES
+    )
+
+    marker_workspace = _workspace()
+    marker_workspace.workspace.data[lease._path("mip-app")] = json.dumps(
+        signed,
+        sort_keys=True,
+    ).encode()
+    recovery_checkpoint.ensure_protocol_marker(
+        lease,
+        marker_workspace,
+        app_name="mip-app",
+        anchor=signed,
+    )
+    marker = marker_workspace.workspace.data[
+        recovery_checkpoint._protocol_marker_path(lease, "mip-app")
+    ]
+    assert len(marker) > recovery_checkpoint.MAX_RECOVERY_HEADS_BYTES
+    assert len(marker) <= recovery_checkpoint.MAX_PROTOCOL_MARKER_BYTES
+    assert (
+        recovery_checkpoint.read_protocol_anchor(
+            lease,
+            marker_workspace,
+            app_name="mip-app",
+        )
+        == signed
+    )
+
+
+def test_v5_recovery_checkpoint_rejects_cross_app_and_cross_chain_replay() -> None:
+    workspace = _workspace()
+    lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    record = lease._download(workspace, app_name="mip-app")
+    assert record is not None
+    source_path = recovery_checkpoint.checkpoint_path(
+        lease,
+        "mip-app",
+        record["chain_id"],
+        record["recovery_index_digest"],
+    )
+    payload = workspace.workspace.data[source_path]
+    foreign_chain = "11111111-1111-4111-8111-111111111111"
+    cross_app_path = recovery_checkpoint.checkpoint_path(
+        lease,
+        "other-app",
+        record["chain_id"],
+        record["recovery_index_digest"],
+    )
+    workspace.workspace.data[cross_app_path] = payload
+    with pytest.raises(RuntimeError, match="path binding"):
+        recovery_checkpoint._read(
+            lease,
+            workspace,
+            app_name="other-app",
+            chain_id=record["chain_id"],
+            digest=record["recovery_index_digest"],
+        )
+    cross_chain_path = recovery_checkpoint.checkpoint_path(
+        lease,
+        "mip-app",
+        foreign_chain,
+        record["recovery_index_digest"],
+    )
+    workspace.workspace.data[cross_chain_path] = payload
+    with pytest.raises(RuntimeError, match="path binding"):
+        recovery_checkpoint._read(
+            lease,
+            workspace,
+            app_name="mip-app",
+            chain_id=foreign_chain,
+            digest=record["recovery_index_digest"],
+        )
+
+
+def test_v5_recovery_rejects_checkpoint_candidate_and_head_drift() -> None:
+    workspace = _workspace()
+    lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease.release(workspace, app_name="mip-app", lease_id=lease_id)
+    record = lease._download(workspace, app_name="mip-app")
+    assert record is not None
+    checkpoint = recovery_checkpoint._read(
+        lease,
+        workspace,
+        app_name="mip-app",
+        chain_id=record["chain_id"],
+        digest=record["recovery_index_digest"],
+    )
+    unsigned = {
+        key: value
+        for key, value in checkpoint.items()
+        if key not in {"attestation_verify_key", "attestation_signature"}
+    }
+    duplicate = recovery_checkpoint._sign(
+        lease,
+        {
+            **unsigned,
+            "lease_candidates": [lease_id, lease_id],
+            "candidate_count": 2,
+        },
+    )
+    duplicate_digest = recovery_checkpoint.checkpoint_digest(duplicate)
+    duplicate_path = recovery_checkpoint.checkpoint_path(
+        lease,
+        "mip-app",
+        record["chain_id"],
+        duplicate_digest,
+    )
+    workspace.workspace.data[duplicate_path] = json.dumps(duplicate).encode()
+    with pytest.raises(RuntimeError, match="not canonical"):
+        recovery_checkpoint._read(
+            lease,
+            workspace,
+            app_name="mip-app",
+            chain_id=record["chain_id"],
+            digest=duplicate_digest,
+        )
+
+    holder = "deployer@example.com"
+    drifted = json.loads(json.dumps(record))
+    drifted["holder_recovery_heads"][holder]["candidate_count"] = 2
+    drifted["holder_recovery_heads"][holder]["previous_recovery_index_digest"] = "a" * 64
+    with pytest.raises(RuntimeError, match="diverges from its signed head"):
+        recovery_checkpoint.recovery_context(
+            lease,
+            workspace,
+            app_name="mip-app",
+            record=drifted,
+        )
+
+
+@pytest.mark.parametrize("mutation", ("missing", "wrong-tail"))
+def test_v5_recovery_requires_exact_immediate_predecessor_checkpoint(
+    mutation: str,
+) -> None:
+    workspace = _workspace()
+    first = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease.release(workspace, app_name="mip-app", lease_id=first)
+    second = lease.acquire(workspace, app_name="mip-app", source_git_sha="b" * 40)
+    record = lease._download(workspace, app_name="mip-app")
+    assert record is not None
+    current = recovery_checkpoint._read(
+        lease,
+        workspace,
+        app_name="mip-app",
+        chain_id=record["chain_id"],
+        digest=record["recovery_index_digest"],
+    )
+    previous_digest = str(current["previous_recovery_index_digest"])
+    previous_path = recovery_checkpoint.checkpoint_path(
+        lease,
+        "mip-app",
+        str(record["chain_id"]),
+        previous_digest,
+    )
+    if mutation == "missing":
+        del workspace.workspace.data[previous_path]
+        expected_record = record
+        message = "recovery index is missing"
+    else:
+        previous = recovery_checkpoint._read(
+            lease,
+            workspace,
+            app_name="mip-app",
+            chain_id=record["chain_id"],
+            digest=previous_digest,
+        )
+        other = "11111111-1111-4111-8111-111111111111"
+        wrong_previous, _checkpoint = recovery_checkpoint._persist(
+            lease,
+            workspace,
+            value={
+                key: value
+                for key, value in {
+                    **previous,
+                    "recovery_root_lease_id": other,
+                    "lease_candidates": [other],
+                    "last_acquire_lease_id": other,
+                }.items()
+                if key not in {"attestation_verify_key", "attestation_signature"}
+            },
+        )
+        wrong_current_digest, wrong_current = recovery_checkpoint._persist(
+            lease,
+            workspace,
+            value={
+                key: value
+                for key, value in {
+                    **current,
+                    "previous_recovery_index_digest": wrong_previous,
+                }.items()
+                if key not in {"attestation_verify_key", "attestation_signature"}
+            },
+        )
+        unsigned_record = {
+            key: value
+            for key, value in json.loads(json.dumps(record)).items()
+            if key not in {"attestation_verify_key", "attestation_signature"}
+        }
+        holder = str(unsigned_record["holder"])
+        unsigned_record["recovery_index_digest"] = wrong_current_digest
+        unsigned_record["holder_recovery_heads"][holder] = recovery_checkpoint._entry(
+            wrong_current,
+            wrong_current_digest,
+        )
+        expected_record = lease._verify(lease._sign(unsigned_record))
+        message = "predecessor checkpoint is invalid"
+
+    with pytest.raises(RuntimeError, match=message):
+        recovery_checkpoint.recovery_context(
+            lease,
+            workspace,
+            app_name="mip-app",
+            record=expected_record,
+        )
+    assert current["lease_candidates"] == [second, first]
+
+
+def test_expired_v5_takeover_requires_authenticated_checkpoint_predecessor() -> None:
+    workspace = _workspace()
+    first = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease.release(workspace, app_name="mip-app", lease_id=first)
+    second = lease.acquire(
+        workspace,
+        app_name="mip-app",
+        source_git_sha="b" * 40,
+        now=NOW + timedelta(hours=1),
+    )
+    current = lease._download(workspace, app_name="mip-app")
+    assert current is not None
+    checkpoint = recovery_checkpoint._read(
+        lease,
+        workspace,
+        app_name="mip-app",
+        chain_id=current["chain_id"],
+        digest=current["recovery_index_digest"],
+    )
+    previous_path = recovery_checkpoint.checkpoint_path(
+        lease,
+        "mip-app",
+        str(current["chain_id"]),
+        str(checkpoint["previous_recovery_index_digest"]),
+    )
+    del workspace.workspace.data[previous_path]
+
+    with pytest.raises(RuntimeError, match="recovery index is missing"):
+        lease.acquire(
+            workspace,
+            app_name="mip-app",
+            source_git_sha="c" * 40,
+            expired_recovery_lease_id=first,
+            now=NOW + timedelta(hours=5, seconds=1),
+        )
+
+    assert lease._download(workspace, app_name="mip-app")["lease_id"] == second
+
+
+@pytest.mark.parametrize("mutation", ("root", "generation", "sequence", "key-epoch"))
+def test_v5_acquisition_record_requires_exact_current_checkpoint_head(
+    mutation: str,
+) -> None:
+    workspace = _workspace()
+    lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    record = lease._download(workspace, app_name="mip-app")
+    assert record is not None
+    unsigned = {
+        key: value
+        for key, value in record.items()
+        if key not in {"attestation_verify_key", "attestation_signature"}
+    }
+    holder = str(unsigned["holder"])
+    if mutation == "root":
+        unsigned["recovery_root_lease_id"] = "11111111-1111-4111-8111-111111111111"
+    elif mutation == "generation":
+        unsigned["holder_recovery_heads"][holder]["last_acquire_generation_id"] = (
+            "11111111-1111-4111-8111-111111111111"
+        )
+    elif mutation == "sequence":
+        unsigned["holder_recovery_heads"][holder]["last_acquire_generation_seq"] = 1
+    else:
+        unsigned["holder_recovery_heads"][holder]["key_epoch"] = 1
+
+    with pytest.raises(RuntimeError, match="recovery index is invalid"):
+        lease._verify(lease._sign(unsigned))
+
+
+@pytest.mark.parametrize("returning_holder", (True, False))
+def test_v5_transition_rejects_recovery_root_reset(
+    returning_holder: bool,
+) -> None:
+    workspace = _workspace()
+    first = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease.release(workspace, app_name="mip-app", lease_id=first)
+    parent = lease._download(workspace, app_name="mip-app")
+    assert parent is not None
+    writer = WRITER_ID
+    if not returning_holder:
+        workspace.current_user.me = lambda: SimpleNamespace(user_name="other@example.com")
+        writer = "other-runtime-writer"
+    lease.acquire(
+        workspace,
+        app_name="mip-app",
+        source_git_sha="b" * 40,
+        writer_application_id=writer,
+    )
+    child = lease._download(workspace, app_name="mip-app")
+    assert child is not None
+    unsigned = {
+        key: value
+        for key, value in json.loads(json.dumps(child)).items()
+        if key not in {"attestation_verify_key", "attestation_signature"}
+    }
+    replacement_root = "11111111-1111-4111-8111-111111111111"
+    unsigned["recovery_root_lease_id"] = replacement_root
+    unsigned["holder_recovery_heads"][unsigned["holder"]]["recovery_root_lease_id"] = (
+        replacement_root
+    )
+    drifted = lease._verify(lease._sign(unsigned))
+
+    with pytest.raises(
+        RuntimeError,
+        match="holder recovery authority changed|new-holder recovery root is invalid",
+    ):
+        lease._validate_transition(parent, drifted)
+
+
+def test_v5_checkpoint_upload_timeout_is_resolved_by_exact_readback() -> None:
+    workspace = _workspace()
+    original_upload = workspace.workspace.upload
+    checkpoint_uploads = 0
+
+    def commit_then_timeout(
+        path: str,
+        content: io.BytesIO,
+        *,
+        format: ImportFormat,
+        overwrite: bool,
+    ) -> None:
+        nonlocal checkpoint_uploads
+        payload = content.getvalue()
+        original_upload(path, io.BytesIO(payload), format=format, overwrite=overwrite)
+        if path.endswith(".recovery-index"):
+            checkpoint_uploads += 1
+            raise TimeoutError("checkpoint committed before timeout")
+
+    workspace.workspace.upload = commit_then_timeout
+    lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+
+    assert checkpoint_uploads == 1
+    assert lease._download(workspace, app_name="mip-app")["lease_id"] == lease_id
+
+
+def test_v5_checkpoint_upload_timeout_before_commit_fails_without_lease() -> None:
+    workspace = _workspace()
+    original_upload = workspace.workspace.upload
+
+    def timeout_before_commit(
+        path: str,
+        content: io.BytesIO,
+        *,
+        format: ImportFormat,
+        overwrite: bool,
+    ) -> None:
+        if path.endswith(".recovery-index"):
+            raise TimeoutError("checkpoint timed out before commit")
+        original_upload(path, content, format=format, overwrite=overwrite)
+
+    workspace.workspace.upload = timeout_before_commit
+    with pytest.raises(RuntimeError, match="could not be authenticated"):
+        lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+
+    assert lease._path("mip-app") not in workspace.workspace.data
+
+
+def test_first_v4_to_v5_acquisition_scans_legacy_base_then_recovery_is_bounded() -> None:
+    workspace = _workspace()
+    first = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    base_path = lease._path("mip-app")
+    v5_base = json.loads(workspace.workspace.data[base_path])
+    v4_unsigned = {
+        key: value
+        for key, value in v5_base.items()
+        if key
+        not in {
+            "attestation_verify_key",
+            "attestation_signature",
+            "recovery_index_digest",
+            "holder_recovery_heads",
+        }
+    }
+    v4_unsigned["version"] = lease.LEGACY_LEASE_VERSION
+    v4_base = lease._sign(v4_unsigned)
+    workspace.workspace.data[base_path] = json.dumps(v4_base).encode()
+    workspace.workspace.data[lease._head_path("mip-app")] = json.dumps(v4_base).encode()
+    del workspace.workspace.data[recovery_checkpoint._protocol_marker_path(lease, "mip-app")]
+    for _ in range(128):
+        parent = lease._download(workspace, app_name="mip-app")
+        assert parent is not None
+        lease._create_generation(
+            workspace,
+            app_name="mip-app",
+            record=lease._next_transition(
+                parent,
+                operation="renew",
+                changes={"expires_at": parent["expires_at"]},
+            ),
+        )
+    lease.release(workspace, app_name="mip-app", lease_id=first)
+    legacy = lease._download(workspace, app_name="mip-app")
+    assert legacy is not None and legacy["version"] == lease.LEGACY_LEASE_VERSION
+    del workspace.workspace.data[lease._head_path("mip-app")]
+    generation_reads = 0
+    original_download = workspace.workspace.download
+
+    def counted(path: str) -> io.BytesIO:
+        nonlocal generation_reads
+        if path == base_path or path.endswith(".next"):
+            generation_reads += 1
+        return original_download(path)
+
+    workspace.workspace.download = counted
+    second = lease.acquire(workspace, app_name="mip-app", source_git_sha="b" * 40)
+    assert generation_reads >= int(legacy["generation_seq"]) + 1
+    assert generation_reads <= 2 * (int(legacy["generation_seq"]) + 2) + 10
+    migrated = lease._download(workspace, app_name="mip-app")
+    assert migrated is not None and migrated["version"] == lease.LEASE_VERSION
+    assert lease.lease_support.recovery_context(lease, workspace, app_name="mip-app") == (
+        first,
+        [second, first],
+    )
+    migrated_checkpoint = recovery_checkpoint._read(
+        lease,
+        workspace,
+        app_name="mip-app",
+        chain_id=migrated["chain_id"],
+        digest=migrated["recovery_index_digest"],
+    )
+    previous = recovery_checkpoint._read(
+        lease,
+        workspace,
+        app_name="mip-app",
+        chain_id=migrated["chain_id"],
+        digest=migrated_checkpoint["previous_recovery_index_digest"],
+    )
+    assert previous["lease_candidates"] == [first]
+    assert previous["previous_recovery_index_digest"] == ""
+
+    calls = 0
+
+    def bounded(path: str) -> io.BytesIO:
+        nonlocal calls
+        calls += 1
+        return original_download(path)
+
+    workspace.workspace.download = bounded
+    assert lease.lease_support.recovery_context(lease, workspace, app_name="mip-app") == (
+        first,
+        [second, first],
+    )
+    assert calls <= 5
+    del workspace.workspace.data[lease._head_path("mip-app")]
+    calls = 0
+    assert lease._download(workspace, app_name="mip-app") == migrated
+    assert calls <= 4
+
+
 def test_delayed_audit_row_during_settlement_preserves_first_install_intent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2489,9 +3609,7 @@ def test_absent_clear_requeries_when_audit_query_crosses_settlement(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = _workspace()
-    creation_lease = lease.acquire(
-        workspace, app_name="mip-app", source_git_sha="a" * 40
-    )
+    creation_lease = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40)
     first_install.prepare(
         workspace,
         app_name="mip-app",
@@ -2500,9 +3618,7 @@ def test_absent_clear_requeries_when_audit_query_crosses_settlement(
         payload=_first_install_payload(),
     )
     lease.release(workspace, app_name="mip-app", lease_id=creation_lease)
-    retry_lease = lease.acquire(
-        workspace, app_name="mip-app", source_git_sha="b" * 40
-    )
+    retry_lease = lease.acquire(workspace, app_name="mip-app", source_git_sha="b" * 40)
     record = first_install._download(workspace, app_name="mip-app")
     assert record is not None
     settlement = datetime.fromisoformat(record["audit_settlement_until"])

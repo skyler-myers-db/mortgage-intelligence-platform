@@ -334,6 +334,28 @@ export MIP_OAUTH_CREDENTIAL_ORPHAN_LEASE_ID="<reviewed-lease-id>"
 export MIP_OAUTH_CREDENTIAL_ORPHAN_RECOVERY_ROOT_LEASE_ID="<reviewed-recovery-root-id>"
 ./scripts/deploy.sh -t dev
 
+# The outer App-lease recovery variables remain unchanged under lease protocol
+# v5. `recovery-root` now authenticates the canonical signed lease head and the
+# exact holder checkpoint named by its digest; it does not enumerate thousands
+# of heartbeat generations. Treat a missing/corrupt/oversized checkpoint,
+# app/chain mismatch, signature failure, or holder-head divergence as a hard
+# governance stop. Do not delete historical `.next` or `.recovery-index` files,
+# and do not edit `.head` by hand: it is only a read accelerator. Recovery reads
+# the selected current checkpoint and its exact immediate predecessor when the
+# signed checkpoint names one.
+python -m tools.databricks.app_deployment_lease recovery-root \
+  --app-name "$MIP_APP_NAME" \
+  --out-env /tmp/mip-app-deployment-recovery.env
+
+# Exceptional missing/corrupt `.head` or unsigned `.protocol-v5` locator
+# recovery. Run as the exact signed holder. This command performs a full
+# authenticated scan (bounded by MAX_CANONICAL_GENERATIONS), re-proves the
+# protected-root ACL, re-anchors a missing/corrupt locator to the canonical
+# signed head, replaces `.head`, and exact-postflights both locators. It cannot
+# repair a corrupt signed generation/checkpoint.
+python -m tools.databricks.app_deployment_lease repair-head \
+  --app-name "$MIP_APP_NAME"
+
 # 1. Separately create/store DATABRICKS_ACCOUNT_ID plus the distinct
 #    DATABRICKS_ACCOUNT_CLIENT_ID/SECRET account-SCIM pair.
 #    A first install with an approved group owner needs account-admin authority

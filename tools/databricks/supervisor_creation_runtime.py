@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -17,13 +18,19 @@ from tools.databricks.agent_runtime_access import (
     assert_runtime_creator,
 )
 from tools.databricks.supervisor_agent_contract import supervisor_tool_resource_is_exact
+from tools.databricks.supervisor_creation_field_update import (
+    update_signed_supervisor_field,
+)
 from tools.databricks.supervisor_creation_journal import (
     base_create_payload,
     download,
     matches_current_policy,
 )
 
-_MAX_CHILD_INVENTORY_PAGES = 1_000
+_INVENTORY_PAGE_SIZE = 100
+_MAX_INVENTORY_PAGES = 1_000
+_FIELD_READBACK_ATTEMPTS = 30
+_FIELD_READBACK_INTERVAL_S = 2.0
 
 
 def _text(value: object) -> str:
@@ -43,8 +50,8 @@ def supervisor_rows(workspace: Any) -> list[dict[str, Any]]:
     identities: set[str] = set()
     token = ""
     seen_tokens: set[str] = set()
-    while True:
-        query: dict[str, Any] = {"page_size": 100}
+    for _page_number in range(_MAX_INVENTORY_PAGES):
+        query: dict[str, Any] = {"page_size": _INVENTORY_PAGE_SIZE}
         if token:
             query["page_token"] = token
         payload = workspace.api_client.do(
@@ -57,6 +64,8 @@ def supervisor_rows(workspace: Any) -> list[dict[str, Any]]:
         page = payload.get("supervisor_agents", [])
         if not isinstance(page, list):
             raise RuntimeError("Supervisor creation inventory is malformed")
+        if len(page) > _INVENTORY_PAGE_SIZE:
+            raise RuntimeError("Supervisor creation inventory exceeded the row limit")
         for raw in page:
             if not isinstance(raw, Mapping):
                 raise RuntimeError("Supervisor creation inventory is malformed")
@@ -77,6 +86,7 @@ def supervisor_rows(workspace: Any) -> list[dict[str, Any]]:
         if token in seen_tokens:
             raise RuntimeError("Supervisor creation inventory pagination cycled")
         seen_tokens.add(token)
+    raise RuntimeError("Supervisor creation inventory exceeded the page limit")
 
 
 def supervisor_by_id(workspace: Any, supervisor_id: str) -> dict[str, Any]:
@@ -184,8 +194,8 @@ def _paged_child_rows(
     rows: list[Any] = []
     token = ""
     seen_tokens: set[str] = set()
-    for _page_number in range(_MAX_CHILD_INVENTORY_PAGES):
-        query: dict[str, Any] = {"page_size": 100}
+    for _page_number in range(_MAX_INVENTORY_PAGES):
+        query: dict[str, Any] = {"page_size": _INVENTORY_PAGE_SIZE}
         if token:
             query["page_token"] = token
         payload = workspace.api_client.do(
@@ -200,6 +210,8 @@ def _paged_child_rows(
         page = payload.get(collection)
         if not isinstance(page, list):
             raise RuntimeError(f"Supervisor creation {resource} inventory is malformed")
+        if len(page) > _INVENTORY_PAGE_SIZE:
+            raise RuntimeError(f"Supervisor creation {resource} inventory exceeded the row limit")
         rows.extend(page)
         next_token = payload.get("next_page_token")
         if next_token is None or next_token == "":
@@ -438,6 +450,83 @@ def _assert_unchanged_journal(
         raise RuntimeError("Supervisor creation journal changed during convergence")
 
 
+def _assert_convergence_authority(
+    workspace: Any,
+    record: dict[str, Any],
+    assert_single_writer: Callable[[], None],
+) -> None:
+    assert_single_writer()
+    _assert_unchanged_journal(workspace, record)
+
+
+def _await_field_readback(
+    workspace: Any,
+    record: dict[str, Any],
+    *,
+    field: str,
+    previous: str,
+    expected: str,
+    mutation_outcome: str,
+    assert_single_writer: Callable[[], None],
+    sleep: Callable[[float], object],
+) -> None:
+    """Observe one provider mutation without reissuing it or accepting drift."""
+
+    if field not in {"instructions", "display_name"}:
+        raise ValueError("Supervisor readback field is unsupported")
+    for observation in range(1, _FIELD_READBACK_ATTEMPTS + 1):
+        _assert_convergence_authority(workspace, record, assert_single_writer)
+        direct = supervisor_by_id(workspace, record["supervisor_id"])
+        observed = _text(direct.get(field)) if field == "display_name" else direct.get(field)
+        if observed not in {previous, expected}:
+            raise RuntimeError(
+                f"Supervisor {field} readback drifted outside the signed "
+                "temporary/canonical states"
+            )
+        exact_journaled_candidate(workspace, record, require_claim=True)
+        if field == "display_name":
+            rows = supervisor_rows(workspace)
+            claimed = [
+                row
+                for row in rows
+                if _text(row.get("supervisor_agent_id")) == record["supervisor_id"]
+            ]
+            if len(claimed) != 1:
+                raise RuntimeError(
+                    "Supervisor display_name readback lost the immutable inventory claim"
+                )
+            listed_name = _text(claimed[0].get("display_name"))
+            if listed_name not in {previous, expected}:
+                raise RuntimeError(
+                    "Supervisor display_name inventory drifted outside the signed "
+                    "temporary/canonical states"
+                )
+            conflicts = [
+                row
+                for row in rows
+                if _text(row.get("display_name")) == expected
+                and _text(row.get("supervisor_agent_id")) != record["supervisor_id"]
+            ]
+            if conflicts:
+                raise RuntimeError(
+                    "Supervisor display_name canonical target became occupied during readback"
+                )
+            if observed == expected and listed_name == expected:
+                assert_unique_target_claim(workspace, record)
+                _assert_convergence_authority(workspace, record, assert_single_writer)
+                return
+        elif observed == expected:
+            _assert_convergence_authority(workspace, record, assert_single_writer)
+            return
+        if observation == _FIELD_READBACK_ATTEMPTS:
+            raise RuntimeError(
+                f"Supervisor {field} readback did not converge after "
+                f"{_FIELD_READBACK_ATTEMPTS} bounded observations "
+                f"(provider_result={mutation_outcome})"
+            )
+        sleep(_FIELD_READBACK_INTERVAL_S)
+
+
 def finalize_signed_blue_for_planning(
     workspace: Any,
     *,
@@ -511,6 +600,7 @@ def converge_claimed(
     assert_single_writer: Callable[[], None],
     create_tool: Callable[[str, str, dict[str, Any]], Any],
     update_field: Callable[[str, str, str], Any],
+    sleep: Callable[[float], object] = time.sleep,
 ) -> dict[str, str]:
     """Add only missing exact tools and finalize the deterministic display name."""
 
@@ -528,18 +618,25 @@ def converge_claimed(
     if direct.get("instructions") == record["temporary_instructions"]:
         assert_single_writer()
         _assert_unchanged_journal(workspace, record)
+        mutation_outcome = "accepted"
         try:
             update_field(
                 record["supervisor_id"],
                 "instructions",
                 canonical_instructions,
             )
-        except Exception as update_error:  # noqa: BLE001
-            refreshed = supervisor_by_id(workspace, record["supervisor_id"])
-            if refreshed.get("instructions") != canonical_instructions:
-                raise RuntimeError(
-                    "Supervisor instructions update did not commit exactly"
-                ) from update_error
+        except Exception:  # noqa: BLE001 - provider commit may be ambiguous
+            mutation_outcome = "ambiguous"
+        _await_field_readback(
+            workspace,
+            record,
+            field="instructions",
+            previous=record["temporary_instructions"],
+            expected=canonical_instructions,
+            mutation_outcome=mutation_outcome,
+            assert_single_writer=assert_single_writer,
+            sleep=sleep,
+        )
     elif direct.get("instructions") != canonical_instructions:
         raise RuntimeError("journaled Supervisor instructions drifted")
     for tool_id, tool in expected.items():
@@ -590,6 +687,7 @@ def converge_claimed(
         record,
         require_claim=True,
     )
+    mutation_outcome = "preexisting"
     if _text(direct.get("display_name")) == record["temporary_name"]:
         conflicts = [
             row
@@ -601,6 +699,7 @@ def converge_claimed(
             raise RuntimeError("Supervisor deterministic target name is already occupied")
         assert_single_writer()
         _assert_unchanged_journal(workspace, record)
+        mutation_outcome = "accepted"
         try:
             update_field(
                 record["supervisor_id"],
@@ -608,30 +707,36 @@ def converge_claimed(
                 record["target_name"],
             )
         except Exception:  # noqa: BLE001 - resolve ambiguous provider commit
-            try:
-                assert_unique_target_claim(workspace, record)
-            except Exception as read_error:  # noqa: BLE001
-                raise RuntimeError(
-                    "Supervisor deterministic target rename state is ambiguous"
-                ) from read_error
+            mutation_outcome = "ambiguous"
+    _await_field_readback(
+        workspace,
+        record,
+        field="display_name",
+        previous=record["temporary_name"],
+        expected=record["target_name"],
+        mutation_outcome=mutation_outcome,
+        assert_single_writer=assert_single_writer,
+        sleep=sleep,
+    )
     assert_unique_target_claim(workspace, record)
     final, final_endpoint_id = exact_journaled_candidate(
         workspace,
         record,
         require_claim=True,
     )
-    if (
-        _text(final.get("display_name")) != record["target_name"]
-        or final.get("instructions") != canonical_instructions
-        or final_endpoint_id != endpoint_id
-        or exact_tool_subset(
-            workspace,
-            record,
-            supervisor_id=record["supervisor_id"],
-        )
-        != set(expected)
-    ):
-        raise RuntimeError("Supervisor creation final postflight failed")
+    if _text(final.get("display_name")) != record["target_name"]:
+        raise RuntimeError("Supervisor creation display_name final postflight failed")
+    if final.get("instructions") != canonical_instructions:
+        raise RuntimeError("Supervisor creation instructions final postflight failed")
+    if final_endpoint_id != endpoint_id:
+        raise RuntimeError("Supervisor creation endpoint identity final postflight failed")
+    if exact_tool_subset(
+        workspace,
+        record,
+        supervisor_id=record["supervisor_id"],
+    ) != set(expected):
+        raise RuntimeError("Supervisor creation tool inventory final postflight failed")
+    _assert_convergence_authority(workspace, record, assert_single_writer)
     return {
         "supervisor_id": record["supervisor_id"],
         "display_name": record["target_name"],
@@ -752,14 +857,15 @@ def main(argv: list[str] | None = None) -> int:
                 ],
                 input_json=payload,
             ),
-            update_field=lambda supervisor_id, field, value: _cli_text(
-                [
-                    "supervisor-agents",
-                    "update-supervisor-agent",
-                    f"supervisor-agents/{supervisor_id}",
-                    field,
-                    value,
-                ]
+            update_field=lambda supervisor_id, field, value: update_signed_supervisor_field(
+                workspace,
+                record,
+                supervisor_id,
+                field,
+                value,
+                read_supervisor=supervisor_by_id,
+                assert_exact_candidate=exact_journaled_candidate,
+                run_cli=_cli_text,
             ),
         )
     _write_result(args.out_json, result)

@@ -11,6 +11,13 @@ from pathlib import Path
 from typing import Any
 
 
+def source_sha(value: str) -> str:
+    normalized = value.strip()
+    if len(normalized) != 40 or any(char not in "0123456789abcdef" for char in normalized):
+        raise ValueError("App deployment lease requires an exact source SHA")
+    return normalized
+
+
 def parent_is_expected(parent_pid: int) -> bool:
     """Return whether the heartbeat remains a child of the original deployer."""
 
@@ -76,7 +83,8 @@ def heartbeat(
 def main(lease: Any, argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=lease.__doc__)
     parser.add_argument(
-        "action", choices=("recovery-root", "acquire", "heartbeat", "release")
+        "action",
+        choices=("recovery-root", "repair-head", "acquire", "heartbeat", "release"),
     )
     parser.add_argument("--app-name", required=True)
     parser.add_argument("--source-git-sha")
@@ -87,7 +95,13 @@ def main(lease: Any, argv: list[str] | None = None) -> int:
     parser.add_argument("--parent-pid", type=int)
     args = parser.parse_args(argv)
     workspace = lease.WorkspaceClient()
-    if args.action == "recovery-root":
+    if args.action == "repair-head":
+        lease.lease_support.repair_head_hint(
+            lease,
+            workspace,
+            app_name=args.app_name,
+        )
+    elif args.action == "recovery-root":
         if args.out_env is None:
             parser.error("recovery-root requires --out-env")
         recovery, candidates = lease.lease_support.recovery_context(

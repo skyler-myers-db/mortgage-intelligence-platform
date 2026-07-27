@@ -27,15 +27,23 @@ from databricks.sdk.service.workspace import (
     WorkspaceObjectAccessControlRequest,
     WorkspaceObjectPermissionLevel,
 )
+from tools.databricks import app_deployment_lease_recovery_checkpoint as recovery_checkpoint
 from tools.databricks import app_deployment_lease_support as lease_support
+from tools.databricks.app_deployment_lease_cli import (
+    parent_is_expected as _parent_is_expected,  # noqa: F401
+)
+from tools.databricks.app_deployment_lease_cli import (
+    source_sha as _source_sha,
+)
 
-LEASE_VERSION = 4
+LEGACY_LEASE_VERSION = 4
+LEASE_VERSION = 5
+SIGNED_LEASE_VERSIONS = {LEGACY_LEASE_VERSION, LEASE_VERSION}
 LEASE_TTL = timedelta(hours=4)
 MAX_ACTIVE_LEASE_LIFETIME = timedelta(hours=6)
 LEGACY_TAKEOVER_GRACE = timedelta(minutes=5)
-# /Shared grants the workspace `users` group inherited CAN_MANAGE, which cannot
-# be removed on a child directory. Keep the deployment fence at the workspace
-# root, where only the `admins` group inherits management access.
+# /Shared grants `users` inherited CAN_MANAGE, which cannot be removed on a
+# child. Keep the fence at the root, where only `admins` inherits management.
 LEASE_ROOT = "/.mip-deployment-leases"
 HEARTBEAT_INTERVAL_SECONDS = 60
 WRITER_ACL_ATTESTATION_MAX_AGE = timedelta(seconds=3 * HEARTBEAT_INTERVAL_SECONDS)
@@ -59,20 +67,16 @@ def _successor_path(app_name: str, generation_id: str) -> str:
         raise RuntimeError("App deployment lease generation is invalid") from exc
     return f"{_path(app_name)}.{normalized_generation}.next"
 
+
 def _head_path(app_name: str) -> str:
     return f"{_path(app_name)}.head"
-
-def _source_sha(value: str) -> str:
-    normalized = value.strip()
-    if len(normalized) != 40 or any(char not in "0123456789abcdef" for char in normalized):
-        raise ValueError("App deployment lease requires an exact source SHA")
-    return normalized
 
 
 def _field(value: object, name: str) -> object:
     if isinstance(value, dict):
         return value.get(name)
     return getattr(value, name, None)
+
 
 def _items(value: object) -> list[object]:
     return list(value) if isinstance(value, list | tuple) else []
@@ -83,6 +87,7 @@ def _holder(workspace: Any) -> str:
     if not holder:
         raise RuntimeError("App deployment lease holder identity is unavailable")
     return holder
+
 
 def _now() -> datetime:
     return datetime.now(UTC)
@@ -176,11 +181,12 @@ def _decode(value: str, *, length: int) -> bytes:
         raise RuntimeError("App deployment lease key has an invalid length")
     return decoded
 
+
 def _encode(value: bytes) -> str:
     return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
 
 
-def _message(record: dict[str, str | int]) -> bytes:
+def _message(record: dict[str, Any]) -> bytes:
     unsigned = {
         key: value
         for key, value in record.items()
@@ -193,14 +199,15 @@ def _message(record: dict[str, str | int]) -> bytes:
     ).encode("utf-8")
 
 
-def _record_digest(record: dict[str, str | int]) -> str:
+def _record_digest(record: dict[str, Any]) -> str:
     return lease_support.record_digest(__import__(__name__, fromlist=["*"]), record)
+
 
 def _key_registry() -> list[str]:
     return lease_support.key_registry()
 
 
-def _sign(record: dict[str, str | int]) -> dict[str, str | int]:
+def _sign(record: dict[str, Any]) -> dict[str, Any]:
     signing = os.environ.get("MIP_AI_GATEWAY_PROOF_SIGNING_KEY", "").strip()
     verify = os.environ.get("MIP_AI_GATEWAY_PROOF_VERIFY_KEY", "").strip()
     private = Ed25519PrivateKey.from_private_bytes(_decode(signing, length=32))
@@ -209,8 +216,8 @@ def _sign(record: dict[str, str | int]) -> dict[str, str | int]:
         raise RuntimeError("App deployment lease signing and verification keys do not match")
     registry = _key_registry()
     key_epoch = registry.index(verify)
-    if record.get("key_epoch") != key_epoch:
-        raise RuntimeError("App deployment lease signing-key epoch is invalid")
+    if not lease_support.metadata_is_exact(record, SIGNED_LEASE_VERSIONS, key_epoch):
+        raise RuntimeError("App deployment lease signing metadata is invalid")
     return {
         **record,
         "attestation_verify_key": verify,
@@ -218,10 +225,12 @@ def _sign(record: dict[str, str | int]) -> dict[str, str | int]:
     }
 
 
-def _verify(record: object) -> dict[str, str | int]:
-    if isinstance(record, dict) and record.get("version") == 2:
+def _verify(record: object) -> dict[str, Any]:
+    if isinstance(record, dict) and lease_support.is_exact_integer(record.get("version"), 2):
         return lease_support.verify_legacy_v2(__import__(__name__, fromlist=["*"]), record)
-    if not isinstance(record, dict) or record.get("version") != LEASE_VERSION:
+    if not isinstance(record, dict) or not lease_support.is_exact_integer_member(
+        record.get("version"), SIGNED_LEASE_VERSIONS
+    ):
         raise RuntimeError("App deployment lease is invalid")
     registry = _key_registry()
     verify = str(record.get("attestation_verify_key") or "").strip()
@@ -234,12 +243,18 @@ def _verify(record: object) -> dict[str, str | int]:
         public.verify(signature, _message(normalized))
     except (InvalidSignature, RuntimeError, ValueError) as exc:
         raise RuntimeError("App deployment lease signature is invalid") from exc
-    if normalized.get("key_epoch") != registry.index(verify):
+    if not lease_support.is_exact_integer(normalized.get("key_epoch"), registry.index(verify)):
         raise RuntimeError("App deployment lease signing-key epoch is invalid")
-    required = lease_support.V4_BASE_FIELDS
+    required = (
+        lease_support.V5_BASE_FIELDS
+        if normalized.get("version") == LEASE_VERSION
+        else lease_support.V4_BASE_FIELDS
+    )
     state = str(normalized.get("state") or "").strip()
     expected = required | ({"released_at"} if state == "released" else set())
-    if set(normalized) == expected - {"acl_attested_at"}:
+    if normalized.get("version") == LEGACY_LEASE_VERSION and set(normalized) == expected - {
+        "acl_attested_at"
+    }:
         normalized["acl_attested_at"] = (
             _parse_timestamp(normalized, "expires_at") - LEASE_TTL
         ).isoformat()
@@ -279,6 +294,8 @@ def _verify(record: object) -> dict[str, str | int]:
     normalized["parent_generation_id"] = parent_generation_id
     normalized["lease_id"] = lease_id
     normalized["recovery_root_lease_id"] = recovery_root
+    if normalized["version"] == LEASE_VERSION:
+        recovery_checkpoint.validate_lease_recovery_fields(normalized)
     lease_support.validate_v4_timestamps(__import__(__name__, fromlist=["*"]), normalized)
     return normalized
 
@@ -288,26 +305,28 @@ def _read_record(
     *,
     path: str,
     app_name: str,
-) -> dict[str, str | int] | None:
+) -> dict[str, Any] | None:
     try:
         stream = workspace.workspace.download(path)
     except (NotFound, ResourceDoesNotExist):
         return None
-    try:
-        record = _verify(json.loads(stream.read().decode("utf-8")))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise RuntimeError("App deployment lease is not valid JSON") from exc
+    record = _verify(
+        lease_support.json_without_duplicate_keys(
+            stream.read(),
+            artifact="App deployment lease",
+        )
+    )
     if record.get("app_name") != app_name.strip():
         raise RuntimeError("App deployment lease path binding is invalid")
     return record
 
 
-def _record_path(app_name: str, record: dict[str, str | int]) -> str:
+def _record_path(app_name: str, record: dict[str, Any]) -> str:
     parent = str(record.get("parent_generation_id") or "")
     return _successor_path(app_name, parent) if parent else _path(app_name)
 
 
-def _parse_timestamp(record: dict[str, str | int], field: str) -> datetime:
+def _parse_timestamp(record: dict[str, Any], field: str) -> datetime:
     try:
         value = datetime.fromisoformat(str(record[field]))
     except (KeyError, ValueError) as exc:
@@ -318,8 +337,8 @@ def _parse_timestamp(record: dict[str, str | int], field: str) -> datetime:
 
 
 def _validate_transition(
-    parent: dict[str, str | int],
-    child: dict[str, str | int],
+    parent: dict[str, Any],
+    child: dict[str, Any],
 ) -> None:
     if (
         child["parent_generation_id"] != parent["generation_id"]
@@ -327,6 +346,11 @@ def _validate_transition(
         or child["chain_id"] != parent["chain_id"]
         or int(child["generation_seq"]) != int(parent["generation_seq"]) + 1
         or int(child["key_epoch"]) < int(parent["key_epoch"])
+        or int(child["version"]) < int(parent["version"])
+        or (
+            child["version"] != parent["version"]
+            and child["operation"] not in {"acquire", "takeover"}
+        )
     ):
         raise RuntimeError("App deployment lease successor lineage is invalid")
     stable = {
@@ -339,10 +363,13 @@ def _validate_transition(
     }
     operation = child["operation"]
     if operation in {"renew", "release"}:
-        if parent["state"] != "active" or any(
-            child[field] != parent[field] for field in stable
-        ):
+        if parent["state"] != "active" or any(child[field] != parent[field] for field in stable):
             raise RuntimeError("App deployment lease same-owner transition is invalid")
+        if parent.get("version") == LEASE_VERSION and (
+            child.get("recovery_index_digest") != parent.get("recovery_index_digest")
+            or child.get("holder_recovery_heads") != parent.get("holder_recovery_heads")
+        ):
+            raise RuntimeError("App deployment lease recovery index changed during heartbeat")
         if operation == "renew" and (
             child["state"] != "active"
             or _expires_at(child) < _expires_at(parent)
@@ -351,8 +378,7 @@ def _validate_transition(
         ):
             raise RuntimeError("App deployment lease renewal transition is invalid")
         if operation == "release" and (
-            child["state"] != "released"
-            or child["acl_attested_at"] != parent["acl_attested_at"]
+            child["state"] != "released" or child["acl_attested_at"] != parent["acl_attested_at"]
         ):
             raise RuntimeError("App deployment lease release transition is invalid")
     elif operation == "takeover":
@@ -360,6 +386,7 @@ def _validate_transition(
             parent["state"] != "active"
             or child["state"] != "active"
             or child["lease_id"] == parent["lease_id"]
+            or child["holder"] != parent["holder"]
             or child["recovery_root_lease_id"] != parent["recovery_root_lease_id"]
             or child["writer_application_id"] != parent["writer_application_id"]
             or _parse_timestamp(child, "acquired_at") < _expires_at(parent)
@@ -370,22 +397,27 @@ def _validate_transition(
             parent["state"] != "released"
             or child["state"] != "active"
             or child["lease_id"] == parent["lease_id"]
-            or _parse_timestamp(child, "acquired_at")
-            < _parse_timestamp(parent, "released_at")
+            or _parse_timestamp(child, "acquired_at") < _parse_timestamp(parent, "released_at")
         ):
             raise RuntimeError("App deployment lease acquisition transition is invalid")
     else:  # pragma: no cover - record validation already closes this branch
         raise RuntimeError("App deployment lease transition operation is invalid")
+    if operation in {"acquire", "takeover"} and child.get("version") == LEASE_VERSION:
+        recovery_checkpoint.validate_transition(
+            parent,
+            child,
+            lease_version=LEASE_VERSION,
+        )
 
 
-def _download(workspace: Any, *, app_name: str) -> dict[str, str | int] | None:
+def _download(workspace: Any, *, app_name: str) -> dict[str, Any] | None:
     """Resolve the append-only signed generation chain to its unique head."""
 
     try:
         hint = _read_record(workspace, path=_head_path(app_name), app_name=app_name)
     except RuntimeError:
         hint = None
-    record: dict[str, str | int] | None
+    record: dict[str, Any] | None
     if hint is not None:
         canonical = _read_record(
             workspace,
@@ -397,11 +429,22 @@ def _download(workspace: Any, *, app_name: str) -> dict[str, str | int] | None:
         record = hint
         limit = MAX_SUCCESSORS_AFTER_HINT
     else:
-        record = _read_record(workspace, path=_path(app_name), app_name=app_name)
-        limit = MAX_CANONICAL_GENERATIONS
+        record = recovery_checkpoint.read_protocol_anchor(
+            __import__(__name__, fromlist=["*"]),
+            workspace,
+            app_name=app_name,
+        )
+        from_locator = record is not None
+        if not from_locator:
+            record = _read_record(workspace, path=_path(app_name), app_name=app_name)
+        limit = (
+            MAX_CANONICAL_GENERATIONS
+            if record is not None and record.get("version") != LEASE_VERSION
+            else MAX_SUCCESSORS_AFTER_HINT
+        )
     if record is None:
         return None
-    if hint is None and record["parent_generation_id"]:
+    if hint is None and not from_locator and record["parent_generation_id"]:
         raise RuntimeError("base App deployment lease unexpectedly names a parent")
     seen = {str(record["generation_id"])}
     for _ in range(limit):
@@ -421,99 +464,15 @@ def _download(workspace: Any, *, app_name: str) -> dict[str, str | int] | None:
     raise RuntimeError("App deployment lease generation chain exceeds its safety bound")
 
 
-def _expires_at(record: dict[str, str | int]) -> datetime:
-    try:
-        expires = datetime.fromisoformat(str(record["expires_at"]))
-    except (KeyError, ValueError) as exc:
-        raise RuntimeError("App deployment lease expiration is invalid") from exc
-    if expires.tzinfo is None:
-        raise RuntimeError("App deployment lease expiration is invalid")
-    return expires.astimezone(UTC)
-
-def _expired(record: dict[str, str | int], *, now: datetime) -> bool:
-    return _expires_at(record) <= now
-
-
-def _assert_recent_writer_acl_attestation(
-    record: dict[str, str | int],
-    *,
-    now: datetime,
-) -> None:
-    # Only a directory manager can inspect the ACL. The delegated writer is
-    # intentionally CAN_READ, so its signed expiry carries the last successful
-    # manager-side ACL validation performed by acquire/heartbeat. Requiring a
-    # recent attestation preserves least privilege and bounds ACL drift to three
-    # heartbeat intervals without granting the mutation identity CAN_MANAGE.
-    attested_at = _parse_timestamp(record, "acl_attested_at")
-    if attested_at > now or now - attested_at > WRITER_ACL_ATTESTATION_MAX_AGE:
-        raise RuntimeError("App deployment lease deployer ACL attestation is stale")
-
-
-def _same_lease_after_renewal(
-    before: dict[str, str | int],
-    after: dict[str, str | int],
-) -> bool:
-    return lease_support.same_lease_after_renewal(
-        __import__(__name__, fromlist=["*"]), before, after
-    )
-
-
-def _held_error(
-    existing: dict[str, str | int] | None,
-    *,
-    now: datetime,
-) -> RuntimeError:
-    owner = str((existing or {}).get("holder") or "unknown")
-    suffix = (
-        " (expired but never auto-replaced)" if existing and _expired(existing, now=now) else ""
-    )
-    return RuntimeError(
-        f"App deployment lease is already held by {owner}{suffix}; wait for release"
-    )
-
-def _authorize_expired_for_acquire(
-    workspace: Any,
-    *,
-    app_name: str,
-    existing: dict[str, str | int],
-    writer_application_id: str,
-    recovery_lease_id: str,
-    now: datetime,
-) -> str:
-    """Authorize one expired signed fence for an atomic successor race.
-
-    The heartbeat terminates its parent deployer if renewal fails, and every
-    in-scope mutator authenticates the unexpired lease. Once the signed lease
-    expiry has passed, an exact ACL check plus its durable recovery root permits
-    contenders to race on one immutable successor path. Workspace Files'
-    create-without-overwrite is the winner
-    fence; no contender ever deletes or overwrites another generation.
-    """
-
-    if existing.get("state") != "active":
-        raise RuntimeError("only an active App deployment lease can expire")
-    if not _expired(existing, now=now):
-        raise _held_error(existing, now=now)
-    holder = str(existing.get("holder") or "").strip()
-    writer = str(existing.get("writer_application_id") or "").strip()
-    if (
-        not holder
-        or _holder(workspace) != holder
-        or writer != writer_application_id
-        or str(existing.get("recovery_root_lease_id") or "") != recovery_lease_id
-    ):
-        raise RuntimeError(
-            "expired App deployment lease is not authorized by its durable recovery root"
-        )
-    return str(existing["recovery_root_lease_id"])
+_expires_at = lease_support.expires_at
 
 
 def _next_transition(
-    parent: dict[str, str | int],
+    parent: dict[str, Any],
     *,
     operation: str,
-    changes: dict[str, str | int],
-) -> dict[str, str | int]:
+    changes: dict[str, Any],
+) -> dict[str, Any]:
     return lease_support.next_transition(
         __import__(__name__, fromlist=["*"]),
         parent,
@@ -526,7 +485,7 @@ def _update_head_hint(
     workspace: Any,
     *,
     app_name: str,
-    record: dict[str, str | int],
+    record: dict[str, Any],
 ) -> None:
     lease_support.update_head_hint(
         __import__(__name__, fromlist=["*"]),
@@ -540,9 +499,9 @@ def _create_generation(
     workspace: Any,
     *,
     app_name: str,
-    record: dict[str, str | int],
+    record: dict[str, Any],
     publish_hint: bool = True,
-) -> dict[str, str | int]:
+) -> dict[str, Any]:
     parent = str(record.get("parent_generation_id") or "")
     path = _successor_path(app_name, parent) if parent else _path(app_name)
     signed = _sign(record)
@@ -569,6 +528,16 @@ def _create_generation(
             ) from upload_error
     if _read_record(workspace, path=path, app_name=app_name) != signed:
         raise RuntimeError("App deployment lease generation is not authoritative")
+    if signed.get("version") == LEASE_VERSION and signed.get("operation") in {
+        "acquire",
+        "takeover",
+    }:
+        recovery_checkpoint.ensure_protocol_marker(
+            __import__(__name__, fromlist=["*"]),
+            workspace,
+            app_name=app_name,
+            anchor=signed,
+        )
     if publish_hint:
         _update_head_hint(workspace, app_name=app_name, record=signed)
     return signed
@@ -578,9 +547,16 @@ def _release_successor(
     workspace: Any,
     *,
     app_name: str,
-    record: dict[str, str | int],
+    record: dict[str, Any],
     now: datetime,
 ) -> None:
+    if record.get("version") == LEASE_VERSION:
+        recovery_checkpoint.ensure_protocol_marker(
+            __import__(__name__, fromlist=["*"]),
+            workspace,
+            app_name=app_name,
+            anchor=record,
+        )
     released_at = now.isoformat()
     _create_generation(
         workspace,
@@ -595,6 +571,8 @@ def _release_successor(
             },
         ),
     )
+
+
 def acquire(
     workspace: Any,
     *,
@@ -615,54 +593,64 @@ def acquire(
     if not writer or writer == holder:
         raise ValueError("App deployment lease requires a distinct writer application ID")
     existing = _download(workspace, app_name=app_name)
+    legacy_lineage: list[dict[str, Any]] | None = None
     # A retained v2 base is a migration parent only while it remains the head.
     legacy_parent = lease_support.is_legacy_head(workspace, _path(app_name), existing)
     requested_recovery_root = (expired_recovery_lease_id or "").strip()
     if existing is not None and existing.get("state") == "active":
         if not requested_recovery_root:
-            raise _held_error(existing, now=current)
+            raise lease_support.held_error(
+                __import__(__name__, fromlist=["*"]),
+                existing,
+                now=current,
+            )
         if legacy_parent and current < _expires_at(existing) + LEGACY_TAKEOVER_GRACE:
-            raise _held_error(existing, now=current)
-        recovery_root = _authorize_expired_for_acquire(
+            raise lease_support.held_error(
+                __import__(__name__, fromlist=["*"]),
+                existing,
+                now=current,
+            )
+        recovery_root = lease_support.authorize_expired_for_acquire(
+            __import__(__name__, fromlist=["*"]),
             workspace,
-            app_name=app_name,
             existing=existing,
             writer_application_id=writer,
             recovery_lease_id=requested_recovery_root,
             now=current,
         )
-    elif existing is not None and requested_recovery_root:
-        authorized_root, _candidates = lease_support.recovery_context(
-            __import__(__name__, fromlist=["*"]),
-            workspace,
-            app_name=app_name,
-        )
-        if authorized_root != requested_recovery_root:
-            raise RuntimeError(
-                "released App deployment lease does not accept this recovery root"
-            )
-        recovery_root = requested_recovery_root
     elif existing is not None:
-        recovery_root, _candidates = lease_support.recovery_context(
-            __import__(__name__, fromlist=["*"]),
-            workspace,
-            app_name=app_name,
-        )
+        if existing.get("version") == LEASE_VERSION:
+            authorized_root, _candidates = lease_support.recovery_context_for_record(
+                __import__(__name__, fromlist=["*"]),
+                workspace,
+                app_name=app_name,
+                record=existing,
+            )
+        else:
+            authorized_root, _candidates, legacy_lineage = (
+                recovery_checkpoint.legacy_recovery_context(
+                    __import__(__name__, fromlist=["*"]),
+                    workspace,
+                    app_name=app_name,
+                    record=existing,
+                )
+            )
+        if requested_recovery_root and authorized_root != requested_recovery_root:
+            raise RuntimeError("released App deployment lease does not accept this recovery root")
+        recovery_root = requested_recovery_root or authorized_root
     else:
         recovery_root = ""
     lease_id = str(uuid4())
     generation_id = str(uuid4())
     operation = "takeover" if existing and existing.get("state") == "active" else "acquire"
-    record: dict[str, str | int] = {
+    record: dict[str, Any] = {
         "version": LEASE_VERSION,
         "app_name": app_name,
         "state": "active",
         "operation": operation,
         "chain_id": str((existing or {}).get("chain_id") or uuid4()),
         "generation_id": generation_id,
-        "generation_seq": (
-            int(existing["generation_seq"]) + 1 if existing is not None else 0
-        ),
+        "generation_seq": (int(existing["generation_seq"]) + 1 if existing is not None else 0),
         "parent_generation_id": str((existing or {}).get("generation_id") or ""),
         "parent_digest": _record_digest(existing) if existing else "",
         "lease_id": lease_id,
@@ -675,12 +663,26 @@ def acquire(
         "expires_at": (current + LEASE_TTL).isoformat(),
         "key_epoch": len(_key_registry()) - 1,
     }
-
-    # A contender must inspect the immutable lease before touching the shared
-    # directory ACL. Every transition appends at the one deterministic path
-    # named by the current generation; create-without-overwrite selects one
-    # winner even when retry, renewal, and release interleave.
+    # After the immutable read, create the checkpoint parent; mkdirs is
+    # idempotent under contention and grants no shared ACL authority.
     workspace.workspace.mkdirs(LEASE_ROOT)
+    recovery_index_digest, holder_recovery_heads = recovery_checkpoint.prepare_acquisition(
+        __import__(__name__, fromlist=["*"]),
+        workspace,
+        app_name=app_name,
+        parent=existing,
+        record=record,
+        legacy_lineage=legacy_lineage,
+    )
+    record.update(
+        {
+            "recovery_index_digest": recovery_index_digest,
+            "holder_recovery_heads": holder_recovery_heads,
+        }
+    )
+
+    # Every transition appends at the one deterministic generation path;
+    # create-without-overwrite selects one winner under concurrent retries.
     try:
         candidate = _create_generation(
             workspace,
@@ -705,10 +707,13 @@ def acquire(
         if persisted is None or persisted.get("lease_id") != lease_id:
             raise
         try:
-            _release_successor(
+            lease_support.compensate_owned_failed_acquisition(
+                __import__(__name__, fromlist=["*"]),
                 workspace,
                 app_name=app_name,
                 record=persisted,
+                holder=holder,
+                writer_application_id=writer,
                 now=current,
             )
         except Exception as compensation_error:
@@ -726,7 +731,7 @@ def assert_held(
     lease_id: str,
     source_git_sha: str,
     now: datetime | None = None,
-) -> dict[str, str | int]:
+) -> dict[str, Any]:
     record = _download(workspace, app_name=app_name)
     if record is None:
         raise RuntimeError("App deployment lease disappeared while deployment was active")
@@ -746,11 +751,15 @@ def assert_held(
             object_id=_root_object_id(workspace),
         )
     else:
-        _assert_recent_writer_acl_attestation(record, now=current)
+        lease_support.assert_recent_writer_acl_attestation(
+            __import__(__name__, fromlist=["*"]), record, now=current
+        )
     authoritative = _download(workspace, app_name=app_name)
     if authoritative is None:
         raise RuntimeError("App deployment lease disappeared during validation")
-    if authoritative != record and not _same_lease_after_renewal(record, authoritative):
+    if authoritative != record and not lease_support.same_lease_after_renewal(
+        __import__(__name__, fromlist=["*"]), record, authoritative
+    ):
         raise RuntimeError("App deployment lease changed during validation")
     record = authoritative
     holder = str(record.get("holder") or "").strip()
@@ -763,8 +772,10 @@ def assert_held(
         raise RuntimeError("App deployment lease ownership or source changed")
     final_now = now or _now()
     if actor == writer:
-        _assert_recent_writer_acl_attestation(record, now=final_now)
-    if _expired(record, now=final_now):
+        lease_support.assert_recent_writer_acl_attestation(
+            __import__(__name__, fromlist=["*"]), record, now=final_now
+        )
+    if _expires_at(record) <= final_now:
         raise RuntimeError("App deployment lease expired while deployment was active")
     return record
 
@@ -856,12 +867,6 @@ def release(workspace: Any, *, app_name: str, lease_id: str) -> None:
             if str(exc) != "App deployment lease generation race was lost":
                 raise
     raise RuntimeError("App deployment lease release did not converge")
-
-
-def _parent_is_expected(parent_pid: int) -> bool:
-    from tools.databricks.app_deployment_lease_cli import parent_is_expected
-
-    return parent_is_expected(parent_pid)
 
 
 def _heartbeat(

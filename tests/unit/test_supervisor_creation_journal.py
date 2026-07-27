@@ -21,6 +21,7 @@ from tools.databricks import provision_agentic_resources as provision
 from tools.databricks import reconcile_historical_agent_endpoints as historical
 from tools.databricks import signed_blue_supervisor_recovery as signed_blue
 from tools.databricks import supervisor_creation_control as control
+from tools.databricks import supervisor_creation_field_update as field_update
 from tools.databricks import supervisor_creation_journal as journal
 from tools.databricks import supervisor_creation_runtime as runtime
 
@@ -397,6 +398,38 @@ def test_recovery_rejects_malformed_tool_pagination(
             intent,
             supervisor_id=created["supervisor_id"],
         )
+
+
+def test_supervisor_inventory_rejects_unique_token_overflow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _Workspace()
+    calls = 0
+
+    class _UnboundedInventory:
+        def do(
+            self,
+            method: str,
+            path: str,
+            *,
+            query: dict[str, Any] | None = None,
+        ) -> object:
+            nonlocal calls
+            assert method == "GET"
+            assert path == "/api/2.1/supervisor-agents"
+            assert query is not None
+            calls += 1
+            return {
+                "supervisor_agents": [],
+                "next_page_token": f"unique-{calls}",
+            }
+
+    workspace.api_client = _UnboundedInventory()
+    monkeypatch.setattr(runtime, "_MAX_INVENTORY_PAGES", 3)
+
+    with pytest.raises(RuntimeError, match="inventory exceeded the page limit"):
+        runtime.supervisor_rows(workspace)
+    assert calls == 3
 
 
 def test_recovery_rejects_example_on_second_page() -> None:
@@ -935,6 +968,90 @@ def _claimed_complete(workspace: _Workspace) -> dict[str, Any]:
     return claimed
 
 
+def test_instruction_update_cli_preserves_signed_positional_display_name() -> None:
+    workspace = _Workspace()
+    claimed = _claimed_complete(workspace)
+    supervisor_id = claimed["supervisor_id"]
+    canonical = json.loads(claimed["contract_json"])
+    workspace.agents[supervisor_id]["display_name"] = claimed["target_name"]
+    workspace.agents[supervisor_id]["instructions"] = claimed["temporary_instructions"]
+    commands: list[list[str]] = []
+
+    result = field_update.update_signed_supervisor_field(
+        workspace,
+        claimed,
+        supervisor_id,
+        "instructions",
+        canonical["instructions"],
+        read_supervisor=runtime.supervisor_by_id,
+        assert_exact_candidate=runtime.exact_journaled_candidate,
+        run_cli=lambda args: commands.append(list(args)) or "updated",
+    )
+
+    assert result == "updated"
+    assert commands == [
+        [
+            "supervisor-agents",
+            "update-supervisor-agent",
+            f"supervisor-agents/{supervisor_id}",
+            "instructions",
+            claimed["target_name"],
+            "--instructions",
+            canonical["instructions"],
+        ]
+    ]
+
+
+def test_display_name_update_cli_retains_exact_positional_contract() -> None:
+    workspace = _Workspace()
+    claimed = _claimed_complete(workspace)
+    supervisor_id = claimed["supervisor_id"]
+    commands: list[list[str]] = []
+
+    field_update.update_signed_supervisor_field(
+        workspace,
+        claimed,
+        supervisor_id,
+        "display_name",
+        claimed["target_name"],
+        read_supervisor=runtime.supervisor_by_id,
+        assert_exact_candidate=runtime.exact_journaled_candidate,
+        run_cli=lambda args: commands.append(list(args)) or "updated",
+    )
+
+    assert commands == [
+        [
+            "supervisor-agents",
+            "update-supervisor-agent",
+            f"supervisor-agents/{supervisor_id}",
+            "display_name",
+            claimed["target_name"],
+        ]
+    ]
+
+
+def test_field_update_cli_rejects_unsigned_display_name_drift() -> None:
+    workspace = _Workspace()
+    claimed = _claimed_complete(workspace)
+    supervisor_id = claimed["supervisor_id"]
+    workspace.agents[supervisor_id]["display_name"] = "unsigned provider projection"
+    commands: list[list[str]] = []
+
+    with pytest.raises(RuntimeError, match="display name is outside the signed"):
+        field_update.update_signed_supervisor_field(
+            workspace,
+            claimed,
+            supervisor_id,
+            "instructions",
+            json.loads(claimed["contract_json"])["instructions"],
+            read_supervisor=runtime.supervisor_by_id,
+            assert_exact_candidate=runtime.exact_journaled_candidate,
+            run_cli=lambda args: commands.append(list(args)) or "updated",
+        )
+
+    assert commands == []
+
+
 def test_claimed_convergence_resumes_live_genie_alias_without_recreating_it() -> None:
     workspace = _Workspace()
     intent = _prepare(workspace)
@@ -978,6 +1095,300 @@ def test_claimed_convergence_resumes_live_genie_alias_without_recreating_it() ->
     )
 
     assert created_tool_ids == ["build_cohort", "segment_counts", "lead_queue_url"]
+
+
+def test_successful_instruction_update_waits_for_delayed_exact_readback() -> None:
+    workspace = _Workspace()
+    claimed = _claimed_complete(workspace)
+    supervisor_id = claimed["supervisor_id"]
+    canonical = json.loads(claimed["contract_json"])
+    workspace.agents[supervisor_id]["instructions"] = claimed["temporary_instructions"]
+    workspace.agents[supervisor_id]["display_name"] = claimed["target_name"]
+    mutations: list[str] = []
+    lease_checks = 0
+
+    def assert_single_writer() -> None:
+        nonlocal lease_checks
+        lease_checks += 1
+
+    def update_field(_supervisor_id: str, field: str, _value: str) -> None:
+        assert field == "instructions"
+        mutations.append(field)
+
+    def publish_delayed_readback(_seconds: float) -> None:
+        workspace.agents[supervisor_id]["instructions"] = canonical["instructions"]
+
+    result = runtime.converge_claimed(
+        workspace,
+        claimed,
+        assert_single_writer=assert_single_writer,
+        create_tool=lambda *_args, **_kwargs: None,
+        update_field=update_field,
+        sleep=publish_delayed_readback,
+    )
+
+    assert result["display_name"] == claimed["target_name"]
+    assert mutations == ["instructions"]
+    assert lease_checks >= 4
+
+
+def test_ambiguous_field_updates_poll_without_reissuing_mutations() -> None:
+    workspace = _Workspace()
+    claimed = _claimed_complete(workspace)
+    supervisor_id = claimed["supervisor_id"]
+    canonical = json.loads(claimed["contract_json"])
+    workspace.agents[supervisor_id]["instructions"] = claimed["temporary_instructions"]
+    mutations: list[str] = []
+
+    def ambiguous_update(
+        _supervisor_id: str,
+        field: str,
+        _value: str,
+    ) -> None:
+        mutations.append(field)
+        raise TimeoutError("provider response was lost after submission")
+
+    def publish_delayed_readback(_seconds: float) -> None:
+        if workspace.agents[supervisor_id]["instructions"] == claimed["temporary_instructions"]:
+            workspace.agents[supervisor_id]["instructions"] = canonical["instructions"]
+        else:
+            workspace.agents[supervisor_id]["display_name"] = claimed["target_name"]
+
+    result = runtime.converge_claimed(
+        workspace,
+        claimed,
+        assert_single_writer=lambda: None,
+        create_tool=lambda *_args, **_kwargs: None,
+        update_field=ambiguous_update,
+        sleep=publish_delayed_readback,
+    )
+
+    assert result["display_name"] == claimed["target_name"]
+    assert mutations == ["instructions", "display_name"]
+
+
+def test_instruction_update_never_converges_without_blind_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _Workspace()
+    claimed = _claimed_complete(workspace)
+    supervisor_id = claimed["supervisor_id"]
+    workspace.agents[supervisor_id]["instructions"] = claimed["temporary_instructions"]
+    mutations: list[str] = []
+    sleeps: list[float] = []
+    monkeypatch.setattr(runtime, "_FIELD_READBACK_ATTEMPTS", 3)
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"instructions readback did not converge.*provider_result=accepted",
+    ):
+        runtime.converge_claimed(
+            workspace,
+            claimed,
+            assert_single_writer=lambda: None,
+            create_tool=lambda *_args, **_kwargs: None,
+            update_field=lambda *_args: mutations.append("instructions"),
+            sleep=sleeps.append,
+        )
+
+    assert mutations == ["instructions"]
+    assert sleeps == [runtime._FIELD_READBACK_INTERVAL_S] * 2
+
+
+def test_instruction_readback_stops_immediately_when_lease_is_lost() -> None:
+    workspace = _Workspace()
+    claimed = _claimed_complete(workspace)
+    supervisor_id = claimed["supervisor_id"]
+    workspace.agents[supervisor_id]["instructions"] = claimed["temporary_instructions"]
+    lease_checks = 0
+    mutations = 0
+
+    def assert_single_writer() -> None:
+        nonlocal lease_checks
+        lease_checks += 1
+        if lease_checks == 3:
+            raise RuntimeError("deployment lease changed")
+
+    def update_field(*_args: object) -> None:
+        nonlocal mutations
+        mutations += 1
+
+    with pytest.raises(RuntimeError, match="deployment lease changed"):
+        runtime.converge_claimed(
+            workspace,
+            claimed,
+            assert_single_writer=assert_single_writer,
+            create_tool=lambda *_args, **_kwargs: None,
+            update_field=update_field,
+            sleep=lambda _seconds: None,
+        )
+
+    assert mutations == 1
+    assert lease_checks == 3
+
+
+def test_successful_instruction_readback_revalidates_lease_before_return() -> None:
+    workspace = _Workspace()
+    claimed = _claimed_complete(workspace)
+    lease_checks = 0
+
+    def assert_single_writer() -> None:
+        nonlocal lease_checks
+        lease_checks += 1
+        if lease_checks == 2:
+            raise RuntimeError("deployment lease changed during provider read")
+
+    with pytest.raises(RuntimeError, match="changed during provider read"):
+        runtime._await_field_readback(
+            workspace,
+            claimed,
+            field="instructions",
+            previous=claimed["temporary_instructions"],
+            expected=json.loads(claimed["contract_json"])["instructions"],
+            mutation_outcome="preexisting",
+            assert_single_writer=assert_single_writer,
+            sleep=lambda _seconds: pytest.fail("exact readback must not poll"),
+        )
+    assert lease_checks == 2
+
+
+def test_successful_instruction_readback_revalidates_journal_before_return(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _Workspace()
+    claimed = _claimed_complete(workspace)
+    journal_checks = 0
+    original_assert = runtime._assert_unchanged_journal
+
+    def assert_available(current_workspace: Any, record: dict[str, Any]) -> None:
+        nonlocal journal_checks
+        journal_checks += 1
+        if journal_checks == 2:
+            raise RuntimeError("journal became unavailable during provider read")
+        original_assert(current_workspace, record)
+
+    monkeypatch.setattr(runtime, "_assert_unchanged_journal", assert_available)
+    with pytest.raises(RuntimeError, match="became unavailable during provider read"):
+        runtime._await_field_readback(
+            workspace,
+            claimed,
+            field="instructions",
+            previous=claimed["temporary_instructions"],
+            expected=json.loads(claimed["contract_json"])["instructions"],
+            mutation_outcome="preexisting",
+            assert_single_writer=lambda: None,
+            sleep=lambda _seconds: pytest.fail("exact readback must not poll"),
+        )
+    assert journal_checks == 2
+
+
+def test_instruction_update_readback_rejects_non_journaled_drift() -> None:
+    workspace = _Workspace()
+    claimed = _claimed_complete(workspace)
+    supervisor_id = claimed["supervisor_id"]
+    workspace.agents[supervisor_id]["instructions"] = claimed["temporary_instructions"]
+
+    def drift(supervisor_id: str, field: str, _value: str) -> None:
+        workspace.agents[supervisor_id][field] = "unreviewed provider projection"
+
+    with pytest.raises(
+        RuntimeError,
+        match="instructions readback drifted outside the signed",
+    ):
+        runtime.converge_claimed(
+            workspace,
+            claimed,
+            assert_single_writer=lambda: None,
+            create_tool=lambda *_args, **_kwargs: None,
+            update_field=drift,
+            sleep=lambda _seconds: pytest.fail("drift must fail without polling"),
+        )
+
+
+def test_successful_rename_waits_for_direct_and_inventory_consistency() -> None:
+    workspace = _Workspace()
+    claimed = _claimed_complete(workspace)
+    supervisor_id = claimed["supervisor_id"]
+    rename_calls = 0
+    sleeps = 0
+
+    def delayed_rename(
+        _supervisor_id: str,
+        field: str,
+        _value: str,
+    ) -> None:
+        nonlocal rename_calls
+        assert field == "display_name"
+        rename_calls += 1
+
+    def publish_delayed_readback(_seconds: float) -> None:
+        nonlocal sleeps
+        sleeps += 1
+        workspace.agents[supervisor_id]["display_name"] = claimed["target_name"]
+
+    result = runtime.converge_claimed(
+        workspace,
+        claimed,
+        assert_single_writer=lambda: None,
+        create_tool=lambda *_args, **_kwargs: None,
+        update_field=delayed_rename,
+        sleep=publish_delayed_readback,
+    )
+
+    assert result["display_name"] == claimed["target_name"]
+    assert rename_calls == 1
+    assert sleeps == 1
+    assert runtime.assert_unique_target_claim(workspace, claimed)["supervisor_agent_id"] == (
+        supervisor_id
+    )
+
+
+def test_retry_waits_for_lagging_inventory_after_direct_rename() -> None:
+    workspace = _Workspace()
+    claimed = _claimed_complete(workspace)
+    supervisor_id = claimed["supervisor_id"]
+    workspace.agents[supervisor_id]["display_name"] = claimed["target_name"]
+    live_api = workspace.api_client
+    inventory_reads = 0
+    sleeps = 0
+
+    class _LaggingInventoryApi:
+        def do(
+            self,
+            method: str,
+            path: str,
+            *,
+            query: dict[str, Any] | None = None,
+        ) -> Any:
+            nonlocal inventory_reads
+            payload = live_api.do(method, path, query=query)
+            if path != "/api/2.1/supervisor-agents":
+                return payload
+            inventory_reads += 1
+            if inventory_reads > 8:
+                return payload
+            rows = [dict(row) for row in payload["supervisor_agents"]]
+            rows[0]["display_name"] = claimed["temporary_name"]
+            return {"supervisor_agents": rows}
+
+    workspace.api_client = _LaggingInventoryApi()
+
+    def observe_poll(_seconds: float) -> None:
+        nonlocal sleeps
+        sleeps += 1
+
+    result = runtime.converge_claimed(
+        workspace,
+        claimed,
+        assert_single_writer=lambda: None,
+        create_tool=lambda *_args, **_kwargs: None,
+        update_field=lambda *_args: pytest.fail("canonical rename must not be reissued"),
+        sleep=observe_poll,
+    )
+
+    assert result["supervisor_id"] == supervisor_id
+    assert sleeps == 1
+    assert inventory_reads > 8
 
 
 def test_claimed_journal_clear_resolves_committed_and_uncommitted_timeouts() -> None:
@@ -1070,7 +1481,7 @@ def test_target_collision_during_rename_fails_runtime_postflight() -> None:
         workspace.tools["intruder"] = {}
         workspace.agents[supervisor_id][field] = value
 
-    with pytest.raises(RuntimeError, match="absent, duplicated, or bound"):
+    with pytest.raises(RuntimeError, match="canonical target became occupied"):
         runtime.converge_claimed(
             workspace,
             claimed,
