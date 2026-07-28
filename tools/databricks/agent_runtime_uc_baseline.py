@@ -319,6 +319,7 @@ _SYSTEM_AI_MODELS = frozenset(
         "system.ai.databricks-inkling",
         "system.ai.databricks-kimi-k2-6",
         "system.ai.databricks-kimi-k2-7-code",
+        "system.ai.databricks-kimi-k3",
         "system.ai.databricks-qwen35-122b-a10b",
         "system.ai.dbrx_base",
         "system.ai.dbrx_instruct",

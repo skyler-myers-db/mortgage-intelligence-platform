@@ -5,13 +5,13 @@ from tools.databricks import verify_agent_proxy_uc_grants as verifier
 from tools.databricks.agent_runtime_uc_baseline import _SYSTEM_AI_INHERITED
 
 
-def test_new_system_owned_opus_model_uses_exact_platform_inheritance(monkeypatch) -> None:
-    full_name = "system.ai.databricks-claude-opus-5"
+def test_new_system_owned_kimi_model_uses_exact_platform_inheritance(monkeypatch) -> None:
+    full_name = "system.ai.databricks-kimi-k3"
     model = SimpleNamespace(
         full_name=full_name,
         catalog_name="system",
         schema_name="ai",
-        name="databricks-claude-opus-5",
+        name="databricks-kimi-k3",
         owner="System user",
     )
     workspace = MagicMock()

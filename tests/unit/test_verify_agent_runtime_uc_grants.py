@@ -2345,6 +2345,7 @@ def test_effective_runtime_uc_boundary_rejects_new_or_reowned_system_model() -> 
         "system.ai.databricks-claude-opus-5",
         "system.ai.databricks-gemini-3-5-flash-lite",
         "system.ai.databricks-gemini-3-6-flash",
+        "system.ai.databricks-kimi-k3",
     ],
 )
 def test_effective_runtime_uc_boundary_accepts_reviewed_live_system_model_shape(
@@ -2363,6 +2364,49 @@ def test_effective_runtime_uc_boundary_accepts_reviewed_live_system_model_shape(
     )
 
     _verify(workspace)
+
+
+@pytest.mark.parametrize(
+    ("tamper", "match"),
+    [
+        ("owner", "System user"),
+        ("source", "sources"),
+    ],
+)
+def test_effective_runtime_uc_boundary_rejects_tampered_kimi_k3_platform_shape(
+    tamper: str,
+    match: str,
+) -> None:
+    full_name = "system.ai.databricks-kimi-k3"
+    model = SimpleNamespace(
+        full_name=full_name,
+        catalog_name="system",
+        schema_name="ai",
+        owner="System user",
+    )
+    workspace = _workspace(
+        {("function", full_name): {"EXECUTE"}},
+        extra_models=[model],
+    )
+
+    if tamper == "owner":
+        model.owner = "human@example.com"
+    else:
+        original = workspace.grants.get_effective
+
+        def altered(*args: Any, **kwargs: Any) -> object:
+            response = original(*args, **kwargs)
+            if args[:2] == ("function", full_name):
+                for assignment in response.privilege_assignments:
+                    for privilege in assignment.privileges:
+                        privilege.inherited_from_type = "CATALOG"
+                        privilege.inherited_from_name = "system"
+            return response
+
+        workspace.grants.get_effective = altered
+
+    with pytest.raises(RuntimeError, match=match):
+        _verify(workspace)
 
 
 def _catalog(model: object) -> str:
