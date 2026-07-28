@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from typing import Any
 
 from tools.databricks.agent_proxy_capability_group_access import (
@@ -180,7 +180,21 @@ def wait_exact_capability_projection(
     *,
     application_id: str,
     service_principal_id: str,
+    required_active_group_names: Collection[str] = (),
 ) -> set[str]:
+    required = {
+        str(name).strip()
+        for name in required_active_group_names
+        if str(name).strip()
+    }
+    if (
+        len(required) != len(required_active_group_names)
+        or any(
+            not name.startswith(MANAGED_AGENT_PROXY_GROUP_PREFIX)
+            for name in required
+        )
+    ):
+        raise ValueError("required managed capability-group contract is invalid")
     states = managed_agent_proxy_groups_for_application(
         workspace,
         application_id=application_id,
@@ -195,6 +209,7 @@ def wait_exact_capability_projection(
             )
         if members:
             active.add(state.contract.name)
+    active.update(required)
     return wait_for_managed_agent_proxy_group_projection(
         workspace,
         application_id=application_id,

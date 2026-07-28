@@ -19,6 +19,7 @@ from tools.databricks.agent_proxy_capability_group_access import (
     inspect_managed_agent_proxy_group,
     managed_agent_proxy_group_name,
     set_managed_agent_proxy_membership,
+    wait_for_managed_agent_proxy_group_discovery,
 )
 from tools.databricks.agent_runtime_access import _genie_spaces
 
@@ -106,6 +107,14 @@ def converge_supervisor_agent_acls(
         workspace,
         application_id=application_id,
         service_principal_id=service_principal_id,
+        required_active_group_names={
+            managed_agent_proxy_group_name(
+                resource_kind="supervisor",
+                resource_id=agent_id,
+                application_id=application_id,
+            )
+            for agent_id in reviewed_ids
+        },
     )
     for agent_id in sorted(agents):
         group_name = managed_agent_proxy_group_name(
@@ -113,12 +122,21 @@ def converge_supervisor_agent_acls(
             resource_id=agent_id,
             application_id=application_id,
         )
-        state = inspect_managed_agent_proxy_group(
-            workspace,
-            resource_kind="supervisor",
-            resource_id=agent_id,
-            application_id=application_id,
-            missing_ok=agent_id not in reviewed_ids,
+        state = (
+            wait_for_managed_agent_proxy_group_discovery(
+                workspace,
+                resource_kind="supervisor",
+                resource_id=agent_id,
+                application_id=application_id,
+            )
+            if agent_id in reviewed_ids
+            else inspect_managed_agent_proxy_group(
+                workspace,
+                resource_kind="supervisor",
+                resource_id=agent_id,
+                application_id=application_id,
+                missing_ok=True,
+            )
         )
         if state is not None:
             assert_managed_agent_proxy_members(
@@ -228,6 +246,13 @@ def converge_genie_acl(
         workspace,
         application_id=application_id,
         service_principal_id=service_principal_id,
+        required_active_group_names={
+            managed_agent_proxy_group_name(
+                resource_kind="genie",
+                resource_id=genie_space_id,
+                application_id=application_id,
+            )
+        },
     )
     for space_id in sorted(spaces):
         group_name = managed_agent_proxy_group_name(
@@ -235,12 +260,21 @@ def converge_genie_acl(
             resource_id=space_id,
             application_id=application_id,
         )
-        state = inspect_managed_agent_proxy_group(
-            workspace,
-            resource_kind="genie",
-            resource_id=space_id,
-            application_id=application_id,
-            missing_ok=space_id != genie_space_id,
+        state = (
+            wait_for_managed_agent_proxy_group_discovery(
+                workspace,
+                resource_kind="genie",
+                resource_id=space_id,
+                application_id=application_id,
+            )
+            if space_id == genie_space_id
+            else inspect_managed_agent_proxy_group(
+                workspace,
+                resource_kind="genie",
+                resource_id=space_id,
+                application_id=application_id,
+                missing_ok=True,
+            )
         )
         if state is not None:
             assert_managed_agent_proxy_members(

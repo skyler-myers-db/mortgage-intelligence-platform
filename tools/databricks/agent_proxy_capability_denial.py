@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from typing import Any
 from urllib.parse import quote
@@ -13,6 +14,7 @@ from tools.databricks.agent_proxy_acl_support import (
     principal_entries,
 )
 from tools.databricks.agent_proxy_capability_group_access import (
+    MANAGED_AGENT_PROXY_GROUP_PREFIX,
     assert_managed_agent_proxy_members,
     inspect_managed_agent_proxy_group,
     managed_agent_proxy_group_name,
@@ -23,6 +25,11 @@ from tools.databricks.agent_runtime_access import (
     _genie_spaces,
     audit_global_no_genie_access,
 )
+from tools.databricks.m2m_access_policy import resolve_effective_groups
+
+_DENIAL_DEADLINE_SECONDS = 120.0
+_DENIAL_POLL_SECONDS = 2.0
+_STABLE_ZERO_DENIAL_OBSERVATIONS = 3
 
 
 def revoke_all_managed_capability_memberships(
@@ -31,27 +38,56 @@ def revoke_all_managed_capability_memberships(
     application_id: str,
     service_principal_id: str,
     assert_single_writer: Callable[[], None],
+    sleep: Callable[[float], object] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+    deadline_seconds: float = _DENIAL_DEADLINE_SECONDS,
 ) -> None:
-    errors: list[str] = []
-    for state in managed_agent_proxy_groups_for_application(
-        workspace,
-        application_id=application_id,
-        service_principal_id=service_principal_id,
-    ):
-        try:
-            remove_managed_agent_proxy_membership(
-                workspace,
-                state=state,
-                service_principal_id=service_principal_id,
-                assert_single_writer=assert_single_writer,
-            )
-        except Exception as exc:  # noqa: BLE001 - attempt every independent revoke
-            errors.append(f"{state.contract.id}: {type(exc).__name__}: {exc}")
-    if errors:
-        raise RuntimeError(
-            "managed agent-proxy membership denial did not converge: "
-            + "; ".join(errors)
+    if deadline_seconds <= 0:
+        raise ValueError("managed capability denial deadline must be positive")
+    deadline = clock() + deadline_seconds
+    stable_zero = 0
+    while True:
+        states = managed_agent_proxy_groups_for_application(
+            workspace,
+            application_id=application_id,
+            service_principal_id=service_principal_id,
         )
+        saw_active = any(state.member_ids for state in states)
+        errors: list[str] = []
+        for state in states:
+            try:
+                remove_managed_agent_proxy_membership(
+                    workspace,
+                    state=state,
+                    service_principal_id=service_principal_id,
+                    assert_single_writer=assert_single_writer,
+                )
+            except Exception as exc:  # noqa: BLE001 - attempt every independent revoke
+                errors.append(f"{state.contract.id}: {type(exc).__name__}: {exc}")
+        if errors:
+            raise RuntimeError(
+                "managed agent-proxy membership denial did not converge: "
+                + "; ".join(errors)
+            )
+        effective_managed_names = {
+            name
+            for name in resolve_effective_groups(
+                workspace,
+                sp_id=service_principal_id,
+            ).values()
+            if name.startswith(MANAGED_AGENT_PROXY_GROUP_PREFIX)
+        }
+        if not saw_active and not effective_managed_names:
+            stable_zero += 1
+            if stable_zero >= _STABLE_ZERO_DENIAL_OBSERVATIONS:
+                return
+        else:
+            stable_zero = 0
+        if clock() >= deadline:
+            raise RuntimeError(
+                "managed agent-proxy membership denial did not converge"
+            )
+        sleep(_DENIAL_POLL_SECONDS)
 
 
 def revoke_all_supervisor_agent_acls(

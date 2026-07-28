@@ -33,6 +33,8 @@ _EXTERNAL_ID_RE = re.compile(
 _MAX_INVENTORY = 1000
 _PROJECTION_DEADLINE_SECONDS = 120.0
 _PROJECTION_POLL_SECONDS = 2.0
+_STABLE_ABSENCE_OBSERVATIONS = 3
+_STABLE_ZERO_PROJECTION_OBSERVATIONS = 3
 
 
 @dataclass(frozen=True)
@@ -211,6 +213,80 @@ def _find_group(
     return _hydrated_group(client, group_id=group_id)
 
 
+def _find_group_across_filtered_and_full_inventory(
+    client: Any,
+    *,
+    resource_kind: ManagedAgentProxyResourceKind,
+    resource_id: str,
+    application_id: str,
+) -> object | None:
+    group = _find_group(
+        client,
+        resource_kind=resource_kind,
+        resource_id=resource_id,
+        application_id=application_id,
+    )
+    if group is not None:
+        return group
+    expected_name = managed_agent_proxy_group_name(
+        resource_kind=resource_kind,
+        resource_id=resource_id,
+        application_id=application_id,
+    )
+    states = managed_agent_proxy_groups_for_application(
+        client,
+        application_id=application_id,
+    )
+    matches = [
+        state for state in states if state.contract.name == expected_name
+    ]
+    if len(matches) > 1:
+        raise RuntimeError(f"managed agent-proxy group {expected_name!r} is duplicated")
+    if not matches:
+        return None
+    return _hydrated_group(client, group_id=matches[0].contract.id)
+
+
+def _find_existing_group_or_confirm_stable_absence(
+    client: Any,
+    *,
+    resource_kind: ManagedAgentProxyResourceKind,
+    resource_id: str,
+    application_id: str,
+    sleep: Callable[[float], object] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+    deadline_seconds: float = _PROJECTION_DEADLINE_SECONDS,
+) -> object | None:
+    """Reconcile two SCIM list views before authorizing group creation."""
+
+    if deadline_seconds <= 0:
+        raise ValueError("managed agent-proxy discovery deadline must be positive")
+    deadline = clock() + deadline_seconds
+    stable_absence = 0
+    while True:
+        try:
+            group = _find_group_across_filtered_and_full_inventory(
+                client,
+                resource_kind=resource_kind,
+                resource_id=resource_id,
+                application_id=application_id,
+            )
+        except (NotFound, ResourceDoesNotExist):
+            group = None
+            stable_absence = 0
+        else:
+            if group is not None:
+                return group
+            stable_absence += 1
+            if stable_absence >= _STABLE_ABSENCE_OBSERVATIONS:
+                return None
+        if clock() >= deadline:
+            raise RuntimeError(
+                "managed agent-proxy pre-create discovery did not converge"
+            )
+        sleep(_PROJECTION_POLL_SECONDS)
+
+
 def _assert_contract(
     group: object,
     *,
@@ -242,6 +318,72 @@ def _assert_contract(
     return contract
 
 
+def _group_state(
+    group: object,
+    *,
+    resource_kind: ManagedAgentProxyResourceKind,
+    resource_id: str,
+    application_id: str,
+) -> ManagedAgentProxyGroupState:
+    return ManagedAgentProxyGroupState(
+        contract=_assert_contract(
+            group,
+            resource_kind=resource_kind,
+            resource_id=resource_id,
+            application_id=application_id,
+        ),
+        member_ids=tuple(sorted(_member_ids(group))),
+    )
+
+
+def wait_for_managed_agent_proxy_group_discovery(
+    client: Any,
+    *,
+    resource_kind: ManagedAgentProxyResourceKind,
+    resource_id: str,
+    application_id: str,
+    expected_contract: ManagedAgentProxyGroup | None = None,
+    sleep: Callable[[float], object] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+    deadline_seconds: float = _PROJECTION_DEADLINE_SECONDS,
+) -> ManagedAgentProxyGroupState:
+    """Wait until an exact group is discoverable without tolerating drift."""
+
+    if deadline_seconds <= 0:
+        raise ValueError("managed agent-proxy discovery deadline must be positive")
+    deadline = clock() + deadline_seconds
+    while True:
+        try:
+            group = _find_group(
+                client,
+                resource_kind=resource_kind,
+                resource_id=resource_id,
+                application_id=application_id,
+            )
+        except (NotFound, ResourceDoesNotExist):
+            group = None
+        if group is not None:
+            state = _group_state(
+                group,
+                resource_kind=resource_kind,
+                resource_id=resource_id,
+                application_id=application_id,
+            )
+            if (
+                expected_contract is not None
+                and state.contract != expected_contract
+            ):
+                raise RuntimeError(
+                    "managed agent-proxy group immutable identity drifted"
+                )
+            return state
+        if clock() >= deadline:
+            raise RuntimeError(
+                "managed agent-proxy group discovery did not converge"
+            )
+        sleep(_PROJECTION_POLL_SECONDS)
+
+
 def inspect_managed_agent_proxy_group(
     client: Any,
     *,
@@ -267,14 +409,11 @@ def inspect_managed_agent_proxy_group(
         if missing_ok:
             return None
         raise RuntimeError("managed agent-proxy group is missing")
-    return ManagedAgentProxyGroupState(
-        contract=_assert_contract(
-            group,
-            resource_kind=resource_kind,
-            resource_id=resource_id,
-            application_id=application_id,
-        ),
-        member_ids=tuple(sorted(_member_ids(group))),
+    return _group_state(
+        group,
+        resource_kind=resource_kind,
+        resource_id=resource_id,
+        application_id=application_id,
     )
 
 
@@ -292,13 +431,14 @@ def ensure_managed_agent_proxy_group(
     principal_id = service_principal_id.strip()
     if not principal_id:
         raise ValueError("agent-proxy service-principal SCIM ID is required")
-    group = _find_group(
+    group = _find_existing_group_or_confirm_stable_absence(
         client,
         resource_kind=resource_kind,
         resource_id=resource_id,
         application_id=application_id,
     )
-    if group is None:
+    created = group is None
+    if created:
         assert_single_writer()
         group = client.groups.create(
             display_name=managed_agent_proxy_group_name(
@@ -316,15 +456,20 @@ def ensure_managed_agent_proxy_group(
         if not group_id:
             raise RuntimeError("created managed agent-proxy group has no immutable ID")
         group = _hydrated_group(client, group_id=group_id)
-    state = ManagedAgentProxyGroupState(
-        contract=_assert_contract(
-            group,
+    state = _group_state(
+        group,
+        resource_kind=resource_kind,
+        resource_id=resource_id,
+        application_id=application_id,
+    )
+    if created:
+        state = wait_for_managed_agent_proxy_group_discovery(
+            client,
             resource_kind=resource_kind,
             resource_id=resource_id,
             application_id=application_id,
-        ),
-        member_ids=tuple(sorted(_member_ids(group))),
-    )
+            expected_contract=state.contract,
+        )
     if set(state.member_ids).difference({principal_id}):
         raise RuntimeError("managed agent-proxy group contains an unrelated member")
     return state
@@ -552,25 +697,68 @@ def wait_for_managed_agent_proxy_group_projection(
         or deadline_seconds <= 0
     ):
         raise ValueError("managed agent-proxy projection contract is incomplete")
-    states = managed_agent_proxy_groups_for_application(
-        client,
-        application_id=application_id,
-        service_principal_id=service_principal_id,
-    )
-    managed_names = {state.contract.name for state in states}
-    if not expected.issubset(managed_names):
-        raise RuntimeError("expected managed agent-proxy group is missing")
     deadline = clock() + deadline_seconds
+    stable_zero_projection = 0
     while True:
-        effective = set(
-            resolve_effective_groups(
+        inventory_ready = True
+        try:
+            states = managed_agent_proxy_groups_for_application(
                 client,
-                sp_id=service_principal_id,
-            ).values()
+                application_id=application_id,
+                service_principal_id=service_principal_id,
+            )
+        except (NotFound, ResourceDoesNotExist):
+            inventory_ready = False
+            states = ()
+        managed_names = {state.contract.name for state in states}
+        active_names: set[str] = set()
+        for state in states:
+            members = set(state.member_ids)
+            if members not in (set(), {service_principal_id}):
+                raise RuntimeError(
+                    "managed agent-proxy group contains an unrelated member"
+                )
+            if members:
+                active_names.add(state.contract.name)
+        exact_inventory = (
+            inventory_ready
+            and expected.issubset(managed_names)
+            and active_names == expected
         )
-        if effective.intersection(managed_names) == expected:
-            return effective
+        if exact_inventory:
+            effective = set(
+                resolve_effective_groups(
+                    client,
+                    sp_id=service_principal_id,
+                ).values()
+            )
+            effective_managed_names = {
+                name
+                for name in effective
+                if name.startswith(MANAGED_AGENT_PROXY_GROUP_PREFIX)
+            }
+            if effective_managed_names == expected:
+                if expected:
+                    return effective
+                stable_zero_projection += 1
+                if (
+                    stable_zero_projection
+                    >= _STABLE_ZERO_PROJECTION_OBSERVATIONS
+                ):
+                    return effective
+            else:
+                stable_zero_projection = 0
+        else:
+            stable_zero_projection = 0
         if clock() >= deadline:
+            if not inventory_ready or not expected.issubset(managed_names):
+                raise RuntimeError(
+                    "expected managed agent-proxy group discovery did not converge"
+                )
+            if active_names != expected:
+                raise RuntimeError(
+                    "managed agent-proxy group membership did not converge"
+                )
             raise RuntimeError(
                 "managed agent-proxy effective-group projection did not converge"
             )

@@ -753,7 +753,7 @@ def test_exact_supervisor_audit_is_read_only(
     )
     monkeypatch.setattr(
         capability_convergence,
-        "inspect_managed_agent_proxy_group",
+        "wait_for_managed_agent_proxy_group_discovery",
         lambda *_args, **_kwargs: ManagedAgentProxyGroupState(
             contract=ManagedAgentProxyGroup(
                 id="group-id",
@@ -928,6 +928,11 @@ def test_genie_audit_accepts_exact_managed_target_and_empty_stale(
         "inspect_managed_agent_proxy_group",
         state,
     )
+    monkeypatch.setattr(
+        capability_convergence,
+        "wait_for_managed_agent_proxy_group_discovery",
+        state,
+    )
     capability_convergence.converge_genie_acl(
         SimpleNamespace(
             api_client=SimpleNamespace(
@@ -965,6 +970,11 @@ def test_genie_audit_rejects_duplicate_proxy_entries_regardless_of_level(
     monkeypatch.setattr(
         capability_convergence,
         "inspect_managed_agent_proxy_group",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        capability_convergence,
+        "wait_for_managed_agent_proxy_group_discovery",
         lambda *_args, **_kwargs: None,
     )
 
@@ -1098,6 +1108,73 @@ def test_deny_all_attempts_serving_supervisor_and_genie_after_partial_failure(
         "supervisor",
         "genie",
     ]
+
+
+def test_managed_denial_retries_stale_empty_inventory_then_revokes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    group_name = managed_agent_proxy_group_name(
+        resource_kind="supervisor",
+        resource_id="agent-target",
+        application_id="proxy-client",
+    )
+    active = True
+    inventory_reads = 0
+    revokes: list[str] = []
+
+    def inventory(*_args: object, **_kwargs: object) -> tuple[object, ...]:
+        nonlocal inventory_reads
+        inventory_reads += 1
+        if inventory_reads == 1:
+            return ()
+        return (
+            ManagedAgentProxyGroupState(
+                contract=ManagedAgentProxyGroup(
+                    id="group-id",
+                    name=group_name,
+                    external_id="external-id",
+                ),
+                member_ids=(("proxy-scim",) if active else ()),
+            ),
+        )
+
+    def remove(*_args: object, state: object, **_kwargs: object) -> bool:
+        nonlocal active
+        if not active:
+            return False
+        revokes.append(cast(ManagedAgentProxyGroupState, state).contract.id)
+        active = False
+        return True
+
+    monkeypatch.setattr(
+        capability_denial,
+        "managed_agent_proxy_groups_for_application",
+        inventory,
+    )
+    monkeypatch.setattr(
+        capability_denial,
+        "remove_managed_agent_proxy_membership",
+        remove,
+    )
+    monkeypatch.setattr(
+        capability_denial,
+        "resolve_effective_groups",
+        lambda *_args, **_kwargs: {},
+    )
+    times = iter((0.0, 0.1, 0.2, 0.3, 0.4))
+
+    capability_denial.revoke_all_managed_capability_memberships(
+        SimpleNamespace(),
+        application_id="proxy-client",
+        service_principal_id="proxy-scim",
+        assert_single_writer=lambda: None,
+        sleep=lambda _seconds: None,
+        clock=lambda: next(times),
+        deadline_seconds=1.0,
+    )
+
+    assert revokes == ["group-id"]
+    assert inventory_reads == 5
 
 
 def test_deny_all_clears_direct_first_failure_after_effective_retry(
