@@ -22,6 +22,7 @@ from mlflow.types.responses import ResponsesAgentRequest, ResponsesAgentResponse
 
 try:
     from backend.agents.gateway_contract import (
+        reviewed_workspace_https_origin,
         verified_gateway_runtime_resource_environment,
     )
     from backend.agents.supervisor_contract import (
@@ -29,6 +30,7 @@ try:
     )
 except ModuleNotFoundError:  # MLflow code_path places backend/ directly on sys.path.
     from agents.gateway_contract import (  # type: ignore[no-redef]
+        reviewed_workspace_https_origin,
         verified_gateway_runtime_resource_environment,
     )
     from agents.supervisor_contract import (  # type: ignore[no-redef]
@@ -45,7 +47,14 @@ def _required_env(name: str) -> str:
     return value
 
 
-def _supervisor_workspace() -> WorkspaceClient:
+def _workspace_host() -> str:
+    try:
+        return reviewed_workspace_https_origin(_required_env("DATABRICKS_HOST"))
+    except ValueError as exc:
+        raise RuntimeError("DATABRICKS_HOST is not a reviewed workspace origin") from exc
+
+
+def _supervisor_workspace(*, workspace_host: str) -> WorkspaceClient:
     """Build the least-privilege caller used only for the private Supervisor."""
 
     proxy_client_id = _required_env("MIP_UPSTREAM_PROXY_CLIENT_ID")
@@ -54,7 +63,9 @@ def _supervisor_workspace() -> WorkspaceClient:
     runtime_id = _required_env("MIP_UPSTREAM_SUPERVISOR_CREATOR")
     if proxy_client_id.casefold() == runtime_id.casefold():
         raise RuntimeError("Supervisor proxy caller must not be the runtime owner")
-    host = _required_env("DATABRICKS_HOST")
+    host = _workspace_host()
+    if host != workspace_host:
+        raise RuntimeError("signed Gateway workspace host binding drifted")
     return WorkspaceClient(
         host=host,
         client_id=proxy_client_id,
@@ -63,7 +74,7 @@ def _supervisor_workspace() -> WorkspaceClient:
     )
 
 
-def _assert_live_runtime_contract() -> str:
+def _assert_live_runtime_contract() -> tuple[str, str]:
     """Authenticate the deployment-signed, exact Gateway-to-Supervisor binding."""
 
     # CAN_QUERY is deliberately unable to read the Supervisor definition.
@@ -77,6 +88,7 @@ def _assert_live_runtime_contract() -> str:
     catalog = _required_env("MIP_SUPERVISOR_CATALOG")
     genie_space_id = _required_env("MIP_SUPERVISOR_GENIE_SPACE_ID")
     expected_hash = _required_env("MIP_SUPERVISOR_CONTRACT_SHA256")
+    workspace_host = _workspace_host()
     if expected_hash != supervisor_contract_hash(
         genie_space_id=genie_space_id,
         catalog=catalog,
@@ -87,6 +99,7 @@ def _assert_live_runtime_contract() -> str:
         "supervisor_id": supervisor_id,
         "supervisor_endpoint": upstream,
         "runtime_application_id": runtime_id,
+        "workspace_host": workspace_host,
         "proxy_caller_application_id": _required_env("MIP_UPSTREAM_PROXY_CLIENT_ID"),
         "proxy_caller_credential_id": _required_env("MIP_UPSTREAM_PROXY_CREDENTIAL_ID"),
         "catalog": catalog,
@@ -95,7 +108,7 @@ def _assert_live_runtime_contract() -> str:
     }
     if any(signed.get(name) != value for name, value in expected_binding.items()):
         raise RuntimeError("signed Gateway-to-Supervisor binding drifted")
-    return upstream
+    return upstream, workspace_host
 
 
 def _decode_upstream_response(raw: object) -> Mapping[str, Any]:
@@ -151,8 +164,8 @@ class MortgageGrowthSupervisorProxy(ResponsesAgent):
     def predict(  # type: ignore[override]
         self, request: ResponsesAgentRequest
     ) -> ResponsesAgentResponse:
-        upstream = _assert_live_runtime_contract()
-        supervisor_workspace = _supervisor_workspace()
+        upstream, workspace_host = _assert_live_runtime_contract()
+        supervisor_workspace = _supervisor_workspace(workspace_host=workspace_host)
         body: dict[str, Any] = {
             "model": upstream,
             "input": [item.model_dump(mode="json", exclude_none=True) for item in request.input],

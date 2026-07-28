@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Callable
 from typing import Any, TypeVar
@@ -20,6 +21,7 @@ _T = TypeVar("_T")
 AUTHORIZATION_CONVERGENCE_SECONDS = 180.0
 AUTHORIZATION_POLL_SECONDS = 3.0
 MAX_EFFECTIVE_GROUPS = 1_000
+_BOUNDARY_REQUEST_ID = re.compile(r"mip-agent-proxy-boundary-[0-9a-f]{32}\Z")
 
 
 def is_exact_target_supervisor_response(
@@ -27,12 +29,14 @@ def is_exact_target_supervisor_response(
     *,
     supervisor_endpoint: str,
 ) -> bool:
+    """Prove the reviewed synchronous route, not independent model provenance."""
+
     canonical_task = str(execution.task or "").lower().replace("-", "_").replace("/", "_")
     if (
         execution.endpoint != supervisor_endpoint
         or execution.transport != "responses_api"
         or canonical_task != "agent_v1_responses"
-        or not str(execution.client_request_id or "").strip()
+        or _BOUNDARY_REQUEST_ID.fullmatch(str(execution.client_request_id or "")) is None
     ):
         return False
     response = execution.response
@@ -54,9 +58,16 @@ def is_exact_target_supervisor_response(
     required = {"id", "object", "model", "status", "error", "incomplete_details", "output"}
     if not required.issubset(response) or not str(response.get("id") or "").strip():
         return False
-    model = str(response.get("model") or "").strip()
+    # Managed Databricks Supervisor endpoints currently return an explicit
+    # JSON null for the Responses `model` echo.  The synchronous request is
+    # still bound to the exact reviewed endpoint by the immutable execution
+    # envelope and the request body constructed by
+    # `query_serving_endpoint_with_proof`.  Accept only that observed explicit
+    # null or the exact endpoint echo; missing, blank, non-string, and
+    # contradictory values remain fail-closed.
+    model = response["model"]
     if (
-        model != supervisor_endpoint
+        (model is not None and model != supervisor_endpoint)
         or str(response.get("status") or "").strip().casefold() != "completed"
         or str(response["object"] or "").strip() != "response"
         or response.get("error") is not None

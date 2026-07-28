@@ -86,6 +86,7 @@ def _contract() -> dict[str, str]:
         "proxy_caller_credential_id",
         "proxy_caller_secret_reference",
         "runtime_application_id",
+        "workspace_host",
         "supervisor_canonical_name",
         "supervisor_contract_json",
         "supervisor_contract_sha256",
@@ -98,6 +99,7 @@ def _contract() -> dict[str, str]:
     }
     contract = {field: f"value-{field}" for field in fields}
     contract["proof_version"] = GATEWAY_RUNTIME_RESOURCE_PROOF_VERSION
+    contract["workspace_host"] = "https://workspace.cloud.databricks.com"
     return contract
 
 
@@ -181,6 +183,7 @@ _EXPERIMENT_ID = "experiment-7"
 _PROXY_CLIENT_ID = "proxy-client"
 _PROXY_CREDENTIAL_ID = "proxy-credential"
 _PROXY_SECRET_REFERENCE = "{{secrets/mip-agent-proxy/oauth-client-secret-proxy-credential}}"
+_WORKSPACE_HOST = "https://workspace.cloud.databricks.com"
 
 
 def _acl_document() -> dict[str, Any]:
@@ -300,6 +303,7 @@ def _live_resources() -> _LiveResources:
         supervisor_id=_SUPERVISOR_ID,
         supervisor_endpoint_id="se-supervisor-immutable",
         runtime_application_id=_RUNTIME_ID,
+        workspace_host=_WORKSPACE_HOST,
         model_name=_MODEL_FAMILY,
         experiment_name=DEFAULT_GATEWAY_AGENT_EXPERIMENT,
         inference_schema="audit",
@@ -352,6 +356,7 @@ def _live_resources() -> _LiveResources:
         "proxy_caller_credential_id": _PROXY_CREDENTIAL_ID,
         "proxy_caller_secret_reference": _PROXY_SECRET_REFERENCE,
         "runtime_application_id": _RUNTIME_ID,
+        "workspace_host": _WORKSPACE_HOST,
         "supervisor_canonical_name": "Mortgage Growth Agent Supervisor",
         "supervisor_contract_json": supervisor_json,
         "supervisor_contract_sha256": supervisor_contract_hash(
@@ -395,6 +400,7 @@ def _live_resources() -> _LiveResources:
     entity_environment = {
         **GATEWAY_STATIC_ENV,
         **environment,
+        "DATABRICKS_HOST": _WORKSPACE_HOST,
         "MIP_UPSTREAM_SUPERVISOR_ID": _SUPERVISOR_ID,
         "MIP_UPSTREAM_SUPERVISOR_ENDPOINT": _SUPERVISOR_ENDPOINT,
         "MIP_UPSTREAM_SUPERVISOR_CREATOR": _RUNTIME_ID,
@@ -460,6 +466,7 @@ def _live_resources() -> _LiveResources:
         ),
     )
     workspace = SimpleNamespace(
+        config=SimpleNamespace(host=_WORKSPACE_HOST),
         api_client=_ApiClient(acl),
         serving_endpoints=_NamedResources(
             {
@@ -601,6 +608,7 @@ def test_served_binding_preserves_previous_model_attestation_key(
         supervisor_endpoint_id="supervisor-endpoint-id",
         upstream_endpoint="supervisor-endpoint",
         runtime_application_id="runtime",
+        workspace_host=_WORKSPACE_HOST,
         proxy_caller_application_id="proxy",
         proxy_caller_credential_id="credential",
         proxy_caller_secret_reference="{{secrets/scope/oauth-client-secret-credential}}",

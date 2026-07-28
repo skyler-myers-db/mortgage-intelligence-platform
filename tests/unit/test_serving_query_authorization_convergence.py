@@ -196,16 +196,121 @@ def test_authorization_retry_rejects_foreign_permission_denied_class() -> None:
 
 
 @pytest.mark.parametrize("model", ("", "different-supervisor"))
-def test_exact_target_response_rejects_missing_or_wrong_model(model: str) -> None:
+def test_exact_target_response_rejects_blank_or_wrong_model(model: str) -> None:
     execution = ServingEndpointExecution(
         endpoint="reviewed-supervisor",
         task="agent_v1_responses",
         transport="responses_api",
-        client_request_id="request-id",
+        client_request_id=f"mip-agent-proxy-boundary-{'a' * 32}",
         response={
             "id": "response-id",
             "object": "response",
             "model": model,
+            "status": "completed",
+            "error": None,
+            "incomplete_details": None,
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": "ready"}],
+                }
+            ],
+        },
+    )
+
+    assert not is_exact_target_supervisor_response(
+        execution,
+        supervisor_endpoint="reviewed-supervisor",
+    )
+
+
+@pytest.mark.parametrize("model", (None, "reviewed-supervisor"))
+def test_exact_target_response_accepts_live_null_or_exact_model(
+    model: str | None,
+) -> None:
+    execution = ServingEndpointExecution(
+        endpoint="reviewed-supervisor",
+        task="agent_v1_responses",
+        transport="responses_api",
+        client_request_id=f"mip-agent-proxy-boundary-{'a' * 32}",
+        response={
+            "id": "response-id",
+            "object": "response",
+            "model": model,
+            "status": "completed",
+            "error": None,
+            "incomplete_details": None,
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": "ready"}],
+                }
+            ],
+        },
+    )
+
+    assert is_exact_target_supervisor_response(
+        execution,
+        supervisor_endpoint="reviewed-supervisor",
+    )
+
+
+@pytest.mark.parametrize(
+    ("client_request_id", "model"),
+    (
+        ("", None),
+        ("request-id", None),
+        (f"mip-agent-proxy-boundary-{'A' * 32}", None),
+        (f"mip-agent-proxy-boundary-{'a' * 31}", None),
+        (f"mip-agent-proxy-boundary-{'a' * 32}", 7),
+    ),
+)
+def test_exact_target_response_rejects_unbound_request_or_non_string_model(
+    client_request_id: str,
+    model: object,
+) -> None:
+    execution = ServingEndpointExecution(
+        endpoint="reviewed-supervisor",
+        task="agent_v1_responses",
+        transport="responses_api",
+        client_request_id=client_request_id,
+        response={
+            "id": "response-id",
+            "object": "response",
+            "model": model,
+            "status": "completed",
+            "error": None,
+            "incomplete_details": None,
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": "ready"}],
+                }
+            ],
+        },
+    )
+
+    assert not is_exact_target_supervisor_response(
+        execution,
+        supervisor_endpoint="reviewed-supervisor",
+    )
+
+
+def test_exact_target_response_rejects_missing_model_key() -> None:
+    execution = ServingEndpointExecution(
+        endpoint="reviewed-supervisor",
+        task="agent_v1_responses",
+        transport="responses_api",
+        client_request_id=f"mip-agent-proxy-boundary-{'a' * 32}",
+        response={
+            "id": "response-id",
+            "object": "response",
             "status": "completed",
             "error": None,
             "incomplete_details": None,

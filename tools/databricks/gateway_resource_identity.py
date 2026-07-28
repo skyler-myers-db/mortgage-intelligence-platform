@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -10,6 +11,7 @@ from backend.agents.gateway_contract import (
     gateway_experiment_base,
     gateway_model_family,
     gateway_proxy_source_hash,
+    reviewed_workspace_https_origin,
 )
 from tools.databricks.agent_runtime_access import assert_runtime_creator
 
@@ -21,6 +23,7 @@ class GatewayAgentDeployment:
     supervisor_endpoint_id: str
     upstream_endpoint: str
     runtime_application_id: str
+    workspace_host: str
     proxy_caller_application_id: str
     proxy_caller_credential_id: str
     proxy_caller_secret_reference: str
@@ -38,6 +41,38 @@ class GatewayAgentDeployment:
     experiment_id: str
     catalog: str
     genie_space_id: str
+
+
+def authenticated_workspace_host(workspace: Any, *, context: str) -> str:
+    try:
+        return reviewed_workspace_https_origin(
+            str(getattr(getattr(workspace, "config", None), "host", "") or "")
+        )
+    except ValueError as exc:
+        raise RuntimeError(f"authenticated {context} workspace host is invalid") from exc
+
+
+def existing_attested_gateway_source_version(
+    client: Any,
+    *,
+    classify_versions: Callable[..., tuple[list[int], list[Any]]],
+    verify_attestation: Callable[..., Any],
+    **contract: str,
+) -> int | None:
+    """Return the latest ready exact-contract model version, if one exists."""
+
+    ready, incomplete = classify_versions(
+        client,
+        verify_attestation=verify_attestation,
+        **contract,
+    )
+    if incomplete:
+        candidate = incomplete[0]
+        raise RuntimeError(
+            f"Gateway candidate model {contract['model_name']} v{candidate.version} "
+            f"is not ready ({candidate.status})"
+        )
+    return max(ready) if ready else None
 
 
 def gateway_agent_source_hash(*, upstream_endpoint: str, catalog: str, genie_space_id: str) -> str:

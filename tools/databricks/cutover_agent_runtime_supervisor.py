@@ -31,12 +31,11 @@ from tools.databricks.cutover_journal_store import (
     persist_cutover_journal,
     refresh_cutover_journal_attestation,
 )
-from tools.databricks.cutover_journal_store import (
-    read_cutover_journal as _read_journal,
-)
+from tools.databricks.cutover_journal_store import read_cutover_journal as _read_journal
 from tools.databricks.cutover_supervisor_inventory import (
     supervisor_by_id_direct as _supervisor_by_id_direct,
 )
+from tools.databricks.gateway_resource_identity import authenticated_workspace_host
 from tools.databricks.provision_agentic_resources import (
     _converge_app_gateway_permissions,
     _run_no_json,
@@ -289,6 +288,7 @@ def _assert_green_path(
     genie_space_id: str,
     runtime_application_id: str,
 ) -> None:
+    workspace_host = authenticated_workspace_host(workspace, context="cutover")
     replacement = _agent_by_id(replacement_id)
     if replacement is None:
         raise RuntimeError("replacement Supervisor disappeared before cutover")
@@ -339,10 +339,11 @@ def _assert_green_path(
     if len(entities) != 1:
         raise RuntimeError("outer Gateway must serve exactly one reviewed proxy")
     environment = getattr(entities[0], "environment_vars", None) or {}
-    if environment.get("MIP_UPSTREAM_SUPERVISOR_ENDPOINT") != replacement_endpoint:
+    if environment.get("MIP_UPSTREAM_SUPERVISOR_ENDPOINT") != replacement_endpoint or (
+        environment.get("DATABRICKS_HOST") != workspace_host
+    ):
         raise RuntimeError("outer Gateway is not bound to the replacement Supervisor")
-    model_family = gateway_model_family
-    model_family_parts = model_family.split(".")
+    model_family_parts = gateway_model_family.split(".")
     inference_parts = gateway_inference_table.split(".")
     if (
         len(model_family_parts) != 3
@@ -355,7 +356,6 @@ def _assert_green_path(
     ):
         raise RuntimeError("outer Gateway family inputs are outside the reviewed target")
     _catalog, inference_schema, _concrete_inference_table = inference_parts
-    inference_table_prefix = gateway_table_prefix
     model_attestation_verify_key = str(
         environment.get("MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY") or ""
     ).strip()
@@ -376,17 +376,18 @@ def _assert_green_path(
         supervisor_id=replacement_id,
         supervisor_endpoint_id=replacement_endpoint_id,
         runtime_application_id=runtime_application_id,
-        model_name=model_family,
+        workspace_host=workspace_host,
+        model_name=gateway_model_family,
         experiment_name=gateway_experiment_base,
         inference_schema=inference_schema,
-        inference_table_prefix=inference_table_prefix,
+        inference_table_prefix=gateway_table_prefix,
         attestation_verify_key=model_attestation_verify_key,
         proxy_caller_application_id=proxy_caller_application_id,
         proxy_caller_credential_id=proxy_caller_credential_id,
         proxy_caller_secret_reference=proxy_caller_secret_reference,
     )
     expected_model = gateway_agent_model_name(
-        base_model_name=model_family,
+        base_model_name=gateway_model_family,
         contract_hash=resource_hash,
     )
     expected_inference_table = ".".join(
@@ -394,7 +395,7 @@ def _assert_green_path(
             catalog,
             inference_schema,
             gateway_inference_table_prefix(
-                base_prefix=inference_table_prefix,
+                base_prefix=gateway_table_prefix,
                 contract_hash=resource_hash,
             ),
         ]
@@ -446,6 +447,7 @@ def _assert_green_path(
             supervisor_endpoint_id=replacement_endpoint_id,
             upstream_endpoint=replacement_endpoint,
             runtime_application_id=runtime_application_id,
+            workspace_host=workspace_host,
             proxy_caller_application_id=proxy_caller_application_id,
             proxy_caller_credential_id=proxy_caller_credential_id,
             proxy_caller_secret_reference=proxy_caller_secret_reference,
@@ -453,11 +455,11 @@ def _assert_green_path(
             model_version=gateway_model_version,
             model_source=model_source,
             model_attestation_verify_key=model_attestation_verify_key,
-            model_family=model_family,
+            model_family=gateway_model_family,
             source_hash=source_hash,
             resource_hash=resource_hash,
             inference_table=gateway_inference_table,
-            inference_table_prefix=inference_table_prefix,
+            inference_table_prefix=gateway_table_prefix,
             experiment_base=gateway_experiment_base,
             experiment_name=expected_experiment_name,
             experiment_id=experiment_id,

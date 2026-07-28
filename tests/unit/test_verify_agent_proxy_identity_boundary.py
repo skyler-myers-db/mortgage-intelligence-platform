@@ -908,27 +908,26 @@ def test_proxy_boundary_rejects_visible_endpoint_misclassified_as_foundation() -
         )
 
 
-def test_proxy_boundary_rejects_live_null_model() -> None:
-    with pytest.raises(RuntimeError, match="exact terminal Agent Responses"):
-        _verify(
-            _workspace(
-                target_supervisor_query_response={
-                    "id": "response-target",
-                    "object": "response",
-                    "model": None,
-                    "status": "completed",
-                    "error": None,
-                    "incomplete_details": None,
-                    "output": [
-                        {
-                            "type": "message",
-                            "role": "assistant",
-                            "content": [{"type": "output_text", "text": "ready"}],
-                        }
-                    ],
-                }
-            )
+def test_proxy_boundary_accepts_live_explicit_null_model() -> None:
+    _verify(
+        _workspace(
+            target_supervisor_query_response={
+                "id": "response-target",
+                "object": "response",
+                "model": None,
+                "status": "completed",
+                "error": None,
+                "incomplete_details": None,
+                "output": [
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "ready"}],
+                    }
+                ],
+            }
         )
+    )
 
 
 def test_proxy_boundary_accepts_missing_item_status() -> None:

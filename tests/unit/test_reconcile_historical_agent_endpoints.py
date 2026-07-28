@@ -33,7 +33,9 @@ from tools.databricks import (
 from tools.databricks import reconcile_historical_agent_endpoints as inventory
 from tools.databricks.gateway_legacy_rollback import (
     LEGACY_GATEWAY_RESOURCE_FIELDS,
+    PRIOR_GATEWAY_RUNTIME_RESOURCE_PROOF_VERSION,
     legacy_gateway_resource_digest,
+    prior_v2_gateway_resource_digest,
 )
 from tools.databricks.serving_query_group_access import (
     managed_query_group_external_id,
@@ -45,6 +47,7 @@ _RUNTIME = "runtime-client"
 _CATALOG = "mip"
 _GENIE = "genie-space"
 _SUPERVISOR_NAME = "Mortgage Growth Agent"
+_WORKSPACE_HOST = "https://adb-1234567890123456.7.azuredatabricks.net"
 
 
 @pytest.fixture(autouse=True)
@@ -228,6 +231,7 @@ class _Groups:
 
 class _Client:
     def __init__(self, details: dict[str, Any], supervisors: list[dict[str, str]]) -> None:
+        self.config = SimpleNamespace(host=_WORKSPACE_HOST)
         self.serving_endpoints = _ServingEndpoints(details)
         self.api_client = _ApiClient(supervisors, self.serving_endpoints)
         self.groups = _Groups()
@@ -719,6 +723,115 @@ def test_proxy_aware_v2_resource_envelope_uses_historical_current_schema_verifie
     assert verified == [contract]
 
 
+def test_exact_prior_v2_proxy_envelope_uses_transition_verifier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidate = DEFAULT_GATEWAY_ENDPOINT
+    supervisor = _supervisor()
+    current = _contract(
+        gateway=candidate,
+        gateway_id="runtime-gateway-id",
+        supervisor=supervisor,
+        supervisor_endpoint_id="supervisor-endpoint-id",
+    )
+    prior = {key: value for key, value in current.items() if key != "workspace_host"}
+    prior["proof_version"] = PRIOR_GATEWAY_RUNTIME_RESOURCE_PROOF_VERSION
+    contract_json = json.dumps(prior, sort_keys=True, separators=(",", ":"))
+    binding = {
+        "MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_CONTRACT_JSON": contract_json,
+        "MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SHA256": prior_v2_gateway_resource_digest(prior),
+        "MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SIGNATURE": "signed-prior-v2",
+        "MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY": TEST_GATEWAY_VERIFY_KEY,
+    }
+    details = SimpleNamespace(
+        id=prior["gateway_endpoint_id"],
+        creator=_RUNTIME,
+        pending_config=None,
+        config=SimpleNamespace(served_entities=[SimpleNamespace(environment_vars=binding)]),
+    )
+    verified: list[dict[str, str]] = []
+    monkeypatch.setattr(
+        gateway_attestation,
+        "assert_live_prior_v2_gateway_resources",
+        lambda _workspace, *, expected: verified.append(expected) or expected,
+    )
+    monkeypatch.setattr(
+        gateway_attestation,
+        "assert_live_historical_gateway_runtime_resources",
+        lambda *_args, **_kwargs: pytest.fail("prior v2 must not be accepted as current"),
+    )
+
+    result = inventory._live_gateway_contract(
+        _Client({candidate: details}, [supervisor]),
+        details,
+        name=candidate,
+        gateway_prefixes=(DEFAULT_GATEWAY_ENDPOINT,),
+        runtime_application_id=_RUNTIME,
+        supervisor_name=_SUPERVISOR_NAME,
+        catalog=_CATALOG,
+        genie_space_id=_GENIE,
+        assert_single_writer=lambda: None,
+    )
+
+    assert result == prior
+    assert verified == [
+        {
+            **prior,
+            "resource_digest": prior_v2_gateway_resource_digest(prior),
+        }
+    ]
+
+
+def test_prior_v2_transition_rejects_signed_scope_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidate = DEFAULT_GATEWAY_ENDPOINT
+    supervisor = _supervisor()
+    current = _contract(
+        gateway=candidate,
+        gateway_id="runtime-gateway-id",
+        supervisor=supervisor,
+        supervisor_endpoint_id="supervisor-endpoint-id",
+    )
+    prior = {key: value for key, value in current.items() if key != "workspace_host"}
+    prior.update(
+        proof_version=PRIOR_GATEWAY_RUNTIME_RESOURCE_PROOF_VERSION,
+        catalog="different_catalog",
+    )
+    binding = {
+        "MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_CONTRACT_JSON": json.dumps(
+            prior, sort_keys=True, separators=(",", ":")
+        ),
+        "MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SHA256": prior_v2_gateway_resource_digest(prior),
+        "MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SIGNATURE": "signed-prior-v2",
+        "MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY": TEST_GATEWAY_VERIFY_KEY,
+    }
+    details = SimpleNamespace(
+        id=prior["gateway_endpoint_id"],
+        creator=_RUNTIME,
+        pending_config=None,
+        config=SimpleNamespace(served_entities=[SimpleNamespace(environment_vars=binding)]),
+    )
+    monkeypatch.setattr(
+        gateway_attestation,
+        "assert_live_prior_v2_gateway_resources",
+        lambda _workspace, *, expected: expected,
+    )
+
+    with pytest.raises(RuntimeError, match="signed identity or scope drifted"):
+        inventory._live_gateway_contract(
+            _Client({candidate: details}, [supervisor]),
+            details,
+            name=candidate,
+            gateway_prefixes=(DEFAULT_GATEWAY_ENDPOINT,),
+            runtime_application_id=_RUNTIME,
+            supervisor_name=_SUPERVISOR_NAME,
+            catalog=_CATALOG,
+            genie_space_id=_GENIE,
+            assert_single_writer=lambda: None,
+        )
+
+
 def test_incomplete_v2_resource_envelope_never_uses_legacy_verifier(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -886,6 +999,7 @@ def test_legacy_attestation_requires_hash_derived_name_and_signed_model_scope(
     }
     tags = signed_gateway_model_tags(model_contract)
     environment = {
+        "DATABRICKS_HOST": _WORKSPACE_HOST,
         "MIP_UPSTREAM_SUPERVISOR_ID": "historical-supervisor",
         "MIP_UPSTREAM_SUPERVISOR_ENDPOINT": supervisor_endpoint,
         "MIP_UPSTREAM_SUPERVISOR_CREATOR": _RUNTIME,
@@ -919,6 +1033,7 @@ def test_legacy_attestation_requires_hash_derived_name_and_signed_model_scope(
         ),
     )
     workspace = SimpleNamespace(
+        config=SimpleNamespace(host=_WORKSPACE_HOST),
         api_client=SimpleNamespace(
             do=lambda _method, _path: {
                 "supervisor_agent_id": "historical-supervisor",
@@ -1864,6 +1979,84 @@ def test_cleanup_deletes_only_unpreserved_exact_resources_and_rechecks_lease(
     assert client.serving_endpoints.deleted == [gateway_name]
     assert client.api_client.deleted == ["old-supervisor"]
     assert lease_checks == ["lease", "lease"]
+
+
+def test_cleanup_retires_exact_signed_prior_v2_before_green_provisioning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    supervisor = _supervisor(
+        supervisor_id="prior-v2-supervisor",
+        display_name=f"{_SUPERVISOR_NAME} [mip-agent-runtime-deadbeef0000]",
+        endpoint="prior-v2-supervisor-endpoint",
+    )
+    gateway_name = f"{DEFAULT_GATEWAY_ENDPOINT}-deadbeef0000"
+    current = _contract(
+        gateway=gateway_name,
+        gateway_id="prior-v2-gateway-id",
+        supervisor=supervisor,
+        supervisor_endpoint_id="prior-v2-supervisor-endpoint-id",
+    )
+    prior = {key: value for key, value in current.items() if key != "workspace_host"}
+    prior["proof_version"] = PRIOR_GATEWAY_RUNTIME_RESOURCE_PROOF_VERSION
+    binding = {
+        "MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_CONTRACT_JSON": json.dumps(
+            prior, sort_keys=True, separators=(",", ":")
+        ),
+        "MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SHA256": prior_v2_gateway_resource_digest(prior),
+        "MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SIGNATURE": "signed-prior-v2",
+        "MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY": TEST_GATEWAY_VERIFY_KEY,
+    }
+    details = SimpleNamespace(
+        id=prior["gateway_endpoint_id"],
+        creator=_RUNTIME,
+        pending_config=None,
+        config=SimpleNamespace(served_entities=[SimpleNamespace(environment_vars=binding)]),
+    )
+    client = _Client(
+        {
+            gateway_name: details,
+            supervisor["endpoint_name"]: SimpleNamespace(
+                id="prior-v2-supervisor-endpoint-id",
+                creator=_RUNTIME,
+            ),
+        },
+        [supervisor],
+    )
+    verified: list[dict[str, str]] = []
+    monkeypatch.setattr(
+        gateway_attestation,
+        "assert_live_prior_v2_gateway_resources",
+        lambda _workspace, *, expected: verified.append(expected) or expected,
+    )
+
+    initial = _inventory(client)
+    empty = inventory.RuntimeEndpointInventory(1, _RUNTIME, (), ())
+    after_gateway = inventory.RuntimeEndpointInventory(1, _RUNTIME, (), initial.supervisors)
+    reads = iter((initial, initial, after_gateway, empty))
+    final = inventory.cleanup_runtime_endpoints(
+        client,
+        initial,
+        assert_single_writer=lambda: None,
+        query_principals=inventory.QueryGroupPrincipals(
+            "app-client",
+            "app-scim",
+            "verifier-client",
+            "verifier-scim",
+            "proxy-client",
+            "proxy-scim",
+        ),
+        timeout_s=1,
+        sleep=lambda _seconds: None,
+        inventory_again=lambda: next(reads),
+        cleanup_journal=_MemoryCleanupJournal(),
+    )
+
+    assert final == empty
+    assert client.serving_endpoints.deleted == [gateway_name]
+    assert client.api_client.deleted == [supervisor["supervisor_agent_id"]]
+    assert verified == [
+        {**prior, "resource_digest": prior_v2_gateway_resource_digest(prior)}
+    ]
 
 
 def test_mixed_inventory_cleanup_recovers_interruption_and_preserves_signed_retirement(

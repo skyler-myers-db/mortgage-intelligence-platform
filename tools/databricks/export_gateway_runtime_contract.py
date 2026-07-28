@@ -30,6 +30,7 @@ from backend.agents.gateway_contract import (  # noqa: E402
     gateway_model_family,
     gateway_proxy_source_hash,
     gateway_runtime_binding_hash,
+    reviewed_workspace_https_origin,
 )
 from backend.agents.reviewed_uc_function_contract import (  # noqa: E402
     assert_reviewed_function_set,
@@ -149,6 +150,12 @@ def resolve_exact_resource_proof(
 ) -> ExactGatewayRuntimeProof:
     """Re-read and authenticate every live fact needed for a safe rollback."""
 
+    try:
+        workspace_host = reviewed_workspace_https_origin(
+            str(getattr(getattr(client, "config", None), "host", "") or "")
+        )
+    except ValueError as exc:
+        raise RuntimeError("authenticated Gateway workspace host is invalid") from exc
     registry = model_registry or MlflowClient(
         tracking_uri="databricks",
         registry_uri="databricks-uc",
@@ -191,6 +198,7 @@ def resolve_exact_resource_proof(
             "gateway_source_hash",
             "genie_space_id",
             "runtime_application_id",
+            "workspace_host",
             "proxy_caller_application_id",
             "proxy_caller_credential_id",
             "proxy_caller_secret_reference",
@@ -215,6 +223,7 @@ def resolve_exact_resource_proof(
             "catalog": catalog,
             "genie_space_id": genie_space_id,
             "runtime_application_id": runtime_application_id,
+            "workspace_host": workspace_host,
             "supervisor_canonical_name": supervisor_name,
             **(
                 {"proxy_caller_application_id": proxy_caller_application_id}
@@ -399,6 +408,7 @@ def resolve_exact_resource_proof(
             supervisor_id=supervisor_id,
             supervisor_endpoint_id=upstream_endpoint_id,
             runtime_application_id=runtime_application_id,
+            workspace_host=workspace_host,
             model_name=model_family,
             experiment_name=experiment_base,
             inference_schema=inference_schema,
@@ -515,6 +525,7 @@ def resolve_exact_resource_proof(
             supervisor_endpoint_id=upstream_endpoint_id,
             upstream_endpoint=upstream,
             runtime_application_id=runtime_application_id,
+            workspace_host=workspace_host,
             proxy_caller_application_id=resolved_proxy_application_id,
             proxy_caller_credential_id=resolved_proxy_credential_id,
             proxy_caller_secret_reference=resolved_proxy_secret_reference,
@@ -588,6 +599,7 @@ def resolve_exact_resource_proof(
         "catalog": catalog,
         "genie_space_id": genie_space_id,
         "runtime_application_id": runtime_application_id,
+        "workspace_host": workspace_host,
         "supervisor_canonical_name": (
             stored["supervisor_canonical_name"] if stored else supervisor_name
         ),
@@ -700,6 +712,7 @@ def resolve_contract(
         supervisor_id=facts["supervisor_id"],
         upstream_endpoint=facts["supervisor_endpoint"],
         runtime_application_id=runtime_application_id,
+        workspace_host=facts["workspace_host"],
         model_name=facts["gateway_model_name"],
         model_version=int(facts["gateway_model_version"]),
         inference_table=facts["gateway_inference_table"],

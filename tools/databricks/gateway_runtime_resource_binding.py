@@ -100,6 +100,7 @@ def bind_gateway_runtime_resource_contract(
         supervisor_id=deployment.supervisor_id,
         upstream_endpoint=deployment.upstream_endpoint,
         runtime_application_id=deployment.runtime_application_id,
+        workspace_host=deployment.workspace_host,
         proxy_caller_application_id=deployment.proxy_caller_application_id,
         proxy_caller_credential_id=deployment.proxy_caller_credential_id,
         proxy_caller_secret_reference=deployment.proxy_caller_secret_reference,

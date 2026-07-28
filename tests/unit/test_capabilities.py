@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import json
+from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -64,6 +65,7 @@ _TEST_SIGNING_KEY = base64.urlsafe_b64encode(bytes(range(32))).decode().rstrip("
 _TEST_VERIFY_KEY = derive_gateway_proof_verify_key(_TEST_SIGNING_KEY)
 _TEST_GATEWAY_ENDPOINT_ID = "gateway-endpoint-id"
 _TEST_SUPERVISOR_ENDPOINT_ID = "supervisor-endpoint-id"
+_TEST_WORKSPACE_HOST = "https://dbc-test.cloud.databricks.com"
 _TEST_PROXY_CLIENT_ID = "proxy-client"
 _TEST_PROXY_CREDENTIAL_ID = "proxy-credential"
 _TEST_PROXY_SECRET_REFERENCE = "{{secrets/mip-agent-proxy/oauth-client-secret-proxy-credential}}"
@@ -82,7 +84,7 @@ def _exact_runtime_resource_stub(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _settings(**overrides: object) -> Settings:
     base: dict[str, object] = {
-        "databricks_host": "dbc-test.cloud.databricks.com",
+        "databricks_host": _TEST_WORKSPACE_HOST,
         "databricks_warehouse_id": "wh-123",
         "genie_space_id": "space-abc",
         "lakebase_host": "lb-test",
@@ -128,23 +130,28 @@ def _settings(**overrides: object) -> Settings:
         base.get("mip_agent_proxy_secret_reference"),
     )
     if all(binding_values):
-        base["mip_expected_agent_gateway_binding_sha256"] = gateway_runtime_binding_hash(
-            endpoint=str(binding_values[0]),
-            supervisor_id=str(binding_values[1]),
-            upstream_endpoint=str(binding_values[2]),
-            runtime_application_id=str(binding_values[3]),
-            model_name=str(binding_values[4]),
-            model_version=int(str(binding_values[5])),
-            inference_table=str(binding_values[6]),
-            proxy_caller_application_id=str(binding_values[7]),
-            proxy_caller_credential_id=str(binding_values[8]),
-            proxy_caller_secret_reference=str(binding_values[9]),
-        )
+        # Invalid/placeholder hosts are deliberately exercised by static
+        # capability tests and cannot have a governed runtime binding.
+        with suppress(ValueError):
+            base["mip_expected_agent_gateway_binding_sha256"] = gateway_runtime_binding_hash(
+                endpoint=str(binding_values[0]),
+                supervisor_id=str(binding_values[1]),
+                upstream_endpoint=str(binding_values[2]),
+                runtime_application_id=str(binding_values[3]),
+                workspace_host=str(base["databricks_host"]),
+                model_name=str(binding_values[4]),
+                model_version=int(str(binding_values[5])),
+                inference_table=str(binding_values[6]),
+                proxy_caller_application_id=str(binding_values[7]),
+                proxy_caller_credential_id=str(binding_values[8]),
+                proxy_caller_secret_reference=str(binding_values[9]),
+            )
     base["mip_expected_agent_gateway_resource_contract_json"] = json.dumps(
         {
             "catalog": base.get("mip_default_catalog"),
             "genie_space_id": base.get("genie_space_id"),
             "runtime_application_id": base.get("mip_agent_runtime_client_id"),
+            "workspace_host": base.get("databricks_host"),
             "supervisor_id": base.get("mip_agent_supervisor_id"),
             "supervisor_endpoint": base.get("mip_agent_supervisor_endpoint"),
             "supervisor_endpoint_id": _TEST_SUPERVISOR_ENDPOINT_ID,
@@ -561,6 +568,7 @@ class _FakeServingEndpoints:
                                 endpoint=name,
                                 inference_table=self.resource_inference_table,
                             ),
+                            "DATABRICKS_HOST": _TEST_WORKSPACE_HOST,
                             "MIP_UPSTREAM_SUPERVISOR_ID": "supervisor-1",
                             "MIP_UPSTREAM_SUPERVISOR_ENDPOINT": upstream,
                             "MIP_UPSTREAM_SUPERVISOR_CREATOR": "runtime-client",

@@ -125,6 +125,7 @@ def verify_supervisor_runtime(
     resource_digest = (settings.mip_expected_agent_gateway_resource_sha256 or "").strip()
     expected_binding = (settings.mip_expected_agent_gateway_binding_sha256 or "").strip()
     runtime_application_id = (settings.mip_agent_runtime_client_id or "").strip()
+    workspace_host = (settings.databricks_host or "").strip()
     proxy_application_id = (settings.mip_agent_proxy_client_id or "").strip()
     proxy_credential_id = (settings.mip_agent_proxy_credential_id or "").strip()
     proxy_secret_reference = (settings.mip_agent_proxy_secret_reference or "").strip()
@@ -136,6 +137,7 @@ def verify_supervisor_runtime(
         or not model_name
         or model_version is None
         or not runtime_application_id
+        or not workspace_host
         or not proxy_application_id
         or not proxy_credential_id
         or not proxy_secret_reference
@@ -155,6 +157,7 @@ def verify_supervisor_runtime(
         "catalog": settings.mip_default_catalog,
         "genie_space_id": settings.genie_space_id or "",
         "runtime_application_id": runtime_application_id,
+        "workspace_host": workspace_host,
         "supervisor_id": supervisor_id,
         "supervisor_endpoint": supervisor_endpoint,
         "gateway_endpoint": endpoint,
@@ -183,6 +186,7 @@ def verify_supervisor_runtime(
             supervisor_id=supervisor_id,
             upstream_endpoint=supervisor_endpoint,
             runtime_application_id=runtime_application_id,
+            workspace_host=workspace_host,
             model_name=model_name,
             model_version=model_version,
             inference_table=inference_table,
@@ -238,6 +242,7 @@ def verify_supervisor_runtime(
             return None, "gateway_proxy_environment_invalid"
         expected_environment = {
             **GATEWAY_STATIC_ENV,
+            "DATABRICKS_HOST": workspace_host,
             "MIP_UPSTREAM_SUPERVISOR_ID": supervisor_id,
             "MIP_UPSTREAM_SUPERVISOR_ENDPOINT": supervisor_endpoint,
             "MIP_UPSTREAM_SUPERVISOR_CREATOR": runtime_application_id,

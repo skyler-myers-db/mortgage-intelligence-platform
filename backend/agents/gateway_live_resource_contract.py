@@ -60,6 +60,7 @@ try:
         gateway_model_version_tags,
         gateway_proxy_source_hash,
         gateway_resource_allocation_hash,
+        reviewed_workspace_https_origin,
         verified_gateway_runtime_resource_environment,
     )
     from backend.agents.supervisor_contract import (
@@ -87,6 +88,7 @@ except ModuleNotFoundError:  # MLflow may place backend/ directly on sys.path.
         gateway_model_version_tags,
         gateway_proxy_source_hash,
         gateway_resource_allocation_hash,
+        reviewed_workspace_https_origin,
         verified_gateway_runtime_resource_environment,
     )
     from agents.supervisor_contract import (  # type: ignore[no-redef]
@@ -283,6 +285,7 @@ def _assert_endpoint_contract(
     expected_environment = {
         **GATEWAY_STATIC_ENV,
         **{key: value for key, value in environment.items() if key in GATEWAY_RUNTIME_RESOURCE_ENV},
+        "DATABRICKS_HOST": contract["workspace_host"],
         "MIP_UPSTREAM_SUPERVISOR_ID": contract["supervisor_id"],
         "MIP_UPSTREAM_SUPERVISOR_ENDPOINT": contract["supervisor_endpoint"],
         "MIP_UPSTREAM_SUPERVISOR_CREATOR": contract["runtime_application_id"],
@@ -350,6 +353,14 @@ def _assert_live_gateway_runtime_resources(
     """Authenticate expected facts and re-prove every mutable live resource."""
 
     contract = verified_gateway_runtime_resource_environment(environment)
+    try:
+        authenticated_workspace_host = reviewed_workspace_https_origin(
+            str(_field(_field(workspace, "config"), "host") or "")
+        )
+    except ValueError as exc:
+        raise RuntimeError("authenticated Gateway workspace host is invalid") from exc
+    if contract["workspace_host"] != authenticated_workspace_host:
+        raise RuntimeError("Gateway signed workspace host contract drifted")
     runtime_id = contract["runtime_application_id"]
     metadata = supervisor_metadata
     if metadata is None:
@@ -396,6 +407,7 @@ def _assert_live_gateway_runtime_resources(
         supervisor_id=contract["supervisor_id"],
         supervisor_endpoint_id=contract["supervisor_endpoint_id"],
         runtime_application_id=runtime_id,
+        workspace_host=contract["workspace_host"],
         model_name=contract["gateway_model_family"],
         experiment_name=contract["gateway_experiment_base"],
         inference_schema=inference_family[1],

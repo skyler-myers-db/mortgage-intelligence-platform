@@ -7,7 +7,7 @@ from backend.schemas.growth_agent import GrowthAgentPromptRunRequest
 
 def _settings() -> Settings:
     return Settings(
-        databricks_host="dbc-test.cloud.databricks.com",
+        databricks_host="https://dbc-test.cloud.databricks.com",
         databricks_warehouse_id="wh-123",
         genie_space_id="space-abc",
     )

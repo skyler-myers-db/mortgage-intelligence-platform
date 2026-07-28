@@ -21,7 +21,11 @@ from tools.databricks.agent_runtime_access import assert_runtime_creator
 from tools.databricks.cutover_journal_store import read_cutover_journal
 from tools.databricks.gateway_legacy_rollback import (
     LEGACY_GATEWAY_RESOURCE_FIELDS,
+    PRIOR_GATEWAY_RUNTIME_RESOURCE_PROOF_VERSION,
+    PRIOR_V2_GATEWAY_RESOURCE_FIELDS,
+    PRIOR_V2_LEGACY_GATEWAY_RESOURCE_FIELDS,
     assert_live_legacy_gateway_resources,
+    assert_live_prior_v2_gateway_resources,
 )
 from tools.databricks.gateway_runtime_resource_binding import (
     gateway_runtime_resource_binding_environment,
@@ -119,7 +123,28 @@ def _signed_resource_contract(
         isinstance(decoded_contract, dict)
         and set(decoded_contract) == LEGACY_GATEWAY_RESOURCE_FIELDS
     )
+    prior_v2_contract = (
+        isinstance(decoded_contract, dict)
+        and decoded_contract.get("proof_version") == PRIOR_GATEWAY_RUNTIME_RESOURCE_PROOF_VERSION
+        and set(decoded_contract)
+        in {
+            PRIOR_V2_LEGACY_GATEWAY_RESOURCE_FIELDS,
+            PRIOR_V2_GATEWAY_RESOURCE_FIELDS,
+        }
+    )
     try:
+        if prior_v2_contract:
+            verified = assert_live_prior_v2_gateway_resources(
+                workspace,
+                expected={
+                    **decoded_contract,
+                    "resource_digest": binding.get(
+                        "MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SHA256",
+                        "",
+                    ),
+                },
+            )
+            return {key: value for key, value in verified.items() if key != "resource_digest"}
         if legacy_contract:
             verified = assert_live_legacy_gateway_resources(
                 workspace,

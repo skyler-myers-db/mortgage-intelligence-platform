@@ -511,6 +511,11 @@ def test_authenticated_health_surfaces_deployed_git_sha(
         "mip.audit.mortgage_growth_supervisor_proxy",
     )
     monkeypatch.setattr(health_mod.settings, "mip_agent_gateway_model_version", 7)
+    monkeypatch.setattr(
+        health_mod.settings,
+        "databricks_host",
+        "https://workspace.cloud.databricks.com",
+    )
     monkeypatch.setattr(health_mod.settings, "mip_agent_proxy_client_id", "proxy-client")
     monkeypatch.setattr(
         health_mod.settings,
@@ -532,6 +537,7 @@ def test_authenticated_health_surfaces_deployed_git_sha(
         supervisor_id="supervisor-123",
         upstream_endpoint="mas-supervisor-endpoint",
         runtime_application_id="runtime-client",
+        workspace_host="https://workspace.cloud.databricks.com",
         model_name="mip.audit.mortgage_growth_supervisor_proxy",
         model_version=7,
         inference_table="mip.audit.mip_agent_gateway_growth_agent",

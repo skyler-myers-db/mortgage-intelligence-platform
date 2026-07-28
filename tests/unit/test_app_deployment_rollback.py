@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,6 +12,7 @@ from databricks.sdk.errors import ResourceDoesNotExist
 
 from backend.agents.gateway_contract import (
     GATEWAY_RUNTIME_RESOURCE_PROOF_VERSION,
+    canonical_gateway_runtime_resource_contract,
     gateway_exact_resource_digest,
     gateway_runtime_binding_hash,
 )
@@ -21,10 +23,13 @@ from tools.databricks import app_deployment_rollback_cli as rollback_cli
 from tools.databricks import app_deployment_rollback_inputs as rollback_inputs
 from tools.databricks import app_rollback_record_contract as rollback_contract
 from tools.databricks.app_health_contract import ActiveAppDeploymentPin
+from tools.databricks.app_rollback_gateway_binding import payload_gateway_binding
 from tools.databricks.app_rollback_resource_contract import reviewed_app_resource_contract
 from tools.databricks.gateway_legacy_rollback import (
     LEGACY_GATEWAY_RESOURCE_FIELDS,
+    PRIOR_GATEWAY_RUNTIME_RESOURCE_PROOF_VERSION,
     legacy_gateway_resource_digest,
+    prior_v2_gateway_resource_digest,
     validated_legacy_gateway_resources,
 )
 from tools.databricks.supervisor_agent_contract import (
@@ -51,6 +56,7 @@ RESOURCE_CONTRACT = {
     "catalog": "mip",
     "genie_space_id": GENIE_SPACE_ID,
     "runtime_application_id": "runtime-client",
+    "workspace_host": "https://workspace.cloud.databricks.com",
     "proxy_caller_application_id": PROXY_CLIENT_ID,
     "proxy_caller_credential_id": PROXY_CREDENTIAL_ID,
     "proxy_caller_secret_reference": PROXY_SECRET_REFERENCE,
@@ -68,15 +74,30 @@ RESOURCE_CONTRACT = {
     "supervisor_creator": "runtime-client",
     "supervisor_endpoint": "supervisor-endpoint",
     "supervisor_endpoint_id": "supervisor-endpoint-id",
+    "supervisor_endpoint_creator": "runtime-client",
     "gateway_endpoint": "green-gateway",
     "gateway_endpoint_id": "green-gateway-id",
     "gateway_endpoint_creator": "runtime-client",
+    "gateway_endpoint_description": "test-reviewed-description",
+    "gateway_endpoint_task": "agent/v1/responses",
+    "gateway_endpoint_route_optimized": "false",
+    "gateway_endpoint_budget_policy": "none",
+    "gateway_endpoint_email_notifications": "none",
+    "gateway_endpoint_deprecated_rate_limits": "[]",
+    "gateway_source_hash": "1" * 64,
+    "gateway_resource_hash": "2" * 64,
+    "gateway_model_family": "mip.audit.proxy",
     "gateway_model_name": "mip.audit.proxy",
     "gateway_model_version": "7",
     "gateway_model_source": "models:/mip.audit.proxy/7",
+    "gateway_model_owner": "runtime-client",
+    "gateway_experiment_base": "proxy",
+    "gateway_experiment_acl_json": '{"test":"acl"}',
+    "gateway_experiment_acl_sha256": "3" * 64,
     "gateway_inference_table_family": "mip.audit.mip_agent_gateway_growth_agent",
     "gateway_experiment_name": "/Users/runtime-client/proxy-deadbeef",
     "gateway_experiment_id": "experiment-7",
+    "gateway_experiment_owner": "runtime-client",
     "gateway_inference_table": "mip.audit.inference",
 }
 RESOURCE_DIGEST = gateway_exact_resource_digest(RESOURCE_CONTRACT)
@@ -175,6 +196,9 @@ def _payload(*, git_sha: str = GIT_SHA) -> dict[str, object]:
         "MIP_AI_GATEWAY_EXPERIMENT_ID": "experiment-7",
         "MIP_AI_GATEWAY_INFERENCE_TABLE": "mip.audit.inference",
         "MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SHA256": RESOURCE_DIGEST,
+        "MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_CONTRACT_JSON": (
+            canonical_gateway_runtime_resource_contract(RESOURCE_CONTRACT)
+        ),
     }
     return {
         "source_code_path": SOURCE,
@@ -198,6 +222,7 @@ def _binding() -> str:
         supervisor_id="supervisor-id",
         upstream_endpoint="supervisor-endpoint",
         runtime_application_id="runtime-client",
+        workspace_host="https://workspace.cloud.databricks.com",
         model_name="mip.audit.proxy",
         model_version=7,
         inference_table="mip.audit.inference",
@@ -205,6 +230,33 @@ def _binding() -> str:
         proxy_caller_credential_id=PROXY_CREDENTIAL_ID,
         proxy_caller_secret_reference=PROXY_SECRET_REFERENCE,
     )
+
+
+def _prior_v2_proxy_resources() -> dict[str, str]:
+    contract = {key: value for key, value in RESOURCE_CONTRACT.items() if key != "workspace_host"}
+    contract["proof_version"] = PRIOR_GATEWAY_RUNTIME_RESOURCE_PROOF_VERSION
+    return {
+        **contract,
+        "resource_digest": prior_v2_gateway_resource_digest(contract),
+    }
+
+
+def _prior_v2_payload() -> dict[str, object]:
+    payload = json.loads(json.dumps(_immutable_payload()))
+    resources = _prior_v2_proxy_resources()
+    contract = {key: value for key, value in resources.items() if key != "resource_digest"}
+    replacements = {
+        "MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SHA256": resources["resource_digest"],
+        "MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_CONTRACT_JSON": json.dumps(
+            contract,
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+    }
+    for item in payload["env_vars"]:
+        if item["name"] in replacements:
+            item["value"] = replacements[item["name"]]
+    return payload
 
 
 def _deployment(
@@ -715,6 +767,7 @@ def test_signed_proxy_retirement_journal_survives_process_loss_and_completes(
         supervisor_id="supervisor-id",
         upstream_endpoint="supervisor-endpoint",
         runtime_application_id="runtime-client",
+        workspace_host="https://workspace.cloud.databricks.com",
         model_name="mip.audit.proxy",
         model_version=7,
         inference_table="mip.audit.inference",
@@ -727,6 +780,9 @@ def test_signed_proxy_retirement_journal_survives_process_loss_and_completes(
         "MIP_AGENT_PROXY_CREDENTIAL_ID": green_credential_id,
         "MIP_AGENT_PROXY_SECRET_REFERENCE": green_secret_reference,
         "MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SHA256": green_digest,
+        "MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_CONTRACT_JSON": (
+            canonical_gateway_runtime_resource_contract(green_contract)
+        ),
     }
     for item in green_payload["env_vars"]:
         if item["name"] in green_values:
@@ -1102,10 +1158,169 @@ def test_stored_v6_proof_authenticates_bounded_pre_owner_contract(
 def _legacy_gateway_resources() -> dict[str, str]:
     contract = {field: f"legacy-{field}" for field in LEGACY_GATEWAY_RESOURCE_FIELDS}
     contract["proof_version"] = GATEWAY_RUNTIME_RESOURCE_PROOF_VERSION
+    contract["workspace_host"] = RESOURCE_CONTRACT["workspace_host"]
     return {
         **contract,
         "resource_digest": legacy_gateway_resource_digest(contract),
     }
+
+
+def _prior_v2_legacy_gateway_resources() -> dict[str, str]:
+    contract = {
+        field: f"prior-{field}"
+        for field in LEGACY_GATEWAY_RESOURCE_FIELDS
+        if field != "workspace_host"
+    }
+    contract["proof_version"] = PRIOR_GATEWAY_RUNTIME_RESOURCE_PROOF_VERSION
+    return {
+        **contract,
+        "resource_digest": prior_v2_gateway_resource_digest(contract),
+    }
+
+
+def test_prior_v2_payload_binding_preserves_old_hash_and_rejects_contradiction() -> None:
+    payload = _prior_v2_payload()
+    binding = payload_gateway_binding(payload)
+
+    environment = {
+        item["name"]: item["value"]
+        for item in payload["env_vars"]
+        if "value" in item
+    }
+    expected_binding = hashlib.sha256(
+        "\0".join(
+            environment[name]
+            for name in (
+                "MIP_AGENT_SERVING_ENDPOINT",
+                "MIP_AGENT_SUPERVISOR_ID",
+                "MIP_AGENT_SUPERVISOR_ENDPOINT",
+                "MIP_AGENT_RUNTIME_CLIENT_ID",
+                "MIP_AI_GATEWAY_AGENT_MODEL",
+                "MIP_AI_GATEWAY_AGENT_MODEL_VERSION",
+                "MIP_AI_GATEWAY_INFERENCE_TABLE",
+                "MIP_AGENT_PROXY_CLIENT_ID",
+                "MIP_AGENT_PROXY_CREDENTIAL_ID",
+                "MIP_AGENT_PROXY_SECRET_REFERENCE",
+            )
+        ).encode()
+    ).hexdigest()
+    assert binding == expected_binding
+    contract_item = next(
+        item
+        for item in payload["env_vars"]
+        if item["name"] == "MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_CONTRACT_JSON"
+    )
+    contract = json.loads(contract_item["value"])
+    contract["gateway_endpoint"] = "different-gateway"
+    contract_item["value"] = json.dumps(contract, sort_keys=True, separators=(",", ":"))
+    with pytest.raises(RuntimeError, match="contradicts its signed proof"):
+        payload_gateway_binding(payload)
+
+
+def test_signed_prior_v6_record_loads_and_uses_transition_live_proof(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _workspace()
+    monkeypatch.setattr(rollback, "_health", lambda *_a, **_kw: (GIT_SHA, _binding(), LEASE_ID))
+    rollback.capture_current(
+        workspace,
+        app_name=APP_NAME,
+        scope="mip",
+        payload=_payload(),
+        base_url="https://mip.example",
+        bearer_token="token",
+        expected_git_sha=GIT_SHA,
+        expected_gateway_binding=_binding(),
+        **CAPTURE_ARGS,
+    )
+    record = _record(workspace)
+    payload = _prior_v2_payload()
+    resources = _prior_v2_proxy_resources()
+    record.update(
+        payload=payload,
+        payload_sha256=rollback._payload_digest(payload),
+        gateway_binding_sha256=payload_gateway_binding(payload),
+        gateway_resources=resources,
+    )
+    rollback._save_record(workspace, scope="mip", record=record)
+    loaded = rollback._load_record(
+        workspace,
+        app_name=APP_NAME,
+        scope="mip",
+        expected_lakebase_instance="mip-app-state",
+    )
+    observed: list[dict[str, str]] = []
+    monkeypatch.setattr(
+        rollback,
+        "assert_live_legacy_gateway_resources",
+        lambda _workspace, *, expected: observed.append(expected) or expected,
+    )
+    monkeypatch.setattr(
+        rollback,
+        "resolve_exact_resource_proof",
+        lambda *_args, **_kwargs: pytest.fail("prior v2 must not enter current proof"),
+    )
+
+    proof = rollback._stored_resource_proof(workspace, record=loaded)
+
+    assert proof.digest == resources["resource_digest"]
+    assert observed == [resources]
+
+
+def test_signed_prior_v5_record_loads_without_becoming_current(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _workspace()
+    monkeypatch.setattr(rollback, "_health", lambda *_a, **_kw: (GIT_SHA, _binding(), LEASE_ID))
+    rollback.capture_current(
+        workspace,
+        app_name=APP_NAME,
+        scope="mip",
+        payload=_payload(),
+        base_url="https://mip.example",
+        bearer_token="token",
+        expected_git_sha=GIT_SHA,
+        expected_gateway_binding=_binding(),
+        **CAPTURE_ARGS,
+    )
+    record = _record(workspace)
+    del workspace.secrets.values[("mip", rollback._record_key(APP_NAME))]
+    record.update(version=5, gateway_resources=_prior_v2_legacy_gateway_resources())
+    rollback._save_legacy_record(workspace, scope="mip", record=record)
+
+    loaded = rollback._load_record(
+        workspace,
+        app_name=APP_NAME,
+        scope="mip",
+        expected_lakebase_instance="mip-app-state",
+    )
+
+    assert loaded["version"] == 5
+    assert loaded["gateway_resources"]["proof_version"] == (
+        PRIOR_GATEWAY_RUNTIME_RESOURCE_PROOF_VERSION
+    )
+    observed: list[dict[str, str]] = []
+    monkeypatch.setattr(
+        rollback,
+        "assert_live_legacy_gateway_resources",
+        lambda _workspace, *, expected: observed.append(expected) or expected,
+    )
+    monkeypatch.setattr(
+        rollback,
+        "authenticated_reviewed_function_owner",
+        lambda *_args, **_kwargs: "reviewed-owner",
+    )
+    monkeypatch.setattr(rollback, "assert_reviewed_function_set", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        rollback,
+        "resolve_exact_resource_proof",
+        lambda *_args, **_kwargs: pytest.fail("prior v5 must not enter current proof"),
+    )
+
+    proof = rollback._stored_resource_proof(workspace, record=loaded)
+
+    assert proof.digest == loaded["gateway_resources"]["resource_digest"]
+    assert observed == [loaded["gateway_resources"]]
 
 
 def test_v5_stored_proof_requires_authenticated_reviewed_function_set(

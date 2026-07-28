@@ -47,6 +47,7 @@ def gateway_runtime_contract_for_scope(
     gateway_experiment_name: str,
     gateway_experiment_id: str,
     gateway_inference_table: str,
+    workspace_host: str = "https://workspace.cloud.databricks.com",
     proxy_caller_application_id: str = "proxy-client",
     proxy_caller_credential_id: str = "proxy-credential",
     proxy_caller_secret_reference: str = (
@@ -84,6 +85,7 @@ def gateway_runtime_contract_for_scope(
         "genie_space_id": genie_space_id,
         "proof_version": GATEWAY_RUNTIME_RESOURCE_PROOF_VERSION,
         "runtime_application_id": runtime_application_id,
+        "workspace_host": workspace_host,
         "proxy_caller_application_id": proxy_caller_application_id,
         "proxy_caller_credential_id": proxy_caller_credential_id,
         "proxy_caller_secret_reference": proxy_caller_secret_reference,

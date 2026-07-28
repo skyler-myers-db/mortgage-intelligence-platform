@@ -58,6 +58,7 @@ OLD_GATEWAY_ID = "old-gateway-id"
 PROXY_CLIENT_ID = "proxy-client"
 PROXY_CREDENTIAL_ID = "proxy-credential"
 PROXY_SECRET_REFERENCE = "{{secrets/mip-agent-proxy/oauth-client-secret-proxy-credential}}"
+WORKSPACE_HOST = "https://workspace.cloud.databricks.com"
 SIGNING_KEY = base64.urlsafe_b64encode(bytes(range(32))).decode().rstrip("=")
 PREVIOUS_SIGNING_KEY = base64.urlsafe_b64encode(bytes(reversed(range(32)))).decode().rstrip("=")
 MODEL_VERIFY_KEY = derive_gateway_proof_verify_key(
@@ -121,6 +122,7 @@ def _endpoint(*, gateway: bool = False) -> object:
                 served_entities=[
                     SimpleNamespace(
                         environment_vars={
+                            "DATABRICKS_HOST": WORKSPACE_HOST,
                             "MIP_UPSTREAM_SUPERVISOR_ENDPOINT": NEW_ENDPOINT,
                             "MIP_UPSTREAM_PROXY_CLIENT_ID": PROXY_CLIENT_ID,
                             "MIP_UPSTREAM_PROXY_CREDENTIAL_ID": PROXY_CREDENTIAL_ID,
@@ -149,6 +151,7 @@ def _workspace() -> object:
             raise AssertionError(name)
 
     return SimpleNamespace(
+        config=SimpleNamespace(host=WORKSPACE_HOST),
         workspace=_WorkspaceFiles(),
         serving_endpoints=_Endpoints(),
         apps=SimpleNamespace(
@@ -192,6 +195,7 @@ def _green_kwargs() -> dict[str, object]:
         supervisor_id=NEW_ID,
         supervisor_endpoint_id=NEW_ENDPOINT_ID,
         runtime_application_id=RUNTIME_ID,
+        workspace_host=WORKSPACE_HOST,
         model_name=model_family,
         experiment_name=DEFAULT_GATEWAY_AGENT_EXPERIMENT,
         inference_schema=schema,
@@ -650,6 +654,7 @@ def test_green_path_passes_proxy_credential_binding_to_gateway_verifier(
         supervisor_id=NEW_ID,
         supervisor_endpoint_id=NEW_ENDPOINT_ID,
         runtime_application_id=RUNTIME_ID,
+        workspace_host=WORKSPACE_HOST,
         model_name=model_family,
         experiment_name=DEFAULT_GATEWAY_AGENT_EXPERIMENT,
         inference_schema=schema,

@@ -29,6 +29,7 @@ from backend.agents.gateway_contract import (
     GATEWAY_WORKLOAD_SIZE,
     GATEWAY_WORKLOAD_TYPE,
     decode_gateway_attestation_base64,
+    reviewed_workspace_https_origin,
 )
 from backend.agents.gateway_live_resource_contract import (
     _experiment_acl_contract,
@@ -52,6 +53,7 @@ LEGACY_GATEWAY_RESOURCE_FIELDS = frozenset(
         "catalog",
         "genie_space_id",
         "runtime_application_id",
+        "workspace_host",
         "supervisor_canonical_name",
         "supervisor_display_name",
         "supervisor_contract_json",
@@ -87,6 +89,16 @@ LEGACY_GATEWAY_RESOURCE_FIELDS = frozenset(
         "gateway_inference_table",
     }
 )
+PRIOR_GATEWAY_RUNTIME_RESOURCE_PROOF_VERSION = "gateway-runtime-resource-proof-v2"
+_PROXY_RESOURCE_FIELDS = frozenset(
+    {
+        "proxy_caller_application_id",
+        "proxy_caller_credential_id",
+        "proxy_caller_secret_reference",
+    }
+)
+PRIOR_V2_LEGACY_GATEWAY_RESOURCE_FIELDS = LEGACY_GATEWAY_RESOURCE_FIELDS - {"workspace_host"}
+PRIOR_V2_GATEWAY_RESOURCE_FIELDS = PRIOR_V2_LEGACY_GATEWAY_RESOURCE_FIELDS | _PROXY_RESOURCE_FIELDS
 _IMMUTABLE_MODEL_SOURCE = re.compile(r"models:/m-[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 
 
@@ -103,6 +115,10 @@ def legacy_gateway_resource_digest(contract: Mapping[str, str]) -> str:
         raise ValueError("legacy Gateway resource contract fields are invalid")
     if contract.get("proof_version") != GATEWAY_RUNTIME_RESOURCE_PROOF_VERSION:
         raise ValueError("legacy Gateway resource contract version is invalid")
+    if contract.get("workspace_host") != reviewed_workspace_https_origin(
+        contract.get("workspace_host", "")
+    ):
+        raise ValueError("legacy Gateway resource workspace host is invalid")
     canonical = json.dumps(dict(contract), sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(canonical).hexdigest()
 
@@ -113,6 +129,8 @@ def validated_legacy_gateway_resources(value: object) -> dict[str, str]:
     ):
         raise RuntimeError("legacy App rollback Gateway resource contract is invalid")
     resources = dict(value)
+    if resources.get("proof_version") == PRIOR_GATEWAY_RUNTIME_RESOURCE_PROOF_VERSION:
+        return validated_prior_v2_gateway_resources(resources, proxy_aware=False)
     digest = resources.pop("resource_digest", "")
     try:
         actual = legacy_gateway_resource_digest(resources)
@@ -123,15 +141,62 @@ def validated_legacy_gateway_resources(value: object) -> dict[str, str]:
     return {**resources, "resource_digest": digest}
 
 
-def _legacy_resource_hash(
+def prior_v2_gateway_resource_digest(contract: Mapping[str, str]) -> str:
+    """Digest only one exact historical v2 resource schema."""
+
+    fields = set(contract)
+    if fields not in {
+        PRIOR_V2_LEGACY_GATEWAY_RESOURCE_FIELDS,
+        PRIOR_V2_GATEWAY_RESOURCE_FIELDS,
+    } or any(not isinstance(value, str) or not value for value in contract.values()):
+        raise ValueError("prior v2 Gateway resource contract fields are invalid")
+    if contract.get("proof_version") != PRIOR_GATEWAY_RUNTIME_RESOURCE_PROOF_VERSION:
+        raise ValueError("prior v2 Gateway resource contract version is invalid")
+    canonical = json.dumps(dict(contract), sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def validated_prior_v2_gateway_resources(
+    value: object,
+    *,
+    proxy_aware: bool | None = None,
+) -> dict[str, str]:
+    """Validate prior v2 bytes without promoting them to the current proof schema."""
+
+    if not isinstance(value, dict) or any(
+        not isinstance(key, str) or not isinstance(item, str) for key, item in value.items()
+    ):
+        raise RuntimeError("prior v2 Gateway resource contract is invalid")
+    resources = dict(value)
+    digest = resources.pop("resource_digest", "")
+    expected_fields = (
+        PRIOR_V2_GATEWAY_RESOURCE_FIELDS
+        if proxy_aware is True
+        else PRIOR_V2_LEGACY_GATEWAY_RESOURCE_FIELDS
+        if proxy_aware is False
+        else None
+    )
+    if expected_fields is not None and set(resources) != expected_fields:
+        raise RuntimeError("prior v2 Gateway resource contract is invalid")
+    try:
+        actual = prior_v2_gateway_resource_digest(resources)
+    except ValueError as exc:
+        raise RuntimeError("prior v2 Gateway resource contract is invalid") from exc
+    if not digest or digest != actual:
+        raise RuntimeError("prior v2 Gateway resource contract digest is invalid")
+    return {**resources, "resource_digest": digest}
+
+
+def _resource_hash(
     contract: Mapping[str, str],
     *,
     attestation_verify_key: str,
+    include_workspace_host: bool,
 ) -> str:
     inference = contract["gateway_inference_table_family"].split(".", 2)
     if len(inference) != 3 or not attestation_verify_key:
         raise RuntimeError("legacy Gateway allocation scope is invalid")
-    allocation = {
+    allocation: dict[str, object] = {
         "source_hash": contract["gateway_source_hash"],
         "supervisor_id": contract["supervisor_id"],
         "supervisor_endpoint_id": contract["supervisor_endpoint_id"],
@@ -158,14 +223,35 @@ def _legacy_resource_hash(
             "traffic_percentage": GATEWAY_TRAFFIC_PERCENTAGE,
         },
     }
+    if include_workspace_host:
+        allocation["workspace_host"] = contract["workspace_host"]
+    if _PROXY_RESOURCE_FIELDS.issubset(contract):
+        allocation.update(
+            proxy_caller_application_id=contract["proxy_caller_application_id"],
+            proxy_caller_credential_id=contract["proxy_caller_credential_id"],
+            proxy_caller_secret_reference=contract["proxy_caller_secret_reference"],
+        )
     canonical = json.dumps(allocation, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(canonical).hexdigest()
+
+
+def _legacy_resource_hash(
+    contract: Mapping[str, str],
+    *,
+    attestation_verify_key: str,
+) -> str:
+    return _resource_hash(
+        contract,
+        attestation_verify_key=attestation_verify_key,
+        include_workspace_host=True,
+    )
 
 
 def _verified_resource_environment(
     entity: object,
     *,
     contract: Mapping[str, str],
+    prior_v2: bool = False,
 ) -> dict[str, str]:
     raw = field(entity, "environment_vars") or {}
     if not isinstance(raw, Mapping):
@@ -176,11 +262,14 @@ def _verified_resource_environment(
         if str(key) in GATEWAY_RUNTIME_RESOURCE_ENV
     }
     contract_json = json.dumps(dict(contract), sort_keys=True, separators=(",", ":"))
-    if environment.get(
-        "MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_CONTRACT_JSON"
-    ) != contract_json or environment.get(
-        "MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SHA256"
-    ) != legacy_gateway_resource_digest(contract):
+    if environment.get("MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_CONTRACT_JSON") != contract_json:
+        raise RuntimeError("legacy Gateway served resource binding drifted")
+    digest = (
+        prior_v2_gateway_resource_digest(contract)
+        if prior_v2
+        else legacy_gateway_resource_digest(contract)
+    )
+    if environment.get("MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SHA256") != digest:
         raise RuntimeError("legacy Gateway served resource binding drifted")
     trusted = {
         os.environ.get("MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY", "").strip(),
@@ -210,6 +299,7 @@ def _assert_endpoint(
     workspace: Any,
     *,
     contract: Mapping[str, str],
+    prior_v2: bool = False,
 ) -> dict[str, str]:
     supervisor = workspace.serving_endpoints.get(contract["supervisor_endpoint"])
     if (
@@ -252,7 +342,11 @@ def _assert_endpoint(
         legacy_models and not legacy_served_model_matches(legacy_models[0], entity)
     ):
         raise RuntimeError("legacy Gateway served-model alias drifted")
-    environment = _verified_resource_environment(entity, contract=contract)
+    environment = _verified_resource_environment(
+        entity,
+        contract=contract,
+        prior_v2=prior_v2,
+    )
     served_name = f"mip-growth-supervisor-proxy-{contract['gateway_model_version']}"
     expected_environment = {
         **GATEWAY_STATIC_ENV,
@@ -265,6 +359,14 @@ def _assert_endpoint(
         "MIP_SUPERVISOR_CONTRACT_SHA256": contract["supervisor_contract_sha256"],
         "MLFLOW_EXPERIMENT_ID": contract["gateway_experiment_id"],
     }
+    if not prior_v2:
+        expected_environment["DATABRICKS_HOST"] = contract["workspace_host"]
+    if _PROXY_RESOURCE_FIELDS.issubset(contract):
+        expected_environment.update(
+            MIP_UPSTREAM_PROXY_CLIENT_ID=contract["proxy_caller_application_id"],
+            MIP_UPSTREAM_PROXY_CREDENTIAL_ID=contract["proxy_caller_credential_id"],
+            MIP_UPSTREAM_PROXY_CLIENT_SECRET=contract["proxy_caller_secret_reference"],
+        )
     if dict(field(entity, "environment_vars") or {}) != expected_environment:
         raise RuntimeError("legacy Gateway served environment drifted")
     if (
@@ -313,17 +415,23 @@ def _assert_endpoint(
     return environment
 
 
-def assert_live_legacy_gateway_resources(
+def _assert_live_resources(
     workspace: Any,
     *,
-    expected: Mapping[str, str],
+    resources: dict[str, str],
+    prior_v2: bool,
     model_registry: Any | None = None,
     tracking_client: Any | None = None,
 ) -> dict[str, str]:
-    """Re-prove every signed v5 resource without accepting it as the v6 schema."""
-
-    resources = validated_legacy_gateway_resources(dict(expected))
     contract = {key: value for key, value in resources.items() if key != "resource_digest"}
+    try:
+        authenticated_workspace_host = reviewed_workspace_https_origin(
+            str(field(field(workspace, "config"), "host") or "")
+        )
+    except ValueError as exc:
+        raise RuntimeError("authenticated legacy Gateway workspace host is invalid") from exc
+    if not prior_v2 and contract["workspace_host"] != authenticated_workspace_host:
+        raise RuntimeError("legacy Gateway workspace host binding drifted")
     runtime_id = contract["runtime_application_id"]
     metadata = workspace.api_client.do(
         "GET",
@@ -347,10 +455,15 @@ def assert_live_legacy_gateway_resources(
         catalog=contract["catalog"],
     ):
         raise RuntimeError("legacy managed Supervisor contract drifted")
-    environment = _assert_endpoint(workspace, contract=contract)
-    resource_hash = _legacy_resource_hash(
+    environment = _assert_endpoint(
+        workspace,
+        contract=contract,
+        prior_v2=prior_v2,
+    )
+    resource_hash = _resource_hash(
         contract,
         attestation_verify_key=environment["MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY"],
+        include_workspace_host=not prior_v2,
     )
     inference = contract["gateway_inference_table_family"].split(".", 2)
     if (
@@ -417,3 +530,48 @@ def assert_live_legacy_gateway_resources(
     ):
         raise RuntimeError("legacy Gateway experiment identity drifted")
     return resources
+
+
+def assert_live_prior_v2_gateway_resources(
+    workspace: Any,
+    *,
+    expected: Mapping[str, str],
+    model_registry: Any | None = None,
+    tracking_client: Any | None = None,
+) -> dict[str, str]:
+    """Authenticate prior v2 bytes and live resources only for transition/retirement."""
+
+    resources = validated_prior_v2_gateway_resources(dict(expected))
+    return _assert_live_resources(
+        workspace,
+        resources=resources,
+        prior_v2=True,
+        model_registry=model_registry,
+        tracking_client=tracking_client,
+    )
+
+
+def assert_live_legacy_gateway_resources(
+    workspace: Any,
+    *,
+    expected: Mapping[str, str],
+    model_registry: Any | None = None,
+    tracking_client: Any | None = None,
+) -> dict[str, str]:
+    """Re-prove a signed rollback Gateway without widening its proof schema."""
+
+    if expected.get("proof_version") == PRIOR_GATEWAY_RUNTIME_RESOURCE_PROOF_VERSION:
+        return assert_live_prior_v2_gateway_resources(
+            workspace,
+            expected=expected,
+            model_registry=model_registry,
+            tracking_client=tracking_client,
+        )
+    resources = validated_legacy_gateway_resources(dict(expected))
+    return _assert_live_resources(
+        workspace,
+        resources=resources,
+        prior_v2=False,
+        model_registry=model_registry,
+        tracking_client=tracking_client,
+    )

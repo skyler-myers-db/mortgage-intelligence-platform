@@ -34,11 +34,13 @@ _TABLE = "mip.audit.mip_agent_gateway_growth_agent"
 _PROXY_CLIENT_ID = "proxy-client"
 _PROXY_CREDENTIAL_ID = "proxy-credential"
 _PROXY_SECRET_REFERENCE = "{{secrets/mip-agent-proxy/oauth-client-secret-proxy-credential}}"
+_WORKSPACE_HOST = "https://workspace.cloud.databricks.com"
 
 
 def _settings(**overrides: object) -> Settings:
     values: dict[str, object] = {
         "mip_agent_orchestrator": True,
+        "databricks_host": _WORKSPACE_HOST,
         "mip_agent_supervisor_id": "supervisor-1",
         "mip_agent_serving_endpoint": "mip-growth-agent-gateway",
         "mip_ai_gateway_endpoint": "mip-growth-agent-gateway",
@@ -73,6 +75,7 @@ def _settings(**overrides: object) -> Settings:
                 supervisor_id=str(binding_values[1]),
                 upstream_endpoint=str(binding_values[2]),
                 runtime_application_id=str(binding_values[3]),
+                workspace_host=str(values["databricks_host"]),
                 model_name=str(binding_values[4]),
                 model_version=int(str(binding_values[5])),
                 inference_table=str(binding_values[6]),
@@ -86,6 +89,7 @@ def _settings(**overrides: object) -> Settings:
         catalog=str(values.get("mip_default_catalog") or ""),
         genie_space_id=str(values.get("genie_space_id") or ""),
         runtime_application_id=str(values.get("mip_agent_runtime_client_id") or ""),
+        workspace_host=str(values.get("databricks_host") or ""),
         supervisor_id=str(values.get("mip_agent_supervisor_id") or ""),
         supervisor_endpoint=str(values.get("mip_agent_supervisor_endpoint") or ""),
         gateway_endpoint=str(values.get("mip_agent_serving_endpoint") or ""),
@@ -193,6 +197,7 @@ class _ServingEndpoints:
                         environment_vars={
                             **GATEWAY_STATIC_ENV,
                             **_resource_environment(),
+                            "DATABRICKS_HOST": _WORKSPACE_HOST,
                             "MIP_UPSTREAM_SUPERVISOR_ID": "supervisor-1",
                             "MIP_UPSTREAM_SUPERVISOR_ENDPOINT": self.upstream,
                             "MIP_UPSTREAM_SUPERVISOR_CREATOR": "runtime-client",

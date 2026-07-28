@@ -13,6 +13,7 @@ from tools.databricks.app_rollback_record_contract import (
 )
 from tools.databricks.export_gateway_runtime_contract import ExactGatewayRuntimeProof
 from tools.databricks.gateway_legacy_rollback import (
+    PRIOR_GATEWAY_RUNTIME_RESOURCE_PROOF_VERSION,
     validated_legacy_gateway_resources,
 )
 
@@ -53,11 +54,7 @@ def resolve_stored_gateway_resource_proof(
             allow_legacy_segment_determinism=True,
         )
         return ExactGatewayRuntimeProof(
-            contract={
-                key: value
-                for key, value in verified.items()
-                if key != "resource_digest"
-            },
+            contract={key: value for key, value in verified.items() if key != "resource_digest"},
             digest=verified["resource_digest"],
         )
 
@@ -80,6 +77,18 @@ def resolve_stored_gateway_resource_proof(
         legacy_function_contract = not owner
     if legacy_function_contract:
         owner = authenticate_owner(workspace, catalog=resources["catalog"])
+    if resources["proof_version"] == PRIOR_GATEWAY_RUNTIME_RESOURCE_PROOF_VERSION:
+        verified = assert_legacy_resources(workspace, expected=resources)
+        assert_function_set(
+            workspace,
+            catalog=resources["catalog"],
+            expected_owner=owner,
+            allow_legacy_segment_determinism=legacy_function_contract,
+        )
+        return ExactGatewayRuntimeProof(
+            contract={key: value for key, value in verified.items() if key != "resource_digest"},
+            digest=verified["resource_digest"],
+        )
     return resolve_exact_resource_proof(
         workspace,
         supervisor_name=resources["supervisor_canonical_name"],

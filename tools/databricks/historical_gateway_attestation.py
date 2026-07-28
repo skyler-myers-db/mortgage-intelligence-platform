@@ -14,6 +14,7 @@ from backend.agents.gateway_contract import (
     GATEWAY_RUNTIME_RESOURCE_PROOF_VERSION,
     gateway_exact_resource_digest,
     gateway_model_version_tags,
+    reviewed_workspace_https_origin,
 )
 from tools.databricks.agent_runtime_access import assert_runtime_creator
 from tools.databricks.experiment_acl_contract import resolve_exact_experiment_acl
@@ -51,6 +52,7 @@ def _environment(details: Any) -> dict[str, str]:
         raise RuntimeError("legacy Gateway environment is malformed") from exc
     required = {
         "MIP_UPSTREAM_SUPERVISOR_ID",
+        "DATABRICKS_HOST",
         "MIP_UPSTREAM_SUPERVISOR_ENDPOINT",
         "MIP_UPSTREAM_SUPERVISOR_CREATOR",
         "MIP_UPSTREAM_PROXY_CLIENT_ID",
@@ -110,6 +112,12 @@ def attest_legacy_gateway(
 ) -> dict[str, str]:
     """Build an exact reviewed record from signed model and live server facts."""
 
+    try:
+        workspace_host = reviewed_workspace_https_origin(
+            str(getattr(getattr(workspace, "config", None), "host", "") or "")
+        )
+    except ValueError as exc:
+        raise RuntimeError("authenticated legacy Gateway workspace host is invalid") from exc
     endpoint_id = _text(getattr(details, "id", None))
     endpoint_creator = assert_runtime_creator(
         getattr(details, "creator", None),
@@ -125,6 +133,7 @@ def attest_legacy_gateway(
         raise RuntimeError("legacy Gateway immutable endpoint contract drifted")
     environment = _environment(details)
     expected_environment = {
+        "DATABRICKS_HOST": workspace_host,
         "MIP_UPSTREAM_SUPERVISOR_CREATOR": runtime_application_id,
         "MIP_SUPERVISOR_CATALOG": catalog,
         "MIP_SUPERVISOR_GENIE_SPACE_ID": genie_space_id,
@@ -204,6 +213,7 @@ def attest_legacy_gateway(
         supervisor_id=supervisor_id,
         supervisor_endpoint_id=supervisor_endpoint_id,
         runtime_application_id=runtime_application_id,
+        workspace_host=workspace_host,
         model_name=signed["model_family"],
         experiment_name=signed["experiment_base"],
         inference_schema=signed["inference_schema"],
@@ -244,6 +254,7 @@ def attest_legacy_gateway(
         supervisor_endpoint_id=supervisor_endpoint_id,
         upstream_endpoint=supervisor_endpoint,
         runtime_application_id=runtime_application_id,
+        workspace_host=workspace_host,
         proxy_caller_application_id=proxy_application_id,
         proxy_caller_credential_id=proxy_credential_id,
         proxy_caller_secret_reference=proxy_secret_reference,
@@ -295,6 +306,7 @@ def attest_legacy_gateway(
         "catalog": catalog,
         "genie_space_id": genie_space_id,
         "runtime_application_id": runtime_application_id,
+        "workspace_host": workspace_host,
         "supervisor_canonical_name": supervisor_name,
         "supervisor_display_name": supervisor_display_name,
         "supervisor_contract_json": supervisor_json,

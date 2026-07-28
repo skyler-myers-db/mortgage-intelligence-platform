@@ -51,11 +51,13 @@ PROXY_CREDENTIAL_ID = "proxy-credential"
 PROXY_SECRET_REFERENCE = (
     "{{secrets/mip-agent-proxy/oauth-client-secret-proxy-credential}}"
 )
+WORKSPACE_HOST = "https://workspace.cloud.databricks.com"
 
 
 def _signed_resource_environment(values: dict[str, object]) -> dict[str, str]:
     catalog = str(values["mip_default_catalog"])
     runtime_id = str(values["mip_agent_runtime_client_id"])
+    workspace_host = str(values["databricks_host"])
     supervisor_id = str(values["mip_agent_supervisor_id"])
     supervisor_endpoint = str(values["mip_agent_supervisor_endpoint"])
     gateway_endpoint = str(values["mip_agent_serving_endpoint"])
@@ -86,6 +88,7 @@ def _signed_resource_environment(values: dict[str, object]) -> dict[str, str]:
         "catalog": catalog,
         "genie_space_id": genie_space_id,
         "runtime_application_id": runtime_id,
+        "workspace_host": workspace_host,
         "supervisor_canonical_name": "Mortgage Growth Agent",
         "supervisor_display_name": "Mortgage Growth Agent",
         "supervisor_contract_json": supervisor_json,
@@ -110,6 +113,7 @@ def _signed_resource_environment(values: dict[str, object]) -> dict[str, str]:
             supervisor_id=supervisor_id,
             supervisor_endpoint_id=SUPERVISOR_ENDPOINT_ID,
             runtime_application_id=runtime_id,
+            workspace_host=workspace_host,
             model_name=model_name,
             experiment_name="proxy",
             inference_schema=inference_table.split(".", 2)[1],
@@ -154,6 +158,7 @@ def _signed_resource_environment(values: dict[str, object]) -> dict[str, str]:
 def runtime_settings(**overrides: object) -> Settings:
     values: dict[str, object] = {
         "mip_agent_orchestrator": True,
+        "databricks_host": WORKSPACE_HOST,
         "mip_agent_serving_endpoint": GATEWAY_ENDPOINT,
         "mip_agent_supervisor_endpoint": SUPERVISOR_ENDPOINT,
         "mip_agent_supervisor_id": SUPERVISOR_ID,
@@ -170,6 +175,7 @@ def runtime_settings(**overrides: object) -> Settings:
             supervisor_id=SUPERVISOR_ID,
             upstream_endpoint=SUPERVISOR_ENDPOINT,
             runtime_application_id="runtime-client",
+            workspace_host=WORKSPACE_HOST,
             model_name=DEFAULT_GATEWAY_AGENT_MODEL,
             model_version=MODEL_VERSION,
             inference_table=INFERENCE_TABLE,
@@ -246,6 +252,7 @@ def gateway_endpoint_details(
                         **_signed_resource_environment(
                             {
                                 "mip_default_catalog": "mip",
+                                "databricks_host": WORKSPACE_HOST,
                                 "mip_agent_runtime_client_id": "runtime-client",
                                 "mip_agent_supervisor_id": SUPERVISOR_ID,
                                 "mip_agent_supervisor_endpoint": SUPERVISOR_ENDPOINT,
@@ -263,6 +270,7 @@ def gateway_endpoint_details(
                             }
                         ),
                         "MIP_UPSTREAM_SUPERVISOR_ID": SUPERVISOR_ID,
+                        "DATABRICKS_HOST": WORKSPACE_HOST,
                         "MIP_UPSTREAM_SUPERVISOR_ENDPOINT": upstream_endpoint,
                         "MIP_UPSTREAM_SUPERVISOR_CREATOR": "runtime-client",
                         "MIP_UPSTREAM_PROXY_CLIENT_ID": PROXY_CLIENT_ID,

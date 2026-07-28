@@ -34,6 +34,7 @@ UPSTREAM = "mip-mortgage-growth-supervisor-0123456789ab"
 PROXY_CLIENT_ID = "proxy-client"
 PROXY_CREDENTIAL_ID = "proxy-credential"
 PROXY_SECRET_REFERENCE = "{{secrets/mip-agent-proxy/oauth-client-secret-proxy-credential}}"
+WORKSPACE_HOST = "https://workspace.cloud.databricks.com"
 SIGNING_KEY = base64.urlsafe_b64encode(b"u" * 32).decode("ascii").rstrip("=")
 VERIFY_KEY = derive_gateway_proof_verify_key(SIGNING_KEY)
 PREVIOUS_SIGNING_KEY = base64.urlsafe_b64encode(b"v" * 32).decode("ascii").rstrip("=")
@@ -73,6 +74,7 @@ def _contract(
         supervisor_id=supervisor_id,
         supervisor_endpoint_id=supervisor_endpoint_id,
         runtime_application_id=runtime_application_id,
+        workspace_host=WORKSPACE_HOST,
         model_name=MODEL_FAMILY,
         experiment_name=experiment,
         inference_schema="audit",
@@ -581,7 +583,7 @@ def _workspace(
             item.name = item_name
     grants = _Grants(values)
     return SimpleNamespace(
-        config=SimpleNamespace(workspace_id="workspace-id"),
+        config=SimpleNamespace(workspace_id="workspace-id", host=WORKSPACE_HOST),
         get_workspace_id=lambda: "workspace-id",
         service_principals=SimpleNamespace(
             list=lambda **_kwargs: iter(

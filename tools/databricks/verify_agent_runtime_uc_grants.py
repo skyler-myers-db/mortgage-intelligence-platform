@@ -8,7 +8,10 @@ from typing import Any
 
 from mlflow import MlflowClient
 
-from backend.agents.gateway_contract import DEFAULT_GATEWAY_AGENT_EXPERIMENT
+from backend.agents.gateway_contract import (
+    DEFAULT_GATEWAY_AGENT_EXPERIMENT,
+    reviewed_workspace_https_origin,
+)
 from tools.databricks.agent_runtime_uc_baseline import (
     _ACCOUNT_USERS_DIRECT,
     _CATALOG_INFORMATION_SCHEMA_TABLES,
@@ -292,6 +295,12 @@ def verify_effective_uc_boundary(
         workspace,
         application_id=principal,
     )
+    try:
+        workspace_host = reviewed_workspace_https_origin(
+            str(getattr(getattr(workspace, "config", None), "host", "") or "")
+        )
+    except ValueError as exc:
+        raise RuntimeError("authenticated runtime workspace host is invalid") from exc
 
     metastore_id = _strict_text(getattr(workspace.metastores.current(), "metastore_id", None))
     if not metastore_id:
@@ -836,6 +845,7 @@ def verify_effective_uc_boundary(
             supervisor_id=supervisor_identity,
             supervisor_endpoint_id=supervisor_endpoint_identity,
             runtime_application_id=principal,
+            workspace_host=workspace_host,
             catalog=catalog_name,
             genie_space_id=genie_id,
             inference_schema="audit",

@@ -26,7 +26,6 @@ from tests.fixtures.supervisor_runtime import (
 
 def _compose_settings() -> Settings:
     return runtime_settings(
-        databricks_host="dbc-test.cloud.databricks.com",
         databricks_warehouse_id="wh-123",
         genie_space_id="space-123",
         lakebase_host="lb-test",
@@ -279,7 +278,7 @@ def test_compose_degrades_when_endpoint_not_ready() -> None:
 
 def test_compose_degrades_when_orchestrator_disabled() -> None:
     settings = Settings(
-        databricks_host="dbc-test.cloud.databricks.com",
+        databricks_host="https://dbc-test.cloud.databricks.com",
         databricks_warehouse_id="wh-123",
         genie_space_id="space-abc",
         lakebase_host="lb-test",

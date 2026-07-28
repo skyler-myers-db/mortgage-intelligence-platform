@@ -27,6 +27,7 @@ from backend.agents.gateway_contract import (
     gateway_experiment_base,
     gateway_model_version_tags,
     gateway_resource_allocation_hash,
+    reviewed_workspace_https_origin,
 )
 from backend.agents.supervisor_contract import supervisor_contract_hash as supervisor_contract_hash
 from databricks.sdk.errors import NotFound, ResourceDoesNotExist
@@ -83,6 +84,7 @@ from tools.databricks.gateway_resource_identity import (
     GatewayAgentDeployment,
     _resolve_exact_experiment,
     _target_model_family,
+    existing_attested_gateway_source_version,
     gateway_agent_model_name,
     gateway_agent_source_hash,
     gateway_experiment_name,
@@ -108,12 +110,14 @@ _ROUTE_OPTIMIZED = GATEWAY_ROUTE_OPTIMIZED
 _TRAFFIC_PERCENTAGE = GATEWAY_TRAFFIC_PERCENTAGE
 _ENDPOINT_DESCRIPTION = GATEWAY_ENDPOINT_DESCRIPTION
 
+
 def gateway_resource_hash(
     *,
     source_hash: str,
     supervisor_id: str,
     supervisor_endpoint_id: str,
     runtime_application_id: str,
+    workspace_host: str,
     model_name: str,
     experiment_name: str,
     inference_schema: str,
@@ -130,6 +134,7 @@ def gateway_resource_hash(
         supervisor_id=supervisor_id,
         supervisor_endpoint_id=supervisor_endpoint_id,
         runtime_application_id=runtime_application_id,
+        workspace_host=workspace_host,
         model_name=model_name,
         experiment_name=experiment_name,
         inference_schema=inference_schema,
@@ -149,45 +154,13 @@ def gateway_resource_hash(
     )
 
 
-def _existing_source_version(
-    client: Any,
-    *,
-    model_name: str,
-    source_hash: str,
-    supervisor_id: str,
-    supervisor_endpoint_id: str,
-    upstream_endpoint: str,
-    runtime_application_id: str,
-    model_family: str,
-    experiment_base: str,
-    catalog: str,
-    genie_space_id: str,
-    inference_schema: str,
-    inference_table_prefix: str,
-) -> int | None:
-    ready, incomplete = attested_source_versions(
+def _existing_source_version(client: Any, **contract: str) -> int | None:
+    return existing_attested_gateway_source_version(
         client,
-        model_name=model_name,
-        source_hash=source_hash,
-        supervisor_id=supervisor_id,
-        supervisor_endpoint_id=supervisor_endpoint_id,
-        upstream_endpoint=upstream_endpoint,
-        runtime_application_id=runtime_application_id,
-        model_family=model_family,
-        experiment_base=experiment_base,
-        catalog=catalog,
-        genie_space_id=genie_space_id,
-        inference_schema=inference_schema,
-        inference_table_prefix=inference_table_prefix,
+        classify_versions=attested_source_versions,
         verify_attestation=verify_gateway_model_contract,
+        **contract,
     )
-    if incomplete:
-        candidate = incomplete[0]
-        raise RuntimeError(
-            f"Gateway candidate model {model_name} v{candidate.version} "
-            f"is not ready ({candidate.status})"
-        )
-    return max(ready) if ready else None
 
 
 def _start_mlflow_run() -> Any:
@@ -302,6 +275,7 @@ def gateway_endpoint_configuration_matches(
         supervisor_id=deployment.supervisor_id,
         upstream_endpoint=deployment.upstream_endpoint,
         runtime_application_id=deployment.runtime_application_id,
+        workspace_host=deployment.workspace_host,
         proxy_caller_application_id=deployment.proxy_caller_application_id,
         proxy_caller_credential_id=deployment.proxy_caller_credential_id,
         proxy_caller_secret_reference=deployment.proxy_caller_secret_reference,
@@ -342,11 +316,17 @@ def verify_gateway_responses_agent(
 ) -> None:
     """Fail closed unless the ready endpoint proves the exact governed boundary."""
 
+    authenticated_workspace_host = reviewed_workspace_https_origin(
+        str(getattr(getattr(workspace, "config", None), "host", "") or "")
+    )
+    if deployment.workspace_host != authenticated_workspace_host:
+        raise RuntimeError("Gateway ResponsesAgent workspace host binding drifted")
     expected_resource_hash = gateway_resource_hash(
         source_hash=deployment.source_hash,
         supervisor_id=deployment.supervisor_id,
         supervisor_endpoint_id=deployment.supervisor_endpoint_id,
         runtime_application_id=deployment.runtime_application_id,
+        workspace_host=deployment.workspace_host,
         model_name=deployment.model_family,
         experiment_name=deployment.experiment_base,
         inference_schema=deployment.inference_table.split(".", 2)[1],
@@ -429,6 +409,7 @@ def verify_gateway_responses_agent(
         supervisor_id=deployment.supervisor_id,
         upstream_endpoint=deployment.upstream_endpoint,
         runtime_application_id=deployment.runtime_application_id,
+        workspace_host=deployment.workspace_host,
         proxy_caller_application_id=deployment.proxy_caller_application_id,
         proxy_caller_credential_id=deployment.proxy_caller_credential_id,
         proxy_caller_secret_reference=deployment.proxy_caller_secret_reference,
@@ -519,6 +500,9 @@ def ensure_gateway_responses_agent(
 
     require_gateway_model_attestation_signing_authority()
     lease_check()
+    workspace_host = reviewed_workspace_https_origin(
+        str(getattr(getattr(workspace, "config", None), "host", "") or "")
+    )
     attestation_verify_key = os.environ.get("MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY", "").strip()
     upstream_details = workspace.serving_endpoints.get(upstream_endpoint)
     assert_runtime_creator(
@@ -549,6 +533,7 @@ def ensure_gateway_responses_agent(
         supervisor_id=supervisor_id,
         supervisor_endpoint_id=supervisor_endpoint_id,
         runtime_application_id=expected_creator_application_id,
+        workspace_host=workspace_host,
         model_name=model_family,
         experiment_name=experiment_family,
         inference_schema=inference_schema,
@@ -774,6 +759,7 @@ def ensure_gateway_responses_agent(
         supervisor_id=supervisor_id,
         upstream_endpoint=upstream_endpoint,
         runtime_application_id=expected_creator_application_id,
+        workspace_host=workspace_host,
         proxy_caller_application_id=proxy_caller_application_id,
         proxy_caller_credential_id=proxy_caller_credential_id,
         proxy_caller_secret_reference=proxy_caller_secret_reference,
@@ -879,6 +865,7 @@ def ensure_gateway_responses_agent(
         supervisor_endpoint_id=supervisor_endpoint_id,
         upstream_endpoint=upstream_endpoint,
         runtime_application_id=expected_creator_application_id,
+        workspace_host=workspace_host,
         proxy_caller_application_id=proxy_caller_application_id,
         proxy_caller_credential_id=proxy_caller_credential_id,
         proxy_caller_secret_reference=proxy_caller_secret_reference,

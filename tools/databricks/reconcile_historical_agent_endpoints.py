@@ -33,6 +33,10 @@ from databricks.sdk.errors import NotFound, ResourceDoesNotExist  # noqa: E402
 from tools.databricks import app_deployment_lease  # noqa: E402
 from tools.databricks import historical_supervisor_creation_admission as creation  # noqa: E402
 from tools.databricks.agent_runtime_access import assert_runtime_creator  # noqa: E402
+from tools.databricks.gateway_legacy_rollback import (  # noqa: E402
+    PRIOR_GATEWAY_RUNTIME_RESOURCE_PROOF_VERSION,
+    prior_v2_gateway_resource_digest,
+)
 from tools.databricks.historical_agent_endpoint_cleanup import (  # noqa: E402
     cleanup_runtime_endpoints,
 )
@@ -78,6 +82,12 @@ _HASH = r"[0-9a-f]{12}"
 
 def _text(value: object) -> str:
     return str(value or "").strip()
+
+
+def _historical_gateway_contract_digest(contract: Mapping[str, str]) -> str:
+    if contract.get("proof_version") == PRIOR_GATEWAY_RUNTIME_RESOURCE_PROOF_VERSION:
+        return prior_v2_gateway_resource_digest(contract)
+    return gateway_exact_resource_digest(contract)
 
 
 def _item_name(value: object) -> str:
@@ -639,7 +649,9 @@ def inventory_runtime_endpoints(
             supervisor_id=gateway_contracts[pin.name]["supervisor_id"],
             supervisor_endpoint=gateway_contracts[pin.name]["supervisor_endpoint"],
             supervisor_endpoint_id=gateway_contracts[pin.name]["supervisor_endpoint_id"],
-            contract_digest=gateway_exact_resource_digest(gateway_contracts[pin.name]),
+            contract_digest=_historical_gateway_contract_digest(
+                gateway_contracts[pin.name]
+            ),
             preserved=pin in all_gateway_pins,
         )
         for pin in sorted(actual_gateway_pins)

@@ -30,7 +30,9 @@ from tools.databricks.app_rollback_secret_scope import (
     assert_owned_app_rollback_scope,
 )
 from tools.databricks.gateway_legacy_rollback import (
+    PRIOR_GATEWAY_RUNTIME_RESOURCE_PROOF_VERSION,
     validated_legacy_gateway_resources,
+    validated_prior_v2_gateway_resources,
 )
 from tools.databricks.lakebase_instance_contract import (
     resolve_lakebase_instance_aliases,
@@ -217,6 +219,8 @@ def _validated_gateway_resources(value: object) -> dict[str, str]:
     ):
         raise RuntimeError("App rollback Gateway resource contract is invalid")
     resources = dict(value)
+    if resources.get("proof_version") == PRIOR_GATEWAY_RUNTIME_RESOURCE_PROOF_VERSION:
+        return validated_prior_v2_gateway_resources(resources, proxy_aware=True)
     digest = resources.pop("resource_digest", "")
     try:
         actual_digest = gateway_exact_resource_digest(resources)
@@ -324,9 +328,7 @@ def _validated_record(
         "app_service_principal_scim_id": app_scim_id,
         "gateway_binding_sha256": binding,
         "gateway_resources": gateway_resources,
-        "pending_proxy_credential_retirement_ids": (
-            pending_proxy_credential_retirement_ids
-        ),
+        "pending_proxy_credential_retirement_ids": (pending_proxy_credential_retirement_ids),
         "app_resources": app_resources,
         "app_resources_sha256": app_resource_contract_digest(app_resources),
     }

@@ -29,7 +29,9 @@ from tools.databricks.gateway_endpoint_contract import (
 from tools.databricks.provision_gateway_responses_agent import (
     GatewayAgentDeployment,
     gateway_agent_source_hash,
-    verify_gateway_responses_agent,
+)
+from tools.databricks.provision_gateway_responses_agent import (
+    verify_gateway_responses_agent as _verify_gateway_responses_agent,
 )
 from tools.databricks.serving_query_group_access import (
     managed_query_group_external_id,
@@ -44,6 +46,7 @@ _SUPERVISOR_ENDPOINT_ID = "supervisor-endpoint-id"
 _PROXY_CLIENT_ID = "proxy-client"
 _PROXY_CREDENTIAL_ID = "proxy-credential"
 _PROXY_SECRET_REFERENCE = "{{secrets/mip-agent-proxy/oauth-client-secret-proxy-credential}}"
+_WORKSPACE_HOST = "https://workspace.cloud.databricks.com"
 _MODEL_SIGNING_KEY = base64.urlsafe_b64encode(b"t" * 32).decode("ascii").rstrip("=")
 _MODEL_VERIFY_KEY = derive_gateway_proof_verify_key(_MODEL_SIGNING_KEY)
 _PREVIOUS_MODEL_SIGNING_KEY = base64.urlsafe_b64encode(b"p" * 32).decode("ascii").rstrip("=")
@@ -53,13 +56,28 @@ _PREVIOUS_MODEL_VERIFY_KEY = derive_gateway_proof_verify_key(_PREVIOUS_MODEL_SIG
 def ensure_gateway_responses_agent(workspace: object, **kwargs: Any) -> GatewayAgentDeployment:
     """Supply the reviewed proxy identity to focused provisioner fixtures."""
 
+    if getattr(workspace, "config", None) is None:
+        workspace.config = SimpleNamespace(host=_WORKSPACE_HOST)
     kwargs.setdefault("proxy_caller_application_id", _PROXY_CLIENT_ID)
     kwargs.setdefault("proxy_caller_credential_id", _PROXY_CREDENTIAL_ID)
     kwargs.setdefault("proxy_caller_secret_reference", _PROXY_SECRET_REFERENCE)
     return gateway.ensure_gateway_responses_agent(workspace, **kwargs)
 
 
+def verify_gateway_responses_agent(
+    workspace: object,
+    deployment: GatewayAgentDeployment,
+    **kwargs: Any,
+) -> None:
+    """Supply the authenticated workspace origin to focused verifier fixtures."""
+
+    if getattr(workspace, "config", None) is None:
+        workspace.config = SimpleNamespace(host=_WORKSPACE_HOST)
+    _verify_gateway_responses_agent(workspace, deployment, **kwargs)
+
+
 def _served_entity(**kwargs: Any) -> tuple[Any, Any]:
+    kwargs.setdefault("workspace_host", _WORKSPACE_HOST)
     kwargs.setdefault("proxy_caller_application_id", _PROXY_CLIENT_ID)
     kwargs.setdefault("proxy_caller_credential_id", _PROXY_CREDENTIAL_ID)
     kwargs.setdefault("proxy_caller_secret_reference", _PROXY_SECRET_REFERENCE)
@@ -246,6 +264,7 @@ def test_gateway_resource_hash_binds_every_green_allocation_input() -> None:
         supervisor_id=_SUPERVISOR_ID,
         supervisor_endpoint_id=_SUPERVISOR_ENDPOINT_ID,
         runtime_application_id=_RUNTIME_APPLICATION_ID,
+        workspace_host=_WORKSPACE_HOST,
         model_name="mip.audit.proxy",
         experiment_name="mip-agent-runtime-gateway-proxy",
         inference_schema="audit",
@@ -260,6 +279,7 @@ def test_gateway_resource_hash_binds_every_green_allocation_input() -> None:
         {"supervisor_id": "different-supervisor"},
         {"supervisor_endpoint_id": "different-supervisor-endpoint"},
         {"runtime_application_id": "different-runtime-client"},
+        {"workspace_host": "https://different.cloud.databricks.com"},
         {"model_name": "mip.audit.other"},
         {"experiment_name": "other-experiment"},
         {"inference_schema": "other"},
@@ -288,6 +308,7 @@ def test_gateway_resource_hash_binds_every_green_allocation_input() -> None:
             "supervisor_id": _SUPERVISOR_ID,
             "supervisor_endpoint_id": _SUPERVISOR_ENDPOINT_ID,
             "runtime_application_id": _RUNTIME_APPLICATION_ID,
+            "workspace_host": _WORKSPACE_HOST,
             "model_name": "mip.audit.proxy",
             "experiment_name": "mip-agent-runtime-gateway-proxy",
             "inference_schema": "audit",
@@ -320,6 +341,7 @@ def test_gateway_resource_hash_rejects_invalid_proxy_credential_binding(
         "supervisor_id": _SUPERVISOR_ID,
         "supervisor_endpoint_id": _SUPERVISOR_ENDPOINT_ID,
         "runtime_application_id": _RUNTIME_APPLICATION_ID,
+        "workspace_host": _WORKSPACE_HOST,
         "model_name": "mip.audit.proxy",
         "experiment_name": "mip-agent-runtime-gateway-proxy",
         "inference_schema": "audit",
@@ -817,6 +839,7 @@ def _cleanup_tags(
 
 def _runtime_workspace(serving: _ServingEndpoints | None = None) -> object:
     return SimpleNamespace(
+        config=SimpleNamespace(host=_WORKSPACE_HOST),
         serving_endpoints=serving or _ServingEndpoints(),
         registered_models=SimpleNamespace(
             get=lambda _name: SimpleNamespace(owner=_RUNTIME_APPLICATION_ID)
@@ -940,6 +963,7 @@ def _resource_hash(
         supervisor_id=supervisor_id,
         supervisor_endpoint_id=supervisor_endpoint_id,
         runtime_application_id=runtime_application_id,
+        workspace_host=_WORKSPACE_HOST,
         model_name="mip.audit.mortgage_growth_supervisor_proxy",
         experiment_name="mip-agent-runtime-gateway-proxy",
         inference_schema="audit",
@@ -989,6 +1013,7 @@ def _exact_endpoint_details(
                     name=served_name,
                     environment_vars={
                         **gateway._STATIC_ENV,
+                        "DATABRICKS_HOST": _WORKSPACE_HOST,
                         "MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY": verify_key,
                         "MIP_UPSTREAM_SUPERVISOR_ID": supervisor_id,
                         "MIP_UPSTREAM_SUPERVISOR_ENDPOINT": upstream,
@@ -1016,6 +1041,7 @@ def _exact_endpoint_details(
                     name=served_name,
                     environment_vars={
                         **gateway._STATIC_ENV,
+                        "DATABRICKS_HOST": _WORKSPACE_HOST,
                         "MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY": verify_key,
                         "MIP_UPSTREAM_SUPERVISOR_ID": supervisor_id,
                         "MIP_UPSTREAM_SUPERVISOR_ENDPOINT": upstream,
@@ -1083,6 +1109,7 @@ def _exact_deployment(
         supervisor_endpoint_id=_SUPERVISOR_ENDPOINT_ID,
         upstream_endpoint=upstream,
         runtime_application_id=_RUNTIME_APPLICATION_ID,
+        workspace_host=_WORKSPACE_HOST,
         proxy_caller_application_id=_PROXY_CLIENT_ID,
         proxy_caller_credential_id=_PROXY_CREDENTIAL_ID,
         proxy_caller_secret_reference=_PROXY_SECRET_REFERENCE,

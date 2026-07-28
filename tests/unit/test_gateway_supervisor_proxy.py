@@ -18,6 +18,7 @@ from backend.agents.supervisor_contract import supervisor_contract_hash
 
 _ASSERT_LIVE_RUNTIME_CONTRACT = proxy_module._assert_live_runtime_contract
 _SUPERVISOR_WORKSPACE = proxy_module._supervisor_workspace
+_WORKSPACE_HOST = "https://workspace.cloud.databricks.com"
 
 
 @pytest.fixture(autouse=True)
@@ -29,6 +30,7 @@ def _runtime_contract_stub(monkeypatch: pytest.MonkeyPatch) -> None:
             "supervisor_id": "supervisor-id",
             "supervisor_endpoint": "managed-supervisor",
             "runtime_application_id": "runtime-client",
+            "workspace_host": _WORKSPACE_HOST,
             "proxy_caller_application_id": "proxy-client",
             "proxy_caller_credential_id": "proxy-credential",
             "catalog": "mip",
@@ -42,14 +44,19 @@ def _runtime_contract_stub(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         proxy_module,
         "_assert_live_runtime_contract",
-        lambda: proxy_module._required_env(
-            "MIP_UPSTREAM_SUPERVISOR_ENDPOINT"
+        lambda: (
+            proxy_module._required_env("MIP_UPSTREAM_SUPERVISOR_ENDPOINT"),
+            _WORKSPACE_HOST,
         ),
     )
     monkeypatch.setattr(
         proxy_module,
         "_supervisor_workspace",
-        lambda: proxy_module.WorkspaceClient(),
+        lambda *, workspace_host: (
+            proxy_module.WorkspaceClient()
+            if workspace_host == _WORKSPACE_HOST
+            else pytest.fail("predict forwarded an unverified workspace host")
+        ),
     )
 
 
@@ -204,6 +211,7 @@ def test_reviewed_function_body_hash_rejects_ungoverned_catalog(
 
 def _set_contract_env(monkeypatch: pytest.MonkeyPatch) -> None:
     values = {
+        "DATABRICKS_HOST": _WORKSPACE_HOST,
         "MIP_UPSTREAM_SUPERVISOR_ID": "supervisor-id",
         "MIP_UPSTREAM_SUPERVISOR_ENDPOINT": "managed-supervisor",
         "MIP_UPSTREAM_SUPERVISOR_CREATOR": "runtime-client",
@@ -225,7 +233,7 @@ def test_runtime_contract_authenticates_deployment_signed_exact_binding(
 ) -> None:
     _set_contract_env(monkeypatch)
 
-    assert _ASSERT_LIVE_RUNTIME_CONTRACT() == "managed-supervisor"
+    assert _ASSERT_LIVE_RUNTIME_CONTRACT() == ("managed-supervisor", _WORKSPACE_HOST)
 
 
 def test_runtime_contract_authenticates_signed_exact_binding_on_every_call(
@@ -241,6 +249,7 @@ def test_runtime_contract_authenticates_signed_exact_binding_on_every_call(
             "supervisor_id": "supervisor-id",
             "supervisor_endpoint": "managed-supervisor",
             "runtime_application_id": "runtime-client",
+            "workspace_host": _WORKSPACE_HOST,
             "proxy_caller_application_id": "proxy-client",
             "proxy_caller_credential_id": "proxy-credential",
             "catalog": "mip",
@@ -252,7 +261,7 @@ def test_runtime_contract_authenticates_signed_exact_binding_on_every_call(
         },
     )
 
-    assert _ASSERT_LIVE_RUNTIME_CONTRACT() == "managed-supervisor"
+    assert _ASSERT_LIVE_RUNTIME_CONTRACT() == ("managed-supervisor", _WORKSPACE_HOST)
     assert calls == [proxy_module.os.environ]
 
 
@@ -267,7 +276,35 @@ def test_runtime_contract_rejects_signed_proxy_binding_drift(
             "supervisor_id": "supervisor-id",
             "supervisor_endpoint": "managed-supervisor",
             "runtime_application_id": "runtime-client",
+            "workspace_host": _WORKSPACE_HOST,
             "proxy_caller_application_id": "different-proxy",
+            "proxy_caller_credential_id": "proxy-credential",
+            "catalog": "mip",
+            "genie_space_id": "space-123",
+            "supervisor_contract_sha256": supervisor_contract_hash(
+                genie_space_id="space-123",
+                catalog="mip",
+            ),
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="signed Gateway-to-Supervisor binding drifted"):
+        _ASSERT_LIVE_RUNTIME_CONTRACT()
+
+
+def test_runtime_contract_rejects_signed_workspace_host_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_contract_env(monkeypatch)
+    monkeypatch.setattr(
+        proxy_module,
+        "verified_gateway_runtime_resource_environment",
+        lambda _environment: {
+            "supervisor_id": "supervisor-id",
+            "supervisor_endpoint": "managed-supervisor",
+            "runtime_application_id": "runtime-client",
+            "workspace_host": "https://different-workspace.cloud.databricks.com",
+            "proxy_caller_application_id": "proxy-client",
             "proxy_caller_credential_id": "proxy-credential",
             "catalog": "mip",
             "genie_space_id": "space-123",
@@ -308,16 +345,73 @@ def test_supervisor_workspace_uses_only_the_dedicated_proxy_credential(
     monkeypatch.setenv("MIP_UPSTREAM_SUPERVISOR_CREATOR", "runtime-client")
     monkeypatch.setattr(proxy_module, "WorkspaceClient", workspace_client)
 
-    monkeypatch.setenv("DATABRICKS_HOST", "https://workspace.example")
-    assert _SUPERVISOR_WORKSPACE() is expected
+    monkeypatch.setenv("DATABRICKS_HOST", _WORKSPACE_HOST)
+    assert _SUPERVISOR_WORKSPACE(workspace_host=_WORKSPACE_HOST) is expected
     assert calls == [
         {
-            "host": "https://workspace.example",
+            "host": _WORKSPACE_HOST,
             "client_id": "proxy-client",
             "client_secret": "proxy-secret-value",
             "auth_type": "oauth-m2m",
         }
     ]
+
+
+@pytest.mark.parametrize(
+    "workspace_host",
+    (
+        "",
+        f"{_WORKSPACE_HOST}/api/2.0",
+        f"{_WORKSPACE_HOST}?profile=admin",
+        f"{_WORKSPACE_HOST}#fragment",
+        "http://workspace.cloud.databricks.com",
+        "https://user@workspace.cloud.databricks.com",
+        "https://workspace.cloud.databricks.com:443",
+        "https://accounts.cloud.databricks.com",
+        "https://%77orkspace.cloud.databricks.com",
+        "https://work_space.cloud.databricks.com",
+        "https://workspace.cloud.\ndatabricks.com",
+        "https://workspace.example",
+    ),
+)
+def test_supervisor_workspace_rejects_unreviewed_host_before_client_construction(
+    monkeypatch: pytest.MonkeyPatch,
+    workspace_host: str,
+) -> None:
+    monkeypatch.setenv("DATABRICKS_HOST", workspace_host)
+    monkeypatch.setenv("MIP_UPSTREAM_PROXY_CLIENT_ID", "proxy-client")
+    monkeypatch.setenv("MIP_UPSTREAM_PROXY_CREDENTIAL_ID", "proxy-credential")
+    monkeypatch.setenv("MIP_UPSTREAM_PROXY_CLIENT_SECRET", "proxy-secret-value")
+    monkeypatch.setenv("MIP_UPSTREAM_SUPERVISOR_CREATOR", "runtime-client")
+    monkeypatch.setattr(
+        proxy_module,
+        "WorkspaceClient",
+        lambda **_kwargs: pytest.fail("WorkspaceClient constructed before host validation"),
+    )
+
+    with pytest.raises(RuntimeError, match="DATABRICKS_HOST"):
+        _SUPERVISOR_WORKSPACE(workspace_host=_WORKSPACE_HOST)
+
+
+def test_supervisor_workspace_rejects_valid_host_drift_before_client_construction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "DATABRICKS_HOST",
+        "https://different-workspace.cloud.databricks.com",
+    )
+    monkeypatch.setenv("MIP_UPSTREAM_PROXY_CLIENT_ID", "proxy-client")
+    monkeypatch.setenv("MIP_UPSTREAM_PROXY_CREDENTIAL_ID", "proxy-credential")
+    monkeypatch.setenv("MIP_UPSTREAM_PROXY_CLIENT_SECRET", "proxy-secret-value")
+    monkeypatch.setenv("MIP_UPSTREAM_SUPERVISOR_CREATOR", "runtime-client")
+    monkeypatch.setattr(
+        proxy_module,
+        "WorkspaceClient",
+        lambda **_kwargs: pytest.fail("WorkspaceClient constructed before host comparison"),
+    )
+
+    with pytest.raises(RuntimeError, match="signed Gateway workspace host binding drifted"):
+        _SUPERVISOR_WORKSPACE(workspace_host=_WORKSPACE_HOST)
 
 
 @pytest.mark.parametrize("proxy_client_id", ("runtime-client", "RUNTIME-CLIENT"))
@@ -331,7 +425,7 @@ def test_supervisor_workspace_rejects_runtime_owner_reuse(
     monkeypatch.setenv("MIP_UPSTREAM_SUPERVISOR_CREATOR", "runtime-client")
 
     with pytest.raises(RuntimeError, match="must not be the runtime owner"):
-        _SUPERVISOR_WORKSPACE()
+        _SUPERVISOR_WORKSPACE(workspace_host=_WORKSPACE_HOST)
 
 
 def test_proxy_delegates_the_same_responses_input_to_managed_supervisor(

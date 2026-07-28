@@ -74,7 +74,7 @@ class _FakeSqlClient:
 
 def _capability_settings() -> Settings:
     return Settings(
-        databricks_host="dbc-test.cloud.databricks.com",
+        databricks_host="https://dbc-test.cloud.databricks.com",
         databricks_warehouse_id="wh-123",
         genie_space_id="space-abc",
         lakebase_host="lb-test",
@@ -84,7 +84,7 @@ def _capability_settings() -> Settings:
 
 def _full_capability_settings() -> Settings:
     return Settings(
-        databricks_host="dbc-test.cloud.databricks.com",
+        databricks_host="https://dbc-test.cloud.databricks.com",
         databricks_warehouse_id="wh-123",
         genie_space_id="space-abc",
         lakebase_host="lb-test",

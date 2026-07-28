@@ -48,6 +48,7 @@ _UPSTREAM = "mas-supervisor-endpoint"
 _PROXY_CLIENT_ID = "proxy-client"
 _PROXY_CREDENTIAL_ID = "proxy-credential"
 _PROXY_SECRET_REFERENCE = "{{secrets/mip-agent-proxy/oauth-client-secret-proxy-credential}}"
+_WORKSPACE_HOST = "https://workspace.cloud.databricks.com"
 _MODEL_VERIFY_KEY = derive_gateway_proof_verify_key(
     base64.urlsafe_b64encode(b"e" * 32).decode("ascii").rstrip("=")
 )
@@ -105,6 +106,7 @@ def _resource_hash() -> str:
         supervisor_id=_SUPERVISOR_ID,
         supervisor_endpoint_id=_SUPERVISOR_ENDPOINT_ID,
         runtime_application_id="runtime-client",
+        workspace_host=_WORKSPACE_HOST,
         model_name=DEFAULT_GATEWAY_AGENT_MODEL,
         experiment_name=DEFAULT_GATEWAY_AGENT_EXPERIMENT,
         inference_schema="audit",
@@ -211,6 +213,7 @@ def _endpoint_details(
                     name="mip-growth-supervisor-proxy-7",
                     environment_vars={
                         **_STATIC_ENV,
+                        "DATABRICKS_HOST": _WORKSPACE_HOST,
                         "MIP_UPSTREAM_SUPERVISOR_ID": _SUPERVISOR_ID,
                         "MIP_UPSTREAM_SUPERVISOR_ENDPOINT": upstream,
                         "MIP_UPSTREAM_SUPERVISOR_CREATOR": "runtime-client",
@@ -324,6 +327,7 @@ def _workspace(
             return SimpleNamespace(rate_limits=[])
 
     return SimpleNamespace(
+        config=SimpleNamespace(host=_WORKSPACE_HOST),
         api_client=_ApiClient(rows, experiment_acl or _experiment_acl()),
         workspace=SimpleNamespace(
             get_status=lambda path: SimpleNamespace(
@@ -903,6 +907,7 @@ def test_resolve_contract_exports_exact_source_bound_runtime() -> None:
         supervisor_id=_SUPERVISOR_ID,
         upstream_endpoint=_UPSTREAM,
         runtime_application_id="runtime-client",
+        workspace_host=_WORKSPACE_HOST,
         model_name=_model_name(),
         model_version=7,
         inference_table=_inference_table(),

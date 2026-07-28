@@ -71,6 +71,7 @@ def _agent_gateway_binding_sha256() -> str | None:
     supervisor_id = (settings.mip_agent_supervisor_id or "").strip()
     upstream = (settings.mip_agent_supervisor_endpoint or "").strip()
     runtime_application_id = (settings.mip_agent_runtime_client_id or "").strip()
+    workspace_host = (settings.databricks_host or "").strip()
     model_name = settings.mip_agent_gateway_model.strip()
     model_version = settings.mip_agent_gateway_model_version
     inference_table = (settings.mip_ai_gateway_inference_table or "").strip()
@@ -82,6 +83,7 @@ def _agent_gateway_binding_sha256() -> str | None:
         or not supervisor_id
         or not upstream
         or not runtime_application_id
+        or not workspace_host
         or not model_name
         or model_version is None
         or not inference_table
@@ -95,6 +97,7 @@ def _agent_gateway_binding_sha256() -> str | None:
         supervisor_id=supervisor_id,
         upstream_endpoint=upstream,
         runtime_application_id=runtime_application_id,
+        workspace_host=workspace_host,
         model_name=model_name,
         model_version=model_version,
         inference_table=inference_table,

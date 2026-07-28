@@ -10,6 +10,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
@@ -84,7 +85,7 @@ GATEWAY_ENDPOINT_DESCRIPTION = (
     "MIP governed ResponsesAgent boundary delegating product planning "
     "to the managed Mortgage Growth Agent Supervisor."
 )
-GATEWAY_DEPLOYMENT_SPEC_VERSION = "gateway-supervisor-proxy-v3-runtime-contract"
+GATEWAY_DEPLOYMENT_SPEC_VERSION = "gateway-supervisor-proxy-v4-workspace-host"
 GATEWAY_PROXY_SOURCE = Path(__file__).with_name("mortgage_growth_supervisor_proxy.py")
 GATEWAY_PROXY_TRANSITIVE_SOURCES = (
     GATEWAY_PROXY_SOURCE,
@@ -95,7 +96,7 @@ GATEWAY_PROXY_TRANSITIVE_SOURCES = (
     Path(__file__).with_name("supervisor_contract.py"),
     Path(__file__).parents[1] / "services" / "ai_gateway_proof_attestation.py",
 )
-GATEWAY_RUNTIME_RESOURCE_PROOF_VERSION = "gateway-runtime-resource-proof-v2"
+GATEWAY_RUNTIME_RESOURCE_PROOF_VERSION = "gateway-runtime-resource-proof-v3"
 GATEWAY_RUNTIME_RESOURCE_ATTESTATION_ALG = "ed25519-gateway-runtime-resource-v1"
 GATEWAY_RUNTIME_RESOURCE_ENV = frozenset(
     {
@@ -112,6 +113,7 @@ _GATEWAY_RUNTIME_RESOURCE_FIELDS = frozenset(
         "catalog",
         "genie_space_id",
         "runtime_application_id",
+        "workspace_host",
         "supervisor_canonical_name",
         "supervisor_display_name",
         "supervisor_contract_json",
@@ -151,6 +153,15 @@ _GATEWAY_RUNTIME_RESOURCE_FIELDS = frozenset(
     }
 )
 _UC_IDENTIFIER = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_-]*\Z")
+_WORKSPACE_HOST_SUFFIXES = (".databricks.com", ".azuredatabricks.net")
+_ACCOUNT_HOSTNAMES = frozenset(
+    {
+        "accounts.azuredatabricks.net",
+        "accounts.cloud.databricks.com",
+        "accounts.gcp.databricks.com",
+    }
+)
+_WORKSPACE_HOST_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
 
 
 @dataclass(frozen=True)
@@ -248,6 +259,39 @@ def gateway_experiment_base(
     return f"/Users/{application_id}/{family}"
 
 
+def reviewed_workspace_https_origin(value: str) -> str:
+    """Return one canonical Databricks workspace HTTPS origin or fail closed."""
+
+    raw = value.strip()
+    if any(ord(character) <= 32 or ord(character) == 127 for character in raw):
+        raise ValueError("Gateway workspace host is not a reviewed HTTPS origin")
+    try:
+        parsed = urlsplit(raw)
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("Gateway workspace host is not a reviewed HTTPS origin") from exc
+    hostname = (parsed.hostname or "").lower()
+    if (
+        parsed.scheme.lower() != "https"
+        or parsed.scheme != "https"
+        or parsed.username is not None
+        or parsed.password is not None
+        or port is not None
+        or not hostname
+        or len(hostname) > 253
+        or any(
+            _WORKSPACE_HOST_LABEL.fullmatch(label) is None for label in hostname.split(".")
+        )
+        or not hostname.endswith(_WORKSPACE_HOST_SUFFIXES)
+        or hostname in _ACCOUNT_HOSTNAMES
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("Gateway workspace host is not a reviewed HTTPS origin")
+    return f"https://{hostname}"
+
+
 def gateway_proxy_source_hash(*, upstream_endpoint: str, catalog: str, genie_space_id: str) -> str:
     """Bind reviewed proxy bytes, runtime pins, and every transitive resource."""
 
@@ -272,6 +316,7 @@ def gateway_resource_allocation_hash(
     supervisor_id: str,
     supervisor_endpoint_id: str,
     runtime_application_id: str,
+    workspace_host: str,
     model_name: str,
     experiment_name: str,
     inference_schema: str,
@@ -296,6 +341,7 @@ def gateway_resource_allocation_hash(
     runtime_identity = runtime_application_id.strip()
     if not supervisor_identity or not supervisor_endpoint_identity or not runtime_identity:
         raise ValueError("Gateway Supervisor endpoint and runtime identities are required")
+    workspace_origin = reviewed_workspace_https_origin(workspace_host)
     verify_key = attestation_verify_key.strip()
     if not verify_key:
         raise ValueError("Gateway model attestation verification key is required")
@@ -321,6 +367,7 @@ def gateway_resource_allocation_hash(
         "supervisor_id": supervisor_identity,
         "supervisor_endpoint_id": supervisor_endpoint_identity,
         "runtime_application_id": runtime_identity,
+        "workspace_host": workspace_origin,
         "model_name": model_name,
         "experiment_name": experiment_name,
         "inference_schema": inference_schema,
@@ -356,6 +403,7 @@ def gateway_runtime_binding_hash(
     supervisor_id: str,
     upstream_endpoint: str,
     runtime_application_id: str,
+    workspace_host: str,
     model_name: str,
     model_version: int,
     inference_table: str,
@@ -365,12 +413,14 @@ def gateway_runtime_binding_hash(
 ) -> str:
     """Return a non-secret digest for deployed-App/runtime contract parity."""
 
+    workspace_origin = reviewed_workspace_https_origin(workspace_host)
     canonical = "\0".join(
         [
             endpoint,
             supervisor_id,
             upstream_endpoint,
             runtime_application_id,
+            workspace_origin,
             model_name,
             str(model_version),
             inference_table,
@@ -393,6 +443,10 @@ def gateway_exact_resource_digest(contract: Mapping[str, str]) -> str:
     normalized = dict(contract)
     if normalized.get("proof_version") != GATEWAY_RUNTIME_RESOURCE_PROOF_VERSION:
         raise ValueError("Gateway exact resource contract is incomplete")
+    if normalized.get("workspace_host") != reviewed_workspace_https_origin(
+        normalized.get("workspace_host", "")
+    ):
+        raise ValueError("Gateway exact resource contract workspace host is invalid")
     canonical = json.dumps(normalized, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(canonical).hexdigest()
 
