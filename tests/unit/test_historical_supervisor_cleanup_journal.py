@@ -25,6 +25,24 @@ from tools.databricks.historical_supervisor_cleanup_journal import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _legacy_query_group_migration(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        cleanup,
+        "inspect_claimed_managed_query_group",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            cleanup.MissingClaimedGroupProvenanceError(
+                "fixture exercises the exact pre-provenance migration path"
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        cleanup.group_provenance,
+        "read_existing",
+        lambda *_args, **_kwargs: None,
+    )
+
+
 class _JournalSecrets:
     def __init__(self) -> None:
         binding = AppRollbackScopeBinding(
@@ -155,6 +173,7 @@ def test_cleanup_journal_recovers_in_fresh_process_under_new_lease(
     result = inventory.cleanup_runtime_endpoints(
         client,
         read(),
+        app_name="mip-app",
         assert_single_writer=lambda: second_checks.append("resource-delete"),
         query_principals=inventory.QueryGroupPrincipals(
             "app-client",
@@ -276,6 +295,7 @@ def test_cleanup_rechecks_supervisor_tuple_after_lease_before_agent_delete() -> 
         cleanup._cleanup_supervisor_proof(
             client,
             proof,
+            app_name="mip-app",
             assert_single_writer=swap_after_lease,
             query_principals=inventory.QueryGroupPrincipals(
                 "app-client",

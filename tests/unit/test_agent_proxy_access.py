@@ -19,6 +19,10 @@ from tools.databricks.legacy_permissions_acl_cleanup import (
     stopped_deployment_app_assertion,
 )
 
+_APP = "mip-app"
+_LEASE = "11111111-1111-4111-8111-111111111111"
+_SOURCE = "a" * 40
+
 
 def _permission_entry(
     *,
@@ -611,6 +615,9 @@ def test_agent_proxy_access_converges_stale_direct_acl_before_global_postflight(
 
     agent_proxy_access.grant_and_audit_agent_proxy_access(
         workspace,
+        app_name=_APP,
+        deployment_lease_id=_LEASE,
+        deployment_source_git_sha=_SOURCE,
         supervisor_id="agent-target",
         supervisor_endpoint="target-endpoint",
         supervisor_endpoint_id="target-endpoint-id",
@@ -693,6 +700,9 @@ def test_agent_proxy_preserves_only_observed_legacy_signed_blue_serving_access(
 
     agent_proxy_access.grant_and_audit_agent_proxy_access(
         workspace,
+        app_name=_APP,
+        deployment_lease_id=_LEASE,
+        deployment_source_git_sha=_SOURCE,
         supervisor_id="green-agent",
         supervisor_endpoint="green-endpoint",
         supervisor_endpoint_id="green-endpoint-id",
@@ -1091,8 +1101,9 @@ def test_deny_all_attempts_serving_supervisor_and_genie_after_partial_failure(
     )
 
     with pytest.raises(RuntimeError, match="global denial is unproven"):
-        agent_proxy_access.revoke_and_audit_agent_proxy_access(
-            workspace,
+            agent_proxy_access.revoke_and_audit_agent_proxy_access(
+                workspace,
+                app_name=_APP,
             application_id="proxy-client",
             expected_inventory_principal="admin@example.com",
             assert_single_writer=lambda: None,
@@ -1234,6 +1245,7 @@ def test_deny_all_clears_direct_first_failure_after_effective_retry(
 
     agent_proxy_access.revoke_and_audit_agent_proxy_access(
         workspace,
+        app_name=_APP,
         application_id="proxy-client",
         expected_inventory_principal="admin@example.com",
         assert_single_writer=lambda: None,
@@ -1283,8 +1295,9 @@ def test_deny_all_attempts_all_direct_axes_before_proxy_identity_inventory_failu
     )
 
     with pytest.raises(RuntimeError, match="identity inventory"):
-        agent_proxy_access.revoke_and_audit_agent_proxy_access(
-            workspace,
+            agent_proxy_access.revoke_and_audit_agent_proxy_access(
+                workspace,
+                app_name=_APP,
             application_id="deleted-proxy",
             expected_inventory_principal="admin@example.com",
             assert_single_writer=lambda: None,
@@ -1312,7 +1325,12 @@ def test_agent_proxy_acl_mutation_refuses_missing_deployment_lease(
     )
 
     with pytest.raises(RuntimeError, match="exact signed App deployment lease"):
-        agent_proxy_access._deployment_lease_assertion(SimpleNamespace())
+        agent_proxy_access._deployment_lease_assertion(
+            SimpleNamespace(),
+            app_name="",
+            lease_id="",
+            source_git_sha="",
+        )
 
 
 def test_agent_proxy_acl_mutation_binds_exact_deployment_lease(
@@ -1339,7 +1357,12 @@ def test_agent_proxy_acl_mutation_binds_exact_deployment_lease(
     )
     workspace = SimpleNamespace()
 
-    assertion = agent_proxy_access._deployment_lease_assertion(workspace)
+    assertion = agent_proxy_access._deployment_lease_assertion(
+        workspace,
+        app_name="mip-app",
+        lease_id="lease-id",
+        source_git_sha="a" * 40,
+    )
     assertion()
 
     assert calls == [

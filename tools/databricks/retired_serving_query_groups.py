@@ -9,14 +9,113 @@ from typing import Any
 from databricks.sdk.errors import NotFound, ResourceDoesNotExist
 from tools.databricks.agent_runtime_access import assert_runtime_creator
 from tools.databricks.app_gateway_access_mode import inspect_gateway_query_access_mode
+from tools.databricks.serving_endpoint_legacy_query import (
+    remove_legacy_pre_provenance_membership,
+)
 from tools.databricks.serving_query_group_access import (
+    assert_claimed_managed_query_group_members,
     assert_managed_query_group_members,
+    inspect_managed_query_group,
+    inspect_managed_query_group_by_id,
     remove_managed_query_membership,
     retire_managed_query_group,
 )
+from tools.databricks.serving_query_group_provenance import (
+    MissingClaimedGroupProvenanceError,
+)
 from tools.databricks.workspace_group_deletion import (
     WORKSPACE_GROUP_DELETION_TIMEOUT_SECONDS,
+    delete_workspace_group_and_wait,
 )
+
+
+def _retire_legacy_endpoint_query_group(
+    workspace: Any,
+    *,
+    endpoint_id: str,
+    application_id: str,
+    scim_id: str,
+    assert_endpoint_absent: Callable[[], None],
+    assert_single_writer: Callable[[], None],
+    timeout_s: int,
+    sleep: Callable[[float], None],
+    clock: Callable[[], float],
+) -> bool:
+    """Retire only the deterministic pre-provenance group of a pinned old endpoint."""
+
+    state = inspect_managed_query_group(
+        workspace,
+        endpoint_id=endpoint_id,
+        application_id=application_id,
+        missing_ok=True,
+    )
+    if state is None:
+        return False
+    if set(state.member_ids) not in ({scim_id}, set()):
+        raise RuntimeError("legacy managed serving-query group contains an unrelated member")
+    assert_single_writer()
+    if (
+        inspect_managed_query_group_by_id(
+            workspace,
+            group_id=state.contract.id,
+            endpoint_id=endpoint_id,
+            application_id=application_id,
+        )
+        != state
+        or inspect_managed_query_group(
+            workspace,
+            endpoint_id=endpoint_id,
+            application_id=application_id,
+            expected_group_id=state.contract.id,
+        )
+        != state
+    ):
+        raise RuntimeError("legacy managed serving-query group changed before deletion")
+    delete_workspace_group_and_wait(
+        workspace,
+        group_id=state.contract.id,
+        expected_state=state,
+        inspect_exact_state=lambda: inspect_managed_query_group_by_id(
+            workspace,
+            group_id=state.contract.id,
+            endpoint_id=endpoint_id,
+            application_id=application_id,
+            missing_ok=True,
+        ),
+        inspect_bound_state=lambda: inspect_managed_query_group(
+            workspace,
+            endpoint_id=endpoint_id,
+            application_id=application_id,
+            missing_ok=True,
+            expected_group_id=state.contract.id,
+        ),
+        assert_deletion_context=assert_endpoint_absent,
+        assert_single_writer=assert_single_writer,
+        resource_label="legacy managed serving-query group",
+        timeout_s=timeout_s,
+        sleep=sleep,
+        clock=clock,
+    )
+    return True
+
+
+def _remove_legacy_managed_query_membership(
+    workspace: Any,
+    *,
+    endpoint_id: str,
+    application_id: str,
+    scim_id: str,
+    assert_single_writer: Callable[[], None],
+) -> bool:
+    """Empty only the exact deterministic pre-provenance group."""
+
+    return remove_legacy_pre_provenance_membership(
+        workspace,
+        endpoint_id=endpoint_id,
+        application_id=application_id,
+        service_principal_id=scim_id,
+        assert_single_writer=assert_single_writer,
+    )
 
 
 def exact_service_principal_scim_id(workspace: Any, *, application_id: str) -> str:
@@ -46,6 +145,7 @@ def exact_service_principal_scim_id(workspace: Any, *, application_id: str) -> s
 def retire_endpoint_query_groups(
     workspace: Any,
     *,
+    app_name: str,
     endpoint_name: str,
     endpoint_id: str,
     principals: tuple[tuple[str, str], ...],
@@ -77,22 +177,37 @@ def retire_endpoint_query_groups(
 
     for application_id, scim_id in normalized:
         assert_endpoint_absent()
-        retire_managed_query_group(
-            workspace,
-            endpoint_id=endpoint_id,
-            application_id=application_id,
-            service_principal_id=scim_id,
-            assert_endpoint_absent=assert_endpoint_absent,
-            assert_single_writer=assert_single_writer,
-            timeout_s=timeout_s,
-            sleep=sleep,
-            clock=clock,
-        )
+        try:
+            retire_managed_query_group(
+                workspace,
+                app_name=app_name,
+                endpoint_id=endpoint_id,
+                application_id=application_id,
+                service_principal_id=scim_id,
+                assert_endpoint_absent=assert_endpoint_absent,
+                assert_single_writer=assert_single_writer,
+                timeout_s=timeout_s,
+                sleep=sleep,
+                clock=clock,
+            )
+        except MissingClaimedGroupProvenanceError:
+            _retire_legacy_endpoint_query_group(
+                workspace,
+                endpoint_id=endpoint_id,
+                application_id=application_id,
+                scim_id=scim_id,
+                assert_endpoint_absent=assert_endpoint_absent,
+                assert_single_writer=assert_single_writer,
+                timeout_s=timeout_s,
+                sleep=sleep,
+                clock=clock,
+            )
 
 
 def revoke_live_managed_query_access(
     workspace: Any,
     *,
+    app_name: str,
     endpoint_name: str,
     endpoint_id: str,
     endpoint_creator: str,
@@ -109,10 +224,12 @@ def revoke_live_managed_query_access(
         raise RuntimeError("live managed-query endpoint identity drifted before retirement")
     mode = inspect_gateway_query_access_mode(
         workspace,
+        app_name=app_name,
         endpoint_name=endpoint_name,
         application_id=application_id,
         scim_id=scim_id,
         identity_label=identity_label,
+        legacy_pinned=True,
     )
     if endpoint_identity(workspace, endpoint_name) != expected_endpoint:
         raise RuntimeError("live managed-query endpoint identity drifted during access inspection")
@@ -124,27 +241,49 @@ def revoke_live_managed_query_access(
         return mode
     if endpoint_identity(workspace, endpoint_name) != expected_endpoint:
         raise RuntimeError("live managed-query endpoint identity drifted before membership revoke")
-    remove_managed_query_membership(
-        workspace,
-        endpoint_id=endpoint_id,
-        application_id=application_id,
-        service_principal_id=scim_id,
-        assert_single_writer=assert_single_writer,
-    )
+    try:
+        remove_managed_query_membership(
+            workspace,
+            app_name=app_name,
+            endpoint_id=endpoint_id,
+            application_id=application_id,
+            service_principal_id=scim_id,
+            assert_single_writer=assert_single_writer,
+        )
+    except MissingClaimedGroupProvenanceError:
+        _remove_legacy_managed_query_membership(
+            workspace,
+            endpoint_id=endpoint_id,
+            application_id=application_id,
+            scim_id=scim_id,
+            assert_single_writer=assert_single_writer,
+        )
     if endpoint_identity(workspace, endpoint_name) != expected_endpoint:
         raise RuntimeError("live managed-query endpoint identity drifted during membership revoke")
-    assert_managed_query_group_members(
-        workspace,
-        endpoint_id=endpoint_id,
-        application_id=application_id,
-        expected_member_ids=(),
-    )
+    try:
+        assert_claimed_managed_query_group_members(
+            workspace,
+            app_name=app_name,
+            endpoint_id=endpoint_id,
+            application_id=application_id,
+            service_principal_id=scim_id,
+            expected_member_ids=(),
+        )
+    except MissingClaimedGroupProvenanceError:
+        assert_managed_query_group_members(
+            workspace,
+            endpoint_id=endpoint_id,
+            application_id=application_id,
+            expected_member_ids=(),
+        )
     post_mode = inspect_gateway_query_access_mode(
         workspace,
+        app_name=app_name,
         endpoint_name=endpoint_name,
         application_id=application_id,
         scim_id=scim_id,
         identity_label=identity_label,
+        legacy_pinned=True,
     )
     if post_mode != "none":
         raise RuntimeError("live managed-query membership retirement did not remove exact access")
@@ -156,6 +295,7 @@ def revoke_live_managed_query_access(
 def delete_pinned_gateway(
     workspace: Any,
     *,
+    app_name: str,
     endpoint: str | None,
     endpoint_id: str | None,
     creator: str | None,
@@ -208,6 +348,7 @@ def delete_pinned_gateway(
         if cleanup_principals:
             retire_query_groups(
                 workspace,
+                app_name=app_name,
                 endpoint_name=endpoint,
                 endpoint_id=endpoint_id,
                 principals=cleanup_principals,
@@ -220,10 +361,12 @@ def delete_pinned_gateway(
     if verifier_application_id:
         verifier_mode = inspect_gateway_query_access_mode(
             workspace,
+            app_name=app_name,
             endpoint_name=endpoint,
             application_id=str(verifier_application_id),
             scim_id=str(verifier_scim_id),
             identity_label="verifier",
+            legacy_pinned=True,
         )
         if not delete_allowed and verifier_mode in {"direct", "mixed"}:
             raise RuntimeError(
@@ -232,6 +375,7 @@ def delete_pinned_gateway(
             )
     access_mode = revoke_app_access(
         workspace,
+        app_name=app_name,
         endpoint_name=endpoint,
         app_client_id=app_principal,
         app_scim_id=app_principal_id,
@@ -250,6 +394,7 @@ def delete_pinned_gateway(
     if verifier_mode == "managed":
         revoke_live_managed_query_access(
             workspace,
+            app_name=app_name,
             endpoint_name=endpoint,
             endpoint_id=endpoint_id,
             endpoint_creator=creator,
@@ -273,6 +418,7 @@ def delete_pinned_gateway(
             if cleanup_principals:
                 retire_query_groups(
                     workspace,
+                    app_name=app_name,
                     endpoint_name=endpoint,
                     endpoint_id=endpoint_id,
                     principals=cleanup_principals,
@@ -286,6 +432,7 @@ def delete_pinned_gateway(
 def retire_pinned_supervisor(
     workspace: Any,
     *,
+    app_name: str,
     canonical_name: str,
     old_id: str | None,
     old_endpoint: str | None,
@@ -325,6 +472,7 @@ def retire_pinned_supervisor(
         if principals:
             retire_query_groups(
                 workspace,
+                app_name=app_name,
                 endpoint_name=old_endpoint,
                 endpoint_id=old_endpoint_id,
                 principals=principals,
@@ -354,6 +502,7 @@ def retire_pinned_supervisor(
             )
     old_access_mode = revoke_app_access(
         workspace,
+        app_name=app_name,
         endpoint_name=old_endpoint,
         app_client_id=app_principal,
         app_scim_id=app_principal_id,
@@ -363,14 +512,17 @@ def retire_pinned_supervisor(
     if cleanup_enabled:
         proxy_mode = inspect_gateway_query_access_mode(
             workspace,
+            app_name=app_name,
             endpoint_name=old_endpoint,
             application_id=str(proxy_application_id),
             scim_id=str(proxy_scim_id),
             identity_label="proxy",
+            legacy_pinned=True,
         )
         if proxy_mode == "managed":
             revoke_live_managed_query_access(
                 workspace,
+                app_name=app_name,
                 endpoint_name=old_endpoint,
                 endpoint_id=old_endpoint_id,
                 endpoint_creator=old_creator,

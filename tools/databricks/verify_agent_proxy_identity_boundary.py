@@ -24,6 +24,7 @@ from tools.databricks.agent_proxy_identity_boundary_cli import parser as _parser
 from tools.databricks.agent_proxy_identity_inventory_groups import (
     collect_managed_proxy_workspace_groups,
     reviewed_agent_proxy_capability_group_bindings,
+    reviewed_agent_proxy_query_group_bindings,
 )
 from tools.databricks.agent_runtime_access import _genie_spaces
 from tools.databricks.audit_global_m2m_access import (
@@ -50,10 +51,6 @@ from tools.databricks.serving_query_authorization_convergence import (
     query_serving_endpoint_after_authorization,
     wait_for_managed_query_group_projection,
     wait_for_reviewed_query_group_projections,
-)
-from tools.databricks.serving_query_group_access import (
-    managed_query_group_external_id,
-    managed_query_group_name,
 )
 
 _MAX_INVENTORY = 1000
@@ -308,25 +305,13 @@ def collect_admin_inventory(
         genie_space_id=genie_space_id,
         expected_application_id=expected_application_id,
     )
-    reviewed_query_groups: list[tuple[str, str, str, str]] = []
-    for _candidate_id, _endpoint_name, endpoint_id in reviewed_bindings:
-        expected_name = managed_query_group_name(
-            endpoint_id=endpoint_id,
-            application_id=expected_application_id,
-        )
-        expected_external_id = managed_query_group_external_id(
-            endpoint_id=endpoint_id,
-            application_id=expected_application_id,
-        )
-        matches = tuple(
-            group
-            for group in managed_groups
-            if group.name == expected_name and group.external_id == expected_external_id
-        )
-        if len(matches) != 1:
-            raise RuntimeError("reviewed managed serving-query group contract drifted")
-        matched = matches[0]
-        reviewed_query_groups.append((endpoint_id, matched.name, matched.id, matched.external_id))
+    reviewed_query_groups = reviewed_agent_proxy_query_group_bindings(
+        workspace,
+        app_name=app_name,
+        managed_groups=managed_groups,
+        reviewed_supervisor_bindings=tuple(reviewed_bindings),
+        expected_application_id=expected_application_id,
+    )
     genie_space_ids = _bounded_unique(_genie_spaces(workspace), label="Genie")
     serving_endpoint_names = _bounded_unique(
         (_text(item, "name") for item in workspace.serving_endpoints.list()),
@@ -368,7 +353,7 @@ def collect_admin_inventory(
         foundation_endpoint_names=foundation_endpoint_names,
         managed_query_group_ids=tuple(group.id for group in managed_groups),
         reviewed_supervisor_bindings=tuple(reviewed_bindings),
-        reviewed_query_group_bindings=tuple(reviewed_query_groups),
+        reviewed_query_group_bindings=reviewed_query_groups,
         reviewed_capability_group_bindings=reviewed_capability_groups,
         managed_query_group_bindings=managed_groups,
     )

@@ -491,9 +491,10 @@ def ensure_gateway_responses_agent(
 ) -> GatewayAgentDeployment:
     """Reuse an exact endpoint or create an immutable, versioned green endpoint."""
 
+    app_name = deployment_app_name or os.environ.get("MIP_APP_NAME", "")
     lease_check = app_deployment_lease.held_assertion(
         workspace,
-        app_name=deployment_app_name or os.environ.get("MIP_APP_NAME", ""),
+        app_name=app_name,
         lease_id=deployment_lease_id or os.environ.get("MIP_APP_DEPLOYMENT_LEASE_ID", ""),
         source_git_sha=deployment_source_git_sha or os.environ.get("MIP_GIT_SHA", ""),
     )
@@ -819,6 +820,7 @@ def ensure_gateway_responses_agent(
     def managed_query_safe(candidate: str, current: Any) -> bool:
         return exact(current) and not endpoint_has_legacy_direct_query_principal(
             workspace,
+            app_name=app_name,
             endpoint_name=candidate,
             runtime_manager_application_id=expected_creator_application_id,
             approved_managed_query_application_ids=approved_query_application_ids,

@@ -100,6 +100,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Serving endpoint on which the verifier receives CAN_QUERY.",
     )
     parser.add_argument(
+        "--deployment-lease-id",
+        help="Exact App deployment lease authorizing Gateway ACL mutation.",
+    )
+    parser.add_argument(
+        "--deployment-source-git-sha",
+        help="Exact deployment source authorizing Gateway ACL mutation.",
+    )
+    parser.add_argument(
         "--revoke-gateway-endpoint",
         action="append",
         default=[],

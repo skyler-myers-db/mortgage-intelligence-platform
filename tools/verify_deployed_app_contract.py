@@ -25,9 +25,6 @@ if _REPO_ROOT not in sys.path:
 
 from databricks.sdk import WorkspaceClient  # noqa: E402
 
-from tools.databricks.app_deployment_rollback import (  # noqa: E402
-    verified_signed_last_good_contract,
-)
 from tools.databricks.app_health_contract import (  # noqa: E402
     APP_HEALTH_READY_INTERVAL_S,
     APP_HEALTH_READY_TIMEOUT_S,
@@ -36,6 +33,21 @@ from tools.databricks.app_health_contract import (  # noqa: E402
     assert_active_app_deployment_pin,
     wait_for_authenticated_app_health,
 )
+
+
+def verified_signed_last_good_contract(
+    workspace: Any,
+    *,
+    app_name: str,
+    scope: str,
+) -> Any:
+    """Resolve rollback proof lazily so non-rollback probes stay lightweight."""
+
+    from tools.databricks.app_deployment_rollback import (
+        verified_signed_last_good_contract as resolve,
+    )
+
+    return resolve(workspace, app_name=app_name, scope=scope)
 
 
 def verify(

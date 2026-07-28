@@ -46,6 +46,9 @@ from tools.databricks.agentic_supervisor_endpoint import (  # noqa: E402
     supervisor_candidates,
     supervisor_endpoint_requires_managed_query_rotation,
 )
+from tools.databricks.app_gateway_permission_convergence import (  # noqa: E402
+    converge_app_gateway_permissions,
+)
 from tools.databricks.gateway_runtime_resource_binding import (  # noqa: E402
     bind_gateway_runtime_resource_contract,
 )
@@ -320,62 +323,26 @@ def _converge_app_gateway_permissions(
     gateway_endpoint: str,
     supervisor_endpoint: str,
     app_name: str,
+    deployment_lease_id: str,
+    deployment_source_git_sha: str,
     preserve_endpoints: tuple[str, ...] = (),
     assert_single_writer: Callable[[], None],
 ) -> None:
-    """Grant only the outer proxy and revoke historical direct bypasses."""
-
-    app = workspace.apps.get(app_name)
-    service_principal = str(
-        getattr(app, "service_principal_client_id", None)
-        or (app.get("service_principal_client_id") if isinstance(app, dict) else "")
-        or ""
-    ).strip()
-    if not service_principal:
-        raise RuntimeError(f"app service principal not found for {app_name!r}")
-    grant_direct_can_query(
+    converge_app_gateway_permissions(
         workspace,
-        endpoint_name=gateway_endpoint,
-        service_principal=service_principal,
+        gateway_endpoint=gateway_endpoint,
+        supervisor_endpoint=supervisor_endpoint,
+        app_name=app_name,
+        deployment_lease_id=deployment_lease_id,
+        deployment_source_git_sha=deployment_source_git_sha,
+        default_gateway_endpoint=DEFAULT_GATEWAY_ENDPOINT,
+        legacy_gateway_endpoint=LEGACY_GATEWAY_ENDPOINT,
+        preserve_endpoints=preserve_endpoints,
         assert_single_writer=assert_single_writer,
+        grant=grant_direct_can_query,
+        revoke=revoke_direct_permissions,
+        emit=print,
     )
-    print(
-        f"[agentic] granted CAN_QUERY on {gateway_endpoint} "
-        f"to app service principal {service_principal}"
-    )
-    obsolete_endpoints = {
-        supervisor_endpoint,
-        DEFAULT_GATEWAY_ENDPOINT,
-        LEGACY_GATEWAY_ENDPOINT,
-    }
-    list_endpoints = getattr(getattr(workspace, "serving_endpoints", None), "list", None)
-    if callable(list_endpoints):
-        for item in list_endpoints():
-            name = str(
-                (item.get("name") if isinstance(item, dict) else getattr(item, "name", "")) or ""
-            ).strip()
-            if name == DEFAULT_GATEWAY_ENDPOINT or name.startswith(f"{DEFAULT_GATEWAY_ENDPOINT}-"):
-                obsolete_endpoints.add(name)
-    for obsolete_endpoint in obsolete_endpoints:
-        if obsolete_endpoint == gateway_endpoint:
-            continue
-        if obsolete_endpoint in preserve_endpoints:
-            print(
-                f"[agentic] preserved App ACL on blue endpoint {obsolete_endpoint} "
-                "until green proof"
-            )
-            continue
-        removed = revoke_direct_permissions(
-            workspace,
-            endpoint_name=obsolete_endpoint,
-            service_principal=service_principal,
-            missing_ok=obsolete_endpoint != supervisor_endpoint,
-            assert_single_writer=assert_single_writer,
-        )
-        print(
-            f"[agentic] {'revoked' if removed else 'verified absent'} direct App ACL "
-            f"on obsolete endpoint {obsolete_endpoint}"
-        )
 
 
 def _supervisor_agents() -> list[dict[str, Any]]:
@@ -399,6 +366,7 @@ def _rename_supervisor_agent(supervisor_id: str, name: str) -> None:
 def ensure_supervisor_agent(
     workspace: WorkspaceClient,
     *,
+    app_name: str,
     display_name: str,
     genie_space_id: str,
     catalog: str,
@@ -417,6 +385,7 @@ def ensure_supervisor_agent(
     candidates = recover_interrupted_signed_blue_finalization(
         workspace,
         candidates,
+        app_name=app_name,
         signed_blue_pin=signed_blue_supervisor_pin,
         display_name=display_name,
         genie_space_id=genie_space_id,
@@ -432,6 +401,7 @@ def ensure_supervisor_agent(
     plan = plan_supervisor_agent(
         workspace,
         candidates,
+        app_name=app_name,
         display_name=display_name,
         genie_space_id=genie_space_id,
         catalog=catalog,
@@ -465,6 +435,7 @@ def ensure_supervisor_agent(
     def requires_query_rotation(endpoint: str) -> bool:
         return supervisor_endpoint_requires_managed_query_rotation(
             workspace,
+            app_name=app_name,
             endpoint_name=endpoint,
             runtime_application_id=expected_creator_application_id,
             managed_query_application_id=expected_query_application_id,
@@ -712,6 +683,7 @@ def main(argv: list[str] | None = None) -> int:
         lease_check()
         supervisor_binding = ensure_supervisor_agent(
             workspace,
+            app_name=args.app_name,
             display_name=args.supervisor_name,
             genie_space_id=args.genie_space_id,
             catalog=args.catalog,
@@ -832,6 +804,8 @@ def main(argv: list[str] | None = None) -> int:
                 gateway_endpoint=gateway_endpoint,
                 supervisor_endpoint=supervisor_endpoint,
                 app_name=args.app_name,
+                deployment_lease_id=args.deployment_lease_id,
+                deployment_source_git_sha=args.deployment_source_git_sha,
                 assert_single_writer=lease_check,
             )
     resources = ProvisionedResources(

@@ -67,6 +67,7 @@ compensate_verifier_gateway_access() {
     else
       captured_audit_args=(
         -m tools.databricks.audit_global_m2m_access
+        --app-name "${MIP_APP_NAME:?App name is required}" \
         --application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
         --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL" \
         --account-id "$DATABRICKS_ACCOUNT_ID" \
@@ -99,7 +100,13 @@ compensate_verifier_gateway_access() {
       fi
     fi
   else
-    "$PYTHON" -m tools.databricks.converge_verifier_gateway_access revoke-managed \
+    run_with_account_identity run_with_proof_signing_authority \
+      "$PYTHON" -m tools.databricks.converge_verifier_gateway_access revoke-managed \
+      --app-name "${MIP_APP_NAME:?App name is required}" \
+      --deployment-lease-id \
+        "${MIP_APP_DEPLOYMENT_LEASE_ID:?deployment lease is required}" \
+      --deployment-source-git-sha \
+        "${MIP_DEPLOYMENT_SOURCE_GIT_SHA:?deployment source is required}" \
       --endpoint "$MIP_AI_GATEWAY_ENDPOINT" \
       --application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
       --expected-scim-id "$MIP_VERIFIER_SCIM_ID" \
@@ -115,6 +122,7 @@ compensate_verifier_gateway_access() {
       else
         run_with_account_identity run_with_proof_signing_authority \
           "$PYTHON" -m tools.databricks.audit_global_m2m_access \
+          --app-name "${MIP_APP_NAME:?App name is required}" \
           --application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
           --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL" \
           --account-id "$DATABRICKS_ACCOUNT_ID" \
@@ -130,6 +138,7 @@ compensate_verifier_gateway_access() {
     else
       run_with_account_identity run_with_proof_signing_authority \
         "$PYTHON" -m tools.databricks.audit_global_m2m_access \
+        --app-name "${MIP_APP_NAME:?App name is required}" \
         --application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
         --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL" \
         --account-id "$DATABRICKS_ACCOUNT_ID" \

@@ -742,6 +742,8 @@ FIRST_INSTALL_COMPENSATION_AUTHORIZED=0
 FIRST_INSTALL_APP_BOUND=0
 FIRST_INSTALL_JOURNAL_STATUS={shlex.quote(journal_status)}
 MIP_APP_DEPLOYMENT_LEASE_ID=lease-id
+MIP_APP_NAME=mip-app
+MIP_DEPLOYMENT_SOURCE_GIT_SHA={'a' * 40}
 SOURCE_GIT_SHA={'a' * 40}
 MIP_LAKEBASE_INSTANCE=mip-lakebase
 DATABRICKS_RELEASE_PROBE_CLIENT_ID=release-probe
@@ -2819,7 +2821,10 @@ APP_FAIL_CLOSED_NAME=mip-app
 APP_UPGRADE_STATE=green_captured_cleanup_pending
 APP_DEPLOYMENT_LEASE_HEARTBEAT_PID=""
 APP_DEPLOYMENT_LEASE_ID=lease-id
+MIP_APP_DEPLOYMENT_LEASE_ID=deployment-lease-id
+MIP_DEPLOYMENT_SOURCE_GIT_SHA={'a' * 40}
 _GRANTS_APP_NAME=mip-app
+MIP_APP_NAME=mip-app
 RESTORE_RENDERED_SQL_FAIL_CLOSED=0
 FIRST_INSTALL_APP_CREATED=0
 LAKEBASE_RUNTIME_ACCESS_PROVEN=1
@@ -3345,6 +3350,17 @@ def test_every_mutating_agent_cutover_command_is_bound_to_exact_deployment_lease
         assert '--deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID"' in segment
         assert '--deployment-source-git-sha "$SOURCE_GIT_SHA"' in segment
 
+    prepare = script[
+        script.index('step "prepare runtime-owned Gateway access') : script.index(
+            'step "converge dedicated verifier access',
+            script.index('step "prepare runtime-owned Gateway access'),
+        )
+    ]
+    assert re.search(
+        r"run_with_proof_signing_authority \\\n\s+"
+        r'"\$PYTHON" -m tools\.databricks\.cutover_agent_runtime_supervisor prepare',
+        prepare,
+    )
     assert script.count("cutover_agent_runtime_supervisor export-journal") == 4
 
 
@@ -3424,6 +3440,7 @@ DATABRICKS_AGENT_RUNTIME_CLIENT_ID=runtime-client
 DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET=runtime-secret
 DATABRICKS_AGENT_PROXY_CLIENT_ID=proxy-client
 DATABRICKS_VERIFIER_CLIENT_ID=verifier-client
+MIP_APP_NAME=mip-app
 MIP_VERIFIER_SCIM_ID=verifier-scim
 MIP_AGENT_SUPERVISOR_ID=green-supervisor-id
 MIP_AGENT_SUPERVISOR_ENDPOINT=green-supervisor
@@ -3537,6 +3554,7 @@ DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET=runtime-secret
 APP_SP_CLIENT_ID=app-client
 APP_SP_SCIM_ID=app-scim-id
 DATABRICKS_VERIFIER_CLIENT_ID=verifier-client
+MIP_APP_NAME=mip-app
 MIP_VERIFIER_SCIM_ID=verifier-scim-id
 DATABRICKS_AGENT_PROXY_CLIENT_ID=proxy-client
 MIP_APP_DEPLOYMENT_LEASE_ID=lease-id
@@ -3699,6 +3717,72 @@ def test_configured_supervisor_name_reaches_historical_cleanup() -> None:
     ]
 
     assert '--supervisor-name "${MIP_AGENT_SUPERVISOR_NAME:-Mortgage Growth Agent}"' in cleanup
+
+
+def test_historical_cleanup_receives_only_bounded_proof_signing_authority(
+    tmp_path: Path,
+) -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    cleanup_command = (
+        'run_with_proof_signing_authority \\\n'
+        '  "$PYTHON" -m tools.databricks.reconcile_historical_agent_endpoints cleanup'
+    )
+    assert cleanup_command in script
+
+    probe = tmp_path / "historical-cleanup-authority-probe.py"
+    child_result = tmp_path / "historical-cleanup-child.json"
+    parent_result = tmp_path / "historical-cleanup-parent.json"
+    probe.write_text(
+        "import json, os, sys\n"
+        "with open(sys.argv[1], 'w', encoding='utf-8') as handle:\n"
+        "    json.dump(\n"
+        "        {'proof_signing_key': os.environ.get(\n"
+        "            'MIP_AI_GATEWAY_PROOF_SIGNING_KEY'\n"
+        "        )},\n"
+        "        handle,\n"
+        "    )\n",
+        encoding="utf-8",
+    )
+    harness = textwrap.dedent(
+        f"""
+        set -euo pipefail
+        DRY_RUN=0
+        DIM=""
+        RED=""
+        RST=""
+        MIP_AI_GATEWAY_PROOF_SIGNING_KEY=historical-cleanup-proof-secret
+        export -n MIP_AI_GATEWAY_PROOF_SIGNING_KEY
+        {_shell_function("run_with_proof_signing_authority")}
+        run_with_proof_signing_authority \
+          {shlex.quote(sys.executable)} {shlex.quote(str(probe))} \
+          {shlex.quote(str(child_result))}
+        {shlex.quote(sys.executable)} {shlex.quote(str(probe))} \
+          {shlex.quote(str(parent_result))}
+        """
+    )
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key != "MIP_AI_GATEWAY_PROOF_SIGNING_KEY"
+    }
+
+    result = subprocess.run(
+        ["bash", "-c", harness],
+        cwd=REPO,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert json.loads(child_result.read_text(encoding="utf-8")) == {
+        "proof_signing_key": "historical-cleanup-proof-secret"
+    }
+    assert json.loads(parent_result.read_text(encoding="utf-8")) == {
+        "proof_signing_key": None
+    }
+    assert "historical-cleanup-proof-secret" not in result.stdout + result.stderr
 
 
 def test_fresh_deploy_creates_governed_uc_tables_before_table_grants() -> None:
@@ -5992,6 +6076,17 @@ def test_verifier_gateway_cutover_is_identity_pinned_and_compensated() -> None:
 
     compensation = _shell_function("compensate_verifier_gateway_access")
     assert "converge_verifier_gateway_access revoke-managed" in compensation
+    assert re.search(
+        r"run_with_account_identity run_with_proof_signing_authority \\\n\s+"
+        r'"\$PYTHON" -m tools\.databricks\.converge_verifier_gateway_access '
+        r"revoke-managed",
+        compensation,
+    )
+    assert '--app-name "${MIP_APP_NAME:?App name is required}"' in compensation
+    assert "--deployment-lease-id" in compensation
+    assert '"${MIP_APP_DEPLOYMENT_LEASE_ID:?deployment lease is required}"' in compensation
+    assert "--deployment-source-git-sha" in compensation
+    assert '"${MIP_DEPLOYMENT_SOURCE_GIT_SHA:?deployment source is required}"' in compensation
     assert '--expected-scim-id "$MIP_VERIFIER_SCIM_ID"' in compensation
     assert "--forbid-customer-serving" in compensation
     assert "--customer-resource-denial" in compensation
@@ -6038,6 +6133,9 @@ MIP_APP_ROLLBACK_GATEWAY_ENDPOINT=blue-gateway
 MIP_APP_ROLLBACK_GATEWAY_INFERENCE_TABLE_PREFIX=mip.audit.blue_gateway
 APP_SIGNED_BLUE_AVAILABLE=1
 DATABRICKS_VERIFIER_CLIENT_ID=verifier-client
+MIP_APP_NAME=mip-app
+MIP_APP_DEPLOYMENT_LEASE_ID=deployment-lease-id
+MIP_DEPLOYMENT_SOURCE_GIT_SHA={'a' * 40}
 DATABRICKS_ACCOUNT_ID=account-id
 DEPLOY_INVENTORY_PRINCIPAL=admin@example.com
 PYTHON={shlex.quote(str(fake_python))}
@@ -6099,6 +6197,7 @@ MIP_APP_ROLLBACK_GATEWAY_ENDPOINT=green-gateway
 MIP_APP_ROLLBACK_GATEWAY_INFERENCE_TABLE_PREFIX=mip.audit.green_gateway
 APP_SIGNED_BLUE_AVAILABLE=1
 DATABRICKS_VERIFIER_CLIENT_ID=verifier-client
+MIP_APP_NAME=mip-app
 DATABRICKS_ACCOUNT_ID=account-id
 DEPLOY_INVENTORY_PRINCIPAL=admin@example.com
 PYTHON={shlex.quote(str(fake_python))}
@@ -6154,6 +6253,7 @@ MIP_APP_ROLLBACK_GATEWAY_ENDPOINT=green-gateway
 MIP_APP_ROLLBACK_GATEWAY_INFERENCE_TABLE_PREFIX=mip.audit.stale_blue_gateway
 APP_SIGNED_BLUE_AVAILABLE=1
 DATABRICKS_VERIFIER_CLIENT_ID=verifier-client
+MIP_APP_NAME=mip-app
 DATABRICKS_ACCOUNT_ID=account-id
 DEPLOY_INVENTORY_PRINCIPAL=admin@example.com
 PYTHON=true
@@ -6206,6 +6306,9 @@ MIP_VERIFIER_SCIM_ID=verifier-scim-id
 MIP_AI_GATEWAY_ENDPOINT=green-gateway
 APP_SIGNED_BLUE_AVAILABLE=0
 DATABRICKS_VERIFIER_CLIENT_ID=verifier-client
+MIP_APP_NAME=mip-app
+MIP_APP_DEPLOYMENT_LEASE_ID=deployment-lease-id
+MIP_DEPLOYMENT_SOURCE_GIT_SHA={'a' * 40}
 DATABRICKS_ACCOUNT_ID=account-id
 DEPLOY_INVENTORY_PRINCIPAL=admin@example.com
 PYTHON={shlex.quote(str(fake_python))}
@@ -6385,6 +6488,9 @@ def test_deny_all_runs_admin_and_proxy_credential_proofs_even_after_failure(
 set -u
 PYTHON={shlex.quote(str(fake_python))}
 DATABRICKS_AGENT_PROXY_CLIENT_ID=proxy-client
+MIP_APP_NAME=mip-app
+MIP_APP_DEPLOYMENT_LEASE_ID=11111111-1111-4111-8111-111111111111
+MIP_DEPLOYMENT_SOURCE_GIT_SHA={'a' * 40}
 DATABRICKS_ACCOUNT_ID=account-id
 DEPLOY_INVENTORY_PRINCIPAL=admin@example.com
 run_with_account_identity() {{ "$@"; }}
@@ -6544,6 +6650,8 @@ _GRANTS_CATALOG=mip
 MIP_AI_GATEWAY_ENDPOINT=green-gateway
 MIP_APP_ROLLBACK_PROXY_MODE=exact-proxy
 MIP_APP_ROLLBACK_DEPLOYMENT_ID=blue-deployment
+MIP_APP_DEPLOYMENT_LEASE_ID=deployment-lease-id
+SOURCE_GIT_SHA={'a' * 40}
 PYTHON={shlex.quote(str(fake_python))}
 refresh_signed_blue_binding() {{
   MIP_APP_ROLLBACK_PROXY_MODE=exact-proxy
@@ -6613,6 +6721,8 @@ MIP_APP_ROLLBACK_DEPLOYMENT_ID=blue-deployment
 MIP_APP_ROLLBACK_PROXY_MODE=exact-proxy
 MIP_AI_GATEWAY_ENDPOINT=green-gateway
 MIP_AGENT_SUPERVISOR_ENDPOINT=green-supervisor
+MIP_APP_DEPLOYMENT_LEASE_ID=deployment-lease-id
+SOURCE_GIT_SHA={'a' * 40}
 PYTHON={shlex.quote(str(fake_python))}
 refresh_signed_blue_binding() {{ :; }}
 converge_signed_blue_agent_proxy_boundary() {{ :; }}

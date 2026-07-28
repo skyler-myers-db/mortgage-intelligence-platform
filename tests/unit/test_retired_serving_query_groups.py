@@ -6,16 +6,53 @@ import pytest
 from databricks.sdk.errors import ResourceDoesNotExist
 
 from tools.databricks import retired_serving_query_groups as retired
+from tools.databricks import serving_query_group_access as group_access
 from tools.databricks.serving_query_group_access import (
-    managed_query_group_external_id,
     managed_query_group_name,
 )
+from tools.databricks.serving_query_group_provenance import (
+    MissingClaimedGroupProvenanceError,
+    intent_external_id,
+)
 
+APP = "mip-app"
 ENDPOINT = "old-gateway"
 ENDPOINT_ID = "old-gateway-id"
 CREATOR = "legacy-owner"
 VERIFIER = "verifier-client"
 VERIFIER_SCIM = "verifier-scim-id"
+NONCE = "22222222-2222-4222-8222-222222222222"
+
+
+@pytest.fixture(autouse=True)
+def _signed_group_provenance(monkeypatch: pytest.MonkeyPatch) -> None:
+    def require_claimed(
+        workspace: object,
+        *,
+        app_name: str,
+        endpoint_id: str,
+        application_id: str,
+        service_principal_id: str,
+        group_name: str,
+    ) -> dict[str, str]:
+        assert app_name == APP
+        key = (endpoint_id, application_id, service_principal_id)
+        record = workspace.groups.claims.get(key)
+        if record is None:
+            raise MissingClaimedGroupProvenanceError(
+                "managed serving-query group has no signed immutable-ID provenance"
+            )
+        assert group_name == managed_query_group_name(
+            endpoint_id=endpoint_id,
+            application_id=application_id,
+        )
+        return record
+
+    monkeypatch.setattr(
+        group_access.group_provenance,
+        "require_claimed",
+        require_claimed,
+    )
 
 
 def _permission_entry(
@@ -31,26 +68,41 @@ def _permission_entry(
 
 
 class _Groups:
-    def __init__(self, *, managed: bool, member_id: str | None) -> None:
+    def __init__(
+        self,
+        *,
+        managed: bool,
+        member_id: str | None,
+        application_id: str = VERIFIER,
+        scim_id: str = VERIFIER_SCIM,
+    ) -> None:
         self.deleted: list[str] = []
         self.patches: list[str] = []
         self.by_id: dict[str, object] = {}
+        self.claims: dict[tuple[str, str, str], dict[str, str]] = {}
         if managed:
-            self.by_id["verifier-group-id"] = SimpleNamespace(
-                id="verifier-group-id",
+            external_id = intent_external_id(
+                endpoint_id=ENDPOINT_ID,
+                application_id=application_id,
+                creation_nonce=NONCE,
+            )
+            group_id = f"{application_id}-group-id"
+            self.by_id[group_id] = SimpleNamespace(
+                id=group_id,
                 display_name=managed_query_group_name(
                     endpoint_id=ENDPOINT_ID,
-                    application_id=VERIFIER,
+                    application_id=application_id,
                 ),
-                external_id=managed_query_group_external_id(
-                    endpoint_id=ENDPOINT_ID,
-                    application_id=VERIFIER,
-                ),
+                external_id=external_id,
                 members=(
                     [] if member_id is None else [SimpleNamespace(value=member_id)]
                 ),
                 meta=SimpleNamespace(resource_type="WorkspaceGroup"),
             )
+            self.claims[(ENDPOINT_ID, application_id, scim_id)] = {
+                "group_id": group_id,
+                "external_id": external_id,
+            }
 
     def list(self, **kwargs: object) -> list[object]:
         groups = list(self.by_id.values())
@@ -61,6 +113,8 @@ class _Groups:
         return [group for group in groups if group.display_name == name]
 
     def get(self, group_id: str) -> object:
+        if group_id not in self.by_id:
+            raise ResourceDoesNotExist("deleted")
         return self.by_id[group_id]
 
     def patch(self, *, id: str, **_kwargs: object) -> None:
@@ -118,6 +172,7 @@ def test_live_verifier_retirement_handles_revocable_modes(
     assert (
         retired.revoke_live_managed_query_access(
             workspace,
+            app_name=APP,
             endpoint_name=ENDPOINT,
             endpoint_id=ENDPOINT_ID,
             endpoint_creator=CREATOR,
@@ -135,7 +190,7 @@ def test_live_verifier_retirement_handles_revocable_modes(
     assert workspace.groups.deleted == []
     assert workspace.serving_endpoints.get(ENDPOINT).id == ENDPOINT_ID
     if mode == "managed":
-        assert workspace.groups.get("verifier-group-id").members == []
+        assert workspace.groups.get(f"{VERIFIER}-group-id").members == []
 
 
 @pytest.mark.parametrize("mode", ["direct", "mixed"])
@@ -148,6 +203,7 @@ def test_live_verifier_retirement_rejects_nonatomic_modes_without_mutation(
     with pytest.raises(RuntimeError, match="cannot be atomically retired"):
         retired.revoke_live_managed_query_access(
             workspace,
+            app_name=APP,
             endpoint_name=ENDPOINT,
             endpoint_id=ENDPOINT_ID,
             endpoint_creator=CREATOR,
@@ -169,6 +225,7 @@ def test_live_verifier_retirement_rejects_unrelated_member_before_lease() -> Non
     with pytest.raises(RuntimeError, match="outside its immutable contract"):
         retired.revoke_live_managed_query_access(
             workspace,
+            app_name=APP,
             endpoint_name=ENDPOINT,
             endpoint_id=ENDPOINT_ID,
             endpoint_creator=CREATOR,
@@ -195,6 +252,7 @@ def test_live_verifier_retirement_rechecks_endpoint_identity_before_mutation() -
     with pytest.raises(RuntimeError, match="identity drifted"):
         retired.revoke_live_managed_query_access(
             workspace,
+            app_name=APP,
             endpoint_name=ENDPOINT,
             endpoint_id=ENDPOINT_ID,
             endpoint_creator=CREATOR,
@@ -214,6 +272,7 @@ def test_live_verifier_retirement_lost_lease_blocks_membership_mutation() -> Non
     with pytest.raises(RuntimeError, match="lease lost"):
         retired.revoke_live_managed_query_access(
             workspace,
+            app_name=APP,
             endpoint_name=ENDPOINT,
             endpoint_id=ENDPOINT_ID,
             endpoint_creator=CREATOR,
@@ -233,6 +292,7 @@ def test_nondeletable_gateway_retires_verifier_group_without_deleting_it() -> No
 
     retired.delete_pinned_gateway(
         workspace,
+        app_name=APP,
         endpoint=ENDPOINT,
         endpoint_id=ENDPOINT_ID,
         creator=CREATOR,
@@ -250,7 +310,7 @@ def test_nondeletable_gateway_retires_verifier_group_without_deleting_it() -> No
     )
 
     assert app_calls == ["app"]
-    assert workspace.groups.get("verifier-group-id").members == []
+    assert workspace.groups.get(f"{VERIFIER}-group-id").members == []
     assert workspace.groups.deleted == []
 
 
@@ -262,6 +322,7 @@ def test_nondeletable_gateway_rejects_verifier_before_app_mutation(mode: str) ->
     with pytest.raises(RuntimeError, match="verifier access cannot be atomically revoked"):
         retired.delete_pinned_gateway(
             workspace,
+            app_name=APP,
             endpoint=ENDPOINT,
             endpoint_id=ENDPOINT_ID,
             creator=CREATOR,
@@ -290,6 +351,11 @@ def test_fresh_gateway_retry_retires_groups_after_committed_endpoint_delete_time
     events: list[str] = []
 
     class _Endpoints:
+        def get(self, _name: str) -> object:
+            if not endpoint_present:
+                raise ResourceDoesNotExist("deleted")
+            return SimpleNamespace(id=ENDPOINT_ID, creator="runtime-client")
+
         def delete(self, name: str) -> None:
             nonlocal endpoint_present, delete_calls
             assert name == ENDPOINT
@@ -313,9 +379,15 @@ def test_fresh_gateway_retry_retires_groups_after_committed_endpoint_delete_time
         "revoke_live_managed_query_access",
         lambda *_a, **_kw: events.append("empty-verifier-group") or "managed",
     )
-    workspace = SimpleNamespace(serving_endpoints=_Endpoints())
+    groups = _Groups(managed=True, member_id=None)
+    workspace = SimpleNamespace(serving_endpoints=_Endpoints(), groups=groups)
+    monkeypatch.setattr(
+        "tools.databricks.workspace_group_deletion._POLL_SECONDS",
+        0,
+    )
     kwargs = {
         "workspace": workspace,
+        "app_name": APP,
         "endpoint": ENDPOINT,
         "endpoint_id": ENDPOINT_ID,
         "creator": "runtime-client",
@@ -332,9 +404,6 @@ def test_fresh_gateway_retry_retires_groups_after_committed_endpoint_delete_time
         "revoke_app_access": (
             lambda *_a, **_kw: events.append("empty-app-group") or "managed"
         ),
-        "retire_query_groups": (
-            lambda *_a, **_kw: events.append("delete-orphan-groups")
-        ),
     }
 
     with pytest.raises(TimeoutError, match="committed"):
@@ -347,8 +416,10 @@ def test_fresh_gateway_retry_retires_groups_after_committed_endpoint_delete_time
         "empty-verifier-group",
         "lease",
         "delete-endpoint",
-        "delete-orphan-groups",
+        "lease",
+        "lease",
     ]
+    assert groups.deleted == [f"{VERIFIER}-group-id"]
 
 
 def test_fresh_supervisor_retry_recovers_agent_absent_endpoint_live(
@@ -402,6 +473,7 @@ def test_fresh_supervisor_retry_recovers_agent_absent_endpoint_live(
     )
     kwargs = {
         "workspace": SimpleNamespace(serving_endpoints=_Endpoints()),
+        "app_name": APP,
         "canonical_name": "Mortgage Growth Agent",
         "old_id": "old-supervisor",
         "old_endpoint": ENDPOINT,
@@ -465,6 +537,11 @@ def test_fresh_supervisor_retry_retires_groups_after_endpoint_delete_timeout(
         return ENDPOINT_ID, CREATOR
 
     class _Endpoints:
+        def get(self, _name: str) -> object:
+            if not endpoint_present:
+                raise ResourceDoesNotExist("deleted")
+            return SimpleNamespace(id=ENDPOINT_ID, creator=CREATOR)
+
         def delete(self, name: str) -> None:
             nonlocal endpoint_present, endpoint_delete_calls
             assert name == ENDPOINT
@@ -488,8 +565,19 @@ def test_fresh_supervisor_retry_retires_groups_after_endpoint_delete_timeout(
         "revoke_live_managed_query_access",
         lambda *_a, **_kw: events.append("empty-proxy-group") or "managed",
     )
+    groups = _Groups(
+        managed=True,
+        member_id=None,
+        application_id="proxy-client",
+        scim_id="proxy-scim-id",
+    )
+    monkeypatch.setattr(
+        "tools.databricks.workspace_group_deletion._POLL_SECONDS",
+        0,
+    )
     kwargs = {
-        "workspace": SimpleNamespace(serving_endpoints=_Endpoints()),
+        "workspace": SimpleNamespace(serving_endpoints=_Endpoints(), groups=groups),
+        "app_name": APP,
         "canonical_name": "Mortgage Growth Agent",
         "old_id": "old-supervisor",
         "old_endpoint": ENDPOINT,
@@ -509,9 +597,6 @@ def test_fresh_supervisor_retry_retires_groups_after_endpoint_delete_timeout(
             lambda *_a, **_kw: events.append("empty-app-group") or "managed"
         ),
         "delete_agent": delete_agent,
-        "retire_query_groups": (
-            lambda *_a, **_kw: events.append("delete-orphan-groups")
-        ),
     }
 
     with pytest.raises(TimeoutError, match="committed"):
@@ -526,5 +611,7 @@ def test_fresh_supervisor_retry_retires_groups_after_endpoint_delete_timeout(
         "delete-agent",
         "lease",
         "delete-endpoint",
-        "delete-orphan-groups",
+        "lease",
+        "lease",
     ]
+    assert groups.deleted == ["proxy-client-group-id"]

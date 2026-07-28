@@ -818,6 +818,7 @@ def test_signed_blue_finalization_precedes_mq1_journaled_creation(
 
     finalized = runtime.finalize_signed_blue_for_planning(
         workspace,
+        app_name=_APP,
         signed_blue_pin={
             "supervisor_id": "signed-blue",
             "endpoint": "signed-blue-endpoint",

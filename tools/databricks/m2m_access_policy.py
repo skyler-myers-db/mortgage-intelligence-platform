@@ -7,7 +7,7 @@ from collections.abc import Callable, Iterable
 from typing import Any
 
 from backend.agents.gateway_contract import DEFAULT_GATEWAY_ENDPOINT, LEGACY_GATEWAY_ENDPOINT
-from tools.databricks.deployment_lease_authority import held_assertion_from_env
+from tools.databricks.deployment_lease_authority import held_assertion
 
 DOCS_RUNBOOK = "docs/security/m2m-oauth-setup.md"
 
@@ -461,6 +461,9 @@ def grant_can_query_on_endpoint(
     endpoint_name: str,
     sp_application_id: str,
     *,
+    app_name: str,
+    deployment_lease_id: str,
+    deployment_source_git_sha: str,
     sp_id: str,
     effective_group_names: set[str],
     assert_single_writer: Callable[[], None] | None = None,
@@ -472,11 +475,18 @@ def grant_can_query_on_endpoint(
     _diag(f"resolving serving endpoint id for endpoint={endpoint_name!r}")
     try:
         _diag(f"granting CAN_QUERY on endpoint={endpoint_name!r} to verifier identity")
-        assertion = assert_single_writer or held_assertion_from_env(
-            client, operation="M2M serving-endpoint ACL mutation"
+        assertion = assert_single_writer or held_assertion(
+            client,
+            app_name=app_name,
+            lease_id=deployment_lease_id,
+            source_git_sha=deployment_source_git_sha,
+            operation="M2M serving-endpoint ACL mutation",
         )
         grant_direct_can_query(
             client,
+            app_name=app_name,
+            deployment_lease_id=deployment_lease_id,
+            deployment_source_git_sha=deployment_source_git_sha,
             endpoint_name=endpoint_name,
             service_principal=sp_application_id,
             service_principal_id=sp_id,
@@ -492,6 +502,9 @@ def revoke_can_query_on_obsolete_endpoint(
     endpoint_name: str,
     sp_application_id: str,
     *,
+    app_name: str,
+    deployment_lease_id: str,
+    deployment_source_git_sha: str,
     sp_id: str,
     effective_group_names: set[str],
     assert_single_writer: Callable[[], None] | None = None,
@@ -501,11 +514,16 @@ def revoke_can_query_on_obsolete_endpoint(
     from tools.databricks.serving_endpoint_acl import revoke_direct_permissions
 
     try:
-        assertion = assert_single_writer or held_assertion_from_env(
-            client, operation="M2M serving-endpoint ACL mutation"
+        assertion = assert_single_writer or held_assertion(
+            client,
+            app_name=app_name,
+            lease_id=deployment_lease_id,
+            source_git_sha=deployment_source_git_sha,
+            operation="M2M serving-endpoint ACL mutation",
         )
         removed = revoke_direct_permissions(
             client,
+            app_name=app_name,
             endpoint_name=endpoint_name,
             service_principal=sp_application_id,
             missing_ok=True,

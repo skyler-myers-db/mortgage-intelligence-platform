@@ -22,6 +22,9 @@ from tools.databricks import m2m_oauth_cli as _cli_helpers  # noqa: E402
 from tools.databricks import m2m_oauth_config as _config_helpers  # noqa: E402
 from tools.databricks import m2m_oauth_credential_mutation as _credential_mutation  # noqa: E402
 from tools.databricks import m2m_oauth_github as _github_helpers  # noqa: E402
+from tools.databricks.m2m_gateway_access_convergence import (  # noqa: E402
+    converge_gateway_query_access,
+)
 from tools.databricks.m2m_identity_contract import (  # noqa: E402
     DEFAULT_ADMIN_GROUP,
     DEFAULT_LAKEBASE_INSTANCE,
@@ -339,6 +342,8 @@ def provision(
     credential_boundary_factory: Callable[..., Any] | None = None,
     credential_writer_application_id: str | None = None,
     gateway_mutation_assertion: Callable[[], None] | None = None,
+    deployment_lease_id: str | None = None,
+    deployment_source_git_sha: str | None = None,
 ) -> ProvisionResult:
     """Provision or refresh the M2M SP and return a structured result.
 
@@ -632,32 +637,22 @@ def provision(
             instance_name=lakebase_instance,
             application_id=sp.application_id,
         )
-    granted_can_query = False
-    obsolete_gateway_endpoints = set(revoke_gateway_endpoints)
-    if gateway_endpoint:
-        obsolete_gateway_endpoints.update(_reserved_gateway_endpoints(client))
-    if gateway_endpoint:
-        _grant_can_query_on_endpoint(
-            client,
-            gateway_endpoint,
-            sp.application_id,
-            sp_id=sp.id,
-            effective_group_names=set(effective_groups.values()),
-            assert_single_writer=gateway_mutation_assertion,
-        )
-        granted_can_query = True
-    for obsolete_endpoint in sorted(
-        obsolete_gateway_endpoints.difference(preserved_gateway_endpoints)
-    ):
-        if obsolete_endpoint and obsolete_endpoint != gateway_endpoint:
-            _revoke_can_query_on_obsolete_endpoint(
-                client,
-                obsolete_endpoint,
-                sp.application_id,
-                sp_id=sp.id,
-                effective_group_names=set(effective_groups.values()),
-                assert_single_writer=gateway_mutation_assertion,
-            )
+    granted_can_query = converge_gateway_query_access(
+        client,
+        gateway_endpoint=gateway_endpoint,
+        revoke_gateway_endpoints=revoke_gateway_endpoints,
+        preserved_gateway_endpoints=preserved_gateway_endpoints,
+        app_name=app_name,
+        deployment_lease_id=deployment_lease_id,
+        deployment_source_git_sha=deployment_source_git_sha,
+        application_id=sp.application_id,
+        service_principal_id=sp.id,
+        effective_group_names=set(effective_groups.values()),
+        assert_single_writer=gateway_mutation_assertion,
+        reserved_gateway_endpoints=_reserved_gateway_endpoints,
+        grant=_grant_can_query_on_endpoint,
+        revoke=_revoke_can_query_on_obsolete_endpoint,
+    )
 
     granted_warehouse_can_use = False
     if warehouse_id:
@@ -884,6 +879,8 @@ def main(argv: list[str] | None = None) -> int:
             revoke_gateway_endpoints=tuple(args.revoke_gateway_endpoint),
             preserve_gateway_endpoints=tuple(args.preserve_gateway_endpoint),
             pre_app_bootstrap=args.pre_app_bootstrap,
+            deployment_lease_id=args.deployment_lease_id,
+            deployment_source_git_sha=args.deployment_source_git_sha,
         )
     except SystemExit:
         raise

@@ -88,6 +88,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--expected-git-sha")
     parser.add_argument("--expected-gateway-binding")
     parser.add_argument("--deployment-lease-id")
+    parser.add_argument("--deployment-source-git-sha")
     parser.add_argument("--expected-rollback-deployment-id")
     parser.add_argument("--genie-space-id")
     parser.add_argument("--bundle-summary")
@@ -111,8 +112,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.action == "ensure":
         if not args.treatment_warehouse_id:
             parser.error("--treatment-warehouse-id is required for ensure")
+        if not args.deployment_lease_id:
+            parser.error("--deployment-lease-id is required for ensure")
+        if not args.deployment_source_git_sha:
+            parser.error("--deployment-source-git-sha is required for ensure")
         endpoint = ensure_current(
             **common,
+            deployment_lease_id=args.deployment_lease_id,
+            deployment_source_git_sha=args.deployment_source_git_sha,
             treatment_warehouse_id=args.treatment_warehouse_id,
             treatment_catalog=args.treatment_catalog,
         )
@@ -143,8 +150,14 @@ def main(argv: list[str] | None = None) -> int:
     elif args.action == "restore":
         if not args.treatment_warehouse_id:
             parser.error("--treatment-warehouse-id is required for restore")
+        if not args.deployment_lease_id:
+            parser.error("--deployment-lease-id is required for restore")
+        if not args.deployment_source_git_sha:
+            parser.error("--deployment-source-git-sha is required for restore")
         restore_last_good(
             **common,
+            deployment_lease_id=args.deployment_lease_id,
+            deployment_source_git_sha=args.deployment_source_git_sha,
             treatment_warehouse_id=args.treatment_warehouse_id,
             treatment_catalog=args.treatment_catalog,
             revoke_endpoints=tuple(args.revoke_endpoint),

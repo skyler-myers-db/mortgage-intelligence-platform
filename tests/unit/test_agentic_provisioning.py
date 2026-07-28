@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from types import SimpleNamespace
 from typing import Any
+from uuid import UUID, uuid5
 
 import pytest
 from databricks.sdk.service.database import (
@@ -32,9 +33,9 @@ from tools.databricks.provision_agentic_resources import (
     SupervisorAgentBinding,
 )
 from tools.databricks.serving_query_group_access import (
-    managed_query_group_external_id,
     managed_query_group_name,
 )
+from tools.databricks.serving_query_group_provenance import intent_external_id
 from tools.databricks.supervisor_agent_contract import (
     RUNTIME_REPLACEMENT_SUFFIX,
     supervisor_replacement_name,
@@ -53,10 +54,42 @@ _PROXY_ARGS = [
     "--proxy-caller-secret-reference",
     _PROXY_SECRET_REFERENCE,
 ]
+_QUERY_NONCE_NAMESPACE = UUID("22222222-2222-4222-8222-222222222222")
 
 
 def _assert_single_writer() -> None:
     return None
+
+
+@pytest.fixture(autouse=True)
+def _signed_query_group_claims(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tools.databricks import serving_query_group_access
+
+    def require_claimed(
+        workspace: object,
+        *,
+        app_name: str,
+        endpoint_id: str,
+        application_id: str,
+        service_principal_id: str,
+        group_name: str,
+    ) -> dict[str, str]:
+        assert app_name == "mip-app"
+        key = (endpoint_id, application_id, service_principal_id)
+        record = workspace.serving_query_claims[key]
+        assert record["group_name"] == group_name
+        return record
+
+    monkeypatch.setattr(
+        serving_query_group_access.group_provenance,
+        "require_claimed",
+        require_claimed,
+    )
+
+
+def _ensure_supervisor_agent(*args: object, **kwargs: Any) -> SupervisorAgentBinding:
+    kwargs.setdefault("app_name", "mip-app")
+    return provision_agentic_resources.ensure_supervisor_agent(*args, **kwargs)
 
 
 class _SupervisorEndpoints:
@@ -105,6 +138,7 @@ def _supervisor_workspace(
     endpoint_permissions = permissions or {}
     groups: dict[str, object] = {}
     principals: dict[str, object] = {}
+    claims: dict[tuple[str, str, str], dict[str, str]] = {}
     for endpoint_id, endpoint_acl in endpoint_permissions.items():
         for application_id in ("proxy-client", "app-client", "verifier-client"):
             name = managed_query_group_name(
@@ -118,13 +152,21 @@ def _supervisor_workspace(
                 continue
             scim_id = f"{application_id}-scim"
             group_id = f"{endpoint_id}-{application_id}-group"
+            nonce = str(
+                uuid5(
+                    _QUERY_NONCE_NAMESPACE,
+                    f"{endpoint_id}\0{application_id}\0{scim_id}",
+                )
+            )
+            external_id = intent_external_id(
+                endpoint_id=endpoint_id,
+                application_id=application_id,
+                creation_nonce=nonce,
+            )
             groups[group_id] = SimpleNamespace(
                 id=group_id,
                 display_name=name,
-                external_id=managed_query_group_external_id(
-                    endpoint_id=endpoint_id,
-                    application_id=application_id,
-                ),
+                external_id=external_id,
                 members=[SimpleNamespace(value=scim_id)],
                 meta=SimpleNamespace(resource_type="WorkspaceGroup"),
             )
@@ -132,6 +174,11 @@ def _supervisor_workspace(
                 id=scim_id,
                 application_id=application_id,
             )
+            claims[(endpoint_id, application_id, scim_id)] = {
+                "group_id": group_id,
+                "group_name": name,
+                "external_id": external_id,
+            }
 
     def list_groups(*, filter: str) -> list[object]:
         match = re.fullmatch(r"displayName eq '([^']+)'", filter)
@@ -153,6 +200,7 @@ def _supervisor_workspace(
             list=lambda **_kwargs: list(principals.values()),
             get=lambda principal_id: principals[principal_id],
         ),
+        serving_query_claims=claims,
     )
 
 
@@ -410,7 +458,7 @@ def test_hashed_and_legacy_supervisor_collision_fails_before_selection(
     )
 
     with pytest.raises(RuntimeError, match="contract-hashed and legacy runtime"):
-        provision_agentic_resources.ensure_supervisor_agent(
+        _ensure_supervisor_agent(
             _supervisor_workspace(),
             display_name=display_name,
             genie_space_id="space-123",
@@ -481,7 +529,7 @@ def test_creator_mismatch_builds_blue_green_replacement_without_touching_old(
     monkeypatch.setattr(provision_agentic_resources, "_run", run)
 
     with pytest.raises(RuntimeError, match="signed prepare/create/claim/complete"):
-        provision_agentic_resources.ensure_supervisor_agent(
+        _ensure_supervisor_agent(
             _supervisor_workspace(),
             display_name="Mortgage Growth Agent",
             genie_space_id="space-123",
@@ -538,7 +586,7 @@ def test_runtime_owned_contract_drift_builds_green_without_mutating_live_supervi
     monkeypatch.setattr(provision_agentic_resources, "_run", run)
 
     with pytest.raises(RuntimeError, match="signed prepare/create/claim/complete"):
-        provision_agentic_resources.ensure_supervisor_agent(
+        _ensure_supervisor_agent(
             _supervisor_workspace(),
             display_name="Mortgage Growth Agent",
             genie_space_id="space-123",
@@ -588,7 +636,7 @@ def test_exact_runtime_supervisor_is_reused_without_tool_mutation(
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("must not create")),
     )
 
-    assert provision_agentic_resources.ensure_supervisor_agent(
+    assert _ensure_supervisor_agent(
         workspace,
         display_name="Mortgage Growth Agent",
         genie_space_id="space-123",
@@ -640,7 +688,7 @@ def test_supervisor_binding_rejects_name_handoff_after_selection(
     )
 
     with pytest.raises(RuntimeError, match="inventory tuple changed"):
-        provision_agentic_resources.ensure_supervisor_agent(
+        _ensure_supervisor_agent(
             _supervisor_workspace(),
             display_name="Mortgage Growth Agent",
             genie_space_id="space-123",
@@ -681,7 +729,7 @@ def test_fresh_supervisor_uses_canonical_name_without_replacement_metadata(
     monkeypatch.setattr(provision_agentic_resources, "_run", run)
 
     with pytest.raises(RuntimeError, match="signed prepare/create/claim/complete"):
-        provision_agentic_resources.ensure_supervisor_agent(
+        _ensure_supervisor_agent(
             _supervisor_workspace(),
             display_name="Mortgage Growth Agent",
             genie_space_id="space-123",
@@ -732,7 +780,7 @@ def test_outer_only_query_access_reuses_exact_managed_supervisor(
         lambda *_args, **_kwargs: pytest.fail("exact Supervisor must not mutate"),
     )
 
-    binding = provision_agentic_resources.ensure_supervisor_agent(
+    binding = _ensure_supervisor_agent(
         workspace,
         display_name="Mortgage Growth Agent",
         genie_space_id="space-123",
@@ -793,7 +841,7 @@ def test_completed_redeploy_reuses_supervisor_with_proxy_and_empty_app_groups(
     )
 
     for _attempt in range(2):
-        binding = provision_agentic_resources.ensure_supervisor_agent(
+        binding = _ensure_supervisor_agent(
             workspace,
             display_name="Mortgage Growth Agent",
             genie_space_id="space-123",
@@ -836,6 +884,7 @@ def test_direct_non_runtime_principal_requires_managed_query_rotation(
 
     assert supervisor_endpoint_requires_managed_query_rotation(
         workspace,
+        app_name="mip-app",
         endpoint_name="mas-canonical",
         runtime_application_id="runtime-client",
         managed_query_application_id="proxy-client",
@@ -895,7 +944,7 @@ def test_proxy_direct_query_rotates_to_mq1_and_preserves_complete_blue_tuple(
     monkeypatch.setattr(provision_agentic_resources, "_run", run)
 
     with pytest.raises(RuntimeError, match="signed prepare/create/claim/complete"):
-        provision_agentic_resources.ensure_supervisor_agent(
+        _ensure_supervisor_agent(
             workspace,
             display_name="Mortgage Growth Agent",
             genie_space_id="space-123",
@@ -964,7 +1013,7 @@ def test_mq1_retry_reuses_safe_candidate_and_preserves_blue_tuple(
         lambda *_args, **_kwargs: pytest.fail("safe candidate must be reused"),
     )
 
-    binding = provision_agentic_resources.ensure_supervisor_agent(
+    binding = _ensure_supervisor_agent(
         workspace,
         display_name=display_name,
         genie_space_id="space-123",
@@ -1033,7 +1082,7 @@ def test_mq1_candidate_with_legacy_query_access_fails_without_mutation(
     )
 
     with pytest.raises(RuntimeError, match="retains legacy query access"):
-        provision_agentic_resources.ensure_supervisor_agent(
+        _ensure_supervisor_agent(
             workspace,
             display_name=display_name,
             genie_space_id="space-123",
@@ -1125,7 +1174,7 @@ def test_fresh_retry_rotates_signed_blue_legacy_replacement_in_one_invocation(
     monkeypatch.setattr(provision_agentic_resources, "_run", run)
 
     with pytest.raises(RuntimeError, match="signed prepare/create/claim/complete"):
-        provision_agentic_resources.ensure_supervisor_agent(
+        _ensure_supervisor_agent(
             workspace,
             display_name=display_name,
             genie_space_id="space-123",
@@ -1200,7 +1249,7 @@ def test_signed_blue_legacy_replacement_drift_fails_before_mutation(
     pin.update(pin_override)
 
     with pytest.raises(RuntimeError, match=message):
-        provision_agentic_resources.ensure_supervisor_agent(
+        _ensure_supervisor_agent(
             workspace,
             display_name=display_name,
             genie_space_id="space-123",
@@ -1246,7 +1295,7 @@ def test_signed_blue_legacy_replacement_name_ambiguity_fails_before_mutation(
     )
 
     with pytest.raises(RuntimeError, match="multiple Supervisor agents"):
-        provision_agentic_resources.ensure_supervisor_agent(
+        _ensure_supervisor_agent(
             _supervisor_workspace(),
             display_name=display_name,
             genie_space_id="space-123",
@@ -1323,7 +1372,7 @@ def test_mq1_candidate_identity_or_contract_drift_fails_without_mutation(
             else "immutable green Supervisor candidate drifted"
         ),
     ):
-        provision_agentic_resources.ensure_supervisor_agent(
+        _ensure_supervisor_agent(
             workspace,
             display_name=display_name,
             genie_space_id="space-123",
@@ -1495,6 +1544,8 @@ def test_converge_app_gateway_permissions_grants_outer_and_revokes_bypasses(monk
     provision_agentic_resources._converge_app_gateway_permissions(
         workspace,  # type: ignore[arg-type]
         assert_single_writer=lambda: None,
+        deployment_lease_id="11111111-1111-4111-8111-111111111111",
+        deployment_source_git_sha="a" * 40,
         gateway_endpoint="mip-growth-agent-gateway",
         supervisor_endpoint="mas-agent-endpoint",
         app_name="mip-app",
@@ -1821,6 +1872,8 @@ def test_converge_app_gateway_permissions_fails_without_app_identity() -> None:
         provision_agentic_resources._converge_app_gateway_permissions(
             workspace,  # type: ignore[arg-type]
             assert_single_writer=lambda: None,
+            deployment_lease_id="11111111-1111-4111-8111-111111111111",
+            deployment_source_git_sha="a" * 40,
             gateway_endpoint="mip-growth-agent-gateway",
             supervisor_endpoint="mas-agent-endpoint",
             app_name="mip-app",

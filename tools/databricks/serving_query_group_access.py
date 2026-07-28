@@ -5,12 +5,19 @@ from __future__ import annotations
 import base64
 import hashlib
 import time
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from typing import Any
 
-from databricks.sdk.errors import NotFound, ResourceDoesNotExist
+from databricks.sdk.errors import (
+    AlreadyExists,
+    NotFound,
+    ResourceAlreadyExists,
+    ResourceConflict,
+    ResourceDoesNotExist,
+)
 from databricks.sdk.service.iam import Patch, PatchOp, PatchSchema
+from tools.databricks import serving_query_group_provenance as group_provenance
 from tools.databricks.workspace_group_deletion import (
     WORKSPACE_GROUP_DELETION_TIMEOUT_SECONDS,
     delete_workspace_group_and_wait,
@@ -19,7 +26,10 @@ from tools.databricks.workspace_group_deletion import (
 MANAGED_QUERY_GROUP_PREFIX = "mip-serving-query-"
 MANAGED_QUERY_GROUP_EXTERNAL_ID_PREFIX = "mip:serving-query:"
 _PATCH_SCHEMA = PatchSchema.URN_IETF_PARAMS_SCIM_API_MESSAGES_2_0_PATCH_OP
-_MAX_EFFECTIVE_GROUPS = 1000
+_CREATE_CONFLICTS = (AlreadyExists, ResourceAlreadyExists, ResourceConflict)
+_CREATE_CONVERGENCE_TIMEOUT_SECONDS = 120
+_CREATE_CONVERGENCE_POLL_SECONDS = 2
+_NOT_FOUND = (NotFound, ResourceDoesNotExist)
 
 
 @dataclass(frozen=True)
@@ -33,90 +43,6 @@ class ManagedQueryGroup:
 class ManagedQueryGroupState:
     contract: ManagedQueryGroup
     member_ids: tuple[str, ...]
-
-
-def assert_managed_query_group_administration_isolated(
-    client: Any,
-    *,
-    account_id: str,
-    endpoint_id: str,
-    application_id: str,
-    service_principal_id: str,
-    authoritative_effective_groups: Mapping[str, str],
-) -> ManagedQueryGroupState | None:
-    """Prove the bound identity cannot administer its endpoint-bound group.
-
-    An empty group may be intentionally retained while a nondeletable endpoint
-    still names it in an ACL. That group remains associated with the identity
-    through its deterministic name and external ID, so it must receive the
-    same administration proof as an active one-member group.
-
-    These groups are deliberately workspace-local. Workspace-local groups have
-    no account rule set; their credential-side management denial is proved by
-    an idempotent Workspace Groups SCIM PATCH in ``identity_boundary_probes``.
-    This admin-side check binds the exact resource plane, rejects unrelated
-    membership, and proves the target is not a workspace administrator.
-    """
-
-    account = account_id.strip()
-    principal_id = service_principal_id.strip()
-    principal = application_id.strip()
-    if not account or not endpoint_id.strip() or not principal or not principal_id:
-        raise ValueError(
-            "account, endpoint, application, and service-principal IDs are required"
-        )
-    state = inspect_managed_query_group(
-        client,
-        endpoint_id=endpoint_id,
-        application_id=principal,
-        missing_ok=True,
-    )
-    if state is None:
-        return None
-    if state.member_ids not in {(), (principal_id,)}:
-        raise RuntimeError(
-            "managed serving-query group membership is neither active nor safely retired"
-        )
-    effective_groups: dict[str, str] = {}
-    effective_ids: set[str] = set()
-    effective_names: set[str] = set()
-    if len(authoritative_effective_groups) > _MAX_EFFECTIVE_GROUPS:
-        raise RuntimeError(
-            "authoritative managed-group membership snapshot is unbounded"
-        )
-    for raw_group_id, raw_group_name in authoritative_effective_groups.items():
-        group_id = str(raw_group_id or "").strip()
-        group_name = str(raw_group_name or "").strip()
-        canonical_id = group_id.casefold()
-        canonical_name = group_name.casefold()
-        if (
-            not group_id
-            or not group_name
-            or canonical_id in effective_ids
-            or canonical_name in effective_names
-        ):
-            raise RuntimeError(
-                "authoritative managed-group membership snapshot is ambiguous"
-            )
-        effective_groups[group_id] = group_name
-        effective_ids.add(canonical_id)
-        effective_names.add(canonical_name)
-    group = _hydrated_group(client, group_id=state.contract.id)
-    meta = getattr(group, "meta", None)
-    resource_type = str(
-        getattr(getattr(meta, "resource_type", None), "value", None)
-        or getattr(meta, "resource_type", "")
-        or ""
-    ).strip()
-    if resource_type != "WorkspaceGroup":
-        raise RuntimeError(
-            "managed serving-query group is not bound to workspace-local SCIM"
-        )
-    if any(name.casefold() == "admins" for name in effective_groups.values()):
-        raise RuntimeError(
-            "managed serving-query member has workspace-administration authority"
-        )
-    return state
 
 
 def managed_query_group_name(*, endpoint_id: str, application_id: str) -> str:
@@ -152,13 +78,9 @@ def _hydrated_group(client: Any, *, group_id: str) -> object:
         raise RuntimeError("managed serving-query group immutable ID drifted")
     meta = group.get("meta") if isinstance(group, dict) else getattr(group, "meta", None)
     raw_resource_type = (
-        meta.get("resourceType")
-        if isinstance(meta, dict)
-        else getattr(meta, "resource_type", None)
+        meta.get("resourceType") if isinstance(meta, dict) else getattr(meta, "resource_type", None)
     )
-    resource_type = str(
-        getattr(raw_resource_type, "value", raw_resource_type) or ""
-    ).strip()
+    resource_type = str(getattr(raw_resource_type, "value", raw_resource_type) or "").strip()
     if resource_type != "WorkspaceGroup":
         raise RuntimeError("managed serving-query group is not workspace-local SCIM")
     return group
@@ -189,24 +111,71 @@ def _find_group(
     return _hydrated_group(client, group_id=group_id)
 
 
+def _await_intent_group(
+    client: Any,
+    *,
+    endpoint_id: str,
+    application_id: str,
+    expected_external_id: str,
+    expected_group_id: str | None,
+    assert_single_writer: Callable[[], None],
+    timeout_s: int,
+    sleep: Callable[[float], None],
+    clock: Callable[[], float],
+) -> object:
+    if timeout_s <= 0:
+        raise ValueError("managed serving-query group convergence timeout must be positive")
+    deadline = clock() + timeout_s
+    while True:
+        assert_single_writer()
+        try:
+            group = _find_group(
+                client,
+                endpoint_id=endpoint_id,
+                application_id=application_id,
+            )
+        except _NOT_FOUND:
+            group = None
+        if group is not None:
+            _assert_group_contract(
+                group,
+                endpoint_id=endpoint_id,
+                application_id=application_id,
+                expected_group_id=expected_group_id,
+                expected_external_id=expected_external_id,
+            )
+            return group
+        if clock() >= deadline:
+            raise RuntimeError(
+                "claimed managed serving-query group did not become visible"
+            )
+        sleep(_CREATE_CONVERGENCE_POLL_SECONDS)
+
+
 def _assert_group_contract(
     group: object,
     *,
     endpoint_id: str,
     application_id: str,
+    expected_group_id: str | None = None,
+    expected_external_id: str | None = None,
 ) -> ManagedQueryGroup:
     expected_name = managed_query_group_name(
         endpoint_id=endpoint_id,
         application_id=application_id,
     )
-    expected_external_id = managed_query_group_external_id(
-        endpoint_id=endpoint_id,
-        application_id=application_id,
+    expected_external_id = expected_external_id or managed_query_group_external_id(
+        endpoint_id=endpoint_id, application_id=application_id
     )
     group_id = str(getattr(group, "id", "") or "").strip()
     name = str(getattr(group, "display_name", "") or "").strip()
     external_id = str(getattr(group, "external_id", "") or "").strip()
-    if not group_id or name != expected_name or external_id != expected_external_id:
+    if (
+        not group_id
+        or (expected_group_id is not None and group_id != expected_group_id)
+        or name != expected_name
+        or external_id != expected_external_id
+    ):
         raise RuntimeError("managed serving-query group contract drifted")
     return ManagedQueryGroup(id=group_id, name=name, external_id=external_id)
 
@@ -223,17 +192,29 @@ def _member_ids(group: object) -> set[str]:
     return members
 
 
+def _required_writer(
+    assertion: Callable[[], None] | None,
+) -> Callable[[], None]:
+    if assertion is None:
+        raise RuntimeError("managed serving-query group mutation requires the deployment lease")
+    return assertion
+
+
 def _group_state(
     group: object,
     *,
     endpoint_id: str,
     application_id: str,
+    expected_group_id: str | None = None,
+    expected_external_id: str | None = None,
 ) -> ManagedQueryGroupState:
     return ManagedQueryGroupState(
         contract=_assert_group_contract(
             group,
             endpoint_id=endpoint_id,
             application_id=application_id,
+            expected_group_id=expected_group_id,
+            expected_external_id=expected_external_id,
         ),
         member_ids=tuple(sorted(_member_ids(group))),
     )
@@ -246,6 +227,7 @@ def inspect_managed_query_group_by_id(
     endpoint_id: str,
     application_id: str,
     missing_ok: bool = False,
+    expected_external_id: str | None = None,
 ) -> ManagedQueryGroupState | None:
     """Rehydrate an expected managed group through its immutable SCIM ID."""
 
@@ -262,6 +244,8 @@ def inspect_managed_query_group_by_id(
         group,
         endpoint_id=endpoint_id,
         application_id=application_id,
+        expected_group_id=immutable_id,
+        expected_external_id=expected_external_id,
     )
 
 
@@ -271,6 +255,8 @@ def inspect_managed_query_group(
     endpoint_id: str,
     application_id: str,
     missing_ok: bool = False,
+    expected_group_id: str | None = None,
+    expected_external_id: str | None = None,
 ) -> ManagedQueryGroupState | None:
     """Rehydrate one deterministic group's immutable contract and members."""
 
@@ -292,6 +278,41 @@ def inspect_managed_query_group(
         group,
         endpoint_id=endpoint_id,
         application_id=application_id,
+        expected_group_id=expected_group_id,
+        expected_external_id=expected_external_id,
+    )
+
+
+def inspect_claimed_managed_query_group(
+    client: Any,
+    *,
+    app_name: str,
+    endpoint_id: str,
+    application_id: str,
+    service_principal_id: str,
+    missing_ok: bool = False,
+) -> ManagedQueryGroupState | None:
+    """Resolve authorization only through a signed immutable group claim."""
+
+    name = managed_query_group_name(
+        endpoint_id=endpoint_id,
+        application_id=application_id,
+    )
+    record = group_provenance.require_claimed(
+        client,
+        app_name=app_name,
+        endpoint_id=endpoint_id,
+        application_id=application_id,
+        service_principal_id=service_principal_id,
+        group_name=name,
+    )
+    return inspect_managed_query_group_by_id(
+        client,
+        group_id=str(record["group_id"]),
+        endpoint_id=endpoint_id,
+        application_id=application_id,
+        missing_ok=missing_ok,
+        expected_external_id=str(record["external_id"]),
     )
 
 
@@ -302,6 +323,8 @@ def assert_managed_query_group_members(
     application_id: str,
     expected_member_ids: Collection[str],
     missing_ok: bool = False,
+    expected_group_id: str | None = None,
+    expected_external_id: str | None = None,
 ) -> ManagedQueryGroupState | None:
     """Verify a deterministic group has exactly the explicitly reviewed members."""
 
@@ -312,6 +335,38 @@ def assert_managed_query_group_members(
         client,
         endpoint_id=endpoint_id,
         application_id=application_id,
+        missing_ok=missing_ok,
+        expected_group_id=expected_group_id,
+        expected_external_id=expected_external_id,
+    )
+    if state is None:
+        return None
+    if set(state.member_ids) != set(members):
+        raise RuntimeError("managed serving-query group membership contract drifted")
+    return state
+
+
+def assert_claimed_managed_query_group_members(
+    client: Any,
+    *,
+    app_name: str,
+    endpoint_id: str,
+    application_id: str,
+    service_principal_id: str,
+    expected_member_ids: Collection[str],
+    missing_ok: bool = False,
+) -> ManagedQueryGroupState | None:
+    """Verify membership through the signed immutable-ID authorization proof."""
+
+    members = tuple(str(value).strip() for value in expected_member_ids)
+    if any(not value for value in members) or len(members) != len(set(members)):
+        raise ValueError("expected managed serving-query member IDs must be distinct")
+    state = inspect_claimed_managed_query_group(
+        client,
+        app_name=app_name,
+        endpoint_id=endpoint_id,
+        application_id=application_id,
+        service_principal_id=service_principal_id,
         missing_ok=missing_ok,
     )
     if state is None:
@@ -324,6 +379,7 @@ def assert_managed_query_group_members(
 def retire_managed_query_group(
     client: Any,
     *,
+    app_name: str,
     endpoint_id: str,
     application_id: str,
     service_principal_id: str,
@@ -342,10 +398,12 @@ def retire_managed_query_group(
     principal_id = service_principal_id.strip()
     if not principal_id:
         raise ValueError("exact service-principal SCIM ID is required for group retirement")
-    state = inspect_managed_query_group(
+    state = inspect_claimed_managed_query_group(
         client,
+        app_name=app_name,
         endpoint_id=endpoint_id,
         application_id=application_id,
+        service_principal_id=principal_id,
         missing_ok=True,
     )
     if state is None:
@@ -354,16 +412,24 @@ def retire_managed_query_group(
     if members not in ({principal_id}, set()):
         raise RuntimeError("managed serving-query group contains an unrelated member")
     assert_single_writer()
-    if inspect_managed_query_group_by_id(
-        client,
-        group_id=state.contract.id,
-        endpoint_id=endpoint_id,
-        application_id=application_id,
-    ) != state or inspect_managed_query_group(
-        client,
-        endpoint_id=endpoint_id,
-        application_id=application_id,
-    ) != state:
+    if (
+        inspect_managed_query_group_by_id(
+            client,
+            group_id=state.contract.id,
+            endpoint_id=endpoint_id,
+            application_id=application_id,
+            expected_external_id=state.contract.external_id,
+        )
+        != state
+        or inspect_managed_query_group(
+            client,
+            endpoint_id=endpoint_id,
+            application_id=application_id,
+            expected_group_id=state.contract.id,
+            expected_external_id=state.contract.external_id,
+        )
+        != state
+    ):
         raise RuntimeError("managed serving-query group changed before deletion")
     delete_workspace_group_and_wait(
         client,
@@ -375,12 +441,15 @@ def retire_managed_query_group(
             endpoint_id=endpoint_id,
             application_id=application_id,
             missing_ok=True,
+            expected_external_id=state.contract.external_id,
         ),
         inspect_bound_state=lambda: inspect_managed_query_group(
             client,
             endpoint_id=endpoint_id,
             application_id=application_id,
             missing_ok=True,
+            expected_group_id=state.contract.id,
+            expected_external_id=state.contract.external_id,
         ),
         assert_deletion_context=assert_endpoint_absent,
         assert_single_writer=assert_single_writer,
@@ -395,43 +464,140 @@ def retire_managed_query_group(
 def ensure_managed_query_group(
     client: Any,
     *,
+    app_name: str,
+    deployment_lease_id: str,
+    deployment_source_git_sha: str,
     endpoint_id: str,
     application_id: str,
     service_principal_id: str,
     assert_single_writer: Callable[[], None] | None = None,
+    timeout_s: int = _CREATE_CONVERGENCE_TIMEOUT_SECONDS,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
 ) -> ManagedQueryGroupState:
     """Create or bind the exact endpoint group without activating access."""
 
     principal_id = service_principal_id.strip()
     if not principal_id:
         raise ValueError("service-principal SCIM ID is required")
+    writer = _required_writer(assert_single_writer)
+    name = managed_query_group_name(
+        endpoint_id=endpoint_id,
+        application_id=application_id,
+    )
+    provenance = group_provenance.prepare(
+        client,
+        app_name=app_name,
+        deployment_lease_id=deployment_lease_id,
+        deployment_source_git_sha=deployment_source_git_sha,
+        endpoint_id=endpoint_id,
+        application_id=application_id,
+        service_principal_id=principal_id,
+        group_name=name,
+        assert_single_writer=writer,
+    )
+    external_id = str(provenance["external_id"])
+    claimed_group_id = str(provenance["group_id"]).strip()
     group = _find_group(
         client,
         endpoint_id=endpoint_id,
         application_id=application_id,
     )
-    if group is None:
-        name = managed_query_group_name(
+    if group is not None:
+        contract = _assert_group_contract(
+            group,
             endpoint_id=endpoint_id,
             application_id=application_id,
+            expected_group_id=claimed_group_id or None,
+            expected_external_id=external_id,
         )
-        if assert_single_writer is not None:
-            assert_single_writer()
-        group = client.groups.create(
-            display_name=name,
-            external_id=managed_query_group_external_id(
+        if not claimed_group_id:
+            provenance = group_provenance.claim(
+                client,
+                app_name=app_name,
+                deployment_lease_id=deployment_lease_id,
+                deployment_source_git_sha=deployment_source_git_sha,
+                record=provenance,
+                group_id=contract.id,
+                proof_kind="signed_intent_projection",
+                assert_single_writer=writer,
+            )
+            claimed_group_id = str(provenance["group_id"])
+    elif claimed_group_id:
+        group = _await_intent_group(
+            client,
+            endpoint_id=endpoint_id,
+            application_id=application_id,
+            expected_external_id=external_id,
+            expected_group_id=claimed_group_id,
+            assert_single_writer=writer,
+            timeout_s=timeout_s,
+            sleep=sleep,
+            clock=clock,
+        )
+    else:
+        writer()
+        try:
+            created = client.groups.create(
+                display_name=name,
+                external_id=external_id,
+            )
+        except _CREATE_CONFLICTS:
+            group = _await_intent_group(
+                client,
                 endpoint_id=endpoint_id,
                 application_id=application_id,
-            ),
+                expected_external_id=external_id,
+                expected_group_id=None,
+                assert_single_writer=writer,
+                timeout_s=timeout_s,
+                sleep=sleep,
+                clock=clock,
+            )
+            claimed_group_id = _assert_group_contract(
+                group,
+                endpoint_id=endpoint_id,
+                application_id=application_id,
+                expected_external_id=external_id,
+            ).id
+            proof_kind = "signed_intent_projection"
+        else:
+            claimed_group_id = _assert_group_contract(
+                created,
+                endpoint_id=endpoint_id,
+                application_id=application_id,
+                expected_external_id=external_id,
+            ).id
+            proof_kind = "create_response"
+        provenance = group_provenance.claim(
+            client,
+            app_name=app_name,
+            deployment_lease_id=deployment_lease_id,
+            deployment_source_git_sha=deployment_source_git_sha,
+            record=provenance,
+            group_id=claimed_group_id,
+            proof_kind=proof_kind,
+            assert_single_writer=writer,
         )
-        group_id = str(getattr(group, "id", "") or "").strip()
-        if not group_id:
-            raise RuntimeError("created managed serving-query group has no immutable ID")
-        group = _hydrated_group(client, group_id=group_id)
+        if provenance["group_id"] != claimed_group_id:
+            raise RuntimeError("serving-query group provenance claim changed immutable ID")
+        group = _await_intent_group(
+            client,
+            endpoint_id=endpoint_id,
+            application_id=application_id,
+            expected_external_id=external_id,
+            expected_group_id=claimed_group_id,
+            assert_single_writer=writer,
+            timeout_s=timeout_s,
+            sleep=sleep,
+            clock=clock,
+        )
     contract = _assert_group_contract(
         group,
         endpoint_id=endpoint_id,
         application_id=application_id,
+        expected_group_id=claimed_group_id,
+        expected_external_id=external_id,
     )
     members = _member_ids(group)
     if members.difference({principal_id}):
@@ -442,9 +608,123 @@ def ensure_managed_query_group(
     )
 
 
+def recover_existing_managed_query_group(
+    client: Any,
+    *,
+    app_name: str,
+    deployment_lease_id: str,
+    deployment_source_git_sha: str,
+    endpoint_id: str,
+    application_id: str,
+    service_principal_id: str,
+    expected_intent: dict[str, Any],
+    assert_single_writer: Callable[[], None] | None = None,
+) -> ManagedQueryGroupState | None:
+    """Claim an existing exact intent group without creating any resource."""
+
+    principal_id = service_principal_id.strip()
+    if not principal_id:
+        raise ValueError("service-principal SCIM ID is required")
+    writer = _required_writer(assert_single_writer)
+    name = managed_query_group_name(
+        endpoint_id=endpoint_id,
+        application_id=application_id,
+    )
+    expected_external_id = str(expected_intent.get("external_id", "")).strip()
+    expected_group_id = str(expected_intent.get("group_id", "")).strip()
+    if not expected_external_id.startswith(group_provenance.INTENT_EXTERNAL_ID_PREFIX):
+        raise RuntimeError("signed serving-query group intent marker is invalid")
+    state = inspect_managed_query_group(
+        client,
+        endpoint_id=endpoint_id,
+        application_id=application_id,
+        missing_ok=True,
+        expected_group_id=expected_group_id or None,
+        expected_external_id=expected_external_id,
+    )
+    if state is None:
+        return None
+    if set(state.member_ids).difference({principal_id}):
+        raise RuntimeError("managed serving-query group contains an unrelated member")
+    contract = state.contract
+    admitted = group_provenance.admit_existing(
+        client,
+        app_name=app_name,
+        deployment_lease_id=deployment_lease_id,
+        deployment_source_git_sha=deployment_source_git_sha,
+        endpoint_id=endpoint_id,
+        application_id=application_id,
+        service_principal_id=principal_id,
+        group_name=name,
+        expected_record=expected_intent,
+        assert_single_writer=writer,
+    )
+    if admitted is None:
+        raise RuntimeError("serving-query group provenance disappeared during recovery")
+    claimed_group_id = str(admitted["group_id"]).strip()
+    if claimed_group_id and claimed_group_id != contract.id:
+        raise RuntimeError("serving-query group provenance claims another immutable ID")
+    current = inspect_managed_query_group_by_id(
+        client,
+        group_id=contract.id,
+        endpoint_id=endpoint_id,
+        application_id=application_id,
+        missing_ok=True,
+        expected_external_id=contract.external_id,
+    )
+    projected = inspect_managed_query_group(
+        client,
+        endpoint_id=endpoint_id,
+        application_id=application_id,
+        missing_ok=True,
+        expected_group_id=contract.id,
+        expected_external_id=contract.external_id,
+    )
+    if current is None and projected is None:
+        raise RuntimeError("managed serving-query group disappeared during recovery")
+    if current is None or projected != current:
+        raise RuntimeError("managed serving-query group changed before recovery claim")
+    if set(current.member_ids).difference({principal_id}):
+        raise RuntimeError("managed serving-query group contains an unrelated member")
+    if not claimed_group_id:
+        admitted = group_provenance.claim(
+            client,
+            app_name=app_name,
+            deployment_lease_id=deployment_lease_id,
+            deployment_source_git_sha=deployment_source_git_sha,
+            record=admitted,
+            group_id=contract.id,
+            proof_kind="signed_intent_projection",
+            assert_single_writer=writer,
+        )
+        if admitted["group_id"] != contract.id:
+            raise RuntimeError("serving-query group provenance claim changed immutable ID")
+    final = inspect_managed_query_group_by_id(
+        client,
+        group_id=contract.id,
+        endpoint_id=endpoint_id,
+        application_id=application_id,
+        expected_external_id=contract.external_id,
+    )
+    if final is None or final != inspect_managed_query_group(
+        client,
+        endpoint_id=endpoint_id,
+        application_id=application_id,
+        expected_group_id=contract.id,
+        expected_external_id=contract.external_id,
+    ):
+        raise RuntimeError("managed serving-query group changed after recovery claim")
+    if set(final.member_ids).difference({principal_id}):
+        raise RuntimeError("managed serving-query group contains an unrelated member")
+    return final
+
+
 def ensure_managed_query_membership(
     client: Any,
     *,
+    app_name: str,
+    deployment_lease_id: str,
+    deployment_source_git_sha: str,
     endpoint_id: str,
     application_id: str,
     service_principal_id: str,
@@ -455,18 +735,21 @@ def ensure_managed_query_membership(
     principal_id = service_principal_id.strip()
     if not principal_id:
         raise ValueError("service-principal SCIM ID is required")
+    writer = _required_writer(assert_single_writer)
     state = ensure_managed_query_group(
         client,
+        app_name=app_name,
+        deployment_lease_id=deployment_lease_id,
+        deployment_source_git_sha=deployment_source_git_sha,
         endpoint_id=endpoint_id,
         application_id=application_id,
         service_principal_id=principal_id,
-        assert_single_writer=assert_single_writer,
+        assert_single_writer=writer,
     )
     contract = state.contract
     members = set(state.member_ids)
     if principal_id not in members:
-        if assert_single_writer is not None:
-            assert_single_writer()
+        writer()
         client.groups.patch(
             id=contract.id,
             operations=[
@@ -482,6 +765,8 @@ def ensure_managed_query_membership(
         endpoint_id=endpoint_id,
         application_id=application_id,
         expected_member_ids=(principal_id,),
+        expected_group_id=contract.id,
+        expected_external_id=contract.external_id,
     )
     assert postflight is not None
     return postflight.contract
@@ -490,6 +775,7 @@ def ensure_managed_query_membership(
 def remove_managed_query_membership(
     client: Any,
     *,
+    app_name: str,
     endpoint_id: str,
     application_id: str,
     service_principal_id: str,
@@ -500,19 +786,19 @@ def remove_managed_query_membership(
     principal_id = service_principal_id.strip()
     if not principal_id:
         raise ValueError("exact service-principal SCIM ID is required for managed query revoke")
-    group = _find_group(
+    writer = _required_writer(assert_single_writer)
+    state = inspect_claimed_managed_query_group(
         client,
+        app_name=app_name,
         endpoint_id=endpoint_id,
         application_id=application_id,
+        service_principal_id=principal_id,
+        missing_ok=True,
     )
-    if group is None:
+    if state is None:
         return False
-    contract = _assert_group_contract(
-        group,
-        endpoint_id=endpoint_id,
-        application_id=application_id,
-    )
-    members = _member_ids(group)
+    contract = state.contract
+    members = set(state.member_ids)
     if principal_id not in members:
         if members:
             raise RuntimeError(
@@ -520,8 +806,7 @@ def remove_managed_query_membership(
                 "the exact service principal"
             )
         return False
-    if assert_single_writer is not None:
-        assert_single_writer()
+    writer()
     client.groups.patch(
         id=contract.id,
         operations=[
@@ -533,14 +818,71 @@ def remove_managed_query_membership(
         schemas=[_PATCH_SCHEMA],
     )
     try:
-        assert_managed_query_group_members(
+        assert_claimed_managed_query_group_members(
             client,
+            app_name=app_name,
             endpoint_id=endpoint_id,
             application_id=application_id,
+            service_principal_id=principal_id,
             expected_member_ids=(),
         )
     except RuntimeError as exc:
-        raise RuntimeError(
-            "managed serving-query group did not converge to exactly empty"
-        ) from exc
+        raise RuntimeError("managed serving-query group did not converge to exactly empty") from exc
     return True
+
+
+def quiesce_claimed_managed_query_group(
+    client: Any,
+    *,
+    app_name: str,
+    endpoint_id: str,
+    application_id: str,
+    service_principal_id: str,
+    assert_single_writer: Callable[[], None],
+    attempts: int = 3,
+) -> None:
+    """Fail closed by emptying every member from the signed managed group."""
+
+    if attempts <= 0:
+        raise ValueError("managed serving-query quiesce attempts must be positive")
+    for _attempt in range(attempts):
+        state = inspect_claimed_managed_query_group(
+            client,
+            app_name=app_name,
+            endpoint_id=endpoint_id,
+            application_id=application_id,
+            service_principal_id=service_principal_id,
+        )
+        assert state is not None
+        if not state.member_ids:
+            return
+        if any(
+            not member_id
+            or any(character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-"
+                   for character in member_id)
+            for member_id in state.member_ids
+        ):
+            raise RuntimeError(
+                "managed serving-query group contains an unsafe member identifier"
+            )
+        assert_single_writer()
+        client.groups.patch(
+            id=state.contract.id,
+            operations=[
+                Patch(
+                    op=PatchOp.REMOVE,
+                    path=f'members[value eq "{member_id}"]',
+                )
+                for member_id in state.member_ids
+            ],
+            schemas=[_PATCH_SCHEMA],
+        )
+    state = assert_claimed_managed_query_group_members(
+        client,
+        app_name=app_name,
+        endpoint_id=endpoint_id,
+        application_id=application_id,
+        service_principal_id=service_principal_id,
+        expected_member_ids=(),
+    )
+    assert state is not None

@@ -199,9 +199,11 @@ for candidate in (
     )
     mode = inspect_app_gateway_access_mode(
         workspace,
+        app_name=app_name,
         endpoint_name=endpoint,
         app_client_id=app_client_id,
         app_scim_id=app_scim_id,
+        legacy_pinned=is_blue,
     )
     if mode in {"legacy", "mixed"}:
         if is_blue:
@@ -279,9 +281,11 @@ for raw in Path(plan_path).read_text(encoding="utf-8").splitlines():
     )
     mode = inspect_app_gateway_access_mode(
         workspace,
+        app_name=app_name,
         endpoint_name=endpoint,
         app_client_id=app_client_id,
         app_scim_id=app_scim_id,
+        legacy_pinned=endpoint == blue_endpoint,
     )
     if mode in {"legacy", "mixed"}:
         if endpoint == blue_endpoint:
@@ -290,6 +294,7 @@ for raw in Path(plan_path).read_text(encoding="utf-8").splitlines():
     if mode == "managed":
         revoke_managed_app_access(
             workspace,
+            app_name=app_name,
             endpoint_name=endpoint,
             app_client_id=app_client_id,
             app_scim_id=app_scim_id,
@@ -365,18 +370,20 @@ PYEOF
 pinned_query_access_mode() {
   local application_id="${1:?application ID is required}"
   local endpoint="${2:?endpoint is required}"
-  "$PYTHON" - "$application_id" "$endpoint" <<'PYEOF'
+  "$PYTHON" - "$_GRANTS_APP_NAME" "$application_id" "$endpoint" <<'PYEOF'
 import sys
 
 from databricks.sdk import WorkspaceClient
 from tools.databricks.serving_endpoint_acl import inspect_exact_query_access_mode
 
-application_id, endpoint = sys.argv[1:]
+app_name, application_id, endpoint = sys.argv[1:]
 print(
     inspect_exact_query_access_mode(
         WorkspaceClient(),
+        app_name=app_name,
         endpoint_name=endpoint,
         service_principal=application_id,
+        legacy_pinned=True,
     )
 )
 PYEOF

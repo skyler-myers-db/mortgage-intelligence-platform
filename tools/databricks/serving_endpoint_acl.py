@@ -11,13 +11,23 @@ from databricks.sdk.service.serving import (
     ServingEndpointPermissionLevel,
 )
 from tools.databricks.m2m_access_policy import resolve_effective_groups
+from tools.databricks.serving_endpoint_identity import (
+    is_platform_foundation_endpoint,
+)
+from tools.databricks.serving_endpoint_legacy_query import (
+    endpoint_has_legacy_direct_query_principal,  # noqa: F401 - public re-export
+    inspect_legacy_pre_provenance_group,
+)
 from tools.databricks.serving_query_group_access import (
-    assert_managed_query_group_members,
+    assert_claimed_managed_query_group_members,
     ensure_managed_query_group,
     ensure_managed_query_membership,
-    inspect_managed_query_group,
     managed_query_group_name,
+    quiesce_claimed_managed_query_group,
     remove_managed_query_membership,
+)
+from tools.databricks.serving_query_group_provenance import (
+    MissingClaimedGroupProvenanceError,
 )
 
 _LEVEL_RANK = {"CAN_VIEW": 1, "CAN_QUERY": 2, "CAN_MANAGE": 3}
@@ -66,9 +76,7 @@ def _principal_entries(permissions: object, principal: str) -> tuple[object, ...
 def _principal_entry(permissions: object, principal: str) -> object | None:
     entries = _principal_entries(permissions, principal)
     if len(entries) > 1:
-        raise RuntimeError(
-            f"serving endpoint ACL contains duplicate entries for {principal!r}"
-        )
+        raise RuntimeError(f"serving endpoint ACL contains duplicate entries for {principal!r}")
     return entries[0] if entries else None
 
 
@@ -185,109 +193,6 @@ def _endpoint_id(client: Any, endpoint_name: str, *, missing_ok: bool) -> str | 
     return endpoint_id
 
 
-def is_platform_foundation_endpoint(details: object) -> bool:
-    """Recognize only Databricks system foundation endpoints without ACL IDs.
-
-    Their model entitlements are audited through the fixed ``system.ai`` UC
-    inventory; they are not customer-created serving securables.
-    """
-
-    if (
-        str(getattr(details, "id", "") or "").strip()
-        or str(getattr(details, "creator", "") or "").strip()
-    ):
-        return False
-    entities = getattr(getattr(details, "config", None), "served_entities", None) or []
-    if not entities:
-        return False
-    for entity in entities:
-        foundation = getattr(entity, "foundation_model", None)
-        full_name = str(getattr(foundation, "name", "") or "").strip()
-        if foundation is None or not full_name.startswith("system.ai."):
-            return False
-    return True
-
-
-def endpoint_has_legacy_direct_query_principal(
-    client: Any,
-    *,
-    endpoint_name: str,
-    runtime_manager_application_id: str,
-    approved_managed_query_application_ids: Collection[str] = (),
-    approved_empty_managed_query_application_ids: Collection[str] = (),
-) -> bool:
-    """Inspect whether an endpoint retains a pre-managed-group query principal."""
-
-    runtime_manager = runtime_manager_application_id.strip()
-    if not runtime_manager:
-        raise ValueError("runtime manager application ID is required")
-    endpoint_id = _endpoint_id(client, endpoint_name, missing_ok=False)
-    assert endpoint_id is not None
-    approved_applications = tuple(
-        str(value).strip() for value in approved_managed_query_application_ids
-    )
-    approved_empty_applications = tuple(
-        str(value).strip() for value in approved_empty_managed_query_application_ids
-    )
-    if (
-        any(not value for value in approved_applications)
-        or any(not value for value in approved_empty_applications)
-        or len(approved_applications) != len(set(approved_applications))
-        or len(approved_empty_applications) != len(set(approved_empty_applications))
-        or set(approved_applications).intersection(approved_empty_applications)
-    ):
-        raise ValueError("approved managed-query application IDs must be non-empty and distinct")
-    reviewed_applications = (*approved_applications, *approved_empty_applications)
-    permissions = client.serving_endpoints.get_permissions(endpoint_id)
-    _direct_acl_contract(permissions)
-    for entry in getattr(permissions, "access_control_list", None) or []:
-        principal = str(getattr(entry, "service_principal_name", "") or "").strip()
-        group = str(getattr(entry, "group_name", "") or "").strip()
-        levels = _all_levels(entry)
-        if principal == runtime_manager and levels == {"CAN_MANAGE"}:
-            continue
-        if group.casefold() == "admins" and levels == {"CAN_MANAGE"}:
-            continue
-        approved_application = next(
-            (
-                application_id
-                for application_id in reviewed_applications
-                if group
-                == managed_query_group_name(
-                    endpoint_id=endpoint_id,
-                    application_id=application_id,
-                )
-            ),
-            None,
-        )
-        if (
-            approved_application is not None
-            and _direct_level(entry) == "CAN_QUERY"
-            and levels == {"CAN_QUERY"}
-        ):
-            state = inspect_managed_query_group(
-                client,
-                endpoint_id=endpoint_id,
-                application_id=approved_application,
-            )
-            assert state is not None
-            if approved_application in approved_empty_applications:
-                if state.member_ids:
-                    raise RuntimeError(
-                        "approved empty managed serving-query group retains a member"
-                    )
-                continue
-            principal_id = _service_principal_id(client, approved_application)
-            if set(state.member_ids) not in ({principal_id}, set()):
-                raise RuntimeError(
-                    "approved managed serving-query group contains an unrelated member"
-                )
-            continue
-        if _direct_level(entry) in {"CAN_QUERY", "CAN_MANAGE"}:
-            return True
-    return False
-
-
 def _exact_query_access_mode(
     permissions: object,
     *,
@@ -335,10 +240,12 @@ def _exact_query_access_mode(
 def inspect_exact_query_access_mode(
     client: Any,
     *,
+    app_name: str,
     endpoint_name: str,
     service_principal: str,
     service_principal_id: str | None = None,
     effective_group_names: set[str] | None = None,
+    legacy_pinned: bool = False,
 ) -> QueryAccessMode:
     """Return one principal's exact query-access mode on one endpoint."""
 
@@ -367,18 +274,36 @@ def inspect_exact_query_access_mode(
         effective_group_names=group_names,
     )
     if mode in {"managed", "mixed"}:
-        assert_managed_query_group_members(
-            client,
-            endpoint_id=endpoint_id,
-            application_id=principal,
-            expected_member_ids=(principal_id,),
-        )
+        try:
+            assert_claimed_managed_query_group_members(
+                client,
+                app_name=app_name,
+                endpoint_id=endpoint_id,
+                application_id=principal,
+                service_principal_id=principal_id,
+                expected_member_ids=(principal_id,),
+            )
+        except MissingClaimedGroupProvenanceError:
+            if not legacy_pinned:
+                raise
+            state = inspect_legacy_pre_provenance_group(
+                client,
+                endpoint_id=endpoint_id,
+                application_id=principal,
+                service_principal_id=principal_id,
+            )
+            assert state is not None
+            if state.member_ids != (principal_id,):
+                raise RuntimeError(
+                    "legacy-pinned managed serving-query group lacks its exact member"
+                ) from None
     return mode
 
 
 def audit_global_serving_endpoint_access(
     client: Any,
     *,
+    app_name: str,
     reviewed_endpoint_names: Collection[str],
     service_principal: str,
     expected_permission_level: Literal["CAN_QUERY", "CAN_MANAGE"] = "CAN_QUERY",
@@ -386,12 +311,7 @@ def audit_global_serving_endpoint_access(
     effective_group_names: set[str] | None = None,
     legacy_pinned_endpoint_names: Collection[str] = (),
 ) -> None:
-    """Admin-side proof of one exact level on only reviewed endpoints.
-
-    Query-only identities are authorized through an endpoint-bound managed
-    group so revocation is an atomic SCIM member removal. Manager identities
-    remain direct because this helper never revokes manager ACLs.
-    """
+    """Prove one exact access level on only the reviewed endpoints."""
 
     reviewed = {str(name).strip() for name in reviewed_endpoint_names if str(name).strip()}
     if not reviewed or len(reviewed) != len(reviewed_endpoint_names):
@@ -404,9 +324,8 @@ def audit_global_serving_endpoint_access(
     legacy_pinned = {
         str(name).strip() for name in legacy_pinned_endpoint_names if str(name).strip()
     }
-    if (
-        len(legacy_pinned) != len(legacy_pinned_endpoint_names)
-        or not legacy_pinned.issubset(reviewed)
+    if len(legacy_pinned) != len(legacy_pinned_endpoint_names) or not legacy_pinned.issubset(
+        reviewed
     ):
         raise ValueError("legacy-pinned endpoint names must be a distinct reviewed subset")
     if legacy_pinned and expected_permission_level != "CAN_QUERY":
@@ -470,11 +389,7 @@ def audit_global_serving_endpoint_access(
                     service_principal=principal,
                     effective_group_names=group_names,
                 )
-                allowed = (
-                    {"managed", "direct", "mixed"}
-                    if name in legacy_pinned
-                    else {"managed"}
-                )
+                allowed = {"managed", "direct", "mixed"} if name in legacy_pinned else {"managed"}
                 if mode not in allowed:
                     raise RuntimeError(
                         f"exact customer-serving CAN_QUERY audit failed for {principal!r} "
@@ -482,12 +397,30 @@ def audit_global_serving_endpoint_access(
                         f"endpoint {name!r}; require its approved exact query-access mode"
                     )
                 if mode in {"managed", "mixed"}:
-                    assert_managed_query_group_members(
-                        client,
-                        endpoint_id=endpoint_id,
-                        application_id=principal,
-                        expected_member_ids=(principal_id,),
-                    )
+                    try:
+                        assert_claimed_managed_query_group_members(
+                            client,
+                            app_name=app_name,
+                            endpoint_id=endpoint_id,
+                            application_id=principal,
+                            service_principal_id=principal_id,
+                            expected_member_ids=(principal_id,),
+                        )
+                    except MissingClaimedGroupProvenanceError:
+                        if name not in legacy_pinned:
+                            raise
+                        state = inspect_legacy_pre_provenance_group(
+                            client,
+                            endpoint_id=endpoint_id,
+                            application_id=principal,
+                            service_principal_id=principal_id,
+                        )
+                        assert state is not None
+                        if state.member_ids != (principal_id,):
+                            raise RuntimeError(
+                                "legacy-pinned managed serving-query group lacks "
+                                "its exact member"
+                            ) from None
             elif (
                 _direct_level(entry or object()) != "CAN_MANAGE"
                 or _all_levels(entry or object()) != {"CAN_MANAGE"}
@@ -511,11 +444,7 @@ def audit_global_no_serving_endpoint_access(
     service_principal_id: str | None = None,
     effective_group_names: set[str] | None = None,
 ) -> None:
-    """Prove no effective access to customer-created serving endpoints.
-
-    Databricks ``system.ai`` foundation endpoints have no serving-securable ID
-    and are classified but excluded from this ACL proof.
-    """
+    """Prove no effective access to customer-created serving endpoints."""
 
     principal = service_principal.strip()
     if not principal:
@@ -563,6 +492,9 @@ def audit_global_no_serving_endpoint_access(
 def grant_direct_can_query(
     client: Any,
     *,
+    app_name: str,
+    deployment_lease_id: str,
+    deployment_source_git_sha: str,
     endpoint_name: str,
     service_principal: str,
     service_principal_id: str | None = None,
@@ -570,6 +502,11 @@ def grant_direct_can_query(
     assert_single_writer: Callable[[], None] | None = None,
 ) -> None:
     """Grant CAN_QUERY through an atomically revocable endpoint-bound group."""
+    if assert_single_writer is None:
+        raise RuntimeError(
+            "serving endpoint query activation requires the deployment lease"
+        )
+    writer = assert_single_writer
     endpoint_id = _endpoint_id(client, endpoint_name, missing_ok=False)
     assert endpoint_id is not None
     principal_id = service_principal_id or _service_principal_id(client, service_principal)
@@ -583,69 +520,105 @@ def grant_direct_can_query(
     managed_group = managed_query_group_name(
         endpoint_id=endpoint_id, application_id=service_principal
     )
-    ensure_managed_query_group(
-        client, endpoint_id=endpoint_id, application_id=service_principal,
-        service_principal_id=principal_id, assert_single_writer=assert_single_writer,
-    )
-    group_entry = _exact_group_entry(permissions, managed_group)
-    if (
-        _direct_level(group_entry or object()) != "CAN_QUERY"
-        or _all_levels(group_entry or object()) != {"CAN_QUERY"}
-    ):
-        if assert_single_writer is not None:
-            assert_single_writer()
-        client.serving_endpoints.update_permissions(
-            endpoint_id,
-            access_control_list=[
-                ServingEndpointAccessControlRequest(
-                    group_name=managed_group,
-                    permission_level=ServingEndpointPermissionLevel.CAN_QUERY,
-                )
-            ],
-        )
-    ensure_managed_query_membership(
-        client, endpoint_id=endpoint_id, application_id=service_principal,
-        service_principal_id=principal_id, assert_single_writer=assert_single_writer,
-    )
-    permissions = client.serving_endpoints.get_permissions(endpoint_id)
-    assert_managed_query_group_members(
-        client,
-        endpoint_id=endpoint_id,
-        application_id=service_principal,
-        expected_member_ids=(principal_id,),
-    )
-    group_names = (
-        effective_group_names
-        if effective_group_names is not None
-        else _effective_group_names(
-            client,
-            service_principal=service_principal,
+    try:
+        ensure_managed_query_group(
+            client, app_name=app_name,
+            deployment_lease_id=deployment_lease_id,
+            deployment_source_git_sha=deployment_source_git_sha,
+            endpoint_id=endpoint_id,
+            application_id=service_principal,
             service_principal_id=principal_id,
+            assert_single_writer=writer,
         )
-    )
-    group_names = {*group_names, managed_group}
-    entry = _principal_entry(permissions, service_principal)
-    groups = _groups_with_access(
-        permissions,
-        effective_group_names=group_names,
-    )
-    group_entry = _exact_group_entry(permissions, managed_group)
-    if (
-        entry is not None
-        or _direct_level(group_entry or object()) != "CAN_QUERY"
-        or _all_levels(group_entry or object()) != {"CAN_QUERY"}
-        or _effective_query_or_manage(group_entry or object()) != "CAN_QUERY"
-        or groups != {managed_group}
-    ):
-        raise RuntimeError(
-            f"exact least-privilege CAN_QUERY postflight failed for {service_principal!r} "
-            f"on {endpoint_name!r}; require only its managed query group"
+        group_entry = _exact_group_entry(permissions, managed_group)
+        if _direct_level(group_entry or object()) != "CAN_QUERY" or _all_levels(
+            group_entry or object()
+        ) != {"CAN_QUERY"}:
+            writer()
+            client.serving_endpoints.update_permissions(
+                endpoint_id,
+                access_control_list=[
+                    ServingEndpointAccessControlRequest(
+                        group_name=managed_group,
+                        permission_level=ServingEndpointPermissionLevel.CAN_QUERY,
+                    )
+                ],
+            )
+        ensure_managed_query_membership(
+            client, app_name=app_name,
+            deployment_lease_id=deployment_lease_id,
+            deployment_source_git_sha=deployment_source_git_sha,
+            endpoint_id=endpoint_id,
+            application_id=service_principal,
+            service_principal_id=principal_id,
+            assert_single_writer=writer,
         )
+        permissions = client.serving_endpoints.get_permissions(endpoint_id)
+        assert_claimed_managed_query_group_members(
+            client,
+            app_name=app_name,
+            endpoint_id=endpoint_id,
+            application_id=service_principal,
+            service_principal_id=principal_id,
+            expected_member_ids=(principal_id,),
+        )
+        group_names = (
+            effective_group_names
+            if effective_group_names is not None
+            else _effective_group_names(
+                client,
+                service_principal=service_principal,
+                service_principal_id=principal_id,
+            )
+        )
+        group_names = {*group_names, managed_group}
+        entry = _principal_entry(permissions, service_principal)
+        groups = _groups_with_access(
+            permissions,
+            effective_group_names=group_names,
+        )
+        group_entry = _exact_group_entry(permissions, managed_group)
+        if (
+            entry is not None
+            or _direct_level(group_entry or object()) != "CAN_QUERY"
+            or _all_levels(group_entry or object()) != {"CAN_QUERY"}
+            or _effective_query_or_manage(group_entry or object()) != "CAN_QUERY"
+            or groups != {managed_group}
+        ):
+            raise RuntimeError(
+                f"exact least-privilege CAN_QUERY postflight failed for "
+                f"{service_principal!r} on {endpoint_name!r}; require only its "
+                "managed query group"
+            )
+    except Exception as activation_error:
+        try:
+            quiesce_claimed_managed_query_group(
+                client,
+                app_name=app_name,
+                endpoint_id=endpoint_id,
+                application_id=service_principal,
+                service_principal_id=principal_id,
+                assert_single_writer=writer,
+            )
+        except MissingClaimedGroupProvenanceError:
+            current = client.serving_endpoints.get_permissions(endpoint_id)
+            if _exact_group_entry(current, managed_group) is None:
+                raise activation_error from None
+            raise RuntimeError(
+                "serving endpoint query activation failed without quiescence proof"
+            ) from activation_error
+        except Exception as quiescence_error:
+            raise RuntimeError(
+                "serving endpoint query activation failed and quiescence "
+                "did not converge"
+            ) from quiescence_error
+        raise
 
 
 def revoke_direct_permissions(
     client: Any,
     *,
+    app_name: str,
     endpoint_name: str,
     service_principal: str,
     missing_ok: bool = False,
@@ -653,12 +626,7 @@ def revoke_direct_permissions(
     effective_group_names: set[str] | None = None,
     assert_single_writer: Callable[[], None] | None = None,
 ) -> bool:
-    """Atomically remove one identity from its managed endpoint query group.
-
-    Databricks serving permissions expose only whole-ACL replacement for
-    deletion. Replacing that ACL can erase an administrator's concurrent grant,
-    so legacy direct entries are rejected for explicit operator cleanup.
-    """
+    """Atomically remove one identity without replacing the endpoint ACL."""
 
     endpoint_id = _endpoint_id(client, endpoint_name, missing_ok=missing_ok)
     if endpoint_id is None:
@@ -668,17 +636,12 @@ def revoke_direct_permissions(
         service_principal,
     )
     before = client.serving_endpoints.get_permissions(endpoint_id)
-    _principal_entry(before, service_principal)
-    removed = remove_managed_query_membership(
-        client,
+    managed_group = managed_query_group_name(
         endpoint_id=endpoint_id,
         application_id=service_principal,
-        service_principal_id=principal_id,
-        assert_single_writer=assert_single_writer,
     )
-    postflight = client.serving_endpoints.get_permissions(endpoint_id)
     group_names = (
-        effective_group_names
+        set(effective_group_names)
         if effective_group_names is not None
         else _effective_group_names(
             client,
@@ -686,11 +649,36 @@ def revoke_direct_permissions(
             service_principal_id=principal_id,
         )
     )
-    managed_group = managed_query_group_name(
-        endpoint_id=endpoint_id,
-        application_id=service_principal,
+    residual_groups = group_names.difference({managed_group})
+    remaining = _principal_entry(before, service_principal)
+    groups = _groups_with_access(
+        before,
+        effective_group_names=residual_groups,
     )
-    group_names = set(group_names).difference({managed_group})
+    if (remaining is not None and _all_levels(remaining)) or groups:
+        raise RuntimeError(
+            f"effective serving permission remains for {service_principal!r} on "
+            f"{endpoint_name!r}; remove residual direct or inherited group access "
+            "before retrying"
+        )
+    try:
+        removed = remove_managed_query_membership(
+            client,
+            app_name=app_name,
+            endpoint_id=endpoint_id,
+            application_id=service_principal,
+            service_principal_id=principal_id,
+            assert_single_writer=assert_single_writer,
+        )
+    except MissingClaimedGroupProvenanceError:
+        group_entry = _exact_group_entry(before, managed_group)
+        if managed_group in group_names and _all_levels(group_entry or object()):
+            raise RuntimeError(
+                "unclaimed managed serving-query group grants effective access"
+            ) from None
+        return False
+    postflight = client.serving_endpoints.get_permissions(endpoint_id)
+    group_names = group_names.difference({managed_group})
     remaining = _principal_entry(postflight, service_principal)
     groups = _groups_with_access(
         postflight,
@@ -708,6 +696,9 @@ def revoke_direct_permissions(
 def converge_exact_direct_can_query(
     client: Any,
     *,
+    app_name: str,
+    deployment_lease_id: str,
+    deployment_source_git_sha: str,
     reviewed_endpoint_names: Collection[str],
     service_principal: str,
     service_principal_id: str | None = None,
@@ -716,16 +707,14 @@ def converge_exact_direct_can_query(
     assert_single_writer: Callable[[], None] | None = None,
 ) -> None:
     """Converge managed CAN_QUERY while preserving reviewed legacy pins read-only."""
-
     reviewed = {str(name).strip() for name in reviewed_endpoint_names if str(name).strip()}
     if not reviewed or len(reviewed) != len(reviewed_endpoint_names):
         raise ValueError("reviewed endpoint names must be non-empty and distinct")
     legacy_pinned = {
         str(name).strip() for name in legacy_pinned_endpoint_names if str(name).strip()
     }
-    if (
-        len(legacy_pinned) != len(legacy_pinned_endpoint_names)
-        or not legacy_pinned.issubset(reviewed)
+    if len(legacy_pinned) != len(legacy_pinned_endpoint_names) or not legacy_pinned.issubset(
+        reviewed
     ):
         raise ValueError("legacy-pinned endpoint names must be a distinct reviewed subset")
     principal = service_principal.strip()
@@ -764,10 +753,12 @@ def converge_exact_direct_can_query(
     for name in sorted(legacy_pinned):
         mode = inspect_exact_query_access_mode(
             client,
+            app_name=app_name,
             endpoint_name=name,
             service_principal=principal,
             service_principal_id=principal_id,
             effective_group_names=group_names,
+            legacy_pinned=True,
         )
         if mode not in {"managed", "direct", "mixed"}:
             raise RuntimeError(
@@ -784,6 +775,7 @@ def converge_exact_direct_can_query(
     for name in sorted(set(visible) - reviewed):
         revoke_direct_permissions(
             client,
+            app_name=app_name,
             endpoint_name=name,
             service_principal=principal,
             missing_ok=True,
@@ -794,6 +786,9 @@ def converge_exact_direct_can_query(
     for name in sorted(reviewed - legacy_pinned):
         grant_direct_can_query(
             client,
+            app_name=app_name,
+            deployment_lease_id=deployment_lease_id,
+            deployment_source_git_sha=deployment_source_git_sha,
             endpoint_name=name,
             service_principal=principal,
             service_principal_id=principal_id,
@@ -809,6 +804,7 @@ def converge_exact_direct_can_query(
     )
     audit_global_serving_endpoint_access(
         client,
+        app_name=app_name,
         reviewed_endpoint_names=reviewed,
         service_principal=principal,
         expected_permission_level="CAN_QUERY",
@@ -821,6 +817,7 @@ def converge_exact_direct_can_query(
 def revoke_all_direct_permissions(
     client: Any,
     *,
+    app_name: str,
     service_principal: str,
     service_principal_id: str | None = None,
     effective_group_names: set[str] | None = None,
@@ -867,6 +864,7 @@ def revoke_all_direct_permissions(
         try:
             revoke_direct_permissions(
                 client,
+                app_name=app_name,
                 endpoint_name=name,
                 service_principal=principal,
                 missing_ok=True,
@@ -894,6 +892,4 @@ def revoke_all_direct_permissions(
     except Exception as exc:  # noqa: BLE001 - include the complete postflight
         errors.append(f"postflight: {type(exc).__name__}: {exc}")
     if errors:
-        raise RuntimeError(
-            "customer-serving deny policy did not converge: " + "; ".join(errors)
-        )
+        raise RuntimeError("customer-serving deny policy did not converge: " + "; ".join(errors))

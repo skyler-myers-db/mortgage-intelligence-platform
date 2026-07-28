@@ -32,8 +32,14 @@ from tools.databricks.cutover_journal_store import (
     refresh_cutover_journal_attestation,
 )
 from tools.databricks.cutover_journal_store import read_cutover_journal as _read_journal
-from tools.databricks.cutover_supervisor_inventory import (
-    supervisor_by_id_direct as _supervisor_by_id_direct,
+from tools.databricks.cutover_runtime_identity import (
+    agent_by_id as _agent_by_id,
+)
+from tools.databricks.cutover_runtime_identity import (
+    endpoint_identity as _endpoint_identity,
+)
+from tools.databricks.cutover_runtime_identity import (
+    retirement_supervisor_by_id as _retirement_supervisor_by_id,
 )
 from tools.databricks.gateway_resource_identity import authenticated_workspace_host
 from tools.databricks.provision_agentic_resources import (
@@ -64,35 +70,6 @@ from tools.databricks.supervisor_agent_contract import (
 from tools.databricks.supervisor_creation_runtime import (
     assert_unique_live_supervisor_binding,
 )
-
-
-def _agent_by_id(supervisor_id: str) -> dict[str, Any] | None:
-    matches = [
-        row
-        for row in _supervisor_agents()
-        if str(row.get("supervisor_agent_id") or "") == supervisor_id
-    ]
-    if len(matches) > 1:
-        raise RuntimeError(f"duplicate Supervisor immutable ID {supervisor_id!r}")
-    return matches[0] if matches else None
-
-
-def _retirement_supervisor_by_id(
-    workspace: Any,
-    supervisor_id: str,
-) -> dict[str, Any] | None:
-    """Resolve destructive retirement state through the immutable GET API."""
-
-    return _supervisor_by_id_direct(workspace, supervisor_id)
-
-
-def _endpoint_identity(workspace: Any, endpoint: str) -> tuple[str, str]:
-    details = workspace.serving_endpoints.get(endpoint)
-    endpoint_id = str(getattr(details, "id", None) or "").strip()
-    creator = str(getattr(details, "creator", None) or "").strip()
-    if not endpoint_id or not creator:
-        raise RuntimeError("serving endpoint has no immutable id or creator")
-    return endpoint_id, creator
 
 
 def pin_journal(
@@ -476,6 +453,8 @@ def prepare(
     workspace: Any,
     *,
     app_name: str,
+    deployment_lease_id: str,
+    deployment_source_git_sha: str,
     verifier_application_id: str,
     verifier_scim_id: str,
     assert_single_writer: Callable[[], None],
@@ -488,6 +467,7 @@ def prepare(
     app_client_id, app_scim_id = app_service_principal_identity(workspace, app_name=app_name)
     assert_pinned_access_retirement_authority(
         workspace,
+        app_name=app_name,
         journal=_read_journal(workspace, runtime_application_id=green["runtime_application_id"]),
         canonical_name=green["canonical_name"],
         green_gateway_endpoint=green["gateway_endpoint"],
@@ -507,6 +487,8 @@ def prepare(
         gateway_endpoint=green["gateway_endpoint"],
         supervisor_endpoint=green["replacement_endpoint"],
         app_name=app_name,
+        deployment_lease_id=deployment_lease_id,
+        deployment_source_git_sha=deployment_source_git_sha,
         preserve_endpoints=preserve_endpoint,
         assert_single_writer=assert_single_writer,
     )
@@ -515,6 +497,7 @@ def prepare(
 def _delete_pinned_gateway(
     workspace: Any,
     *,
+    app_name: str,
     endpoint: str | None,
     endpoint_id: str | None,
     creator: str | None,
@@ -530,6 +513,7 @@ def _delete_pinned_gateway(
 ) -> None:
     delete_pinned_gateway(
         workspace,
+        app_name=app_name,
         endpoint=endpoint,
         endpoint_id=endpoint_id,
         creator=creator,
@@ -647,6 +631,7 @@ def retire(
     )
     _delete_pinned_gateway(
         workspace,
+        app_name=app_name,
         endpoint=old_gateway_endpoint,
         endpoint_id=old_gateway_endpoint_id,
         creator=old_gateway_creator,
@@ -662,6 +647,7 @@ def retire(
     )
     retire_pinned_supervisor(
         workspace,
+        app_name=app_name,
         canonical_name=canonical_name,
         old_id=old_id,
         old_endpoint=old_endpoint,
@@ -814,6 +800,7 @@ def main(argv: list[str] | None = None) -> int:
         assert lease_check is not None
         clear_journal(
             workspace,
+            app_name=args.app_name,
             runtime_application_id=args.runtime_application_id,
             app_application_id=args.app_application_id,
             app_scim_id=args.app_scim_id,
@@ -835,6 +822,8 @@ def main(argv: list[str] | None = None) -> int:
             gateway_endpoint=args.gateway_endpoint,
             supervisor_endpoint=args.supervisor_endpoint,
             app_name=args.app_name,
+            deployment_lease_id=args.deployment_lease_id,
+            deployment_source_git_sha=args.deployment_source_git_sha,
             assert_single_writer=lease_check,
         )
         return 0
@@ -865,6 +854,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "prepare":
             prepare(
                 **green,
+                deployment_lease_id=args.deployment_lease_id,
+                deployment_source_git_sha=args.deployment_source_git_sha,
                 verifier_application_id=args.verifier_application_id,
                 verifier_scim_id=args.verifier_scim_id,
             )

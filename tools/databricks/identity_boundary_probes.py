@@ -172,28 +172,35 @@ def collect_managed_workspace_group_bindings(
         or any(not name or not external for name, external in prefix_contracts)
     ):
         raise ValueError("managed workspace-group prefix contracts are required")
+    contracts_by_name: dict[str, set[str]] = {}
+    for name_prefix, external_prefix in prefix_contracts:
+        contracts_by_name.setdefault(name_prefix, set()).add(external_prefix)
     summaries = tuple(workspace.groups.list(attributes="id,displayName"))
     if len(summaries) > _MAX_INVENTORY:
         raise RuntimeError("managed workspace-group inventory is unbounded")
     bindings: list[ManagedWorkspaceGroupBinding] = []
     for summary in summaries:
         name = _text(summary, "display_name") or _text(summary, "displayName")
-        matches = tuple(
-            contract
-            for contract in prefix_contracts
-            if name.startswith(contract[0])
+        matched_name_prefixes = tuple(
+            name_prefix
+            for name_prefix in contracts_by_name
+            if name.startswith(name_prefix)
         )
-        if not matches:
+        if not matched_name_prefixes:
             continue
-        if len(matches) != 1:
+        if len(matched_name_prefixes) != 1:
             raise RuntimeError("managed workspace-group name contract is ambiguous")
+        allowed_external_prefixes = contracts_by_name[matched_name_prefixes[0]]
         binding = managed_workspace_group_binding(
             workspace,
             group_id=_text(summary, "id"),
         )
         if (
             binding.name != name
-            or not binding.external_id.startswith(matches[0][1])
+            or not any(
+                binding.external_id.startswith(prefix)
+                for prefix in allowed_external_prefixes
+            )
         ):
             raise RuntimeError("managed workspace-group immutable contract drifted")
         bindings.append(binding)

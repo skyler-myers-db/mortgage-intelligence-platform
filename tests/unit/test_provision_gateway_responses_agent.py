@@ -23,6 +23,7 @@ from tools.databricks import gateway_model_attestation as attestation
 from tools.databricks import gateway_registration_journal as journal_store
 from tools.databricks import gateway_registration_recovery as registration_recovery
 from tools.databricks import provision_gateway_responses_agent as gateway
+from tools.databricks import serving_query_group_access as query_group_access
 from tools.databricks.gateway_endpoint_contract import (
     current_model_version as _current_model_version,
 )
@@ -33,10 +34,8 @@ from tools.databricks.provision_gateway_responses_agent import (
 from tools.databricks.provision_gateway_responses_agent import (
     verify_gateway_responses_agent as _verify_gateway_responses_agent,
 )
-from tools.databricks.serving_query_group_access import (
-    managed_query_group_external_id,
-    managed_query_group_name,
-)
+from tools.databricks.serving_query_group_access import managed_query_group_name
+from tools.databricks.serving_query_group_provenance import intent_external_id
 
 _CATALOG = "mip"
 _GENIE_SPACE_ID = "space-123"
@@ -61,6 +60,7 @@ def ensure_gateway_responses_agent(workspace: object, **kwargs: Any) -> GatewayA
     kwargs.setdefault("proxy_caller_application_id", _PROXY_CLIENT_ID)
     kwargs.setdefault("proxy_caller_credential_id", _PROXY_CREDENTIAL_ID)
     kwargs.setdefault("proxy_caller_secret_reference", _PROXY_SECRET_REFERENCE)
+    kwargs.setdefault("deployment_app_name", "mip-app")
     return gateway.ensure_gateway_responses_agent(workspace, **kwargs)
 
 
@@ -3865,14 +3865,15 @@ def test_completed_redeploy_reuses_gateway_with_exact_app_and_verifier_groups(
                 endpoint_id=endpoint.id,
                 application_id=application_id,
             ),
-            external_id=managed_query_group_external_id(
+            external_id=intent_external_id(
                 endpoint_id=endpoint.id,
                 application_id=application_id,
+                creation_nonce=f"22222222-2222-4222-8222-22222222222{index}",
             ),
             members=[SimpleNamespace(value=f"{application_id}-scim")],
             meta=SimpleNamespace(resource_type="WorkspaceGroup"),
         )
-        for application_id in applications
+        for index, application_id in enumerate(applications)
     }
     principals = {
         application_id: SimpleNamespace(
@@ -3893,6 +3894,39 @@ def test_completed_redeploy_reuses_gateway_with_exact_app_and_verifier_groups(
     )
     workspace.service_principals = SimpleNamespace(
         list=lambda **_kwargs: list(principals.values()),
+    )
+    claims = {
+        (
+            endpoint.id,
+            application_id,
+            f"{application_id}-scim",
+        ): {
+            "group_id": groups[application_id].id,
+            "external_id": groups[application_id].external_id,
+        }
+        for application_id in applications
+    }
+
+    def require_claimed(
+        _workspace: object,
+        *,
+        app_name: str,
+        endpoint_id: str,
+        application_id: str,
+        service_principal_id: str,
+        group_name: str,
+    ) -> dict[str, str]:
+        assert app_name == "mip-app"
+        assert group_name == managed_query_group_name(
+            endpoint_id=endpoint_id,
+            application_id=application_id,
+        )
+        return claims[(endpoint_id, application_id, service_principal_id)]
+
+    monkeypatch.setattr(
+        query_group_access.group_provenance,
+        "require_claimed",
+        require_claimed,
     )
 
     deployment = _ensure_gateway(

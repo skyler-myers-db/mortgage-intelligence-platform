@@ -21,7 +21,7 @@ from backend.services.resilience import CircuitBreaker, DependencyDownError
 # interpreter import while the full suite saturates xdist workers; tying it to
 # the inner eight-second fake-server release made the otherwise bounded tests
 # fail nondeterministically before their assertions could report a result.
-_SUBPROCESS_WALL_TIMEOUT_S = 20.0
+_SUBPROCESS_WALL_TIMEOUT_S = 60.0
 
 
 class _Clock:

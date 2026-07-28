@@ -799,6 +799,9 @@ def main(argv: list[str] | None = None) -> int:
         inventory = cleanup_runtime_endpoints(
             client,
             inventory,
+            app_name=args.app_name,
+            deployment_lease_id=args.deployment_lease_id,
+            deployment_source_git_sha=args.deployment_source_git_sha,
             assert_single_writer=lease_check,
             query_principals=QueryGroupPrincipals(
                 app_application_id=args.app_application_id,

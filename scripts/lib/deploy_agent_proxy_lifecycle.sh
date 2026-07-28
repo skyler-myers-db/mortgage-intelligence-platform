@@ -11,6 +11,11 @@ converge_agent_proxy_boundary() {
   run_with_proof_signing_authority \
     "$PYTHON" -m tools.databricks.agent_proxy_access \
     --mode "$mode" \
+    --app-name "${MIP_APP_NAME:?App name is required}" \
+    --deployment-lease-id \
+      "${MIP_APP_DEPLOYMENT_LEASE_ID:?deployment lease is required}" \
+    --deployment-source-git-sha \
+      "${MIP_DEPLOYMENT_SOURCE_GIT_SHA:?deployment source is required}" \
     --supervisor-id "$supervisor_id" \
     --supervisor-endpoint "$supervisor_endpoint" \
     --supervisor-endpoint-id "$supervisor_endpoint_id" \
@@ -88,6 +93,11 @@ deny_all_agent_proxy_access() {
   run_with_proof_signing_authority \
     "$PYTHON" -m tools.databricks.agent_proxy_access \
     --mode deny-all \
+    --app-name "${MIP_APP_NAME:?App name is required}" \
+    --deployment-lease-id \
+      "${MIP_APP_DEPLOYMENT_LEASE_ID:?deployment lease is required}" \
+    --deployment-source-git-sha \
+      "${MIP_DEPLOYMENT_SOURCE_GIT_SHA:?deployment source is required}" \
     --application-id "${DATABRICKS_AGENT_PROXY_CLIENT_ID:?agent-proxy identity is required}" \
     --expected-inventory-principal "${DEPLOY_INVENTORY_PRINCIPAL:?inventory principal is required}" \
     || failed=1

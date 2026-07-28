@@ -29,6 +29,7 @@ from databricks.sdk.service.sql import (
 )
 
 from tools.databricks import oauth_credential_creation
+from tools.databricks import serving_query_group_access as query_group_access
 from tools.databricks.agent_proxy_credential_bundle import (
     canonical_agent_proxy_credential_bundle,
     parse_agent_proxy_credential_bundle,
@@ -37,9 +38,9 @@ from tools.databricks.agent_proxy_credential_bundle import (
     main as agent_proxy_bundle_main,
 )
 from tools.databricks.serving_query_group_access import (
-    managed_query_group_external_id,
     managed_query_group_name,
 )
+from tools.databricks.serving_query_group_provenance import intent_external_id
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 _PMO_PATH = REPO_ROOT / "tools" / "databricks" / "provision_m2m_oauth.py"
@@ -264,18 +265,28 @@ def _make_client(
         application_id=endpoint_principal,
     )
     if resource_access and managed_serving_access:
+        external_id = intent_external_id(
+            endpoint_id="mip-gateway-endpoint-id",
+            application_id=endpoint_principal,
+            creation_nonce="22222222-2222-4222-8222-222222222222",
+        )
         group_values.append(
             SimpleNamespace(
                 id="mip-gateway-query-group-id",
                 display_name=endpoint_group_name,
-                external_id=managed_query_group_external_id(
-                    endpoint_id="mip-gateway-endpoint-id",
-                    application_id=endpoint_principal,
-                ),
+                external_id=external_id,
                 members=[SimpleNamespace(value=endpoint_sp_id)],
                 meta=SimpleNamespace(resource_type="WorkspaceGroup"),
             )
         )
+        client.serving_query_claim = {
+            "endpoint_id": "mip-gateway-endpoint-id",
+            "application_id": endpoint_principal,
+            "service_principal_id": endpoint_sp_id,
+            "group_name": endpoint_group_name,
+            "external_id": external_id,
+            "group_id": "mip-gateway-query-group-id",
+        }
     groups_by_id = {str(group.id): group for group in group_values if getattr(group, "id", None)}
 
     def list_groups(**kwargs: object):
@@ -654,6 +665,8 @@ def _provision(client: MagicMock, **overrides: object):
         ),
         "credential_writer_application_id": "deployment-writer-client",
         "gateway_mutation_assertion": lambda: None,
+        "deployment_lease_id": "11111111-1111-4111-8111-111111111111",
+        "deployment_source_git_sha": "a" * 40,
     }
     kwargs.update(overrides)
     role_defaults = pmo.IDENTITY_DEFAULTS[kwargs["identity_role"]]
@@ -2180,7 +2193,9 @@ def test_admin_existing_membership_is_idempotent() -> None:
     assert result.added_to_group is False
 
 
-def test_verifier_reuses_safely_bootstrapped_lakebase_role_without_admin_or_app_grants() -> None:
+def test_verifier_reuses_safely_bootstrapped_lakebase_role_without_admin_or_app_grants(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     verifier = _sp(
         "mip-ai-gateway-verifier-ci-sp",
         sp_id="verifier-scim-id",
@@ -2195,6 +2210,35 @@ def test_verifier_reuses_safely_bootstrapped_lakebase_role_without_admin_or_app_
             )
         ],
         managed_serving_access=True,
+    )
+    monkeypatch.delenv("MIP_APP_NAME", raising=False)
+
+    def exact_claim(workspace: object, **kwargs: object) -> dict[str, str]:
+        record = workspace.serving_query_claim
+        assert kwargs["app_name"] == "mip-app"
+        assert kwargs["endpoint_id"] == record["endpoint_id"]
+        assert kwargs["application_id"] == record["application_id"]
+        assert kwargs["service_principal_id"] == record["service_principal_id"]
+        assert kwargs["group_name"] == record["group_name"]
+        if "deployment_lease_id" in kwargs:
+            assert kwargs["deployment_lease_id"]
+            assert kwargs["deployment_source_git_sha"] == "a" * 40
+        return record
+
+    monkeypatch.setattr(
+        query_group_access.group_provenance,
+        "prepare",
+        exact_claim,
+    )
+    monkeypatch.setattr(
+        query_group_access.group_provenance,
+        "require_claimed",
+        exact_claim,
+    )
+    monkeypatch.setattr(
+        query_group_access.group_provenance,
+        "claim",
+        lambda *_args, **_kwargs: pytest.fail("an existing signed claim must be reused"),
     )
 
     result = _provision(
@@ -2911,6 +2955,9 @@ def test_verifier_gateway_grant_fails_closed_without_endpoint_id() -> None:
             client,
             "mip-agent-gateway",
             "verifier-application-id",
+            app_name="mip-app",
+            deployment_lease_id="11111111-1111-4111-8111-111111111111",
+            deployment_source_git_sha="a" * 40,
             sp_id="verifier-scim-id",
             effective_group_names=set(),
             assert_single_writer=lambda: None,

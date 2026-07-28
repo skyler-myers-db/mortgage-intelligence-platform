@@ -306,6 +306,7 @@ def test_occupied_sink_retry_clears_source_before_any_remaining_resource(
     result = cleanup.cleanup_runtime_endpoints(
         client,
         initial,
+        app_name="mip-app",
         assert_single_writer=lambda: None,
         query_principals=QueryGroupPrincipals(
             "app-client",

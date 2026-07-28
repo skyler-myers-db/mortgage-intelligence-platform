@@ -11,12 +11,15 @@ import pytest
 from databricks.sdk.errors import PermissionDenied, ResourceDoesNotExist
 from databricks.sdk.service.apps import ComputeState
 
+from tools.databricks import agent_proxy_identity_inventory_groups as inventory_groups
 from tools.databricks import verify_agent_proxy_identity_boundary as boundary
 from tools.databricks.agent_proxy_capability_group_access import (
     managed_agent_proxy_group_external_id,
     managed_agent_proxy_group_name,
 )
 from tools.databricks.serving_query_group_access import (
+    ManagedQueryGroup,
+    ManagedQueryGroupState,
     managed_query_group_external_id,
     managed_query_group_name,
 )
@@ -38,6 +41,7 @@ PROXY_QUERY_GROUP = managed_query_group_name(
     endpoint_id="gateway-id",
     application_id=PROXY_ID,
 )
+PROXY_QUERY_V2_EXTERNAL_ID = f"mip:sq:v2:{'a' * 52}"
 
 
 def _proxy_main_args(
@@ -399,6 +403,7 @@ def _admin_inventory_workspace(
     *,
     supervisor_endpoint: str = "gateway",
     managed_groups: tuple[object, ...] | None = None,
+    query_external_id: str | None = None,
 ) -> object:
     groups = managed_groups or tuple(
         SimpleNamespace(
@@ -411,9 +416,9 @@ def _admin_inventory_workspace(
             (
                 "managed-query-group-id",
                 PROXY_QUERY_GROUP,
-                managed_query_group_external_id(
-                    endpoint_id="gateway-id",
-                    application_id=PROXY_ID,
+                query_external_id
+                or managed_query_group_external_id(
+                    endpoint_id="gateway-id", application_id=PROXY_ID
                 ),
             ),
             (
@@ -455,7 +460,16 @@ def _admin_inventory_workspace(
         ),
         metastores=SimpleNamespace(current=lambda: SimpleNamespace(metastore_id="metastore-id")),
         service_principals=SimpleNamespace(
-            list=lambda **_kwargs: iter((SimpleNamespace(id="proxy-scim"),))
+            list=lambda **_kwargs: iter(
+                (
+                    SimpleNamespace(
+                        id="proxy-scim",
+                        application_id=PROXY_ID,
+                        display_name="proxy",
+                        active=True,
+                    ),
+                )
+            )
         ),
         secrets=SimpleNamespace(list_scopes=lambda: iter((SimpleNamespace(name="proxy-scope"),))),
         database=SimpleNamespace(
@@ -484,9 +498,21 @@ def test_admin_inventory_binds_target_supervisor_id_to_endpoint(
 ) -> None:
     monkeypatch.setattr(boundary, "_supervisor_agents", lambda _workspace: {TARGET_SUPERVISOR: ""})
     monkeypatch.setattr(boundary, "_genie_spaces", lambda _workspace: {TARGET_GENIE: ""})
+    monkeypatch.setattr(
+        inventory_groups,
+        "inspect_claimed_managed_query_group",
+        lambda *_args, **_kwargs: ManagedQueryGroupState(
+            contract=ManagedQueryGroup(
+                id="managed-query-group-id",
+                name=PROXY_QUERY_GROUP,
+                external_id=PROXY_QUERY_V2_EXTERNAL_ID,
+            ),
+            member_ids=("proxy-scim",),
+        ),
+    )
 
     inventory = collect_admin_inventory(
-        _admin_inventory_workspace(),
+        _admin_inventory_workspace(query_external_id=PROXY_QUERY_V2_EXTERNAL_ID),
         app_name="mip-app",
         app_url="https://mip-app.databricksapps.com",
         lakebase_instance="lakebase-target",
@@ -501,6 +527,114 @@ def test_admin_inventory_binds_target_supervisor_id_to_endpoint(
     assert inventory.supervisor_ids == (TARGET_SUPERVISOR,)
     assert inventory.serving_endpoint_names == ("gateway",)
     assert inventory.reviewed_supervisor_bindings == ((TARGET_SUPERVISOR, "gateway", "gateway-id"),)
+
+
+def test_proxy_inventory_accepts_exact_v1_only_for_preserved_supervisor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    active_name = managed_query_group_name(
+        endpoint_id="active-endpoint-id",
+        application_id=PROXY_ID,
+    )
+    preserved_name = managed_query_group_name(
+        endpoint_id="preserved-endpoint-id",
+        application_id=PROXY_ID,
+    )
+    preserved_external_id = managed_query_group_external_id(
+        endpoint_id="preserved-endpoint-id",
+        application_id=PROXY_ID,
+    )
+    managed_groups = (
+        boundary.ManagedWorkspaceGroupBinding(
+            id="active-group-id",
+            name=active_name,
+            external_id=PROXY_QUERY_V2_EXTERNAL_ID,
+            resource_type="WorkspaceGroup",
+        ),
+        boundary.ManagedWorkspaceGroupBinding(
+            id="preserved-group-id",
+            name=preserved_name,
+            external_id=preserved_external_id,
+            resource_type="WorkspaceGroup",
+        ),
+    )
+    monkeypatch.setattr(
+        inventory_groups,
+        "workspace_target_identity",
+        lambda *_args, **_kwargs: SimpleNamespace(scim_id="proxy-scim"),
+    )
+
+    def claimed(
+        _workspace: object,
+        *,
+        endpoint_id: str,
+        **_kwargs: object,
+    ) -> ManagedQueryGroupState:
+        if endpoint_id == "preserved-endpoint-id":
+            raise inventory_groups.MissingClaimedGroupProvenanceError(
+                "preserved v1 group has no signed claim"
+            )
+        return ManagedQueryGroupState(
+            contract=ManagedQueryGroup(
+                id="active-group-id",
+                name=active_name,
+                external_id=PROXY_QUERY_V2_EXTERNAL_ID,
+            ),
+            member_ids=("proxy-scim",),
+        )
+
+    legacy_calls: list[str] = []
+    monkeypatch.setattr(
+        inventory_groups,
+        "inspect_claimed_managed_query_group",
+        claimed,
+    )
+    monkeypatch.setattr(
+        inventory_groups,
+        "inspect_legacy_pre_provenance_group",
+        lambda _workspace, *, endpoint_id, **_kwargs: (
+            legacy_calls.append(endpoint_id)
+            or ManagedQueryGroupState(
+                contract=ManagedQueryGroup(
+                    id="preserved-group-id",
+                    name=preserved_name,
+                    external_id=preserved_external_id,
+                ),
+                member_ids=("proxy-scim",),
+            )
+        ),
+    )
+
+    reviewed = inventory_groups.reviewed_agent_proxy_query_group_bindings(
+        object(),
+        app_name="mip-app",
+        managed_groups=managed_groups,
+        reviewed_supervisor_bindings=(
+            ("active-supervisor", "active-endpoint", "active-endpoint-id"),
+            (
+                "preserved-supervisor",
+                "preserved-endpoint",
+                "preserved-endpoint-id",
+            ),
+        ),
+        expected_application_id=PROXY_ID,
+    )
+
+    assert legacy_calls == ["preserved-endpoint-id"]
+    assert reviewed == (
+        (
+            "active-endpoint-id",
+            active_name,
+            "active-group-id",
+            PROXY_QUERY_V2_EXTERNAL_ID,
+        ),
+        (
+            "preserved-endpoint-id",
+            preserved_name,
+            "preserved-group-id",
+            preserved_external_id,
+        ),
+    )
 
 
 def test_admin_inventory_rejects_supervisor_id_endpoint_drift(

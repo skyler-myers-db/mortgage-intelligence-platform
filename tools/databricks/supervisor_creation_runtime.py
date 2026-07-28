@@ -530,6 +530,7 @@ def _await_field_readback(
 def finalize_signed_blue_for_planning(
     workspace: Any,
     *,
+    app_name: str,
     signed_blue_pin: Mapping[str, object] | None,
     canonical_name: str,
     genie_space_id: str,
@@ -565,6 +566,7 @@ def finalize_signed_blue_for_planning(
     after = recover_interrupted_signed_blue_finalization(
         workspace,
         before,
+        app_name=app_name,
         signed_blue_pin=signed_blue_pin,
         display_name=canonical_name,
         genie_space_id=genie_space_id,
@@ -796,6 +798,7 @@ def main(argv: list[str] | None = None) -> int:
 
         result = finalize_signed_blue_for_planning(
             workspace,
+            app_name=args.app_name,
             signed_blue_pin=signed_blue_supervisor_pin_from_env(),
             canonical_name=args.canonical_name,
             genie_space_id=args.genie_space_id,

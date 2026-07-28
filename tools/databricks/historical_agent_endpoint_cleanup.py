@@ -8,16 +8,26 @@ from typing import Any, Protocol
 from urllib.parse import quote
 
 from databricks.sdk.errors import NotFound, ResourceDoesNotExist
+from tools.databricks import serving_query_group_provenance as group_provenance
 from tools.databricks.historical_agent_endpoint_types import (
     QueryGroupPrincipals,
     ReviewedSupervisor,
     RuntimeEndpointInventory,
     SupervisorCleanupProof,
 )
+from tools.databricks.serving_endpoint_legacy_query import (
+    inspect_legacy_pre_provenance_group,
+)
 from tools.databricks.serving_query_group_access import (
     ManagedQueryGroupState,
+    inspect_claimed_managed_query_group,
     inspect_managed_query_group,
     inspect_managed_query_group_by_id,
+    managed_query_group_name,
+    recover_existing_managed_query_group,
+)
+from tools.databricks.serving_query_group_provenance import (
+    MissingClaimedGroupProvenanceError,
 )
 from tools.databricks.workspace_group_deletion import (
     WORKSPACE_GROUP_DELETION_TIMEOUT_SECONDS,
@@ -92,25 +102,72 @@ def _exact_group_acl_binding(
 def _capture_retirable_query_groups(
     client: Any,
     *,
+    app_name: str,
+    deployment_lease_id: str | None = None,
+    deployment_source_git_sha: str | None = None,
     endpoint_id: str,
     principals: tuple[tuple[str, str], ...],
     permissions: object,
-) -> tuple[tuple[str, str, ManagedQueryGroupState], ...]:
-    groups: list[tuple[str, str, ManagedQueryGroupState]] = []
+    assert_single_writer: Callable[[], None],
+) -> tuple[tuple[str, str, ManagedQueryGroupState, bool], ...]:
+    groups: list[tuple[str, str, ManagedQueryGroupState, bool]] = []
     for application_id, scim_id in principals:
-        state = inspect_managed_query_group(
-            client,
-            endpoint_id=endpoint_id,
-            application_id=application_id,
-            missing_ok=True,
-        )
+        try:
+            state = inspect_claimed_managed_query_group(
+                client,
+                app_name=app_name,
+                endpoint_id=endpoint_id,
+                application_id=application_id,
+                service_principal_id=scim_id,
+                missing_ok=True,
+            )
+        except MissingClaimedGroupProvenanceError:
+            intent = group_provenance.read_existing(
+                client,
+                app_name=app_name,
+                endpoint_id=endpoint_id,
+                application_id=application_id,
+                service_principal_id=scim_id,
+                group_name=managed_query_group_name(
+                    endpoint_id=endpoint_id,
+                    application_id=application_id,
+                ),
+            )
+            if intent is not None:
+                if not deployment_lease_id or not deployment_source_git_sha:
+                    raise RuntimeError(
+                        "signed query-group intent recovery requires deployment identity"
+                    ) from None
+                state = recover_existing_managed_query_group(
+                    client,
+                    app_name=app_name,
+                    deployment_lease_id=deployment_lease_id,
+                    deployment_source_git_sha=deployment_source_git_sha,
+                    endpoint_id=endpoint_id,
+                    application_id=application_id,
+                    service_principal_id=scim_id,
+                    expected_intent=intent,
+                    assert_single_writer=assert_single_writer,
+                )
+                signed = True
+            else:
+                state = inspect_legacy_pre_provenance_group(
+                    client,
+                    endpoint_id=endpoint_id,
+                    application_id=application_id,
+                    service_principal_id=scim_id,
+                    missing_ok=True,
+                )
+                signed = False
+        else:
+            signed = True
         if state is None:
             continue
         bound = _exact_group_acl_binding(
             permissions,
             group_name=state.contract.name,
         )
-        if not bound:
+        if not signed and not bound:
             raise RuntimeError(
                 "historical managed query group is not bound to the exact live endpoint ACL"
             )
@@ -118,13 +175,16 @@ def _capture_retirable_query_groups(
             raise RuntimeError(
                 "historical endpoint group contains an unrelated member before deletion"
             )
-        groups.append((application_id, scim_id, state))
+        groups.append((application_id, scim_id, state, bound))
     return tuple(groups)
 
 
 def _retire_live_endpoint_query_groups(
     client: Any,
     *,
+    app_name: str,
+    deployment_lease_id: str | None = None,
+    deployment_source_git_sha: str | None = None,
     endpoint_name: str,
     endpoint_id: str,
     endpoint_creator: str,
@@ -151,39 +211,47 @@ def _retire_live_endpoint_query_groups(
     permissions = client.serving_endpoints.get_permissions(endpoint_id)
     groups = _capture_retirable_query_groups(
         client,
+        app_name=app_name,
+        deployment_lease_id=deployment_lease_id,
+        deployment_source_git_sha=deployment_source_git_sha,
         endpoint_id=endpoint_id,
         principals=principals,
         permissions=permissions,
+        assert_single_writer=assert_single_writer,
     )
     expected_endpoint = (endpoint_id, endpoint_creator)
-    for application_id, scim_id, expected_state in groups:
+    for application_id, scim_id, expected_state, expected_acl_bound in groups:
         current_endpoint = client.serving_endpoints.get(endpoint_name)
         if (
             _item_text(current_endpoint, "id"),
             _item_text(current_endpoint, "creator"),
         ) != expected_endpoint:
             raise RuntimeError("historical endpoint changed during exact group retirement")
-        current = inspect_managed_query_group(
+        current = inspect_managed_query_group_by_id(
             client,
+            group_id=expected_state.contract.id,
             endpoint_id=endpoint_id,
             application_id=application_id,
+            expected_external_id=expected_state.contract.external_id,
         )
         if current != expected_state or set(current.member_ids) not in (
             {scim_id},
             set(),
         ):
             raise RuntimeError("historical managed query group changed before deletion")
-        if not _exact_group_acl_binding(
+        if _exact_group_acl_binding(
             client.serving_endpoints.get_permissions(endpoint_id),
             group_name=expected_state.contract.name,
-        ):
+        ) != expected_acl_bound:
             raise RuntimeError("historical managed query ACL changed before group deletion")
         assert_single_writer()
         current_endpoint = client.serving_endpoints.get(endpoint_name)
-        current = inspect_managed_query_group(
+        current = inspect_managed_query_group_by_id(
             client,
+            group_id=expected_state.contract.id,
             endpoint_id=endpoint_id,
             application_id=application_id,
+            expected_external_id=expected_state.contract.external_id,
         )
         if (
             (
@@ -192,10 +260,10 @@ def _retire_live_endpoint_query_groups(
             )
             != expected_endpoint
             or current != expected_state
-            or not _exact_group_acl_binding(
+            or _exact_group_acl_binding(
                 client.serving_endpoints.get_permissions(endpoint_id),
                 group_name=expected_state.contract.name,
-            )
+            ) != expected_acl_bound
         ):
             raise RuntimeError("historical endpoint, group, or ACL changed at deletion boundary")
         def assert_endpoint_exact() -> None:
@@ -219,10 +287,12 @@ def _retire_live_endpoint_query_groups(
                 endpoint_id=endpoint_id,
                 application_id=application_id,
                 missing_ok=True,
+                expected_external_id=expected_state.contract.external_id,
             )
 
         def inspect_bound_state(
             application_id: str = application_id,
+            expected_state: ManagedQueryGroupState = expected_state,
         ) -> ManagedQueryGroupState | None:
             assert_endpoint_exact()
             return inspect_managed_query_group(
@@ -230,6 +300,8 @@ def _retire_live_endpoint_query_groups(
                 endpoint_id=endpoint_id,
                 application_id=application_id,
                 missing_ok=True,
+                expected_group_id=expected_state.contract.id,
+                expected_external_id=expected_state.contract.external_id,
             )
 
         delete_workspace_group_and_wait(
@@ -390,6 +462,9 @@ def _cleanup_supervisor_proof(
     client: Any,
     proof: SupervisorCleanupProof,
     *,
+    app_name: str,
+    deployment_lease_id: str | None = None,
+    deployment_source_git_sha: str | None = None,
     assert_single_writer: Callable[[], None],
     query_principals: QueryGroupPrincipals,
     cleanup_journal: CleanupJournal,
@@ -411,6 +486,9 @@ def _cleanup_supervisor_proof(
     if endpoint_live:
         _retire_live_endpoint_query_groups(
             client,
+            app_name=app_name,
+            deployment_lease_id=deployment_lease_id,
+            deployment_source_git_sha=deployment_source_git_sha,
             endpoint_name=proof.endpoint,
             endpoint_id=proof.endpoint_id,
             endpoint_creator=proof.creator,
@@ -474,6 +552,9 @@ def cleanup_runtime_endpoints(
     client: Any,
     inventory: RuntimeEndpointInventory,
     *,
+    app_name: str,
+    deployment_lease_id: str | None = None,
+    deployment_source_git_sha: str | None = None,
     assert_single_writer: Callable[[], None],
     query_principals: QueryGroupPrincipals,
     timeout_s: int,
@@ -492,6 +573,9 @@ def cleanup_runtime_endpoints(
         _cleanup_supervisor_proof(
             client,
             inventory.pending_supervisor_cleanup,
+            app_name=app_name,
+            deployment_lease_id=deployment_lease_id,
+            deployment_source_git_sha=deployment_source_git_sha,
             assert_single_writer=assert_single_writer,
             query_principals=query_principals,
             cleanup_journal=cleanup_journal,
@@ -525,6 +609,9 @@ def cleanup_runtime_endpoints(
         )
         _retire_live_endpoint_query_groups(
             client,
+            app_name=app_name,
+            deployment_lease_id=deployment_lease_id,
+            deployment_source_git_sha=deployment_source_git_sha,
             endpoint_name=gateway.name,
             endpoint_id=gateway.endpoint_id,
             endpoint_creator=gateway.creator,
@@ -564,6 +651,9 @@ def cleanup_runtime_endpoints(
         )
         _cleanup_supervisor_proof(
             client,
+            app_name=app_name,
+            deployment_lease_id=deployment_lease_id,
+            deployment_source_git_sha=deployment_source_git_sha,
             assert_single_writer=assert_single_writer,
             query_principals=query_principals,
             cleanup_journal=cleanup_journal,

@@ -315,6 +315,7 @@ def plan_and_prepare(
     plan = plan_supervisor_agent(
         workspace,
         candidates,
+        app_name=app_name,
         display_name=canonical_name,
         genie_space_id=genie_space_id,
         catalog=catalog,

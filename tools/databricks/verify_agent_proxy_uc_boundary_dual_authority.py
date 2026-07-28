@@ -17,8 +17,14 @@ from tools.databricks.agent_runtime_uc_inventory import _text
 from tools.databricks.audit_agent_runtime_foreign_uc_access import (
     audit_foreign_uc_access,
 )
+from tools.databricks.serving_endpoint_legacy_query import (
+    inspect_legacy_pre_provenance_group,
+)
 from tools.databricks.serving_query_group_access import (
-    inspect_managed_query_group,
+    inspect_claimed_managed_query_group,
+)
+from tools.databricks.serving_query_group_provenance import (
+    MissingClaimedGroupProvenanceError,
 )
 from tools.databricks.uc_owner_policy import account_client_from_env
 from tools.databricks.uc_target_identity import (
@@ -73,6 +79,7 @@ def _reviewed_workspace_capability_groups(
     workspace: Any,
     *,
     account: Any,
+    app_name: str,
     application_id: str,
     supervisor_ids: Iterable[str],
     supervisor_endpoint_ids: Iterable[str],
@@ -131,23 +138,36 @@ def _reviewed_workspace_capability_groups(
             )
         )
 
-    for supervisor_id, endpoint_id in zip(
+    for index, (supervisor_id, endpoint_id) in enumerate(zip(
         reviewed_supervisor_ids,
         reviewed_endpoint_ids,
         strict=True,
-    ):
+    )):
         capability = inspect_managed_agent_proxy_group(
             workspace,
             resource_kind="supervisor",
             resource_id=supervisor_id,
             application_id=application_id,
         )
-        query = inspect_managed_query_group(
-            workspace,
-            endpoint_id=endpoint_id,
-            application_id=application_id,
-            missing_ok=True,
-        )
+        try:
+            query = inspect_claimed_managed_query_group(
+                workspace,
+                app_name=app_name,
+                endpoint_id=endpoint_id,
+                application_id=application_id,
+                service_principal_id=workspace_principal_id,
+                missing_ok=True,
+            )
+        except MissingClaimedGroupProvenanceError:
+            if index == 0:
+                raise
+            query = inspect_legacy_pre_provenance_group(
+                workspace,
+                endpoint_id=endpoint_id,
+                application_id=application_id,
+                service_principal_id=workspace_principal_id,
+                missing_ok=True,
+            )
         if capability is None:
             raise RuntimeError("reviewed agent-proxy Supervisor group is missing")
         if capability.member_ids != (workspace_principal_id,):
@@ -205,6 +225,7 @@ def _bind_proxy_auth_environment(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--app-name", required=True)
     parser.add_argument("--application-id", required=True)
     parser.add_argument("--expected-inventory-principal", required=True)
     parser.add_argument("--catalog", default="mip")
@@ -222,6 +243,7 @@ def main(argv: list[str] | None = None) -> int:
     reviewed_capability_attestation = _reviewed_workspace_capability_groups(
         admin_workspace,
         account=account_client,
+        app_name=args.app_name,
         application_id=args.application_id,
         supervisor_ids=args.supervisor_id,
         supervisor_endpoint_ids=args.supervisor_endpoint_id,
@@ -261,6 +283,7 @@ def main(argv: list[str] | None = None) -> int:
         _reviewed_workspace_capability_groups(
             admin_workspace,
             account=account_client,
+            app_name=args.app_name,
             application_id=args.application_id,
             supervisor_ids=args.supervisor_id,
             supervisor_endpoint_ids=args.supervisor_endpoint_id,

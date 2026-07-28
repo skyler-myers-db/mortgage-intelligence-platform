@@ -16,7 +16,7 @@ from databricks.sdk import WorkspaceClient
 from tools.databricks.audit_global_m2m_access import (
     assert_workspace_admin_inventory_identity,
 )
-from tools.databricks.deployment_lease_authority import held_assertion_from_env
+from tools.databricks.deployment_lease_authority import held_assertion
 from tools.databricks.serving_endpoint_acl import revoke_direct_permissions
 
 _IDENTITY_ID_RE = re.compile(r"[A-Za-z0-9._-]{1,128}")
@@ -99,6 +99,7 @@ def capture(
 def revoke_managed(
     workspace: Any,
     *,
+    app_name: str,
     endpoint: str,
     application_id: str,
     expected_scim_id: str,
@@ -120,6 +121,7 @@ def revoke_managed(
         raise RuntimeError("verifier immutable SCIM ID drifted before Gateway compensation")
     return revoke_direct_permissions(
         workspace,
+        app_name=app_name,
         endpoint_name=endpoint,
         service_principal=observed_application_id,
         service_principal_id=expected_id,
@@ -136,6 +138,9 @@ def _parser() -> argparse.ArgumentParser:
     capture_parser.add_argument("--expected-inventory-principal", required=True)
     capture_parser.add_argument("--out-env", type=Path, required=True)
     revoke_parser = subparsers.add_parser("revoke-managed")
+    revoke_parser.add_argument("--app-name", required=True)
+    revoke_parser.add_argument("--deployment-lease-id", required=True)
+    revoke_parser.add_argument("--deployment-source-git-sha", required=True)
     revoke_parser.add_argument("--endpoint", required=True)
     revoke_parser.add_argument("--application-id", required=True)
     revoke_parser.add_argument("--expected-scim-id", required=True)
@@ -155,12 +160,16 @@ def main(argv: list[str] | None = None) -> int:
         )
         print("verifier immutable Gateway identity capture: PASS")
         return 0
-    assert_single_writer = held_assertion_from_env(
+    assert_single_writer = held_assertion(
         workspace,
+        app_name=args.app_name,
+        lease_id=args.deployment_lease_id,
+        source_git_sha=args.deployment_source_git_sha,
         operation="verifier Gateway compensation",
     )
     revoke_managed(
         workspace,
+        app_name=args.app_name,
         endpoint=args.endpoint,
         application_id=args.application_id,
         expected_scim_id=args.expected_scim_id,

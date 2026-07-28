@@ -124,6 +124,7 @@ def supervisor_candidates(
 def supervisor_endpoint_requires_managed_query_rotation(
     workspace: Any,
     *,
+    app_name: str,
     endpoint_name: str,
     runtime_application_id: str,
     managed_query_application_id: str | None = None,
@@ -143,6 +144,7 @@ def supervisor_endpoint_requires_managed_query_rotation(
     )
     return endpoint_has_legacy_direct_query_principal(
         workspace,
+        app_name=app_name,
         endpoint_name=endpoint_name,
         runtime_manager_application_id=runtime_application_id,
         approved_managed_query_application_ids=approved,
@@ -189,6 +191,7 @@ def plan_supervisor_agent(
     workspace: Any,
     candidates: SupervisorCandidates,
     *,
+    app_name: str,
     display_name: str,
     genie_space_id: str,
     catalog: str,
@@ -255,6 +258,7 @@ def plan_supervisor_agent(
     endpoint = str(canonical.get("endpoint_name") or "")
     rotate_query_access = supervisor_endpoint_requires_managed_query_rotation(
         workspace,
+        app_name=app_name,
         endpoint_name=endpoint,
         runtime_application_id=runtime_application_id,
         managed_query_application_id=managed_query_application_id,

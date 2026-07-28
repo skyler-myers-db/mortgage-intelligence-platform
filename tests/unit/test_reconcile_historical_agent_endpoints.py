@@ -38,6 +38,8 @@ from tools.databricks.gateway_legacy_rollback import (
     prior_v2_gateway_resource_digest,
 )
 from tools.databricks.serving_query_group_access import (
+    ManagedQueryGroup,
+    ManagedQueryGroupState,
     managed_query_group_external_id,
     managed_query_group_name,
 )
@@ -57,6 +59,20 @@ def _trusted_model_attestation_epoch(
     monkeypatch.setenv(
         "MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY",
         TEST_GATEWAY_VERIFY_KEY,
+    )
+    monkeypatch.setattr(
+        cleanup,
+        "inspect_claimed_managed_query_group",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            cleanup.MissingClaimedGroupProvenanceError(
+                "fixture exercises the exact pre-provenance migration path"
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        cleanup.group_provenance,
+        "read_existing",
+        lambda *_args, **_kwargs: None,
     )
 
 
@@ -1960,6 +1976,7 @@ def test_cleanup_deletes_only_unpreserved_exact_resources_and_rechecks_lease(
     final = inventory.cleanup_runtime_endpoints(
         client,
         initial,
+        app_name="mip-app",
         assert_single_writer=lambda: lease_checks.append("lease"),
         query_principals=inventory.QueryGroupPrincipals(
             "app-client",
@@ -2036,6 +2053,7 @@ def test_cleanup_retires_exact_signed_prior_v2_before_green_provisioning(
     final = inventory.cleanup_runtime_endpoints(
         client,
         initial,
+        app_name="mip-app",
         assert_single_writer=lambda: None,
         query_principals=inventory.QueryGroupPrincipals(
             "app-client",
@@ -2107,6 +2125,7 @@ def test_mixed_inventory_cleanup_recovers_interruption_and_preserves_signed_reti
     final = inventory.cleanup_runtime_endpoints(
         client,
         retry_inventory,
+        app_name="mip-app",
         assert_single_writer=lambda: None,
         query_principals=inventory.QueryGroupPrincipals(
             "app-client",
@@ -2139,6 +2158,7 @@ def test_cleanup_aborts_when_inventory_changes_before_first_mutation() -> None:
         inventory.cleanup_runtime_endpoints(
             client,
             empty,
+            app_name="mip-app",
             assert_single_writer=lambda: None,
             query_principals=inventory.QueryGroupPrincipals(
                 "app-client",
@@ -2164,6 +2184,448 @@ def _query_permission(group_name: str) -> SimpleNamespace:
             SimpleNamespace(permission_level="CAN_QUERY", inherited=False),
         ],
     )
+
+
+def _install_observed_signed_group_race(
+    monkeypatch: pytest.MonkeyPatch,
+    client: _Client,
+    *,
+    endpoint_id: str,
+    race: str,
+) -> str:
+    application_id = "app-client"
+    group_id = "observed-v2-group-id"
+    external_id = f"mip:sq:v2:{'c' * 52}"
+    client.groups.details[group_id] = SimpleNamespace(
+        id=group_id,
+        display_name=managed_query_group_name(
+            endpoint_id=endpoint_id,
+            application_id=application_id,
+        ),
+        external_id=external_id,
+        members=[SimpleNamespace(value="app-scim")],
+        meta=SimpleNamespace(resource_type="WorkspaceGroup"),
+    )
+    client.serving_endpoints.permissions[endpoint_id] = SimpleNamespace(
+        access_control_list=[]
+    )
+    intent = {"group_id": "", "external_id": external_id}
+    monkeypatch.setattr(
+        cleanup.group_provenance,
+        "read_existing",
+        lambda *_args, application_id, **_kwargs: (
+            intent if application_id == "app-client" else None
+        ),
+    )
+    monkeypatch.setattr(
+        cleanup.group_provenance,
+        "claim",
+        lambda *_args, **_kwargs: pytest.fail("race must abort before claim"),
+    )
+    if race == "intent-disappears":
+        monkeypatch.setattr(
+            cleanup.group_provenance,
+            "admit_existing",
+            lambda *_args, **_kwargs: None,
+        )
+        return group_id
+    if race != "group-disappears":
+        raise AssertionError(f"unknown recovery race {race}")
+    monkeypatch.setattr(
+        cleanup.group_provenance,
+        "admit_existing",
+        lambda *_args, **_kwargs: intent,
+    )
+    original_get = client.groups.get
+    original_list = client.groups.list
+    get_calls = 0
+    list_calls = 0
+
+    def transient_get(immutable_id: str) -> Any:
+        nonlocal get_calls
+        get_calls += 1
+        if get_calls == 2:
+            raise NotFound("transiently hidden")
+        return original_get(immutable_id)
+
+    def transient_list(*, filter: str | None = None) -> list[Any]:
+        nonlocal list_calls
+        list_calls += 1
+        if list_calls == 2:
+            return []
+        return original_list(filter=filter)
+
+    monkeypatch.setattr(client.groups, "get", transient_get)
+    monkeypatch.setattr(client.groups, "list", transient_list)
+    return group_id
+
+
+@pytest.mark.parametrize("race", ["intent-disappears", "group-disappears"])
+def test_gateway_cleanup_aborts_after_observed_signed_group_race(
+    monkeypatch: pytest.MonkeyPatch,
+    race: str,
+) -> None:
+    gateway_name = f"{DEFAULT_GATEWAY_ENDPOINT}-deadbeef0000"
+    supervisor = _supervisor()
+    contract = _contract(
+        gateway=gateway_name,
+        gateway_id="historical-gateway-id",
+        supervisor=supervisor,
+        supervisor_endpoint_id="supervisor-endpoint-id",
+    )
+    client = _Client(
+        {
+            gateway_name: _gateway_details(contract),
+            supervisor["endpoint_name"]: SimpleNamespace(
+                id="supervisor-endpoint-id",
+                creator=_RUNTIME,
+            ),
+        },
+        [supervisor],
+    )
+    _trust_signed_historical(monkeypatch)
+    group_id = _install_observed_signed_group_race(
+        monkeypatch,
+        client,
+        endpoint_id="historical-gateway-id",
+        race=race,
+    )
+    initial = _inventory(client)
+
+    with pytest.raises(RuntimeError, match="during recovery"):
+        inventory.cleanup_runtime_endpoints(
+            client,
+            initial,
+            app_name="mip-app",
+            deployment_lease_id="22222222-2222-4222-8222-222222222222",
+            deployment_source_git_sha="d" * 40,
+            assert_single_writer=lambda: None,
+            query_principals=inventory.QueryGroupPrincipals(
+                "app-client",
+                "app-scim",
+                "verifier-client",
+                "verifier-scim",
+                "proxy-client",
+                "proxy-scim",
+            ),
+            timeout_s=1,
+            sleep=lambda _seconds: None,
+            inventory_again=lambda: _inventory(client),
+            cleanup_journal=_MemoryCleanupJournal(),
+        )
+
+    assert gateway_name in client.serving_endpoints.details
+    assert client.serving_endpoints.deleted == []
+    assert group_id in client.groups.details
+    assert client.groups.deleted == []
+
+
+@pytest.mark.parametrize("race", ["intent-disappears", "group-disappears"])
+def test_supervisor_cleanup_keeps_staged_journal_after_observed_group_race(
+    monkeypatch: pytest.MonkeyPatch,
+    race: str,
+) -> None:
+    supervisor = _supervisor(
+        supervisor_id="historical-supervisor",
+        display_name=f"{_SUPERVISOR_NAME} [mip-agent-runtime-deadbeef0000]",
+        endpoint="historical-supervisor-endpoint",
+    )
+    endpoint_id = "historical-supervisor-endpoint-id"
+    client = _Client(
+        {
+            supervisor["endpoint_name"]: SimpleNamespace(
+                id=endpoint_id,
+                creator=_RUNTIME,
+            )
+        },
+        [supervisor],
+    )
+    group_id = _install_observed_signed_group_race(
+        monkeypatch,
+        client,
+        endpoint_id=endpoint_id,
+        race=race,
+    )
+    journal = _MemoryCleanupJournal()
+
+    def read() -> inventory.RuntimeEndpointInventory:
+        return _inventory(client, pending_cleanup=journal.read())
+
+    initial = read()
+    expected_proof = journal.proof_for(
+        initial.supervisors[0],
+        runtime_application_id=_RUNTIME,
+    )
+    with pytest.raises(RuntimeError, match="during recovery"):
+        inventory.cleanup_runtime_endpoints(
+            client,
+            initial,
+            app_name="mip-app",
+            deployment_lease_id="22222222-2222-4222-8222-222222222222",
+            deployment_source_git_sha="d" * 40,
+            assert_single_writer=lambda: None,
+            query_principals=inventory.QueryGroupPrincipals(
+                "app-client",
+                "app-scim",
+                "verifier-client",
+                "verifier-scim",
+                "proxy-client",
+                "proxy-scim",
+            ),
+            timeout_s=1,
+            sleep=lambda _seconds: None,
+            inventory_again=read,
+            cleanup_journal=journal,
+        )
+
+    assert journal.pending == expected_proof
+    assert supervisor["supervisor_agent_id"] in client.api_client.supervisors
+    assert supervisor["endpoint_name"] in client.serving_endpoints.details
+    assert client.api_client.deleted == []
+    assert client.serving_endpoints.deleted == []
+    assert group_id in client.groups.details
+    assert client.groups.deleted == []
+
+
+@pytest.mark.parametrize("acl_bound", [True, False])
+def test_cleanup_retires_exact_signed_v2_query_group(
+    monkeypatch: pytest.MonkeyPatch,
+    acl_bound: bool,
+) -> None:
+    endpoint_name = "historical-endpoint"
+    endpoint_id = "historical-endpoint-id"
+    application_id = "app-client"
+    scim_id = "app-scim"
+    group_id = "signed-v2-group-id"
+    group_name = managed_query_group_name(
+        endpoint_id=endpoint_id,
+        application_id=application_id,
+    )
+    external_id = f"mip:sq:v2:{'a' * 52}"
+    client = _Client(
+        {
+            endpoint_name: SimpleNamespace(
+                id=endpoint_id,
+                creator=_RUNTIME,
+            ),
+        },
+        [],
+    )
+    client.groups.details[group_id] = SimpleNamespace(
+        id=group_id,
+        display_name=group_name,
+        external_id=external_id,
+        members=[SimpleNamespace(value=scim_id)],
+        meta=SimpleNamespace(resource_type="WorkspaceGroup"),
+    )
+    client.serving_endpoints.permissions[endpoint_id] = SimpleNamespace(
+        access_control_list=(
+            [_query_permission(group_name)] if acl_bound else []
+        )
+    )
+    monkeypatch.setattr(
+        cleanup,
+        "inspect_claimed_managed_query_group",
+        lambda *_args, **_kwargs: ManagedQueryGroupState(
+            contract=ManagedQueryGroup(
+                id=group_id,
+                name=group_name,
+                external_id=external_id,
+            ),
+            member_ids=(scim_id,),
+        ),
+    )
+
+    cleanup._retire_live_endpoint_query_groups(
+        client,
+        app_name="mip-app",
+        endpoint_name=endpoint_name,
+        endpoint_id=endpoint_id,
+        endpoint_creator=_RUNTIME,
+        principals=((application_id, scim_id),),
+        assert_single_writer=lambda: None,
+    )
+
+    assert client.groups.deleted == [group_id]
+    assert group_id not in client.groups.details
+
+
+def test_cleanup_recovers_unclaimed_signed_intent_under_fresh_lease(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    endpoint_name = "historical-endpoint"
+    endpoint_id = "historical-endpoint-id"
+    application_id = "app-client"
+    scim_id = "app-scim"
+    group_id = "unclaimed-v2-group-id"
+    group_name = managed_query_group_name(
+        endpoint_id=endpoint_id,
+        application_id=application_id,
+    )
+    external_id = f"mip:sq:v2:{'c' * 52}"
+    client = _Client(
+        {
+            endpoint_name: SimpleNamespace(
+                id=endpoint_id,
+                creator=_RUNTIME,
+            ),
+        },
+        [],
+    )
+    client.groups.details[group_id] = SimpleNamespace(
+        id=group_id,
+        display_name=group_name,
+        external_id=external_id,
+        members=[],
+        meta=SimpleNamespace(resource_type="WorkspaceGroup"),
+    )
+    client.serving_endpoints.permissions[endpoint_id] = SimpleNamespace(
+        access_control_list=[]
+    )
+    monkeypatch.setattr(
+        cleanup,
+        "inspect_claimed_managed_query_group",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            cleanup.MissingClaimedGroupProvenanceError("unclaimed intent")
+        ),
+    )
+    monkeypatch.setattr(
+        cleanup.group_provenance,
+        "read_existing",
+        lambda *_args, **_kwargs: {"group_id": "", "external_id": external_id},
+    )
+    monkeypatch.setattr(
+        cleanup.group_provenance,
+        "admit_existing",
+        lambda *_args, **_kwargs: {"group_id": "", "external_id": external_id},
+    )
+    monkeypatch.setattr(
+        cleanup.group_provenance,
+        "claim",
+        lambda *_args, group_id, **_kwargs: {
+            "group_id": group_id,
+            "external_id": external_id,
+        },
+    )
+
+    cleanup._retire_live_endpoint_query_groups(
+        client,
+        app_name="mip-app",
+        deployment_lease_id="22222222-2222-4222-8222-222222222222",
+        deployment_source_git_sha="d" * 40,
+        endpoint_name=endpoint_name,
+        endpoint_id=endpoint_id,
+        endpoint_creator=_RUNTIME,
+        principals=((application_id, scim_id),),
+        assert_single_writer=lambda: None,
+    )
+
+    assert client.groups.deleted == [group_id]
+
+
+def test_cleanup_never_creates_for_unclaimed_intent_without_a_group(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    endpoint_name = "historical-endpoint"
+    endpoint_id = "historical-endpoint-id"
+    application_id = "app-client"
+    scim_id = "app-scim"
+    group_name = managed_query_group_name(
+        endpoint_id=endpoint_id,
+        application_id=application_id,
+    )
+    client = _Client(
+        {
+            endpoint_name: SimpleNamespace(
+                id=endpoint_id,
+                creator=_RUNTIME,
+            ),
+        },
+        [],
+    )
+    client.serving_endpoints.permissions[endpoint_id] = SimpleNamespace(
+        access_control_list=[_query_permission(group_name)]
+    )
+    create_calls: list[dict[str, object]] = []
+    client.groups.create = lambda **kwargs: create_calls.append(kwargs)  # type: ignore[attr-defined]
+    monkeypatch.setattr(
+        cleanup.group_provenance,
+        "read_existing",
+        lambda *_args, **_kwargs: {
+            "group_id": "",
+            "external_id": f"mip:sq:v2:{'c' * 52}",
+        },
+    )
+    monkeypatch.setattr(
+        cleanup.group_provenance,
+        "admit_existing",
+        lambda *_args, **_kwargs: pytest.fail("absent group must not readmit intent"),
+    )
+    monkeypatch.setattr(
+        cleanup.group_provenance,
+        "claim",
+        lambda *_args, **_kwargs: pytest.fail("absent group must not claim intent"),
+    )
+
+    cleanup._retire_live_endpoint_query_groups(
+        client,
+        app_name="mip-app",
+        deployment_lease_id="22222222-2222-4222-8222-222222222222",
+        deployment_source_git_sha="d" * 40,
+        endpoint_name=endpoint_name,
+        endpoint_id=endpoint_id,
+        endpoint_creator=_RUNTIME,
+        principals=((application_id, scim_id),),
+        assert_single_writer=lambda: None,
+    )
+
+    assert create_calls == []
+    assert client.groups.deleted == []
+
+
+def test_cleanup_rejects_unsigned_v2_query_group_without_mutation() -> None:
+    endpoint_name = "historical-endpoint"
+    endpoint_id = "historical-endpoint-id"
+    application_id = "app-client"
+    scim_id = "app-scim"
+    group_id = "unsigned-v2-group-id"
+    group_name = managed_query_group_name(
+        endpoint_id=endpoint_id,
+        application_id=application_id,
+    )
+    client = _Client(
+        {
+            endpoint_name: SimpleNamespace(
+                id=endpoint_id,
+                creator=_RUNTIME,
+            ),
+        },
+        [],
+    )
+    client.groups.details[group_id] = SimpleNamespace(
+        id=group_id,
+        display_name=group_name,
+        external_id=f"mip:sq:v2:{'b' * 52}",
+        members=[SimpleNamespace(value=scim_id)],
+        meta=SimpleNamespace(resource_type="WorkspaceGroup"),
+    )
+    client.serving_endpoints.permissions[endpoint_id] = SimpleNamespace(
+        access_control_list=[_query_permission(group_name)]
+    )
+
+    with pytest.raises(RuntimeError, match="contract drifted"):
+        cleanup._retire_live_endpoint_query_groups(
+            client,
+            app_name="mip-app",
+            endpoint_name=endpoint_name,
+            endpoint_id=endpoint_id,
+            endpoint_creator=_RUNTIME,
+            principals=((application_id, scim_id),),
+            assert_single_writer=lambda: pytest.fail("lease reached"),
+        )
+
+    assert client.groups.deleted == []
+    assert group_id in client.groups.details
 
 
 def test_cleanup_retires_exact_group_before_its_endpoint() -> None:
@@ -2203,6 +2665,7 @@ def test_cleanup_retires_exact_group_before_its_endpoint() -> None:
 
     cleanup._retire_live_endpoint_query_groups(
         client,
+        app_name="mip-app",
         endpoint_name=endpoint_name,
         endpoint_id=endpoint_id,
         endpoint_creator=creator,
@@ -2221,6 +2684,7 @@ def test_cleanup_retires_exact_group_before_its_endpoint() -> None:
     # performs no hash/prefix sweep, and remains idempotent.
     cleanup._retire_live_endpoint_query_groups(
         client,
+        app_name="mip-app",
         endpoint_name=endpoint_name,
         endpoint_id=endpoint_id,
         endpoint_creator=creator,
@@ -2280,6 +2744,7 @@ def test_cleanup_waits_for_delayed_scim_group_deletion(
 
     cleanup._retire_live_endpoint_query_groups(
         client,
+        app_name="mip-app",
         endpoint_name=endpoint_name,
         endpoint_id=endpoint_id,
         endpoint_creator=_RUNTIME,
@@ -2338,6 +2803,7 @@ def test_cleanup_rechecks_lease_immediately_before_group_delete() -> None:
     with pytest.raises(RuntimeError, match="deployment lease lost"):
         cleanup._retire_live_endpoint_query_groups(
             client,
+            app_name="mip-app",
             endpoint_name=endpoint_name,
             endpoint_id=endpoint_id,
             endpoint_creator=_RUNTIME,
@@ -2401,9 +2867,10 @@ def test_cleanup_rejects_same_name_replacement_during_group_postflight(
 
     monkeypatch.setattr(client.groups, "delete", replace_after_delete)
 
-    with pytest.raises(RuntimeError, match="deterministic binding changed"):
+    with pytest.raises(RuntimeError, match="contract drifted"):
         cleanup._retire_live_endpoint_query_groups(
             client,
+            app_name="mip-app",
             endpoint_name=endpoint_name,
             endpoint_id=endpoint_id,
             endpoint_creator=_RUNTIME,
@@ -2490,6 +2957,7 @@ def test_cleanup_does_not_accept_transient_false_group_absence(
     with pytest.raises(RuntimeError, match="retirement did not converge"):
         cleanup._retire_live_endpoint_query_groups(
             client,
+            app_name="mip-app",
             endpoint_name=endpoint_name,
             endpoint_id=endpoint_id,
             endpoint_creator=_RUNTIME,
@@ -2559,6 +3027,7 @@ def test_cleanup_bounds_uncommitted_scim_group_deletion_failure(
     ):
         cleanup._retire_live_endpoint_query_groups(
             client,
+            app_name="mip-app",
             endpoint_name=endpoint_name,
             endpoint_id=endpoint_id,
             endpoint_creator=_RUNTIME,
@@ -2606,6 +3075,7 @@ def test_cleanup_refuses_unattached_colliding_group_without_mutation() -> None:
     with pytest.raises(RuntimeError, match="not bound to the exact live endpoint ACL"):
         cleanup._retire_live_endpoint_query_groups(
             client,
+            app_name="mip-app",
             endpoint_name=endpoint_name,
             endpoint_id=endpoint_id,
             endpoint_creator=_RUNTIME,
@@ -2655,6 +3125,7 @@ def test_cleanup_rechecks_exact_acl_after_lease_before_group_mutation() -> None:
     with pytest.raises(RuntimeError, match="ACL changed at deletion boundary"):
         cleanup._retire_live_endpoint_query_groups(
             client,
+            app_name="mip-app",
             endpoint_name=endpoint_name,
             endpoint_id=endpoint_id,
             endpoint_creator=_RUNTIME,
@@ -2688,6 +3159,7 @@ def test_cleanup_never_sweeps_hash_shaped_group_without_a_live_endpoint() -> Non
     result = inventory.cleanup_runtime_endpoints(
         client,
         empty,
+        app_name="mip-app",
         assert_single_writer=lambda: pytest.fail("lease reached"),
         query_principals=inventory.QueryGroupPrincipals(
             "app-client",
@@ -2751,6 +3223,7 @@ def test_cleanup_recovers_when_supervisor_delete_commits_then_times_out_and_leav
     result = inventory.cleanup_runtime_endpoints(
         client,
         initial,
+        app_name="mip-app",
         assert_single_writer=lambda: None,
         query_principals=inventory.QueryGroupPrincipals(
             "app-client",

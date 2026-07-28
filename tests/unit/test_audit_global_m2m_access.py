@@ -6,6 +6,9 @@ import pytest
 
 import tools.databricks.audit_global_m2m_access as audit
 import tools.databricks.serving_query_group_access as query_groups
+from tools.databricks.serving_query_group_provenance import (
+    MissingClaimedGroupProvenanceError,
+)
 
 _TARGET_IDENTITY_PROOF = (
     "runtime-scim-id",
@@ -15,6 +18,10 @@ _TARGET_IDENTITY_PROOF = (
 
 def _CREDENTIAL_LEASE() -> None:
     pass
+
+
+def _main(argv: list[str]) -> int:
+    return audit.main(["--app-name", "mip-app", *argv])
 
 
 @pytest.fixture(autouse=True)
@@ -54,7 +61,7 @@ def test_main_audits_serving_and_genie_globally(monkeypatch) -> None:
     )
 
     assert (
-        audit.main(
+        _main(
             [
                 "--application-id",
                 "runtime-id",
@@ -79,9 +86,10 @@ def test_main_audits_serving_and_genie_globally(monkeypatch) -> None:
         (
             "serving",
             (
-                workspace,
-                {
-                    "reviewed_endpoint_names": (
+                    workspace,
+                    {
+                        "app_name": "mip-app",
+                        "reviewed_endpoint_names": (
                         "supervisor-endpoint",
                         "gateway-endpoint",
                     ),
@@ -135,7 +143,7 @@ def test_main_can_audit_verifier_without_genie(monkeypatch) -> None:
     )
 
     assert (
-        audit.main(
+        _main(
             [
                 "--application-id",
                 "verifier-id",
@@ -154,6 +162,7 @@ def test_main_can_audit_verifier_without_genie(monkeypatch) -> None:
     )
     assert serving == [
         {
+            "app_name": "mip-app",
             "reviewed_endpoint_names": ("gateway-endpoint",),
             "service_principal": "verifier-id",
             "expected_permission_level": "CAN_QUERY",
@@ -205,7 +214,7 @@ def test_main_rejects_incomplete_inventory_authority(
     monkeypatch.setattr(audit, "WorkspaceClient", lambda: workspace)
 
     with pytest.raises(RuntimeError, match=message):
-        audit.main(
+        _main(
             [
                 "--application-id",
                 "runtime-id",
@@ -224,7 +233,7 @@ def test_main_rejects_incomplete_inventory_authority(
 
 def test_main_requires_explicit_genie_access_policy() -> None:
     with pytest.raises(SystemExit):
-        audit.main(
+        _main(
             [
                 "--application-id",
                 "runtime-id",
@@ -261,7 +270,7 @@ def test_main_forwards_narrow_legacy_pinned_serving_subset(monkeypatch) -> None:
     )
 
     assert (
-        audit.main(
+        _main(
             [
                 "--application-id",
                 "verifier-id",
@@ -313,7 +322,7 @@ def test_main_can_prove_customer_serving_and_genie_denial(
     )
 
     assert (
-        audit.main(
+        _main(
             [
                 "--application-id",
                 "verifier-id",
@@ -345,6 +354,8 @@ def test_main_can_prove_customer_serving_and_genie_denial(
         {
             "account_id": "account-id",
             "application_id": "verifier-id",
+            "app_name": "mip-app",
+            "legacy_pinned_endpoint_names": (),
             "assert_single_writer": _CREDENTIAL_LEASE,
         }
     ]
@@ -373,7 +384,7 @@ def test_main_fails_before_resource_audits_when_target_proof_fails(
     monkeypatch.setattr(audit, "audit_global_genie_access", unexpected)
 
     with pytest.raises(RuntimeError, match="target-credential membership proof"):
-        audit.main(
+        _main(
             [
                 "--application-id",
                 "runtime-id",
@@ -402,7 +413,7 @@ def test_forbid_customer_serving_rejects_positive_policy_options(
     conflict: list[str],
 ) -> None:
     with pytest.raises(SystemExit):
-        audit.main(
+        _main(
             [
                 "--application-id",
                 "verifier-id",
@@ -438,6 +449,7 @@ def test_managed_group_governance_requires_account_id(
     with pytest.raises(RuntimeError, match="requires the Databricks account id"):
         audit._audit_managed_query_group_governance(
             workspace,
+            app_name="mip-app",
             account_id=None,
             application_id="app-client",
             assert_single_writer=lambda: None,
@@ -454,6 +466,22 @@ def test_target_membership_proof_runs_without_managed_query_groups(
             list=lambda **_kwargs: [
                 SimpleNamespace(id="app-scim", application_id="app-client")
             ]
+        ),
+        groups=SimpleNamespace(
+            list=lambda **kwargs: (
+                [
+                    SimpleNamespace(
+                        display_name=kwargs["filter"]
+                        .removeprefix("displayName eq '")
+                        .removesuffix("'")
+                    )
+                ]
+                if any(
+                    name in kwargs["filter"]
+                    for name in ("green-immutable", "retired-empty-immutable")
+                )
+                else []
+            )
         ),
     )
     account = SimpleNamespace(
@@ -477,6 +505,7 @@ def test_target_membership_proof_runs_without_managed_query_groups(
 
     proof = audit._audit_managed_query_group_governance(
         workspace,
+        app_name="mip-app",
         account_id="account-id",
         application_id="app-client",
         assert_single_writer=credential_lease,
@@ -511,6 +540,13 @@ def test_target_membership_proof_runs_without_managed_query_groups(
 def test_managed_group_governance_uses_exact_endpoint_and_principal_ids(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    visible_group_names = {
+        query_groups.managed_query_group_name(
+            endpoint_id=endpoint_id,
+            application_id="app-client",
+        )
+        for endpoint_id in ("green-immutable", "retired-empty-immutable")
+    }
     workspace = SimpleNamespace(
         config=SimpleNamespace(host="https://workspace.cloud.databricks.com"),
         serving_endpoints=SimpleNamespace(
@@ -528,6 +564,22 @@ def test_managed_group_governance_uses_exact_endpoint_and_principal_ids(
             list=lambda **_kwargs: [
                 SimpleNamespace(id="app-scim", application_id="app-client")
             ]
+        ),
+        groups=SimpleNamespace(
+            list=lambda **kwargs: (
+                [
+                    SimpleNamespace(
+                        display_name=kwargs["filter"]
+                        .removeprefix("displayName eq '")
+                        .removesuffix("'")
+                    )
+                ]
+                if kwargs["filter"]
+                .removeprefix("displayName eq '")
+                .removesuffix("'")
+                in visible_group_names
+                else []
+            )
         ),
     )
     account = SimpleNamespace(
@@ -559,6 +611,11 @@ def test_managed_group_governance_uses_exact_endpoint_and_principal_ids(
     )
     monkeypatch.setattr(
         audit,
+        "inspect_claimed_managed_query_group",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        audit,
         "managed_workspace_group_binding",
         lambda _workspace, *, group_id: audit.ManagedWorkspaceGroupBinding(
             id=group_id,
@@ -572,14 +629,16 @@ def test_managed_group_governance_uses_exact_endpoint_and_principal_ids(
     )
     monkeypatch.setattr(
         audit,
-        "assert_managed_query_group_administration_isolated",
+        "assert_legacy_managed_query_group_administration_isolated",
         lambda _workspace, **kwargs: calls.append(kwargs),
     )
 
     proof = audit._audit_managed_query_group_governance(
         workspace,
+        app_name="mip-app",
         account_id="account-id",
         application_id="app-client",
+        legacy_pinned_endpoint_names=("green", "retired-empty"),
         assert_single_writer=credential_lease,
         account_factory=lambda: account,
         effective_group_probe=lambda *args, **kwargs: (
@@ -642,7 +701,201 @@ def test_managed_group_governance_uses_exact_endpoint_and_principal_ids(
     ]
 
 
-def test_empty_group_rejects_workspace_admin_from_target_probe() -> None:
+def test_unsigned_group_is_rejected_outside_explicit_legacy_transition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    endpoint_id = "green-immutable"
+    group_name = query_groups.managed_query_group_name(
+        endpoint_id=endpoint_id,
+        application_id="app-client",
+    )
+    workspace = SimpleNamespace(
+        serving_endpoints=SimpleNamespace(
+            list=lambda: [SimpleNamespace(name="green")],
+            get=lambda name: SimpleNamespace(name=name, id=endpoint_id),
+            get_permissions=lambda _endpoint_id: SimpleNamespace(
+                access_control_list=[]
+            ),
+        ),
+        service_principals=SimpleNamespace(
+            list=lambda **_kwargs: [
+                SimpleNamespace(id="app-scim", application_id="app-client")
+            ]
+        ),
+        groups=SimpleNamespace(
+            list=lambda **_kwargs: [SimpleNamespace(display_name=group_name)]
+        ),
+    )
+    monkeypatch.setattr(
+        audit,
+        "inspect_claimed_managed_query_group",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            MissingClaimedGroupProvenanceError(
+                "managed serving-query group has no signed immutable-ID provenance"
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        audit,
+        "inspect_managed_query_group",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("unsigned group must not use the legacy path without a pin")
+        ),
+    )
+
+    with pytest.raises(
+        MissingClaimedGroupProvenanceError,
+        match="no signed immutable-ID provenance",
+    ):
+        audit._audit_managed_query_group_governance(
+            workspace,
+            app_name="mip-app",
+            account_id="account-id",
+            application_id="app-client",
+            assert_single_writer=lambda: None,
+        )
+
+
+def test_signed_group_audit_uses_immutable_id_when_name_projection_is_hidden(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    endpoint_id = "hidden-endpoint-id"
+    application_id = "app-client"
+    group_name = query_groups.managed_query_group_name(
+        endpoint_id=endpoint_id,
+        application_id=application_id,
+    )
+    external_id = query_groups.group_provenance.intent_external_id(
+        endpoint_id=endpoint_id,
+        application_id=application_id,
+        creation_nonce="22222222-2222-4222-8222-222222222222",
+    )
+    managed_group = SimpleNamespace(
+        id="hidden-group-id",
+        display_name=group_name,
+        external_id=external_id,
+        members=[],
+        meta=SimpleNamespace(resource_type="WorkspaceGroup"),
+    )
+    workspace = SimpleNamespace(
+        config=SimpleNamespace(host="https://workspace.cloud.databricks.com"),
+        serving_endpoints=SimpleNamespace(
+            list=lambda: [SimpleNamespace(name="hidden-endpoint")],
+            get=lambda name: SimpleNamespace(name=name, id=endpoint_id),
+        ),
+        service_principals=SimpleNamespace(
+            list=lambda **_kwargs: [
+                SimpleNamespace(id="app-scim", application_id=application_id)
+            ]
+        ),
+        groups=SimpleNamespace(
+            list=lambda **_kwargs: [],
+            get=lambda group_id: managed_group
+            if group_id == managed_group.id
+            else (_ for _ in ()).throw(AssertionError(group_id)),
+        ),
+    )
+    account = SimpleNamespace(
+        service_principals=SimpleNamespace(
+            list=lambda **_kwargs: [
+                SimpleNamespace(id="app-scim", application_id=application_id)
+            ]
+        )
+    )
+    monkeypatch.setattr(
+        query_groups.group_provenance,
+        "require_claimed",
+        lambda *_args, **_kwargs: {
+            "group_id": managed_group.id,
+            "external_id": managed_group.external_id,
+        },
+    )
+    probes: list[tuple[audit.ManagedWorkspaceGroupBinding, ...]] = []
+    isolated: list[str] = []
+    monkeypatch.setattr(
+        audit,
+        "assert_managed_query_group_administration_isolated",
+        lambda _workspace, **kwargs: isolated.append(str(kwargs["endpoint_id"])),
+    )
+
+    audit._audit_managed_query_group_governance(
+        workspace,
+        app_name="mip-app",
+        account_id="account-id",
+        application_id=application_id,
+        assert_single_writer=lambda: None,
+        account_factory=lambda: account,
+        effective_group_probe=lambda *_args, **kwargs: (
+            probes.append(tuple(kwargs["group_bindings"])) or {}
+        ),
+    )
+
+    assert probes == [
+        (
+            audit.ManagedWorkspaceGroupBinding(
+                id=managed_group.id,
+                name=group_name,
+                external_id=external_id,
+                resource_type="WorkspaceGroup",
+            ),
+        )
+    ]
+    assert isolated == [endpoint_id]
+
+
+def test_hidden_unsigned_acl_group_fails_closed_before_credential_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    endpoint_id = "hidden-unsigned-endpoint-id"
+    application_id = "app-client"
+    group_name = query_groups.managed_query_group_name(
+        endpoint_id=endpoint_id,
+        application_id=application_id,
+    )
+    workspace = SimpleNamespace(
+        serving_endpoints=SimpleNamespace(
+            list=lambda: [SimpleNamespace(name="hidden-unsigned")],
+            get=lambda name: SimpleNamespace(name=name, id=endpoint_id),
+            get_permissions=lambda _endpoint_id: SimpleNamespace(
+                access_control_list=[
+                    SimpleNamespace(group_name=group_name)
+                ]
+            ),
+        ),
+        service_principals=SimpleNamespace(
+            list=lambda **_kwargs: [
+                SimpleNamespace(id="app-scim", application_id=application_id)
+            ]
+        ),
+        groups=SimpleNamespace(list=lambda **_kwargs: []),
+    )
+    monkeypatch.setattr(
+        audit,
+        "inspect_claimed_managed_query_group",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            MissingClaimedGroupProvenanceError("missing proof")
+        ),
+    )
+
+    with pytest.raises(
+        MissingClaimedGroupProvenanceError,
+        match="permission-bearing",
+    ):
+        audit._audit_managed_query_group_governance(
+            workspace,
+            app_name="mip-app",
+            account_id="account-id",
+            application_id=application_id,
+            assert_single_writer=lambda: None,
+            effective_group_probe=lambda *_args, **_kwargs: pytest.fail(
+                "credential probe must not receive an incomplete group set"
+            ),
+        )
+
+
+def test_empty_group_rejects_workspace_admin_from_target_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     endpoint_id = "retired-endpoint-id"
     application_id = "app-client"
     managed_group = SimpleNamespace(
@@ -651,9 +904,10 @@ def test_empty_group_rejects_workspace_admin_from_target_probe() -> None:
             endpoint_id=endpoint_id,
             application_id=application_id,
         ),
-        external_id=query_groups.managed_query_group_external_id(
+        external_id=query_groups.group_provenance.intent_external_id(
             endpoint_id=endpoint_id,
             application_id=application_id,
+            creation_nonce="22222222-2222-4222-8222-222222222222",
         ),
         members=[],
         meta=SimpleNamespace(resource_type="WorkspaceGroup"),
@@ -684,10 +938,19 @@ def test_empty_group_rejects_workspace_admin_from_target_probe() -> None:
             ]
         )
     )
+    monkeypatch.setattr(
+        query_groups.group_provenance,
+        "require_claimed",
+        lambda *_args, **_kwargs: {
+            "group_id": managed_group.id,
+            "external_id": managed_group.external_id,
+        },
+    )
 
     with pytest.raises(RuntimeError, match="workspace-administration authority"):
         audit._audit_managed_query_group_governance(
             workspace,
+            app_name="mip-app",
             account_id="account-id",
             application_id=application_id,
             assert_single_writer=lambda: None,

@@ -16,6 +16,17 @@ from tools.databricks.agent_runtime_access import (
     assert_current_runtime_identity,
     assert_runtime_creator,
 )
+from tools.databricks.app_gateway_access_inspection import (
+    AppGatewayAccessMode,
+    inspect_app_gateway_access_mode,
+    inspect_gateway_query_access_mode,
+)
+from tools.databricks.app_gateway_access_inspection import (
+    GatewayQueryAccessMode as GatewayQueryAccessMode,
+)
+from tools.databricks.app_gateway_access_inspection import (
+    app_service_principal_identity as app_service_principal_identity,
+)
 from tools.databricks.cutover_journal_store import (
     clear_cutover_journal_exact,
     read_cutover_journal,
@@ -26,221 +37,13 @@ from tools.databricks.cutover_retirement_inventory import (
     assert_retained_journal_gateway_exact,
     validated_cutover_endpoint_inventory,
 )
-from tools.databricks.m2m_access_policy import resolve_effective_groups
 from tools.databricks.serving_endpoint_acl import revoke_direct_permissions
-from tools.databricks.serving_query_group_access import (
-    managed_query_group_external_id,
-    managed_query_group_name,
+from tools.databricks.serving_endpoint_legacy_query import (
+    remove_legacy_pre_provenance_membership,
 )
-
-AppGatewayAccessMode = Literal["none", "legacy", "managed", "mixed"]
-GatewayQueryAccessMode = Literal["none", "direct", "managed", "mixed"]
-
-
-def app_service_principal_identity(
-    workspace: Any,
-    *,
-    app_name: str,
-) -> tuple[str, str]:
-    """Resolve both immutable App service-principal identifiers."""
-
-    app = workspace.apps.get(app_name)
-    client_id = str(
-        getattr(app, "service_principal_client_id", None)
-        or (app.get("service_principal_client_id") if isinstance(app, dict) else "")
-        or ""
-    ).strip()
-    scim_id = str(
-        getattr(app, "service_principal_id", None)
-        or (app.get("service_principal_id") if isinstance(app, dict) else "")
-        or ""
-    ).strip()
-    if not client_id or not scim_id:
-        raise RuntimeError(f"both App service-principal identifiers are required for {app_name!r}")
-    return client_id, scim_id
-
-
-def _permission_level(permission: object) -> str:
-    value = getattr(permission, "permission_level", None)
-    return str(getattr(value, "value", value) or "").strip()
-
-
-def _direct_levels(entry: object) -> set[str]:
-    return {
-        _permission_level(permission)
-        for permission in (getattr(entry, "all_permissions", None) or [])
-        if getattr(permission, "inherited", None) is not True and _permission_level(permission)
-    }
-
-
-def _all_levels(entry: object) -> set[str]:
-    return {
-        _permission_level(permission)
-        for permission in (getattr(entry, "all_permissions", None) or [])
-        if _permission_level(permission)
-    }
-
-
-def _exact_acl_entry(
-    permissions: object,
-    *,
-    identity_field: str,
-    identity: str,
-) -> object | None:
-    entries = [
-        entry
-        for entry in (getattr(permissions, "access_control_list", None) or [])
-        if str(getattr(entry, identity_field, "") or "").strip() == identity
-    ]
-    if len(entries) > 1:
-        raise RuntimeError(f"serving endpoint ACL duplicates {identity_field} {identity!r}")
-    return entries[0] if entries else None
-
-
-def _assert_exact_managed_group(
-    workspace: Any,
-    *,
-    endpoint_id: str,
-    application_id: str,
-    scim_id: str,
-    identity_label: str,
-) -> bool:
-    group_name = managed_query_group_name(
-        endpoint_id=endpoint_id,
-        application_id=application_id,
-    )
-    matches = [
-        group
-        for group in workspace.groups.list(filter=f"displayName eq '{group_name}'")
-        if str(getattr(group, "display_name", "") or "").strip() == group_name
-    ]
-    if len(matches) != 1:
-        raise RuntimeError(
-            f"signed {identity_label} managed query group {group_name!r} is absent or duplicated"
-        )
-    group_id = str(getattr(matches[0], "id", "") or "").strip()
-    if not group_id:
-        raise RuntimeError(f"signed {identity_label} managed query group has no immutable ID")
-    group = workspace.groups.get(group_id)
-    expected = (
-        group_id,
-        group_name,
-        managed_query_group_external_id(
-            endpoint_id=endpoint_id,
-            application_id=application_id,
-        ),
-    )
-    actual = (
-        str(getattr(group, "id", "") or "").strip(),
-        str(getattr(group, "display_name", "") or "").strip(),
-        str(getattr(group, "external_id", "") or "").strip(),
-    )
-    if actual != expected:
-        raise RuntimeError(f"signed {identity_label} managed query group identity drifted")
-    members = {
-        str(getattr(member, "value", "") or "").strip()
-        for member in (getattr(group, "members", None) or [])
-    }
-    if "" in members or members.difference({scim_id}):
-        raise RuntimeError(
-            f"signed {identity_label} managed query group contains an identity "
-            "outside its immutable contract"
-        )
-    return members == {scim_id}
-
-
-def inspect_gateway_query_access_mode(
-    workspace: Any,
-    *,
-    endpoint_name: str,
-    application_id: str,
-    scim_id: str,
-    identity_label: str,
-) -> GatewayQueryAccessMode:
-    """Classify one exact identity's direct and managed Gateway query paths."""
-
-    application = application_id.strip()
-    principal_id = scim_id.strip()
-    label = identity_label.strip()
-    if not application or not principal_id or not label:
-        raise ValueError("application, SCIM, and identity label are required")
-    endpoint = workspace.serving_endpoints.get(endpoint_name)
-    endpoint_id = str(getattr(endpoint, "id", "") or "").strip()
-    if not endpoint_id:
-        raise RuntimeError(f"signed {label} Gateway endpoint has no immutable ID")
-    permissions = workspace.serving_endpoints.get_permissions(endpoint_id)
-    direct_entry = _exact_acl_entry(
-        permissions,
-        identity_field="service_principal_name",
-        identity=application,
-    )
-    direct_levels = _direct_levels(direct_entry or object())
-    if _all_levels(direct_entry or object()) and (
-        direct_levels != {"CAN_QUERY"} or _all_levels(direct_entry or object()) != {"CAN_QUERY"}
-    ):
-        raise RuntimeError(f"signed {label} direct Gateway access is not exact CAN_QUERY")
-    group_name = managed_query_group_name(
-        endpoint_id=endpoint_id,
-        application_id=application,
-    )
-    group_entry = _exact_acl_entry(
-        permissions,
-        identity_field="group_name",
-        identity=group_name,
-    )
-    group_levels = _direct_levels(group_entry or object())
-    if _all_levels(group_entry or object()) and (
-        group_levels != {"CAN_QUERY"} or _all_levels(group_entry or object()) != {"CAN_QUERY"}
-    ):
-        raise RuntimeError(f"signed {label} managed Gateway access is not exact CAN_QUERY")
-    managed_membership_active = False
-    if group_levels:
-        managed_membership_active = _assert_exact_managed_group(
-            workspace,
-            endpoint_id=endpoint_id,
-            application_id=application,
-            scim_id=principal_id,
-            identity_label=label,
-        )
-    effective_groups = set(resolve_effective_groups(workspace, sp_id=principal_id).values())
-    for entry in getattr(permissions, "access_control_list", None) or []:
-        effective_group = str(getattr(entry, "group_name", "") or "").strip()
-        if (
-            effective_group
-            and effective_group != group_name
-            and effective_group in effective_groups
-            and _all_levels(entry)
-        ):
-            raise RuntimeError(
-                f"signed {label} Gateway access includes an unreviewed effective group"
-            )
-    if direct_levels and group_levels and managed_membership_active:
-        return "mixed"
-    if direct_levels:
-        return "direct"
-    if group_levels and managed_membership_active:
-        return "managed"
-    return "none"
-
-
-def inspect_app_gateway_access_mode(
-    workspace: Any,
-    *,
-    endpoint_name: str,
-    app_client_id: str,
-    app_scim_id: str,
-) -> AppGatewayAccessMode:
-    """Read and classify exact App query access without mutating the ACL."""
-
-    mode = inspect_gateway_query_access_mode(
-        workspace,
-        endpoint_name=endpoint_name,
-        application_id=app_client_id,
-        scim_id=app_scim_id,
-        identity_label="App",
-    )
-    return "legacy" if mode == "direct" else mode
-
+from tools.databricks.serving_query_group_provenance import (
+    MissingClaimedGroupProvenanceError,
+)
 
 CutoverJournalRelation = Literal["absent", "current", "stale"]
 
@@ -349,6 +152,7 @@ def json_pin_from_env(name: str) -> Mapping[str, object] | None:
 def assert_cutover_journal_retired(
     workspace: Any,
     *,
+    app_name: str,
     journal: Mapping[str, str],
     supervisor_by_id: Callable[[str], Mapping[str, Any] | None],
     supervisor_inventory: Callable[[], tuple[Mapping[str, Any], ...]],
@@ -447,10 +251,12 @@ def assert_cutover_journal_retired(
         ):
             mode = inspect_gateway_query_access_mode(
                 workspace,
+                app_name=app_name,
                 endpoint_name=journal["old_gateway_endpoint"],
                 application_id=application_id,
                 scim_id=scim_id,
                 identity_label=label,
+                legacy_pinned=True,
             )
             if mode != "none":
                 raise RuntimeError(
@@ -469,6 +275,7 @@ def assert_cutover_journal_retired(
 def assert_stale_journal_retired_under_signed_blue(
     workspace: Any,
     *,
+    app_name: str,
     runtime_application_id: str,
     journal: Mapping[str, str],
     signed_blue_gateway_pin: Mapping[str, object],
@@ -508,6 +315,7 @@ def assert_stale_journal_retired_under_signed_blue(
         raise RuntimeError("signed-blue Supervisor is omitted or drifted in complete inventory")
     assert_cutover_journal_retired(
         workspace,
+        app_name=app_name,
         journal=journal,
         supervisor_by_id=supervisor_by_id,
         supervisor_inventory=supervisor_inventory,
@@ -571,6 +379,7 @@ def assert_signed_blue_runtime_live(
 def clear_stale_aware_cutover_journal(
     workspace: Any,
     *,
+    app_name: str,
     runtime_application_id: str,
     assert_single_writer: Callable[[], None],
     supervisor_by_id: Callable[[str], Mapping[str, Any] | None],
@@ -644,6 +453,7 @@ def clear_stale_aware_cutover_journal(
             assert signed_blue_supervisor_pin is not None
             assert_stale_journal_retired_under_signed_blue(
                 workspace,
+                app_name=app_name,
                 runtime_application_id=runtime_application_id,
                 journal=journal,
                 signed_blue_gateway_pin=signed_blue_gateway_pin,
@@ -659,6 +469,7 @@ def clear_stale_aware_cutover_journal(
             return
         assert_cutover_journal_retired(
             workspace,
+            app_name=app_name,
             journal=journal,
             supervisor_by_id=supervisor_by_id,
             supervisor_inventory=supervisor_inventory,
@@ -679,6 +490,7 @@ def clear_stale_aware_cutover_journal(
 def assert_pinned_access_retirement_authority(
     workspace: Any,
     *,
+    app_name: str,
     journal: Mapping[str, str] | None,
     canonical_name: str,
     green_gateway_endpoint: str,
@@ -732,9 +544,11 @@ def assert_pinned_access_retirement_authority(
                 raise RuntimeError("pinned old Gateway identity drifted before prepare")
             mode = inspect_app_gateway_access_mode(
                 workspace,
+                app_name=app_name,
                 endpoint_name=gateway,
                 app_client_id=app_client_id,
                 app_scim_id=app_scim_id,
+                legacy_pinned=True,
             )
             if mode in {"legacy", "mixed"} and (
                 journal.get("old_gateway_delete_allowed") != "1"
@@ -745,10 +559,12 @@ def assert_pinned_access_retirement_authority(
                 )
             verifier_mode = inspect_gateway_query_access_mode(
                 workspace,
+                app_name=app_name,
                 endpoint_name=gateway,
                 application_id=verifier_application,
                 scim_id=verifier_principal_id,
                 identity_label="verifier",
+                legacy_pinned=True,
             )
             if verifier_mode in {"direct", "mixed"} and (
                 journal.get("old_gateway_delete_allowed") != "1"
@@ -799,15 +615,18 @@ def assert_pinned_access_retirement_authority(
             raise RuntimeError("pinned old Supervisor ownership drifted before prepare")
     inspect_app_gateway_access_mode(
         workspace,
+        app_name=app_name,
         endpoint_name=endpoint,
         app_client_id=app_client_id,
         app_scim_id=app_scim_id,
+        legacy_pinned=True,
     )
 
 
 def preserve_blue_and_revoke_managed_candidates(
     workspace: Any,
     *,
+    app_name: str,
     blue_endpoint: str,
     app_client_id: str,
     app_scim_id: str,
@@ -818,9 +637,11 @@ def preserve_blue_and_revoke_managed_candidates(
 
     blue_mode = inspect_app_gateway_access_mode(
         workspace,
+        app_name=app_name,
         endpoint_name=blue_endpoint,
         app_client_id=app_client_id,
         app_scim_id=app_scim_id,
+        legacy_pinned=True,
     )
     if blue_mode == "none":
         raise RuntimeError("signed-blue App has no exact query access to its Gateway endpoint")
@@ -843,6 +664,7 @@ def preserve_blue_and_revoke_managed_candidates(
         try:
             mode = inspect_app_gateway_access_mode(
                 workspace,
+                app_name=app_name,
                 endpoint_name=endpoint,
                 app_client_id=app_client_id,
                 app_scim_id=app_scim_id,
@@ -854,20 +676,23 @@ def preserve_blue_and_revoke_managed_candidates(
                 f"candidate Gateway {endpoint!r} retains legacy direct App access; "
                 "rotate and retire the pinned endpoint instead of replacing its ACL"
             )
-        revoke_direct_permissions(
-            workspace,
-            endpoint_name=endpoint,
-            service_principal=app_client_id,
-            service_principal_id=app_scim_id,
-            missing_ok=True,
-            assert_single_writer=assert_before_mutation,
-        )
+        if mode == "managed":
+            revoke_direct_permissions(
+                workspace,
+                app_name=app_name,
+                endpoint_name=endpoint,
+                service_principal=app_client_id,
+                service_principal_id=app_scim_id,
+                missing_ok=True,
+                assert_single_writer=assert_before_mutation,
+            )
     return blue_mode
 
 
 def revoke_managed_app_access(
     workspace: Any,
     *,
+    app_name: str,
     endpoint_name: str,
     app_client_id: str,
     app_scim_id: str,
@@ -878,17 +703,35 @@ def revoke_managed_app_access(
 
     mode = inspect_app_gateway_access_mode(
         workspace,
+        app_name=app_name,
         endpoint_name=endpoint_name,
         app_client_id=app_client_id,
         app_scim_id=app_scim_id,
+        legacy_pinned=True,
     )
     if mode not in {"legacy", "mixed"}:
-        revoke_direct_permissions(
-            workspace,
-            endpoint_name=endpoint_name,
-            service_principal=app_client_id,
-            service_principal_id=app_scim_id,
-            missing_ok=missing_ok,
-            assert_single_writer=assert_before_mutation,
-        )
+        try:
+            revoke_direct_permissions(
+                workspace,
+                app_name=app_name,
+                endpoint_name=endpoint_name,
+                service_principal=app_client_id,
+                service_principal_id=app_scim_id,
+                missing_ok=missing_ok,
+                assert_single_writer=assert_before_mutation,
+            )
+        except MissingClaimedGroupProvenanceError:
+            endpoint = workspace.serving_endpoints.get(endpoint_name)
+            endpoint_id = str(getattr(endpoint, "id", "") or "").strip()
+            if not endpoint_id:
+                raise RuntimeError(
+                    "legacy App Gateway has no immutable endpoint ID"
+                ) from None
+            remove_legacy_pre_provenance_membership(
+                workspace,
+                endpoint_id=endpoint_id,
+                application_id=app_client_id,
+                service_principal_id=app_scim_id,
+                assert_single_writer=assert_before_mutation,
+            )
     return mode

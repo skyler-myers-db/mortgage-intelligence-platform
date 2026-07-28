@@ -143,6 +143,7 @@ def resume_stale_journal_retirement(
     supervisor_pin = _supervisor_pin(journal)
     delete_pinned_gateway(
         workspace,
+        app_name=app_name,
         endpoint=(gateway_pin or {}).get("name"),
         endpoint_id=(gateway_pin or {}).get("endpoint_id"),
         creator=(gateway_pin or {}).get("creator"),
@@ -161,6 +162,7 @@ def resume_stale_journal_retirement(
     )
     retire_pinned_supervisor(
         workspace,
+        app_name=app_name,
         canonical_name=journal["canonical_name"],
         old_id=(supervisor_pin or {}).get("supervisor_id"),
         old_endpoint=(supervisor_pin or {}).get("endpoint"),

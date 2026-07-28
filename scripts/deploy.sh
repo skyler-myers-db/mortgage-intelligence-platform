@@ -588,6 +588,8 @@ restore_signed_blue_while_quiesced() {
     --scope "$APP_ROLLBACK_SECRET_SCOPE" \
     --base-url "${MIP_APP_URL:?App URL is required for exact rollback proof}" \
     --token-env MIP_BEARER_TOKEN \
+    --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+    --deployment-source-git-sha "$SOURCE_GIT_SHA" \
     --treatment-warehouse-id "$_GRANTS_WAREHOUSE_ID" \
     --treatment-catalog "$_GRANTS_CATALOG" \
     --expected-rollback-deployment-id "$MIP_APP_ROLLBACK_DEPLOYMENT_ID" \
@@ -690,7 +692,7 @@ converge_captured_app_gateway_acl() {
   local old_gateway="${1:-}"
   local old_gateway_id="${2:-}"
   local old_gateway_creator="${3:-}"
-  "$PYTHON" - \
+  run_with_proof_signing_authority "$PYTHON" - \
     "$APP_FAIL_CLOSED_NAME" \
     "$MIP_APP_DEPLOYMENT_LEASE_ID" \
     "$SOURCE_GIT_SHA" \
@@ -734,6 +736,8 @@ _converge_app_gateway_permissions(
     gateway_endpoint=green_gateway,
     supervisor_endpoint=green_supervisor,
     app_name=app_name,
+    deployment_lease_id=lease_id,
+    deployment_source_git_sha=source_sha,
     preserve_endpoints=preserve,
     assert_single_writer=lease,
 )
@@ -751,9 +755,11 @@ if old_gateway:
     )
     mode = inspect_app_gateway_access_mode(
         workspace,
+        app_name=app_name,
         endpoint_name=old_gateway,
         app_client_id=app_client_id,
         app_scim_id=app_scim_id,
+        legacy_pinned=True,
     )
     if mode == "none":
         raise RuntimeError("old Gateway was preserved despite having no App query access")
@@ -785,6 +791,7 @@ converge_green_only_app_access() {
   fi
   app_audit_args=(
     -m tools.databricks.audit_global_m2m_access
+    --app-name "${MIP_APP_NAME:?App name is required}" \
     --application-id "${APP_SP_CLIENT_ID:?App service principal is required}" \
     --expected-inventory-principal "${DEPLOY_INVENTORY_PRINCIPAL:?}" \
     --account-id "$DATABRICKS_ACCOUNT_ID" \
@@ -2826,6 +2833,8 @@ print(str(matches[0].get("url") or "").strip() if len(matches) == 1 else "")
         --scope "$APP_ROLLBACK_SECRET_SCOPE" \
         --base-url "${MIP_APP_URL:?existing App URL is required}" \
         --token-env MIP_BEARER_TOKEN \
+        --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+        --deployment-source-git-sha "$SOURCE_GIT_SHA" \
         --treatment-warehouse-id "$_GRANTS_WAREHOUSE_ID" \
         --treatment-catalog "$_GRANTS_CATALOG" \
         --out-env "$APP_ROLLBACK_BINDING_ENV"
@@ -2879,6 +2888,8 @@ print(str(matches[0].get("url") or "").strip() if len(matches) == 1 else "")
           --scope "$APP_ROLLBACK_SECRET_SCOPE" \
           --base-url "${MIP_APP_URL:?existing App URL is required}" \
           --token-env MIP_BEARER_TOKEN \
+          --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+          --deployment-source-git-sha "$SOURCE_GIT_SHA" \
           --treatment-warehouse-id "$_GRANTS_WAREHOUSE_ID" \
           --treatment-catalog "$_GRANTS_CATALOG" \
           --out-env "$APP_ROLLBACK_BINDING_ENV"
@@ -3976,7 +3987,8 @@ if [[ "$STALE_CUTOVER_JOURNAL_PENDING" -eq 1 ]]; then
 fi
 HISTORICAL_ENDPOINT_INVENTORY="$(mktemp -t mip-historical-agent-endpoints.XXXXXX.json)"
 step "attest and retire every unrelated historical runtime endpoint before green provisioning"
-run "$PYTHON" -m tools.databricks.reconcile_historical_agent_endpoints cleanup \
+run_with_proof_signing_authority \
+  "$PYTHON" -m tools.databricks.reconcile_historical_agent_endpoints cleanup \
   --runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
   --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
   --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
@@ -4189,6 +4201,7 @@ run_with_account_identity \
   run_with_proof_signing_authority \
     run_with_agent_proxy_credentials \
     "$PYTHON" -m tools.databricks.verify_agent_proxy_uc_boundary_dual_authority \
+  --app-name "$_GRANTS_APP_NAME" \
   --application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID" \
   --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL" \
   --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
@@ -4394,7 +4407,8 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
     step "prepare runtime-owned Gateway access while preserving the live old Supervisor"
     journal_preactivation_app_acl_endpoint "$MIP_AI_GATEWAY_ENDPOINT"
     journal_preactivation_app_acl_endpoint "$MIP_AGENT_SUPERVISOR_ENDPOINT"
-    run "$PYTHON" -m tools.databricks.cutover_agent_runtime_supervisor prepare \
+    run_with_proof_signing_authority \
+      "$PYTHON" -m tools.databricks.cutover_agent_runtime_supervisor prepare \
       "${AGENT_RUNTIME_GREEN_ARGS[@]}" \
       --verifier-application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
       --verifier-scim-id "$MIP_VERIFIER_SCIM_ID"
@@ -4412,11 +4426,14 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
       )
     fi
     VERIFIER_GATEWAY_CUTOVER_MUTATED=1
-    run "$PYTHON" -m tools.databricks.provision_m2m_oauth \
+    run_with_proof_signing_authority \
+      "$PYTHON" -m tools.databricks.provision_m2m_oauth \
       --identity-role verifier \
       --expected-application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
       --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
       --gateway-endpoint "$MIP_AI_GATEWAY_ENDPOINT" \
+      --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+      --deployment-source-git-sha "$MIP_DEPLOYMENT_SOURCE_GIT_SHA" \
       --revoke-gateway-endpoint "${MIP_AGENT_SUPERVISOR_ENDPOINT:-}" \
       --revoke-gateway-endpoint "mip-agent-gateway" \
       --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
@@ -4424,6 +4441,7 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
       "${VERIFIER_GATEWAY_PRESERVE_ARGS[@]}"
     RUNTIME_GLOBAL_ACCESS_ARGS=(
       -m tools.databricks.audit_global_m2m_access
+      --app-name "${MIP_APP_NAME:?App name is required}"
       --application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID"
       --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL"
       --account-id "$DATABRICKS_ACCOUNT_ID"
@@ -4456,6 +4474,7 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
     step "audit verifier access across every visible serving resource"
     VERIFIER_GLOBAL_ACCESS_ARGS=(
       -m tools.databricks.audit_global_m2m_access
+      --app-name "${MIP_APP_NAME:?App name is required}"
       --application-id "$DATABRICKS_VERIFIER_CLIENT_ID"
       --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL"
       --account-id "$DATABRICKS_ACCOUNT_ID"
@@ -4475,6 +4494,7 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
       "$PYTHON" "${VERIFIER_GLOBAL_ACCESS_ARGS[@]}"
     APP_GLOBAL_ACCESS_ARGS=(
       -m tools.databricks.audit_global_m2m_access
+      --app-name "${MIP_APP_NAME:?App name is required}"
       --application-id "$APP_SP_CLIENT_ID"
       --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL"
       --account-id "$DATABRICKS_ACCOUNT_ID"
@@ -4818,6 +4838,7 @@ if [[ "$DRY_RUN" -eq 0 && "$FINAL_APP_PROVEN" -eq 1 ]]; then
   step "re-audit final agent-runtime global access after blue retirement"
   run_with_account_identity run_with_proof_signing_authority \
     "$PYTHON" -m tools.databricks.audit_global_m2m_access \
+    --app-name "${MIP_APP_NAME:?App name is required}" \
     --application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
     --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL" \
     --account-id "$DATABRICKS_ACCOUNT_ID" \
@@ -4836,6 +4857,7 @@ if [[ "$DRY_RUN" -eq 0 && "$FINAL_APP_PROVEN" -eq 1 ]]; then
     run_with_proof_signing_authority \
       run_with_agent_proxy_credentials \
       "$PYTHON" -m tools.databricks.verify_agent_proxy_uc_boundary_dual_authority \
+    --app-name "$_GRANTS_APP_NAME" \
     --application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID" \
     --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL" \
     --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
@@ -4902,6 +4924,7 @@ if [[ "$DRY_RUN" -eq 0 && "$FINAL_APP_PROVEN" -eq 1 ]]; then
   step "re-audit final verifier global access after blue retirement"
   run_with_account_identity run_with_proof_signing_authority \
     "$PYTHON" -m tools.databricks.audit_global_m2m_access \
+    --app-name "${MIP_APP_NAME:?App name is required}" \
     --application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
     --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL" \
     --account-id "$DATABRICKS_ACCOUNT_ID" \
@@ -4911,6 +4934,7 @@ if [[ "$DRY_RUN" -eq 0 && "$FINAL_APP_PROVEN" -eq 1 ]]; then
   step "re-audit final App global serving access after blue retirement"
   run_with_account_identity run_with_proof_signing_authority \
     "$PYTHON" -m tools.databricks.audit_global_m2m_access \
+    --app-name "${MIP_APP_NAME:?App name is required}" \
     --application-id "$APP_SP_CLIENT_ID" \
     --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL" \
     --account-id "$DATABRICKS_ACCOUNT_ID" \

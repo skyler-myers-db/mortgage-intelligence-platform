@@ -46,6 +46,8 @@ SIGNING_KEY = base64.urlsafe_b64encode(bytes(range(32))).decode().rstrip("=")
 TREATMENT_ARGS = {
     "treatment_warehouse_id": "warehouse-id",
     "treatment_catalog": "mip",
+    "deployment_lease_id": LEASE_ID,
+    "deployment_source_git_sha": GIT_SHA,
 }
 GENIE_SPACE_ID = "genie-space-id"
 PROXY_CLIENT_ID = "proxy-client"
@@ -119,7 +121,8 @@ CAPTURE_ARGS = {
     "genie_space_id": GENIE_SPACE_ID,
     "expected_deployment_lease_id": LEASE_ID,
     "expected_app_resources": APP_RESOURCES,
-    **TREATMENT_ARGS,
+    "treatment_warehouse_id": TREATMENT_ARGS["treatment_warehouse_id"],
+    "treatment_catalog": TREATMENT_ARGS["treatment_catalog"],
 }
 
 
@@ -138,6 +141,11 @@ def _attestation_env(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda *_a, **_kw: "managed",
     )
     monkeypatch.setattr(rollback, "assert_deployment_lease_held", lambda *_a, **_kw: {})
+    monkeypatch.setattr(
+        rollback,
+        "held_assertion",
+        lambda *_args, **_kwargs: lambda: None,
+    )
     monkeypatch.setattr(
         rollback_contract,
         "assert_owned_app_rollback_scope",
@@ -600,6 +608,10 @@ def test_ensure_cli_exports_exact_signed_blue_proxy_binding(
                 "MIP_TEST_TOKEN",
                 "--treatment-warehouse-id",
                 "warehouse-id",
+                "--deployment-lease-id",
+                LEASE_ID,
+                "--deployment-source-git-sha",
+                GIT_SHA,
                 "--out-env",
                 str(out_env),
             ]
@@ -2253,6 +2265,13 @@ def test_restore_preserves_legacy_blue_and_revokes_only_managed_candidate(
         **CAPTURE_ARGS,
     )
     calls: list[dict[str, object]] = []
+    lease_authorities: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        rollback,
+        "held_assertion",
+        lambda _workspace, **kwargs: lease_authorities.append(kwargs)
+        or (lambda: None),
+    )
     monkeypatch.setattr(
         rollback,
         "preserve_blue_and_revoke_managed_candidates",
@@ -2270,9 +2289,18 @@ def test_restore_preserves_legacy_blue_and_revokes_only_managed_candidate(
     )
 
     assert len(calls) == 1
+    assert lease_authorities == [
+        {
+            "app_name": APP_NAME,
+            "lease_id": LEASE_ID,
+            "source_git_sha": GIT_SHA,
+            "operation": "signed App rollback Gateway ACL mutation",
+        }
+    ]
     assert callable(calls[0].pop("assert_before_mutation"))
     assert calls == [
         {
+            "app_name": APP_NAME,
             "blue_endpoint": "green-gateway",
             "app_client_id": "app-client",
             "app_scim_id": "app-scim-id",

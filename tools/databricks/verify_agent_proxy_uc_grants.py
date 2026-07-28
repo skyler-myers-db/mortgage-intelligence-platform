@@ -169,7 +169,9 @@ def _audit_mip_catalog(
         if schema_name == "information_schema":
             _assert_system_owned(schema, label=f"schema {schema_full_name}")
             expected_schema = {"USE_SCHEMA"}
-            schema_sources = {"USE_SCHEMA": set(_ACCOUNT_USERS_DIRECT)}
+            schema_sources: dict[str, set[tuple[str, str, str]]] | None = {
+                "USE_SCHEMA": set(_ACCOUNT_USERS_DIRECT)
+            }
         else:
             _assert_not_runtime_owned(
                 schema,

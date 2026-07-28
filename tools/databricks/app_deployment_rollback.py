@@ -67,7 +67,7 @@ from tools.databricks.converge_campaign_treatment_access import (
     Mode,
     converge_campaign_treatment_access,
 )
-from tools.databricks.deployment_lease_authority import held_assertion_from_env
+from tools.databricks.deployment_lease_authority import held_assertion
 from tools.databricks.export_gateway_runtime_contract import (
     ExactGatewayRuntimeProof,
     resolve_exact_resource_proof,
@@ -421,23 +421,22 @@ def _converge_rollback_endpoint_acl(
     *,
     app_name: str,
     record: dict[str, Any],
+    deployment_lease_id: str,
+    deployment_source_git_sha: str,
     revoke_endpoints: tuple[str, ...] = (),
 ) -> None:
     principal, principal_id = _app_identity(workspace, app_name=app_name)
-    assertion: Callable[[], None] | None = None
-
-    def assert_single_writer() -> None:
-        nonlocal assertion
-        if assertion is None:
-            assertion = held_assertion_from_env(
-                workspace,
-                operation="signed App rollback Gateway ACL mutation",
-            )
-        else:
-            assertion()
+    assert_single_writer = held_assertion(
+        workspace,
+        app_name=app_name,
+        lease_id=deployment_lease_id,
+        source_git_sha=deployment_source_git_sha,
+        operation="signed App rollback Gateway ACL mutation",
+    )
 
     preserve_blue_and_revoke_managed_candidates(
         workspace,
+        app_name=app_name,
         blue_endpoint=_rollback_gateway_endpoint(record),
         app_client_id=principal,
         app_scim_id=principal_id,
@@ -465,6 +464,8 @@ def ensure_current(
     scope: str,
     base_url: str,
     bearer_token: str,
+    deployment_lease_id: str,
+    deployment_source_git_sha: str,
     treatment_warehouse_id: str,
     treatment_catalog: str,
 ) -> str:
@@ -506,6 +507,8 @@ def ensure_current(
                 scope=scope,
                 base_url=base_url,
                 bearer_token=bearer_token,
+                deployment_lease_id=deployment_lease_id,
+                deployment_source_git_sha=deployment_source_git_sha,
                 treatment_warehouse_id=treatment_warehouse_id,
                 treatment_catalog=treatment_catalog,
                 restore_treatment=False,
@@ -531,6 +534,8 @@ def ensure_current(
             workspace,
             app_name=app_name,
             record=record,
+            deployment_lease_id=deployment_lease_id,
+            deployment_source_git_sha=deployment_source_git_sha,
         )
         _verify_health(
             workspace,
@@ -766,6 +771,8 @@ def restore_last_good(
     scope: str,
     base_url: str,
     bearer_token: str,
+    deployment_lease_id: str,
+    deployment_source_git_sha: str,
     treatment_warehouse_id: str,
     treatment_catalog: str,
     revoke_endpoints: tuple[str, ...] = (),
@@ -809,6 +816,8 @@ def restore_last_good(
             workspace,
             app_name=app_name,
             record=record,
+            deployment_lease_id=deployment_lease_id,
+            deployment_source_git_sha=deployment_source_git_sha,
             revoke_endpoints=revoke_endpoints,
         )
         _ensure_started(workspace, app_name=app_name)

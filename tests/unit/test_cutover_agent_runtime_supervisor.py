@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import inspect
 import io
 import json
 import shlex
@@ -78,6 +79,7 @@ def _clear_journal(
     assert callable(assert_single_writer)
     cutover.clear_journal(
         workspace,
+        app_name="mip-app",
         runtime_application_id=RUNTIME_ID,
         app_application_id="app-client",
         app_scim_id="app-scim-id",
@@ -109,6 +111,18 @@ def _attestation_env(monkeypatch: pytest.MonkeyPatch) -> None:
         cutover,
         "_retirement_supervisor_by_id",
         lambda _workspace, supervisor_id: cutover._agent_by_id(supervisor_id),
+    )
+    monkeypatch.setattr(
+        cutover,
+        "_agent_by_id",
+        lambda supervisor_id: next(
+            (
+                row
+                for row in cutover._supervisor_agents()
+                if row.get("supervisor_agent_id") == supervisor_id
+            ),
+            None,
+        ),
     )
 
 
@@ -446,6 +460,8 @@ def test_prepare_then_retire_proves_green_and_deletes_only_pinned_old_id(
     cutover.prepare(
         workspace,
         app_name="mip-app",
+        deployment_lease_id="deployment-lease-id",
+        deployment_source_git_sha="a" * 40,
         verifier_application_id="verifier-client",
         verifier_scim_id="verifier-scim-id",
         **_green_kwargs(),
@@ -539,12 +555,40 @@ def test_prepare_refuses_supervisor_contract_drift_before_app_acl(
         cutover.prepare(
             _workspace(),
             app_name="mip-app",
+            deployment_lease_id="deployment-lease-id",
+            deployment_source_git_sha="a" * 40,
             verifier_application_id="verifier-client",
             verifier_scim_id="verifier-scim-id",
             **_green_kwargs(),
         )
 
     assert events == []
+
+
+def test_prepare_contract_requires_explicit_deployment_identity() -> None:
+    signature = inspect.signature(cutover.prepare)
+    green = _green_kwargs()
+    with pytest.raises(TypeError):
+        signature.bind(
+            _workspace(),
+            app_name="mip-app",
+            verifier_application_id="verifier-client",
+            verifier_scim_id="verifier-scim-id",
+            **green,
+        )
+
+    bound = signature.bind(
+        _workspace(),
+        app_name="mip-app",
+        deployment_lease_id="deployment-lease-id",
+        deployment_source_git_sha="a" * 40,
+        verifier_application_id="verifier-client",
+        verifier_scim_id="verifier-scim-id",
+        **green,
+    )
+    assert bound.arguments["app_name"] == "mip-app"
+    assert bound.arguments["deployment_lease_id"] == "deployment-lease-id"
+    assert bound.arguments["deployment_source_git_sha"] == "a" * 40
 
 
 def test_green_path_accepts_managed_query_epoch_supervisor_name(
@@ -1247,7 +1291,7 @@ def test_retirement_supervisor_lookup_uses_direct_immutable_get(
     monkeypatch.setattr(
         cutover,
         "_retirement_supervisor_by_id",
-        lambda workspace, supervisor_id: cutover._supervisor_by_id_direct(
+        lambda workspace, supervisor_id: supervisor_inventory.supervisor_by_id_direct(
             workspace,
             supervisor_id,
         ),
@@ -1727,6 +1771,7 @@ def test_clear_accepts_exact_nondeletable_gateway_only_after_access_is_empty(
 
     gateway_access.assert_cutover_journal_retired(
         workspace,
+        app_name="mip-app",
         journal={
             "canonical_name": "Mortgage Growth Agent",
             "old_gateway_endpoint": OLD_GATEWAY,
@@ -1773,6 +1818,7 @@ def test_clear_rejects_nondeletable_gateway_with_remaining_query_access(
     with pytest.raises(RuntimeError, match="still authorizes App query access"):
         gateway_access.assert_cutover_journal_retired(
             workspace,
+            app_name="mip-app",
             journal={
                 "canonical_name": "Mortgage Growth Agent",
                 "old_gateway_endpoint": OLD_GATEWAY,
@@ -1817,6 +1863,7 @@ def test_clear_rejects_orphan_group_for_absent_nondeletable_gateway(
     with pytest.raises(RuntimeError, match="Gateway App query group is not retired"):
         gateway_access.assert_cutover_journal_retired(
             workspace,
+            app_name="mip-app",
             journal={
                 "canonical_name": "Mortgage Growth Agent",
                 "old_gateway_endpoint": OLD_GATEWAY,
@@ -2434,6 +2481,7 @@ def test_legacy_old_gateway_skips_revoke_and_deletes_after_exact_reproof(
     )
     cutover._delete_pinned_gateway(
         SimpleNamespace(serving_endpoints=_Endpoints()),
+        app_name="mip-app",
         endpoint=OLD_GATEWAY,
         endpoint_id=OLD_GATEWAY_ID,
         creator=RUNTIME_ID,
@@ -2477,6 +2525,7 @@ def test_legacy_old_gateway_identity_drift_blocks_delete_without_revoke(
     with pytest.raises(RuntimeError, match="changed before its pinned deletion"):
         cutover._delete_pinned_gateway(
             SimpleNamespace(serving_endpoints=_Endpoints()),
+            app_name="mip-app",
             endpoint=OLD_GATEWAY,
             endpoint_id=OLD_GATEWAY_ID,
             creator=RUNTIME_ID,
@@ -2509,6 +2558,7 @@ def test_already_absent_pinned_gateway_retry_is_a_noop(
     )
     cutover._delete_pinned_gateway(
         workspace,
+        app_name="mip-app",
         endpoint=OLD_GATEWAY,
         endpoint_id=OLD_GATEWAY_ID,
         creator=RUNTIME_ID,
@@ -2524,7 +2574,16 @@ def test_already_absent_pinned_gateway_retry_is_a_noop(
     assert mutations == []
 
 
-def test_retired_endpoint_group_cleanup_is_exact_and_idempotent() -> None:
+def test_retired_endpoint_group_cleanup_is_exact_and_idempotent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        retired_groups,
+        "retire_managed_query_group",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            retired_groups.MissingClaimedGroupProvenanceError("legacy v1")
+        ),
+    )
     applications = {
         "app-client": "app-scim-id",
         "verifier-client": "verifier-scim-id",
@@ -2573,6 +2632,7 @@ def test_retired_endpoint_group_cleanup_is_exact_and_idempotent() -> None:
     )
     kwargs = {
         "workspace": workspace,
+        "app_name": "mip-app",
         "endpoint_name": OLD_GATEWAY,
         "endpoint_id": OLD_GATEWAY_ID,
         "principals": tuple(applications.items()),
@@ -2598,7 +2658,16 @@ def test_retired_endpoint_group_cleanup_is_exact_and_idempotent() -> None:
     assert by_id == {}
 
 
-def test_retired_endpoint_group_cleanup_rejects_transient_endpoint_absence() -> None:
+def test_retired_endpoint_group_cleanup_rejects_transient_endpoint_absence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        retired_groups,
+        "retire_managed_query_group",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            retired_groups.MissingClaimedGroupProvenanceError("legacy v1")
+        ),
+    )
     application_id = "app-client"
     scim_id = "app-scim-id"
     group_id = f"group-{application_id}"
@@ -2652,6 +2721,7 @@ def test_retired_endpoint_group_cleanup_rejects_transient_endpoint_absence() -> 
     with pytest.raises(RuntimeError, match="after it has reappeared"):
         retired_groups.retire_endpoint_query_groups(
             workspace,
+            app_name="mip-app",
             endpoint_name=OLD_GATEWAY,
             endpoint_id=OLD_GATEWAY_ID,
             principals=((application_id, scim_id),),
@@ -2664,7 +2734,16 @@ def test_retired_endpoint_group_cleanup_rejects_transient_endpoint_absence() -> 
     assert group_id in by_id
 
 
-def test_retired_endpoint_group_cleanup_rejects_unrelated_member() -> None:
+def test_retired_endpoint_group_cleanup_rejects_unrelated_member(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        retired_groups,
+        "retire_managed_query_group",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            retired_groups.MissingClaimedGroupProvenanceError("legacy v1")
+        ),
+    )
     group = SimpleNamespace(
         id="group-app",
         display_name=managed_query_group_name(
@@ -2693,6 +2772,7 @@ def test_retired_endpoint_group_cleanup_rejects_unrelated_member() -> None:
     with pytest.raises(RuntimeError, match="unrelated member"):
         retired_groups.retire_endpoint_query_groups(
             workspace,
+            app_name="mip-app",
             endpoint_name=OLD_GATEWAY,
             endpoint_id=OLD_GATEWAY_ID,
             principals=(("app-client", "app-scim-id"),),
@@ -2712,6 +2792,7 @@ def test_retired_endpoint_group_cleanup_refuses_live_endpoint() -> None:
     with pytest.raises(RuntimeError, match="before its endpoint is absent"):
         retired_groups.retire_endpoint_query_groups(
             workspace,
+            app_name="mip-app",
             endpoint_name=OLD_GATEWAY,
             endpoint_id=OLD_GATEWAY_ID,
             principals=(("app-client", "app-scim-id"),),
@@ -2812,6 +2893,8 @@ def test_prepare_lost_lease_blocks_app_acl_mutation(monkeypatch: pytest.MonkeyPa
         cutover.prepare(
             _workspace(),
             app_name="mip-app",
+            deployment_lease_id="deployment-lease-id",
+            deployment_source_git_sha="a" * 40,
             verifier_application_id="verifier-client",
             verifier_scim_id="verifier-scim-id",
             **green,
@@ -2847,6 +2930,8 @@ def test_prepare_rejects_unauthorized_legacy_retirement_before_app_activation(
         cutover.prepare(
             _workspace(),
             app_name="mip-app",
+            deployment_lease_id="deployment-lease-id",
+            deployment_source_git_sha="a" * 40,
             verifier_application_id="verifier-client",
             verifier_scim_id="verifier-scim-id",
             **_green_kwargs(),
@@ -2890,6 +2975,7 @@ def test_old_gateway_lost_lease_blocks_each_mutation(
     with pytest.raises(RuntimeError, match="lease lost"):
         cutover._delete_pinned_gateway(
             workspace,
+            app_name="mip-app",
             endpoint=OLD_GATEWAY,
             endpoint_id=OLD_GATEWAY_ID,
             creator=RUNTIME_ID,

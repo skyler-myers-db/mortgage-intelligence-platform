@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from typing import Any
 
 from databricks.sdk import WorkspaceClient
@@ -25,8 +25,16 @@ from tools.databricks.serving_endpoint_acl import (
     is_platform_foundation_endpoint,
 )
 from tools.databricks.serving_query_group_access import (
-    assert_managed_query_group_administration_isolated,
+    inspect_claimed_managed_query_group,
     inspect_managed_query_group,
+    managed_query_group_name,
+)
+from tools.databricks.serving_query_group_governance import (
+    assert_legacy_managed_query_group_administration_isolated,
+    assert_managed_query_group_administration_isolated,
+)
+from tools.databricks.serving_query_group_provenance import (
+    MissingClaimedGroupProvenanceError,
 )
 from tools.databricks.uc_owner_policy import account_client_from_env
 
@@ -122,8 +130,10 @@ def _account_service_principal_scim_id(
 def _audit_managed_query_group_governance(
     workspace: object,
     *,
+    app_name: str,
     account_id: str | None,
     application_id: str,
+    legacy_pinned_endpoint_names: Collection[str] = (),
     assert_single_writer: Callable[[], None],
     account_factory: Callable[[], Any] = account_client_from_env,
     effective_group_probe: Callable[..., dict[str, str]] = (
@@ -142,7 +152,17 @@ def _audit_managed_query_group_governance(
         raise RuntimeError(
             "target-credential access governance requires the Databricks account id"
         )
+    principal_id = _service_principal_scim_id(
+        workspace,
+        application_id=application_id,
+    )
+    legacy_pinned = {
+        str(name).strip() for name in legacy_pinned_endpoint_names if str(name).strip()
+    }
+    if len(legacy_pinned) != len(legacy_pinned_endpoint_names):
+        raise ValueError("legacy-pinned endpoint names must be non-empty and distinct")
     managed_groups_by_endpoint: dict[str, ManagedWorkspaceGroupBinding] = {}
+    legacy_endpoint_ids: set[str] = set()
     seen_names: set[str] = set()
     seen_endpoint_ids: set[str] = set()
     summaries = tuple(workspace.serving_endpoints.list())  # type: ignore[attr-defined]
@@ -169,12 +189,55 @@ def _audit_managed_query_group_governance(
                 "managed-group serving-endpoint immutable identity is ambiguous"
             )
         seen_endpoint_ids.add(endpoint_id)
-        state = inspect_managed_query_group(
-            workspace,
+        group_name = managed_query_group_name(
             endpoint_id=endpoint_id,
             application_id=application_id,
-            missing_ok=True,
         )
+        if endpoint_name in legacy_pinned:
+            state = inspect_managed_query_group(
+                workspace,
+                endpoint_id=endpoint_id,
+                application_id=application_id,
+            )
+            legacy_endpoint_ids.add(endpoint_id)
+        else:
+            try:
+                state = inspect_claimed_managed_query_group(
+                    workspace,
+                    app_name=app_name,
+                    endpoint_id=endpoint_id,
+                    application_id=application_id,
+                    service_principal_id=principal_id,
+                    missing_ok=True,
+                )
+            except MissingClaimedGroupProvenanceError:
+                permissions = workspace.serving_endpoints.get_permissions(  # type: ignore[attr-defined]
+                    endpoint_id
+                )
+                acl_matches = [
+                    entry
+                    for entry in _items(_field(permissions, "access_control_list"))
+                    if str(_field(entry, "group_name") or "").strip() == group_name
+                ]
+                if acl_matches:
+                    raise MissingClaimedGroupProvenanceError(
+                        "permission-bearing managed serving-query group has no "
+                        "signed immutable-ID provenance"
+                    ) from None
+                matches = [
+                    group
+                    for group in workspace.groups.list(  # type: ignore[attr-defined]
+                        filter=f"displayName eq '{group_name}'"
+                    )
+                    if str(_field(group, "display_name") or "").strip() == group_name
+                ]
+                if len(matches) > 1:
+                    raise RuntimeError(
+                        f"managed serving-query group {group_name!r} is duplicated"
+                    ) from None
+                if matches:
+                    raise
+                continue
         if state is not None:
             binding = managed_workspace_group_binding(
                 workspace,
@@ -196,10 +259,12 @@ def _audit_managed_query_group_governance(
                     "managed serving-query group immutable identity is ambiguous"
                 )
             managed_groups_by_endpoint[endpoint_id] = binding
-    principal_id = _service_principal_scim_id(
-        workspace,
-        application_id=application_id,
-    )
+    missing_legacy = legacy_pinned.difference(seen_names)
+    if missing_legacy:
+        raise RuntimeError(
+            "legacy-pinned managed-group endpoint(s) are absent: "
+            + ", ".join(sorted(missing_legacy))
+        )
     workspace_host = str(
         _field(_field(workspace, "config"), "host") or ""
     ).strip()
@@ -261,19 +326,31 @@ def _audit_managed_query_group_governance(
             "target-credential membership proof returned ambiguous evidence"
         )
     for endpoint_id in managed_groups_by_endpoint:
-        assert_managed_query_group_administration_isolated(
-            workspace,
-            account_id=str(account_id),
-            endpoint_id=endpoint_id,
-            application_id=application_id,
-            service_principal_id=principal_id,
-            authoritative_effective_groups=authoritative_effective_groups,
-        )
+        if endpoint_id in legacy_endpoint_ids:
+            assert_legacy_managed_query_group_administration_isolated(
+                workspace,
+                account_id=str(account_id),
+                endpoint_id=endpoint_id,
+                application_id=application_id,
+                service_principal_id=principal_id,
+                authoritative_effective_groups=authoritative_effective_groups,
+            )
+        else:
+            assert_managed_query_group_administration_isolated(
+                workspace,
+                app_name=app_name,
+                account_id=str(account_id),
+                endpoint_id=endpoint_id,
+                application_id=application_id,
+                service_principal_id=principal_id,
+                authoritative_effective_groups=authoritative_effective_groups,
+            )
     return principal_id, authoritative_effective_groups
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--app-name", required=True)
     parser.add_argument("--application-id", required=True)
     parser.add_argument("--account-id", required=True)
     parser.add_argument("--expected-inventory-principal", required=True)
@@ -319,6 +396,10 @@ def main(argv: list[str] | None = None) -> int:
         workspace,
         account_id=args.account_id,
         application_id=args.application_id,
+        app_name=args.app_name,
+        legacy_pinned_endpoint_names=tuple(
+            args.legacy_pinned_serving_endpoint or ()
+        ),
         assert_single_writer=credential_lease,
     )
     effective_group_names = set(authoritative_effective_groups.values())
@@ -333,6 +414,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         audit_global_serving_endpoint_access(
             workspace,
+            app_name=args.app_name,
             reviewed_endpoint_names=endpoints,
             service_principal=args.application_id,
             expected_permission_level=args.expected_serving_permission,

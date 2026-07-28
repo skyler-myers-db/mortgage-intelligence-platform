@@ -7,6 +7,49 @@ import pytest
 from databricks.sdk.errors import ResourceDoesNotExist
 
 from tools.databricks import app_gateway_access_mode as access
+from tools.databricks import serving_query_group_access as group_access
+from tools.databricks.serving_query_group_access import (
+    managed_query_group_external_id,
+    managed_query_group_name,
+)
+from tools.databricks.serving_query_group_provenance import (
+    MissingClaimedGroupProvenanceError,
+    intent_external_id,
+)
+
+_APP = "mip-app"
+_NONCE = "22222222-2222-4222-8222-222222222222"
+
+
+@pytest.fixture(autouse=True)
+def _signed_group_provenance(monkeypatch: pytest.MonkeyPatch) -> None:
+    def require_claimed(
+        workspace: object,
+        *,
+        app_name: str,
+        endpoint_id: str,
+        application_id: str,
+        service_principal_id: str,
+        group_name: str,
+    ) -> dict[str, str]:
+        assert app_name == _APP
+        key = (endpoint_id, application_id, service_principal_id)
+        record = workspace.groups.claims.get(key)
+        if record is None:
+            raise MissingClaimedGroupProvenanceError(
+                "managed serving-query group has no signed immutable-ID provenance"
+            )
+        assert group_name == managed_query_group_name(
+            endpoint_id=endpoint_id,
+            application_id=application_id,
+        )
+        return record
+
+    monkeypatch.setattr(
+        group_access.group_provenance,
+        "require_claimed",
+        require_claimed,
+    )
 
 
 def _permission_entry(
@@ -28,8 +71,10 @@ def _workspace(
     member_id: str | None = "app-scim-id",
     endpoint_id: str = "gateway-id",
     application_id: str = "app-client",
+    signed: bool = True,
+    legacy_v1: bool = False,
 ) -> object:
-    group_name = access.managed_query_group_name(
+    group_name = managed_query_group_name(
         endpoint_id=endpoint_id,
         application_id=application_id,
     )
@@ -38,15 +83,39 @@ def _workspace(
         entries.append(_permission_entry(principal=application_id))
     if managed:
         entries.append(_permission_entry(group=group_name))
+    external_id = (
+        managed_query_group_external_id(
+            endpoint_id=endpoint_id,
+            application_id=application_id,
+        )
+        if legacy_v1
+        else intent_external_id(
+            endpoint_id=endpoint_id,
+            application_id=application_id,
+            creation_nonce=_NONCE,
+        )
+    )
     group = SimpleNamespace(
         id="group-id",
         display_name=group_name,
-        external_id=access.managed_query_group_external_id(
-            endpoint_id=endpoint_id,
-            application_id=application_id,
-        ),
+        external_id=external_id,
         members=[] if member_id is None else [SimpleNamespace(value=member_id)],
         meta=SimpleNamespace(resource_type="WorkspaceGroup"),
+    )
+    claimed_scim_id = (
+        "verifier-scim-id"
+        if application_id == "verifier-client"
+        else "app-scim-id"
+    )
+    claims = (
+        {
+            (endpoint_id, application_id, claimed_scim_id): {
+                "group_id": group.id,
+                "external_id": external_id,
+            }
+        }
+        if managed and signed
+        else {}
     )
     return SimpleNamespace(
         serving_endpoints=SimpleNamespace(
@@ -56,6 +125,7 @@ def _workspace(
         groups=SimpleNamespace(
             list=lambda **_kw: [group] if managed else [],
             get=lambda _id: group,
+            claims=claims,
         ),
     )
 
@@ -76,6 +146,7 @@ def test_inspection_classifies_exact_query_access_without_mutation(
     assert (
         access.inspect_app_gateway_access_mode(
             _workspace(direct=direct, managed=managed),
+            app_name=_APP,
             endpoint_name="blue",
             app_client_id="app-client",
             app_scim_id="app-scim-id",
@@ -106,6 +177,7 @@ def test_exact_verifier_inspection_classifies_all_query_modes(
                 member_id="verifier-scim-id",
                 application_id="verifier-client",
             ),
+            app_name=_APP,
             endpoint_name="blue",
             application_id="verifier-client",
             scim_id="verifier-scim-id",
@@ -124,6 +196,7 @@ def test_exact_verifier_inspection_rejects_unrelated_member() -> None:
                 member_id="unrelated-scim-id",
                 application_id="verifier-client",
             ),
+            app_name=_APP,
             endpoint_name="blue",
             application_id="verifier-client",
             scim_id="verifier-scim-id",
@@ -141,9 +214,10 @@ def test_exact_verifier_inspection_rejects_group_identity_drift() -> None:
     group = workspace.groups.get("group-id")
     group.external_id = "attacker-controlled"
 
-    with pytest.raises(RuntimeError, match="identity drifted"):
+    with pytest.raises(RuntimeError, match="contract drifted"):
         access.inspect_gateway_query_access_mode(
             workspace,
+            app_name=_APP,
             endpoint_name="blue",
             application_id="verifier-client",
             scim_id="verifier-scim-id",
@@ -159,6 +233,7 @@ def test_inspection_rejects_managed_scim_identity_drift() -> None:
                 managed=True,
                 member_id="different-app-scim-id",
             ),
+            app_name=_APP,
             endpoint_name="blue",
             app_client_id="app-client",
             app_scim_id="app-scim-id",
@@ -173,12 +248,63 @@ def test_empty_exact_managed_group_is_currently_no_access() -> None:
                 managed=True,
                 member_id=None,
             ),
+            app_name=_APP,
             endpoint_name="retired-blue",
             app_client_id="app-client",
             app_scim_id="app-scim-id",
         )
         == "none"
     )
+
+
+def test_explicit_legacy_pin_accepts_only_exact_v1_managed_group() -> None:
+    assert (
+        access.inspect_app_gateway_access_mode(
+            _workspace(
+                direct=False,
+                managed=True,
+                signed=False,
+                legacy_v1=True,
+            ),
+            app_name=_APP,
+            endpoint_name="signed-blue",
+            app_client_id="app-client",
+            app_scim_id="app-scim-id",
+            legacy_pinned=True,
+        )
+        == "managed"
+    )
+
+
+def test_active_inspection_rejects_unsigned_v2_managed_group() -> None:
+    with pytest.raises(MissingClaimedGroupProvenanceError):
+        access.inspect_app_gateway_access_mode(
+            _workspace(
+                direct=False,
+                managed=True,
+                signed=False,
+            ),
+            app_name=_APP,
+            endpoint_name="candidate",
+            app_client_id="app-client",
+            app_scim_id="app-scim-id",
+        )
+
+
+def test_legacy_pin_does_not_admit_unsigned_v2_managed_group() -> None:
+    with pytest.raises(RuntimeError, match="contract drifted"):
+        access.inspect_app_gateway_access_mode(
+            _workspace(
+                direct=False,
+                managed=True,
+                signed=False,
+            ),
+            app_name=_APP,
+            endpoint_name="signed-blue",
+            app_client_id="app-client",
+            app_scim_id="app-scim-id",
+            legacy_pinned=True,
+        )
 
 
 def test_empty_exact_managed_group_cannot_claim_active_signed_blue() -> None:
@@ -189,6 +315,7 @@ def test_empty_exact_managed_group_cannot_claim_active_signed_blue() -> None:
                 managed=True,
                 member_id=None,
             ),
+            app_name=_APP,
             blue_endpoint="retired-blue",
             app_client_id="app-client",
             app_scim_id="app-scim-id",
@@ -215,6 +342,7 @@ def test_inspection_rejects_unreviewed_effective_group_access() -> None:
     with pytest.raises(RuntimeError, match="unreviewed effective group"):
         access.inspect_app_gateway_access_mode(
             workspace,
+            app_name=_APP,
             endpoint_name="blue",
             app_client_id="app-client",
             app_scim_id="app-scim-id",
@@ -267,6 +395,7 @@ def test_blue_is_preserved_while_reserved_managed_candidate_is_revoked_exactly(
     assert (
         access.preserve_blue_and_revoke_managed_candidates(
             workspace,
+            app_name=_APP,
             blue_endpoint="blue",
             app_client_id="app-client",
             app_scim_id="app-scim-id",
@@ -275,6 +404,64 @@ def test_blue_is_preserved_while_reserved_managed_candidate_is_revoked_exactly(
         == "legacy"
     )
     assert revoked == [("mip-growth-agent-gateway-deadbeef1234", "app-scim-id")]
+
+
+def test_inventory_candidate_cannot_receive_unpinned_v1_mutation_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    blue = _workspace(direct=True, managed=False)
+    candidate_name = "mip-growth-agent-gateway-deadbeef1234"
+    candidate = _workspace(
+        direct=False,
+        managed=True,
+        endpoint_id="candidate-id",
+        signed=False,
+        legacy_v1=True,
+    )
+    endpoints = {
+        "blue": blue.serving_endpoints,
+        candidate_name: candidate.serving_endpoints,
+    }
+
+    class _Endpoints:
+        def list(self) -> list[object]:
+            return [SimpleNamespace(name="blue"), SimpleNamespace(name=candidate_name)]
+
+        def get(self, name: str) -> object:
+            if name not in endpoints:
+                raise ResourceDoesNotExist("missing")
+            return endpoints[name].get(name)
+
+        def get_permissions(self, endpoint_id: str) -> object:
+            owner = blue if endpoint_id == "gateway-id" else candidate
+            return owner.serving_endpoints.get_permissions(endpoint_id)
+
+    mutations: list[str] = []
+    monkeypatch.setattr(
+        access,
+        "revoke_direct_permissions",
+        lambda *_args, **_kwargs: mutations.append("revoke") or True,
+    )
+    monkeypatch.setattr(
+        access,
+        "remove_legacy_pre_provenance_membership",
+        lambda *_args, **_kwargs: mutations.append("legacy") or True,
+    )
+
+    with pytest.raises(MissingClaimedGroupProvenanceError):
+        access.preserve_blue_and_revoke_managed_candidates(
+            SimpleNamespace(
+                serving_endpoints=_Endpoints(),
+                groups=candidate.groups,
+            ),
+            app_name=_APP,
+            blue_endpoint="blue",
+            app_client_id="app-client",
+            app_scim_id="app-scim-id",
+            assert_before_mutation=lambda: mutations.append("lease"),
+        )
+
+    assert mutations == []
 
 
 def test_mixed_candidate_is_rejected_before_any_managed_mutation(
@@ -303,6 +490,7 @@ def test_mixed_candidate_is_rejected_before_any_managed_mutation(
     with pytest.raises(RuntimeError, match="retains legacy direct App access"):
         access.preserve_blue_and_revoke_managed_candidates(
             SimpleNamespace(serving_endpoints=SimpleNamespace()),
+            app_name=_APP,
             blue_endpoint="blue",
             app_client_id="app-client",
             app_scim_id="app-scim-id",
@@ -345,6 +533,7 @@ def test_prepare_rejects_legacy_gateway_without_pinned_deletion_authority(
     with pytest.raises(RuntimeError, match="creator policy"):
         access.assert_pinned_access_retirement_authority(
             workspace,
+            app_name=_APP,
             journal=journal,
             canonical_name="Mortgage Growth Agent",
             green_gateway_endpoint="green-gateway",
@@ -361,6 +550,7 @@ def test_prepare_rejects_preserved_endpoint_without_signed_journal() -> None:
     with pytest.raises(RuntimeError, match="no signed cutover retirement journal"):
         access.assert_pinned_access_retirement_authority(
             SimpleNamespace(),
+            app_name=_APP,
             journal=None,
             canonical_name="Mortgage Growth Agent",
             green_gateway_endpoint="green-gateway",
@@ -398,6 +588,7 @@ def test_prepare_allows_managed_gateway_without_endpoint_deletion_authority(
 
     access.assert_pinned_access_retirement_authority(
         workspace,
+        app_name=_APP,
         journal={
             "canonical_name": "Mortgage Growth Agent",
             "old_gateway_endpoint": "old-gateway",
@@ -454,6 +645,7 @@ def test_prepare_checks_exact_verifier_mode_for_nondeletable_gateway(
     )
     kwargs = {
         "workspace": workspace,
+        "app_name": _APP,
         "journal": {
             "canonical_name": "Mortgage Growth Agent",
             "old_gateway_endpoint": "old-gateway",
@@ -506,6 +698,7 @@ def test_prepare_allows_deletable_gateway_to_retain_direct_verifier_access(
 
     access.assert_pinned_access_retirement_authority(
         workspace,
+        app_name=_APP,
         journal={
             "canonical_name": "Mortgage Growth Agent",
             "old_gateway_endpoint": "old-gateway",
@@ -545,6 +738,7 @@ def test_prepare_rejects_pinned_supervisor_ownership_drift(
     with pytest.raises(RuntimeError, match="ownership drifted"):
         access.assert_pinned_access_retirement_authority(
             workspace,
+            app_name=_APP,
             journal={
                 "canonical_name": "Mortgage Growth Agent",
                 "old_id": "old-supervisor",
@@ -601,6 +795,7 @@ def test_retirement_revoke_mutates_only_exact_managed_membership(
     assert (
         access.revoke_managed_app_access(
             object(),
+            app_name=_APP,
             endpoint_name="old",
             app_client_id="app-client",
             app_scim_id="app-scim-id",

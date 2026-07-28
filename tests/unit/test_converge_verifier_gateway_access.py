@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -119,6 +120,7 @@ def test_revoke_managed_passes_the_pinned_scim_id_and_exact_endpoint(
 
     assert access.revoke_managed(
         workspace,
+        app_name="mip-app",
         endpoint="green-gateway",
         application_id=APPLICATION_ID,
         expected_scim_id=SCIM_ID,
@@ -129,6 +131,7 @@ def test_revoke_managed_passes_the_pinned_scim_id_and_exact_endpoint(
     assert observed == [
         {
             "client": workspace,
+            "app_name": "mip-app",
             "endpoint_name": "green-gateway",
             "service_principal": APPLICATION_ID,
             "service_principal_id": SCIM_ID,
@@ -157,6 +160,7 @@ def test_revoke_managed_refuses_scim_drift_before_mutation(
     with pytest.raises(RuntimeError, match="drifted"):
         access.revoke_managed(
             workspace,
+            app_name="mip-app",
             endpoint="green-gateway",
             application_id=APPLICATION_ID,
             expected_scim_id=SCIM_ID,
@@ -205,18 +209,23 @@ def test_cli_routes_exact_managed_revoke(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = _workspace()
-    observed: list[tuple[object, str, str, str, str]] = []
+    observed: list[tuple[object, str, str, str, str, str]] = []
+    lease_calls: list[dict[str, object]] = []
     monkeypatch.setattr(access, "WorkspaceClient", lambda: workspace)
     monkeypatch.setattr(
         access,
-        "held_assertion_from_env",
-        lambda *_args, **_kwargs: (lambda: None),
+        "held_assertion",
+        lambda client, **kwargs: (
+            lease_calls.append({"client": client, **kwargs}),
+            (lambda: None),
+        )[1],
     )
     monkeypatch.setattr(
         access,
         "revoke_managed",
         lambda client,
         *,
+        app_name,
         endpoint,
         application_id,
         expected_scim_id,
@@ -224,6 +233,7 @@ def test_cli_routes_exact_managed_revoke(
         assert_single_writer: observed.append(
             (
                 client,
+                app_name,
                 endpoint,
                 application_id,
                 expected_scim_id,
@@ -237,6 +247,12 @@ def test_cli_routes_exact_managed_revoke(
         access.main(
             [
                 "revoke-managed",
+                "--app-name",
+                "mip-app",
+                "--deployment-lease-id",
+                "deployment-lease-id",
+                "--deployment-source-git-sha",
+                "a" * 40,
                 "--endpoint",
                 "green-gateway",
                 "--application-id",
@@ -252,9 +268,43 @@ def test_cli_routes_exact_managed_revoke(
     assert observed == [
         (
             workspace,
+            "mip-app",
             "green-gateway",
             APPLICATION_ID,
             SCIM_ID,
             "admin@example.com",
         )
     ]
+    assert lease_calls == [
+        {
+            "client": workspace,
+            "app_name": "mip-app",
+            "lease_id": "deployment-lease-id",
+            "source_git_sha": "a" * 40,
+            "operation": "verifier Gateway compensation",
+        }
+    ]
+
+
+def test_revoke_contract_requires_explicit_app_name() -> None:
+    signature = inspect.signature(access.revoke_managed)
+    with pytest.raises(TypeError):
+        signature.bind(
+            _workspace(),
+            endpoint="green-gateway",
+            application_id=APPLICATION_ID,
+            expected_scim_id=SCIM_ID,
+            expected_inventory_principal="admin@example.com",
+            assert_single_writer=lambda: None,
+        )
+
+    bound = signature.bind(
+        _workspace(),
+        app_name="mip-app",
+        endpoint="green-gateway",
+        application_id=APPLICATION_ID,
+        expected_scim_id=SCIM_ID,
+        expected_inventory_principal="admin@example.com",
+        assert_single_writer=lambda: None,
+    )
+    assert bound.arguments["app_name"] == "mip-app"

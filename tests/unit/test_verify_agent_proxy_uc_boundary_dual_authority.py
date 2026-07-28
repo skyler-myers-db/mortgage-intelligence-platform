@@ -25,6 +25,8 @@ def _proof():
 
 def _args() -> list[str]:
     return [
+        "--app-name",
+        "mip-app",
         "--application-id",
         _APPLICATION_ID,
         "--expected-inventory-principal",
@@ -216,7 +218,7 @@ def test_reviewed_capability_groups_bind_exact_resource_and_member_contracts(
     monkeypatch.setattr(dual, "inspect_managed_agent_proxy_group", capability)
     monkeypatch.setattr(
         dual,
-        "inspect_managed_query_group",
+        "inspect_claimed_managed_query_group",
         lambda _workspace, *, endpoint_id, **_kwargs: SimpleNamespace(
             contract=SimpleNamespace(
                 id=f"query-{endpoint_id}-group-id",
@@ -230,6 +232,7 @@ def test_reviewed_capability_groups_bind_exact_resource_and_member_contracts(
     attestation = dual._reviewed_workspace_capability_groups(
         object(),
         account=object(),
+        app_name="mip-app",
         application_id=_APPLICATION_ID,
         supervisor_ids=("supervisor-a", "supervisor-b"),
         supervisor_endpoint_ids=("endpoint-a", "endpoint-b"),
@@ -274,7 +277,7 @@ def test_reviewed_capability_groups_reject_unrelated_query_group_member(
     )
     monkeypatch.setattr(
         dual,
-        "inspect_managed_query_group",
+        "inspect_claimed_managed_query_group",
         lambda *_args, **_kwargs: SimpleNamespace(
             contract=SimpleNamespace(
                 id="query-id",
@@ -289,8 +292,88 @@ def test_reviewed_capability_groups_reject_unrelated_query_group_member(
         dual._reviewed_workspace_capability_groups(
             object(),
             account=object(),
+            app_name="mip-app",
             application_id=_APPLICATION_ID,
             supervisor_ids=("supervisor",),
             supervisor_endpoint_ids=("endpoint",),
             genie_space_id="genie",
         )
+
+
+def test_reviewed_capability_groups_accept_exact_v1_only_for_preserved_supervisor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        dual,
+        "workspace_target_identity",
+        lambda *_args, **_kwargs: SimpleNamespace(scim_id="proxy-scim"),
+    )
+    monkeypatch.setattr(
+        dual,
+        "account_target_identity",
+        lambda *_args, **_kwargs: ("account-proxy-scim", "proxy"),
+    )
+    monkeypatch.setattr(
+        dual,
+        "inspect_managed_agent_proxy_group",
+        lambda *_args, resource_kind, resource_id, **_kwargs: SimpleNamespace(
+            contract=SimpleNamespace(
+                id=f"{resource_kind}-{resource_id}-id",
+                name=f"{resource_kind}-{resource_id}",
+                external_id=f"{resource_kind}-{resource_id}-external-id",
+            ),
+            member_ids=("proxy-scim",),
+        ),
+    )
+
+    def claimed(
+        _workspace: object,
+        *,
+        endpoint_id: str,
+        **_kwargs: object,
+    ) -> object:
+        if endpoint_id == "preserved-endpoint":
+            raise dual.MissingClaimedGroupProvenanceError("no signed claim")
+        return SimpleNamespace(
+            contract=SimpleNamespace(
+                id="active-query-id",
+                name="active-query",
+                external_id=f"mip:sq:v2:{'a' * 52}",
+            ),
+            member_ids=("proxy-scim",),
+        )
+
+    legacy_calls: list[str] = []
+    monkeypatch.setattr(dual, "inspect_claimed_managed_query_group", claimed)
+    monkeypatch.setattr(
+        dual,
+        "inspect_legacy_pre_provenance_group",
+        lambda _workspace, *, endpoint_id, **_kwargs: (
+            legacy_calls.append(endpoint_id)
+            or SimpleNamespace(
+                contract=SimpleNamespace(
+                    id="preserved-query-id",
+                    name="preserved-query",
+                    external_id="mip:serving-query:legacy",
+                ),
+                member_ids=("proxy-scim",),
+            )
+        ),
+    )
+
+    attestation = dual._reviewed_workspace_capability_groups(
+        object(),
+        account=object(),
+        app_name="mip-app",
+        application_id=_APPLICATION_ID,
+        supervisor_ids=("active-supervisor", "preserved-supervisor"),
+        supervisor_endpoint_ids=("active-endpoint", "preserved-endpoint"),
+        genie_space_id="genie",
+    )
+
+    assert legacy_calls == ["preserved-endpoint"]
+    assert {
+        group.group_id
+        for group in attestation.groups
+        if group.resource_kind == "serving_endpoint"
+    } == {"active-query-id", "preserved-query-id"}

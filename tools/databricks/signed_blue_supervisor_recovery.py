@@ -67,6 +67,7 @@ def recover_interrupted_signed_blue_finalization(
     workspace: Any,
     candidates: SupervisorCandidates,
     *,
+    app_name: str,
     signed_blue_pin: Mapping[str, object] | None,
     display_name: str,
     genie_space_id: str,
@@ -97,6 +98,7 @@ def recover_interrupted_signed_blue_finalization(
     endpoint = str(candidate.get("endpoint_name") or "").strip()
     if not supervisor_endpoint_requires_managed_query_rotation(
         workspace,
+        app_name=app_name,
         endpoint_name=endpoint,
         runtime_application_id=runtime_application_id,
         managed_query_application_id=managed_query_application_id,

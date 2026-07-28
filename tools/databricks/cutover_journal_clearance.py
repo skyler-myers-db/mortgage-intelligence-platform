@@ -15,6 +15,7 @@ from tools.databricks.cutover_supervisor_inventory import (
 def clear_journal(
     workspace: Any,
     *,
+    app_name: str,
     runtime_application_id: str,
     app_application_id: str,
     app_scim_id: str,
@@ -27,6 +28,7 @@ def clear_journal(
 
     clear_stale_aware_cutover_journal(
         workspace,
+        app_name=app_name,
         runtime_application_id=runtime_application_id,
         assert_single_writer=assert_single_writer,
         supervisor_by_id=lambda supervisor_id: supervisor_by_id_direct(

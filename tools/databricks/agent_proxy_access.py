@@ -41,7 +41,7 @@ from tools.databricks.agent_runtime_access import (
 from tools.databricks.audit_global_m2m_access import (
     assert_workspace_admin_inventory_identity,
 )
-from tools.databricks.deployment_lease_authority import held_assertion_from_env
+from tools.databricks.deployment_lease_authority import held_assertion
 from tools.databricks.legacy_permissions_acl_cleanup import (
     stopped_deployment_app_assertion,
 )
@@ -192,6 +192,9 @@ def _reviewed_bindings(
 def grant_and_audit_agent_proxy_access(
     workspace: Any,
     *,
+    app_name: str,
+    deployment_lease_id: str,
+    deployment_source_git_sha: str,
     supervisor_id: str,
     supervisor_endpoint: str,
     supervisor_endpoint_id: str,
@@ -257,6 +260,7 @@ def grant_and_audit_agent_proxy_access(
         for endpoint in requested_legacy_pins
         if inspect_exact_query_access_mode(
             workspace,
+            app_name=app_name,
             endpoint_name=endpoint,
             service_principal=proxy_id,
             service_principal_id=principal_id,
@@ -295,6 +299,7 @@ def grant_and_audit_agent_proxy_access(
     if audit_only:
         audit_global_serving_endpoint_access(
             workspace,
+            app_name=app_name,
             reviewed_endpoint_names=reviewed_endpoints,
             service_principal=proxy_id,
             expected_permission_level="CAN_QUERY",
@@ -305,6 +310,9 @@ def grant_and_audit_agent_proxy_access(
     else:
         converge_exact_direct_can_query(
             workspace,
+            app_name=app_name,
+            deployment_lease_id=deployment_lease_id,
+            deployment_source_git_sha=deployment_source_git_sha,
             reviewed_endpoint_names=reviewed_endpoints,
             service_principal=proxy_id,
             service_principal_id=principal_id,
@@ -317,6 +325,7 @@ def grant_and_audit_agent_proxy_access(
 def revoke_and_audit_agent_proxy_access(
     workspace: Any,
     *,
+    app_name: str,
     application_id: str,
     expected_inventory_principal: str,
     assert_single_writer: Callable[[], None],
@@ -338,6 +347,7 @@ def revoke_and_audit_agent_proxy_access(
             "serving endpoint",
             lambda: revoke_all_direct_permissions(
                 workspace,
+                app_name=app_name,
                 service_principal=proxy_id,
                 effective_group_names=set(),
                 assert_single_writer=assert_single_writer,
@@ -395,6 +405,7 @@ def revoke_and_audit_agent_proxy_access(
                 "serving endpoint",
                 lambda: revoke_all_direct_permissions(
                     workspace,
+                    app_name=app_name,
                     service_principal=proxy_id,
                     service_principal_id=principal_id,
                     effective_group_names=group_names,
@@ -437,9 +448,18 @@ def revoke_and_audit_agent_proxy_access(
         )
 
 
-def _deployment_lease_assertion(workspace: Any) -> Callable[[], None]:
-    return held_assertion_from_env(
+def _deployment_lease_assertion(
+    workspace: Any,
+    *,
+    app_name: str,
+    lease_id: str,
+    source_git_sha: str,
+) -> Callable[[], None]:
+    return held_assertion(
         workspace,
+        app_name=app_name,
+        lease_id=lease_id,
+        source_git_sha=source_git_sha,
         operation="agent-proxy ACL mutation",
     )
 
@@ -456,17 +476,26 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--legacy-pinned-supervisor-endpoint", action="append", default=[])
     parser.add_argument("--genie-space-id")
     parser.add_argument("--application-id", required=True)
+    parser.add_argument("--app-name", required=True)
+    parser.add_argument("--deployment-lease-id", required=True)
+    parser.add_argument("--deployment-source-git-sha", required=True)
     parser.add_argument("--runtime-application-id")
     parser.add_argument("--expected-inventory-principal", required=True)
     args = parser.parse_args(argv)
     workspace = WorkspaceClient()
-    assert_single_writer = _deployment_lease_assertion(workspace)
+    assert_single_writer = _deployment_lease_assertion(
+        workspace,
+        app_name=args.app_name,
+        lease_id=args.deployment_lease_id,
+        source_git_sha=args.deployment_source_git_sha,
+    )
     assert_legacy_cleanup_quiesced = stopped_deployment_app_assertion(workspace)
     if args.mode == "deny-all":
         if args.legacy_pinned_supervisor_endpoint:
             parser.error("--legacy-pinned-supervisor-endpoint is invalid with deny-all")
         revoke_and_audit_agent_proxy_access(
             workspace,
+            app_name=args.app_name,
             application_id=args.application_id,
             expected_inventory_principal=args.expected_inventory_principal,
             assert_single_writer=assert_single_writer,
@@ -498,6 +527,9 @@ def main(argv: list[str] | None = None) -> int:
         )
     grant_and_audit_agent_proxy_access(
         workspace,
+        app_name=args.app_name,
+        deployment_lease_id=args.deployment_lease_id,
+        deployment_source_git_sha=args.deployment_source_git_sha,
         supervisor_id=args.supervisor_id,
         supervisor_endpoint=args.supervisor_endpoint,
         supervisor_endpoint_id=args.supervisor_endpoint_id,
