@@ -4217,7 +4217,8 @@ run_with_account_identity \
   --supervisor-endpoint-id "${MIP_AGENT_SUPERVISOR_ENDPOINT_ID:-dry-run-supervisor-endpoint-id}" \
   "${AGENT_PROXY_PRESERVE_ARGS[@]}" \
   --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
-  --allow-attested-app-401
+  --allow-attested-app-401 \
+  --allow-attested-stopped-app-503
 if ! revoke_agent_runtime_bootstrap_grants; then
   echo "${RED}[deploy] temporary agent-runtime schema privileges remain; refusing deployment.${RST}" >&2
   exit 1

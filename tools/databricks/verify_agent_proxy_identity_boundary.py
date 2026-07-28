@@ -374,28 +374,6 @@ def collect_admin_inventory(
     )
 
 
-def _verify_app_denial(
-    workspace: Any,
-    *,
-    expected_application_id: str,
-    app_url: str,
-    http_get: Callable[..., Any],
-    admin_workspace: Any | None = None,
-    app_name: str | None = None,
-    allow_attested_app_401: bool = False,
-) -> None:
-    verify_authenticated_app_denial(
-        workspace,
-        expected_application_id=expected_application_id,
-        app_url=app_url,
-        label="agent-proxy Databricks App denial",
-        http_get=http_get,
-        admin_workspace=admin_workspace,
-        app_name=app_name,
-        allow_attested_app_401=allow_attested_app_401,
-    )
-
-
 def _verify_warehouse_denial(workspace: Any, *, warehouse_id: str) -> None:
     try:
         response = workspace.statement_execution.execute_statement(
@@ -670,6 +648,7 @@ def verify_boundary(
     preserved_supervisor_bindings: tuple[tuple[str, str, str], ...] = (),
     admin_workspace: Any | None = None,
     allow_attested_app_401: bool = False,
+    allow_attested_stopped_app_503: bool = False,
     http_get: Callable[..., Any] = requests.get,
 ) -> None:
     """Run positive target and exhaustive negative probes under proxy OAuth."""
@@ -679,7 +658,7 @@ def verify_boundary(
     }
     if authenticated != {expected_application_id}:
         raise RuntimeError("authenticated agent-proxy identity does not match its application id")
-    if allow_attested_app_401 and admin_workspace is None:
+    if (allow_attested_app_401 or allow_attested_stopped_app_503) and admin_workspace is None:
         raise RuntimeError("admin App attestation authority is absent")
     _expect_denied(
         "account administrator service-principal listing probe",
@@ -699,14 +678,16 @@ def verify_boundary(
         strict=True,
     ):
         is_target = candidate_app == app_name
-        _verify_app_denial(
+        verify_authenticated_app_denial(
             workspace,
             expected_application_id=expected_application_id,
             app_url=candidate_url,
+            label="agent-proxy Databricks App denial",
             http_get=http_get,
             admin_workspace=admin_workspace if is_target else None,
             app_name=candidate_app if is_target else None,
             allow_attested_app_401=allow_attested_app_401 and is_target,
+            allow_attested_stopped_app_503=(allow_attested_stopped_app_503 and is_target),
         )
     _expect_denied(
         "metastore administrator GET probe",
@@ -761,6 +742,10 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("--wait-customer-resource-denial requires --customer-resource-denial")
     if denial_mode and args.target_query_only:
         raise SystemExit("--customer-resource-denial conflicts with --target-query-only")
+    if denial_mode and args.allow_attested_stopped_app_503:
+        raise SystemExit(
+            "--customer-resource-denial rejects --allow-attested-stopped-app-503"
+        )
     if denial_mode and not args.expected_inventory_principal:
         raise SystemExit("--customer-resource-denial requires --expected-inventory-principal")
     if denial_mode and not args.account_id:
@@ -886,6 +871,7 @@ def main(argv: list[str] | None = None) -> int:
                 preserved_supervisor_bindings=preserved_bindings,
                 admin_workspace=admin_workspace,
                 allow_attested_app_401=args.allow_attested_app_401,
+                allow_attested_stopped_app_503=args.allow_attested_stopped_app_503,
             )
     if denial_mode:
         print("agent-proxy authorization boundary: PASS (customer-created serving/agent resources denied; foundation invocation not asserted)")

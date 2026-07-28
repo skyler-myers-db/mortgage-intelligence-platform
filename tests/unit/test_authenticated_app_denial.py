@@ -214,6 +214,7 @@ def _verify(
     http_get: Callable[..., Any] | None = None,
     admin_workspace: object | None = None,
     allow_attested_app_401: bool = False,
+    allow_attested_stopped_app_503: bool = False,
     app_url: str = APP_URL,
 ) -> object:
     exact_workspace = workspace or _workspace()
@@ -228,6 +229,7 @@ def _verify(
         admin_workspace=admin_workspace,
         app_name=APP_NAME if admin_workspace is not None else None,
         allow_attested_app_401=allow_attested_app_401,
+        allow_attested_stopped_app_503=allow_attested_stopped_app_503,
     )
     return exact_workspace
 
@@ -260,6 +262,91 @@ def test_accepts_target_401_with_stable_admin_attestation(state: object) -> None
 def test_rejects_401_without_explicit_admin_attestation() -> None:
     with pytest.raises(RuntimeError, match="uncorroborated status=401"):
         _verify(app_status=401)
+
+
+def test_accepts_stopped_undeployed_503_with_stable_admin_attestation() -> None:
+    http_get, seen_headers = _http_probe(app_status=503)
+    workspace = _verify(
+        app_status=503,
+        http_get=http_get,
+        admin_workspace=_admin_workspace(
+            apps=(_app(active_deployment_id=""),)
+        ),
+        allow_attested_stopped_app_503=True,
+    )
+
+    assert workspace.config.authenticate_calls == 1
+    assert len(seen_headers) == 4
+    assert all(headers is seen_headers[0] for headers in seen_headers)
+
+
+@pytest.mark.parametrize(
+    "app",
+    (
+        _app(state=ComputeState.ACTIVE),
+        _app(active_deployment_id="active"),
+        _app(active_deployment_id="", pending_deployment_id="pending"),
+    ),
+    ids=["active", "stopped-with-active-deployment", "pending-deployment"],
+)
+def test_rejects_attested_503_unless_app_is_stopped_and_undeployed(
+    app: object,
+) -> None:
+    with pytest.raises(RuntimeError, match="App 503 attestation does not match"):
+        _verify(
+            app_status=503,
+            admin_workspace=_admin_workspace(apps=(app,)),
+            allow_attested_stopped_app_503=True,
+        )
+
+
+def test_rejects_attested_stopped_503_with_can_use_or_direct_target_access() -> None:
+    for entry in (
+        _acl_entry(group_name="users", levels=(_permission("CAN_USE"),)),
+        _acl_entry(
+            service_principal_name=IDENTITY,
+            levels=(_permission("CAN_MANAGE"),),
+        ),
+    ):
+        with pytest.raises(RuntimeError, match="global CAN_USE|direct App access"):
+            _verify(
+                app_status=503,
+                admin_workspace=_admin_workspace(
+                    apps=(_app(active_deployment_id=""),),
+                    acls=((entry,),),
+                ),
+                allow_attested_stopped_app_503=True,
+            )
+
+
+def test_rejects_attested_stopped_503_without_same_bearer_admin_denial() -> None:
+    http_get, _headers = _http_probe(
+        app_status=503,
+        permission_status=200,
+    )
+    with pytest.raises(RuntimeError, match="503 permission-administration denial"):
+        _verify(
+            app_status=503,
+            http_get=http_get,
+            admin_workspace=_admin_workspace(
+                apps=(_app(active_deployment_id=""),)
+            ),
+            allow_attested_stopped_app_503=True,
+        )
+
+
+def test_rejects_attested_stopped_503_when_admin_snapshot_drifts() -> None:
+    with pytest.raises(RuntimeError, match="identity, state, or ACL drifted"):
+        _verify(
+            app_status=503,
+            admin_workspace=_admin_workspace(
+                apps=(
+                    _app(active_deployment_id=""),
+                    _app(active_deployment_id="", app_id="changed-app"),
+                )
+            ),
+            allow_attested_stopped_app_503=True,
+        )
 
 
 @pytest.mark.parametrize("state", ("RUNNING", "STARTING", "STOPPING", "UNKNOWN"))

@@ -36,4 +36,12 @@ def parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Accept target-App 401 only with a stable independent admin attestation.",
     )
+    result.add_argument(
+        "--allow-attested-stopped-app-503",
+        action="store_true",
+        help=(
+            "Accept target-App 503 only when a stable independent admin attestation "
+            "proves it is stopped, undeployed, and quarantined."
+        ),
+    )
     return result

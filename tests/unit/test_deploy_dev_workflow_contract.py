@@ -2392,6 +2392,7 @@ def test_deploy_uses_isolated_identity_for_agent_resource_ownership() -> None:
         )
     ]
     assert "--allow-attested-app-401" in pre_cutover_proxy_block
+    assert "--allow-attested-stopped-app-503" in pre_cutover_proxy_block
     assert "--supervisor-endpoint" in pre_cutover_proxy_block
     proxy_uc_block = runtime_block[proxy_uc_audit : proxy_uc_audit + 700]
     assert "run_with_account_identity" in proxy_uc_block
@@ -2451,8 +2452,13 @@ def test_deploy_uses_isolated_identity_for_agent_resource_ownership() -> None:
         in script[final_proxy_identity_boundary:proxy_secret_cleanup]
     )
     assert "--allow-attested-app-401" in script[final_proxy_identity_boundary:proxy_secret_cleanup]
+    assert (
+        "--allow-attested-stopped-app-503"
+        not in script[final_proxy_identity_boundary:proxy_secret_cleanup]
+    )
     assert "--supervisor-endpoint" in script[final_proxy_identity_boundary:proxy_secret_cleanup]
     assert script.count("--allow-attested-app-401") == 5
+    assert script.count("--allow-attested-stopped-app-503") == 1
     assert "--allow-stopped-app-401" not in script
     runtime_identity_boundary = runtime_block.index(
         "tools.databricks.verify_agent_runtime_identity_boundary"

@@ -42,8 +42,10 @@ PROXY_QUERY_GROUP = managed_query_group_name(
 
 def _proxy_main_args(
     account_host: str = "https://accounts.cloud.databricks.com",
+    *,
+    allow_attested_stopped_app_503: bool = False,
 ) -> list[str]:
-    return [
+    args = [
         "--expected-application-id",
         PROXY_ID,
         "--account-host",
@@ -68,6 +70,9 @@ def _proxy_main_args(
         TARGET_GENIE,
         "--allow-attested-app-401",
     ]
+    if allow_attested_stopped_app_503:
+        args.append("--allow-attested-stopped-app-503")
+    return args
 
 
 @pytest.mark.parametrize(
@@ -164,7 +169,7 @@ def test_main_scrubs_deployer_aliases_before_exact_proxy_clients(
     monkeypatch.setattr(boundary, "collect_admin_inventory", lambda *_args, **_kwargs: _inventory())
     monkeypatch.setattr(boundary, "verify_boundary", verify)
 
-    assert boundary.main(_proxy_main_args()) == 0
+    assert boundary.main(_proxy_main_args(allow_attested_stopped_app_503=True)) == 0
 
     assert auth_at_construction == [
         ("pat", "admin-token", "", "deployer-token"),
@@ -177,6 +182,7 @@ def test_main_scrubs_deployer_aliases_before_exact_proxy_clients(
     assert observed["account"] is account
     assert observed["admin_workspace"] is clients[0]
     assert observed["allow_attested_app_401"] is True
+    assert observed["allow_attested_stopped_app_503"] is True
     assert "DATABRICKS_AGENT_PROXY_CLIENT_SECRET" not in os.environ
     assert "MIP_DEPLOYER_DATABRICKS_HOST" not in os.environ
     assert "MIP_DEPLOYER_DATABRICKS_PROFILE" not in os.environ
@@ -724,7 +730,11 @@ def _account(*, admin_succeeds: bool = False) -> object:
     return SimpleNamespace(service_principals=SimpleNamespace(list=operation))
 
 
-def _admin_workspace(*, state: object = ComputeState.STOPPED) -> object:
+def _admin_workspace(
+    *,
+    state: object = ComputeState.STOPPED,
+    active_deployment_id: str = "active",
+) -> object:
     permission = SimpleNamespace(permission_level="CAN_MANAGE", inherited=True)
     managed_groups = {group.id: group for group in _admin_inventory_workspace().groups.list()}
     return SimpleNamespace(
@@ -736,7 +746,11 @@ def _admin_workspace(*, state: object = ComputeState.STOPPED) -> object:
                 service_principal_client_id="app-client",
                 service_principal_id="app-scim",
                 compute_status=SimpleNamespace(state=state),
-                active_deployment=SimpleNamespace(deployment_id="active"),
+                active_deployment=(
+                    SimpleNamespace(deployment_id=active_deployment_id)
+                    if active_deployment_id
+                    else None
+                ),
                 pending_deployment=None,
             ),
             get_permissions=lambda _name: SimpleNamespace(
@@ -773,6 +787,7 @@ def _verify(
     unrelated_app_status: int = 403,
     admin_workspace: object | None = None,
     allow_attested_app_401: bool = False,
+    allow_attested_stopped_app_503: bool = False,
     inventory: AgentProxyBoundaryInventory | None = None,
 ) -> None:
     def http_get(url: str, **_kwargs: object) -> object:
@@ -804,6 +819,7 @@ def _verify(
         genie_space_id=TARGET_GENIE,
         admin_workspace=admin_workspace,
         allow_attested_app_401=allow_attested_app_401,
+        allow_attested_stopped_app_503=allow_attested_stopped_app_503,
         http_get=http_get,
     )
 
@@ -1148,6 +1164,36 @@ def test_proxy_boundary_accepts_target_401_with_admin_attestation(
     )
 
 
+def test_proxy_boundary_accepts_only_attested_stopped_target_503() -> None:
+    _verify(
+        _workspace(),
+        app_status=503,
+        admin_workspace=_admin_workspace(
+            state=ComputeState.STOPPED,
+            active_deployment_id="",
+        ),
+        allow_attested_stopped_app_503=True,
+    )
+
+    with pytest.raises(RuntimeError, match="App 503 attestation does not match"):
+        _verify(
+            _workspace(),
+            app_status=503,
+            admin_workspace=_admin_workspace(state=ComputeState.ACTIVE),
+            allow_attested_stopped_app_503=True,
+        )
+
+
+def test_proxy_boundary_keeps_unrelated_app_503_fail_closed() -> None:
+    with pytest.raises(RuntimeError, match="status=503"):
+        _verify(
+            _workspace(),
+            unrelated_app_status=503,
+            admin_workspace=_admin_workspace(),
+            allow_attested_stopped_app_503=True,
+        )
+
+
 def test_proxy_boundary_keeps_unrelated_apps_403_only() -> None:
     with pytest.raises(RuntimeError, match="uncorroborated status=401"):
         _verify(
@@ -1164,6 +1210,14 @@ def test_proxy_boundary_requires_admin_authority_for_attested_401_mode() -> None
         _verify(
             _workspace(),
             allow_attested_app_401=True,
+        )
+
+
+def test_proxy_boundary_requires_admin_authority_for_attested_503_mode() -> None:
+    with pytest.raises(RuntimeError, match="attestation authority is absent"):
+        _verify(
+            _workspace(),
+            allow_attested_stopped_app_503=True,
         )
 
 
@@ -1788,5 +1842,21 @@ def test_global_denial_cli_requires_account_id() -> None:
                 "--expected-inventory-principal",
                 "admin@example.com",
                 "--customer-resource-denial",
+            ]
+        )
+
+
+def test_global_denial_cli_rejects_stopped_app_503_attestation_mode() -> None:
+    with pytest.raises(SystemExit, match="allow-attested-stopped-app-503"):
+        boundary.main(
+            [
+                "--expected-application-id",
+                PROXY_ID,
+                "--expected-inventory-principal",
+                "admin@example.com",
+                "--account-id",
+                "account-id",
+                "--customer-resource-denial",
+                "--allow-attested-stopped-app-503",
             ]
         )
