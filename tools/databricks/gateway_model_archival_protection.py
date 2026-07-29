@@ -21,6 +21,7 @@ from tools.databricks.gateway_model_archival_inventory import (
 from tools.databricks.gateway_model_retirement_record import record_sha256
 from tools.databricks.gateway_registration_recovery import _parse_durable_journal
 from tools.databricks.gateway_resource_identity import gateway_experiment_name
+from tools.databricks.serving_endpoint_identity import uc_model_serving_identity
 
 _MODEL_SUFFIX = re.compile(r"[0-9a-f]{12}\Z")
 _REGISTRATION_VISIBILITY_ATTEMPTS = 10
@@ -62,8 +63,13 @@ def _allocation(
     }
 
 
-def _endpoint_contracts(workspace: Any) -> list[dict[str, Any]]:
+def _endpoint_contracts(
+    workspace: Any,
+    *,
+    model_family: str,
+) -> list[dict[str, Any]]:
     protected: list[dict[str, Any]] = []
+    family_pattern = re.compile(rf"{re.escape(model_family)}_[0-9a-f]{{12}}\Z")
     for summary in workspace.serving_endpoints.list():
         endpoint_name = _field(summary, "name")
         if not endpoint_name:
@@ -77,17 +83,6 @@ def _endpoint_contracts(workspace: Any) -> list[dict[str, Any]]:
             seen_contracts: set[tuple[str, str]] = set()
             for collection in ("served_entities", "served_models"):
                 for index, entity in enumerate(_config_entities(config, collection)):
-                    entity_name = _field(entity, "entity_name") or _field(
-                        entity,
-                        "model_name",
-                    )
-                    alias = _field(entity, "name")
-                    if not entity_name:
-                        raise RuntimeError("Gateway protected endpoint entity has no model")
-                    if alias:
-                        if alias in aliases and aliases[alias] != entity_name:
-                            raise RuntimeError("Gateway protected endpoint alias is ambiguous")
-                        aliases[alias] = entity_name
                     environment = getattr(entity, "environment_vars", None)
                     if environment is None and isinstance(entity, Mapping):
                         environment = entity.get("environment_vars")
@@ -97,16 +92,49 @@ def _endpoint_contracts(workspace: Any) -> list[dict[str, Any]]:
                         for key, value in raw.items()
                         if str(key) in GATEWAY_RUNTIME_RESOURCE_ENV
                     }
+                    identity = uc_model_serving_identity(entity)
+                    if identity is None:
+                        if binding:
+                            raise RuntimeError(
+                                "Gateway protected non-UC entity carries a runtime contract: "
+                                f"{endpoint_name}/{phase}/{collection}[{index}]"
+                            )
+                        continue
+                    entity_name, entity_version, alias = identity
                     if not binding:
+                        if family_pattern.fullmatch(entity_name) is not None:
+                            raise RuntimeError(
+                                "Gateway family endpoint entity lacks its runtime contract: "
+                                f"{endpoint_name}/{phase}/{collection}[{index}]"
+                            )
                         continue
                     contract = verified_gateway_runtime_resource_environment(binding)
                     model_name = str(contract.get("gateway_model_name") or "").strip()
-                    if not model_name or model_name != entity_name:
+                    model_version = str(
+                        contract.get("gateway_model_version") or ""
+                    ).strip()
+                    if (
+                        not model_name
+                        or model_name != entity_name
+                        or not model_version
+                        or model_version != entity_version
+                    ):
                         raise RuntimeError("Gateway protected endpoint contract has no model")
-                    identity = (model_name, record_sha256(contract))
-                    if identity in seen_contracts:
+                    expected_alias = (
+                        "mip-growth-supervisor-proxy-"
+                        f"{model_version}"
+                    )
+                    if alias != expected_alias:
+                        raise RuntimeError(
+                            "Gateway protected endpoint alias is not canonical"
+                        )
+                    if alias in aliases and aliases[alias] != entity_name:
+                        raise RuntimeError("Gateway protected endpoint alias is ambiguous")
+                    aliases[alias] = entity_name
+                    contract_identity = (model_name, record_sha256(contract))
+                    if contract_identity in seen_contracts:
                         continue
-                    seen_contracts.add(identity)
+                    seen_contracts.add(contract_identity)
                     protected.append(
                         _allocation(
                             f"endpoint-{phase}-{endpoint_name}-{collection}-{index}",
@@ -245,7 +273,7 @@ def discover_protected_allocation_contracts(
 ) -> tuple[dict[str, Any], ...]:
     """Authenticate every discoverable current, blue, rollback, and cutover pin."""
 
-    protected = _endpoint_contracts(workspace)
+    protected = _endpoint_contracts(workspace, model_family=model_family)
     protected.extend(
         _registration_recovery_contracts(
             workspace,

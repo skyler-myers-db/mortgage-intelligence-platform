@@ -494,3 +494,172 @@ def test_serving_inventory_detects_traffic_route_and_inference_table_references(
         if reference["collection"] == "traffic_routes"
     )
     assert traffic["traffic_percentage"] == "37"
+
+
+def test_serving_inventory_ignores_platform_and_managed_foundation_entities() -> None:
+    platform = SimpleNamespace(
+        name="databricks-foundation",
+        id=None,
+        creator=None,
+        state={"ready": "READY"},
+        config=_config(
+            entities=[
+                SimpleNamespace(
+                    name="foundation",
+                    foundation_model=SimpleNamespace(name="system.ai.foundation"),
+                )
+            ]
+        ),
+        pending_config=None,
+        ai_gateway=None,
+    )
+    managed = _endpoint(
+        current=_config(
+            entities=[
+                SimpleNamespace(
+                    name=None,
+                    foundation_model=SimpleNamespace(name="mas-base-model-deadbeef"),
+                )
+            ]
+        )
+    )
+    managed.name = "mas-deadbeef-endpoint"
+
+    inventory, references = inventory_gateway_serving(
+        _workspace(endpoints=[platform, managed]),
+        model_name=_MODEL,
+        inference_table_family=_TABLE_FAMILY,
+    )
+
+    assert references == ()
+    assert [item["name"] for item in inventory] == ["mas-deadbeef-endpoint"]
+
+
+def test_serving_inventory_rejects_model_less_entity_without_provider_marker() -> None:
+    endpoint = _endpoint(
+        current=_config(
+            entities=[
+                SimpleNamespace(
+                    name="unknown",
+                    entity_name=None,
+                    model_name=None,
+                )
+            ]
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="no recognized provider identity"):
+        inventory_gateway_serving(
+            _workspace(endpoints=[endpoint]),
+            model_name=_MODEL,
+            inference_table_family=_TABLE_FAMILY,
+        )
+
+
+@pytest.mark.parametrize("drift", ["pending-model", "inference-table"])
+def test_platform_foundation_shortcut_rejects_hidden_gateway_state(
+    drift: str,
+) -> None:
+    platform = SimpleNamespace(
+        name="databricks-foundation",
+        id=None,
+        creator=None,
+        state={"ready": "READY"},
+        config=_config(
+            entities=[
+                SimpleNamespace(
+                    name="foundation",
+                    foundation_model=SimpleNamespace(name="system.ai.foundation"),
+                )
+            ]
+        ),
+        pending_config=(
+            _config(
+                entities=[
+                    SimpleNamespace(
+                        name="target",
+                        entity_name=_MODEL,
+                        entity_version="1",
+                    )
+                ]
+            )
+            if drift == "pending-model"
+            else None
+        ),
+        ai_gateway=(
+            SimpleNamespace(
+                inference_table_config={
+                    "catalog_name": _CATALOG,
+                    "schema_name": _SCHEMA,
+                    "table_name_prefix": f"{_TABLE_PREFIX}_aaaaaaaaaaaa",
+                }
+            )
+            if drift == "inference-table"
+            else None
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="endpoint identity is incomplete"):
+        inventory_gateway_serving(
+            _workspace(endpoints=[platform]),
+            model_name=_MODEL,
+            inference_table_family=_TABLE_FAMILY,
+        )
+
+
+def test_serving_inventory_rejects_uc_and_non_uc_alias_collision() -> None:
+    endpoint = _endpoint(
+        current=_config(
+            entities=[
+                SimpleNamespace(
+                    name="shared",
+                    entity_name=_MODEL,
+                    entity_version="1",
+                ),
+                SimpleNamespace(
+                    name="shared",
+                    foundation_model=SimpleNamespace(name="mas-base-model-deadbeef"),
+                ),
+            ]
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="serving alias is ambiguous"):
+        inventory_gateway_serving(
+            _workspace(endpoints=[endpoint]),
+            model_name=_MODEL,
+            inference_table_family=_TABLE_FAMILY,
+        )
+
+
+def test_serving_inventory_rejects_conflicting_route_alias_fields() -> None:
+    endpoint = _endpoint(
+        current=_config(
+            entities=[
+                SimpleNamespace(
+                    name="target",
+                    entity_name=_MODEL,
+                    entity_version="1",
+                ),
+                SimpleNamespace(
+                    name="other",
+                    entity_name="customer.catalog.other_model",
+                    entity_version="1",
+                ),
+            ],
+            routes=[
+                SimpleNamespace(
+                    served_entity_name="target",
+                    served_model_name="other",
+                    traffic_percentage=100,
+                )
+            ],
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="serving route is ambiguous"):
+        inventory_gateway_serving(
+            _workspace(endpoints=[endpoint]),
+            model_name=_MODEL,
+            inference_table_family=_TABLE_FAMILY,
+        )

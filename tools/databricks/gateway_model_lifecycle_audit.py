@@ -216,7 +216,7 @@ def _active_contracts(
     scope: GatewayModelArchiveScope,
     model_family: str,
 ) -> dict[str, list[dict[str, Any]]]:
-    protected = _endpoint_contracts(workspace)
+    protected = _endpoint_contracts(workspace, model_family=model_family)
     protected.extend(
         _registration_recovery_contracts(
             workspace,

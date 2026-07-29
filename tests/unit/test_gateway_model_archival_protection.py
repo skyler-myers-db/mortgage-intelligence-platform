@@ -284,14 +284,19 @@ def test_protected_inventory_authenticates_endpoint_runtime_contract(
 ) -> None:
     _discovery_defaults(monkeypatch)
     entity = SimpleNamespace(
-        name="served-alias",
+        name="mip-growth-supervisor-proxy-1",
         entity_name=_MODEL,
+        entity_version="1",
         environment_vars={
             "MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_CONTRACT_JSON": "signed-value",
             "UNRELATED": "x",
         },
     )
-    contract = {"gateway_model_name": _MODEL, "allocation": "active"}
+    contract = {
+        "gateway_model_name": _MODEL,
+        "gateway_model_version": "1",
+        "allocation": "active",
+    }
     monkeypatch.setattr(
         protection,
         "verified_gateway_runtime_resource_environment",
@@ -313,6 +318,135 @@ def test_protected_inventory_authenticates_endpoint_runtime_contract(
             "contract_sha256": record_sha256(contract),
         },
     )
+
+
+def test_protected_inventory_ignores_unbound_foundation_model_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _discovery_defaults(monkeypatch)
+    foundation_entity = SimpleNamespace(
+        name="databricks-foundation-model",
+        entity_name=None,
+        model_name=None,
+        foundation_model={"name": "system.ai.foundation-model"},
+        environment_vars=None,
+    )
+
+    assert _discover(_endpoint_workspace(foundation_entity)) == ()
+
+
+def test_protected_inventory_rejects_bound_entity_without_uc_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _discovery_defaults(monkeypatch)
+    malformed_bound_entity = SimpleNamespace(
+        name="governed-gateway",
+        entity_name=None,
+        model_name=None,
+        foundation_model={"name": "system.ai.foundation-model"},
+        environment_vars={
+            "MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_CONTRACT_JSON": "signed-value",
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="non-UC entity carries a runtime contract"):
+        _discover(_endpoint_workspace(malformed_bound_entity))
+
+
+def test_protected_inventory_rejects_family_model_with_stripped_binding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _discovery_defaults(monkeypatch)
+    entity = SimpleNamespace(
+        name="mip-growth-supervisor-proxy-1",
+        entity_name=_MODEL,
+        entity_version="1",
+        environment_vars=None,
+    )
+
+    with pytest.raises(RuntimeError, match="lacks its runtime contract"):
+        _discover(_endpoint_workspace(entity))
+
+
+def test_protected_inventory_ignores_unbound_unrelated_uc_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _discovery_defaults(monkeypatch)
+    entity = SimpleNamespace(
+        name="unrelated",
+        entity_name="customer.catalog.unrelated_model",
+        entity_version="1",
+        environment_vars=None,
+    )
+
+    assert _discover(_endpoint_workspace(entity)) == ()
+
+
+@pytest.mark.parametrize("alias", [None, "", "unrelated-alias"])
+def test_protected_inventory_rejects_noncanonical_bound_alias(
+    monkeypatch: pytest.MonkeyPatch,
+    alias: str | None,
+) -> None:
+    _discovery_defaults(monkeypatch)
+    entity = SimpleNamespace(
+        name=alias,
+        entity_name=_MODEL,
+        entity_version="1",
+        environment_vars={
+            "MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_CONTRACT_JSON": "signed-value",
+        },
+    )
+    monkeypatch.setattr(
+        protection,
+        "verified_gateway_runtime_resource_environment",
+        lambda _binding: {
+            "gateway_model_name": _MODEL,
+            "gateway_model_version": "1",
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="alias is not canonical"):
+        _discover(_endpoint_workspace(entity))
+
+
+def test_protected_inventory_rejects_signed_model_version_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _discovery_defaults(monkeypatch)
+    entity = SimpleNamespace(
+        name="mip-growth-supervisor-proxy-1",
+        entity_name=_MODEL,
+        entity_version="999",
+        environment_vars={
+            "MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_CONTRACT_JSON": "signed-value",
+        },
+    )
+    monkeypatch.setattr(
+        protection,
+        "verified_gateway_runtime_resource_environment",
+        lambda _binding: {
+            "gateway_model_name": _MODEL,
+            "gateway_model_version": "1",
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="contract has no model"):
+        _discover(_endpoint_workspace(entity))
+
+
+def test_protected_inventory_rejects_model_less_entity_without_provider_marker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _discovery_defaults(monkeypatch)
+    entity = SimpleNamespace(
+        name="unknown",
+        entity_name=None,
+        model_name=None,
+        environment_vars=None,
+    )
+
+    with pytest.raises(RuntimeError, match="no recognized provider identity"):
+        _discover(_endpoint_workspace(entity))
 
 
 def test_protected_inventory_rejects_live_signed_cutover(

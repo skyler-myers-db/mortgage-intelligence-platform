@@ -234,7 +234,7 @@ def _install_contract_sources(
     monkeypatch.setattr(
         audit,
         "_endpoint_contracts",
-        lambda _workspace: [
+        lambda _workspace, **_kwargs: [
             _allocation(
                 "endpoint-current-blue",
                 _BLUE_MODEL,

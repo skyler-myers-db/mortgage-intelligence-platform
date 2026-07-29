@@ -19,6 +19,10 @@ from tools.databricks.mlflow_uc_model_versions import (
     model_version_field,
     model_version_tags,
 )
+from tools.databricks.serving_endpoint_identity import (
+    is_platform_foundation_endpoint,
+    uc_model_serving_identity,
+)
 
 _SOURCE = re.compile(r"models:/(?P<model_id>m-[A-Za-z0-9][A-Za-z0-9_-]*)\Z")
 _MODEL_SUFFIX = re.compile(r"[0-9a-f]{12}\Z")
@@ -435,6 +439,8 @@ def _serving_inventory(
             raise RuntimeError("Gateway retirement endpoint inventory is ambiguous")
         names.add(name)
         details = workspace.serving_endpoints.get(name)
+        if is_platform_foundation_endpoint(details):
+            continue
         endpoint_id = _field(details, "id")
         creator = _field(details, "creator")
         if _field(details, "name") not in {"", name} or not endpoint_id or not creator:
@@ -460,15 +466,20 @@ def _serving_inventory(
             ("pending", getattr(details, "pending_config", None)),
         ):
             aliases: dict[str, tuple[str, str]] = {}
+            non_uc_aliases: set[str] = set()
             for collection in ("served_entities", "served_models"):
                 for entity_index, entity in enumerate(_served_collection(config, collection)):
-                    entity_name = _field(entity, "entity_name") or _field(entity, "model_name")
-                    entity_version = (
-                        _field(entity, "entity_version") or _field(entity, "model_version")
-                    )
-                    entity_id = _field(entity, "name")
-                    if not entity_name:
-                        raise RuntimeError("Gateway retirement serving entity has no identity")
+                    identity = uc_model_serving_identity(entity)
+                    if identity is None:
+                        entity_id = _field(entity, "name")
+                        if entity_id:
+                            if entity_id in aliases:
+                                raise RuntimeError(
+                                    "Gateway retirement serving alias is ambiguous"
+                                )
+                            non_uc_aliases.add(entity_id)
+                        continue
+                    entity_name, entity_version, entity_id = identity
                     reference = {
                         "endpoint_name": name,
                         "endpoint_id": endpoint_id,
@@ -483,9 +494,13 @@ def _serving_inventory(
                     }
                     endpoint["configurations"].append(reference)
                     if entity_id:
-                        if entity_id in aliases and aliases[entity_id] != (
-                            entity_name,
-                            entity_version,
+                        if entity_id in non_uc_aliases or (
+                            entity_id in aliases
+                            and aliases[entity_id]
+                            != (
+                                entity_name,
+                                entity_version,
+                            )
                         ):
                             raise RuntimeError(
                                 "Gateway retirement serving alias is ambiguous"
@@ -499,10 +514,16 @@ def _serving_inventory(
                 else getattr(config, "traffic_config", None)
             )
             for route_index, route in enumerate(_served_collection(traffic, "routes")):
-                route_alias = _field(route, "served_entity_name") or _field(
-                    route,
-                    "served_model_name",
-                )
+                route_aliases = {
+                    _field(route, field)
+                    for field in ("served_entity_name", "served_model_name")
+                    if _field(route, field)
+                }
+                if len(route_aliases) != 1:
+                    raise RuntimeError("Gateway retirement serving route is ambiguous")
+                route_alias = next(iter(route_aliases))
+                if route_alias in non_uc_aliases:
+                    continue
                 if not route_alias or route_alias not in aliases:
                     raise RuntimeError("Gateway retirement serving route is unresolved")
                 entity_name, entity_version = aliases[route_alias]
