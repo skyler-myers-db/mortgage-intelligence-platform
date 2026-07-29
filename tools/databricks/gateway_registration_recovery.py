@@ -876,14 +876,9 @@ def reconcile_incomplete_source_versions(
         ready_versions = [recovered_ready] if recovered_ready is not None else []
     if ready_versions:
         ready_version = max(ready_versions)
-        clear_registration_journal(
-            client,
-            durable,
-            assert_single_writer=assert_single_writer,
-        )
         return RegistrationRecovery(
             durable=durable,
             ready_version=ready_version,
-            journal_requires_clear=False,
+            journal_requires_clear=True,
         )
     return RegistrationRecovery(durable=durable)

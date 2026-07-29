@@ -364,6 +364,7 @@ VERIFIER_IDENTITY_CAPTURE_ENV=""
 HISTORICAL_ENDPOINT_INVENTORY=""
 HISTORICAL_CUTOVER_JOURNAL_ENV=""
 STALE_CUTOVER_JOURNAL_PENDING=0
+HISTORICAL_CUTOVER_JOURNAL_PRESENT=0
 AGENT_RUNTIME_BOOTSTRAP_GRANTS_ACTIVE=0
 TREATMENT_RUNTIME_QUIESCED=0
 APP_SIGNED_BLUE_AVAILABLE=0
@@ -1819,6 +1820,65 @@ run_with_proof_signing_authority() {
     export MIP_AI_GATEWAY_PROOF_SIGNING_KEY="$signing_key"
     "$@"
   )
+}
+
+reconcile_gateway_model_archives() {
+  MIP_CUTOVER_SIGNED_BLUE_GATEWAY_PIN_JSON="${MIP_APP_ROLLBACK_GATEWAY_PIN_JSON:-}" \
+  MIP_CUTOVER_SIGNED_BLUE_SUPERVISOR_PIN_JSON="${MIP_APP_ROLLBACK_SUPERVISOR_PIN_JSON:-}" \
+    run_with_account_identity run_with_proof_signing_authority \
+      "$PYTHON" -m tools.databricks.gateway_model_archival_cli \
+      archive-unprotected \
+      --app-name "$_GRANTS_APP_NAME" \
+      --lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+      --source-git-sha "$SOURCE_GIT_SHA" \
+      --runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+      --app-application-id "$APP_SP_CLIENT_ID" \
+      --proxy-application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID" \
+      --verifier-application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
+      --archive-owner "$DEPLOY_INVENTORY_PRINCIPAL" \
+      --governance-group "${MIP_ADMIN_GROUP_NAME:-mip-admin}" \
+      --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
+      --model-family "${MIP_AI_GATEWAY_AGENT_MODEL_FAMILY:-${MIP_DEFAULT_CATALOG:-mip}.audit.mortgage_growth_supervisor_proxy}" \
+      --experiment-base "${MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE:-mip-agent-runtime-gateway-proxy}" \
+      --inference-schema "${MIP_AI_GATEWAY_SCHEMA:-audit}" \
+      --inference-table-prefix "${MIP_AI_GATEWAY_TABLE_PREFIX:-mip_agent_gateway_growth_agent}" \
+      --rollback-scope "$APP_ROLLBACK_SECRET_SCOPE" \
+      --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+      --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
+      --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL"
+}
+
+prove_agent_runtime_dual_uc_boundary() {
+  MIP_CUTOVER_SIGNED_BLUE_GATEWAY_PIN_JSON="${MIP_APP_ROLLBACK_GATEWAY_PIN_JSON:-}" \
+  MIP_CUTOVER_SIGNED_BLUE_SUPERVISOR_PIN_JSON="${MIP_APP_ROLLBACK_SUPERVISOR_PIN_JSON:-}" \
+    run_with_account_identity \
+      run_with_proof_signing_authority \
+        run_with_agent_runtime_credentials \
+        "$PYTHON" -m tools.databricks.verify_agent_runtime_uc_boundary_dual_authority \
+      --application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+      --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL" \
+      --supervisor-id "$MIP_AGENT_SUPERVISOR_ID" \
+      --supervisor-endpoint-id "$MIP_AGENT_SUPERVISOR_ENDPOINT_ID" \
+      --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
+      --gateway-model "$MIP_AI_GATEWAY_AGENT_MODEL" \
+      --gateway-model-family "${MIP_AI_GATEWAY_AGENT_MODEL_FAMILY:-${MIP_DEFAULT_CATALOG:-mip}.audit.mortgage_growth_supervisor_proxy}" \
+      --gateway-experiment-base "${MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE:-mip-agent-runtime-gateway-proxy}" \
+      --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
+      --inference-schema "${MIP_AI_GATEWAY_SCHEMA:-audit}" \
+      --inference-table-prefix "${MIP_AI_GATEWAY_TABLE_PREFIX:-mip_agent_gateway_growth_agent}" \
+      --proxy-caller-application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID" \
+      --proxy-caller-credential-id "$DATABRICKS_AGENT_PROXY_CREDENTIAL_ID" \
+      --proxy-caller-secret-reference "$MIP_AGENT_PROXY_SECRET_REFERENCE" \
+      --app-name "$_GRANTS_APP_NAME" \
+      --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+      --deployment-source-git-sha "$SOURCE_GIT_SHA" \
+      --app-application-id "$APP_SP_CLIENT_ID" \
+      --verifier-application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
+      --archive-owner "$DEPLOY_INVENTORY_PRINCIPAL" \
+      --governance-group "${MIP_ADMIN_GROUP_NAME:-mip-admin}" \
+      --rollback-scope "$APP_ROLLBACK_SECRET_SCOPE" \
+      --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+      --warehouse-id "$_GRANTS_WAREHOUSE_ID"
 }
 
 run_with_lakebase_bootstrap_authority() {
@@ -3936,6 +3996,7 @@ run_as_m2m_identity \
   --runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
   --out-env "$HISTORICAL_CUTOVER_JOURNAL_ENV"
 if [[ -s "$HISTORICAL_CUTOVER_JOURNAL_ENV" ]]; then
+  HISTORICAL_CUTOVER_JOURNAL_PRESENT=1
   unset \
     MIP_REPLACED_AGENT_SUPERVISOR_ID \
     MIP_REPLACED_AGENT_SUPERVISOR_ENDPOINT \
@@ -4023,6 +4084,13 @@ if [[ "$STALE_CUTOVER_JOURNAL_PENDING" -eq 1 ]]; then
     --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
     --deployment-source-git-sha "$SOURCE_GIT_SHA"
   STALE_CUTOVER_JOURNAL_PENDING=0
+  HISTORICAL_CUTOVER_JOURNAL_PRESENT=0
+fi
+if [[ "$HISTORICAL_CUTOVER_JOURNAL_PRESENT" -eq 0 ]]; then
+  step "archive every unprotected historical Gateway model before green provisioning"
+  reconcile_gateway_model_archives
+else
+  step "defer Gateway model archival while the authenticated current journal protects retry"
 fi
 step "reconcile retry-only App access on non-blue reserved Supervisor candidates"
 run reconcile_retry_supervisor_app_acl
@@ -4278,6 +4346,8 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
   . "$AGENTIC_ENV_FILE"
   set +a
   if [[ -n "${MIP_AI_GATEWAY_INFERENCE_TABLE:-}" && -n "${MIP_AI_GATEWAY_ENDPOINT:-}" ]]; then
+    step "prove dual-authority agent-runtime UC boundary before cutover"
+    prove_agent_runtime_dual_uc_boundary
     CUTOVER_JOURNAL_ENV_FILE="$(mktemp -t mip-agent-cutover.XXXXXX.env)"
     run_as_m2m_identity \
       agent-runtime \
@@ -4386,24 +4456,6 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
         --preserve-endpoint "$MIP_REPLACED_AGENT_SUPERVISOR_ENDPOINT"
       )
     fi
-    step "prove dual-authority agent-runtime UC boundary before cutover"
-    run_with_account_identity \
-      run_with_proof_signing_authority \
-        run_with_agent_runtime_credentials \
-        "$PYTHON" -m tools.databricks.verify_agent_runtime_uc_boundary_dual_authority \
-      --application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
-      --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL" \
-      --supervisor-id "$MIP_AGENT_SUPERVISOR_ID" \
-      --supervisor-endpoint-id "$MIP_AGENT_SUPERVISOR_ENDPOINT_ID" \
-      --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
-      --gateway-model "$MIP_AI_GATEWAY_AGENT_MODEL" \
-      --gateway-model-family "${MIP_AI_GATEWAY_AGENT_MODEL_FAMILY:-${MIP_DEFAULT_CATALOG:-mip}.audit.mortgage_growth_supervisor_proxy}" \
-      --gateway-experiment-base "${MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE:-mip-agent-runtime-gateway-proxy}" \
-      --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
-      --inference-table-prefix "${MIP_AI_GATEWAY_TABLE_PREFIX:-mip_agent_gateway_growth_agent}" \
-      --proxy-caller-application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID" \
-      --proxy-caller-credential-id "$DATABRICKS_AGENT_PROXY_CREDENTIAL_ID" \
-      --proxy-caller-secret-reference "$MIP_AGENT_PROXY_SECRET_REFERENCE"
     step "prepare runtime-owned Gateway access while preserving the live old Supervisor"
     journal_preactivation_app_acl_endpoint "$MIP_AI_GATEWAY_ENDPOINT"
     journal_preactivation_app_acl_endpoint "$MIP_AGENT_SUPERVISOR_ENDPOINT"
@@ -4956,6 +5008,10 @@ if [[ "$DRY_RUN" -eq 0 && "$FINAL_APP_PROVEN" -eq 1 ]]; then
     --app-name "$_GRANTS_APP_NAME" \
     --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
     --deployment-source-git-sha "$SOURCE_GIT_SHA"
+  step "archive the retired blue Gateway model after authenticated journal clearance"
+  reconcile_gateway_model_archives
+  step "re-prove final dual-authority agent-runtime UC boundary after model archival"
+  prove_agent_runtime_dual_uc_boundary
   VERIFIER_GATEWAY_CUTOVER_MUTATED=0
   # Persist only after retirement/finalization. Keeping the prior cache until
   # then preserves the pinned old identity across an interrupted cleanup.

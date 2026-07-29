@@ -12,13 +12,15 @@ from backend.agents.gateway_contract import (
     DEFAULT_GATEWAY_AGENT_EXPERIMENT,
     reviewed_workspace_https_origin,
 )
+from tools.databricks.agent_runtime_samples_baseline import (
+    _assert_samples_catalog_baseline,
+)
 from tools.databricks.agent_runtime_uc_baseline import (
     _ACCOUNT_USERS_DIRECT,
     _CATALOG_INFORMATION_SCHEMA_TABLES,
     _MAX_INVENTORY_WORKERS,
     _SAMPLES_CATALOG_PRIVILEGES,
     _SAMPLES_INHERITED,
-    _SAMPLES_SCHEMA_PRIVILEGES,
     _SYSTEM_AI_FUNCTIONS,
     _SYSTEM_AI_INHERITED,
     _SYSTEM_AI_MODELS,
@@ -30,6 +32,9 @@ from tools.databricks.agent_runtime_uc_baseline import (
     ControlPlaneForeignCatalogProof,
     authoritative_workspace_id,
     consume_issued_control_plane_foreign_catalog_proof,
+)
+from tools.databricks.agent_runtime_uc_baseline import (
+    _SAMPLES_SCHEMA_PRIVILEGES as _SAMPLES_SCHEMA_PRIVILEGES_BASELINE,
 )
 from tools.databricks.agent_runtime_uc_inventory import (
     _assert_authenticated_runtime,
@@ -50,88 +55,21 @@ from tools.databricks.agent_runtime_uc_inventory import (
     _strict_text,
     _text,
 )
+from tools.databricks.gateway_model_lifecycle_proof import (
+    GatewayModelLifecycleProof,
+)
+from tools.databricks.gateway_model_runtime_lifecycle import (
+    assert_runtime_gateway_lifecycle_inventory,
+    classify_runtime_gateway_model,
+    classify_runtime_inference_table,
+    consume_runtime_gateway_lifecycle_boundary,
+)
 from tools.databricks.gateway_uc_model_provenance import assert_gateway_model_provenance
 
 _DATABRICKS_INTERNAL_CATALOG = "__databricks_internal"
 _PLATFORM_RUNTIME_CATALOGS = frozenset({_DATABRICKS_INTERNAL_CATALOG, "samples", "system"})
-
-
-def _assert_samples_catalog_baseline(workspace: Any, *, principal: str) -> None:
-    """Require the exact Databricks-managed samples inheritance contract."""
-
-    for schema in workspace.schemas.list("samples", include_browse=True):
-        _assert_system_owned(schema, label="samples schema")
-        schema_name = _strict_text(getattr(schema, "name", None))
-        schema_full_name = _full_name(schema, fallback=f"samples.{schema_name}")
-        schema_sources = {action: set(_SAMPLES_INHERITED) for action in _SAMPLES_SCHEMA_PRIVILEGES}
-        if schema_name == "information_schema":
-            schema_sources["USE_SCHEMA"] = {
-                *_SAMPLES_INHERITED,
-                *_ACCOUNT_USERS_DIRECT,
-            }
-        _assert_privileges(
-            workspace,
-            securable_type="schema",
-            full_name=schema_full_name,
-            principal=principal,
-            expected=set(_SAMPLES_SCHEMA_PRIVILEGES),
-            expected_source_map=schema_sources,
-        )
-        for function in workspace.functions.list("samples", schema_name, include_browse=True):
-            _assert_system_owned(function, label="samples function")
-            function_name = _strict_text(getattr(function, "name", None))
-            _assert_privileges(
-                workspace,
-                securable_type="function",
-                full_name=_full_name(
-                    function,
-                    fallback=f"{schema_full_name}.{function_name}",
-                ),
-                principal=principal,
-                expected={"EXECUTE"},
-                expected_source_map={"EXECUTE": set(_SAMPLES_INHERITED)},
-            )
-        for table in workspace.tables.list(
-            "samples",
-            schema_name,
-            include_browse=True,
-            omit_columns=True,
-            omit_properties=True,
-        ):
-            _assert_system_owned(table, label="samples table")
-            table_name = _strict_text(getattr(table, "name", None))
-            table_sources = set(_SAMPLES_INHERITED)
-            if (
-                schema_name == "information_schema"
-                and table_name in _CATALOG_INFORMATION_SCHEMA_TABLES
-            ):
-                table_sources.update(_ACCOUNT_USERS_DIRECT)
-            _assert_privileges(
-                workspace,
-                securable_type="table",
-                full_name=_full_name(
-                    table,
-                    fallback=f"{schema_full_name}.{table_name}",
-                ),
-                principal=principal,
-                expected={"SELECT"},
-                expected_source_map={"SELECT": table_sources},
-            )
-        for volume in workspace.volumes.list("samples", schema_name, include_browse=True):
-            _assert_system_owned(volume, label="samples volume")
-            volume_name = _strict_text(getattr(volume, "name", None))
-            _assert_privileges(
-                workspace,
-                securable_type="volume",
-                full_name=_full_name(
-                    volume,
-                    fallback=f"{schema_full_name}.{volume_name}",
-                ),
-                principal=principal,
-                expected={"READ_VOLUME"},
-                expected_source_map={"READ_VOLUME": set(_SAMPLES_INHERITED)},
-            )
-
+# Backward-compatible contract used by the proxy verifier and focused fixtures.
+_SAMPLES_SCHEMA_PRIVILEGES = _SAMPLES_SCHEMA_PRIVILEGES_BASELINE
 
 def _assert_system_catalog_baseline(
     workspace: Any,
@@ -269,6 +207,8 @@ def verify_effective_uc_boundary(
     proxy_caller_secret_reference: str,
     model_registry: Any | None = None,
     foreign_control_plane_proof: ControlPlaneForeignCatalogProof | None = None,
+    gateway_model_lifecycle_proof: GatewayModelLifecycleProof | None = None,
+    expected_inventory_principal: str | None = None,
 ) -> None:
     """Require only reviewed functions plus runtime-owned Gateway artifacts in MIP."""
 
@@ -322,6 +262,16 @@ def verify_effective_uc_boundary(
             raise RuntimeError(
                 "foreign-catalog control-plane proof does not match the runtime boundary"
             )
+    lifecycle = consume_runtime_gateway_lifecycle_boundary(
+        gateway_model_lifecycle_proof,
+        application_id=principal,
+        expected_inventory_principal=expected_inventory_principal,
+        catalog=catalog_name,
+        metastore_id=metastore_id,
+        workspace_id=authoritative_workspace_id(workspace),
+        model_family=model_family,
+        candidate_model=model_name,
+    )
     _assert_privileges(
         workspace,
         securable_type="metastore",
@@ -595,6 +545,10 @@ def verify_effective_uc_boundary(
             for future in as_completed(futures):
                 future.result()
 
+    reviewed_inference_suffixes: set[str] = set()
+    reviewed_inference_tables: set[str] = set()
+    archived_inference_suffixes: set[str] = set()
+    archived_inference_tables: set[str] = set()
     schemas = list(workspace.schemas.list(catalog_name, include_browse=True))
     schema_name_list = [_strict_text(getattr(schema, "name", None)) for schema in schemas]
     schema_names = set(schema_name_list)
@@ -602,7 +556,6 @@ def verify_effective_uc_boundary(
         raise RuntimeError("MIP schema inventory returned duplicate names")
     if not {"gold", "audit"}.issubset(schema_names):
         raise RuntimeError("MIP catalog is missing the reviewed agent schemas")
-    reviewed_inference_suffixes: set[str] = set()
     for schema in schemas:
         schema_name = _strict_text(getattr(schema, "name", None))
         if not schema_name:
@@ -747,16 +700,24 @@ def verify_effective_uc_boundary(
                     full_name=table_full_name,
                     principal=principal,
                 )
-                # Ownership may be omitted or reported as exact-direct privileges.
-                if (
-                    any(sources != runtime_direct for sources in actual_sources.values())
-                    or _exact_owner(table, label=f"table {table_full_name}") != principal
-                ):
-                    raise RuntimeError(
-                        f"agent-runtime inference table {table_name} lacks exact direct "
-                        "runtime ownership"
-                    )
+                state = lifecycle.states_by_suffix.get(inference_suffix)
+                owner = _exact_owner(table, label=f"table {table_full_name}")
+                disposition = classify_runtime_inference_table(
+                    state=state,
+                    owner=owner,
+                    principal=principal,
+                    table_full_name=table_full_name,
+                    inference_suffix=inference_suffix,
+                    candidate_suffix=model_name.rsplit("_", 1)[-1],
+                    actual_sources=actual_sources,
+                    runtime_direct=runtime_direct,
+                )
+                if disposition == "archived":
+                    archived_inference_suffixes.add(inference_suffix)
+                    archived_inference_tables.add(table_full_name)
+                    continue
                 reviewed_inference_suffixes.add(inference_suffix)
+                reviewed_inference_tables.add(table_full_name)
                 continue
             _assert_not_runtime_owned(
                 table,
@@ -814,6 +775,7 @@ def verify_effective_uc_boundary(
         registry_uri="databricks-uc",
     )
     reviewed_model_suffixes: set[str] = set()
+    archived_model_suffixes: set[str] = set()
     for model in registered_models:
         full_name = _full_name(model)
         actual_sources = _effective_privilege_sources(
@@ -829,15 +791,21 @@ def verify_effective_uc_boundary(
                     + ", ".join(sorted(actual_sources))
                 )
             continue
-        # Model ownership has the same omitted-or-exact-direct representation.
-        if (
-            any(sources != runtime_direct for sources in actual_sources.values())
-            or _exact_owner(model, label=f"registered model {full_name}") != principal
-        ):
-            raise RuntimeError(
-                f"agent-runtime Gateway model {full_name} lacks exact direct runtime ownership"
-            )
-        assert_gateway_model_provenance(
+        state = lifecycle.states.get(full_name)
+        owner = _exact_owner(model, label=f"registered model {full_name}")
+        disposition = classify_runtime_gateway_model(
+            state=state,
+            owner=owner,
+            principal=principal,
+            full_name=full_name,
+            candidate_model=model_name,
+            actual_sources=actual_sources,
+            runtime_direct=runtime_direct,
+        )
+        if disposition == "archived":
+            archived_model_suffixes.add(full_name.rsplit("_", 1)[-1])
+            continue
+        versions_sha256 = assert_gateway_model_provenance(
             model_registry=registry,
             full_name=full_name,
             model_family=model_family,
@@ -855,9 +823,25 @@ def verify_effective_uc_boundary(
             proxy_caller_credential_id=proxy_caller_credential_id,
             proxy_caller_secret_reference=proxy_caller_secret_reference,
         )
+        if state is not None and state.versions_sha256 != versions_sha256:
+            raise RuntimeError(
+                f"Gateway model {full_name} version evidence changed from its "
+                "control-plane proof"
+            )
         reviewed_model_suffixes.add(full_name.rsplit("_", 1)[-1])
     if not reviewed_inference_suffixes.issubset(reviewed_model_suffixes):
         raise RuntimeError("inference-table family is not backed by reviewed Gateway models")
+    if not archived_inference_suffixes.issubset(archived_model_suffixes):
+        raise RuntimeError(
+            "archived inference-table family is not backed by archived Gateway models"
+        )
+    assert_runtime_gateway_lifecycle_inventory(
+        lifecycle,
+        reviewed_model_suffixes=reviewed_model_suffixes,
+        archived_model_suffixes=archived_model_suffixes,
+        reviewed_inference_tables=reviewed_inference_tables,
+        archived_inference_tables=archived_inference_tables,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

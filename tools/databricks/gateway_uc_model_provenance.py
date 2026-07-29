@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from typing import Any
 
@@ -74,12 +76,14 @@ def assert_gateway_model_provenance(
     proxy_caller_application_id: str,
     proxy_caller_credential_id: str,
     proxy_caller_secret_reference: str,
-) -> None:
+) -> str:
     """Require signed source/allocation provenance for every visible family version."""
 
     versions = _search_model_versions(model_registry, full_name=full_name)
     if not versions:
         raise RuntimeError(f"Gateway model {full_name} has no registered versions")
+    version_evidence: list[dict[str, object]] = []
+    seen_version_numbers: set[str] = set()
     for search_result in versions:
         version = _authoritative_version(model_registry, search_result, full_name=full_name)
         tags = model_version_tags(
@@ -95,30 +99,15 @@ def assert_gateway_model_provenance(
         attested_supervisor_id = attested_contract["supervisor_id"]
         attested_supervisor_endpoint_id = attested_contract["supervisor_endpoint_id"]
         attested_runtime_application_id = attested_contract["runtime_application_id"]
+        if not version_number or version_number in seen_version_numbers:
+            raise RuntimeError(f"Gateway model {full_name} has duplicate or missing versions")
+        seen_version_numbers.add(version_number)
         if (
-            not version_number
-            or not model_source
+            not model_source
             or not re.fullmatch(r"[0-9a-f]{64}", source_hash)
             or not upstream
         ):
             raise RuntimeError(f"Gateway model {full_name} has an incomplete version contract")
-        contract_hash = gateway_resource_hash(
-            source_hash=source_hash,
-            supervisor_id=attested_supervisor_id,
-            supervisor_endpoint_id=attested_supervisor_endpoint_id,
-            runtime_application_id=attested_runtime_application_id,
-            workspace_host=workspace_host,
-            model_name=model_family,
-            experiment_name=experiment_base,
-            inference_schema=inference_schema,
-            inference_table_prefix=inference_table_prefix,
-            attestation_verify_key=gateway_model_attestation_record_key(tags),
-            proxy_caller_application_id=proxy_caller_application_id,
-            proxy_caller_credential_id=proxy_caller_credential_id,
-            proxy_caller_secret_reference=proxy_caller_secret_reference,
-        )
-        if full_name.rsplit("_", 1)[-1] != contract_hash[:12]:
-            raise RuntimeError(f"Gateway model {full_name} lacks source-bound contract provenance")
         contract = {
             "full_name": full_name,
             "model_source": model_source,
@@ -136,12 +125,51 @@ def assert_gateway_model_provenance(
         }
         current = verify_gateway_model_contract(tags=tags, **contract)
         candidate = f"Gateway candidate model {full_name} v{version_number}"
-        identity_changed = (
+        is_candidate = full_name == candidate_model
+        if attested_runtime_application_id != runtime_application_id:
+            raise RuntimeError(
+                f"Gateway model {full_name} uses a different immutable runtime identity"
+            )
+        if is_candidate and (
             attested_supervisor_id != supervisor_id
             or attested_supervisor_endpoint_id != supervisor_endpoint_id
-            or attested_runtime_application_id != runtime_application_id
-        )
-        if full_name == candidate_model and identity_changed:
+        ):
             raise RuntimeError(f"{candidate} uses a different immutable runtime identity")
-        if full_name == candidate_model and not current:
+        if is_candidate:
+            contract_hash = gateway_resource_hash(
+                source_hash=source_hash,
+                supervisor_id=attested_supervisor_id,
+                supervisor_endpoint_id=attested_supervisor_endpoint_id,
+                runtime_application_id=attested_runtime_application_id,
+                workspace_host=workspace_host,
+                model_name=model_family,
+                experiment_name=experiment_base,
+                inference_schema=inference_schema,
+                inference_table_prefix=inference_table_prefix,
+                attestation_verify_key=gateway_model_attestation_record_key(tags),
+                proxy_caller_application_id=proxy_caller_application_id,
+                proxy_caller_credential_id=proxy_caller_credential_id,
+                proxy_caller_secret_reference=proxy_caller_secret_reference,
+            )
+            if full_name.rsplit("_", 1)[-1] != contract_hash[:12]:
+                raise RuntimeError(
+                    f"Gateway candidate model {full_name} lacks current "
+                    "source-bound contract provenance"
+                )
+        if is_candidate and not current:
             raise RuntimeError(f"{candidate} uses a previous attestation epoch")
+        version_evidence.append(
+            {
+                "name": full_name,
+                "source": model_source,
+                "status": "READY",
+                "tags": tags,
+                "version": version_number,
+            }
+        )
+    canonical_evidence = json.dumps(
+        sorted(version_evidence, key=lambda item: int(str(item["version"]))),
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(canonical_evidence).hexdigest()

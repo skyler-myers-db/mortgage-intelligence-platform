@@ -1785,7 +1785,8 @@ def test_deploy_requires_control_plane_and_runtime_uc_boundary_proofs() -> None:
         'step "prepare runtime-owned Gateway access while preserving the live old Supervisor"'
     )
     preflight_block = text[preflight:historical_reconciliation]
-    dual_block = text[dual_authority:cutover]
+    dual_invocation_block = text[dual_authority:cutover]
+    dual_block = _shell_function("prove_agent_runtime_dual_uc_boundary")
 
     early_block = text[early_preflight:first_lakebase_runtime_use]
     assert early_preflight < first_lakebase_runtime_use < preflight
@@ -1803,6 +1804,7 @@ def test_deploy_requires_control_plane_and_runtime_uc_boundary_proofs() -> None:
     assert "run_as_m2m_identity" not in preflight_block
     assert "MIP_LAKEBASE_BOOTSTRAP_CONTROL_CLIENT_SECRET" not in preflight_block
     assert "-m tools.databricks.verify_agent_runtime_uc_boundary_dual_authority" in dual_block
+    assert "prove_agent_runtime_dual_uc_boundary" in dual_invocation_block
     assert '--expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL"' in dual_block
     assert "run_with_account_identity" in dual_block
     assert "run_with_agent_runtime_credentials" in dual_block
@@ -2406,7 +2408,10 @@ def test_deploy_uses_isolated_identity_for_agent_resource_ownership() -> None:
     runtime_uc_audit = runtime_block.index(
         'step "prove dual-authority agent-runtime UC boundary before cutover"'
     )
-    runtime_uc_block = runtime_block[runtime_uc_audit : runtime_uc_audit + 900]
+    runtime_uc_block = _shell_function("prove_agent_runtime_dual_uc_boundary")
+    assert "prove_agent_runtime_dual_uc_boundary" in runtime_block[
+        runtime_uc_audit : runtime_uc_audit + 200
+    ]
     assert "run_with_account_identity" in runtime_uc_block
     assert "run_with_proof_signing_authority" in runtime_uc_block
     assert "run_with_agent_runtime_credentials" in runtime_uc_block
@@ -3329,7 +3334,7 @@ def test_every_mutating_agent_cutover_command_is_bound_to_exact_deployment_lease
         ],
         script[
             script.index("AGENT_RUNTIME_GREEN_ARGS=(") : script.index(
-                'step "prove dual-authority agent-runtime UC boundary',
+                'step "classify signed old Supervisor App access',
                 script.index("AGENT_RUNTIME_GREEN_ARGS=("),
             )
         ],
@@ -3340,7 +3345,8 @@ def test_every_mutating_agent_cutover_command_is_bound_to_exact_deployment_lease
         ],
         script[
             script.index("cutover_agent_runtime_supervisor clear-journal") : script.index(
-                'step "re-audit final agent-runtime global access'
+                'step "archive the retired blue Gateway model',
+                script.index("cutover_agent_runtime_supervisor clear-journal"),
             )
         ],
     ]
@@ -3409,8 +3415,96 @@ def test_normal_cutover_journal_clear_follows_every_final_boundary() -> None:
         'step "clear the authenticated cutover journal after every final boundary proof"',
         retirement,
     )
+    archive = script.index(
+        'step "archive the retired blue Gateway model after authenticated journal clearance"',
+        clear,
+    )
+    final_dual = script.index(
+        'step "re-prove final dual-authority agent-runtime UC boundary after model archival"',
+        archive,
+    )
+    green_verified = script.index('APP_UPGRADE_STATE="green_verified"', final_dual)
 
     assert runtime_audit < proxy_cleanup < verifier_audit < app_audit < clear
+    assert clear < archive < final_dual < green_verified
+
+
+def test_gateway_model_archive_and_dual_proof_order_is_release_fenced() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    historical_cleanup = script.index(
+        'step "attest and retire every unrelated historical runtime endpoint before green provisioning"'
+    )
+    stale_clear = script.index(
+        'step "prove historical retirement and clear only the stale signed cutover journal"'
+    )
+    pre_archive = script.index(
+        'step "archive every unprotected historical Gateway model before green provisioning"'
+    )
+    supervisor_provision = script.index(
+        'step "provision the managed Supervisor under the dedicated agent-runtime identity"'
+    )
+    contract_export = script.index(
+        'step "export the exact live Gateway resource contract under runtime authority"'
+    )
+    pre_dual = script.index(
+        'step "prove dual-authority agent-runtime UC boundary before cutover"'
+    )
+    journal_export = script.index(
+        "-m tools.databricks.cutover_agent_runtime_supervisor export-journal",
+        contract_export,
+    )
+    normal_clear = script.index(
+        'step "clear the authenticated cutover journal after every final boundary proof"'
+    )
+    post_archive = script.index(
+        'step "archive the retired blue Gateway model after authenticated journal clearance"'
+    )
+    final_dual = script.index(
+        'step "re-prove final dual-authority agent-runtime UC boundary after model archival"'
+    )
+    cache_persist = script.index("mkdir -p .databricks", final_dual)
+
+    assert historical_cleanup < stale_clear < pre_archive < supervisor_provision
+    assert contract_export < pre_dual < journal_export
+    assert normal_clear < post_archive < final_dual < cache_persist
+    historical_gate = script[stale_clear:supervisor_provision]
+    assert 'HISTORICAL_CUTOVER_JOURNAL_PRESENT" -eq 0' in historical_gate
+    assert "reconcile_gateway_model_archives" in historical_gate
+    assert "defer Gateway model archival" in historical_gate
+
+
+def test_gateway_model_archive_and_dual_helpers_bind_exact_authority_scope() -> None:
+    archive = _shell_function("reconcile_gateway_model_archives")
+    dual = _shell_function("prove_agent_runtime_dual_uc_boundary")
+    shared = {
+        '--app-name "$_GRANTS_APP_NAME"',
+        '--app-application-id "$APP_SP_CLIENT_ID"',
+        '--verifier-application-id "$DATABRICKS_VERIFIER_CLIENT_ID"',
+        '--archive-owner "$DEPLOY_INVENTORY_PRINCIPAL"',
+        '--governance-group "${MIP_ADMIN_GROUP_NAME:-mip-admin}"',
+        '--catalog "${MIP_DEFAULT_CATALOG:-mip}"',
+        '--rollback-scope "$APP_ROLLBACK_SECRET_SCOPE"',
+        '--lakebase-instance "$MIP_LAKEBASE_INSTANCE"',
+        '--warehouse-id "$_GRANTS_WAREHOUSE_ID"',
+        '--expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL"',
+    }
+    for fragment in shared:
+        assert fragment in archive
+        assert fragment in dual
+    assert '--lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID"' in archive
+    assert '--source-git-sha "$SOURCE_GIT_SHA"' in archive
+    assert '--runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID"' in archive
+    assert '--proxy-application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID"' in archive
+    assert '--deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID"' in dual
+    assert '--deployment-source-git-sha "$SOURCE_GIT_SHA"' in dual
+    assert '--application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID"' in dual
+    assert '--proxy-caller-application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID"' in dual
+    assert '--gateway-model "$MIP_AI_GATEWAY_AGENT_MODEL"' in dual
+    assert "run_with_account_identity" in archive
+    assert "run_with_proof_signing_authority" in archive
+    assert "run_with_account_identity" in dual
+    assert "run_with_proof_signing_authority" in dual
+    assert "run_with_agent_runtime_credentials" in dual
 
 
 def test_captured_cleanup_resumes_exact_signed_retirement_and_defers_journal_clear(

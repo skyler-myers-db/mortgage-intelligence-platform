@@ -650,6 +650,35 @@ class _ServingEndpoints:
 
     def create(self, **kwargs: Any) -> None:
         self.created.append(kwargs)
+        name = str(kwargs["name"])
+        created = SimpleNamespace(
+            id=f"{name}-id",
+            name=name,
+            creator=self.supervisor_endpoint_creator,
+            state=SimpleNamespace(ready="READY"),
+            task="agent/v1/responses",
+            config=kwargs["config"],
+            pending_config=None,
+            ai_gateway=kwargs["ai_gateway"],
+            tags=kwargs["tags"],
+            description=kwargs["description"],
+            route_optimized=kwargs["route_optimized"],
+            budget_policy_id=None,
+            email_notifications=None,
+        )
+        if isinstance(self.details, dict):
+            self.details[name] = created
+        elif self.details is not None and name != "mip-growth-agent-gateway":
+            self.details = {
+                "mip-growth-agent-gateway": self.details,
+                name: created,
+            }
+        else:
+            self.details = created
+
+    def create_and_wait(self, **kwargs: Any) -> object:
+        self.create(**kwargs)
+        return self.get(str(kwargs["name"]))
 
     def update_config(self, **kwargs: Any) -> None:
         self.updated.append(kwargs)
@@ -742,6 +771,11 @@ def _patch_mlflow(monkeypatch, *, client: _Client) -> None:
         gateway.mlflow,
         "set_experiment",
         client.set_experiment,
+    )
+    monkeypatch.setattr(
+        gateway,
+        "verify_gateway_responses_agent",
+        lambda *_args, **_kwargs: None,
     )
 
 
@@ -1178,6 +1212,19 @@ def _experiment_permissions_api() -> object:
             else pytest.fail("unexpected experiment permissions request")
         )
     )
+
+
+def _full_verifier_workspace(serving: _ServingEndpoints) -> Any:
+    workspace: Any = _runtime_workspace(serving)
+    workspace.api_client = _experiment_permissions_api()
+    workspace.workspace = SimpleNamespace(
+        get_status=lambda path: SimpleNamespace(
+            path=path,
+            object_type="DIRECTORY",
+            object_id="runtime-home-id",
+        )
+    )
+    return workspace
 
 
 def test_log_gateway_model_uses_deployment_only_packaging_validation(
@@ -2386,8 +2433,9 @@ def test_durable_reconcile_preserves_pending_version_until_it_becomes_ready(
     recovery = _reconcile_recovery(client, model_name=model_name)
 
     assert recovery is not None and recovery.ready_version == 1
+    assert recovery.journal_requires_clear
     assert client.deleted_versions == []
-    assert _journal_state(client).retired
+    assert not _journal_state(client).retired
 
 
 def test_uc_search_hydration_rejects_immutable_source_drift() -> None:
@@ -3350,7 +3398,265 @@ def test_registration_lost_response_reuses_authoritative_ready_version(
     assert len(serving.created) == 1
 
 
-def test_journal_clear_failure_prevents_endpoint_and_preserves_source(
+def test_endpoint_creation_interruption_preserves_active_registration_journal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _CleanupClient()
+    _patch_mlflow(monkeypatch, client=client)
+    monkeypatch.setattr(
+        gateway,
+        "_log_gateway_model",
+        lambda **_kwargs: SimpleNamespace(model_uri="models:/m-endpoint-interrupted"),
+    )
+    monkeypatch.setattr(
+        gateway.mlflow,
+        "register_model",
+        lambda model_uri, _name, *, tags: _registered(
+            client,
+            model_uri,
+            version="5",
+            tags=tags,
+        ),
+    )
+
+    class InterruptedCreate(_ServingEndpoints):
+        def create(self, **kwargs: Any) -> None:
+            self.created.append(kwargs)
+            raise ConnectionError("endpoint creation response unavailable")
+
+    serving = InterruptedCreate()
+
+    with pytest.raises(ConnectionError, match="creation response unavailable"):
+        _ensure_gateway(_runtime_workspace(serving))
+
+    assert _journal_state(client).value is not None
+    assert not _journal_state(client).retired
+    assert len(serving.created) == 1
+
+
+def test_registration_journal_clears_only_after_exact_endpoint_postflight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _CleanupClient()
+    _patch_mlflow(monkeypatch, client=client)
+    monkeypatch.setattr(
+        gateway,
+        "_log_gateway_model",
+        lambda **_kwargs: SimpleNamespace(model_uri="models:/m-postflight-before-clear"),
+    )
+    monkeypatch.setattr(
+        gateway.mlflow,
+        "register_model",
+        lambda model_uri, _name, *, tags: _registered(
+            client,
+            model_uri,
+            version="5",
+            tags=tags,
+        ),
+    )
+    serving = _ServingEndpoints()
+    workspace = _full_verifier_workspace(serving)
+    postflight_events: list[str] = []
+
+    def full_postflight(
+        selected_workspace: Any,
+        deployment: GatewayAgentDeployment,
+        **kwargs: Any,
+    ) -> None:
+        _verify_gateway_responses_agent(
+            selected_workspace,
+            deployment,
+            **kwargs,
+        )
+        postflight_events.append("verify")
+
+    monkeypatch.setattr(gateway, "verify_gateway_responses_agent", full_postflight)
+    real_clear = gateway.clear_registration_journal
+    clear_observations: list[str] = []
+
+    def clear_after_endpoint(
+        selected_client: Any,
+        durable: Any,
+        *,
+        assert_single_writer: Any,
+    ) -> None:
+        assert len(serving.created) == 1
+        endpoint_name = str(serving.created[0]["name"])
+        details = serving.get(endpoint_name)
+        assert str(getattr(details, "id", "") or "") == f"{endpoint_name}-id"
+        assert getattr(details, "pending_config", None) is None
+        assert postflight_events == ["verify"]
+        postflight_events.append("clear")
+        clear_observations.append(endpoint_name)
+        real_clear(
+            selected_client,
+            durable,
+            assert_single_writer=assert_single_writer,
+        )
+
+    monkeypatch.setattr(gateway, "clear_registration_journal", clear_after_endpoint)
+
+    deployment = _ensure_gateway(workspace)
+
+    assert clear_observations == [deployment.endpoint]
+    assert postflight_events == ["verify", "clear"]
+    assert _journal_state(client).retired
+
+
+def test_registration_journal_stays_active_when_full_postflight_rejects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _CleanupClient()
+    _patch_mlflow(monkeypatch, client=client)
+    monkeypatch.setattr(
+        gateway,
+        "_log_gateway_model",
+        lambda **_kwargs: SimpleNamespace(model_uri="models:/m-postflight-rejected"),
+    )
+    monkeypatch.setattr(
+        gateway.mlflow,
+        "register_model",
+        lambda model_uri, _name, *, tags: _registered(
+            client,
+            model_uri,
+            version="5",
+            tags=tags,
+        ),
+    )
+    serving = _ServingEndpoints()
+    postflight_events: list[str] = []
+
+    def reject_postflight(*_args: Any, **_kwargs: Any) -> None:
+        postflight_events.append("verify")
+        raise RuntimeError("full Gateway verifier rejected")
+
+    monkeypatch.setattr(gateway, "verify_gateway_responses_agent", reject_postflight)
+    monkeypatch.setattr(
+        gateway,
+        "clear_registration_journal",
+        lambda *_args, **_kwargs: pytest.fail(
+            "registration journal must remain active after verifier rejection"
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="full Gateway verifier rejected"):
+        _ensure_gateway(_runtime_workspace(serving))
+
+    assert postflight_events == ["verify"]
+    assert _journal_state(client).value is not None
+    assert not _journal_state(client).retired
+    assert len(serving.created) == 1
+
+
+@pytest.mark.parametrize(
+    ("failure", "message"),
+    [
+        ("ready", "not READY"),
+        ("task", "not agent/v1/responses"),
+        ("model-owner", "registered model"),
+        ("model-tags", "attestation"),
+        ("experiment-identity", "name/ID binding drifted"),
+        ("experiment-acl", "experiment ACL"),
+    ],
+)
+def test_full_postflight_failure_never_retires_registration_journal(
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+    message: str,
+) -> None:
+    client = _CleanupClient()
+    _patch_mlflow(monkeypatch, client=client)
+    monkeypatch.setattr(
+        gateway,
+        "_log_gateway_model",
+        lambda **_kwargs: SimpleNamespace(
+            model_uri=f"models:/m-postflight-{failure}"
+        ),
+    )
+    monkeypatch.setattr(
+        gateway.mlflow,
+        "register_model",
+        lambda model_uri, _name, *, tags: _registered(
+            client,
+            model_uri,
+            version="5",
+            tags=tags,
+        ),
+    )
+    serving = _ServingEndpoints()
+    workspace = _full_verifier_workspace(serving)
+    verifier_calls = 0
+
+    def reject_drifted_postflight(
+        selected_workspace: Any,
+        deployment: GatewayAgentDeployment,
+        **kwargs: Any,
+    ) -> None:
+        nonlocal verifier_calls
+        verifier_calls += 1
+        details: Any = serving.get(deployment.endpoint)
+        if failure == "ready":
+            details.state.ready = "NOT_READY"
+        elif failure == "task":
+            details.task = "llm/v1/chat"
+        elif failure == "model-owner":
+            selected_workspace.registered_models.get = lambda _name: SimpleNamespace(
+                owner="unreviewed-owner"
+            )
+        elif failure == "model-tags":
+            client.version_tags[str(deployment.model_version)] = {}
+        elif failure == "experiment-identity":
+            experiment: Any = client.get_experiment(deployment.experiment_id)
+            assert experiment is not None
+            experiment.name = "/Users/other/drifted-experiment"
+        elif failure == "experiment-acl":
+            selected_workspace.api_client = SimpleNamespace(
+                do=lambda _method, _path: {
+                    "access_control_list": [
+                        {
+                            "user_name": "unreviewed@example.com",
+                            "all_permissions": [
+                                {
+                                    "permission_level": "CAN_MANAGE",
+                                    "inherited": False,
+                                    "inherited_from_object": [],
+                                }
+                            ],
+                        }
+                    ]
+                }
+            )
+        else:
+            raise AssertionError(f"unexpected full-verifier failure fixture {failure}")
+        _verify_gateway_responses_agent(
+            selected_workspace,
+            deployment,
+            **kwargs,
+        )
+
+    monkeypatch.setattr(
+        gateway,
+        "verify_gateway_responses_agent",
+        reject_drifted_postflight,
+    )
+    monkeypatch.setattr(
+        gateway,
+        "clear_registration_journal",
+        lambda *_args, **_kwargs: pytest.fail(
+            "registration journal must remain active after full-verifier failure"
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match=message):
+        _ensure_gateway(workspace)
+
+    assert verifier_calls == 1
+    assert _journal_state(client).value is not None
+    assert not _journal_state(client).retired
+    assert len(serving.created) == 1
+
+
+def test_journal_clear_failure_follows_exact_endpoint_and_preserves_source(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client = _CleanupClient()
@@ -3382,7 +3688,7 @@ def test_journal_clear_failure_prevents_endpoint_and_preserves_source(
     assert not _journal_state(client).retired
     assert client.deleted_logged_models == []
     assert client.deleted_runs == []
-    assert serving.created == []
+    assert len(serving.created) == 1
 
 
 def test_ensure_gateway_agent_creates_versioned_green_without_mutating_live_drift(

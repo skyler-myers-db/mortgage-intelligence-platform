@@ -748,13 +748,11 @@ def ensure_gateway_responses_agent(
         or persisted_model_tags.contract["upstream_endpoint"] != upstream_endpoint
     ):
         raise RuntimeError("Gateway model version source-binding tags are not immutable")
-    if active_durable is not None:
-        if (
-            model_source != active_durable.journal.model_source
-            or model_version_tags != active_durable.registration_tags
-        ):
-            raise RuntimeError("READY Gateway version does not match its durable journal")
-        clear_registration_journal(client, active_durable, assert_single_writer=lease_check)
+    if active_durable is not None and (
+        model_source != active_durable.journal.model_source
+        or model_version_tags != active_durable.registration_tags
+    ):
+        raise RuntimeError("READY Gateway version does not match its durable journal")
 
     entity, traffic = _served_entity(
         supervisor_id=supervisor_id,
@@ -845,7 +843,7 @@ def ensure_gateway_responses_agent(
             f"[agentic] creating Gateway Supervisor proxy: {actual_endpoint} "
             f"({versioned_model_name} v{model_version})"
         )
-        workspace.serving_endpoints.create(
+        workspace.serving_endpoints.create_and_wait(
             name=actual_endpoint,
             config=EndpointCoreConfigInput(
                 name=actual_endpoint,
@@ -859,9 +857,11 @@ def ensure_gateway_responses_agent(
         )
     else:
         print(f"[agentic] exact Gateway Supervisor proxy exists: {actual_endpoint}")
-
+    details = read(actual_endpoint, require_runtime_creator=True)
+    if details is None or not managed_query_safe(actual_endpoint, details):
+        raise RuntimeError("Gateway endpoint did not converge to exact protected state")
     inference_table = ".".join([inference_catalog, inference_schema, versioned_table_prefix])
-    return GatewayAgentDeployment(
+    deployment = GatewayAgentDeployment(
         endpoint=actual_endpoint,
         supervisor_id=supervisor_id,
         supervisor_endpoint_id=supervisor_endpoint_id,
@@ -886,3 +886,13 @@ def ensure_gateway_responses_agent(
         catalog=inference_catalog,
         genie_space_id=genie_space_id,
     )
+    verify_gateway_responses_agent(
+        workspace, deployment, model_registry=client, tracking_client=client
+    )
+    if active_durable is not None:
+        clear_registration_journal(
+            client,
+            active_durable,
+            assert_single_writer=lease_check,
+        )
+    return deployment

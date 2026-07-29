@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import base64
 import copy
+import hashlib
+import json
 from enum import Enum
 from types import SimpleNamespace
 from typing import Any
@@ -21,6 +23,11 @@ from tools.databricks.agent_runtime_uc_baseline import (
     _issue_control_plane_foreign_catalog_proof,
 )
 from tools.databricks.gateway_model_attestation import sign_gateway_model_contract
+from tools.databricks.gateway_model_lifecycle_proof import (
+    GatewayModelLifecycleProof,
+    GatewayModelLifecycleState,
+    _issue_gateway_model_lifecycle_proof,
+)
 from tools.databricks.provision_gateway_responses_agent import gateway_resource_hash
 
 APPLICATION_ID = "runtime-client"
@@ -301,6 +308,7 @@ def _workspace(
     model: str = MODEL,
     table: str = TABLE,
     extra_models: list[object] | None = None,
+    extra_tables: list[object] | None = None,
     model_owner: str = APPLICATION_ID,
     table_owner: str = APPLICATION_ID,
 ) -> object:
@@ -426,6 +434,7 @@ def _workspace(
                 schema_name="audit",
                 owner=table_owner,
             ),
+            *(extra_tables or []),
             SimpleNamespace(
                 name="action_audit",
                 full_name="mip.audit.action_audit",
@@ -731,6 +740,8 @@ def _verify(
     registry_tags: dict[str, dict[str, str]] | None = None,
     model_registry: Any | None = None,
     foreign_control_plane_proof: ControlPlaneForeignCatalogProof | None = None,
+    gateway_model_lifecycle_proof: GatewayModelLifecycleProof | None = None,
+    expected_inventory_principal: str | None = "deployer@example.com",
 ) -> None:
     verifier.verify_effective_uc_boundary(
         workspace,
@@ -748,6 +759,64 @@ def _verify(
         proxy_caller_secret_reference=PROXY_SECRET_REFERENCE,
         model_registry=model_registry or _ModelRegistry(registry_tags or {model: _provenance()}),
         foreign_control_plane_proof=foreign_control_plane_proof,
+        gateway_model_lifecycle_proof=gateway_model_lifecycle_proof,
+        expected_inventory_principal=(
+            expected_inventory_principal
+            if gateway_model_lifecycle_proof is not None
+            else None
+        ),
+    )
+
+
+def _version_digest(full_name: str, tags: dict[str, str]) -> str:
+    evidence = [
+        {
+            "name": full_name,
+            "source": "models:/m-reviewed-proxy",
+            "status": "READY",
+            "tags": tags,
+            "version": "1",
+        }
+    ]
+    encoded = json.dumps(
+        evidence,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _active_lifecycle_proof(
+    *,
+    registry_tags: dict[str, dict[str, str]],
+    inference_tables: dict[str, str],
+    inventory_principal: str = "deployer@example.com",
+    metastore_id: str = "metastore-id",
+) -> GatewayModelLifecycleProof:
+    assert set(registry_tags) == set(inference_tables)
+    states = tuple(
+        sorted(
+            GatewayModelLifecycleState(
+                model_name=full_name,
+                owner=APPLICATION_ID,
+                disposition="active",
+                versions_sha256=_version_digest(full_name, tags),
+                inference_tables=(inference_tables[full_name],),
+                active_contract_json='{"disposition":"active"}',
+                retirement_record_sha256="",
+            )
+            for full_name, tags in registry_tags.items()
+        )
+    )
+    return _issue_gateway_model_lifecycle_proof(
+        application_id=APPLICATION_ID,
+        inventory_principal=inventory_principal,
+        catalog=CATALOG,
+        metastore_id=metastore_id,
+        workspace_id="workspace-id",
+        model_family=MODEL_FAMILY,
+        candidate_model=MODEL,
+        states=states,
     )
 
 
@@ -1793,24 +1862,96 @@ def test_effective_runtime_uc_boundary_requires_reviewed_schemas() -> None:
         _verify(workspace)
 
 
+@pytest.mark.parametrize(
+    "proof_scope",
+    [
+        {"inventory_principal": "other-deployer@example.com"},
+        {"metastore_id": "other-metastore"},
+    ],
+)
+def test_gateway_model_lifecycle_proof_must_match_inventory_authority(
+    proof_scope: dict[str, str],
+) -> None:
+    registry_tags = {MODEL: _provenance()}
+    proof = _active_lifecycle_proof(
+        registry_tags=registry_tags,
+        inference_tables={MODEL: f"{CATALOG}.audit.{TABLE}"},
+        **proof_scope,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Gateway model lifecycle proof does not match the runtime boundary",
+    ):
+        _verify(
+            _workspace(),
+            registry_tags=registry_tags,
+            gateway_model_lifecycle_proof=proof,
+        )
+
+
+@pytest.mark.parametrize("expected_inventory_principal", [None, ""])
+def test_gateway_model_lifecycle_proof_requires_expected_inventory_principal(
+    expected_inventory_principal: str | None,
+) -> None:
+    registry_tags = {MODEL: _provenance()}
+    proof = _active_lifecycle_proof(
+        registry_tags=registry_tags,
+        inference_tables={MODEL: f"{CATALOG}.audit.{TABLE}"},
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Gateway model lifecycle proof does not match the runtime boundary",
+    ):
+        _verify(
+            _workspace(),
+            registry_tags=registry_tags,
+            gateway_model_lifecycle_proof=proof,
+            expected_inventory_principal=expected_inventory_principal,
+        )
+
+
 def test_effective_runtime_uc_boundary_allows_source_proven_historical_model() -> None:
     upstream = "mip-mortgage-growth-supervisor-fedcba987654"
-    historical, _table, source_hash = _contract(upstream=upstream, source_hash="b" * 64)
+    historical, historical_table, source_hash = _contract(
+        upstream=upstream,
+        source_hash="b" * 64,
+    )
+    historical_table_full_name = f"{CATALOG}.audit.{historical_table}"
+    registry_tags = {
+        MODEL: _provenance(),
+        historical: _provenance(
+            full_name=historical,
+            source_hash=source_hash,
+            upstream=upstream,
+        ),
+    }
     workspace = _workspace(
-        {("function", historical): {"ALL_PRIVILEGES"}},
+        {
+            ("function", historical): {"ALL_PRIVILEGES"},
+            ("table", historical_table_full_name): {"ALL_PRIVILEGES"},
+        },
         extra_models=[SimpleNamespace(full_name=historical, owner=APPLICATION_ID)],
+        extra_tables=[
+            SimpleNamespace(
+                name=historical_table,
+                full_name=historical_table_full_name,
+                owner=APPLICATION_ID,
+            )
+        ],
     )
 
     _verify(
         workspace,
-        registry_tags={
-            MODEL: _provenance(),
-            historical: _provenance(
-                full_name=historical,
-                source_hash=source_hash,
-                upstream=upstream,
-            ),
-        },
+        registry_tags=registry_tags,
+        gateway_model_lifecycle_proof=_active_lifecycle_proof(
+            registry_tags=registry_tags,
+            inference_tables={
+                MODEL: f"{CATALOG}.audit.{TABLE}",
+                historical: historical_table_full_name,
+            },
+        ),
     )
 
 
@@ -1838,21 +1979,41 @@ def test_effective_runtime_uc_boundary_allows_historical_model_attested_to_prior
         source_hash="b" * 64,
         supervisor_id=historical_supervisor,
     )
+    historical_table = _table
+    historical_table_full_name = f"{CATALOG}.audit.{historical_table}"
+    registry_tags = {
+        MODEL: _provenance(),
+        historical: _provenance(
+            full_name=historical,
+            source_hash=source_hash,
+            supervisor_id=historical_supervisor,
+        ),
+    }
     workspace = _workspace(
-        {("function", historical): {"ALL_PRIVILEGES"}},
+        {
+            ("function", historical): {"ALL_PRIVILEGES"},
+            ("table", historical_table_full_name): {"ALL_PRIVILEGES"},
+        },
         extra_models=[SimpleNamespace(full_name=historical, owner=APPLICATION_ID)],
+        extra_tables=[
+            SimpleNamespace(
+                name=historical_table,
+                full_name=historical_table_full_name,
+                owner=APPLICATION_ID,
+            )
+        ],
     )
 
     _verify(
         workspace,
-        registry_tags={
-            MODEL: _provenance(),
-            historical: _provenance(
-                full_name=historical,
-                source_hash=source_hash,
-                supervisor_id=historical_supervisor,
-            ),
-        },
+        registry_tags=registry_tags,
+        gateway_model_lifecycle_proof=_active_lifecycle_proof(
+            registry_tags=registry_tags,
+            inference_tables={
+                MODEL: f"{CATALOG}.audit.{TABLE}",
+                historical: historical_table_full_name,
+            },
+        ),
     )
 
 
@@ -1893,7 +2054,7 @@ def test_previous_epoch_retained_model_validates_without_mutation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     historical_upstream = "mip-mortgage-growth-supervisor-fedcba987654"
-    historical, _table, historical_hash = _contract(
+    historical, historical_table, historical_hash = _contract(
         upstream=historical_upstream,
         source_hash="b" * 64,
         verify_key=PREVIOUS_VERIFY_KEY,
@@ -1904,23 +2065,45 @@ def test_previous_epoch_retained_model_validates_without_mutation(
         source_hash=historical_hash,
         upstream=historical_upstream,
     )
-    registry = _ModelRegistry({MODEL: _provenance(), historical: previous})
+    registry_tags = {MODEL: _provenance(), historical: previous}
+    registry = _ModelRegistry(registry_tags)
+    historical_table_full_name = f"{CATALOG}.audit.{historical_table}"
     workspace = _workspace(
-        {("function", historical): {"ALL_PRIVILEGES"}},
+        {
+            ("function", historical): {"ALL_PRIVILEGES"},
+            ("table", historical_table_full_name): {"ALL_PRIVILEGES"},
+        },
         extra_models=[SimpleNamespace(full_name=historical, owner=APPLICATION_ID)],
+        extra_tables=[
+            SimpleNamespace(
+                name=historical_table,
+                full_name=historical_table_full_name,
+                owner=APPLICATION_ID,
+            )
+        ],
     )
 
-    _verify(workspace, model_registry=registry)
+    _verify(
+        workspace,
+        model_registry=registry,
+        gateway_model_lifecycle_proof=_active_lifecycle_proof(
+            registry_tags=registry_tags,
+            inference_tables={
+                MODEL: f"{CATALOG}.audit.{TABLE}",
+                historical: historical_table_full_name,
+            },
+        ),
+    )
 
     assert registry.set_calls == []
     assert registry.tags[historical] == previous
 
 
-def test_previous_epoch_retained_model_requires_epoch_bound_suffix(
+def test_previous_epoch_retained_model_requires_lifecycle_proof(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     historical_upstream = "mip-mortgage-growth-supervisor-fedcba987654"
-    historical, _table, historical_hash = _contract(
+    historical, historical_table, historical_hash = _contract(
         upstream=historical_upstream,
         source_hash="b" * 64,
     )
@@ -1930,14 +2113,29 @@ def test_previous_epoch_retained_model_requires_epoch_bound_suffix(
         source_hash=historical_hash,
         upstream=historical_upstream,
     )
-    registry = _ModelRegistry({MODEL: _provenance(), historical: previous})
+    registry_tags = {MODEL: _provenance(), historical: previous}
+    registry = _ModelRegistry(registry_tags)
+    historical_table_full_name = f"{CATALOG}.audit.{historical_table}"
     workspace = _workspace(
-        {("function", historical): {"ALL_PRIVILEGES"}},
+        {
+            ("function", historical): {"ALL_PRIVILEGES"},
+            ("table", historical_table_full_name): {"ALL_PRIVILEGES"},
+        },
         extra_models=[SimpleNamespace(full_name=historical, owner=APPLICATION_ID)],
+        extra_tables=[
+            SimpleNamespace(
+                name=historical_table,
+                full_name=historical_table_full_name,
+                owner=APPLICATION_ID,
+            )
+        ],
     )
 
-    with pytest.raises(RuntimeError, match="source-bound contract provenance"):
-        _verify(workspace, model_registry=registry)
+    with pytest.raises(RuntimeError, match="lacks an active allocation proof"):
+        _verify(
+            workspace,
+            model_registry=registry,
+        )
 
     assert registry.set_calls == []
 
