@@ -310,6 +310,58 @@ def test_current_cutover_journal_adds_exact_signed_blue_model_protection(
     ]
 
 
+def test_supervisor_only_cutover_journal_does_not_require_gateway_blue_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    journal = _journal()
+    for key in (
+        "old_gateway_endpoint",
+        "old_gateway_endpoint_id",
+        "old_gateway_creator",
+    ):
+        journal.pop(key)
+    _install_contract_sources(
+        monkeypatch,
+        journal=journal,
+        gateway_pin=_BLUE_GATEWAY,
+        supervisor_pin=_BLUE_SUPERVISOR,
+    )
+    monkeypatch.setattr(audit, "json_pin_from_env", lambda _name: None)
+
+    contracts = audit._active_contracts(
+        object(),
+        object(),
+        object(),
+        scope=_scope(),
+        model_family=_MODEL_FAMILY,
+    )
+
+    assert [item["kind"] for item in contracts[_BLUE_MODEL]] == [
+        "endpoint-current-blue"
+    ]
+
+
+def test_gateway_cutover_journal_still_requires_signed_blue_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_contract_sources(
+        monkeypatch,
+        journal=_journal(),
+        gateway_pin=_BLUE_GATEWAY,
+        supervisor_pin=_BLUE_SUPERVISOR,
+    )
+    monkeypatch.setattr(audit, "json_pin_from_env", lambda _name: None)
+
+    with pytest.raises(RuntimeError, match="lacks signed-blue authority"):
+        audit._active_contracts(
+            object(),
+            object(),
+            object(),
+            scope=_scope(),
+            model_family=_MODEL_FAMILY,
+        )
+
+
 def test_current_cutover_journal_rejects_partial_signed_blue_mismatch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

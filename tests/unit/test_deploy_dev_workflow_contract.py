@@ -6914,6 +6914,26 @@ def test_historical_runtime_cleanup_precedes_green_provisioning_and_preserves_si
     assert "-m tools.databricks.cutover_agent_runtime_supervisor clear-journal" in stale_clear_block
 
 
+def test_supervisor_only_cutover_archives_after_gateway_handoff_before_lifecycle_proof() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    gateway = script.index(
+        'step "provision the governed outer Gateway under agent-runtime authority"'
+    )
+    archival = script.index(
+        'step "archive unprotected Gateway models after the supervisor-only journal handoff"'
+    )
+    lifecycle = script.index(
+        'step "prove dual-authority agent-runtime UC boundary before cutover"'
+    )
+    block = script[gateway:lifecycle]
+
+    assert gateway < archival < lifecycle
+    assert 'APP_SIGNED_BLUE_AVAILABLE" -eq 0' in block
+    assert 'HISTORICAL_CUTOVER_JOURNAL_PRESENT" -eq 1' in block
+    assert 'HISTORICAL_CUTOVER_GATEWAY_PRESENT" -eq 0' in block
+    assert "reconcile_gateway_model_archives" in block
+
+
 def test_current_cutover_journal_retry_deduplicates_signed_blue_and_rejects_collisions(
     tmp_path: Path,
 ) -> None:

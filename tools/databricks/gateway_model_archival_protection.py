@@ -313,7 +313,11 @@ def discover_protected_allocation_contracts(
         workspace,
         runtime_application_id=runtime_application_id,
     )
-    if cutover is not None:
+    # A Supervisor-only retirement journal has no Gateway allocation to
+    # preserve. It may coexist with archival after an in-place Gateway handoff
+    # during first governed adoption. A journal that pins an outer Gateway
+    # still blocks archival until its signed-blue lifecycle is resolved.
+    if cutover is not None and cutover.get("old_gateway_endpoint"):
         raise RuntimeError(
             "Gateway model archival requires the signed cutover journal to be absent"
         )

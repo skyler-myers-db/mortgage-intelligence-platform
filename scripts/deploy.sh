@@ -365,6 +365,7 @@ HISTORICAL_ENDPOINT_INVENTORY=""
 HISTORICAL_CUTOVER_JOURNAL_ENV=""
 STALE_CUTOVER_JOURNAL_PENDING=0
 HISTORICAL_CUTOVER_JOURNAL_PRESENT=0
+HISTORICAL_CUTOVER_GATEWAY_PRESENT=0
 AGENT_RUNTIME_BOOTSTRAP_GRANTS_ACTIVE=0
 TREATMENT_RUNTIME_QUIESCED=0
 APP_SIGNED_BLUE_AVAILABLE=0
@@ -4013,6 +4014,9 @@ if [[ -s "$HISTORICAL_CUTOVER_JOURNAL_ENV" ]]; then
   # shellcheck disable=SC1090
   . "$HISTORICAL_CUTOVER_JOURNAL_ENV"
   set +a
+  if [[ -n "${MIP_REPLACED_AGENT_GATEWAY_PIN_JSON:-}" ]]; then
+    HISTORICAL_CUTOVER_GATEWAY_PRESENT=1
+  fi
   if [[ "$APP_SIGNED_BLUE_AVAILABLE" -eq 1 ]]; then
     merge_historical_cutover_journal_preservation
   else
@@ -4346,6 +4350,12 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
   . "$AGENTIC_ENV_FILE"
   set +a
   if [[ -n "${MIP_AI_GATEWAY_INFERENCE_TABLE:-}" && -n "${MIP_AI_GATEWAY_ENDPOINT:-}" ]]; then
+    if [[ "$APP_SIGNED_BLUE_AVAILABLE" -eq 0 && \
+          "$HISTORICAL_CUTOVER_JOURNAL_PRESENT" -eq 1 && \
+          "$HISTORICAL_CUTOVER_GATEWAY_PRESENT" -eq 0 ]]; then
+      step "archive unprotected Gateway models after the supervisor-only journal handoff"
+      reconcile_gateway_model_archives
+    fi
     step "prove dual-authority agent-runtime UC boundary before cutover"
     prove_agent_runtime_dual_uc_boundary
     CUTOVER_JOURNAL_ENV_FILE="$(mktemp -t mip-agent-cutover.XXXXXX.env)"

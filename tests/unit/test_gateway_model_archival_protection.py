@@ -449,14 +449,32 @@ def test_protected_inventory_rejects_model_less_entity_without_provider_marker(
         _discover(_endpoint_workspace(entity))
 
 
-def test_protected_inventory_rejects_live_signed_cutover(
+def test_protected_inventory_allows_supervisor_only_signed_cutover(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _discovery_defaults(monkeypatch)
     monkeypatch.setattr(
         protection,
         "read_signed_cutover_journal",
-        lambda *_args, **_kwargs: {"state": "pending"},
+        lambda *_args, **_kwargs: {
+            "old_id": "retiring-supervisor",
+            "old_endpoint": "retiring-supervisor-endpoint",
+        },
+    )
+
+    assert _discover(_endpoint_workspace()) == ()
+
+
+def test_protected_inventory_rejects_live_gateway_signed_cutover(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _discovery_defaults(monkeypatch)
+    monkeypatch.setattr(
+        protection,
+        "read_signed_cutover_journal",
+        lambda *_args, **_kwargs: {
+            "old_gateway_endpoint": "retiring-gateway",
+        },
     )
 
     with pytest.raises(RuntimeError, match="cutover journal to be absent"):

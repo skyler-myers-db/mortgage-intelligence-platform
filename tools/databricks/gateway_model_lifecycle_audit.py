@@ -255,7 +255,18 @@ def _active_contracts(
         workspace,
         runtime_application_id=scope.runtime_application_id,
     )
-    if cutover is not None:
+    # A Supervisor-only journal authorizes retirement of the private managed
+    # Supervisor and cannot protect, name, or otherwise affect a Gateway model
+    # allocation. Treating that journal as Gateway authority would make an
+    # interrupted first governed adoption impossible to recover: there is no
+    # signed App rollback record (and therefore no signed-blue Gateway pin)
+    # until the candidate earns its first release proof.
+    #
+    # A journal that does pin an outer Gateway remains subject to the complete
+    # signed-blue comparison below. Its endpoint tuple can affect model
+    # retention, so accepting it without the independent rollback authority
+    # would weaken the lifecycle inventory.
+    if cutover is not None and cutover.get("old_gateway_endpoint"):
         signed_blue_gateway = json_pin_from_env(
             "MIP_CUTOVER_SIGNED_BLUE_GATEWAY_PIN_JSON"
         )
