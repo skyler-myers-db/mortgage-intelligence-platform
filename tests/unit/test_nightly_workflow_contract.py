@@ -520,6 +520,10 @@ def test_lifecycle_delta_replay_is_in_explicit_low_volume_mutation_gate() -> Non
     assert "tests/integration/test_lifecycle_delta_replay_live.py" in block
     assert "tests/integration/test_campaign_treatment_at_cap_live.py" in block
     assert "MIP_LIVE_SCRATCH_SUFFIX: gha_${{ github.run_id }}" in block
+    assert (
+        "MIP_LIFECYCLE_REPLAY_REVIEW_SHA256: "
+        "${{ vars.MIP_LIFECYCLE_REPLAY_REVIEW_SHA256 }}" in text
+    )
     assert "tools.databricks.cleanup_lifecycle_replay_scratch" in block
     assert "tools.databricks.cleanup_campaign_treatment_scratch" in block
     assert "--stale-older-than-hours 2" in block
@@ -539,6 +543,18 @@ def test_lifecycle_delta_replay_is_in_explicit_low_volume_mutation_gate() -> Non
     assert "if: always()" in cleanup_block
     assert "tools.databricks.cleanup_campaign_treatment_scratch" in cleanup_block
     assert "MIP_LIVE_SCRATCH_SUFFIX: gha_${{ github.run_id }}" in cleanup_block
+
+
+def test_nightly_binds_live_reviewed_function_owner_variable() -> None:
+    text = NIGHTLY.read_text(encoding="utf-8")
+
+    assert "MIP_REVIEWED_FUNCTION_OWNER: ${{ vars.MIP_REVIEWED_FUNCTION_OWNER }}" in text
+    resolve_pos = text.index("- name: Resolve source-bound Gateway runtime contract")
+    export_pos = text.index(
+        "python -m tools.databricks.export_gateway_runtime_contract",
+        resolve_pos,
+    )
+    assert resolve_pos < export_pos
 
 
 def test_live_campaign_fixtures_are_run_bound_and_recovered_after_cancellation() -> None:

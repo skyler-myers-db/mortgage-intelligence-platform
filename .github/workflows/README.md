@@ -140,6 +140,8 @@ app-admin access to the Databricks PAT owner.
 | `MIP_GENIE_SPACE_NAME` | Human-readable governed Genie space title. | Defaults to `Mortgage Lead Intelligence`; use an environment-qualified title when several spaces share an account. |
 | `MIP_RUNTIME_SECRET_SCOPE` | Databricks secret scope for App runtime bindings. | Defaults to `mip-runtime`; isolate it per deployment. |
 | `MIP_APP_ROLLBACK_SECRET_SCOPE` | Databricks secret scope for signed last-good App state. | Defaults to `mip-app-rollback`; isolate it per deployment. |
+| `MIP_REVIEWED_FUNCTION_OWNER` | Exact owner returned unanimously by the live reviewed UC function inventory. | Set only from the deployed catalog after the deployer's authenticated owner capture succeeds. Nightly pins this value and rejects owner drift. |
+| `MIP_LIFECYCLE_REPLAY_REVIEW_SHA256` | SHA-256 of the committed canonical lifecycle replay MERGE sequence. | Regenerate `docs/validation/lifecycle-replay-sql-2026-07-29.json` with `python -m tests.integration.test_lifecycle_delta_replay_live --catalog <catalog> --out <artifact>` and update this variable only after independent governance review. Before any Delta DDL, the live test validates the artifact's self-digest and requires both runtime SQL and this variable to equal that committed review. |
 
 Optional non-secret Gateway family variables are `MIP_AI_GATEWAY_AGENT_MODEL_FAMILY`
 (default `<catalog>.audit.mortgage_growth_supervisor_proxy`),

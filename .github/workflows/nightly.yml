@@ -68,6 +68,8 @@ env:
   MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE: ${{ vars.MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE }}
   MIP_AI_GATEWAY_TABLE_PREFIX: ${{ vars.MIP_AI_GATEWAY_TABLE_PREFIX }}
   MIP_AI_GATEWAY_PROOF_VERIFY_KEY: ${{ vars.MIP_AI_GATEWAY_PROOF_VERIFY_KEY }}
+  MIP_REVIEWED_FUNCTION_OWNER: ${{ vars.MIP_REVIEWED_FUNCTION_OWNER }}
+  MIP_LIFECYCLE_REPLAY_REVIEW_SHA256: ${{ vars.MIP_LIFECYCLE_REPLAY_REVIEW_SHA256 }}
 
 permissions:
   contents: read
@@ -411,10 +413,12 @@ jobs:
             tests/integration/test_borrower_id_uniqueness.py \
             tests/integration/test_silver_coercion.py \
             tests/integration/test_silver_zip_5_digit.py
-      - name: Lakebase round-trip
-        # Release-blocking: Lakebase stores governed cohorts, drafts,
-        # approvals, and audit rows. Auth/schema drift here means the app can
-        # look correct while losing durable workflow proof.
+      - name: Lakebase post-activation read path
+        # Release-blocking and deliberately DDL-free. The deploy job already
+        # migrated the schema and proved the exact App/verifier grant inventory
+        # while the App was stopped. This step proves the active App's read
+        # path; the mutation-gated campaign audit test below proves the
+        # uniquely marked public-API write/read round trip under the App SP.
         run: pytest -q tests/integration/test_lakebase_round_trip.py
       - name: Genie live
         if: always()
@@ -439,16 +443,12 @@ jobs:
     # A 25-minute cap could cancel a healthy cold-workspace proof mid-gate.
     timeout-minutes: 90
     env:
-      # Deliberately omit LAKEBASE_HOST / _USER / _PASSWORD here so the
-      # backend's `_resolve_lakebase_connection_params` takes the SDK
-      # workspace-identity path: it calls `/api/2.0/database/instances/
-      # mip-app-state` to resolve the real `read_write_dns`, uses the
-      # PAT-identity's `user_name` as the Postgres user, and mints a
-      # fresh short-lived Postgres password via
-      # `/api/2.0/database/credentials`. This mirrors the pattern in
-      # jobs/lakebase_migrate.py and what the deployed App does at
-      # startup — one auth story for every environment, and no stale
-      # LAKEBASE_PASSWORD secret to rotate.
+      # Deliberately omit LAKEBASE_HOST / _USER / _PASSWORD. Live mutation
+      # tests authenticate only at the deployed public API; the active App
+      # resolves Lakebase and mints a short-lived database credential as its
+      # exact service-principal identity. The pre-activation deploy job alone
+      # uses deployment authority for schema/grant migration. No test receives
+      # a static LAKEBASE_PASSWORD or reruns schema DDL after activation.
       LAKEBASE_INTEGRATION: '1'
       E2E_LIVE: '1'
       MIP_APP_NAME: ${{ vars.MIP_APP_NAME || 'mip-app' }}
@@ -734,6 +734,11 @@ jobs:
         # Reuse this manual release workflow rather than creating another
         # schedule. These checks mutate only the dev/sandbox app and prove the
         # real Lakebase constraints plus the current Unity Catalog lineage.
+        # test_campaign_audit_workflow_live is the post-activation Lakebase
+        # write/read proof: CI authenticates at the public API, while the App
+        # service principal performs the underlying database transaction.
+        # The Delta replay refuses all mutation unless its exact rendered MERGE
+        # sequence matches the independently reviewed repository digest.
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
