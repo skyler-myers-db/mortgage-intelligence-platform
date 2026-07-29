@@ -368,6 +368,109 @@ def test_concurrent_payload_conflict_has_one_winner_and_no_lost_update() -> None
             )
 
 
+def test_campaign_archive_and_outreach_approval_have_one_serial_order() -> None:
+    """A lifecycle revocation can never precede a durable campaign approval."""
+
+    _assert_dev_target()
+    campaign_id, draft = _campaign_draft()
+    approval_request_id = str(uuid4())
+    approval_correlation_id = f"campaign-approval-decision-{uuid4()}"
+    archive_correlation_id = f"campaign-approval-order-{uuid4()}"
+    approval_result, archive_result = _race_requests(
+        [
+            (
+                "POST",
+                "/api/outreach/approve",
+                _approval_payload(draft, request_id=approval_request_id),
+                approval_correlation_id,
+            ),
+            (
+                "PATCH",
+                f"/api/campaigns/{campaign_id}",
+                {
+                    "status": "archived",
+                    "expected_status": "approved",
+                    "rationale": "Live approval ordering proof.",
+                },
+                archive_correlation_id,
+            ),
+        ]
+    )
+
+    archive_status, archive_body = archive_result
+    assert archive_status == 200, archive_body
+    approval_status, approval_body = approval_result
+    assert approval_status in {200, 409}, approval_body
+
+    if approval_status == 409:
+        assert isinstance(approval_body, dict)
+        assert approval_body.get("detail") in {
+            "Campaign lifecycle state does not allow outreach review.",
+            "Campaign lifecycle state changed before the outreach decision was saved.",
+        }
+        status, approval_audits = _request(
+            "GET",
+            "/api/audit/events?"
+            + urllib.parse.urlencode(
+                {"correlation_id": approval_correlation_id, "limit": 10}
+            ),
+            token=ADMIN_TOKEN,
+        )
+        assert status == 200, approval_audits
+        assert isinstance(approval_audits, list), approval_audits
+        assert not any(
+            isinstance(event, dict)
+            and (
+                event.get("request_id") == approval_request_id
+                or event.get("entity_type") == "approval"
+            )
+            for event in approval_audits
+        ), approval_audits
+        return
+
+    assert isinstance(approval_body, dict)
+    approval_id = _required_string(approval_body, "approval_id")
+    approval_audit_id = _required_string(approval_body, "audit_event_id")
+    status, approval_audits = _request(
+        "GET",
+        "/api/audit/events?"
+        + urllib.parse.urlencode({"entity_id": approval_id, "limit": 10}),
+        token=ADMIN_TOKEN,
+    )
+    assert status == 200, approval_audits
+    assert isinstance(approval_audits, list), approval_audits
+    approval_event = next(
+        (
+            event
+            for event in approval_audits
+            if isinstance(event, dict) and event.get("event_id") == approval_audit_id
+        ),
+        None,
+    )
+    assert isinstance(approval_event, dict), approval_audits
+
+    status, campaign_audits = _request(
+        "GET",
+        "/api/audit/events?"
+        + urllib.parse.urlencode(
+            {
+                "entity_id": campaign_id,
+                "correlation_id": archive_correlation_id,
+                "limit": 10,
+            }
+        ),
+        token=ADMIN_TOKEN,
+    )
+    assert status == 200, campaign_audits
+    assert isinstance(campaign_audits, list), campaign_audits
+    archive_event = next(
+        (event for event in campaign_audits if isinstance(event, dict)),
+        None,
+    )
+    assert isinstance(archive_event, dict), campaign_audits
+    assert int(approval_event["audit_sequence"]) < int(archive_event["audit_sequence"])
+
+
 def test_concurrent_identical_campaign_transition_is_one_audited_replay() -> None:
     _assert_dev_target()
     campaign_id, _variant, _channel, _borrowers = _create_campaign()

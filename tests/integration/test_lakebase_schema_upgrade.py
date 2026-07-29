@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 from typing import Any
 from uuid import uuid4
 
@@ -13,6 +15,7 @@ import pytest
 from psycopg import sql as psql
 
 from jobs import lakebase_migrate
+from jobs.lakebase_migration_integrity import _campaign_decision_intent
 
 pytestmark = pytest.mark.integration
 
@@ -70,6 +73,101 @@ def _reviewed_trigger_keys(conn_kwargs: dict[str, str]) -> set[tuple[str, str, s
             """
         )
         return {(str(schema), str(table), str(trigger)) for schema, table, trigger in cur}
+
+
+def _ready_campaign(cur: Any) -> tuple[object, str, str]:
+    campaign_id = uuid4()
+    owner = "campaign-serialization@test.example"
+    borrower_id = f"B-{uuid4().int % 10**13:013d}"
+    cur.execute(
+        """
+        INSERT INTO mip_app.campaigns (
+            campaign_id, name, owner_email, status, criteria,
+            treatment_state, treatment_materialization_id,
+            treatment_algorithm_version, treatment_contract_fingerprint,
+            treatment_build_lease_until
+        ) VALUES (%s, 'Serialization proof', %s, 'draft', '{}'::jsonb,
+                  'building', %s, 'campaign-treatment-v2', %s,
+                  now() + interval '5 minutes')
+        """,
+        (campaign_id, owner, campaign_id, "3" * 64),
+    )
+    cur.execute(
+        """
+        INSERT INTO mip_app.campaign_message_variants (
+            campaign_id, variant_name, channel, subject, body,
+            generation_mode, generator_label, provenance_key_id,
+            provenance_issued_at, provenance_expires_at,
+            provenance_copy_hash, provenance_criteria_fingerprint,
+            provenance_token_digest
+        ) VALUES (%s, 'Primary', 'email', 'Proof', 'Reviewed proof.',
+                  'reviewed_fallback', 'Serialization proof', 'v1',
+                  now(), now() + interval '1 hour', %s, %s, %s)
+        """,
+        (campaign_id, "0" * 64, "1" * 64, "2" * 64),
+    )
+    cur.execute(
+        """
+        UPDATE mip_app.campaigns
+        SET status = 'approved', treatment_state = 'ready',
+            treatment_fingerprint = %s, treatment_source_snapshot_id = %s,
+            treatment_delta_version = 0, treatment_assignment_digest = %s,
+            treatment_candidate_count = 1, treatment_selected_primary_count = 1,
+            treatment_count = 1, treatment_holdout_count = 0,
+            treatment_materialized_at = now(), treatment_build_lease_until = NULL
+        WHERE campaign_id = %s
+        """,
+        ("4" * 64, "5" * 64, "6" * 64, campaign_id),
+    )
+    return campaign_id, owner, borrower_id
+
+
+def _insert_campaign_decision(
+    cur: Any,
+    *,
+    campaign_id: object,
+    owner: str,
+    borrower_id: str,
+    approval_id: object,
+    audit_id: object,
+) -> None:
+    request_id = str(uuid4())
+    intent, intent_hash = _campaign_decision_intent(
+        action="approve",
+        actor=owner,
+        borrower_id=borrower_id,
+        campaign_id=campaign_id,
+        variant_name="Primary",
+        channel="email",
+        owner_email=owner,
+        treatment_fingerprint="4" * 64,
+    )
+    cur.execute(
+        """
+        INSERT INTO mip_app.action_audit (
+            audit_id, event_type, actor_email, entity_type, entity_id,
+            request_id, metadata
+        ) VALUES (%s, 'OUTREACH_APPROVAL', %s, 'approval', %s, %s, '{}'::jsonb)
+        """,
+        (audit_id, owner, str(approval_id), request_id),
+    )
+    cur.execute(
+        """
+        INSERT INTO mip_app.approvals (
+            approval_id, campaign_id, variant_name, channel, borrower_id,
+            action, actor_email, request_id, decision_intent, decision_payload_hash
+        ) VALUES (%s, %s, 'Primary', 'email', %s, 'approve', %s, %s, %s, %s)
+        """,
+        (approval_id, campaign_id, borrower_id, owner, request_id, intent, intent_hash),
+    )
+    cur.execute(
+        """
+        UPDATE mip_app.approvals
+        SET decision_response = '{"approved":true}'::jsonb, audit_event_id = %s
+        WHERE approval_id = %s
+        """,
+        (audit_id, approval_id),
+    )
 
 
 def _proof_rows(conn_kwargs: dict[str, str]) -> tuple[list[tuple[Any, ...]], ...]:
@@ -288,6 +386,108 @@ def test_failed_migration_rolls_back_reviewed_trigger_quarantine(
         )
 
     assert _reviewed_trigger_keys(postgres_kwargs) == expected
+
+
+def test_campaign_decision_and_archive_have_two_forced_serial_orders(
+    postgres_kwargs: dict[str, str],
+) -> None:
+    _apply_migration(postgres_kwargs)
+
+    with psycopg.connect(**postgres_kwargs) as setup_conn, setup_conn.cursor() as cur:
+        archived_campaign, owner, borrower_id = _ready_campaign(cur)
+    with psycopg.connect(**postgres_kwargs) as archive_conn, archive_conn.cursor() as cur:
+        cur.execute(
+            "UPDATE mip_app.campaigns SET status = 'archived' WHERE campaign_id = %s",
+            (archived_campaign,),
+        )
+    rejected_approval, rejected_audit = uuid4(), uuid4()
+    rejected_conn = psycopg.connect(**postgres_kwargs)
+    try:
+        with (
+            rejected_conn.cursor() as cur,
+            pytest.raises(psycopg.errors.CheckViolation),
+        ):
+            _insert_campaign_decision(
+                cur,
+                campaign_id=archived_campaign,
+                owner=owner,
+                borrower_id=borrower_id,
+                approval_id=rejected_approval,
+                audit_id=rejected_audit,
+            )
+        rejected_conn.rollback()
+    finally:
+        rejected_conn.close()
+    with psycopg.connect(**postgres_kwargs) as verify_conn, verify_conn.cursor() as cur:
+        cur.execute(
+            "SELECT EXISTS (SELECT 1 FROM mip_app.approvals WHERE approval_id = %s), "
+            "EXISTS (SELECT 1 FROM mip_app.action_audit WHERE audit_id = %s)",
+            (rejected_approval, rejected_audit),
+        )
+        assert cur.fetchone() == (False, False)
+
+    with psycopg.connect(**postgres_kwargs) as setup_conn, setup_conn.cursor() as cur:
+        approved_campaign, owner, borrower_id = _ready_campaign(cur)
+    approval_id, audit_id = uuid4(), uuid4()
+    decision_conn = psycopg.connect(**postgres_kwargs)
+    archive_started = Event()
+    archive_pid: list[int] = []
+
+    def archive_after_decision_lock() -> int:
+        with psycopg.connect(**postgres_kwargs) as conn, conn.cursor() as cur:
+            cur.execute("SELECT pg_backend_pid()")
+            pid = int(cur.fetchone()[0])
+            archive_pid.append(pid)
+            archive_started.set()
+            cur.execute(
+                "UPDATE mip_app.campaigns SET status = 'archived' WHERE campaign_id = %s",
+                (approved_campaign,),
+            )
+            return pid
+
+    try:
+        with decision_conn.cursor() as cur:
+            _insert_campaign_decision(
+                cur,
+                campaign_id=approved_campaign,
+                owner=owner,
+                borrower_id=borrower_id,
+                approval_id=approval_id,
+                audit_id=audit_id,
+            )
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            archive_future = executor.submit(archive_after_decision_lock)
+            blocked = False
+            try:
+                assert archive_started.wait(timeout=5)
+                with psycopg.connect(**postgres_kwargs) as observer, observer.cursor() as cur:
+                    for _attempt in range(40):
+                        cur.execute(
+                            "SELECT EXISTS (SELECT 1 FROM pg_stat_activity "
+                            "WHERE pid = %s AND wait_event_type = 'Lock')",
+                            (archive_pid[0],),
+                        )
+                        if cur.fetchone() == (True,):
+                            blocked = True
+                            break
+                        cur.execute("SELECT pg_sleep(0.05)")
+            finally:
+                decision_conn.commit()
+            archive_future.result(timeout=5)
+            assert blocked, "campaign archive did not block on the approval share lock"
+    finally:
+        decision_conn.close()
+
+    with psycopg.connect(**postgres_kwargs) as verify_conn, verify_conn.cursor() as cur:
+        cur.execute(
+            "SELECT c.status, a.audit_event_id = %s, e.audit_id = %s "
+            "FROM mip_app.campaigns c "
+            "JOIN mip_app.approvals a ON a.campaign_id = c.campaign_id "
+            "JOIN mip_app.action_audit e ON e.audit_id = a.audit_event_id "
+            "WHERE c.campaign_id = %s AND a.approval_id = %s",
+            (audit_id, audit_id, approved_campaign, approval_id),
+        )
+        assert cur.fetchone() == ("archived", True, True)
 
 
 def test_campaign_json_checks_preserve_existing_rows_and_reject_new_poison(
@@ -724,6 +924,49 @@ def test_real_postgres_isolates_app_and_verifier_acl(
                 ),
             )
             assert cur.fetchone() == (True, True, True, False, False)
+
+        with psycopg.connect(**postgres_kwargs) as conn, conn.cursor() as cur:
+            campaign_id, owner, borrower_id = _ready_campaign(cur)
+        approval_id, audit_id = uuid4(), uuid4()
+        with psycopg.connect(**postgres_kwargs) as conn, conn.cursor() as cur:
+            cur.execute(psql.SQL("SET ROLE {}").format(psql.Identifier(app_role)))
+            _insert_campaign_decision(
+                cur,
+                campaign_id=campaign_id,
+                owner=owner,
+                borrower_id=borrower_id,
+                approval_id=approval_id,
+                audit_id=audit_id,
+            )
+        with psycopg.connect(**postgres_kwargs) as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE mip_app.campaigns SET status = 'archived' WHERE campaign_id = %s",
+                (campaign_id,),
+            )
+        rejected_approval, rejected_audit = uuid4(), uuid4()
+        rejected_conn = psycopg.connect(**postgres_kwargs)
+        try:
+            with rejected_conn.cursor() as cur:
+                cur.execute(psql.SQL("SET ROLE {}").format(psql.Identifier(app_role)))
+                with pytest.raises(psycopg.errors.CheckViolation):
+                    _insert_campaign_decision(
+                        cur,
+                        campaign_id=campaign_id,
+                        owner=owner,
+                        borrower_id=borrower_id,
+                        approval_id=rejected_approval,
+                        audit_id=rejected_audit,
+                    )
+            rejected_conn.rollback()
+        finally:
+            rejected_conn.close()
+        with psycopg.connect(**postgres_kwargs) as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT EXISTS (SELECT 1 FROM mip_app.approvals WHERE approval_id = %s), "
+                "EXISTS (SELECT 1 FROM mip_app.action_audit WHERE audit_id = %s)",
+                (rejected_approval, rejected_audit),
+            )
+            assert cur.fetchone() == (False, False)
     finally:
         with psycopg.connect(**postgres_kwargs, autocommit=True) as conn, conn.cursor() as cur:
             for role in (app_role, verifier_role):

@@ -148,8 +148,11 @@ class _AtomicConn:
         if "SELECT approval_id" in sql:
             if self.owner.existing_row:
                 return _TxnResult(self.owner.existing_row)
-            if self.owner.existing_approval_id:
-                attempted = self.owner.last_attempt_params or {}
+            if (
+                self.owner.existing_approval_id
+                and self.owner.last_attempt_params is not None
+            ):
+                attempted = self.owner.last_attempt_params
                 audit_event_id = "22222222-2222-4222-8222-222222222222"
                 return _TxnResult(
                     {
@@ -1391,6 +1394,65 @@ def test_fallback_request_id_has_no_clock_boundary() -> None:
     )
 
     assert first == retry
+
+
+@pytest.mark.parametrize(
+    ("campaign_id", "owner_claim"),
+    [
+        (None, None),
+        ("11111111-1111-4111-8111-111111111111", "owner@example.com"),
+    ],
+)
+def test_owner_claim_upgrade_preserves_no_key_replay(
+    campaign_id: str | None,
+    owner_claim: str | None,
+) -> None:
+    legacy_payload = {
+        "action": "approve",
+        "actor": "lo@example.com",
+        "borrower_id": "B-48291",
+        "campaign_id": campaign_id,
+        "rationale": "reviewed",
+    }
+    legacy_intent = outreach_mod._canonical_intent(legacy_payload)
+    current_intent = outreach_mod._canonical_intent(
+        {**legacy_payload, "campaign_owner_email": owner_claim}
+    )
+
+    legacy_key = outreach_mod._derive_fallback_request_id(
+        actor="lo@example.com",
+        action="approve",
+        decision_intent=legacy_intent,
+    )
+    current_key = outreach_mod._derive_fallback_request_id(
+        actor="lo@example.com",
+        action="approve",
+        decision_intent=current_intent,
+    )
+    assert current_key == legacy_key
+
+    stored_response = {
+        "approved": True,
+        "approval_id": "11111111-1111-4111-8111-111111111112",
+        "audit_event_id": "11111111-1111-4111-8111-111111111113",
+    }
+    replay = outreach_mod._existing_approval_response_or_conflict(
+        {
+            "approval_id": stored_response["approval_id"],
+            "actor_email": "lo@example.com",
+            "borrower_id": "B-48291",
+            "action": "approve",
+            "decision_intent": legacy_intent,
+            "decision_payload_hash": outreach_mod._intent_hash(legacy_intent),
+            "decision_response": stored_response,
+            "audit_event_id": stored_response["audit_event_id"],
+        },
+        actor="lo@example.com",
+        borrower_id="B-48291",
+        action="approve",
+        expected_intent=current_intent,
+    )
+    assert replay == stored_response
 
 
 # ---------------------------------------------------------------------------

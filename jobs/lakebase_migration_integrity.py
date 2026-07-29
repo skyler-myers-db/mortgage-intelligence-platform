@@ -5,6 +5,11 @@ from __future__ import annotations
 from typing import Any
 from uuid import uuid4
 
+from jobs.lakebase_migration_campaign_decision_probe import (
+    _campaign_decision_intent,
+    _run_campaign_decision_negative_probes,
+)
+
 _POST_SEED_MARKER = "-- MIP_LAKEBASE_POST_SEED_BEGIN"
 
 
@@ -98,10 +103,22 @@ def _run_outreach_integrity_probe(
             cur.execute(
                 """
                 INSERT INTO mip_app.campaigns (
-                    campaign_id, name, owner_email, status, criteria
-                ) VALUES (%s, %s, %s, 'draft', '{}'::jsonb)
+                    campaign_id, name, owner_email, status, criteria,
+                    treatment_state, treatment_materialization_id,
+                    treatment_algorithm_version, treatment_contract_fingerprint,
+                    treatment_build_lease_until
+                ) VALUES (
+                    %s, %s, %s, 'draft', '{}'::jsonb,
+                    'building', %s, 'campaign-treatment-v2', %s, now() + interval '5 minutes'
+                )
                 """,
-                (campaign_id, "Deployment integrity probe", actor),
+                (
+                    campaign_id,
+                    "Deployment integrity probe",
+                    actor,
+                    campaign_id,
+                    "3" * 64,
+                ),
             )
             cur.execute(
                 """
@@ -179,6 +196,32 @@ def _run_outreach_integrity_probe(
                 )
             cur.execute(
                 """
+                UPDATE mip_app.campaigns
+                SET status = 'approved',
+                    treatment_state = 'ready',
+                    treatment_fingerprint = %s,
+                    treatment_source_snapshot_id = %s,
+                    treatment_delta_version = 0,
+                    treatment_assignment_digest = %s,
+                    treatment_candidate_count = 1,
+                    treatment_selected_primary_count = 1,
+                    treatment_count = 1,
+                    treatment_holdout_count = 0,
+                    treatment_materialized_at = now(),
+                    treatment_build_lease_until = NULL
+                WHERE campaign_id = %s
+                """,
+                ("4" * 64, "5" * 64, "6" * 64, campaign_id),
+            )
+            valid_intent, valid_intent_hash = _run_campaign_decision_negative_probes(
+                cur,
+                campaign_id=campaign_id,
+                actor=actor,
+                borrower_id=borrower_id,
+                expect_rejection=_expect_database_rejection,
+            )
+            cur.execute(
+                """
                 INSERT INTO mip_app.action_audit (
                     audit_id, audit_sequence, event_type, actor_email,
                     entity_type, entity_id, request_id, metadata
@@ -194,9 +237,17 @@ def _run_outreach_integrity_probe(
                     borrower_id, action, actor_email, request_id,
                     decision_intent, decision_payload_hash
                 ) VALUES (%s, %s, 'Integrity proof', 'email', %s,
-                          'approve', %s, %s, 'approve', %s)
+                          'approve', %s, %s, %s, %s)
                 """,
-                (approval_id, campaign_id, borrower_id, actor, request_id, "0" * 64),
+                (
+                    approval_id,
+                    campaign_id,
+                    borrower_id,
+                    actor,
+                    request_id,
+                    valid_intent,
+                    valid_intent_hash,
+                ),
             )
             cur.execute(
                 """
@@ -396,17 +447,36 @@ def _run_outreach_integrity_probe(
                 ),
                 expected_sqlstates=("23514",),
             )
+            channel_mismatch_intent, channel_mismatch_hash = _campaign_decision_intent(
+                action="approve",
+                actor=actor,
+                borrower_id=borrower_id,
+                campaign_id=campaign_id,
+                variant_name="Integrity proof",
+                channel="sms",
+                owner_email=actor,
+                treatment_fingerprint="4" * 64,
+            )
             _expect_database_rejection(
                 cur,
                 savepoint="probe_variant_mismatch",
                 statement="""
                     INSERT INTO mip_app.approvals (
                         approval_id, campaign_id, variant_name, channel,
-                        borrower_id, action, actor_email, request_id
+                        borrower_id, action, actor_email, request_id,
+                        decision_intent, decision_payload_hash
                     ) VALUES (%s, %s, 'Integrity proof', 'sms', %s,
-                              'approve', %s, %s)
+                              'approve', %s, %s, %s, %s)
                 """,
-                params=(uuid4(), campaign_id, borrower_id, actor, str(uuid4())),
+                params=(
+                    uuid4(),
+                    campaign_id,
+                    borrower_id,
+                    actor,
+                    str(uuid4()),
+                    channel_mismatch_intent,
+                    channel_mismatch_hash,
+                ),
                 expected_sqlstates=("23503",),
             )
             _expect_database_rejection(
@@ -683,6 +753,28 @@ def _run_outreach_integrity_probe(
                 raise RuntimeError(
                     "Lakebase integrity probe expected four row-level audit "
                     f"finalization triggers, found {finalize_trigger_count}"
+                )
+
+            cur.execute(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM pg_trigger t
+                    JOIN pg_class c ON c.oid = t.tgrelid
+                    JOIN pg_namespace n ON n.oid = c.relnamespace
+                    WHERE n.nspname = 'mip_app'
+                      AND c.relname = 'approvals'
+                      AND t.tgname = 'trg_approvals_campaign_lifecycle'
+                      AND NOT t.tgisinternal
+                      AND (t.tgtype & 1) = 1
+                      AND (t.tgtype & 4) = 4
+                )
+                """
+            )
+            if cur.fetchone() != (True,):
+                raise RuntimeError(
+                    "Lakebase integrity probe did not find the row-level "
+                    "campaign decision lifecycle trigger"
                 )
 
             cur.execute("CREATE TEMP TABLE mip_integrity_truncate_probe (id INTEGER)")

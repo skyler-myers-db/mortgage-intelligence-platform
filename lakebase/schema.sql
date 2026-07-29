@@ -1242,6 +1242,7 @@ CREATE TABLE IF NOT EXISTS mip_app.approvals (
 -- commit. Historical evidence is never deleted by a recurring deployment.
 DROP TRIGGER IF EXISTS trg_approvals_finalize_only ON mip_app.approvals;
 DROP TRIGGER IF EXISTS trg_approvals_no_remove ON mip_app.approvals;
+DROP TRIGGER IF EXISTS trg_approvals_campaign_lifecycle ON mip_app.approvals;
 -- R5-01 idempotency key: when the backend retries an approve/reject after
 -- a lost 503 response, the re-POSTed ``request_id`` collides on this
 -- partial unique index so we don't write a duplicate decision row. The
@@ -2979,6 +2980,101 @@ CREATE TRIGGER trg_campaign_message_variants_immutable
     BEFORE UPDATE OR DELETE OR TRUNCATE ON mip_app.campaign_message_variants
     FOR EACH STATEMENT
     EXECUTE FUNCTION mip_app.prevent_outreach_evidence_mutation();
+
+-- A campaign-bound decision must serialize with campaign lifecycle/treatment
+-- mutation. The row-share lock conflicts with UPDATE, so either the decision
+-- commits while the campaign is eligible or it observes the newer ineligible
+-- state and fails; no post-revocation evidence row can slip through.
+CREATE OR REPLACE FUNCTION mip_app.enforce_campaign_decision_lifecycle()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    campaign_status TEXT;
+    campaign_owner_email TEXT;
+    campaign_treatment_state TEXT;
+    campaign_treatment_algorithm_version TEXT;
+    campaign_treatment_fingerprint TEXT;
+    decision_document JSONB;
+    decision_owner_email TEXT;
+    decision_treatment_fingerprint TEXT;
+BEGIN
+    IF NEW.campaign_id IS NULL THEN
+        RETURN NEW;
+    END IF;
+
+    SELECT status, owner_email, treatment_state,
+           treatment_algorithm_version, treatment_fingerprint
+    INTO campaign_status, campaign_owner_email, campaign_treatment_state,
+         campaign_treatment_algorithm_version, campaign_treatment_fingerprint
+    FROM mip_app.campaigns
+    WHERE campaign_id = NEW.campaign_id
+    FOR SHARE;
+
+    IF NOT FOUND
+       OR campaign_treatment_state IS DISTINCT FROM 'ready'
+       OR campaign_treatment_algorithm_version IS DISTINCT FROM 'campaign-treatment-v2'
+       OR NEW.action NOT IN ('approve', 'reject')
+       OR (
+           NEW.action = 'approve'
+           AND campaign_status NOT IN ('approved', 'live', 'active')
+       )
+       OR (
+           NEW.action = 'reject'
+           AND campaign_status NOT IN (
+               'draft', 'pending_review', 'approved', 'live', 'active'
+           )
+       ) THEN
+        RAISE EXCEPTION
+            'campaign lifecycle state does not allow this outreach decision'
+            USING ERRCODE = '23514';
+    END IF;
+
+    BEGIN
+        decision_document := NEW.decision_intent::jsonb;
+        IF jsonb_typeof(decision_document) IS DISTINCT FROM 'object' THEN
+            RAISE EXCEPTION 'campaign decision intent must be a JSON object'
+                USING ERRCODE = '23514';
+        END IF;
+        decision_owner_email :=
+            decision_document->>'campaign_owner_email';
+        decision_treatment_fingerprint :=
+            decision_document->>'campaign_treatment_fingerprint';
+    EXCEPTION
+        WHEN OTHERS THEN
+            RAISE EXCEPTION
+                'campaign decision intent is not valid JSON'
+                USING ERRCODE = '23514';
+    END;
+    IF decision_document->>'action' IS DISTINCT FROM NEW.action
+       OR lower(btrim(decision_document->>'actor'))
+          IS DISTINCT FROM lower(btrim(NEW.actor_email))
+       OR decision_document->>'borrower_id' IS DISTINCT FROM NEW.borrower_id
+       OR decision_document->>'campaign_id' IS DISTINCT FROM NEW.campaign_id::TEXT
+       OR decision_document->>'variant_name' IS DISTINCT FROM NEW.variant_name
+       OR decision_document->>'channel' IS DISTINCT FROM NEW.channel
+       OR decision_document->>'offer_code' IS DISTINCT FROM NEW.offer_code
+       OR NEW.decision_payload_hash IS DISTINCT FROM
+          encode(sha256(convert_to(NEW.decision_intent, 'UTF8')), 'hex')
+       OR decision_owner_email IS NULL
+       OR lower(btrim(decision_owner_email))
+          IS DISTINCT FROM lower(btrim(campaign_owner_email))
+       OR decision_treatment_fingerprint IS NULL
+       OR decision_treatment_fingerprint IS DISTINCT FROM campaign_treatment_fingerprint THEN
+        RAISE EXCEPTION
+            'campaign treatment proof changed before outreach decision commit'
+            USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_approvals_campaign_lifecycle
+    ON mip_app.approvals;
+CREATE TRIGGER trg_approvals_campaign_lifecycle
+    BEFORE INSERT ON mip_app.approvals
+    FOR EACH ROW
+    EXECUTE FUNCTION mip_app.enforce_campaign_decision_lifecycle();
 
 -- Approval decisions are evidence. The app needs one narrowly-scoped UPDATE
 -- to atomically attach the response and audit row after the idempotent INSERT;

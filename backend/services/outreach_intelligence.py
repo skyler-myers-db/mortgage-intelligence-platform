@@ -66,6 +66,8 @@ class GovernedCampaignVariant:
     generation_mode: str
     generator_label: str
     treatment_fingerprint: str
+    campaign_owner_email: str = ""
+    campaign_proof_fingerprint: str = ""
 
 
 def _relationship_label(borrower: Any) -> str:

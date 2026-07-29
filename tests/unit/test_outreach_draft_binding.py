@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import MagicMock
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 
+from backend.api import outreach as outreach_mod
 from backend.config.settings import settings
 from backend.main import app
 from backend.schemas.portfolio import HouseholdDedupConfig, project_public_campaign_json_field
@@ -100,10 +104,14 @@ def _install_campaign_rows(
     assert isinstance(initial_criteria, dict)
     assert isinstance(initial_suppression, dict)
     assert initial_holdout is None or isinstance(initial_holdout, dict)
+    initial_contract_version = initial_state.get("json_contract_version", contract_version)
+    assert isinstance(initial_contract_version, int | str) and not isinstance(
+        initial_contract_version, bool
+    )
     stored_contract_fingerprint = str(
         initial_state.get("treatment_contract_fingerprint")
         or campaign_treatment_fingerprint(
-            json_contract_version=int(initial_state.get("json_contract_version", contract_version)),
+            json_contract_version=int(initial_contract_version),
             criteria=initial_criteria,
             suppression_policy=initial_suppression,
             holdout=initial_holdout,
@@ -244,6 +252,84 @@ def _install_campaign_rows(
         return original_fetchone(sql, values)
 
     monkeypatch.setattr(lakebase, "fetchone", _fetchone)
+
+
+def _enable_atomic_campaign_decisions(monkeypatch, lakebase) -> None:
+    """Give the shared test client the production decision transaction contract."""
+
+    class _Result:
+        def __init__(self, row: dict[str, Any] | None) -> None:
+            self.row = row
+
+        def fetchone(self) -> dict[str, Any] | None:
+            return self.row
+
+    class _Connection:
+        def execute(
+            self,
+            sql: str,
+            params: dict[str, Any] | None = None,
+        ) -> _Result:
+            values = params or {}
+            lakebase.executes.append((sql, values))
+            if sql == outreach_mod._CAMPAIGN_DECISION_LOCK_LOOKUP:
+                return _Result(lakebase.fetchone(sql, values))
+            if "pg_advisory_xact_lock" in sql:
+                return _Result(None)
+            if "INSERT INTO mip_app.approvals" in sql:
+                existing = next(
+                    (
+                        row
+                        for row in lakebase.approvals
+                        if row.get("request_id") == values.get("request_id")
+                    ),
+                    None,
+                )
+                if existing is not None:
+                    return _Result(None)
+                row = {
+                    **values,
+                    "decision_response": None,
+                    "audit_event_id": None,
+                    "decided_at": datetime.now(UTC),
+                }
+                lakebase.approvals.append(row)
+                return _Result({"approval_id": values["approval_id"]})
+            if "SELECT approval_id" in sql and "FROM mip_app.approvals" in sql:
+                return _Result(
+                    next(
+                        (
+                            dict(row)
+                            for row in lakebase.approvals
+                            if row.get("request_id") == values.get("request_id")
+                        ),
+                        None,
+                    )
+                )
+            if "INSERT INTO mip_app.action_audit" in sql:
+                event = {
+                    "audit_id": str(uuid4()),
+                    "audit_sequence": len(lakebase.audit_events) + 1,
+                    "event_at": datetime.now(UTC),
+                    **values,
+                }
+                lakebase.audit_events.append(event)
+                return _Result(event)
+            if "UPDATE mip_app.approvals" in sql:
+                for row in lakebase.approvals:
+                    if str(row["approval_id"]) == str(values["approval_id"]):
+                        row["decision_response"] = json.loads(values["decision_response"])
+                        row["audit_event_id"] = values["audit_event_id"]
+                        return _Result(dict(row))
+                return _Result(None)
+            raise AssertionError(f"unexpected transactional SQL: {sql}")
+
+    @contextmanager
+    def _transaction():
+        yield _Connection()
+
+    monkeypatch.setattr(lakebase, "_supports_atomic_transactions", True, raising=False)
+    monkeypatch.setattr(lakebase, "transaction", _transaction)
 
 
 def test_production_approval_requires_persisted_draft_proof(monkeypatch) -> None:
@@ -737,6 +823,7 @@ def test_campaign_approval_persists_proof_binding_and_replays_before_borrower_fe
     fake_lakebase_client,
 ) -> None:
     _install_campaign_rows(monkeypatch, fake_lakebase_client)
+    _enable_atomic_campaign_decisions(monkeypatch, fake_lakebase_client)
     draft = _draft(
         campaign_id=CAMPAIGN_A,
         variant_name="Primary",
@@ -760,10 +847,24 @@ def test_campaign_approval_persists_proof_binding_and_replays_before_borrower_fe
         for sql, params in fake_lakebase_client.executes
         if "INSERT INTO mip_app.approvals" in sql
     )
+    executed_sql = [sql for sql, _params in fake_lakebase_client.executes]
+    campaign_lock_index = executed_sql.index(outreach_mod._CAMPAIGN_DECISION_LOCK_LOOKUP)
+    borrower_lock_index = next(
+        index
+        for index, sql in enumerate(executed_sql)
+        if "pg_advisory_xact_lock" in sql
+    )
+    approval_insert_index = next(
+        index
+        for index, sql in enumerate(executed_sql)
+        if "INSERT INTO mip_app.approvals" in sql
+    )
+    assert borrower_lock_index < campaign_lock_index < approval_insert_index
     assert approval_insert["campaign_id"] == CAMPAIGN_A
     assert approval_insert["variant_name"] == "Primary"
     assert approval_insert["channel"] == "email"
     decision_intent = json.loads(str(approval_insert["decision_intent"]))
+    assert decision_intent["campaign_owner_email"] == OWNER
     assert (
         decision_intent["campaign_treatment_fingerprint"] == draft["campaign_treatment_fingerprint"]
     )
@@ -805,6 +906,104 @@ def test_campaign_approval_persists_proof_binding_and_replays_before_borrower_fe
     borrower_fetch.assert_not_called()
 
 
+def test_campaign_approval_fails_closed_without_atomic_transaction(
+    monkeypatch,
+    fake_lakebase_client,
+) -> None:
+    _install_campaign_rows(monkeypatch, fake_lakebase_client)
+    draft = _draft(
+        campaign_id=CAMPAIGN_A,
+        variant_name="Primary",
+        headers={"X-Forwarded-Email": OWNER},
+    )
+    monkeypatch.setattr(settings, "app_env", "production")
+
+    response = client.post(
+        "/api/outreach/approve",
+        json=_approval(draft),
+        headers={"X-Forwarded-Email": OWNER},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "lakebase is temporarily unavailable"
+    assert not any(
+        "INSERT INTO mip_app.approvals" in sql
+        for sql, _params in fake_lakebase_client.executes
+    )
+
+
+def test_campaign_rejection_locks_and_persists_exact_owner_treatment_proof(
+    monkeypatch,
+    fake_lakebase_client,
+) -> None:
+    _install_campaign_rows(monkeypatch, fake_lakebase_client)
+    _enable_atomic_campaign_decisions(monkeypatch, fake_lakebase_client)
+
+    response = client.post(
+        "/api/outreach/reject",
+        json={
+            "borrower_id": "B-48291",
+            "campaign_id": CAMPAIGN_A,
+            "variant_name": "Primary",
+            "channel": "email",
+            "evidence_ids": BORROWER_EVIDENCE_IDS,
+            "rationale_code": "low_intent",
+            "rationale": "Borrower declined this reviewed option.",
+        },
+        headers={"X-Forwarded-Email": OWNER},
+    )
+
+    assert response.status_code == 200, response.text
+    executed_sql = [sql for sql, _params in fake_lakebase_client.executes]
+    campaign_lock_index = executed_sql.index(outreach_mod._CAMPAIGN_DECISION_LOCK_LOOKUP)
+    borrower_lock_index = next(
+        index
+        for index, sql in enumerate(executed_sql)
+        if "pg_advisory_xact_lock" in sql
+    )
+    approval_insert_index = next(
+        index
+        for index, sql in enumerate(executed_sql)
+        if "INSERT INTO mip_app.approvals" in sql
+    )
+    assert borrower_lock_index < campaign_lock_index < approval_insert_index
+    approval_insert = fake_lakebase_client.executes[approval_insert_index][1]
+    assert approval_insert["action"] == "reject"
+    assert approval_insert["campaign_id"] == CAMPAIGN_A
+    assert approval_insert["variant_name"] == "Primary"
+    decision_intent = json.loads(str(approval_insert["decision_intent"]))
+    assert decision_intent["campaign_owner_email"] == OWNER
+    assert decision_intent["campaign_treatment_fingerprint"] == "a" * 64
+
+
+def test_campaign_rejection_fails_closed_without_atomic_transaction(
+    monkeypatch,
+    fake_lakebase_client,
+) -> None:
+    _install_campaign_rows(monkeypatch, fake_lakebase_client)
+
+    response = client.post(
+        "/api/outreach/reject",
+        json={
+            "borrower_id": "B-48291",
+            "campaign_id": CAMPAIGN_A,
+            "variant_name": "Primary",
+            "channel": "email",
+            "evidence_ids": BORROWER_EVIDENCE_IDS,
+            "rationale_code": "low_intent",
+            "rationale": "Borrower declined this reviewed option.",
+        },
+        headers={"X-Forwarded-Email": OWNER},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "lakebase is temporarily unavailable"
+    assert not any(
+        "INSERT INTO mip_app.approvals" in sql
+        for sql, _params in fake_lakebase_client.executes
+    )
+
+
 @pytest.mark.parametrize(
     ("field", "changed_value"),
     [
@@ -825,6 +1024,7 @@ def test_campaign_approval_idempotency_rejects_each_governed_payload_mismatch(
     changed_value: object,
 ) -> None:
     _install_campaign_rows(monkeypatch, fake_lakebase_client)
+    _enable_atomic_campaign_decisions(monkeypatch, fake_lakebase_client)
     draft = _draft(
         campaign_id=CAMPAIGN_A,
         variant_name="Primary",

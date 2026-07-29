@@ -78,6 +78,7 @@ _APP_ROLE_ROUTINE_PRIVILEGES: dict[tuple[str, str], tuple[str, ...]] = {
     ("enforce_audit_event_finalize_only", ""): (),
     ("prevent_outreach_evidence_mutation", ""): (),
     ("enforce_ai_gateway_proof_timestamp_bounds", ""): (),
+    ("enforce_campaign_decision_lifecycle", ""): (),
     ("enforce_approval_finalize_only", ""): (),
 }
 
@@ -122,6 +123,11 @@ _APP_TRIGGER_CONTRACT: dict[
         "campaign_message_variants",
         "trg_campaign_message_variants_immutable",
     ): ("mip_app", "prevent_outreach_evidence_mutation", "", 58),
+    (
+        "mip_app",
+        "approvals",
+        "trg_approvals_campaign_lifecycle",
+    ): ("mip_app", "enforce_campaign_decision_lifecycle", "", 7),
     (
         "mip_app",
         "approvals",

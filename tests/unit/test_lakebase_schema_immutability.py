@@ -78,6 +78,7 @@ def test_seed_precedes_legacy_proof_backfill_and_hard_validation() -> None:
     assert "VALIDATE CONSTRAINT approvals_campaign_variant_channel_fkey" in post_seed
     assert "VALIDATE CONSTRAINT generated_outreach_campaign_variant_channel_fkey" in post_seed
     assert "CREATE TRIGGER trg_approvals_finalize_only" in post_seed
+    assert "CREATE TRIGGER trg_approvals_campaign_lifecycle" in post_seed
     assert "CREATE TRIGGER trg_generated_outreach_drafts_immutable" in post_seed
 
 
@@ -260,6 +261,41 @@ def test_approvals_only_allow_one_time_audit_finalization() -> None:
         r"BEFORE UPDATE ON mip_app\.approvals\s+"
         r"FOR EACH ROW\s+"
         r"EXECUTE FUNCTION mip_app\.enforce_approval_finalize_only\(\);",
+        _SCHEMA,
+    )
+
+
+def test_campaign_decision_insert_locks_and_revalidates_lifecycle_proof() -> None:
+    assert "CREATE OR REPLACE FUNCTION mip_app.enforce_campaign_decision_lifecycle()" in _SCHEMA
+    assert "FROM mip_app.campaigns" in _SCHEMA
+    assert "FOR SHARE;" in _SCHEMA
+    assert "campaign_status NOT IN ('approved', 'live', 'active')" in _SCHEMA
+    assert "campaign_treatment_state IS DISTINCT FROM 'ready'" in _SCHEMA
+    assert (
+        "campaign_treatment_algorithm_version IS DISTINCT FROM "
+        "'campaign-treatment-v2'"
+    ) in _SCHEMA
+    assert (
+        "(NEW.decision_intent::jsonb)->>'campaign_treatment_fingerprint'"
+    ) not in _SCHEMA
+    assert "decision_document->>'campaign_treatment_fingerprint'" in _SCHEMA
+    assert "decision_document->>'campaign_owner_email'" in _SCHEMA
+    assert "decision_document->>'action' IS DISTINCT FROM NEW.action" in _SCHEMA
+    assert "decision_document->>'campaign_id' IS DISTINCT FROM NEW.campaign_id::TEXT" in _SCHEMA
+    assert "decision_document->>'variant_name' IS DISTINCT FROM NEW.variant_name" in _SCHEMA
+    assert "decision_document->>'channel' IS DISTINCT FROM NEW.channel" in _SCHEMA
+    assert "decision_document->>'offer_code' IS DISTINCT FROM NEW.offer_code" in _SCHEMA
+    assert "lower(btrim(decision_owner_email))" in _SCHEMA
+    assert "lower(btrim(campaign_owner_email))" in _SCHEMA
+    assert (
+        "encode(sha256(convert_to(NEW.decision_intent, 'UTF8')), 'hex')"
+        in _SCHEMA
+    )
+    assert re.search(
+        r"CREATE TRIGGER trg_approvals_campaign_lifecycle\s+"
+        r"BEFORE INSERT ON mip_app\.approvals\s+"
+        r"FOR EACH ROW\s+"
+        r"EXECUTE FUNCTION mip_app\.enforce_campaign_decision_lifecycle\(\);",
         _SCHEMA,
     )
 
