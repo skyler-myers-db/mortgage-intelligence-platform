@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Event
+from time import sleep
 from typing import Any
 from uuid import uuid4
 
@@ -14,6 +16,12 @@ import psycopg
 import pytest
 from psycopg import sql as psql
 
+from backend.schemas.portfolio import HouseholdDedupConfig
+from backend.services.campaign_treatment import (
+    _CAMPAIGN_RESERVE_SQL,
+    CampaignTreatmentCoordinator,
+    CampaignTreatmentCreateSpec,
+)
 from jobs import lakebase_migrate
 from jobs.lakebase_migration_integrity import _campaign_decision_intent
 
@@ -75,22 +83,58 @@ def _reviewed_trigger_keys(conn_kwargs: dict[str, str]) -> set[tuple[str, str, s
         return {(str(schema), str(table), str(trigger)) for schema, table, trigger in cur}
 
 
+def _reviewed_treatment_response(
+    name: str,
+    *,
+    candidate_count: int = 1,
+    selected_primary_count: int = 1,
+    treatment_count: int = 1,
+) -> tuple[str, str]:
+    household_summary = {
+        "enabled": False,
+        "candidate_borrower_count": candidate_count,
+        "selected_primary_count": selected_primary_count,
+        "suppressed_co_owner_count": candidate_count - selected_primary_count,
+        "household_count": selected_primary_count,
+        "owner_link_household_count": 0,
+        "mailing_address_household_count": 0,
+        "singleton_household_count": selected_primary_count,
+        "primary_contact_strategy": "highest_opportunity_eligible",
+        "source_assets": ["mip.gold.household_rollup", "mip.gold.borrower_360"],
+    }
+    creation_response = {
+        "name": name,
+        "marketable_population": treatment_count,
+        "campaign_build_limit": 10_000,
+        "campaign_build_eligible": True,
+        "household_summary": household_summary,
+    }
+    return (
+        json.dumps(household_summary, sort_keys=True),
+        json.dumps(creation_response, sort_keys=True),
+    )
+
+
 def _ready_campaign(cur: Any) -> tuple[object, str, str]:
     campaign_id = uuid4()
     owner = "campaign-serialization@test.example"
     borrower_id = f"B-{uuid4().int % 10**13:013d}"
+    household_summary, creation_response = _reviewed_treatment_response(
+        "Serialization proof"
+    )
     cur.execute(
         """
         INSERT INTO mip_app.campaigns (
             campaign_id, name, owner_email, status, criteria,
+            idempotency_key, request_payload_hash,
             treatment_state, treatment_materialization_id,
             treatment_algorithm_version, treatment_contract_fingerprint,
             treatment_build_lease_until
         ) VALUES (%s, 'Serialization proof', %s, 'draft', '{}'::jsonb,
-                  'building', %s, 'campaign-treatment-v2', %s,
+                  %s, %s, 'building', %s, 'campaign-treatment-v2', %s,
                   now() + interval '5 minutes')
         """,
-        (campaign_id, owner, campaign_id, "3" * 64),
+        (campaign_id, owner, str(campaign_id), "7" * 64, campaign_id, "3" * 64),
     )
     cur.execute(
         """
@@ -114,10 +158,19 @@ def _ready_campaign(cur: Any) -> tuple[object, str, str]:
             treatment_delta_version = 0, treatment_assignment_digest = %s,
             treatment_candidate_count = 1, treatment_selected_primary_count = 1,
             treatment_count = 1, treatment_holdout_count = 0,
-            treatment_materialized_at = now(), treatment_build_lease_until = NULL
+            treatment_materialized_at = now(), treatment_build_lease_until = NULL,
+            household_summary = %s::jsonb,
+            creation_response = %s::jsonb
         WHERE campaign_id = %s
         """,
-        ("4" * 64, "5" * 64, "6" * 64, campaign_id),
+        (
+            "4" * 64,
+            "5" * 64,
+            "6" * 64,
+            household_summary,
+            creation_response,
+            campaign_id,
+        ),
     )
     return campaign_id, owner, borrower_id
 
@@ -314,6 +367,116 @@ def _simulate_legacy_proof(conn_kwargs: dict[str, str], *, borrower_id: str) -> 
         )
 
 
+def test_default_campaign_reservation_uses_sql_null_for_absent_optional_json(
+    postgres_kwargs: dict[str, str],
+) -> None:
+    _apply_migration(postgres_kwargs)
+    materialization_id = uuid4()
+    request_id = str(uuid4())
+    spec = CampaignTreatmentCreateSpec(
+        name="Default optional JSON proof",
+        owner_email="campaign-default-reserve@test.example",
+        idempotency_key=request_id,
+        request_payload_hash="a" * 64,
+        criteria={"marketing_eligibility": "Eligible only"},
+        suppression_policy={"default": "eligible_only", "frequency_cap_days": 60},
+        household_dedup=HouseholdDedupConfig(),
+    )
+    params = CampaignTreatmentCoordinator._reserve_params(
+        spec,
+        materialization_id=str(materialization_id),
+        contract_fingerprint="b" * 64,
+    )
+
+    assert params["holdout"] is None
+    assert params["roi_assumptions"] is None
+    with psycopg.connect(**postgres_kwargs) as conn, conn.cursor() as cur:
+        cur.execute(_CAMPAIGN_RESERVE_SQL, params)
+        row = cur.fetchone()
+        assert row is not None
+        campaign_id = row[0]
+        assert row[1:] == (str(materialization_id), "a" * 64, "building")
+        cur.execute(
+            """
+            SELECT holdout IS NULL, roi_assumptions IS NULL,
+                   treatment_build_lease_until > now()
+            FROM mip_app.campaigns
+            WHERE campaign_id = %s
+            """,
+            (campaign_id,),
+        )
+        assert cur.fetchone() == (True, True, True)
+
+
+def test_upgrade_rejects_preexisting_building_with_finalized_proof(
+    postgres_kwargs: dict[str, str],
+) -> None:
+    _apply_migration(postgres_kwargs)
+    campaign_id = uuid4()
+    with psycopg.connect(**postgres_kwargs) as conn, conn.cursor() as cur:
+        cur.execute("DROP TRIGGER trg_campaigns_treatment_boundary ON mip_app.campaigns")
+        cur.execute(
+            "ALTER TABLE mip_app.campaigns "
+            "DROP CONSTRAINT campaigns_nonready_treatment_proof_empty_chk"
+        )
+        cur.execute(
+            """
+            INSERT INTO mip_app.campaigns (
+                campaign_id, name, owner_email, criteria,
+                idempotency_key, request_payload_hash, treatment_state,
+                treatment_materialization_id, treatment_algorithm_version,
+                treatment_contract_fingerprint, treatment_fingerprint,
+                treatment_source_snapshot_id, treatment_delta_version,
+                treatment_assignment_digest, treatment_candidate_count,
+                treatment_selected_primary_count, treatment_count,
+                treatment_holdout_count, treatment_materialized_at,
+                treatment_build_lease_until, household_summary, creation_response
+            ) VALUES (
+                %s, 'Preexisting poisoned building', 'poisoned-upgrade@test.example',
+                '{}'::jsonb, %s, %s, 'building', %s, 'campaign-treatment-v2',
+                %s, %s, %s, 0, %s, 1, 1, 1, 0, now(),
+                now() + interval '5 minutes', '{"x":1}'::jsonb, '{"y":1}'::jsonb
+            )
+            """,
+            (
+                campaign_id,
+                str(campaign_id),
+                "1" * 64,
+                campaign_id,
+                "2" * 64,
+                "3" * 64,
+                "4" * 64,
+                "5" * 64,
+            ),
+        )
+
+    with pytest.raises(psycopg.errors.CheckViolation):
+        _apply_migration(postgres_kwargs)
+
+    with psycopg.connect(**postgres_kwargs) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT treatment_state, treatment_fingerprint,
+                   household_summary, creation_response
+            FROM mip_app.campaigns
+            WHERE campaign_id = %s
+            """,
+            (campaign_id,),
+        )
+        assert cur.fetchone() == ("building", "3" * 64, {"x": 1}, {"y": 1})
+        cur.execute(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conrelid = 'mip_app.campaigns'::regclass
+                  AND conname = 'campaigns_nonready_treatment_proof_empty_chk'
+            )
+            """
+        )
+        assert cur.fetchone() == (False,)
+
+
 def test_fresh_upgrade_and_recurring_apply_preserve_proof(
     postgres_kwargs: dict[str, str],
 ) -> None:
@@ -488,6 +651,651 @@ def test_campaign_decision_and_archive_have_two_forced_serial_orders(
             (audit_id, audit_id, approved_campaign, approval_id),
         )
         assert cur.fetchone() == ("archived", True, True)
+
+
+def test_campaign_treatment_state_machine_freezes_ready_proof(
+    postgres_kwargs: dict[str, str],
+) -> None:
+    _apply_migration(postgres_kwargs)
+
+    with psycopg.connect(**postgres_kwargs) as conn, conn.cursor() as cur:
+        ready_campaign, owner, _borrower_id = _ready_campaign(cur)
+        transferred_owner = "campaign-transfer@test.example"
+        cur.execute(
+            """
+            UPDATE mip_app.campaigns
+            SET status = 'archived', owner_email = %s, updated_at = now()
+            WHERE campaign_id = %s
+            RETURNING status, owner_email, treatment_state
+            """,
+            (transferred_owner, ready_campaign),
+        )
+        assert cur.fetchone() == ("archived", transferred_owner, "ready")
+
+        forbidden_ready_mutations = (
+            (
+                "ready_request_hash",
+                "UPDATE mip_app.campaigns SET request_payload_hash = %s "
+                "WHERE campaign_id = %s",
+                ("7" * 64, ready_campaign),
+                ("55000",),
+            ),
+            (
+                "ready_creation_response",
+                "UPDATE mip_app.campaigns SET creation_response = %s::jsonb "
+                "WHERE campaign_id = %s",
+                ('{"marketable_population":2}', ready_campaign),
+                ("55000",),
+            ),
+            (
+                "ready_household_summary",
+                "UPDATE mip_app.campaigns SET household_summary = %s::jsonb "
+                "WHERE campaign_id = %s",
+                ('{"selected_primary_count":2}', ready_campaign),
+                ("55000",),
+            ),
+            (
+                "ready_channel_cascade",
+                "UPDATE mip_app.campaigns SET channel_cascade = %s::jsonb "
+                "WHERE campaign_id = %s",
+                ('[{"step":1,"channel":"email"}]', ready_campaign),
+                ("55000",),
+            ),
+            (
+                "ready_treatment_fingerprint",
+                "UPDATE mip_app.campaigns SET treatment_fingerprint = %s "
+                "WHERE campaign_id = %s",
+                ("8" * 64, ready_campaign),
+                ("55000",),
+            ),
+        )
+        for savepoint, statement, params, sqlstates in forbidden_ready_mutations:
+            lakebase_migrate._expect_database_rejection(
+                cur,
+                savepoint=savepoint,
+                statement=statement,
+                params=params,
+                expected_sqlstates=sqlstates,
+            )
+
+        failed_campaign = uuid4()
+        cur.execute(
+            """
+            INSERT INTO mip_app.campaigns (
+                campaign_id, name, owner_email, status, criteria,
+                idempotency_key, request_payload_hash,
+                treatment_state, treatment_materialization_id,
+                treatment_algorithm_version, treatment_contract_fingerprint,
+                treatment_build_lease_until
+            ) VALUES (
+                %s, 'Failed transition proof', %s, 'draft', '{}'::jsonb,
+                %s, %s, 'building', %s, 'campaign-treatment-v2', %s,
+                now() + interval '5 minutes'
+            )
+            """,
+            (
+                failed_campaign,
+                owner,
+                str(failed_campaign),
+                "8" * 64,
+                failed_campaign,
+                "9" * 64,
+            ),
+        )
+        lakebase_migrate._expect_database_rejection(
+            cur,
+            savepoint="failed_with_live_lease",
+            statement=(
+                "UPDATE mip_app.campaigns SET treatment_state = 'failed' "
+                "WHERE campaign_id = %s"
+            ),
+            params=(failed_campaign,),
+            expected_sqlstates=("23514",),
+        )
+        cur.execute(
+            """
+            UPDATE mip_app.campaigns
+            SET treatment_state = 'failed', treatment_build_lease_until = NULL
+            WHERE campaign_id = %s
+            RETURNING treatment_state, treatment_build_lease_until
+            """,
+            (failed_campaign,),
+        )
+        assert cur.fetchone() == ("failed", None)
+        lakebase_migrate._expect_database_rejection(
+            cur,
+            savepoint="failed_to_building",
+            statement=(
+                "UPDATE mip_app.campaigns "
+                "SET treatment_state = 'building', "
+                "treatment_build_lease_until = now() + interval '5 minutes' "
+                "WHERE campaign_id = %s"
+            ),
+            params=(failed_campaign,),
+            expected_sqlstates=("55000",),
+        )
+
+        building_campaign = uuid4()
+        zero_holdout_campaign = uuid4()
+        positive_holdout_campaign = uuid4()
+        cur.execute(
+            """
+            INSERT INTO mip_app.campaigns (
+                campaign_id, name, owner_email, status, criteria,
+                idempotency_key, request_payload_hash,
+                treatment_state, treatment_materialization_id,
+                treatment_algorithm_version, treatment_contract_fingerprint,
+                treatment_build_lease_until
+            ) VALUES (
+                %s, 'Building transition proof', %s, 'draft', '{}'::jsonb,
+                %s, %s, 'building', %s, 'campaign-treatment-v2', %s,
+                now() + interval '5 minutes'
+            )
+            """,
+            (
+                building_campaign,
+                owner,
+                str(building_campaign),
+                "9" * 64,
+                building_campaign,
+                "a" * 64,
+            ),
+        )
+        cur.execute(
+            """
+            INSERT INTO mip_app.campaigns (
+                campaign_id, name, owner_email, status, criteria, holdout,
+                idempotency_key, request_payload_hash,
+                treatment_state, treatment_materialization_id,
+                treatment_algorithm_version, treatment_contract_fingerprint,
+                treatment_build_lease_until
+            ) VALUES (
+                %s, 'Positive holdout transition proof', %s, 'draft', '{}'::jsonb,
+                '{"method":"hash_modulo","size_pct":50}'::jsonb,
+                %s, %s, 'building', %s, 'campaign-treatment-v2', %s,
+                now() + interval '5 minutes'
+            )
+            """,
+            (
+                positive_holdout_campaign,
+                owner,
+                str(positive_holdout_campaign),
+                "1" * 64,
+                positive_holdout_campaign,
+                "2" * 64,
+            ),
+        )
+        cur.execute(
+            """
+            INSERT INTO mip_app.campaigns (
+                campaign_id, name, owner_email, status, criteria, holdout,
+                idempotency_key, request_payload_hash,
+                treatment_state, treatment_materialization_id,
+                treatment_algorithm_version, treatment_contract_fingerprint,
+                treatment_build_lease_until
+            ) VALUES (
+                %s, 'Zero holdout transition proof', %s, 'draft', '{}'::jsonb,
+                '{"method":"hash_modulo","size_pct":0}'::jsonb,
+                %s, %s, 'building', %s, 'campaign-treatment-v2', %s,
+                now() + interval '5 minutes'
+            )
+            """,
+            (
+                zero_holdout_campaign,
+                owner,
+                str(zero_holdout_campaign),
+                "e" * 64,
+                zero_holdout_campaign,
+                "f" * 64,
+            ),
+        )
+        lakebase_migrate._expect_database_rejection(
+            cur,
+            savepoint="building_to_legacy",
+            statement=(
+                "UPDATE mip_app.campaigns SET treatment_state = 'legacy_unbound' "
+                "WHERE campaign_id = %s"
+            ),
+            params=(building_campaign,),
+            expected_sqlstates=("55000",),
+        )
+        lakebase_migrate._expect_database_rejection(
+            cur,
+            savepoint="building_lease_only",
+            statement=(
+                "UPDATE mip_app.campaigns "
+                "SET treatment_build_lease_until = now() + interval '10 minutes' "
+                "WHERE campaign_id = %s"
+            ),
+            params=(building_campaign,),
+            expected_sqlstates=("23514",),
+        )
+        lakebase_migrate._expect_database_rejection(
+            cur,
+            savepoint="incomplete_ready_manifest",
+            statement=(
+                "UPDATE mip_app.campaigns "
+                "SET treatment_state = 'ready', "
+                "treatment_candidate_count = 1, "
+                "treatment_selected_primary_count = 1, "
+                "treatment_count = 1, treatment_holdout_count = 0, "
+                "treatment_materialized_at = now(), "
+                "treatment_build_lease_until = NULL, "
+                "household_summary = '{\"selected_primary_count\":1}'::jsonb, "
+                "creation_response = '{\"marketable_population\":1}'::jsonb "
+                "WHERE campaign_id = %s"
+            ),
+            params=(building_campaign,),
+            expected_sqlstates=("23514",),
+        )
+        lakebase_migrate._expect_database_rejection(
+            cur,
+            savepoint="invalid_ready_response_contract",
+            statement=(
+                "UPDATE mip_app.campaigns "
+                "SET treatment_state = 'ready', treatment_fingerprint = %s, "
+                "treatment_source_snapshot_id = %s, treatment_delta_version = 0, "
+                "treatment_assignment_digest = %s, treatment_candidate_count = 1, "
+                "treatment_selected_primary_count = 1, treatment_count = 1, "
+                "treatment_holdout_count = 0, treatment_materialized_at = now(), "
+                "treatment_build_lease_until = NULL, "
+                "household_summary = '{\"x\":1}'::jsonb, "
+                "creation_response = '{\"y\":1}'::jsonb "
+                "WHERE campaign_id = %s"
+            ),
+            params=("b" * 64, "c" * 64, "d" * 64, building_campaign),
+            expected_sqlstates=("23514",),
+        )
+        household_summary, creation_response = _reviewed_treatment_response(
+            "Building transition proof"
+        )
+        contradictory_summary = json.loads(household_summary)
+        contradictory_summary.update(
+            {
+                "owner_link_household_count": 1,
+                "mailing_address_household_count": 1,
+                "singleton_household_count": 1,
+            }
+        )
+        contradictory_response = json.loads(creation_response)
+        contradictory_response["household_summary"] = contradictory_summary
+        lakebase_migrate._expect_database_rejection(
+            cur,
+            savepoint="contradictory_household_bucket_proof",
+            statement=(
+                "UPDATE mip_app.campaigns "
+                "SET treatment_state = 'ready', treatment_fingerprint = %s, "
+                "treatment_source_snapshot_id = %s, treatment_delta_version = 0, "
+                "treatment_assignment_digest = %s, treatment_candidate_count = 1, "
+                "treatment_selected_primary_count = 1, treatment_count = 1, "
+                "treatment_holdout_count = 0, treatment_materialized_at = now(), "
+                "treatment_build_lease_until = NULL, household_summary = %s::jsonb, "
+                "creation_response = %s::jsonb WHERE campaign_id = %s"
+            ),
+            params=(
+                "b" * 64,
+                "c" * 64,
+                "d" * 64,
+                json.dumps(contradictory_summary, sort_keys=True),
+                json.dumps(contradictory_response, sort_keys=True),
+                building_campaign,
+            ),
+            expected_sqlstates=("23514",),
+        )
+        excessive_households = {
+            **json.loads(household_summary),
+            "household_count": 2,
+            "singleton_household_count": 2,
+        }
+        dedup_mismatch = {
+            **json.loads(household_summary),
+            "enabled": True,
+            "candidate_borrower_count": 2,
+            "selected_primary_count": 2,
+            "suppressed_co_owner_count": 0,
+        }
+        over_cap_summary = {
+            **json.loads(household_summary),
+            "candidate_borrower_count": 10_001,
+            "selected_primary_count": 10_001,
+            "suppressed_co_owner_count": 0,
+            "household_count": 10_001,
+            "singleton_household_count": 10_001,
+        }
+        over_cap_response = {
+            "name": "Building transition proof",
+            "marketable_population": 5_001,
+            "campaign_build_limit": 10_000,
+            "campaign_build_eligible": True,
+            "household_summary": over_cap_summary,
+        }
+        impossible_disabled_summary = {
+            **json.loads(household_summary),
+            "candidate_borrower_count": 2,
+            "selected_primary_count": 1,
+            "suppressed_co_owner_count": 1,
+        }
+        impossible_disabled_response = {
+            "name": "Building transition proof",
+            "marketable_population": 1,
+            "campaign_build_limit": 10_000,
+            "campaign_build_eligible": True,
+            "household_summary": impossible_disabled_summary,
+        }
+        impossible_holdout_response = {
+            "name": "Building transition proof",
+            "marketable_population": 0,
+            "campaign_build_limit": 10_000,
+            "campaign_build_eligible": True,
+            "household_summary": json.loads(household_summary),
+        }
+        impossible_zero_holdout_response = {
+            **impossible_holdout_response,
+            "name": "Zero holdout transition proof",
+        }
+        positive_holdout_response = {
+            **impossible_holdout_response,
+            "name": "Positive holdout transition proof",
+        }
+        cur.execute(
+            """
+            SELECT
+                mip_app.campaign_household_summary_is_reviewed(
+                    %s::jsonb, %s::jsonb, 1, 1
+                ),
+                mip_app.campaign_household_summary_is_reviewed(
+                    %s::jsonb, %s::jsonb, 2, 2
+                )
+            """,
+            (
+                json.dumps(excessive_households, sort_keys=True),
+                json.dumps(
+                    {
+                        "enabled": False,
+                        "dedupe_unit": "borrower",
+                        "primary_contact_strategy": "highest_opportunity_eligible",
+                    },
+                    sort_keys=True,
+                ),
+                json.dumps(dedup_mismatch, sort_keys=True),
+                json.dumps(
+                    {
+                        "enabled": True,
+                        "dedupe_unit": "household",
+                        "primary_contact_strategy": "highest_opportunity_eligible",
+                    },
+                    sort_keys=True,
+                ),
+            ),
+        )
+        assert cur.fetchone() == (False, False)
+        lakebase_migrate._expect_database_rejection(
+            cur,
+            savepoint="over_cap_selected_primary_proof",
+            statement=(
+                "UPDATE mip_app.campaigns "
+                "SET treatment_state = 'ready', treatment_fingerprint = %s, "
+                "treatment_source_snapshot_id = %s, treatment_delta_version = 0, "
+                "treatment_assignment_digest = %s, treatment_candidate_count = 10001, "
+                "treatment_selected_primary_count = 10001, treatment_count = 5001, "
+                "treatment_holdout_count = 5000, treatment_materialized_at = now(), "
+                "treatment_build_lease_until = NULL, household_summary = %s::jsonb, "
+                "creation_response = %s::jsonb WHERE campaign_id = %s"
+            ),
+            params=(
+                "b" * 64,
+                "c" * 64,
+                "d" * 64,
+                json.dumps(over_cap_summary, sort_keys=True),
+                json.dumps(over_cap_response, sort_keys=True),
+                building_campaign,
+            ),
+            expected_sqlstates=("23514",),
+        )
+        lakebase_migrate._expect_database_rejection(
+            cur,
+            savepoint="disabled_dedup_suppressed_proof",
+            statement=(
+                "UPDATE mip_app.campaigns "
+                "SET treatment_state = 'ready', treatment_fingerprint = %s, "
+                "treatment_source_snapshot_id = %s, treatment_delta_version = 0, "
+                "treatment_assignment_digest = %s, treatment_candidate_count = 2, "
+                "treatment_selected_primary_count = 1, treatment_count = 1, "
+                "treatment_holdout_count = 0, treatment_materialized_at = now(), "
+                "treatment_build_lease_until = NULL, household_summary = %s::jsonb, "
+                "creation_response = %s::jsonb WHERE campaign_id = %s"
+            ),
+            params=(
+                "b" * 64,
+                "c" * 64,
+                "d" * 64,
+                json.dumps(impossible_disabled_summary, sort_keys=True),
+                json.dumps(impossible_disabled_response, sort_keys=True),
+                building_campaign,
+            ),
+            expected_sqlstates=("23514",),
+        )
+        for savepoint, campaign, response in (
+            (
+                "absent_holdout_member_proof",
+                building_campaign,
+                impossible_holdout_response,
+            ),
+            (
+                "zero_holdout_member_proof",
+                zero_holdout_campaign,
+                impossible_zero_holdout_response,
+            ),
+        ):
+            lakebase_migrate._expect_database_rejection(
+                cur,
+                savepoint=savepoint,
+                statement=(
+                    "UPDATE mip_app.campaigns "
+                    "SET treatment_state = 'ready', treatment_fingerprint = %s, "
+                    "treatment_source_snapshot_id = %s, treatment_delta_version = 0, "
+                    "treatment_assignment_digest = %s, treatment_candidate_count = 1, "
+                    "treatment_selected_primary_count = 1, treatment_count = 0, "
+                    "treatment_holdout_count = 1, treatment_materialized_at = now(), "
+                    "treatment_build_lease_until = NULL, household_summary = %s::jsonb, "
+                    "creation_response = %s::jsonb WHERE campaign_id = %s"
+                ),
+                params=(
+                    "b" * 64,
+                    "c" * 64,
+                    "d" * 64,
+                    household_summary,
+                    json.dumps(response, sort_keys=True),
+                    campaign,
+                ),
+                expected_sqlstates=("23514",),
+            )
+        cur.execute(
+            """
+            UPDATE mip_app.campaigns
+            SET treatment_state = 'ready', treatment_fingerprint = %s,
+                treatment_source_snapshot_id = %s, treatment_delta_version = 0,
+                treatment_assignment_digest = %s, treatment_candidate_count = 1,
+                treatment_selected_primary_count = 1, treatment_count = 0,
+                treatment_holdout_count = 1, treatment_materialized_at = now(),
+                treatment_build_lease_until = NULL, household_summary = %s::jsonb,
+                creation_response = %s::jsonb
+            WHERE campaign_id = %s
+            RETURNING treatment_state
+            """,
+            (
+                "b" * 64,
+                "c" * 64,
+                "d" * 64,
+                household_summary,
+                json.dumps(positive_holdout_response, sort_keys=True),
+                positive_holdout_campaign,
+            ),
+        )
+        assert cur.fetchone() == ("ready",)
+        cur.execute(
+            """
+            UPDATE mip_app.campaigns
+            SET treatment_state = 'ready',
+                treatment_fingerprint = %s,
+                treatment_source_snapshot_id = %s,
+                treatment_delta_version = 0,
+                treatment_assignment_digest = %s,
+                treatment_candidate_count = 1,
+                treatment_selected_primary_count = 1,
+                treatment_count = 1,
+                treatment_holdout_count = 0,
+                treatment_materialized_at = now(),
+                treatment_build_lease_until = NULL,
+                household_summary = %s::jsonb,
+                creation_response = %s::jsonb
+            WHERE campaign_id = %s
+            RETURNING treatment_state
+            """,
+            (
+                "b" * 64,
+                "c" * 64,
+                "d" * 64,
+                household_summary,
+                creation_response,
+                building_campaign,
+            ),
+        )
+        assert cur.fetchone() == ("ready",)
+        lakebase_migrate._expect_database_rejection(
+            cur,
+            savepoint="ready_campaign_id",
+            statement=(
+                "UPDATE mip_app.campaigns SET campaign_id = %s "
+                "WHERE campaign_id = %s"
+            ),
+            params=(uuid4(), building_campaign),
+            expected_sqlstates=("55000",),
+        )
+        lakebase_migrate._expect_database_rejection(
+            cur,
+            savepoint="ready_created_at",
+            statement=(
+                "UPDATE mip_app.campaigns SET created_at = created_at - interval '1 day' "
+                "WHERE campaign_id = %s"
+            ),
+            params=(building_campaign,),
+            expected_sqlstates=("55000",),
+        )
+        direct_ready_id = uuid4()
+        lakebase_migrate._expect_database_rejection(
+            cur,
+            savepoint="direct_ready_insert",
+            statement=(
+                "INSERT INTO mip_app.campaigns ("
+                "campaign_id, name, owner_email, criteria, treatment_state"
+                ") VALUES (%s, 'Direct ready', %s, '{}'::jsonb, 'ready')"
+            ),
+            params=(direct_ready_id, owner),
+            expected_sqlstates=("23514",),
+        )
+        unleased_campaign = uuid4()
+        lakebase_migrate._expect_database_rejection(
+            cur,
+            savepoint="unleased_building_insert",
+            statement=(
+                "INSERT INTO mip_app.campaigns ("
+                "campaign_id, name, owner_email, criteria, "
+                "idempotency_key, request_payload_hash, treatment_state, "
+                "treatment_materialization_id, treatment_algorithm_version, "
+                "treatment_contract_fingerprint, treatment_build_lease_until"
+                ") VALUES (%s, 'Unleased building', %s, '{}'::jsonb, "
+                "%s, %s, 'building', %s, 'campaign-treatment-v2', %s, NULL)"
+            ),
+            params=(
+                unleased_campaign,
+                owner,
+                str(unleased_campaign),
+                "e" * 64,
+                unleased_campaign,
+                "f" * 64,
+            ),
+            expected_sqlstates=("23514",),
+        )
+        poisoned_building = uuid4()
+        lakebase_migrate._expect_database_rejection(
+            cur,
+            savepoint="building_with_finalized_proof",
+            statement=(
+                "INSERT INTO mip_app.campaigns ("
+                "campaign_id, name, owner_email, criteria, "
+                "idempotency_key, request_payload_hash, treatment_state, "
+                "treatment_materialization_id, treatment_algorithm_version, "
+                "treatment_contract_fingerprint, treatment_build_lease_until, "
+                "treatment_fingerprint"
+                ") VALUES (%s, 'Poisoned building', %s, '{}'::jsonb, "
+                "%s, %s, 'building', %s, 'campaign-treatment-v2', %s, "
+                "now() + interval '5 minutes', %s)"
+            ),
+            params=(
+                poisoned_building,
+                owner,
+                str(poisoned_building),
+                "0" * 64,
+                poisoned_building,
+                "1" * 64,
+                "2" * 64,
+            ),
+            expected_sqlstates=("23514",),
+        )
+
+    reclaim_campaign = uuid4()
+    old_materialization_id = uuid4()
+    new_materialization_id = uuid4()
+    with psycopg.connect(**postgres_kwargs) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO mip_app.campaigns (
+                campaign_id, name, owner_email, criteria,
+                idempotency_key, request_payload_hash, treatment_state,
+                treatment_materialization_id, treatment_algorithm_version,
+                treatment_contract_fingerprint, treatment_build_lease_until
+            ) VALUES (
+                %s, 'Expired reclaim proof', 'campaign-reclaim@test.example',
+                '{}'::jsonb, %s, %s, 'building', %s,
+                'campaign-treatment-v2', %s,
+                clock_timestamp() + interval '100 milliseconds'
+            )
+            """,
+            (
+                reclaim_campaign,
+                str(reclaim_campaign),
+                "3" * 64,
+                old_materialization_id,
+                "4" * 64,
+            ),
+        )
+    sleep(0.2)
+    with psycopg.connect(**postgres_kwargs) as conn, conn.cursor() as cur:
+        lakebase_migrate._expect_database_rejection(
+            cur,
+            savepoint="expired_reclaim_null_lease",
+            statement=(
+                "UPDATE mip_app.campaigns "
+                "SET treatment_materialization_id = %s, "
+                "treatment_build_lease_until = NULL "
+                "WHERE campaign_id = %s"
+            ),
+            params=(new_materialization_id, reclaim_campaign),
+            expected_sqlstates=("55000",),
+        )
+        cur.execute(
+            """
+            UPDATE mip_app.campaigns
+            SET treatment_materialization_id = %s,
+                treatment_build_lease_until = now() + interval '5 minutes'
+            WHERE campaign_id = %s
+            RETURNING treatment_materialization_id,
+                      treatment_build_lease_until > now()
+            """,
+            (new_materialization_id, reclaim_campaign),
+        )
+        assert cur.fetchone() == (new_materialization_id, True)
 
 
 def test_campaign_json_checks_preserve_existing_rows_and_reject_new_poison(

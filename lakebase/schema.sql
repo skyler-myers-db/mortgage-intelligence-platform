@@ -171,6 +171,147 @@ AS $$
        );
 $$;
 
+CREATE OR REPLACE FUNCTION mip_app.campaign_jsonb_bounded_nonnegative_integer(
+    document JSONB,
+    key_name TEXT,
+    maximum BIGINT
+)
+RETURNS BOOLEAN
+LANGUAGE SQL
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    SELECT CASE
+        WHEN jsonb_typeof(document) = 'object'
+             AND document ? key_name
+             AND jsonb_typeof(document->key_name) = 'number'
+             AND document->>key_name ~ '^(0|[1-9][0-9]{0,7})$'
+        THEN (document->>key_name)::BIGINT BETWEEN 0 AND maximum
+        ELSE FALSE
+    END;
+$$;
+
+CREATE OR REPLACE FUNCTION mip_app.campaign_household_summary_is_reviewed(
+    document JSONB,
+    household_config JSONB,
+    candidate_count BIGINT,
+    selected_primary_count BIGINT
+)
+RETURNS BOOLEAN
+LANGUAGE SQL
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    SELECT (
+        mip_app.campaign_jsonb_has_only_keys(
+            document,
+            ARRAY[
+                'enabled','candidate_borrower_count','selected_primary_count',
+                'suppressed_co_owner_count','household_count',
+                'owner_link_household_count','mailing_address_household_count',
+                'singleton_household_count','primary_contact_strategy','source_assets'
+            ]::TEXT[]
+        )
+        AND mip_app.campaign_jsonb_has_only_keys(
+            household_config,
+            ARRAY['enabled','dedupe_unit','primary_contact_strategy']::TEXT[]
+        )
+        AND jsonb_typeof(household_config->'enabled') = 'boolean'
+        AND household_config->>'primary_contact_strategy'
+            = 'highest_opportunity_eligible'
+        AND (
+            (
+                household_config->'enabled' = 'true'::jsonb
+                AND household_config->>'dedupe_unit' = 'household'
+            )
+            OR (
+                household_config->'enabled' = 'false'::jsonb
+                AND household_config->>'dedupe_unit' = 'borrower'
+            )
+        )
+        AND jsonb_typeof(document->'enabled') = 'boolean'
+        AND document->'enabled' = household_config->'enabled'
+        AND mip_app.campaign_jsonb_bounded_nonnegative_integer(
+            document, 'candidate_borrower_count', 10000000
+        )
+        AND document->>'candidate_borrower_count' = candidate_count::TEXT
+        AND mip_app.campaign_jsonb_bounded_nonnegative_integer(
+            document, 'selected_primary_count', 10000
+        )
+        AND document->>'selected_primary_count' = selected_primary_count::TEXT
+        AND mip_app.campaign_jsonb_bounded_nonnegative_integer(
+            document, 'suppressed_co_owner_count', 10000000
+        )
+        AND document->>'suppressed_co_owner_count'
+            = (candidate_count - selected_primary_count)::TEXT
+        AND (
+            document->'enabled' = 'true'::jsonb
+            OR selected_primary_count = candidate_count
+        )
+        AND CASE
+            WHEN mip_app.campaign_jsonb_bounded_nonnegative_integer(
+                     document, 'household_count', 10000000
+                 )
+                 AND mip_app.campaign_jsonb_bounded_nonnegative_integer(
+                     document, 'owner_link_household_count', 10000000
+                 )
+                 AND mip_app.campaign_jsonb_bounded_nonnegative_integer(
+                     document, 'mailing_address_household_count', 10000000
+                 )
+                 AND mip_app.campaign_jsonb_bounded_nonnegative_integer(
+                     document, 'singleton_household_count', 10000000
+                 )
+            THEN
+                (document->>'household_count')::BIGINT
+                    = (document->>'owner_link_household_count')::BIGINT
+                    + (document->>'mailing_address_household_count')::BIGINT
+                    + (document->>'singleton_household_count')::BIGINT
+                AND (document->>'household_count')::BIGINT <= selected_primary_count
+                AND (
+                    document->'enabled' = 'false'::jsonb
+                    OR (document->>'household_count')::BIGINT = selected_primary_count
+                )
+            ELSE FALSE
+        END
+        AND document->>'primary_contact_strategy' = 'highest_opportunity_eligible'
+        AND document->'source_assets' = (
+            '["mip.gold.household_rollup","mip.gold.borrower_360"]'::jsonb
+        )
+    ) IS TRUE;
+$$;
+
+CREATE OR REPLACE FUNCTION mip_app.campaign_creation_response_is_reviewed(
+    document JSONB,
+    campaign_name TEXT,
+    treatment_count BIGINT,
+    household_summary JSONB
+)
+RETURNS BOOLEAN
+LANGUAGE SQL
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    SELECT (
+        mip_app.campaign_jsonb_has_only_keys(
+            document,
+            ARRAY[
+                'name','marketable_population','campaign_build_limit',
+                'campaign_build_eligible','household_summary'
+            ]::TEXT[]
+        )
+        AND jsonb_typeof(document->'name') = 'string'
+        AND document->>'name' = campaign_name
+        AND mip_app.campaign_jsonb_bounded_nonnegative_integer(
+            document, 'marketable_population', 10000
+        )
+        AND document->>'marketable_population' = treatment_count::TEXT
+        AND jsonb_typeof(document->'campaign_build_limit') = 'number'
+        AND document->>'campaign_build_limit' = '10000'
+        AND document->'campaign_build_eligible' = 'true'::jsonb
+        AND document->'household_summary' = household_summary
+    ) IS TRUE;
+$$;
+
 CREATE OR REPLACE FUNCTION mip_app.campaign_portfolio_criteria_is_reviewed(
     document JSONB
 )
@@ -706,7 +847,9 @@ AS $$
            )
        AND document->>'method' = 'hash_modulo'
        AND jsonb_typeof(document->'size_pct') = 'number'
-       AND (document->>'size_pct')::NUMERIC BETWEEN 0 AND 50;
+       AND (document->>'size_pct')::NUMERIC BETWEEN 0 AND 50
+       AND (document->>'size_pct')::NUMERIC * 100
+           = trunc((document->>'size_pct')::NUMERIC * 100);
 $$;
 
 CREATE OR REPLACE FUNCTION mip_app.campaign_roi_assumptions_is_reviewed(
@@ -874,6 +1017,55 @@ ALTER TABLE mip_app.campaigns
     ADD CONSTRAINT campaigns_treatment_state_chk
     CHECK (treatment_state IN ('legacy_unbound','building','ready','failed'));
 ALTER TABLE mip_app.campaigns
+    DROP CONSTRAINT IF EXISTS campaigns_treatment_reservation_chk;
+ALTER TABLE mip_app.campaigns
+    ADD CONSTRAINT campaigns_treatment_reservation_chk
+    CHECK (
+        treatment_state = 'legacy_unbound'
+        OR (
+            treatment_materialization_id IS NOT NULL
+            AND treatment_algorithm_version = 'campaign-treatment-v2'
+            AND treatment_contract_fingerprint ~ '^[0-9a-f]{64}$'
+            AND length(btrim(idempotency_key)) BETWEEN 1 AND 128
+            AND request_payload_hash ~ '^[0-9a-f]{64}$'
+        ) IS TRUE
+    );
+ALTER TABLE mip_app.campaigns
+    DROP CONSTRAINT IF EXISTS campaigns_treatment_lease_state_chk;
+ALTER TABLE mip_app.campaigns
+    ADD CONSTRAINT campaigns_treatment_lease_state_chk
+    CHECK (
+        treatment_state = 'legacy_unbound'
+        OR (
+            treatment_state = 'building'
+            AND treatment_build_lease_until IS NOT NULL
+        )
+        OR (
+            treatment_state IN ('ready','failed')
+            AND treatment_build_lease_until IS NULL
+        )
+    );
+ALTER TABLE mip_app.campaigns
+    DROP CONSTRAINT IF EXISTS campaigns_nonready_treatment_proof_empty_chk;
+ALTER TABLE mip_app.campaigns
+    ADD CONSTRAINT campaigns_nonready_treatment_proof_empty_chk
+    CHECK (
+        treatment_state NOT IN ('building','failed')
+        OR (
+            treatment_fingerprint IS NULL
+            AND treatment_source_snapshot_id IS NULL
+            AND treatment_delta_version IS NULL
+            AND treatment_assignment_digest IS NULL
+            AND treatment_candidate_count IS NULL
+            AND treatment_selected_primary_count IS NULL
+            AND treatment_count IS NULL
+            AND treatment_holdout_count IS NULL
+            AND treatment_materialized_at IS NULL
+            AND household_summary = '{}'::jsonb
+            AND creation_response IS NULL
+        )
+    );
+ALTER TABLE mip_app.campaigns
     DROP CONSTRAINT IF EXISTS campaigns_treatment_counts_chk;
 ALTER TABLE mip_app.campaigns
     ADD CONSTRAINT campaigns_treatment_counts_chk
@@ -907,7 +1099,27 @@ ALTER TABLE mip_app.campaigns
             AND treatment_count IS NOT NULL
             AND treatment_holdout_count IS NOT NULL
             AND treatment_materialized_at IS NOT NULL
-        )
+            AND treatment_build_lease_until IS NULL
+            AND mip_app.campaign_household_summary_is_reviewed(
+                household_summary,
+                household_dedup,
+                treatment_candidate_count,
+                treatment_selected_primary_count
+            )
+            AND mip_app.campaign_creation_response_is_reviewed(
+                creation_response,
+                name,
+                treatment_count,
+                household_summary
+            )
+            AND CASE
+                WHEN holdout IS NULL THEN treatment_holdout_count = 0
+                WHEN mip_app.campaign_holdout_is_reviewed(holdout) IS TRUE THEN
+                    treatment_holdout_count = 0
+                    OR (holdout->>'size_pct')::NUMERIC > 0
+                ELSE FALSE
+            END
+        ) IS TRUE
     );
 
 CREATE OR REPLACE FUNCTION mip_app.enforce_campaign_treatment_boundary()
@@ -916,19 +1128,64 @@ LANGUAGE plpgsql
 AS $$
 BEGIN
     IF TG_OP = 'INSERT' THEN
-        IF NEW.treatment_state = 'ready' THEN
-            RAISE EXCEPTION 'campaign treatment must pass through building before ready'
+        IF NEW.treatment_state NOT IN ('legacy_unbound', 'building') THEN
+            RAISE EXCEPTION 'campaign treatment must begin in legacy or building state'
+                USING ERRCODE = '23514';
+        END IF;
+        IF NEW.treatment_state = 'building' AND (
+            NEW.treatment_materialization_id IS NULL
+            OR NEW.treatment_algorithm_version
+                IS DISTINCT FROM 'campaign-treatment-v2'
+            OR NEW.treatment_contract_fingerprint IS NULL
+            OR NEW.treatment_contract_fingerprint !~ '^[0-9a-f]{64}$'
+            OR NEW.idempotency_key IS NULL
+            OR length(btrim(NEW.idempotency_key)) NOT BETWEEN 1 AND 128
+            OR NEW.request_payload_hash IS NULL
+            OR NEW.request_payload_hash !~ '^[0-9a-f]{64}$'
+            OR NEW.treatment_build_lease_until IS NULL
+            OR NEW.treatment_build_lease_until <= now()
+        ) THEN
+            RAISE EXCEPTION 'building campaign requires a complete active reservation'
+                USING ERRCODE = '23514';
+        END IF;
+        IF NEW.treatment_state = 'building' AND (
+            NEW.treatment_fingerprint IS NOT NULL
+            OR NEW.treatment_source_snapshot_id IS NOT NULL
+            OR NEW.treatment_delta_version IS NOT NULL
+            OR NEW.treatment_assignment_digest IS NOT NULL
+            OR NEW.treatment_candidate_count IS NOT NULL
+            OR NEW.treatment_selected_primary_count IS NOT NULL
+            OR NEW.treatment_count IS NOT NULL
+            OR NEW.treatment_holdout_count IS NOT NULL
+            OR NEW.treatment_materialized_at IS NOT NULL
+            OR NEW.household_summary IS DISTINCT FROM '{}'::jsonb
+            OR NEW.creation_response IS NOT NULL
+        ) THEN
+            RAISE EXCEPTION 'building campaign cannot carry finalized treatment proof'
                 USING ERRCODE = '23514';
         END IF;
         RETURN NEW;
     END IF;
 
+    IF NEW.campaign_id IS DISTINCT FROM OLD.campaign_id
+       OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
+        RAISE EXCEPTION 'campaign identity and creation chronology are immutable'
+            USING ERRCODE = '55000';
+    END IF;
+
     IF OLD.treatment_state IN ('building','ready','failed') AND (
-        NEW.criteria IS DISTINCT FROM OLD.criteria
+        NEW.name IS DISTINCT FROM OLD.name
+        OR NEW.criteria IS DISTINCT FROM OLD.criteria
         OR NEW.json_contract_version IS DISTINCT FROM OLD.json_contract_version
         OR NEW.suppression_policy IS DISTINCT FROM OLD.suppression_policy
+        OR NEW.message_variants IS DISTINCT FROM OLD.message_variants
+        OR NEW.channel_cascade IS DISTINCT FROM OLD.channel_cascade
+        OR NEW.send_window IS DISTINCT FROM OLD.send_window
         OR NEW.holdout IS DISTINCT FROM OLD.holdout
+        OR NEW.roi_assumptions IS DISTINCT FROM OLD.roi_assumptions
         OR NEW.household_dedup IS DISTINCT FROM OLD.household_dedup
+        OR NEW.idempotency_key IS DISTINCT FROM OLD.idempotency_key
+        OR NEW.request_payload_hash IS DISTINCT FROM OLD.request_payload_hash
         OR NEW.treatment_algorithm_version IS DISTINCT FROM OLD.treatment_algorithm_version
         OR NEW.treatment_contract_fingerprint IS DISTINCT FROM OLD.treatment_contract_fingerprint
     ) THEN
@@ -940,7 +1197,10 @@ BEGIN
        AND NOT (
            OLD.treatment_state = 'building'
            AND NEW.treatment_state = 'building'
+           AND OLD.treatment_build_lease_until IS NOT NULL
+           AND NEW.treatment_build_lease_until IS NOT NULL
            AND OLD.treatment_build_lease_until <= now()
+           AND NEW.treatment_build_lease_until > now()
            AND OLD.treatment_fingerprint IS NULL
            AND OLD.treatment_delta_version IS NULL
        ) THEN
@@ -953,9 +1213,31 @@ BEGIN
             USING ERRCODE = '55000';
     END IF;
 
-    IF OLD.treatment_state = 'ready' AND (
-        NEW.treatment_state IS DISTINCT FROM OLD.treatment_state
-        OR NEW.treatment_fingerprint IS DISTINCT FROM OLD.treatment_fingerprint
+    IF NEW.treatment_state IS DISTINCT FROM OLD.treatment_state
+       AND NOT (
+           OLD.treatment_state = 'building'
+           AND NEW.treatment_state IN ('ready', 'failed')
+       ) THEN
+        RAISE EXCEPTION 'campaign treatment state transition is not allowed'
+            USING ERRCODE = '55000';
+    END IF;
+
+    IF NEW.treatment_state = 'building' AND (
+        NEW.treatment_build_lease_until IS NULL
+        OR NEW.treatment_build_lease_until <= now()
+    ) THEN
+        RAISE EXCEPTION 'building campaign requires an active treatment lease'
+            USING ERRCODE = '23514';
+    END IF;
+
+    IF NEW.treatment_state IN ('ready', 'failed')
+       AND NEW.treatment_build_lease_until IS NOT NULL THEN
+        RAISE EXCEPTION 'terminal campaign treatment state cannot retain a build lease'
+            USING ERRCODE = '23514';
+    END IF;
+
+    IF (
+        NEW.treatment_fingerprint IS DISTINCT FROM OLD.treatment_fingerprint
         OR NEW.treatment_source_snapshot_id IS DISTINCT FROM OLD.treatment_source_snapshot_id
         OR NEW.treatment_delta_version IS DISTINCT FROM OLD.treatment_delta_version
         OR NEW.treatment_assignment_digest IS DISTINCT FROM OLD.treatment_assignment_digest
@@ -964,13 +1246,41 @@ BEGIN
         OR NEW.treatment_count IS DISTINCT FROM OLD.treatment_count
         OR NEW.treatment_holdout_count IS DISTINCT FROM OLD.treatment_holdout_count
         OR NEW.treatment_materialized_at IS DISTINCT FROM OLD.treatment_materialized_at
+        OR NEW.household_summary IS DISTINCT FROM OLD.household_summary
+        OR NEW.creation_response IS DISTINCT FROM OLD.creation_response
+    ) AND NOT (
+        OLD.treatment_state = 'building'
+        AND NEW.treatment_state = 'ready'
     ) THEN
-        RAISE EXCEPTION 'ready campaign treatment manifest is immutable'
+        RAISE EXCEPTION
+            'campaign treatment proof may change only during building-to-ready finalization'
             USING ERRCODE = '55000';
     END IF;
 
-    IF NEW.treatment_state = 'ready' AND OLD.treatment_state <> 'building' THEN
-        RAISE EXCEPTION 'only a building campaign treatment may become ready'
+    IF NEW.treatment_build_lease_until
+       IS DISTINCT FROM OLD.treatment_build_lease_until
+       AND NOT (
+           OLD.treatment_state = 'building'
+           AND (
+               (
+                   NEW.treatment_state = 'building'
+                   AND NEW.treatment_materialization_id
+                       IS DISTINCT FROM OLD.treatment_materialization_id
+                   AND OLD.treatment_build_lease_until IS NOT NULL
+                   AND NEW.treatment_build_lease_until IS NOT NULL
+                   AND OLD.treatment_build_lease_until <= now()
+                   AND NEW.treatment_build_lease_until > now()
+                   AND OLD.treatment_fingerprint IS NULL
+                   AND OLD.treatment_delta_version IS NULL
+               )
+               OR (
+                   NEW.treatment_state IN ('ready', 'failed')
+                   AND NEW.treatment_build_lease_until IS NULL
+               )
+           )
+       ) THEN
+        RAISE EXCEPTION
+            'campaign treatment lease may change only during reclaim or terminal transition'
             USING ERRCODE = '23514';
     END IF;
     RETURN NEW;

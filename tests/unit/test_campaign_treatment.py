@@ -59,6 +59,17 @@ def test_schema_normalized_fractional_holdout_reaches_treatment_materialization(
     assert _holdout_basis_points(holdout) == 110
 
 
+def test_reservation_preserves_absent_optional_json_as_sql_null() -> None:
+    params = CampaignTreatmentCoordinator._reserve_params(
+        _spec(),
+        materialization_id=OLD_MATERIALIZATION_ID,
+        contract_fingerprint="f" * 64,
+    )
+
+    assert params["holdout"] is None
+    assert params["roi_assumptions"] is None
+
+
 def _spec(**updates: Any) -> CampaignTreatmentCreateSpec:
     values: dict[str, Any] = {
         "name": "Ready campaign",

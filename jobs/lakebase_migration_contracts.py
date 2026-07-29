@@ -60,6 +60,10 @@ _APP_ROLE_SEQUENCE_PRIVILEGES: dict[str, tuple[str, ...]] = {
 _APP_ROLE_ROUTINE_PRIVILEGES: dict[tuple[str, str], tuple[str, ...]] = {
     ("campaign_jsonb_has_only_keys", "jsonb, text[]"): ("EXECUTE",),
     ("campaign_jsonb_text_array_is_reviewed", "jsonb, text, integer"): ("EXECUTE",),
+    (
+        "campaign_jsonb_bounded_nonnegative_integer",
+        "jsonb, text, bigint",
+    ): ("EXECUTE",),
     ("campaign_portfolio_criteria_is_reviewed", "jsonb"): ("EXECUTE",),
     ("campaign_replay_filters_are_reviewed", "jsonb"): ("EXECUTE",),
     ("campaign_criteria_is_reviewed", "jsonb"): ("EXECUTE",),
@@ -71,6 +75,14 @@ _APP_ROLE_ROUTINE_PRIVILEGES: dict[tuple[str, str], tuple[str, ...]] = {
     (
         "campaign_json_contract_is_reviewed",
         "jsonb, jsonb, jsonb, jsonb, jsonb, jsonb",
+    ): ("EXECUTE",),
+    (
+        "campaign_household_summary_is_reviewed",
+        "jsonb, jsonb, bigint, bigint",
+    ): ("EXECUTE",),
+    (
+        "campaign_creation_response_is_reviewed",
+        "jsonb, text, bigint, jsonb",
     ): ("EXECUTE",),
     ("enforce_campaign_json_contract", ""): (),
     ("enforce_campaign_treatment_boundary", ""): (),
@@ -332,7 +344,7 @@ _MANAGED_OAUTH_ROLE_ATTRIBUTE_PROFILE = (
     True,  # rolcanlogin
 )
 
-# These six constraints are the only retained schema expressions allowed to
+# These seven constraints are the only retained schema expressions allowed to
 # depend on application-owned code before an upgrade. Their exact dependency
 # is reviewed here and they are dropped under lock before schema.sql runs, so a
 # replaced function body cannot execute during an earlier ALTER/backfill. The
@@ -371,6 +383,55 @@ _QUARANTINED_CONSTRAINT_ROUTINE_CONTRACT: dict[
         "campaigns",
         "campaigns_roi_assumptions_reviewed_shape_chk",
     ): frozenset({("campaign_roi_assumptions_is_reviewed", "jsonb")}),
+    (
+        "mip_app",
+        "campaigns",
+        "campaigns_ready_treatment_manifest_chk",
+    ): frozenset(
+        {
+            (
+                "campaign_household_summary_is_reviewed",
+                "jsonb, jsonb, bigint, bigint",
+            ),
+            (
+                "campaign_creation_response_is_reviewed",
+                "jsonb, text, bigint, jsonb",
+            ),
+            ("campaign_holdout_is_reviewed", "jsonb"),
+        }
+    ),
+}
+
+# The immediately preceding production schema used the same ready-manifest
+# constraint name without application-routine dependencies. Permit only its
+# exact rendered expression during this upgrade transition, then quarantine it
+# under lock like the current custom-code constraint. Once schema.sql runs, the
+# recurring contract above is the only accepted shape.
+_QUARANTINED_CONSTRAINT_LEGACY_EXPRESSION_CONTRACT: dict[
+    tuple[str, str, str],
+    frozenset[str],
+] = {
+    (
+        "mip_app",
+        "campaigns",
+        "campaigns_ready_treatment_manifest_chk",
+    ): frozenset(
+        {
+            "CHECK (treatment_state <> 'ready'::text OR "
+            "treatment_materialization_id IS NOT NULL AND "
+            "treatment_algorithm_version = 'campaign-treatment-v2'::text AND "
+            "treatment_contract_fingerprint ~ '^[0-9a-f]{64}$'::text AND "
+            "treatment_fingerprint ~ '^[0-9a-f]{64}$'::text AND "
+            "treatment_source_snapshot_id ~ '^[0-9a-f]{64}$'::text AND "
+            "treatment_delta_version >= 0 AND "
+            "treatment_assignment_digest ~ '^[0-9a-f]{64}$'::text AND "
+            "treatment_candidate_count IS NOT NULL AND "
+            "treatment_selected_primary_count IS NOT NULL AND "
+            "treatment_count IS NOT NULL AND "
+            "treatment_holdout_count IS NOT NULL AND "
+            "treatment_materialized_at IS NOT NULL)"
+        }
+    ),
 }
 
 # pg_depend omits pinned built-ins, so executable-hook review has two layers:

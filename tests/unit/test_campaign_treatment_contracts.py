@@ -72,9 +72,65 @@ def test_lakebase_manifest_is_ready_only_after_fenced_finalize() -> None:
     assert "CREATE OR REPLACE FUNCTION mip_app.enforce_campaign_treatment_boundary()" in (
         LAKEBASE_SCHEMA
     )
-    assert "NEW.treatment_state = 'ready'" in LAKEBASE_SCHEMA
-    assert "OLD.treatment_state <> 'building'" in LAKEBASE_SCHEMA
-    assert "ready campaign treatment manifest is immutable" in LAKEBASE_SCHEMA
+    assert "NEW.treatment_state NOT IN ('legacy_unbound', 'building')" in LAKEBASE_SCHEMA
+    assert "campaigns_treatment_reservation_chk" in LAKEBASE_SCHEMA
+    assert "campaigns_treatment_lease_state_chk" in LAKEBASE_SCHEMA
+    assert "campaigns_nonready_treatment_proof_empty_chk" in LAKEBASE_SCHEMA
+    assert "campaign_household_summary_is_reviewed" in LAKEBASE_SCHEMA
+    assert "campaign_creation_response_is_reviewed" in LAKEBASE_SCHEMA
+    assert (
+        "(document->>'household_count')::BIGINT "
+        "<= selected_primary_count" in LAKEBASE_SCHEMA
+    )
+    assert (
+        "(document->>'owner_link_household_count')::BIGINT"
+        in LAKEBASE_SCHEMA
+    )
+    assert (
+        "OR (document->>'household_count')::BIGINT = selected_primary_count"
+        in LAKEBASE_SCHEMA
+    )
+    assert "document, 'selected_primary_count', 10000" in LAKEBASE_SCHEMA
+    assert "OR selected_primary_count = candidate_count" in LAKEBASE_SCHEMA
+    assert "WHEN holdout IS NULL THEN treatment_holdout_count = 0" in LAKEBASE_SCHEMA
+    assert "treatment_holdout_count = 0" in LAKEBASE_SCHEMA
+    assert "trunc((document->>'size_pct')::NUMERIC * 100)" in LAKEBASE_SCHEMA
+    assert "building campaign requires a complete active reservation" in LAKEBASE_SCHEMA
+    assert "building campaign cannot carry finalized treatment proof" in LAKEBASE_SCHEMA
+    assert "campaign identity and creation chronology are immutable" in LAKEBASE_SCHEMA
+    assert "NEW.campaign_id IS DISTINCT FROM OLD.campaign_id" in LAKEBASE_SCHEMA
+    assert "NEW.created_at IS DISTINCT FROM OLD.created_at" in LAKEBASE_SCHEMA
+    assert "NEW.treatment_state IS DISTINCT FROM OLD.treatment_state" in LAKEBASE_SCHEMA
+    assert "NEW.treatment_state IN ('ready', 'failed')" in LAKEBASE_SCHEMA
+    assert "campaign treatment state transition is not allowed" in LAKEBASE_SCHEMA
+    assert "building campaign requires an active treatment lease" in LAKEBASE_SCHEMA
+    assert "terminal campaign treatment state cannot retain a build lease" in LAKEBASE_SCHEMA
+    assert "AND OLD.treatment_build_lease_until IS NOT NULL" in LAKEBASE_SCHEMA
+    assert "AND NEW.treatment_build_lease_until IS NOT NULL" in LAKEBASE_SCHEMA
+    assert ") IS TRUE" in LAKEBASE_SCHEMA
+    assert (
+        "campaign treatment proof may change only during building-to-ready finalization"
+        in LAKEBASE_SCHEMA
+    )
+    assert (
+        "campaign treatment lease may change only during reclaim or terminal transition"
+        in LAKEBASE_SCHEMA
+    )
+    for proof_field in (
+        "name",
+        "message_variants",
+        "channel_cascade",
+        "send_window",
+        "roi_assumptions",
+        "idempotency_key",
+        "request_payload_hash",
+        "household_summary",
+        "creation_response",
+    ):
+        assert (
+            f"NEW.{proof_field} IS DISTINCT FROM OLD.{proof_field}"
+            in LAKEBASE_SCHEMA
+        )
     assert "treatment_materialization_id" in LAKEBASE_SCHEMA
     assert "campaigns_active_requires_ready_treatment_chk" in LAKEBASE_SCHEMA
     assert "CHECK (status <> 'active' OR treatment_state = 'ready')" in LAKEBASE_SCHEMA

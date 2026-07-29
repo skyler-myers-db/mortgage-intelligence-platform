@@ -249,6 +249,7 @@ def test_lakebase_migration_facade_preserves_reviewed_import_seams() -> None:
         "_APP_TRIGGER_CONTRACT",
         "_AUDIT_SEQUENCE_DEFAULT_EXPRESSION",
         "_COLUMN_PRIVILEGE_NAMES",
+        "_QUARANTINED_CONSTRAINT_LEGACY_EXPRESSION_CONTRACT",
         "_QUARANTINED_CONSTRAINT_ROUTINE_CONTRACT",
         "_UNSAFE_ROLE_ATTRIBUTE_NAMES",
         "_apply_app_role_grants",

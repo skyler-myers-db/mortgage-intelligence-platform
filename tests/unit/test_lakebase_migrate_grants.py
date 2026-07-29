@@ -1589,10 +1589,15 @@ def test_reviewed_campaign_constraints_are_quarantined_by_exact_dependency() -> 
             "constraint_expression",
             table=table,
             hook_name=constraint,
-            expression=f"CHECK (mip_app.{next(iter(dependencies))[0]}(criteria))",
+            expression="CHECK ("
+            + " AND ".join(
+                f"mip_app.{dependency_name}(criteria)"
+                for dependency_name, _dependency_arguments in sorted(dependencies)
+            )
+            + ")",
             dependency_schema="mip_app",
-            dependency_name=next(iter(dependencies))[0],
-            dependency_arguments=next(iter(dependencies))[1],
+            dependency_name=dependency_name,
+            dependency_arguments=dependency_arguments,
             security_definer=False,
             owned_by_executor=True,
         )
@@ -1601,6 +1606,7 @@ def test_reviewed_campaign_constraints_are_quarantined_by_exact_dependency() -> 
             table,
             constraint,
         ), dependencies in lakebase_migrate._QUARANTINED_CONSTRAINT_ROUTINE_CONTRACT.items()
+        for dependency_name, dependency_arguments in dependencies
     ]
     cursor = _Cursor(fetchall_results=[rows])
 
@@ -1611,7 +1617,38 @@ def test_reviewed_campaign_constraints_are_quarantined_by_exact_dependency() -> 
     lakebase_migrate._quarantine_reviewed_constraints(quarantine_cursor, reviewed)
     statements = [statement for statement, _params in quarantine_cursor.executed]
     assert statements[0] == 'LOCK TABLE "mip_app"."campaigns" IN ACCESS EXCLUSIVE MODE'
-    assert len([statement for statement in statements if "DROP CONSTRAINT" in statement]) == 6
+    assert len([statement for statement in statements if "DROP CONSTRAINT" in statement]) == len(
+        lakebase_migrate._QUARANTINED_CONSTRAINT_ROUTINE_CONTRACT
+    )
+
+
+def test_legacy_ready_manifest_constraint_is_quarantined_by_exact_expression() -> None:
+    key, expressions = next(
+        iter(lakebase_migrate._QUARANTINED_CONSTRAINT_LEGACY_EXPRESSION_CONTRACT.items())
+    )
+    schema, table, constraint = key
+    expression = next(iter(expressions))
+    row = _schema_hook_row(
+        "constraint_expression",
+        schema=schema,
+        table=table,
+        hook_name=constraint,
+        expression=expression,
+        dependency_kind=None,
+        dependency_schema=None,
+        dependency_name=None,
+        security_definer=False,
+    )
+
+    assert lakebase_migrate._preflight_executable_schema_hooks(
+        _Cursor(fetchall_results=[[row]])
+    ) == {key}
+
+    drifted_row = (*row[:4], f"{expression[:-1]} OR TRUE)", *row[5:])
+    with pytest.raises(RuntimeError, match="constraint_dependency_mismatch"):
+        lakebase_migrate._preflight_executable_schema_hooks(
+            _Cursor(fetchall_results=[[drifted_row]])
+        )
 
 
 def test_exact_trigger_postflight_failure_rolls_back_schema_and_seed(

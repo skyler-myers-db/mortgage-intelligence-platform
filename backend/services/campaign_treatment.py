@@ -581,8 +581,14 @@ class CampaignTreatmentCoordinator:
             "message_variants": json.dumps(spec.message_variants, sort_keys=True, default=str),
             "channel_cascade": json.dumps(spec.channel_cascade, sort_keys=True),
             "send_window": json.dumps(spec.send_window, sort_keys=True),
-            "holdout": json.dumps(spec.holdout, sort_keys=True),
-            "roi_assumptions": json.dumps(spec.roi_assumptions, sort_keys=True),
+            "holdout": (
+                None if spec.holdout is None else json.dumps(spec.holdout, sort_keys=True)
+            ),
+            "roi_assumptions": (
+                None
+                if spec.roi_assumptions is None
+                else json.dumps(spec.roi_assumptions, sort_keys=True)
+            ),
             "household_dedup": json.dumps(spec.household_dedup.model_dump(mode="json")),
             "idempotency_key": spec.idempotency_key,
             "request_payload_hash": spec.request_payload_hash,

@@ -111,6 +111,9 @@ from jobs.lakebase_migration_contracts import (
     _MANAGED_PROVIDER_PUBLIC_VIEW_CONTRACT as _MANAGED_PROVIDER_PUBLIC_VIEW_CONTRACT,
 )
 from jobs.lakebase_migration_contracts import (
+    _QUARANTINED_CONSTRAINT_LEGACY_EXPRESSION_CONTRACT as _QUARANTINED_CONSTRAINT_LEGACY_EXPRESSION_CONTRACT,
+)
+from jobs.lakebase_migration_contracts import (
     _QUARANTINED_CONSTRAINT_ROUTINE_CONTRACT as _QUARANTINED_CONSTRAINT_ROUTINE_CONTRACT,
 )
 from jobs.lakebase_migration_contracts import (

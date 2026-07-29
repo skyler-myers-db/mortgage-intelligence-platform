@@ -11,6 +11,7 @@ from jobs.lakebase_migration_contracts import (
     _MANAGED_OAUTH_ROLE_FUNCTION_ACLS,
     _MANAGED_OAUTH_ROLE_FUNCTION_SOURCE_BYTES,
     _MANAGED_OAUTH_ROLE_FUNCTION_SOURCE_SHA256,
+    _QUARANTINED_CONSTRAINT_LEGACY_EXPRESSION_CONTRACT,
     _QUARANTINED_CONSTRAINT_ROUTINE_CONTRACT,
     _SAFE_SCHEMA_HOOK_FUNCTION_NAMES,
     _SAFE_SCHEMA_HOOK_PG_CATALOG_OPERATORS,
@@ -138,7 +139,7 @@ def _preflight_executable_schema_hooks(
     closed on every non-system dependency. Module 0 intentionally has no
     generated columns, user rewrite rules, or row policies.
 
-    Six campaign CHECK constraints legitimately call reviewed ``mip_app``
+    Seven campaign CHECK constraints legitimately call reviewed ``mip_app``
     validators. They must match the exact code-owned dependency contract and
     be owned by the migration executor; the caller drops them under table lock
     before schema.sql and the post-seed suffix recreates them.
@@ -378,6 +379,7 @@ def _preflight_executable_schema_hooks(
         tuple[str, str, str],
         set[tuple[str, str]],
     ] = {}
+    reviewed_constraint_expressions: dict[tuple[str, str, str], set[str]] = {}
     present_reviewed_constraint_keys: set[tuple[str, str, str]] = set()
     present_audit_sequence_default = False
     audit_sequence_expressions: set[str] = set()
@@ -401,6 +403,7 @@ def _preflight_executable_schema_hooks(
         kind = str(hook_kind)
         if kind == "constraint_expression" and (key in _QUARANTINED_CONSTRAINT_ROUTINE_CONTRACT):
             present_reviewed_constraint_keys.add(key)
+            reviewed_constraint_expressions.setdefault(key, set()).add(str(expression))
         if kind == "column_default" and key == _AUDIT_SEQUENCE_DEFAULT_KEY:
             present_audit_sequence_default = True
             audit_sequence_expressions.add(str(expression))
@@ -482,7 +485,17 @@ def _preflight_executable_schema_hooks(
     for key in present_reviewed_constraint_keys:
         actual = reviewed_dependencies.get(key, set())
         expected = set(_QUARANTINED_CONSTRAINT_ROUTINE_CONTRACT[key])
-        if actual != expected:
+        legacy_expressions = _QUARANTINED_CONSTRAINT_LEGACY_EXPRESSION_CONTRACT.get(
+            key,
+            frozenset(),
+        )
+        observed_expressions = reviewed_constraint_expressions.get(key, set())
+        exact_legacy_transition = (
+            not actual
+            and len(observed_expressions) == 1
+            and observed_expressions.issubset(legacy_expressions)
+        )
+        if actual != expected and not exact_legacy_transition:
             unexpected.append(("constraint_dependency_mismatch", *key, actual, expected))
 
     if present_audit_sequence_default and (

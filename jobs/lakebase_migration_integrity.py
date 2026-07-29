@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 from uuid import uuid4
 
@@ -85,6 +86,25 @@ def _run_outreach_integrity_probe(
     disposition_audit_sequence = generation_audit_sequence - 1
     outcome_audit_sequence = generation_audit_sequence - 2
     growth_audit_sequence = generation_audit_sequence - 3
+    household_summary = {
+        "enabled": False,
+        "candidate_borrower_count": 1,
+        "selected_primary_count": 1,
+        "suppressed_co_owner_count": 0,
+        "household_count": 1,
+        "owner_link_household_count": 0,
+        "mailing_address_household_count": 0,
+        "singleton_household_count": 1,
+        "primary_contact_strategy": "highest_opportunity_eligible",
+        "source_assets": ["mip.gold.household_rollup", "mip.gold.borrower_360"],
+    }
+    creation_response = {
+        "name": "Deployment integrity probe",
+        "marketable_population": 1,
+        "campaign_build_limit": 10_000,
+        "campaign_build_eligible": True,
+        "household_summary": household_summary,
+    }
     owns_connection = connection is None
     conn = connection or psycopg.connect(**conn_kwargs, autocommit=False)
     try:
@@ -104,18 +124,22 @@ def _run_outreach_integrity_probe(
                 """
                 INSERT INTO mip_app.campaigns (
                     campaign_id, name, owner_email, status, criteria,
+                    idempotency_key, request_payload_hash,
                     treatment_state, treatment_materialization_id,
                     treatment_algorithm_version, treatment_contract_fingerprint,
                     treatment_build_lease_until
                 ) VALUES (
                     %s, %s, %s, 'draft', '{}'::jsonb,
-                    'building', %s, 'campaign-treatment-v2', %s, now() + interval '5 minutes'
+                    %s, %s, 'building', %s, 'campaign-treatment-v2', %s,
+                    now() + interval '5 minutes'
                 )
                 """,
                 (
                     campaign_id,
                     "Deployment integrity probe",
                     actor,
+                    str(campaign_id),
+                    "8" * 64,
                     campaign_id,
                     "3" * 64,
                 ),
@@ -208,10 +232,19 @@ def _run_outreach_integrity_probe(
                     treatment_count = 1,
                     treatment_holdout_count = 0,
                     treatment_materialized_at = now(),
-                    treatment_build_lease_until = NULL
+                    treatment_build_lease_until = NULL,
+                    household_summary = %s::jsonb,
+                    creation_response = %s::jsonb
                 WHERE campaign_id = %s
                 """,
-                ("4" * 64, "5" * 64, "6" * 64, campaign_id),
+                (
+                    "4" * 64,
+                    "5" * 64,
+                    "6" * 64,
+                    json.dumps(household_summary, sort_keys=True),
+                    json.dumps(creation_response, sort_keys=True),
+                    campaign_id,
+                ),
             )
             valid_intent, valid_intent_hash = _run_campaign_decision_negative_probes(
                 cur,
