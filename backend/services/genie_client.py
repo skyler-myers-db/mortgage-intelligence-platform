@@ -55,9 +55,13 @@ log = logging.getLogger(__name__)
 # Terminal Genie message states. The API docs list COMPLETED as the
 # happy path; FAILED / CANCELED / EXPIRED are terminal errors; SUBMITTED
 # / IN_PROGRESS / EXECUTING_QUERY are transitional states we poll past.
+# QUERY_RESULT_EXPIRED added 2026-07-31 (QA review M7): treating it as
+# transitional made _poll_message spin to its full timeout on a result
+# that can never come back. The live-progress stage map derives from
+# these sets — extend HERE, not there, so the two can't drift (QA H3).
 _GENIE_SUCCESS_STATES: frozenset[str] = frozenset({"COMPLETED"})
 _GENIE_TERMINAL_ERROR_STATES: frozenset[str] = frozenset(
-    {"FAILED", "CANCELED", "CANCELLED", "EXPIRED", "TIMEOUT"}
+    {"FAILED", "CANCELED", "CANCELLED", "EXPIRED", "TIMEOUT", "QUERY_RESULT_EXPIRED"}
 )
 
 
@@ -141,6 +145,9 @@ class GenieClient:
     _POLL_INITIAL_S: float = 0.5
     _POLL_MAX_S: float = 2.0
     _POLL_BACKOFF: float = 1.35
+    # Single-GET budget for the live-progress peek; a hung peek must not
+    # hold the browser's poll loop for the full ask() timeout.
+    _PEEK_TIMEOUT_S: float = 10.0
 
     def __init__(
         self,
@@ -202,17 +209,7 @@ class GenieClient:
             else:
                 conv_id = conversation_id
                 msg_id = self._append_message(conv_id, question)
-
-            message = self._poll_message(conv_id, msg_id)
-            genie_status = str(message.get("status") or message.get("state") or "") or None
-            extracted = self._extract_message_payload(message)
-            sql_rows: list[dict[str, Any]] | None = None
-            if extracted["sql_query"]:
-                sql_rows = self._fetch_query_result(
-                    conv_id,
-                    msg_id,
-                    attachment_id=extracted["query_attachment_id"],
-                )
+            return self._finish_message(conv_id, msg_id, q_hash=q_hash, start=start)
         except BaseException as exc:
             emit(
                 log,
@@ -228,12 +225,113 @@ class GenieClient:
             )
             raise
 
+    def submit_message(
+        self,
+        question: str,
+        conversation_id: str | None = None,
+    ) -> tuple[str, str]:
+        """Create the Genie message WITHOUT waiting for the answer.
+
+        Async-lifecycle primitive (2026-07): the router submits the question,
+        hands ``(conversation_id, message_id)`` to the browser, and the
+        browser drives ``peek_message`` polling for live progress before
+        asking the server to ``resume_message`` for the governed completion.
+        """
+        q_hash = _question_hash(question)
+        emit(
+            log,
+            "genie_query_submit",
+            dependency="genie",
+            operation="submit",
+            statement_hash=q_hash,
+            conversation_id=conversation_id,
+        )
+        if conversation_id is None:
+            return self._start_conversation(question)
+        return conversation_id, self._append_message(conversation_id, question)
+
+    def peek_message(self, conversation_id: str, message_id: str) -> dict[str, Any]:
+        """Return the raw message body from ONE poll GET (no waiting loop).
+
+        Pure read for the live-progress surface. Raw thoughts in the body
+        never cross the API boundary — the router translates them through
+        ``genie_reasoning_trace_from_thoughts`` before responding.
+        """
+        url = (
+            f"{self._host}/api/2.0/genie/spaces/{self._space_id}"
+            f"/conversations/{conversation_id}/messages/{message_id}"
+        )
+        return self._get(url, timeout_s=self._PEEK_TIMEOUT_S)
+
+    def resume_message(self, conversation_id: str, message_id: str) -> GenieResponse:
+        """Complete an already-submitted message: poll → extract → rows.
+
+        Companion to ``submit_message``. The polling budget is the same as
+        ``ask``; when the browser only calls this after progress reports a
+        terminal state, the internal poll returns on its first iteration.
+        """
+        emit(
+            log,
+            "genie_query_resume",
+            dependency="genie",
+            operation="resume",
+            conversation_id=conversation_id,
+            message_id=message_id,
+        )
+        start = time.monotonic()
+        try:
+            return self._finish_message(
+                conversation_id,
+                message_id,
+                # No question text on resume; correlate by message id so
+                # start/end pairs stay balanced per operation (QA M1).
+                q_hash=f"resume:{message_id}",
+                start=start,
+                operation="resume",
+            )
+        except BaseException as exc:
+            emit(
+                log,
+                "genie_query_error",
+                level=logging.WARNING,
+                dependency="genie",
+                operation="resume",
+                statement_hash=f"resume:{message_id}",
+                conversation_id=conversation_id,
+                message_id=message_id,
+                duration_ms=round((time.monotonic() - start) * 1000.0, 2),
+                outcome="error",
+                exc_type=type(exc).__name__,
+                exc_msg=str(exc)[:500],
+            )
+            raise
+
+    def _finish_message(
+        self,
+        conv_id: str,
+        msg_id: str,
+        *,
+        q_hash: str,
+        start: float,
+        operation: str = "ask",
+    ) -> GenieResponse:
+        message = self._poll_message(conv_id, msg_id)
+        genie_status = str(message.get("status") or message.get("state") or "") or None
+        extracted = self._extract_message_payload(message)
+        sql_rows: list[dict[str, Any]] | None = None
+        if extracted["sql_query"]:
+            sql_rows = self._fetch_query_result(
+                conv_id,
+                msg_id,
+                attachment_id=extracted["query_attachment_id"],
+            )
+
         elapsed_ms = int((time.monotonic() - start) * 1000)
         emit(
             log,
             "genie_query_end",
             dependency="genie",
-            operation="ask",
+            operation=operation,
             statement_hash=q_hash,
             duration_ms=elapsed_ms,
             outcome="ok",
@@ -672,6 +770,35 @@ class ResilientGenieClient:
         )
         return self._resilient.call(
             lambda: self._client.ask(question, conversation_id=conversation_id)
+        )
+
+    def submit_message(
+        self,
+        question: str,
+        conversation_id: str | None = None,
+    ) -> tuple[str, str]:
+        # Answer-path call: shares the ask() breaker so a sick Genie fails
+        # the submission fast and the router can fall back to the same
+        # degraded response the synchronous path produces.
+        self._resilient.breaker.force_close_if_config_changed(
+            lambda: not is_placeholder_space_id(self._client.space_id)
+        )
+        return self._resilient.call(
+            lambda: self._client.submit_message(question, conversation_id=conversation_id)
+        )
+
+    def peek_message(self, conversation_id: str, message_id: str) -> dict[str, Any]:
+        # Advisory progress read. Breaker-free (like ping): a transient peek
+        # failure must not trip the answer-path breaker mid-question, and an
+        # open breaker must not stop the browser from watching an in-flight
+        # message finish.
+        return self._client.peek_message(conversation_id, message_id)
+
+    def resume_message(self, conversation_id: str, message_id: str) -> GenieResponse:
+        # Governed completion of an already-submitted message; answer path,
+        # so it rides the breaker exactly like ask().
+        return self._resilient.call(
+            lambda: self._client.resume_message(conversation_id, message_id)
         )
 
     def post_message_comment(

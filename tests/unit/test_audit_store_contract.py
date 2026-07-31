@@ -176,6 +176,20 @@ _MUTATION_AUDIT_EXPECTATIONS: dict[str, tuple[str, ...]] = {
     "record_lead_outcome": ("store.record_outcome(",),
     "property_loan_lookup": ("lookup_property_loan(",),
     "genie_message": ("_required_audit_write",),
+    # Async Genie lifecycle (2026-07-31): submission audits the live message
+    # creation (or resolves deterministically through the shared audited guard
+    # battery); the pure progress poll is exempt; completion writes the same
+    # genie.run_query row as the synchronous endpoint.
+    # Submit must show BOTH live-path audits: the message-creation row and
+    # the degraded-fallback's genie.run_query row (adversarial review
+    # 2026-07-31 — the token set is deliberately non-vacuous).
+    "genie_message_submit": (
+        "_deterministic_genie_response(",
+        "genie.message_submitted",
+        "genie.run_query",
+    ),
+    "genie_message_progress": ("AUDIT EXEMPT: read-only progress poll",),
+    "genie_message_complete": ("_required_audit_write", "_finalize_genie_response("),
     "genie_action": ("handle_genie_action(",),
     "genie_feedback": ("record_genie_feedback(",),
     "run_growth_agent_workflow": ("_run_workflow(",),

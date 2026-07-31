@@ -27,6 +27,39 @@ class GenieMessageRequest(BaseModel):
         return normalized
 
 
+class GenieProgressRequest(BaseModel):
+    """Poll one in-flight Genie message (async lifecycle).
+
+    POST body (not GET query params) so the signed token never lands in
+    access logs or proxy URL captures.
+    """
+
+    conversation_id: str = Field(min_length=1, max_length=256)
+    message_id: str = Field(min_length=1, max_length=256)
+    progress_token: str = Field(min_length=1, max_length=4_096)
+
+
+class GenieCompleteRequest(BaseModel):
+    """Finish an in-flight Genie message into a governed answer.
+
+    ``question`` must hash-match the token minted at submit, which makes the
+    guarded prompt and the completed answer cryptographically the same turn.
+    """
+
+    conversation_id: str = Field(min_length=1, max_length=256)
+    message_id: str = Field(min_length=1, max_length=256)
+    progress_token: str = Field(min_length=1, max_length=4_096)
+    question: str = Field(min_length=1, max_length=4_000)
+
+    @field_validator("question")
+    @classmethod
+    def _question_must_contain_text(cls, value: str) -> str:
+        normalized = re.sub(r"\s+", " ", value).strip()
+        if not normalized:
+            raise ValueError("question is required")
+        return normalized
+
+
 _PROTECTED_PROMPT_TERMS = (
     "age",
     "asian",

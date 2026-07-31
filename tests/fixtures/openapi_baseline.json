@@ -5609,6 +5609,43 @@
         "title": "GenieActionSuggestion",
         "type": "object"
       },
+      "GenieCompleteRequest": {
+        "description": "Finish an in-flight Genie message into a governed answer.\n\n``question`` must hash-match the token minted at submit, which makes the\nguarded prompt and the completed answer cryptographically the same turn.",
+        "properties": {
+          "conversation_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "message_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Message Id",
+            "type": "string"
+          },
+          "progress_token": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Progress Token",
+            "type": "string"
+          },
+          "question": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Question",
+            "type": "string"
+          }
+        },
+        "required": [
+          "conversation_id",
+          "message_id",
+          "progress_token",
+          "question"
+        ],
+        "title": "GenieCompleteRequest",
+        "type": "object"
+      },
       "GenieDataFreshness": {
         "properties": {
           "asset": {
@@ -5947,6 +5984,99 @@
         "title": "GenieNativeVisualization",
         "type": "object"
       },
+      "GenieProgressRequest": {
+        "description": "Poll one in-flight Genie message (async lifecycle).\n\nPOST body (not GET query params) so the signed token never lands in\naccess logs or proxy URL captures.",
+        "properties": {
+          "conversation_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "message_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Message Id",
+            "type": "string"
+          },
+          "progress_token": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Progress Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "conversation_id",
+          "message_id",
+          "progress_token"
+        ],
+        "title": "GenieProgressRequest",
+        "type": "object"
+      },
+      "GenieProgressResponse": {
+        "description": "Live progress for one in-flight Genie message.\n\nServer-owned vocabulary only: ``status`` is the raw Genie lifecycle enum\n(platform-authored, not model text), ``stage``/``stage_label`` are our\nbounded mapping of it, and ``reasoning_trace`` reuses the same\nprivate-thought \u2192 public-process translation as the completed answer.\n``sql_preview`` is the same generated SQL the completed proof already\nexposes \u2014 surfaced earlier, capped, never model prose.",
+        "properties": {
+          "error_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Hint"
+          },
+          "failed": {
+            "default": false,
+            "title": "Failed",
+            "type": "boolean"
+          },
+          "reasoning_trace": {
+            "items": {
+              "$ref": "#/components/schemas/GenieReasoningStep"
+            },
+            "title": "Reasoning Trace",
+            "type": "array"
+          },
+          "sql_preview": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sql Preview"
+          },
+          "stage": {
+            "title": "Stage",
+            "type": "string"
+          },
+          "stage_label": {
+            "title": "Stage Label",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "terminal": {
+            "default": false,
+            "title": "Terminal",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "status",
+          "stage",
+          "stage_label"
+        ],
+        "title": "GenieProgressResponse",
+        "type": "object"
+      },
       "GenieProof": {
         "properties": {
           "conversation_id": {
@@ -6106,6 +6236,74 @@
           }
         },
         "title": "GenieStartResponse",
+        "type": "object"
+      },
+      "GenieSubmitResponse": {
+        "description": "Wire contract for `/api/genie/message/submit` (async lifecycle).\n\n``completed=True`` means the turn resolved deterministically before any\nlive Genie call (guardrail refusal, sales-ops, footprint, degraded\nfallback) and ``response`` carries the full governed answer \u2014 identical\nbody to the synchronous endpoint. ``completed=False`` means a live Genie\nmessage was created; the browser polls `/message/progress` with the\nsigned ``progress_token`` and finishes via `/message/complete`.",
+        "properties": {
+          "completed": {
+            "title": "Completed",
+            "type": "boolean"
+          },
+          "conversation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversation Id"
+          },
+          "message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message Id"
+          },
+          "progress_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress Token"
+          },
+          "question_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Question Hash"
+          },
+          "response": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GenieMessageResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "completed"
+        ],
+        "title": "GenieSubmitResponse",
         "type": "object"
       },
       "GenieVisualizationSpec": {
@@ -16282,6 +16480,165 @@
         ]
       }
     },
+    "/api/genie/message/complete": {
+      "post": {
+        "deprecated": true,
+        "description": "Async lifecycle step 3: governed completion of the submitted turn.\n\nThe token proves the same actor's submit created this exact message and\nthe hash check pins ``question`` to the prompt that passed the guard\nbattery there, so the output-policy check, audit write, action-token\nissuance, and session recording below stay byte-identical in meaning to\nthe synchronous endpoint's live tail. No conversation-ownership lookup\nhere: for a fresh conversation the Lakebase row intentionally does not\nexist until this very call finalizes \u2014 the token is the authorization.",
+        "operationId": "post_api_genie_message_complete_genie_message_complete",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenieCompleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenieMessageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Genie Message Complete",
+        "tags": [
+          "genie"
+        ]
+      }
+    },
+    "/api/genie/message/progress": {
+      "post": {
+        "deprecated": true,
+        "description": "Async lifecycle step 2: one pure poll of the in-flight message.\n\nToken-authorized, side-effect free, and bounded: the response carries\nthe platform status enum, our server-owned stage vocabulary, the same\npublic process steps the completed answer would expose, and the\ngenerated SQL (already part of the completed proof contract) \u2014 never\nraw model thoughts or upstream error text.",
+        "operationId": "post_api_genie_message_progress_genie_message_progress",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenieProgressRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenieProgressResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Genie Message Progress",
+        "tags": [
+          "genie"
+        ]
+      }
+    },
+    "/api/genie/message/submit": {
+      "post": {
+        "deprecated": true,
+        "description": "Async lifecycle step 1: guard the prompt, then create the message.\n\nRuns the identical deterministic battery as the synchronous endpoint\n(via the shared ``_deterministic_genie_response``). Deterministic turns\n\u2014 refusals, sales-ops, footprint, degraded fallbacks \u2014 resolve inline\nwith ``completed=True`` so they stay instant and fully audited. Live\nturns return ``(conversation_id, message_id)`` plus a signed progress\ntoken that authorizes the in-flight window; session ownership is still\nrecorded only at completion, exactly like the sync path.",
+        "operationId": "post_api_genie_message_submit_genie_message_submit",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenieMessageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenieSubmitResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Genie Message Submit",
+        "tags": [
+          "genie"
+        ]
+      }
+    },
     "/api/genie/start": {
       "post": {
         "deprecated": true,
@@ -23464,6 +23821,162 @@
           }
         },
         "summary": "Genie Message",
+        "tags": [
+          "genie"
+        ]
+      }
+    },
+    "/api/v1/genie/message/complete": {
+      "post": {
+        "description": "Async lifecycle step 3: governed completion of the submitted turn.\n\nThe token proves the same actor's submit created this exact message and\nthe hash check pins ``question`` to the prompt that passed the guard\nbattery there, so the output-policy check, audit write, action-token\nissuance, and session recording below stay byte-identical in meaning to\nthe synchronous endpoint's live tail. No conversation-ownership lookup\nhere: for a fresh conversation the Lakebase row intentionally does not\nexist until this very call finalizes \u2014 the token is the authorization.",
+        "operationId": "post_api_v1_genie_message_complete_genie_message_complete",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenieCompleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenieMessageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Genie Message Complete",
+        "tags": [
+          "genie"
+        ]
+      }
+    },
+    "/api/v1/genie/message/progress": {
+      "post": {
+        "description": "Async lifecycle step 2: one pure poll of the in-flight message.\n\nToken-authorized, side-effect free, and bounded: the response carries\nthe platform status enum, our server-owned stage vocabulary, the same\npublic process steps the completed answer would expose, and the\ngenerated SQL (already part of the completed proof contract) \u2014 never\nraw model thoughts or upstream error text.",
+        "operationId": "post_api_v1_genie_message_progress_genie_message_progress",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenieProgressRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenieProgressResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Genie Message Progress",
+        "tags": [
+          "genie"
+        ]
+      }
+    },
+    "/api/v1/genie/message/submit": {
+      "post": {
+        "description": "Async lifecycle step 1: guard the prompt, then create the message.\n\nRuns the identical deterministic battery as the synchronous endpoint\n(via the shared ``_deterministic_genie_response``). Deterministic turns\n\u2014 refusals, sales-ops, footprint, degraded fallbacks \u2014 resolve inline\nwith ``completed=True`` so they stay instant and fully audited. Live\nturns return ``(conversation_id, message_id)`` plus a signed progress\ntoken that authorizes the in-flight window; session ownership is still\nrecorded only at completion, exactly like the sync path.",
+        "operationId": "post_api_v1_genie_message_submit_genie_message_submit",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenieMessageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenieSubmitResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Genie Message Submit",
         "tags": [
           "genie"
         ]

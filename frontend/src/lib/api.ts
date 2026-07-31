@@ -193,6 +193,29 @@ export interface GenieFeedbackResult {
   audit_event_id?: string | null;
 }
 
+/** Async Genie lifecycle (2026-07): `/api/genie/message/submit` body. */
+export interface GenieSubmitResult {
+  completed: boolean;
+  conversation_id?: string | null;
+  message_id?: string | null;
+  progress_token?: string | null;
+  question_hash?: string | null;
+  /** Full governed answer when the turn resolved deterministically. */
+  response?: GenieResult | null;
+}
+
+/** Live progress for one in-flight Genie turn (server-owned vocabulary). */
+export interface GenieLiveProgress {
+  status: string;
+  stage: string;
+  stage_label: string;
+  terminal: boolean;
+  failed: boolean;
+  reasoning_trace: Array<{ kind: string; content: string }>;
+  sql_preview?: string | null;
+  error_hint?: string | null;
+}
+
 export interface AuditEventRow {
   event_id: string;
   actor: string;
@@ -1699,6 +1722,54 @@ export const api = {
     postJson<GenieResult, { question: string; conversation_id?: string | null }>(
       '/api/genie/message',
       { question, conversation_id: conversationId ?? null },
+      signal,
+    ),
+
+  genieSubmit: (question: string, conversationId?: string | null, signal?: AbortSignal) =>
+    postJson<GenieSubmitResult, { question: string; conversation_id?: string | null }>(
+      '/api/genie/message/submit',
+      { question, conversation_id: conversationId ?? null },
+      signal,
+    ),
+
+  genieProgress: (
+    conversationId: string,
+    messageId: string,
+    progressToken: string,
+    signal?: AbortSignal,
+  ) =>
+    postJson<
+      GenieLiveProgress,
+      { conversation_id: string; message_id: string; progress_token: string }
+    >(
+      '/api/genie/message/progress',
+      { conversation_id: conversationId, message_id: messageId, progress_token: progressToken },
+      signal,
+    ),
+
+  genieComplete: (
+    conversationId: string,
+    messageId: string,
+    progressToken: string,
+    question: string,
+    signal?: AbortSignal,
+  ) =>
+    postJson<
+      GenieResult,
+      {
+        conversation_id: string;
+        message_id: string;
+        progress_token: string;
+        question: string;
+      }
+    >(
+      '/api/genie/message/complete',
+      {
+        conversation_id: conversationId,
+        message_id: messageId,
+        progress_token: progressToken,
+        question,
+      },
       signal,
     ),
 

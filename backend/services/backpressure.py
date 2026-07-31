@@ -94,6 +94,18 @@ class BackpressureController:
             return RouteBudget("health", settings.mip_rate_limit_default_per_minute, None)
         if path.startswith("/api/telemetry"):
             return RouteBudget("telemetry", settings.mip_rate_limit_telemetry_per_minute, None)
+        if path == "/api/genie/message/progress":
+            # Live-progress poll (2026-07-31): a token-authorized single-GET
+            # peek, not an answer-path call. It gets the default read bucket —
+            # a 1–2s browser poll (~40/min) inside the shared 30/min "genie"
+            # budget would drain the bucket that gates asks, completes, and
+            # the human-approval /actions call. No "genie" dependency slot
+            # either: peek is breaker-free by design, and letting held peek
+            # slots saturate the concurrency semaphore would starve real
+            # answer traffic exactly when Genie hangs.
+            return RouteBudget(
+                "genie-progress", settings.mip_rate_limit_default_per_minute, None
+            )
         if path.startswith("/api/genie"):
             return RouteBudget("genie", settings.mip_rate_limit_genie_per_minute, "genie")
         if method.upper() in {"POST", "PUT", "PATCH", "DELETE"}:

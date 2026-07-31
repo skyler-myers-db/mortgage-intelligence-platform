@@ -2006,7 +2006,10 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
   });
 
   test('ask-genie: shows governed progress while a live request is pending', async ({ page }) => {
-    await page.route('**/api/genie/message', async (route) => {
+    // Async lifecycle: the UI's first call is /message/submit; delaying it
+    // holds the null-progress "Waiting for Genie response" placeholder on
+    // screen (live stage labels only start with the first progress poll).
+    await page.route('**/api/genie/message/submit', async (route) => {
       await new Promise((resolve) => setTimeout(resolve, 1500));
       await route.continue();
     });

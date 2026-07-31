@@ -147,7 +147,13 @@ in `backend/services/campaign_treatment_runtime.py` that
 `MIP_BYPASS_STARTUP_CHECKS` cannot reach, `/api/health` reports
 `status="degraded"` with `campaign_treatment_runtime:
 "disabled_baseline_deploy"`, and UC `MODIFY` quiesce remains the
-authoritative backstop underneath. After green health and
+authoritative backstop underneath. Deliberate scope (ratified with the
+2026-07-31 adversarial review): the marker gates the campaign-treatment
+write funnel specifically — the authority the promotion pipeline proves —
+not every Lakebase mutation. Outreach approvals and other app-state writes
+on an un-promoted deploy remain governed by their own approval gates and
+audit trails; widening the marker to all mutations would recreate the
+whole-app outage semantics this restructure exists to remove. After green health and
 hosted-tool proof, the signed last-good record is persisted and verified while
 runtime `MODIFY` remains quiesced. Capture then restores exact treatment access
 and repeats App, resource, health, and signed-lease verification. The protected

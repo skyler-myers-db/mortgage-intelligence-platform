@@ -14,6 +14,9 @@ const mocks = vi.hoisted(() => ({
   genieAction: vi.fn(),
   genieFeedback: vi.fn(),
   genieStart: vi.fn(),
+  genieSubmit: vi.fn(),
+  genieProgress: vi.fn(),
+  genieComplete: vi.fn(),
   refreshWorkspace: vi.fn(),
   setDrawer: vi.fn(),
   setGenieOpen: vi.fn(),
@@ -28,9 +31,36 @@ vi.mock('../../lib/api', async () => {
       genieAction: mocks.genieAction,
       genieFeedback: mocks.genieFeedback,
       genieStart: mocks.genieStart,
+      genieSubmit: mocks.genieSubmit,
+      genieProgress: mocks.genieProgress,
+      genieComplete: mocks.genieComplete,
     },
   };
 });
+
+/**
+ * Async-lifecycle default: submit resolves the turn inline (the
+ * deterministic `completed=true` contract), delegating to the per-test
+ * `mocks.genie` programming so every existing turn fixture — including
+ * rejected ApiError turns — keeps driving the conversation exactly as it
+ * did through the legacy single call. The live polling path is pinned
+ * separately below and in genieAsk.test.ts.
+ */
+function armInlineSubmitDelegate() {
+  mocks.genieSubmit.mockImplementation(
+    async (question: string, conversationId?: string | null) => ({
+      completed: true,
+      conversation_id: null,
+      message_id: null,
+      progress_token: null,
+      question_hash: null,
+      // Two-arg delegation on purpose: this suite's turn assertions pin
+      // (question, conversationId) exactly; the abort signal is covered by
+      // the live-path test and genieAsk.test.ts.
+      response: await mocks.genie(question, conversationId),
+    }),
+  );
+}
 
 vi.mock('../AppContext', () => ({
   useApp: () => ({
@@ -101,6 +131,7 @@ describe('floating Genie conversation continuity', () => {
     Object.values(mocks).forEach((mock) => mock.mockReset());
     installLocalStorage();
     setViewport(1_440, 900);
+    armInlineSubmitDelegate();
     mocks.genieStart.mockResolvedValue(START);
     mocks.genieFeedback.mockResolvedValue({ accepted: true });
     container = document.createElement('div');
@@ -299,5 +330,52 @@ describe('floating Genie conversation continuity', () => {
     expect(source?.textContent).not.toContain('Databricks Genie Conversation API');
     expect(source?.getAttribute('aria-label')).toBe('Answer source: Governed action result');
     expect(mocks.refreshWorkspace).toHaveBeenCalledTimes(1);
+  });
+
+  it('threads the conversation id through a LIVE submit → progress → complete turn', async () => {
+    mocks.genieStart.mockResolvedValue({ ...START, conversation_id: null });
+    mocks.genieSubmit.mockResolvedValue({
+      completed: false,
+      conversation_id: 'conv-live',
+      message_id: 'msg-live-1',
+      progress_token: 'tok-live',
+      question_hash: 'hash-live',
+    });
+    mocks.genieProgress.mockResolvedValue({
+      status: 'COMPLETED',
+      stage: 'complete',
+      stage_label: 'Answer ready — verifying and formatting',
+      terminal: true,
+      failed: false,
+      reasoning_trace: [],
+      sql_preview: null,
+      error_hint: null,
+    });
+    mocks.genieComplete.mockResolvedValue(
+      answer({ conversation_id: 'conv-live', message_id: 'msg-live-1' }),
+    );
+
+    mount();
+    act(() => setInputValue(input(), 'How many borrowers are in the money?'));
+    await clickAndFlush(button('Ask'));
+    await waitUntil(() => mocks.genieComplete.mock.calls.length === 1);
+    await waitUntil(
+      () => container.textContent?.includes('The governed opportunity result is ready.') ?? false,
+    );
+
+    // complete() must receive the ids + token minted at submit.
+    expect(mocks.genieComplete.mock.calls[0].slice(0, 4)).toEqual([
+      'conv-live',
+      'msg-live-1',
+      'tok-live',
+      'How many borrowers are in the money?',
+    ]);
+
+    // The NEXT ask must continue the live conversation.
+    act(() => setInputValue(input(), 'Break this down by state.'));
+    await clickAndFlush(button('Ask'));
+    await waitUntil(() => mocks.genieSubmit.mock.calls.length === 2);
+    expect(mocks.genieSubmit.mock.calls[1][0]).toBe('Break this down by state.');
+    expect(mocks.genieSubmit.mock.calls[1][1]).toBe('conv-live');
   });
 });

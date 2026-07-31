@@ -2979,11 +2979,116 @@ a.lineage-node__chip:focus-visible {
   font-size: var(--fs-11);
   line-height: var(--lh-snug);
 }
+.genie-progress__label { flex: 1; min-width: 0; }
+.genie-progress__elapsed {
+  color: var(--text-3);
+  font-size: var(--fs-11);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.genie-progress__stages {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.genie-progress__stage {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  color: var(--text-3);
+  font-size: var(--fs-11);
+  white-space: nowrap;
+}
+.genie-progress__stage:not(:last-child)::after {
+  content: '';
+  width: var(--sp-4);
+  height: 1px;
+  background: var(--bg-3);
+  margin-left: var(--sp-1);
+}
+.genie-progress__stage-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--bg-3);
+  color: var(--accent-contrast);
+  flex: none;
+}
+.genie-progress__stage.is-done { color: var(--text-2); }
+.genie-progress__stage.is-done .genie-progress__stage-dot {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.genie-progress__stage.is-active { color: var(--text-1); font-weight: 600; }
+.genie-progress__stage.is-active .genie-progress__stage-dot {
+  border-color: var(--accent);
+  box-shadow: 0 0 8px var(--accent-soft);
+  animation: genie-progress-pulse 1.2s ease-in-out infinite;
+}
+@keyframes genie-progress-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(0.82); opacity: 0.6; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .genie-progress__stage.is-active .genie-progress__stage-dot { animation: none; }
+}
+.genie-progress__trace {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.genie-progress__trace-step {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  color: var(--text-2);
+  font-size: var(--fs-11);
+  line-height: var(--lh-snug);
+}
+.genie-progress__trace-step svg { flex: none; transform: translateY(1px); }
+.genie-progress__sql summary {
+  cursor: pointer;
+  color: var(--text-3);
+  font-size: var(--fs-11);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  user-select: none;
+}
+.genie-progress__sql summary:hover { color: var(--text-2); }
+.genie-progress__sql pre {
+  margin: var(--sp-2) 0 0;
+  padding: var(--sp-3);
+  background: var(--bg-1);
+  border: 1px solid var(--bg-3);
+  border-radius: var(--r-md);
+  font-size: var(--fs-11);
+  line-height: var(--lh-body);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 180px;
+  overflow-y: auto;
+}
 .genie-progress--dense { gap: var(--sp-1); }
 .genie-progress--dense .genie-progress__head {
   font-size: var(--fs-12);
   font-weight: 500;
 }
+.genie-progress--dense .genie-progress__stage-label { display: none; }
+.genie-progress--dense .genie-progress__stage.is-active .genie-progress__stage-label {
+  display: inline;
+}
+.genie-progress--dense .genie-progress__sql pre { max-height: 120px; }
 
 /* ============================================================
    AUDIT LOG ROW
@@ -4684,6 +4789,43 @@ a.lineage-node__chip:focus-visible {
   font-variant-numeric: tabular-nums;
   margin-bottom: var(--sp-2);
 }
+/* Single-row results render as a value-first stat strip instead of a
+   one-row table. DOM stays dt→dd for <dl> conformance; column-reverse
+   puts the value on top like the KPI cards. */
+.genie-answer__stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  margin: var(--sp-3) 0 0;
+}
+.genie-answer__stat {
+  display: flex;
+  flex-direction: column-reverse;
+  gap: var(--sp-1);
+  min-width: 96px;
+  flex: 1 1 auto;
+  padding: var(--sp-3);
+  background: var(--bg-1);
+  border: 1px solid var(--bg-3);
+  border-radius: var(--r-md);
+}
+.genie-answer__stat-label {
+  color: var(--text-3);
+  font-size: var(--fs-11);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.genie-answer__stat-value {
+  margin: 0;
+  color: var(--text-1);
+  font-size: var(--fs-18);
+  font-weight: 600;
+  letter-spacing: var(--tracking-tight);
+  line-height: var(--lh-tight);
+  overflow-wrap: anywhere;
+}
+.genie-answer__stat-value.num { font-variant-numeric: tabular-nums; }
 .genie-answer__table-scroll {
   overflow-x: auto;
   margin-top: var(--sp-3);

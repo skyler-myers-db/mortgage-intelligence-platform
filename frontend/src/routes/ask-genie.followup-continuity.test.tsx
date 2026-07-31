@@ -22,6 +22,23 @@ vi.mock('../lib/api', () => ({
     growthAgentCapabilities: (...args: unknown[]) => growthAgentCapabilities(...args),
     genieStart: (...args: unknown[]) => genieStart(...args),
     genie: (...args: unknown[]) => genie(...args),
+    // Async lifecycle: the route asks through submit → the deterministic
+    // completed=true envelope delegates to the per-test `genie` fixture so
+    // every existing turn programming (including rejections) still drives
+    // the conversation. Live polling specifics are pinned in
+    // genieAsk.test.ts and the GenieChat continuity suite.
+    genieSubmit: async (
+      question: string,
+      conversationId?: string | null,
+      signal?: AbortSignal,
+    ) => ({
+      completed: true,
+      conversation_id: null,
+      message_id: null,
+      progress_token: null,
+      question_hash: null,
+      response: await genie(question, conversationId, signal),
+    }),
   },
   ApiError: class ApiError extends Error {
     status = 500;

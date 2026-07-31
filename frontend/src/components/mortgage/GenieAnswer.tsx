@@ -25,6 +25,7 @@ import {
   usePinnedInsights,
 } from '../../lib/pinnedInsights';
 import {
+  coerceNumber,
   formatCell,
   humanizeKey,
   isIdentifierColumn,
@@ -283,43 +284,72 @@ export function GenieAnswer({
           valueCol={chart.valueCol}
         />
       )}
-      {visibleRows.length > 0 && columns.length > 0 && (
-        <>
-          <div
-            className="genie-answer__table-scroll"
-            role="region"
-            aria-label="Genie answer table"
-            tabIndex={0}
-          >
-            <table className="genie-answer__table">
-              <thead>
-                <tr>
-                  {columns.map((c) => (
-                    <th key={c}>{humanizeKey(c)}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {visibleRows.map((row, i) => (
-                  <tr key={i}>
-                    {columns.map((c) => {
-                      const v = row[c];
-                      const isNum = typeof v === 'number' && !isIdentifierColumn(c);
-                      return (
-                        <td key={c} className={isNum ? 'num' : undefined}>
-                          {formatCell(c, v)}
-                        </td>
-                      );
-                    })}
+      {/* A single METRIC row is a set of headline facts, not a table —
+          render it as a stat strip (value-first, KPI style) so answers like
+          "count + avg spread + refreshed at" read at a glance. A single
+          RECORD row (identifier columns, e.g. a borrower id) keeps the
+          table: masked ids as KPI headlines misread, and borrower_list
+          plans already render their own list above (QA M6). */}
+      {visibleRows.length === 1 &&
+      columns.length > 0 &&
+      plan.kind === 'none' &&
+      columns.every((c) => !isIdentifierColumn(c)) &&
+      // Warehouse rows arrive as strings — coerce like the chart layer does.
+      columns.some((c) => coerceNumber(visibleRows[0][c]) !== null) ? (
+        <dl className="genie-answer__stats" aria-label="Genie answer headline facts">
+          {columns.map((c) => {
+            const v = visibleRows[0][c];
+            const isNum = coerceNumber(v) !== null && !isIdentifierColumn(c);
+            return (
+              <div key={c} className="genie-answer__stat">
+                <dt className="genie-answer__stat-label">{humanizeKey(c)}</dt>
+                <dd className={`genie-answer__stat-value${isNum ? ' num' : ''}`}>
+                  {formatCell(c, v)}
+                </dd>
+              </div>
+            );
+          })}
+        </dl>
+      ) : (
+        visibleRows.length > 0 &&
+        columns.length > 0 && (
+          <>
+            <div
+              className="genie-answer__table-scroll"
+              role="region"
+              aria-label="Genie answer table"
+              tabIndex={0}
+            >
+              <table className="genie-answer__table">
+                <thead>
+                  <tr>
+                    {columns.map((c) => (
+                      <th key={c}>{humanizeKey(c)}</th>
+                    ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {hiddenRows > 0 && (
-            <div className="genie-answer__more">+{hiddenRows} more row{hiddenRows === 1 ? '' : 's'}</div>
-          )}
-        </>
+                </thead>
+                <tbody>
+                  {visibleRows.map((row, i) => (
+                    <tr key={i}>
+                      {columns.map((c) => {
+                        const v = row[c];
+                        const isNum = typeof v === 'number' && !isIdentifierColumn(c);
+                        return (
+                          <td key={c} className={isNum ? 'num' : undefined}>
+                            {formatCell(c, v)}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {hiddenRows > 0 && (
+              <div className="genie-answer__more">+{hiddenRows} more row{hiddenRows === 1 ? '' : 's'}</div>
+            )}
+          </>
+        )
       )}
       {payload.proof && showProof && typeof document !== 'undefined' && createPortal(
         <>

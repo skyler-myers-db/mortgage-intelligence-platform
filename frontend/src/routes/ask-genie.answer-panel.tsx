@@ -1,5 +1,6 @@
 import type { RefObject } from 'react';
 import type { GenieActionSuggestion, GenieAnswer as GenieAnswerShape } from '../types';
+import type { GenieLiveProgress } from '../lib/api';
 import type { WarmingUpState } from '../lib/useWarmingUpRetry';
 import { Button, Chip, EvidenceChip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
@@ -34,6 +35,10 @@ export interface AskGenieAnswerPanelProps {
   /** Full sample-question list; the composer shows the first four. */
   sampleQuestions: string[];
   payload: GenieAnswerShape | null;
+  /** Live lifecycle telemetry for the in-flight turn (null when idle). */
+  liveProgress?: GenieLiveProgress | null;
+  /** Epoch ms when the current ask started; drives the elapsed ticker. */
+  askStartedAt?: number | null;
   submittedQuestion: string | null;
   onFollowUp: (question: string, conversationId: string | null) => void;
   onAction: (action: GenieActionSuggestion) => void;
@@ -52,6 +57,8 @@ export function AskGenieAnswerPanel({
   onRetry,
   sampleQuestions,
   payload,
+  liveProgress = null,
+  askStartedAt = null,
   submittedQuestion,
   onFollowUp,
   onAction,
@@ -168,7 +175,7 @@ export function AskGenieAnswerPanel({
         {loading && !warmingUp && (
           <div className="surface surface--inset mt-4">
             <div className="surface__body">
-              <GenieProgress />
+              <GenieProgress progress={liveProgress} startedAt={askStartedAt} />
             </div>
           </div>
         )}

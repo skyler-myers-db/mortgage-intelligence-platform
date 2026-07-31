@@ -26,6 +26,7 @@ from fastapi.testclient import TestClient
 import backend.api.health as health_mod  # noqa: F401 -- imported for monkeypatch surface parity
 import backend.services.health_probes as health_probes
 import backend.services.lakebase_identity_gate as identity_gate
+import backend.services.resilience as resilience
 from backend.main import (
     _campaign_treatment_runtime_disabled_handler,
     _lifespan,
@@ -44,8 +45,19 @@ from backend.services.campaign_treatment_runtime import (
     campaign_treatment_runtime_state,
     require_campaign_treatment_runtime,
 )
+from backend.services.forced_degraded import _reset_forced_degraded_for_tests
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _reset_breakers() -> None:
+    # The health assertions read real breaker + probe-cache state; earlier
+    # tests in the same process (e.g. genie failure-path suites) may leave a
+    # breaker open or a stale degraded probe snapshot cached.
+    resilience._reset_breakers_for_tests()
+    _reset_forced_degraded_for_tests()
+    health_probes._probe_cache.clear()
 
 
 def _enter_lifespan() -> None:

@@ -140,6 +140,50 @@ class GenieMessageResponse(BaseModel):
     genie_status: str | None = None
 
 
+class GenieSubmitResponse(BaseModel):
+    """Wire contract for `/api/genie/message/submit` (async lifecycle).
+
+    ``completed=True`` means the turn resolved deterministically before any
+    live Genie call (guardrail refusal, sales-ops, footprint, degraded
+    fallback) and ``response`` carries the full governed answer — identical
+    body to the synchronous endpoint. ``completed=False`` means a live Genie
+    message was created; the browser polls `/message/progress` with the
+    signed ``progress_token`` and finishes via `/message/complete`.
+    """
+
+    completed: bool
+    conversation_id: str | None = None
+    message_id: str | None = None
+    #: HMAC-signed claims binding (actor, conversation, message, question
+    #: hash, expiry). Progress/complete calls are refused without it, which
+    #: is what authorizes the in-flight window before the completed turn is
+    #: recorded to Lakebase session ownership.
+    progress_token: str | None = None
+    question_hash: str | None = None
+    response: GenieMessageResponse | None = None
+
+
+class GenieProgressResponse(BaseModel):
+    """Live progress for one in-flight Genie message.
+
+    Server-owned vocabulary only: ``status`` is the raw Genie lifecycle enum
+    (platform-authored, not model text), ``stage``/``stage_label`` are our
+    bounded mapping of it, and ``reasoning_trace`` reuses the same
+    private-thought → public-process translation as the completed answer.
+    ``sql_preview`` is the same generated SQL the completed proof already
+    exposes — surfaced earlier, capped, never model prose.
+    """
+
+    status: str
+    stage: str
+    stage_label: str
+    terminal: bool = False
+    failed: bool = False
+    reasoning_trace: list[GenieReasoningStep] = Field(default_factory=list)
+    sql_preview: str | None = None
+    error_hint: str | None = None
+
+
 _SAMPLE_QUESTIONS_CACHE: tuple[list[str], ...] | None = None
 
 

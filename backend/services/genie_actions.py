@@ -572,6 +572,29 @@ def issue_response_action_tokens(
     response.actions = signed_actions
 
 
+def sign_genie_claims(claims: dict[str, Any]) -> str:
+    """Public HMAC signer for Genie-surface claims (progress tokens, actions).
+
+    Same key material, rotation grace, and wire format as action tokens so
+    one audited secret path covers every signed Genie surface. Callers must
+    include a distinct ``kind`` claim; verifiers reject foreign kinds.
+    """
+
+    return _sign_action_claims(claims)
+
+
+def decode_genie_claims(token: str) -> dict[str, Any]:
+    """Public verifier counterpart to :func:`sign_genie_claims`."""
+
+    return _decode_action_token(token)
+
+
+def genie_claims_key_id() -> str:
+    """Expose the current signing key id for claims that carry ``kid``."""
+
+    return _current_action_token_key()[0]
+
+
 def _decode_action_token(token: str) -> dict[str, Any]:
     try:
         body, supplied_sig = token.split(".", 1)

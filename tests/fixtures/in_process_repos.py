@@ -939,6 +939,25 @@ class InProcessMockGenieAnswerRepository:
             )
         return response
 
+    def respond_existing(
+        self,
+        question: str,
+        *,
+        conversation_id: str,
+        message_id: str,
+    ) -> GenieMessageResponse:
+        """Async-lifecycle seam parity: complete an 'already submitted' turn.
+
+        The fixture has no live message store, so it derives the same answer
+        as :meth:`respond` and stamps the caller's identifiers, matching the
+        production contract that the completed body carries the submitted
+        conversation/message identity.
+        """
+        response = self.respond(question, conversation_id=conversation_id)
+        return response.model_copy(
+            update={"message_id": message_id, "genie_status": "COMPLETED"}
+        )
+
 
 # Fixture per-state rollups — covers a representative current-coverage shape
 # so /api/geo/state-rollups returns realistic schemas under test and

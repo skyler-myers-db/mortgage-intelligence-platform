@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { useNavigate } from 'react-router';
 import { useApp } from '../AppContext';
-import { ApiError, api } from '../../lib/api';
+import { ApiError, api, isAbortError, type GenieLiveProgress } from '../../lib/api';
+import { GenieLiveError, askGenieLive } from '../../lib/genieAsk';
 import type { GenieActionSuggestion, GenieAnswer as GenieAnswerShape } from '../../types';
 import { Icon } from '../Icon';
 import { Button, Chip, EvidenceChip } from '../Primitives';
@@ -68,6 +69,23 @@ export function GenieChat() {
   const [msgs, setMsgs] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState('');
   const [typing, setTyping] = useState(false);
+  // Live lifecycle telemetry for the in-flight turn (stage, public process
+  // steps, generated SQL) driven by the submit → progress → complete flow.
+  const [liveProgress, setLiveProgress] = useState<GenieLiveProgress | null>(null);
+  const [askStartedAt, setAskStartedAt] = useState<number | null>(null);
+  // Abort + generation control for the in-flight live turn (QA M3): a
+  // conversation reset or New thread must stop the poll loop, and a turn
+  // that resolves AFTER a reset must not re-persist the previous actor's
+  // conversation id or append an orphan bubble to the cleared thread.
+  const askAbortRef = useRef<AbortController | null>(null);
+  const askGenerationRef = useRef(0);
+
+  useEffect(
+    () => () => {
+      askAbortRef.current?.abort();
+    },
+    [],
+  );
   const [sampleQuestions, setSampleQuestions] = useState<string[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(() => readGenieConversationId());
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -95,10 +113,16 @@ export function GenieChat() {
   useEffect(() => {
     const onActorBoundaryReset = () => {
       suppressBootstrapConversationRef.current = true;
+      // Invalidate + stop any in-flight turn so a late resolution cannot
+      // re-persist the previous actor's conversation id (QA M3).
+      askGenerationRef.current += 1;
+      askAbortRef.current?.abort();
       setConversationId(null);
       setMsgs([]);
       setInput('');
       setTyping(false);
+      setLiveProgress(null);
+      setAskStartedAt(null);
     };
     window.addEventListener(GENIE_CONVERSATION_RESET_EVENT, onActorBoundaryReset);
     return () => {
@@ -168,8 +192,23 @@ export function GenieChat() {
     setMsgs((m) => [...m, { who: 'user', text: trimmed }]);
     setInput('');
     setTyping(true);
+    setLiveProgress(null);
+    setAskStartedAt(Date.now());
+    const generation = ++askGenerationRef.current;
+    askAbortRef.current?.abort();
+    const controller = new AbortController();
+    askAbortRef.current = controller;
+    const isCurrent = () => askGenerationRef.current === generation;
     try {
-      const res = (await api.genie(trimmed, activeConversationId)) as GenieAnswerShape;
+      const res = (await askGenieLive(trimmed, activeConversationId, {
+        signal: controller.signal,
+        onProgress: (p) => {
+          if (isCurrent()) setLiveProgress(p);
+        },
+      })) as GenieAnswerShape;
+      // A reset/new-thread while in flight invalidates this turn: never
+      // re-persist its conversation id or append to the cleared thread.
+      if (!isCurrent()) return;
       const returnedConversationId = res.conversation_id ?? null;
       if (returnedConversationId && shouldPersistConversation(res)) {
         setConversationId(returnedConversationId);
@@ -177,16 +216,23 @@ export function GenieChat() {
       }
       setMsgs((m) => [...m, { who: 'ai', payload: res, sources: sourceAssetsFor(res) }]);
     } catch (err) {
+      if (!isCurrent() || isAbortError(err)) return;
       if (err instanceof ApiError && err.status === 403) {
         setConversationId(null);
         clearGenieConversationState({ notify: true });
       }
+      const answer =
+        err instanceof GenieLiveError
+          ? err.message
+          : err instanceof Error
+            ? `Genie session reset: ${err.message}`
+            : 'Genie session reset.';
       setMsgs((m) => [
         ...m,
         {
           who: 'ai',
           payload: {
-            answer: err instanceof Error ? `Genie session reset: ${err.message}` : 'Genie session reset.',
+            answer,
             source: 'degraded',
             trusted_assets: [],
           },
@@ -194,7 +240,11 @@ export function GenieChat() {
         },
       ]);
     } finally {
-      setTyping(false);
+      if (isCurrent()) {
+        setTyping(false);
+        setLiveProgress(null);
+        setAskStartedAt(null);
+      }
     }
   };
 
@@ -477,7 +527,9 @@ export function GenieChat() {
           )}
           {typing && (
             <div className="genie__msg genie__msg--ai">
-              <div className="bubble"><GenieProgress dense /></div>
+              <div className="bubble">
+                <GenieProgress dense progress={liveProgress} startedAt={askStartedAt} />
+              </div>
             </div>
           )}
           {msgs.length === 0 && !typing && (

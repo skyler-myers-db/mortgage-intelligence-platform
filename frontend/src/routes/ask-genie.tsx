@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router';
-import { ApiError, api } from '../lib/api';
+import { ApiError, api, type GenieLiveProgress } from '../lib/api';
+import { GenieLiveError, askGenieLive } from '../lib/genieAsk';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import type {
   ComposePlanResponse,
@@ -141,6 +142,14 @@ export default function AskGenie() {
   const [submittedQuestion, setSubmittedQuestion] = useState<string | null>(null);
   const [submittedConversationId, setSubmittedConversationId] = useState<string | null>(null);
   const [submitToken, setSubmitToken] = useState<number>(0);
+  // Live lifecycle telemetry for the in-flight turn (stage rail, public
+  // process steps, generated SQL) from the submit → progress → complete flow.
+  const [liveProgress, setLiveProgress] = useState<GenieLiveProgress | null>(null);
+  const [askStartedAt, setAskStartedAt] = useState<number | null>(null);
+  // Generation counter: an aborted ask settles AFTER its replacement has
+  // already started, and its cleanup must not clobber the new turn's
+  // ticker/rail state (QA M2 — sample-question chips can re-ask mid-flight).
+  const askGenerationRef = useRef(0);
 
   const {
     data: payload,
@@ -148,7 +157,24 @@ export default function AskGenie() {
     error,
     manualRetry,
   } = useWarmingUpRetry<GenieAnswerShape>(
-    (signal) => api.genie(submittedQuestion ?? '', submittedConversationId, signal) as Promise<GenieAnswerShape>,
+    (signal) => {
+      const generation = ++askGenerationRef.current;
+      setAskStartedAt(Date.now());
+      setLiveProgress(null);
+      return (
+        askGenieLive(submittedQuestion ?? '', submittedConversationId, {
+          signal,
+          onProgress: (p) => {
+            if (askGenerationRef.current === generation) setLiveProgress(p);
+          },
+        }) as Promise<GenieAnswerShape>
+      ).finally(() => {
+        if (askGenerationRef.current === generation) {
+          setLiveProgress(null);
+          setAskStartedAt(null);
+        }
+      });
+    },
     [submittedQuestion, submittedConversationId, submitToken],
     {
       enabled: submittedQuestion !== null && submittedQuestion.length > 0,
@@ -164,9 +190,11 @@ export default function AskGenie() {
 
   const loading = submittedQuestion !== null && payload === null && warmingUp === null && error === null;
   const errorMsg = error
-    ? error instanceof Error
-      ? `Couldn't reach Genie: ${error.message}`
-      : "Couldn't reach Genie."
+    ? error instanceof GenieLiveError
+      ? error.message
+      : error instanceof Error
+        ? `Couldn't reach Genie: ${error.message}`
+        : "Couldn't reach Genie."
     : null;
 
   useEffect(() => {
@@ -744,6 +772,8 @@ export default function AskGenie() {
           onRetry={manualRetry}
           sampleQuestions={sampleQuestions}
           payload={payload}
+          liveProgress={liveProgress}
+          askStartedAt={askStartedAt}
           submittedQuestion={submittedQuestion}
           onFollowUp={ask}
           onAction={runAction}

@@ -259,6 +259,42 @@ class DatabricksGenieRepository:
             raise
         return _adapt_genie_response(question, result, sql_client=self._sql_client)
 
+    def respond_existing(
+        self,
+        question: str,
+        *,
+        conversation_id: str,
+        message_id: str,
+    ) -> GenieMessageResponse:
+        """Complete an already-submitted live message (async lifecycle).
+
+        Applies :meth:`respond`'s LIVE-path policy pipeline — breaker
+        handling, text-only SQL repair, adaptation, degraded fallback — to a
+        message the submit endpoint already created. The legacy
+        interceptor-first posture (``mip_genie_live_first=False``) is
+        deliberately absent here: under that posture the submit endpoint
+        resolves the whole turn through :meth:`respond` and never creates a
+        live message, so no turn reaches this method. ``question`` is the
+        token-verified prompt of record for repair/adaptation/audit; it was
+        prompt-guarded at submit before the message existed.
+        """
+        breaker_state = self._genie.resilient.breaker.state
+        if breaker_state == "open":
+            return self._degraded(question, kind=DependencyDownError.KIND_BREAKER_OPEN)
+        try:
+            result = self._genie.resume_message(conversation_id, message_id)
+            if _needs_genie_sql_repair(question, result):
+                result = self._repair_text_only_genie_answer(
+                    question=question,
+                    original=result,
+                    conversation_id=conversation_id,
+                )
+        except DependencyDownError as exc:
+            return self._degraded(question, kind=exc.kind)
+        except GenieClientError:
+            raise
+        return _adapt_genie_response(question, result, sql_client=self._sql_client)
+
     def _repair_text_only_genie_answer(
         self,
         *,

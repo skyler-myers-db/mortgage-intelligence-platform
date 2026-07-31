@@ -70,6 +70,20 @@ def _trusted_sql_policy(sql: str | None, trusted_assets: list[str]) -> bool:
     )
 
 
+def sql_is_disclosable_preview(sql: str | None) -> bool:
+    """True when a mid-flight generated statement may ship to the browser.
+
+    Live-progress companion to the completed-answer contract (2026-07-31
+    adversarial review): `_adapt_genie_response` withholds `sql_query` from
+    policy-blocked turns, so the progress body must apply the same policy
+    BEFORE the turn finishes — otherwise a statement the completion would
+    refuse to disclose (untrusted assets, PII columns, non-SELECT shape)
+    would already have been shown while the query was still running.
+    """
+
+    return _trusted_sql_policy(sql, [])
+
+
 def _trusted_sql_policy_allowing_stale_evidence_enum(
     sql: str | None,
     trusted_assets: list[str],

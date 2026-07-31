@@ -385,3 +385,14 @@ class GenieAnswerRepository(Protocol):
         to avoid a forward-import cycle with ``backend.services
         .genie_answers``; routers re-annotate to the concrete model."""
         ...
+
+    def respond_existing(
+        self,
+        question: str,
+        *,
+        conversation_id: str,
+        message_id: str,
+    ) -> object:
+        """Complete an already-submitted live Genie message into a governed
+        answer (async lifecycle). Same return contract as :meth:`respond`."""
+        ...

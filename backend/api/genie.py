@@ -12,6 +12,7 @@ serve only live Genie/trusted-SQL answers or an explicit degraded-state message.
 """
 
 import hashlib
+import logging
 import re
 from typing import Annotated, Any
 from uuid import uuid4
@@ -36,8 +37,10 @@ from backend.services.genie_answers import (
     GenieActionRequest,
     GenieActionResponse,
     GenieMessageResponse,
+    GenieProgressResponse,
     GenieProof,
     GenieStartResponse,
+    GenieSubmitResponse,
     load_sample_questions,
 )
 from backend.services.genie_audit import genie_audit_entity_id, genie_audit_entity_id_from_parts
@@ -47,7 +50,9 @@ from backend.services.genie_client import (
     get_genie_client,
 )
 from backend.services.genie_message_policy import (
+    GenieCompleteRequest,
     GenieMessageRequest,
+    GenieProgressRequest,
 )
 from backend.services.genie_message_policy import (
     genie_response_has_unsafe_visible_text as _genie_response_has_unsafe_visible_text,
@@ -58,12 +63,23 @@ from backend.services.genie_message_policy import (
 from backend.services.genie_message_policy import (
     protected_prompt_match as _protected_prompt_match,
 )
+from backend.services.genie_progress import (
+    build_genie_progress,
+    genie_question_binding_hash,
+    genie_question_hash,
+    mint_genie_progress_token,
+    verify_genie_progress_token,
+)
 from backend.services.genie_sales_ops import sales_ops_genie_response
-from backend.services.genie_session_guard import assert_genie_conversation_owned
+from backend.services.genie_session_guard import (
+    GENIE_MESSAGE_OWNERSHIP_SQL,
+    assert_genie_conversation_owned,
+)
 from backend.services.genie_source_gaps import source_gap_answer
 from backend.services.genie_trusted_assets import trusted_assets
 from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
+from backend.services.observability import emit
 from backend.services.repositories import BorrowerRepository, GenieAnswerRepository
 from backend.services.repositories.factory import (
     get_borrower_repository,
@@ -72,6 +88,8 @@ from backend.services.repositories.factory import (
 from backend.services.resilience import DependencyDownError
 from backend.services.sales_state import SalesStateStore
 from backend.services.workspace_store import WorkspaceStore, get_workspace_store
+
+log = logging.getLogger("mip-genie")
 
 router = APIRouter(prefix="/genie", tags=["genie"])
 
@@ -396,38 +414,24 @@ def genie_start(
     )
 
 
-@router.post("/message", response_model=GenieMessageResponse, responses=JSON_CONTENT_TYPE_RESPONSE)
-def genie_message(
+def _deterministic_genie_response(
     payload: GenieMessageRequest,
-    request: Request,
+    *,
+    actor: str,
+    audit: AuditStore,
     background: BackgroundTasks,
-    repo: RepoDep,
-    audit: AuditDep,
-    lakebase: LakebaseDep,
-    borrower_repo: BorrowerRepoDep,
-    _: Annotated[None, Depends(require_json_content_type)],
-) -> GenieMessageResponse:
-    actor = resolve_actor(request)
-    try:
-        live_campaign_run_marker = normalize_live_campaign_run_marker(
-            request.headers.get("X-MIP-Live-Campaign-Run-Marker")
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="live campaign run marker is invalid") from exc
+    lakebase: LakebaseClient,
+    borrower_repo: BorrowerRepository,
+) -> GenieMessageResponse | None:
+    """Run every pre-Genie deterministic path; None means "go live".
 
-    def finalize(response: GenieMessageResponse) -> GenieMessageResponse:
-        return _finalize_genie_response(
-            lakebase,
-            actor=actor,
-            response=response,
-            live_campaign_run_marker=live_campaign_run_marker,
-        )
-
-    assert_genie_conversation_owned(
-        lakebase,
-        actor=actor,
-        conversation_id=payload.conversation_id,
-    )
+    Extracted verbatim from the synchronous ``genie_message`` body
+    (2026-07-31) so the async ``/message/submit`` endpoint applies the
+    identical guardrail battery — protected-class, instruction-override,
+    outreach, PII, scope-bypass, source-gap, off-topic, cross-lender,
+    sales-ops, footprint — before any live Genie message exists. Callers
+    finalize (action tokens + session record) the returned response.
+    """
     protected_term = _protected_prompt_match(payload.question)
     if protected_term:
         refusal_reason = (
@@ -471,7 +475,7 @@ def genie_message(
                 else "prompt refused before Genie execution due protected-class term in the prompt"
             ),
         )
-        return finalize(response)
+        return response
     override_match = prompt_guardrails.instruction_override_prompt_match(payload.question)
     if override_match:
         question_hash = hashlib.sha256(payload.question.encode("utf-8")).hexdigest()[:16]
@@ -504,7 +508,7 @@ def genie_message(
             ),
             known_gap="prompt refused before Genie execution due instruction-override pattern",
         )
-        return finalize(response)
+        return response
     if _is_outreach_writer_request(payload.question):
         question_hash = hashlib.sha256(payload.question.encode("utf-8")).hexdigest()[:16]
         _ = background
@@ -553,7 +557,7 @@ def genie_message(
             follow_up_questions=load_sample_questions()[:2],
             table_rows=[],
         )
-        return finalize(response)
+        return response
     pii_match = prompt_guardrails.pii_prompt_match(payload.question)
     if pii_match is None and _identity_prompt_match(payload.question):
         pii_match = "person_name"
@@ -589,7 +593,7 @@ def genie_message(
             ),
             known_gap="prompt refused before Genie execution due PII request pattern",
         )
-        return finalize(response)
+        return response
     scope_bypass_match = prompt_guardrails.scope_bypass_prompt_match(payload.question)
     if scope_bypass_match:
         question_hash = hashlib.sha256(payload.question.encode("utf-8")).hexdigest()[:16]
@@ -623,7 +627,7 @@ def genie_message(
             ),
             known_gap="prompt refused before Genie execution due scope-bypass pattern",
         )
-        return finalize(response)
+        return response
     source_gap_match = prompt_guardrails.source_gap_prompt_match(payload.question)
     if source_gap_match:
         question_hash = hashlib.sha256(payload.question.encode("utf-8")).hexdigest()[:16]
@@ -671,7 +675,7 @@ def genie_message(
             follow_up_questions=load_sample_questions()[:2],
             table_rows=[],
         )
-        return finalize(response)
+        return response
     off_topic_match = prompt_guardrails.off_topic_prompt_match(payload.question)
     if off_topic_match:
         question_hash = hashlib.sha256(payload.question.encode("utf-8")).hexdigest()[:16]
@@ -704,7 +708,7 @@ def genie_message(
             ),
             known_gap="prompt refused before Genie execution due off-topic pattern",
         )
-        return finalize(response)
+        return response
     cross_lender_match = prompt_guardrails.cross_lender_prompt_match(payload.question)
     if cross_lender_match:
         question_hash = hashlib.sha256(payload.question.encode("utf-8")).hexdigest()[:16]
@@ -741,7 +745,7 @@ def genie_message(
                 "prompt refused before Genie execution due cross-lender customer-list pattern"
             ),
         )
-        return finalize(response)
+        return response
     try:
         sales_ops_response = sales_ops_genie_response(
             lakebase,
@@ -768,7 +772,7 @@ def genie_message(
                 payload=payload,
                 response=sales_ops_response,
             )
-            return finalize(blocked)
+            return blocked
         _required_audit_write(
             audit,
             actor=actor,
@@ -786,7 +790,7 @@ def genie_message(
             },
             event_type="RUN_GENIE",
         )
-        return finalize(sales_ops_response)
+        return sales_ops_response
     metadata_gap = prompt_guardrails.footprint_metadata_gap_match(payload.question)
     if metadata_gap is not None:
         state_name, state_code = metadata_gap
@@ -836,7 +840,7 @@ def genie_message(
             follow_up_questions=load_sample_questions()[:2],
             table_rows=[],
         )
-        return finalize(response)
+        return response
     outside_footprint = prompt_guardrails.outside_footprint_match(payload.question)
     if outside_footprint is not None:
         state_name, state_code, footprint_codes = outside_footprint
@@ -893,7 +897,52 @@ def genie_message(
             follow_up_questions=load_sample_questions()[:2],
             table_rows=[],
         )
-        return finalize(response)
+        return response
+    return None
+
+
+@router.post("/message", response_model=GenieMessageResponse, responses=JSON_CONTENT_TYPE_RESPONSE)
+def genie_message(
+    payload: GenieMessageRequest,
+    request: Request,
+    background: BackgroundTasks,
+    repo: RepoDep,
+    audit: AuditDep,
+    lakebase: LakebaseDep,
+    borrower_repo: BorrowerRepoDep,
+    _: Annotated[None, Depends(require_json_content_type)],
+) -> GenieMessageResponse:
+    actor = resolve_actor(request)
+    try:
+        live_campaign_run_marker = normalize_live_campaign_run_marker(
+            request.headers.get("X-MIP-Live-Campaign-Run-Marker")
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="live campaign run marker is invalid") from exc
+
+    def finalize(response: GenieMessageResponse) -> GenieMessageResponse:
+        return _finalize_genie_response(
+            lakebase,
+            actor=actor,
+            response=response,
+            live_campaign_run_marker=live_campaign_run_marker,
+        )
+
+    assert_genie_conversation_owned(
+        lakebase,
+        actor=actor,
+        conversation_id=payload.conversation_id,
+    )
+    deterministic = _deterministic_genie_response(
+        payload,
+        actor=actor,
+        audit=audit,
+        background=background,
+        lakebase=lakebase,
+        borrower_repo=borrower_repo,
+    )
+    if deterministic is not None:
+        return finalize(deterministic)
     # repo.respond() returns a GenieMessageResponse by contract; the
     # protocol annotates `object` only to dodge a forward-import cycle.
     try:
@@ -930,6 +979,355 @@ def genie_message(
         event_type="RUN_GENIE",
     )
     return finalize(result)  # type: ignore[arg-type]
+
+
+
+
+@router.post(
+    "/message/submit",
+    response_model=GenieSubmitResponse,
+    responses=JSON_CONTENT_TYPE_RESPONSE,
+)
+def genie_message_submit(
+    payload: GenieMessageRequest,
+    request: Request,
+    background: BackgroundTasks,
+    repo: RepoDep,
+    audit: AuditDep,
+    lakebase: LakebaseDep,
+    borrower_repo: BorrowerRepoDep,
+    _: Annotated[None, Depends(require_json_content_type)],
+) -> GenieSubmitResponse:
+    """Async lifecycle step 1: guard the prompt, then create the message.
+
+    Runs the identical deterministic battery as the synchronous endpoint
+    (via the shared ``_deterministic_genie_response``). Deterministic turns
+    — refusals, sales-ops, footprint, degraded fallbacks — resolve inline
+    with ``completed=True`` so they stay instant and fully audited. Live
+    turns return ``(conversation_id, message_id)`` plus a signed progress
+    token that authorizes the in-flight window; session ownership is still
+    recorded only at completion, exactly like the sync path.
+    """
+    actor = resolve_actor(request)
+    try:
+        live_campaign_run_marker = normalize_live_campaign_run_marker(
+            request.headers.get("X-MIP-Live-Campaign-Run-Marker")
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="live campaign run marker is invalid") from exc
+    assert_genie_conversation_owned(
+        lakebase,
+        actor=actor,
+        conversation_id=payload.conversation_id,
+    )
+    deterministic = _deterministic_genie_response(
+        payload,
+        actor=actor,
+        audit=audit,
+        background=background,
+        lakebase=lakebase,
+        borrower_repo=borrower_repo,
+    )
+    if deterministic is not None:
+        response = _finalize_genie_response(
+            lakebase,
+            actor=actor,
+            response=deterministic,
+            live_campaign_run_marker=live_campaign_run_marker,
+        )
+        return GenieSubmitResponse(
+            completed=True,
+            conversation_id=response.conversation_id or None,
+            message_id=response.message_id,
+            question_hash=response.question_hash,
+            response=response,
+        )
+    def _inline_repo_resolution() -> GenieSubmitResponse:
+        """Resolve the turn through the repository, sync-endpoint style.
+
+        Shared by the legacy interceptor-first posture and the Genie-down
+        fallback. Mirrors the synchronous live tail exactly: output-policy
+        check, the genie.run_query audit row (QA/adversarial review 2026-07-31
+        — a resolved turn must never lack one), and finalize.
+        """
+        result = repo.respond(payload.question, conversation_id=payload.conversation_id)
+        if _genie_response_has_unsafe_visible_text(result):  # type: ignore[arg-type]
+            resolved = _block_unsafe_genie_output(
+                audit,
+                actor=actor,
+                payload=payload,
+                response=result,  # type: ignore[arg-type]
+            )
+        else:
+            _required_audit_write(
+                audit,
+                actor=actor,
+                action="genie.run_query",
+                entity_type="genie_message",
+                entity_id=genie_audit_entity_id(result),
+                payload_json={
+                    "conversation_id": result.conversation_id,
+                    "message_id": result.message_id,
+                    "question_hash": result.question_hash,
+                    "row_count": result.row_count or 0,
+                    "source_assets": result.trusted_assets,
+                    "visualization_kind": (
+                        result.visualization.kind if result.visualization else None
+                    ),
+                },
+                event_type="RUN_GENIE",
+            )
+            resolved = result  # type: ignore[assignment]
+        response = _finalize_genie_response(
+            lakebase,
+            actor=actor,
+            response=resolved,  # type: ignore[arg-type]
+            live_campaign_run_marker=live_campaign_run_marker,
+        )
+        return GenieSubmitResponse(
+            completed=True,
+            conversation_id=response.conversation_id or None,
+            message_id=response.message_id,
+            question_hash=response.question_hash,
+            response=response,
+        )
+
+    if not settings.mip_genie_live_first:
+        # Legacy/emergency posture (offline or rate-limited booth operation):
+        # the synchronous endpoint consults the reviewed canonical catalog
+        # BEFORE any live Genie call. The async lifecycle honors the same
+        # posture by resolving the whole turn here instead of creating a live
+        # message (QA review H2 — submit previously bypassed the posture).
+        return _inline_repo_resolution()
+    try:
+        conversation_id, message_id = get_genie_client().submit_message(
+            payload.question, conversation_id=payload.conversation_id
+        )
+    except DependencyDownError:
+        # Genie is unavailable right now (breaker open / retries exhausted on
+        # the submission call). Resolve the turn synchronously through the
+        # same repository pipeline as the sync endpoint — reviewed canonical
+        # fallback when one applies, honest degraded message otherwise.
+        return _inline_repo_resolution()
+    except GenieClientError as exc:
+        raise DependencyDownError(
+            "genie",
+            reason="genie client returned an unrecoverable response",
+            last_error=exc,
+            kind=DependencyDownError.KIND_RETRIES_EXHAUSTED,
+        ) from exc
+    question_hash = genie_question_hash(payload.question)
+    question_binding_hash = genie_question_binding_hash(payload.question)
+    # The live submission itself mutates external state (a message now exists
+    # in the governed Genie conversation) even if the browser never completes
+    # the turn, so it gets its own durable audit row. Completion writes the
+    # existing genie.run_query row exactly like the synchronous path.
+    _required_audit_write(
+        audit,
+        actor=actor,
+        action="genie.message_submitted",
+        entity_type="genie_message",
+        entity_id=_safe_genie_audit_entity_id(
+            payload,
+            question_hash=question_hash,
+            message_id=message_id,
+        ),
+        payload_json={
+            "conversation_id": conversation_id,
+            "message_id": message_id,
+            "question_hash": question_hash,
+            "row_count": 0,
+            "source_assets": [],
+            "visualization_kind": None,
+            "action_type": "message_submitted",
+        },
+        event_type="RUN_GENIE",
+    )
+    return GenieSubmitResponse(
+        completed=False,
+        conversation_id=conversation_id,
+        message_id=message_id,
+        progress_token=mint_genie_progress_token(
+            actor=actor,
+            conversation_id=conversation_id,
+            message_id=message_id,
+            # Full 256-bit binding in the token; the wire/audit field keeps
+            # the established short label.
+            question_hash=question_binding_hash,
+        ),
+        question_hash=question_hash,
+    )
+
+
+@router.post(
+    "/message/progress",
+    response_model=GenieProgressResponse,
+    responses=JSON_CONTENT_TYPE_RESPONSE,
+)
+def genie_message_progress(
+    payload: GenieProgressRequest,
+    request: Request,
+    _: Annotated[None, Depends(require_json_content_type)],
+) -> GenieProgressResponse:
+    """Async lifecycle step 2: one pure poll of the in-flight message.
+
+    Token-authorized, side-effect free, and bounded: the response carries
+    the platform status enum, our server-owned stage vocabulary, the same
+    public process steps the completed answer would expose, and the
+    generated SQL (already part of the completed proof contract) — never
+    raw model thoughts or upstream error text.
+    """
+    # AUDIT EXEMPT: read-only progress poll — the token-authorized peek
+    # mutates nothing; submission and completion carry the audit rows.
+    actor = resolve_actor(request)
+    verify_genie_progress_token(
+        payload.progress_token,
+        actor=actor,
+        conversation_id=payload.conversation_id,
+        message_id=payload.message_id,
+    )
+    try:
+        message = get_genie_client().peek_message(payload.conversation_id, payload.message_id)
+    except (GenieClientError, TimeoutError, OSError) as exc:
+        # TimeoutError/OSError: the breaker-free peek path bypasses the
+        # resilience wrapper, so a socket read timeout would otherwise
+        # surface as a raw 500 instead of the structured 503 (QA L1).
+        raise DependencyDownError(
+            "genie",
+            reason="genie progress peek failed",
+            last_error=exc,
+            kind=DependencyDownError.KIND_RETRIES_EXHAUSTED,
+        ) from exc
+    return build_genie_progress(message)
+
+
+@router.post(
+    "/message/complete",
+    response_model=GenieMessageResponse,
+    responses=JSON_CONTENT_TYPE_RESPONSE,
+)
+def genie_message_complete(
+    payload: GenieCompleteRequest,
+    request: Request,
+    repo: RepoDep,
+    audit: AuditDep,
+    lakebase: LakebaseDep,
+    _: Annotated[None, Depends(require_json_content_type)],
+) -> GenieMessageResponse:
+    """Async lifecycle step 3: governed completion of the submitted turn.
+
+    The token proves the same actor's submit created this exact message and
+    the hash check pins ``question`` to the prompt that passed the guard
+    battery there, so the output-policy check, audit write, action-token
+    issuance, and session recording below stay byte-identical in meaning to
+    the synchronous endpoint's live tail. No conversation-ownership lookup
+    here: for a fresh conversation the Lakebase row intentionally does not
+    exist until this very call finalizes — the token is the authorization.
+    """
+    actor = resolve_actor(request)
+    try:
+        live_campaign_run_marker = normalize_live_campaign_run_marker(
+            request.headers.get("X-MIP-Live-Campaign-Run-Marker")
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="live campaign run marker is invalid") from exc
+    claims = verify_genie_progress_token(
+        payload.progress_token,
+        actor=actor,
+        conversation_id=payload.conversation_id,
+        message_id=payload.message_id,
+    )
+    if genie_question_binding_hash(payload.question) != str(claims.get("question_hash") or ""):
+        raise HTTPException(
+            status_code=400,
+            detail="question does not match the submitted Genie turn",
+        )
+    guard_payload = GenieMessageRequest(
+        question=payload.question,
+        conversation_id=payload.conversation_id,
+    )
+    try:
+        result = repo.respond_existing(
+            payload.question,
+            conversation_id=payload.conversation_id,
+            message_id=payload.message_id,
+        )
+    except GenieClientError as exc:
+        raise DependencyDownError(
+            "genie",
+            reason="genie client returned an unrecoverable response",
+            last_error=exc,
+            kind=DependencyDownError.KIND_RETRIES_EXHAUSTED,
+        ) from exc
+    if _genie_response_has_unsafe_visible_text(result):  # type: ignore[arg-type]
+        blocked = _block_unsafe_genie_output(
+            audit,
+            actor=actor,
+            payload=guard_payload,
+            response=result,  # type: ignore[arg-type]
+        )
+        return _finalize_genie_response(
+            lakebase,
+            actor=actor,
+            response=blocked,
+            live_campaign_run_marker=live_campaign_run_marker,
+        )
+    # Replay hygiene (2026-07-31 adversarial review): the stateless token
+    # verifies for its full TTL, so a re-sent complete would otherwise write
+    # a duplicate genie.run_query row for one turn and inflate RUN_GENIE
+    # counts against one message id. The durable genie_messages row from the
+    # first completion is the replay marker; repeats re-serve the governed
+    # answer without a second audit row.
+    already_recorded = False
+    if result.message_id:
+        try:
+            already_recorded = (
+                lakebase.fetchone(
+                    GENIE_MESSAGE_OWNERSHIP_SQL,
+                    {
+                        "actor_email": actor,
+                        "conversation_id": payload.conversation_id,
+                        "message_id": result.message_id,
+                    },
+                )
+                is not None
+            )
+        except LakebaseError:
+            # Fail toward auditing: an unreadable ledger must never suppress
+            # the audit row for a turn that may not have one yet.
+            already_recorded = False
+    if already_recorded:
+        emit(
+            log,
+            "genie_complete_replayed",
+            dependency="lakebase",
+            outcome="deduplicated",
+            conversation_id=payload.conversation_id,
+            message_id=result.message_id,
+        )
+    else:
+        _required_audit_write(
+            audit,
+            actor=actor,
+            action="genie.run_query",
+            entity_type="genie_message",
+            entity_id=genie_audit_entity_id(result),
+            payload_json={
+                "conversation_id": result.conversation_id,
+                "message_id": result.message_id,
+                "question_hash": result.question_hash,
+                "row_count": result.row_count or 0,
+                "source_assets": result.trusted_assets,
+                "visualization_kind": result.visualization.kind if result.visualization else None,
+            },
+            event_type="RUN_GENIE",
+        )
+    return _finalize_genie_response(
+        lakebase,
+        actor=actor,
+        response=result,  # type: ignore[arg-type]
+        live_campaign_run_marker=live_campaign_run_marker,
+    )
 
 
 @router.post("/actions", response_model=GenieActionResponse, responses=JSON_CONTENT_TYPE_RESPONSE)
