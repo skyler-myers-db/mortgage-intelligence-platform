@@ -20,6 +20,7 @@ from backend.services.campaign_targeting import (
     CAMPAIGN_TREATMENT_ALGORITHM_VERSION,
     campaign_treatment_fingerprint,
 )
+from backend.services.campaign_treatment_runtime import require_campaign_treatment_runtime
 from backend.services.lakebase import LakebaseClient, LakebaseError
 from backend.services.repositories.databricks_lead_cohorts import (
     CampaignTreatmentBuildRejected,
@@ -306,6 +307,12 @@ class CampaignTreatmentCoordinator:
         self._cohort_queries = cohort_queries
 
     def create(self, spec: CampaignTreatmentCreateSpec) -> CampaignTreatmentCreateResult:
+        # Deployment-promotion write gate (2026-07-30 restructure): every
+        # reserve/materialize/finalize path funnels through here, so this one
+        # per-request check keeps treatment writes fail-closed on a baseline
+        # (un-promoted) deploy without the old boot-time process kill. UC
+        # MODIFY quiesce remains the authoritative backstop underneath.
+        require_campaign_treatment_runtime()
         contract_fingerprint = campaign_treatment_fingerprint(
             json_contract_version=1,
             criteria=spec.criteria,

@@ -107,6 +107,13 @@ export interface HealthPayload {
   dependencies?: Record<string, string>;
   circuit_breakers?: Record<string, string>;
   actor_cache_key?: string | null;
+  /**
+   * Deploy-promotion marker state: "enabled" after a governed
+   * scripts/deploy.sh promotion, "disabled_baseline_deploy" when the
+   * running process came from a bare deploy (treatment writes 503 and
+   * status reports degraded). Absent on the anonymous liveness body.
+   */
+  campaign_treatment_runtime?: string;
   forced_degraded?: {
     active: boolean;
     dependency: string;

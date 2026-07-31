@@ -469,7 +469,12 @@ def test_health_authenticated_returns_runtime_status_only(
         "dependencies",
         "circuit_breakers",
         "actor_cache_key",
+        # 2026-07-30 gate restructure: deploy-promotion marker state is part
+        # of the authenticated runtime body so the UI can name why a bare
+        # deploy is degraded. Outside Databricks Apps it reads "enabled".
+        "campaign_treatment_runtime",
     }
+    assert body["campaign_treatment_runtime"] == "enabled"
     assert body["dependencies"] == {"warehouse": "up", "lakebase": "up", "genie": "up"}
     assert set(body["circuit_breakers"].keys()) >= {"warehouse", "lakebase", "genie"}
     assert "warehouse_id" not in body

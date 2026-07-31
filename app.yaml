@@ -83,9 +83,14 @@ env:
 
   # Bundle deployment creates/updates the App before scripts/deploy.sh can
   # prove the target service principal's effective UC authority. The baseline
-  # deployment must therefore fail startup. The final snapshot payload flips
-  # this to 1 only after constraints/properties are proven and access remains
-  # quiesced; exact runtime MODIFY is restored after that snapshot promotes.
+  # deployment therefore starts DEGRADED: treatment writes fail closed with
+  # 503 (backend/services/campaign_treatment_runtime.py) and /api/health
+  # reports status=degraded, while reads keep serving. (Pre-2026-07-30 this
+  # marker refused startup entirely, which turned every bare UI/CLI deploy
+  # into a full-app crash loop — the 2026-07-16 and 2026-07-30 outages.)
+  # The final snapshot payload flips this to 1 only after constraints/
+  # properties are proven and access remains quiesced; exact runtime MODIFY
+  # is restored after that snapshot promotes.
   - name: MIP_CAMPAIGN_TREATMENT_RUNTIME_ENABLED
     value: "0"
 

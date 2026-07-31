@@ -59,6 +59,10 @@ from backend.config.settings import (
     settings,
 )
 from backend.services.backpressure import BackpressureController, BackpressureMiddleware
+from backend.services.campaign_treatment_runtime import (
+    CAMPAIGN_TREATMENT_RUNTIME_MARKER_ENV,
+    campaign_treatment_runtime_enabled,
+)
 from backend.services.observability import (
     configure_logging,
     emit,
@@ -83,23 +87,40 @@ COMPAT_API_PREFIX = "/api"
 configure_logging()
 
 
-def _require_campaign_treatment_runtime_gate() -> None:
-    """Refuse traffic until deployment proves exact treatment authority.
+def _log_campaign_treatment_runtime_state() -> None:
+    """Announce treatment-write authority state without killing the process.
 
-    A bundle apply creates and can start the Databricks App before the deploy
-    script can resolve its service principal and converge UC access. The
-    source-controlled app.yaml baseline is therefore disabled. Only the final
+    A bundle apply or a bare UI/CLI deploy starts the App from the
+    source-controlled app.yaml baseline, which is disabled. Only the final
     snapshot deployment, after constraint/property proof while treatment
     access remains read-only, carries the marker; runtime MODIFY is restored
     only after that enabled snapshot promotes.
+
+    2026-07-30 incident fix (July audit HIGH finding): the previous design
+    raised here in lifespan, so every bare deploy crash-looped the whole App
+    — no health body, no read routes, no platform-visible reason (the
+    2026-07-16 and 2026-07-30 outages). Enforcement now lives at the write
+    path (``backend.services.campaign_treatment_runtime``), evaluated per
+    request so ``MIP_BYPASS_STARTUP_CHECKS`` still cannot disable it, while
+    ``/api/health`` reports ``status="degraded"`` and read surfaces keep
+    serving. UC MODIFY quiesce remains the authoritative backstop.
     """
 
-    if not looks_like_databricks_app_deploy():
+    if campaign_treatment_runtime_enabled():
         return
-    if os.environ.get("MIP_CAMPAIGN_TREATMENT_RUNTIME_ENABLED", "").strip() != "1":
-        raise RuntimeError(
-            "Campaign treatment runtime is disabled until governed access proof completes"
-        )
+    emit(
+        log,
+        "campaign_treatment_runtime_disabled_baseline_deploy",
+        level=logging.ERROR,
+        dependency="deployment",
+        outcome="degraded",
+        marker_env=CAMPAIGN_TREATMENT_RUNTIME_MARKER_ENV,
+        recommended_action=(
+            "this deployment bypassed scripts/deploy.sh promotion; treatment "
+            "writes return 503 until a governed roll-forward redeploys the "
+            "promoted snapshot payload"
+        ),
+    )
 
 
 def _operation_id(route: APIRoute) -> str:
@@ -276,10 +297,12 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
       deployed app default sets this to 0 so idle workspaces can auto-stop.
     """
     rewarm_task: asyncio.Task[None] | None = None
-    # This is a Databricks Apps deployment invariant, not a generic startup
-    # convenience check. Keep it outside _running_under_pytest() so
-    # MIP_BYPASS_STARTUP_CHECKS cannot disable the production write gate.
-    _require_campaign_treatment_runtime_gate()
+    # Databricks Apps deployment invariant: log the treatment-runtime marker
+    # state at boot. The write gate itself is enforced per-request in
+    # backend.services.campaign_treatment_runtime (outside any
+    # _running_under_pytest()/MIP_BYPASS_STARTUP_CHECKS reach), so a baseline
+    # deploy degrades treatment writes instead of killing the process.
+    _log_campaign_treatment_runtime_state()
     if looks_like_databricks_app_deploy():
         # Governance invariant: the ambient App identity must be the exact
         # LOGIN-only OAuth role, and PostgreSQL's replication protocol must
@@ -519,8 +542,44 @@ app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)
 from fastapi import Request  # noqa: E402 -- handler below needs it
 from fastapi.responses import JSONResponse  # noqa: E402
 
+from backend.services.campaign_treatment_runtime import (  # noqa: E402
+    CampaignTreatmentRuntimeDisabledError,
+)
 from backend.services.error_sanitizer import safe_dependency_detail  # noqa: E402
 from backend.services.resilience import DependencyDownError  # noqa: E402
+
+
+@app.exception_handler(CampaignTreatmentRuntimeDisabledError)
+async def _campaign_treatment_runtime_disabled_handler(
+    _request: Request, exc: CampaignTreatmentRuntimeDisabledError
+) -> JSONResponse:
+    """Return 503 when a treatment write hits the un-promoted baseline deploy.
+
+    Companion to the 2026-07-30 gate restructure: instead of the process
+    dying at boot on a bare deploy, the specific write surface fails closed
+    with an operator-actionable reason while reads keep serving. The body
+    mirrors the DependencyDownError shape the DegradedBanner already parses,
+    with ``retryable: false`` — retrying cannot help until an operator rolls
+    forward through scripts/deploy.sh.
+    """
+    emit(
+        log,
+        "campaign_treatment_write_refused_baseline_deploy",
+        level=logging.ERROR,
+        dependency="deployment",
+        outcome="refused",
+        correlation_id=get_correlation_id(),
+    )
+    return JSONResponse(
+        status_code=503,
+        content={
+            "detail": str(exc),
+            "retryable": False,
+            "dependency": "deployment",
+            "reason": "campaign_treatment_runtime_disabled",
+            "correlation_id": get_correlation_id(),
+        },
+    )
 
 
 @app.exception_handler(DependencyDownError)

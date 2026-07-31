@@ -513,6 +513,17 @@
             "title": "Breaker State Changes Last Hour",
             "type": "integer"
           },
+          "campaign_treatment_runtime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campaign Treatment Runtime"
+          },
           "circuit_breakers": {
             "additionalProperties": {
               "type": "string"
@@ -7598,6 +7609,17 @@
               }
             ],
             "title": "Agent Gateway Binding Sha256"
+          },
+          "campaign_treatment_runtime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campaign Treatment Runtime"
           },
           "circuit_breakers": {
             "additionalProperties": {
@@ -17300,7 +17322,7 @@
     "/api/growth-agent/agent/run": {
       "post": {
         "deprecated": true,
-        "description": "Route a natural-language co-pilot request to reviewed workflows.\n\nWhen Databricks Agent Responses is configured, it may choose exactly\none reviewed workflow id from the app allowlist. The endpoint still does\nnot call the normal Genie answer path for prompt planning because that path\ncan compile and execute SQL. Reviewed deterministic tools own SQL, counts,\nfilters, Lakebase audit rows, and the reconciled Lead Queue/Admin handoff.",
+        "description": "Route a natural-language co-pilot request to reviewed workflows.\n\nWhen Databricks Agent Responses is configured, it may suggest exactly\none reviewed workflow id from the app allowlist. The endpoint still does\nnot call the normal Genie answer path for prompt planning because that path\ncan compile and execute SQL. Reviewed deterministic tools own SQL, counts,\nfilters, Lakebase audit rows, and the reconciled Lead Queue/Admin handoff.",
         "operationId": "post_api_growth_agent_agent_run_run_mortgage_growth_agent",
         "requestBody": {
           "content": {
@@ -24479,7 +24501,7 @@
     },
     "/api/v1/growth-agent/agent/run": {
       "post": {
-        "description": "Route a natural-language co-pilot request to reviewed workflows.\n\nWhen Databricks Agent Responses is configured, it may choose exactly\none reviewed workflow id from the app allowlist. The endpoint still does\nnot call the normal Genie answer path for prompt planning because that path\ncan compile and execute SQL. Reviewed deterministic tools own SQL, counts,\nfilters, Lakebase audit rows, and the reconciled Lead Queue/Admin handoff.",
+        "description": "Route a natural-language co-pilot request to reviewed workflows.\n\nWhen Databricks Agent Responses is configured, it may suggest exactly\none reviewed workflow id from the app allowlist. The endpoint still does\nnot call the normal Genie answer path for prompt planning because that path\ncan compile and execute SQL. Reviewed deterministic tools own SQL, counts,\nfilters, Lakebase audit rows, and the reconciled Lead Queue/Admin handoff.",
         "operationId": "post_api_v1_growth_agent_agent_run_run_mortgage_growth_agent",
         "requestBody": {
           "content": {

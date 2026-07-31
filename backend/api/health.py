@@ -47,6 +47,10 @@ from backend.agents.gateway_contract import gateway_runtime_binding_hash
 from backend.config.settings import looks_like_databricks_app_deploy, settings
 from backend.schemas.health import AdminHealthResponse, HealthResponse
 from backend.services.audit_store import get_fallback_identity_count
+from backend.services.campaign_treatment_runtime import (
+    CAMPAIGN_TREATMENT_RUNTIME_ENABLED,
+    campaign_treatment_runtime_state,
+)
 from backend.services.forced_degraded import (
     FORCED_DEGRADED_COOKIE_NAME,
     apply_forced_degraded,
@@ -168,12 +172,30 @@ def _apply_breaker_degraded(
     return next_status, next_deps
 
 
+def _apply_treatment_runtime_degraded(status: str) -> tuple[str, str]:
+    """Fold the deploy-promotion marker into overall health status.
+
+    2026-07-30 gate restructure: a baseline (un-promoted) deploy no longer
+    crashes the process; it serves reads with treatment writes failing
+    closed. Health is where that state becomes visible — ``status`` flips
+    to ``degraded`` so the existing frontend banner and operator probes
+    catch a bare UI/CLI deploy immediately, and the returned state string
+    names the reason for authenticated/admin bodies.
+    """
+
+    state = campaign_treatment_runtime_state()
+    if state != CAMPAIGN_TREATMENT_RUNTIME_ENABLED:
+        return "degraded", state
+    return status, state
+
+
 def _diagnostic_body(
     status: str,
     deps: dict[str, str],
     actor_email: str,
     forced_degraded: dict[str, object] | None = None,
 ) -> dict[str, Any]:
+    status, treatment_runtime = _apply_treatment_runtime_degraded(status)
     boundary_warning = None
     if settings.trust_forwarded_headers and not looks_like_databricks_app_deploy():
         boundary_warning = {
@@ -240,6 +262,11 @@ def _diagnostic_body(
         # pass once downstream consumers cut over.
         "fallback_identity_fallbacks_process_total": get_fallback_identity_count(),
         "fallback_identity_fallbacks_total": get_fallback_identity_count(),
+        # Deploy-promotion marker state. "disabled_baseline_deploy" means the
+        # running process came from a bare deploy that bypassed the
+        # scripts/deploy.sh promoted snapshot — treatment writes 503 until a
+        # governed roll-forward.
+        "campaign_treatment_runtime": treatment_runtime,
         "boundary_warning": boundary_warning,
     }
     if settings.mip_git_sha:
@@ -286,16 +313,26 @@ def health(request: Request) -> dict[str, Any]:
     actor_email = _trusted_health_actor(request)
     authenticated = bool(actor_email)
     if not authenticated:
-        return {"status": "ok", "mode": "live"}
+        # Keys stay exactly {status, mode} (R6-09 reconnaissance contract),
+        # but the VALUE reflects a baseline (un-promoted) deploy so even a
+        # curl of the public URL shows the degraded state instead of the
+        # pre-2026-07-30 behavior of the whole process being dead.
+        anonymous_status, _ = _apply_treatment_runtime_degraded("ok")
+        return {"status": anonymous_status, "mode": "live"}
 
     status, deps = probe_snapshot()
     breakers = breaker_states()
     status, deps = _apply_breaker_degraded(status, deps, breakers)
 
     status, deps, forced_degraded = _apply_browser_forced_degraded(request, status, deps)
+    status, treatment_runtime = _apply_treatment_runtime_degraded(status)
     body = {
         "status": status,
         "mode": "live",
+        # Named reason for the degraded flip above; the banner/topbar can
+        # distinguish "a dependency is down" from "this deploy was never
+        # promoted" without admin diagnostics.
+        "campaign_treatment_runtime": treatment_runtime,
         "dependencies": deps,
         # Keep the topbar / degraded-state UI useful for authenticated
         # workspace users without exposing admin-only diagnostics such as

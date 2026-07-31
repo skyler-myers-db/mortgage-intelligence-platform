@@ -139,7 +139,15 @@ rollout. The source-controlled App baseline carries
 `MIP_CAMPAIGN_TREATMENT_RUNTIME_ENABLED=0`; the failure trap is armed before
 the existing App is inspected or quiesced; and the App remains read-only while
 constraints, table properties, ownership, and effective privileges converge.
-Only a promoted App snapshot carries marker `1`. After green health and
+Only a promoted App snapshot carries marker `1`. A marker-`0` process (any
+bare UI/CLI deploy that bypassed promotion) boots into an explicit degraded
+state instead of refusing to start (2026-07-30 restructure of the July audit
+HIGH finding): campaign-treatment writes return 503 via a per-request check
+in `backend/services/campaign_treatment_runtime.py` that
+`MIP_BYPASS_STARTUP_CHECKS` cannot reach, `/api/health` reports
+`status="degraded"` with `campaign_treatment_runtime:
+"disabled_baseline_deploy"`, and UC `MODIFY` quiesce remains the
+authoritative backstop underneath. After green health and
 hosted-tool proof, the signed last-good record is persisted and verified while
 runtime `MODIFY` remains quiesced. Capture then restores exact treatment access
 and repeats App, resource, health, and signed-lease verification. The protected
