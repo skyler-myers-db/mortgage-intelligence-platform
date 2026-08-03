@@ -11,8 +11,9 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import time
 from collections.abc import Callable
-from typing import Literal
+from typing import Any, Literal
 
 from databricks.sdk import AccountClient, WorkspaceClient
 from databricks.sdk.errors import NotFound, ResourceDoesNotExist
@@ -43,6 +44,56 @@ from tools.databricks.uc_target_identity import workspace_target_identity
 from tools.databricks.workspace_auth import deployment_workspace_client
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+# A service-principal secret is eventually consistent at the account token
+# endpoint: the create call returns before the credential is universally
+# honored, so the FIRST authentication with a freshly minted secret can be
+# rejected with `invalid_client` for a few seconds. Observed 2026-08-01/03 to
+# fail roughly half of deploy-dev runs at step 4 (the identity-membership
+# probe), which aborts the whole deployment on a transient condition.
+#
+# This settle window covers only the gap between minting our own temporary
+# credential and its first successful use. It is not an authorization
+# fallback: the credential stays bound to the same principal, every identity
+# assertion after the call is unchanged, and cleanup remains fatal. Any
+# non-auth error, and any auth rejection still standing at the deadline,
+# propagates unchanged.
+_OAUTH_AUTH_REJECTION_CODES = frozenset(
+    {
+        "invalid_client",
+        "invalid_grant",
+        "unauthenticated",
+        "unauthorized_client",
+    }
+)
+_OAUTH_ERROR_CODE_RE = re.compile(r"^(?P<code>[a-z][a-z0-9_]*)\s*:")
+_CREDENTIAL_SETTLE_DEADLINE_S = 90.0
+_CREDENTIAL_SETTLE_INTERVAL_S = 5.0
+
+
+def _is_oauth_auth_rejection(error: BaseException) -> bool:
+    match = _OAUTH_ERROR_CODE_RE.match(str(error).strip())
+    return bool(match) and match.group("code") in _OAUTH_AUTH_REJECTION_CODES
+
+
+def read_identity_with_credential_settle(
+    read_identity: Callable[[], Any],
+    *,
+    sleep: Callable[[float], None] = time.sleep,
+    monotonic: Callable[[], float] = time.monotonic,
+    deadline_s: float = _CREDENTIAL_SETTLE_DEADLINE_S,
+    interval_s: float = _CREDENTIAL_SETTLE_INTERVAL_S,
+) -> Any:
+    """Read the target identity, absorbing new-credential propagation only."""
+
+    deadline = monotonic() + deadline_s
+    while True:
+        try:
+            return read_identity()
+        except BaseException as exc:
+            if not _is_oauth_auth_rejection(exc) or monotonic() >= deadline:
+                raise
+        sleep(interval_s)
 _TABLE = "campaign_treatment_snapshot"
 _SCHEMA = "audit"
 _SAFE_METASTORE_PRIVILEGES = {"USE_MARKETPLACE_ASSETS"}
@@ -137,11 +188,13 @@ def target_identity_groups_probe(
             client_secret=credential.secret,
             auth_type="oauth-m2m",
         )
-        identity = target_workspace.api_client.do(
-            "GET",
-            "/api/2.0/preview/scim/v2/Me",
-            query={"attributes": "id,userName,groups"},
-            headers={"Accept": "application/json"},
+        identity = read_identity_with_credential_settle(
+            lambda: target_workspace.api_client.do(
+                "GET",
+                "/api/2.0/preview/scim/v2/Me",
+                query={"attributes": "id,userName,groups"},
+                headers={"Accept": "application/json"},
+            )
         )
         if not isinstance(identity, dict):
             raise RuntimeError("Target identity membership proof returned a malformed identity")
