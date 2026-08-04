@@ -188,6 +188,23 @@ def _raw_token_endpoint_verdict(
         return f"raw_token_probe_error={type(transport_error).__name__}: {str(transport_error)[:120]}"
 
 
+def _fingerprint(value: object) -> str:
+    """Stable, non-secret fingerprint of an identifier.
+
+    CI masks secret VALUES in logs, which hides exactly the identifiers a
+    failure analysis needs (which service principal, which host, which
+    account). A truncated SHA-256 is not the secret, so it survives masking
+    and can be compared against a locally computed digest of a known-good id.
+    """
+
+    import hashlib
+
+    text = str(value or "").strip()
+    if not text:
+        return "<unset>"
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+
+
 def _describe_probe_failure(
     error: BaseException,
     *,
@@ -196,6 +213,7 @@ def _describe_probe_failure(
     host: str,
     stripped_env: tuple[str, ...],
     raw_verdict: str = "",
+    account_scim_id: str = "",
 ) -> str:
     """Build a secret-free description of a target-identity auth failure.
 
@@ -221,7 +239,14 @@ def _describe_probe_failure(
         f"resolved_host={str(getattr(config, 'host', '') or host)} | "
         f"ambient_auth_env_removed={','.join(stripped_env) or '<none>'} | "
         f"ambient_auth_env_remaining="
-        f"{','.join(sorted(n for n in _AMBIENT_AUTH_ENV_VARS if n in os.environ)) or '<none>'}"
+        f"{','.join(sorted(n for n in _AMBIENT_AUTH_ENV_VARS if n in os.environ)) or '<none>'} | "
+        # Mask-proof identity fingerprints: CI redacts the values themselves,
+        # which is precisely what a failure analysis needs to compare.
+        f"fp_client_id={_fingerprint(application_id)} | "
+        f"fp_host={_fingerprint(host)} | "
+        f"fp_account_scim_id={_fingerprint(account_scim_id)} | "
+        f"fp_account_id={_fingerprint(os.environ.get('DATABRICKS_ACCOUNT_ID'))} | "
+        f"fp_account_client_id={_fingerprint(os.environ.get('DATABRICKS_ACCOUNT_CLIENT_ID'))}"
         + (f" | {raw_verdict}" if raw_verdict else "")
     )
 
@@ -338,6 +363,7 @@ def target_identity_groups_probe(
                         application_id=application_id,
                         host=host,
                         stripped_env=stripped_env,
+                        account_scim_id=principal_id,
                         raw_verdict=_raw_token_endpoint_verdict(
                             host, application_id, credential.secret
                         ),
