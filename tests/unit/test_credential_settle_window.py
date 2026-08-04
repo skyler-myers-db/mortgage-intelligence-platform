@@ -170,3 +170,43 @@ def test_probe_failure_description_is_secret_free_and_actionable() -> None:
     assert "ambient_auth_env_removed=DATABRICKS_TOKEN" in text
     # No secret material may appear in a CI log line.
     assert "secret" not in text.lower()
+
+
+def test_raw_token_verdict_redacts_secret_and_reports_description(monkeypatch) -> None:
+    import io
+    import urllib.error
+
+    from tools.databricks import converge_campaign_treatment_access as m
+
+    def fake_urlopen(request, timeout=0):
+        raise urllib.error.HTTPError(
+            request.full_url,
+            401,
+            "Unauthorized",
+            hdrs=None,
+            fp=io.BytesIO(
+                b'{"error":"invalid_client","error_description":'
+                b'"Client not found in this workspace"}'
+            ),
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    verdict = m._raw_token_endpoint_verdict(
+        "https://ws.example.com", "client-app-id", "super-secret-value"
+    )
+
+    assert "raw_token_status=401" in verdict
+    assert "Client not found in this workspace" in verdict
+    assert "super-secret-value" not in verdict
+
+
+def test_raw_token_verdict_never_raises(monkeypatch) -> None:
+    from tools.databricks import converge_campaign_treatment_access as m
+
+    def explode(request, timeout=0):
+        raise OSError("network unreachable")
+
+    monkeypatch.setattr("urllib.request.urlopen", explode)
+    verdict = m._raw_token_endpoint_verdict("https://ws.example.com", "cid", "sec")
+
+    assert verdict.startswith("raw_token_probe_error=OSError")
