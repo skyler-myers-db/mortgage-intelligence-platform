@@ -368,6 +368,11 @@ def target_identity_groups_probe(
             label="temporary target identity",
         )
         minted_at = time.monotonic()
+        # Presence at t~0 separates "the create never persisted" from
+        # "something reaped it during the probe window".
+        presence_at_mint = _credential_presence(
+            account, principal_id, credential.credential_id
+        )
         # Construct AND read inside one isolation window: the SDK fetches its
         # token lazily on the first request, so ambient deployer credentials
         # would otherwise still be in scope when the token is minted.
@@ -411,6 +416,8 @@ def target_identity_groups_probe(
                             )
                             + " "
                             + _probe_timeline(minted_at)
+                            + " | at_mint: "
+                            + presence_at_mint
                         ),
                         raw_verdict=_raw_token_endpoint_verdict(
                             host, application_id, credential.secret
