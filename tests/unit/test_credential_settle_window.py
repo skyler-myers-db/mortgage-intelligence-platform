@@ -102,3 +102,71 @@ def test_persistent_rejection_still_fails_at_the_deadline() -> None:
     # Bounded: 90s deadline at a 5s interval, then the rejection propagates.
     assert clock.now >= 90.0
     assert len(attempts) == 19
+
+
+class _FakeConfig:
+    def __init__(self, client_id: str, auth_type: str, host: str) -> None:
+        self.client_id = client_id
+        self.auth_type = auth_type
+        self.host = host
+
+
+class _FakeWorkspace:
+    def __init__(self, client_id: str, auth_type: str = "oauth-m2m") -> None:
+        self.config = _FakeConfig(client_id, auth_type, "https://ws.example.com")
+
+
+def test_isolated_auth_env_strips_and_restores() -> None:
+    """Ambient deployer credentials must not be visible to the target probe."""
+    import os
+
+    from tools.databricks.converge_campaign_treatment_access import (
+        _AMBIENT_AUTH_ENV_VARS,
+        isolated_target_auth_env,
+    )
+
+    os.environ["DATABRICKS_TOKEN"] = "ambient-deployer-token"
+    os.environ["DATABRICKS_AUTH_TYPE"] = "pat"
+    try:
+        with isolated_target_auth_env() as stripped:
+            assert "DATABRICKS_TOKEN" in stripped
+            assert not [n for n in _AMBIENT_AUTH_ENV_VARS if n in os.environ]
+        assert os.environ["DATABRICKS_TOKEN"] == "ambient-deployer-token"
+        assert os.environ["DATABRICKS_AUTH_TYPE"] == "pat"
+    finally:
+        os.environ.pop("DATABRICKS_TOKEN", None)
+        os.environ.pop("DATABRICKS_AUTH_TYPE", None)
+
+
+def test_isolated_auth_env_restores_on_exception() -> None:
+    import os
+
+    from tools.databricks.converge_campaign_treatment_access import isolated_target_auth_env
+
+    os.environ["DATABRICKS_TOKEN"] = "ambient"
+    try:
+        with pytest.raises(RuntimeError), isolated_target_auth_env():
+            raise RuntimeError("probe blew up")
+        assert os.environ["DATABRICKS_TOKEN"] == "ambient"
+    finally:
+        os.environ.pop("DATABRICKS_TOKEN", None)
+
+
+def test_probe_failure_description_is_secret_free_and_actionable() -> None:
+    from tools.databricks.converge_campaign_treatment_access import _describe_probe_failure
+
+    text = _describe_probe_failure(
+        ValueError("invalid_client: Client authentication failed"),
+        workspace=_FakeWorkspace(client_id="wrong-client-id"),
+        application_id="intended-app-id",
+        host="https://ws.example.com",
+        stripped_env=("DATABRICKS_TOKEN",),
+    )
+
+    assert "intended_client_id=intended-app-id" in text
+    assert "resolved_client_id=wrong-client-id" in text
+    assert "client_id_matches=false" in text
+    assert "resolved_auth_type=oauth-m2m" in text
+    assert "ambient_auth_env_removed=DATABRICKS_TOKEN" in text
+    # No secret material may appear in a CI log line.
+    assert "secret" not in text.lower()

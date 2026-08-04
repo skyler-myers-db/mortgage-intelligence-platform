@@ -11,8 +11,10 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from typing import Any, Literal
 
 from databricks.sdk import AccountClient, WorkspaceClient
@@ -45,19 +47,21 @@ from tools.databricks.workspace_auth import deployment_workspace_client
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
-# A service-principal secret is eventually consistent at the account token
-# endpoint: the create call returns before the credential is universally
-# honored, so the FIRST authentication with a freshly minted secret can be
-# rejected with `invalid_client` for a few seconds. Observed 2026-08-01/03 to
-# fail roughly half of deploy-dev runs at step 4 (the identity-membership
-# probe), which aborts the whole deployment on a transient condition.
+# Bounded settle window for new-credential propagation.
 #
-# This settle window covers only the gap between minting our own temporary
-# credential and its first successful use. It is not an authorization
-# fallback: the credential stays bound to the same principal, every identity
-# assertion after the call is unchanged, and cleanup remains fatal. Any
-# non-auth error, and any auth rejection still standing at the deadline,
-# propagates unchanged.
+# CORRECTION (2026-08-04): this was first added believing propagation was the
+# cause of the step-4 `invalid_client` failures. That premise was DISPROVEN by
+# measurement — three trials against this same principal, at this same 300s
+# lifetime, authenticated in 1.4-2.3s, and the window ran its full deadline in
+# CI without ever succeeding. It is retained only as defense-in-depth for a
+# genuinely slow mint, and costs at most `_CREDENTIAL_SETTLE_DEADLINE_S` on a
+# doomed attempt. The actual CI failure is being diagnosed by
+# `_describe_probe_failure` instead.
+#
+# It is not an authorization fallback: the credential stays bound to the same
+# principal, every identity assertion after the call is unchanged, and cleanup
+# remains fatal. Any non-auth error, and any auth rejection still standing at
+# the deadline, propagates unchanged.
 _OAUTH_AUTH_REJECTION_CODES = frozenset(
     {
         "invalid_client",
@@ -99,6 +103,78 @@ _SCHEMA = "audit"
 _SAFE_METASTORE_PRIVILEGES = {"USE_MARKETPLACE_ASSETS"}
 Mode = Literal["quiesce", "runtime"]
 _TEMPORARY_PROBE_SECRET_LIFETIME = "300s"
+
+
+# Ambient deployer credentials that must not leak into the bounded target
+# identity proof. ``account_client_from_env`` already builds the account plane
+# with an explicit Config "without inheriting workspace credentials"; the
+# target workspace client was constructed from bare kwargs, so the SDK could
+# still merge whatever the deploy shell exported (the workflow sets
+# DATABRICKS_HOST/TOKEN/AUTH_TYPE=pat for the deployer). The SDK resolves its
+# token lazily at request time, so the read must run inside the same isolation
+# as the construction.
+_AMBIENT_AUTH_ENV_VARS = (
+    "DATABRICKS_TOKEN",
+    "DATABRICKS_AUTH_TYPE",
+    "DATABRICKS_CLIENT_ID",
+    "DATABRICKS_CLIENT_SECRET",
+    "DATABRICKS_CONFIG_PROFILE",
+    "DATABRICKS_CONFIG_FILE",
+    "DATABRICKS_HOST",
+    "DATABRICKS_USERNAME",
+    "DATABRICKS_PASSWORD",
+)
+
+
+@contextmanager
+def isolated_target_auth_env() -> Iterator[tuple[str, ...]]:
+    """Remove ambient Databricks auth env for the duration of a probe.
+
+    Yields the names (never values) of the variables that were removed so a
+    failure can report the ambient state it ran against. Always restored.
+    """
+
+    saved = {name: os.environ.pop(name) for name in _AMBIENT_AUTH_ENV_VARS if name in os.environ}
+    try:
+        yield tuple(sorted(saved))
+    finally:
+        os.environ.update(saved)
+
+
+def _describe_probe_failure(
+    error: BaseException,
+    *,
+    workspace: object,
+    application_id: str,
+    host: str,
+    stripped_env: tuple[str, ...],
+) -> str:
+    """Build a secret-free description of a target-identity auth failure.
+
+    The step-4 ``invalid_client`` rejection reproduced only on CI runners and
+    never locally (three trials at the same 300s lifetime authenticated in
+    1.4-2.3s), so the deciding evidence — which client id and auth mode the
+    SDK actually resolved — has to come from the failing environment itself.
+    Values are never emitted: only identifiers already present in deploy logs
+    and the NAMES of ambient variables.
+    """
+
+    config = getattr(getattr(workspace, "api_client", None), "_cfg", None) or getattr(
+        workspace, "config", None
+    )
+    resolved_client = str(getattr(config, "client_id", "") or "")
+    return (
+        "[identity-probe] target authentication failed: "
+        f"error={type(error).__name__}: {str(error)[:120]} | "
+        f"intended_client_id={application_id} | "
+        f"resolved_client_id={resolved_client or '<unset>'} | "
+        f"client_id_matches={str(resolved_client == application_id).lower()} | "
+        f"resolved_auth_type={getattr(config, 'auth_type', None) or '<unset>'} | "
+        f"resolved_host={str(getattr(config, 'host', '') or host)} | "
+        f"ambient_auth_env_removed={','.join(stripped_env) or '<none>'} | "
+        f"ambient_auth_env_remaining="
+        f"{','.join(sorted(n for n in _AMBIENT_AUTH_ENV_VARS if n in os.environ)) or '<none>'}"
+    )
 
 
 def _canonical(value: object) -> str:
@@ -182,20 +258,40 @@ def target_identity_groups_probe(
             ),
             label="temporary target identity",
         )
-        target_workspace = workspace_factory(
-            host=host,
-            client_id=application_id,
-            client_secret=credential.secret,
-            auth_type="oauth-m2m",
-        )
-        identity = read_identity_with_credential_settle(
-            lambda: target_workspace.api_client.do(
-                "GET",
-                "/api/2.0/preview/scim/v2/Me",
-                query={"attributes": "id,userName,groups"},
-                headers={"Accept": "application/json"},
+        # Construct AND read inside one isolation window: the SDK fetches its
+        # token lazily on the first request, so ambient deployer credentials
+        # would otherwise still be in scope when the token is minted.
+        with isolated_target_auth_env() as stripped_env:
+            target_workspace = workspace_factory(
+                host=host,
+                client_id=application_id,
+                client_secret=credential.secret,
+                auth_type="oauth-m2m",
             )
-        )
+            try:
+                identity = read_identity_with_credential_settle(
+                    lambda: target_workspace.api_client.do(
+                        "GET",
+                        "/api/2.0/preview/scim/v2/Me",
+                        query={"attributes": "id,userName,groups"},
+                        headers={"Accept": "application/json"},
+                    )
+                )
+            except BaseException as exc:
+                # Emit the resolved-config evidence before unwinding; this is
+                # the only place the failing environment can be observed.
+                print(
+                    _describe_probe_failure(
+                        exc,
+                        workspace=target_workspace,
+                        application_id=application_id,
+                        host=host,
+                        stripped_env=stripped_env,
+                    ),
+                    file=sys.stderr,
+                    flush=True,
+                )
+                raise
         if not isinstance(identity, dict):
             raise RuntimeError("Target identity membership proof returned a malformed identity")
         identity_id = identity.get("id")
