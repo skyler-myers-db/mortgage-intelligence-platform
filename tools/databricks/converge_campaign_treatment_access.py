@@ -305,7 +305,7 @@ def _describe_probe_failure(
         f"fp_account_scim_id={_fingerprint(account_scim_id)} | "
         f"fp_account_id={_fingerprint(os.environ.get('DATABRICKS_ACCOUNT_ID'))} | "
         f"fp_account_client_id={_fingerprint(os.environ.get('DATABRICKS_ACCOUNT_CLIENT_ID'))} | "
-        f"account_host={os.environ.get('DATABRICKS_ACCOUNT_HOST') or '<unset>'} | "
+        f"fp_account_host={_fingerprint(os.environ.get('DATABRICKS_ACCOUNT_HOST'))} | "
         f"{credential_state}"
         + (f" | {raw_verdict}" if raw_verdict else "")
     )

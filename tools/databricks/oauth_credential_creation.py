@@ -323,7 +323,13 @@ def create_exact_oauth_credential(
                 intent=intent,
             )
         validation_error: BaseException = RuntimeError(
-            f"{label} credential create response is incomplete or ambiguous"
+            f"{label} credential create response is incomplete or ambiguous "
+            f"[id_present={bool(credential_id)} secret_present={bool(secret)} "
+            f"id_prefix={credential_id[:8] or '<empty>'} "
+            f"before={sorted(i[:8] for i in before_ids)} "
+            f"after={sorted(i[:8] for i in after_ids)} "
+            f"added={sorted(i[:8] for i in after_ids.difference(before_ids))} "
+            f"removed={sorted(i[:8] for i in before_ids.difference(after_ids))}]"
         )
     except CredentialMutationQuarantineError:
         raise
