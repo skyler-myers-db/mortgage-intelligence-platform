@@ -210,3 +210,23 @@ def test_raw_token_verdict_never_raises(monkeypatch) -> None:
     verdict = m._raw_token_endpoint_verdict("https://ws.example.com", "cid", "sec")
 
     assert verdict.startswith("raw_token_probe_error=OSError")
+
+
+def test_transient_instability_markers_are_recognized() -> None:
+    from tools.databricks.converge_campaign_treatment_access import (
+        _is_transient_credential_instability,
+    )
+
+    assert _is_transient_credential_instability(
+        RuntimeError("temporary target identity credential create response is incomplete or ambiguous")
+    )
+    assert _is_transient_credential_instability(
+        RuntimeError("temporary target identity credential inventory did not become stable")
+    )
+    # A real authorization or identity failure must NOT be retried.
+    assert not _is_transient_credential_instability(
+        RuntimeError("Temporary credential authenticated as a different target identity")
+    )
+    assert not _is_transient_credential_instability(
+        ValueError("invalid_client: Client authentication failed")
+    )

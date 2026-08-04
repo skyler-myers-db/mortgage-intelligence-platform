@@ -74,6 +74,31 @@ _OAUTH_ERROR_CODE_RE = re.compile(r"^(?P<code>[a-z][a-z0-9_]*)\s*:")
 _CREDENTIAL_SETTLE_DEADLINE_S = 90.0
 _CREDENTIAL_SETTLE_INTERVAL_S = 5.0
 
+# Bounded mint-and-prove retry.
+#
+# CI evidence (2026-08-04) shows the account-side secret inventory for the
+# target principal is transiently unstable, in two forms: a create whose
+# post-create listing fails the exact before+{new} check ("incomplete or
+# ambiguous"), and a create that validates but whose credential is absent
+# moments later. Both leave the probe holding nothing usable, and the original
+# design mints exactly once, so either form aborts the entire deployment.
+#
+# Each attempt independently re-reads `before_ids`, validates exactly, and
+# restores on failure — the governance contract per attempt is unchanged. Only
+# the number of attempts is new, so a transient inventory blip no longer ends
+# the deploy while a genuine, persistent failure still does.
+_CREDENTIAL_MINT_ATTEMPTS = 3
+_CREDENTIAL_MINT_BACKOFF_S = 10.0
+_CREDENTIAL_INSTABILITY_MARKERS = (
+    "incomplete or ambiguous",
+    "did not become stable",
+)
+
+
+def _is_transient_credential_instability(error: BaseException) -> bool:
+    text = str(error).casefold()
+    return any(marker in text for marker in _CREDENTIAL_INSTABILITY_MARKERS)
+
 
 def _is_oauth_auth_rejection(error: BaseException) -> bool:
     match = _OAUTH_ERROR_CODE_RE.match(str(error).strip())
@@ -340,8 +365,39 @@ def target_identity_groups_probe(
     credential: ExactOAuthCredential | None = None
     probe_error: BaseException | None = None
     effective_groups: dict[str, str] = {}
-    try:
-        credential = create_exact_oauth_credential(
+
+    def _mint_probe_credential() -> ExactOAuthCredential:
+        """Mint one temporary credential, retrying transient inventory blips.
+
+        Every attempt performs the full exact-inventory contract (fresh
+        before_ids, exact validation, restore-on-failure); a quarantine or any
+        non-instability error propagates immediately and unchanged.
+        """
+
+        last_error: BaseException | None = None
+        for attempt in range(1, _CREDENTIAL_MINT_ATTEMPTS + 1):
+            try:
+                return _create_probe_credential()
+            except CredentialMutationQuarantineError:
+                raise
+            except BaseException as exc:
+                if not _is_transient_credential_instability(exc):
+                    raise
+                last_error = exc
+                print(
+                    f"[identity-probe] credential mint attempt {attempt} of "
+                    f"{_CREDENTIAL_MINT_ATTEMPTS} hit transient account-inventory "
+                    f"instability: {str(exc)[:120]}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                if attempt < _CREDENTIAL_MINT_ATTEMPTS:
+                    time.sleep(_CREDENTIAL_MINT_BACKOFF_S)
+        assert last_error is not None
+        raise last_error
+
+    def _create_probe_credential() -> ExactOAuthCredential:
+        return create_exact_oauth_credential(
             principal_id=principal_id,
             list_credentials=lambda: account.service_principal_secrets.list(
                 principal_id
@@ -367,6 +423,9 @@ def target_identity_groups_probe(
             ),
             label="temporary target identity",
         )
+
+    try:
+        credential = _mint_probe_credential()
         minted_at = time.monotonic()
         # Presence at t~0 separates "the create never persisted" from
         # "something reaped it during the probe window".
