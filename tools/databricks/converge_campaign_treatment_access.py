@@ -205,6 +205,25 @@ def _fingerprint(value: object) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
 
 
+def _credential_presence(account: object, principal_id: str, credential_id: str) -> str:
+    """Report whether the just-minted credential still exists account-side.
+
+    Distinguishes "something deleted our secret between mint and use" (a
+    concurrency/reaper problem in our own tooling) from "the secret exists and
+    the platform refuses it" (a Databricks-side problem). Never raises.
+    """
+
+    try:
+        secrets = list(account.service_principal_secrets.list(principal_id))  # type: ignore[attr-defined]
+        ids = {str(getattr(item, "id", "")) for item in secrets}
+        return (
+            f"minted_credential_present={str(credential_id in ids).lower()} "
+            f"account_secret_count={len(ids)}"
+        )
+    except Exception as exc:  # noqa: BLE001 - diagnostic only
+        return f"credential_presence_error={type(exc).__name__}: {str(exc)[:80]}"
+
+
 def _describe_probe_failure(
     error: BaseException,
     *,
@@ -214,6 +233,7 @@ def _describe_probe_failure(
     stripped_env: tuple[str, ...],
     raw_verdict: str = "",
     account_scim_id: str = "",
+    credential_state: str = "",
 ) -> str:
     """Build a secret-free description of a target-identity auth failure.
 
@@ -246,7 +266,9 @@ def _describe_probe_failure(
         f"fp_host={_fingerprint(host)} | "
         f"fp_account_scim_id={_fingerprint(account_scim_id)} | "
         f"fp_account_id={_fingerprint(os.environ.get('DATABRICKS_ACCOUNT_ID'))} | "
-        f"fp_account_client_id={_fingerprint(os.environ.get('DATABRICKS_ACCOUNT_CLIENT_ID'))}"
+        f"fp_account_client_id={_fingerprint(os.environ.get('DATABRICKS_ACCOUNT_CLIENT_ID'))} | "
+        f"account_host={os.environ.get('DATABRICKS_ACCOUNT_HOST') or '<unset>'} | "
+        f"{credential_state}"
         + (f" | {raw_verdict}" if raw_verdict else "")
     )
 
@@ -364,6 +386,14 @@ def target_identity_groups_probe(
                         host=host,
                         stripped_env=stripped_env,
                         account_scim_id=principal_id,
+                        # Decisive: does the credential we just minted still
+                        # EXIST at the moment authentication is refused? If it
+                        # vanished, something reaped it (concurrency); if it is
+                        # present, the credential is real and the platform is
+                        # rejecting it.
+                        credential_state=_credential_presence(
+                            account, principal_id, credential.credential_id
+                        ),
                         raw_verdict=_raw_token_endpoint_verdict(
                             host, application_id, credential.secret
                         ),
