@@ -205,6 +205,12 @@ def _fingerprint(value: object) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
 
 
+def _probe_timeline(minted_at: float) -> str:
+    """Seconds elapsed since the temporary credential was minted."""
+
+    return f"seconds_since_mint={time.monotonic() - minted_at:.1f}"
+
+
 def _credential_presence(account: object, principal_id: str, credential_id: str) -> str:
     """Report whether the just-minted credential still exists account-side.
 
@@ -216,9 +222,16 @@ def _credential_presence(account: object, principal_id: str, credential_id: str)
     try:
         secrets = list(account.service_principal_secrets.list(principal_id))  # type: ignore[attr-defined]
         ids = {str(getattr(item, "id", "")) for item in secrets}
+        inventory = ";".join(
+            f"{str(getattr(item, 'id', ''))[:8]}@{getattr(item, 'status', '?')}"
+            f"/exp={getattr(item, 'expire_time', '?')}"
+            for item in secrets
+        )
         return (
             f"minted_credential_present={str(credential_id in ids).lower()} "
-            f"account_secret_count={len(ids)}"
+            f"minted_id_prefix={credential_id[:8]} "
+            f"account_secret_count={len(ids)} "
+            f"account_inventory=[{inventory}]"
         )
     except Exception as exc:  # noqa: BLE001 - diagnostic only
         return f"credential_presence_error={type(exc).__name__}: {str(exc)[:80]}"
@@ -354,6 +367,7 @@ def target_identity_groups_probe(
             ),
             label="temporary target identity",
         )
+        minted_at = time.monotonic()
         # Construct AND read inside one isolation window: the SDK fetches its
         # token lazily on the first request, so ambient deployer credentials
         # would otherwise still be in scope when the token is minted.
@@ -391,8 +405,12 @@ def target_identity_groups_probe(
                         # vanished, something reaped it (concurrency); if it is
                         # present, the credential is real and the platform is
                         # rejecting it.
-                        credential_state=_credential_presence(
-                            account, principal_id, credential.credential_id
+                        credential_state=(
+                            _credential_presence(
+                                account, principal_id, credential.credential_id
+                            )
+                            + " "
+                            + _probe_timeline(minted_at)
                         ),
                         raw_verdict=_raw_token_endpoint_verdict(
                             host, application_id, credential.secret
