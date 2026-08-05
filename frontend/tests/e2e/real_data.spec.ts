@@ -1505,8 +1505,17 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     ]) {
       await expect(page.getByRole('button', { name: new RegExp(`^${label}:`) })).toBeVisible();
     }
-    await expect(page.getByText(/Owner Link, purchase-intent, product, and equity filters/i)).toBeVisible();
-    await expect(page.getByText(/staged cadence only/i)).toBeVisible();
+    // The route lede, verbatim: "Apply geography, lien, relationship, Owner
+    // Link, purchase intent, product, and equity filters." The old pattern
+    // hyphenated "purchase-intent", which the copy has never used on this
+    // branch or on main, so it could not match anywhere.
+    await expect(
+      page.getByText(/Owner Link, purchase intent, product, and equity filters/i),
+    ).toBeVisible();
+    // Governance disclosure on this surface. The previous assertion looked for
+    // "staged cadence only", a phrase that appears nowhere in the product;
+    // pin the eligibility gate the page actually states before approval.
+    await expect(page.getByText(/eligible-only policy required before approval/i)).toBeVisible();
     const dataOperationsLink = page.getByRole('link', { name: /Admin Data Operations/i });
     await expect(dataOperationsLink).toBeVisible();
     const adminContext = await browser.newContext({
@@ -1663,10 +1672,21 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
       )
       .toBeGreaterThanOrEqual(Number(before.applications_submitted ?? 0) + 1);
 
-    await gotoApp(page, '/lead-queue');
-    await expect(page.getByText('Closed-loop outcomes')).toBeVisible({ timeout: 45_000 });
+    // The Sales ops snapshot moved off Lead Queue to Analytics -> Sales ops
+    // (analytics.tsx mounts SalesOpsSection for tab === 'sales-ops', and
+    // lead-queue.test.tsx pins that no residual is left behind), so assert the
+    // ledger where it now lives. The heading swaps to the dry-run variant when
+    // the deployment has dry-run outcome rows -- both are the same panel.
+    await gotoApp(page, '/analytics');
+    await page.getByRole('tab', { name: /^Sales ops$/i }).click();
+    await expect(
+      page.getByText(/Closed-loop outcomes|Outcome ledger · includes dry run/),
+    ).toBeVisible({ timeout: 45_000 });
     await expect(page.getByText(/Imported, read-only outcome ledger/i)).toBeVisible();
-    await expect(page.getByText(/does not write back to customer systems/i)).toBeVisible();
+    // Verbatim disclosure: "Imported, read-only outcome ledger; no write-back
+    // to customer systems." The old pattern ("does not write back") never
+    // matched that wording.
+    await expect(page.getByText(/no write-back to customer systems/i)).toBeVisible();
   });
 
   test('analytics: multi-select filters drive API queries and URL state', async ({ page }) => {
