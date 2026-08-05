@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import type { GenieLiveProgress } from '../../lib/api';
 import { Icon } from '../Icon';
@@ -86,15 +86,29 @@ export function GenieProgress({
   // text-only repair turn re-enters ASKING_AI after EXECUTING_QUERY), but a
   // completed stage dot must never un-complete on screen. Reset per ask via
   // the startedAt identity.
-  const maxStageIdxRef = useRef(-1);
-  const askKeyRef = useRef<number | null>(null);
-  if (askKeyRef.current !== (startedAt ?? null)) {
-    askKeyRef.current = startedAt ?? null;
-    maxStageIdxRef.current = -1;
-  }
+  //
+  // The high-water mark lives in state, not a ref: refs must not be read or
+  // written during render (it misbehaves under StrictMode's double render and
+  // concurrent re-renders). Rendering max(reported, carried) keeps the rail
+  // exact with no one-frame lag — the freshly reported stage is already
+  // folded in before the effect commits it — and pinning the carried value to
+  // the ask identity means a new ask starts from scratch on its first render.
+  const askKey = startedAt ?? null;
+  const [seen, setSeen] = useState<{ askKey: number | null; maxIdx: number }>({
+    askKey,
+    maxIdx: -1,
+  });
   const reportedIdx = stageIndex(progress?.stage);
-  if (reportedIdx > maxStageIdxRef.current) maxStageIdxRef.current = reportedIdx;
-  const activeIdx = maxStageIdxRef.current >= 0 ? maxStageIdxRef.current : reportedIdx;
+  const carriedIdx = seen.askKey === askKey ? seen.maxIdx : -1;
+  const activeIdx = Math.max(reportedIdx, carriedIdx);
+  useEffect(() => {
+    setSeen((prev) => {
+      const base = prev.askKey === askKey ? prev.maxIdx : -1;
+      const nextIdx = Math.max(base, reportedIdx);
+      if (prev.askKey === askKey && prev.maxIdx === nextIdx) return prev;
+      return { askKey, maxIdx: nextIdx };
+    });
+  }, [askKey, reportedIdx]);
   const trace = dedupeTrace(progress?.reasoning_trace ?? []);
   const sql = progress?.sql_preview?.trim() || null;
 
