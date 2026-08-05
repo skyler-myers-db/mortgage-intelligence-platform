@@ -9,6 +9,8 @@ absorb that narrow case WITHOUT becoming an authorization fallback.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from tools.databricks.converge_campaign_treatment_access import (
@@ -153,7 +155,10 @@ def test_isolated_auth_env_restores_on_exception() -> None:
 
 
 def test_probe_failure_description_is_secret_free_and_actionable() -> None:
-    from tools.databricks.converge_campaign_treatment_access import _describe_probe_failure
+    from tools.databricks.converge_campaign_treatment_access import (
+        _AMBIENT_AUTH_ENV_VARS,
+        _describe_probe_failure,
+    )
 
     text = _describe_probe_failure(
         ValueError("invalid_client: Client authentication failed"),
@@ -168,8 +173,34 @@ def test_probe_failure_description_is_secret_free_and_actionable() -> None:
     assert "client_id_matches=false" in text
     assert "resolved_auth_type=oauth-m2m" in text
     assert "ambient_auth_env_removed=DATABRICKS_TOKEN" in text
-    # No secret material may appear in a CI log line.
-    assert "secret" not in text.lower()
+
+    # No secret material may appear in a CI log line. Assert that as the
+    # property it actually is -- no auth env var VALUE is printed -- rather
+    # than as a bare "secret" substring: the probe legitimately reports which
+    # ambient auth variables it stripped and which are still visible, by NAME,
+    # and one of those names is DATABRICKS_CLIENT_SECRET, so the substring
+    # form fails on any runner that happens to have that variable set.
+    for name in _AMBIENT_AUTH_ENV_VARS:
+        assert f"{name}=" not in text
+
+    # Direct proof: a real value in the environment must not reach the text.
+    sentinel = "sentinel-value-that-must-never-be-logged"
+    previous = os.environ.get("DATABRICKS_CLIENT_SECRET")
+    os.environ["DATABRICKS_CLIENT_SECRET"] = sentinel
+    try:
+        with_secret = _describe_probe_failure(
+            ValueError("invalid_client: Client authentication failed"),
+            workspace=_FakeWorkspace(client_id="wrong-client-id"),
+            application_id="intended-app-id",
+            host="https://ws.example.com",
+            stripped_env=("DATABRICKS_TOKEN",),
+        )
+    finally:
+        if previous is None:
+            os.environ.pop("DATABRICKS_CLIENT_SECRET", None)
+        else:
+            os.environ["DATABRICKS_CLIENT_SECRET"] = previous
+    assert sentinel not in with_secret
 
 
 def test_transient_instability_markers_are_recognized() -> None:
