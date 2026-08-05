@@ -1862,10 +1862,15 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
 
     await gotoApp(page, `/offer-orchestrator/${target}`);
 
-    // Unique-to-route: the "Draft outreach · review only, never auto-sent"
-    // heading on the right surface. Copy is a verbatim prototype string
-    // and anchors the "no automatic outreach" safety posture.
-    await expect(page.getByText(/Draft outreach.*review only/i)).toBeVisible({ timeout: 30_000 });
+    // Unique-to-route: the governed draft surface on the right. The heading
+    // was "Draft outreach · review only" before the governed-draft rework
+    // renamed it; assert the current heading AND the review-only control it
+    // labels, so this keeps failing if the "no automatic outreach" posture
+    // ever leaves the surface rather than merely being reworded.
+    await expect(
+      page.getByText(/Governed outreach.*exact audited copy/i),
+    ).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByLabel('Outreach draft — review only')).toBeVisible();
 
     // Real data: the draft textarea is prefilled with a borrower-aware
     // message ("Hi <first name> — based on recent public-record signals…").
