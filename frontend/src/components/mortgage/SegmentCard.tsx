@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import type { DimensionFacetCount, SegmentSummary } from '../../types';
 import { Icon } from '../Icon';
 import { EvidenceChip } from '../Primitives';
@@ -24,10 +24,25 @@ const FACET_LABELS: Record<string, string> = {
  * Segment color is passed as a CSS variable `--seg-color` so the top accent bar,
  * badge, selection shadow, and hover radial gradient all pick it up.
  *
- * Root element is the prototype's `div role="button"` composition
- * (`design_files/Module 0 Prototype.html` lines 1150–1153) rather than a
- * native <button>, so the S1.3 evidence chip in the meta row can be a real
- * button without nesting interactive elements.
+ * Selection composition: the prototype makes the WHOLE card the selection
+ * target (`design_files/Module 0 Prototype.html` lines 1150–1153) and we keep
+ * that. What we do not keep is making the card element itself the button.
+ * Module 0 added interactive children the prototype never had (the S1.3
+ * evidence chip, the S1.6 product/channel breakdown chips), and a
+ * `role="button"` host containing real buttons is both an ARIA violation
+ * (axe `nested-interactive`) and a click-routing trap: the children have to
+ * `stopPropagation()` to avoid selecting, so any click that lands on one —
+ * including a click on the card's geometric centre once the breakdown rows
+ * render — silently does something other than select.
+ *
+ * Instead the card is a plain container holding `.seg-card__select`: a real
+ * <button> stretched across the card (`position:absolute; inset:0`) that owns
+ * selection, `aria-pressed`, and the keyboard contract. The chips sit above it
+ * in the stacking order (see `.seg-card__evidence` / `.seg-card__facet-chip`
+ * in components.css), so they are click targets in their own right rather than
+ * propagation hazards. Nothing calls `stopPropagation()` any more, the
+ * selection control has a stable accessible name instead of the card's entire
+ * text content, and clicking anywhere that is not a chip selects the segment.
  *
  * S1.3 evidence: every segment count carries an `.evidence-chip` that opens
  * the EvidenceDrawer with the segment's exact membership predicate, its
@@ -94,26 +109,22 @@ export function SegmentCard({ segment, selected, updating, onClick }: SegmentCar
   });
 
   const activate = gated ? undefined : onClick;
-  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (!activate) return;
-    if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault();
-      activate();
-    }
-  };
 
   return (
     <div
       className={`seg-card ${selected ? 'is-selected' : ''} ${updating ? 'is-updating' : ''} ${gated ? 'seg-card--gated' : ''}`}
       style={{ '--seg-color': displayColor } as CSSProperties}
-      onClick={activate}
-      onKeyDown={handleKeyDown}
-      role="button"
-      tabIndex={0}
-      aria-pressed={gated ? undefined : selected}
-      aria-disabled={gated || undefined}
       aria-busy={updating || undefined}
     >
+      {activate && (
+        <button
+          type="button"
+          className="seg-card__select"
+          onClick={activate}
+          aria-pressed={selected ?? false}
+          aria-label={`Select ${displayName} segment — ${segment.count.toLocaleString()} borrowers`}
+        />
+      )}
       {selected && emanateKey > 0 && (
         <span key={emanateKey} className="seg-card__emanate" aria-hidden="true" />
       )}
@@ -145,11 +156,7 @@ export function SegmentCard({ segment, selected, updating, onClick }: SegmentCar
           </span>
         )}
         {!gated && !hasNoBorrowers && <span>avg {segment.avg_score}</span>}
-        <span
-          className="seg-card__evidence"
-          onClick={(event) => event.stopPropagation()}
-          onKeyDown={(event) => event.stopPropagation()}
-        >
+        <span className="seg-card__evidence">
           <EvidenceChip source={evidenceSource} title={`Evidence for ${displayName}`}>
             evidence
           </EvidenceChip>
@@ -163,12 +170,7 @@ export function SegmentCard({ segment, selected, updating, onClick }: SegmentCar
               {loanProductMix.map((facet) => {
                 const label = FACET_LABELS[facet.value] ?? facet.value;
                 return (
-                  <span
-                    key={`product-${facet.value}`}
-                    className="seg-card__facet-chip"
-                    onClick={(event) => event.stopPropagation()}
-                    onKeyDown={(event) => event.stopPropagation()}
-                  >
+                  <span key={`product-${facet.value}`} className="seg-card__facet-chip">
                     <EvidenceChip source={DRAWER_SOURCES.loanProductType}>
                       {label} {facet.count.toLocaleString()}
                     </EvidenceChip>
@@ -183,12 +185,7 @@ export function SegmentCard({ segment, selected, updating, onClick }: SegmentCar
               {originationChannelMix.map((facet) => {
                 const label = FACET_LABELS[facet.value] ?? facet.value;
                 return (
-                  <span
-                    key={`channel-${facet.value}`}
-                    className="seg-card__facet-chip"
-                    onClick={(event) => event.stopPropagation()}
-                    onKeyDown={(event) => event.stopPropagation()}
-                  >
+                  <span key={`channel-${facet.value}`} className="seg-card__facet-chip">
                     <EvidenceChip source={DRAWER_SOURCES.originationChannel}>
                       {label} {facet.count.toLocaleString()}
                     </EvidenceChip>

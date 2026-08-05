@@ -105,7 +105,9 @@ async function discoverMapDrillTarget(
 }
 
 async function clickSegmentCard(page: Page, label: string) {
-  await page.locator('.seg-card', { hasText: label }).click();
+  // `.seg-card__select` is the card's selection button; clicking the card box
+  // targets its centre, which the breakdown chips can occupy.
+  await page.locator('.seg-card', { hasText: label }).locator('.seg-card__select').click();
 }
 
 async function clickSvgRegion(page: Page, target: Locator, label: string) {

@@ -184,7 +184,9 @@ function leadQueueApiPathFromRoute(route: string): string {
 async function clickSegment(page: Page, label: string): Promise<void> {
   const card = page.locator('.seg-card', { hasText: label }).first();
   await expect(card, `segment card ${label}`).toBeVisible({ timeout: 45_000 });
-  await card.click();
+  // `.seg-card__select` is the card's selection button; clicking the card box
+  // targets its centre, which the breakdown chips can occupy.
+  await card.locator('.seg-card__select').click();
 }
 
 async function expectClearFiltersState(page: Page, disabled: boolean): Promise<void> {
@@ -272,6 +274,67 @@ test('Segment Intelligence stacks selected segments into an any-match cohort and
   expect(url.searchParams.get('segment_codes') ?? url.searchParams.get('segments')).toMatch(/itm/);
   expect(url.searchParams.get('segment_codes') ?? url.searchParams.get('segments')).toMatch(/listed/);
   await expect(page.getByRole('button', { name: /SEGMENT:\s*2 segments selected \(all selected\)/i })).toBeVisible({ timeout: 20_000 });
+});
+
+/**
+ * Regression: clicking a segment card's geometric centre used to open the
+ * Evidence Drawer instead of selecting. The card was a `role="button"` host
+ * whose evidence/breakdown chips called `stopPropagation()`, and on
+ * deployments whose data renders the product/channel rows those chips occupied
+ * the centre — the point an untargeted click (a user's, or Playwright's
+ * default) lands on. Selection now lives on a stretched `.seg-card__select`
+ * button that the chips sit above, so the centre always selects.
+ */
+test('clicking the centre of a segment card selects it instead of opening evidence', async ({ page }) => {
+  await gotoApp(page, '/segment-intelligence');
+  const card = page.locator('.seg-card', { hasText: 'Prime Refi Candidates' }).first();
+  await expect(card, 'segment card should be ready').toBeVisible({ timeout: 45_000 });
+  const select = card.locator('.seg-card__select');
+  await expect(select).toHaveAttribute('aria-pressed', 'false');
+
+  // What is actually under the card's centre point? Anything that is not the
+  // selection button means an untargeted click does something else.
+  const centreOwner = await card.evaluate((node) => {
+    const rect = node.getBoundingClientRect();
+    const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    return {
+      isSelect: hit?.classList.contains('seg-card__select') ?? false,
+      hit: hit ? `${hit.tagName.toLowerCase()}.${hit.className}` : 'none',
+    };
+  });
+  expect(centreOwner.isSelect, `card centre should be the selection button, got ${centreOwner.hit}`).toBe(true);
+
+  const box = await card.boundingBox();
+  expect(box, 'segment card should have a layout box').not.toBeNull();
+  await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height / 2);
+
+  await expect(select).toHaveAttribute('aria-pressed', 'true', { timeout: 20_000 });
+  await expect(page).toHaveURL(/segment_codes=[^&]*itm/, { timeout: 20_000 });
+  await expect(page.locator('.drawer-scrim.is-open'), 'centre click must not open the Evidence Drawer').toHaveCount(0);
+});
+
+/**
+ * The drawer is modal, so a stray open blocks the page until it is dismissed.
+ * Both dismissal paths must work: the scrim and Escape.
+ */
+test('the Evidence Drawer is dismissible by scrim click and by Escape', async ({ page }) => {
+  await gotoApp(page, '/segment-intelligence');
+  const chip = page.locator('.seg-card .evidence-chip').first();
+  await expect(chip, 'segment evidence chip should be ready').toBeVisible({ timeout: 45_000 });
+
+  await chip.click();
+  await expect(page.locator('.drawer.is-open')).toBeVisible({ timeout: 20_000 });
+  await page.locator('.drawer-scrim.is-open').click({ position: { x: 8, y: 8 } });
+  await expect(page.locator('.drawer-scrim.is-open')).toHaveCount(0, { timeout: 20_000 });
+
+  await chip.click();
+  await expect(page.locator('.drawer.is-open')).toBeVisible({ timeout: 20_000 });
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.drawer-scrim.is-open')).toHaveCount(0, { timeout: 20_000 });
+
+  // Page is usable again: selection still works after the drawer closes.
+  await clickSegment(page, 'Prime Refi Candidates');
+  await expect(page).toHaveURL(/segment_codes=[^&]*itm/, { timeout: 20_000 });
 });
 
 test('segment any/all API counts are de-duplicated and intersection-safe', async ({ request }) => {

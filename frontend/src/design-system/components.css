@@ -836,11 +836,17 @@ kbd {
    ============================================================ */
 .seg-card {
   position: relative;
+  display: flex;
+  flex-direction: column;
   background: var(--bg-2);
   border: 1px solid var(--line-1);
   border-radius: var(--r-lg);
   padding: var(--pad-card);
-  cursor: pointer;
+  /* Not `pointer`: the card is a container, not a control. The pointer
+     affordance belongs to `.seg-card__select` (the stretched selection
+     button) and to the chips, so the cursor never promises a click that
+     does nothing — e.g. on a gated card, which has no select button. */
+  cursor: default;
   transition: all var(--dur-base) var(--ease);
   overflow: hidden;
   text-align: left;
@@ -848,6 +854,39 @@ kbd {
   min-block-size: 184px;
   color: inherit;
   font-family: inherit;
+}
+/* Whole-card selection target. See the SegmentCard.tsx header comment: the
+   prototype's "the whole card selects" contract is preserved by stretching a
+   real <button> across the card instead of putting `role="button"` on the
+   card itself. Sits above the card content (z-index 1) so any click that is
+   not on a chip selects; the chips are lifted to z-index 2 below. */
+.seg-card__select {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  appearance: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  border-radius: var(--r-lg);
+  cursor: pointer;
+}
+/* Inset the focus ring: the card clips overflow, so the global
+   `:focus-visible { outline-offset: 2px }` would be cut off. */
+.seg-card__select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -3px;
+  border-radius: var(--r-lg);
+}
+/* Chips keep their own click target above the selection overlay. This is what
+   replaced six `stopPropagation()` handlers: the evidence and breakdown chips
+   are no longer descendants of the selection control, so their clicks cannot
+   reach it in the first place. */
+.seg-card__evidence,
+.seg-card__facet-chip {
+  position: relative;
+  z-index: 2;
 }
 .seg-card::before {
   content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
@@ -869,10 +908,10 @@ kbd {
 }
 /* S1.3 gated segment panel: source not connected / not licensed. The card
    stays in the grid (registry completeness) but reads as inert — dashed
-   border, muted accent, default cursor, no hover lift. Counts are never
-   fabricated; the em-dash count + warning chip say why. */
+   border, muted accent, no hover lift, and no `.seg-card__select` button at
+   all (SegmentCard.tsx renders none), so there is nothing to click. Counts
+   are never fabricated; the em-dash count + warning chip say why. */
 .seg-card--gated {
-  cursor: default;
   border-style: dashed;
   border-color: var(--line-2);
 }
@@ -1005,14 +1044,19 @@ kbd {
 
 /* S1.6 — borrower-dimension facet rows (loan product + origination channel).
  * Sits under the meta row; one row per dimension: a small caps label followed
- * by `.chip chip--neutral` chips. Chips are evidence-clickable spans (not
- * buttons — the card itself is a <button>, so nesting is invalid) that open
- * the EvidenceDrawer without toggling card selection. */
+ * by evidence chips that open the EvidenceDrawer without toggling selection.
+ *
+ * `margin-top: auto` pins the breakdown to the bottom edge of the card (the
+ * card is a column flex container) so the card's slack collects in the middle
+ * instead of pushing chips toward the geometric centre. That matters because
+ * the centre is where an untargeted click — a user's, or Playwright's default
+ * click point — lands: it should hit the selection overlay, not a chip. */
 .seg-card__facets {
   display: flex;
   flex-direction: column;
   gap: var(--sp-2);
-  margin-top: var(--sp-3);
+  margin-top: auto;
+  padding-top: var(--sp-3);
 }
 .seg-card__facet-row {
   display: flex;
@@ -1029,16 +1073,12 @@ kbd {
   color: var(--text-3);
   margin-inline-end: var(--sp-1);
 }
+/* Layout wrapper only. The hover and focus treatments live on the
+   `.evidence-chip` button inside it — the wrapper is a <span> with no border
+   and no tabindex, so styling its own :hover/:focus-visible painted nothing. */
 .seg-card__facet-chip {
-  cursor: pointer;
-}
-.seg-card__facet-chip:hover {
-  border-color: var(--line-2);
-  color: var(--text-1);
-}
-.seg-card__facet-chip:focus-visible {
-  outline: calc(var(--sp-1) / 2) solid var(--accent);
-  outline-offset: calc(var(--sp-1) / 2);
+  display: inline-flex;
+  min-inline-size: 0;
 }
 
 /* ============================================================
