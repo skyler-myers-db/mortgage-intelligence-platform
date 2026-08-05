@@ -1362,7 +1362,7 @@ def test_genie_sales_ops_response_policy_blocks_unapproved_table_identity(
     previous_audit = app.dependency_overrides.get(get_audit_store)
     app.dependency_overrides[get_audit_store] = lambda: audit
     monkeypatch.setattr(
-        "backend.api.genie.sales_ops_genie_response",
+        "backend.services.genie_deterministic.sales_ops_genie_response",
         _unsafe_sales_ops_response,
     )
     try:
