@@ -39,7 +39,6 @@ from backend.services.lakebase import get_lakebase_client  # noqa: F401 - compat
 from backend.services.repositories.databricks_analytics import DatabricksAnalyticsRepository
 from backend.services.repositories.databricks_borrowers import (
     DatabricksBorrowerRepository,
-    DatabricksOfferRepository,
     DatabricksOutreachRepository,
 )
 from backend.services.repositories.databricks_genie import (  # noqa: F401
@@ -140,6 +139,7 @@ from backend.services.repositories.databricks_geo import (
     DatabricksSegmentRepository,
 )
 from backend.services.repositories.databricks_leads import DatabricksLeadRepository
+from backend.services.repositories.databricks_offers import DatabricksOfferRepository
 from backend.services.repositories.databricks_portfolio import DatabricksPortfolioRepository
 from backend.services.repositories.databricks_shared import (
     _BORROWER_360_COLUMNS,  # noqa: F401 - compatibility re-export for schema-guard tests

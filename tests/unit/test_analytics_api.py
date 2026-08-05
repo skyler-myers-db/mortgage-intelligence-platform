@@ -156,7 +156,20 @@ class _AnalyticsSqlClient:
                 "refreshed_at": "2026-05-18 06:00:00",
             }]
         if "AS total_matching" in statement:
-            return [{"total_matching": 6, "refreshed_at": "2026-05-18 06:00:00"}]
+            return [{
+                "borrower_id": "B-48291",
+                "display_name": "Borrower 48291",
+                "primary_segment_code": "itm",
+                "state": "IL",
+                "equity_pct": 42,
+                "rate_spread_bps": 88,
+                "opportunity_score": 91,
+                "score_band": "high",
+                "in_the_money": True,
+                "total_matching": 6,
+                "coordinate_total": 1,
+                "refreshed_at": "2026-05-18 06:00:00",
+            }]
         if "ORDER BY p.opportunity_score DESC, p.borrower_id" in statement:
             return [{
                 "borrower_id": "B-48291",

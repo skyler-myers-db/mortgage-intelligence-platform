@@ -1,28 +1,22 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ApiError, api } from '../../lib/api';
-import { Icon } from '../Icon';
+import { Icon, ThumbsDown, ThumbsUp } from '../Icon';
 
 /**
  * GenieAnswerFeedback — thumbs-up / thumbs-down on a Genie answer with an
- * optional short comment. Submits to POST /api/genie/feedback, which writes a
- * governed audit row.
+ * a governed audit row. The app intentionally collects only the binary vote;
+ * free-text comments can carry borrower details and are not accepted.
  *
  * Contract notes:
  *   - Requires both conversation_id and message_id (the audit key). When
  *     either is missing the whole control renders nothing — feedback that
  *     can't be attributed to a message is dropped rather than shown.
- *   - The comment is capped at 280 chars and the placeholder warns against
- *     names / PII. The backend rejects PII with 422; we surface that
- *     `detail` inline but NEVER echo the rejected comment back as a quoted
- *     string (that would re-surface the PII the backend just refused).
  *   - 415 (wrong content-type) / 5xx surface a generic inline error.
  *   - The submit handler is async-latched via a ref so a double-click or a
  *     second vote while a request is in flight cannot fire two POSTs.
  *   - On success the control locks to a subtle "Feedback recorded" state and
  *     both vote buttons disable. There is deliberately NO un-vote flow.
  */
-
-const MAX_COMMENT = 280;
 
 type Vote = 'up' | 'down';
 
@@ -35,13 +29,24 @@ export function GenieAnswerFeedback({
   conversationId,
   messageId,
 }: GenieAnswerFeedbackProps) {
-  const [comment, setComment] = useState('');
   const [pending, setPending] = useState<Vote | null>(null);
   const [recorded, setRecorded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Async latch: guards against a double-submit before React re-renders the
   // disabled state. Mirrors the approval handler latch pattern.
   const inFlightRef = useRef(false);
+  const requestIdsRef = useRef<Partial<Record<Vote, string>>>({});
+  const identity = `${conversationId ?? ''}:${messageId ?? ''}`;
+  const identityRef = useRef(identity);
+
+  useEffect(() => {
+    identityRef.current = identity;
+    inFlightRef.current = false;
+    requestIdsRef.current = {};
+    setPending(null);
+    setRecorded(false);
+    setError(null);
+  }, [identity]);
 
   // Feedback needs a message to attach to. Without the audit key there is
   // nothing to record, so render nothing rather than a dead control.
@@ -52,28 +57,34 @@ export function GenieAnswerFeedback({
     inFlightRef.current = true;
     setPending(helpful ? 'up' : 'down');
     setError(null);
-    const trimmed = comment.trim();
+    const vote: Vote = helpful ? 'up' : 'down';
+    const submittedIdentity = identity;
+    const requestId = requestIdsRef.current[vote] ?? crypto.randomUUID();
+    requestIdsRef.current[vote] = requestId;
     try {
       await api.genieFeedback({
         conversation_id: conversationId,
         message_id: messageId,
         helpful,
-        // Only send a comment when the user typed one — the field is optional.
-        ...(trimmed.length > 0 ? { comment: trimmed } : {}),
+        request_id: requestId,
       });
-      setRecorded(true);
+      if (identityRef.current === submittedIdentity) setRecorded(true);
     } catch (err) {
-      // 422 → surface the backend detail (e.g. "Comment appears to contain
-      // personal data."). We show the detail message only, never the
-      // rejected comment text. 415 / 5xx → generic copy.
+      if (identityRef.current !== submittedIdentity) return;
+      // A policy rejection can still return 422 for a stale client payload.
+      // Surface only the fixed backend detail.
       if (err instanceof ApiError && err.status === 422) {
-        setError(err.message || 'That comment could not be accepted.');
+        setError(err.message || 'Feedback could not be recorded.');
+      } else if (err instanceof ApiError && err.status === 409) {
+        setError('Feedback is still being processed or could not be reconciled. Retry to safely confirm the same vote.');
       } else {
         setError('Feedback could not be recorded. Please try again.');
       }
     } finally {
-      inFlightRef.current = false;
-      setPending(null);
+      if (identityRef.current === submittedIdentity) {
+        inFlightRef.current = false;
+        setPending(null);
+      }
     }
   };
 
@@ -98,7 +109,7 @@ export function GenieAnswerFeedback({
           aria-label="Mark this answer helpful"
           data-testid="genie-feedback-up"
         >
-          <Icon name="up" size={12} />
+          <ThumbsUp size={14} />
         </button>
         <button
           type="button"
@@ -108,19 +119,9 @@ export function GenieAnswerFeedback({
           aria-label="Mark this answer not helpful"
           data-testid="genie-feedback-down"
         >
-          <Icon name="down" size={12} />
+          <ThumbsDown size={14} />
         </button>
       </div>
-      <textarea
-        className="genie-feedback__comment"
-        value={comment}
-        maxLength={MAX_COMMENT}
-        onChange={(e) => setComment(e.target.value)}
-        placeholder="Optional — what worked or what was off? Do not include names or personal details."
-        aria-label="Optional feedback comment (do not include names or personal details)"
-        rows={2}
-        disabled={pending !== null}
-      />
       {error && (
         <div className="genie-feedback__error" role="alert">
           {error}

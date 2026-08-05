@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import {
   AppShell,
   applyActorScopedStateTransition,
@@ -24,8 +24,8 @@ import type { ConfigOptions } from '../../types';
  *   1. The skip-link appears before any navigation/header/main markup.
  *   2. The `#main-content` target carries `tabIndex={-1}` so focus
  *      actually moves when the skip-link activates.
- *   3. The workspace-console skip-link is preserved (was added in
- *      cycle 11; removing it is a regression).
+ *   3. The workspace-console skip-link is not emitted while its target is
+ *      hidden. The interactive browser suite covers it when the console opens.
  *   4. Rail is `<nav>` labelled "Primary navigation".
  */
 
@@ -60,20 +60,24 @@ function renderShell(configOptions?: ConfigOptions): string {
 }
 
 describe('AppShell skip-link + landmarks', () => {
-  it('emits a "Skip to main content" link before "Skip to workspace console"', () => {
+  it('emits "Skip to main content" without a shortcut to the hidden console', () => {
     const html = renderShell();
     const mainIdx = html.indexOf('Skip to main content');
     const consoleIdx = html.indexOf('Skip to workspace console');
     expect(mainIdx).toBeGreaterThan(-1);
-    expect(consoleIdx).toBeGreaterThan(-1);
-    // Order matters: WCAG expects "skip to main" as the first
-    // affordance. The workspace-console shortcut is secondary.
-    expect(mainIdx).toBeLessThan(consoleIdx);
+    expect(consoleIdx).toBe(-1);
+    expect(html.indexOf('class="app-shell"')).toBeLessThan(mainIdx);
   });
 
   it('wires the "Skip to main content" link to #main-content', () => {
     const html = renderShell();
     expect(html).toMatch(/href="#main-content"[^>]*class="sr-skip-link"/);
+  });
+
+  it('keeps the lazy workspace-console target programmatically focusable', () => {
+    const html = renderShell();
+    expect(html).toMatch(/<aside[^>]*id="workspace-console"/);
+    expect(html).toMatch(/<aside[^>]*id="workspace-console"[^>]*tabindex="-1"/);
   });
 
   it('emits <main id="main-content" tabindex="-1"> so the skip-link can shift focus', () => {

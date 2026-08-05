@@ -189,6 +189,28 @@ def test_allowlist_permits_known_keys() -> None:
     )
 
 
+def test_generated_draft_proof_metadata_is_strictly_value_checked() -> None:
+    valid = {
+        "draft_generation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "draft_response_hash": "a" * 64,
+        "draft_source_refreshed_at": "2026-07-13T12:00:00+00:00",
+        "draft_edited": True,
+        "draft_attribution": "human_edited_from_supervisor",
+    }
+    _assert_allowlisted(valid)
+    _assert_public_safe_values(valid)
+
+    for field, value in (
+        ("draft_response_hash", "not-a-hash"),
+        ("draft_source_refreshed_at", "not-a-timestamp"),
+        ("draft_source_refreshed_at", "2026-07-13T12:00:00"),
+        ("draft_edited", "true"),
+        ("draft_attribution", "model_generated"),
+    ):
+        with pytest.raises(AuditMetadataValueViolation):
+            _assert_public_safe_values({field: value})
+
+
 def test_allowlist_is_case_insensitive() -> None:
     """Upper-cased known keys still pass -- matches the denylist policy."""
     _assert_allowlisted({"OFFER_CODE": "refi"})
@@ -475,6 +497,7 @@ def test_in_memory_store_scrubs_allowed_free_text_before_persisting() -> None:
             "approval_id": "94e455bb-5fed-4745-82db-0b8606194175",
             "borrower_id": "B-12345",
             "offer_code": "refi",
+            "draft_subject": "Review for jane@example.com at 555-212-3333",
             "draft_body": "Call 555-212-3333 or email jane@example.com about 123 Elm St.",
         },
     )
@@ -482,6 +505,10 @@ def test_in_memory_store_scrubs_allowed_free_text_before_persisting() -> None:
     assert "555-212-3333" not in str(event.payload_json)
     assert "jane@example.com" not in str(event.payload_json)
     assert "123 Elm St" not in str(event.payload_json)
+    assert "jane@example.com" not in event.payload_json["draft_subject"]
+    assert "555-212-3333" not in event.payload_json["draft_subject"]
+    assert "[EMAIL-REDACTED]" in event.payload_json["draft_subject"]
+    assert "[PHONE-REDACTED]" in event.payload_json["draft_subject"]
     assert "[PHONE-REDACTED]" in event.payload_json["draft_body"]
     assert "[EMAIL-REDACTED]" in event.payload_json["draft_body"]
     assert "[ADDRESS-REDACTED]" in event.payload_json["draft_body"]

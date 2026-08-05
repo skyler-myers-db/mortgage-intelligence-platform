@@ -69,15 +69,25 @@ python -m backend.runtime
 
 ## Databricks deploy
 
-For a customer fork, first rebind the bundle's single workspace-host anchor
-and set the lender identity in `.env.local`:
+For a customer fork, first add the customer's exact public legal lender name
+and verified NMLS ID to the source-controlled registry in
+`backend/schemas/lender_identity.py`. That registry change requires independent
+review; runtime configuration alone cannot introduce a new borrower-facing
+identity. After the reviewed pair is merged, rebind the bundle's single
+workspace-host anchor and set that exact identity in `.env.local`:
 
 ```bash
 ./scripts/configure-workspace.sh https://<customer-workspace>.cloud.databricks.com
-MIP_LENDER_NAME="Acme Mortgage"
+MIP_LENDER_NAME="<reviewed legal lender name>"
+MIP_LENDER_NMLS_ID="<matching reviewed lender NMLS id>"
 # Optional; defaults from MIP_LENDER_NAME when unset.
-MIP_TENANT_ID="acme_mortgage"
+MIP_TENANT_ID="<reviewed tenant slug>"
 ```
+
+Non-Summit deployments must set `MIP_LENDER_NMLS_ID`; the Summit demo ID is
+never reused as a customer default. Deployment validates the configured pair
+before it mutates workspace resources and fails closed when the pair is absent
+from the reviewed registry.
 
 ```bash
 make deploy-dev
@@ -85,19 +95,13 @@ make deploy-dev
 
 `make deploy-dev` runs `scripts/deploy.sh`: build, env-aware direct bundle
 validate/plan/deploy, app snapshot promotion, refresh jobs, Genie rebinding,
-and smoke checks. For narrow resource-only recovery, `make bundle-validate`,
-`make bundle-plan`, and `make bundle-deploy` are safe because they run
-`tools/databricks/bundle_env.py`.
-
-The Entrada dev target also supports the plain Databricks bundle path:
-
-```bash
-databricks bundle deploy -t dev --profile DEFAULT
-```
-
-That path is resource-only; run `databricks apps deploy mip-app --mode SNAPSHOT`
-afterward if you need to promote a freshly built app snapshot without running the
-full deploy script.
+and smoke checks. `make bundle-validate` and `make bundle-plan` are safe
+read-only diagnostics because they run `tools/databricks/bundle_env.py`.
+The former mutable `make bundle-deploy` and `make bundle-deploy-dev` aliases
+fail closed. All workspace mutation goes through `make deploy-dev` so non-App
+resource selection, App resource reconciliation, signed source promotion,
+migrations, proof checks, refreshes, and smoke gates remain one reviewable
+operator flow.
 
 ## Documentation map
 

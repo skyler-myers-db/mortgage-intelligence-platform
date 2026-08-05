@@ -24,11 +24,13 @@ import { ScoreBadge } from './ScoreBadge';
 interface LeadTableRowProps {
   lead: LeadSummary;
   virtualIndex: number;
+  ariaRowIndex?: number;
   isOpen: boolean;
   approval: string | undefined;
   isSelected: boolean;
   isSelectable: boolean;
   isApprovalEligible: boolean;
+  approvalActionsDisabled?: boolean;
   bulkApproving: boolean;
   salesBusy: boolean;
   salesTeamCount: number;
@@ -44,11 +46,13 @@ interface LeadTableRowProps {
 export function LeadTableRow({
   lead,
   virtualIndex,
+  ariaRowIndex,
   isOpen,
   approval,
   isSelected,
   isSelectable,
   isApprovalEligible,
+  approvalActionsDisabled = false,
   bulkApproving,
   salesBusy,
   salesTeamCount,
@@ -62,12 +66,13 @@ export function LeadTableRow({
 }: LeadTableRowProps) {
   const stop = (e: ReactMouseEvent) => e.stopPropagation();
   const toggleRow = () => onToggleRow(lead, isOpen);
+  const resolvedAriaRowIndex = ariaRowIndex ?? virtualIndex + 2;
 
   return (
     <Fragment>
       <tr
         className={isOpen ? 'is-expanded' : ''}
-        aria-rowindex={virtualIndex + 2}
+        aria-rowindex={resolvedAriaRowIndex}
         onClick={toggleRow}
       >
         <td className="tbl-cell--select" onClick={stop}>
@@ -246,7 +251,8 @@ export function LeadTableRow({
                 variant="primary"
                 size="sm"
                 icon="check"
-                disabled={pendingApproval}
+                disabled={approvalActionsDisabled || pendingApproval}
+                aria-describedby={approvalActionsDisabled ? 'campaign-binding-status' : undefined}
                 onClick={(e) => {
                   e.stopPropagation();
                   onApprove(lead.borrower_id);
@@ -261,7 +267,8 @@ export function LeadTableRow({
                 className="btn btn--sm lead-table__reject"
                 aria-label={`Reject ${lead.borrower_id}`}
                 title="Reject"
-                disabled={pendingApproval}
+                disabled={approvalActionsDisabled || pendingApproval}
+                aria-describedby={approvalActionsDisabled ? 'campaign-binding-status' : undefined}
                 onClick={(e) => {
                   e.stopPropagation();
                   onReject(lead.borrower_id);
@@ -275,7 +282,7 @@ export function LeadTableRow({
         </td>
       </tr>
       {isOpen && (
-        <tr className="tbl__expand">
+        <tr className="tbl__expand" aria-rowindex={resolvedAriaRowIndex + 1}>
           <td colSpan={15}>
             <RowPreview lead={lead} approval={approval} />
           </td>

@@ -11,7 +11,10 @@ These are integration-tier tests because they exercise the full
 router -> factory -> store seam, not a single unit. They do not
 require any live network.
 """
+
 from __future__ import annotations
+
+import json
 
 from fastapi.testclient import TestClient
 
@@ -95,7 +98,10 @@ def test_recommend_offer_emits_recommend_offer_audit_row() -> None:
 
 
 def test_draft_outreach_emits_draft_outreach_audit_row() -> None:
-    store = _clear_store()
+    _clear_store()
+    lakebase = _installed_lakebase()
+    lakebase.audit_events.clear()
+    lakebase.generated_outreach_drafts.clear()
 
     r = client.post(
         "/api/outreach/draft",
@@ -103,12 +109,14 @@ def test_draft_outreach_emits_draft_outreach_audit_row() -> None:
     )
     assert r.status_code == 200
 
-    events = store.list(limit=10)
-    drafts = [e for e in events if e.event_type == "DRAFT_OUTREACH"]
+    drafts = [e for e in lakebase.audit_events if e["event_type"] == "DRAFT_OUTREACH"]
     assert len(drafts) == 1
     e = drafts[0]
-    assert e.entity_type == "outreach_draft"
-    assert e.payload_json.get("channel") == "email"
+    assert e["entity_type"] == "outreach_draft"
+    assert json.loads(e["metadata"])["channel"] == "email"
+    assert len(lakebase.generated_outreach_drafts) == 1
+    assert lakebase.generated_outreach_drafts[0]["audit_event_id"] == e["audit_id"]
+    assert lakebase.generated_outreach_drafts[0]["response_json"] == r.json()
 
 
 def test_approve_outreach_writes_approvals_row_and_audit_event() -> None:
@@ -122,16 +130,15 @@ def test_approve_outreach_writes_approvals_row_and_audit_event() -> None:
             "borrower_id": "B-48291",
             "offer_code": "refi",
             "actor": "anonymous",
-            "draft_body": "Governed approval body. Summit Mortgage, NMLS #123456. Equal Housing Lender. Reply unsubscribe to opt out.",
+            "draft_subject": "Your mortgage review",
+            "draft_body": "Contact a loan officer to review available mortgage options. Summit Mortgage, NMLS #123456. Equal Housing Lender. Reply unsubscribe to opt out.",
         },
     )
     assert r.status_code == 200
 
     # Approvals row -- INSERT INTO mip_app.approvals with named params.
     approval_inserts = [
-        (sql, params)
-        for sql, params in lakebase.executes
-        if "INSERT INTO mip_app.approvals" in sql
+        (sql, params) for sql, params in lakebase.executes if "INSERT INTO mip_app.approvals" in sql
     ]
     assert len(approval_inserts) == 1
     _sql, params = approval_inserts[0]

@@ -1,12 +1,23 @@
 """Offer recommendation request and response contracts."""
 
-from datetime import datetime
-from typing import Literal
+import re
+from datetime import UTC, datetime, timedelta
+from typing import Annotated, Literal
+from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 from backend.schemas.common import (
+    PUBLIC_UUID_PATTERN,
     validate_internal_staff_email,
+    validate_no_human_name_shape,
     validate_public_borrower_id,
     validate_public_campaign_label,
     validate_public_opaque_id,
@@ -25,6 +36,133 @@ OfferType = Literal[
     "investor",
     "nurture",
 ]
+
+_EVIDENCE_ID_PATTERN_TEXT = r"^ev-[0-9a-f]{3,61}$"
+_EVIDENCE_ID_PATTERN = re.compile(_EVIDENCE_ID_PATTERN_TEXT)
+_MAX_OFFER_EVIDENCE_IDS = 20
+_MAX_SOURCE_REFRESHED_AT_LENGTH = 64
+_MAX_SOURCE_REFRESHED_AT_FUTURE_SKEW = timedelta(minutes=5)
+EvidenceIdentifier = Annotated[
+    str,
+    StringConstraints(
+        min_length=6,
+        max_length=64,
+        pattern=_EVIDENCE_ID_PATTERN_TEXT,
+    ),
+]
+
+
+def validate_offer_evidence_ids(value: object) -> list[str]:
+    """Validate ordered, public evidence references for an offer proof."""
+
+    if not isinstance(value, list | tuple):
+        raise ValueError("offer evidence_ids must be an ordered list")
+    if not 1 <= len(value) <= _MAX_OFFER_EVIDENCE_IDS:
+        raise ValueError(
+            f"offer evidence_ids must contain between 1 and {_MAX_OFFER_EVIDENCE_IDS} items"
+        )
+
+    evidence_ids: list[str] = []
+    for raw_value in value:
+        if not isinstance(raw_value, str):
+            raise ValueError("offer evidence_ids contains an invalid identifier")
+        evidence_id = raw_value.strip()
+        if _EVIDENCE_ID_PATTERN.fullmatch(evidence_id) is None:
+            raise ValueError("offer evidence_ids contains an invalid identifier")
+        evidence_ids.append(evidence_id)
+    return evidence_ids
+
+
+def validate_offer_source_refreshed_at(value: object) -> str:
+    """Validate the bounded, timezone-aware source version for an offer proof."""
+
+    if not isinstance(value, str):
+        raise ValueError("offer source_refreshed_at must be a timestamp")
+    timestamp = value.strip()
+    if not timestamp or len(timestamp) > _MAX_SOURCE_REFRESHED_AT_LENGTH:
+        raise ValueError("offer source_refreshed_at must be a bounded timestamp")
+    try:
+        parsed = datetime.fromisoformat(timestamp)
+    except ValueError as exc:
+        raise ValueError("offer source_refreshed_at must be a parseable timestamp") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("offer source_refreshed_at must include a timezone")
+    if parsed.astimezone(UTC) > datetime.now(UTC) + _MAX_SOURCE_REFRESHED_AT_FUTURE_SKEW:
+        raise ValueError("offer source_refreshed_at cannot be materially in the future")
+    return timestamp
+
+
+def validate_campaign_uuid(value: str) -> str:
+    """Return the canonical UUID used by Lakebase campaign foreign keys."""
+
+    campaign_id = str(value).strip()
+    try:
+        return str(UUID(campaign_id))
+    except (AttributeError, ValueError) as exc:
+        raise ValueError("campaign_id must be a valid UUID") from exc
+
+
+def validate_complete_campaign_binding(
+    campaign_id: str | None,
+    variant_name: str | None,
+) -> None:
+    """Prevent campaign ids and variant labels from travelling independently."""
+
+    if (campaign_id is None) != (variant_name is None):
+        raise ValueError("campaign_id and variant_name must be supplied together")
+
+
+class GovernedOfferInputs(BaseModel):
+    """Strict atomic input row used to build and audit a recommendation."""
+
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    clip_id: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=128),
+    ]
+    borrower_id: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=64),
+    ]
+    confidence: int = Field(ge=0, le=100)
+    evidence_ids: list[EvidenceIdentifier] = Field(
+        min_length=1,
+        max_length=_MAX_OFFER_EVIDENCE_IDS,
+    )
+    source_refreshed_at: str = Field(min_length=1, max_length=64)
+    rate_spread_bps: int
+    equity_pct: int = Field(ge=0, le=100)
+    has_permit: bool
+    has_heloc_propensity_trigger: bool
+    heloc_propensity_score: int | None = Field(ge=0, le=999)
+    has_refi_propensity_trigger: bool
+    refi_propensity_score: int | None = Field(ge=0, le=999)
+    listed_for_sale: bool
+    is_investor: bool
+    is_current_customer: bool
+    is_competitor_lien: bool
+    offer_code: OfferType
+    min_spread_bps: int
+    min_equity_pct: int = Field(ge=0, le=100)
+    heloc_equity_min_pct: int = Field(ge=0, le=100)
+    cashout_equity_min_pct: int = Field(ge=0, le=100)
+    retention_min_spread_bps: int
+
+    @field_validator("borrower_id")
+    @classmethod
+    def _borrower_id_is_public_safe(cls, value: str) -> str:
+        return validate_public_borrower_id(value)
+
+    @field_validator("source_refreshed_at", mode="before")
+    @classmethod
+    def _source_refreshed_at_is_valid(cls, value: object) -> str:
+        return validate_offer_source_refreshed_at(value)
+
+    @field_validator("evidence_ids", mode="before")
+    @classmethod
+    def _evidence_ids_are_valid(cls, value: object) -> list[str]:
+        return validate_offer_evidence_ids(value)
 
 
 class OfferAlternative(BaseModel):
@@ -56,12 +194,20 @@ class SourceLabel(BaseModel):
 
 class OfferRecommendation(BaseModel):
     borrower_id: str
+    source_refreshed_at: str = Field(
+        min_length=1,
+        max_length=64,
+        json_schema_extra={"format": "date-time"},
+    )
     offer_code: str
     offer_type: OfferType
     product_label: str
     confidence: int = Field(ge=0, le=100)
     rationale: str
-    evidence_ids: list[str]
+    evidence_ids: list[EvidenceIdentifier] = Field(
+        min_length=1,
+        max_length=_MAX_OFFER_EVIDENCE_IDS,
+    )
     # Legacy: raw UC FQN list kept for drawer lineage (the frontend's
     # sourceDescriptor() helper still substring-matches on 'fn_in_the_money'
     # etc. to route to DRAWER_SOURCES). Superseded for chip rendering by
@@ -75,6 +221,16 @@ class OfferRecommendation(BaseModel):
     source_labels: list[SourceLabel] = []
     alternatives: list[OfferAlternative] = []
     thresholds_applied: dict[str, int] = {}
+
+    @field_validator("source_refreshed_at", mode="before")
+    @classmethod
+    def _source_refreshed_at_is_valid(cls, value: object) -> str:
+        return validate_offer_source_refreshed_at(value)
+
+    @field_validator("evidence_ids", mode="before")
+    @classmethod
+    def _evidence_ids_are_valid(cls, value: object) -> list[str]:
+        return validate_offer_evidence_ids(value)
 
 
 class OfferRecommendRequest(BaseModel):
@@ -90,7 +246,16 @@ OutreachChannel = Literal["email", "sms", "direct_mail"]
 
 
 class OutreachDraft(BaseModel):
+    generation_id: str = Field(min_length=1, max_length=64)
+    response_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_refreshed_at: str = Field(min_length=1, max_length=64)
     borrower_id: str
+    campaign_id: str | None = Field(default=None, max_length=64)
+    variant_name: str | None = Field(default=None, max_length=64)
+    campaign_treatment_fingerprint: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
     offer_code: str
     channel: OutreachChannel
     subject: str | None = None
@@ -99,6 +264,34 @@ class OutreachDraft(BaseModel):
     disclosure_version: str
     disclosure_state: str
     marketing_eligible: bool
+    generation_mode: Literal["supervisor", "governed_fallback"]
+    generator_label: str = Field(min_length=1, max_length=80)
+    strategy_summary: str = Field(min_length=1, max_length=500)
+    evidence_summary: list[str] = Field(min_length=1, max_length=5)
+    evidence_assets: list[str] = Field(min_length=1, max_length=5)
+
+    @field_validator("campaign_id")
+    @classmethod
+    def _campaign_id_is_uuid(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        return validate_campaign_uuid(value)
+
+    @field_validator("variant_name")
+    @classmethod
+    def _variant_name_is_public_safe(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        return validate_public_campaign_label(value)
+
+    @model_validator(mode="after")
+    def _campaign_binding_is_complete(self) -> "OutreachDraft":
+        validate_complete_campaign_binding(self.campaign_id, self.variant_name)
+        if (self.campaign_id is None) != (self.campaign_treatment_fingerprint is None):
+            raise ValueError(
+                "campaign_treatment_fingerprint is required exactly when a campaign is bound"
+            )
+        return self
 
 
 class OutreachDraftRequest(BaseModel):
@@ -117,7 +310,7 @@ class OutreachDraftRequest(BaseModel):
     def _campaign_id_is_public_safe(cls, value: str | None) -> str | None:
         if value is None:
             return value
-        return validate_public_opaque_id(value)
+        return validate_campaign_uuid(value)
 
     @field_validator("variant_name")
     @classmethod
@@ -125,6 +318,11 @@ class OutreachDraftRequest(BaseModel):
         if value is None:
             return value
         return validate_public_campaign_label(value)
+
+    @model_validator(mode="after")
+    def _campaign_binding_is_complete(self) -> "OutreachDraftRequest":
+        validate_complete_campaign_binding(self.campaign_id, self.variant_name)
+        return self
 
 
 class OutreachApproveRequest(BaseModel):
@@ -144,14 +342,25 @@ class OutreachApproveRequest(BaseModel):
     # nullable so FastAPI can return the endpoint's clearer 422 detail
     # instead of a generic request-body parse failure.
     draft_body: str | None = None
+    # The exact approver-visible subject for channels that support one.
+    # SMS is intentionally subjectless and is rejected when a caller sends
+    # non-empty subject text.
+    draft_subject: str | None = Field(default=None, max_length=120)
+    draft_generation_id: str | None = Field(default=None, pattern=PUBLIC_UUID_PATTERN)
+    draft_response_hash: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    draft_source_refreshed_at: str | None = Field(default=None, max_length=64)
     # R5-01 idempotency key. When present, the router short-circuits a
     # retry that arrived after a successful INSERT whose response was
     # lost: the partial unique index on ``mip_app.approvals.request_id``
     # catches the collision and we return the existing decision row.
     # Clients generate this with ``crypto.randomUUID()`` and reuse the
     # same value across retries of the same user action. Bounded at 64
-    # chars to match the DDL column width; None keeps legacy callers
-    # working at pre-R5-01 semantics (no duplicate protection).
+    # chars to match the DDL column width. When omitted, the server derives a
+    # stable key from the actor, action, and complete normalized decision intent
+    # so legacy transport retries retain duplicate protection.
     request_id: str | None = Field(default=None, max_length=64)
     # Feature C: optional loan-officer assignment + "follow up in N days"
     # reminder captured at approval time. Both are optional and None-able so
@@ -182,6 +391,16 @@ class OutreachApproveRequest(BaseModel):
             return value
         return validate_internal_staff_email(value)
 
+    @field_validator("rationale", "bulk_rationale")
+    @classmethod
+    def _rationale_is_public_safe(cls, value: str | None, info) -> str | None:
+        if value is None or not value.strip():
+            return None
+        return validate_no_human_name_shape(
+            value,
+            field_name=str(info.field_name).replace("_", " "),
+        )
+
     @field_validator("bulk_id", "request_id")
     @classmethod
     def _opaque_id_is_public_safe(cls, value: str | None) -> str | None:
@@ -194,7 +413,7 @@ class OutreachApproveRequest(BaseModel):
     def _campaign_id_is_public_safe(cls, value: str | None) -> str | None:
         if value is None:
             return value
-        return validate_public_opaque_id(value)
+        return validate_campaign_uuid(value)
 
     @field_validator("variant_name")
     @classmethod
@@ -202,6 +421,23 @@ class OutreachApproveRequest(BaseModel):
         if value is None:
             return value
         return validate_public_campaign_label(value)
+
+    @model_validator(mode="after")
+    def _draft_proof_is_complete(self) -> "OutreachApproveRequest":
+        validate_complete_campaign_binding(self.campaign_id, self.variant_name)
+        proof = (
+            self.draft_generation_id,
+            self.draft_response_hash,
+            self.draft_source_refreshed_at,
+        )
+        if any(value is not None for value in proof) and not all(
+            isinstance(value, str) and value.strip() for value in proof
+        ):
+            raise ValueError(
+                "draft_generation_id, draft_response_hash, and "
+                "draft_source_refreshed_at must be supplied together"
+            )
+        return self
 
 
 class OutreachApproveResponse(BaseModel):
@@ -213,6 +449,8 @@ class OutreachApproveResponse(BaseModel):
     # when the approver did not request an assignment / reminder.
     assigned_to_email: str | None = None
     follow_up_at: datetime | None = None
+    draft_generation_id: str | None = None
+    draft_edited: bool | None = None
 
 
 class OutreachRejectRequest(BaseModel):
@@ -258,12 +496,22 @@ class OutreachRejectRequest(BaseModel):
             return value
         return validate_public_opaque_id(value)
 
+    @field_validator("rationale")
+    @classmethod
+    def _rationale_is_public_safe(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        return validate_no_human_name_shape(
+            value,
+            field_name="rationale",
+        )
+
     @field_validator("campaign_id")
     @classmethod
     def _campaign_id_is_public_safe(cls, value: str | None) -> str | None:
         if value is None:
             return value
-        return validate_public_opaque_id(value)
+        return validate_campaign_uuid(value)
 
     @field_validator("variant_name")
     @classmethod
@@ -274,6 +522,7 @@ class OutreachRejectRequest(BaseModel):
 
     @model_validator(mode="after")
     def _other_requires_text(self) -> "OutreachRejectRequest":
+        validate_complete_campaign_binding(self.campaign_id, self.variant_name)
         if self.rationale_code == "other_with_text" and not (self.rationale or "").strip():
             raise ValueError("other_with_text requires a rationale")
         return self

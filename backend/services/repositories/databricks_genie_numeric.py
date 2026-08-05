@@ -11,7 +11,7 @@ import math
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 from backend.services.genie_answers import GenieMessageResponse, GenieProof
 from backend.services.repositories.databricks_genie_visualization import (
@@ -103,6 +103,7 @@ class _NumericClaim:
     value: float
     span: tuple[int, int]
     is_percent: bool
+    kind: Literal["currency", "percent", "bps", "number"]
 
 
 def _unsupported_answer_numeric_claims(
@@ -127,9 +128,9 @@ def _unsupported_answer_numeric_claims(
     ]
     if not claims:
         return []
-    support = _numeric_support_values_from_rows(rows)
     unsupported: list[str] = []
     for claim in claims:
+        support = _numeric_support_values_from_rows(rows, claim=claim)
         if _is_supported(claim.value, support):
             continue
         unsupported.append("unsupported_numeric_claim")
@@ -203,6 +204,9 @@ def _numeric_claims(text: str) -> list[_NumericClaim]:
                 value=value,
                 span=match.span(),
                 is_percent=bool(match.group("pct")),
+                kind=_numeric_claim_kind(
+                    text, match.span(), match.group(0), bool(match.group("pct"))
+                ),
             )
         )
     return claims
@@ -222,16 +226,41 @@ def _word_suffix_multiplier(text: str, end: int) -> float | None:
     return None
 
 
-def _numeric_support_values_from_rows(rows: list[dict[str, Any]] | None) -> set[float]:
-    values: set[float] = {0.0}
+def _numeric_claim_kind(
+    text: str,
+    span: tuple[int, int],
+    raw: str,
+    is_percent: bool,
+) -> Literal["currency", "percent", "bps", "number"]:
+    before, after = _context(text, span, size=28)
+    window = _normalized_window(before, raw, after)
+    if raw.strip().startswith("$") or re.search(r"\b(?:dollars?|usd)\b", window):
+        return "currency"
+    if is_percent or re.search(r"\b(?:percent|percentage)\b", window):
+        return "percent"
+    if re.search(r"\b(?:bps|basis points?)\b", window):
+        return "bps"
+    if re.search(r"\b(?:balance|amount|avm|loan value|property value|equity value)\b", window):
+        return "currency"
+    return "number"
+
+
+def _numeric_support_values_from_rows(
+    rows: list[dict[str, Any]] | None,
+    *,
+    claim: _NumericClaim,
+) -> set[float]:
+    values: set[float] = set()
     if rows is None:
         return values
-    values.add(float(len(rows)))
+    if claim.kind == "number":
+        values.add(float(len(rows)))
     columns = [
         col
         for col in _row_columns(rows)
         if not _is_genie_identifier_column(col)
         and not _column_looks_dateish(col)
+        and _column_supports_claim_kind(col, claim.kind)
     ]
     by_column: list[list[float]] = []
     for col in columns:
@@ -253,6 +282,35 @@ def _numeric_support_values_from_rows(rows: list[dict[str, Any]] | None) -> set[
         _add_supported_variants(values, max(col_values))
         _add_supported_variants(values, sum(col_values) / len(col_values))
     return values
+
+
+def _column_supports_claim_kind(
+    column: str,
+    kind: Literal["currency", "percent", "bps", "number"],
+) -> bool:
+    if kind == "number":
+        return True
+    normalized = column.lower().replace("-", "_").replace(" ", "_")
+    if kind == "currency":
+        return any(
+            term in normalized
+            for term in (
+                "amount",
+                "avm",
+                "balance",
+                "dollar",
+                "equity_value",
+                "loan_value",
+                "usd",
+                "value",
+            )
+        )
+    if kind == "percent":
+        return any(
+            term in normalized
+            for term in ("pct", "percent", "percentage", "ratio", "rate", "share")
+        ) and not any(term in normalized for term in ("bps", "basis", "spread"))
+    return any(term in normalized for term in ("bps", "basis", "spread"))
 
 
 def _numeric_cell_value(value: Any) -> float | None:
@@ -332,9 +390,47 @@ def _is_measure_claim(text: str, claim: _NumericClaim) -> bool:
 
 
 def _is_identifier_or_date_context(text: str, claim: _NumericClaim) -> bool:
-    before, after = _context(text, claim.span, size=34)
-    window = _normalized_window(before, claim.raw, after)
-    return any(term in window for term in _IDENTIFIER_CONTEXT_TERMS)
+    if claim.kind != "number" or not claim.value.is_integer():
+        return False
+    before, after = _context(text, claim.span, size=28)
+    before_lower = before.lower()
+    after_lower = after.lower()
+    if int(claim.value) == 360 and re.search(r"\b(?:borrower|customer)\s*$", before_lower):
+        return True
+    identifier_terms = "|".join(re.escape(term) for term in _IDENTIFIER_CONTEXT_TERMS)
+    if re.search(rf"(?:{identifier_terms})\s*[:#-]?\s*$", before_lower):
+        return True
+    if re.match(rf"^\s*[:#-]?\s*(?:{identifier_terms})\b", after_lower):
+        return True
+    value = int(claim.value)
+    if _is_iso_date_token(text, claim.span):
+        return True
+    month = (
+        r"(?:january|february|march|april|may|june|july|august|"
+        r"september|october|november|december)"
+    )
+    if 1900 <= value <= 2100:
+        return bool(
+            re.search(
+                rf"(?:\b(?:date|refreshed|snapshot|week|year|in|during|since|through|of)\s*|"
+                rf"\b{month}\s+\d{{1,2}},\s*)$",
+                before_lower,
+            )
+            or re.match(r"^\s*(?:year|snapshot|date)\b", after_lower)
+        )
+    if 1 <= value <= 31:
+        return bool(
+            re.search(rf"\b{month}\s*$", before_lower)
+            or re.match(rf"^\s*,?\s*(?:{month}|\d{{4}}\b)", after_lower)
+        )
+    return False
+
+
+def _is_iso_date_token(text: str, span: tuple[int, int]) -> bool:
+    for match in re.finditer(r"\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b", text):
+        if match.start() <= span[0] and span[1] <= match.end():
+            return True
+    return False
 
 
 def _number_is_query_limit(question: str, claim: _NumericClaim) -> bool:

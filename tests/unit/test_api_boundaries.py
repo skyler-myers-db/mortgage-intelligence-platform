@@ -167,6 +167,66 @@ def test_audit_events_accepts_limit_at_cap() -> None:
     assert response.status_code == 200, response.text
 
 
+def test_audit_event_page_rejects_malformed_cursor() -> None:
+    response = client.get("/api/audit/events/page?limit=25&cursor=not-a-cursor")
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"] == "invalid audit cursor"
+
+
+def test_audit_event_cursor_excludes_concurrent_inserts_without_duplicates() -> None:
+    created_ids: list[str] = []
+    for index in range(5):
+        created = client.post(
+            "/api/audit/event",
+            json={
+                "actor": "ignored@example.com",
+                "action": "view.cursor_test",
+                "entity_type": "audit_test",
+                "entity_id": f"cursor-{index}",
+                "event_type": "CURSOR_TEST",
+            },
+        )
+        assert created.status_code == 200, created.text
+        created_ids.append(created.json()["event_id"])
+
+    first = client.get(
+        "/api/audit/events/page?limit=2&event_type=CURSOR_TEST"
+    )
+    assert first.status_code == 200, first.text
+    first_body = first.json()
+    assert len(first_body["items"]) == 2
+    assert first_body["next_cursor"]
+
+    inserted = client.post(
+        "/api/audit/event",
+        json={
+            "actor": "ignored@example.com",
+            "action": "view.cursor_test",
+            "entity_type": "audit_test",
+            "entity_id": "cursor-concurrent",
+            "event_type": "CURSOR_TEST",
+        },
+    )
+    assert inserted.status_code == 200, inserted.text
+
+    traversed = list(first_body["items"])
+    cursor = first_body["next_cursor"]
+    while cursor:
+        response = client.get(
+            "/api/audit/events/page",
+            params={"limit": 2, "event_type": "CURSOR_TEST", "cursor": cursor},
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        traversed.extend(body["items"])
+        cursor = body["next_cursor"]
+
+    traversed_ids = [event["event_id"] for event in traversed]
+    assert set(created_ids).issubset(set(traversed_ids))
+    assert inserted.json()["event_id"] not in traversed_ids
+    assert len(traversed_ids) == len(set(traversed_ids))
+
+
 def test_audit_events_filters_by_correlation_id() -> None:
     correlation_id = "audit-corr-filter-001"
     created = client.post(
@@ -230,20 +290,27 @@ def test_public_audit_event_cannot_forge_genie_actions() -> None:
     "server_owned_event_type",
     [
         "APPROVE",
+        "ACTIVATION_STAGE",
+        "ADMIN_OPERATION_RUN",
         "CAMPAIGN_STATUS_UPDATE",
         "CALL_DISPOSITION",
         "DELETE_DRAFT",
         "DRAFT_OUTREACH",
+        "GENIE_FEEDBACK",
+        "GROWTH_AGENT_RUN",
         "LEAD_ASSIGN",
         "LEAD_DISTRIBUTE",
+        "LEAD_OUTCOME_RECORDED",
         "OUTREACH_REJECT",
         "PORTFOLIO_CREATE",
+        "PROPERTY_LOOKUP",
         "RECOMMEND_OFFER",
         "RUN_GENIE",
         "SAVE_DRAFT",
         "SAVE_LEAD",
         "UNSAVE_LEAD",
         "VIEW_BORROWER",
+        "VIEW_BORROWER_PROOF",
         "VIEW_LEADS",
     ],
 )

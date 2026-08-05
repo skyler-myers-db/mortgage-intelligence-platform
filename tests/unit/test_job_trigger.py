@@ -1,12 +1,4 @@
-"""Unit tests for the ``backend.services.job_trigger`` module.
-
-Covers the default warehouse lifecycle sync and the legacy Databricks Jobs
-rollback mode.
-
-The job-mode tests still pin the bounded job-id cache and failure swallowing
-logic because ``MIP_LIFECYCLE_SYNC_MODE=job`` remains an explicit rollback
-path. The product default is warehouse-backed sync so approvals do not launch
-a serverless Python cluster.
+"""Unit tests for warehouse-first lifecycle sync and durable Jobs recovery.
 
 We also assert that the approval HTTP path schedules the trigger via
 ``BackgroundTasks`` so the HTTP 200 response ships before the trigger
@@ -16,6 +8,7 @@ These tests use ``monkeypatch`` to substitute a stub WorkspaceClient
 in place of the real ``databricks.sdk`` import; no network or auth is
 required.
 """
+
 from __future__ import annotations
 
 import sys
@@ -49,7 +42,7 @@ def _install_fake_sdk(monkeypatch: pytest.MonkeyPatch, ws: Any) -> None:
 
 @pytest.fixture(autouse=True)
 def _reset_trigger_state(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Clear the module-level debounce + job-id cache between tests."""
+    """Clear the job-id cache between tests and force explicit job mode."""
     monkeypatch.setenv("MIP_LIFECYCLE_SYNC_MODE", "job")
     job_trigger._reset_for_tests()
 
@@ -81,10 +74,12 @@ def test_default_trigger_uses_warehouse_sync(monkeypatch: pytest.MonkeyPatch) ->
     from backend.services.lifecycle_sync import LifecycleSyncResult
 
     monkeypatch.setenv("MIP_LIFECYCLE_SYNC_MODE", "warehouse")
-    calls: list[str] = []
+    calls: list[tuple[bool, bool]] = []
 
-    def _fake_sync() -> LifecycleSyncResult:
-        calls.append("sync")
+    def _fake_sync(
+        *, record_funnel_snapshot: bool, prune_legacy_defaults: bool
+    ) -> LifecycleSyncResult:
+        calls.append((record_funnel_snapshot, prune_legacy_defaults))
         return LifecycleSyncResult(
             lakebase_rows=2,
             mirrored_rows=10,
@@ -95,7 +90,7 @@ def test_default_trigger_uses_warehouse_sync(monkeypatch: pytest.MonkeyPatch) ->
 
     job_trigger.trigger_lifecycle_sync(reason="approval")
 
-    assert calls == ["sync"]
+    assert calls == [(False, False)]
 
 
 def test_trigger_fires_run_now_once(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -128,8 +123,10 @@ def test_trigger_uses_bound_job_id_env_before_listing(monkeypatch: pytest.Monkey
     assert ws.jobs.run_now.call_args.kwargs == {"job_id": 98765}
 
 
-def test_trigger_debounces_clustered_calls(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Two approvals inside the debounce window produce ONE run_now."""
+def test_forced_job_mode_does_not_process_debounce_clustered_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No app replica may suppress another accepted event in process memory."""
     ws = _stub_workspace()
     _install_fake_sdk(monkeypatch, ws)
 
@@ -137,26 +134,87 @@ def test_trigger_debounces_clustered_calls(monkeypatch: pytest.MonkeyPatch) -> N
     job_trigger.trigger_lifecycle_sync(reason="approval")
     job_trigger.trigger_lifecycle_sync(reason="approval")
 
-    assert ws.jobs.run_now.call_count == 1
+    assert ws.jobs.run_now.call_count == 3
 
 
-def test_trigger_refires_after_debounce(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A call past the debounce window fires a second run_now."""
+def test_clustered_job_calls_reuse_only_job_id_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Job-id lookup is cached, but durable run submission is not throttled."""
     ws = _stub_workspace()
     _install_fake_sdk(monkeypatch, ws)
 
-    # Fake monotonic clock. ``_resolve_job_id`` also samples the clock
-    # for TTL bookkeeping so a bounded iterator overflows; use a
-    # mutable reference instead so every sample returns the current
-    # "now" until the test advances it.
-    now = [0.0]
-    monkeypatch.setattr(job_trigger.time, "monotonic", lambda: now[0])
-
     job_trigger.trigger_lifecycle_sync(reason="approval")
-    now[0] = 120.0  # past the 60-s debounce
     job_trigger.trigger_lifecycle_sync(reason="approval")
 
     assert ws.jobs.run_now.call_count == 2
+    assert ws.jobs.list.call_count == 1
+
+
+def test_warehouse_failure_submits_durable_retriable_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed cheap MERGE becomes a workspace-durable Jobs run."""
+    from backend.services import lifecycle_sync
+
+    ws = _stub_workspace(run_id=7788, job_id=42)
+    _install_fake_sdk(monkeypatch, ws)
+    monkeypatch.setenv("MIP_LIFECYCLE_SYNC_MODE", "warehouse")
+    monkeypatch.setattr(
+        lifecycle_sync,
+        "sync_lifecycle_state_via_warehouse",
+        lambda **_: (_ for _ in ()).throw(RuntimeError("warehouse unavailable")),
+    )
+    events: list[tuple[str, dict[str, Any]]] = []
+    monkeypatch.setattr(
+        job_trigger,
+        "emit",
+        lambda _log, event, **fields: events.append((event, fields)),
+    )
+
+    job_trigger.trigger_lifecycle_sync(reason="approval")
+
+    assert ws.jobs.run_now.call_args.kwargs == {"job_id": 42}
+    assert any(
+        event == "lifecycle_sync_retry_queued"
+        and fields["run_id"] == 7788
+        and fields["job_id"] == 42
+        for event, fields in events
+    )
+
+
+def test_double_failure_is_explicit_and_points_to_durable_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If warehouse and Jobs are down, the durable source and repair are named."""
+    from backend.services import lifecycle_sync
+
+    ws = _stub_workspace()
+    ws.jobs.run_now.side_effect = RuntimeError("jobs unavailable")
+    _install_fake_sdk(monkeypatch, ws)
+    monkeypatch.setenv("MIP_LIFECYCLE_SYNC_MODE", "warehouse")
+    monkeypatch.setattr(
+        lifecycle_sync,
+        "sync_lifecycle_state_via_warehouse",
+        lambda **_: (_ for _ in ()).throw(RuntimeError("warehouse unavailable")),
+    )
+    events: list[tuple[str, dict[str, Any]]] = []
+    monkeypatch.setattr(
+        job_trigger,
+        "emit",
+        lambda _log, event, **fields: events.append((event, fields)),
+    )
+
+    job_trigger.trigger_lifecycle_sync(reason="approval")
+
+    terminal = [fields for event, fields in events if event == "lifecycle_sync_retry_unavailable"]
+    assert terminal == [
+        {
+            "level": job_trigger.logging.ERROR,
+            "mode": "warehouse",
+            "reason": "approval",
+            "durable_source": "mip_app.approvals,mip_app.call_dispositions",
+            "repair_command": "databricks bundle run mip_sync_lifecycle_state -t <target>",
+        }
+    ]
 
 
 def test_trigger_swallows_sdk_failure(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -228,7 +286,8 @@ def test_approval_endpoint_schedules_trigger(monkeypatch: pytest.MonkeyPatch) ->
             "borrower_id": "B-48291",
             "offer_code": "heloc",
             "actor": "anonymous",
-            "draft_body": "Governed approval body. Summit Mortgage, NMLS #123456. Equal Housing Lender. Reply unsubscribe to opt out.",
+            "draft_subject": "Your mortgage review",
+            "draft_body": "Contact a loan officer to review available mortgage options. Summit Mortgage, NMLS #123456. Equal Housing Lender. Reply unsubscribe to opt out.",
         },
     )
     assert resp.status_code == 200, resp.text
@@ -248,15 +307,13 @@ def test_job_id_cache_expires_after_ttl(monkeypatch: pytest.MonkeyPatch) -> None
     ws = _stub_workspace(job_id=42)
     _install_fake_sdk(monkeypatch, ws)
 
-    # Shared mutable clock: ``trigger_lifecycle_sync`` samples
-    # ``time.monotonic`` for the debounce AND ``_resolve_job_id``
-    # samples it for the TTL, so we need a callable (not an iterator).
+    # Shared mutable clock for the resolver's TTL bookkeeping.
     now = [0.0]
     monkeypatch.setattr(job_trigger.time, "monotonic", lambda: now[0])
     ttl = job_trigger._JOB_ID_TTL_SECONDS
 
     job_trigger.trigger_lifecycle_sync(reason="approval")
-    # Advance past BOTH the debounce window AND the job-id TTL.
+    # Advance past the job-id TTL.
     now[0] = ttl + 1.0
     job_trigger.trigger_lifecycle_sync(reason="approval")
 
@@ -286,11 +343,6 @@ def test_run_now_404_invalidates_job_id_cache(monkeypatch: pytest.MonkeyPatch) -
     ws.jobs.run_now.side_effect = _ResourceDoesNotExist("job 42 not found")
     _install_fake_sdk(monkeypatch, ws)
 
-    # Drive two calls past the debounce window so both reach run_now.
-    # Callable clock so resolver + trigger share one "now".
-    now = [0.0]
-    monkeypatch.setattr(job_trigger.time, "monotonic", lambda: now[0])
-
     job_trigger.trigger_lifecycle_sync(reason="approval")
     # Cache cleared by _invalidate_cached_job_id -- the second call must
     # re-list. Swap run_now to succeed this time to confirm the flow.
@@ -298,8 +350,6 @@ def test_run_now_404_invalidates_job_id_cache(monkeypatch: pytest.MonkeyPatch) -
     run = MagicMock()
     run.run_id = 777
     ws.jobs.run_now.return_value = run
-    now[0] = 120.0  # past the debounce window
-
     job_trigger.trigger_lifecycle_sync(reason="approval")
 
     # Two run_now attempts (first failed, second succeeded) AND two

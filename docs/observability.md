@@ -137,11 +137,11 @@ collector endpoint is supplied for a deployment:
 - `curl -H "Authorization: Bearer $(databricks auth token --profile DEFAULT -o json | jq -r .access_token)" "$MIP_APP_URL/api/v1/admin/health"`
   returned `status=ok`, `warehouse/lakebase/genie=up`,
   `counters_persistence=process-local`, and `log_export=stdout-only`.
-- `databricks apps deploy --help` on CLI `0.299.1` exposes no top-level
+- Apps deployment help on Databricks CLI `0.299.1` exposes no top-level
   `--env` flag, but the deploy API accepts runtime `env_vars` through
-  `--json`. Use that only for non-sensitive endpoint values. Collector
-  header secrets should be wired through Databricks Secrets and an app
-  secret resource.
+  `--json`. This is why direct App deployment is unsupported: the governed
+  script must emit the complete payload and bind collector headers through a
+  Databricks Secret resource.
 - `databricks secrets list-secrets` checks of the likely local scopes
   (`mip`, `entrada-dashboard`, `gateway-keys`, `dbx_scope`,
   `dbx_default_scope`) found no OTLP, collector, Splunk, Datadog, Loki,
@@ -215,47 +215,37 @@ Safe closure path when a real customer-owned collector exists:
 ```bash
 # 1. Put sensitive headers in Databricks Secrets. Do not put the token in
 # source files, app.yaml, screenshots, or shell history.
+# Scope creation is idempotent: create it only when the exact scope is absent.
+databricks secrets list-scopes --profile DEFAULT -o json \
+  | jq -e '.scopes[]? | select(.name == "customer-observability")' >/dev/null \
+  || databricks secrets create-scope customer-observability --profile DEFAULT
 read -r -s MIP_OTEL_HEADERS
 printf '%s' "$MIP_OTEL_HEADERS" \
-  | databricks secrets put-secret mip otel-headers --profile DEFAULT
+  | databricks secrets put-secret customer-observability otlp-headers --profile DEFAULT
+unset MIP_OTEL_HEADERS
 
-# 2. Deploy the OTLP-capable bundle target. The target adds the
-# otel_headers app secret resource but does not commit the secret value.
-databricks bundle deploy -t prod_otlp --profile DEFAULT \
-  --var genie_space_id=<customer-genie-space-id> \
-  --var otel_headers_secret_scope=mip \
-  --var otel_headers_secret_key=otel-headers
+# 2. Configure only the secret reference. The command of record attaches it
+# to the existing target and retains lease, rollback, treatment, and smoke gates.
+export MIP_OTEL_ENDPOINT=https://<customer-owned-collector>/v1/logs
+export MIP_OTEL_HEADERS_SECRET_SCOPE=customer-observability
+export MIP_OTEL_HEADERS_SECRET_KEY=otlp-headers
+CI=1 ./scripts/deploy.sh -t prod --no-confirm
 
-# If adding OTLP to an app that is already deployed under another bundle
-# target in the same workspace, do not run a second production target that
-# recreates Lakebase/warehouse resources unless that target has imported
-# or already owns those resources. Instead, update the existing app's
-# resources to add the `otel_headers` app secret resource while preserving
-# the current resources, then use the deploy payload below.
-
-# 3. Build a full deployment payload. Apps deployment env_vars replace
-# app.yaml, so use the helper instead of hand-writing a partial list.
-python tools/databricks/otlp_deploy_payload.py \
-  --source-code-path /Workspace/Users/<user>/.bundle/mortgage-intelligence-platform/prod_otlp/files \
-  --endpoint https://<customer-owned-collector>/v1/logs \
-  > /tmp/mip-otlp-deploy.json
-
-databricks apps deploy mip-app \
-  --json @/tmp/mip-otlp-deploy.json \
-  --auto-approve \
-  --profile DEFAULT \
-  --timeout 20m
-
-# 4. Prove the deployed app handler is active.
+# 3. Prove the deployed app handler is active.
 MIP_APP_URL="$(databricks apps get mip-app --profile DEFAULT -o json | jq -r .url)"
 TOK="$(databricks auth token --profile DEFAULT -o json | jq -r .access_token)"
 curl -sS -H "Authorization: Bearer $TOK" \
   "$MIP_APP_URL/api/v1/admin/health" \
   | jq '{status, dependencies, counters_persistence, log_export}'
 
-# 5. Prove receipt in the collector using the fresh deployed-app
+# 4. Prove receipt in the collector using the fresh deployed-app
 # correlation_id or event name from the same time window.
 ```
+
+The deployment script rejects partial OTLP configuration, credential-bearing
+endpoint URLs, and a plaintext `MIP_OTEL_HEADERS` process variable before
+workspace mutation. Do not run a second bundle target or promote an Apps
+snapshot directly; those paths do not carry the signed deployment contract.
 
 Record the customer proof as a structured evidence file and validate it
 before claiming durable customer retention:
@@ -284,35 +274,10 @@ It is a guardrail against overclaiming: `passed` means the evidence packet
 is complete for the environment under review, not that the application
 can independently certify the customer's logging platform.
 
-For a non-secret proof collector that requires no headers, a one-off
-deployment can also use the API-level override:
-
-```bash
-databricks apps deploy mip-app \
-  --json '{
-    "source_code_path": "/Workspace/Users/<user>/.bundle/mortgage-intelligence-platform/dev/files",
-    "mode": "SNAPSHOT",
-    "env_vars": [
-      {"name":"APP_ENV","value":"sandbox"},
-      {"name":"DATABRICKS_WAREHOUSE_ID","value_from":"sql_warehouse"},
-      {"name":"GENIE_SPACE_ID","value_from":"genie_space"},
-      {"name":"PGHOST","value_from":"database"},
-      {"name":"LAKEBASE_HOST","value_from":"database"},
-      {"name":"MIP_LIFECYCLE_SYNC_JOB_ID","value_from":"lifecycle_sync_job"},
-      {"name":"MIP_DEFAULT_CATALOG","value":"mip"},
-      {"name":"MIP_DEFAULT_SCHEMA","value":"gold"},
-      {"name":"MIP_OTEL_ENDPOINT","value":"https://<collector>/v1/logs"}
-    ]
-  }' \
-  --auto-approve \
-  --profile DEFAULT \
-  --timeout 20m
-```
-
-Deployment-level `env_vars` replace the app.yaml env list, so include
-the base resource-derived variables shown above. Supplying only
-`MIP_OTEL_ENDPOINT` will make the app fail closed at startup because the
-warehouse and Genie bindings are absent.
+Headerless proof collectors are not a deployment exception. Put a
+non-sensitive proof header in the dedicated Databricks Secret and use the same
+canonical path so the resource and full runtime contract remain identical to
+an authenticated collector deployment.
 
 ### Splunk (HEC)
 

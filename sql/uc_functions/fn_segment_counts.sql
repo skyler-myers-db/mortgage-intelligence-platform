@@ -10,7 +10,7 @@
 -- eligibility predicate and must stay equivalent (modulo whitespace) with
 -- backend/services/eligibility.py::eligible_sql_predicate("b").
 -- tests/unit/test_contact_eligibility.py pins the lockstep. The function
--- is no longer declared DETERMINISTIC because the frequency-cap guard
+-- is explicitly declared NOT DETERMINISTIC because the frequency-cap guard
 -- reads CURRENT_TIMESTAMP().
 CREATE OR REPLACE FUNCTION mip.gold.fn_segment_counts(
   segment_codes ARRAY<STRING>,
@@ -18,6 +18,7 @@ CREATE OR REPLACE FUNCTION mip.gold.fn_segment_counts(
   states        ARRAY<STRING>
 )
 RETURNS BIGINT
+NOT DETERMINISTIC
 COMMENT 'Reviewed Mortgage Growth Agent actionability tool. Counts DISTINCT clip from gold.borrower_360 after the full contact-eligibility gate (marketing eligibility, opt-in consent, suppression, do-not-contact, frequency cap). Read-only.'
 RETURN (
   SELECT COUNT(DISTINCT b.clip)
@@ -31,7 +32,7 @@ RETURN (
     AND (b.last_touch_at IS NULL
       OR b.last_touch_at < CURRENT_TIMESTAMP() - INTERVAL '30' DAYS))
     AND (
-      SIZE(COALESCE(segment_codes, ARRAY())) = 0
+      SIZE(COALESCE(segment_codes, CAST(ARRAY() AS ARRAY<STRING>))) = 0
       OR CASE
         WHEN LOWER(COALESCE(segment_mode, 'any')) = 'all'
           THEN SIZE(ARRAY_EXCEPT(TRANSFORM(segment_codes, x -> LOWER(x)), b.segment_codes)) = 0
@@ -39,7 +40,7 @@ RETURN (
       END
     )
     AND (
-      SIZE(COALESCE(states, ARRAY())) = 0
+      SIZE(COALESCE(states, CAST(ARRAY() AS ARRAY<STRING>))) = 0
       OR ARRAY_CONTAINS(TRANSFORM(states, x -> UPPER(x)), UPPER(b.state))
     )
 );

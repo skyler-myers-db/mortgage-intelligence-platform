@@ -37,6 +37,7 @@ import re
 from threading import Lock
 from typing import Any
 
+from backend.config.runtime_secret_policy import require_strong_runtime_secret
 from backend.schemas._validators import is_public_lender_ref, normalize_public_lender_ref
 from backend.services.observability import emit
 
@@ -284,7 +285,7 @@ _FORBIDDEN_OUTPUT_KEYS: frozenset[str] = frozenset(
 
 _STREET_NUMBER_PATTERN = re.compile(r"\d")
 _ID_MASK_NAMESPACE = "mip-cotality-id-mask-v1"
-_ID_MASK_FALLBACK_APP_ENVS = frozenset({"local", "dev", "sandbox"})
+_ID_MASK_FALLBACK_APP_ENVS = frozenset({"local", "test"})
 _ID_MASK_PLACEHOLDER_SECRETS = frozenset(
     {
         "redacted",
@@ -384,17 +385,26 @@ def _id_mask_secret() -> str:
         normalized in _ID_MASK_PLACEHOLDER_SECRETS
         or (normalized.startswith("<") and normalized.endswith(">"))
     )
-    if configured and not is_placeholder:
-        return configured
-
     from backend.config.settings import settings
 
-    app_env = (settings.app_env or "local").strip().lower()
+    app_env = (settings.app_env or "").strip().lower()
+    if configured and not is_placeholder:
+        if app_env not in _ID_MASK_FALLBACK_APP_ENVS:
+            try:
+                return require_strong_runtime_secret(
+                    configured,
+                    name="MIP_COTALITY_ID_MASK_SECRET",
+                    extra_placeholders=_ID_MASK_PLACEHOLDER_SECRETS,
+                )
+            except ValueError as exc:
+                raise RuntimeError(str(exc)) from exc
+        return configured
+
     if app_env in _ID_MASK_FALLBACK_APP_ENVS:
         return _ID_MASK_NAMESPACE
 
     raise RuntimeError(
-        "MIP_COTALITY_ID_MASK_SECRET is required outside local/dev/sandbox app environments"
+        "MIP_COTALITY_ID_MASK_SECRET is required outside local/test app environments"
     )
 
 
@@ -413,6 +423,30 @@ def mask_address_for_audit(normalized_address: str, zip5: str) -> str:
     secret = _id_mask_secret()
     message = f"addr:{normalized_address}|{zip5}".encode()
     return hmac.new(secret.encode(), message, hashlib.sha256).hexdigest()
+
+
+def mask_source_record_ref(source_system: str, source_record_ref: str) -> str:
+    """Return a tenant-secret opaque token for an external outcome record id.
+
+    CRM/LOS record identifiers are client-supplied and therefore cannot be
+    trusted to remain free of borrower names or other PII.  The API hashes the
+    value before any repository, response, or audit boundary sees it.  The
+    source-system domain separator prevents the same upstream identifier from
+    correlating across connectors while preserving deterministic idempotency
+    within one connector.
+    """
+
+    secret = _id_mask_secret()
+    source = str(source_system or "").strip().lower()
+    record_ref = str(source_record_ref or "").strip()
+    if not source or not record_ref:
+        raise ValueError("source_system and source_record_ref are required")
+    digest = hmac.new(
+        secret.encode(),
+        f"outcome-ref:{source}:{record_ref}".encode(),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"auto-{digest[:32]}"
 
 
 def mask_cotality_id(kind: str, raw: Any) -> str:
@@ -640,6 +674,7 @@ def redact_borrower_row(row: dict[str, Any]) -> dict[str, Any]:
         ),
         "eligibility_source": _eligibility_source(row.get("eligibility_source")),
         "current_lender_ref": _public_lender_ref(row.get("current_lender_ref")),
+        "source_refreshed_at": _optional_str(row.get("refreshed_at")),
     }
     _enforce_no_forbidden_keys(output)
     return output

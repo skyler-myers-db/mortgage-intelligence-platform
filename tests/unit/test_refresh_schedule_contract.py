@@ -47,7 +47,7 @@ def test_operator_docs_explain_app_refresh_default_and_paused_schedules() -> Non
 
     assert "Data operations" in runbook
     assert "schedules deploy **paused by" in runbook
-    assert "default** in dev, prod, and prod_otlp" in runbook
+    assert "default** in dev and prod" in runbook
     assert "All MIP refresh and automation schedules deploy paused by default" in deployment
     assert "FRED, lifecycle fallback, and Growth Agent monitor schedules deploy" in onboarding
     assert "scheduler drafts" in onboarding

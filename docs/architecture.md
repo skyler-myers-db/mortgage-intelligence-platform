@@ -44,8 +44,20 @@ Genie is not just a chat response surface. Confirmed actions write governed stat
 |---|---|
 | Open this cohort in Lead Queue | Materializes `mip_app.genie_cohorts` plus optional `mip_app.genie_cohort_members`, returns `/lead-queue?cohort_id=...` with reviewed filters, and logs `GENIE_ACTION_OPEN_COHORT`. |
 | Save borrowers | Writes actor-scoped `saved_leads` and one audited Genie action idempotently. |
-| Create draft campaign | Writes `mip_app.campaigns` with the reviewed cohort criteria and audit metadata. |
+| Create draft campaign | Reserves a Lakebase campaign in `building`, materializes one immutable treatment/holdout assignment plus manifest in `mip.audit.campaign_treatment_snapshot`, then atomically marks the campaign `ready` and writes variants/audit. Outreach reads only the pinned Delta version and intersects it with current eligibility. The synchronous Module 0 builder fails closed above 10,000 post-dedup selected primaries before any Delta MERGE; operators must refine larger cohorts, rather than depending on the warehouse client's 30-second cancellation budget for a multi-million-row write. |
 | Show/compare actions | Write an audit event and never mutate borrower state without confirmation. Export actions are not enabled until a governed artifact writer exists. |
+
+The size preflight and the MERGE both enforce the 10,000 post-dedup selected-primary ceiling,
+and the MERGE also requires the exact preflight source snapshot id. A refresh
+or cohort growth between those statements therefore produces no ready
+manifest. Failed builds are terminal for that campaign id (no same-id
+recomputation of an append-only proof); they may only be archived, then the
+operator creates a new campaign with a refined cohort. Expired in-progress
+leases rotate to a new materialization id so a late worker cannot finalize an
+older write. A live at-cap latency measurement is still required before release
+signoff. Portfolio preview and create responses expose the typed
+`campaign_build_limit` and `campaign_build_eligible` fields so the product can
+disable oversized builds and guide an operator to refine filters before submit.
 
 ## Known External Dependencies
 

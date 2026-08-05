@@ -15,16 +15,20 @@ We stub the probe helpers so the test never opens a warehouse / Lakebase
 connection. Health must return HTTP 200 even when degraded so the
 Databricks App load-balancer doesn't yank the container.
 """
+
 from __future__ import annotations
 
 import base64
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event, Lock
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 
+from backend.agents.gateway_contract import gateway_runtime_binding_hash
 from backend.api import health as health_mod
 from backend.main import app
 from backend.services import health_probes, resilience
@@ -313,6 +317,59 @@ def test_health_bursts_share_one_probe_per_dependency(
     assert counts == {"warehouse": 1, "lakebase": 1, "genie": 1}
 
 
+def test_twenty_simultaneous_cold_snapshots_share_each_dependency_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    counts = {"warehouse": 0, "lakebase": 0, "genie": 0}
+    counts_lock = Lock()
+    all_started = Event()
+    release = Event()
+
+    def _probe(name: str) -> bool:
+        with counts_lock:
+            counts[name] += 1
+            if sum(counts.values()) == 3:
+                all_started.set()
+        release.wait(timeout=2.0)
+        return True
+
+    monkeypatch.setattr(health_probes, "probe_warehouse", lambda: _probe("warehouse"))
+    monkeypatch.setattr(health_probes, "probe_lakebase", lambda: _probe("lakebase"))
+    monkeypatch.setattr(health_probes, "probe_genie", lambda: _probe("genie"))
+
+    with ThreadPoolExecutor(max_workers=20) as callers:
+        futures = [callers.submit(health_probes.probe_snapshot) for _ in range(20)]
+        assert all_started.wait(timeout=1.0)
+        release.set()
+        snapshots = [future.result(timeout=1.0) for future in futures]
+
+    assert snapshots == [("ok", {"warehouse": "up", "lakebase": "up", "genie": "up"})] * 20
+    assert counts == {"warehouse": 1, "lakebase": 1, "genie": 1}
+
+
+def test_health_waits_long_enough_for_successful_lakebase_pool_checkout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A healthy Lakebase call taking more than the removed 1s cutoff is up."""
+
+    def slow_but_healthy_lakebase() -> bool:
+        time.sleep(1.05)
+        return True
+
+    monkeypatch.setattr(health_probes, "probe_warehouse", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_lakebase", slow_but_healthy_lakebase)
+    monkeypatch.setattr(health_probes, "probe_genie", lambda: True)
+
+    started = time.monotonic()
+    res = client.get("/api/health", headers={"X-Forwarded-Email": "ops@example.com"})
+    elapsed = time.monotonic() - started
+
+    assert res.status_code == 200
+    assert res.json()["dependencies"]["lakebase"] == "up"
+    assert elapsed >= 1.0
+    assert elapsed < health_probes.settings.mip_health_cold_wait_budget_s
+
+
 def test_health_returns_cached_value_during_stale_window(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -412,7 +469,12 @@ def test_health_authenticated_returns_runtime_status_only(
         "dependencies",
         "circuit_breakers",
         "actor_cache_key",
+        # 2026-07-30 gate restructure: deploy-promotion marker state is part
+        # of the authenticated runtime body so the UI can name why a bare
+        # deploy is degraded. Outside Databricks Apps it reads "enabled".
+        "campaign_treatment_runtime",
     }
+    assert body["campaign_treatment_runtime"] == "enabled"
     assert body["dependencies"] == {"warehouse": "up", "lakebase": "up", "genie": "up"}
     assert set(body["circuit_breakers"].keys()) >= {"warehouse", "lakebase", "genie"}
     assert "warehouse_id" not in body
@@ -431,18 +493,83 @@ def test_authenticated_health_surfaces_deployed_git_sha(
     monkeypatch.setattr(health_probes, "probe_lakebase", lambda: True)
     monkeypatch.setattr(health_probes, "probe_genie", lambda: True)
     monkeypatch.setattr(health_mod.settings, "mip_git_sha", "abc123def456")
+    monkeypatch.setattr(
+        health_mod.settings,
+        "mip_app_deployment_lease_id",
+        "11111111-1111-4111-8111-111111111111",
+    )
+    monkeypatch.setattr(
+        health_mod.settings,
+        "mip_agent_serving_endpoint",
+        "mip-growth-agent-gateway",
+    )
+    monkeypatch.setattr(health_mod.settings, "mip_agent_supervisor_id", "supervisor-123")
+    monkeypatch.setattr(health_mod.settings, "mip_agent_runtime_client_id", "runtime-client")
+    monkeypatch.setattr(
+        health_mod.settings,
+        "mip_agent_supervisor_endpoint",
+        "mas-supervisor-endpoint",
+    )
+    monkeypatch.setattr(
+        health_mod.settings,
+        "mip_agent_gateway_model",
+        "mip.audit.mortgage_growth_supervisor_proxy",
+    )
+    monkeypatch.setattr(health_mod.settings, "mip_agent_gateway_model_version", 7)
+    monkeypatch.setattr(
+        health_mod.settings,
+        "databricks_host",
+        "https://workspace.cloud.databricks.com",
+    )
+    monkeypatch.setattr(health_mod.settings, "mip_agent_proxy_client_id", "proxy-client")
+    monkeypatch.setattr(
+        health_mod.settings,
+        "mip_agent_proxy_credential_id",
+        "proxy-credential",
+    )
+    monkeypatch.setattr(
+        health_mod.settings,
+        "mip_agent_proxy_secret_reference",
+        "{{secrets/mip-agent-proxy/oauth-client-secret-proxy-credential}}",
+    )
+    monkeypatch.setattr(
+        health_mod.settings,
+        "mip_ai_gateway_inference_table",
+        "mip.audit.mip_agent_gateway_growth_agent",
+    )
+    expected_binding = gateway_runtime_binding_hash(
+        endpoint="mip-growth-agent-gateway",
+        supervisor_id="supervisor-123",
+        upstream_endpoint="mas-supervisor-endpoint",
+        runtime_application_id="runtime-client",
+        workspace_host="https://workspace.cloud.databricks.com",
+        model_name="mip.audit.mortgage_growth_supervisor_proxy",
+        model_version=7,
+        inference_table="mip.audit.mip_agent_gateway_growth_agent",
+        proxy_caller_application_id="proxy-client",
+        proxy_caller_credential_id="proxy-credential",
+        proxy_caller_secret_reference=(
+            "{{secrets/mip-agent-proxy/oauth-client-secret-proxy-credential}}"
+        ),
+    )
 
     anon = client.get("/api/health")
     assert anon.status_code == 200
     assert "git_sha" not in anon.json()
+    assert "deployment_lease_id" not in anon.json()
+    assert "agent_gateway_binding_sha256" not in anon.json()
 
     auth = client.get("/api/health", headers={"X-Forwarded-Email": "skyler@entrada.ai"})
     assert auth.status_code == 200
     assert auth.json()["git_sha"] == "abc123def456"
+    assert auth.json()["deployment_lease_id"] == "11111111-1111-4111-8111-111111111111"
+    assert auth.json()["agent_gateway_binding_sha256"] == expected_binding
 
     admin = client.get("/api/admin/health", headers=ADMIN_HEADERS)
     assert admin.status_code == 200
     assert admin.json()["git_sha"] == "abc123def456"
+    assert admin.json()["deployment_lease_id"] == "11111111-1111-4111-8111-111111111111"
+    assert admin.json()["agent_gateway_binding_sha256"] == expected_binding
 
 
 def test_health_admin_endpoint_returns_full_diagnostics(

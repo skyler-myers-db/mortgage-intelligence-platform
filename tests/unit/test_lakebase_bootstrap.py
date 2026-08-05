@@ -107,8 +107,7 @@ def test_bootstrap_flag_flips_on_successful_retry_after_failure() -> None:
     clean = _FakeClient()
     ensure_approval_idempotency_column(clean)  # type: ignore[arg-type]
     assert _bootstrap_state_for_tests()["request_id_bootstrapped"] is True
-    # R6-04: lock + ALTER + CREATE INDEX + unlock = 4 calls.
-    assert len(clean.calls) == 4
+    assert len(clean.calls) == len(lakebase_bootstrap._APPROVAL_REQUEST_ID_DDL) + 2
 
 
 def test_bootstrap_successful_call_flips_flag_and_runs_all_statements() -> None:
@@ -140,6 +139,10 @@ def test_bootstrap_preflight_latches_when_schema_already_exists() -> None:
             self.calls.append(stmt)
             return {
                 "has_request_id_column": True,
+                "has_decision_intent_column": True,
+                "has_decision_payload_hash_column": True,
+                "has_decision_response_column": True,
+                "has_audit_event_id_column": True,
                 "has_request_id_index": True,
             }
 
@@ -184,13 +187,12 @@ def test_bootstrap_acquires_and_releases_advisory_lock_on_success() -> None:
     ensure_approval_idempotency_column(client)  # type: ignore[arg-type]
 
     assert _bootstrap_state_for_tests()["request_id_bootstrapped"] is True
-    # 1 lock + 2 DDL + 1 unlock = 4 calls total
-    assert len(client.calls) == 4
+    assert len(client.calls) == len(lakebase_bootstrap._APPROVAL_REQUEST_ID_DDL) + 2
     assert "pg_advisory_lock" in client.calls[0]
     assert "pg_advisory_unlock" in client.calls[-1]
-    # Both DDL statements must sit INSIDE the locked region.
+    # Every DDL statement must sit inside the locked region.
     assert "ALTER TABLE" in client.calls[1]
-    assert "CREATE UNIQUE INDEX" in client.calls[2]
+    assert "CREATE UNIQUE INDEX" in client.calls[-2]
 
 
 def test_bootstrap_releases_advisory_lock_on_ddl_failure() -> None:

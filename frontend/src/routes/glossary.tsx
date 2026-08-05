@@ -1,4 +1,4 @@
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { PageShell } from '../components/layout/PageShell';
 import { Chip } from '../components/Primitives';
 import { Icon } from '../components/Icon';

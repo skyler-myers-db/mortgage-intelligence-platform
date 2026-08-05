@@ -57,14 +57,21 @@ class TestCommittedManifest:
 
     def test_every_family_traces_raw_share_to_gold_or_metric_view(self) -> None:
         manifest = load_manifest_file()
+        readiness_only = {"source_readiness", "permit_readiness"}
         for family in manifest.families:
             layers = [node.layer for node in family.nodes]
-            assert layers[0] == "raw_share", (
-                f"family {family.id!r} must start at the raw Cotality share"
-            )
-            assert layers[-1] in {"gold", "metric_view"}, (
-                f"family {family.id!r} must end at a gold table or metric view"
-            )
+            if family.id in readiness_only:
+                assert (
+                    layers[0] == "gold"
+                ), f"readiness family {family.id!r} must start at a real gold status asset"
+            else:
+                assert (
+                    layers[0] == "raw_share"
+                ), f"family {family.id!r} must start at the raw Cotality share"
+            assert layers[-1] in {
+                "gold",
+                "metric_view",
+            }, f"family {family.id!r} must end at a gold table or metric view"
 
     def test_raw_share_nodes_name_the_cotality_catalog_explicitly(self) -> None:
         manifest = load_manifest_file()
@@ -177,10 +184,26 @@ class TestExplorerUrls:
             "https://dbc-unit.cloud.databricks.com/explore/data/functions/mip/gold/fn_in_the_money"
         )
 
-    def test_urls_are_none_without_a_configured_host(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_urls_are_none_without_a_configured_host(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(settings, "databricks_host", None)
+        assert catalog_explorer_url_for("table", "mip", "gold", "borrower_360") is None
+
+    @pytest.mark.parametrize(
+        "host",
+        [
+            "httpx://evil.example",
+            "javascript://evil.example",
+            "https://user:secret@evil.example",
+            "https://dbc-unit.cloud.databricks.com/path",
+            "https://dbc-unit.cloud.databricks.com?redirect=evil",
+            "http://dbc-unit.cloud.databricks.com",
+            "https://evil.example",
+        ],
+    )
+    def test_urls_reject_non_workspace_origins(
+        self, monkeypatch: pytest.MonkeyPatch, host: str
+    ) -> None:
+        monkeypatch.setattr(settings, "databricks_host", host)
         assert catalog_explorer_url_for("table", "mip", "gold", "borrower_360") is None
 
     def test_response_resolves_default_catalog_and_links(
@@ -193,8 +216,7 @@ class TestExplorerUrls:
         fqns = {node.fqn for node in family.nodes}
         assert "mip_custom.gold.fn_in_the_money" in fqns
         assert (
-            f"{RAW_COTALITY_CATALOG}.corelogic."
-            "entrada_eval_voluntary_lien_status_marketing_v2"
+            f"{RAW_COTALITY_CATALOG}.corelogic." "entrada_eval_voluntary_lien_status_marketing_v2"
         ) in fqns
         fn_node = next(n for n in family.nodes if n.id == "fn_in_the_money")
         assert fn_node.catalog_explorer_url == (

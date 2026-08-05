@@ -11,6 +11,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from backend.schemas.campaign_status import authorize_campaign_status_transition
 from backend.schemas.common import validate_public_opaque_id
 from backend.schemas.portfolio import (
     CampaignListResponse,
@@ -18,9 +19,11 @@ from backend.schemas.portfolio import (
     CampaignSummary,
 )
 from backend.services.audit_store import resolve_actor
+from backend.services.campaign_authorization import authorize_campaign_quarantine_actor
 from backend.services.error_sanitizer import safe_dependency_detail
+from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.lakebase import LakebaseError
-from backend.services.rbac import require_admin
+from backend.services.rbac import require_admin, require_approver
 from backend.services.repositories import PortfolioRepository, get_portfolio_repository
 
 router = APIRouter(prefix="/campaigns", tags=["campaigns"])
@@ -78,12 +81,17 @@ def get_campaign(campaign_id: str, request: Request, repo: RepoDep) -> CampaignS
     return CampaignSummary(**result)
 
 
-@router.patch("/{campaign_id}", response_model=CampaignSummary)
+@router.patch(
+    "/{campaign_id}",
+    response_model=CampaignSummary,
+    responses=JSON_CONTENT_TYPE_RESPONSE,
+)
 def patch_campaign(
     campaign_id: str,
     payload: CampaignStatusPatchRequest,
     request: Request,
     repo: RepoDep,
+    _: Annotated[None, Depends(require_json_content_type)],
 ) -> CampaignSummary:
     try:
         validate_public_opaque_id(campaign_id)
@@ -93,8 +101,24 @@ def patch_campaign(
         result = repo.get(campaign_id)
         if not result:
             raise HTTPException(status_code=404, detail="campaign not found")
-        _assert_campaign_visible(result, actor=resolve_actor(request), is_admin=_is_admin(request))
-        return repo.patch_status(campaign_id, payload, actor=resolve_actor(request))
+        actor = resolve_actor(request)
+        _assert_campaign_visible(result, actor=actor, is_admin=_is_admin(request))
+        actor = authorize_campaign_quarantine_actor(
+            request,
+            requested_status=payload.status,
+            treatment_state=result.get("treatment_state"),
+            actor=actor,
+        )
+        if payload.status in {"approved", "live", "active"}:
+            approver = require_approver(request)
+            payload = authorize_campaign_status_transition(
+                payload,
+                campaign_id=campaign_id,
+                current_status=str(result.get("status") or ""),
+                approver_email=approver,
+            )
+            actor = approver
+        return repo.patch_status(campaign_id, payload, actor=actor)
     except HTTPException:
         raise
     except ValueError as exc:

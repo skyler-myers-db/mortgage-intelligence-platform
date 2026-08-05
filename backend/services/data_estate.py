@@ -8,6 +8,7 @@ from urllib.parse import quote
 from backend.config.settings import settings
 from backend.schemas.data_estate import DataEstateAsset, DataEstateLane, DataEstateResponse
 from backend.services.admin_rules import SourceRow
+from backend.services.asset_metadata_utils import workspace_origin
 from backend.services.databricks_sql_helpers import qualify
 
 
@@ -17,11 +18,9 @@ def _catalog_explorer_url(uc_object: str | None) -> str | None:
     parts = uc_object.split(".")
     if len(parts) != 3:
         return None
-    host = (settings.databricks_host or "").strip()
-    if not host:
+    host = workspace_origin(settings.databricks_host)
+    if host is None:
         return None
-    if not host.startswith("http"):
-        host = f"https://{host}"
     catalog, schema_name, object_name = parts
     return (
         f"{host.rstrip('/')}/explore/data/"

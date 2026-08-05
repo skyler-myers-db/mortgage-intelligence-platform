@@ -11,7 +11,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const navigate = vi.fn();
-vi.mock('react-router-dom', () => ({ useNavigate: () => navigate }));
+vi.mock('react-router', () => ({ useNavigate: () => navigate }));
 
 const setTheme = vi.fn();
 const setConsoleOpen = vi.fn();
@@ -23,6 +23,7 @@ vi.mock('../AppContext', () => ({
     consoleOpen: false,
     setConsoleOpen,
     setGenieOpen,
+    canAccessAdmin: false,
   }),
 }));
 
@@ -83,6 +84,7 @@ describe('CommandPalette', () => {
     // First option is active by default.
     expect(combo.getAttribute('aria-activedescendant')).toBe('cmdk-option-0');
     expect(container.querySelector('#cmdk-option-0')!.getAttribute('aria-selected')).toBe('true');
+    expect(container.textContent).not.toContain('Admin');
   });
 
   it('toggles closed on a second ⌘K', () => {

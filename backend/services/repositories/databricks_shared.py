@@ -41,7 +41,7 @@ _BORROWER_360_COLUMNS: str = (
 
 _BORROWER_DOSSIER_COLUMNS: str = (
     _BORROWER_360_COLUMNS
-    + ", trigger_timeline_json, evidence_events, trigger_timeline"
+    + ", trigger_timeline_json, evidence_events, trigger_timeline, refreshed_at"
 )
 
 _LEAD_POPULATION_COLUMNS: str = (

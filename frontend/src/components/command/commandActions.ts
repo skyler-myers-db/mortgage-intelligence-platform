@@ -56,6 +56,13 @@ export const COMMAND_ACTIONS: readonly CommandAction[] = [
     keywords: ['settings', 'density', 'accent', 'tenant'], target: { kind: 'command', command: 'toggle-console' } },
 ];
 
+export function commandActionsForAccess(
+  canAccessAdmin: boolean,
+  actions: readonly CommandAction[] = COMMAND_ACTIONS,
+): CommandAction[] {
+  return actions.filter((action) => canAccessAdmin || action.id !== 'nav-admin');
+}
+
 function normalize(text: string): string {
   return text.toLowerCase().trim();
 }

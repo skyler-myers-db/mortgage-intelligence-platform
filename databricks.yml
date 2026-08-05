@@ -1,6 +1,11 @@
 bundle:
   name: mortgage-intelligence-platform
-  databricks_cli_version: ">= 0.279.0"
+  # Existing-App roll-forwards use direct-engine partial deploys so bundle
+  # resources can converge without replacing the verified blue App snapshot.
+  # CLI 1.2.0 introduced `bundle deploy --select`; 1.7.0 also fixes selected
+  # resources omitting their grants/permissions, so keep automation and
+  # operator runs on that governance-safe floor.
+  databricks_cli_version: ">= 1.7.0"
   # Direct deployment is the Databricks-recommended bundle engine for new
   # projects. This product has no customer-installed Terraform bundle state to
   # migrate, so the bundle defaults to direct from first deploy.
@@ -26,21 +31,20 @@ bundle:
 # anchor and fails if it finds one — a forkability safeguard so an SE
 # cannot ship a customer deploy still pointing at Entrada's workspace.
 workspace:
-  host: &default_host https://dbc-3aa503a9-4fa8.cloud.databricks.com
+  host: &default_host https://dbc-149e560d-e056.cloud.databricks.com
 
 # Sync: explicitly include the built frontend bundle in the uploaded
 # source tree. `frontend/dist/` is in .gitignore (we don't commit built
 # artifacts) but the Databricks App runtime needs those files at `/` so
-# the FastAPI SPA fallback serves the React bundle. The operator runs
-# `npm --prefix frontend run build` before `bundle deploy` — a one-line
-# wrapper in Makefile's `bundle-deploy-dev` guards this.
+# the FastAPI SPA fallback serves the React bundle. `scripts/deploy.sh`
+# performs the frontend build before its selector-bounded resource apply.
 #
 # 2026-05-04: also include `sql/_rendered/**`. The render_sql tool writes
 # UC-catalog-substituted SQL into `sql/_rendered/` (gitignored — never
 # committed), and every job task in this file references those rendered
 # paths (`sql/_rendered/ddl/001_catalogs_schemas.sql`,
 # `sql/_rendered/transformations/gold_segment_population.sql`, etc.).
-# Without this include, `databricks bundle deploy` honors the gitignore
+# Without this include, the bundle resource upload honors the gitignore
 # and the workspace ends up missing every rendered SQL file, causing the
 # next `bundle run` to fail with "File ... not found." The deploy.sh
 # orchestrator runs render_sql in step 2 specifically so step 5
@@ -49,28 +53,38 @@ sync:
   include:
     - frontend/dist/**
     - sql/_rendered/**
+  # The frontend is built before bundle deployment and served as static files
+  # by FastAPI. Databricks Apps currently provides Node 22.16, while the
+  # audited React Router release requires Node 22.22 for package installation.
+  # Keep the repository-level npm wrapper out of the uploaded App source so
+  # the managed runtime consumes only the already-validated static build.
+  exclude:
+    - /package.json
+    - /package-lock.json
 
 targets:
   dev:
     mode: development
     default: true
+    run_as:
+      user_name: ${workspace.current_user.userName}
     workspace:
       host: *default_host
-      profile: DEFAULT
       root_path: ~/.bundle/${bundle.name}/${bundle.target}
     variables:
       # The Databricks Apps bundle schema requires app Genie bindings to carry
       # a concrete space_id; it cannot resolve Genie spaces by name through a
       # bundle lookup. Keep the root variable default as the CI placeholder, but
       # pin the Entrada dev target to the governed mortgage_lead_intelligence
-      # space so plain `databricks bundle deploy -t dev --profile DEFAULT`
+      # space in this target workspace so post-bootstrap resource recovery
+      # through the signed scripts/deploy.sh command of record
       # never reaches Apps with the placeholder and returns the opaque 403
       # "Can View" permission error.
-      genie_space_id: 01f13d4968af1b249dc388fd5b18b195
+      genie_space_id: 01f18188d7a41311abe3d99932b5aa9a
 
   prod:
     mode: production
-    # CUSTOMER-SE CHECKLIST BEFORE FIRST `bundle deploy -t prod`:
+    # CUSTOMER-SE CHECKLIST BEFORE FIRST `./scripts/deploy.sh -t prod`:
     #   1. `workspace.host` dereferences the root `&default_host` YAML anchor.
     #      Before customer deploy, run:
     #        ./scripts/configure-workspace.sh https://<customer-workspace>
@@ -79,8 +93,10 @@ targets:
     #   2. Decide catalog isolation: share `mip` with dev in a single
     #      workspace, or set `variables.uc_catalog.default` to `mip_prod`
     #      for separation. Both are valid; pick one and document.
-    #   3. Confirm `run_as` service principal has CREATE on uc_catalog
-    #      and USAGE on Delta Share source catalog.
+    #   3. Confirm the deploying identity is the approved UC owner/metastore
+    #      administrator and Delta Share source access is available. The
+    #      command-of-record creates the minimal pipeline namespace before
+    #      bundle apply, then converges runtime grants and verifies postflight.
     #   4. Lakebase instance name `mip-app-state` is reused across targets
     #      via UC; if you need a prod-only instance, override the resource
     #      block under `database_instances`.
@@ -98,70 +114,6 @@ targets:
           # targets so transient primary maintenance fails over instead of
           # surfacing as an app-wide degraded state.
           enable_readable_secondaries: true
-  prod_otlp:
-    mode: production
-    # Production-retention target for environments that have a
-    # customer-owned OTLP collector and a Databricks Secret containing
-    # `MIP_OTEL_HEADERS`. This target intentionally is not the default:
-    # customer SEs must provision the secret and collector first, then
-    # deploy this target and promote with an env_vars payload that sets
-    # MIP_OTEL_ENDPOINT plus MIP_OTEL_HEADERS value_from=otel_headers.
-    workspace:
-      host: *default_host
-      profile: DEFAULT
-      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
-    run_as:
-      user_name: ${workspace.current_user.userName}
-    resources:
-      database_instances:
-        mip_app_state:
-          enable_readable_secondaries: true
-      apps:
-        mip_app:
-          resources:
-            - name: sql_warehouse
-              description: "Serverless SQL Warehouse for gold-table queries."
-              sql_warehouse:
-                id: ${resources.sql_warehouses.mip_serverless_sql.id}
-                permission: CAN_USE
-            - name: genie_space
-              description: "Mortgage Lead Intelligence Genie Space."
-              genie_space:
-                name: mortgage_lead_intelligence
-                space_id: ${var.genie_space_id}
-                permission: CAN_RUN
-            - name: database
-              description: "Lakebase/Postgres app-state database."
-              database:
-                database_name: ${var.lakebase_database_name}
-                instance_name: ${resources.database_instances.mip_app_state.name}
-                permission: CAN_CONNECT_AND_CREATE
-            - name: lifecycle_sync_job
-              description: "Event-triggered lifecycle sync job for approval/outreach state."
-              job:
-                id: ${resources.jobs.mip_sync_lifecycle_state.id}
-                permission: CAN_MANAGE_RUN
-            - name: fred_rates_job
-              description: "Operator-triggered FRED market-rate refresh job."
-              job:
-                id: ${resources.jobs.mip_fred_rates_ingest.id}
-                permission: CAN_MANAGE_RUN
-            - name: silver_refresh_job
-              description: "Operator-triggered Cotality/first-party silver refresh job."
-              job:
-                id: ${resources.jobs.mip_refresh_silver.id}
-                permission: CAN_MANAGE_RUN
-            - name: gold_refresh_job
-              description: "Operator-triggered Module 0 gold scoring refresh job."
-              job:
-                id: ${resources.jobs.mip_refresh_scores.id}
-                permission: CAN_MANAGE_RUN
-            - name: otel_headers
-              description: "Customer-owned OTLP collector header secret for durable log export."
-              secret:
-                scope: ${var.otel_headers_secret_scope}
-                key: ${var.otel_headers_secret_key}
-                permission: READ
   # `ci` target is for PR validation ONLY — never deploy against it. The
   # `dev` + `prod` targets both carry `mode:` + `${workspace.current_user
   # .userName}` templates that force the CLI to call
@@ -177,8 +129,8 @@ targets:
 
 resources:
   # Slice 5 real-data migration: self-contained Lakebase provisioning.
-  # ``databricks bundle deploy -t dev`` creates the Postgres instance +
-  # registers the database catalog in Unity Catalog. Bundle schema
+  # The selector-bounded resource phase inside ``scripts/deploy.sh`` creates
+  # the Postgres instance and registers the database catalog in Unity Catalog. Bundle schema
   # ``resources.database_instances`` + ``resources.database_catalogs``
   # confirmed via ``databricks bundle schema`` on CLI 0.297.x. The
   # migration job below (``mip_lakebase_migrate``) applies ``lakebase/
@@ -188,8 +140,10 @@ resources:
     mip_app_state:
       # DNS-compliant: alphanumeric + hyphens only. The bundle resource key
       # stays `mip_app_state` for internal references; the actual instance
-      # name on the Databricks side is `mip-app-state`.
-      name: mip-app-state
+      # name on the Databricks side defaults to `mip-app-state`. Isolated
+      # staging and customer installs override the bundle variable instead of
+      # editing this resource or colliding with another deployment.
+      name: ${var.lakebase_instance_name}
       # CU_1 is the smallest tier and is appropriate for Module 0's
       # default write volume (audit + approvals on the order of a
       # few rows per minute). Production lift to CU_2 would be a
@@ -201,14 +155,14 @@ resources:
 
   database_catalogs:
     mip_app_state_catalog:
-      name: mip_app_state
+      name: ${var.lakebase_catalog_name}
       database_instance_name: ${resources.database_instances.mip_app_state.name}
       database_name: ${var.lakebase_database_name}
       create_database_if_not_exists: true
 
   apps:
     mip_app:
-      name: mip-app
+      name: ${var.app_name}
       description: Mortgage Intelligence Platform — Module 0 (Top-of-Funnel Lead Generation & Borrower Segmentation).
       source_code_path: .
       # App resource bindings. On deploy, Databricks Apps injects env
@@ -257,6 +211,42 @@ resources:
           job:
             id: ${resources.jobs.mip_refresh_scores.id}
             permission: CAN_MANAGE_RUN
+        - name: cotality_id_mask_secret
+          description: "Deployment-scoped Cotality identifier-mask HMAC key."
+          secret:
+            scope: ${var.runtime_secret_scope}
+            key: cotality-id-mask-v1
+            permission: READ
+        - name: genie_action_current_secret
+          description: "Current HMAC key for governed Genie and campaign actions."
+          secret:
+            scope: ${var.runtime_secret_scope}
+            key: genie-action-current
+            permission: READ
+        - name: genie_action_previous_secret
+          description: "Previous HMAC key retained for bounded token rotation."
+          secret:
+            scope: ${var.runtime_secret_scope}
+            key: genie-action-previous
+            permission: READ
+        - name: salesforce_client_secret
+          description: "Optional Salesforce connected-app client secret."
+          secret:
+            scope: ${var.runtime_secret_scope}
+            key: salesforce-client-secret
+            permission: READ
+        - name: salesforce_password
+          description: "Optional Salesforce integration-user password."
+          secret:
+            scope: ${var.runtime_secret_scope}
+            key: salesforce-password
+            permission: READ
+        - name: salesforce_security_token
+          description: "Optional Salesforce integration-user security token."
+          secret:
+            scope: ${var.runtime_secret_scope}
+            key: salesforce-security-token
+            permission: READ
 
   sql_warehouses:
     mip_serverless_sql:
@@ -267,6 +257,69 @@ resources:
       auto_stop_mins: 10
 
   jobs:
+    # Dedicated first-install bootstrap. Deploy runs this idempotent DAG before
+    # applying UC grants, so a fresh or --skip-silver deployment never grants
+    # a schema, table, or reviewed Growth Agent function before it exists.
+    # Silver/gold refreshes intentionally repeat table DDL later to seed and
+    # refresh data. The three reviewed, App-executable Growth Agent functions
+    # are deployment-owned and publish only here: customer/Admin/nightly jobs
+    # must never replace them and silently discard their object grants.
+    mip_init_catalog_schemas:
+      name: mip_init_catalog_schemas
+      tags:
+        solution: mortgage-intelligence-platform
+        module: module0
+        owner: entrada
+        slice: module0-bootstrap
+      max_concurrent_runs: 1
+      tasks:
+        - task_key: init_catalog_schemas
+          description: "Create the managed catalog, core schemas, first-party contracts, and governed audit treatment table."
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/ddl/001_catalogs_schemas.sql
+        - task_key: init_ref_tables
+          description: "Create the governed ref schema and empty reference-data contracts before its schema grant."
+          depends_on:
+            - task_key: init_catalog_schemas
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/ddl/004_ref_tables.sql
+        - task_key: init_governed_gold_tables
+          description: "Create every empty governed gold contract, including both app-writable lifecycle tables."
+          depends_on:
+            - task_key: init_ref_tables
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/ddl/003_gold_tables.sql
+        - task_key: publish_fn_build_cohort
+          description: "Create the reviewed read-only broad-cohort function before granting EXECUTE."
+          depends_on:
+            - task_key: init_governed_gold_tables
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/uc_functions/fn_build_cohort.sql
+        - task_key: publish_fn_segment_counts
+          description: "Create the reviewed eligibility-gated cohort function before granting EXECUTE."
+          depends_on:
+            - task_key: init_governed_gold_tables
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/uc_functions/fn_segment_counts.sql
+        - task_key: publish_fn_lead_queue_url
+          description: "Create the reviewed app-internal handoff function before granting EXECUTE."
+          depends_on:
+            - task_key: init_governed_gold_tables
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/uc_functions/fn_lead_queue_url.sql
+
     # Slice 2 real-data migration: refresh silver by running the Lakeflow
     # (DLT) feature pipeline. Step 1 applies the idempotent DDL (catalog +
     # schemas) via SQL task against the serverless warehouse; Step 2 kicks
@@ -726,30 +779,6 @@ resources:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
               path: sql/_rendered/ddl/005_semantics_views.sql
-        - task_key: publish_fn_build_cohort
-          description: "CREATE OR REPLACE mip.gold.fn_build_cohort for reviewed Growth Agent cohort counts."
-          depends_on:
-            - task_key: refresh_semantics_views
-          sql_task:
-            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
-            file:
-              path: sql/_rendered/uc_functions/fn_build_cohort.sql
-        - task_key: publish_fn_segment_counts
-          description: "CREATE OR REPLACE mip.gold.fn_segment_counts for reviewed Growth Agent eligible counts."
-          depends_on:
-            - task_key: refresh_semantics_views
-          sql_task:
-            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
-            file:
-              path: sql/_rendered/uc_functions/fn_segment_counts.sql
-        - task_key: publish_fn_lead_queue_url
-          description: "CREATE OR REPLACE mip.gold.fn_lead_queue_url for reviewed Growth Agent handoffs."
-          depends_on:
-            - task_key: refresh_semantics_views
-          sql_task:
-            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
-            file:
-              path: sql/_rendered/uc_functions/fn_lead_queue_url.sql
         - task_key: refresh_certified_lead_metric_view
           description: "CREATE OR REPLACE certified Lead Queue Databricks metric view wrapper."
           depends_on:
@@ -775,23 +804,26 @@ resources:
             file:
               path: sql/_rendered/metric_views/certified_borrower_opportunity_metric_view.sql
 
-    # Event-triggered sync of Lakebase approval + outreach state into
+    # Durable repair sync of Lakebase approval + outreach state into
     # mip.gold.borrower_lifecycle_state. Metric views (segment_
     # performance + lead_generation) JOIN this so `approval_rate` and
     # `outreach_rate` resolve without a runtime federated query.
     # Lakebase remains authoritative; this job is a strictly
     # one-directional mirror.
     #
-    # Trigger model (changed 2026-04-22 from fixed-interval schedule;
-    # hardened 2026-06-05):
-    #   1. **Event-triggered** from the backend. Every POST
-    #      /api/outreach/approve fires backend.services.job_trigger.
-    #      trigger_lifecycle_sync() via FastAPI BackgroundTasks, which
-    #      calls WorkspaceClient.jobs.run_now(job_id=...) non-blocking.
-    #      Trigger is debounced to 60 s so a reviewer clicking through
-    #      an approval queue produces one sync run, not N. See
-    #      backend/services/job_trigger.py for the full contract.
-    #   2. **Paused fallback schedule** (04:00 America/Chicago). The cron
+    # Trigger model (incremental path hardened 2026-07-14):
+    #   1. **Primary app path:** accepted approval/rejection hooks call
+    #      backend.services.lifecycle_sync through FastAPI BackgroundTasks.
+    #      That path applies a sparse changed-row Delta MERGE through the
+    #      already-provisioned SQL warehouse and skips the population-wide
+    #      funnel snapshot. Lakebase remains the durable source if the
+    #      process exits before the task runs.
+    #   2. **Durable failure recovery:** a warehouse-path failure submits
+    #      this job through the bound job resource. Databricks persists run
+    #      state, queues concurrent submissions, and retries sync failures.
+    #      The job uses the same canonical MERGE builder as the app, then
+    #      records the full daily funnel snapshot once at the repair boundary.
+    #   3. **Paused fallback schedule** (04:00 America/Chicago). The cron
     #      definition is retained so an operator can deliberately unpause it
     #      for a customer-approved production cadence, but every target ships
     #      PAUSED by default. This avoids recurring warehouse/Lakebase spend
@@ -805,9 +837,9 @@ resources:
     # product is sold to mortgage lenders and their cost line should
     # only reflect real activity.
     #
-    # Runs AFTER mip_refresh_scores (which lands gold.borrower_360) so
-    # the sync has a full borrower_id universe to seed the 'pending'
-    # default against.
+    # Missing lifecycle rows intentionally resolve to pending/none through
+    # consumer LEFT JOIN + COALESCE semantics. This job never seeds one row
+    # per borrower and never replaces the table.
     #
     # The funnel snapshot task (gold_funnel_snapshot_daily.sql) runs
     # after the sync so it reads the freshly-mirrored lifecycle_state
@@ -820,10 +852,11 @@ resources:
         owner: entrada
         slice: slice13-accuracy
       max_concurrent_runs: 1
+      queue:
+        enabled: true
       # Schedule definition retained for explicitly approved isolated cadences.
-      # Event-trigger from the backend approval path and explicit Admin → Data
-      # operations clicks are the primary freshness drivers; every target ships
-      # PAUSED by default.
+      # The app's sparse warehouse MERGE and explicit Admin Data operations
+      # are the primary freshness drivers; every target ships PAUSED by default.
       schedule:
         quartz_cron_expression: "0 0 4 ? * * *"
         timezone_id: America/Chicago
@@ -841,21 +874,17 @@ resources:
               - psycopg[binary]==3.2.10
               - databricks-sdk>=0.30.0
       tasks:
-        - task_key: seed_default_state
-          description: "Seed mip.gold.borrower_lifecycle_state with 'pending' defaults so metric views resolve on a cold Lakebase."
-          sql_task:
-            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
-            file:
-              path: sql/_rendered/transformations/gold_borrower_lifecycle_state.sql
         - task_key: sync_from_lakebase
-          description: "Read mip_app.approvals + outreach events from Lakebase and overwrite mip.gold.borrower_lifecycle_state."
-          depends_on:
-            - task_key: seed_default_state
+          description: "MERGE changed Lakebase approval/outreach rows into the sparse gold lifecycle mirror."
           environment_key: py_default
           spark_python_task:
             python_file: jobs/sync_lifecycle_state.py
-            parameters: ["--catalog=${var.uc_catalog}"]
+            parameters:
+              - "--catalog=${var.uc_catalog}"
+              - "--lakebase-instance=${var.lakebase_instance_name}"
+              - "--lakebase-database=${var.lakebase_database_name}"
           max_retries: 2
+          min_retry_interval_millis: 10000
           retry_on_timeout: true
         - task_key: record_funnel_snapshot
           description: "MERGE today's per-(state, segment) counts into mip.gold.funnel_snapshot_daily."
@@ -908,7 +937,10 @@ resources:
           environment_key: py_default
           spark_python_task:
             python_file: jobs/kpi_snapshot.py
-            parameters: ["--catalog=${var.uc_catalog}"]
+            parameters:
+              - "--catalog=${var.uc_catalog}"
+              - "--lakebase-instance=${var.lakebase_instance_name}"
+              - "--lakebase-database=${var.lakebase_database_name}"
           max_retries: 2
           retry_on_timeout: true
 
@@ -977,10 +1009,19 @@ resources:
               - databricks-sdk>=0.30.0
       tasks:
         - task_key: apply_schema_and_seed
-          description: "Apply lakebase/schema.sql + lakebase/seed_campaigns.sql against mip-app-state."
+          description: "Apply lakebase/schema.sql + lakebase/seed_campaigns.sql against the configured Lakebase instance."
           environment_key: py_default
           spark_python_task:
             python_file: jobs/lakebase_migrate.py
+            parameters:
+              - "--app-name=${var.app_name}"
+              - "--lakebase-instance=${var.lakebase_instance_name}"
+              - "--lakebase-database=${var.lakebase_database_name}"
+              - "--lender-name=${var.lender_name}"
+              - "--lender-nmls-id=${var.lender_nmls_id}"
+              - "--tenant-id=${var.tenant_id}"
+              - "--ai-gateway-verifier-client-id=${var.ai_gateway_verifier_client_id}"
+              - "--require-ai-gateway-verifier"
           max_retries: 2
           retry_on_timeout: true
 
@@ -1065,6 +1106,9 @@ resources:
       catalog: ${var.uc_catalog}
       schema: silver
       photon: true
+      # Fresh serverless-only workspaces reject pipelines that omit this flag.
+      # Serverless is also the governed production posture for this pipeline.
+      serverless: true
       # `development` is intentionally NOT set here -- bundle target mode
       # (`mode: development` vs `mode: production`) flips the pipeline's
       # development flag automatically. Hardcoding `development: true` here
@@ -1094,9 +1138,9 @@ resources:
       file_path: dashboards/segment_dashboard.lvdash.json
       warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
 
-  # Canonical experiment path is /Shared/mip/lead-scoring; the parent
-  # /Shared/mip directory is auto-created by the bundle deploy. Under
-  # `mode: development` (the dev target), Databricks Asset Bundles
+  # Keep the experiment directly under the workspace root. Nested experiment
+  # paths require a separately-created parent directory, which breaks a fresh
+  # zero-click bundle apply. Under `mode: development` (the dev target), DAB
   # automatically prefixes the experiment name with `[dev <username>]`
   # to sandbox per-user experiments — so we don't need a manual
   # `${workspace.current_user.userName}` template that would force
@@ -1104,7 +1148,7 @@ resources:
   # resolve the path (making PR CI impossible without real secrets).
   experiments:
     mip_lead_scoring:
-      name: /Shared/mip/lead-scoring
+      name: /mip-lead-scoring
 
 # Genie spaces (mortgage_lead_intelligence) are still provisioned out-of-
 # bundle via tools/databricks/provision_genie_space.py (see AGENTS.md).
@@ -1122,22 +1166,47 @@ variables:
   app_name:
     description: Databricks App display name
     default: mip-app
+  lender_name:
+    description: Reviewed public lender identity rendered into borrower disclosures
+    default: Summit Mortgage
+  lender_nmls_id:
+    description: Exact public NMLS identifier bound into borrower disclosures
+    default: ""
+  tenant_id:
+    description: Lakebase namespace for the configured deployment's reviewed disclosures
+    default: ""
+  ai_gateway_verifier_client_id:
+    description: >-
+      Dedicated AI Gateway verifier service-principal client ID. The remote
+      Lakebase migration requires this exact role before any schema mutation.
+    default: 00000000PLACEHOLDER
+  lakebase_instance_name:
+    description: >-
+      Workspace-unique Lakebase instance name. Override for isolated staging
+      or when more than one Module 0 deployment shares a workspace.
+    default: mip-app-state
+  lakebase_catalog_name:
+    description: >-
+      Unity Catalog database-catalog name registered for the Lakebase instance.
+      Keep it aligned with MIP_LAKEBASE_SYNC_CATALOG.
+    default: mip_app_state
   # sql_warehouse_id and genie_space_id can be overridden per-invocation via
-  # the Databricks CLI BUNDLE_VAR_* mechanism. The Makefile targets
-  # `bundle-validate-env` and `bundle-deploy-dev` source .env.local and export
+  # the Databricks CLI BUNDLE_VAR_* mechanism. `bundle-validate-env` sources
+  # .env.local and exports
   # BUNDLE_VAR_sql_warehouse_id=$DATABRICKS_WAREHOUSE_ID and
   # BUNDLE_VAR_genie_space_id=$GENIE_SPACE_ID before calling the CLI.
   #
   # The root defaults stay as CI placeholders. The dev target above pins the
-  # governed Entrada Genie space explicitly so a plain
-  # `databricks bundle deploy -t dev --profile DEFAULT` is also safe. Customer
-  # targets should either set a target-specific Genie space id after
-  # provisioning or pass BUNDLE_VAR_genie_space_id / --var on deploy.
+  # governed Entrada Genie space explicitly. Mutable bundle application is an
+  # internal selector-bounded phase of `scripts/deploy.sh`; unrestricted
+  # bundle deployment is not an operator recovery path. Customer targets set a
+  # target-specific Genie id after provisioning or pass BUNDLE_VAR_genie_space_id
+  # to the command of record.
   sql_warehouse_id:
     description: >-
       Serverless SQL Warehouse ID. Override with BUNDLE_VAR_sql_warehouse_id
-      (Makefile: bundle-validate-env / bundle-deploy-dev read
-      DATABRICKS_WAREHOUSE_ID from .env.local).
+      (`bundle-validate-env` reads DATABRICKS_WAREHOUSE_ID from .env.local;
+      `scripts/deploy.sh` owns mutable use).
     default: 00000000PLACEHOLDER
   genie_space_id:
     description: >-
@@ -1149,17 +1218,12 @@ variables:
   lakebase_database_name:
     description: Lakebase Postgres database name backing Module 0 app state
     default: mip_app_state
-  otel_headers_secret_scope:
+  runtime_secret_scope:
     description: >-
-      Databricks Secret scope containing MIP_OTEL_HEADERS for the prod_otlp
-      target. The value is read by Databricks Apps through the otel_headers
-      app resource; never commit collector header values to the bundle.
-    default: mip
-  otel_headers_secret_key:
-    description: >-
-      Databricks Secret key containing comma-separated OTLP headers for
-      MIP_OTEL_HEADERS, for example "authorization=Bearer ...".
-    default: otel-headers
+      Databricks Secret scope containing deployment-scoped masking and
+      governed-action HMAC keys. scripts/deploy.sh provisions these keys
+      before bundle validation; app payloads contain only resource refs.
+    default: mip-runtime
   # ---------------------------------------------------------------------------
   # FRED API key (audit R5-16, 2026-04-23)
   # ---------------------------------------------------------------------------

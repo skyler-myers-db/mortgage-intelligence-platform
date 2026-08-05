@@ -23,8 +23,8 @@
 --     collapses the read to one statement / one indexed row — a single
 --     round-trip where the warehouse already has the bytes on Photon's
 --     cluster cache. Target: p95 < 2000 ms (ideally < 1000 ms warm).
---   - Portable: every client that runs `databricks bundle deploy -t dev` +
---     `databricks bundle run mip_refresh_scores -t dev` gets the table.
+--   - Portable: every client running the signed deploy orchestrator gets the
+--     table through its governed `mip_refresh_scores` job phase.
 --     No per-client grants beyond the ones already baked in for gold.
 --
 -- Evidence cap (20 rows per CLIP):

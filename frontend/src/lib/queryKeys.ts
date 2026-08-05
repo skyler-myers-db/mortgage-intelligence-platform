@@ -23,6 +23,8 @@ export const queryKeys = {
   salesOps: () => ['mip', 'sales', 'ops-snapshot'] as const,
   portfolioPreview: (criteria: readonly unknown[]) => ['mip', 'portfolio', 'preview', ...criteria] as const,
   campaigns: () => ['mip', 'campaigns'] as const,
+  campaign: (campaignId: string | null | undefined) =>
+    ['mip', 'campaigns', campaignId ?? ''] as const,
   adminRules: () => ['mip', 'admin', 'rules'] as const,
   adminSources: () => ['mip', 'admin', 'sources'] as const,
   adminOperations: () => ['mip', 'admin', 'operations'] as const,

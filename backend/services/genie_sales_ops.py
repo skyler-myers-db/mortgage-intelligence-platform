@@ -51,6 +51,10 @@ def sales_ops_genie_response(
         sales_store = SalesStateStore(lakebase)
         sales_store.require_manager_actor(actor)
         visible_lo_emails = sales_store.visible_lo_emails(actor=actor)
+        staff_labels = {
+            member.email: member.display_label
+            for member in sales_store.list_team(actor=actor)
+        }
     except (KeyError, PermissionError) as exc:
         raise HTTPException(status_code=403, detail="Sales Ops Genie questions require sales-manager access") from exc
     started = time.monotonic()
@@ -92,7 +96,10 @@ LIMIT 10
             apps = int(row.get("applications_started") or 0)
             rows.append(
                 {
-                    "lo_email": row.get("group_key"),
+                    "loan_officer": staff_labels.get(
+                        str(row.get("group_key") or ""),
+                        "Unassigned loan officer",
+                    ),
                     "calls_attempted": calls,
                     "contacts_reached": int(row.get("contacts_reached") or 0),
                     "callbacks_scheduled": int(row.get("callbacks_scheduled") or 0),
@@ -103,10 +110,10 @@ LIMIT 10
         if rows:
             top = rows[0]
             answer = (
-                f"{top['lo_email']} has the highest application-start rate this week at "
+                f"{top['loan_officer']} has the highest application-start rate this week at "
                 f"{top['application_start_rate'] * 100:.1f}% "
                 f"({top['applications_started']} applications from {top['calls_attempted']} logged calls). "
-                "This answer is routed through governed Sales Ops state because LO dispositions live in Lakebase."
+                "This answer is routed through governed sales operations state because LO dispositions live in Lakebase."
             )
         else:
             answer = (
@@ -156,7 +163,14 @@ ORDER BY lo_email, outcome
             limit=500,
         )
         rows = [
-            {"lo_email": row.get("lo_email"), "outcome": row.get("outcome"), "count": int(row.get("n") or 0)}
+            {
+                "loan_officer": staff_labels.get(
+                    str(row.get("lo_email") or ""),
+                    "Unassigned loan officer",
+                ),
+                "outcome": row.get("outcome"),
+                "count": int(row.get("n") or 0),
+            }
             for row in raw_rows
         ]
         calls = sum(int(row["count"]) for row in rows)
@@ -200,14 +214,14 @@ LIMIT 10
         )
         sql_query = f"""
 WITH latest_approval AS (
-  SELECT DISTINCT ON (borrower_id) borrower_id, action, decided_at
+  SELECT DISTINCT ON (borrower_id) borrower_id, approval_id, action, decided_at
   FROM mip_app.approvals
-  ORDER BY borrower_id, decided_at DESC
+  ORDER BY borrower_id, decided_at DESC, approval_id::text DESC
 ),
 latest_disposition AS (
-  SELECT DISTINCT ON (borrower_id) borrower_id, occurred_at
+  SELECT DISTINCT ON (borrower_id) borrower_id, disposition_id, occurred_at
   FROM mip_app.call_dispositions
-  ORDER BY borrower_id, occurred_at DESC, created_at DESC
+  ORDER BY borrower_id, occurred_at DESC, created_at DESC, disposition_id::text DESC
 )
 SELECT a.borrower_id,
        FLOOR(EXTRACT(EPOCH FROM (now() - a.decided_at)) / 86400)::int AS age_days

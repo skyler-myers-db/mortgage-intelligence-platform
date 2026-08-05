@@ -10,7 +10,7 @@
 
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DrawerSource } from '../components/AppContext';
 
@@ -51,9 +51,6 @@ vi.mock('../components/mortgage/USChoroplethMap', () => ({
 }));
 vi.mock('../components/mortgage/PinnedInsights', () => ({
   PinnedInsights: () => <div data-testid="pinned-insights" />,
-}));
-vi.mock('../components/mortgage/AgentActivityLog', () => ({
-  AgentActivityLog: () => <div data-testid="agent-activity-log" />,
 }));
 vi.mock('../components/mortgage/PortfolioSummaryCard', () => ({
   PortfolioSummaryCard: () => <div data-testid="portfolio-summary-card" />,

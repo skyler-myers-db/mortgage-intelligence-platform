@@ -18,7 +18,7 @@
 --            exactly one display_name.
 --
 -- Posture:   CREATE ... IF NOT EXISTS. Idempotent; safe to run on every
---            `databricks bundle deploy`. The companion seed SQL
+--            signed deploy resource phase. The companion seed SQL
 --            (`sql/ref/lender_dictionary_seed.sql`) uses MERGE so re-runs
 --            do not duplicate rows.
 --

@@ -1292,7 +1292,7 @@ def direct_canonical_response(
         if rows:
             top = rows[0]
             answer = (
-                "The refinance lane is driven by governed evidence, not a generic model summary. "
+                "The refinance lane is calculated from governed borrower economics. "
                 f"The leading current signal is `{top.get('signal_type')}`, present for "
                 f"{int(top.get('borrowers') or 0):,} marketing-eligible borrowers in refinance "
                 f"or refinance-plus-HELOC offer lanes. Review the table by signal type: rate "

@@ -1,26 +1,24 @@
 import { useEffect, useState } from 'react';
+
+import type { GenieLiveProgress } from '../../lib/api';
 import { Icon } from '../Icon';
 
-const GENIE_PROGRESS_STEPS = [
-  'Opening a governed Genie turn',
-  'Selecting trusted Unity Catalog assets',
-  'Generating read-only SQL',
-  'Executing on the Databricks warehouse',
-  'Validating sources, rows, and freshness',
-  'Planning the answer view',
-];
+const INDETERMINATE_LABEL = 'Waiting for Genie response';
 
 /**
- * Known Genie message statuses → human staged-progress copy. When the ask
- * flow has a live `genie_status`, we render the mapped label directly (no
- * timer, no invented cadence). Unknown / absent statuses fall back to the
- * generic rotating steps below.
+ * Genie message statuses → human progress copy. Server-owned stage labels
+ * (progress.stage_label) win when the live lifecycle is active; this map
+ * remains for callers that only hold a raw status string.
  */
 const GENIE_STATUS_LABELS: Record<string, string> = {
-  FILTERING_CONTEXT: 'Scoping context',
-  PENDING_WAREHOUSE: 'Warming warehouse',
-  ASKING_AI: 'Composing answer',
-  EXECUTING_QUERY: 'Running governed SQL',
+  SUBMITTED: 'Question submitted to Genie',
+  FETCHING_METADATA: 'Genie is reading governed table metadata',
+  FILTERING_CONTEXT: 'Genie is selecting the governed mortgage context',
+  ASKING_AI: 'Genie is drafting a governed SQL plan',
+  PENDING_WAREHOUSE: 'Genie is waking the SQL warehouse',
+  IN_PROGRESS: 'Genie is processing the question',
+  EXECUTING_QUERY: 'Genie is running the generated query',
+  COMPLETED: 'Answer ready — verifying and formatting',
 };
 
 export function genieStatusLabel(status: string | null | undefined): string | null {
@@ -28,38 +26,91 @@ export function genieStatusLabel(status: string | null | undefined): string | nu
   return GENIE_STATUS_LABELS[status] ?? null;
 }
 
+/** Ordered lifecycle rail. `stage` values come from the backend's bounded
+ * vocabulary; anything unknown ("working") keeps the rail indeterminate. */
+const STAGES: Array<{ key: string; label: string }> = [
+  { key: 'understanding', label: 'Understand' },
+  { key: 'drafting', label: 'Draft SQL' },
+  { key: 'executing', label: 'Execute' },
+  { key: 'complete', label: 'Format' },
+];
+
+function stageIndex(stage: string | null | undefined): number {
+  if (!stage) return -1;
+  return STAGES.findIndex((s) => s.key === stage);
+}
+
+function dedupeTrace(trace: Array<{ kind: string; content: string }>): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const step of trace) {
+    const content = step.content.trim();
+    if (!content || seen.has(content)) continue;
+    seen.add(content);
+    out.push(content);
+  }
+  return out;
+}
+
+function ElapsedTicker({ startedAt }: { startedAt: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const seconds = Math.max(0, Math.round((now - startedAt) / 1000));
+  return (
+    <span className="genie-progress__elapsed mono" aria-label={`elapsed ${seconds} seconds`}>
+      {seconds}s
+    </span>
+  );
+}
+
 export function GenieProgress({
   dense = false,
   status = null,
+  progress = null,
+  startedAt = null,
 }: {
   dense?: boolean;
-  /** Live Genie message status. A known value renders staged copy with no
-   *  fake timer; unknown/absent keeps the generic rotating fallback. */
+  /** A raw Genie message status for callers without the live lifecycle. */
   status?: string | null;
+  /** Live lifecycle payload from `/api/genie/message/progress`. */
+  progress?: GenieLiveProgress | null;
+  /** Epoch ms when the ask started; renders the elapsed ticker when set. */
+  startedAt?: number | null;
 }) {
-  const mapped = genieStatusLabel(status);
-  const [step, setStep] = useState(0);
-
+  const label =
+    progress?.stage_label ?? genieStatusLabel(progress?.status ?? status) ?? INDETERMINATE_LABEL;
+  // Monotonic rail: Genie legitimately revisits earlier statuses (e.g. a
+  // text-only repair turn re-enters ASKING_AI after EXECUTING_QUERY), but a
+  // completed stage dot must never un-complete on screen. Reset per ask via
+  // the startedAt identity.
+  //
+  // The high-water mark lives in state, not a ref: refs must not be read or
+  // written during render (it misbehaves under StrictMode's double render and
+  // concurrent re-renders). Rendering max(reported, carried) keeps the rail
+  // exact with no one-frame lag — the freshly reported stage is already
+  // folded in before the effect commits it — and pinning the carried value to
+  // the ask identity means a new ask starts from scratch on its first render.
+  const askKey = startedAt ?? null;
+  const [seen, setSeen] = useState<{ askKey: number | null; maxIdx: number }>({
+    askKey,
+    maxIdx: -1,
+  });
+  const reportedIdx = stageIndex(progress?.stage);
+  const carriedIdx = seen.askKey === askKey ? seen.maxIdx : -1;
+  const activeIdx = Math.max(reportedIdx, carriedIdx);
   useEffect(() => {
-    // No fake timer when a real status drives the copy — the label is
-    // status-derived, not clock-derived.
-    if (mapped) return undefined;
-    const id = window.setInterval(() => {
-      setStep((cur) => Math.min(cur + 1, GENIE_PROGRESS_STEPS.length - 1));
-    }, 2600);
-    return () => window.clearInterval(id);
-  }, [mapped]);
-
-  const label = mapped ?? GENIE_PROGRESS_STEPS[step];
-  // Rail highlight index: for a mapped status, light the rail proportionally
-  // to where that status sits in the known lifecycle so the bar isn't stuck
-  // at step 0. Purely cosmetic; no timer.
-  const railActiveThrough = mapped
-    ? Math.min(
-        GENIE_PROGRESS_STEPS.length - 1,
-        Object.keys(GENIE_STATUS_LABELS).indexOf(status ?? ''),
-      )
-    : step;
+    setSeen((prev) => {
+      const base = prev.askKey === askKey ? prev.maxIdx : -1;
+      const nextIdx = Math.max(base, reportedIdx);
+      if (prev.askKey === askKey && prev.maxIdx === nextIdx) return prev;
+      return { askKey, maxIdx: nextIdx };
+    });
+  }, [askKey, reportedIdx]);
+  const trace = dedupeTrace(progress?.reasoning_trace ?? []);
+  const sql = progress?.sql_preview?.trim() || null;
 
   return (
     <div
@@ -69,20 +120,59 @@ export function GenieProgress({
     >
       <div className="genie-progress__head">
         <Icon name="sparkle" size={12} className="icon-accent" />
-        <span>{label}</span>
+        <span className="genie-progress__label">{label}</span>
+        {startedAt != null ? <ElapsedTicker startedAt={startedAt} /> : null}
       </div>
-      {!dense && (
-        <div className="genie-progress__rail" aria-hidden="true">
-          {GENIE_PROGRESS_STEPS.map((railLabel, i) => (
-            <span
-              key={railLabel}
-              className={i <= railActiveThrough ? 'is-active' : undefined}
-            />
+
+      <ol className="genie-progress__stages" aria-label="Genie lifecycle stages">
+        {STAGES.map((stage, idx) => {
+          const state =
+            activeIdx < 0
+              ? 'pending'
+              : idx < activeIdx
+                ? 'done'
+                : idx === activeIdx
+                  ? 'active'
+                  : 'pending';
+          return (
+            <li
+              key={stage.key}
+              className={`genie-progress__stage is-${state}`}
+              aria-current={state === 'active' ? 'step' : undefined}
+            >
+              <span className="genie-progress__stage-dot" aria-hidden="true">
+                {state === 'done' ? <Icon name="check" size={9} /> : null}
+              </span>
+              <span className="genie-progress__stage-label">{stage.label}</span>
+            </li>
+          );
+        })}
+      </ol>
+
+      {trace.length > 0 && (
+        <ul className="genie-progress__trace" aria-label="Genie public process steps">
+          {trace.map((content) => (
+            <li key={content} className="genie-progress__trace-step">
+              <Icon name="check" size={10} className="icon-accent" />
+              <span>{content}</span>
+            </li>
           ))}
-        </div>
+        </ul>
       )}
+
+      {sql && (
+        <details className="genie-progress__sql" open={!dense}>
+          <summary>Generated SQL</summary>
+          <pre className="mono">{sql}</pre>
+        </details>
+      )}
+
       <div className="genie-progress__meta">
-        Live Genie calls can take 10-20 seconds while SQL compiles and runs.
+        {progress
+          ? 'Live from the Databricks Genie Conversation API.'
+          : dense
+            ? 'The live request is still pending.'
+            : 'The answer will appear after the live request completes.'}
       </div>
     </div>
   );

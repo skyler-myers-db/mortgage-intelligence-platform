@@ -1,5 +1,5 @@
 import { renderToStaticMarkup } from 'react-dom/server';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { describe, expect, it } from 'vitest';
 import {
   DailyEvidenceLineChart,
@@ -45,6 +45,7 @@ function pointFixture(overrides: Partial<EquitySpreadPoint> = {}): EquitySpreadP
     equity_pct: 42,
     rate_spread_bps: 88,
     opportunity_score: 90,
+    coordinate_total: 1,
     score_band: 'high',
     in_the_money: true,
     ...overrides,
@@ -176,12 +177,20 @@ describe('analytics chart readability', () => {
     expect(html).not.toContain('B-0000000000025');
   });
 
-  it('renders zoomed real points with honest showing-N-of-M copy and Borrower 360 links', () => {
+  it('renders zoomed real points with honest returned-versus-matching copy and Borrower 360 links', () => {
     const html = renderToStaticMarkup(
       <MemoryRouter>
         <EquitySpreadPointsView
           payload={pointsPayload({
-            points: [pointFixture(), pointFixture({ borrower_id: 'B-0000000000075', score_band: 'low', opportunity_score: 40 })],
+            points: [
+              pointFixture(),
+              pointFixture({
+                borrower_id: 'B-0000000000075',
+                equity_pct: 43,
+                score_band: 'low',
+                opportunity_score: 40,
+              }),
+            ],
             total_matching: 970,
             showing: 2,
             truncated: true,
@@ -190,11 +199,12 @@ describe('analytics chart readability', () => {
       </MemoryRouter>,
     );
 
-    expect(html).toContain('Showing 2 of 970 borrowers in this window');
+    expect(html).toContain('Plotting 2 of 2 returned borrowers');
+    expect(html).toContain('(970 total matching this window)');
     expect(html).toContain('server cap 5K');
     expect(html).toContain('/borrower-360/B-0000000000025');
     expect(html).toContain('/borrower-360/B-0000000000075');
-    // Dots carry the canonical band classes from the payload.
+    // Individual dots carry the canonical band classes from the payload.
     expect(html).toContain('analytics-scatter__dot--band score--high');
     expect(html).toContain('analytics-scatter__dot--band score--low');
   });
@@ -212,7 +222,10 @@ describe('analytics chart readability', () => {
 
   it('says when the DOM plot is a top slice of the honest server page', () => {
     const many = Array.from({ length: MAX_SCATTER_POINTS + 50 }, (_, idx) =>
-      pointFixture({ borrower_id: `B-${String(idx).padStart(13, '0')}` }));
+      pointFixture({
+        borrower_id: `B-${String(idx).padStart(13, '0')}`,
+        coordinate_total: MAX_SCATTER_POINTS + 50,
+      }));
     const html = renderToStaticMarkup(
       <MemoryRouter>
         <EquitySpreadPointsView
@@ -220,8 +233,9 @@ describe('analytics chart readability', () => {
         />
       </MemoryRouter>,
     );
-    expect(html).toContain(`plotting the top ${(MAX_SCATTER_POINTS / 1000).toFixed(1)}K by opportunity score`);
-    expect((html.match(/analytics-scatter__dot/g) ?? []).length).toBeLessThanOrEqual(MAX_SCATTER_POINTS * 2);
+    expect(html).toContain(`the plotted points are the top ${(MAX_SCATTER_POINTS / 1000).toFixed(1)}K by opportunity score`);
+    expect(html).toContain(`${many.length} borrowers at 42% equity and 88 bps spread`);
+    expect(html).not.toContain('/borrower-360/B-0000000001249');
   });
 
   it('renders evidence daily dates as dates instead of mangled integers', () => {

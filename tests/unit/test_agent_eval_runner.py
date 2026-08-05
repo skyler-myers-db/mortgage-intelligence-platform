@@ -6,6 +6,8 @@ import sys
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from tools.databricks import run_agent_eval
 
 
@@ -22,9 +24,45 @@ def test_live_invocation_case_flag_defaults_off(monkeypatch) -> None:
     assert enabled.live_invocation_case is True
 
 
+def test_parser_keeps_normal_and_admin_bearers_separate(monkeypatch) -> None:
+    monkeypatch.setenv("MIP_BEARER_TOKEN", "normal-bearer")
+    monkeypatch.setenv("MIP_ADMIN_BEARER_TOKEN", "admin-bearer")
+
+    from_env = run_agent_eval._parser().parse_args([])
+    from_args = run_agent_eval._parser().parse_args(
+        ["--token", "normal-arg", "--admin-token", "admin-arg"]
+    )
+
+    assert from_env.token == "normal-bearer"
+    assert from_env.admin_token == "admin-bearer"
+    assert from_args.token == "normal-arg"
+    assert from_args.admin_token == "admin-arg"
+
+
+def test_parser_does_not_fall_back_to_normal_bearer_for_admin(monkeypatch) -> None:
+    monkeypatch.setenv("MIP_BEARER_TOKEN", "normal-bearer")
+    monkeypatch.delenv("MIP_ADMIN_BEARER_TOKEN", raising=False)
+
+    args = run_agent_eval._parser().parse_args([])
+
+    assert args.token == "normal-bearer"
+    assert args.admin_token == ""
+
+
+def test_main_fails_clearly_when_admin_bearer_is_absent(monkeypatch) -> None:
+    monkeypatch.delenv("MIP_ADMIN_BEARER_TOKEN", raising=False)
+
+    with pytest.raises(ValueError, match="MIP_ADMIN_BEARER_TOKEN is required"):
+        run_agent_eval.main(["--app-url", "https://example.test", "--token", "normal-bearer"])
+
+
 def test_live_invocation_case_clones_first_case_with_distinct_id() -> None:
     cases = [
-        {"id": "case-a", "prompt": "Find prime refinance opportunities.", "expected_workflow_id": "daily_refi_brief"},
+        {
+            "id": "case-a",
+            "prompt": "Find prime refinance opportunities.",
+            "expected_workflow_id": "daily_refi_brief",
+        },
         {"id": "case-b", "prompt": "Something else."},
     ]
     extra = run_agent_eval.live_invocation_case(cases)
@@ -40,12 +78,33 @@ def test_live_invocation_case_clones_first_case_with_distinct_id() -> None:
 
 def test_call_growth_agent_uses_json_content_type_and_uuid_request_id(monkeypatch) -> None:
     captured: dict[str, Any] = {}
+    tool_hash = "a" * 64
+    cohort_digest = "b" * 64
+    source_fingerprint = run_agent_eval._cohort_fingerprint(
+        cohort_digest=cohort_digest,
+        tool_result_hash=tool_hash,
+    )
 
     class _Response:
         status_code = 200
 
         def json(self) -> dict[str, Any]:
-            return {"workflow": {"id": "daily_refi_brief"}}
+            return {
+                "workflow": {"id": "daily_refi_brief"},
+                "actionable_total": 5,
+                "route": "/lead-queue?segment=itm&marketing_eligibility=Eligible+only",
+                "tool_result_hash": tool_hash,
+                "actionable_cohort_fingerprint": source_fingerprint,
+                "actionable_snapshot_id": "snapshot-1",
+            }
+
+    class _DestinationResponse:
+        status_code = 200
+        headers = {
+            "X-Total-Matching": "5",
+            "X-Cohort-Digest": cohort_digest,
+            "X-Cohort-Snapshot-ID": "snapshot-1",
+        }
 
     class _Client:
         def __init__(self, *, timeout: float, follow_redirects: bool) -> None:
@@ -64,19 +123,32 @@ def test_call_growth_agent_uses_json_content_type_and_uuid_request_id(monkeypatc
             captured["json"] = json
             return _Response()
 
+        def get(self, url: str, *, headers: dict[str, str]) -> _DestinationResponse:
+            captured.setdefault("destination_urls", []).append(url)
+            captured["destination_headers"] = headers
+            return _DestinationResponse()
+
     monkeypatch.setattr(run_agent_eval.httpx, "Client", _Client)
 
     response = run_agent_eval._call_growth_agent(
         app_url="https://example.test/",
-        token="redacted",
+        token="normal-bearer",
+        admin_token="admin-bearer",
         case={"prompt": "Find prime refinance opportunities."},
         timeout_s=12,
     )
 
-    assert response == {"workflow": {"id": "daily_refi_brief"}}
+    assert response["destination_total"] == 5
+    assert response["destination_cohort_fingerprint"] == source_fingerprint
+    assert response["destination_snapshot_id"] == "snapshot-1"
     assert captured["url"] == "https://example.test/api/growth-agent/agent/run"
     assert captured["headers"]["Content-Type"] == "application/json"
     assert captured["headers"]["Accept"] == "application/json"
+    assert captured["headers"]["Authorization"] == "Bearer normal-bearer"
+    assert captured["destination_urls"] == [
+        "https://example.test/api/leads?segment=itm&marketing_eligibility=Eligible+only&limit=1&include_identity_proof=true",
+    ]
+    assert captured["destination_headers"]["Authorization"] == "Bearer admin-bearer"
     assert captured["json"]["save_monitor"] is False
     assert re.fullmatch(
         r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
@@ -87,9 +159,13 @@ def test_call_growth_agent_uses_json_content_type_and_uuid_request_id(monkeypatc
 def test_call_growth_agent_retries_transient_app_warmup(monkeypatch) -> None:
     attempts = 0
     sleeps: list[float] = []
+    tool_hash = "b" * 64
+    cohort_digest = "c" * 64
 
     class _Response:
-        def __init__(self, status_code: int, payload: dict[str, Any] | None = None, text: str = "") -> None:
+        def __init__(
+            self, status_code: int, payload: dict[str, Any] | None = None, text: str = ""
+        ) -> None:
             self.status_code = status_code
             self._payload = payload
             self.text = text
@@ -98,6 +174,14 @@ def test_call_growth_agent_retries_transient_app_warmup(monkeypatch) -> None:
             if self._payload is None:
                 raise json.JSONDecodeError("no json", self.text, 0)
             return self._payload
+
+    class _DestinationResponse:
+        status_code = 200
+        headers = {
+            "X-Total-Matching": "5",
+            "X-Cohort-Digest": cohort_digest,
+            "X-Cohort-Snapshot-ID": "snapshot-2",
+        }
 
     class _Client:
         def __init__(self, *, timeout: float, follow_redirects: bool) -> None:
@@ -115,7 +199,23 @@ def test_call_growth_agent_retries_transient_app_warmup(monkeypatch) -> None:
             attempts += 1
             if attempts == 1:
                 return _Response(502, None, "<html>Bad Gateway</html>")
-            return _Response(200, {"workflow": {"id": "daily_refi_brief"}})
+            return _Response(
+                200,
+                {
+                    "workflow": {"id": "daily_refi_brief"},
+                    "route": "/lead-queue?segment=itm",
+                    "tool_result_hash": tool_hash,
+                    "actionable_cohort_fingerprint": run_agent_eval._cohort_fingerprint(
+                        cohort_digest=cohort_digest,
+                        tool_result_hash=tool_hash,
+                    ),
+                    "actionable_snapshot_id": "snapshot-2",
+                },
+            )
+
+        def get(self, url: str, *, headers: dict[str, str]) -> _DestinationResponse:
+            _ = url, headers
+            return _DestinationResponse()
 
     monkeypatch.setattr(run_agent_eval.httpx, "Client", _Client)
     monkeypatch.setattr(run_agent_eval.time, "sleep", lambda seconds: sleeps.append(seconds))
@@ -123,13 +223,15 @@ def test_call_growth_agent_retries_transient_app_warmup(monkeypatch) -> None:
     response = run_agent_eval._call_growth_agent(
         app_url="https://example.test/",
         token="redacted",
+        admin_token="admin-redacted",
         case={"prompt": "Find prime refinance opportunities."},
         timeout_s=12,
         max_attempts=2,
         retry_delay_s=0.25,
     )
 
-    assert response == {"workflow": {"id": "daily_refi_brief"}}
+    assert response["destination_total"] == 5
+    assert response["destination_snapshot_id"] == "snapshot-2"
     assert attempts == 2
     assert sleeps == [0.25]
 
@@ -165,6 +267,7 @@ def test_call_growth_agent_does_not_retry_validation_error(monkeypatch) -> None:
     response = run_agent_eval._call_growth_agent(
         app_url="https://example.test/",
         token="redacted",
+        admin_token="admin-redacted",
         case={"prompt": "Call John Smith at 555-111-2222."},
         timeout_s=12,
         max_attempts=3,
@@ -173,6 +276,225 @@ def test_call_growth_agent_does_not_retry_validation_error(monkeypatch) -> None:
 
     assert response == {"error": "PII"}
     assert attempts == 1
+
+
+def test_destination_total_fails_closed_when_header_is_missing() -> None:
+    class _DestinationResponse:
+        status_code = 200
+        headers: dict[str, str] = {}
+
+    class _Client:
+        def get(self, url: str, *, headers: dict[str, str]) -> _DestinationResponse:
+            _ = url, headers
+            return _DestinationResponse()
+
+    response = run_agent_eval._with_destination_total(
+        client=_Client(),
+        app_url="https://example.test",
+        admin_token="admin-redacted",
+        response={
+            "route": "/lead-queue?segment=itm",
+            "actionable_total": 5,
+        },
+    )
+
+    assert "destination_total" not in response
+    assert response["destination_error"] == "Lead Queue response is missing X-Total-Matching"
+
+
+def test_destination_total_fails_closed_on_fetch_error() -> None:
+    class _Client:
+        def get(self, url: str, *, headers: dict[str, str]) -> object:
+            _ = url, headers
+            raise run_agent_eval.httpx.ReadTimeout("timed out")
+
+    response = run_agent_eval._with_destination_total(
+        client=_Client(),
+        app_url="https://example.test",
+        admin_token="admin-redacted",
+        response={"route": "/lead-queue?segment=itm", "actionable_total": 5},
+    )
+
+    assert "destination_total" not in response
+    assert response["destination_error"] == "Lead Queue fetch failed: ReadTimeout"
+
+
+def test_cohort_fingerprint_is_digest_and_tool_result_bound() -> None:
+    first = run_agent_eval._cohort_fingerprint(
+        cohort_digest="1" * 64,
+        tool_result_hash="a" * 64,
+    )
+    same_inputs = run_agent_eval._cohort_fingerprint(
+        cohort_digest="1" * 64,
+        tool_result_hash="a" * 64,
+    )
+    different_tool_result = run_agent_eval._cohort_fingerprint(
+        cohort_digest="1" * 64,
+        tool_result_hash="b" * 64,
+    )
+    different_digest = run_agent_eval._cohort_fingerprint(
+        cohort_digest="2" * 64,
+        tool_result_hash="a" * 64,
+    )
+
+    assert first == same_inputs
+    assert first != different_tool_result
+    assert first != different_digest
+
+
+def test_destination_identity_fails_honestly_without_common_snapshot() -> None:
+    class _DestinationResponse:
+        status_code = 200
+        headers = {"X-Total-Matching": "2", "X-Cohort-Digest": "3" * 64}
+
+    class _Client:
+        def get(self, url: str, *, headers: dict[str, str]) -> _DestinationResponse:
+            _ = url, headers
+            return _DestinationResponse()
+
+    response = run_agent_eval._with_destination_total(
+        client=_Client(),
+        app_url="https://example.test",
+        admin_token="admin-redacted",
+        response={
+            "route": "/lead-queue?segment=itm",
+            "actionable_total": 2,
+            "tool_result_hash": "a" * 64,
+        },
+    )
+
+    assert response["destination_total"] == 2
+    assert len(str(response["destination_cohort_fingerprint"])) == 64
+    assert "destination_snapshot_id" not in response
+    assert response["destination_identity_error"] == (
+        "Lead Queue does not expose a cohort snapshot token for reconciliation"
+    )
+
+
+def test_destination_identity_supports_cohorts_above_row_response_cap() -> None:
+    class _DestinationResponse:
+        status_code = 200
+        headers = {
+            "X-Total-Matching": "5001",
+            "X-Cohort-Digest": "4" * 64,
+            "X-Cohort-Snapshot-ID": "snapshot-large",
+        }
+
+    class _Client:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def get(self, url: str, *, headers: dict[str, str]) -> _DestinationResponse:
+            _ = url, headers
+            self.calls += 1
+            return _DestinationResponse()
+
+    client = _Client()
+    response = run_agent_eval._with_destination_total(
+        client=client,
+        app_url="https://example.test",
+        admin_token="admin-redacted",
+        response={
+            "route": "/lead-queue?segment=itm",
+            "actionable_total": 5001,
+            "tool_result_hash": "a" * 64,
+        },
+    )
+
+    assert response["destination_total"] == 5001
+    assert len(str(response["destination_cohort_fingerprint"])) == 64
+    assert response["destination_snapshot_id"] == "snapshot-large"
+    assert "destination_identity_error" not in response
+    assert client.calls == 1
+
+
+def test_wait_for_app_health_retries_until_all_dependencies_are_up(monkeypatch) -> None:
+    attempts = 0
+    sleeps: list[float] = []
+
+    class _Response:
+        status_code = 200
+
+        def __init__(self, payload: dict[str, Any]) -> None:
+            self._payload = payload
+
+        def json(self) -> dict[str, Any]:
+            return self._payload
+
+    class _Client:
+        def __init__(self, *, timeout: float, follow_redirects: bool) -> None:
+            assert timeout == 5
+            assert follow_redirects is False
+
+        def __enter__(self) -> _Client:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def get(self, url: str, *, headers: dict[str, str]) -> _Response:
+            nonlocal attempts
+            attempts += 1
+            assert url == "https://example.test/api/v1/health"
+            assert headers["Authorization"] == "Bearer redacted"
+            dependencies = {
+                "warehouse": "up",
+                "lakebase": "up" if attempts > 1 else "down",
+                "genie": "up",
+            }
+            return _Response(
+                {"status": "ok" if attempts > 1 else "degraded", "dependencies": dependencies}
+            )
+
+    monkeypatch.setattr(run_agent_eval.httpx, "Client", _Client)
+    monkeypatch.setattr(run_agent_eval.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    run_agent_eval._wait_for_app_health(
+        app_url="https://example.test/",
+        token="redacted",
+        timeout_s=30,
+        interval_s=2,
+        request_timeout_s=5,
+    )
+
+    assert attempts == 2
+    assert sleeps == [2]
+
+
+def test_wait_for_app_health_fails_fast_on_bad_authorization(monkeypatch) -> None:
+    class _Response:
+        status_code = 403
+
+        def json(self) -> dict[str, Any]:
+            return {"detail": "forbidden"}
+
+    class _Client:
+        def __init__(self, *, timeout: float, follow_redirects: bool) -> None:
+            _ = timeout, follow_redirects
+
+        def __enter__(self) -> _Client:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def get(self, url: str, *, headers: dict[str, str]) -> _Response:
+            _ = url, headers
+            return _Response()
+
+    monkeypatch.setattr(run_agent_eval.httpx, "Client", _Client)
+
+    try:
+        run_agent_eval._wait_for_app_health(
+            app_url="https://example.test",
+            token="redacted",
+            timeout_s=30,
+            interval_s=2,
+        )
+    except RuntimeError as exc:
+        assert "not authorized" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected authorization failure to stop the health gate")
 
 
 def test_log_eval_run_uses_positional_set_tag(monkeypatch) -> None:
@@ -216,7 +538,9 @@ def test_log_eval_run_uses_positional_set_tag(monkeypatch) -> None:
 
     assert run_id == "run-1"
     assert any(call[:2] == ["experiments", "log-batch"] for call in no_output_calls)
-    assert any(call[:3] == ["experiments", "set-tag", "mip_eval_failures"] for call in no_output_calls)
+    assert any(
+        call[:3] == ["experiments", "set-tag", "mip_eval_failures"] for call in no_output_calls
+    )
     assert any(call[:2] == ["experiments", "update-run"] for call in no_output_calls)
 
 
@@ -342,6 +666,12 @@ def test_mlflow_genai_evaluate_runs_custom_scorer(monkeypatch) -> None:
             "case-a": {
                 "broad_total": 10,
                 "actionable_total": 5,
+                "destination_total": 5,
+                "actionable_cohort_fingerprint": "d" * 64,
+                "destination_cohort_fingerprint": "d" * 64,
+                "destination_fingerprint_tool_result_hash": "c" * 64,
+                "actionable_snapshot_id": "snapshot-mlflow-1",
+                "destination_snapshot_id": "snapshot-mlflow-1",
                 "route": "/lead-queue?segment=itm&marketing_eligibility=Eligible+only",
                 "source_assets": ["mip.gold.borrower_360"],
                 "trace_id": "agent-trace-test",
@@ -523,9 +853,7 @@ def _fake_lakebase_workspace():
 
     return SimpleNamespace(
         database=SimpleNamespace(
-            get_database_instance=lambda name: SimpleNamespace(
-                read_write_dns=f"{name}.db.example"
-            ),
+            get_database_instance=lambda name: SimpleNamespace(read_write_dns=f"{name}.db.example"),
             generate_database_credential=lambda instance_names, request_id: SimpleNamespace(
                 token="short-lived-token"
             ),
@@ -600,61 +928,61 @@ def test_verifier_respects_real_lakebase_host_in_settings(monkeypatch) -> None:
     assert singleton.lakebase_host == "customer-real.db.example"
 
 
-def test_verifier_query_retries_through_cold_start_timeouts(monkeypatch) -> None:
+def test_verifier_warmup_retries_with_distinct_non_proof_ids(monkeypatch) -> None:
     """Scale-to-zero gateway endpoints hold cold requests past the SDK read
     timeout (observed: deploy step 18 died after the SDK's 5-minute retry
     budget, 2026-07-07). Timeout-shaped failures retry inside the warmup
     budget; the eventual warm response is returned."""
     from tools.databricks import verify_ai_gateway_exact_proof as verifier
 
-    calls = {"n": 0}
+    request_ids: list[str] = []
 
-    class _WarmingServingEndpoints:
-        def query(self, endpoint: str, **kwargs):
-            calls["n"] += 1
-            if calls["n"] < 3:
+    class _WarmingApiClient:
+        def do(self, method: str, path: str, *, body: dict[str, object]):
+            request_ids.append(str(body["client_request_id"]))
+            if len(request_ids) < 3:
                 raise TimeoutError("Timed out after 0:05:00")
             return {"choices": [{"message": {"content": "warm"}}]}
 
     class _Workspace:
-        serving_endpoints = _WarmingServingEndpoints()
+        api_client = _WarmingApiClient()
 
     naps: list[float] = []
-    response = verifier.query_with_cold_start_patience(
+    response = verifier.warm_endpoint_with_cold_start_patience(
         _Workspace(),
         "mip-agent-gateway",
         prompt="ping",
-        client_request_id="mip-capability-z",
         task="llm/v1/chat",
         warmup_timeout_s=600.0,
         interval_s=5.0,
         sleep=naps.append,
     )
-    assert calls["n"] == 3
+    assert len(request_ids) == 3
+    assert len(set(request_ids)) == 3
+    assert all(request_id.startswith("mip-warmup-") for request_id in request_ids)
     assert naps == [5.0, 5.0]
     assert response["choices"]
 
 
-def test_verifier_query_raises_immediately_on_non_timeout_errors() -> None:
+def test_verifier_warmup_raises_immediately_on_non_timeout_errors() -> None:
     """A 400/permission failure will never heal by waiting — no retries."""
     from tools.databricks import verify_ai_gateway_exact_proof as verifier
 
     calls = {"n": 0}
 
-    class _RejectingServingEndpoints:
-        def query(self, endpoint: str, **kwargs):
+    class _RejectingApiClient:
+        def do(self, method: str, path: str, *, body: dict[str, object]):
             calls["n"] += 1
             raise ValueError("Encountered an unexpected error while evaluating the model")
 
     class _Workspace:
-        serving_endpoints = _RejectingServingEndpoints()
+        api_client = _RejectingApiClient()
 
     try:
-        verifier.query_with_cold_start_patience(
+        verifier.warm_endpoint_with_cold_start_patience(
             _Workspace(),
             "mip-agent-gateway",
             prompt="ping",
-            client_request_id="mip-capability-z",
             task="llm/v1/chat",
             warmup_timeout_s=600.0,
             sleep=lambda _s: None,
@@ -666,22 +994,21 @@ def test_verifier_query_raises_immediately_on_non_timeout_errors() -> None:
     assert calls["n"] == 1
 
 
-def test_verifier_query_gives_up_after_warmup_budget() -> None:
+def test_verifier_warmup_gives_up_after_budget() -> None:
     from tools.databricks import verify_ai_gateway_exact_proof as verifier
 
-    class _ForeverColdServingEndpoints:
-        def query(self, endpoint: str, **kwargs):
+    class _ForeverColdApiClient:
+        def do(self, method: str, path: str, *, body: dict[str, object]):
             raise TimeoutError("Timed out after 0:05:00")
 
     class _Workspace:
-        serving_endpoints = _ForeverColdServingEndpoints()
+        api_client = _ForeverColdApiClient()
 
     try:
-        verifier.query_with_cold_start_patience(
+        verifier.warm_endpoint_with_cold_start_patience(
             _Workspace(),
             "mip-agent-gateway",
             prompt="ping",
-            client_request_id="mip-capability-z",
             task="llm/v1/chat",
             warmup_timeout_s=0.0,
             sleep=lambda _s: None,

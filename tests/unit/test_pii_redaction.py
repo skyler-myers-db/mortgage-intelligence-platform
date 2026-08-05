@@ -22,6 +22,7 @@ from backend.services.pii_redaction import (
     _reset_lender_resolver_for_tests,
     generalize_lender,
     mask_cotality_id,
+    mask_source_record_ref,
     redact_borrower_row,
     redact_evidence_row,
     redact_lead_row,
@@ -210,6 +211,23 @@ def test_mask_cotality_id_preserves_synthetic_demo_refs() -> None:
     assert mask_cotality_id("owner_link", "ol_demo_48291") == "ol_demo_48291"
 
 
+def test_source_record_ref_mask_is_deterministic_and_source_scoped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MIP_COTALITY_ID_MASK_SECRET", "test-source-ref-secret")
+    monkeypatch.setattr(settings, "app_env", "test")
+
+    first = mask_source_record_ref("salesforce", "sf_case_123")
+    replay = mask_source_record_ref("salesforce", "sf_case_123")
+    other_source = mask_source_record_ref("los_pos", "sf_case_123")
+
+    assert re.fullmatch(r"auto-[a-f0-9]{32}", first)
+    assert first == replay
+    assert mask_source_record_ref("salesforce", first) != first
+    assert first != other_source
+    assert "sf_case_123" not in first
+
+
 def test_mask_cotality_id_ignores_legacy_raw_id_escape_hatch(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MIP_EXPOSE_RAW_COTALITY_IDS", "1")
     assert re.fullmatch(r"clip_ref_[0-9a-f]{12}", mask_cotality_id("clip", "1234567890"))
@@ -219,10 +237,24 @@ def test_mask_cotality_id_ignores_legacy_raw_id_escape_hatch(monkeypatch: pytest
     )
 
 
-def test_mask_cotality_id_requires_secret_outside_sandbox(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("app_env", ["dev", "sandbox", "customer", "production"])
+def test_mask_cotality_id_requires_secret_outside_local_test(
+    monkeypatch: pytest.MonkeyPatch,
+    app_env: str,
+) -> None:
     monkeypatch.delenv("MIP_COTALITY_ID_MASK_SECRET", raising=False)
     monkeypatch.delenv("MIP_GENIE_ACTION_SECRET", raising=False)
-    monkeypatch.setattr(settings, "app_env", "customer")
+    monkeypatch.setattr(settings, "app_env", app_env)
+
+    with pytest.raises(RuntimeError, match="MIP_COTALITY_ID_MASK_SECRET"):
+        mask_cotality_id("clip", "1234567890")
+
+
+def test_mask_cotality_id_requires_secret_when_app_env_is_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("MIP_COTALITY_ID_MASK_SECRET", raising=False)
+    monkeypatch.setattr(settings, "app_env", "")
 
     with pytest.raises(RuntimeError, match="MIP_COTALITY_ID_MASK_SECRET"):
         mask_cotality_id("clip", "1234567890")
@@ -239,7 +271,7 @@ def test_mask_cotality_id_ignores_genie_action_secret_for_masking(
         mask_cotality_id("clip", "1234567890")
 
 
-def test_mask_cotality_id_rejects_placeholder_secret_outside_sandbox(
+def test_mask_cotality_id_rejects_placeholder_secret_outside_local_test(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("MIP_COTALITY_ID_MASK_SECRET", "REDACTED")
@@ -250,10 +282,23 @@ def test_mask_cotality_id_rejects_placeholder_secret_outside_sandbox(
 
 
 def test_mask_cotality_id_accepts_customer_mask_secret(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MIP_COTALITY_ID_MASK_SECRET", "customer-mask-secret")
+    monkeypatch.setenv(
+        "MIP_COTALITY_ID_MASK_SECRET",
+        "customer-mask-secret-material-at-least-32-bytes",
+    )
     monkeypatch.setattr(settings, "app_env", "customer")
 
     assert re.fullmatch(r"clip_ref_[0-9a-f]{12}", mask_cotality_id("clip", "1234567890"))
+
+
+def test_mask_cotality_id_rejects_weak_customer_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MIP_COTALITY_ID_MASK_SECRET", "x")
+    monkeypatch.setattr(settings, "app_env", "customer")
+
+    with pytest.raises(RuntimeError, match="at least 32"):
+        mask_cotality_id("clip", "1234567890")
 
 
 def test_redact_borrower_row_synthesizes_display_name() -> None:
@@ -416,13 +461,17 @@ def test_redact_evidence_row_passthrough_for_non_lender_signals() -> None:
 
 @pytest.fixture(autouse=True)
 def _isolate_resolver_singleton() -> None:
-    """Ensure each test starts with no process-wide resolver cached.
+    """Give every unit test an isolated, no-network process resolver.
 
     `generalize_lender` lazily constructs a singleton; tests that stub a
     new resolver must be able to install it without leaking state between
-    cases.
+    cases. Installing an explicit fallback resolver also prevents this unit
+    module from discovering local Databricks credentials and opening a real
+    warehouse connection while exercising otherwise-pure redaction helpers.
     """
-    _reset_lender_resolver_for_tests(None)
+    resolver = LenderRefResolver(ttl_s=60.0)
+    resolver._load_from_uc = lambda: None  # type: ignore[method-assign]
+    _reset_lender_resolver_for_tests(resolver)
     yield
     _reset_lender_resolver_for_tests(None)
 

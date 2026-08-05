@@ -1,293 +1,446 @@
-"""Apply Lakebase schema + Summit Mortgage campaign seed.
+#!/usr/bin/env python3
+# ruff: noqa: E402
+"""Apply the governed Lakebase schema, seed, integrity proofs, and grants.
 
-Runs as a Databricks Jobs Python task (``mip_lakebase_migrate`` in
-``databricks.yml``). Opens a psycopg3 connection to the
-``mip-app-state`` Lakebase instance and executes, in order:
-
-    1. ``lakebase/schema.sql`` -- idempotent DDL (CREATE ... IF NOT
-       EXISTS, CREATE INDEX IF NOT EXISTS) for campaigns, approvals,
-       action_audit, archive-run/migration ledgers, agent_sessions, feedback.
-    2. ``lakebase/seed_campaigns.sql`` -- idempotent seed (stable
-       UUIDs + ON CONFLICT DO NOTHING) for the Summit Mortgage
-       campaigns + five sample approvals.
-
-Auth model (self-contained, no env-var plumbing required):
-    On Databricks the task runs under the workspace identity (service
-    principal when deployed; user identity for `bundle run`). We fetch a
-    fresh short-lived Postgres credential via
-    ``WorkspaceClient().database.generate_database_credential(...)``
-    and use the identity's user_name as the Postgres user. This avoids
-    the OAuth-token-expiry problem of stuffing a long-lived password
-    into .env.local / secret scope.
-
-Env-var overrides (optional; used for local runs off Databricks):
-    LAKEBASE_HOST              -- DNS name; otherwise resolved from the
-                                  ``mip-app-state`` database_instance.
-    LAKEBASE_USER              -- Postgres user; otherwise the current
-                                  Databricks identity's user_name.
-    LAKEBASE_PASSWORD          -- Postgres password; otherwise fetched
-                                  via generate_database_credential.
-    LAKEBASE_DATABASE          -- default ``mip_app_state``.
-    LAKEBASE_PORT              -- default 5432.
-    LAKEBASE_SSLMODE           -- default ``require``.
-    LAKEBASE_INSTANCE_NAME     -- default ``mip-app-state``.
-
-Exit codes:
-    0 -- schema + seed applied cleanly.
-    2 -- psycopg / Postgres error (full error printed for debugging).
-    3 -- SDK / auth error resolving connection parameters.
+This file remains the Databricks Jobs Python-task entrypoint and the stable
+import facade used by deployment tests. Production implementation is split by
+responsibility across ``jobs/lakebase_migration_*.py`` modules.
 """
+
 from __future__ import annotations
 
+import argparse
 import os
 import sys
+import time as time
 from pathlib import Path
 
 
-def _resolve_connection() -> dict:
-    """Return a dict of connection kwargs for psycopg.connect.
+def _bootstrap_repo_imports() -> None:
+    """Make absolute repository imports work for direct file execution."""
 
-    Prefers env-var overrides; otherwise uses the Databricks SDK with
-    the ambient workspace identity to resolve the DNS + fetch a fresh
-    Postgres credential.
-    """
-    instance_name = os.environ.get("LAKEBASE_INSTANCE_NAME", "mip-app-state")
-    host = os.environ.get("LAKEBASE_HOST")
-    user = os.environ.get("LAKEBASE_USER")
-    password = os.environ.get("LAKEBASE_PASSWORD")
-
-    if host and user and password:
-        return {
-            "host": host,
-            "port": int(os.environ.get("LAKEBASE_PORT", "5432")),
-            "dbname": os.environ.get("LAKEBASE_DATABASE", "mip_app_state"),
-            "user": user,
-            "password": password,
-            "sslmode": os.environ.get("LAKEBASE_SSLMODE", "require"),
-        }
-
-    # SDK-based resolution. Import lazily so --help doesn't require the
-    # wheel and so local CI doesn't need the SDK unless resolution is
-    # actually needed.
+    if globals().get("__package__"):
+        return
     try:
-        from databricks.sdk import WorkspaceClient
-    except ImportError:
-        print(
-            "[lakebase-migrate] databricks-sdk is not installed; either "
-            "install it (`pip install databricks-sdk`) or set the "
-            "LAKEBASE_* env vars explicitly.",
-            file=sys.stderr,
-        )
-        sys.exit(3)
-
-    try:
-        w = WorkspaceClient()
-        me = w.current_user.me()
-        identity = me.user_name or me.display_name
-        if not identity:
-            print(
-                "[lakebase-migrate] could not resolve current workspace "
-                "identity user_name.",
-                file=sys.stderr,
-            )
-            sys.exit(3)
-
-        # Resolve via raw REST rather than the typed ``w.database`` service.
-        # Older databricks-sdk builds (e.g. the baseline shipped with
-        # serverless py_default) don't expose ``database`` as a typed
-        # attribute; the underlying REST endpoints are stable, so
-        # ``api_client.do`` is the portable surface.
-        inst = w.api_client.do("GET", f"/api/2.0/database/instances/{instance_name}")
-        resolved_host = host or inst.get("read_write_dns")
-        if not resolved_host:
-            print(
-                f"[lakebase-migrate] instance {instance_name!r} has no "
-                f"read_write_dns; check provisioning state.",
-                file=sys.stderr,
-            )
-            sys.exit(3)
-
-        cred = w.api_client.do(
-            "POST",
-            "/api/2.0/database/credentials",
-            body={
-                "request_id": (
-                    f"mip-lakebase-migrate-"
-                    f"{os.environ.get('DATABRICKS_JOB_RUN_ID','local')}"
-                ),
-                "instance_names": [instance_name],
-            },
-        )
-        cred_token = cred.get("token")
-        if not cred_token:
-            print(
-                f"[lakebase-migrate] credential response missing token: {cred}",
-                file=sys.stderr,
-            )
-            sys.exit(3)
-    except SystemExit:
-        raise
-    except Exception as exc:  # noqa: BLE001 -- operator-facing
-        print(
-            f"[lakebase-migrate] SDK auth/resolution failed: {exc}",
-            file=sys.stderr,
-        )
-        sys.exit(3)
-
-    return {
-        "host": resolved_host,
-        "port": int(os.environ.get("LAKEBASE_PORT", "5432")),
-        "dbname": os.environ.get("LAKEBASE_DATABASE", "mip_app_state"),
-        "user": user or identity,
-        "password": password or cred_token,
-        "sslmode": os.environ.get("LAKEBASE_SSLMODE", "require"),
-    }
+        repo_root = Path(__file__).resolve().parents[1]
+    except NameError:
+        repo_root = Path.cwd()
+        if not (repo_root / "jobs" / "lakebase_migrate.py").is_file():
+            for candidate in (Path.cwd().parent, Path("/Workspace/Users")):
+                match = next(candidate.rglob("jobs/lakebase_migrate.py"), None)
+                if match is not None:
+                    repo_root = match.parents[1]
+                    break
+    repo_root_text = str(repo_root)
+    if repo_root_text not in sys.path:
+        sys.path.insert(0, repo_root_text)
 
 
-def _run(sql_text: str, conn_kwargs: dict) -> None:
-    import psycopg  # local import so `--help` still works without the wheel
+_bootstrap_repo_imports()
 
-    # psycopg 3 supports multi-statement exec via raw cursor.execute on
-    # the whole text in server-side "simple query" mode. The schema +
-    # seed SQL is idempotent so a partial-apply + re-run is safe.
-    conn = psycopg.connect(
-        **conn_kwargs,
-        autocommit=True,  # DDL / SEED runs are whole-program idempotent
-    )
-    try:
-        with conn.cursor() as cur:
-            cur.execute(sql_text)
-    finally:
-        conn.close()
-
-
-def _repo_root() -> Path:
-    """Return the repo root. Tolerates Databricks ipykernel exec
-    contexts where ``__file__`` is not defined (the exec() path strips
-    the module's ``__file__`` attribute)."""
-    try:
-        return Path(__file__).resolve().parents[1]
-    except NameError as exc:
-        # Databricks workspace runs upload the bundle under a known prefix.
-        # Fall back to cwd + a couple of likely locations.
-        for candidate in (Path.cwd(), Path.cwd() / "..", Path("/Workspace/Users")):
-            for probe in candidate.rglob("lakebase/schema.sql"):
-                return probe.parents[1]
-        raise RuntimeError(
-            "Cannot locate repo root — __file__ undefined and no lakebase/"
-            "schema.sql found under cwd."
-        ) from exc
-
-
-# ---------------------------------------------------------------------------
-# 2026-06-11 audit P1-3 (Lakebase half): app-role grants used to live only in
-# docs/security/GRANTS.md as a manual psql runbook — a packaging bug on fresh
-# workspaces. After schema + seed, we grant the app's Postgres role the same
-# matrix GRANTS.md documents. Role discovery is defensive: depending on the
-# Databricks Apps database-binding version the provisioned role is named
-# after the app, the SP client id, or the SP numeric id — we grant to every
-# candidate that exists in pg_roles. action_audit stays append-only (REVOKE
-# UPDATE/DELETE). Missing roles are a WARNING, not a failure: on the very
-# first deploy ordering the binding may not have provisioned the role yet,
-# and the next deploy converges.
-# ---------------------------------------------------------------------------
-_APP_ROLE_GRANT_TEMPLATES = (
-    'GRANT USAGE ON SCHEMA mip_app TO {role}',
-    'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA mip_app TO {role}',
-    'REVOKE UPDATE, DELETE ON TABLE mip_app.action_audit FROM {role}',
+from jobs.lakebase_migration_acl import (  # noqa: E402
+    _postflight_direct_column_privileges as _postflight_direct_column_privileges,
+)
+from jobs.lakebase_migration_acl import (
+    _postflight_effective_column_only_privileges as _postflight_effective_column_only_privileges,
+)
+from jobs.lakebase_migration_acl import (
+    _postflight_effective_default_privileges as _postflight_effective_default_privileges,
+)
+from jobs.lakebase_migration_acl import (
+    _postflight_effective_routine_privileges as _postflight_effective_routine_privileges,
+)
+from jobs.lakebase_migration_acl import (
+    _postflight_effective_schema_privileges as _postflight_effective_schema_privileges,
+)
+from jobs.lakebase_migration_acl import (
+    _postflight_role_security as _postflight_role_security,
+)
+from jobs.lakebase_migration_connection import (  # noqa: E402
+    _repo_root as _repo_root,
+)
+from jobs.lakebase_migration_connection import (
+    _resolve_connection as _resolve_connection,
+)
+from jobs.lakebase_migration_contracts import (  # noqa: E402
+    _AI_GATEWAY_VERIFIER_TABLE_PRIVILEGES as _AI_GATEWAY_VERIFIER_TABLE_PRIVILEGES,
+)
+from jobs.lakebase_migration_contracts import (
+    _APP_ROLE_OPTIONAL_BASELINE_SCHEMA_PRIVILEGES as _APP_ROLE_OPTIONAL_BASELINE_SCHEMA_PRIVILEGES,
+)
+from jobs.lakebase_migration_contracts import (
+    _APP_ROLE_ROUTINE_PRIVILEGES as _APP_ROLE_ROUTINE_PRIVILEGES,
+)
+from jobs.lakebase_migration_contracts import (
+    _APP_ROLE_SEQUENCE_PRIVILEGES as _APP_ROLE_SEQUENCE_PRIVILEGES,
+)
+from jobs.lakebase_migration_contracts import (
+    _APP_ROLE_TABLE_PRIVILEGES as _APP_ROLE_TABLE_PRIVILEGES,
+)
+from jobs.lakebase_migration_contracts import (
+    _APP_TRIGGER_CONTRACT as _APP_TRIGGER_CONTRACT,
+)
+from jobs.lakebase_migration_contracts import (
+    _AUDIT_SEQUENCE_DEFAULT_EXPRESSION as _AUDIT_SEQUENCE_DEFAULT_EXPRESSION,
+)
+from jobs.lakebase_migration_contracts import (
+    _AUDIT_SEQUENCE_DEFAULT_KEY as _AUDIT_SEQUENCE_DEFAULT_KEY,
+)
+from jobs.lakebase_migration_contracts import (
+    _COLUMN_PRIVILEGE_NAMES as _COLUMN_PRIVILEGE_NAMES,
+)
+from jobs.lakebase_migration_contracts import (
+    _MANAGED_EVENT_TRIGGER_CONTRACT as _MANAGED_EVENT_TRIGGER_CONTRACT,
+)
+from jobs.lakebase_migration_contracts import (
+    _MANAGED_EVENT_TRIGGER_FUNCTION_ACLS as _MANAGED_EVENT_TRIGGER_FUNCTION_ACLS,
+)
+from jobs.lakebase_migration_contracts import (
+    _MANAGED_OAUTH_ROLE_ATTRIBUTE_NAMES as _MANAGED_OAUTH_ROLE_ATTRIBUTE_NAMES,
+)
+from jobs.lakebase_migration_contracts import (
+    _MANAGED_OAUTH_ROLE_ATTRIBUTE_PROFILE as _MANAGED_OAUTH_ROLE_ATTRIBUTE_PROFILE,
+)
+from jobs.lakebase_migration_contracts import (
+    _MANAGED_OAUTH_ROLE_FUNCTION_SOURCE_BYTES as _MANAGED_OAUTH_ROLE_FUNCTION_SOURCE_BYTES,
+)
+from jobs.lakebase_migration_contracts import (
+    _MANAGED_OAUTH_ROLE_FUNCTION_SOURCE_SHA256 as _MANAGED_OAUTH_ROLE_FUNCTION_SOURCE_SHA256,
+)
+from jobs.lakebase_migration_contracts import (
+    _MANAGED_PROVIDER_PUBLIC_VIEW_CONTRACT as _MANAGED_PROVIDER_PUBLIC_VIEW_CONTRACT,
+)
+from jobs.lakebase_migration_contracts import (
+    _QUARANTINED_CONSTRAINT_LEGACY_EXPRESSION_CONTRACT as _QUARANTINED_CONSTRAINT_LEGACY_EXPRESSION_CONTRACT,
+)
+from jobs.lakebase_migration_contracts import (
+    _QUARANTINED_CONSTRAINT_ROUTINE_CONTRACT as _QUARANTINED_CONSTRAINT_ROUTINE_CONTRACT,
+)
+from jobs.lakebase_migration_contracts import (
+    _SAFE_SCHEMA_HOOK_FUNCTION_NAMES as _SAFE_SCHEMA_HOOK_FUNCTION_NAMES,
+)
+from jobs.lakebase_migration_contracts import (
+    _SAFE_SCHEMA_HOOK_PG_CATALOG_OPERATORS as _SAFE_SCHEMA_HOOK_PG_CATALOG_OPERATORS,
+)
+from jobs.lakebase_migration_contracts import (
+    _SAFE_SCHEMA_HOOK_PG_CATALOG_ROUTINES as _SAFE_SCHEMA_HOOK_PG_CATALOG_ROUTINES,
+)
+from jobs.lakebase_migration_contracts import (
+    _SCHEMA_PRIVILEGE_NAMES as _SCHEMA_PRIVILEGE_NAMES,
+)
+from jobs.lakebase_migration_contracts import (
+    _SEQUENCE_PRIVILEGE_NAMES as _SEQUENCE_PRIVILEGE_NAMES,
+)
+from jobs.lakebase_migration_contracts import (
+    _SQL_FUNCTION_CALL_RE as _SQL_FUNCTION_CALL_RE,
+)
+from jobs.lakebase_migration_contracts import (
+    _SQL_STRING_LITERAL_RE as _SQL_STRING_LITERAL_RE,
+)
+from jobs.lakebase_migration_contracts import (
+    _TABLE_PRIVILEGE_NAMES as _TABLE_PRIVILEGE_NAMES,
+)
+from jobs.lakebase_migration_contracts import (
+    _UNSAFE_ROLE_ATTRIBUTE_NAMES as _UNSAFE_ROLE_ATTRIBUTE_NAMES,
+)
+from jobs.lakebase_migration_contracts import (
+    _VERIFIER_OPTIONAL_APP_ENVS as _VERIFIER_OPTIONAL_APP_ENVS,
+)
+from jobs.lakebase_migration_contracts import (
+    _VERIFIER_OPTIONAL_BUNDLE_TARGETS as _VERIFIER_OPTIONAL_BUNDLE_TARGETS,
+)
+from jobs.lakebase_migration_grants import (  # noqa: E402
+    _apply_app_role_grants as _apply_app_role_grants_impl,
+)
+from jobs.lakebase_migration_grants import (
+    _preflight_database_roles as _preflight_database_roles_impl,
+)
+from jobs.lakebase_migration_integrity import _POST_SEED_MARKER as _POST_SEED_MARKER
+from jobs.lakebase_migration_integrity import (  # noqa: E402
+    _expect_database_rejection as _expect_database_rejection,
+)
+from jobs.lakebase_migration_integrity import (
+    _run_outreach_integrity_probe as _run_outreach_integrity_probe,
+)
+from jobs.lakebase_migration_integrity import (
+    _split_schema_sql as _split_schema_sql,
+)
+from jobs.lakebase_migration_postflight import (  # noqa: E402
+    _postflight_ai_gateway_verifier_grants as _postflight_ai_gateway_verifier_grants,
+)
+from jobs.lakebase_migration_postflight import (
+    _postflight_app_role_grants as _postflight_app_role_grants,
+)
+from jobs.lakebase_migration_provider_plane import (
+    _close_public_schema_boundary as _close_public_schema_boundary,
+)
+from jobs.lakebase_migration_provider_plane import (
+    _postflight_no_pre_boundary_sessions as _postflight_no_pre_boundary_sessions,
+)
+from jobs.lakebase_migration_provider_plane import (  # noqa: E402
+    _postflight_provider_schema_boundary as _postflight_provider_schema_boundary,
+)
+from jobs.lakebase_migration_provider_plane import (
+    _postflight_public_schema_boundary as _postflight_public_schema_boundary,
+)
+from jobs.lakebase_migration_roles import (
+    _raise_object_inventory_mismatch as _raise_object_inventory_mismatch,
+)
+from jobs.lakebase_migration_roles import (  # noqa: E402
+    _resolve_ai_gateway_verifier_role as _resolve_ai_gateway_verifier_role,
+)
+from jobs.lakebase_migration_roles import (
+    _resolve_app_role as _resolve_app_role,
+)
+from jobs.lakebase_migration_schema_hooks import (  # noqa: E402
+    _postflight_event_trigger_inventory as _postflight_event_trigger_inventory,
+)
+from jobs.lakebase_migration_schema_hooks import (
+    _postflight_oauth_role_function_contract as _postflight_oauth_role_function_contract,
+)
+from jobs.lakebase_migration_schema_hooks import (
+    _postflight_trigger_inventory as _postflight_trigger_inventory,
+)
+from jobs.lakebase_migration_schema_hooks import (
+    _preflight_executable_schema_hooks as _preflight_executable_schema_hooks,
+)
+from jobs.lakebase_migration_schema_hooks import (
+    _quarantine_existing_reviewed_triggers as _quarantine_existing_reviewed_triggers,
+)
+from jobs.lakebase_migration_schema_hooks import (
+    _quarantine_reviewed_constraints as _quarantine_reviewed_constraints,
+)
+from jobs.lakebase_migration_schema_hooks import (
+    _schema_hook_function_calls as _schema_hook_function_calls,
+)
+from jobs.lakebase_migration_seed import _sql_literal as _sql_literal
+from jobs.lakebase_migration_seed import (  # noqa: E402
+    _tenant_disclosure_seed_sql as _tenant_disclosure_seed_sql,
+)
+from jobs.lakebase_migration_transaction import (  # noqa: E402
+    _run_transaction as _run_transaction_impl,
 )
 
 
-def _candidate_app_roles() -> list[str]:
-    """Return plausible Postgres role names for the app identity."""
-    app_name = os.environ.get("MIP_APP_NAME", "mip-app")
-    candidates = [app_name]
-    try:
-        from databricks.sdk import WorkspaceClient
+def _apply_app_role_grants(
+    conn_kwargs: dict,
+    *,
+    app_name: str | None = None,
+    ai_gateway_verifier_client_id: str | None = None,
+    require_ai_gateway_verifier: bool = False,
+    role_wait_timeout_s: float | None = None,
+    role_wait_interval_s: float | None = None,
+    allow_absent_managed_event_triggers: bool = False,
+    allow_absent_provider_schema: bool = False,
+    resolved_roles: tuple[str, str | None] | None = None,
+) -> None:
+    """Reconcile grants while preserving facade monkeypatch seams."""
 
-        app = WorkspaceClient().apps.get(app_name)
-        for attr in ("service_principal_client_id", "service_principal_name"):
-            value = getattr(app, attr, None)
-            if value:
-                candidates.append(str(value))
-        numeric_id = getattr(app, "service_principal_id", None)
-        if numeric_id:
-            candidates.append(str(numeric_id))
-    except Exception as exc:  # noqa: BLE001 -- grants are best-effort here
-        print(f"[lakebase-migrate] app SP lookup skipped: {type(exc).__name__}")
-    # Preserve order, drop dups/empties.
-    seen: set[str] = set()
-    ordered = []
-    for cand in candidates:
-        if cand and cand not in seen:
-            seen.add(cand)
-            ordered.append(cand)
-    return ordered
-
-
-def _apply_app_role_grants(conn_kwargs: dict) -> None:
-    import psycopg
-    from psycopg import sql as psql
-
-    candidates = _candidate_app_roles()
-    conn = psycopg.connect(**conn_kwargs, autocommit=True)
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT rolname FROM pg_roles WHERE rolname = ANY(%s)",
-                (candidates,),
-            )
-            present = [row[0] for row in cur.fetchall()]
-            if not present:
-                print(
-                    "[lakebase-migrate] WARNING: no app role found in pg_roles "
-                    f"(candidates: {candidates}); app-role grants skipped. "
-                    "Re-run the deploy (or apply docs/security/GRANTS.md "
-                    "§Lakebase) once the app's database binding has "
-                    "provisioned its role."
-                )
-                return
-            for role in present:
-                for template in _APP_ROLE_GRANT_TEMPLATES:
-                    statement = template.format(
-                        role=psql.Identifier(role).as_string(cur)
-                    )
-                    cur.execute(statement)
-                print(f"[lakebase-migrate] app-role grants applied to {role!r}")
-    finally:
-        conn.close()
-
-
-def main() -> None:
-    conn_kwargs = _resolve_connection()
-    repo_root = _repo_root()
-    schema_sql = (repo_root / "lakebase" / "schema.sql").read_text(encoding="utf-8")
-    seed_sql = (repo_root / "lakebase" / "seed_campaigns.sql").read_text(
-        encoding="utf-8"
+    _apply_app_role_grants_impl(
+        conn_kwargs,
+        app_name=app_name,
+        role_wait_timeout_s=role_wait_timeout_s,
+        role_wait_interval_s=role_wait_interval_s,
+        allow_absent_managed_event_triggers=allow_absent_managed_event_triggers,
+        allow_absent_provider_schema=allow_absent_provider_schema,
+        resolved_roles=resolved_roles,
+        _resolve_app_role_fn=_resolve_app_role,
+        _resolve_verifier_role_fn=lambda: _resolve_ai_gateway_verifier_role(
+            ai_gateway_verifier_client_id,
+            required=require_ai_gateway_verifier,
+        ),
     )
 
+
+def _preflight_database_roles(
+    conn_kwargs: dict,
+    *,
+    app_name: str | None = None,
+    ai_gateway_verifier_client_id: str | None = None,
+    require_ai_gateway_verifier: bool = False,
+    role_wait_timeout_s: float | None = None,
+    role_wait_interval_s: float | None = None,
+) -> tuple[str, str | None]:
+    """Resolve and prove exact roles while preserving facade monkeypatch seams."""
+
+    return _preflight_database_roles_impl(
+        conn_kwargs,
+        app_name=app_name,
+        role_wait_timeout_s=role_wait_timeout_s,
+        role_wait_interval_s=role_wait_interval_s,
+        _resolve_app_role_fn=_resolve_app_role,
+        _resolve_verifier_role_fn=lambda: _resolve_ai_gateway_verifier_role(
+            ai_gateway_verifier_client_id,
+            required=require_ai_gateway_verifier,
+        ),
+    )
+
+
+def _run_transaction(
+    sql_texts: tuple[str, ...],
+    conn_kwargs: dict,
+    *,
+    app_role: str,
+    ai_gateway_verifier_role: str | None = None,
+    verify_outreach_integrity: bool = False,
+    allow_absent_managed_event_triggers: bool = False,
+    allow_absent_provider_schema: bool = False,
+) -> None:
+    """Run migration while preserving the integrity-probe monkeypatch seam."""
+
+    _run_transaction_impl(
+        sql_texts,
+        conn_kwargs,
+        app_role=app_role,
+        ai_gateway_verifier_role=ai_gateway_verifier_role,
+        verify_outreach_integrity=verify_outreach_integrity,
+        allow_absent_managed_event_triggers=allow_absent_managed_event_triggers,
+        allow_absent_provider_schema=allow_absent_provider_schema,
+        _run_integrity_probe_fn=_run_outreach_integrity_probe,
+    )
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Apply the governed Lakebase schema and seed")
+    parser.add_argument(
+        "--app-name",
+        default=os.environ.get("MIP_APP_NAME", "mip-app"),
+    )
+    parser.add_argument(
+        "--lakebase-instance",
+        default=os.environ.get("LAKEBASE_INSTANCE_NAME", "mip-app-state"),
+    )
+    parser.add_argument(
+        "--lakebase-database",
+        default=os.environ.get("LAKEBASE_DATABASE", "mip_app_state"),
+    )
+    parser.add_argument(
+        "--lender-name",
+        default=os.environ.get("MIP_LENDER_NAME", "Summit Mortgage"),
+    )
+    parser.add_argument(
+        "--lender-nmls-id",
+        default=os.environ.get("MIP_LENDER_NMLS_ID", ""),
+    )
+    parser.add_argument(
+        "--tenant-id",
+        default=os.environ.get("MIP_TENANT_ID", ""),
+    )
+    parser.add_argument(
+        "--ai-gateway-verifier-client-id",
+        default=os.environ.get("MIP_AI_GATEWAY_VERIFIER_CLIENT_ID", ""),
+        help="Dedicated verifier service-principal client ID granted proof-ledger writes",
+    )
+    parser.add_argument(
+        "--require-ai-gateway-verifier",
+        action="store_true",
+        help="Fail before schema mutation unless an explicit real verifier client ID is bound",
+    )
+    return parser
+
+
+def main(
+    *,
+    app_name: str | None = None,
+    lakebase_instance: str | None = None,
+    lakebase_database: str | None = None,
+    lender_name: str = "Summit Mortgage",
+    lender_nmls_id: str = "",
+    tenant_id: str = "",
+    ai_gateway_verifier_client_id: str | None = None,
+    require_ai_gateway_verifier: bool = False,
+) -> None:
     try:
-        _run(schema_sql, conn_kwargs)
-        print("[lakebase-migrate] schema applied")
-        _run(seed_sql, conn_kwargs)
-        print("[lakebase-migrate] Summit Mortgage seed applied")
-    except Exception as exc:  # noqa: BLE001 -- operator-facing failure
-        print(f"[lakebase-migrate] failed: {exc}", file=sys.stderr)
+        verifier_role = _resolve_ai_gateway_verifier_role(
+            ai_gateway_verifier_client_id,
+            required=require_ai_gateway_verifier,
+        )
+    except Exception:  # noqa: BLE001 -- stable deployment diagnostic; never reflect secrets
+        print(
+            "[lakebase-migrate] verifier identity preflight failed; verify the dedicated "
+            "verifier client ID and deployment configuration before schema mutation.",
+            file=sys.stderr,
+        )
         sys.exit(2)
 
-    # Grants are applied after (and never instead of) schema + seed; a
-    # grant failure must not mask a successful migration, so it exits 0
-    # with a loud warning rather than failing the job.
+    if lakebase_instance is None and lakebase_database is None:
+        conn_kwargs = _resolve_connection()
+    else:
+        conn_kwargs = _resolve_connection(
+            instance_name=lakebase_instance,
+            database_name=lakebase_database,
+        )
     try:
-        _apply_app_role_grants(conn_kwargs)
-    except Exception as exc:  # noqa: BLE001 -- best-effort, converges next run
+        resolved_roles = _preflight_database_roles(
+            conn_kwargs,
+            app_name=app_name,
+            ai_gateway_verifier_client_id=verifier_role,
+            require_ai_gateway_verifier=require_ai_gateway_verifier,
+        )
+    except Exception:  # noqa: BLE001 -- stable deployment diagnostic; never reflect secrets
         print(
-            "[lakebase-migrate] WARNING: app-role grants failed "
-            f"({type(exc).__name__}: {exc}); schema+seed are applied. "
+            "[lakebase-migrate] runtime-role preflight failed; verify App and verifier "
+            "workspace identities and Lakebase role visibility before schema mutation.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    app_role = resolved_roles[0]
+    repo_root = _repo_root()
+    schema_sql = (repo_root / "lakebase" / "schema.sql").read_text(encoding="utf-8")
+    seed_sql = (repo_root / "lakebase" / "seed_campaigns.sql").read_text(encoding="utf-8")
+    tenant_disclosure_seed_sql = _tenant_disclosure_seed_sql(
+        lender_name=lender_name,
+        lender_nmls_id=lender_nmls_id,
+        tenant_id=tenant_id,
+    )
+    pre_seed_schema_sql, post_seed_schema_sql = _split_schema_sql(schema_sql)
+
+    try:
+        _run_transaction(
+            (
+                pre_seed_schema_sql,
+                seed_sql,
+                tenant_disclosure_seed_sql,
+                post_seed_schema_sql,
+            ),
+            conn_kwargs,
+            app_role=app_role,
+            ai_gateway_verifier_role=resolved_roles[1],
+            verify_outreach_integrity=True,
+        )
+        print(
+            "[lakebase-migrate] schema + sample seed + configured tenant disclosures + "
+            "integrity proof applied atomically"
+        )
+    except Exception:  # noqa: BLE001 -- stable deployment diagnostic; never reflect secrets
+        print(
+            "[lakebase-migrate] schema transaction failed; inspect sanitized Lakebase "
+            "service diagnostics and retry only after the database is healthy.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    try:
+        _apply_app_role_grants(conn_kwargs, resolved_roles=resolved_roles)
+    except Exception:  # noqa: BLE001 -- stable deployment diagnostic; never reflect secrets
+        print(
+            "[lakebase-migrate] app-role grants failed; refusing a false-green deploy. "
             "See docs/security/GRANTS.md §Lakebase.",
             file=sys.stderr,
         )
+        sys.exit(2)
 
 
 if __name__ == "__main__":
-    main()
+    _args = build_parser().parse_args()
+    main(
+        app_name=_args.app_name,
+        lakebase_instance=_args.lakebase_instance,
+        lakebase_database=_args.lakebase_database,
+        lender_name=_args.lender_name,
+        lender_nmls_id=_args.lender_nmls_id,
+        tenant_id=_args.tenant_id,
+        ai_gateway_verifier_client_id=_args.ai_gateway_verifier_client_id,
+        require_ai_gateway_verifier=_args.require_ai_gateway_verifier,
+    )

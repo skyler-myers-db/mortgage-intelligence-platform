@@ -1,0 +1,856 @@
+#!/usr/bin/env python3
+"""Prove the agent runtime's effective privilege boundary across the MIP catalog."""
+
+from __future__ import annotations
+
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any
+
+from mlflow import MlflowClient
+
+from backend.agents.gateway_contract import (
+    DEFAULT_GATEWAY_AGENT_EXPERIMENT,
+    reviewed_workspace_https_origin,
+)
+from tools.databricks.agent_runtime_samples_baseline import (
+    _assert_samples_catalog_baseline,
+)
+from tools.databricks.agent_runtime_uc_baseline import (
+    _ACCOUNT_USERS_DIRECT,
+    _CATALOG_INFORMATION_SCHEMA_TABLES,
+    _MAX_INVENTORY_WORKERS,
+    _SAMPLES_CATALOG_PRIVILEGES,
+    _SAMPLES_INHERITED,
+    _SYSTEM_AI_FUNCTIONS,
+    _SYSTEM_AI_INHERITED,
+    _SYSTEM_AI_MODELS,
+    _SYSTEM_AI_MODELS_WITH_DIRECT_EXECUTE,
+    _SYSTEM_INFORMATION_SCHEMA_TABLES,
+    _SYSTEM_SCHEMA_PRIVILEGES,
+    ALLOWED_FUNCTIONS,
+    ALLOWED_METASTORE_BASELINE,
+    ControlPlaneForeignCatalogProof,
+    authoritative_workspace_id,
+    consume_issued_control_plane_foreign_catalog_proof,
+)
+from tools.databricks.agent_runtime_uc_baseline import (
+    _SAMPLES_SCHEMA_PRIVILEGES as _SAMPLES_SCHEMA_PRIVILEGES_BASELINE,
+)
+from tools.databricks.agent_runtime_uc_inventory import (
+    _assert_authenticated_runtime,
+    _assert_mip_child_identity,
+    _assert_mip_schema_identity,
+    _assert_no_catalog_child_privileges,
+    _assert_not_runtime_owned,
+    _assert_privileges,
+    _assert_registered_model_identity,
+    _assert_system_owned,
+    _catalog_name,
+    _effective_privilege_sources,
+    _exact_owner,
+    _full_name,
+    _inference_table_suffix,
+    _reviewed_model_family,
+    _schema_name,
+    _strict_text,
+    _text,
+)
+from tools.databricks.gateway_model_lifecycle_proof import (
+    GatewayModelLifecycleProof,
+)
+from tools.databricks.gateway_model_runtime_lifecycle import (
+    assert_runtime_gateway_lifecycle_inventory,
+    classify_runtime_gateway_model,
+    classify_runtime_inference_table,
+    consume_runtime_gateway_lifecycle_boundary,
+)
+from tools.databricks.gateway_uc_model_provenance import assert_gateway_model_provenance
+
+_DATABRICKS_INTERNAL_CATALOG = "__databricks_internal"
+_PLATFORM_RUNTIME_CATALOGS = frozenset({_DATABRICKS_INTERNAL_CATALOG, "samples", "system"})
+# Backward-compatible contract used by the proxy verifier and focused fixtures.
+_SAMPLES_SCHEMA_PRIVILEGES = _SAMPLES_SCHEMA_PRIVILEGES_BASELINE
+
+def _assert_system_catalog_baseline(
+    workspace: Any,
+    *,
+    principal: str,
+    runtime_owner_aliases: set[str],
+) -> None:
+    """Allow only the reviewed immutable Databricks account-users system baseline."""
+
+    for schema in workspace.schemas.list("system", include_browse=True):
+        schema_name = _strict_text(getattr(schema, "name", None))
+        if not schema_name:
+            raise RuntimeError("system schema inventory returned an empty name")
+        schema_owner = _exact_owner(schema, label=f"system schema {schema_name}")
+        if schema_name == "data_quality_monitoring":
+            if not schema_owner or schema_owner.casefold() in runtime_owner_aliases:
+                raise RuntimeError("system.data_quality_monitoring has an invalid platform owner")
+        else:
+            _assert_system_owned(schema, label="system schema")
+        schema_full_name = _full_name(schema, fallback=f"system.{schema_name}")
+
+        def assert_child_owner(
+            item: object,
+            *,
+            label: str,
+            system_schema_name: str = schema_name,
+            system_schema_owner: str = schema_owner,
+        ) -> None:
+            if system_schema_name != "data_quality_monitoring":
+                _assert_system_owned(item, label=label)
+                return
+            owner = _exact_owner(item, label=label)
+            if owner != system_schema_owner:
+                raise RuntimeError(
+                    "system.data_quality_monitoring child owner drifted from its "
+                    "platform schema owner"
+                )
+
+        _assert_privileges(
+            workspace,
+            securable_type="schema",
+            full_name=schema_full_name,
+            principal=principal,
+            expected=set(_SYSTEM_SCHEMA_PRIVILEGES.get(schema_name, set())),
+            expected_source_map={
+                action: set(_ACCOUNT_USERS_DIRECT)
+                for action in _SYSTEM_SCHEMA_PRIVILEGES.get(schema_name, set())
+            },
+        )
+        for function in workspace.functions.list(
+            "system",
+            schema_name,
+            include_browse=True,
+        ):
+            assert_child_owner(function, label="system function")
+            function_name = _strict_text(getattr(function, "name", None))
+            _assert_privileges(
+                workspace,
+                securable_type="function",
+                full_name=_full_name(
+                    function,
+                    fallback=f"{schema_full_name}.{function_name}",
+                ),
+                principal=principal,
+                expected=(
+                    {"EXECUTE"}
+                    if schema_name == "ai" and function_name in _SYSTEM_AI_FUNCTIONS
+                    else set()
+                ),
+                expected_source_map=(
+                    {"EXECUTE": set(_SYSTEM_AI_INHERITED)}
+                    if schema_name == "ai" and function_name in _SYSTEM_AI_FUNCTIONS
+                    else None
+                ),
+            )
+        for table in workspace.tables.list(
+            "system",
+            schema_name,
+            include_browse=True,
+            omit_columns=True,
+            omit_properties=True,
+        ):
+            assert_child_owner(table, label="system table")
+            table_name = _strict_text(getattr(table, "name", None))
+            _assert_privileges(
+                workspace,
+                securable_type="table",
+                full_name=_full_name(
+                    table,
+                    fallback=f"{schema_full_name}.{table_name}",
+                ),
+                principal=principal,
+                expected=(
+                    {"SELECT"}
+                    if schema_name == "information_schema"
+                    and table_name in _SYSTEM_INFORMATION_SCHEMA_TABLES
+                    else set()
+                ),
+                expected_source_map=(
+                    {"SELECT": set(_ACCOUNT_USERS_DIRECT)}
+                    if schema_name == "information_schema"
+                    and table_name in _SYSTEM_INFORMATION_SCHEMA_TABLES
+                    else None
+                ),
+            )
+        for volume in workspace.volumes.list("system", schema_name, include_browse=True):
+            assert_child_owner(volume, label="system volume")
+            volume_name = _strict_text(getattr(volume, "name", None))
+            _assert_privileges(
+                workspace,
+                securable_type="volume",
+                full_name=_full_name(
+                    volume,
+                    fallback=f"{schema_full_name}.{volume_name}",
+                ),
+                principal=principal,
+                expected=set(),
+            )
+
+
+def verify_effective_uc_boundary(
+    workspace: Any,
+    *,
+    application_id: str,
+    supervisor_id: str,
+    supervisor_endpoint_id: str,
+    catalog: str,
+    gateway_model: str,
+    inference_table_prefix: str,
+    gateway_model_family: str | None = None,
+    gateway_experiment_base: str = DEFAULT_GATEWAY_AGENT_EXPERIMENT,
+    genie_space_id: str,
+    proxy_caller_application_id: str,
+    proxy_caller_credential_id: str,
+    proxy_caller_secret_reference: str,
+    model_registry: Any | None = None,
+    foreign_control_plane_proof: ControlPlaneForeignCatalogProof | None = None,
+    gateway_model_lifecycle_proof: GatewayModelLifecycleProof | None = None,
+    expected_inventory_principal: str | None = None,
+) -> None:
+    """Require only reviewed functions plus runtime-owned Gateway artifacts in MIP."""
+
+    principal = application_id.strip()
+    supervisor_identity = supervisor_id.strip()
+    supervisor_endpoint_identity = supervisor_endpoint_id.strip()
+    catalog_name = catalog.strip()
+    model_name = gateway_model.strip()
+    model_family = (gateway_model_family or model_name).strip()
+    experiment_base = gateway_experiment_base.strip()
+    genie_id = genie_space_id.strip()
+    table_prefix = inference_table_prefix.strip()
+    core_required = (
+        principal,
+        supervisor_identity,
+        supervisor_endpoint_identity,
+        catalog_name,
+        model_name,
+    )
+    resource_required = (model_family, experiment_base, genie_id, table_prefix)
+    if not all(core_required + resource_required):
+        raise ValueError("application ID, Supervisor ID, catalog, model, and table prefix required")
+    runtime_owner_aliases = _assert_authenticated_runtime(
+        workspace,
+        application_id=principal,
+    )
+    try:
+        workspace_host = reviewed_workspace_https_origin(
+            str(getattr(getattr(workspace, "config", None), "host", "") or "")
+        )
+    except ValueError as exc:
+        raise RuntimeError("authenticated runtime workspace host is invalid") from exc
+
+    metastore_id = _strict_text(getattr(workspace.metastores.current(), "metastore_id", None))
+    if not metastore_id:
+        raise RuntimeError("workspace has no current metastore identity")
+    consumed_control_plane_proof = None
+    if foreign_control_plane_proof is not None:
+        consumed_control_plane_proof = consume_issued_control_plane_foreign_catalog_proof(
+            foreign_control_plane_proof
+        )
+        workspace_id = authoritative_workspace_id(workspace)
+        proof_identity = (
+            consumed_control_plane_proof.application_id,
+            consumed_control_plane_proof.catalog,
+            consumed_control_plane_proof.metastore_id,
+            consumed_control_plane_proof.workspace_id,
+        )
+        runtime_identity = (principal, catalog_name, metastore_id, workspace_id)
+        if proof_identity != runtime_identity:
+            raise RuntimeError(
+                "foreign-catalog control-plane proof does not match the runtime boundary"
+            )
+    lifecycle = consume_runtime_gateway_lifecycle_boundary(
+        gateway_model_lifecycle_proof,
+        application_id=principal,
+        expected_inventory_principal=expected_inventory_principal,
+        catalog=catalog_name,
+        metastore_id=metastore_id,
+        workspace_id=authoritative_workspace_id(workspace),
+        model_family=model_family,
+        candidate_model=model_name,
+    )
+    _assert_privileges(
+        workspace,
+        securable_type="metastore",
+        full_name=metastore_id,
+        principal=principal,
+        expected=set(ALLOWED_METASTORE_BASELINE),
+        expected_source_map={"USE_MARKETPLACE_ASSETS": set(_ACCOUNT_USERS_DIRECT)},
+    )
+
+    runtime_direct = {(principal, "", "")}
+    _assert_privileges(
+        workspace,
+        securable_type="catalog",
+        full_name=catalog_name,
+        principal=principal,
+        expected={"USE_CATALOG"},
+        expected_source_map={"USE_CATALOG": set(runtime_direct)},
+    )
+    visible_catalogs = list(workspace.catalogs.list(include_browse=True))
+    visible_catalog_name_list = [
+        _strict_text(getattr(item, "name", None)) for item in visible_catalogs
+    ]
+    visible_catalog_names = set(visible_catalog_name_list)
+    if len(visible_catalog_name_list) != len(visible_catalog_names):
+        raise RuntimeError("workspace catalog inventory returned duplicate names")
+    visible_catalog_owners = {
+        _strict_text(getattr(item, "name", None)): _exact_owner(
+            item,
+            label=(f"catalog " f"{_strict_text(getattr(item, 'name', None)) or '<unknown>'}"),
+        )
+        for item in visible_catalogs
+    }
+    visible_catalog_types = {
+        _strict_text(getattr(item, "name", None)): _text(
+            getattr(item, "catalog_type", None)
+        ).upper()
+        for item in visible_catalogs
+    }
+    visible_catalog_modes = {
+        _strict_text(getattr(item, "name", None)): _text(
+            getattr(item, "isolation_mode", None)
+        ).upper()
+        for item in visible_catalogs
+    }
+    if catalog_name not in visible_catalog_names:
+        raise RuntimeError("configured MIP catalog is missing from workspace inventory")
+    mip_catalog_object = next(
+        item
+        for item in visible_catalogs
+        if _strict_text(getattr(item, "name", None)) == catalog_name
+    )
+    _assert_not_runtime_owned(
+        mip_catalog_object,
+        owner_aliases=runtime_owner_aliases,
+        label=f"catalog {catalog_name}",
+    )
+    if "" in visible_catalog_names:
+        raise RuntimeError("workspace catalog inventory returned an empty name")
+    binding_denied_catalog_names = (
+        {item.catalog for item in consumed_control_plane_proof.binding_denied_catalogs}
+        if consumed_control_plane_proof is not None
+        else set()
+    )
+    unexpectedly_visible_binding_denied = sorted(
+        visible_catalog_names.intersection(binding_denied_catalog_names)
+    )
+    if unexpectedly_visible_binding_denied:
+        raise RuntimeError(
+            "binding-denied foreign catalogs became visible to the agent runtime: "
+            + ", ".join(unexpectedly_visible_binding_denied)
+        )
+    other_catalogs = sorted(visible_catalog_names - {catalog_name, ""})
+
+    def inspect_other_catalog(other_catalog: str) -> None:
+        is_system = other_catalog == "system"
+        if is_system:
+            if visible_catalog_owners.get("system") != "System user":
+                raise RuntimeError("system catalog is not owned by Databricks System user")
+            _assert_privileges(
+                workspace,
+                securable_type="catalog",
+                full_name=other_catalog,
+                principal=principal,
+                expected={"USE_CATALOG"},
+                expected_source_map={"USE_CATALOG": set(_ACCOUNT_USERS_DIRECT)},
+            )
+            _assert_system_catalog_baseline(
+                workspace,
+                principal=principal,
+                runtime_owner_aliases=runtime_owner_aliases,
+            )
+        elif other_catalog == "samples":
+            if visible_catalog_owners.get("samples") != "System user":
+                raise RuntimeError("samples catalog is not owned by Databricks System user")
+            _assert_privileges(
+                workspace,
+                securable_type="catalog",
+                full_name=other_catalog,
+                principal=principal,
+                expected=set(_SAMPLES_CATALOG_PRIVILEGES),
+                expected_source_map={
+                    action: set(_ACCOUNT_USERS_DIRECT) for action in _SAMPLES_CATALOG_PRIVILEGES
+                },
+            )
+            _assert_samples_catalog_baseline(workspace, principal=principal)
+        elif other_catalog == _DATABRICKS_INTERNAL_CATALOG:
+            if (
+                visible_catalog_owners.get(other_catalog) != "System user"
+                or visible_catalog_types.get(other_catalog) != "INTERNAL_CATALOG"
+                or visible_catalog_modes.get(other_catalog) != "OPEN"
+            ):
+                raise RuntimeError(
+                    "Databricks internal catalog does not match the fixed platform identity"
+                )
+            _assert_privileges(
+                workspace,
+                securable_type="catalog",
+                full_name=other_catalog,
+                principal=principal,
+                expected=set(),
+            )
+        elif (
+            consumed_control_plane_proof is not None
+            and other_catalog in consumed_control_plane_proof.grant_audited_catalogs
+        ):
+            return
+        else:
+            catalog_sources = _effective_privilege_sources(
+                workspace,
+                securable_type="catalog",
+                full_name=other_catalog,
+                principal=principal,
+            )
+            if catalog_sources:
+                raise RuntimeError(
+                    f"agent-runtime has forbidden access on catalog {other_catalog}: "
+                    f"{catalog_sources}"
+                )
+            _assert_no_catalog_child_privileges(
+                workspace,
+                catalog=other_catalog,
+                catalog_type=visible_catalog_types.get(other_catalog, ""),
+                catalog_owner=visible_catalog_owners.get(other_catalog, ""),
+                principal=principal,
+            )
+
+    if other_catalogs:
+        with ThreadPoolExecutor(
+            max_workers=min(_MAX_INVENTORY_WORKERS, len(other_catalogs)),
+            thread_name_prefix="mip-uc-inventory",
+        ) as executor:
+            futures = [executor.submit(inspect_other_catalog, item) for item in other_catalogs]
+            for future in as_completed(futures):
+                future.result()
+
+    all_registered_models = list(workspace.registered_models.list(include_browse=True))
+    for model in all_registered_models:
+        _assert_registered_model_identity(model)
+    registered_model_full_names = [_full_name(model) for model in all_registered_models]
+    if len(registered_model_full_names) != len(set(registered_model_full_names)):
+        raise RuntimeError("workspace registered-model inventory returned duplicate identities")
+    if any(not _catalog_name(model) for model in all_registered_models):
+        raise RuntimeError("workspace registered-model inventory lacks a catalog name")
+    registered_models = [
+        model for model in all_registered_models if _catalog_name(model) == catalog_name
+    ]
+    other_registered_models = [
+        model for model in all_registered_models if _catalog_name(model) != catalog_name
+    ]
+    for model in registered_models:
+        if not _reviewed_model_family(_full_name(model), family_name=model_family):
+            _assert_not_runtime_owned(
+                model,
+                owner_aliases=runtime_owner_aliases,
+                label=f"registered model {_full_name(model)}",
+            )
+    unexpected_system_models = sorted(
+        _full_name(model)
+        for model in other_registered_models
+        if _catalog_name(model) == "system"
+        and _schema_name(model) == "ai"
+        and _full_name(model) not in _SYSTEM_AI_MODELS
+    )
+    if unexpected_system_models:
+        raise RuntimeError(
+            "unreviewed system.ai registered models are visible: "
+            + ", ".join(unexpected_system_models)
+        )
+    invalid_system_owners = sorted(
+        _full_name(model)
+        for model in other_registered_models
+        if _full_name(model) in _SYSTEM_AI_MODELS
+        and _exact_owner(model, label=f"registered model {_full_name(model)}") != "System user"
+    )
+    if invalid_system_owners:
+        raise RuntimeError(
+            "reviewed system.ai models are not owned by System user: "
+            + ", ".join(invalid_system_owners)
+        )
+    invalid_platform_model_owners = sorted(
+        _full_name(model)
+        for model in other_registered_models
+        if _catalog_name(model) in _PLATFORM_RUNTIME_CATALOGS
+        and _exact_owner(model, label=f"registered model {_full_name(model)}") != "System user"
+    )
+    if invalid_platform_model_owners:
+        raise RuntimeError(
+            "platform registered models are not owned by System user: "
+            + ", ".join(invalid_platform_model_owners)
+        )
+    unexpectedly_visible_binding_denied_models = sorted(
+        _full_name(model)
+        for model in other_registered_models
+        if _catalog_name(model) in binding_denied_catalog_names
+    )
+    if unexpectedly_visible_binding_denied_models:
+        raise RuntimeError(
+            "binding-denied foreign registered models became visible to the agent runtime: "
+            + ", ".join(unexpectedly_visible_binding_denied_models)
+        )
+    models_requiring_runtime_audit = [
+        model
+        for model in other_registered_models
+        if (
+            consumed_control_plane_proof is None
+            or _catalog_name(model) in _PLATFORM_RUNTIME_CATALOGS
+            or _catalog_name(model) not in consumed_control_plane_proof.grant_audited_catalogs
+        )
+    ]
+    if models_requiring_runtime_audit:
+        with ThreadPoolExecutor(
+            max_workers=min(_MAX_INVENTORY_WORKERS, len(models_requiring_runtime_audit)),
+            thread_name_prefix="mip-uc-models",
+        ) as executor:
+            futures = [
+                executor.submit(
+                    _assert_privileges,
+                    workspace,
+                    securable_type="function",
+                    full_name=_full_name(model),
+                    principal=principal,
+                    expected=(
+                        {"EXECUTE"}
+                        if (
+                            (_catalog_name(model) == "system" and _schema_name(model) == "ai")
+                            or _catalog_name(model) == "samples"
+                        )
+                        else set()
+                    ),
+                    expected_source_map=(
+                        {
+                            "EXECUTE": {
+                                *_SYSTEM_AI_INHERITED,
+                                *(
+                                    _ACCOUNT_USERS_DIRECT
+                                    if _full_name(model) in _SYSTEM_AI_MODELS_WITH_DIRECT_EXECUTE
+                                    else set()
+                                ),
+                            }
+                        }
+                        if _catalog_name(model) == "system" and _schema_name(model) == "ai"
+                        else (
+                            {"EXECUTE": set(_SAMPLES_INHERITED)}
+                            if _catalog_name(model) == "samples"
+                            else None
+                        )
+                    ),
+                )
+                for model in models_requiring_runtime_audit
+            ]
+            for future in as_completed(futures):
+                future.result()
+
+    reviewed_inference_suffixes: set[str] = set()
+    reviewed_inference_tables: set[str] = set()
+    archived_inference_suffixes: set[str] = set()
+    archived_inference_tables: set[str] = set()
+    schemas = list(workspace.schemas.list(catalog_name, include_browse=True))
+    schema_name_list = [_strict_text(getattr(schema, "name", None)) for schema in schemas]
+    schema_names = set(schema_name_list)
+    if len(schema_name_list) != len(schema_names):
+        raise RuntimeError("MIP schema inventory returned duplicate names")
+    if not {"gold", "audit"}.issubset(schema_names):
+        raise RuntimeError("MIP catalog is missing the reviewed agent schemas")
+    for schema in schemas:
+        schema_name = _strict_text(getattr(schema, "name", None))
+        if not schema_name:
+            raise RuntimeError("MIP schema inventory returned an empty name")
+        schema_full_name = _full_name(schema, fallback=f"{catalog_name}.{schema_name}")
+        if schema_full_name != f"{catalog_name}.{schema_name}":
+            raise RuntimeError("MIP schema inventory returned an invalid parent identity")
+        _assert_mip_schema_identity(
+            schema,
+            catalog_name=catalog_name,
+            schema_name=schema_name,
+            full_name=schema_full_name,
+        )
+        if schema_name == "information_schema":
+            _assert_system_owned(schema, label=f"schema {schema_full_name}")
+        else:
+            _assert_not_runtime_owned(
+                schema,
+                owner_aliases=runtime_owner_aliases,
+                label=f"schema {schema_full_name}",
+            )
+        if schema_name in {"gold", "audit"}:
+            expected_schema = {"USE_SCHEMA"}
+            schema_sources = {"USE_SCHEMA": set(runtime_direct)}
+        elif schema_name == "information_schema":
+            expected_schema = {"USE_SCHEMA"}
+            schema_sources = {"USE_SCHEMA": set(_ACCOUNT_USERS_DIRECT)}
+        else:
+            expected_schema = set()
+            schema_sources = None
+        _assert_privileges(
+            workspace,
+            securable_type="schema",
+            full_name=schema_full_name,
+            principal=principal,
+            expected=expected_schema,
+            expected_source_map=schema_sources,
+        )
+
+        functions = list(
+            workspace.functions.list(
+                catalog_name,
+                schema_name,
+                include_browse=True,
+            )
+        )
+        function_full_names: set[str] = set()
+        for function in functions:
+            function_name = _strict_text(getattr(function, "name", None))
+            if not function_name:
+                raise RuntimeError("MIP function inventory returned an empty name")
+            function_full_name = _full_name(
+                function,
+                fallback=f"{schema_full_name}.{function_name}",
+            )
+            if function_full_name != f"{schema_full_name}.{function_name}":
+                raise RuntimeError("MIP function inventory returned an invalid parent identity")
+            if function_full_name in function_full_names:
+                raise RuntimeError("MIP function inventory returned a duplicate identity")
+            function_full_names.add(function_full_name)
+            _assert_mip_child_identity(
+                function,
+                catalog_name=catalog_name,
+                schema_name=schema_name,
+                item_name=function_name,
+                full_name=function_full_name,
+                label="function",
+            )
+            _assert_not_runtime_owned(
+                function,
+                owner_aliases=runtime_owner_aliases,
+                label=f"function {function_full_name}",
+            )
+            expected = (
+                {"EXECUTE"}
+                if schema_name == "gold" and function_name in ALLOWED_FUNCTIONS
+                else set()
+            )
+            _assert_privileges(
+                workspace,
+                securable_type="function",
+                full_name=function_full_name,
+                principal=principal,
+                expected=expected,
+                expected_source_map=({"EXECUTE": set(runtime_direct)} if expected else None),
+            )
+
+        tables = list(
+            workspace.tables.list(
+                catalog_name,
+                schema_name,
+                include_browse=True,
+                omit_columns=True,
+                omit_properties=True,
+            )
+        )
+        table_full_names: set[str] = set()
+        for table in tables:
+            table_name = _strict_text(getattr(table, "name", None))
+            if not table_name:
+                raise RuntimeError("MIP table inventory returned an empty name")
+            table_full_name = _full_name(
+                table,
+                fallback=f"{schema_full_name}.{table_name}",
+            )
+            if table_full_name != f"{schema_full_name}.{table_name}":
+                raise RuntimeError("MIP table inventory returned an invalid parent identity")
+            if table_full_name in table_full_names:
+                raise RuntimeError("MIP table inventory returned a duplicate identity")
+            table_full_names.add(table_full_name)
+            _assert_mip_child_identity(
+                table,
+                catalog_name=catalog_name,
+                schema_name=schema_name,
+                item_name=table_name,
+                full_name=table_full_name,
+                label="table",
+            )
+            if schema_name == "information_schema":
+                _assert_system_owned(table, label=f"table {table_full_name}")
+                expected = {"SELECT"} if table_name in _CATALOG_INFORMATION_SCHEMA_TABLES else set()
+                _assert_privileges(
+                    workspace,
+                    securable_type="table",
+                    full_name=table_full_name,
+                    principal=principal,
+                    expected=expected,
+                    expected_source_map=(
+                        {"SELECT": set(_ACCOUNT_USERS_DIRECT)} if expected else None
+                    ),
+                )
+                continue
+            inference_suffix = (
+                _inference_table_suffix(table_name, family_prefix=table_prefix)
+                if schema_name == "audit"
+                else None
+            )
+            if inference_suffix is not None:
+                actual_sources = _effective_privilege_sources(
+                    workspace,
+                    securable_type="table",
+                    full_name=table_full_name,
+                    principal=principal,
+                )
+                state = lifecycle.states_by_suffix.get(inference_suffix)
+                owner = _exact_owner(table, label=f"table {table_full_name}")
+                disposition = classify_runtime_inference_table(
+                    state=state,
+                    owner=owner,
+                    principal=principal,
+                    table_full_name=table_full_name,
+                    inference_suffix=inference_suffix,
+                    candidate_suffix=model_name.rsplit("_", 1)[-1],
+                    actual_sources=actual_sources,
+                    runtime_direct=runtime_direct,
+                )
+                if disposition == "archived":
+                    archived_inference_suffixes.add(inference_suffix)
+                    archived_inference_tables.add(table_full_name)
+                    continue
+                reviewed_inference_suffixes.add(inference_suffix)
+                reviewed_inference_tables.add(table_full_name)
+                continue
+            _assert_not_runtime_owned(
+                table,
+                owner_aliases=runtime_owner_aliases,
+                label=f"table {table_full_name}",
+            )
+            _assert_privileges(
+                workspace,
+                securable_type="table",
+                full_name=table_full_name,
+                principal=principal,
+                expected=set(),
+            )
+
+        volumes = list(workspace.volumes.list(catalog_name, schema_name, include_browse=True))
+        volume_full_names: set[str] = set()
+        for volume in volumes:
+            volume_name = _strict_text(getattr(volume, "name", None))
+            if not volume_name:
+                raise RuntimeError("MIP volume inventory returned an empty name")
+            volume_full_name = _full_name(
+                volume,
+                fallback=f"{schema_full_name}.{volume_name}",
+            )
+            if volume_full_name != f"{schema_full_name}.{volume_name}":
+                raise RuntimeError("MIP volume inventory returned an invalid parent identity")
+            if volume_full_name in volume_full_names:
+                raise RuntimeError("MIP volume inventory returned a duplicate identity")
+            volume_full_names.add(volume_full_name)
+            _assert_mip_child_identity(
+                volume,
+                catalog_name=catalog_name,
+                schema_name=schema_name,
+                item_name=volume_name,
+                full_name=volume_full_name,
+                label="volume",
+            )
+            _assert_not_runtime_owned(
+                volume,
+                owner_aliases=runtime_owner_aliases,
+                label=f"volume {volume_full_name}",
+            )
+            _assert_privileges(
+                workspace,
+                securable_type="volume",
+                full_name=volume_full_name,
+                principal=principal,
+                expected=set(),
+            )
+
+    if model_name not in {_full_name(model) for model in registered_models}:
+        raise RuntimeError("reviewed Gateway registered model is missing from the MIP catalog")
+    registry = model_registry or MlflowClient(
+        tracking_uri="databricks",
+        registry_uri="databricks-uc",
+    )
+    reviewed_model_suffixes: set[str] = set()
+    archived_model_suffixes: set[str] = set()
+    for model in registered_models:
+        full_name = _full_name(model)
+        actual_sources = _effective_privilege_sources(
+            workspace,
+            securable_type="function",
+            full_name=full_name,
+            principal=principal,
+        )
+        if not _reviewed_model_family(full_name, family_name=model_family):
+            if actual_sources:
+                raise RuntimeError(
+                    f"agent-runtime has unexpected registered-model privileges on {full_name}: "
+                    + ", ".join(sorted(actual_sources))
+                )
+            continue
+        state = lifecycle.states.get(full_name)
+        owner = _exact_owner(model, label=f"registered model {full_name}")
+        disposition = classify_runtime_gateway_model(
+            state=state,
+            owner=owner,
+            principal=principal,
+            full_name=full_name,
+            candidate_model=model_name,
+            actual_sources=actual_sources,
+            runtime_direct=runtime_direct,
+        )
+        if disposition == "archived":
+            archived_model_suffixes.add(full_name.rsplit("_", 1)[-1])
+            continue
+        versions_sha256 = assert_gateway_model_provenance(
+            model_registry=registry,
+            full_name=full_name,
+            model_family=model_family,
+            experiment_base=experiment_base,
+            supervisor_id=supervisor_identity,
+            supervisor_endpoint_id=supervisor_endpoint_identity,
+            runtime_application_id=principal,
+            workspace_host=workspace_host,
+            catalog=catalog_name,
+            genie_space_id=genie_id,
+            inference_schema="audit",
+            inference_table_prefix=table_prefix,
+            candidate_model=model_name,
+            proxy_caller_application_id=proxy_caller_application_id,
+            proxy_caller_credential_id=proxy_caller_credential_id,
+            proxy_caller_secret_reference=proxy_caller_secret_reference,
+        )
+        if state is not None and state.versions_sha256 != versions_sha256:
+            raise RuntimeError(
+                f"Gateway model {full_name} version evidence changed from its "
+                "control-plane proof"
+            )
+        reviewed_model_suffixes.add(full_name.rsplit("_", 1)[-1])
+    if not reviewed_inference_suffixes.issubset(reviewed_model_suffixes):
+        raise RuntimeError("inference-table family is not backed by reviewed Gateway models")
+    if not archived_inference_suffixes.issubset(archived_model_suffixes):
+        raise RuntimeError(
+            "archived inference-table family is not backed by archived Gateway models"
+        )
+    assert_runtime_gateway_lifecycle_inventory(
+        lifecycle,
+        reviewed_model_suffixes=reviewed_model_suffixes,
+        archived_model_suffixes=archived_model_suffixes,
+        reviewed_inference_tables=reviewed_inference_tables,
+        archived_inference_tables=archived_inference_tables,
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
+    from tools.databricks.verify_agent_runtime_uc_grants_cli import (
+        main as cli_main,
+    )
+
+    return cli_main(argv)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

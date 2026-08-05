@@ -9,7 +9,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router';
 import { Icon } from '../components/Icon';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { type UseWarmingUpRetryResult } from '../lib/useWarmingUpRetry';
@@ -66,6 +66,11 @@ export function LoadState<T>({
         className={`stable-refresh-region ${updating ? 'is-updating' : ''}`}
         aria-busy={updating ? true : undefined}
       >
+        {updating && (
+          <span className="stable-refresh-status" role="status" aria-live="polite">
+            Updating {title.toLowerCase()}
+          </span>
+        )}
         {children(query.data)}
       </div>
     );

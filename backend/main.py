@@ -48,15 +48,21 @@ from backend.api import (
     portfolio,
     sales,
     segments,
+    session,
     telemetry,
     workspace,
 )
 from backend.config.settings import (
     _running_under_pytest,
     check_trust_boundary_at_startup,
+    looks_like_databricks_app_deploy,
     settings,
 )
 from backend.services.backpressure import BackpressureController, BackpressureMiddleware
+from backend.services.campaign_treatment_runtime import (
+    CAMPAIGN_TREATMENT_RUNTIME_MARKER_ENV,
+    campaign_treatment_runtime_enabled,
+)
 from backend.services.observability import (
     configure_logging,
     emit,
@@ -79,6 +85,42 @@ COMPAT_API_PREFIX = "/api"
 # lines. configure_logging() is idempotent so a second call during tests
 # is a safe no-op.
 configure_logging()
+
+
+def _log_campaign_treatment_runtime_state() -> None:
+    """Announce treatment-write authority state without killing the process.
+
+    A bundle apply or a bare UI/CLI deploy starts the App from the
+    source-controlled app.yaml baseline, which is disabled. Only the final
+    snapshot deployment, after constraint/property proof while treatment
+    access remains read-only, carries the marker; runtime MODIFY is restored
+    only after that enabled snapshot promotes.
+
+    2026-07-30 incident fix (July audit HIGH finding): the previous design
+    raised here in lifespan, so every bare deploy crash-looped the whole App
+    — no health body, no read routes, no platform-visible reason (the
+    2026-07-16 and 2026-07-30 outages). Enforcement now lives at the write
+    path (``backend.services.campaign_treatment_runtime``), evaluated per
+    request so ``MIP_BYPASS_STARTUP_CHECKS`` still cannot disable it, while
+    ``/api/health`` reports ``status="degraded"`` and read surfaces keep
+    serving. UC MODIFY quiesce remains the authoritative backstop.
+    """
+
+    if campaign_treatment_runtime_enabled():
+        return
+    emit(
+        log,
+        "campaign_treatment_runtime_disabled_baseline_deploy",
+        level=logging.ERROR,
+        dependency="deployment",
+        outcome="degraded",
+        marker_env=CAMPAIGN_TREATMENT_RUNTIME_MARKER_ENV,
+        recommended_action=(
+            "this deployment bypassed scripts/deploy.sh promotion; treatment "
+            "writes return 503 until a governed roll-forward redeploys the "
+            "promoted snapshot payload"
+        ),
+    )
 
 
 def _operation_id(route: APIRoute) -> str:
@@ -136,19 +178,13 @@ def _warm_lakebase() -> None:
     continues, and the audit router's 503 + resilience-aware UI
     banner cover the gap until the first real request succeeds.
     """
-    from backend.services.lakebase import get_lakebase_client
-
-    # If Lakebase connection hints are absent, skip silently -- the
-    # audit router already surfaces 503 on its own when the creds are
-    # missing, and we don't want to duplicate that signal at startup.
-    #
-    # Deployed Databricks Apps may provide PGHOST / PGUSER plus a
-    # workspace-token password provider instead of LAKEBASE_* vars, so
-    # the warm-start gate must mirror the Lakebase client resolver's
-    # supported connection hints rather than only settings fields.
+    # If the host hint is absent, skip silently -- the audit router already
+    # surfaces 503 on its own when the binding is missing. PGHOST alone is a
+    # complete deployed-App hint: get_lakebase_client uses the same resolver
+    # as every request and obtains a missing user plus the short-lived token
+    # from workspace identity.
     host_hint = settings.lakebase_host or os.environ.get("PGHOST")
-    user_hint = settings.lakebase_user or os.environ.get("PGUSER")
-    if not host_hint or not user_hint:
+    if not host_hint:
         emit(
             log,
             "lakebase_warm_start_skipped",
@@ -159,9 +195,21 @@ def _warm_lakebase() -> None:
         return
     start = time.monotonic()
     try:
-        client = get_lakebase_client()
-        client.fetchone("SELECT 1 AS warm")
+        from backend.services.health_probes import cached_probe, probe_lakebase
+
+        is_up = cached_probe("lakebase", probe_lakebase)
         took_ms = int((time.monotonic() - start) * 1000)
+        if not is_up:
+            emit(
+                log,
+                "lakebase_warm_start_failed",
+                level=logging.WARNING,
+                dependency="lakebase",
+                outcome="error",
+                duration_ms=took_ms,
+                reason="bounded_health_probe_reported_down",
+            )
+            return
         emit(
             log,
             "lakebase_warm_start_succeeded",
@@ -249,6 +297,22 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
       deployed app default sets this to 0 so idle workspaces can auto-stop.
     """
     rewarm_task: asyncio.Task[None] | None = None
+    # Databricks Apps deployment invariant: log the treatment-runtime marker
+    # state at boot. The write gate itself is enforced per-request in
+    # backend.services.campaign_treatment_runtime (outside any
+    # _running_under_pytest()/MIP_BYPASS_STARTUP_CHECKS reach), so a baseline
+    # deploy degrades treatment writes instead of killing the process.
+    _log_campaign_treatment_runtime_state()
+    if looks_like_databricks_app_deploy():
+        # Governance invariant: the ambient App identity must be the exact
+        # LOGIN-only OAuth role, and PostgreSQL's replication protocol must
+        # reject it. This remains outside the generic local/test bypass just
+        # like the campaign-treatment runtime gate above.
+        from backend.services.lakebase_identity_gate import (
+            verify_app_lakebase_identity_at_startup,
+        )
+
+        verify_app_lakebase_identity_at_startup()
     if not _running_under_pytest():
         # ``require_databricks_creds`` raises RuntimeError with a
         # clear operator-facing message when any of the three env
@@ -478,8 +542,44 @@ app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)
 from fastapi import Request  # noqa: E402 -- handler below needs it
 from fastapi.responses import JSONResponse  # noqa: E402
 
+from backend.services.campaign_treatment_runtime import (  # noqa: E402
+    CampaignTreatmentRuntimeDisabledError,
+)
 from backend.services.error_sanitizer import safe_dependency_detail  # noqa: E402
 from backend.services.resilience import DependencyDownError  # noqa: E402
+
+
+@app.exception_handler(CampaignTreatmentRuntimeDisabledError)
+async def _campaign_treatment_runtime_disabled_handler(
+    _request: Request, exc: CampaignTreatmentRuntimeDisabledError
+) -> JSONResponse:
+    """Return 503 when a treatment write hits the un-promoted baseline deploy.
+
+    Companion to the 2026-07-30 gate restructure: instead of the process
+    dying at boot on a bare deploy, the specific write surface fails closed
+    with an operator-actionable reason while reads keep serving. The body
+    mirrors the DependencyDownError shape the DegradedBanner already parses,
+    with ``retryable: false`` — retrying cannot help until an operator rolls
+    forward through scripts/deploy.sh.
+    """
+    emit(
+        log,
+        "campaign_treatment_write_refused_baseline_deploy",
+        level=logging.ERROR,
+        dependency="deployment",
+        outcome="refused",
+        correlation_id=get_correlation_id(),
+    )
+    return JSONResponse(
+        status_code=503,
+        content={
+            "detail": str(exc),
+            "retryable": False,
+            "dependency": "deployment",
+            "reason": "campaign_treatment_runtime_disabled",
+            "correlation_id": get_correlation_id(),
+        },
+    )
 
 
 @app.exception_handler(DependencyDownError)
@@ -595,6 +695,7 @@ API_ROUTERS = [
     sales.router,
     loan_officers.router,
     geo.router,
+    session.router,
     growth_agent.router,
     growth_agent_compose_routes.router,
     genie.router,

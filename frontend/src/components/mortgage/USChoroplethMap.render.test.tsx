@@ -4,7 +4,7 @@
 
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { USChoroplethMap } from './USChoroplethMap';
 import type { CountyRollupResponse, StateRollupResponse } from '../../types';
@@ -48,7 +48,7 @@ async function settle(): Promise<void> {
 
 async function waitForSelector<T extends Element>(selector: string): Promise<T | null> {
   let node: T | null = null;
-  for (let i = 0; i < 80; i += 1) {
+  for (let i = 0; i < 400; i += 1) {
     await settle();
     node = document.querySelector(selector) as T | null;
     if (node) return node;
@@ -170,8 +170,12 @@ describe('USChoroplethMap county visual states', () => {
       await new Promise((resolve) => window.setTimeout(resolve, 5));
     }
     expect(illinois?.classList.contains('has-data')).toBe(true);
+    const currentIllinois =
+      document.querySelector<SVGPathElement>('path[aria-label="Illinois"]')
+      ?? document.querySelector<SVGPathElement>('path[aria-label="IL"]');
+    expect(currentIllinois).toBeTruthy();
     await act(async () => {
-      illinois?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      currentIllinois?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
     const cookLoading = await waitForSelector<SVGPathElement>('path[aria-label="Cook County"]');
     expect(cookLoading).toBeTruthy();

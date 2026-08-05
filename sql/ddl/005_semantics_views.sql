@@ -7,7 +7,7 @@
 --            materialise them AFTER the gold tables they read from are
 --            built. This is the file `mip_refresh_scores` executes at
 --            the end of its CTAS chain to guarantee Genie's trusted
---            assets bind on the first `databricks bundle deploy -t dev`.
+--            assets bind during the first signed deploy orchestration.
 --
 -- Sources of truth (these files stay the authored copy for code review;
 -- 005_semantics_views.sql is the deploy surface and must stay a

@@ -6,6 +6,7 @@ test.skip(!LIVE, 'Set E2E_LIVE=1 to run route performance and overlap checks.');
 const APP_URL = process.env.MIP_APP_URL || 'http://127.0.0.1:5173';
 const API_URL = process.env.MIP_API_URL || APP_URL.replace(':5173', ':8000');
 const BEARER = process.env.MIP_BEARER_TOKEN || process.env.DATABRICKS_TOKEN || '';
+const ADMIN_BEARER = process.env.MIP_ADMIN_BEARER_TOKEN || '';
 const AUTH_HEADERS: Record<string, string> = BEARER ? { Authorization: `Bearer ${BEARER}` } : {};
 
 test.use({ baseURL: APP_URL, extraHTTPHeaders: AUTH_HEADERS });
@@ -25,7 +26,6 @@ const ROUTES: RouteProbe[] = [
   { label: 'Borrower 360', path: liveBorrowerPath('/borrower-360'), ready: /Borrower dossier|Refi economics check/i, maxLoadMs: 7_000 },
   { label: 'Offer', path: liveBorrowerPath('/offer-orchestrator'), ready: /Draft outreach|Recommended offer/i, maxLoadMs: 7_000 },
   { label: 'Ask Genie', path: '/ask-genie', ready: /Ask Genie|Ready for governed analysis/i, maxLoadMs: 4_000 },
-  { label: 'Admin', path: '/admin-config', ready: /Offer rules|Audit explorer|Admin/i, maxLoadMs: 4_000 },
 ];
 
 function liveBorrowerPath(prefix: string): (request: APIRequestContext) => Promise<string> {
@@ -183,6 +183,43 @@ test.describe('route performance and layout canaries', () => {
     });
   }
 
+  test('Admin route meets the load and layout budget with the admin bearer', async ({ page }) => {
+    test.skip(!ADMIN_BEARER, 'Requires MIP_ADMIN_BEARER_TOKEN for Admin route performance coverage.');
+    await page.setExtraHTTPHeaders({ Authorization: `Bearer ${ADMIN_BEARER}` });
+    const dataEstateResponse = page.waitForResponse(
+      (response) => (
+        response.request().method() === 'GET'
+        && normalizedApiPath(response.url()) === '/api/data-estate'
+        && response.status() === 200
+      ),
+      { timeout: 30_000 },
+    );
+    await page.goto('/admin-config');
+    const dataEstate = await dataEstateResponse;
+    const dataEstateBody = await dataEstate.json() as {
+      lanes?: Array<{ id?: unknown }>;
+      proof_assets?: unknown;
+    };
+    expect(
+      dataEstateBody.lanes?.map((lane) => lane.id),
+      'GET /api/v1/data-estate governed lane contract',
+    ).toEqual(['first_party', 'cotality', 'databricks', 'entrada']);
+    expect(
+      Array.isArray(dataEstateBody.proof_assets) && dataEstateBody.proof_assets.length > 0,
+      'GET /api/v1/data-estate proof assets',
+    ).toBe(true);
+    await expect(
+      page.getByRole('heading', { name: 'Rules, data sources, and audit' }),
+    ).toBeVisible({ timeout: 30_000 });
+    await expect(
+      page.locator('.data-estate:not([aria-busy]) .data-estate__lane-proof').first(),
+    ).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText('Data-estate proof unavailable')).toHaveCount(0);
+    expect(await routeLoadMs(page), 'Admin route load budget').toBeLessThanOrEqual(4_000);
+    await assertNoHorizontalOverflow(page, 'Admin');
+    await assertNoObviousTextOverlap(page, 'Admin');
+  });
+
   test('mobile shell keeps primary routes usable without horizontal overflow', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     for (const path of ['/', '/segment-intelligence', '/lead-queue', '/ask-genie']) {
@@ -193,20 +230,17 @@ test.describe('route performance and layout canaries', () => {
     }
   });
 
-  test('QueryClient keeps hot Home reads cached during Home -> Segments -> Home', async ({ page }) => {
+  test('QueryClient keeps the hot Home preview cached during Home -> Segments -> Home', async ({ page }) => {
     await page.goto('/');
     await expect(page.getByText(/Who should we contact, why now, and with what offer/i).first()).toBeVisible({ timeout: 10_000 });
     await expect(page.locator('.kpi:not(.is-loading) .kpi__value').first()).toBeVisible({
-      timeout: 10_000,
-    });
-    await expect(page.locator('.data-estate:not([aria-busy]) .data-estate__lane-proof').first()).toBeVisible({
       timeout: 10_000,
     });
 
     const hotReads: string[] = [];
     page.on('request', (request) => {
       const path = normalizedApiPath(request.url());
-      if (path === '/api/portfolio/preview' || path === '/api/data-estate') {
+      if (path === '/api/portfolio/preview') {
         hotReads.push(`${request.method()} ${path}`);
       }
     });
@@ -217,7 +251,7 @@ test.describe('route performance and layout canaries', () => {
     await page.getByRole('link', { name: /^Home$/i }).click();
     await expect(page.getByText(/Who should we contact, why now, and with what offer/i).first()).toBeVisible({ timeout: 10_000 });
 
-    expect(hotReads, 'Home preview/data-estate should remain in QueryClient stale window').toEqual([]);
+    expect(hotReads, 'Home preview should remain in the QueryClient stale window').toEqual([]);
   });
 
   test('config options fetch is shared by shell and route-level consumers', async ({ page }) => {
@@ -307,9 +341,10 @@ test.describe('route performance and layout canaries', () => {
     await initialAuditRequest;
     protectedReads.length = 0;
 
-    for (const name of [/^Portfolio$/i, /^Segments$/i, /^Leads$/i, /^Borrower 360$/i, /^Offer$/i, /^Ask Genie$/i, /^Admin$/i]) {
+    for (const name of [/^Portfolio$/i, /^Segments$/i, /^Leads$/i, /^Borrower 360$/i, /^Offer$/i, /^Ask Genie$/i]) {
       await routeNavLink(page, name).hover();
     }
+    await expect(routeNavLink(page, /^Admin$/i)).toHaveCount(0);
     await page.getByLabel(/Toggle Genie chat/i).hover();
     await page.waitForTimeout(1200);
 

@@ -16,10 +16,17 @@ class HealthResponse(BaseModel):
     status: str
     mode: str
     git_sha: str | None = None
+    deployment_lease_id: str | None = None
+    agent_gateway_binding_sha256: str | None = None
     dependencies: dict[str, str] = Field(default_factory=dict)
     circuit_breakers: dict[str, str] = Field(default_factory=dict)
     actor_cache_key: str | None = None
     forced_degraded: ForcedDegradedInfo | None = None
+    # Deploy-promotion marker state: "enabled" after a governed
+    # scripts/deploy.sh snapshot promotion, "disabled_baseline_deploy" when
+    # the process came from a bare deploy (treatment writes 503, status
+    # reports degraded). Absent on the anonymous liveness body.
+    campaign_treatment_runtime: str | None = None
 
 
 class BoundaryWarning(BaseModel):

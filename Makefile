@@ -58,7 +58,8 @@ bundle-plan: render-sql
 	$(PYTHON) tools/databricks/bundle_env.py plan -t dev
 
 bundle-deploy: render-sql
-	$(PYTHON) tools/databricks/bundle_env.py deploy -t dev
+	@echo "bundle-deploy is retired: use make deploy-dev for the signed command-of-record flow" >&2
+	@exit 2
 
 zip:
 	./scripts/package_source.sh
@@ -73,8 +74,7 @@ zip:
 # `bundle-validate-env`   sources .env.local (if present), exports
 #                         DATABRICKS_WAREHOUSE_ID and GENIE_SPACE_ID into
 #                         bundle variables, then validates the dev target.
-# `bundle-deploy-dev`     same env sourcing, then deploys to the dev target
-#                         after an interactive confirmation.
+# `bundle-deploy-dev`     retired unsafe alias; use `deploy-dev`.
 # ---------------------------------------------------------------------------
 
 provision-genie:
@@ -89,9 +89,8 @@ bundle-validate-env: render-sql
 	@$(PYTHON) tools/databricks/bundle_env.py validate -t dev
 
 bundle-deploy-dev: render-sql
-	@read -p "About to DEPLOY to your workspace. Continue? [y/N] " ans; \
-	  test "$$ans" = "y" || { echo "aborted."; exit 1; }; \
-	  $(PYTHON) tools/databricks/bundle_env.py deploy -t dev
+	@echo "bundle-deploy-dev is retired: use make deploy-dev for signed App promotion" >&2
+	@exit 2
 
 # ---------------------------------------------------------------------------
 # `deploy-dev` — single-command zero-click dev deploy.

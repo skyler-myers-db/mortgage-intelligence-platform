@@ -19,11 +19,17 @@ Invariants covered:
 5. A Lakebase failure surfaces as 503 -- no silent fallback, matches
    the approve path contract.
 """
+
 from __future__ import annotations
 
+import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from threading import RLock
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -35,6 +41,7 @@ from backend.services.audit_decision_inputs import DECISION_INPUT_KEYS
 from backend.services.audit_store import get_audit_store
 from backend.services.lakebase import LakebaseError, get_lakebase_client
 from backend.services.lakebase_bootstrap import _reset_bootstrap_for_tests
+from backend.services.repositories import get_outreach_repository
 from backend.services.resilience import _reset_breakers_for_tests
 from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
 
@@ -48,7 +55,9 @@ def _disclosure_row(params: dict[str, Any] | None = None) -> dict[str, str]:
         else "Summit Mortgage, NMLS #123456. Equal Housing Lender. Reply unsubscribe to opt out."
     )
     return {
-        "state": params.get("state", "_ALL"),
+        # These fixtures model the generic fallback row selected for an IL
+        # borrower, not an IL-specific reviewed legal template.
+        "state": "_ALL",
         "channel": channel,
         "disclosure_version": "test-disclosure-v1",
         "body": body,
@@ -56,7 +65,34 @@ def _disclosure_row(params: dict[str, Any] | None = None) -> dict[str, str]:
 
 
 DISCLOSURE_BODY = _disclosure_row()["body"]
-APPROVAL_DRAFT_BODY = f"Governed approval body. {DISCLOSURE_BODY}"
+APPROVAL_DRAFT_BODY = (
+    "Contact a loan officer to review available mortgage options. " f"{DISCLOSURE_BODY}"
+)
+
+
+def _record_non_atomic_approval(
+    inserted: dict[str, dict[str, Any]],
+    sql: str,
+    params: dict[str, Any],
+) -> None:
+    if "INSERT INTO mip_app.approvals" in sql and params.get("request_id"):
+        inserted[params["request_id"]] = {
+            "approval_id": params["approval_id"],
+            "borrower_id": params["borrower_id"],
+            "action": params["action"],
+            "actor_email": params["actor_email"],
+            "decision_intent": params["decision_intent"],
+            "decision_payload_hash": params["decision_payload_hash"],
+            "decision_response": None,
+            "audit_event_id": None,
+        }
+        return
+    if "UPDATE mip_app.approvals" in sql:
+        for row in inserted.values():
+            if str(row["approval_id"]) == str(params["approval_id"]):
+                row["decision_response"] = json.loads(params["decision_response"])
+                row["audit_event_id"] = params["audit_event_id"]
+                return
 
 
 def _fetchone_none_or_disclosure(
@@ -101,21 +137,39 @@ class _AtomicConn:
     def execute(self, sql: str, params: dict[str, Any] | None = None) -> _TxnResult:
         params = params or {}
         self.owner.executed_sql.append(sql)
+        if "pg_advisory_xact_lock" in sql:
+            return _TxnResult(None)
         if "INSERT INTO mip_app.approvals" in sql:
             if self.owner.conflict:
+                self.owner.last_attempt_params = dict(params)
                 return _TxnResult(None)
             self.owner.pending_approvals.append(dict(params))
             return _TxnResult({"approval_id": params["approval_id"]})
         if "SELECT approval_id" in sql:
             if self.owner.existing_row:
                 return _TxnResult(self.owner.existing_row)
-            if self.owner.existing_approval_id:
+            if (
+                self.owner.existing_approval_id
+                and self.owner.last_attempt_params is not None
+            ):
+                attempted = self.owner.last_attempt_params
+                audit_event_id = "22222222-2222-4222-8222-222222222222"
                 return _TxnResult(
                     {
                         "approval_id": self.owner.existing_approval_id,
                         "borrower_id": "B-48291",
                         "action": "approve",
                         "actor_email": "lo@example.com",
+                        "decision_intent": attempted.get("decision_intent"),
+                        "decision_payload_hash": attempted.get("decision_payload_hash"),
+                        "decision_response": {
+                            "approved": True,
+                            "approval_id": self.owner.existing_approval_id,
+                            "audit_event_id": audit_event_id,
+                            "assigned_to_email": None,
+                            "follow_up_at": None,
+                        },
+                        "audit_event_id": audit_event_id,
                     }
                 )
             return _TxnResult(None)
@@ -124,7 +178,26 @@ class _AtomicConn:
             if self.owner.audit_fails:
                 raise LakebaseError("audit insert failed")
             self.owner.audit_params = dict(params)
-            return _TxnResult({"audit_id": "evt-atomic", "event_at": datetime.now(UTC)})
+            return _TxnResult(
+                {
+                    "audit_id": "evt-atomic",
+                    "audit_sequence": 1,
+                    "event_at": datetime.now(UTC),
+                }
+            )
+        if "UPDATE mip_app.approvals" in sql:
+            for row in self.owner.pending_approvals:
+                if str(row["approval_id"]) == str(params["approval_id"]):
+                    row["decision_response"] = params["decision_response"]
+                    row["audit_event_id"] = params["audit_event_id"]
+                    return _TxnResult(
+                        {
+                            "approval_id": row["approval_id"],
+                            "decision_response": params["decision_response"],
+                            "audit_event_id": params["audit_event_id"],
+                        }
+                    )
+            return _TxnResult(None)
         raise AssertionError(f"unexpected SQL: {sql}")
 
 
@@ -148,6 +221,7 @@ class _AtomicLakebase:
         self.executed_sql: list[str] = []
         self.audit_insert_count = 0
         self.audit_params: dict[str, Any] | None = None
+        self.last_attempt_params: dict[str, Any] | None = None
         self.committed = False
         self.rolled_back = False
         self.conn: _AtomicConn | None = None
@@ -159,6 +233,81 @@ class _AtomicLakebase:
 
     def transaction(self) -> _TxnContext:
         return _TxnContext(self)
+
+
+class _ConcurrentDecisionConn:
+    def __init__(self, owner: _ConcurrentDecisionLakebase) -> None:
+        self.owner = owner
+
+    def execute(self, sql: str, params: dict[str, Any] | None = None) -> _TxnResult:
+        values = params or {}
+        if "pg_advisory_xact_lock" in sql:
+            return _TxnResult(None)
+        if "INSERT INTO mip_app.approvals" in sql:
+            request_id = str(values["request_id"])
+            if request_id in self.owner.approvals:
+                return _TxnResult(None)
+            row = {
+                **values,
+                "decision_response": None,
+                "audit_event_id": None,
+            }
+            self.owner.approvals[request_id] = row
+            return _TxnResult({"approval_id": row["approval_id"]})
+        if "SELECT approval_id" in sql:
+            row = self.owner.approvals.get(str(values["request_id"]))
+            return _TxnResult(dict(row) if row is not None else None)
+        if "INSERT INTO mip_app.action_audit" in sql:
+            self.owner.audit_count += 1
+            return _TxnResult(
+                {
+                    "audit_id": str(uuid4()),
+                    "audit_sequence": self.owner.audit_count,
+                    "event_at": datetime.now(UTC),
+                }
+            )
+        if "UPDATE mip_app.approvals" in sql:
+            for row in self.owner.approvals.values():
+                if str(row["approval_id"]) == str(values["approval_id"]):
+                    row["decision_response"] = json.loads(values["decision_response"])
+                    row["audit_event_id"] = values["audit_event_id"]
+                    return _TxnResult(dict(row))
+            return _TxnResult(None)
+        raise AssertionError(f"unexpected SQL: {sql}")
+
+
+class _ConcurrentDecisionTransaction:
+    def __init__(self, owner: _ConcurrentDecisionLakebase) -> None:
+        self.owner = owner
+
+    def __enter__(self) -> _ConcurrentDecisionConn:
+        self.owner.lock.acquire()
+        return _ConcurrentDecisionConn(self.owner)
+
+    def __exit__(self, exc_type: Any, exc: BaseException | None, tb: Any) -> bool:
+        self.owner.lock.release()
+        return False
+
+
+class _ConcurrentDecisionLakebase:
+    _supports_atomic_transactions = True
+
+    def __init__(self) -> None:
+        self.lock = RLock()
+        self.approvals: dict[str, dict[str, Any]] = {}
+        self.audit_count = 0
+
+    def fetchone(self, sql: str, params: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        if "FROM mip_app.tenant_disclosures" in sql:
+            return _disclosure_row(params)
+        if "FROM mip_app.approvals" in sql:
+            with self.lock:
+                row = self.approvals.get(str((params or {}).get("request_id")))
+                return dict(row) if row is not None else None
+        return None
+
+    def transaction(self) -> _ConcurrentDecisionTransaction:
+        return _ConcurrentDecisionTransaction(self)
 
 
 @pytest.fixture(autouse=True)
@@ -246,7 +395,7 @@ def test_reject_writes_approval_and_audit_rows(override_deps) -> None:
         json={
             "borrower_id": "B-48291",
             "offer_code": "heloc",
-            "evidence_ids": ["ev-001", "ev-002"],
+            "evidence_ids": ["ev-001", "ev-002", "ev-003"],
             "rationale_code": "opt_out",
             "rationale": "Borrower opted out",
         },
@@ -260,8 +409,13 @@ def test_reject_writes_approval_and_audit_rows(override_deps) -> None:
 
     # mip_app.approvals write: exactly one execute() call with
     # action='reject' and our actor.
-    assert fake_lakebase.execute.call_count == 1
-    sql, params = fake_lakebase.execute.call_args.args
+    approval_calls = [
+        call
+        for call in fake_lakebase.execute.call_args_list
+        if "INSERT INTO mip_app.approvals" in call.args[0]
+    ]
+    assert len(approval_calls) == 1
+    sql, params = approval_calls[0].args
     assert "INSERT INTO mip_app.approvals" in sql
     assert params["action"] == "reject"
     assert params["actor_email"] == "lo@example.com"
@@ -280,7 +434,7 @@ def test_reject_writes_approval_and_audit_rows(override_deps) -> None:
     assert evt.entity_type == "approval"
     assert evt.entity_id == body["approval_id"]
     assert evt.actor == "lo@example.com"
-    assert evt.evidence_ids == ["ev-001", "ev-002"]
+    assert evt.evidence_ids == ["ev-001", "ev-002", "ev-003"]
     assert evt.subject_clip is not None
     assert evt.payload_json["borrower_id"] == "B-48291"
     assert evt.payload_json["offer_code"] == "heloc"
@@ -306,7 +460,30 @@ def test_reject_rejects_evidence_ids_not_owned_by_borrower(override_deps) -> Non
     )
 
     assert response.status_code == 422, response.text
-    assert "must belong to the borrower recommendation" in response.json()["detail"]
+    assert "must exactly match the borrower recommendation" in response.json()["detail"]
+    fake_lakebase.execute.assert_not_called()
+    assert audit.list(limit=10) == []
+
+
+def test_reject_rejects_partial_recommendation_evidence(override_deps) -> None:
+    audit = InMemoryAuditStore()
+    fake_lakebase = MagicMock()
+    fake_lakebase.fetchone.side_effect = _fetchone_none_or_disclosure
+    override_deps(audit=audit, lakebase=fake_lakebase)
+
+    response = TestClient(app).post(
+        "/api/outreach/reject",
+        json={
+            "borrower_id": "B-48291",
+            "offer_code": "heloc",
+            "evidence_ids": ["ev-001"],
+            "rationale_code": "low_intent",
+        },
+        headers={"X-Forwarded-Email": "lo@example.com"},
+    )
+
+    assert response.status_code == 422, response.text
+    assert "must exactly match the borrower recommendation" in response.json()["detail"]
     fake_lakebase.execute.assert_not_called()
     assert audit.list(limit=10) == []
 
@@ -319,7 +496,14 @@ def test_approve_reject_unknown_borrower_fail_closed_before_lakebase(override_de
     client = TestClient(app)
     for path, body in (
         ("/api/outreach/approve", {"borrower_id": "B-DOES-NOT-EXIST", "offer_code": "heloc"}),
-        ("/api/outreach/reject", {"borrower_id": "B-DOES-NOT-EXIST", "offer_code": "heloc", "rationale_code": "low_intent"}),
+        (
+            "/api/outreach/reject",
+            {
+                "borrower_id": "B-DOES-NOT-EXIST",
+                "offer_code": "heloc",
+                "rationale_code": "low_intent",
+            },
+        ),
     ):
         response = client.post(path, json=body, headers={"X-Forwarded-Email": "lo@example.com"})
         assert response.status_code == 404, response.text
@@ -353,7 +537,12 @@ def test_reject_scrubs_free_text_before_decision_and_audit_rows(override_deps) -
     )
     assert resp.status_code == 200, resp.text
 
-    _sql, params = fake_lakebase.execute.call_args.args
+    approval_call = next(
+        call
+        for call in fake_lakebase.execute.call_args_list
+        if "INSERT INTO mip_app.approvals" in call.args[0]
+    )
+    _sql, params = approval_call.args
     persisted_rationale = params["rationale"]
     assert persisted_rationale.startswith("data quality: ")
     assert "[EMAIL-REDACTED]" in persisted_rationale
@@ -378,13 +567,23 @@ def test_draft_outreach_is_relationship_and_channel_aware() -> None:
     )
     assert current.status_code == 200, current.text
     current_body = current.json()["body"]
+    assert current.json()["generation_mode"] in {"supervisor", "governed_fallback"}
+    assert current.json()["generator_label"]
+    assert current.json()["strategy_summary"]
+    assert current.json()["evidence_summary"]
     assert "Summit Mortgage customer" in current_body
     assert "public-record" not in current_body
     assert "may qualify" not in current_body
     assert "[first name]" not in current_body
     assert "NMLS #123456" in current_body
     assert "Equal Housing" in current_body
-    assert current.json()["offer_code"] in {"retention", "nurture", "refi", "refi_plus_heloc", "cash_out"}
+    assert current.json()["offer_code"] in {
+        "retention",
+        "nurture",
+        "refi",
+        "refi_plus_heloc",
+        "cash_out",
+    }
 
     sms = client.post(
         "/api/outreach/draft",
@@ -402,8 +601,16 @@ def test_draft_outreach_is_relationship_and_channel_aware() -> None:
 def test_draft_outreach_uses_configured_lender_name(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from backend.schemas import lender_identity
+
+    monkeypatch.setitem(
+        lender_identity._REVIEWED_PUBLIC_LENDER_IDENTITIES,
+        "Acme Mortgage",
+        frozenset({"7654321"}),
+    )
     monkeypatch.setattr(outreach_mod.settings, "mip_lender_name", "Acme Mortgage")
-    monkeypatch.setattr(outreach_mod.settings, "mip_tenant_id", "summit")
+    monkeypatch.setattr(outreach_mod.settings, "mip_lender_nmls_id", "7654321")
+    monkeypatch.setattr(outreach_mod.settings, "mip_tenant_id", None)
 
     response = TestClient(app).post(
         "/api/outreach/draft",
@@ -416,6 +623,62 @@ def test_draft_outreach_uses_configured_lender_name(
     assert response.json()["subject"] == "A quick mortgage review from Acme Mortgage"
     assert "Acme Mortgage customer" in body
     assert "Summit Mortgage customer" not in body
+
+
+def test_supervisor_draft_is_reconstructed_from_exact_durable_response(
+    override_deps,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stored: list[dict[str, Any]] = []
+
+    def _fetchone(sql: str, params: dict[str, Any]) -> dict[str, Any] | None:
+        if "FROM mip_app.tenant_disclosures" in sql:
+            return _disclosure_row(params)
+        if "INSERT INTO mip_app.generated_outreach_drafts" in sql:
+            stored.append({"sql": sql, **params})
+            return {
+                "generation_id": params["generation_id"],
+                "audit_event_id": params["audit_id"],
+                "response_hash": params["response_hash"],
+                "response_json": json.loads(params["response_json"]),
+            }
+        return None
+
+    fake_lakebase = MagicMock()
+    fake_lakebase.fetchone.side_effect = _fetchone
+    override_deps(audit=InMemoryAuditStore(), lakebase=fake_lakebase)
+    monkeypatch.setattr(
+        outreach_mod,
+        "compose_intelligent_outreach",
+        lambda **kwargs: SimpleNamespace(
+            subject="A focused mortgage review",
+            body=(
+                "Contact a loan officer to review and clarify your available options. "
+                f"{DISCLOSURE_BODY}"
+            ),
+            generation_mode="supervisor",
+            generator_label="Supervisor-optimized message",
+            strategy_summary="Lead with borrower autonomy and one focused review path.",
+            evidence_summary=["Primary offer: home equity line of credit"],
+            evidence_assets=["mip.gold.borrower_360"],
+        ),
+    )
+
+    response = TestClient(app).post(
+        "/api/outreach/draft",
+        json={"borrower_id": "B-48291", "channel": "email"},
+        headers={"X-Forwarded-Email": "lo@example.com"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert len(stored) == 1
+    assert "INSERT INTO mip_app.action_audit" in stored[0]["sql"]
+    assert json.loads(stored[0]["response_json"]) == response.json()
+    assert response.json()["generation_mode"] == "supervisor"
+    assert response.json()["strategy_summary"] == (
+        "Lead with borrower autonomy and one focused review path."
+    )
+    assert "body" not in json.loads(stored[0]["metadata"])
 
 
 def test_atomic_decision_rolls_back_if_audit_insert_fails(
@@ -437,6 +700,7 @@ def test_atomic_decision_rolls_back_if_audit_insert_fails(
         json={
             "borrower_id": "B-48291",
             "offer_code": "heloc",
+            "draft_subject": "Your mortgage review",
             "draft_body": APPROVAL_DRAFT_BODY,
         },
         headers={"X-Forwarded-Email": "lo@example.com"},
@@ -470,6 +734,7 @@ def test_atomic_conflict_does_not_write_audit_for_uninserted_approval(
             "borrower_id": "B-48291",
             "offer_code": "heloc",
             "request_id": "11111111-1111-4111-8111-111111111111",
+            "draft_subject": "Your mortgage review",
             "draft_body": APPROVAL_DRAFT_BODY,
         },
         headers={"X-Forwarded-Email": "lo@example.com"},
@@ -477,7 +742,14 @@ def test_atomic_conflict_does_not_write_audit_for_uninserted_approval(
 
     assert resp.status_code == 200, resp.text
     assert resp.json()["approval_id"] == existing_id
-    assert resp.json()["audit_event_id"] == ""
+    assert resp.json()["audit_event_id"] == "22222222-2222-4222-8222-222222222222"
+    lock_index = next(
+        i for i, sql in enumerate(lakebase.executed_sql) if "pg_advisory_xact_lock" in sql
+    )
+    insert_index = next(
+        i for i, sql in enumerate(lakebase.executed_sql) if "INSERT INTO mip_app.approvals" in sql
+    )
+    assert lock_index < insert_index
     assert lakebase.audit_insert_count == 0
     assert lakebase.committed_approvals == []
     assert trigger_calls == []
@@ -512,6 +784,7 @@ def test_atomic_conflict_rejects_request_id_for_different_decision(
             "borrower_id": "B-48291",
             "offer_code": "heloc",
             "request_id": "11111111-1111-4111-8111-111111111111",
+            "draft_subject": "Your mortgage review",
             "draft_body": APPROVAL_DRAFT_BODY,
         },
         headers={"X-Forwarded-Email": "lo@example.com"},
@@ -546,6 +819,7 @@ def test_approve_audit_captures_decision_inputs(
         json={
             "borrower_id": "B-48291",
             "offer_code": "heloc",
+            "draft_subject": "Your mortgage review",
             "draft_body": APPROVAL_DRAFT_BODY,
         },
         headers={
@@ -562,7 +836,8 @@ def test_approve_audit_captures_decision_inputs(
 
 
 def test_reject_schedules_lifecycle_sync_trigger(
-    override_deps, monkeypatch: pytest.MonkeyPatch,
+    override_deps,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The reject endpoint must fire the same debounced sync trigger
     the approve path uses, so the funnel metric view reflects
@@ -616,8 +891,9 @@ def test_reject_surfaces_503_on_lakebase_failure(override_deps) -> None:
     assert audit.list(limit=10) == []
 
 
-def test_approve_forwards_draft_body_into_audit_metadata(
-    override_deps, monkeypatch: pytest.MonkeyPatch,
+def test_approve_forwards_final_subject_and_body_into_audit_metadata(
+    override_deps,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Audit finding 2026-04-22: the Offer Orchestrator now forwards
     the approver's edited textarea body on approve. It must land in the
@@ -643,13 +919,95 @@ def test_approve_forwards_draft_body_into_audit_metadata(
         json={
             "borrower_id": "B-48291",
             "actor": "anonymous",
+            "draft_subject": "Your mortgage review",
             "draft_body": draft,
         },
     )
     assert resp.status_code == 200, resp.text
     events = audit.list(limit=5)
     assert len(events) == 1
+    assert events[0].payload_json.get("draft_subject") == "Your mortgage review"
     assert events[0].payload_json.get("draft_body") == draft
+
+
+@pytest.mark.parametrize(
+    "protected_copy",
+    [
+        "Women homeowners",
+        "African American homeowners",
+        "Latina homeowners",
+        "Catholic homeowners",
+        "Widowed homeowners",
+    ],
+)
+def test_approve_rejects_protected_class_language_before_write(
+    protected_copy: str,
+    override_deps,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    audit = InMemoryAuditStore()
+    fake_lakebase = MagicMock()
+    fake_lakebase.fetchone.side_effect = _fetchone_none_or_disclosure
+    monkeypatch.setattr(
+        outreach_mod,
+        "enqueue_lifecycle_trigger",
+        lambda background, *, reason="approval": None,
+    )
+    override_deps(audit=audit, lakebase=fake_lakebase)
+
+    response = TestClient(app).post(
+        "/api/outreach/approve",
+        json={
+            "borrower_id": "B-48291",
+            "draft_subject": "Your mortgage review",
+            "draft_body": f"{protected_copy} should call for a review. {DISCLOSURE_BODY}",
+        },
+    )
+
+    assert response.status_code == 422
+    assert "protected-class" in response.json()["detail"]
+    assert audit.list(limit=5) == []
+
+
+@pytest.mark.parametrize(
+    "unsafe_copy",
+    [
+        "You are pre-approved. Review your options today.",
+        "Ask about our best rate. Schedule a review.",
+        "Act now before this limited-time opportunity expires. Call today.",
+        "Senior citizens should contact us for a review.",
+        "We prioritize borrowers by source of income. Schedule a review.",
+        "Contact John Smith to discuss your options.",
+        "contact john smith to discuss your options.",
+        "CONTACT JOHN SMITH to discuss your options.",
+    ],
+)
+def test_approve_rejects_unsupported_or_identity_shaped_borrower_copy_before_write(
+    unsafe_copy: str,
+    override_deps,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    audit = InMemoryAuditStore()
+    fake_lakebase = MagicMock()
+    fake_lakebase.fetchone.side_effect = _fetchone_none_or_disclosure
+    monkeypatch.setattr(
+        outreach_mod,
+        "enqueue_lifecycle_trigger",
+        lambda background, *, reason="approval": None,
+    )
+    override_deps(audit=audit, lakebase=fake_lakebase)
+
+    response = TestClient(app).post(
+        "/api/outreach/approve",
+        json={
+            "borrower_id": "B-48291",
+            "draft_subject": "Your mortgage review",
+            "draft_body": f"{unsafe_copy} {DISCLOSURE_BODY}",
+        },
+    )
+
+    assert response.status_code == 422, response.text
+    assert audit.list(limit=5) == []
 
 
 # ---------------------------------------------------------------------------
@@ -658,7 +1016,8 @@ def test_approve_forwards_draft_body_into_audit_metadata(
 
 
 def test_approve_idempotent_on_retry_with_same_request_id(
-    override_deps, monkeypatch: pytest.MonkeyPatch,
+    override_deps,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """R5-01: a second /approve with the same ``request_id`` must NOT
     write a second row. The first call inserts; the second looks up the
@@ -673,13 +1032,7 @@ def test_approve_idempotent_on_retry_with_same_request_id(
     inserted: dict[str, dict[str, Any]] = {}
 
     def _execute(sql: str, params: dict[str, Any]) -> None:
-        if "INSERT INTO mip_app.approvals" in sql and params.get("request_id"):
-            inserted[params["request_id"]] = {
-                "approval_id": params["approval_id"],
-                "borrower_id": params["borrower_id"],
-                "action": params["action"],
-                "actor_email": params["actor_email"],
-            }
+        _record_non_atomic_approval(inserted, sql, params)
 
     def _fetchone(sql: str, params: dict[str, Any]) -> dict[str, Any] | None:
         if "FROM mip_app.tenant_disclosures" in sql:
@@ -707,20 +1060,37 @@ def test_approve_idempotent_on_retry_with_same_request_id(
         "borrower_id": "B-48291",
         "actor": "anonymous",
         "request_id": "22222222-2222-4222-8222-222222222222",
+        "draft_subject": "Your mortgage review",
         "draft_body": APPROVAL_DRAFT_BODY,
     }
     first = client.post("/api/outreach/approve", json=body)
+    repo = app.dependency_overrides[get_outreach_repository]()
+    borrower_lookup = MagicMock(side_effect=AssertionError("replay queried mutable UC borrower"))
+    monkeypatch.setattr(repo, "find_borrower", borrower_lookup)
     second = client.post("/api/outreach/approve", json=body)
+    payload_conflict = client.post(
+        "/api/outreach/approve",
+        json={**body, "rationale": "A different reviewed decision"},
+    )
+    actor_conflict = client.post(
+        "/api/outreach/approve",
+        json=body,
+        headers={"X-Forwarded-Email": "other@example.com"},
+    )
 
     assert first.status_code == 200, first.text
     assert second.status_code == 200, second.text
+    assert payload_conflict.status_code == 409, payload_conflict.text
+    assert actor_conflict.status_code == 409, actor_conflict.text
     # Same approval_id returned on both calls -- the idempotency
     # contract's observable guarantee.
     assert first.json()["approval_id"] == second.json()["approval_id"]
+    borrower_lookup.assert_not_called()
 
     # Exactly one INSERT -- the second call short-circuited.
     approval_inserts = [
-        call for call in fake_lakebase.execute.call_args_list
+        call
+        for call in fake_lakebase.execute.call_args_list
         if "INSERT INTO mip_app.approvals" in call.args[0]
     ]
     assert len(approval_inserts) == 1
@@ -732,20 +1102,15 @@ def test_approve_idempotent_on_retry_with_same_request_id(
 
 
 def test_reject_idempotent_on_retry_with_same_request_id(
-    override_deps, monkeypatch: pytest.MonkeyPatch,
+    override_deps,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Reject-path twin of the approve idempotency test above."""
     audit = InMemoryAuditStore()
     inserted: dict[str, dict[str, Any]] = {}
 
     def _execute(sql: str, params: dict[str, Any]) -> None:
-        if "INSERT INTO mip_app.approvals" in sql and params.get("request_id"):
-            inserted[params["request_id"]] = {
-                "approval_id": params["approval_id"],
-                "borrower_id": params["borrower_id"],
-                "action": params["action"],
-                "actor_email": params["actor_email"],
-            }
+        _record_non_atomic_approval(inserted, sql, params)
 
     def _fetchone(sql: str, params: dict[str, Any]) -> dict[str, Any] | None:
         if "FROM mip_app.tenant_disclosures" in sql:
@@ -775,14 +1140,27 @@ def test_reject_idempotent_on_retry_with_same_request_id(
         "request_id": "33333333-3333-4333-8333-333333333333",
     }
     first = client.post("/api/outreach/reject", json=body)
+    repo = app.dependency_overrides[get_outreach_repository]()
+    borrower_lookup = MagicMock(side_effect=AssertionError("replay queried mutable UC borrower"))
+    campaign_lookup = MagicMock(side_effect=AssertionError("replay queried mutable campaign state"))
+    monkeypatch.setattr(repo, "find_borrower", borrower_lookup)
+    monkeypatch.setattr(outreach_mod, "_resolve_governed_campaign_variant", campaign_lookup)
     second = client.post("/api/outreach/reject", json=body)
+    payload_conflict = client.post(
+        "/api/outreach/reject",
+        json={**body, "rationale_code": "data_quality"},
+    )
 
     assert first.status_code == 200, first.text
     assert second.status_code == 200, second.text
+    assert payload_conflict.status_code == 409, payload_conflict.text
     assert first.json()["approval_id"] == second.json()["approval_id"]
+    campaign_lookup.assert_not_called()
+    borrower_lookup.assert_not_called()
 
     approval_inserts = [
-        call for call in fake_lakebase.execute.call_args_list
+        call
+        for call in fake_lakebase.execute.call_args_list
         if "INSERT INTO mip_app.approvals" in call.args[0]
     ]
     assert len(approval_inserts) == 1
@@ -790,7 +1168,8 @@ def test_reject_idempotent_on_retry_with_same_request_id(
 
 
 def test_request_id_conflict_for_different_decision_is_rejected(
-    override_deps, monkeypatch: pytest.MonkeyPatch,
+    override_deps,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     audit = InMemoryAuditStore()
     fake_lakebase = MagicMock()
@@ -813,6 +1192,7 @@ def test_request_id_conflict_for_different_decision_is_rejected(
         json={
             "borrower_id": "B-48291",
             "request_id": "44444444-4444-4444-8444-444444444444",
+            "draft_subject": "Your mortgage review",
             "draft_body": APPROVAL_DRAFT_BODY,
         },
         headers={"X-Forwarded-Email": "lo@example.com"},
@@ -824,28 +1204,136 @@ def test_request_id_conflict_for_different_decision_is_rejected(
     assert audit.list(limit=10) == []
 
 
-def test_approve_without_request_id_same_minute_collapses_to_one_row(
-    override_deps, monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ("path", "payload", "response_flag"),
+    [
+        (
+            "/api/outreach/approve",
+            {
+                "borrower_id": "B-48291",
+                "offer_code": "heloc",
+                "channel": "email",
+                "rationale": "Reviewed by the operator",
+                "draft_subject": "Your mortgage review",
+                "draft_body": APPROVAL_DRAFT_BODY,
+                "assigned_to_email": "lo01@summit.example",
+                "follow_up_in_days": 3,
+                "request_id": "88888888-8888-4888-8888-888888888881",
+            },
+            "approved",
+        ),
+        (
+            "/api/outreach/reject",
+            {
+                "borrower_id": "B-48291",
+                "offer_code": "heloc",
+                "channel": "email",
+                "rationale_code": "low_intent",
+                "rationale": "Reviewed by the operator",
+                "request_id": "88888888-8888-4888-8888-888888888882",
+            },
+            "rejected",
+        ),
+    ],
+)
+def test_concurrent_decision_replay_returns_complete_winner_once(
+    path: str,
+    payload: dict[str, Any],
+    response_flag: str,
+    override_deps,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lakebase = _ConcurrentDecisionLakebase()
+    monkeypatch.setattr(
+        outreach_mod,
+        "enqueue_lifecycle_trigger",
+        lambda background, *, reason="approval": None,
+    )
+    override_deps(audit=InMemoryAuditStore(), lakebase=lakebase)
+    headers = {"X-Forwarded-Email": "lo@example.com"}
+
+    def _post(_: int) -> Any:
+        return TestClient(app).post(path, json=payload, headers=headers)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        responses = list(pool.map(_post, range(8)))
+
+    assert {response.status_code for response in responses} == {200}
+    bodies = [response.json() for response in responses]
+    assert all(body == bodies[0] for body in bodies)
+    assert bodies[0][response_flag] is True
+    assert bodies[0]["approval_id"]
+    assert bodies[0]["audit_event_id"]
+    if response_flag == "approved":
+        assert bodies[0]["assigned_to_email"] == "lo01@summit.example"
+        assert bodies[0]["follow_up_at"] is not None
+    assert len(lakebase.approvals) == 1
+    assert lakebase.audit_count == 1
+
+    mismatch = dict(payload)
+    if response_flag == "approved":
+        mismatch["rationale"] = "A different reviewed decision"
+    else:
+        mismatch["rationale_code"] = "data_quality"
+    conflict = TestClient(app).post(path, json=mismatch, headers=headers)
+    assert conflict.status_code == 409
+    assert "different outreach decision" in conflict.json()["detail"]
+    assert len(lakebase.approvals) == 1
+    assert lakebase.audit_count == 1
+
+
+def test_fallback_request_id_binds_the_full_decision_payload(
+    override_deps,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lakebase = _ConcurrentDecisionLakebase()
+    monkeypatch.setattr(
+        outreach_mod,
+        "enqueue_lifecycle_trigger",
+        lambda background, *, reason="approval": None,
+    )
+    override_deps(audit=InMemoryAuditStore(), lakebase=lakebase)
+    base = {
+        "borrower_id": "B-48291",
+        "draft_subject": "Your mortgage review",
+        "draft_body": APPROVAL_DRAFT_BODY,
+    }
+    headers = {"X-Forwarded-Email": "lo@example.com"}
+
+    first = TestClient(app).post(
+        "/api/outreach/approve",
+        json={**base, "rationale": "First reviewed intent"},
+        headers=headers,
+    )
+    second = TestClient(app).post(
+        "/api/outreach/approve",
+        json={**base, "rationale": "Second reviewed intent"},
+        headers=headers,
+    )
+
+    assert first.status_code == second.status_code == 200
+    assert first.json()["approval_id"] != second.json()["approval_id"]
+    assert len(lakebase.approvals) == 2
+    assert len(set(lakebase.approvals)) == 2
+    assert lakebase.audit_count == 2
+
+
+def test_approve_without_request_id_repeated_payload_collapses_to_one_row(
+    override_deps,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """R6-19: legacy callers that omit ``request_id`` get a server-derived
-    deterministic fallback keyed on (actor, borrower, action, minute).
+    deterministic fallback keyed on the complete decision intent.
 
-    Two same-minute POSTs from the same actor for the same borrower now
-    collapse to one row (matches operator intent: a double-click should
-    not double-book). Cross-minute retries stay distinct -- the test
-    below covers that.
+    Repeated POSTs from the same actor for the same decision collapse to one
+    row regardless of retry timing. A distinct intentional decision requires
+    an explicit new request id.
     """
     audit = InMemoryAuditStore()
     inserted: dict[str, dict[str, Any]] = {}
 
     def _execute(sql: str, params: dict[str, Any]) -> None:
-        if "INSERT INTO mip_app.approvals" in sql and params.get("request_id"):
-            inserted[params["request_id"]] = {
-                "approval_id": params["approval_id"],
-                "borrower_id": params["borrower_id"],
-                "action": params["action"],
-                "actor_email": params["actor_email"],
-            }
+        _record_non_atomic_approval(inserted, sql, params)
 
     def _fetchone(sql: str, params: dict[str, Any]) -> dict[str, Any] | None:
         if "FROM mip_app.tenant_disclosures" in sql:
@@ -865,86 +1353,106 @@ def test_approve_without_request_id_same_minute_collapses_to_one_row(
         "enqueue_lifecycle_trigger",
         lambda background, *, reason="approval": None,
     )
-    # Pin the clock so both POSTs land in the same minute-bucket.
-    monkeypatch.setattr(outreach_mod.time, "time", lambda: 1_700_000_000.0)
     override_deps(audit=audit, lakebase=fake_lakebase)
 
     client = TestClient(app)
-    body = {"borrower_id": "B-48291", "draft_body": APPROVAL_DRAFT_BODY}
+    body = {
+        "borrower_id": "B-48291",
+        "draft_subject": "Your mortgage review",
+        "draft_body": APPROVAL_DRAFT_BODY,
+    }
     headers = {"X-Forwarded-Email": "lo@example.com"}
     first = client.post("/api/outreach/approve", json=body, headers=headers)
     second = client.post("/api/outreach/approve", json=body, headers=headers)
 
     assert first.status_code == 200
     assert second.status_code == 200
-    # Same-minute duplicates collapse to one approval_id.
+    # Identical no-key retries collapse to one approval_id.
     assert first.json()["approval_id"] == second.json()["approval_id"]
     # Exactly one INSERT -- the second call short-circuited via the
     # server-derived fallback key.
     approval_inserts = [
-        call for call in fake_lakebase.execute.call_args_list
+        call
+        for call in fake_lakebase.execute.call_args_list
         if "INSERT INTO mip_app.approvals" in call.args[0]
     ]
     assert len(approval_inserts) == 1
 
 
-def test_approve_without_request_id_cross_minute_produces_two_rows(
-    override_deps, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """R6-19 cross-minute contract: an explicit re-submit ~60s later
-    intentionally opens a new decision -- the fallback key changes
-    bucket so the second POST writes a distinct row.
-    """
-    audit = InMemoryAuditStore()
-    inserted: dict[str, dict[str, Any]] = {}
+def test_fallback_request_id_has_no_clock_boundary() -> None:
+    intent = '{"borrower_id":"B-48291","rationale":"reviewed"}'
 
-    def _execute(sql: str, params: dict[str, Any]) -> None:
-        if "INSERT INTO mip_app.approvals" in sql and params.get("request_id"):
-            inserted[params["request_id"]] = {
-                "approval_id": params["approval_id"],
-                "borrower_id": params["borrower_id"],
-                "action": params["action"],
-                "actor_email": params["actor_email"],
-            }
-
-    def _fetchone(sql: str, params: dict[str, Any]) -> dict[str, Any] | None:
-        if "FROM mip_app.tenant_disclosures" in sql:
-            return _disclosure_row(params)
-        if "WHERE request_id" in sql:
-            rid = params.get("request_id")
-            if rid and rid in inserted:
-                return inserted[rid]
-        return None
-
-    fake_lakebase = MagicMock()
-    fake_lakebase.execute.side_effect = _execute
-    fake_lakebase.fetchone.side_effect = _fetchone
-
-    # Start clock, bump 61s between calls.
-    clock = {"t": 1_700_000_000.0}
-    monkeypatch.setattr(outreach_mod.time, "time", lambda: clock["t"])
-    monkeypatch.setattr(
-        outreach_mod,
-        "enqueue_lifecycle_trigger",
-        lambda background, *, reason="approval": None,
+    first = outreach_mod._derive_fallback_request_id(
+        actor="lo@example.com",
+        action="approve",
+        decision_intent=intent,
     )
-    override_deps(audit=audit, lakebase=fake_lakebase)
+    retry = outreach_mod._derive_fallback_request_id(
+        actor="lo@example.com",
+        action="approve",
+        decision_intent=intent,
+    )
 
-    client = TestClient(app)
-    body = {"borrower_id": "B-48291", "draft_body": APPROVAL_DRAFT_BODY}
-    headers = {"X-Forwarded-Email": "lo@example.com"}
-    first = client.post("/api/outreach/approve", json=body, headers=headers)
-    clock["t"] += 61.0  # bump to the next minute bucket
-    second = client.post("/api/outreach/approve", json=body, headers=headers)
+    assert first == retry
 
-    assert first.status_code == 200
-    assert second.status_code == 200
-    assert first.json()["approval_id"] != second.json()["approval_id"]
-    approval_inserts = [
-        call for call in fake_lakebase.execute.call_args_list
-        if "INSERT INTO mip_app.approvals" in call.args[0]
-    ]
-    assert len(approval_inserts) == 2
+
+@pytest.mark.parametrize(
+    ("campaign_id", "owner_claim"),
+    [
+        (None, None),
+        ("11111111-1111-4111-8111-111111111111", "owner@example.com"),
+    ],
+)
+def test_owner_claim_upgrade_preserves_no_key_replay(
+    campaign_id: str | None,
+    owner_claim: str | None,
+) -> None:
+    legacy_payload = {
+        "action": "approve",
+        "actor": "lo@example.com",
+        "borrower_id": "B-48291",
+        "campaign_id": campaign_id,
+        "rationale": "reviewed",
+    }
+    legacy_intent = outreach_mod._canonical_intent(legacy_payload)
+    current_intent = outreach_mod._canonical_intent(
+        {**legacy_payload, "campaign_owner_email": owner_claim}
+    )
+
+    legacy_key = outreach_mod._derive_fallback_request_id(
+        actor="lo@example.com",
+        action="approve",
+        decision_intent=legacy_intent,
+    )
+    current_key = outreach_mod._derive_fallback_request_id(
+        actor="lo@example.com",
+        action="approve",
+        decision_intent=current_intent,
+    )
+    assert current_key == legacy_key
+
+    stored_response = {
+        "approved": True,
+        "approval_id": "11111111-1111-4111-8111-111111111112",
+        "audit_event_id": "11111111-1111-4111-8111-111111111113",
+    }
+    replay = outreach_mod._existing_approval_response_or_conflict(
+        {
+            "approval_id": stored_response["approval_id"],
+            "actor_email": "lo@example.com",
+            "borrower_id": "B-48291",
+            "action": "approve",
+            "decision_intent": legacy_intent,
+            "decision_payload_hash": outreach_mod._intent_hash(legacy_intent),
+            "decision_response": stored_response,
+            "audit_event_id": stored_response["audit_event_id"],
+        },
+        actor="lo@example.com",
+        borrower_id="B-48291",
+        action="approve",
+        expected_intent=current_intent,
+    )
+    assert replay == stored_response
 
 
 # ---------------------------------------------------------------------------
@@ -953,7 +1461,9 @@ def test_approve_without_request_id_cross_minute_produces_two_rows(
 
 
 def test_approve_body_not_in_logs(
-    override_deps, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    override_deps,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """R5-23: if anyone ever cranks log level to DEBUG, request bodies
     must not leak to stdout / log fixtures. We POST a draft_body
@@ -982,13 +1492,15 @@ def test_approve_body_not_in_logs(
     client = TestClient(app)
 
     import logging as _logging
+
     caplog.set_level(_logging.DEBUG)
     resp = client.post(
         "/api/outreach/approve",
         json={
             "borrower_id": "B-48291",
             "actor": f"{sentinel}@example.com",
-            "draft_body": f"{sentinel} {APPROVAL_DRAFT_BODY}",
+            "draft_subject": "Your mortgage review",
+            "draft_body": f"{sentinel}. {APPROVAL_DRAFT_BODY}",
         },
     )
     assert resp.status_code == 200, resp.text
@@ -1005,60 +1517,24 @@ def test_approve_body_not_in_logs(
         # Also check the structured extras the emit() helper attaches.
         for key, value in record.__dict__.items():
             if isinstance(value, str):
-                assert sentinel not in value, (
-                    f"leaked request body into log extra {key!r}: {value!r}"
-                )
+                assert (
+                    sentinel not in value
+                ), f"leaked request body into log extra {key!r}: {value!r}"
 
 
-def test_safe_audit_write_broadened_exception_scope(
-    override_deps, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+def test_generated_draft_fails_closed_when_durable_proof_cannot_be_written(
+    override_deps,
 ) -> None:
-    """R5-18: ``_safe_audit_write`` must catch ANY exception (not just
-    LakebaseError) and emit ``event=audit.dropped`` with the exception
-    class name -- never ``str(exc)``.
-    """
-    # Build a lakebase + audit store that lets approve write succeed,
-    # but patch the shared resolver for the DRAFT path's audit write
-    # to raise a non-LakebaseError. The draft endpoint's
-    # _safe_audit_write runs on BackgroundTasks and must swallow the
-    # failure + emit the structured event.
-    class _ExplodingAuditStore:
-        def write(self, **kwargs: Any) -> Any:
-            raise RuntimeError("shouldnt-leak-this-message-r5-18")
-
-        def list(self, limit: int = 50) -> list[Any]:
-            return []
-
+    audit = InMemoryAuditStore()
     fake_lakebase = MagicMock()
     fake_lakebase.fetchone.side_effect = _fetchone_none_or_disclosure
-    override_deps(audit=_ExplodingAuditStore(), lakebase=fake_lakebase)
+    override_deps(audit=audit, lakebase=fake_lakebase)
 
-    import logging as _logging
-    # emit() logs at INFO by default; caplog must be at INFO or
-    # below to observe it. The R5-23 concern is "operator cranks to
-    # DEBUG and PII leaks" -- INFO is a fortiori covered.
-    caplog.set_level(_logging.DEBUG)
-    client = TestClient(app)
-    resp = client.post(
+    response = TestClient(app).post(
         "/api/outreach/draft",
         json={"borrower_id": "B-48291", "channel": "email"},
     )
-    # Draft path still returns 200 -- the broken audit is a
-    # background-task failure that must not break the user path.
-    assert resp.status_code == 200
 
-    # The audit.dropped event WAS emitted with the exception class name.
-    # ``emit`` attaches the structured payload under ``mip_event`` +
-    # ``mip_extras`` -- see backend/services/observability.py::emit.
-    dropped = [
-        r for r in caplog.records
-        if getattr(r, "mip_event", "") == "audit.dropped"
-    ]
-    assert dropped, "expected an audit.dropped structured log record"
-    extras = getattr(dropped[0], "mip_extras", {}) or {}
-    assert extras.get("exc_type") == "RuntimeError"
-
-    # The exception MESSAGE must NOT appear anywhere in captured logs
-    # -- only the class name. This is the PII-safety contract.
-    for record in caplog.records:
-        assert "shouldnt-leak-this-message-r5-18" not in record.getMessage()
+    assert response.status_code == 503
+    assert response.json()["detail"] == "lakebase is temporarily unavailable"
+    assert audit.list(limit=10) == []

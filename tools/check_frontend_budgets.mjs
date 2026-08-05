@@ -43,8 +43,13 @@ const budgets = {
   // index instead of emitting it separately, so index raw/gzip increases while
   // total JS remains below the existing total budget. Re-baseline index with
   // ~5% headroom on the measured post-patch actual.
-  initialJsBytes: 393 * KiB, // actual 373.76
-  initialJsGzipBytes: 122 * KiB, // actual 115.43
+  // Re-baselined 2026-07-13 for the intelligence + trust UX slice. The shell
+  // now carries the reviewed 48-asset evidence-destination registry so every
+  // evidence chip and lineage node can resolve immediately and consistently,
+  // plus native Genie feedback and the shared offer/campaign evidence controls.
+  // Measured: initial JS 396.40 / gzip 119.85; restore ~5% headroom per policy.
+  initialJsBytes: 417 * KiB, // actual 396.40
+  initialJsGzipBytes: 126 * KiB, // actual 119.85
   // Bumped 2026-06-11 for the re-audit #4 Buyer-Wow tranche: ⌘K command
   // palette (.cmdk*), portal evidence hover-card (.evidence-hovercard*),
   // sleek one-time KPI entrance (.kpi__value--enter / .spark__line--draw),
@@ -69,15 +74,36 @@ const budgets = {
   // and the Today's-top-leads quick-pick). The initial-CSS gates had drifted
   // thin on main; restore ~5% headroom per this file's policy. Measured: CSS
   // 134.24 / gzip 22.97.
-  initialCssBytes: 141 * KiB, // actual 134.24
-  initialCssGzipBytes: 25 * KiB, // actual 22.97
+  // Re-baselined 2026-07-15 after the intelligence + trust UX and signed
+  // campaign-handoff slices settled. The inherited 141 KiB gate left only
+  // 0.05 KiB above the measured artifact, violating the documented ~5%
+  // cross-platform headroom policy. Measured: CSS 140.95 / gzip 23.89.
+  initialCssBytes: 148 * KiB, // actual 140.95
+  initialCssGzipBytes: 25 * KiB, // actual 23.89
   // Re-baselined 2026-07-10 for the UX declutter slice (batches 1-2). total JS
   // was red on main (990.51 > 990.00); restored ~5% headroom over the measured
   // actual per this file's policy. Batch 2 (asset-label helper, top-leads
   // quick-pick) nudged totals within that headroom. Measured: total JS 992.92 /
   // gzip 323.76 (38 chunks).
-  totalJsBytes: 1041 * KiB, // actual 992.92
-  totalJsGzipBytes: 339 * KiB, // actual 323.76
+  // Re-baselined 2026-07-13 for the intelligence + trust UX slice: governed
+  // asset links and lineage parity, the admin audit explorer, data-backed
+  // campaign economics and Supervisor recommendations, offer-copy evidence,
+  // and Genie reasoning/feedback affordances. Measured after the file-size
+  // refactor: total JS 1050.03 / gzip 340.53 across 41 chunks. Restore the
+  // documented ~5% headroom for
+  // both aggregate dimensions; the initial, lazy-chunk, CSS, and font gates
+  // remain unchanged.
+  // Re-baselined 2026-07-15 for the signed Growth Agent cohort handoff and
+  // campaign-variant approval provenance. The UI now carries and verifies the
+  // opaque handoff proof, exposes stale-proof recovery, and preserves the
+  // selected governed campaign variant through draft/approval/rejection.
+  // Measured after the cohort-proof and public Agent Responses hardening:
+  // total JS 1113.49 KiB / gzip 358.35 KiB across 41 chunks. Keep the same
+  // documented ~5% headroom on both raw and compressed totals; this also
+  // absorbs the zlib platform variance called out above without weakening the
+  // initial-bundle or largest-lazy-chunk gates.
+  totalJsBytes: 1170 * KiB, // actual 1113.49
+  totalJsGzipBytes: 377 * KiB, // actual 358.35
   maxLazyJsBytes: 104 * KiB, // actual 98.40 (was 160 -- tightened)
   maxLazyJsGzipBytes: 34 * KiB, // actual 32.06 (was 60 -- tightened)
   fontAssetCount: 14, // exact by policy

@@ -4,7 +4,13 @@ import re
 
 from pydantic import BaseModel, Field
 
-from backend.schemas._validators import configured_public_lender_name
+from backend.schemas._validators import (
+    configured_public_lender_name,
+    contains_human_name_shape,
+    contains_mechanical_pii_or_raw_identifier,
+    contains_prompt_injection_text,
+    contains_protected_class_marketing_text,
+)
 
 PUBLIC_BORROWER_ID_PATTERN = re.compile(r"^B-[A-Za-z0-9][A-Za-z0-9_-]{0,126}$")
 PUBLIC_UUID_PATTERN = re.compile(
@@ -18,9 +24,7 @@ PUBLIC_SERVER_ID_PATTERN = re.compile(
     r"[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$"
 )
 PUBLIC_AUDIT_TEXT_PATTERN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_,.:+-]{0,127}$")
-PUBLIC_AUDIT_ACTION_PATTERN = re.compile(
-    r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$"
-)
+PUBLIC_AUDIT_ACTION_PATTERN = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$")
 PUBLIC_AUDIT_EVENT_TYPE_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]{0,127}$")
 PUBLIC_AUDIT_ENTITY_TYPE_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 PUBLIC_AUDIT_SEGMENT_PATTERN = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
@@ -32,9 +36,7 @@ PUBLIC_INTERNAL_STAFF_EMAIL_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _SSN_PATTERN = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
-_PHONE_PATTERN = re.compile(
-    r"(?<!\d)(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}(?!\d)"
-)
+_PHONE_PATTERN = re.compile(r"(?<!\d)(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}(?!\d)")
 _STREET_ADDRESS_PATTERN = re.compile(
     r"\b\d{1,6}\s+[A-Za-z0-9.'-]+\s+"
     r"(?:st|street|ave|avenue|rd|road|dr|drive|ln|lane|blvd|boulevard|ct|court|way)\b",
@@ -69,6 +71,7 @@ _PUBLIC_CAMPAIGN_LABEL_WORD_ALLOWLIST: frozenset[str] = frozenset(
         "Equity",
         "Former",
         "Home",
+        "HELOC",
         "Investor",
         "Loan",
         "Mortgage",
@@ -88,6 +91,7 @@ _PUBLIC_CAMPAIGN_LABEL_WORD_ALLOWLIST: frozenset[str] = frozenset(
         "Weekly",
     }
 )
+_PUBLIC_LABEL_SUFFIXES = frozenset({"brief", "campaign", "monitor", "watch"})
 
 
 def validate_public_borrower_id(value: str) -> str:
@@ -114,9 +118,7 @@ def contains_pii_marker(value: str) -> bool:
 
     text = str(value)
     return bool(
-        _EMAIL_PATTERN.search(text)
-        or _SSN_PATTERN.search(text)
-        or _PHONE_PATTERN.search(text)
+        _EMAIL_PATTERN.search(text) or _SSN_PATTERN.search(text) or _PHONE_PATTERN.search(text)
     )
 
 
@@ -158,8 +160,11 @@ def validate_public_campaign_label(value: str, *, field_name: str = "variant_nam
         raise ValueError(f"{field_name} must not be blank")
     if (
         contains_pii_marker(label)
+        or contains_mechanical_pii_or_raw_identifier(label)
         or _STREET_ADDRESS_PATTERN.search(label)
         or _UNRESOLVED_PLACEHOLDER_PATTERN.search(label)
+        or contains_prompt_injection_text(label)
+        or contains_protected_class_marketing_text(label)
     ):
         raise ValueError(f"{field_name} must not contain PII, raw identifiers, or placeholders")
     if not PUBLIC_CAMPAIGN_LABEL_PATTERN.fullmatch(label):
@@ -167,11 +172,18 @@ def validate_public_campaign_label(value: str, *, field_name: str = "variant_nam
     name_scan = label
     for phrase in (*_PUBLIC_CAMPAIGN_LABEL_PHRASE_ALLOWLIST, configured_public_lender_name()):
         name_scan = name_scan.replace(phrase, "")
+    if contains_human_name_shape(name_scan, include_titlecase=False):
+        raise ValueError(f"{field_name} must not contain human-name-shaped text")
     for match in _HUMAN_NAME_SHAPE_PATTERN.finditer(name_scan):
         words = [part.strip() for part in match.group(0).split() if part.strip()]
         if words and all(word in _PUBLIC_CAMPAIGN_LABEL_WORD_ALLOWLIST for word in words):
             continue
         raise ValueError(f"{field_name} must not contain human-name-shaped text")
+    words = re.findall(r"[A-Za-z]{2,30}", name_scan)
+    if len(words) == 3 and words[-1].casefold() in _PUBLIC_LABEL_SUFFIXES:
+        allowed_words = {word.casefold() for word in _PUBLIC_CAMPAIGN_LABEL_WORD_ALLOWLIST}
+        if all(word.casefold() not in allowed_words for word in words[:2]):
+            raise ValueError(f"{field_name} must not contain human-name-shaped text")
     return label
 
 
@@ -196,14 +208,43 @@ def validate_public_free_comment(
         raise ValueError(f"{field_name} must be at most {max_len} characters")
     if (
         contains_pii_marker(text)
+        or contains_mechanical_pii_or_raw_identifier(text)
         or _STREET_ADDRESS_PATTERN.search(text)
         or _UNRESOLVED_PLACEHOLDER_PATTERN.search(text)
+        or contains_prompt_injection_text(text)
+        or contains_protected_class_marketing_text(text)
     ):
         raise ValueError(f"{field_name} must not contain PII, raw identifiers, or placeholders")
     name_scan = text
     for phrase in (*_PUBLIC_CAMPAIGN_LABEL_PHRASE_ALLOWLIST, configured_public_lender_name()):
         name_scan = name_scan.replace(phrase, "")
-    if _HUMAN_NAME_SHAPE_PATTERN.search(name_scan):
+    if _HUMAN_NAME_SHAPE_PATTERN.search(name_scan) or contains_human_name_shape(
+        name_scan,
+        include_titlecase=False,
+    ):
+        raise ValueError(f"{field_name} must not contain human-name-shaped text")
+    return text
+
+
+def validate_no_human_name_shape(value: str, *, field_name: str) -> str:
+    """Reject human-name-shaped text while preserving later redaction inputs.
+
+    Saved workspace drafts retain the existing defense-in-depth redaction of
+    phone, email, SSN, and address text. Names cannot be reliably redacted, so
+    they are rejected before the draft reaches that persistence layer.
+    """
+
+    text = str(value).strip()
+    name_scan = text
+    for pattern in (_EMAIL_PATTERN, _SSN_PATTERN, _PHONE_PATTERN, _STREET_ADDRESS_PATTERN):
+        name_scan = pattern.sub(" [redacted] ", name_scan)
+    name_scan = _UNRESOLVED_PLACEHOLDER_PATTERN.sub(" [redacted] ", name_scan)
+    for phrase in (*_PUBLIC_CAMPAIGN_LABEL_PHRASE_ALLOWLIST, configured_public_lender_name()):
+        name_scan = name_scan.replace(phrase, "")
+    if _HUMAN_NAME_SHAPE_PATTERN.search(name_scan) or contains_human_name_shape(
+        name_scan,
+        include_titlecase=False,
+    ):
         raise ValueError(f"{field_name} must not contain human-name-shaped text")
     return text
 
@@ -259,7 +300,9 @@ def validate_public_audit_event_type(value: str) -> str:
 
 def validate_public_audit_entity_type(value: str) -> str:
     entity_type = str(value).strip()
-    if contains_pii_marker(entity_type) or not PUBLIC_AUDIT_ENTITY_TYPE_PATTERN.fullmatch(entity_type):
+    if contains_pii_marker(entity_type) or not PUBLIC_AUDIT_ENTITY_TYPE_PATTERN.fullmatch(
+        entity_type
+    ):
         raise ValueError("entity_type must be a lowercase machine slug")
     return entity_type
 

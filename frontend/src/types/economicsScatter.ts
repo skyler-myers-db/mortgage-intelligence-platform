@@ -6,8 +6,17 @@ export interface EquitySpreadPoint {
   equity_pct: number;
   rate_spread_bps: number;
   opportunity_score: number;
+  coordinate_total: number;
   score_band?: 'high' | 'med' | 'low' | null;
   in_the_money?: boolean | null;
+}
+
+export interface EquitySpreadCoordinateGroup {
+  key: string;
+  equity_pct: number;
+  rate_spread_bps: number;
+  coordinate_total: number;
+  points: EquitySpreadPoint[];
 }
 
 export interface EquitySpreadViewport {

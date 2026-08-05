@@ -1,4 +1,5 @@
-import { Link } from 'react-router-dom';
+import { useState } from 'react';
+import { Link } from 'react-router';
 import type { WarmingUpState } from '../lib/useWarmingUpRetry';
 import type { Borrower360 as Borrower360Type, OfferRecommendation } from '../types';
 import { BorrowerTruthFlags } from '../components/mortgage/BorrowerTruthFlags';
@@ -8,7 +9,7 @@ import { Icon } from '../components/Icon';
 import { Skeleton } from '../components/ui/Skeleton';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { Reveal } from '../components/fx/Reveal';
-import { descriptorFor } from '../lib/drawerSources';
+import { descriptorFor, drawerForAsset } from '../lib/drawerSources';
 import { offerDisplayLabel, offerRationale, offerShortDescription } from '../lib/offerLanguage';
 import {
   OUTREACH_CHANNELS,
@@ -137,21 +138,34 @@ interface OfferReviewGridProps {
   leadIsSaved: boolean;
   saveCurrentLead: () => void;
   draftWarming: WarmingUpState | null;
+  draftPending?: boolean;
   draftLoaded: boolean;
   draftError: string | null;
+  draftSubject: string;
   draftText: string;
-  onDraftChange: (body: string) => void;
   draftChannel: OutreachChannel;
+  allowedDraftChannels?: readonly OutreachChannel[];
+  draftDirty?: boolean;
+  draftProofFresh: boolean;
   onDraftChannelChange: (channel: OutreachChannel) => void;
   approving: boolean;
   draftDisclosureVersion: string | null;
   draftDisclosureState: string | null;
+  draftGeneratorLabel: string | null;
+  draftGenerationMode: 'supervisor' | 'governed_fallback' | null;
+  draftStrategy: string | null;
+  draftEvidence: string[];
+  draftEvidenceAssets: string[];
+  regenerateDraft: () => void;
   draftIsSaved: boolean;
   saveCurrentDraft: () => void;
+  draftSavePending?: boolean;
+  draftSaveError?: string | null;
   savedDraftExists: boolean;
   resetCurrentDraft: () => void;
   draftReady: boolean;
   borrowerId: string | null;
+  canAccessAdmin?: boolean;
 }
 
 export function OfferReviewGrid({
@@ -161,21 +175,34 @@ export function OfferReviewGrid({
   leadIsSaved,
   saveCurrentLead,
   draftWarming,
+  draftPending = false,
   draftLoaded,
   draftError,
+  draftSubject,
   draftText,
-  onDraftChange,
   draftChannel,
+  allowedDraftChannels,
+  draftDirty = false,
+  draftProofFresh,
   onDraftChannelChange,
   approving,
   draftDisclosureVersion,
   draftDisclosureState,
+  draftGeneratorLabel,
+  draftGenerationMode,
+  draftStrategy,
+  draftEvidence,
+  draftEvidenceAssets,
+  regenerateDraft,
   draftIsSaved,
   saveCurrentDraft,
+  draftSavePending = false,
+  draftSaveError = null,
   savedDraftExists,
   resetCurrentDraft,
   draftReady,
   borrowerId,
+  canAccessAdmin = false,
 }: OfferReviewGridProps) {
   return (
     <div className="layoutA-grid">
@@ -190,20 +217,33 @@ export function OfferReviewGrid({
         borrower={borrower}
         borrowerId={borrowerId}
         draftWarming={draftWarming}
+        draftPending={draftPending}
         draftLoaded={draftLoaded}
         draftError={draftError}
+        draftSubject={draftSubject}
         draftText={draftText}
-        onDraftChange={onDraftChange}
         draftChannel={draftChannel}
+        allowedDraftChannels={allowedDraftChannels}
+        draftDirty={draftDirty}
+        draftProofFresh={draftProofFresh}
         onDraftChannelChange={onDraftChannelChange}
         approving={approving}
         draftDisclosureVersion={draftDisclosureVersion}
         draftDisclosureState={draftDisclosureState}
+        draftGeneratorLabel={draftGeneratorLabel}
+        draftGenerationMode={draftGenerationMode}
+        draftStrategy={draftStrategy}
+        draftEvidence={draftEvidence}
+        draftEvidenceAssets={draftEvidenceAssets}
+        regenerateDraft={regenerateDraft}
         draftIsSaved={draftIsSaved}
         saveCurrentDraft={saveCurrentDraft}
+        draftSavePending={draftSavePending}
+        draftSaveError={draftSaveError}
         savedDraftExists={savedDraftExists}
         resetCurrentDraft={resetCurrentDraft}
         draftReady={draftReady}
+        canAccessAdmin={canAccessAdmin}
       />
     </div>
   );
@@ -301,46 +341,80 @@ interface DraftOutreachPanelProps {
   borrower: Borrower360Type | null;
   borrowerId: string | null;
   draftWarming: WarmingUpState | null;
+  draftPending?: boolean;
   draftLoaded: boolean;
   draftError: string | null;
+  draftSubject: string;
   draftText: string;
-  onDraftChange: (body: string) => void;
   draftChannel: OutreachChannel;
+  allowedDraftChannels?: readonly OutreachChannel[];
+  draftDirty?: boolean;
+  draftProofFresh: boolean;
   onDraftChannelChange: (channel: OutreachChannel) => void;
   approving: boolean;
   draftDisclosureVersion: string | null;
   draftDisclosureState: string | null;
+  draftGeneratorLabel: string | null;
+  draftGenerationMode: 'supervisor' | 'governed_fallback' | null;
+  draftStrategy: string | null;
+  draftEvidence: string[];
+  draftEvidenceAssets: string[];
+  regenerateDraft: () => void;
   draftIsSaved: boolean;
   saveCurrentDraft: () => void;
+  draftSavePending?: boolean;
+  draftSaveError?: string | null;
   savedDraftExists: boolean;
   resetCurrentDraft: () => void;
   draftReady: boolean;
+  canAccessAdmin?: boolean;
 }
 
 function DraftOutreachPanel({
   borrower,
   borrowerId,
   draftWarming,
+  draftPending = false,
   draftLoaded,
   draftError,
+  draftSubject,
   draftText,
-  onDraftChange,
   draftChannel,
+  allowedDraftChannels,
+  draftDirty = false,
+  draftProofFresh,
   onDraftChannelChange,
   approving,
   draftDisclosureVersion,
   draftDisclosureState,
+  draftGeneratorLabel,
+  draftGenerationMode,
+  draftStrategy,
+  draftEvidence,
+  draftEvidenceAssets,
+  regenerateDraft,
   draftIsSaved,
   saveCurrentDraft,
+  draftSavePending = false,
+  draftSaveError = null,
   savedDraftExists,
   resetCurrentDraft,
   draftReady,
+  canAccessAdmin = false,
 }: DraftOutreachPanelProps) {
+  const [regenerateReviewOpen, setRegenerateReviewOpen] = useState(false);
+  const [pendingChannel, setPendingChannel] = useState<OutreachChannel | null>(null);
+  const channelRestrictionNoteId = allowedDraftChannels
+    ? 'campaign-outreach-channel-restriction'
+    : undefined;
+  const allowedChannelLabels = allowedDraftChannels?.map((channel) => (
+    channel === 'direct_mail' ? 'Direct mail' : channel.toUpperCase()
+  ));
   return (
     <div className="surface">
       <div className="surface__hdr">
         <Icon name="doc" size={14} className="icon-accent" />
-        <div className="h-4">Draft outreach · review only</div>
+        <div className="h-4">Governed outreach · exact audited copy</div>
       </div>
       <div className="surface__body">
         {draftWarming && (
@@ -352,52 +426,196 @@ function DraftOutreachPanel({
             />
           </div>
         )}
-        {!draftLoaded && !draftWarming && borrower && (
+        {draftPending && !draftLoaded && !draftWarming && borrower && (
+          <div className="muted fs-12 mb-3" role="status" data-testid="draft-loading-note">
+            Loading audited outreach draft…
+          </div>
+        )}
+        {!draftLoaded && !draftWarming && !draftPending && borrower && (
           <div
             data-testid="draft-unavailable-note"
             className="status-callout status-callout--warning mb-3"
             role="alert"
           >
-            {draftError ?? 'Offer draft unavailable. Approval is disabled until the audited draft loads.'}
+            <span>{draftError ?? 'Offer draft unavailable. Approval is disabled until the audited draft loads.'}</span>
+            {draftError && (
+              <div className="chip-row mt-2">
+                <Button
+                  variant="default"
+                  size="sm"
+                  icon="play"
+                  onClick={regenerateDraft}
+                  disabled={approving || !borrowerId}
+                >
+                  Retry draft
+                </Button>
+              </div>
+            )}
           </div>
+        )}
+        {draftLoaded && !draftProofFresh && (
+          <div
+            data-testid="draft-proof-stale-note"
+            className="status-callout status-callout--warning mb-3"
+            role="alert"
+          >
+            <span>The borrower data changed after this draft was generated. Regenerate it before approval.</span>
+            <div className="chip-row mt-2">
+              <Button
+                variant="default"
+                size="sm"
+                icon="play"
+                onClick={regenerateDraft}
+                disabled={approving || draftSavePending || !borrowerId}
+              >
+                Regenerate draft
+              </Button>
+            </div>
+          </div>
+        )}
+        {draftChannel !== 'sms' && (
+          <label className="field mb-3">
+            <span className="field__label">Subject</span>
+            <input
+              aria-label="Outreach subject — review only"
+              value={draftSubject}
+              maxLength={120}
+              readOnly
+              disabled={!draftLoaded || draftSavePending}
+              data-testid="outreach-subject"
+            />
+          </label>
         )}
         <textarea
           key={borrower?.borrower_id ?? 'empty'}
           aria-label="Outreach draft — review only"
           value={draftText}
-          onChange={(e) => {
-            if (!draftLoaded) return;
-            onDraftChange(e.target.value);
-          }}
-          disabled={!draftLoaded}
+          readOnly
+          disabled={!draftLoaded || draftSavePending}
           data-testid="outreach-draft"
           className="route-textarea route-textarea--outreach"
         />
-        <div className="muted fs-11 mt-2">
-          Draft text is relationship-aware, disclosure-backed, and must be reviewed by a licensed officer before any external send.
-        </div>
-        <div className="chip-row mt-3">
-          {OUTREACH_CHANNELS.map((channel) => (
-            <Button
-              key={channel}
-              variant={draftChannel === channel ? 'primary' : 'ghost'}
-              size="sm"
-              onClick={() => {
-                onDraftChannelChange(channel);
-              }}
-              disabled={approving}
-            >
-              {channel === 'direct_mail' ? 'Direct mail' : channel.toUpperCase()}
-            </Button>
-          ))}
-          <Link
-            className="chip chip--neutral offer-cadence-link"
-            to="/admin-config#offer-rules"
-            title="Open governed offer rules for follow-up cadence context"
+        <p className="muted fs-12 mt-2">
+          Review the exact audited copy before approval. To change the message, regenerate a new
+          governed draft so its approval proof remains valid.
+        </p>
+        {draftGeneratorLabel && (
+          <div className="offer-message-intelligence mt-3" data-testid="offer-message-intelligence">
+            <div className="split-row">
+              <Chip
+                variant={!draftDirty && draftProofFresh && draftGenerationMode === 'supervisor' ? 'success' : 'neutral'}
+                icon={!draftDirty && draftProofFresh && draftGenerationMode === 'supervisor' ? 'sparkle' : 'doc'}
+              >
+                {draftGeneratorLabel}
+              </Chip>
+              <Button
+                variant="ghost"
+                size="sm"
+                icon="sparkle"
+                onClick={() => setRegenerateReviewOpen(true)}
+                disabled={approving || draftSavePending || !borrowerId}
+              >
+                Regenerate
+              </Button>
+            </div>
+            {regenerateReviewOpen && (
+              <div className="status-callout status-callout--warning" role="alert">
+                <span>Regenerating replaces the current audited subject and message.</span>
+                <div className="chip-row mt-2">
+                  <Button
+                    variant="default"
+                    size="sm"
+                    onClick={() => {
+                      setRegenerateReviewOpen(false);
+                      regenerateDraft();
+                    }}
+                  >
+                    Replace current draft
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setRegenerateReviewOpen(false)}
+                  >
+                    Keep current draft
+                  </Button>
+                </div>
+              </div>
+            )}
+            {draftStrategy && <p className="body flush">{draftStrategy}</p>}
+            {draftEvidence.length > 0 && (
+              <div className="chip-row" aria-label="Message evidence">
+                {draftEvidence.map((item) => (
+                  <Chip key={item} variant="neutral">{item}</Chip>
+                ))}
+              </div>
+            )}
+            {draftEvidenceAssets.length > 0 && (
+              <div className="chip-row" aria-label="Message source assets">
+                {draftEvidenceAssets.map((asset) => {
+                  const source = drawerForAsset(asset);
+                  return source ? (
+                    <EvidenceChip key={asset} source={source}>{asset}</EvidenceChip>
+                  ) : null;
+                })}
+              </div>
+            )}
+          </div>
+        )}
+        {allowedChannelLabels && (
+          <div
+            id={channelRestrictionNoteId}
+            className="status-callout status-callout--info mt-3"
+            role="status"
+            aria-live="polite"
+            data-testid="campaign-channel-restriction"
           >
-            <Icon name="link" size={10} />
-            <span className="chip__label">LO call follow-up within 5 days</span>
-          </Link>
+            This campaign handoff is limited to its saved audited
+            {' '}{allowedChannelLabels.join(' and ')} copy. Other channels require separately
+            saved campaign variants.
+          </div>
+        )}
+        <div className="chip-row mt-3">
+          {OUTREACH_CHANNELS.map((channel) => {
+            const channelAvailable = !allowedDraftChannels
+              || allowedDraftChannels.includes(channel);
+            const label = channel === 'direct_mail' ? 'Direct mail' : channel.toUpperCase();
+            return (
+              <Button
+                key={channel}
+                variant={draftChannel === channel ? 'primary' : 'ghost'}
+                size="sm"
+                onClick={() => {
+                  if (!channelAvailable || channel === draftChannel) return;
+                  if (draftDirty) {
+                    setPendingChannel(channel);
+                    return;
+                  }
+                  onDraftChannelChange(channel);
+                }}
+                disabled={approving || draftSavePending || !channelAvailable}
+                aria-disabled={!channelAvailable || undefined}
+                aria-describedby={!channelAvailable ? channelRestrictionNoteId : undefined}
+                title={!channelAvailable
+                  ? `${label} is unavailable because this campaign has no saved audited ${label} variant.`
+                  : undefined}
+              >
+                {label}
+              </Button>
+            );
+          })}
+          {canAccessAdmin ? (
+            <Link
+              className="chip chip--neutral offer-cadence-link"
+              to="/admin-config#offer-rules"
+              title="Open governed offer rules for follow-up cadence context"
+            >
+              <Icon name="link" size={10} />
+              <span className="chip__label">LO call follow-up within 5 days</span>
+            </Link>
+          ) : (
+            <Chip variant="neutral">LO call follow-up within 5 days</Chip>
+          )}
           {draftDisclosureVersion && (
             <Chip variant="success" icon="shield">
               Disclosure {draftDisclosureVersion} · {draftDisclosureState ?? 'state fallback'}
@@ -407,11 +625,11 @@ function DraftOutreachPanel({
             variant={draftIsSaved ? 'ghost' : 'default'}
             size="sm"
             icon={draftIsSaved ? 'check' : 'doc'}
-            onClick={saveCurrentDraft}
-            disabled={!borrowerId || !draftReady}
+            onClick={() => void saveCurrentDraft()}
+            disabled={!borrowerId || !draftReady || draftDirty || draftSavePending}
             aria-label={`Save outreach draft for ${borrowerId ?? 'borrower'}`}
           >
-            {draftIsSaved ? 'Draft saved' : 'Save draft'}
+            {draftSavePending ? 'Saving…' : draftIsSaved ? 'Draft saved' : 'Save draft'}
           </Button>
           {savedDraftExists && (
             <Button
@@ -419,12 +637,47 @@ function DraftOutreachPanel({
               size="sm"
               icon="cross"
               onClick={resetCurrentDraft}
+              disabled={draftSavePending}
               aria-label={`Reset saved outreach draft for ${borrowerId ?? 'borrower'}`}
             >
               Reset draft
             </Button>
           )}
         </div>
+        {draftSaveError && (
+          <div className="status-callout status-callout--danger mt-3" role="alert">
+            {draftSaveError}
+          </div>
+        )}
+        {pendingChannel && (
+          <div className="status-callout status-callout--warning mt-3" role="alert">
+            <span>
+              Switching to {pendingChannel === 'direct_mail' ? 'direct mail' : pendingChannel.toUpperCase()}
+              {' '}replaces the current audited subject and message.
+            </span>
+            <div className="chip-row mt-2">
+              <Button
+                variant="default"
+                size="sm"
+                onClick={() => {
+                  const channel = pendingChannel;
+                  setPendingChannel(null);
+                  onDraftChannelChange(channel);
+                }}
+                disabled={draftSavePending}
+              >
+                Switch channel
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setPendingChannel(null)}
+              >
+                Keep current copy
+              </Button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

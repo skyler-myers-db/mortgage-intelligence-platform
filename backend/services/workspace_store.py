@@ -6,16 +6,20 @@ location, and offer metadata. Draft free text is scrubbed before Lakebase
 storage, and every state-changing statement includes an action_audit
 insert in the same SQL statement.
 """
+
 from __future__ import annotations
 
 import json
+import logging
 from datetime import UTC, datetime
 from typing import Any, Protocol, runtime_checkable
 from uuid import uuid4
 
+from pydantic import ValidationError
+
 from backend.schemas.workspace import (
     SavedDraft,
-    SavedDraftInput,
+    SavedDraftRecordInput,
     SavedLead,
     SavedLeadInput,
     WorkspaceMutationResponse,
@@ -23,8 +27,10 @@ from backend.schemas.workspace import (
 )
 from backend.services.audit_store import build_safe_audit_metadata
 from backend.services.lakebase import LakebaseClient, get_lakebase_client
-from backend.services.observability import get_correlation_id
+from backend.services.observability import emit, get_correlation_id
 from backend.services.pii_redaction import scrub_free_text
+
+logger = logging.getLogger(__name__)
 
 
 @runtime_checkable
@@ -43,11 +49,9 @@ class WorkspaceStore(Protocol):
         metadata: dict[str, Any],
     ) -> tuple[int, str | None]: ...
 
-    def delete_lead(
-        self, *, actor: str, borrower_id: str
-    ) -> WorkspaceMutationResponse: ...
+    def delete_lead(self, *, actor: str, borrower_id: str) -> WorkspaceMutationResponse: ...
 
-    def save_draft(self, *, actor: str, draft: SavedDraftInput) -> SavedDraft: ...
+    def save_draft(self, *, actor: str, draft: SavedDraftRecordInput) -> SavedDraft: ...
 
     def delete_draft(
         self, *, actor: str, borrower_id: str, channel: str = "email"
@@ -84,12 +88,30 @@ def _lead_from_row(row: dict[str, Any]) -> SavedLead:
 def _draft_from_row(row: dict[str, Any]) -> SavedDraft:
     return SavedDraft(
         borrower_id=str(row["borrower_id"]),
+        generation_id=str(row.get("generation_id") or ""),
+        response_hash=str(row.get("response_hash") or ""),
         offer_code=row.get("offer_code"),
         channel=row.get("channel") or "email",
+        subject=row.get("subject"),
         body=row.get("body") or "",
         saved_at=_iso(row.get("saved_at")),
         updated_at=_iso(row.get("updated_at")),
     )
+
+
+def _governed_draft_from_row(row: dict[str, Any]) -> SavedDraft | None:
+    """Quarantine pre-policy drafts instead of breaking the whole workspace."""
+
+    try:
+        return _draft_from_row(row)
+    except ValidationError:
+        emit(
+            logger,
+            "workspace_draft_quarantined",
+            level=logging.WARNING,
+            outcome="quarantined",
+        )
+        return None
 
 
 _SAVE_LEAD_SQL = """
@@ -226,19 +248,24 @@ FROM changed CROSS JOIN audit
 _SAVE_DRAFT_SQL = """
 WITH upsert AS (
   INSERT INTO mip_app.outreach_drafts (
-    actor_email, borrower_id, offer_code, channel, body,
+    actor_email, borrower_id, generation_id, response_hash, offer_code, channel, subject, body,
     status, saved_at, updated_at, deleted_at
   ) VALUES (
-    %(actor_email)s, %(borrower_id)s, %(offer_code)s, %(channel)s, %(body)s,
+    %(actor_email)s, %(borrower_id)s, %(generation_id)s, %(response_hash)s,
+    %(offer_code)s, %(channel)s, %(subject)s, %(body)s,
     'draft', now(), now(), NULL
   )
   ON CONFLICT (actor_email, borrower_id, channel) DO UPDATE SET
+    generation_id = EXCLUDED.generation_id,
+    response_hash = EXCLUDED.response_hash,
     offer_code = EXCLUDED.offer_code,
+    subject = EXCLUDED.subject,
     body = EXCLUDED.body,
     status = 'draft',
     updated_at = now(),
     deleted_at = NULL
-  RETURNING borrower_id, offer_code, channel, body, saved_at, updated_at
+  RETURNING borrower_id, generation_id, response_hash, offer_code, channel, subject, body,
+            saved_at, updated_at
 ),
 audit AS (
   INSERT INTO mip_app.action_audit (
@@ -294,11 +321,22 @@ LIMIT %(limit)s
 
 
 _LIST_DRAFTS_SQL = """
-SELECT borrower_id, offer_code, channel, body, saved_at, updated_at
-FROM mip_app.outreach_drafts
-WHERE actor_email = %(actor_email)s
-  AND deleted_at IS NULL
-ORDER BY updated_at DESC
+SELECT draft.borrower_id, draft.generation_id, draft.response_hash,
+       draft.offer_code, draft.channel, draft.subject, draft.body,
+       draft.saved_at, draft.updated_at
+FROM mip_app.outreach_drafts AS draft
+JOIN mip_app.generated_outreach_drafts AS generated
+  ON generated.generation_id = draft.generation_id
+ AND generated.actor_email = draft.actor_email
+ AND generated.borrower_id = draft.borrower_id
+ AND generated.channel = draft.channel
+ AND generated.offer_code IS NOT DISTINCT FROM draft.offer_code
+ AND generated.response_hash = draft.response_hash
+ AND generated.response_json ->> 'subject' IS NOT DISTINCT FROM draft.subject
+ AND generated.response_json ->> 'body' = draft.body
+WHERE draft.actor_email = %(actor_email)s
+  AND draft.deleted_at IS NULL
+ORDER BY draft.updated_at DESC
 LIMIT %(limit)s
 """
 
@@ -311,9 +349,12 @@ class LakebaseWorkspaceStore:
         params = {"actor_email": actor, "limit": 100}
         lead_rows = self._client.fetchall(_LIST_LEADS_SQL, params, limit=100)
         draft_rows = self._client.fetchall(_LIST_DRAFTS_SQL, params, limit=100)
+        governed_drafts = [
+            draft for row in draft_rows if (draft := _governed_draft_from_row(row)) is not None
+        ]
         return WorkspaceState(
             saved_leads=[_lead_from_row(row) for row in lead_rows],
-            saved_drafts=[_draft_from_row(row) for row in draft_rows],
+            saved_drafts=governed_drafts,
         )
 
     def save_lead(self, *, actor: str, lead: SavedLeadInput) -> SavedLead:
@@ -363,11 +404,11 @@ class LakebaseWorkspaceStore:
         row = self._client.fetchone(_SAVE_LEADS_FROM_GENIE_ACTION_SQL, params)
         if row is None:
             raise RuntimeError("Lakebase Genie save action returned no row")
-        return int(row.get("saved_count") or 0), str(row["audit_id"]) if row.get("audit_id") else None
+        return int(row.get("saved_count") or 0), str(row["audit_id"]) if row.get(
+            "audit_id"
+        ) else None
 
-    def delete_lead(
-        self, *, actor: str, borrower_id: str
-    ) -> WorkspaceMutationResponse:
+    def delete_lead(self, *, actor: str, borrower_id: str) -> WorkspaceMutationResponse:
         request_id = str(uuid4())
         params = {
             "actor_email": actor,
@@ -386,14 +427,22 @@ class LakebaseWorkspaceStore:
             audit_event_id=str(row["audit_id"]) if row and row.get("audit_id") else None,
         )
 
-    def save_draft(self, *, actor: str, draft: SavedDraftInput) -> SavedDraft:
+    def save_draft(self, *, actor: str, draft: SavedDraftRecordInput) -> SavedDraft:
         request_id = str(uuid4())
         clean_body = scrub_free_text(draft.body)
+        clean_subject = scrub_free_text(draft.subject) if draft.subject else None
+        if clean_body != draft.body or clean_subject != draft.subject:
+            raise ValueError(
+                "proof-bound workspace draft copy cannot be mutated during persistence"
+            )
         params: dict[str, Any] = {
             "actor_email": actor,
             "borrower_id": draft.borrower_id,
+            "generation_id": draft.generation_id,
+            "response_hash": draft.response_hash,
             "offer_code": draft.offer_code,
             "channel": draft.channel,
+            "subject": clean_subject,
             "body": clean_body,
             "request_id": request_id,
             "correlation_id": get_correlation_id(),
@@ -401,8 +450,11 @@ class LakebaseWorkspaceStore:
                 "workspace.save_draft",
                 {
                     "borrower_id": draft.borrower_id,
+                    "draft_generation_id": draft.generation_id,
+                    "draft_response_hash": draft.response_hash,
                     "workspace_offer_code": draft.offer_code,
                     "channel": draft.channel,
+                    "has_subject": bool(clean_subject),
                     "request_id": request_id,
                 },
             ),

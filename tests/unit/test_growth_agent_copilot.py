@@ -7,7 +7,7 @@ from backend.schemas.growth_agent import GrowthAgentPromptRunRequest
 
 def _settings() -> Settings:
     return Settings(
-        databricks_host="dbc-test.cloud.databricks.com",
+        databricks_host="https://dbc-test.cloud.databricks.com",
         databricks_warehouse_id="wh-123",
         genie_space_id="space-abc",
     )
@@ -23,7 +23,7 @@ def test_prompt_planner_does_not_call_genie_sql_path(monkeypatch) -> None:
         settings=_settings(),
     )
 
-    assert workflow.id == "listing_watch"
+    assert workflow.id == "custom_segment_watch"
     assert evidence.execution_mode == "deterministic"
     assert evidence.trace_kind == "local_hash"
     assert evidence.planner_label == "Reviewed deterministic planner"

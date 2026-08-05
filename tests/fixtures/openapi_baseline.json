@@ -345,6 +345,65 @@
         "title": "ActivationSummary",
         "type": "object"
       },
+      "ActorAuditEventPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ActorAuditEventSummary"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "title": "ActorAuditEventPage",
+        "type": "object"
+      },
+      "ActorAuditEventSummary": {
+        "description": "PII-minimized event shape for an operator's own recovery feed.",
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "entity_type": {
+            "title": "Entity Type",
+            "type": "string"
+          },
+          "event_type": {
+            "title": "Event Type",
+            "type": "string"
+          },
+          "subject_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject Id"
+          }
+        },
+        "required": [
+          "event_type",
+          "entity_type",
+          "created_at"
+        ],
+        "title": "ActorAuditEventSummary",
+        "type": "object"
+      },
       "AdminCapabilitiesResponse": {
         "properties": {
           "capabilities": {
@@ -417,6 +476,17 @@
             ],
             "title": "Actor Cache Key"
           },
+          "agent_gateway_binding_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Gateway Binding Sha256"
+          },
           "app_env": {
             "anyOf": [
               {
@@ -443,6 +513,17 @@
             "title": "Breaker State Changes Last Hour",
             "type": "integer"
           },
+          "campaign_treatment_runtime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campaign Treatment Runtime"
+          },
           "circuit_breakers": {
             "additionalProperties": {
               "type": "string"
@@ -461,6 +542,17 @@
             },
             "title": "Dependencies",
             "type": "object"
+          },
+          "deployment_lease_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deployment Lease Id"
           },
           "fallback_identity_fallbacks_process_total": {
             "default": 0,
@@ -787,6 +879,10 @@
             "title": "Label",
             "type": "string"
           },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
           "run_id": {
             "anyOf": [
               {
@@ -815,7 +911,8 @@
           "key",
           "label",
           "job_name",
-          "job_id"
+          "job_id",
+          "request_id"
         ],
         "title": "AdminOperationRunResponse",
         "type": "object"
@@ -1266,6 +1363,17 @@
             "title": "Asset Path",
             "type": "string"
           },
+          "catalog_explorer_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Catalog Explorer Url"
+          },
           "direction": {
             "enum": [
               "upstream",
@@ -1274,6 +1382,17 @@
             ],
             "title": "Direction",
             "type": "string"
+          },
+          "event_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event Count"
           },
           "event_time": {
             "anyOf": [
@@ -1293,6 +1412,11 @@
           "object_type": {
             "anyOf": [
               {
+                "enum": [
+                  "table",
+                  "view",
+                  "function"
+                ],
                 "type": "string"
               },
               {
@@ -1449,6 +1573,27 @@
             ],
             "title": "Object Type",
             "type": "string"
+          },
+          "observation_source": {
+            "default": "unavailable",
+            "enum": [
+              "system.information_schema.tables",
+              "system.information_schema.routines",
+              "unavailable"
+            ],
+            "title": "Observation Source",
+            "type": "string"
+          },
+          "observed_in_unity_catalog": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed In Unity Catalog"
           },
           "properties": {
             "items": {
@@ -2027,6 +2172,31 @@
           "entity_id"
         ],
         "title": "AuditEventCreateRequest",
+        "type": "object"
+      },
+      "AuditEventPage": {
+        "description": "One snapshot-stable page of append-only audit events.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AuditEvent"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "title": "AuditEventPage",
         "type": "object"
       },
       "AuditRollupResponse": {
@@ -2707,6 +2877,17 @@
             ],
             "title": "Situs Cbsa Code"
           },
+          "source_refreshed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Refreshed At"
+          },
           "state": {
             "title": "State",
             "type": "string"
@@ -3130,6 +3311,21 @@
         "title": "CallDisposition",
         "type": "object"
       },
+      "CampaignBuildPreviewConfig": {
+        "additionalProperties": false,
+        "description": "Optional exact treatment-count contract for Portfolio Builder previews.",
+        "properties": {
+          "household_dedup": {
+            "$ref": "#/components/schemas/HouseholdDedupConfig"
+          },
+          "suppression_policy": {
+            "title": "Suppression Policy",
+            "type": "object"
+          }
+        },
+        "title": "CampaignBuildPreviewConfig",
+        "type": "object"
+      },
       "CampaignListResponse": {
         "properties": {
           "campaigns": {
@@ -3146,9 +3342,258 @@
         "title": "CampaignListResponse",
         "type": "object"
       },
+      "CampaignPerformanceFunnelResponse": {
+        "properties": {
+          "from_date": {
+            "title": "From Date",
+            "type": "string"
+          },
+          "methodology": {
+            "const": "same_borrower_nested_funnel",
+            "default": "same_borrower_nested_funnel",
+            "title": "Methodology",
+            "type": "string"
+          },
+          "to_date": {
+            "title": "To Date",
+            "type": "string"
+          },
+          "unique_application_starts": {
+            "title": "Unique Application Starts",
+            "type": "integer"
+          },
+          "unique_applications_submitted": {
+            "title": "Unique Applications Submitted",
+            "type": "integer"
+          },
+          "unique_closed_funded": {
+            "title": "Unique Closed Funded",
+            "type": "integer"
+          },
+          "unique_contacts_reached": {
+            "title": "Unique Contacts Reached",
+            "type": "integer"
+          },
+          "unique_leads_attempted": {
+            "title": "Unique Leads Attempted",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "from_date",
+          "to_date",
+          "unique_leads_attempted",
+          "unique_contacts_reached",
+          "unique_application_starts",
+          "unique_applications_submitted",
+          "unique_closed_funded"
+        ],
+        "title": "CampaignPerformanceFunnelResponse",
+        "type": "object"
+      },
+      "CampaignRecommendationEvidence": {
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "source_asset": {
+            "enum": [
+              "mip.semantics.portfolio_headline_metric_view",
+              "mip.gold.borrower_360",
+              "mip_app.call_dispositions",
+              "mip_app.lead_outcomes"
+            ],
+            "title": "Source Asset",
+            "type": "string"
+          },
+          "value": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "value",
+          "source_asset"
+        ],
+        "title": "CampaignRecommendationEvidence",
+        "type": "object"
+      },
+      "CampaignRecommendationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "criteria": {
+            "$ref": "#/components/schemas/PortfolioCriteria"
+          }
+        },
+        "title": "CampaignRecommendationRequest",
+        "type": "object"
+      },
+      "CampaignRecommendationResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "audience_summary": {
+            "maxLength": 280,
+            "minLength": 1,
+            "title": "Audience Summary",
+            "type": "string"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/CampaignRecommendationEvidence"
+            },
+            "maxItems": 8,
+            "minItems": 1,
+            "title": "Evidence",
+            "type": "array"
+          },
+          "generation_mode": {
+            "enum": [
+              "supervisor",
+              "reviewed_fallback"
+            ],
+            "title": "Generation Mode",
+            "type": "string"
+          },
+          "generator_label": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Generator Label",
+            "type": "string"
+          },
+          "holdout_pct": {
+            "maximum": 30.0,
+            "minimum": 5.0,
+            "title": "Holdout Pct",
+            "type": "number"
+          },
+          "performance_status": {
+            "enum": [
+              "qualified",
+              "insufficient_sample",
+              "unavailable"
+            ],
+            "title": "Performance Status",
+            "type": "string"
+          },
+          "strategy": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Strategy",
+            "type": "string"
+          },
+          "variants": {
+            "items": {
+              "$ref": "#/components/schemas/CampaignRecommendationVariant"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "title": "Variants",
+            "type": "array"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 4,
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "generation_mode",
+          "generator_label",
+          "performance_status",
+          "audience_summary",
+          "strategy",
+          "variants",
+          "holdout_pct",
+          "evidence"
+        ],
+        "title": "CampaignRecommendationResponse",
+        "type": "object"
+      },
+      "CampaignRecommendationVariant": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Body",
+            "type": "string"
+          },
+          "hypothesis": {
+            "maxLength": 280,
+            "minLength": 1,
+            "title": "Hypothesis",
+            "type": "string"
+          },
+          "provenance_token": {
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "minLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provenance Token"
+          },
+          "subject": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Subject",
+            "type": "string"
+          },
+          "variant_name": {
+            "enum": [
+              "Benefit-led",
+              "Guidance-led"
+            ],
+            "title": "Variant Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "variant_name",
+          "subject",
+          "body",
+          "hypothesis"
+        ],
+        "title": "CampaignRecommendationVariant",
+        "type": "object"
+      },
       "CampaignStatusPatchRequest": {
         "additionalProperties": false,
         "properties": {
+          "expected_status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "draft",
+                  "pending_review",
+                  "approved",
+                  "live",
+                  "active",
+                  "rejected",
+                  "archived"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Status"
+          },
           "rationale": {
             "anyOf": [
               {
@@ -3183,6 +3628,31 @@
       },
       "CampaignSummary": {
         "properties": {
+          "actionability_issue": {
+            "anyOf": [
+              {
+                "enum": [
+                  "legacy_contract",
+                  "treatment_unbound",
+                  "invalid_name",
+                  "invalid_criteria",
+                  "invalid_policy",
+                  "invalid_configuration",
+                  "invalid_message_variants"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actionability Issue"
+          },
+          "actionable": {
+            "default": true,
+            "title": "Actionable",
+            "type": "boolean"
+          },
           "campaign_id": {
             "title": "Campaign Id",
             "type": "string"
@@ -3274,6 +3744,16 @@
             "title": "Suppression Policy",
             "type": "object"
           },
+          "treatment_state": {
+            "enum": [
+              "legacy_unbound",
+              "building",
+              "ready",
+              "failed"
+            ],
+            "title": "Treatment State",
+            "type": "string"
+          },
           "updated_at": {
             "anyOf": [
               {
@@ -3292,6 +3772,7 @@
           "name",
           "owner_email",
           "status",
+          "treatment_state",
           "criteria"
         ],
         "title": "CampaignSummary",
@@ -4347,6 +4828,12 @@
             "title": "Borrower Id",
             "type": "string"
           },
+          "coordinate_total": {
+            "default": 1,
+            "minimum": 1.0,
+            "title": "Coordinate Total",
+            "type": "integer"
+          },
           "display_name": {
             "title": "Display Name",
             "type": "string"
@@ -5122,6 +5609,43 @@
         "title": "GenieActionSuggestion",
         "type": "object"
       },
+      "GenieCompleteRequest": {
+        "description": "Finish an in-flight Genie message into a governed answer.\n\n``question`` must hash-match the token minted at submit, which makes the\nguarded prompt and the completed answer cryptographically the same turn.",
+        "properties": {
+          "conversation_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "message_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Message Id",
+            "type": "string"
+          },
+          "progress_token": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Progress Token",
+            "type": "string"
+          },
+          "question": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Question",
+            "type": "string"
+          }
+        },
+        "required": [
+          "conversation_id",
+          "message_id",
+          "progress_token",
+          "question"
+        ],
+        "title": "GenieCompleteRequest",
+        "type": "object"
+      },
       "GenieDataFreshness": {
         "properties": {
           "asset": {
@@ -5223,6 +5747,7 @@
           "conversation_id": {
             "anyOf": [
               {
+                "maxLength": 256,
                 "type": "string"
               },
               {
@@ -5232,6 +5757,7 @@
             "title": "Conversation Id"
           },
           "question": {
+            "maxLength": 4000,
             "minLength": 1,
             "title": "Question",
             "type": "string"
@@ -5458,6 +5984,99 @@
         "title": "GenieNativeVisualization",
         "type": "object"
       },
+      "GenieProgressRequest": {
+        "description": "Poll one in-flight Genie message (async lifecycle).\n\nPOST body (not GET query params) so the signed token never lands in\naccess logs or proxy URL captures.",
+        "properties": {
+          "conversation_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "message_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Message Id",
+            "type": "string"
+          },
+          "progress_token": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Progress Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "conversation_id",
+          "message_id",
+          "progress_token"
+        ],
+        "title": "GenieProgressRequest",
+        "type": "object"
+      },
+      "GenieProgressResponse": {
+        "description": "Live progress for one in-flight Genie message.\n\nServer-owned vocabulary only: ``status`` is the raw Genie lifecycle enum\n(platform-authored, not model text), ``stage``/``stage_label`` are our\nbounded mapping of it, and ``reasoning_trace`` reuses the same\nprivate-thought \u2192 public-process translation as the completed answer.\n``sql_preview`` is the same generated SQL the completed proof already\nexposes \u2014 surfaced earlier, capped, never model prose.",
+        "properties": {
+          "error_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Hint"
+          },
+          "failed": {
+            "default": false,
+            "title": "Failed",
+            "type": "boolean"
+          },
+          "reasoning_trace": {
+            "items": {
+              "$ref": "#/components/schemas/GenieReasoningStep"
+            },
+            "title": "Reasoning Trace",
+            "type": "array"
+          },
+          "sql_preview": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sql Preview"
+          },
+          "stage": {
+            "title": "Stage",
+            "type": "string"
+          },
+          "stage_label": {
+            "title": "Stage Label",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "terminal": {
+            "default": false,
+            "title": "Terminal",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "status",
+          "stage",
+          "stage_label"
+        ],
+        "title": "GenieProgressResponse",
+        "type": "object"
+      },
       "GenieProof": {
         "properties": {
           "conversation_id": {
@@ -5617,6 +6236,74 @@
           }
         },
         "title": "GenieStartResponse",
+        "type": "object"
+      },
+      "GenieSubmitResponse": {
+        "description": "Wire contract for `/api/genie/message/submit` (async lifecycle).\n\n``completed=True`` means the turn resolved deterministically before any\nlive Genie call (guardrail refusal, sales-ops, footprint, degraded\nfallback) and ``response`` carries the full governed answer \u2014 identical\nbody to the synchronous endpoint. ``completed=False`` means a live Genie\nmessage was created; the browser polls `/message/progress` with the\nsigned ``progress_token`` and finishes via `/message/complete`.",
+        "properties": {
+          "completed": {
+            "title": "Completed",
+            "type": "boolean"
+          },
+          "conversation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversation Id"
+          },
+          "message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message Id"
+          },
+          "progress_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress Token"
+          },
+          "question_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Question Hash"
+          },
+          "response": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GenieMessageResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "completed"
+        ],
+        "title": "GenieSubmitResponse",
         "type": "object"
       },
       "GenieVisualizationSpec": {
@@ -6346,6 +7033,20 @@
             "title": "Draft Id",
             "type": "string"
           },
+          "generation_mode": {
+            "default": "governed_fallback",
+            "enum": [
+              "supervisor",
+              "governed_fallback"
+            ],
+            "title": "Generation Mode",
+            "type": "string"
+          },
+          "generator_label": {
+            "default": "Governed notification framework",
+            "title": "Generator Label",
+            "type": "string"
+          },
           "monitor_id": {
             "title": "Monitor Id",
             "type": "string"
@@ -6362,6 +7063,11 @@
               "cancelled"
             ],
             "title": "Status",
+            "type": "string"
+          },
+          "strategy_summary": {
+            "default": "Reviewed internal notification framing.",
+            "title": "Strategy Summary",
             "type": "string"
           },
           "title": {
@@ -6574,10 +7280,32 @@
             ],
             "title": "Actionable Avg Score"
           },
+          "actionable_cohort_fingerprint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actionable Cohort Fingerprint"
+          },
           "actionable_label": {
             "default": "Eligible subset",
             "title": "Actionable Label",
             "type": "string"
+          },
+          "actionable_snapshot_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actionable Snapshot Id"
           },
           "actionable_total": {
             "minimum": 0.0,
@@ -7069,6 +7797,28 @@
             ],
             "title": "Actor Cache Key"
           },
+          "agent_gateway_binding_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Gateway Binding Sha256"
+          },
+          "campaign_treatment_runtime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campaign Treatment Runtime"
+          },
           "circuit_breakers": {
             "additionalProperties": {
               "type": "string"
@@ -7082,6 +7832,17 @@
             },
             "title": "Dependencies",
             "type": "object"
+          },
+          "deployment_lease_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deployment Lease Id"
           },
           "forced_degraded": {
             "anyOf": [
@@ -8871,8 +9632,13 @@
           },
           "evidence_ids": {
             "items": {
+              "maxLength": 64,
+              "minLength": 6,
+              "pattern": "^ev-[0-9a-f]{3,61}$",
               "type": "string"
             },
+            "maxItems": 20,
+            "minItems": 1,
             "title": "Evidence Ids",
             "type": "array"
           },
@@ -8911,6 +9677,13 @@
             "title": "Source Labels",
             "type": "array"
           },
+          "source_refreshed_at": {
+            "format": "date-time",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Source Refreshed At",
+            "type": "string"
+          },
           "sources": {
             "default": [],
             "items": {
@@ -8930,6 +9703,7 @@
         },
         "required": [
           "borrower_id",
+          "source_refreshed_at",
           "offer_code",
           "offer_type",
           "product_label",
@@ -9019,6 +9793,54 @@
               }
             ],
             "title": "Draft Body"
+          },
+          "draft_generation_id": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft Generation Id"
+          },
+          "draft_response_hash": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft Response Hash"
+          },
+          "draft_source_refreshed_at": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft Source Refreshed At"
+          },
+          "draft_subject": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft Subject"
           },
           "evidence_ids": {
             "items": {
@@ -9130,6 +9952,28 @@
             "title": "Audit Event Id",
             "type": "string"
           },
+          "draft_edited": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft Edited"
+          },
+          "draft_generation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft Generation Id"
+          },
           "follow_up_at": {
             "anyOf": [
               {
@@ -9161,6 +10005,30 @@
             "title": "Borrower Id",
             "type": "string"
           },
+          "campaign_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campaign Id"
+          },
+          "campaign_treatment_fingerprint": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campaign Treatment Fingerprint"
+          },
           "channel": {
             "enum": [
               "email",
@@ -9178,6 +10046,44 @@
             "title": "Disclosure Version",
             "type": "string"
           },
+          "evidence_assets": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 5,
+            "minItems": 1,
+            "title": "Evidence Assets",
+            "type": "array"
+          },
+          "evidence_summary": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 5,
+            "minItems": 1,
+            "title": "Evidence Summary",
+            "type": "array"
+          },
+          "generation_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Generation Id",
+            "type": "string"
+          },
+          "generation_mode": {
+            "enum": [
+              "supervisor",
+              "governed_fallback"
+            ],
+            "title": "Generation Mode",
+            "type": "string"
+          },
+          "generator_label": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Generator Label",
+            "type": "string"
+          },
           "marketing_eligible": {
             "title": "Marketing Eligible",
             "type": "boolean"
@@ -9186,10 +10092,27 @@
             "title": "Offer Code",
             "type": "string"
           },
+          "response_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Response Hash",
+            "type": "string"
+          },
+          "source_refreshed_at": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Source Refreshed At",
+            "type": "string"
+          },
           "status": {
             "const": "draft",
             "default": "draft",
             "title": "Status",
+            "type": "string"
+          },
+          "strategy_summary": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Strategy Summary",
             "type": "string"
           },
           "subject": {
@@ -9202,16 +10125,36 @@
               }
             ],
             "title": "Subject"
+          },
+          "variant_name": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Variant Name"
           }
         },
         "required": [
+          "generation_id",
+          "response_hash",
+          "source_refreshed_at",
           "borrower_id",
           "offer_code",
           "channel",
           "body",
           "disclosure_version",
           "disclosure_state",
-          "marketing_eligible"
+          "marketing_eligible",
+          "generation_mode",
+          "generator_label",
+          "strategy_summary",
+          "evidence_summary",
+          "evidence_assets"
         ],
         "title": "OutreachDraft",
         "type": "object"
@@ -9612,6 +10555,17 @@
             ],
             "title": "Audit Event Id"
           },
+          "campaign_build_eligible": {
+            "default": true,
+            "title": "Campaign Build Eligible",
+            "type": "boolean"
+          },
+          "campaign_build_limit": {
+            "default": 10000,
+            "minimum": 1.0,
+            "title": "Campaign Build Limit",
+            "type": "integer"
+          },
           "campaign_id": {
             "anyOf": [
               {
@@ -9834,6 +10788,36 @@
         "title": "PortfolioCriteria",
         "type": "object"
       },
+      "PortfolioOfferMixRow": {
+        "additionalProperties": false,
+        "properties": {
+          "borrower_count": {
+            "minimum": 0.0,
+            "title": "Borrower Count",
+            "type": "integer"
+          },
+          "offer_code": {
+            "enum": [
+              "purchase",
+              "refi_plus_heloc",
+              "heloc",
+              "refi",
+              "cash_out",
+              "investor",
+              "retention",
+              "nurture"
+            ],
+            "title": "Offer Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "offer_code",
+          "borrower_count"
+        ],
+        "title": "PortfolioOfferMixRow",
+        "type": "object"
+      },
       "PortfolioPreview": {
         "properties": {
           "approved_count": {
@@ -9847,6 +10831,54 @@
             ],
             "title": "Approved Count"
           },
+          "avg_current_lien_balance_usd": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Current Lien Balance Usd"
+          },
+          "avg_equity_pct": {
+            "anyOf": [
+              {
+                "maximum": 100.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Equity Pct"
+          },
+          "avg_high_intent_lien_balance_usd": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg High Intent Lien Balance Usd"
+          },
+          "avg_rate_spread_bps": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Rate Spread Bps"
+          },
           "avg_score": {
             "anyOf": [
               {
@@ -9859,6 +10891,35 @@
               }
             ],
             "title": "Avg Score"
+          },
+          "campaign_build_contact_count": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campaign Build Contact Count"
+          },
+          "campaign_build_eligible": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campaign Build Eligible"
+          },
+          "campaign_build_limit": {
+            "default": 10000,
+            "minimum": 1.0,
+            "title": "Campaign Build Limit",
+            "type": "integer"
           },
           "data_refreshed_at": {
             "anyOf": [
@@ -9896,6 +10957,13 @@
             "title": "Marketable Population",
             "type": "integer"
           },
+          "offer_mix": {
+            "items": {
+              "$ref": "#/components/schemas/PortfolioOfferMixRow"
+            },
+            "title": "Offer Mix",
+            "type": "array"
+          },
           "offers_available": {
             "anyOf": [
               {
@@ -9928,6 +10996,18 @@
               }
             ],
             "title": "Top Tier Opportunities"
+          },
+          "total_current_lien_balance_usd": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Current Lien Balance Usd"
           },
           "trend_note": {
             "anyOf": [
@@ -9963,6 +11043,16 @@
       "PortfolioPreviewRequest": {
         "additionalProperties": false,
         "properties": {
+          "campaign_build_config": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CampaignBuildPreviewConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "criteria": {
             "$ref": "#/components/schemas/PortfolioCriteria"
           }
@@ -10735,6 +11825,16 @@
             "title": "Total Outcomes",
             "type": "integer"
           },
+          "unique_applications_submitted": {
+            "default": 0,
+            "title": "Unique Applications Submitted",
+            "type": "integer"
+          },
+          "unique_closed_funded": {
+            "default": 0,
+            "title": "Unique Closed Funded",
+            "type": "integer"
+          },
           "withdrawn": {
             "title": "Withdrawn",
             "type": "integer"
@@ -10866,6 +11966,7 @@
         "type": "object"
       },
       "SavedDraft": {
+        "additionalProperties": false,
         "properties": {
           "body": {
             "maxLength": 5000,
@@ -10889,6 +11990,11 @@
             "title": "Channel",
             "type": "string"
           },
+          "generation_id": {
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+            "title": "Generation Id",
+            "type": "string"
+          },
           "offer_code": {
             "anyOf": [
               {
@@ -10901,9 +12007,26 @@
             ],
             "title": "Offer Code"
           },
+          "response_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Response Hash",
+            "type": "string"
+          },
           "saved_at": {
             "title": "Saved At",
             "type": "string"
+          },
+          "subject": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject"
           },
           "updated_at": {
             "title": "Updated At",
@@ -10912,6 +12035,8 @@
         },
         "required": [
           "borrower_id",
+          "generation_id",
+          "response_hash",
           "body",
           "saved_at",
           "updated_at"
@@ -10920,12 +12045,20 @@
         "type": "object"
       },
       "SavedDraftInput": {
+        "additionalProperties": false,
+        "description": "Public save request; borrower copy is reconstructed from proof.",
         "properties": {
           "body": {
-            "maxLength": 5000,
-            "minLength": 1,
-            "title": "Body",
-            "type": "string"
+            "anyOf": [
+              {
+                "maxLength": 5000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Body"
           },
           "borrower_id": {
             "maxLength": 128,
@@ -10934,13 +12067,24 @@
             "type": "string"
           },
           "channel": {
-            "default": "email",
-            "enum": [
-              "email",
-              "sms",
-              "direct_mail"
+            "anyOf": [
+              {
+                "enum": [
+                  "email",
+                  "sms",
+                  "direct_mail"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
             ],
-            "title": "Channel",
+            "title": "Channel"
+          },
+          "generation_id": {
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+            "title": "Generation Id",
             "type": "string"
           },
           "offer_code": {
@@ -10954,11 +12098,29 @@
               }
             ],
             "title": "Offer Code"
+          },
+          "response_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Response Hash",
+            "type": "string"
+          },
+          "subject": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject"
           }
         },
         "required": [
           "borrower_id",
-          "body"
+          "generation_id",
+          "response_hash"
         ],
         "title": "SavedDraftInput",
         "type": "object"
@@ -11510,6 +12672,24 @@
           "color"
         ],
         "title": "SegmentSummary",
+        "type": "object"
+      },
+      "SessionResponse": {
+        "properties": {
+          "can_access_admin": {
+            "title": "Can Access Admin",
+            "type": "boolean"
+          },
+          "can_approve": {
+            "title": "Can Approve",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "can_access_admin",
+          "can_approve"
+        ],
+        "title": "SessionResponse",
         "type": "object"
       },
       "SignalAnalyticsResponse": {
@@ -14066,6 +15246,17 @@
           },
           {
             "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
             "name": "actor",
             "required": false,
             "schema": {
@@ -14250,6 +15441,287 @@
         ]
       }
     },
+    "/api/audit/events/page": {
+      "get": {
+        "deprecated": true,
+        "description": "Traverse a snapshot of the append-only audit ledger without page drift.",
+        "operationId": "get_api_audit_events_page_list_event_page",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2048,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "actor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Actor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "action",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Action"
+            }
+          },
+          {
+            "in": "query",
+            "name": "entity_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Entity Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "borrower_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Borrower Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "subject_clip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Clip"
+            }
+          },
+          {
+            "in": "query",
+            "name": "event_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Event Type"
+            }
+          },
+          {
+            "in": "query",
+            "name": "correlation_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Correlation Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          },
+          {
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Until"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditEventPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Event Page",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
+    "/api/audit/my-events": {
+      "get": {
+        "deprecated": true,
+        "description": "Return a snapshot-stable, PII-minimized page for the current actor only.",
+        "operationId": "get_api_audit_my_events_list_my_events",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 8,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2048,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActorAuditEventPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List My Events",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
     "/api/audit/rollups": {
       "get": {
         "deprecated": true,
@@ -14428,6 +15900,18 @@
             "schema": {
               "title": "Borrower Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Bypass the process cache while reconciling a gold refresh.",
+            "in": "query",
+            "name": "fresh",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Bypass the process cache while reconciling a gold refresh.",
+              "title": "Fresh",
+              "type": "boolean"
             }
           }
         ],
@@ -14745,6 +16229,16 @@
             },
             "description": "Successful Response"
           },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -14884,7 +16378,7 @@
     "/api/genie/feedback": {
       "post": {
         "deprecated": true,
-        "description": "Record thumbs up/down feedback for a Genie answer.\n\nGuards: JSON content type, the genie rate-limit lane (applied by the\nbackpressure middleware for ``/api/genie/*``), and a conversation\nownership check. Side effects: a best-effort Genie message comment (a\nfailure here does not fail the request) and a required ``GENIE_FEEDBACK``\naudit row written in a Lakebase transaction. The caller comment is\nvalidated public-safe (422 on PII) and never stored verbatim.",
+        "description": "Record thumbs up/down feedback for a Genie answer.\n\nThe exact actor/conversation/message ownership is checked before a durable\nidempotency intent is claimed. The native rating is sent only after that\ntransaction commits; final state and the ``GENIE_FEEDBACK`` audit row are\nthen committed together. Free-text feedback is rejected so names or other\nborrower details cannot be forwarded to the native Genie comment system.",
         "operationId": "post_api_genie_feedback_genie_feedback",
         "requestBody": {
           "content": {
@@ -14981,6 +16475,165 @@
           }
         },
         "summary": "Genie Message",
+        "tags": [
+          "genie"
+        ]
+      }
+    },
+    "/api/genie/message/complete": {
+      "post": {
+        "deprecated": true,
+        "description": "Async lifecycle step 3: governed completion of the submitted turn.\n\nThe token proves the same actor's submit created this exact message and\nthe hash check pins ``question`` to the prompt that passed the guard\nbattery there, so the output-policy check, audit write, action-token\nissuance, and session recording below stay byte-identical in meaning to\nthe synchronous endpoint's live tail. No conversation-ownership lookup\nhere: for a fresh conversation the Lakebase row intentionally does not\nexist until this very call finalizes \u2014 the token is the authorization.",
+        "operationId": "post_api_genie_message_complete_genie_message_complete",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenieCompleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenieMessageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Genie Message Complete",
+        "tags": [
+          "genie"
+        ]
+      }
+    },
+    "/api/genie/message/progress": {
+      "post": {
+        "deprecated": true,
+        "description": "Async lifecycle step 2: one pure poll of the in-flight message.\n\nToken-authorized, side-effect free, and bounded: the response carries\nthe platform status enum, our server-owned stage vocabulary, the same\npublic process steps the completed answer would expose, and the\ngenerated SQL (already part of the completed proof contract) \u2014 never\nraw model thoughts or upstream error text.",
+        "operationId": "post_api_genie_message_progress_genie_message_progress",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenieProgressRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenieProgressResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Genie Message Progress",
+        "tags": [
+          "genie"
+        ]
+      }
+    },
+    "/api/genie/message/submit": {
+      "post": {
+        "deprecated": true,
+        "description": "Async lifecycle step 1: guard the prompt, then create the message.\n\nRuns the identical deterministic battery as the synchronous endpoint\n(via the shared ``_deterministic_genie_response``). Deterministic turns\n\u2014 refusals, sales-ops, footprint, degraded fallbacks \u2014 resolve inline\nwith ``completed=True`` so they stay instant and fully audited. Live\nturns return ``(conversation_id, message_id)`` plus a signed progress\ntoken that authorizes the in-flight window; session ownership is still\nrecorded only at completion, exactly like the sync path.",
+        "operationId": "post_api_genie_message_submit_genie_message_submit",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenieMessageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenieSubmitResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Genie Message Submit",
         "tags": [
           "genie"
         ]
@@ -16026,7 +17679,7 @@
     "/api/growth-agent/agent/run": {
       "post": {
         "deprecated": true,
-        "description": "Route a natural-language co-pilot request to reviewed workflows.\n\nWhen the Databricks Supervisor Agent is configured, it may choose exactly\none reviewed workflow id from the app allowlist. The endpoint still does\nnot call the normal Genie answer path for prompt planning because that path\ncan compile and execute SQL. Reviewed deterministic tools own SQL, counts,\nfilters, Lakebase audit rows, and the reconciled Lead Queue/Admin handoff.",
+        "description": "Route a natural-language co-pilot request to reviewed workflows.\n\nWhen Databricks Agent Responses is configured, it may suggest exactly\none reviewed workflow id from the app allowlist. The endpoint still does\nnot call the normal Genie answer path for prompt planning because that path\ncan compile and execute SQL. Reviewed deterministic tools own SQL, counts,\nfilters, Lakebase audit rows, and the reconciled Lead Queue/Admin handoff.",
         "operationId": "post_api_growth_agent_agent_run_run_mortgage_growth_agent",
         "requestBody": {
           "content": {
@@ -17005,6 +18658,18 @@
               "default": false,
               "description": "Admin-only analytics override. When true, clears the default Eligible only marketing gate so suppressed/non-opt-in rows can be counted or inspected without making them campaign-actionable.",
               "title": "Include Suppressed For Analytics",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Admin/evaluation-only complete-cohort digest and snapshot headers. Disabled by default because it performs an aggregate proof query.",
+            "in": "query",
+            "name": "include_identity_proof",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Admin/evaluation-only complete-cohort digest and snapshot headers. Disabled by default because it performs an aggregate proof query.",
+              "title": "Include Identity Proof",
               "type": "boolean"
             }
           },
@@ -18079,10 +19744,81 @@
         ]
       }
     },
+    "/api/portfolio/campaign-recommendation": {
+      "post": {
+        "deprecated": true,
+        "description": "Generate a validated strategy over the exact governed cohort.\n\nThe configured Agent Responses endpoint receives aggregate facts only.\nMetrics, citations, holdout bounds, and the approval boundary are enforced by the server response\ncontract; an unavailable or invalid model response is labelled as a\nreviewed fallback rather than masquerading as AI output.",
+        "operationId": "post_api_portfolio_campaign_recommendation_campaign_recommendation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CampaignRecommendationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignRecommendationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Campaign Recommendation",
+        "tags": [
+          "portfolio"
+        ]
+      }
+    },
     "/api/portfolio/create": {
       "post": {
         "deprecated": true,
         "operationId": "post_api_portfolio_create_create_portfolio",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -18267,6 +20003,16 @@
             },
             "description": "Successful Response"
           },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -18341,6 +20087,61 @@
           }
         },
         "summary": "Sales Aging",
+        "tags": [
+          "sales"
+        ]
+      }
+    },
+    "/api/sales/campaign-performance": {
+      "get": {
+        "deprecated": true,
+        "description": "Return a manager-visible, same-borrower nested campaign funnel.",
+        "operationId": "get_api_sales_campaign_performance_sales_campaign_performance",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "from",
+            "required": true,
+            "schema": {
+              "format": "date",
+              "title": "From",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": true,
+            "schema": {
+              "format": "date",
+              "title": "To",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignPerformanceFunnelResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Sales Campaign Performance",
         "tags": [
           "sales"
         ]
@@ -18914,6 +20715,28 @@
         "summary": "List Segments",
         "tags": [
           "segments"
+        ]
+      }
+    },
+    "/api/session": {
+      "get": {
+        "deprecated": true,
+        "operationId": "get_api_session_get_session",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Session",
+        "tags": [
+          "session"
         ]
       }
     },
@@ -20786,6 +22609,17 @@
           },
           {
             "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
             "name": "actor",
             "required": false,
             "schema": {
@@ -20970,6 +22804,285 @@
         ]
       }
     },
+    "/api/v1/audit/events/page": {
+      "get": {
+        "description": "Traverse a snapshot of the append-only audit ledger without page drift.",
+        "operationId": "get_api_v1_audit_events_page_list_event_page",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2048,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "actor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Actor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "action",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Action"
+            }
+          },
+          {
+            "in": "query",
+            "name": "entity_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Entity Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "borrower_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Borrower Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "subject_clip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Clip"
+            }
+          },
+          {
+            "in": "query",
+            "name": "event_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Event Type"
+            }
+          },
+          {
+            "in": "query",
+            "name": "correlation_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Correlation Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          },
+          {
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Until"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditEventPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Event Page",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
+    "/api/v1/audit/my-events": {
+      "get": {
+        "description": "Return a snapshot-stable, PII-minimized page for the current actor only.",
+        "operationId": "get_api_v1_audit_my_events_list_my_events",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 8,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2048,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActorAuditEventPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List My Events",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
     "/api/v1/audit/rollups": {
       "get": {
         "description": "Approval/rejection counts by period for committee review.\n\nThe endpoint reads the governed Lakebase audit ledger directly and\nreturns only aggregate counts. It does not invent outreach state or\npull borrower PII into the response.",
@@ -21145,6 +23258,18 @@
             "schema": {
               "title": "Borrower Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Bypass the process cache while reconciling a gold refresh.",
+            "in": "query",
+            "name": "fresh",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Bypass the process cache while reconciling a gold refresh.",
+              "title": "Fresh",
+              "type": "boolean"
             }
           }
         ],
@@ -21456,6 +23581,16 @@
             },
             "description": "Successful Response"
           },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -21590,7 +23725,7 @@
     },
     "/api/v1/genie/feedback": {
       "post": {
-        "description": "Record thumbs up/down feedback for a Genie answer.\n\nGuards: JSON content type, the genie rate-limit lane (applied by the\nbackpressure middleware for ``/api/genie/*``), and a conversation\nownership check. Side effects: a best-effort Genie message comment (a\nfailure here does not fail the request) and a required ``GENIE_FEEDBACK``\naudit row written in a Lakebase transaction. The caller comment is\nvalidated public-safe (422 on PII) and never stored verbatim.",
+        "description": "Record thumbs up/down feedback for a Genie answer.\n\nThe exact actor/conversation/message ownership is checked before a durable\nidempotency intent is claimed. The native rating is sent only after that\ntransaction commits; final state and the ``GENIE_FEEDBACK`` audit row are\nthen committed together. Free-text feedback is rejected so names or other\nborrower details cannot be forwarded to the native Genie comment system.",
         "operationId": "post_api_v1_genie_feedback_genie_feedback",
         "requestBody": {
           "content": {
@@ -21686,6 +23821,162 @@
           }
         },
         "summary": "Genie Message",
+        "tags": [
+          "genie"
+        ]
+      }
+    },
+    "/api/v1/genie/message/complete": {
+      "post": {
+        "description": "Async lifecycle step 3: governed completion of the submitted turn.\n\nThe token proves the same actor's submit created this exact message and\nthe hash check pins ``question`` to the prompt that passed the guard\nbattery there, so the output-policy check, audit write, action-token\nissuance, and session recording below stay byte-identical in meaning to\nthe synchronous endpoint's live tail. No conversation-ownership lookup\nhere: for a fresh conversation the Lakebase row intentionally does not\nexist until this very call finalizes \u2014 the token is the authorization.",
+        "operationId": "post_api_v1_genie_message_complete_genie_message_complete",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenieCompleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenieMessageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Genie Message Complete",
+        "tags": [
+          "genie"
+        ]
+      }
+    },
+    "/api/v1/genie/message/progress": {
+      "post": {
+        "description": "Async lifecycle step 2: one pure poll of the in-flight message.\n\nToken-authorized, side-effect free, and bounded: the response carries\nthe platform status enum, our server-owned stage vocabulary, the same\npublic process steps the completed answer would expose, and the\ngenerated SQL (already part of the completed proof contract) \u2014 never\nraw model thoughts or upstream error text.",
+        "operationId": "post_api_v1_genie_message_progress_genie_message_progress",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenieProgressRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenieProgressResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Genie Message Progress",
+        "tags": [
+          "genie"
+        ]
+      }
+    },
+    "/api/v1/genie/message/submit": {
+      "post": {
+        "description": "Async lifecycle step 1: guard the prompt, then create the message.\n\nRuns the identical deterministic battery as the synchronous endpoint\n(via the shared ``_deterministic_genie_response``). Deterministic turns\n\u2014 refusals, sales-ops, footprint, degraded fallbacks \u2014 resolve inline\nwith ``completed=True`` so they stay instant and fully audited. Live\nturns return ``(conversation_id, message_id)`` plus a signed progress\ntoken that authorizes the in-flight window; session ownership is still\nrecorded only at completion, exactly like the sync path.",
+        "operationId": "post_api_v1_genie_message_submit_genie_message_submit",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenieMessageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenieSubmitResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Genie Message Submit",
         "tags": [
           "genie"
         ]
@@ -22723,7 +25014,7 @@
     },
     "/api/v1/growth-agent/agent/run": {
       "post": {
-        "description": "Route a natural-language co-pilot request to reviewed workflows.\n\nWhen the Databricks Supervisor Agent is configured, it may choose exactly\none reviewed workflow id from the app allowlist. The endpoint still does\nnot call the normal Genie answer path for prompt planning because that path\ncan compile and execute SQL. Reviewed deterministic tools own SQL, counts,\nfilters, Lakebase audit rows, and the reconciled Lead Queue/Admin handoff.",
+        "description": "Route a natural-language co-pilot request to reviewed workflows.\n\nWhen Databricks Agent Responses is configured, it may suggest exactly\none reviewed workflow id from the app allowlist. The endpoint still does\nnot call the normal Genie answer path for prompt planning because that path\ncan compile and execute SQL. Reviewed deterministic tools own SQL, counts,\nfilters, Lakebase audit rows, and the reconciled Lead Queue/Admin handoff.",
         "operationId": "post_api_v1_growth_agent_agent_run_run_mortgage_growth_agent",
         "requestBody": {
           "content": {
@@ -23692,6 +25983,18 @@
               "default": false,
               "description": "Admin-only analytics override. When true, clears the default Eligible only marketing gate so suppressed/non-opt-in rows can be counted or inspected without making them campaign-actionable.",
               "title": "Include Suppressed For Analytics",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Admin/evaluation-only complete-cohort digest and snapshot headers. Disabled by default because it performs an aggregate proof query.",
+            "in": "query",
+            "name": "include_identity_proof",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Admin/evaluation-only complete-cohort digest and snapshot headers. Disabled by default because it performs an aggregate proof query.",
+              "title": "Include Identity Proof",
               "type": "boolean"
             }
           },
@@ -24750,9 +27053,79 @@
         ]
       }
     },
+    "/api/v1/portfolio/campaign-recommendation": {
+      "post": {
+        "description": "Generate a validated strategy over the exact governed cohort.\n\nThe configured Agent Responses endpoint receives aggregate facts only.\nMetrics, citations, holdout bounds, and the approval boundary are enforced by the server response\ncontract; an unavailable or invalid model response is labelled as a\nreviewed fallback rather than masquerading as AI output.",
+        "operationId": "post_api_v1_portfolio_campaign_recommendation_campaign_recommendation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CampaignRecommendationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignRecommendationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Campaign Recommendation",
+        "tags": [
+          "portfolio"
+        ]
+      }
+    },
     "/api/v1/portfolio/create": {
       "post": {
         "operationId": "post_api_v1_portfolio_create_create_portfolio",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -24934,6 +27307,16 @@
             },
             "description": "Successful Response"
           },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -25007,6 +27390,60 @@
           }
         },
         "summary": "Sales Aging",
+        "tags": [
+          "sales"
+        ]
+      }
+    },
+    "/api/v1/sales/campaign-performance": {
+      "get": {
+        "description": "Return a manager-visible, same-borrower nested campaign funnel.",
+        "operationId": "get_api_v1_sales_campaign_performance_sales_campaign_performance",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "from",
+            "required": true,
+            "schema": {
+              "format": "date",
+              "title": "From",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": true,
+            "schema": {
+              "format": "date",
+              "title": "To",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignPerformanceFunnelResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Sales Campaign Performance",
         "tags": [
           "sales"
         ]
@@ -25577,6 +28014,27 @@
         ]
       }
     },
+    "/api/v1/session": {
+      "get": {
+        "operationId": "get_api_v1_session_get_session",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Session",
+        "tags": [
+          "session"
+        ]
+      }
+    },
     "/api/v1/telemetry/rum": {
       "post": {
         "description": "Accept sanitized browser performance telemetry.\n\nRUM events are operational telemetry, not audit rows. They are kept\ndeliberately narrow: sanitized route patterns, metric name, numeric\nvalue, coarse rating, and non-identifying details. The schema rejects\nquery strings, borrower ids, UUIDs, and email-looking values before\nanything reaches logs or downstream collectors.",
@@ -25740,6 +28198,16 @@
             },
             "description": "Successful Response"
           },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -25831,6 +28299,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
           },
           "422": {
             "content": {
@@ -25963,6 +28441,16 @@
             },
             "description": "Successful Response"
           },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -26056,6 +28544,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
           },
           "422": {
             "content": {

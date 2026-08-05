@@ -17,11 +17,20 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from backend.api.leads import DEFAULT_LEAD_LIMIT, MAX_LEAD_LIMIT
 from backend.main import app
 from backend.schemas.lead import LeadSummary
+from backend.schemas.portfolio import PortfolioCriteria
+from backend.services.growth_agent_handoff import handoff_filters_fingerprint
+from backend.services.growth_agent_runtime import cohort_fingerprint
+from backend.services.repositories.databricks_lead_cohorts import (
+    LeadCohortFilters,
+    issue_growth_agent_handoff,
+    normalise_lead_queue_handoff_filters,
+)
 from backend.services.repositories.databricks_repo import DatabricksLeadRepository
 from backend.services.scoring import HIGH_OPPORTUNITY_THRESHOLD
 
@@ -81,6 +90,34 @@ def _lead(
         why_now="test",
         evidence_ids=[],
         approval_status="pending",
+    )
+
+
+def _growth_handoff_token(
+    *,
+    actor: str = "operator@example.com",
+    total: int = 1,
+    cohort_digest: str = "b" * 64,
+    source_snapshot: str = "snapshot-1",
+) -> str:
+    tool_result_hash = "a" * 64
+    normalized_filters = normalise_lead_queue_handoff_filters(
+        LeadCohortFilters(
+            segment="itm",
+            portfolio_criteria=PortfolioCriteria(marketing_eligibility="Eligible only"),
+        )
+    )
+    return issue_growth_agent_handoff(
+        actor=actor,
+        run_id="11111111-1111-4111-8111-111111111111",
+        normalized_filters=normalized_filters,
+        cohort_fingerprint=cohort_fingerprint(
+            cohort_digest=cohort_digest,
+            tool_result_hash=tool_result_hash,
+        ),
+        total=total,
+        source_snapshot=source_snapshot,
+        tool_result_hash=tool_result_hash,
     )
 
 
@@ -189,6 +226,100 @@ def test_lead_repository_applies_exact_funnel_stage_predicates_to_borrower_360()
     assert "lead_population" not in sql
     assert FUNNEL_STAGE_PREDICATES["approved"] in sql
     assert captured["params"] == {}
+
+
+def test_lead_repository_cohort_identity_hashes_complete_distinct_set() -> None:
+    captured: dict[str, object] = {}
+
+    class _Client:
+        def execute_one(
+            self,
+            sql: str,
+            params: dict[str, object] | None = None,
+        ) -> dict[str, object]:
+            captured["sql"] = sql
+            captured["params"] = params or {}
+            return {
+                "n": 3,
+                "cohort_digest": "a" * 64,
+                "snapshot_id": "2026-07-14 12:00:00",
+            }
+
+    repo = DatabricksLeadRepository(_Client(), cache_ttl_s=0)  # type: ignore[arg-type]
+
+    identity = repo.cohort_identity(
+        segment=None,
+        portfolio_id=None,
+        state_codes=["IL"],
+        segment_codes=["itm", "equity"],
+        segment_mode="all",
+    )
+
+    sql = str(captured["sql"])
+    assert identity == {
+        "total": 3,
+        "cohort_digest": "a" * 64,
+        "snapshot_id": "2026-07-14 12:00:00",
+    }
+    assert "COUNT(DISTINCT m.borrower_id) AS n" in sql
+    assert "sort_array(collect_set(CAST(m.borrower_id AS STRING)))" in sql
+    assert "FROM mip.ref.refresh_run_state" in sql
+    assert "versions.borrower_360_at = anchor.refresh_at" in sql
+    assert "NULLIF(TRIM(CAST(anchor.run_id AS STRING)), '')" in sql
+    assert "concat(anchor.source, ':', CAST(anchor.captured_at AS STRING))" in sql
+    assert "anchor.source IN ('mip_refresh_scores', 'ad_hoc', 'backfill')" in sql
+    assert "anchor.run_id IS NOT NULL" not in sql
+    assert "array_contains(segment_codes, :seg_0) AND" in sql
+    assert captured["params"] == {"seg_0": "itm", "seg_1": "equity", "state_0": "IL"}
+
+
+def test_lead_repository_atomic_identity_binds_rows_total_digest_and_snapshot() -> None:
+    captured: dict[str, object] = {}
+    lead = _lead("B-ATOMIC000001").model_dump(mode="python")
+
+    class _Client:
+        def execute(
+            self,
+            sql: str,
+            params: dict[str, object] | None = None,
+        ) -> list[dict[str, object]]:
+            captured["sql"] = sql
+            captured["params"] = params or {}
+            return [
+                {
+                    **lead,
+                    "__rank_order": 80,
+                    "__identity_total": 1,
+                    "__cohort_digest": "d" * 64,
+                    "__snapshot_id": "e" * 64,
+                }
+            ]
+
+    repo = DatabricksLeadRepository(_Client(), cache_ttl_s=900)  # type: ignore[arg-type]
+    rows, identity = repo.list_with_identity(
+        segment=None,
+        portfolio_id=None,
+        state_codes=["IL"],
+        segment_codes=["itm", "equity"],
+        segment_mode="all",
+        limit=1,
+    )
+
+    assert [row.borrower_id for row in rows] == ["B-ATOMIC000001"]
+    assert identity == {
+        "total": 1,
+        "cohort_digest": "d" * 64,
+        "snapshot_id": "e" * 64,
+    }
+    sql = str(captured["sql"])
+    assert sql.count("WITH matched AS") == 1
+    assert "LEFT JOIN ranked ON TRUE" in sql
+    assert "__identity_total" in sql
+    assert "NULLIF(TRIM(CAST(anchor.run_id AS STRING)), '')" in sql
+    assert "concat(anchor.source, ':', CAST(anchor.captured_at AS STRING))" in sql
+    assert "anchor.run_id IS NOT NULL" not in sql
+    assert "versions.borrower_360_at = anchor.refresh_at" in sql
+    assert captured["params"] == {"seg_0": "itm", "seg_1": "equity", "state_0": "IL"}
 
 
 def test_lead_repository_pins_every_funnel_stage_to_snapshot_predicate() -> None:
@@ -1214,3 +1345,252 @@ def test_leads_route_rejects_raw_target_lender_ref_before_repo() -> None:
 
     assert response.status_code == 422
     assert repo.calls == 0
+
+
+def test_leads_identity_proof_emits_complete_set_headers_for_admin() -> None:
+    from backend.services.repositories import get_lead_repository
+
+    class _IdentityRepo:
+        def list_with_identity(
+            self, **_kwargs: object
+        ) -> tuple[list[LeadSummary], dict[str, str | int]]:
+            return [_lead("B-IDENTITY00001")], {
+                "total": 1,
+                "cohort_digest": "b" * 64,
+                "snapshot_id": "2026-07-14 12:00:00",
+            }
+
+        def list(self, **_kwargs: object) -> list[LeadSummary]:
+            raise AssertionError("proof mode must not call cached list")
+
+        def count(self, **_kwargs: object) -> int:
+            raise AssertionError("proof mode must not call cached count")
+
+        def cohort_identity(self, **_kwargs: object) -> dict[str, str | int]:
+            raise AssertionError("proof mode must not run a second proof query")
+
+    prior = app.dependency_overrides.get(get_lead_repository)
+    app.dependency_overrides[get_lead_repository] = _IdentityRepo
+    try:
+        response = TestClient(app).get(
+            "/api/leads?segment=itm&limit=1&include_identity_proof=true"
+        )
+    finally:
+        if prior is None:
+            app.dependency_overrides.pop(get_lead_repository, None)
+        else:
+            app.dependency_overrides[get_lead_repository] = prior
+
+    assert response.status_code == 200
+    assert response.headers["X-Total-Matching"] == "1"
+    assert response.headers["X-Cohort-Digest"] == "b" * 64
+    assert response.headers["X-Cohort-Snapshot-ID"] == "2026-07-14 12:00:00"
+
+
+def test_leads_identity_proof_fails_closed_when_atomic_proof_is_incomplete() -> None:
+    from backend.services.repositories import get_lead_repository
+
+    class _MismatchRepo:
+        def list_with_identity(self, **_kwargs: object) -> object:
+            raise ValueError("snapshot mismatch")
+
+    prior = app.dependency_overrides.get(get_lead_repository)
+    app.dependency_overrides[get_lead_repository] = _MismatchRepo
+    try:
+        response = TestClient(app).get(
+            "/api/leads?segment=itm&limit=1&include_identity_proof=true"
+        )
+    finally:
+        if prior is None:
+            app.dependency_overrides.pop(get_lead_repository, None)
+        else:
+            app.dependency_overrides[get_lead_repository] = prior
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Lead Queue cohort identity proof is incomplete"}
+
+
+def test_leads_identity_proof_requires_admin() -> None:
+    response = TestClient(app).get(
+        "/api/leads?segment=itm&include_identity_proof=true",
+        headers={"X-Forwarded-Groups": ""},
+    )
+
+    assert response.status_code == 403
+
+
+def test_signed_growth_handoff_is_user_operable_and_atomic() -> None:
+    from backend.services.audit_store import get_audit_store
+    from backend.services.repositories import get_lead_repository
+    from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
+
+    class _SignedHandoffRepo:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def list_with_identity(
+            self, **_kwargs: object
+        ) -> tuple[list[LeadSummary], dict[str, str | int]]:
+            self.calls += 1
+            return [_lead("B-HANDOFF000001")], {
+                "total": 1,
+                "cohort_digest": "b" * 64,
+                "snapshot_id": "snapshot-1",
+            }
+
+        def list(self, **_kwargs: object) -> list[LeadSummary]:
+            raise AssertionError("signed handoff must not use the cached list path")
+
+        def count(self, **_kwargs: object) -> int:
+            raise AssertionError("signed handoff must not run a second count query")
+
+    repo = _SignedHandoffRepo()
+    audit = InMemoryAuditStore()
+    token = _growth_handoff_token()
+    prior = app.dependency_overrides.get(get_lead_repository)
+    prior_audit = app.dependency_overrides.get(get_audit_store)
+    app.dependency_overrides[get_lead_repository] = lambda: repo
+    app.dependency_overrides[get_audit_store] = lambda: audit
+    try:
+        response = TestClient(app).get(
+            "/api/leads",
+            params={"segment": "itm", "limit": 1, "growth_handoff": token},
+            headers={
+                "X-Forwarded-Email": "operator@example.com",
+                "X-Forwarded-Groups": "",
+            },
+        )
+    finally:
+        if prior is None:
+            app.dependency_overrides.pop(get_lead_repository, None)
+        else:
+            app.dependency_overrides[get_lead_repository] = prior
+        if prior_audit is None:
+            app.dependency_overrides.pop(get_audit_store, None)
+        else:
+            app.dependency_overrides[get_audit_store] = prior_audit
+
+    assert response.status_code == 200, response.text
+    assert repo.calls == 1
+    assert response.headers["X-Total-Matching"] == "1"
+    assert response.headers["X-Cohort-Fingerprint"] == cohort_fingerprint(
+        cohort_digest="b" * 64,
+        tool_result_hash="a" * 64,
+    )
+    assert response.headers["X-Cohort-Snapshot-ID"] == "snapshot-1"
+    assert response.headers["X-Growth-Agent-Run-ID"] == (
+        "11111111-1111-4111-8111-111111111111"
+    )
+    assert "X-Cohort-Digest" not in response.headers
+    event = audit.list(limit=1)[0]
+    assert event.event_type == "VIEW_LEADS"
+    assert event.payload_json["growth_agent_run_id"] == (
+        "11111111-1111-4111-8111-111111111111"
+    )
+    assert event.payload_json["growth_agent_filters_fingerprint"] == handoff_filters_fingerprint(
+        normalise_lead_queue_handoff_filters(
+            LeadCohortFilters(
+                segment="itm",
+                portfolio_criteria=PortfolioCriteria(marketing_eligibility="Eligible only"),
+            )
+        )
+    )
+    assert event.payload_json["growth_agent_cohort_fingerprint"] == response.headers[
+        "X-Cohort-Fingerprint"
+    ]
+    assert event.payload_json["growth_agent_source_snapshot"] == "snapshot-1"
+    assert event.payload_json["tool_result_hash"] == "a" * 64
+
+
+@pytest.mark.parametrize("attack", ["signature", "actor", "filters", "borrower_ids"])
+def test_signed_growth_handoff_rejects_tampering_before_query(attack: str) -> None:
+    from backend.services.repositories import get_lead_repository
+
+    class _NoQueryRepo:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def list_with_identity(self, **_kwargs: object) -> object:
+            self.calls += 1
+            raise AssertionError("invalid handoff must fail before the cohort query")
+
+    repo = _NoQueryRepo()
+    token = _growth_handoff_token()
+    actor = "operator@example.com"
+    segment = "itm"
+    if attack == "signature":
+        token = token[:-1] + ("A" if token[-1] != "A" else "B")
+    elif attack == "actor":
+        actor = "other@example.com"
+    elif attack == "filters":
+        segment = "equity"
+    params = {"segment": segment, "growth_handoff": token}
+    if attack == "borrower_ids":
+        params["borrower_ids"] = "B-HANDOFF000001"
+
+    prior = app.dependency_overrides.get(get_lead_repository)
+    app.dependency_overrides[get_lead_repository] = lambda: repo
+    try:
+        response = TestClient(app).get(
+            "/api/leads",
+            params=params,
+            headers={"X-Forwarded-Email": actor, "X-Forwarded-Groups": ""},
+        )
+    finally:
+        if prior is None:
+            app.dependency_overrides.pop(get_lead_repository, None)
+        else:
+            app.dependency_overrides[get_lead_repository] = prior
+
+    assert response.status_code == 422
+    assert "handoff" in response.json()["detail"].lower()
+    assert repo.calls == 0
+
+
+@pytest.mark.parametrize(
+    "identity",
+    [
+        {"total": 2, "cohort_digest": "b" * 64, "snapshot_id": "snapshot-1"},
+        {"total": 1, "cohort_digest": "b" * 64, "snapshot_id": "snapshot-2"},
+        {"total": 1, "cohort_digest": "c" * 64, "snapshot_id": "snapshot-1"},
+    ],
+)
+def test_signed_growth_handoff_returns_409_for_stale_current_cohort(
+    identity: dict[str, str | int],
+) -> None:
+    from backend.services.repositories import get_lead_repository
+
+    class _StaleRepo:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def list_with_identity(
+            self, **_kwargs: object
+        ) -> tuple[list[LeadSummary], dict[str, str | int]]:
+            self.calls += 1
+            return [], identity
+
+    repo = _StaleRepo()
+    prior = app.dependency_overrides.get(get_lead_repository)
+    app.dependency_overrides[get_lead_repository] = lambda: repo
+    try:
+        response = TestClient(app).get(
+            "/api/leads",
+            params={
+                "segment": "itm",
+                "growth_handoff": _growth_handoff_token(),
+            },
+            headers={
+                "X-Forwarded-Email": "operator@example.com",
+                "X-Forwarded-Groups": "",
+            },
+        )
+    finally:
+        if prior is None:
+            app.dependency_overrides.pop(get_lead_repository, None)
+        else:
+            app.dependency_overrides[get_lead_repository] = prior
+
+    assert response.status_code == 409
+    assert "changed" in response.json()["detail"].lower()
+    assert repo.calls == 1

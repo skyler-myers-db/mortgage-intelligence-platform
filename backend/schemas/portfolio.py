@@ -2,16 +2,49 @@
 
 import re
 from datetime import datetime
-from typing import Literal
+from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from backend.schemas._validators import (
-    configured_public_lender_name,
     normalize_public_lender_ref,
     reviewed_geography_labels,
     reviewed_state_codes,
 )
+from backend.schemas.campaign_json_inputs import (
+    OUTREACH_CHANNELS,
+    normalize_channel_cascade,
+    normalize_holdout,
+    normalize_roi_assumptions,
+    normalize_send_window,
+    normalize_suppression_policy,
+    require_exact_json_keys,
+)
+from backend.schemas.campaign_json_projection import (
+    CampaignPublicJsonField,
+    project_public_campaign_name,
+)
+from backend.schemas.campaign_json_projection import (
+    project_public_campaign_json_field as _project_public_campaign_json_field,
+)
+from backend.schemas.campaign_status import (
+    CampaignStatus,  # noqa: F401 - compatibility re-export
+    CampaignStatusPatchRequest,  # noqa: F401 - compatibility re-export
+)
+from backend.schemas.portfolio_campaign import (
+    CampaignRecommendationEvidence,  # noqa: F401 - compatibility re-export
+    CampaignRecommendationRequest,  # noqa: F401 - compatibility re-export
+    CampaignRecommendationResponse,  # noqa: F401 - compatibility re-export
+    CampaignRecommendationVariant,  # noqa: F401 - compatibility re-export
+    PortfolioOfferMixRow,
+    assert_borrower_campaign_copy,
+    assert_public_campaign_text,
+    bind_portfolio_criteria,
+)
+
+CAMPAIGN_BUILD_LIMIT = 10_000
+CAMPAIGN_TREATMENT_ALGORITHM_VERSION = "campaign-treatment-v2"
+CampaignTreatmentState = Literal["legacy_unbound", "building", "ready", "failed"]
 
 _OCCUPANCY_LABELS: frozenset[str] = frozenset(
     {"Owner-occupied", "Non-owner-occupied", "All"},
@@ -25,8 +58,7 @@ _LENDER_RELATIONSHIP_LABELS: frozenset[str] = frozenset(
 _PRODUCT_LABELS: frozenset[str] = frozenset(
     {"All products", "Refi", "HELOC", "Cash-out", "Purchase", "Retention"},
 )
-# S1.6: loan product-type dimension (gold.borrower_360.loan_product_type).
-# Distinct from `product`, which filters the RECOMMENDED OFFER product.
+# S1.6 loan product type; distinct from the recommended-offer product filter.
 _LOAN_PRODUCT_LABELS: frozenset[str] = frozenset(
     {"All loan products", "Conventional", "Jumbo", "FHA", "VA", "Other", "Unknown"},
 )
@@ -58,7 +90,9 @@ _EQUITY_LABELS: frozenset[str] = frozenset({"≥ 15%", "≥ 25%", "≥ 40%", "An
 _OWNER_LINK_LABELS: frozenset[str] = frozenset(
     {"All", "Single-property owner", "Multi-property (2-4)", "Portfolio investor (5+)"}
 )
-_PURCHASE_INTENT_LABELS: frozenset[str] = frozenset({"All", "Listed for sale", "HELOC intent", "Both"})
+_PURCHASE_INTENT_LABELS: frozenset[str] = frozenset(
+    {"All", "Listed for sale", "HELOC intent", "Both"}
+)
 _PURCHASE_INTENT_ALIASES: dict[str, str] = {
     # Legacy deep links used this label before Cotality delivered the HELOC
     # propensity feed. Normalize it so no active surface claims filed permits.
@@ -93,56 +127,7 @@ _RECENCY_ALIASES: dict[str, str] = {
     "90d": "Untouched 90d",
     "any": "Any",
 }
-_OUTREACH_CHANNELS: frozenset[str] = frozenset({"email", "sms", "direct_mail"})
-_SEND_WINDOW_DAYS: frozenset[str] = frozenset(
-    {"Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"}
-)
-_SEND_WINDOW_DAY_ALIASES: dict[str, str] = {
-    "mon": "Monday",
-    "monday": "Monday",
-    "tue": "Tuesday",
-    "tues": "Tuesday",
-    "tuesday": "Tuesday",
-    "wed": "Wednesday",
-    "weds": "Wednesday",
-    "wednesday": "Wednesday",
-    "thu": "Thursday",
-    "thur": "Thursday",
-    "thurs": "Thursday",
-    "thursday": "Thursday",
-    "fri": "Friday",
-    "friday": "Friday",
-    "sat": "Saturday",
-    "saturday": "Saturday",
-    "sun": "Sunday",
-    "sunday": "Sunday",
-}
-_PUBLIC_TEXT_DENYLIST: tuple[str, ...] = (
-    r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}",
-    r"\b(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}\b",
-    r"\b\d{3}-\d{2}-\d{4}\b",
-    r"\b\d{9,}\b",
-    r"\b\d{1,6}\s+[A-Za-z0-9.'-]+\s+(?:st|street|ave|avenue|rd|road|dr|drive|ln|lane|blvd|boulevard|ct|court|way)\b",
-    r"\b(?:raw[_\s-]?clip|owner[_\s-]?name|borrower[_\s-]?name|customer[_\s-]?name|prospect[_\s-]?name|street[_\s-]?address|mailing[_\s-]?address)\b",
-    r"\[(?:first|last|full)[_\s-]?name\]",
-    r"\{(?:first|last|full)[_\s-]?name\}",
-    r"\binsert governed\b",
-)
-_HUMAN_NAME_SHAPE_RE = re.compile(r"\b[A-Z][a-z]{1,30}\s+(?:[A-Z]\s+)?[A-Z][a-z]{1,30}\b")
-_PUBLIC_TITLECASE_PHRASE_ALLOWLIST: tuple[str, ...] = (
-    "Summit Mortgage",
-    "Equal Housing",
-    "New York",
-    "New Jersey",
-    "New Mexico",
-    "North Carolina",
-    "North Dakota",
-    "South Carolina",
-    "South Dakota",
-    "Rhode Island",
-    "West Virginia",
-    "United States",
-)
+_OUTREACH_CHANNELS = OUTREACH_CHANNELS
 
 
 def _validate_optional_label(
@@ -181,34 +166,6 @@ def _normalise_reviewed_alias(
     raise ValueError(f"{field_name} must be one of the reviewed options")
 
 
-def _assert_public_campaign_text(value: object, *, field_name: str, max_length: int) -> str:
-    if value is None:
-        return ""
-    text = re.sub(r"\s+", " ", str(value).strip())
-    if len(text) > max_length:
-        raise ValueError(f"{field_name} must be {max_length} characters or fewer")
-    if any(re.search(pattern, text, re.IGNORECASE) for pattern in _PUBLIC_TEXT_DENYLIST):
-        raise ValueError(f"{field_name} cannot contain PII, raw identifiers, or unresolved placeholders")
-    name_scan_text = text
-    for allowed in (*_PUBLIC_TITLECASE_PHRASE_ALLOWLIST, configured_public_lender_name()):
-        name_scan_text = name_scan_text.replace(allowed, "")
-    if _HUMAN_NAME_SHAPE_RE.search(name_scan_text):
-        raise ValueError(f"{field_name} cannot contain human-name-shaped text")
-    return text
-
-
-def _assert_json_public(value: object, *, field_name: str) -> None:
-    if isinstance(value, dict):
-        for key, item in value.items():
-            _assert_json_public(key, field_name=field_name)
-            _assert_json_public(item, field_name=field_name)
-    elif isinstance(value, list):
-        for item in value:
-            _assert_json_public(item, field_name=field_name)
-    elif isinstance(value, str):
-        _assert_public_campaign_text(value, field_name=field_name, max_length=1000)
-
-
 class KpiTrend(BaseModel):
     """A single KPI's 7-day history + delta.
 
@@ -231,6 +188,9 @@ class PortfolioPreview(BaseModel):
     # trends from funnel_snapshot_daily). Cotality Delta Share + public FRED
     # data only; no lender CRM / campaign / app-activity signal contributes.
     marketable_population: int
+    campaign_build_limit: int = Field(default=CAMPAIGN_BUILD_LIMIT, ge=1)
+    campaign_build_contact_count: int | None = Field(default=None, ge=0)
+    campaign_build_eligible: bool | None = None
     high_intent_leads: int
     # SUM(is_high_opportunity) — canonical threshold pinned in
     # mip.gold.fn_high_opportunity / scoring.HIGH_OPPORTUNITY_THRESHOLD.
@@ -241,6 +201,17 @@ class PortfolioPreview(BaseModel):
     # decision ("offers available" headline measure).
     offers_available: int | None = None
     avg_score: int | None = Field(default=None, ge=0, le=100)
+    # Cohort economics are measured over the exact filtered population in the
+    # same semantic query as the headline KPIs. These replace client-side
+    # placeholder assumptions; missing source values remain null.
+    avg_current_lien_balance_usd: int | None = Field(default=None, ge=0)
+    # Same filtered query, restricted to the in-the-money population used by
+    # the economics scenario. Never substitute the all-borrower average.
+    avg_high_intent_lien_balance_usd: int | None = Field(default=None, ge=0)
+    total_current_lien_balance_usd: int | None = Field(default=None, ge=0)
+    avg_equity_pct: float | None = Field(default=None, ge=0, le=100)
+    avg_rate_spread_bps: float | None = None
+    offer_mix: list["PortfolioOfferMixRow"] = Field(default_factory=list)
     # Optional trend histories keyed by KPI field name. When absent, the UI
     # renders the KPI without a sparkline.
     trends: dict[str, KpiTrend] = Field(default_factory=dict)
@@ -476,21 +447,38 @@ class PortfolioCriteria(BaseModel):
         geography = (self.geography or "").strip().lower()
         if self.states:
             return True
-        if geography and not (geography == "all" or (geography.startswith("all ") and geography.endswith(" states"))):
+        if geography and not (
+            geography == "all" or (geography.startswith("all ") and geography.endswith(" states"))
+        ):
             return True
         if self.occupancy in {"Owner-occupied", "Non-owner-occupied"}:
             return True
         lien_status = (self.lien_status or "").strip().lower()
-        if lien_status in {"free & clear", "free and clear", "open 1st lien", "open first lien", "open heloc"}:
+        if lien_status in {
+            "free & clear",
+            "free and clear",
+            "open 1st lien",
+            "open first lien",
+            "open heloc",
+        }:
             return True
         owner_link = (self.owner_link or "").strip().lower()
-        if owner_link in {"single-property owner", "multi-property (2-4)", "portfolio investor (5+)"}:
+        if owner_link in {
+            "single-property owner",
+            "multi-property (2-4)",
+            "portfolio investor (5+)",
+        }:
             return True
         purchase_intent = (self.purchase_intent or "").strip().lower()
         if purchase_intent in {"listed for sale", "heloc intent", "both"}:
             return True
         relationship = (self.lender_relationship or "").strip().lower()
-        if relationship in {"current customer", "former customer", "competitor customer", "competitor"}:
+        if relationship in {
+            "current customer",
+            "former customer",
+            "competitor customer",
+            "competitor",
+        }:
             return True
         target_lender_ref = (self.target_lender_ref or "").strip().lower()
         if target_lender_ref and target_lender_ref != "all":
@@ -514,10 +502,7 @@ class PortfolioCriteria(BaseModel):
         return self.min_equity_pct_label in {"≥ 15%", "≥ 25%", "≥ 40%"}
 
 
-class PortfolioPreviewRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    criteria: PortfolioCriteria = Field(default_factory=PortfolioCriteria)
+bind_portfolio_criteria(PortfolioCriteria)
 
 
 HouseholdDedupeUnit = Literal["borrower", "household"]
@@ -539,6 +524,27 @@ class HouseholdDedupConfig(BaseModel):
     def _normalize_dedupe_unit(self) -> "HouseholdDedupConfig":
         self.dedupe_unit = "household" if self.enabled else "borrower"
         return self
+
+
+class CampaignBuildPreviewConfig(BaseModel):
+    """Optional exact treatment-count contract for Portfolio Builder previews."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    suppression_policy: dict[str, object] = Field(default_factory=dict)
+    household_dedup: HouseholdDedupConfig = Field(default_factory=HouseholdDedupConfig)
+
+    @field_validator("suppression_policy")
+    @classmethod
+    def _validate_suppression_policy(cls, value: dict[str, object]) -> dict[str, object]:
+        return normalize_suppression_policy(value)
+
+
+class PortfolioPreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    criteria: PortfolioCriteria = Field(default_factory=PortfolioCriteria)
+    campaign_build_config: CampaignBuildPreviewConfig | None = None
 
 
 class HouseholdDedupSummary(BaseModel):
@@ -598,26 +604,7 @@ class PortfolioCreateRequest(BaseModel):
     @field_validator("name")
     @classmethod
     def _validate_name(cls, value: str) -> str:
-        cleaned = re.sub(r"\s+", " ", value.strip())
-        if not cleaned:
-            raise ValueError("name is required")
-        if len(cleaned) > 80:
-            raise ValueError("name must be 80 characters or fewer")
-        pii_patterns = (
-            r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}",
-            r"\b(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}\b",
-            r"\b\d{9,}\b",
-            r"\b\d{1,6}\s+[A-Za-z0-9.'-]+\s+(?:st|street|ave|avenue|rd|road|dr|drive|ln|lane|blvd|boulevard|ct|court|way)\b",
-            r"\b(?:raw[_\s-]?clip|owner[_\s-]?name|street[_\s-]?address|mailing[_\s-]?address)\b",
-        )
-        if any(re.search(pattern, cleaned, re.IGNORECASE) for pattern in pii_patterns):
-            raise ValueError("name cannot contain PII, raw identifiers, or street addresses")
-        name_scan = cleaned
-        for allowed in (*_PUBLIC_TITLECASE_PHRASE_ALLOWLIST, configured_public_lender_name()):
-            name_scan = name_scan.replace(allowed, "")
-        if re.search(r"\b[A-Z][a-z]{1,30}\s+(?:[A-Z]\s+)?[A-Z][a-z]{1,30}\b", name_scan):
-            raise ValueError("name cannot contain PII, raw identifiers, or street addresses")
-        return cleaned
+        return project_public_campaign_name(value)
 
     @field_validator("message_variants")
     @classmethod
@@ -628,25 +615,57 @@ class PortfolioCreateRequest(BaseModel):
         if len(value) > 12:
             raise ValueError("message_variants supports at most 12 variants per campaign")
         normalized: list[dict[str, object]] = []
+        seen_names: set[str] = set()
         for raw in value:
-            name = _assert_public_campaign_text(
-                raw.get("variant_name") or raw.get("name") or "default",
+            raw_name = raw.get("variant_name", raw.get("name"))
+            if raw_name is None or not str(raw_name).strip():
+                raise ValueError("message variant_name must be nonblank")
+            name = assert_public_campaign_text(
+                raw_name,
                 field_name="variant_name",
                 max_length=64,
             )
+            name_key = name.casefold()
+            if name_key in seen_names:
+                raise ValueError("message variant_name values must be unique")
+            seen_names.add(name_key)
             channel = str(raw.get("channel") or "email").strip()
             if channel not in _OUTREACH_CHANNELS:
                 raise ValueError("message variant channel must be email, sms, or direct_mail")
-            subject = _assert_public_campaign_text(
+            subject = assert_public_campaign_text(
                 raw.get("subject") or "",
                 field_name="variant subject",
                 max_length=120,
             )
-            body = _assert_public_campaign_text(
+            body = assert_public_campaign_text(
                 raw.get("body") or "",
                 field_name="variant body",
                 max_length=1000,
             )
+            if not body:
+                raise ValueError("variant body must be nonblank")
+            if channel == "email" and not subject:
+                raise ValueError("email message variants require a nonblank subject")
+            assert_borrower_campaign_copy(subject, field_name="variant subject")
+            assert_borrower_campaign_copy(body, field_name="variant body")
+            generation_mode = str(raw.get("generation_mode") or "").strip()
+            if generation_mode not in {"supervisor", "reviewed_fallback"}:
+                raise ValueError(
+                    "borrower-facing campaign copy must come from a reviewed server template"
+                )
+            generator_label = assert_public_campaign_text(
+                raw.get("generator_label") or "",
+                field_name="variant generator_label",
+                max_length=80,
+            )
+            if not generator_label:
+                raise ValueError("variant generator_label must be nonblank")
+            provenance_token_raw = raw.get("provenance_token")
+            provenance_token = (
+                str(provenance_token_raw).strip() if provenance_token_raw is not None else None
+            )
+            if provenance_token is None or not 32 <= len(provenance_token) <= 4096:
+                raise ValueError("variant provenance_token must be a bounded server-issued token")
             weight_raw = raw.get("weight_pct", 100)
             try:
                 weight = float(weight_raw)
@@ -661,8 +680,14 @@ class PortfolioCreateRequest(BaseModel):
                     "subject": subject,
                     "body": body,
                     "weight_pct": weight,
+                    "generation_mode": generation_mode,
+                    "generator_label": generator_label,
+                    "provenance_token": provenance_token,
                 }
             )
+        ab_names = {str(item["variant_name"]).casefold() for item in normalized}
+        if ab_names & {"a", "b"} and not {"a", "b"}.issubset(ab_names):
+            raise ValueError("A/B message variants require complete A and B variants")
         return normalized
 
     @field_validator("channel_cascade")
@@ -671,81 +696,22 @@ class PortfolioCreateRequest(BaseModel):
         cls,
         value: list[dict[str, object]],
     ) -> list[dict[str, object]]:
-        if len(value) > 6:
-            raise ValueError("channel_cascade supports at most 6 steps")
-        seen_steps: set[int] = set()
-        normalized: list[dict[str, object]] = []
-        for raw in value:
-            channel = str(raw.get("channel") or "").strip()
-            if channel not in _OUTREACH_CHANNELS:
-                raise ValueError("channel cascade channel must be email, sms, or direct_mail")
-            try:
-                step = int(raw.get("step") or 0)
-                after_days = int(raw.get("after_days") or 0)
-            except (TypeError, ValueError) as exc:
-                raise ValueError("channel cascade step and after_days must be integers") from exc
-            if step <= 0 or step in seen_steps:
-                raise ValueError("channel cascade steps must be positive and unique")
-            if after_days < 0 or after_days > 365:
-                raise ValueError("channel cascade after_days must be between 0 and 365")
-            seen_steps.add(step)
-            normalized.append({"channel": channel, "step": step, "after_days": after_days})
-        return sorted(normalized, key=lambda item: int(item["step"]))
+        return normalize_channel_cascade(value)
 
     @field_validator("send_window")
     @classmethod
     def _validate_send_window(cls, value: dict[str, object]) -> dict[str, object]:
-        if not value:
-            return value
-        days_raw = value.get("days") or []
-        if not isinstance(days_raw, list):
-            raise ValueError("send_window.days must be a list")
-        days: list[str] = []
-        for raw_day in days_raw:
-            day = str(raw_day).strip()
-            if not day:
-                continue
-            days.append(_SEND_WINDOW_DAY_ALIASES.get(day.lower(), day))
-        if not days or any(day not in _SEND_WINDOW_DAYS for day in days):
-            raise ValueError("send_window.days must use reviewed day labels")
-        start = str(value.get("start_local") or value.get("start") or "").strip()
-        end = str(value.get("end_local") or value.get("end") or "").strip()
-        if not re.fullmatch(r"\d{2}:\d{2}", start) or not re.fullmatch(r"\d{2}:\d{2}", end):
-            raise ValueError("send_window start/end must be HH:MM")
-        if start >= end:
-            raise ValueError("send_window start_local must be before end_local")
-        timezone = str(value.get("timezone") or "borrower_local").strip()
-        _assert_public_campaign_text(timezone, field_name="send_window timezone", max_length=64)
-        return {
-            "days": days,
-            "timezone": timezone,
-            "start_local": start,
-            "end_local": end,
-        }
+        return normalize_send_window(value)
 
     @field_validator("holdout")
     @classmethod
     def _validate_holdout(cls, value: dict[str, object] | None) -> dict[str, object] | None:
-        if value is None:
-            return None
-        method = str(value.get("method") or "hash_modulo").strip()
-        if method != "hash_modulo":
-            raise ValueError("holdout.method must be hash_modulo")
-        try:
-            size_pct = float(value.get("size_pct", 0))
-        except (TypeError, ValueError) as exc:
-            raise ValueError("holdout.size_pct must be numeric") from exc
-        if size_pct < 0 or size_pct > 50:
-            raise ValueError("holdout.size_pct must be between 0 and 50")
-        return {"method": method, "size_pct": size_pct}
+        return normalize_holdout(value)
 
     @field_validator("suppression_policy")
     @classmethod
-    def _validate_public_json(cls, value: dict[str, object] | None) -> dict[str, object] | None:
-        if value is None:
-            return None
-        _assert_json_public(value, field_name="campaign metadata")
-        return value
+    def _validate_public_json(cls, value: dict[str, object]) -> dict[str, object]:
+        return normalize_suppression_policy(value)
 
     @field_validator("roi_assumptions")
     @classmethod
@@ -753,54 +719,34 @@ class PortfolioCreateRequest(BaseModel):
         cls,
         value: dict[str, object] | None,
     ) -> dict[str, object] | None:
-        if value is None:
-            return None
-        _assert_json_public(value, field_name="campaign ROI assumptions")
-        numeric_keys = {
-            "budget_usd",
-            "expected_conversion_rate",
-            "expected_conversion_rate_pct",
-            "lo_capacity",
-        }
-        normalized = dict(value)
-        for key in numeric_keys & normalized.keys():
-            # Re-audit #3 follow-up (2026-06-12, observed live): the builder's
-            # Budget field is optional and the client sends budget_usd: null
-            # when it is left blank — float(None) raised TypeError and the
-            # whole save 422'd. An explicit null is "not provided", exactly
-            # like omitting the key; drop it instead of rejecting the save.
-            if normalized[key] is None:
-                normalized.pop(key)
-                continue
-            try:
-                numeric = float(normalized[key])
-            except (TypeError, ValueError) as exc:
-                raise ValueError(f"roi_assumptions.{key} must be numeric") from exc
-            if numeric < 0:
-                raise ValueError(f"roi_assumptions.{key} must be non-negative")
-            if key in {"expected_conversion_rate", "expected_conversion_rate_pct"} and numeric > 100:
-                raise ValueError(f"roi_assumptions.{key} must be 100 or less")
-            normalized[key] = numeric
-        cost = normalized.get("cost_per_contact_usd")
-        if isinstance(cost, dict):
-            checked: dict[str, float] = {}
-            for channel, amount in cost.items():
-                channel_key = str(channel).strip()
-                if channel_key not in _OUTREACH_CHANNELS:
-                    raise ValueError("roi_assumptions.cost_per_contact_usd uses unknown channel")
-                try:
-                    numeric = float(amount)
-                except (TypeError, ValueError) as exc:
-                    raise ValueError(
-                        "roi_assumptions.cost_per_contact_usd values must be numeric"
-                    ) from exc
-                if numeric < 0:
-                    raise ValueError(
-                        "roi_assumptions.cost_per_contact_usd values must be non-negative"
-                    )
-                checked[channel_key] = numeric
-            normalized["cost_per_contact_usd"] = checked
-        return normalized
+        return normalize_roi_assumptions(value)
+
+
+def _project_portfolio_criteria(value: dict[str, object]) -> dict[str, object]:
+    require_exact_json_keys(
+        value,
+        allowed=frozenset(PortfolioCriteria.model_fields),
+        field_name="criteria",
+    )
+    model = PortfolioCriteria.model_validate(value)
+    return cast(
+        dict[str, object],
+        model.model_dump(include=model.model_fields_set, exclude_none=True),
+    )
+
+
+def project_public_campaign_json_field(
+    field_name: CampaignPublicJsonField,
+    value: object,
+) -> dict[str, object] | list[dict[str, object]] | None:
+    """Return the exact reviewed public projection for persisted campaign JSON."""
+
+    return _project_public_campaign_json_field(
+        field_name,
+        value,
+        portfolio_fields=frozenset(PortfolioCriteria.model_fields),
+        portfolio_projector=_project_portfolio_criteria,
+    )
 
 
 class PortfolioCreateResponse(BaseModel):
@@ -808,11 +754,15 @@ class PortfolioCreateResponse(BaseModel):
     campaign_id: str | None = None
     name: str
     marketable_population: int
+    campaign_build_limit: int = Field(default=CAMPAIGN_BUILD_LIMIT, ge=1)
+    campaign_build_eligible: bool = True
     household_summary: HouseholdDedupSummary = Field(default_factory=HouseholdDedupSummary)
     audit_event_id: str | None = None
 
-
-CampaignStatus = Literal["draft", "pending_review", "approved", "live", "active", "rejected", "archived"]
+    @field_validator("name")
+    @classmethod
+    def _validate_name(cls, value: str) -> str:
+        return project_public_campaign_name(value)
 
 
 class CampaignSummary(BaseModel):
@@ -820,6 +770,20 @@ class CampaignSummary(BaseModel):
     name: str
     owner_email: str
     status: CampaignStatus
+    treatment_state: CampaignTreatmentState
+    actionable: bool = True
+    actionability_issue: (
+        Literal[
+            "legacy_contract",
+            "treatment_unbound",
+            "invalid_name",
+            "invalid_criteria",
+            "invalid_policy",
+            "invalid_configuration",
+            "invalid_message_variants",
+        ]
+        | None
+    ) = None
     criteria: dict[str, object]
     suppression_policy: dict[str, object] = Field(default_factory=dict)
     message_variants: list[dict[str, object]] = Field(default_factory=list)
@@ -832,29 +796,11 @@ class CampaignSummary(BaseModel):
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
+    @field_validator("name")
+    @classmethod
+    def _validate_name(cls, value: str) -> str:
+        return project_public_campaign_name(value)
+
 
 class CampaignListResponse(BaseModel):
     campaigns: list[CampaignSummary]
-
-
-class CampaignStatusPatchRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    status: CampaignStatus
-    rationale: str | None = Field(default=None, max_length=500)
-
-    @field_validator("rationale")
-    @classmethod
-    def _validate_rationale(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        cleaned = _assert_public_campaign_text(
-            value,
-            field_name="campaign status rationale",
-            max_length=500,
-        )
-        if not cleaned:
-            return None
-        if re.search(r"\b[A-Z][a-z]{1,30}\s+(?:[A-Z]\s+)?[A-Z][a-z]{1,30}\b", cleaned):
-            raise ValueError("campaign status rationale cannot contain human-name-shaped values")
-        return cleaned

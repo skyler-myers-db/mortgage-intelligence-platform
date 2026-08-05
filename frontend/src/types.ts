@@ -1,5 +1,7 @@
 import type { AssignmentLifecycleStatus, LeadAssignment } from './types/loanOfficer';
 
+export type { CampaignRecommendationResponse } from './types/campaign';
+
 export type SegmentCode =
   | 'itm'
   | 'listed'
@@ -234,6 +236,9 @@ export interface SalesConversionResponse {
     contacts_reached: number;
     callbacks_scheduled: number;
     applications_started: number;
+    unique_leads_contacted?: number;
+    unique_contacts_reached?: number;
+    unique_application_starts?: number;
     application_start_rate: number;
   }>;
 }
@@ -244,6 +249,8 @@ export interface SalesOutcomeSummaryResponse {
   total_outcomes: number;
   applications_submitted: number;
   closed_funded: number;
+  unique_applications_submitted?: number;
+  unique_closed_funded?: number;
   lost_to_competitor: number;
   withdrawn: number;
   not_qualified: number;
@@ -270,41 +277,15 @@ export interface SalesOutcomeSummaryResponse {
   }>;
 }
 
-export interface SavedLead {
-  borrower_id: string;
-  city?: string | null;
-  state?: string | null;
-  zip?: string | null;
-  recommended_offer?: string | null;
-  opportunity_score?: number | null;
-  confidence?: number | null;
-  saved_at: string;
-  updated_at: string;
-}
-
-export type SavedLeadInput = Omit<SavedLead, 'saved_at' | 'updated_at'>;
-
-export interface SavedDraft {
-  borrower_id: string;
-  offer_code?: string | null;
-  channel: 'email' | 'sms' | 'direct_mail';
-  body: string;
-  saved_at: string;
-  updated_at: string;
-}
-
-export type SavedDraftInput = Omit<SavedDraft, 'saved_at' | 'updated_at'>;
-
-export interface WorkspaceState {
-  saved_leads: SavedLead[];
-  saved_drafts: SavedDraft[];
-}
-
-export interface WorkspaceMutationResult {
-  ok: boolean;
-  borrower_id: string;
-  audit_event_id?: string | null;
-}
+export type {
+  SavedDraft,
+  SavedDraftInput,
+  SavedLead,
+  SavedLeadInput,
+  SessionResponse,
+  WorkspaceMutationResult,
+  WorkspaceState,
+} from './types/workspace';
 
 export type ActivationDestinationType = 'salesforce' | 'crm_cdp' | 'los_pos' | 'servicing' | 'webhook';
 export type ActivationDestinationStatus = 'not_configured' | 'dry_run' | 'connected' | 'disabled';
@@ -375,6 +356,7 @@ export interface WhyPanel {
 }
 
 export interface Borrower360 extends LeadSummary {
+  source_refreshed_at?: string | null;
   clip_id: string;
   owner_link_id: string;
   subject_property: string;
@@ -474,10 +456,22 @@ export interface KpiTrend {
 
 export interface PortfolioPreview {
   marketable_population: number;
+  campaign_build_contact_count: number | null;
+  campaign_build_limit: number;
+  campaign_build_eligible: boolean | null;
   high_intent_leads: number;
   top_tier_opportunities: number | null;
   offers_recommended: number | null;
   avg_score: number | null;
+  avg_current_lien_balance_usd?: number | null;
+  avg_high_intent_lien_balance_usd?: number | null;
+  total_current_lien_balance_usd?: number | null;
+  avg_equity_pct?: number | null;
+  avg_rate_spread_bps?: number | null;
+  offer_mix?: Array<{
+    offer_code: 'purchase' | 'refi_plus_heloc' | 'heloc' | 'refi' | 'cash_out' | 'investor' | 'retention' | 'nurture';
+    borrower_count: number;
+  }>;
   data_refreshed_at: string | null; // ISO timestamp
   trends?: Record<string, KpiTrend>;
   trend_status?: 'live' | 'not_applicable' | 'unavailable' | 'empty' | string;
@@ -496,6 +490,8 @@ export interface PortfolioCreateResponse {
   campaign_id?: string | null;
   name: string;
   marketable_population: number;
+  campaign_build_limit: number;
+  campaign_build_eligible: boolean;
   household_summary?: HouseholdDedupSummary;
   audit_event_id?: string | null;
 }
@@ -524,6 +520,15 @@ export interface CampaignSummary {
   name: string;
   owner_email: string;
   status: 'draft' | 'pending_review' | 'approved' | 'live' | 'active' | 'rejected' | 'archived';
+  actionable?: boolean;
+  actionability_issue?: 'legacy_contract' | 'treatment_unbound' | 'invalid_name' | 'invalid_criteria' | 'invalid_policy' | 'invalid_configuration' | 'invalid_message_variants' | null;
+  /**
+   * Present on current campaign responses so the UI can distinguish a
+   * transient materialization from an archive-only quarantine. Optional
+   * during the rolling deploy because older API workers only reported the
+   * coarser `treatment_unbound` actionability issue.
+   */
+  treatment_state?: 'building' | 'ready' | 'failed' | 'legacy_unbound';
   criteria: Record<string, unknown>;
   suppression_policy?: Record<string, unknown>;
   message_variants?: Record<string, unknown>[];
@@ -549,6 +554,7 @@ export interface OfferAlternative {
 
 export interface OfferRecommendation {
   borrower_id: string;
+  source_refreshed_at: string;
   offer_code: string;
   offer_type: string;
   product_label: string;
@@ -666,7 +672,9 @@ export interface AssetLineageNode {
   label: string;
   object_type?: string | null;
   event_time?: string | null;
+  event_count?: number | null;
   source: string;
+  catalog_explorer_url?: string | null;
 }
 
 export interface AssetMetadataResponse {
@@ -680,6 +688,11 @@ export interface AssetMetadataResponse {
   schema_name: string;
   object_name: string;
   uc_object: string;
+  observed_in_unity_catalog?: boolean | null;
+  observation_source?:
+    | 'system.information_schema.tables'
+    | 'system.information_schema.routines'
+    | 'unavailable';
   generated_at: string;
   last_updated?: string | null;
   delta_last_modified?: string | null;
@@ -876,3 +889,4 @@ export type * from './types/loanOfficer';
 export type * from './types/lineage';
 export type * from './types/economicsScatter';
 export type * from './types/approvalFunnel';
+export type * from './types/campaignPerformance';

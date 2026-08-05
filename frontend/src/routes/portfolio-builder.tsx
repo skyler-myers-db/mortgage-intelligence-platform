@@ -1,10 +1,16 @@
 import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router';
 import { api } from '../lib/api';
 import { useConfigOptionsQuery } from '../lib/configOptionsQuery';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
-import type { CampaignListResponse, CampaignSummary, PortfolioPreview } from '../types';
+import type {
+  CampaignListResponse,
+  CampaignRecommendationResponse,
+  CampaignSummary,
+  PortfolioPreview,
+  CampaignPerformanceFunnelResponse,
+} from '../types';
 import { PageShell } from '../components/layout/PageShell';
 import { CampaignPrefillBanner } from '../components/mortgage/CampaignPrefillBanner';
 import { KpiCard } from '../components/mortgage/KpiCard';
@@ -15,24 +21,23 @@ import { FilterSelect } from '../components/ui/FilterSelect';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { parseCampaignPrefill } from '../lib/campaignPrefill';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
-import { parseBackendTimestamp } from '../lib/time';
 import { useFootprint } from '../components/FootprintProvider';
 import { queryKeys } from '../lib/queryKeys';
 import { RoiProjector, StateMultiSelect } from './portfolio-builder.components';
+import { CampaignSetupPanel } from './portfolio-builder.campaign-setup';
+import { CampaignBuildGuard, SavedCampaignsPanel } from './portfolio-builder.governance';
 import {
   BASE_DEFAULT_FILTERS,
   DEFAULT_CAMPAIGN_SETUP,
   NON_GEO_FILTER_GROUPS,
   URL_FILTER_KEYS,
   buildCampaignConfig,
-  buildDefaultCampaignSetup,
   buildGeoOptions,
   buildLeadQueueUrlFromFilters,
   buildPreviewCriteria,
   buildSegmentIntelligenceUrlFromFilters,
   buildUrlFromFilters,
-  campaignCriteriaSummary,
-  groupSavedCampaigns,
+  campaignCopyValidationError,
   dayZeroSafe,
   defaultGeographyForOptions,
   formatDelta,
@@ -50,15 +55,15 @@ import { HIGH_OPPORTUNITY_KPI_LABEL } from '../lib/opportunityScore';
  * primary forward motion into segment intelligence.
  */
 
-/** Compact "Mon D" date for a saved-campaign timestamp (wire-safe parse). */
-function formatSavedCampaignDate(iso: string | null): string | null {
-  const parsed = parseBackendTimestamp(iso);
-  return parsed ? parsed.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : null;
+function isoDateDaysAgo(days: number): string {
+  const date = new Date();
+  date.setUTCDate(date.getUTCDate() - days);
+  return date.toISOString().slice(0, 10);
 }
 
 export default function PortfolioBuilder() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const { setDrawer } = useApp();
+  const { canAccessAdmin } = useApp();
   const footprint = useFootprint();
   // S9 geo → campaign handoff: a `prefill_source=geo-drilldown` link seeds a
   // draft context banner. The state predicate itself applies through the
@@ -73,7 +78,6 @@ export default function PortfolioBuilder() {
   const targetLenderStatus = configOptionsQuery.isError
     ? 'unavailable'
     : configOptionsQuery.data?.target_lender_refs_status ?? 'loading';
-  const lenderName = configOptionsQuery.data?.lender_name?.trim() || 'configured lender';
   // Build the GEO dropdown from the tenant footprint. Memoised so the
   // FilterSelect doesn't get a fresh options array on every render (it
   // would be identity-stable for same-footprint re-renders).
@@ -127,12 +131,15 @@ export default function PortfolioBuilder() {
   // portfolio-builder.save.test.tsx keeps the blocking API out for good.
   const [savePanelOpen, setSavePanelOpen] = useState(false);
   const [saveName, setSaveName] = useState('');
+  const [saveValidationError, setSaveValidationError] = useState<string | null>(null);
   const [campaignSetup, setCampaignSetup] = useState<CampaignSetupState>(DEFAULT_CAMPAIGN_SETUP);
-  const campaignSetupDefaultRef = useRef<CampaignSetupState>(DEFAULT_CAMPAIGN_SETUP);
-  const currentDefaultCampaignSetup = useMemo(
-    () => buildDefaultCampaignSetup(lenderName),
-    [lenderName],
-  );
+  const campaignBuildConfig = useMemo(() => {
+    const config = buildCampaignConfig(campaignSetup);
+    return {
+      suppression_policy: config.suppression_policy,
+      household_dedup: config.household_dedup,
+    };
+  }, [campaignSetup]);
   const {
     data: campaignsData,
     isPending: campaignsLoading,
@@ -150,8 +157,12 @@ export default function PortfolioBuilder() {
   // changes (via Run build or URL navigation). 6 retries / 5s apart =
   // 30s of auto-retry before surfacing the red error path.
   const committedKey = useMemo(
-    () => JSON.stringify({ filters: committedFilters, stateCodes: committedStateCodes }),
-    [committedFilters, committedStateCodes],
+    () => JSON.stringify({
+      filters: committedFilters,
+      stateCodes: committedStateCodes,
+      campaignBuildConfig,
+    }),
+    [campaignBuildConfig, committedFilters, committedStateCodes],
   );
   const {
     data: preview,
@@ -160,7 +171,11 @@ export default function PortfolioBuilder() {
     manualRetry: retryBuild,
     isFetching: previewFetching,
   } = useWarmingUpRetry<PortfolioPreview>(
-    (signal) => api.portfolioPreview(buildPreviewCriteria(committedFilters, committedStateCodes), signal),
+    (signal) => api.portfolioPreview(
+      buildPreviewCriteria(committedFilters, committedStateCodes),
+      signal,
+      campaignBuildConfig,
+    ),
     [committedKey],
     { queryKey: queryKeys.portfolioPreview([committedKey]), keepPreviousData: true },
   );
@@ -170,22 +185,77 @@ export default function PortfolioBuilder() {
   // "Run build → Save build within ~1s" found Save enabled mid-build.
   // Everything that must not race an in-flight build gates on this.
   const buildInFlight = building || previewFetching;
+  // The server owns both the treatment limit and the eligibility decision.
+  // Equality to true is deliberate: an older or malformed response fails
+  // closed for persistence while Run build and recommendation exploration
+  // remain available.
+  const campaignBuildEligible = preview?.campaign_build_eligible === true;
+  const campaignBuildLimit = preview?.campaign_build_limit ?? 10_000;
   const previewError = error
     ? error instanceof Error
       ? `Couldn't load portfolio preview: ${error.message}`
       : "Couldn't load portfolio preview."
     : null;
+  // Both SQL endpoints include start and end, so 89 days back plus today is
+  // exactly 90 calendar days.
+  const observedFrom = useMemo(() => isoDateDaysAgo(89), []);
+  const observedTo = useMemo(() => isoDateDaysAgo(0), []);
+  const performanceQuery = useQuery<CampaignPerformanceFunnelResponse>({
+    queryKey: ['portfolio-campaign-performance', observedFrom, observedTo],
+    queryFn: ({ signal }) => api.salesCampaignPerformance(observedFrom, observedTo, signal),
+    retry: false,
+  });
+  const recommendationQuery = useQuery<CampaignRecommendationResponse>({
+    queryKey: ['portfolio-campaign-recommendation', committedKey],
+    queryFn: ({ signal }) => api.campaignRecommendation(
+      buildPreviewCriteria(committedFilters, committedStateCodes),
+      signal,
+    ),
+    enabled: Boolean(preview && preview.marketable_population > 0),
+    retry: false,
+  });
 
   const setFilter = (key: string) => (next: string) => setFilters((f) => ({ ...f, [key]: next }));
-  const setCampaignField = (key: Exclude<keyof CampaignSetupState, 'marketHouseholdTogether'>) => (
+  const setCampaignField = (key: Exclude<
+    keyof CampaignSetupState,
+    | 'marketHouseholdTogether'
+    | 'generationMode'
+    | 'generatorLabel'
+    | 'provenanceTokenA'
+    | 'provenanceTokenB'
+    | 'subjectA'
+    | 'subjectB'
+    | 'bodyA'
+    | 'bodyB'
+  >) => (
     event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>,
-  ) => setCampaignSetup((current) => ({ ...current, [key]: event.target.value }));
+  ) => setCampaignSetup((current) => ({
+    ...current,
+    [key]: event.target.value,
+  }));
   const toggleHouseholdDedup = useCallback(() => {
     setCampaignSetup((current) => ({
       ...current,
       marketHouseholdTogether: !current.marketHouseholdTogether,
     }));
   }, []);
+  const applyRecommendation = useCallback(() => {
+    const recommendation = recommendationQuery.data;
+    if (!recommendation || recommendation.variants.length !== 2) return;
+    const [variantA, variantB] = recommendation.variants;
+    setCampaignSetup((current) => ({
+      ...current,
+      subjectA: variantA.subject,
+      subjectB: variantB.subject,
+      bodyA: variantA.body,
+      bodyB: variantB.body,
+      holdoutPct: String(recommendation.holdout_pct),
+      generationMode: recommendation.generation_mode,
+      generatorLabel: recommendation.generator_label,
+      provenanceTokenA: variantA.provenance_token,
+      provenanceTokenB: variantB.provenance_token,
+    }));
+  }, [recommendationQuery.data]);
   const buildDirty = useMemo(
     () =>
       JSON.stringify({ filters, stateCodes }) !==
@@ -224,16 +294,33 @@ export default function PortfolioBuilder() {
     }
   }, [buildDirty]);
 
+  const saveRequestRef = useRef<{ fingerprint: string; requestId: string } | null>(null);
   const onOpenSavePanel = useCallback(() => {
-    if (buildDirty || buildInFlight) return;
+    if (buildDirty || buildInFlight || preview?.campaign_build_eligible !== true) return;
+    saveRequestRef.current = null;
     setSaveName(`Portfolio build ${new Date().toLocaleString()}`);
+    setSaveValidationError(null);
     setSavePanelOpen(true);
-  }, [buildDirty, buildInFlight]);
+  }, [buildDirty, buildInFlight, preview?.campaign_build_eligible]);
 
   const [saving, setSaving] = useState(false);
   const onConfirmSave = useCallback(async () => {
     const name = saveName.trim();
-    if (!name || saving) return;
+    if (!name || saving || buildInFlight) return;
+    if (preview?.campaign_build_eligible !== true) {
+      setSaveValidationError(
+        `This build is not eligible for the governed ${campaignBuildLimit.toLocaleString()}-contact campaign limit. Refine the filters and run it again.`,
+      );
+      setSaveHint('failed');
+      return;
+    }
+    const copyError = campaignCopyValidationError(campaignSetup);
+    if (copyError) {
+      setSaveValidationError(copyError);
+      setSaveHint('failed');
+      return;
+    }
+    setSaveValidationError(null);
     // Re-audit #4 (2026-06-12): the panel used to close BEFORE the await,
     // so a failed save silently discarded the operator's typed name. Keep
     // the panel (and the name) until the save actually succeeds; on failure
@@ -241,12 +328,22 @@ export default function PortfolioBuilder() {
     // the operator can retry without re-typing.
     setSaving(true);
     try {
+      const criteria = buildPreviewCriteria(committedFilters, committedStateCodes);
+      const campaignConfig = buildCampaignConfig(campaignSetup);
+      const fingerprint = JSON.stringify({ name, criteria, campaignConfig });
+      if (saveRequestRef.current?.fingerprint !== fingerprint) {
+        saveRequestRef.current = {
+          fingerprint,
+          requestId: crypto.randomUUID(),
+        };
+      }
       await api.portfolioCreate(
         name,
-        buildPreviewCriteria(committedFilters, committedStateCodes),
-        buildCampaignConfig(campaignSetup),
+        criteria,
+        { ...campaignConfig, request_id: saveRequestRef.current.requestId },
       );
       await refetchCampaigns();
+      saveRequestRef.current = null;
       setSavePanelOpen(false);
       setSaveHint('saved');
     } catch {
@@ -254,7 +351,17 @@ export default function PortfolioBuilder() {
     } finally {
       setSaving(false);
     }
-  }, [campaignSetup, committedFilters, committedStateCodes, refetchCampaigns, saveName, saving]);
+  }, [
+    campaignBuildLimit,
+    campaignSetup,
+    buildInFlight,
+    committedFilters,
+    committedStateCodes,
+    preview?.campaign_build_eligible,
+    refetchCampaigns,
+    saveName,
+    saving,
+  ]);
 
   useEffect(() => {
     if (copyHint === 'idle') return;
@@ -267,16 +374,6 @@ export default function PortfolioBuilder() {
     const t = window.setTimeout(() => setSaveHint('idle'), 2200);
     return () => window.clearTimeout(t);
   }, [saveHint]);
-
-  useEffect(() => {
-    const previousDefault = campaignSetupDefaultRef.current;
-    campaignSetupDefaultRef.current = currentDefaultCampaignSetup;
-    setCampaignSetup((current) => (
-      JSON.stringify(current) === JSON.stringify(previousDefault)
-        ? currentDefaultCampaignSetup
-        : current
-    ));
-  }, [currentDefaultCampaignSetup]);
 
   // When the URL changes (browser back/forward), reconcile local state
   // and refetch so the KPI grid reflects the navigation. We only
@@ -391,7 +488,7 @@ export default function PortfolioBuilder() {
               size="default"
               icon="doc"
               onClick={onOpenSavePanel}
-              disabled={buildDirty || buildInFlight}
+              disabled={buildDirty || buildInFlight || !campaignBuildEligible}
               aria-label="Save current portfolio build"
               aria-expanded={savePanelOpen}
               data-testid="portfolio-save-build"
@@ -404,6 +501,8 @@ export default function PortfolioBuilder() {
                 ? 'Run before saving'
                 : buildInFlight
                 ? 'Build running…'
+                : !campaignBuildEligible
+                ? 'Refine before saving'
                 : 'Save build'}
             </Button>
             <Button
@@ -432,7 +531,7 @@ export default function PortfolioBuilder() {
                 className="form-input save-build-form__input"
                 value={saveName}
                 onChange={(e) => setSaveName(e.target.value)}
-                maxLength={120}
+                maxLength={80}
                 autoFocus
                 data-testid="portfolio-save-name"
               />
@@ -441,11 +540,11 @@ export default function PortfolioBuilder() {
                 size="sm"
                 type="submit"
                 icon="check"
-                disabled={saveName.trim().length === 0 || saving}
-                aria-busy={saving}
+                disabled={saveName.trim().length === 0 || saving || buildInFlight || !campaignBuildEligible}
+                aria-busy={saving || buildInFlight}
                 data-testid="portfolio-save-confirm"
               >
-                {saving ? 'Saving…' : 'Save'}
+                {saving ? 'Saving…' : buildInFlight ? 'Rechecking…' : 'Save'}
               </Button>
               <Button
                 variant="ghost"
@@ -459,7 +558,7 @@ export default function PortfolioBuilder() {
               </Button>
               {saveHint === 'failed' && (
                 <span className="save-build-form__error" role="alert">
-                  Save failed — your name is kept; try again.
+                  {saveValidationError ?? 'Save failed — your name is kept; try again.'}
                 </span>
               )}
             </form>
@@ -516,9 +615,15 @@ export default function PortfolioBuilder() {
               className="status-callout status-callout--day-zero mt-4"
             >
               <strong>First data refresh pending.</strong>{' '}
-              Unity Catalog gold tables are empty. Open{' '}
-              <Link to="/admin-config#data-operations">Admin Data Operations</Link>
-              {' '}and run the governed scoring refresh after the source-feature refresh completes.
+              Unity Catalog gold tables are empty.{' '}
+              {canAccessAdmin ? (
+                <>
+                  Open <Link to="/admin-config#data-operations">Admin Data Operations</Link>
+                  {' '}and run the governed scoring refresh after the source-feature refresh completes.
+                </>
+              ) : (
+                <>Contact an administrator to run the governed scoring refresh after the source-feature refresh completes.</>
+              )}
             </div>
           )}
           {!isDayZero(preview) && preview?.trend_note && (
@@ -529,6 +634,8 @@ export default function PortfolioBuilder() {
               {preview.trend_note}
             </div>
           )}
+
+          {preview && <CampaignBuildGuard preview={preview} />}
 
           <div className="kpi-row kpi-row--spaced">
             <KpiCard
@@ -579,234 +686,43 @@ export default function PortfolioBuilder() {
           build with refinance-economics leads exists — never on day-zero or an
           empty cohort, where a dollar headline would be misleading. */}
       {!isDayZero(preview) && (preview?.high_intent_leads ?? 0) > 0 && (
-        <RoiProjector leads={preview!.high_intent_leads} />
+        <RoiProjector
+          preview={preview!}
+          performance={performanceQuery.data}
+          performanceStatus={
+            performanceQuery.isPending
+              ? 'loading'
+              : performanceQuery.isError
+                ? 'unavailable'
+                : 'available'
+          }
+        />
       )}
 
-      <div className="surface mt-4">
-        <div className="surface__hdr surface__hdr--split">
-          <div className="surface__hdr-main">
-            <div className="surface__icon">
-              <Icon name="send" size={14} />
-            </div>
-            <div>
-              <div className="h-4">Campaign setup</div>
-              <div className="muted fs-12">
-                Eligible-only suppression, channel sequence, holdout, send window, and ROI inputs.
-              </div>
-            </div>
-          </div>
-          <span className="chip chip--success">eligible only · 30d cap</span>
-        </div>
-        <div className="surface__body">
-          <div className="campaign-setup">
-            <label className="campaign-setup__field">
-              <span>Subject A</span>
-              <input
-                className="form-input"
-                value={campaignSetup.subjectA}
-                onChange={setCampaignField('subjectA')}
-                maxLength={120}
-              />
-            </label>
-            <label className="campaign-setup__field">
-              <span>Subject B</span>
-              <input
-                className="form-input"
-                value={campaignSetup.subjectB}
-                onChange={setCampaignField('subjectB')}
-                maxLength={120}
-              />
-            </label>
-            <label className="campaign-setup__field campaign-setup__field--wide">
-              <span>Body angle A</span>
-              <textarea
-                className="form-input campaign-setup__textarea"
-                value={campaignSetup.bodyA}
-                onChange={setCampaignField('bodyA')}
-                maxLength={700}
-              />
-            </label>
-            <label className="campaign-setup__field campaign-setup__field--wide">
-              <span>Body angle B</span>
-              <textarea
-                className="form-input campaign-setup__textarea"
-                value={campaignSetup.bodyB}
-                onChange={setCampaignField('bodyB')}
-                maxLength={700}
-              />
-            </label>
-            <label className="campaign-setup__field">
-              <span>Holdout %</span>
-              <input
-                className="form-input"
-                inputMode="decimal"
-                value={campaignSetup.holdoutPct}
-                onChange={setCampaignField('holdoutPct')}
-              />
-            </label>
-            <label className="campaign-setup__field">
-              <span>Send start</span>
-              <input
-                className="form-input"
-                type="time"
-                value={campaignSetup.startLocal}
-                onChange={setCampaignField('startLocal')}
-              />
-            </label>
-            <label className="campaign-setup__field">
-              <span>Send end</span>
-              <input
-                className="form-input"
-                type="time"
-                value={campaignSetup.endLocal}
-                onChange={setCampaignField('endLocal')}
-              />
-            </label>
-            <label className="campaign-setup__field">
-              <span>Budget</span>
-              <input
-                className="form-input"
-                inputMode="decimal"
-                value={campaignSetup.budget}
-                onChange={setCampaignField('budget')}
-                placeholder="optional"
-              />
-            </label>
-            <label className="campaign-setup__field">
-              <span>Email cost</span>
-              <input
-                className="form-input"
-                inputMode="decimal"
-                value={campaignSetup.emailCost}
-                onChange={setCampaignField('emailCost')}
-              />
-            </label>
-            <label className="campaign-setup__field">
-              <span>SMS cost</span>
-              <input
-                className="form-input"
-                inputMode="decimal"
-                value={campaignSetup.smsCost}
-                onChange={setCampaignField('smsCost')}
-              />
-            </label>
-            <label className="campaign-setup__field">
-              <span>Mail cost</span>
-              <input
-                className="form-input"
-                inputMode="decimal"
-                value={campaignSetup.mailCost}
-                onChange={setCampaignField('mailCost')}
-              />
-            </label>
-            <div className="campaign-setup__field campaign-setup__field--wide">
-              <div className="campaign-setup__toggle">
-                <div className="campaign-setup__toggle-copy">
-                  <span>market the household together</span>
-                  <p>
-                    One eligible primary contact per household enters the campaign;
-                    suppressed co-owners are counted in the summary.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  className={`switch ${campaignSetup.marketHouseholdTogether ? 'on' : ''}`}
-                  onClick={toggleHouseholdDedup}
-                  aria-pressed={campaignSetup.marketHouseholdTogether}
-                  aria-label="market the household together"
-                />
-              </div>
-            </div>
-          </div>
-          <div className="campaign-setup__meta">
-            <span>Email → SMS after 3 days → direct mail after 10 days</span>
-            <span>Staged cadence only; customer-system delivery requires a connected activation destination.</span>
-            <span><Link to="/admin-config#data-operations">Admin Data Operations</Link> shows refresh status.</span>
-            <span>Tue-Thu · borrower local time</span>
-          </div>
-        </div>
-      </div>
+      <CampaignSetupPanel
+        setup={campaignSetup}
+        recommendation={recommendationQuery.data}
+        recommendationPending={recommendationQuery.isPending}
+        recommendationError={recommendationQuery.isError}
+        recommendationFetching={recommendationQuery.isFetching}
+        canRecommend={Boolean(preview && preview.marketable_population > 0)}
+        canAccessAdmin={canAccessAdmin}
+        onFieldChange={setCampaignField}
+        onNumericFieldCommit={(key, value) => setCampaignSetup((current) => ({
+          ...current,
+          [key]: value,
+        }))}
+        onToggleHouseholdDedup={toggleHouseholdDedup}
+        onRegenerate={() => void recommendationQuery.refetch()}
+        onApply={applyRecommendation}
+      />
 
-      <div className="surface mt-4">
-        <div className="surface__hdr surface__hdr--split">
-          <div className="surface__hdr-main">
-            <div className="surface__icon">
-              <Icon name="doc" size={14} />
-            </div>
-            <div>
-              <div className="h-4">Saved campaigns</div>
-              <div className="muted fs-12">Drafts and review status for portfolio builds.</div>
-            </div>
-          </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            icon="tweak"
-            onClick={() => void refetchCampaigns()}
-            aria-label="Refresh saved campaigns"
-          >
-            Refresh
-          </Button>
-        </div>
-        <div className="surface__body">
-          {campaignsLoading ? (
-            <div className="muted fs-12">Loading campaigns…</div>
-          ) : campaignsError ? (
-            <div className="status-callout status-callout--danger">{campaignsError}</div>
-          ) : campaigns.length === 0 ? (
-            <div className="muted fs-12">No saved campaigns.</div>
-          ) : (
-            <div className="saved-workspace">
-              <div className="saved-workspace__summary">
-                <span>{campaigns.length.toLocaleString()} saved</span>
-                <span>eligible-only policy required before approval</span>
-              </div>
-              {groupSavedCampaigns(campaigns).slice(0, 8).map((row) => {
-                const campaign = row.campaign;
-                const householdEnabled = campaign.household_dedup?.enabled === true;
-                const suppressedCount = campaign.household_summary?.suppressed_co_owner_count ?? 0;
-                const grouped = row.draftCount > 1;
-                const latestSaved = grouped ? formatSavedCampaignDate(row.latestAt) : null;
-                return (
-                  <div key={campaign.campaign_id} className="saved-workspace__item">
-                    <span className="status-dot status-dot--ok" aria-hidden="true" />
-                    <div className="saved-workspace__body">
-                      <span className="text-1">{campaign.name}</span>
-                      <span>{campaign.status.replace(/_/g, ' ')} · {campaignCriteriaSummary(campaign)}</span>
-                      {(grouped || householdEnabled) && (
-                        <div className="saved-workspace__proof">
-                          {grouped && (
-                            <span className="chip chip--neutral chip--compact">×{row.draftCount} drafts</span>
-                          )}
-                          {grouped && latestSaved && (
-                            <span className="muted fs-11">latest {latestSaved}</span>
-                          )}
-                          {householdEnabled && (
-                            <>
-                              <span className="chip chip--warning">
-                                {suppressedCount.toLocaleString()} co-owner
-                                {suppressedCount === 1 ? '' : 's'} suppressed
-                              </span>
-                              <button
-                                type="button"
-                                className="evidence-chip"
-                                onClick={() => setDrawer(DRAWER_SOURCES.householdRollup)}
-                              >
-                                <Icon name="link" size={9} className="e-ico" />
-                                <span className="evidence-chip__label">household_rollup</span>
-                              </button>
-                            </>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      </div>
+      <SavedCampaignsPanel
+        campaigns={campaigns}
+        loading={campaignsLoading}
+        error={campaignsError}
+        onRefresh={refetchCampaigns}
+      />
 
       {preview?.high_intent_leads !== undefined && preview.high_intent_leads > 0 && (
         <div className="lead-cta">

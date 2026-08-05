@@ -1,12 +1,11 @@
 import { useEffect, useRef } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router';
 import { PageShell } from '../components/layout/PageShell';
 import { KpiCard } from '../components/mortgage/KpiCard';
 import { USChoroplethMap } from '../components/mortgage/USChoroplethMap';
 import { PinnedInsights } from '../components/mortgage/PinnedInsights';
 import { PortfolioSummaryCard } from '../components/mortgage/PortfolioSummaryCard';
 import { LastLoginSummary } from '../components/mortgage/LastLoginSummary';
-import { AgentActivityLog } from '../components/mortgage/AgentActivityLog';
 import { Button, Chip } from '../components/Primitives';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
 import { Icon } from '../components/Icon';
@@ -21,13 +20,6 @@ import { EntradaWordmark } from '../components/brand/Entrada';
 import { formatRefreshed } from '../lib/formatRefreshed';
 import type { HomeSummary, KpiTrend, PortfolioPreview } from '../types';
 import { HIGH_OPPORTUNITY_KPI_LABEL } from '../lib/opportunityScore';
-
-const FUTURE_MODULES = [
-  { code: 'M1', title: 'Pre-Qualified Offer & Self-Serve Accept', desc: 'Borrower-facing pre-qualified offer with one-click accept → compliant application handoff (FCRA firm-offer + RESPA timing).' },
-  { code: 'M2', title: 'LO Workbench',          desc: 'Officer assist with explainable borrower guidance.' },
-  { code: 'M3', title: 'Underwriting Copilot',  desc: 'Condition handling and exception triage.' },
-  { code: 'M4', title: 'Risk & Retention',      desc: 'Portfolio-level retention and recapture.' },
-];
 
 export const HOME_PORTFOLIO_PREVIEW_CRITERIA = { marketing_eligibility: 'Any' } as const;
 export const APPROVAL_QUEUE_STATE_LABEL = 'current lifecycle state';
@@ -49,11 +41,28 @@ function formatDelta(trend: KpiTrend | undefined): string | undefined {
   return `${sign}${pct.toFixed(1)}% ${trend?.comparison_label ?? 'vs prior snapshot'}`;
 }
 
+export function HomeDayZeroStatus({ canAccessAdmin }: { canAccessAdmin: boolean }) {
+  return (
+    <div role="status" className="status-callout status-callout--day-zero">
+      <strong>First data refresh pending.</strong>{' '}
+      Unity Catalog gold tables are empty.{' '}
+      {canAccessAdmin ? (
+        <>
+          Start and monitor the refresh in{' '}
+          <Link to="/admin-config#data-operations">Admin Data Operations</Link>.
+        </>
+      ) : (
+        'Contact an administrator to start and monitor the refresh.'
+      )}
+    </div>
+  );
+}
+
 export default function Home() {
   // Home KPIs read straight from /api/v1/portfolio/preview. While the request is
   // in flight we show skeletons rather than design-time numbers or em-dashes,
   // so normal loading is visually distinct from a genuinely unknown value.
-  const { lender } = useApp();
+  const { lender, canAccessAdmin } = useApp();
   const navigate = useNavigate();
   const healthCtx = useOptionalHealth();
   // True when the shared health poll has confirmed warehouse / lakebase is
@@ -186,17 +195,7 @@ export default function Home() {
         </div>
       )}
       {isDayZero && (
-        <div
-          role="status"
-          className="status-callout status-callout--day-zero"
-        >
-          <strong>First data refresh pending.</strong>{' '}
-          Unity Catalog gold tables are empty. Run{' '}
-          <code className="callout-code">
-            databricks bundle run mip_refresh_scores -t dev
-          </code>{' '}
-          to populate them.
-        </div>
+        <HomeDayZeroStatus canAccessAdmin={canAccessAdmin} />
       )}
       {!isDayZero && !previewWarming && preview?.trend_note && (
         <div role="status" className="status-callout status-callout--info">
@@ -298,35 +297,10 @@ export default function Home() {
           <div className="h-2">State → county → ZIP → borrower</div>
         </div>
       </div>
-      <div className="layoutA-grid">
-        {/* Home map drills in-place through state/county/ZIP and then opens
-            the filtered Lead Queue. Lead Queue remains the source-of-truth
-            index for borrower selection. */}
-        <USChoroplethMap drillBehavior="filter" />
-        <Reveal>
-          <AgentActivityLog />
-        </Reveal>
-      </div>
-
-      <Reveal>
-        <div className="section-hdr">
-          <div>
-            <div className="eyebrow">Roadmap</div>
-            <div className="h-2">Planned modules</div>
-          </div>
-        </div>
-        <div className="roadmap-grid">
-          {FUTURE_MODULES.map((m) => (
-            <div className="surface" key={m.code}>
-              <div className="surface__body">
-                <div className="eyebrow">{m.code} · planned</div>
-                <div className="h-3 mt-2">{m.title}</div>
-                <p className="body mt-2">{m.desc}</p>
-              </div>
-            </div>
-          ))}
-        </div>
-      </Reveal>
+      {/* Home map drills in-place through state/county/ZIP and then opens
+          the filtered Lead Queue. Lead Queue remains the source-of-truth
+          index for borrower selection. Audit exploration is admin-only. */}
+      <USChoroplethMap drillBehavior="filter" />
 
       <div className="section-actions">
         <Link to="/portfolio-builder" className="btn btn--primary" aria-label="Build a lead portfolio">

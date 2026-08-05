@@ -17,6 +17,8 @@ anyio==4.13.0
     #   httpx
     #   starlette
     #   watchfiles
+asn1crypto==1.5.1
+    # via scramp
 ast-serialize==0.5.0
     # via mypy
 attrs==26.1.0
@@ -25,6 +27,12 @@ attrs==26.1.0
     #   hypothesis
 blinker==1.9.0
     # via flask
+boto3==1.43.50
+    # via -r requirements.in
+botocore==1.43.50
+    # via
+    #   boto3
+    #   s3transfer
 cachetools==7.1.4
     # via
     #   mlflow-skinny
@@ -87,8 +95,10 @@ frozenlist==1.8.0
     #   aiosignal
 gitdb==4.0.12
     # via gitpython
-gitpython==3.1.50
-    # via mlflow-skinny
+gitpython==3.1.56
+    # via
+    #   -r requirements.in
+    #   mlflow-skinny
 google-auth==2.53.0
     # via databricks-sdk
 googleapis-common-protos==1.75.0
@@ -137,6 +147,10 @@ itsdangerous==2.2.0
     # via flask
 jinja2==3.1.6
     # via flask
+jmespath==1.1.0
+    # via
+    #   boto3
+    #   botocore
 joblib==1.5.3
     # via scikit-learn
 kiwisolver==1.5.0
@@ -232,8 +246,12 @@ pandas==2.3.3
     #   mlflow
 pathspec==1.1.1
     # via mypy
-pillow==12.2.0
-    # via matplotlib
+pg8000==1.31.5
+    # via -r requirements.in
+pillow==12.3.0
+    # via
+    #   -r requirements.in
+    #   matplotlib
 pluggy==1.6.0
     # via pytest
 prettytable==3.18.0
@@ -255,8 +273,10 @@ psycopg-binary==3.3.4
     # via psycopg
 pyarrow==24.0.0
     # via mlflow
-pyasn1==0.6.3
-    # via pyasn1-modules
+pyasn1==0.6.4
+    # via
+    #   -r requirements.in
+    #   pyasn1-modules
 pyasn1-modules==0.4.2
     # via google-auth
 pybreaker==1.4.1
@@ -293,10 +313,12 @@ pytest-xdist==3.8.0
     # via -r requirements.in
 python-dateutil==2.9.0.post0
     # via
+    #   botocore
     #   databricks-sql-connector
     #   graphene
     #   matplotlib
     #   pandas
+    #   pg8000
 python-dotenv==1.2.2
     # via
     #   -r requirements.in
@@ -318,6 +340,8 @@ requests==2.34.2
     #   opentelemetry-exporter-otlp-proto-http
 ruff==0.8.6
     # via -r requirements.in
+s3transfer==0.19.1
+    # via boto3
 scikit-learn==1.9.0
     # via
     #   mlflow
@@ -327,6 +351,8 @@ scipy==1.17.1
     #   mlflow
     #   scikit-learn
     #   skops
+scramp==1.4.12
+    # via pg8000
 six==1.17.0
     # via python-dateutil
 skops==0.14.0
@@ -380,6 +406,7 @@ tzdata==2026.2
     # via pandas
 urllib3==2.7.0
     # via
+    #   botocore
     #   databricks-sql-connector
     #   docker
     #   requests

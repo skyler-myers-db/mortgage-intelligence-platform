@@ -5,14 +5,11 @@ that no forbidden secret files are committed to git. Local-only files like
 `.env.local` are expected to exist on a developer machine, so this script
 inspects git's tracked set rather than the filesystem.
 
-R6-25: also emits a non-fatal warning when the deploying user lacks the
-``Can Manage`` permission on the Databricks App resource. ``databricks
-bundle validate`` only checks schema, so the two-phase deploy gotcha
-(bundle uploads files; ``databricks apps deploy`` promotes -- see
-``docs/se-onboarding.md`` §5) can otherwise first surface during resource
-apply with a confusing "Can View" permission error. Catching it in the
-pre-deploy scaffold check means SEs see the actionable message BEFORE
-they burn the warehouse warm-up time.
+R6-25: also emits a non-fatal warning when the deploying user may lack the
+``Can Manage`` permission on the Databricks App resource. ``databricks bundle
+validate`` only checks schema, so this can otherwise first surface during the
+governed resource reconciliation with a confusing "Can View" permission
+error. The warning routes operators back to the signed command of record.
 """
 
 from __future__ import annotations
@@ -90,14 +87,13 @@ def _check_app_permissions() -> str | None:
     # access. The fine-grained "Can Manage" grant check requires the
     # permissions endpoint which is awkward to version-proof across CLI
     # releases, so we surface a one-line hint instead of a hard check:
-    # pointer to the documented two-step pattern.
+    # pointer to the governed deployment entrypoint.
     app_id = app.get("id") or app.get("app_id") or _APP_NAME
     return (
-        f"note: Databricks App '{app_id}' detected. If 'databricks bundle "
-        f"deploy -t dev' fails during app resource update with a 'Can View' "
-        f"permission error, run the two-phase deploy documented in "
-        f"docs/se-onboarding.md §5: bundle deploy uploads files, then "
-        f"'databricks apps deploy {_APP_NAME}' promotes them."
+        f"note: Databricks App '{app_id}' detected. If scripts/deploy.sh fails "
+        f"during App resource reconciliation with a 'Can View' permission "
+        f"error, grant the reviewed deployer CAN_MANAGE as documented in "
+        f"docs/se-onboarding.md, then rerun './scripts/deploy.sh -t dev'."
     )
 
 

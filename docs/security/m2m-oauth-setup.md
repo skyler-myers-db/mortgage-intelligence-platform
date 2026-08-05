@@ -56,49 +56,158 @@ three secrets to the GitHub repo — runs from a single Python tool:
 #      an admin PAT in ~/.databrickscfg DEFAULT profile).
 #   2. `gh auth login` against the repo owner. Used to push the three
 #      GitHub secrets via stdin.
-#   3. `./scripts/deploy.sh -t dev` has been run at least once, or the
-#      lower-level bundle resource deploy plus app promotion has created the
-#      deployed App resource (`mip-app`) in the workspace.
+#   3. The reviewed `origin` remote names the GitHub repository that will
+#      receive each role-owned client ID and one-shot client secret.
+#   4. Export MIP_AI_GATEWAY_PROOF_SIGNING_KEY and its derived
+#      MIP_AI_GATEWAY_PROOF_VERIFY_KEY. Credential creation holds its outer
+#      signed App deployment lease and a separate fixed global
+#      mip-oauth-credential-mutations lease, so alternate App names cannot
+#      overlap bootstrap, rotation, audit, or temporary identity probes.
+#   5. Run every standalone bootstrap/rotation from a clean tracked and
+#      untracked worktree. If MIP_DEPLOYMENT_SOURCE_GIT_SHA is set, it must
+#      equal HEAD. Deploy-owned mutations instead require the explicit source
+#      SHA already bound to their borrowed signed outer lease.
 
+# Bootstrap the isolated agent-runtime identity first. It is the only
+# service-principal reader retained on the shared signed-lease root and is the
+# delegated lease writer for every later credential mutation.
 python tools/databricks/provision_m2m_oauth.py \
-    --sp-name mip-nightly-ci-sp \
-    --app-name mip-app \
+    --pre-app-bootstrap \
+    --identity-role agent_runtime \
+    --gh-repo skyler-myers-db/mortgage-intelligence-platform \
+    --set-gh-secrets
+
+# Repeat for the other six separated workspace identities. Group creation is
+# explicit and reviewed only for the admin role.
+python tools/databricks/provision_m2m_oauth.py \
+    --pre-app-bootstrap \
+    --identity-role normal \
+    --gh-repo skyler-myers-db/mortgage-intelligence-platform \
+    --set-gh-secrets
+python tools/databricks/provision_m2m_oauth.py \
+    --pre-app-bootstrap \
+    --identity-role operator2 \
+    --gh-repo skyler-myers-db/mortgage-intelligence-platform \
+    --set-gh-secrets
+python tools/databricks/provision_m2m_oauth.py \
+    --pre-app-bootstrap \
+    --identity-role admin \
+    --create-group \
+    --gh-repo skyler-myers-db/mortgage-intelligence-platform \
+    --set-gh-secrets
+python tools/databricks/provision_m2m_oauth.py \
+    --pre-app-bootstrap \
+    --identity-role release_probe \
+    --gh-repo skyler-myers-db/mortgage-intelligence-platform \
+    --set-gh-secrets
+python tools/databricks/provision_m2m_oauth.py \
+    --pre-app-bootstrap \
+    --identity-role verifier \
+    --gh-repo skyler-myers-db/mortgage-intelligence-platform \
+    --set-gh-secrets
+python tools/databricks/provision_m2m_oauth.py \
+    --pre-app-bootstrap \
+    --identity-role agent_proxy \
     --gh-repo skyler-myers-db/mortgage-intelligence-platform \
     --set-gh-secrets
 ```
 
 What this runs (in order, all via `databricks-sdk`):
 
-1. `w.service_principals.list(filter="displayName eq 'mip-nightly-ci-sp'")`
-   — idempotent lookup. If the SP exists, re-use it; else create it via
-   `w.service_principals.create(...)`.
-2. `w.apps.set_permissions("mip-app", access_control_list=[...CAN_USE...])`
-   — grants the SP `CAN USE` on the deployed App resource.
-3. `w.service_principal_secrets_proxy.create(service_principal_id=...)`
-   — mints a one-shot OAuth client_secret. The secret is returned in
-   the response's `.secret` field and cannot be retrieved later.
-4. `gh secret set DATABRICKS_CLIENT_ID --repo ... <stdin>` (+ the
-   secret and `MIP_APP_URL`) — piped via stdin so the value never
-   appears in argv/ps. Each call is preceded by a GitHub Actions
-   `::add-mask::` directive so any accidental echo downstream is
-   redacted.
+1. Resolve or create only the reserved role-bound service principal. The admin
+   command also creates/joins only `mip-admin` because `--create-group` is
+   explicit.
+2. Acquire the fixed global credential-mutation lease before reading the
+   provider inventory. Write and read back a signed immutable intent containing
+   the exact provider authority, principal, sink descriptor, global lease
+   generation, and prior credential IDs; then call
+   `w.service_principal_secrets_proxy.create(service_principal_id=...)`.
+   A signed observation containing the returned credential ID is durable before
+   the one-shot secret is exposed. Commit-timeout ambiguity is reconciled under
+   the same operation; cleanup is accepted only after a complete repeated-read
+   window proves the prior state. An operation-bound signed quarantine blocks
+   all later credential baselines across every App name until a terminal
+   resolution proves exact provider inventory and sink disposition. Lease
+   expiry and record deletion are not recovery.
+   Recovery is available only through the signed-intent deploy mode documented
+   in `docs/runbook.md`: the operator must independently confirm the principal,
+   application identity, and provider API. A fresh resolver process can take
+   over only the intent's expired global recovery root, revoke only its durable
+   observation or sole attributable delta, delete only the armed GitHub secret
+   names and prove repeated absence, and append a signed terminal record
+   containing both the original operation lease and resolver lease lineages. It
+   leaves a zero-delta unobserved intent quarantined because a bounded inventory
+   read cannot prove that a delayed provider create will never commit and the
+   current provider exposes no durable non-commit evidence; it never
+   reconstructs or re-delivers a secret.
+3. `gh secret set ... --repo ... <stdin>` writes each role's credential
+   material via stdin so it never appears in argv/ps. For the agent-proxy role,
+   the only write is one
+   canonical `DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE` JSON value containing
+   its client ID, immutable credential ID, and one-shot secret. Live consumers
+   derive all three values solely from that canonical bundle. If the bundle
+   write fails, the newly minted credential is revoked, its absence is re-read,
+   and every armed GitHub secret name is deleted with repeated absence proof
+   before the operation resolves. Because GitHub secrets are write-only, this
+   fail-closed invalidation may also remove a prior bundle even when the failed
+   request did not commit. Treat the sink as unavailable and retry the reviewed
+   rotation; do not assume the prior bundle remains usable.
+
+This mode performs no App, Lakebase, Gateway, or warehouse grant and does not
+write `MIP_APP_URL` before an App exists. Pre-App bootstrap is creation-only:
+it refuses every existing reserved principal, whether credentialed or not.
+Use the normal identity flow with the canonical expected application ID for a
+reviewed rotation. If a bootstrap sink fails, the command revokes the minted
+credential and removes the principal; if that cleanup cannot be proven, it
+stops with a manual security-reconciliation error instead of implicitly
+resuming an unproven identity.
+Provision the separate account-SCIM client credentials and the two distinct
+Gateway proof/model-attestation signing keys, then run `scripts/deploy.sh`.
+After bundle apply creates the App, deploy grants exact persistent `CAN_USE` to
+normal, operator2, and admin with their expected application IDs and no secret
+rotation. The release probe receives candidate-only access during an explicit
+unsigned-App rebase and loses it immediately after signed capture.
+
+The normal and operator2 principals are not assigned to an approver group.
+The deployed workflow writes their exact client IDs to
+`MIP_APPROVER_IDENTITIES`; the admin and release-probe client IDs are written to
+`MIP_ADMIN_IDENTITIES`. Workspace App ACLs keep the release probe unreachable
+outside its bounded candidate gate. Those server-owned exact allowlists are the automation
+authorization boundary. `X-Forwarded-Groups` is not part of the documented
+Databricks Apps identity-header contract and is only a local/test compatibility
+path in the application.
 
 Flags of note:
 
 | Flag                    | Default                                          | Purpose                                                                                           |
 | ----------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
-| `--sp-name`             | `mip-nightly-ci-sp`                              | SCIM `displayName` for the SP.                                                                    |
+| `--identity-role`       | `normal`                                         | Selects the reserved principal, client ID, grants, and GitHub sinks as one governance contract.   |
+| `--pre-app-bootstrap`   | off                                              | Creation-only credential first-install mode; refuses every existing principal, requires the reviewed GitHub sink, and forbids App/data-resource options. |
+| `--sp-name`             | role-specific reserved name                      | Optional assertion only; a different or cross-role name is rejected before external calls.        |
+| `--expected-application-id` | role-owned configured client ID, when present | Optional assertion; cross-role and duplicate configured client IDs fail before external calls.    |
+| client ID/secret sink flags | role-owned names                            | Optional assertions only; custom or cross-role GitHub secret destinations are rejected.            |
 | `--app-name`            | resolved from `databricks.yml`                   | Deployed App to grant on.                                                                         |
-| `--gh-repo`             | inferred from `git remote get-url origin`        | Target GitHub repo for secret upload.                                                             |
-| `--set-gh-secrets`      | off (explicit opt-in)                            | Required for secret upload. Without it, the tool prints the client_secret to stdout once.         |
-| `--rotate`              | off                                              | If the SP exists, mint a fresh secret. Old secret remains valid until revoked in Accounts Console. |
-| `--no-grant-can-use`    | grant is on                                      | Skip the CAN_USE grant (use when an admin grants it separately).                                  |
+| `--gh-repo`             | inferred from `git remote get-url origin`        | Must match the detected origin or `MIP_M2M_GITHUB_REPOSITORY`; a different secret sink is rejected before SDK calls or minting. |
+| `--set-gh-secrets`      | off (explicit opt-in)                            | Required for minting and upload; the tool never prints or stores the one-shot client secret.       |
+| `--rotate`              | off                                              | If the SP exists, mint a fresh secret. Deployment revokes every non-active agent-proxy credential only after green cutover and blue retirement. |
+| `--grant-can-use` / `--no-grant-can-use` | role-specific | Control persistent App grants for both operator identities and the admin identity. Release-probe, verifier, agent-runtime, and agent-proxy roles always forbid persistent App `CAN_USE` and reject `--grant-can-use`, including under `--dry-run`. |
 | `--dry-run`             | off                                              | Resolve defaults and validate arguments without touching the workspace.                           |
 
 Rotation (replaces the "Rotation cadence" section below when you use
-the SDK path): re-run with `--rotate --set-gh-secrets`. The old secret
-is still valid until revoked in the Accounts Console — same zero-
-downtime order as the UI flow (new secret first, revoke second).
+the SDK path): use normal mode with the role's canonical
+`--expected-application-id`, `--rotate`, and `--set-gh-secrets`; never combine
+`--rotate` with creation-only `--pre-app-bootstrap`. For every role except
+agent-proxy, a durable sink acknowledgement is followed by immediate retirement
+of every prior credential and an exact one-credential postflight. For agent-proxy,
+the old credential remains usable during blue/green overlap; the signed deploy
+then revokes only the explicitly signed-blue OAuth credential IDs and removes
+their matching Databricks secret-key versions after blue retirement. Final
+postflight requires exactly the retained green credential/key. Any additional
+credential or versioned key is preserved but blocks the release for explicit
+security reconciliation. A partial GitHub sink failure revokes the new
+credential and removes the newly created bootstrap principal immediately, so a
+retry cannot strand a valid but undelivered secret or resume an unproven
+identity.
 
 Tests: `.venv/bin/pytest tests/unit/test_provision_m2m_oauth.py -q`
 mocks the full SDK surface to pin the call-order contract; a future
@@ -123,8 +232,8 @@ through the workspace admin console.
 From the workspace admin console:
 
 1. **Settings → Identity and access → Service principals → Add service principal**.
-2. Name: `mip-nightly-ci-sp` (or your house convention — whatever you pick
-   here will show up in the Apps audit log as the caller).
+2. Name: `mip-nightly-ci-sp`. This is the reserved normal-role identity name
+   used by the scripted contract and the Apps audit log.
 3. No workspace entitlements beyond the defaults are needed. Do **not**
    grant `Workspace access` on the sidebar if it's off by default; the
    SP only needs to traverse the Apps OAuth proxy, nothing else.
@@ -209,7 +318,7 @@ export DATABRICKS_HOST=https://<your-workspace>.cloud.databricks.com
 export DATABRICKS_CLIENT_ID=<your-m2m-client-id>
 export DATABRICKS_CLIENT_SECRET=<your-m2m-client-secret>
 
-python tools/oauth_m2m_mint.py > /tmp/bearer.txt
+.venv/bin/python tools/oauth_m2m_mint.py --output-file /tmp/bearer.txt
 
 # Expect: a JSON body from the deployed app (not a consent HTML page).
 curl -sSf \
@@ -234,18 +343,15 @@ than a local runner.
 
 ## Token TTL and refresh
 
-M2M tokens from Databricks have a **~1 hour TTL**. A Playwright run
-takes 5–10 minutes end-to-end. A single mint at job start is therefore
-enough — we don't need mid-run refresh. `tools/oauth_m2m_mint.py`
-comments mirror this; if the spec ever grows past ~45 min, re-mint
-before the long phase rather than caching across steps.
+M2M tokens from Databricks have a **~1 hour TTL**. Mint immediately before
+each long or independently retried phase rather than assuming one token covers
+the whole workflow. The nightly currently remints before Agent Evaluation, and
+the deploy script remints before Agent Evaluation and the final smoke sweep.
 
-The token itself is written to `$GITHUB_ENV` as `MIP_BEARER_TOKEN`. It
-lives only in the runner VM's process environment — GitHub does not
-persist it, and it is **not** exposed in the Actions logs because the
-mint helper writes the token to stdout while all diagnostics go to
-stderr (GitHub only redacts declared secrets, so the helper's stderr
-lines deliberately never include the token).
+In CI, the token is appended directly to `$GITHUB_ENV` as
+`MIP_BEARER_TOKEN`. It lives only in the runner VM's process environment;
+GitHub does not persist it. The helper never writes a token to stdout. For a
+local check, `--output-file` creates a mode-0600 file.
 
 ---
 
@@ -296,10 +402,12 @@ success.
    export DATABRICKS_HOST=https://<your-workspace>.cloud.databricks.com
    export DATABRICKS_CLIENT_ID=<the-same-client-id>
    export DATABRICKS_CLIENT_SECRET=<the-now-revoked-secret>
-   python tools/oauth_m2m_mint.py
+   rm -f /tmp/revoked-bearer.txt
+   .venv/bin/python tools/oauth_m2m_mint.py \
+     --output-file /tmp/revoked-bearer.txt
    echo "exit=$?"
    ```
-   **Expected:** exit code `4` and a stderr line matching
+   **Expected:** exit code `4`, no token output file, and a stderr line matching
    `ERROR authenticate() raised ... invalid_client` (or similar;
    Databricks' OAuth server returns a 401 with `error=invalid_client`
    for revoked credentials). **Not expected:** exit 0 with a stale
@@ -331,11 +439,51 @@ artifact alongside the warehouse/Lakebase/Genie drill evidence.
 
 - `DATABRICKS_CLIENT_SECRET` is **never** printed to stdout, embedded
   in a commit, pasted in `app.yaml`, or included in a screenshot.
-- The mint helper writes diagnostics to stderr only; stdout carries
-  exactly one payload (the token) so `TOKEN=$(python tools/oauth_m2m_mint.py)`
-  works cleanly.
+- The mint helper writes diagnostics to stderr only and never writes the token
+  to stdout. Use `--github-env` in CI or `--output-file` locally.
 - The SP's scope is `CAN USE` on the deployed app and nothing else. If
   a future feature needs broader access (e.g. SQL warehouse reads), add
   a second purpose-built SP rather than widening this one.
+- The AI Gateway verifier SP is separate from the app-access SP. It may
+  receive only its scoped Lakebase role, endpoint-bound managed-group
+  `CAN QUERY`, and SQL-warehouse `CAN USE`; it must have no direct,
+  unrelated-group, inherited, or effective app permission and no direct or
+  nested membership in `mip-admin` or an app-authorized group.
+- The managed-Supervisor proxy SP is separate from the runtime owner and every
+  app-facing identity. It receives one endpoint-bound, sole-member
+  managed-group `CAN_QUERY`, one direct Genie `CAN_RUN`, and direct execution
+  of the three reviewed UC functions. Global postflights require no App,
+  Lakebase, warehouse, unrelated serving-endpoint or group, foreign catalog,
+  table, volume, model, ownership, inherited, or fourth-function authority.
+- `--identity-role verifier --grant-can-use` is an invalid request. Both the
+  CLI (including `--dry-run`) and direct `provision()` calls reject it before
+  creating a workspace client, mutating Lakebase/serving/warehouse/App
+  permissions, or minting an OAuth secret. Normal app-access and admin roles
+  retain their App `CAN_USE` behavior.
+- Each role is bound to its reserved service-principal name, its configured
+  client ID (when present), and its exact GitHub client ID/client-secret sinks.
+  Custom names, another role's reserved name or client ID, duplicate configured
+  IDs, and cross-role secret destinations fail before repository inference,
+  `gh` checks, workspace-client construction, or mutation. Dry-run enforces the
+  same binding.
+- Verifier provisioning hydrates the workspace-visible group graph, direct
+  roles/entitlements, App ACL, serving ACL, and every warehouse ACL before
+  granting resources or minting a secret. It removes direct access to every
+  non-target warehouse and requires exact direct `CAN_USE` on the target.
+  Databricks automatic identity management can hide account-level nested
+  membership from workspace SCIM, so this preflight is not the authoritative
+  identity proof by itself.
+- The manual live workflow runs
+  `tools/databricks/verify_verifier_identity_boundary.py` with the verifier's
+  own OAuth credentials. Its read-only negative probes must disprove account
+  administration, App use/administration, service-principal secret management,
+  metastore administration or privileges; direct, inherited, and hidden-group
+  ownership/privileges on every visible catalog and schema (including empty
+  containers); and metadata access to every verifier-visible non-target UC
+  relation, serving endpoint, and SQL warehouse before the exact Gateway proof
+  can run. These probes do not invoke a non-target model, execute
+  SQL on a non-target warehouse, or mutate permissions. `DATABRICKS_ACCOUNT_ID`
+  is a required repository secret for this release gate; AWS defaults the
+  account host to `https://accounts.cloud.databricks.com`.
 - The workflow's mint step uses `run: |` with inline shell, not a
   third-party GitHub Action. No marketplace dependency is introduced.

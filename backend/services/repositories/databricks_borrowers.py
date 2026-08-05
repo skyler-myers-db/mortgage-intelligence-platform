@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import re
+from threading import Lock
 from typing import Any
 
 from backend.config.settings import settings
@@ -155,6 +156,8 @@ class DatabricksBorrowerRepository:
         self._client = client
         self._cache = cache if cache is not None else TTLCache()
         self._cache_ttl_s = settings.mip_cache_ttl_s if cache_ttl_s is None else cache_ttl_s
+        self._cache_guard = Lock()
+        self._cache_generation = 0
 
     _GET_SQL = (
         f"SELECT {_BORROWER_DOSSIER_COLUMNS} "
@@ -221,7 +224,6 @@ class DatabricksBorrowerRepository:
         "   OR b.zip = :zip_exact "
         "   OR b.zip LIKE :zip_prefix "
         "   OR UPPER(b.city) LIKE :term_contains "
-        "   OR b.clip = :clip_exact "
         "   OR b.state = :state_exact "
         "   OR UPPER(cr.county_name) LIKE :county_contains "
         "{county_fips_clause} "
@@ -253,10 +255,11 @@ class DatabricksBorrowerRepository:
 
     def get(self, borrower_id: str) -> Borrower360 | None:
         cache_key = f"borrower_dossier:{borrower_id}"
-        if self._cache_ttl_s > 0:
-            cached = self._cache.get(cache_key)
-            if isinstance(cached, Borrower360):
-                return cached.model_copy(deep=True)
+        with self._cache_guard:
+            generation = self._cache_generation
+            cached = self._cache.get(cache_key) if self._cache_ttl_s > 0 else None
+        if self._cache_ttl_s > 0 and isinstance(cached, Borrower360):
+            return cached.model_copy(deep=True)
 
         # Single-statement indexed lookup on the dossier cluster key
         # (borrower_id). Evidence + trigger timeline are both pre-joined
@@ -370,8 +373,19 @@ class DatabricksBorrowerRepository:
                 min_equity_pct=why.min_equity_pct,
             )
         if self._cache_ttl_s > 0:
-            self._cache.set(cache_key, borrower, self._cache_ttl_s)
+            with self._cache_guard:
+                if self._cache_generation == generation:
+                    self._cache.set(cache_key, borrower, self._cache_ttl_s)
         return borrower.model_copy(deep=True)
+
+    def get_fresh(self, borrower_id: str) -> Borrower360 | None:
+        """Bypass a cached dossier generation during a coordinated refresh."""
+
+        cache_key = f"borrower_dossier:{borrower_id}"
+        with self._cache_guard:
+            self._cache_generation += 1
+            self._cache.invalidate(cache_key)
+        return self.get(borrower_id)
 
     def evidence(self, borrower_id: str) -> list[EvidenceEvent] | None:
         # Prefer reading from the dossier's pre-joined evidence array --
@@ -435,7 +449,6 @@ class DatabricksBorrowerRepository:
                 "term_contains": f"%{upper}%",
                 "zip_exact": zip_exact,
                 "zip_prefix": zip_prefix,
-                "clip_exact": term,
                 "state_exact": state_exact,
                 "county_contains": county_contains,
                 **county_params,
@@ -825,60 +838,6 @@ def _build_borrower_proof(row: dict[str, Any]) -> BorrowerProof:
         source_assets=borrower_proof_assets(),
         reproduce=_proof_sql_templates(),
     )
-
-
-class DatabricksOfferRepository:
-    """Offer-input bundle used by the offers router to build a recommendation."""
-
-    def __init__(self, client: DatabricksSqlClient) -> None:
-        self._client = client
-
-    _SQL = (
-        "SELECT "
-        "  rate_spread_bps, equity_pct, has_permit, has_heloc_propensity_trigger, "
-        "  heloc_propensity_score, has_refi_propensity_trigger, refi_propensity_score, "
-        "  listed_for_sale, "
-        "  is_investor, is_current_customer, is_competitor_lien, "
-        "  recommended_offer_code, min_spread_bps_applied, min_equity_pct_applied, "
-        "  heloc_equity_min_applied, cashout_equity_min_applied, "
-        "  retention_min_spread_applied "
-        f"FROM {qualify('gold', 'borrower_360')} "
-        "WHERE borrower_id = :borrower_id "
-        "LIMIT 1"
-    )
-
-    def get_offer_inputs(self, borrower_id: str) -> dict[str, object] | None:
-        row = self._client.execute_one(self._SQL, {"borrower_id": borrower_id})
-        if row is None:
-            return None
-        code = row.get("recommended_offer_code") or "nurture"
-        # Defence in depth: contract expects a known code; surface an
-        # obvious label if gold drifted.
-        if code not in NBO_PRODUCT_LABELS:
-            code = "nurture"
-        return {
-            "rate_spread_bps": int(row.get("rate_spread_bps") or 0),
-            "equity_pct": int(row.get("equity_pct") or 0),
-            "has_permit": _coerce_bool(row.get("has_permit")),
-            "has_heloc_propensity_trigger": _coerce_bool(
-                row.get("has_heloc_propensity_trigger")
-            ),
-            "heloc_propensity_score": int(row.get("heloc_propensity_score") or 0),
-            "has_refi_propensity_trigger": _coerce_bool(
-                row.get("has_refi_propensity_trigger")
-            ),
-            "refi_propensity_score": int(row.get("refi_propensity_score") or 0),
-            "listed_for_sale": _coerce_bool(row.get("listed_for_sale")),
-            "is_investor": _coerce_bool(row.get("is_investor")),
-            "is_current_customer": _coerce_bool(row.get("is_current_customer")),
-            "is_competitor_lien": _coerce_bool(row.get("is_competitor_lien")),
-            "offer_code": code,
-            "min_spread_bps": int(row.get("min_spread_bps_applied") or 75),
-            "min_equity_pct": int(row.get("min_equity_pct_applied") or 15),
-            "heloc_equity_min_pct": int(row.get("heloc_equity_min_applied") or 35),
-            "cashout_equity_min_pct": int(row.get("cashout_equity_min_applied") or 25),
-            "retention_min_spread_bps": int(row.get("retention_min_spread_applied") or 50),
-        }
 
 
 class DatabricksOutreachRepository:

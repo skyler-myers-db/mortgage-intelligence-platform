@@ -203,14 +203,17 @@ export function DataOperationsPanel({ sources, sourcesLoading = false, sourcesEr
     + freshnessStats.staleCount
     + freshnessStats.errorCount
     + freshnessStats.missingTimestampCount;
-  const operationsChipVariant = operationsError || sourcesError || freshnessAttentionCount > 0
+  const operationsPending = operationsLoading || sourcesLoading;
+  const operationsChipVariant = operationsPending
+    ? 'neutral'
+    : operationsError || sourcesError || freshnessAttentionCount > 0
     ? 'warning'
     : activeOperationCount > 0 ? 'success' : 'neutral';
   const operationsChipLabel = operationsError
     ? 'unavailable'
     : sourcesError
       ? 'freshness unavailable'
-      : operationsLoading
+      : operationsPending
         ? 'loading...'
         : activeOperationCount > 0
           ? `${activeOperationCount} running`
@@ -245,10 +248,15 @@ export function DataOperationsPanel({ sources, sourcesLoading = false, sourcesEr
   };
 
   return (
-    <div id="data-operations" className="surface mt-grid">
+    <div
+      id="data-operations"
+      className="surface mt-grid"
+      tabIndex={-1}
+      aria-labelledby="data-operations-title"
+    >
       <div className="surface__hdr surface__hdr--split">
         <div>
-          <div className="h-4">Data operations</div>
+          <div className="h-4" id="data-operations-title">Data operations</div>
           <div className="muted fs-12">
             Governed refresh jobs for rates, source features, scoring snapshots, and workflow state.
           </div>

@@ -147,7 +147,8 @@ describe('ComposePlanCard', () => {
     renderResponse(COMPOSED_EXECUTED);
 
     // Honesty label — must never read as a reviewed catalog workflow.
-    expect(container.textContent).toContain('supervisor_composed');
+    expect(container.textContent).toContain('Databricks Agent Responses');
+    expect(container.textContent).not.toContain('supervisor_composed');
     expect(container.textContent).toContain('databricks-meta-llama');
     expect(container.textContent).toContain('Model-composed');
 

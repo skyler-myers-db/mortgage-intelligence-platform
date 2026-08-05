@@ -14,6 +14,7 @@ from backend.schemas.sales import (
     AssignLeadRequest,
     AssignmentResponse,
     BorrowerLifecycleResponse,
+    CampaignPerformanceFunnelResponse,
     DispositionRequest,
     DispositionResponse,
     DistributeLeadsRequest,
@@ -296,12 +297,19 @@ def record_lead_outcome(
             borrower_id=borrower_id,
             assigned_to_email=payload.assigned_to_email,
         )
+        from backend.services.pii_redaction import mask_source_record_ref
+
+        source_record_ref = (
+            mask_source_record_ref(payload.source_system, payload.source_record_ref)
+            if payload.source_record_ref
+            else None
+        )
         outcome, audit_event_id = store.record_outcome(
             borrower_id=borrower_id,
             actor=actor,
             outcome_type=payload.outcome_type,
             source_system=payload.source_system,
-            source_record_ref=payload.source_record_ref,
+            source_record_ref=source_record_ref,
             assigned_to_email=payload.assigned_to_email
             or (scoped_assignee.email if scoped_assignee is not None else None),
             campaign_id=payload.campaign_id,
@@ -421,6 +429,36 @@ def sales_conversion(
             to_date=to_date.isoformat(),
             group_by=group_by,
             rows=rows,
+        )
+    except (KeyError, PermissionError) as exc:
+        raise _forbidden(exc) from exc
+    except LakebaseError as exc:
+        raise _lakebase_503(exc) from exc
+
+
+@router.get("/sales/campaign-performance", response_model=CampaignPerformanceFunnelResponse)
+def sales_campaign_performance(
+    request: Request,
+    store: SalesStateDep,
+    from_date: Annotated[date, Query(alias="from")],
+    to_date: Annotated[date, Query(alias="to")],
+) -> CampaignPerformanceFunnelResponse:
+    """Return a manager-visible, same-borrower nested campaign funnel."""
+
+    if to_date < from_date:
+        raise HTTPException(status_code=422, detail="to must be on or after from")
+    actor = resolve_actor(request)
+    try:
+        store.require_manager_actor(actor)
+        funnel = store.campaign_performance_funnel(
+            from_date=from_date.isoformat(),
+            to_date=to_date.isoformat(),
+            visible_lo_emails=store.visible_lo_emails(actor=actor),
+        )
+        return CampaignPerformanceFunnelResponse(
+            from_date=from_date.isoformat(),
+            to_date=to_date.isoformat(),
+            **funnel,
         )
     except (KeyError, PermissionError) as exc:
         raise _forbidden(exc) from exc

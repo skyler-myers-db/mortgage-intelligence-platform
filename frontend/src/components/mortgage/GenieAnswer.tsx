@@ -25,6 +25,7 @@ import {
   usePinnedInsights,
 } from '../../lib/pinnedInsights';
 import {
+  coerceNumber,
   formatCell,
   humanizeKey,
   isIdentifierColumn,
@@ -36,6 +37,8 @@ import { useFocusTrap } from '../../hooks/useFocusTrap';
 
 export { stripQuestionRestatement } from './GenieAnswer.markdown';
 export { inferChartFromRows } from './GenieAnswer.logic';
+
+export const GOVERNED_ACTION_SOURCE = 'governed_action';
 
 /**
  * GenieAnswer — renders the widened Genie payload: metric_value (big tabular
@@ -51,17 +54,14 @@ export { inferChartFromRows } from './GenieAnswer.logic';
  *   - Bold (**x**), inline code (`x`), and bullet lists ("- item")
  *     are rendered as real markup so emphasized ZIP codes / segment
  *     names actually pop instead of reading as raw asterisks.
- *   - Charts: the Genie API does support attachment-based charts but
- *     the message endpoint returns them as separate attachment IDs
- *     that have to be fetched via a follow-up call. Not wired today;
- *     the follow-up question chips below let the user pivot to a
- *     more visual question (e.g. "show as a bar chart") and the
- *     table_rows path covers the most common "list me N things" ask.
+ *   - Charts: native visualization metadata is surfaced only when the
+ *     Conversation API returns it; structured rows remain the authoritative
+ *     source for the app's interactive chart layer.
  */
 
 interface GenieAnswerProps {
   payload: GenieAnswerShape;
-  onFollowUp?: (q: string) => void;
+  onFollowUp?: (q: string, conversationId: string | null) => void;
   onAction?: (action: GenieActionSuggestion) => void | Promise<void>;
   /** The question that produced this answer (lives in the conversation, not
    *  the payload). When present on a genuine answer, enables "Pin to Home". */
@@ -94,6 +94,27 @@ export function GenieAnswer({
   const columns = visibleRows[0] ? Object.keys(visibleRows[0]).slice(0, MAX_TABLE_COLS) : [];
   const chartColumns = rows[0] ? Object.keys(rows[0]) : [];
   const cleanedAnswer = answer ? normalizeGenieAnswerLanguage(stripQuestionRestatement(answer)) : '';
+  const isGenieApiAnswer = payload.source === 'genie';
+  const isGovernedActionResult = payload.source === GOVERNED_ACTION_SOURCE;
+  // Live Genie identifiers are duplicated into proof so the governed audit
+  // binding survives canonical answer rewrites. Prefer the top-level wire
+  // fields and consume the proof copies when an older response shape omits
+  // them; never synthesize an identifier client-side.
+  const liveConversationId = payload.conversation_id ?? payload.proof?.conversation_id;
+  const liveMessageId = payload.message_id ?? payload.proof?.message_id;
+  const hasLiveGenieTurn = Boolean(
+    liveConversationId
+    && liveMessageId
+    && payload.genie_status === 'COMPLETED',
+  );
+  const hasApiReasoning = Boolean(
+    hasLiveGenieTurn
+    && Array.isArray(payload.reasoning_trace)
+    && payload.reasoning_trace.length > 0,
+  );
+  const reasoningSummaries = hasApiReasoning && Array.isArray(payload.reasoning_trace)
+    ? payload.reasoning_trace
+    : [];
   // "Pin to Home" (Buyer-Wow #9): only a genuine, trusted data answer is
   // pinnable — never a degraded/policy-blocked caveat. Trust is the app's
   // denylist (`isTrustedGenieSource`), so canonical `trusted_sql`/`sales_ops`
@@ -126,7 +147,12 @@ export function GenieAnswer({
   const chart = plan.chart;
   const proofToggle = payload.proof ? (
     <div className="genie-proof-toggle">
-      <button type="button" className="btn btn--ghost btn--sm" onClick={() => setShowProof((cur) => !cur)}>
+      <button
+        type="button"
+        className="btn btn--ghost btn--sm"
+        aria-expanded={showProof}
+        onClick={() => setShowProof((cur) => !cur)}
+      >
         <Icon name="audit" size={12} />
         {showProof ? 'Hide proof' : 'Show proof'}
       </button>
@@ -161,8 +187,42 @@ export function GenieAnswer({
     onClose: () => setShowProof(false),
   });
 
+  const liveAnswerAnnouncement = [
+    'Genie answer ready.',
+    metric_value !== null && metric_value !== undefined && metric_value !== ''
+      ? String(metric_value)
+      : '',
+    cleanedAnswer,
+  ].filter(Boolean).join(' ');
+  const sourceDisclosure = isGovernedActionResult
+    ? {
+        ariaLabel: 'Answer source: Governed action result',
+        label: 'Governed action result',
+      }
+    : isGenieApiAnswer || hasLiveGenieTurn
+      ? {
+          ariaLabel: 'Answer source: Databricks Genie Conversation API',
+          label: payload.source === 'trusted_sql'
+            ? 'Databricks Genie Conversation API · verified SQL'
+            : 'Databricks Genie Conversation API',
+        }
+      : null;
+
   return (
-    <div>
+    <div className="genie-answer">
+      <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {liveAnswerAnnouncement}
+      </div>
+      {sourceDisclosure && (
+        <div
+          className="genie-answer__api-source"
+          role="note"
+          aria-label={sourceDisclosure.ariaLabel}
+        >
+          <Icon name={isGovernedActionResult ? 'check' : 'sparkle'} size={12} />
+          <span>{sourceDisclosure.label}</span>
+        </div>
+      )}
       {metric_value !== null && metric_value !== undefined && metric_value !== '' && (
         <div
           className={`genie-answer__metric ${dense ? 'genie-answer__metric--dense' : ''}`}
@@ -173,6 +233,35 @@ export function GenieAnswer({
       {proofToggle}
       {nativeVizBadge}
       {cleanedAnswer && <MarkdownAnswer text={cleanedAnswer} />}
+      {/* The backend exposes bounded, public process summaries for live Genie
+          turns through the existing reasoning_trace wire field. Render them
+          as escaped text in a native disclosure. */}
+      {reasoningSummaries.length > 0 && (
+        <details className="genie-answer__reasoning">
+          <summary className="genie-answer__reasoning-summary">
+            <Icon name="flow" size={12} />
+            <span>Genie process summary</span>
+          </summary>
+          <div
+            className="genie-answer__reasoning-body"
+            role="list"
+            aria-label="Databricks Genie public process summaries"
+          >
+            {reasoningSummaries.map((step, i) => (
+              <div
+                key={`${step.kind}-${i}`}
+                className="genie-answer__reasoning-step"
+                role="listitem"
+              >
+                <div className="genie-answer__reasoning-kind">
+                  {humanizeKey(step.kind.replace(/^THOUGHT_TYPE_/, '').toLowerCase())}
+                </div>
+                <div className="genie-answer__reasoning-content">{step.content}</div>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
       {/* FIX Δ3: chart renders BEFORE the underlying table so the user
           sees the visual summary first; the table stays as the
           authoritative data source below. Only renders when withChart
@@ -195,36 +284,72 @@ export function GenieAnswer({
           valueCol={chart.valueCol}
         />
       )}
-      {visibleRows.length > 0 && columns.length > 0 && (
-        <>
-          <table className="genie-answer__table">
-            <thead>
-              <tr>
-                {columns.map((c) => (
-                  <th key={c}>{humanizeKey(c)}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {visibleRows.map((row, i) => (
-                <tr key={i}>
-                  {columns.map((c) => {
-                    const v = row[c];
-                    const isNum = typeof v === 'number' && !isIdentifierColumn(c);
-                    return (
-                      <td key={c} className={isNum ? 'num' : undefined}>
-                        {formatCell(c, v)}
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {hiddenRows > 0 && (
-            <div className="genie-answer__more">+{hiddenRows} more row{hiddenRows === 1 ? '' : 's'}</div>
-          )}
-        </>
+      {/* A single METRIC row is a set of headline facts, not a table —
+          render it as a stat strip (value-first, KPI style) so answers like
+          "count + avg spread + refreshed at" read at a glance. A single
+          RECORD row (identifier columns, e.g. a borrower id) keeps the
+          table: masked ids as KPI headlines misread, and borrower_list
+          plans already render their own list above (QA M6). */}
+      {visibleRows.length === 1 &&
+      columns.length > 0 &&
+      plan.kind === 'none' &&
+      columns.every((c) => !isIdentifierColumn(c)) &&
+      // Warehouse rows arrive as strings — coerce like the chart layer does.
+      columns.some((c) => coerceNumber(visibleRows[0][c]) !== null) ? (
+        <dl className="genie-answer__stats" aria-label="Genie answer headline facts">
+          {columns.map((c) => {
+            const v = visibleRows[0][c];
+            const isNum = coerceNumber(v) !== null && !isIdentifierColumn(c);
+            return (
+              <div key={c} className="genie-answer__stat">
+                <dt className="genie-answer__stat-label">{humanizeKey(c)}</dt>
+                <dd className={`genie-answer__stat-value${isNum ? ' num' : ''}`}>
+                  {formatCell(c, v)}
+                </dd>
+              </div>
+            );
+          })}
+        </dl>
+      ) : (
+        visibleRows.length > 0 &&
+        columns.length > 0 && (
+          <>
+            <div
+              className="genie-answer__table-scroll"
+              role="region"
+              aria-label="Genie answer table"
+              tabIndex={0}
+            >
+              <table className="genie-answer__table">
+                <thead>
+                  <tr>
+                    {columns.map((c) => (
+                      <th key={c}>{humanizeKey(c)}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {visibleRows.map((row, i) => (
+                    <tr key={i}>
+                      {columns.map((c) => {
+                        const v = row[c];
+                        const isNum = typeof v === 'number' && !isIdentifierColumn(c);
+                        return (
+                          <td key={c} className={isNum ? 'num' : undefined}>
+                            {formatCell(c, v)}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {hiddenRows > 0 && (
+              <div className="genie-answer__more">+{hiddenRows} more row{hiddenRows === 1 ? '' : 's'}</div>
+            )}
+          </>
+        )
       )}
       {payload.proof && showProof && typeof document !== 'undefined' && createPortal(
         <>
@@ -278,7 +403,7 @@ export function GenieAnswer({
               key={q}
               type="button"
               className="filter filter--question"
-              onClick={() => onFollowUp(q)}
+              onClick={() => onFollowUp(q, liveConversationId ?? null)}
             >
               <span className="filter__label">Ask</span>
               <span className="filter__value filter__value--question">{q}</span>
@@ -309,8 +434,8 @@ export function GenieAnswer({
           lacks a conversation_id / message_id to attribute the vote to. */}
       {isTrustedGenieSource(payload.source) && (
         <GenieAnswerFeedback
-          conversationId={payload.conversation_id}
-          messageId={payload.message_id}
+          conversationId={liveConversationId}
+          messageId={liveMessageId}
         />
       )}
     </div>

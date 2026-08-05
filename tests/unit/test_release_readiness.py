@@ -138,3 +138,51 @@ def test_bad_zip_fails_package_hygiene_without_hiding_other_unknowns(tmp_path: P
     assert ".env.local" in report["checks"]["package_hygiene"]["evidence"]
     assert report["checks"]["bundle_validate"]["status"] == "not_run"
     assert "Cannot claim release readiness while failing checks remain: Package hygiene." in markdown
+
+
+def test_root_mlflow_database_fails_package_hygiene(tmp_path: Path) -> None:
+    release_zip = tmp_path / "release.zip"
+    with zipfile.ZipFile(release_zip, "w") as archive:
+        archive.writestr("mortgage-intelligence-platform/mlflow.db", b"SQLite format 3\x00")
+
+    talk_track = tmp_path / "talk-track.md"
+    _write_talk_track(talk_track)
+    args = release_readiness.parse_args(
+        [
+            "--release-zip",
+            str(release_zip),
+            "--talk-track",
+            str(talk_track),
+        ]
+    )
+
+    report = release_readiness.build_report(args)
+
+    assert report["checks"]["package_hygiene"]["status"] == "failed"
+    assert "mlflow.db (banned file: mlflow.db)" in report["checks"]["package_hygiene"]["evidence"]
+
+
+def test_mlflow_run_directory_fails_package_hygiene(tmp_path: Path) -> None:
+    release_zip = tmp_path / "release.zip"
+    with zipfile.ZipFile(release_zip, "w") as archive:
+        archive.writestr("mortgage-intelligence-platform/mlruns/0/meta.yaml", "artifact")
+
+    talk_track = tmp_path / "talk-track.md"
+    _write_talk_track(talk_track)
+    args = release_readiness.parse_args(
+        [
+            "--release-zip",
+            str(release_zip),
+            "--talk-track",
+            str(talk_track),
+        ]
+    )
+
+    report = release_readiness.build_report(args)
+
+    assert report["checks"]["package_hygiene"]["status"] == "failed"
+    assert "mlruns/0/meta.yaml" in report["checks"]["package_hygiene"]["evidence"]
+    assert (
+        "banned directory or path segment: mlruns"
+        in report["checks"]["package_hygiene"]["evidence"]
+    )

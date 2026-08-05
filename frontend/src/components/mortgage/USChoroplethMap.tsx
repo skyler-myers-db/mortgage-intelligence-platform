@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import type { FeatureCollection } from 'geojson';
 import type { GeometryCollection, Topology } from 'topojson-specification';
 import { Icon } from '../Icon';

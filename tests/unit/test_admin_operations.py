@@ -50,7 +50,13 @@ class _FakeOps:
             )
         ]
 
-    def run_now(self, key: str) -> JobLaunch:
+    def run_now(
+        self,
+        key: str,
+        *,
+        idempotency_token: str,
+        replay: bool = False,
+    ) -> JobLaunch:
         self.run_calls.append(key)
         return JobLaunch(
             key=key,  # type: ignore[arg-type]
@@ -181,7 +187,10 @@ def test_run_operation_requires_explicit_confirmation() -> None:
     try:
         response = client.post(
             "/api/admin/operations/run",
-            json={"job_key": "gold_refresh"},
+            json={
+                "job_key": "gold_refresh",
+                "request_id": "10111111-1111-4111-8111-111111111111",
+            },
         )
     finally:
         _clear_jobs_override()
@@ -221,9 +230,158 @@ def test_run_operation_audits_then_triggers_job() -> None:
     assert audit_rows[0]["payload_json"]["run_id"] == 789
 
 
+def test_run_operation_replays_same_request_without_second_launch(monkeypatch) -> None:
+    from backend.api import admin
+
+    monkeypatch.setitem(admin._JOB_COOLDOWN_SECONDS, "gold_refresh", 0)
+    fake = _FakeOps()
+    _override_jobs(fake)
+    payload = {
+        "job_key": "gold_refresh",
+        "confirm": True,
+        "reason": "operator_refresh",
+        "request_id": "17111111-1111-4111-8111-111111111111",
+    }
+    try:
+        first = client.post("/api/admin/operations/run", json=payload)
+        replay = client.post("/api/admin/operations/run", json=payload)
+    finally:
+        _clear_jobs_override()
+
+    assert first.status_code == 202, first.text
+    assert replay.status_code == 202, replay.text
+    assert replay.json()["run_id"] == first.json()["run_id"] == 789
+    assert replay.json()["audit_event_id"] == first.json()["audit_event_id"]
+    assert fake.run_calls == ["gold_refresh"]
+
+
+def test_run_operation_rejects_request_id_payload_mismatch(monkeypatch) -> None:
+    from backend.api import admin
+
+    monkeypatch.setitem(admin._JOB_COOLDOWN_SECONDS, "gold_refresh", 0)
+    fake = _FakeOps()
+    _override_jobs(fake)
+    request_id = "18111111-1111-4111-8111-111111111111"
+    try:
+        first = client.post(
+            "/api/admin/operations/run",
+            json={
+                "job_key": "gold_refresh",
+                "confirm": True,
+                "reason": "operator_refresh",
+                "request_id": request_id,
+            },
+        )
+        mismatch = client.post(
+            "/api/admin/operations/run",
+            json={
+                "job_key": "gold_refresh",
+                "confirm": True,
+                "reason": "support_triage",
+                "request_id": request_id,
+            },
+        )
+    finally:
+        _clear_jobs_override()
+
+    assert first.status_code == 202, first.text
+    assert mismatch.status_code == 409, mismatch.text
+    assert fake.run_calls == ["gold_refresh"]
+
+
+def test_run_operation_retry_closes_post_launch_audit_failure(monkeypatch) -> None:
+    from backend.api import admin
+
+    monkeypatch.setitem(admin._JOB_COOLDOWN_SECONDS, "gold_refresh", 0)
+
+    class _RetryOps(_FakeOps):
+        def __init__(self) -> None:
+            super().__init__()
+            self.details: list[tuple[str, str, bool]] = []
+
+        def run_now(
+            self,
+            key: str,
+            *,
+            idempotency_token: str,
+            replay: bool = False,
+        ) -> JobLaunch:
+            self.details.append((key, idempotency_token, replay))
+            return super().run_now(
+                key,
+                idempotency_token=idempotency_token,
+                replay=replay,
+            )
+
+    class _AuditFailsFinalOnce:
+        def __init__(self) -> None:
+            self.events: list[Any] = []
+            self.failed = False
+
+        def list(self, **filters: Any) -> list[Any]:
+            rows = list(reversed(self.events))
+            for key in ("actor", "entity_id", "event_type", "action"):
+                value = filters.get(key)
+                if value is None:
+                    continue
+                attr = "actor" if key == "actor" else key
+                rows = [row for row in rows if getattr(row, attr, None) == value]
+            return rows[: int(filters.get("limit", 50))]
+
+        def write(self, **values: Any) -> Any:
+            if values.get("event_type") == "ADMIN_OPERATION_RUN" and not self.failed:
+                self.failed = True
+                raise LakebaseError("simulated post-launch audit interruption")
+            event = SimpleNamespace(
+                event_id=f"audit-{len(self.events) + 1}",
+                actor=values["actor"],
+                action=values["action"],
+                entity_id=values["entity_id"],
+                event_type=values["event_type"],
+                request_id=values.get("request_id"),
+                payload_json=values.get("payload_json") or {},
+                created_at=datetime.now(UTC).isoformat(),
+            )
+            self.events.append(event)
+            return event
+
+    fake = _RetryOps()
+    audit = _AuditFailsFinalOnce()
+    _override_jobs(fake)
+    app.dependency_overrides[get_audit_store] = lambda: audit
+    request_id = "19111111-1111-4111-8111-111111111111"
+    payload = {
+        "job_key": "gold_refresh",
+        "confirm": True,
+        "reason": "operator_refresh",
+        "request_id": request_id,
+    }
+    try:
+        interrupted = client.post("/api/admin/operations/run", json=payload)
+        replay = client.post("/api/admin/operations/run", json=payload)
+    finally:
+        _clear_jobs_override()
+        app.dependency_overrides.pop(get_audit_store, None)
+
+    assert interrupted.status_code == 503, interrupted.text
+    assert replay.status_code == 202, replay.text
+    assert replay.json()["run_id"] == 789
+    assert fake.details == [
+        ("gold_refresh", request_id, False),
+        ("gold_refresh", request_id, True),
+    ]
+    assert [event.event_type for event in audit.events].count("ADMIN_OPERATION_RUN") == 1
+
+
 def test_run_operation_conflict_when_job_already_active() -> None:
     class _AlreadyRunning(_FakeOps):
-        def run_now(self, key: str) -> JobLaunch:
+        def run_now(
+            self,
+            key: str,
+            *,
+            idempotency_token: str,
+            replay: bool = False,
+        ) -> JobLaunch:
             raise JobAlreadyRunningError(key, run_id=444)
 
     fake = _AlreadyRunning()
@@ -231,7 +389,11 @@ def test_run_operation_conflict_when_job_already_active() -> None:
     try:
         response = client.post(
             "/api/admin/operations/run",
-            json={"job_key": "fred_rates", "confirm": True},
+            json={
+                "job_key": "fred_rates",
+                "confirm": True,
+                "request_id": "12111111-1111-4111-8111-111111111111",
+            },
         )
     finally:
         _clear_jobs_override()
@@ -312,11 +474,21 @@ def test_failed_operation_launch_does_not_create_cooldown_lockout() -> None:
             super().__init__()
             self.failed = False
 
-        def run_now(self, key: str) -> JobLaunch:
+        def run_now(
+            self,
+            key: str,
+            *,
+            idempotency_token: str,
+            replay: bool = False,
+        ) -> JobLaunch:
             if not self.failed:
                 self.failed = True
                 raise JobOperationError("jobs API down")
-            return super().run_now(key)
+            return super().run_now(
+                key,
+                idempotency_token=idempotency_token,
+                replay=replay,
+            )
 
     fake = _FailsOnce()
     _override_jobs(fake)
@@ -359,7 +531,11 @@ def test_run_operation_does_not_trigger_when_audit_is_down() -> None:
     try:
         response = client.post(
             "/api/admin/operations/run",
-            json={"job_key": "fred_rates", "confirm": True},
+            json={
+                "job_key": "fred_rates",
+                "confirm": True,
+                "request_id": "13111111-1111-4111-8111-111111111111",
+            },
         )
     finally:
         _clear_jobs_override()
@@ -397,7 +573,10 @@ def test_databricks_job_operations_uses_env_job_id_and_blocks_active_run(monkeyp
     assert status.latest_run.active is True
 
     try:
-        ops.run_now("gold_refresh")
+        ops.run_now(
+            "gold_refresh",
+            idempotency_token="14111111-1111-4111-8111-111111111111",
+        )
     except JobAlreadyRunningError as exc:
         assert exc.run_id == 456
     else:  # pragma: no cover
@@ -479,7 +658,10 @@ def test_databricks_job_operations_bounds_active_run_fallback(monkeypatch) -> No
     ops = DatabricksJobOperations(workspace)
 
     try:
-        ops.run_now("fred_rates")
+        ops.run_now(
+            "fred_rates",
+            idempotency_token="15111111-1111-4111-8111-111111111111",
+        )
     except JobAlreadyRunningError as exc:
         assert exc.run_id == 9
     else:  # pragma: no cover
@@ -504,6 +686,7 @@ def test_databricks_job_operations_handles_run_now_waiter_shape(monkeypatch) -> 
 
     monkeypatch.setenv("MIP_FRED_RATES_JOB_ID", "321")
     monkeypatch.setattr(settings, "databricks_host", "")
+    run_now_calls: list[dict[str, Any]] = []
     workspace = SimpleNamespace(
         _api=SimpleNamespace(
             _cfg=SimpleNamespace(
@@ -513,14 +696,23 @@ def test_databricks_job_operations_handles_run_now_waiter_shape(monkeypatch) -> 
         ),
         jobs=SimpleNamespace(
             list_runs=lambda **_: [],
-            run_now=lambda **_: _RunNowWaiter(999),
+            run_now=lambda **kwargs: run_now_calls.append(kwargs) or _RunNowWaiter(999),
         ),
     )
     ops = DatabricksJobOperations(workspace)
 
-    launch = ops.run_now("fred_rates")
+    launch = ops.run_now(
+        "fred_rates",
+        idempotency_token="16111111-1111-4111-8111-111111111111",
+    )
 
     assert launch.run_id == 999
+    assert run_now_calls == [
+        {
+            "job_id": 321,
+            "idempotency_token": "16111111-1111-4111-8111-111111111111",
+        }
+    ]
     assert launch.run_page_url == "https://dbc-example.cloud.databricks.com/?o=12345#job/321/run/999"
 
 

@@ -30,11 +30,11 @@ import atexit
 import contextlib
 import logging
 import random
-import threading
 import time
 from collections import OrderedDict
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from threading import Event, Lock
 from typing import Any, Generic, TypeVar
 
@@ -578,22 +578,13 @@ class TTLCache:
 
 
 # Shared executor: one slot per dependency (warehouse/lakebase/genie).
-# Intentionally small so a hung refresh can't spawn unbounded threads; any
-# refresh that runs long waits its turn behind the next-slot dependency
-# instead of piling up. Created lazily so test processes that never touch
-# SWR don't pay for the threads.
+# A cache key retains one Future until the real probe returns, even after a
+# caller stops waiting. That makes timeout handling truthful: a slow probe
+# cannot fan out into replacement work, and its eventual result can still
+# update the cache. Created lazily so processes that never touch SWR do not
+# pay for the threads.
 _SWR_EXECUTOR: ThreadPoolExecutor | None = None
 _SWR_EXECUTOR_LOCK = Lock()
-
-# Per-probe ceiling: the SWR background worker wraps each probe in a
-# ``Thread.join(timeout=_SWR_PROBE_TIMEOUT_S)``. Matches
-# ``backend/services/health_probes.py::_PROBE_TIMEOUT_S`` so the async refresh path has
-# the same latency ceiling as the sync-miss path. A probe that exceeds this
-# is a TCP black hole: we clear the in-flight flag so the slot frees up,
-# log ``event=swr_probe_timeout``, and let the orphaned daemon thread die
-# on process exit (Python can't kill threads, but daemon=True + the atexit
-# ``cancel_futures=True`` shutdown below means the interpreter won't block).
-_SWR_PROBE_TIMEOUT_S = 1.0
 
 
 def _get_swr_executor() -> ThreadPoolExecutor:
@@ -607,17 +598,15 @@ def _get_swr_executor() -> ThreadPoolExecutor:
 
 
 def _shutdown_swr_executor() -> None:
-    """atexit hook -- drop the SWR executor without waiting.
+    """Atexit hook: reject queued work without creating orphan probes.
 
-    ``wait=False`` means we don't block interpreter teardown on a hung
-    refresh (a warehouse probe stuck on a blocking socket read cannot be
-    cancelled from Python). ``cancel_futures=True`` drops queued but
-    not-yet-started work so pending refreshes don't fire during teardown.
+    ``cancel_futures=True`` drops queued but not-yet-started executor work.
+    Python cannot cancel a running sync I/O call; those calls stay in the
+    bounded executor (one Future per dependency) until the underlying client
+    timeout retires them. There is no nested daemon-thread escape hatch.
 
-    Registered at module-import time so uvicorn reloads / worker
-    restarts don't leak the pool. Safe to call multiple times; the
-    second call is a no-op because ``_SWR_EXECUTOR`` is set back to
-    None after shutdown.
+    Safe to call multiple times; the second call is a no-op because
+    ``_SWR_EXECUTOR`` is set back to None after shutdown.
     """
     global _SWR_EXECUTOR
     with _SWR_EXECUTOR_LOCK:
@@ -634,14 +623,16 @@ atexit.register(_shutdown_swr_executor)
 
 class StaleWhileRevalidateCache:
     """Two-tier TTL cache: soft TTL triggers background refresh, hard TTL
-    evicts and forces a synchronous probe.
+    makes a caller wait for the shared in-flight probe.
 
     For each key we track ``(value, hard_expiry, soft_expiry,
     refresh_in_flight)`` under a single lock. ``get_or_refresh`` returns
     the cached value unless the hard TTL has elapsed; if only the soft
     TTL has elapsed it kicks a background refresh into a shared
     ``ThreadPoolExecutor`` and still returns the cached value. Concurrent
-    callers see ``refresh_in_flight`` and skip enqueueing duplicate work.
+    callers share one completion Future. A cold caller waits only for its
+    budget; timing out never creates a cached synthetic failure, and the
+    eventual real completion still refreshes the cache.
 
     Not a drop-in replacement for :class:`TTLCache` -- the API takes a
     probe callable because the whole point is "serve cached while we
@@ -668,177 +659,184 @@ class StaleWhileRevalidateCache:
         self._lock = Lock()
         # key -> (value, hard_expiry, soft_expiry, refresh_in_flight)
         self._entries: dict[str, tuple[Any, float, float, bool]] = {}
+        self._inflight: dict[str, Future[Any]] = {}
 
     def _executor(self) -> ThreadPoolExecutor:
         return self._executor_override or _get_swr_executor()
 
-    def get_or_refresh(self, key: str, probe: Callable[[], Any]) -> Any:
-        """Return cached value if hard TTL unexpired; otherwise probe.
+    def get_or_refresh(
+        self,
+        key: str,
+        probe: Callable[[], Any],
+        *,
+        wait_timeout_s: float = 30.0,
+    ) -> Any | None:
+        """Resolve one key within a caller-level wait budget."""
+        return self.get_or_refresh_many(
+            {key: probe}, wait_timeout_s=wait_timeout_s
+        )[key]
 
-        Fast path (hit, under soft TTL): single lock acquire, return.
-        Stale-but-fresh (soft expired, hard not yet): single lock
-        acquire, schedule background refresh if not already running,
-        return cached.
-        Miss (hard expired or never populated): drop to synchronous
-        probe, store, return.
+    def get_or_refresh_many(
+        self,
+        probes: dict[str, Callable[[], Any]],
+        *,
+        wait_timeout_s: float,
+    ) -> dict[str, Any | None]:
+        """Resolve a probe batch against one absolute caller deadline.
+
+        Every cold dependency starts before this method waits, allowing the
+        probes to overlap. Stale values return immediately while exactly one
+        refresh remains active per key.
         """
+        if wait_timeout_s < 0:
+            raise ValueError("wait_timeout_s must be >= 0")
+        deadline = time.monotonic() + wait_timeout_s
+
+        immediate: dict[str, Any] = {}
+        pending: dict[str, Future[Any]] = {}
+        reservations: list[tuple[str, Callable[[], Any], Future[Any], bool]] = []
         now = self._now()
         with self._lock:
-            entry = self._entries.get(key)
-            if entry is not None:
-                value, hard_expiry, soft_expiry, refreshing = entry
-                if now < hard_expiry:
-                    # Hard TTL still good -- we will return the cached
-                    # value. Decide if we should kick a refresh.
-                    if now >= soft_expiry and not refreshing:
-                        # Mark in-flight under the lock so the second
-                        # concurrent caller cannot also enqueue.
-                        self._entries[key] = (value, hard_expiry, soft_expiry, True)
-                        schedule = True
-                    else:
-                        schedule = False
-                    cached_value = value
-                else:
-                    # Hard TTL blown -- evict and fall through to sync
-                    # probe path below.
-                    del self._entries[key]
-                    schedule = False
-                    cached_value = None
-            else:
-                schedule = False
-                cached_value = None
+            for key, probe in probes.items():
+                entry = self._entries.get(key)
+                if entry is not None:
+                    value, hard_expiry, soft_expiry, _refreshing = entry
+                    if now < hard_expiry:
+                        immediate[key] = value
+                        if now >= soft_expiry and key not in self._inflight:
+                            stale_completion: Future[Any] = Future()
+                            self._inflight[key] = stale_completion
+                            self._entries[key] = (
+                                value,
+                                hard_expiry,
+                                soft_expiry,
+                                True,
+                            )
+                            reservations.append((key, probe, stale_completion, True))
+                        continue
 
-        if cached_value is not None and not schedule:
-            return cached_value
-        if cached_value is not None and schedule:
-            # Background refresh: do not block the request thread.
-            self._submit_refresh(key, probe)
-            return cached_value
+                completion = self._inflight.get(key)
+                if completion is None:
+                    completion = Future()
+                    self._inflight[key] = completion
+                    if entry is not None:
+                        value, hard_expiry, soft_expiry, _refreshing = entry
+                        self._entries[key] = (
+                            value,
+                            hard_expiry,
+                            soft_expiry,
+                            True,
+                        )
+                    reservations.append((key, probe, completion, False))
+                pending[key] = completion
 
-        # Synchronous miss path: run the probe now, store, return.
-        fresh = self._run_probe_sync(probe)
-        self._store(key, fresh)
-        return fresh
+        # Submit after releasing the cache lock. Test executors may execute
+        # inline, and production workers call back into this cache on finish.
+        for reservation in reservations:
+            self._submit_reserved(*reservation)
 
-    def _submit_refresh(self, key: str, probe: Callable[[], Any]) -> None:
-        """Enqueue a background refresh; the worker clears the flag.
+        results: dict[str, Any | None] = dict(immediate)
+        for key, completion in pending.items():
+            remaining = max(0.0, deadline - time.monotonic())
+            try:
+                results[key] = completion.result(timeout=remaining)
+            except FuturesTimeoutError:
+                emit(
+                    log,
+                    "health_probe_caller_timeout",
+                    level=logging.WARNING,
+                    dependency=key,
+                    timeout_s=wait_timeout_s,
+                    outcome="timeout",
+                )
+                results[key] = None
+            except BaseException as exc:  # noqa: BLE001 -- health fails closed
+                emit(
+                    log,
+                    "health_probe_refresh_failed",
+                    level=logging.WARNING,
+                    dependency=key,
+                    outcome="error",
+                    exc_type=type(exc).__name__,
+                )
+                results[key] = None
+        return results
 
-        The worker wraps the actual probe call in a daemon thread with a
-        ``join(timeout=_SWR_PROBE_TIMEOUT_S)``. Rationale: a probe that
-        hangs on a blocking socket read (TCP black hole to the warehouse,
-        frozen Lakebase pooler) would otherwise occupy its executor slot
-        for the full underlying client timeout -- often tens of seconds.
-        With only three SWR slots, a 30 s hang across the three probes
-        exhausts the pool and every subsequent health request falls to
-        the synchronous miss path, defeating the whole cache.
-
-        On timeout we emit ``event=swr_probe_timeout``, clear the
-        in-flight flag so the *next* caller is eligible to schedule a
-        fresh refresh, and let the daemon thread die on process exit.
-        """
+    def _submit_reserved(
+        self,
+        key: str,
+        probe: Callable[[], Any],
+        completion: Future[Any],
+        stale_refresh: bool,
+    ) -> None:
+        """Submit a reservation to the one shared bounded executor."""
 
         def _worker() -> None:
             start = time.monotonic()
-            result: dict[str, Any] = {"value": None, "err": None, "done": False}
-
-            def _probe_runner() -> None:
-                try:
-                    result["value"] = probe()
-                except BaseException as exc:  # noqa: BLE001 -- logged by caller
-                    result["err"] = exc
-                finally:
-                    result["done"] = True
-
-            probe_thread = threading.Thread(
-                target=_probe_runner,
-                name=f"mip-swr-probe-{key}",
-                daemon=True,
-            )
-            probe_thread.start()
-            probe_thread.join(timeout=_SWR_PROBE_TIMEOUT_S)
-            duration_ms = (time.monotonic() - start) * 1000.0
-
-            if not result["done"]:
-                # Probe exceeded the per-probe ceiling. Free the slot;
-                # the orphaned daemon thread will be reaped at exit.
-                emit(
-                    log,
-                    "swr_probe_timeout",
-                    level=logging.WARNING,
-                    dependency=key,
-                    hit_soft_ttl=True,
-                    duration_ms=round(duration_ms, 2),
-                    timeout_s=_SWR_PROBE_TIMEOUT_S,
-                    outcome="timeout",
-                )
-                self._clear_refresh_flag(key)
-                return
-
-            if result["err"] is not None:
-                # On error, keep the last-good value but reset the flag
-                # so the next caller can retry. We do NOT schedule
-                # another refresh here -- next caller decides.
+            try:
+                value = probe()
+            except BaseException as exc:  # noqa: BLE001 -- copied to waiters
+                self._finish_error(key, completion)
+                completion.set_exception(exc)
                 emit(
                     log,
                     "health_probe_background_refresh",
                     level=logging.WARNING,
                     dependency=key,
-                    hit_soft_ttl=True,
-                    duration_ms=round(duration_ms, 2),
+                    hit_soft_ttl=stale_refresh,
+                    duration_ms=round((time.monotonic() - start) * 1000.0, 2),
                     outcome="error",
-                    exc_type=type(result["err"]).__name__,
+                    exc_type=type(exc).__name__,
                 )
-                self._clear_refresh_flag(key)
                 return
 
-            self._store(key, result["value"])
+            self._finish_success(key, completion, value)
+            completion.set_result(value)
             emit(
                 log,
                 "health_probe_background_refresh",
                 dependency=key,
-                hit_soft_ttl=True,
-                duration_ms=round(duration_ms, 2),
+                hit_soft_ttl=stale_refresh,
+                duration_ms=round((time.monotonic() - start) * 1000.0, 2),
                 outcome="ok",
             )
 
         try:
             self._executor().submit(_worker)
-        except RuntimeError:
-            # Executor has been shut down (e.g. atexit during teardown);
-            # fail closed -- clear the flag so subsequent callers can
-            # retry, and let the next sync path re-probe.
-            self._clear_refresh_flag(key)
+        except RuntimeError as exc:
+            self._finish_error(key, completion)
+            completion.set_exception(exc)
 
-    def _run_probe_sync(self, probe: Callable[[], Any]) -> Any:
-        """Run the probe callable outside the lock. Exceptions propagate
-        to the caller (who is responsible for translating them to a
-        'down' state). The three health probe wrappers already convert
-        their own exceptions to ``False``, so in practice this path
-        returns a bool even on dependency failure."""
-        return probe()
-
-    def _store(self, key: str, value: Any) -> None:
+    def _finish_success(
+        self, key: str, completion: Future[Any], value: Any
+    ) -> None:
         now = self._now()
         with self._lock:
+            if self._inflight.get(key) is not completion:
+                return
             self._entries[key] = (
                 value,
                 now + self._hard_ttl_s,
                 now + self._soft_ttl_s,
                 False,
             )
+            del self._inflight[key]
 
-    def _clear_refresh_flag(self, key: str) -> None:
+    def _finish_error(self, key: str, completion: Future[Any]) -> None:
         with self._lock:
-            entry = self._entries.get(key)
-            if entry is None:
+            if self._inflight.get(key) is not completion:
                 return
-            value, hard_expiry, soft_expiry, _ = entry
-            self._entries[key] = (value, hard_expiry, soft_expiry, False)
+            del self._inflight[key]
+            entry = self._entries.get(key)
+            if entry is not None:
+                value, hard_expiry, soft_expiry, _refreshing = entry
+                self._entries[key] = (value, hard_expiry, soft_expiry, False)
 
     def clear(self) -> None:
-        """Drop every cached entry. Tests call this between cases."""
+        """Drop cached and single-flight state; late workers cannot repopulate it."""
         with self._lock:
             self._entries.clear()
+            self._inflight.clear()
 
 
 # ---------------------------------------------------------------------------

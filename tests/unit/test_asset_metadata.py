@@ -151,6 +151,15 @@ class _SensitiveReadinessNoteSqlClient(_AssetSqlClient):
         return super().execute(statement, parameters)
 
 
+class _EmptySqlClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, Any]] = []
+
+    def execute(self, statement: str, parameters: Any = None) -> list[dict[str, Any]]:
+        self.calls.append((statement, parameters))
+        return []
+
+
 def test_asset_metadata_route_returns_typed_sanitized_metadata() -> None:
     response = client.get("/api/admin/assets/lead_population/metadata")
 
@@ -158,6 +167,8 @@ def test_asset_metadata_route_returns_typed_sanitized_metadata() -> None:
     body = response.json()
     assert body["title"] == "Gold Lead Queue Population"
     assert body["uc_object"].endswith(".gold.lead_population")
+    assert body["observed_in_unity_catalog"] is True
+    assert body["observation_source"] == "system.information_schema.tables"
     assert body["row_count"] == 5156184
     assert body["row_count_source"] == "source_readiness"
     assert body["freshness"] in {"fresh", "aging", "stale", "unavailable"}
@@ -273,7 +284,13 @@ def test_asset_metadata_route_requires_admin_membership() -> None:
     assert response.status_code == 403
 
 
-def test_service_uses_registry_parameterized_metadata_and_sanitizes_output() -> None:
+def test_service_uses_registry_parameterized_metadata_and_sanitizes_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "backend.services.asset_metadata.settings.databricks_host",
+        "https://dbc-unit.cloud.databricks.com",
+    )
     fake = _AssetSqlClient()
     payload = AssetMetadataService(fake).get_asset("lead_population")
 
@@ -299,12 +316,19 @@ def test_service_uses_registry_parameterized_metadata_and_sanitizes_output() -> 
     assert "source_table" not in payload.ddl
     assert "redacted_fields" in payload.ddl
     assert "LOCATION" not in payload.ddl
-    assert [node.asset_path for node in payload.lineage] == ["mip.gold.borrower_360"]
+    assert [node.asset_path for node in payload.lineage] == [
+        "mip.gold.borrower_360",
+        "mip.silver.lien_current",
+    ]
+    assert payload.lineage[0].event_time == "2026-05-20 12:10:00"
+    assert payload.lineage[0].event_count == 2
+    assert payload.lineage[0].catalog_explorer_url == (
+        "https://dbc-unit.cloud.databricks.com/explore/data/mip/gold/borrower_360"
+    )
 
     rendered = payload.model_dump_json().lower()
     assert "dbfs:/" not in rendered
     assert "person@example.com" not in rendered
-    assert "mip.silver" not in rendered
     assert "source_table" not in rendered
 
     statements = [statement for statement, _params in fake.calls]
@@ -326,8 +350,8 @@ def test_service_uses_registry_parameterized_metadata_and_sanitizes_output() -> 
 @pytest.mark.parametrize(
     "asset_key",
     [
-        "mip.silver.lien_current",
-        "mip.first_party.loan_applications",
+        "mip.silver.not_registered",
+        "mip.first_party.not_registered",
         "system.access.table_lineage",
         "information_schema.columns",
         "hive_metastore.default.table",
@@ -349,6 +373,67 @@ def test_asset_registry_rejects_unsafe_or_unapproved_assets_without_sql(asset_ke
 def test_asset_registry_accepts_known_aliases_only() -> None:
     assert resolve_asset_descriptor("mip.gold.lead_population").key == "lead_population"
     assert resolve_asset_descriptor("lead_population").key == "lead_population"
+    assert resolve_asset_descriptor("mip.silver.lien_current").key == "lien_current"
+    assert (
+        resolve_asset_descriptor("mip.first_party.loan_applications").key
+        == "loan_applications"
+    )
 
     with pytest.raises(AssetNotFoundError):
-        resolve_asset_descriptor("lien_current")
+        resolve_asset_descriptor("not_registered")
+
+
+def test_function_metadata_uses_the_catalog_explorer_function_route_without_table_scans(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "backend.services.asset_metadata.settings.databricks_host",
+        "dbc-unit.cloud.databricks.com",
+    )
+    fake = _EmptySqlClient()
+
+    payload = AssetMetadataService(fake).get_asset("fn_in_the_money")
+
+    assert payload.object_type == "function"
+    assert payload.observed_in_unity_catalog is False
+    assert payload.observation_source == "system.information_schema.routines"
+    assert payload.catalog_explorer_url == (
+        "https://dbc-unit.cloud.databricks.com/explore/data/functions/"
+        f"{payload.catalog}/gold/fn_in_the_money"
+    )
+    statements = [statement.upper() for statement, _ in fake.calls]
+    assert any("INFORMATION_SCHEMA.ROUTINES" in statement for statement in statements)
+    assert not any(statement.startswith("DESCRIBE DETAIL") for statement in statements)
+    assert not any("COUNT(*)" in statement for statement in statements)
+    assert not any("TABLE_LINEAGE" in statement for statement in statements)
+
+
+def test_object_verification_distinguishes_missing_from_unavailable() -> None:
+    missing = AssetMetadataService(_EmptySqlClient()).get_asset("lead_population")
+    unavailable = AssetMetadataService(_SensitiveErrorSqlClient()).get_asset(
+        "lead_population"
+    )
+
+    assert missing.observed_in_unity_catalog is False
+    assert missing.observation_source == "system.information_schema.tables"
+    assert "Declared UC object was not found" in " ".join(missing.known_data_gaps)
+    assert unavailable.observed_in_unity_catalog is None
+    assert unavailable.observation_source == "unavailable"
+    assert "UC object verification unavailable" in " ".join(
+        unavailable.known_data_gaps
+    )
+
+
+def test_raw_share_metadata_never_falls_back_to_an_unbounded_count() -> None:
+    fake = _EmptySqlClient()
+
+    payload = AssetMetadataService(fake).get_asset("entrada_eval_property_domain_v3")
+
+    assert payload.asset_path == (
+        "cotality_mortgage_data.corelogic.entrada_eval_property_domain_v3"
+    )
+    assert payload.row_count is None
+    assert not any(
+        "SELECT COUNT(*) AS ROW_COUNT FROM" in statement.upper()
+        for statement, _ in fake.calls
+    )

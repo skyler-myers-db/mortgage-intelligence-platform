@@ -44,6 +44,15 @@ def _install_test_coverage() -> None:
     _reset_state_footprint_resolver_for_tests(resolver)
 
 
+def test_decimal_equity_floor_is_not_truncated() -> None:
+    where, params = _where_for(
+        _any_contactability(min_equity_pct=35.9),
+    )
+
+    assert "equity_pct >= :equity_floor" in where
+    assert params["equity_floor"] == 35.9
+
+
 @pytest.mark.parametrize(
     ("relationship", "expected_clause"),
     [
@@ -259,6 +268,15 @@ def test_portfolio_create_rejects_pii_like_names(name: str) -> None:
 def test_portfolio_create_strips_and_accepts_business_name() -> None:
     request = PortfolioCreateRequest(name="  Q3 CA Pilot - competitor recapture  ")
     assert request.name == "Q3 CA Pilot - competitor recapture"
+
+
+def test_portfolio_create_accepts_a_build_without_campaign_copy() -> None:
+    request = PortfolioCreateRequest(
+        name="Illinois refinance cohort",
+        message_variants=[],
+    )
+
+    assert request.message_variants == []
 
 
 def test_portfolio_criteria_rejects_arbitrary_option_text() -> None:

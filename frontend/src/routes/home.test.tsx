@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { MemoryRouter } from 'react-router';
 
 const apiMocks = vi.hoisted(() => ({
   portfolioPreview: vi.fn(),
@@ -16,6 +18,7 @@ vi.mock('../lib/api', () => ({
 import {
   APPROVAL_QUEUE_STATE_LABEL,
   HOME_PORTFOLIO_PREVIEW_CRITERIA,
+  HomeDayZeroStatus,
   requestHomePortfolioPreview,
 } from './home';
 
@@ -35,5 +38,18 @@ describe('Home portfolio preview request contract', () => {
 
   it('describes approval metrics as current lifecycle state, not snapshot state', () => {
     expect(APPROVAL_QUEUE_STATE_LABEL).toBe('current lifecycle state');
+  });
+
+  it('replaces the day-zero Admin link with guidance for non-admins', () => {
+    const regularHtml = renderToStaticMarkup(
+      <MemoryRouter><HomeDayZeroStatus canAccessAdmin={false} /></MemoryRouter>,
+    );
+    expect(regularHtml).toContain('Contact an administrator');
+    expect(regularHtml).not.toContain('/admin-config');
+
+    const adminHtml = renderToStaticMarkup(
+      <MemoryRouter><HomeDayZeroStatus canAccessAdmin /></MemoryRouter>,
+    );
+    expect(adminHtml).toContain('/admin-config#data-operations');
   });
 });

@@ -6,11 +6,12 @@ test.skip(!LIVE, 'Set E2E_LIVE=1 to run procurement accessibility canaries.');
 const APP_URL = process.env.MIP_APP_URL || 'http://127.0.0.1:5173';
 const API_URL = process.env.MIP_API_URL || APP_URL.replace(':5173', ':8000');
 const BEARER = process.env.MIP_BEARER_TOKEN || process.env.DATABRICKS_TOKEN || '';
+const ADMIN_BEARER = process.env.MIP_ADMIN_BEARER_TOKEN || '';
 const AUTH_HEADERS: Record<string, string> = BEARER ? { Authorization: `Bearer ${BEARER}` } : {};
 
 test.use({ baseURL: APP_URL, extraHTTPHeaders: AUTH_HEADERS });
 
-const CORE_ROUTES = ['/', '/lead-queue', '/segment-intelligence', '/ask-genie', '/admin-config'] as const;
+const CORE_ROUTES = ['/', '/lead-queue', '/segment-intelligence', '/ask-genie'] as const;
 const BORROWER_DETAIL_ROUTE_PREFIXES = ['/borrower-360', '/offer-orchestrator'] as const;
 
 async function fetchFirstLeadId(request: APIRequestContext): Promise<string> {
@@ -42,6 +43,70 @@ async function skipOnlyWhenLeadQueueIsExplicitlyEmpty(page: Page): Promise<void>
   }
 }
 
+async function assertActualAdminPage(page: Page): Promise<void> {
+  await expect(
+    page.getByRole('heading', { name: 'Rules, data sources, and audit' }),
+  ).toBeVisible({ timeout: 30_000 });
+}
+
+async function visibleNamelessControls(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
+    const controls = Array.from(document.querySelectorAll<HTMLElement>('button, a[href]'));
+    return controls
+      .filter((el) => {
+        const rect = el.getBoundingClientRect();
+        const style = window.getComputedStyle(el);
+        if (style.display === 'none' || style.visibility === 'hidden') return false;
+        if (rect.width < 1 || rect.height < 1) return false;
+        const name = [
+          el.getAttribute('aria-label'),
+          el.getAttribute('title'),
+          el.textContent,
+        ].join(' ').trim();
+        return name.length === 0;
+      })
+      .map((el) => el.outerHTML.slice(0, 180));
+  });
+}
+
+async function undersizedControls(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
+    const selectors = [
+      'button',
+      'input:not([type="hidden"])',
+      'select',
+      'textarea',
+      'a[href]',
+      '[role="button"]',
+      '[tabindex="0"]',
+      '.filter',
+    ];
+    const controls = Array.from(document.querySelectorAll<HTMLElement>(selectors.join(',')));
+    return controls
+      .filter((el) => {
+        const style = window.getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        if (style.display === 'none' || style.visibility === 'hidden') return false;
+        if (rect.width < 1 || rect.height < 1) return false;
+        if (el.closest('[aria-hidden="true"]')) return false;
+        if (el.classList.contains('sr-skip-link')) return false;
+        if (el.dataset.targetSizeExempt === 'geographic-shape') return false;
+        return rect.width < 24 || rect.height < 24;
+      })
+      .map((el) => {
+        const rect = el.getBoundingClientRect();
+        const name = [
+          el.getAttribute('aria-label'),
+          el.getAttribute('title'),
+          el.textContent,
+          el.getAttribute('placeholder'),
+        ].join(' ').replace(/\s+/g, ' ').trim();
+        return `${el.tagName.toLowerCase()} ${name || el.className || el.id} ${Math.round(rect.width)}x${Math.round(rect.height)}`;
+      })
+      .slice(0, 20);
+  });
+}
+
 test.describe('procurement accessibility canaries', () => {
   test('skip link moves keyboard focus into the main landmark @a11y', async ({ page }) => {
     await page.goto('/');
@@ -58,25 +123,17 @@ test.describe('procurement accessibility canaries', () => {
     for (const path of CORE_ROUTES) {
       await page.goto(path);
       await expect(page.locator('#main-content')).toBeVisible({ timeout: 20_000 });
-      const nameless = await page.evaluate(() => {
-        const controls = Array.from(document.querySelectorAll<HTMLElement>('button, a[href]'));
-        return controls
-          .filter((el) => {
-            const rect = el.getBoundingClientRect();
-            const style = window.getComputedStyle(el);
-            if (style.display === 'none' || style.visibility === 'hidden') return false;
-            if (rect.width < 1 || rect.height < 1) return false;
-            const name = [
-              el.getAttribute('aria-label'),
-              el.getAttribute('title'),
-              el.textContent,
-            ].join(' ').trim();
-            return name.length === 0;
-          })
-          .map((el) => el.outerHTML.slice(0, 180));
-      });
+      const nameless = await visibleNamelessControls(page);
       expect(nameless, `${path}: every visible button/link needs an accessible name`).toEqual([]);
     }
+  });
+
+  test('Admin controls have programmatic names under the admin bearer @a11y', async ({ page }) => {
+    test.skip(!ADMIN_BEARER, 'Requires MIP_ADMIN_BEARER_TOKEN for Admin procurement coverage.');
+    await page.setExtraHTTPHeaders({ Authorization: `Bearer ${ADMIN_BEARER}` });
+    await page.goto('/admin-config');
+    await assertActualAdminPage(page);
+    expect(await visibleNamelessControls(page)).toEqual([]);
   });
 
   test('keyboard focus order exposes visible named controls without traps @a11y', async ({ page }) => {
@@ -132,47 +189,17 @@ test.describe('procurement accessibility canaries', () => {
     for (const path of routes) {
       await page.goto(path);
       await expect(page.locator('#main-content')).toBeVisible({ timeout: 20_000 });
-      const undersized = await page.evaluate(() => {
-        const selectors = [
-          'button',
-          'input:not([type="hidden"])',
-          'select',
-          'textarea',
-          'a[href]',
-          '[role="button"]',
-          '[tabindex="0"]',
-          '.filter',
-        ];
-        const controls = Array.from(document.querySelectorAll<HTMLElement>(selectors.join(',')));
-        return controls
-          .filter((el) => {
-            const style = window.getComputedStyle(el);
-            const rect = el.getBoundingClientRect();
-            if (style.display === 'none' || style.visibility === 'hidden') return false;
-            if (rect.width < 1 || rect.height < 1) return false;
-            if (el.closest('[aria-hidden="true"]')) return false;
-            if (el.classList.contains('sr-skip-link')) return false;
-            // SVG geography regions preserve exact state/county shapes. They
-            // are keyboard reachable and visibly focusable, but target-size
-            // remediation would distort the map geometry; track the exception
-            // explicitly instead of hiding it behind a class selector.
-            if (el.dataset.targetSizeExempt === 'geographic-shape') return false;
-            return rect.width < 24 || rect.height < 24;
-          })
-          .map((el) => {
-            const rect = el.getBoundingClientRect();
-            const name = [
-              el.getAttribute('aria-label'),
-              el.getAttribute('title'),
-              el.textContent,
-              el.getAttribute('placeholder'),
-            ].join(' ').replace(/\s+/g, ' ').trim();
-            return `${el.tagName.toLowerCase()} ${name || el.className || el.id} ${Math.round(rect.width)}x${Math.round(rect.height)}`;
-          })
-          .slice(0, 20);
-      });
+      const undersized = await undersizedControls(page);
       expect(undersized, `${path}: controls should be at least 24x24 CSS px`).toEqual([]);
     }
+  });
+
+  test('Admin controls meet the target-size floor under the admin bearer @a11y', async ({ page }) => {
+    test.skip(!ADMIN_BEARER, 'Requires MIP_ADMIN_BEARER_TOKEN for Admin procurement coverage.');
+    await page.setExtraHTTPHeaders({ Authorization: `Bearer ${ADMIN_BEARER}` });
+    await page.goto('/admin-config');
+    await assertActualAdminPage(page);
+    expect(await undersizedControls(page)).toEqual([]);
   });
 
   test('Lead Queue virtualization keeps DOM bounded while exposing row metadata @a11y', async ({ page }) => {

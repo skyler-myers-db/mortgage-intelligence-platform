@@ -12,8 +12,8 @@ a separate task in the `mip_fred_rates_ingest` bundle job:
                     the configured silver.market_rates_weekly table IF it is
                     empty. This is the "first boot works offline" guarantee
                     -- the committed seed ships with the repo so
-                    `databricks bundle deploy -t dev` lands a populated
-                    silver table before the first FRED fetch runs.
+                    the signed deploy orchestrator lands a populated silver
+                    table before the first FRED fetch runs.
                     Re-runs against a non-empty table are a no-op.
 
     --mode=fred     Pulls https://fred.stlouisfed.org/graph/fredgraph.csv?id=
@@ -61,10 +61,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
-FRED_CSV_URL = (
-    "https://fred.stlouisfed.org/graph/fredgraph.csv"
-    "?id=MORTGAGE30US&cosd=2021-01-01"
-)
+FRED_CSV_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv" "?id=MORTGAGE30US&cosd=2021-01-01"
 DEFAULT_CATALOG = "mip"
 DEFAULT_TABLE_SCHEMA = "silver"
 DEFAULT_TABLE_NAME = "market_rates_weekly"
@@ -136,8 +133,7 @@ def parse_fred_csv(text: str, series_id: str = DEFAULT_SERIES) -> list[RateRow]:
     header = next(reader, None)
     if header is None or len(header) < 2 or header[0].lower() != "observation_date":
         raise ValueError(
-            f"FRED CSV header unexpected: {header!r}. "
-            "Expected ['observation_date', <series>]."
+            f"FRED CSV header unexpected: {header!r}. " "Expected ['observation_date', <series>]."
         )
     for raw in reader:
         if len(raw) < 2:
@@ -212,9 +208,7 @@ def fetch_fred_csv(
     last_exc: BaseException | None = None
     headers: dict[str, str] = {}
     resolved_user_agent = (
-        os.environ.get("FRED_USER_AGENT", "").strip()
-        if user_agent is None
-        else user_agent.strip()
+        os.environ.get("FRED_USER_AGENT", "").strip() if user_agent is None else user_agent.strip()
     )
     if resolved_user_agent:
         headers["User-Agent"] = resolved_user_agent
@@ -274,9 +268,7 @@ def _table_row_count(spark, table: str) -> int:  # pragma: no cover
 
 
 def _table_latest_week(spark, table: str) -> date | None:  # pragma: no cover
-    row = spark.sql(
-        f"SELECT MAX(observation_week) AS w FROM {table}"
-    ).first()
+    row = spark.sql(f"SELECT MAX(observation_week) AS w FROM {table}").first()
     return row["w"] if row and row["w"] else None
 
 
@@ -321,7 +313,9 @@ def _rows_to_df(spark, rows: Iterable[RateRow], batch_id: str):  # pragma: no co
     return spark.createDataFrame(materialized, schema=schema)
 
 
-def _merge_rows(spark, table: str, rows: list[RateRow], batch_id: str) -> tuple[int, int]:  # pragma: no cover
+def _merge_rows(
+    spark, table: str, rows: list[RateRow], batch_id: str
+) -> tuple[int, int]:  # pragma: no cover
     """MERGE rows into `table` on (series_id, observation_week). Returns (inserted, updated) counts."""
     if not rows:
         return 0, 0
@@ -475,7 +469,7 @@ def run_fred(table: str, batch_id: str, dry_run: bool, staleness_days: int) -> i
             return 0
         spark = _get_spark()  # pragma: no cover
         latest = _table_latest_week(spark, table)  # pragma: no cover
-        cutoff = (datetime.now(tz=UTC).date() - timedelta(days=staleness_days))  # pragma: no cover
+        cutoff = datetime.now(tz=UTC).date() - timedelta(days=staleness_days)  # pragma: no cover
         if latest and latest >= cutoff:  # pragma: no cover
             log.warning(  # pragma: no cover
                 "FRED unreachable but silver has %s (>= %s cutoff); exit success",

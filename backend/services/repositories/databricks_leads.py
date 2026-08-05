@@ -12,36 +12,21 @@ import time
 from typing import Any
 
 from backend.config.settings import settings
-from backend.schemas.common import validate_public_borrower_id
 from backend.schemas.lead import LeadSummary
 from backend.schemas.portfolio import PortfolioCriteria
 from backend.services.databricks_sql import DatabricksSqlClient
 from backend.services.databricks_sql_helpers import qualify
 from backend.services.pii_redaction import redact_lead_row
+from backend.services.repositories.databricks_lead_cohorts import (
+    LeadCohortFilters,
+    LeadCohortQueries,
+)
 from backend.services.repositories.databricks_portfolio import build_preview_predicates
 from backend.services.repositories.databricks_shared import (
     _LEAD_POPULATION_SELECT_FROM_B360,
     _LEAD_POPULATION_SELECT_FROM_LP,
 )
 from backend.services.resilience import TTLCache
-from backend.services.scoring import HIGH_OPPORTUNITY_THRESHOLD
-from backend.services.segment_predicates import (
-    compose_segment_predicate,
-    normalise_segment_codes,
-)
-from backend.services.state_footprint import get_state_footprint_resolver
-
-
-def _state_sets() -> dict[str, list[str]]:
-    """Build the active geography-label mapping used by portfolio criteria."""
-    resolver = get_state_footprint_resolver()
-    footprint_codes = resolver.state_codes()
-    state_name_map = resolver.state_name_to_codes()
-    all_key = f"all {len(footprint_codes)} states"
-    return {
-        **state_name_map,
-        all_key: list(footprint_codes),
-    }
 
 
 class DatabricksLeadRepository:
@@ -67,6 +52,11 @@ class DatabricksLeadRepository:
         self._client = client
         self._cache = cache if cache is not None else TTLCache()
         self._cache_ttl_s = settings.mip_cache_ttl_s if cache_ttl_s is None else cache_ttl_s
+        self._cohort_queries = LeadCohortQueries(
+            client,
+            cache_ttl_s=self._cache_ttl_s,
+            clock=time,
+        )
 
     _LIST_BASE_SQL_TEMPLATE = (
         f"SELECT {_LEAD_POPULATION_SELECT_FROM_LP} "
@@ -90,29 +80,6 @@ class DatabricksLeadRepository:
         "WHERE {segment_clause} {lifecycle_clause} "
         "ORDER BY lp.rank_overall ASC, lp.borrower_id ASC "
         "LIMIT {limit}"
-    )
-
-    _COUNT_BASE_SQL = (
-        f"SELECT COUNT(*) AS n FROM {qualify('gold', 'lead_population')} lp "
-        f"LEFT JOIN {qualify('gold', 'borrower_lifecycle_state')} ls "
-        "  ON ls.borrower_id = lp.borrower_id "
-        "WHERE 1=1 {lifecycle_clause}"
-    )
-
-    _COUNT_FILTERED_SQL_TEMPLATE = (
-        f"SELECT COUNT(*) AS n FROM {qualify('gold', 'lead_population')} lp "
-        f"LEFT JOIN {qualify('gold', 'borrower_lifecycle_state')} ls "
-        "  ON ls.borrower_id = lp.borrower_id "
-        "WHERE {segment_clause} {lifecycle_clause}"
-    )
-
-    _COUNT_BY_GEO_SQL_TEMPLATE = (
-        f"SELECT COUNT(*) AS n FROM {qualify('gold', 'borrower_360')} b "
-        f"LEFT JOIN {qualify('gold', 'borrower_lifecycle_state')} ls "
-        "  ON ls.borrower_id = b.borrower_id "
-        "WHERE 1=1 {state_clause} {zip_clause} {county_clause} {borrower_clause} "
-        "{segment_clause} {funnel_stage_clause} {lender_clause} {portfolio_clause} "
-        "{lifecycle_clause} {freshness_clause}"
     )
 
     # 2026-05-04 FIX β: when the caller filters by state and/or zip we
@@ -199,7 +166,7 @@ class DatabricksLeadRepository:
         cached = self._get_cached_leads(cache_key)
         if cached is not None:
             return cached
-        segment_clause, segment_params = self._segment_filter_clause(
+        segment_clause, segment_params = self._cohort_queries.segment_filter_clause(
             segment=segment,
             segment_codes=segment_codes,
             segment_mode=segment_mode,
@@ -208,11 +175,14 @@ class DatabricksLeadRepository:
         # FIX β: geo-filtered path bypasses lead_population so the queue
         # row count matches the map tooltip. See the
         # _LIST_BY_GEO_SQL_TEMPLATE docstring above for the full rationale.
-        normalised_states = self._normalise_states(state, state_codes)
-        normalised_zips = self._normalise_zips(zip_code, zip_codes)
-        normalised_county = self._normalise_county_fips(county_fips, county_fipses)
-        normalised_borrower_ids = self._normalise_borrower_ids(borrower_ids)
-        lifecycle_clause, lifecycle_params = self._lifecycle_filter_clause(
+        normalised_states = self._cohort_queries.normalise_states(state, state_codes)
+        normalised_zips = self._cohort_queries.normalise_zips(zip_code, zip_codes)
+        normalised_county = self._cohort_queries.normalise_county_fips(
+            county_fips,
+            county_fipses,
+        )
+        normalised_borrower_ids = self._cohort_queries.normalise_borrower_ids(borrower_ids)
+        lifecycle_clause, lifecycle_params = self._cohort_queries.lifecycle_filter_clause(
             source_alias="b",
             approval_status=approval_status,
             outreach_status=outreach_status,
@@ -225,7 +195,11 @@ class DatabricksLeadRepository:
             lender_params["target_lender_ref"] = target_lender_ref.strip()
         portfolio_where, portfolio_params = build_preview_predicates(
             portfolio_criteria,
-            state_sets=_state_sets() if portfolio_criteria and portfolio_criteria.geography else {},
+            state_sets=(
+                self._cohort_queries.state_sets()
+                if portfolio_criteria and portfolio_criteria.geography
+                else {}
+            ),
         )
         portfolio_clause = (
             "AND " + portfolio_where.removeprefix("WHERE ").strip() if portfolio_where else ""
@@ -233,8 +207,8 @@ class DatabricksLeadRepository:
         if "target_lender_ref" in portfolio_params:
             lender_clause = ""
             lender_params = {}
-        funnel_stage_clause = self._funnel_stage_filter_clause(funnel_stage)
-        freshness_clause = self._freshness_clause()
+        funnel_stage_clause = self._cohort_queries.funnel_stage_filter_clause(funnel_stage)
+        freshness_clause = self._cohort_queries.freshness_clause()
 
         if (
             normalised_states
@@ -249,25 +223,25 @@ class DatabricksLeadRepository:
             params.update(lender_params)
             params.update(portfolio_params)
             params.update(lifecycle_params)
-            state_clause = self._in_clause(
+            state_clause = self._cohort_queries.in_clause(
                 column="b.state",
                 prefix="state",
                 values=normalised_states,
                 params=params,
             )
-            zip_clause = self._in_clause(
+            zip_clause = self._cohort_queries.in_clause(
                 column="b.zip",
                 prefix="zip",
                 values=normalised_zips,
                 params=params,
             )
-            county_clause = self._in_clause(
+            county_clause = self._cohort_queries.in_clause(
                 column="b.county_fips_5",
                 prefix="county",
                 values=normalised_county,
                 params=params,
             )
-            borrower_clause = self._in_clause(
+            borrower_clause = self._cohort_queries.in_clause(
                 column="b.borrower_id",
                 prefix="borrower_id",
                 values=normalised_borrower_ids,
@@ -293,7 +267,7 @@ class DatabricksLeadRepository:
                 [LeadSummary(**redact_lead_row(r)) for r in rows[:bounded]],
             )
 
-        lifecycle_clause, lifecycle_params = self._lifecycle_filter_clause(
+        lifecycle_clause, lifecycle_params = self._cohort_queries.lifecycle_filter_clause(
             source_alias="lp",
             approval_status=approval_status,
             outreach_status=outreach_status,
@@ -342,7 +316,6 @@ class DatabricksLeadRepository:
         outreach_status: str | None = None,
         aged_days: int | None = None,
     ) -> int:
-        _ = (portfolio_id, cohort_id)
         cache_key = self._cache_key(
             "lead_count",
             {
@@ -370,100 +343,137 @@ class DatabricksLeadRepository:
             cached = self._cache.get(cache_key)
             if isinstance(cached, int):
                 return cached
-        segment_clause, segment_params = self._segment_filter_clause(
-            segment=segment,
-            segment_codes=segment_codes,
-            segment_mode=segment_mode,
+        row = self._cohort_queries.aggregate_row(
+            LeadCohortFilters(
+                segment=segment,
+                state=state,
+                zip_code=zip_code,
+                county_fips=county_fips,
+                county_fipses=county_fipses,
+                state_codes=state_codes,
+                zip_codes=zip_codes,
+                borrower_ids=borrower_ids,
+                segment_codes=segment_codes,
+                segment_mode=segment_mode,
+                target_lender_ref=target_lender_ref,
+                funnel_stage=funnel_stage,
+                portfolio_criteria=portfolio_criteria,
+                approval_status=approval_status,
+                outreach_status=outreach_status,
+                aged_days=aged_days,
+            ),
+            aggregate_select="COUNT(*) AS n",
         )
-        normalised_states = self._normalise_states(state, state_codes)
-        normalised_zips = self._normalise_zips(zip_code, zip_codes)
-        normalised_county = self._normalise_county_fips(county_fips, county_fipses)
-        normalised_borrower_ids = self._normalise_borrower_ids(borrower_ids)
-        lifecycle_clause_geo, lifecycle_params_geo = self._lifecycle_filter_clause(
-            source_alias="b",
-            approval_status=approval_status,
-            outreach_status=outreach_status,
-            aged_days=aged_days,
-        )
-        lender_clause = ""
-        lender_params: dict[str, object] = {}
-        if target_lender_ref and target_lender_ref.strip().lower() != "all":
-            lender_clause = "AND b.current_lender_ref = :target_lender_ref"
-            lender_params["target_lender_ref"] = target_lender_ref.strip()
-        portfolio_where, portfolio_params = build_preview_predicates(
-            portfolio_criteria,
-            state_sets=_state_sets() if portfolio_criteria and portfolio_criteria.geography else {},
-        )
-        portfolio_clause = (
-            "AND " + portfolio_where.removeprefix("WHERE ").strip() if portfolio_where else ""
-        )
-        if "target_lender_ref" in portfolio_params:
-            lender_clause = ""
-            lender_params = {}
-        funnel_stage_clause = self._funnel_stage_filter_clause(funnel_stage)
-        freshness_clause = self._freshness_clause()
-        if (
-            normalised_states
-            or normalised_zips
-            or normalised_county
-            or normalised_borrower_ids
-            or funnel_stage
-            or lender_clause
-            or portfolio_clause
-        ):
-            params: dict[str, object] = dict(segment_params)
-            params.update(lender_params)
-            params.update(portfolio_params)
-            params.update(lifecycle_params_geo)
-            sql = self._COUNT_BY_GEO_SQL_TEMPLATE.format(
-                state_clause=self._in_clause(
-                    column="b.state", prefix="state", values=normalised_states, params=params
-                ),
-                zip_clause=self._in_clause(
-                    column="b.zip", prefix="zip", values=normalised_zips, params=params
-                ),
-                county_clause=self._in_clause(
-                    column="b.county_fips_5",
-                    prefix="county",
-                    values=normalised_county,
-                    params=params,
-                ),
-                borrower_clause=self._in_clause(
-                    column="b.borrower_id",
-                    prefix="borrower_id",
-                    values=normalised_borrower_ids,
-                    params=params,
-                ),
-                segment_clause=f"AND {segment_clause}" if segment_clause else "",
-                funnel_stage_clause=funnel_stage_clause,
-                lender_clause=lender_clause,
-                portfolio_clause=portfolio_clause,
-                lifecycle_clause=lifecycle_clause_geo,
-                freshness_clause=freshness_clause,
+        return self._store_cached_count(cache_key, int(row.get("n") or 0))
+
+    def cohort_identity(
+        self,
+        segment: str | None,
+        portfolio_id: str | None,
+        state: str | None = None,
+        zip_code: str | None = None,
+        county_fips: str | None = None,
+        county_fipses: list[str] | None = None,
+        state_codes: list[str] | None = None,
+        zip_codes: list[str] | None = None,
+        borrower_ids: list[str] | None = None,
+        segment_codes: list[str] | None = None,
+        segment_mode: str = "any",
+        target_lender_ref: str | None = None,
+        cohort_id: str | None = None,
+        funnel_stage: str | None = None,
+        portfolio_criteria: PortfolioCriteria | None = None,
+        approval_status: str | None = None,
+        outreach_status: str | None = None,
+        aged_days: int | None = None,
+    ) -> dict[str, str | int]:
+        """Return complete-set identity proof for an explicitly requested audit."""
+
+        return self._cohort_queries.cohort_identity(
+            LeadCohortFilters(
+                segment=segment,
+                state=state,
+                zip_code=zip_code,
+                county_fips=county_fips,
+                county_fipses=county_fipses,
+                state_codes=state_codes,
+                zip_codes=zip_codes,
+                borrower_ids=borrower_ids,
+                segment_codes=segment_codes,
+                segment_mode=segment_mode,
+                target_lender_ref=target_lender_ref,
+                funnel_stage=funnel_stage,
+                portfolio_criteria=portfolio_criteria,
+                approval_status=approval_status,
+                outreach_status=outreach_status,
+                aged_days=aged_days,
             )
-            row = self._client.execute_one(sql, params)
-            return self._store_cached_count(cache_key, int((row or {}).get("n") or 0))
-        lifecycle_clause, lifecycle_params = self._lifecycle_filter_clause(
-            source_alias="lp",
-            approval_status=approval_status,
-            outreach_status=outreach_status,
-            aged_days=aged_days,
         )
-        if segment_clause:
-            segment_params = {**segment_params, **lifecycle_params}
-            row = self._client.execute_one(
-                self._COUNT_FILTERED_SQL_TEMPLATE.format(
-                    segment_clause=segment_clause,
-                    lifecycle_clause=lifecycle_clause,
-                ),
-                segment_params,
-            )
-            return self._store_cached_count(cache_key, int((row or {}).get("n") or 0))
-        row = self._client.execute_one(
-            self._COUNT_BASE_SQL.format(lifecycle_clause=lifecycle_clause),
-            lifecycle_params,
+
+    def is_campaign_treatment_member(
+        self,
+        *,
+        borrower_id: str,
+        campaign_id: str,
+        materialization_id: str,
+        delta_version: int,
+        treatment_fingerprint: str,
+        frequency_cap_days: int,
+    ) -> bool:
+        return self._cohort_queries.is_campaign_treatment_member(
+            borrower_id=borrower_id,
+            campaign_id=campaign_id,
+            materialization_id=materialization_id,
+            delta_version=delta_version,
+            treatment_fingerprint=treatment_fingerprint,
+            frequency_cap_days=frequency_cap_days,
         )
-        return self._store_cached_count(cache_key, int((row or {}).get("n") or 0))
+
+    def list_with_identity(
+        self,
+        segment: str | None,
+        portfolio_id: str | None,
+        limit: int | None = None,
+        state: str | None = None,
+        zip_code: str | None = None,
+        county_fips: str | None = None,
+        county_fipses: list[str] | None = None,
+        state_codes: list[str] | None = None,
+        zip_codes: list[str] | None = None,
+        borrower_ids: list[str] | None = None,
+        segment_codes: list[str] | None = None,
+        segment_mode: str = "any",
+        target_lender_ref: str | None = None,
+        cohort_id: str | None = None,
+        funnel_stage: str | None = None,
+        portfolio_criteria: PortfolioCriteria | None = None,
+        approval_status: str | None = None,
+        outreach_status: str | None = None,
+        aged_days: int | None = None,
+    ) -> tuple[list[LeadSummary], dict[str, str | int]]:
+        """Return page rows and complete-set identity from one uncached statement."""
+
+        return self._cohort_queries.list_with_identity(
+            LeadCohortFilters(
+                segment=segment,
+                state=state,
+                zip_code=zip_code,
+                county_fips=county_fips,
+                county_fipses=county_fipses,
+                state_codes=state_codes,
+                zip_codes=zip_codes,
+                borrower_ids=borrower_ids,
+                segment_codes=segment_codes,
+                segment_mode=segment_mode,
+                target_lender_ref=target_lender_ref,
+                funnel_stage=funnel_stage,
+                portfolio_criteria=portfolio_criteria,
+                approval_status=approval_status,
+                outreach_status=outreach_status,
+                aged_days=aged_days,
+            ),
+            limit=self._bound_limit(limit),
+        )
 
     @staticmethod
     def _criteria_key(criteria: PortfolioCriteria | None) -> dict[str, Any] | None:
@@ -507,53 +517,25 @@ class DatabricksLeadRepository:
         state: str | None,
         state_codes: list[str] | None,
     ) -> list[str]:
-        raw = ([state] if state else []) + (state_codes or [])
-        out: list[str] = []
-        for value in raw:
-            code = str(value or "").upper()[:2]
-            if len(code) == 2 and code.isalpha() and code not in out:
-                out.append(code)
-        return out
+        return LeadCohortQueries.normalise_states(state, state_codes)
 
     @staticmethod
     def _normalise_zips(
         zip_code: str | None,
         zip_codes: list[str] | None,
     ) -> list[str]:
-        raw = ([zip_code] if zip_code else []) + (zip_codes or [])
-        out: list[str] = []
-        for value in raw:
-            code = str(value or "").strip()[:5]
-            if len(code) == 5 and code.isdigit() and code not in out:
-                out.append(code)
-        return out
+        return LeadCohortQueries.normalise_zips(zip_code, zip_codes)
 
     @staticmethod
     def _normalise_county_fips(
         county_fips: str | None,
         county_fipses: list[str] | None = None,
     ) -> list[str]:
-        raw = ([county_fips] if county_fips else []) + (county_fipses or [])
-        out: list[str] = []
-        for value in raw:
-            code = str(value or "").strip()[:5]
-            if len(code) == 5 and code.isdigit() and code not in out:
-                out.append(code)
-        return out
+        return LeadCohortQueries.normalise_county_fips(county_fips, county_fipses)
 
     @staticmethod
-    def _normalise_borrower_ids(
-        borrower_ids: list[str] | None,
-    ) -> list[str]:
-        out: list[str] = []
-        for value in borrower_ids or []:
-            try:
-                borrower_id = validate_public_borrower_id(str(value or ""))
-            except ValueError:
-                continue
-            if borrower_id not in out:
-                out.append(borrower_id)
-        return out
+    def _normalise_borrower_ids(borrower_ids: list[str] | None) -> list[str]:
+        return LeadCohortQueries.normalise_borrower_ids(borrower_ids)
 
     @staticmethod
     def _lifecycle_filter_clause(
@@ -563,50 +545,16 @@ class DatabricksLeadRepository:
         outreach_status: str | None,
         aged_days: int | None,
     ) -> tuple[str, dict[str, object]]:
-        clauses: list[str] = []
-        params: dict[str, object] = {}
-        if approval_status:
-            clauses.append(
-                f"COALESCE(ls.approval_status, {source_alias}.approval_status, 'pending') = :approval_status"
-            )
-            params["approval_status"] = approval_status
-        if outreach_status:
-            clauses.append("COALESCE(ls.outreach_status, 'none') = :outreach_status")
-            params["outreach_status"] = outreach_status
-        if aged_days is not None:
-            bounded_days = max(1, min(int(aged_days), 90))
-            clauses.append(
-                f"COALESCE(ls.approval_status, {source_alias}.approval_status, 'pending') = 'approved'"
-            )
-            clauses.append(
-                "ls.approved_at <= current_timestamp() - INTERVAL " f"{bounded_days} DAYS"
-            )
-            clauses.append("ls.outreach_at IS NULL")
-        if not clauses:
-            return "", {}
-        return "AND " + " AND ".join(clauses), params
+        return LeadCohortQueries.lifecycle_filter_clause(
+            source_alias=source_alias,
+            approval_status=approval_status,
+            outreach_status=outreach_status,
+            aged_days=aged_days,
+        )
 
     @staticmethod
     def _funnel_stage_filter_clause(funnel_stage: str | None) -> str:
-        """Return the exact gold-funnel predicate used by analytics drilldowns."""
-
-        stage = str(funnel_stage or "").strip().lower()
-        if not stage or stage == "addressable":
-            return ""
-        if stage == "in_the_money":
-            return "AND b.in_the_money = TRUE"
-        if stage == "high_opportunity":
-            return f"AND b.opportunity_score >= {HIGH_OPPORTUNITY_THRESHOLD}"
-        if stage == "offer_recommended":
-            return (
-                "AND b.recommended_offer_code IS NOT NULL "
-                "AND b.recommended_offer_code <> 'nurture'"
-            )
-        if stage == "approved":
-            return "AND COALESCE(ls.approval_status, 'pending') = 'approved'"
-        if stage == "actioned":
-            return "AND COALESCE(ls.outreach_status, 'none') = 'actioned'"
-        raise ValueError(f"unsupported funnel_stage: {funnel_stage}")
+        return LeadCohortQueries.funnel_stage_filter_clause(funnel_stage)
 
     @staticmethod
     def _in_clause(
@@ -616,24 +564,19 @@ class DatabricksLeadRepository:
         values: list[str],
         params: dict[str, object],
     ) -> str:
-        if not values:
-            return ""
-        placeholders: list[str] = []
-        for i, value in enumerate(values):
-            key = f"{prefix}_{i}"
-            params[key] = value
-            placeholders.append(f":{key}")
-        if len(placeholders) == 1:
-            return f"AND {column} = {placeholders[0]}"
-        return f"AND {column} IN ({', '.join(placeholders)})"
+        return LeadCohortQueries.in_clause(
+            column=column,
+            prefix=prefix,
+            values=values,
+            params=params,
+        )
 
     @staticmethod
     def _normalise_segment_codes(
         segment: str | None,
         segment_codes: list[str] | None,
     ) -> list[str]:
-        raw = segment_codes if segment_codes else ([segment] if segment else [])
-        return normalise_segment_codes(raw)
+        return LeadCohortQueries.normalise_segment_codes(segment, segment_codes)
 
     @classmethod
     def _segment_filter_clause(
@@ -643,11 +586,10 @@ class DatabricksLeadRepository:
         segment_codes: list[str] | None,
         segment_mode: str,
     ) -> tuple[str, dict[str, object]]:
-        # S8: delegate to the canonical composer so the Lead Queue ranks the
-        # exact cohort the Segment Intelligence cards previewed.
-        return compose_segment_predicate(
-            cls._normalise_segment_codes(segment, segment_codes),
-            mode=segment_mode,
+        return LeadCohortQueries.segment_filter_clause(
+            segment=segment,
+            segment_codes=segment_codes,
+            segment_mode=segment_mode,
         )
 
     @classmethod
@@ -675,31 +617,4 @@ class DatabricksLeadRepository:
         return min(int(bounded_limit) + 1, cls.MAX_LIMIT + 1)
 
     def _freshness_clause(self) -> str:
-        """Bound warehouse result-cache reuse for interactive drilldowns.
-
-        Drilldowns read ``gold.borrower_360`` joined to the lifecycle mirror,
-        which can change during deploy-time syncs while query text stays
-        otherwise identical. An app-generated no-op literal predicate prevents
-        Databricks SQL from serving a stale exact-query result; the app's
-        short ``TTLCache`` remains the bounded reuse layer.
-
-        2026-06-11 audit P1-6 refinement (staleness wording corrected per
-        re-audit): the marker is bucketed to the repository cache TTL
-        instead of nanosecond-unique, so sibling app processes/workers
-        (each with their own in-process TTLCache) can reuse the warehouse
-        result cache instead of re-scanning borrower_360 (5.16M rows,
-        3.6-6.6s measured live). Staleness bound: the LAYERS COMPOUND — a
-        warehouse result computed at the start of a marker window can be
-        stored into the app cache at the end of it, so worst-case data age
-        is ~2x ``cache_ttl_s`` (~10 min at the 300s default), not 1x. That
-        remains far below the gold-refresh cadence, which is the actual
-        data-change rate. With app caching disabled (ttl <= 0) the marker
-        stays nanosecond-unique, preserving the original always-fresh
-        behaviour.
-        """
-
-        if self._cache_ttl_s <= 0:
-            marker: int = time.time_ns()
-        else:
-            marker = int(time.time() // self._cache_ttl_s)
-        return f"AND {marker} = {marker}"
+        return self._cohort_queries.freshness_clause()

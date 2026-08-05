@@ -152,7 +152,7 @@ test.describe('Module 0 — theme / density / narrow canaries', () => {
       .toBe(initialDensity);
   });
 
-  test('narrow viewport (1150px): rail stays fixed; kpi-row and layoutA-grid collapse', async ({ page }) => {
+  test('narrow viewport (1150px): rail stays fixed and geography remains full-width', async ({ page }) => {
     await page.setViewportSize({ width: 1150, height: 900 });
     await page.goto('/');
 
@@ -168,13 +168,15 @@ test.describe('Module 0 — theme / density / narrow canaries', () => {
     });
     expect(kpiCols, 'expected .kpi-row to render 3 columns at 1150px').toBe(3);
 
-    // .layoutA-grid (below the KPIs) stays 2-col in the medium band.
-    const layoutCols = await page.locator('.layoutA-grid').first().evaluate((el) => {
-      return getComputedStyle(el).gridTemplateColumns
-        .split(' ')
-        .filter((x) => x.trim().length > 0).length;
-    });
-    expect(layoutCols, 'expected .layoutA-grid to render 2 columns at 1150px').toBe(2);
+    const map = page.locator('.map-wrap').first();
+    await expect(map).toBeVisible({ timeout: 30_000 });
+    const mapWidth = await map.evaluate((el) => el.getBoundingClientRect().width);
+    const contentWidth = await page.locator('.main__inner').first().evaluate(
+      (el) => el.getBoundingClientRect().width,
+    );
+    expect(mapWidth, 'Home geography should use the main content width').toBeGreaterThanOrEqual(
+      contentWidth * 0.95,
+    );
 
     // Rail is NOT responsive by design (until < 1024 viewport) — assert it stays
     // at 72px so we catch any regression that tries to hide it.
@@ -216,6 +218,49 @@ test.describe('Module 0 — theme / density / narrow canaries', () => {
       return document.documentElement.scrollWidth - document.documentElement.clientWidth;
     });
     expect(overflow, 'segment intelligence should not create document-level horizontal scroll').toBeLessThanOrEqual(2);
+  });
+
+  test('analytics scatter stays legible and keyboard-navigable at phone width', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/analytics');
+
+    await expect(page.getByRole('heading', { name: 'Analytics', exact: true })).toBeVisible({
+      timeout: 30_000,
+    });
+    const scatterHeading = page.getByRole('heading', { name: 'Equity vs Rate Spread' });
+    await expect(scatterHeading).toBeVisible({ timeout: 60_000 });
+    await scatterHeading.scrollIntoViewIfNeeded();
+    await expect(page.getByText('High 85-100', { exact: true })).toBeVisible();
+    await expect(page.getByText('Medium 65-84', { exact: true })).toBeVisible();
+    await expect(page.getByText('Low 0-64', { exact: true })).toBeVisible();
+
+    const markers = page.locator('[data-scatter-marker]');
+    await expect.poll(() => markers.count(), { timeout: 60_000 }).toBeGreaterThan(1);
+    await markers.first().focus();
+    await page.keyboard.press('ArrowRight');
+    await expect(markers.nth(1)).toBeFocused();
+
+    const metrics = await page.evaluate(() => {
+      const plot = document.querySelector('.analytics-scatter') as HTMLElement | null;
+      const legend = document.querySelector('.analytics-scatter-legend') as HTMLElement | null;
+      if (!plot || !legend) return null;
+      const plotRect = plot.getBoundingClientRect();
+      const legendRect = legend.getBoundingClientRect();
+      return {
+        documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        plotLeft: plotRect.left,
+        plotRight: plotRect.right,
+        legendLeft: legendRect.left,
+        legendRight: legendRect.right,
+        viewportWidth: document.documentElement.clientWidth,
+      };
+    });
+    expect(metrics, 'scatter and legend should render').toBeTruthy();
+    expect(metrics!.documentOverflow, 'analytics should not create document-level horizontal scroll').toBeLessThanOrEqual(2);
+    expect(metrics!.plotLeft).toBeGreaterThanOrEqual(0);
+    expect(metrics!.plotRight).toBeLessThanOrEqual(metrics!.viewportWidth + 2);
+    expect(metrics!.legendLeft).toBeGreaterThanOrEqual(0);
+    expect(metrics!.legendRight).toBeLessThanOrEqual(metrics!.viewportWidth + 2);
   });
 
   test('lead queue phone viewport keeps approval column reachable inside table scroller', async ({ page }) => {
@@ -306,7 +351,7 @@ test.describe('Module 0 — responsive anchor matrix', () => {
   test.use({ baseURL: APP_URL, extraHTTPHeaders: AUTH_HEADERS });
 
   for (const anchor of ANCHORS) {
-    test(`[${anchor.label}] Home renders ${anchor.kpiCols}-col KPI row, ${anchor.layoutACols}-col layoutA`, async ({ page }) => {
+    test(`[${anchor.label}] Home renders ${anchor.kpiCols}-col KPI row and full-width geography`, async ({ page }) => {
       await page.setViewportSize({ width: anchor.width, height: anchor.height });
       await page.goto('/');
 
@@ -321,12 +366,15 @@ test.describe('Module 0 — responsive anchor matrix', () => {
       });
       expect(kpiCols, `Home .kpi-row at ${anchor.label}`).toBe(anchor.kpiCols);
 
-      const layoutCols = await page.locator('.layoutA-grid').first().evaluate((el) => {
-        return getComputedStyle(el).gridTemplateColumns
-          .split(' ')
-          .filter((x) => x.trim().length > 0).length;
-      });
-      expect(layoutCols, `Home .layoutA-grid at ${anchor.label}`).toBe(anchor.layoutACols);
+      const map = page.locator('.map-wrap').first();
+      await expect(map).toBeVisible({ timeout: 30_000 });
+      const mapWidth = await map.evaluate((el) => el.getBoundingClientRect().width);
+      const innerWidth = await page.locator('.main__inner').first().evaluate(
+        (el) => el.getBoundingClientRect().width,
+      );
+      expect(mapWidth, `Home geography width at ${anchor.label}`).toBeGreaterThanOrEqual(
+        innerWidth * 0.95,
+      );
 
       // Content cap: at ≥ 2001px viewport the .main__content wrapper
       // holds the text-dense content to 1920px. Home's wideMap opts

@@ -8,7 +8,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from backend.schemas._validators import normalize_public_lender_ref
+from backend.schemas._validators import contains_human_name_shape, normalize_public_lender_ref
 from backend.schemas.common import (
     contains_pii_marker,
     validate_internal_staff_email,
@@ -284,6 +284,13 @@ class LeadOutcomeRequest(BaseModel):
             return None
         if contains_pii_marker(clean):
             raise ValueError("source_record_ref must not contain PII")
+        name_scan = re.sub(r"[._-]+", " ", clean)
+        if contains_human_name_shape(name_scan):
+            raise ValueError("source_record_ref must be an opaque machine identifier")
+        if re.fullmatch(r"auto-[a-f0-9]{32}", clean):
+            raise ValueError(
+                "source_record_ref must be the upstream identifier, not a server-issued token"
+            )
         return validate_public_audit_identifier_or_none(clean)
 
     @field_validator("assigned_to_email")
@@ -381,12 +388,25 @@ class SalesConversionResponse(BaseModel):
     rows: list[dict[str, object]]
 
 
+class CampaignPerformanceFunnelResponse(BaseModel):
+    from_date: str
+    to_date: str
+    unique_leads_attempted: int
+    unique_contacts_reached: int
+    unique_application_starts: int
+    unique_applications_submitted: int
+    unique_closed_funded: int
+    methodology: Literal["same_borrower_nested_funnel"] = "same_borrower_nested_funnel"
+
+
 class SalesOutcomeSummaryResponse(BaseModel):
     from_date: str
     to_date: str
     total_outcomes: int
     applications_submitted: int
     closed_funded: int
+    unique_applications_submitted: int = 0
+    unique_closed_funded: int = 0
     lost_to_competitor: int
     withdrawn: int
     not_qualified: int

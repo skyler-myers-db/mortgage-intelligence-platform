@@ -59,6 +59,7 @@ SELECT
   b.recommended_offer_code,
   b.is_owner_occupied,
   b.current_lien_balance,
+  b.rate_spread_bps,
   b.second_pos_amount,
   b.related_property_count,
   b.listed_for_sale,

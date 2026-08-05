@@ -1,4 +1,5 @@
 import type { LeadSummary, SalesTeamMember } from '../../types';
+import type { GrowthAgentCohortVerification } from '../../lib/api';
 
 export interface LeadExportContext {
   generatedAt?: string;
@@ -11,6 +12,7 @@ export interface LeadTableProps {
   leads: LeadSummary[];
   totalMatching?: number | null;
   truncatedAt?: number | null;
+  growthAgentVerification?: GrowthAgentCohortVerification | null;
   exportContext?: LeadExportContext;
   salesTeam?: SalesTeamMember[];
 }

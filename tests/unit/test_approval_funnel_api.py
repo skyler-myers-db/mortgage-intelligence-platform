@@ -25,10 +25,9 @@ LO_01 = "55555555-5555-4555-8555-555555555501"
 LO_02 = "55555555-5555-4555-8555-555555555502"
 
 _DISCLOSURE = (
-    "Summit Mortgage, NMLS #123456. Equal Housing Lender. "
-    "Reply unsubscribe to opt out."
+    "Summit Mortgage, NMLS #123456. Equal Housing Lender. " "Reply unsubscribe to opt out."
 )
-_DRAFT_BODY = f"Reviewed and approved governed outreach. {_DISCLOSURE}"
+_DRAFT_BODY = f"Contact a loan officer to review available mortgage options. {_DISCLOSURE}"
 
 
 def _funnel() -> dict:
@@ -52,6 +51,7 @@ def _approve(borrower_id: str) -> dict:
             "borrower_id": borrower_id,
             "offer_code": "refi_plus_heloc",
             "channel": "email",
+            "draft_subject": "Your mortgage review",
             "draft_body": _DRAFT_BODY,
             "request_id": str(uuid4()),
         },

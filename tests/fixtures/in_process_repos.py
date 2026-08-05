@@ -92,8 +92,9 @@ class InProcessMockPortfolioRepository:
         payload: PortfolioCreateRequest,
         *,
         actor: str | None = None,
+        idempotency_key: str,
     ) -> PortfolioCreateResponse:
-        _ = actor
+        _ = actor, idempotency_key
         return PortfolioCreateResponse(
             portfolio_id="11111111-1111-4111-8111-111111111111",
             campaign_id="11111111-1111-4111-8111-111111111111",
@@ -110,6 +111,7 @@ class InProcessMockPortfolioRepository:
             name="Synthetic campaign",
             owner_email="skyler@entrada.ai",
             status="draft",
+            treatment_state="ready",
             criteria={"marketing_eligibility": "Eligible only"},
             suppression_policy={"default": "eligible_only"},
             message_variants=[],
@@ -682,6 +684,25 @@ class InProcessMockLeadRepository:
             aged_days=aged_days,
         ))
 
+    def is_campaign_treatment_member(
+        self,
+        *,
+        borrower_id: str,
+        campaign_id: str,
+        materialization_id: str,
+        delta_version: int,
+        treatment_fingerprint: str,
+        frequency_cap_days: int,
+    ) -> bool:
+        _ = (
+            campaign_id,
+            materialization_id,
+            delta_version,
+            treatment_fingerprint,
+            frequency_cap_days,
+        )
+        return any(row.borrower_id == borrower_id for row in mock_data.BORROWERS)
+
     @staticmethod
     def _filter_funnel_stage(leads: list[LeadSummary], funnel_stage: str) -> list[LeadSummary]:
         if funnel_stage == "addressable":
@@ -708,8 +729,13 @@ class InProcessMockBorrowerRepository:
     def get(self, borrower_id: str) -> Borrower360 | None:
         for b in mock_data.BORROWERS:
             if b.borrower_id == borrower_id:
-                return b
+                return b.model_copy(
+                    update={"source_refreshed_at": "2026-04-20T06:12:00Z"}
+                )
         return None
+
+    def get_fresh(self, borrower_id: str) -> Borrower360 | None:
+        return self.get(borrower_id)
 
     def evidence(self, borrower_id: str) -> list[EvidenceEvent] | None:
         borrower = self.get(borrower_id)
@@ -769,7 +795,18 @@ class InProcessMockOfferRepository:
     """Test fixture implementing ``OfferRepository`` from the synthetic population."""
 
     def get_offer_inputs(self, borrower_id: str) -> dict[str, object] | None:
-        return mock_data.BORROWER_OFFER_INPUTS.get(borrower_id)
+        inputs = mock_data.BORROWER_OFFER_INPUTS.get(borrower_id)
+        borrower = next((row for row in mock_data.BORROWERS if row.borrower_id == borrower_id), None)
+        if inputs is None or borrower is None:
+            return None
+        return {
+            **inputs,
+            "clip_id": borrower.clip_id,
+            "borrower_id": borrower.borrower_id,
+            "confidence": borrower.confidence,
+            "evidence_ids": list(borrower.evidence_ids),
+            "source_refreshed_at": "2026-04-20T06:12:00Z",
+        }
 
 
 class InProcessMockOutreachRepository:
@@ -778,7 +815,9 @@ class InProcessMockOutreachRepository:
     def find_borrower(self, borrower_id: str) -> Borrower360 | None:
         for b in mock_data.BORROWERS:
             if b.borrower_id == borrower_id:
-                return b
+                return b.model_copy(
+                    update={"source_refreshed_at": "2026-04-20T06:12:00Z"}
+                )
         return None
 
 
@@ -899,6 +938,25 @@ class InProcessMockGenieAnswerRepository:
                 }
             )
         return response
+
+    def respond_existing(
+        self,
+        question: str,
+        *,
+        conversation_id: str,
+        message_id: str,
+    ) -> GenieMessageResponse:
+        """Async-lifecycle seam parity: complete an 'already submitted' turn.
+
+        The fixture has no live message store, so it derives the same answer
+        as :meth:`respond` and stamps the caller's identifiers, matching the
+        production contract that the completed body carries the submitted
+        conversation/message identity.
+        """
+        response = self.respond(question, conversation_id=conversation_id)
+        return response.model_copy(
+            update={"message_id": message_id, "genie_status": "COMPLETED"}
+        )
 
 
 # Fixture per-state rollups — covers a representative current-coverage shape

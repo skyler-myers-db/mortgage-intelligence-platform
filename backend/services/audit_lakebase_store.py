@@ -1,4 +1,5 @@
 """Lakebase-backed implementation of the append-only audit store."""
+
 from __future__ import annotations
 
 import json
@@ -25,17 +26,23 @@ INSERT INTO mip_app.action_audit (
     %(subject_clip)s, %(subject_segment)s, %(request_id)s,
     %(correlation_id)s, %(evidence_ids)s, %(metadata)s::jsonb
 )
-RETURNING audit_id, event_at
+RETURNING audit_id, audit_sequence, event_at
 """
 
 _SELECT_SQL_TEMPLATE = """
-SELECT audit_id, event_type, actor_email, entity_type, entity_id,
+WITH snapshot_anchor AS (
+  SELECT {snapshot_expression} AS snapshot
+)
+SELECT audit_id, audit_sequence, event_type, actor_email, entity_type, entity_id,
        subject_clip, subject_segment, request_id,
-       correlation_id, evidence_ids, metadata, event_at
+       correlation_id, evidence_ids, metadata, event_at,
+       snapshot_anchor.snapshot::text AS audit_snapshot
 FROM mip_app.action_audit
+CROSS JOIN snapshot_anchor
 {where_clause}
-ORDER BY event_at DESC
+ORDER BY audit_sequence DESC
 LIMIT %(limit)s
+OFFSET %(offset)s
 """
 
 
@@ -71,11 +78,7 @@ def _build_insert_params(
         subject_segment=subject_segment,
         request_id=request_id,
     )
-    safe_subject_clip = (
-        mask_cotality_id("clip", subject_clip)
-        if subject_clip is not None
-        else None
-    )
+    safe_subject_clip = mask_cotality_id("clip", subject_clip) if subject_clip is not None else None
     params: dict[str, Any] = {
         "event_type": safe_event_type,
         "actor_email": actor,
@@ -90,6 +93,36 @@ def _build_insert_params(
     }
     _ = safe_action
     return payload, params
+
+
+def build_audit_insert_params(
+    *,
+    actor: str,
+    action: str,
+    entity_type: str,
+    entity_id: str,
+    payload_json: dict[str, Any] | None = None,
+    evidence_ids: list[str] | None = None,
+    event_type: str | None = None,
+    subject_clip: str | None = None,
+    subject_segment: str | None = None,
+    request_id: str | None = None,
+) -> dict[str, Any]:
+    """Return validated Lakebase audit INSERT parameters for atomic CTE writes."""
+
+    _, params = _build_insert_params(
+        actor=actor,
+        action=action,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        payload_json=payload_json,
+        evidence_ids=evidence_ids,
+        event_type=event_type,
+        subject_clip=subject_clip,
+        subject_segment=subject_segment,
+        request_id=request_id,
+    )
+    return params
 
 
 def _audit_event_from_row(
@@ -123,6 +156,8 @@ def _audit_event_from_row(
         subject_segment=subject_segment,
         request_id=request_id,
         correlation_id=correlation_id,
+        audit_sequence=int(row["audit_sequence"]),
+        audit_snapshot=(str(row["audit_snapshot"]) if row.get("audit_snapshot") else None),
     )
 
 
@@ -242,6 +277,10 @@ class LakebaseAuditStore:
         self,
         limit: int = 50,
         *,
+        offset: int = 0,
+        after_sequence: int | None = None,
+        snapshot_sequence: int | None = None,
+        snapshot_token: str | None = None,
         actor: str | None = None,
         action: str | None = None,
         entity_id: str | None = None,
@@ -252,8 +291,21 @@ class LakebaseAuditStore:
         since: datetime | None = None,
         until: datetime | None = None,
     ) -> list[AuditEvent]:
-        clauses: list[str] = []
-        params: dict[str, Any] = {"limit": limit}
+        clauses: list[str] = [
+            "pg_visible_in_snapshot("
+            "mip_app.action_audit.xmin::text::xid8, snapshot_anchor.snapshot)"
+        ]
+        params: dict[str, Any] = {"limit": limit, "offset": offset}
+        snapshot_expression = "pg_current_snapshot()"
+        if snapshot_token is not None:
+            snapshot_expression = "%(snapshot_token)s::pg_snapshot"
+            params["snapshot_token"] = snapshot_token
+        if snapshot_sequence is not None:
+            clauses.append("audit_sequence <= %(snapshot_sequence)s")
+            params["snapshot_sequence"] = snapshot_sequence
+        if after_sequence is not None:
+            clauses.append("audit_sequence < %(after_sequence)s")
+            params["after_sequence"] = after_sequence
         if actor:
             clauses.append("actor_email = %(actor)s")
             params["actor"] = actor
@@ -261,7 +313,9 @@ class LakebaseAuditStore:
             clauses.append("entity_id = %(entity_id)s")
             params["entity_id"] = entity_id
         if borrower_id:
-            clauses.append("(entity_id = %(borrower_id)s OR metadata->>'borrower_id' = %(borrower_id)s)")
+            clauses.append(
+                "(entity_id = %(borrower_id)s OR metadata->>'borrower_id' = %(borrower_id)s)"
+            )
             params["borrower_id"] = borrower_id
         if subject_clip:
             clauses.append("subject_clip = %(subject_clip)s")
@@ -282,7 +336,10 @@ class LakebaseAuditStore:
             clauses.append("event_at <= %(until)s")
             params["until"] = until
         where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-        sql = _SELECT_SQL_TEMPLATE.format(where_clause=where_clause)
+        sql = _SELECT_SQL_TEMPLATE.format(
+            snapshot_expression=snapshot_expression,
+            where_clause=where_clause,
+        )
         rows = self._client.fetchall(sql, params, limit=limit)
         out: list[AuditEvent] = []
         for row in rows:
@@ -312,6 +369,10 @@ class LakebaseAuditStore:
                     subject_segment=row.get("subject_segment"),
                     request_id=row.get("request_id"),
                     correlation_id=row.get("correlation_id"),
+                    audit_sequence=int(row["audit_sequence"]),
+                    audit_snapshot=(
+                        str(row["audit_snapshot"]) if row.get("audit_snapshot") else None
+                    ),
                 )
             )
         return out

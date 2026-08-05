@@ -31,6 +31,10 @@ def test_otlp_deploy_payload_contains_full_base_env_and_secret_reference(capsys)
     assert env["MIP_FRED_RATES_JOB_ID"]["value_from"] == "fred_rates_job"
     assert env["MIP_SILVER_REFRESH_JOB_ID"]["value_from"] == "silver_refresh_job"
     assert env["MIP_GOLD_REFRESH_JOB_ID"]["value_from"] == "gold_refresh_job"
+    assert env["MIP_CAMPAIGN_TREATMENT_RUNTIME_ENABLED"]["value"] == "1"
+    assert env["MIP_GENIE_ACTION_SECRET_CURRENT"]["value_from"] == (
+        "genie_action_current_secret"
+    )
     assert env["MIP_OTEL_ENDPOINT"]["value"] == "https://collector.example.com/v1/logs"
     assert env["MIP_OTEL_HEADERS"] == {
         "name": "MIP_OTEL_HEADERS",

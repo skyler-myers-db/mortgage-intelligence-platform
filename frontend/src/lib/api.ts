@@ -4,6 +4,7 @@ import type {
   BorrowerLifecycle,
   CallDisposition,
   CampaignListResponse,
+  CampaignRecommendationResponse,
   CampaignSummary,
   ConfigOptions,
   CountyRollupResponse,
@@ -39,9 +40,11 @@ import type {
   SalesTeamMember,
   SalesAgingLead,
   SalesConversionResponse,
+  CampaignPerformanceFunnelResponse,
   SalesOutcomeSummaryResponse,
   SalesStandupResponse,
   SegmentAnalyticsResponse,
+  SessionResponse,
   StateRollupResponse,
   SignalAnalyticsResponse,
   SavedDraft,
@@ -104,6 +107,13 @@ export interface HealthPayload {
   dependencies?: Record<string, string>;
   circuit_breakers?: Record<string, string>;
   actor_cache_key?: string | null;
+  /**
+   * Deploy-promotion marker state: "enabled" after a governed
+   * scripts/deploy.sh promotion, "disabled_baseline_deploy" when the
+   * running process came from a bare deploy (treatment writes 503 and
+   * status reports degraded). Absent on the anonymous liveness body.
+   */
+  campaign_treatment_runtime?: string;
   forced_degraded?: {
     active: boolean;
     dependency: string;
@@ -120,6 +130,8 @@ export interface ApproveResult {
   assigned_to_email?: string | null;
   /** Follow-up reminder timestamp (ISO), computed from follow_up_in_days. */
   follow_up_at?: string | null;
+  draft_generation_id?: string | null;
+  draft_edited?: boolean | null;
 }
 
 export interface RejectResult {
@@ -129,7 +141,12 @@ export interface RejectResult {
 }
 
 export interface OutreachDraftResult {
+  generation_id: string;
+  response_hash: string;
+  source_refreshed_at: string;
   borrower_id: string;
+  campaign_id?: string | null;
+  variant_name?: string | null;
   offer_code: string;
   channel: 'email' | 'sms' | 'direct_mail';
   subject?: string | null;
@@ -138,6 +155,11 @@ export interface OutreachDraftResult {
   disclosure_version: string;
   disclosure_state: string;
   marketing_eligible: boolean;
+  generation_mode: 'supervisor' | 'governed_fallback';
+  generator_label: string;
+  strategy_summary: string;
+  evidence_summary: string[];
+  evidence_assets: string[];
 }
 
 export interface GenieResult {
@@ -171,6 +193,29 @@ export interface GenieFeedbackResult {
   audit_event_id?: string | null;
 }
 
+/** Async Genie lifecycle (2026-07): `/api/genie/message/submit` body. */
+export interface GenieSubmitResult {
+  completed: boolean;
+  conversation_id?: string | null;
+  message_id?: string | null;
+  progress_token?: string | null;
+  question_hash?: string | null;
+  /** Full governed answer when the turn resolved deterministically. */
+  response?: GenieResult | null;
+}
+
+/** Live progress for one in-flight Genie turn (server-owned vocabulary). */
+export interface GenieLiveProgress {
+  status: string;
+  stage: string;
+  stage_label: string;
+  terminal: boolean;
+  failed: boolean;
+  reasoning_trace: Array<{ kind: string; content: string }>;
+  sql_preview?: string | null;
+  error_hint?: string | null;
+}
+
 export interface AuditEventRow {
   event_id: string;
   actor: string;
@@ -184,6 +229,24 @@ export interface AuditEventRow {
   subject_clip?: string | null;
   subject_segment?: string | null;
   request_id?: string | null;
+  correlation_id?: string | null;
+}
+
+export interface AuditEventPage {
+  items: AuditEventRow[];
+  next_cursor: string | null;
+}
+
+export interface ActorAuditEventSummary {
+  event_type: string;
+  entity_type: string;
+  subject_id: string | null;
+  created_at: string;
+}
+
+export interface ActorAuditEventPage {
+  items: ActorAuditEventSummary[];
+  next_cursor: string | null;
 }
 
 /**
@@ -215,6 +278,24 @@ export interface LeadQueryOptions {
   assignedTo?: string | null;
   agedDays?: number | null;
   limit?: number;
+  growthAgentProof?: GrowthAgentCohortProof | null;
+}
+
+export interface GrowthAgentCohortProof {
+  runId: string;
+  actionableTotal: number;
+  cohortFingerprint: string;
+  snapshotId: string;
+  toolResultHash: string;
+  growthHandoff: string;
+}
+
+export interface GrowthAgentCohortVerification {
+  status: 'verified';
+  runId: string;
+  total: number;
+  cohortFingerprint: string;
+  snapshotId: string;
 }
 
 export interface AnalyticsQueryOptions {
@@ -244,6 +325,7 @@ export interface LeadsPageResult {
   totalMatching: number | null;
   returnedRows: number | null;
   truncatedAt: number | null;
+  growthAgentVerification: GrowthAgentCohortVerification | null;
 }
 
 export type GeoQueryCriteria = Record<string, string | number | readonly string[] | null | undefined>;
@@ -484,6 +566,119 @@ function _newRequestId(): string {
   });
 }
 
+const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
+const GROWTH_AGENT_RUN_ID_RE = /^[A-Za-z0-9_-]{8,128}$/;
+function _growthAgentProofError(message: string): ApiError {
+  return new ApiError(message, {
+    path: apiPath('/api/leads'),
+    status: 409,
+    retryable: false,
+  });
+}
+
+function _growthAgentProofFromLocation(): GrowthAgentCohortProof | null {
+  if (typeof window === 'undefined') return null;
+  const params = new URLSearchParams(window.location.search);
+  const runId = params.get('growth_agent_run_id')?.trim() ?? '';
+  const rawTotal = params.get('actionable_total')?.trim() ?? '';
+  const cohortFingerprint = params.get('actionable_cohort_fingerprint')?.trim().toLowerCase() ?? '';
+  const snapshotId = params.get('actionable_snapshot_id')?.trim() ?? '';
+  const toolResultHash = params.get('tool_result_hash')?.trim().toLowerCase() ?? '';
+  const growthHandoff = params.get('growth_handoff')?.trim() ?? '';
+  if (!runId && !rawTotal && !cohortFingerprint && !snapshotId && !toolResultHash && !growthHandoff) {
+    return null;
+  }
+
+  const actionableTotal = Number(rawTotal);
+  if (
+    !GROWTH_AGENT_RUN_ID_RE.test(runId)
+    || !rawTotal
+    || !Number.isSafeInteger(actionableTotal)
+    || actionableTotal < 0
+    || !SHA256_HEX_RE.test(cohortFingerprint)
+    || !snapshotId
+    || !SHA256_HEX_RE.test(toolResultHash)
+    || !growthHandoff
+    || growthHandoff[4096]
+  ) {
+    throw _growthAgentProofError('Growth Agent cohort proof is incomplete.');
+  }
+  return { runId, actionableTotal, cohortFingerprint, snapshotId, toolResultHash, growthHandoff };
+}
+
+export async function growthAgentCohortFingerprint(
+  cohortDigest: string,
+  toolResultHash: string,
+): Promise<string> {
+  const normalizedDigest = cohortDigest.trim().toLowerCase();
+  const normalizedToolHash = toolResultHash.trim().toLowerCase();
+  if (!SHA256_HEX_RE.test(normalizedDigest) || !SHA256_HEX_RE.test(normalizedToolHash)) {
+    throw _growthAgentProofError(
+      'Growth Agent cohort proof is incomplete. Run the workflow again before reviewing leads.',
+    );
+  }
+  const subtle = globalThis.crypto?.subtle;
+  if (!subtle) {
+    throw _growthAgentProofError(
+      'Growth Agent cohort proof cannot be verified in this browser.',
+    );
+  }
+  const canonical = JSON.stringify({
+    cohort_digest: normalizedDigest,
+    tool_result_hash: normalizedToolHash,
+    version: 1,
+  });
+  const digest = await subtle.digest('SHA-256', new TextEncoder().encode(canonical));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+async function _verifyGrowthAgentCohort(
+  headers: Headers,
+  proof: GrowthAgentCohortProof,
+): Promise<GrowthAgentCohortVerification> {
+  const rawTotal = headers.get('X-Total-Matching');
+  const cohortDigest = headers.get('X-Cohort-Digest')?.trim().toLowerCase() ?? '';
+  const cohortFingerprint = headers.get('X-Cohort-Fingerprint')?.trim().toLowerCase() ?? '';
+  const snapshotId = headers.get('X-Cohort-Snapshot-ID')?.trim() ?? '';
+  const runId = headers.get('X-Growth-Agent-Run-ID')?.trim() ?? '';
+  const total = Number(rawTotal);
+  if (
+    rawTotal === null
+    || !Number.isSafeInteger(total)
+    || total < 0
+    || !SHA256_HEX_RE.test(cohortDigest)
+    || !SHA256_HEX_RE.test(cohortFingerprint)
+    || !snapshotId
+    || !GROWTH_AGENT_RUN_ID_RE.test(runId)
+  ) {
+    throw _growthAgentProofError(
+      'Growth Agent cohort is stale. Run the workflow again before reviewing or approving leads.',
+    );
+  }
+  const destinationFingerprint = await growthAgentCohortFingerprint(
+    cohortDigest,
+    proof.toolResultHash,
+  );
+  if (
+    total !== proof.actionableTotal
+    || destinationFingerprint !== proof.cohortFingerprint
+    || cohortFingerprint !== proof.cohortFingerprint
+    || snapshotId !== proof.snapshotId
+    || runId !== proof.runId
+  ) {
+    throw _growthAgentProofError(
+      'Growth Agent cohort is stale. Run the workflow again before reviewing or approving leads.',
+    );
+  }
+  return {
+    status: 'verified',
+    runId,
+    total,
+    cohortFingerprint,
+    snapshotId,
+  };
+}
+
 export interface Retryable503Parsed {
   retryable: boolean;
   dependency: string | null;
@@ -676,7 +871,12 @@ async function getJsonWithHeaders<T>(path: string, signal?: AbortSignal): Promis
   return { data: (await res.json()) as T, headers: res.headers };
 }
 
-async function postJson<T, B>(path: string, body: B, signal?: AbortSignal): Promise<T> {
+async function postJson<T, B>(
+  path: string,
+  body: B,
+  signal?: AbortSignal,
+  extraHeaders?: Record<string, string>,
+): Promise<T> {
   const requestPath = apiPath(path);
   let res: Response;
   try {
@@ -684,7 +884,7 @@ async function postJson<T, B>(path: string, body: B, signal?: AbortSignal): Prom
       requestPath,
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...extraHeaders },
         body: JSON.stringify(body ?? {}),
       },
       3,
@@ -817,9 +1017,31 @@ export const api = {
   portfolioPreview: (
     criteria: Record<string, unknown> = {},
     signal?: AbortSignal,
+    campaignBuildConfig?: {
+      suppression_policy: Record<string, unknown>;
+      household_dedup: Record<string, unknown>;
+    },
   ) =>
-    postJson<PortfolioPreview, { criteria: Record<string, unknown> }>(
+    postJson<PortfolioPreview, {
+      criteria: Record<string, unknown>;
+      campaign_build_config?: {
+        suppression_policy: Record<string, unknown>;
+        household_dedup: Record<string, unknown>;
+      };
+    }>(
       '/api/portfolio/preview',
+      campaignBuildConfig
+        ? { criteria, campaign_build_config: campaignBuildConfig }
+        : { criteria },
+      signal,
+    ),
+
+  campaignRecommendation: (
+    criteria: Record<string, unknown> = {},
+    signal?: AbortSignal,
+  ) =>
+    postJson<CampaignRecommendationResponse, { criteria: Record<string, unknown> }>(
+      '/api/portfolio/campaign-recommendation',
       { criteria },
       signal,
     ),
@@ -835,6 +1057,7 @@ export const api = {
       holdout: Record<string, unknown>;
       roi_assumptions: Record<string, unknown>;
       household_dedup: Record<string, unknown>;
+      request_id: string;
     }> = {},
     signal?: AbortSignal,
   ) =>
@@ -870,6 +1093,7 @@ export const api = {
         },
       },
       signal,
+      { 'Idempotency-Key': config.request_id ?? _newRequestId() },
     ),
 
   segments: (
@@ -983,6 +1207,9 @@ export const api = {
     // returned 0 rows because the unfiltered top-500 from
     // lead_population didn't include the geo's borrowers.
     const params = new URLSearchParams();
+    const growthAgentProof = opts.growthAgentProof === undefined
+      ? _growthAgentProofFromLocation()
+      : opts.growthAgentProof;
     if (segment) params.set('segment', segment);
     if (opts.segmentCodes && opts.segmentCodes.length > 0) {
       params.set('segment_codes', opts.segmentCodes.join(','));
@@ -1003,6 +1230,10 @@ export const api = {
     if (opts.outreachStatus && opts.outreachStatus !== 'any') params.set('outreach_status', opts.outreachStatus);
     if (opts.assignedTo) params.set('assigned_to', opts.assignedTo);
     if (opts.agedDays) params.set('aged_days', String(opts.agedDays));
+    if (growthAgentProof) {
+      params.set('include_identity_proof', 'true');
+      params.set('growth_handoff', growthAgentProof.growthHandoff);
+    }
     if (opts.portfolioCriteria) {
       for (const [key, value] of Object.entries(opts.portfolioCriteria)) {
         if (value !== null && value !== undefined && String(value).length > 0) {
@@ -1014,11 +1245,14 @@ export const api = {
     return getJsonWithHeaders<LeadSummary[]>(
       qs ? `/api/leads?${qs}` : '/api/leads',
       signal,
-    ).then(({ data, headers }) => ({
+    ).then(async ({ data, headers }) => ({
       leads: data,
       totalMatching: headers.get('X-Total-Matching') ? Number(headers.get('X-Total-Matching')) : null,
       returnedRows: headers.get('X-Returned-Rows') ? Number(headers.get('X-Returned-Rows')) : null,
       truncatedAt: headers.get('X-Truncated-At') ? Number(headers.get('X-Truncated-At')) : null,
+      growthAgentVerification: growthAgentProof
+        ? await _verifyGrowthAgentCohort(headers, growthAgentProof)
+        : null,
     }));
   },
 
@@ -1029,8 +1263,11 @@ export const api = {
     opts: LeadQueryOptions = {},
   ) => api.leadsPage(segment, signal, geo, opts).then((page) => page.leads),
 
-  borrower: (id: string, signal?: AbortSignal) =>
-    getJson<Borrower360>(`/api/borrowers/${id}`, signal),
+  borrower: (id: string, signal?: AbortSignal, fresh = false) =>
+    getJson<Borrower360>(
+      `/api/borrowers/${id}${fresh ? '?fresh=true' : ''}`,
+      signal,
+    ),
 
   borrowerProof: (id: string, signal?: AbortSignal) =>
     getJson<BorrowerProof>(`/api/borrowers/${id}/proof`, signal),
@@ -1057,7 +1294,11 @@ export const api = {
       actor?: string;
       offer_code?: string | null;
       evidence_ids?: string[];
+      draft_subject?: string | null;
       draft_body?: string | null;
+      draft_generation_id?: string | null;
+      draft_response_hash?: string | null;
+      draft_source_refreshed_at?: string | null;
       rationale?: string | null;
       bulk_id?: string | null;
       bulk_rationale?: string | null;
@@ -1079,7 +1320,11 @@ export const api = {
         actor: string;
         offer_code?: string | null;
         evidence_ids?: string[];
+        draft_subject?: string | null;
         draft_body?: string | null;
+        draft_generation_id?: string | null;
+        draft_response_hash?: string | null;
+        draft_source_refreshed_at?: string | null;
         rationale?: string | null;
         bulk_id?: string | null;
         bulk_rationale?: string | null;
@@ -1097,7 +1342,11 @@ export const api = {
         actor: opts.actor ?? 'anonymous',
         offer_code: opts.offer_code ?? null,
         evidence_ids: opts.evidence_ids ?? [],
+        draft_subject: opts.draft_subject ?? null,
         draft_body: opts.draft_body ?? null,
+        draft_generation_id: opts.draft_generation_id ?? null,
+        draft_response_hash: opts.draft_response_hash ?? null,
+        draft_source_refreshed_at: opts.draft_source_refreshed_at ?? null,
         rationale: opts.rationale ?? null,
         bulk_id: opts.bulk_id ?? null,
         bulk_rationale: opts.bulk_rationale ?? null,
@@ -1181,10 +1430,21 @@ export const api = {
     borrower_id: string,
     channel: 'email' | 'sms' | 'direct_mail' = 'email',
     signal?: AbortSignal,
+    campaign?: { campaign_id: string; variant_name: string },
   ) =>
-    postJson<OutreachDraftResult, { borrower_id: string; channel: 'email' | 'sms' | 'direct_mail' }>(
+    postJson<OutreachDraftResult, {
+      borrower_id: string;
+      channel: 'email' | 'sms' | 'direct_mail';
+      campaign_id: string | null;
+      variant_name: string | null;
+    }>(
       '/api/outreach/draft',
-      { borrower_id, channel },
+      {
+        borrower_id,
+        channel,
+        campaign_id: campaign?.campaign_id ?? null,
+        variant_name: campaign?.variant_name ?? null,
+      },
       signal,
     ),
 
@@ -1362,6 +1622,20 @@ export const api = {
     return getJson<SalesConversionResponse>(`/api/sales/conversion?${params.toString()}`, signal);
   },
 
+  salesCampaignPerformance: (
+    fromDate: string,
+    toDate: string,
+    signal?: AbortSignal,
+  ) => {
+    const params = new URLSearchParams();
+    params.set('from', fromDate);
+    params.set('to', toDate);
+    return getJson<CampaignPerformanceFunnelResponse>(
+      `/api/sales/campaign-performance?${params.toString()}`,
+      signal,
+    );
+  },
+
   salesOutcomeSummary: (
     fromDate: string,
     toDate: string,
@@ -1430,7 +1704,7 @@ export const api = {
     getJson<CampaignListResponse>('/api/campaigns', signal),
 
   campaign: (campaignId: string, signal?: AbortSignal) =>
-    getJson<CampaignSummary>(`/api/campaigns/${campaignId}`, signal),
+    getJson<CampaignSummary>(`/api/campaigns/${encodeURIComponent(campaignId)}`, signal),
 
   campaignStatus: (
     campaignId: string,
@@ -1439,7 +1713,7 @@ export const api = {
     signal?: AbortSignal,
   ) =>
     patchJson<CampaignSummary, { status: CampaignSummary['status']; rationale?: string | null }>(
-      `/api/campaigns/${campaignId}`,
+      `/api/campaigns/${encodeURIComponent(campaignId)}`,
       { status, rationale: rationale ?? null },
       signal,
     ),
@@ -1448,6 +1722,54 @@ export const api = {
     postJson<GenieResult, { question: string; conversation_id?: string | null }>(
       '/api/genie/message',
       { question, conversation_id: conversationId ?? null },
+      signal,
+    ),
+
+  genieSubmit: (question: string, conversationId?: string | null, signal?: AbortSignal) =>
+    postJson<GenieSubmitResult, { question: string; conversation_id?: string | null }>(
+      '/api/genie/message/submit',
+      { question, conversation_id: conversationId ?? null },
+      signal,
+    ),
+
+  genieProgress: (
+    conversationId: string,
+    messageId: string,
+    progressToken: string,
+    signal?: AbortSignal,
+  ) =>
+    postJson<
+      GenieLiveProgress,
+      { conversation_id: string; message_id: string; progress_token: string }
+    >(
+      '/api/genie/message/progress',
+      { conversation_id: conversationId, message_id: messageId, progress_token: progressToken },
+      signal,
+    ),
+
+  genieComplete: (
+    conversationId: string,
+    messageId: string,
+    progressToken: string,
+    question: string,
+    signal?: AbortSignal,
+  ) =>
+    postJson<
+      GenieResult,
+      {
+        conversation_id: string;
+        message_id: string;
+        progress_token: string;
+        question: string;
+      }
+    >(
+      '/api/genie/message/complete',
+      {
+        conversation_id: conversationId,
+        message_id: messageId,
+        progress_token: progressToken,
+        question,
+      },
       signal,
     ),
 
@@ -1483,24 +1805,19 @@ export const api = {
       signal,
     ),
 
-  /**
-   * Record thumbs-up/down feedback on a Genie answer. Writes a governed
-   * audit row on the backend. The comment is optional and must never
-   * contain PII — the backend rejects PII with 422 and we surface the
-   * `detail` verbatim WITHOUT echoing the rejected comment text back.
-   * A wrong content-type yields 415. Both flow through `_throwFromResponse`
-   * so the ApiError carries the backend `detail`.
-   */
+  /** Record replay-safe thumbs-up/down feedback on a Genie answer. */
   genieFeedback: (
     payload: {
       conversation_id: string;
       message_id: string;
       helpful: boolean;
       comment?: string;
+      request_id?: string;
     },
     signal?: AbortSignal,
-  ) =>
-    postJson<
+  ) => {
+    const { request_id: requestId, ...body } = payload;
+    return postJson<
       GenieFeedbackResult,
       {
         conversation_id: string;
@@ -1508,7 +1825,13 @@ export const api = {
         helpful: boolean;
         comment?: string;
       }
-    >('/api/genie/feedback', payload, signal),
+    >(
+      '/api/genie/feedback',
+      body,
+      signal,
+      { 'Idempotency-Key': requestId ?? crypto.randomUUID() },
+    );
+  },
 
   growthAgent: (signal?: AbortSignal) =>
     getJson<GrowthAgentHomeResponse>('/api/growth-agent', signal),
@@ -1648,14 +1971,49 @@ export const api = {
       event_type?: string | null;
       since?: string | null;
       until?: string | null;
+      offset?: number | null;
     } = {},
   ) => {
     const params = new URLSearchParams();
     params.set('limit', String(limit));
     Object.entries(filters).forEach(([key, value]) => {
-      if (value) params.set(key, value);
+      if (value !== null && value !== undefined && value !== '') {
+        params.set(key, String(value));
+      }
     });
     return getJson<AuditEventRow[]>(`/api/audit/events?${params.toString()}`, signal);
+  },
+
+  auditEventPage: (
+    limit = 25,
+    signal?: AbortSignal,
+    filters: {
+      actor?: string | null;
+      action?: string | null;
+      entity_id?: string | null;
+      borrower_id?: string | null;
+      subject_clip?: string | null;
+      event_type?: string | null;
+      since?: string | null;
+      until?: string | null;
+      cursor?: string | null;
+    } = {},
+  ) => {
+    const params = new URLSearchParams();
+    params.set('limit', String(limit));
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value !== null && value !== undefined && value !== '') {
+        params.set(key, String(value));
+      }
+    });
+    return getJson<AuditEventPage>(`/api/audit/events/page?${params.toString()}`, signal);
+  },
+
+  myAuditEvents: (limit = 8, signal?: AbortSignal, cursor?: string | null) => {
+    const params = new URLSearchParams();
+    params.set('limit', String(limit));
+    if (cursor) params.set('cursor', cursor);
+    return getJson<ActorAuditEventPage>(`/api/audit/my-events?${params.toString()}`, signal);
   },
 
   auditRollups: (period: 'day' | 'week' | 'month' = 'week', signal?: AbortSignal) =>
@@ -1666,6 +2024,9 @@ export const api = {
 
   workspace: (signal?: AbortSignal) =>
     getJson<WorkspaceState>('/api/workspace', signal),
+
+  session: (signal?: AbortSignal) =>
+    getJson<SessionResponse>('/api/session', signal),
 
   saveWorkspaceLead: (lead: SavedLeadInput, signal?: AbortSignal) =>
     putJson<SavedLead, SavedLeadInput>(

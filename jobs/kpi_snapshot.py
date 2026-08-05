@@ -118,9 +118,14 @@ def _quote_uc_identifier(value: str, *, field: str) -> str:
     return f"`{normalized}`"
 
 
-def _resolve_connection() -> dict:
+def _resolve_connection(
+    *,
+    instance_name: str | None = None,
+    database_name: str | None = None,
+) -> dict:
     """Return psycopg.connect kwargs. Mirrors jobs/lakebase_migrate.py."""
-    instance_name = os.environ.get("LAKEBASE_INSTANCE_NAME", "mip-app-state")
+    instance_name = instance_name or os.environ.get("LAKEBASE_INSTANCE_NAME", "mip-app-state")
+    database_name = database_name or os.environ.get("LAKEBASE_DATABASE", "mip_app_state")
     host = os.environ.get("LAKEBASE_HOST")
     user = os.environ.get("LAKEBASE_USER")
     password = os.environ.get("LAKEBASE_PASSWORD")
@@ -129,7 +134,7 @@ def _resolve_connection() -> dict:
         return {
             "host": host,
             "port": int(os.environ.get("LAKEBASE_PORT", "5432")),
-            "dbname": os.environ.get("LAKEBASE_DATABASE", "mip_app_state"),
+            "dbname": database_name,
             "user": user,
             "password": password,
             "sslmode": os.environ.get("LAKEBASE_SSLMODE", "require"),
@@ -199,7 +204,7 @@ def _resolve_connection() -> dict:
     return {
         "host": resolved_host,
         "port": int(os.environ.get("LAKEBASE_PORT", "5432")),
-        "dbname": os.environ.get("LAKEBASE_DATABASE", "mip_app_state"),
+        "dbname": database_name,
         "user": user or identity,
         "password": password or cred_token,
         "sslmode": os.environ.get("LAKEBASE_SSLMODE", "require"),
@@ -283,6 +288,14 @@ def build_parser() -> argparse.ArgumentParser:
             "(default: MIP_DEFAULT_CATALOG or mip)."
         ),
     )
+    parser.add_argument(
+        "--lakebase-instance",
+        default=os.environ.get("LAKEBASE_INSTANCE_NAME", "mip-app-state"),
+    )
+    parser.add_argument(
+        "--lakebase-database",
+        default=os.environ.get("LAKEBASE_DATABASE", "mip_app_state"),
+    )
     return parser
 
 
@@ -293,7 +306,10 @@ def main(argv: list[str] | None = None) -> None:
         "[kpi-snapshot] headline aggregates: "
         + ", ".join(f"{k}={v}" for k, v in aggregates.items())
     )
-    conn_kwargs = _resolve_connection()
+    conn_kwargs = _resolve_connection(
+        instance_name=args.lakebase_instance,
+        database_name=args.lakebase_database,
+    )
     _upsert_snapshot(conn_kwargs, aggregates)
 
 

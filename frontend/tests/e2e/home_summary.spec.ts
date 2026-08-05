@@ -111,6 +111,46 @@ test.describe('S4 home summary — pinned response cross-check', () => {
   test.describe.configure({ timeout: 90_000 });
 
   test.beforeEach(async ({ page }) => {
+    await page.route(apiPattern('session$'), async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ can_access_admin: false }),
+      });
+    });
+    await page.route(apiPattern('workspace$'), async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ saved_leads: [], saved_drafts: [] }),
+      });
+    });
+    await page.route(apiPattern('config/options$'), async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          lender_name: 'Summit Mortgage',
+          rum_enabled: false,
+          geographies: ['All states', 'Illinois'],
+          geographies_status: 'live',
+          occupancy: ['All'],
+          lien_status: ['Any'],
+          lender_relationships: ['All'],
+          products: ['All products'],
+          equity_thresholds: ['Any'],
+          target_lender_refs: ['All'],
+          target_lender_refs_status: 'live',
+        }),
+      });
+    });
+    await page.route(apiPattern('config/footprint$'), async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ states: [], using_fallback: false, geography_scope: null }),
+      });
+    });
     await page.route(apiPattern('home/summary$'), async (route) => {
       await route.fulfill({
         status: 200,
@@ -154,10 +194,75 @@ test.describe('S4 home summary — pinned response cross-check', () => {
         }),
       });
     });
+    await page.route(apiPattern('geo/state-rollups'), async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ rollups: [], snapshot_date: '2026-07-10' }),
+      });
+    });
+    await page.route(apiPattern('admin/assets/[^/]+/metadata$'), async (route) => {
+      const assetKey = new URL(route.request().url()).pathname.split('/').at(-2) ?? 'unknown';
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          asset_path: `mip.semantics.${assetKey}`,
+          title: 'Portfolio headline metric view',
+          description: 'Governed home summary metrics.',
+          object_type: 'view',
+          status: 'ready',
+          freshness: 'fresh',
+          catalog: 'mip',
+          schema_name: 'semantics',
+          object_name: assetKey,
+          uc_object: `mip.semantics.${assetKey}`,
+          generated_at: '2026-07-10T12:00:00Z',
+          row_count_source: 'unavailable',
+          tags: [],
+          properties: [],
+          columns: [],
+          ddl_redacted_lines: 0,
+          lineage: [],
+          known_data_gaps: [],
+        }),
+      });
+    });
+    await page.route(apiPattern('lineage/manifest$'), async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          schema_version: 1,
+          manifest_path: 'backend/resources/lineage_manifest.json',
+          families: [
+            ['marketable_population', 'Marketable population'],
+            ['opportunity_score', 'Opportunity score'],
+            ['in_the_money', 'Refi economics screen'],
+            ['next_best_offer', 'Primary offer path'],
+          ].map(([id, title]) => ({
+            id,
+            title,
+            description: `${title} lineage.`,
+            nodes: [
+              {
+                id: `${id}_metric`,
+                layer: 'metric_view',
+                object_type: 'view',
+                fqn: 'mip.semantics.portfolio_headline_metric_view',
+                label: 'Portfolio headline metric view',
+                note: null,
+                catalog_explorer_url: 'https://dbc-home-summary.cloud.databricks.com/explore/data/mip/semantics/portfolio_headline_metric_view',
+              },
+            ],
+          })),
+        }),
+      });
+    });
   });
 
   test('renders exactly the API display tokens as evidence numbers', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/', { waitUntil: 'domcontentloaded', timeout: 60_000 });
     const summary = page.locator('.login-summary');
     await expect(summary).toBeVisible({ timeout: 60_000 });
     await expect(summary).toContainText('Since your last login');
@@ -168,7 +273,7 @@ test.describe('S4 home summary — pinned response cross-check', () => {
   });
 
   test('every number opens the EvidenceDrawer citing snapshot + metric view', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/', { waitUntil: 'domcontentloaded', timeout: 60_000 });
     const summary = page.locator('.login-summary');
     await expect(summary).toBeVisible({ timeout: 60_000 });
 
@@ -181,6 +286,16 @@ test.describe('S4 home summary — pinned response cross-check', () => {
       await expect(drawer).toContainText(
         PINNED_SUMMARY.highlights[i].current.toLocaleString('en-US'),
       );
+      await drawer.getByRole('tab', { name: 'Lineage' }).click();
+      const familyTitles: Record<string, string> = {
+        high_opportunity: 'Opportunity score',
+        refi_economics_screen: 'Refi economics screen',
+        offers_available: 'Primary offer path',
+      };
+      await expect(drawer).toContainText(
+        `${familyTitles[PINNED_SUMMARY.highlights[i].measure]} — governed chain`,
+      );
+      await expect(drawer.locator('a.lineage-node__chip')).toHaveCount(1);
       await page.keyboard.press('Escape');
       await expect(drawer).toBeHidden();
     }

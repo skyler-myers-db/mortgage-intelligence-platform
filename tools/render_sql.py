@@ -4,7 +4,7 @@ Multi-catalog zero-click deploy (R6-01 rollout).
 ---------------------------------------------------------------------------
 
 The Module 0 SQL source files under ``sql/`` hardcode the default catalog
-prefix ``mip.`` on every three-part identifier (e.g.
+prefix ``mip.`` on every governed identifier (e.g.
 ``mip.gold.borrower_360``, ``mip.silver.lien_current``). A customer who
 deploys this bundle with a different Unity Catalog name (``summit_mortgage``,
 ``cotality_mip``, ``lender_uc``) gets CTAS statements that still write to
@@ -12,8 +12,8 @@ deploys this bundle with a different Unity Catalog name (``summit_mortgage``,
 into the wrong catalog.
 
 This preprocessor resolves that by emitting ``sql/_rendered/**/*.sql``
-alongside the canonical sources, with the five documented prefixes
-substituted for a caller-provided catalog:
+alongside the canonical sources, with the governed catalog and schema
+prefixes substituted for a caller-provided catalog:
 
     mip.gold.       -> {catalog}.gold.
     mip.silver.     -> {catalog}.silver.
@@ -21,6 +21,13 @@ substituted for a caller-provided catalog:
     mip.semantics.  -> {catalog}.semantics.
     mip.raw.        -> {catalog}.raw.
     mip.first_party.-> {catalog}.first_party.
+    mip.audit.      -> {catalog}.audit.
+    mip.app.        -> {catalog}.app.
+
+It also rewrites the exact DDL contexts ``CREATE CATALOG IF NOT EXISTS mip``
+and ``CREATE SCHEMA IF NOT EXISTS mip.<governed-schema>``. Without those
+two-part rewrites, a renamed-catalog deploy could create containers in the
+default catalog before its three-part table DDL targets the customer catalog.
 
 The canonical sources keep the readable ``mip.*`` identifiers so code
 review + git diffs stay legible. The rendered tree is a build artifact
@@ -37,7 +44,7 @@ explicitly opts the dev Summit demo into these feeds.
 Why the regex is safe (no false-positive substitutions).
 ---------------------------------------------------------------------------
 
-The five prefixes ALL take the form ``mip.<schema>.`` where ``<schema>``
+The three-part prefixes all take the form ``mip.<schema>.`` where ``<schema>``
 is a fixed enumeration of known UC schemas. Every match is anchored on a
 word boundary before ``mip`` AND a literal trailing dot after the schema,
 so the preprocessor rewrites ONLY three-part UC names and nothing else.
@@ -88,19 +95,38 @@ import re
 import sys
 from pathlib import Path
 
-# The five UC schema segments governed by this rewrite. Order does not
+# The UC schema segments governed by this rewrite. Order does not
 # matter (they are disjoint). Documented in docs/multi-catalog-plan.md.
-_UC_SCHEMAS: tuple[str, ...] = ("gold", "silver", "ref", "semantics", "raw", "first_party")
+_UC_SCHEMAS: tuple[str, ...] = (
+    "gold",
+    "silver",
+    "ref",
+    "semantics",
+    "raw",
+    "first_party",
+    "audit",
+    "app",
+)
 
 # Pre-compile one regex per prefix. Anchoring: word boundary before
 # ``mip`` ensures ``mip_app`` (Lakebase schema) is never matched. The
 # literal ``.<schema>.`` after ``mip`` ensures bare ``mip.something_else``
 # does not match either.
 _PATTERNS: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(rf"\bmip\.{schema}\."), f"{{catalog}}.{schema}.")
-    for schema in _UC_SCHEMAS
+    (re.compile(rf"\bmip\.{schema}\."), f"{{catalog}}.{schema}.") for schema in _UC_SCHEMAS
 ]
+_CREATE_CATALOG_PATTERN = re.compile(
+    r"^(\s*CREATE\s+CATALOG\s+IF\s+NOT\s+EXISTS\s+)mip(?=\s|;|$)",
+    re.IGNORECASE | re.MULTILINE,
+)
+_CREATE_SCHEMA_PATTERN = re.compile(
+    r"^(\s*CREATE\s+SCHEMA\s+IF\s+NOT\s+EXISTS\s+)mip\."
+    rf"(?P<schema>{'|'.join(re.escape(schema) for schema in _UC_SCHEMAS)})"
+    r"(?=\s|;|$)",
+    re.IGNORECASE | re.MULTILINE,
+)
 _DEMO_FIRST_PARTY_TOKEN = "{{mip_enable_demo_first_party_feeds}}"
+_UC_IDENTIFIER = re.compile(r"^[a-z_][a-z0-9_]{0,254}$")
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _DEFAULT_SOURCE = _REPO_ROOT / "sql"
@@ -110,7 +136,7 @@ _DEFAULT_DEST = _REPO_ROOT / "sql" / "_rendered"
 def _resolve_default_catalog() -> str:
     """Read ``settings.mip_default_catalog`` without hard-failing on import.
 
-    The renderer runs before ``databricks bundle deploy``, possibly in CI
+    The renderer runs before the signed deploy resource phase, possibly in CI
     containers that do not install the backend's runtime requirements. If
     importing settings fails, fall back to the contractual default
     (``mip``) so the tool is usable stand-alone.
@@ -133,8 +159,7 @@ def _parse_bool(raw: str | None, *, default: bool) -> bool:
     if value in {"0", "false", "no", "n", "off"}:
         return False
     raise ValueError(
-        "MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS must be one of "
-        "1/0, true/false, yes/no, on/off"
+        "MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS must be one of " "1/0, true/false, yes/no, on/off"
     )
 
 
@@ -147,6 +172,13 @@ def _resolve_demo_first_party_enabled(cli_value: str | None) -> bool:
 def _render_text(text: str, catalog: str, *, demo_first_party_enabled: bool) -> tuple[str, int]:
     """Apply UC prefix substitutions and render-time SQL switches."""
     total = 0
+    text, n = _CREATE_CATALOG_PATTERN.subn(lambda match: f"{match.group(1)}{catalog}", text)
+    total += n
+    text, n = _CREATE_SCHEMA_PATTERN.subn(
+        lambda match: f"{match.group(1)}{catalog}.{match.group('schema').lower()}",
+        text,
+    )
+    total += n
     for pattern, template in _PATTERNS:
         replacement = template.format(catalog=catalog)
         new_text, n = pattern.subn(replacement, text)
@@ -159,11 +191,15 @@ def _render_text(text: str, catalog: str, *, demo_first_party_enabled: bool) -> 
 
 
 def _iter_sql_files(source_root: Path, dest_root: Path) -> list[Path]:
-    """Return every ``*.sql`` under source_root, skipping the dest tree."""
+    """Return canonical ``*.sql`` files, skipping every rendered artifact tree."""
     files: list[Path] = []
     for path in source_root.rglob("*.sql"):
+        relative_path = path.relative_to(source_root)
+        if "_rendered" in relative_path.parts:
+            continue
         # Skip anything inside the rendered output directory to keep the
-        # run idempotent even if someone points source == dest's parent.
+        # run idempotent when a caller chooses a differently named in-tree
+        # destination.
         try:
             path.relative_to(dest_root)
             continue
@@ -222,7 +258,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         description=(
             "Render SQL sources with a target Unity Catalog catalog name. "
             "Writes sql/_rendered/**/*.sql mirroring sql/**/*.sql with the "
-            "five documented UC prefixes rewritten for the target catalog."
+            "governed UC prefixes rewritten for the target catalog."
         ),
     )
     parser.add_argument(
@@ -267,12 +303,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"render_sql: {exc}", file=sys.stderr)
         return 2
 
-    # Light validation -- UC catalog names are lowercase alphanumerics +
-    # underscore, DNS-ish. We do not enforce casing; we only reject empty
-    # or whitespace-only values which would silently corrupt identifiers.
-    if not catalog or not catalog.strip():
-        print("render_sql: --catalog must be a non-empty string", file=sys.stderr)
+    # Match bundle_env and the pre-bundle namespace bootstrap exactly so an
+    # unsafe or divergent identifier never reaches rendered executable SQL.
+    if _UC_IDENTIFIER.fullmatch(catalog.strip()) is None:
+        print(
+            "render_sql: --catalog must be a lowercase unquoted UC identifier",
+            file=sys.stderr,
+        )
         return 2
+    catalog = catalog.strip()
 
     source_root = Path(args.source).resolve()
     dest_root = Path(args.dest).resolve()

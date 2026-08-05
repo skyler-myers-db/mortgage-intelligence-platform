@@ -4,13 +4,31 @@ Slice 5 migrates this router off the in-memory store onto the
 Lakebase-backed ``AuditStore`` via ``get_audit_store``. The wire shape
 is unchanged so the frontend Activity Log keeps working.
 """
+
 from datetime import datetime
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from pydantic import BaseModel, Field
 
-from backend.schemas.audit import AuditEvent, AuditEventCreateRequest, AuditRollupResponse
-from backend.schemas.common import validate_public_borrower_id
+from backend.config.settings import settings
+from backend.schemas.audit import (
+    AuditEvent,
+    AuditEventCreateRequest,
+    AuditEventPage,
+    AuditRollupResponse,
+)
+from backend.schemas.common import (
+    validate_public_audit_entity_type,
+    validate_public_audit_event_type,
+    validate_public_borrower_id,
+)
+from backend.services.audit_event_types import is_server_owned_audit_event_type
+from backend.services.audit_pagination import (
+    audit_filter_fingerprint,
+    decode_audit_cursor,
+    encode_audit_cursor,
+)
 from backend.services.audit_store import (
     AuditMetadataValueViolation,
     AuditMetadataViolation,
@@ -38,28 +56,22 @@ LakebaseDep = Annotated[LakebaseClient, Depends(get_lakebase_client)]
 # (~50) so operator deep-dives still have headroom.
 DEFAULT_AUDIT_LIMIT: int = 50
 MAX_AUDIT_LIMIT: int = 500
-_ROUTER_OWNED_EVENT_TYPES: frozenset[str] = frozenset(
-    {
-        "APPROVE",
-        "CAMPAIGN_STATUS_UPDATE",
-        "DRAFT_OUTREACH",
-        "OUTREACH_APPROVE",
-        "OUTREACH_REJECT",
-        "PORTFOLIO_CREATE",
-        "RECOMMEND_OFFER",
-        "RUN_GENIE",
-        "SAVE_DRAFT",
-        "SAVE_LEAD",
-        "UNSAVE_LEAD",
-        "DELETE_DRAFT",
-        "CALL_DISPOSITION",
-        "LEAD_ASSIGN",
-        "LEAD_DISTRIBUTE",
-        "LEAD_OUTCOME",
-        "VIEW_BORROWER",
-        "VIEW_LEADS",
-    }
-)
+DEFAULT_MY_ACTIVITY_LIMIT: int = 8
+MAX_MY_ACTIVITY_LIMIT: int = 50
+class ActorAuditEventSummary(BaseModel):
+    """PII-minimized event shape for an operator's own recovery feed."""
+
+    event_type: str
+    entity_type: str
+    subject_id: str | None = None
+    created_at: str
+
+
+class ActorAuditEventPage(BaseModel):
+    items: list[ActorAuditEventSummary] = Field(default_factory=list)
+    next_cursor: str | None = None
+
+
 def _event_type_for_payload(payload: AuditEventCreateRequest) -> str:
     return (payload.event_type or payload.action).replace(".", "_").replace("-", "_").upper()
 
@@ -70,11 +82,109 @@ def _validate_correlation_filter(value: str) -> str:
     return value
 
 
+def _authenticated_actor(request: Request) -> str:
+    """Resolve the current edge identity without admitting a fallback actor."""
+
+    if not settings.trust_forwarded_headers:
+        raise HTTPException(status_code=401, detail="audit identity required")
+    actor = request.headers.get("X-Forwarded-Email") or request.headers.get("X-Forwarded-User")
+    if not actor:
+        raise HTTPException(status_code=401, detail="audit identity required")
+    return actor
+
+
+def _actor_event_summary(event: AuditEvent) -> ActorAuditEventSummary:
+    event_type = event.event_type or event.action.replace(".", "_").replace("-", "_").upper()
+    try:
+        event_type = validate_public_audit_event_type(event_type)
+    except ValueError:
+        event_type = "ACTIVITY"
+    try:
+        entity_type = validate_public_audit_entity_type(event.entity_type)
+    except ValueError:
+        entity_type = "activity"
+    subject_id = None
+    # Approval and outreach audit rows use the decision/proof UUID as their
+    # entity id. The metadata's borrower_id is an explicitly governed masked
+    # identifier, so expose it only after the same strict validation used by
+    # public borrower routes. No other payload field crosses this boundary.
+    for candidate in (event.payload_json.get("borrower_id"), event.entity_id):
+        if candidate is None:
+            continue
+        try:
+            subject_id = validate_public_borrower_id(str(candidate))
+            break
+        except ValueError:
+            continue
+    return ActorAuditEventSummary(
+        event_type=event_type,
+        entity_type=entity_type,
+        subject_id=subject_id,
+        created_at=event.created_at,
+    )
+
+
+@router.get("/my-events", response_model=ActorAuditEventPage)
+def list_my_events(
+    request: Request,
+    response: Response,
+    store: StoreDep,
+    limit: Annotated[int, Query(ge=1, le=MAX_MY_ACTIVITY_LIMIT)] = DEFAULT_MY_ACTIVITY_LIMIT,
+    cursor: Annotated[str | None, Query(max_length=2048)] = None,
+) -> ActorAuditEventPage:
+    """Return a snapshot-stable, PII-minimized page for the current actor only."""
+
+    if "actor" in request.query_params:
+        raise HTTPException(status_code=422, detail="actor filter is not supported")
+    actor = _authenticated_actor(request)
+    response.headers["Cache-Control"] = "private, no-store"
+    fingerprint = audit_filter_fingerprint(
+        {
+            "scope": "my-events",
+            "actor": actor,
+            "limit": limit,
+        }
+    )
+    decoded = None
+    if cursor is not None:
+        try:
+            decoded = decode_audit_cursor(cursor, filter_fingerprint=fingerprint)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="invalid audit cursor") from exc
+    try:
+        rows = store.list(
+            limit=limit + 1,
+            after_sequence=decoded.after_sequence if decoded else None,
+            snapshot_sequence=decoded.snapshot_sequence if decoded else None,
+            snapshot_token=decoded.snapshot_token if decoded else None,
+            actor=actor,
+        )
+    except LakebaseError as exc:
+        raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
+    items = rows[:limit]
+    summaries = [_actor_event_summary(event) for event in items]
+    if len(rows) <= limit or not items:
+        return ActorAuditEventPage(items=summaries)
+    snapshot_sequence = items[0].audit_sequence if decoded is None else decoded.snapshot_sequence
+    after_sequence = items[-1].audit_sequence
+    snapshot_token = items[0].audit_snapshot if decoded is None else decoded.snapshot_token
+    if snapshot_sequence is None or after_sequence is None or snapshot_token is None:
+        raise HTTPException(status_code=503, detail="audit pagination unavailable")
+    next_cursor = encode_audit_cursor(
+        after_sequence=after_sequence,
+        snapshot_sequence=snapshot_sequence,
+        snapshot_token=snapshot_token,
+        filter_fingerprint=fingerprint,
+    )
+    return ActorAuditEventPage(items=summaries, next_cursor=next_cursor)
+
+
 @router.get("/events", response_model=list[AuditEvent])
 def list_events(
     store: StoreDep,
     _actor: AdminDep,
     limit: Annotated[int, Query(ge=1, le=MAX_AUDIT_LIMIT)] = DEFAULT_AUDIT_LIMIT,
+    offset: Annotated[int, Query(ge=0)] = 0,
     actor: Annotated[str | None, Query(max_length=256)] = None,
     action: Annotated[str | None, Query(max_length=128)] = None,
     entity_id: Annotated[str | None, Query(max_length=256)] = None,
@@ -98,6 +208,7 @@ def list_events(
     try:
         return store.list(
             limit=limit,
+            offset=offset,
             actor=actor,
             action=action,
             entity_id=entity_id,
@@ -114,9 +225,89 @@ def list_events(
         # kick in once it lands.
         # R5-03: constant body string; full ``str(exc)`` stays in the
         # LakebaseError WARNING + ``from exc`` chaining for ops.
-        raise HTTPException(
-            status_code=503, detail=safe_dependency_detail("lakebase")
-        ) from exc
+        raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
+
+
+@router.get("/events/page", response_model=AuditEventPage)
+def list_event_page(
+    store: StoreDep,
+    _actor: AdminDep,
+    limit: Annotated[int, Query(ge=1, le=MAX_AUDIT_LIMIT)] = DEFAULT_AUDIT_LIMIT,
+    cursor: Annotated[str | None, Query(max_length=2048)] = None,
+    actor: Annotated[str | None, Query(max_length=256)] = None,
+    action: Annotated[str | None, Query(max_length=128)] = None,
+    entity_id: Annotated[str | None, Query(max_length=256)] = None,
+    borrower_id: Annotated[str | None, Query(max_length=64)] = None,
+    subject_clip: Annotated[str | None, Query(max_length=128)] = None,
+    event_type: Annotated[str | None, Query(max_length=128)] = None,
+    correlation_id: Annotated[str | None, Query(max_length=128)] = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> AuditEventPage:
+    """Traverse a snapshot of the append-only audit ledger without page drift."""
+
+    if borrower_id is not None:
+        try:
+            validate_public_borrower_id(borrower_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="invalid borrower_id") from exc
+    if correlation_id is not None:
+        try:
+            correlation_id = _validate_correlation_filter(correlation_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="invalid correlation_id") from exc
+    filters = {
+        "limit": limit,
+        "actor": actor,
+        "action": action,
+        "entity_id": entity_id,
+        "borrower_id": borrower_id,
+        "subject_clip": subject_clip,
+        "event_type": event_type,
+        "correlation_id": correlation_id,
+        "since": since,
+        "until": until,
+    }
+    fingerprint = audit_filter_fingerprint(filters)
+    decoded = None
+    if cursor is not None:
+        try:
+            decoded = decode_audit_cursor(cursor, filter_fingerprint=fingerprint)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="invalid audit cursor") from exc
+    try:
+        rows = store.list(
+            limit=limit + 1,
+            after_sequence=decoded.after_sequence if decoded else None,
+            snapshot_sequence=decoded.snapshot_sequence if decoded else None,
+            snapshot_token=decoded.snapshot_token if decoded else None,
+            actor=actor,
+            action=action,
+            entity_id=entity_id,
+            borrower_id=borrower_id,
+            subject_clip=subject_clip,
+            event_type=event_type,
+            correlation_id=correlation_id,
+            since=since,
+            until=until,
+        )
+    except LakebaseError as exc:
+        raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
+    items = rows[:limit]
+    if len(rows) <= limit or not items:
+        return AuditEventPage(items=items)
+    snapshot_sequence = items[0].audit_sequence if decoded is None else decoded.snapshot_sequence
+    after_sequence = items[-1].audit_sequence
+    snapshot_token = items[0].audit_snapshot if decoded is None else decoded.snapshot_token
+    if snapshot_sequence is None or after_sequence is None or snapshot_token is None:
+        raise HTTPException(status_code=503, detail="audit pagination unavailable")
+    next_cursor = encode_audit_cursor(
+        after_sequence=after_sequence,
+        snapshot_sequence=snapshot_sequence,
+        snapshot_token=snapshot_token,
+        filter_fingerprint=fingerprint,
+    )
+    return AuditEventPage(items=items, next_cursor=next_cursor)
 
 
 @router.get("/rollups", response_model=list[AuditRollupResponse])
@@ -170,9 +361,7 @@ def audit_rollups(
     try:
         rows = lakebase.fetchall(sql, params, limit=104)
     except LakebaseError as exc:
-        raise HTTPException(
-            status_code=503, detail=safe_dependency_detail("lakebase")
-        ) from exc
+        raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
     return [
         AuditRollupResponse(
             bucket_start=(
@@ -198,7 +387,7 @@ def log_event(
     _actor: AdminDep,
 ) -> AuditEvent:
     event_type = _event_type_for_payload(payload)
-    if event_type in _ROUTER_OWNED_EVENT_TYPES or event_type.startswith("GENIE_ACTION_"):
+    if is_server_owned_audit_event_type(event_type):
         raise HTTPException(
             status_code=400,
             detail="event type is owned by a governed server route",
@@ -227,6 +416,4 @@ def log_event(
     except (AuditPIIError, AuditMetadataViolation, AuditMetadataValueViolation) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except LakebaseError as exc:
-        raise HTTPException(
-            status_code=503, detail=safe_dependency_detail("lakebase")
-        ) from exc
+        raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc

@@ -6,6 +6,7 @@ mirror the Lakeview dashboard datasets over ``mip.gold`` and
 signals. Raw CLIP, owner names, addresses, and share-level identifiers do
 not cross this boundary.
 """
+
 from __future__ import annotations
 
 from typing import Literal
@@ -15,6 +16,20 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from backend.schemas._validators import normalize_public_lender_ref
 from backend.schemas.lead import SegmentCode
 
+# Schema modules cannot import runtime services. These bounds mirror
+# backend.services.scoring.score_band; the analytics schema tests pin every
+# edge against that canonical function so either side changing alone fails CI.
+_SCORE_BAND_HIGH_MIN = 85
+_SCORE_BAND_MED_MIN = 65
+
+
+def _expected_score_band(opportunity_score: int) -> Literal["high", "med", "low"]:
+    if opportunity_score >= _SCORE_BAND_HIGH_MIN:
+        return "high"
+    if opportunity_score >= _SCORE_BAND_MED_MIN:
+        return "med"
+    return "low"
+
 
 class AnalyticsFilters(BaseModel):
     """Validated filter bag shared by the native analytics endpoints."""
@@ -22,11 +37,14 @@ class AnalyticsFilters(BaseModel):
     states: list[str] = Field(default_factory=list)
     segment_codes: list[SegmentCode] = Field(default_factory=list)
     segment_mode: Literal["any", "all"] = "any"
-    lender_relationship: Literal[
-        "Current customer",
-        "Former customer",
-        "Competitor customer",
-    ] | None = None
+    lender_relationship: (
+        Literal[
+            "Current customer",
+            "Former customer",
+            "Competitor customer",
+        ]
+        | None
+    ) = None
     target_lender_ref: str | None = None
     signal_types: list[str] = Field(default_factory=list)
     days: int = Field(default=30, ge=1, le=90)
@@ -112,6 +130,19 @@ class EquitySpreadPoint(BaseModel):
     # equity_spread_points gold row. Optional so pre-S7 fixtures stay valid.
     score_band: Literal["high", "med", "low"] | None = None
     in_the_money: bool | None = None
+    # Exact population at this equity/spread coordinate before the response
+    # cap is applied. This prevents client-side cluster counts from becoming
+    # an understated sample when a dense coordinate crosses the server cap.
+    coordinate_total: int = Field(default=1, ge=1)
+
+    @model_validator(mode="after")
+    def _score_band_matches_opportunity_score(self) -> EquitySpreadPoint:
+        if self.score_band is None:
+            return self
+        expected = _expected_score_band(self.opportunity_score)
+        if self.score_band != expected:
+            raise ValueError("score_band must match the canonical band for opportunity_score")
+        return self
 
 
 # Bound literals below mirror the pinned plot-domain constants in

@@ -422,7 +422,11 @@ class TestGoldDdlAdditions:
             "outreach_status",
             "offer_code",
             "approved_at",
+            "approval_decided_at",
+            "approval_event_id",
             "outreach_at",
+            "outreach_created_at",
+            "outreach_event_id",
             "synced_at",
             "refreshed_at",
         ):
@@ -472,7 +476,18 @@ TRANSFORM_DIR = REPO_ROOT / "sql" / "transformations"
     [
         (
             "gold_borrower_lifecycle_state.sql",
-            ("CREATE OR REPLACE TABLE mip.gold.borrower_lifecycle_state",),
+            (
+                "DELETE FROM mip.gold.borrower_lifecycle_state",
+                "approval_status = 'pending'",
+                "outreach_status = 'none'",
+                "offer_code IS NULL",
+                "approved_at IS NULL",
+                "approval_decided_at IS NULL",
+                "approval_event_id IS NULL",
+                "outreach_at IS NULL",
+                "outreach_created_at IS NULL",
+                "outreach_event_id IS NULL",
+            ),
         ),
         (
             "gold_funnel_snapshot_daily.sql",

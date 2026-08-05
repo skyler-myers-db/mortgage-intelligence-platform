@@ -109,6 +109,8 @@ export interface GrowthAgentRunResponse {
   planner_label: string;
   trace_id: string;
   tool_result_hash: string;
+  actionable_cohort_fingerprint?: string | null;
+  actionable_snapshot_id?: string | null;
   broad_label: string;
   actionable_label: string;
   broad_total: number;
@@ -196,6 +198,9 @@ export interface GrowthAgentNotificationDraft {
   channel: GrowthAgentNotificationChannel;
   title: string;
   body: string;
+  generation_mode?: 'supervisor' | 'governed_fallback';
+  generator_label?: string;
+  strategy_summary?: string;
   status: 'draft' | 'reviewed' | 'cancelled';
   created_at?: string | null;
   updated_at?: string | null;

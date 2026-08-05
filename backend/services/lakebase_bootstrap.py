@@ -1,7 +1,7 @@
 """One-shot runtime bootstrap for Lakebase schema drift.
 
 The mip_lakebase_migrate Databricks Job is the canonical owner of
-``lakebase/schema.sql`` -- it runs on bundle deploy and applies every
+``lakebase/schema.sql`` -- it runs during signed deployment and applies every
 ``CREATE ... IF NOT EXISTS`` / ``ALTER ... IF NOT EXISTS`` idempotently.
 But we ship small, targeted DDLs (e.g. R5-01 idempotency key) between
 deploys too, and the first HTTP path that depends on the new column
@@ -29,8 +29,8 @@ R6-04 cross-process serialisation
 
 The ``mip_lakebase_migrate`` Databricks Job ALSO applies
 ``lakebase/schema.sql`` post-deploy. When the app boots immediately
-after ``databricks bundle deploy -t dev`` the first approve/reject can
-race the migrate job -- both run the same IF-NOT-EXISTS / partial
+after the signed resource phase the first approve/reject can race the migrate
+job -- both run the same IF-NOT-EXISTS / partial
 unique index DDL concurrently. Postgres serialises CREATE INDEX via
 AccessExclusiveLock, but the ``ADD COLUMN IF NOT EXISTS`` + ``CREATE
 UNIQUE INDEX IF NOT EXISTS`` sequence can still interleave in ways
@@ -46,6 +46,7 @@ is a deterministic 64-bit integer derived from the migration name,
 so future bootstrap DDLs each get their own key (register a new
 ``_advisory_key_for`` entry -- see ``_APPROVAL_REQUEST_ID_KEY``).
 """
+
 from __future__ import annotations
 
 import logging
@@ -63,6 +64,10 @@ log = logging.getLogger(__name__)
 # the migration without re-running the whole schema.sql.
 _APPROVAL_REQUEST_ID_DDL: tuple[str, ...] = (
     "ALTER TABLE mip_app.approvals ADD COLUMN IF NOT EXISTS request_id TEXT",
+    "ALTER TABLE mip_app.approvals ADD COLUMN IF NOT EXISTS decision_intent TEXT",
+    "ALTER TABLE mip_app.approvals ADD COLUMN IF NOT EXISTS decision_payload_hash TEXT",
+    "ALTER TABLE mip_app.approvals ADD COLUMN IF NOT EXISTS decision_response JSONB",
+    "ALTER TABLE mip_app.approvals ADD COLUMN IF NOT EXISTS audit_event_id UUID",
     (
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_approvals_request_id "
         "ON mip_app.approvals (request_id) WHERE request_id IS NOT NULL"
@@ -77,6 +82,34 @@ SELECT
       AND table_name = 'approvals'
       AND column_name = 'request_id'
   ) AS has_request_id_column,
+  EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'mip_app'
+      AND table_name = 'approvals'
+      AND column_name = 'decision_intent'
+  ) AS has_decision_intent_column,
+  EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'mip_app'
+      AND table_name = 'approvals'
+      AND column_name = 'decision_payload_hash'
+  ) AS has_decision_payload_hash_column,
+  EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'mip_app'
+      AND table_name = 'approvals'
+      AND column_name = 'decision_response'
+  ) AS has_decision_response_column,
+  EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'mip_app'
+      AND table_name = 'approvals'
+      AND column_name = 'audit_event_id'
+  ) AS has_audit_event_id_column,
   EXISTS (
     SELECT 1
     FROM pg_indexes
@@ -682,8 +715,13 @@ def _approval_request_id_already_applied(client: LakebaseClient) -> bool:
     row = fetchone(_APPROVAL_REQUEST_ID_PREFLIGHT_SQL)
     if not row:
         return False
-    return bool(row.get("has_request_id_column")) and bool(
-        row.get("has_request_id_index")
+    return (
+        bool(row.get("has_request_id_column"))
+        and bool(row.get("has_decision_intent_column"))
+        and bool(row.get("has_decision_payload_hash_column"))
+        and bool(row.get("has_decision_response_column"))
+        and bool(row.get("has_audit_event_id_column"))
+        and bool(row.get("has_request_id_index"))
     )
 
 

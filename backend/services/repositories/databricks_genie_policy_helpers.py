@@ -7,6 +7,7 @@ import re
 from typing import Any
 
 from backend.config.settings import settings
+from backend.schemas._validators import contains_unsafe_ai_text
 from backend.services.databricks_sql_helpers import qualify
 from backend.services.genie_answers import GenieNativeVisualization, GenieReasoningStep
 from backend.services.genie_client import GenieResponse
@@ -216,41 +217,85 @@ _PII_TEXT_PATTERNS: tuple[re.Pattern[str], ...] = (
 
 
 def _answer_text_contains_pii(text: str | None) -> bool:
+    """Return true for any text unsafe to render, retaining the legacy name."""
+
     if not text:
         return False
-    return any(pattern.search(text) for pattern in _PII_TEXT_PATTERNS)
+    return any(pattern.search(text) for pattern in _PII_TEXT_PATTERNS) or contains_unsafe_ai_text(
+        text
+    )
+
+
+def _safe_rendered_summary(text: object, *, max_length: int | None = None) -> str | None:
+    """Return scrubbed public text, or drop the field when either pass is unsafe."""
+
+    raw = str(text or "").strip()
+    if not raw or _answer_text_contains_pii(raw):
+        return None
+    cleaned = scrub_free_text(raw).strip()
+    if max_length is not None:
+        cleaned = cleaned[:max_length].strip()
+    if not cleaned or _answer_text_contains_pii(cleaned):
+        return None
+    return cleaned
 
 
 # ---------------------------------------------------------------------------
 # Genie enhancement fields (2026-07). The live Genie turn can carry a native
-# visualization reference, model-suggested follow-up questions, and an exposed
-# planning trace. Each string that ships in the response body is routed through
-# ``scrub_free_text`` -- the same output-guard the answer text is checked
-# against -- so a drifting Space cannot leak PII through a suggestion, a viz
-# title, or a reasoning step. Deterministic trusted_sql / refused paths do NOT
+# visualization reference, model-suggested follow-up questions, and a public
+# process summary. Raw model thoughts never cross the API boundary. Each
+# model-authored string that ships in the response body is routed through
+# the same fail-closed output guard as the answer text, before optional
+# scrubbing, so a drifting Space cannot leak or visibly redact unsafe text
+# through a suggestion, a viz title, or a reasoning step. Deterministic
+# trusted_sql / refused paths do NOT
 # call these builders; they emit empty list / None (no fabrication).
 # ---------------------------------------------------------------------------
 
-# Cap the exposed planning trace so a runaway thoughts array can't bloat the
-# response body; length-cap each step so one step stays a sentence.
+# Cap the public process summary so a runaway thoughts array cannot bloat the
+# response body.
 _GENIE_MAX_REASONING_STEPS = 12
-_GENIE_REASONING_CONTENT_MAX_LEN = 500
+
+_GENIE_PUBLIC_PROCESS_STEPS: tuple[tuple[tuple[str, ...], str, str], ...] = (
+    (
+        ("FILTER", "CONTEXT", "CLASSIFY"),
+        "context",
+        "Selected the governed mortgage context for this question.",
+    ),
+    (
+        ("QUERY", "SQL", "EXECUT"),
+        "query",
+        "Prepared a governed query plan over approved data assets.",
+    ),
+    (
+        ("SYNTH", "ANSWER", "SUMMAR"),
+        "answer",
+        "Summarized the verified result for review.",
+    ),
+)
+
+
+def _public_genie_process_step(raw_kind: object) -> tuple[str, str]:
+    normalized = re.sub(r"[^A-Z0-9]+", "_", str(raw_kind or "").upper()).strip("_")
+    normalized = normalized.removeprefix("THOUGHT_TYPE_")
+    for tokens, kind, content in _GENIE_PUBLIC_PROCESS_STEPS:
+        if any(token in normalized for token in tokens):
+            return kind, content
+    return "analysis", "Analyzed the request within the governed Genie workflow."
 
 
 def genie_reasoning_trace_from_thoughts(
     thoughts: list[dict[str, str]] | None,
 ) -> list[GenieReasoningStep]:
-    """Scrub + bound the exposed Genie planning trace for the response body."""
+    """Translate private model thoughts into bounded server-owned process steps."""
     steps: list[GenieReasoningStep] = []
     for raw in thoughts or []:
         if not isinstance(raw, dict):
             continue
-        content = scrub_free_text(str(raw.get("content") or "").strip())[
-            :_GENIE_REASONING_CONTENT_MAX_LEN
-        ].strip()
-        if not content:
+        raw_content = str(raw.get("content") or "").strip()
+        if not raw_content:
             continue
-        kind = scrub_free_text(str(raw.get("kind") or "thought").strip()) or "thought"
+        kind, content = _public_genie_process_step(raw.get("kind"))
         steps.append(GenieReasoningStep(kind=kind, content=content))
         if len(steps) >= _GENIE_MAX_REASONING_STEPS:
             break
@@ -266,8 +311,8 @@ def genie_follow_up_questions(suggested: list[str] | None) -> list[str]:
     """
     out: list[str] = []
     for raw in suggested or []:
-        text = scrub_free_text(str(raw).strip()).strip()
-        if text and text not in out:
+        text = _safe_rendered_summary(raw)
+        if text is not None and text not in out:
             out.append(text)
         if len(out) >= 5:
             break
@@ -285,8 +330,9 @@ def genie_native_visualization(
         return None
     title = native.get("title")
     query_attachment_id = native.get("query_attachment_id")
+    safe_title = _safe_rendered_summary(title) if title else None
     return GenieNativeVisualization(
         attachment_id=str(attachment_id),
         query_attachment_id=str(query_attachment_id) if query_attachment_id else None,
-        title=scrub_free_text(str(title)).strip() or None if title else None,
+        title=safe_title or None,
     )

@@ -9,7 +9,9 @@ claim. These tests pin that behaviour against the real probe logic.
 
 from __future__ import annotations
 
+import base64
 import json
+from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,10 +19,32 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
+import backend.services.ai_gateway_capability_probe as ai_gateway_probe_module
 import backend.services.capabilities as capabilities_module
 import backend.services.capability_request as capability_request_module
-from backend.config.settings import Settings
+import backend.services.supervisor_runtime as supervisor_runtime_module
+from backend.agents.gateway_contract import (
+    GATEWAY_BURST_SCALING_ENABLED,
+    GATEWAY_ENDPOINT_DESCRIPTION,
+    GATEWAY_PROXY_SOURCE_HASH_TAG,
+    GATEWAY_ROUTE_OPTIMIZED,
+    GATEWAY_SCALE_TO_ZERO_ENABLED,
+    GATEWAY_STATIC_ENV,
+    GATEWAY_TRAFFIC_PERCENTAGE,
+    GATEWAY_UPSTREAM_TAG,
+    GATEWAY_WORKLOAD_SIZE,
+    GATEWAY_WORKLOAD_TYPE,
+    gateway_proxy_source_hash,
+    gateway_runtime_binding_hash,
+)
+from backend.agents.supervisor_contract import supervisor_contract_hash
+from backend.config.settings import AI_GATEWAY_PROOF_FRESHNESS_MAX_S, Settings
 from backend.main import app
+from backend.services.ai_gateway_proof_attestation import (
+    derive_gateway_proof_verify_key,
+    sign_gateway_proof,
+)
+from backend.services.ai_gateway_proof_ledger import AI_GATEWAY_PROOF_CLOCK_SKEW_S
 from backend.services.capabilities import (
     CapabilityStatus,
     LiveCapabilityStatus,
@@ -37,18 +61,138 @@ from backend.services.resilience import TTLCache
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _TEST_GIT_SHA = "69ff206fa7667589a28498c6554779f7f6c18c08"
 _OTHER_GIT_SHA = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+_TEST_SIGNING_KEY = base64.urlsafe_b64encode(bytes(range(32))).decode().rstrip("=")
+_TEST_VERIFY_KEY = derive_gateway_proof_verify_key(_TEST_SIGNING_KEY)
+_TEST_GATEWAY_ENDPOINT_ID = "gateway-endpoint-id"
+_TEST_SUPERVISOR_ENDPOINT_ID = "supervisor-endpoint-id"
+_TEST_WORKSPACE_HOST = "https://dbc-test.cloud.databricks.com"
+_TEST_PROXY_CLIENT_ID = "proxy-client"
+_TEST_PROXY_CREDENTIAL_ID = "proxy-credential"
+_TEST_PROXY_SECRET_REFERENCE = "{{secrets/mip-agent-proxy/oauth-client-secret-proxy-credential}}"
+
+
+@pytest.fixture(autouse=True)
+def _exact_runtime_resource_stub(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        supervisor_runtime_module,
+        "verified_gateway_runtime_resource_environment",
+        lambda environment: json.loads(
+            environment["MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_CONTRACT_JSON"]
+        ),
+    )
 
 
 def _settings(**overrides: object) -> Settings:
     base: dict[str, object] = {
-        "databricks_host": "dbc-test.cloud.databricks.com",
+        "databricks_host": _TEST_WORKSPACE_HOST,
         "databricks_warehouse_id": "wh-123",
         "genie_space_id": "space-abc",
         "lakebase_host": "lb-test",
         "lakebase_user": "mip_app",
+        "mip_ai_gateway_proof_verify_key": _TEST_VERIFY_KEY,
+        "mip_agent_serving_endpoint": "mip-growth-agent-gateway",
+        "mip_ai_gateway_endpoint": "mip-growth-agent-gateway",
+        "mip_agent_supervisor_endpoint": "mip-supervisor-endpoint",
+        "mip_agent_supervisor_id": "supervisor-1",
+        "mip_agent_gateway_model_version": 7,
+        "mip_agent_runtime_client_id": "runtime-client",
+        "mip_agent_proxy_client_id": _TEST_PROXY_CLIENT_ID,
+        "mip_agent_proxy_credential_id": _TEST_PROXY_CREDENTIAL_ID,
+        "mip_agent_proxy_secret_reference": _TEST_PROXY_SECRET_REFERENCE,
+        "mip_default_catalog": "mip",
+        "mip_ai_gateway_inference_table": "mip_app_state.mip_sync.mip_agent_inference",
+        "mip_ai_gateway_experiment_id": "experiment-7",
+        "mip_ai_gateway_experiment_name": "/Users/runtime-client/proxy",
+        "mip_ai_gateway_agent_model_source": "models:/m-reviewed-proxy",
+        "mip_expected_agent_gateway_resource_sha256": "a" * 64,
+        "mip_expected_agent_gateway_resource_signature": "signature",
+        "mip_gateway_model_attestation_verify_key": _TEST_VERIFY_KEY,
     }
+    if overrides.get("mip_ai_gateway") is True and "mip_agent_orchestrator" not in overrides:
+        base["mip_agent_orchestrator"] = True
     base.update(overrides)
+    overridden_gateway_endpoint = overrides.get("mip_ai_gateway_endpoint")
+    if (
+        isinstance(overridden_gateway_endpoint, str)
+        and "mip_agent_serving_endpoint" not in overrides
+    ):
+        base["mip_agent_serving_endpoint"] = overridden_gateway_endpoint
+    binding_values = (
+        base.get("mip_agent_serving_endpoint"),
+        base.get("mip_agent_supervisor_id"),
+        base.get("mip_agent_supervisor_endpoint"),
+        base.get("mip_agent_runtime_client_id"),
+        base.get("mip_agent_gateway_model", "mip.audit.mortgage_growth_supervisor_proxy"),
+        base.get("mip_agent_gateway_model_version"),
+        base.get("mip_ai_gateway_inference_table"),
+        base.get("mip_agent_proxy_client_id"),
+        base.get("mip_agent_proxy_credential_id"),
+        base.get("mip_agent_proxy_secret_reference"),
+    )
+    if all(binding_values):
+        # Invalid/placeholder hosts are deliberately exercised by static
+        # capability tests and cannot have a governed runtime binding.
+        with suppress(ValueError):
+            base["mip_expected_agent_gateway_binding_sha256"] = gateway_runtime_binding_hash(
+                endpoint=str(binding_values[0]),
+                supervisor_id=str(binding_values[1]),
+                upstream_endpoint=str(binding_values[2]),
+                runtime_application_id=str(binding_values[3]),
+                workspace_host=str(base["databricks_host"]),
+                model_name=str(binding_values[4]),
+                model_version=int(str(binding_values[5])),
+                inference_table=str(binding_values[6]),
+                proxy_caller_application_id=str(binding_values[7]),
+                proxy_caller_credential_id=str(binding_values[8]),
+                proxy_caller_secret_reference=str(binding_values[9]),
+            )
+    base["mip_expected_agent_gateway_resource_contract_json"] = json.dumps(
+        {
+            "catalog": base.get("mip_default_catalog"),
+            "genie_space_id": base.get("genie_space_id"),
+            "runtime_application_id": base.get("mip_agent_runtime_client_id"),
+            "workspace_host": base.get("databricks_host"),
+            "supervisor_id": base.get("mip_agent_supervisor_id"),
+            "supervisor_endpoint": base.get("mip_agent_supervisor_endpoint"),
+            "supervisor_endpoint_id": _TEST_SUPERVISOR_ENDPOINT_ID,
+            "gateway_endpoint": base.get("mip_agent_serving_endpoint"),
+            "gateway_endpoint_id": _TEST_GATEWAY_ENDPOINT_ID,
+            "gateway_model_name": base.get(
+                "mip_agent_gateway_model", "mip.audit.mortgage_growth_supervisor_proxy"
+            ),
+            "gateway_model_version": str(base.get("mip_agent_gateway_model_version")),
+            "gateway_model_source": base.get("mip_ai_gateway_agent_model_source"),
+            "gateway_experiment_name": base.get("mip_ai_gateway_experiment_name"),
+            "gateway_experiment_id": base.get("mip_ai_gateway_experiment_id"),
+            "gateway_inference_table": base.get("mip_ai_gateway_inference_table"),
+            "proxy_caller_application_id": base.get("mip_agent_proxy_client_id"),
+            "proxy_caller_credential_id": base.get("mip_agent_proxy_credential_id"),
+            "proxy_caller_secret_reference": base.get("mip_agent_proxy_secret_reference"),
+        }
+    )
     return Settings(**base)
+
+
+def _runtime_resource_environment(*, endpoint: str, inference_table: str) -> dict[str, str]:
+    configured = _settings(
+        mip_agent_serving_endpoint=endpoint,
+        mip_ai_gateway_endpoint=endpoint,
+        mip_ai_gateway_inference_table=inference_table,
+    )
+    return {
+        "MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_CONTRACT_JSON": (
+            configured.mip_expected_agent_gateway_resource_contract_json or ""
+        ),
+        "MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SHA256": (
+            configured.mip_expected_agent_gateway_resource_sha256 or ""
+        ),
+        "MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SIGNATURE": (
+            configured.mip_expected_agent_gateway_resource_signature or ""
+        ),
+        "MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY": (
+            configured.mip_gateway_model_attestation_verify_key or ""
+        ),
+    }
 
 
 def _by_key(caps: list, key: str):
@@ -65,13 +209,15 @@ class _LiveSqlClient:
         count_by_request_id: dict[str, int] | None = None,
         table_names: list[str] | None = None,
         column_names: list[str] | None = None,
-        ) -> None:
+    ) -> None:
         self.fail = fail
         self.count = count
         self.count_sequence = list(count_sequence or [])
         self.count_by_request_id = dict(count_by_request_id or {})
         self.use_request_id_counts = count_by_request_id is not None
-        self.table_names = ["mip_agent_inference_payload"] if table_names is None else list(table_names)
+        self.table_names = (
+            ["mip_agent_inference_payload"] if table_names is None else list(table_names)
+        )
         self.column_names = (
             ["client_request_id", "request", "databricks_request_id"]
             if column_names is None
@@ -108,12 +254,14 @@ class _LiveGenieClient:
         ok: bool = True,
         conversation_id: str = "conv-live",
         message_id: str | None = "msg-live",
+        genie_status: str | None = "COMPLETED",
         native_visualization: dict[str, object] | None = None,
         download_ok: bool = False,
     ) -> None:
         self.ok = ok
         self.conversation_id = conversation_id
         self.message_id = message_id
+        self.genie_status = genie_status
         self.native_visualization = native_visualization
         self.download_ok = download_ok
         self.download_calls: list[tuple[str, str, str]] = []
@@ -125,6 +273,7 @@ class _LiveGenieClient:
         return SimpleNamespace(
             conversation_id=self.conversation_id,
             message_id=self.message_id,
+            genie_status=self.genie_status,
             native_visualization=self.native_visualization,
         )
 
@@ -153,23 +302,39 @@ class _LiveLakebase:
         verified_at: datetime | None = None,
         status: str = "verified",
     ) -> _LiveLakebase:
-        sent = datetime.now(UTC) - timedelta(minutes=5)
         verified = verified_at or datetime.now(UTC) - timedelta(minutes=1)
-        return cls(
-            [
-                {
-                    "proof_id": "11111111-1111-4111-8111-111111111111",
-                    "git_sha": git_sha,
-                    "client_request_id": f"mip-capability-{git_sha}-abcdef1234567890",
-                    "endpoint_name": endpoint_name,
-                    "inference_table": inference_table,
-                    "sent_at": sent,
-                    "verified_at": verified,
-                    "verify_latency_s": 240.0,
-                    "status": status,
-                }
-            ]
-        )
+        sent = verified - timedelta(minutes=4)
+        row: dict[str, object] = {
+            "proof_id": "11111111-1111-4111-8111-111111111111",
+            "git_sha": git_sha,
+            "client_request_id": f"mip-capability-{git_sha}-abcdef1234567890",
+            "endpoint_name": endpoint_name,
+            "inference_table": inference_table,
+            "sent_at": sent,
+            "verified_at": verified,
+            "verify_latency_s": 240.0,
+            "status": status,
+            "attestation_alg": None,
+            "attestation_key_id": None,
+            "attestation_signature": None,
+        }
+        if status == "verified":
+            alg, key_id, signature = sign_gateway_proof(
+                signing_key=_TEST_SIGNING_KEY,
+                proof_id=str(row["proof_id"]),
+                git_sha=git_sha,
+                client_request_id=str(row["client_request_id"]),
+                endpoint_name=endpoint_name,
+                inference_table=inference_table,
+                sent_at=sent,
+                verified_at=verified,
+            )
+            row.update(
+                attestation_alg=alg,
+                attestation_key_id=key_id,
+                attestation_signature=signature,
+            )
+        return cls([row])
 
     def fetchone(
         self,
@@ -184,6 +349,8 @@ class _LiveLakebase:
         endpoint_name = str(params.get("endpoint_name") or "")
         inference_table = str(params.get("inference_table") or "")
         cutoff = params.get("cutoff")
+        future_cutoff = params.get("future_cutoff")
+        clock_skew = timedelta(seconds=int(params.get("clock_skew_s") or 0))
         matches: list[dict[str, object]] = []
         for proof in self.proofs:
             if proof.get("git_sha") != git_sha or proof.get("status") != "verified":
@@ -192,11 +359,40 @@ class _LiveLakebase:
                 continue
             if proof.get("inference_table") != inference_table:
                 continue
+            if proof.get("attestation_alg") != params.get("attestation_alg"):
+                continue
+            if proof.get("attestation_key_id") != params.get("attestation_key_id"):
+                continue
             verified_at = proof.get("verified_at")
-            if isinstance(cutoff, datetime) and isinstance(verified_at, datetime) and verified_at < cutoff:
+            if (
+                isinstance(cutoff, datetime)
+                and isinstance(verified_at, datetime)
+                and verified_at < cutoff
+            ):
+                continue
+            sent_at = proof.get("sent_at")
+            if (
+                isinstance(future_cutoff, datetime)
+                and isinstance(verified_at, datetime)
+                and verified_at > future_cutoff
+            ):
+                continue
+            if (
+                isinstance(future_cutoff, datetime)
+                and isinstance(sent_at, datetime)
+                and sent_at > future_cutoff
+            ):
+                continue
+            if (
+                isinstance(verified_at, datetime)
+                and isinstance(sent_at, datetime)
+                and verified_at < sent_at - clock_skew
+            ):
                 continue
             matches.append(dict(proof))
-        matches.sort(key=lambda row: row.get("verified_at") or datetime.min.replace(tzinfo=UTC), reverse=True)
+        matches.sort(
+            key=lambda row: row.get("verified_at") or datetime.min.replace(tzinfo=UTC), reverse=True
+        )
         return matches[0] if matches else None
 
 
@@ -209,13 +405,22 @@ class _SyncedTable:
 
 
 class _FakeDatabaseApi:
-    def __init__(self, *, permission_denied: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        permission_denied: bool = False,
+        metadata_error: Exception | None = None,
+    ) -> None:
         self.requested: list[str] = []
         self.permission_denied = permission_denied
+        self.metadata_error = metadata_error
 
     def get_synced_database_table(self, name: str) -> _SyncedTable:
         self.requested.append(name)
+        if self.metadata_error is not None:
+            raise self.metadata_error
         if self.permission_denied:
+
             class PermissionDenied(Exception):
                 pass
 
@@ -228,14 +433,23 @@ class _FakeWorkspaceClient:
         self,
         *,
         permission_denied: bool = False,
+        database_metadata_error: Exception | None = None,
         serving_ready: bool = True,
         serving_task: str = "agent/v1/responses",
         empty_serving_response: bool = False,
+        supervisor_metadata_id: str = "supervisor-1",
+        supervisor_metadata_endpoint: str = "mip-supervisor-endpoint",
+        supervisor_metadata_error: Exception | None = None,
+        gateway_endpoint_id: str = _TEST_GATEWAY_ENDPOINT_ID,
+        supervisor_endpoint_id: str = _TEST_SUPERVISOR_ENDPOINT_ID,
+        supervisor_endpoint_creator: str = "runtime-client",
         inference_enabled: bool = True,
         inference_catalog: str = "mip_app_state",
         inference_schema: str = "mip_sync",
         inference_table_prefix: str = "mip_agent_inference",
+        resource_inference_table: str = "mip_app_state.mip_sync.mip_agent_inference",
         responses_api_error: Exception | None = None,
+        serving_response_status: str = "completed",
         eval_total: int = 5,
         eval_passed: int | None = None,
         eval_score: float = 1.0,
@@ -252,10 +466,17 @@ class _FakeWorkspaceClient:
         eval_experiment_id: str = "exp-1",
         eval_run_experiment_id: str | None = None,
     ) -> None:
-        self.database = _FakeDatabaseApi(permission_denied=permission_denied)
+        self.database = _FakeDatabaseApi(
+            permission_denied=permission_denied,
+            metadata_error=database_metadata_error,
+        )
         self.api_client = _FakeApiClient(
             empty_response=empty_serving_response,
             error=responses_api_error,
+            supervisor_id=supervisor_metadata_id,
+            supervisor_endpoint=supervisor_metadata_endpoint,
+            supervisor_error=supervisor_metadata_error,
+            serving_response_status=serving_response_status,
         )
         self.serving_endpoints = _FakeServingEndpoints(
             ready=serving_ready,
@@ -265,6 +486,10 @@ class _FakeWorkspaceClient:
             inference_catalog=inference_catalog,
             inference_schema=inference_schema,
             inference_table_prefix=inference_table_prefix,
+            resource_inference_table=resource_inference_table,
+            gateway_endpoint_id=gateway_endpoint_id,
+            supervisor_endpoint_id=supervisor_endpoint_id,
+            supervisor_endpoint_creator=supervisor_endpoint_creator,
         )
         self.experiments = _FakeExperiments(
             total=eval_total,
@@ -300,6 +525,10 @@ class _FakeServingEndpoints:
         inference_catalog: str = "mip_app_state",
         inference_schema: str = "mip_sync",
         inference_table_prefix: str = "mip_agent_inference",
+        resource_inference_table: str = "mip_app_state.mip_sync.mip_agent_inference",
+        gateway_endpoint_id: str = _TEST_GATEWAY_ENDPOINT_ID,
+        supervisor_endpoint_id: str = _TEST_SUPERVISOR_ENDPOINT_ID,
+        supervisor_endpoint_creator: str = "runtime-client",
     ) -> None:
         self.ready = ready
         self.task = task
@@ -308,20 +537,94 @@ class _FakeServingEndpoints:
         self.inference_catalog = inference_catalog
         self.inference_schema = inference_schema
         self.inference_table_prefix = inference_table_prefix
+        self.resource_inference_table = resource_inference_table
+        self.gateway_endpoint_id = gateway_endpoint_id
+        self.supervisor_endpoint_id = supervisor_endpoint_id
+        self.supervisor_endpoint_creator = supervisor_endpoint_creator
         self.queries: list[tuple[str, dict[str, object]]] = []
 
     def get(self, name: str) -> object:
-        _ = name
+        upstream = "mip-supervisor-endpoint"
+        if name == upstream:
+            return SimpleNamespace(
+                id=self.supervisor_endpoint_id,
+                creator=self.supervisor_endpoint_creator,
+            )
         return SimpleNamespace(
+            id=self.gateway_endpoint_id,
+            creator="runtime-client",
             state=SimpleNamespace(ready="READY" if self.ready else "NOT_READY"),
             task=self.task,
+            pending_config=None,
+            config=SimpleNamespace(
+                served_entities=[
+                    SimpleNamespace(
+                        entity_name="mip.audit.mortgage_growth_supervisor_proxy",
+                        entity_version="7",
+                        name="mip-growth-supervisor-proxy-7",
+                        environment_vars={
+                            **GATEWAY_STATIC_ENV,
+                            **_runtime_resource_environment(
+                                endpoint=name,
+                                inference_table=self.resource_inference_table,
+                            ),
+                            "DATABRICKS_HOST": _TEST_WORKSPACE_HOST,
+                            "MIP_UPSTREAM_SUPERVISOR_ID": "supervisor-1",
+                            "MIP_UPSTREAM_SUPERVISOR_ENDPOINT": upstream,
+                            "MIP_UPSTREAM_SUPERVISOR_CREATOR": "runtime-client",
+                            "MIP_UPSTREAM_PROXY_CLIENT_ID": _TEST_PROXY_CLIENT_ID,
+                            "MIP_UPSTREAM_PROXY_CREDENTIAL_ID": _TEST_PROXY_CREDENTIAL_ID,
+                            "MIP_UPSTREAM_PROXY_CLIENT_SECRET": _TEST_PROXY_SECRET_REFERENCE,
+                            "MIP_SUPERVISOR_CATALOG": "mip",
+                            "MIP_SUPERVISOR_GENIE_SPACE_ID": "space-abc",
+                            "MIP_SUPERVISOR_CONTRACT_SHA256": supervisor_contract_hash(
+                                genie_space_id="space-abc",
+                                catalog="mip",
+                            ),
+                            "MLFLOW_EXPERIMENT_ID": "experiment-7",
+                        },
+                        workload_size=GATEWAY_WORKLOAD_SIZE,
+                        workload_type=GATEWAY_WORKLOAD_TYPE,
+                        scale_to_zero_enabled=GATEWAY_SCALE_TO_ZERO_ENABLED,
+                        burst_scaling_enabled=GATEWAY_BURST_SCALING_ENABLED,
+                    )
+                ],
+                traffic_config=SimpleNamespace(
+                    routes=[
+                        SimpleNamespace(
+                            served_entity_name="mip-growth-supervisor-proxy-7",
+                            traffic_percentage=GATEWAY_TRAFFIC_PERCENTAGE,
+                        )
+                    ]
+                ),
+            ),
+            description=GATEWAY_ENDPOINT_DESCRIPTION,
+            route_optimized=GATEWAY_ROUTE_OPTIMIZED,
+            budget_policy_id=None,
+            email_notifications=None,
+            rate_limits=[],
+            tags=[
+                SimpleNamespace(
+                    key=GATEWAY_PROXY_SOURCE_HASH_TAG,
+                    value=gateway_proxy_source_hash(
+                        upstream_endpoint=upstream,
+                        catalog="mip",
+                        genie_space_id="space-abc",
+                    ),
+                ),
+                SimpleNamespace(key=GATEWAY_UPSTREAM_TAG, value=upstream),
+            ],
             ai_gateway=SimpleNamespace(
+                fallback_config=None,
+                guardrails=None,
+                rate_limits=[],
+                usage_tracking_config=None,
                 inference_table_config=SimpleNamespace(
                     enabled=self.inference_enabled,
                     catalog_name=self.inference_catalog,
                     schema_name=self.inference_schema,
                     table_name_prefix=self.inference_table_prefix,
-                )
+                ),
             ),
         )
 
@@ -333,18 +636,56 @@ class _FakeServingEndpoints:
 
 
 class _FakeApiClient:
-    def __init__(self, *, empty_response: bool = False, error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        empty_response: bool = False,
+        error: Exception | None = None,
+        supervisor_id: str = "supervisor-1",
+        supervisor_endpoint: str = "mip-supervisor-endpoint",
+        supervisor_error: Exception | None = None,
+        serving_response_status: str = "completed",
+    ) -> None:
         self.empty_response = empty_response
         self.error = error
+        self.supervisor_id = supervisor_id
+        self.supervisor_endpoint = supervisor_endpoint
+        self.supervisor_error = supervisor_error
+        self.serving_response_status = serving_response_status
         self.requests: list[tuple[str, str, dict[str, object] | None]] = []
 
-    def do(self, method: str, path: str, *, body: dict[str, object] | None = None, **_kwargs: object) -> object:
+    def do(
+        self, method: str, path: str, *, body: dict[str, object] | None = None, **_kwargs: object
+    ) -> object:
         self.requests.append((method, path, body))
+        if method == "GET" and path.startswith("/api/2.1/supervisor-agents/"):
+            if self.supervisor_error is not None:
+                raise self.supervisor_error
+            return {
+                "supervisor_agent_id": self.supervisor_id,
+                "endpoint_name": self.supervisor_endpoint,
+                "creator": "runtime-client",
+            }
         if self.error is not None:
             raise self.error
         if self.empty_response:
             return {}
-        return {"output": [{"content": [{"text": "ready"}]}]}
+        return {
+            "status": self.serving_response_status,
+            "output": [{"content": [{"text": "ready"}]}],
+        }
+
+
+def _gateway_probe_requests(
+    workspace: _FakeWorkspaceClient,
+) -> list[tuple[str, str, dict[str, object] | None]]:
+    return [
+        request
+        for request in workspace.api_client.requests
+        if request[0] == "POST"
+        and isinstance(request[2], dict)
+        and str(request[2].get("client_request_id") or "").startswith("mip-capability-")
+    ]
 
 
 class _FakeExperiments:
@@ -375,7 +716,9 @@ class _FakeExperiments:
             info=SimpleNamespace(experiment_id=genai_run_experiment_id or experiment_id),
             data=SimpleNamespace(
                 metrics=[
-                    SimpleNamespace(key="count_reconciles/mean", value=genai_count_reconciles_score),
+                    SimpleNamespace(
+                        key="count_reconciles/mean", value=genai_count_reconciles_score
+                    ),
                 ],
                 params=[],
                 tags=[],
@@ -389,7 +732,10 @@ class _FakeExperiments:
                     SimpleNamespace(key="passed", value=passed),
                     SimpleNamespace(key="total", value=total),
                     SimpleNamespace(key="count_reconciles_passed", value=count_reconciles_passed),
-                    SimpleNamespace(key="mlflow_genai_count_reconciles_score", value=genai_count_reconciles_score),
+                    SimpleNamespace(
+                        key="mlflow_genai_count_reconciles_score",
+                        value=genai_count_reconciles_score,
+                    ),
                 ],
                 params=[
                     SimpleNamespace(key="git_sha", value=sha),
@@ -407,7 +753,7 @@ class _FakeExperiments:
                         value="true" if genai_run_verified else "false",
                     ),
                 ],
-            )
+            ),
         )
 
     def get_by_name(self, name: str) -> object:
@@ -447,13 +793,12 @@ def test_preview_capabilities_are_never_claimable() -> None:
             assert cap.status is expected, f"{key} -> {cap.status}"
 
 
-def test_orchestrator_flag_on_without_libs_is_not_provisioned() -> None:
-    """databricks-agents / mlflow>=3.1.3 are not installed in CI, so flipping the
-    flag on must NOT yield a claimable capability — it surfaces honestly."""
+def test_orchestrator_config_is_not_claimable_without_live_proof() -> None:
+    """Source-bound endpoint config is visible but cannot claim live capability."""
     caps = probe_capabilities(_settings(mip_agent_orchestrator=True))
     orch = _by_key(caps, "agent_orchestrator")
     assert orch.ga is True
-    assert orch.status is CapabilityStatus.NOT_PROVISIONED
+    assert orch.status is CapabilityStatus.CONFIGURED
     assert orch.claimable is False
 
 
@@ -567,6 +912,16 @@ def test_genie_live_probe_requires_conversation_and_message_ids() -> None:
 
     assert statuses["genie_conversation_api"].available is False
     assert "conversation and message id" in statuses["genie_conversation_api"].detail
+
+
+def test_genie_live_probe_requires_completed_terminal_status() -> None:
+    statuses = collect_live_capability_statuses(
+        genie_client=_LiveGenieClient(genie_status=None),
+    )
+
+    assert statuses["genie_conversation_api"].available is False
+    assert "terminal status was missing" in statuses["genie_conversation_api"].detail
+    assert statuses["genie_native_visualization"].available is False
 
 
 def test_genie_native_visualization_configured_not_claimed_by_default() -> None:
@@ -690,7 +1045,7 @@ def test_lakebase_sync_live_probe_runs_without_lakebase_client() -> None:
     assert "source_readiness" in sql.statements[-1]
 
 
-def test_lakebase_sync_probe_falls_back_to_sql_when_metadata_acl_denied() -> None:
+def test_lakebase_sync_probe_fails_closed_when_metadata_acl_denied() -> None:
     sql = _LiveSqlClient()
     statuses = collect_live_capability_statuses(
         settings=_settings(mip_lakebase_sync=True, mip_lakebase_sync_tables="source_readiness"),
@@ -698,9 +1053,25 @@ def test_lakebase_sync_probe_falls_back_to_sql_when_metadata_acl_denied() -> Non
         workspace_client=_FakeWorkspaceClient(permission_denied=True),
     )
 
-    assert statuses["lakebase_sync"].available is True
-    assert "SQL row-count proof" in statuses["lakebase_sync"].detail
-    assert "source_readiness" in sql.statements[-1]
+    assert statuses["lakebase_sync"].available is False
+    assert "Database API metadata" in statuses["lakebase_sync"].detail
+    assert "SQL rows alone do not prove sync state" in statuses["lakebase_sync"].detail
+    assert not any("source_readiness" in statement for statement in sql.statements)
+
+
+def test_lakebase_sync_probe_fails_closed_when_metadata_api_is_unavailable() -> None:
+    sql = _LiveSqlClient()
+    statuses = collect_live_capability_statuses(
+        settings=_settings(mip_lakebase_sync=True, mip_lakebase_sync_tables="source_readiness"),
+        sql_client=sql,
+        workspace_client=_FakeWorkspaceClient(
+            database_metadata_error=RuntimeError("Database API unavailable")
+        ),
+    )
+
+    assert statuses["lakebase_sync"].available is False
+    assert "RuntimeError" in statuses["lakebase_sync"].detail
+    assert not any("source_readiness" in statement for statement in sql.statements)
 
 
 def test_agent_orchestrator_live_probe_requires_endpoint_query() -> None:
@@ -709,45 +1080,95 @@ def test_agent_orchestrator_live_probe_requires_endpoint_query() -> None:
         settings=_settings(
             mip_agent_orchestrator=True,
             mip_agent_supervisor_id="supervisor-1",
-            mip_agent_serving_endpoint="mip-supervisor-endpoint",
+            mip_agent_serving_endpoint="mip-growth-agent-gateway",
         ),
         workspace_client=workspace,
     )
 
     assert statuses["agent_orchestrator"].available is True
-    assert workspace.api_client.requests
+    assert len(workspace.api_client.requests) == 1
     method, path, body = workspace.api_client.requests[0]
     assert method == "POST"
     assert path == "/serving-endpoints/responses"
     assert body is not None
-    assert body["model"] == "mip-supervisor-endpoint"
+    assert body["model"] == "mip-growth-agent-gateway"
 
 
-def test_agent_orchestrator_live_probe_falls_back_when_responses_route_returns_non_json() -> None:
+def test_agent_orchestrator_rejects_live_gateway_endpoint_identity_replacement() -> None:
+    workspace = _FakeWorkspaceClient(gateway_endpoint_id="replaced-endpoint-id")
+    statuses = collect_live_capability_statuses(
+        settings=_settings(mip_agent_orchestrator=True),
+        workspace_client=workspace,
+    )
+
+    assert statuses["agent_orchestrator"].available is False
+    assert "gateway_endpoint_id_mismatch" in statuses["agent_orchestrator"].detail
+    assert _gateway_probe_requests(workspace) == []
+
+
+def test_agent_orchestrator_does_not_read_private_supervisor_endpoint_creator() -> None:
+    workspace = _FakeWorkspaceClient(supervisor_endpoint_creator="attacker-client")
+    statuses = collect_live_capability_statuses(
+        settings=_settings(mip_agent_orchestrator=True),
+        workspace_client=workspace,
+    )
+
+    assert statuses["agent_orchestrator"].available is True
+    assert len(workspace.api_client.requests) == 1
+    assert workspace.api_client.requests[0][:2] == ("POST", "/serving-endpoints/responses")
+
+
+def test_agent_orchestrator_does_not_require_runtime_private_supervisor_metadata() -> None:
+    class PermissionDenied(Exception):
+        pass
+
+    workspace = _FakeWorkspaceClient(supervisor_metadata_error=PermissionDenied("metadata denied"))
+    statuses = collect_live_capability_statuses(
+        settings=_settings(
+            mip_agent_orchestrator=True,
+            mip_agent_supervisor_id="supervisor-1",
+            mip_agent_serving_endpoint="mip-growth-agent-gateway",
+        ),
+        workspace_client=workspace,
+    )
+
+    assert statuses["agent_orchestrator"].available is True
+    assert len(workspace.api_client.requests) == 1
+    assert workspace.api_client.requests[0][1] == "/serving-endpoints/responses"
+
+
+def test_agent_orchestrator_normalizes_sdk_enum_task_to_exact_responses_transport() -> None:
+    workspace = _FakeWorkspaceClient()
+    workspace.serving_endpoints.task = SimpleNamespace(value="AGENT_V1_RESPONSES")
+
+    statuses = collect_live_capability_statuses(
+        settings=_settings(
+            mip_agent_orchestrator=True,
+            mip_agent_supervisor_id="supervisor-1",
+            mip_agent_serving_endpoint="mip-growth-agent-gateway",
+        ),
+        workspace_client=workspace,
+    )
+
+    assert statuses["agent_orchestrator"].available is True
+    assert workspace.api_client.requests[0][1] == "/serving-endpoints/responses"
+
+
+def test_agent_orchestrator_live_probe_does_not_retry_after_responses_route_failure() -> None:
     workspace = _FakeWorkspaceClient(responses_api_error=json.JSONDecodeError("bad", "", 0))
     statuses = collect_live_capability_statuses(
         settings=_settings(
             mip_agent_orchestrator=True,
             mip_agent_supervisor_id="supervisor-1",
-            mip_agent_serving_endpoint="mip-supervisor-endpoint",
+            mip_agent_serving_endpoint="mip-growth-agent-gateway",
         ),
         workspace_client=workspace,
     )
 
-    assert statuses["agent_orchestrator"].available is True
-    assert workspace.api_client.requests
-    assert workspace.serving_endpoints.queries
-    endpoint, kwargs = workspace.serving_endpoints.queries[0]
-    assert endpoint == "mip-supervisor-endpoint"
-    assert kwargs["input"] == [
-        {
-            "role": "user",
-            "content": (
-                "Capability readiness check. Reply with a one-sentence acknowledgement "
-                "that the Mortgage Growth Agent endpoint is reachable."
-            ),
-        }
-    ]
+    assert statuses["agent_orchestrator"].available is False
+    assert "JSONDecodeError" in statuses["agent_orchestrator"].detail
+    assert len(workspace.api_client.requests) == 1
+    assert workspace.serving_endpoints.queries == []
 
 
 def test_agent_orchestrator_live_probe_rejects_empty_endpoint_response() -> None:
@@ -755,7 +1176,7 @@ def test_agent_orchestrator_live_probe_rejects_empty_endpoint_response() -> None
         settings=_settings(
             mip_agent_orchestrator=True,
             mip_agent_supervisor_id="supervisor-1",
-            mip_agent_serving_endpoint="mip-supervisor-endpoint",
+            mip_agent_serving_endpoint="mip-growth-agent-gateway",
         ),
         workspace_client=_FakeWorkspaceClient(empty_serving_response=True),
     )
@@ -770,7 +1191,7 @@ def test_agent_orchestrator_live_probe_requires_exact_agent_responses_task(task:
         settings=_settings(
             mip_agent_orchestrator=True,
             mip_agent_supervisor_id="supervisor-1",
-            mip_agent_serving_endpoint="mip-supervisor-endpoint",
+            mip_agent_serving_endpoint="mip-growth-agent-gateway",
         ),
         workspace_client=_FakeWorkspaceClient(serving_task=task),
     )
@@ -797,8 +1218,9 @@ def test_ai_gateway_live_probe_requires_endpoint_query_and_verified_ledger_proof
     assert statuses["ai_gateway"].available is True
     assert "exact inference-row round-trip verified" in statuses["ai_gateway"].detail
     assert "Current deployment inference rows visible: 3" in statuses["ai_gateway"].detail
-    assert workspace.api_client.requests
-    method, path, body = workspace.api_client.requests[0]
+    gateway_requests = _gateway_probe_requests(workspace)
+    assert len(gateway_requests) == 1
+    method, path, body = gateway_requests[0]
     assert method == "POST"
     assert path == "/serving-endpoints/responses"
     assert body is not None
@@ -814,6 +1236,56 @@ def test_ai_gateway_live_probe_requires_endpoint_query_and_verified_ledger_proof
         and params.get("prefix_1") == f"mip-agent-run-{_TEST_GIT_SHA}-%"
         for params in sql.parameters
     )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "value"),
+    [
+        ("attestation_alg", None),
+        ("attestation_signature", None),
+        ("attestation_signature", "A" * 86),
+        ("client_request_id", f"mip-capability-{_TEST_GIT_SHA}-ffffffffffffffff"),
+    ],
+)
+def test_ai_gateway_capability_rejects_fabricated_or_tampered_ledger_proof(
+    mutation: str,
+    value: object,
+) -> None:
+    lakebase = _LiveLakebase.verified()
+    lakebase.proofs[0][mutation] = value
+
+    statuses = collect_live_capability_statuses(
+        settings=_settings(
+            mip_git_sha=_TEST_GIT_SHA,
+            mip_ai_gateway=True,
+            mip_ai_gateway_endpoint="mip-agent-gateway",
+            mip_ai_gateway_inference_table="mip_app_state.mip_sync.mip_agent_inference",
+        ),
+        sql_client=_LiveSqlClient(count=3),
+        lakebase=lakebase,
+        workspace_client=_FakeWorkspaceClient(),
+    )
+
+    assert statuses["ai_gateway"].available is False
+    assert "signature did not verify" in statuses["ai_gateway"].detail
+
+
+def test_ai_gateway_capability_requires_runtime_public_verify_key() -> None:
+    statuses = collect_live_capability_statuses(
+        settings=_settings(
+            mip_git_sha=_TEST_GIT_SHA,
+            mip_ai_gateway=True,
+            mip_ai_gateway_endpoint="mip-agent-gateway",
+            mip_ai_gateway_inference_table="mip_app_state.mip_sync.mip_agent_inference",
+            mip_ai_gateway_proof_verify_key=None,
+        ),
+        sql_client=_LiveSqlClient(count=3),
+        lakebase=_LiveLakebase.verified(),
+        workspace_client=_FakeWorkspaceClient(),
+    )
+
+    assert statuses["ai_gateway"].available is False
+    assert "proof verification key" in statuses["ai_gateway"].detail
 
 
 def test_ai_gateway_live_probe_does_not_retry_or_write_ledger_at_runtime() -> None:
@@ -833,8 +1305,56 @@ def test_ai_gateway_live_probe_does_not_retry_or_write_ledger_at_runtime() -> No
     )
 
     assert statuses["ai_gateway"].available is True
-    assert len(workspace.api_client.requests) == 1
+    assert len(_gateway_probe_requests(workspace)) == 1
     assert len(lakebase.fetchone_calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("workspace", "expected_path", "expected_detail"),
+    [
+        (
+            _FakeWorkspaceClient(serving_task="llm/v1/chat"),
+            None,
+            "gateway_task_not_agent",
+        ),
+        (
+            _FakeWorkspaceClient(empty_serving_response=True),
+            "/serving-endpoints/responses",
+            "terminal completed Responses payload",
+        ),
+        (
+            _FakeWorkspaceClient(serving_response_status="in_progress"),
+            "/serving-endpoints/responses",
+            "terminal completed Responses payload",
+        ),
+    ],
+    ids=["generic-payload", "no-payload", "nonterminal"],
+)
+def test_ai_gateway_live_probe_requires_terminal_responses_execution(
+    workspace: _FakeWorkspaceClient,
+    expected_path: str | None,
+    expected_detail: str,
+) -> None:
+    statuses = collect_live_capability_statuses(
+        settings=_settings(
+            mip_git_sha=_TEST_GIT_SHA,
+            mip_ai_gateway=True,
+            mip_ai_gateway_endpoint="mip-agent-gateway",
+            mip_ai_gateway_inference_table="mip_app_state.mip_sync.mip_agent_inference",
+        ),
+        sql_client=_LiveSqlClient(count=1),
+        lakebase=_LiveLakebase.verified(),
+        workspace_client=workspace,
+    )
+
+    assert statuses["ai_gateway"].available is False
+    assert expected_detail in statuses["ai_gateway"].detail
+    gateway_requests = _gateway_probe_requests(workspace)
+    if expected_path is None:
+        assert gateway_requests == []
+    else:
+        assert len(gateway_requests) == 1
+        assert gateway_requests[0][1] == expected_path
 
 
 def test_ai_gateway_live_probe_rejects_prefix_rows_without_verified_ledger() -> None:
@@ -877,7 +1397,9 @@ def test_ai_gateway_live_probe_rejects_verified_ledger_row_for_different_sha() -
     assert "no fresh ledger-verified exact row" in statuses["ai_gateway"].detail
 
 
-def test_ai_gateway_live_probe_rejects_verified_ledger_row_for_different_endpoint_or_table() -> None:
+def test_ai_gateway_live_probe_rejects_verified_ledger_row_for_different_endpoint_or_table() -> (
+    None
+):
     base_settings = _settings(
         mip_git_sha=_TEST_GIT_SHA,
         mip_ai_gateway=True,
@@ -920,6 +1442,60 @@ def test_ai_gateway_live_probe_rejects_stale_verified_ledger_row() -> None:
 
     assert statuses["ai_gateway"].available is False
     assert "no fresh ledger-verified exact row" in statuses["ai_gateway"].detail
+
+
+def test_ai_gateway_live_probe_rejects_future_verified_ledger_row() -> None:
+    future_verified = datetime.now(UTC) + timedelta(seconds=AI_GATEWAY_PROOF_CLOCK_SKEW_S + 30)
+    lakebase = _LiveLakebase.verified(verified_at=future_verified)
+    statuses = collect_live_capability_statuses(
+        settings=_settings(
+            mip_git_sha=_TEST_GIT_SHA,
+            mip_ai_gateway=True,
+            mip_ai_gateway_endpoint="mip-agent-gateway",
+            mip_ai_gateway_inference_table="mip_app_state.mip_sync.mip_agent_inference",
+        ),
+        sql_client=_LiveSqlClient(count=2),
+        lakebase=lakebase,
+        workspace_client=_FakeWorkspaceClient(),
+    )
+
+    assert statuses["ai_gateway"].available is False
+    assert "no fresh ledger-verified exact row" in statuses["ai_gateway"].detail
+    query, params = lakebase.fetchone_calls[-1]
+    assert "verified_at <= %(future_cutoff)s" in query
+    assert isinstance(params["future_cutoff"], datetime)
+
+
+def test_ai_gateway_probe_caps_mutated_freshness_before_ledger_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(
+        mip_git_sha=_TEST_GIT_SHA,
+        mip_ai_gateway=True,
+        mip_ai_gateway_endpoint="mip-agent-gateway",
+        mip_ai_gateway_inference_table="mip_app_state.mip_sync.mip_agent_inference",
+    )
+    settings.mip_ai_gateway_proof_freshness_s = 7 * 24 * 60 * 60
+    captured: dict[str, float] = {}
+
+    def _latest_verified_proof(*_args: object, freshness_s: float, **_kwargs: object) -> None:
+        captured["freshness_s"] = freshness_s
+        return None
+
+    monkeypatch.setattr(
+        ai_gateway_probe_module,
+        "latest_verified_proof",
+        _latest_verified_proof,
+    )
+
+    collect_live_capability_statuses(
+        settings=settings,
+        sql_client=_LiveSqlClient(count=0),
+        lakebase=_LiveLakebase(),
+        workspace_client=_FakeWorkspaceClient(),
+    )
+
+    assert captured["freshness_s"] == AI_GATEWAY_PROOF_FRESHNESS_MAX_S
 
 
 def test_ai_gateway_live_probe_rejects_without_deployed_sha() -> None:
@@ -1026,7 +1602,7 @@ def test_ai_gateway_live_probe_rejects_endpoint_not_ready() -> None:
     )
 
     assert statuses["ai_gateway"].available is False
-    assert "not READY" in statuses["ai_gateway"].detail
+    assert "gateway_endpoint_not_ready:NOT_READY" in statuses["ai_gateway"].detail
 
 
 def test_ai_gateway_live_probe_rejects_disabled_inference_logging() -> None:
@@ -1043,7 +1619,7 @@ def test_ai_gateway_live_probe_rejects_disabled_inference_logging() -> None:
     )
 
     assert statuses["ai_gateway"].available is False
-    assert "inference table is not enabled" in statuses["ai_gateway"].detail
+    assert "gateway_inference_table_mismatch" in statuses["ai_gateway"].detail
 
 
 def test_ai_gateway_live_probe_rejects_inference_table_mismatch() -> None:
@@ -1056,11 +1632,13 @@ def test_ai_gateway_live_probe_rejects_inference_table_mismatch() -> None:
         ),
         sql_client=_LiveSqlClient(),
         lakebase=_LiveLakebase(),
-        workspace_client=_FakeWorkspaceClient(),
+        workspace_client=_FakeWorkspaceClient(
+            resource_inference_table="mip_app_state.mip_sync.other_gateway_prefix"
+        ),
     )
 
     assert statuses["ai_gateway"].available is False
-    assert "expected mip_app_state.mip_sync.other_gateway_prefix" in statuses["ai_gateway"].detail
+    assert "gateway_inference_table_mismatch" in statuses["ai_gateway"].detail
 
 
 def test_ai_gateway_live_probe_rejects_malformed_inference_table_config() -> None:
@@ -1081,7 +1659,7 @@ def test_ai_gateway_live_probe_rejects_malformed_inference_table_config() -> Non
     )
 
     assert statuses["ai_gateway"].available is False
-    assert "AI Gateway probe failed (ValueError)" in statuses["ai_gateway"].detail
+    assert "gateway_inference_table_not_configured" in statuses["ai_gateway"].detail
 
 
 def test_ai_gateway_live_probe_rejects_missing_lakebase_proof_ledger() -> None:
@@ -1329,6 +1907,9 @@ def test_uc_growth_agent_tool_sql_contracts_are_present() -> None:
         assert "create or replace function" in text
         assert "mortgage growth agent" in text
         assert "read-only" in text or "no outreach or state write" in text
+        assert "coalesce(segment_codes, array())" not in text
+        assert "coalesce(states, array())" not in text
+        assert "cast(array() as array<string>)" in text
 
 
 def test_growth_agent_function_grants_are_documented_and_deployed() -> None:
@@ -1347,8 +1928,11 @@ def test_ai_gateway_audit_grant_is_table_scoped() -> None:
     grants = (_REPO_ROOT / "docs" / "security" / "GRANTS.md").read_text(encoding="utf-8")
     assert "GRANT USE SCHEMA, SELECT ON SCHEMA ${_GRANTS_CATALOG}.audit" not in deploy
     assert "GRANT USE SCHEMA ON SCHEMA ${_GRANTS_CATALOG}.audit" in deploy
-    assert "grant_ai_gateway_inference_table.py" in deploy
-    assert "GRANT SELECT ON TABLE mip.audit.mip_agent_gateway_llama_payload" in grants
+    assert "-m tools.databricks.grant_ai_gateway_inference_table" in deploy
+    assert (
+        "GRANT SELECT ON TABLE "
+        "mip.audit.mip_agent_gateway_growth_agent_<resource-hash-12>_payload" in grants
+    )
     assert "Do not grant `SELECT ON SCHEMA mip.audit`" in grants
 
 
@@ -1373,7 +1957,7 @@ def test_ai_gateway_and_lakebase_sync_gated_by_flags() -> None:
     assert _by_key(off, "ai_gateway").status is CapabilityStatus.NOT_PROVISIONED
     assert _by_key(off, "lakebase_sync").status is CapabilityStatus.NOT_PROVISIONED
     on = probe_capabilities(_settings(mip_ai_gateway=True, mip_lakebase_sync=True))
-    assert _by_key(on, "ai_gateway").status is CapabilityStatus.NOT_PROVISIONED
+    assert _by_key(on, "ai_gateway").status is CapabilityStatus.CONFIGURED
     assert _by_key(on, "lakebase_sync").status is CapabilityStatus.CONFIGURED
 
 
@@ -1477,14 +2061,16 @@ def test_capabilities_live_probe_bypasses_cache_for_ai_gateway_exact_precheck(
     second_rows = {row["key"]: row for row in second.json()["capabilities"]}
     assert first_rows["ai_gateway"]["status"] == "available"
     assert second_rows["ai_gateway"]["status"] == "available"
-    assert len(workspace.api_client.requests) == 2
+    assert len(_gateway_probe_requests(workspace)) == 2
 
 
 def test_capabilities_live_probe_cache_expires(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     now = [0.0]
-    monkeypatch.setattr(capability_request_module, "_LIVE_CAPABILITY_CACHE", TTLCache(now=lambda: now[0]))
+    monkeypatch.setattr(
+        capability_request_module, "_LIVE_CAPABILITY_CACHE", TTLCache(now=lambda: now[0])
+    )
     settings = _settings(
         mip_git_sha=_TEST_GIT_SHA,
         mip_ai_gateway=True,
@@ -1514,7 +2100,7 @@ def test_capabilities_live_probe_cache_expires(
 
     assert first.status_code == 200
     assert second.status_code == 200
-    assert len(workspace.api_client.requests) == 2
+    assert len(_gateway_probe_requests(workspace)) == 2
 
 
 def test_capabilities_live_probe_ttl_zero_disables_cache(
@@ -1548,7 +2134,7 @@ def test_capabilities_live_probe_ttl_zero_disables_cache(
 
     assert first.status_code == 200
     assert second.status_code == 200
-    assert len(workspace.api_client.requests) == 2
+    assert len(_gateway_probe_requests(workspace)) == 2
 
 
 def test_capabilities_live_probe_cache_key_tracks_gateway_settings(
@@ -1591,7 +2177,7 @@ def test_capabilities_live_probe_cache_key_tracks_gateway_settings(
 
     assert first.status_code == 200
     assert second.status_code == 200
-    assert len(workspace.api_client.requests) == 2
+    assert len(_gateway_probe_requests(workspace)) == 2
 
 
 def test_capabilities_endpoint_requires_admin() -> None:
@@ -1607,17 +2193,17 @@ def test_query_serving_endpoint_chat_path_omits_temperature() -> None:
     proof only needs a bounded round-trip, so the model default is fine."""
     from backend.services.capability_serving_probes import query_serving_endpoint
 
-    class _RecordingServingEndpoints:
+    class _RecordingApiClient:
         def __init__(self) -> None:
-            self.calls: list[tuple[str, dict]] = []
+            self.calls: list[tuple[str, str, dict]] = []
 
-        def query(self, endpoint: str, **kwargs):
-            self.calls.append((endpoint, kwargs))
+        def do(self, method: str, path: str, *, body: dict):
+            self.calls.append((method, path, body))
             return {"choices": [{"message": {"content": "ok"}}]}
 
     class _Workspace:
         def __init__(self) -> None:
-            self.serving_endpoints = _RecordingServingEndpoints()
+            self.api_client = _RecordingApiClient()
 
     workspace = _Workspace()
     query_serving_endpoint(
@@ -1627,28 +2213,20 @@ def test_query_serving_endpoint_chat_path_omits_temperature() -> None:
         client_request_id="mip-capability-x",
         task="llm/v1/chat",
     )
-    endpoint, kwargs = workspace.serving_endpoints.calls[0]
-    assert endpoint == "mip-agent-gateway"
-    assert "temperature" not in kwargs
-    assert kwargs["max_tokens"] == 64
-    assert kwargs["client_request_id"] == "mip-capability-x"
+    method, path, body = workspace.api_client.calls[0]
+    assert method == "POST"
+    assert path == "/serving-endpoints/mip-agent-gateway/invocations"
+    assert "temperature" not in body
+    assert body["max_tokens"] == 64
+    assert body["client_request_id"] == "mip-capability-x"
 
 
-def test_query_serving_endpoint_falls_back_to_raw_invocations_on_sdk_parse_failure() -> None:
-    """databricks-sdk's typed QueryEndpointResponse.from_dict raises
-    AttributeError when a custom FM endpoint answers with a JSON list body
-    (observed live on mip-agent-gateway / llama_v3_2_3b_instruct,
-    2026-07-07). The probe must re-issue the bounded request via the raw
-    REST client with the same client_request_id so the inference-table
-    binding survives."""
+def test_query_serving_endpoint_uses_raw_invocation_without_sdk_retry() -> None:
+    """The probe uses one untyped request so parsing cannot trigger a second inference."""
     from backend.services.capability_serving_probes import (
         query_serving_endpoint,
         serving_response_has_payload,
     )
-
-    class _ParseFailingServingEndpoints:
-        def query(self, endpoint: str, **kwargs):
-            raise AttributeError("'list' object has no attribute 'get'")
 
     class _RecordingApiClient:
         def __init__(self) -> None:
@@ -1660,7 +2238,6 @@ def test_query_serving_endpoint_falls_back_to_raw_invocations_on_sdk_parse_failu
 
     class _Workspace:
         def __init__(self) -> None:
-            self.serving_endpoints = _ParseFailingServingEndpoints()
             self.api_client = _RecordingApiClient()
 
     workspace = _Workspace()
@@ -1686,7 +2263,15 @@ def test_serving_response_has_payload_accepts_list_response() -> None:
     from backend.services.capability_serving_probes import serving_response_has_payload
 
     assert serving_response_has_payload([{"output": "ok"}]) is True
+    assert serving_response_has_payload([{"generated_text": "ok"}]) is True
     assert serving_response_has_payload([]) is False
+    assert serving_response_has_payload({"id": "resp-only"}) is False
+    assert (
+        serving_response_has_payload(
+            {"id": "resp-failed", "status": "failed", "output": [{"content": "not proof"}]}
+        )
+        is False
+    )
 
 
 def test_count_inference_log_rows_content_matches_when_no_client_request_id_column() -> None:
@@ -1709,7 +2294,9 @@ def test_count_inference_log_rows_content_matches_when_no_client_request_id_colu
     count_statement = next(s for s in sql.statements if "COUNT(*)" in s)
     assert "request LIKE :client_request_marker" in count_statement
     assert "client_request_id =" not in count_statement
-    count_params = next(p for p in sql.parameters if isinstance(p, dict) and "client_request_marker" in p)
+    count_params = next(
+        p for p in sql.parameters if isinstance(p, dict) and "client_request_marker" in p
+    )
     assert count_params["client_request_marker"] == "%mip-capability-abc123%"
 
 

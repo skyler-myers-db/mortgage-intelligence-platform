@@ -153,7 +153,8 @@ describe('LastLoginSummary', () => {
     const buttons = Array.from(
       container.querySelectorAll<HTMLButtonElement>('.login-summary__num'),
     );
-    for (const button of buttons) {
+    const expectedFamilies = ['opportunity_score', 'in_the_money', 'next_best_offer'];
+    for (const [index, button] of buttons.entries()) {
       setDrawer.mockClear();
       act(() => button.click());
       expect(setDrawer).toHaveBeenCalledTimes(1);
@@ -162,6 +163,7 @@ describe('LastLoginSummary', () => {
       expect(lineageNames).toContain('mip_app.kpi_snapshots');
       expect(lineageNames).toContain('mip.semantics.portfolio_headline_metric_view');
       expect(source.assetKey).toBe('portfolio_headline_metric_view');
+      expect(source.lineageFamily).toBe(expectedFamilies[index]);
       const signalLabels = (source.signals ?? []).map((s) => s.label);
       expect(signalLabels).toEqual(
         expect.arrayContaining(['Current', 'Baseline', 'Since last login']),
@@ -181,6 +183,7 @@ describe('LastLoginSummary', () => {
     const lineageNames = (source.lineage ?? []).map((step) => step.name);
     expect(lineageNames).not.toContain('mip_app.kpi_snapshots');
     expect(lineageNames).toContain('mip.semantics.portfolio_headline_metric_view');
+    expect(source.lineageFamily).toBe('marketable_population');
   });
 
   it('no-baseline state is honest about the pending snapshot', () => {

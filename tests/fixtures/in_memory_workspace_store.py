@@ -1,4 +1,5 @@
 """Test-only in-memory workspace store implementation."""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -7,7 +8,7 @@ from uuid import uuid4
 
 from backend.schemas.workspace import (
     SavedDraft,
-    SavedDraftInput,
+    SavedDraftRecordInput,
     SavedLead,
     SavedLeadInput,
     WorkspaceMutationResponse,
@@ -24,14 +25,8 @@ class InMemoryWorkspaceStore:
         self._drafts: dict[tuple[str, str, str], SavedDraft] = {}
 
     def list(self, *, actor: str) -> WorkspaceState:
-        leads = [
-            row for (row_actor, _), row in self._leads.items()
-            if row_actor == actor
-        ]
-        drafts = [
-            row for (row_actor, _, _), row in self._drafts.items()
-            if row_actor == actor
-        ]
+        leads = [row for (row_actor, _), row in self._leads.items() if row_actor == actor]
+        drafts = [row for (row_actor, _, _), row in self._drafts.items() if row_actor == actor]
         leads.sort(key=lambda row: row.updated_at, reverse=True)
         drafts.sort(key=lambda row: row.updated_at, reverse=True)
         return WorkspaceState(saved_leads=leads, saved_drafts=drafts)
@@ -66,9 +61,7 @@ class InMemoryWorkspaceStore:
             saved += 1
         return saved, f"evt-{uuid4().hex[:12]}"
 
-    def delete_lead(
-        self, *, actor: str, borrower_id: str
-    ) -> WorkspaceMutationResponse:
+    def delete_lead(self, *, actor: str, borrower_id: str) -> WorkspaceMutationResponse:
         existed = self._leads.pop((actor, borrower_id), None) is not None
         return WorkspaceMutationResponse(
             ok=existed,
@@ -76,7 +69,7 @@ class InMemoryWorkspaceStore:
             audit_event_id=f"evt-{uuid4().hex[:12]}" if existed else None,
         )
 
-    def save_draft(self, *, actor: str, draft: SavedDraftInput) -> SavedDraft:
+    def save_draft(self, *, actor: str, draft: SavedDraftRecordInput) -> SavedDraft:
         clean = draft.model_copy(update={"body": scrub_free_text(draft.body)})
         key = (actor, clean.borrower_id, clean.channel)
         now = datetime.now(UTC).isoformat()

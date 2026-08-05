@@ -13,6 +13,7 @@ Three layers under test:
    predicate.
 3. The FastAPI viewport parsing (min<=max, plot-domain bounds).
 """
+
 from __future__ import annotations
 
 import json
@@ -23,15 +24,18 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from backend.schemas.analytics import AnalyticsFilters, EquitySpreadViewport
+from backend.schemas.analytics import AnalyticsFilters, EquitySpreadPoint, EquitySpreadViewport
 from backend.services import economics_scatter
 from backend.services.repositories.databricks_analytics import (
     DatabricksAnalyticsRepository,
 )
+from backend.services.scoring import score_band
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GOLDEN = json.loads(
-    (REPO_ROOT / "tests" / "fixtures" / "equity_spread_bins_golden.json").read_text(encoding="utf-8")
+    (REPO_ROOT / "tests" / "fixtures" / "equity_spread_bins_golden.json").read_text(
+        encoding="utf-8"
+    )
 )
 TRANSFORMATION = (
     REPO_ROOT / "sql" / "transformations" / "gold_equity_spread_points.sql"
@@ -109,12 +113,47 @@ def test_viewport_rejects_inverted_bounds() -> None:
         EquitySpreadViewport(spread_min=300, spread_max=0)
 
 
+def test_equity_spread_point_enforces_canonical_score_band_for_every_score() -> None:
+    bands = {"high", "med", "low"}
+    for opportunity_score in range(101):
+        expected = score_band(opportunity_score)
+        point = EquitySpreadPoint(
+            borrower_id="B-48291",
+            display_name="Owner anon",
+            segment="Prime Refi Candidates",
+            state="IL",
+            equity_pct=40,
+            rate_spread_bps=88,
+            opportunity_score=opportunity_score,
+            score_band=expected,
+        )
+        assert point.score_band == expected
+
+        wrong = next(iter(bands - {expected}))
+        with pytest.raises(ValidationError, match="canonical band"):
+            EquitySpreadPoint(
+                borrower_id="B-48291",
+                display_name="Owner anon",
+                segment="Prime Refi Candidates",
+                state="IL",
+                equity_pct=40,
+                rate_spread_bps=88,
+                opportunity_score=opportunity_score,
+                score_band=wrong,
+            )
+
+
 # ---------------------------------------------------------------------------
 # 2. Repository: cap + showing-N-of-M
 # ---------------------------------------------------------------------------
 
 
-def _point_row(i: int) -> dict[str, Any]:
+def _point_row(
+    i: int,
+    *,
+    total_matching: int = 1,
+    coordinate_total: int | None = None,
+) -> dict[str, Any]:
     return {
         "borrower_id": f"B-{i:013d}",
         "display_name": f"Owner {i}",
@@ -125,11 +164,14 @@ def _point_row(i: int) -> dict[str, Any]:
         "opportunity_score": 80,
         "score_band": "med",
         "in_the_money": True,
+        "total_matching": total_matching,
+        "coordinate_total": coordinate_total or total_matching,
+        "refreshed_at": "2026-07-10 06:00:00",
     }
 
 
 class _ScatterSqlClient:
-    """Serves the points/count statement pair with configurable volumes."""
+    """Serves one snapshot-consistent points statement with window metadata."""
 
     def __init__(self, *, point_rows: int, total_matching: int) -> None:
         self._point_rows = point_rows
@@ -140,10 +182,8 @@ class _ScatterSqlClient:
     def execute(self, statement: str, parameters: Any | None = None) -> list[dict[str, Any]]:
         self.statements.append(statement)
         self.parameters.append(parameters)
-        if "AS total_matching" in statement:
-            return [{"total_matching": self._total, "refreshed_at": "2026-07-10 06:00:00"}]
         if "ORDER BY p.opportunity_score DESC, p.borrower_id" in statement:
-            return [_point_row(i) for i in range(self._point_rows)]
+            return [_point_row(i, total_matching=self._total) for i in range(self._point_rows)]
         raise AssertionError(statement)
 
 
@@ -160,19 +200,21 @@ def test_points_showing_n_of_m_is_honest() -> None:
     assert payload.truncated is True
     assert payload.point_cap == economics_scatter.MAX_SCATTER_POINT_ROWS
     assert payload.source_table == economics_scatter.EQUITY_SPREAD_SOURCE_TABLE
-    # The count statement must carry the SAME viewport predicate + bindings
-    # as the points statement, or M would answer a different question.
-    points_sql = next(s for s in client.statements if "ORDER BY p.opportunity_score" in s)
-    count_sql = next(s for s in client.statements if "AS total_matching" in s)
+    # Count, refresh time, and points must come from one filtered statement so
+    # a concurrent refresh cannot make the chart say "N of M" across snapshots.
+    assert len(client.statements) == 1
+    points_sql = client.statements[0]
+    assert "CAST(COUNT(*) OVER () AS BIGINT) AS total_matching" in points_sql
+    assert "COUNT(*) OVER (PARTITION BY p.equity_pct, p.rate_spread_bps)" in points_sql
+    assert "MAX(p.refreshed_at) OVER () AS refreshed_at" in points_sql
     for predicate in (
         "p.equity_pct BETWEEN :vp_equity_min AND :vp_equity_max",
         "p.rate_spread_bps BETWEEN :vp_spread_min AND :vp_spread_max",
     ):
         assert predicate in points_sql
-        assert predicate in count_sql
-    assert client.parameters[0] == client.parameters[1]
     assert client.parameters[0]["vp_equity_min"] == 40
     assert client.parameters[0]["vp_spread_max"] == 200
+    assert {point.coordinate_total for point in payload.points} == {970}
 
 
 def test_points_not_truncated_when_everything_fits() -> None:
@@ -182,6 +224,13 @@ def test_points_not_truncated_when_everything_fits() -> None:
     assert payload.showing == 2
     assert payload.total_matching == 2
     assert payload.truncated is False
+
+
+def test_points_reject_internally_inconsistent_snapshot_metadata() -> None:
+    client = _ScatterSqlClient(point_rows=3, total_matching=2)
+    repo = DatabricksAnalyticsRepository(client)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="snapshot count"):
+        repo.economics_points(AnalyticsFilters(), EquitySpreadViewport())
 
 
 def test_points_cap_enforced_server_side_even_against_overserving_sql() -> None:
@@ -218,4 +267,7 @@ def test_segment_display_labels_cover_every_product_segment() -> None:
     assert economics_scatter.segment_display_label("itm") == "Prime Refi Candidates"
     assert economics_scatter.segment_display_label("equity") == "Home Equity Candidate"
     assert economics_scatter.segment_display_label(None) == economics_scatter.UNSEGMENTED_LABEL
-    assert economics_scatter.segment_display_label("unknown_code") == economics_scatter.UNSEGMENTED_LABEL
+    assert (
+        economics_scatter.segment_display_label("unknown_code")
+        == economics_scatter.UNSEGMENTED_LABEL
+    )

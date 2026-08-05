@@ -47,20 +47,25 @@ Reads from the app are fine (probe + admin surfaces).
 
 ### 1b. Verifier tool — `tools/databricks/verify_ai_gateway_exact_proof.py`
 
-One tool, two modes, "send-now / verify-previous" pattern so proof stays fresh regardless of lag:
+One tool, two fail-closed modes keeps proof fresh without promoting evidence
+whose hosted-tool trace was lost across a process boundary:
 
-1. **verify-pending:** for every `pending` ledger row for the current SHA (and optionally prior
-   SHAs), run `count_inference_log_rows(exact client_request_id)` (reuse the existing exact-id
-   helper — it already binds the id as a parameter). If ≥1: set `verified`,
-   `verified_at=now()`, compute `verify_latency_s`. If older than a hard ceiling (default 6h,
-   `MIP_AI_GATEWAY_VERIFY_EXPIRY_S`): set `expired`.
-2. **send:** mint `mip-capability-{full-sha}-{uuid16}` (full deployment SHA), send one
-   bounded query via the existing `query_serving_endpoint` (max_tokens small, temperature 0),
-   assert `serving_response_has_payload`, insert a `pending` ledger row.
-3. **--wait mode (deploy-time):** after send, poll the exact id every 30–60s up to
-   `MIP_AI_GATEWAY_VERIFY_TIMEOUT_S` (default 1200s, configurable up to 3600). On hit → mark
-   verified inline and print measured latency. On timeout → leave `pending` (the next scheduled
-   run verifies it) and exit per §1d gating.
+1. **verify-pending:** mark every interrupted `pending` row `failed`. An older
+   process cannot durably prove that its terminal Responses payload carried the
+   exact hosted `fn_build_cohort` tool trace, so an inference row alone is
+   insufficient and is never promoted.
+2. **send:** warm scale-to-zero separately with non-proof `mip-warmup-*` request
+   IDs, then mint `mip-capability-{full-sha}-{uuid16}`, insert its `pending`
+   ledger row, and send that exact bounded request once. The same process must
+   observe a terminal completed Responses payload and an exact hosted-tool trace
+   matching the independently computed cohort count. Timeout, 503, malformed
+   output, missing tool proof, or any ambiguous submission marks the row
+   `failed`; the proof request ID is never retried.
+3. **--wait mode (deploy-time):** only after the in-process trace succeeds, poll
+   the exact inference ID up to the configured timeout. Exactly one successful,
+   terminal, timestamp-bounded row promotes the proof to `verified` and records
+   latency. Duplicate, non-success, nonterminal, schema-unsubstantiated, or
+   timed-out evidence marks the row `failed`.
 
 Print measured `verify_latency_s` in all modes — this number is signoff evidence and informs
 window tuning. No secrets in output. Idempotent: re-running verify-pending is a no-op for
@@ -78,8 +83,10 @@ Claimable = ALL of the following (single path, no alternatives):
    valid proof for this run (and strictly stronger), but it must NOT be required.
 3. **A `verified` ledger row exists for the CURRENT deployment SHA with
    `verified_at >= now() - FRESHNESS`.** `FRESHNESS` = `MIP_AI_GATEWAY_PROOF_FRESHNESS_S`,
-   default 26 hours (covers a nightly re-verify cadence + lag; see §1d). A verified proof from a
-   different SHA, a `pending`/`failed`/`expired` row, or a stale `verified_at` → NOT claimable.
+   default and hard maximum 26 hours (covers a nightly re-verify cadence + lag; see §1d). Settings
+   validation rejects larger values, and ledger/probe callers defensively cap mutated or direct
+   values. A verified proof from a different SHA, a `pending`/`failed`/`expired` row, or a stale
+   `verified_at` → NOT claimable.
 
 **Remove the trailing-2h `count_recent_inference_log_rows` fallback from the claimable path
 entirely.** It may remain only as detail enrichment on the `configured` branch (e.g. "recent
@@ -96,11 +103,14 @@ Detail strings (update all surfaces consistently, §4):
 - **deploy.sh:** after agentic provisioning, run the verifier `send --wait`. Under
   `MIP_REQUIRE_AI_GATEWAY_CLAIMABLE=1` (strict): exit non-zero if no verified proof exists for
   the deployed SHA after the wait (a prior-SHA verified proof does NOT count). Non-strict:
-  warn, leave `pending`, capability honestly reports `configured` until the nightly verifies.
-- **Nightly (extend `nightly.yml` or the monitors-job pattern):** run `verify-pending` then
-  `send` — this keeps a rolling verified proof fresher than `FRESHNESS` forever, regardless of
-  lag. If delivery breaks, verification stops, the newest proof ages past FRESHNESS, and the
-  capability self-heals to `configured` — preserve this property.
+  warn after the failed attempt is durably marked `failed`; capability honestly
+  reports `configured` until a fresh trace-attested send succeeds.
+- **Nightly (extend `nightly.yml` or the monitors-job pattern):** run
+  `verify-pending` to fail interrupted, trace-less attempts, then run a fresh
+  `send --wait` in one process. This keeps a rolling verified proof fresher than
+  `FRESHNESS` while refusing inference-only promotion. If delivery or trace
+  proof breaks, the newest proof ages past FRESHNESS and the capability
+  self-heals to `configured`.
 - Document both in `docs/deployment.md` (including the strict-mode admin-token note already
   there).
 
@@ -108,11 +118,19 @@ Detail strings (update all surfaces consistently, §4):
 
 Probe traffic alone is not "integration." Required:
 
-1. **Route the Supervisor/orchestrator bounded queries through the AI-Gateway-enabled endpoint**
-   (or apply the same `ai_gateway` config — inference logging + usage tracking + rate limits —
-   to the Supervisor endpoint via `provision_agentic_resources.py`). All config stays in the
-   provisioner/bundle; zero click-ops. After this, real `agent_framework` runs produce inference
-   rows (request ids should carry a distinguishable prefix, e.g. `mip-agent-run-{full-sha}-…`).
+1. **Route the Supervisor/orchestrator bounded queries through the AI-Gateway-enabled endpoint.**
+   The provisioner deploys an MLflow `ResponsesAgent` as the product boundary and delegates its
+   bounded input to the managed Supervisor endpoint through Model Serving automatic
+   authentication. All config stays in the provisioner/bundle; zero click-ops. After this, real
+   `agent_framework` runs produce inference rows (request ids should carry a distinguishable
+   prefix, e.g. `mip-agent-run-{full-sha}-…`).
+   Deployment/export postflight must independently read the exact Unity Catalog model version
+   receiving endpoint traffic and require its signed, fixed-field
+   `mip_proxy_source_hash` and `mip_upstream_supervisor_endpoint` metadata to match the reviewed
+   proxy source and Supervisor. Dotted source/upstream tags belong only to the separate Serving
+   Endpoint API.
+   Endpoint tags alone are not authoritative because they can be changed independently of the
+   served registered-model version.
 2. **Run-card governance chip binds to a real, synchronously-true signal:** for
    `agent_framework` runs, record the gateway `client_request_id` used for the Supervisor call
    in the run evidence, and render the AI Gateway chip as "routed through governed endpoint"
@@ -122,16 +140,20 @@ Probe traffic alone is not "integration." Required:
    proof time + measured latency + count of gateway inference rows for the current SHA (probe +
    product prefixes) read from the inference table. No identifiers on public surfaces (existing
    leak-guard tests stay green).
-4. **Rate limits:** ensure per-user rate limits are set on the gateway endpoint via the
-   provisioner (was planned in Phase 6; verify present or add), asserted by a provisioning test.
+4. **Request budgets:** Databricks Agent Model endpoints support Gateway inference tables but do
+   not currently support Gateway rate limits or usage tracking. Keep those unsupported fields off
+   the endpoint, assert that the provisioning payload contains only the inference-table config,
+   and retain authenticated application-level backpressure as the request budget.
 
 ## 3. Test requirements (all must exist; enumerate every added/removed assertion in the report)
 
 Backend:
 - Ledger migration idempotency (re-run safe), status CHECK, unique client_request_id.
-- Verifier: pending→verified on row landing (id-aware SQL fake); timeout leaves pending;
-  expiry→expired; latency recorded; SHA scoping; exit codes for strict/non-strict; verify-previous
-  works across invocations; re-run idempotency.
+- Verifier: pending→verified only when the same process first proves the exact
+  hosted-tool trace and then observes one exact row; timeout/503/malformed or
+  trace-less responses mark failed and never retry the proof ID; duplicate rows
+  fail; interrupted pending rows fail across invocations; latency, SHA scoping,
+  and strict/non-strict exit codes remain pinned.
 - Probe: claimable ONLY with fresh verified ledger row for current SHA. Rejection tests:
   wrong-SHA verified row; pending; failed/expired; stale verified_at (boundary ±1s); ledger row present
   but endpoint not READY now; ledger empty. Positive: fresh verified row + all pre-checks →
@@ -213,8 +235,8 @@ numbers/ids (redact per the existing evidence-redaction caveat before external s
 
 - The ONLY claimable path is the ledger-verified exact row (§1c). No prefix-count fallback, no
   "enabled/queryable" path, no recent-window path may yield `available=True`.
-- Do not widen `FRESHNESS` beyond 26h or the verify ceiling beyond 3600s without product-owner
-  signoff recorded in the commit message.
+- `FRESHNESS` must not exceed the code-enforced 26h maximum. Changing that ceiling or the 3600s
+  verify ceiling requires product-owner signoff recorded with the change.
 - No test may be inverted/renamed to accept weaker proof. Replacing the async-acceptance test
   with a rejection is required and must be called out explicitly in the commit message.
 - If a gate fails, report the failure. A summary claiming PASS while any gate is red, or

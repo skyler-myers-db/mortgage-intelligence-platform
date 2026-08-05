@@ -10,18 +10,50 @@ on:
         description: "Skip deployed app smoke test"
         type: boolean
         default: false
+      rebase_unverified_app:
+        description: "One-time only: stop an existing App that has no signed rollback record"
+        type: boolean
+        default: false
+      remediate_foreign_catalog_bindings:
+        description: "One-time reviewed isolation of foreign catalogs from the MIP workspace"
+        type: boolean
+        default: false
+      repair_normal_credential:
+        description: "Recovery only: rotate the missing normal-operator OAuth secret into GitHub"
+        type: boolean
+        default: false
+      acknowledge_single_maintainer_break_glass:
+        description: "Required: acknowledge audited self-approval because this repository has one maintainer"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: mip-dev-deploy
+  # Share one durable-state lane with nightly live validation: deployment may
+  # stop the App and both workflows mutate the same dev Lakebase records.
+  group: mip-dev-live-state
   cancel-in-progress: false
 
 jobs:
-  deploy:
+  refuse-unacknowledged:
+    if: ${{ !inputs.acknowledge_single_maintainer_break_glass }}
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    steps:
+      - name: Refuse an unacknowledged single-maintainer deployment
+        run: |
+          set -euo pipefail
+          echo "::error::Dev deployment requires explicit single-maintainer break-glass acknowledgement."
+          exit 1
+  deploy:
+    if: ${{ inputs.acknowledge_single_maintainer_break_glass }}
+    runs-on: ubuntu-latest
+    # A first install may perform two serial one-use role convergences. Each
+    # deliberately waits through a captured 65-minute OAuth/database lease
+    # plus skew, so the manual deploy gate needs room for both and for the
+    # subsequent bundle, migration, refresh, and smoke steps.
+    timeout-minutes: 240
     environment: dev
     steps:
       - uses: actions/checkout@v6
@@ -29,7 +61,7 @@ jobs:
         with: { node-version: '22' }
       - uses: actions/setup-python@v6
         with: { python-version: '3.11' }
-      - uses: databricks/setup-cli@v1.0.0
+      - uses: databricks/setup-cli@bc7e6aabb6006d8d1758bd25ee1a100935c9cb7c # v1.7.0
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -41,12 +73,49 @@ jobs:
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
           DATABRICKS_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
           GENIE_SPACE_ID: ${{ secrets.GENIE_SPACE_ID }}
+          MIP_COTALITY_ID_MASK_SECRET: ${{ secrets.MIP_COTALITY_ID_MASK_SECRET }}
+          MIP_GENIE_ACTION_SECRET_CURRENT: ${{ secrets.MIP_GENIE_ACTION_SECRET_CURRENT }}
+          MIP_GENIE_ACTION_SECRET_PREVIOUS: ${{ secrets.MIP_GENIE_ACTION_SECRET_PREVIOUS }}
+          MIP_AI_GATEWAY_PROOF_SIGNING_KEY: ${{ secrets.MIP_AI_GATEWAY_PROOF_SIGNING_KEY }}
+          MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY: ${{ secrets.MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY }}
+          MIP_GENIE_ACTION_SECRET_KID: ${{ vars.MIP_GENIE_ACTION_SECRET_KID }}
+          MIP_GENIE_ACTION_SECRET_PREVIOUS_KID: ${{ vars.MIP_GENIE_ACTION_SECRET_PREVIOUS_KID }}
           MIP_ADMIN_EMAILS: ${{ vars.MIP_ADMIN_EMAILS }}
           MIP_ADMIN_GROUP_NAME: ${{ vars.MIP_ADMIN_GROUP_NAME }}
+          MIP_APPROVER_GROUP_NAME: ${{ vars.MIP_APPROVER_GROUP_NAME }}
+          MIP_UC_APPROVED_OWNER_PRINCIPALS: ${{ vars.MIP_UC_APPROVED_OWNER_PRINCIPALS }}
+          MIP_UC_FOREIGN_CATALOG_BINDING_POLICY: ${{ vars.MIP_UC_FOREIGN_CATALOG_BINDING_POLICY }}
+          MIP_DEFAULT_CATALOG: ${{ vars.MIP_DEFAULT_CATALOG || 'mip' }}
+          MIP_LENDER_NAME: ${{ vars.MIP_LENDER_NAME || 'Summit Mortgage' }}
+          MIP_LENDER_NMLS_ID: ${{ vars.MIP_LENDER_NMLS_ID }}
+          MIP_TENANT_ID: ${{ vars.MIP_TENANT_ID }}
+          MIP_APP_NAME: ${{ vars.MIP_APP_NAME || 'mip-app' }}
+          MIP_LAKEBASE_INSTANCE: ${{ vars.MIP_LAKEBASE_INSTANCE || 'mip-app-state' }}
+          LAKEBASE_DATABASE: ${{ vars.LAKEBASE_DATABASE || 'mip_app_state' }}
+          MIP_LAKEBASE_SYNC_CATALOG: ${{ vars.MIP_LAKEBASE_SYNC_CATALOG || 'mip_app_state' }}
+          MIP_LAKEBASE_SYNC_SCHEMA: ${{ vars.MIP_LAKEBASE_SYNC_SCHEMA || 'mip_sync' }}
+          MIP_LAKEBASE_SYNC_TABLES: ${{ vars.MIP_LAKEBASE_SYNC_TABLES || 'source_readiness,segment_population,funnel_snapshot_daily' }}
+          MIP_RUNTIME_SECRET_SCOPE: ${{ vars.MIP_RUNTIME_SECRET_SCOPE || 'mip-runtime' }}
+          MIP_APP_ROLLBACK_SECRET_SCOPE: ${{ vars.MIP_APP_ROLLBACK_SECRET_SCOPE || 'mip-app-rollback' }}
+          MIP_GENIE_SPACE_NAME: ${{ vars.MIP_GENIE_SPACE_NAME || 'Mortgage Lead Intelligence' }}
+          MIP_AI_GATEWAY_AGENT_MODEL_FAMILY: ${{ vars.MIP_AI_GATEWAY_AGENT_MODEL_FAMILY }}
+          MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE: ${{ vars.MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE }}
+          MIP_AI_GATEWAY_TABLE_PREFIX: ${{ vars.MIP_AI_GATEWAY_TABLE_PREFIX }}
+          DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
+          DATABRICKS_OPERATOR2_CLIENT_ID: ${{ secrets.DATABRICKS_OPERATOR2_CLIENT_ID }}
+          DATABRICKS_ADMIN_CLIENT_ID: ${{ secrets.DATABRICKS_ADMIN_CLIENT_ID }}
+          DATABRICKS_RELEASE_PROBE_CLIENT_ID: ${{ secrets.DATABRICKS_RELEASE_PROBE_CLIENT_ID }}
+          DATABRICKS_VERIFIER_CLIENT_ID: ${{ secrets.DATABRICKS_VERIFIER_CLIENT_ID }}
+          DATABRICKS_AGENT_RUNTIME_CLIENT_ID: ${{ secrets.DATABRICKS_AGENT_RUNTIME_CLIENT_ID }}
+          DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE: ${{ secrets.DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE }}
+          DATABRICKS_ACCOUNT_HOST: ${{ secrets.DATABRICKS_ACCOUNT_HOST || 'https://accounts.cloud.databricks.com' }}
+          DATABRICKS_ACCOUNT_ID: ${{ secrets.DATABRICKS_ACCOUNT_ID }}
+          DATABRICKS_ACCOUNT_CLIENT_ID: ${{ secrets.DATABRICKS_ACCOUNT_CLIENT_ID }}
+          DATABRICKS_ACCOUNT_CLIENT_SECRET: ${{ secrets.DATABRICKS_ACCOUNT_CLIENT_SECRET }}
         run: |
           set -euo pipefail
           missing=""
-          for v in DATABRICKS_HOST DATABRICKS_TOKEN DATABRICKS_WAREHOUSE_ID GENIE_SPACE_ID; do
+          for v in DATABRICKS_HOST DATABRICKS_TOKEN DATABRICKS_WAREHOUSE_ID GENIE_SPACE_ID MIP_COTALITY_ID_MASK_SECRET MIP_GENIE_ACTION_SECRET_CURRENT MIP_AI_GATEWAY_PROOF_SIGNING_KEY MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY DATABRICKS_CLIENT_ID DATABRICKS_OPERATOR2_CLIENT_ID DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_RELEASE_PROBE_CLIENT_ID DATABRICKS_VERIFIER_CLIENT_ID DATABRICKS_AGENT_RUNTIME_CLIENT_ID DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE DATABRICKS_ACCOUNT_HOST DATABRICKS_ACCOUNT_ID DATABRICKS_ACCOUNT_CLIENT_ID DATABRICKS_ACCOUNT_CLIENT_SECRET; do
             if [ -z "${!v}" ]; then
               missing="$missing $v"
             fi
@@ -55,11 +124,64 @@ jobs:
             echo "::error::Missing required secrets:$missing"
             exit 1
           fi
-          if [ -z "${MIP_ADMIN_EMAILS:-}" ] && [ -z "${MIP_ADMIN_GROUP_NAME:-}" ]; then
-            echo "::error::Configure MIP_ADMIN_EMAILS or MIP_ADMIN_GROUP_NAME as a dev environment/repository variable before deploying."
+          # Retain every value in this shell for config writes, but expose only
+          # the canonical proxy bundle to its bounded parser and only public
+          # client IDs to the subsequent separation check.
+          export -n DATABRICKS_HOST DATABRICKS_TOKEN DATABRICKS_WAREHOUSE_ID GENIE_SPACE_ID
+          export -n MIP_COTALITY_ID_MASK_SECRET MIP_GENIE_ACTION_SECRET_CURRENT
+          export -n MIP_GENIE_ACTION_SECRET_PREVIOUS MIP_AI_GATEWAY_PROOF_SIGNING_KEY
+          export -n MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY
+          export -n MIP_GENIE_ACTION_SECRET_KID MIP_GENIE_ACTION_SECRET_PREVIOUS_KID
+          export -n MIP_ADMIN_EMAILS MIP_ADMIN_GROUP_NAME MIP_APPROVER_GROUP_NAME
+          export -n MIP_UC_APPROVED_OWNER_PRINCIPALS
+          export -n MIP_UC_FOREIGN_CATALOG_BINDING_POLICY MIP_DEFAULT_CATALOG
+          export -n MIP_APP_NAME MIP_LAKEBASE_INSTANCE LAKEBASE_DATABASE
+          export -n MIP_LAKEBASE_SYNC_CATALOG MIP_LAKEBASE_SYNC_SCHEMA
+          export -n MIP_LAKEBASE_SYNC_TABLES MIP_RUNTIME_SECRET_SCOPE
+          export -n MIP_APP_ROLLBACK_SECRET_SCOPE
+          export -n MIP_GENIE_SPACE_NAME
+          export -n MIP_AI_GATEWAY_AGENT_MODEL_FAMILY MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE
+          export -n MIP_AI_GATEWAY_TABLE_PREFIX DATABRICKS_ACCOUNT_HOST
+          export -n DATABRICKS_ACCOUNT_ID DATABRICKS_ACCOUNT_CLIENT_SECRET
+          if ! _AGENT_PROXY_PUBLIC_FIELDS="$(
+            python -m tools.databricks.agent_proxy_credential_bundle public-fields
+          )"; then
+            echo "::error::DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE is invalid"
             exit 1
           fi
+          IFS=$'\t' read -r DATABRICKS_AGENT_PROXY_CLIENT_ID \
+            DATABRICKS_AGENT_PROXY_CREDENTIAL_ID <<< "$_AGENT_PROXY_PUBLIC_FIELDS"
+          unset _AGENT_PROXY_PUBLIC_FIELDS
+          export DATABRICKS_AGENT_PROXY_CLIENT_ID
+          export -n DATABRICKS_AGENT_PROXY_CREDENTIAL_ID
+          export -n DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE
+          python - <<'PY'
+          import os
 
+          names = (
+              "DATABRICKS_CLIENT_ID",
+              "DATABRICKS_OPERATOR2_CLIENT_ID",
+              "DATABRICKS_ADMIN_CLIENT_ID",
+              "DATABRICKS_RELEASE_PROBE_CLIENT_ID",
+              "DATABRICKS_VERIFIER_CLIENT_ID",
+              "DATABRICKS_AGENT_RUNTIME_CLIENT_ID",
+              "DATABRICKS_AGENT_PROXY_CLIENT_ID",
+          )
+          values = [os.environ[name].strip().casefold() for name in names]
+          if len(set(values)) != len(values):
+              raise SystemExit("Normal, operator2, admin, release-probe, verifier, agent-runtime, and agent-proxy M2M client IDs must be pairwise distinct.")
+          account_client_id = os.environ.get(
+              "DATABRICKS_ACCOUNT_CLIENT_ID", ""
+          ).strip().casefold()
+          if account_client_id and account_client_id in values:
+              raise SystemExit("Account-SCIM OAuth client must be distinct from every app-facing M2M client ID.")
+          PY
+          export -n DATABRICKS_CLIENT_ID DATABRICKS_OPERATOR2_CLIENT_ID
+          export -n DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_RELEASE_PROBE_CLIENT_ID
+          export -n DATABRICKS_VERIFIER_CLIENT_ID
+          export -n DATABRICKS_AGENT_RUNTIME_CLIENT_ID DATABRICKS_AGENT_PROXY_CLIENT_ID
+          export -n DATABRICKS_AGENT_PROXY_CREDENTIAL_ID
+          export -n DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE DATABRICKS_ACCOUNT_CLIENT_ID
           {
             echo "[DEFAULT]"
             echo "host  = ${DATABRICKS_HOST}"
@@ -73,49 +195,172 @@ jobs:
             echo "DATABRICKS_HOST=${DATABRICKS_HOST}"
             echo "DATABRICKS_WAREHOUSE_ID=${DATABRICKS_WAREHOUSE_ID}"
             echo "GENIE_SPACE_ID=${GENIE_SPACE_ID}"
-            echo "MIP_DEFAULT_CATALOG=mip"
+            echo "MIP_DEFAULT_CATALOG=${MIP_DEFAULT_CATALOG}"
+            echo "MIP_LENDER_NAME=${MIP_LENDER_NAME:-Summit Mortgage}"
+            echo "MIP_LENDER_NMLS_ID=${MIP_LENDER_NMLS_ID:-}"
+            echo "MIP_TENANT_ID=${MIP_TENANT_ID:-}"
+            echo "MIP_APP_NAME=${MIP_APP_NAME:-mip-app}"
+            echo "MIP_LAKEBASE_INSTANCE=${MIP_LAKEBASE_INSTANCE:-mip-app-state}"
+            echo "LAKEBASE_INSTANCE_NAME=${MIP_LAKEBASE_INSTANCE:-mip-app-state}"
+            echo "LAKEBASE_DATABASE=${LAKEBASE_DATABASE:-mip_app_state}"
+            echo "MIP_LAKEBASE_DATABASE_NAME=${LAKEBASE_DATABASE:-mip_app_state}"
+            echo "MIP_LAKEBASE_SYNC_CATALOG=${MIP_LAKEBASE_SYNC_CATALOG:-mip_app_state}"
+            echo "MIP_LAKEBASE_SYNC_SCHEMA=${MIP_LAKEBASE_SYNC_SCHEMA:-mip_sync}"
+            echo "MIP_LAKEBASE_SYNC_TABLES=${MIP_LAKEBASE_SYNC_TABLES:-source_readiness,segment_population,funnel_snapshot_daily}"
+            echo "MIP_RUNTIME_SECRET_SCOPE=${MIP_RUNTIME_SECRET_SCOPE:-mip-runtime}"
+            echo "MIP_APP_ROLLBACK_SECRET_SCOPE=${MIP_APP_ROLLBACK_SECRET_SCOPE:-mip-app-rollback}"
+            echo "MIP_GENIE_SPACE_NAME=${MIP_GENIE_SPACE_NAME:-Mortgage Lead Intelligence}"
             echo "MIP_DEFAULT_SCHEMA=gold"
             echo "MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS=1"
+            echo "MIP_APPROVER_IDENTITIES=${DATABRICKS_CLIENT_ID},${DATABRICKS_OPERATOR2_CLIENT_ID}"
+            echo "MIP_ADMIN_IDENTITIES=${DATABRICKS_ADMIN_CLIENT_ID},${DATABRICKS_RELEASE_PROBE_CLIENT_ID}"
+            if [ -n "${MIP_GENIE_ACTION_SECRET_KID:-}" ]; then
+              echo "MIP_GENIE_ACTION_SECRET_KID=${MIP_GENIE_ACTION_SECRET_KID}"
+            fi
+            if [ -n "${MIP_GENIE_ACTION_SECRET_PREVIOUS_KID:-}" ]; then
+              echo "MIP_GENIE_ACTION_SECRET_PREVIOUS_KID=${MIP_GENIE_ACTION_SECRET_PREVIOUS_KID}"
+            fi
             if [ -n "${MIP_ADMIN_EMAILS:-}" ]; then
               echo "MIP_ADMIN_EMAILS=${MIP_ADMIN_EMAILS}"
             fi
             if [ -n "${MIP_ADMIN_GROUP_NAME:-}" ]; then
               echo "MIP_ADMIN_GROUP_NAME=${MIP_ADMIN_GROUP_NAME}"
             fi
+            if [ -n "${MIP_APPROVER_GROUP_NAME:-}" ]; then
+              echo "MIP_APPROVER_GROUP_NAME=${MIP_APPROVER_GROUP_NAME}"
+            fi
+            if [ -n "${MIP_UC_APPROVED_OWNER_PRINCIPALS:-}" ]; then
+              echo "MIP_UC_APPROVED_OWNER_PRINCIPALS=${MIP_UC_APPROVED_OWNER_PRINCIPALS}"
+            fi
+            if [ -n "${MIP_UC_FOREIGN_CATALOG_BINDING_POLICY:-}" ]; then
+              echo "MIP_UC_FOREIGN_CATALOG_BINDING_POLICY=${MIP_UC_FOREIGN_CATALOG_BINDING_POLICY}"
+            fi
+            if [ -n "${MIP_AI_GATEWAY_AGENT_MODEL_FAMILY:-}" ]; then
+              echo "MIP_AI_GATEWAY_AGENT_MODEL_FAMILY=${MIP_AI_GATEWAY_AGENT_MODEL_FAMILY}"
+            fi
+            if [ -n "${MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE:-}" ]; then
+              echo "MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE=${MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE}"
+            fi
+            if [ -n "${MIP_AI_GATEWAY_TABLE_PREFIX:-}" ]; then
+              echo "MIP_AI_GATEWAY_TABLE_PREFIX=${MIP_AI_GATEWAY_TABLE_PREFIX}"
+            fi
           } > .env.local
           chmod 600 .env.local
-      - name: Mint deployed app bearer for smoke
-        if: ${{ inputs.skip_smoke == false }}
-        env:
-          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
-          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-          DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
-          DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
-        run: |
-          set -euo pipefail
-          missing=""
-          for v in DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET; do
-            if [ -z "${!v:-}" ]; then
-              missing="$missing $v"
-            fi
-          done
-          if [ -n "$missing" ]; then
-            echo "::error::Missing required M2M OAuth secret(s) for deployed smoke:$missing"
-            exit 1
-          fi
-          bearer="$(python tools/oauth_m2m_mint.py)"
-          if [ -z "$bearer" ]; then
-            echo "::error::M2M bearer token was empty"
-            exit 1
-          fi
-          echo "::add-mask::$bearer"
-          echo "MIP_BEARER_TOKEN=$bearer" >> "$GITHUB_ENV"
-      - name: Deploy dev Databricks App
+      - name: Repair normal operator OAuth credential
+        if: ${{ inputs.repair_normal_credential }}
         env:
           DATABRICKS_AUTH_TYPE: pat
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-          MIP_ADMIN_BEARER_TOKEN: ${{ secrets.MIP_ADMIN_BEARER_TOKEN }}
+          DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
+          GH_TOKEN: ${{ secrets.MIP_GITHUB_CREDENTIAL_SINK_TOKEN }}
+          MIP_AI_GATEWAY_PROOF_SIGNING_KEY: ${{ secrets.MIP_AI_GATEWAY_PROOF_SIGNING_KEY }}
+          MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY: ${{ secrets.MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY }}
+          MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS: ${{ vars.MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS }}
+          MIP_APP_NAME: ${{ vars.MIP_APP_NAME || 'mip-app' }}
+          MIP_DEPLOYMENT_SOURCE_GIT_SHA: ${{ github.sha }}
+          MIP_M2M_GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          missing=""
+          for v in DATABRICKS_HOST DATABRICKS_TOKEN DATABRICKS_CLIENT_ID \
+                   GH_TOKEN MIP_AI_GATEWAY_PROOF_SIGNING_KEY MIP_APP_NAME \
+                   MIP_DEPLOYMENT_SOURCE_GIT_SHA MIP_M2M_GITHUB_REPOSITORY; do
+            if [ -z "${!v}" ]; then
+              missing="$missing $v"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing required credential-repair input(s):$missing"
+            exit 1
+          fi
+          if ! MIP_AI_GATEWAY_PROOF_VERIFY_KEY="$(
+            python - <<'PY'
+          import os
+          from backend.services.ai_gateway_proof_attestation import (
+              derive_gateway_proof_verify_key,
+          )
+
+          print(
+              derive_gateway_proof_verify_key(
+                  os.environ["MIP_AI_GATEWAY_PROOF_SIGNING_KEY"]
+              )
+          )
+          PY
+          )"; then
+            echo "::error::MIP_AI_GATEWAY_PROOF_SIGNING_KEY is invalid"
+            exit 1
+          fi
+          export MIP_AI_GATEWAY_PROOF_VERIFY_KEY
+          python -m tools.databricks.provision_m2m_oauth \
+            --identity-role normal \
+            --expected-application-id "$DATABRICKS_CLIENT_ID" \
+            --app-name "$MIP_APP_NAME" \
+            --no-grant-can-use \
+            --gh-repo "$GITHUB_REPOSITORY" \
+            --rotate \
+            --set-gh-secrets
+      - name: Deploy dev Databricks App
+        if: ${{ !inputs.repair_normal_credential }}
+        env:
+          DATABRICKS_AUTH_TYPE: pat
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+          DATABRICKS_OPERATOR2_CLIENT_ID: ${{ secrets.DATABRICKS_OPERATOR2_CLIENT_ID }}
+          DATABRICKS_ADMIN_CLIENT_ID: ${{ secrets.DATABRICKS_ADMIN_CLIENT_ID }}
+          DATABRICKS_ADMIN_CLIENT_SECRET: ${{ secrets.DATABRICKS_ADMIN_CLIENT_SECRET }}
+          DATABRICKS_RELEASE_PROBE_CLIENT_ID: ${{ secrets.DATABRICKS_RELEASE_PROBE_CLIENT_ID }}
+          DATABRICKS_RELEASE_PROBE_CLIENT_SECRET: ${{ secrets.DATABRICKS_RELEASE_PROBE_CLIENT_SECRET }}
+          DATABRICKS_VERIFIER_CLIENT_ID: ${{ secrets.DATABRICKS_VERIFIER_CLIENT_ID }}
+          DATABRICKS_VERIFIER_CLIENT_SECRET: ${{ secrets.DATABRICKS_VERIFIER_CLIENT_SECRET }}
+          DATABRICKS_AGENT_RUNTIME_CLIENT_ID: ${{ secrets.DATABRICKS_AGENT_RUNTIME_CLIENT_ID }}
+          DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET: ${{ secrets.DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET }}
+          DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE: ${{ secrets.DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE }}
+          DATABRICKS_ACCOUNT_HOST: ${{ secrets.DATABRICKS_ACCOUNT_HOST || 'https://accounts.cloud.databricks.com' }}
+          DATABRICKS_ACCOUNT_ID: ${{ secrets.DATABRICKS_ACCOUNT_ID }}
+          DATABRICKS_ACCOUNT_CLIENT_ID: ${{ secrets.DATABRICKS_ACCOUNT_CLIENT_ID }}
+          DATABRICKS_ACCOUNT_CLIENT_SECRET: ${{ secrets.DATABRICKS_ACCOUNT_CLIENT_SECRET }}
+          MIP_COTALITY_ID_MASK_SECRET: ${{ secrets.MIP_COTALITY_ID_MASK_SECRET }}
+          MIP_GENIE_ACTION_SECRET_CURRENT: ${{ secrets.MIP_GENIE_ACTION_SECRET_CURRENT }}
+          MIP_GENIE_ACTION_SECRET_PREVIOUS: ${{ secrets.MIP_GENIE_ACTION_SECRET_PREVIOUS }}
+          MIP_AI_GATEWAY_PROOF_SIGNING_KEY: ${{ secrets.MIP_AI_GATEWAY_PROOF_SIGNING_KEY }}
+          MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY: ${{ secrets.MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY }}
+          MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS: ${{ vars.MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS }}
+          MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY: ${{ secrets.MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY }}
+          MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY: ${{ secrets.MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY }}
+          MIP_UC_APPROVED_OWNER_PRINCIPALS: ${{ vars.MIP_UC_APPROVED_OWNER_PRINCIPALS }}
+          MIP_UC_FOREIGN_CATALOG_BINDING_POLICY: ${{ vars.MIP_UC_FOREIGN_CATALOG_BINDING_POLICY }}
+          MIP_DEFAULT_CATALOG: ${{ vars.MIP_DEFAULT_CATALOG || 'mip' }}
+          MIP_LENDER_NAME: ${{ vars.MIP_LENDER_NAME || 'Summit Mortgage' }}
+          MIP_LENDER_NMLS_ID: ${{ vars.MIP_LENDER_NMLS_ID }}
+          MIP_TENANT_ID: ${{ vars.MIP_TENANT_ID }}
+          MIP_APP_NAME: ${{ vars.MIP_APP_NAME || 'mip-app' }}
+          MIP_LAKEBASE_INSTANCE: ${{ vars.MIP_LAKEBASE_INSTANCE || 'mip-app-state' }}
+          LAKEBASE_DATABASE: ${{ vars.LAKEBASE_DATABASE || 'mip_app_state' }}
+          MIP_LAKEBASE_SYNC_CATALOG: ${{ vars.MIP_LAKEBASE_SYNC_CATALOG || 'mip_app_state' }}
+          MIP_LAKEBASE_SYNC_SCHEMA: ${{ vars.MIP_LAKEBASE_SYNC_SCHEMA || 'mip_sync' }}
+          MIP_LAKEBASE_SYNC_TABLES: ${{ vars.MIP_LAKEBASE_SYNC_TABLES || 'source_readiness,segment_population,funnel_snapshot_daily' }}
+          MIP_RUNTIME_SECRET_SCOPE: ${{ vars.MIP_RUNTIME_SECRET_SCOPE || 'mip-runtime' }}
+          MIP_APP_ROLLBACK_SECRET_SCOPE: ${{ vars.MIP_APP_ROLLBACK_SECRET_SCOPE || 'mip-app-rollback' }}
+          MIP_AGENT_PROXY_SECRET_SCOPE: ${{ vars.MIP_AGENT_PROXY_SECRET_SCOPE }}
+          MIP_GENIE_SPACE_NAME: ${{ vars.MIP_GENIE_SPACE_NAME || 'Mortgage Lead Intelligence' }}
+          MIP_AI_GATEWAY_AGENT_MODEL_FAMILY: ${{ vars.MIP_AI_GATEWAY_AGENT_MODEL_FAMILY }}
+          MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE: ${{ vars.MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE }}
+          MIP_AI_GATEWAY_TABLE_PREFIX: ${{ vars.MIP_AI_GATEWAY_TABLE_PREFIX }}
+          MIP_REBASE_UNVERIFIED_APP: ${{ inputs.rebase_unverified_app && '1' || '0' }}
+          MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS: ${{ inputs.remediate_foreign_catalog_bindings && '1' || '0' }}
+          MIP_REQUIRE_AI_GATEWAY_CLAIMABLE: '1'
+          SALESFORCE_INSTANCE_URL: ${{ vars.SALESFORCE_INSTANCE_URL }}
+          SALESFORCE_CLIENT_ID: ${{ vars.SALESFORCE_CLIENT_ID }}
+          SALESFORCE_USERNAME: ${{ vars.SALESFORCE_USERNAME }}
+          SALESFORCE_API_VERSION: ${{ vars.SALESFORCE_API_VERSION }}
+          SALESFORCE_SOBJECT: ${{ vars.SALESFORCE_SOBJECT }}
+          SALESFORCE_EXTERNAL_ID_FIELD: ${{ vars.SALESFORCE_EXTERNAL_ID_FIELD }}
+          SALESFORCE_CLIENT_SECRET: ${{ secrets.SALESFORCE_CLIENT_SECRET }}
+          SALESFORCE_PASSWORD: ${{ secrets.SALESFORCE_PASSWORD }}
+          SALESFORCE_SECURITY_TOKEN: ${{ secrets.SALESFORCE_SECURITY_TOKEN }}
         run: |
           set -euo pipefail
           args=(-t dev --no-confirm)

@@ -84,25 +84,60 @@ export type CampaignSetupState = {
   smsCost: string;
   mailCost: string;
   marketHouseholdTogether: boolean;
+  generationMode: 'supervisor' | 'reviewed_fallback' | 'operator';
+  generatorLabel: string;
+  provenanceTokenA: string | null;
+  provenanceTokenB: string | null;
 };
 
+export type CampaignNumericField = 'holdoutPct' | 'budget' | 'emailCost' | 'smsCost' | 'mailCost';
+
+export const CAMPAIGN_NUMERIC_BOUNDS: Record<CampaignNumericField, {
+  min: number;
+  max: number;
+  fallback: number | null;
+  step: number;
+}> = {
+  holdoutPct: { min: 0, max: 50, fallback: 10, step: 0.1 },
+  budget: { min: 0, max: 10_000_000, fallback: null, step: 1 },
+  emailCost: { min: 0, max: 1_000, fallback: null, step: 0.01 },
+  smsCost: { min: 0, max: 1_000, fallback: null, step: 0.01 },
+  mailCost: { min: 0, max: 1_000, fallback: null, step: 0.01 },
+};
+
+export function normalizeCampaignNumericValue(
+  field: CampaignNumericField,
+  raw: string,
+): string {
+  const bounds = CAMPAIGN_NUMERIC_BOUNDS[field];
+  if (raw.trim() === '' && bounds.fallback === null) return '';
+  const parsed = Number(raw);
+  const value = Number.isFinite(parsed) ? parsed : bounds.fallback;
+  if (value === null) return '';
+  const bounded = Math.min(bounds.max, Math.max(bounds.min, value));
+  return String(Number(bounded.toFixed(2)));
+}
+
 export function buildDefaultCampaignSetup(
-  lenderName: string = DEFAULT_CAMPAIGN_LENDER_NAME,
+  _lenderName: string = DEFAULT_CAMPAIGN_LENDER_NAME,
 ): CampaignSetupState {
-  const label = lenderName.trim() || DEFAULT_CAMPAIGN_LENDER_NAME;
   return {
-    subjectA: `${label} review for your current loan options`,
-    subjectB: 'A refinance review may improve your mortgage fit',
-    bodyA: `Review your current mortgage fit with ${label} — rate, equity, and next options.`,
-    bodyB: `See whether a refinance could improve your rate and use your equity, reviewed by a ${label} loan officer.`,
+    subjectA: '',
+    subjectB: '',
+    bodyA: '',
+    bodyB: '',
     holdoutPct: '10',
     startLocal: '09:00',
     endLocal: '16:00',
     budget: '',
-    emailCost: '1.20',
-    smsCost: '0.08',
-    mailCost: '0.86',
+    emailCost: '',
+    smsCost: '',
+    mailCost: '',
     marketHouseholdTogether: false,
+    generationMode: 'operator',
+    generatorLabel: 'Operator edited',
+    provenanceTokenA: null,
+    provenanceTokenB: null,
   };
 }
 
@@ -233,6 +268,7 @@ export function buildSegmentIntelligenceUrlFromFilters(
 }
 
 export function campaignCriteriaSummary(campaign: CampaignSummary): string {
+  if (campaign.actionable === false) return 'Needs review before use';
   const criteria = campaign.criteria ?? {};
   const parts: string[] = [];
   const states = Array.isArray(criteria.states) ? criteria.states.map(String).filter(Boolean) : [];
@@ -262,16 +298,15 @@ export function campaignCriteriaSummary(campaign: CampaignSummary): string {
 export interface SavedCampaignRow {
   /** Representative campaign (most recent) — wins the row's key/links. */
   campaign: CampaignSummary;
-  /** Number of same-name drafts collapsed into this row; 1 = not collapsed. */
+  /** Number of semantically identical drafts collapsed into this row; 1 = not collapsed. */
   draftCount: number;
   latestAt: string | null;
 }
 
 /**
- * Collapse repeated same-name DRAFT campaigns into one representative row so a
- * long list of identical "Genie strategy draft" rows reads as one item with a
- * count. Non-draft or uniquely-named campaigns pass through 1:1. The most-recent
- * campaign (by updated_at/created_at) represents the group.
+ * Collapse only semantically identical DRAFT campaigns. Name alone is not an
+ * identity: operators routinely reuse a name for different criteria, holdouts,
+ * or message variants, and those records must remain separately inspectable.
  */
 export function groupSavedCampaigns(campaigns: CampaignSummary[]): SavedCampaignRow[] {
   const timeOf = (campaign: CampaignSummary): number => {
@@ -282,8 +317,9 @@ export function groupSavedCampaigns(campaigns: CampaignSummary[]): SavedCampaign
   const groups = new Map<string, CampaignSummary[]>();
   const order: string[] = [];
   for (const campaign of campaigns) {
-    // Only DRAFT rows sharing a name collapse; everything else stays unique.
-    const key = campaign.status === 'draft' ? `draft:${campaign.name}` : `one:${campaign.campaign_id}`;
+    const key = campaign.status === 'draft'
+      ? `draft:${canonicalDraftFingerprint(campaign)}`
+      : `one:${campaign.campaign_id}`;
     const bucket = groups.get(key);
     if (bucket) {
       bucket.push(campaign);
@@ -306,16 +342,61 @@ export function groupSavedCampaigns(campaigns: CampaignSummary[]): SavedCampaign
   });
 }
 
+function canonicalDraftFingerprint(campaign: CampaignSummary): string {
+  const {
+    campaign_id: _campaignId,
+    created_at: _createdAt,
+    updated_at: _updatedAt,
+    ...semanticRecord
+  } = campaign;
+  const canonicalize = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(canonicalize);
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>)
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([key, child]) => [key, canonicalize(child)]),
+      );
+    }
+    return value;
+  };
+  return JSON.stringify(canonicalize(semanticRecord));
+}
+
 function boundedNumber(raw: string, fallback: number, min: number, max: number): number {
   const parsed = Number(raw);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(max, Math.max(min, parsed));
 }
 
-function nullableMoney(raw: string): number | null {
+function nullableMoney(raw: string, max: number): number | null {
+  if (raw.trim() === '') return null;
   const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed <= 0) return null;
-  return Number(parsed.toFixed(2));
+  if (!Number.isFinite(parsed)) return null;
+  return Number(Math.min(max, Math.max(0, parsed)).toFixed(2));
+}
+
+function configuredChannelCosts(setup: CampaignSetupState): Record<string, number> {
+  const costs = {
+    email: nullableMoney(setup.emailCost, CAMPAIGN_NUMERIC_BOUNDS.emailCost.max),
+    sms: nullableMoney(setup.smsCost, CAMPAIGN_NUMERIC_BOUNDS.smsCost.max),
+    direct_mail: nullableMoney(setup.mailCost, CAMPAIGN_NUMERIC_BOUNDS.mailCost.max),
+  };
+  return Object.fromEntries(
+    Object.entries(costs).filter((entry): entry is [string, number] => entry[1] !== null),
+  );
+}
+
+export function campaignCopyValidationError(setup: CampaignSetupState): string | null {
+  const variants = [
+    { label: 'Benefit-led', subject: setup.subjectA.trim(), body: setup.bodyA.trim() },
+    { label: 'Guidance-led', subject: setup.subjectB.trim(), body: setup.bodyB.trim() },
+  ];
+  if (variants.every((variant) => !variant.subject && !variant.body)) return null;
+  const incomplete = variants.find((variant) => !variant.subject || !variant.body);
+  return incomplete
+    ? `${incomplete.label} copy needs both a subject and message before this build can be saved.`
+    : null;
 }
 
 export function buildCampaignConfig(setup: CampaignSetupState): {
@@ -328,24 +409,37 @@ export function buildCampaignConfig(setup: CampaignSetupState): {
   household_dedup: Record<string, unknown>;
 } {
   const holdoutPct = boundedNumber(setup.holdoutPct, 10, 0, 50);
+  const hasCampaignCopy = [
+    setup.subjectA,
+    setup.subjectB,
+    setup.bodyA,
+    setup.bodyB,
+  ].some((value) => value.trim().length > 0);
+  const messageVariants = hasCampaignCopy ? [
+    {
+      variant_name: 'Benefit-led',
+      channel: 'email',
+      subject: setup.subjectA.trim(),
+      body: setup.bodyA.trim(),
+      weight_pct: Math.max(0, Math.round((100 - holdoutPct) / 2)),
+      generation_mode: setup.generationMode,
+      generator_label: setup.generatorLabel,
+      provenance_token: setup.provenanceTokenA,
+    },
+    {
+      variant_name: 'Guidance-led',
+      channel: 'email',
+      subject: setup.subjectB.trim(),
+      body: setup.bodyB.trim(),
+      weight_pct: Math.max(0, Math.floor((100 - holdoutPct) / 2)),
+      generation_mode: setup.generationMode,
+      generator_label: setup.generatorLabel,
+      provenance_token: setup.provenanceTokenB,
+    },
+  ] : [];
   return {
     suppression_policy: { default: 'eligible_only', frequency_cap_days: 30 },
-    message_variants: [
-      {
-        variant_name: 'A',
-        channel: 'email',
-        subject: setup.subjectA.trim(),
-        body: setup.bodyA.trim(),
-        weight_pct: Math.max(0, Math.round((100 - holdoutPct) / 2)),
-      },
-      {
-        variant_name: 'B',
-        channel: 'email',
-        subject: setup.subjectB.trim(),
-        body: setup.bodyB.trim(),
-        weight_pct: Math.max(0, Math.floor((100 - holdoutPct) / 2)),
-      },
-    ],
+    message_variants: messageVariants,
     channel_cascade: [
       { channel: 'email', step: 1 },
       { channel: 'sms', step: 2, after_days: 3 },
@@ -359,12 +453,8 @@ export function buildCampaignConfig(setup: CampaignSetupState): {
     },
     holdout: { method: 'hash_modulo', size_pct: holdoutPct },
     roi_assumptions: {
-      budget_usd: nullableMoney(setup.budget),
-      cost_per_contact_usd: {
-        email: nullableMoney(setup.emailCost),
-        sms: nullableMoney(setup.smsCost),
-        direct_mail: nullableMoney(setup.mailCost),
-      },
+      budget_usd: nullableMoney(setup.budget, CAMPAIGN_NUMERIC_BOUNDS.budget.max),
+      cost_per_contact_usd: configuredChannelCosts(setup),
       source: 'operator_configured',
     },
     household_dedup: {
@@ -437,95 +527,6 @@ export function isDayZero(preview: PortfolioPreview | null): boolean {
  * defaults. Pure and deterministic so the demo never surprises and the
  * math is unit-pinnable.
  */
-export interface RoiAssumptionInputs {
-  /** Addressable borrowers passing the refinance-economics screen in the current build. */
-  leads: number;
-  /** Expected response/funding rate, as a percent (e.g. 4.0). */
-  responseRatePct: string;
-  /** Average origination balance per funded loan, in dollars. */
-  avgBalanceUsd: string;
-  /** Lender revenue per origination (gain-on-sale + fees), as a percent. */
-  revenueRatePct: string;
-  /** Blended per-lead outreach cost across the channel cascade, in dollars. */
-  costPerLeadUsd: string;
-}
-
-export interface RoiProjection {
-  fundings: number;
-  originationVolumeUsd: number;
-  grossRevenueUsd: number;
-  outreachCostUsd: number;
-  netRevenueUsd: number;
-  /** True when every assumption parsed to a usable, in-range number. */
-  valid: boolean;
-}
-
-export const DEFAULT_ROI_ASSUMPTIONS: Omit<RoiAssumptionInputs, 'leads'> = {
-  // Conservative top-of-funnel response for governed, eligibility-suppressed
-  // mortgage outreach; tunable on screen.
-  responseRatePct: '4.0',
-  // ~U.S. average first-lien origination balance, rounded.
-  avgBalanceUsd: '340000',
-  // Blended gain-on-sale + origination fee revenue, as a share of balance.
-  revenueRatePct: '1.50',
-  // Blended per-lead cost across the email → SMS → mail cascade.
-  costPerLeadUsd: '1.40',
-};
-
-function clampPct(raw: string): number | null {
-  const n = Number.parseFloat(raw);
-  if (!Number.isFinite(n) || n < 0 || n > 100) return null;
-  return n;
-}
-
-// Sane upper ceilings so a fat-fingered assumption can't produce a nonsense
-// headline ("$1000000.0B"). Generous — far above any real mortgage input —
-// and consistent with clampPct, which likewise REJECTS out-of-range (→ "—")
-// rather than silently clamping.
-const MAX_AVG_BALANCE_USD = 100_000_000; // $100M per funded loan (well past jumbo)
-const MAX_COST_PER_LEAD_USD = 100_000; // $100K blended per-lead cost
-
-function nonNegMoney(raw: string, max = Number.POSITIVE_INFINITY): number | null {
-  const n = Number.parseFloat(raw);
-  if (!Number.isFinite(n) || n < 0 || n > max) return null;
-  return n;
-}
-
-export function projectRoi(inputs: RoiAssumptionInputs): RoiProjection {
-  const leads = Number.isFinite(inputs.leads) && inputs.leads > 0 ? inputs.leads : 0;
-  const responseRate = clampPct(inputs.responseRatePct);
-  const avgBalance = nonNegMoney(inputs.avgBalanceUsd, MAX_AVG_BALANCE_USD);
-  const revenueRate = clampPct(inputs.revenueRatePct);
-  const costPerLead = nonNegMoney(inputs.costPerLeadUsd, MAX_COST_PER_LEAD_USD);
-  const valid =
-    responseRate !== null &&
-    avgBalance !== null &&
-    revenueRate !== null &&
-    costPerLead !== null;
-  if (!valid) {
-    return {
-      fundings: 0,
-      originationVolumeUsd: 0,
-      grossRevenueUsd: 0,
-      outreachCostUsd: 0,
-      netRevenueUsd: 0,
-      valid: false,
-    };
-  }
-  const fundings = leads * (responseRate / 100);
-  const originationVolumeUsd = fundings * avgBalance;
-  const grossRevenueUsd = originationVolumeUsd * (revenueRate / 100);
-  const outreachCostUsd = leads * costPerLead;
-  return {
-    fundings,
-    originationVolumeUsd,
-    grossRevenueUsd,
-    outreachCostUsd,
-    netRevenueUsd: grossRevenueUsd - outreachCostUsd,
-    valid: true,
-  };
-}
-
 /** Compact USD formatter for the projector headline ($2.3M, $940K, $1.2B, $1.5T). */
 export function formatUsdCompact(n: number): string {
   if (!Number.isFinite(n)) return '—';

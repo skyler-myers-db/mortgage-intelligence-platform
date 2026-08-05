@@ -20,11 +20,11 @@ fallback — it never silently substitutes a fabricated plan.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
 from backend.agents.mortgage_growth_copilot import (
-    agent_task_if_ready,
     extract_response_text,
     parse_json_object,
     prompt_hash,
@@ -33,6 +33,7 @@ from backend.agents.mortgage_growth_copilot import (
     workspace_client as make_workspace_client,
 )
 from backend.config.settings import Settings, get_settings
+from backend.schemas._validators import contains_unsafe_ai_text
 from backend.schemas.agent_plan import (
     MAX_PLAN_STEPS,
     MAX_RATIONALE_LEN,
@@ -51,8 +52,20 @@ from backend.services.capability_serving_probes import (
     serving_response_has_payload,
 )
 from backend.services.pii_redaction import scrub_free_text
+from backend.services.supervisor_runtime import verify_supervisor_runtime
 
 ComposeStatus = Literal["composed", "degraded", "invalid"]
+
+_UNSUPPORTED_PLAN_NARRATIVE_RE = re.compile(
+    r"\b(?:guarantee(?:d|s)?|certain)\b.{0,40}\b"
+    r"(?:approval|conversion|funding|outcome|response|result|savings?)\b|"
+    r"\b(?:automatic(?:ally)?|autonomous(?:ly)?)\b.{0,40}\b"
+    r"(?:activate|contact|email|launch|message|outreach|send|text)\b|"
+    r"\b(?:activate|contact|email|launch|message|outreach|send|text)\b.{0,50}\b"
+    r"(?:without|no)\s+(?:human|manual)\s+(?:approval|review)\b|"
+    r"\b(?:without|no)\s+(?:human|manual)\s+(?:approval|review)\b",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 @dataclass(frozen=True)
@@ -95,20 +108,18 @@ def compose_growth_agent_plan(
     """Compose and validate a plan, or degrade/invalidate honestly."""
 
     settings = settings or get_settings()
-    endpoint, reason = composition_endpoint(settings)
-    if endpoint is None:
-        return _degraded(reason or "orchestrator_unavailable")
-
     client = serving_client
-    task: str | None = None
     try:
         if client is None:
             client = make_workspace_client()
-        task = agent_task_if_ready(client, endpoint)
     except Exception:  # noqa: BLE001 - host flakiness must degrade, not crash
-        return _degraded("orchestrator_probe_failed", endpoint=endpoint)
-    if task is None:
-        return _degraded("orchestrator_not_ready", endpoint=endpoint)
+        return _degraded("orchestrator_client_failed")
+    runtime, reason = verify_supervisor_runtime(client, settings)
+    if runtime is None:
+        endpoint = (settings.mip_agent_serving_endpoint or "").strip() or None
+        return _degraded(reason or "orchestrator_unavailable", endpoint=endpoint)
+    endpoint = runtime.endpoint
+    task = runtime.task
 
     # One bounded repair turn, mirroring the Genie SQL-repair precedent: a
     # first invalid plan (hallucinated params, unknown tool, bad shape) is fed
@@ -169,6 +180,23 @@ def build_validated_plan(
             f"The composed plan exceeded the {MAX_PLAN_STEPS}-step limit.",
             endpoint=endpoint,
         )
+
+    narrative_fields: list[tuple[str, Any]] = [
+        ("objective_summary", parsed.get("objective_summary")),
+        ("expected_outcome", parsed.get("expected_outcome")),
+        ("risk_notes", parsed.get("risk_notes")),
+    ]
+    for index, raw in enumerate(raw_steps, start=1):
+        if isinstance(raw, dict):
+            narrative_fields.append((f"step-{index} rationale", raw.get("rationale")))
+    for field_name, value in narrative_fields:
+        unsafe_reason = _unsafe_plan_narrative_reason(value)
+        if unsafe_reason is not None:
+            return _invalid(
+                f"The composed plan's {field_name} failed governance validation: "
+                f"{unsafe_reason}.",
+                endpoint=endpoint,
+            )
 
     known = registered_agent_tool_names()
     steps: list[PlanStep] = []
@@ -282,6 +310,21 @@ def _clamp(value: Any) -> str:
     if value is None:
         return ""
     return scrub_free_text(str(value).strip())[:MAX_RATIONALE_LEN].strip()
+
+
+def _unsafe_plan_narrative_reason(value: Any) -> str | None:
+    """Return a public-safe reason when model-authored plan prose is unsafe."""
+
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if contains_unsafe_ai_text(text, include_titlecase=False):
+        return "unsafe identity, protected-class, instruction, or internal content"
+    if _UNSUPPORTED_PLAN_NARRATIVE_RE.search(text):
+        return "unsupported outcome or automation claim"
+    return None
 
 
 def _fallback_summary(payload: ComposePlanRequest) -> str:

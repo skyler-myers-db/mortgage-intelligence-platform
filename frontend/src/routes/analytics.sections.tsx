@@ -4,7 +4,7 @@
 
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { HIGH_OPPORTUNITY_SCORE_LABEL } from '../lib/opportunityScore';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { Icon } from '../components/Icon';
 import { GlossaryTerm } from '../components/GlossaryTerm';
 import { KpiCard } from '../components/mortgage/KpiCard';

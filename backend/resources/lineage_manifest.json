@@ -455,6 +455,73 @@
       ]
     },
     {
+      "id": "equity_spread_scatter",
+      "title": "Equity and rate-spread scatter",
+      "description": "Borrower lien and valuation inputs flow through the canonical rate-spread and score-band functions into the precomputed borrower-grain scatter table used for overview bins and drill-down points.",
+      "nodes": [
+        {
+          "id": "raw_voluntary_lien",
+          "layer": "raw_share",
+          "object_type": "table",
+          "catalog": "cotality_mortgage_data",
+          "schema": "corelogic",
+          "object": "entrada_eval_voluntary_lien_status_marketing_v2",
+          "label": "Cotality Voluntary Lien share",
+          "note": "Current lien rate and balance inputs for rate spread and equity."
+        },
+        {
+          "id": "silver_lien_current",
+          "layer": "silver",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "silver",
+          "object": "lien_current",
+          "label": "Silver current liens",
+          "note": "Typed current-lien economics joined to the borrower feature spine."
+        },
+        {
+          "id": "fn_rate_spread",
+          "layer": "uc_function",
+          "object_type": "function",
+          "catalog": null,
+          "schema": "gold",
+          "object": "fn_rate_spread",
+          "label": "fn_rate_spread",
+          "note": "Canonical basis-point spread used on the scatter y-axis."
+        },
+        {
+          "id": "gold_borrower_360",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "borrower_360",
+          "label": "Gold borrower 360",
+          "note": "Borrower-grain modeled equity, rate spread, and opportunity score."
+        },
+        {
+          "id": "fn_score_band",
+          "layer": "uc_function",
+          "object_type": "function",
+          "catalog": null,
+          "schema": "gold",
+          "object": "fn_score_band",
+          "label": "fn_score_band",
+          "note": "Canonical high, medium, and low opportunity color band."
+        },
+        {
+          "id": "gold_equity_spread_points",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "equity_spread_points",
+          "label": "Gold equity and spread points",
+          "note": "Precomputed borrower points and density bins read by the analytics scatter."
+        }
+      ]
+    },
+    {
       "id": "segment_population",
       "title": "Segment membership",
       "description": "Segment rollup counts and average scores per predicate: intent triggers land on borrower_360 flags, roll up into segment_population, and read through the segment-performance metric view.",
@@ -528,6 +595,807 @@
           "object": "segment_performance_metric_view",
           "label": "Segment performance metric view",
           "note": "Semantic view for segment comparisons."
+        }
+      ]
+    },
+    {
+      "id": "property_identity",
+      "title": "Property, owner, and household identity",
+      "description": "The ordered narrative groups the property-share inputs and their governed identity outputs. Property master and property owners are parallel silver lifts; the sequence does not claim every adjacent object directly writes the next.",
+      "nodes": [
+        {
+          "id": "raw_property_domain",
+          "layer": "raw_share",
+          "object_type": "table",
+          "catalog": "cotality_mortgage_data",
+          "schema": "corelogic",
+          "object": "entrada_eval_property_domain_v3",
+          "label": "Cotality Property Domain share",
+          "note": "CLIP, property, and masked owner-identity inputs."
+        },
+        {
+          "id": "silver_property_master",
+          "layer": "silver",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "silver",
+          "object": "property_master",
+          "label": "Silver property master",
+          "note": "PII-minimized CLIP-grain property profile."
+        },
+        {
+          "id": "silver_property_owners",
+          "layer": "silver",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "silver",
+          "object": "property_owners",
+          "label": "Silver property owners",
+          "note": "Masked multi-owner rows and resolution classifications."
+        },
+        {
+          "id": "gold_property_owner_bridge",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "property_owner_bridge",
+          "label": "Gold property owner bridge",
+          "note": "Owner-Link rollup for related-property and investor evidence."
+        },
+        {
+          "id": "gold_borrower_360",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "borrower_360",
+          "label": "Gold borrower 360",
+          "note": "Borrower-grain feature spine using the governed property identity."
+        },
+        {
+          "id": "gold_household_rollup",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "household_rollup",
+          "label": "Gold household rollup",
+          "note": "Opt-in household grouping with one contact-eligible primary."
+        }
+      ]
+    },
+    {
+      "id": "borrower_proof",
+      "title": "Borrower proof and semantic view",
+      "description": "Property and lien inputs are co-inputs to the borrower feature spine. The ordered narrative then follows score and evidence outputs into the dossier and borrower-opportunity semantic view.",
+      "nodes": [
+        {
+          "id": "raw_property_domain",
+          "layer": "raw_share",
+          "object_type": "table",
+          "catalog": "cotality_mortgage_data",
+          "schema": "corelogic",
+          "object": "entrada_eval_property_domain_v3",
+          "label": "Cotality Property Domain share",
+          "note": "Property and owner inputs."
+        },
+        {
+          "id": "raw_voluntary_lien",
+          "layer": "raw_share",
+          "object_type": "table",
+          "catalog": "cotality_mortgage_data",
+          "schema": "corelogic",
+          "object": "entrada_eval_voluntary_lien_status_marketing_v2",
+          "label": "Cotality Voluntary Lien share",
+          "note": "Lien, rate, and valuation inputs."
+        },
+        {
+          "id": "silver_property_master",
+          "layer": "silver",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "silver",
+          "object": "property_master",
+          "label": "Silver property master",
+          "note": "Typed property profile."
+        },
+        {
+          "id": "silver_lien_current",
+          "layer": "silver",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "silver",
+          "object": "lien_current",
+          "label": "Silver current liens",
+          "note": "Typed lien economics."
+        },
+        {
+          "id": "gold_borrower_360",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "borrower_360",
+          "label": "Gold borrower 360",
+          "note": "Canonical borrower feature spine."
+        },
+        {
+          "id": "gold_lead_scores",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "lead_scores",
+          "label": "Gold lead scores",
+          "note": "Deterministic score outputs."
+        },
+        {
+          "id": "gold_evidence_events",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "evidence_events",
+          "label": "Gold evidence events",
+          "note": "Borrower-safe evidence rows."
+        },
+        {
+          "id": "gold_borrower_dossier",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "borrower_dossier",
+          "label": "Gold borrower dossier",
+          "note": "Prejoined proof surface for borrower detail."
+        },
+        {
+          "id": "mv_borrower_opportunity",
+          "layer": "metric_view",
+          "object_type": "view",
+          "catalog": null,
+          "schema": "semantics",
+          "object": "borrower_opportunity_metric_view",
+          "label": "Borrower opportunity metric view",
+          "note": "Semantic borrower analysis surface."
+        }
+      ]
+    },
+    {
+      "id": "lien_economics",
+      "title": "Lien balance and AVM economics",
+      "description": "The Cotality lien share is typed into current liens, bounded and amortized by committed UC functions, and carried into borrower and evidence outputs.",
+      "nodes": [
+        {
+          "id": "raw_voluntary_lien",
+          "layer": "raw_share",
+          "object_type": "table",
+          "catalog": "cotality_mortgage_data",
+          "schema": "corelogic",
+          "object": "entrada_eval_voluntary_lien_status_marketing_v2",
+          "label": "Cotality Voluntary Lien share",
+          "note": "Current rate, original balance, and AVM inputs."
+        },
+        {
+          "id": "silver_lien_current",
+          "layer": "silver",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "silver",
+          "object": "lien_current",
+          "label": "Silver current liens",
+          "note": "Typed borrower lien and valuation fields."
+        },
+        {
+          "id": "ref_lender_dictionary",
+          "layer": "reference",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "ref",
+          "object": "lender_dictionary",
+          "label": "Lender dictionary",
+          "note": "Governed tenant and competitor lender classification input."
+        },
+        {
+          "id": "fn_bounded_mortgage_rate",
+          "layer": "uc_function",
+          "object_type": "function",
+          "catalog": null,
+          "schema": "gold",
+          "object": "fn_bounded_mortgage_rate",
+          "label": "fn_bounded_mortgage_rate",
+          "note": "Bounds source rates before amortization."
+        },
+        {
+          "id": "fn_estimated_upb",
+          "layer": "uc_function",
+          "object_type": "function",
+          "catalog": null,
+          "schema": "gold",
+          "object": "fn_estimated_upb",
+          "label": "fn_estimated_upb",
+          "note": "Estimates current unpaid principal balance."
+        },
+        {
+          "id": "fn_estimated_upb_confidence_band",
+          "layer": "uc_function",
+          "object_type": "function",
+          "catalog": null,
+          "schema": "gold",
+          "object": "fn_estimated_upb_confidence_band",
+          "label": "fn_estimated_upb_confidence_band",
+          "note": "Produces the reviewed balance interval."
+        },
+        {
+          "id": "gold_borrower_360",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "borrower_360",
+          "label": "Gold borrower 360",
+          "note": "Materialized balance, equity, and confidence facts."
+        },
+        {
+          "id": "gold_evidence_events",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "evidence_events",
+          "label": "Gold evidence events",
+          "note": "Borrower-safe evidence summaries."
+        }
+      ]
+    },
+    {
+      "id": "lifecycle_evidence",
+      "title": "Mortgage and owner-transfer lifecycle evidence",
+      "description": "Mortgage and owner-transfer shares are parallel event inputs. The ordered narrative groups both lifts before the borrower-safe evidence stream and borrower feature output.",
+      "nodes": [
+        {
+          "id": "raw_mortgage_domain",
+          "layer": "raw_share",
+          "object_type": "table",
+          "catalog": "cotality_mortgage_data",
+          "schema": "corelogic",
+          "object": "entrada_eval_mortgage_domain_v1",
+          "label": "Cotality Mortgage Domain share",
+          "note": "Mortgage, refinance, payoff, and release events."
+        },
+        {
+          "id": "raw_owner_transfer",
+          "layer": "raw_share",
+          "object_type": "table",
+          "catalog": "cotality_mortgage_data",
+          "schema": "corelogic",
+          "object": "entrada_eval_owner_transfer_domain_v1",
+          "label": "Cotality Owner Transfer share",
+          "note": "Sale and transfer events."
+        },
+        {
+          "id": "silver_mortgage_events",
+          "layer": "silver",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "silver",
+          "object": "mortgage_events",
+          "label": "Silver mortgage events",
+          "note": "PII-minimized mortgage history."
+        },
+        {
+          "id": "silver_owner_transfer_events",
+          "layer": "silver",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "silver",
+          "object": "owner_transfer_events",
+          "label": "Silver owner transfer events",
+          "note": "PII-minimized transfer history."
+        },
+        {
+          "id": "gold_evidence_events",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "evidence_events",
+          "label": "Gold evidence events",
+          "note": "Controlled lifecycle signal vocabulary and display text."
+        },
+        {
+          "id": "gold_borrower_360",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "borrower_360",
+          "label": "Gold borrower 360",
+          "note": "Materialized lifecycle flags and dates."
+        }
+      ]
+    },
+    {
+      "id": "source_readiness",
+      "title": "Source readiness ledger",
+      "description": "This family is a governed status destination rather than a data transformation chain. It intentionally names only the real Unity Catalog readiness table.",
+      "nodes": [
+        {
+          "id": "gold_source_readiness",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "source_readiness",
+          "label": "Gold source readiness",
+          "note": "Non-PII status, row proof, and checked-at timestamps."
+        }
+      ]
+    },
+    {
+      "id": "lockin_cohort",
+      "title": "Rate lock-in cohort",
+      "description": "Lien economics and the governed weekly market-rate reference flow through borrower features into the precomputed lock-in cohort.",
+      "nodes": [
+        {
+          "id": "raw_voluntary_lien",
+          "layer": "raw_share",
+          "object_type": "table",
+          "catalog": "cotality_mortgage_data",
+          "schema": "corelogic",
+          "object": "entrada_eval_voluntary_lien_status_marketing_v2",
+          "label": "Cotality Voluntary Lien share",
+          "note": "Origination rate and date inputs."
+        },
+        {
+          "id": "silver_lien_current",
+          "layer": "silver",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "silver",
+          "object": "lien_current",
+          "label": "Silver current liens",
+          "note": "Typed current mortgage facts."
+        },
+        {
+          "id": "silver_market_rates_weekly",
+          "layer": "silver",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "silver",
+          "object": "market_rates_weekly",
+          "label": "Silver weekly market rates",
+          "note": "Current MORTGAGE30US reference."
+        },
+        {
+          "id": "gold_borrower_360",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "borrower_360",
+          "label": "Gold borrower 360",
+          "note": "Borrower current-rate and spread facts."
+        },
+        {
+          "id": "gold_lockin_cohort",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "lockin_cohort",
+          "label": "Gold lock-in cohort",
+          "note": "Precomputed rate-lock and refinance-sensitivity cohort."
+        }
+      ]
+    },
+    {
+      "id": "propensity_signals",
+      "title": "HELOC and refinance propensity signals",
+      "description": "The two Cotality model feeds are independent co-inputs. Their silver lifts are materialized on borrower 360 and cited in the evidence stream; neither is a building-permit filing.",
+      "nodes": [
+        {
+          "id": "raw_heloc_propensity",
+          "layer": "raw_share",
+          "object_type": "table",
+          "catalog": "cotality_mortgage_data",
+          "schema": "corelogic",
+          "object": "entrada_eval_heloc_propensity_score_v1",
+          "label": "Cotality HELOC Propensity share",
+          "note": "HELOC model scores and run dates."
+        },
+        {
+          "id": "raw_refi_propensity",
+          "layer": "raw_share",
+          "object_type": "table",
+          "catalog": "cotality_mortgage_data",
+          "schema": "corelogic",
+          "object": "entrada_eval_refi_propensity_score_v1",
+          "label": "Cotality Refi Propensity share",
+          "note": "Refinance model scores and run dates."
+        },
+        {
+          "id": "silver_heloc_propensity",
+          "layer": "silver",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "silver",
+          "object": "heloc_propensity",
+          "label": "Silver HELOC propensity",
+          "note": "Latest CLIP-keyed HELOC model score."
+        },
+        {
+          "id": "silver_refi_propensity",
+          "layer": "silver",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "silver",
+          "object": "refi_propensity",
+          "label": "Silver refi propensity",
+          "note": "Latest CLIP-keyed refinance model score."
+        },
+        {
+          "id": "gold_borrower_360",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "borrower_360",
+          "label": "Gold borrower 360",
+          "note": "Materialized scores and trigger flags."
+        },
+        {
+          "id": "gold_evidence_events",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "evidence_events",
+          "label": "Gold evidence events",
+          "note": "Borrower-safe propensity evidence."
+        }
+      ]
+    },
+    {
+      "id": "loan_dimensions",
+      "title": "Loan product and origination dimensions",
+      "description": "Cotality lien facts and the governed conforming limit determine product type; first-party LOS rows independently supply origination channel. The ordered narrative groups these co-inputs before borrower 360.",
+      "nodes": [
+        {
+          "id": "raw_voluntary_lien",
+          "layer": "raw_share",
+          "object_type": "table",
+          "catalog": "cotality_mortgage_data",
+          "schema": "corelogic",
+          "object": "entrada_eval_voluntary_lien_status_marketing_v2",
+          "label": "Cotality Voluntary Lien share",
+          "note": "First-position loan type and original amount."
+        },
+        {
+          "id": "silver_lien_current",
+          "layer": "silver",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "silver",
+          "object": "lien_current",
+          "label": "Silver current liens",
+          "note": "Typed first-position loan facts."
+        },
+        {
+          "id": "ref_offer_rules",
+          "layer": "reference",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "ref",
+          "object": "offer_rules_config",
+          "label": "Offer rules configuration",
+          "note": "Governed conforming-loan limit."
+        },
+        {
+          "id": "fn_loan_product_type",
+          "layer": "uc_function",
+          "object_type": "function",
+          "catalog": null,
+          "schema": "gold",
+          "object": "fn_loan_product_type",
+          "label": "fn_loan_product_type",
+          "note": "Canonical product classifier."
+        },
+        {
+          "id": "first_party_loan_applications",
+          "layer": "reference",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "first_party",
+          "object": "loan_applications",
+          "label": "First-party loan applications",
+          "note": "Most recent funded LOS origination channel; independent co-input."
+        },
+        {
+          "id": "gold_borrower_360",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "borrower_360",
+          "label": "Gold borrower 360",
+          "note": "Materialized loan product type and origination channel."
+        }
+      ]
+    },
+    {
+      "id": "permit_readiness",
+      "title": "Building permit readiness",
+      "description": "No governed building-permit feed exists. This is a readiness path, not fabricated data lineage: the ledger records the pending state and borrower 360 keeps has_permit false.",
+      "nodes": [
+        {
+          "id": "gold_source_readiness",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "source_readiness",
+          "label": "Gold source readiness",
+          "note": "Authoritative pending status for Cotality Building Permits."
+        },
+        {
+          "id": "gold_borrower_360",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "borrower_360",
+          "label": "Gold borrower 360",
+          "note": "has_permit remains false until real filed-permit rows land."
+        }
+      ]
+    },
+    {
+      "id": "listing_activity",
+      "title": "MLS listing activity",
+      "description": "The Cotality MLS share is lifted into the CLIP-keyed listing table, then materialized on borrower 360 and cited in the evidence stream.",
+      "nodes": [
+        {
+          "id": "raw_mls_listing",
+          "layer": "raw_share",
+          "object_type": "table",
+          "catalog": "cotality_mortgage_data",
+          "schema": "corelogic",
+          "object": "entrada_eval_mls_listing_v1",
+          "label": "Cotality MLS Listing share",
+          "note": "Listing status, date, and price inputs."
+        },
+        {
+          "id": "silver_listing_activity",
+          "layer": "silver",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "silver",
+          "object": "listing_activity",
+          "label": "Silver MLS listing activity",
+          "note": "PII-minimized current and active listing rows."
+        },
+        {
+          "id": "gold_borrower_360",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "borrower_360",
+          "label": "Gold borrower 360",
+          "note": "Materialized listed-for-sale trigger."
+        },
+        {
+          "id": "gold_evidence_events",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "evidence_events",
+          "label": "Gold evidence events",
+          "note": "Borrower-safe listing evidence."
+        }
+      ]
+    },
+    {
+      "id": "funnel_snapshot",
+      "title": "Daily funnel snapshot",
+      "description": "Ordered narrative for the daily funnel output. Property and lien lifts are parallel Borrower 360 inputs; the scheduled Unity Catalog lifecycle mirror is a co-input carrying Lakebase approval and outreach state. The metric view consumes the resulting daily snapshot.",
+      "nodes": [
+        {
+          "id": "raw_property_domain",
+          "layer": "raw_share",
+          "object_type": "table",
+          "catalog": "cotality_mortgage_data",
+          "schema": "corelogic",
+          "object": "entrada_eval_property_domain_v3",
+          "label": "Cotality Property Domain share",
+          "note": "Property identity and geography inputs."
+        },
+        {
+          "id": "raw_voluntary_lien",
+          "layer": "raw_share",
+          "object_type": "table",
+          "catalog": "cotality_mortgage_data",
+          "schema": "corelogic",
+          "object": "entrada_eval_voluntary_lien_status_marketing_v2",
+          "label": "Cotality Voluntary Lien share",
+          "note": "Borrower economics inputs."
+        },
+        {
+          "id": "silver_property_master",
+          "layer": "silver",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "silver",
+          "object": "property_master",
+          "label": "Silver property master",
+          "note": "Typed property and geography lift."
+        },
+        {
+          "id": "silver_lien_current",
+          "layer": "silver",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "silver",
+          "object": "lien_current",
+          "label": "Silver current liens",
+          "note": "Typed lien and valuation lift."
+        },
+        {
+          "id": "gold_borrower_360",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "borrower_360",
+          "label": "Gold borrower 360",
+          "note": "Addressable population, segments, economics, and scores."
+        },
+        {
+          "id": "gold_borrower_lifecycle_state",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "borrower_lifecycle_state",
+          "label": "Gold borrower lifecycle state",
+          "note": "Scheduled UC mirror of authoritative Lakebase approval and outreach records."
+        },
+        {
+          "id": "fn_high_opportunity",
+          "layer": "uc_function",
+          "object_type": "function",
+          "catalog": null,
+          "schema": "gold",
+          "object": "fn_high_opportunity",
+          "label": "fn_high_opportunity",
+          "note": "Canonical high-opportunity count threshold."
+        },
+        {
+          "id": "gold_funnel_snapshot_daily",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "funnel_snapshot_daily",
+          "label": "Gold daily funnel snapshot",
+          "note": "Daily state and segment aggregate counts."
+        },
+        {
+          "id": "mv_lead_generation",
+          "layer": "metric_view",
+          "object_type": "view",
+          "catalog": null,
+          "schema": "semantics",
+          "object": "lead_generation_metric_view",
+          "label": "Lead generation metric view",
+          "note": "Consumes current and prior funnel snapshots for dashboard and Genie deltas."
+        }
+      ]
+    },
+    {
+      "id": "geographic_rollups",
+      "title": "County and ZIP opportunity rollups",
+      "description": "Ordered narrative for the geographic drilldowns. Property geography is lifted into Borrower 360; county and ZIP tables are parallel aggregate outputs at different grains, not a county-to-ZIP transformation chain.",
+      "nodes": [
+        {
+          "id": "raw_property_domain",
+          "layer": "raw_share",
+          "object_type": "table",
+          "catalog": "cotality_mortgage_data",
+          "schema": "corelogic",
+          "object": "entrada_eval_property_domain_v3",
+          "label": "Cotality Property Domain share",
+          "note": "Source state, ZIP, and county geography."
+        },
+        {
+          "id": "silver_property_master",
+          "layer": "silver",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "silver",
+          "object": "property_master",
+          "label": "Silver property master",
+          "note": "Typed CLIP geography including county FIPS and ZIP."
+        },
+        {
+          "id": "gold_borrower_360",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "borrower_360",
+          "label": "Gold borrower 360",
+          "note": "Addressable borrower geography, segments, and scores."
+        },
+        {
+          "id": "fn_high_opportunity",
+          "layer": "uc_function",
+          "object_type": "function",
+          "catalog": null,
+          "schema": "gold",
+          "object": "fn_high_opportunity",
+          "label": "fn_high_opportunity",
+          "note": "Canonical high-opportunity aggregate threshold."
+        },
+        {
+          "id": "gold_county_rollup",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "county_rollup",
+          "label": "Gold county rollup",
+          "note": "County and snapshot-date aggregate output."
+        },
+        {
+          "id": "gold_zip_rollup",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "zip_rollup",
+          "label": "Gold ZIP rollup",
+          "note": "State, county, ZIP, and snapshot-date aggregate output."
+        }
+      ]
+    },
+    {
+      "id": "assignment_overlay_uc_input",
+      "title": "Assignment overlay Unity Catalog input",
+      "description": "This family covers only the governed borrower-geography input. Assignment and loan-officer records are Lakebase operational state and are intentionally navigated through the sales-operations query surface, not Catalog Explorer.",
+      "nodes": [
+        {
+          "id": "raw_property_domain",
+          "layer": "raw_share",
+          "object_type": "table",
+          "catalog": "cotality_mortgage_data",
+          "schema": "corelogic",
+          "object": "entrada_eval_property_domain_v3",
+          "label": "Cotality Property Domain share",
+          "note": "Source geography input."
+        },
+        {
+          "id": "silver_property_master",
+          "layer": "silver",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "silver",
+          "object": "property_master",
+          "label": "Silver property master",
+          "note": "Typed state and county geography."
+        },
+        {
+          "id": "gold_borrower_360",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "borrower_360",
+          "label": "Gold borrower 360",
+          "note": "Marketing-eligible borrower geography joined to Lakebase state by the API."
         }
       ]
     }

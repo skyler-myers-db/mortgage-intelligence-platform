@@ -48,6 +48,17 @@ describe('ApprovalBanner', () => {
     expect(html).toContain('aria-busy="false"');
   });
 
+  it('can block approval while leaving rejection available', () => {
+    const html = renderToStaticMarkup(
+      <ApprovalBanner count={1} approveDisabled />,
+    );
+    const buttons = [...html.matchAll(/<button([^>]*)>([\s\S]*?)<\/button>/g)];
+    const reject = buttons.find((match) => match[2].includes('Reject'))?.[1] ?? '';
+    const approve = buttons.find((match) => match[2].includes('Approve outreach'))?.[1] ?? '';
+    expect(reject).not.toContain('disabled');
+    expect(approve).toContain('disabled');
+  });
+
   it('pluralizes the default sub-copy for count>1', () => {
     const one = renderToStaticMarkup(<ApprovalBanner count={1} />);
     expect(one).toContain('1 borrower pending review.');

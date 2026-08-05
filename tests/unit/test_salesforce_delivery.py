@@ -20,16 +20,19 @@ import io
 import json
 import urllib.error
 from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 
+from backend.config.settings import settings
 from backend.schemas.activation import ActivationOutboxItem
 from backend.services import activation_delivery
 from backend.services.activation_delivery import (
     REASON_NOT_CONFIGURED,
+    DeliveryResult,
     deliver_to_salesforce,
 )
 from backend.services.resilience import (
@@ -130,10 +133,26 @@ def _outbox_row(status: str = "staged") -> ActivationOutboxItem:
 
 
 class _FakeStore:
-    """Captures update_delivery_state calls and returns an updated row."""
+    """Governed-store double that yields only its activation-bound guard."""
 
-    def __init__(self) -> None:
+    def __init__(self, row: ActivationOutboxItem | None = None) -> None:
+        self.activation = row or _outbox_row()
+        self.should_deliver = self.activation.status in {"staged", "failed"}
+        self.guard_entries = 0
         self.updates: list[dict[str, Any]] = []
+
+    @contextmanager
+    def delivery_guard(
+        self,
+        *,
+        activation_id: str,
+        lead_repo: object,
+    ) -> Iterator[_FakeStore]:
+        del lead_repo
+        if activation_id != self.activation.activation_id:
+            raise PermissionError("guard is bound to a different activation")
+        self.guard_entries += 1
+        yield self
 
     def update_delivery_state(
         self,
@@ -149,9 +168,27 @@ class _FakeStore:
                 "delivery_metadata": delivery_metadata,
             }
         )
-        row = _outbox_row(status=status)
-        row = row.model_copy(update={"delivery_metadata": delivery_metadata})
-        return row
+        self.activation = self.activation.model_copy(
+            update={"status": status, "delivery_metadata": delivery_metadata}
+        )
+        self.should_deliver = False
+        return self.activation
+
+
+def _deliver(
+    row: ActivationOutboxItem,
+    *,
+    store: _FakeStore,
+    client: object | None = None,
+) -> DeliveryResult:
+    store.activation = row
+    store.should_deliver = row.status in {"staged", "failed"}
+    return deliver_to_salesforce(
+        row.activation_id,
+        store=store,
+        lead_repo=object(),  # campaign proof behavior belongs to state-store tests
+        client=client,  # type: ignore[arg-type]
+    )
 
 
 def _real_client(monkeypatch: pytest.MonkeyPatch, responses: list[Any]) -> ResilientSalesforceClient:
@@ -179,7 +216,8 @@ def _real_client(monkeypatch: pytest.MonkeyPatch, responses: list[Any]) -> Resil
 
 
 @pytest.fixture(autouse=True)
-def _reset_singletons() -> Iterator[None]:
+def _reset_singletons(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setattr(settings, "salesforce_external_id_field", "MIP_Activation_Id__c")
     _reset_salesforce_client_for_tests()
     _reset_breakers_for_tests()
     yield
@@ -202,7 +240,7 @@ def test_delivery_success_marks_delivered_and_carries_no_pii(
     client = _real_client(monkeypatch, [token_body, create_body])
     store = _FakeStore()
     captured = _patch_urlopen(monkeypatch, [token_body, create_body])
-    result = deliver_to_salesforce(_outbox_row(), store=store, client=client)
+    result = _deliver(_outbox_row(), store=store, client=client)
 
     assert result.delivered is True
     assert result.attempted is True
@@ -251,7 +289,7 @@ def test_delivery_salesforce_error_marks_failed(
         ],
     )
     store = _FakeStore()
-    result = deliver_to_salesforce(_outbox_row(), store=store, client=client)
+    result = _deliver(_outbox_row(), store=store, client=client)
 
     assert result.delivered is False
     assert result.attempted is True
@@ -295,6 +333,41 @@ def test_delivery_401_triggers_token_refresh_then_succeeds(
     assert "/services/oauth2/token" in captured[2][0]
 
 
+def test_external_id_upsert_resolves_existing_record_after_empty_204(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured = _patch_urlopen(
+        monkeypatch,
+        [
+            {"access_token": "sf-token"},
+            b"",
+            {"Id": "00T-existing"},
+        ],
+    )
+    client = SalesforceClient(
+        instance_url="https://example.my.salesforce.com",
+        client_id="cid",
+        client_secret="csecret",
+        username="user@example.com",
+        password="pw",
+    )
+
+    result = client.upsert_record(
+        "Task",
+        "MIP_Activation_Id__c",
+        "11111111-1111-4111-8111-111111111111",
+        {"Subject": "x", "Description": "y"},
+    )
+
+    assert result == {"id": "00T-existing", "success": True}
+    assert len(captured) == 3
+    assert "MIP_Activation_Id__c/11111111-1111-4111-8111-111111111111" in captured[1][0]
+    assert captured[2][0].endswith("?fields=Id")
+    assert json.loads(captured[1][1])["MIP_Activation_Id__c"] == (
+        "11111111-1111-4111-8111-111111111111"
+    )
+
+
 # ---------------------------------------------------------------------------
 # (d) UNCONFIGURED -> honest no-op
 # ---------------------------------------------------------------------------
@@ -313,18 +386,39 @@ def test_delivery_unconfigured_is_clean_noop(monkeypatch: pytest.MonkeyPatch) ->
         "backend.services.salesforce_client.urllib.request.urlopen", _boom
     )
     store = _FakeStore()
-    row = _outbox_row(status="dry_run")
-    result = deliver_to_salesforce(row, store=store)
+    row = _outbox_row(status="staged")
+    result = _deliver(row, store=store)
 
     assert result.delivered is False
     assert result.attempted is False
     # Status UNCHANGED -- never claims delivery.
-    assert result.status == "dry_run"
+    assert result.status == "staged"
     assert result.delivery_metadata == {
         "delivered": False,
         "reason": REASON_NOT_CONFIGURED,
     }
     # No DB update on the unconfigured path.
+    assert store.updates == []
+
+
+def test_delivery_guard_block_is_zero_side_effect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _boom(*_a: Any, **_k: Any) -> None:  # pragma: no cover - must not run
+        raise AssertionError("governance-blocked delivery must not touch the network")
+
+    monkeypatch.setattr(
+        "backend.services.salesforce_client.urllib.request.urlopen", _boom
+    )
+    row = _outbox_row(status="cancelled")
+    store = _FakeStore(row)
+
+    result = _deliver(row, store=store)
+
+    assert result.delivered is False
+    assert result.attempted is False
+    assert result.status == "cancelled"
+    assert store.guard_entries == 1
     assert store.updates == []
 
 
@@ -346,14 +440,14 @@ def test_breaker_opens_after_repeated_failures(monkeypatch: pytest.MonkeyPatch) 
     store = _FakeStore()
 
     for _ in range(3):
-        result = deliver_to_salesforce(_outbox_row(), store=store, client=client)
+        result = _deliver(_outbox_row(), store=store, client=client)
         assert result.delivered is False
         assert result.status == "failed"
 
     # Breaker should now be OPEN -- a fourth call short-circuits to a
     # DependencyDownError, which the adapter records as a 'failed' row
     # WITHOUT any further HTTP (no responses left to consume).
-    result = deliver_to_salesforce(_outbox_row(), store=store, client=client)
+    result = _deliver(_outbox_row(), store=store, client=client)
     assert result.delivered is False
     assert result.status == "failed"
     assert "DependencyDownError" in result.delivery_metadata["error"]
@@ -363,14 +457,79 @@ def test_breaker_open_records_dependency_down(monkeypatch: pytest.MonkeyPatch) -
     """Directly assert the DependencyDownError path is handled honestly."""
 
     class _OpenClient:
-        def create_record(self, sobject: str, fields: dict[str, Any]) -> dict[str, Any]:
+        def upsert_record(
+            self,
+            sobject: str,
+            external_id_field: str,
+            external_id: str,
+            fields: dict[str, Any],
+        ) -> dict[str, Any]:
             raise DependencyDownError(
                 "salesforce", reason="circuit breaker is open",
                 kind=DependencyDownError.KIND_BREAKER_OPEN,
             )
 
     store = _FakeStore()
-    result = deliver_to_salesforce(_outbox_row(), store=store, client=_OpenClient())  # type: ignore[arg-type]
+    result = _deliver(_outbox_row(), store=store, client=_OpenClient())
     assert result.delivered is False
     assert result.status == "failed"
     assert result.delivery_metadata["delivered"] is False
+
+
+def test_delivered_replay_never_calls_salesforce_or_updates_state() -> None:
+    class _ExplodingClient:
+        def upsert_record(self, *_args: object, **_kwargs: object) -> dict[str, Any]:
+            raise AssertionError("delivered activation must not be sent again")
+
+    store = _FakeStore()
+    row = _outbox_row(status="delivered").model_copy(
+        update={"delivery_metadata": {"delivered": True, "salesforce_id": "00T-existing"}}
+    )
+
+    result = _deliver(row, store=store, client=_ExplodingClient())
+
+    assert result.delivered is True
+    assert result.attempted is False
+    assert result.salesforce_id == "00T-existing"
+    assert store.updates == []
+
+
+def test_retry_after_remote_success_uses_same_external_id() -> None:
+    class _IdempotentClient:
+        def __init__(self) -> None:
+            self.records: dict[str, str] = {}
+            self.calls: list[str] = []
+
+        def upsert_record(
+            self,
+            _sobject: str,
+            _external_id_field: str,
+            external_id: str,
+            _fields: dict[str, Any],
+        ) -> dict[str, Any]:
+            self.calls.append(external_id)
+            self.records.setdefault(external_id, "00T-stable")
+            return {"id": self.records[external_id], "success": True}
+
+    class _FailFirstStore(_FakeStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.fail = True
+
+        def update_delivery_state(self, **kwargs: Any) -> ActivationOutboxItem:
+            if self.fail:
+                self.fail = False
+                raise RuntimeError("commit connection failed after remote success")
+            return super().update_delivery_state(**kwargs)
+
+    sf = _IdempotentClient()
+    store = _FailFirstStore()
+    row = _outbox_row()
+    with pytest.raises(RuntimeError, match="commit connection failed"):
+        _deliver(row, store=store, client=sf)
+
+    result = _deliver(row, store=store, client=sf)
+
+    assert result.delivered is True
+    assert sf.calls == [row.activation_id, row.activation_id]
+    assert sf.records == {row.activation_id: "00T-stable"}

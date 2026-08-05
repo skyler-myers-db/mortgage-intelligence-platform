@@ -280,7 +280,7 @@ export const mortgageGlossary = {
     category: 'principles',
     short: 'The platform prepares outreach as drafts and never sends email or SMS automatically.',
     appContext: 'Growth Agent and Genie actions produce reviewable drafts and Lead Queue handoffs; a person sends the message from their own system.',
-    proof: 'Draft cards are labelled "Not sent"; Module 0 exposes no outbound send endpoint.',
+    proof: 'Draft cards remain in review until an operator approves the activation step.',
   },
   humanApproval: {
     id: 'human-approval',
@@ -315,7 +315,7 @@ export const mortgageGlossary = {
     aliases: ['data masking', 'redaction'],
     category: 'principles',
     short: 'Borrower identifiers and contact details are masked throughout the product surface.',
-    appContext: 'Only masked borrower ids and display-safe fields reach the UI; raw CLIP, owner names, and contact data stay inside governed joins. Contact fields are synthetic.',
+    appContext: 'Borrower 360 uses app-scoped references and evidence fields. Contact fields in this environment are synthetic.',
     proof: 'Evidence rows are redacted at the API boundary before any value renders on screen.',
   },
   platformCapabilityStatus: {

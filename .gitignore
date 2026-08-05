@@ -20,6 +20,10 @@ node_modules/
 frontend/node_modules/
 frontend/dist/
 coverage/
+.coverage
+coverage.xml
+/mlflow.db
+/mlruns/
 playwright-report/
 test-results/
 /dist/
@@ -41,6 +45,10 @@ frontend/.claude/
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
 .mcp.json
+
+# Local agent/review tool state
+.pi/
+.polly/
 
 # OS/editor
 .DS_Store

@@ -13,7 +13,14 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { useConfigOptionsQuery } from '../lib/configOptionsQuery';
 import { queryKeys } from '../lib/queryKeys';
-import type { ConfigOptions, SavedDraft, SavedDraftInput, SavedLead, SavedLeadInput } from '../types';
+import type {
+  ConfigOptions,
+  SavedDraft,
+  SavedDraftInput,
+  SavedLead,
+  SavedLeadInput,
+  SessionResponse,
+} from '../types';
 
 /**
  * AppContext — theme, accent, density, configured tenant, drawer, Genie, approvals,
@@ -54,12 +61,16 @@ interface AppCtxValue {
   density: Density;
   setDensity: (d: Density) => void;
   lender: string;
+  canAccessAdmin: boolean;
   showEvidence: boolean;
   setShowEvidence: (v: boolean) => void;
   showConfidence: boolean;
   setShowConfidence: (v: boolean) => void;
   consoleOpen: boolean;
   setConsoleOpen: (v: boolean) => void;
+  recentActivityFocusRequest: number;
+  openConsoleRecentActivity: () => void;
+  acknowledgeRecentActivityFocus: () => void;
   drawer: DrawerSource | null;
   setDrawer: (d: DrawerSource | null) => void;
   genieOpen: boolean;
@@ -74,7 +85,7 @@ interface AppCtxValue {
   removeSavedLead: (borrowerId: string) => void;
   isLeadSaved: (borrowerId: string) => boolean;
   savedDrafts: Record<string, SavedDraft>;
-  saveDraft: (draft: SavedDraftInput) => void;
+  saveDraft: (draft: SavedDraftInput) => Promise<SavedDraft>;
   removeSavedDraft: (borrowerId: string, channel?: SavedDraft['channel']) => void;
   workspaceStatus: 'loading' | 'ready' | 'error';
   workspaceError: string | null;
@@ -168,6 +179,7 @@ export function AppProvider({ children }: PropsWithChildren) {
   const [consoleOpen, setConsoleOpenState] = useState<boolean>(() =>
     readStoredBool('mip.consoleOpen', false),
   );
+  const [recentActivityFocusRequest, setRecentActivityFocusRequest] = useState(0);
   const [drawer, setDrawer] = useState<DrawerSource | null>(null);
   const [genieOpen, setGenieOpen] = useState(false);
   const [approvals, setApprovals] = useState<Record<string, 'approved' | 'rejected'>>({});
@@ -177,6 +189,15 @@ export function AppProvider({ children }: PropsWithChildren) {
   const [workspaceStatus, setWorkspaceStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
   const [workspaceReloadToken, setWorkspaceReloadToken] = useState(0);
+  const sessionQuery = useQuery<SessionResponse>({
+    queryKey: ['session', 'access'],
+    queryFn: ({ signal }) => api.session(signal),
+    retry: false,
+  });
+  // TanStack retains the last successful session payload during background
+  // refetches. Authorization-sensitive surfaces therefore fail closed on the
+  // first load without flickering away after access has been established.
+  const canAccessAdmin = sessionQuery.data?.can_access_admin === true;
   const workspaceQuery = useQuery({
     queryKey: [...queryKeys.workspace(), workspaceReloadToken],
     queryFn: ({ signal }) => api.workspace(signal),
@@ -256,6 +277,13 @@ export function AppProvider({ children }: PropsWithChildren) {
   const setAccent = useCallback((a: Accent) => setAccentState(a), []);
   const setDensity = useCallback((d: Density) => setDensityState(d), []);
   const setConsoleOpen = useCallback((v: boolean) => setConsoleOpenState(v), []);
+  const openConsoleRecentActivity = useCallback(() => {
+    setConsoleOpenState(true);
+    setRecentActivityFocusRequest((request) => request + 1);
+  }, []);
+  const acknowledgeRecentActivityFocus = useCallback(() => {
+    setRecentActivityFocusRequest(0);
+  }, []);
   const setApproval = useCallback((borrowerId: string, state: 'approved' | 'rejected') => {
     setApprovals((cur) => ({ ...cur, [borrowerId]: state }));
   }, []);
@@ -338,43 +366,33 @@ export function AppProvider({ children }: PropsWithChildren) {
     (borrowerId: string) => Boolean(savedLeads[borrowerId]),
     [savedLeads],
   );
-  const saveDraft = useCallback((draft: SavedDraftInput) => {
-    if (!draft.borrower_id || draft.body.trim().length === 0) return;
-    const now = new Date().toISOString();
+  const saveDraft = useCallback(async (draft: SavedDraftInput): Promise<SavedDraft> => {
+    if (
+      !draft.borrower_id
+      || !draft.generation_id
+      || !/^[0-9a-f]{64}$/.test(draft.response_hash)
+    ) {
+      throw new Error('A borrower and audited draft proof are required.');
+    }
     setLastBorrowerIdState(draft.borrower_id);
-    let prior: SavedDraft | undefined;
-    const key = draftKey(draft.borrower_id, draft.channel);
-    setSavedDrafts((cur) => {
-      prior = cur[key];
-      return {
+    try {
+      const saved = await api.saveWorkspaceDraft(draft);
+      setSavedDrafts((cur) => ({
         ...cur,
-        [key]: {
-          ...prior,
-          ...draft,
-          channel: draft.channel,
-          saved_at: prior?.saved_at ?? now,
-          updated_at: now,
-        },
-      };
-    });
-    void api.saveWorkspaceDraft(draft)
-      .then((saved) => {
-        setSavedDrafts((cur) => ({ ...cur, [draftKey(saved.borrower_id, saved.channel)]: saved }));
-        setWorkspaceStatus('ready');
-        setWorkspaceError(null);
-      })
-      .catch((err: unknown) => {
-        setSavedDrafts((cur) => {
-          const { [key]: _discard, ...rest } = cur;
-          return prior ? { ...rest, [key]: prior } : rest;
-        });
-        setWorkspaceStatus('error');
-        setWorkspaceError(
-          err instanceof Error
-            ? `Couldn't save draft: ${err.message}`
-            : "Couldn't save draft.",
-        );
-      });
+        [draftKey(saved.borrower_id, saved.channel)]: saved,
+      }));
+      setWorkspaceStatus('ready');
+      setWorkspaceError(null);
+      return saved;
+    } catch (err: unknown) {
+      setWorkspaceStatus('error');
+      setWorkspaceError(
+        err instanceof Error
+          ? `Couldn't save draft: ${err.message}`
+          : "Couldn't save draft.",
+      );
+      throw err;
+    }
   }, []);
   const removeSavedDraft = useCallback((borrowerId: string, channel: SavedDraft['channel'] = 'email') => {
     let prior: SavedDraft | undefined;
@@ -410,9 +428,11 @@ export function AppProvider({ children }: PropsWithChildren) {
       accent, setAccent,
       density, setDensity,
       lender,
+      canAccessAdmin,
       showEvidence, setShowEvidence,
       showConfidence, setShowConfidence,
       consoleOpen, setConsoleOpen,
+      recentActivityFocusRequest, openConsoleRecentActivity, acknowledgeRecentActivityFocus,
       drawer, setDrawer,
       genieOpen, setGenieOpen,
       approvals, setApproval,
@@ -432,7 +452,8 @@ export function AppProvider({ children }: PropsWithChildren) {
     }),
     [
       theme, setTheme, accent, setAccent, density, setDensity,
-      lender, showEvidence, showConfidence, consoleOpen, setConsoleOpen,
+      lender, canAccessAdmin, showEvidence, showConfidence, consoleOpen, setConsoleOpen,
+      recentActivityFocusRequest, openConsoleRecentActivity, acknowledgeRecentActivityFocus,
       drawer, genieOpen, approvals, setApproval,
       lastBorrowerIdState, setLastBorrowerId, clearActorScopedState,
       savedLeads, saveLead, removeSavedLead, isLeadSaved,

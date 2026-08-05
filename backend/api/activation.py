@@ -14,11 +14,10 @@ from backend.schemas.activation import (
     ActivationStageResponse,
     ActivationSummary,
 )
-from backend.services.activation_state import (
-    ActivationStateStore,
-    get_activation_state_store,
-)
-from backend.services.audit_store import AuditStore, get_audit_store, resolve_actor
+from backend.services.activation_campaign_proof import CampaignActivationProof
+from backend.services.activation_state import ActivationStateStore, get_activation_state_store
+from backend.services.audit_store import AuditStore, get_audit_store
+from backend.services.campaign_targeting import campaign_contains_borrower
 from backend.services.eligibility import (
     get_eligibility_service,
     safe_write_suppression_audit,
@@ -27,9 +26,12 @@ from backend.services.error_sanitizer import safe_dependency_detail
 from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.lakebase import LakebaseError
 from backend.services.observability import emit
+from backend.services.rbac import ApproverDep
 from backend.services.repositories import (
     BorrowerRepository,
+    LeadRepository,
     get_borrower_repository,
+    get_lead_repository,
 )
 from backend.services.sales_state import SalesStateStore, get_sales_state_store
 
@@ -37,6 +39,7 @@ router = APIRouter(prefix="/activation", tags=["activation"])
 
 ActivationDep = Annotated[ActivationStateStore, Depends(get_activation_state_store)]
 BorrowerRepoDep = Annotated[BorrowerRepository, Depends(get_borrower_repository)]
+LeadRepoDep = Annotated[LeadRepository, Depends(get_lead_repository)]
 SalesStateDep = Annotated[SalesStateStore, Depends(get_sales_state_store)]
 AuditDep = Annotated[AuditStore, Depends(get_audit_store)]
 
@@ -60,7 +63,9 @@ def _assert_activation_eligible(
     suppression before rejecting the stage request.
     """
     if lifecycle.get("approval_status") != "approved":
-        raise HTTPException(status_code=409, detail="lead must be approved before activation staging")
+        raise HTTPException(
+            status_code=409, detail="lead must be approved before activation staging"
+        )
     decision = get_eligibility_service().evaluate(borrower)
     if decision.eligible:
         return
@@ -141,8 +146,10 @@ def stage_activation(
     _: Annotated[None, Depends(require_json_content_type)],
     store: ActivationDep,
     repo: BorrowerRepoDep,
+    lead_repo: LeadRepoDep,
     sales_state: SalesStateDep,
     audit: AuditDep,
+    actor: ApproverDep,
 ) -> ActivationStageResponse:
     """Stage an approved borrower for a governed customer destination.
 
@@ -151,7 +158,6 @@ def stage_activation(
     MIP after customer connector setup.
     """
 
-    actor = resolve_actor(request)
     borrower = repo.get(payload.borrower_id)
     if borrower is None:
         raise HTTPException(status_code=404, detail=f"Borrower {payload.borrower_id} not found")
@@ -173,18 +179,60 @@ def stage_activation(
         )
         lifecycle_approval_id = str(lifecycle.get("approval_id") or "")
         if lifecycle_approval_id != payload.approval_id:
-            raise HTTPException(status_code=409, detail="approval_id is not the current approved decision for this borrower")
+            raise HTTPException(
+                status_code=409,
+                detail="approval_id is not the current approved decision for this borrower",
+            )
         approved_decision = store.approved_decision_for(
             approval_id=payload.approval_id,
             borrower_id=payload.borrower_id,
         )
         if approved_decision is None:
-            raise HTTPException(status_code=409, detail="approval_id is not an approved decision for this borrower")
+            raise HTTPException(
+                status_code=409, detail="approval_id is not an approved decision for this borrower"
+            )
+        approved_campaign_id = str(approved_decision.get("campaign_id") or "").strip()
+        campaign_proof: CampaignActivationProof | None = None
+        if approved_campaign_id:
+            campaign_proof = store.campaign_activation_proof_for_approval(
+                approval_id=payload.approval_id,
+                borrower_id=payload.borrower_id,
+                campaign_id=approved_campaign_id,
+            )
+            if campaign_proof is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "campaign must be active with a valid saved treatment proof "
+                        "at activation time"
+                    ),
+                )
+            try:
+                is_treatment_member = campaign_contains_borrower(
+                    lead_repo,
+                    borrower_id=payload.borrower_id,
+                    campaign_id=campaign_proof.campaign_id,
+                    materialization_id=campaign_proof.materialization_id,
+                    delta_version=campaign_proof.delta_version,
+                    treatment_fingerprint=campaign_proof.treatment_fingerprint,
+                    suppression_policy=campaign_proof.suppression_policy,
+                )
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail="campaign targeting contract is invalid; rebuild the campaign",
+                ) from exc
+            if not is_treatment_member:
+                raise HTTPException(
+                    status_code=409,
+                    detail="borrower is not in the saved campaign treatment cohort",
+                )
         result = store.stage_borrower(
             borrower=borrower,
             destination=destination,
             payload=payload,
             approved_decision=approved_decision,
+            campaign_proof=campaign_proof,
             actor=actor,
         )
     except HTTPException:
@@ -198,6 +246,7 @@ def stage_activation(
         activation=result.activation,
         destination=destination,
         store=store,
+        lead_repo=lead_repo,
     )
     return ActivationStageResponse(
         staged=True,
@@ -211,6 +260,7 @@ def _maybe_deliver_salesforce(
     activation: ActivationOutboxItem,
     destination: ActivationDestination,
     store: ActivationStateStore,
+    lead_repo: LeadRepository,
 ) -> ActivationOutboxItem:
     """Best-effort synchronous Salesforce delivery after staging.
 
@@ -230,11 +280,25 @@ def _maybe_deliver_salesforce(
         return activation
     if not settings.salesforce_configured:
         return activation
-
     try:
         from backend.services.activation_delivery import deliver_to_salesforce
 
-        outcome = deliver_to_salesforce(activation, store=store)
+        outcome = deliver_to_salesforce(
+            activation.activation_id,
+            store=store,
+            lead_repo=lead_repo,
+        )
+        if (
+            activation.campaign_id
+            and not outcome.attempted
+            and outcome.activation.status == "cancelled"
+        ):
+            emit(
+                logging.getLogger(__name__),
+                "salesforce_delivery_campaign_not_authorized",
+                level=logging.WARNING,
+                activation_id=activation.activation_id,
+            )
         return outcome.activation
     except Exception as exc:  # noqa: BLE001 -- delivery must never fail the stage
         emit(

@@ -22,8 +22,8 @@ concurrency:
 env:
   # Mirror of pyproject.toml requires-python pin. Bump both in lockstep.
   PYTHON_VERSION: '3.11'
-  # frontend/package.json doesn't pin an engines.node; keep Node 22 LTS to
-  # match the local Vite + Playwright dev posture.
+  # frontend/package.json requires Node >=22.22; follow the current Node 22
+  # LTS line so CI receives patch updates while satisfying that floor.
   NODE_VERSION: '22'
   # Placeholder BUNDLE_VARs so `databricks bundle validate` can resolve
   # variable references without any real workspace secrets. The nightly
@@ -212,18 +212,17 @@ jobs:
             echo "::warning::gitleaks is unavailable; release_hygiene.py already validated banned artifact paths"
           fi
 
-  playwright-spec-parse:
+  playwright-offline:
     # Post-cutover the backend refuses to boot without live Databricks
     # credentials (see backend/runtime.py::_preflight_credentials), which
     # are intentionally absent in PR CI. So the offline Playwright job
-    # can't stand up a real uvicorn + vite pair. Instead we run
-    # `playwright test --list` which parses the config, collects tests,
-    # and exits — a cheap static check that the spec file + config are
-    # valid. Real end-to-end runs happen in nightly.yml against the
-    # deployed app with real secrets.
-    name: e2e (spec parse, offline)
+    # can't stand up a real uvicorn + vite pair. We still parse every spec,
+    # then serve the production frontend and execute the route-fulfilled
+    # Growth Agent handoff contract. Real-data end-to-end runs remain in
+    # nightly.yml against the deployed app with workspace credentials.
+    name: e2e (parse + governed handoff fixture)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -239,9 +238,34 @@ jobs:
             npm --prefix frontend install --no-audit --no-fund
           fi
       - name: Playwright test --list (parse + collect, no run)
-        # No browsers installed; --list does not launch them.
         working-directory: frontend
         run: npx playwright test --list
+      - name: Build production frontend
+        run: npm --prefix frontend run build
+      - name: Install Chromium
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+      - name: Execute governed handoff and virtualization fixtures
+        working-directory: frontend
+        env:
+          MIP_APP_URL: http://127.0.0.1:4173
+        run: |
+          npm run preview -- --host 127.0.0.1 --port 4173 > /tmp/mip-vite-preview.log 2>&1 &
+          preview_pid=$!
+          trap 'kill "$preview_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:4173/ >/dev/null; then
+              break
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              cat /tmp/mip-vite-preview.log
+              exit 1
+            fi
+            sleep 1
+          done
+          npx playwright test tests/e2e/growth_agent_handoff_fixture.spec.ts
+          E2E_LAYOUT_MOCK=1 npx playwright test tests/e2e/layout-stability.spec.ts \
+            --grep "expanded virtual-row geometry" --workers=1
 
   security-scan:
     # SAST + secret-scan gate. This job is credential-free like the rest

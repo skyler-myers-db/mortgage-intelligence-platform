@@ -12,11 +12,9 @@ import { api, isAbortError, type HealthPayload } from '../lib/api';
 /**
  * HealthProvider — one `/api/health` poll, shared via context.
  *
- * Before: `Topbar`, `AgentActivityLog`, and `DegradedBanner` each ran
- * their own `setInterval` health-fetch loop. 3× the load
- * on `/api/health`, 3 independent timers, and inconsistent state on
- * the same page (a degraded warehouse could show in the banner while
- * the topbar pill still said "up").
+ * Before: shell consumers ran independent `setInterval` health-fetch loops,
+ * multiplying `/api/health` load and risking inconsistent state on the same
+ * page.
  *
  * Now: one poll per document, cadence flips from `pollIntervalOkMs`
  * (8s) to `pollIntervalDegradedMs` (3s) when any dependency is down.

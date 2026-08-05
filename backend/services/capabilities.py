@@ -39,10 +39,10 @@ from backend.services.capability_genie_probe import (
     probe_native_visualization,
 )
 from backend.services.capability_serving_probes import (
-    query_serving_endpoint,
-    serving_response_has_payload,
+    query_serving_endpoint_with_proof,
 )
 from backend.services.databricks_sql_helpers import _validate_identifier, qualify
+from backend.services.supervisor_runtime import verify_supervisor_runtime
 
 
 class CapabilityStatus(str, Enum):
@@ -379,10 +379,10 @@ def probe_capabilities(
             key="agent_orchestrator",
             configured=True,
             configured_detail=(
-                "Supervisor agent id and serving endpoint are configured; a live "
-                "serving endpoint probe must pass before this row is claimable."
+                "Agent id metadata and an Agent Responses serving endpoint are configured; "
+                "an exact live endpoint probe must pass before this row is claimable."
             ),
-            not_provisioned_detail="Supervisor agent id or serving endpoint missing.",
+            not_provisioned_detail="Agent id metadata or serving endpoint missing.",
             live_statuses=live_statuses,
         )
     else:
@@ -394,7 +394,7 @@ def probe_capabilities(
     caps.append(
         Capability(
             key="agent_orchestrator",
-            label="Agent Framework orchestration",
+            label="Agent Responses orchestration",
             ga=True,
             status=orchestrator_status,
             detail=orchestrator_detail,
@@ -547,9 +547,17 @@ def collect_live_capability_statuses(
         conversation_status, response = probe_genie_turn(
             genie_client, make_status=LiveCapabilityStatus
         )
+        conversation_status = _exact_genie_turn_status(conversation_status, response)
         statuses["genie_conversation_api"] = conversation_status
-        statuses["genie_native_visualization"] = probe_native_visualization(
-            genie_client, response, make_status=LiveCapabilityStatus
+        statuses["genie_native_visualization"] = (
+            probe_native_visualization(
+                genie_client, response, make_status=LiveCapabilityStatus
+            )
+            if conversation_status.available
+            else LiveCapabilityStatus(
+                False,
+                "Native visualization was not probed because the Genie turn lacked exact completed-turn proof.",
+            )
         )
     if sql_client is not None:
         statuses["certified_metric_views"] = _probe_metric_views(sql_client)
@@ -604,6 +612,28 @@ def _probe_uc_functions(sql_client: Any) -> LiveCapabilityStatus:
     )
 
 
+def _exact_genie_turn_status(
+    initial: LiveCapabilityStatus,
+    response: Any | None,
+) -> LiveCapabilityStatus:
+    if not initial.available or response is None:
+        return initial
+    conversation_id = str(getattr(response, "conversation_id", "") or "").strip()
+    message_id = str(getattr(response, "message_id", "") or "").strip()
+    terminal_status = str(getattr(response, "genie_status", "") or "").strip().upper()
+    if not conversation_id or not message_id:
+        return LiveCapabilityStatus(False, "Genie turn did not return conversation/message proof.")
+    if terminal_status != "COMPLETED":
+        return LiveCapabilityStatus(
+            False,
+            f"Genie turn returned ids but terminal status was {terminal_status or 'missing'}, not COMPLETED.",
+        )
+    return LiveCapabilityStatus(
+        True,
+        "Live Genie Conversation API turn returned conversation/message ids with terminal status COMPLETED.",
+    )
+
+
 def _probe_lakebase_synced_tables(
     *,
     sql_client: Any,
@@ -624,20 +654,21 @@ def _probe_lakebase_synced_tables(
             _validate_identifier("table", table)
     except ValueError as exc:
         return LiveCapabilityStatus(False, str(exc))
-    metadata_permission_denied = False
     try:
         for table in tables:
             full_name = f"{catalog}.{schema}.{table}"
             try:
                 synced = workspace_client.database.get_synced_database_table(full_name)
-                status = synced.data_synchronization_status
-                state = _enum_value(getattr(status, "detailed_state", ""))
-                if not _synced_table_is_ready(state):
-                    return LiveCapabilityStatus(False, f"{full_name} sync state is {state or 'unknown'}.")
-            except Exception as exc:  # noqa: BLE001 - app SP may have SQL access but not Database API metadata
-                if type(exc).__name__ != "PermissionDenied":
-                    raise
-                metadata_permission_denied = True
+            except Exception as exc:  # noqa: BLE001 - fail closed on inaccessible metadata
+                return LiveCapabilityStatus(
+                    False,
+                    f"Database API metadata for {full_name} is unavailable "
+                    f"({type(exc).__name__}); SQL rows alone do not prove sync state.",
+                )
+            status = getattr(synced, "data_synchronization_status", None)
+            state = _enum_value(getattr(status, "detailed_state", ""))
+            if not _synced_table_is_ready(state):
+                return LiveCapabilityStatus(False, f"{full_name} sync state is {state or 'unknown'}.")
             row_count = _count_relation_rows(sql_client, full_name)
             if row_count <= 0:
                 return LiveCapabilityStatus(
@@ -646,14 +677,10 @@ def _probe_lakebase_synced_tables(
                 )
     except Exception as exc:  # noqa: BLE001 - dependency details stay bounded
         return LiveCapabilityStatus(False, f"Lakebase synced-table probe failed ({type(exc).__name__}).")
-    metadata_detail = (
-        "; Database API metadata was not visible to the app service principal, so SQL row-count proof was used"
-        if metadata_permission_denied
-        else " with metadata state verification"
-    )
     return LiveCapabilityStatus(
         True,
-        f"Live Lakebase synced-table probes passed for {len(tables)} MIP-owned serving tables{metadata_detail}.",
+        f"Live Lakebase synced-table metadata and row-count probes passed for "
+        f"{len(tables)} MIP-owned serving tables.",
     )
 
 
@@ -796,32 +823,46 @@ def _probe_agent_eval(workspace_client: Any, settings: Settings) -> LiveCapabili
 
 
 def _probe_agent_orchestrator(workspace_client: Any, settings: Settings) -> LiveCapabilityStatus:
-    endpoint = (settings.mip_agent_serving_endpoint or "").strip()
-    supervisor_id = (settings.mip_agent_supervisor_id or "").strip()
-    if not endpoint or not supervisor_id:
-        return LiveCapabilityStatus(False, "Supervisor id or serving endpoint is not configured.")
     try:
-        details = workspace_client.serving_endpoints.get(endpoint)
-        state = _enum_value(getattr(getattr(details, "state", None), "ready", None))
-        task = getattr(details, "task", None)
-        if state != "READY":
-            return LiveCapabilityStatus(False, f"Agent endpoint {endpoint} is not READY ({state}).")
-        if not _is_agent_responses_task(task):
-            return LiveCapabilityStatus(False, f"Endpoint {endpoint} task is {task}, not agent.")
-        response = query_serving_endpoint(
+        runtime, reason = verify_supervisor_runtime(workspace_client, settings)
+        if runtime is None:
+            detail = {
+                "supervisor_endpoint_mismatch": "Managed Supervisor metadata does not map to MIP_AGENT_SUPERVISOR_ENDPOINT.",
+                "supervisor_identity_mismatch": "Databricks Agent Responses metadata did not match MIP_AGENT_SUPERVISOR_ID.",
+                "orchestrator_not_configured": "Agent id metadata or serving endpoint is not configured.",
+                "gateway_endpoint_recurses_to_itself": "Gateway proxy and managed Supervisor endpoints must be distinct.",
+                "gateway_product_endpoint_mismatch": "Product Agent Responses traffic and AI Gateway proof must name the same outer endpoint.",
+                "gateway_inference_table_not_configured": "The governed Gateway inference-table binding is not configured.",
+            }.get(reason or "")
+            if detail is None and (reason or "").startswith("gateway_task_not_agent:"):
+                detail = f"Gateway endpoint task is {(reason or '').partition(':')[2]}, not agent."
+            if detail is None and (reason or "").startswith("gateway_endpoint_not_ready:"):
+                detail = f"Gateway endpoint is not READY ({(reason or '').partition(':')[2]})."
+            if detail is None:
+                detail = f"Databricks Agent Responses runtime verification failed ({reason})."
+            return LiveCapabilityStatus(False, detail)
+        endpoint = runtime.endpoint
+        supervisor_id = runtime.supervisor_id
+        execution = query_serving_endpoint_with_proof(
             workspace_client,
             endpoint,
-            task=str(task),
+            task="agent/v1/responses",
             prompt=(
                 "Capability readiness check. Reply with a one-sentence acknowledgement "
                 "that the Mortgage Growth Agent endpoint is reachable."
             ),
         )
-        if not serving_response_has_payload(response):
-            return LiveCapabilityStatus(False, f"Agent endpoint {endpoint} returned no response payload.")
+        if not execution.proves_agent_response:
+            return LiveCapabilityStatus(
+                False, f"Agent endpoint {endpoint} returned no response payload."
+            )
+        response_proof = f", response {execution.response_id}" if execution.response_id else ""
         return LiveCapabilityStatus(
             True,
-            f"Live Supervisor Agent endpoint accepted a bounded query ({endpoint}, supervisor {supervisor_id}).",
+            f"Managed Supervisor {supervisor_id} is source-bound through reviewed proxy "
+            f"{runtime.model_name} at {endpoint}; live endpoint returned output "
+            f"(task agent/v1/responses, transport "
+            f"{execution.transport}{response_proof}).",
         )
     except Exception as exc:  # noqa: BLE001
         return LiveCapabilityStatus(False, f"Agent Orchestrator probe failed ({type(exc).__name__}).")

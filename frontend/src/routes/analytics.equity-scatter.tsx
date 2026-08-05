@@ -2,20 +2,35 @@
 // budget. Keep this route module explicit, like its analytics siblings.
 'use no memo';
 
-import { useState, type CSSProperties, type ReactNode } from 'react';
-import { Link } from 'react-router-dom';
+import {
+  useId,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent,
+  type ReactNode,
+} from 'react';
+import { Link } from 'react-router';
 import { EvidenceChip } from '../components/Primitives';
 import { api, type AnalyticsQueryOptions } from '../lib/api';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
-import { scoreBand } from '../lib/opportunityScore';
+import {
+  SCORE_BAND_HIGH_MIN,
+  SCORE_BAND_MED_MIN,
+  scoreBand,
+  type ScoreBand,
+} from '../lib/opportunityScore';
 import { queryKeys } from '../lib/queryKeys';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import type {
+  EquitySpreadCoordinateGroup,
   EquitySpreadOverview,
+  EquitySpreadPoint,
   EquitySpreadPointsResponse,
   EquitySpreadViewport,
 } from '../types';
 import { LoadState } from './analytics.charts';
+import './analytics.scatter.css';
 import {
   MAX_SCATTER_POINTS,
   binCellRect,
@@ -38,7 +53,7 @@ import {
  * mip.gold.equity_spread_points — no raw borrower rows cross the wire until
  * the user zooms. Selecting a cell loads the REAL borrowers inside that
  * window from /analytics/economics/points, capped server-side, with an
- * honest "showing N of M" line. Dots are colored by the canonical S1 score
+ * honest returned-versus-matching counts. Dots are colored by the canonical S1 score
  * bands (scoreBand → .score--high/med/low) and deep-link to Borrower 360,
  * where the draft-only outreach composer is the terminal action.
  */
@@ -105,69 +120,130 @@ function ScatterFrame({
   yTicks,
   overlay,
   meta,
+  scoreScope,
 }: {
   layout: ScatterLayout;
   xTicks: number[];
   yTicks: number[];
   overlay: ReactNode;
   meta: ReactNode;
+  scoreScope: 'overview' | 'borrower';
 }) {
   return (
-    <div className="analytics-scatter-wrap">
-      <div className="analytics-chart__plot">
-        <div className="analytics-chart__y-ticks" aria-hidden="true">
-          {[...yTicks].reverse().map((tick) => (
-            <span
-              key={tick}
-              className="analytics-chart__tick analytics-chart__tick--y"
-              style={{ '--tick-pos': `${100 - pct(tick - layout.yMin, layout.yRange)}%` } as CSSProperties}
-            >
-              {formatAxisTick(tick)}
-            </span>
-          ))}
-        </div>
-        <div className="analytics-chart__canvas">
-          <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="analytics-scatter" role="img" aria-label="Equity versus rate spread grid">
-            {yTicks.map((tick) => (
-              <line
-                key={`y-${tick}`}
-                x1="0"
-                x2="100"
-                y1={100 - pct(tick - layout.yMin, layout.yRange)}
-                y2={100 - pct(tick - layout.yMin, layout.yRange)}
-                className="analytics-chart__grid"
-                vectorEffect="non-scaling-stroke"
-              />
-            ))}
-            {xTicks.map((tick) => (
-              <line
-                key={`x-${tick}`}
-                x1={pct(tick - layout.xMin, layout.xRange)}
-                x2={pct(tick - layout.xMin, layout.xRange)}
-                y1="0"
-                y2="100"
-                className="analytics-chart__grid"
-                vectorEffect="non-scaling-stroke"
-              />
-            ))}
-          </svg>
-          {overlay}
-          <div className="analytics-chart__x-ticks" aria-hidden="true">
-            {xTicks.map((tick) => (
+    <>
+      <ScoreBandLegend scope={scoreScope} />
+      <div className="analytics-scatter-wrap">
+        <div className="analytics-chart__plot">
+          <div className="analytics-chart__y-ticks" aria-hidden="true">
+            {[...yTicks].reverse().map((tick) => (
               <span
                 key={tick}
-                className="analytics-chart__tick analytics-chart__tick--x"
-                style={{ '--tick-pos': `${pct(tick - layout.xMin, layout.xRange)}%` } as CSSProperties}
+                className="analytics-chart__tick analytics-chart__tick--y"
+                style={{ '--tick-pos': `${100 - pct(tick - layout.yMin, layout.yRange)}%` } as CSSProperties}
               >
                 {formatAxisTick(tick)}
               </span>
             ))}
           </div>
+          <div className="analytics-chart__canvas">
+            <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="analytics-scatter" role="img" aria-label="Equity versus rate spread grid">
+              {yTicks.map((tick) => (
+                <line
+                  key={`y-${tick}`}
+                  x1="0"
+                  x2="100"
+                  y1={100 - pct(tick - layout.yMin, layout.yRange)}
+                  y2={100 - pct(tick - layout.yMin, layout.yRange)}
+                  className="analytics-chart__grid"
+                  vectorEffect="non-scaling-stroke"
+                />
+              ))}
+              {xTicks.map((tick) => (
+                <line
+                  key={`x-${tick}`}
+                  x1={pct(tick - layout.xMin, layout.xRange)}
+                  x2={pct(tick - layout.xMin, layout.xRange)}
+                  y1="0"
+                  y2="100"
+                  className="analytics-chart__grid"
+                  vectorEffect="non-scaling-stroke"
+                />
+              ))}
+            </svg>
+            {overlay}
+            <div className="analytics-chart__x-ticks" aria-hidden="true">
+              {xTicks.map((tick) => (
+                <span
+                  key={tick}
+                  className="analytics-chart__tick analytics-chart__tick--x"
+                  style={{ '--tick-pos': `${pct(tick - layout.xMin, layout.xRange)}%` } as CSSProperties}
+                >
+                  {formatAxisTick(tick)}
+                </span>
+              ))}
+            </div>
+          </div>
         </div>
+        <div className="analytics-chart__axis analytics-chart__axis--x">Equity percent</div>
+        <div className="analytics-chart__axis analytics-chart__axis--y">Rate spread bps</div>
+        {meta}
       </div>
-      <div className="analytics-chart__axis analytics-chart__axis--x">Equity percent</div>
-      <div className="analytics-chart__axis analytics-chart__axis--y">Rate spread bps</div>
-      {meta}
+    </>
+  );
+}
+
+const SCORE_BAND_LEGEND: ReadonlyArray<{
+  band: ScoreBand;
+  label: string;
+  range: string;
+}> = [
+  { band: 'high', label: 'High', range: `${SCORE_BAND_HIGH_MIN}-100` },
+  {
+    band: 'med',
+    label: 'Medium',
+    range: `${SCORE_BAND_MED_MIN}-${SCORE_BAND_HIGH_MIN - 1}`,
+  },
+  { band: 'low', label: 'Low', range: `0-${SCORE_BAND_MED_MIN - 1}` },
+];
+
+const CLUSTER_PAGE_SIZE = 50;
+
+export function ScoreBandLegend({ scope }: { scope: 'overview' | 'borrower' }) {
+  const scopeLabel = scope === 'overview' ? 'overview cell means' : 'borrower drilldown points';
+  return (
+    <div
+      className="analytics-scatter-legend"
+      role="group"
+      aria-label={`Opportunity score color legend for ${scopeLabel}`}
+    >
+      <div className="analytics-scatter-legend__items chip-row">
+        {SCORE_BAND_LEGEND.map(({ band, label, range }) => (
+          <span key={band} className={`score score--${band} analytics-scatter-legend__band`}>
+            <span className="score__dot" aria-hidden="true" />
+            {label} {range}
+          </span>
+        ))}
+        {scope === 'borrower' && (
+          <span className="analytics-scatter-legend__cluster">
+            <span className="analytics-scatter-legend__cluster-count" aria-hidden="true">2+</span>
+            Exact-coordinate cluster count
+          </span>
+        )}
+        {scope === 'overview' && (
+          <span className="analytics-scatter-legend__density">
+            <span className="analytics-scatter-legend__density-scale" aria-hidden="true">
+              <span className="analytics-scatter-legend__density-swatch is-lower" />
+              <span className="analytics-scatter-legend__density-swatch is-higher" />
+            </span>
+            Opacity: lower to higher borrower density
+          </span>
+        )}
+      </div>
+      <p className="analytics-scatter-legend__scope muted fs-12 flush">
+        {scope === 'overview'
+          ? 'Color metric: mean opportunity score per overview cell.'
+          : 'Colors show individual opportunity scores. A numbered marker uses the highest returned score in its cluster; its number is the exact coordinate population. Open it for ranked links returned under the server cap.'}
+      </p>
     </div>
   );
 }
@@ -179,9 +255,14 @@ export function EquitySpreadBinsView({
   overview: EquitySpreadOverview;
   onZoom: (viewport: EquitySpreadViewport) => void;
 }) {
+  const binKeys = overview.bins.map((bin) => `${bin.equity_bin_pct}:${bin.spread_bin_bps}`);
+  const [activeMarkerKey, setActiveMarkerKey] = useState<string | null>(binKeys[0] ?? null);
   if (overview.bins.length === 0) {
     return <div className="analytics-empty">No borrower points returned.</div>;
   }
+  const resolvedActiveMarkerKey = activeMarkerKey && binKeys.includes(activeMarkerKey)
+    ? activeMarkerKey
+    : binKeys[0];
   const layout = overviewScatterLayout(overview);
   const maxCount = Math.max(1, ...overview.bins.map((bin) => bin.borrower_count));
   return (
@@ -189,14 +270,20 @@ export function EquitySpreadBinsView({
       layout={layout}
       xTicks={makeTicks(overview.equity_domain_min, overview.equity_domain_max)}
       yTicks={makeTicks(overview.spread_domain_min, overview.spread_domain_max)}
+      scoreScope="overview"
       overlay={
-        <div className="analytics-scatter__points" aria-label="Borrower density cells">
+        <div
+          className="analytics-scatter__points"
+          aria-label="Borrower density cells"
+          onKeyDown={handleScatterMarkerNavigation}
+        >
           {overview.bins.map((bin) => {
+            const markerKey = `${bin.equity_bin_pct}:${bin.spread_bin_bps}`;
             const rect = binCellRect(bin, overview);
             const band = scoreBand(bin.mean_opportunity_score);
             return (
               <button
-                key={`${bin.equity_bin_pct}:${bin.spread_bin_bps}`}
+                key={markerKey}
                 type="button"
                 className={`analytics-scatter__bin score--${band}`}
                 style={{
@@ -209,6 +296,10 @@ export function EquitySpreadBinsView({
                 onClick={() => onZoom(binZoomViewport(bin, overview))}
                 aria-label={`${fmt(bin.borrower_count)} borrowers near ${bin.equity_bin_pct}% equity and ${bin.spread_bin_bps} bps spread, mean score ${bin.mean_opportunity_score}. Zoom in to load real borrowers.`}
                 title={`${fmt(bin.borrower_count)} borrowers · mean score ${bin.mean_opportunity_score} · ${fmt(bin.in_the_money_borrowers)} in the money`}
+                data-scatter-marker
+                data-scatter-key={markerKey}
+                tabIndex={markerKey === resolvedActiveMarkerKey ? 0 : -1}
+                onFocus={() => setActiveMarkerKey(markerKey)}
               />
             );
           })}
@@ -225,19 +316,32 @@ export function EquitySpreadBinsView({
 }
 
 export function EquitySpreadPointsView({ payload }: { payload: EquitySpreadPointsResponse }) {
+  const [openClusterKey, setOpenClusterKey] = useState<string | null>(null);
+  const [activeMarkerKey, setActiveMarkerKey] = useState<string | null>(null);
   const layout = zoomScatterLayout(payload.viewport);
-  // The server orders by opportunity score DESC and caps at point_cap; keep
-  // the DOM responsive by plotting at most MAX_SCATTER_POINTS of those and
-  // saying so — the meta line never pretends the plot is the population.
+  // The server orders by opportunity score DESC and caps at point_cap. Limit
+  // the number of displayed coordinates to those represented by the first
+  // MAX_SCATTER_POINTS rows, but aggregate every returned borrower sharing a
+  // displayed coordinate. This keeps the marker DOM bounded without showing
+  // an exact-looking cluster count that is only a client-side floor.
   const plotted = payload.points.slice(0, MAX_SCATTER_POINTS);
+  const plottedCoordinates = new Set(plotted.map(pointCoordinateKey));
+  const coordinateGroups = groupExactCoordinatePoints(payload.points).filter(
+    (group) => plottedCoordinates.has(group.key),
+  );
+  const resolvedActiveMarkerKey = activeMarkerKey
+    && coordinateGroups.some((group) => group.key === activeMarkerKey)
+    ? activeMarkerKey
+    : coordinateGroups[0]?.key ?? null;
   const meta = (
     <p className="analytics-scatter-meta muted fs-12" data-testid="scatter-meta">
-      Showing {fmt(payload.showing)} of {fmt(payload.total_matching)} borrowers in this window
+      Plotting {fmt(plotted.length)} of {fmt(payload.showing)} returned borrowers
+      {' '}({fmt(payload.total_matching)} total matching this window)
       {payload.truncated ? ` (server cap ${fmt(payload.point_cap)})` : ''}
       {plotted.length < payload.points.length
-        ? `; plotting the top ${fmt(plotted.length)} by opportunity score`
+        ? `; the plotted points are the top ${fmt(plotted.length)} by opportunity score across ${fmt(coordinateGroups.length)} coordinate markers`
         : ''}
-      . Dots open Borrower 360.
+      . Single points open Borrower 360; numbered clusters show the exact coordinate population and the ranked borrower links returned under the server cap.
     </p>
   );
   if (payload.points.length === 0) {
@@ -252,28 +356,226 @@ export function EquitySpreadPointsView({ payload }: { payload: EquitySpreadPoint
       layout={layout}
       xTicks={makeTicks(payload.viewport.equity_min, payload.viewport.equity_max)}
       yTicks={makeTicks(payload.viewport.spread_min, payload.viewport.spread_max)}
+      scoreScope="borrower"
       overlay={
-        <div className="analytics-scatter__points" aria-label="Borrower drilldown points">
-          {plotted.map((point) => {
-            const position = scatterPosition(point.equity_pct, point.rate_spread_bps, layout);
-            const band = point.score_band ?? scoreBand(point.opportunity_score);
-            return (
-              <Link
-                key={point.borrower_id}
-                className={`analytics-scatter__dot analytics-scatter__dot--band score--${band}`}
-                to={`/borrower-360/${encodeURIComponent(point.borrower_id)}`}
-                style={{
-                  '--dot-x': `${position.xPct}%`,
-                  '--dot-y': `${position.yPct}%`,
-                } as CSSProperties}
-                aria-label={`${point.display_name}: ${point.equity_pct}% equity, ${point.rate_spread_bps} bps spread, score ${point.opportunity_score} (${band}). Open Borrower 360.`}
-                title={`${point.display_name} · ${point.segment} · ${point.state} · ${point.equity_pct}% equity · ${point.rate_spread_bps} bps · score ${point.opportunity_score}`}
+        <div
+          className="analytics-scatter__points"
+          aria-label="Borrower drilldown points"
+          onKeyDown={handleScatterMarkerNavigation}
+        >
+          {coordinateGroups.map((group) => (
+            group.coordinate_total === 1 ? (
+              <ScatterPointLink
+                key={group.key}
+                point={group.points[0]}
+                layout={layout}
+                tabIndex={group.key === resolvedActiveMarkerKey ? 0 : -1}
+                onFocus={() => setActiveMarkerKey(group.key)}
               />
-            );
-          })}
+            ) : (
+              <ScatterPointCluster
+                key={group.key}
+                group={group}
+                layout={layout}
+                open={openClusterKey === group.key}
+                onOpenChange={(open) => setOpenClusterKey(open ? group.key : null)}
+                tabIndex={group.key === resolvedActiveMarkerKey ? 0 : -1}
+                onFocus={() => setActiveMarkerKey(group.key)}
+              />
+            )
+          ))}
         </div>
       }
       meta={meta}
     />
+  );
+}
+
+function handleScatterMarkerNavigation(event: KeyboardEvent<HTMLDivElement>) {
+  const direction = event.key === 'ArrowRight' || event.key === 'ArrowDown'
+    ? 1
+    : event.key === 'ArrowLeft' || event.key === 'ArrowUp'
+      ? -1
+      : 0;
+  if (direction === 0 && event.key !== 'Home' && event.key !== 'End') return;
+  const markers = [...event.currentTarget.querySelectorAll<HTMLElement>('[data-scatter-marker]')];
+  const current = event.target instanceof HTMLElement ? markers.indexOf(event.target) : -1;
+  if (current < 0 || markers.length === 0) return;
+  event.preventDefault();
+  const next = event.key === 'Home'
+    ? 0
+    : event.key === 'End'
+      ? markers.length - 1
+      : (current + direction + markers.length) % markers.length;
+  markers[next]?.focus();
+}
+
+function pointCoordinateKey(point: Pick<EquitySpreadPoint, 'equity_pct' | 'rate_spread_bps'>): string {
+  return `${point.equity_pct}\u0000${point.rate_spread_bps}`;
+}
+
+export function groupExactCoordinatePoints(
+  points: ReadonlyArray<EquitySpreadPoint>,
+): EquitySpreadCoordinateGroup[] {
+  const groups = new Map<string, EquitySpreadCoordinateGroup>();
+  for (const point of points) {
+    const key = pointCoordinateKey(point);
+    const existing = groups.get(key);
+    if (existing) {
+      existing.points.push(point);
+      existing.coordinate_total = Math.max(existing.coordinate_total, point.coordinate_total);
+    } else {
+      groups.set(key, {
+        key,
+        equity_pct: point.equity_pct,
+        rate_spread_bps: point.rate_spread_bps,
+        coordinate_total: point.coordinate_total,
+        points: [point],
+      });
+    }
+  }
+  // Preserve the API's opportunity_score DESC order inside every coordinate.
+  // Sorting by the masked id here would make the UI call an alphabetical list
+  // "ranked" even though the server already returned the governed ranking.
+  return [...groups.values()];
+}
+
+function ScatterPointLink({
+  point,
+  layout,
+  tabIndex,
+  onFocus,
+}: {
+  point: EquitySpreadPoint;
+  layout: ScatterLayout;
+  tabIndex: number;
+  onFocus: () => void;
+}) {
+  const position = scatterPosition(point.equity_pct, point.rate_spread_bps, layout);
+  const band = point.score_band ?? scoreBand(point.opportunity_score);
+  return (
+    <Link
+      className={`analytics-scatter__dot analytics-scatter__dot--band score--${band}`}
+      to={`/borrower-360/${encodeURIComponent(point.borrower_id)}`}
+      style={{
+        '--dot-x': `${position.xPct}%`,
+        '--dot-y': `${position.yPct}%`,
+      } as CSSProperties}
+      aria-label={`${point.display_name}: ${point.equity_pct}% equity, ${point.rate_spread_bps} bps spread, score ${point.opportunity_score} (${band}). Open Borrower 360.`}
+      title={`${point.display_name} · ${point.segment} · ${point.state} · ${point.equity_pct}% equity · ${point.rate_spread_bps} bps · score ${point.opportunity_score}`}
+      data-scatter-marker
+      data-scatter-key={pointCoordinateKey(point)}
+      tabIndex={tabIndex}
+      onFocus={onFocus}
+    />
+  );
+}
+
+function ScatterPointCluster({
+  group,
+  layout,
+  open,
+  onOpenChange,
+  tabIndex,
+  onFocus,
+}: {
+  group: EquitySpreadCoordinateGroup;
+  layout: ScatterLayout;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  tabIndex: number;
+  onFocus: () => void;
+}) {
+  const panelId = useId();
+  const [visibleCount, setVisibleCount] = useState(CLUSTER_PAGE_SIZE);
+  const markerRef = useRef<HTMLButtonElement>(null);
+  const position = scatterPosition(group.equity_pct, group.rate_spread_bps, layout);
+  const highestScore = Math.max(...group.points.map((point) => point.opportunity_score));
+  const returnedCount = group.points.length;
+  const cappedMembership = group.coordinate_total > returnedCount;
+  const membershipLabel = cappedMembership
+    ? `${group.coordinate_total} borrowers; showing ${returnedCount} ranked links returned under server cap`
+    : `${group.coordinate_total} borrowers`;
+  const band = scoreBand(highestScore);
+  const alignment = position.xPct < 24
+    ? 'analytics-scatter__cluster--align-start'
+    : position.xPct > 76
+      ? 'analytics-scatter__cluster--align-end'
+      : '';
+  const vertical = position.yPct > 58 ? 'analytics-scatter__cluster--above' : '';
+  return (
+    <div
+      className={`analytics-scatter__cluster ${alignment} ${vertical}`}
+      style={{
+        '--dot-x': `${position.xPct}%`,
+        '--dot-y': `${position.yPct}%`,
+      } as CSSProperties}
+      onKeyDown={(event) => {
+        if (event.key !== 'Escape' || !open) return;
+        event.preventDefault();
+        onOpenChange(false);
+        markerRef.current?.focus();
+      }}
+    >
+      <button
+        ref={markerRef}
+        type="button"
+        className={`analytics-scatter__cluster-marker score--${band}`}
+        aria-expanded={open}
+        aria-controls={panelId}
+        aria-label={`${membershipLabel} at ${group.equity_pct}% equity and ${group.rate_spread_bps} bps spread. Open exact-coordinate cluster.`}
+        title={`${membershipLabel} at the same coordinate`}
+        onClick={() => onOpenChange(!open)}
+        data-scatter-marker
+        data-scatter-key={group.key}
+        tabIndex={tabIndex}
+        onFocus={onFocus}
+      >
+        {group.coordinate_total}
+      </button>
+      <div
+        id={panelId}
+        className="analytics-scatter__cluster-panel"
+        role="group"
+        aria-label={`${membershipLabel} at ${group.equity_pct}% equity and ${group.rate_spread_bps} bps spread`}
+        hidden={!open}
+      >
+        <div className="analytics-scatter__cluster-title">
+          {membershipLabel} · {group.equity_pct}% equity · {group.rate_spread_bps} bps
+        </div>
+        {open && <ul className="analytics-scatter__cluster-list">
+          {group.points.slice(0, visibleCount).map((point) => {
+            const pointBand = point.score_band ?? scoreBand(point.opportunity_score);
+            return (
+              <li key={point.borrower_id}>
+                <Link
+                  className="analytics-scatter__cluster-link"
+                  to={`/borrower-360/${encodeURIComponent(point.borrower_id)}`}
+                  aria-label={`${point.display_name}, ${point.borrower_id}, score ${point.opportunity_score} (${pointBand}). Open Borrower 360.`}
+                >
+                  <span className={`analytics-scatter__cluster-score score--${pointBand}`} aria-hidden="true" />
+                  <span>
+                    <strong>{point.display_name}</strong>
+                    <span className="mono">{point.borrower_id}</span>
+                  </span>
+                  <span className="mono num">{point.opportunity_score}</span>
+                </Link>
+              </li>
+            );
+          })}
+          {visibleCount < group.points.length && (
+            <li>
+              <button
+                type="button"
+                className="analytics-scatter__cluster-more"
+                onClick={() => setVisibleCount((count) => Math.min(count + CLUSTER_PAGE_SIZE, group.points.length))}
+              >
+                Show {Math.min(CLUSTER_PAGE_SIZE, group.points.length - visibleCount)} more
+              </button>
+            </li>
+          )}
+        </ul>}
+      </div>
+    </div>
   );
 }

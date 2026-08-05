@@ -186,6 +186,7 @@ ack() {
   fi
 }
 
+# shellcheck disable=SC2329  # Invoked indirectly by the EXIT/INT/TERM trap.
 cleanup() {
   local rc=$?
   if [[ -n "$DRILL_BACKEND_PID" ]] && kill -0 "$DRILL_BACKEND_PID" 2>/dev/null; then
@@ -194,7 +195,7 @@ cleanup() {
     wait "$DRILL_BACKEND_PID" 2>/dev/null || true
   fi
   log "evidence log: $LOG"
-  exit $rc
+  exit "$rc"
 }
 trap cleanup EXIT INT TERM
 

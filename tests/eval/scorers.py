@@ -16,7 +16,9 @@ from typing import Any
 CASE_PATH = Path(__file__).with_name("golden_agent_cases.jsonl")
 MIN_GOLDEN_CASES = 5
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
-_UC_THREE_PART = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*$")
+_UC_THREE_PART = re.compile(
+    r"^[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*$"
+)
 _TRUSTED_ASSET_SUFFIXES = (
     ".gold.lead_population",
     ".gold.segment_population",
@@ -84,11 +86,10 @@ def _trusted_source_asset(value: Any) -> bool:
 def score_count_reconciliation(response: dict[str, Any], case: dict[str, Any]) -> dict[str, Any]:
     """Score the broad-vs-actionable count contract for a Growth Agent answer.
 
-    The scorer is trace-aware: a passing non-error answer must carry a stable
-    trace id, a tool-result hash, a trusted source-asset list, and the explicit
-    "Broad vs actionable reconciliation" policy check. This catches the exact
-    class of regressions where the answer headline and the Lead Queue handoff
-    are both individually valid but no longer refer to a reconciled population.
+    Equal counts are necessary but insufficient. A passing answer must also
+    prove that the source/action cohort and the complete Lead Queue destination
+    contain the same borrower IDs under one source snapshot, with the
+    destination fingerprint bound to the answer's tool-result hash.
     """
 
     if case.get("expected_error"):
@@ -99,18 +100,52 @@ def score_count_reconciliation(response: dict[str, Any], case: dict[str, Any]) -
 
     broad_total = _number(response.get("broad_total"))
     actionable_total = _number(response.get("actionable_total"))
+    destination_total = _number(response.get("destination_total"))
     route = str(response.get("route") or "")
     trace_id = str(response.get("trace_id") or "")
     tool_hash = str(response.get("tool_result_hash") or "")
+    source_fingerprint = str(
+        response.get("actionable_cohort_fingerprint")
+        or response.get("source_cohort_fingerprint")
+        or ""
+    )
+    destination_fingerprint = str(response.get("destination_cohort_fingerprint") or "")
+    fingerprint_tool_hash = str(response.get("destination_fingerprint_tool_result_hash") or "")
+    source_snapshot = str(
+        response.get("actionable_snapshot_id") or response.get("source_snapshot_id") or ""
+    )
+    destination_snapshot = str(response.get("destination_snapshot_id") or "")
     source_assets = response.get("source_assets")
     checks = {
         "broad_total_present": broad_total is not None,
         "actionable_total_present": actionable_total is not None,
+        "destination_total_present": destination_total is not None,
         "counts_ordered": (
             broad_total is not None
             and actionable_total is not None
             and broad_total >= actionable_total >= 0
         ),
+        "destination_matches_actionable": (
+            destination_total is not None
+            and actionable_total is not None
+            and destination_total == actionable_total
+        ),
+        "source_cohort_fingerprint_present": bool(_HEX64.fullmatch(source_fingerprint)),
+        "destination_cohort_fingerprint_present": bool(_HEX64.fullmatch(destination_fingerprint)),
+        "cohort_identity_matches": (
+            bool(source_fingerprint)
+            and bool(destination_fingerprint)
+            and source_fingerprint == destination_fingerprint
+        ),
+        "destination_fingerprint_bound_to_tool_result": (
+            bool(_HEX64.fullmatch(tool_hash)) and fingerprint_tool_hash == tool_hash
+        ),
+        "common_snapshot": (
+            bool(source_snapshot)
+            and bool(destination_snapshot)
+            and source_snapshot == destination_snapshot
+        ),
+        "destination_identity_complete": not bool(response.get("destination_identity_error")),
         "eligible_handoff": "marketing_eligibility=Eligible+only" in route,
         "trace_id_present": trace_id.startswith("agent-trace-"),
         "tool_result_hash_present": bool(_HEX64.fullmatch(tool_hash)),
@@ -130,6 +165,11 @@ def score_count_reconciliation(response: dict[str, Any], case: dict[str, Any]) -
         "facts": {
             "broad_total": broad_total,
             "actionable_total": actionable_total,
+            "destination_total": destination_total,
+            "source_cohort_fingerprint": source_fingerprint,
+            "destination_cohort_fingerprint": destination_fingerprint,
+            "source_snapshot_id": source_snapshot,
+            "destination_snapshot_id": destination_snapshot,
             "route": route,
             "trace_id": trace_id,
         },
@@ -170,9 +210,12 @@ def score_growth_agent_response(response: dict[str, Any], case: dict[str, Any]) 
     all pass for an eval case to be considered successful.
     """
 
-    workflow = response.get("workflow") if isinstance(response.get("workflow"), dict) else {}
-    criteria = response.get("criteria") if isinstance(response.get("criteria"), dict) else {}
-    filters = criteria.get("lead_queue_filters") if isinstance(criteria.get("lead_queue_filters"), dict) else {}
+    workflow_value = response.get("workflow")
+    workflow: dict[str, Any] = workflow_value if isinstance(workflow_value, dict) else {}
+    criteria_value = response.get("criteria")
+    criteria: dict[str, Any] = criteria_value if isinstance(criteria_value, dict) else {}
+    filters_value = criteria.get("lead_queue_filters")
+    filters = filters_value if isinstance(filters_value, dict) else {}
     route = str(response.get("route") or "")
     serialized = json.dumps(response, sort_keys=True, default=str).lower()
     expected_error = case.get("expected_error")
@@ -182,8 +225,7 @@ def score_growth_agent_response(response: dict[str, Any], case: dict[str, Any]) 
             "expected_error": str(expected_error) in error_text,
             "no_success_workflow": not workflow.get("id"),
             "no_forbidden_terms": not any(
-                str(term).lower() in serialized
-                for term in case.get("forbidden_terms", [])
+                str(term).lower() in serialized for term in case.get("forbidden_terms", [])
             ),
         }
         passed = all(checks.values())
@@ -219,7 +261,9 @@ def score_growth_agent_response(response: dict[str, Any], case: dict[str, Any]) 
     }
 
 
-def score_batch(responses_by_case_id: dict[str, dict[str, Any]], cases: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+def score_batch(
+    responses_by_case_id: dict[str, dict[str, Any]], cases: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
     """Score multiple responses and return a compact eval summary."""
 
     loaded_cases = cases if cases is not None else load_cases()

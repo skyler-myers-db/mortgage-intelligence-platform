@@ -6,13 +6,17 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { useApp } from '../AppContext';
 import { Icon, type IconName } from '../Icon';
 import { api } from '../../lib/api';
 import type { LeadSummary } from '../../types';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
-import { filterCommandActions, type CommandAction } from './commandActions';
+import {
+  commandActionsForAccess,
+  filterCommandActions,
+  type CommandAction,
+} from './commandActions';
 
 /**
  * ⌘K command palette (re-audit #4 Buyer-Wow #1). Reuses the wired
@@ -36,7 +40,14 @@ const MAX_BORROWERS = 6;
 
 export function CommandPalette() {
   const navigate = useNavigate();
-  const { theme, setTheme, consoleOpen, setConsoleOpen, setGenieOpen } = useApp();
+  const {
+    theme,
+    setTheme,
+    consoleOpen,
+    setConsoleOpen,
+    setGenieOpen,
+    canAccessAdmin,
+  } = useApp();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [borrowers, setBorrowers] = useState<LeadSummary[]>([]);
@@ -119,7 +130,10 @@ export function CommandPalette() {
     };
   }, [open, query]);
 
-  const actions = useMemo(() => filterCommandActions(query), [query]);
+  const actions = useMemo(
+    () => filterCommandActions(query, commandActionsForAccess(canAccessAdmin)),
+    [canAccessAdmin, query],
+  );
   const items: FlatItem[] = useMemo(
     () => [
       ...actions.map((action) => ({ kind: 'action' as const, action })),

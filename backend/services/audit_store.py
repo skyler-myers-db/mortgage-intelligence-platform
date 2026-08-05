@@ -4,6 +4,7 @@ Runtime writes through ``mip_app.action_audit``. ``resolve_actor`` reads the
 Databricks Apps ``X-Forwarded-Email`` header and emits an observable fallback
 warning when local/test paths use ``settings.default_actor``.
 """
+
 from __future__ import annotations
 
 import logging
@@ -15,8 +16,14 @@ from fastapi import Request
 
 from backend.config.settings import settings
 from backend.schemas.audit import AuditEvent
+from backend.schemas.borrower_copy_claims import (
+    contains_unsupported_borrower_qualification_claim,
+)
+from backend.schemas.borrower_copy_names import contains_borrower_copy_contextual_name
+from backend.schemas.borrower_cta_evidence import contains_borrower_cta_contradiction
 from backend.schemas.common import (
     contains_pii_marker,
+    contains_protected_class_marketing_text,
     validate_internal_staff_email,
     validate_public_audit_action,
     validate_public_audit_entity_type,
@@ -126,10 +133,15 @@ _PII_DENYLIST_KEYS: frozenset[str] = frozenset(
 #   backend/api/outreach.py::draft_outreach
 #     channel, offer_code
 #   backend/api/outreach.py::approve_outreach
-#     approval_id, offer_code, borrower_id, request_id, draft_body,
-#     rationale, bulk_id, bulk_rationale, decision_inputs
+#     approval_id, offer_code, borrower_id, request_id, draft_subject, draft_body,
+#     draft_generation_id, draft_response_hash, draft_source_refreshed_at,
+#     campaign_treatment_fingerprint,
+#     draft_edited, draft_attribution, rationale, bulk_id, bulk_rationale,
+#     decision_inputs
 #   backend/api/outreach.py::reject_outreach
 #     approval_id, offer_code, borrower_id, request_id, rationale, rationale_code
+#   backend/api/outreach.py::draft_outreach
+#     generation_mode
 #   backend/api/leads.py::list_leads_ranked
 #     rendered_borrower_ids, portfolio_id, segment, segment_mode, limit
 #   backend/api/offers.py::recommend_offer
@@ -157,6 +169,7 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         # Borrower 360 view
         "opportunity_score",
         "confidence",
+        "source_refreshed_at",
         "segment_codes",
         "recommended_offer",
         "workspace_offer_code",
@@ -166,13 +179,25 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "approval_id",
         "borrower_id",
         "request_id",
+        "draft_subject",
         "draft_body",
+        "draft_generation_id",
+        "draft_response_hash",
+        "campaign_treatment_fingerprint",
+        "draft_source_refreshed_at",
+        "draft_edited",
+        "draft_attribution",
+        "has_subject",
         "rationale",
         "rationale_code",
         "bulk_id",
         "bulk_rationale",
         "reason",
         "variant_name",
+        "generation_mode",
+        "campaign_generation_mode",
+        "generator_label",
+        "variant_provenance",
         # Marketing-contactability and disclosure proof
         "marketing_eligible",
         "consent_status",
@@ -212,6 +237,12 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "target_lender_ref",
         "portfolio_criteria",
         "cohort_id",
+        # Verified Growth Agent -> Lead Queue handoff provenance. These values
+        # come from a server-verified signed token, never from URL labels.
+        "growth_agent_run_id",
+        "growth_agent_filters_fingerprint",
+        "growth_agent_cohort_fingerprint",
+        "growth_agent_source_snapshot",
         # Sales manager workflow state
         "assignment_id",
         "assigned_by",
@@ -311,20 +342,45 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "household_mailing_address_count",
         "household_singleton_count",
         "status",
+        "expected_status",
+        # T0 campaign quarantine proof. Enum + boolean only; no cohort members.
+        "treatment_state",
+        "terminal_archive_without_treatment",
+        # Immutable T0 campaign manifest proof (bounded enums, hashes, counts).
+        "treatment_algorithm_version",
+        "treatment_contract_fingerprint",
+        "treatment_fingerprint",
+        "source_snapshot_id",
+        "candidate_count",
+        "selected_primary_count",
+        "treatment_count",
+        "holdout_count",
         # Admin degraded-banner proof drill
         "forced_state",
         "forced_dependency",
         "ttl_s",
-        "proof_scope", "job_key", "job_name", "job_id", "run_id", "cooldown_seconds",
-        "lifecycle_sync_mode", "lakebase_row_count", "mirrored_row_count", "funnel_snapshot_row_count",
+        "proof_scope",
+        "job_key",
+        "job_name",
+        "job_id",
+        "run_id",
+        "cooldown_seconds",
+        "lifecycle_sync_mode",
+        "lakebase_row_count",
+        "mirrored_row_count",
+        "funnel_snapshot_row_count",
         # Governed customer activation / writeback outbox.
-        "activation_id", "destination_key", "destination_type", "activation_status",
+        "activation_id",
+        "destination_key",
+        "destination_type",
+        "activation_status",
     }
 )
 
 _FREE_TEXT_METADATA_KEYS: frozenset[str] = frozenset(
-    {"draft_body", "rationale", "bulk_rationale", "reason", "notes"}
+    {"draft_subject", "draft_body", "rationale", "bulk_rationale", "reason", "notes"}
 )
+_BORROWER_DRAFT_METADATA_KEYS: frozenset[str] = frozenset({"draft_subject", "draft_body"})
 _NESTED_METADATA_KEYS_WITH_OWN_POLICY: frozenset[str] = frozenset(
     {
         "decision_inputs",
@@ -335,11 +391,19 @@ _NESTED_METADATA_KEYS_WITH_OWN_POLICY: frozenset[str] = frozenset(
         "result_filters",
         "thresholds_applied",
         "tool_steps",
+        "variant_provenance",
     }
 )
 _HUMAN_NAME_OR_PLACEHOLDER_PATTERN = re.compile(
     r"\b[A-Z][a-z]{1,30}\s+(?:[A-Z]\s+)?[A-Z][a-z]{1,30}\b|"
     r"\[(?:first|last|full)[_\s-]?[Nn]ame\]|\{(?:first|last|full)[_\s-]?[Nn]ame\}"
+)
+_AUDIT_HUMAN_IDENTITY_DIRECTIVE_RE = re.compile(
+    r"\b(?i:call|contact|email|message|ask|tell|notify|assign|refer)\s+"
+    r"(?!(?:us|we|you|they|our|the|this|your|a|an|consent|authorization|permission|outreach|"
+    r"support|compliance|operations|servicing|"
+    r"is|was|has|had|will|should|must|may|can|could)\b)"
+    r"[a-z][a-z'’-]{1,29}\s+[a-z][a-z'’-]{1,29}\b"
 )
 _GROWTH_AGENT_REVIEWED_NAME_WORD_ALLOWLIST: frozenset[str] = frozenset(
     {
@@ -396,10 +460,16 @@ _OPAQUE_ID_METADATA_KEYS: frozenset[str] = frozenset(
         "lead_outcome_id",
         "activation_id",
         "loan_officer_id",
+        "draft_generation_id",
+        "growth_agent_run_id",
     }
 )
-_CAMPAIGN_LABEL_METADATA_KEYS: frozenset[str] = frozenset({"variant_name", "recommended_offer", "workspace_offer_code"})
-_INTERNAL_STAFF_EMAIL_METADATA_KEYS: frozenset[str] = frozenset({"assigned_to_email", "assigned_by", "lo_email"})
+_CAMPAIGN_LABEL_METADATA_KEYS: frozenset[str] = frozenset(
+    {"variant_name", "recommended_offer", "workspace_offer_code"}
+)
+_INTERNAL_STAFF_EMAIL_METADATA_KEYS: frozenset[str] = frozenset(
+    {"assigned_to_email", "assigned_by", "lo_email"}
+)
 _INTERNAL_STAFF_EMAIL_LIST_METADATA_KEYS: frozenset[str] = frozenset({"lo_emails"})
 _SALES_STRATEGIES: frozenset[str] = frozenset({"manual", "round_robin", "score_balanced"})
 _ASSIGNMENT_LIFECYCLE_STATUSES: frozenset[str] = frozenset(
@@ -411,7 +481,16 @@ _ASSIGNMENT_LIFECYCLE_STATUSES: frozenset[str] = frozenset(
 # backend/schemas/loan_officer.py.
 _ASSIGNMENT_OUTCOMES: frozenset[str] = frozenset({"success", "no_response", "declined"})
 _SALES_DISPOSITION_OUTCOMES: frozenset[str] = frozenset(
-    {"called_no_answer", "called_left_voicemail", "connected", "callback_scheduled", "application_started", "not_interested", "not_now", "dead"}
+    {
+        "called_no_answer",
+        "called_left_voicemail",
+        "connected",
+        "callback_scheduled",
+        "application_started",
+        "not_interested",
+        "not_now",
+        "dead",
+    }
 )
 _LEAD_OUTCOME_TYPES: frozenset[str] = frozenset(
     {"application_submitted", "closed_funded", "lost_to_competitor", "withdrawn", "not_qualified"}
@@ -421,11 +500,20 @@ _LEAD_OUTCOME_SOURCE_SYSTEMS: frozenset[str] = frozenset(
 )
 _PUBLIC_BUSINESS_LABEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 &.,:+-]{0,79}$")
 _PUBLIC_COMPETITOR_LABEL_PATTERN = re.compile(r"^Competitor ([A-Z]|Other)$")
-_GENIE_REFUSAL_REASONS: frozenset[str] = frozenset({"protected_class", "instruction_override", "pii_request", "scope_bypass", "out_of_scope"})
+_GENIE_REFUSAL_REASONS: frozenset[str] = frozenset(
+    {"protected_class", "instruction_override", "pii_request", "scope_bypass", "out_of_scope"}
+)
 
 _ALLOWED_OFFER_CODES: frozenset[str] = frozenset(NBO_PRODUCT_LABELS) | {"recapture"}
+_OUTREACH_GENERATION_MODES: frozenset[str] = frozenset({"supervisor", "governed_fallback"})
+_OUTREACH_DRAFT_ATTRIBUTIONS: frozenset[str] = frozenset(
+    _OUTREACH_GENERATION_MODES
+    | {f"human_edited_from_{mode}" for mode in _OUTREACH_GENERATION_MODES}
+)
 
-_BORROWER_ID_LIST_METADATA_KEYS: frozenset[str] = frozenset({"borrower_ids", "rendered_borrower_ids"})
+_BORROWER_ID_LIST_METADATA_KEYS: frozenset[str] = frozenset(
+    {"borrower_ids", "rendered_borrower_ids"}
+)
 
 
 def _metadata_values_for(
@@ -434,6 +522,7 @@ def _metadata_values_for(
 ) -> list[tuple[str, Any]]:
     lowered = {key.lower() for key in keys}
     return [(key, value) for key, value in metadata.items() if key.lower() in lowered]
+
 
 _ALLOWED_RESULT_FILTER_KEYS: frozenset[str] = frozenset(
     {
@@ -469,8 +558,12 @@ _ALLOWED_FUNNEL_STAGES: frozenset[str] = frozenset(
     }
 )
 _FORCED_DEGRADED_DEPENDENCIES: frozenset[str] = frozenset({"warehouse", "lakebase", "genie", "all"})
-_ACTIVATION_DESTINATION_TYPES: frozenset[str] = frozenset({"salesforce", "crm_cdp", "los_pos", "servicing", "webhook"})
-_ACTIVATION_STATUSES: frozenset[str] = frozenset({"dry_run", "staged", "delivered", "failed", "cancelled"})
+_ACTIVATION_DESTINATION_TYPES: frozenset[str] = frozenset(
+    {"salesforce", "crm_cdp", "los_pos", "servicing", "webhook"}
+)
+_ACTIVATION_STATUSES: frozenset[str] = frozenset(
+    {"dry_run", "staged", "delivered", "failed", "cancelled"}
+)
 _ACTIVATION_DESTINATION_KEY_PATTERN = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 _HOUSEHOLD_DEDUPE_UNITS: frozenset[str] = frozenset({"borrower", "household"})
 _HOUSEHOLD_PRIMARY_STRATEGIES: frozenset[str] = frozenset({"highest_opportunity_eligible"})
@@ -551,8 +644,7 @@ class AuditMetadataViolation(RuntimeError):
             "Audit metadata contains unexpected keys (not on the "
             "reviewed allowlist -- see ``_ALLOWED_METADATA_KEYS`` in "
             "backend/services/audit_store.py for the inventory and how "
-            "to extend it): "
-            + ", ".join(sorted(unexpected_keys))
+            "to extend it): " + ", ".join(sorted(unexpected_keys))
         )
 
 
@@ -616,7 +708,11 @@ def _metadata_pii_value_paths(value: Any, *, path: str = "metadata") -> set[str]
     if value is None or isinstance(value, bool | int | float):
         return hits
     text = str(value)
-    if contains_pii_marker(text) or scrub_free_text(text) != text:
+    if (
+        contains_pii_marker(text)
+        or scrub_free_text(text) != text
+        or contains_borrower_copy_contextual_name(text)
+    ):
         hits.add(path)
     return hits
 
@@ -628,6 +724,7 @@ def _growth_agent_reviewed_text_contains_pii(value: Any) -> bool:
     return bool(
         contains_pii_marker(text)
         or scrub_free_text(text) != text
+        or contains_borrower_copy_contextual_name(text)
         or _growth_agent_reviewed_text_contains_human_name(text)
     )
 
@@ -682,6 +779,93 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
     """Validate reviewed free-ish values that have their own public policy."""
     if not metadata:
         return
+    for field, rows in _metadata_values_for(metadata, {"variant_provenance"}):
+        if not isinstance(rows, list) or len(rows) > 12:
+            raise AuditMetadataValueViolation(field, "must be a bounded provenance list")
+        allowed_keys = {
+            "variant_name",
+            "generation_mode",
+            "generator_label",
+            "provenance_key_id",
+            "provenance_issued_at",
+            "provenance_expires_at",
+            "provenance_copy_hash",
+            "provenance_criteria_fingerprint",
+            "provenance_performance_fingerprint",
+        }
+        for row in rows:
+            if not isinstance(row, dict) or set(row) - allowed_keys:
+                raise AuditMetadataValueViolation(field, "contains an invalid provenance object")
+            try:
+                validate_public_campaign_label(
+                    str(row.get("variant_name") or ""),
+                    field_name="variant_name",
+                )
+            except ValueError as exc:
+                raise AuditMetadataValueViolation(
+                    field,
+                    "contains an invalid public provenance label",
+                ) from exc
+            generation_mode = str(row.get("generation_mode") or "")
+            reviewed_generator_labels = {
+                "supervisor": "Databricks Agent Responses",
+                "reviewed_fallback": "Reviewed campaign framework",
+                "operator": "Operator edited",
+            }
+            if generation_mode not in reviewed_generator_labels:
+                raise AuditMetadataValueViolation(field, "contains an invalid generation mode")
+            if row.get("generator_label") != reviewed_generator_labels[generation_mode]:
+                raise AuditMetadataValueViolation(
+                    field,
+                    "contains a generator label that does not match its generation mode",
+                )
+            proof_fields = allowed_keys - {
+                "variant_name",
+                "generation_mode",
+                "generator_label",
+            }
+            present_proof_fields = proof_fields.intersection(row)
+            if present_proof_fields and present_proof_fields != proof_fields:
+                raise AuditMetadataValueViolation(field, "contains a partial provenance proof")
+            has_proof = present_proof_fields == proof_fields
+            if not has_proof:
+                continue
+            if row.get("provenance_key_id") is None:
+                raise AuditMetadataValueViolation(field, "contains a partial provenance proof")
+            if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", str(row["provenance_key_id"])):
+                raise AuditMetadataValueViolation(field, "contains an invalid provenance key id")
+            for timestamp_key in ("provenance_issued_at", "provenance_expires_at"):
+                try:
+                    parsed = datetime.fromisoformat(str(row[timestamp_key]).replace("Z", "+00:00"))
+                except ValueError as exc:
+                    raise AuditMetadataValueViolation(
+                        field,
+                        "contains an invalid provenance timestamp",
+                    ) from exc
+                if parsed.tzinfo is None:
+                    raise AuditMetadataValueViolation(
+                        field,
+                        "contains a timezone-naive provenance timestamp",
+                    )
+            for hash_key in (
+                "provenance_copy_hash",
+                "provenance_criteria_fingerprint",
+            ):
+                if re.fullmatch(r"[0-9a-f]{64}", str(row[hash_key])) is None:
+                    raise AuditMetadataValueViolation(field, "contains an invalid provenance hash")
+            performance_hash = row["provenance_performance_fingerprint"]
+            if (
+                performance_hash is not None
+                and re.fullmatch(
+                    r"[0-9a-f]{64}",
+                    str(performance_hash),
+                )
+                is None
+            ):
+                raise AuditMetadataValueViolation(
+                    field,
+                    "contains an invalid performance provenance hash",
+                )
     for field, value in _metadata_values_for(metadata, _BORROWER_ID_METADATA_KEYS):
         if value is None:
             continue
@@ -698,6 +882,53 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
             raise AuditMetadataValueViolation(
                 field,
                 "must be a governed offer code",
+            )
+    for field, generation_mode in _metadata_values_for(metadata, {"generation_mode"}):
+        if generation_mode is not None and str(generation_mode) not in _OUTREACH_GENERATION_MODES:
+            raise AuditMetadataValueViolation(
+                field,
+                "must be a reviewed outreach generation mode",
+            )
+    for field, attribution in _metadata_values_for(metadata, {"draft_attribution"}):
+        if attribution is not None and str(attribution) not in _OUTREACH_DRAFT_ATTRIBUTIONS:
+            raise AuditMetadataValueViolation(
+                field,
+                "must be a reviewed generated-draft attribution",
+            )
+    for field, edited in _metadata_values_for(metadata, {"draft_edited"}):
+        if not isinstance(edited, bool):
+            raise AuditMetadataValueViolation(field, "must be boolean")
+    for field, value in _metadata_values_for(
+        metadata,
+        {"draft_response_hash", "campaign_treatment_fingerprint"},
+    ):
+        if value is not None and re.fullmatch(r"[0-9a-f]{64}", str(value)) is None:
+            raise AuditMetadataValueViolation(field, "must be a SHA-256 hex digest")
+    for field, value in _metadata_values_for(metadata, {"draft_source_refreshed_at"}):
+        if value is None:
+            continue
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise AuditMetadataValueViolation(
+                field,
+                "must be an ISO-8601 timestamp",
+            ) from exc
+        if parsed.tzinfo is None:
+            raise AuditMetadataValueViolation(
+                field,
+                "must include a timezone",
+            )
+    for field, generation_mode in _metadata_values_for(metadata, {"campaign_generation_mode"}):
+        if generation_mode is not None and str(generation_mode) not in {
+            "supervisor",
+            "reviewed_fallback",
+            "operator",
+            "mixed",
+        }:
+            raise AuditMetadataValueViolation(
+                field,
+                "must be a reviewed campaign generation mode",
             )
     for field, value in _metadata_values_for(metadata, _OPAQUE_ID_METADATA_KEYS):
         if value is None:
@@ -777,12 +1008,19 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
     }.items():
         for _, value in _metadata_values_for(metadata, {field}):
             if value is not None and str(value) not in allowed:
-                raise AuditMetadataValueViolation(field, "contains values outside the reviewed vocabulary")
+                raise AuditMetadataValueViolation(
+                    field, "contains values outside the reviewed vocabulary"
+                )
     for field, ttl_s in _metadata_values_for(metadata, {"ttl_s"}):
         if not isinstance(ttl_s, int) or isinstance(ttl_s, bool) or ttl_s < 0 or ttl_s > 300:
             raise AuditMetadataValueViolation(field, "must be an integer between 0 and 300")
     for field, seconds in _metadata_values_for(metadata, {"cooldown_seconds"}):
-        if not isinstance(seconds, int) or isinstance(seconds, bool) or seconds < 0 or seconds > 7200:
+        if (
+            not isinstance(seconds, int)
+            or isinstance(seconds, bool)
+            or seconds < 0
+            or seconds > 7200
+        ):
             raise AuditMetadataValueViolation(field, "must be an integer between 0 and 7200")
     for _, portfolio_criteria in _metadata_values_for(metadata, {"portfolio_criteria"}):
         if portfolio_criteria is None:
@@ -811,10 +1049,14 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
         try:
             validate_public_audit_identifier_or_none(str(value))
         except ValueError as exc:
-            raise AuditMetadataValueViolation(field, "must be a public-safe feedback identifier") from exc
+            raise AuditMetadataValueViolation(
+                field, "must be a public-safe feedback identifier"
+            ) from exc
     for field, value in _metadata_values_for(metadata, {"from_status", "to_status"}):
         if value is not None and str(value) not in _ASSIGNMENT_LIFECYCLE_STATUSES:
-            raise AuditMetadataValueViolation(field, "must be a governed assignment lifecycle status")
+            raise AuditMetadataValueViolation(
+                field, "must be a governed assignment lifecycle status"
+            )
     for field, value in _metadata_values_for(metadata, {"lead_outcome_type"}):
         if value is not None and str(value) not in _LEAD_OUTCOME_TYPES:
             raise AuditMetadataValueViolation(field, "must be a governed lead outcome type")
@@ -827,11 +1069,18 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
         try:
             validate_public_audit_identifier_or_none(str(value))
         except ValueError as exc:
-            raise AuditMetadataValueViolation(field, "must be a public-safe source record reference") from exc
+            raise AuditMetadataValueViolation(
+                field, "must be a public-safe source record reference"
+            ) from exc
     for field, value in _metadata_values_for(metadata, {"loan_amount"}):
         if value is None:
             continue
-        if not isinstance(value, int) or isinstance(value, bool) or value < 0 or value > 100_000_000:
+        if (
+            not isinstance(value, int)
+            or isinstance(value, bool)
+            or value < 0
+            or value > 100_000_000
+        ):
             raise AuditMetadataValueViolation(field, "must be a bounded non-negative integer")
     for field, value in _metadata_values_for(metadata, {"competitor_lender_label"}):
         if value is None:
@@ -871,10 +1120,14 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
             raise AuditMetadataValueViolation(field, str(exc)) from exc
     for field, value in _metadata_values_for(metadata, {"destination_key"}):
         if value is not None and not _ACTIVATION_DESTINATION_KEY_PATTERN.fullmatch(str(value)):
-            raise AuditMetadataValueViolation(field, "must be a governed activation destination slug")
+            raise AuditMetadataValueViolation(
+                field, "must be a governed activation destination slug"
+            )
     for field, value in _metadata_values_for(metadata, {"destination_type"}):
         if value is not None and str(value) not in _ACTIVATION_DESTINATION_TYPES:
-            raise AuditMetadataValueViolation(field, "must be a governed activation destination type")
+            raise AuditMetadataValueViolation(
+                field, "must be a governed activation destination type"
+            )
     for field, value in _metadata_values_for(metadata, {"activation_status"}):
         if value is not None and str(value) not in _ACTIVATION_STATUSES:
             raise AuditMetadataValueViolation(field, "must be a governed activation outbox status")
@@ -883,20 +1136,38 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
             raise AuditMetadataValueViolation(field, "must be a governed growth-agent workflow id")
     for field, value in _metadata_values_for(metadata, {"workflow_title"}):
         if value is not None and str(value) not in _GROWTH_AGENT_TITLES:
-            raise AuditMetadataValueViolation(field, "must be a governed growth-agent workflow title")
+            raise AuditMetadataValueViolation(
+                field, "must be a governed growth-agent workflow title"
+            )
     for field, value in _metadata_values_for(metadata, {"run_status"}):
         if value is not None and str(value) not in _GROWTH_AGENT_RUN_STATUSES:
             raise AuditMetadataValueViolation(field, "must be a governed growth-agent run status")
     for field, value in _metadata_values_for(metadata, {"trace_id"}):
         if value is not None and not re.fullmatch(r"agent-trace-[0-9a-fA-F-]{36}", str(value)):
             raise AuditMetadataValueViolation(field, "must be a governed agent trace id")
-    for field, value in _metadata_values_for(metadata, {"tool_result_hash"}):
+    for field, value in _metadata_values_for(
+        metadata,
+        {
+            "tool_result_hash",
+            "growth_agent_filters_fingerprint",
+            "growth_agent_cohort_fingerprint",
+        },
+    ):
         if value is None:
             continue
         try:
             validate_sql_hash(value)
         except ValueError as exc:
             raise AuditMetadataValueViolation(field, str(exc)) from exc
+    for field, value in _metadata_values_for(metadata, {"growth_agent_source_snapshot"}):
+        if value is None:
+            continue
+        try:
+            validate_public_audit_identifier_or_none(str(value))
+        except ValueError as exc:
+            raise AuditMetadataValueViolation(
+                field, "must be a public-safe source snapshot identifier"
+            ) from exc
     for field, value in _metadata_values_for(metadata, {"specialist_agent"}):
         if value is not None and str(value) not in _GROWTH_AGENT_SPECIALISTS:
             raise AuditMetadataValueViolation(field, "must be a governed specialist id")
@@ -907,7 +1178,9 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
             validate_row_count(value)
         except ValueError as exc:
             raise AuditMetadataValueViolation(field, str(exc)) from exc
-    for field, value in _metadata_values_for(metadata, {"tool_steps", "policy_checks", "governance_chips"}):
+    for field, value in _metadata_values_for(
+        metadata, {"tool_steps", "policy_checks", "governance_chips"}
+    ):
         if value is None:
             continue
         if not isinstance(value, list) or len(value) > 12:
@@ -918,7 +1191,9 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
             for key, nested_value in item.items():
                 if key == "tool_name" and nested_value is not None:
                     if str(nested_value) not in _GROWTH_AGENT_TOOL_NAMES:
-                        raise AuditMetadataValueViolation(field, "must reference a reviewed growth-agent tool")
+                        raise AuditMetadataValueViolation(
+                            field, "must reference a reviewed growth-agent tool"
+                        )
                     continue
                 if key == "result_hash" and nested_value is not None:
                     try:
@@ -936,7 +1211,9 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
                     evidence_ref = str(nested_value)
                     if evidence_ref.startswith("agent-trace-"):
                         if not re.fullmatch(r"agent-trace-[0-9a-fA-F-]{36}", evidence_ref):
-                            raise AuditMetadataValueViolation(field, "must be a governed agent trace id")
+                            raise AuditMetadataValueViolation(
+                                field, "must be a governed agent trace id"
+                            )
                         continue
                     if evidence_ref.startswith("mip."):
                         try:
@@ -979,7 +1256,9 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
         if value is None:
             continue
         if not isinstance(value, dict):
-            raise AuditMetadataValueViolation(field, "must be an object keyed by internal staff email")
+            raise AuditMetadataValueViolation(
+                field, "must be an object keyed by internal staff email"
+            )
         if len(value) > 25:
             raise AuditMetadataValueViolation(field, "must contain at most 25 loan officers")
         for key, count in value.items():
@@ -1017,9 +1296,7 @@ def _validate_top_level_audit_columns(
             if subject_segment is not None
             else None
         )
-        safe_request_id = (
-            validate_public_opaque_id(request_id) if request_id is not None else None
-        )
+        safe_request_id = validate_public_opaque_id(request_id) if request_id is not None else None
     except ValueError as exc:
         raise AuditMetadataValueViolation("audit_column", str(exc)) from exc
     return (
@@ -1093,7 +1370,9 @@ def _assert_string_list(
         if rx is not None and not rx.fullmatch(text):
             raise AuditMetadataValueViolation(field, "contains values outside the reviewed format")
         if allowed is not None and text not in allowed:
-            raise AuditMetadataValueViolation(field, "contains values outside the reviewed vocabulary")
+            raise AuditMetadataValueViolation(
+                field, "contains values outside the reviewed vocabulary"
+            )
 
 
 def _assert_result_filters_value_policy(value: Any) -> None:
@@ -1174,7 +1453,12 @@ def _assert_result_filters_value_policy(value: Any) -> None:
         _assert_portfolio_criteria_value_policy(value["portfolio_criteria"])
     if "source" in value and str(value["source"]) not in {"genie", "trusted_sql"}:
         raise AuditMetadataValueViolation("result_filters.source", "must be genie or trusted_sql")
-    if "approval_status" in value and str(value["approval_status"]) not in {"pending", "approved", "rejected", "hold"}:
+    if "approval_status" in value and str(value["approval_status"]) not in {
+        "pending",
+        "approved",
+        "rejected",
+        "hold",
+    }:
         raise AuditMetadataValueViolation(
             "result_filters.approval_status",
             "must be a reviewed approval status",
@@ -1195,7 +1479,9 @@ def _assert_result_filters_value_policy(value: Any) -> None:
         try:
             aged_days = int(value["aged_days"])
         except (TypeError, ValueError) as exc:
-            raise AuditMetadataValueViolation("result_filters.aged_days", "must be 1 to 90") from exc
+            raise AuditMetadataValueViolation(
+                "result_filters.aged_days", "must be 1 to 90"
+            ) from exc
         if aged_days < 1 or aged_days > 90:
             raise AuditMetadataValueViolation("result_filters.aged_days", "must be 1 to 90")
 
@@ -1216,7 +1502,12 @@ def _assert_decision_inputs_value_policy(value: Any) -> None:
         if extra:
             detail.append("unreviewed " + ", ".join(sorted(extra)))
         raise AuditMetadataValueViolation("decision_inputs", "; ".join(detail))
-    for field in ("rate_spread_bps", "equity_pct", "heloc_propensity_score", "refi_propensity_score"):
+    for field in (
+        "rate_spread_bps",
+        "equity_pct",
+        "heloc_propensity_score",
+        "refi_propensity_score",
+    ):
         item = value[field]
         if isinstance(item, bool) or not isinstance(item, int):
             raise AuditMetadataValueViolation(f"decision_inputs.{field}", "must be an integer")
@@ -1254,10 +1545,33 @@ def _sanitize_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     for key in _FREE_TEXT_METADATA_KEYS:
         if key in cleaned and cleaned[key] is not None:
             cleaned[key] = scrub_free_text(str(cleaned[key]))
-            if key == "notes" and _HUMAN_NAME_OR_PLACEHOLDER_PATTERN.search(str(cleaned[key])):
+            clean_text = str(cleaned[key])
+            if contains_protected_class_marketing_text(clean_text):
+                raise AuditMetadataValueViolation(
+                    key,
+                    "must not contain protected-class targeting language",
+                )
+            if contains_unsupported_borrower_qualification_claim(clean_text):
+                raise AuditMetadataValueViolation(
+                    key,
+                    "must not contain unsupported borrower-facing claims",
+                )
+            if (
+                contains_borrower_copy_contextual_name(clean_text)
+                or (key == "notes" and _HUMAN_NAME_OR_PLACEHOLDER_PATTERN.search(clean_text))
+                or (
+                    key not in _BORROWER_DRAFT_METADATA_KEYS
+                    and _AUDIT_HUMAN_IDENTITY_DIRECTIVE_RE.search(clean_text)
+                )
+            ):
                 raise AuditMetadataValueViolation(
                     key,
                     "must not contain human-name-shaped text or unresolved placeholders",
+                )
+            if contains_borrower_cta_contradiction(clean_text):
+                raise AuditMetadataValueViolation(
+                    key,
+                    "must not contain a contact action that contradicts consent or response handling",
                 )
     return cleaned
 
@@ -1313,6 +1627,10 @@ class AuditStore(Protocol):
         self,
         limit: int = 50,
         *,
+        offset: int = 0,
+        after_sequence: int | None = None,
+        snapshot_sequence: int | None = None,
+        snapshot_token: str | None = None,
         actor: str | None = None,
         action: str | None = None,
         entity_id: str | None = None,
@@ -1436,8 +1754,8 @@ class _AuditStoreProxy:
     def write(self, **kwargs: Any) -> AuditEvent:
         return get_audit_store().write(**kwargs)
 
-    def list(self, limit: int = 50) -> list[AuditEvent]:
-        return get_audit_store().list(limit=limit)
+    def list(self, limit: int = 50, **kwargs: Any) -> list[AuditEvent]:
+        return get_audit_store().list(limit=limit, **kwargs)
 
 
 audit_store: AuditStore = _AuditStoreProxy()

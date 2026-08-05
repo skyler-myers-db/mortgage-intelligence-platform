@@ -22,7 +22,7 @@ def test_disaster_recovery_runbook_covers_operational_scenarios() -> None:
     for command in (
         "databricks bundle run mip_lakebase_migrate -t dev",
         "databricks bundle run mip_refresh_scores -t dev",
-        "databricks apps list-deployments mip-app",
+        "CI=1 ./scripts/deploy.sh -t dev --no-confirm",
         "git checkout <prior-good-sha>",
         "tools/databricks/provision_genie_space.py",
         "tools/databricks/export_action_audit.py",
@@ -47,8 +47,8 @@ def test_production_lakebase_targets_enable_readable_secondaries() -> None:
     bundle = Path("databricks.yml").read_text(encoding="utf-8")
 
     assert "prod:" in bundle
-    assert "prod_otlp:" in bundle
-    assert bundle.count("enable_readable_secondaries: true") >= 2
+    assert "prod_otlp:" not in bundle
+    assert bundle.count("enable_readable_secondaries: true") >= 1
     assert "enable_readable_secondaries: false" in bundle
 
 

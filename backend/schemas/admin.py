@@ -119,9 +119,7 @@ class AdminOperationRunRequest(BaseModel):
     @field_validator("request_id")
     @classmethod
     def _request_id_is_public_safe(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        return validate_public_opaque_id(value)
+        return None if value is None else validate_public_opaque_id(value)
 
 
 class AdminOperationRunResponse(BaseModel):
@@ -133,3 +131,4 @@ class AdminOperationRunResponse(BaseModel):
     run_id: int | None = None
     run_page_url: str | None = None
     audit_event_id: str | None = None
+    request_id: str

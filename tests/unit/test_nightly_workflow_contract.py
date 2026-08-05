@@ -9,10 +9,67 @@ the scoring job.
 
 from __future__ import annotations
 
+import subprocess
+import textwrap
 from pathlib import Path
+
+import yaml
 
 REPO = Path(__file__).resolve().parents[2]
 NIGHTLY = REPO / ".github" / "workflows" / "nightly.yml"
+REAL_DATA_SPEC = REPO / "frontend" / "tests" / "e2e" / "real_data.spec.ts"
+LIVE_CAMPAIGN_PROOF = REPO / "frontend" / "src" / "lib" / "liveCampaignProof.ts"
+LIVE_CAMPAIGN_PROOF_TEST = REPO / "frontend" / "src" / "lib" / "liveCampaignProof.test.ts"
+LIVE_HARDENING_SPEC = REPO / "frontend" / "tests" / "e2e" / "live_hardening_regressions.spec.ts"
+CONSOLE_LAYOUT_SPEC = REPO / "frontend" / "tests" / "e2e" / "console-layout.spec.ts"
+ECONOMICS_SCATTER_SPEC = REPO / "frontend" / "tests" / "e2e" / "economics_scatter.spec.ts"
+
+
+def _workflow_run_block(step_name: str) -> str:
+    text = NIGHTLY.read_text(encoding="utf-8")
+    step = text.index(f"- name: {step_name}")
+    run = text.index("        run: |", step)
+    end = text.find("\n      - name:", run + 1)
+    return textwrap.dedent(text[run + len("        run: |\n") : end if end != -1 else None])
+
+
+def _recorded_mint_environments(
+    tmp_path: Path,
+    *,
+    step_name: str,
+    credentials: dict[str, str],
+) -> list[dict[str, str]]:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "mint-env.log"
+    recorder = bin_dir / "python"
+    recorder.write_text(
+        "#!/usr/bin/env bash\n"
+        "{\n"
+        "  echo '=== child ==='\n"
+        "  /usr/bin/env | /usr/bin/sort\n"
+        '} >> "$CHILD_ENV_LOG"\n',
+        encoding="utf-8",
+    )
+    recorder.chmod(0o755)
+    result = subprocess.run(
+        ["bash", "-c", _workflow_run_block(step_name)],
+        cwd=REPO,
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "CHILD_ENV_LOG": str(log),
+            **credentials,
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    return [
+        dict(line.split("=", 1) for line in block.splitlines() if "=" in line)
+        for block in log.read_text(encoding="utf-8").split("=== child ===\n")
+        if block.strip()
+    ]
 
 
 def test_live_validation_is_manual_only() -> None:
@@ -21,6 +78,12 @@ def test_live_validation_is_manual_only() -> None:
     assert "workflow_dispatch:" in text
     assert "\n  schedule:" not in text
     assert "cron:" not in text
+
+
+def test_live_playwright_job_budgets_cold_app_and_serial_browser_matrix() -> None:
+    workflow = yaml.safe_load(NIGHTLY.read_text(encoding="utf-8"))
+
+    assert int(workflow["jobs"]["playwright-e2e-live"]["timeout-minutes"]) >= 90
 
 
 def test_live_validation_refreshes_live_snapshot_before_live_parity() -> None:
@@ -32,9 +95,111 @@ def test_live_validation_refreshes_live_snapshot_before_live_parity() -> None:
     gold_pos = text.index("databricks bundle run mip_refresh_scores -t dev --profile DEFAULT")
     parity_pos = text.index("pytest -q tests/integration/test_sql_python_parity.py")
     segment_pos = text.index("pytest tests/integration/test_segment_count_parity.py -q --tb=short")
+    intersection_pos = text.index(
+        "pytest tests/integration/test_segment_intersection_parity.py -q --tb=short"
+    )
     source_pos = text.index("pytest tests/integration/test_source_readiness_live.py -q --tb=short")
 
-    assert validate_pos < fred_pos < silver_pos < gold_pos < parity_pos < segment_pos < source_pos
+    assert (
+        validate_pos
+        < fred_pos
+        < silver_pos
+        < gold_pos
+        < parity_pos
+        < segment_pos
+        < intersection_pos
+        < source_pos
+    )
+
+
+def test_live_validation_proves_source_bound_app_before_expensive_mutations() -> None:
+    text = NIGHTLY.read_text(encoding="utf-8")
+
+    resolve_pos = text.index("- name: Resolve source-bound Gateway runtime contract")
+    app_proof_pos = text.index(
+        "- name: Fail fast unless the exact app commit and Gateway binding are deployed"
+    )
+    refresh_pos = text.index("- name: Refresh live FRED market rates before validation")
+    grant_pos = text.index("- name: Reconcile delayed AI Gateway inference-table grants")
+    exact_proof_pos = text.index("- name: Refresh and verify AI Gateway exact proof ledger")
+
+    assert resolve_pos < app_proof_pos < refresh_pos < grant_pos < exact_proof_pos
+    app_proof_block = text[app_proof_pos:refresh_pos]
+    assert "python -m tools.verify_deployed_app_contract" in app_proof_block
+    assert '--git-sha "$GITHUB_SHA"' in app_proof_block
+    assert "MIP_EXPECTED_AGENT_GATEWAY_BINDING_SHA256" in app_proof_block
+    assert '--rollback-scope "$MIP_APP_ROLLBACK_SECRET_SCOPE"' in app_proof_block
+
+
+def test_live_validation_ignores_historical_gateway_resource_secrets() -> None:
+    text = NIGHTLY.read_text(encoding="utf-8")
+
+    assert "secrets.MIP_AI_GATEWAY_ENDPOINT" not in text
+    assert "secrets.MIP_AI_GATEWAY_INFERENCE_TABLE" not in text
+    assert "MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY" not in text
+    assert (
+        "MIP_AI_GATEWAY_PROOF_VERIFY_KEY: " "${{ vars.MIP_AI_GATEWAY_PROOF_VERIFY_KEY }}"
+    ) in text
+    assert text.count("vars.MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY") == 2
+    assert text.count("-m tools.databricks.export_gateway_runtime_contract") == 2
+
+
+def test_live_validation_gateway_proof_uses_only_verifier_derived_auth() -> None:
+    text = NIGHTLY.read_text(encoding="utf-8")
+    start = text.index("- name: Refresh and verify AI Gateway exact proof ledger")
+    end = text.index("\n      - name:", start + 1)
+    block = text[start:end]
+
+    assert block.count("--require-verifier-derived-auth") == 2
+    assert block.count('--warehouse-id "$DATABRICKS_WAREHOUSE_ID"') == 2
+    assert "DATABRICKS_AUTH_TYPE: oauth-m2m" in block
+    assert "DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_VERIFIER_CLIENT_ID }}" in block
+    assert "DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_VERIFIER_CLIENT_SECRET }}" in block
+    assert block.count('--lakebase-instance "$MIP_LAKEBASE_INSTANCE"') == 2
+    assert block.count('--lakebase-database "$LAKEBASE_DATABASE"') == 2
+
+
+def test_simulated_drills_never_receive_static_lakebase_secrets() -> None:
+    text = NIGHTLY.read_text(encoding="utf-8")
+    start = text.index("\n  kill-drill-simulated:")
+    end = text.index("\n  kill-drill-real-infra:", start)
+    block = text[start:end]
+
+    for name in ("LAKEBASE_HOST", "LAKEBASE_USER", "LAKEBASE_PASSWORD"):
+        assert f"secrets.{name}" not in block
+    assert "LAKEBASE_HOST=invalid.host.example.com" in block
+    assert "LAKEBASE_USER=mip-simulated-drill" in block
+    assert "LAKEBASE_PASSWORD=drill-invalid-password" in block
+
+
+def test_live_browser_rechecks_exact_contract_before_live_mutations() -> None:
+    text = NIGHTLY.read_text(encoding="utf-8")
+    job_pos = text.index("\n  playwright-e2e-live:")
+    next_job_pos = text.index("\n  kill-drill-simulated:", job_pos + 1)
+    job = text[job_pos:next_job_pos]
+
+    resolve_pos = job.index("- name: Resolve source-bound Gateway runtime contract")
+    mint_pos = job.index("- name: Mint per-run Playwright Bearer tokens")
+    recheck_pos = job.index(
+        "- name: Recheck deployed commit and Gateway binding with the browser identity"
+    )
+    mutations_pos = job.index("- name: Low-volume deployed workflow contracts")
+
+    assert resolve_pos < mint_pos < recheck_pos < mutations_pos
+    recheck_block = job[recheck_pos:mutations_pos]
+    assert "python -m tools.verify_deployed_app_contract" in recheck_block
+    assert "--token-env MIP_NON_ADMIN_BEARER_TOKEN" in recheck_block
+    assert '--git-sha "$GITHUB_SHA"' in recheck_block
+    assert '--rollback-scope "$MIP_APP_ROLLBACK_SECRET_SCOPE"' in recheck_block
+    assert "DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}" in recheck_block
+    assert "DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}" in recheck_block
+
+
+def test_live_browser_smoke_never_logs_untrusted_response_bodies() -> None:
+    block = _workflow_run_block("Authenticated non-admin smoke (M2M)")
+
+    assert "body=" not in block
+    assert "session!r" not in block
 
 
 def test_live_validation_refresh_steps_use_real_dev_bundle_profile() -> None:
@@ -66,13 +231,545 @@ def test_live_validation_renders_dev_demo_feeds_for_bundle_validation() -> None:
     assert 'python tools/render_sql.py --catalog "${MIP_DEFAULT_CATALOG:-mip}"' in block
 
 
-def test_live_validation_admin_degraded_proof_fails_closed_without_explicit_skip() -> None:
+def test_live_validation_uses_the_same_optional_gateway_resource_families() -> None:
     text = NIGHTLY.read_text(encoding="utf-8")
 
-    assert "skip_admin_degraded_proof:" in text
-    assert "ADMIN_BEARER: ${{ secrets.MIP_ADMIN_BEARER_TOKEN }}" in text
-    assert "SKIP_ADMIN_DEGRADED_PROOF: ${{ inputs.skip_admin_degraded_proof }}" in text
-    assert "MIP_ADMIN_BEARER_TOKEN=$ADMIN_BEARER" in text
-    assert "Missing MIP_ADMIN_BEARER_TOKEN" in text
-    assert "skip_admin_degraded_proof=true" in text
+    assert "MIP_DEFAULT_CATALOG: ${{ vars.MIP_DEFAULT_CATALOG || 'mip' }}" in text
+    for name in (
+        "MIP_AI_GATEWAY_AGENT_MODEL_FAMILY",
+        "MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE",
+        "MIP_AI_GATEWAY_TABLE_PREFIX",
+    ):
+        assert f"{name}: ${{{{ vars.{name} }}}}" in text
+
+
+def test_live_validation_mints_admin_token_for_every_admin_proof() -> None:
+    text = NIGHTLY.read_text(encoding="utf-8")
+
+    assert "skip_admin_degraded_proof:" not in text
+    assert "secrets.MIP_ADMIN_BEARER_TOKEN" not in text
+    assert "DATABRICKS_ADMIN_CLIENT_ID: ${{ secrets.DATABRICKS_ADMIN_CLIENT_ID }}" in text
+    assert "DATABRICKS_ADMIN_CLIENT_SECRET: ${{ secrets.DATABRICKS_ADMIN_CLIENT_SECRET }}" in text
+    assert "DATABRICKS_OPERATOR2_CLIENT_ID: ${{ secrets.DATABRICKS_OPERATOR2_CLIENT_ID }}" in text
+    assert (
+        "DATABRICKS_OPERATOR2_CLIENT_SECRET: " "${{ secrets.DATABRICKS_OPERATOR2_CLIENT_SECRET }}"
+    ) in text
+    assert "--github-env MIP_OPERATOR2_BEARER_TOKEN" in text
+    assert "--github-env MIP_ADMIN_BEARER_TOKEN" in text
+    assert "DATABRICKS_VERIFIER_CLIENT_ID: ${{ secrets.DATABRICKS_VERIFIER_CLIENT_ID }}" in text
+    assert "Operator A, operator B, admin, and verifier M2M client IDs must be distinct" in text
+    assert "campaign-audit" in text
+    assert "Growth Agent audit" in text
     assert "exit 1" in text
+
+
+def test_segment_intersection_parity_inherits_fail_fast_live_credentials() -> None:
+    text = NIGHTLY.read_text(encoding="utf-8")
+
+    export_pos = text.index("- name: Export live Databricks test env")
+    next_step_pos = text.index("\n      - name:", export_pos + 1)
+    export_block = text[export_pos:next_step_pos]
+    intersection_pos = text.index(
+        "pytest tests/integration/test_segment_intersection_parity.py -q --tb=short"
+    )
+
+    for secret in (
+        "DATABRICKS_HOST",
+        "DATABRICKS_TOKEN",
+        "DATABRICKS_WAREHOUSE_ID",
+        "GENIE_SPACE_ID",
+    ):
+        assert f"{secret}: ${{{{ secrets.{secret} }}}}" in export_block
+        assert secret in export_block
+    assert "Missing required secrets" in export_block
+    assert "exit 1" in export_block
+    assert export_pos < intersection_pos
+
+
+def test_live_playwright_executes_live_hardening_and_excludes_mocked_console() -> None:
+    text = NIGHTLY.read_text(encoding="utf-8")
+    console_text = CONSOLE_LAYOUT_SPEC.read_text(encoding="utf-8")
+
+    job_pos = text.index("\n  playwright-e2e-live:")
+    next_job_pos = text.index("\n  kill-drill-simulated:", job_pos + 1)
+    job_block = text[job_pos:next_job_pos]
+    run_pos = job_block.index("- name: Run real-UC Playwright specs")
+    next_step_pos = job_block.index("\n      - name:", run_pos + 1)
+    run_block = job_block[run_pos:next_step_pos]
+    run_commands = "\n".join(
+        line for line in run_block.splitlines() if not line.lstrip().startswith("#")
+    )
+
+    assert "E2E_LIVE: '1'" in job_block
+    assert "tests/e2e/live_hardening_regressions.spec.ts" in run_block
+    assert "tests/e2e/layout-stability.spec.ts" in run_block
+    assert "tests/e2e/console-layout.spec.ts" not in run_block
+    assert "--list" not in run_commands
+    assert "E2E_LAYOUT_MOCK" not in run_block
+    assert "page.route('**/api/**'" in console_text
+
+
+def test_mocked_economics_canary_is_explicitly_separate_from_real_uc_proof() -> None:
+    text = NIGHTLY.read_text(encoding="utf-8")
+    spec = ECONOMICS_SCATTER_SPEC.read_text(encoding="utf-8")
+    real_block = _workflow_run_block("Run real-UC Playwright specs")
+    mocked_block = _workflow_run_block("Run mocked economics scatter response-shape canary")
+
+    assert "ECONOMICS_SCATTER_MOCKED" not in real_block
+    assert "ECONOMICS_SCATTER_MOCKED: '1'" in text
+    assert "--grep '^mocked response-shape canary:'" in mocked_block
+    assert "test.skip(" in spec
+    assert "!MOCKED_POINTS_CANARY" in spec
+
+
+def test_real_genie_browser_proof_executes_bound_native_follow_up() -> None:
+    spec = REAL_DATA_SPEC.read_text(encoding="utf-8")
+
+    # The interactive surfaces ask through the async lifecycle, so the POST
+    # that carries {question, conversation_id} is `/genie/message/submit`, not
+    # the retired blocking `/genie/message`. The proof still has to read that
+    # request body and bind it to the first native conversation.
+    assert "genie/message/submit" in spec
+    assert "submit.request().postDataJSON()" in spec
+    assert "followUpRequest.conversation_id" in spec
+    assert "toBe(firstConversationId)" in spec
+    assert "standalone native Genie follow-up" in spec
+
+
+def test_live_genie_campaign_action_archives_the_exact_created_campaign() -> None:
+    spec = REAL_DATA_SPEC.read_text(encoding="utf-8")
+    proof = LIVE_CAMPAIGN_PROOF.read_text(encoding="utf-8")
+    proof_test = LIVE_CAMPAIGN_PROOF_TEST.read_text(encoding="utf-8")
+    action_pos = spec.index(
+        "ask-genie: dynamic chart, proof drawer, and governed action confirmation"
+    )
+    next_test_pos = spec.index("\n  test(", action_pos + 1)
+    action_block = spec[action_pos:next_test_pos]
+
+    assert "export async function archiveLiveCampaign" in proof
+    assert "export async function reconcileGenieCampaignAction" in proof
+    assert "Authorization: `Bearer ${options.adminBearer}`" in proof
+    assert "expected_status: currentStatus" in proof
+    assert "final GET ${confirmed.status()}" in proof
+    assert "assertExpectedNameAfterCleanup" in proof
+    assert "const actionRequest = page.waitForRequest" in action_block
+    assert "LIVE_CAMPAIGN_RUN_MARKER" in action_block
+    assert "submittedRequest.postDataJSON()" in action_block
+    assert "typeof actionPayload.campaign_id === 'string'" in action_block
+    assert "finally" in action_block
+    assert "reconcileGenieCampaignAction(page.request, {" in action_block
+    assert "archiveLiveCampaign(page.request, {" in action_block
+    assert "expectedName: `Genie strategy draft ${LIVE_CAMPAIGN_RUN_MARKER}`" in action_block
+    assert "AUTH_HEADERS['X-MIP-Live-Campaign-Run-Marker']" in spec
+    assert "response lost" in proof_test
+    assert "response(503" in proof_test
+    assert "truncated response" in proof_test
+    assert "campaign marker was not persisted" in proof_test
+
+
+def test_live_playwright_credentials_fail_before_browser_proofs() -> None:
+    text = NIGHTLY.read_text(encoding="utf-8")
+
+    resolve_pos = text.index("- name: Resolve deployed app URL")
+    bearer_pos = text.index("- name: Mint per-run Playwright Bearer tokens")
+    run_pos = text.index("- name: Run real-UC Playwright specs")
+    resolve_block = text[resolve_pos:bearer_pos]
+    bearer_block = text[bearer_pos:run_pos]
+
+    assert "Missing DATABRICKS_HOST or DATABRICKS_TOKEN" in resolve_block
+    assert "exit 1" in resolve_block
+    assert "DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_ADMIN_CLIENT_SECRET" in bearer_block
+    assert "DATABRICKS_OPERATOR2_CLIENT_ID DATABRICKS_OPERATOR2_CLIENT_SECRET" in bearer_block
+    assert "DATABRICKS_VERIFIER_CLIENT_ID" in bearer_block
+    for left, right in (
+        ("DATABRICKS_CLIENT_ID", "DATABRICKS_OPERATOR2_CLIENT_ID"),
+        ("DATABRICKS_CLIENT_ID", "DATABRICKS_ADMIN_CLIENT_ID"),
+        ("DATABRICKS_CLIENT_ID", "DATABRICKS_VERIFIER_CLIENT_ID"),
+        ("DATABRICKS_OPERATOR2_CLIENT_ID", "DATABRICKS_ADMIN_CLIENT_ID"),
+        ("DATABRICKS_OPERATOR2_CLIENT_ID", "DATABRICKS_VERIFIER_CLIENT_ID"),
+        ("DATABRICKS_ADMIN_CLIENT_ID", "DATABRICKS_VERIFIER_CLIENT_ID"),
+    ):
+        assert f'[ "${left}" = "${right}" ]' in bearer_block
+    assert "Missing required M2M OAuth secret(s)" in bearer_block
+    assert "--github-env MIP_BEARER_TOKEN" in bearer_block
+    assert "--github-env MIP_OPERATOR2_BEARER_TOKEN" in bearer_block
+    assert "--github-env MIP_ADMIN_BEARER_TOKEN" in bearer_block
+    assert "secrets.MIP_ADMIN_BEARER_TOKEN" not in bearer_block
+    assert "exit 1" in bearer_block
+    assert "continue-on-error" not in resolve_block
+    assert "continue-on-error" not in bearer_block
+    assert resolve_pos < bearer_pos < run_pos
+
+
+def test_live_playwright_mint_children_receive_only_the_selected_identity() -> None:
+    text = NIGHTLY.read_text(encoding="utf-8")
+    start = text.index("- name: Mint per-run Playwright Bearer tokens")
+    end = text.index("\n      - name:", start + 1)
+    block = text[start:end]
+    function = block[
+        block.index("mint_m2m_token()") : block.index(
+            "          }", block.index("mint_m2m_token()")
+        )
+        + 11
+    ]
+
+    assert "export -n DATABRICKS_TOKEN" in function
+    for secret in (
+        "DATABRICKS_CLIENT_SECRET",
+        "DATABRICKS_OPERATOR2_CLIENT_SECRET",
+        "DATABRICKS_ADMIN_CLIENT_SECRET",
+        "DATABRICKS_VERIFIER_CLIENT_SECRET",
+    ):
+        assert secret in function
+    assert 'export DATABRICKS_CLIENT_ID="$client_id"' in function
+    assert 'export DATABRICKS_CLIENT_SECRET="$client_secret"' in function
+    assert 'python tools/oauth_m2m_mint.py "$@"' in function
+    assert "--client-secret-env" not in block
+
+
+def test_live_playwright_mint_subshells_enforce_identity_isolation(tmp_path: Path) -> None:
+    credentials = {
+        "DATABRICKS_HOST": "https://workspace.example",
+        "DATABRICKS_TOKEN": "deployer-pat",
+        "DATABRICKS_CLIENT_ID": "operator-a",
+        "DATABRICKS_CLIENT_SECRET": "operator-a-secret",
+        "DATABRICKS_OPERATOR2_CLIENT_ID": "operator-b",
+        "DATABRICKS_OPERATOR2_CLIENT_SECRET": "operator-b-secret",
+        "DATABRICKS_ADMIN_CLIENT_ID": "admin",
+        "DATABRICKS_ADMIN_CLIENT_SECRET": "admin-secret",
+        "DATABRICKS_VERIFIER_CLIENT_ID": "verifier",
+        "DATABRICKS_VERIFIER_CLIENT_SECRET": "verifier-secret",
+    }
+    children = _recorded_mint_environments(
+        tmp_path,
+        step_name="Mint per-run Playwright Bearer tokens",
+        credentials=credentials,
+    )
+
+    assert len(children) == 4
+    expected = (
+        ("operator-a", "operator-a-secret"),
+        ("operator-b", "operator-b-secret"),
+        ("admin", "admin-secret"),
+        ("verifier", "verifier-secret"),
+    )
+    for child, (client_id, secret) in zip(children, expected, strict=True):
+        assert child["DATABRICKS_CLIENT_ID"] == client_id
+        assert child["DATABRICKS_CLIENT_SECRET"] == secret
+        assert child["DATABRICKS_HOST"] == credentials["DATABRICKS_HOST"]
+        assert "DATABRICKS_TOKEN" not in child
+        for role_name in ("OPERATOR2", "ADMIN", "VERIFIER"):
+            assert f"DATABRICKS_{role_name}_CLIENT_ID" not in child
+            assert f"DATABRICKS_{role_name}_CLIENT_SECRET" not in child
+
+
+def test_agent_eval_remint_children_receive_only_the_selected_identity() -> None:
+    text = NIGHTLY.read_text(encoding="utf-8")
+    start = text.index("- name: Remint per-run Bearers immediately before Agent Evaluation")
+    end = text.index("\n      - name:", start + 1)
+    block = text[start:end]
+
+    assert "mint_m2m_token()" in block
+    assert "export -n DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET" in block
+    assert "export -n DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_ADMIN_CLIENT_SECRET" in block
+    assert 'export DATABRICKS_CLIENT_ID="$client_id"' in block
+    assert 'export DATABRICKS_CLIENT_SECRET="$client_secret"' in block
+    assert 'python tools/oauth_m2m_mint.py "$@"' in block
+    assert "--client-secret-env" not in block
+
+
+def test_agent_eval_remint_subshells_enforce_identity_isolation(tmp_path: Path) -> None:
+    credentials = {
+        "DATABRICKS_HOST": "https://workspace.example",
+        "DATABRICKS_CLIENT_ID": "operator-a",
+        "DATABRICKS_CLIENT_SECRET": "operator-a-secret",
+        "DATABRICKS_ADMIN_CLIENT_ID": "admin",
+        "DATABRICKS_ADMIN_CLIENT_SECRET": "admin-secret",
+    }
+    children = _recorded_mint_environments(
+        tmp_path,
+        step_name="Remint per-run Bearers immediately before Agent Evaluation",
+        credentials=credentials,
+    )
+
+    assert len(children) == 2
+    assert children[0]["DATABRICKS_CLIENT_ID"] == "operator-a"
+    assert children[0]["DATABRICKS_CLIENT_SECRET"] == "operator-a-secret"
+    assert children[1]["DATABRICKS_CLIENT_ID"] == "admin"
+    assert children[1]["DATABRICKS_CLIENT_SECRET"] == "admin-secret"
+    for child in children:
+        assert "DATABRICKS_ADMIN_CLIENT_ID" not in child
+        assert "DATABRICKS_ADMIN_CLIENT_SECRET" not in child
+
+
+def test_live_gate_runs_two_operator_recovery_contract() -> None:
+    text = NIGHTLY.read_text(encoding="utf-8")
+
+    assert "tests/integration/test_lakebase_concurrency_live.py" in text
+    assert "tests/integration/test_two_operator_recovery_live.py" in text
+    assert "tests/integration/test_lifecycle_delta_replay_live.py" in text
+    assert "tests/integration/test_campaign_treatment_at_cap_live.py" in text
+    assert '"operator_b": os.environ["MIP_OPERATOR2_BEARER_TOKEN"]' in text
+
+
+def test_lifecycle_delta_replay_is_in_explicit_low_volume_mutation_gate() -> None:
+    text = NIGHTLY.read_text(encoding="utf-8")
+    step_pos = text.index("- name: Low-volume deployed workflow contracts")
+    next_step_pos = text.index("\n      - name:", step_pos + 1)
+    block = text[step_pos:next_step_pos]
+
+    assert "MIP_LIVE_MUTATION_OK: '1'" in block
+    assert "DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}" in block
+    assert "DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}" in block
+    assert "DATABRICKS_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}" in block
+    assert "tests/integration/test_lifecycle_delta_replay_live.py" in block
+    assert "tests/integration/test_campaign_treatment_at_cap_live.py" in block
+    assert "MIP_LIVE_SCRATCH_SUFFIX: gha_${{ github.run_id }}" in block
+    assert (
+        "MIP_LIFECYCLE_REPLAY_REVIEW_SHA256: "
+        "${{ vars.MIP_LIFECYCLE_REPLAY_REVIEW_SHA256 }}" in text
+    )
+    assert "tools.databricks.cleanup_lifecycle_replay_scratch" in block
+    assert "tools.databricks.cleanup_campaign_treatment_scratch" in block
+    assert "--stale-older-than-hours 2" in block
+
+    lifecycle_cleanup_pos = text.index(
+        "- name: Always clean deterministic lifecycle replay scratch tables"
+    )
+    lifecycle_cleanup_next = text.index("\n      - name:", lifecycle_cleanup_pos + 1)
+    lifecycle_cleanup_block = text[lifecycle_cleanup_pos:lifecycle_cleanup_next]
+    assert "if: always()" in lifecycle_cleanup_block
+    assert "tools.databricks.cleanup_lifecycle_replay_scratch" in lifecycle_cleanup_block
+    assert "MIP_LIVE_SCRATCH_SUFFIX: gha_${{ github.run_id }}" in lifecycle_cleanup_block
+
+    cleanup_pos = text.index("- name: Always clean deterministic treatment scratch table")
+    cleanup_next = text.index("\n      - name:", cleanup_pos + 1)
+    cleanup_block = text[cleanup_pos:cleanup_next]
+    assert "if: always()" in cleanup_block
+    assert "tools.databricks.cleanup_campaign_treatment_scratch" in cleanup_block
+    assert "MIP_LIVE_SCRATCH_SUFFIX: gha_${{ github.run_id }}" in cleanup_block
+
+
+def test_nightly_binds_live_reviewed_function_owner_variable() -> None:
+    text = NIGHTLY.read_text(encoding="utf-8")
+
+    assert "MIP_REVIEWED_FUNCTION_OWNER: ${{ vars.MIP_REVIEWED_FUNCTION_OWNER }}" in text
+    resolve_pos = text.index("- name: Resolve source-bound Gateway runtime contract")
+    export_pos = text.index(
+        "python -m tools.databricks.export_gateway_runtime_contract",
+        resolve_pos,
+    )
+    assert resolve_pos < export_pos
+
+
+def test_live_campaign_fixtures_are_run_bound_and_recovered_after_cancellation() -> None:
+    text = NIGHTLY.read_text(encoding="utf-8")
+    workflow = yaml.safe_load(text)
+
+    assert workflow["concurrency"]["group"] == "mip-dev-live-state"
+    marker_block = _workflow_run_block("Derive governed live campaign run marker")
+    assert 'str.maketrans("0123456789", "abcdefghij")' in marker_block
+    assert "MIP_LIVE_CAMPAIGN_RUN_MARKER=" in marker_block
+
+    mutation_block = _workflow_run_block("Low-volume deployed workflow contracts")
+    assert "tools.cleanup_live_campaign_fixtures" in mutation_block
+    assert "--all-run-markers" in mutation_block
+    assert mutation_block.index("--all-run-markers") < mutation_block.index("pytest -q")
+
+    mint_pos = text.index("- name: Mint per-run Playwright Bearer tokens")
+    recovery_pos = text.index("- name: Recover abandoned live campaign fixtures")
+    smoke_pos = text.index("- name: Authenticated non-admin smoke (M2M)")
+    recovery_block = _workflow_run_block("Recover abandoned live campaign fixtures")
+    assert mint_pos < recovery_pos < smoke_pos
+    assert "tools.cleanup_live_campaign_fixtures" in recovery_block
+    assert "--all-run-markers" in recovery_block
+
+    cleanup_pos = text.index("- name: Always archive run-marked live campaign fixtures")
+    cleanup_next = text.index("\n      - name:", cleanup_pos + 1)
+    cleanup_block = text[cleanup_pos:cleanup_next]
+    assert "if: always()" in cleanup_block
+    assert "DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}" in cleanup_block
+    assert (
+        "DATABRICKS_ADMIN_CLIENT_SECRET: " "${{ secrets.DATABRICKS_ADMIN_CLIENT_SECRET }}"
+    ) in cleanup_block
+    assert cleanup_block.count("tools/oauth_m2m_mint.py") == 2
+    assert "tools.cleanup_live_campaign_fixtures" in cleanup_block
+    assert '--run-marker "$MIP_LIVE_CAMPAIGN_RUN_MARKER"' in cleanup_block
+    assert "unset MIP_CLEANUP_OWNER_BEARER_TOKEN" in cleanup_block
+
+    browser_pos = text.index("- name: Run real-UC Playwright specs")
+    browser_cleanup_pos = text.index("- name: Always reconcile live browser campaign fixtures")
+    browser_cleanup_next = text.index("\n      - name:", browser_cleanup_pos + 1)
+    browser_cleanup = text[browser_cleanup_pos:browser_cleanup_next]
+    assert browser_pos < browser_cleanup_pos
+    assert "if: always()" in browser_cleanup
+    assert browser_cleanup.count("tools/oauth_m2m_mint.py") == 2
+    assert "--all-run-markers" in browser_cleanup
+
+
+def test_nightly_agent_eval_passes_distinct_normal_and_admin_bearers() -> None:
+    text = NIGHTLY.read_text(encoding="utf-8")
+
+    remint_pos = text.index("- name: Remint per-run Bearers immediately before Agent Evaluation")
+    eval_pos = text.index("- name: Growth Agent evaluation with admin identity proof")
+    next_step_pos = text.index("\n      - name:", eval_pos + 1)
+    remint_block = text[remint_pos:eval_pos]
+    eval_block = text[eval_pos:next_step_pos]
+
+    assert "--github-env MIP_BEARER_TOKEN" in remint_block
+    assert "--github-env MIP_ADMIN_BEARER_TOKEN" in remint_block
+    assert "DATABRICKS_ADMIN_CLIENT_ID" in remint_block
+    assert "Per-run admin M2M bearer was not minted" in eval_block
+    assert "exit 1" in eval_block
+    assert "python -m tools.databricks.run_agent_eval" in eval_block
+    assert "MIP_ADMIN_BEARER_TOKEN" in eval_block
+    assert '--token "$MIP_BEARER_TOKEN"' not in eval_block
+    assert '--admin-token "$MIP_ADMIN_BEARER_TOKEN"' not in eval_block
+    assert '--admin-token "$MIP_BEARER_TOKEN"' not in eval_block
+    assert remint_pos < eval_pos
+
+
+def test_ai_gateway_proof_uses_dedicated_verifier_m2m_identity() -> None:
+    text = NIGHTLY.read_text(encoding="utf-8")
+    proof_pos = text.index("- name: Refresh and verify AI Gateway exact proof ledger")
+    next_step_pos = text.index("\n      - name:", proof_pos + 1)
+    proof_block = text[proof_pos:next_step_pos]
+
+    assert "DATABRICKS_AUTH_TYPE: oauth-m2m" in proof_block
+    assert "unset DATABRICKS_TOKEN" in proof_block
+    assert "secrets.DATABRICKS_VERIFIER_CLIENT_ID" in proof_block
+    assert "secrets.DATABRICKS_VERIFIER_CLIENT_SECRET" in proof_block
+    assert "secrets.DATABRICKS_ADMIN_CLIENT_ID" not in proof_block
+    assert "dedicated AI Gateway verifier" in proof_block
+
+
+def test_verifier_boundary_uses_its_own_identity_and_precedes_exact_proof() -> None:
+    text = NIGHTLY.read_text(encoding="utf-8")
+    boundary_pos = text.index("- name: Prove the verifier's effective authorization boundary")
+    proof_pos = text.index("- name: Refresh and verify AI Gateway exact proof ledger")
+    block = text[boundary_pos:proof_pos]
+
+    assert boundary_pos < proof_pos
+    assert "-m tools.databricks.verify_verifier_identity_boundary" in block
+    assert "DATABRICKS_AUTH_TYPE: pat" in block
+    assert "DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}" in block
+    assert (
+        "DATABRICKS_VERIFIER_CLIENT_ID: "
+        "${{ secrets.DATABRICKS_VERIFIER_CLIENT_ID }}" in block
+    )
+    assert (
+        "DATABRICKS_VERIFIER_CLIENT_SECRET: "
+        "${{ secrets.DATABRICKS_VERIFIER_CLIENT_SECRET }}" in block
+    )
+    assert "DATABRICKS_CLIENT_ID:" not in block
+    assert "DATABRICKS_CLIENT_SECRET:" not in block
+    assert (
+        '--expected-application-id "$DATABRICKS_VERIFIER_CLIENT_ID"' in block
+    )
+    assert '--expected-application-id "$DATABRICKS_CLIENT_ID"' not in block
+    assert "secrets.DATABRICKS_ACCOUNT_ID" in block
+    assert "unset DATABRICKS_TOKEN" not in block
+    assert "--protected-service-principal-id" in block
+    assert "--forbidden-relation" not in block
+    assert "--obsolete-endpoint" not in block
+    assert "--allow-attested-app-401" in block
+    assert "Missing required verifier-boundary input" in block
+
+
+def test_native_genie_browser_gate_requires_live_governed_turn_and_visible_trust() -> None:
+    text = REAL_DATA_SPEC.read_text(encoding="utf-8")
+
+    native_pos = text.index(
+        "ask-genie: native Conversation API turn renders governed proof and feedback"
+    )
+    next_test_pos = text.index("\n  test(", native_pos + 1)
+    native_block = text[native_pos:next_test_pos]
+    helper_pos = text.index("async function expectLiveGenieUi")
+    helper_end = text.index("\n}\n\ntype MapDrillTarget", helper_pos) + 2
+    helper_block = text[helper_pos:helper_end]
+    turn_helper_block = text[text.index("function expectLiveGenieTurn") : helper_pos]
+
+    assert "NATIVE_GENIE_CONVERSATION_QUESTION" in native_block
+    assert "expect(payload.source" in native_block
+    assert ").toBe('genie')" in native_block
+    assert "expectLiveGenieTurn(payload" in native_block
+    assert "conversation_id" in turn_helper_block
+    assert "genie_status" in turn_helper_block
+    assert "toBe('COMPLETED')" in turn_helper_block
+    assert "genie-feedback-up" in helper_block
+    assert "genie-feedback-down" in helper_block
+    assert "Answer source: Databricks Genie Conversation API" in helper_block
+    assert "Public Preview reasoning returned by the API must render" in helper_block
+    assert "completed native turn must expose public API reasoning summaries" in turn_helper_block
+    assert "completed native turn must expose follow-up suggestions" in turn_helper_block
+    assert "proof must preserve the same public reasoning summaries" in turn_helper_block
+    assert "API follow-up suggestions must render as actions" in helper_block
+    assert "test.skip(" not in native_block
+
+
+def test_deterministic_genie_has_no_native_reasoning_or_follow_ups() -> None:
+    text = REAL_DATA_SPEC.read_text(encoding="utf-8")
+
+    canonical_pos = text.index("genie FAB returns a non-empty answer and source chip opens lineage")
+    next_test_pos = text.index("\n  test(", canonical_pos + 1)
+    canonical_block = text[canonical_pos:next_test_pos]
+
+    assert ").toBe('trusted_sql')" in canonical_block
+    # A recognized-shape turn is recomputed deterministically but leads with
+    # the live turn's narrative, so it legitimately carries that turn's real
+    # reasoning trace and follow-ups (backend `_adapt_genie_response`). The
+    # rule the proof must still pin is anti-fabrication: Genie-authored fields
+    # only ever appear when a live turn actually produced them.
+    assert "canonicalPayload.genie_status && canonicalPayload.message_id" in canonical_block
+    assert (
+        "a deterministic answer with no live turn must not expose reasoning summaries"
+        in canonical_block
+    )
+    assert (
+        "a deterministic answer with no live turn must not fabricate proof reasoning"
+        in canonical_block
+    )
+    assert (
+        "a deterministic answer with no live turn must not claim Genie follow-ups"
+        in canonical_block
+    )
+    assert (
+        "a deterministic answer with no live turn must not render a reasoning disclosure"
+        in canonical_block
+    )
+    assert "test.skip(" not in canonical_block
+
+
+def test_live_browser_specs_pin_campaign_role_segment_and_catalog_proofs() -> None:
+    real_data = REAL_DATA_SPEC.read_text(encoding="utf-8")
+    hardening = LIVE_HARDENING_SPEC.read_text(encoding="utf-8")
+
+    assert "/api/v1/admin/capabilities?live=1" in real_data
+    assert (
+        "a claimable Supervisor capability must produce the AI campaign recommendation" in real_data
+    )
+    assert "recommendation.performance_status" in real_data
+    assert "campaign response must carry governed evidence" in real_data
+    assert "clicking a lineage asset must open its exact Catalog Explorer destination" in real_data
+
+    role_pos = hardening.index(
+        "admin and non-admin identities enforce navigation and activity boundaries"
+    )
+    next_test_pos = hardening.index("\ntest(", role_pos + 1)
+    role_block = hardening[role_pos:next_test_pos]
+    assert "/api/session" in role_block
+    assert "/api/audit/my-events?limit=8" in role_block
+    assert "/api/audit/events?limit=1" in role_block
+    assert "non-admin global activity lookup must fail closed" in role_block
+    assert "admin global activity lookup" in role_block
+    assert "toHaveURL(/\\/admin-config$/)" in role_block
+    assert "test.skip(" not in role_block
+
+    segment_pos = hardening.index(
+        "segment any/all API counts are de-duplicated and intersection-safe"
+    )
+    next_test_pos = hardening.index("\ntest(", segment_pos + 1)
+    segment_block = hardening[segment_pos:next_test_pos]
+    assert "itm + equity - allMode" in segment_block
+    assert "new Set(borrowerIds).size" in segment_block
+    assert "live proof requires a nonempty ITM/equity intersection" in segment_block

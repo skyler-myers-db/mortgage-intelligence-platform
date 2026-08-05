@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
-import { ApiError, api } from '../lib/api';
+import { useNavigate } from 'react-router';
+import { ApiError, api, type GenieLiveProgress } from '../lib/api';
+import { GenieLiveError, askGenieLive } from '../lib/genieAsk';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import type {
   ComposePlanResponse,
@@ -28,7 +29,6 @@ import {
   readGenieConversationId,
   writeGenieConversationId,
 } from '../lib/genieConversation';
-import { isGenieFollowUpQuestion } from '../lib/genieSession';
 import { queryKeys } from '../lib/queryKeys';
 import { GrowthAgentDraftPanel } from './ask-genie.growth-agent-drafts';
 import { AskGenieAnswerPanel } from './ask-genie.answer-panel';
@@ -67,6 +67,7 @@ export default function AskGenie() {
   const navigate = useNavigate();
   const { refreshWorkspace, setDrawer } = useApp();
   const questionRef = useRef<HTMLTextAreaElement>(null);
+  const suppressBootstrapConversationRef = useRef(false);
   const [question, setQuestion] = useState('');
   const [sampleQuestions, setSampleQuestions] = useState<string[]>([]);
   const [activeAssetPath, setActiveAssetPath] = useState<string | null>(null);
@@ -79,6 +80,7 @@ export default function AskGenie() {
   const [promptAgentPending, setPromptAgentPending] = useState(false);
   const [promptAgentPendingAction, setPromptAgentPendingAction] = useState<'run' | 'save' | null>(null);
   const [growthAgentPending, setGrowthAgentPending] = useState<GrowthAgentWorkflowId | null>(null);
+  const [growthAgentPendingAction, setGrowthAgentPendingAction] = useState<'run' | 'save' | null>(null);
   const [monitorPending, setMonitorPending] = useState<string | null>(null);
   const [monitorDraftPending, setMonitorDraftPending] = useState<string | null>(null);
   const [customAgentPendingAction, setCustomAgentPendingAction] = useState<'run' | 'save' | null>(null);
@@ -122,11 +124,14 @@ export default function AskGenie() {
     const result = genieStartQuery.data;
     if (!result) return;
     setSampleQuestions(Array.isArray(result.sample_questions) ? result.sample_questions : []);
-    if (conversationId) return;
-    if (!result.conversation_id) return;
-    setConversationId(result.conversation_id);
-    writeGenieConversationId(result.conversation_id);
-  }, [conversationId, genieStartQuery.data]);
+    const startConversationId = result.conversation_id;
+    if (!startConversationId || suppressBootstrapConversationRef.current) return;
+    setConversationId((current) => {
+      if (current) return current;
+      writeGenieConversationId(startConversationId);
+      return startConversationId;
+    });
+  }, [genieStartQuery.data]);
   const trustedAssets = trustedAssetsForCatalog(genieStartQuery.data?.trusted_assets);
   const [actionStatus, setActionStatus] = useState<string | null>(null);
   // `submittedQuestion` drives the warming-up-wrapped fetch. Typing in
@@ -137,6 +142,14 @@ export default function AskGenie() {
   const [submittedQuestion, setSubmittedQuestion] = useState<string | null>(null);
   const [submittedConversationId, setSubmittedConversationId] = useState<string | null>(null);
   const [submitToken, setSubmitToken] = useState<number>(0);
+  // Live lifecycle telemetry for the in-flight turn (stage rail, public
+  // process steps, generated SQL) from the submit → progress → complete flow.
+  const [liveProgress, setLiveProgress] = useState<GenieLiveProgress | null>(null);
+  const [askStartedAt, setAskStartedAt] = useState<number | null>(null);
+  // Generation counter: an aborted ask settles AFTER its replacement has
+  // already started, and its cleanup must not clobber the new turn's
+  // ticker/rail state (QA M2 — sample-question chips can re-ask mid-flight).
+  const askGenerationRef = useRef(0);
 
   const {
     data: payload,
@@ -144,7 +157,24 @@ export default function AskGenie() {
     error,
     manualRetry,
   } = useWarmingUpRetry<GenieAnswerShape>(
-    (signal) => api.genie(submittedQuestion ?? '', submittedConversationId, signal) as Promise<GenieAnswerShape>,
+    (signal) => {
+      const generation = ++askGenerationRef.current;
+      setAskStartedAt(Date.now());
+      setLiveProgress(null);
+      return (
+        askGenieLive(submittedQuestion ?? '', submittedConversationId, {
+          signal,
+          onProgress: (p) => {
+            if (askGenerationRef.current === generation) setLiveProgress(p);
+          },
+        }) as Promise<GenieAnswerShape>
+      ).finally(() => {
+        if (askGenerationRef.current === generation) {
+          setLiveProgress(null);
+          setAskStartedAt(null);
+        }
+      });
+    },
     [submittedQuestion, submittedConversationId, submitToken],
     {
       enabled: submittedQuestion !== null && submittedQuestion.length > 0,
@@ -160,20 +190,23 @@ export default function AskGenie() {
 
   const loading = submittedQuestion !== null && payload === null && warmingUp === null && error === null;
   const errorMsg = error
-    ? error instanceof Error
-      ? `Couldn't reach Genie: ${error.message}`
-      : "Couldn't reach Genie."
+    ? error instanceof GenieLiveError
+      ? error.message
+      : error instanceof Error
+        ? `Couldn't reach Genie: ${error.message}`
+        : "Couldn't reach Genie."
     : null;
 
   useEffect(() => {
     if (!(error instanceof ApiError) || error.status !== 403) return;
     setConversationId(null);
     setSubmittedConversationId(null);
-    clearGenieConversationState();
+    clearGenieConversationState({ notify: true });
   }, [error]);
 
   useEffect(() => {
     const onActorBoundaryReset = () => {
+      suppressBootstrapConversationRef.current = true;
       setConversationId(null);
       setSubmittedConversationId(null);
       setSubmittedQuestion(null);
@@ -187,28 +220,29 @@ export default function AskGenie() {
     };
   }, []);
 
-  function ask(q: string) {
+  function ask(q: string, followUpConversationId?: string | null) {
     const trimmed = q.trim();
-    const nextConversationId = isGenieFollowUpQuestion(trimmed) ? conversationId : null;
+    const activeConversationId = followUpConversationId ?? conversationId;
     setQuestion(q);
-    setConversationId(nextConversationId);
-    setSubmittedConversationId(nextConversationId);
+    setConversationId(activeConversationId);
+    setSubmittedConversationId(activeConversationId);
     setSubmittedQuestion(trimmed);
     setSubmitToken((n) => n + 1);
     setActiveAssetPath(null);
     setActionStatus(null);
-    if (!nextConversationId) {
+    if (!activeConversationId) {
       clearGenieConversationState();
     }
   }
 
   function newConversation() {
+    suppressBootstrapConversationRef.current = true;
     setConversationId(null);
     setSubmittedConversationId(null);
     setSubmittedQuestion(null);
     setActiveAssetPath(null);
     setActionStatus('Started a new Genie thread.');
-    clearGenieConversationState();
+    clearGenieConversationState({ notify: true });
   }
 
   function scopeToTrustedAsset(asset: { label: string; path: string }) {
@@ -227,6 +261,7 @@ export default function AskGenie() {
       return;
     }
     setGrowthAgentPending(workflow.id);
+    setGrowthAgentPendingAction(saveMonitor ? 'save' : 'run');
     setLatestGrowthRun(null);
     setGrowthAgentError(null);
     try {
@@ -245,6 +280,7 @@ export default function AskGenie() {
       setGrowthAgentError(err instanceof Error ? err.message : 'Growth Agent workflow failed.');
     } finally {
       setGrowthAgentPending(null);
+      setGrowthAgentPendingAction(null);
     }
   }
 
@@ -443,8 +479,8 @@ export default function AskGenie() {
     <PageShell
       eyebrow="Mortgage Growth Agent"
       title="Mortgage growth co-pilot"
-      lede="Turn a growth objective into a reviewed workflow, preview the eligible borrowers, and ask follow-up questions about your book."
-      heroRight={<Chip variant="neutral" icon="sparkle">Databricks Genie + SQL</Chip>}
+      lede="Use the Genie Conversation API for portfolio analysis, then compose and run reviewed growth workflows with human approval at the action boundary. Databricks Agent Responses automation is identified only when the configured capability is ready."
+      heroRight={<Chip variant="neutral" icon="sparkle">Genie analytics + reviewed automation</Chip>}
     >
       <div className="surface growth-agent" aria-busy={agentBusy}>
         <div className="surface__hdr">
@@ -564,7 +600,7 @@ export default function AskGenie() {
             </div>
           )}
 
-          <div className="growth-agent__cards" aria-label="Governed Growth Agent workflows">
+          <section className="growth-agent__cards" aria-label="Governed Growth Agent workflows">
             {workflows.map((workflow) => {
               const pending = growthAgentPending === workflow.id;
               return (
@@ -598,7 +634,7 @@ export default function AskGenie() {
                       onClick={() => runGrowthAgentWorkflow(workflow, false)}
                       disabled={agentBusy || stateParsePreview.invalid.length > 0}
                     >
-                      {pending ? 'Running…' : 'Run'}
+                      {pending && growthAgentPendingAction === 'run' ? 'Running…' : 'Run'}
                     </Button>
                     <Button
                       variant="ghost"
@@ -607,7 +643,7 @@ export default function AskGenie() {
                       onClick={() => runGrowthAgentWorkflow(workflow, true)}
                       disabled={agentBusy || stateParsePreview.invalid.length > 0}
                     >
-                      Save watchlist
+                      {pending && growthAgentPendingAction === 'save' ? 'Saving…' : 'Save watchlist'}
                     </Button>
                   </div>
                 </article>
@@ -618,9 +654,9 @@ export default function AskGenie() {
                 <div className="surface__body">Loading governed workflows…</div>
               </div>
             )}
-          </div>
+          </section>
 
-          <div className="growth-agent-custom" aria-label="Build a custom Growth Agent workflow">
+          <section className="growth-agent-custom" aria-label="Build a custom Growth Agent workflow">
             <div className="growth-agent-custom__head">
               <Icon name="filter" size={14} className="icon-accent" />
               <div>
@@ -688,7 +724,7 @@ export default function AskGenie() {
                 </Button>
               </div>
             </div>
-          </div>
+          </section>
 
           {latestGrowthRun && (
             <GrowthAgentRunCard
@@ -736,6 +772,8 @@ export default function AskGenie() {
           onRetry={manualRetry}
           sampleQuestions={sampleQuestions}
           payload={payload}
+          liveProgress={liveProgress}
+          askStartedAt={askStartedAt}
           submittedQuestion={submittedQuestion}
           onFollowUp={ask}
           onAction={runAction}

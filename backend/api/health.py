@@ -23,14 +23,17 @@ A degraded response STILL returns HTTP 200 so the Databricks App load
 balancer doesn't yank the container. Degraded state is carried in the
 body, which the frontend reads to show the banner.
 
-Authenticated dependency probes are lightweight pings with a 1-second
-timeout. Warehouse / Lakebase probes issue ``SELECT 1``; Genie probes
-hit ``GET /spaces/{id}``. Failures do not raise; they flip the
-dependency status to ``down`` and bump the breaker's failure counter.
+Authenticated dependency probes are lightweight pings sharing one
+configurable request deadline. Warehouse / Lakebase probes issue ``SELECT
+1``; Lakebase also enforces bounded connect, TCP transport, and server-side
+statement deadlines, while Genie hits ``GET /spaces/{id}``. Failures do not raise;
+they flip the dependency status to ``down`` and bump the breaker's failure
+counter.
 Anonymous load-balancer/liveness requests intentionally do not run those
 probes, so external monitoring cannot keep billable dependencies warm.
 The frontend's degraded banner auto-retries until ``status == "ok"``.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -40,9 +43,14 @@ from typing import Any
 
 from fastapi import APIRouter, Request
 
+from backend.agents.gateway_contract import gateway_runtime_binding_hash
 from backend.config.settings import looks_like_databricks_app_deploy, settings
 from backend.schemas.health import AdminHealthResponse, HealthResponse
 from backend.services.audit_store import get_fallback_identity_count
+from backend.services.campaign_treatment_runtime import (
+    CAMPAIGN_TREATMENT_RUNTIME_ENABLED,
+    campaign_treatment_runtime_state,
+)
 from backend.services.forced_degraded import (
     FORCED_DEGRADED_COOKIE_NAME,
     apply_forced_degraded,
@@ -60,6 +68,47 @@ from backend.services.rbac import AdminDep
 router = APIRouter()
 
 _PROCESS_ACTOR_CACHE_SECRET = secrets.token_urlsafe(32)
+
+
+def _agent_gateway_binding_sha256() -> str | None:
+    endpoint = (settings.mip_agent_serving_endpoint or "").strip()
+    supervisor_id = (settings.mip_agent_supervisor_id or "").strip()
+    upstream = (settings.mip_agent_supervisor_endpoint or "").strip()
+    runtime_application_id = (settings.mip_agent_runtime_client_id or "").strip()
+    workspace_host = (settings.databricks_host or "").strip()
+    model_name = settings.mip_agent_gateway_model.strip()
+    model_version = settings.mip_agent_gateway_model_version
+    inference_table = (settings.mip_ai_gateway_inference_table or "").strip()
+    proxy_application_id = (settings.mip_agent_proxy_client_id or "").strip()
+    proxy_credential_id = (settings.mip_agent_proxy_credential_id or "").strip()
+    proxy_secret_reference = (settings.mip_agent_proxy_secret_reference or "").strip()
+    if (
+        not endpoint
+        or not supervisor_id
+        or not upstream
+        or not runtime_application_id
+        or not workspace_host
+        or not model_name
+        or model_version is None
+        or not inference_table
+        or not proxy_application_id
+        or not proxy_credential_id
+        or not proxy_secret_reference
+    ):
+        return None
+    return gateway_runtime_binding_hash(
+        endpoint=endpoint,
+        supervisor_id=supervisor_id,
+        upstream_endpoint=upstream,
+        runtime_application_id=runtime_application_id,
+        workspace_host=workspace_host,
+        model_name=model_name,
+        model_version=model_version,
+        inference_table=inference_table,
+        proxy_caller_application_id=proxy_application_id,
+        proxy_caller_credential_id=proxy_credential_id,
+        proxy_caller_secret_reference=proxy_secret_reference,
+    )
 
 
 def _actor_cache_key(actor_email: str) -> str:
@@ -123,12 +172,30 @@ def _apply_breaker_degraded(
     return next_status, next_deps
 
 
+def _apply_treatment_runtime_degraded(status: str) -> tuple[str, str]:
+    """Fold the deploy-promotion marker into overall health status.
+
+    2026-07-30 gate restructure: a baseline (un-promoted) deploy no longer
+    crashes the process; it serves reads with treatment writes failing
+    closed. Health is where that state becomes visible — ``status`` flips
+    to ``degraded`` so the existing frontend banner and operator probes
+    catch a bare UI/CLI deploy immediately, and the returned state string
+    names the reason for authenticated/admin bodies.
+    """
+
+    state = campaign_treatment_runtime_state()
+    if state != CAMPAIGN_TREATMENT_RUNTIME_ENABLED:
+        return "degraded", state
+    return status, state
+
+
 def _diagnostic_body(
     status: str,
     deps: dict[str, str],
     actor_email: str,
     forced_degraded: dict[str, object] | None = None,
 ) -> dict[str, Any]:
+    status, treatment_runtime = _apply_treatment_runtime_degraded(status)
     boundary_warning = None
     if settings.trust_forwarded_headers and not looks_like_databricks_app_deploy():
         boundary_warning = {
@@ -195,10 +262,20 @@ def _diagnostic_body(
         # pass once downstream consumers cut over.
         "fallback_identity_fallbacks_process_total": get_fallback_identity_count(),
         "fallback_identity_fallbacks_total": get_fallback_identity_count(),
+        # Deploy-promotion marker state. "disabled_baseline_deploy" means the
+        # running process came from a bare deploy that bypassed the
+        # scripts/deploy.sh promoted snapshot — treatment writes 503 until a
+        # governed roll-forward.
+        "campaign_treatment_runtime": treatment_runtime,
         "boundary_warning": boundary_warning,
     }
     if settings.mip_git_sha:
         body["git_sha"] = settings.mip_git_sha
+    if settings.mip_app_deployment_lease_id:
+        body["deployment_lease_id"] = settings.mip_app_deployment_lease_id
+    gateway_binding = _agent_gateway_binding_sha256()
+    if gateway_binding:
+        body["agent_gateway_binding_sha256"] = gateway_binding
     if forced_degraded is not None:
         body["forced_degraded"] = forced_degraded
     return body
@@ -236,16 +313,26 @@ def health(request: Request) -> dict[str, Any]:
     actor_email = _trusted_health_actor(request)
     authenticated = bool(actor_email)
     if not authenticated:
-        return {"status": "ok", "mode": "live"}
+        # Keys stay exactly {status, mode} (R6-09 reconnaissance contract),
+        # but the VALUE reflects a baseline (un-promoted) deploy so even a
+        # curl of the public URL shows the degraded state instead of the
+        # pre-2026-07-30 behavior of the whole process being dead.
+        anonymous_status, _ = _apply_treatment_runtime_degraded("ok")
+        return {"status": anonymous_status, "mode": "live"}
 
     status, deps = probe_snapshot()
     breakers = breaker_states()
     status, deps = _apply_breaker_degraded(status, deps, breakers)
 
     status, deps, forced_degraded = _apply_browser_forced_degraded(request, status, deps)
+    status, treatment_runtime = _apply_treatment_runtime_degraded(status)
     body = {
         "status": status,
         "mode": "live",
+        # Named reason for the degraded flip above; the banner/topbar can
+        # distinguish "a dependency is down" from "this deploy was never
+        # promoted" without admin diagnostics.
+        "campaign_treatment_runtime": treatment_runtime,
         "dependencies": deps,
         # Keep the topbar / degraded-state UI useful for authenticated
         # workspace users without exposing admin-only diagnostics such as
@@ -255,6 +342,11 @@ def health(request: Request) -> dict[str, Any]:
     }
     if settings.mip_git_sha:
         body["git_sha"] = settings.mip_git_sha
+    if settings.mip_app_deployment_lease_id:
+        body["deployment_lease_id"] = settings.mip_app_deployment_lease_id
+    gateway_binding = _agent_gateway_binding_sha256()
+    if gateway_binding:
+        body["agent_gateway_binding_sha256"] = gateway_binding
     if forced_degraded is not None:
         body["forced_degraded"] = forced_degraded
     return body

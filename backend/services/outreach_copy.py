@@ -10,6 +10,7 @@ governed human review. No Lakebase / audit / scoring-write side effects live
 here -- this module is pure copy authoring (plus the ``HTTPException`` the
 compose path raises when a tenant SMS disclosure is too long to fit 160 chars).
 """
+
 from __future__ import annotations
 
 import re
@@ -71,15 +72,17 @@ def _personalization_hook(borrower: Any) -> str:
         return "your current mortgage"
 
     rate_spread = getattr(borrower, "rate_spread_bps", None)
-    if isinstance(rate_spread, int | float) and not isinstance(rate_spread, bool) and rate_spread > 0:
+    if (
+        isinstance(rate_spread, int | float)
+        and not isinstance(rate_spread, bool)
+        and rate_spread > 0
+    ):
         return "your current rate relative to today's market"
 
     ltv = getattr(borrower, "ltv", None)
     equity = getattr(borrower, "equity_estimate", None)
     has_equity_ltv = isinstance(ltv, int | float) and not isinstance(ltv, bool) and ltv < 80
-    has_equity_est = (
-        isinstance(equity, int | float) and not isinstance(equity, bool) and equity > 0
-    )
+    has_equity_est = isinstance(equity, int | float) and not isinstance(equity, bool) and equity > 0
     if has_equity_ltv or has_equity_est:
         return "your estimated home-equity position"
 
@@ -113,7 +116,9 @@ def _figure_safe_reason(text: str) -> str:
     return "" if _TRIGGER_TERM_RE.search(text) else text
 
 
-def _compose_outreach_body(*, borrower: Any, channel: str, disclosure: Any) -> tuple[str | None, str]:
+def _compose_outreach_body(
+    *, borrower: Any, channel: str, disclosure: Any
+) -> tuple[str | None, str]:
     """Return relationship-aware, channel-specific human-review copy.
 
     This is still a draft; the product does not send messages. Copy is
@@ -125,7 +130,9 @@ def _compose_outreach_body(*, borrower: Any, channel: str, disclosure: Any) -> t
     receive cold acquisition language.
     """
     code = _safe_offer_code(getattr(borrower, "recommended_offer_code", None))
-    offer = _borrower_offer_phrase(code, _offer_label(code, getattr(borrower, "recommended_offer", None)))
+    offer = _borrower_offer_phrase(
+        code, _offer_label(code, getattr(borrower, "recommended_offer", None))
+    )
     is_customer = bool(getattr(borrower, "is_current_customer", False))
     is_competitor = bool(getattr(borrower, "is_competitor_lien", False))
     # `why_now` is a proof-backed reason from the gold tables. Production copy is
@@ -151,11 +158,14 @@ def _compose_outreach_body(*, borrower: Any, channel: str, disclosure: Any) -> t
         if len(body) > 160:
             body = f"{sms_lender}: mortgage review. Reply YES. {disclosure.body}"
         if len(body) > 160:
-            body = disclosure.body
+            body = f"Reply YES to review. {disclosure.body}"
         if len(body) > 160:
             raise HTTPException(
                 status_code=412,
-                detail="tenant SMS disclosure exceeds 160 characters; configure shorter SMS disclosure",
+                detail=(
+                    "tenant SMS disclosure leaves no room for a reviewed call to action within "
+                    "160 characters; configure a shorter SMS disclosure"
+                ),
             )
         return None, body
 
@@ -194,9 +204,7 @@ def _compose_outreach_body(*, borrower: Any, channel: str, disclosure: Any) -> t
             if hook
             else "A quick mortgage review may be useful."
         )
-        benefit = (
-            f"A licensed loan officer can help you compare {offer} and decide whether it is worth pursuing."
-        )
+        benefit = f"A licensed loan officer can help you compare {offer} and decide whether it is worth pursuing."
         subject = "A quick mortgage review"
 
     if channel == "direct_mail":

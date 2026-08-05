@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS mip_app.campaigns (
     owner_email  TEXT NOT NULL,
     status       TEXT NOT NULL DEFAULT 'draft',
     criteria     JSONB NOT NULL DEFAULT '{}'::jsonb,
+    json_contract_version SMALLINT NOT NULL DEFAULT 1,
     suppression_policy JSONB NOT NULL DEFAULT '{}'::jsonb,
     message_variants JSONB NOT NULL DEFAULT '[]'::jsonb,
     channel_cascade JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -54,6 +55,23 @@ CREATE TABLE IF NOT EXISTS mip_app.campaigns (
     roi_assumptions JSONB,
     household_dedup JSONB NOT NULL DEFAULT '{"enabled": false, "dedupe_unit": "borrower", "primary_contact_strategy": "highest_opportunity_eligible"}'::jsonb,
     household_summary JSONB NOT NULL DEFAULT '{}'::jsonb,
+    idempotency_key TEXT,
+    request_payload_hash TEXT,
+    creation_response JSONB,
+    treatment_state TEXT NOT NULL DEFAULT 'legacy_unbound',
+    treatment_materialization_id UUID,
+    treatment_algorithm_version TEXT,
+    treatment_contract_fingerprint TEXT,
+    treatment_fingerprint TEXT,
+    treatment_source_snapshot_id TEXT,
+    treatment_delta_version BIGINT,
+    treatment_assignment_digest TEXT,
+    treatment_candidate_count BIGINT,
+    treatment_selected_primary_count BIGINT,
+    treatment_count BIGINT,
+    treatment_holdout_count BIGINT,
+    treatment_materialized_at TIMESTAMPTZ,
+    treatment_build_lease_until TIMESTAMPTZ,
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -74,11 +92,1259 @@ ALTER TABLE mip_app.campaigns
 ALTER TABLE mip_app.campaigns
     ADD COLUMN IF NOT EXISTS household_summary JSONB NOT NULL DEFAULT '{}'::jsonb;
 ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS request_payload_hash TEXT;
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS creation_response JSONB;
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS treatment_state TEXT NOT NULL DEFAULT 'legacy_unbound';
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS treatment_materialization_id UUID;
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS treatment_algorithm_version TEXT;
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS treatment_contract_fingerprint TEXT;
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS treatment_fingerprint TEXT;
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS treatment_source_snapshot_id TEXT;
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS treatment_delta_version BIGINT;
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS treatment_assignment_digest TEXT;
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS treatment_candidate_count BIGINT;
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS treatment_selected_primary_count BIGINT;
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS treatment_count BIGINT;
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS treatment_holdout_count BIGINT;
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS treatment_materialized_at TIMESTAMPTZ;
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS treatment_build_lease_until TIMESTAMPTZ;
+ALTER TABLE mip_app.campaigns
     ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+-- Existing deployments receive NULL first so the upgrade can distinguish
+-- preserved rows from fresh version-1 writes without inspecting legacy JSON.
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS json_contract_version SMALLINT;
+
+-- Campaign JSON is a compatibility store, not an untyped API surface. These
+-- immutable helpers back deploy-safe CHECK constraints added after the seed.
+CREATE OR REPLACE FUNCTION mip_app.campaign_jsonb_has_only_keys(
+    document JSONB,
+    allowed_keys TEXT[]
+)
+RETURNS BOOLEAN
+LANGUAGE SQL
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    SELECT jsonb_typeof(document) = 'object'
+       AND NOT EXISTS (
+           SELECT 1
+           FROM jsonb_object_keys(document) AS keys(key_name)
+           WHERE NOT (key_name = ANY(allowed_keys))
+       );
+$$;
+
+CREATE OR REPLACE FUNCTION mip_app.campaign_jsonb_text_array_is_reviewed(
+    document JSONB,
+    value_pattern TEXT,
+    max_items INTEGER
+)
+RETURNS BOOLEAN
+LANGUAGE SQL
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    SELECT jsonb_typeof(document) = 'array'
+       AND jsonb_array_length(document) <= max_items
+       AND NOT EXISTS (
+           SELECT 1
+           FROM jsonb_array_elements(document) AS items(item)
+           WHERE jsonb_typeof(item) <> 'string'
+              OR item #>> '{}' !~ value_pattern
+       );
+$$;
+
+CREATE OR REPLACE FUNCTION mip_app.campaign_jsonb_bounded_nonnegative_integer(
+    document JSONB,
+    key_name TEXT,
+    maximum BIGINT
+)
+RETURNS BOOLEAN
+LANGUAGE SQL
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    SELECT CASE
+        WHEN jsonb_typeof(document) = 'object'
+             AND document ? key_name
+             AND jsonb_typeof(document->key_name) = 'number'
+             AND document->>key_name ~ '^(0|[1-9][0-9]{0,7})$'
+        THEN (document->>key_name)::BIGINT BETWEEN 0 AND maximum
+        ELSE FALSE
+    END;
+$$;
+
+CREATE OR REPLACE FUNCTION mip_app.campaign_household_summary_is_reviewed(
+    document JSONB,
+    household_config JSONB,
+    candidate_count BIGINT,
+    selected_primary_count BIGINT
+)
+RETURNS BOOLEAN
+LANGUAGE SQL
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    SELECT (
+        mip_app.campaign_jsonb_has_only_keys(
+            document,
+            ARRAY[
+                'enabled','candidate_borrower_count','selected_primary_count',
+                'suppressed_co_owner_count','household_count',
+                'owner_link_household_count','mailing_address_household_count',
+                'singleton_household_count','primary_contact_strategy','source_assets'
+            ]::TEXT[]
+        )
+        AND mip_app.campaign_jsonb_has_only_keys(
+            household_config,
+            ARRAY['enabled','dedupe_unit','primary_contact_strategy']::TEXT[]
+        )
+        AND jsonb_typeof(household_config->'enabled') = 'boolean'
+        AND household_config->>'primary_contact_strategy'
+            = 'highest_opportunity_eligible'
+        AND (
+            (
+                household_config->'enabled' = 'true'::jsonb
+                AND household_config->>'dedupe_unit' = 'household'
+            )
+            OR (
+                household_config->'enabled' = 'false'::jsonb
+                AND household_config->>'dedupe_unit' = 'borrower'
+            )
+        )
+        AND jsonb_typeof(document->'enabled') = 'boolean'
+        AND document->'enabled' = household_config->'enabled'
+        AND mip_app.campaign_jsonb_bounded_nonnegative_integer(
+            document, 'candidate_borrower_count', 10000000
+        )
+        AND document->>'candidate_borrower_count' = candidate_count::TEXT
+        AND mip_app.campaign_jsonb_bounded_nonnegative_integer(
+            document, 'selected_primary_count', 10000
+        )
+        AND document->>'selected_primary_count' = selected_primary_count::TEXT
+        AND mip_app.campaign_jsonb_bounded_nonnegative_integer(
+            document, 'suppressed_co_owner_count', 10000000
+        )
+        AND document->>'suppressed_co_owner_count'
+            = (candidate_count - selected_primary_count)::TEXT
+        AND (
+            document->'enabled' = 'true'::jsonb
+            OR selected_primary_count = candidate_count
+        )
+        AND CASE
+            WHEN mip_app.campaign_jsonb_bounded_nonnegative_integer(
+                     document, 'household_count', 10000000
+                 )
+                 AND mip_app.campaign_jsonb_bounded_nonnegative_integer(
+                     document, 'owner_link_household_count', 10000000
+                 )
+                 AND mip_app.campaign_jsonb_bounded_nonnegative_integer(
+                     document, 'mailing_address_household_count', 10000000
+                 )
+                 AND mip_app.campaign_jsonb_bounded_nonnegative_integer(
+                     document, 'singleton_household_count', 10000000
+                 )
+            THEN
+                (document->>'household_count')::BIGINT
+                    = (document->>'owner_link_household_count')::BIGINT
+                    + (document->>'mailing_address_household_count')::BIGINT
+                    + (document->>'singleton_household_count')::BIGINT
+                AND (document->>'household_count')::BIGINT <= selected_primary_count
+                AND (
+                    document->'enabled' = 'false'::jsonb
+                    OR (document->>'household_count')::BIGINT = selected_primary_count
+                )
+            ELSE FALSE
+        END
+        AND document->>'primary_contact_strategy' = 'highest_opportunity_eligible'
+        AND document->'source_assets' = (
+            '["mip.gold.household_rollup","mip.gold.borrower_360"]'::jsonb
+        )
+    ) IS TRUE;
+$$;
+
+CREATE OR REPLACE FUNCTION mip_app.campaign_creation_response_is_reviewed(
+    document JSONB,
+    campaign_name TEXT,
+    treatment_count BIGINT,
+    household_summary JSONB
+)
+RETURNS BOOLEAN
+LANGUAGE SQL
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    SELECT (
+        mip_app.campaign_jsonb_has_only_keys(
+            document,
+            ARRAY[
+                'name','marketable_population','campaign_build_limit',
+                'campaign_build_eligible','household_summary'
+            ]::TEXT[]
+        )
+        AND jsonb_typeof(document->'name') = 'string'
+        AND document->>'name' = campaign_name
+        AND mip_app.campaign_jsonb_bounded_nonnegative_integer(
+            document, 'marketable_population', 10000
+        )
+        AND document->>'marketable_population' = treatment_count::TEXT
+        AND jsonb_typeof(document->'campaign_build_limit') = 'number'
+        AND document->>'campaign_build_limit' = '10000'
+        AND document->'campaign_build_eligible' = 'true'::jsonb
+        AND document->'household_summary' = household_summary
+    ) IS TRUE;
+$$;
+
+CREATE OR REPLACE FUNCTION mip_app.campaign_portfolio_criteria_is_reviewed(
+    document JSONB
+)
+RETURNS BOOLEAN
+LANGUAGE SQL
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    SELECT mip_app.campaign_jsonb_has_only_keys(
+               document,
+               ARRAY[
+                   'geography','states','occupancy','lien_status',
+                   'lender_relationship','product','loan_product',
+                   'origination_channel','target_lender_ref','min_equity_pct',
+                   'owner_link','purchase_intent','marketing_eligibility',
+                   'consent_status','recency','min_equity_pct_label'
+               ]::TEXT[]
+           )
+       AND (
+           NOT document ? 'geography'
+           OR (
+               jsonb_typeof(document->'geography') = 'string'
+               AND length(document->>'geography') BETWEEN 1 AND 160
+           )
+       )
+       AND (
+           NOT document ? 'states'
+           OR mip_app.campaign_jsonb_text_array_is_reviewed(
+               document->'states', '^[A-Z]{2}$', 56
+           )
+       )
+       AND (
+           NOT document ? 'occupancy'
+           OR document->>'occupancy' = ANY(
+               ARRAY['Owner-occupied','Non-owner-occupied','All']::TEXT[]
+           )
+       )
+       AND (
+           NOT document ? 'lien_status'
+           OR document->>'lien_status' = ANY(
+               ARRAY[
+                   'Open 1st lien','Open first lien','Open HELOC',
+                   'Free & clear','Free and clear','Any'
+               ]::TEXT[]
+           )
+       )
+       AND (
+           NOT document ? 'lender_relationship'
+           OR document->>'lender_relationship' = ANY(
+               ARRAY[
+                   'All','Current customer','Former customer',
+                   'Competitor customer','Competitor'
+               ]::TEXT[]
+           )
+       )
+       AND (
+           NOT document ? 'product'
+           OR document->>'product' = ANY(
+               ARRAY['All products','Refi','HELOC','Cash-out','Purchase','Retention']::TEXT[]
+           )
+       )
+       AND (
+           NOT document ? 'loan_product'
+           OR document->>'loan_product' = ANY(
+               ARRAY[
+                   'All loan products','Conventional','Jumbo','FHA','VA',
+                   'Other','Unknown'
+               ]::TEXT[]
+           )
+       )
+       AND (
+           NOT document ? 'origination_channel'
+           OR document->>'origination_channel' = ANY(
+               ARRAY[
+                   'All channels','Loan officer','Digital','Branch',
+                   'Call center','Unknown'
+               ]::TEXT[]
+           )
+       )
+       AND (
+           NOT document ? 'target_lender_ref'
+           OR (
+               jsonb_typeof(document->'target_lender_ref') = 'string'
+               AND length(document->>'target_lender_ref') BETWEEN 1 AND 80
+           )
+       )
+       AND (
+           NOT document ? 'min_equity_pct'
+           OR (
+               jsonb_typeof(document->'min_equity_pct') = 'number'
+               AND (document->>'min_equity_pct')::NUMERIC BETWEEN 0 AND 100
+           )
+       )
+       AND (
+           NOT document ? 'owner_link'
+           OR document->>'owner_link' = ANY(
+               ARRAY[
+                   'All','Single-property owner','Multi-property (2-4)',
+                   'Portfolio investor (5+)'
+               ]::TEXT[]
+           )
+       )
+       AND (
+           NOT document ? 'purchase_intent'
+           OR document->>'purchase_intent' = ANY(
+               ARRAY['All','Listed for sale','HELOC intent','Both']::TEXT[]
+           )
+       )
+       AND (
+           NOT document ? 'marketing_eligibility'
+           OR document->>'marketing_eligibility' = ANY(
+               ARRAY['Eligible only','Any','Suppressed only']::TEXT[]
+           )
+       )
+       AND (
+           NOT document ? 'consent_status'
+           OR document->>'consent_status' = ANY(
+               ARRAY['Opt-in','Opt-out','Unknown','Any']::TEXT[]
+           )
+       )
+       AND (
+           NOT document ? 'recency'
+           OR document->>'recency' = ANY(
+               ARRAY['Untouched 30d','Untouched 60d','Untouched 90d','Any']::TEXT[]
+           )
+       )
+       AND (
+           NOT document ? 'min_equity_pct_label'
+           OR document->>'min_equity_pct_label' = ANY(
+               ARRAY['≥ 15%','≥ 25%','≥ 40%','Any']::TEXT[]
+           )
+       );
+$$;
+
+CREATE OR REPLACE FUNCTION mip_app.campaign_replay_filters_are_reviewed(
+    document JSONB
+)
+RETURNS BOOLEAN
+LANGUAGE SQL
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    SELECT mip_app.campaign_jsonb_has_only_keys(
+               document,
+               ARRAY[
+                   'zips','county','counties','states','segment_codes',
+                   'segment_mode','target_lender_ref','portfolio_criteria',
+                   'borrower_ids','source'
+               ]::TEXT[]
+           )
+       AND (
+           NOT document ? 'zips'
+           OR mip_app.campaign_jsonb_text_array_is_reviewed(
+               document->'zips', '^[0-9]{5}$', 500
+           )
+       )
+       AND (
+           NOT document ? 'county'
+           OR (
+               jsonb_typeof(document->'county') = 'string'
+               AND document->>'county' ~ '^[0-9]{5}$'
+           )
+       )
+       AND (
+           NOT document ? 'counties'
+           OR mip_app.campaign_jsonb_text_array_is_reviewed(
+               document->'counties', '^[0-9]{5}$', 500
+           )
+       )
+       AND (
+           NOT document ? 'states'
+           OR mip_app.campaign_jsonb_text_array_is_reviewed(
+               document->'states', '^[A-Z]{2}$', 56
+           )
+       )
+       AND (
+           NOT document ? 'segment_codes'
+           OR mip_app.campaign_jsonb_text_array_is_reviewed(
+               document->'segment_codes',
+               '^(itm|listed|permit|investor|equity|retention)$',
+               6
+           )
+       )
+       AND (
+           NOT document ? 'segment_mode'
+           OR document->>'segment_mode' = ANY(ARRAY['all','any']::TEXT[])
+       )
+       AND (
+           NOT document ? 'target_lender_ref'
+           OR (
+               jsonb_typeof(document->'target_lender_ref') = 'string'
+               AND length(document->>'target_lender_ref') BETWEEN 1 AND 80
+           )
+       )
+       AND (
+           NOT document ? 'portfolio_criteria'
+           OR mip_app.campaign_portfolio_criteria_is_reviewed(
+               document->'portfolio_criteria'
+           )
+       )
+       AND (
+           NOT document ? 'borrower_ids'
+           OR mip_app.campaign_jsonb_text_array_is_reviewed(
+               document->'borrower_ids', '^B-[0-9A-Z]{13}$', 500
+           )
+       )
+       AND (
+           NOT document ? 'source'
+           OR document->>'source' = ANY(ARRAY['genie','trusted_sql']::TEXT[])
+       );
+$$;
+
+CREATE OR REPLACE FUNCTION mip_app.campaign_criteria_is_reviewed(
+    document JSONB
+)
+RETURNS BOOLEAN
+LANGUAGE SQL
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    SELECT CASE
+        WHEN mip_app.campaign_portfolio_criteria_is_reviewed(document) THEN TRUE
+        WHEN document ? 'segment' THEN
+            mip_app.campaign_jsonb_has_only_keys(
+                document,
+                ARRAY[
+                    'segment','min_spread_bps','min_equity_pct',
+                    'heloc_equity_min_pct','heloc_propensity_min','intent_signal',
+                    'filed_permits','states','marketing_eligibility',
+                    'consent_status','recency'
+                ]::TEXT[]
+            )
+            AND document->>'segment' = ANY(ARRAY['itm','cashout','heloc']::TEXT[])
+            AND (
+                NOT document ? 'states'
+                OR mip_app.campaign_jsonb_text_array_is_reviewed(
+                    document->'states', '^[A-Z]{2}$', 56
+                )
+            )
+            AND (
+                NOT document ? 'min_spread_bps'
+                OR (
+                    jsonb_typeof(document->'min_spread_bps') = 'number'
+                    AND (document->>'min_spread_bps')::NUMERIC BETWEEN 0 AND 2000
+                )
+            )
+            AND (
+                NOT document ? 'min_equity_pct'
+                OR (
+                    jsonb_typeof(document->'min_equity_pct') = 'number'
+                    AND (document->>'min_equity_pct')::NUMERIC BETWEEN 0 AND 100
+                )
+            )
+            AND (
+                NOT document ? 'heloc_equity_min_pct'
+                OR (
+                    jsonb_typeof(document->'heloc_equity_min_pct') = 'number'
+                    AND (document->>'heloc_equity_min_pct')::NUMERIC BETWEEN 0 AND 100
+                )
+            )
+            AND (
+                NOT document ? 'heloc_propensity_min'
+                OR (
+                    jsonb_typeof(document->'heloc_propensity_min') = 'number'
+                    AND (document->>'heloc_propensity_min')::NUMERIC BETWEEN 0 AND 1000
+                )
+            )
+            AND (
+                NOT document ? 'intent_signal'
+                OR document->>'intent_signal' = 'cotality_heloc_propensity'
+            )
+            AND (
+                NOT document ? 'filed_permits'
+                OR document->>'filed_permits' = 'pending_not_inferred'
+            )
+            AND (
+                NOT document ? 'marketing_eligibility'
+                OR document->>'marketing_eligibility' = 'Eligible only'
+            )
+            AND (
+                NOT document ? 'consent_status'
+                OR document->>'consent_status' = ANY(
+                    ARRAY['Opt-in','Opt-out','Unknown','Any']::TEXT[]
+                )
+            )
+            AND (
+                NOT document ? 'recency'
+                OR document->>'recency' = ANY(
+                    ARRAY['Untouched 30d','Untouched 60d','Untouched 90d','Any']::TEXT[]
+                )
+            )
+        WHEN document ? 'source' THEN
+            mip_app.campaign_jsonb_has_only_keys(
+                document,
+                ARRAY[
+                    'source','borrower_ids','criteria_hash','criteria_keys',
+                    'source_assets','visualization_kind','conversation_id',
+                    'message_id','question_hash','row_count','route',
+                    'result_filters','sql_hash'
+                ]::TEXT[]
+            )
+            AND document->>'source' = ANY(ARRAY['genie','trusted_sql']::TEXT[])
+            AND (
+                NOT document ? 'borrower_ids'
+                OR mip_app.campaign_jsonb_text_array_is_reviewed(
+                    document->'borrower_ids', '^B-[0-9A-Z]{13}$', 500
+                )
+            )
+            AND (
+                NOT document ? 'criteria_keys'
+                OR mip_app.campaign_jsonb_text_array_is_reviewed(
+                    document->'criteria_keys', '^[a-z][a-z0-9_]{0,63}$', 50
+                )
+            )
+            AND (
+                NOT document ? 'source_assets'
+                OR mip_app.campaign_jsonb_text_array_is_reviewed(
+                    document->'source_assets', '^[A-Za-z0-9_.]{1,160}$', 10
+                )
+            )
+            AND (
+                NOT document ? 'result_filters'
+                OR mip_app.campaign_replay_filters_are_reviewed(
+                    document->'result_filters'
+                )
+            )
+            AND (
+                NOT document ? 'row_count'
+                OR (
+                    jsonb_typeof(document->'row_count') = 'number'
+                    AND (document->>'row_count')::NUMERIC =
+                        trunc((document->>'row_count')::NUMERIC)
+                    AND (document->>'row_count')::NUMERIC BETWEEN 0 AND 10000000
+                )
+            )
+            AND (
+                NOT document ? 'route'
+                OR document->'route' = 'null'::jsonb
+                OR (
+                    jsonb_typeof(document->'route') = 'string'
+                    AND (
+                        document->>'route' = '/lead-queue'
+                        OR document->>'route' LIKE '/lead-queue?%'
+                    )
+                    AND length(document->>'route') <= 2000
+                )
+            )
+            AND (
+                NOT document ? 'visualization_kind'
+                OR document->'visualization_kind' = 'null'::jsonb
+                OR document->>'visualization_kind' = ANY(
+                    ARRAY['bar','line','metric','pie','scatter','table']::TEXT[]
+                )
+            )
+            AND (
+                NOT document ? 'criteria_hash'
+                OR document->'criteria_hash' = 'null'::jsonb
+                OR (
+                    jsonb_typeof(document->'criteria_hash') = 'string'
+                    AND document->>'criteria_hash' ~ '^[A-Za-z0-9_-]{1,128}$'
+                )
+            )
+            AND (
+                NOT document ? 'sql_hash'
+                OR document->'sql_hash' = 'null'::jsonb
+                OR (
+                    jsonb_typeof(document->'sql_hash') = 'string'
+                    AND document->>'sql_hash' ~ '^[A-Za-z0-9_-]{1,128}$'
+                )
+            )
+            AND (
+                NOT document ? 'question_hash'
+                OR document->'question_hash' = 'null'::jsonb
+                OR (
+                    jsonb_typeof(document->'question_hash') = 'string'
+                    AND document->>'question_hash' ~ '^[A-Za-z0-9_-]{1,128}$'
+                )
+            )
+            AND (
+                NOT document ? 'conversation_id'
+                OR document->'conversation_id' = 'null'::jsonb
+                OR (
+                    jsonb_typeof(document->'conversation_id') = 'string'
+                    AND length(document->>'conversation_id') BETWEEN 1 AND 256
+                )
+            )
+            AND (
+                NOT document ? 'message_id'
+                OR document->'message_id' = 'null'::jsonb
+                OR (
+                    jsonb_typeof(document->'message_id') = 'string'
+                    AND length(document->>'message_id') BETWEEN 1 AND 256
+                )
+            )
+            AND (
+                (
+                    document ? 'borrower_ids'
+                    AND jsonb_array_length(document->'borrower_ids') > 0
+                )
+                OR (
+                    document ? 'result_filters'
+                    AND document->'result_filters' <> '{}'::jsonb
+                )
+            )
+        ELSE FALSE
+    END;
+$$;
+
+CREATE OR REPLACE FUNCTION mip_app.campaign_suppression_policy_is_reviewed(
+    document JSONB
+)
+RETURNS BOOLEAN
+LANGUAGE SQL
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    SELECT mip_app.campaign_jsonb_has_only_keys(
+               document,
+               ARRAY[
+                   'default','require_marketing_eligible',
+                   'marketing_eligibility','frequency_cap_days'
+               ]::TEXT[]
+           )
+       AND (NOT document ? 'default' OR document->>'default' = 'eligible_only')
+       AND (
+           NOT document ? 'require_marketing_eligible'
+           OR jsonb_typeof(document->'require_marketing_eligible') = 'boolean'
+       )
+       AND (
+           NOT document ? 'marketing_eligibility'
+           OR document->>'marketing_eligibility' = 'Eligible only'
+       )
+       AND (
+           NOT document ? 'frequency_cap_days'
+           OR (
+               jsonb_typeof(document->'frequency_cap_days') = 'number'
+               AND (document->>'frequency_cap_days')::NUMERIC =
+                   trunc((document->>'frequency_cap_days')::NUMERIC)
+               AND (document->>'frequency_cap_days')::NUMERIC BETWEEN 30 AND 365
+           )
+       );
+$$;
+
+CREATE OR REPLACE FUNCTION mip_app.campaign_channel_cascade_is_reviewed(
+    document JSONB
+)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+DECLARE
+    item JSONB;
+    step_number INTEGER;
+    seen_steps INTEGER[] := ARRAY[]::INTEGER[];
+BEGIN
+    IF jsonb_typeof(document) <> 'array' OR jsonb_array_length(document) > 6 THEN
+        RETURN FALSE;
+    END IF;
+    FOR item IN SELECT value FROM jsonb_array_elements(document) AS entries(value)
+    LOOP
+        IF NOT mip_app.campaign_jsonb_has_only_keys(
+            item, ARRAY['channel','step','after_days']::TEXT[]
+        ) THEN
+            RETURN FALSE;
+        END IF;
+        IF NOT item ? 'channel' OR NOT item ? 'step' THEN
+            RETURN FALSE;
+        END IF;
+        IF jsonb_typeof(item->'channel') <> 'string'
+           OR NOT (item->>'channel' = ANY(ARRAY['email','sms','direct_mail']::TEXT[])) THEN
+            RETURN FALSE;
+        END IF;
+        IF jsonb_typeof(item->'step') <> 'number'
+           OR (item->>'step')::NUMERIC <> trunc((item->>'step')::NUMERIC)
+           OR (item->>'step')::NUMERIC NOT BETWEEN 1 AND 100 THEN
+            RETURN FALSE;
+        END IF;
+        step_number := (item->>'step')::INTEGER;
+        IF step_number = ANY(seen_steps) THEN
+            RETURN FALSE;
+        END IF;
+        seen_steps := array_append(seen_steps, step_number);
+        IF item ? 'after_days' AND (
+            jsonb_typeof(item->'after_days') <> 'number'
+            OR (item->>'after_days')::NUMERIC <> trunc((item->>'after_days')::NUMERIC)
+            OR (item->>'after_days')::NUMERIC NOT BETWEEN 0 AND 365
+        ) THEN
+            RETURN FALSE;
+        END IF;
+    END LOOP;
+    RETURN TRUE;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION mip_app.campaign_send_window_is_reviewed(
+    document JSONB
+)
+RETURNS BOOLEAN
+LANGUAGE SQL
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    SELECT document = '{}'::jsonb
+       OR (
+           mip_app.campaign_jsonb_has_only_keys(
+               document,
+               ARRAY['days','timezone','start_local','end_local']::TEXT[]
+           )
+           AND mip_app.campaign_jsonb_text_array_is_reviewed(
+               document->'days',
+               '^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)$',
+               7
+           )
+           AND jsonb_array_length(document->'days') > 0
+           AND document->>'timezone' = 'borrower_local'
+           AND document->>'start_local' ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+           AND document->>'end_local' ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+           AND document->>'start_local' < document->>'end_local'
+       );
+$$;
+
+CREATE OR REPLACE FUNCTION mip_app.campaign_holdout_is_reviewed(
+    document JSONB
+)
+RETURNS BOOLEAN
+LANGUAGE SQL
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    SELECT mip_app.campaign_jsonb_has_only_keys(
+               document, ARRAY['method','size_pct']::TEXT[]
+           )
+       AND document->>'method' = 'hash_modulo'
+       AND jsonb_typeof(document->'size_pct') = 'number'
+       AND (document->>'size_pct')::NUMERIC BETWEEN 0 AND 50
+       AND (document->>'size_pct')::NUMERIC * 100
+           = trunc((document->>'size_pct')::NUMERIC * 100);
+$$;
+
+CREATE OR REPLACE FUNCTION mip_app.campaign_roi_assumptions_is_reviewed(
+    document JSONB
+)
+RETURNS BOOLEAN
+LANGUAGE SQL
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    SELECT mip_app.campaign_jsonb_has_only_keys(
+               document,
+               ARRAY[
+                   'budget_usd','expected_conversion_rate',
+                   'expected_conversion_rate_pct','lo_capacity',
+                   'cost_per_contact_usd','source'
+               ]::TEXT[]
+           )
+       AND NOT EXISTS (
+           SELECT 1
+           FROM jsonb_each(document) AS entry(key_name, item)
+           WHERE key_name = ANY(
+               ARRAY[
+                   'budget_usd','expected_conversion_rate',
+                   'expected_conversion_rate_pct','lo_capacity'
+               ]::TEXT[]
+           )
+             AND (
+                 jsonb_typeof(item) <> 'number'
+                 OR (item #>> '{}')::NUMERIC < 0
+                 OR (
+                     key_name = ANY(
+                         ARRAY[
+                             'expected_conversion_rate',
+                             'expected_conversion_rate_pct'
+                         ]::TEXT[]
+                     )
+                     AND (item #>> '{}')::NUMERIC > 100
+                 )
+             )
+       )
+       AND (
+           NOT document ? 'cost_per_contact_usd'
+           OR (
+               jsonb_typeof(document->'cost_per_contact_usd') = 'number'
+               AND (document->>'cost_per_contact_usd')::NUMERIC >= 0
+           )
+           OR (
+               mip_app.campaign_jsonb_has_only_keys(
+                   document->'cost_per_contact_usd',
+                   ARRAY['email','sms','direct_mail']::TEXT[]
+               )
+               AND NOT EXISTS (
+                   SELECT 1
+                   FROM jsonb_each(document->'cost_per_contact_usd') AS cost(channel, amount)
+                   WHERE jsonb_typeof(amount) <> 'number'
+                      OR (amount #>> '{}')::NUMERIC < 0
+               )
+           )
+       )
+       AND (
+           NOT document ? 'source'
+           OR document->>'source' = ANY(
+               ARRAY[
+                   'operator_configured',
+                   'operator_required_before_live_send'
+               ]::TEXT[]
+           )
+       );
+$$;
+
+CREATE OR REPLACE FUNCTION mip_app.campaign_json_contract_is_reviewed(
+    criteria_document JSONB,
+    suppression_document JSONB,
+    cascade_document JSONB,
+    send_window_document JSONB,
+    holdout_document JSONB,
+    roi_document JSONB
+)
+RETURNS BOOLEAN
+LANGUAGE SQL
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    SELECT mip_app.campaign_criteria_is_reviewed(criteria_document) IS TRUE
+       AND mip_app.campaign_suppression_policy_is_reviewed(suppression_document) IS TRUE
+       AND mip_app.campaign_channel_cascade_is_reviewed(cascade_document) IS TRUE
+       AND mip_app.campaign_send_window_is_reviewed(send_window_document) IS TRUE
+       AND (
+           holdout_document IS NULL
+           OR mip_app.campaign_holdout_is_reviewed(holdout_document) IS TRUE
+       )
+       AND (
+           roi_document IS NULL
+           OR mip_app.campaign_roi_assumptions_is_reviewed(roi_document) IS TRUE
+       );
+$$;
+
+-- Rows that predate the explicit contract remain readable and status-
+-- transitionable. Fresh installs already hold version 1 from CREATE TABLE;
+-- only rows encountered during an in-place upgrade receive legacy version 0.
+UPDATE mip_app.campaigns
+SET json_contract_version = 0
+WHERE json_contract_version IS NULL;
+ALTER TABLE mip_app.campaigns
+    ALTER COLUMN json_contract_version SET DEFAULT 1;
+ALTER TABLE mip_app.campaigns
+    ALTER COLUMN json_contract_version SET NOT NULL;
+
+CREATE OR REPLACE FUNCTION mip_app.enforce_campaign_json_contract()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        NEW.json_contract_version := 1;
+        IF mip_app.campaign_json_contract_is_reviewed(
+            NEW.criteria,
+            NEW.suppression_policy,
+            NEW.channel_cascade,
+            NEW.send_window,
+            NEW.holdout,
+            NEW.roi_assumptions
+        ) IS NOT TRUE THEN
+            RAISE EXCEPTION 'campaign JSON does not satisfy reviewed contract version 1'
+                USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+    END IF;
+
+    IF NEW.json_contract_version IS DISTINCT FROM OLD.json_contract_version
+       OR NEW.criteria IS DISTINCT FROM OLD.criteria
+       OR NEW.suppression_policy IS DISTINCT FROM OLD.suppression_policy
+       OR NEW.channel_cascade IS DISTINCT FROM OLD.channel_cascade
+       OR NEW.send_window IS DISTINCT FROM OLD.send_window
+       OR NEW.holdout IS DISTINCT FROM OLD.holdout
+       OR NEW.roi_assumptions IS DISTINCT FROM OLD.roi_assumptions THEN
+        IF mip_app.campaign_json_contract_is_reviewed(
+            NEW.criteria,
+            NEW.suppression_policy,
+            NEW.channel_cascade,
+            NEW.send_window,
+            NEW.holdout,
+            NEW.roi_assumptions
+        ) IS NOT TRUE THEN
+            RAISE EXCEPTION 'modified campaign JSON must satisfy reviewed contract version 1'
+                USING ERRCODE = '23514';
+        END IF;
+        NEW.json_contract_version := 1;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_campaigns_json_contract_enforcement
+    ON mip_app.campaigns;
+CREATE TRIGGER trg_campaigns_json_contract_enforcement
+    BEFORE INSERT OR UPDATE ON mip_app.campaigns
+    FOR EACH ROW
+    EXECUTE FUNCTION mip_app.enforce_campaign_json_contract();
+
+ALTER TABLE mip_app.campaigns
+    DROP CONSTRAINT IF EXISTS campaigns_treatment_state_chk;
+ALTER TABLE mip_app.campaigns
+    ADD CONSTRAINT campaigns_treatment_state_chk
+    CHECK (treatment_state IN ('legacy_unbound','building','ready','failed'));
+ALTER TABLE mip_app.campaigns
+    DROP CONSTRAINT IF EXISTS campaigns_treatment_reservation_chk;
+ALTER TABLE mip_app.campaigns
+    ADD CONSTRAINT campaigns_treatment_reservation_chk
+    CHECK (
+        treatment_state = 'legacy_unbound'
+        OR (
+            treatment_materialization_id IS NOT NULL
+            AND treatment_algorithm_version = 'campaign-treatment-v2'
+            AND treatment_contract_fingerprint ~ '^[0-9a-f]{64}$'
+            AND length(btrim(idempotency_key)) BETWEEN 1 AND 128
+            AND request_payload_hash ~ '^[0-9a-f]{64}$'
+        ) IS TRUE
+    );
+ALTER TABLE mip_app.campaigns
+    DROP CONSTRAINT IF EXISTS campaigns_treatment_lease_state_chk;
+ALTER TABLE mip_app.campaigns
+    ADD CONSTRAINT campaigns_treatment_lease_state_chk
+    CHECK (
+        treatment_state = 'legacy_unbound'
+        OR (
+            treatment_state = 'building'
+            AND treatment_build_lease_until IS NOT NULL
+        )
+        OR (
+            treatment_state IN ('ready','failed')
+            AND treatment_build_lease_until IS NULL
+        )
+    );
+ALTER TABLE mip_app.campaigns
+    DROP CONSTRAINT IF EXISTS campaigns_nonready_treatment_proof_empty_chk;
+ALTER TABLE mip_app.campaigns
+    ADD CONSTRAINT campaigns_nonready_treatment_proof_empty_chk
+    CHECK (
+        treatment_state NOT IN ('building','failed')
+        OR (
+            treatment_fingerprint IS NULL
+            AND treatment_source_snapshot_id IS NULL
+            AND treatment_delta_version IS NULL
+            AND treatment_assignment_digest IS NULL
+            AND treatment_candidate_count IS NULL
+            AND treatment_selected_primary_count IS NULL
+            AND treatment_count IS NULL
+            AND treatment_holdout_count IS NULL
+            AND treatment_materialized_at IS NULL
+            AND household_summary = '{}'::jsonb
+            AND creation_response IS NULL
+        )
+    );
+ALTER TABLE mip_app.campaigns
+    DROP CONSTRAINT IF EXISTS campaigns_treatment_counts_chk;
+ALTER TABLE mip_app.campaigns
+    ADD CONSTRAINT campaigns_treatment_counts_chk
+    CHECK (
+        treatment_candidate_count IS NULL
+        OR (
+            treatment_candidate_count >= 0
+            AND treatment_selected_primary_count >= 0
+            AND treatment_count >= 0
+            AND treatment_holdout_count >= 0
+            AND treatment_selected_primary_count <= treatment_candidate_count
+            AND treatment_selected_primary_count = treatment_count + treatment_holdout_count
+        )
+    );
+ALTER TABLE mip_app.campaigns
+    DROP CONSTRAINT IF EXISTS campaigns_ready_treatment_manifest_chk;
+ALTER TABLE mip_app.campaigns
+    ADD CONSTRAINT campaigns_ready_treatment_manifest_chk
+    CHECK (
+        treatment_state <> 'ready'
+        OR (
+            treatment_materialization_id IS NOT NULL
+            AND treatment_algorithm_version = 'campaign-treatment-v2'
+            AND treatment_contract_fingerprint ~ '^[0-9a-f]{64}$'
+            AND treatment_fingerprint ~ '^[0-9a-f]{64}$'
+            AND treatment_source_snapshot_id ~ '^[0-9a-f]{64}$'
+            AND treatment_delta_version >= 0
+            AND treatment_assignment_digest ~ '^[0-9a-f]{64}$'
+            AND treatment_candidate_count IS NOT NULL
+            AND treatment_selected_primary_count IS NOT NULL
+            AND treatment_count IS NOT NULL
+            AND treatment_holdout_count IS NOT NULL
+            AND treatment_materialized_at IS NOT NULL
+            AND treatment_build_lease_until IS NULL
+            AND mip_app.campaign_household_summary_is_reviewed(
+                household_summary,
+                household_dedup,
+                treatment_candidate_count,
+                treatment_selected_primary_count
+            )
+            AND mip_app.campaign_creation_response_is_reviewed(
+                creation_response,
+                name,
+                treatment_count,
+                household_summary
+            )
+            AND CASE
+                WHEN holdout IS NULL THEN treatment_holdout_count = 0
+                WHEN mip_app.campaign_holdout_is_reviewed(holdout) IS TRUE THEN
+                    treatment_holdout_count = 0
+                    OR (holdout->>'size_pct')::NUMERIC > 0
+                ELSE FALSE
+            END
+        ) IS TRUE
+    );
+
+CREATE OR REPLACE FUNCTION mip_app.enforce_campaign_treatment_boundary()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        IF NEW.treatment_state NOT IN ('legacy_unbound', 'building') THEN
+            RAISE EXCEPTION 'campaign treatment must begin in legacy or building state'
+                USING ERRCODE = '23514';
+        END IF;
+        IF NEW.treatment_state = 'building' AND (
+            NEW.treatment_materialization_id IS NULL
+            OR NEW.treatment_algorithm_version
+                IS DISTINCT FROM 'campaign-treatment-v2'
+            OR NEW.treatment_contract_fingerprint IS NULL
+            OR NEW.treatment_contract_fingerprint !~ '^[0-9a-f]{64}$'
+            OR NEW.idempotency_key IS NULL
+            OR length(btrim(NEW.idempotency_key)) NOT BETWEEN 1 AND 128
+            OR NEW.request_payload_hash IS NULL
+            OR NEW.request_payload_hash !~ '^[0-9a-f]{64}$'
+            OR NEW.treatment_build_lease_until IS NULL
+            OR NEW.treatment_build_lease_until <= now()
+        ) THEN
+            RAISE EXCEPTION 'building campaign requires a complete active reservation'
+                USING ERRCODE = '23514';
+        END IF;
+        IF NEW.treatment_state = 'building' AND (
+            NEW.treatment_fingerprint IS NOT NULL
+            OR NEW.treatment_source_snapshot_id IS NOT NULL
+            OR NEW.treatment_delta_version IS NOT NULL
+            OR NEW.treatment_assignment_digest IS NOT NULL
+            OR NEW.treatment_candidate_count IS NOT NULL
+            OR NEW.treatment_selected_primary_count IS NOT NULL
+            OR NEW.treatment_count IS NOT NULL
+            OR NEW.treatment_holdout_count IS NOT NULL
+            OR NEW.treatment_materialized_at IS NOT NULL
+            OR NEW.household_summary IS DISTINCT FROM '{}'::jsonb
+            OR NEW.creation_response IS NOT NULL
+        ) THEN
+            RAISE EXCEPTION 'building campaign cannot carry finalized treatment proof'
+                USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+    END IF;
+
+    IF NEW.campaign_id IS DISTINCT FROM OLD.campaign_id
+       OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
+        RAISE EXCEPTION 'campaign identity and creation chronology are immutable'
+            USING ERRCODE = '55000';
+    END IF;
+
+    IF OLD.treatment_state IN ('building','ready','failed') AND (
+        NEW.name IS DISTINCT FROM OLD.name
+        OR NEW.criteria IS DISTINCT FROM OLD.criteria
+        OR NEW.json_contract_version IS DISTINCT FROM OLD.json_contract_version
+        OR NEW.suppression_policy IS DISTINCT FROM OLD.suppression_policy
+        OR NEW.message_variants IS DISTINCT FROM OLD.message_variants
+        OR NEW.channel_cascade IS DISTINCT FROM OLD.channel_cascade
+        OR NEW.send_window IS DISTINCT FROM OLD.send_window
+        OR NEW.holdout IS DISTINCT FROM OLD.holdout
+        OR NEW.roi_assumptions IS DISTINCT FROM OLD.roi_assumptions
+        OR NEW.household_dedup IS DISTINCT FROM OLD.household_dedup
+        OR NEW.idempotency_key IS DISTINCT FROM OLD.idempotency_key
+        OR NEW.request_payload_hash IS DISTINCT FROM OLD.request_payload_hash
+        OR NEW.treatment_algorithm_version IS DISTINCT FROM OLD.treatment_algorithm_version
+        OR NEW.treatment_contract_fingerprint IS DISTINCT FROM OLD.treatment_contract_fingerprint
+    ) THEN
+        RAISE EXCEPTION 'campaign treatment contract is immutable after reservation'
+            USING ERRCODE = '55000';
+    END IF;
+
+    IF NEW.treatment_materialization_id IS DISTINCT FROM OLD.treatment_materialization_id
+       AND NOT (
+           OLD.treatment_state = 'building'
+           AND NEW.treatment_state = 'building'
+           AND OLD.treatment_build_lease_until IS NOT NULL
+           AND NEW.treatment_build_lease_until IS NOT NULL
+           AND OLD.treatment_build_lease_until <= now()
+           AND NEW.treatment_build_lease_until > now()
+           AND OLD.treatment_fingerprint IS NULL
+           AND OLD.treatment_delta_version IS NULL
+       ) THEN
+        RAISE EXCEPTION 'campaign materialization id may rotate only during an expired build reclaim'
+            USING ERRCODE = '55000';
+    END IF;
+
+    IF OLD.treatment_state = 'legacy_unbound' AND NEW.treatment_state <> 'legacy_unbound' THEN
+        RAISE EXCEPTION 'legacy campaigns must be rebuilt with a new campaign id'
+            USING ERRCODE = '55000';
+    END IF;
+
+    IF NEW.treatment_state IS DISTINCT FROM OLD.treatment_state
+       AND NOT (
+           OLD.treatment_state = 'building'
+           AND NEW.treatment_state IN ('ready', 'failed')
+       ) THEN
+        RAISE EXCEPTION 'campaign treatment state transition is not allowed'
+            USING ERRCODE = '55000';
+    END IF;
+
+    IF NEW.treatment_state = 'building' AND (
+        NEW.treatment_build_lease_until IS NULL
+        OR NEW.treatment_build_lease_until <= now()
+    ) THEN
+        RAISE EXCEPTION 'building campaign requires an active treatment lease'
+            USING ERRCODE = '23514';
+    END IF;
+
+    IF NEW.treatment_state IN ('ready', 'failed')
+       AND NEW.treatment_build_lease_until IS NOT NULL THEN
+        RAISE EXCEPTION 'terminal campaign treatment state cannot retain a build lease'
+            USING ERRCODE = '23514';
+    END IF;
+
+    IF (
+        NEW.treatment_fingerprint IS DISTINCT FROM OLD.treatment_fingerprint
+        OR NEW.treatment_source_snapshot_id IS DISTINCT FROM OLD.treatment_source_snapshot_id
+        OR NEW.treatment_delta_version IS DISTINCT FROM OLD.treatment_delta_version
+        OR NEW.treatment_assignment_digest IS DISTINCT FROM OLD.treatment_assignment_digest
+        OR NEW.treatment_candidate_count IS DISTINCT FROM OLD.treatment_candidate_count
+        OR NEW.treatment_selected_primary_count IS DISTINCT FROM OLD.treatment_selected_primary_count
+        OR NEW.treatment_count IS DISTINCT FROM OLD.treatment_count
+        OR NEW.treatment_holdout_count IS DISTINCT FROM OLD.treatment_holdout_count
+        OR NEW.treatment_materialized_at IS DISTINCT FROM OLD.treatment_materialized_at
+        OR NEW.household_summary IS DISTINCT FROM OLD.household_summary
+        OR NEW.creation_response IS DISTINCT FROM OLD.creation_response
+    ) AND NOT (
+        OLD.treatment_state = 'building'
+        AND NEW.treatment_state = 'ready'
+    ) THEN
+        RAISE EXCEPTION
+            'campaign treatment proof may change only during building-to-ready finalization'
+            USING ERRCODE = '55000';
+    END IF;
+
+    IF NEW.treatment_build_lease_until
+       IS DISTINCT FROM OLD.treatment_build_lease_until
+       AND NOT (
+           OLD.treatment_state = 'building'
+           AND (
+               (
+                   NEW.treatment_state = 'building'
+                   AND NEW.treatment_materialization_id
+                       IS DISTINCT FROM OLD.treatment_materialization_id
+                   AND OLD.treatment_build_lease_until IS NOT NULL
+                   AND NEW.treatment_build_lease_until IS NOT NULL
+                   AND OLD.treatment_build_lease_until <= now()
+                   AND NEW.treatment_build_lease_until > now()
+                   AND OLD.treatment_fingerprint IS NULL
+                   AND OLD.treatment_delta_version IS NULL
+               )
+               OR (
+                   NEW.treatment_state IN ('ready', 'failed')
+                   AND NEW.treatment_build_lease_until IS NULL
+               )
+           )
+       ) THEN
+        RAISE EXCEPTION
+            'campaign treatment lease may change only during reclaim or terminal transition'
+            USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_campaigns_treatment_boundary ON mip_app.campaigns;
+CREATE TRIGGER trg_campaigns_treatment_boundary
+    BEFORE INSERT OR UPDATE ON mip_app.campaigns
+    FOR EACH ROW
+    EXECUTE FUNCTION mip_app.enforce_campaign_treatment_boundary();
+
+-- Activation may only consume an immutable T0 treatment. Quarantine any
+-- pre-treatment campaigns that were historically seeded or promoted as
+-- active, then make the invariant database-enforced for every future writer.
+UPDATE mip_app.campaigns
+SET status = 'archived',
+    updated_at = now()
+WHERE status = 'active'
+  AND treatment_state <> 'ready';
+
+ALTER TABLE mip_app.campaigns
+    DROP CONSTRAINT IF EXISTS campaigns_active_requires_ready_treatment_chk;
+ALTER TABLE mip_app.campaigns
+    ADD CONSTRAINT campaigns_active_requires_ready_treatment_chk
+    CHECK (status <> 'active' OR treatment_state = 'ready');
+
+-- The post-seed NOT VALID checks retain the legacy-version escape hatch on
+-- unchanged payloads. The trigger above closes that hatch for inserts and any
+-- governed JSON modification, promoting successful remediations to version 1.
+ALTER TABLE mip_app.campaigns
+    DROP CONSTRAINT IF EXISTS campaigns_criteria_reviewed_shape_chk;
+ALTER TABLE mip_app.campaigns
+    DROP CONSTRAINT IF EXISTS campaigns_suppression_policy_reviewed_shape_chk;
+ALTER TABLE mip_app.campaigns
+    DROP CONSTRAINT IF EXISTS campaigns_channel_cascade_reviewed_shape_chk;
+ALTER TABLE mip_app.campaigns
+    DROP CONSTRAINT IF EXISTS campaigns_send_window_reviewed_shape_chk;
+ALTER TABLE mip_app.campaigns
+    DROP CONSTRAINT IF EXISTS campaigns_holdout_reviewed_shape_chk;
+ALTER TABLE mip_app.campaigns
+    DROP CONSTRAINT IF EXISTS campaigns_roi_assumptions_reviewed_shape_chk;
+
 CREATE INDEX IF NOT EXISTS idx_campaigns_owner
     ON mip_app.campaigns (owner_email, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_campaigns_status
     ON mip_app.campaigns (status, updated_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_campaigns_owner_idempotency
+    ON mip_app.campaigns (owner_email, idempotency_key)
+    WHERE idempotency_key IS NOT NULL;
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_07_14_campaign_idempotency',
+    'Add owner-scoped campaign idempotency keys and request payload hashes'
+)
+ON CONFLICT (version) DO NOTHING;
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_07_15_campaign_t0_treatment_boundary',
+    'Reserve campaigns in Lakebase and bind ready execution to an immutable Unity Catalog treatment snapshot'
+)
+ON CONFLICT (version) DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS mip_app.campaign_message_variants (
     campaign_id  UUID NOT NULL REFERENCES mip_app.campaigns(campaign_id) ON DELETE CASCADE,
@@ -87,9 +1353,55 @@ CREATE TABLE IF NOT EXISTS mip_app.campaign_message_variants (
     subject      TEXT,
     body         TEXT NOT NULL CHECK (length(body) <= 5000),
     weight_pct   NUMERIC,
+    generation_mode TEXT NOT NULL DEFAULT 'operator'
+                    CHECK (generation_mode IN ('supervisor','reviewed_fallback','operator')),
+    generator_label TEXT NOT NULL DEFAULT 'Operator edited',
+    provenance_key_id TEXT,
+    provenance_issued_at TIMESTAMPTZ,
+    provenance_expires_at TIMESTAMPTZ,
+    provenance_copy_hash TEXT,
+    provenance_criteria_fingerprint TEXT,
+    provenance_performance_fingerprint TEXT,
+    provenance_token_digest TEXT,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (campaign_id, variant_name, channel)
 );
+ALTER TABLE mip_app.campaign_message_variants
+    ADD COLUMN IF NOT EXISTS generation_mode TEXT NOT NULL DEFAULT 'operator';
+ALTER TABLE mip_app.campaign_message_variants
+    ADD COLUMN IF NOT EXISTS generator_label TEXT NOT NULL DEFAULT 'Operator edited';
+ALTER TABLE mip_app.campaign_message_variants
+    ADD COLUMN IF NOT EXISTS provenance_key_id TEXT;
+ALTER TABLE mip_app.campaign_message_variants
+    ADD COLUMN IF NOT EXISTS provenance_issued_at TIMESTAMPTZ;
+ALTER TABLE mip_app.campaign_message_variants
+    ADD COLUMN IF NOT EXISTS provenance_expires_at TIMESTAMPTZ;
+ALTER TABLE mip_app.campaign_message_variants
+    ADD COLUMN IF NOT EXISTS provenance_copy_hash TEXT;
+ALTER TABLE mip_app.campaign_message_variants
+    ADD COLUMN IF NOT EXISTS provenance_criteria_fingerprint TEXT;
+ALTER TABLE mip_app.campaign_message_variants
+    ADD COLUMN IF NOT EXISTS provenance_performance_fingerprint TEXT;
+ALTER TABLE mip_app.campaign_message_variants
+    ADD COLUMN IF NOT EXISTS provenance_token_digest TEXT;
+-- Recurring seed installation retains three historical operator rows. Drop
+-- the forward-write guard only inside this migration transaction; it is
+-- restored after the insert-only seed block below.
+ALTER TABLE mip_app.campaign_message_variants
+    DROP CONSTRAINT IF EXISTS campaign_message_variants_server_owned_proof_chk;
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'campaign_message_variants_generation_mode_chk'
+          AND conrelid = 'mip_app.campaign_message_variants'::regclass
+    ) THEN
+        ALTER TABLE mip_app.campaign_message_variants
+            ADD CONSTRAINT campaign_message_variants_generation_mode_chk
+            CHECK (generation_mode IN ('supervisor','reviewed_fallback','operator'));
+    END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS mip_app.tenant_disclosures (
     -- Per-deployment disclosure namespace. Summit dev seeds use "summit";
@@ -199,6 +1511,13 @@ CREATE TABLE IF NOT EXISTS mip_app.call_dispositions (
     request_id     TEXT,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Recurring schema application may need to install upgraded proof guards.
+-- PostgreSQL DDL is transactional, so a later failure restores the prior
+-- triggers together with the rest of the migration.
+DROP TRIGGER IF EXISTS trg_call_dispositions_finalize_only
+    ON mip_app.call_dispositions;
+DROP TRIGGER IF EXISTS trg_call_dispositions_no_remove
+    ON mip_app.call_dispositions;
 CREATE INDEX IF NOT EXISTS idx_call_dispositions_borrower
     ON mip_app.call_dispositions (borrower_id, occurred_at DESC);
 CREATE INDEX IF NOT EXISTS idx_call_dispositions_lo
@@ -213,15 +1532,27 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_call_dispositions_request_id
 -- can swap to `clip_ref`. `action` is the approve / reject / hold verb.
 CREATE TABLE IF NOT EXISTS mip_app.approvals (
     approval_id   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    campaign_id   UUID REFERENCES mip_app.campaigns(campaign_id) ON DELETE SET NULL,
+    campaign_id   UUID,
+    variant_name  TEXT,
+    channel       TEXT CHECK (channel IN ('email','sms','direct_mail')),
     borrower_id   TEXT NOT NULL,
     offer_code    TEXT,
     action        TEXT NOT NULL CHECK (action IN ('approve','reject','hold')),
     actor_email   TEXT NOT NULL,
     rationale     TEXT,
     request_id    TEXT,
+    decision_intent TEXT,
+    decision_payload_hash TEXT,
+    decision_response JSONB,
+    audit_event_id UUID,
     decided_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- The schema is reapplied transactionally. Drop the proof guards only so
+-- explicit compatibility backfills below can run; they are recreated before
+-- commit. Historical evidence is never deleted by a recurring deployment.
+DROP TRIGGER IF EXISTS trg_approvals_finalize_only ON mip_app.approvals;
+DROP TRIGGER IF EXISTS trg_approvals_no_remove ON mip_app.approvals;
+DROP TRIGGER IF EXISTS trg_approvals_campaign_lifecycle ON mip_app.approvals;
 -- R5-01 idempotency key: when the backend retries an approve/reject after
 -- a lost 503 response, the re-POSTed ``request_id`` collides on this
 -- partial unique index so we don't write a duplicate decision row. The
@@ -230,6 +1561,18 @@ CREATE TABLE IF NOT EXISTS mip_app.approvals (
 -- the retry-safe guarantee).
 ALTER TABLE mip_app.approvals
     ADD COLUMN IF NOT EXISTS request_id TEXT;
+ALTER TABLE mip_app.approvals
+    ADD COLUMN IF NOT EXISTS decision_intent TEXT;
+ALTER TABLE mip_app.approvals
+    ADD COLUMN IF NOT EXISTS decision_payload_hash TEXT;
+ALTER TABLE mip_app.approvals
+    ADD COLUMN IF NOT EXISTS decision_response JSONB;
+ALTER TABLE mip_app.approvals
+    ADD COLUMN IF NOT EXISTS audit_event_id UUID;
+ALTER TABLE mip_app.approvals
+    ADD COLUMN IF NOT EXISTS variant_name TEXT;
+ALTER TABLE mip_app.approvals
+    ADD COLUMN IF NOT EXISTS channel TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_approvals_request_id
     ON mip_app.approvals (request_id) WHERE request_id IS NOT NULL;
 -- Feature C (loan-officer assignment + follow-up reminder): persist the
@@ -273,8 +1616,11 @@ CREATE INDEX IF NOT EXISTS idx_saved_leads_actor_updated
 CREATE TABLE IF NOT EXISTS mip_app.outreach_drafts (
     actor_email  TEXT NOT NULL,
     borrower_id  TEXT NOT NULL,
+    generation_id UUID,
+    response_hash TEXT,
     offer_code   TEXT,
     channel      TEXT NOT NULL DEFAULT 'email' CHECK (channel IN ('email','sms','direct_mail')),
+    subject      TEXT CHECK (subject IS NULL OR length(subject) <= 120),
     body         TEXT NOT NULL CHECK (length(body) <= 5000),
     status       TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','released')),
     saved_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -283,12 +1629,40 @@ CREATE TABLE IF NOT EXISTS mip_app.outreach_drafts (
     PRIMARY KEY (actor_email, borrower_id, channel)
 );
 ALTER TABLE mip_app.outreach_drafts
+    ADD COLUMN IF NOT EXISTS generation_id UUID;
+ALTER TABLE mip_app.outreach_drafts
+    ADD COLUMN IF NOT EXISTS response_hash TEXT;
+ALTER TABLE mip_app.outreach_drafts
+    DROP CONSTRAINT IF EXISTS outreach_drafts_generation_proof_check;
+ALTER TABLE mip_app.outreach_drafts
+    ADD CONSTRAINT outreach_drafts_generation_proof_check CHECK (
+        (generation_id IS NULL AND response_hash IS NULL)
+        OR (
+            generation_id IS NOT NULL
+            AND response_hash ~ '^[0-9a-f]{64}$'
+        )
+    );
+ALTER TABLE mip_app.outreach_drafts
+    ADD COLUMN IF NOT EXISTS subject TEXT;
+ALTER TABLE mip_app.outreach_drafts
+    DROP CONSTRAINT IF EXISTS outreach_drafts_subject_check;
+ALTER TABLE mip_app.outreach_drafts
+    ADD CONSTRAINT outreach_drafts_subject_check
+    CHECK (subject IS NULL OR length(subject) <= 120);
+ALTER TABLE mip_app.outreach_drafts
     DROP CONSTRAINT IF EXISTS outreach_drafts_channel_check;
 ALTER TABLE mip_app.outreach_drafts
     ADD CONSTRAINT outreach_drafts_channel_check CHECK (channel IN ('email','sms','direct_mail'));
 CREATE INDEX IF NOT EXISTS idx_outreach_drafts_actor_updated
     ON mip_app.outreach_drafts (actor_email, updated_at DESC)
     WHERE deleted_at IS NULL;
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_07_13_outreach_draft_subject',
+    'Persist the exact email or direct-mail subject through workspace review and approval audit'
+)
+ON CONFLICT (version) DO NOTHING;
 
 -- Activation / customer writeback --------------------------------------
 -- Product boundary: Module 0 can stage an approved lead or campaign for a
@@ -392,10 +1766,63 @@ ALTER TABLE mip_app.activation_outbox
 DROP INDEX IF EXISTS mip_app.idx_activation_outbox_request_id;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_activation_outbox_request_id
     ON mip_app.activation_outbox (request_id);
+
+-- Install the delivery-time campaign proof gate exactly once. schema.sql is
+-- intentionally replayable on every deploy, so an unguarded UPDATE here would
+-- cancel rows produced by the new proof-bound writer on every later release.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM mip_app.schema_migrations
+        WHERE version = '2026_07_25_campaign_activation_delivery_reproof'
+    ) THEN
+        UPDATE mip_app.activation_outbox
+        SET status = 'cancelled',
+            delivery_metadata = COALESCE(delivery_metadata, '{}'::jsonb)
+                || '{"cancelled_reason":"campaign_treatment_reproof_required"}'::jsonb,
+            updated_at = now()
+        WHERE campaign_id IS NOT NULL
+          AND status IN ('dry_run','staged','failed');
+
+        INSERT INTO mip_app.schema_migrations (version, description)
+        VALUES (
+            '2026_07_25_campaign_activation_delivery_reproof',
+            'Cancel only pre-gate campaign activation rows before delivery-time treatment reproof becomes authoritative'
+        );
+    END IF;
+END;
+$$;
+
+-- A historical failed handoff may share a business key with another active
+-- row because the former index excluded failures. Preserve the oldest,
+-- highest-authority row (and therefore its stable external idempotency key)
+-- and cancel only additional duplicates before widening the unique boundary.
+WITH ranked_activation_business_keys AS (
+    SELECT activation_id,
+           ROW_NUMBER() OVER (
+               PARTITION BY destination_key, approval_id, borrower_id, channel
+               ORDER BY
+                   CASE WHEN status = 'delivered' THEN 0 ELSE 1 END,
+                   created_at ASC,
+                   activation_id ASC
+           ) AS business_key_rank
+    FROM mip_app.activation_outbox
+    WHERE status IN ('dry_run','staged','failed','delivered')
+)
+UPDATE mip_app.activation_outbox AS activation
+SET status = 'cancelled',
+    delivery_metadata = COALESCE(activation.delivery_metadata, '{}'::jsonb)
+        || '{"cancelled_reason":"duplicate_business_key_reconciled"}'::jsonb,
+    updated_at = now()
+FROM ranked_activation_business_keys AS ranked
+WHERE activation.activation_id = ranked.activation_id
+  AND ranked.business_key_rank > 1;
+
 DROP INDEX IF EXISTS mip_app.idx_activation_outbox_business_key;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_activation_outbox_business_key
     ON mip_app.activation_outbox (destination_key, approval_id, borrower_id, channel)
-    WHERE status IN ('dry_run','staged','delivered');
+    WHERE status IN ('dry_run','staged','failed','delivered');
 CREATE INDEX IF NOT EXISTS idx_activation_outbox_created
     ON mip_app.activation_outbox (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_activation_outbox_borrower
@@ -449,6 +1876,10 @@ CREATE TABLE IF NOT EXISTS mip_app.lead_outcomes (
         request_id IS NOT NULL OR source_record_ref IS NOT NULL
     )
 );
+DROP TRIGGER IF EXISTS trg_lead_outcomes_finalize_only
+    ON mip_app.lead_outcomes;
+DROP TRIGGER IF EXISTS trg_lead_outcomes_no_remove
+    ON mip_app.lead_outcomes;
 COMMENT ON TABLE mip_app.lead_outcomes IS
     'PII-safe closed-loop lead outcomes imported from customer CRM/LOS/POS/servicing systems.';
 COMMENT ON COLUMN mip_app.lead_outcomes.payload_json IS
@@ -473,6 +1904,7 @@ BEGIN
             CHECK (request_id IS NOT NULL OR source_record_ref IS NOT NULL);
     END IF;
 END $$;
+
 DO $$
 BEGIN
     IF NOT EXISTS (
@@ -486,6 +1918,22 @@ BEGIN
                 competitor_lender_label IS NULL
                 OR competitor_lender_label ~ '^Competitor ([A-Z]|Other)$'
             );
+    END IF;
+END $$;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'ck_lead_outcomes_source_record_ref'
+          AND conrelid = 'mip_app.lead_outcomes'::regclass
+    ) THEN
+        ALTER TABLE mip_app.lead_outcomes
+            ADD CONSTRAINT ck_lead_outcomes_source_record_ref
+            CHECK (
+                source_record_ref IS NULL
+                OR source_record_ref ~ '^auto-[a-f0-9]{32}$'
+            ) NOT VALID;
     END IF;
 END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_lead_outcomes_request_id
@@ -513,6 +1961,7 @@ CREATE INDEX IF NOT EXISTS idx_lead_outcomes_type
 -- -- NO PII (no owner names, no street addresses).
 CREATE TABLE IF NOT EXISTS mip_app.action_audit (
     audit_id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    audit_sequence  BIGSERIAL NOT NULL,
     event_type      TEXT NOT NULL,
     actor_email     TEXT NOT NULL,
     entity_type     TEXT NOT NULL DEFAULT 'borrower',
@@ -527,6 +1976,12 @@ CREATE TABLE IF NOT EXISTS mip_app.action_audit (
 );
 ALTER TABLE mip_app.action_audit
     ADD COLUMN IF NOT EXISTS correlation_id TEXT;
+ALTER TABLE mip_app.action_audit
+    ADD COLUMN IF NOT EXISTS audit_sequence BIGSERIAL;
+ALTER TABLE mip_app.action_audit
+    ALTER COLUMN audit_sequence SET NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_action_audit_sequence
+    ON mip_app.action_audit (audit_sequence);
 CREATE INDEX IF NOT EXISTS idx_action_audit_event_at
     ON mip_app.action_audit (event_at DESC);
 CREATE INDEX IF NOT EXISTS idx_action_audit_event_type
@@ -567,6 +2022,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_action_audit_genie_request_actor_event
 CREATE UNIQUE INDEX IF NOT EXISTS idx_action_audit_genie_request_actor_event_v2
     ON mip_app.action_audit (actor_email, request_id, event_type)
     WHERE request_id IS NOT NULL AND left(event_type, 13) = 'GENIE_ACTION_';
+-- Admin refresh launches use the caller-supplied request id as both the
+-- Lakebase lifecycle key and the Databricks Jobs idempotency token. Keep one
+-- requested and one terminal run record per actor/request even when a retry is
+-- handled by another app process.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_action_audit_admin_request_actor_event
+    ON mip_app.action_audit (actor_email, request_id, event_type)
+    WHERE request_id IS NOT NULL
+      AND event_type IN ('ADMIN_OPERATION_REQUESTED', 'ADMIN_OPERATION_RUN');
 
 -- Append-only enforcement must not rely solely on GRANT shape. The
 -- Databricks Apps / migration identity can own or receive broader table
@@ -586,9 +2049,213 @@ $$;
 
 DROP TRIGGER IF EXISTS trg_action_audit_append_only ON mip_app.action_audit;
 CREATE TRIGGER trg_action_audit_append_only
-    BEFORE UPDATE OR DELETE ON mip_app.action_audit
+    BEFORE UPDATE OR DELETE OR TRUNCATE ON mip_app.action_audit
     FOR EACH STATEMENT
     EXECUTE FUNCTION mip_app.prevent_action_audit_mutation();
+
+-- Business outcome rows are immutable proof once inserted. Their writers use
+-- one narrow follow-up UPDATE in the same transaction to attach the audit row;
+-- the database permits only that NULL -> non-NULL audit_event_id transition.
+CREATE OR REPLACE FUNCTION mip_app.enforce_audit_event_finalize_only()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF (to_jsonb(NEW) - 'audit_event_id')
+       IS DISTINCT FROM
+       (to_jsonb(OLD) - 'audit_event_id')
+       OR OLD.audit_event_id IS NOT NULL
+       OR NEW.audit_event_id IS NULL THEN
+        RAISE EXCEPTION
+            '%.% is immutable except for one-time audit_event_id finalization',
+            TG_TABLE_SCHEMA, TG_TABLE_NAME
+            USING ERRCODE = '42501';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'call_dispositions_audit_event_id_fkey'
+          AND conrelid = 'mip_app.call_dispositions'::regclass
+    ) THEN
+        ALTER TABLE mip_app.call_dispositions
+            ADD CONSTRAINT call_dispositions_audit_event_id_fkey
+            FOREIGN KEY (audit_event_id) REFERENCES mip_app.action_audit(audit_id)
+            NOT VALID;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'lead_outcomes_audit_event_id_fkey'
+          AND conrelid = 'mip_app.lead_outcomes'::regclass
+    ) THEN
+        ALTER TABLE mip_app.lead_outcomes
+            ADD CONSTRAINT lead_outcomes_audit_event_id_fkey
+            FOREIGN KEY (audit_event_id) REFERENCES mip_app.action_audit(audit_id)
+            NOT VALID;
+    END IF;
+END $$;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'approvals_audit_event_id_fkey'
+          AND conrelid = 'mip_app.approvals'::regclass
+    ) THEN
+        ALTER TABLE mip_app.approvals
+            ADD CONSTRAINT approvals_audit_event_id_fkey
+            FOREIGN KEY (audit_event_id) REFERENCES mip_app.action_audit(audit_id);
+    END IF;
+END $$;
+
+-- Generated outreach proof ----------------------------------------------
+-- Each /outreach/draft response is committed with its exact approved-safe
+-- response JSON and audit id before it is returned. This remains separate
+-- from mutable workspace drafts so generation never overwrites operator work.
+CREATE TABLE IF NOT EXISTS mip_app.generated_outreach_drafts (
+    generation_id UUID PRIMARY KEY,
+    audit_event_id UUID NOT NULL UNIQUE REFERENCES mip_app.action_audit(audit_id),
+    actor_email    TEXT NOT NULL,
+    borrower_id    TEXT NOT NULL,
+    campaign_id    UUID,
+    variant_name   TEXT,
+    channel        TEXT NOT NULL CHECK (channel IN ('email','sms','direct_mail')),
+    offer_code     TEXT NOT NULL,
+    generation_mode TEXT NOT NULL CHECK (generation_mode IN ('supervisor','governed_fallback')),
+    response_hash  TEXT NOT NULL CHECK (response_hash ~ '^[0-9a-f]{64}$'),
+    response_json  JSONB NOT NULL,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE mip_app.outreach_drafts
+    DROP CONSTRAINT IF EXISTS outreach_drafts_generation_id_fkey;
+ALTER TABLE mip_app.outreach_drafts
+    ADD CONSTRAINT outreach_drafts_generation_id_fkey
+    FOREIGN KEY (generation_id)
+    REFERENCES mip_app.generated_outreach_drafts(generation_id)
+    NOT VALID;
+ALTER TABLE mip_app.outreach_drafts
+    VALIDATE CONSTRAINT outreach_drafts_generation_id_fkey;
+
+-- Existing immutable triggers are transactionally removed only after their
+-- table exists. The post-seed finalization block restores them before commit.
+DROP TRIGGER IF EXISTS trg_generated_outreach_drafts_immutable
+    ON mip_app.generated_outreach_drafts;
+
+-- Existing deployments stored campaign_id as nullable TEXT. Convert without
+-- losing evidence: NULL remains NULL, while malformed or orphaned non-NULL
+-- values stop the migration before any type change. The exclusive lock closes
+-- the validation/ALTER race with a still-running app process.
+DO $$
+DECLARE
+    campaign_id_type REGTYPE;
+BEGIN
+    SELECT a.atttypid::regtype
+    INTO campaign_id_type
+    FROM pg_attribute a
+    WHERE a.attrelid = 'mip_app.generated_outreach_drafts'::regclass
+      AND a.attname = 'campaign_id'
+      AND NOT a.attisdropped;
+
+    IF campaign_id_type IS DISTINCT FROM 'uuid'::regtype THEN
+        IF campaign_id_type NOT IN ('text'::regtype, 'character varying'::regtype) THEN
+            RAISE EXCEPTION
+                'Unsupported generated_outreach_drafts.campaign_id type: %',
+                campaign_id_type;
+        END IF;
+
+        LOCK TABLE mip_app.generated_outreach_drafts IN ACCESS EXCLUSIVE MODE;
+
+        IF EXISTS (
+            SELECT 1
+            FROM mip_app.generated_outreach_drafts
+            WHERE campaign_id IS NOT NULL
+              AND campaign_id !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+        ) THEN
+            RAISE EXCEPTION
+                'Cannot migrate generated_outreach_drafts.campaign_id: malformed UUID value';
+        END IF;
+
+        IF EXISTS (
+            SELECT 1
+            FROM mip_app.generated_outreach_drafts d
+            LEFT JOIN mip_app.campaigns c
+              ON c.campaign_id = d.campaign_id::uuid
+            WHERE d.campaign_id IS NOT NULL
+              AND c.campaign_id IS NULL
+        ) THEN
+            RAISE EXCEPTION
+                'Cannot migrate generated_outreach_drafts.campaign_id: orphaned campaign reference';
+        END IF;
+
+        ALTER TABLE mip_app.generated_outreach_drafts
+            ALTER COLUMN campaign_id TYPE UUID USING campaign_id::uuid;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'generated_outreach_drafts_campaign_id_fkey'
+          AND conrelid = 'mip_app.generated_outreach_drafts'::regclass
+          AND confrelid = 'mip_app.campaigns'::regclass
+          AND contype = 'f'
+    ) THEN
+        ALTER TABLE mip_app.generated_outreach_drafts
+            ADD CONSTRAINT generated_outreach_drafts_campaign_id_fkey
+            FOREIGN KEY (campaign_id) REFERENCES mip_app.campaigns(campaign_id);
+    END IF;
+END $$;
+
+-- Remove legacy/simple and previously installed proof constraints inside the
+-- migration transaction. ALTER TABLE locks remain held until commit; the
+-- post-seed suffix recreates and validates the exact constraint set after all
+-- deterministic compatibility updates have completed.
+ALTER TABLE mip_app.approvals
+    DROP CONSTRAINT IF EXISTS approvals_campaign_id_fkey;
+ALTER TABLE mip_app.generated_outreach_drafts
+    DROP CONSTRAINT IF EXISTS generated_outreach_drafts_campaign_id_fkey;
+ALTER TABLE mip_app.approvals
+    DROP CONSTRAINT IF EXISTS approvals_channel_chk;
+ALTER TABLE mip_app.approvals
+    DROP CONSTRAINT IF EXISTS approvals_channel_required_chk;
+ALTER TABLE mip_app.approvals
+    DROP CONSTRAINT IF EXISTS approvals_campaign_variant_pair_chk;
+ALTER TABLE mip_app.approvals
+    DROP CONSTRAINT IF EXISTS approvals_campaign_variant_channel_fkey;
+ALTER TABLE mip_app.generated_outreach_drafts
+    DROP CONSTRAINT IF EXISTS generated_outreach_campaign_variant_pair_chk;
+ALTER TABLE mip_app.generated_outreach_drafts
+    DROP CONSTRAINT IF EXISTS generated_outreach_campaign_variant_channel_fkey;
+
+CREATE INDEX IF NOT EXISTS idx_generated_outreach_drafts_actor_created
+    ON mip_app.generated_outreach_drafts (actor_email, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_generated_outreach_drafts_borrower_created
+    ON mip_app.generated_outreach_drafts (borrower_id, created_at DESC);
+
+-- Generated copy and campaign variants are evidence records, not mutable
+-- workspace drafts. The trigger is a second control behind SELECT+INSERT-only
+-- runtime grants and still blocks an owner or accidentally elevated role.
+CREATE OR REPLACE FUNCTION mip_app.prevent_outreach_evidence_mutation()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RAISE EXCEPTION '%.% is immutable; % is not allowed',
+        TG_TABLE_SCHEMA, TG_TABLE_NAME, TG_OP
+        USING ERRCODE = '42501';
+END;
+$$;
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_07_13_generated_outreach_draft_proof',
+    'Persist exact generated outreach responses and audit linkage before returning copy'
+)
+ON CONFLICT (version) DO NOTHING;
 
 -- Genie sessions ------------------------------------------------------
 -- Durable state for Databricks Genie conversations. These tables store
@@ -727,6 +2394,10 @@ CREATE TABLE IF NOT EXISTS mip_app.growth_agent_runs (
     audit_event_id   UUID REFERENCES mip_app.action_audit(audit_id),
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+DROP TRIGGER IF EXISTS trg_growth_agent_runs_finalize_only
+    ON mip_app.growth_agent_runs;
+DROP TRIGGER IF EXISTS trg_growth_agent_runs_no_remove
+    ON mip_app.growth_agent_runs;
 ALTER TABLE mip_app.growth_agent_runs
     ADD COLUMN IF NOT EXISTS request_id TEXT;
 ALTER TABLE mip_app.growth_agent_runs
@@ -841,9 +2512,37 @@ CREATE TABLE IF NOT EXISTS mip_app.growth_agent_notification_drafts (
     body           TEXT NOT NULL CHECK (length(body) BETWEEN 20 AND 2000),
     status         TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','reviewed','cancelled')),
     request_id     TEXT,
+    intent_payload TEXT,
+    intent_hash    TEXT,
+    audit_event_id UUID REFERENCES mip_app.action_audit(audit_id),
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE mip_app.growth_agent_notification_drafts
+    ADD COLUMN IF NOT EXISTS generation_mode TEXT NOT NULL DEFAULT 'governed_fallback'
+    CHECK (generation_mode IN ('supervisor','governed_fallback'));
+ALTER TABLE mip_app.growth_agent_notification_drafts
+    ADD COLUMN IF NOT EXISTS generator_label TEXT NOT NULL DEFAULT 'Governed notification framework';
+ALTER TABLE mip_app.growth_agent_notification_drafts
+    ADD COLUMN IF NOT EXISTS strategy_summary TEXT NOT NULL DEFAULT 'Reviewed internal notification framing.';
+ALTER TABLE mip_app.growth_agent_notification_drafts
+    ADD COLUMN IF NOT EXISTS intent_payload TEXT;
+ALTER TABLE mip_app.growth_agent_notification_drafts
+    ADD COLUMN IF NOT EXISTS intent_hash TEXT;
+ALTER TABLE mip_app.growth_agent_notification_drafts
+    ADD COLUMN IF NOT EXISTS audit_event_id UUID;
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'growth_agent_notification_drafts_audit_event_id_fkey'
+          AND conrelid = 'mip_app.growth_agent_notification_drafts'::regclass
+    ) THEN
+        ALTER TABLE mip_app.growth_agent_notification_drafts
+            ADD CONSTRAINT growth_agent_notification_drafts_audit_event_id_fkey
+            FOREIGN KEY (audit_event_id) REFERENCES mip_app.action_audit(audit_id);
+    END IF;
+END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_growth_agent_notification_drafts_request
     ON mip_app.growth_agent_notification_drafts (request_id)
     WHERE request_id IS NOT NULL;
@@ -888,6 +2587,9 @@ CREATE TABLE IF NOT EXISTS mip_app.ai_gateway_proof_ledger (
     verified_at         TIMESTAMPTZ,
     verify_latency_s    DOUBLE PRECISION CHECK (verify_latency_s IS NULL OR verify_latency_s >= 0),
     status              TEXT NOT NULL CHECK (status IN ('pending','verified','failed','expired')),
+    attestation_alg     TEXT,
+    attestation_key_id  TEXT,
+    attestation_signature TEXT,
     CONSTRAINT ck_ai_gateway_proof_verified_fields
       CHECK (
         (status = 'verified' AND verified_at IS NOT NULL AND verify_latency_s IS NOT NULL)
@@ -895,16 +2597,118 @@ CREATE TABLE IF NOT EXISTS mip_app.ai_gateway_proof_ledger (
         (status <> 'verified')
       )
 );
+ALTER TABLE mip_app.ai_gateway_proof_ledger
+    ADD COLUMN IF NOT EXISTS attestation_alg TEXT,
+    ADD COLUMN IF NOT EXISTS attestation_key_id TEXT,
+    ADD COLUMN IF NOT EXISTS attestation_signature TEXT;
+
+-- Pre-attestation verified rows are intentionally retired. Their exact-row
+-- evidence may have been valid, but a Lakebase writer alone could manufacture
+-- the same shape. Only newly signed verifier evidence is claimable.
+UPDATE mip_app.ai_gateway_proof_ledger
+SET status = 'expired',
+    verified_at = NULL,
+    verify_latency_s = NULL
+WHERE status = 'verified'
+  AND attestation_signature IS NULL;
+
+ALTER TABLE mip_app.ai_gateway_proof_ledger
+    DROP CONSTRAINT IF EXISTS ck_ai_gateway_proof_attestation;
+ALTER TABLE mip_app.ai_gateway_proof_ledger
+    ADD CONSTRAINT ck_ai_gateway_proof_attestation
+    CHECK (
+      (
+        status = 'verified'
+        AND attestation_alg = 'ed25519-v1'
+        AND attestation_key_id ~ '^[0-9a-f]{16}$'
+        AND attestation_signature ~ '^[A-Za-z0-9_-]{86}$'
+      )
+      OR
+      (
+        status <> 'verified'
+        AND attestation_alg IS NULL
+        AND attestation_key_id IS NULL
+        AND attestation_signature IS NULL
+      )
+    );
 CREATE INDEX IF NOT EXISTS idx_ai_gateway_proof_sha_status
     ON mip_app.ai_gateway_proof_ledger (git_sha, status, verified_at DESC);
 CREATE INDEX IF NOT EXISTS idx_ai_gateway_proof_pending
     ON mip_app.ai_gateway_proof_ledger (status, sent_at)
     WHERE status = 'pending';
 
+-- Proof writers may run on a host whose clock differs slightly from Lakebase.
+-- Accept at most five minutes of positive skew; larger future timestamps or
+-- reversed send/verify chronology would let evidence outlive its real window.
+CREATE OR REPLACE FUNCTION mip_app.enforce_ai_gateway_proof_timestamp_bounds()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    observed_now TIMESTAMPTZ := clock_timestamp();
+    clock_tolerance CONSTANT INTERVAL := INTERVAL '5 minutes';
+BEGIN
+    IF TG_OP = 'INSERT' AND NEW.status = 'verified' THEN
+        RAISE EXCEPTION
+            'AI Gateway proof must be inserted as pending before verification'
+            USING ERRCODE = '42501';
+    END IF;
+    IF TG_OP = 'UPDATE'
+       AND NEW.status = 'verified'
+       AND OLD.status <> 'pending' THEN
+        RAISE EXCEPTION
+            'AI Gateway proof can only transition from pending to verified'
+            USING ERRCODE = '42501';
+    END IF;
+    IF NEW.status IN ('pending', 'verified')
+       AND NEW.sent_at > observed_now + clock_tolerance THEN
+        RAISE EXCEPTION
+            'AI Gateway proof sent_at exceeds the five-minute clock tolerance'
+            USING ERRCODE = '22007';
+    END IF;
+    IF NEW.status IN ('pending', 'verified')
+       AND NEW.verified_at IS NOT NULL
+       AND NEW.verified_at > observed_now + clock_tolerance THEN
+        RAISE EXCEPTION
+            'AI Gateway proof verified_at exceeds the five-minute clock tolerance'
+            USING ERRCODE = '22007';
+    END IF;
+    IF NEW.status IN ('pending', 'verified')
+       AND NEW.verified_at IS NOT NULL
+       AND NEW.verified_at < NEW.sent_at - clock_tolerance THEN
+        RAISE EXCEPTION
+            'AI Gateway proof verified_at precedes sent_at beyond clock tolerance'
+            USING ERRCODE = '22007';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_ai_gateway_proof_timestamp_bounds
+    ON mip_app.ai_gateway_proof_ledger;
+CREATE TRIGGER trg_ai_gateway_proof_timestamp_bounds
+    BEFORE INSERT OR UPDATE ON mip_app.ai_gateway_proof_ledger
+    FOR EACH ROW
+    EXECUTE FUNCTION mip_app.enforce_ai_gateway_proof_timestamp_bounds();
+
 INSERT INTO mip_app.schema_migrations (version, description)
 VALUES (
     '2026_07_02_ai_gateway_exact_proof_ledger',
     'Add AI Gateway exact inference-row proof ledger for strict capability claims'
+)
+ON CONFLICT (version) DO NOTHING;
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_07_15_ai_gateway_proof_timestamp_bounds',
+    'Reject AI Gateway proof timestamps beyond a five-minute positive clock tolerance'
+)
+ON CONFLICT (version) DO NOTHING;
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_07_15_ai_gateway_proof_ed25519_attestation',
+    'Require independently signed verifier evidence for claimable AI Gateway proofs'
 )
 ON CONFLICT (version) DO NOTHING;
 
@@ -930,19 +2734,12 @@ VALUES (
 ON CONFLICT (version) DO NOTHING;
 
 -- ---------------------------------------------------------------------
--- 2026-06-11 audit P1-5: narrative seed used legacy 5-digit borrower IDs
--- (B-48291..B-48295) that violate the B-[0-9A-Z]{13} contract and join
--- to no gold.borrower_360 row — orphaning the "three high-value borrower
--- examples" the Module 0 spec requires and skewing approval-rate
--- metrics. Delete the malformed seed rows (the re-run of
--- seed_campaigns.sql re-inserts the same approval_ids with REAL gold
--- IDs), then enforce the format so malformed IDs can never seed again.
--- The borrower-pattern guard makes the DELETE a no-op on every run after
--- the new seed lands (same approval_ids, but 13-char borrower IDs).
+-- 2026-06-11 audit P1-5: narrative seed used five known 5-digit borrower IDs
+-- that violate the B-[0-9A-Z]{13} contract. Preserve those approval rows and
+-- map only the exact stable approval-id/legacy-id pairs to the reviewed gold
+-- borrower ids. Any other malformed historical row makes validation fail and
+-- rolls back the whole deployment; recurring schema apply never deletes it.
 -- ---------------------------------------------------------------------
-DELETE FROM mip_app.approvals
-WHERE borrower_id ~ '^B-[0-9]{5}$';
-
 DO $$
 BEGIN
     IF NOT EXISTS (
@@ -950,71 +2747,49 @@ BEGIN
         WHERE conname = 'approvals_borrower_id_format_chk'
           AND conrelid = 'mip_app.approvals'::regclass
     ) THEN
-        -- NOT VALID: enforce the format on every NEW write immediately,
-        -- without letting one unexpected legacy row fail the whole
-        -- migrate job (deploy step 4b). The block below upgrades to a
-        -- fully-validated constraint once the table is clean.
+        -- NOT VALID enforces the format on new writes while the deterministic
+        -- compatibility update below repairs the five reviewed seed rows.
         ALTER TABLE mip_app.approvals
             ADD CONSTRAINT approvals_borrower_id_format_chk
             CHECK (borrower_id ~ '^B-[0-9A-Z]{13}$') NOT VALID;
     END IF;
 END $$;
 
-DO $$
-BEGIN
-    ALTER TABLE mip_app.approvals
-        VALIDATE CONSTRAINT approvals_borrower_id_format_chk;
-EXCEPTION WHEN OTHERS THEN
-    RAISE NOTICE 'approvals_borrower_id_format_chk left NOT VALID (new writes still enforced): %', SQLERRM;
-END $$;
+WITH legacy_seed_approval_map (approval_id, legacy_borrower_id, borrower_id) AS (
+    VALUES
+        ('44444444-4444-4444-8444-444444444441'::uuid, 'B-48291', 'B-0CPWBTJMAPFY2'),
+        ('44444444-4444-4444-8444-444444444442'::uuid, 'B-48294', 'B-1IB0UGBTFYM20'),
+        ('44444444-4444-4444-8444-444444444443'::uuid, 'B-48295', 'B-102FL7THC6Q3L'),
+        ('44444444-4444-4444-8444-444444444444'::uuid, 'B-48292', 'B-1BCZXFQYCX715'),
+        ('44444444-4444-4444-8444-444444444445'::uuid, 'B-48293', 'B-1VU4FO4XBQPC4')
+)
+UPDATE mip_app.approvals AS approval
+SET borrower_id = mapping.borrower_id
+FROM legacy_seed_approval_map AS mapping
+WHERE approval.approval_id = mapping.approval_id
+  AND approval.borrower_id = mapping.legacy_borrower_id;
+
+ALTER TABLE mip_app.approvals
+    VALIDATE CONSTRAINT approvals_borrower_id_format_chk;
 
 INSERT INTO mip_app.schema_migrations (version, description)
 VALUES (
     '2026_06_11_narrative_seed_real_ids',
-    'Audit P1-5: purge legacy 5-digit seed approvals; CHECK borrower_id ~ ^B-[0-9A-Z]{13}$; seed re-inserts canonical trio with real gold borrower_360 IDs'
+    'Audit P1-5: deterministically map five legacy seed borrower ids and validate borrower_id ~ ^B-[0-9A-Z]{13}$ without deleting approvals'
 )
 ON CONFLICT (version) DO NOTHING;
 
 -- ---------------------------------------------------------------------
--- Re-audit #3 P3 (2026-06-12): ~28 approvals accumulated from April/May
--- dev sessions (50d/30d old at audit time) surfaced in the stale-approved
--- queue as "aging" rows — test detritus reading as operational neglect at
--- the booth. Purge operational STATE older than the demo-prep era
--- (2026-06-01), keeping the five canonical narrative approvals from
--- seed_campaigns.sql. The immutable mip_app.action_audit event log is
--- deliberately untouched — history stays reconstructable; this clears
--- workflow state only. activation_outbox rows referencing purged
--- approvals go first (FK activation_outbox_approval_fk). Naturally
--- idempotent: re-runs match zero rows, and post-purge approvals all
--- carry decided_at >= the cutoff.
+-- Re-audit #3 P3 (2026-06-12) originally purged pre-demo approvals here.
+-- That behavior is intentionally retired: age and fixed identifiers cannot
+-- distinguish test data from a legitimate customer decision. Operational
+-- cleanup must be an explicit, separately authorized retention workflow.
 -- ---------------------------------------------------------------------
-DELETE FROM mip_app.activation_outbox
-WHERE approval_id IN (
-    SELECT approval_id FROM mip_app.approvals
-    WHERE decided_at < TIMESTAMPTZ '2026-06-01 00:00:00+00'
-      AND approval_id NOT IN (
-        '44444444-4444-4444-8444-444444444441',
-        '44444444-4444-4444-8444-444444444442',
-        '44444444-4444-4444-8444-444444444443',
-        '44444444-4444-4444-8444-444444444444',
-        '44444444-4444-4444-8444-444444444445'
-      )
-);
-
-DELETE FROM mip_app.approvals
-WHERE decided_at < TIMESTAMPTZ '2026-06-01 00:00:00+00'
-  AND approval_id NOT IN (
-    '44444444-4444-4444-8444-444444444441',
-    '44444444-4444-4444-8444-444444444442',
-    '44444444-4444-4444-8444-444444444443',
-    '44444444-4444-4444-8444-444444444444',
-    '44444444-4444-4444-8444-444444444445'
-  );
 
 INSERT INTO mip_app.schema_migrations (version, description)
 VALUES (
     '2026_06_12_purge_dev_session_approvals',
-    'Re-audit #3 P3: purge pre-2026-06-01 dev-session approvals (and their activation_outbox rows) so the stale-approved queue shows demo-era state only; canonical narrative five kept; action_audit untouched'
+    'Retired unsafe age-based approval/outbox purge; recurring schema apply preserves all workflow and proof rows'
 )
 ON CONFLICT (version) DO NOTHING;
 
@@ -1218,5 +2993,496 @@ INSERT INTO mip_app.schema_migrations (version, description)
 VALUES (
     '2026_07_10_s3_kpi_snapshots_user_visits',
     'S3: daily headline-KPI snapshot table (per-day upsert target for mip_kpi_snapshot job) and throttled user_visits ledger for last-login deltas'
+)
+ON CONFLICT (version) DO NOTHING;
+
+-- Native Genie feedback delivery --------------------------------------
+-- Durable intent precedes the upstream rating side effect. Client request
+-- ids make retries collapse onto one row; a short IN_FLIGHT lease permits
+-- recovery after a process dies with an uncertain upstream result. Replays
+-- only set the same native rating. Optional comment text is never persisted.
+CREATE TABLE IF NOT EXISTS mip_app.genie_feedback_requests (
+    feedback_request_id   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    actor_email           TEXT NOT NULL,
+    request_id            TEXT NOT NULL,
+    conversation_id       TEXT NOT NULL,
+    message_id            TEXT NOT NULL,
+    rating                TEXT NOT NULL CHECK (rating IN ('POSITIVE', 'NEGATIVE')),
+    comment_present       BOOLEAN NOT NULL DEFAULT false,
+    status                TEXT NOT NULL DEFAULT 'PENDING'
+                          CHECK (status IN (
+                              'PENDING', 'IN_FLIGHT', 'SUCCEEDED', 'RETRYABLE_FAILED'
+                          )),
+    attempt_count         INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+    intent_audit_event_id UUID REFERENCES mip_app.action_audit(audit_id),
+    audit_event_id        UUID REFERENCES mip_app.action_audit(audit_id),
+    last_error_code       TEXT CHECK (
+                              last_error_code IS NULL
+                              OR last_error_code ~ '^[a-z0-9_]{1,64}$'
+                          ),
+    last_attempt_at       TIMESTAMPTZ,
+    succeeded_at          TIMESTAMPTZ,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_genie_feedback_actor_request UNIQUE (actor_email, request_id),
+    CONSTRAINT fk_genie_feedback_message FOREIGN KEY (conversation_id, message_id)
+        REFERENCES mip_app.genie_messages(conversation_id, message_id)
+);
+CREATE INDEX IF NOT EXISTS idx_genie_feedback_message
+    ON mip_app.genie_feedback_requests (
+        actor_email, conversation_id, message_id, created_at DESC
+    );
+CREATE INDEX IF NOT EXISTS idx_genie_feedback_retryable
+    ON mip_app.genie_feedback_requests (status, updated_at)
+    WHERE status IN ('PENDING', 'IN_FLIGHT', 'RETRYABLE_FAILED');
+COMMENT ON TABLE mip_app.genie_feedback_requests IS
+    'PII-minimized native Genie feedback intent and delivery state; optional comment text is never stored.';
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_07_13_native_genie_feedback',
+    'Durable actor/message-owned native Genie feedback intents with replay-safe request ids and audited delivery state'
+)
+ON CONFLICT (version) DO NOTHING;
+
+-- MIP_LAKEBASE_POST_SEED_BEGIN
+
+-- Historical reviewed seed rows remain readable evidence, but every new
+-- variant must carry structurally complete server-owned generation proof.
+-- NOT VALID preserves those legacy operator rows while still enforcing this
+-- check for every INSERT/UPDATE after the migration commits.
+ALTER TABLE mip_app.campaign_message_variants
+    ADD CONSTRAINT campaign_message_variants_server_owned_proof_chk
+    CHECK (
+        generation_mode IN ('supervisor', 'reviewed_fallback')
+        AND length(btrim(generator_label)) BETWEEN 1 AND 80
+        AND provenance_key_id IS NOT NULL
+        AND provenance_key_id ~ '^[A-Za-z0-9._-]{1,64}$'
+        AND provenance_issued_at IS NOT NULL
+        AND provenance_expires_at IS NOT NULL
+        AND provenance_expires_at > provenance_issued_at
+        AND provenance_copy_hash IS NOT NULL
+        AND provenance_copy_hash ~ '^[0-9a-f]{64}$'
+        AND provenance_criteria_fingerprint IS NOT NULL
+        AND provenance_criteria_fingerprint ~ '^[0-9a-f]{64}$'
+        AND (
+            provenance_performance_fingerprint IS NULL
+            OR provenance_performance_fingerprint ~ '^[0-9a-f]{64}$'
+        )
+        AND provenance_token_digest IS NOT NULL
+        AND provenance_token_digest ~ '^[0-9a-f]{64}$'
+    ) NOT VALID;
+ALTER TABLE mip_app.campaign_message_variants
+    ALTER COLUMN generation_mode DROP DEFAULT,
+    ALTER COLUMN generator_label DROP DEFAULT;
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_07_18_campaign_variant_server_owned_proof',
+    'Reject new operator-authored campaign variants and require complete server-owned proof'
+)
+ON CONFLICT (version) DO NOTHING;
+-- jobs/lakebase_migrate.py executes the deterministic seed immediately before
+-- this suffix, in the same transaction. That ordering makes reviewed campaign
+-- variants available for legacy proof backfills before hard validation.
+
+ALTER TABLE mip_app.campaigns
+    ADD CONSTRAINT campaigns_criteria_reviewed_shape_chk
+    CHECK (
+        json_contract_version = 0
+        OR mip_app.campaign_criteria_is_reviewed(criteria) IS TRUE
+    )
+    NOT VALID;
+ALTER TABLE mip_app.campaigns
+    ADD CONSTRAINT campaigns_suppression_policy_reviewed_shape_chk
+    CHECK (
+        json_contract_version = 0
+        OR mip_app.campaign_suppression_policy_is_reviewed(suppression_policy) IS TRUE
+    )
+    NOT VALID;
+ALTER TABLE mip_app.campaigns
+    ADD CONSTRAINT campaigns_channel_cascade_reviewed_shape_chk
+    CHECK (
+        json_contract_version = 0
+        OR mip_app.campaign_channel_cascade_is_reviewed(channel_cascade) IS TRUE
+    )
+    NOT VALID;
+ALTER TABLE mip_app.campaigns
+    ADD CONSTRAINT campaigns_send_window_reviewed_shape_chk
+    CHECK (
+        json_contract_version = 0
+        OR mip_app.campaign_send_window_is_reviewed(send_window) IS TRUE
+    )
+    NOT VALID;
+ALTER TABLE mip_app.campaigns
+    ADD CONSTRAINT campaigns_holdout_reviewed_shape_chk
+    CHECK (
+        json_contract_version = 0
+        OR holdout IS NULL
+        OR mip_app.campaign_holdout_is_reviewed(holdout) IS TRUE
+    )
+    NOT VALID;
+ALTER TABLE mip_app.campaigns
+    ADD CONSTRAINT campaigns_roi_assumptions_reviewed_shape_chk
+    CHECK (
+        json_contract_version = 0
+        OR roi_assumptions IS NULL
+        OR mip_app.campaign_roi_assumptions_is_reviewed(roi_assumptions) IS TRUE
+    )
+    NOT VALID;
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_07_15_campaign_json_reviewed_shapes',
+    'Enforce exact reviewed shapes for new and changed campaign JSON fields'
+)
+ON CONFLICT (version) DO NOTHING;
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_07_15_campaign_json_contract_version',
+    'Allow status-only updates on untouched legacy campaign JSON while enforcing reviewed version 1 on inserts and payload changes'
+)
+ON CONFLICT (version) DO NOTHING;
+
+-- Upgrade historical campaign evidence only when the missing value has one
+-- possible immutable variant. Ambiguous or orphaned history remains unchanged
+-- and fails the explicit proof check below before the deployment can commit.
+WITH unique_campaign_variant AS (
+    SELECT campaign_id, MIN(variant_name) AS variant_name, MIN(channel) AS channel
+    FROM mip_app.campaign_message_variants
+    GROUP BY campaign_id
+    HAVING COUNT(*) = 1
+)
+UPDATE mip_app.approvals AS approval
+SET variant_name = variant.variant_name,
+    channel = variant.channel
+FROM unique_campaign_variant AS variant
+WHERE approval.campaign_id = variant.campaign_id
+  AND approval.variant_name IS NULL
+  AND approval.channel IS NULL;
+
+WITH unique_named_variant AS (
+    SELECT campaign_id, variant_name, MIN(channel) AS channel
+    FROM mip_app.campaign_message_variants
+    GROUP BY campaign_id, variant_name
+    HAVING COUNT(*) = 1
+)
+UPDATE mip_app.approvals AS approval
+SET channel = variant.channel
+FROM unique_named_variant AS variant
+WHERE approval.campaign_id = variant.campaign_id
+  AND approval.variant_name = variant.variant_name
+  AND approval.channel IS NULL;
+
+WITH unique_channel_variant AS (
+    SELECT campaign_id, channel, MIN(variant_name) AS variant_name
+    FROM mip_app.campaign_message_variants
+    GROUP BY campaign_id, channel
+    HAVING COUNT(*) = 1
+)
+UPDATE mip_app.approvals AS approval
+SET variant_name = variant.variant_name
+FROM unique_channel_variant AS variant
+WHERE approval.campaign_id = variant.campaign_id
+  AND approval.channel = variant.channel
+  AND approval.variant_name IS NULL;
+
+WITH unique_channel_variant AS (
+    SELECT campaign_id, channel, MIN(variant_name) AS variant_name
+    FROM mip_app.campaign_message_variants
+    GROUP BY campaign_id, channel
+    HAVING COUNT(*) = 1
+)
+UPDATE mip_app.generated_outreach_drafts AS draft
+SET variant_name = variant.variant_name
+FROM unique_channel_variant AS variant
+WHERE draft.campaign_id = variant.campaign_id
+  AND draft.channel = variant.channel
+  AND draft.variant_name IS NULL;
+
+ALTER TABLE mip_app.approvals
+    ADD CONSTRAINT approvals_channel_chk
+    CHECK (channel IN ('email','sms','direct_mail')) NOT VALID;
+ALTER TABLE mip_app.approvals
+    ADD CONSTRAINT approvals_channel_required_chk
+    CHECK (campaign_id IS NULL OR channel IS NOT NULL) NOT VALID;
+ALTER TABLE mip_app.approvals
+    ADD CONSTRAINT approvals_campaign_variant_pair_chk
+    CHECK ((campaign_id IS NULL) = (variant_name IS NULL)) NOT VALID;
+ALTER TABLE mip_app.generated_outreach_drafts
+    ADD CONSTRAINT generated_outreach_campaign_variant_pair_chk
+    CHECK ((campaign_id IS NULL) = (variant_name IS NULL)) NOT VALID;
+ALTER TABLE mip_app.approvals
+    ADD CONSTRAINT approvals_campaign_variant_channel_fkey
+    FOREIGN KEY (campaign_id, variant_name, channel)
+    REFERENCES mip_app.campaign_message_variants(campaign_id, variant_name, channel)
+    NOT VALID;
+ALTER TABLE mip_app.generated_outreach_drafts
+    ADD CONSTRAINT generated_outreach_campaign_variant_channel_fkey
+    FOREIGN KEY (campaign_id, variant_name, channel)
+    REFERENCES mip_app.campaign_message_variants(campaign_id, variant_name, channel)
+    NOT VALID;
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM mip_app.approvals AS approval
+        WHERE (approval.campaign_id IS NULL) <> (approval.variant_name IS NULL)
+           OR (approval.campaign_id IS NOT NULL AND approval.channel IS NULL)
+           OR (
+               approval.campaign_id IS NOT NULL
+               AND NOT EXISTS (
+                   SELECT 1
+                   FROM mip_app.campaign_message_variants AS variant
+                   WHERE variant.campaign_id = approval.campaign_id
+                     AND variant.variant_name = approval.variant_name
+                     AND variant.channel = approval.channel
+               )
+           )
+    ) THEN
+        RAISE EXCEPTION
+            'Cannot validate approval proof binding: legacy rows are ambiguous or orphaned';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM mip_app.generated_outreach_drafts AS draft
+        WHERE (draft.campaign_id IS NULL) <> (draft.variant_name IS NULL)
+           OR (
+               draft.campaign_id IS NOT NULL
+               AND NOT EXISTS (
+                   SELECT 1
+                   FROM mip_app.campaign_message_variants AS variant
+                   WHERE variant.campaign_id = draft.campaign_id
+                     AND variant.variant_name = draft.variant_name
+                     AND variant.channel = draft.channel
+               )
+           )
+    ) THEN
+        RAISE EXCEPTION
+            'Cannot validate generated outreach binding: legacy rows are ambiguous or orphaned';
+    END IF;
+
+    ALTER TABLE mip_app.approvals VALIDATE CONSTRAINT approvals_channel_chk;
+    ALTER TABLE mip_app.approvals VALIDATE CONSTRAINT approvals_channel_required_chk;
+    ALTER TABLE mip_app.approvals VALIDATE CONSTRAINT approvals_campaign_variant_pair_chk;
+    ALTER TABLE mip_app.approvals VALIDATE CONSTRAINT approvals_campaign_variant_channel_fkey;
+    ALTER TABLE mip_app.call_dispositions
+        VALIDATE CONSTRAINT call_dispositions_audit_event_id_fkey;
+    ALTER TABLE mip_app.lead_outcomes
+        VALIDATE CONSTRAINT lead_outcomes_audit_event_id_fkey;
+    ALTER TABLE mip_app.generated_outreach_drafts
+        VALIDATE CONSTRAINT generated_outreach_campaign_variant_pair_chk;
+    ALTER TABLE mip_app.generated_outreach_drafts
+        VALIDATE CONSTRAINT generated_outreach_campaign_variant_channel_fkey;
+END $$;
+
+CREATE TRIGGER trg_generated_outreach_drafts_immutable
+    BEFORE UPDATE OR DELETE OR TRUNCATE ON mip_app.generated_outreach_drafts
+    FOR EACH STATEMENT
+    EXECUTE FUNCTION mip_app.prevent_outreach_evidence_mutation();
+
+DROP TRIGGER IF EXISTS trg_campaign_message_variants_immutable
+    ON mip_app.campaign_message_variants;
+CREATE TRIGGER trg_campaign_message_variants_immutable
+    BEFORE UPDATE OR DELETE OR TRUNCATE ON mip_app.campaign_message_variants
+    FOR EACH STATEMENT
+    EXECUTE FUNCTION mip_app.prevent_outreach_evidence_mutation();
+
+-- A campaign-bound decision must serialize with campaign lifecycle/treatment
+-- mutation. The row-share lock conflicts with UPDATE, so either the decision
+-- commits while the campaign is eligible or it observes the newer ineligible
+-- state and fails; no post-revocation evidence row can slip through.
+CREATE OR REPLACE FUNCTION mip_app.enforce_campaign_decision_lifecycle()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    campaign_status TEXT;
+    campaign_owner_email TEXT;
+    campaign_treatment_state TEXT;
+    campaign_treatment_algorithm_version TEXT;
+    campaign_treatment_fingerprint TEXT;
+    decision_document JSONB;
+    decision_owner_email TEXT;
+    decision_treatment_fingerprint TEXT;
+BEGIN
+    IF NEW.campaign_id IS NULL THEN
+        RETURN NEW;
+    END IF;
+
+    SELECT status, owner_email, treatment_state,
+           treatment_algorithm_version, treatment_fingerprint
+    INTO campaign_status, campaign_owner_email, campaign_treatment_state,
+         campaign_treatment_algorithm_version, campaign_treatment_fingerprint
+    FROM mip_app.campaigns
+    WHERE campaign_id = NEW.campaign_id
+    FOR SHARE;
+
+    IF NOT FOUND
+       OR campaign_treatment_state IS DISTINCT FROM 'ready'
+       OR campaign_treatment_algorithm_version IS DISTINCT FROM 'campaign-treatment-v2'
+       OR NEW.action NOT IN ('approve', 'reject')
+       OR (
+           NEW.action = 'approve'
+           AND campaign_status NOT IN ('approved', 'live', 'active')
+       )
+       OR (
+           NEW.action = 'reject'
+           AND campaign_status NOT IN (
+               'draft', 'pending_review', 'approved', 'live', 'active'
+           )
+       ) THEN
+        RAISE EXCEPTION
+            'campaign lifecycle state does not allow this outreach decision'
+            USING ERRCODE = '23514';
+    END IF;
+
+    BEGIN
+        decision_document := NEW.decision_intent::jsonb;
+        IF jsonb_typeof(decision_document) IS DISTINCT FROM 'object' THEN
+            RAISE EXCEPTION 'campaign decision intent must be a JSON object'
+                USING ERRCODE = '23514';
+        END IF;
+        decision_owner_email :=
+            decision_document->>'campaign_owner_email';
+        decision_treatment_fingerprint :=
+            decision_document->>'campaign_treatment_fingerprint';
+    EXCEPTION
+        WHEN OTHERS THEN
+            RAISE EXCEPTION
+                'campaign decision intent is not valid JSON'
+                USING ERRCODE = '23514';
+    END;
+    IF decision_document->>'action' IS DISTINCT FROM NEW.action
+       OR lower(btrim(decision_document->>'actor'))
+          IS DISTINCT FROM lower(btrim(NEW.actor_email))
+       OR decision_document->>'borrower_id' IS DISTINCT FROM NEW.borrower_id
+       OR decision_document->>'campaign_id' IS DISTINCT FROM NEW.campaign_id::TEXT
+       OR decision_document->>'variant_name' IS DISTINCT FROM NEW.variant_name
+       OR decision_document->>'channel' IS DISTINCT FROM NEW.channel
+       OR decision_document->>'offer_code' IS DISTINCT FROM NEW.offer_code
+       OR NEW.decision_payload_hash IS DISTINCT FROM
+          encode(sha256(convert_to(NEW.decision_intent, 'UTF8')), 'hex')
+       OR decision_owner_email IS NULL
+       OR lower(btrim(decision_owner_email))
+          IS DISTINCT FROM lower(btrim(campaign_owner_email))
+       OR decision_treatment_fingerprint IS NULL
+       OR decision_treatment_fingerprint IS DISTINCT FROM campaign_treatment_fingerprint THEN
+        RAISE EXCEPTION
+            'campaign treatment proof changed before outreach decision commit'
+            USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_approvals_campaign_lifecycle
+    ON mip_app.approvals;
+CREATE TRIGGER trg_approvals_campaign_lifecycle
+    BEFORE INSERT ON mip_app.approvals
+    FOR EACH ROW
+    EXECUTE FUNCTION mip_app.enforce_campaign_decision_lifecycle();
+
+-- Approval decisions are evidence. The app needs one narrowly-scoped UPDATE
+-- to atomically attach the response and audit row after the idempotent INSERT;
+-- every business/proof-binding column is immutable, and removal is forbidden.
+CREATE OR REPLACE FUNCTION mip_app.enforce_approval_finalize_only()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF (to_jsonb(NEW) - ARRAY['decision_response', 'audit_event_id'])
+       IS DISTINCT FROM
+       (to_jsonb(OLD) - ARRAY['decision_response', 'audit_event_id'])
+       OR OLD.decision_response IS NOT NULL
+       OR OLD.audit_event_id IS NOT NULL
+       OR NEW.decision_response IS NULL
+       OR NEW.audit_event_id IS NULL THEN
+        RAISE EXCEPTION
+            'mip_app.approvals is immutable except for its one-time audit finalization'
+            USING ERRCODE = '42501';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_approvals_finalize_only
+    BEFORE UPDATE ON mip_app.approvals
+    FOR EACH ROW
+    EXECUTE FUNCTION mip_app.enforce_approval_finalize_only();
+
+CREATE TRIGGER trg_approvals_no_remove
+    BEFORE DELETE OR TRUNCATE ON mip_app.approvals
+    FOR EACH STATEMENT
+    EXECUTE FUNCTION mip_app.prevent_outreach_evidence_mutation();
+
+CREATE TRIGGER trg_call_dispositions_finalize_only
+    BEFORE UPDATE ON mip_app.call_dispositions
+    FOR EACH ROW
+    EXECUTE FUNCTION mip_app.enforce_audit_event_finalize_only();
+
+CREATE TRIGGER trg_call_dispositions_no_remove
+    BEFORE DELETE OR TRUNCATE ON mip_app.call_dispositions
+    FOR EACH STATEMENT
+    EXECUTE FUNCTION mip_app.prevent_outreach_evidence_mutation();
+
+CREATE TRIGGER trg_lead_outcomes_finalize_only
+    BEFORE UPDATE ON mip_app.lead_outcomes
+    FOR EACH ROW
+    EXECUTE FUNCTION mip_app.enforce_audit_event_finalize_only();
+
+CREATE TRIGGER trg_lead_outcomes_no_remove
+    BEFORE DELETE OR TRUNCATE ON mip_app.lead_outcomes
+    FOR EACH STATEMENT
+    EXECUTE FUNCTION mip_app.prevent_outreach_evidence_mutation();
+
+-- Growth-agent runs are born terminal in the current contract. Preserve every
+-- completed/failed result and its evidence, allowing only the same one-time
+-- audit attachment used by the runtime transaction.
+CREATE TRIGGER trg_growth_agent_runs_finalize_only
+    BEFORE UPDATE ON mip_app.growth_agent_runs
+    FOR EACH ROW
+    EXECUTE FUNCTION mip_app.enforce_audit_event_finalize_only();
+
+CREATE TRIGGER trg_growth_agent_runs_no_remove
+    BEFORE DELETE OR TRUNCATE ON mip_app.growth_agent_runs
+    FOR EACH STATEMENT
+    EXECUTE FUNCTION mip_app.prevent_outreach_evidence_mutation();
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_07_14_outreach_evidence_immutability',
+    'Convert generated draft campaign ids to governed UUID foreign keys and make generated drafts and campaign variants immutable'
+)
+ON CONFLICT (version) DO NOTHING;
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_07_14_outreach_variant_binding',
+    'Deterministically bind legacy outreach proof to one exact variant and validate every proof constraint'
+)
+ON CONFLICT (version) DO NOTHING;
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_07_14_approval_proof_guards',
+    'Require channels for campaign-bound approvals, preserve campaign-less legacy proof, allow only one-time audit finalization, and block proof removal'
+)
+ON CONFLICT (version) DO NOTHING;
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_07_14_outcome_and_agent_run_immutability',
+    'Make call dispositions, lead outcomes, and terminal growth-agent runs immutable except for one-time audit linkage'
+)
+ON CONFLICT (version) DO NOTHING;
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_07_14_hmac_outcome_source_reference',
+    'Enforce HMAC-derived auto-<32 lowercase hex> lead outcome source references on new and updated rows while preserving legacy history'
 )
 ON CONFLICT (version) DO NOTHING;

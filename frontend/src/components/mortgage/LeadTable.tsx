@@ -1,15 +1,17 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import { Link, useSearchParams } from 'react-router';
 import type { CallDisposition, LeadSummary } from '../../types';
 import { Icon } from '../Icon';
-import { Chip, Button } from '../Primitives';
+import { Button, Chip } from '../Primitives';
 import { useApp } from '../AppContext';
 import { api, ApiError, isAbortError } from '../../lib/api';
-import { invalidateOperationalQueries } from '../../lib/queryKeys';
+import { invalidateOperationalQueries, queryKeys } from '../../lib/queryKeys';
 import { buildLeadCsv } from './LeadTable.csv';
 import {
   BULK_APPROVE_CONCURRENCY,
+  LEAD_EXPANDED_PREVIEW_ESTIMATE_PX,
   LEAD_ROW_ESTIMATE_PX,
   LEAD_ROW_OVERSCAN,
   LEAD_TABLE_COL_COUNT,
@@ -25,6 +27,7 @@ import {
   isLeadSelectableForSalesOps,
   isTerminalApproval,
   sortValue,
+  verifiedCampaignBinding,
 } from './LeadTable.logic';
 import { LeadTableRow } from './LeadTableRow';
 import { LeadDispositionPanel, LeadRejectPanel } from './LeadTableDecisionPanels';
@@ -62,10 +65,45 @@ export type { LeadExportContext } from './LeadTable.types';
  * when the table has focus; plain A still approves only the expanded row.
  */
 
-export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exportContext, salesTeam = [] }: LeadTableProps) {
+export function LeadTable({
+  leads,
+  totalMatching = null,
+  truncatedAt = null,
+  growthAgentVerification = null,
+  exportContext,
+  salesTeam = [],
+}: LeadTableProps) {
   'use no memo';
 
   const queryClient = useQueryClient();
+  const [searchParams] = useSearchParams();
+  const campaignId = searchParams.get('campaign_id')?.trim() ?? '';
+  const variantName = searchParams.get('variant_name')?.trim() ?? '';
+  const hasCampaignBindingRequest = Boolean(campaignId || variantName);
+  const requestedCampaignBinding = campaignId && variantName
+    ? { campaign_id: campaignId, variant_name: variantName }
+    : null;
+  const campaignBindingQuery = useQuery({
+    queryKey: queryKeys.campaign(campaignId),
+    queryFn: ({ signal }) => api.campaign(campaignId, signal),
+    enabled: requestedCampaignBinding !== null,
+    retry: false,
+    staleTime: 60_000,
+  });
+  const campaignBinding = verifiedCampaignBinding(
+    campaignBindingQuery.data,
+    requestedCampaignBinding,
+  );
+  const campaignBindingState = !hasCampaignBindingRequest
+    ? 'absent'
+    : requestedCampaignBinding === null
+      ? 'invalid'
+      : campaignBinding
+        ? 'verified'
+        : campaignBindingQuery.isPending || campaignBindingQuery.isFetching
+          ? 'validating'
+          : 'invalid';
+  const campaignBindingBlocked = hasCampaignBindingRequest && campaignBinding === null;
   const tableWrapRef = useRef<HTMLDivElement | null>(null);
   // A11y: the bulk-approve button is the launch point for the bulk flow.
   // After the action settles we restore focus deterministically — to this
@@ -90,7 +128,7 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
   const [dispositionLo, setDispositionLo] = useState<string>('');
   const [dispositionCallbackAt, setDispositionCallbackAt] = useState('');
   const [dispositionNotes, setDispositionNotes] = useState('');
-  const { approvals, setApproval, setLastBorrowerId } = useApp();
+  const { approvals, setApproval, setLastBorrowerId, openConsoleRecentActivity } = useApp();
   const displayLeads = leads.map((lead) => ({ ...lead, ...(salesOverrides[lead.borrower_id] ?? {}) }));
   const leadsById = new Map(displayLeads.map((lead) => [lead.borrower_id, lead]));
   const sortedLeads = sortKey === 'rank'
@@ -104,6 +142,10 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
         }
         return String(av).localeCompare(String(bv)) * direction;
       });
+  const expandedRowIndex = expanded
+    ? sortedLeads.findIndex((lead) => lead.borrower_id === expanded)
+    : -1;
+  const hasExpandedRow = expandedRowIndex >= 0;
   const shouldVirtualize = sortedLeads.length > LEAD_VIRTUALIZATION_THRESHOLD;
   // TanStack Virtual returns imperative instance methods tied to the scroll
   // element. The hook stays local to this table and its methods are not passed
@@ -112,7 +154,10 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
   const rowVirtualizer = useVirtualizer({
     count: sortedLeads.length,
     enabled: shouldVirtualize,
-    estimateSize: () => LEAD_ROW_ESTIMATE_PX,
+    estimateSize: (index) => LEAD_ROW_ESTIMATE_PX + (
+      index === expandedRowIndex ? LEAD_EXPANDED_PREVIEW_ESTIMATE_PX : 0
+    ),
+    getItemKey: (index) => sortedLeads[index]?.borrower_id ?? index,
     getScrollElement: () => tableWrapRef.current,
     overscan: LEAD_ROW_OVERSCAN,
   });
@@ -158,7 +203,8 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
   // committed the audit row. Server-side idempotency protects retries
   // that reuse the original request_id; this bulk UI does not persist
   // those per-row ids after unmount, so the honest operator guidance is
-  // still to check the audit log instead of blindly retrying. R5-21
+  // still to review their actor-scoped recent activity instead of blindly
+  // retrying. R5-21
   // (2026-04-23).
   const [bulkToast, setBulkToast] = useState<
     { ok: number; fail: number; network: number; aborted: number } | null
@@ -193,22 +239,51 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
     // to true and produce a second audit row. The ref flips
     // immediately.
     if (rowInFlightRef.current[borrowerId]) return 'duplicate';
+    if (campaignBindingBlocked) {
+      setApprovalError(
+        campaignBindingState === 'validating'
+          ? 'Campaign binding is still being validated. Wait before approval.'
+          : 'Campaign binding is invalid. Reopen the saved campaign before approval.',
+      );
+      return 'backend';
+    }
     rowInFlightRef.current[borrowerId] = true;
     setApprovalError(null);
     setPendingApproval((p) => ({ ...p, [borrowerId]: true }));
     try {
       const lead = leadsById.get(borrowerId);
-      const draft = await api.draftOutreach(borrowerId, 'email', signal);
+      const draft = campaignBinding
+        ? await api.draftOutreach(borrowerId, 'email', signal, campaignBinding)
+        : await api.draftOutreach(borrowerId, 'email', signal);
+      if (
+        campaignBinding
+        && (
+          draft.campaign_id !== campaignBinding.campaign_id
+          || draft.variant_name !== campaignBinding.variant_name
+        )
+      ) {
+        throw new Error('Campaign variant proof is stale. Reopen the saved campaign before approval.');
+      }
+      const draftSubject = draft.subject?.trim();
+      if (!draftSubject) {
+        throw new Error('Governed email draft returned without a subject. Regenerate before approval.');
+      }
       const res = await api.approve(
         borrowerId,
         {
           evidence_ids: lead?.evidence_ids ?? [],
           offer_code: draft.offer_code ?? lead?.recommended_offer_code ?? null,
+          draft_subject: draftSubject,
           draft_body: draft.body,
+          draft_generation_id: draft.generation_id,
+          draft_response_hash: draft.response_hash,
+          draft_source_refreshed_at: draft.source_refreshed_at,
           channel: 'email',
           rationale: extras.rationale ?? null,
           bulk_id: extras.bulk_id ?? null,
           bulk_rationale: extras.bulk_rationale ?? null,
+          campaign_id: campaignBinding?.campaign_id ?? null,
+          variant_name: campaignBinding?.variant_name ?? null,
         },
         signal,
       );
@@ -255,6 +330,14 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
   ): Promise<boolean> {
     // R5-04: synchronous latch — see approveLead above.
     if (rowInFlightRef.current[borrowerId]) return false;
+    if (campaignBindingBlocked) {
+      setApprovalError(
+        campaignBindingState === 'validating'
+          ? 'Campaign binding is still being validated. Wait before rejection.'
+          : 'Campaign binding is invalid. Reopen the saved campaign before rejection.',
+      );
+      return false;
+    }
     rowInFlightRef.current[borrowerId] = true;
     setApprovalError(null);
     setPendingApproval((p) => ({ ...p, [borrowerId]: true }));
@@ -267,6 +350,8 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
           offer_code: lead?.recommended_offer_code ?? null,
           rationale_code: reasonCode,
           rationale,
+          campaign_id: campaignBinding?.campaign_id ?? null,
+          variant_name: campaignBinding?.variant_name ?? null,
         },
       );
       if (res.rejected) {
@@ -499,6 +584,14 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
     // schedules — producing two parallel loops with the same selection
     // and two audit rows per borrower. Flip the ref before any await.
     if (bulkInFlightRef.current || bulkApproving) return;
+    if (campaignBindingBlocked) {
+      setApprovalError(
+        campaignBindingState === 'validating'
+          ? 'Campaign binding is still being validated. Wait before approval.'
+          : 'Campaign binding is invalid. Reopen the saved campaign before approval.',
+      );
+      return;
+    }
     bulkInFlightRef.current = true;
     // Snapshot which ids to run: skip already-decided rows silently.
     const eligibleForApproval = new Set(approvalEligibleIds);
@@ -618,8 +711,8 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
       const aborted = parsed.aborted ?? 0;
       if (ok + aborted === 0) return;
       // R5-21: route unmounted mid-loop. Aborted ids are in ambiguous
-      // state (server may have committed). Surface a "check audit log"
-      // message rather than mixing them into the retryable `fail` count.
+      // state (server may have committed). Surface an actor-scoped recovery
+      // action rather than mixing them into the retryable `fail` count.
       setBulkToast({ ok, fail: 0, network: 0, aborted });
     } catch {
       // malformed payload — ignore
@@ -634,10 +727,10 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
     };
   }, []);
 
-  // Auto-dismiss the toast after 4s so it doesn't pile up next to the
-  // action bar.
+  // Auto-dismiss settled results after 4s. Ambiguous cancelled requests stay
+  // visible until the operator opens Recent activity to resolve them.
   useEffect(() => {
-    if (!bulkToast) return;
+    if (!bulkToast || bulkToast.aborted > 0) return;
     const t = window.setTimeout(() => setBulkToast(null), 4000);
     return () => window.clearTimeout(t);
   }, [bulkToast]);
@@ -669,6 +762,7 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
     if (isEditableTarget(document.activeElement)) return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const key = e.key.toLowerCase();
+    if (campaignBindingBlocked && (key === 'a' || key === 'r')) return;
     // Shift+A: bulk approve. Takes precedence over single-row A when
     // any row is selected.
     if (key === 'a' && e.shiftKey) {
@@ -796,7 +890,6 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
           </div>
         </div>
         <div className="lead-table__header-actions">
-          <Chip variant="neutral" icon="shield">PII suppressed</Chip>
           <Button
             size="sm"
             icon="export"
@@ -809,6 +902,57 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
           </Button>
         </div>
       </div>
+      {growthAgentVerification && (
+        <div className="table-success chip-row" role="status" data-testid="growth-agent-cohort-proof">
+          <Chip variant="success" icon="shield">Verified Growth Agent cohort</Chip>
+          <span className="num">{growthAgentVerification.total.toLocaleString()} borrowers</span>
+          <span className="mono" title={growthAgentVerification.cohortFingerprint}>
+            proof {growthAgentVerification.cohortFingerprint.slice(0, 12)}
+          </span>
+          <span title={growthAgentVerification.snapshotId}>
+            snapshot {growthAgentVerification.snapshotId}
+          </span>
+          <span className="mono" title={growthAgentVerification.runId}>
+            run {growthAgentVerification.runId.slice(0, 12)}
+          </span>
+        </div>
+      )}
+      {campaignBindingState === 'validating' && requestedCampaignBinding && (
+        <div id="campaign-binding-status" className="table-neutral chip-row" role="status" aria-live="polite" data-testid="campaign-binding-status">
+          <Chip variant="neutral" icon="shield">Validating campaign binding</Chip>
+          <span className="mono" title={requestedCampaignBinding.campaign_id}>
+            campaign {requestedCampaignBinding.campaign_id.slice(0, 12)}
+          </span>
+          <span>variant {requestedCampaignBinding.variant_name}</span>
+        </div>
+      )}
+      {campaignBindingState === 'invalid' && (
+        <div id="campaign-binding-status" className="table-neutral chip-row" role="status" aria-live="polite" data-testid="campaign-binding-status">
+          <Chip variant="neutral" icon="shield">Campaign binding invalid</Chip>
+          <span>Reopen the saved campaign and select a verified variant before taking action.</span>
+        </div>
+      )}
+      {campaignBinding && (
+        <div className="table-success chip-row" role="status" data-testid="campaign-operational-provenance">
+          <Chip variant="success" icon="shield">Campaign-bound outreach</Chip>
+          <span className="mono" title={campaignBinding.campaign_id}>
+            campaign {campaignBinding.campaign_id.slice(0, 12)}
+          </span>
+          <span>variant {campaignBinding.variant_name}</span>
+          {expanded && (
+            <Link
+              className="btn btn--primary btn--sm"
+              to={`/offer-orchestrator/${encodeURIComponent(expanded)}?${new URLSearchParams({
+                campaign_id: campaignBinding.campaign_id,
+                variant_name: campaignBinding.variant_name,
+              }).toString()}`}
+            >
+              Open bound offer
+              <Icon name="chevright" size={12} />
+            </Link>
+          )}
+        </div>
+      )}
       {pendingReject && (
         <LeadRejectPanel
           borrowerId={pendingReject}
@@ -846,8 +990,17 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
           {salesToast}
         </div>
       )}
-      <div ref={tableWrapRef} className="tbl-wrap" tabIndex={0} aria-label="Ranked borrowers table scroll region">
-        <table className="tbl lead-table__table" aria-rowcount={sortedLeads.length + 1}>
+      <div
+        ref={tableWrapRef}
+        className="tbl-wrap"
+        role="region"
+        tabIndex={0}
+        aria-label="Ranked borrowers table scroll region"
+      >
+        <table
+          className="tbl lead-table__table"
+          aria-rowcount={sortedLeads.length + 1 + (hasExpandedRow ? 1 : 0)}
+        >
           <colgroup>
             <col className="lead-table__col-select" />
             <col className="lead-table__col-expand" />
@@ -897,12 +1050,13 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
               <th className="tbl-cell--approval lead-table__approval-header">Approval</th>
             </tr>
           </thead>
-          <tbody>
-            {shouldVirtualize && topSpacerHeight > 0 && (
+          {shouldVirtualize && topSpacerHeight > 0 && (
+            <tbody aria-hidden="true">
               <tr aria-hidden="true" className="lead-table__virtual-spacer">
                 <td colSpan={LEAD_TABLE_COL_COUNT} style={{ height: topSpacerHeight }} />
               </tr>
-            )}
+            </tbody>
+          )}
             {visibleRows.map(({ lead, virtualIndex }) => {
               const isOpen = expanded === lead.borrower_id;
               // Prefer in-session AppContext override (set optimistically on
@@ -918,37 +1072,47 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
               const isSelectable = isLeadSelectableForSalesOps(serverStatus, approval, lead);
               const isApprovalEligible = isLeadApprovalEligible(serverStatus, approval, lead);
               return (
-                <LeadTableRow
+                <tbody
                   key={lead.borrower_id}
-                  lead={lead}
-                  virtualIndex={virtualIndex}
-                  isOpen={isOpen}
-                  approval={approval}
-                  isSelected={isSelected}
-                  isSelectable={isSelectable}
-                  isApprovalEligible={isApprovalEligible}
-                  bulkApproving={bulkApproving}
-                  salesBusy={salesBusy}
-                  salesTeamCount={salesTeam.length}
-                  pendingApproval={Boolean(pendingApproval[lead.borrower_id])}
-                  onToggleRow={(row, open) => {
-                    setLastBorrowerId(row.borrower_id);
-                    setExpanded(open ? null : row.borrower_id);
-                  }}
-                  onToggleSelect={toggleSelect}
-                  onApprove={(borrowerId) => void approveLead(borrowerId)}
-                  onReject={setPendingReject}
-                  onOpenDisposition={openDisposition}
-                  onAssignmentUpdate={applyLeadUpdate}
-                />
+                  data-index={shouldVirtualize ? virtualIndex : undefined}
+                  ref={shouldVirtualize ? rowVirtualizer.measureElement : undefined}
+                >
+                  <LeadTableRow
+                    lead={lead}
+                    virtualIndex={virtualIndex}
+                    ariaRowIndex={virtualIndex + 2 + (
+                      hasExpandedRow && virtualIndex > expandedRowIndex ? 1 : 0
+                    )}
+                    isOpen={isOpen}
+                    approval={approval}
+                    isSelected={isSelected}
+                    isSelectable={isSelectable}
+                    isApprovalEligible={isApprovalEligible}
+                    approvalActionsDisabled={campaignBindingBlocked}
+                    bulkApproving={bulkApproving}
+                    salesBusy={salesBusy}
+                    salesTeamCount={salesTeam.length}
+                    pendingApproval={Boolean(pendingApproval[lead.borrower_id])}
+                    onToggleRow={(row, open) => {
+                      setLastBorrowerId(row.borrower_id);
+                      setExpanded(open ? null : row.borrower_id);
+                    }}
+                    onToggleSelect={toggleSelect}
+                    onApprove={(borrowerId) => void approveLead(borrowerId)}
+                    onReject={setPendingReject}
+                    onOpenDisposition={openDisposition}
+                    onAssignmentUpdate={applyLeadUpdate}
+                  />
+                </tbody>
               );
             })}
             {shouldVirtualize && bottomSpacerHeight > 0 && (
+              <tbody aria-hidden="true">
               <tr aria-hidden="true" className="lead-table__virtual-spacer">
                 <td colSpan={LEAD_TABLE_COL_COUNT} style={{ height: bottomSpacerHeight }} />
               </tr>
+              </tbody>
             )}
-          </tbody>
         </table>
       </div>
       {selectionCount > 0 && (
@@ -1012,35 +1176,6 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
                 </Button>
               </>
             )}
-            {bulkToast && (
-              <span
-                role="status"
-                aria-live="polite"
-                data-testid="lead-bulk-toast"
-                className={`bulk-actions__toast ${
-                  bulkToast.aborted > 0 || bulkToast.network > 0
-                    ? 'bulk-actions__toast--danger'
-                    : bulkToast.fail > 0
-                      ? 'bulk-actions__toast--warn'
-                      : 'bulk-actions__toast--ok'
-                }`}
-              >
-                {bulkToast.ok} approved
-                {bulkToast.fail > 0 ? `, ${bulkToast.fail} failed` : ''}
-                {bulkToast.network > 0
-                  ? ` (${bulkToast.network} network dropped — retry)`
-                  : ''}
-                {/*
-                  R5-21: aborted rows are in an ambiguous state. Server
-                  idempotency is safe only when the same request_id is
-                  reused; this bulk toast no longer owns those ids after
-                  unmount, so direct the user to the audit log instead.
-                */}
-                {bulkToast.aborted > 0
-                  ? ` · ${bulkToast.aborted} cancelled in flight — unknown state, check the audit log`
-                  : ''}
-              </span>
-            )}
             <Button
               variant="ghost"
               size="sm"
@@ -1056,13 +1191,50 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
               size="sm"
               icon={bulkApproving ? undefined : 'check'}
               onClick={() => void bulkApprove()}
-              disabled={bulkApproving || selectedApprovalEligibleCount === 0}
+              disabled={campaignBindingBlocked || bulkApproving || selectedApprovalEligibleCount === 0}
+              aria-describedby={campaignBindingBlocked ? 'campaign-binding-status' : undefined}
               data-testid="lead-bulk-approve"
               aria-label={`Approve ${selectedApprovalEligibleCount} eligible leads`}
             >
               {bulkApproving ? 'Approving…' : `Approve ${selectedApprovalEligibleCount} eligible`}
             </Button>
           </div>
+        </div>
+      )}
+      {bulkToast && (
+        <div className="bulk-actions" data-testid="lead-bulk-toast">
+          <span
+            role="status"
+            aria-live="polite"
+            className={`bulk-actions__toast ${
+              bulkToast.aborted > 0 || bulkToast.network > 0
+                ? 'bulk-actions__toast--danger'
+                : bulkToast.fail > 0
+                  ? 'bulk-actions__toast--warn'
+                  : 'bulk-actions__toast--ok'
+            }`}
+          >
+            {bulkToast.ok} approved
+            {bulkToast.fail > 0 ? `, ${bulkToast.fail} failed` : ''}
+            {bulkToast.network > 0
+              ? ` (${bulkToast.network} network dropped; retry)`
+              : ''}
+            {bulkToast.aborted > 0
+              ? ` · ${bulkToast.aborted} cancelled in flight. Confirm the outcome in Recent activity.`
+              : ''}
+          </span>
+          {bulkToast.aborted > 0 && (
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm"
+              onClick={() => {
+                openConsoleRecentActivity();
+                setBulkToast(null);
+              }}
+            >
+              Review recent activity
+            </button>
+          )}
         </div>
       )}
       {approvalError && (

@@ -78,8 +78,17 @@ except ImportError as exc:  # pragma: no cover - PyYAML ships with databricks-sd
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from tools.databricks.workspace_auth import (  # noqa: E402
+    APP_FACING_WORKSPACE_AUTH_ENV,
+    deployment_workspace_client,
+)
+
 SPACE_YAML = REPO_ROOT / "genie" / "mortgage_lead_intelligence_space.yml"
 SPACE_ID_FILE = REPO_ROOT / "genie" / "space_id.txt"
+
 
 def _load_env_local() -> None:
     """Overlay .env.local onto the process env for SUBPROCESS CLI runs ONLY.
@@ -109,6 +118,14 @@ def _load_env_local() -> None:
             # intended catalog before invoking this tool. Standalone operators
             # should use --catalog or an explicit exported env var.
             if key in {"MIP_DEFAULT_CATALOG", "MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS"}:
+                continue
+            if key in APP_FACING_WORKSPACE_AUTH_ENV:
+                continue
+            if os.environ.get("MIP_DEPLOYER_DATABRICKS_PROFILE") and key in {
+                "DATABRICKS_HOST",
+                "DATABRICKS_TOKEN",
+                "DATABRICKS_AUTH_TYPE",
+            }:
                 continue
             os.environ[key] = value
 
@@ -407,6 +424,15 @@ def _build_client(args: argparse.Namespace):
     """Instantiate WorkspaceClient using CLI-equivalent auth resolution."""
     from databricks.sdk import WorkspaceClient
 
+    if any(
+        os.environ.get(name, "").strip()
+        for name in (
+            "MIP_DEPLOYER_DATABRICKS_HOST",
+            "MIP_DEPLOYER_DATABRICKS_TOKEN",
+            "MIP_DEPLOYER_DATABRICKS_PROFILE",
+        )
+    ):
+        return deployment_workspace_client()
     kwargs: dict[str, Any] = {}
     if args.workspace_host:
         kwargs["host"] = args.workspace_host
@@ -419,7 +445,8 @@ def _build_client(args: argparse.Namespace):
 
 
 def _find_space(client: Any, target_name: str) -> Any | None:
-    """Page through all spaces and return the first whose title matches."""
+    """Resolve at most one exact-title space across every result page."""
+    matches: list[Any] = []
     page_token: str | None = None
     while True:
         resp = client.genie.list_spaces(page_token=page_token)
@@ -427,10 +454,16 @@ def _find_space(client: Any, target_name: str) -> Any | None:
         for space in spaces:
             title = getattr(space, "title", None) or getattr(space, "name", None)
             if title and title.strip() == target_name:
-                return space
+                matches.append(space)
         page_token = getattr(resp, "next_page_token", None)
         if not page_token:
-            return None
+            break
+    if len(matches) > 1:
+        raise ValueError(
+            f"refusing ambiguous Genie binding: found {len(matches)} spaces "
+            f"named {target_name!r}"
+        )
+    return matches[0] if matches else None
 
 
 def _workspace_ui_url(host: str | None, space_id: str | None = None) -> str:
@@ -756,9 +789,9 @@ def run(args: argparse.Namespace) -> int:
         print()
         print(
             "note: trusted_assets in the YAML reference a catalog not yet "
-            f"materialized ({spec.catalog}). Run `make bundle-deploy-dev` then "
-            "`databricks bundle run refresh_silver -t dev` to create the "
-            "gold tables, then re-run this tool to bind them to the space."
+            f"materialized ({spec.catalog}). Run `./scripts/deploy.sh -t dev` "
+            "to create and refresh the governed tables, then re-run this tool "
+            "to bind them to the space."
         )
 
     if args.smoke_test and not _run_smoke_test(client, space_id):

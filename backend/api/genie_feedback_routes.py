@@ -13,12 +13,17 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from backend.schemas.common import validate_public_free_comment
+from backend.schemas.common import validate_public_opaque_id
 from backend.services.audit_store import resolve_actor
 from backend.services.error_sanitizer import safe_dependency_detail
 from backend.services.genie_client import ResilientGenieClient, get_genie_client
-from backend.services.genie_feedback import record_genie_feedback
-from backend.services.genie_session_guard import assert_genie_conversation_owned
+from backend.services.genie_feedback import (
+    GenieFeedbackConflictError,
+    GenieFeedbackDeliveryError,
+    GenieFeedbackInProgressError,
+    record_genie_feedback,
+)
+from backend.services.genie_session_guard import assert_genie_message_owned
 from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
 
@@ -46,20 +51,33 @@ class GenieFeedbackResponse(BaseModel):
 
 
 def _validated_feedback_comment(comment: str | None) -> str | None:
-    """Return a public-safe comment or raise 422 without echoing the input."""
+    """Reject free text so borrower identity data cannot cross into Genie."""
     if comment is None:
         return None
     stripped = comment.strip()
     if not stripped:
         return None
+    raise HTTPException(
+        status_code=422,
+        detail="Free-text feedback is disabled; use the helpful or not-helpful vote.",
+    )
+
+
+def _validated_request_id(request_id: str | None) -> str | None:
+    if request_id is None:
+        return None
     try:
-        return validate_public_free_comment(stripped, max_len=280)
+        return validate_public_opaque_id(request_id)
     except ValueError as exc:
-        # Do NOT include the offending text: reflecting it would echo PII.
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=422,
+            detail="Idempotency-Key must be a UUID or governed opaque id",
+        ) from exc
 
 
-@router.post("/feedback", response_model=GenieFeedbackResponse, responses=JSON_CONTENT_TYPE_RESPONSE)
+@router.post(
+    "/feedback", response_model=GenieFeedbackResponse, responses=JSON_CONTENT_TYPE_RESPONSE
+)
 def genie_feedback(
     payload: GenieFeedbackRequest,
     request: Request,
@@ -69,30 +87,50 @@ def genie_feedback(
 ) -> GenieFeedbackResponse:
     """Record thumbs up/down feedback for a Genie answer.
 
-    Guards: JSON content type, the genie rate-limit lane (applied by the
-    backpressure middleware for ``/api/genie/*``), and a conversation
-    ownership check. Side effects: a best-effort Genie message comment (a
-    failure here does not fail the request) and a required ``GENIE_FEEDBACK``
-    audit row written in a Lakebase transaction. The caller comment is
-    validated public-safe (422 on PII) and never stored verbatim.
+    The exact actor/conversation/message ownership is checked before a durable
+    idempotency intent is claimed. The native rating is sent only after that
+    transaction commits; final state and the ``GENIE_FEEDBACK`` audit row are
+    then committed together. Free-text feedback is rejected so names or other
+    borrower details cannot be forwarded to the native Genie comment system.
     """
     actor = resolve_actor(request)
     safe_comment = _validated_feedback_comment(payload.comment)
-    assert_genie_conversation_owned(
+    # Read manually rather than as a FastAPI Header dependency: this preserves
+    # the existing OpenAPI body/response contract while supporting the standard
+    # client idempotency header. Legacy clients get a stable derived key.
+    safe_request_id = _validated_request_id(request.headers.get("Idempotency-Key"))
+    assert_genie_message_owned(
         lakebase,
         actor=actor,
         conversation_id=payload.conversation_id,
+        message_id=payload.message_id,
     )
     try:
         audit_event_id = record_genie_feedback(
             lakebase,
             genie,
             actor=actor,
+            request_id=safe_request_id,
             conversation_id=payload.conversation_id,
             message_id=payload.message_id,
             helpful=payload.helpful,
             comment=safe_comment,
         )
+    except GenieFeedbackConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="Idempotency-Key was already used for different feedback",
+        ) from exc
+    except GenieFeedbackInProgressError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="feedback request is already in progress",
+        ) from exc
+    except GenieFeedbackDeliveryError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=safe_dependency_detail("genie"),
+        ) from exc
     except LakebaseError as exc:
         raise HTTPException(
             status_code=503,

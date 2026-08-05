@@ -13,8 +13,11 @@
 --                mip.app        -- app-runtime scratch / lookups
 --                mip.audit      -- audit tables (mirrors Lakebase audit)
 --
--- Posture:   CREATE ... IF NOT EXISTS everywhere. Safe to re-run on every
---            job invocation and every `databricks bundle deploy`. This
+-- Posture:   deploy.sh pre-creates only the empty catalog + silver schema so
+--            the bundle can define its pipeline on a brand-new workspace.
+--            This full governed DDL remains post-bundle and runs before any
+--            table grants. CREATE ... IF NOT EXISTS everywhere. Safe to re-run on every
+--            deploy workflow and every job invocation. This
 --            script MUST come before any silver/gold DDL in the Lakeflow
 --            job graph so downstream tables land in valid namespaces.
 --
@@ -159,3 +162,54 @@ CREATE TABLE IF NOT EXISTS mip.first_party.product_balances (
 )
 USING DELTA
 COMMENT 'Optional banking-product balance feed. Uses bands and hashes, not account numbers or balances requiring PII treatment.';
+
+-- Immutable campaign treatment boundary -------------------------------------
+-- One Delta commit stores both the member assignments and a manifest sentinel.
+-- The Lakebase campaign row pins the committed Delta version, so later appends
+-- to this shared table cannot widen an already-ready campaign.
+CREATE TABLE IF NOT EXISTS mip.audit.campaign_treatment_snapshot (
+  campaign_id                    STRING NOT NULL,
+  materialization_id             STRING NOT NULL,
+  row_kind                       STRING NOT NULL,
+  record_key                     STRING NOT NULL,
+  borrower_id                    STRING,
+  assignment                     STRING,
+  treatment_unit_token           STRING,
+  treatment_algorithm_version    STRING NOT NULL,
+  contract_fingerprint           STRING NOT NULL,
+  request_payload_hash           STRING NOT NULL,
+  source_snapshot_id             STRING NOT NULL,
+  source_refreshed_at            TIMESTAMP NOT NULL,
+  candidate_count                BIGINT,
+  selected_primary_count         BIGINT,
+  treatment_count                BIGINT,
+  holdout_count                  BIGINT,
+  assignment_digest              STRING,
+  treatment_fingerprint          STRING,
+  household_count                BIGINT,
+  owner_link_household_count     BIGINT,
+  mailing_address_household_count BIGINT,
+  singleton_household_count      BIGINT,
+  materialized_at                TIMESTAMP NOT NULL
+)
+USING DELTA
+TBLPROPERTIES (
+  'delta.appendOnly' = 'true',
+  'delta.logRetentionDuration' = 'interval 2555 days',
+  'delta.deletedFileRetentionDuration' = 'interval 2555 days'
+)
+COMMENT 'Append-only, version-pinned T0 campaign treatment and holdout assignments. Synthetic borrower ids only; no raw household identifiers or PII.';
+
+-- CREATE IF NOT EXISTS does not converge properties on an existing table.
+-- Re-assert the immutable proof-retention contract on every deployment.
+ALTER TABLE mip.audit.campaign_treatment_snapshot SET TBLPROPERTIES (
+  'delta.appendOnly' = 'true',
+  'delta.logRetentionDuration' = 'interval 2555 days',
+  'delta.deletedFileRetentionDuration' = 'interval 2555 days'
+);
+
+-- Databricks rejects inline CHECK constraints in CREATE TABLE even though
+-- Delta CHECK constraints are supported through ALTER TABLE ADD CONSTRAINT.
+-- scripts/deploy.sh therefore runs ensure_campaign_treatment_table.py after
+-- this DDL. That fail-closed step adds only missing constraints and rejects a
+-- conflicting existing definition without ever dropping the protection.

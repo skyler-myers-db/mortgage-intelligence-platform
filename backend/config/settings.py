@@ -17,10 +17,14 @@ import re
 from collections.abc import Callable
 from functools import lru_cache
 
-from pydantic import AliasChoices, Field, SecretStr
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import AliasChoices, Field, SecretStr, model_validator
+from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 from backend.schemas._validators import set_public_lender_name_provider
+from backend.schemas.lender_identity import (
+    effective_public_tenant_id,
+    validate_public_lender_identity,
+)
 
 # Documented, shared error message so every fail-fast site reads the
 # same -- helps operators who see it in a container log.
@@ -53,6 +57,8 @@ _PLACEHOLDER_HOSTS = {
     "dbc.example",
     "example.cloud.databricks.com",
 }
+
+AI_GATEWAY_PROOF_FRESHNESS_MAX_S = 26 * 60 * 60
 
 
 def _has_angle_bracket_placeholder(value: str | None) -> bool:
@@ -118,12 +124,29 @@ class Settings(BaseSettings):
         populate_by_name=True,
     )
 
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        """Honor the process-wide dotenv kill switch for every instance."""
+        del settings_cls
+        if os.environ.get("MIP_DISABLE_DOTENV", "").strip() == "1":
+            return init_settings, env_settings, file_secret_settings
+        return init_settings, env_settings, dotenv_settings, file_secret_settings
+
     app_env: str = "local"
     mip_git_sha: str | None = Field(
         default=None,
         validation_alias=AliasChoices("MIP_GIT_SHA", "GIT_SHA", "SOURCE_VERSION"),
     )
+    mip_app_deployment_lease_id: str | None = None
     mip_lender_name: str = "Summit Mortgage"
+    mip_lender_nmls_id: str = ""
     mip_tenant_id: str | None = None
     mip_default_catalog: str = "mip"
     mip_default_schema: str = "gold"
@@ -181,10 +204,43 @@ class Settings(BaseSettings):
     # (Phase 3b). When set AND reachable, the in-App route may delegate to
     # the served endpoint; otherwise it runs the orchestrator in-process.
     mip_agent_serving_endpoint: str | None = None
+    mip_agent_supervisor_endpoint: str | None = None
+    mip_agent_gateway_model: str = Field(
+        default="mip.audit.mortgage_growth_supervisor_proxy",
+        validation_alias=AliasChoices(
+            "MIP_AI_GATEWAY_AGENT_MODEL",
+            "AI_GATEWAY_AGENT_MODEL",
+        ),
+    )
+    mip_agent_gateway_model_version: int | None = Field(
+        default=None,
+        ge=1,
+        validation_alias=AliasChoices(
+            "MIP_AI_GATEWAY_AGENT_MODEL_VERSION",
+            "AI_GATEWAY_AGENT_MODEL_VERSION",
+        ),
+    )
+    mip_agent_proxy_client_id: str | None = None
+    mip_agent_proxy_credential_id: str | None = None
+    mip_agent_proxy_secret_reference: str | None = None
     mip_ai_gateway_endpoint: str | None = None
     mip_ai_gateway_inference_table: str | None = None
+    mip_ai_gateway_agent_model_source: str | None = None
+    mip_ai_gateway_experiment_name: str | None = None
+    mip_ai_gateway_experiment_id: str | None = None
+    mip_expected_agent_gateway_binding_sha256: str | None = None
+    mip_expected_agent_gateway_resource_sha256: str | None = None
+    mip_expected_agent_gateway_resource_contract_json: str | None = None
+    mip_expected_agent_gateway_resource_signature: str | None = None
+    mip_gateway_model_attestation_verify_key: str | None = None
+    mip_gateway_model_attestation_previous_verify_key: str | None = None
+    # Public Ed25519 key for exact inference-row proof attestations. The
+    # verifier-only private key is never injected into the App runtime.
+    mip_ai_gateway_proof_verify_key: str | None = None
     mip_ai_gateway_proof_freshness_s: float = Field(
-        default=26 * 60 * 60,
+        default=AI_GATEWAY_PROOF_FRESHNESS_MAX_S,
+        gt=0,
+        le=AI_GATEWAY_PROOF_FRESHNESS_MAX_S,
         validation_alias=AliasChoices(
             "MIP_AI_GATEWAY_PROOF_FRESHNESS_S",
             "AI_GATEWAY_PROOF_FRESHNESS_S",
@@ -194,6 +250,7 @@ class Settings(BaseSettings):
     mip_agent_eval_run_id: str | None = None
     mip_agent_supervisor_id: str | None = None
     mip_agent_supervisor_name: str | None = None
+    mip_agent_runtime_client_id: str | None = None
     mip_lakebase_sync_catalog: str = "mip_app_state"
     mip_lakebase_sync_schema: str = "mip_sync"
     mip_lakebase_sync_tables: str = "source_readiness,segment_population,funnel_snapshot_daily"
@@ -201,14 +258,10 @@ class Settings(BaseSettings):
     def effective_tenant_id(self) -> str:
         """Return the Lakebase disclosure namespace for this deployment."""
 
-        configured = (self.mip_tenant_id or "").strip()
-        if configured:
-            return configured
-        lender_name = (self.mip_lender_name or "").strip()
-        if lender_name == "Summit Mortgage":
-            return "summit"
-        slug = re.sub(r"[^a-z0-9]+", "_", lender_name.lower()).strip("_")
-        return slug or "tenant"
+        return effective_public_tenant_id(
+            self.mip_tenant_id,
+            lender_name=self.mip_lender_name,
+        )
 
     # In-the-money contract: matches tests/fixtures/rate_spread_golden.json
     # (market_rate_constant) and tests/fixtures/in_the_money_golden.json
@@ -248,10 +301,10 @@ class Settings(BaseSettings):
     # MIP_GENIE_ACTION_SECRET remains accepted as the current key so older
     # deploys can move to the rotation contract without a flag day.
     #
-    # When no configured key exists, the app generates a process-local key
-    # at boot, which keeps tokens unforgeable but invalidates outstanding
-    # confirmations after a restart. Shared/customer deploys should set a
-    # stable current key.
+    # Local development and tests may use a process-local key. Deployed
+    # sandbox/customer runtimes must receive a stable current key from the
+    # deployment payload so outstanding confirmations survive process and
+    # replica changes.
     mip_genie_action_secret: SecretStr | None = Field(default=None, repr=False)
     mip_genie_action_secret_current: SecretStr | None = Field(default=None, repr=False)
     mip_genie_action_secret_previous: SecretStr | None = Field(default=None, repr=False)
@@ -290,6 +343,10 @@ class Settings(BaseSettings):
     salesforce_security_token: SecretStr | None = Field(default=None, repr=False)
     salesforce_api_version: str = "v60.0"
     salesforce_sobject: str = "Task"
+    # Customer-created Salesforce External ID field used for idempotent
+    # upsert. A connected destination remains staged unless this is set;
+    # ordinary sObject POST cannot provide exactly-once retry semantics.
+    salesforce_external_id_field: str | None = None
     # Per-HTTP-call timeout for the Salesforce REST client. Kept short because
     # delivery runs synchronously inside POST /activation/stage; the circuit
     # breaker (failure_threshold=3) fast-fails after a few slow calls so a
@@ -309,6 +366,7 @@ class Settings(BaseSettings):
                 self.salesforce_client_secret,
                 self.salesforce_username,
                 self.salesforce_password,
+                self.salesforce_external_id_field,
             )
         )
 
@@ -330,17 +388,10 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("MIP_DEFAULT_ACTOR", "DEFAULT_ACTOR"),
     )
 
-    # Admin RBAC gate for /api/admin/* endpoints. Two recognition paths
-    # in ``backend/services/rbac.py::require_admin``:
-    #
-    # 1. Group membership — ``X-Forwarded-Groups`` includes this name or
-    #    the hard-coded fallback ``"admins"``. Overrideable via
-    #    ``MIP_ADMIN_GROUP_NAME``.
-    # 2. Email allowlist — ``X-Forwarded-Email`` is in the comma-
-    #    separated list below. Day-0 customer deploys may opt into this
-    #    path with ``MIP_ADMIN_EMAILS`` before workspace groups are
-    #    provisioned. The default is intentionally empty so a customer
-    #    deploy never inherits Entrada developer admin access.
+    # Deployed admin automation is authorized by exact actor identities.
+    # Human email allowlists are additive. Group matching exists only as a
+    # local/test compatibility path because Databricks Apps does not document
+    # a forwarded group header as an application authorization contract.
     admin_group_name: str = Field(
         default="mip-admin",
         validation_alias=AliasChoices("MIP_ADMIN_GROUP_NAME", "ADMIN_GROUP_NAME"),
@@ -349,16 +400,24 @@ class Settings(BaseSettings):
         default="",
         validation_alias=AliasChoices("MIP_ADMIN_EMAILS", "ADMIN_EMAILS"),
     )
-    # 2026-06-11 audit P2-5: OPTIONAL approver allowlist for the human
-    # decision endpoints (/outreach/approve|reject). Module 0's demo
-    # contract is that any authenticated workspace user may decide (with
-    # full audit attribution), so the default stays permissive. Customers
-    # opt INTO enforcement by listing approver emails; admins always pass
-    # so the deploying operator cannot lock themselves out of the surface
-    # they administer.
+    admin_identities: str = Field(
+        default="",
+        validation_alias=AliasChoices("MIP_ADMIN_IDENTITIES", "ADMIN_IDENTITIES"),
+    )
+    # Human decision endpoints admit exact automation identities, explicit
+    # approver emails, or admins. The group name is local/test compatibility
+    # only and is not provisioned onto the two automation principals.
+    approver_group_name: str = Field(
+        default="mip-approver",
+        validation_alias=AliasChoices("MIP_APPROVER_GROUP_NAME", "APPROVER_GROUP_NAME"),
+    )
     approver_emails: str = Field(
         default="",
         validation_alias=AliasChoices("MIP_APPROVER_EMAILS", "APPROVER_EMAILS"),
+    )
+    approver_identities: str = Field(
+        default="",
+        validation_alias=AliasChoices("MIP_APPROVER_IDENTITIES", "APPROVER_IDENTITIES"),
     )
 
     # R5-09 trust boundary. Databricks Apps is the authoritative
@@ -366,9 +425,9 @@ class Settings(BaseSettings):
     # injects its own based on the authenticated workspace user. That's
     # the posture the default (True) assumes -- matching production.
     #
-    # Flip to False for unusual deploys where an intermediate proxy
-    # does NOT strip client-supplied ``X-Forwarded-Email`` /
-    # ``X-Forwarded-Groups`` headers. With trust disabled:
+    # Flip to False for unusual deploys where an intermediate proxy does NOT
+    # strip client-supplied ``X-Forwarded-Email`` / ``X-Forwarded-User``.
+    # With trust disabled:
     #
     # * ``backend.services.rbac.require_admin`` ignores the forwarded
     #   group list and denies unless the email allowlist admits the
@@ -482,9 +541,61 @@ class Settings(BaseSettings):
     # intentionally matches mip_lakebase_concurrency_limit so pool checkout
     # does not bottleneck before the app-side semaphore. Set max size to 0
     # to force one-connection-per-call behavior for local diagnostics.
-    mip_lakebase_pool_max_size: int = 16
-    mip_lakebase_pool_timeout_s: float = 2.0
-    mip_lakebase_pool_max_lifetime_s: float = 3000.0
+    mip_lakebase_pool_max_size: int = Field(default=16, ge=0)
+    mip_lakebase_pool_timeout_s: float = Field(
+        default=2.0,
+        ge=0,
+        allow_inf_nan=False,
+    )
+    mip_lakebase_pool_max_lifetime_s: float = Field(
+        default=3000.0,
+        gt=0,
+        allow_inf_nan=False,
+    )
+    mip_lakebase_connect_timeout_s: int = Field(default=2, ge=1)
+    mip_lakebase_transport_timeout_s: int = Field(default=2, ge=1)
+    mip_lakebase_health_statement_timeout_s: float = Field(
+        default=2.0,
+        gt=0,
+        allow_inf_nan=False,
+    )
+    # Authenticated health callers wait against one request-level deadline.
+    # Keep it above each Lakebase I/O phase ceiling so a contended but healthy
+    # connection is not mislabeled down; late work still updates the health
+    # cache after an individual caller stops waiting.
+    mip_health_cold_wait_budget_s: float = Field(
+        default=3.0,
+        gt=0,
+        allow_inf_nan=False,
+    )
+
+    @model_validator(mode="after")
+    def _validate_public_lender_identity(self) -> Settings:
+        self.mip_lender_name, self.mip_lender_nmls_id = validate_public_lender_identity(
+            self.mip_lender_name,
+            self.mip_lender_nmls_id,
+        )
+        if self.mip_tenant_id is not None:
+            self.mip_tenant_id = effective_public_tenant_id(
+                self.mip_tenant_id,
+                lender_name=self.mip_lender_name,
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_health_wait_budget(self) -> Settings:
+        dependency_deadline_floor = max(
+            float(self.mip_lakebase_pool_timeout_s),
+            float(self.mip_lakebase_connect_timeout_s),
+            float(self.mip_lakebase_transport_timeout_s),
+            self.mip_lakebase_health_statement_timeout_s,
+        )
+        if self.mip_health_cold_wait_budget_s <= dependency_deadline_floor:
+            raise ValueError(
+                "mip_health_cold_wait_budget_s must be strictly greater than "
+                "the Lakebase pool, connect, transport, and health-statement timeouts"
+            )
+        return self
 
     def require_databricks_creds(self) -> tuple[str, Callable[[], str], str]:
         """Return ``(host, token_provider, warehouse_id)`` or raise at startup.
@@ -514,7 +625,11 @@ class Settings(BaseSettings):
         """
         host = self.databricks_host
         warehouse = self.databricks_warehouse_id
-        if not host or not warehouse or is_placeholder_databricks_config(host=host, warehouse_id=warehouse):
+        if (
+            not host
+            or not warehouse
+            or is_placeholder_databricks_config(host=host, warehouse_id=warehouse)
+        ):
             raise RuntimeError(_MISSING_CREDS_MSG)
         # Normalise host shape: strip trailing slash, ensure scheme.
         if not host.startswith("http"):
@@ -675,6 +790,10 @@ def check_trust_boundary_at_startup() -> None:
 
 @lru_cache
 def get_settings() -> Settings:
+    if os.environ.get("MIP_DISABLE_DOTENV", "").strip() == "1":
+        # `_env_file` is a pydantic-settings runtime init control; its generated
+        # static signature does not expose the keyword.
+        return Settings(_env_file=None)  # type: ignore[call-arg]
     return Settings()
 
 

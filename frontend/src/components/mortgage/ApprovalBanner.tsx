@@ -25,6 +25,8 @@ interface ApprovalBannerProps {
   approveLabel?: string;
   rejectLabel?: string;
   disabled?: boolean;
+  approveDisabled?: boolean;
+  rejectDisabled?: boolean;
   /**
    * Caller-controlled in-flight flag. When true, both buttons disable and
    * the region flips `aria-busy`. Leaves the internal latch as a fallback
@@ -41,6 +43,8 @@ export function ApprovalBanner({
   approveLabel = 'Approve outreach',
   rejectLabel = 'Reject',
   disabled,
+  approveDisabled,
+  rejectDisabled,
   isSubmitting,
 }: ApprovalBannerProps) {
   const sub =
@@ -82,7 +86,7 @@ export function ApprovalBanner({
           size="sm"
           onClick={() => void guard(onReject)()}
           icon="cross"
-          disabled={buttonsDisabled}
+          disabled={buttonsDisabled || Boolean(rejectDisabled)}
         >
           {rejectLabel}
         </Button>
@@ -91,7 +95,7 @@ export function ApprovalBanner({
           size="sm"
           onClick={() => void guard(onApprove)()}
           icon="check"
-          disabled={buttonsDisabled}
+          disabled={buttonsDisabled || Boolean(approveDisabled)}
         >
           {busy ? 'Submitting…' : approveLabel}
         </Button>

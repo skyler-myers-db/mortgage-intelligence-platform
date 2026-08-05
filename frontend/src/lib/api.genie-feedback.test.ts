@@ -24,7 +24,7 @@ describe('genieFeedback API client', () => {
       conversation_id: 'conv-1',
       message_id: 'msg-1',
       helpful: true,
-      comment: 'clear and fast',
+      request_id: '11111111-1111-4111-8111-111111111111',
     });
 
     expect(res.accepted).toBe(true);
@@ -34,29 +34,13 @@ describe('genieFeedback API client', () => {
     expect((calls[0].init?.headers as Record<string, string>)['Content-Type']).toBe(
       'application/json',
     );
+    expect((calls[0].init?.headers as Record<string, string>)['Idempotency-Key']).toBe(
+      '11111111-1111-4111-8111-111111111111',
+    );
     expect(JSON.parse(String(calls[0].init?.body))).toEqual({
       conversation_id: 'conv-1',
       message_id: 'msg-1',
       helpful: true,
-      comment: 'clear and fast',
-    });
-  });
-
-  it('surfaces the 422 PII detail as an ApiError without the request echoing the comment', async () => {
-    vi.stubGlobal('fetch', async () =>
-      jsonResponse(422, { detail: 'Comment appears to contain personal data.' }),
-    );
-
-    await expect(
-      api.genieFeedback({
-        conversation_id: 'conv-1',
-        message_id: 'msg-1',
-        helpful: false,
-        comment: 'call jane@example.com',
-      }),
-    ).rejects.toMatchObject({
-      status: 422,
-      message: 'Comment appears to contain personal data.',
     });
   });
 

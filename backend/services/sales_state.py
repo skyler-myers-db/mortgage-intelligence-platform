@@ -265,9 +265,13 @@ class SalesStateStore:
         cache_key = f"sales_state:list_team:{actor or '_all'}"
         if use_cache:
             cached = _cache_get(cache_key)
-            if isinstance(cached, list) and all(isinstance(member, SalesTeamMember) for member in cached):
+            if isinstance(cached, list) and all(
+                isinstance(member, SalesTeamMember) for member in cached
+            ):
                 return [member.model_copy(deep=True) for member in cached]
-        actor_member = self.require_active_team_member(actor, use_cache=use_cache) if actor else None
+        actor_member = (
+            self.require_active_team_member(actor, use_cache=use_cache) if actor else None
+        )
         rows = self._client.fetchall(
             """
             SELECT email, display_label, role, region, manager_email, capacity_per_day, active
@@ -400,9 +404,7 @@ class SalesStateStore:
 
         assignment = self.active_assignment_for(borrower_id, use_cache=False)
         if assignment is None:
-            raise PermissionError(
-                "lead outcome requires an in-scope active assignment"
-            )
+            raise PermissionError("lead outcome requires an in-scope active assignment")
 
         try:
             active_assignee = self.require_visible_assignee(
@@ -473,7 +475,9 @@ class SalesStateStore:
             raise LakebaseError("sales audit insert returned no row")
         return str(audit_id)
 
-    def active_assignment_for(self, borrower_id: str, *, use_cache: bool = False) -> LeadAssignment | None:
+    def active_assignment_for(
+        self, borrower_id: str, *, use_cache: bool = False
+    ) -> LeadAssignment | None:
         cache_key = f"sales_state:active_assignment:{borrower_id}"
         if use_cache:
             cached = _cache_get(cache_key)
@@ -516,7 +520,7 @@ class SalesStateStore:
                        occurred_at, callback_at, notes, audit_event_id
                 FROM mip_app.call_dispositions
                 WHERE borrower_id = %(borrower_id)s
-                ORDER BY occurred_at DESC, created_at DESC
+                ORDER BY occurred_at DESC, created_at DESC, disposition_id::text DESC
                 LIMIT 1
                 """,
                 {"borrower_id": borrower_id},
@@ -648,11 +652,17 @@ class SalesStateStore:
                 "status": "available",
                 "configured": True,
             }
-        row = self._client.fetchone(_OUTCOME_SOURCE_STATUS_BY_TYPE, {"source_system": source_system})
+        row = self._client.fetchone(
+            _OUTCOME_SOURCE_STATUS_BY_TYPE, {"source_system": source_system}
+        )
         status = str(row.get("status") if row else "not_configured")
         return {
             "source_system": source_system,
-            "display_name": str(row.get("display_name") if row else _OUTCOME_SOURCE_LABELS.get(source_system, source_system)),
+            "display_name": str(
+                row.get("display_name")
+                if row
+                else _OUTCOME_SOURCE_LABELS.get(source_system, source_system)
+            ),
             "status": status,
             "configured": status in _CONFIGURED_OUTCOME_SOURCE_STATUSES,
         }
@@ -677,14 +687,20 @@ class SalesStateStore:
             out.append(
                 {
                     "source_system": source_system,
-                    "display_name": str(row.get("display_name") if row else _OUTCOME_SOURCE_LABELS.get(source_system, source_system)),
+                    "display_name": str(
+                        row.get("display_name")
+                        if row
+                        else _OUTCOME_SOURCE_LABELS.get(source_system, source_system)
+                    ),
                     "status": status,
                     "configured": status in _CONFIGURED_OUTCOME_SOURCE_STATUSES,
                 }
             )
         return out
 
-    def _require_configured_outcome_source(self, source_system: LeadOutcomeSourceSystem) -> dict[str, Any]:
+    def _require_configured_outcome_source(
+        self, source_system: LeadOutcomeSourceSystem
+    ) -> dict[str, Any]:
         status = self.outcome_source_status(source_system)
         if not status["configured"]:
             raise ValueError(f"{status['display_name']} outcome feed is not configured")
@@ -696,7 +712,9 @@ class SalesStateStore:
         normalized = sorted({str(borrower_id) for borrower_id in borrower_ids})
         cache_key = "sales_state:latest_dispositions:" + ",".join(normalized)
         cached = _cache_get(cache_key)
-        if isinstance(cached, dict) and all(isinstance(v, CallDisposition) for v in cached.values()):
+        if isinstance(cached, dict) and all(
+            isinstance(v, CallDisposition) for v in cached.values()
+        ):
             return {str(k): v.model_copy(deep=True) for k, v in cached.items()}
         rows = self._client.fetchall(
             """
@@ -705,7 +723,8 @@ class SalesStateStore:
                    occurred_at, callback_at, notes, audit_event_id
             FROM mip_app.call_dispositions
             WHERE borrower_id = ANY(%(borrower_ids)s)
-            ORDER BY borrower_id, occurred_at DESC, created_at DESC
+            ORDER BY borrower_id, occurred_at DESC, created_at DESC,
+                     disposition_id::text DESC
             """,
             {"borrower_ids": normalized},
             limit=max(len(normalized), 1),
@@ -847,7 +866,9 @@ class SalesStateStore:
                     "assigned_to_email": assignment.assigned_to_email,
                     "assigned_by": assignment.assigned_by,
                     "assigned_at": assignment.assigned_at.isoformat(),
-                    "expires_at": assignment.expires_at.isoformat() if assignment.expires_at else None,
+                    "expires_at": assignment.expires_at.isoformat()
+                    if assignment.expires_at
+                    else None,
                     "strategy": assignment.strategy,
                 },
                 event_type="LEAD_ASSIGN",
@@ -902,7 +923,8 @@ class SalesStateStore:
                 if (
                     str(row.get("assignment_scope") or "single") != "distribution"
                     or assignment.assigned_by != assigned_by.lower()
-                    or assignment.assigned_to_email != expected_by_borrower.get(assignment.borrower_id)
+                    or assignment.assigned_to_email
+                    != expected_by_borrower.get(assignment.borrower_id)
                     or assignment.strategy != strategy
                     or not _assignment_duration_matches(assignment, expires_in_hours)
                 ):
@@ -976,7 +998,9 @@ class SalesStateStore:
                     if existing := _matches_existing(existing_after_conflict):
                         return existing, ""
                     if existing_after_conflict:
-                        raise PermissionError("request_id already belongs to a different distribution")
+                        raise PermissionError(
+                            "request_id already belongs to a different distribution"
+                        )
                     raise LakebaseError("assignment insert returned no row")
                 assignments.append(assignment)
             counts = Counter(a.assigned_to_email for a in assignments)
@@ -1019,7 +1043,9 @@ class SalesStateStore:
         clean_notes = scrub_free_text(notes) if notes else None
 
         def _matches_existing(existing: CallDisposition) -> bool:
-            occurred_matches = True if occurred_at is None else _datetimes_equal(existing.occurred_at, occurred_at)
+            occurred_matches = (
+                True if occurred_at is None else _datetimes_equal(existing.occurred_at, occurred_at)
+            )
             return (
                 existing.borrower_id == borrower_id
                 and existing.lo_email == lo.email
@@ -1093,7 +1119,9 @@ class SalesStateStore:
                     "outcome": disposition.outcome,
                     "attempt_number": disposition.attempt_number,
                     "occurred_at": disposition.occurred_at.isoformat(),
-                    "callback_at": disposition.callback_at.isoformat() if disposition.callback_at else None,
+                    "callback_at": disposition.callback_at.isoformat()
+                    if disposition.callback_at
+                    else None,
                     "notes": disposition.notes,
                 },
                 event_type="CALL_DISPOSITION",
@@ -1209,7 +1237,9 @@ class SalesStateStore:
                 if not _matches_existing(outcome):
                     if request_id and outcome.request_id == request_id:
                         raise ValueError("request_id already belongs to a different lead outcome")
-                    raise ValueError("source_record_ref already belongs to a different lead outcome")
+                    raise ValueError(
+                        "source_record_ref already belongs to a different lead outcome"
+                    )
                 return outcome, outcome.audit_event_id or ""
             audit_event_id = self._insert_audit_event(
                 cur,
@@ -1250,20 +1280,21 @@ class SalesStateStore:
             cached = _cache_get(cache_key)
             if isinstance(cached, dict):
                 return deepcopy(cached)
-        row = self._client.fetchone(
-            """
+        row = (
+            self._client.fetchone(
+                """
             WITH latest_approval AS (
                 SELECT approval_id, action, offer_code, decided_at
                 FROM mip_app.approvals
                 WHERE borrower_id = %(borrower_id)s
-                ORDER BY decided_at DESC
+                ORDER BY decided_at DESC, approval_id::text DESC
                 LIMIT 1
             ),
             latest_disposition AS (
                 SELECT occurred_at AS disposition_at
                 FROM mip_app.call_dispositions
                 WHERE borrower_id = %(borrower_id)s
-                ORDER BY occurred_at DESC, created_at DESC
+                ORDER BY occurred_at DESC, created_at DESC, disposition_id::text DESC
                 LIMIT 1
             )
             SELECT
@@ -1285,8 +1316,10 @@ class SalesStateStore:
             FROM latest_approval a
             FULL OUTER JOIN latest_disposition d ON true
             """,
-            {"borrower_id": borrower_id},
-        ) or {}
+                {"borrower_id": borrower_id},
+            )
+            or {}
+        )
         result = {
             "borrower_id": borrower_id,
             "approval_status": row.get("approval_status") or "pending",
@@ -1309,13 +1342,14 @@ class SalesStateStore:
                 SELECT DISTINCT ON (borrower_id)
                        borrower_id, action, decided_at
                 FROM mip_app.approvals
-                ORDER BY borrower_id, decided_at DESC
+                ORDER BY borrower_id, decided_at DESC, approval_id::text DESC
             ),
             latest_disposition AS (
                 SELECT DISTINCT ON (borrower_id)
                        borrower_id, outcome, occurred_at
                 FROM mip_app.call_dispositions
-                ORDER BY borrower_id, occurred_at DESC, created_at DESC
+                ORDER BY borrower_id, occurred_at DESC, created_at DESC,
+                         disposition_id::text DESC
             )
             SELECT a.borrower_id,
                    'approved' AS approval_status,
@@ -1368,7 +1402,9 @@ class SalesStateStore:
         return {
             "date": date,
             "calls_logged": sum(totals.values()),
-            "contacts_reached": totals["connected"] + totals["callback_scheduled"] + totals["application_started"],
+            "contacts_reached": totals["connected"]
+            + totals["callback_scheduled"]
+            + totals["application_started"],
             "callbacks_scheduled": totals["callback_scheduled"],
             "applications_started": totals["application_started"],
             "dead_leads": totals["dead"],
@@ -1392,9 +1428,14 @@ class SalesStateStore:
             f"""
             SELECT {group_expr} AS group_key,
                    COUNT(*) AS calls_attempted,
+                   COUNT(DISTINCT borrower_id) AS unique_leads_contacted,
+                   COUNT(DISTINCT borrower_id) FILTER (
+                     WHERE outcome IN ('connected','callback_scheduled','application_started')
+                   ) AS unique_contacts_reached,
                    COUNT(*) FILTER (WHERE outcome IN ('connected','callback_scheduled','application_started')) AS contacts_reached,
                    COUNT(*) FILTER (WHERE outcome = 'callback_scheduled') AS callbacks_scheduled,
-                   COUNT(*) FILTER (WHERE outcome = 'application_started') AS applications_started
+                   COUNT(*) FILTER (WHERE outcome = 'application_started') AS applications_started,
+                   COUNT(DISTINCT borrower_id) FILTER (WHERE outcome = 'application_started') AS unique_application_starts
             FROM mip_app.call_dispositions
             WHERE occurred_at >= %(from_date)s::date
               AND occurred_at < (%(to_date)s::date + interval '1 day')
@@ -1403,13 +1444,20 @@ class SalesStateStore:
             ORDER BY applications_started DESC, calls_attempted DESC
             LIMIT 100
             """,
-            {"from_date": from_date, "to_date": to_date, "lo_emails": sorted(visible_lo_emails or [])},
+            {
+                "from_date": from_date,
+                "to_date": to_date,
+                "lo_emails": sorted(visible_lo_emails or []),
+            },
             limit=100,
         )
         out: list[dict[str, Any]] = []
         for row in rows:
             calls = int(row.get("calls_attempted") or 0)
             apps = int(row.get("applications_started") or 0)
+            unique_leads = int(row.get("unique_leads_contacted") or 0)
+            unique_contacts = int(row.get("unique_contacts_reached") or 0)
+            unique_apps = int(row.get("unique_application_starts") or 0)
             out.append(
                 {
                     "group_key": row.get("group_key"),
@@ -1417,10 +1465,126 @@ class SalesStateStore:
                     "contacts_reached": int(row.get("contacts_reached") or 0),
                     "callbacks_scheduled": int(row.get("callbacks_scheduled") or 0),
                     "applications_started": apps,
-                    "application_start_rate": round(apps / calls, 4) if calls else 0.0,
+                    "unique_leads_contacted": unique_leads,
+                    "unique_contacts_reached": unique_contacts,
+                    "unique_application_starts": unique_apps,
+                    "application_start_rate": (
+                        round(unique_apps / unique_contacts, 4) if unique_contacts else 0.0
+                    ),
                 }
             )
         return out
+
+    def campaign_performance_funnel(
+        self,
+        *,
+        from_date: str,
+        to_date: str,
+        visible_lo_emails: set[str] | None = None,
+    ) -> dict[str, int | datetime]:
+        """Return a same-borrower, chronological observed funnel for benchmarks.
+
+        Each stage uses the borrower's earliest event at or after the preceding
+        stage. This prevents later funnel stages from being credited to an
+        earlier outreach attempt and prevents independently counted populations
+        from being multiplied together as one cohort. The result is a manager-
+        visible team benchmark, not a claim that these borrowers belong to the
+        Portfolio Builder selection.
+        """
+
+        disposition_scope = (
+            "AND d.lo_email = ANY(%(lo_emails)s)" if visible_lo_emails is not None else ""
+        )
+        outcome_scope = (
+            "AND o.assigned_to_email = ANY(%(lo_emails)s)" if visible_lo_emails is not None else ""
+        )
+        rows = self._client.fetchall(
+            f"""
+            /* campaign_performance_funnel: same-borrower nested sets */
+            WITH attempted AS (
+              SELECT d.borrower_id, MIN(d.occurred_at) AS attempted_at
+              FROM mip_app.call_dispositions d
+              WHERE d.occurred_at >= %(from_date)s::date
+                AND d.occurred_at < (%(to_date)s::date + interval '1 day')
+                {disposition_scope}
+              GROUP BY d.borrower_id
+            ),
+            reached AS (
+              SELECT d.borrower_id, MIN(d.occurred_at) AS reached_at
+              FROM mip_app.call_dispositions d
+              INNER JOIN attempted a ON a.borrower_id = d.borrower_id
+              WHERE d.occurred_at >= a.attempted_at
+                AND d.occurred_at < (%(to_date)s::date + interval '1 day')
+                AND d.outcome IN ('connected','callback_scheduled','application_started')
+                {disposition_scope}
+              GROUP BY d.borrower_id
+            ),
+            started AS (
+              SELECT d.borrower_id, MIN(d.occurred_at) AS started_at
+              FROM mip_app.call_dispositions d
+              INNER JOIN reached r ON r.borrower_id = d.borrower_id
+              WHERE d.occurred_at >= r.reached_at
+                AND d.occurred_at < (%(to_date)s::date + interval '1 day')
+                AND d.outcome = 'application_started'
+                {disposition_scope}
+              GROUP BY d.borrower_id
+            ),
+            submitted AS (
+              SELECT o.borrower_id, MIN(o.occurred_at) AS submitted_at
+              FROM mip_app.lead_outcomes o
+              INNER JOIN started s ON s.borrower_id = o.borrower_id
+              WHERE o.occurred_at >= s.started_at
+                AND o.occurred_at < (%(to_date)s::date + interval '1 day')
+                AND o.outcome_type = 'application_submitted'
+                {outcome_scope}
+              GROUP BY o.borrower_id
+            ),
+            funded AS (
+              SELECT o.borrower_id, MIN(o.occurred_at) AS funded_at
+              FROM mip_app.lead_outcomes o
+              INNER JOIN submitted s ON s.borrower_id = o.borrower_id
+              WHERE o.occurred_at >= s.submitted_at
+                AND o.occurred_at < (%(to_date)s::date + interval '1 day')
+                AND o.outcome_type = 'closed_funded'
+                {outcome_scope}
+              GROUP BY o.borrower_id
+            )
+            SELECT
+              statement_timestamp() AS snapshot_at,
+              (SELECT COUNT(*) FROM attempted) AS unique_leads_attempted,
+              (SELECT COUNT(*) FROM reached) AS unique_contacts_reached,
+              (SELECT COUNT(*) FROM started) AS unique_application_starts,
+              (SELECT COUNT(*) FROM submitted) AS unique_applications_submitted,
+              (SELECT COUNT(*) FROM funded) AS unique_closed_funded
+            """,
+            {
+                "from_date": from_date,
+                "to_date": to_date,
+                "lo_emails": sorted(visible_lo_emails or []),
+            },
+            limit=1,
+        )
+        row = rows[0] if rows else {}
+        snapshot_value = row.get("snapshot_at")
+        if isinstance(snapshot_value, datetime):
+            snapshot_at = snapshot_value
+        elif snapshot_value:
+            try:
+                snapshot_at = datetime.fromisoformat(str(snapshot_value).replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise LakebaseError("campaign performance snapshot timestamp is invalid") from exc
+        else:
+            raise LakebaseError("campaign performance snapshot timestamp is missing")
+        if snapshot_at.tzinfo is None or snapshot_at.utcoffset() is None:
+            raise LakebaseError("campaign performance snapshot timestamp is timezone-naive")
+        return {
+            "snapshot_at": snapshot_at.astimezone(UTC),
+            "unique_leads_attempted": int(row.get("unique_leads_attempted") or 0),
+            "unique_contacts_reached": int(row.get("unique_contacts_reached") or 0),
+            "unique_application_starts": int(row.get("unique_application_starts") or 0),
+            "unique_applications_submitted": int(row.get("unique_applications_submitted") or 0),
+            "unique_closed_funded": int(row.get("unique_closed_funded") or 0),
+        }
 
     def outcome_summary(
         self,
@@ -1429,7 +1593,14 @@ class SalesStateStore:
         to_date: str,
         visible_lo_emails: set[str] | None = None,
     ) -> dict[str, Any]:
-        lo_filter = "AND assigned_to_email = ANY(%(lo_emails)s)" if visible_lo_emails is not None else ""
+        lo_filter = (
+            "AND assigned_to_email = ANY(%(lo_emails)s)" if visible_lo_emails is not None else ""
+        )
+        params = {
+            "from_date": from_date,
+            "to_date": to_date,
+            "lo_emails": sorted(visible_lo_emails or []),
+        }
         rows = self._client.fetchall(
             f"""
             SELECT outcome_type, source_system, assigned_to_email,
@@ -1443,9 +1614,27 @@ class SalesStateStore:
             ORDER BY n DESC
             LIMIT 1000
             """,
-            {"from_date": from_date, "to_date": to_date, "lo_emails": sorted(visible_lo_emails or [])},
+            params,
             limit=1000,
         )
+        unique_rows = self._client.fetchall(
+            f"""
+            SELECT
+              COUNT(DISTINCT borrower_id) FILTER (
+                WHERE outcome_type = 'application_submitted'
+              ) AS unique_applications_submitted,
+              COUNT(DISTINCT borrower_id) FILTER (
+                WHERE outcome_type = 'closed_funded'
+              ) AS unique_closed_funded
+            FROM mip_app.lead_outcomes
+            WHERE occurred_at >= %(from_date)s::date
+              AND occurred_at < (%(to_date)s::date + interval '1 day')
+              {lo_filter}
+            """,
+            params,
+            limit=1,
+        )
+        unique_row = unique_rows[0] if unique_rows else {}
         totals: Counter[str] = Counter()
         by_source: dict[str, Counter[str]] = {}
         by_lo: dict[str, Counter[str]] = {}
@@ -1468,6 +1657,10 @@ class SalesStateStore:
             "total_outcomes": sum(totals.values()),
             "applications_submitted": totals["application_submitted"],
             "closed_funded": totals["closed_funded"],
+            "unique_applications_submitted": int(
+                unique_row.get("unique_applications_submitted") or 0
+            ),
+            "unique_closed_funded": int(unique_row.get("unique_closed_funded") or 0),
             "lost_to_competitor": totals["lost_to_competitor"],
             "withdrawn": totals["withdrawn"],
             "not_qualified": totals["not_qualified"],
@@ -1478,7 +1671,9 @@ class SalesStateStore:
             "source_statuses": [
                 {
                     **status,
-                    "outcome_count": sum(by_source.get(str(status["source_system"]), Counter()).values()),
+                    "outcome_count": sum(
+                        by_source.get(str(status["source_system"]), Counter()).values()
+                    ),
                 }
                 for status in source_statuses
             ],

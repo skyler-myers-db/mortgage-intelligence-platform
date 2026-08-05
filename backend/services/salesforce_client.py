@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -80,7 +81,8 @@ class SalesforceClient:
     """Stdlib-only Salesforce REST client.
 
     ``create_record(sobject, fields)`` drives the
-    ``authenticate -> POST sobjects/{sobject}`` sequence, refreshing the
+``authenticate -> PATCH sobjects/{sobject}/{external-id-field}/{value}``
+sequence, refreshing the
     cached OAuth token once on a 401. The access token is cached in a
     process-local :class:`TTLCache`.
     """
@@ -226,6 +228,85 @@ class SalesforceClient:
             )
         return {"id": str(record_id), "success": True}
 
+    def upsert_record(
+        self,
+        sobject: str,
+        external_id_field: str,
+        external_id: str,
+        fields: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Idempotently create/update an sObject by a unique External ID."""
+
+        try:
+            return self._upsert_once(
+                sobject,
+                external_id_field,
+                external_id,
+                fields,
+                force_token_refresh=False,
+            )
+        except SalesforceClientError as exc:
+            if not exc.is_auth_error:
+                raise
+            emit(
+                log,
+                "salesforce_token_refresh",
+                level=logging.WARNING,
+                dependency="salesforce",
+                reason="401_on_upsert",
+            )
+            return self._upsert_once(
+                sobject,
+                external_id_field,
+                external_id,
+                fields,
+                force_token_refresh=True,
+            )
+
+    def _upsert_once(
+        self,
+        sobject: str,
+        external_id_field: str,
+        external_id: str,
+        fields: dict[str, Any],
+        *,
+        force_token_refresh: bool,
+    ) -> dict[str, Any]:
+        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,79}", external_id_field):
+            raise SalesforceClientError("Salesforce External ID field name is invalid")
+        token = self._access_token(force_refresh=force_token_refresh)
+        record_url = (
+            f"{self._instance_url}/services/data/{self._api_version}/sobjects/"
+            f"{urllib.parse.quote(sobject, safe='')}/"
+            f"{urllib.parse.quote(external_id_field, safe='')}/"
+            f"{urllib.parse.quote(external_id, safe='')}"
+        )
+        payload = json.dumps({**fields, external_id_field: external_id}).encode("utf-8")
+        request = urllib.request.Request(
+            record_url,
+            data=payload,
+            method="PATCH",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+        )
+        response = self._send(request)
+        record_id = str(response.get("id") or "").strip()
+        if not record_id:
+            lookup = urllib.request.Request(
+                f"{record_url}?fields=Id",
+                method="GET",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            record_id = str(self._send(lookup).get("Id") or "").strip()
+        if not record_id:
+            raise SalesforceClientError(
+                "Salesforce External-ID upsert could not resolve the record id",
+                status_code=502,
+            )
+        return {"id": record_id, "success": True}
+
     # ------------------------------------------------------------------
     # HTTP
     # ------------------------------------------------------------------
@@ -286,17 +367,11 @@ def _parse_sf_error_code(detail: str) -> str | None:
 
 
 class ResilientSalesforceClient:
-    """Compose ``Resilient`` (breaker) around ``create_record``.
+    """Compose ``Resilient`` (breaker) around Salesforce writes.
 
-    The breaker key is ``"salesforce"`` so the dependency shows up in the
-    resilience registry. The write is NOT auto-retried (attempts=1): a
-    ``create_record`` is a non-idempotent POST, and Salesforce is not given an
-    idempotency key here (``request_id`` is only free text in the Task
-    Description, NOT an External-Id upsert), so retrying a create that may have
-    committed server-side would risk a duplicate Task. Re-delivery is instead
-    bounded by the breaker and by the UNIQUE ``request_id`` on
-    ``activation_outbox`` (which dedupes re-staging). Production should migrate
-    to an External-Id upsert to make the write itself idempotent.
+    Production delivery uses ``upsert_record`` with the immutable activation id
+    bound to a customer-configured unique External ID field. The legacy
+    ``create_record`` seam remains only for direct client compatibility tests.
     """
 
     def __init__(self, client: SalesforceClient, resilient: Resilient[Any]) -> None:
@@ -313,6 +388,22 @@ class ResilientSalesforceClient:
 
     def create_record(self, sobject: str, fields: dict[str, Any]) -> dict[str, Any]:
         return self._resilient.call(lambda: self._client.create_record(sobject, fields))
+
+    def upsert_record(
+        self,
+        sobject: str,
+        external_id_field: str,
+        external_id: str,
+        fields: dict[str, Any],
+    ) -> dict[str, Any]:
+        return self._resilient.call(
+            lambda: self._client.upsert_record(
+                sobject,
+                external_id_field,
+                external_id,
+                fields,
+            )
+        )
 
 
 _CLIENT: ResilientSalesforceClient | None = None
@@ -338,13 +429,16 @@ def get_salesforce_client() -> ResilientSalesforceClient | None:
     with _CLIENT_LOCK:
         if _CLIENT is not None:
             return _CLIENT
-        # mypy: salesforce_configured guarantees these are non-None.
+        client_secret = settings.salesforce_client_secret
+        password = settings.salesforce_password
+        if client_secret is None or password is None:
+            return None
         bare = SalesforceClient(
             instance_url=str(settings.salesforce_instance_url),
             client_id=str(settings.salesforce_client_id),
-            client_secret=settings.salesforce_client_secret.get_secret_value(),  # type: ignore[union-attr]
+            client_secret=client_secret.get_secret_value(),
             username=str(settings.salesforce_username),
-            password=settings.salesforce_password.get_secret_value(),  # type: ignore[union-attr]
+            password=password.get_secret_value(),
             security_token=(
                 settings.salesforce_security_token.get_secret_value()
                 if settings.salesforce_security_token is not None
@@ -354,14 +448,10 @@ def get_salesforce_client() -> ResilientSalesforceClient | None:
             timeout_s=settings.salesforce_timeout_s,
         )
         breaker = get_breaker("salesforce", failure_threshold=3, cooldown_s=30.0)
-        # attempts=1: a create_record is a NON-IDEMPOTENT write. A create that
-        # commits server-side but then fails the client read (timeout/5xx) would,
-        # on retry, double-write a Task -- Salesforce has no idempotency key here
-        # and request_id is only free text in the Description. So we do NOT retry
-        # the write; the breaker still trips on repeated failures, and re-staging
-        # is deduped by the UNIQUE request_id on activation_outbox. (The single
-        # controlled 401 token-refresh lives inside create_record and is safe: a
-        # 401 means the write never happened.)
+        # Keep attempts=1. External-ID upsert makes request retries idempotent,
+        # but an automatic retry inside an ambiguous network failure would hide
+        # useful delivery-state evidence from the durable outbox. The next
+        # governed stage retry safely repeats the same upsert key.
         resilient = Resilient[Any](
             breaker=breaker,
             dependency_name="salesforce",

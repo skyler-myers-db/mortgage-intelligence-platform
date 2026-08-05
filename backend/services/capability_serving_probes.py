@@ -3,9 +3,38 @@
 from __future__ import annotations
 
 import time
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Literal
 
 from backend.services.databricks_sql_helpers import _validate_identifier
+
+ServingTransport = Literal["responses_api", "endpoint_invocation"]
+
+_LIKE_ESCAPE = "\\"
+
+
+@dataclass(frozen=True)
+class ServingEndpointExecution:
+    """Runtime proof for the exact endpoint call that produced a response."""
+
+    endpoint: str
+    task: str | None
+    transport: ServingTransport
+    response: Any
+    client_request_id: str | None = None
+
+    @property
+    def response_id(self) -> str | None:
+        return serving_response_id(self.response)
+
+    @property
+    def proves_agent_response(self) -> bool:
+        return (
+            self.transport == "responses_api"
+            and _is_agent_responses_task(self.task)
+            and serving_response_is_terminal_completed(self.response)
+            and serving_response_has_payload(self.response)
+        )
 
 
 def query_serving_endpoint(
@@ -15,91 +44,148 @@ def query_serving_endpoint(
     prompt: str,
     client_request_id: str | None = None,
     task: str | None = None,
+    max_tokens: int = 64,
 ) -> Any:
-    if str(task or "").lower().startswith("agent/v1/responses"):
+    return query_serving_endpoint_with_proof(
+        workspace_client,
+        endpoint,
+        prompt=prompt,
+        client_request_id=client_request_id,
+        task=task,
+        max_tokens=max_tokens,
+    ).response
+
+
+def query_serving_endpoint_with_proof(
+    workspace_client: Any,
+    endpoint: str,
+    *,
+    prompt: str,
+    client_request_id: str | None = None,
+    task: str | None = None,
+    max_tokens: int = 64,
+    return_trace: bool = False,
+) -> ServingEndpointExecution:
+    if _is_agent_responses_task(task):
         input_messages = [{"role": "user", "content": prompt}]
         body: dict[str, Any] = {
             "model": endpoint,
             "input": input_messages,
             "stream": False,
+            "max_output_tokens": max_tokens,
         }
         if client_request_id:
             body["client_request_id"] = client_request_id
-        try:
-            return workspace_client.api_client.do("POST", "/serving-endpoints/responses", body=body)
-        except Exception:
-            # Databricks Apps workspace identity can receive a non-JSON platform
-            # response from the shared Responses route even when the endpoint is
-            # queryable. The per-endpoint SDK query path still proves the agent
-            # serving endpoint accepted a bounded request.
-            return workspace_client.serving_endpoints.query(
-                endpoint,
-                input=input_messages,
-                stream=False,
-                client_request_id=client_request_id,
-            )
+        if return_trace:
+            body["custom_inputs"] = {
+                "databricks_options": {"return_trace": True},
+            }
+        response = workspace_client.api_client.do("POST", "/serving-endpoints/responses", body=body)
+        return ServingEndpointExecution(
+            endpoint=endpoint,
+            task=task,
+            transport="responses_api",
+            response=response,
+            client_request_id=client_request_id,
+        )
 
-    try:
-        from databricks.sdk.service.serving import ChatMessage, ChatMessageRole
-
-        messages: list[Any] = [ChatMessage(role=ChatMessageRole.USER, content=prompt)]
-    except Exception:  # noqa: BLE001 - keep tests/lightweight clients decoupled from SDK internals
-        messages = [{"role": "user", "content": prompt}]
-    # No temperature: HF-served foundation models (e.g. system.ai llama)
-    # reject 0.0 ("has to be a strictly positive float") and the probe only
-    # needs a bounded round-trip that lands in the inference table, so the
-    # model default is fine for every endpoint family.
-    kwargs: dict[str, Any] = {
-        "messages": messages,
-        "max_tokens": 64,
+    # Use one untyped REST transport. Retrying after an SDK deserialization
+    # error can execute the same model request twice because the endpoint may
+    # already have returned a successful payload before local parsing failed.
+    body = {
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": max_tokens,
     }
     if client_request_id:
-        kwargs["client_request_id"] = client_request_id
-    try:
-        return workspace_client.serving_endpoints.query(endpoint, **kwargs)
-    except (AttributeError, TypeError):
-        # databricks-sdk's QueryEndpointResponse.from_dict AttributeErrors
-        # when a custom FM endpoint answers with a JSON list body (observed
-        # live on mip-agent-gateway / system.ai llama_v3_2_3b_instruct,
-        # 2026-07-07: "'list' object has no attribute 'get'"). The HTTP
-        # round-trip itself succeeded, so re-issue the same bounded request
-        # through the raw REST client, which returns untyped JSON. Same
-        # client_request_id: the inference-table binding stays intact.
-        fallback_body: dict[str, Any] = {
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 64,
-        }
-        if client_request_id:
-            fallback_body["client_request_id"] = client_request_id
-        return workspace_client.api_client.do(
-            "POST", f"/serving-endpoints/{endpoint}/invocations", body=fallback_body
-        )
+        body["client_request_id"] = client_request_id
+    response = workspace_client.api_client.do(
+        "POST", f"/serving-endpoints/{endpoint}/invocations", body=body
+    )
+    return ServingEndpointExecution(
+        endpoint=endpoint,
+        task=task,
+        transport="endpoint_invocation",
+        response=response,
+        client_request_id=client_request_id,
+    )
 
 
 def serving_response_has_payload(response: Any) -> bool:
+    response = _serving_response_value(response)
     if response is None:
         return False
+    if isinstance(response, str):
+        return bool(response.strip())
+    if isinstance(response, list):
+        return any(serving_response_has_payload(item) for item in response)
+    if isinstance(response, dict):
+        status = str(response.get("status") or response.get("state") or "").strip().lower()
+        if status in {"cancelled", "canceled", "error", "failed"}:
+            return False
+        for key in ("text", "content", "output_text", "generated_text", "message"):
+            if key in response and serving_response_has_payload(response[key]):
+                return True
+        for key in ("choices", "predictions", "outputs", "output", "response", "messages"):
+            if key in response and serving_response_has_payload(response[key]):
+                return True
+        return False
+    for key in (
+        "text",
+        "content",
+        "output_text",
+        "generated_text",
+        "message",
+        "choices",
+        "predictions",
+        "outputs",
+        "output",
+        "response",
+        "messages",
+    ):
+        value = getattr(response, key, None)
+        if value is not None and serving_response_has_payload(value):
+            return True
+    return False
+
+
+def serving_response_is_terminal_completed(response: Any) -> bool:
+    """Return whether a Responses API payload is terminal and successful."""
+    value = _serving_response_value(response)
+    if isinstance(value, dict):
+        status = value.get("status") or value.get("state")
+    else:
+        status = getattr(value, "status", None) or getattr(value, "state", None)
+    raw = getattr(status, "value", status)
+    normalized = str(raw or "").strip().lower().replace("-", "_").replace("/", "_")
+    return normalized == "completed"
+
+
+def serving_response_id(response: Any) -> str | None:
+    value = _serving_response_value(response)
+    if isinstance(value, dict):
+        response_id = str(value.get("id") or value.get("response_id") or "").strip()
+        return response_id or None
+    response_id = str(
+        getattr(value, "id", None) or getattr(value, "response_id", None) or ""
+    ).strip()
+    return response_id or None
+
+
+def _serving_response_value(response: Any) -> Any:
     for method in ("as_dict", "to_dict"):
         converter = getattr(response, method, None)
         if callable(converter):
             try:
-                response = converter()
-                break
+                return converter()
             except Exception:  # noqa: BLE001 - fall back to attribute checks
                 pass
-    if isinstance(response, list):
-        # Custom FM endpoints (e.g. HF-served system.ai llama) may answer
-        # with a bare JSON array of generations; non-empty is a payload.
-        return len(response) > 0
-    if isinstance(response, dict):
-        return any(
-            bool(response.get(key))
-            for key in ("choices", "predictions", "outputs", "output", "response", "messages", "id")
-        )
-    return any(
-        bool(getattr(response, key, None))
-        for key in ("choices", "predictions", "outputs", "output", "response", "messages", "id")
-    )
+    return response
+
+
+def _is_agent_responses_task(task: object) -> bool:
+    raw = getattr(task, "value", task)
+    normalized = str(raw or "").strip().lower()
+    return normalized.replace("-", "_").replace("/", "_") == "agent_v1_responses"
 
 
 def _inference_table_columns(
@@ -192,20 +278,21 @@ def count_inference_log_rows_by_prefixes(
 
 def inference_log_table_names(sql_client: Any, expected_table_prefix: str) -> list[str]:
     catalog, schema, table_prefix = _split_three_part_relation(expected_table_prefix)
+    escaped_table_prefix = _escape_like_literal(table_prefix)
     table_rows = sql_client.execute(
         """
         SELECT table_name
         FROM system.information_schema.tables
         WHERE table_catalog = :catalog
           AND table_schema = :schema
-          AND (table_name = :prefix OR table_name LIKE :prefix_like)
+          AND (table_name = :prefix OR table_name LIKE :prefix_like ESCAPE '\\\\')
         ORDER BY table_name
         """,
         {
             "catalog": catalog,
             "schema": schema,
             "prefix": table_prefix,
-            "prefix_like": f"{table_prefix}%",
+            "prefix_like": f"{escaped_table_prefix}%",
         },
     )
     names: list[str] = []
@@ -213,9 +300,19 @@ def inference_log_table_names(sql_client: Any, expected_table_prefix: str) -> li
         table_name = str(row.get("table_name") or "").strip()
         if not table_name:
             continue
+        if not table_name.startswith(table_prefix):
+            continue
         _validate_identifier("table", table_name)
         names.append(table_name)
     return names
+
+
+def _escape_like_literal(value: str) -> str:
+    return (
+        value.replace(_LIKE_ESCAPE, _LIKE_ESCAPE * 2)
+        .replace("%", f"{_LIKE_ESCAPE}%")
+        .replace("_", f"{_LIKE_ESCAPE}_")
+    )
 
 
 def wait_for_inference_log_increment(

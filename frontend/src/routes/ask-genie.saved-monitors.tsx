@@ -24,7 +24,7 @@ export function SavedGrowthAgentMonitors({
   if (monitors.length === 0) return null;
 
   return (
-    <div className="growth-agent-monitors" aria-label="Saved Growth Agent watchlists">
+    <section className="growth-agent-monitors" aria-label="Saved Growth Agent watchlists">
       <div className="eyebrow">Saved watchlists</div>
       <div className="growth-agent-monitor-list">
         {monitors.map((monitor) => {
@@ -90,6 +90,6 @@ export function SavedGrowthAgentMonitors({
           );
         })}
       </div>
-    </div>
+    </section>
   );
 }

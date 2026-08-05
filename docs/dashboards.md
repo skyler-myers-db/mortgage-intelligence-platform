@@ -135,13 +135,12 @@ databricks bundle run mip_sync_lifecycle_state -t dev
 
 The lifecycle-aware dashboard measures read through
 `mip.gold.borrower_lifecycle_state`, a table written by
-`jobs/sync_lifecycle_state.py` as a one-directional mirror of Lakebase
+`jobs/sync_lifecycle_state.py` as a sparse, one-directional mirror of Lakebase
 (`mip_app.approvals` + outreach events). On a brand-new deploy no operator
-has approved or actioned anything yet, so the mirror is seeded with
-`approval_status = 'pending'` and `outreach_status = 'none'` for every
-borrower in `mip.gold.borrower_360`. This seeding is what
-[`sql/transformations/gold_borrower_lifecycle_state.sql`](../sql/transformations/gold_borrower_lifecycle_state.sql)
-performs via the `seed_default_state` task.
+has approved or actioned anything yet, so the mirror can be empty. Every
+consumer uses `LEFT JOIN` + `COALESCE` to interpret a missing row as
+`approval_status = 'pending'` and `outreach_status = 'none'` without storing
+one synthetic row per borrower.
 
 **First-day-of-deploy expectation:** every downstream measure that
 filters on `approval_status = 'approved'` or `outreach_status = 'actioned'`
@@ -159,15 +158,12 @@ Specifically:
 
 These populate as operators use the app. Every click on the "Approve"
 button in the Approval Queue writes a row to `mip_app.approvals` in
-Lakebase; the backend then fires `mip_sync_lifecycle_state` via
-`WorkspaceClient.jobs.run_now` (non-blocking, debounced 60 s) which
-mirrors that row into `mip.gold.borrower_lifecycle_state` and runs
-`record_funnel_snapshot` to update the per-(state, segment) counts on
-`mip.gold.funnel_snapshot_daily`. The turnaround from a UI click to a
-lit-up dashboard cell is typically 1–3 minutes (Serverless job cold
-start + three tasks). The 04:00 schedule definition is retained but ships
-paused by default; unpause it only after the customer approves a recurring
-cadence and the target writes to an isolated catalog.
+Lakebase; the backend then schedules a cheap changed-row `MERGE` through the
+existing SQL warehouse. A failed warehouse attempt submits
+`mip_sync_lifecycle_state`, whose run and retries are durable in Databricks.
+The 04:00 schedule definition is retained but ships paused by default;
+unpause it only after the customer approves a recurring cadence and the
+target writes to an isolated catalog.
 
 **On-demand refresh:** if you need to demo a partially-lit dashboard on day
 one, the same job can be run from Admin **Data operations** or by an operator
@@ -177,8 +173,8 @@ with CLI access:
 databricks bundle run mip_sync_lifecycle_state -t dev
 ```
 
-That runs all three tasks (`seed_default_state` → `sync_from_lakebase` →
-`record_funnel_snapshot`) in sequence, so any approvals already in
+That runs `sync_from_lakebase` → `record_funnel_snapshot` in sequence, so
+legacy untouched default rows are pruned, and approvals already in
 Lakebase become visible on the dashboards within the run window.
 
 ---
@@ -193,8 +189,8 @@ deploy, work the checklist:
    requires ≥ 2 distinct `snapshot_date` values in
    `mip.gold.funnel_snapshot_daily` separated by ≥ 7 days. See §1.
 2. Is the measure an approval or outreach count / rate? → It reads
-   through `mip.gold.borrower_lifecycle_state`, which is seeded
-   `'pending' / 'none'` by default. See §2.
+   through `mip.gold.borrower_lifecycle_state`; missing sparse rows resolve
+   to `'pending' / 'none'`. See §2.
 3. Neither? → Treat as a genuine data-freshness or pipeline issue and go
    to [`docs/runbook.md`](runbook.md) §6 (stale real data).
 

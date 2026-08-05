@@ -8,15 +8,16 @@ from uuid import uuid4
 
 from backend.config.settings import Settings
 from backend.services.ai_gateway_proof_ledger import (
+    bounded_gateway_proof_freshness_s,
     latest_verified_proof,
     normalize_gateway_sha,
 )
 from backend.services.capability_serving_probes import (
     count_inference_log_rows_by_prefixes,
     inference_log_table_names,
-    query_serving_endpoint,
-    serving_response_has_payload,
+    query_serving_endpoint_with_proof,
 )
+from backend.services.supervisor_runtime import verify_supervisor_runtime
 
 
 def probe_ai_gateway(
@@ -37,8 +38,23 @@ def probe_ai_gateway(
     if sql_client is None:
         return make_status(False, "SQL client is required to verify AI Gateway inference log rows.")
     if lakebase is None:
-        return make_status(False, "Lakebase proof ledger is required to verify AI Gateway exact rows.")
+        return make_status(
+            False, "Lakebase proof ledger is required to verify AI Gateway exact rows."
+        )
+    verify_key = (settings.mip_ai_gateway_proof_verify_key or "").strip()
+    if not verify_key:
+        return make_status(
+            False,
+            "AI Gateway proof verification key is not configured for this deployment.",
+        )
     try:
+        runtime, runtime_reason = verify_supervisor_runtime(workspace_client, settings)
+        if runtime is None or runtime.endpoint != endpoint:
+            return make_status(
+                False,
+                "AI Gateway proof is not bound to the verified product Agent runtime "
+                f"({runtime_reason or 'endpoint_mismatch'}).",
+            )
         details = workspace_client.serving_endpoints.get(endpoint)
         state = _enum_value(getattr(getattr(details, "state", None), "ready", None))
         task = getattr(details, "task", None)
@@ -47,7 +63,9 @@ def probe_ai_gateway(
         if state != "READY":
             return make_status(False, f"Gateway endpoint {endpoint} is not READY ({state}).")
         if not bool(getattr(inference, "enabled", False)):
-            return make_status(False, f"Gateway endpoint {endpoint} inference table is not enabled.")
+            return make_status(
+                False, f"Gateway endpoint {endpoint} inference table is not enabled."
+            )
         actual = ".".join(
             part
             for part in (
@@ -58,7 +76,9 @@ def probe_ai_gateway(
             if part
         )
         if expected_table and actual != expected_table:
-            return make_status(False, f"Gateway inference table is {actual}, expected {expected_table}.")
+            return make_status(
+                False, f"Gateway inference table is {actual}, expected {expected_table}."
+            )
         table_names = inference_log_table_names(sql_client, expected_table)
         if not table_names:
             return make_status(
@@ -73,7 +93,7 @@ def probe_ai_gateway(
             )
         _ = exact_log_wait_s, exact_log_attempts
         live_request_id = f"{request_prefix}{sha}-{uuid4().hex[:16]}"
-        response = query_serving_endpoint(
+        execution = query_serving_endpoint_with_proof(
             workspace_client,
             endpoint,
             task=str(task or ""),
@@ -83,14 +103,20 @@ def probe_ai_gateway(
             ),
             client_request_id=live_request_id,
         )
-        if not serving_response_has_payload(response):
-            return make_status(False, f"Gateway endpoint {endpoint} returned no response payload.")
+        if not execution.proves_agent_response:
+            return make_status(
+                False,
+                f"Gateway endpoint {endpoint} did not return a terminal completed Responses payload.",
+            )
         proof = latest_verified_proof(
             lakebase,
             git_sha=sha,
             endpoint_name=endpoint,
             inference_table=expected_table,
-            freshness_s=float(settings.mip_ai_gateway_proof_freshness_s or 0),
+            freshness_s=bounded_gateway_proof_freshness_s(
+                settings.mip_ai_gateway_proof_freshness_s
+            ),
+            attestation_verify_key=verify_key,
         )
         current_sha_rows = count_inference_log_rows_by_prefixes(
             sql_client,
@@ -104,8 +130,9 @@ def probe_ai_gateway(
             return make_status(
                 True,
                 (
-                    "Live AI Gateway endpoint accepted a bounded query now; exact inference-row "
-                    f"round-trip verified for deployment {sha} at {proof.verified_at.isoformat()} "
+                    "Live AI Gateway endpoint accepted a bounded query now; the separated "
+                    "verifier signed its observation; exact inference-row round-trip verified for deployment "
+                    f"{sha} at {proof.verified_at.isoformat()} "
                     f"(delivery {proof.verify_latency_s:.1f}s). Current deployment inference rows "
                     f"visible: {current_sha_rows}."
                 ),
@@ -115,7 +142,8 @@ def probe_ai_gateway(
             (
                 "Live AI Gateway endpoint accepted a bounded query now and inference logging "
                 f"is enabled/queryable at {actual}; no fresh ledger-verified exact row exists "
-                f"for deployment {sha}, so this capability is not claimable yet. Current "
+                f"for deployment {sha}, or its signature did not verify, so this capability is "
+                "not claimable yet. Current "
                 f"deployment inference rows visible: {current_sha_rows}."
             ),
         )

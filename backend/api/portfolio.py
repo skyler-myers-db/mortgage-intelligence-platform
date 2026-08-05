@@ -1,12 +1,17 @@
 """Portfolio preview, save, list, and status endpoints."""
 
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
+from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
+from backend.schemas.campaign_status import authorize_campaign_status_transition
 from backend.schemas.common import validate_public_opaque_id
 from backend.schemas.portfolio import (
     CampaignListResponse,
+    CampaignRecommendationRequest,
+    CampaignRecommendationResponse,
     CampaignStatusPatchRequest,
     CampaignSummary,
     PortfolioCreateRequest,
@@ -15,11 +20,19 @@ from backend.schemas.portfolio import (
     PortfolioPreviewRequest,
 )
 from backend.services.audit_store import resolve_actor
+from backend.services.campaign_authorization import authorize_campaign_quarantine_actor
+from backend.services.campaign_intelligence import (
+    CampaignPerformanceContext,
+    campaign_criteria_fingerprint,
+    campaign_performance_fingerprint,
+    recommend_campaign,
+)
 from backend.services.error_sanitizer import safe_dependency_detail
 from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.lakebase import LakebaseError
-from backend.services.rbac import require_admin
+from backend.services.rbac import require_admin, require_approver
 from backend.services.repositories import PortfolioRepository, get_portfolio_repository
+from backend.services.sales_state import SalesStateStore, get_sales_state_store
 
 router = APIRouter(prefix="/portfolio", tags=["portfolio"])
 
@@ -27,6 +40,7 @@ router = APIRouter(prefix="/portfolio", tags=["portfolio"])
 # ruff's B008 quiet (Depends(...) is not a *value* default; it's the
 # dependency marker resolved at request time).
 RepoDep = Annotated[PortfolioRepository, Depends(get_portfolio_repository)]
+SalesStateDep = Annotated[SalesStateStore, Depends(get_sales_state_store)]
 
 
 def _is_admin(request: Request) -> bool:
@@ -55,15 +69,103 @@ def preview_portfolio(
     return repo.preview(payload)
 
 
-@router.post("/create", response_model=PortfolioCreateResponse, responses=JSON_CONTENT_TYPE_RESPONSE)
+@router.post(
+    "/campaign-recommendation",
+    response_model=CampaignRecommendationResponse,
+    responses=JSON_CONTENT_TYPE_RESPONSE,
+)
+def campaign_recommendation(
+    request: Request,
+    repo: RepoDep,
+    sales_state: SalesStateDep,
+    payload: CampaignRecommendationRequest,
+    _: Annotated[None, Depends(require_json_content_type)],
+) -> CampaignRecommendationResponse:
+    """Generate a validated strategy over the exact governed cohort.
+
+    The configured Agent Responses endpoint receives aggregate facts only.
+    Metrics, citations, holdout bounds, and the approval boundary are enforced by the server response
+    contract; an unavailable or invalid model response is labelled as a
+    reviewed fallback rather than masquerading as AI output.
+    """
+
+    # AUDIT EXEMPT: read-only aggregate recommendation; no state is written.
+    preview = repo.preview(PortfolioPreviewRequest(criteria=payload.criteria))
+    performance: CampaignPerformanceContext | None = None
+    try:
+        actor = resolve_actor(request)
+        sales_state.require_manager_actor(actor)
+        visible_los = sales_state.visible_lo_emails(actor=actor)
+        end_date = datetime.now(UTC).date()
+        start_date = end_date - timedelta(days=89)
+        observed_funnel = sales_state.campaign_performance_funnel(
+            from_date=start_date.isoformat(),
+            to_date=end_date.isoformat(),
+            visible_lo_emails=visible_los,
+        )
+        observation_fingerprint = campaign_performance_fingerprint(
+            observed_from=start_date,
+            observed_to=end_date,
+            visible_lo_emails=visible_los,
+            counts=observed_funnel,
+        )
+        snapshot_value = observed_funnel["snapshot_at"]
+        if isinstance(snapshot_value, datetime):
+            snapshot_at = snapshot_value
+        else:
+            snapshot_at = datetime.fromisoformat(str(snapshot_value).replace("Z", "+00:00"))
+        if snapshot_at.tzinfo is None or snapshot_at.utcoffset() is None:
+            raise ValueError("campaign performance snapshot must include a timezone")
+        performance = CampaignPerformanceContext(
+            unique_leads_attempted=int(str(observed_funnel["unique_leads_attempted"])),
+            unique_contacts_reached=int(str(observed_funnel["unique_contacts_reached"])),
+            unique_application_starts=int(str(observed_funnel["unique_application_starts"])),
+            unique_applications_submitted=int(
+                str(observed_funnel["unique_applications_submitted"])
+            ),
+            unique_closed_funded=int(str(observed_funnel["unique_closed_funded"])),
+            observed_from=start_date,
+            observed_to=end_date,
+            snapshot_at=snapshot_at.astimezone(UTC),
+            interval_days=(end_date - start_date).days + 1,
+            observation_fingerprint=observation_fingerprint,
+        )
+    except (KeyError, PermissionError, ValueError, LakebaseError):
+        # Campaign recommendations remain available from exact UC cohort facts
+        # when the actor lacks Sales Ops scope or Lakebase is unavailable.
+        performance = None
+    return recommend_campaign(
+        preview,
+        performance=performance,
+        criteria_fingerprint=campaign_criteria_fingerprint(payload.criteria),
+    )
+
+
+@router.post(
+    "/create", response_model=PortfolioCreateResponse, responses=JSON_CONTENT_TYPE_RESPONSE
+)
 def create_portfolio(
     request: Request,
     payload: PortfolioCreateRequest,
     repo: RepoDep,
     _: Annotated[None, Depends(require_json_content_type)],
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> PortfolioCreateResponse:
+    if idempotency_key is None:
+        safe_idempotency_key = str(uuid4())
+    else:
+        try:
+            safe_idempotency_key = validate_public_opaque_id(idempotency_key)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     try:
-        return repo.create(payload, actor=resolve_actor(request))
+        return repo.create(
+            payload,
+            actor=resolve_actor(request),
+            idempotency_key=safe_idempotency_key,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except LakebaseError as exc:
         raise HTTPException(
             status_code=503,
@@ -121,12 +223,17 @@ def get_portfolio(portfolio_id: str, request: Request, repo: RepoDep) -> dict[st
     return result
 
 
-@router.patch("/{portfolio_id}", response_model=CampaignSummary)
+@router.patch(
+    "/{portfolio_id}",
+    response_model=CampaignSummary,
+    responses=JSON_CONTENT_TYPE_RESPONSE,
+)
 def patch_portfolio(
     portfolio_id: str,
     payload: CampaignStatusPatchRequest,
     request: Request,
     repo: RepoDep,
+    _: Annotated[None, Depends(require_json_content_type)],
 ) -> CampaignSummary:
     try:
         validate_public_opaque_id(portfolio_id)
@@ -136,8 +243,25 @@ def patch_portfolio(
         result = repo.get(portfolio_id)
         if not result:
             raise HTTPException(status_code=404, detail="portfolio not found")
-        _assert_portfolio_visible(result, actor=resolve_actor(request), is_admin=_is_admin(request))
-        return repo.patch_status(portfolio_id, payload, actor=resolve_actor(request))
+        actor = resolve_actor(request)
+        _assert_portfolio_visible(result, actor=actor, is_admin=_is_admin(request))
+        actor = authorize_campaign_quarantine_actor(
+            request,
+            requested_status=payload.status,
+            treatment_state=result.get("treatment_state"),
+            actor=actor,
+        )
+        current_status = str(result.get("status") or "")
+        if payload.status in {"approved", "live", "active"}:
+            approver = require_approver(request)
+            payload = authorize_campaign_status_transition(
+                payload,
+                campaign_id=portfolio_id,
+                current_status=current_status,
+                approver_email=approver,
+            )
+            actor = approver
+        return repo.patch_status(portfolio_id, payload, actor=actor)
     except HTTPException:
         raise
     except ValueError as exc:

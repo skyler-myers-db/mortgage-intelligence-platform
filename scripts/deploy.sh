@@ -10,10 +10,11 @@
 #   2.  Validate the direct-deployment bundle under `-t dev`, with .env.local mapped to
 #       BUNDLE_VAR_* via tools/databricks/bundle_env.py.
 #   3.  Show the direct deployment plan.
-#   4.  Deploy the bundle.
-#   5.  Promote the uploaded bundle source to the running Databricks App.
-#   6.  Seed + refresh silver (FRED MORTGAGE30US + Cotality share).
-#   7.  Migrate Lakebase (idempotent schema.sql + seed_campaigns.sql).
+#   4.  Deploy non-App bundle resources, then apply source-free App resource
+#       bindings (first install creates the App stopped with --no-compute).
+#   5.  Migrate Lakebase (idempotent schema.sql + seed_campaigns.sql).
+#   6.  Promote the uploaded bundle source only after migration/grant proof.
+#   7.  Seed + refresh silver (FRED MORTGAGE30US + Cotality share).
 #   8.  Refresh gold (CTAS chain) — the last task in the chain is
 #       `refresh_semantics_views`, which lands the four mip.semantics.*
 #       metric views Genie depends on.
@@ -47,6 +48,8 @@
 #                                       # emergency/manual deploy only: warn instead of fail
 #   ./scripts/deploy.sh -t dev --no-confirm
 #                                       # skip the y/N prompt before deploy
+#   ./scripts/deploy.sh --verify-source-only
+#                                       # run the exact-source gate and exit
 #
 # Environment:
 #   .env.local must set at minimum DATABRICKS_HOST, DATABRICKS_WAREHOUSE_ID.
@@ -64,6 +67,26 @@
 
 set -euo pipefail
 
+# Workflow secrets arrive exported. Retain signing authorities as shell-only
+# values before the first child process so ordinary deploy commands can never
+# inherit them; run_as_m2m_identity exposes each key only to its bounded role.
+MIP_AI_GATEWAY_PROOF_SIGNING_KEY="${MIP_AI_GATEWAY_PROOF_SIGNING_KEY:-}"
+MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY="${MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY:-}"
+export -n MIP_AI_GATEWAY_PROOF_SIGNING_KEY MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY
+for _PRIVATE_CREDENTIAL in \
+  DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET \
+  DATABRICKS_OPERATOR2_CLIENT_ID DATABRICKS_OPERATOR2_CLIENT_SECRET \
+  DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_ADMIN_CLIENT_SECRET \
+  DATABRICKS_RELEASE_PROBE_CLIENT_ID DATABRICKS_RELEASE_PROBE_CLIENT_SECRET \
+  DATABRICKS_VERIFIER_CLIENT_ID DATABRICKS_VERIFIER_CLIENT_SECRET \
+  DATABRICKS_AGENT_RUNTIME_CLIENT_ID DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET \
+  DATABRICKS_AGENT_PROXY_CLIENT_ID DATABRICKS_AGENT_PROXY_CLIENT_SECRET \
+  DATABRICKS_AGENT_PROXY_CREDENTIAL_ID DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE \
+  DATABRICKS_ACCOUNT_CLIENT_ID DATABRICKS_ACCOUNT_CLIENT_SECRET; do
+  export -n "${_PRIVATE_CREDENTIAL?}" 2>/dev/null || true
+done
+unset _PRIVATE_CREDENTIAL
+
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
@@ -74,7 +97,9 @@ DRY_RUN=0
 SKIP_SILVER=0
 SKIP_SMOKE=0
 NO_CONFIRM=0
+VERIFY_SOURCE_ONLY=0
 TARGET="dev"
+TARGET_SEEN=0
 
 # `for arg in "$@"` iterates a pre-expanded snapshot, so an inner
 # `shift` to grab `-t <target>`'s value doesn't actually consume the
@@ -88,23 +113,32 @@ while [[ $# -gt 0 ]]; do
     --skip-silver)  SKIP_SILVER=1;   shift ;;
     --skip-smoke)   SKIP_SMOKE=1;    shift ;;
     --no-confirm)   NO_CONFIRM=1;    shift ;;
+    --verify-source-only) VERIFY_SOURCE_ONLY=1; shift ;;
     -t|--target)
+      if [[ "$TARGET_SEEN" -eq 1 ]]; then
+        echo "[deploy] target may be supplied only once" >&2
+        exit 2
+      fi
       if [[ $# -lt 2 || -z "$2" ]]; then
         echo "[deploy] missing value for $1 (expected target name, e.g. dev)" >&2
         exit 2
       fi
-      TARGET="$2"; shift 2 ;;
+      TARGET="$2"; TARGET_SEEN=1; shift 2 ;;
     --target=*)
       # The `--target=` form can take an empty value (e.g. user typed
       # `--target=` with nothing after the equals sign). Validate and
       # fail fast so we never pass `-t ""` to `databricks bundle ...`
       # downstream (raised by Copilot 2026-04-22).
       TARGET="${1#--target=}"
+      if [[ "$TARGET_SEEN" -eq 1 ]]; then
+        echo "[deploy] target may be supplied only once" >&2
+        exit 2
+      fi
       if [[ -z "$TARGET" ]]; then
         echo "[deploy] missing value for --target= (expected target name, e.g. dev)" >&2
         exit 2
       fi
-      shift ;;
+      TARGET_SEEN=1; shift ;;
     -h|--help)
       sed -n '2,60p' "$0"
       exit 0
@@ -115,6 +149,10 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+if [[ "$TARGET" != "dev" && "$TARGET" != "prod" ]]; then
+  echo "[deploy] target must be exactly dev or prod; refusing '$TARGET'" >&2
+  exit 2
+fi
 
 # -----------------------------------------------------------------------------
 # Pretty-print helpers
@@ -133,6 +171,46 @@ run() {
   if [[ "$DRY_RUN" -eq 1 ]]; then
     return 0
   fi
+  if [[ -n "${APP_DEPLOYMENT_LEASE_HEARTBEAT_PID:-}" ]] && \
+     ! kill -0 "$APP_DEPLOYMENT_LEASE_HEARTBEAT_PID" 2>/dev/null; then
+    echo "${RED}[deploy] signed App deployment lease heartbeat is not running.${RST}" >&2
+    return 1
+  fi
+  "$@"
+}
+
+run_json_to_file() {
+  local output_file="$1"
+  local display_file="${output_file:-<dry-run-json-output>}"
+  shift
+  echo "${DIM}\$ $* > ${display_file}${RST}"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    return 0
+  fi
+  if [[ -z "$output_file" ]]; then
+    echo "${RED}[deploy] JSON command output path is required.${RST}" >&2
+    return 1
+  fi
+  if [[ -n "${APP_DEPLOYMENT_LEASE_HEARTBEAT_PID:-}" ]] && \
+     ! kill -0 "$APP_DEPLOYMENT_LEASE_HEARTBEAT_PID" 2>/dev/null; then
+    echo "${RED}[deploy] signed App deployment lease heartbeat is not running.${RST}" >&2
+    return 1
+  fi
+  "$@" > "$output_file"
+}
+
+run_redacted() {
+  local display="$1"
+  shift
+  echo "${DIM}\$ ${display}${RST}"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    return 0
+  fi
+  if [[ -n "${APP_DEPLOYMENT_LEASE_HEARTBEAT_PID:-}" ]] && \
+     ! kill -0 "$APP_DEPLOYMENT_LEASE_HEARTBEAT_PID" 2>/dev/null; then
+    echo "${RED}[deploy] signed App deployment lease heartbeat is not running.${RST}" >&2
+    return 1
+  fi
   "$@"
 }
 
@@ -149,6 +227,11 @@ run_job_with_retry() {
     return 0
   fi
   for attempt in 1 2 3; do
+    if [[ -n "${APP_DEPLOYMENT_LEASE_HEARTBEAT_PID:-}" ]] && \
+       ! kill -0 "$APP_DEPLOYMENT_LEASE_HEARTBEAT_PID" 2>/dev/null; then
+      echo "${RED}[deploy] signed App deployment lease heartbeat is not running.${RST}" >&2
+      return 1
+    fi
     if "$@"; then
       return 0
     fi
@@ -170,6 +253,43 @@ on_error() {
 }
 trap on_error ERR
 
+# The deployment advertises MIP_GIT_SHA from HEAD while Databricks Bundle
+# sync uploads the working tree. A dirty tracked file or untracked source can
+# otherwise make that SHA a false provenance claim. Standard ignored outputs
+# (frontend/dist, sql/_rendered, .databricks, local env files) remain allowed.
+SOURCE_GIT_SHA=""
+verify_exact_deploy_source() {
+  local current_sha source_status
+  if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "${RED}[deploy] exact-source gate requires a Git worktree.${RST}" >&2
+    exit 2
+  fi
+  current_sha="$(git rev-parse --verify HEAD 2>/dev/null || true)"
+  if [[ -z "$current_sha" ]]; then
+    echo "${RED}[deploy] exact-source gate requires a committed HEAD.${RST}" >&2
+    exit 2
+  fi
+  source_status="$(git status --porcelain=v1 --untracked-files=all)"
+  if [[ -n "$source_status" ]]; then
+    echo "${RED}[deploy] refusing deployment from dirty source.${RST}" >&2
+    echo "  Commit or remove every tracked change and untracked non-ignored file first:" >&2
+    printf '%s\n' "$source_status" >&2
+    exit 2
+  fi
+  if [[ -n "$SOURCE_GIT_SHA" && "$current_sha" != "$SOURCE_GIT_SHA" ]]; then
+    echo "${RED}[deploy] HEAD changed during deployment (${SOURCE_GIT_SHA} -> ${current_sha}).${RST}" >&2
+    echo "  Re-run from the new clean revision so uploaded source and MIP_GIT_SHA match." >&2
+    exit 2
+  fi
+  SOURCE_GIT_SHA="$current_sha"
+  echo "[deploy] exact source: ${SOURCE_GIT_SHA} (tracked and untracked source clean)"
+}
+
+verify_exact_deploy_source
+if [[ "$VERIFY_SOURCE_ONLY" -eq 1 ]]; then
+  exit 0
+fi
+
 # -----------------------------------------------------------------------------
 # Resolve python interpreter (same convention as the Makefile)
 # -----------------------------------------------------------------------------
@@ -179,14 +299,988 @@ else
   PYTHON="python3"
 fi
 
+same_identity_casefold() {
+  "$PYTHON" - "$1" "$2" <<'PYEOF'
+import sys
+
+left, right = (value.strip().casefold() for value in sys.argv[1:])
+raise SystemExit(0 if left and right and left == right else 1)
+PYEOF
+}
+
 RESTORE_RENDERED_SQL_FAIL_CLOSED=0
 APP_DEPLOY_PAYLOAD=""
+APP_LAST_DEPLOY_PAYLOAD=""
+APP_BUNDLE_SUMMARY=""
+APP_ROLLBACK_BINDING_ENV=""
 AGENTIC_ENV_FILE=""
 AGENT_EVAL_ENV_FILE=""
+CUTOVER_JOURNAL_ENV_FILE=""
+APP_DEPLOYMENT_LEASE_ENV=""
+APP_LEASE_RECOVERY_ENV=""
+OAUTH_CREDENTIAL_QUARANTINE_FILE=""
+FOREIGN_CATALOG_BINDING_DIR=""
+FOREIGN_CATALOG_REMEDIATION_COMPLETE=0
+APP_RESOURCE_BINDING_SUMMARY=""
+APP_RESOURCE_BINDING_PAYLOAD=""
+APP_RESOURCE_BINDING_BEFORE=""
+APP_RESOURCE_BINDING_AFTER=""
+APP_CREATE_RESULT=""
+_PII_SECRET_PAYLOAD=""
+APP_DEPLOYMENT_LEASE_ID=""
+APP_DEPLOYMENT_LEASE_HEARTBEAT_PID=""
+APP_FAIL_CLOSED_ARMED=0
+APP_FAIL_CLOSED_NAME=""
+APP_EXPECTED_IDENTITY_ARGS=()
+APP_UPGRADE_STATE="first_install"
+APP_ROLLBACK_SECRET_SCOPE="${MIP_APP_ROLLBACK_SECRET_SCOPE:-mip-app-rollback}"
+MIP_APP_ROLLBACK_PROXY_CREDENTIAL_IDS=""
+MIP_APP_ROLLBACK_RECORD_VERSION=""
+MIP_APP_ROLLBACK_PROXY_MODE=""
+MIP_APP_ROLLBACK_DEPLOYMENT_ID=""
+MIP_APP_ROLLBACK_GATEWAY_ENDPOINT_ID=""
+MIP_APP_ROLLBACK_GATEWAY_CREATOR=""
+MIP_APP_ROLLBACK_GATEWAY_PIN_JSON=""
+MIP_APP_ROLLBACK_GATEWAY_INFERENCE_TABLE_PREFIX=""
+MIP_APP_ROLLBACK_SUPERVISOR_ID=""
+MIP_APP_ROLLBACK_SUPERVISOR_CREATOR=""
+MIP_APP_ROLLBACK_SUPERVISOR_ENDPOINT=""
+MIP_APP_ROLLBACK_SUPERVISOR_ENDPOINT_ID=""
+MIP_APP_ROLLBACK_SUPERVISOR_PIN_JSON=""
+MIP_APP_ROLLBACK_RUNTIME_APPLICATION_ID=""
+MIP_APP_ROLLBACK_GENIE_SPACE_ID=""
+MIP_APP_ROLLBACK_PROXY_APPLICATION_ID=""
+AGENT_PROXY_ACCESS_MUTATED=0
+VERIFIER_GATEWAY_CUTOVER_MUTATED=0
+PREACTIVATION_APP_ACL_MUTATED=0
+PREACTIVATION_APP_REVOKE_ENDPOINTS=()
+CAPTURED_RUNTIME_RETIREMENT_COMPLETE=0
+CAPTURED_APP_BOUNDARY_PROVEN=0
+CAPTURED_PROXY_BOUNDARY_PROVEN=0
+CAPTURED_VERIFIER_BOUNDARY_PROVEN=0
+OLD_SUPERVISOR_APP_ACCESS_MODE="none"
+MIP_VERIFIER_SCIM_ID=""
+VERIFIER_IDENTITY_CAPTURE_ENV=""
+HISTORICAL_ENDPOINT_INVENTORY=""
+HISTORICAL_CUTOVER_JOURNAL_ENV=""
+STALE_CUTOVER_JOURNAL_PENDING=0
+HISTORICAL_CUTOVER_JOURNAL_PRESENT=0
+HISTORICAL_CUTOVER_GATEWAY_PRESENT=0
+AGENT_RUNTIME_BOOTSTRAP_GRANTS_ACTIVE=0
+TREATMENT_RUNTIME_QUIESCED=0
+APP_SIGNED_BLUE_AVAILABLE=0
+APP_ACCESS_QUARANTINED=0
+REVIEWED_FUNCTION_GRANTS_PROVEN=0
+# Process-local state is never durable proof across deployment retries. Every
+# run starts unproven and may authorize signed-blue restoration only after the
+# live migration verifies both OAuth role security and the exact grant matrix.
+LAKEBASE_RUNTIME_ACCESS_PROVEN=0
+FIRST_INSTALL_APP_CREATED=0
+FIRST_INSTALL_APP_BOUND=0
+FIRST_INSTALL_COMPENSATION_AUTHORIZED=0
+FIRST_INSTALL_JOURNAL_STATUS="absent"
+FIRST_INSTALL_APP_ID=""
+FIRST_INSTALL_APP_CLIENT_ID=""
+FIRST_INSTALL_APP_SCIM_ID=""
+FIRST_INSTALL_JOURNAL_ENV=""
+FIRST_INSTALL_MARKED_PAYLOAD=""
+
+assert_expected_app_identity() {
+  local app_name="${1:?App name is required for identity verification}"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    return 0
+  fi
+  if [[ "${#APP_EXPECTED_IDENTITY_ARGS[@]}" -ne 6 ]]; then
+    echo "${RED}[deploy] complete expected App identity is required before name-addressed mutation.${RST}" >&2
+    return 1
+  fi
+  "$PYTHON" -m tools.databricks.stop_app_fail_closed \
+    --app-name "$app_name" \
+    "${APP_EXPECTED_IDENTITY_ARGS[@]}" \
+    --assert-identity-only
+}
+
+run_foreign_catalog_binding_remediation() {
+  if [[ -z "${MIP_UC_FOREIGN_CATALOG_BINDING_POLICY:-}" ]]; then
+    echo "${RED}[deploy] foreign-catalog remediation requires the reviewed binding policy.${RST}" >&2
+    return 4
+  fi
+  FOREIGN_CATALOG_BINDING_DIR="$(mktemp -d -t mip-foreign-catalog.XXXXXX)"
+  local manifest="$FOREIGN_CATALOG_BINDING_DIR/manifest.json"
+  local parent_manifest="$FOREIGN_CATALOG_BINDING_DIR/parent.json"
+  local action="apply"
+  local recovery_candidate="" recovery_rc=0 recovered=0
+  local -a recovery_candidates=()
+  local -a common_args=(
+    --app-name "$_GRANTS_APP_NAME"
+    --application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID"
+    --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL"
+    --expected-account-id "$DATABRICKS_ACCOUNT_ID"
+    --expected-account-client-id "$DATABRICKS_ACCOUNT_CLIENT_ID"
+    --mip-catalog "${MIP_DEFAULT_CATALOG:-mip}"
+    --lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID"
+  )
+  if [[ -n "${MIP_APP_DEPLOYMENT_RECOVERY_CANDIDATES:-}" ]]; then
+    step "recover the signed interrupted foreign-catalog manifest"
+    IFS=',' read -r -a recovery_candidates \
+      <<< "$MIP_APP_DEPLOYMENT_RECOVERY_CANDIDATES"
+    for recovery_candidate in "${recovery_candidates[@]}"; do
+      if run_with_account_identity run_with_proof_signing_authority \
+          "$PYTHON" -m tools.databricks.converge_foreign_catalog_workspace_bindings \
+          recover-local "${common_args[@]}" \
+          --parent-lease-id "$recovery_candidate" \
+          --manifest "$parent_manifest"; then
+        recovered=1
+        break
+      else
+        recovery_rc=$?
+      fi
+      if [[ "$recovery_rc" -eq 5 ]]; then
+        break
+      elif [[ "$recovery_rc" -ne 3 ]]; then
+        return "$recovery_rc"
+      fi
+    done
+    if [[ "$recovered" -eq 1 ]]; then
+      step "reauthorize interrupted foreign-catalog remediation under the current lease"
+      if run_with_account_identity run_with_proof_signing_authority \
+        "$PYTHON" -m tools.databricks.converge_foreign_catalog_workspace_bindings \
+        reauthorize "${common_args[@]}" \
+        --manifest "$parent_manifest" \
+        --out-manifest "$manifest"; then
+        :
+      else
+        recovery_rc=$?
+        return "$recovery_rc"
+      fi
+      action="resume"
+    else
+      step "no interrupted foreign-catalog manifest; snapshot fresh signed pre-state"
+      if run_with_account_identity run_with_proof_signing_authority \
+        "$PYTHON" -m tools.databricks.converge_foreign_catalog_workspace_bindings \
+        snapshot "${common_args[@]}" --manifest "$manifest"; then
+        :
+      else
+        recovery_rc=$?
+        return "$recovery_rc"
+      fi
+    fi
+  else
+    step "snapshot the exact signed foreign-catalog binding pre-state"
+    if run_with_account_identity run_with_proof_signing_authority \
+      "$PYTHON" -m tools.databricks.converge_foreign_catalog_workspace_bindings \
+      snapshot "${common_args[@]}" --manifest "$manifest"; then
+      :
+    else
+      recovery_rc=$?
+      return "$recovery_rc"
+    fi
+  fi
+  step "$action the reviewed foreign-catalog workspace isolation"
+  if run_with_account_identity run_with_proof_signing_authority \
+    "$PYTHON" -m tools.databricks.converge_foreign_catalog_workspace_bindings \
+    "$action" "${common_args[@]}" --manifest "$manifest"; then
+    :
+  else
+    recovery_rc=$?
+    return "$recovery_rc"
+  fi
+  step "verify the complete foreign-catalog workspace isolation policy"
+  if run_with_account_identity run_with_proof_signing_authority \
+    "$PYTHON" -m tools.databricks.converge_foreign_catalog_workspace_bindings \
+    verify "${common_args[@]}" --manifest "$manifest"; then
+    :
+  else
+    recovery_rc=$?
+    return "$recovery_rc"
+  fi
+}
+
+restore_deployment_sync_contract() {
+  local source_label="${1:-agentic environment}"
+  if [[ "${MIP_LAKEBASE_SYNC_CATALOG:-}" != "$DEPLOYMENT_SYNC_CATALOG" || \
+        "${MIP_LAKEBASE_SYNC_SCHEMA:-}" != "$DEPLOYMENT_SYNC_SCHEMA" || \
+        "${MIP_LAKEBASE_SYNC_TABLES:-}" != "$DEPLOYMENT_SYNC_TABLES" ]]; then
+    echo "[deploy] ignoring stale Lakebase Sync names from ${source_label}; deployment controls are authoritative"
+  fi
+  MIP_LAKEBASE_SYNC_CATALOG="$DEPLOYMENT_SYNC_CATALOG"
+  MIP_LAKEBASE_SYNC_SCHEMA="$DEPLOYMENT_SYNC_SCHEMA"
+  MIP_LAKEBASE_SYNC_TABLES="$DEPLOYMENT_SYNC_TABLES"
+  export MIP_LAKEBASE_SYNC_CATALOG MIP_LAKEBASE_SYNC_SCHEMA MIP_LAKEBASE_SYNC_TABLES
+}
+
+converge_app_treatment_access() {
+  local mode="$1" principal
+  principal="${APP_SP_CLIENT_ID:-${_EXISTING_APP_SP_CLIENT_ID:-}}"
+  if [[ -z "$principal" || -z "${_GRANTS_WAREHOUSE_ID:-}" || \
+        -z "${_GRANTS_CATALOG:-}" ]]; then
+    echo "${RED}[deploy] treatment convergence lacks an App identity or warehouse.${RST}" >&2
+    return 1
+  fi
+  run_with_account_identity run_with_proof_signing_authority \
+    "$PYTHON" -m tools.databricks.converge_campaign_treatment_access \
+    --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
+    --catalog "$_GRANTS_CATALOG" \
+    --principal "$principal" \
+    --mode "$mode"
+}
+
+mint_signed_app_proof_token() {
+  if [[ "${APP_ACCESS_QUARANTINED:-0}" -eq 1 ]]; then
+    mint_m2m_token MIP_BEARER_TOKEN \
+      DATABRICKS_RELEASE_PROBE_CLIENT_ID DATABRICKS_RELEASE_PROBE_CLIENT_SECRET
+  else
+    mint_m2m_token MIP_BEARER_TOKEN DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET
+  fi
+}
+
+converge_runtime_app_release_access() {
+  if [[ "${APP_ACCESS_QUARANTINED:-0}" -eq 1 ]]; then
+    "$PYTHON" -m tools.databricks.converge_app_release_access \
+      --mode runtime \
+      --app-name "$APP_FAIL_CLOSED_NAME" \
+      --release-probe-application-id "$DATABRICKS_RELEASE_PROBE_CLIENT_ID" \
+      --normal-application-id "$DATABRICKS_CLIENT_ID" \
+      --operator2-application-id "$DATABRICKS_OPERATOR2_CLIENT_ID" \
+      --admin-application-id "$DATABRICKS_ADMIN_CLIENT_ID" \
+      "${APP_EXPECTED_IDENTITY_ARGS[@]}" || return 1
+  fi
+}
+
+# Security-critical lifecycle libraries declare functions only and are sourced
+# before any deploy step can call them. Their dependencies may be declared
+# later in this entrypoint; invocation happens only after initialization. They
+# intentionally inherit this shell's strict mode, traps, and private variables.
+# shellcheck source=scripts/lib/deploy_agent_proxy_lifecycle.sh
+. "$REPO_ROOT/scripts/lib/deploy_agent_proxy_lifecycle.sh"
+# shellcheck source=scripts/lib/deploy_verifier_gateway_lifecycle.sh
+. "$REPO_ROOT/scripts/lib/deploy_verifier_gateway_lifecycle.sh"
+# shellcheck source=scripts/lib/deploy_cutover_journal_lifecycle.sh
+. "$REPO_ROOT/scripts/lib/deploy_cutover_journal_lifecycle.sh"
+# shellcheck source=scripts/lib/deploy_supervisor_creation_lifecycle.sh
+. "$REPO_ROOT/scripts/lib/deploy_supervisor_creation_lifecycle.sh"
+
+restore_signed_blue_while_quiesced() {
+  [[ "$APP_SIGNED_BLUE_AVAILABLE" -eq 1 ]] || return 1
+  [[ "${LAKEBASE_RUNTIME_ACCESS_PROVEN:-0}" -eq 1 ]] || return 1
+  local endpoint
+  local -a revoke_args=()
+  if declare -F mint_m2m_token >/dev/null; then
+    mint_signed_app_proof_token || return 1
+  fi
+  refresh_signed_blue_binding || return 1
+  converge_signed_blue_agent_proxy_boundary || return 1
+  if [[ "$MIP_APP_ROLLBACK_PROXY_MODE" == "exact-proxy" ]]; then
+    prove_exact_agent_proxy_boundary \
+      "$MIP_APP_ROLLBACK_SUPERVISOR_ID" \
+      "$MIP_APP_ROLLBACK_SUPERVISOR_ENDPOINT" \
+      "$MIP_APP_ROLLBACK_SUPERVISOR_ENDPOINT_ID" || return 1
+  fi
+  for endpoint in "${PREACTIVATION_APP_REVOKE_ENDPOINTS[@]}"; do
+    if [[ -n "$endpoint" && \
+          "$endpoint" != "$MIP_APP_ROLLBACK_GATEWAY_ENDPOINT" && \
+          "$endpoint" != "$MIP_APP_ROLLBACK_SUPERVISOR_ENDPOINT" ]]; then
+      revoke_args+=(--revoke-endpoint "$endpoint")
+    fi
+  done
+  run_with_account_identity \
+    run_with_proof_signing_authority \
+      "$PYTHON" -m tools.databricks.app_deployment_rollback restore \
+    --app-name "$APP_FAIL_CLOSED_NAME" \
+    --scope "$APP_ROLLBACK_SECRET_SCOPE" \
+    --base-url "${MIP_APP_URL:?App URL is required for exact rollback proof}" \
+    --token-env MIP_BEARER_TOKEN \
+    --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+    --deployment-source-git-sha "$SOURCE_GIT_SHA" \
+    --treatment-warehouse-id "$_GRANTS_WAREHOUSE_ID" \
+    --treatment-catalog "$_GRANTS_CATALOG" \
+    --expected-rollback-deployment-id "$MIP_APP_ROLLBACK_DEPLOYMENT_ID" \
+    "${revoke_args[@]}" || return 1
+  converge_runtime_app_release_access || return 1
+  converge_app_treatment_access runtime || return 1
+  APP_ACCESS_QUARANTINED=0
+  TREATMENT_RUNTIME_QUIESCED=0
+  PREACTIVATION_APP_REVOKE_ENDPOINTS=()
+  PREACTIVATION_APP_ACL_MUTATED=0
+  APP_UPGRADE_STATE="blue_active"
+}
+
+compensate_preactivation_app_acl() {
+  [[ "$DRY_RUN" -eq 0 && "$PREACTIVATION_APP_ACL_MUTATED" -eq 1 ]] || return 0
+  if [[ "${APP_UPGRADE_STATE:-first_install}" != "blue_active" ]]; then
+    return 0
+  fi
+  restore_signed_blue_while_quiesced
+}
+
+stop_and_quiesce_unproven_app() {
+  local failed=0 outcome_file outcome_line="" extra_line="" outcome="" principal app_json
+  local -a stop_identity_args=()
+  if [[ "${FIRST_INSTALL_COMPENSATION_AUTHORIZED:-0}" -eq 1 ]]; then
+    stop_identity_args=(
+      --expected-app-id "${FIRST_INSTALL_APP_ID:?claimed first-install App ID is required}"
+      --expected-client-id "${FIRST_INSTALL_APP_CLIENT_ID:?claimed App client ID is required}"
+      --expected-scim-id "${FIRST_INSTALL_APP_SCIM_ID:?claimed App SCIM ID is required}"
+    )
+  elif [[ "${#APP_EXPECTED_IDENTITY_ARGS[@]}" -gt 0 ]]; then
+    stop_identity_args=("${APP_EXPECTED_IDENTITY_ARGS[@]}")
+  fi
+  outcome_file="$(mktemp -t mip-app-stop-outcome.XXXXXX.env)"
+  chmod 600 "$outcome_file"
+  if ! "$PYTHON" -m tools.databricks.stop_app_fail_closed \
+    --app-name "$APP_FAIL_CLOSED_NAME" \
+    "${stop_identity_args[@]}" \
+    --out-env "$outcome_file"; then
+    rm -f "$outcome_file"
+    return 1
+  fi
+  {
+    IFS= read -r outcome_line || true
+    if IFS= read -r extra_line || [[ -n "$extra_line" ]]; then
+      outcome_line=""
+    fi
+  } < "$outcome_file"
+  rm -f "$outcome_file"
+  case "$outcome_line" in
+    MIP_APP_STOP_OUTCOME=absent) outcome="absent" ;;
+    MIP_APP_STOP_OUTCOME=stopped) outcome="stopped" ;;
+  esac
+  if [[ -z "$outcome" ]]; then
+    echo "${RED}[deploy] fail-closed App stop returned no authenticated outcome.${RST}" >&2
+    return 1
+  fi
+  # Authoritative absence proves that no target App identity can write the
+  # treatment table. Requiring a nonexistent principal here turns a safe
+  # first-install bundle failure into an unprovable secondary failure.
+  if [[ "$outcome" == "absent" ]]; then
+    TREATMENT_RUNTIME_QUIESCED=1
+    return 0
+  fi
+  if [[ "${APP_ACCESS_QUARANTINED:-0}" -eq 1 ]]; then
+    if "$PYTHON" -m tools.databricks.converge_app_release_access \
+      --mode quarantine \
+      --app-name "$APP_FAIL_CLOSED_NAME" \
+      --release-probe-application-id "$DATABRICKS_RELEASE_PROBE_CLIENT_ID" \
+      --normal-application-id "$DATABRICKS_CLIENT_ID" \
+      --operator2-application-id "$DATABRICKS_OPERATOR2_CLIENT_ID" \
+      --admin-application-id "$DATABRICKS_ADMIN_CLIENT_ID" \
+      "${APP_EXPECTED_IDENTITY_ARGS[@]}"; then
+      APP_ACCESS_QUARANTINED=1
+    else
+      echo "${RED}[deploy] failed to re-quarantine temporary App release access.${RST}" >&2
+      failed=1
+    fi
+  fi
+  principal="${APP_SP_CLIENT_ID:-${_EXISTING_APP_SP_CLIENT_ID:-}}"
+  if [[ -z "$principal" ]]; then
+    app_json="$(databricks apps get "$APP_FAIL_CLOSED_NAME" -o json 2>/dev/null || true)"
+    if [[ -n "$app_json" ]]; then
+      principal="$(printf '%s' "$app_json" | "$PYTHON" -c '
+import json, sys
+print((json.load(sys.stdin).get("service_principal_client_id") or "").strip())
+' 2>/dev/null || true)"
+    fi
+    APP_SP_CLIENT_ID="$principal"
+  fi
+  if converge_app_treatment_access quiesce; then
+    TREATMENT_RUNTIME_QUIESCED=1
+  else
+    failed=1
+  fi
+  return "$failed"
+}
+
+converge_captured_app_gateway_acl() {
+  local old_gateway="${1:-}"
+  local old_gateway_id="${2:-}"
+  local old_gateway_creator="${3:-}"
+  run_with_proof_signing_authority "$PYTHON" - \
+    "$APP_FAIL_CLOSED_NAME" \
+    "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+    "$SOURCE_GIT_SHA" \
+    "${MIP_AI_GATEWAY_ENDPOINT:?green Gateway is required}" \
+    "${MIP_AGENT_SUPERVISOR_ENDPOINT:?green Supervisor is required}" \
+    "$old_gateway" \
+    "$old_gateway_id" \
+    "$old_gateway_creator" <<'PYEOF'
+import sys
+
+from databricks.sdk import WorkspaceClient
+from tools.databricks import app_deployment_lease
+from tools.databricks.app_gateway_access_mode import (
+    app_service_principal_identity,
+    inspect_app_gateway_access_mode,
+)
+from tools.databricks.provision_agentic_resources import (
+    _converge_app_gateway_permissions,
+)
+(
+    app_name,
+    lease_id,
+    source_sha,
+    green_gateway,
+    green_supervisor,
+    old_gateway,
+    old_gateway_id,
+    old_gateway_creator,
+) = sys.argv[1:]
+workspace = WorkspaceClient()
+lease = app_deployment_lease.held_assertion(
+    workspace,
+    app_name=app_name,
+    lease_id=lease_id,
+    source_git_sha=source_sha,
+)
+lease()
+preserve = (old_gateway,) if old_gateway else ()
+_converge_app_gateway_permissions(
+    workspace,
+    gateway_endpoint=green_gateway,
+    supervisor_endpoint=green_supervisor,
+    app_name=app_name,
+    deployment_lease_id=lease_id,
+    deployment_source_git_sha=source_sha,
+    preserve_endpoints=preserve,
+    assert_single_writer=lease,
+)
+if old_gateway:
+    details = workspace.serving_endpoints.get(old_gateway)
+    actual = (
+        str(getattr(details, "id", "") or "").strip(),
+        str(getattr(details, "creator", "") or "").strip(),
+    )
+    if actual != (old_gateway_id, old_gateway_creator):
+        raise RuntimeError("signed old Gateway changed before App ACL compensation")
+    app_client_id, app_scim_id = app_service_principal_identity(
+        workspace,
+        app_name=app_name,
+    )
+    mode = inspect_app_gateway_access_mode(
+        workspace,
+        app_name=app_name,
+        endpoint_name=old_gateway,
+        app_client_id=app_client_id,
+        app_scim_id=app_scim_id,
+        legacy_pinned=True,
+    )
+    if mode == "none":
+        raise RuntimeError("old Gateway was preserved despite having no App query access")
+PYEOF
+}
+
+converge_green_only_app_access() {
+  local app_old_gateway_mode="none" app_old_supervisor_mode="none"
+  local -a app_audit_args=()
+  converge_runtime_app_release_access || return 1
+  load_captured_live_old_resources || return 1
+  if [[ "$CAPTURED_OLD_GATEWAY_LIVE" -eq 1 ]]; then
+    app_old_gateway_mode="$(pinned_query_access_mode \
+      "$APP_SP_CLIENT_ID" \
+      "$MIP_REPLACED_AGENT_GATEWAY_ENDPOINT")" || return 1
+  fi
+  if [[ "$CAPTURED_OLD_SUPERVISOR_LIVE" -eq 1 ]]; then
+    app_old_supervisor_mode="$(pinned_query_access_mode \
+      "$APP_SP_CLIENT_ID" \
+      "$MIP_REPLACED_AGENT_SUPERVISOR_ENDPOINT")" || return 1
+  fi
+  if [[ "$app_old_gateway_mode" != "none" ]]; then
+    converge_captured_app_gateway_acl \
+      "$MIP_REPLACED_AGENT_GATEWAY_ENDPOINT" \
+      "$MIP_REPLACED_AGENT_GATEWAY_ENDPOINT_ID" \
+      "$MIP_REPLACED_AGENT_GATEWAY_CREATOR" || return 1
+  else
+    converge_captured_app_gateway_acl || return 1
+  fi
+  app_audit_args=(
+    -m tools.databricks.audit_global_m2m_access
+    --app-name "${MIP_APP_NAME:?App name is required}" \
+    --application-id "${APP_SP_CLIENT_ID:?App service principal is required}" \
+    --expected-inventory-principal "${DEPLOY_INVENTORY_PRINCIPAL:?}" \
+    --account-id "$DATABRICKS_ACCOUNT_ID" \
+    --expected-serving-permission CAN_QUERY \
+    --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
+    --serving-endpoint "$MIP_AI_GATEWAY_ENDPOINT"
+  )
+  if [[ "$app_old_gateway_mode" != "none" ]]; then
+    app_audit_args+=(
+      --serving-endpoint "$MIP_REPLACED_AGENT_GATEWAY_ENDPOINT"
+      --legacy-pinned-serving-endpoint "$MIP_REPLACED_AGENT_GATEWAY_ENDPOINT"
+    )
+  fi
+  if [[ "$app_old_supervisor_mode" != "none" ]]; then
+    app_audit_args+=(
+      --serving-endpoint "$MIP_REPLACED_AGENT_SUPERVISOR_ENDPOINT"
+      --legacy-pinned-serving-endpoint "$MIP_REPLACED_AGENT_SUPERVISOR_ENDPOINT"
+    )
+  fi
+  run_with_account_identity run_with_proof_signing_authority \
+    "$PYTHON" "${app_audit_args[@]}" || return 1
+  APP_ACCESS_QUARANTINED=0
+  CAPTURED_APP_BOUNDARY_PROVEN=1
+}
+
+stop_app_after_failed_deploy() {
+  [[ "$DRY_RUN" -eq 0 && "$APP_FAIL_CLOSED_ARMED" -eq 1 && \
+     -n "$APP_FAIL_CLOSED_NAME" ]] || return 0
+  if [[ "${FIRST_INSTALL_APP_CREATED:-0}" -eq 1 ]]; then
+    if ! refresh_first_install_journal_status; then
+      echo "${RED}[deploy] could not authenticate first-install App before stop compensation.${RST}" >&2
+      return 1
+    fi
+    case "$FIRST_INSTALL_JOURNAL_STATUS" in
+      recover)
+        FIRST_INSTALL_COMPENSATION_AUTHORIZED=1
+        ;;
+      orphan_claimed)
+        # Authoritative App absence needs no name-based stop or quiescence.
+        FIRST_INSTALL_COMPENSATION_AUTHORIZED=1
+        TREATMENT_RUNTIME_QUIESCED=1
+        return 0
+        ;;
+      *)
+        echo "${RED}[deploy] first-install stop compensation is not authorized for journal state ${FIRST_INSTALL_JOURNAL_STATUS:-unknown}.${RST}" >&2
+        return 1
+        ;;
+    esac
+  fi
+  if [[ "${LAKEBASE_RUNTIME_ACCESS_PROVEN:-0}" -ne 1 ]]; then
+    echo "${RED}[deploy] Lakebase runtime access is unproven; stopping and quiescing instead of restoring signed blue.${RST}" >&2
+    stop_and_quiesce_unproven_app
+    return $?
+  fi
+  if [[ "${REVIEWED_FUNCTION_GRANTS_PROVEN:-0}" -ne 1 ]]; then
+    echo "${RED}[deploy] reviewed function grants are unproven; stopping and quiescing instead of restoring signed blue.${RST}" >&2
+    stop_and_quiesce_unproven_app
+    return $?
+  fi
+  case "${APP_UPGRADE_STATE:-first_install}" in
+    blue_active)
+      if [[ "$TREATMENT_RUNTIME_QUIESCED" -eq 1 ]]; then
+        echo "${YLW}[deploy] restoring verified-blue treatment authority after a pre-activation failure.${RST}" >&2
+        if converge_app_treatment_access runtime; then
+          TREATMENT_RUNTIME_QUIESCED=0
+          return 0
+        fi
+        echo "${RED}[deploy] verified-blue treatment restoration failed; stopping and quiescing.${RST}" >&2
+        stop_and_quiesce_unproven_app
+        return $?
+      fi
+      echo "${YLW}[deploy] preserving the verified blue App after a pre-activation failure.${RST}" >&2
+      return 0
+      ;;
+    green_verified)
+      echo "${YLW}[deploy] preserving the already-verified green App after a later deployment failure.${RST}" >&2
+      return 0
+      ;;
+    green_captured_cleanup_pending)
+      echo "${YLW}[deploy] green is signed; preserving every still-live journaled endpoint after cleanup failure.${RST}" >&2
+      if converge_green_only_app_access; then
+        return 0
+      fi
+      echo "${RED}[deploy] green-only App ACL convergence failed; stopping and quiescing.${RST}" >&2
+      stop_and_quiesce_unproven_app || true
+      # The captured release remains durable, but its signed old-resource
+      # retirement is unresolved. Retain the deployment lease even after a
+      # successful stop/quiesce so the next retry must resume this journal.
+      return 1
+      ;;
+    blue_quiescing)
+      echo "${YLW}[deploy] green activation did not begin; restoring verified-blue treatment authority.${RST}" >&2
+      if converge_app_treatment_access runtime; then
+        TREATMENT_RUNTIME_QUIESCED=0
+        APP_UPGRADE_STATE="blue_active"
+        return 0
+      fi
+      stop_and_quiesce_unproven_app
+      return $?
+      ;;
+    blue_quiesced|green_activating_quiesced)
+      echo "${YLW}[deploy] green App proof failed; restoring signed blue while treatment remains quiesced.${RST}" >&2
+      if restore_signed_blue_while_quiesced; then
+        return 0
+      fi
+      echo "${RED}[deploy] exact quiesced-blue restore failed; applying stop/quiesce compensation.${RST}" >&2
+      stop_and_quiesce_unproven_app
+      return $?
+      ;;
+    green_treatment_pending_capture)
+      echo "${RED}[deploy] green capture failed after treatment restoration; stopping and quiescing before rollback.${RST}" >&2
+      if ! stop_and_quiesce_unproven_app; then
+        return 1
+      fi
+      if [[ "$APP_SIGNED_BLUE_AVAILABLE" -eq 1 ]]; then
+        restore_signed_blue_while_quiesced
+        return $?
+      fi
+      return 0
+      ;;
+  esac
+  echo "${YLW}[deploy] deployment failed without a signed release; stopping and quiescing the App.${RST}" >&2
+  stop_and_quiesce_unproven_app
+}
+
+quiesce_app_treatment_after_failed_stop() {
+  if [[ "${FIRST_INSTALL_APP_CREATED:-0}" -eq 1 && \
+        "${FIRST_INSTALL_COMPENSATION_AUTHORIZED:-0}" -ne 1 ]]; then
+    echo "${RED}[deploy] refusing name-based treatment quiescence without an authenticated first-install App identity.${RST}" >&2
+    return 1
+  fi
+  local principal="${APP_SP_CLIENT_ID:-${_EXISTING_APP_SP_CLIENT_ID:-}}" app_json=""
+  if [[ "${#APP_EXPECTED_IDENTITY_ARGS[@]}" -gt 0 ]]; then
+    if ! "$PYTHON" -m tools.databricks.stop_app_fail_closed \
+      --app-name "$APP_FAIL_CLOSED_NAME" \
+      "${APP_EXPECTED_IDENTITY_ARGS[@]}" \
+      --assert-identity-only; then
+      echo "${RED}[deploy] App identity drifted after failed stop; refusing secondary treatment mutation.${RST}" >&2
+      return 1
+    fi
+  fi
+  if [[ -z "$principal" && -n "$APP_FAIL_CLOSED_NAME" ]]; then
+    app_json="$(databricks apps get "$APP_FAIL_CLOSED_NAME" -o json 2>/dev/null || true)"
+    if [[ -n "$app_json" ]]; then
+      principal="$(printf '%s' "$app_json" | "$PYTHON" -c '
+import json, sys
+print((json.load(sys.stdin).get("service_principal_client_id") or "").strip())
+' 2>/dev/null || true)"
+    fi
+  fi
+  if [[ -z "$principal" || -z "${_GRANTS_WAREHOUSE_ID:-}" || \
+        -z "${_GRANTS_CATALOG:-}" ]]; then
+    echo "${RED}[deploy] secondary treatment quiescence lacks a resolved App identity or warehouse.${RST}" >&2
+    return 1
+  fi
+  echo "${YLW}[deploy] App stop is unproven; attempting secondary treatment-write quiescence.${RST}" >&2
+  run_with_account_identity run_with_proof_signing_authority \
+    "$PYTHON" -m tools.databricks.converge_campaign_treatment_access \
+    --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
+    --catalog "$_GRANTS_CATALOG" \
+    --principal "$principal" \
+    --mode quiesce
+}
+
+revoke_agent_runtime_bootstrap_grants() {
+  [[ "$DRY_RUN" -eq 0 && "$AGENT_RUNTIME_BOOTSTRAP_GRANTS_ACTIVE" -eq 1 ]] || return 0
+  local statement response state schema_count failed=0
+  echo "${DIM}[deploy] revoking temporary agent-runtime CREATE MODEL/TABLE grants.${RST}" >&2
+  statement="SELECT COUNT(*) FROM system.information_schema.schemata WHERE catalog_name = '${_GRANTS_CATALOG//\'/\'\'}' AND schema_name = 'audit'"
+  response="$(databricks api post /api/2.0/sql/statements/ --json "$(
+    "$PYTHON" -c 'import json,sys; print(json.dumps({"warehouse_id": sys.argv[1], "statement": sys.argv[2], "wait_timeout": "50s", "on_wait_timeout": "CANCEL"}))' \
+      "$_GRANTS_WAREHOUSE_ID" "$statement"
+  )" 2>/dev/null || true)"
+  state="$(printf '%s' "$response" | "$PYTHON" -c 'import json,sys; print((json.load(sys.stdin).get("status") or {}).get("state", ""))' 2>/dev/null || true)"
+  schema_count="$(printf '%s' "$response" | "$PYTHON" -c 'import json,sys; rows=(json.load(sys.stdin).get("result") or {}).get("data_array", []); print(rows[0][0] if len(rows) == 1 and len(rows[0]) == 1 else "")' 2>/dev/null || true)"
+  if [[ "$state" != "SUCCEEDED" || ! "$schema_count" =~ ^[0-9]+$ ]]; then
+    echo "${RED}[deploy] could not determine whether the agent-runtime bootstrap schema exists.${RST}" >&2
+    return 1
+  fi
+  if [[ "$schema_count" == "0" ]]; then
+    AGENT_RUNTIME_BOOTSTRAP_GRANTS_ACTIVE=0
+    return 0
+  fi
+  for statement in \
+    "REVOKE CREATE MODEL ON SCHEMA ${_GRANTS_CATALOG}.audit FROM \`${DATABRICKS_AGENT_RUNTIME_CLIENT_ID}\`" \
+    "REVOKE CREATE TABLE ON SCHEMA ${_GRANTS_CATALOG}.audit FROM \`${DATABRICKS_AGENT_RUNTIME_CLIENT_ID}\`"; do
+    response="$(databricks api post /api/2.0/sql/statements/ --json "$(
+      "$PYTHON" -c 'import json,sys; print(json.dumps({"warehouse_id": sys.argv[1], "statement": sys.argv[2], "wait_timeout": "50s", "on_wait_timeout": "CANCEL"}))' \
+        "$_GRANTS_WAREHOUSE_ID" "$statement"
+    )" 2>/dev/null || true)"
+    state="$(printf '%s' "$response" | "$PYTHON" -c 'import json,sys; print((json.load(sys.stdin).get("status") or {}).get("state", ""))' 2>/dev/null || true)"
+    if [[ "$state" != "SUCCEEDED" ]]; then
+      echo "${RED}[deploy] failed to revoke temporary agent-runtime privilege: ${statement}${RST}" >&2
+      failed=1
+    fi
+  done
+  if [[ "$failed" -eq 0 ]]; then
+    statement="SHOW GRANTS \`${DATABRICKS_AGENT_RUNTIME_CLIENT_ID}\` ON SCHEMA ${_GRANTS_CATALOG}.audit"
+    response="$(databricks api post /api/2.0/sql/statements/ --json "$(
+      "$PYTHON" -c 'import json,sys; print(json.dumps({"warehouse_id": sys.argv[1], "statement": sys.argv[2], "wait_timeout": "50s", "on_wait_timeout": "CANCEL"}))' \
+        "$_GRANTS_WAREHOUSE_ID" "$statement"
+    )" 2>/dev/null || true)"
+    state="$(printf '%s' "$response" | "$PYTHON" -c 'import json,sys; print((json.load(sys.stdin).get("status") or {}).get("state", ""))' 2>/dev/null || true)"
+    if [[ "$state" != "SUCCEEDED" ]] || ! printf '%s' "$response" | "$PYTHON" -c '
+import json, sys
+body = json.load(sys.stdin)
+catalog = sys.argv[1].casefold()
+for row in (body.get("result") or {}).get("data_array", []):
+    cells = [str(value or "").casefold() for value in row]
+    joined = "|".join(cells)
+    if (("create model" in joined or "create table" in joined)
+            and catalog in joined and "audit" in joined):
+        raise SystemExit(1)
+' "$_GRANTS_CATALOG"
+    then
+      echo "${RED}[deploy] temporary agent-runtime CREATE privileges remain effective.${RST}" >&2
+      failed=1
+    else
+      AGENT_RUNTIME_BOOTSTRAP_GRANTS_ACTIVE=0
+    fi
+  fi
+  return "$failed"
+}
+
+finalize_signed_first_install_capture() {
+  # Capture makes this durable signed customer state. Change the compensation
+  # boundary before journal retirement because retirement can fail after an
+  # ambiguous Workspace Files delete without invalidating the signed release.
+  FIRST_INSTALL_APP_CREATED=0
+  FIRST_INSTALL_APP_BOUND=0
+  TREATMENT_RUNTIME_QUIESCED=0
+  APP_UPGRADE_STATE="green_captured_cleanup_pending"
+  if [[ "$FIRST_INSTALL_JOURNAL_STATUS" != "absent" ]]; then
+    step "retire signed first-install ownership journal after last-good capture"
+    run_with_proof_signing_authority \
+      "$PYTHON" -m tools.databricks.app_first_install_journal complete \
+      --app-name "$APP_NAME" \
+      --lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+      --source-git-sha "$SOURCE_GIT_SHA" \
+      --rollback-scope "$APP_ROLLBACK_SECRET_SCOPE" \
+      --lakebase-instance "$MIP_LAKEBASE_INSTANCE"
+    FIRST_INSTALL_JOURNAL_STATUS="absent"
+  fi
+}
+
+refresh_first_install_journal_status() {
+  local status_env
+  status_env="$(mktemp -t mip-app-first-install-status.XXXXXX.env)"
+  chmod 600 "$status_env"
+  if ! run_with_proof_signing_authority \
+    "$PYTHON" -m tools.databricks.app_first_install_journal status \
+    --app-name "$APP_FAIL_CLOSED_NAME" \
+    --lease-id "${MIP_APP_DEPLOYMENT_LEASE_ID:?deployment lease is required}" \
+    --source-git-sha "${SOURCE_GIT_SHA:?source SHA is required}" \
+    --rollback-scope "$APP_ROLLBACK_SECRET_SCOPE" \
+    --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+    --out-env "$status_env"; then
+    rm -f "$status_env"
+    return 1
+  fi
+  unset MIP_FIRST_INSTALL_JOURNAL_STATUS MIP_FIRST_INSTALL_APP_ID
+  unset MIP_FIRST_INSTALL_APP_CLIENT_ID MIP_FIRST_INSTALL_APP_SCIM_ID
+  # The producer emits shell-escaped assignments so empty values are written
+  # as ''. Source the owner-only temporary file to decode those assignments;
+  # raw line slicing would mistake the quoting syntax for a real identity.
+  # shellcheck disable=SC1090
+  . "$status_env"
+  FIRST_INSTALL_JOURNAL_STATUS="${MIP_FIRST_INSTALL_JOURNAL_STATUS-}"
+  FIRST_INSTALL_APP_ID="${MIP_FIRST_INSTALL_APP_ID-}"
+  FIRST_INSTALL_APP_CLIENT_ID="${MIP_FIRST_INSTALL_APP_CLIENT_ID-}"
+  FIRST_INSTALL_APP_SCIM_ID="${MIP_FIRST_INSTALL_APP_SCIM_ID-}"
+  unset MIP_FIRST_INSTALL_JOURNAL_STATUS MIP_FIRST_INSTALL_APP_ID
+  unset MIP_FIRST_INSTALL_APP_CLIENT_ID MIP_FIRST_INSTALL_APP_SCIM_ID
+  rm -f "$status_env"
+  if [[ ( "$FIRST_INSTALL_JOURNAL_STATUS" == "recover" || \
+          "$FIRST_INSTALL_JOURNAL_STATUS" == "orphan_claimed" ) ]] && \
+     [[ -z "$FIRST_INSTALL_APP_ID" || -z "$FIRST_INSTALL_APP_CLIENT_ID" || \
+        -z "$FIRST_INSTALL_APP_SCIM_ID" ]]; then
+    return 1
+  fi
+  if [[ "$FIRST_INSTALL_JOURNAL_STATUS" == "recover" ]]; then
+    APP_SP_CLIENT_ID="$FIRST_INSTALL_APP_CLIENT_ID"
+  fi
+  [[ -n "$FIRST_INSTALL_JOURNAL_STATUS" ]]
+}
+
+recover_journaled_first_install_lakebase_bootstrap() {
+  if [[ -z "$FIRST_INSTALL_APP_CLIENT_ID" ]]; then
+    echo "${RED}[deploy] journaled first-install App client ID is required for Lakebase recovery.${RST}" >&2
+    return 1
+  fi
+  run_with_lakebase_bootstrap_authority \
+    "$PYTHON" -m tools.databricks.converge_lakebase_oauth_role \
+    --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+    --lakebase-database "$LAKEBASE_DATABASE" \
+    --application-id "$FIRST_INSTALL_APP_CLIENT_ID" \
+    --role-contract app \
+    --recover-bootstrap-only
+}
+
+recover_interrupted_first_install_app() {
+  if [[ "$FIRST_INSTALL_JOURNAL_STATUS" != "recover" || \
+        -z "$FIRST_INSTALL_APP_ID" || -z "$FIRST_INSTALL_APP_CLIENT_ID" || \
+        -z "$FIRST_INSTALL_APP_SCIM_ID" || \
+        "$FIRST_INSTALL_APP_CLIENT_ID" != "$_EXISTING_APP_SP_CLIENT_ID" ]]; then
+    echo "${RED}[deploy] signed first-install recovery identity is incomplete or conflicts with inventory.${RST}" >&2
+    return 1
+  fi
+  APP_FAIL_CLOSED_NAME="$_GRANTS_APP_NAME"
+  step "stop journal-owned unsigned first-install App after interrupted deployment"
+  run "$PYTHON" -m tools.databricks.stop_app_fail_closed \
+    --app-name "$_GRANTS_APP_NAME" \
+    --expected-app-id "$FIRST_INSTALL_APP_ID" \
+    --expected-client-id "$FIRST_INSTALL_APP_CLIENT_ID" \
+    --expected-scim-id "$FIRST_INSTALL_APP_SCIM_ID"
+  step "quarantine journal-owned App access before exact recovery deletion"
+  run "$PYTHON" -m tools.databricks.converge_app_release_access \
+    --mode quarantine \
+    --app-name "$_GRANTS_APP_NAME" \
+    --release-probe-application-id "$DATABRICKS_RELEASE_PROBE_CLIENT_ID" \
+    --normal-application-id "$DATABRICKS_CLIENT_ID" \
+    --operator2-application-id "$DATABRICKS_OPERATOR2_CLIENT_ID" \
+    --admin-application-id "$DATABRICKS_ADMIN_CLIENT_ID" \
+    --expected-app-id "$FIRST_INSTALL_APP_ID" \
+    --expected-client-id "$FIRST_INSTALL_APP_CLIENT_ID" \
+    --expected-scim-id "$FIRST_INSTALL_APP_SCIM_ID"
+  APP_ACCESS_QUARANTINED=1
+  step "quiesce journal-owned App treatment authority before recovery deletion"
+  run_with_account_identity run_with_proof_signing_authority \
+    "$PYTHON" -m tools.databricks.converge_campaign_treatment_access \
+    --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
+    --catalog "$_GRANTS_CATALOG" \
+    --principal "$FIRST_INSTALL_APP_CLIENT_ID" \
+    --mode quiesce
+  TREATMENT_RUNTIME_QUIESCED=1
+  step "recover journal-owned Lakebase bootstrap before App deletion"
+  recover_journaled_first_install_lakebase_bootstrap
+  step "normalize and remove any interrupted first-install bundle binding"
+  run "$PYTHON" -m tools.databricks.bundle_env deployment bind \
+    mip_app "$_GRANTS_APP_NAME" -t "$TARGET" --auto-approve
+  run "$PYTHON" -m tools.databricks.bundle_env deployment unbind \
+    mip_app -t "$TARGET"
+  step "delete only the App authenticated by the signed first-install journal"
+  run_with_proof_signing_authority \
+    "$PYTHON" -m tools.databricks.app_first_install_journal delete \
+    --app-name "$_GRANTS_APP_NAME" \
+    --lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+    --source-git-sha "$SOURCE_GIT_SHA" \
+    --rollback-scope "$APP_ROLLBACK_SECRET_SCOPE" \
+    --lakebase-instance "$MIP_LAKEBASE_INSTANCE"
+  _EXISTING_APPS_JSON="[]"
+  _EXISTING_APP_ID=""
+  _EXISTING_APP_SP_CLIENT_ID=""
+  _EXISTING_APP_SP_SCIM_ID=""
+  APP_EXPECTED_IDENTITY_ARGS=()
+  FIRST_INSTALL_JOURNAL_STATUS="absent"
+  FIRST_INSTALL_APP_ID=""
+  FIRST_INSTALL_APP_CLIENT_ID=""
+  FIRST_INSTALL_APP_SCIM_ID=""
+  APP_ACCESS_QUARANTINED=0
+  TREATMENT_RUNTIME_QUIESCED=0
+}
+
+cleanup_failed_first_install_app() {
+  [[ "$DRY_RUN" -eq 0 && "$FIRST_INSTALL_APP_CREATED" -eq 1 ]] || return 0
+  # Re-authenticate the signed journal before touching bundle state. The helper
+  # refuses signed customer state and any App whose creator, marker, exact
+  # resources, or immutable service-principal IDs no longer match.
+  if ! refresh_first_install_journal_status; then
+    echo "${RED}[deploy] could not authenticate failed first-install ownership.${RST}" >&2
+    return 1
+  fi
+  if [[ "$FIRST_INSTALL_JOURNAL_STATUS" != "recover" && \
+        "$FIRST_INSTALL_JOURNAL_STATUS" != "orphan_claimed" ]]; then
+    echo "${RED}[deploy] first-install cleanup is not authorized for journal state ${FIRST_INSTALL_JOURNAL_STATUS:-unknown}.${RST}" >&2
+    return 1
+  fi
+  echo "${YLW}[deploy] recovering journal-owned Lakebase bootstrap before failed-App cleanup.${RST}" >&2
+  if ! recover_journaled_first_install_lakebase_bootstrap; then
+    echo "${RED}[deploy] failed first-install Lakebase recovery did not converge; retaining App and journal.${RST}" >&2
+    return 1
+  fi
+  # FIRST_INSTALL_APP_BOUND is armed before bind, so both pre-commit and
+  # commit-then-error outcomes take this path. A failed/ambiguous unbind leaves
+  # the signed journal and App intact for the next lease to reconcile.
+  if [[ "$FIRST_INSTALL_APP_BOUND" -eq 1 ]]; then
+    echo "${YLW}[deploy] unbinding failed first-install App from bundle state before cleanup.${RST}" >&2
+    if ! "$PYTHON" -m tools.databricks.bundle_env deployment unbind \
+      mip_app -t "$TARGET"; then
+      echo "${RED}[deploy] failed to unbind the unverified first-install App; refusing API deletion.${RST}" >&2
+      return 1
+    fi
+    FIRST_INSTALL_APP_BOUND=0
+  fi
+  echo "${YLW}[deploy] deleting only the unsigned App authenticated by the signed first-install journal.${RST}" >&2
+  if ! run_with_proof_signing_authority \
+    "$PYTHON" -m tools.databricks.app_first_install_journal delete \
+    --app-name "$APP_FAIL_CLOSED_NAME" \
+    --lease-id "${MIP_APP_DEPLOYMENT_LEASE_ID:?deployment lease is required}" \
+    --source-git-sha "${SOURCE_GIT_SHA:?source SHA is required}" \
+    --rollback-scope "$APP_ROLLBACK_SECRET_SCOPE" \
+    --lakebase-instance "$MIP_LAKEBASE_INSTANCE"; then
+    echo "${RED}[deploy] authenticated failed first-install App deletion did not converge.${RST}" >&2
+    return 1
+  fi
+  FIRST_INSTALL_APP_CREATED=0
+  FIRST_INSTALL_JOURNAL_STATUS="absent"
+}
 
 restore_rendered_sql_fail_closed() {
+  local rc=$? compensation_failed=0 app_stopped=0
+  if [[ "$rc" -ne 0 ]]; then
+    if stop_app_after_failed_deploy; then
+      app_stopped=1
+    else
+      compensation_failed=1
+      if ! quiesce_app_treatment_after_failed_stop; then
+        echo "${RED}[deploy] secondary treatment-write quiescence also failed.${RST}" >&2
+      fi
+    fi
+    if [[ "$app_stopped" -eq 1 ]] && \
+       declare -F cleanup_failed_first_install_app >/dev/null && \
+       ! cleanup_failed_first_install_app; then
+        compensation_failed=1
+    fi
+    if declare -F compensate_preactivation_app_acl >/dev/null && \
+       ! compensate_preactivation_app_acl; then
+      echo "${RED}[deploy] pre-activation App serving ACL compensation failed.${RST}" >&2
+      compensation_failed=1
+    fi
+    if declare -F compensate_agent_proxy_access >/dev/null && \
+       ! compensate_agent_proxy_access; then
+      echo "${RED}[deploy] agent-proxy capability compensation failed.${RST}" >&2
+      compensation_failed=1
+    fi
+    if declare -F compensate_verifier_gateway_access >/dev/null && \
+       ! compensate_verifier_gateway_access; then
+      echo "${RED}[deploy] verifier Gateway capability compensation failed.${RST}" >&2
+      compensation_failed=1
+    fi
+  fi
+  if declare -F revoke_agent_runtime_bootstrap_grants >/dev/null && \
+     ! revoke_agent_runtime_bootstrap_grants; then
+    compensation_failed=1
+  fi
+  if [[ "$compensation_failed" -eq 0 ]] && \
+     declare -F complete_captured_runtime_retirement_journal >/dev/null && \
+     ! complete_captured_runtime_retirement_journal; then
+    echo "${RED}[deploy] captured runtime retirement journal completion failed.${RST}" >&2
+    compensation_failed=1
+  fi
+  if [[ -n "${OAUTH_CREDENTIAL_QUARANTINE_FILE:-}" && \
+        -s "$OAUTH_CREDENTIAL_QUARANTINE_FILE" ]]; then
+    echo "${RED}[deploy] OAuth credential cleanup is unproven; retaining the signed deployment lease and durable workspace quarantine.${RST}" >&2
+    compensation_failed=1
+  fi
+  if [[ -n "${APP_DEPLOYMENT_LEASE_HEARTBEAT_PID:-}" ]]; then
+    kill "$APP_DEPLOYMENT_LEASE_HEARTBEAT_PID" 2>/dev/null || true
+    wait "$APP_DEPLOYMENT_LEASE_HEARTBEAT_PID" 2>/dev/null || true
+    APP_DEPLOYMENT_LEASE_HEARTBEAT_PID=""
+  fi
+  if [[ "$compensation_failed" -eq 0 && "$DRY_RUN" -eq 0 && \
+        -n "${APP_DEPLOYMENT_LEASE_ID:-}" && \
+        -n "${_GRANTS_APP_NAME:-}" ]]; then
+    if ! run_with_proof_signing_authority \
+      "$PYTHON" -m tools.databricks.app_deployment_lease release \
+      --app-name "$_GRANTS_APP_NAME" \
+      --lease-id "$APP_DEPLOYMENT_LEASE_ID"; then
+      echo "${RED}[deploy] failed to release the signed workspace App deployment lease.${RST}" >&2
+      compensation_failed=1
+    fi
+    APP_DEPLOYMENT_LEASE_ID=""
+  elif [[ "$compensation_failed" -eq 1 && \
+          -n "${APP_DEPLOYMENT_LEASE_ID:-}" ]]; then
+    echo "${RED}[deploy] retaining the signed deployment lease until expiry because compensation is unproven.${RST}" >&2
+  fi
   if [[ -n "${APP_DEPLOY_PAYLOAD:-}" ]]; then
     rm -f "$APP_DEPLOY_PAYLOAD"
+  fi
+  if [[ -n "${APP_LAST_DEPLOY_PAYLOAD:-}" ]]; then
+    rm -f "$APP_LAST_DEPLOY_PAYLOAD"
+  fi
+  if [[ -n "${APP_BUNDLE_SUMMARY:-}" ]]; then
+    rm -f "$APP_BUNDLE_SUMMARY"
+  fi
+  if [[ -n "${APP_ROLLBACK_BINDING_ENV:-}" ]]; then
+    rm -f "$APP_ROLLBACK_BINDING_ENV"
   fi
   if [[ -n "${AGENTIC_ENV_FILE:-}" ]]; then
     rm -f "$AGENTIC_ENV_FILE"
@@ -194,15 +1288,68 @@ restore_rendered_sql_fail_closed() {
   if [[ -n "${AGENT_EVAL_ENV_FILE:-}" ]]; then
     rm -f "$AGENT_EVAL_ENV_FILE"
   fi
-  if [[ "$DRY_RUN" -eq 1 || "$RESTORE_RENDERED_SQL_FAIL_CLOSED" -ne 1 ]]; then
-    return 0
+  if [[ -n "${CUTOVER_JOURNAL_ENV_FILE:-}" ]]; then
+    rm -f "$CUTOVER_JOURNAL_ENV_FILE"
   fi
-  MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS=0 "$PYTHON" tools/render_sql.py \
-    --catalog "${MIP_DEFAULT_CATALOG:-mip}" >/dev/null 2>&1 || {
+  if [[ -n "${APP_DEPLOYMENT_LEASE_ENV:-}" ]]; then
+    rm -f "$APP_DEPLOYMENT_LEASE_ENV"
+  fi
+  if [[ -n "${APP_LEASE_RECOVERY_ENV:-}" ]]; then
+    rm -f "$APP_LEASE_RECOVERY_ENV"
+  fi
+  if [[ -n "${OAUTH_CREDENTIAL_QUARANTINE_FILE:-}" ]]; then
+    rm -f "$OAUTH_CREDENTIAL_QUARANTINE_FILE"
+  fi
+  if [[ -n "${FOREIGN_CATALOG_BINDING_DIR:-}" ]]; then
+    rm -rf "$FOREIGN_CATALOG_BINDING_DIR"
+  fi
+  if [[ -n "${APP_RESOURCE_BINDING_SUMMARY:-}" ]]; then
+    rm -f "$APP_RESOURCE_BINDING_SUMMARY"
+  fi
+  if [[ -n "${APP_RESOURCE_BINDING_PAYLOAD:-}" ]]; then
+    rm -f "$APP_RESOURCE_BINDING_PAYLOAD"
+  fi
+  if [[ -n "${APP_RESOURCE_BINDING_BEFORE:-}" ]]; then
+    rm -f "$APP_RESOURCE_BINDING_BEFORE"
+  fi
+  if [[ -n "${APP_RESOURCE_BINDING_AFTER:-}" ]]; then
+    rm -f "$APP_RESOURCE_BINDING_AFTER"
+  fi
+  if [[ -n "${APP_CREATE_RESULT:-}" ]]; then
+    rm -f "$APP_CREATE_RESULT"
+  fi
+  if [[ -n "${FIRST_INSTALL_JOURNAL_ENV:-}" ]]; then
+    rm -f "$FIRST_INSTALL_JOURNAL_ENV"
+  fi
+  if [[ -n "${VERIFIER_IDENTITY_CAPTURE_ENV:-}" ]]; then
+    rm -f "$VERIFIER_IDENTITY_CAPTURE_ENV"
+  fi
+  if [[ -n "${HISTORICAL_ENDPOINT_INVENTORY:-}" ]]; then
+    rm -f "$HISTORICAL_ENDPOINT_INVENTORY"
+  fi
+  if [[ -n "${HISTORICAL_CUTOVER_JOURNAL_ENV:-}" ]]; then
+    rm -f "$HISTORICAL_CUTOVER_JOURNAL_ENV"
+  fi
+  if [[ -n "${FIRST_INSTALL_MARKED_PAYLOAD:-}" ]]; then
+    rm -f "$FIRST_INSTALL_MARKED_PAYLOAD"
+  fi
+  if [[ -n "${_PII_SECRET_PAYLOAD:-}" ]]; then
+    rm -f "$_PII_SECRET_PAYLOAD"
+  fi
+  if [[ "$DRY_RUN" -eq 0 && "$RESTORE_RENDERED_SQL_FAIL_CLOSED" -eq 1 ]]; then
+    if MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS=0 "$PYTHON" tools/render_sql.py \
+      --catalog "${MIP_DEFAULT_CATALOG:-mip}" >/dev/null 2>&1; then
+      echo "${DIM}[deploy] restored sql/_rendered with demo first-party feeds disabled.${RST}" >&2
+    else
       echo "${YLW}[deploy] warning: failed to restore sql/_rendered with demo first-party feeds disabled.${RST}" >&2
-      return 0
-    }
-  echo "${DIM}[deploy] restored sql/_rendered with demo first-party feeds disabled.${RST}" >&2
+    fi
+  fi
+  if [[ "$compensation_failed" -eq 1 ]]; then
+    echo "${RED}[deploy] original failure was followed by unproven App shutdown or temporary-privilege revocation.${RST}" >&2
+    trap - EXIT
+    exit 90
+  fi
+  return "$rc"
 }
 trap restore_rendered_sql_fail_closed EXIT
 
@@ -220,15 +1367,557 @@ dotenv_value() {
 import sys
 from pathlib import Path
 
-from dotenv import dotenv_values
-
 key = sys.argv[1]
 path = Path(".env.local")
 if not path.exists():
     print("")
 else:
-    print((dotenv_values(path).get(key) or "").strip())
+    try:
+        from dotenv import dotenv_values
+    except ModuleNotFoundError:
+        # Preflight must also work in isolated release-contract fixtures where
+        # the repository venv has not been created yet. This intentionally
+        # supports only the literal KEY=value forms used for deploy secrets;
+        # it never evaluates shell syntax or expands variables.
+        value = ""
+        for raw_line in path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("export "):
+                line = line[7:].lstrip()
+            name, separator, candidate = line.partition("=")
+            if separator and name.strip() == key:
+                candidate = candidate.strip()
+                if (
+                    len(candidate) >= 2
+                    and candidate[0] == candidate[-1]
+                    and candidate[0] in {"'", '"'}
+                ):
+                    candidate = candidate[1:-1]
+                value = candidate
+        print(value.strip())
+    else:
+        print((dotenv_values(path).get(key) or "").strip())
 PY
+}
+
+deployment_control_value() {
+  local name="$1" default_value="${2:-}" value
+  value="${!name:-}"
+  if [[ -z "$value" ]]; then
+    value="$(dotenv_value "$name")"
+  fi
+  printf '%s' "${value:-$default_value}"
+}
+
+resolve_m2m_credential() {
+  local name="$1" scope="${2:-export}" value
+  value="${!name:-}"
+  if [[ -z "$value" ]]; then
+    value="$(dotenv_value "$name")"
+  fi
+  printf -v "$name" '%s' "$value"
+  if [[ "$scope" == "shell" ]]; then
+    # Keep app-facing OAuth credentials available to explicit mint/subshell
+    # calls without letting bare deployment-side SDK clients auto-select them.
+    export -n "${name?}" 2>/dev/null || true
+  elif [[ "$scope" == "export" ]]; then
+    export "${name?}"
+  else
+    echo "${RED}[deploy] invalid credential scope '$scope' for $name.${RST}" >&2
+    return 2
+  fi
+}
+
+bind_deployment_workspace_auth() {
+  local bundle_host dotenv_host dotenv_token host token profile profile_host
+  dotenv_host="$(dotenv_value DATABRICKS_HOST)"
+  dotenv_token="$(dotenv_value DATABRICKS_TOKEN)"
+  unset MIP_DEPLOYER_DATABRICKS_HOST MIP_DEPLOYER_DATABRICKS_TOKEN \
+    MIP_DEPLOYER_DATABRICKS_PROFILE MIP_DATABRICKS_WORKSPACE_HOST
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    host="${dotenv_host:-${DATABRICKS_HOST:-}}"
+    if [[ -z "$host" ]]; then
+      echo "${RED}[deploy] could not resolve the planned deployment workspace host.${RST}" >&2
+      return 2
+    fi
+    export MIP_DATABRICKS_WORKSPACE_HOST="${host%/}"
+    export -n DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET 2>/dev/null || true
+    return 0
+  fi
+  if [[ -n "${DATABRICKS_CONFIG_PROFILE:-}" ]]; then
+    profile="$DATABRICKS_CONFIG_PROFILE"
+    profile_host="$($PYTHON - "$profile" <<'PY'
+import configparser
+import os
+import sys
+from pathlib import Path
+
+path = Path(os.environ.get("DATABRICKS_CONFIG_FILE") or Path.home() / ".databrickscfg")
+parser = configparser.ConfigParser(interpolation=None)
+parser.read(path, encoding="utf-8")
+profile = sys.argv[1]
+print(parser.get(profile, "host", fallback="").strip().rstrip("/"))
+PY
+)"
+    if [[ -z "$profile_host" ]]; then
+      echo "${RED}[deploy] Databricks profile '$profile' has no workspace host.${RST}" >&2
+      return 2
+    fi
+    if [[ -n "$dotenv_host" && "${dotenv_host%/}" != "$profile_host" ]]; then
+      echo "${RED}[deploy] .env.local workspace host does not match selected Databricks profile '$profile'.${RST}" >&2
+      return 2
+    fi
+    host="$profile_host"
+    export DATABRICKS_CONFIG_PROFILE="$profile"
+    unset DATABRICKS_HOST DATABRICKS_TOKEN DATABRICKS_AUTH_TYPE
+    export MIP_DEPLOYER_DATABRICKS_PROFILE="$profile"
+  else
+    if [[ -n "$dotenv_token" ]]; then
+      if [[ -z "$dotenv_host" ]]; then
+        echo "${RED}[deploy] .env.local DATABRICKS_TOKEN requires its own DATABRICKS_HOST.${RST}" >&2
+        return 2
+      fi
+      host="$dotenv_host"
+      token="$dotenv_token"
+    elif [[ -n "${DATABRICKS_TOKEN:-}" ]]; then
+      host="${DATABRICKS_HOST:-}"
+      token="$DATABRICKS_TOKEN"
+      if [[ -n "$dotenv_host" && "${dotenv_host%/}" != "${host%/}" ]]; then
+        echo "${RED}[deploy] refusing to combine an ambient PAT with a different .env.local host.${RST}" >&2
+        return 2
+      fi
+    else
+      host="${dotenv_host:-${DATABRICKS_HOST:-}}"
+      token=""
+    fi
+    if [[ -n "$token" ]]; then
+      if [[ -z "$host" ]]; then
+        echo "${RED}[deploy] DATABRICKS_TOKEN requires DATABRICKS_HOST for deployer auth.${RST}" >&2
+        return 2
+      fi
+      DATABRICKS_HOST="$host"
+      DATABRICKS_TOKEN="$token"
+      DATABRICKS_AUTH_TYPE="pat"
+      export DATABRICKS_HOST DATABRICKS_TOKEN DATABRICKS_AUTH_TYPE
+      unset DATABRICKS_CONFIG_PROFILE
+      export MIP_DEPLOYER_DATABRICKS_HOST="$host"
+      export MIP_DEPLOYER_DATABRICKS_TOKEN="$token"
+    else
+      profile="DEFAULT"
+      profile_host="$($PYTHON - "$profile" <<'PY'
+import configparser
+import os
+import sys
+from pathlib import Path
+
+path = Path(os.environ.get("DATABRICKS_CONFIG_FILE") or Path.home() / ".databrickscfg")
+parser = configparser.ConfigParser(interpolation=None)
+parser.read(path, encoding="utf-8")
+profile = sys.argv[1]
+print(parser.get(profile, "host", fallback="").strip().rstrip("/"))
+PY
+)"
+      if [[ -z "$profile_host" ]]; then
+        echo "${RED}[deploy] DATABRICKS_TOKEN is absent and DEFAULT profile has no workspace host.${RST}" >&2
+        return 2
+      fi
+      if [[ -n "$host" && "${host%/}" != "$profile_host" ]]; then
+        echo "${RED}[deploy] .env.local workspace host does not match DEFAULT Databricks profile.${RST}" >&2
+        return 2
+      fi
+      host="$profile_host"
+      export DATABRICKS_CONFIG_PROFILE="$profile"
+      unset DATABRICKS_HOST DATABRICKS_TOKEN DATABRICKS_AUTH_TYPE
+      export MIP_DEPLOYER_DATABRICKS_PROFILE="$profile"
+    fi
+  fi
+  if [[ -z "$host" ]]; then
+    echo "${RED}[deploy] could not resolve the deployment workspace host.${RST}" >&2
+    return 2
+  fi
+  bundle_host="$($PYTHON - "$TARGET" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+data = yaml.safe_load(Path("databricks.yml").read_text(encoding="utf-8")) or {}
+target = sys.argv[1]
+targets = data.get("targets") or {}
+if target not in targets:
+    raise SystemExit(f"unknown Databricks bundle target: {target}")
+workspace = targets[target].get("workspace") or {}
+top_workspace = data.get("workspace") or {}
+print(str(workspace.get("host") or top_workspace.get("host") or "").strip().rstrip("/"))
+PY
+)"
+  if [[ -z "$bundle_host" || "${host%/}" != "$bundle_host" ]]; then
+    echo "${RED}[deploy] authenticated workspace host does not match databricks.yml target '$TARGET'.${RST}" >&2
+    return 2
+  fi
+  export MIP_DATABRICKS_WORKSPACE_HOST="${host%/}"
+  # These names represent the normal App user, never the UC/App deployment
+  # authority. Preserve their shell values but remove them from child envs.
+  export -n DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET 2>/dev/null || true
+}
+
+mint_m2m_token() {
+  local output_name="$1" client_id_env="$2" client_secret_env="$3"
+  local client_id="${!client_id_env}" client_secret="${!client_secret_env}"
+  local token_file token
+  token_file="$(mktemp -t mip-m2m-token.XXXXXX)"
+  chmod 600 "$token_file"
+  echo "${DIM}\$ $PYTHON tools/oauth_m2m_mint.py --client-id-env $client_id_env --client-secret-env $client_secret_env --output-file [secure-temp]${RST}"
+  # The identity override is intentionally confined to this mint subprocess.
+  # shellcheck disable=SC2030
+  if ! (
+    unset DATABRICKS_TOKEN DATABRICKS_CONFIG_PROFILE \
+      MIP_DEPLOYER_DATABRICKS_HOST MIP_DEPLOYER_DATABRICKS_TOKEN \
+      MIP_DEPLOYER_DATABRICKS_PROFILE \
+      MIP_BEARER_TOKEN MIP_OPERATOR2_BEARER_TOKEN MIP_ADMIN_BEARER_TOKEN \
+      DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_ADMIN_CLIENT_SECRET \
+      DATABRICKS_OPERATOR2_CLIENT_ID DATABRICKS_OPERATOR2_CLIENT_SECRET \
+      DATABRICKS_RELEASE_PROBE_CLIENT_ID DATABRICKS_RELEASE_PROBE_CLIENT_SECRET \
+      DATABRICKS_VERIFIER_CLIENT_ID DATABRICKS_VERIFIER_CLIENT_SECRET \
+      DATABRICKS_AGENT_RUNTIME_CLIENT_ID DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET \
+      DATABRICKS_AGENT_PROXY_CLIENT_ID DATABRICKS_AGENT_PROXY_CLIENT_SECRET \
+      DATABRICKS_AGENT_PROXY_CREDENTIAL_ID \
+      DATABRICKS_ACCOUNT_CLIENT_ID DATABRICKS_ACCOUNT_CLIENT_SECRET
+    export DATABRICKS_HOST="${MIP_DATABRICKS_WORKSPACE_HOST:?}"
+    export DATABRICKS_AUTH_TYPE="oauth-m2m"
+    export DATABRICKS_CLIENT_ID="$client_id"
+    export DATABRICKS_CLIENT_SECRET="$client_secret"
+    "$PYTHON" tools/oauth_m2m_mint.py \
+      --client-id-env DATABRICKS_CLIENT_ID \
+      --client-secret-env DATABRICKS_CLIENT_SECRET \
+      --output-file "$token_file"
+  ); then
+    rm -f "$token_file"
+    return 1
+  fi
+  if ! IFS= read -r token < "$token_file" || [[ -z "$token" ]]; then
+    rm -f "$token_file"
+    echo "${RED}[deploy] M2M mint returned an empty bearer for $client_id_env.${RST}" >&2
+    return 1
+  fi
+  rm -f "$token_file"
+  printf -v "$output_name" '%s' "$token"
+  export "${output_name?}"
+}
+
+mint_app_automation_tokens() {
+  if [[ "$APP_ACCESS_QUARANTINED" -eq 1 ]]; then
+    mint_m2m_token MIP_BEARER_TOKEN \
+      DATABRICKS_RELEASE_PROBE_CLIENT_ID DATABRICKS_RELEASE_PROBE_CLIENT_SECRET
+    MIP_ADMIN_BEARER_TOKEN="$MIP_BEARER_TOKEN"
+    export MIP_ADMIN_BEARER_TOKEN
+  else
+    mint_m2m_token MIP_BEARER_TOKEN DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET
+    mint_m2m_token MIP_ADMIN_BEARER_TOKEN \
+      DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_ADMIN_CLIENT_SECRET
+  fi
+}
+
+run_as_m2m_identity() {
+  local label="$1" client_id_env="$2" client_secret_env="$3"
+  local client_id="${!client_id_env}" client_secret="${!client_secret_env}"
+  local verifier_signing_key="${MIP_AI_GATEWAY_PROOF_SIGNING_KEY:-}"
+  local verifier_verify_key="${MIP_AI_GATEWAY_PROOF_VERIFY_KEY:-}"
+  local verifier_previous_key="${MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY:-}"
+  local verifier_historical_keys="${MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS:-}"
+  local model_signing_key="${MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY:-}"
+  local model_verify_key="${MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY:-}"
+  local model_previous_key="${MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY:-}"
+  local allow_runtime_model_signing="${MIP_ALLOW_RUNTIME_MODEL_ATTESTATION_SIGNING:-0}"
+  local cutover_signed_blue_gateway_pin="${MIP_CUTOVER_SIGNED_BLUE_GATEWAY_PIN_JSON:-}"
+  local cutover_signed_blue_supervisor_pin="${MIP_CUTOVER_SIGNED_BLUE_SUPERVISOR_PIN_JSON:-}"
+  local lakebase_instance="${MIP_LAKEBASE_INSTANCE:-${LAKEBASE_INSTANCE_NAME:-mip-app-state}}"
+  local lakebase_database="${LAKEBASE_DATABASE:-${MIP_LAKEBASE_DATABASE_NAME:-mip_app_state}}"
+  local allowed_name
+  shift 3
+  echo "${DIM}\$ $* (${label} M2M identity)${RST}"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    return 0
+  fi
+  # Build the clean environment with shell builtins so OAuth and signing
+  # secrets never appear in `env KEY=value ...` process arguments.
+  # shellcheck disable=SC2030,SC2031  # Isolation is intentionally subshell-local.
+  (
+    local inherited_name
+    while IFS= read -r inherited_name; do
+      export -n "${inherited_name?}" 2>/dev/null || true
+    done < <(compgen -e)
+    export HOME="${HOME:-}" PATH="${PATH:-/usr/bin:/bin}"
+    export DATABRICKS_HOST="${MIP_DATABRICKS_WORKSPACE_HOST:?}"
+    export DATABRICKS_AUTH_TYPE="oauth-m2m"
+    export DATABRICKS_CLIENT_ID="$client_id"
+    export DATABRICKS_CLIENT_SECRET="$client_secret"
+    export MIP_DISABLE_DOTENV=1
+    export MIP_LAKEBASE_INSTANCE="$lakebase_instance"
+    export LAKEBASE_INSTANCE_NAME="$lakebase_instance"
+    export LAKEBASE_DATABASE="$lakebase_database"
+    export MIP_LAKEBASE_DATABASE_NAME="$lakebase_database"
+    for allowed_name in TMPDIR LANG LC_ALL SSL_CERT_FILE REQUESTS_CA_BUNDLE \
+      CURL_CA_BUNDLE HTTPS_PROXY HTTP_PROXY NO_PROXY; do
+      if [[ -n "${!allowed_name:-}" ]]; then
+        export "${allowed_name}=${!allowed_name}"
+      fi
+    done
+    if [[ "$label" == "verifier" || "$label" == "agent-runtime" ]]; then
+      if [[ -n "$verifier_verify_key" ]]; then
+        export MIP_AI_GATEWAY_PROOF_VERIFY_KEY="$verifier_verify_key"
+      fi
+      if [[ -n "$verifier_previous_key" ]]; then
+        export MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY="$verifier_previous_key"
+      fi
+      if [[ -n "$verifier_historical_keys" ]]; then
+        export MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS="$verifier_historical_keys"
+      fi
+    fi
+    if [[ "$label" == "verifier" && -n "$verifier_signing_key" ]]; then
+      export MIP_AI_GATEWAY_PROOF_SIGNING_KEY="$verifier_signing_key"
+    fi
+    if [[ "$label" == "agent-runtime" ]]; then
+      if [[ -n "$cutover_signed_blue_gateway_pin" ]]; then
+        export MIP_CUTOVER_SIGNED_BLUE_GATEWAY_PIN_JSON="$cutover_signed_blue_gateway_pin"
+      fi
+      if [[ -n "$cutover_signed_blue_supervisor_pin" ]]; then
+        export MIP_CUTOVER_SIGNED_BLUE_SUPERVISOR_PIN_JSON="$cutover_signed_blue_supervisor_pin"
+      fi
+      if [[ -n "$model_verify_key" ]]; then
+        export MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY="$model_verify_key"
+      fi
+      if [[ -n "$model_previous_key" ]]; then
+        export MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY="$model_previous_key"
+      fi
+      if [[ "$allow_runtime_model_signing" == "1" && \
+            -n "$model_signing_key" ]]; then
+        export MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY="$model_signing_key"
+        export MIP_ALLOW_RUNTIME_MODEL_ATTESTATION_SIGNING=1
+      fi
+    fi
+    "$@"
+  )
+}
+
+run_with_agent_runtime_credentials() {
+  local client_id="${DATABRICKS_AGENT_RUNTIME_CLIENT_ID:-}"
+  local client_secret="${DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET:-}"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    run "$@"
+    return
+  fi
+  if [[ -z "$client_id" || -z "$client_secret" ]]; then
+    echo "${RED}[deploy] exact agent-runtime credentials are missing for dual-authority audit.${RST}" >&2
+    return 2
+  fi
+  # Preserve deployer auth for the first authority plane. The dedicated values
+  # are exported only inside this subshell and never placed in process arguments.
+  (
+    export DATABRICKS_AGENT_RUNTIME_CLIENT_ID="$client_id"
+    export DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET="$client_secret"
+    run "$@"
+  )
+}
+
+run_with_verifier_credentials() {
+  local client_id="${DATABRICKS_VERIFIER_CLIENT_ID:-}"
+  local client_secret="${DATABRICKS_VERIFIER_CLIENT_SECRET:-}"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    run "$@"
+    return
+  fi
+  if [[ -z "$client_id" || -z "$client_secret" ]]; then
+    echo "${RED}[deploy] exact verifier credentials are missing for dual-authority audit.${RST}" >&2
+    return 2
+  fi
+  # Preserve deployer auth only for the bounded admin attestation. The verifier
+  # replaces ambient auth before any target-identity probe.
+  (
+    export DATABRICKS_VERIFIER_CLIENT_ID="$client_id"
+    export DATABRICKS_VERIFIER_CLIENT_SECRET="$client_secret"
+    run "$@"
+  )
+}
+
+run_with_agent_proxy_credentials() {
+  local client_id="${DATABRICKS_AGENT_PROXY_CLIENT_ID:-}"
+  local client_secret="${DATABRICKS_AGENT_PROXY_CLIENT_SECRET:-}"
+  local credential_id="${DATABRICKS_AGENT_PROXY_CREDENTIAL_ID:-}"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    run "$@"
+    return
+  fi
+  if [[ -z "$client_id" || -z "$client_secret" || -z "$credential_id" ]]; then
+    echo "${RED}[deploy] complete agent-proxy credential binding is missing.${RST}" >&2
+    return 2
+  fi
+  (
+    export DATABRICKS_AGENT_PROXY_CLIENT_ID="$client_id"
+    export DATABRICKS_AGENT_PROXY_CLIENT_SECRET="$client_secret"
+    export DATABRICKS_AGENT_PROXY_CREDENTIAL_ID="$credential_id"
+    run "$@"
+  )
+}
+
+run_with_agent_proxy_binding() {
+  local client_id="${DATABRICKS_AGENT_PROXY_CLIENT_ID:-}"
+  local credential_id="${DATABRICKS_AGENT_PROXY_CREDENTIAL_ID:-}"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    run "$@"
+    return
+  fi
+  if [[ -z "$client_id" || -z "$credential_id" ]]; then
+    echo "${RED}[deploy] agent-proxy identity binding is missing.${RST}" >&2
+    return 2
+  fi
+  (
+    export DATABRICKS_AGENT_PROXY_CLIENT_ID="$client_id"
+    export DATABRICKS_AGENT_PROXY_CREDENTIAL_ID="$credential_id"
+    export -n DATABRICKS_AGENT_PROXY_CLIENT_SECRET 2>/dev/null || true
+    run "$@"
+  )
+}
+
+run_with_account_identity() {
+  local account_client_id="${DATABRICKS_ACCOUNT_CLIENT_ID:-}"
+  local account_client_secret="${DATABRICKS_ACCOUNT_CLIENT_SECRET:-}"
+  echo "${DIM}\$ $* (bounded account-SCIM identity)${RST}"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    return 0
+  fi
+  if [[ -n "${APP_DEPLOYMENT_LEASE_HEARTBEAT_PID:-}" ]] && \
+     ! kill -0 "$APP_DEPLOYMENT_LEASE_HEARTBEAT_PID" 2>/dev/null; then
+    echo "${RED}[deploy] signed App deployment lease heartbeat is not running.${RST}" >&2
+    return 1
+  fi
+  if [[ -z "$account_client_id" || -z "$account_client_secret" ]]; then
+    echo "${RED}[deploy] bounded account-SCIM credentials are missing.${RST}" >&2
+    return 2
+  fi
+  # shellcheck disable=SC2030  # Account credential export is intentionally subshell-local.
+  (
+    export DATABRICKS_ACCOUNT_CLIENT_ID="$account_client_id"
+    export DATABRICKS_ACCOUNT_CLIENT_SECRET="$account_client_secret"
+    "$@"
+  )
+}
+
+run_with_proof_signing_authority() {
+  # shellcheck disable=SC2031  # Parent shell retains the unexported authority.
+  local signing_key="${MIP_AI_GATEWAY_PROOF_SIGNING_KEY:-}"
+  echo "${DIM}\$ $* (bounded deployer proof-signing authority)${RST}"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    return 0
+  fi
+  if [[ -z "$signing_key" ]]; then
+    echo "${RED}[deploy] bounded proof-signing authority is missing.${RST}" >&2
+    return 2
+  fi
+  # shellcheck disable=SC2030,SC2031  # Proof authority is intentionally subshell-local.
+  (
+    export MIP_AI_GATEWAY_PROOF_SIGNING_KEY="$signing_key"
+    "$@"
+  )
+}
+
+reconcile_gateway_model_archives() {
+  MIP_CUTOVER_SIGNED_BLUE_GATEWAY_PIN_JSON="${MIP_APP_ROLLBACK_GATEWAY_PIN_JSON:-}" \
+  MIP_CUTOVER_SIGNED_BLUE_SUPERVISOR_PIN_JSON="${MIP_APP_ROLLBACK_SUPERVISOR_PIN_JSON:-}" \
+    run_with_account_identity run_with_proof_signing_authority \
+      "$PYTHON" -m tools.databricks.gateway_model_archival_cli \
+      archive-unprotected \
+      --app-name "$_GRANTS_APP_NAME" \
+      --lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+      --source-git-sha "$SOURCE_GIT_SHA" \
+      --runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+      --app-application-id "$APP_SP_CLIENT_ID" \
+      --proxy-application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID" \
+      --verifier-application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
+      --archive-owner "$DEPLOY_INVENTORY_PRINCIPAL" \
+      --governance-group "${MIP_ADMIN_GROUP_NAME:-mip-admin}" \
+      --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
+      --model-family "${MIP_AI_GATEWAY_AGENT_MODEL_FAMILY:-${MIP_DEFAULT_CATALOG:-mip}.audit.mortgage_growth_supervisor_proxy}" \
+      --experiment-base "${MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE:-mip-agent-runtime-gateway-proxy}" \
+      --inference-schema "${MIP_AI_GATEWAY_SCHEMA:-audit}" \
+      --inference-table-prefix "${MIP_AI_GATEWAY_TABLE_PREFIX:-mip_agent_gateway_growth_agent}" \
+      --rollback-scope "$APP_ROLLBACK_SECRET_SCOPE" \
+      --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+      --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
+      --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL"
+}
+
+prove_agent_runtime_dual_uc_boundary() {
+  MIP_CUTOVER_SIGNED_BLUE_GATEWAY_PIN_JSON="${MIP_APP_ROLLBACK_GATEWAY_PIN_JSON:-}" \
+  MIP_CUTOVER_SIGNED_BLUE_SUPERVISOR_PIN_JSON="${MIP_APP_ROLLBACK_SUPERVISOR_PIN_JSON:-}" \
+    run_with_account_identity \
+      run_with_proof_signing_authority \
+        run_with_agent_runtime_credentials \
+        "$PYTHON" -m tools.databricks.verify_agent_runtime_uc_boundary_dual_authority \
+      --application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+      --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL" \
+      --supervisor-id "$MIP_AGENT_SUPERVISOR_ID" \
+      --supervisor-endpoint-id "$MIP_AGENT_SUPERVISOR_ENDPOINT_ID" \
+      --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
+      --gateway-model "$MIP_AI_GATEWAY_AGENT_MODEL" \
+      --gateway-model-family "${MIP_AI_GATEWAY_AGENT_MODEL_FAMILY:-${MIP_DEFAULT_CATALOG:-mip}.audit.mortgage_growth_supervisor_proxy}" \
+      --gateway-experiment-base "${MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE:-mip-agent-runtime-gateway-proxy}" \
+      --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
+      --inference-schema "${MIP_AI_GATEWAY_SCHEMA:-audit}" \
+      --inference-table-prefix "${MIP_AI_GATEWAY_TABLE_PREFIX:-mip_agent_gateway_growth_agent}" \
+      --proxy-caller-application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID" \
+      --proxy-caller-credential-id "$DATABRICKS_AGENT_PROXY_CREDENTIAL_ID" \
+      --proxy-caller-secret-reference "$MIP_AGENT_PROXY_SECRET_REFERENCE" \
+      --app-name "$_GRANTS_APP_NAME" \
+      --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+      --deployment-source-git-sha "$SOURCE_GIT_SHA" \
+      --app-application-id "$APP_SP_CLIENT_ID" \
+      --verifier-application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
+      --archive-owner "$DEPLOY_INVENTORY_PRINCIPAL" \
+      --governance-group "${MIP_ADMIN_GROUP_NAME:-mip-admin}" \
+      --rollback-scope "$APP_ROLLBACK_SECRET_SCOPE" \
+      --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+      --warehouse-id "$_GRANTS_WAREHOUSE_ID"
+}
+
+run_with_lakebase_bootstrap_authority() {
+  local control_client_id="${DATABRICKS_AGENT_RUNTIME_CLIENT_ID:-}"
+  local control_client_secret="${DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET:-}"
+  if [[ "$DRY_RUN" -eq 0 && \
+        ( -z "$control_client_id" || -z "$control_client_secret" ) ]]; then
+    echo "${RED}[deploy] fresh OAuth-M2M Lakebase bootstrap control credentials are missing.${RST}" >&2
+    return 2
+  fi
+  # Expose the reviewed agent-runtime control identity only to the convergence
+  # child. The child creates a fresh OAuth client for every bracketed probe;
+  # ordinary deploy commands never inherit this credential under a generic
+  # Databricks auth variable.
+  (
+    export MIP_LAKEBASE_BOOTSTRAP_CONTROL_CLIENT_ID="$control_client_id"
+    export MIP_LAKEBASE_BOOTSTRAP_CONTROL_CLIENT_SECRET="$control_client_secret"
+    run_with_account_identity run_with_proof_signing_authority "$@"
+  )
+}
+
+start_proof_signing_heartbeat() {
+  # shellcheck disable=SC2031  # Parent shell retains the unexported authority.
+  local signing_key="${MIP_AI_GATEWAY_PROOF_SIGNING_KEY:-}"
+  echo "${DIM}\$ $* (bounded deployer proof-signing heartbeat)${RST}"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    return 0
+  fi
+  if [[ -z "$signing_key" ]]; then
+    echo "${RED}[deploy] bounded proof-signing authority is missing.${RST}" >&2
+    return 2
+  fi
+  # Launch the external process directly from this shell. Backgrounding the
+  # subshell-based foreground wrapper would make that subshell Python's parent
+  # and invalidate the heartbeat's deployer-PID fence immediately. The
+  # assignment remains scoped to this one child and never enters its argv.
+  MIP_AI_GATEWAY_PROOF_SIGNING_KEY="$signing_key" "$@" &
+  APP_DEPLOYMENT_LEASE_HEARTBEAT_PID=$!
 }
 
 # -----------------------------------------------------------------------------
@@ -242,6 +1931,8 @@ if [[ ! -f .env.local ]]; then
   exit 2
 fi
 
+bind_deployment_workspace_auth
+
 if ! command -v databricks >/dev/null 2>&1; then
   echo "${RED}[deploy] \`databricks\` CLI is not on PATH.${RST}" >&2
   echo "  install: https://docs.databricks.com/en/dev-tools/cli/install.html" >&2
@@ -254,20 +1945,243 @@ echo "  python:     ${PYTHON}"
 echo "  target:     ${TARGET}"
 echo "  dry-run:    ${DRY_RUN}"
 
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  # Unity Catalog model registration validates the uploaded artifact through
+  # the metastore's cloud storage before the version becomes ready. Fail before
+  # the first workspace lookup/mutation when the runtime lacks that AWS
+  # artifact client. Dry-runs intentionally validate config without requiring
+  # the deployment-only Python dependency set.
+  if ! "$PYTHON" -c 'import boto3, mlflow' >/dev/null 2>&1; then
+    echo "${RED}[deploy] MLflow Unity Catalog artifact dependencies are unavailable (mlflow + boto3 required).${RST}" >&2
+    exit 2
+  fi
+  DEPLOY_INVENTORY_PRINCIPAL="$("$PYTHON" - <<'PY'
+from databricks.sdk import WorkspaceClient
+
+from tools.databricks.audit_global_m2m_access import (
+    workspace_admin_inventory_principal,
+)
+
+print(workspace_admin_inventory_principal(WorkspaceClient()))
+PY
+)"
+  if [[ -z "$DEPLOY_INVENTORY_PRINCIPAL" ]]; then
+    echo "${RED}[deploy] workspace-admin inventory preflight returned no principal.${RST}" >&2
+    exit 2
+  fi
+  echo "  inventory:  ${DEPLOY_INVENTORY_PRINCIPAL} (workspace admin)"
+else
+  DEPLOY_INVENTORY_PRINCIPAL="dry-run-deployer@example.invalid"
+fi
+
 if [[ "$DRY_RUN" -eq 0 && "$NO_CONFIRM" -eq 0 ]]; then
-  read -p "About to DEPLOY to the ${TARGET} target. Continue? [y/N] " ans
+  read -r -p "About to DEPLOY to the ${TARGET} target. Continue? [y/N] " ans
   if [[ "$ans" != "y" && "$ans" != "Y" ]]; then
     echo "aborted."
     exit 1
   fi
 fi
 
-# Resolve deployment-scoped controls before any helper can read .env.local.
-# bundle_env.py intentionally ignores stale local MIP_DEFAULT_CATALOG values
-# unless the caller exports one; provision_genie_space.py loads .env.local via
-# python-dotenv, so export the same normalized value here to keep the bundle,
-# SQL renderer, Python jobs, and Genie table bindings pointed at one catalog.
-export MIP_DEFAULT_CATALOG="${MIP_DEFAULT_CATALOG:-mip}"
+# Resolve deployment-scoped controls before any workspace mutation. A reviewed
+# shell export wins; otherwise the documented .env.local value wins; defaults
+# preserve the established Entrada installation. Alias drift still fails.
+MIP_DEFAULT_CATALOG="$(deployment_control_value MIP_DEFAULT_CATALOG mip)"
+MIP_UC_FOREIGN_CATALOG_BINDING_POLICY="$(
+  deployment_control_value MIP_UC_FOREIGN_CATALOG_BINDING_POLICY
+)"
+MIP_APP_NAME="$(deployment_control_value MIP_APP_NAME mip-app)"
+MIP_LENDER_NAME="$(deployment_control_value MIP_LENDER_NAME 'Summit Mortgage')"
+_MIP_LENDER_NMLS_ID="$(deployment_control_value MIP_LENDER_NMLS_ID)"
+_MIP_TENANT_ID="$(deployment_control_value MIP_TENANT_ID)"
+if [[ ! -f backend/schemas/lender_identity.py ]]; then
+  # Isolated shell-contract tests copy only deploy.sh. The only safe fallback
+  # without the source-controlled registry is the exact built-in demo pair.
+  if [[ "$MIP_LENDER_NAME" != "Summit Mortgage" || \
+        ( -n "$_MIP_LENDER_NMLS_ID" && "$_MIP_LENDER_NMLS_ID" != "123456" ) || \
+        ( -n "$_MIP_TENANT_ID" && "$_MIP_TENANT_ID" != "summit" ) ]]; then
+    echo "${RED}[deploy] source-controlled lender identity registry is unavailable.${RST}" >&2
+    exit 2
+  fi
+  _MIP_LENDER_IDENTITY=$'Summit Mortgage\t123456\tsummit'
+elif ! _MIP_LENDER_IDENTITY="$(
+    "$PYTHON" -c '
+import sys
+from backend.schemas.lender_identity import effective_public_tenant_id, validate_public_lender_identity
+lender, nmls = validate_public_lender_identity(sys.argv[1], sys.argv[2])
+tenant = effective_public_tenant_id(sys.argv[3], lender_name=lender)
+print("\t".join((lender, nmls, tenant)))
+' "$MIP_LENDER_NAME" "$_MIP_LENDER_NMLS_ID" "$_MIP_TENANT_ID"
+)"; then
+  echo "${RED}[deploy] lender name, NMLS id, or tenant disclosure namespace is invalid.${RST}" >&2
+  exit 2
+fi
+IFS=$'\t' read -r MIP_LENDER_NAME MIP_LENDER_NMLS_ID MIP_TENANT_ID <<< "$_MIP_LENDER_IDENTITY"
+if [[ -z "$MIP_LENDER_NAME" || -z "$MIP_LENDER_NMLS_ID" || -z "$MIP_TENANT_ID" ]]; then
+  echo "${RED}[deploy] lender disclosure identity did not resolve completely.${RST}" >&2
+  exit 2
+fi
+_LAKEBASE_INSTANCE_NAME="$(deployment_control_value LAKEBASE_INSTANCE_NAME)"
+_MIP_LAKEBASE_INSTANCE="$(deployment_control_value MIP_LAKEBASE_INSTANCE)"
+if [[ -n "$_LAKEBASE_INSTANCE_NAME" && -n "$_MIP_LAKEBASE_INSTANCE" && \
+      "$_LAKEBASE_INSTANCE_NAME" != "$_MIP_LAKEBASE_INSTANCE" ]]; then
+  echo "${RED}[deploy] LAKEBASE_INSTANCE_NAME and MIP_LAKEBASE_INSTANCE must match.${RST}" >&2
+  exit 2
+fi
+MIP_LAKEBASE_INSTANCE="${_MIP_LAKEBASE_INSTANCE:-${_LAKEBASE_INSTANCE_NAME:-mip-app-state}}"
+LAKEBASE_INSTANCE_NAME="$MIP_LAKEBASE_INSTANCE"
+_LAKEBASE_DATABASE="$(deployment_control_value LAKEBASE_DATABASE)"
+_MIP_LAKEBASE_DATABASE_NAME="$(deployment_control_value MIP_LAKEBASE_DATABASE_NAME)"
+if [[ -n "$_LAKEBASE_DATABASE" && -n "$_MIP_LAKEBASE_DATABASE_NAME" && \
+      "$_LAKEBASE_DATABASE" != "$_MIP_LAKEBASE_DATABASE_NAME" ]]; then
+  echo "${RED}[deploy] LAKEBASE_DATABASE and MIP_LAKEBASE_DATABASE_NAME must match.${RST}" >&2
+  exit 2
+fi
+LAKEBASE_DATABASE="${_LAKEBASE_DATABASE:-${_MIP_LAKEBASE_DATABASE_NAME:-mip_app_state}}"
+MIP_LAKEBASE_DATABASE_NAME="$LAKEBASE_DATABASE"
+MIP_LAKEBASE_SYNC_CATALOG="$(deployment_control_value MIP_LAKEBASE_SYNC_CATALOG mip_app_state)"
+MIP_LAKEBASE_SYNC_SCHEMA="$(deployment_control_value MIP_LAKEBASE_SYNC_SCHEMA mip_sync)"
+MIP_LAKEBASE_SYNC_TABLES="$(deployment_control_value MIP_LAKEBASE_SYNC_TABLES 'source_readiness,segment_population,funnel_snapshot_daily')"
+DEPLOYMENT_SYNC_CATALOG="$MIP_LAKEBASE_SYNC_CATALOG"
+DEPLOYMENT_SYNC_SCHEMA="$MIP_LAKEBASE_SYNC_SCHEMA"
+DEPLOYMENT_SYNC_TABLES="$MIP_LAKEBASE_SYNC_TABLES"
+MIP_GENIE_SPACE_NAME="$(deployment_control_value MIP_GENIE_SPACE_NAME 'Mortgage Lead Intelligence')"
+MIP_RUNTIME_SECRET_SCOPE="$(deployment_control_value MIP_RUNTIME_SECRET_SCOPE mip-runtime)"
+MIP_APP_ROLLBACK_SECRET_SCOPE="$(deployment_control_value MIP_APP_ROLLBACK_SECRET_SCOPE mip-app-rollback)"
+MIP_AGENT_PROXY_SECRET_SCOPE="$(
+  deployment_control_value MIP_AGENT_PROXY_SECRET_SCOPE "${MIP_APP_NAME}-agent-proxy"
+)"
+MIP_OTEL_ENDPOINT="$(deployment_control_value MIP_OTEL_ENDPOINT)"
+MIP_OTEL_HEADERS_SECRET_SCOPE="$(deployment_control_value MIP_OTEL_HEADERS_SECRET_SCOPE)"
+MIP_OTEL_HEADERS_SECRET_KEY="$(deployment_control_value MIP_OTEL_HEADERS_SECRET_KEY)"
+_MIP_OTEL_HEADERS_PLAINTEXT="$(deployment_control_value MIP_OTEL_HEADERS)"
+if [[ -n "$_MIP_OTEL_HEADERS_PLAINTEXT" ]]; then
+  unset _MIP_OTEL_HEADERS_PLAINTEXT
+  echo "${RED}[deploy] MIP_OTEL_HEADERS must never be provided as plaintext deploy config; store it in Databricks Secrets.${RST}" >&2
+  exit 2
+fi
+unset _MIP_OTEL_HEADERS_PLAINTEXT
+if [[ -n "$MIP_OTEL_ENDPOINT" || -n "$MIP_OTEL_HEADERS_SECRET_SCOPE" || \
+      -n "$MIP_OTEL_HEADERS_SECRET_KEY" ]]; then
+  if [[ -z "$MIP_OTEL_ENDPOINT" || -z "$MIP_OTEL_HEADERS_SECRET_SCOPE" || \
+        -z "$MIP_OTEL_HEADERS_SECRET_KEY" ]]; then
+    echo "${RED}[deploy] OTLP requires MIP_OTEL_ENDPOINT plus the Databricks Secret scope and key.${RST}" >&2
+    exit 2
+  fi
+  if ! "$PYTHON" - "$MIP_OTEL_ENDPOINT" <<'PYEOF'
+import sys
+from tools.databricks.app_deploy_payload import validated_otel_endpoint
+
+validated_otel_endpoint(sys.argv[1])
+PYEOF
+  then
+    echo "${RED}[deploy] MIP_OTEL_ENDPOINT must be credential-free HTTPS without query or fragment.${RST}" >&2
+    exit 2
+  fi
+  if [[ ! "$MIP_OTEL_HEADERS_SECRET_SCOPE" =~ ^[A-Za-z0-9._-]{1,128}$ || \
+        ! "$MIP_OTEL_HEADERS_SECRET_KEY" =~ ^[A-Za-z0-9._-]{1,128}$ ]]; then
+    echo "${RED}[deploy] OTLP Databricks Secret scope/key names are invalid.${RST}" >&2
+    exit 2
+  fi
+fi
+MIP_DEPLOYMENT_SOURCE_GIT_SHA="$SOURCE_GIT_SHA"
+export MIP_DEFAULT_CATALOG MIP_APP_NAME MIP_LENDER_NAME MIP_LENDER_NMLS_ID MIP_TENANT_ID
+export MIP_DEPLOYMENT_SOURCE_GIT_SHA
+export MIP_UC_FOREIGN_CATALOG_BINDING_POLICY
+export MIP_LAKEBASE_INSTANCE LAKEBASE_INSTANCE_NAME
+export LAKEBASE_DATABASE MIP_LAKEBASE_DATABASE_NAME MIP_LAKEBASE_SYNC_CATALOG
+export MIP_LAKEBASE_SYNC_SCHEMA MIP_LAKEBASE_SYNC_TABLES
+export MIP_GENIE_SPACE_NAME MIP_RUNTIME_SECRET_SCOPE MIP_APP_ROLLBACK_SECRET_SCOPE
+export MIP_AGENT_PROXY_SECRET_SCOPE
+export MIP_OTEL_ENDPOINT MIP_OTEL_HEADERS_SECRET_SCOPE MIP_OTEL_HEADERS_SECRET_KEY
+OTEL_RESOURCE_BINDING_ARGS=()
+OTEL_DEPLOY_PAYLOAD_ARGS=()
+if [[ -n "$MIP_OTEL_ENDPOINT" ]]; then
+  OTEL_RESOURCE_BINDING_ARGS=(
+    --otel-header-secret-scope "$MIP_OTEL_HEADERS_SECRET_SCOPE"
+    --otel-header-secret-key "$MIP_OTEL_HEADERS_SECRET_KEY"
+  )
+  OTEL_DEPLOY_PAYLOAD_ARGS=(
+    --otel-endpoint "$MIP_OTEL_ENDPOINT"
+    --otel-header-resource otel_headers
+  )
+fi
+APP_ROLLBACK_SECRET_SCOPE="$MIP_APP_ROLLBACK_SECRET_SCOPE"
+if [[ ! "$MIP_APP_NAME" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; then
+  echo "${RED}[deploy] MIP_APP_NAME must be a lowercase DNS-style name.${RST}" >&2
+  exit 2
+fi
+if [[ "$MIP_AGENT_PROXY_SECRET_SCOPE" != "${MIP_APP_NAME}-agent-proxy" ]]; then
+  echo "${RED}[deploy] MIP_AGENT_PROXY_SECRET_SCOPE must be the deterministic App-bound scope '${MIP_APP_NAME}-agent-proxy'.${RST}" >&2
+  exit 2
+fi
+_EXPECTED_APP_ROLLBACK_SECRET_SCOPE="$("$PYTHON" - "$MIP_APP_NAME" <<'PYEOF'
+import sys
+
+name = sys.argv[1]
+if name.endswith("-app"):
+    print(f"{name}-rollback")
+elif "-app-" in name:
+    prefix, suffix = name.rsplit("-app-", 1)
+    print(f"{prefix}-app-rollback-{suffix}")
+else:
+    print(f"{name}-rollback")
+PYEOF
+)"
+if [[ "$MIP_APP_ROLLBACK_SECRET_SCOPE" != "$_EXPECTED_APP_ROLLBACK_SECRET_SCOPE" ]]; then
+  echo "${RED}[deploy] MIP_APP_ROLLBACK_SECRET_SCOPE must be the deterministic App-bound scope '${_EXPECTED_APP_ROLLBACK_SECRET_SCOPE}'.${RST}" >&2
+  exit 2
+fi
+if [[ ! "$MIP_LAKEBASE_INSTANCE" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; then
+  echo "${RED}[deploy] MIP_LAKEBASE_INSTANCE must be a lowercase DNS-style name.${RST}" >&2
+  exit 2
+fi
+if [[ ! "$MIP_DEFAULT_CATALOG" =~ ^[a-z_][a-z0-9_]{0,254}$ || \
+      ! "$MIP_LAKEBASE_SYNC_CATALOG" =~ ^[a-z_][a-z0-9_]{0,254}$ || \
+      ! "$MIP_LAKEBASE_SYNC_SCHEMA" =~ ^[a-z_][a-z0-9_]{0,254}$ || \
+      ! "$LAKEBASE_DATABASE" =~ ^[a-z_][a-z0-9_]{0,254}$ ]]; then
+  echo "${RED}[deploy] UC/Lakebase catalog, schema, and database must be lowercase unquoted identifiers.${RST}" >&2
+  exit 2
+fi
+if ! "$PYTHON" - "$MIP_LAKEBASE_SYNC_TABLES" <<'PYEOF'
+import re
+import sys
+
+names = sys.argv[1].split(",")
+valid = re.compile(r"^[a-z_][a-z0-9_]{0,254}$").fullmatch
+raise SystemExit(0 if names and len(names) == len(set(names)) and all(valid(name) for name in names) else 1)
+PYEOF
+then
+  echo "${RED}[deploy] MIP_LAKEBASE_SYNC_TABLES must be a unique comma-separated list of lowercase unquoted identifiers.${RST}" >&2
+  exit 2
+fi
+if [[ ! "$MIP_RUNTIME_SECRET_SCOPE" =~ ^[A-Za-z0-9._-]{1,128}$ || \
+      ! "$MIP_APP_ROLLBACK_SECRET_SCOPE" =~ ^[A-Za-z0-9._-]{1,128}$ || \
+      ! "$MIP_AGENT_PROXY_SECRET_SCOPE" =~ ^[A-Za-z0-9._-]{1,128}$ ]]; then
+  echo "${RED}[deploy] Databricks secret-scope names are invalid.${RST}" >&2
+  exit 2
+fi
+export BUNDLE_VAR_app_name="$MIP_APP_NAME"
+export BUNDLE_VAR_lender_name="$MIP_LENDER_NAME"
+export BUNDLE_VAR_lender_nmls_id="$MIP_LENDER_NMLS_ID"
+export BUNDLE_VAR_tenant_id="$MIP_TENANT_ID"
+export BUNDLE_VAR_lakebase_instance_name="$MIP_LAKEBASE_INSTANCE"
+export BUNDLE_VAR_lakebase_catalog_name="$MIP_LAKEBASE_SYNC_CATALOG"
+export BUNDLE_VAR_lakebase_database_name="$LAKEBASE_DATABASE"
+_UC_APPROVED_OWNERS="${MIP_UC_APPROVED_OWNER_PRINCIPALS:-}"
+if [[ -z "$_UC_APPROVED_OWNERS" ]]; then
+  _UC_APPROVED_OWNERS="$(dotenv_value MIP_UC_APPROVED_OWNER_PRINCIPALS)"
+fi
+export MIP_UC_APPROVED_OWNER_PRINCIPALS="$_UC_APPROVED_OWNERS"
+for _ACCOUNT_AUTH_NAME in DATABRICKS_ACCOUNT_HOST DATABRICKS_ACCOUNT_ID; do
+  resolve_m2m_credential "$_ACCOUNT_AUTH_NAME"
+done
+resolve_m2m_credential DATABRICKS_ACCOUNT_CLIENT_ID shell
+resolve_m2m_credential DATABRICKS_ACCOUNT_CLIENT_SECRET shell
+resolve_m2m_credential DATABRICKS_OPERATOR2_CLIENT_ID shell
+if [[ -z "$DATABRICKS_ACCOUNT_HOST" ]]; then
+  DATABRICKS_ACCOUNT_HOST="https://accounts.cloud.databricks.com"
+  export DATABRICKS_ACCOUNT_HOST
+fi
 
 # Admin-allowlist visibility check (2026-06-11, observed live). Databricks
 # Apps deployment env_vars are a FULL REPLACEMENT, `admin_emails` defaults to
@@ -305,15 +2219,42 @@ if [[ -z "$APP_RUNTIME_ENV" ]]; then
     APP_RUNTIME_ENV="$TARGET"
   fi
 fi
-APP_GIT_SHA="$(git rev-parse HEAD 2>/dev/null || true)"
+APP_GIT_SHA="$SOURCE_GIT_SHA"
 
-# Cotality ID-mask HMAC visibility check (audit P3, 2026-06-11). When
-# MIP_COTALITY_ID_MASK_SECRET is unset, backend/services/pii_redaction.py
-# falls back to a source-committed constant — masked IDs are still stable,
-# but anyone with repo access can recompute the mapping. Fine for the
-# synthetic-data sandbox; never acceptable for a customer deploy. Runtime
-# local/dev/sandbox keeps the warning path; customer/prod runtime envs fail
-# before mutating the app.
+# Campaign/Genie confirmation tokens must remain verifiable across app
+# restarts and replicas. Every deployed runtime, including the shared sandbox,
+# requires an operator-owned current secret. Process-local and generated-file
+# keys are allowed only by the backend's local/test runtime paths.
+_GENIE_ACTION_SECRET_RESOLVED="${MIP_GENIE_ACTION_SECRET_CURRENT:-}"
+if [[ -z "$_GENIE_ACTION_SECRET_RESOLVED" ]]; then
+  _GENIE_ACTION_SECRET_RESOLVED="$(dotenv_value MIP_GENIE_ACTION_SECRET_CURRENT)"
+fi
+_GENIE_ACTION_SECRET_NORMALIZED="$(printf '%s' "$_GENIE_ACTION_SECRET_RESOLVED" | tr '[:upper:]' '[:lower:]')"
+case "$_GENIE_ACTION_SECRET_NORMALIZED" in
+  ""|redacted|changeme|change-me|change_me|placeholder|example|your-secret|your_secret)
+    _GENIE_ACTION_SECRET_RESOLVED=""
+    ;;
+esac
+if [[ "$_GENIE_ACTION_SECRET_NORMALIZED" == \<*\> ]]; then
+  _GENIE_ACTION_SECRET_RESOLVED=""
+fi
+if [[ -z "$_GENIE_ACTION_SECRET_RESOLVED" ]]; then
+  if [[ "$APP_RUNTIME_ENV" != "local" && "$APP_RUNTIME_ENV" != "test" ]]; then
+    echo "${RED}[deploy] ERROR: MIP_GENIE_ACTION_SECRET_CURRENT is required for target '$TARGET' (APP_ENV=${APP_RUNTIME_ENV}).${RST}" >&2
+    echo "${RED}  Deployed confirmation and campaign-provenance tokens require a stable, deployment-scoped HMAC key.${RST}" >&2
+    exit 1
+  fi
+  echo "${YLW}[deploy] WARNING: local/test runtime will use its non-durable compatibility key.${RST}" >&2
+else
+  echo "  genie/campaign HMAC: configured"
+fi
+if [[ -n "$_GENIE_ACTION_SECRET_RESOLVED" ]]; then
+  export MIP_GENIE_ACTION_SECRET_CURRENT="$_GENIE_ACTION_SECRET_RESOLVED"
+fi
+
+# Cotality ID-mask HMAC visibility check. The source-known compatibility
+# namespace is local/test-only; sandbox and customer runtimes fail before any
+# app mutation unless the operator supplies a durable deployment-scoped key.
 _ID_MASK_RESOLVED="${MIP_COTALITY_ID_MASK_SECRET:-$("$PYTHON" - <<'PYEOF'
 from pathlib import Path
 try:
@@ -334,56 +2275,755 @@ if [[ "$_ID_MASK_NORMALIZED" == \<*\> ]]; then
   _ID_MASK_RESOLVED=""
 fi
 if [[ -z "$_ID_MASK_RESOLVED" ]]; then
-  if [[ "$APP_RUNTIME_ENV" != "local" && "$APP_RUNTIME_ENV" != "dev" && "$APP_RUNTIME_ENV" != "sandbox" ]]; then
+  if [[ "$APP_RUNTIME_ENV" != "local" && "$APP_RUNTIME_ENV" != "test" ]]; then
     echo "${RED}[deploy] ERROR: MIP_COTALITY_ID_MASK_SECRET is required for target '$TARGET' (APP_ENV=${APP_RUNTIME_ENV}).${RST}" >&2
-    echo "${RED}  Customer/non-sandbox runtime deployments must use a deployment-scoped HMAC secret;${RST}" >&2
-    echo "${RED}  the source-committed fallback is allowed only for the dev sandbox.${RST}" >&2
+    echo "${RED}  Deployed runtimes must use a deployment-scoped HMAC secret;${RST}" >&2
+    echo "${RED}  the source-known compatibility namespace is allowed only for local/test.${RST}" >&2
     exit 1
   fi
   echo "${YLW}[deploy] WARNING: MIP_COTALITY_ID_MASK_SECRET is not set (env or .env.local).${RST}" >&2
-  echo "${YLW}  Cotality ID masking will use the source-committed fallback constant —${RST}" >&2
-  echo "${YLW}  acceptable for the synthetic-data sandbox, NOT for customer deploys.${RST}" >&2
+  echo "${YLW}  Cotality ID masking will use the local/test compatibility namespace.${RST}" >&2
 else
   echo "  cotality id-mask secret: configured"
 fi
-
-# -----------------------------------------------------------------------------
-# Step 0a: ensure the bundle has a real Genie space id before app resource apply
-# -----------------------------------------------------------------------------
-# The app resource binding validates the Genie space during
-# `databricks bundle deploy`. If GENIE_SPACE_ID is blank, the bundle default
-# `00000000PLACEHOLDER` can reach Databricks and return the opaque
-# error "You need Can View permission to perform this action." Provisioning the
-# space here makes the first real app update deterministic. We re-run the same
-# provisioner after gold refresh below so the space picks up newly-materialized
-# trusted assets.
-GENIE_SPACE_ID_FROM_ENV="${GENIE_SPACE_ID:-}"
-if ! is_real_bundle_value "$GENIE_SPACE_ID_FROM_ENV"; then
-  GENIE_SPACE_ID_FROM_ENV="$(dotenv_value GENIE_SPACE_ID)"
+if [[ -n "$_ID_MASK_RESOLVED" ]]; then
+  export MIP_COTALITY_ID_MASK_SECRET="$_ID_MASK_RESOLVED"
 fi
 
-if ! is_real_bundle_value "$GENIE_SPACE_ID_FROM_ENV"; then
-  step "provision Genie space before bundle deploy (first-run app binding)"
-  run "$PYTHON" tools/databricks/provision_genie_space.py --no-smoke-test
-  if [[ "$DRY_RUN" -eq 0 ]]; then
-    if [[ ! -s genie/space_id.txt ]]; then
-      echo "${RED}[deploy] Genie provisioner did not write genie/space_id.txt.${RST}" >&2
-      exit 2
-    fi
-    export GENIE_SPACE_ID="$(< genie/space_id.txt)"
+# Exact AI Gateway proof rows use verifier-only Ed25519 signatures. The App
+# receives only the derived public key, so the Lakebase proof-writer credential
+# cannot manufacture a claimable row by itself.
+# shellcheck disable=SC2031  # Parent-shell secret is unchanged by M2M subshells.
+_AI_GATEWAY_PROOF_PREVIOUS_KEY_RESOLVED="${MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY:-}"
+if [[ -z "$_AI_GATEWAY_PROOF_PREVIOUS_KEY_RESOLVED" ]]; then
+  _AI_GATEWAY_PROOF_PREVIOUS_KEY_RESOLVED="$(dotenv_value MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY)"
+fi
+if [[ -n "$_AI_GATEWAY_PROOF_PREVIOUS_KEY_RESOLVED" ]]; then
+  # shellcheck disable=SC2031  # Intentional parent-shell restoration.
+  export MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY="$_AI_GATEWAY_PROOF_PREVIOUS_KEY_RESOLVED"
+fi
+# shellcheck disable=SC2031  # Intentional parent-shell restoration.
+_AI_GATEWAY_PROOF_HISTORICAL_KEYS_RESOLVED="${MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS:-}"
+if [[ -z "$_AI_GATEWAY_PROOF_HISTORICAL_KEYS_RESOLVED" ]]; then
+  _AI_GATEWAY_PROOF_HISTORICAL_KEYS_RESOLVED="$(dotenv_value MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS)"
+fi
+if [[ -n "$_AI_GATEWAY_PROOF_HISTORICAL_KEYS_RESOLVED" ]]; then
+  # shellcheck disable=SC2031  # Intentional parent-shell restoration.
+  export MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS="$_AI_GATEWAY_PROOF_HISTORICAL_KEYS_RESOLVED"
+fi
+# shellcheck disable=SC2031  # Intentional parent-shell restoration.
+_AI_GATEWAY_PROOF_SIGNING_KEY_RESOLVED="${MIP_AI_GATEWAY_PROOF_SIGNING_KEY:-}"
+if [[ -z "$_AI_GATEWAY_PROOF_SIGNING_KEY_RESOLVED" ]]; then
+  _AI_GATEWAY_PROOF_SIGNING_KEY_RESOLVED="$(dotenv_value MIP_AI_GATEWAY_PROOF_SIGNING_KEY)"
+fi
+if [[ -z "$_AI_GATEWAY_PROOF_SIGNING_KEY_RESOLVED" ]]; then
+  if [[ "$APP_RUNTIME_ENV" != "local" && "$APP_RUNTIME_ENV" != "test" ]]; then
+    echo "${RED}[deploy] ERROR: MIP_AI_GATEWAY_PROOF_SIGNING_KEY is required for target '$TARGET' (APP_ENV=${APP_RUNTIME_ENV}).${RST}" >&2
+    echo "${RED}  AI Gateway exact-row proof requires a verifier-only Ed25519 key.${RST}" >&2
+    exit 1
   fi
 else
-  export GENIE_SPACE_ID="$GENIE_SPACE_ID_FROM_ENV"
+  # shellcheck disable=SC2031
+  MIP_AI_GATEWAY_PROOF_SIGNING_KEY="$_AI_GATEWAY_PROOF_SIGNING_KEY_RESOLVED"
+  export -n MIP_AI_GATEWAY_PROOF_SIGNING_KEY
+  if ! MIP_AI_GATEWAY_PROOF_VERIFY_KEY="$(
+    MIP_AI_GATEWAY_PROOF_SIGNING_KEY="$MIP_AI_GATEWAY_PROOF_SIGNING_KEY" \
+      "$PYTHON" - <<'PYEOF'
+import os
+from backend.services.ai_gateway_proof_attestation import derive_gateway_proof_verify_key
+
+print(derive_gateway_proof_verify_key(os.environ["MIP_AI_GATEWAY_PROOF_SIGNING_KEY"]))
+PYEOF
+  )"; then
+    echo "${RED}[deploy] ERROR: MIP_AI_GATEWAY_PROOF_SIGNING_KEY is invalid.${RST}" >&2
+    exit 1
+  fi
+  export MIP_AI_GATEWAY_PROOF_VERIFY_KEY
+  echo "  AI Gateway proof attestation: verifier private key / runtime public key configured"
 fi
+
+# Proxy-model provenance uses a distinct release-signing key. The runtime
+# receives this private key only for the bounded model registration command;
+# it never receives the verifier-only inference-row proof key.
+# The previous public key is safe to load from local configuration and must
+# accompany the current key through provisioning so rotations remain verifiable.
+# shellcheck disable=SC2031  # Parent-shell value is intentionally restored.
+_GATEWAY_MODEL_PREVIOUS_KEY_RESOLVED="${MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY:-}"
+if [[ -z "$_GATEWAY_MODEL_PREVIOUS_KEY_RESOLVED" ]]; then
+  _GATEWAY_MODEL_PREVIOUS_KEY_RESOLVED="$(
+    dotenv_value MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY
+  )"
+fi
+if [[ -n "$_GATEWAY_MODEL_PREVIOUS_KEY_RESOLVED" ]]; then
+  export MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY="$(
+    printf '%s' "$_GATEWAY_MODEL_PREVIOUS_KEY_RESOLVED"
+  )"
+fi
+# shellcheck disable=SC2031  # Parent-shell secret is unchanged by M2M subshells.
+_GATEWAY_MODEL_SIGNING_KEY_RESOLVED="${MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY:-}"
+if [[ -z "$_GATEWAY_MODEL_SIGNING_KEY_RESOLVED" ]]; then
+  _GATEWAY_MODEL_SIGNING_KEY_RESOLVED="$(
+    dotenv_value MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY
+  )"
+fi
+if [[ -z "$_GATEWAY_MODEL_SIGNING_KEY_RESOLVED" ]]; then
+  if [[ "$APP_RUNTIME_ENV" != "local" && "$APP_RUNTIME_ENV" != "test" ]]; then
+    echo "${RED}[deploy] ERROR: MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY is required for target '$TARGET' (APP_ENV=${APP_RUNTIME_ENV}).${RST}" >&2
+    exit 1
+  fi
+else
+  # shellcheck disable=SC2031
+  MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY="$_GATEWAY_MODEL_SIGNING_KEY_RESOLVED"
+  export -n MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY
+  if ! MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY="$(
+    MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY="$MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY" \
+      "$PYTHON" - <<'PYEOF'
+import os
+from backend.services.ai_gateway_proof_attestation import derive_gateway_proof_verify_key
+
+print(derive_gateway_proof_verify_key(
+    os.environ["MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY"]
+))
+PYEOF
+  )"; then
+    echo "${RED}[deploy] ERROR: MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY is invalid.${RST}" >&2
+    exit 1
+  fi
+  export MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY
+  if [[ -n "${MIP_AI_GATEWAY_PROOF_VERIFY_KEY:-}" && \
+        "$MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY" == \
+        "$MIP_AI_GATEWAY_PROOF_VERIFY_KEY" ]]; then
+    echo "${RED}[deploy] ERROR: model-attestation and verifier-proof keys must be distinct.${RST}" >&2
+    exit 1
+  fi
+  echo "  Gateway model attestation: separated model-provenance key configured"
+fi
+
+# App-facing, release-probe, and agent-runtime automation use separated
+# long-lived client credentials but no stored bearer tokens. Normal/admin
+# tokens are minted per run; a quarantined rebase uses only the dedicated
+# release-probe token until signed capture. The verifier client is used only
+# for deployment-side Gateway proof writes and is not a member of mip-admin.
+if [[ "${MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS:-0}" == "1" && \
+      "${MIP_REBASE_UNVERIFIED_APP:-0}" == "1" ]]; then
+  echo "${RED}[deploy] foreign-catalog remediation cannot be combined with unsigned App rebase.${RST}" >&2
+  exit 4
+fi
+for _M2M_NAME in \
+  DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET \
+  DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_ADMIN_CLIENT_SECRET \
+  DATABRICKS_RELEASE_PROBE_CLIENT_ID DATABRICKS_RELEASE_PROBE_CLIENT_SECRET \
+  DATABRICKS_VERIFIER_CLIENT_ID DATABRICKS_VERIFIER_CLIENT_SECRET \
+  DATABRICKS_AGENT_RUNTIME_CLIENT_ID DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET \
+  DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE; do
+  resolve_m2m_credential "$_M2M_NAME" shell
+done
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  # Dry-run fixtures may provide public planning values without usable secret
+  # material. Live deployment deliberately ignores these legacy sources.
+  for _M2M_NAME in \
+    DATABRICKS_AGENT_PROXY_CLIENT_ID DATABRICKS_AGENT_PROXY_CREDENTIAL_ID; do
+    resolve_m2m_credential "$_M2M_NAME" shell
+  done
+else
+  DATABRICKS_AGENT_PROXY_CLIENT_ID=""
+  DATABRICKS_AGENT_PROXY_CREDENTIAL_ID=""
+  DATABRICKS_AGENT_PROXY_CLIENT_SECRET=""
+fi
+if [[ "$DRY_RUN" -eq 0 && -n "$DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE" ]]; then
+  if ! _AGENT_PROXY_BUNDLE_FIELDS="$(
+    DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE="$DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE" \
+      "$PYTHON" -m tools.databricks.agent_proxy_credential_bundle all-fields
+  )"; then
+    echo "${RED}[deploy] ERROR: agent-proxy credential bundle is invalid.${RST}" >&2
+    exit 1
+  fi
+  IFS=$'\t' read -r DATABRICKS_AGENT_PROXY_CLIENT_ID \
+    DATABRICKS_AGENT_PROXY_CREDENTIAL_ID DATABRICKS_AGENT_PROXY_CLIENT_SECRET \
+    <<< "$_AGENT_PROXY_BUNDLE_FIELDS"
+  unset _AGENT_PROXY_BUNDLE_FIELDS
+  export -n DATABRICKS_AGENT_PROXY_CLIENT_SECRET \
+    DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE 2>/dev/null || true
+fi
+_GRANTS_APP_NAME="${MIP_APP_NAME:-mip-app}"
+_OAUTH_RECOVERY_VALUES=(
+  "${MIP_OAUTH_CREDENTIAL_RECOVERY_INTENT_PATH:-}"
+  "${MIP_OAUTH_CREDENTIAL_RECOVERY_PRINCIPAL_ID:-}"
+  "${MIP_OAUTH_CREDENTIAL_RECOVERY_AUTHORITY_IDENTITY:-}"
+  "${MIP_OAUTH_CREDENTIAL_RECOVERY_PROVIDER_API:-}"
+)
+_OAUTH_ORPHAN_RECOVERY_VALUES=(
+  "${MIP_OAUTH_CREDENTIAL_ORPHAN_LEASE_ID:-}"
+  "${MIP_OAUTH_CREDENTIAL_ORPHAN_RECOVERY_ROOT_LEASE_ID:-}"
+)
+_OAUTH_RECOVERY_VALUE_COUNT=0
+for _OAUTH_RECOVERY_VALUE in "${_OAUTH_RECOVERY_VALUES[@]}"; do
+  if [[ -n "$_OAUTH_RECOVERY_VALUE" ]]; then
+    _OAUTH_RECOVERY_VALUE_COUNT=$((_OAUTH_RECOVERY_VALUE_COUNT + 1))
+  fi
+done
+_OAUTH_ORPHAN_RECOVERY_VALUE_COUNT=0
+for _OAUTH_ORPHAN_RECOVERY_VALUE in "${_OAUTH_ORPHAN_RECOVERY_VALUES[@]}"; do
+  if [[ -n "$_OAUTH_ORPHAN_RECOVERY_VALUE" ]]; then
+    _OAUTH_ORPHAN_RECOVERY_VALUE_COUNT=$((_OAUTH_ORPHAN_RECOVERY_VALUE_COUNT + 1))
+  fi
+done
+if [[ "$_OAUTH_RECOVERY_VALUE_COUNT" -ne 0 && \
+      "$_OAUTH_RECOVERY_VALUE_COUNT" -ne 4 ]]; then
+  echo "${RED}[deploy] OAuth credential recovery requires intent path, principal id, authority identity, and provider API together.${RST}" >&2
+  exit 4
+fi
+if [[ "$_OAUTH_ORPHAN_RECOVERY_VALUE_COUNT" -ne 0 && \
+      "$_OAUTH_ORPHAN_RECOVERY_VALUE_COUNT" -ne 2 ]]; then
+  echo "${RED}[deploy] OAuth credential orphan-lease recovery requires lease id and recovery-root lease id together.${RST}" >&2
+  exit 4
+fi
+if [[ "$_OAUTH_RECOVERY_VALUE_COUNT" -ne 0 && \
+      "$_OAUTH_ORPHAN_RECOVERY_VALUE_COUNT" -ne 0 ]]; then
+  echo "${RED}[deploy] OAuth credential intent recovery and orphan-lease recovery are mutually exclusive.${RST}" >&2
+  exit 4
+fi
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  _M2M_MISSING=""
+  for _M2M_NAME in \
+    DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET \
+    DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_ADMIN_CLIENT_SECRET \
+    DATABRICKS_RELEASE_PROBE_CLIENT_ID DATABRICKS_RELEASE_PROBE_CLIENT_SECRET \
+    DATABRICKS_VERIFIER_CLIENT_ID DATABRICKS_VERIFIER_CLIENT_SECRET \
+    DATABRICKS_AGENT_RUNTIME_CLIENT_ID DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET \
+    DATABRICKS_AGENT_PROXY_CLIENT_ID DATABRICKS_AGENT_PROXY_CLIENT_SECRET \
+    DATABRICKS_AGENT_PROXY_CREDENTIAL_ID DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE \
+    DATABRICKS_ACCOUNT_HOST DATABRICKS_ACCOUNT_ID \
+    DATABRICKS_ACCOUNT_CLIENT_ID DATABRICKS_ACCOUNT_CLIENT_SECRET; do
+    if [[ -z "${!_M2M_NAME:-}" ]]; then
+      _M2M_MISSING="${_M2M_MISSING} ${_M2M_NAME}"
+    fi
+  done
+  if [[ -n "$_M2M_MISSING" ]]; then
+    echo "${RED}[deploy] ERROR: missing required per-run M2M credential(s):${_M2M_MISSING}.${RST}" >&2
+    exit 1
+  fi
+  # shellcheck disable=SC2031  # Bounded account subshell does not change parent value.
+  if [[ -n "$DATABRICKS_ACCOUNT_CLIENT_ID" ]]; then
+    for _SEPARATED_CLIENT_ENV in \
+      DATABRICKS_CLIENT_ID DATABRICKS_OPERATOR2_CLIENT_ID \
+      DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_RELEASE_PROBE_CLIENT_ID \
+      DATABRICKS_VERIFIER_CLIENT_ID \
+      DATABRICKS_AGENT_RUNTIME_CLIENT_ID \
+      DATABRICKS_AGENT_PROXY_CLIENT_ID; do
+      if [[ -n "${!_SEPARATED_CLIENT_ENV:-}" ]] && \
+         same_identity_casefold \
+           "$DATABRICKS_ACCOUNT_CLIENT_ID" "${!_SEPARATED_CLIENT_ENV}"; then
+        echo "${RED}[deploy] ERROR: account-SCIM OAuth client must be distinct from ${_SEPARATED_CLIENT_ENV}.${RST}" >&2
+        exit 1
+      fi
+    done
+  fi
+  # run_as_m2m_identity changes DATABRICKS_CLIENT_ID only in a subshell.
+  # shellcheck disable=SC2031
+  if ! "$PYTHON" - \
+    "$DATABRICKS_CLIENT_ID" "$DATABRICKS_OPERATOR2_CLIENT_ID" \
+    "$DATABRICKS_ADMIN_CLIENT_ID" "$DATABRICKS_RELEASE_PROBE_CLIENT_ID" \
+    "$DATABRICKS_VERIFIER_CLIENT_ID" \
+    "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+    "$DATABRICKS_AGENT_PROXY_CLIENT_ID" \
+    "$DATABRICKS_ACCOUNT_CLIENT_ID" <<'PYEOF'
+import sys
+
+values = [value.strip().casefold() for value in sys.argv[1:-1]]
+account_client_id = sys.argv[-1].strip().casefold()
+raise SystemExit(
+    0
+    if (
+        all(values)
+        and len(values) == len(set(values))
+        and account_client_id
+        and account_client_id not in values
+    )
+    else 1
+)
+PYEOF
+  then
+    echo "${RED}[deploy] ERROR: normal, operator2, admin, release-probe, verifier, agent-runtime, and agent-proxy M2M client IDs must be pairwise distinct, and account-SCIM must be distinct from all of them.${RST}" >&2
+    exit 1
+  fi
+  _CONFIGURED_ADMIN_IDENTITIES="$(deployment_control_value MIP_ADMIN_IDENTITIES)"
+  MIP_ADMIN_IDENTITIES="$("$PYTHON" - \
+    "$_CONFIGURED_ADMIN_IDENTITIES" \
+    "$DATABRICKS_ADMIN_CLIENT_ID" \
+    "$DATABRICKS_RELEASE_PROBE_CLIENT_ID" <<'PYEOF'
+import sys
+
+configured, admin_id, release_probe_id = sys.argv[1:]
+values = []
+for candidate in (*configured.split(","), admin_id, release_probe_id):
+    value = candidate.strip()
+    if value and value not in values:
+        values.append(value)
+print(",".join(values))
+PYEOF
+)"
+  export MIP_ADMIN_IDENTITIES
+  export MIP_AI_GATEWAY_VERIFIER_CLIENT_ID="$DATABRICKS_VERIFIER_CLIENT_ID"
+  export BUNDLE_VAR_ai_gateway_verifier_client_id="$DATABRICKS_VERIFIER_CLIENT_ID"
+  # The signed lease is the first persistent workspace mutation. A contender
+  # must lose here before it can revoke stale grants or alter shared resources.
+  APP_LEASE_RECOVERY_ENV="$(mktemp -t mip-app-lease-recovery.XXXXXX.env)"
+  chmod 600 "$APP_LEASE_RECOVERY_ENV"
+  run_with_proof_signing_authority \
+    "$PYTHON" -m tools.databricks.app_deployment_lease recovery-root \
+    --app-name "$_GRANTS_APP_NAME" \
+    --out-env "$APP_LEASE_RECOVERY_ENV"
+  set -a
+  # shellcheck disable=SC1090
+  . "$APP_LEASE_RECOVERY_ENV"
+  set +a
+  _APP_EXPIRED_LEASE_RECOVERY_ARGS=()
+  if [[ -n "${MIP_APP_DEPLOYMENT_RECOVERY_ROOT:-}" ]]; then
+    _APP_EXPIRED_LEASE_RECOVERY_ARGS=(
+      --expired-recovery-lease-id "$MIP_APP_DEPLOYMENT_RECOVERY_ROOT"
+    )
+  fi
+  APP_DEPLOYMENT_LEASE_ENV="$(mktemp -t mip-app-deployment-lease.XXXXXX.env)"
+  step "acquire signed workspace lease for the exact App deployment"
+  run_with_proof_signing_authority \
+    "$PYTHON" -m tools.databricks.app_deployment_lease acquire \
+    --app-name "$_GRANTS_APP_NAME" \
+    --source-git-sha "$SOURCE_GIT_SHA" \
+    --writer-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+    "${_APP_EXPIRED_LEASE_RECOVERY_ARGS[@]}" \
+    --out-env "$APP_DEPLOYMENT_LEASE_ENV"
+  set -a
+  # shellcheck disable=SC1090
+  . "$APP_DEPLOYMENT_LEASE_ENV"
+  set +a
+  APP_DEPLOYMENT_LEASE_ID="${MIP_APP_DEPLOYMENT_LEASE_ID:?lease acquisition returned no id}"
+  export MIP_APP_DEPLOYMENT_LEASE_ID
+  OAUTH_CREDENTIAL_QUARANTINE_FILE="$(
+    mktemp -t mip-oauth-credential-quarantine.XXXXXX
+  )"
+  chmod 600 "$OAUTH_CREDENTIAL_QUARANTINE_FILE"
+  export MIP_OAUTH_CREDENTIAL_QUARANTINE_FILE="$OAUTH_CREDENTIAL_QUARANTINE_FILE"
+  start_proof_signing_heartbeat \
+    "$PYTHON" -m tools.databricks.app_deployment_lease heartbeat \
+    --app-name "$_GRANTS_APP_NAME" \
+    --source-git-sha "$SOURCE_GIT_SHA" \
+    --lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+    --parent-pid "$$"
+  if [[ -n "${MIP_OAUTH_CREDENTIAL_ORPHAN_LEASE_ID:-}" ]]; then
+    step "recover the explicitly confirmed orphan OAuth credential lease"
+    run_with_proof_signing_authority \
+      "$PYTHON" -m tools.databricks.oauth_credential_recovery_cli \
+      recover-orphan-lease \
+      --confirm-lease-id "$MIP_OAUTH_CREDENTIAL_ORPHAN_LEASE_ID" \
+      --confirm-recovery-root-lease-id \
+        "$MIP_OAUTH_CREDENTIAL_ORPHAN_RECOVERY_ROOT_LEASE_ID"
+  fi
+  if [[ -n "${MIP_OAUTH_CREDENTIAL_RECOVERY_INTENT_PATH:-}" ]]; then
+    step "recover the explicitly confirmed interrupted OAuth credential intent"
+    run_with_account_identity run_with_proof_signing_authority \
+      "$PYTHON" -m tools.databricks.oauth_credential_recovery_cli recover \
+      --intent-path "$MIP_OAUTH_CREDENTIAL_RECOVERY_INTENT_PATH" \
+      --confirm-principal-id "$MIP_OAUTH_CREDENTIAL_RECOVERY_PRINCIPAL_ID" \
+      --confirm-authority-identity \
+        "$MIP_OAUTH_CREDENTIAL_RECOVERY_AUTHORITY_IDENTITY" \
+      --confirm-provider-api "$MIP_OAUTH_CREDENTIAL_RECOVERY_PROVIDER_API"
+  fi
+  step "prove or create the deterministic owned App rollback secret scope"
+  run "$PYTHON" -m tools.databricks.app_rollback_secret_scope ensure \
+    --app-name "$_GRANTS_APP_NAME" \
+    --scope "$APP_ROLLBACK_SECRET_SCOPE"
+  # Inventory and separate the immutable target before the account credential
+  # can resolve owners, recover roles, or authorize any App-addressed action.
+  _EXISTING_APPS_JSON="$(databricks apps list -o json)"
+  _EXISTING_APP_IDENTITY="$(printf '%s' "$_EXISTING_APPS_JSON" | "$PYTHON" -c '
+import json, os, sys
+items = json.load(sys.stdin)
+name = os.environ.get("MIP_APP_NAME", "mip-app")
+matches = [item for item in items if str(item.get("name") or "") == name]
+if len(matches) > 1:
+    raise SystemExit(f"multiple Databricks Apps named {name!r}")
+if not matches:
+    print("absent")
+else:
+    values = tuple(str(matches[0].get(field) or "").strip() for field in (
+        "id", "service_principal_client_id", "service_principal_id"
+    ))
+    if not all(values) or any(any(char.isspace() for char in value) for value in values):
+        raise SystemExit(f"existing Databricks App {name!r} has incomplete identity")
+    print("\t".join(values))
+')"
+  _EXISTING_APP_ID=""
+  _EXISTING_APP_SP_CLIENT_ID=""
+  _EXISTING_APP_SP_SCIM_ID=""
+  if [[ "$_EXISTING_APP_IDENTITY" != "absent" ]]; then
+    IFS=$'\t' read -r \
+      _EXISTING_APP_ID _EXISTING_APP_SP_CLIENT_ID _EXISTING_APP_SP_SCIM_ID \
+      <<< "$_EXISTING_APP_IDENTITY"
+    if [[ -z "$_EXISTING_APP_ID" || -z "$_EXISTING_APP_SP_CLIENT_ID" || \
+          -z "$_EXISTING_APP_SP_SCIM_ID" ]]; then
+      echo "${RED}[deploy] existing App inventory returned an incomplete immutable identity.${RST}" >&2
+      exit 4
+    fi
+    APP_EXPECTED_IDENTITY_ARGS=(
+      --expected-app-id "$_EXISTING_APP_ID"
+      --expected-client-id "$_EXISTING_APP_SP_CLIENT_ID"
+      --expected-scim-id "$_EXISTING_APP_SP_SCIM_ID"
+    )
+    # OAuth application IDs are compared case-insensitively throughout the
+    # identity policy.
+    # shellcheck disable=SC2031  # Bounded account subshell does not change parent value.
+    if same_identity_casefold \
+      "$DATABRICKS_ACCOUNT_CLIENT_ID" "$_EXISTING_APP_SP_CLIENT_ID"; then
+      echo "${RED}[deploy] account-SCIM OAuth client must be distinct from the existing target App service principal.${RST}" >&2
+      exit 4
+    fi
+  fi
+  if [[ "${MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS:-0}" != "1" ]]; then
+    step "preflight agent-runtime foreign UC access before Lakebase bootstrap mutation"
+    run_with_account_identity run_with_proof_signing_authority \
+      "$PYTHON" -m tools.databricks.audit_agent_runtime_foreign_uc_access \
+      --application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+      --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
+      --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL" \
+      --allow-missing-mip-catalog
+    # Recover any deterministic one-use Lakebase role creators left by a prior
+    # SIGKILL immediately after the lease winner is known.
+    step "recover interrupted verifier Lakebase role bootstrap"
+    run_with_lakebase_bootstrap_authority \
+      "$PYTHON" -m tools.databricks.converge_lakebase_oauth_role \
+      --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+      --lakebase-database "$LAKEBASE_DATABASE" \
+      --application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
+      --role-contract verifier \
+      --recover-bootstrap-only
+  fi
+  if [[ -n "$_EXISTING_APP_SP_CLIENT_ID" && \
+        "${MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS:-0}" != "1" ]]; then
+    step "recover interrupted App Lakebase role bootstrap"
+    run_with_lakebase_bootstrap_authority \
+      "$PYTHON" -m tools.databricks.converge_lakebase_oauth_role \
+      --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+      --lakebase-database "$LAKEBASE_DATABASE" \
+      --application-id "$_EXISTING_APP_SP_CLIENT_ID" \
+      --role-contract app \
+      --recover-bootstrap-only
+  fi
+  APP_FAIL_CLOSED_NAME="$_GRANTS_APP_NAME"
+  step "read signed first-install journal at the immediate recovery boundary"
+  if ! refresh_first_install_journal_status; then
+    echo "${RED}[deploy] could not authenticate first-install recovery journal.${RST}" >&2
+    exit 1
+  fi
+  if [[ "${MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS:-0}" == "1" ]]; then
+    if [[ -z "$_EXISTING_APP_SP_CLIENT_ID" ]]; then
+      echo "${RED}[deploy] foreign-catalog remediation requires an existing identity-pinned App.${RST}" >&2
+      exit 4
+    fi
+    if [[ "$FIRST_INSTALL_JOURNAL_STATUS" != "absent" && \
+          "$FIRST_INSTALL_JOURNAL_STATUS" != "signed" ]]; then
+      echo "${RED}[deploy] foreign-catalog remediation refuses unstable first-install App state.${RST}" >&2
+      exit 4
+    fi
+    step "stop the exact App before foreign-catalog recovery or fresh remediation"
+    run "$PYTHON" -m tools.databricks.stop_app_fail_closed \
+      --app-name "$_GRANTS_APP_NAME" \
+      "${APP_EXPECTED_IDENTITY_ARGS[@]}"
+    run_foreign_catalog_binding_remediation
+    step "preflight remediated agent-runtime foreign UC access while App is stopped"
+    run_with_account_identity run_with_proof_signing_authority \
+      "$PYTHON" -m tools.databricks.audit_agent_runtime_foreign_uc_access \
+      --application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+      --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
+      --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL"
+    FOREIGN_CATALOG_REMEDIATION_COMPLETE=1
+  fi
+  if [[ "${MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS:-0}" != "1" && \
+        -n "$FIRST_INSTALL_APP_CLIENT_ID" && \
+        "$FIRST_INSTALL_APP_CLIENT_ID" != "$_EXISTING_APP_SP_CLIENT_ID" ]]; then
+    step "recover interrupted Lakebase bootstrap for journaled App identity"
+    recover_journaled_first_install_lakebase_bootstrap
+  fi
+  # Reconcile any CREATE privileges left by a prior SIGKILL at the same early
+  # recovery boundary.
+  _GRANTS_WAREHOUSE_ID="${DATABRICKS_WAREHOUSE_ID:-$(dotenv_value DATABRICKS_WAREHOUSE_ID)}"
+  _GRANTS_CATALOG="${MIP_DEFAULT_CATALOG:-mip}"
+  if [[ -z "$_GRANTS_WAREHOUSE_ID" ]]; then
+    echo "${RED}[deploy] DATABRICKS_WAREHOUSE_ID is required for early privilege reconciliation.${RST}" >&2
+    exit 1
+  fi
+  AGENT_RUNTIME_BOOTSTRAP_GRANTS_ACTIVE=1
+  if ! revoke_agent_runtime_bootstrap_grants; then
+    echo "${RED}[deploy] could not clear prior agent-runtime bootstrap privileges.${RST}" >&2
+    exit 1
+  fi
+  mint_m2m_token MIP_BEARER_TOKEN DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET
+  mint_m2m_token MIP_ADMIN_BEARER_TOKEN \
+    DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_ADMIN_CLIENT_SECRET
+  echo "  app automation: distinct per-run normal/admin Bearers minted"
+else
+  export MIP_APP_DEPLOYMENT_LEASE_ID="dry-run-deployment-lease"
+  echo "  app automation: normal/admin Bearer mint deferred by --dry-run"
+  step "prove or create the deterministic owned App rollback secret scope"
+  echo "  would prove/create: scope ${APP_ROLLBACK_SECRET_SCOPE}"
+fi
+
+# -----------------------------------------------------------------------------
+# Step 0a: prove signed-blue state before any workspace mutation
+# -----------------------------------------------------------------------------
+_GRANTS_WAREHOUSE_ID="${DATABRICKS_WAREHOUSE_ID:-$(dotenv_value DATABRICKS_WAREHOUSE_ID)}"
+_GRANTS_CATALOG="${MIP_DEFAULT_CATALOG:-mip}"
+if [[ -z "$_GRANTS_WAREHOUSE_ID" ]]; then
+  echo "${RED}[deploy] DATABRICKS_WAREHOUSE_ID missing (env or .env.local) — cannot govern treatment access.${RST}" >&2
+  exit 4
+fi
+# The exact target was discovered at the immediate post-lease recovery boundary
+# before any failure-prone build or bundle work.
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  if [[ -n "$_EXISTING_APP_SP_CLIENT_ID" ]]; then
+    APP_UPGRADE_STATE="unverified_existing"
+  fi
+  # The signed journal and any journal-only client ID were authenticated and
+  # recovered immediately after lease acquisition, before grant cleanup.
+  if [[ "$FIRST_INSTALL_JOURNAL_STATUS" == "orphan_unclaimed" ]]; then
+    step "clear signed first-install intent whose App creation never committed"
+    run_with_proof_signing_authority \
+      "$PYTHON" -m tools.databricks.app_first_install_journal clear-absent \
+      --app-name "$_GRANTS_APP_NAME" \
+      --lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+      --source-git-sha "$SOURCE_GIT_SHA" \
+      --warehouse-id "$_GRANTS_WAREHOUSE_ID"
+    FIRST_INSTALL_JOURNAL_STATUS="absent"
+  elif [[ "$FIRST_INSTALL_JOURNAL_STATUS" == "orphan_claimed" ]]; then
+    step "retire claimed first-install journal after authenticated App deletion"
+    run_with_proof_signing_authority \
+      "$PYTHON" -m tools.databricks.app_first_install_journal delete \
+      --app-name "$_GRANTS_APP_NAME" \
+      --lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+      --source-git-sha "$SOURCE_GIT_SHA" \
+      --rollback-scope "$APP_ROLLBACK_SECRET_SCOPE" \
+      --lakebase-instance "$MIP_LAKEBASE_INSTANCE"
+    FIRST_INSTALL_JOURNAL_STATUS="absent"
+  elif [[ "$FIRST_INSTALL_JOURNAL_STATUS" == "recover" ]]; then
+    if [[ -z "$_EXISTING_APP_SP_CLIENT_ID" ]]; then
+      echo "${RED}[deploy] signed first-install journal names an App absent from inventory.${RST}" >&2
+      exit 4
+    fi
+    recover_interrupted_first_install_app
+  elif [[ "$FIRST_INSTALL_JOURNAL_STATUS" == "unclaimed" ]]; then
+    APP_FAIL_CLOSED_NAME="$_GRANTS_APP_NAME"
+    step "bind interrupted first-install App to its authoritative create audit event"
+    run_with_proof_signing_authority \
+      "$PYTHON" -m tools.databricks.app_first_install_journal recover-claim \
+      --app-name "$_GRANTS_APP_NAME" \
+      --lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+      --source-git-sha "$SOURCE_GIT_SHA" \
+      --warehouse-id "$_GRANTS_WAREHOUSE_ID"
+    refresh_first_install_journal_status
+    if [[ "$FIRST_INSTALL_JOURNAL_STATUS" != "recover" ]]; then
+      echo "${RED}[deploy] audited first-install recovery did not converge to recoverable state.${RST}" >&2
+      exit 4
+    fi
+    recover_interrupted_first_install_app
+  elif [[ "$FIRST_INSTALL_JOURNAL_STATUS" != "absent" && \
+          "$FIRST_INSTALL_JOURNAL_STATUS" != "signed" ]]; then
+    echo "${RED}[deploy] unrecognized first-install journal state.${RST}" >&2
+    exit 4
+  fi
+  if [[ -n "$_EXISTING_APP_SP_CLIENT_ID" ]]; then
+    APP_UPGRADE_STATE="unverified_existing"
+    _EXISTING_APP_URL="$(printf '%s' "$_EXISTING_APPS_JSON" | "$PYTHON" -c '
+import json, os, sys
+items = json.load(sys.stdin)
+name = os.environ.get("MIP_APP_NAME", "mip-app")
+matches = [item for item in items if str(item.get("name") or "") == name]
+print(str(matches[0].get("url") or "").strip() if len(matches) == 1 else "")
+')"
+    if [[ -z "${MIP_APP_URL:-}" && -n "$_EXISTING_APP_URL" ]]; then
+      export MIP_APP_URL="$_EXISTING_APP_URL"
+    fi
+    APP_FAIL_CLOSED_NAME="$_GRANTS_APP_NAME"
+    if [[ "${MIP_REBASE_UNVERIFIED_APP:-0}" == "1" && \
+          "$FIRST_INSTALL_JOURNAL_STATUS" != "signed" ]]; then
+      step "prove the unsigned legacy App has no existing last-good rollback record"
+      run "$PYTHON" -m tools.databricks.app_rollback_bootstrap_gate \
+        --app-name "$_GRANTS_APP_NAME" \
+        --scope "$APP_ROLLBACK_SECRET_SCOPE"
+      APP_FAIL_CLOSED_ARMED=1
+      step "explicitly stop an unverified legacy App before fail-closed rebase"
+      run "$PYTHON" -m tools.databricks.stop_app_fail_closed \
+        --app-name "$_GRANTS_APP_NAME" \
+        "${APP_EXPECTED_IDENTITY_ARGS[@]}"
+      step "quarantine all non-manager App access for the unsigned rebase"
+      # shellcheck disable=SC2031  # Parent-shell normal client ID is unchanged by mint subshells.
+      run "$PYTHON" -m tools.databricks.converge_app_release_access \
+        --mode quarantine \
+        --app-name "$_GRANTS_APP_NAME" \
+        --release-probe-application-id "$DATABRICKS_RELEASE_PROBE_CLIENT_ID" \
+        --normal-application-id "$DATABRICKS_CLIENT_ID" \
+        --operator2-application-id "$DATABRICKS_OPERATOR2_CLIENT_ID" \
+        --admin-application-id "$DATABRICKS_ADMIN_CLIENT_ID" \
+        "${APP_EXPECTED_IDENTITY_ARGS[@]}"
+      APP_ACCESS_QUARANTINED=1
+      step "quiesce the stopped legacy App treatment grant before fail-closed rebase"
+      run_with_account_identity run_with_proof_signing_authority \
+        "$PYTHON" -m tools.databricks.converge_campaign_treatment_access \
+        --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
+        --catalog "$_GRANTS_CATALOG" \
+        --principal "$_EXISTING_APP_SP_CLIENT_ID" \
+        --mode quiesce
+      TREATMENT_RUNTIME_QUIESCED=1
+      APP_UPGRADE_STATE="first_install"
+    else
+      APP_FAIL_CLOSED_ARMED=1
+      step "quiesce treatment authority before signed-blue App reconciliation"
+      run_with_account_identity run_with_proof_signing_authority \
+        "$PYTHON" -m tools.databricks.converge_campaign_treatment_access \
+        --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
+        --catalog "$_GRANTS_CATALOG" \
+        --principal "$_EXISTING_APP_SP_CLIENT_ID" \
+        --mode quiesce
+      TREATMENT_RUNTIME_QUIESCED=1
+      mint_m2m_token MIP_BEARER_TOKEN DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET
+      step "prove or reconcile the signed last-good App before non-App mutations"
+      APP_ROLLBACK_BINDING_ENV="$(mktemp -t mip-app-blue-binding.XXXXXX.env)"
+      run_with_account_identity \
+        run_with_proof_signing_authority \
+          "$PYTHON" -m tools.databricks.app_deployment_rollback ensure \
+        --app-name "$_GRANTS_APP_NAME" \
+        --scope "$APP_ROLLBACK_SECRET_SCOPE" \
+        --base-url "${MIP_APP_URL:?existing App URL is required}" \
+        --token-env MIP_BEARER_TOKEN \
+        --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+        --deployment-source-git-sha "$SOURCE_GIT_SHA" \
+        --treatment-warehouse-id "$_GRANTS_WAREHOUSE_ID" \
+        --treatment-catalog "$_GRANTS_CATALOG" \
+        --out-env "$APP_ROLLBACK_BINDING_ENV"
+      set -a
+      # shellcheck disable=SC1090
+      . "$APP_ROLLBACK_BINDING_ENV"
+      set +a
+      APP_SIGNED_BLUE_AVAILABLE=1
+      TREATMENT_RUNTIME_QUIESCED=1
+      APP_UPGRADE_STATE="blue_quiesced"
+      if [[ "$FIRST_INSTALL_JOURNAL_STATUS" == "signed" ]]; then
+        step "retire completed first-install journal after signed-blue verification"
+        run_with_proof_signing_authority \
+          "$PYTHON" -m tools.databricks.app_first_install_journal complete \
+          --app-name "$_GRANTS_APP_NAME" \
+          --lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+          --source-git-sha "$SOURCE_GIT_SHA" \
+          --rollback-scope "$APP_ROLLBACK_SECRET_SCOPE" \
+          --lakebase-instance "$MIP_LAKEBASE_INSTANCE"
+        FIRST_INSTALL_JOURNAL_STATUS="absent"
+      fi
+    fi
+    step "keep existing App treatment writes quiesced through non-App release work"
+  else
+    step "prove absent or converge governed treatment table before first App creation"
+    run "$PYTHON" -m tools.databricks.ensure_campaign_treatment_table \
+      --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
+      --catalog "$_GRANTS_CATALOG" \
+      --allow-absent
+  fi
+  if [[ "${MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS:-0}" == "1" ]]; then
+    if [[ "$FOREIGN_CATALOG_REMEDIATION_COMPLETE" -eq 0 ]]; then
+      step "stop the exact admitted App before foreign-catalog remediation"
+      run "$PYTHON" -m tools.databricks.stop_app_fail_closed \
+        --app-name "$_GRANTS_APP_NAME" \
+        "${APP_EXPECTED_IDENTITY_ARGS[@]}"
+      run_foreign_catalog_binding_remediation
+      step "preflight remediated agent-runtime foreign UC access while App is stopped"
+      run_with_account_identity run_with_proof_signing_authority \
+        "$PYTHON" -m tools.databricks.audit_agent_runtime_foreign_uc_access \
+        --application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+        --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
+        --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL"
+      FOREIGN_CATALOG_REMEDIATION_COMPLETE=1
+      if [[ "$APP_SIGNED_BLUE_AVAILABLE" -eq 1 ]]; then
+        step "restart and re-prove only the exact signed-blue App after UC preflight"
+        run_with_account_identity \
+          run_with_proof_signing_authority \
+            "$PYTHON" -m tools.databricks.app_deployment_rollback ensure \
+          --app-name "$_GRANTS_APP_NAME" \
+          --scope "$APP_ROLLBACK_SECRET_SCOPE" \
+          --base-url "${MIP_APP_URL:?existing App URL is required}" \
+          --token-env MIP_BEARER_TOKEN \
+          --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+          --deployment-source-git-sha "$SOURCE_GIT_SHA" \
+          --treatment-warehouse-id "$_GRANTS_WAREHOUSE_ID" \
+          --treatment-catalog "$_GRANTS_CATALOG" \
+          --out-env "$APP_ROLLBACK_BINDING_ENV"
+        TREATMENT_RUNTIME_QUIESCED=1
+        APP_UPGRADE_STATE="blue_quiesced"
+      fi
+    fi
+    step "recover interrupted verifier Lakebase role bootstrap after UC preflight"
+    run_with_lakebase_bootstrap_authority \
+      "$PYTHON" -m tools.databricks.converge_lakebase_oauth_role \
+      --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+      --lakebase-database "$LAKEBASE_DATABASE" \
+      --application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
+      --role-contract verifier \
+      --recover-bootstrap-only
+    step "recover interrupted App Lakebase role bootstrap after UC preflight"
+    run_with_lakebase_bootstrap_authority \
+      "$PYTHON" -m tools.databricks.converge_lakebase_oauth_role \
+      --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+      --lakebase-database "$LAKEBASE_DATABASE" \
+      --application-id "$_EXISTING_APP_SP_CLIENT_ID" \
+      --role-contract app \
+      --recover-bootstrap-only
+  fi
+else
+  echo "[deploy] dry-run: existing app treatment writes remain live until treatment DDL"
+fi
+APP_FAIL_CLOSED_NAME="$_GRANTS_APP_NAME"
+APP_FAIL_CLOSED_ARMED=1
+
+# -----------------------------------------------------------------------------
+# Step 0a: resolve the governed Genie space before any App secret mutation
+# -----------------------------------------------------------------------------
+# The app resource binding validates the Genie space during
+# `databricks bundle deploy`. A merely well-formed GENIE_SPACE_ID is not proof
+# that it names the governed space in this workspace: CI variables and local
+# dotenv files can survive a workspace change. Always resolve by the reviewed
+# MIP_GENIE_SPACE_NAME, then replace the ambient id with the provisioner's
+# authoritative result before any runtime secret or bundle mutation.
+step "resolve governed Genie space before App secret and bundle mutation"
+run "$PYTHON" -m tools.databricks.provision_genie_space \
+  --space-name "$MIP_GENIE_SPACE_NAME" \
+  --catalog "$MIP_DEFAULT_CATALOG" \
+  --no-smoke-test
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  if [[ ! -s genie/space_id.txt ]]; then
+    echo "${RED}[deploy] Genie provisioner did not write genie/space_id.txt.${RST}" >&2
+    exit 2
+  fi
+  GENIE_SPACE_ID="$(< genie/space_id.txt)"
+  if ! is_real_bundle_value "$GENIE_SPACE_ID"; then
+    echo "${RED}[deploy] governed Genie space resolution returned an invalid id.${RST}" >&2
+    exit 2
+  fi
+  export GENIE_SPACE_ID
+fi
+
+# Provision runtime HMAC values directly into Databricks Secrets only after
+# the governed Genie binding has been resolved. The later Apps deploy payload
+# carries only value_from resource names, never raw secret values.
+RUNTIME_SECRET_SCOPE="${MIP_RUNTIME_SECRET_SCOPE:-mip-runtime}"
+export BUNDLE_VAR_runtime_secret_scope="$RUNTIME_SECRET_SCOPE"
+step "provision Databricks App runtime secret bindings"
+run "$PYTHON" -m tools.databricks.provision_runtime_secrets \
+  --scope "$RUNTIME_SECRET_SCOPE"
 
 # -----------------------------------------------------------------------------
 # Step 1a: render SQL for the target UC catalog
 # -----------------------------------------------------------------------------
 # The bundle's SQL tasks read from sql/_rendered/**/*.sql. The canonical
 # sources under sql/** hardcode the default `mip.*` catalog prefix for
-# readability + code review; tools/render_sql.py substitutes the five
-# documented UC prefixes (mip.gold., mip.silver., mip.ref., mip.semantics.,
-# mip.raw., mip.first_party.) for the target catalog before bundle
+# readability + code review; tools/render_sql.py substitutes the governed
+# catalog/schema DDL and three-part UC prefixes for the target catalog before bundle
 # validate/deploy read the rendered tree. The renderer also materializes the
 # first-party demo-feed switch as a SQL literal because Databricks SQL does not
 # allow parameter markers in this DDL path. The stand-alone renderer defaults to
@@ -425,19 +3065,341 @@ run npm --prefix frontend run build
 # Step 2: validate bundle
 # -----------------------------------------------------------------------------
 step "validate direct-deployment bundle against -t ${TARGET}"
-run "$PYTHON" tools/databricks/bundle_env.py validate -t "$TARGET"
+run "$PYTHON" -m tools.databricks.bundle_env validate -t "$TARGET"
 
 # -----------------------------------------------------------------------------
 # Step 3: plan bundle
 # -----------------------------------------------------------------------------
 step "plan direct deployment against -t ${TARGET}"
-run "$PYTHON" tools/databricks/bundle_env.py plan -t "$TARGET"
+run "$PYTHON" -m tools.databricks.bundle_env plan -t "$TARGET"
 
 # -----------------------------------------------------------------------------
 # Step 4: deploy bundle
 # -----------------------------------------------------------------------------
-step "deploy bundle (app + warehouse + jobs + pipelines + Lakebase)"
-run "$PYTHON" tools/databricks/bundle_env.py deploy -t "$TARGET"
+
+verify_exact_deploy_source
+# A pipeline resource cannot be created until its target catalog/schema exists,
+# while the full catalog DDL is itself uploaded as a bundle job. Break that
+# first-install cycle under the signed deployment lease by creating only the
+# empty managed namespace needed by the pipeline. Governed tables remain in the
+# post-bundle mip_init_catalog_schemas job after the App identity is quiesced.
+step "ensure managed UC pipeline namespace exists before bundle apply"
+_PIPELINE_NAMESPACE_ARGS=(
+  --catalog "${MIP_DEFAULT_CATALOG:-mip}"
+  --schema silver
+)
+# shellcheck disable=SC2031  # Parent-shell M2M ids survive bounded subshells.
+for _FORBIDDEN_OWNER in \
+  "$DATABRICKS_CLIENT_ID" "$DATABRICKS_OPERATOR2_CLIENT_ID" \
+  "$DATABRICKS_ADMIN_CLIENT_ID" "$DATABRICKS_RELEASE_PROBE_CLIENT_ID" \
+  "$DATABRICKS_VERIFIER_CLIENT_ID" \
+  "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID"; do
+  _PIPELINE_NAMESPACE_ARGS+=(--forbidden-owner-principal "$_FORBIDDEN_OWNER")
+done
+if [[ -n "${_EXISTING_APP_SP_CLIENT_ID:-}" ]]; then
+  _PIPELINE_NAMESPACE_ARGS+=(
+    --forbidden-owner-principal "$_EXISTING_APP_SP_CLIENT_ID"
+  )
+fi
+run_with_account_identity run_with_proof_signing_authority \
+  "$PYTHON" -m tools.databricks.ensure_pipeline_namespace \
+  "${_PIPELINE_NAMESPACE_ARGS[@]}"
+verify_exact_deploy_source
+step "deploy non-App bundle resources without activating an App candidate"
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  BUNDLE_SUMMARY_JSON="$("$PYTHON" -m tools.databricks.bundle_env summary -t "$TARGET" -o json)"
+else
+  # Preserve offline dry-run semantics: derive only resource keys from the
+  # checked-in bundle and never authenticate to resolve a live summary.
+  BUNDLE_SUMMARY_JSON="$("$PYTHON" -c '
+import json, sys, yaml
+
+body = yaml.safe_load(open(sys.argv[1], encoding="utf-8")) or {}
+print(json.dumps({"resources": body.get("resources") or {}}))
+' databricks.yml)"
+fi
+BUNDLE_NON_APP_SELECTORS="$(printf '%s' "$BUNDLE_SUMMARY_JSON" | "$PYTHON" -c '
+import json, sys
+
+body = json.load(sys.stdin)
+resources = body.get("resources") or {}
+selectors = sorted(
+    f"{kind}.{name}"
+    for kind, entries in resources.items()
+    if kind != "apps" and isinstance(entries, dict)
+    for name in entries
+)
+if not selectors:
+    raise SystemExit("bundle summary exposed no non-App resources")
+print("\n".join(selectors))
+')"
+BUNDLE_NON_APP_ARGS=()
+while IFS= read -r _bundle_selector; do
+  [[ -n "$_bundle_selector" ]] || continue
+  BUNDLE_NON_APP_ARGS+=(--select "$_bundle_selector")
+done <<< "$BUNDLE_NON_APP_SELECTORS"
+run "$PYTHON" -m tools.databricks.bundle_env deploy -t "$TARGET" "${BUNDLE_NON_APP_ARGS[@]}"
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  # Refresh after apply: on a true first install this is the first summary
+  # that can contain concrete ids for every App resource binding.
+  BUNDLE_SUMMARY_JSON="$("$PYTHON" -m tools.databricks.bundle_env summary -t "$TARGET" -o json)"
+fi
+
+# The App's Lakebase role exists only after its database resource binding is
+# applied. A DAB bind records state but does not update the live App, while a
+# full App bundle deploy would also activate source_code_path. Resolve the
+# now-created non-App resource ids and use the Apps API to apply only resource
+# bindings. First installs create the App stopped with those bindings; upgrades
+# update the existing App and prove its active/pending source deployment and
+# compute state did not change.
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  APP_RESOURCE_BINDING_SUMMARY="$(mktemp -t mip-app-resource-summary.XXXXXX.json)"
+  APP_RESOURCE_BINDING_PAYLOAD="$(mktemp -t mip-app-resource-payload.XXXXXX.json)"
+  APP_RESOURCE_BINDING_AFTER="$(mktemp -t mip-app-resource-after.XXXXXX.json)"
+  chmod 600 \
+    "$APP_RESOURCE_BINDING_SUMMARY" \
+    "$APP_RESOURCE_BINDING_PAYLOAD" \
+    "$APP_RESOURCE_BINDING_AFTER"
+  printf '%s\n' "$BUNDLE_SUMMARY_JSON" > "$APP_RESOURCE_BINDING_SUMMARY"
+  "$PYTHON" -m tools.databricks.app_resource_bindings build \
+    --bundle-summary "$APP_RESOURCE_BINDING_SUMMARY" \
+    --app-name "$_GRANTS_APP_NAME" \
+    "${OTEL_RESOURCE_BINDING_ARGS[@]}" \
+    --out "$APP_RESOURCE_BINDING_PAYLOAD"
+else
+  APP_RESOURCE_BINDING_PAYLOAD="/tmp/mip-dry-run-app-resource-bindings.json"
+fi
+# App resource binding can create or replace its OAuth role. From this point
+# until the migration grant postflight succeeds, no signed-blue restoration is
+# authorized: a failed LOGIN-only role rotation is not transactionally
+# reversible across the Apps API, Lakebase control plane, and PostgreSQL.
+LAKEBASE_RUNTIME_ACCESS_PROVEN=0
+if [[ -z "${_EXISTING_APP_SP_CLIENT_ID:-}" ]]; then
+  if [[ "$DRY_RUN" -eq 0 ]]; then
+    FIRST_INSTALL_MARKED_PAYLOAD="$(mktemp -t mip-app-first-install-payload.XXXXXX.json)"
+    chmod 600 "$FIRST_INSTALL_MARKED_PAYLOAD"
+    step "persist signed first-install ownership before remote App creation"
+    run_with_proof_signing_authority \
+      "$PYTHON" -m tools.databricks.app_first_install_journal prepare \
+      --app-name "$_GRANTS_APP_NAME" \
+      --lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+      --source-git-sha "$SOURCE_GIT_SHA" \
+      --payload "$APP_RESOURCE_BINDING_PAYLOAD" \
+      --out-payload "$FIRST_INSTALL_MARKED_PAYLOAD"
+    FIRST_INSTALL_JOURNAL_STATUS="prepared"
+  else
+    FIRST_INSTALL_MARKED_PAYLOAD="$APP_RESOURCE_BINDING_PAYLOAD"
+  fi
+  step "create stopped Databricks App with resolved resource bindings and no source deployment"
+  if [[ "$DRY_RUN" -eq 0 ]]; then
+    APP_CREATE_RESULT="$(mktemp -t mip-app-first-install-create.XXXXXX.json)"
+    chmod 600 "$APP_CREATE_RESULT"
+  else
+    APP_CREATE_RESULT=""
+  fi
+  if [[ "$DRY_RUN" -eq 0 ]]; then
+    # Arm the signed-journal compensation boundary before the remote POST. A
+    # nonzero CLI result can still mean that Apps committed creation and only
+    # the response was lost. Until the journal binds immutable IDs, the exit
+    # trap must refuse every name-based App stop or treatment mutation.
+    FIRST_INSTALL_APP_CREATED=1
+  fi
+  run_json_to_file "$APP_CREATE_RESULT" databricks apps create \
+    --json "@$FIRST_INSTALL_MARKED_PAYLOAD" \
+    --no-compute \
+    -o json
+  if [[ "$DRY_RUN" -eq 0 ]]; then
+    databricks apps get "$_GRANTS_APP_NAME" -o json > "$APP_RESOURCE_BINDING_AFTER"
+    "$PYTHON" -m tools.databricks.app_resource_bindings verify \
+      --expected "$FIRST_INSTALL_MARKED_PAYLOAD" \
+      --after "$APP_RESOURCE_BINDING_AFTER" \
+      --require-stopped-without-deployment
+    step "bind signed first-install recovery to the created App service-principal identity"
+    run_with_proof_signing_authority \
+      "$PYTHON" -m tools.databricks.app_first_install_journal claim \
+      --app-name "$_GRANTS_APP_NAME" \
+      --lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+      --source-git-sha "$SOURCE_GIT_SHA" \
+      --created-app "$APP_CREATE_RESULT"
+    FIRST_INSTALL_JOURNAL_STATUS="recover"
+  fi
+  step "bind the stopped source-free App into bundle deployment state"
+  if [[ "$DRY_RUN" -eq 0 ]]; then
+    # Arm compensation before the remote command: a nonzero exit can still mean
+    # the bind committed and its response was lost.
+    FIRST_INSTALL_APP_BOUND=1
+  fi
+  run "$PYTHON" -m tools.databricks.bundle_env deployment bind \
+    mip_app "$_GRANTS_APP_NAME" -t "$TARGET" --auto-approve
+else
+  step "update existing Databricks App resource bindings without source activation"
+  if [[ "$DRY_RUN" -eq 0 ]]; then
+    APP_RESOURCE_BINDING_BEFORE="$(mktemp -t mip-app-resource-before.XXXXXX.json)"
+    chmod 600 "$APP_RESOURCE_BINDING_BEFORE"
+    databricks apps get "$_GRANTS_APP_NAME" -o json > "$APP_RESOURCE_BINDING_BEFORE"
+    read -r _BINDING_APP_ID _BINDING_APP_CLIENT_ID _BINDING_APP_SCIM_ID < <(
+      "$PYTHON" - "$APP_RESOURCE_BINDING_BEFORE" <<'PYEOF'
+import json, sys
+
+app = json.load(open(sys.argv[1], encoding="utf-8"))
+print(
+    str(app.get("id") or "").strip(),
+    str(app.get("service_principal_client_id") or "").strip(),
+    str(app.get("service_principal_id") or "").strip(),
+)
+PYEOF
+    )
+    if [[ "$_BINDING_APP_ID" != "$_EXISTING_APP_ID" || \
+          "$_BINDING_APP_CLIENT_ID" != "$_EXISTING_APP_SP_CLIENT_ID" || \
+          "$_BINDING_APP_SCIM_ID" != "$_EXISTING_APP_SP_SCIM_ID" ]]; then
+      echo "${RED}[deploy] existing App identity drifted before resource-binding update.${RST}" >&2
+      exit 4
+    fi
+    step "stop and identity-pin existing App before Lakebase binding update"
+    run "$PYTHON" -m tools.databricks.stop_app_fail_closed \
+      --app-name "$_GRANTS_APP_NAME" \
+      --expected-app-id "$_BINDING_APP_ID" \
+      --expected-client-id "$_BINDING_APP_CLIENT_ID" \
+      --expected-scim-id "$_BINDING_APP_SCIM_ID"
+    # The mutation verifier compares resource bindings while independently
+    # pinning compute state. Stopping is intentional, so establish the stopped
+    # state as the authoritative pre-mutation baseline.
+    databricks apps get "$_GRANTS_APP_NAME" -o json > "$APP_RESOURCE_BINDING_BEFORE"
+  fi
+  assert_expected_app_identity "$_GRANTS_APP_NAME"
+  run databricks apps update "$_GRANTS_APP_NAME" \
+    --json "@$APP_RESOURCE_BINDING_PAYLOAD"
+  assert_expected_app_identity "$_GRANTS_APP_NAME"
+  if [[ "$DRY_RUN" -eq 0 ]]; then
+    databricks apps get "$_GRANTS_APP_NAME" -o json > "$APP_RESOURCE_BINDING_AFTER"
+    "$PYTHON" -m tools.databricks.app_resource_bindings verify \
+      --expected "$APP_RESOURCE_BINDING_PAYLOAD" \
+      --before "$APP_RESOURCE_BINDING_BEFORE" \
+      --after "$APP_RESOURCE_BINDING_AFTER"
+  fi
+fi
+
+# A true first install has no service principal to quiesce before App identity
+# creation. Resolve the newly created (or retained) identity immediately and
+# apply the same authoritative identity/metastore/UC boundary before any
+# migration, catalog bootstrap, or general data grant can run.
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  APP_RESOURCE_JSON="$(databricks apps get "$_GRANTS_APP_NAME" -o json 2>/dev/null || true)"
+  APP_OBJECT_ID="$(printf '%s' "$APP_RESOURCE_JSON" | "$PYTHON" -c 'import json,sys; print(str(json.load(sys.stdin).get("id") or "").strip())' 2>/dev/null || true)"
+  APP_SP_CLIENT_ID="$(printf '%s' "$APP_RESOURCE_JSON" | "$PYTHON" -c 'import json,sys; print((json.load(sys.stdin).get("service_principal_client_id") or "").strip())' 2>/dev/null || true)"
+  APP_SP_SCIM_ID="$(printf '%s' "$APP_RESOURCE_JSON" | "$PYTHON" -c 'import json,sys; print(str(json.load(sys.stdin).get("service_principal_id") or "").strip())' 2>/dev/null || true)"
+  if [[ -z "$APP_OBJECT_ID" || -z "$APP_SP_CLIENT_ID" || -z "$APP_SP_SCIM_ID" ]]; then
+    echo "${RED}[deploy] could not resolve the immutable identity triplet for app '$_GRANTS_APP_NAME' after stopped identity bootstrap.${RST}" >&2
+    exit 4
+  fi
+  if [[ -n "${_EXISTING_APP_ID:-}" ]] && \
+     [[ "$APP_OBJECT_ID" != "$_EXISTING_APP_ID" || \
+        "$APP_SP_CLIENT_ID" != "$_EXISTING_APP_SP_CLIENT_ID" || \
+        "$APP_SP_SCIM_ID" != "$_EXISTING_APP_SP_SCIM_ID" ]]; then
+    echo "${RED}[deploy] existing App identity drifted after resource-binding convergence.${RST}" >&2
+    exit 4
+  fi
+  APP_EXPECTED_IDENTITY_ARGS=(
+    --expected-app-id "$APP_OBJECT_ID"
+    --expected-client-id "$APP_SP_CLIENT_ID"
+    --expected-scim-id "$APP_SP_SCIM_ID"
+  )
+  export MIP_DEPLOYMENT_APP_OBJECT_ID="$APP_OBJECT_ID"
+  export MIP_DEPLOYMENT_APP_APPLICATION_ID="$APP_SP_CLIENT_ID"
+  export MIP_DEPLOYMENT_APP_SCIM_ID="$APP_SP_SCIM_ID"
+  # shellcheck disable=SC2031  # Bounded account subshell does not change parent value.
+  if same_identity_casefold \
+    "$DATABRICKS_ACCOUNT_CLIENT_ID" "$APP_SP_CLIENT_ID"; then
+    echo "${RED}[deploy] account-SCIM OAuth client must be distinct from the target App service principal.${RST}" >&2
+    exit 4
+  fi
+else
+  # A true first-install dry run has no App identity yet. Use visibly inert
+  # placeholders so the printed plan remains complete without making a live
+  # lookup or accidentally substituting an operator credential.
+  APP_SP_CLIENT_ID="dry-run-app-client-id"
+  APP_SP_SCIM_ID="dry-run-app-scim-id"
+fi
+# The legacy Database Instances role-create path and the App database binding
+# can materialize OAuth roles with PostgreSQL REPLICATION even though their
+# API-visible CREATEDB/CREATEROLE/BYPASSRLS attributes are all false.  At this
+# stopped/quiesced boundary, replace only that exact unsafe profile through the
+# documented databricks_create_role SQL function, which creates LOGIN-only
+# roles.  The helper proves zero ownership, memberships, and non-ACL shared
+# dependencies before any replacement and verifies the resulting live profile.
+step "converge App Lakebase OAuth role to exact LOGIN-only profile"
+run_with_lakebase_bootstrap_authority \
+  "$PYTHON" -m tools.databricks.converge_lakebase_oauth_role \
+  --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+  --lakebase-database "$LAKEBASE_DATABASE" \
+  --application-id "$APP_SP_CLIENT_ID" \
+  --role-contract app \
+  --app-name "$_GRANTS_APP_NAME" \
+  --stop-app-for-mutation \
+  --repair-legacy-replication
+step "converge verifier Lakebase OAuth role to exact LOGIN-only profile"
+run_with_lakebase_bootstrap_authority \
+  "$PYTHON" -m tools.databricks.converge_lakebase_oauth_role \
+  --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+  --lakebase-database "$LAKEBASE_DATABASE" \
+  --application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
+  --role-contract verifier \
+  --repair-legacy-replication
+# Credentials-only bootstrap intentionally cannot touch an App that does not
+# exist yet. As soon as bundle apply has created/resolved the App, converge the
+# three App-facing identities by their reserved role and immutable client ID.
+# Secret minting remains a separate pre-App operation; deploy never rotates it.
+if [[ "$APP_ACCESS_QUARANTINED" -eq 1 ]]; then
+  step "keep normal, second-operator, and admin App access quarantined until signed capture"
+else
+  step "reconcile normal operator access to the deployed App"
+  # shellcheck disable=SC2031  # Parent-shell identity is unchanged by M2M mint subshells.
+  run "$PYTHON" -m tools.databricks.provision_m2m_oauth \
+    --identity-role normal \
+    --expected-application-id "$DATABRICKS_CLIENT_ID" \
+    --app-name "$_GRANTS_APP_NAME" \
+    --no-mint-secret
+  step "reconcile second-operator access to the deployed App"
+  run "$PYTHON" -m tools.databricks.provision_m2m_oauth \
+    --identity-role operator2 \
+    --expected-application-id "$DATABRICKS_OPERATOR2_CLIENT_ID" \
+    --app-name "$_GRANTS_APP_NAME" \
+    --no-mint-secret
+  step "reconcile admin identity and reviewed group access to the deployed App"
+  run "$PYTHON" -m tools.databricks.provision_m2m_oauth \
+    --identity-role admin \
+    --expected-application-id "$DATABRICKS_ADMIN_CLIENT_ID" \
+    --app-name "$_GRANTS_APP_NAME" \
+    --no-mint-secret
+fi
+step "audit the dedicated release probe remains isolated before candidate activation"
+run "$PYTHON" -m tools.databricks.provision_m2m_oauth \
+  --identity-role release_probe \
+  --expected-application-id "$DATABRICKS_RELEASE_PROBE_CLIENT_ID" \
+  --app-name "$_GRANTS_APP_NAME" \
+  --no-grant-can-use \
+  --no-mint-secret
+# The first migration grants the dedicated verifier's proof-ledger role. On a
+# fresh workspace that Lakebase OAuth role does not exist merely because the
+# workspace service principal exists, so create/reconcile it before the job's
+# grant postflight. Endpoint and warehouse grants stay in the later agentic
+# convergence step, after those concrete resources are known.
+step "bootstrap dedicated AI Gateway verifier Lakebase OAuth role"
+run "$PYTHON" -m tools.databricks.provision_m2m_oauth \
+  --identity-role verifier \
+  --expected-application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
+  --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+  --no-mint-secret
+step "re-audit dedicated agent-runtime isolation before resource ownership"
+run "$PYTHON" -m tools.databricks.provision_m2m_oauth \
+  --identity-role agent_runtime \
+  --expected-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+  --no-mint-secret
+step "re-audit dedicated Supervisor proxy-caller identity isolation"
+run "$PYTHON" -m tools.databricks.provision_m2m_oauth \
+  --identity-role agent_proxy \
+  --expected-application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID" \
+  --no-mint-secret
 
 # -----------------------------------------------------------------------------
 # Step 4b: Lakebase migration — BEFORE the app snapshot restart
@@ -446,12 +3408,154 @@ run "$PYTHON" tools/databricks/bundle_env.py deploy -t "$TARGET"
 # app snapshot promotion, the freshly restarted app raced the migrate job's
 # schema work, tripped the lakebase circuit breaker, and showed the audit
 # feed's degraded banner for ~30s. Migrating first means the restarted app
-# boots against an already-migrated schema. Bonus: the migrate job's runtime
-# gives the bundle-triggered app deployment time to settle, so the
-# wait_for_app_deployable() poll below usually finds a clear runway.
+# boots against an already-migrated schema. The stopped first-install identity
+# and every existing App remain unmodified throughout this migration; source
+# activation occurs only through deploy_app_snapshot after convergence.
 # Requires only step 4 (the bundle apply defines the job + Lakebase instance).
 step "migrate Lakebase — schema.sql + seed_campaigns.sql (idempotent)"
 run_job_with_retry databricks bundle run mip_lakebase_migrate -t "$TARGET"
+LAKEBASE_RUNTIME_ACCESS_PROVEN=1
+
+# Historical releases granted the App's UC identity directly on the Lakebase
+# ``public``/``mip_app`` schemas.  Remove that residue (and any pre-existing
+# sync-schema access) before rebuilding the reviewed sync target.  The helper
+# resolves nested groups and proves the effective boundary, so a broader group
+# grant or ownership path fails the release instead of being hidden by a
+# successful direct REVOKE.
+step "quiesce legacy and target Lakebase synced-catalog access"
+run "$PYTHON" -m tools.databricks.converge_app_lakebase_sync_access \
+  --mode quiesce \
+  --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
+  --app-application-id "$APP_SP_CLIENT_ID" \
+  --app-scim-id "$APP_SP_SCIM_ID" \
+  --sync-catalog "$DEPLOYMENT_SYNC_CATALOG" \
+  --sync-schema "$DEPLOYMENT_SYNC_SCHEMA" \
+  --sync-tables "$DEPLOYMENT_SYNC_TABLES"
+
+apply_uc_grant() {
+  local _grant_stmt="$1"
+  local _grant_state=""
+  local _grant_resp=""
+  local _grant_try
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "  would grant: ${_grant_stmt}"
+    return 0
+  fi
+  # Re-audit 2026-06-11: a single 50s/CANCEL attempt reported a cold or
+  # queued warehouse as a misleading "grant failed". Retry the statement
+  # up to 3 attempts (the wait_timeout API ceiling is 50s per call) so
+  # warm-up latency is absorbed; a genuine authority failure still exits.
+  for _grant_try in 1 2 3; do
+    _grant_resp="$(databricks api post /api/2.0/sql/statements/ --json "$(
+      "$PYTHON" -c 'import json,sys; print(json.dumps({"warehouse_id": sys.argv[1], "statement": sys.argv[2], "wait_timeout": "50s", "on_wait_timeout": "CANCEL"}))' \
+        "$_GRANTS_WAREHOUSE_ID" "$_grant_stmt"
+    )")"
+    _grant_state="$(printf '%s' "$_grant_resp" | "$PYTHON" -c 'import json,sys; d=json.load(sys.stdin); print(d.get("status",{}).get("state",""))')"
+    [[ "$_grant_state" == "SUCCEEDED" ]] && break
+    if [[ "$_grant_try" -lt 3 ]]; then
+      echo "  grant attempt ${_grant_try} ended ${_grant_state:-no-state} (warehouse warming?) — retrying"
+      sleep 5
+    fi
+  done
+  if [[ "$_grant_state" != "SUCCEEDED" ]]; then
+    echo "${RED}[deploy] UC grant failed after 3 attempts (${_grant_state:-no-state}): ${_grant_stmt}${RST}" >&2
+    printf '%s\n' "$_grant_resp" | "$PYTHON" -c 'import json,sys; d=json.load(sys.stdin); print(json.dumps(d.get("status",{}).get("error",{}), indent=2)[:600])' >&2 || true
+    echo "  Likely cause: the deploying identity lacks GRANT authority on catalog '${_GRANTS_CATALOG}'." >&2
+    echo "  A metastore admin can apply docs/security/GRANTS.md once; reruns are idempotent." >&2
+    return 4
+  fi
+  echo "  granted: ${_grant_stmt}"
+}
+
+# The pre-refresh bootstrap is the sole publisher of the reviewed helper
+# functions. Both it and the gold refresh pass through the same reconciliation
+# boundary so grants remain proven after publication and any future job-graph
+# regression fails closed before either production identity can continue.
+reconcile_reviewed_function_execute_grants() {
+  local _function_name
+  local _principal
+  local _grant_failed=0
+  local _postflight_failed=0
+  for _principal in \
+    "$APP_SP_CLIENT_ID" \
+    "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+    "$DATABRICKS_AGENT_PROXY_CLIENT_ID"; do
+    for _function_name in fn_build_cohort fn_segment_counts fn_lead_queue_url; do
+      if ! apply_uc_grant \
+        "GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.${_function_name} TO \`${_principal}\`"; then
+        _grant_failed=1
+      fi
+    done
+  done
+  if ! run "$PYTHON" -m tools.databricks.verify_reviewed_function_execute_grants \
+    --catalog "$_GRANTS_CATALOG" \
+    --app-application-id "$APP_SP_CLIENT_ID" \
+    --agent-runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+    --agent-proxy-application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID"; then
+    _postflight_failed=1
+  fi
+  if [[ "$_grant_failed" -ne 0 || "$_postflight_failed" -ne 0 ]]; then
+    echo "${RED}[deploy] reviewed function EXECUTE reconciliation is unproven.${RST}" >&2
+    return 4
+  fi
+  REVIEWED_FUNCTION_GRANTS_PROVEN=1
+}
+
+run_job_and_reconcile_reviewed_function_grants() {
+  local _job_label="$1"
+  local _job_rc=0
+  local _reconcile_rc=0
+  shift
+  REVIEWED_FUNCTION_GRANTS_PROVEN=0
+  step "$_job_label"
+  run_job_with_retry "$@" || _job_rc=$?
+  step "reconcile and prove reviewed function EXECUTE grants after governed job"
+  reconcile_reviewed_function_execute_grants || _reconcile_rc=$?
+  if [[ "$_job_rc" -ne 0 ]]; then
+    if [[ "$_reconcile_rc" -ne 0 ]]; then
+      echo "${RED}[deploy] governed job and reviewed function grant repair both failed.${RST}" >&2
+    fi
+    return "$_job_rc"
+  fi
+  return "$_reconcile_rc"
+}
+
+initialize_uc_targets_and_reconcile_function_grants() {
+  run_job_and_reconcile_reviewed_function_grants \
+    "initialize every pre-refresh UC grant target (idempotent)" \
+    databricks bundle run mip_init_catalog_schemas -t "$TARGET"
+}
+
+refresh_gold_and_reconcile_function_grants() {
+  run_job_and_reconcile_reviewed_function_grants \
+    "refresh gold — borrower_360, lead_scores, *_population, dossier, + mip.semantics.*" \
+    databricks bundle run mip_refresh_scores -t "$TARGET"
+}
+
+# Run the dedicated, idempotent UC bootstrap before object-level grants. Its
+# DAG creates the governed treatment table, the ref/gold contracts, and the
+# three reviewed Growth Agent functions. Customer-triggerable silver/gold jobs
+# never republish those functions; grant ordering must not depend on refresh
+# policy.
+step "quiesce app treatment writes immediately before treatment-table DDL"
+run_with_account_identity run_with_proof_signing_authority \
+  "$PYTHON" -m tools.databricks.converge_campaign_treatment_access \
+  --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
+  --catalog "$_GRANTS_CATALOG" \
+  --principal "$APP_SP_CLIENT_ID" \
+  --mode quiesce
+TREATMENT_RUNTIME_QUIESCED=1
+initialize_uc_targets_and_reconcile_function_grants
+
+# CHECK constraints must be added through ALTER TABLE in Databricks SQL; the
+# CREATE TABLE bootstrap cannot declare them inline. Inspect Delta's persisted
+# constraint properties, add only missing exact definitions, and fail closed
+# on drift before granting the app access to the treatment table.
+step "converge governed campaign treatment Delta constraints (idempotent)"
+run "$PYTHON" -m tools.databricks.ensure_campaign_treatment_table \
+  --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
+  --catalog "$_GRANTS_CATALOG"
+step "keep treatment writes quiesced until the green App is proven and captured"
 
 # -----------------------------------------------------------------------------
 # Step 4c: UC grants for the app service principal (audit P1-3, zero-click)
@@ -470,48 +3574,15 @@ run_job_with_retry databricks bundle run mip_lakebase_migrate -t "$TARGET"
 # GRANTS.md remains the audit-readable matrix; Lakebase role grants are
 # applied by jobs/lakebase_migrate.py in step 4b.
 step "apply UC grants to the app service principal (idempotent)"
-_GRANTS_APP_NAME="${MIP_APP_NAME:-mip-app}"
-_GRANTS_WAREHOUSE_ID="${DATABRICKS_WAREHOUSE_ID:-$(dotenv_value DATABRICKS_WAREHOUSE_ID)}"
-_GRANTS_CATALOG="${MIP_DEFAULT_CATALOG:-mip}"
-_GRANTS_SYNC_CATALOG="${MIP_LAKEBASE_SYNC_CATALOG:-mip_app_state}"
-_GRANTS_SYNC_SCHEMA="${MIP_LAKEBASE_SYNC_SCHEMA:-mip_sync}"
-APP_SP_CLIENT_ID="$(databricks apps get "$_GRANTS_APP_NAME" -o json 2>/dev/null | "$PYTHON" -c 'import json,sys; print((json.load(sys.stdin).get("service_principal_client_id") or "").strip())' || true)"
-if [[ -z "$APP_SP_CLIENT_ID" ]]; then
-  echo "${RED}[deploy] could not resolve service_principal_client_id for app '$_GRANTS_APP_NAME'.${RST}" >&2
-  echo "  The bundle apply (step 4) should have created the app. Inspect 'databricks apps get $_GRANTS_APP_NAME'." >&2
-  exit 4
-fi
-if [[ -z "$_GRANTS_WAREHOUSE_ID" ]]; then
-  echo "${RED}[deploy] DATABRICKS_WAREHOUSE_ID missing (env or .env.local) — cannot apply UC grants.${RST}" >&2
-  exit 4
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  # These two schema-creation privileges exist only while the dedicated runtime
+  # creates/updates its exact registered model and Gateway inference table.
+  # The EXIT compensation revokes them on both success and failure.
+  AGENT_RUNTIME_BOOTSTRAP_GRANTS_ACTIVE=1
 fi
 while IFS= read -r _grant_stmt; do
   [[ -z "$_grant_stmt" ]] && continue
-  # Re-audit 2026-06-11: a single 50s/CANCEL attempt reported a cold or
-  # queued warehouse as a misleading "grant failed". Retry the statement
-  # up to 3 attempts (the wait_timeout API ceiling is 50s per call) so
-  # warm-up latency is absorbed; a genuine authority failure still exits.
-  _grant_state=""
-  for _grant_try in 1 2 3; do
-    _grant_resp="$(databricks api post /api/2.0/sql/statements/ --json "$(
-      "$PYTHON" -c 'import json,sys; print(json.dumps({"warehouse_id": sys.argv[1], "statement": sys.argv[2], "wait_timeout": "50s", "on_wait_timeout": "CANCEL"}))' \
-        "$_GRANTS_WAREHOUSE_ID" "$_grant_stmt"
-    )")"
-    _grant_state="$(printf '%s' "$_grant_resp" | "$PYTHON" -c 'import json,sys; d=json.load(sys.stdin); print(d.get("status",{}).get("state",""))')"
-    [[ "$_grant_state" == "SUCCEEDED" ]] && break
-    if [[ "$_grant_try" -lt 3 ]]; then
-      echo "  grant attempt ${_grant_try} ended ${_grant_state:-no-state} (warehouse warming?) — retrying"
-      sleep 5
-    fi
-  done
-  if [[ "$_grant_state" != "SUCCEEDED" ]]; then
-    echo "${RED}[deploy] UC grant failed after 3 attempts (${_grant_state:-no-state}): ${_grant_stmt}${RST}" >&2
-    printf '%s\n' "$_grant_resp" | "$PYTHON" -c 'import json,sys; d=json.load(sys.stdin); print(json.dumps(d.get("status",{}).get("error",{}), indent=2)[:600])' >&2 || true
-    echo "  Likely cause: the deploying identity lacks GRANT authority on catalog '${_GRANTS_CATALOG}'." >&2
-    echo "  A metastore admin can apply docs/security/GRANTS.md once; reruns are idempotent." >&2
-    exit 4
-  fi
-  echo "  granted: ${_grant_stmt}"
+  apply_uc_grant "$_grant_stmt"
 done <<GRANTS_EOF
 GRANT USE CATALOG ON CATALOG ${_GRANTS_CATALOG} TO \`${APP_SP_CLIENT_ID}\`
 GRANT USE SCHEMA, SELECT ON SCHEMA ${_GRANTS_CATALOG}.gold TO \`${APP_SP_CLIENT_ID}\`
@@ -522,10 +3593,49 @@ GRANT USE SCHEMA ON SCHEMA ${_GRANTS_CATALOG}.audit TO \`${APP_SP_CLIENT_ID}\`
 GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_build_cohort TO \`${APP_SP_CLIENT_ID}\`
 GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_segment_counts TO \`${APP_SP_CLIENT_ID}\`
 GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_lead_queue_url TO \`${APP_SP_CLIENT_ID}\`
-GRANT USE CATALOG ON CATALOG ${_GRANTS_SYNC_CATALOG} TO \`${APP_SP_CLIENT_ID}\`
-GRANT USE SCHEMA, SELECT ON SCHEMA ${_GRANTS_SYNC_CATALOG}.${_GRANTS_SYNC_SCHEMA} TO \`${APP_SP_CLIENT_ID}\`
+GRANT USE CATALOG ON CATALOG ${_GRANTS_CATALOG} TO \`${DATABRICKS_AGENT_RUNTIME_CLIENT_ID}\`
+GRANT USE SCHEMA ON SCHEMA ${_GRANTS_CATALOG}.gold TO \`${DATABRICKS_AGENT_RUNTIME_CLIENT_ID}\`
+GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_build_cohort TO \`${DATABRICKS_AGENT_RUNTIME_CLIENT_ID}\`
+GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_segment_counts TO \`${DATABRICKS_AGENT_RUNTIME_CLIENT_ID}\`
+GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_lead_queue_url TO \`${DATABRICKS_AGENT_RUNTIME_CLIENT_ID}\`
+GRANT USE CATALOG ON CATALOG ${_GRANTS_CATALOG} TO \`${DATABRICKS_AGENT_PROXY_CLIENT_ID}\`
+GRANT USE SCHEMA ON SCHEMA ${_GRANTS_CATALOG}.gold TO \`${DATABRICKS_AGENT_PROXY_CLIENT_ID}\`
+GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_build_cohort TO \`${DATABRICKS_AGENT_PROXY_CLIENT_ID}\`
+GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_segment_counts TO \`${DATABRICKS_AGENT_PROXY_CLIENT_ID}\`
+GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_lead_queue_url TO \`${DATABRICKS_AGENT_PROXY_CLIENT_ID}\`
+GRANT USE SCHEMA ON SCHEMA ${_GRANTS_CATALOG}.audit TO \`${DATABRICKS_AGENT_RUNTIME_CLIENT_ID}\`
+GRANT CREATE MODEL ON SCHEMA ${_GRANTS_CATALOG}.audit TO \`${DATABRICKS_AGENT_RUNTIME_CLIENT_ID}\`
+GRANT CREATE TABLE ON SCHEMA ${_GRANTS_CATALOG}.audit TO \`${DATABRICKS_AGENT_RUNTIME_CLIENT_ID}\`
 GRANTS_EOF
 
+_treatment_properties_stmt="SHOW TBLPROPERTIES ${_GRANTS_CATALOG}.audit.campaign_treatment_snapshot"
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  echo "  would verify: campaign treatment table append-only and exact retention properties"
+else
+_treatment_properties_resp="$(databricks api post /api/2.0/sql/statements/ --json "$(
+  "$PYTHON" -c 'import json,sys; print(json.dumps({"warehouse_id": sys.argv[1], "statement": sys.argv[2], "wait_timeout": "50s", "on_wait_timeout": "CANCEL"}))' \
+    "$_GRANTS_WAREHOUSE_ID" "$_treatment_properties_stmt"
+)")"
+if ! printf '%s' "$_treatment_properties_resp" | "$PYTHON" -c '
+import json, sys
+body = json.load(sys.stdin)
+if body.get("status", {}).get("state") != "SUCCEEDED":
+    raise SystemExit(1)
+rows = body.get("result", {}).get("data_array", [])
+actual = {str(row[0]): str(row[1]) for row in rows if len(row) >= 2}
+expected = {
+    "delta.appendOnly": "true",
+    "delta.logRetentionDuration": "interval 2555 days",
+    "delta.deletedFileRetentionDuration": "interval 2555 days",
+}
+if any(actual.get(key) != value for key, value in expected.items()):
+    raise SystemExit(1)
+'; then
+  echo "${RED}[deploy] campaign treatment table property postflight failed.${RST}" >&2
+  exit 4
+fi
+echo "  verified: campaign treatment table is append-only with exact log and deleted-file retention"
+fi
 # -----------------------------------------------------------------------------
 # Step 4d: provision the PII-salt secret scope (audit P1-4, zero-click)
 # -----------------------------------------------------------------------------
@@ -541,22 +3651,56 @@ step "provision pii-salt secret scope (create-if-missing, never rotate)"
 # CLI JSON shape note (observed live 2026-06-11): `databricks secrets
 # list-scopes -o json` / `list-secrets -o json` emit a BARE ARRAY on
 # current CLI versions and a wrapped object on older ones — accept both.
-if ! databricks secrets list-scopes -o json | "$PYTHON" -c 'import json,sys
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  echo "  would inspect/create: scope mip and write-once pii-salt-v1"
+elif ! databricks secrets list-scopes -o json | "$PYTHON" -c 'import json,sys
 data = json.load(sys.stdin)
 items = data.get("scopes", []) if isinstance(data, dict) else (data or [])
 names = {s.get("name") for s in items if isinstance(s, dict)}
 sys.exit(0 if "mip" in names else 1)'; then
   run databricks secrets create-scope mip
 fi
-if ! databricks secrets list-secrets mip -o json 2>/dev/null | "$PYTHON" -c 'import json,sys
+if [[ "$DRY_RUN" -eq 0 ]] && ! databricks secrets list-secrets mip -o json 2>/dev/null | "$PYTHON" -c 'import json,sys
 data = json.load(sys.stdin)
 items = data.get("secrets", []) if isinstance(data, dict) else (data or [])
 keys = {s.get("key") for s in items if isinstance(s, dict)}
 sys.exit(0 if "pii-salt-v1" in keys else 1)'; then
   echo "  generating pii-salt-v1 (random 64-hex, write-once)"
-  databricks secrets put-secret mip pii-salt-v1 --string-value "$(openssl rand -hex 32)"
-else
+  _PII_SECRET_PAYLOAD="$(mktemp -t mip-pii-salt.XXXXXX.json)"
+  chmod 600 "$_PII_SECRET_PAYLOAD"
+  "$PYTHON" - "$_PII_SECRET_PAYLOAD" <<'PY'
+import json
+import secrets
+import sys
+from pathlib import Path
+
+Path(sys.argv[1]).write_text(
+    json.dumps(
+        {"scope": "mip", "key": "pii-salt-v1", "string_value": secrets.token_hex(32)}
+    ),
+    encoding="utf-8",
+)
+PY
+  if ! run_redacted \
+    "databricks api post /api/2.0/secrets/put --json @[secure-temp]" \
+    databricks api post /api/2.0/secrets/put --json "@$_PII_SECRET_PAYLOAD"; then
+    rm -f "$_PII_SECRET_PAYLOAD"
+    _PII_SECRET_PAYLOAD=""
+    exit 1
+  fi
+  rm -f "$_PII_SECRET_PAYLOAD"
+  _PII_SECRET_PAYLOAD=""
+elif [[ "$DRY_RUN" -eq 0 ]]; then
   echo "  pii-salt-v1 already present — leaving untouched (rotation would break masked-ID stability)"
+fi
+
+step "provision dedicated signed App rollback-contract secret scope"
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  echo "  would re-audit: scope ${APP_ROLLBACK_SECRET_SCOPE}"
+else
+  run "$PYTHON" -m tools.databricks.app_rollback_secret_scope assert \
+    --app-name "$_GRANTS_APP_NAME" \
+    --scope "$APP_ROLLBACK_SECRET_SCOPE"
 fi
 
 # -----------------------------------------------------------------------------
@@ -568,19 +3712,23 @@ APP_NAME="${MIP_APP_NAME:-mip-app}"
 # races were observed in the wild, each failing this step on a fresh run:
 #   1. App STOPPED (idle auto-stop / manual stop) -> "Cannot deploy app ...
 #      as it is not in RUNNING state."
-#   2. The bundle deploy in the previous step triggers its OWN app deployment
-#      (the app is a bundle resource), so an immediate `apps deploy` here
-#      collides with it -> "active/pending deployment in progress."
+#   2. A prior interrupted governed promotion can leave an active/pending
+#      deployment in progress. The selected non-App bundle apply above cannot
+#      create one, but retry recovery must still wait for the existing state.
 # Both are waitable states, not errors. Start the app if needed, then poll
-# until no deployment is in flight before promoting the snapshot.
+# until no deployment is in flight before promoting the signed snapshot.
 wait_for_app_deployable() {
   local compute pend active i
+  assert_expected_app_identity "$APP_NAME"
   compute="$(databricks apps get "$APP_NAME" -o json 2>/dev/null | "$PYTHON" -c 'import json,sys; print((json.load(sys.stdin).get("compute_status") or {}).get("state",""))' || true)"
   if [[ "$compute" == "STOPPED" || "$compute" == "STOPPING" ]]; then
     step "app compute is ${compute} — starting before snapshot deploy"
+    assert_expected_app_identity "$APP_NAME"
     run databricks apps start "$APP_NAME"
+    assert_expected_app_identity "$APP_NAME"
   fi
   for i in $(seq 1 90); do
+    assert_expected_app_identity "$APP_NAME"
     pend="$(databricks apps get "$APP_NAME" -o json 2>/dev/null | "$PYTHON" -c 'import json,sys; d=json.load(sys.stdin); print(((d.get("pending_deployment") or {}).get("status") or {}).get("state","NONE"))' || echo "UNKNOWN")"
     active="$(databricks apps get "$APP_NAME" -o json 2>/dev/null | "$PYTHON" -c 'import json,sys; d=json.load(sys.stdin); print(((d.get("active_deployment") or {}).get("status") or {}).get("state","NONE"))' || echo "UNKNOWN")"
     if [[ "$pend" == "NONE" && "$active" != "IN_PROGRESS" ]]; then
@@ -593,20 +3741,37 @@ wait_for_app_deployable() {
   return 1
 }
 
-deploy_app_snapshot() {
-  local label="$1"
-  step "$label"
-  APP_DEPLOY_PAYLOAD="$(mktemp -t mip-app-deploy.XXXXXX.json)"
-  MIP_GIT_SHA="$APP_GIT_SHA" "$PYTHON" tools/databricks/app_deploy_payload.py \
-    --source-code-path "$APP_SOURCE_PATH" \
+emit_app_deploy_payload() {
+  local destination="$1" source_code_path="$2" git_sha="$3"
+  MIP_GIT_SHA="$git_sha" "$PYTHON" -m tools.databricks.app_deploy_payload \
+    --source-code-path "$source_code_path" \
     --target "$TARGET" \
     --current-user-email "$APP_CURRENT_USER" \
     --app-env "$APP_RUNTIME_ENV" \
     --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
     --schema "${MIP_DEFAULT_SCHEMA:-gold}" \
-    > "$APP_DEPLOY_PAYLOAD"
+    --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+    --enable-campaign-treatment-runtime \
+    "${OTEL_DEPLOY_PAYLOAD_ARGS[@]}" \
+    > "$destination"
+}
+
+deploy_app_snapshot() {
+  local label="$1"
+  step "$label"
+  APP_DEPLOY_PAYLOAD="$(mktemp -t mip-app-deploy.XXXXXX.json)"
+  emit_app_deploy_payload "$APP_DEPLOY_PAYLOAD" "$APP_SOURCE_PATH" "$APP_GIT_SHA"
+  assert_expected_app_identity "$APP_NAME"
+  run "$PYTHON" -m tools.databricks.converge_static_app_source \
+    --source-code-path "$APP_SOURCE_PATH" \
+    --expected-principal "$APP_CURRENT_USER" \
+    --expected-target "$TARGET"
   run databricks apps deploy "$APP_NAME" --json "@$APP_DEPLOY_PAYLOAD" --timeout 20m
-  rm -f "$APP_DEPLOY_PAYLOAD"
+  assert_expected_app_identity "$APP_NAME"
+  if [[ -n "${APP_LAST_DEPLOY_PAYLOAD:-}" ]]; then
+    rm -f "$APP_LAST_DEPLOY_PAYLOAD"
+  fi
+  APP_LAST_DEPLOY_PAYLOAD="$APP_DEPLOY_PAYLOAD"
   APP_DEPLOY_PAYLOAD=""
 
   if [[ "$DRY_RUN" -eq 0 && -z "${MIP_APP_URL:-}" ]]; then
@@ -621,15 +3786,55 @@ deploy_app_snapshot() {
   fi
 }
 
-if [[ "$DRY_RUN" -eq 0 ]]; then
-  wait_for_app_deployable
-fi
+capture_last_good_app() {
+  local binding="${1:-}"
+  local -a args
+  args=(
+    -m tools.databricks.app_deployment_rollback capture
+    --app-name "$APP_NAME"
+    --scope "$APP_ROLLBACK_SECRET_SCOPE"
+    --base-url "${MIP_APP_URL:?App URL is required for exact last-good capture}"
+    --token-env MIP_BEARER_TOKEN
+    --payload "${APP_LAST_DEPLOY_PAYLOAD:?App deployment payload is required}"
+    --app-resource-payload "${APP_RESOURCE_BINDING_PAYLOAD:?Resolved App resources are required}"
+    --expected-git-sha "$APP_GIT_SHA"
+    --deployment-lease-id "${MIP_APP_DEPLOYMENT_LEASE_ID:?App deployment lease is required}"
+    --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}"
+    --treatment-warehouse-id "$_GRANTS_WAREHOUSE_ID"
+    --treatment-catalog "$_GRANTS_CATALOG"
+  )
+  if [[ -n "$binding" ]]; then
+    args+=(--expected-gateway-binding "$binding")
+  fi
+  if [[ -z "$APP_ROLLBACK_BINDING_ENV" ]]; then
+    APP_ROLLBACK_BINDING_ENV="$(mktemp -t mip-app-blue-binding.XXXXXX.env)"
+  fi
+  args+=(--out-env "$APP_ROLLBACK_BINDING_ENV")
+  run_with_account_identity \
+    run_with_proof_signing_authority "$PYTHON" "${args[@]}"
+  set -a
+  # shellcheck disable=SC1090
+  . "$APP_ROLLBACK_BINDING_ENV"
+  set +a
+}
 
-APP_DEPLOY_META="$(databricks bundle summary -t "$TARGET" -o json | "$PYTHON" -c 'import json,sys; data=json.load(sys.stdin); ws=data.get("workspace") or {}; print((data.get("resources") or {}).get("apps", {}).get("mip_app", {}).get("source_code_path") or ws.get("file_path") or ""); print((ws.get("current_user") or {}).get("userName") or "")')"
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  APP_BUNDLE_SUMMARY="$(mktemp -t mip-bundle-summary.XXXXXX.json)"
+  databricks bundle summary -t "$TARGET" -o json > "$APP_BUNDLE_SUMMARY"
+  APP_DEPLOY_META="$("$PYTHON" -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); ws=data.get("workspace") or {}; print((data.get("resources") or {}).get("apps", {}).get("mip_app", {}).get("source_code_path") or ws.get("file_path") or ""); print((ws.get("current_user") or {}).get("userName") or "")' "$APP_BUNDLE_SUMMARY")"
+else
+  APP_DEPLOY_META=$'/Workspace/dry-run/mortgage-intelligence-platform\ndry-run-deployer@example.invalid'
+  APP_BUNDLE_SUMMARY="/tmp/mip-dry-run-bundle-summary.json"
+fi
 APP_SOURCE_PATH="$(printf '%s\n' "$APP_DEPLOY_META" | sed -n '1p')"
 APP_CURRENT_USER="$(printf '%s\n' "$APP_DEPLOY_META" | sed -n '2p')"
 if [[ -z "$APP_SOURCE_PATH" ]]; then
   echo "${RED}[deploy] bundle summary did not expose the uploaded app source path.${RST}" >&2
+  exit 1
+fi
+if [[ -z "$APP_CURRENT_USER" || \
+      "$APP_CURRENT_USER" != "$DEPLOY_INVENTORY_PRINCIPAL" ]]; then
+  echo "${RED}[deploy] bundle identity does not match the preflighted workspace-admin inventory principal.${RST}" >&2
   exit 1
 fi
 
@@ -641,14 +3846,23 @@ fi
 # run; source it here so a re-deploy never forgets what is already
 # provisioned. First-ever deploys have no file and keep the two-phase flow.
 AGENTIC_ENV_CACHE=".databricks/mip-agentic.env"
-if [[ "$DRY_RUN" -eq 0 && -f "$AGENTIC_ENV_CACHE" ]]; then
+if [[ "$DRY_RUN" -eq 0 && -f "$AGENTIC_ENV_CACHE" && \
+      "${MIP_REBASE_UNVERIFIED_APP:-0}" != "1" ]]; then
   echo "[deploy] carrying forward agentic env from $AGENTIC_ENV_CACHE (last provisioning)"
   set -a
   # shellcheck disable=SC1090
   . "$AGENTIC_ENV_CACHE"
   set +a
+  restore_deployment_sync_contract "$AGENTIC_ENV_CACHE"
 fi
-deploy_app_snapshot "deploy Databricks App snapshot from uploaded bundle source"
+if [[ "$APP_UPGRADE_STATE" == "first_install" ]]; then
+  if [[ "$DRY_RUN" -eq 0 ]]; then
+    wait_for_app_deployable
+  fi
+  deploy_app_snapshot "deploy first-install Databricks App snapshot from uploaded bundle source"
+else
+  step "preserve prior App source and runtime binding until green activation"
+fi
 
 # -----------------------------------------------------------------------------
 # Step 6: silver refresh (FRED + Cotality share)
@@ -670,14 +3884,16 @@ fi
 # -----------------------------------------------------------------------------
 # Step 8: gold refresh (CTAS chain, ends with refresh_semantics_views)
 # -----------------------------------------------------------------------------
-step "refresh gold — borrower_360, lead_scores, *_population, dossier, + mip.semantics.*"
-run_job_with_retry databricks bundle run mip_refresh_scores -t "$TARGET"
+refresh_gold_and_reconcile_function_grants
 
 # -----------------------------------------------------------------------------
 # Step 9: lifecycle sync + funnel snapshot (approval / outreach rates)
 # -----------------------------------------------------------------------------
 step "sync lifecycle state from Lakebase + record daily funnel snapshot"
-run "$PYTHON" tools/sync_lifecycle_warehouse.py --catalog "${MIP_DEFAULT_CATALOG:-mip}"
+run "$PYTHON" -m tools.sync_lifecycle_warehouse \
+  --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
+  --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+  --lakebase-database "$LAKEBASE_DATABASE"
 
 # -----------------------------------------------------------------------------
 # Step 9b: KPI snapshot backfill (S3)
@@ -694,68 +3910,874 @@ run_job_with_retry databricks bundle run mip_kpi_snapshot -t "$TARGET"
 # Step 10: rebind the Genie space after gold/semantic assets exist
 # -----------------------------------------------------------------------------
 step "rebind Genie space — bind trusted assets from genie/mortgage_lead_intelligence_space.yml"
-run "$PYTHON" tools/databricks/provision_genie_space.py --no-smoke-test
+run "$PYTHON" -m tools.databricks.provision_genie_space \
+  --space-name "$MIP_GENIE_SPACE_NAME" \
+  --catalog "$MIP_DEFAULT_CATALOG" \
+  --no-smoke-test
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  if [[ ! -s genie/space_id.txt ]]; then
+    echo "${RED}[deploy] Genie rebind did not write genie/space_id.txt.${RST}" >&2
+    exit 2
+  fi
+  GENIE_SPACE_ID="$(< genie/space_id.txt)"
+  if ! is_real_bundle_value "$GENIE_SPACE_ID"; then
+    echo "${RED}[deploy] governed Genie rebind returned an invalid id.${RST}" >&2
+    exit 2
+  fi
+  export GENIE_SPACE_ID
+fi
 
 # -----------------------------------------------------------------------------
 # Step 10b: provision MIP-owned agentic resources after gold/Genie assets exist
 # -----------------------------------------------------------------------------
-step "provision agentic resources — Lakebase sync, AI Gateway, Supervisor Agent"
+step "prove agentic Lakebase Sync under deployer authority"
 AGENTIC_ENV_FILE="$(mktemp -t mip-agentic.XXXXXX.env)"
-run "$PYTHON" tools/databricks/provision_agentic_resources.py \
+run "$PYTHON" -m tools.databricks.provision_agentic_resources \
+  --app-name "$_GRANTS_APP_NAME" \
+  --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+  --deployment-source-git-sha "$SOURCE_GIT_SHA" \
   --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
   --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
+  --lakebase-catalog "$DEPLOYMENT_SYNC_CATALOG" \
+  --lakebase-schema "$DEPLOYMENT_SYNC_SCHEMA" \
+  --lakebase-sync-tables "$DEPLOYMENT_SYNC_TABLES" \
+  --database-instance "$MIP_LAKEBASE_INSTANCE" \
+  --logical-database "$LAKEBASE_DATABASE" \
+  --capture-reviewed-function-owner \
+  --skip-supervisor \
+  --skip-gateway \
   --out-env "$AGENTIC_ENV_FILE"
 if [[ "$DRY_RUN" -eq 0 ]]; then
   set -a
   # shellcheck disable=SC1090
   . "$AGENTIC_ENV_FILE"
   set +a
-  # Persist for the next roll-forward's first snapshot deploy (env
-  # continuity — see AGENTIC_ENV_CACHE above). Values only name resources
-  # (endpoint/table/supervisor/experiment ids); no secrets are written.
-  mkdir -p .databricks
-  cp "$AGENTIC_ENV_FILE" "$AGENTIC_ENV_CACHE"
+else
+  MIP_REVIEWED_FUNCTION_OWNER="dry-run-reviewed-function-owner"
+fi
+step "converge exact app read-only access to proven Lakebase synced tables"
+run "$PYTHON" -m tools.databricks.converge_app_lakebase_sync_access \
+  --mode runtime \
+  --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
+  --app-application-id "$APP_SP_CLIENT_ID" \
+  --app-scim-id "$APP_SP_SCIM_ID" \
+  --sync-catalog "$DEPLOYMENT_SYNC_CATALOG" \
+  --sync-schema "$DEPLOYMENT_SYNC_SCHEMA" \
+  --sync-tables "$DEPLOYMENT_SYNC_TABLES"
+step "preflight agent-runtime foreign UC access before runtime-owned UC mutations"
+run_with_account_identity run_with_proof_signing_authority \
+  "$PYTHON" -m tools.databricks.audit_agent_runtime_foreign_uc_access \
+  --application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+  --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
+  --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL"
+step "grant exact Genie CAN_RUN to the dedicated agent-runtime identity"
+run "$PYTHON" -m tools.databricks.agent_runtime_access \
+  --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
+  --application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID"
+step "capture the verifier immutable identity before retirement admission"
+run capture_verifier_identity
+HISTORICAL_ENDPOINT_PRESERVE_ARGS=()
+if [[ "$APP_SIGNED_BLUE_AVAILABLE" -eq 1 ]]; then
+  if [[ -z "${MIP_APP_ROLLBACK_GATEWAY_PIN_JSON:-}" || \
+        -z "${MIP_APP_ROLLBACK_SUPERVISOR_PIN_JSON:-}" ]]; then
+    echo "${RED}[deploy] signed blue lacks immutable runtime pins for historical preservation.${RST}" >&2
+    exit 1
+  fi
+  HISTORICAL_ENDPOINT_PRESERVE_ARGS+=(
+    --preserve-gateway-json "$MIP_APP_ROLLBACK_GATEWAY_PIN_JSON"
+    --preserve-supervisor-json "$MIP_APP_ROLLBACK_SUPERVISOR_PIN_JSON"
+  )
+fi
+HISTORICAL_CUTOVER_JOURNAL_ENV="$(mktemp -t mip-historical-cutover.XXXXXX.env)"
+run_as_m2m_identity \
+  agent-runtime \
+  DATABRICKS_AGENT_RUNTIME_CLIENT_ID \
+  DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET \
+  "$PYTHON" -m tools.databricks.cutover_agent_runtime_supervisor export-journal \
+  --runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+  --out-env "$HISTORICAL_CUTOVER_JOURNAL_ENV"
+if [[ -s "$HISTORICAL_CUTOVER_JOURNAL_ENV" ]]; then
+  HISTORICAL_CUTOVER_JOURNAL_PRESENT=1
+  unset \
+    MIP_REPLACED_AGENT_SUPERVISOR_ID \
+    MIP_REPLACED_AGENT_SUPERVISOR_ENDPOINT \
+    MIP_REPLACED_AGENT_SUPERVISOR_ENDPOINT_ID \
+    MIP_REPLACED_AGENT_SUPERVISOR_CREATOR \
+    MIP_REPLACED_AGENT_SUPERVISOR_CREATE_TIME \
+    MIP_REPLACED_AGENT_SUPERVISOR_PIN_JSON \
+    MIP_REPLACED_AGENT_GATEWAY_ENDPOINT \
+    MIP_REPLACED_AGENT_GATEWAY_ENDPOINT_ID \
+    MIP_REPLACED_AGENT_GATEWAY_CREATOR \
+    MIP_REPLACED_AGENT_GATEWAY_DELETE_ALLOWED \
+    MIP_REPLACED_AGENT_GATEWAY_PIN_JSON
+  set -a
+  # shellcheck disable=SC1090
+  . "$HISTORICAL_CUTOVER_JOURNAL_ENV"
+  set +a
+  if [[ -n "${MIP_REPLACED_AGENT_GATEWAY_PIN_JSON:-}" ]]; then
+    HISTORICAL_CUTOVER_GATEWAY_PRESENT=1
+  fi
+  if [[ "$APP_SIGNED_BLUE_AVAILABLE" -eq 1 ]]; then
+    merge_historical_cutover_journal_preservation
+  else
+    if [[ -n "${MIP_REPLACED_AGENT_GATEWAY_PIN_JSON:-}" ]]; then
+      HISTORICAL_ENDPOINT_PRESERVE_ARGS+=(
+        --preserve-retirement-gateway-json \
+        "$MIP_REPLACED_AGENT_GATEWAY_PIN_JSON"
+      )
+    fi
+    if [[ -n "${MIP_REPLACED_AGENT_SUPERVISOR_PIN_JSON:-}" ]]; then
+      HISTORICAL_ENDPOINT_PRESERVE_ARGS+=(
+        --preserve-retirement-supervisor-json \
+        "$MIP_REPLACED_AGENT_SUPERVISOR_PIN_JSON"
+      )
+    fi
+  fi
+fi
+run recover_pending_supervisor_creation
+if [[ "$STALE_CUTOVER_JOURNAL_PENDING" -eq 1 ]]; then
+  step "resume exact stale runtime retirement under the signed-blue boundary"
+  MIP_CUTOVER_SIGNED_BLUE_GATEWAY_PIN_JSON="$MIP_APP_ROLLBACK_GATEWAY_PIN_JSON" \
+  MIP_CUTOVER_SIGNED_BLUE_SUPERVISOR_PIN_JSON="$MIP_APP_ROLLBACK_SUPERVISOR_PIN_JSON" \
+    run "$PYTHON" -m tools.databricks.cutover_agent_runtime_supervisor \
+    resume-stale-journal \
+    --runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+    --app-application-id "$APP_SP_CLIENT_ID" \
+    --verifier-application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
+    --verifier-scim-id "$MIP_VERIFIER_SCIM_ID" \
+    --proxy-application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID" \
+    --app-name "$_GRANTS_APP_NAME" \
+    --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+    --deployment-source-git-sha "$SOURCE_GIT_SHA"
+fi
+HISTORICAL_ENDPOINT_INVENTORY="$(mktemp -t mip-historical-agent-endpoints.XXXXXX.json)"
+step "attest and retire every unrelated historical runtime endpoint before green provisioning"
+run_with_proof_signing_authority \
+  "$PYTHON" -m tools.databricks.reconcile_historical_agent_endpoints cleanup \
+  --runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+  --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
+  --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
+  --supervisor-name "${MIP_AGENT_SUPERVISOR_NAME:-Mortgage Growth Agent}" \
+  --app-name "$_GRANTS_APP_NAME" \
+  --rollback-scope "$APP_ROLLBACK_SECRET_SCOPE" \
+  --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+  --deployment-source-git-sha "$SOURCE_GIT_SHA" \
+  --app-application-id "$APP_SP_CLIENT_ID" \
+  --app-scim-id "$APP_SP_SCIM_ID" \
+  --verifier-application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
+  --verifier-scim-id "$MIP_VERIFIER_SCIM_ID" \
+  --proxy-application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID" \
+  "${HISTORICAL_ENDPOINT_PRESERVE_ARGS[@]}" \
+  --out-json "$HISTORICAL_ENDPOINT_INVENTORY"
+if [[ "$STALE_CUTOVER_JOURNAL_PENDING" -eq 1 ]]; then
+  step "prove historical retirement and clear only the stale signed cutover journal"
+  MIP_CUTOVER_SIGNED_BLUE_GATEWAY_PIN_JSON="$MIP_APP_ROLLBACK_GATEWAY_PIN_JSON" \
+  MIP_CUTOVER_SIGNED_BLUE_SUPERVISOR_PIN_JSON="$MIP_APP_ROLLBACK_SUPERVISOR_PIN_JSON" \
+    run_as_m2m_identity \
+      agent-runtime \
+      DATABRICKS_AGENT_RUNTIME_CLIENT_ID \
+      DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET \
+      "$PYTHON" -m tools.databricks.cutover_agent_runtime_supervisor clear-journal \
+    --runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+    --app-application-id "$APP_SP_CLIENT_ID" \
+    --app-scim-id "$APP_SP_SCIM_ID" \
+    --verifier-application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
+    --verifier-scim-id "$MIP_VERIFIER_SCIM_ID" \
+    --proxy-application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID" \
+    --app-name "$_GRANTS_APP_NAME" \
+    --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+    --deployment-source-git-sha "$SOURCE_GIT_SHA"
+  STALE_CUTOVER_JOURNAL_PENDING=0
+  HISTORICAL_CUTOVER_JOURNAL_PRESENT=0
+fi
+if [[ "$HISTORICAL_CUTOVER_JOURNAL_PRESENT" -eq 0 ]]; then
+  step "archive every unprotected historical Gateway model before green provisioning"
+  reconcile_gateway_model_archives
+else
+  step "defer Gateway model archival while the authenticated current journal protects retry"
+fi
+step "reconcile retry-only App access on non-blue reserved Supervisor candidates"
+run reconcile_retry_supervisor_app_acl
+run create_planned_supervisor_if_needed
+step "provision the managed Supervisor under the dedicated agent-runtime identity"
+MIP_CUTOVER_SIGNED_BLUE_SUPERVISOR_PIN_JSON="${MIP_APP_ROLLBACK_SUPERVISOR_PIN_JSON:-}" \
+  MIP_ALLOW_RUNTIME_MODEL_ATTESTATION_SIGNING=1 run_as_m2m_identity \
+  agent-runtime \
+  DATABRICKS_AGENT_RUNTIME_CLIENT_ID \
+  DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET \
+  "$PYTHON" -m tools.databricks.provision_agentic_resources \
+  --app-name "$_GRANTS_APP_NAME" \
+  --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
+  --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
+  --expected-runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+  --proxy-caller-application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID" \
+  --approved-query-application-id "$APP_SP_CLIENT_ID" \
+  --reviewed-function-owner "$MIP_REVIEWED_FUNCTION_OWNER" \
+  --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+  --deployment-source-git-sha "$SOURCE_GIT_SHA" \
+  --gateway-endpoint "${MIP_APP_ROLLBACK_GATEWAY_ENDPOINT:-mip-growth-agent-gateway}" \
+  --gateway-agent-model "${MIP_AI_GATEWAY_AGENT_MODEL_FAMILY:-${MIP_DEFAULT_CATALOG:-mip}.audit.mortgage_growth_supervisor_proxy}" \
+  --gateway-agent-experiment "${MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE:-mip-agent-runtime-gateway-proxy}" \
+  --gateway-table-prefix "${MIP_AI_GATEWAY_TABLE_PREFIX:-mip_agent_gateway_growth_agent}" \
+  --lakebase-catalog "$DEPLOYMENT_SYNC_CATALOG" \
+  --lakebase-schema "$DEPLOYMENT_SYNC_SCHEMA" \
+  --lakebase-sync-tables "$DEPLOYMENT_SYNC_TABLES" \
+  --skip-sync \
+  --skip-gateway \
+  --skip-app-permissions \
+  --out-env "$AGENTIC_ENV_FILE"
+run finalize_supervisor_creation_handoff
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$AGENTIC_ENV_FILE"
+  set +a
+fi
+AGENT_PROXY_PRESERVE_ARGS=()
+AGENT_PROXY_ACCESS_PRESERVE_ARGS=()
+AGENT_PROXY_UC_PRESERVE_ARGS=()
+if [[ "$APP_SIGNED_BLUE_AVAILABLE" -eq 1 ]]; then
+  case "$MIP_APP_ROLLBACK_PROXY_MODE" in
+    legacy-proxyless)
+      if [[ "$MIP_APP_ROLLBACK_RECORD_VERSION" != "5" ]]; then
+        echo "${RED}[deploy] signed legacy rollback mode has the wrong record version.${RST}" >&2
+        exit 1
+      fi
+      ;;
+    exact-proxy)
+      if [[ "$MIP_APP_ROLLBACK_RECORD_VERSION" != "6" || \
+            -z "$MIP_APP_ROLLBACK_SUPERVISOR_ID" || \
+            -z "$MIP_APP_ROLLBACK_SUPERVISOR_ENDPOINT" || \
+            -z "$MIP_APP_ROLLBACK_SUPERVISOR_ENDPOINT_ID" || \
+            "$MIP_APP_ROLLBACK_SUPERVISOR_CREATOR" != \
+              "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" || \
+            "$MIP_APP_ROLLBACK_RUNTIME_APPLICATION_ID" != \
+              "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" || \
+            "$MIP_APP_ROLLBACK_PROXY_APPLICATION_ID" != \
+              "$DATABRICKS_AGENT_PROXY_CLIENT_ID" || \
+            "$MIP_APP_ROLLBACK_GENIE_SPACE_ID" != \
+              "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" ]]; then
+        echo "${RED}[deploy] signed-blue agent-proxy binding is incomplete or drifted.${RST}" >&2
+        exit 1
+      fi
+      if [[ "$MIP_APP_ROLLBACK_SUPERVISOR_ID" == \
+            "${MIP_AGENT_SUPERVISOR_ID:-dry-run-supervisor}" && \
+            ( "$MIP_APP_ROLLBACK_SUPERVISOR_ENDPOINT" != \
+                "${MIP_AGENT_SUPERVISOR_ENDPOINT:-dry-run-supervisor-endpoint}" || \
+              "$MIP_APP_ROLLBACK_SUPERVISOR_ENDPOINT_ID" != \
+                "${MIP_AGENT_SUPERVISOR_ENDPOINT_ID:-dry-run-supervisor-endpoint-id}" ) ]]; then
+        echo "${RED}[deploy] one Supervisor ID cannot bind different blue and green endpoints.${RST}" >&2
+        exit 1
+      elif [[ "$MIP_APP_ROLLBACK_SUPERVISOR_ID" != \
+              "${MIP_AGENT_SUPERVISOR_ID:-dry-run-supervisor}" ]]; then
+        AGENT_PROXY_PRESERVE_ARGS+=(
+          --preserve-supervisor-id "$MIP_APP_ROLLBACK_SUPERVISOR_ID"
+          --preserve-supervisor-endpoint "$MIP_APP_ROLLBACK_SUPERVISOR_ENDPOINT"
+          --preserve-supervisor-endpoint-id "$MIP_APP_ROLLBACK_SUPERVISOR_ENDPOINT_ID"
+        )
+        AGENT_PROXY_ACCESS_PRESERVE_ARGS+=(
+          --preserve-supervisor-id "$MIP_APP_ROLLBACK_SUPERVISOR_ID"
+          --preserve-supervisor-endpoint "$MIP_APP_ROLLBACK_SUPERVISOR_ENDPOINT"
+          --preserve-supervisor-endpoint-id "$MIP_APP_ROLLBACK_SUPERVISOR_ENDPOINT_ID"
+        )
+        AGENT_PROXY_UC_PRESERVE_ARGS+=(
+          --supervisor-id "$MIP_APP_ROLLBACK_SUPERVISOR_ID"
+          --supervisor-endpoint-id "$MIP_APP_ROLLBACK_SUPERVISOR_ENDPOINT_ID"
+        )
+      fi
+      AGENT_PROXY_ACCESS_PRESERVE_ARGS+=(
+        --legacy-pinned-supervisor-endpoint
+        "$MIP_APP_ROLLBACK_SUPERVISOR_ENDPOINT"
+      )
+      ;;
+    *)
+      echo "${RED}[deploy] signed-blue proxy rollback mode is invalid.${RST}" >&2
+      exit 1
+      ;;
+  esac
+fi
+if [[ -n "${_EXISTING_APP_ID:-}" && "$APP_UPGRADE_STATE" == "first_install" ]]; then
+  step "stop the exact unsigned rebase App before legacy proxy ACL migration"
+  run "$PYTHON" -m tools.databricks.stop_app_fail_closed \
+    --app-name "$_GRANTS_APP_NAME" \
+    "${APP_EXPECTED_IDENTITY_ARGS[@]}"
+fi
+step "grant and globally audit the dedicated Supervisor proxy caller"
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  AGENT_PROXY_ACCESS_MUTATED=1
+fi
+run converge_agent_proxy_boundary \
+  converge \
+  "${MIP_AGENT_SUPERVISOR_ID:-dry-run-supervisor}" \
+  "${MIP_AGENT_SUPERVISOR_ENDPOINT:-dry-run-supervisor-endpoint}" \
+  "${MIP_AGENT_SUPERVISOR_ENDPOINT_ID:-dry-run-supervisor-endpoint-id}" \
+  "${AGENT_PROXY_ACCESS_PRESERVE_ARGS[@]}"
+step "provision the credential-versioned Supervisor proxy secret reference"
+run_with_agent_proxy_credentials \
+  "$PYTHON" -m tools.databricks.provision_agent_proxy_secret \
+  --app-name "$_GRANTS_APP_NAME" \
+  --scope "$MIP_AGENT_PROXY_SECRET_SCOPE" \
+  --runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+  --out-env "$AGENTIC_ENV_FILE"
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$AGENTIC_ENV_FILE"
+  set +a
+fi
+_AGENT_PROXY_SECRET_REFERENCE="${MIP_AGENT_PROXY_SECRET_REFERENCE:-}"
+if [[ "$DRY_RUN" -eq 1 && -z "$_AGENT_PROXY_SECRET_REFERENCE" ]]; then
+  _AGENT_PROXY_SECRET_REFERENCE='{{secrets/dry-run/oauth-client-secret-dry-run}}'
+fi
+step "provision the governed outer Gateway under agent-runtime authority"
+MIP_ALLOW_RUNTIME_MODEL_ATTESTATION_SIGNING=1 run_as_m2m_identity \
+  agent-runtime \
+  DATABRICKS_AGENT_RUNTIME_CLIENT_ID \
+  DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET \
+  "$PYTHON" -m tools.databricks.provision_agentic_resources \
+  --app-name "$_GRANTS_APP_NAME" \
+  --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
+  --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
+  --expected-runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+  --reviewed-function-owner "$MIP_REVIEWED_FUNCTION_OWNER" \
+  --supervisor-id "${MIP_AGENT_SUPERVISOR_ID:-dry-run-supervisor}" \
+  --supervisor-endpoint "${MIP_AGENT_SUPERVISOR_ENDPOINT:-dry-run-supervisor-endpoint}" \
+  --proxy-caller-application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID" \
+  --proxy-caller-credential-id "$DATABRICKS_AGENT_PROXY_CREDENTIAL_ID" \
+  --proxy-caller-secret-reference "$_AGENT_PROXY_SECRET_REFERENCE" \
+  --approved-query-application-id "$APP_SP_CLIENT_ID" \
+  --approved-query-application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
+  --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+  --deployment-source-git-sha "$SOURCE_GIT_SHA" \
+  --gateway-endpoint "${MIP_APP_ROLLBACK_GATEWAY_ENDPOINT:-mip-growth-agent-gateway}" \
+  --gateway-agent-model "${MIP_AI_GATEWAY_AGENT_MODEL_FAMILY:-${MIP_DEFAULT_CATALOG:-mip}.audit.mortgage_growth_supervisor_proxy}" \
+  --gateway-agent-experiment "${MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE:-mip-agent-runtime-gateway-proxy}" \
+  --gateway-table-prefix "${MIP_AI_GATEWAY_TABLE_PREFIX:-mip_agent_gateway_growth_agent}" \
+  --lakebase-catalog "$DEPLOYMENT_SYNC_CATALOG" \
+  --lakebase-schema "$DEPLOYMENT_SYNC_SCHEMA" \
+  --lakebase-sync-tables "$DEPLOYMENT_SYNC_TABLES" \
+  --skip-sync \
+  --skip-supervisor \
+  --skip-app-permissions \
+  --merge-out-env \
+  --out-env "$AGENTIC_ENV_FILE"
+step "re-audit the Supervisor proxy caller after Gateway provisioning"
+run converge_agent_proxy_boundary \
+  audit \
+  "${MIP_AGENT_SUPERVISOR_ID:-dry-run-supervisor}" \
+  "${MIP_AGENT_SUPERVISOR_ENDPOINT:-dry-run-supervisor-endpoint}" \
+  "${MIP_AGENT_SUPERVISOR_ENDPOINT_ID:-dry-run-supervisor-endpoint-id}" \
+  "${AGENT_PROXY_ACCESS_PRESERVE_ARGS[@]}"
+step "prove dual-authority agent-proxy Unity Catalog boundary"
+run_with_account_identity \
+  run_with_proof_signing_authority \
+    run_with_agent_proxy_credentials \
+    "$PYTHON" -m tools.databricks.verify_agent_proxy_uc_boundary_dual_authority \
+  --app-name "$_GRANTS_APP_NAME" \
+  --application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID" \
+  --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL" \
+  --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
+  --supervisor-id "${MIP_AGENT_SUPERVISOR_ID:-dry-run-supervisor}" \
+  --supervisor-endpoint-id \
+    "${MIP_AGENT_SUPERVISOR_ENDPOINT_ID:-dry-run-supervisor-endpoint-id}" \
+  "${AGENT_PROXY_UC_PRESERVE_ARGS[@]}" \
+  --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}"
+_AGENT_PROXY_BOUNDARY_APP_URL="${MIP_APP_URL:-}"
+if [[ "$DRY_RUN" -eq 1 && -z "$_AGENT_PROXY_BOUNDARY_APP_URL" ]]; then
+  _AGENT_PROXY_BOUNDARY_APP_URL="https://dry-run.databricksapps.com"
+fi
+step "prove agent-proxy target query and negative authorization boundary before cutover"
+run_with_account_identity \
+  run_with_agent_proxy_credentials \
+    "$PYTHON" -m tools.databricks.verify_agent_proxy_identity_boundary \
+  --expected-application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID" \
+  --account-host "$DATABRICKS_ACCOUNT_HOST" \
+  --account-id "$DATABRICKS_ACCOUNT_ID" \
+  --app-name "$_GRANTS_APP_NAME" \
+  --app-url "${_AGENT_PROXY_BOUNDARY_APP_URL:?deployed App URL is required}" \
+  --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+  --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
+  --supervisor-id "${MIP_AGENT_SUPERVISOR_ID:-dry-run-supervisor}" \
+  --supervisor-endpoint "${MIP_AGENT_SUPERVISOR_ENDPOINT:-dry-run-supervisor-endpoint}" \
+  --supervisor-endpoint-id "${MIP_AGENT_SUPERVISOR_ENDPOINT_ID:-dry-run-supervisor-endpoint-id}" \
+  "${AGENT_PROXY_PRESERVE_ARGS[@]}" \
+  --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
+  --allow-attested-app-401 \
+  --allow-attested-stopped-app-503
+if ! revoke_agent_runtime_bootstrap_grants; then
+  echo "${RED}[deploy] temporary agent-runtime schema privileges remain; refusing deployment.${RST}" >&2
+  exit 1
+fi
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  unset \
+    MIP_REPLACED_AGENT_SUPERVISOR_ID \
+    MIP_REPLACED_AGENT_SUPERVISOR_ENDPOINT \
+    MIP_REPLACED_AGENT_SUPERVISOR_ENDPOINT_ID \
+    MIP_REPLACED_AGENT_SUPERVISOR_CREATOR \
+    MIP_REPLACED_AGENT_SUPERVISOR_CREATE_TIME \
+    MIP_REPLACED_AGENT_SUPERVISOR_PIN_JSON \
+    MIP_REPLACED_AGENT_GATEWAY_ENDPOINT \
+    MIP_REPLACED_AGENT_GATEWAY_ENDPOINT_ID \
+    MIP_REPLACED_AGENT_GATEWAY_CREATOR \
+    MIP_REPLACED_AGENT_GATEWAY_DELETE_ALLOWED \
+    MIP_REPLACED_AGENT_GATEWAY_PIN_JSON
+  set -a
+  # shellcheck disable=SC1090
+  . "$AGENTIC_ENV_FILE"
+  set +a
+  step "export the exact live Gateway resource contract under runtime authority"
+  run_as_m2m_identity \
+    agent-runtime \
+    DATABRICKS_AGENT_RUNTIME_CLIENT_ID \
+    DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET \
+    "$PYTHON" -m tools.databricks.export_gateway_runtime_contract \
+    --shell-env "$AGENTIC_ENV_FILE" \
+    --supervisor-name "$MIP_AGENT_SUPERVISOR_NAME" \
+    --supervisor-id "$MIP_AGENT_SUPERVISOR_ID" \
+    --gateway-endpoint "$MIP_AI_GATEWAY_ENDPOINT" \
+    --gateway-model-family "$MIP_AI_GATEWAY_AGENT_MODEL_FAMILY" \
+    --gateway-experiment-base "$MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE" \
+    --gateway-table-prefix "$MIP_AI_GATEWAY_TABLE_PREFIX" \
+    --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
+    --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
+    --runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+    --reviewed-function-owner "$MIP_REVIEWED_FUNCTION_OWNER" \
+    --proxy-caller-application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID" \
+    --proxy-caller-credential-id "$DATABRICKS_AGENT_PROXY_CREDENTIAL_ID" \
+    --proxy-caller-secret-reference "$MIP_AGENT_PROXY_SECRET_REFERENCE"
+  set -a
+  # shellcheck disable=SC1090
+  . "$AGENTIC_ENV_FILE"
+  set +a
   if [[ -n "${MIP_AI_GATEWAY_INFERENCE_TABLE:-}" && -n "${MIP_AI_GATEWAY_ENDPOINT:-}" ]]; then
+    if [[ "$APP_SIGNED_BLUE_AVAILABLE" -eq 0 && \
+          "$HISTORICAL_CUTOVER_JOURNAL_PRESENT" -eq 1 && \
+          "$HISTORICAL_CUTOVER_GATEWAY_PRESENT" -eq 0 ]]; then
+      step "archive unprotected Gateway models after the supervisor-only journal handoff"
+      reconcile_gateway_model_archives
+    fi
+    step "prove dual-authority agent-runtime UC boundary before cutover"
+    prove_agent_runtime_dual_uc_boundary
+    CUTOVER_JOURNAL_ENV_FILE="$(mktemp -t mip-agent-cutover.XXXXXX.env)"
+    run_as_m2m_identity \
+      agent-runtime \
+      DATABRICKS_AGENT_RUNTIME_CLIENT_ID \
+      DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET \
+      "$PYTHON" -m tools.databricks.cutover_agent_runtime_supervisor export-journal \
+      --runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+      --out-env "$CUTOVER_JOURNAL_ENV_FILE"
+    run_with_proof_signing_authority \
+      "$PYTHON" -m tools.databricks.cutover_agent_runtime_supervisor \
+      refresh-journal-attestation \
+      --runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+      --app-name "$_GRANTS_APP_NAME" \
+      --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+      --deployment-source-git-sha "$SOURCE_GIT_SHA"
+    if [[ -s "$CUTOVER_JOURNAL_ENV_FILE" ]]; then
+      unset \
+        MIP_REPLACED_AGENT_SUPERVISOR_ID \
+        MIP_REPLACED_AGENT_SUPERVISOR_ENDPOINT \
+        MIP_REPLACED_AGENT_SUPERVISOR_ENDPOINT_ID \
+        MIP_REPLACED_AGENT_SUPERVISOR_CREATOR \
+        MIP_REPLACED_AGENT_SUPERVISOR_CREATE_TIME \
+        MIP_REPLACED_AGENT_SUPERVISOR_PIN_JSON \
+        MIP_REPLACED_AGENT_GATEWAY_ENDPOINT \
+        MIP_REPLACED_AGENT_GATEWAY_ENDPOINT_ID \
+        MIP_REPLACED_AGENT_GATEWAY_CREATOR \
+        MIP_REPLACED_AGENT_GATEWAY_DELETE_ALLOWED \
+        MIP_REPLACED_AGENT_GATEWAY_PIN_JSON
+      set -a
+      # shellcheck disable=SC1090
+      . "$CUTOVER_JOURNAL_ENV_FILE"
+      set +a
+    elif [[ -n "${MIP_REPLACED_AGENT_SUPERVISOR_ID:-}" || \
+            ( -n "${MIP_APP_ROLLBACK_GATEWAY_ENDPOINT:-}" && \
+              "${MIP_APP_ROLLBACK_GATEWAY_ENDPOINT}" != "$MIP_AI_GATEWAY_ENDPOINT" ) ]]; then
+      AGENT_RUNTIME_PIN_ARGS=(
+        -m tools.databricks.cutover_agent_runtime_supervisor pin-journal
+        --runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID"
+        --app-name "$_GRANTS_APP_NAME"
+        --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID"
+        --deployment-source-git-sha "$SOURCE_GIT_SHA"
+      )
+      if [[ -n "${MIP_REPLACED_AGENT_SUPERVISOR_ID:-}" ]]; then
+        AGENT_RUNTIME_PIN_ARGS+=(
+          --old-id "$MIP_REPLACED_AGENT_SUPERVISOR_ID"
+          --old-endpoint "$MIP_REPLACED_AGENT_SUPERVISOR_ENDPOINT"
+          --old-creator "$MIP_REPLACED_AGENT_SUPERVISOR_CREATOR"
+          --old-create-time "$MIP_REPLACED_AGENT_SUPERVISOR_CREATE_TIME"
+        )
+      fi
+      if [[ -n "${MIP_APP_ROLLBACK_GATEWAY_ENDPOINT:-}" && \
+            "${MIP_APP_ROLLBACK_GATEWAY_ENDPOINT}" != "$MIP_AI_GATEWAY_ENDPOINT" ]]; then
+        AGENT_RUNTIME_PIN_ARGS+=(
+          --old-gateway-endpoint "$MIP_APP_ROLLBACK_GATEWAY_ENDPOINT"
+        )
+      fi
+      step "sign and pin the destructive cutover tuple under deployer authority"
+      run_with_proof_signing_authority "$PYTHON" "${AGENT_RUNTIME_PIN_ARGS[@]}"
+      run_as_m2m_identity \
+        agent-runtime \
+        DATABRICKS_AGENT_RUNTIME_CLIENT_ID \
+        DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET \
+        "$PYTHON" -m tools.databricks.cutover_agent_runtime_supervisor export-journal \
+        --runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+        --out-env "$CUTOVER_JOURNAL_ENV_FILE"
+      unset \
+        MIP_REPLACED_AGENT_SUPERVISOR_ID \
+        MIP_REPLACED_AGENT_SUPERVISOR_ENDPOINT \
+        MIP_REPLACED_AGENT_SUPERVISOR_ENDPOINT_ID \
+        MIP_REPLACED_AGENT_SUPERVISOR_CREATOR \
+        MIP_REPLACED_AGENT_SUPERVISOR_CREATE_TIME \
+        MIP_REPLACED_AGENT_SUPERVISOR_PIN_JSON \
+        MIP_REPLACED_AGENT_GATEWAY_ENDPOINT \
+        MIP_REPLACED_AGENT_GATEWAY_ENDPOINT_ID \
+        MIP_REPLACED_AGENT_GATEWAY_CREATOR \
+        MIP_REPLACED_AGENT_GATEWAY_DELETE_ALLOWED \
+        MIP_REPLACED_AGENT_GATEWAY_PIN_JSON
+      set -a
+      # shellcheck disable=SC1090
+      . "$CUTOVER_JOURNAL_ENV_FILE"
+      set +a
+    fi
+    AGENT_RUNTIME_GREEN_ARGS=(
+      --replacement-id "$MIP_AGENT_SUPERVISOR_ID"
+      --replacement-endpoint "$MIP_AGENT_SUPERVISOR_ENDPOINT"
+      --gateway-endpoint "$MIP_AI_GATEWAY_ENDPOINT"
+      --gateway-model "$MIP_AI_GATEWAY_AGENT_MODEL"
+      --gateway-model-version "$MIP_AI_GATEWAY_AGENT_MODEL_VERSION"
+      --gateway-inference-table "$MIP_AI_GATEWAY_INFERENCE_TABLE"
+      --gateway-model-family "$MIP_AI_GATEWAY_AGENT_MODEL_FAMILY"
+      --gateway-experiment-base "$MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE"
+      --gateway-table-prefix "$MIP_AI_GATEWAY_TABLE_PREFIX"
+      --catalog "${MIP_DEFAULT_CATALOG:-mip}"
+      --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}"
+      --app-name "$_GRANTS_APP_NAME"
+      --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID"
+      --deployment-source-git-sha "$SOURCE_GIT_SHA"
+      --runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID"
+      --preserve-endpoint "${MIP_APP_ROLLBACK_GATEWAY_ENDPOINT:-}"
+    )
+    step "classify signed old Supervisor App access from the authenticated journal"
+    run classify_journaled_old_supervisor_app_access
+    if [[ "$OLD_SUPERVISOR_APP_ACCESS_MODE" == "direct" || \
+          "$OLD_SUPERVISOR_APP_ACCESS_MODE" == "mixed" ]]; then
+      AGENT_RUNTIME_GREEN_ARGS+=(
+        --preserve-endpoint "$MIP_REPLACED_AGENT_SUPERVISOR_ENDPOINT"
+      )
+    fi
+    step "prepare runtime-owned Gateway access while preserving the live old Supervisor"
+    journal_preactivation_app_acl_endpoint "$MIP_AI_GATEWAY_ENDPOINT"
+    journal_preactivation_app_acl_endpoint "$MIP_AGENT_SUPERVISOR_ENDPOINT"
+    run_with_proof_signing_authority \
+      "$PYTHON" -m tools.databricks.cutover_agent_runtime_supervisor prepare \
+      "${AGENT_RUNTIME_GREEN_ARGS[@]}" \
+      --verifier-application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
+      --verifier-scim-id "$MIP_VERIFIER_SCIM_ID"
+    step "converge dedicated verifier access to the green Gateway before cutover"
+    VERIFIER_GATEWAY_PRESERVE_ARGS=()
+    VERIFIER_BOUNDARY_PRESERVE_ARGS=()
+    if [[ "$APP_SIGNED_BLUE_AVAILABLE" -eq 1 && \
+          -n "${MIP_APP_ROLLBACK_GATEWAY_ENDPOINT:-}" && \
+          "$MIP_APP_ROLLBACK_GATEWAY_ENDPOINT" != "$MIP_AI_GATEWAY_ENDPOINT" ]]; then
+      VERIFIER_GATEWAY_PRESERVE_ARGS+=(
+        --preserve-gateway-endpoint "$MIP_APP_ROLLBACK_GATEWAY_ENDPOINT"
+      )
+      VERIFIER_BOUNDARY_PRESERVE_ARGS+=(
+        --preserve-endpoint "$MIP_APP_ROLLBACK_GATEWAY_ENDPOINT"
+      )
+    fi
+    VERIFIER_GATEWAY_CUTOVER_MUTATED=1
+    run_with_proof_signing_authority \
+      "$PYTHON" -m tools.databricks.provision_m2m_oauth \
+      --identity-role verifier \
+      --expected-application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
+      --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+      --gateway-endpoint "$MIP_AI_GATEWAY_ENDPOINT" \
+      --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+      --deployment-source-git-sha "$MIP_DEPLOYMENT_SOURCE_GIT_SHA" \
+      --revoke-gateway-endpoint "${MIP_AGENT_SUPERVISOR_ENDPOINT:-}" \
+      --revoke-gateway-endpoint "mip-agent-gateway" \
+      --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
+      --no-mint-secret \
+      "${VERIFIER_GATEWAY_PRESERVE_ARGS[@]}"
+    RUNTIME_GLOBAL_ACCESS_ARGS=(
+      -m tools.databricks.audit_global_m2m_access
+      --app-name "${MIP_APP_NAME:?App name is required}"
+      --application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID"
+      --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL"
+      --account-id "$DATABRICKS_ACCOUNT_ID"
+      --expected-serving-permission CAN_MANAGE
+      --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}"
+      --serving-endpoint "$MIP_AGENT_SUPERVISOR_ENDPOINT"
+      --serving-endpoint "$MIP_AI_GATEWAY_ENDPOINT"
+    )
+    if [[ "${MIP_REPLACED_AGENT_SUPERVISOR_CREATOR:-}" == \
+          "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" && \
+          -n "${MIP_REPLACED_AGENT_SUPERVISOR_ENDPOINT:-}" && \
+          "$MIP_REPLACED_AGENT_SUPERVISOR_ENDPOINT" != "$MIP_AGENT_SUPERVISOR_ENDPOINT" && \
+          "$MIP_REPLACED_AGENT_SUPERVISOR_ENDPOINT" != "$MIP_AI_GATEWAY_ENDPOINT" ]]; then
+      RUNTIME_GLOBAL_ACCESS_ARGS+=(
+        --serving-endpoint "$MIP_REPLACED_AGENT_SUPERVISOR_ENDPOINT"
+      )
+    fi
+    if [[ "${MIP_REPLACED_AGENT_GATEWAY_CREATOR:-}" == \
+          "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" && \
+          -n "${MIP_REPLACED_AGENT_GATEWAY_ENDPOINT:-}" && \
+          "$MIP_REPLACED_AGENT_GATEWAY_ENDPOINT" != "$MIP_AGENT_SUPERVISOR_ENDPOINT" && \
+          "$MIP_REPLACED_AGENT_GATEWAY_ENDPOINT" != "$MIP_AI_GATEWAY_ENDPOINT" ]]; then
+      RUNTIME_GLOBAL_ACCESS_ARGS+=(
+        --serving-endpoint "$MIP_REPLACED_AGENT_GATEWAY_ENDPOINT"
+      )
+    fi
+    step "audit agent-runtime access across every visible Genie and serving resource"
+    run_with_account_identity run_with_proof_signing_authority \
+      "$PYTHON" "${RUNTIME_GLOBAL_ACCESS_ARGS[@]}"
+    step "audit verifier access across every visible serving resource"
+    VERIFIER_GLOBAL_ACCESS_ARGS=(
+      -m tools.databricks.audit_global_m2m_access
+      --app-name "${MIP_APP_NAME:?App name is required}"
+      --application-id "$DATABRICKS_VERIFIER_CLIENT_ID"
+      --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL"
+      --account-id "$DATABRICKS_ACCOUNT_ID"
+      --expected-serving-permission CAN_QUERY
+      --forbid-all-genie
+      --serving-endpoint "$MIP_AI_GATEWAY_ENDPOINT"
+    )
+    if [[ "$APP_SIGNED_BLUE_AVAILABLE" -eq 1 && \
+          -n "${MIP_APP_ROLLBACK_GATEWAY_ENDPOINT:-}" && \
+          "$MIP_APP_ROLLBACK_GATEWAY_ENDPOINT" != "$MIP_AI_GATEWAY_ENDPOINT" ]]; then
+      VERIFIER_GLOBAL_ACCESS_ARGS+=(
+        --serving-endpoint "$MIP_APP_ROLLBACK_GATEWAY_ENDPOINT"
+        --legacy-pinned-serving-endpoint "$MIP_APP_ROLLBACK_GATEWAY_ENDPOINT"
+      )
+    fi
+    run_with_account_identity run_with_proof_signing_authority \
+      "$PYTHON" "${VERIFIER_GLOBAL_ACCESS_ARGS[@]}"
+    APP_GLOBAL_ACCESS_ARGS=(
+      -m tools.databricks.audit_global_m2m_access
+      --app-name "${MIP_APP_NAME:?App name is required}"
+      --application-id "$APP_SP_CLIENT_ID"
+      --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL"
+      --account-id "$DATABRICKS_ACCOUNT_ID"
+      --expected-serving-permission CAN_QUERY
+      --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}"
+      --serving-endpoint "$MIP_AI_GATEWAY_ENDPOINT"
+    )
+    if [[ -n "${MIP_APP_ROLLBACK_GATEWAY_ENDPOINT:-}" && \
+          "$MIP_APP_ROLLBACK_GATEWAY_ENDPOINT" != "$MIP_AI_GATEWAY_ENDPOINT" ]]; then
+      APP_GLOBAL_ACCESS_ARGS+=(
+        --serving-endpoint "$MIP_APP_ROLLBACK_GATEWAY_ENDPOINT"
+        --legacy-pinned-serving-endpoint "$MIP_APP_ROLLBACK_GATEWAY_ENDPOINT"
+      )
+    fi
+    if [[ "$OLD_SUPERVISOR_APP_ACCESS_MODE" == "direct" || \
+          "$OLD_SUPERVISOR_APP_ACCESS_MODE" == "mixed" ]]; then
+      APP_GLOBAL_ACCESS_ARGS+=(
+        --serving-endpoint "$MIP_REPLACED_AGENT_SUPERVISOR_ENDPOINT"
+        --legacy-pinned-serving-endpoint "$MIP_REPLACED_AGENT_SUPERVISOR_ENDPOINT"
+      )
+    fi
+    step "audit App access across every visible serving resource during cutover"
+    run_with_account_identity run_with_proof_signing_authority \
+      "$PYTHON" "${APP_GLOBAL_ACCESS_ARGS[@]}"
+    # Activate the new contract before any destructive old-resource action.
+    # Proof-ledger claimability is dynamic; this snapshot is intentionally
+    # healthy-but-unclaimable until the verifier step below observes a row.
+    if [[ "$APP_UPGRADE_STATE" == "blue_active" || \
+          "$APP_UPGRADE_STATE" == "blue_quiesced" ]]; then
+      APP_UPGRADE_STATE="blue_quiescing"
+      step "quiesce verified-blue treatment authority immediately before green activation"
+      run converge_app_treatment_access quiesce
+      TREATMENT_RUNTIME_QUIESCED=1
+      APP_UPGRADE_STATE="green_activating_quiesced"
+    fi
+    wait_for_app_deployable
+    mint_m2m_token MIP_BEARER_TOKEN DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET
+    deploy_app_snapshot "activate App snapshot on the runtime-owned Gateway before retirement"
+    step "prove agent-runtime negative authorization boundary before positive App probes"
+    run_with_agent_runtime_credentials \
+      "$PYTHON" -m tools.databricks.verify_agent_runtime_identity_boundary \
+      --expected-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+      --app-name "$_GRANTS_APP_NAME" \
+      --app-url "${MIP_APP_URL:?deployed app URL is required}" \
+      --protected-service-principal-id "$APP_SP_SCIM_ID" \
+      --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
+      --allow-attested-app-401
+    if [[ "$APP_ACCESS_QUARANTINED" -eq 1 ]]; then
+      step "grant only the dedicated release probe temporary candidate access"
+      # shellcheck disable=SC2031  # Parent-shell normal client ID is unchanged by mint subshells.
+      run "$PYTHON" -m tools.databricks.converge_app_release_access \
+        --mode probe \
+        --app-name "$_GRANTS_APP_NAME" \
+        --release-probe-application-id "$DATABRICKS_RELEASE_PROBE_CLIENT_ID" \
+        --normal-application-id "$DATABRICKS_CLIENT_ID" \
+        --operator2-application-id "$DATABRICKS_OPERATOR2_CLIENT_ID" \
+        --admin-application-id "$DATABRICKS_ADMIN_CLIENT_ID" \
+        "${APP_EXPECTED_IDENTITY_ARGS[@]}"
+      mint_app_automation_tokens
+    fi
+    AGENT_RUNTIME_BINDING_SHA256="$($PYTHON - \
+      "$MIP_AGENT_SERVING_ENDPOINT" \
+      "$MIP_AGENT_SUPERVISOR_ID" \
+      "$MIP_AGENT_SUPERVISOR_ENDPOINT" \
+      "$MIP_AGENT_RUNTIME_CLIENT_ID" \
+      "$MIP_AI_GATEWAY_AGENT_MODEL" \
+      "$MIP_AI_GATEWAY_AGENT_MODEL_VERSION" \
+      "$MIP_AI_GATEWAY_INFERENCE_TABLE" \
+      "$MIP_AGENT_PROXY_CLIENT_ID" \
+      "$MIP_AGENT_PROXY_CREDENTIAL_ID" \
+      "$MIP_AGENT_PROXY_SECRET_REFERENCE" <<'PYEOF'
+import sys
+from backend.agents.gateway_contract import gateway_runtime_binding_hash
+
+print(gateway_runtime_binding_hash(
+    endpoint=sys.argv[1],
+    supervisor_id=sys.argv[2],
+    upstream_endpoint=sys.argv[3],
+    runtime_application_id=sys.argv[4],
+    model_name=sys.argv[5],
+    model_version=int(sys.argv[6]),
+    inference_table=sys.argv[7],
+    proxy_caller_application_id=sys.argv[8],
+    proxy_caller_credential_id=sys.argv[9],
+    proxy_caller_secret_reference=sys.argv[10],
+))
+PYEOF
+)"
+    step "prove the active App snapshot is bound to the green runtime contract"
+    run "$PYTHON" -m tools.verify_deployed_app_contract \
+      --base-url "$MIP_APP_URL" \
+      --app-name "$APP_NAME" \
+      --token-env MIP_BEARER_TOKEN \
+      --git-sha "$APP_GIT_SHA" \
+      --gateway-binding-sha256 "$AGENT_RUNTIME_BINDING_SHA256" \
+      --deployment-lease-id "${MIP_APP_DEPLOYMENT_LEASE_ID:?App deployment lease is required}"
+    step "prove the App reaches green Agent Responses and its reviewed planner/data path"
+    run "$PYTHON" -m tools.verify_app_agent_green_path \
+      --base-url "$MIP_APP_URL" \
+      --app-name "$APP_NAME" \
+      --token-env MIP_BEARER_TOKEN \
+      --expected-endpoint "$MIP_AI_GATEWAY_ENDPOINT" \
+      --deployment-lease-id "${MIP_APP_DEPLOYMENT_LEASE_ID:?App deployment lease is required}"
+    step "read independent governed fn_build_cohort expectation before cutover"
+    AGENT_TOOL_EXPECTED_COUNT="$(
+      "$PYTHON" -m tools.databricks.read_agent_tool_probe_expectation \
+        --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
+        --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
+        --state CA
+    )"
+    if [[ ! "$AGENT_TOOL_EXPECTED_COUNT" =~ ^[0-9]+$ ]]; then
+      echo "${RED}[deploy] independent fn_build_cohort expectation is invalid.${RST}" >&2
+      exit 1
+    fi
+    step "prove exact hosted build_cohort execution through the green Gateway"
+    run_as_m2m_identity \
+      verifier \
+      DATABRICKS_VERIFIER_CLIENT_ID \
+      DATABRICKS_VERIFIER_CLIENT_SECRET \
+      "$PYTHON" -m tools.databricks.verify_hosted_agent_tool_execution \
+      --endpoint "$MIP_AI_GATEWAY_ENDPOINT" \
+      --expected-count "$AGENT_TOOL_EXPECTED_COUNT" \
+      --catalog "${MIP_DEFAULT_CATALOG:-mip}"
+    # The pre-activation mip_lakebase_migrate job already reconciled the exact
+    # App and verifier Lakebase grants after both OAuth roles were bootstrapped.
+    # Never rerun the full schema transaction after activating an App snapshot:
+    # doing so races live requests and can trip the Lakebase circuit breaker.
+    AI_GATEWAY_GRANTS_READY=1
     step "grant least-privilege AI Gateway inference-table access to the app service principal"
-    run "$PYTHON" tools/databricks/grant_ai_gateway_inference_table.py \
+    if ! run "$PYTHON" -m tools.databricks.grant_ai_gateway_inference_table \
       --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
       --relation-prefix "$MIP_AI_GATEWAY_INFERENCE_TABLE" \
       --endpoint "$MIP_AI_GATEWAY_ENDPOINT" \
-      --principal "$APP_SP_CLIENT_ID"
-    step "verify AI Gateway exact inference-row proof"
-    AI_GATEWAY_PROOF_ARGS=(
-      tools/databricks/verify_ai_gateway_exact_proof.py
-      send
-      --wait
-      --git-sha "$APP_GIT_SHA"
-      --endpoint "$MIP_AI_GATEWAY_ENDPOINT"
-      --inference-table "$MIP_AI_GATEWAY_INFERENCE_TABLE"
-    )
-    if [[ "${MIP_REQUIRE_AI_GATEWAY_CLAIMABLE:-0}" == "1" ]]; then
-      AI_GATEWAY_PROOF_ARGS+=(--require-verified)
+      --principal "$APP_SP_CLIENT_ID"; then
+      AI_GATEWAY_GRANTS_READY=0
     fi
-    run "$PYTHON" "${AI_GATEWAY_PROOF_ARGS[@]}"
+    if [[ "$AI_GATEWAY_GRANTS_READY" -eq 1 ]]; then
+      step "grant read-only AI Gateway inference-table access to the verifier service principal"
+      if ! run "$PYTHON" -m tools.databricks.grant_ai_gateway_inference_table \
+        --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
+        --relation-prefix "$MIP_AI_GATEWAY_INFERENCE_TABLE" \
+        --endpoint "$MIP_AI_GATEWAY_ENDPOINT" \
+        --principal "$DATABRICKS_VERIFIER_CLIENT_ID"; then
+        AI_GATEWAY_GRANTS_READY=0
+      fi
+    fi
+    if [[ "$AI_GATEWAY_GRANTS_READY" -eq 0 ]]; then
+      if [[ "${MIP_REQUIRE_AI_GATEWAY_CLAIMABLE:-0}" == "1" ]]; then
+        echo "${RED}[deploy] strict AI Gateway inference-table grant convergence failed.${RST}" >&2
+        exit 1
+      fi
+      echo "${YLW}[deploy] AI Gateway inference-table delivery/grants are pending; skipping exact proof and continuing with the capability honestly configured/unavailable.${RST}" >&2
+    else
+      DATABRICKS_ACCOUNT_HOST="${DATABRICKS_ACCOUNT_HOST:-https://accounts.cloud.databricks.com}"
+      if [[ -z "${DATABRICKS_ACCOUNT_ID:-}" ]]; then
+        echo "${RED}[deploy] DATABRICKS_ACCOUNT_ID is required before the verifier can write an exact Gateway proof.${RST}" >&2
+        exit 1
+      fi
+      step "prove verifier effective authorization boundary before exact Gateway proof"
+      run_as_m2m_identity \
+        verifier \
+        DATABRICKS_VERIFIER_CLIENT_ID \
+        DATABRICKS_VERIFIER_CLIENT_SECRET \
+        "$PYTHON" -m tools.databricks.verify_lakebase_oauth_identity \
+        --expected-application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
+        --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+        --lakebase-database "$LAKEBASE_DATABASE"
+      prove_exact_verifier_boundary \
+        "$MIP_AI_GATEWAY_ENDPOINT" \
+        "$MIP_AI_GATEWAY_INFERENCE_TABLE" \
+        "${VERIFIER_BOUNDARY_PRESERVE_ARGS[@]}"
+      step "verify AI Gateway exact inference-row proof with dedicated verifier identity"
+      AI_GATEWAY_PROOF_ARGS=(
+        -m
+        tools.databricks.verify_ai_gateway_exact_proof
+        send
+        --wait
+        --require-verifier-derived-auth
+        --warehouse-id "$_GRANTS_WAREHOUSE_ID"
+        --lakebase-instance "$MIP_LAKEBASE_INSTANCE"
+        --lakebase-database "$LAKEBASE_DATABASE"
+        --git-sha "$APP_GIT_SHA"
+        --endpoint "$MIP_AI_GATEWAY_ENDPOINT"
+        --inference-table "$MIP_AI_GATEWAY_INFERENCE_TABLE"
+        --expected-tool-count "$AGENT_TOOL_EXPECTED_COUNT"
+      )
+      if [[ "${MIP_REQUIRE_AI_GATEWAY_CLAIMABLE:-0}" == "1" ]]; then
+        AI_GATEWAY_PROOF_ARGS+=(--require-verified)
+      fi
+      if ! run_as_m2m_identity \
+        verifier \
+        DATABRICKS_VERIFIER_CLIENT_ID \
+        DATABRICKS_VERIFIER_CLIENT_SECRET \
+        "$PYTHON" "${AI_GATEWAY_PROOF_ARGS[@]}"; then
+        if [[ "${MIP_REQUIRE_AI_GATEWAY_CLAIMABLE:-0}" == "1" ]]; then
+          echo "${RED}[deploy] strict AI Gateway exact proof failed.${RST}" >&2
+          exit 1
+        fi
+        echo "${YLW}[deploy] AI Gateway exact proof is not claimable; continuing with the capability honestly configured/unavailable.${RST}" >&2
+      fi
+    fi
   fi
 fi
 
-if [[ "$DRY_RUN" -eq 0 ]]; then
-  wait_for_app_deployable
-fi
-deploy_app_snapshot "deploy Databricks App snapshot with agentic resource env"
+# The App already runs the exact agentic env before retirement. The verifier
+# ledger is read dynamically, so successful proof does not require another
+# deployment here.
 
 # -----------------------------------------------------------------------------
 # Step 10c: run live Agent Evaluation, then redeploy with the eval run id
 # -----------------------------------------------------------------------------
-if [[ "$DRY_RUN" -eq 0 && -n "${MIP_APP_URL:-}" && -z "${MIP_BEARER_TOKEN:-}" ]]; then
-  AUTH_HOST="${DATABRICKS_HOST:-$(dotenv_value DATABRICKS_HOST)}"
-  if [[ -n "$AUTH_HOST" ]]; then
-    export MIP_BEARER_TOKEN="$(databricks auth token --host "$AUTH_HOST" | "$PYTHON" -c 'import json,sys; print(json.load(sys.stdin).get("access_token",""))')"
-  fi
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  # A full deploy can exceed the workspace OAuth TTL before eval starts.
+  # Remint both identities immediately before the proof and never substitute
+  # the deployment PAT for either app-facing role.
+  mint_app_automation_tokens
 fi
 step "run live Agent Evaluation — golden Growth Agent workflows"
 mkdir -p dist
 AGENT_EVAL_ENV_FILE="$(mktemp -t mip-agent-eval.XXXXXX.env)"
-run "$PYTHON" tools/databricks/run_agent_eval.py \
+run "$PYTHON" -m tools.databricks.run_agent_eval \
   --app-url "${MIP_APP_URL:-}" \
   --require-mlflow-genai-evaluate \
   --out-env "$AGENT_EVAL_ENV_FILE" \
@@ -768,6 +4790,7 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
 fi
 
 if [[ "$DRY_RUN" -eq 0 ]]; then
+  mint_app_automation_tokens
   wait_for_app_deployable
 fi
 deploy_app_snapshot "deploy Databricks App snapshot with Agent Evaluation proof"
@@ -775,6 +4798,7 @@ deploy_app_snapshot "deploy Databricks App snapshot with Agent Evaluation proof"
 # -----------------------------------------------------------------------------
 # Step 11 (optional): live smoke test
 # -----------------------------------------------------------------------------
+FINAL_APP_PROVEN=0
 if [[ "$SKIP_SMOKE" -eq 1 ]]; then
   step "live smoke — SKIPPED (--skip-smoke)"
 else
@@ -785,31 +4809,248 @@ else
     # TTL, and smoke 401'd on geo rollups after passing nine checks). The
     # smoke sweep always deserves a fresh full-lifetime bearer.
     if [[ "$DRY_RUN" -eq 0 && -n "${MIP_APP_URL:-}" ]]; then
-      AUTH_HOST="${DATABRICKS_HOST:-$(dotenv_value DATABRICKS_HOST)}"
-      if [[ -n "$AUTH_HOST" ]]; then
-        export MIP_BEARER_TOKEN="$(databricks auth token --host "$AUTH_HOST" | "$PYTHON" -c 'import json,sys; print(json.load(sys.stdin).get("access_token",""))')"
-      fi
+      mint_app_automation_tokens
     fi
     step "live smoke — scripts/smoke_live.sh against the deployed app"
     export MIP_EXPECT_AGENTIC_CAPABILITIES="${MIP_EXPECT_AGENTIC_CAPABILITIES:-1}"
+    export MIP_EXPECT_GIT_SHA="$APP_GIT_SHA"
     if ! run ./scripts/smoke_live.sh; then
       if [[ "${ALLOW_SMOKE_FAILURE:-0}" == "1" ]]; then
-        echo "${YLW}[deploy] smoke test failed — override ALLOW_SMOKE_FAILURE=1 kept the deploy moving.${RST}" >&2
-        echo "${YLW}[deploy] this is for manual emergency use only; fix before customer release.${RST}" >&2
+        echo "${YLW}[deploy] smoke test failed — override will restore the signed last-good App.${RST}" >&2
+        echo "${YLW}[deploy] the failed candidate will not be recorded as verified.${RST}" >&2
       else
         echo "${RED}[deploy] smoke test failed — deployed source is not customer-release-ready.${RST}" >&2
         echo "${RED}[deploy] set ALLOW_SMOKE_FAILURE=1 only for an intentional manual emergency override.${RST}" >&2
         exit 1
       fi
+    else
+      FINAL_APP_PROVEN=1
     fi
   else
     step "live smoke — scripts/smoke_live.sh not executable; skipping"
   fi
 fi
 
+if [[ "$DRY_RUN" -eq 0 && "$FINAL_APP_PROVEN" -eq 1 ]]; then
+  mint_app_automation_tokens
+  APP_UPGRADE_STATE="green_treatment_pending_capture"
+  step "atomically restore treatment authority and persist the last-good App contract"
+  capture_last_good_app "${AGENT_RUNTIME_BINDING_SHA256:-}"
+  finalize_signed_first_install_capture
+  if [[ "$APP_ACCESS_QUARANTINED" -eq 1 ]]; then
+    step "replace release-probe access with exact runtime operator access after signed capture"
+    # shellcheck disable=SC2031  # Parent-shell normal client ID is unchanged by mint subshells.
+    run "$PYTHON" -m tools.databricks.converge_app_release_access \
+      --mode runtime \
+      --app-name "$_GRANTS_APP_NAME" \
+      --release-probe-application-id "$DATABRICKS_RELEASE_PROBE_CLIENT_ID" \
+      --normal-application-id "$DATABRICKS_CLIENT_ID" \
+      --operator2-application-id "$DATABRICKS_OPERATOR2_CLIENT_ID" \
+      --admin-application-id "$DATABRICKS_ADMIN_CLIENT_ID" \
+      "${APP_EXPECTED_IDENTITY_ARGS[@]}"
+    APP_ACCESS_QUARANTINED=0
+  fi
+  step "retire pinned blue runtime resources only after every green release gate"
+  AGENT_RUNTIME_RETIRE_ARGS=(
+    -m tools.databricks.cutover_agent_runtime_supervisor retire
+    "${AGENT_RUNTIME_GREEN_ARGS[@]}"
+    --verifier-application-id "$DATABRICKS_VERIFIER_CLIENT_ID"
+    --verifier-scim-id "$MIP_VERIFIER_SCIM_ID"
+    --proxy-application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID"
+  )
+  if [[ -n "${MIP_REPLACED_AGENT_SUPERVISOR_ID:-}" ]]; then
+    AGENT_RUNTIME_RETIRE_ARGS+=(
+      --old-id "$MIP_REPLACED_AGENT_SUPERVISOR_ID"
+      --old-endpoint "$MIP_REPLACED_AGENT_SUPERVISOR_ENDPOINT"
+      --old-endpoint-id "$MIP_REPLACED_AGENT_SUPERVISOR_ENDPOINT_ID"
+      --old-creator "$MIP_REPLACED_AGENT_SUPERVISOR_CREATOR"
+      --old-create-time "$MIP_REPLACED_AGENT_SUPERVISOR_CREATE_TIME"
+    )
+  fi
+  if [[ -n "${MIP_REPLACED_AGENT_GATEWAY_ENDPOINT:-}" ]]; then
+    AGENT_RUNTIME_RETIRE_ARGS+=(
+      --old-gateway-endpoint "$MIP_REPLACED_AGENT_GATEWAY_ENDPOINT"
+      --old-gateway-endpoint-id "$MIP_REPLACED_AGENT_GATEWAY_ENDPOINT_ID"
+      --old-gateway-creator "$MIP_REPLACED_AGENT_GATEWAY_CREATOR"
+    )
+    if [[ "${MIP_REPLACED_AGENT_GATEWAY_DELETE_ALLOWED:-0}" == "1" ]]; then
+      AGENT_RUNTIME_RETIRE_ARGS+=(--old-gateway-delete-allowed)
+    fi
+  fi
+  if [[ -n "${MIP_REPLACED_AGENT_SUPERVISOR_ID:-}" || \
+        -n "${MIP_REPLACED_AGENT_GATEWAY_ENDPOINT:-}" ]]; then
+    run "$PYTHON" "${AGENT_RUNTIME_RETIRE_ARGS[@]}"
+  else
+    step "no signed blue runtime resource is pinned; skipping destructive retirement"
+  fi
+  step "finalize the runtime-owned Supervisor canonical name"
+  run_as_m2m_identity \
+    agent-runtime \
+    DATABRICKS_AGENT_RUNTIME_CLIENT_ID \
+    DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET \
+    "$PYTHON" -m tools.databricks.cutover_agent_runtime_supervisor finalize \
+    --replacement-id "$MIP_AGENT_SUPERVISOR_ID" \
+    --replacement-endpoint "$MIP_AGENT_SUPERVISOR_ENDPOINT" \
+    --runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+    --app-name "$_GRANTS_APP_NAME" \
+    --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+    --deployment-source-git-sha "$SOURCE_GIT_SHA" \
+    --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
+    --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}"
+  step "re-audit final agent-runtime global access after blue retirement"
+  run_with_account_identity run_with_proof_signing_authority \
+    "$PYTHON" -m tools.databricks.audit_global_m2m_access \
+    --app-name "${MIP_APP_NAME:?App name is required}" \
+    --application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+    --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL" \
+    --account-id "$DATABRICKS_ACCOUNT_ID" \
+    --expected-serving-permission CAN_MANAGE \
+    --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
+    --serving-endpoint "$MIP_AGENT_SUPERVISOR_ENDPOINT" \
+    --serving-endpoint "$MIP_AI_GATEWAY_ENDPOINT"
+  step "re-audit final Supervisor proxy caller access after blue retirement"
+  run converge_agent_proxy_boundary \
+    converge \
+    "$MIP_AGENT_SUPERVISOR_ID" \
+    "$MIP_AGENT_SUPERVISOR_ENDPOINT" \
+    "$MIP_AGENT_SUPERVISOR_ENDPOINT_ID"
+  step "re-prove final dual-authority agent-proxy Unity Catalog boundary"
+  run_with_account_identity \
+    run_with_proof_signing_authority \
+      run_with_agent_proxy_credentials \
+      "$PYTHON" -m tools.databricks.verify_agent_proxy_uc_boundary_dual_authority \
+    --app-name "$_GRANTS_APP_NAME" \
+    --application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID" \
+    --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL" \
+    --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
+    --supervisor-id "$MIP_AGENT_SUPERVISOR_ID" \
+    --supervisor-endpoint-id "$MIP_AGENT_SUPERVISOR_ENDPOINT_ID" \
+    --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}"
+  step "re-prove final agent-proxy target query and negative boundary after blue retirement"
+  run_with_account_identity \
+    run_with_agent_proxy_credentials \
+      "$PYTHON" -m tools.databricks.verify_agent_proxy_identity_boundary \
+    --expected-application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID" \
+    --account-host "$DATABRICKS_ACCOUNT_HOST" \
+    --account-id "$DATABRICKS_ACCOUNT_ID" \
+    --app-name "$_GRANTS_APP_NAME" \
+    --app-url "${_AGENT_PROXY_BOUNDARY_APP_URL:?deployed App URL is required}" \
+    --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+    --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
+    --supervisor-id "${MIP_AGENT_SUPERVISOR_ID:-dry-run-supervisor}" \
+    --supervisor-endpoint "${MIP_AGENT_SUPERVISOR_ENDPOINT:-dry-run-supervisor-endpoint}" \
+    --supervisor-endpoint-id "${MIP_AGENT_SUPERVISOR_ENDPOINT_ID:-dry-run-supervisor-endpoint-id}" \
+    --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
+    --allow-attested-app-401
+  AGENT_PROXY_SIGNED_BLUE_RETIRE_ARGS=()
+  if [[ "$APP_SIGNED_BLUE_AVAILABLE" -eq 1 && \
+        -n "$MIP_APP_ROLLBACK_PROXY_CREDENTIAL_IDS" ]]; then
+    IFS=',' read -r -a _AGENT_PROXY_SIGNED_BLUE_IDS \
+      <<< "$MIP_APP_ROLLBACK_PROXY_CREDENTIAL_IDS"
+    for _AGENT_PROXY_SIGNED_BLUE_ID in "${_AGENT_PROXY_SIGNED_BLUE_IDS[@]}"; do
+      if [[ ! "$_AGENT_PROXY_SIGNED_BLUE_ID" =~ ^[A-Za-z0-9._-]{1,128}$ ]]; then
+        echo "${RED}[deploy] signed-blue agent-proxy credential ID is invalid.${RST}" >&2
+        exit 1
+      fi
+      AGENT_PROXY_SIGNED_BLUE_RETIRE_ARGS+=(
+        --signed-blue-credential-id "$_AGENT_PROXY_SIGNED_BLUE_ID"
+      )
+    done
+  fi
+  step "remove retired Supervisor proxy OAuth credentials and secret versions"
+  run_with_proof_signing_authority \
+    run_with_agent_proxy_binding \
+      "$PYTHON" -m tools.databricks.provision_agent_proxy_secret \
+    --app-name "$_GRANTS_APP_NAME" \
+    --scope "$MIP_AGENT_PROXY_SECRET_SCOPE" \
+    --rollback-scope "$APP_ROLLBACK_SECRET_SCOPE" \
+    --runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+    --cleanup-signed-blue \
+    "${AGENT_PROXY_SIGNED_BLUE_RETIRE_ARGS[@]}"
+  step "prove exact green Gateway inference after proxy credential retirement"
+  mint_app_automation_tokens
+  run "$PYTHON" -m tools.verify_app_agent_green_path \
+    --base-url "$MIP_APP_URL" \
+    --app-name "$APP_NAME" \
+    --token-env MIP_BEARER_TOKEN \
+    --expected-endpoint "$MIP_AI_GATEWAY_ENDPOINT" \
+    --deployment-lease-id "${MIP_APP_DEPLOYMENT_LEASE_ID:?App deployment lease is required}"
+  run_as_m2m_identity \
+    verifier \
+    DATABRICKS_VERIFIER_CLIENT_ID \
+    DATABRICKS_VERIFIER_CLIENT_SECRET \
+    "$PYTHON" -m tools.databricks.verify_hosted_agent_tool_execution \
+    --endpoint "$MIP_AI_GATEWAY_ENDPOINT" \
+    --expected-count "$AGENT_TOOL_EXPECTED_COUNT" \
+    --catalog "${MIP_DEFAULT_CATALOG:-mip}"
+  step "re-audit final verifier global access after blue retirement"
+  run_with_account_identity run_with_proof_signing_authority \
+    "$PYTHON" -m tools.databricks.audit_global_m2m_access \
+    --app-name "${MIP_APP_NAME:?App name is required}" \
+    --application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
+    --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL" \
+    --account-id "$DATABRICKS_ACCOUNT_ID" \
+    --expected-serving-permission CAN_QUERY \
+    --forbid-all-genie \
+    --serving-endpoint "$MIP_AI_GATEWAY_ENDPOINT"
+  step "re-audit final App global serving access after blue retirement"
+  run_with_account_identity run_with_proof_signing_authority \
+    "$PYTHON" -m tools.databricks.audit_global_m2m_access \
+    --app-name "${MIP_APP_NAME:?App name is required}" \
+    --application-id "$APP_SP_CLIENT_ID" \
+    --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL" \
+    --account-id "$DATABRICKS_ACCOUNT_ID" \
+    --expected-serving-permission CAN_QUERY \
+    --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
+    --serving-endpoint "$MIP_AI_GATEWAY_ENDPOINT"
+  step "clear the authenticated cutover journal after every final boundary proof"
+  run_as_m2m_identity \
+    agent-runtime \
+    DATABRICKS_AGENT_RUNTIME_CLIENT_ID \
+    DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET \
+    "$PYTHON" -m tools.databricks.cutover_agent_runtime_supervisor clear-journal \
+    --runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+    --app-application-id "$APP_SP_CLIENT_ID" \
+    --app-scim-id "$APP_SP_SCIM_ID" \
+    --verifier-application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
+    --verifier-scim-id "$MIP_VERIFIER_SCIM_ID" \
+    --proxy-application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID" \
+    --app-name "$_GRANTS_APP_NAME" \
+    --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+    --deployment-source-git-sha "$SOURCE_GIT_SHA"
+  step "archive the retired blue Gateway model after authenticated journal clearance"
+  reconcile_gateway_model_archives
+  step "re-prove final dual-authority agent-runtime UC boundary after model archival"
+  prove_agent_runtime_dual_uc_boundary
+  VERIFIER_GATEWAY_CUTOVER_MUTATED=0
+  # Persist only after retirement/finalization. Keeping the prior cache until
+  # then preserves the pinned old identity across an interrupted cleanup.
+  # Values only name resources; no secrets are written.
+  mkdir -p .databricks
+  sed '/^MIP_REPLACED_AGENT_SUPERVISOR_/d' \
+    "$AGENTIC_ENV_FILE" > "$AGENTIC_ENV_CACHE"
+  APP_UPGRADE_STATE="green_verified"
+elif [[ "$DRY_RUN" -eq 0 ]]; then
+  step "stop the unproven candidate before signed-blue rollback"
+  run "$PYTHON" -m tools.databricks.stop_app_fail_closed \
+    --app-name "$APP_NAME" \
+    "${APP_EXPECTED_IDENTITY_ARGS[@]}"
+  step "prove treatment authority remains quiesced before signed-blue rollback"
+  run converge_app_treatment_access quiesce
+  TREATMENT_RUNTIME_QUIESCED=1
+  if [[ "$APP_SIGNED_BLUE_AVAILABLE" -ne 1 ]]; then
+    echo "${RED}[deploy] final smoke proof is absent and no signed-blue rollback exists; leaving the first-install App stopped and quiesced.${RST}" >&2
+    exit 1
+  fi
+  APP_UPGRADE_STATE="green_activating_quiesced"
+  step "restore the signed last-good App because final smoke proof is absent"
+  run restore_signed_blue_while_quiesced
+fi
+
 # -----------------------------------------------------------------------------
 # Done
 # -----------------------------------------------------------------------------
+APP_FAIL_CLOSED_ARMED=0
 echo
 echo "${GRN}[deploy] complete.${RST}"
 echo "${DIM}  App URL:     ${MIP_APP_URL:-"(check the Databricks workspace → Apps)"}${RST}"

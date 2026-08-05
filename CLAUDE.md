@@ -22,7 +22,7 @@ Remember these exact product anchors:
 - Enterprise product polish at 1440×900.
 - Fast page loads, stable interactions, real data under the hood.
 - Source evidence visible on every score/recommendation — traced to live Unity Catalog rows.
-- **Self-contained, zero-click deploy.** `./scripts/deploy.sh -t dev` (or `make deploy-dev`) is the command of record for first deploys and roll-forwards. It must provision, populate, promote, and smoke-check every resource the app needs — UC catalog + schemas, silver/gold tables, Lakeflow pipelines, Lakebase instance + migrations, FRED ingest job, Genie Space, Databricks App — with no manual UI steps, no "now go click this" setup docs, no secret dances beyond one `.env.local` fill-in. `databricks bundle deploy -t dev` is the lower-level resource apply; it does not run the full population/promotion workflow by itself. Customers should see a working app after the deploy script completes.
+- **Self-contained, zero-click deploy.** `./scripts/deploy.sh -t dev` (or `make deploy-dev`) is the only supported mutation command for first deploys and roll-forwards. It must provision, populate, promote, and smoke-check every resource the app needs — UC catalog + schemas, silver/gold tables, Lakeflow pipelines, Lakebase instance + migrations, FRED ingest job, Genie Space, Databricks App — with no manual UI steps, no "now go click this" setup docs, no secret dances beyond one `.env.local` fill-in. Unrestricted raw bundle deployment is retired because the bundle includes App source and can bypass signed promotion. Customers should see a working app after the deploy script completes.
 - Clear separation of frontend, backend, SQL, Databricks resources, and agent docs.
 - Small files, strong types, easy-to-review commits.
 - Repeatable validation after every slice.
@@ -69,7 +69,7 @@ npm --prefix frontend run build                                # tsc -b && vite 
 python tools/verify_scaffold.py
 make deploy-dev                                                 # full one-command deploy
 databricks bundle validate -t dev                              # resource-level validation
-databricks bundle deploy -t dev                                # resource-level apply only
+# Unrestricted bundle mutation is retired; use make deploy-dev.
 
 # Makefile aggregates: make setup | dev-api | dev-ui | test | lint | build | validate
 ```
@@ -88,7 +88,7 @@ If a command fails, fix the root cause before moving to another feature. Do not 
 - **App state:** Lakebase Postgres (`lakebase/schema.sql`) holds campaigns, approvals, agent sessions, audit, feedback. Sample-lender seed in `lakebase/seed_campaigns.sql`.
 - **Test fixtures (not a runtime mode):** `tests/fixtures/mock_population.py` and `frontend/src/mocks/fixtureData.ts` exist for unit tests and Storybook only. Production routers do NOT import them. There is no `MIP_MOCK_MODE` runtime toggle — the app runs on live Unity Catalog + Lakebase in every environment. Real-world flakiness is handled by `backend/services/resilience.py` (retry, warm-start, short-TTL cache, circuit breaker) and by explicit degraded-state UI, never by silent mock fallback.
 - **Frontend:** Vite + React Router. Eleven route modules in `frontend/src/routes/` (the eight contracted product-flow routes plus analytics, asset detail, glossary — admin-config is the eleventh; legacy outreach-composer paths are redirects, not routes); shared UI in `components/mortgage/` (EvidenceDrawer, KpiCard, LeadTable, SegmentCard, ApprovalBanner, TriggerTimeline). Design tokens live in `design-system/tokens.css` — don't inline colors.
-- **Databricks bundle:** `databricks.yml` declares ALL resources inline (app, serverless SQL warehouse, jobs, pipelines, dashboards, Genie space, Lakebase instance, MLflow experiment). Job task source files live in `jobs/` and `pipelines/lakeflow/`; do not add YAML mirrors of bundle resources — mirrors buy drift, not modularity.
+- **Databricks bundle:** `databricks.yml` declares the app, serverless SQL warehouse, jobs, pipelines, dashboards, Lakebase instance, and MLflow experiment inline. The governed Genie space is provisioned and verified by `tools/databricks/provision_genie_space.py` because the bundle schema cannot declare it. Job task source files live in `jobs/` and `pipelines/lakeflow/`; do not add YAML mirrors of bundle resources — mirrors buy drift, not modularity.
 
 ## Start here when a task is vague
 
@@ -125,7 +125,7 @@ Hard rules for UI work:
 - Do not wire automatic email/SMS sending.
 - Do not introduce a mock fallback in the running app. The app runs on real Unity Catalog data or it fails visibly. Handle flakiness with resilience engineering (retries, warm-start, cache, circuit breaker, degraded-state UI) — never with silent mock substitution.
 - Do not filter real data to a single metro. The product must follow the current refreshed Cotality coverage dynamically; geography drill-down is a hero surface, not a nice-to-have.
-- Do not add out-of-band setup steps. Any new infrastructure (UC object, secret scope, job, pipeline, Lakebase migration, seed file) must be declared in the bundle or an idempotent deploy helper and must be reachable from `./scripts/deploy.sh -t dev` plus a documented `.env.local` template. Bare `databricks bundle deploy -t dev` may apply lower-level resources only; the customer/operator contract is the deploy script. Manual click-ops in the Databricks UI are a packaging bug.
+- Do not add out-of-band setup steps. Any new infrastructure (UC object, secret scope, job, pipeline, Lakebase migration, seed file) must be declared in the bundle or an idempotent deploy helper and must be reachable from `./scripts/deploy.sh -t dev` plus a documented `.env.local` template. Unrestricted raw bundle mutation is unsupported because it can activate App source outside signed promotion; the customer/operator contract is the deploy script. Manual click-ops in the Databricks UI are a packaging bug.
 - Do not rely on external APIs being reachable at deploy-time. FRED and any future public-data sources must have a repo-committed seed file so the first app boot has data even before the first scheduled refresh runs.
 - Do not put secrets in source, `.env`, `app.yaml`, screenshots, notebooks, or logs.
 - Do not change the app to Streamlit unless the user explicitly chooses the emergency fallback.

@@ -87,6 +87,19 @@ describe('apiPath', () => {
   });
 });
 
+describe('session API client', () => {
+  it('reads the minimal role capability from canonical API v1', async () => {
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', async (path: string) => {
+      calls.push(path);
+      return jsonResponse(200, { can_access_admin: false });
+    });
+
+    await expect(api.session()).resolves.toEqual({ can_access_admin: false });
+    expect(calls).toEqual(['/api/v1/session']);
+  });
+});
+
 describe('analytics API client', () => {
   it('routes native analytics reads through the canonical API version', async () => {
     const calls: Array<{ path: string; init?: RequestInit }> = [];

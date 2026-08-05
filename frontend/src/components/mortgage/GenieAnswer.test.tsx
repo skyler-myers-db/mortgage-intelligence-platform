@@ -168,8 +168,16 @@ describe('Genie table display labels', () => {
     expect(formatCell('segment_code', 'permit')).toBe('HELOC Intent');
     expect(formatCell('segment_code', 'itm')).toBe('Prime Refi Candidates');
     expect(formatCell('segment_codes', ['permit', 'equity'])).toBe('HELOC Intent, Home Equity Candidate');
+    expect(formatCell('segment_codes', '["itm", "permit"]')).toBe('Prime Refi Candidates, HELOC Intent');
     expect(formatCell('segment_code', 'retention-risk')).toBe('Unknown segment');
     expect(formatCell('segment_codes', ['retention-risk', 'made_up'])).toBe('Unknown segment');
+  });
+
+  it('fails closed for malformed, non-array, or partly unknown encoded cohort lists', () => {
+    expect(formatCell('segment_codes', '["itm"')).toBe('Unknown segment');
+    expect(formatCell('segment_codes', '"itm"')).toBe('Unknown segment');
+    expect(formatCell('segment_codes', '["itm", "made_up"]')).toBe('Unknown segment');
+    expect(formatCell('segment_codes', '[]')).toBe('Unknown segment');
   });
 
   it('does not leak raw unknown segment tokens in strategy board metadata', () => {

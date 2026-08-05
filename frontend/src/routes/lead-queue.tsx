@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router';
 import { api, type LeadsPageResult } from '../lib/api';
 import { useConfigOptionsQuery } from '../lib/configOptionsQuery';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
@@ -138,6 +138,14 @@ export default function LeadQueue() {
   const outreachStatus = (searchParams.get('outreach_status') ?? 'any').toLowerCase();
   const assignedTo = (searchParams.get('assigned_to') ?? '').trim() || undefined;
   const agedDays = Number(searchParams.get('aged_days') ?? '') || null;
+  const growthAgentProofKey = [
+    'growth_agent_run_id',
+    'actionable_total',
+    'actionable_cohort_fingerprint',
+    'actionable_snapshot_id',
+    'tool_result_hash',
+    'growth_handoff',
+  ].map((key) => searchParams.get(key) ?? '').join('|');
   // Sales team feeds the ASSIGNED filter and LeadTable's assign actions. The
   // Sales ops snapshot that also used it moved to the Analytics "Sales ops" tab.
   const salesTeamQuery = useQuery<SalesTeamMember[]>({
@@ -199,6 +207,7 @@ export default function LeadQueue() {
     error,
     manualRetry,
     isFetching: leadsFetching,
+    isPlaceholderData: leadsPlaceholderData,
   } = useWarmingUpRetry<LeadsPageResult>(
     (signal) => api.leadsPage(
       segment,
@@ -244,6 +253,7 @@ export default function LeadQueue() {
       outreachStatus,
       assignedTo,
       agedDays,
+      growthAgentProofKey,
     ],
     {
       queryKey: queryKeys.leads([
@@ -266,6 +276,7 @@ export default function LeadQueue() {
         outreachStatus,
         assignedTo ?? '',
         agedDays ?? '',
+        growthAgentProofKey,
       ]),
       keepPreviousData: true,
     },
@@ -458,6 +469,7 @@ export default function LeadQueue() {
         <div className="surface__body">
           <div
             className={`lead-queue-scope ${scopeFiltersActive ? '' : 'is-empty'}`}
+            role="group"
             aria-label="Active analytics drilldown filters"
             aria-hidden={!scopeFiltersActive || undefined}
           >
@@ -486,7 +498,7 @@ export default function LeadQueue() {
             ) : null}
           </div>
           {segmentChips.length > 0 && (
-            <div className="chip-row mb-2" aria-label="Active segment filters">
+            <div className="chip-row mb-2" role="group" aria-label="Active segment filters">
               {segmentChips.map((chip) => (
                 <Chip
                   key={chip.code}
@@ -685,6 +697,9 @@ export default function LeadQueue() {
             leads={visibleLeads}
             totalMatching={leadsData?.totalMatching ?? null}
             truncatedAt={leadsData?.truncatedAt ?? null}
+            growthAgentVerification={leadsPlaceholderData
+              ? null
+              : leadsData?.growthAgentVerification ?? null}
             exportContext={exportContext}
             salesTeam={salesTeam}
           />

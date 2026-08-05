@@ -5,6 +5,8 @@
  *   - follow-up chips submit the question through onFollowUp
  *   - native-visualization Beta badge renders only when the field is present,
  *     and is a NEUTRAL marker (never chip--success)
+ *   - genuine Genie answers identify the Conversation API and expose
+ *     API-provided reasoning summaries in a collapsed disclosure
  *   - feedback control appears on a trusted answer and is suppressed on a
  *     governed refusal
  */
@@ -24,6 +26,8 @@ vi.mock('../../lib/api', async () => {
 
 import { GenieAnswer } from './GenieAnswer';
 
+(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
 function payload(overrides: Partial<GenieAnswerShape> = {}): GenieAnswerShape {
   return {
     answer: 'The average loan age is 5.25 years.',
@@ -31,6 +35,7 @@ function payload(overrides: Partial<GenieAnswerShape> = {}): GenieAnswerShape {
     trusted_assets: ['mip.gold.borrower_360'],
     conversation_id: 'conv-1',
     message_id: 'msg-1',
+    genie_status: 'COMPLETED',
     question_hash: 'h1',
     metric_value: '5.25 years',
     table_rows: null,
@@ -52,22 +57,41 @@ describe('GenieAnswer render surfaces', () => {
     container.remove();
   });
 
-  it('submits the follow-up question text through onFollowUp on click', () => {
-    const onFollowUp = vi.fn();
-    act(() =>
-      root.render(
-        <GenieAnswer
-          payload={payload({ follow_up_questions: ['Break this down by state'] })}
-          question="Q"
-          onFollowUp={onFollowUp}
-        />,
-      ),
-    );
-    const chip = container.querySelector<HTMLButtonElement>('.filter--question');
-    expect(chip).not.toBeNull();
-    act(() => chip!.click());
-    expect(onFollowUp).toHaveBeenCalledWith('Break this down by state');
+  it('announces the metric and narrative without wrapping interactive answer controls', () => {
+    act(() => root.render(
+      <GenieAnswer payload={payload()} question="Q" onFollowUp={() => {}} />,
+    ));
+
+    const status = container.querySelector<HTMLElement>('[role="status"]');
+    expect(status).not.toBeNull();
+    expect(status?.classList.contains('sr-only')).toBe(true);
+    expect(status?.getAttribute('aria-live')).toBe('polite');
+    expect(status?.getAttribute('aria-atomic')).toBe('true');
+    expect(status?.textContent).toContain('Genie answer ready.');
+    expect(status?.textContent).toContain('5.25 years');
+    expect(status?.textContent).toContain('The average loan age is 5.25 years.');
+    expect(status?.querySelector('button')).toBeNull();
   });
+
+  it.each(['Break this down by state', 'Which ZIPs lead'])(
+    'submits native follow-up %s with its explicit conversation id',
+    (followUp) => {
+      const onFollowUp = vi.fn();
+      act(() =>
+        root.render(
+          <GenieAnswer
+            payload={payload({ follow_up_questions: [followUp] })}
+            question="Q"
+            onFollowUp={onFollowUp}
+          />,
+        ),
+      );
+      const chip = container.querySelector<HTMLButtonElement>('.filter--question');
+      expect(chip).not.toBeNull();
+      act(() => chip!.click());
+      expect(onFollowUp).toHaveBeenCalledWith(followUp, 'conv-1');
+    },
+  );
 
   it('renders the native-viz Beta badge only when native_visualization is present', () => {
     // Absent → no badge.
@@ -96,6 +120,105 @@ describe('GenieAnswer render surfaces', () => {
     expect(container.querySelector('.genie-answer__native-viz svg.recharts-surface')).toBeNull();
   });
 
+  it('labels genuine Genie answers and renders public process summaries collapsed', () => {
+    act(() =>
+      root.render(
+        <GenieAnswer
+          payload={payload({
+            reasoning_trace: [
+              { kind: 'FILTERING_CONTEXT', content: 'Scoped the request to trusted assets.' },
+              { kind: 'THOUGHT_TYPE_TEXT', content: 'Summarized the verified result.' },
+            ],
+          })}
+          question="Q"
+          onFollowUp={() => {}}
+        />,
+      ),
+    );
+
+    const source = container.querySelector('.genie-answer__api-source');
+    expect(source?.textContent).toContain('Databricks Genie Conversation API');
+    expect(source?.getAttribute('aria-label')).toBe(
+      'Answer source: Databricks Genie Conversation API',
+    );
+    expect(source?.getAttribute('role')).toBe('note');
+    const reasoning = container.querySelector<HTMLDetailsElement>('.genie-answer__reasoning');
+    expect(reasoning).not.toBeNull();
+    expect(reasoning?.open).toBe(false);
+    expect(reasoning?.textContent).toContain('Genie process summary');
+    expect(reasoning?.textContent).toContain('Filtering Context');
+    expect(reasoning?.textContent).toContain('Scoped the request to trusted assets.');
+    expect(reasoning?.textContent).toContain('Text');
+    expect(reasoning?.textContent).toContain('Summarized the verified result.');
+    expect(reasoning?.textContent).not.toContain('chain-of-thought');
+    expect(
+      reasoning?.querySelector('[role="list"]')?.getAttribute('aria-label'),
+    ).toBe('Databricks Genie public process summaries');
+  });
+
+  it('surfaces API reasoning when a real Genie turn is verified by trusted SQL', () => {
+    act(() =>
+      root.render(
+        <GenieAnswer
+          payload={payload({
+            source: 'trusted_sql',
+            reasoning_trace: [
+              { kind: 'THOUGHT_TYPE_TEXT', content: 'Verified the returned aggregate.' },
+            ],
+          })}
+          question="Q"
+          onFollowUp={() => {}}
+        />,
+      ),
+    );
+
+    expect(container.querySelector('.genie-answer__api-source')?.textContent).toContain(
+      'Databricks Genie Conversation API · verified SQL',
+    );
+    expect(container.querySelector('.genie-answer__reasoning')).not.toBeNull();
+    expect(container.textContent).toContain('Verified the returned aggregate.');
+  });
+
+  it('discloses a verified live Genie turn even when no reasoning rows are returned', () => {
+    act(() =>
+      root.render(
+        <GenieAnswer
+          payload={payload({
+            source: 'trusted_sql',
+            reasoning_trace: [],
+          })}
+          question="Q"
+          onFollowUp={() => {}}
+        />,
+      ),
+    );
+
+    expect(container.querySelector('.genie-answer__api-source')?.textContent).toContain(
+      'Databricks Genie Conversation API · verified SQL',
+    );
+    expect(container.querySelector('.genie-answer__reasoning')).toBeNull();
+  });
+
+  it('labels governed action results without claiming a Genie Conversation API answer', () => {
+    act(() =>
+      root.render(
+        <GenieAnswer
+          payload={payload({
+            source: 'governed_action',
+            answer: 'Saved 12 borrowers to the reviewed Lead Queue handoff.',
+            message_id: null,
+            genie_status: null,
+          })}
+        />,
+      ),
+    );
+
+    const source = container.querySelector('.genie-answer__api-source');
+    expect(source?.textContent).toContain('Governed action result');
+    expect(source?.textContent).not.toContain('Databricks Genie Conversation API');
+    expect(source?.getAttribute('aria-label')).toBe('Answer source: Governed action result');
+  });
+
   it('shows the feedback control on a trusted answer and hides it on a refusal', () => {
     act(() => root.render(<GenieAnswer payload={payload()} question="Q" onFollowUp={() => {}} />));
     expect(container.querySelector('[data-testid="genie-feedback-up"]')).not.toBeNull();
@@ -110,5 +233,26 @@ describe('GenieAnswer render surfaces', () => {
       ),
     );
     expect(container.querySelector('[data-testid="genie-feedback-up"]')).toBeNull();
+  });
+
+  it('keeps canonical feedback visible using live ids preserved in proof', () => {
+    act(() => root.render(
+      <GenieAnswer
+        payload={payload({
+          source: 'trusted_sql',
+          conversation_id: undefined,
+          message_id: null,
+          proof: {
+            conversation_id: 'conv-live',
+            message_id: 'msg-live',
+            trusted: true,
+          },
+        })}
+        question="Q"
+      />,
+    ));
+
+    expect(container.querySelector('[data-testid="genie-feedback-up"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="genie-feedback-down"]')).not.toBeNull();
   });
 });

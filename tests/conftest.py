@@ -18,18 +18,39 @@ swap in a custom stub for a single route can layer their own override
 on top and clear it in teardown -- dependency_overrides is a plain
 dict.
 """
+
 from __future__ import annotations
 
 # ruff: noqa: E402,I001
 
+import json
+import os
+import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+
+# Pytest must be hermetic even when a developer has a deployment-ready
+# ``.env.local`` in the checkout.  Explicit process environment variables are
+# still available to opt-in live integration tests, but repository-local
+# deployment credentials and APP_ENV must never change ordinary unit-test
+# authorization or cause live infrastructure calls during the default suite.
+os.environ["MIP_DISABLE_DOTENV"] = "1"
+
+# MLflow tracing can flush after an individual test fixture has torn down. Pin
+# the entire pytest process to an isolated tracking/registry database before
+# importing the application so asynchronous exporters can never fall back to
+# root-local ``mlflow.db`` / ``mlruns`` state.
+_MLFLOW_TEST_ROOT = Path(tempfile.mkdtemp(prefix="mip-pytest-mlflow-"))
+_MLFLOW_TEST_URI = f"sqlite:///{_MLFLOW_TEST_ROOT / 'mlflow.db'}"
+os.environ["MLFLOW_TRACKING_URI"] = _MLFLOW_TEST_URI
+os.environ["MLFLOW_REGISTRY_URI"] = _MLFLOW_TEST_URI
 
 from backend.config.settings import settings
 
@@ -90,6 +111,7 @@ from backend.services.repositories import (
 from backend.services.repositories.factory import _reset_singletons_for_tests
 from backend.services.resilience import _reset_breakers_for_tests
 from backend.services.sales_state import clear_sales_state_cache
+from backend.services.state_footprint import _reset_state_footprint_resolver_for_tests
 from backend.services.workspace_store import (
     _reset_workspace_store_for_tests,
     get_workspace_store,
@@ -177,6 +199,7 @@ class _FakeLakebaseClient:
         self.assignments: list[dict[str, Any]] = []
         self.dispositions: list[dict[str, Any]] = []
         self.outcomes: list[dict[str, Any]] = []
+        self.campaigns: list[dict[str, Any]] = []
         self.activation_destinations: list[dict[str, Any]] = [
             {
                 "source_system": "salesforce",
@@ -204,6 +227,7 @@ class _FakeLakebaseClient:
             },
         ]
         self.approvals: list[dict[str, Any]] = []
+        self.generated_outreach_drafts: list[dict[str, Any]] = []
         self.audit_events: list[dict[str, Any]] = []
         # S6 assignment outcomes reuse the feedback table pattern.
         self.feedback: list[dict[str, Any]] = []
@@ -239,8 +263,19 @@ class _FakeLakebaseClient:
                     "request_id": params.get("request_id"),
                     "assigned_to_email": params.get("assigned_to_email"),
                     "follow_up_at": params.get("follow_up_at"),
+                    "decision_intent": params.get("decision_intent"),
+                    "decision_payload_hash": params.get("decision_payload_hash"),
+                    "decision_response": None,
+                    "audit_event_id": None,
                 }
             )
+        if "UPDATE mip_app.approvals" in sql and params:
+            for row in self.approvals:
+                if str(row["approval_id"]) == str(params.get("approval_id")):
+                    row["decision_response"] = json.loads(
+                        str(params.get("decision_response") or "{}")
+                    )
+                    row["audit_event_id"] = params.get("audit_event_id")
         if "UPDATE mip_app.call_dispositions" in sql and params:
             for row in self.dispositions:
                 if str(row["disposition_id"]) == str(params.get("disposition_id")):
@@ -250,10 +285,46 @@ class _FakeLakebaseClient:
         for p in params_list:
             self.executes.append((sql, p))
 
-    def fetchone(
-        self, sql: str, params: dict[str, Any] | None = None
-    ) -> dict[str, Any] | None:
+    def fetchone(self, sql: str, params: dict[str, Any] | None = None) -> dict[str, Any] | None:
         self.fetchones.append((sql, params or {}))
+        if "INSERT INTO mip_app.generated_outreach_drafts" in sql:
+            values = params or {}
+            response_json = json.loads(str(values.get("response_json") or "{}"))
+            row = {
+                "generation_id": values["generation_id"],
+                "audit_event_id": values["audit_id"],
+                "response_hash": values["response_hash"],
+                "response_json": response_json,
+            }
+            self.generated_outreach_drafts.append({**values, **row})
+            self.audit_events.append(
+                {
+                    "audit_id": values["audit_id"],
+                    "event_at": datetime.now(UTC),
+                    **values,
+                }
+            )
+            return row
+        if "FROM mip_app.generated_outreach_drafts" in sql:
+            values = params or {}
+            for row in self.generated_outreach_drafts:
+                if (
+                    str(row.get("generation_id") or "") == str(values.get("generation_id") or "")
+                    and str(row.get("actor_email") or "") == str(values.get("actor_email") or "")
+                    and str(row.get("borrower_id") or "") == str(values.get("borrower_id") or "")
+                ):
+                    return {
+                        "generation_id": row.get("generation_id"),
+                        "audit_event_id": row.get("audit_event_id"),
+                        "actor_email": row.get("actor_email"),
+                        "borrower_id": row.get("borrower_id"),
+                        "channel": row.get("channel"),
+                        "offer_code": row.get("offer_code"),
+                        "generation_mode": row.get("generation_mode"),
+                        "response_hash": row.get("response_hash"),
+                        "response_json": row.get("response_json"),
+                    }
+            return None
         if "FROM mip_app.sales_team" in sql:
             email = str((params or {}).get("email") or "").lower()
             for row in self.sales_team:
@@ -282,25 +353,34 @@ class _FakeLakebaseClient:
             borrower_id = (params or {}).get("borrower_id")
             for row in reversed(self.assignments):
                 if row["borrower_id"] == borrower_id and row.get("released_at") is None:
-                    team = next((t for t in self.sales_team if t["email"] == row["assigned_to_email"]), {})
+                    team = next(
+                        (t for t in self.sales_team if t["email"] == row["assigned_to_email"]), {}
+                    )
                     return {**row, "assigned_to_label": team.get("display_label")}
             return None
         if "WITH latest_approval" in sql:
             borrower_id = (params or {}).get("borrower_id")
             approvals = [row for row in self.approvals if row.get("borrower_id") == borrower_id]
             approval = approvals[-1] if approvals else None
-            dispositions = [row for row in self.dispositions if row.get("borrower_id") == borrower_id]
+            dispositions = [
+                row for row in self.dispositions if row.get("borrower_id") == borrower_id
+            ]
             disposition = dispositions[-1] if dispositions else None
             action = approval.get("action") if approval else None
             approval_status = (
-                "approved" if action == "approve"
-                else "rejected" if action == "reject"
-                else "hold" if action == "hold"
+                "approved"
+                if action == "approve"
+                else "rejected"
+                if action == "reject"
+                else "hold"
+                if action == "hold"
                 else "pending"
             )
             return {
                 "approval_status": approval_status,
-                "outreach_status": "actioned" if disposition else ("queued" if action == "approve" else "none"),
+                "outreach_status": "actioned"
+                if disposition
+                else ("queued" if action == "approve" else "none"),
                 "approval_id": approval.get("approval_id") if action == "approve" else None,
                 "approved_at": approval.get("decided_at") if action == "approve" else None,
                 "outreach_at": disposition.get("occurred_at") if disposition else None,
@@ -365,32 +445,73 @@ class _FakeLakebaseClient:
                 in {"approved", "actioned", "outcome_recorded"}
             }
             approval_borrowers = {
-                row["borrower_id"]
-                for row in self.approvals
-                if row.get("action") == "approve"
+                row["borrower_id"] for row in self.approvals if row.get("action") == "approve"
             }
             return {"n": len(lifecycle_borrowers | approval_borrowers)}
         if "FROM mip_app.approvals" in sql and "request_id" in sql:
             return None
         if "FROM mip_app.tenant_disclosures" in sql:
+            from backend.config.settings import settings
+
             channel = (params or {}).get("channel", "email")
+            lender_name = settings.mip_lender_name
+            nmls_id = settings.mip_lender_nmls_id
             body = (
-                "Summit Mortgage NMLS #123456. Equal Housing Lender. Reply STOP to opt out."
+                f"{lender_name} NMLS #{nmls_id}. Equal Housing Lender. Reply STOP to opt out."
                 if channel == "sms"
-                else "Summit Mortgage, NMLS #123456. Equal Housing Lender. Reply unsubscribe to opt out."
+                else (
+                    f"{lender_name}, NMLS #{nmls_id}. Equal Housing Lender. "
+                    "Reply unsubscribe to opt out."
+                )
             )
             return {
-                "state": (params or {}).get("state", "_ALL"),
+                "state": "_ALL",
                 "channel": channel,
                 "disclosure_version": "test-disclosure-v1",
                 "body": body,
             }
+        if (
+            "FROM mip_app.campaigns c" in sql
+            and "c.idempotency_key" in sql
+            and "INSERT INTO mip_app.campaigns" not in sql
+        ):
+            return next(
+                (
+                    dict(row)
+                    for row in self.campaigns
+                    if row.get("owner_email") == (params or {}).get("owner_email")
+                    and row.get("idempotency_key") == (params or {}).get("idempotency_key")
+                ),
+                None,
+            )
         if "INSERT INTO mip_app.campaigns" in sql:
-            return {
+            owner_email = (params or {}).get("owner_email")
+            idempotency_key = (params or {}).get("idempotency_key")
+            existing = next(
+                (
+                    row
+                    for row in self.campaigns
+                    if row.get("owner_email") == owner_email
+                    and row.get("idempotency_key") == idempotency_key
+                ),
+                None,
+            )
+            if existing is not None:
+                return dict(existing)
+            row = {
                 "campaign_id": uuid4(),
                 "audit_id": uuid4(),
                 "event_at": datetime.now(UTC),
+                "owner_email": owner_email,
+                "idempotency_key": idempotency_key,
+                "request_payload_hash": (params or {}).get("request_payload_hash"),
+                "creation_response": json.loads(
+                    str((params or {}).get("creation_response") or "{}")
+                ),
+                "created": True,
             }
+            self.campaigns.append(row)
+            return dict(row)
         if "FROM mip_app.campaigns" in sql:
             return {
                 "campaign_id": (params or {}).get("campaign_id", uuid4()),
@@ -411,7 +532,11 @@ class _FakeLakebaseClient:
             # S4 home summary: no recorded visits or snapshots in the fake ->
             # the delta service resolves the honest first-visit shape.
             return None
-        return {"audit_id": uuid4(), "event_at": datetime.now(UTC)}
+        return {
+            "audit_id": uuid4(),
+            "audit_sequence": len(self.audit_events) + 1,
+            "event_at": datetime.now(UTC),
+        }
 
     def fetchall(
         self,
@@ -477,10 +602,9 @@ class _FakeLakebaseClient:
                 if str(row.get("assignment_id")) not in assignment_ids:
                     continue
                 counts[event_type] = counts.get(event_type, 0) + 1
-            return [
-                {"event_type": event_type, "n": n}
-                for event_type, n in sorted(counts.items())
-            ][:limit]
+            return [{"event_type": event_type, "n": n} for event_type, n in sorted(counts.items())][
+                :limit
+            ]
         if "FROM mip_app.approvals" in sql and "ORDER BY decided_at DESC" in sql:
             rows = [
                 {
@@ -508,7 +632,9 @@ class _FakeLakebaseClient:
             for row in self.assignments:
                 if row.get("released_at") is not None:
                     continue
-                if loan_officer_id and str(row.get("loan_officer_id") or "") != str(loan_officer_id):
+                if loan_officer_id and str(row.get("loan_officer_id") or "") != str(
+                    loan_officer_id
+                ):
                     continue
                 if borrower_id and row.get("borrower_id") != borrower_id:
                     continue
@@ -522,14 +648,19 @@ class _FakeLakebaseClient:
                 out = []
                 for row in self.assignments:
                     if row.get("request_id") == request_id:
-                        team = next((t for t in self.sales_team if t["email"] == row["assigned_to_email"]), {})
+                        team = next(
+                            (t for t in self.sales_team if t["email"] == row["assigned_to_email"]),
+                            {},
+                        )
                         out.append({**row, "assigned_to_label": team.get("display_label")})
                 return out[:limit]
             borrower_ids = set((params or {}).get("borrower_ids") or [])
             out = []
             for row in self.assignments:
                 if row["borrower_id"] in borrower_ids and row.get("released_at") is None:
-                    team = next((t for t in self.sales_team if t["email"] == row["assigned_to_email"]), {})
+                    team = next(
+                        (t for t in self.sales_team if t["email"] == row["assigned_to_email"]), {}
+                    )
                     out.append({**row, "assigned_to_label": team.get("display_label")})
             return out[:limit]
         if "FROM mip_app.lead_assignments" in sql and "assigned_to_email" in sql:
@@ -544,7 +675,7 @@ class _FakeLakebaseClient:
             and "applications_started" in sql
             and "GROUP BY lo_email" in sql
         ):
-            by_lo: dict[str, dict[str, int]] = {}
+            by_lo: dict[str, dict[str, Any]] = {}
             for row in self.dispositions:
                 lo_email = str(row["lo_email"])
                 outcome = str(row["outcome"])
@@ -555,19 +686,102 @@ class _FakeLakebaseClient:
                         "contacts_reached": 0,
                         "callbacks_scheduled": 0,
                         "applications_started": 0,
+                        "unique_lead_ids": set(),
+                        "unique_contact_ids": set(),
+                        "unique_application_ids": set(),
                     },
                 )
                 bucket["calls_attempted"] += 1
+                bucket["unique_lead_ids"].add(str(row["borrower_id"]))
                 if outcome in {"connected", "callback_scheduled", "application_started"}:
                     bucket["contacts_reached"] += 1
+                    bucket["unique_contact_ids"].add(str(row["borrower_id"]))
                 if outcome == "callback_scheduled":
                     bucket["callbacks_scheduled"] += 1
                 if outcome == "application_started":
                     bucket["applications_started"] += 1
+                    bucket["unique_application_ids"].add(str(row["borrower_id"]))
             return [
-                {"group_key": lo_email, **counts}
+                {
+                    "group_key": lo_email,
+                    **{key: value for key, value in counts.items() if not key.endswith("_ids")},
+                    "unique_leads_contacted": len(counts["unique_lead_ids"]),
+                    "unique_contacts_reached": len(counts["unique_contact_ids"]),
+                    "unique_application_starts": len(counts["unique_application_ids"]),
+                }
                 for lo_email, counts in sorted(by_lo.items())
             ][:limit]
+        if "campaign_performance_funnel" in sql:
+            lo_emails = set((params or {}).get("lo_emails") or [])
+            scoped_dispositions = [
+                row
+                for row in self.dispositions
+                if not lo_emails or str(row.get("lo_email")) in lo_emails
+            ]
+            attempted: dict[str, datetime] = {}
+            for row in scoped_dispositions:
+                borrower_id = str(row["borrower_id"])
+                occurred_at = row["occurred_at"]
+                if borrower_id not in attempted or occurred_at < attempted[borrower_id]:
+                    attempted[borrower_id] = occurred_at
+            reached: dict[str, datetime] = {}
+            for row in scoped_dispositions:
+                borrower_id = str(row["borrower_id"])
+                occurred_at = row["occurred_at"]
+                if (
+                    row.get("outcome") in {"connected", "callback_scheduled", "application_started"}
+                    and occurred_at >= attempted[borrower_id]
+                    and (borrower_id not in reached or occurred_at < reached[borrower_id])
+                ):
+                    reached[borrower_id] = occurred_at
+            started: dict[str, datetime] = {}
+            for row in scoped_dispositions:
+                borrower_id = str(row["borrower_id"])
+                occurred_at = row["occurred_at"]
+                if (
+                    row.get("outcome") == "application_started"
+                    and borrower_id in reached
+                    and occurred_at >= reached[borrower_id]
+                    and (borrower_id not in started or occurred_at < started[borrower_id])
+                ):
+                    started[borrower_id] = occurred_at
+            scoped_outcomes = [
+                row
+                for row in self.outcomes
+                if not lo_emails or str(row.get("assigned_to_email")) in lo_emails
+            ]
+            submitted: dict[str, datetime] = {}
+            for row in scoped_outcomes:
+                borrower_id = str(row["borrower_id"])
+                occurred_at = row["occurred_at"]
+                if (
+                    row.get("outcome_type") == "application_submitted"
+                    and borrower_id in started
+                    and occurred_at >= started[borrower_id]
+                    and (borrower_id not in submitted or occurred_at < submitted[borrower_id])
+                ):
+                    submitted[borrower_id] = occurred_at
+            funded: dict[str, datetime] = {}
+            for row in scoped_outcomes:
+                borrower_id = str(row["borrower_id"])
+                occurred_at = row["occurred_at"]
+                if (
+                    row.get("outcome_type") == "closed_funded"
+                    and borrower_id in submitted
+                    and occurred_at >= submitted[borrower_id]
+                    and (borrower_id not in funded or occurred_at < funded[borrower_id])
+                ):
+                    funded[borrower_id] = occurred_at
+            return [
+                {
+                    "snapshot_at": datetime.now(UTC),
+                    "unique_leads_attempted": len(attempted),
+                    "unique_contacts_reached": len(reached),
+                    "unique_application_starts": len(started),
+                    "unique_applications_submitted": len(submitted),
+                    "unique_closed_funded": len(funded),
+                }
+            ]
         if "FROM mip_app.call_dispositions" in sql and "GROUP BY lo_email, outcome" in sql:
             counts: dict[tuple[str, str], int] = {}
             for row in self.dispositions:
@@ -578,30 +792,64 @@ class _FakeLakebaseClient:
                 for (lo_email, outcome), n in sorted(counts.items())
             ][:limit]
         if "FROM mip_app.call_dispositions" in sql and "GROUP BY 1" in sql:
-            by_lo: dict[str, dict[str, int]] = {}
+            by_group: dict[str, dict[str, Any]] = {}
+            aggregate_all = "'all_cohorts' AS group_key" in sql
             for row in self.dispositions:
-                lo_email = str(row["lo_email"])
+                group_key = "all_cohorts" if aggregate_all else str(row["lo_email"])
                 outcome = str(row["outcome"])
-                bucket = by_lo.setdefault(
-                    lo_email,
+                bucket = by_group.setdefault(
+                    group_key,
                     {
                         "calls_attempted": 0,
                         "contacts_reached": 0,
                         "callbacks_scheduled": 0,
                         "applications_started": 0,
+                        "unique_lead_ids": set(),
+                        "unique_contact_ids": set(),
+                        "unique_application_ids": set(),
                     },
                 )
                 bucket["calls_attempted"] += 1
+                bucket["unique_lead_ids"].add(str(row["borrower_id"]))
                 if outcome in {"connected", "callback_scheduled", "application_started"}:
                     bucket["contacts_reached"] += 1
+                    bucket["unique_contact_ids"].add(str(row["borrower_id"]))
                 if outcome == "callback_scheduled":
                     bucket["callbacks_scheduled"] += 1
                 if outcome == "application_started":
                     bucket["applications_started"] += 1
+                    bucket["unique_application_ids"].add(str(row["borrower_id"]))
             return [
-                {"group_key": lo_email, **counts}
-                for lo_email, counts in sorted(by_lo.items())
+                {
+                    "group_key": group_key,
+                    **{key: value for key, value in counts.items() if not key.endswith("_ids")},
+                    "unique_leads_contacted": len(counts["unique_lead_ids"]),
+                    "unique_contacts_reached": len(counts["unique_contact_ids"]),
+                    "unique_application_starts": len(counts["unique_application_ids"]),
+                }
+                for group_key, counts in sorted(by_group.items())
             ][:limit]
+        if (
+            "FROM mip_app.lead_outcomes" in sql
+            and "unique_applications_submitted" in sql
+            and "GROUP BY" not in sql
+        ):
+            submitted = {
+                str(row["borrower_id"])
+                for row in self.outcomes
+                if row.get("outcome_type") == "application_submitted"
+            }
+            funded = {
+                str(row["borrower_id"])
+                for row in self.outcomes
+                if row.get("outcome_type") == "closed_funded"
+            }
+            return [
+                {
+                    "unique_applications_submitted": len(submitted),
+                    "unique_closed_funded": len(funded),
+                }
+            ]
         if "FROM mip_app.lead_outcomes" in sql and "GROUP BY outcome_type" in sql:
             counts: dict[tuple[str, str, str | None, str], int] = {}
             for row in self.outcomes:
@@ -620,8 +868,12 @@ class _FakeLakebaseClient:
                     "competitor_lender_label": competitor_lender_label,
                     "n": n,
                 }
-                for (outcome_type, source_system, assigned_to_email, competitor_lender_label), n
-                in sorted(counts.items())
+                for (
+                    outcome_type,
+                    source_system,
+                    assigned_to_email,
+                    competitor_lender_label,
+                ), n in sorted(counts.items())
             ][:limit]
         if "FROM mip_app.activation_destinations" in sql and "destination_type IN" in sql:
             return [dict(row) for row in self.activation_destinations][:limit]
@@ -650,7 +902,8 @@ class _FakeLakebaseClient:
                     continue
                 assignment = next(
                     (
-                        a for a in self.assignments
+                        a
+                        for a in self.assignments
                         if a.get("borrower_id") == borrower_id and a.get("released_at") is None
                     ),
                     None,
@@ -664,7 +917,9 @@ class _FakeLakebaseClient:
                         "age_days": (now - decided_at).days,
                         "outreach_status": "queued",
                         "outreach_at": None,
-                        "assigned_to_email": assignment.get("assigned_to_email") if assignment else None,
+                        "assigned_to_email": assignment.get("assigned_to_email")
+                        if assignment
+                        else None,
                         "latest_disposition_outcome": None,
                         "latest_disposition_at": None,
                     }
@@ -728,7 +983,10 @@ class _FakeLakebaseClient:
                             self._last = client._loan_officer_assignment_row(row)
                 elif "UPDATE mip_app.lead_assignments" in sql:
                     for row in client.assignments:
-                        if row["borrower_id"] == params.get("borrower_id") and row.get("released_at") is None:
+                        if (
+                            row["borrower_id"] == params.get("borrower_id")
+                            and row.get("released_at") is None
+                        ):
                             row["released_at"] = now
                     self._last = None
                 elif "INSERT INTO mip_app.approvals" in sql:
@@ -793,13 +1051,21 @@ class _FakeLakebaseClient:
                     self._last = client._loan_officer_assignment_row(row)
                 elif "MAX(attempt_number)" in sql:
                     borrower_id = params.get("borrower_id")
-                    attempts = [r["attempt_number"] for r in client.dispositions if r["borrower_id"] == borrower_id]
+                    attempts = [
+                        r["attempt_number"]
+                        for r in client.dispositions
+                        if r["borrower_id"] == borrower_id
+                    ]
                     self._last = {"next_attempt": (max(attempts) if attempts else 0) + 1}
                 elif "INSERT INTO mip_app.call_dispositions" in sql:
                     request_id = params.get("request_id")
                     if request_id:
                         duplicate = next(
-                            (row for row in client.dispositions if row.get("request_id") == request_id),
+                            (
+                                row
+                                for row in client.dispositions
+                                if row.get("request_id") == request_id
+                            ),
                             None,
                         )
                         if duplicate is not None:
@@ -901,6 +1167,7 @@ class _FakeLakebaseClient:
                 elif "INSERT INTO mip_app.action_audit" in sql:
                     row = {
                         "audit_id": uuid4(),
+                        "audit_sequence": len(client.audit_events) + 1,
                         "event_at": now,
                         **params,
                     }
@@ -962,11 +1229,51 @@ class _FakeAdminSqlClient:
         # ``mip_demo`` locally, ``mip_prod`` in prod deploys).
         if ".REF.OFFER_RULES_CONFIG" in s:
             return [
-                {"key": "mip_min_spread_bps",           "value": 75.0,    "unit": "bps",           "label": "Min spread (bps)",            "description": "desc", "sort_order": 1, "last_updated": "2026-04-22 12:00:00"},
-                {"key": "mip_min_equity_pct",           "value": 15.0,    "unit": "pct",           "label": "Min equity (%)",              "description": "desc", "sort_order": 2, "last_updated": "2026-04-22 12:00:00"},
-                {"key": "mip_heloc_equity_min_pct",     "value": 35.0,    "unit": "pct",           "label": "HELOC equity floor (%)",      "description": "desc", "sort_order": 3, "last_updated": "2026-04-22 12:00:00"},
-                {"key": "mip_cashout_equity_min_pct",   "value": 25.0,    "unit": "pct",           "label": "Cash-out equity floor (%)",   "description": "desc", "sort_order": 4, "last_updated": "2026-04-22 12:00:00"},
-                {"key": "mip_retention_min_spread_bps", "value": 50.0,    "unit": "bps",           "label": "Retention min spread (bps)",  "description": "desc", "sort_order": 5, "last_updated": "2026-04-22 12:00:00"},
+                {
+                    "key": "mip_min_spread_bps",
+                    "value": 75.0,
+                    "unit": "bps",
+                    "label": "Min spread (bps)",
+                    "description": "desc",
+                    "sort_order": 1,
+                    "last_updated": "2026-04-22 12:00:00",
+                },
+                {
+                    "key": "mip_min_equity_pct",
+                    "value": 15.0,
+                    "unit": "pct",
+                    "label": "Min equity (%)",
+                    "description": "desc",
+                    "sort_order": 2,
+                    "last_updated": "2026-04-22 12:00:00",
+                },
+                {
+                    "key": "mip_heloc_equity_min_pct",
+                    "value": 35.0,
+                    "unit": "pct",
+                    "label": "HELOC equity floor (%)",
+                    "description": "desc",
+                    "sort_order": 3,
+                    "last_updated": "2026-04-22 12:00:00",
+                },
+                {
+                    "key": "mip_cashout_equity_min_pct",
+                    "value": 25.0,
+                    "unit": "pct",
+                    "label": "Cash-out equity floor (%)",
+                    "description": "desc",
+                    "sort_order": 4,
+                    "last_updated": "2026-04-22 12:00:00",
+                },
+                {
+                    "key": "mip_retention_min_spread_bps",
+                    "value": 50.0,
+                    "unit": "bps",
+                    "label": "Retention min spread (bps)",
+                    "description": "desc",
+                    "sort_order": 5,
+                    "last_updated": "2026-04-22 12:00:00",
+                },
             ]
         if ".GOLD.BORROWER_360" in s and "MARKET_RATE_FRACTION" in s:
             return [{"rate_fraction": 0.0637, "last_updated": "2026-05-07 12:00:00"}]
@@ -1132,6 +1439,7 @@ def _reset_runtime_singletons_for_tests() -> None:
     _reset_breakers_for_tests()
     _reset_kpi_delta_service_for_tests()
     _reset_home_summary_service_for_tests()
+    _reset_state_footprint_resolver_for_tests()
 
 
 def _reset_fake_dependency_state_for_tests() -> None:
@@ -1296,4 +1604,53 @@ def _disable_outreach_lifecycle_sync_for_unit_routes(
         outreach_mod,
         "enqueue_lifecycle_trigger",
         lambda background, *, reason="approval": None,
+    )
+
+
+@pytest.fixture(autouse=True)
+def _disable_live_supervisor_client_for_test_routes(
+    monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+) -> None:
+    """Prevent hermetic route tests from discovering local workspace auth.
+
+    Supervisor request/response handling has focused tests that inject a serving
+    client explicitly. Generic unit and in-process integration routes should
+    exercise the governed fallback and must never construct a real
+    ``WorkspaceClient`` just because a developer has Databricks credentials on
+    disk. Explicitly enabled live integration runs retain production wiring.
+    """
+    test_path = str(request.node.path)
+    if "tests/integration/" in test_path and os.environ.get("LAKEBASE_INTEGRATION") == "1":
+        return
+
+    from backend.services import (
+        campaign_intelligence,
+        growth_agent_composer,
+        growth_agent_notification_intelligence,
+        outreach_intelligence,
+    )
+
+    def _unit_workspace_client() -> object:
+        raise RuntimeError("live Supervisor client disabled in unit tests")
+
+    monkeypatch.setattr(
+        outreach_intelligence,
+        "workspace_client",
+        _unit_workspace_client,
+    )
+    monkeypatch.setattr(
+        campaign_intelligence,
+        "workspace_client",
+        _unit_workspace_client,
+    )
+    monkeypatch.setattr(
+        growth_agent_notification_intelligence,
+        "workspace_client",
+        _unit_workspace_client,
+    )
+    monkeypatch.setattr(
+        growth_agent_composer,
+        "make_workspace_client",
+        _unit_workspace_client,
     )

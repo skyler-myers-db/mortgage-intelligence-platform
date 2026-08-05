@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from backend.main import app
 from backend.services.audit_store import AuditMetadataValueViolation, get_audit_store
+from backend.services.genie_answers import GenieMessageResponse
 from backend.services.genie_sales_ops import sales_ops_genie_response
 from backend.services.lakebase import get_lakebase_client
 from backend.services.repositories import get_borrower_repository
@@ -39,6 +40,7 @@ def _approve_for_sales(borrower_id: str) -> None:
             "borrower_id": borrower_id,
             "offer_code": "refi_plus_heloc",
             "channel": "email",
+            "draft_subject": draft.json()["subject"],
             "draft_body": draft.json()["body"],
             "request_id": str(uuid4()),
         },
@@ -492,6 +494,11 @@ def test_sales_standup_aging_and_conversion_surfaces() -> None:
         json={"lo_email": "lo02@summit.example", "outcome": "application_started"},
     )
     assert logged.status_code == 200
+    repeat_contact = client.post(
+        f"/api/leads/{borrower_id}/disposition",
+        json={"lo_email": "lo02@summit.example", "outcome": "connected"},
+    )
+    assert repeat_contact.status_code == 200
 
     today = datetime.now(UTC).date().isoformat()
     standup = client.get(f"/api/sales/standup?date={today}")
@@ -501,7 +508,11 @@ def test_sales_standup_aging_and_conversion_surfaces() -> None:
     conversion = client.get(f"/api/sales/conversion?from={today}&to={today}&groupBy=lo")
     assert conversion.status_code == 200
     rows = conversion.json()["rows"]
-    assert any(row["group_key"] == "lo02@summit.example" for row in rows)
+    lo_row = next(row for row in rows if row["group_key"] == "lo02@summit.example")
+    assert lo_row["calls_attempted"] == 2
+    assert lo_row["unique_leads_contacted"] == 1
+    assert lo_row["unique_application_starts"] == 1
+    assert lo_row["application_start_rate"] == 1.0
 
     invalid = client.get(f"/api/sales/conversion?from={today}&to=2020-01-01&groupBy=lo")
     assert invalid.status_code == 422
@@ -509,6 +520,109 @@ def test_sales_standup_aging_and_conversion_surfaces() -> None:
     aging = client.get("/api/sales/aging?older_than_days=7")
     assert aging.status_code == 200
     assert isinstance(aging.json(), list)
+
+
+def test_campaign_performance_uses_nested_same_borrower_sets(fake_lakebase_client) -> None:
+    today = datetime.now(UTC).date().isoformat()
+    base = datetime.now(UTC)
+    fake_lakebase_client.dispositions.extend(
+        [
+            {
+                "borrower_id": "B-REACHED-ONLY",
+                "lo_email": "lo01@summit.example",
+                "outcome": "connected",
+                "occurred_at": base,
+            },
+            {
+                "borrower_id": "B-NESTED",
+                "lo_email": "lo01@summit.example",
+                "outcome": "application_started",
+                "occurred_at": base,
+            },
+            {
+                "borrower_id": "B-EARLIEST-VALID",
+                "lo_email": "lo01@summit.example",
+                "outcome": "application_started",
+                "occurred_at": base + timedelta(seconds=2),
+            },
+            {
+                "borrower_id": "B-BACKWARDS",
+                "lo_email": "lo01@summit.example",
+                "outcome": "application_started",
+                "occurred_at": base + timedelta(seconds=2),
+            },
+        ]
+    )
+    fake_lakebase_client.outcomes.extend(
+        [
+            {
+                "borrower_id": "B-DISJOINT",
+                "assigned_to_email": "lo01@summit.example",
+                "outcome_type": "closed_funded",
+                "occurred_at": base,
+            },
+            {
+                "borrower_id": "B-NESTED",
+                "assigned_to_email": "lo01@summit.example",
+                "outcome_type": "application_submitted",
+                "occurred_at": base + timedelta(seconds=1),
+            },
+            {
+                "borrower_id": "B-NESTED",
+                "assigned_to_email": "lo01@summit.example",
+                "outcome_type": "closed_funded",
+                "occurred_at": base + timedelta(seconds=2),
+            },
+            {
+                "borrower_id": "B-EARLIEST-VALID",
+                "assigned_to_email": "lo01@summit.example",
+                "outcome_type": "application_submitted",
+                "occurred_at": base + timedelta(seconds=1),
+            },
+            {
+                "borrower_id": "B-EARLIEST-VALID",
+                "assigned_to_email": "lo01@summit.example",
+                "outcome_type": "application_submitted",
+                "occurred_at": base + timedelta(seconds=3),
+            },
+            {
+                "borrower_id": "B-EARLIEST-VALID",
+                "assigned_to_email": "lo01@summit.example",
+                "outcome_type": "closed_funded",
+                "occurred_at": base + timedelta(seconds=4),
+            },
+            {
+                "borrower_id": "B-BACKWARDS",
+                "assigned_to_email": "lo01@summit.example",
+                "outcome_type": "application_submitted",
+                "occurred_at": base + timedelta(seconds=1),
+            },
+            {
+                "borrower_id": "B-BACKWARDS",
+                "assigned_to_email": "lo01@summit.example",
+                "outcome_type": "closed_funded",
+                "occurred_at": base + timedelta(seconds=3),
+            },
+        ]
+    )
+
+    response = client.get(f"/api/sales/campaign-performance?from={today}&to={today}")
+    assert response.status_code == 200
+    assert response.json() == {
+        "from_date": today,
+        "to_date": today,
+        "unique_leads_attempted": 4,
+        "unique_contacts_reached": 4,
+        "unique_application_starts": 3,
+        "unique_applications_submitted": 2,
+        "unique_closed_funded": 2,
+        "methodology": "same_borrower_nested_funnel",
+    }
+
+    invalid = client.get(
+        f"/api/sales/campaign-performance?from={today}&to=2020-01-01"
+    )
+    assert invalid.status_code == 422
 
 
 def test_sales_closed_loop_outcomes_are_recorded_and_summarized(fake_lakebase_client) -> None:
@@ -538,6 +652,9 @@ def test_sales_closed_loop_outcomes_are_recorded_and_summarized(fake_lakebase_cl
     assert body["outcome"]["borrower_id"] == borrower_id
     assert body["outcome"]["outcome_type"] == "lost_to_competitor"
     assert body["outcome"]["audit_event_id"]
+    assert body["outcome"]["source_record_ref"].startswith("auto-")
+    assert "sf_case_123" not in recorded.text
+    assert all(row.get("source_record_ref") != "sf_case_123" for row in fake_lakebase_client.outcomes)
 
     replay = client.post(
         f"/api/leads/{borrower_id}/outcome",
@@ -553,6 +670,20 @@ def test_sales_closed_loop_outcomes_are_recorded_and_summarized(fake_lakebase_cl
     )
     assert replay.status_code == 200
     assert replay.json()["outcome"]["outcome_id"] == body["outcome"]["outcome_id"]
+
+    replay_by_returned_token = client.post(
+        f"/api/leads/{borrower_id}/outcome",
+        json={
+            "outcome_type": "lost_to_competitor",
+            "source_system": "salesforce",
+            "source_record_ref": body["outcome"]["source_record_ref"],
+            "assigned_to_email": "lo01@summit.example",
+            "loan_amount": 425000,
+            "competitor_lender_label": "Competitor D",
+        },
+    )
+    assert replay_by_returned_token.status_code == 422
+    assert body["outcome"]["source_record_ref"] not in replay_by_returned_token.text
 
     today = datetime.now(UTC).date().isoformat()
     summary = client.get(f"/api/sales/outcomes/summary?from={today}&to={today}")
@@ -598,6 +729,18 @@ def test_sales_closed_loop_outcomes_are_recorded_and_summarized(fake_lakebase_cl
         },
     )
     assert raw_brand.status_code == 422
+
+    for unsafe_ref in ("John-Smith", "Jane_Doe", "john.smith"):
+        response = client.post(
+            f"/api/leads/{borrower_id}/outcome",
+            json={
+                "outcome_type": "application_submitted",
+                "source_system": "manual_import",
+                "source_record_ref": unsafe_ref,
+            },
+        )
+        assert response.status_code == 422
+        assert unsafe_ref not in response.text
 
 
 def test_sales_outcome_rejects_unconfigured_customer_sources(fake_lakebase_client) -> None:
@@ -964,7 +1107,7 @@ def test_sales_manager_outcome_stale_active_assignment_is_forbidden(
     assert not [
         row
         for row in fake_lakebase_client.outcomes
-        if str(row.get("source_record_ref") or "").startswith("manual_stale_assignment_")
+        if row.get("borrower_id") == borrower_id
     ]
 
 
@@ -1036,7 +1179,7 @@ def test_sales_manager_outcome_released_cached_assignment_is_forbidden(
     assert not [
         row
         for row in fake_lakebase_client.outcomes
-        if row.get("source_record_ref") == "manual_released_assignment_alpha"
+        if row.get("borrower_id") == borrower_id
     ]
 
 
@@ -1158,6 +1301,7 @@ def test_genie_routes_sales_manager_lo_conversion_to_sales_ops_adapter() -> None
                 "borrower_id": borrower_id,
                 "offer_code": "refi_plus_heloc",
                 "channel": "email",
+                "draft_subject": draft.json()["subject"],
                 "draft_body": draft.json()["body"],
                 "request_id": str(uuid4()),
             },
@@ -1192,7 +1336,53 @@ def test_genie_routes_sales_manager_lo_conversion_to_sales_ops_adapter() -> None
     assert body["source"] == "sales_ops"
     assert body["proof"]["trusted"] is False
     assert "mip_app.call_dispositions" in body["trusted_assets"]
-    assert any(row["lo_email"] == "lo02@summit.example" for row in body["table_rows"])
+    assert any(row["loan_officer"] == "Summit LO 02" for row in body["table_rows"])
+    assert "lo02@summit.example" not in response.text
+
+
+def test_genie_sales_ops_response_policy_blocks_unapproved_table_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    unsafe_email = "external.person@example.com"
+
+    def _unsafe_sales_ops_response(*_args: object, **kwargs: object) -> GenieMessageResponse:
+        return GenieMessageResponse(
+            conversation_id=str(kwargs.get("conversation_id") or "conv-sales-unsafe"),
+            message_id="msg-sales-unsafe",
+            question=str(kwargs["question"]),
+            question_hash="hash-sales-unsafe",
+            answer="The conversion rollup is ready.",
+            source="sales_ops",
+            trusted_assets=["mip_app.call_dispositions"],
+            row_count=1,
+            table_rows=[{"loan_officer": unsafe_email, "applications_started": 1}],
+        )
+
+    audit = InMemoryAuditStore()
+    previous_audit = app.dependency_overrides.get(get_audit_store)
+    app.dependency_overrides[get_audit_store] = lambda: audit
+    monkeypatch.setattr(
+        "backend.api.genie.sales_ops_genie_response",
+        _unsafe_sales_ops_response,
+    )
+    try:
+        response = client.post(
+            "/api/genie/message",
+            json={"question": "Which LO had the highest application-start rate this week?"},
+        )
+    finally:
+        if previous_audit is None:
+            app.dependency_overrides.pop(get_audit_store, None)
+        else:
+            app.dependency_overrides[get_audit_store] = previous_audit
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source"] == "policy_blocked"
+    assert body["question"] == ""
+    assert body["table_rows"] == []
+    assert unsafe_email not in response.text
+    assert len(audit.list(action="genie.response_blocked")) == 1
 
 
 def test_genie_sales_aging_omits_approval_rows_without_live_borrower() -> None:
@@ -1260,6 +1450,12 @@ def test_genie_sales_aging_omits_approval_rows_without_live_borrower() -> None:
     ]
     assert aging_queries
     assert "LIMIT 100" in aging_queries[-1]
+    compact_sql = " ".join(aging_queries[-1].split())
+    assert "ORDER BY borrower_id, decided_at DESC, approval_id::text DESC" in compact_sql
+    assert (
+        "ORDER BY borrower_id, occurred_at DESC, created_at DESC, "
+        "disposition_id::text DESC"
+    ) in compact_sql
 
 
 def test_sales_routes_enforce_actor_scope_and_assignment_eligibility() -> None:

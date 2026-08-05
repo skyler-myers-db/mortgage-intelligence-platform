@@ -31,6 +31,17 @@ CURRENT_OPERATOR_DOCS = [
     ROOT / "docs" / "module0-rehearsal-checklist.md",
 ]
 
+CURRENT_DEPLOYMENT_GUIDANCE_SURFACES = [
+    ROOT / "databricks.yml",
+    ROOT / "backend" / "services" / "lakebase_bootstrap.py",
+    ROOT / "jobs" / "fred_rates_ingest.py",
+    ROOT / "sql" / "ddl" / "004_ref_tables.sql",
+    ROOT / "sql" / "ddl" / "005_semantics_views.sql",
+    ROOT / "sql" / "transformations" / "gold_borrower_dossier.sql",
+    ROOT / "tools" / "render_sql.py",
+    ROOT / "tools" / "databricks" / "otlp_deploy_payload.py",
+]
+
 UNVERSIONED_API_RE = re.compile(
     r"(?<!v1)/api/"
     r"(?:health|admin/health|admin/|data-estate|config/options|leads|borrowers|"
@@ -87,7 +98,10 @@ def test_readme_surfaces_current_operator_entrypoints() -> None:
         "/api/v1/health",
         "X-API-Version: v1",
         "MIP_LENDER_NAME",
+        "MIP_LENDER_NMLS_ID",
         "MIP_TENANT_ID",
+        "source-controlled registry",
+        "backend/schemas/lender_identity.py",
         "docs/se-onboarding.md",
         "docs/disaster-recovery.md",
         "docs/load-baseline.md",
@@ -96,6 +110,95 @@ def test_readme_surfaces_current_operator_entrypoints() -> None:
         "CHANGELOG.md",
     ):
         assert required in text
+
+
+def test_current_operator_docs_never_advertise_bare_mutable_deployment() -> None:
+    violations: list[str] = []
+    command = re.compile(r"databricks\s+(?:apps\s+deploy|bundle\s+deploy)\b")
+    for path in (*CURRENT_OPERATOR_DOCS, *CURRENT_DEPLOYMENT_GUIDANCE_SURFACES):
+        text = _read(path)
+        if command.search(text):
+            violations.append(str(path.relative_to(ROOT)))
+        assert "promote it from the Databricks Apps deployment UI" not in text
+    assert violations == []
+    assert not re.search(
+        r"post-bootstrap\s+resource-recovery\s*#?\s*bundle\s+deploy",
+        _read(ROOT / "databricks.yml"),
+        re.IGNORECASE,
+    )
+
+    for relative in ("README.md", "docs/runbook.md", "docs/se-onboarding.md"):
+        text = _read(ROOT / relative)
+        assert "./scripts/deploy.sh -t dev" in text or "make deploy-dev" in text
+
+
+def test_otlp_operator_docs_use_the_same_governed_target() -> None:
+    for relative in (
+        "docs/observability.md",
+        "docs/deployment.md",
+        "docs/modernization-todo.md",
+    ):
+        text = _read(ROOT / relative)
+        assert "prod_otlp" not in text
+    for relative in ("docs/observability.md", "docs/deployment.md"):
+        text = _read(ROOT / relative)
+        assert "MIP_OTEL_HEADERS_SECRET_SCOPE" in text
+        assert "MIP_OTEL_HEADERS_SECRET_KEY" in text
+        assert "scripts/deploy.sh -t prod" in text
+        assert "tools/databricks/otlp_deploy_payload.py" not in text
+    observability = _read(ROOT / "docs" / "observability.md")
+    assert "databricks secrets list-scopes" in observability
+    assert "databricks secrets create-scope customer-observability" in observability
+
+
+def test_mutable_operator_surfaces_route_to_signed_deploy_only() -> None:
+    makefile = _read(ROOT / "Makefile")
+    bundle_env = _read(ROOT / "tools" / "databricks" / "bundle_env.py")
+    scaffold = _read(ROOT / "tools" / "verify_scaffold.py")
+    m2m = _read(ROOT / "tools" / "databricks" / "provision_m2m_oauth.py")
+    genie = _read(ROOT / "tools" / "databricks" / "provision_genie_space.py")
+
+    for target in ("bundle-deploy", "bundle-deploy-dev"):
+        block = makefile.split(f"{target}: render-sql", 1)[1].split("\n\n", 1)[0]
+        assert "retired" in block
+        assert "exit 2" in block
+        assert "bundle_env.py deploy" not in block
+    assert "unrestricted bundle deploy is forbidden" in bundle_env
+    assert "precomputed bundle deploy plans are forbidden" in bundle_env
+    assert 'match.group("kind") == "apps"' in bundle_env
+    assert "databricks apps deploy" not in scaffold
+    assert "databricks bundle deploy" not in m2m
+    assert "make bundle-deploy-dev" not in genie
+    assert "./scripts/deploy.sh -t dev" in scaffold
+    assert "./scripts/deploy.sh -t dev" in m2m
+    assert "./scripts/deploy.sh -t dev" in genie
+
+
+def test_production_workflow_is_honestly_non_deploying() -> None:
+    docs = _read(ROOT / ".github" / "workflows" / "README.md")
+    workflow = _read(ROOT / ".github" / "workflows" / "deploy-prod.yml")
+
+    assert "Non-deploying scaffold gate only" in docs
+    assert "does not deploy or authenticate" in docs
+    assert "name: prod-readiness-gate" in workflow
+    assert "Non-deploying production scaffold gate" in workflow
+    assert "scripts/deploy.sh" not in workflow
+    assert "DATABRICKS_" not in workflow
+
+
+def test_external_lakebase_migration_requires_explicit_reviewed_identity() -> None:
+    text = _read(ROOT / "docs" / "security" / "GRANTS.md")
+    command = text.split("Run the same idempotent migration", 1)[1].split("```", 2)[1]
+
+    for required in (
+        'export MIP_LENDER_NAME="<exact-reviewed-legal-lender-name>"',
+        'export MIP_LENDER_NMLS_ID="<exact-reviewed-nmls-id>"',
+        'export MIP_TENANT_ID="<reviewed-tenant-slug>"',
+        '--lender-name "$MIP_LENDER_NAME"',
+        '--lender-nmls-id "$MIP_LENDER_NMLS_ID"',
+        '--tenant-id "$MIP_TENANT_ID"',
+    ):
+        assert required in command
 
 
 def test_current_operator_docs_use_canonical_api_v1_paths() -> None:
@@ -120,9 +223,13 @@ def test_load_baseline_has_one_canonical_operator_doc() -> None:
 
 def test_live_smoke_script_uses_canonical_api_v1_by_default() -> None:
     source = _read(ROOT / "scripts" / "smoke_live.sh")
+    deploy_source = _read(ROOT / "scripts" / "deploy.sh")
 
     assert 'API_PREFIX="${MIP_API_PREFIX:-/api/v1}"' in source
     assert "$API_PREFIX/health" in source
+    assert 'EXPECT_GIT_SHA="${MIP_EXPECT_GIT_SHA:-}"' in source
+    assert 'DEPLOYED_GIT_SHA=$(echo "$HEALTH" | jq -r' in source
+    assert 'export MIP_EXPECT_GIT_SHA="$APP_GIT_SHA"' in deploy_source
     for deprecated in (
         '"/api/health"',
         '"/api/leads',

@@ -1,11 +1,12 @@
-name: deploy-prod
+name: prod-readiness-gate
 on:
   workflow_dispatch:
 
 jobs:
-  prod-gate:
+  non-deploying-prod-gate:
+    name: Non-deploying production scaffold gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - run: python tools/verify_scaffold.py
-      - run: echo "Production deployment requires manual approval and Databricks workspace variables."
+      - run: echo "No production deployment occurred; this workflow validates repository scaffolding only."

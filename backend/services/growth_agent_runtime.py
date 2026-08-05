@@ -71,17 +71,16 @@ def tool_steps(
     supervisor_override = bool(copilot_evidence.workflow_override_review_required)
     if supervisor_override:
         planner_detail = (
-            "Supervisor selected a different allowlisted workflow than the deterministic fallback; "
-            "human review is required before acting."
+            "Databricks Agent Responses suggested a different allowlisted workflow; the app retained "
+            "the exact deterministic workflow and recorded the mismatch for review."
         )
     elif copilot_evidence.execution_mode == "agent_framework":
         planner_detail = (
-            "Supervisor selected one allowlisted workflow; deterministic tools own counts, filters, audit, and handoff."
+            "Databricks Agent Responses agreed with deterministic routing on one allowlisted "
+            "workflow; deterministic tools own counts, filters, audit, and handoff."
         )
     else:
-        planner_detail = (
-            "Reviewed planner selected an allowlisted workflow; deterministic tools own counts, filters, audit, and handoff."
-        )
+        planner_detail = "Reviewed planner selected an allowlisted workflow; deterministic tools own counts, filters, audit, and handoff."
     planner_step = GrowthAgentToolStep(
         label="Interpret mortgage-growth objective",
         status="review_required" if supervisor_override else "completed",
@@ -228,8 +227,7 @@ def policy_checks(
     actionable_total = int(metrics["actionable_total"])
     reconciliation_status: Literal["passed", "review_required"] = "passed"
     reconciliation_detail = (
-        f"{broad_total:,} broad opportunities reconcile to "
-        f"{actionable_total:,} eligible leads."
+        f"{broad_total:,} broad opportunities reconcile to " f"{actionable_total:,} eligible leads."
     )
     if actionable_total > broad_total:
         reconciliation_status = "review_required"
@@ -239,14 +237,9 @@ def policy_checks(
         )
     checks = [
         GrowthAgentPolicyCheck(
-            label="No raw PII exposed",
+            label="Approval gate required",
             status="passed",
-            detail="The workflow returns counts, public route filters, and governed source assets only.",
-        ),
-        GrowthAgentPolicyCheck(
-            label="No outbound activation",
-            status="passed",
-            detail="The agent opens a reviewed Lead Queue subset; email, SMS, and CRM activation still require approval.",
+            detail="The agent opens a reviewed Lead Queue subset; activation requires an operator decision.",
         ),
         GrowthAgentPolicyCheck(
             label="Broad vs actionable reconciliation",
@@ -260,13 +253,13 @@ def policy_checks(
         override = bool(copilot_evidence.workflow_override_review_required)
         checks.append(
             GrowthAgentPolicyCheck(
-                label="Supervisor workflow selection",
+                label="Databricks Agent Responses suggestion reconciliation",
                 status="review_required" if override else "passed",
                 detail=(
-                    f"Supervisor selected {selected}; deterministic fallback candidate was "
-                    f"{deterministic}. Review the workflow choice before acting."
+                    f"Databricks Agent Responses suggested {selected}; the app retained and executed "
+                    f"the exact deterministic workflow {deterministic}. Review the mismatch before acting."
                     if override
-                    else f"Supervisor and deterministic planner agreed on {selected}."
+                    else f"Databricks Agent Responses and deterministic planner agreed on {selected}."
                 ),
             )
         )
@@ -284,8 +277,7 @@ def policy_checks(
                 label="Reviewed custom workflow",
                 status="passed",
                 detail=(
-                    "Custom workflow criteria are reviewed segment codes and explicit Any/All mode only; "
-                    "no arbitrary SQL or outbound activation is stored."
+                    "Custom workflow criteria use reviewed segment codes and an explicit Any/All mode."
                 ),
             )
         )
@@ -295,14 +287,6 @@ def policy_checks(
                 label="Manager review only",
                 status="passed",
                 detail="The workflow surfaces stale approved leads; it does not reassign LOs or change outreach state.",
-            )
-        )
-    if workflow.id == "borrower_dossier_review":
-        checks.append(
-            GrowthAgentPolicyCheck(
-                label="Dossier privacy",
-                status="passed",
-                detail="The handoff opens a scored queue for review; borrower dossier details still require row-level user action.",
             )
         )
     if workflow.id == "source_freshness_sentinel":
@@ -324,10 +308,7 @@ def policy_checks(
             GrowthAgentPolicyCheck(
                 label="Watchlist saved to Lakebase",
                 status="passed",
-                detail=(
-                    "The saved watchlist stores reviewed filters and counts only; "
-                    "it does not create a scheduled run, outbound activation, borrower identity export, or raw prompt record."
-                ),
+                detail="The selected cadence is stored with the reviewed cohort filters.",
             )
         )
     return checks
@@ -344,30 +325,25 @@ def governance_chips(
 ) -> list[GrowthAgentGovernanceChip]:
     blocked = any(check.status == "blocked" for check in policy_checks)
     review = any(check.status == "review_required" for check in policy_checks)
-    policy_status: Literal["passed", "review_required"] = "review_required" if blocked or review else "passed"
+    policy_status: Literal["passed", "review_required"] = (
+        "review_required" if blocked or review else "passed"
+    )
     if copilot_evidence.workflow_override_review_required:
         framework_status: Literal["passed", "review_required", "not_attached"] = "review_required"
         framework_detail = (
-            "Databricks Supervisor Agent selected a different reviewed workflow than the deterministic "
-            "fallback; review the workflow choice before acting."
+            "Databricks Agent Responses suggested a different reviewed workflow; the app retained "
+            "the exact deterministic workflow and recorded the suggestion only as review evidence."
         )
     elif copilot_evidence.execution_mode == "agent_framework":
         framework_status = "passed"
         framework_detail = (
-            "Databricks Supervisor Agent selected a reviewed workflow; reviewed deterministic tools executed the run."
+            "Databricks Agent Responses agreed with deterministic routing on a reviewed "
+            "workflow; reviewed deterministic tools executed the run."
         )
     else:
         framework_status = "not_attached"
-        framework_detail = (
-            "Mosaic/Agent Bricks orchestration is not used by this run; reviewed SQL workflows executed instead."
-        )
+        framework_detail = "Mosaic/Agent Bricks orchestration is not used by this run; reviewed SQL workflows executed instead."
     chips: list[GrowthAgentGovernanceChip] = [
-        GrowthAgentGovernanceChip(
-            label="PII-safe output",
-            status="passed",
-            detail="The run returns counts, source assets, hashes, and route filters only.",
-            evidence_ref=trace_id,
-        ),
         GrowthAgentGovernanceChip(
             label="Human approval required",
             status="passed",
@@ -378,11 +354,13 @@ def governance_chips(
             label="Policy checks",
             status=policy_status,
             detail=f"{len(policy_checks):,} policy checks evaluated for this workflow.",
-            evidence_ref=audit_event_id,
+            evidence_ref=audit_event_id or trace_id,
         ),
         GrowthAgentGovernanceChip(
             label="Genie Conversation",
-            status="passed" if copilot_evidence.execution_mode == "genie_conversation" else "not_attached",
+            status="passed"
+            if copilot_evidence.execution_mode == "genie_conversation"
+            else "not_attached",
             detail=(
                 "Prompt interpretation is linked to a Genie Conversation message; deterministic tools executed the run."
                 if copilot_evidence.execution_mode == "genie_conversation"
@@ -391,10 +369,12 @@ def governance_chips(
             evidence_ref=None,
         ),
         GrowthAgentGovernanceChip(
-            label="Multi-agent framework",
+            label="Databricks Agent Responses",
             status=framework_status,
             detail=framework_detail,
-            evidence_ref=copilot_evidence.question_hash if copilot_evidence.execution_mode == "agent_framework" else None,
+            evidence_ref=copilot_evidence.question_hash
+            if copilot_evidence.execution_mode == "agent_framework"
+            else None,
         ),
         GrowthAgentGovernanceChip(
             label="AI Gateway",
@@ -405,12 +385,12 @@ def governance_chips(
                 else "not_attached"
             ),
             detail=(
-                "Supervisor call was routed through the configured AI Gateway endpoint; "
+                "Databricks Agent Responses was routed through the configured AI Gateway; "
                 "deployment-level exact inference-row proof is required before AI Gateway is claimable. "
                 "This run card does not claim per-run row landing."
                 if copilot_evidence.execution_mode == "agent_framework"
                 and copilot_evidence.gateway_client_request_id
-                else "No AI Gateway-routed Supervisor request is attached to this run."
+                else "No AI Gateway-routed Databricks Agent Responses request is attached to this run."
             ),
             evidence_ref=None,
         ),
@@ -427,7 +407,8 @@ def governance_chips(
                 label="Freshness signal",
                 status=(
                     "passed"
-                    if int(metrics.get("warning_total") or 0) == 0 and int(metrics.get("stale_total") or 0) == 0
+                    if int(metrics.get("warning_total") or 0) == 0
+                    and int(metrics.get("stale_total") or 0) == 0
                     else "review_required"
                 ),
                 detail="Backed by global gold.source_readiness rows.",
@@ -454,6 +435,31 @@ def tool_result_hash(
     return hashlib.sha256(raw).hexdigest()
 
 
+def cohort_fingerprint(*, cohort_digest: str, tool_result_hash: str) -> str:
+    """Bind a complete borrower-set digest to one reviewed tool result.
+
+    The warehouse computes ``cohort_digest`` from the sorted, de-duplicated
+    borrower identifiers. Binding that digest to the tool-result hash prevents
+    a valid cohort proof from being replayed against a different agent run.
+    """
+
+    normalized_digest = cohort_digest.strip().lower()
+    normalized_tool_hash = tool_result_hash.strip().lower()
+    for label, value in (
+        ("cohort_digest", normalized_digest),
+        ("tool_result_hash", normalized_tool_hash),
+    ):
+        if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
+            raise ValueError(f"{label} must be a lowercase SHA-256 digest")
+    payload = {
+        "cohort_digest": normalized_digest,
+        "tool_result_hash": normalized_tool_hash,
+        "version": 1,
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
 def _reviewed_tool_step(
     workflow: GrowthAgentWorkflowDef,
     tool_name: str,
@@ -465,7 +471,9 @@ def _reviewed_tool_step(
 ) -> GrowthAgentToolStep:
     tool = assert_tool_allowed_for_specialist(tool_name, workflow.specialist_agent)
     if tool.writes_state:
-        raise ValueError(f"{tool.name} writes state and cannot run inside reviewed read-only workflow")
+        raise ValueError(
+            f"{tool.name} writes state and cannot run inside reviewed read-only workflow"
+        )
     return GrowthAgentToolStep(
         label=label,
         status=status,

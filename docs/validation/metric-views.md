@@ -14,20 +14,27 @@ daily snapshot MERGE, and updated metric views that JOIN them.
 ## Approach (Option A — UC-native mirror)
 
 Approval and outreach state live in **Lakebase** (`mip_app.approvals`,
-`mip_app.action_audit`). The metric views can't LEFT JOIN Lakebase
-directly without a foreign UC catalog, which the bundle doesn't declare
-today. Rather than build the federated-catalog layer, we mirror Lakebase
-into a small, borrower-keyed gold table and JOIN that.
+`mip_app.call_dispositions`). Although the bundle registers the app-state
+database catalog, the metric views deliberately avoid a runtime cross-plane
+join and its grant/latency coupling. They join a small borrower-keyed gold
+mirror instead.
 
 ### New gold tables
 
 - **`mip.gold.borrower_lifecycle_state`** (DDL: `sql/ddl/003_gold_tables.sql`
-  §7). One row per `borrower_id`. Columns: `approval_status`
+  §7). Sparse, at most one row per `borrower_id` that has a durable Lakebase
+  approval or disposition. Columns: `approval_status`
   (`pending` / `approved` / `rejected` / `hold`), `outreach_status`
   (`none` / `queued` / `actioned`), `offer_code`, `approved_at`,
-  `outreach_at`, `synced_at`, `refreshed_at`. `refreshed_at` is the
-  Lakebase mirror refresh boundary for this lifecycle snapshot; it is not the
-  scoring gold refresh boundary. Cluster BY `borrower_id`.
+  `approval_decided_at`, `approval_event_id`, `outreach_at`,
+  `outreach_created_at`, `outreach_event_id`, `synced_at`, `refreshed_at`.
+  `(approval_decided_at, approval_event_id)` versions the complete approval
+  dimension, including reject and hold decisions for which `approved_at` is
+  null. `(outreach_at, outreach_created_at, outreach_event_id)` versions the
+  disposition dimension. The event IDs are non-PII UUID strings.
+  `refreshed_at` is the Lakebase mirror refresh boundary for this lifecycle
+  snapshot; it is not the scoring gold refresh boundary. Cluster BY
+  `borrower_id`.
 
 - **`mip.gold.funnel_snapshot_daily`** (DDL §8). One row per
   `(snapshot_date, state, segment_code)` incl. the `_ALL` rollups.
@@ -38,37 +45,58 @@ into a small, borrower-keyed gold table and JOIN that.
 
 ### How they get written
 
-1. **Seed default state** — `sql/transformations/gold_borrower_lifecycle_state.sql`
-   does a `CREATE OR REPLACE TABLE ... AS SELECT` that walks every
-   borrower in `gold.borrower_360` and writes `pending` / `none`. This
-   lets the metric views resolve on a cold deploy before any approval
-   has been made.
+1. **Primary app sync** — after Lakebase commits an accepted approval or
+   rejection, `backend/services/job_trigger.py` schedules
+   `backend/services/lifecycle_sync.py` on FastAPI `BackgroundTasks`. The
+   service reads the durable current Lakebase lifecycle rows and applies a
+   changed-row Delta `MERGE` through the existing SQL warehouse. Approval
+   fields advance only when the approval version tuple advances; disposition
+   fields advance only when the outreach version tuple advances. These are the
+   same tuples used by the Lakebase `ORDER BY`, so equal event timestamps remain
+   totally ordered and a delayed older snapshot cannot roll back a selected
+   newer decision or outreach action. It does not
+   `INSERT OVERWRITE`, seed defaults, scan the lifecycle target for a count,
+   or rebuild the population-wide funnel snapshot on each click. Consumers
+   already use `LEFT JOIN` + `COALESCE('pending'/'none')` for borrowers with no
+   lifecycle row.
 
-2. **Sync from Lakebase** — `jobs/sync_lifecycle_state.py` opens a
+2. **Durable repair sync** — when the cheap warehouse path fails, the app
+   submits `mip_sync_lifecycle_state`. `jobs/sync_lifecycle_state.py` opens a
    psycopg3 connection to `mip-app-state` (same auth path as
    `jobs/lakebase_migrate.py` — workspace identity + short-lived
-   credential), reads the latest approval per borrower + whether an
-   `OUTREACH_*` event exists in `action_audit`, and `CREATE OR
-   REPLACE TABLE`-rewrites `mip.gold.borrower_lifecycle_state` via
-   Spark. The rewrite seeds every borrower in `borrower_360` to the
-   `pending` / `none` default and then unions in the Lakebase rows —
-   so borrowers that have never been reviewed still appear with the
-   default, and approved borrowers carry the real timestamp.
+   credential), reads the latest approval/disposition per borrower, and runs
+   the same canonical changed-row `MERGE` via Spark. Databricks stores the run
+   state, queues concurrent recovery submissions, and retries the task twice.
+   The durable Lakebase source means a dropped process-local background task
+   can be repaired by any later app, Admin Data operations, deploy, or job run.
+   Both write paths probe for all four additive version columns and add only
+   those absent from the Delta target, so partial and repeated upgrades are
+   idempotent before the guarded `MERGE`.
 
 3. **Snapshot the funnel** — `sql/transformations/gold_funnel_snapshot_daily.sql`
    does a `MERGE INTO` keyed by `(snapshot_date, state, segment_code)`,
    so re-running the same day is idempotent. Joins `gold.borrower_360`
    against `gold.borrower_lifecycle_state` and aggregates across both
-   per-segment and `_ALL` rollups per state and per-`_ALL` state.
+   per-segment and `_ALL` rollups per state and per-`_ALL` state. This full
+   population aggregation runs at deploy/Admin/durable-repair boundaries, not
+   for every successful app hook.
 
 ### Bundle wiring
 
-A new job `mip_sync_lifecycle_state` chains these three steps
-(`seed_default_state → sync_from_lakebase → record_funnel_snapshot`)
-with an hourly quartz schedule (`0 15 * ? * * *` America/Chicago).
-Canonical declaration in `databricks.yml`; mirror block in
-`resources/jobs.yml` following the repo convention used for
-`mip_fred_rates_ingest` and `mip_ref_seed`.
+`mip_sync_lifecycle_state` chains two steps
+(`sync_from_lakebase → record_funnel_snapshot`). It has one queued run at a
+time and two task retries. The optional 04:00 America/Chicago schedule is
+declared but ships paused in every target; the normal freshness driver is the
+warehouse-first app hook. `databricks.yml` is the canonical declaration.
+
+**Upgrade note:** a workspace upgraded from the former seed/overwrite design
+can retain historical synthetic `pending` / `none` rows until an intentional
+one-time cleanup is approved. They are semantically harmless because the
+consumer defaults are identical, and the changed-row predicate leaves them
+untouched. Do not hide a multi-million-row Delta delete inside an app hook;
+validate and run that storage cleanup as an explicit operator migration. The
+Spark entrypoint requires `--prune-legacy-defaults`; routine app, deploy, Admin,
+and repair-job calls leave the rows in place.
 
 ## Metric-view changes
 
@@ -127,11 +155,10 @@ Publishes:
    `funnel_snapshot_daily` with a `snapshot_date = CURRENT_DATE()`
    predicate and a second join for `CURRENT_DATE() - INTERVAL 90 DAYS`
    (QoQ) or `- INTERVAL 365 DAYS` (YoY) is a 10-line dashboard edit.
-2. **Federated-catalog swap.** When UC foreign-catalog federation
-   over Lakebase Postgres lands, `sql/transformations/gold_borrower_lifecycle_state.sql`
-   can become a CTAS against the foreign catalog and the Python
-   `sync_lifecycle_state.py` job can retire. Column contract on the
-   gold table does not change.
+2. **Federated-catalog swap.** If the deployed Lakebase catalog becomes a
+   supported direct metric-view source with the required grants and latency,
+   the Python repair job can retire. The sparse gold column contract does not
+   change.
 3. **mean_rate_spread_bps / mean_equity_pct as measures on
    `segment_performance_metric_view`.** Still computed by the
    `ds_segment_overview` dataset via a runtime aggregation against
@@ -163,3 +190,6 @@ Publishes:
   the dashboards need to see every addressable borrower even if nobody
   has reviewed them yet (the denominator of approval_rate must be the
   full population, not just reviewed rows).
+- **Do NOT restore default-row seeding or table replacement.** A single
+  lifecycle event must remain a changed-row `MERGE`, never a rewrite of
+  `gold.borrower_360`'s full population.

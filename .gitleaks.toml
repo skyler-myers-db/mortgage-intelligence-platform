@@ -27,6 +27,9 @@ regexes = [
   '''00000000-0000-0000-0000-000000000000''',
   # CI placeholder Lakebase instance name.
   '''mip-placeholder''',
+  # Databricks secret-scope key name used by the App resource binding. This
+  # identifies a key; the value is provisioned separately through the Secrets API.
+  '''^cotality-id-mask-v1$''',
   # Synthetic borrower ids used throughout fixtures + docs (`B-48291`
   # etc). These are not credentials but the default gitleaks rule for
   # "generic api key" sometimes flags short capitalized+digit strings.

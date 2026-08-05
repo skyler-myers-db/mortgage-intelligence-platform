@@ -3,13 +3,23 @@
  */
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+// @ts-expect-error Frontend app types intentionally exclude Node globals; this
+// unit test reads the committed manifest under Vitest only.
+import { readFileSync } from 'node:fs';
+// @ts-expect-error see node:fs note above.
+import { join } from 'node:path';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EvidenceDrawer } from './EvidenceDrawer';
 import type { DrawerSource } from '../AppContext';
-import type { LineageManifestResponse } from '../../types';
+import { DRAWER_SOURCES } from '../../lib/drawerSources';
+import type { LineageLayer, LineageManifestResponse } from '../../types';
+
+declare const process: { cwd(): string };
+
+(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const appMocks = vi.hoisted(() => ({
   drawer: null as DrawerSource | null,
@@ -36,6 +46,53 @@ vi.mock('../../lib/api', () => ({
 }));
 
 const WORKSPACE = 'https://dbc-vitest.cloud.databricks.com';
+
+interface ManifestFile {
+  schema_version: number;
+  families: Array<{
+    id: string;
+    title: string;
+    description: string;
+    nodes: Array<{
+      id: string;
+      layer: LineageLayer;
+      object_type: 'table' | 'view' | 'function';
+      catalog: string | null;
+      schema: string;
+      object: string;
+      label: string;
+      note?: string | null;
+    }>;
+  }>;
+}
+
+const MANIFEST_FILE = JSON.parse(readFileSync(
+  join(process.cwd(), '..', 'backend', 'resources', 'lineage_manifest.json'),
+  'utf8',
+)) as ManifestFile;
+
+const FULL_MANIFEST: LineageManifestResponse = {
+  schema_version: MANIFEST_FILE.schema_version,
+  manifest_path: 'backend/resources/lineage_manifest.json',
+  families: MANIFEST_FILE.families.map((family) => ({
+    id: family.id,
+    title: family.title,
+    description: family.description,
+    nodes: family.nodes.map((node) => {
+      const catalog = node.catalog ?? 'mip';
+      const functionPath = node.object_type === 'function' ? 'functions/' : '';
+      return {
+        id: node.id,
+        layer: node.layer,
+        object_type: node.object_type,
+        fqn: `${catalog}.${node.schema}.${node.object}`,
+        label: node.label,
+        note: node.note ?? null,
+        catalog_explorer_url: `${WORKSPACE}/explore/data/${functionPath}${catalog}/${node.schema}/${node.object}`,
+      };
+    }),
+  })),
+};
 
 /** Shape mirrors GET /api/lineage/manifest (backend/schemas/lineage.py). */
 const MANIFEST: LineageManifestResponse = {
@@ -86,9 +143,28 @@ const MAPPED_SOURCE: DrawerSource = {
   assetKey: 'borrower_360',
   assetPath: 'mip.gold.borrower_360',
   lineageFamily: 'in_the_money',
+  signals: [
+    {
+      label: 'Lien rate input',
+      source:
+        'cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2.current_rate',
+      value: 'borrower row',
+    },
+    {
+      label: 'Economics screen',
+      source: 'mip.gold.fn_in_the_money',
+      value: 'reviewed function',
+    },
+  ],
 };
 
 const UNMAPPED_SOURCE: DrawerSource = {
+  title: 'Unknown evidence source',
+  short: 'unknown',
+  description: 'Not in the reviewed destination registry.',
+};
+
+const LAKEBASE_SOURCE: DrawerSource = {
   title: 'Campaign assumptions',
   short: 'config',
   description: 'Per-lender campaign config.',
@@ -119,7 +195,19 @@ describe('EvidenceDrawer lineage tab', () => {
       delta_last_modified: null,
       freshness: 'fresh',
       status: 'ready',
-      lineage: [],
+      lineage: [
+        {
+          direction: 'upstream',
+          asset_path: 'mip.gold.borrower_360',
+          label: 'Gold Borrower 360',
+          object_type: 'table',
+          event_time: '2026-07-10 12:00:00',
+          event_count: 2,
+          source: 'system.access.table_lineage',
+          catalog_explorer_url: `${WORKSPACE}/explore/data/mip/gold/borrower_360`,
+        },
+      ],
+      known_data_gaps: [],
       last_updated: null,
       catalog_explorer_url: null,
     });
@@ -159,13 +247,34 @@ describe('EvidenceDrawer lineage tab', () => {
     appMocks.drawer = MAPPED_SOURCE;
     await render();
 
-    // Tablist is part of the drawer chrome; Overview stays the default.
+    // Overview uses the governed manifest immediately and presents its
+    // compact asset list rather than DrawerSource.lineage.
     const overviewTab = document.getElementById('drawer-tab-overview');
     expect(overviewTab?.getAttribute('aria-selected')).toBe('true');
-    expect(apiMocks.lineageManifest).not.toHaveBeenCalled();
+    expect(apiMocks.lineageManifest).toHaveBeenCalledTimes(1);
+    expect(document.body.textContent).toContain('Governed assets');
+    expect(document.body.textContent).toContain('Compact semantics');
+    expect(document.body.textContent).not.toContain(
+      'One or more Catalog Explorer links are unavailable because the Databricks workspace host or asset mapping is not configured.',
+    );
+    expect(document.querySelectorAll('.governed-assets__list .lineage-node__chip')).toHaveLength(3);
+    const signalLinks = Array.from(
+      document.querySelectorAll<HTMLAnchorElement>('.lineage-node--signal a'),
+    );
+    expect(signalLinks.map((link) => link.href)).toEqual([
+      `${WORKSPACE}/explore/data/cotality_mortgage_data/corelogic/entrada_eval_voluntary_lien_status_marketing_v2`,
+      `${WORKSPACE}/explore/data/functions/mip/gold/fn_in_the_money`,
+    ]);
 
     await openLineageTab();
     expect(apiMocks.lineageManifest).toHaveBeenCalledTimes(1);
+    const catalogStatus = Array.from(document.querySelectorAll('[role="status"]')).find((node) => (
+      node.textContent?.includes('One or more Catalog Explorer links are unavailable')
+    ));
+    expect(catalogStatus).toBeTruthy();
+    expect(Array.from(document.querySelectorAll('[role="alert"]')).some((node) => (
+      node.textContent?.includes('Catalog Explorer links are unavailable')
+    ))).toBe(false);
 
     const chips = Array.from(
       document.querySelectorAll<HTMLElement>('.lineage-node__chip'),
@@ -191,7 +300,41 @@ describe('EvidenceDrawer lineage tab', () => {
 
     // Provenance footer cites the committed manifest.
     expect(document.body.textContent).toContain('backend/resources/lineage_manifest.json');
+
+    const observedLink = document.querySelector<HTMLAnchorElement>('.observed-lineage__asset');
+    expect(document.body.textContent).toContain(
+      'Observed Unity Catalog relationships - supplemental',
+    );
+    expect(observedLink?.textContent).toContain('Observed upstream');
+    expect(observedLink?.textContent).toContain('2 observed event(s)');
+    expect(observedLink?.href).toBe(
+      `${WORKSPACE}/explore/data/mip/gold/borrower_360`,
+    );
   });
+
+  it('links every node in every committed manifest family to its resolved Catalog Explorer asset', async () => {
+    apiMocks.lineageManifest.mockResolvedValue(FULL_MANIFEST);
+
+    for (const family of FULL_MANIFEST.families) {
+      appMocks.drawer = {
+        ...MAPPED_SOURCE,
+        title: `${family.title} evidence`,
+        lineageFamily: family.id,
+      };
+      await render();
+      await openLineageTab();
+
+      const chips = Array.from(document.querySelectorAll<HTMLAnchorElement>(
+        '.lineage-node__chip',
+      ));
+      expect(chips, family.id).toHaveLength(family.nodes.length);
+      family.nodes.forEach((node, index) => {
+        expect(chips[index].tagName, `${family.id}/${node.id}`).toBe('A');
+        expect(chips[index].textContent?.trim(), `${family.id}/${node.id}`).toBe(node.fqn);
+        expect(chips[index].href, `${family.id}/${node.id}`).toBe(node.catalog_explorer_url);
+      });
+    }
+  }, 15_000);
 
   it('shows the explicit not-mapped state without fetching or inventing nodes', async () => {
     appMocks.drawer = UNMAPPED_SOURCE;
@@ -201,6 +344,91 @@ describe('EvidenceDrawer lineage tab', () => {
     expect(document.body.textContent).toContain('Lineage not mapped');
     expect(document.querySelectorAll('.lineage-node__chip')).toHaveLength(0);
     expect(apiMocks.lineageManifest).not.toHaveBeenCalled();
+  });
+
+  it('classifies Lakebase records and routes to the operational query surface without Catalog links', async () => {
+    appMocks.drawer = LAKEBASE_SOURCE;
+    await render();
+    await openLineageTab();
+
+    expect(document.body.textContent).toContain('Lakebase operational records');
+    expect(document.body.textContent).toContain('mip_app.campaigns');
+    const operationalLink = Array.from(document.querySelectorAll<HTMLAnchorElement>('a')).find(
+      (link) => link.textContent?.includes('Open campaign builder'),
+    );
+    expect(operationalLink?.getAttribute('href')).toBe('/portfolio-builder');
+    expect(document.querySelector('a[href*="/explore/data/"]')).toBeNull();
+    expect(apiMocks.lineageManifest).not.toHaveBeenCalled();
+    expect(apiMocks.assetMetadata).not.toHaveBeenCalled();
+  });
+
+  it('renders campaign-performance Lakebase drawers with non-admin Sales Ops destinations', async () => {
+    for (const source of [DRAWER_SOURCES.callDispositions, DRAWER_SOURCES.leadOutcomes]) {
+      appMocks.drawer = source;
+      await render();
+      await openLineageTab();
+
+      expect(document.body.textContent).toContain('Lakebase operational records');
+      expect(document.body.textContent).toContain(source.assetPath);
+      const operationalLink = Array.from(document.querySelectorAll<HTMLAnchorElement>('a')).find(
+        (link) => link.textContent?.includes('Open sales operations'),
+      );
+      expect(operationalLink?.getAttribute('href')).toBe('/analytics?view=sales-ops');
+      expect(document.querySelector('a[href^="/admin-config"]')).toBeNull();
+      expect(document.querySelector('a[href*="/explore/data/"]')).toBeNull();
+    }
+    expect(apiMocks.lineageManifest).not.toHaveBeenCalled();
+    expect(apiMocks.assetMetadata).not.toHaveBeenCalled();
+  });
+
+  it('keeps observed assets noninteractive when the backend cannot issue a workspace link', async () => {
+    apiMocks.assetMetadata.mockResolvedValue({
+      row_count: null,
+      num_files: null,
+      size_label: null,
+      delta_last_modified: null,
+      freshness: 'fresh',
+      status: 'ready',
+      lineage: [
+        {
+          direction: 'upstream',
+          asset_path: 'mip.gold.borrower_360',
+          label: 'Gold Borrower 360',
+          object_type: 'table',
+          event_time: null,
+          event_count: 1,
+          source: 'system.access.table_lineage',
+          catalog_explorer_url: null,
+        },
+      ],
+      known_data_gaps: [],
+      last_updated: null,
+      catalog_explorer_url: null,
+    });
+    appMocks.drawer = MAPPED_SOURCE;
+    await render();
+    await openLineageTab();
+
+    const observedAsset = document.querySelector<HTMLElement>('.observed-lineage__asset');
+    expect(observedAsset?.tagName).toBe('DIV');
+    expect(observedAsset?.getAttribute('title')).toContain(
+      'Catalog Explorer link unavailable',
+    );
+  });
+
+  it('keeps governed explanations visible when metadata and lineage requests fail', async () => {
+    apiMocks.assetMetadata.mockRejectedValue(new Error('metadata unavailable'));
+    apiMocks.lineageManifest.mockRejectedValue(new Error('manifest unavailable'));
+    appMocks.drawer = MAPPED_SOURCE;
+    await render();
+
+    expect(document.body.textContent).toContain('Metadata not loaded');
+    expect(document.body.textContent).toContain('Governed asset metadata requires admin access');
+    expect(document.body.textContent).toContain('Governed assets unavailable; manifest not loaded');
+
+    await openLineageTab();
+    expect(document.body.textContent).toContain('governed lineage manifest could not be loaded');
+    expect(document.body.textContent).toContain('Observed relationships unavailable');
   });
 
   it('flags a family id missing from the manifest as drift, not lineage', async () => {
@@ -227,5 +455,45 @@ describe('EvidenceDrawer lineage tab', () => {
     expect(
       document.getElementById('drawer-tab-overview')?.getAttribute('aria-selected'),
     ).toBe('true');
+  });
+
+  it('uses roving tab stops and activates tabs with arrow, Home, and End keys', async () => {
+    appMocks.drawer = MAPPED_SOURCE;
+    await render();
+
+    const overview = document.getElementById('drawer-tab-overview') as HTMLButtonElement;
+    const lineage = document.getElementById('drawer-tab-lineage') as HTMLButtonElement;
+    expect(overview.tabIndex).toBe(0);
+    expect(lineage.tabIndex).toBe(-1);
+
+    overview.focus();
+    await act(async () => {
+      overview.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    });
+    expect(document.activeElement).toBe(lineage);
+    expect(lineage.getAttribute('aria-selected')).toBe('true');
+    expect(lineage.tabIndex).toBe(0);
+    expect(overview.tabIndex).toBe(-1);
+
+    await act(async () => {
+      lineage.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+    });
+    expect(document.activeElement).toBe(overview);
+    expect(overview.getAttribute('aria-selected')).toBe('true');
+
+    await act(async () => {
+      overview.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    });
+    await act(async () => {
+      lineage.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true }));
+    });
+    expect(document.activeElement).toBe(overview);
+    expect(overview.getAttribute('aria-selected')).toBe('true');
+
+    await act(async () => {
+      overview.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }));
+    });
+    expect(document.activeElement).toBe(lineage);
+    expect(lineage.getAttribute('aria-selected')).toBe('true');
   });
 });

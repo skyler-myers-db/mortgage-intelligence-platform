@@ -102,7 +102,13 @@ class PortfolioRepository(Protocol):
     def preview(self, request: PortfolioPreviewRequest | None) -> PortfolioPreview:
         ...
 
-    def create(self, payload: PortfolioCreateRequest, *, actor: str | None = None) -> PortfolioCreateResponse:
+    def create(
+        self,
+        payload: PortfolioCreateRequest,
+        *,
+        actor: str | None = None,
+        idempotency_key: str,
+    ) -> PortfolioCreateResponse:
         ...
 
     def get(self, portfolio_id: str) -> dict[str, object]:
@@ -225,6 +231,19 @@ class LeadRepository(Protocol):
         """Return the total matching the same predicates as ``list``."""
         ...
 
+    def is_campaign_treatment_member(
+        self,
+        *,
+        borrower_id: str,
+        campaign_id: str,
+        materialization_id: str,
+        delta_version: int,
+        treatment_fingerprint: str,
+        frequency_cap_days: int,
+    ) -> bool:
+        """Return immutable T0 treatment membership narrowed by live eligibility."""
+        ...
+
 
 @runtime_checkable
 class BorrowerRepository(Protocol):
@@ -238,6 +257,10 @@ class BorrowerRepository(Protocol):
     """
 
     def get(self, borrower_id: str) -> Borrower360 | None:
+        ...
+
+    def get_fresh(self, borrower_id: str) -> Borrower360 | None:
+        """Read through the process cache for snapshot reconciliation."""
         ...
 
     def evidence(self, borrower_id: str) -> list[EvidenceEvent] | None:
@@ -256,7 +279,8 @@ class BorrowerRepository(Protocol):
 class OfferRepository(Protocol):
     """Inputs for the offer-orchestrator recommendation.
 
-    Returns the boolean + numeric columns from ``gold.borrower_360``
+    Returns one atomic row from ``gold.borrower_dossier`` containing the
+    audit subject, evidence/confidence, and the boolean + numeric columns
     that feed ``fn_next_best_offer`` (rate_spread_bps, equity_pct,
     has_permit, listed_for_sale, is_investor, is_current_customer,
     is_competitor_lien) plus the precomputed ``offer_code`` and the five
@@ -360,4 +384,15 @@ class GenieAnswerRepository(Protocol):
         """Return a ``GenieMessageResponse``. Typed as ``object`` here
         to avoid a forward-import cycle with ``backend.services
         .genie_answers``; routers re-annotate to the concrete model."""
+        ...
+
+    def respond_existing(
+        self,
+        question: str,
+        *,
+        conversation_id: str,
+        message_id: str,
+    ) -> object:
+        """Complete an already-submitted live Genie message into a governed
+        answer (async lifecycle). Same return contract as :meth:`respond`."""
         ...

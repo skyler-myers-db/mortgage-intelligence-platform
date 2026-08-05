@@ -115,7 +115,7 @@ test.describe('Module 0 — golden path', () => {
     });
   });
 
-  test('home: hero + four KPIs + map + agent log', async ({ page }) => {
+  test('home: hero + four KPIs + full-width geography without admin audit data', async ({ page }) => {
     await page.goto('/');
 
     await expect(page).toHaveTitle(/Mortgage Intelligence Platform/);
@@ -132,7 +132,7 @@ test.describe('Module 0 — golden path', () => {
     // drill (Chicago/Cook County). State topology ships aria-labels for every
     // state; picking IL aligns the test with the product narrative.
     await expect(page.locator('[aria-label="Illinois"]').first()).toBeVisible({ timeout: 5_000 });
-    await expect(page.locator('.surface', { hasText: /agent|activity/i }).first()).toBeVisible();
+    await expect(page.getByText('Agent action audit log', { exact: true })).toHaveCount(0);
 
     expect(consoleErrors, `unexpected console errors: ${consoleErrors.join(' | ')}`).toEqual([]);
   });
@@ -425,11 +425,12 @@ test.describe('Module 0 — golden path', () => {
         body: JSON.stringify({ conversation_id: null, trusted_assets: ['mip.gold.borrower_360'] }),
       });
     });
-    await page.route(apiPattern('genie/message$'), async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({
+    // Async lifecycle (2026-07-31): the UI submits via /message/submit and
+    // expects the GenieSubmitResponse envelope; deterministic fixture turns
+    // resolve inline with completed=true. The bare /message shape stays for
+    // the legacy sync endpoint.
+    await page.route(apiPattern('genie/message(/submit)?$'), async (route) => {
+      const answerBody = ({
           conversation_id: 'conv-exact',
           message_id: 'msg-exact',
           question_hash: 'hash-exact',
@@ -477,7 +478,22 @@ test.describe('Module 0 — golden path', () => {
               confirmation_token: 'token-exact',
             },
           ],
-        }),
+        });
+      const isSubmit = route.request().url().includes('/message/submit');
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(
+          isSubmit
+            ? {
+                completed: true,
+                conversation_id: answerBody.conversation_id,
+                message_id: answerBody.message_id,
+                question_hash: answerBody.question_hash,
+                response: answerBody,
+              }
+            : answerBody,
+        ),
       });
     });
     await page.route(apiPattern('genie/actions$'), async (route) => {
@@ -549,11 +565,12 @@ test.describe('Module 0 — golden path', () => {
         body: JSON.stringify({ conversation_id: null, trusted_assets: ['mip.gold.borrower_360'] }),
       });
     });
-    await page.route(apiPattern('genie/message$'), async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({
+    // Async lifecycle (2026-07-31): the UI submits via /message/submit and
+    // expects the GenieSubmitResponse envelope; deterministic fixture turns
+    // resolve inline with completed=true. The bare /message shape stays for
+    // the legacy sync endpoint.
+    await page.route(apiPattern('genie/message(/submit)?$'), async (route) => {
+      const answerBody = ({
           conversation_id: 'conv-fail',
           message_id: 'msg-fail',
           question_hash: 'hash-fail',
@@ -577,7 +594,22 @@ test.describe('Module 0 — golden path', () => {
               confirmation_token: 'token-fail',
             },
           ],
-        }),
+        });
+      const isSubmit = route.request().url().includes('/message/submit');
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(
+          isSubmit
+            ? {
+                completed: true,
+                conversation_id: answerBody.conversation_id,
+                message_id: answerBody.message_id,
+                question_hash: answerBody.question_hash,
+                response: answerBody,
+              }
+            : answerBody,
+        ),
       });
     });
     await page.route(apiPattern('genie/actions$'), async (route) => {

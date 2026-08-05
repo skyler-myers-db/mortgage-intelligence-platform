@@ -61,6 +61,123 @@ def test_admin_rejects_non_admin_group(client: TestClient) -> None:
     assert response.json() == {"detail": "forbidden"}
 
 
+@pytest.mark.parametrize(
+    "path",
+    ["/api/audit/events", "/api/audit/events/page", "/api/audit/rollups"],
+)
+def test_audit_reads_reject_non_admin_group(client: TestClient, path: str) -> None:
+    """The relocated audit explorer is protected at its own API boundary."""
+
+    response = client.get(
+        path,
+        headers={"X-Forwarded-Groups": "analysts,loan-officers"},
+    )
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "forbidden"}
+
+
+def test_session_returns_only_admin_capability_from_same_group_rule(
+    client: TestClient,
+) -> None:
+    admitted = client.get(
+        "/api/v1/session",
+        headers={"X-Forwarded-Groups": settings.admin_group_name},
+    )
+    denied = client.get(
+        "/api/v1/session",
+        headers={"X-Forwarded-Groups": "analysts,loan-officers"},
+    )
+    compat = client.get(
+        "/api/session",
+        headers={"X-Forwarded-Groups": settings.admin_group_name},
+    )
+
+    assert admitted.status_code == 200
+    assert admitted.json() == {"can_access_admin": True, "can_approve": True}
+    assert denied.status_code == 200
+    assert denied.json() == {"can_access_admin": False, "can_approve": False}
+    assert compat.status_code == 200
+    assert compat.json() == admitted.json()
+
+
+def test_session_and_admin_gate_share_email_allowlist_rule(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "admin_emails", "operator@example.com")
+    headers = {
+        "X-Forwarded-Email": "operator@example.com",
+        "X-Forwarded-Groups": "",
+    }
+
+    session = client.get("/api/v1/session", headers=headers)
+    admin = client.get("/api/admin/rules", headers=headers)
+
+    assert session.json() == {"can_access_admin": True, "can_approve": True}
+    assert admin.status_code == 200, admin.text
+
+
+def test_session_separates_approver_automation_from_admin_and_verifier(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "approver_identities", "normal-client,operator2-client")
+    monkeypatch.setattr(settings, "admin_identities", "admin-client")
+    monkeypatch.setattr(settings, "approver_emails", "")
+    monkeypatch.setattr(settings, "admin_emails", "")
+
+    normal = client.get(
+        "/api/v1/session",
+        headers={"X-Forwarded-Email": "normal-client", "X-Forwarded-Groups": ""},
+    )
+    operator2 = client.get(
+        "/api/v1/session",
+        headers={"X-Forwarded-User": "operator2-client", "X-Forwarded-Groups": ""},
+    )
+    admin = client.get(
+        "/api/v1/session",
+        headers={"X-Forwarded-Email": "admin-client", "X-Forwarded-Groups": ""},
+    )
+    verifier = client.get(
+        "/api/v1/session",
+        headers={"X-Forwarded-Email": "verifier-client", "X-Forwarded-Groups": ""},
+    )
+
+    expected_operator = {"can_access_admin": False, "can_approve": True}
+    assert normal.json() == expected_operator
+    assert operator2.json() == expected_operator
+    assert admin.json() == {"can_access_admin": True, "can_approve": True}
+    assert verifier.json() == {"can_access_admin": False, "can_approve": False}
+
+
+def test_sandbox_rejects_group_only_and_accepts_exact_admin_identity(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "app_env", "sandbox")
+    monkeypatch.setattr(settings, "admin_identities", "admin-client")
+    monkeypatch.setattr(settings, "admin_emails", "")
+
+    group_only = client.get(
+        "/api/admin/rules",
+        headers={
+            "X-Forwarded-Email": "operator@example.com",
+            "X-Forwarded-Groups": settings.admin_group_name,
+        },
+    )
+    exact_identity = client.get(
+        "/api/admin/rules",
+        headers={
+            "X-Forwarded-User": "admin-client",
+            "X-Forwarded-Groups": "",
+        },
+    )
+
+    assert group_only.status_code == 403
+    assert exact_identity.status_code == 200, exact_identity.text
+
+
 def test_force_degraded_rejects_non_admin_group(client: TestClient) -> None:
     """The drill switch is admin-only because it affects every live user."""
 
@@ -113,6 +230,10 @@ def test_admin_respects_trust_forwarded_headers_flag(
     )
     assert denied.status_code == 403
     assert denied.json() == {"detail": "forbidden"}
+    session_denied = client.get(
+        "/api/v1/session", headers={"X-Forwarded-Groups": "mip-admin"}
+    )
+    assert session_denied.json() == {"can_access_admin": False, "can_approve": False}
 
     # Trust re-enabled -- same header admits again.
     monkeypatch.setattr(settings, "trust_forwarded_headers", True)
@@ -120,6 +241,10 @@ def test_admin_respects_trust_forwarded_headers_flag(
         "/api/admin/rules", headers={"X-Forwarded-Groups": "mip-admin"}
     )
     assert admitted.status_code == 200, admitted.text
+    session_admitted = client.get(
+        "/api/v1/session", headers={"X-Forwarded-Groups": "mip-admin"}
+    )
+    assert session_admitted.json() == {"can_access_admin": True, "can_approve": True}
 
 
 def test_admin_fallback_group_always_admitted(client: TestClient) -> None:

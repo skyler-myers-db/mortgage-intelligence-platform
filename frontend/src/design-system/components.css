@@ -622,9 +622,6 @@ kbd {
   flex-shrink: 0;
   background: var(--text-3);
 }
-.evidence-chip__dot--fresh { background: var(--signal-success); }
-.evidence-chip__dot--aging { background: var(--signal-warning); }
-.evidence-chip__dot--stale { background: var(--text-3); }
 
 /* Evidence hover micro-preview (re-audit #4 Buyer-Wow #8). Portal-rendered
    to document.body with position:fixed coords, so it never clips inside the
@@ -666,9 +663,6 @@ kbd {
   background: var(--text-3);
   flex-shrink: 0;
 }
-.evidence-hovercard__dot--fresh { background: var(--signal-success); }
-.evidence-hovercard__dot--aging { background: var(--signal-warning); }
-.evidence-hovercard__dot--stale { background: var(--text-3); }
 .evidence-hovercard__signal {
   display: flex;
   align-items: baseline;
@@ -710,8 +704,14 @@ kbd {
   border-radius: 50%;
   display: inline-block;
 }
+.evidence-chip__dot--fresh,
+.evidence-hovercard__dot--fresh,
 .freshness-legend__dot--fresh { background: var(--signal-success); }
+.evidence-chip__dot--aging,
+.evidence-hovercard__dot--aging,
 .freshness-legend__dot--aging { background: var(--signal-warning); }
+.evidence-chip__dot--stale,
+.evidence-hovercard__dot--stale,
 .freshness-legend__dot--stale { background: var(--text-3); }
 
 /* ============================================================
@@ -1419,18 +1419,16 @@ kbd {
 .bulk-actions__toast--ok { color: var(--signal-success); }
 .bulk-actions__toast--warn { color: var(--signal-warning); }
 .bulk-actions__toast--danger { color: var(--signal-danger); }
-.table-error {
+.table-error,
+.table-success,
+.table-neutral {
   padding: var(--sp-2) var(--sp-4);
-  color: var(--signal-danger);
   font-size: var(--fs-12);
   border-top: 1px solid var(--line-1);
 }
-.table-success {
-  padding: var(--sp-2) var(--sp-4);
-  color: var(--signal-success);
-  font-size: var(--fs-12);
-  border-top: 1px solid var(--line-1);
-}
+.table-error { color: var(--signal-danger); }
+.table-success { color: var(--signal-success); }
+.table-neutral { color: var(--text-2); }
 .sales-ops-grid {
   display: grid;
   /* 2x2 for the four snapshot cards so none floats alone in a 3-col row. */
@@ -2372,6 +2370,19 @@ kbd {
   overflow-wrap: anywhere;
   text-decoration: none;
 }
+.governed-assets__list {
+  display: grid;
+  grid-template-columns: 1fr;
+  align-items: stretch;
+}
+.governed-assets__list .lineage-node__chip {
+  inline-size: 100%;
+  justify-content: space-between;
+}
+.observed-lineage__asset {
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
 a.lineage-node__chip:hover,
 a.lineage-node__chip:focus-visible {
   border-color: var(--accent);
@@ -2748,6 +2759,9 @@ a.lineage-node__chip:focus-visible {
 .growth-agent-card__copy {
   margin: 0;
 }
+.growth-agent-card__copy--structured {
+  white-space: pre-wrap;
+}
 .growth-agent-card__proof {
   display: flex;
   flex-direction: column;
@@ -3005,11 +3019,116 @@ a.lineage-node__chip:focus-visible {
   font-size: var(--fs-11);
   line-height: var(--lh-snug);
 }
+.genie-progress__label { flex: 1; min-width: 0; }
+.genie-progress__elapsed {
+  color: var(--text-3);
+  font-size: var(--fs-11);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.genie-progress__stages {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.genie-progress__stage {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  color: var(--text-3);
+  font-size: var(--fs-11);
+  white-space: nowrap;
+}
+.genie-progress__stage:not(:last-child)::after {
+  content: '';
+  width: var(--sp-4);
+  height: 1px;
+  background: var(--bg-3);
+  margin-left: var(--sp-1);
+}
+.genie-progress__stage-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--bg-3);
+  color: var(--accent-contrast);
+  flex: none;
+}
+.genie-progress__stage.is-done { color: var(--text-2); }
+.genie-progress__stage.is-done .genie-progress__stage-dot {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.genie-progress__stage.is-active { color: var(--text-1); font-weight: 600; }
+.genie-progress__stage.is-active .genie-progress__stage-dot {
+  border-color: var(--accent);
+  box-shadow: 0 0 8px var(--accent-soft);
+  animation: genie-progress-pulse 1.2s ease-in-out infinite;
+}
+@keyframes genie-progress-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(0.82); opacity: 0.6; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .genie-progress__stage.is-active .genie-progress__stage-dot { animation: none; }
+}
+.genie-progress__trace {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.genie-progress__trace-step {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  color: var(--text-2);
+  font-size: var(--fs-11);
+  line-height: var(--lh-snug);
+}
+.genie-progress__trace-step svg { flex: none; transform: translateY(1px); }
+.genie-progress__sql summary {
+  cursor: pointer;
+  color: var(--text-3);
+  font-size: var(--fs-11);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  user-select: none;
+}
+.genie-progress__sql summary:hover { color: var(--text-2); }
+.genie-progress__sql pre {
+  margin: var(--sp-2) 0 0;
+  padding: var(--sp-3);
+  background: var(--bg-1);
+  border: 1px solid var(--bg-3);
+  border-radius: var(--r-md);
+  font-size: var(--fs-11);
+  line-height: var(--lh-body);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 180px;
+  overflow-y: auto;
+}
 .genie-progress--dense { gap: var(--sp-1); }
 .genie-progress--dense .genie-progress__head {
   font-size: var(--fs-12);
   font-weight: 500;
 }
+.genie-progress--dense .genie-progress__stage-label { display: none; }
+.genie-progress--dense .genie-progress__stage.is-active .genie-progress__stage-label {
+  display: inline;
+}
+.genie-progress--dense .genie-progress__sql pre { max-height: 120px; }
 
 /* ============================================================
    AUDIT LOG ROW
@@ -3188,6 +3307,16 @@ a.lineage-node__chip:focus-visible {
   flex: 0 0 100%;
   font-size: var(--fs-12);
   color: var(--signal-danger);
+}
+.campaign-build-guard {
+  margin-top: var(--sp-4);
+}
+.campaign-build-guard--blocked {
+  border-color: color-mix(in oklab, var(--signal-warning) 55%, var(--line-2));
+  background: color-mix(in oklab, var(--signal-warning) 8%, var(--bg-2));
+}
+.campaign-build-guard > .chip {
+  flex: 0 0 auto;
 }
 
 /* Campaign ROI projector (re-audit #4 Buyer-Wow #7). Board-room headline
@@ -3510,7 +3639,8 @@ a.lineage-node__chip:focus-visible {
 @media (prefers-reduced-motion: reduce) {
   .map-region.is-loading { animation: none; }
 }
-.map-status {
+.map-status,
+.sr-only {
   position: absolute;
   clip: rect(0 0 0 0);
   clip-path: inset(50%);
@@ -3750,7 +3880,7 @@ a.lineage-node__chip:focus-visible {
    TWEAKS / CONSOLE PANEL
    ============================================================ */
 .tweaks {
-  position: fixed; top: 72px; right: var(--sp-4);
+  position: fixed; inset: 72px var(--sp-4) var(--sp-4) auto;
   width: 300px;
   background: var(--bg-1);
   border: 1px solid var(--line-2);
@@ -3758,8 +3888,9 @@ a.lineage-node__chip:focus-visible {
   box-shadow: var(--shadow-lg);
   z-index: 50;
   display: none;
+  flex-flow: column;
 }
-.tweaks.is-open { display: block; }
+.tweaks.is-open { display: flex; }
 .tweaks__hdr {
   padding: var(--sp-3) var(--sp-4);
   border-bottom: 1px solid var(--line-1);
@@ -3767,7 +3898,10 @@ a.lineage-node__chip:focus-visible {
 }
 .tweaks__hdr-icon { color: var(--accent-ink); }
 .tweaks__title { font-size: var(--fs-13); font-weight: 600; }
-.tweaks__body { padding: var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-4); }
+.tweaks__body {
+  padding: var(--sp-4); display: grid; gap: var(--sp-4);
+  flex: 1; overflow: auto;
+}
 .tweak-row label { font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.06em; display: block; margin-bottom: 6px; }
 .tweak-row .swatches { display: flex; gap: 6px; }
 .tweak-row .sw {
@@ -3949,6 +4083,25 @@ a.lineage-node__chip:focus-visible {
 .stable-refresh-region.is-updating {
   transition: filter var(--dur-base) var(--ease);
   filter: saturate(0.9);
+}
+.stable-refresh-status {
+  position: absolute;
+  inset-block-start: var(--sp-3);
+  inset-inline-end: var(--sp-4);
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  min-block-size: var(--sp-6);
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-pill);
+  background: var(--bg-3);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  font-weight: 500;
+  box-shadow: var(--shadow-1);
+  pointer-events: none;
 }
 .stable-refresh-region--table.is-updating::before {
   content: attr(data-status);
@@ -4349,6 +4502,12 @@ a.lineage-node__chip:focus-visible {
   box-shadow: 0 0 0 1px color-mix(in oklab, var(--bg-0) 45%, transparent);
   transition: opacity var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
 }
+.analytics-scatter__dot::before {
+  content: '';
+  position: absolute;
+  inset: calc(-1 * var(--sp-2));
+  border-radius: var(--r-pill);
+}
 .analytics-scatter__dot:hover,
 .analytics-scatter__dot:focus-visible {
   opacity: 1;
@@ -4656,6 +4815,10 @@ a.lineage-node__chip:focus-visible {
 /* ============================================================
    GENIE ANSWER — metric_value, table_rows, follow_up_questions
    ============================================================ */
+.genie-answer {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .genie-answer__metric {
   font-family: var(--font-sans);
   font-weight: 600;
@@ -4666,11 +4829,52 @@ a.lineage-node__chip:focus-visible {
   font-variant-numeric: tabular-nums;
   margin-bottom: var(--sp-2);
 }
+/* Single-row results render as a value-first stat strip instead of a
+   one-row table. DOM stays dt→dd for <dl> conformance; column-reverse
+   puts the value on top like the KPI cards. */
+.genie-answer__stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  margin: var(--sp-3) 0 0;
+}
+.genie-answer__stat {
+  display: flex;
+  flex-direction: column-reverse;
+  gap: var(--sp-1);
+  min-width: 96px;
+  flex: 1 1 auto;
+  padding: var(--sp-3);
+  background: var(--bg-1);
+  border: 1px solid var(--bg-3);
+  border-radius: var(--r-md);
+}
+.genie-answer__stat-label {
+  color: var(--text-3);
+  font-size: var(--fs-11);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.genie-answer__stat-value {
+  margin: 0;
+  color: var(--text-1);
+  font-size: var(--fs-18);
+  font-weight: 600;
+  letter-spacing: var(--tracking-tight);
+  line-height: var(--lh-tight);
+  overflow-wrap: anywhere;
+}
+.genie-answer__stat-value.num { font-variant-numeric: tabular-nums; }
+.genie-answer__table-scroll {
+  overflow-x: auto;
+  margin-top: var(--sp-3);
+}
 .genie-answer__table {
-  width: 100%;
+  width: max-content;
+  min-width: 100%;
   border-collapse: collapse;
   font-size: var(--fs-12);
-  margin-top: var(--sp-3);
   font-variant-numeric: tabular-nums;
 }
 .genie-answer__table th,
@@ -4704,9 +4908,58 @@ a.lineage-node__chip:focus-visible {
    download API; this chip is a marker only, no chart is rendered from it. */
 .genie-answer__native-viz { margin: var(--sp-2) 0; }
 
-/* Answer feedback — thumbs up/down + optional short comment. Subtle, muted.
+.genie-answer__api-source {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
+  color: var(--accent-ink);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+}
+.genie-answer__reasoning {
+  margin-top: var(--sp-3);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+  background: var(--bg-1);
+}
+.genie-answer__reasoning-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  color: var(--text-2);
+  cursor: pointer;
+  list-style: none;
+}
+.genie-answer__reasoning-summary::-webkit-details-marker { display: none; }
+.genie-answer__reasoning-body {
+  display: grid;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-3) var(--sp-3);
+}
+.genie-answer__reasoning-step {
+  display: grid;
+  gap: var(--sp-1);
+  padding: var(--sp-2) var(--sp-3);
+  border-inline-start: var(--sp-1) solid var(--line-2);
+}
+.genie-answer__reasoning-kind {
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+}
+.genie-answer__reasoning-content {
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  line-height: var(--lh-body);
+}
+
+/* Answer feedback — thumbs up/down only. Subtle, muted.
    The vote buttons reuse the .btn / .btn--ghost / .btn--sm primitive; only
-   the layout + comment box + confirmation tone are new here. */
+   the layout and confirmation tone are new here. */
 .genie-feedback,
 .genie-feedback--done {
   margin-top: var(--sp-3); padding-top: var(--sp-3);
@@ -4720,15 +4973,6 @@ a.lineage-node__chip:focus-visible {
 .genie-feedback__done-label,
 .genie-feedback__error { font-size: var(--fs-11); color: var(--text-3); }
 .genie-feedback__error { color: var(--signal-danger); }
-.genie-feedback__comment {
-  width: 100%; resize: vertical; padding: var(--sp-2);
-  font-family: var(--font-sans); font-size: var(--fs-12);
-  color: var(--text-1); background: var(--bg-0);
-  border: 1px solid var(--line-1); border-radius: var(--r-md);
-  line-height: var(--lh-snug);
-}
-.genie-feedback__comment:focus { outline: none; border-color: var(--accent); }
-
 /* Top-level Genie reasoning (Public Preview) in the proof drawer. Collapsed
    by default (native <details>); rows reuse .genie-proof__trace-* styling, so
    only the summary affordance + the extra-muted content tone are new here. */
@@ -4878,11 +5122,9 @@ a.lineage-node__chip:focus-visible {
     right: 0;
     left: 0;
     bottom: 0;
-    width: 100vw;
+    width: auto;
     max-height: 50vh;
     border-radius: var(--r-lg) var(--r-lg) 0 0;
-    border-bottom: 0;
-    overflow-y: auto;
   }
   [data-console="open"] .main {
     padding-right: var(--sp-6);
@@ -5120,6 +5362,7 @@ a.lineage-node__chip:focus-visible {
 .section-actions {
   margin-top: var(--gap-grid);
   display: flex;
+  flex-wrap: wrap;
   gap: var(--sp-3);
 }
 .lead-cta {
@@ -5487,6 +5730,7 @@ a.lineage-node__chip:focus-visible {
 .admin-audit-list {
   display: grid;
   gap: var(--sp-2);
+  overflow-x: auto;
 }
 .admin-audit-row {
   display: grid;
@@ -5577,6 +5821,104 @@ a.lineage-node__chip:focus-visible {
   outline: none;
 }
 .form-input:focus { border-color: var(--accent); }
+.campaign-recommendation {
+  display: grid;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-5);
+  padding: var(--sp-4);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  background: color-mix(in oklab, var(--accent) 5%, var(--bg-2));
+}
+.campaign-recommendation__header,
+.campaign-recommendation__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+.campaign-recommendation__header {
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+.campaign-recommendation__actions {
+  flex-wrap: wrap;
+}
+.campaign-recommendation__audience,
+.campaign-recommendation__strategy {
+  margin: 0;
+  line-height: var(--lh-body);
+}
+.campaign-recommendation__audience {
+  color: var(--text-1);
+  font-weight: 600;
+}
+.campaign-recommendation__strategy {
+  color: var(--text-2);
+}
+.campaign-recommendation__hypotheses {
+  display: grid;
+  gap: var(--sp-2);
+}
+.campaign-recommendation__hypothesis-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(calc(var(--sp-16) * 3), 1fr));
+  gap: var(--sp-3);
+  margin: 0;
+}
+.campaign-recommendation__hypothesis {
+  display: grid;
+  gap: var(--sp-2);
+  min-inline-size: 0;
+  padding-block: var(--sp-3);
+  border-block-start: 1px solid var(--line-2);
+}
+.campaign-recommendation__hypothesis dt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  color: var(--text-1);
+}
+.campaign-recommendation__hypothesis dd {
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--fs-13);
+  line-height: var(--lh-body);
+  overflow-wrap: anywhere;
+}
+.campaign-recommendation__evidence {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: var(--sp-2);
+}
+.campaign-evidence {
+  display: grid;
+  gap: var(--sp-1);
+  min-inline-size: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-sm);
+  background: var(--bg-1);
+  color: var(--text-3);
+  font-size: var(--fs-11);
+}
+.campaign-evidence strong {
+  color: var(--text-1);
+  font-size: var(--fs-16);
+}
+.campaign-evidence code {
+  overflow-wrap: anywhere;
+  color: var(--text-3);
+  font-size: var(--fs-11);
+}
+.offer-message-intelligence {
+  display: grid;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-sm);
+  background: var(--bg-1);
+}
 .campaign-setup {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(calc(var(--sp-16) * 3), 1fr));
@@ -5820,7 +6162,7 @@ a.lineage-node__chip:focus-visible {
 }
 .genie-board__grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, calc(var(--sp-10) * 4)), 1fr));
   gap: var(--sp-2);
 }
 .genie-board__card {

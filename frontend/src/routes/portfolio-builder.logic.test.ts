@@ -4,17 +4,17 @@ import {
   DEFAULT_CAMPAIGN_SETUP,
   buildDefaultCampaignSetup,
   buildCampaignConfig,
+  normalizeCampaignNumericValue,
   buildLeadQueueUrlFromFilters,
   buildPreviewCriteria,
   buildSegmentIntelligenceUrlFromFilters,
   buildUrlFromFilters,
   campaignCriteriaSummary,
+  campaignCopyValidationError,
   groupSavedCampaigns,
   defaultGeographyForOptions,
   parseFiltersFromUrl,
   parseStateCodesFromUrl,
-  DEFAULT_ROI_ASSUMPTIONS,
-  projectRoi,
   formatUsdCompact,
 } from './portfolio-builder.logic';
 import { isPublicLenderRef } from '../lib/lenderFilters';
@@ -116,12 +116,29 @@ describe('portfolio builder URL helpers', () => {
 });
 
 describe('portfolio campaign config', () => {
-  it('derives default campaign copy from the configured lender label', () => {
+  it('normalizes visible numeric controls to the same bounds used by saved config', () => {
+    expect(normalizeCampaignNumericValue('holdoutPct', '95')).toBe('50');
+    expect(normalizeCampaignNumericValue('holdoutPct', '-3')).toBe('0');
+    expect(normalizeCampaignNumericValue('holdoutPct', 'not-a-number')).toBe('10');
+    for (const field of ['budget', 'emailCost', 'smsCost', 'mailCost'] as const) {
+      const max = field === 'budget' ? 10_000_000 : 1_000;
+      expect(normalizeCampaignNumericValue(field, '')).toBe('');
+      expect(normalizeCampaignNumericValue(field, '-1')).toBe('0');
+      expect(normalizeCampaignNumericValue(field, String(max + 1))).toBe(String(max));
+      expect(normalizeCampaignNumericValue(field, 'not-a-number')).toBe('');
+    }
+  });
+
+  it('does not seed generic copy or invented channel costs before intelligence loads', () => {
     const setup = buildDefaultCampaignSetup('Acme Mortgage');
 
-    expect(setup.subjectA).toContain('Acme Mortgage');
-    expect(setup.bodyA).toContain('Acme Mortgage');
-    expect(setup.subjectA).not.toContain('Summit Mortgage');
+    expect(setup.subjectA).toBe('');
+    expect(setup.subjectB).toBe('');
+    expect(setup.bodyA).toBe('');
+    expect(setup.bodyB).toBe('');
+    expect(setup.emailCost).toBe('');
+    expect(setup.smsCost).toBe('');
+    expect(setup.mailCost).toBe('');
   });
 
   it('preserves suppression, holdout, cascade, and ROI defaults', () => {
@@ -139,6 +156,7 @@ describe('portfolio campaign config', () => {
     expect(config.holdout).toMatchObject({ method: 'hash_modulo', size_pct: 10 });
     expect(config.roi_assumptions).toMatchObject({
       budget_usd: null,
+      cost_per_contact_usd: {},
       source: 'operator_configured',
     });
     expect(config.household_dedup).toEqual({
@@ -146,6 +164,81 @@ describe('portfolio campaign config', () => {
       dedupe_unit: 'borrower',
       primary_contact_strategy: 'highest_opportunity_eligible',
     });
+    expect(config.message_variants).toEqual([]);
+    expect(campaignCopyValidationError(DEFAULT_CAMPAIGN_SETUP)).toBeNull();
+  });
+
+  it('persists only channel costs that the operator actually configured', () => {
+    const config = buildCampaignConfig({
+      ...DEFAULT_CAMPAIGN_SETUP,
+      emailCost: '1.25',
+      smsCost: '',
+      mailCost: '0.86',
+    });
+
+    expect(config.roi_assumptions).toMatchObject({
+      cost_per_contact_usd: { email: 1.25, direct_mail: 0.86 },
+    });
+  });
+
+  it('clamps direct campaign config inputs to every numeric boundary', () => {
+    const config = buildCampaignConfig({
+      ...DEFAULT_CAMPAIGN_SETUP,
+      holdoutPct: '500',
+      budget: '10000001',
+      emailCost: '-1',
+      smsCost: '1001',
+      mailCost: '0',
+    });
+
+    expect(config.holdout).toMatchObject({ size_pct: 50 });
+    expect(config.roi_assumptions).toMatchObject({
+      budget_usd: 10_000_000,
+      cost_per_contact_usd: { email: 0, sms: 1_000, direct_mail: 0 },
+    });
+  });
+
+  it('persists the applied campaign-intelligence provenance on every variant', () => {
+    const config = buildCampaignConfig({
+      ...DEFAULT_CAMPAIGN_SETUP,
+      subjectA: 'Review your mortgage options',
+      subjectB: 'A clearer mortgage review',
+      bodyA: 'A loan officer can explain the available options. Would a review be useful?',
+      bodyB: 'Compare the available choices and tradeoffs with a loan officer.',
+      generationMode: 'supervisor',
+      generatorLabel: 'Supervisor-generated recommendation',
+      provenanceTokenA: 'signed-benefit-provenance-token-0000000000001',
+      provenanceTokenB: 'signed-guidance-provenance-token-000000000001',
+    });
+
+    expect(config.message_variants).toHaveLength(2);
+    expect(config.message_variants).toEqual([
+      expect.objectContaining({
+        generation_mode: 'supervisor',
+        generator_label: 'Supervisor-generated recommendation',
+        provenance_token: 'signed-benefit-provenance-token-0000000000001',
+      }),
+      expect.objectContaining({
+        generation_mode: 'supervisor',
+        generator_label: 'Supervisor-generated recommendation',
+        provenance_token: 'signed-guidance-provenance-token-000000000001',
+      }),
+    ]);
+  });
+
+  it('blocks partially entered copy instead of silently dropping it or sending blanks', () => {
+    const setup = {
+      ...DEFAULT_CAMPAIGN_SETUP,
+      subjectA: 'Review your mortgage options',
+    };
+
+    expect(campaignCopyValidationError(setup)).toBe(
+      'Benefit-led copy needs both a subject and message before this build can be saved.',
+    );
+    expect(buildCampaignConfig(setup).message_variants).toEqual([
+      expect.objectContaining({ variant_name: 'Benefit-led', subject: 'Review your mortgage options' }),
+      expect.objectContaining({ variant_name: 'Guidance-led', subject: '', body: '' }),
+    ]);
   });
 
   it('makes household dedup opt-in at campaign time only', () => {
@@ -196,6 +289,14 @@ describe('portfolio campaign config', () => {
     // "Eligible only" (criterion) and "eligible only" (policy) collapse to one.
     expect(summary.toLowerCase().match(/eligible only/g)?.length ?? 0).toBe(1);
   });
+
+  it('labels quarantined campaigns instead of presenting an empty cohort as eligible-only', () => {
+    expect(campaignCriteriaSummary({
+      actionable: false,
+      actionability_issue: 'invalid_criteria',
+      criteria: {},
+    } as never)).toBe('Needs review before use');
+  });
 });
 
 describe('groupSavedCampaigns', () => {
@@ -208,7 +309,7 @@ describe('groupSavedCampaigns', () => {
     updated_at,
   });
 
-  it('collapses same-name drafts into one row with a count and the latest as representative', () => {
+  it('collapses semantically identical drafts and uses the latest representative', () => {
     const rows = groupSavedCampaigns([
       draft('Genie strategy draft', 'c1', '2026-07-08T10:00:00Z'),
       draft('Genie strategy draft', 'c3', '2026-07-10T10:00:00Z'),
@@ -218,6 +319,20 @@ describe('groupSavedCampaigns', () => {
     expect(rows[0].draftCount).toBe(3);
     expect(rows[0].campaign.campaign_id).toBe('c3');
     expect(rows[0].latestAt).toBe('2026-07-10T10:00:00Z');
+  });
+
+  it('keeps same-name drafts with distinct criteria as separately inspectable rows', () => {
+    const rows = groupSavedCampaigns([
+      { ...draft('Genie strategy draft', 'c1', '2026-07-08T10:00:00Z'), criteria: { states: ['IL'] } },
+      { ...draft('Genie strategy draft', 'c2', '2026-07-09T10:00:00Z'), criteria: { states: ['TX'] } },
+      { ...draft('Genie strategy draft', 'c3', '2026-07-10T10:00:00Z'), criteria: { states: ['IL'] } },
+    ] as never);
+
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row) => campaignCriteriaSummary(row.campaign))).toEqual(['IL', 'TX']);
+    expect(rows[0].draftCount).toBe(2);
+    expect(rows[0].campaign.campaign_id).toBe('c3');
+    expect(rows[1].draftCount).toBe(1);
   });
 
   it('keeps non-draft and uniquely-named campaigns as their own rows', () => {
@@ -231,42 +346,7 @@ describe('groupSavedCampaigns', () => {
   });
 });
 
-describe('campaign ROI projector (Buyer-Wow #7)', () => {
-  it('computes the funnel arithmetic deterministically from visible assumptions', () => {
-    // 1,200 leads × 4% → 48 fundings; × $340k → $16.32M volume;
-    // × 1.5% → $244,800 gross; − 1,200 × $1.40 outreach ($1,680) → net.
-    const p = projectRoi({ leads: 1200, ...DEFAULT_ROI_ASSUMPTIONS });
-    expect(p.valid).toBe(true);
-    expect(p.fundings).toBeCloseTo(48, 6);
-    expect(p.originationVolumeUsd).toBeCloseTo(16_320_000, 2);
-    expect(p.grossRevenueUsd).toBeCloseTo(244_800, 2);
-    expect(p.outreachCostUsd).toBeCloseTo(1_680, 2);
-    expect(p.netRevenueUsd).toBeCloseTo(243_120, 2);
-  });
-
-  it('treats non-numeric or out-of-range assumptions as invalid (no NaN headline)', () => {
-    expect(projectRoi({ leads: 1000, ...DEFAULT_ROI_ASSUMPTIONS, responseRatePct: '' }).valid).toBe(false);
-    expect(projectRoi({ leads: 1000, ...DEFAULT_ROI_ASSUMPTIONS, responseRatePct: '120' }).valid).toBe(false);
-    expect(projectRoi({ leads: 1000, ...DEFAULT_ROI_ASSUMPTIONS, avgBalanceUsd: '-5' }).valid).toBe(false);
-    expect(projectRoi({ leads: 1000, ...DEFAULT_ROI_ASSUMPTIONS, responseRatePct: 'abc' }).grossRevenueUsd).toBe(0);
-  });
-
-  it('zeroes out a no-lead build instead of projecting phantom revenue', () => {
-    const p = projectRoi({ leads: 0, ...DEFAULT_ROI_ASSUMPTIONS });
-    expect(p.valid).toBe(true);
-    expect(p.grossRevenueUsd).toBe(0);
-    expect(p.fundings).toBe(0);
-  });
-
-  it('rejects fat-fingered money inputs above a sane ceiling (no "$1000000.0B")', () => {
-    // Consistent with clampPct: implausible inputs are INVALID (→ "—"), not
-    // silently clamped, so the headline can never render a nonsense magnitude.
-    expect(projectRoi({ leads: 1000, ...DEFAULT_ROI_ASSUMPTIONS, avgBalanceUsd: '100000000001' }).valid).toBe(false);
-    expect(projectRoi({ leads: 1000, ...DEFAULT_ROI_ASSUMPTIONS, costPerLeadUsd: '100001' }).valid).toBe(false);
-    // A generous-but-real jumbo balance still computes.
-    expect(projectRoi({ leads: 1000, ...DEFAULT_ROI_ASSUMPTIONS, avgBalanceUsd: '5000000' }).valid).toBe(true);
-  });
-
+describe('projected economics formatting', () => {
   it('formats compact USD across magnitudes (incl. trillions)', () => {
     expect(formatUsdCompact(244_800)).toBe('$245K');
     expect(formatUsdCompact(16_320_000)).toBe('$16.3M');

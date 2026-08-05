@@ -71,11 +71,43 @@ psql "host=$LAKEBASE_HOST user=$LAKEBASE_USER dbname=$LAKEBASE_DATABASE sslmode=
   -c "SELECT 1"
 ```
 
-If the Lakebase instance itself is stopped, bounce it:
+If the Lakebase instance or App is stopped, recover it only through the
+governed deployment workflow. That workflow keeps the App stopped while it
+reconciles the exact Lakebase roles, runs the migration and grant postflight,
+and activates source only after those checks pass:
 
 ```bash
-databricks bundle run mip_lakebase_migrate -t dev
+BRANCH="$(git branch --show-current)"
+# Routine recovery of a signed last-good App leaves this false. Set it to true
+# only for an approved legacy or failed pre-capture App expected to have no
+# signed record; the workflow re-proves that absence before any rebase mutation.
+REBASE_UNVERIFIED_APP=false
+RUN_URL="$(gh workflow run deploy-dev.yml --ref "$BRANCH" \
+  -f skip_silver=true \
+  -f skip_smoke=false \
+  -f rebase_unverified_app="$REBASE_UNVERIFIED_APP" \
+  -f remediate_foreign_catalog_bindings=false)"
+# Fail closed unless this gh version returned exactly the created Actions URL.
+if [[ "$RUN_URL" =~ ^https://github\.com/[^/]+/[^/]+/actions/runs/([0-9]+)$ ]]; then
+  RUN_ID="${BASH_REMATCH[1]}"
+else
+  echo "workflow dispatch did not return an exact run URL" >&2
+  exit 1
+fi
+gh run watch "$RUN_ID" --exit-status
 ```
+
+The GitHub workflow above is dev-only. Do not transpose it to a customer or
+production workspace: production recovery requires its separately reviewed
+environment contract and change-controlled `scripts/deploy.sh -t prod`
+invocation. A failed pre-capture rebase remains unsigned and therefore requires
+`REBASE_UNVERIFIED_APP=true` again on its next explicitly approved recovery;
+once a signed last-good record exists, the exceptional path refuses to run.
+
+Do not run `mip_lakebase_migrate` by itself after an App snapshot has ever been
+activated. A standalone migration can race live requests and trip the Lakebase
+circuit breaker; `scripts/deploy.sh` is the command of record for the required
+stop → migrate/grant → activate ordering.
 
 ### 1.3 Genie cold / first ask returns `source: "degraded"`
 
@@ -236,21 +268,129 @@ governance + qa-test-engineer sign-off. The fixtures are the contract.
 ## 4. Deploy from scratch
 
 Use this when setting up a new dev/prod workspace, or when the
-workspace has been rebuilt. **The one command is `./scripts/deploy.sh`
-(or `make deploy-dev`).** Everything below is what that script runs,
-in order, idempotently. You shouldn't need to invoke the steps
-manually unless something failed and you want to resume from a
-specific step.
+workspace has been rebuilt. A brand-new workspace has one credentials-only
+bootstrap followed by the normal `./scripts/deploy.sh` (or `make deploy-dev`).
+Bootstrap cannot touch an App or data resource; deploy creates the App and then
+reconciles its operator grants. After that first install, deploy remains the one
+idempotent command.
 
 ```bash
-# 0. Prereqs: .env.local populated with DATABRICKS_HOST + DATABRICKS_WAREHOUSE_ID.
+# 0. One-time credentials before the App exists. The GitHub sink must match origin.
+# Export MIP_AI_GATEWAY_PROOF_SIGNING_KEY and its derived
+# MIP_AI_GATEWAY_PROOF_VERIFY_KEY first. Bootstrap holds the outer signed App
+# lease and the fixed global mip-oauth-credential-mutations lease. These
+# standalone commands refuse tracked or untracked changes and require any
+# configured MIP_DEPLOYMENT_SOURCE_GIT_SHA to equal HEAD.
+GH_REPO=skyler-myers-db/mortgage-intelligence-platform
+python tools/databricks/provision_m2m_oauth.py --pre-app-bootstrap \
+  --identity-role agent_runtime --set-gh-secrets --gh-repo "$GH_REPO"
+python tools/databricks/provision_m2m_oauth.py --pre-app-bootstrap \
+  --identity-role normal --set-gh-secrets --gh-repo "$GH_REPO"
+python tools/databricks/provision_m2m_oauth.py --pre-app-bootstrap \
+  --identity-role operator2 --set-gh-secrets --gh-repo "$GH_REPO"
+python tools/databricks/provision_m2m_oauth.py --pre-app-bootstrap \
+  --identity-role admin --create-group --set-gh-secrets --gh-repo "$GH_REPO"
+python tools/databricks/provision_m2m_oauth.py --pre-app-bootstrap \
+  --identity-role release_probe --set-gh-secrets --gh-repo "$GH_REPO"
+python tools/databricks/provision_m2m_oauth.py --pre-app-bootstrap \
+  --identity-role verifier --set-gh-secrets --gh-repo "$GH_REPO"
+python tools/databricks/provision_m2m_oauth.py --pre-app-bootstrap \
+  --identity-role agent_proxy --set-gh-secrets --gh-repo "$GH_REPO"
+
+# Pre-App bootstrap is creation-only. If a failed bootstrap was fully
+# compensated, prove and remove the credentialless principal before repeating
+# bootstrap; never add --rotate to a bootstrap command. After the App exists,
+# rotate in normal mode with the role's exact --expected-application-id,
+# --rotate, and --set-gh-secrets. Never reuse a client ID across roles.
+# A signed intent is durable before provider create; observation and sink
+# records are durable before the one-shot secret is returned or written.
+# A durable oauth-credential-quarantine record blocks every App namespace until
+# an administrator runs the exact signed-intent recovery under governance
+# review. Never remove that record or wait for lease expiry merely to make
+# bootstrap proceed.
+python -m tools.databricks.oauth_credential_recovery_cli inspect \
+  --intent-path "$INTENT_PATH"
+# Confirm the displayed principal, authority identity, and provider API against
+# the reviewed deployment inventory. Then export all four values and rerun the
+# normal deploy; partial recovery configuration fails preflight.
+export MIP_OAUTH_CREDENTIAL_RECOVERY_INTENT_PATH="$INTENT_PATH"
+export MIP_OAUTH_CREDENTIAL_RECOVERY_PRINCIPAL_ID="<confirmed-scim-id>"
+export MIP_OAUTH_CREDENTIAL_RECOVERY_AUTHORITY_IDENTITY="<confirmed-client-id>"
+export MIP_OAUTH_CREDENTIAL_RECOVERY_PROVIDER_API="<confirmed-provider-api>"
+./scripts/deploy.sh -t dev
+# A zero-delta unobserved intent remains quarantined because a bounded read
+# cannot prove that a delayed provider create will never commit. The current
+# provider exposes no durable non-commit evidence. Recovery also refuses
+# multiple deltas, missing prior credentials, any delete exception, or any
+# mismatch. It never reconstructs or re-delivers a one-shot secret.
+# If the global mutation lease exists but no intent was committed, inspect and
+# explicitly recover only that signed orphan coordinate. The recovery
+# subcommand requires a live signed outer deployment lease, so do not invoke it
+# directly after the failed process exits. Export both reviewed coordinates and
+# rerun deploy; deploy acquires the new outer lease before recovering the
+# orphan. Do not combine this with the four intent-recovery variables above.
+python -m tools.databricks.oauth_credential_recovery_cli inspect-orphan-lease
+export MIP_OAUTH_CREDENTIAL_ORPHAN_LEASE_ID="<reviewed-lease-id>"
+export MIP_OAUTH_CREDENTIAL_ORPHAN_RECOVERY_ROOT_LEASE_ID="<reviewed-recovery-root-id>"
+./scripts/deploy.sh -t dev
+
+# The outer App-lease recovery variables remain unchanged under lease protocol
+# v5. `recovery-root` now authenticates the canonical signed lease head and the
+# exact holder checkpoint named by its digest; it does not enumerate thousands
+# of heartbeat generations. Treat a missing/corrupt/oversized checkpoint,
+# app/chain mismatch, signature failure, or holder-head divergence as a hard
+# governance stop. Do not delete historical `.next` or `.recovery-index` files,
+# and do not edit `.head` by hand: it is only a read accelerator. Recovery reads
+# the selected current checkpoint and its exact immediate predecessor when the
+# signed checkpoint names one.
+python -m tools.databricks.app_deployment_lease recovery-root \
+  --app-name "$MIP_APP_NAME" \
+  --out-env /tmp/mip-app-deployment-recovery.env
+
+# Exceptional missing/corrupt `.head` or unsigned `.protocol-v5` locator
+# recovery. Run as the exact signed holder. This command performs a full
+# authenticated scan (bounded by MAX_CANONICAL_GENERATIONS), re-proves the
+# protected-root ACL, re-anchors a missing/corrupt locator to the canonical
+# signed head, replaces `.head`, and exact-postflights both locators. It cannot
+# repair a corrupt signed generation/checkpoint.
+python -m tools.databricks.app_deployment_lease repair-head \
+  --app-name "$MIP_APP_NAME"
+
+# 1. Separately create/store DATABRICKS_ACCOUNT_ID plus the distinct
+#    DATABRICKS_ACCOUNT_CLIENT_ID/SECRET account-SCIM pair.
+#    A first install with an approved group owner needs account-admin authority
+#    because the new target App cannot be delegated in advance. Afterward,
+#    downscope to Service Principal Manager over every app-facing M2M and the
+#    now-existing target App.
+#    Also configure distinct MIP_AI_GATEWAY_PROOF_SIGNING_KEY and
+#    MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY values and the runtime
+#    HMAC/masking secrets. These are not generated by the workspace-SP tool.
+
+# 2. Populate .env.local/GitHub with DATABRICKS_HOST and warehouse/data inputs.
 #    If GENIE_SPACE_ID is blank, deploy.sh provisions it before bundle deploy.
 
-# One command:
+# 3. Create/deploy the App; post-bundle reconciliation grants CAN_USE to the
+#    exact normal, operator2, and admin client IDs without rotating credentials.
 ./scripts/deploy.sh
 # or equivalently:
 make deploy-dev
 ```
+
+The normal deploy creates and verifies only the empty managed
+`<MIP_DEFAULT_CATALOG>.silver` pipeline namespace before bundle apply. This
+breaks the first-install pipeline dependency cycle; the bundle's dedicated
+`mip_init_catalog_schemas` job still owns the full governed schema/table DDL and
+runs before schema, table, and reviewed-function grants. It creates the empty
+gold/ref contracts and the three Growth Agent UC functions even when a refresh
+is skipped. Lakebase Sync access is granted separately only after the
+synced-table API has created and proven the configured schema and exact reviewed
+table allowlist. The App receives `USE SCHEMA` plus table-scoped `SELECT`, never
+schema-wide table reads. Namespace readback must
+match the current workspace metastore, and every owner resolves to one immutable
+SCIM principal while the
+target App and all app-facing M2M identities are excluded, including through
+approved owner groups. Catalog and schema identifiers are lowercase unquoted
+UC names of at most 255 characters.
 
 That single invocation executes:
 
@@ -261,55 +401,70 @@ That single invocation executes:
    `.env.local` to `BUNDLE_VAR_sql_warehouse_id` / `BUNDLE_VAR_genie_space_id`).
 3. `tools/databricks/bundle_env.py plan -t dev` — read-only direct
    deployment plan. Review this output before a real app/customer deploy.
-4. `tools/databricks/bundle_env.py deploy -t dev` — env-aware wrapper
-   around direct `databricks bundle deploy`; SQL warehouse, app, jobs,
-   pipelines, Lakebase instance, MLflow experiment, dashboards.
-5. `databricks apps deploy mip-app --mode SNAPSHOT` — promotes the
-   uploaded bundle source to the running app compute.
-6. `databricks bundle run mip_fred_rates_ingest -t dev` — FRED
+4. `tools/databricks/bundle_env.py deploy -t dev --select ...` — deploys
+   every non-App bundle resource (warehouse, jobs, pipelines, Lakebase,
+   experiment, and dashboards) while explicitly excluding `apps.mip_app`.
+5. `tools.databricks.app_resource_bindings` resolves the now-concrete IDs and
+   applies only the App resource bindings. A first install creates the App with
+   `databricks apps create --no-compute`; an upgrade uses `apps update`. The
+   postflight requires exact bindings and proves no source deployment or
+   compute transition occurred. First install then binds that stopped App into
+   DAB state. Failed first installs unbind and delete only the newly created,
+   unsigned App so a normal retry starts from authoritative absence.
+6. `databricks bundle run mip_lakebase_migrate -t dev` — Postgres
+   `schema.sql` + `seed_campaigns.sql` and the exact App/verifier role-grant
+   postflight. This runs only after the live database binding has provisioned
+   the App role and before any App source activation.
+7. The script submits its generated, governed App deployment payload to promote
+   the uploaded bundle source only after Lakebase migration and treatment
+   constraints have converged. Operators must not replace this phase with a bare
+   App deployment command.
+8. `databricks bundle run mip_fred_rates_ingest -t dev` — FRED
    MORTGAGE30US into `silver.market_rates_weekly`.
-7. `databricks bundle run mip_refresh_silver -t dev` — Cotality Delta
+9. `databricks bundle run mip_refresh_silver -t dev` — Cotality Delta
    Share → `mip.silver.*`; geography coverage is discovered from source
    rows with non-null states.
-8. `databricks bundle run mip_lakebase_migrate -t dev` — Postgres
-   `schema.sql` + `seed_campaigns.sql` (both idempotent).
-9. `databricks bundle run mip_refresh_scores -t dev` — CTAS chain:
+10. `databricks bundle run mip_refresh_scores -t dev` — CTAS chain:
    `property_owner_bridge` → `evidence_events` → `borrower_360` →
    `lead_scores` → `lead_population` → `segment_population` →
    `lockin_cohort` → `borrower_dossier` → **`refresh_semantics_views`**
    (the three `mip.semantics.*` metric views Genie binds to).
-10. `databricks bundle run mip_sync_lifecycle_state -t dev` — initial
-   seed run so `mip.gold.borrower_lifecycle_state` has a row per
-   borrower and `delta_vs_prior_*` columns can start resolving. After
-   deploy, this job is **event-triggered** from the backend approval
-   path (POST `/api/v1/outreach/approve` fires
-   `backend.services.job_trigger.trigger_lifecycle_sync` via FastAPI
-   `BackgroundTasks`, debounced 60 s). A fallback schedule is defined
-   but ships **PAUSED in every target**. Only
+11. The deploy script runs the warehouse lifecycle sync and records the daily
+   funnel snapshot. The lifecycle table is sparse; borrowers with no event
+   resolve to `pending` / `none` through consumer `LEFT JOIN` + `COALESCE`.
+   After deploy, accepted approval/rejection hooks apply a cheap changed-row
+   `MERGE` through FastAPI `BackgroundTasks` and skip the population-wide
+   snapshot. If that warehouse call fails, the backend submits
+   `mip_sync_lifecycle_state`; Databricks queues the run and retries the sync
+   task twice, so failure state is durable and operator-visible. A fallback
+   schedule is defined but ships **PAUSED in every target**. Only
    unpause it for a customer-approved production cadence; otherwise
    use the Admin Data operations button when a refresh is needed.
-11. `databricks bundle run mip_growth_agent_monitor_scheduler -t dev` —
+   Deploy and durable repair runs remove only legacy untouched `pending` /
+   `none` rows before the sparse MERGE. Per-event hooks skip that cleanup, so
+   user actions never scan or rewrite the population-wide table.
+12. `databricks bundle run mip_growth_agent_monitor_scheduler -t dev` —
    optional draft-only Growth Agent automation. It calls the deployed app's
    admin-gated `/api/v1/growth-agent/monitors/run-due-all` endpoint, refreshes
    due saved watchlists for their original owners, and creates Slack/Teams
    review drafts. It never sends messages or connector writes. Its weekday
    schedule ships **PAUSED in every target**; run it manually or unpause only
    after the customer approves a cadence. The Databricks job run identity must
-   be admitted by the app's admin policy (`MIP_ADMIN_EMAILS` or the configured
-   admin group, usually `mip-admin`) before the job is unpaused; otherwise the
+   be admitted by the app's admin policy (`MIP_ADMIN_IDENTITIES` or
+   `MIP_ADMIN_EMAILS`) before the job is unpaused; otherwise the
    all-actor endpoint fails closed with `403 {"detail":"forbidden"}`.
-12. `python tools/databricks/provision_genie_space.py` — reads
+13. `python tools/databricks/provision_genie_space.py` — reads
    `genie/mortgage_lead_intelligence_space.yml`, creates or updates
    the Genie Space, binds trusted assets, writes `genie/space_id.txt`.
-13. `./scripts/smoke_live.sh` — verify the app and all four deps up.
+14. `./scripts/smoke_live.sh` — verify the app and all four deps up.
 
 Flags on `scripts/deploy.sh` for partial re-runs:
 
 | Flag | Effect |
 |---|---|
 | `--dry-run` | print the plan, make no changes |
-| `--skip-silver` | skip steps 5–6 (fast path when silver is already fresh) |
-| `--skip-smoke` | skip step 11 |
+| `--skip-silver` | skip steps 8–9 (fast path when silver is already fresh) |
+| `--skip-smoke` | skip step 14 |
 | `--no-confirm` | skip the interactive `y/N` prompt |
 
 Every step is idempotent — re-running `./scripts/deploy.sh` is safe
@@ -328,14 +483,19 @@ and `/admin-config` exposes them under **Data operations**:
 3. **Rebuild scoring snapshot** (`mip_refresh_scores`) after either upstream
    refresh so Borrower 360, Lead Queue, segment populations, source readiness,
    and Genie metric views read the new snapshot.
-4. **Sync workflow state** (`mip_sync_lifecycle_state`) when approvals or
-   outreach state need to mirror into gold immediately.
+4. **Sync workflow state** uses the same sparse warehouse `MERGE` when
+   approvals or outreach state need repair, then refreshes the daily funnel
+   snapshot. The bundle job is the durable retry path when the app's warehouse
+   attempt fails.
 
-Each button is admin-only, writes a Lakebase audit row before launching
-compute, refuses duplicate active runs, and shows the latest Databricks run
-state. If the audit ledger is unavailable, the app does not launch the job.
+Each operation is admin-only and writes a Lakebase audit row before compute.
+Job-backed operations refuse duplicate active runs and show the latest
+Databricks run state. Lifecycle sync executes the sparse warehouse MERGE
+synchronously; when an app-hook MERGE fails, its queued repair job provides
+the durable run state. If the audit ledger is unavailable, Admin Data
+operations do not launch compute.
 The bundle-defined FRED, lifecycle fallback, and Growth Agent monitor
-schedules deploy **paused by default** in dev, prod, and prod_otlp so
+schedules deploy **paused by default** in dev and prod so
 intermittent development and demo workspaces do not burn recurring
 warehouse/Lakebase compute. If a customer later wants scheduled refreshes or
 scheduled watchlist-draft creation, unpause the schedule explicitly in that
@@ -343,7 +503,8 @@ customer workspace and document the approved cadence. The Growth Agent
 scheduler is draft-only: it creates Slack/Teams review drafts and never sends
 messages.
 
-**No manual UI step is required for deploy/bootstrap.** The previous runbook called for
+**No manual UI step is required after the one-time credential/account
+prerequisites are satisfied.** The previous runbook called for
 opening the Databricks UI to rebind the Genie space's trusted assets
 after a metric view rename; that is no longer required. Step 7
 publishes the views, step 10 binds them, and re-running `deploy.sh`
@@ -537,15 +698,21 @@ If any fail, route to data-modeler + principal-architect before release.
 
 ---
 
-## 11. Admin RBAC header for local dev
+## 11. Admin RBAC compatibility header for local dev
 
 The `/api/v1/admin/*` endpoints are gated by
-[`backend/services/rbac.py`](../backend/services/rbac.py). Admission is
-a match against the configured admin group (default `mip-admin`, env
-override `MIP_ADMIN_GROUP_NAME`) or the hard-coded fallback `admins`.
-Databricks Apps forwards workspace group membership via
-`X-Forwarded-Groups`; the deployed app gets this for free from the
-edge.
+[`backend/services/rbac.py`](../backend/services/rbac.py). Sandbox and
+production admission requires an exact resolved actor in
+`MIP_ADMIN_IDENTITIES` or `MIP_ADMIN_EMAILS`. The deploy workflow derives the
+automation identities from the dedicated admin and candidate release-probe
+service-principal client IDs. The release probe has no persistent App
+`CAN_USE`; it is reachable only during the signed-capture gate for an explicit
+unsigned-App rebase.
+
+`X-Forwarded-Groups` is not a documented Databricks Apps identity-header
+contract. The configured group (default `mip-admin`) and the `admins` fallback
+therefore work only as local/test compatibility helpers; they are never an
+authoritative deployed authorization path.
 
 Local `uvicorn` and `curl` do **not** get that header automatically —
 we deliberately chose fail-closed over an `app_env == "local"` auto-
@@ -659,24 +826,24 @@ row.
    `lakebase == "down"` is the smoking gun. Fix: §1.2 (re-auth /
    bounce the instance).
 
-2. **RBAC denied the approval call** — the analyst isn't in the admin
-   group, or the Databricks Apps edge isn't forwarding
-   `X-Forwarded-Groups`, so `POST /api/v1/outreach/approve` returns 403.
+2. **RBAC denied the approval call** — the resolved actor is absent from
+   `MIP_APPROVER_IDENTITIES`, `MIP_APPROVER_EMAILS`, or the admin allowlists,
+   so `POST /api/v1/outreach/approve` returns 403.
 
    Confirm in the browser devtools Network panel: the approve POST
    should be 200. If it's 403 with body `{"detail":"forbidden"}`, RBAC
-   is rejecting. Replay from a trusted host:
+   is rejecting. For local-only diagnosis, replay with an email configured in
+   `MIP_APPROVER_EMAILS`:
    ```bash
    BORROWER_ID="$(curl -s "$MIP_APP_URL/api/v1/leads?limit=1" | jq -r '.[0].borrower_id')"
    curl -s -X POST "$MIP_APP_URL/api/v1/outreach/approve" \
-     -H "X-Forwarded-Groups: mip-admin" \
      -H "X-Forwarded-Email: you@entrada.ai" \
      -H "Content-Type: application/json" \
      -d "{\"borrower_id\":\"$BORROWER_ID\",\"offer_code\":\"RATE_TERM_REFI\"}" | jq
    ```
-   Fix: see §11 for the header contract; for production the edge should
-   be forwarding both headers automatically — if it isn't, route to
-   governance-security-reviewer.
+   Fix: inspect `/api/v1/session` under the same authenticated identity and
+   reconcile the exact server-owned allowlist. Do not grant deployed access by
+   trusting a caller-supplied group header.
 
 3. **Write succeeded, read filtered it out** — the audit list query
    scopes by `actor_email`, and the email the write recorded disagrees

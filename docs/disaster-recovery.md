@@ -135,25 +135,20 @@ Symptoms:
 - the regression is in source code or built `frontend/dist/**`, not in bundle
   resources.
 
-Recovery path A, source-only rollback:
-
-```bash
-databricks apps list-deployments mip-app -o json | jq '.deployments[] | {id, state, create_time}'
-databricks apps get-deployment mip-app "<prior-good-deployment-id>" -o json | jq
-```
-
-If the prior deployment is the right source snapshot, promote it from the
-Databricks Apps deployment UI. If the CLI in your workspace supports direct
-promotion for prior snapshots, use the equivalent CLI path and capture its
-output in the incident ticket.
-
-Recovery path B, source or frontend rebuild from prior SHA:
+Governed source/frontend rollback from a reviewed prior SHA:
 
 ```bash
 git fetch origin
 git checkout <prior-good-sha>
 CI=1 ./scripts/deploy.sh -t dev --no-confirm
 ```
+
+The command of record acquires the signed deployment lease, keeps treatment
+access quiesced through cutover, reconciles exact App resources, and captures
+the new signed last-good record only after live smoke proof. A failed candidate
+automatically invokes the signed-blue restore in
+`tools/databricks/app_deployment_rollback.py`; never promote a prior Apps
+snapshot through the UI or a bare CLI operation.
 
 Why this matters: `frontend/dist/**` is gitignored and rebuilt on each deploy.
 If current source is bad, re-running the deploy from the same checkout rebuilds
@@ -289,13 +284,12 @@ ledger is a compliance record.
 ## Production Lakebase HA
 
 The base `dev` resource stays cost-minimal (`CU_1`, no readable secondaries).
-The `prod` and `prod_otlp` bundle targets enable readable secondaries for
-Lakebase so a production customer target has a failover posture by default.
+The `prod` bundle target enables readable secondaries for Lakebase so a
+production customer target has a failover posture by default.
 Validate before customer go-live:
 
 ```bash
 .venv/bin/python tools/databricks/bundle_env.py validate -t prod
-.venv/bin/python tools/databricks/bundle_env.py validate -t prod_otlp
 ```
 
 ## Incident Closeout

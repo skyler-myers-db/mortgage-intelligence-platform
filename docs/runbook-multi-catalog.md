@@ -12,18 +12,19 @@ MIP_DEFAULT_CATALOG=summit_mortgage
 ./scripts/deploy.sh           # or: make deploy-dev
 ```
 
-That is the entire operator contract. `scripts/deploy.sh` (step 1a) runs `tools/render_sql.py --catalog "${MIP_DEFAULT_CATALOG:-mip}"` before the bundle validate/deploy phase, which materializes `sql/_rendered/**` with the target catalog substituted into the five documented UC prefixes. The bundle's SQL tasks all read from `sql/_rendered/**`, so every CTAS / DDL / metric view / UC function lands in the right catalog on first deploy.
+That is the entire operator contract. `scripts/deploy.sh` (step 1a) runs `tools/render_sql.py --catalog "${MIP_DEFAULT_CATALOG:-mip}"` before the bundle validate/deploy phase, which materializes `sql/_rendered/**` with the target catalog substituted into the governed catalog/schema DDL and three-part UC prefixes. The bundle's SQL tasks all read from `sql/_rendered/**`, so every CTAS / DDL / metric view / UC function lands in the right catalog on first deploy.
 
 For the bundle-variable path (non-default workspace target), keep the two-var form:
 
 ```bash
 MIP_DEFAULT_CATALOG=mip_prod \
-databricks bundle deploy -t prod \
-    --var="uc_catalog=mip_prod" \
-    --var="lakebase_instance=mip-prod-lakebase"
+./scripts/deploy.sh -t prod
 ```
 
-(`uc_catalog` is the bundle-side variable consumed by `pipelines.mip_feature_pipeline.catalog` and the Spark Python job parameters; `MIP_DEFAULT_CATALOG` drives the SQL renderer and the Python runtime. Keep them equal.)
+The deploy script maps `MIP_DEFAULT_CATALOG` to the bundle-side `uc_catalog`
+used by the pipeline and Spark jobs, and it performs the signed, minimal
+namespace bootstrap required on a pristine workspace. Bare bundle apply is a
+lower-level recovery path only after that namespace exists.
 
 ## Python layer — multi-catalog safe since hole-finder R2 #19
 
@@ -60,11 +61,20 @@ mip.silver.    -> {catalog}.silver.
 mip.ref.       -> {catalog}.ref.
 mip.semantics. -> {catalog}.semantics.
 mip.raw.       -> {catalog}.raw.
+mip.first_party. -> {catalog}.first_party.
+mip.audit.     -> {catalog}.audit.
+mip.app.       -> {catalog}.app.
 ```
+
+The renderer also rewrites only exact executable
+`CREATE CATALOG IF NOT EXISTS mip` and
+`CREATE SCHEMA IF NOT EXISTS mip.<governed-schema>` statements. This keeps
+first-install namespace creation in the same target catalog as all downstream
+table DDL.
 
 Wiring:
 
-- **`Makefile` targets** (`render-sql`, `bundle-validate`, `bundle-deploy`, `bundle-validate-env`, `bundle-deploy-dev`) all depend on `render-sql`. The `render-sql` target runs `tools/render_sql.py --catalog "$${MIP_DEFAULT_CATALOG:-mip}"` — idempotent, fast, zero dependencies.
+- **`Makefile` targets** `bundle-validate` and `bundle-validate-env` depend on `render-sql`; mutable `bundle-deploy*` aliases are retired. The `render-sql` target runs `tools/render_sql.py --catalog "$${MIP_DEFAULT_CATALOG:-mip}"` — idempotent, fast, zero dependencies. Use `make deploy-dev` for every mutation.
 - **`scripts/deploy.sh`** (step 1a) runs the renderer before the frontend build, so the rendered tree is present before the bundle is touched.
 - **`databricks.yml`** declares every `sql_task.file.path` under `sql/_rendered/...` rather than `sql/...`. The canonical sources under `sql/**/*.sql` stay committed; the rendered copies under `sql/_rendered/**` are gitignored.
 - **Identity when `--catalog mip`:** every substitution is a byte-identical rewrite on the default catalog, so customers who keep the default name pay nothing.
@@ -80,7 +90,7 @@ python tools/render_sql.py --catalog <name>    # ad-hoc one-off
 
 Two bundle jobs execute Python against Unity Catalog tables instead of SQL files:
 
-- `mip_sync_lifecycle_state` runs `jobs/sync_lifecycle_state.py` with `--catalog=${var.uc_catalog}` and writes `${var.uc_catalog}.gold.borrower_lifecycle_state`.
+- `mip_sync_lifecycle_state` runs `jobs/sync_lifecycle_state.py` with `--catalog=${var.uc_catalog}` and incrementally MERGEs durable Lakebase rows into `${var.uc_catalog}.gold.borrower_lifecycle_state`. The normal app hook uses the same canonical MERGE through the SQL warehouse; the job is durable failure recovery and explicit repair.
 - `mip_fred_rates_ingest` runs `jobs/fred_rates_ingest.py` with `--table=${var.uc_catalog}.silver.market_rates_weekly` for both seed and live FRED refresh tasks.
 
 This closes the last non-SQL path that could otherwise land state in `mip.*` during a renamed-catalog customer deploy.
@@ -88,8 +98,8 @@ This closes the last non-SQL path that could otherwise land state in `mip.*` dur
 Both scheduled fallback jobs deploy with `pause_status: PAUSED` in every target.
 If a customer unpauses a recurring FRED or lifecycle cadence, first confirm that
 target writes to an isolated catalog; two unpaused targets writing the same
-catalog can conflict on Delta table replacement and create avoidable compute
-spend.
+catalog can queue redundant recovery/snapshot runs and create avoidable
+compute spend.
 
 ## Genie space and eval — multi-catalog safe since 2026-05-17
 
@@ -154,3 +164,4 @@ curl -s http://localhost:8000/api/v1/admin/settings | jq .catalog
 - 2026-04-23 — hole-finder round-2 #19: introduced `qualify()` helper; refactored the Python API layer; documented the SQL-layer gap.
 - 2026-04-23 — R6-01 rollout: shipped `tools/render_sql.py`; `databricks.yml` and `Makefile` now consume `sql/_rendered/**`; retired the manual `sed` workaround.
 - 2026-05-17 — multi-tenant audit remediation: wired Spark Python lifecycle and FRED jobs to `${var.uc_catalog}` so renamed-catalog deploys stay isolated outside SQL-task paths too.
+- 2026-07-14 — lifecycle cost remediation: centralized sparse Delta MERGE logic across app/job paths, removed full-universe seeding from the job, and made queued Jobs runs the durable retry surface.

@@ -25,11 +25,10 @@ const liveFailureArtifacts = process.env.E2E_LIVE_FAILURE_ARTIFACTS === '1' && !
  * a direct fetch against the backend audit endpoint to verify the
  * human-approval round-trip wrote an audit event.
  *
- * CI posture: the `ci.yml` offline job runs `playwright test --list` for
- * a syntax + test-collection check that does NOT boot servers (the
- * cutover backend refuses to boot without live Databricks credentials,
- * which are intentionally absent in PR CI). The nightly workflow runs
- * the full spec with real credentials against the deployed app.
+ * CI posture: the `ci.yml` offline job parses every spec, then serves the
+ * production frontend and runs the route-fulfilled Growth Agent handoff
+ * contract without booting the credential-gated backend. The nightly
+ * workflow runs the live suite with real credentials against the deployed app.
  */
 export default defineConfig({
   testDir: './tests/e2e',

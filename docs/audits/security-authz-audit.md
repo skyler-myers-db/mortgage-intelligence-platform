@@ -72,7 +72,7 @@ The **core authorization and data-handling controls are solid**. Authentication 
 | Any endpoint | malformed Bearer | 401 | 401 | ✅ |
 | Any endpoint | empty Bearer | 401 | 401 | ✅ |
 | `/api/admin/sources` | unauth + spoofed admin headers | 401 | 401 (edge rejects) | ✅ |
-| `/api/admin/settings` | valid token + spoofed `X-Forwarded-Email=attacker@evil` + `X-Forwarded-Groups=admins` | depends on platform stripping | 200 (platform strips spoofed headers, real identity = skyler@entrada.ai which is in admin_emails allowlist) | ✅ |
+| `/api/admin/settings` | valid token + spoofed `X-Forwarded-Email=attacker@evil` + `X-Forwarded-Groups=admins` | supplied identity must not override the authenticated actor | 200 (real identity = skyler@entrada.ai matched `admin_emails`; this result did not establish a platform-injected group contract) | ✅ |
 | `/api/admin/settings` | valid token + spoofed `X-Forwarded-Email=nobody@example` (downgrade test) | should still 200 if platform strips client headers | 200 (confirms platform IS stripping — defense holds) | ✅ |
 | `/api/admin/rules` PUT | valid admin + payload that lowers min_spread to -99999 | 410 Gone (rules are governance-owned) | 410 with explanatory detail | ✅ |
 | `/api/borrowers/{id}/approval` | mutating attempt | 405 (no POST defined on that path) | 405 | ✅ |
@@ -310,7 +310,7 @@ Make the spa_fallback handler emit the same response shape regardless of encodin
 ## What works well
 
 - **Edge authentication is mandatory and fail-closed.** Every unauthenticated probe returned `401` with empty body. The Databricks Apps platform terminates auth before requests reach FastAPI.
-- **Header-spoofing defense holds.** Client-supplied `X-Forwarded-Email` and `X-Forwarded-Groups` are stripped/overwritten by the platform edge — confirmed by downgrade test (sending a non-admin email + non-admin group still gets admin response because the real identity is used).
+- **The tested email-spoofing defense held.** A client-supplied `X-Forwarded-Email` did not replace the authenticated Apps actor. This historical probe did not establish that Databricks injects an authoritative `X-Forwarded-Groups` value; current deployed authorization uses exact server-owned identity allowlists and treats group headers as local/test-only compatibility input.
 - **Actor binding for audit attribution.** Outreach approve / reject explicitly ignore the body `actor` field (`outreach.py:579-587`) and use `resolve_actor(request)` which reads only the platform-injected header. Audit ledger probe confirmed all events tagged with `skyler@entrada.ai` not anything spoofable.
 - **`require_admin` is properly fail-closed when `trust_forwarded_headers=False`.** The code disables the header path entirely and falls back to the email allowlist — which itself only fires when `resolve_actor` returns an address, which it doesn't without trust. The result is "nobody admitted via header, only explicit server-side configuration" — exactly the right posture for an untrusted edge.
 - **PII redaction has a defensive exit check.** `_enforce_no_forbidden_keys` raises `ValueError` if any of `owner_name_hash`, `owner_1_full_name`, `situs_street_address`, `mailing_street_address`, `trigger_timeline_json` survive into the response dict. This is belt-and-suspenders — even if a future repo edit forgets to drop a column, the redactor throws.

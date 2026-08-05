@@ -1,6 +1,7 @@
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation } from 'react-router';
 import { Icon, type IconName } from '../Icon';
 import { EntradaMark } from '../brand/Entrada';
+import { useAdminNavigationAccess } from './RouteNav';
 
 /**
  * Left module rail. Vertical strip, 72px wide. M0 ships today; M1–M4
@@ -33,6 +34,7 @@ const MODULES: ModuleItem[] = [
 
 export function Rail() {
   const { pathname } = useLocation();
+  const canAccessAdmin = useAdminNavigationAccess();
   // All current routes are Module 0.
   const activeModuleId = 0;
   const isM0 = activeModuleId === 0 && pathname !== '/__unused';
@@ -74,9 +76,11 @@ export function Rail() {
         );
       })}
       <div className="rail__spacer" />
-      <Link to="/admin-config" className="rail__item" title="Admin / settings">
-        <Icon name="settings" size={16} />
-      </Link>
+      {canAccessAdmin && (
+        <Link to="/admin-config" className="rail__item" title="Admin / settings">
+          <Icon name="settings" size={16} />
+        </Link>
+      )}
     </nav>
   );
 }

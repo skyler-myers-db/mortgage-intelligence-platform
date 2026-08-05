@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { assetHrefForSource, assetKeyForSource, descriptorFor, descriptorForEvidence, drawerForAsset, DRAWER_SOURCES } from './drawerSources';
+import {
+  assetHrefForSource,
+  assetKeyForSource,
+  descriptorFor,
+  descriptorForEvidence,
+  drawerForAsset,
+  ASSET_KEYS_BY_SOURCE,
+  DRAWER_SOURCES,
+  evidenceDestinationFor,
+} from './drawerSources';
+import lineageManifest from '../../../backend/resources/lineage_manifest.json';
 
 describe('home headline KPI sources cite the metric view (S1)', () => {
   it('routes the headline view lineage to its own drawer entry', () => {
@@ -161,7 +171,10 @@ describe('descriptorFor', () => {
   it('keeps S1.6 dimension drawers resolvable to a registered asset key', () => {
     expect(assetKeyForSource(DRAWER_SOURCES.loanProductType.assetPath)).toBe('borrower_360');
     expect(DRAWER_SOURCES.loanProductType.assetKey).toBe('borrower_360');
-    expect(DRAWER_SOURCES.originationChannel.assetKey).toBe('borrower_360');
+    expect(DRAWER_SOURCES.originationChannel.assetKey).toBe('loan_applications');
+    expect(assetKeyForSource(DRAWER_SOURCES.originationChannel.assetPath)).toBe(
+      'loan_applications',
+    );
   });
 
   it('maps Genie trusted assets to specific curated drawers', () => {
@@ -174,6 +187,10 @@ describe('descriptorFor', () => {
     expect(drawerForAsset('mip.gold.household_rollup')).toBe(DRAWER_SOURCES.householdRollup);
     expect(drawerForAsset('mip.gold.source_readiness')).toBe(DRAWER_SOURCES.sourceReadiness);
     expect(drawerForAsset('mip.gold.lockin_cohort')).toBe(DRAWER_SOURCES.lockinCohort);
+    expect(drawerForAsset('mip.gold.funnel_snapshot_daily')).toBe(DRAWER_SOURCES.funnelSnapshot);
+    expect(drawerForAsset('mip.gold.borrower_lifecycle_state')).toBe(DRAWER_SOURCES.funnelSnapshot);
+    expect(drawerForAsset('mip.gold.county_rollup')).toBe(DRAWER_SOURCES.countyRollup);
+    expect(drawerForAsset('mip.gold.zip_rollup')).toBe(DRAWER_SOURCES.zipRollup);
     expect(drawerForAsset('mip.gold.fn_rate_spread')).toBe(DRAWER_SOURCES.marketRate);
     expect(drawerForAsset('mip.gold.fn_estimated_upb_confidence_band')).toBe(DRAWER_SOURCES.lien);
     expect(drawerForAsset('mip.gold.evidence_events.rate_spread')).toBe(DRAWER_SOURCES.rateSpread);
@@ -191,8 +208,103 @@ describe('descriptorFor', () => {
     expect(assetHrefForSource('mip.semantics.borrower_opportunity_metric_view')).toBe('/data-estate/assets/borrower_opportunity_metric_view');
     expect(assetKeyForSource('mip.silver.listing_activity')).toBe('listing_activity');
     expect(assetHrefForSource('mip.silver.heloc_propensity')).toBe('/data-estate/assets/heloc_propensity');
-    expect(assetKeyForSource('mip.silver.lien_current')).toBeNull();
-    expect(assetHrefForSource('mip.first_party.loan_applications')).toBeNull();
+    expect(assetKeyForSource('mip.silver.lien_current')).toBe('lien_current');
+    expect(assetHrefForSource('mip.first_party.loan_applications')).toBe(
+      '/data-estate/assets/loan_applications',
+    );
+    expect(assetKeyForSource('other.gold.lead_population')).toBeNull();
+  });
+
+  it('routes campaign-performance Lakebase assets to non-admin Sales Ops analytics', () => {
+    const cases = [
+      ['mip_app.call_dispositions', DRAWER_SOURCES.callDispositions],
+      ['mip_app.lead_outcomes', DRAWER_SOURCES.leadOutcomes],
+    ] as const;
+
+    for (const [assetPath, expectedSource] of cases) {
+      const source = drawerForAsset(assetPath);
+      expect(source).toBe(expectedSource);
+      expect(source?.assetPath).toBe(assetPath);
+      expect(assetHrefForSource(assetPath)).toBeNull();
+
+      const destination = evidenceDestinationFor(source);
+      expect(destination.kind).toBe('lakebase');
+      if (destination.kind === 'lakebase') {
+        expect(destination.objectPaths).toEqual([assetPath]);
+        expect(destination.href).toBe('/analytics?view=sales-ops');
+        expect(destination.href).not.toContain('/admin-config');
+        expect(destination.actionLabel).toBe('Open sales operations');
+      }
+    }
+  });
+
+  it('classifies every curated drawer and maps every visible UC object to the registry', () => {
+    for (const [key, source] of Object.entries(DRAWER_SOURCES)) {
+      const destination = evidenceDestinationFor(source);
+      expect(destination.kind, `${key} destination`).not.toBe('unmapped');
+
+      if (destination.kind === 'unity_catalog') {
+        expect(source.assetKey, `${key} assetKey`).toBeTruthy();
+        expect(source.assetPath, `${key} assetPath`).toBeTruthy();
+        expect(source.lineageFamily, `${key} lineageFamily`).toBeTruthy();
+        expect(assetKeyForSource(source.assetPath), `${key} registry mapping`).toBe(
+          source.assetKey,
+        );
+      }
+
+      for (const node of source.lineage ?? []) {
+        const isUcObject =
+          (node.name.startsWith('mip.') ||
+            node.name.startsWith('cotality_mortgage_data.')) &&
+          node.name.split('.').length === 3;
+        if (isUcObject) {
+          expect(assetKeyForSource(node.name), `${key}: ${node.name}`).toBeTruthy();
+        }
+      }
+    }
+
+    for (const sourcePath of Object.keys(ASSET_KEYS_BY_SOURCE)) {
+      expect(drawerForAsset(sourcePath), `${sourcePath} drawer route`).not.toBeNull();
+    }
+
+    const permit = evidenceDestinationFor(DRAWER_SOURCES.permit);
+    expect(permit.kind).toBe('readiness');
+    if (permit.kind === 'readiness') {
+      expect(permit.objectPaths).toEqual(['mip.gold.source_readiness']);
+      expect(permit.objectPaths.some((path) => path.includes('permit'))).toBe(false);
+    }
+
+    for (const source of [
+      DRAWER_SOURCES.assignmentOverlay,
+      DRAWER_SOURCES.callDispositions,
+      DRAWER_SOURCES.leadOutcomes,
+      DRAWER_SOURCES.config,
+    ]) {
+      const destination = evidenceDestinationFor(source);
+      expect(destination.kind).toBe('lakebase');
+      if (destination.kind === 'lakebase') {
+        expect(destination.objectPaths.every((path) => path.startsWith('mip_app.'))).toBe(true);
+      }
+    }
+  });
+
+  it('maps every declared drawer lineage family to the governed manifest', () => {
+    const manifestFamilyIds = new Set(lineageManifest.families.map((family) => family.id));
+
+    for (const [key, source] of Object.entries(DRAWER_SOURCES)) {
+      if (source.lineageFamily) {
+        expect(manifestFamilyIds.has(source.lineageFamily), `${key} lineageFamily`).toBe(true);
+      }
+    }
+  });
+
+  it('resolves destinations by stable asset key when display copy is overridden', () => {
+    const source = {
+      ...DRAWER_SOURCES.leadPopulation,
+      title: 'Tenant-specific ranked population',
+      short: 'Customized copy',
+    };
+    expect(evidenceDestinationFor(source).kind).toBe('unity_catalog');
   });
 
   it('documents estimated UPB confidence-band lineage and inputs', () => {

@@ -7,13 +7,14 @@ real Postgres connection.
 Assertions:
 
 * ``write(...)`` issues an INSERT with the right columns + named params.
-* ``list(limit=N)`` issues a SELECT with ``ORDER BY event_at DESC``
+* ``list(limit=N)`` issues a SELECT with monotonic insertion ordering
   and ``LIMIT N`` and hydrates AuditEvent rows.
 * ``resolve_actor`` reads ``X-Forwarded-Email`` and falls back to
   ``settings.default_actor`` with a WARNING on absent header.
 * ``_coerce_event_type`` upper-cases dotted actions for governance §4
   canonical-verb alignment.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -55,6 +56,7 @@ def _build_client_returning_row() -> MagicMock:
     client = MagicMock()
     client.fetchone.return_value = {
         "audit_id": uuid4(),
+        "audit_sequence": 1,
         "event_at": datetime.now(UTC),
     }
     client.fetchall.return_value = []
@@ -112,7 +114,7 @@ def test_write_issues_insert_with_named_params() -> None:
 
 
 def test_action_audit_schema_has_statement_level_append_only_trigger() -> None:
-    """The ledger must reject UPDATE/DELETE even if the runtime role owns the table."""
+    """The ledger rejects UPDATE/DELETE/TRUNCATE even with broad table rights."""
 
     schema_sql = Path("lakebase/schema.sql").read_text(encoding="utf-8")
 
@@ -120,10 +122,14 @@ def test_action_audit_schema_has_statement_level_append_only_trigger() -> None:
     assert "RAISE EXCEPTION 'mip_app.action_audit is append-only" in schema_sql
     assert "USING ERRCODE = '42501'" in schema_sql
     assert "CREATE TRIGGER trg_action_audit_append_only" in schema_sql
-    assert "BEFORE UPDATE OR DELETE ON mip_app.action_audit" in schema_sql
+    assert "BEFORE UPDATE OR DELETE OR TRUNCATE ON mip_app.action_audit" in schema_sql
     assert "FOR EACH STATEMENT" in schema_sql
     assert "ADD COLUMN IF NOT EXISTS correlation_id TEXT" in schema_sql
+    assert "ADD COLUMN IF NOT EXISTS audit_sequence BIGSERIAL" in schema_sql
+    assert "idx_action_audit_sequence" in schema_sql
     assert "CREATE INDEX IF NOT EXISTS idx_action_audit_correlation" in schema_sql
+    assert "idx_action_audit_admin_request_actor_event" in schema_sql
+    assert "'ADMIN_OPERATION_REQUESTED', 'ADMIN_OPERATION_RUN'" in schema_sql
 
 
 def test_every_backend_action_audit_insert_carries_correlation_id() -> None:
@@ -144,6 +150,7 @@ _MUTATION_AUDIT_EXPECTATIONS: dict[str, tuple[str, ...]] = {
     # Explicit non-mutating POST/PUT surfaces.
     "put_rules": ("status_code=410", "Offer rules are governed"),
     "preview_portfolio": ("repo.preview",),
+    "campaign_recommendation": ("AUDIT EXEMPT: read-only aggregate recommendation",),
     "genie_start": ("_latest_genie_conversation",),
     "record_rum": ("mip_rum_enabled",),
     "post_force_degraded": ("audit.write(", "FORCE_DEGRADED"),
@@ -152,8 +159,8 @@ _MUTATION_AUDIT_EXPECTATIONS: dict[str, tuple[str, ...]] = {
     "create_portfolio": ("repo.create(",),
     "patch_portfolio": ("repo.patch_status(",),
     "patch_campaign": ("repo.patch_status(",),
-    "recommend_offer": ("_safe_audit_write",),
-    "draft_outreach": ("_safe_audit_write",),
+    "recommend_offer": ("audit.write(",),
+    "draft_outreach": ("_persist_generated_outreach_draft(",),
     "approve_outreach": ("_commit_outreach_decision_atomic(", "audit.write("),
     "reject_outreach": ("_commit_outreach_decision_atomic(", "audit.write("),
     "assign_lead": ("store.assign_lead(",),
@@ -169,6 +176,20 @@ _MUTATION_AUDIT_EXPECTATIONS: dict[str, tuple[str, ...]] = {
     "record_lead_outcome": ("store.record_outcome(",),
     "property_loan_lookup": ("lookup_property_loan(",),
     "genie_message": ("_required_audit_write",),
+    # Async Genie lifecycle (2026-07-31): submission audits the live message
+    # creation (or resolves deterministically through the shared audited guard
+    # battery); the pure progress poll is exempt; completion writes the same
+    # genie.run_query row as the synchronous endpoint.
+    # Submit must show BOTH live-path audits: the message-creation row and
+    # the degraded-fallback's genie.run_query row (adversarial review
+    # 2026-07-31 — the token set is deliberately non-vacuous).
+    "genie_message_submit": (
+        "_deterministic_genie_response(",
+        "genie.message_submitted",
+        "genie.run_query",
+    ),
+    "genie_message_progress": ("AUDIT EXEMPT: read-only progress poll",),
+    "genie_message_complete": ("_required_audit_write", "_finalize_genie_response("),
     "genie_action": ("handle_genie_action(",),
     "genie_feedback": ("record_genie_feedback(",),
     "run_growth_agent_workflow": ("_run_workflow(",),
@@ -206,9 +227,7 @@ def test_every_mutation_route_has_audit_coverage_or_explicit_exemption() -> None
             "add an audit write or an explicit exemption to this manifest"
         )
         source = inspect.getsource(endpoint)
-        missing = [
-            token for token in _MUTATION_AUDIT_EXPECTATIONS[name] if token not in source
-        ]
+        missing = [token for token in _MUTATION_AUDIT_EXPECTATIONS[name] if token not in source]
         assert not missing, f"{name} missing audit/exemption evidence tokens: {missing}"
         covered.add(name)
 
@@ -223,23 +242,37 @@ def test_growth_agent_shared_executor_writes_audit_event() -> None:
     assert "GROWTH_AGENT_RUN" in source
 
 
-def test_list_issues_select_ordered_desc_with_limit() -> None:
+def test_list_issues_select_with_total_order_and_cursor_boundaries() -> None:
     client = _build_client_returning_row()
     # fetchall returns rows in whatever the SELECT produces -- we assert
     # on the query shape.
     client.fetchall.return_value = []
     store = LakebaseAuditStore(client=client)
 
-    events = store.list(limit=25)
+    events = store.list(
+        limit=25,
+        after_sequence=12,
+        snapshot_sequence=25,
+    )
 
     assert events == []
     assert client.fetchall.call_count == 1
     args, kwargs = client.fetchall.call_args
     sql = args[0]
     params = args[1]
-    assert "ORDER BY event_at DESC" in sql
+    assert "ORDER BY audit_sequence DESC" in sql
     assert "LIMIT %(limit)s" in sql
-    assert params == {"limit": 25}
+    assert "OFFSET %(offset)s" in sql
+    assert "audit_sequence <= %(snapshot_sequence)s" in sql
+    assert "audit_sequence < %(after_sequence)s" in sql
+    assert "pg_current_snapshot()" in sql
+    assert "pg_visible_in_snapshot" in sql
+    assert params == {
+        "limit": 25,
+        "after_sequence": 12,
+        "snapshot_sequence": 25,
+        "offset": 0,
+    }
     # belt-and-suspenders: fetchall is called with limit=25 too
     assert kwargs.get("limit", args[2] if len(args) > 2 else None) == 25
 
@@ -265,6 +298,7 @@ def test_list_hydrates_rows_into_audit_events() -> None:
     client.fetchall.return_value = [
         {
             "audit_id": aid,
+            "audit_sequence": 42,
             "event_type": "VIEW_BORROWER",
             "actor_email": "skyler@entrada.ai",
             "entity_type": "borrower",
@@ -276,6 +310,7 @@ def test_list_hydrates_rows_into_audit_events() -> None:
             "evidence_ids": ["ev-1"],
             "metadata": {"action": "view_borrower_360", "score": 92},
             "event_at": now,
+            "audit_snapshot": "10:50:12,21",
         }
     ]
     store = LakebaseAuditStore(client=client)
@@ -294,6 +329,7 @@ def test_list_hydrates_rows_into_audit_events() -> None:
     # payload_json; the score survives.
     assert e.payload_json == {"score": 92}
     assert e.created_at == now.isoformat()
+    assert e.audit_snapshot == "10:50:12,21"
 
 
 def test_list_masks_legacy_raw_subject_clip_values() -> None:
@@ -309,6 +345,7 @@ def test_list_masks_legacy_raw_subject_clip_values() -> None:
     client.fetchall.return_value = [
         {
             "audit_id": aid,
+            "audit_sequence": 43,
             "event_type": "VIEW_BORROWER",
             "actor_email": "skyler@entrada.ai",
             "entity_type": "borrower",
@@ -342,10 +379,7 @@ def test_resolve_actor_falls_back_to_default_with_warning(
     with caplog.at_level(logging.WARNING, logger="backend.services.audit_store"):
         actor = resolve_actor(req)
     assert actor == settings.default_actor
-    assert any(
-        getattr(rec, "mip_event", None) == "identity_fallback"
-        for rec in caplog.records
-    )
+    assert any(getattr(rec, "mip_event", None) == "identity_fallback" for rec in caplog.records)
 
 
 def test_resolve_actor_handles_null_request() -> None:
@@ -393,11 +427,15 @@ def test_growth_agent_audit_metadata_is_allowlisted_and_value_checked() -> None:
                 },
             ],
             "policy_checks": [
-                {"label": "No outbound activation", "status": "passed", "detail": "Human review remains required."},
+                {
+                    "label": "Approval gate required",
+                    "status": "passed",
+                    "detail": "Human review remains required.",
+                },
             ],
             "governance_chips": [
                 {
-                    "label": "PII-safe output",
+                    "label": "Masked references only",
                     "status": "passed",
                     "detail": "Counts and route filters only.",
                     "evidence_ref": "agent-trace-11111111-1111-4111-8111-111111111111",
@@ -412,8 +450,10 @@ def test_growth_agent_audit_metadata_is_allowlisted_and_value_checked() -> None:
     assert metadata["trace_id"].startswith("agent-trace-")
     assert metadata["tool_result_hash"] == "a" * 64
     assert metadata["specialist_agent"] == "structured_data_agent"
-    assert metadata["governance_chips"][0]["label"] == "PII-safe output"
-    assert metadata["result_filters"]["portfolio_criteria"]["marketing_eligibility"] == "Eligible only"
+    assert metadata["governance_chips"][0]["label"] == "Masked references only"
+    assert (
+        metadata["result_filters"]["portfolio_criteria"]["marketing_eligibility"] == "Eligible only"
+    )
 
 
 def test_growth_agent_audit_metadata_rejects_unknown_workflows() -> None:
@@ -445,10 +485,18 @@ def test_custom_growth_agent_audit_metadata_is_governed() -> None:
             },
             "source_assets": ["mip.gold.borrower_360", "mip.gold.lead_population"],
             "tool_steps": [
-                {"label": "Apply custom segment screen", "status": "completed", "detail": "No identities returned."},
+                {
+                    "label": "Apply custom segment screen",
+                    "status": "completed",
+                    "detail": "No identities returned.",
+                },
             ],
             "policy_checks": [
-                {"label": "Reviewed custom workflow", "status": "passed", "detail": "Reviewed segment vocabulary only."},
+                {
+                    "label": "Reviewed custom workflow",
+                    "status": "passed",
+                    "detail": "Reviewed segment vocabulary only.",
+                },
             ],
         },
         action="growth_agent.run",
@@ -508,6 +556,14 @@ def test_growth_agent_audit_metadata_rejects_unreviewed_funnel_stage() -> None:
         )
 
 
+def test_outreach_audit_metadata_rejects_unreviewed_generation_mode() -> None:
+    with pytest.raises(AuditMetadataValueViolation):
+        build_safe_audit_metadata(
+            {"generation_mode": "unverified_model"},
+            action="outreach.draft",
+        )
+
+
 def test_growth_agent_audit_metadata_rejects_unreviewed_tool_name() -> None:
     with pytest.raises(AuditMetadataValueViolation):
         build_safe_audit_metadata(
@@ -548,14 +604,43 @@ def test_custom_growth_agent_lakebase_schema_contract_is_migrated() -> None:
 
 
 def test_lakebase_grants_reference_covers_growth_agent_tables() -> None:
+    from jobs import lakebase_migrate
+
     grants_doc = Path("docs/security/GRANTS.md").read_text(encoding="utf-8")
 
-    assert "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.growth_agent_runs" in grants_doc
-    assert "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.growth_agent_monitors" in grants_doc
-    assert (
-        "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "
-        "mip_app.growth_agent_notification_drafts"
-    ) in grants_doc
+    for table_name in (
+        "growth_agent_runs",
+        "growth_agent_monitors",
+        "growth_agent_notification_drafts",
+    ):
+        assert lakebase_migrate._APP_ROLE_TABLE_PRIVILEGES[table_name] == (
+            "SELECT",
+            "INSERT",
+            "UPDATE",
+        )
+        assert f"GRANT SELECT, INSERT, UPDATE ON TABLE mip_app.{table_name}" not in grants_doc
+
+    assert ".venv/bin/python -m jobs.lakebase_migrate" in grants_doc
+    assert "Do not copy a static GRANT list" in grants_doc
+    assert "code-owned privilege matrix" in grants_doc
+
+
+def test_lakebase_app_role_grants_only_the_required_current_sequence() -> None:
+    """The app may call nextval only on the reviewed BIGSERIAL sequence."""
+
+    from jobs import lakebase_migrate
+
+    grants_doc = Path("docs/security/GRANTS.md").read_text(encoding="utf-8")
+
+    assert lakebase_migrate._APP_ROLE_SEQUENCE_PRIVILEGES == {
+        "action_audit_audit_sequence_seq": ("USAGE",),
+    }
+    assert ".venv/bin/python -m jobs.lakebase_migrate" in grants_doc
+    assert "Do not copy a static GRANT list" in grants_doc
+    assert "code-owned privilege matrix" in grants_doc
+    assert "GRANT USAGE ON SEQUENCE mip_app.action_audit_audit_sequence_seq" not in grants_doc
+    assert "GRANT USAGE ON ALL SEQUENCES IN SCHEMA mip_app" not in grants_doc
+    assert "GRANT USAGE ON SEQUENCES TO" not in grants_doc
 
 
 def test_in_memory_store_is_a_drop_in_for_the_protocol() -> None:
@@ -568,6 +653,77 @@ def test_in_memory_store_is_a_drop_in_for_the_protocol() -> None:
     )
     out = store.list(limit=50)
     assert out == [e]
+
+
+def test_in_memory_store_pages_newest_first_without_duplicates() -> None:
+    store = InMemoryAuditStore()
+    written = [
+        store.write(
+            actor="a@b",
+            action="view_borrower_360",
+            entity_type="borrower",
+            entity_id=f"B-{index}",
+        )
+        for index in range(5)
+    ]
+
+    ordered = store.list(limit=5)
+    first = ordered[:2]
+    snapshot = first[0]
+    second = store.list(
+        limit=2,
+        after_sequence=first[-1].audit_sequence,
+        snapshot_sequence=snapshot.audit_sequence,
+        snapshot_token=snapshot.audit_snapshot,
+    )
+    third = store.list(
+        limit=2,
+        after_sequence=second[-1].audit_sequence,
+        snapshot_sequence=snapshot.audit_sequence,
+        snapshot_token=snapshot.audit_snapshot,
+    )
+
+    assert first + second + third == ordered
+    assert len({event.event_id for event in first + second + third}) == len(written)
+    assert store.list(limit=2, offset=0) == ordered[:2]
+    assert store.list(limit=2, offset=2) == ordered[2:4]
+    assert store.list(limit=2, offset=4) == ordered[4:]
+
+
+def test_in_memory_cursor_stably_orders_tied_timestamps_and_excludes_new_inserts() -> None:
+    store = InMemoryAuditStore()
+    tied = [
+        store.write(
+            actor="a@b",
+            action="view_borrower_360",
+            entity_type="borrower",
+            entity_id=f"B-{index}",
+        )
+        for index in range(4)
+    ]
+    tied_at = "2026-07-13T12:00:00+00:00"
+    for event in tied:
+        event.created_at = tied_at
+    ordered = sorted(tied, key=lambda event: event.audit_sequence or 0, reverse=True)
+    first = store.list(limit=2)
+    snapshot = first[0]
+    after = first[-1]
+    inserted = store.write(
+        actor="a@b",
+        action="view_borrower_360",
+        entity_type="borrower",
+        entity_id="B-NEW",
+    )
+    inserted.created_at = "2020-01-01T00:00:00+00:00"
+    second = store.list(
+        limit=2,
+        after_sequence=after.audit_sequence,
+        snapshot_sequence=snapshot.audit_sequence,
+        snapshot_token=snapshot.audit_snapshot,
+    )
+
+    assert first + second == ordered
+    assert inserted not in first + second
 
 
 def test_default_actor_emits_warning_log(

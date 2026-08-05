@@ -259,6 +259,42 @@ class DatabricksGenieRepository:
             raise
         return _adapt_genie_response(question, result, sql_client=self._sql_client)
 
+    def respond_existing(
+        self,
+        question: str,
+        *,
+        conversation_id: str,
+        message_id: str,
+    ) -> GenieMessageResponse:
+        """Complete an already-submitted live message (async lifecycle).
+
+        Applies :meth:`respond`'s LIVE-path policy pipeline — breaker
+        handling, text-only SQL repair, adaptation, degraded fallback — to a
+        message the submit endpoint already created. The legacy
+        interceptor-first posture (``mip_genie_live_first=False``) is
+        deliberately absent here: under that posture the submit endpoint
+        resolves the whole turn through :meth:`respond` and never creates a
+        live message, so no turn reaches this method. ``question`` is the
+        token-verified prompt of record for repair/adaptation/audit; it was
+        prompt-guarded at submit before the message existed.
+        """
+        breaker_state = self._genie.resilient.breaker.state
+        if breaker_state == "open":
+            return self._degraded(question, kind=DependencyDownError.KIND_BREAKER_OPEN)
+        try:
+            result = self._genie.resume_message(conversation_id, message_id)
+            if _needs_genie_sql_repair(question, result):
+                result = self._repair_text_only_genie_answer(
+                    question=question,
+                    original=result,
+                    conversation_id=conversation_id,
+                )
+        except DependencyDownError as exc:
+            return self._degraded(question, kind=exc.kind)
+        except GenieClientError:
+            raise
+        return _adapt_genie_response(question, result, sql_client=self._sql_client)
+
     def _repair_text_only_genie_answer(
         self,
         *,
@@ -624,20 +660,36 @@ def _restore_live_voice(
     proof = canonical.proof
     narrative = (result.answer_text or "").strip()
     updates: dict[str, Any] = {}
-    contradicted, claimed = _narrative_contradicts_metric(narrative, canonical.metric_value)
+    contradicted, _ = _narrative_contradicts_metric(
+        narrative,
+        canonical.metric_value,
+    )
+    unsupported_claims = _unsupported_answer_numeric_claims(
+        narrative,
+        canonical.table_rows,
+        canonical.question,
+    )
     if narrative and contradicted:
-        # Trust boundary (external audit 2026-07-08): never lead a
-        # ``trusted_sql`` answer with model prose asserting a figure the
-        # governed recomputation disproves. The verified deterministic
-        # statement leads; the discrepancy is disclosed as a gap, not
-        # displayed as fact. Live-intelligence fields still carry through —
-        # the turn was genuinely live, only its numeric claim lost.
         updates["answer"] = canonical.answer
         if proof is not None:
             gap = (
-                f"Genie's draft narrative stated {claimed}; the governed "
-                f"recomputation returned {canonical.metric_value} and "
-                "superseded it."
+                "Genie's draft narrative was superseded because it contradicted "
+                "the governed recomputation; the unsupported prose was removed."
+            )
+            if gap not in proof.known_data_gaps:
+                proof = proof.model_copy(
+                    update={"known_data_gaps": [*proof.known_data_gaps, gap]}
+                )
+    elif narrative and unsupported_claims:
+        # Recognized shapes must obey the same all-claims rule as generic
+        # Genie turns. One matching count cannot launder another unsupported
+        # rate, balance, percentage, or count in the same narrative.
+        updates["answer"] = canonical.answer
+        if proof is not None:
+            gap = (
+                "Genie's draft narrative included numeric or financial claims "
+                "that were not supported by the governed recomputation; the "
+                "unsupported prose was removed."
             )
             if gap not in proof.known_data_gaps:
                 proof = proof.model_copy(
@@ -660,7 +712,19 @@ def _restore_live_voice(
                 update={"known_data_gaps": [*proof.known_data_gaps, gap]}
             )
     if proof is not None:
-        updates["proof"] = proof.model_copy(update={"reasoning_trace": reasoning_trace})
+        updates["proof"] = proof.model_copy(
+            update={
+                "reasoning_trace": reasoning_trace,
+                "conversation_id": result.conversation_id,
+                "message_id": result.message_id,
+            }
+        )
+    # Canonical answers intentionally carry deterministic proof identifiers.
+    # Feedback, however, belongs to the live Conversation API turn, so retain
+    # its identity on the response without changing the recomputed metric.
+    updates["conversation_id"] = result.conversation_id
+    updates["message_id"] = result.message_id
+    updates["elapsed_ms"] = result.elapsed_ms
     updates["reasoning_trace"] = reasoning_trace
     updates["follow_up_questions"] = genie_follow_up_questions(result.suggested_questions)
     updates["native_visualization"] = genie_native_visualization(result.native_visualization)

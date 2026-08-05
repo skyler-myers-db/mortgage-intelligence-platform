@@ -36,9 +36,11 @@ class AssetLineageNode(BaseModel):
     direction: AssetLineageDirection
     asset_path: str
     label: str
-    object_type: str | None = None
+    object_type: AssetObjectType | None = None
     event_time: str | None = None
+    event_count: int | None = None
     source: str = "system.access.table_lineage"
+    catalog_explorer_url: str | None = None
 
 
 class AssetMetadataResponse(BaseModel):
@@ -52,6 +54,12 @@ class AssetMetadataResponse(BaseModel):
     schema_name: str
     object_name: str
     uc_object: str
+    observed_in_unity_catalog: bool | None = None
+    observation_source: Literal[
+        "system.information_schema.tables",
+        "system.information_schema.routines",
+        "unavailable",
+    ] = "unavailable"
     generated_at: datetime
     last_updated: str | None = None
     delta_last_modified: str | None = None

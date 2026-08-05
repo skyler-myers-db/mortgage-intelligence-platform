@@ -3,6 +3,9 @@ import type { DrawerSource } from '../components/AppContext';
 
 export const mockPortfolio: PortfolioPreview = {
   marketable_population: 89553,
+  campaign_build_contact_count: 89_553,
+  campaign_build_limit: 10_000,
+  campaign_build_eligible: false,
   high_intent_leads: 12840,
   top_tier_opportunities: 4120,
   offers_recommended: 6250,

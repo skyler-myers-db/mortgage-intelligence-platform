@@ -272,7 +272,13 @@ class DatabricksJobOperations:
             recent_runs=recent_runs,
         )
 
-    def run_now(self, key: ManagedJobKey) -> JobLaunch:
+    def run_now(
+        self,
+        key: ManagedJobKey,
+        *,
+        idempotency_token: str,
+        replay: bool = False,
+    ) -> JobLaunch:
         definition = MANAGED_JOBS[key]
         workspace = self._client()
         job_id = self._resolve_job_id(workspace, definition)
@@ -280,11 +286,14 @@ class DatabricksJobOperations:
             raise JobOperationError(f"{definition.job_name} is not configured")
 
         active_run = self._active_run(workspace, job_id)
-        if active_run is not None:
+        if active_run is not None and not replay:
             raise JobAlreadyRunningError(definition.key, active_run.run_id)
 
         try:
-            run = workspace.jobs.run_now(job_id=job_id)
+            run = workspace.jobs.run_now(
+                job_id=job_id,
+                idempotency_token=idempotency_token,
+            )
         except Exception as exc:  # noqa: BLE001
             emit(
                 log,

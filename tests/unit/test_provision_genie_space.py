@@ -25,6 +25,7 @@ import importlib.util
 import json
 import os
 import re
+import subprocess
 import sys
 import types
 from pathlib import Path
@@ -67,6 +68,43 @@ def _expected_assets(catalog: str = "mip") -> set[str]:
     return {f"{catalog}.{schema}.{table}" for schema, table in EXPECTED_ASSET_PAIRS}
 
 
+def test_find_space_rejects_duplicate_exact_titles_before_update() -> None:
+    class Genie:
+        def __init__(self) -> None:
+            self.pages: list[str | None] = []
+
+        def list_spaces(self, *, page_token: str | None) -> types.SimpleNamespace:
+            self.pages.append(page_token)
+            if page_token is None:
+                return types.SimpleNamespace(
+                    spaces=[
+                        types.SimpleNamespace(
+                            title="Mortgage Lead Intelligence",
+                            space_id="first-space",
+                        )
+                    ],
+                    next_page_token="next",
+                )
+            return types.SimpleNamespace(
+                spaces=[
+                    types.SimpleNamespace(
+                        title="Mortgage Lead Intelligence",
+                        space_id="second-space",
+                    )
+                ],
+                next_page_token=None,
+            )
+
+    genie = Genie()
+    with pytest.raises(ValueError, match="refusing ambiguous Genie binding"):
+        pgs._find_space(
+            types.SimpleNamespace(genie=genie),
+            "Mortgage Lead Intelligence",
+        )
+
+    assert genie.pages == [None, "next"]
+
+
 @pytest.fixture(autouse=True)
 def _default_catalog(
     monkeypatch: pytest.MonkeyPatch,
@@ -81,10 +119,14 @@ def test_env_local_does_not_override_catalog_routing(
 ) -> None:
     monkeypatch.delenv("MIP_DEFAULT_CATALOG", raising=False)
     monkeypatch.delenv("DATABRICKS_HOST", raising=False)
+    monkeypatch.delenv("DATABRICKS_CLIENT_ID", raising=False)
+    monkeypatch.delenv("DATABRICKS_CLIENT_SECRET", raising=False)
     monkeypatch.setattr(pgs, "REPO_ROOT", tmp_path)
     (tmp_path / ".env.local").write_text(
         "MIP_DEFAULT_CATALOG=mip_demo\n"
-        "DATABRICKS_HOST=https://dbc.example\n",
+        "DATABRICKS_HOST=https://dbc.example\n"
+        "DATABRICKS_CLIENT_ID=normal-app-client\n"
+        "DATABRICKS_CLIENT_SECRET=normal-app-secret\n",
         encoding="utf-8",
     )
 
@@ -92,6 +134,35 @@ def test_env_local_does_not_override_catalog_routing(
 
     assert "MIP_DEFAULT_CATALOG" not in os.environ
     assert os.environ["DATABRICKS_HOST"] == "https://dbc.example"
+    assert "DATABRICKS_CLIENT_ID" not in os.environ
+    assert "DATABRICKS_CLIENT_SECRET" not in os.environ
+
+
+def test_build_client_uses_explicit_deployer_binding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sentinel = object()
+    monkeypatch.setenv("MIP_DEPLOYER_DATABRICKS_PROFILE", "REVIEWED")
+    monkeypatch.setenv("DATABRICKS_CLIENT_ID", "normal-app-client")
+    monkeypatch.setenv("DATABRICKS_CLIENT_SECRET", "normal-app-secret")
+    monkeypatch.setattr(pgs, "deployment_workspace_client", lambda: sentinel)
+    args = types.SimpleNamespace(workspace_host=None, profile="DEFAULT")
+
+    assert pgs._build_client(args) is sentinel
+
+
+def test_direct_script_entry_resolves_repo_imports(tmp_path: Path) -> None:
+    result = subprocess.run(
+        [sys.executable, str(_PGS_PATH), "--help"],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Create or update the Mortgage Lead Intelligence Genie Space" in result.stdout
+    assert "ModuleNotFoundError" not in result.stderr
 
 
 def test_smoke_test_rejects_prompt_echo(
