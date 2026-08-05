@@ -118,3 +118,21 @@ is not extended here.
 
 The ratchet this decision adds: a file may be re-dated at most once more. Any
 file still oversize on 2026-09-15 blocks merge until it is split.
+
+### Two thresholds, one allowlist
+
+The gate is enforced at two different limits and the allowlist has to satisfy
+both: `tests/unit/test_architecture_boundaries.py` fails backend files over
+**1000** lines, while CI runs `tools/check_file_sizes.py --warn 500 --fail 900`
+over the whole repo. Files in the 900–1000 band therefore pass the unit test and
+fail CI, which is how `backend/services/genie_client.py` (957) and
+`tools/databricks/converge_campaign_treatment_access.py` (933, down from 985
+after the raw-token probe came out) sat unlisted while `main` went red.
+
+Both are covered through 2026-09-15 by the decision above. Before that date:
+
+1. Split `genie_client.py` into transport/retry, message lifecycle polling, and
+   response normalization.
+2. Split `converge_campaign_treatment_access.py` into credential minting,
+   identity probing, and group convergence, keeping the probe's secret-free
+   diagnostics with the probe.

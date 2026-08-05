@@ -16,7 +16,9 @@
     "frontend/src/design-system/components.css": "2026-09-15",
     "frontend/src/lib/api.ts": "2026-09-15",
     "scripts/deploy.sh": "2026-08-15",
-    "tools/e2e_borrower_audit.py": "2026-09-15"
+    "tools/e2e_borrower_audit.py": "2026-09-15",
+    "backend/services/genie_client.py": "2026-09-15",
+    "tools/databricks/converge_campaign_treatment_access.py": "2026-09-15"
   },
   "_policy": "2026-08-05 schedule decision: expiry moved from 2026-07-31 to 2026-09-15 and backend/api/outreach.py added, because the 2026-07-31 date lapsed mid-branch. backend/api/genie.py was split instead of re-dated and its entry is removed. See docs/maintenance/file-size-refactor-plan.md. A file may be re-dated at most once more; anything still oversize on 2026-09-15 blocks merge until it is split."
 }
