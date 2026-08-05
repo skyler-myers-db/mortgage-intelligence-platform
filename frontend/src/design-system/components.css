@@ -2330,6 +2330,13 @@ kbd {
   overflow-wrap: anywhere;
   text-decoration: none;
 }
+/* The FQN inside a chip keeps `.lineage-node__name` for BEM/evidence parity
+   but defers to the chip's own type scale and ink, so adopting the class did
+   not restyle the governed-asset rows. */
+.lineage-node__chip .lineage-node__name {
+  font-size: inherit;
+  color: inherit;
+}
 .governed-assets__list {
   display: grid;
   grid-template-columns: 1fr;
