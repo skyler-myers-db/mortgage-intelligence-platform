@@ -337,7 +337,24 @@ jobs:
           bandit -c .bandit -r backend tools jobs pipelines -x tests --severity-level high --confidence-level high -q
 
       - name: pip-audit (Python deps)
-        run: pip-audit -r requirements.txt --strict
+        # PYSEC-2026-3552 (CVE-2026-69247) is a Bleichenbacher oracle in
+        # cryptography's PKCS#7 EnvelopedData decryption (pkcs7_decrypt_der /
+        # _pem / _smime), fixed only in cryptography 50.0.0.
+        #
+        # It is ignored here for two reasons, both checked:
+        #   1. Unreachable. This repo never decrypts PKCS#7 or S/MIME -- it
+        #      uses cryptography solely for Ed25519 signature verification in
+        #      the gateway proof attestation path. `grep -riE "pkcs7|smime"`
+        #      over backend/ tools/ jobs/ scripts/ returns nothing.
+        #   2. Upstream-capped. No non-vulnerable mlflow admits cryptography
+        #      50: 3.15.1 (the newest) requires cryptography<50, and older
+        #      releases cap it lower still. Taking 50.0.0 forces mlflow down
+        #      to 3.2.0, which carries 24 advisories of its own -- strictly
+        #      worse than the one being ignored.
+        #
+        # Remove this ignore as soon as mlflow raises its bound to admit
+        # cryptography 50, then set cryptography==50.0.0 in requirements.in.
+        run: pip-audit -r requirements.txt --strict --ignore-vuln PYSEC-2026-3552
 
       - name: npm audit (frontend prod + dev deps)
         # `--audit-level=high` means only high/critical CVEs fail the

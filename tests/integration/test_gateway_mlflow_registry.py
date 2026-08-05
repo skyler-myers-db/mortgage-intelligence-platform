@@ -14,13 +14,13 @@ from tools.databricks.gateway_model_attestation import (
 )
 
 
-def test_mlflow_3_14_register_model_persists_atomic_gateway_tags(
+def test_mlflow_register_model_persists_atomic_gateway_tags(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Exercise the real MLflow 3.14 registry API used by provisioning."""
+    """Exercise the real MLflow registry API used by provisioning."""
 
-    assert mlflow.__version__ == "3.14.0"
+    assert mlflow.__version__ == "3.15.1"
     original_tracking = mlflow.get_tracking_uri()
     original_registry = mlflow.get_registry_uri()
     database_uri = f"sqlite:///{tmp_path / 'mlflow.db'}"

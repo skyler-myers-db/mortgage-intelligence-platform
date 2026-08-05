@@ -84,7 +84,7 @@ def test_python_requirements_use_real_transitive_lockfile() -> None:
     assert "boto3==1.43.50" in requirements_in
     assert "pg8000==1.31.5" in requirements_in
     assert "gitpython>=3.1.57,<4" in requirements_in
-    assert "cryptography==50.0.0" in requirements_in
+    assert "cryptography==49.0.0" in requirements_in
     assert "aiohttp>=3.14.3" in requirements_in
     assert "pyasn1>=0.6.4,<1" in requirements_in
     for required_pin in (
@@ -93,7 +93,9 @@ def test_python_requirements_use_real_transitive_lockfile() -> None:
         "databricks-sql-connector==4.2.6",
         "pyjwt==2.13.0",
         "gitpython==3.1.58",
-        "cryptography==50.0.0",
+        "cryptography==49.0.0",
+        "mlflow==3.15.1",
+        "pyarrow==25.0.0",
         "aiohttp==3.14.3",
         "pyasn1==0.6.4",
         "pg8000==1.31.5",
