@@ -7,13 +7,15 @@
       "Read(./config/credentials.json)",
       "Read(./frontend/dist/**)",
       "Bash(rm -rf:*)",
-      "Bash(git push:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
       "Bash(databricks workspace delete:*)"
     ],
     "allow": [
       "Bash(git status:*)",
       "Bash(git diff:*)",
       "Bash(git log:*)",
+      "Bash(git push:*)",
       "Bash(npm --prefix frontend run lint:*)",
       "Bash(npm --prefix frontend run test:*)",
       "Bash(npm --prefix frontend run build:*)",
