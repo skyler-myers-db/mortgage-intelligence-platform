@@ -166,53 +166,6 @@ def isolated_target_auth_env() -> Iterator[tuple[str, ...]]:
         os.environ.update(saved)
 
 
-def _raw_token_endpoint_verdict(
-    host: str,
-    client_id: str,
-    client_secret: str,
-) -> str:
-    """Ask the workspace token endpoint directly and return ITS explanation.
-
-    The SDK reduces an OAuth rejection to ``{error}: {summary}`` — for the
-    step-4 failures that is always ``invalid_client: Client authentication
-    failed``, which names the symptom, not the cause. The endpoint's raw
-    JSON usually carries an ``error_description`` that does (wrong audience,
-    unknown client in this workspace, expired secret, …). Returns a bounded,
-    secret-free string; never raises.
-    """
-
-    import urllib.error
-    import urllib.parse
-    import urllib.request
-
-    url = f"{host.rstrip('/')}/oidc/v1/token"
-    body = urllib.parse.urlencode(
-        {
-            "grant_type": "client_credentials",
-            "scope": "all-apis",
-            "client_id": client_id,
-            "client_secret": client_secret,
-        }
-    ).encode("ascii")
-    request = urllib.request.Request(
-        url,
-        data=body,
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            return f"raw_token_status={response.status} (authentication SUCCEEDED on direct call)"
-    except urllib.error.HTTPError as http_error:
-        payload = http_error.read()[:600].decode("utf-8", errors="replace")
-        # The request body holds the secret; the RESPONSE body never does —
-        # it is the server's error JSON. Redact defensively anyway.
-        sanitized = payload.replace(client_secret, "<redacted>")
-        return f"raw_token_status={http_error.code} raw_token_body={sanitized}"
-    except Exception as transport_error:  # noqa: BLE001 - diagnostic only
-        return f"raw_token_probe_error={type(transport_error).__name__}: {str(transport_error)[:120]}"
-
-
 def _fingerprint(value: object) -> str:
     """Stable, non-secret fingerprint of an identifier.
 
@@ -269,7 +222,6 @@ def _describe_probe_failure(
     application_id: str,
     host: str,
     stripped_env: tuple[str, ...],
-    raw_verdict: str = "",
     account_scim_id: str = "",
     credential_state: str = "",
 ) -> str:
@@ -307,7 +259,6 @@ def _describe_probe_failure(
         f"fp_account_client_id={_fingerprint(os.environ.get('DATABRICKS_ACCOUNT_CLIENT_ID'))} | "
         f"fp_account_host={_fingerprint(os.environ.get('DATABRICKS_ACCOUNT_HOST'))} | "
         f"{credential_state}"
-        + (f" | {raw_verdict}" if raw_verdict else "")
     )
 
 
@@ -477,9 +428,6 @@ def target_identity_groups_probe(
                             + _probe_timeline(minted_at)
                             + " | at_mint: "
                             + presence_at_mint
-                        ),
-                        raw_verdict=_raw_token_endpoint_verdict(
-                            host, application_id, credential.secret
                         ),
                     ),
                     file=sys.stderr,

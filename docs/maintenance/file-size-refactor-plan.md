@@ -74,3 +74,65 @@ retain its reviewed ordering while the release completes. Before that date:
 
 Do not extend this exception without a new dated decision and concrete split
 evidence. New shell libraries are never covered by this exception.
+
+## 2026-08-05 governed-draft and Genie-lifecycle addendum
+
+The 2026-07-31 expiry lapsed with the `codex/intelligence-trust-ux` branch in
+flight, so the gate began failing for every file still listed. This is the new
+dated schedule decision required by the rule above; it is not a silent
+extension.
+
+**Split completed with this decision.** `backend/api/genie.py` (1349 lines,
+891 on `main`) crossed the limit when the async Genie lifecycle
+(`/message/submit`, `/message/progress`, `/message/complete`) landed. Plan item
+3 above is now partially satisfied: the deterministic guardrail battery —
+protected-class, instruction-override, outreach, PII, scope-bypass, source-gap,
+off-topic, cross-lender, sales-ops, footprint, plus refusal shaping and the
+governed output block — moved verbatim to
+`backend/services/genie_deterministic.py`. That is policy, not routing, so it
+belongs beside the other Genie services. The router is now 734 lines and its
+allowlist entry is **removed**, not re-dated. Call sites in the route bodies
+are unchanged, so the audit source-contract test and the OpenAPI baseline still
+hold. Remaining for that file: separate proof/asset and admin/eval routes from
+the public chat routes.
+
+**Newly oversize.** `backend/api/outreach.py` went 938 -> 2192 lines during the
+campaign-treatment and governed-draft work. It is the human-approval and audit
+path, so it is listed here rather than split in the same pass. Before the date
+below:
+
+1. Extract draft generation, regeneration, and copy-verification into an
+   outreach draft service.
+2. Extract the approval/rejection commit path (the atomic Lakebase decision +
+   audit write) into its own module so the transaction boundary is
+   independently testable.
+3. Extract campaign-treatment assignment and eligibility gating.
+4. Keep only routing, request validation, and response mapping in the router.
+
+**New expiry: 2026-09-15** for the eight files still listed
+(`databricks_genie_canonical.py`, `outreach.py`, `databricks_genie_direct.py`,
+`databricks_portfolio.py`, `audit_store.py`, `sales_state.py`,
+`databricks_genie.py`, `genie_actions.py`) and for the frontend entries carried
+from the 2026-06-14 list. `scripts/deploy.sh` keeps its own 2026-08-15 date and
+is not extended here.
+
+The ratchet this decision adds: a file may be re-dated at most once more. Any
+file still oversize on 2026-09-15 blocks merge until it is split.
+
+### Two thresholds, one allowlist
+
+The gate is enforced at two different limits and the allowlist has to satisfy
+both: `tests/unit/test_architecture_boundaries.py` fails backend files over
+**1000** lines, while CI runs `tools/check_file_sizes.py --warn 500 --fail 900`
+over the whole repo. Files in the 900–1000 band therefore pass the unit test and
+fail CI, which is how `backend/services/genie_client.py` (957) and
+`tools/databricks/converge_campaign_treatment_access.py` (933, down from 985
+after the raw-token probe came out) sat unlisted while `main` went red.
+
+Both are covered through 2026-09-15 by the decision above. Before that date:
+
+1. Split `genie_client.py` into transport/retry, message lifecycle polling, and
+   response normalization.
+2. Split `converge_campaign_treatment_access.py` into credential minting,
+   identity probing, and group convergence, keeping the probe's secret-free
+   diagnostics with the probe.
