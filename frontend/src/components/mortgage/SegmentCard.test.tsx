@@ -143,18 +143,94 @@ describe('SegmentCard', () => {
     expect(container.querySelector('.seg-card__facets')).toBeNull();
   });
 
-  it('keeps the card on the div role-button composition and wraps facet controls in spans', () => {
-    render({
-      code: 'itm',
-      count: 12,
-      loan_product_mix: [{ value: 'fha', count: 1240 }],
-    });
+  it('puts selection on a dedicated button instead of the card element', () => {
+    render(
+      {
+        code: 'itm',
+        count: 12,
+        loan_product_mix: [{ value: 'fha', count: 1240 }],
+      },
+      vi.fn(),
+    );
     const card = container.querySelector('.seg-card');
     expect(card?.tagName).toBe('DIV');
-    expect(card?.getAttribute('role')).toBe('button');
+    // The card element itself is no longer a widget — it holds interactive
+    // children, and a role="button" host containing buttons is an ARIA
+    // violation as well as the click-routing trap this composition replaced.
+    expect(card?.getAttribute('role')).toBeNull();
+    expect(card?.hasAttribute('tabindex')).toBe(false);
+
+    const select = container.querySelector<HTMLButtonElement>('.seg-card__select');
+    expect(select?.tagName).toBe('BUTTON');
+    // type="button" + a native <button> is the whole keyboard contract:
+    // Enter/Space activation comes from the platform, not a keydown handler.
+    expect(select?.getAttribute('type')).toBe('button');
+    expect(select?.getAttribute('aria-pressed')).toBe('false');
+    expect(select?.getAttribute('aria-label')).toBe(
+      'Select Prime Refi Candidates segment — 12 borrowers',
+    );
+
     const chip = container.querySelector('.seg-card__facet-chip');
     expect(chip?.tagName).toBe('SPAN');
     expect(chip?.querySelector('.evidence-chip')).not.toBeNull();
+  });
+
+  it('keeps every evidence control outside the selection button', () => {
+    render(
+      {
+        code: 'itm',
+        count: 12,
+        loan_product_mix: [{ value: 'fha', count: 1240 }],
+        origination_channel_mix: [{ value: 'digital', count: 620 }],
+      },
+      vi.fn(),
+    );
+    const select = container.querySelector('.seg-card__select');
+    expect(select).not.toBeNull();
+    const chips = Array.from(container.querySelectorAll('.evidence-chip'));
+    // Segment evidence chip + product chip + channel chip.
+    expect(chips).toHaveLength(3);
+    for (const chip of chips) {
+      // Nothing needs stopPropagation() because nothing nests: a chip click
+      // cannot reach the selection button if the button is not its ancestor.
+      expect(select!.contains(chip)).toBe(false);
+    }
+  });
+
+  it('selects the segment when the card surface is clicked', () => {
+    const onClick = vi.fn();
+    render({ code: 'itm', count: 12 }, onClick);
+    const select = container.querySelector<HTMLButtonElement>('.seg-card__select');
+    act(() => select!.click());
+    expect(onClick).toHaveBeenCalledTimes(1);
+    expect(setDrawer).not.toHaveBeenCalled();
+  });
+
+  it('marks the selection button pressed for the active segment', () => {
+    render({ code: 'itm', count: 12 }, vi.fn());
+    expect(
+      container.querySelector('.seg-card__select')?.getAttribute('aria-pressed'),
+    ).toBe('false');
+    act(() =>
+      root.render(
+        <SegmentCard
+          segment={{
+            code: 'itm',
+            name: 'In the Money',
+            count: 12,
+            delta: '+1%',
+            avg_score: 70,
+            description: 'x',
+            color: '#000',
+          }}
+          selected
+          onClick={vi.fn()}
+        />,
+      ),
+    );
+    expect(
+      container.querySelector('.seg-card__select')?.getAttribute('aria-pressed'),
+    ).toBe('true');
   });
 
   it('opens the product-type drawer on chip click without toggling card selection', () => {
@@ -189,19 +265,25 @@ describe('SegmentCard', () => {
   });
 
   it('renders an explicit gated panel for a not-connected source and suppresses the count', () => {
-    render({
-      code: 'permit_activity',
-      count: 0,
-      source_status: 'not_connected',
-      source_name: 'Building Permits',
-    });
+    render(
+      {
+        code: 'permit_activity',
+        count: 0,
+        source_status: 'not_connected',
+        source_name: 'Building Permits',
+      },
+      vi.fn(),
+    );
     expect(container.textContent).toContain('not connected');
     expect(container.textContent).toContain('Building Permits');
     expect(container.textContent).toContain('—');
     expect(container.textContent).not.toContain('no borrowers in current view');
     const card = container.querySelector('.seg-card');
     expect(card?.classList.contains('seg-card--gated')).toBe(true);
-    expect(card?.getAttribute('aria-disabled')).toBe('true');
+    // A gated segment cannot be selected, so it exposes no selection control
+    // at all — stronger than aria-disabled on a non-widget, and it keeps the
+    // card from advertising a click that would do nothing.
+    expect(container.querySelector('.seg-card__select')).toBeNull();
   });
 
   it('labels a permission-denied source as not licensed', () => {
