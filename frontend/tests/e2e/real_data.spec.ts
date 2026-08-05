@@ -1055,25 +1055,51 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
       canonicalPayload.source,
       'the canonical count must use the deterministic governed SQL tier',
     ).toBe('trusted_sql');
-    expect(
-      canonicalPayload.reasoning_trace ?? [],
-      'deterministic trusted_sql must not expose native Genie reasoning summaries',
-    ).toEqual([]);
-    expect(
-      canonicalPayload.proof?.reasoning_trace ?? [],
-      'deterministic trusted_sql proof must not fabricate native reasoning summaries',
-    ).toEqual([]);
-    expect(
-      canonicalPayload.follow_up_questions ?? [],
-      'deterministic trusted_sql must not claim Genie-authored follow-up suggestions',
-    ).toEqual([]);
+    // A recognized-shape question is recomputed deterministically -- hence the
+    // trusted_sql tier and the "trusted" chip -- but since the governed-draft
+    // rework it leads with the live turn's own narrative and carries that
+    // turn's real reasoning trace and follow-ups (backend
+    // `_adapt_genie_response`, pinned by
+    // test_recognized_shape_live_turn_preserves_genie_voice_and_live_fields).
+    // Suppressing them would hide Genie's involvement in prose that is
+    // Genie's, which is the less honest disclosure.
+    //
+    // The invariant that actually protects the user is anti-fabrication:
+    // Genie-authored fields may appear ONLY when a live turn produced them.
+    // A deterministic answer with no live turn behind it must carry none.
+    const liveTurnBackedTheAnswer = Boolean(
+      canonicalPayload.genie_status && canonicalPayload.message_id,
+    );
+    if (liveTurnBackedTheAnswer) {
+      expect(
+        canonicalPayload.reasoning_trace ?? [],
+        'a live-turn-backed answer must expose that turn real reasoning summaries',
+      ).not.toEqual([]);
+    } else {
+      expect(
+        canonicalPayload.reasoning_trace ?? [],
+        'a deterministic answer with no live turn must not expose reasoning summaries',
+      ).toEqual([]);
+      expect(
+        canonicalPayload.proof?.reasoning_trace ?? [],
+        'a deterministic answer with no live turn must not fabricate proof reasoning',
+      ).toEqual([]);
+      expect(
+        canonicalPayload.follow_up_questions ?? [],
+        'a deterministic answer with no live turn must not claim Genie follow-ups',
+      ).toEqual([]);
+    }
 
     // Cold Genie space = 10-15s; allow 40s (a cold warehouse + Genie
     // compilation can push past 20s on the first question of a session).
     // We assert the answer region renders at least one non-empty character
     // that is NOT the spinner glyph. The component uses `genie__msg--ai`
     // for assistant bubbles (see components/mortgage/GenieChat.tsx).
-    await expect(panel.getByRole('status')).toBeHidden({ timeout: 60_000 });
+    // The pending indicator specifically -- not "any role=status in the
+    // panel". The rendered answer keeps an sr-only role="status" live region
+    // so screen readers hear the answer when it lands, and matching on the
+    // role would wait forever for that (correct) element to disappear.
+    await expect(panel.locator('.genie-progress')).toHaveCount(0, { timeout: 60_000 });
     const aiMessage = panel.locator('.genie__msg--ai').last();
     const answer = aiMessage.locator('.bubble');
     await expect(answer).toBeVisible({ timeout: 40_000 });
@@ -1085,8 +1111,10 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await expect(aiMessage.getByTestId('genie-feedback-down')).toBeVisible();
     await expect(
       aiMessage.locator('.genie-answer__reasoning'),
-      'trusted_sql UI must not render a native reasoning disclosure',
-    ).toHaveCount(0);
+      liveTurnBackedTheAnswer
+        ? 'a live-turn-backed answer must disclose that turn reasoning in the UI'
+        : 'a deterministic answer with no live turn must not render a reasoning disclosure',
+    ).toHaveCount(liveTurnBackedTheAnswer ? 1 : 0);
     const feedbackResponsePromise = page.waitForResponse((response) => (
       response.request().method() === 'POST'
       && /\/api\/(?:v1\/)?genie\/feedback$/.test(response.url())

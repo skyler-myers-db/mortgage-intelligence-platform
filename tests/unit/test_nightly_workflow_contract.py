@@ -715,19 +715,28 @@ def test_deterministic_genie_has_no_native_reasoning_or_follow_ups() -> None:
     canonical_block = text[canonical_pos:next_test_pos]
 
     assert ").toBe('trusted_sql')" in canonical_block
+    # A recognized-shape turn is recomputed deterministically but leads with
+    # the live turn's narrative, so it legitimately carries that turn's real
+    # reasoning trace and follow-ups (backend `_adapt_genie_response`). The
+    # rule the proof must still pin is anti-fabrication: Genie-authored fields
+    # only ever appear when a live turn actually produced them.
+    assert "canonicalPayload.genie_status && canonicalPayload.message_id" in canonical_block
     assert (
-        "deterministic trusted_sql must not expose native Genie reasoning summaries"
+        "a deterministic answer with no live turn must not expose reasoning summaries"
         in canonical_block
     )
     assert (
-        "deterministic trusted_sql proof must not fabricate native reasoning summaries"
+        "a deterministic answer with no live turn must not fabricate proof reasoning"
         in canonical_block
     )
     assert (
-        "deterministic trusted_sql must not claim Genie-authored follow-up suggestions"
+        "a deterministic answer with no live turn must not claim Genie follow-ups"
         in canonical_block
     )
-    assert "trusted_sql UI must not render a native reasoning disclosure" in canonical_block
+    assert (
+        "a deterministic answer with no live turn must not render a reasoning disclosure"
+        in canonical_block
+    )
     assert "test.skip(" not in canonical_block
 
 
