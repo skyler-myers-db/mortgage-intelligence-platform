@@ -366,18 +366,17 @@ function expectMaskedCotalityIds(payload: unknown, label: string) {
   }
 }
 
+/**
+ * Click the segment card's selection control, not the card box. `.seg-card`
+ * clicks land on the card's geometric centre, which the product/channel
+ * breakdown chips can occupy on deployments whose data renders them — that
+ * click opens the Evidence Drawer instead of selecting. `.seg-card__select`
+ * is the stretched selection button and is environment-independent.
+ */
 async function clickSegmentCard(page: Page, label: string) {
   const card = page.locator('.seg-card', { hasText: label });
   await expect(card, `segment card ${label} should be ready`).toBeVisible({ timeout: 45_000 });
-  // Click the title, not the card's geometric centre. The card embeds evidence
-  // and product/channel affordances that call event.stopPropagation(), and how
-  // tall those make the card depends on the deployment's data — on coverage
-  // that renders the extra breakdown rows the centre lands on the evidence
-  // control, which opens the Evidence Drawer instead of selecting the segment
-  // and then blocks every later click with its scrim. The title is outside
-  // every stopPropagation subtree, so selection is exercised the same way in
-  // any environment.
-  await card.locator('.seg-card__title').click();
+  await card.locator('.seg-card__select').click();
 }
 
 async function chooseFilter(page: Page, label: string, value: string) {

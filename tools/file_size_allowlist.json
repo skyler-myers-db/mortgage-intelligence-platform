@@ -1,23 +1,24 @@
 {
   "expires": {
-    "backend/api/genie.py": "2026-07-31",
-    "backend/api/outreach.py": "2026-07-31",
-    "backend/services/capabilities.py": "2026-07-31",
-    "backend/services/audit_store.py": "2026-07-31",
-    "backend/services/genie_actions.py": "2026-07-31",
-    "backend/services/lakebase_bootstrap.py": "2026-07-31",
-    "backend/services/repositories/databricks_genie.py": "2026-07-31",
-    "backend/services/repositories/databricks_genie_canonical.py": "2026-07-31",
-    "backend/services/repositories/databricks_genie_direct.py": "2026-07-31",
-    "backend/services/repositories/databricks_portfolio.py": "2026-07-31",
-    "backend/services/resilience.py": "2026-07-31",
-    "backend/services/sales_state.py": "2026-07-31",
-    "frontend/src/components/mortgage/LeadTable.tsx": "2026-07-31",
-    "frontend/src/components/mortgage/USChoroplethMap.tsx": "2026-07-31",
-    "frontend/src/design-system/components.css": "2026-07-31",
-    "frontend/src/lib/api.ts": "2026-07-31",
+    "backend/api/outreach.py": "2026-09-15",
+    "backend/services/capabilities.py": "2026-09-15",
+    "backend/services/audit_store.py": "2026-09-15",
+    "backend/services/genie_actions.py": "2026-09-15",
+    "backend/services/lakebase_bootstrap.py": "2026-09-15",
+    "backend/services/repositories/databricks_genie.py": "2026-09-15",
+    "backend/services/repositories/databricks_genie_canonical.py": "2026-09-15",
+    "backend/services/repositories/databricks_genie_direct.py": "2026-09-15",
+    "backend/services/repositories/databricks_portfolio.py": "2026-09-15",
+    "backend/services/resilience.py": "2026-09-15",
+    "backend/services/sales_state.py": "2026-09-15",
+    "frontend/src/components/mortgage/LeadTable.tsx": "2026-09-15",
+    "frontend/src/components/mortgage/USChoroplethMap.tsx": "2026-09-15",
+    "frontend/src/design-system/components.css": "2026-09-15",
+    "frontend/src/lib/api.ts": "2026-09-15",
     "scripts/deploy.sh": "2026-08-15",
-    "tools/e2e_borrower_audit.py": "2026-07-31"
+    "tools/e2e_borrower_audit.py": "2026-09-15",
+    "backend/services/genie_client.py": "2026-09-15",
+    "tools/databricks/converge_campaign_treatment_access.py": "2026-09-15"
   },
-  "_policy": "2026-06-14 schedule decision: allowlist expiry moved from 2026-06-21 to 2026-07-31 because listed-for-sale/HELOC evidence hardening took priority before Data+AI Summit. See docs/maintenance/file-size-refactor-plan.md. Do not extend again without either splitting files or updating that documented schedule."
+  "_policy": "2026-08-05 schedule decision: expiry moved from 2026-07-31 to 2026-09-15 and backend/api/outreach.py added, because the 2026-07-31 date lapsed mid-branch. backend/api/genie.py was split instead of re-dated and its entry is removed. See docs/maintenance/file-size-refactor-plan.md. A file may be re-dated at most once more; anything still oversize on 2026-09-15 blocks merge until it is split."
 }

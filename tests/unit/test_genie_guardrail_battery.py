@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import pytest
 
-from backend.api.genie import _protected_prompt_match
+from backend.services.genie_deterministic import _protected_prompt_match
 from backend.services.genie_prompt_guardrails import (
     cross_lender_prompt_match,
     instruction_override_prompt_match,

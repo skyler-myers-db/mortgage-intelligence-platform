@@ -10,14 +10,6 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from pydantic import SecretStr, ValidationError
 
-from backend.api.genie import (
-    _cross_lender_prompt_match,
-    _instruction_override_prompt_match,
-    _outside_footprint_match,
-    _pii_prompt_match,
-    _scope_bypass_prompt_match,
-    _source_gap_prompt_match,
-)
 from backend.config.settings import settings
 from backend.main import app
 from backend.schemas.common import validate_public_audit_identifier_or_none
@@ -39,6 +31,14 @@ from backend.services.genie_answers import (
     GenieMessageResponse,
 )
 from backend.services.genie_client import GenieClientError
+from backend.services.genie_deterministic import (
+    _cross_lender_prompt_match,
+    _instruction_override_prompt_match,
+    _outside_footprint_match,
+    _pii_prompt_match,
+    _scope_bypass_prompt_match,
+    _source_gap_prompt_match,
+)
 from backend.services.lakebase import LakebaseError, get_lakebase_client
 from backend.services.repositories import get_genie_answer_repository
 from backend.services.repositories.databricks_genie_actions import _route_from_answer_rows
@@ -437,7 +437,7 @@ def test_genie_message_refuses_lowercase_common_person_name() -> None:
     ],
 )
 def test_fair_lending_guard_allows_loan_age_and_place_names(question: str) -> None:
-    from backend.api.genie import _protected_prompt_match
+    from backend.services.genie_deterministic import _protected_prompt_match
 
     assert _protected_prompt_match(question) is None, question
 
@@ -451,7 +451,7 @@ def test_fair_lending_guard_allows_loan_age_and_place_names(question: str) -> No
     ],
 )
 def test_identity_guard_allows_reviewed_product_and_geography_phrases(question: str) -> None:
-    from backend.api.genie import _identity_prompt_match
+    from backend.services.genie_deterministic import _identity_prompt_match
 
     assert _identity_prompt_match(question) is False
 
@@ -470,7 +470,7 @@ def test_identity_guard_allows_reviewed_product_and_geography_phrases(question: 
 def test_fair_lending_guard_still_refuses_protected_usage(
     question: str, expected_term: str
 ) -> None:
-    from backend.api.genie import _protected_prompt_match
+    from backend.services.genie_deterministic import _protected_prompt_match
 
     assert _protected_prompt_match(question) == expected_term, question
 
