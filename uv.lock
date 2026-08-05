@@ -2,8 +2,10 @@
 #    uv pip compile requirements.in --python-version 3.11 --format requirements.txt --output-file uv.lock
 aiohappyeyeballs==2.6.2
     # via aiohttp
-aiohttp==3.14.1
-    # via mlflow
+aiohttp==3.14.3
+    # via
+    #   -r requirements.in
+    #   mlflow
 aiosignal==1.4.0
     # via aiohttp
 alembic==1.18.5
@@ -33,7 +35,7 @@ botocore==1.43.50
     # via
     #   boto3
     #   s3transfer
-cachetools==7.1.4
+cachetools==6.2.6
     # via
     #   mlflow-skinny
     #   mlflow-tracing
@@ -57,7 +59,7 @@ contourpy==1.3.3
     # via matplotlib
 coverage==7.14.0
     # via pytest-cov
-cryptography==48.0.1
+cryptography==49.0.0
     # via
     #   -r requirements.in
     #   google-auth
@@ -95,7 +97,7 @@ frozenlist==1.8.0
     #   aiosignal
 gitdb==4.0.12
     # via gitpython
-gitpython==3.1.56
+gitpython==3.1.58
     # via
     #   -r requirements.in
     #   mlflow-skinny
@@ -115,7 +117,7 @@ graphql-relay==3.2.0
     # via graphene
 grpcio==1.80.0
     # via opentelemetry-exporter-otlp-proto-grpc
-gunicorn==26.0.0
+gunicorn==23.0.0
     # via mlflow
 h11==0.16.0
     # via
@@ -127,7 +129,7 @@ httptools==0.7.1
     # via uvicorn
 httpx==0.28.1
     # via -r requirements.in
-huey==3.0.3
+huey==3.3.4
     # via mlflow
 hypothesis==6.123.7
     # via -r requirements.in
@@ -169,11 +171,11 @@ markupsafe==3.0.3
     #   werkzeug
 matplotlib==3.11.0
     # via mlflow
-mlflow==3.14.0
+mlflow==3.15.1
     # via -r requirements.in
-mlflow-skinny==3.14.0
+mlflow-skinny==3.15.1
     # via mlflow
-mlflow-tracing==3.14.0
+mlflow-tracing==3.15.1
     # via mlflow
 multidict==6.7.1
     # via
@@ -232,7 +234,7 @@ opentelemetry-sdk==1.41.1
     #   opentelemetry-exporter-otlp-proto-http
 opentelemetry-semantic-conventions==0.62b1
     # via opentelemetry-sdk
-packaging==26.2
+packaging==25.0
     # via
     #   gunicorn
     #   matplotlib
@@ -271,8 +273,10 @@ psycopg==3.3.4
     # via -r requirements.in
 psycopg-binary==3.3.4
     # via psycopg
-pyarrow==24.0.0
-    # via mlflow
+pyarrow==25.0.0
+    # via
+    #   -r requirements.in
+    #   mlflow
 pyasn1==0.6.4
     # via
     #   -r requirements.in

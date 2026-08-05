@@ -10,20 +10,37 @@ databricks-sql-connector==4.2.6
 # Required by tools/databricks/run_agent_eval.py. Deploy fails closed if
 # mlflow.genai.evaluate is missing so "MLflow Agent Evaluation" cannot be
 # claimed from local scorer metrics alone.
-mlflow>=3.1.3,<4
+# Pinned exactly. A range let the resolver backtrack to mlflow 3.2.0 (24
+# advisories) in order to satisfy a newer cryptography; 3.15.1 is the first
+# release whose bound (cryptography<50) admits the 49.0.0 security fix.
+mlflow==3.15.1
 # MLflow's Unity Catalog registration path reads the newly created model
 # artifacts back from the metastore's S3 storage before marking a version
 # ready. The plain ``mlflow`` extra does not install the AWS artifact client,
 # so CI deploys must carry it explicitly instead of relying on ambient tooling.
 boto3==1.43.50
-cryptography==48.0.1  # security floor for GHSA-537c-gmf6-5ccf via google-auth
+# Security floor for GHSA-537c-gmf6-5ccf via google-auth, raised to 49.0.0 for
+# PYSEC-2026-3553 and PYSEC-2026-3554. PYSEC-2026-3552 is fixed only in
+# 50.0.0, which no non-vulnerable mlflow admits (3.15.1 caps cryptography
+# below 50). That advisory is a Bleichenbacher oracle in PKCS#7
+# EnvelopedData decryption; this app never decrypts PKCS#7 or S/MIME — it
+# uses cryptography only for Ed25519 signature verification — so the
+# vulnerable code path is unreachable. See ci.yml's pip-audit ignore.
+cryptography==49.0.0
 # Security floors for GHSA-2f96-g7mh-g2hx, GHSA-v396-v7q4-x2qj,
 # GHSA-956x-8gvw-wg5v, GHSA-8ppf-4f7h-5ppj, GHSA-hm4w-wwcw-mr6r,
 # and GHSA-94p4-4cq8-9g67.
 # MLflow and google-auth pull these transitively; pin the reviewed fixes so a
 # lock refresh cannot silently restore the vulnerable releases.
-gitpython>=3.1.55,<4
+gitpython>=3.1.57,<4  # adds GHSA-3f7w-8rr8-f37f
 pyasn1>=0.6.4,<1
+# Security floor for PYSEC-2026-3545/PYSEC-2026-3546/PYSEC-2026-3547. MLflow
+# pulls aiohttp transitively; keep the reviewed fix explicit so a lock
+# refresh cannot silently restore the vulnerable release.
+aiohttp>=3.14.3
+# Security floor for PYSEC-2026-113. MLflow pulls pyarrow transitively and a
+# resolver backtrack dropped it to 21.0.0; hold the reviewed version.
+pyarrow>=24.0.0
 # Security floor for PYSEC-2026-175/PYSEC-2026-177/PYSEC-2026-178/PYSEC-2026-179.
 # databricks-sql-connector depends on PyJWT; keep the transitive pin explicit
 # so pip-audit failures have a first-party dependency contract to resolve.

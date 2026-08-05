@@ -66,9 +66,9 @@ GATEWAY_MODEL_CANONICAL_TAGS = frozenset(
     }
 )
 GATEWAY_MODEL_REQUIREMENTS = (
-    "mlflow==3.14.0",
+    "mlflow==3.15.1",
     "databricks-sdk==0.103.0",
-    "cryptography==48.0.1",
+    "cryptography==49.0.0",
 )
 GATEWAY_STATIC_ENV = {
     "ENABLE_LANGCHAIN_STREAMING": "true",
