@@ -16,14 +16,20 @@ mlflow>=3.1.3,<4
 # ready. The plain ``mlflow`` extra does not install the AWS artifact client,
 # so CI deploys must carry it explicitly instead of relying on ambient tooling.
 boto3==1.43.50
-cryptography==48.0.1  # security floor for GHSA-537c-gmf6-5ccf via google-auth
+# Security floor for GHSA-537c-gmf6-5ccf via google-auth, raised to 50.0.0 for
+# PYSEC-2026-3552/PYSEC-2026-3553/PYSEC-2026-3554.
+cryptography==50.0.0
 # Security floors for GHSA-2f96-g7mh-g2hx, GHSA-v396-v7q4-x2qj,
 # GHSA-956x-8gvw-wg5v, GHSA-8ppf-4f7h-5ppj, GHSA-hm4w-wwcw-mr6r,
 # and GHSA-94p4-4cq8-9g67.
 # MLflow and google-auth pull these transitively; pin the reviewed fixes so a
 # lock refresh cannot silently restore the vulnerable releases.
-gitpython>=3.1.55,<4
+gitpython>=3.1.57,<4  # adds GHSA-3f7w-8rr8-f37f
 pyasn1>=0.6.4,<1
+# Security floor for PYSEC-2026-3545/PYSEC-2026-3546/PYSEC-2026-3547. MLflow
+# pulls aiohttp transitively; keep the reviewed fix explicit so a lock
+# refresh cannot silently restore the vulnerable release.
+aiohttp>=3.14.3
 # Security floor for PYSEC-2026-175/PYSEC-2026-177/PYSEC-2026-178/PYSEC-2026-179.
 # databricks-sql-connector depends on PyJWT; keep the transitive pin explicit
 # so pip-audit failures have a first-party dependency contract to resolve.
