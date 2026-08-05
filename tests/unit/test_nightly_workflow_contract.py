@@ -325,7 +325,12 @@ def test_mocked_economics_canary_is_explicitly_separate_from_real_uc_proof() -> 
 def test_real_genie_browser_proof_executes_bound_native_follow_up() -> None:
     spec = REAL_DATA_SPEC.read_text(encoding="utf-8")
 
-    assert "followUpResponse.request().postDataJSON()" in spec
+    # The interactive surfaces ask through the async lifecycle, so the POST
+    # that carries {question, conversation_id} is `/genie/message/submit`, not
+    # the retired blocking `/genie/message`. The proof still has to read that
+    # request body and bind it to the first native conversation.
+    assert "genie/message/submit" in spec
+    assert "submit.request().postDataJSON()" in spec
     assert "followUpRequest.conversation_id" in spec
     assert "toBe(firstConversationId)" in spec
     assert "standalone native Genie follow-up" in spec

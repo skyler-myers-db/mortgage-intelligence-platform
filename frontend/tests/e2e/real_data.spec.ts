@@ -369,7 +369,15 @@ function expectMaskedCotalityIds(payload: unknown, label: string) {
 async function clickSegmentCard(page: Page, label: string) {
   const card = page.locator('.seg-card', { hasText: label });
   await expect(card, `segment card ${label} should be ready`).toBeVisible({ timeout: 45_000 });
-  await card.click();
+  // Click the title, not the card's geometric centre. The card embeds evidence
+  // and product/channel affordances that call event.stopPropagation(), and how
+  // tall those make the card depends on the deployment's data — on coverage
+  // that renders the extra breakdown rows the centre lands on the evidence
+  // control, which opens the Evidence Drawer instead of selecting the segment
+  // and then blocks every later click with its scrim. The title is outside
+  // every stopPropagation subtree, so selection is exercised the same way in
+  // any environment.
+  await card.locator('.seg-card__title').click();
 }
 
 async function chooseFilter(page: Page, label: string, value: string) {
@@ -377,6 +385,61 @@ async function chooseFilter(page: Page, label: string, value: string) {
   await expect(trigger, `filter ${label} should be ready`).toBeVisible({ timeout: 45_000 });
   await trigger.click();
   await page.getByRole('option', { name: value, exact: true }).click();
+}
+
+type GenieTurnRequest = { question?: string; conversation_id?: string | null };
+
+/**
+ * Drive one Genie turn and return both halves of it.
+ *
+ * The interactive surfaces moved off the single blocking `/genie/message`
+ * call to the async lifecycle (submit → progress → complete), so a live turn
+ * no longer produces one request/response pair:
+ *
+ *  - `/message/submit` always happens and carries `{question, conversation_id}`
+ *    — the request-shape assertions belong to it.
+ *  - the governed answer arrives on `/message/complete`, EXCEPT for turns that
+ *    resolve deterministically (guardrail refusal, sales-ops, footprint,
+ *    degraded fallback), which never reach `/complete` and instead return
+ *    `{completed: true, response}` on `/submit` itself.
+ *
+ * Accept whichever terminal call the turn actually makes and hand back the
+ * unwrapped GenieMessageResponse, so callers assert on one payload shape.
+ */
+async function captureGenieTurn(
+  page: Page,
+  act: () => Promise<void>,
+  timeout = 120_000,
+): Promise<{ request: GenieTurnRequest; payload: LiveGeniePayload }> {
+  const isSubmit = (url: string) => /\/api\/(?:v1\/)?genie\/message\/submit$/.test(url);
+  const submitPromise = page.waitForResponse(
+    (candidate) => candidate.request().method() === 'POST' && isSubmit(candidate.url()),
+    { timeout },
+  );
+  const terminalPromise = page.waitForResponse(async (candidate) => {
+    if (candidate.request().method() !== 'POST') return false;
+    const url = candidate.url();
+    if (/\/api\/(?:v1\/)?genie\/message\/complete$/.test(url)) return true;
+    if (!isSubmit(url)) return false;
+    try {
+      return ((await candidate.json()) as { completed?: boolean }).completed === true;
+    } catch {
+      return false;
+    }
+  }, { timeout });
+
+  await act();
+
+  const submit = await submitPromise;
+  expect(submit.status(), 'Genie submit returned non-200').toBe(200);
+  const terminal = await terminalPromise;
+  expect(terminal.status(), 'Genie terminal call returned non-200').toBe(200);
+  const raw = (await terminal.json()) as LiveGeniePayload & {
+    completed?: boolean;
+    response?: LiveGeniePayload;
+  };
+  const payload = raw.completed === true && raw.response ? raw.response : (raw as LiveGeniePayload);
+  return { request: submit.request().postDataJSON() as GenieTurnRequest, payload };
 }
 
 async function clickSvgRegion(page: Page, target: Locator, label: string) {
@@ -984,14 +1047,9 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     const canonicalQ =
       'How many borrowers across current refreshed coverage are currently in-the-money?';
     await panel.getByLabel('Ask Genie').fill(canonicalQ);
-    const canonicalResponsePromise = page.waitForResponse((response) => (
-      response.request().method() === 'POST'
-      && /\/api\/(?:v1\/)?genie\/message$/.test(response.url())
-    ), { timeout: 60_000 });
-    await panel.getByRole('button', { name: /Ask/i }).click();
-    const canonicalResponse = await canonicalResponsePromise;
-    expect(canonicalResponse.status(), 'canonical Genie message returned non-200').toBe(200);
-    const canonicalPayload = await canonicalResponse.json() as LiveGeniePayload;
+    const { payload: canonicalPayload } = await captureGenieTurn(page, async () => {
+      await panel.getByRole('button', { name: /Ask/i }).click();
+    }, 60_000);
     expectGovernedGeniePayload(canonicalPayload, 'canonical FAB answer');
     expect(
       canonicalPayload.source,
@@ -1877,14 +1935,9 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     );
     const askButton = page.getByRole('button', { name: /^Ask Genie$/i }).first();
     await expect(askButton).toBeVisible();
-    const responsePromise = page.waitForResponse((response) => (
-      response.request().method() === 'POST'
-      && /\/api\/(?:v1\/)?genie\/message$/.test(response.url())
-    ), { timeout: 120_000 });
-    await askButton.click();
-    const response = await responsePromise;
-    expect(response.status(), 'native Genie message returned non-200').toBe(200);
-    const payload = await response.json() as LiveGeniePayload;
+    const { payload } = await captureGenieTurn(page, async () => {
+      await askButton.click();
+    });
     expect(payload.source, 'native aggregation must use the Genie answer tier').toBe('genie');
     expectLiveGenieTurn(payload, 'standalone native Genie answer');
 
@@ -1919,23 +1972,17 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     const restoredQuestion = page.locator('textarea[aria-label="Ask Genie — question"]');
     await expect(restoredQuestion).toBeVisible();
     await restoredQuestion.fill(followUpQuestion);
-    const followUpResponsePromise = page.waitForResponse((candidate) => (
-      candidate.request().method() === 'POST'
-      && /\/api\/(?:v1\/)?genie\/message$/.test(candidate.url())
-    ), { timeout: 120_000 });
-    await page.getByRole('button', { name: /^Ask Genie$/i }).first().click();
-    const followUpResponse = await followUpResponsePromise;
-    const followUpRequest = followUpResponse.request().postDataJSON() as {
-      question?: string;
-      conversation_id?: string | null;
-    };
+    const { request: followUpRequest, payload: followUpPayload } = await captureGenieTurn(
+      page,
+      async () => {
+        await page.getByRole('button', { name: /^Ask Genie$/i }).first().click();
+      },
+    );
     expect(followUpRequest.question).toBe(followUpQuestion);
     expect(
       followUpRequest.conversation_id,
       'live follow-up POST must carry the first native conversation id',
     ).toBe(firstConversationId);
-    expect(followUpResponse.status(), 'native Genie follow-up returned non-200').toBe(200);
-    const followUpPayload = await followUpResponse.json() as LiveGeniePayload;
     expect(followUpPayload.source, 'follow-up must remain on the native Genie tier').toBe('genie');
     expect(followUpPayload.conversation_id).toBe(firstConversationId);
     expectLiveGenieTurn(followUpPayload, 'standalone native Genie follow-up');
@@ -1954,22 +2001,14 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await expect(sampleButton).toBeVisible();
     const sampleQuestion = (await sampleButton.textContent())?.trim();
     expect(sampleQuestion, 'restored composer sample question is empty').toBeTruthy();
-    const sampleResponsePromise = page.waitForResponse((candidate) => (
-      candidate.request().method() === 'POST'
-      && /\/api\/(?:v1\/)?genie\/message$/.test(candidate.url())
-    ), { timeout: 120_000 });
-    await sampleButton.click();
-    const sampleResponse = await sampleResponsePromise;
-    const sampleRequest = sampleResponse.request().postDataJSON() as {
-      question?: string;
-      conversation_id?: string | null;
-    };
+    const { request: sampleRequest } = await captureGenieTurn(page, async () => {
+      await sampleButton.click();
+    });
     expect(sampleRequest.question).toBe(sampleQuestion);
     expect(
       sampleRequest.conversation_id,
       'live sample POST must keep the restored native conversation id',
     ).toBe(firstConversationId);
-    expect(sampleResponse.status(), 'restored Genie sample returned non-200').toBe(200);
   });
 
   test('ask-genie: listed days-on-market prompt returns trusted app proof', async ({ page }) => {
