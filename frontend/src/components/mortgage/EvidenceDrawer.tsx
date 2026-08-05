@@ -42,7 +42,27 @@ const LINEAGE_LAYER_LABELS: Record<LineageLayer, string> = {
   reference: 'Reference',
 };
 
-function LineageManifestChip({ node }: { node: LineageManifestNode }) {
+/**
+ * A governed asset name carries the prototype's `.lineage-node__name`
+ * (design_files/index.html:698) wherever it renders — chip row or chain node.
+ * That class is the evidence contract: "this KPI traces to this Unity Catalog
+ * object" is asserted against `.lineage-node__name`.
+ *
+ * `display` overrides the visible text without changing where the chip links.
+ * Signal rows use it to keep their column-level pointer
+ * (`portfolio_headline_metric_view.in_the_money`) while still deep-linking to
+ * the table; the governed-asset row and the lineage chain show the manifest's
+ * fully-qualified `catalog.schema.object`. Keeping the table FQN to a single
+ * slot per drawer is also what makes it addressable by an exact locator.
+ */
+function LineageManifestChip({
+  node,
+  display,
+}: {
+  node: LineageManifestNode;
+  display?: string;
+}) {
+  const text = display ?? node.fqn;
   if (node.catalog_explorer_url) {
     return (
       <a
@@ -52,7 +72,7 @@ function LineageManifestChip({ node }: { node: LineageManifestNode }) {
         rel="noreferrer"
         aria-label={`${node.label} — open ${node.fqn} in Catalog Explorer`}
       >
-        {node.fqn}
+        <span className="lineage-node__name">{text}</span>
         <Icon name="export" size={10} />
       </a>
     );
@@ -62,7 +82,7 @@ function LineageManifestChip({ node }: { node: LineageManifestNode }) {
       className="chip chip--neutral lineage-node__chip"
       title="Catalog Explorer link unavailable — no workspace host configured"
     >
-      {node.fqn}
+      <span className="lineage-node__name">{text}</span>
     </span>
   );
 }
@@ -595,7 +615,7 @@ export function EvidenceDrawer() {
                         <div>
                           <div className="lineage-node__label">{s.label}</div>
                           {catalogNode ? (
-                            <LineageManifestChip node={catalogNode} />
+                            <LineageManifestChip node={catalogNode} display={s.source} />
                           ) : (
                             <div className="lineage-node__name">{s.source}</div>
                           )}
