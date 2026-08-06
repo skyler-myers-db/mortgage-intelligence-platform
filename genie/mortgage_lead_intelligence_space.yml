@@ -367,7 +367,8 @@ trusted_assets:
       Refreshed trigger evidence table of events (rate_spread, equity,
       market_trend, competitor_lien, multi_property, absentee_mailing,
       corporate_owner, recent_refi, recent_payoff, recent_sale,
-      foreclosure_stage, listing, heloc_propensity, refi_propensity) per borrower with a UTC timestamp, confidence, and
+      foreclosure_stage, listing, heloc_propensity, refi_propensity,
+      product_type, origination_channel, loan_type_fit) per borrower with a UTC timestamp, confidence, and
       source-table citation. Filed building-permit trigger feeds are pending
       Cotality delivery and remain disabled today. Use this for
       supporting proof, timelines, and trigger freshness; offer rationale text
