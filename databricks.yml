@@ -58,6 +58,21 @@ sync:
   # audited React Router release requires Node 22.22 for package installation.
   # Keep the repository-level npm wrapper out of the uploaded App source so
   # the managed runtime consumes only the already-validated static build.
+  #
+  # Load-bearing, not hygiene (2026-08-05 incident): a root package.json in
+  # the App source makes the Apps build phase run its `build` script on every
+  # deployment, recompiling frontend/dist from the uploaded sources on the
+  # unaudited platform Node (EBADENGINE demotes the engines mismatch to a
+  # warning, so the rebuild succeeds) and overwriting the prebuilt bundle.
+  # Verified on CLI v1.10.0 (2026-08-05 scratch-bundle experiment): a bundle
+  # deploy honours this exclusion both ways — the manifests are never
+  # uploaded AND previously-uploaded copies are deleted from the target tree,
+  # with or without local sync-snapshot state. Residual exposure is deploys
+  # from checkouts predating this block (that is how the manifests returned
+  # to the paychex tree on 2026-08-05) and App promotions outside
+  # scripts/deploy.sh; the governed path closes both by running
+  # tools/databricks/converge_static_app_source.py right before every
+  # promotion. Full story: docs/deployment.md "App source contract".
   exclude:
     - /package.json
     - /package-lock.json

@@ -2,9 +2,20 @@
 #
 # Command: uvicorn (via backend.runtime) honouring DATABRICKS_APP_PORT.
 # Build:   `scripts/deploy.sh` builds the React bundle under the audited CI
-#          Node version before bundle sync. The uploaded App source deliberately
-#          has no root npm manifest or runtime build command; FastAPI serves the
-#          prebuilt `frontend/dist/` bundle at `/`.
+#          Node version before bundle sync; FastAPI serves the prebuilt
+#          `frontend/dist/` bundle at `/`. The PROMOTED App source must carry
+#          no root npm manifest: if a root package.json reaches the tree, the
+#          Databricks Apps build phase runs its `build` script on every
+#          deployment with the platform Node (22.16 vs the audited 22.22 —
+#          the engines mismatch is only an EBADENGINE warning, so the build
+#          SUCCEEDS) and recompiles frontend/dist from the uploaded
+#          frontend/src, replacing the prebuilt bundle. That silent rebuild
+#          is what kept reverting a dist-only hotfix on 2026-08-05.
+#          Enforced twice: databricks.yml sync.exclude (upload filter +
+#          server-side delete on current CLI) and
+#          tools/databricks/converge_static_app_source.py immediately before
+#          every governed App promotion. Contract details:
+#          docs/deployment.md "App source contract".
 # Env:     workspace identity + resource bindings (see databricks.yml
 #          `resources.apps.mip_app.resources`) are surfaced here as env
 #          vars. Backend reads them via backend/config/settings.py +
