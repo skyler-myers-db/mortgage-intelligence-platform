@@ -530,6 +530,48 @@ ORDER BY opportunity_score DESC, rank_overall ASC, borrower_id ASC
 LIMIT 10
 """.strip()
 
+# Driver-rich variant of the global top-borrowers ranking for "top candidates
+# across all segments + what makes each one strong + which offer" questions.
+# Each row carries a SQL-computed ``why_now`` driver summary so the per-borrower
+# rationale is grounded in gold columns, never model prose.
+_CANONICAL_TOP_BORROWERS_ALL_SEGMENTS_SQL = f"""
+SELECT borrower_id
+     , display_name
+     , city
+     , state
+     , zip
+     , array_join(segment_codes, ', ') AS segments
+     , opportunity_score
+     , rate_spread_bps
+     , equity_pct
+     , equity_estimate
+     , concat_ws(' | ',
+         CASE
+           WHEN in_the_money = TRUE AND rate_spread_bps IS NOT NULL
+           THEN concat('In the money: +', CAST(CAST(ROUND(rate_spread_bps, 0) AS BIGINT) AS STRING), ' bps rate spread')
+         END,
+         CASE
+           WHEN equity_pct IS NOT NULL AND equity_pct >= 35
+           THEN concat('Strong equity: ', CAST(CAST(ROUND(equity_pct, 0) AS BIGINT) AS STRING), '%')
+         END,
+         CASE WHEN listed_for_sale = TRUE THEN 'Listed for sale' END,
+         CASE
+           WHEN related_property_count IS NOT NULL AND related_property_count >= 2
+           THEN concat('Investor: ', CAST(related_property_count AS STRING), ' related properties')
+         END,
+         CASE WHEN array_contains(segment_codes, 'retention') THEN 'Retention / recapture risk' END,
+         CASE WHEN has_heloc_propensity_trigger = TRUE THEN 'HELOC propensity trigger' END
+       ) AS why_now
+     , recommended_offer_code
+     , recommended_offer
+     , refreshed_at
+FROM {_BORROWER_360}
+WHERE {_ELIGIBLE}
+  AND consent_status = 'opt_in'
+ORDER BY opportunity_score DESC, rate_spread_bps DESC NULLS LAST, borrower_id ASC
+LIMIT 10
+""".strip()
+
 _CANONICAL_TOP_REFI_BORROWERS_BY_STATE_SQL = f"""
 SELECT borrower_id
      , display_name
@@ -2037,11 +2079,40 @@ def _canonical_top_borrowers_state_scope(question: str) -> tuple[str, str] | Non
     return _canonical_itm_state_scope(question)
 
 
+_ALL_SEGMENTS_SCOPE_TERMS = (
+    "across all segments",
+    "across segments",
+    "across every segment",
+    "all segments",
+    "every segment",
+    "across the portfolio",
+    "entire portfolio",
+    "whole portfolio",
+    "portfolio-wide",
+    "portfolio wide",
+)
+
+# "Why" language that asks for per-borrower rationale, not just a ranking.
+_TOP_BORROWER_WHY_TERMS = (
+    "why",
+    "what makes",
+    "reason",
+    "rationale",
+    "explain",
+    "driver",
+    "justif",
+)
+
+
+def _has_all_segments_scope(q: str) -> bool:
+    return any(term in q for term in _ALL_SEGMENTS_SCOPE_TERMS)
+
+
 def _canonical_top_borrowers_global_scope(question: str) -> bool:
     q = _normalized_question(question)
     if _retention_competitor_lien_list_question(question):
         return False
-    if not _has_global_coverage_scope(q):
+    if not (_has_global_coverage_scope(q) or _has_all_segments_scope(q)):
         return False
     if _canonical_itm_state_scope(question) is not None:
         return False
@@ -2049,12 +2120,41 @@ def _canonical_top_borrowers_global_scope(question: str) -> bool:
         return False
     return (
         _has_rank_intent(q)
-        and any(term in q for term in ("borrower", "borrowers", "lead", "leads"))
+        and any(
+            term in q
+            for term in ("borrower", "borrowers", "lead", "leads", "candidate", "candidates")
+        )
         and (
-            any(term in q for term in ("lead score", "opportunity score", "score", "offer", "any offer"))
+            any(
+                term in q
+                for term in (
+                    "lead score",
+                    "opportunity score",
+                    "score",
+                    "offer",
+                    "any offer",
+                    "candidate",
+                    "candidates",
+                )
+            )
             or "best" in q
         )
     )
+
+
+def _canonical_top_borrowers_all_segments_scope(question: str) -> bool:
+    """Global candidate ranking that also asks WHY each borrower is strong.
+
+    Matches "top borrower candidates across all segments — what makes each one
+    a good candidate and which offer should we make?"-family questions. The
+    per-intent and per-state scopes stay in charge of their narrower shapes.
+    """
+    q = _normalized_question(question)
+    if not _canonical_top_borrowers_global_scope(question):
+        return False
+    if _canonical_listed_purchase_scope(question):
+        return False
+    return any(term in q for term in _TOP_BORROWER_WHY_TERMS)
 
 
 def _specific_top_borrower_intent(q: str) -> str | None:

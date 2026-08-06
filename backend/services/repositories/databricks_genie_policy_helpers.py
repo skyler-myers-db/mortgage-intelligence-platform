@@ -142,7 +142,12 @@ def _trusted_sql_repair_prompt(question: str) -> str:
         "is_current_customer and is_competitor_lien to both be true. For evidence "
         "trigger questions, use the governed signal_type enum exactly as modeled; "
         "competitor-lien evidence is signal_type = 'competitor_lien', never "
-        "'lien-change' or 'competitor'. User question: "
+        "'lien-change' or 'competitor'. For top-borrower or top-candidate ranking "
+        f"questions, return per-borrower rows from {borrower_asset} with "
+        "segment_codes, opportunity_score, rate_spread_bps, equity_pct, and the "
+        "governed recommended_offer columns, filtered to marketing-eligible opt-in "
+        "borrowers and ordered by opportunity_score, so the answer can explain why "
+        "each borrower ranks and which offer applies. User question: "
         f"{question}"
     )
 

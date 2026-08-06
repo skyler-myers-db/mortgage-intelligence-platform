@@ -154,6 +154,16 @@ class _RetentionEligibilitySqlClient(_UniversalSqlClient):
             "What are the overall best borrowers for any offer?",
             "mip.gold.lead_population",
         ),
+        (
+            "What are the top borrower candidates across all segments overall, what makes "
+            "them such good candidates exactly (for each one), and what is the exact offer "
+            "we should make to each and why?",
+            "mip.gold.borrower_360",
+        ),
+        (
+            "What are the top borrower candidates across all segments?",
+            "mip.gold.lead_population",
+        ),
         ("Show me the top 10 borrowers by lead score in Illinois.", "mip.gold.lead_population"),
         (
             "Top 5 ZIP codes by HELOC-eligible borrowers with equity at least 35%.",

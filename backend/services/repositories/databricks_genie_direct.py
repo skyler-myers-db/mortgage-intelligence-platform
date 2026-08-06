@@ -64,6 +64,7 @@ from backend.services.repositories.databricks_genie_canonical import (
     _CANONICAL_RETENTION_ELIGIBILITY_SUMMARY_GLOBAL_SQL,
     _CANONICAL_SEGMENT_APPROVAL_RATE_SQL,
     _CANONICAL_STRATEGY_BOARD_SQL,
+    _CANONICAL_TOP_BORROWERS_ALL_SEGMENTS_SQL,
     _CANONICAL_TOP_BORROWERS_BY_STATE_INTENT_SQL,
     _CANONICAL_TOP_BORROWERS_BY_STATE_SQL,
     _CANONICAL_TOP_BORROWERS_GLOBAL_INTENT_SQL,
@@ -112,6 +113,7 @@ from backend.services.repositories.databricks_genie_canonical import (
     _canonical_specific_top_borrowers_global_scope,
     _canonical_specific_top_borrowers_state_scope,
     _canonical_strategy_board_scope,
+    _canonical_top_borrowers_all_segments_scope,
     _canonical_top_borrowers_global_scope,
     _canonical_top_borrowers_state_scope,
     _canonical_top_cash_out_by_equity_scope,
@@ -1014,6 +1016,56 @@ def direct_canonical_response(
             question=question,
             sql_query=_CANONICAL_TOP_BORROWERS_BY_STATE_SQL,
             trusted_assets=[lead_population_asset],
+            rows=rows,
+            answer=answer,
+        )
+
+    if _canonical_top_borrowers_all_segments_scope(question):
+        try:
+            rows = (
+                _redact_genie_rows(sql_client.execute(_CANONICAL_TOP_BORROWERS_ALL_SEGMENTS_SQL))
+                or []
+            )
+        except DatabricksSqlError as exc:
+            _emit_genie_warning(
+                "direct_canonical_genie_top_borrowers_all_segments_failed", exc=exc
+            )
+            return None
+        if rows:
+            top = rows[0]
+            top_offer = offer_display_label(
+                str(top.get("recommended_offer_code") or ""),
+                str(top.get("recommended_offer") or ""),
+            )
+            top_why = str(top.get("why_now") or "").strip()
+            top_why_clause = f" Why now: {top_why}." if top_why else ""
+            answer = (
+                f"I ranked the top {len(rows)} marketing-eligible, opt-in borrowers "
+                f"across every segment from {borrower_asset}, ordered by opportunity "
+                "score with rate-spread economics as the tiebreaker. Each row lists "
+                "the borrower's segments, the live signals that make them a strong "
+                "candidate right now (rate spread, equity, listing, multi-property, "
+                "retention, HELOC propensity), and the governed next-best offer those "
+                "signals drive. The current first borrower is masked "
+                f"{top.get('borrower_id')} in {top.get('city')}, {top.get('state')} "
+                f"with opportunity score {int(top.get('opportunity_score') or 0):,}; "
+                f"the recommended offer is {top_offer}.{top_why_clause} Offers follow "
+                "the governed next-best-offer rules — deep equity favors cash-out, a "
+                "wide positive rate spread favors a rate-improvement refinance, an "
+                "active listing favors purchase financing, and retention risk favors "
+                "recapture outreach — and every recommendation still requires human "
+                "approval in the Lead Queue."
+            )
+        else:
+            answer = (
+                "The trusted borrower table returned no marketing-eligible, opt-in "
+                "borrowers across the segment portfolio for the current refreshed "
+                "coverage."
+            )
+        return trusted_response(
+            question=question,
+            sql_query=_CANONICAL_TOP_BORROWERS_ALL_SEGMENTS_SQL,
+            trusted_assets=[borrower_asset],
             rows=rows,
             answer=answer,
         )
