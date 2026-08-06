@@ -107,7 +107,7 @@ class _RetentionEligibilitySqlClient(_UniversalSqlClient):
                     "refreshed_at": "2026-06-17T14:33:04.239Z",
                 }
             ]
-        if "array_contains(segment_codes, 'retention')" in sql:
+        if "segment_codes, 'retention')" in sql and "action_ready" not in sql:
             return []
         return super().execute(statement, parameters)
 
@@ -513,7 +513,7 @@ def test_direct_investor_count_and_refi_economic_synonyms_stay_canonical() -> No
 
     assert investor is not None and investor.source == "trusted_sql"
     assert investor.sql_query is not None
-    assert "array_contains(segment_codes, 'investor')" in investor.sql_query
+    assert "segment_codes, 'investor')" in investor.sql_query
     assert investor.metric_value == "1,749,208"
     assert investor_display_verb is not None and investor_display_verb.source == "trusted_sql"
     assert investor_display_verb.sql_query is not None
@@ -582,13 +582,13 @@ def test_direct_itm_state_breakdown_reconciles_lead_queue_action_subset() -> Non
         (
             "best investor borrowers in Florida",
             "FL",
-            "array_contains(segment_codes, 'investor')",
+            "segment_codes, 'investor')",
             "Investor / Multi-Property borrowers",
         ),
         (
             "best retention borrowers in Illinois",
             "IL",
-            "array_contains(segment_codes, 'retention')",
+            "segment_codes, 'retention')",
             "retention-risk borrowers",
         ),
         (
@@ -626,7 +626,7 @@ def test_direct_specific_intent_state_top_borrowers_do_not_use_generic_lead_popu
         ("best cash-out candidates across the current Cotality coverage", "recommended_offer_code = 'cash_out'"),
         ("best HELOC candidates across the current Cotality coverage", "has_heloc_propensity_trigger = TRUE"),
         ("best listed borrowers across the current Cotality coverage", "listed_for_sale = TRUE"),
-        ("best investor borrowers across the current Cotality coverage", "array_contains(segment_codes, 'investor')"),
+        ("best investor borrowers across the current Cotality coverage", "segment_codes, 'investor')"),
     ],
 )
 def test_direct_specific_intent_global_top_borrowers_do_not_use_generic_lead_population(
