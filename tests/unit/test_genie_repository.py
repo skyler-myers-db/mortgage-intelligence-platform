@@ -27,6 +27,8 @@ from backend.services.genie_client import GenieClientError, GenieResponse
 from backend.services.repositories.databricks_genie_canonical import (
     _CANONICAL_ITM_TOP_LEAD_QUEUE_ZIPS_SQL,
     _CANONICAL_ITM_TOP_ZIPS_SQL,
+    _CANONICAL_TOP_BORROWERS_ALL_SEGMENTS_SQL,
+    _canonical_top_borrowers_all_segments_scope,
 )
 from backend.services.repositories.databricks_genie_policy_helpers import (
     genie_follow_up_questions,
@@ -1127,6 +1129,94 @@ def test_data_question_without_query_gets_generic_sql_repair() -> None:
     assert result.visualization.y == "in_the_money_borrowers"
     assert result.table_rows is not None
     assert result.table_rows[0]["zip"] == 60617
+
+
+_ALL_SEGMENTS_ESSENCE_QUESTION = (
+    "What are the top borrower candidates across all segments overall, what makes "
+    "them such good candidates exactly (for each one), and what is the exact offer "
+    "we should make to each and why?"
+)
+
+
+@pytest.mark.parametrize(
+    ("question", "expected"),
+    [
+        (_ALL_SEGMENTS_ESSENCE_QUESTION, True),
+        (
+            "Show the top borrowers across all segments and explain why each one "
+            "is a good candidate.",
+            True,
+        ),
+        # No why/rationale language -> the thin ranked-lead answer keeps the shape.
+        (
+            "Show me the top 10 borrowers by lead score across the current Cotality "
+            "data coverage.",
+            False,
+        ),
+        # Explicit intent stays with the per-intent canonical ranking.
+        ("What are the top cash-out borrower candidates overall and why?", False),
+        # State-scoped questions stay with the per-state canonical ranking.
+        ("What are the top borrower candidates in Texas and why?", False),
+    ],
+)
+def test_all_segments_top_candidates_scope_matcher(question: str, expected: bool) -> None:
+    assert _canonical_top_borrowers_all_segments_scope(question) is expected
+
+
+def test_text_only_all_segments_top_candidates_returns_driver_rich_answer() -> None:
+    """The product's essence question must never end in a governed refusal.
+
+    A live turn that returns no SQL proof (and a repair turn that also fails)
+    lands on the canonical all-segments repair: driver-rich rows from
+    gold.borrower_360 with a per-borrower ``why_now`` rationale and the
+    governed next-best offer.
+    """
+    text_only = GenieResponse(
+        answer_text="",
+        sql_query=None,
+        sql_result_rows=[],
+        conversation_id="conv-all-seg",
+        message_id="msg-all-seg",
+    )
+    stub = _StubClient(_make_breaker("closed"), response=[text_only, text_only])
+    sql = _StubSqlClient(
+        [
+            {
+                "borrower_id": "B-1ABCDEFGHIJKL",
+                "display_name": "Masked Borrower",
+                "city": "Aurora",
+                "state": "IL",
+                "zip": "60505",
+                "segments": "itm, equity",
+                "opportunity_score": 94,
+                "rate_spread_bps": 183,
+                "equity_pct": 47,
+                "equity_estimate": 312000,
+                "why_now": "In the money: +183 bps rate spread | Strong equity: 47%",
+                "recommended_offer_code": "refi",
+                "recommended_offer": "Rate-improvement refinance",
+                "refreshed_at": "2026-08-05T02:00:00Z",
+            }
+        ]
+    )
+    repo = DatabricksGenieRepository(stub, sql)  # type: ignore[arg-type]
+
+    result = repo.respond(_ALL_SEGMENTS_ESSENCE_QUESTION)
+
+    assert result.source == "trusted_sql"
+    assert result.sql_query == _CANONICAL_TOP_BORROWERS_ALL_SEGMENTS_SQL
+    assert "why_now" in result.sql_query
+    assert "FROM mip.gold.borrower_360" in result.sql_query
+    assert result.trusted_assets == ["mip.gold.borrower_360"]
+    assert result.table_rows
+    assert result.table_rows[0]["why_now"].startswith("In the money")
+    assert "B-1ABCDEFGHIJKL" in result.answer
+    assert "recommended offer is" in result.answer
+    assert "Why now: In the money: +183 bps rate spread" in result.answer
+    assert result.proof is not None
+    assert result.proof.trusted is True
+    # The live path still tried an ask plus one governed SQL-repair retry.
+    assert len(stub.ask_calls) == 2
 
 
 def test_top_zip_question_uses_direct_canonical_gold_sql_without_genie_call() -> None:

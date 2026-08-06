@@ -166,14 +166,6 @@ export function GenieProgress({
           <pre className="mono">{sql}</pre>
         </details>
       )}
-
-      <div className="genie-progress__meta">
-        {progress
-          ? 'Live from the Databricks Genie Conversation API.'
-          : dense
-            ? 'The live request is still pending.'
-            : 'The answer will appear after the live request completes.'}
-      </div>
     </div>
   );
 }

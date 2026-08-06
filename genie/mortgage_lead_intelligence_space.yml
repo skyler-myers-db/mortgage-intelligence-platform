@@ -582,6 +582,43 @@ example_question_sqls:
         FROM market_scores
         ORDER BY borrowers DESC, avg_score DESC
         LIMIT 5
+  - question: >-
+      What are the top borrower candidates across all segments overall, what
+      makes each one a strong candidate, and which offer should we make to each?
+    sql:
+      - |
+        SELECT
+          borrower_id,
+          city,
+          state,
+          array_join(segment_codes, ', ') AS segments,
+          opportunity_score,
+          rate_spread_bps,
+          equity_pct,
+          concat_ws(' | ',
+            CASE
+              WHEN in_the_money = TRUE AND rate_spread_bps IS NOT NULL
+              THEN concat('In the money: +', CAST(CAST(ROUND(rate_spread_bps, 0) AS BIGINT) AS STRING), ' bps rate spread')
+            END,
+            CASE
+              WHEN equity_pct IS NOT NULL AND equity_pct >= 35
+              THEN concat('Strong equity: ', CAST(CAST(ROUND(equity_pct, 0) AS BIGINT) AS STRING), '%')
+            END,
+            CASE WHEN listed_for_sale = TRUE THEN 'Listed for sale' END,
+            CASE
+              WHEN related_property_count IS NOT NULL AND related_property_count >= 2
+              THEN concat('Investor: ', CAST(related_property_count AS STRING), ' related properties')
+            END,
+            CASE WHEN array_contains(segment_codes, 'retention') THEN 'Retention / recapture risk' END,
+            CASE WHEN has_heloc_propensity_trigger = TRUE THEN 'HELOC propensity trigger' END
+          ) AS why_now,
+          recommended_offer,
+          refreshed_at
+        FROM mip.gold.borrower_360
+        WHERE marketing_eligible = TRUE
+          AND consent_status = 'opt_in'
+        ORDER BY opportunity_score DESC, rate_spread_bps DESC NULLS LAST, borrower_id ASC
+        LIMIT 10
   - question: Which borrowers should I review first for refinance plus HELOC?
     sql:
       - |
