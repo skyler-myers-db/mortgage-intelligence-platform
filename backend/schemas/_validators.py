@@ -352,7 +352,8 @@ _NON_PERSON_TITLECASE_SUFFIXES = frozenset(
         "meadows", "mesa", "oaks", "park", "pines", "plains", "point", "prairie",
         "rapids", "ridge", "shores", "springs", "station", "valley", "village",
         "vista", "woods",
-        "equity", "heloc", "loan", "mortgage", "offer", "refi", "refinance", "review",
+        "equity", "heloc", "loan", "mortgage", "offer", "queue", "refi",
+        "refinance", "review",
         "candidate", "candidates", "intent", "risk", "sale", "segment", "segments",
         # fmt: on
     }

@@ -141,6 +141,51 @@ def test_segment_display_labels_render_in_strategy_prose() -> None:
         assert genie_visible_text_unsafe(prose) is False, label
 
 
+def test_full_analyst_brief_passes_the_router_gate() -> None:
+    """The in-depth brief cites Owner Link, Lead Queue, cities, and product
+    labels — all product vocabulary that must render, end to end."""
+
+    from backend.services.genie_message_policy import genie_visible_text_unsafe
+    from backend.services.repositories.databricks_genie_canonical import (
+        compose_all_segments_brief,
+    )
+
+    rows = [
+        {
+            "borrower_id": "B-0N122RBMBT4PK",
+            "city": "LAKE FOREST",
+            "state": "CA",
+            "segments": "itm, listed, investor, heloc_draw_to_payback, refi_propensity",
+            "opportunity_score": 90,
+            "rate_spread_bps": 271,
+            "equity_pct": 76,
+            "equity_estimate": 912000,
+            "current_rate": 9.01,
+            "current_lien_balance": 288000,
+            "avm_value": 1200000,
+            "in_the_money": True,
+            "listed_for_sale": True,
+            "listing_status_category": "active",
+            "related_property_count": 9,
+            "heloc_propensity_score": 851,
+            "has_heloc_propensity_trigger": True,
+            "is_current_customer": False,
+            "min_spread_bps_applied": 75,
+            "min_equity_pct_applied": 15,
+            "heloc_equity_min_applied": 35,
+            "cashout_equity_min_applied": 25,
+            "why_now": "In the money: +271 bps rate spread | Strong equity: 76%",
+            "recommended_offer_code": "purchase",
+            "recommended_offer": "Purchase Mortgage",
+            "refreshed_at": "2026-08-06T13:16:31Z",
+        }
+    ]
+    brief = compose_all_segments_brief(rows, "mip.gold.borrower_360")
+    assert "heloc_draw_to_payback" not in brief
+    assert "ownership records" in brief
+    assert genie_visible_text_unsafe(brief) is False
+
+
 def test_router_gate_still_blocks_real_pii_in_prose_and_rows() -> None:
     named = _visible_response(answer="Call John Smith at 431 Maple Street.")
     assert genie_response_has_unsafe_visible_text(named) is True

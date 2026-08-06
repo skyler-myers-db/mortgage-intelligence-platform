@@ -532,8 +532,11 @@ LIMIT 10
 
 # Driver-rich variant of the global top-borrowers ranking for "top candidates
 # across all segments + what makes each one strong + which offer" questions.
-# Each row carries a SQL-computed ``why_now`` driver summary so the per-borrower
-# rationale is grounded in gold columns, never model prose.
+# Carries the raw economics (rate, balance, home value), the behavioral
+# signals, and the run-specific policy thresholds so the analyst brief can
+# interpret every number in plain language, plus a SQL-computed ``why_now``
+# driver summary for the table view — all grounded in gold columns, never
+# model prose.
 _CANONICAL_TOP_BORROWERS_ALL_SEGMENTS_SQL = f"""
 SELECT borrower_id
      , display_name
@@ -545,6 +548,20 @@ SELECT borrower_id
      , rate_spread_bps
      , equity_pct
      , equity_estimate
+     , current_rate
+     , current_lien_balance
+     , avm_value
+     , in_the_money
+     , listed_for_sale
+     , listing_status_category
+     , related_property_count
+     , heloc_propensity_score
+     , has_heloc_propensity_trigger
+     , is_current_customer
+     , min_spread_bps_applied
+     , min_equity_pct_applied
+     , heloc_equity_min_applied
+     , cashout_equity_min_applied
      , concat_ws(' | ',
          CASE
            WHEN in_the_money = TRUE AND rate_spread_bps IS NOT NULL
@@ -573,29 +590,20 @@ LIMIT 10
 """.strip()
 
 
-def _brief_offer_reason(code: str, row: dict[str, Any]) -> str:
-    """One clause explaining WHY the governed offer follows from row drivers."""
+def _brief_money(value: Any) -> str | None:
+    """Format a dollar amount the way an analyst would say it aloud."""
 
-    equity = row.get("equity_pct")
-    spread = row.get("rate_spread_bps")
-    equity_txt = f"{int(round(float(equity)))}% modeled equity" if equity is not None else "the modeled equity"
-    spread_txt = (
-        f"the +{int(round(float(spread)))} bps rate spread" if spread is not None else "the rate spread"
-    )
-    reasons = {
-        "refi": f"{spread_txt} clears the refinance-economics screen",
-        "refi_plus_heloc": (
-            f"{spread_txt} clears the refinance-economics screen and "
-            f"{equity_txt} supports the home-equity add-on"
-        ),
-        "heloc": f"{equity_txt} supports an equity line without disturbing the first mortgage",
-        "cash_out": f"{equity_txt} supports pulling cash while refinancing",
-        "purchase": "the active listing signals an upcoming purchase and financing need",
-        "investor": "the multi-property profile fits investor financing",
-        "retention": "retention-risk signals favor a recapture touch before a competitor closes",
-        "nurture": "signals are early, so monitor rather than contact",
-    }
-    return reasons.get(code, "the governed next-best-offer rules select it from the row's signals")
+    try:
+        amount = float(value)
+    except (TypeError, ValueError):
+        return None
+    if amount <= 0:
+        return None
+    if amount >= 1_000_000:
+        return f"${amount / 1_000_000:.2f}M"
+    if amount >= 1_000:
+        return f"${amount / 1_000:.0f}k"
+    return f"${amount:,.0f}"
 
 
 def _brief_city_label(row: dict[str, Any]) -> str:
@@ -606,13 +614,225 @@ def _brief_city_label(row: dict[str, Any]) -> str:
     return city.title() or state or "coverage area"
 
 
+def _brief_int(value: Any) -> int | None:
+    try:
+        return int(round(float(value)))
+    except (TypeError, ValueError):
+        return None
+
+
+# Overlay segment codes translated into the sentence an analyst would say.
+# Raw codes like ``heloc_draw_to_payback`` must never reach the narrative.
+_BRIEF_OVERLAY_SIGNALS: tuple[tuple[str, str], ...] = (
+    (
+        "heloc_draw_to_payback",
+        "an existing home-equity line is nearing the end of its draw period, "
+        "which usually brings a payment jump — a natural moment to restructure",
+    ),
+    (
+        "home_equity_history",
+        "they have borrowed against home equity before, so the product is familiar territory",
+    ),
+    (
+        "second_lien_itm",
+        "they carry an expensive second lien that is worth consolidating",
+    ),
+    (
+        "refi_propensity",
+        "Cotality's refinance-propensity model independently flags them as likely to act",
+    ),
+    (
+        "itm_on_related_property",
+        "another property they own also passes the refinance screen",
+    ),
+    (
+        "payoff_loss_leads",
+        "they recently paid off a loan, which opens a recapture window",
+    ),
+)
+
+
+def _brief_position_sentences(row: dict[str, Any]) -> list[str]:
+    """The borrower's mortgage position, in plain dollars-and-rates English."""
+
+    sentences: list[str] = []
+    balance = _brief_int(row.get("current_lien_balance")) or 0
+    avm = _brief_money(row.get("avm_value"))
+    equity_money = _brief_money(row.get("equity_estimate"))
+    equity_pct = _brief_int(row.get("equity_pct"))
+    rate = row.get("current_rate")
+    rate_f = None
+    try:
+        rate_f = float(rate) if rate is not None and float(rate) > 0 else None
+    except (TypeError, ValueError):
+        rate_f = None
+    if balance > 0 and rate_f is not None and avm:
+        base = (
+            f"They are paying {rate_f:.2f}% on roughly "
+            f"{_brief_money(balance)} of remaining mortgage against a home "
+            f"valued around {avm}"
+        )
+        if equity_money and equity_pct is not None:
+            base += (
+                f", which leaves about {equity_money} of equity — they own "
+                f"{equity_pct}% of the home's value outright"
+            )
+        sentences.append(base + ".")
+    elif balance == 0 and avm:
+        owned = (
+            f"They own the home outright — no mortgage balance remains against "
+            f"a value of about {avm}"
+        )
+        if equity_money:
+            owned += f", so all {equity_money} of it is equity"
+        sentences.append(owned + ".")
+    spread = _brief_int(row.get("rate_spread_bps"))
+    min_spread = _brief_int(row.get("min_spread_bps_applied"))
+    if row.get("in_the_money") and spread and rate_f is not None:
+        market = rate_f - spread / 100.0
+        points = spread / 100.0
+        threshold_txt = (
+            f" — well past the {min_spread}-bps mark where a refinance typically "
+            "starts paying for itself"
+            if min_spread and spread >= 2 * min_spread
+            else (
+                f" — clearing the {min_spread}-bps refinance threshold"
+                if min_spread
+                else ""
+            )
+        )
+        sentences.append(
+            f"Today's market rate is roughly {market:.2f}%, so they are "
+            f"overpaying by about {points:.2f} percentage points "
+            f"({spread} basis points){threshold_txt}."
+        )
+    return sentences
+
+
+def _brief_signal_sentences(row: dict[str, Any]) -> list[str]:
+    """Behavioral and ownership signals, translated from codes into stories."""
+
+    sentences: list[str] = []
+    segments = {code.strip() for code in str(row.get("segments") or "").split(",")}
+    if row.get("listed_for_sale"):
+        status = str(row.get("listing_status_category") or "").strip().lower()
+        status_txt = f" ({status})" if status and status not in {"none", "unknown"} else ""
+        sentences.append(
+            f"The home is actively listed for sale{status_txt} — the strongest "
+            "intent signal in the funnel, because when it sells this borrower "
+            "needs financing for the next one."
+        )
+    related = _brief_int(row.get("related_property_count")) or 0
+    if related >= 2:
+        sentences.append(
+            f"Cotality's mastered ownership records tie them to {related} "
+            "properties in total, marking an experienced multi-property "
+            "investor rather than a first-time borrower."
+        )
+    propensity = _brief_int(row.get("heloc_propensity_score"))
+    if row.get("has_heloc_propensity_trigger") and propensity:
+        sentences.append(
+            f"Cotality's HELOC-propensity model scores them {propensity} out "
+            "of 999 — top-tier likelihood of opening a home-equity line, "
+            "based on behavioral and property patterns, not marketing guesses."
+        )
+    overlays = [text for code, text in _BRIEF_OVERLAY_SIGNALS if code in segments]
+    if overlays:
+        joined = "; ".join(overlays[:3])
+        sentences.append(f"On top of that, {joined}.")
+    if row.get("is_current_customer"):
+        sentences.append(
+            "They are also an existing customer, so this is a retention "
+            "conversation, not a cold introduction."
+        )
+    return sentences
+
+
+def _brief_offer_paragraph(row: dict[str, Any]) -> str:
+    """The offer, the reason it follows from the numbers, and the play."""
+
+    code = str(row.get("recommended_offer_code") or "")
+    offer = offer_display_label(code, str(row.get("recommended_offer") or ""))
+    spread = _brief_int(row.get("rate_spread_bps"))
+    equity_pct = _brief_int(row.get("equity_pct"))
+    heloc_min = _brief_int(row.get("heloc_equity_min_applied"))
+    cashout_min = _brief_int(row.get("cashout_equity_min_applied"))
+    equity_money = _brief_money(row.get("equity_estimate"))
+    balance = _brief_int(row.get("current_lien_balance")) or 0
+    spread_clause = (
+        f"the {spread}-bps rate gap makes the refinance case on its own"
+        if spread
+        else "the rate economics make the refinance case"
+    )
+    equity_clause = (
+        f"{equity_pct}% equity"
+        + (f" (about {equity_money})" if equity_money else "")
+        + (f" clears the {heloc_min}% home-equity bar" if heloc_min else "")
+    )
+    plays = {
+        "refi_plus_heloc": (
+            f"{spread_clause}, and {equity_clause}, so the same conversation can "
+            "add a home-equity line. The play: lead with the rate savings, then "
+            "present the equity line as optional flexibility rather than a "
+            "second pitch."
+        ),
+        "refi": (
+            f"{spread_clause}; equity sits below the "
+            f"{heloc_min or 'home-equity'}% bar, so keep it a clean "
+            "rate-improvement conversation without upsell noise."
+        ),
+        "heloc": (
+            f"{equity_clause}, and the propensity signals say the appetite is "
+            "there. The play: an equity line that leaves their current "
+            "first mortgage untouched."
+        ),
+        "cash_out": (
+            (
+                "There is no rate incentive to lead with, but "
+                if not row.get("in_the_money")
+                else ""
+            )
+            + f"{equity_clause}"
+            + (f" (cash-out threshold: {cashout_min}%)" if cashout_min else "")
+            + (
+                ". With no remaining mortgage, this is unlocking cash against a "
+                "debt-free home on their terms."
+                if balance == 0
+                else ". The play: convert locked-up equity into usable cash in one refinance."
+            )
+        ),
+        "purchase": (
+            "the active listing means a purchase-loan need on the next home. "
+            "The play: get a pre-approval in place before the sale closes, so "
+            "the financing is ready the day they buy."
+        ),
+        "investor": (
+            "the multi-property profile routes to investor financing — "
+            "portfolio-aware terms rather than a single-home product."
+        ),
+        "retention": (
+            "the relationship plus rate-drift signals say a competitor could "
+            "take this loan; the play is a proactive retention review before "
+            "that call happens."
+        ),
+        "nurture": (
+            "the signals are real but early — keep them in the funnel and "
+            "let the triggers mature before spending an outreach touch."
+        ),
+    }
+    reason = plays.get(code, "the governed next-best-offer rules select it from this row's signals.")
+    return f"**The offer: {offer}.** {reason[0].upper() + reason[1:] if reason else reason}"
+
+
 def compose_all_segments_brief(rows: list[dict[str, Any]], borrower_asset: str) -> str:
     """Deterministic analyst brief for the all-segments top-candidates shape.
 
-    One bullet per candidate — drivers, governed offer, and the reason the
-    offer follows — plus a cohort synthesis. Every number is read from the
-    governed rows, so the brief can never carry an unverifiable claim. Renders
-    through the answer markdown (paragraphs, ``- `` bullets, ``**bold**``).
+    Written for a Head of Growth, not a mortgage quant: every term is
+    explained inline, every number is interpreted in dollars and plain
+    English, raw segment codes never leak into prose, and each candidate ends
+    with the concrete play. Every figure reads from the governed rows, so the
+    brief can never carry an unverifiable claim. Renders through the answer
+    markdown (paragraph blocks, ``**bold**``).
     """
 
     if not rows:
@@ -622,62 +842,80 @@ def compose_all_segments_brief(rows: list[dict[str, Any]], borrower_asset: str) 
             "coverage."
         )
     refreshed = str(rows[0].get("refreshed_at") or "")[:10]
-    refreshed_txt = f" (refreshed {refreshed})" if refreshed else ""
-    lines: list[str] = [
-        f"I ranked all marketing-eligible, opt-in borrowers across every segment "
-        f"at the unique borrower grain from {borrower_asset}{refreshed_txt}, "
-        "ordered by opportunity score with rate-spread economics as the "
-        f"tiebreaker. Here are the top {len(rows)} candidates, what makes each "
-        "one strong right now, and the governed offer each set of signals "
-        "drives:",
-        "",
+    refreshed_txt = f", refreshed {refreshed}," if refreshed else ""
+    top = rows[0]
+    min_spread = _brief_int(top.get("min_spread_bps_applied"))
+    min_equity = _brief_int(top.get("min_equity_pct_applied"))
+    screen_txt = (
+        f"at least {min_spread} bps of spread with at least {min_equity}% equity"
+        if min_spread and min_equity
+        else "enough spread and equity"
+    )
+    blocks: list[str] = [
+        (
+            f"I ranked every marketing-eligible, opt-in borrower in "
+            f"{borrower_asset}{refreshed_txt} by **opportunity score** — a "
+            "0-100 blend of refinance economics, home equity, listing "
+            "activity, portfolio ownership, retention risk, and Cotality's "
+            "behavioral propensity models — with rate-spread economics "
+            "breaking ties. Two terms recur below: **rate spread** is how far "
+            "a borrower's current mortgage rate sits above today's market "
+            "rate, measured in basis points (100 bps = 1 percentage point), "
+            "and a borrower is **in the money** when that gap is wide enough "
+            f"to make refinancing pay for itself ({screen_txt} under the "
+            f"current policy). Here are the top {len(rows)} candidates in "
+            "depth:"
+        )
     ]
     for rank, row in enumerate(rows, start=1):
-        offer_code = str(row.get("recommended_offer_code") or "")
-        offer = offer_display_label(offer_code, str(row.get("recommended_offer") or ""))
-        why_now = str(row.get("why_now") or "").strip()
-        segments = str(row.get("segments") or "").strip()
-        score = row.get("opportunity_score")
-        score_txt = f"score {int(round(float(score)))}" if score is not None else "scored"
-        parts = [
-            f"**#{rank} {row.get('borrower_id')}** — {_brief_city_label(row)} — {score_txt}"
-        ]
-        if segments:
-            parts.append(f"segments: {segments}")
-        if why_now:
-            parts.append(f"why now: {why_now}")
-        parts.append(f"offer: **{offer}** because {_brief_offer_reason(offer_code, row)}")
-        lines.append(f"- {'. '.join(parts)}.")
-    itm_rows = [r for r in rows if "In the money" in str(r.get("why_now") or "")]
-    equity_rows = [r for r in rows if "Strong equity" in str(r.get("why_now") or "")]
-    listed_rows = [r for r in rows if "Listed for sale" in str(r.get("why_now") or "")]
-    investor_rows = [r for r in rows if "Investor:" in str(r.get("why_now") or "")]
-    retention_rows = [r for r in rows if "Retention" in str(r.get("why_now") or "")]
+        score = _brief_int(row.get("opportunity_score"))
+        header = (
+            f"**#{rank} · {row.get('borrower_id')} · {_brief_city_label(row)} · "
+            f"opportunity score {score if score is not None else '—'}/100.**"
+        )
+        story = " ".join(
+            [*_brief_position_sentences(row), *_brief_signal_sentences(row)]
+        )
+        offer_par = _brief_offer_paragraph(row)
+        blocks.append(f"{header} {story}".strip())
+        blocks.append(offer_par)
+    itm_rows = [r for r in rows if r.get("in_the_money")]
+    listed_rows = [r for r in rows if r.get("listed_for_sale")]
+    investor_rows = [r for r in rows if (_brief_int(r.get("related_property_count")) or 0) >= 2]
+    heloc_rows = [r for r in rows if r.get("has_heloc_propensity_trigger")]
     cohort_bits: list[str] = []
     if itm_rows:
-        spreads = [float(r["rate_spread_bps"]) for r in itm_rows if r.get("rate_spread_bps") is not None]
-        avg_txt = f" (average +{int(round(sum(spreads) / len(spreads)))} bps)" if spreads else ""
-        cohort_bits.append(
-            f"{len(itm_rows)} of {len(rows)} pass the refinance-economics screen{avg_txt}"
-        )
-    if equity_rows:
-        cohort_bits.append(f"{len(equity_rows)} carry 35%+ modeled equity")
+        spreads = [
+            float(r["rate_spread_bps"]) for r in itm_rows if r.get("rate_spread_bps") is not None
+        ]
+        if spreads:
+            avg = int(round(sum(spreads) / len(spreads)))
+            cohort_bits.append(
+                f"{len(itm_rows)} of {len(rows)} are in the money with an "
+                f"average gap of about {avg} bps (~{avg / 100:.1f} percentage "
+                "points above market)"
+            )
+        else:
+            cohort_bits.append(f"{len(itm_rows)} of {len(rows)} are in the money")
     if listed_rows:
-        cohort_bits.append(f"{len(listed_rows)} are actively listed for sale")
+        cohort_bits.append(f"{len(listed_rows)} have homes actively listed for sale")
     if investor_rows:
-        cohort_bits.append(f"{len(investor_rows)} show multi-property investor profiles")
-    if retention_rows:
-        cohort_bits.append(f"{len(retention_rows)} carry retention risk")
-    lines.append("")
-    cohort_txt = f"Cohort picture: {'; '.join(cohort_bits)}. " if cohort_bits else ""
-    lines.append(
-        f"{cohort_txt}Offers follow the governed next-best-offer rules, and every "
-        "recommendation still requires human approval in the Lead Queue before "
-        "any outreach."
+        cohort_bits.append(f"{len(investor_rows)} are multi-property investors")
+    if heloc_rows:
+        cohort_bits.append(
+            f"{len(heloc_rows)} carry top-tier HELOC-propensity model scores"
+        )
+    cohort_txt = (
+        f"**The cohort picture:** {'; '.join(cohort_bits)}. " if cohort_bits else ""
     )
-    lines.append("")
-    lines.append(f"Source: {borrower_asset}")
-    return "\n".join(lines)
+    blocks.append(
+        f"{cohort_txt}Offers come from the governed next-best-offer rules — "
+        "the same decision tree the Lead Queue uses — and every "
+        "recommendation still requires human approval there before any "
+        "outreach happens."
+    )
+    blocks.append(f"Source: {borrower_asset}")
+    return "\n\n".join(blocks)
 
 _CANONICAL_TOP_REFI_BORROWERS_BY_STATE_SQL = f"""
 SELECT borrower_id
