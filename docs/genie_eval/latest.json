@@ -1,5 +1,5 @@
 {
-  "stamp": "2026-08-06T14-37-44Z",
+  "stamp": "2026-08-06T22-51-05Z",
   "base": "https://mip-app-2543889327043640.aws.databricksapps.com",
   "overall_score": 100.0,
   "passed": 19,
@@ -10,7 +10,7 @@
       "category": "top-N",
       "score": 100.0,
       "passed": true,
-      "latency_s": 21.89,
+      "latency_s": 23.65,
       "source": "trusted_sql",
       "checks": {
         "citations": true,
@@ -26,7 +26,7 @@
         "guardrail": true
       },
       "notes": [
-        "latency 21.9s > target 8.0s"
+        "latency 23.6s > target 8.0s"
       ]
     },
     {
@@ -34,7 +34,7 @@
       "category": "top-N",
       "score": 100.0,
       "passed": true,
-      "latency_s": 15.68,
+      "latency_s": 22.94,
       "source": "trusted_sql",
       "checks": {
         "citations": true,
@@ -50,7 +50,7 @@
         "guardrail": true
       },
       "notes": [
-        "latency 15.7s > target 8.0s"
+        "latency 22.9s > target 8.0s"
       ]
     },
     {
@@ -58,7 +58,7 @@
       "category": "chart-planner",
       "score": 100.0,
       "passed": true,
-      "latency_s": 18.36,
+      "latency_s": 17.49,
       "source": "trusted_sql",
       "checks": {
         "citations": true,
@@ -74,7 +74,7 @@
         "guardrail": true
       },
       "notes": [
-        "latency 18.4s > target 8.0s"
+        "latency 17.5s > target 8.0s"
       ]
     },
     {
@@ -82,7 +82,7 @@
       "category": "aggregate",
       "score": 100.0,
       "passed": true,
-      "latency_s": 14.81,
+      "latency_s": 12.48,
       "source": "trusted_sql",
       "checks": {
         "citations": true,
@@ -98,7 +98,7 @@
         "guardrail": true
       },
       "notes": [
-        "latency 14.8s > target 6.0s"
+        "latency 12.5s > target 6.0s"
       ]
     },
     {
@@ -106,7 +106,7 @@
       "category": "aggregate",
       "score": 100.0,
       "passed": true,
-      "latency_s": 12.59,
+      "latency_s": 12.91,
       "source": "trusted_sql",
       "checks": {
         "citations": true,
@@ -122,7 +122,7 @@
         "guardrail": true
       },
       "notes": [
-        "latency 12.6s > target 6.0s"
+        "latency 12.9s > target 6.0s"
       ]
     },
     {
@@ -130,7 +130,7 @@
       "category": "aggregate",
       "score": 100.0,
       "passed": true,
-      "latency_s": 19.14,
+      "latency_s": 17.24,
       "source": "trusted_sql",
       "checks": {
         "citations": true,
@@ -146,7 +146,7 @@
         "guardrail": true
       },
       "notes": [
-        "latency 19.1s > target 8.0s"
+        "latency 17.2s > target 8.0s"
       ]
     },
     {
@@ -154,7 +154,7 @@
       "category": "aggregate",
       "score": 100.0,
       "passed": true,
-      "latency_s": 0.93,
+      "latency_s": 1.16,
       "source": "out_of_footprint",
       "checks": {
         "citations": true,
@@ -176,7 +176,7 @@
       "category": "strategy",
       "score": 100.0,
       "passed": true,
-      "latency_s": 20.56,
+      "latency_s": 21.15,
       "source": "trusted_sql",
       "checks": {
         "citations": true,
@@ -192,7 +192,7 @@
         "guardrail": true
       },
       "notes": [
-        "latency 20.6s > target 10.0s"
+        "latency 21.1s > target 10.0s"
       ]
     },
     {
@@ -200,7 +200,7 @@
       "category": "strategy",
       "score": 100.0,
       "passed": true,
-      "latency_s": 15.21,
+      "latency_s": 19.61,
       "source": "trusted_sql",
       "checks": {
         "citations": true,
@@ -216,7 +216,7 @@
         "guardrail": true
       },
       "notes": [
-        "latency 15.2s > target 10.0s"
+        "latency 19.6s > target 10.0s"
       ]
     },
     {
@@ -224,7 +224,7 @@
       "category": "segment",
       "score": 100.0,
       "passed": true,
-      "latency_s": 16.56,
+      "latency_s": 14.35,
       "source": "genie",
       "checks": {
         "citations": true,
@@ -240,7 +240,7 @@
         "guardrail": true
       },
       "notes": [
-        "latency 16.6s > target 8.0s"
+        "latency 14.3s > target 8.0s"
       ]
     },
     {
@@ -248,7 +248,7 @@
       "category": "governance",
       "score": 100.0,
       "passed": true,
-      "latency_s": 0.84,
+      "latency_s": 0.95,
       "source": "data_gap",
       "checks": {
         "citations": true,
@@ -270,7 +270,7 @@
       "category": "trigger",
       "score": 100.0,
       "passed": true,
-      "latency_s": 29.92,
+      "latency_s": 25.72,
       "source": "trusted_sql",
       "checks": {
         "citations": true,
@@ -286,7 +286,7 @@
         "guardrail": true
       },
       "notes": [
-        "latency 29.9s > target 8.0s"
+        "latency 25.7s > target 8.0s"
       ]
     },
     {
@@ -294,7 +294,7 @@
       "category": "governance",
       "score": 100.0,
       "passed": true,
-      "latency_s": 0.93,
+      "latency_s": 1.0,
       "source": "out_of_footprint",
       "checks": {
         "citations": true,
@@ -316,7 +316,7 @@
       "category": "governance",
       "score": 100.0,
       "passed": true,
-      "latency_s": 1.11,
+      "latency_s": 1.07,
       "source": "refused",
       "checks": {
         "citations": true,
@@ -338,7 +338,7 @@
       "category": "governance",
       "score": 100.0,
       "passed": true,
-      "latency_s": 0.95,
+      "latency_s": 1.03,
       "source": "refused",
       "checks": {
         "citations": true,
@@ -360,7 +360,7 @@
       "category": "aggregate",
       "score": 100.0,
       "passed": true,
-      "latency_s": 21.68,
+      "latency_s": 17.28,
       "source": "trusted_sql",
       "checks": {
         "citations": true,
@@ -376,7 +376,7 @@
         "guardrail": true
       },
       "notes": [
-        "latency 21.7s > target 8.0s"
+        "latency 17.3s > target 8.0s"
       ]
     },
     {
@@ -384,7 +384,7 @@
       "category": "deep-analysis",
       "score": 100.0,
       "passed": true,
-      "latency_s": 32.17,
+      "latency_s": 33.92,
       "source": "trusted_sql",
       "checks": {
         "citations": true,
@@ -406,7 +406,7 @@
       "category": "deep-analysis",
       "score": 100.0,
       "passed": true,
-      "latency_s": 27.09,
+      "latency_s": 30.83,
       "source": "trusted_sql",
       "checks": {
         "citations": true,
@@ -428,7 +428,7 @@
       "category": "deep-analysis",
       "score": 100.0,
       "passed": true,
-      "latency_s": 25.11,
+      "latency_s": 26.15,
       "source": "trusted_sql",
       "checks": {
         "citations": true,
