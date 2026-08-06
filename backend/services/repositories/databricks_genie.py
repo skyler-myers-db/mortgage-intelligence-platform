@@ -423,20 +423,20 @@ def _adapt_genie_response(
     )
     # Trusted SQL overlays are allowed to answer known grain-sensitive
     # questions only when the live Genie turn is not unsafe. They must not
-    # mask PII, untrusted SQL, or pending-feed dependence. Text-only turns can
+    # mask untrusted SQL or pending-feed dependence. Text-only turns can
     # still be answered through this explicit `trusted_sql` source so users see
     # that the app used a governed canonical query rather than the raw Genie
-    # narrative.
+    # narrative. A narrative that trips the output text guard does NOT forfeit
+    # a recognized shape: the canonical answer replaces the model prose
+    # entirely (never renders it) and the withholding is disclosed in the
+    # proof, so a prose false positive degrades to a governed deterministic
+    # answer instead of a refusal.
     unsafe_live_sql = bool(result.sql_query and not trusted_sql)
     stale_evidence_enum_only = bool(
         result.sql_query
         and _trusted_sql_policy_allowing_stale_evidence_enum(result.sql_query, trusted_assets)
     )
-    if (
-        not text_contains_pii
-        and (not unsafe_live_sql or stale_evidence_enum_only)
-        and not depends_on_pending_feeds
-    ):
+    if (not unsafe_live_sql or stale_evidence_enum_only) and not depends_on_pending_feeds:
         canonical = _canonical_genie_answer(
             question=question,
             result=result,
@@ -448,7 +448,11 @@ def _adapt_genie_response(
             # narrative and live-intelligence fields so a recognized-shape turn
             # is not flattened into canned phrasing with the live artifacts
             # dropped.
-            return _restore_live_voice(canonical, result)
+            return _restore_live_voice(
+                canonical,
+                result,
+                narrative_withheld=text_contains_pii,
+            )
     if text_contains_pii or lacks_trusted_proof or unsafe_live_sql or depends_on_pending_feeds:
         if depends_on_pending_feeds:
             gaps = _known_data_gaps_for_result(
@@ -643,6 +647,8 @@ def _narrative_contradicts_metric(
 def _restore_live_voice(
     canonical: GenieMessageResponse,
     result: GenieResponse,
+    *,
+    narrative_withheld: bool = False,
 ) -> GenieMessageResponse:
     """Keep a recognized-shape trusted answer's governance but restore voice.
 
@@ -662,7 +668,18 @@ def _restore_live_voice(
     """
     reasoning_trace = genie_reasoning_trace_from_thoughts(result.thoughts)
     proof = canonical.proof
-    narrative = (result.answer_text or "").strip()
+    # A guard-flagged narrative is withheld wholesale: the deterministic
+    # canonical answer ships instead, and the withholding is disclosed below.
+    narrative = "" if narrative_withheld else (result.answer_text or "").strip()
+    if narrative_withheld and proof is not None:
+        gap = (
+            "Genie's draft narrative was withheld by the output safety guard; "
+            "presenting the verified deterministic summary instead."
+        )
+        if gap not in proof.known_data_gaps:
+            proof = proof.model_copy(
+                update={"known_data_gaps": [*proof.known_data_gaps, gap]}
+            )
     updates: dict[str, Any] = {}
     contradicted, _ = _narrative_contradicts_metric(
         narrative,
@@ -709,7 +726,7 @@ def _restore_live_voice(
         if note and note not in answer:
             answer = f"{answer}\n\n{note}"
         updates["answer"] = _ensure_answer_cites_source(answer, canonical.trusted_assets)
-    elif proof is not None:
+    elif proof is not None and not narrative_withheld:
         gap = "Genie returned no narrative; presenting the verified deterministic summary."
         if gap not in proof.known_data_gaps:
             proof = proof.model_copy(

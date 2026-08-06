@@ -1219,6 +1219,50 @@ def test_text_only_all_segments_top_candidates_returns_driver_rich_answer() -> N
     assert len(stub.ask_calls) == 2
 
 
+def test_pii_flagged_narrative_is_withheld_not_refused_for_canonical_shape() -> None:
+    """A guard-flagged narrative on a recognized shape degrades to the
+    governed deterministic answer with the model prose withheld and the
+    withholding disclosed — never a governed refusal, never rendered prose."""
+
+    flagged = GenieResponse(
+        answer_text="Call John Smith about his loan.",
+        sql_query=None,
+        sql_result_rows=[],
+        conversation_id="conv-withheld",
+        message_id="msg-withheld",
+    )
+    stub = _StubClient(_make_breaker("closed"), response=flagged)
+    sql = _StubSqlClient(
+        [
+            {
+                "borrower_id": "B-1ABCDEFGHIJKL",
+                "city": "Aurora",
+                "state": "IL",
+                "segments": "itm, equity",
+                "opportunity_score": 94,
+                "rate_spread_bps": 183,
+                "equity_pct": 47,
+                "why_now": "In the money: +183 bps rate spread | Strong equity: 47%",
+                "recommended_offer_code": "refi",
+                "recommended_offer": "Rate-improvement refinance",
+                "refreshed_at": "2026-08-05T02:00:00Z",
+            }
+        ]
+    )
+    repo = DatabricksGenieRepository(stub, sql)  # type: ignore[arg-type]
+
+    result = repo.respond(_ALL_SEGMENTS_ESSENCE_QUESTION)
+
+    assert result.source == "trusted_sql"
+    assert "John Smith" not in result.answer
+    assert "B-1ABCDEFGHIJKL" in result.answer
+    assert result.proof is not None
+    assert any("withheld by the output safety guard" in gap for gap in result.proof.known_data_gaps)
+    assert not any("returned no narrative" in gap for gap in result.proof.known_data_gaps)
+    # PII narratives are excluded from the SQL-repair retry; one live ask only.
+    assert len(stub.ask_calls) == 1
+
+
 def test_top_zip_question_uses_direct_canonical_gold_sql_without_genie_call() -> None:
     text_only = GenieResponse(
         answer_text="The top ZIP is 60617.",
