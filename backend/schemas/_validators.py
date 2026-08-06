@@ -336,7 +336,63 @@ _LEADING_ANALYTICS_COMMAND_RE = re.compile(
     r"\b(?:Compare|Explain|Find|List|Open|Prioritize|Rank|Review|Show|Target)\s+(?=[A-Z])"
 )
 _NON_PERSON_TITLECASE_SUFFIXES = frozenset(
-    {"borough", "city", "county", "metro", "msa", "parish", "region", "township"}
+    {
+        "borough",
+        "city",
+        "county",
+        "metro",
+        "msa",
+        "parish",
+        "region",
+        "township",
+        # US place-name geographic-feature suffixes (Lake Forest, Grand
+        # Prairie, Coral Springs). Title-case city names are sanctioned
+        # analytics output — borrower rows carry the same city strings — and
+        # no real-person identity in this product ever renders with these
+        # suffixes (borrower names never ship; display identities are
+        # synthetic masked IDs).
+        "beach",
+        "bluffs",
+        "canyon",
+        "creek",
+        "falls",
+        "forest",
+        "gardens",
+        "grove",
+        "harbor",
+        "heights",
+        "hills",
+        "island",
+        "junction",
+        "lake",
+        "lakes",
+        "meadows",
+        "mesa",
+        "oaks",
+        "park",
+        "pines",
+        "plains",
+        "point",
+        "prairie",
+        "rapids",
+        "ridge",
+        "shores",
+        "springs",
+        "station",
+        "valley",
+        "village",
+        "vista",
+        "woods",
+        # Mortgage-product phrase suffixes ("Purchase Mortgage",
+        # "Cash-Out Refinance", "Home-Equity Review") — governed offer
+        # vocabulary rendered in title case, never a person.
+        "heloc",
+        "loan",
+        "mortgage",
+        "offer",
+        "refinance",
+        "review",
+    }
 )
 _COMMON_FIRST_NAMES = frozenset(
     {
@@ -625,8 +681,21 @@ def assert_no_protected_class_marketing_text(value: str, *, field_name: str) -> 
     return value
 
 
-def contains_protected_class_marketing_text(value: str) -> bool:
-    """Return true for protected-class or obvious proxy targeting language."""
+def contains_protected_class_marketing_text(
+    value: str,
+    *,
+    assume_reviewed_read_only_analytics: bool = False,
+) -> bool:
+    """Return true for protected-class or obvious proxy targeting language.
+
+    ``assume_reviewed_read_only_analytics`` marks the caller's surface as a
+    read-only analytics narrative (Ask Genie answers) whose ranking vocabulary
+    ("candidates are those with the highest opportunity scores") is the
+    product's core language. It bypasses ONLY the fail-closed unknown-criterion
+    state machine that exists for campaign audience formation; every direct
+    protected-class, health-status, national-origin, and proxy-targeting
+    detector still runs.
+    """
 
     normalized = unicodedata.normalize("NFKC", str(value))
     # Campaign copy is an English-language governed surface. Invisible format
@@ -751,7 +820,7 @@ def contains_protected_class_marketing_text(value: str) -> bool:
     reviewed_analytics = is_reviewed_read_only_analytics_text(mark_folded)
     has_unreviewed_selection_criterion = (
         False
-        if reviewed_analytics
+        if (reviewed_analytics or assume_reviewed_read_only_analytics)
         else any(
             contains_unreviewed_selection_criterion(
                 mask_protected_health_safe_contexts(part),
@@ -858,13 +927,28 @@ def contains_mechanical_pii_or_raw_identifier(value: str) -> bool:
     return any(pattern.search(text) for pattern in _MECHANICAL_PII_OR_RAW_IDENTIFIER_PATTERNS)
 
 
-def contains_unsafe_ai_text(value: str, *, include_titlecase: bool = True) -> bool:
-    """Shared fail-closed guard for model-authored or model-directed prose."""
+def contains_unsafe_ai_text(
+    value: str,
+    *,
+    include_titlecase: bool = True,
+    assume_reviewed_read_only_analytics: bool = False,
+) -> bool:
+    """Shared fail-closed guard for model-authored or model-directed prose.
+
+    ``assume_reviewed_read_only_analytics`` relaxes only the campaign
+    audience-formation criterion machine (see
+    :func:`contains_protected_class_marketing_text`); it never disables the
+    PII, injection, confidential, name-shape, or direct protected-class
+    detectors.
+    """
 
     text = str(value)
     return (
         contains_mechanical_pii_or_raw_identifier(text)
-        or contains_protected_class_marketing_text(text)
+        or contains_protected_class_marketing_text(
+            text,
+            assume_reviewed_read_only_analytics=assume_reviewed_read_only_analytics,
+        )
         or contains_prompt_injection_text(text)
         or contains_confidential_or_internal_text(text)
         or contains_human_name_shape(text, include_titlecase=include_titlecase)
