@@ -336,63 +336,25 @@ _TITLECASE_HUMAN_NAME_RE = re.compile(
 _LEADING_ANALYTICS_COMMAND_RE = re.compile(
     r"\b(?:Compare|Explain|Find|List|Open|Prioritize|Rank|Review|Show|Target)\s+(?=[A-Z])"
 )
+# Title-case pairs ending in these words are never person names here:
+# admin/geographic place-name suffixes (Lake Forest, Grand Prairie, Coral
+# Springs — city strings are sanctioned analytics output and borrower rows
+# carry the same values), governed mortgage-product phrases ("Purchase
+# Mortgage", "Cash-Out Refinance"), and governed segment display labels
+# ("Prime Refi Candidates", "Home Equity Candidate", "Retention Risk").
+# Borrower names never ship; display identities are synthetic masked IDs.
 _NON_PERSON_TITLECASE_SUFFIXES = frozenset(
     {
-        "borough",
-        "city",
-        "county",
-        "metro",
-        "msa",
-        "parish",
-        "region",
-        "township",
-        # US place-name geographic-feature suffixes (Lake Forest, Grand
-        # Prairie, Coral Springs). Title-case city names are sanctioned
-        # analytics output — borrower rows carry the same city strings — and
-        # no real-person identity in this product ever renders with these
-        # suffixes (borrower names never ship; display identities are
-        # synthetic masked IDs).
-        "beach",
-        "bluffs",
-        "canyon",
-        "creek",
-        "falls",
-        "forest",
-        "gardens",
-        "grove",
-        "harbor",
-        "heights",
-        "hills",
-        "island",
-        "junction",
-        "lake",
-        "lakes",
-        "meadows",
-        "mesa",
-        "oaks",
-        "park",
-        "pines",
-        "plains",
-        "point",
-        "prairie",
-        "rapids",
-        "ridge",
-        "shores",
-        "springs",
-        "station",
-        "valley",
-        "village",
-        "vista",
-        "woods",
-        # Mortgage-product phrase suffixes ("Purchase Mortgage",
-        # "Cash-Out Refinance", "Home-Equity Review") — governed offer
-        # vocabulary rendered in title case, never a person.
-        "heloc",
-        "loan",
-        "mortgage",
-        "offer",
-        "refinance",
-        "review",
+        # fmt: off
+        "borough", "city", "county", "metro", "msa", "parish", "region", "township",
+        "beach", "bluffs", "canyon", "creek", "falls", "forest", "gardens", "grove",
+        "harbor", "heights", "hills", "island", "junction", "lake", "lakes",
+        "meadows", "mesa", "oaks", "park", "pines", "plains", "point", "prairie",
+        "rapids", "ridge", "shores", "springs", "station", "valley", "village",
+        "vista", "woods",
+        "equity", "heloc", "loan", "mortgage", "offer", "refi", "refinance", "review",
+        "candidate", "candidates", "intent", "risk", "sale", "segment", "segments",
+        # fmt: on
     }
 )
 _COMMON_FIRST_NAMES = frozenset(
