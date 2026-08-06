@@ -716,7 +716,11 @@ def _brief_signal_sentences(row: dict[str, Any]) -> list[str]:
     segments = {code.strip() for code in str(row.get("segments") or "").split(",")}
     if row.get("listed_for_sale"):
         status = str(row.get("listing_status_category") or "").strip().lower()
-        status_txt = f" ({status})" if status and status not in {"none", "unknown"} else ""
+        # Only annotate with a readable status word — single-letter source
+        # codes ("a") add noise, not meaning, for a general reader.
+        status_txt = (
+            f" ({status})" if len(status) >= 4 and status not in {"none", "unknown"} else ""
+        )
         sentences.append(
             f"The home is actively listed for sale{status_txt} — the strongest "
             "intent signal in the funnel, because when it sells this borrower "
