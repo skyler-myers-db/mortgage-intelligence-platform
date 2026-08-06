@@ -573,8 +573,14 @@ _MECHANICAL_PII_OR_RAW_IDENTIFIER_PATTERNS: tuple[re.Pattern[str], ...] = (
 
 _CONTEXTUAL_HUMAN_NAME_RE = re.compile(
     r"\b(?:call|contact|email|message|text|ask|target|prioritize|dear|hello|hi)\s+"
-    r"(?!(?:to|the|a|an|and|or|at|about|before|if|when|this|that|your|our|us|me|you|"
+    r"(?!(?:to|the|a|an|and|or|at|about|before|if|when|this|that|these|those|your|our|us|me|you|"
     r"them|him|her|it|then|provider|carrier|system|platform|service|gateway|authorization|consent|permission|outreach|contact|records?|"
+    # Domain population/ranking vocabulary: "prioritize overall", "contact
+    # borrowers", "target top segments" are core product phrasings, not
+    # person-name lookups. Real names never take these words.
+    r"all|any|each|every|only|both|overall|first|next|now|today|top|"
+    r"borrowers?|leads?|candidates?|prospects?|customers?|clients?|"
+    r"segments?|cohorts?|homeowners?|investors?|people|everyone|anyone|someone|"
     r"is|are|was|were|will|would|can|could|may|might|has|have|had)\b)"
     r"[A-Za-z]{2,30}\s+[A-Za-z]{2,30}\b|"
     r"\b[A-Za-z]{2,30}\s+[A-Za-z]{2,30}\s+(?:qualifies?|is the top borrower)\b",

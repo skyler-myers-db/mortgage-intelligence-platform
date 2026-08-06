@@ -69,12 +69,12 @@ from backend.services.repositories.databricks_genie_canonical import (
     _specific_top_borrower_intent_label,
     _specific_top_borrower_intent_note,
     _specific_top_borrower_sort_label,
+    compose_all_segments_brief,
 )
 from backend.services.repositories.databricks_genie_direct import (
     direct_canonical_response,
 )
 from backend.services.repositories.databricks_genie_numeric import (
-    _numeric_claim_blocked_response,
     _unsupported_answer_numeric_claims,
 )
 from backend.services.repositories.databricks_genie_policy import (
@@ -453,7 +453,7 @@ def _adapt_genie_response(
                 result,
                 narrative_withheld=text_contains_pii,
             )
-    if text_contains_pii or lacks_trusted_proof or unsafe_live_sql or depends_on_pending_feeds:
+    if lacks_trusted_proof or unsafe_live_sql or depends_on_pending_feeds:
         if depends_on_pending_feeds:
             gaps = _known_data_gaps_for_result(
                 question=" ".join([question, "permit listing mls"]),
@@ -496,20 +496,28 @@ def _adapt_genie_response(
         )
     if result.sql_query and trusted_sql and not rows and sql_client is not None:
         rows = _redact_genie_rows(_execute_trusted_genie_sql(sql_client, result.sql_query))
-    unsupported_numeric_claims = _unsupported_answer_numeric_claims(
-        result.answer_text,
-        rows,
-        question,
-    )
-    if unsupported_numeric_claims:
-        return _numeric_claim_blocked_response(
-            conversation_id=result.conversation_id,
-            message_id=result.message_id,
-            elapsed_ms=result.elapsed_ms,
-            question_hash=question_hash,
-            question=question,
-            trusted_assets=trusted_assets,
-            reasoning_trace=[],
+    # Trusted SQL is a floor, not a coin flip: from here the governed query,
+    # rows, proof, and actions ALWAYS ship. Only the model PROSE is
+    # conditionally withheld — when the output safety guard flags its wording,
+    # or when it carries numbers the returned rows cannot verify — and the
+    # withholding is disclosed in proof.known_data_gaps. Unverified model
+    # numbers and guard-flagged prose still never render.
+    prose_withheld_gap: str | None = None
+    prose_withheld_reason: str | None = None
+    if text_contains_pii:
+        prose_withheld_gap = (
+            "Genie's draft narrative was withheld by the output safety guard; "
+            "the governed query results are shown instead."
+        )
+        prose_withheld_reason = "the output safety guard flagged its wording."
+    elif _unsupported_answer_numeric_claims(result.answer_text, rows, question):
+        prose_withheld_gap = (
+            "Genie's draft narrative included numeric or financial claims that "
+            "could not be verified against the returned rows; the prose was "
+            "withheld and the verified rows are shown."
+        )
+        prose_withheld_reason = (
+            "it contained numbers the app could not verify against the returned rows."
         )
     # Genie enhancement fields (2026-07): scrub once, share between the proof
     # trace and the top-level response fields so every emitted string clears
@@ -525,6 +533,10 @@ def _adapt_genie_response(
         elapsed_ms=result.elapsed_ms,
         reasoning_trace=[step.model_dump() for step in reasoning_trace],
     )
+    if prose_withheld_gap and prose_withheld_gap not in proof.known_data_gaps:
+        proof = proof.model_copy(
+            update={"known_data_gaps": [*proof.known_data_gaps, prose_withheld_gap]}
+        )
     visualization = _plan_genie_visualization(question, rows)
     actions = _suggest_genie_actions(
         question=question,
@@ -536,13 +548,23 @@ def _adapt_genie_response(
         question_hash=question_hash,
         sql_query=result.sql_query,
     )
+    if prose_withheld_reason:
+        row_count = len(rows) if rows else 0
+        row_word = "row" if row_count == 1 else "rows"
+        answer_text: str | None = (
+            f"Genie ran a governed query against {trusted_assets[0]} and returned "
+            f"{row_count:,} {row_word}, shown with the generated SQL. The draft "
+            f"narrative was withheld: {prose_withheld_reason}"
+        )
+    else:
+        answer_text = result.answer_text
     return GenieMessageResponse(
         conversation_id=result.conversation_id,
         message_id=result.message_id,
         elapsed_ms=result.elapsed_ms,
         question_hash=question_hash,
         question=question,
-        answer=_ensure_answer_cites_source(result.answer_text, trusted_assets),
+        answer=_ensure_answer_cites_source(answer_text, trusted_assets),
         source="genie",
         trusted_assets=trusted_assets,
         sql_query=result.sql_query,
@@ -717,14 +739,20 @@ def _restore_live_voice(
                     update={"known_data_gaps": [*proof.known_data_gaps, gap]}
                 )
     elif narrative:
-        note = _default_verification_note(
-            canonical.trusted_assets,
-            canonical.metric_value,
-            len(canonical.table_rows or []),
-        )
-        answer = narrative
-        if note and note not in answer:
-            answer = f"{answer}\n\n{note}"
+        if canonical.sql_query == _CANONICAL_TOP_BORROWERS_ALL_SEGMENTS_SQL:
+            # The all-segments brief is the product's deep per-borrower
+            # analysis; a surviving live narrative leads and the verified
+            # brief follows, instead of flattening to a one-line note.
+            answer = f"{narrative}\n\n{canonical.answer}"
+        else:
+            note = _default_verification_note(
+                canonical.trusted_assets,
+                canonical.metric_value,
+                len(canonical.table_rows or []),
+            )
+            answer = narrative
+            if note and note not in answer:
+                answer = f"{answer}\n\n{note}"
         updates["answer"] = _ensure_answer_cites_source(answer, canonical.trusted_assets)
     elif proof is not None and not narrative_withheld:
         gap = "Genie returned no narrative; presenting the verified deterministic summary."
@@ -1015,44 +1043,13 @@ def _canonical_genie_answer(
             sql_query=_CANONICAL_TOP_BORROWERS_ALL_SEGMENTS_SQL,
             source="trusted_sql",
         )
-        if rows:
-            top = rows[0]
-            top_offer = offer_display_label(
-                str(top.get("recommended_offer_code") or ""),
-                str(top.get("recommended_offer") or ""),
-            )
-            top_why = str(top.get("why_now") or "").strip()
-            top_why_clause = f" Why now: {top_why}." if top_why else ""
-            answer = (
-                f"I ranked the top {len(rows)} marketing-eligible, opt-in borrowers "
-                f"across every segment from {borrower_asset}, ordered by opportunity "
-                "score with rate-spread economics as the tiebreaker. Each row lists "
-                "the borrower's segments, the live signals that make them a strong "
-                "candidate right now (rate spread, equity, listing, multi-property, "
-                "retention, HELOC propensity), and the governed next-best offer those "
-                "signals drive. The current first borrower is masked "
-                f"{top.get('borrower_id')} in {top.get('city')}, {top.get('state')} "
-                f"with opportunity score {int(top.get('opportunity_score') or 0):,}; "
-                f"the recommended offer is {top_offer}.{top_why_clause} Offers follow "
-                "the governed next-best-offer rules — deep equity favors cash-out, a "
-                "wide positive rate spread favors a rate-improvement refinance, an "
-                "active listing favors purchase financing, and retention risk favors "
-                "recapture outreach — and every recommendation still requires human "
-                "approval in the Lead Queue."
-            )
-        else:
-            answer = (
-                "The trusted borrower table returned no marketing-eligible, opt-in "
-                "borrowers across the segment portfolio for the current refreshed "
-                "coverage."
-            )
         return GenieMessageResponse(
             conversation_id=result.conversation_id,
             message_id=result.message_id,
             elapsed_ms=result.elapsed_ms,
             question_hash=question_hash,
             question=question,
-            answer=answer,
+            answer=compose_all_segments_brief(rows, borrower_asset),
             source="trusted_sql",
             trusted_assets=trusted_assets,
             sql_query=_CANONICAL_TOP_BORROWERS_ALL_SEGMENTS_SQL,

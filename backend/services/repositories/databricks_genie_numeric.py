@@ -10,10 +10,8 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Any, Literal
 
-from backend.services.genie_answers import GenieMessageResponse, GenieProof
 from backend.services.repositories.databricks_genie_visualization import (
     _is_genie_identifier_column,
     _row_columns,
@@ -137,48 +135,11 @@ def _unsupported_answer_numeric_claims(
     return unsupported[:5]
 
 
-def _numeric_claim_blocked_response(
-    *,
-    conversation_id: str,
-    message_id: str,
-    elapsed_ms: int,
-    question_hash: str,
-    question: str,
-    trusted_assets: list[str],
-    reasoning_trace: list[dict[str, str]] | None,
-) -> GenieMessageResponse:
-    return GenieMessageResponse(
-        conversation_id=conversation_id,
-        message_id=message_id,
-        elapsed_ms=elapsed_ms,
-        question_hash=question_hash,
-        question=question,
-        answer=(
-            "Genie returned trusted SQL, but the app could not verify one or "
-            "more numeric claims against the returned rows, so the result was "
-            "not displayed. Ask again with a narrower metric or inspect the "
-            "source rows."
-        ),
-        source="policy_blocked",
-        trusted_assets=trusted_assets,
-        sql_query=None,
-        row_count=0,
-        proof=GenieProof(
-            sql_query=None,
-            source_assets=trusted_assets,
-            row_count=0,
-            trusted=False,
-            reasoning_trace=reasoning_trace or [],
-            known_data_gaps=[
-                "Genie returned numeric prose that could not be verified against the returned rows."
-            ],
-            conversation_id=conversation_id,
-            message_id=message_id,
-            elapsed_ms=elapsed_ms,
-            generated_at=datetime.now(UTC).isoformat(),
-        ),
-        table_rows=[],
-    )
+# The former ``_numeric_claim_blocked_response`` hard refusal was retired
+# (2026-08-06): a trusted-SQL turn with unverifiable narrative numbers now
+# ships the governed rows with the prose withheld and the withholding
+# disclosed — see ``_adapt_genie_response``. Unverified model numbers still
+# never render.
 
 
 def _numeric_claims(text: str) -> list[_NumericClaim]:
