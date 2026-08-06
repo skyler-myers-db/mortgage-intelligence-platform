@@ -111,6 +111,14 @@ _SAFE_PHRASE_PATTERNS: tuple[re.Pattern[str], ...] = (
         r"sands?|house|hall|bear|fish|hawk|diamond)(?![a-z0-9])",
         re.IGNORECASE,
     ),
+    # Governed offer connectors (live probe 2026-08-06): "candidates with
+    # offers" / "with what offer" is core product phrasing, but the trailing
+    # "with" reads as an audience-criterion connector to the campaign clause
+    # machine and refused a plain HELOC ranking ask. Masking only these
+    # literal offer connectors keeps unknown-term laundering ("carry zyrplax")
+    # fully scannable.
+    re.compile(r"(?<![a-z0-9])with (?:what )?offers?(?![a-z0-9])", re.IGNORECASE),
+    re.compile(r"(?<![a-z0-9])heloc[- ]eligible(?![a-z0-9])", re.IGNORECASE),
 )
 
 

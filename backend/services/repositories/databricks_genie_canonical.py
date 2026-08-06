@@ -2138,14 +2138,28 @@ def _canonical_itm_top_tier_compare_scope(question: str) -> bool:
 def _canonical_strategy_board_scope(question: str) -> bool:
     q = re.sub(r"[^a-z0-9\s]+", " ", question.lower())
     q = re.sub(r"\s+", " ", q).strip()
-    spend_terms = ("spend", "allocate", "prioritize", "focus", "deploy")
-    touch_terms = ("outreach touch", "outreach touches", "touches", "contacts", "campaign")
+    # "call/contact N borrowers — which segments, states, offers?" is the
+    # same capacity-allocation ask as "spend N outreach touches"; both route
+    # to the state-segment-offer strategy board.
+    spend_terms = ("spend", "allocate", "prioritize", "focus", "deploy", "call", "contact", "reach")
+    touch_terms = (
+        "outreach touch",
+        "outreach touches",
+        "touches",
+        "contacts",
+        "campaign",
+        "borrowers",
+        "leads",
+        "calls",
+        "people",
+    )
     strategy_terms = ("strategy", "where should", "which state", "which segment")
-    has_touch_count = "10000" in q or "10 000" in q or "10k" in q
+    has_touch_count = bool(re.search(r"\b\d{2,7}\b", q)) or "10k" in q
     return (
         any(term in q for term in spend_terms)
         and any(term in q for term in touch_terms)
         and (has_touch_count or any(term in q for term in strategy_terms))
+        and any(term in q for term in (*strategy_terms, "offer", "offers", "touches", "campaign"))
     )
 
 

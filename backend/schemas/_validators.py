@@ -94,6 +94,7 @@ _PROTECTED_CLASS_MARKETING_RE = re.compile(
 
 _PROTECTED_AGE_CITIZENSHIP_MARKETING_RE = re.compile(
     r"\b(?:baby\s+boomers?|boomers?|gen(?:eration)?\s*[xyz]|millennials?|retirees?|"
+    r"retired\s+(?:homeowners?|borrowers?|households?|couples?|residents?|owners?|people|persons?)|"
     r"retirement[- ]age|young\s+families|foreign[- ]born|non[- ]?citizens?|"
     r"citizenship\s+status|citizens?|naturalized\s+(?:citizens?|homeowners?|"
     r"borrowers?|people|persons?)|"
@@ -573,7 +574,10 @@ _MECHANICAL_PII_OR_RAW_IDENTIFIER_PATTERNS: tuple[re.Pattern[str], ...] = (
 
 _CONTEXTUAL_HUMAN_NAME_RE = re.compile(
     r"\b(?:call|contact|email|message|text|ask|target|prioritize|dear|hello|hi)\s+"
-    r"(?!(?:to|the|a|an|and|or|at|about|before|if|when|this|that|these|those|your|our|us|me|you|"
+    # Prepositions after the verb ("target for reverse mortgages", "call with
+    # an offer") are sentence structure, never a person's first name.
+    r"(?!(?:for|with|on|in|by|from|into|over|under|near|toward|towards|across|during|after|against|without|"
+    r"to|the|a|an|and|or|at|about|before|if|when|this|that|these|those|your|our|us|me|you|"
     r"them|him|her|it|then|provider|carrier|system|platform|service|gateway|authorization|consent|permission|outreach|contact|records?|"
     # Domain population/ranking vocabulary: "prioritize overall", "contact
     # borrowers", "target top segments" are core product phrasings, not
