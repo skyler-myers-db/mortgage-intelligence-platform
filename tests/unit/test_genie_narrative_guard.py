@@ -15,6 +15,8 @@ phrases ("Purchase Mortgage"). These tests pin the corrected boundary:
 from __future__ import annotations
 
 from backend.schemas._validators import contains_unsafe_ai_text
+from backend.services.genie_answers import GenieMessageResponse
+from backend.services.genie_message_policy import genie_response_has_unsafe_visible_text
 from backend.services.repositories.databricks_genie_policy_helpers import (
     _answer_text_contains_pii,
 )
@@ -81,3 +83,47 @@ def test_campaign_copy_surface_keeps_fail_closed_ranking_grammar() -> None:
         )
         is True
     )
+
+
+def _visible_response(**overrides: object) -> GenieMessageResponse:
+    base: dict[str, object] = {
+        "conversation_id": "conv",
+        "question": "q",
+        "question_hash": "hash",
+        "answer": _LIVE_CAPTURED_NARRATIVE,
+        "source": "genie",
+        "trusted_assets": ["mip.gold.borrower_360"],
+        "table_rows": [
+            {
+                "borrower_id": "B-0N122RBMBT4PK",
+                "city": "Lake Forest",
+                "state": "CA",
+                "recommended_offer": "Purchase Mortgage",
+                "why_now": "Listed for sale",
+            },
+            {
+                "borrower_id": "B-1ABCDEFGHIJKL",
+                "city": "San Antonio",
+                "state": "TX",
+                "recommended_offer": "Cash-Out Refinance",
+                "why_now": "In the money: +204 bps rate spread",
+            },
+        ],
+    }
+    base.update(overrides)
+    return GenieMessageResponse(**base)  # type: ignore[arg-type]
+
+
+def test_router_gate_renders_the_live_answer_with_city_and_offer_rows() -> None:
+    """The route-level visible-text gate must not re-block what the
+    repository boundary allows: analytics narrative plus governed row values
+    (title-case cities, offer labels) render."""
+
+    assert genie_response_has_unsafe_visible_text(_visible_response()) is False
+
+
+def test_router_gate_still_blocks_real_pii_in_prose_and_rows() -> None:
+    named = _visible_response(answer="Call John Smith at 431 Maple Street.")
+    assert genie_response_has_unsafe_visible_text(named) is True
+    leaked_row = _visible_response(table_rows=[{"note": "SSN 123-45-6789"}])
+    assert genie_response_has_unsafe_visible_text(leaked_row) is True

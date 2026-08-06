@@ -7,10 +7,10 @@ import re
 from typing import Any
 
 from backend.config.settings import settings
-from backend.schemas._validators import contains_unsafe_ai_text
 from backend.services.databricks_sql_helpers import qualify
 from backend.services.genie_answers import GenieNativeVisualization, GenieReasoningStep
 from backend.services.genie_client import GenieResponse
+from backend.services.genie_message_policy import genie_visible_text_unsafe
 from backend.services.observability import emit
 from backend.services.pii_redaction import _FORBIDDEN_OUTPUT_KEYS, scrub_free_text
 from backend.services.repositories.databricks_genie_canonical import (
@@ -221,36 +221,21 @@ _PII_TEXT_PATTERNS: tuple[re.Pattern[str], ...] = (
 )
 
 
-# "City Name, ST" / "(City Name, ST)" geography references in Genie
-# narratives. Borrower rows carry the same city/state strings, so citing them
-# in prose is sanctioned analytics output — but title-case city names
-# ("Lake Forest, CA") pattern-match the human-name-shape guard. Strip the
-# geography shape before the name-shape scan only; the raw text still goes
-# through every PII pattern first. No real-person identity can take this
-# shape here: borrower names never render, and display identities are
-# synthetic masked IDs.
-_GENIE_GEO_LOCATION_RE = re.compile(
-    r"\(?\b[A-Z][A-Za-z.'-]*(?:\s+[A-Z][A-Za-z.'-]*){0,3},\s*[A-Z]{2}\b\)?"
-)
-
-
 def _answer_text_contains_pii(text: str | None) -> bool:
-    """Return true for any text unsafe to render, retaining the legacy name."""
+    """Return true for any text unsafe to render, retaining the legacy name.
+
+    The raw text goes through every Genie PII pattern first; the shared
+    analytics-surface scanner (geography stripping + campaign criterion-machine
+    bypass, all PII/name/injection/protected detectors intact) then covers the
+    model-authored prose. Kept in lockstep with the router-level
+    ``genie_response_has_unsafe_visible_text`` by reusing the same scanner.
+    """
 
     if not text:
         return False
     if any(pattern.search(text) for pattern in _PII_TEXT_PATTERNS):
         return True
-    # Ask Genie answers are a read-only analytics narrative, not campaign
-    # copy: ranking language ("candidates are those with the highest
-    # opportunity scores") is the product's core vocabulary, so the campaign
-    # audience-formation criterion machine is bypassed. All PII, name-shape,
-    # injection, confidential, and direct protected-class detectors stay on.
-    scannable = _GENIE_GEO_LOCATION_RE.sub(" ", text)
-    return contains_unsafe_ai_text(
-        scannable,
-        assume_reviewed_read_only_analytics=True,
-    )
+    return genie_visible_text_unsafe(text)
 
 
 def _safe_rendered_summary(text: object, *, max_length: int | None = None) -> str | None:
