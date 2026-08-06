@@ -1210,9 +1210,13 @@ def test_text_only_all_segments_top_candidates_returns_driver_rich_answer() -> N
     assert result.trusted_assets == ["mip.gold.borrower_360"]
     assert result.table_rows
     assert result.table_rows[0]["why_now"].startswith("In the money")
-    assert "B-1ABCDEFGHIJKL" in result.answer
-    assert "recommended offer is" in result.answer
-    assert "Why now: In the money: +183 bps rate spread" in result.answer
+    # The analyst brief: a bullet per candidate with drivers + offer + reason.
+    assert "**#1 B-1ABCDEFGHIJKL**" in result.answer
+    assert "Aurora, IL" in result.answer
+    assert "why now: In the money: +183 bps rate spread | Strong equity: 47%" in result.answer
+    assert "offer: **Refinance review** because" in result.answer
+    assert "human approval in the Lead Queue" in result.answer
+    assert "Source: mip.gold.borrower_360" in result.answer
     assert result.proof is not None
     assert result.proof.trusted is True
     # The live path still tried an ask plus one governed SQL-repair retry.
@@ -1255,12 +1259,13 @@ def test_pii_flagged_narrative_is_withheld_not_refused_for_canonical_shape() -> 
 
     assert result.source == "trusted_sql"
     assert "John Smith" not in result.answer
-    assert "B-1ABCDEFGHIJKL" in result.answer
+    assert "**#1 B-1ABCDEFGHIJKL**" in result.answer
     assert result.proof is not None
     assert any("withheld by the output safety guard" in gap for gap in result.proof.known_data_gaps)
     assert not any("returned no narrative" in gap for gap in result.proof.known_data_gaps)
-    # PII narratives are excluded from the SQL-repair retry; one live ask only.
-    assert len(stub.ask_calls) == 1
+    # The repair retry now runs even for guard-flagged narratives (the repair
+    # prompt carries only the question), so the live path made two asks.
+    assert len(stub.ask_calls) == 2
 
 
 def test_top_zip_question_uses_direct_canonical_gold_sql_without_genie_call() -> None:
@@ -1850,7 +1855,13 @@ def test_raw_cotality_identifier_literals_are_policy_blocked(sql_query: str) -> 
         "OwnerLink ID 1100000134187756 matched.",
     ],
 )
-def test_raw_owner_identifier_answer_text_is_policy_blocked(answer_text: str) -> None:
+def test_raw_owner_identifier_answer_text_withholds_prose_ships_governed_rows(
+    answer_text: str,
+) -> None:
+    """Raw-identifier lookups are refused at the PROMPT guard in production;
+    this repository-level defence now withholds the flagged prose while the
+    governed count rows still ship. The raw identifier never renders."""
+
     live = GenieResponse(
         answer_text=answer_text,
         sql_query="SELECT count(*) AS borrowers FROM mip.gold.borrower_360",
@@ -1863,10 +1874,13 @@ def test_raw_owner_identifier_answer_text_is_policy_blocked(answer_text: str) ->
 
     result = repo.respond("Tell me about Owner Link 1100000134187756.")
 
-    assert result.source == "policy_blocked"
-    assert result.sql_query is None
-    assert result.table_rows == []
+    assert result.source == "genie"
+    assert result.sql_query == live.sql_query
+    assert result.table_rows == [{"borrowers": 2}]
     assert "1100000134187756" not in result.answer
+    assert "withheld" in result.answer
+    assert result.proof is not None
+    assert any("withheld by the output safety guard" in gap for gap in result.proof.known_data_gaps)
 
 
 def test_zip_map_prompt_does_not_emit_state_map_without_state_column() -> None:
@@ -2205,7 +2219,10 @@ def test_raw_gold_pii_column_sql_is_policy_blocked(column: str) -> None:
     assert result.table_rows == []
 
 
-def test_pii_answer_text_is_policy_blocked() -> None:
+def test_pii_answer_text_is_withheld_and_governed_rows_still_ship() -> None:
+    """A PII-bearing narrative on a trusted-SQL turn withholds the prose but
+    keeps the governed data; the email never renders anywhere."""
+
     live = GenieResponse(
         answer_text="The top borrower email is raw@example.com.",
         sql_query="SELECT count(*) FROM mip.gold.borrower_360",
@@ -2218,10 +2235,13 @@ def test_pii_answer_text_is_policy_blocked() -> None:
 
     result = repo.respond("show the top borrower email")
 
-    assert result.source == "policy_blocked"
-    assert result.sql_query is None
-    assert result.table_rows == []
+    assert result.source == "genie"
+    assert result.sql_query == live.sql_query
+    assert result.table_rows == [{"count": 1}]
     assert "raw@example.com" not in result.answer
+    assert "withheld" in result.answer
+    assert result.proof is not None
+    assert any("withheld by the output safety guard" in gap for gap in result.proof.known_data_gaps)
 
 
 def test_trusted_genie_answer_with_matching_numeric_claim_passes() -> None:
@@ -2262,7 +2282,10 @@ def test_trusted_genie_answer_does_not_duplicate_existing_source_line() -> None:
     assert result.answer.count("Source: mip.gold.borrower_360") == 1
 
 
-def test_trusted_genie_answer_with_unsupported_numeric_claim_is_policy_blocked() -> None:
+def test_trusted_genie_answer_with_unsupported_numeric_claim_withholds_prose() -> None:
+    """Unverifiable narrative numbers withhold the prose; the governed rows,
+    SQL, and proof still ship. The hallucinated number never renders."""
+
     live = GenieResponse(
         answer_text="There are 999 borrowers in this trusted cohort.",
         sql_query="SELECT 123 AS borrowers FROM mip.gold.borrower_360",
@@ -2281,16 +2304,17 @@ def test_trusted_genie_answer_with_unsupported_numeric_claim_is_policy_blocked()
 
     result = repo.respond("Summarize the trusted cohort.")
 
-    assert result.source == "policy_blocked"
-    assert result.sql_query is None
-    assert result.table_rows == []
-    assert result.visualization is None
-    assert result.actions == []
+    assert result.source == "genie"
+    assert result.sql_query == live.sql_query
+    assert result.table_rows == [{"borrowers": 123}]
     assert "999" not in result.answer
+    assert "withheld" in result.answer
     assert result.proof is not None
-    assert result.proof.trusted is False
-    assert result.proof.reasoning_trace == []
-    assert result.proof.known_data_gaps
+    assert result.proof.trusted is True
+    assert any(
+        "could not be verified against the returned rows" in gap
+        for gap in result.proof.known_data_gaps
+    )
 
 
 def test_numeric_claim_cannot_use_unrelated_matching_count_as_financial_support() -> None:
@@ -2305,8 +2329,10 @@ def test_numeric_claim_cannot_use_unrelated_matching_count_as_financial_support(
         _StubClient(_make_breaker("closed"), response=live)
     ).respond("Summarize the trusted cohort.")
 
-    assert result.source == "policy_blocked"
+    assert result.source == "genie"
+    assert result.table_rows == [{"borrowers": 123}]
     assert "$123" not in result.answer
+    assert "withheld" in result.answer
 
 
 def test_numeric_claim_is_not_waived_by_unbound_snapshot_date_language() -> None:
@@ -2321,8 +2347,10 @@ def test_numeric_claim_is_not_waived_by_unbound_snapshot_date_language() -> None
         _StubClient(_make_breaker("closed"), response=live)
     ).respond("Summarize the trusted cohort.")
 
-    assert result.source == "policy_blocked"
+    assert result.source == "genie"
+    assert result.table_rows == [{"borrowers": 123}]
     assert "2026" not in result.answer
+    assert "withheld" in result.answer
 
 
 def test_trusted_genie_numeric_check_accepts_rounded_percent_claim() -> None:
@@ -2501,8 +2529,10 @@ def test_trusted_genie_numeric_check_rejects_unscaled_word_suffix_claims() -> No
 
     result = repo.respond("Summarize the returned cohort.")
 
-    assert result.source == "policy_blocked"
-    assert result.table_rows == []
+    assert result.source == "genie"
+    assert result.table_rows == [{"avg_score": 1.2}]
+    assert "1.2 million" not in result.answer
+    assert "withheld" in result.answer
 
 
 def test_trusted_genie_numeric_check_ignores_identifier_dates_and_query_limits() -> None:
@@ -2537,9 +2567,10 @@ def test_trusted_genie_numeric_check_blocks_nonzero_claim_on_empty_rows() -> Non
 
     result = repo.respond("Summarize this empty cohort.")
 
-    assert result.source == "policy_blocked"
+    assert result.source == "genie"
     assert result.table_rows == []
     assert "10" not in result.answer
+    assert "withheld" in result.answer
 
 
 def test_backtick_quoted_trusted_sql_is_accepted() -> None:

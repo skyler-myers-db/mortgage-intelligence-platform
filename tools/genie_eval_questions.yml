@@ -275,3 +275,54 @@ questions:
       - mip.gold.borrower_360
     min_rows: 5
     max_latency_s: 8
+
+  # ---------------------------------------------------------------------------
+  # Deep-analysis family (2026-08-06). The product's central promise: an agent
+  # that ranks candidates across all segments and explains each one plus its
+  # offer. These questions previously ended in governed refusals (missing
+  # canonical shape + campaign-grade output guard on analytics narrative).
+  # The canonical all-segments brief is the deterministic floor, so a refusal
+  # on any of these is a release-gating regression, not a model mood.
+  # ---------------------------------------------------------------------------
+  - id: deep_analysis_all_segments_offers_why
+    category: deep-analysis
+    question: >-
+      What are the top borrower candidates across all segments overall, what
+      makes them such good candidates exactly (for each one), and what is the
+      exact offer we should make to each and why?
+    must_cite:
+      - mip.gold.borrower_360
+    forbid_keywords:
+      - did not display the result
+      - not pass the governed output policy
+      - ask a scoped question
+    require_keywords:
+      - offer
+    min_rows: 5
+    max_latency_s: 60
+
+  - id: deep_analysis_explain_each_candidate
+    category: deep-analysis
+    question: >-
+      Show the top borrowers across all segments and explain why each one is a
+      good candidate.
+    must_cite:
+      - mip.gold.borrower_360
+    forbid_keywords:
+      - did not display the result
+      - not pass the governed output policy
+      - ask a scoped question
+    min_rows: 5
+    max_latency_s: 60
+
+  - id: deep_analysis_prioritize_overall_why
+    category: deep-analysis
+    question: Which borrowers should we prioritize overall for any offer, and why?
+    must_cite:
+      - mip.gold.borrower_360
+    forbid_keywords:
+      - did not display the result
+      - not pass the governed output policy
+      - ask a scoped question
+    min_rows: 5
+    max_latency_s: 60

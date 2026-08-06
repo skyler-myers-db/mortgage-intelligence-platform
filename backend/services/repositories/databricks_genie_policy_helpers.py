@@ -105,9 +105,12 @@ def _likely_data_question(question: str) -> bool:
 
 
 def _needs_genie_sql_repair(question: str, result: GenieResponse) -> bool:
+    # A guard-flagged narrative no longer suppresses the repair retry: the
+    # repair prompt carries only the user's question (never the flagged
+    # answer text), and recovering a governed SQL attachment lets the
+    # trusted-data floor ship rows with the prose withheld instead of
+    # refusing outright.
     if not _likely_data_question(question):
-        return False
-    if _answer_text_contains_pii(result.answer_text):
         return False
     if _sql_uses_stale_evidence_signal_enum(result.sql_query):
         return True

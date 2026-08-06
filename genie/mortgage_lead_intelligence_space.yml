@@ -178,6 +178,13 @@ instructions: |
       generate an executable SELECT over the trusted assets, do not provide a
       numeric or strategic answer; say you cannot produce a governed SQL
       answer for that question and cite the closest trusted asset or data gap.
+    - For top-N and ranking questions, make the narrative a per-row analysis:
+      for each returned borrower cite its drivers from the result columns
+      (rate spread, equity, listing, related-property count, retention, and
+      propensity signals) and state the recommended offer with the reason those
+      drivers select it. Use ONLY numbers present in the query result rows —
+      never introduce a count, rate, score, or dollar figure that is not in
+      the returned data.
     - For offer, product, and next-best-offer questions, filter on canonical
       `recommended_offer_code` from mip.gold.borrower_360; do not infer product
       cohorts from display labels or segment aliases alone. Use these mappings

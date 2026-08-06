@@ -8,7 +8,7 @@ from typing import Any
 
 from backend.services.databricks_sql_helpers import qualify
 from backend.services.eligibility import eligible_sql_predicate
-from backend.services.scoring import HIGH_OPPORTUNITY_THRESHOLD
+from backend.services.scoring import HIGH_OPPORTUNITY_THRESHOLD, offer_display_label
 
 
 @dataclass(frozen=True)
@@ -571,6 +571,113 @@ WHERE {_ELIGIBLE}
 ORDER BY opportunity_score DESC, rate_spread_bps DESC NULLS LAST, borrower_id ASC
 LIMIT 10
 """.strip()
+
+
+def _brief_offer_reason(code: str, row: dict[str, Any]) -> str:
+    """One clause explaining WHY the governed offer follows from row drivers."""
+
+    equity = row.get("equity_pct")
+    spread = row.get("rate_spread_bps")
+    equity_txt = f"{int(round(float(equity)))}% modeled equity" if equity is not None else "the modeled equity"
+    spread_txt = (
+        f"the +{int(round(float(spread)))} bps rate spread" if spread is not None else "the rate spread"
+    )
+    reasons = {
+        "refi": f"{spread_txt} clears the refinance-economics screen",
+        "refi_plus_heloc": (
+            f"{spread_txt} clears the refinance-economics screen and "
+            f"{equity_txt} supports the home-equity add-on"
+        ),
+        "heloc": f"{equity_txt} supports an equity line without disturbing the first mortgage",
+        "cash_out": f"{equity_txt} supports pulling cash while refinancing",
+        "purchase": "the active listing signals an upcoming purchase and financing need",
+        "investor": "the multi-property profile fits investor financing",
+        "retention": "retention-risk signals favor a recapture touch before a competitor closes",
+        "nurture": "signals are early, so monitor rather than contact",
+    }
+    return reasons.get(code, "the governed next-best-offer rules select it from the row's signals")
+
+
+def _brief_city_label(row: dict[str, Any]) -> str:
+    city = str(row.get("city") or "").strip()
+    state = str(row.get("state") or "").strip()
+    if city and state:
+        return f"{city.title()}, {state}"
+    return city.title() or state or "coverage area"
+
+
+def compose_all_segments_brief(rows: list[dict[str, Any]], borrower_asset: str) -> str:
+    """Deterministic analyst brief for the all-segments top-candidates shape.
+
+    One bullet per candidate — drivers, governed offer, and the reason the
+    offer follows — plus a cohort synthesis. Every number is read from the
+    governed rows, so the brief can never carry an unverifiable claim. Renders
+    through the answer markdown (paragraphs, ``- `` bullets, ``**bold**``).
+    """
+
+    if not rows:
+        return (
+            "The trusted borrower table returned no marketing-eligible, opt-in "
+            "borrowers across the segment portfolio for the current refreshed "
+            "coverage."
+        )
+    refreshed = str(rows[0].get("refreshed_at") or "")[:10]
+    refreshed_txt = f" (refreshed {refreshed})" if refreshed else ""
+    lines: list[str] = [
+        f"I ranked all marketing-eligible, opt-in borrowers across every segment "
+        f"at the unique borrower grain from {borrower_asset}{refreshed_txt}, "
+        "ordered by opportunity score with rate-spread economics as the "
+        f"tiebreaker. Here are the top {len(rows)} candidates, what makes each "
+        "one strong right now, and the governed offer each set of signals "
+        "drives:",
+        "",
+    ]
+    for rank, row in enumerate(rows, start=1):
+        offer_code = str(row.get("recommended_offer_code") or "")
+        offer = offer_display_label(offer_code, str(row.get("recommended_offer") or ""))
+        why_now = str(row.get("why_now") or "").strip()
+        segments = str(row.get("segments") or "").strip()
+        score = row.get("opportunity_score")
+        score_txt = f"score {int(round(float(score)))}" if score is not None else "scored"
+        parts = [
+            f"**#{rank} {row.get('borrower_id')}** — {_brief_city_label(row)} — {score_txt}"
+        ]
+        if segments:
+            parts.append(f"segments: {segments}")
+        if why_now:
+            parts.append(f"why now: {why_now}")
+        parts.append(f"offer: **{offer}** because {_brief_offer_reason(offer_code, row)}")
+        lines.append(f"- {'. '.join(parts)}.")
+    itm_rows = [r for r in rows if "In the money" in str(r.get("why_now") or "")]
+    equity_rows = [r for r in rows if "Strong equity" in str(r.get("why_now") or "")]
+    listed_rows = [r for r in rows if "Listed for sale" in str(r.get("why_now") or "")]
+    investor_rows = [r for r in rows if "Investor:" in str(r.get("why_now") or "")]
+    retention_rows = [r for r in rows if "Retention" in str(r.get("why_now") or "")]
+    cohort_bits: list[str] = []
+    if itm_rows:
+        spreads = [float(r["rate_spread_bps"]) for r in itm_rows if r.get("rate_spread_bps") is not None]
+        avg_txt = f" (average +{int(round(sum(spreads) / len(spreads)))} bps)" if spreads else ""
+        cohort_bits.append(
+            f"{len(itm_rows)} of {len(rows)} pass the refinance-economics screen{avg_txt}"
+        )
+    if equity_rows:
+        cohort_bits.append(f"{len(equity_rows)} carry 35%+ modeled equity")
+    if listed_rows:
+        cohort_bits.append(f"{len(listed_rows)} are actively listed for sale")
+    if investor_rows:
+        cohort_bits.append(f"{len(investor_rows)} show multi-property investor profiles")
+    if retention_rows:
+        cohort_bits.append(f"{len(retention_rows)} carry retention risk")
+    lines.append("")
+    cohort_txt = f"Cohort picture: {'; '.join(cohort_bits)}. " if cohort_bits else ""
+    lines.append(
+        f"{cohort_txt}Offers follow the governed next-best-offer rules, and every "
+        "recommendation still requires human approval in the Lead Queue before "
+        "any outreach."
+    )
+    lines.append("")
+    lines.append(f"Source: {borrower_asset}")
+    return "\n".join(lines)
 
 _CANONICAL_TOP_REFI_BORROWERS_BY_STATE_SQL = f"""
 SELECT borrower_id
