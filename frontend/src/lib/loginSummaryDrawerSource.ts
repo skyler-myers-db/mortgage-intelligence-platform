@@ -14,31 +14,10 @@ export function loginSummaryDrawerSource(
     HomeSummaryHighlight,
     'measure' | 'label' | 'display' | 'current' | 'baseline' | 'delta' | 'delta_pct'
   >,
-  opts: { baselineSnapshotAt: string | null; previousVisitAt: string | null } = {
-    baselineSnapshotAt: null,
-    previousVisitAt: null,
-  },
+  opts: { previousVisitAt: string | null } = { previousVisitAt: null },
 ): DrawerSource {
   const hasBaseline = highlight.baseline !== null && highlight.delta !== null;
   const lineageFamily = HOME_SUMMARY_LINEAGE_FAMILY[highlight.measure];
-  const lineage: NonNullable<DrawerSource['lineage']> = [];
-  if (hasBaseline) {
-    lineage.push({
-      layer: 'APP',
-      name: 'mip_app.kpi_snapshots',
-      meta: opts.baselineSnapshotAt
-        ? `baseline snapshot @ ${opts.baselineSnapshotAt}`
-        : 'baseline snapshot nearest your previous visit',
-    });
-  }
-  lineage.push(
-    { layer: 'FEATURES', name: 'mip.gold.borrower_360' },
-    {
-      layer: 'SEMANTIC',
-      name: 'mip.semantics.portfolio_headline_metric_view',
-      meta: 'current reading (unfiltered headline set)',
-    },
-  );
   const signals: NonNullable<DrawerSource['signals']> = [
     {
       label: 'Current',
@@ -78,7 +57,6 @@ export function loginSummaryDrawerSource(
         'comparison is apples-to-apples.'
       : 'Live reading from the unfiltered portfolio headline metric view. ' +
         'Last-login deltas appear once a previous visit and a baseline snapshot exist.',
-    lineage,
     signals,
     ...(opts.previousVisitAt ? { eventDate: opts.previousVisitAt } : {}),
   };

@@ -159,9 +159,9 @@ describe('LastLoginSummary', () => {
       act(() => button.click());
       expect(setDrawer).toHaveBeenCalledTimes(1);
       const source = setDrawer.mock.calls[0][0] as DrawerSource;
-      const lineageNames = (source.lineage ?? []).map((step) => step.name);
-      expect(lineageNames).toContain('mip_app.kpi_snapshots');
-      expect(lineageNames).toContain('mip.semantics.portfolio_headline_metric_view');
+      const baseline = (source.signals ?? []).find((signal) => signal.label === 'Baseline');
+      expect(baseline?.source).toMatch(/^kpi_snapshots\./);
+      expect(source.assetPath).toBe('mip.semantics.portfolio_headline_metric_view');
       expect(source.assetKey).toBe('portfolio_headline_metric_view');
       expect(source.lineageFamily).toBe(expectedFamilies[index]);
       const signalLabels = (source.signals ?? []).map((s) => s.label);
@@ -180,9 +180,9 @@ describe('LastLoginSummary', () => {
     expect(button).toBeTruthy();
     act(() => button!.click());
     const source = setDrawer.mock.calls[0][0] as DrawerSource;
-    const lineageNames = (source.lineage ?? []).map((step) => step.name);
-    expect(lineageNames).not.toContain('mip_app.kpi_snapshots');
-    expect(lineageNames).toContain('mip.semantics.portfolio_headline_metric_view');
+    const signalLabels = (source.signals ?? []).map((signal) => signal.label);
+    expect(signalLabels).not.toContain('Baseline');
+    expect(source.assetPath).toBe('mip.semantics.portfolio_headline_metric_view');
     expect(source.lineageFamily).toBe('marketable_population');
   });
 

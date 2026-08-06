@@ -11,6 +11,23 @@ import {
 } from './drawerSources';
 import lineageManifest from '../../../backend/resources/lineage_manifest.json';
 
+/**
+ * The drawer renders governed lineage from the manifest family (see
+ * EvidenceDrawer), so "this drawer cites asset X" is asserted against the
+ * family's fully-qualified objects — mirroring
+ * backend/services/lineage_manifest.resolve_node_fqn.
+ */
+const MANIFEST_FAMILY_FQNS = new Map(
+  lineageManifest.families.map((family) => [
+    family.id,
+    new Set(
+      family.nodes.map(
+        (node) => `${node.catalog ?? 'mip'}.${node.schema}.${node.object}`,
+      ),
+    ),
+  ]),
+);
+
 describe('home headline KPI sources cite the metric view (S1)', () => {
   it('routes the headline view lineage to its own drawer entry', () => {
     expect(descriptorFor('mip.semantics.portfolio_headline_metric_view')).toBe(
@@ -29,8 +46,12 @@ describe('home headline KPI sources cite the metric view (S1)', () => {
       DRAWER_SOURCES.nbo,
     ];
     for (const source of homeKpiSources) {
-      const lineageNames = (source.lineage ?? []).map((step) => step.name);
-      expect(lineageNames).toContain('mip.semantics.portfolio_headline_metric_view');
+      const familyFqns = MANIFEST_FAMILY_FQNS.get(source.lineageFamily ?? '');
+      expect(familyFqns, `${source.title} lineageFamily`).toBeTruthy();
+      expect(
+        familyFqns?.has('mip.semantics.portfolio_headline_metric_view'),
+        `${source.title} family cites the headline metric view`,
+      ).toBe(true);
       // Underlying row asset stays anchored so the drawer's freshness +
       // lineage link resolve to a real governed table.
       expect(source.assetKey).toBeTruthy();
@@ -252,14 +273,14 @@ describe('descriptorFor', () => {
         );
       }
 
-      for (const node of source.lineage ?? []) {
-        const isUcObject =
-          (node.name.startsWith('mip.') ||
-            node.name.startsWith('cotality_mortgage_data.')) &&
-          node.name.split('.').length === 3;
-        if (isUcObject) {
-          expect(assetKeyForSource(node.name), `${key}: ${node.name}`).toBeTruthy();
-        }
+      // Every declared family must exist in the governed manifest — the
+      // drawer renders an explicit "family absent" warning otherwise, and
+      // no local chain is substituted.
+      if (source.lineageFamily) {
+        expect(
+          MANIFEST_FAMILY_FQNS.has(source.lineageFamily),
+          `${key} lineageFamily '${source.lineageFamily}' missing from the governed manifest`,
+        ).toBe(true);
       }
     }
 
@@ -307,12 +328,18 @@ describe('descriptorFor', () => {
     expect(evidenceDestinationFor(source).kind).toBe('unity_catalog');
   });
 
+  it('keeps segment evidence anchored to borrower_360 rows via its manifest family', () => {
+    expect(
+      MANIFEST_FAMILY_FQNS.get('segment_population')?.has('mip.gold.borrower_360'),
+    ).toBe(true);
+  });
+
   it('documents estimated UPB confidence-band lineage and inputs', () => {
-    const lineageNames = DRAWER_SOURCES.lien.lineage?.map((node) => node.name) ?? [];
+    const familyFqns = MANIFEST_FAMILY_FQNS.get(DRAWER_SOURCES.lien.lineageFamily ?? '');
     const signalSources = DRAWER_SOURCES.lien.signals?.map((signal) => signal.source) ?? [];
 
-    expect(lineageNames).toContain('mip.gold.fn_bounded_mortgage_rate');
-    expect(lineageNames).toContain('mip.gold.fn_estimated_upb_confidence_band');
+    expect(familyFqns?.has('mip.gold.fn_bounded_mortgage_rate')).toBe(true);
+    expect(familyFqns?.has('mip.gold.fn_estimated_upb_confidence_band')).toBe(true);
     expect(signalSources).toContain('lien_current.first_pos_amount');
     expect(signalSources).toContain('months_between(refresh_at, first_pos_date)');
     expect(signalSources).toContain('fn_estimated_upb_confidence_band');
