@@ -65,7 +65,6 @@ function SummaryNumber({
 }) {
   const { setDrawer, showEvidence } = useApp();
   const source = loginSummaryDrawerSource(highlight, {
-    baselineSnapshotAt: summary.baseline_snapshot_at,
     previousVisitAt: summary.previous_visit_at,
   });
   if (!showEvidence) {

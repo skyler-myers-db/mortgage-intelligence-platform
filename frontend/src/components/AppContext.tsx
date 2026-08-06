@@ -35,7 +35,6 @@ export type Density = 'comfortable' | 'compact';
 export interface DrawerSource {
   title: string;
   description?: string;
-  lineage?: Array<{ layer: string; name: string; meta?: string }>;
   signals?: Array<{ label: string; source: string; value: string }>;
   updatedAt?: string;
   eventDate?: string;

@@ -114,13 +114,6 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     title: 'Marketable population',
     short: 'cotality.public_records',
     description: 'Joins Cotality Public Records (Deed & Mortgage), Voluntary Lien, and Owner Link under Entrada semantic models; filtered by lender configuration.',
-    lineage: [
-      { layer: 'SOURCE',   name: 'cotality.public_records.deed_and_mortgage', meta: 'Delta Share · 142M rows' },
-      { layer: 'SOURCE',   name: 'cotality.liens.voluntary_lien', meta: 'Delta Share · 98M rows' },
-      { layer: 'ENTITY',   name: 'entity.property_clip', meta: 'Mastered via CLIP' },
-      { layer: 'ENTITY',   name: 'entity.owner_link', meta: 'Mastered via Owner Link' },
-      { layer: 'SEMANTIC', name: 'metrics.borrower_universe', meta: 'UC metric view' },
-    ],
     signals: [
       { label: 'Owner-occupied SFR', source: 'property_clip.occupancy', value: '1.84M' },
       { label: 'Open first lien',    source: 'voluntary_lien.status',   value: '1.72M' },
@@ -132,13 +125,6 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     title: 'In-the-Money logic',
     short: 'rules.itm_v3',
     description: 'Lien rate ≥ (par refi rate + 75 bps) AND equity ≥ 15% on latest AVM. Rule set is version-controlled in Unity Catalog.',
-    lineage: [
-      { layer: 'SOURCE',   name: 'cotality.mma.origination_refi', meta: 'Par rate feed (daily)' },
-      { layer: 'SOURCE',   name: 'cotality.avm.current',          meta: 'Property value (monthly)' },
-      { layer: 'SOURCE',   name: 'cotality.liens.voluntary_lien', meta: 'Current lien rate' },
-      { layer: 'RULESET',  name: 'rules.itm_v3',                  meta: 'reviewed 2026-03-15' },
-      { layer: 'SEMANTIC', name: 'metrics.itm_flag',              meta: 'UC metric view' },
-    ],
     signals: [
       { label: 'Par refi rate (30y conf.)', source: 'mma.origination_refi', value: '6.250%' },
       { label: 'Example lien rate',         source: 'voluntary_lien',       value: '7.125%' },
@@ -151,11 +137,6 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     title: 'Primary offer rules',
     short: 'rules · fn_next_best_offer',
     description: 'Deterministic offer-selection rules over governed borrower signals; output is one of refi, HELOC, cash-out, purchase, retention, or recapture.',
-    lineage: [
-      { layer: 'FEATURES',   name: 'features.borrower_360',        meta: 'Owner Link + property + lien history' },
-      { layer: 'RULESET',    name: 'sql.fn_next_best_offer',       meta: 'Deterministic branch order' },
-      { layer: 'GOVERNANCE', name: 'compliance.offer_review_board', meta: 'Approved rule review' },
-    ],
     signals: [
       { label: 'Rate spread branch', source: 'fn_next_best_offer', value: 'rate_spread_bps' },
       { label: 'Equity branch',      source: 'fn_next_best_offer', value: 'avm_equity_pct' },
@@ -167,11 +148,6 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     title: 'Building permit signal',
     short: 'Building Permits - pending',
     description: 'True filed building-permit rows remain pending. HELOC intent is represented separately by Cotality HELOC propensity.',
-    lineage: [
-      { layer: 'SOURCE',   name: 'cotality.permits.building', meta: 'Delta Share · pending' },
-      { layer: 'JOIN',     name: 'join.permit_to_clip',       meta: 'pending true permit source' },
-      { layer: 'GOLD',     name: 'borrower_360.has_permit',   meta: 'filed permit only' },
-    ],
     signals: [
       { label: 'Readiness',     source: 'admin.sources',    value: 'roadmap' },
       { label: 'has_permit',    source: 'borrower_360',     value: 'filed permit only' },
@@ -183,7 +159,6 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     title: 'Campaign assumptions',
     short: 'config',
     description: 'Marketing ROI config, set per lender.',
-    lineage: [{ layer: 'CONFIG', name: 'lender.campaign_config' }],
     signals: [],
   },
 };

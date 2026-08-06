@@ -85,11 +85,11 @@ describe('Home KPI evidence drawers cite the headline metric view', () => {
     container.remove();
   });
 
-  const KPI_CHIPS: Array<{ label: string; chipText: string }> = [
-    { label: 'Marketable population', chipText: 'Marketable population' },
-    { label: 'Refi economics screen', chipText: 'Rate + equity screen' },
-    { label: 'Opportunity score 75+', chipText: 'Opportunity score' },
-    { label: 'Primary offer paths', chipText: 'How the offer path was selected' },
+  const KPI_CHIPS: Array<{ label: string; chipText: string; family: string }> = [
+    { label: 'Marketable population', chipText: 'Marketable population', family: 'marketable_population' },
+    { label: 'Refi economics screen', chipText: 'Rate + equity screen', family: 'in_the_money' },
+    { label: 'Opportunity score 75+', chipText: 'Opportunity score', family: 'opportunity_score' },
+    { label: 'Primary offer paths', chipText: 'How the offer path was selected', family: 'next_best_offer' },
   ];
 
   it('renders all four headline KPI cards with evidence chips', () => {
@@ -102,7 +102,7 @@ describe('Home KPI evidence drawers cite the headline metric view', () => {
     expect(container.querySelectorAll('.kpi__source').length).toBe(4);
   });
 
-  for (const { label, chipText } of KPI_CHIPS) {
+  for (const { label, chipText, family } of KPI_CHIPS) {
     it(`opens the drawer for "${label}" citing the metric view + underlying rows`, () => {
       const chip = Array.from(
         container.querySelectorAll<HTMLButtonElement>('.kpi__source button'),
@@ -113,8 +113,10 @@ describe('Home KPI evidence drawers cite the headline metric view', () => {
 
       expect(setDrawer).toHaveBeenCalledTimes(1);
       const source = setDrawer.mock.calls[0][0] as DrawerSource;
-      const lineageNames = (source.lineage ?? []).map((step) => step.name);
-      expect(lineageNames).toContain('mip.semantics.portfolio_headline_metric_view');
+      // The metric-view citation renders from the governed manifest family
+      // (EvidenceDrawer.headline-evidence.test.tsx pins that end to end);
+      // the payload's contract is the right family + a governed row anchor.
+      expect(source.lineageFamily).toBe(family);
       // Underlying rows: the drawer stays anchored to a governed row-grain
       // asset so freshness + row citations resolve.
       expect(source.assetKey).toBeTruthy();

@@ -39,10 +39,6 @@ const SOURCE: DrawerSource = {
   assetKey: 'lead_population',
   assetPath: 'mip.gold.lead_population',
   usedIn: ['Ranked borrower table'],
-  lineage: [
-    { layer: 'Gold', name: 'mip.gold.lead_population' },
-    { layer: 'Metric view', name: 'mip.semantics.lead_generation_metric_view' },
-  ],
 };
 
 async function settle(): Promise<void> {

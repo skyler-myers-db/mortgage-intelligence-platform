@@ -1,6 +1,6 @@
 import type { DrawerSource } from '../components/AppContext';
 import type { SegmentSummary } from '../types';
-import { SEGMENT_EVIDENCE_SPECS, SEGMENT_GATE_COPY } from './segmentEvidenceSpecs';
+import { SEGMENT_GATE_COPY } from './segmentEvidenceSpecs';
 
 export function segmentEvidenceSource(
   segment: Pick<
@@ -8,9 +8,6 @@ export function segmentEvidenceSource(
     'code' | 'name' | 'count' | 'avg_score' | 'description' | 'source_status' | 'source_name'
   >,
 ): DrawerSource {
-  const spec = SEGMENT_EVIDENCE_SPECS[segment.code];
-  const predicate = spec?.[0];
-  const sources = spec?.[1];
   const gated = segment.source_status === 'not_connected' || segment.source_status === 'not_licensed';
   const gateCopy = gated ? SEGMENT_GATE_COPY[segment.source_status ?? ''] : null;
   return {
@@ -22,11 +19,6 @@ export function segmentEvidenceSource(
     description: gateCopy
       ? `${segment.description} ${gateCopy}`
       : `${segment.description} Live total from mip.gold.segment_population.`,
-    lineage: [
-      ...(sources?.map(([layer, name, meta]) => ({ layer, name, meta })) ?? []),
-      { layer: 'GOLD', name: 'mip.gold.borrower_360', meta: predicate ?? 'segment membership flag' },
-      { layer: 'GOLD', name: 'mip.gold.segment_population' },
-    ],
     signals: gated
       ? [
           {

@@ -167,8 +167,8 @@ describe('Home renders the personalized last-login summary', () => {
     act(() => button!.click());
     expect(setDrawer).toHaveBeenCalledTimes(1);
     const source = setDrawer.mock.calls[0][0] as DrawerSource;
-    const lineageNames = (source.lineage ?? []).map((step) => step.name);
-    expect(lineageNames).toContain('mip_app.kpi_snapshots');
-    expect(lineageNames).toContain('mip.semantics.portfolio_headline_metric_view');
+    const signalSources = (source.signals ?? []).map((signal) => signal.source);
+    expect(signalSources.some((s) => s.startsWith('kpi_snapshots.'))).toBe(true);
+    expect(source.assetPath).toBe('mip.semantics.portfolio_headline_metric_view');
   });
 });

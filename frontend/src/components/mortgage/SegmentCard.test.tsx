@@ -306,6 +306,8 @@ describe('SegmentCard', () => {
     const source = setDrawer.mock.calls[0][0];
     expect(source.assetKey).toBe('segment_population');
     expect(source.title).toContain('Refi Propensity');
-    expect(JSON.stringify(source.lineage)).toContain('mip.gold.borrower_360');
+    // The borrower_360 row-grain citation renders from the governed
+    // segment_population manifest family (pinned in drawerSources.test.ts).
+    expect(source.lineageFamily).toBe('segment_population');
   });
 });
