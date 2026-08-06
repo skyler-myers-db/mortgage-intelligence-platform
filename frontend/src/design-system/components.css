@@ -3021,11 +3021,6 @@ a.lineage-node__chip:focus-visible {
   background: var(--accent);
   box-shadow: 0 0 10px var(--accent-soft);
 }
-.genie-progress__meta {
-  color: var(--text-3);
-  font-size: var(--fs-11);
-  line-height: var(--lh-snug);
-}
 .genie-progress__label { flex: 1; min-width: 0; }
 .genie-progress__elapsed {
   color: var(--text-3);

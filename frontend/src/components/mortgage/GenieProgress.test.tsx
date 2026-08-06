@@ -100,9 +100,9 @@ describe('GenieProgress', () => {
     expect(steps[0].textContent).toContain('Selected the governed mortgage context');
     const sql = container.querySelector('.genie-progress__sql pre');
     expect(sql!.textContent).toBe('SELECT COUNT(*) FROM mip.gold.borrower_360');
-    expect(container.querySelector('.genie-progress__meta')!.textContent).toContain(
-      'Live from the Databricks Genie Conversation API',
-    );
+    // Implementation plumbing ("Live from the Databricks Genie Conversation
+    // API") is not end-user copy — the progress panel renders no meta line.
+    expect(container.querySelector('.genie-progress__meta')).toBeNull();
   });
 
   it('keeps the stage rail indeterminate for an unknown live stage', () => {
