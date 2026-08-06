@@ -1138,6 +1138,41 @@ _ALL_SEGMENTS_ESSENCE_QUESTION = (
 )
 
 
+def _all_segments_brief_row() -> dict[str, Any]:
+    """A coherent driver-rich gold row for the analyst-brief canonical."""
+
+    return {
+        "borrower_id": "B-1ABCDEFGHIJKL",
+        "display_name": "Masked Borrower",
+        "city": "AURORA",
+        "state": "IL",
+        "zip": "60505",
+        "segments": "itm, equity, refi_propensity",
+        "opportunity_score": 94,
+        "rate_spread_bps": 183,
+        "equity_pct": 47,
+        "equity_estimate": 312000,
+        "current_rate": 8.13,
+        "current_lien_balance": 351000,
+        "avm_value": 663000,
+        "in_the_money": True,
+        "listed_for_sale": False,
+        "listing_status_category": None,
+        "related_property_count": 1,
+        "heloc_propensity_score": None,
+        "has_heloc_propensity_trigger": False,
+        "is_current_customer": False,
+        "min_spread_bps_applied": 75,
+        "min_equity_pct_applied": 15,
+        "heloc_equity_min_applied": 35,
+        "cashout_equity_min_applied": 25,
+        "why_now": "In the money: +183 bps rate spread | Strong equity: 47%",
+        "recommended_offer_code": "refi",
+        "recommended_offer": "Rate-improvement refinance",
+        "refreshed_at": "2026-08-05T02:00:00Z",
+    }
+
+
 @pytest.mark.parametrize(
     ("question", "expected"),
     [
@@ -1179,26 +1214,7 @@ def test_text_only_all_segments_top_candidates_returns_driver_rich_answer() -> N
         message_id="msg-all-seg",
     )
     stub = _StubClient(_make_breaker("closed"), response=[text_only, text_only])
-    sql = _StubSqlClient(
-        [
-            {
-                "borrower_id": "B-1ABCDEFGHIJKL",
-                "display_name": "Masked Borrower",
-                "city": "Aurora",
-                "state": "IL",
-                "zip": "60505",
-                "segments": "itm, equity",
-                "opportunity_score": 94,
-                "rate_spread_bps": 183,
-                "equity_pct": 47,
-                "equity_estimate": 312000,
-                "why_now": "In the money: +183 bps rate spread | Strong equity: 47%",
-                "recommended_offer_code": "refi",
-                "recommended_offer": "Rate-improvement refinance",
-                "refreshed_at": "2026-08-05T02:00:00Z",
-            }
-        ]
-    )
+    sql = _StubSqlClient([_all_segments_brief_row()])
     repo = DatabricksGenieRepository(stub, sql)  # type: ignore[arg-type]
 
     result = repo.respond(_ALL_SEGMENTS_ESSENCE_QUESTION)
@@ -1210,13 +1226,19 @@ def test_text_only_all_segments_top_candidates_returns_driver_rich_answer() -> N
     assert result.trusted_assets == ["mip.gold.borrower_360"]
     assert result.table_rows
     assert result.table_rows[0]["why_now"].startswith("In the money")
-    # The analyst brief: a bullet per candidate with drivers + offer + reason.
-    assert "**#1 B-1ABCDEFGHIJKL**" in result.answer
-    assert "Aurora, IL" in result.answer
-    assert "why now: In the money: +183 bps rate spread | Strong equity: 47%" in result.answer
-    assert "offer: **Refinance review** because" in result.answer
-    assert "human approval in the Lead Queue" in result.answer
+    # The analyst brief teaches: header, position in dollars, term
+    # explanations, the live policy thresholds, the offer, and the play.
+    assert "**#1 · B-1ABCDEFGHIJKL · Aurora, IL · opportunity score 94/100.**" in result.answer
+    assert "paying 8.13% on roughly $351k" in result.answer
+    assert "183 basis points" in result.answer
+    assert "100 bps = 1 percentage point" in result.answer
+    assert "**The offer: Refinance review.**" in result.answer
+    assert "Lead Queue" in result.answer
     assert "Source: mip.gold.borrower_360" in result.answer
+    # Raw overlay segment codes never leak into the prose (the stub row's
+    # segments include refi_propensity; the brief must translate it).
+    assert "refi_propensity" not in result.answer
+    assert "refinance-propensity model" in result.answer
     assert result.proof is not None
     assert result.proof.trusted is True
     # The live path still tried an ask plus one governed SQL-repair retry.
@@ -1236,30 +1258,14 @@ def test_pii_flagged_narrative_is_withheld_not_refused_for_canonical_shape() -> 
         message_id="msg-withheld",
     )
     stub = _StubClient(_make_breaker("closed"), response=flagged)
-    sql = _StubSqlClient(
-        [
-            {
-                "borrower_id": "B-1ABCDEFGHIJKL",
-                "city": "Aurora",
-                "state": "IL",
-                "segments": "itm, equity",
-                "opportunity_score": 94,
-                "rate_spread_bps": 183,
-                "equity_pct": 47,
-                "why_now": "In the money: +183 bps rate spread | Strong equity: 47%",
-                "recommended_offer_code": "refi",
-                "recommended_offer": "Rate-improvement refinance",
-                "refreshed_at": "2026-08-05T02:00:00Z",
-            }
-        ]
-    )
+    sql = _StubSqlClient([_all_segments_brief_row()])
     repo = DatabricksGenieRepository(stub, sql)  # type: ignore[arg-type]
 
     result = repo.respond(_ALL_SEGMENTS_ESSENCE_QUESTION)
 
     assert result.source == "trusted_sql"
     assert "John Smith" not in result.answer
-    assert "**#1 B-1ABCDEFGHIJKL**" in result.answer
+    assert "#1 · B-1ABCDEFGHIJKL" in result.answer
     assert result.proof is not None
     assert any("withheld by the output safety guard" in gap for gap in result.proof.known_data_gaps)
     assert not any("returned no narrative" in gap for gap in result.proof.known_data_gaps)
