@@ -550,7 +550,12 @@ _CONTEXTUAL_HUMAN_NAME_RE = re.compile(
     r"segments?|cohorts?|homeowners?|investors?|people|everyone|anyone|someone|"
     r"is|are|was|were|will|would|can|could|may|might|has|have|had)\b)"
     r"[A-Za-z]{2,30}\s+[A-Za-z]{2,30}\b|"
-    r"\b[A-Za-z]{2,30}\s+[A-Za-z]{2,30}\s+(?:qualifies?|is the top borrower)\b",
+    # "X Y qualifies" catches case-normalized names ("john smith qualifies").
+    # Quantifier/population pairs ("each one qualifies", "which borrower
+    # qualifies") are grammar, not identities.
+    r"\b(?!(?:each|every|any|no|which|that|this|the|one)\b)[A-Za-z]{2,30}\s+"
+    r"(?!(?:one|ones|borrower|borrowers|candidate|candidates|customer|customers|lead|leads)\b)"
+    r"[A-Za-z]{2,30}\s+(?:qualifies?|is the top borrower)\b",
     re.IGNORECASE,
 )
 

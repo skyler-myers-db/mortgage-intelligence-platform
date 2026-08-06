@@ -584,9 +584,11 @@ def test_text_only_specific_intent_state_fallback_uses_borrower_360_not_generic_
     assert "FROM mip.gold.lead_population" not in result.sql_query
     assert "recommended_offer_code = 'cash_out'" in result.sql_query
     assert sql.parameters[-1] == {"state": "TX"}
-    # Voice-first: Genie's own narrative leads, with an appended verification note.
+    # Voice-first: Genie's own narrative leads, and the teaching-analyst
+    # brief follows instead of a one-line verification note.
     assert result.answer.startswith("Texas cash-out candidates are available.")
-    assert "Verified against" in result.answer
+    assert "I ranked the top" in result.answer
+    assert "**#1" in result.answer
 
 
 def test_text_only_multi_intent_fallback_discloses_primary_ranking_lens() -> None:
@@ -624,10 +626,11 @@ def test_text_only_multi_intent_fallback_discloses_primary_ranking_lens() -> Non
     assert result.source == "trusted_sql"
     assert result.sql_query is not None
     assert "recommended_offer_code = 'cash_out'" in result.sql_query
-    # Voice-first: the answer is Genie's own narrative plus a verification note;
+    # Voice-first: Genie's narrative leads and the teaching brief follows;
     # the cash-out ranking lens is still enforced by the governed SQL above.
     assert result.answer.startswith("Texas borrowers are available.")
-    assert "Verified against" in result.answer
+    assert "I ranked the top" in result.answer
+    assert "**#1" in result.answer
 
 
 def test_text_only_global_retention_empty_fallback_explains_eligibility_gate() -> None:
