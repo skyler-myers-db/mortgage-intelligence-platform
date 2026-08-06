@@ -189,6 +189,15 @@ GENIE_GEO_LOCATION_RE = re.compile(
     r"\(?\b[A-Z][A-Za-z.'-]*(?:\s+[A-Z][A-Za-z.'-]*){0,3},\s*[A-Z]{2}\b\)?"
 )
 
+# A parenthetical immediately after a masked borrower ID is always the
+# borrower's CITY in this product ("**B-0YINYSXBPWZBF** (Miramar): ...") —
+# borrower names never render and masked IDs are the only identity. City-only
+# forms lack the ", ST" the geography pattern above needs, so strip them here
+# before the name-shape scan.
+_MASKED_ID_CITY_PARENS_RE = re.compile(
+    r"(B-[0-9A-Z]{13}\*{0,2}[\s:,·—-]*)\(([A-Z][^)]{1,40})\)"
+)
+
 
 def genie_visible_text_unsafe(value: str, *, structured_value: bool = False) -> bool:
     """Fail-closed scan for one Genie-rendered string on the analytics surface.
@@ -208,6 +217,7 @@ def genie_visible_text_unsafe(value: str, *, structured_value: bool = False) -> 
     """
 
     scannable = GENIE_GEO_LOCATION_RE.sub(" ", value)
+    scannable = _MASKED_ID_CITY_PARENS_RE.sub(r"\1 ", scannable)
     return contains_unsafe_ai_text(
         scannable,
         include_titlecase=not structured_value,

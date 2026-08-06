@@ -19,6 +19,14 @@ def _scrub_sql_for_policy(sql: str | None) -> str | None:
     """
     if not sql:
         return None
+    # One trailing statement terminator is benign and common in generated
+    # SQL (live capture 2026-08-06: Genie's valid single statements often end
+    # in ";" and were rejected wholesale). Interior semicolons — the actual
+    # multi-statement smuggling vector — still reject below.
+    trimmed = sql.strip()
+    if trimmed.endswith(";"):
+        trimmed = trimmed[:-1]
+    sql = trimmed
     out: list[str] = []
     i = 0
     while i < len(sql):
