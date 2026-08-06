@@ -88,8 +88,12 @@ questions:
     forbid_keywords:
       - no borrowers
       - 0 borrowers
+    # Range re-based 2026-08-06 after the active-lien gate accuracy fix:
+    # 35,337 paid-off (zero-balance) borrowers no longer count as in the
+    # money, so the national ITM total dropped from ~125k to ~89k. Bounds
+    # stay generous to survive coverage growth while catching nonsense.
     expected_numeric_range:
-      min: 100000
+      min: 50000
       max: 250000
     require_trusted_proof: true
     require_select_sql: true
@@ -114,9 +118,10 @@ questions:
       - no borrowers
       - 147,742
       - 277,139
+    # Re-based 2026-08-06 with the active-lien gate (see national count note).
     expected_numeric_range:
-      min: 50000
-      max: 80000
+      min: 25000
+      max: 90000
     require_trusted_proof: true
     require_select_sql: true
     require_freshness: true
