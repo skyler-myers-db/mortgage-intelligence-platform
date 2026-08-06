@@ -122,6 +122,25 @@ def test_router_gate_renders_the_live_answer_with_city_and_offer_rows() -> None:
     assert genie_response_has_unsafe_visible_text(_visible_response()) is False
 
 
+def test_segment_display_labels_render_in_strategy_prose() -> None:
+    """The strategy board's own segment labels are product vocabulary, not
+    person names (live probe 2026-08-06: 'Prime Refi Candidates' blocked the
+    call-capacity strategy answer at the route gate)."""
+
+    from backend.services.genie_message_policy import genie_visible_text_unsafe
+
+    for label in (
+        "Prime Refi Candidates",
+        "Home Equity Candidate",
+        "Retention Risk",
+        "Listed for Sale",
+        "HELOC Intent",
+        "Investor / Multi-Property",
+    ):
+        prose = f"The top lane is state IL, {label}, with 12,345 marketable borrowers."
+        assert genie_visible_text_unsafe(prose) is False, label
+
+
 def test_router_gate_still_blocks_real_pii_in_prose_and_rows() -> None:
     named = _visible_response(answer="Call John Smith at 431 Maple Street.")
     assert genie_response_has_unsafe_visible_text(named) is True
