@@ -471,7 +471,19 @@ enriched AS (
     b.*,
     m.market_rate_fraction,
     -- Rate spread via frozen UDF. Both sides fractional.
-    mip.gold.fn_rate_spread(b.first_pos_rate, m.market_rate_fraction) AS rate_spread_bps,
+    -- Refi economics require an ACTIVE lien (accuracy fix 2026-08-06): when
+    -- the amortized UPB estimate says the debt is fully paid down (or no open
+    -- lien exists), the stale origination coupon must not read as an
+    -- in-the-money spread — there is nothing to refinance. Passing NULL keeps
+    -- fn_rate_spread's documented "no signal == no opportunity" contract
+    -- (returns 0, so downstream fn_in_the_money stays FALSE and non-NULL
+    -- consumers are unaffected).
+    mip.gold.fn_rate_spread(
+      CASE
+        WHEN COALESCE(b.estimated_current_lien_balance, 0) > 0 THEN b.first_pos_rate
+      END,
+      m.market_rate_fraction
+    ) AS rate_spread_bps,
     -- Equity % is the capped available-equity companion to display LTV.
     -- Prefer the gold-estimated current lien balance so equity dollars,
     -- equity_pct, display LTV, and current_lien_balance all read from the
@@ -612,7 +624,14 @@ enriched AS (
     -- Second-lien consolidation economics: spread of the OPEN second-
     -- position rate over the same first-lien par reference. Rolling an
     -- expensive second into a new first at par is the consolidation play.
-    mip.gold.fn_rate_spread(b.second_pos_rate, m.market_rate_fraction) AS second_pos_rate_spread_bps,
+    -- Same active-lien gate as rate_spread_bps: a fully paid-down balance
+    -- means no consolidation economics.
+    mip.gold.fn_rate_spread(
+      CASE
+        WHEN COALESCE(b.estimated_current_lien_balance, 0) > 0 THEN b.second_pos_rate
+      END,
+      m.market_rate_fraction
+    ) AS second_pos_rate_spread_bps,
     -- First-lien seasoning in whole months at refresh time. NULL when the
     -- origination date is missing (heuristic scores it 0 points).
     CASE
@@ -1064,7 +1083,14 @@ SELECT
   CAST(COALESCE(w.estimated_current_lien_balance_low, w.estimated_current_lien_balance, 0) AS BIGINT) AS current_lien_balance_low,
   CAST(COALESCE(w.estimated_current_lien_balance_high, w.estimated_current_lien_balance, 0) AS BIGINT) AS current_lien_balance_high,
   -- current_rate in PERCENT form (5.75), matches Pydantic + mock_data.
-  CAST(COALESCE(w.first_pos_rate * 100, 0.0) AS DOUBLE)                              AS current_rate,
+  -- Zeroed when the amortized UPB estimate says no active lien remains: a
+  -- paid-off loan has no CURRENT rate, and displaying the stale origination
+  -- coupon misreads as refi economics (accuracy fix 2026-08-06).
+  CAST(CASE
+    WHEN COALESCE(w.estimated_current_lien_balance, 0) > 0
+    THEN COALESCE(w.first_pos_rate * 100, 0.0)
+    ELSE 0.0
+  END AS DOUBLE)                                                                     AS current_rate,
   w.ltv,
   w.related_property_count,
   w.owner_count,
@@ -1171,7 +1197,7 @@ COMMENT ON COLUMN mip.gold.borrower_360.county_fips_5 IS '5-char FIPS county cod
 COMMENT ON COLUMN mip.gold.borrower_360.segment_codes IS 'Ordered list of SegmentCode Literals (itm/listed/permit/investor/equity/retention + S1.3 overlays second_lien_itm/heloc_draw_to_payback/home_equity_history/refi_propensity/itm_on_related_property/payoff_loss_leads/permit_activity) this borrower belongs to.';
 COMMENT ON COLUMN mip.gold.borrower_360.equity_estimate IS 'USD: GREATEST(0, avm_value - estimated current lien balance). Current lien uses fn_estimated_upb(first_pos_amount, first_pos_rate, months_elapsed) plus second-position amount when first-lien inputs are present.';
 COMMENT ON COLUMN mip.gold.borrower_360.equity_pct IS '0..100 int available-equity percentage from AVM and estimated current lien balance; falls back to Cotality estimated_cltv only when AVM is missing. Underwater borrowers clamp to 0 for scoring while display LTV can exceed 100. Feeds fn_in_the_money + fn_next_best_offer.';
-COMMENT ON COLUMN mip.gold.borrower_360.rate_spread_bps IS 'fn_rate_spread(first_pos_rate, market_rate_fraction). Positive = above market = refi opportunity.';
+COMMENT ON COLUMN mip.gold.borrower_360.rate_spread_bps IS 'fn_rate_spread(first_pos_rate, market_rate_fraction), gated on an ACTIVE lien: 0 when the amortized UPB estimate is fully paid down (nothing to refinance). Positive = above market = refi opportunity.';
 COMMENT ON COLUMN mip.gold.borrower_360.market_rate_fraction IS 'Fractional market rate from silver.market_rates_weekly WHERE is_latest=TRUE. Router maps to WhyPanel.market_rate.';
 COMMENT ON COLUMN mip.gold.borrower_360.opportunity_score IS 'fn_lead_score output. 0..100.';
 COMMENT ON COLUMN mip.gold.borrower_360.confidence IS 'ROUND(mean(5 sub-scores)). 0..100. Matches mock_data._build_borrower.';
@@ -1186,7 +1212,7 @@ COMMENT ON COLUMN mip.gold.borrower_360.avm_value IS 'COALESCE(avm_value, 0).';
 COMMENT ON COLUMN mip.gold.borrower_360.current_lien_balance IS 'Estimated current lien balance in USD: fn_estimated_upb(first_pos_amount, first_pos_rate, months_elapsed) plus second-position amount when first-lien inputs are present; otherwise COALESCE(total_open_lien_balance, 0).';
 COMMENT ON COLUMN mip.gold.borrower_360.current_lien_balance_low IS 'Lower bound of the estimated current lien balance confidence band in USD: fn_estimated_upb_confidence_band lower_upb plus second-position amount when first-lien inputs are present; otherwise equals current_lien_balance.';
 COMMENT ON COLUMN mip.gold.borrower_360.current_lien_balance_high IS 'Upper bound of the estimated current lien balance confidence band in USD: fn_estimated_upb_confidence_band upper_upb plus second-position amount when first-lien inputs are present; otherwise equals current_lien_balance.';
-COMMENT ON COLUMN mip.gold.borrower_360.current_rate IS 'PERCENT form (5.75, not 0.0575). Matches Pydantic current_rate and mock_data convention.';
+COMMENT ON COLUMN mip.gold.borrower_360.current_rate IS 'PERCENT form (5.75, not 0.0575). 0.0 when no active lien remains (paid-off loans carry no current rate). Matches Pydantic current_rate and mock_data convention.';
 COMMENT ON COLUMN mip.gold.borrower_360.ltv IS 'Display LTV int from estimated current lien balance divided by AVM when AVM is present; not upper-capped, so underwater borrowers may exceed 100.';
 COMMENT ON COLUMN mip.gold.borrower_360.related_property_count IS 'COALESCE(property_owner_bridge.related_property_count, 1).';
 COMMENT ON COLUMN mip.gold.borrower_360.owner_count IS 'S1.1: occupied owner slots on this CLIP in silver.property_owners (max 4, duplicate Owner Links collapsed). 0 when the source record has no owner information. Drives the multi-owner caveat chip.';

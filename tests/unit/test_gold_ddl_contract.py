@@ -402,7 +402,11 @@ def test_borrower_360_bounds_source_mortgage_rates_before_scoring() -> None:
     ).read_text(encoding="utf-8")
 
     assert "mip.gold.fn_bounded_mortgage_rate(lc.first_pos_rate) AS first_pos_rate" in text
-    assert "mip.gold.fn_rate_spread(b.first_pos_rate" in text
+    # Active-lien gate (2026-08-06): the spread input is NULLed when the
+    # amortized UPB estimate says the debt is fully paid down, so a stale
+    # origination coupon can never read as in-the-money refi economics.
+    assert "WHEN COALESCE(b.estimated_current_lien_balance, 0) > 0 THEN b.first_pos_rate" in text
+    assert "mip.gold.fn_rate_spread(" in text
     assert "mip.gold.fn_estimated_upb_confidence_band(" in text
     assert "current_lien_balance_low" in text
     assert "current_lien_balance_high" in text
