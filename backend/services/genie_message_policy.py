@@ -170,6 +170,43 @@ def _without_allowed_literals(value: str, allowed_literals: Sequence[str]) -> st
     return scrubbed
 
 
+# "City Name, ST" / "(City Name, ST)" geography references in Genie prose.
+# Borrower rows carry the same city/state strings, so citing them in a
+# narrative is sanctioned analytics output — but title-case city names
+# ("Lake Forest, CA") pattern-match the human-name-shape guard. Strip the
+# geography shape before the name-shape scan only. No real-person identity
+# can take this shape here: borrower names never render, and display
+# identities are synthetic masked IDs.
+GENIE_GEO_LOCATION_RE = re.compile(
+    r"\(?\b[A-Z][A-Za-z.'-]*(?:\s+[A-Z][A-Za-z.'-]*){0,3},\s*[A-Z]{2}\b\)?"
+)
+
+
+def genie_visible_text_unsafe(value: str, *, structured_value: bool = False) -> bool:
+    """Fail-closed scan for one Genie-rendered string on the analytics surface.
+
+    Ask Genie output is a read-only analytics narrative, not campaign copy:
+    ranking vocabulary ("candidates are those with the highest opportunity
+    scores") is the product's core language, so the campaign audience-formation
+    criterion machine is bypassed. Every PII, injection, confidential,
+    health-status, and direct protected-class detector stays on.
+
+    ``structured_value`` marks governed table-cell values (already key-redacted
+    gold columns such as city or offer labels). Those keep the mechanical-PII,
+    injection, and protected-class scans but skip the title-case human-name
+    heuristic, which can only false-positive on structured values ("El Paso",
+    "San Antonio", "Purchase Mortgage") — gold rows carry no name columns after
+    redaction.
+    """
+
+    scannable = GENIE_GEO_LOCATION_RE.sub(" ", value)
+    return contains_unsafe_ai_text(
+        scannable,
+        include_titlecase=not structured_value,
+        assume_reviewed_read_only_analytics=True,
+    )
+
+
 def genie_response_has_unsafe_visible_text(
     response: GenieMessageResponse,
     *,
@@ -197,8 +234,14 @@ def genie_response_has_unsafe_visible_text(
             )
             if value
         )
-    values.extend(_visible_text_values(response.table_rows or []))
+    row_values = _visible_text_values(response.table_rows or [])
     return any(
-        contains_unsafe_ai_text(_without_allowed_literals(value, allowed_literals))
+        genie_visible_text_unsafe(_without_allowed_literals(value, allowed_literals))
         for value in values
+    ) or any(
+        genie_visible_text_unsafe(
+            _without_allowed_literals(value, allowed_literals),
+            structured_value=True,
+        )
+        for value in row_values
     )
