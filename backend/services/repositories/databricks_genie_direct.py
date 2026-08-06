@@ -127,6 +127,7 @@ from backend.services.repositories.databricks_genie_canonical import (
     _specific_top_borrower_intent_note,
     _specific_top_borrower_sort_label,
     compose_all_segments_brief,
+    compose_cohort_ranking_brief,
 )
 from backend.services.repositories.databricks_genie_policy_helpers import (
     _emit_genie_warning,
@@ -839,14 +840,13 @@ def direct_canonical_response(
             )
             return None
         if rows:
-            top = rows[0]
             intent_note = _specific_top_borrower_intent_note(question, intent)
-            answer = (
-                f"I ranked the top {len(rows)} {state_name} ({state_code}) "
-                f"{intent_label} borrowers from {borrower_asset}, ordered by "
-                f"{sort_label}. The current first borrower is masked "
-                f"{top.get('borrower_id')} with opportunity score "
-                f"{int(top.get('opportunity_score') or 0):,}.{intent_note}"
+            answer = compose_cohort_ranking_brief(
+                rows,
+                cohort_label=f"{state_name} ({state_code}) {intent_label} borrowers",
+                ordering_label=sort_label,
+                source_asset=borrower_asset,
+                scope_note=intent_note.strip(),
             )
             response_sql_query = sql_query
             response_rows = rows
@@ -924,14 +924,13 @@ def direct_canonical_response(
             )
             return None
         if rows:
-            top = rows[0]
             intent_note = _specific_top_borrower_intent_note(question, intent)
-            answer = (
-                f"I ranked the top {len(rows)} {intent_label} borrowers across the "
-                f"current refreshed coverage from {borrower_asset}, ordered by "
-                f"{sort_label}. The current first borrower is masked "
-                f"{top.get('borrower_id')} with opportunity score "
-                f"{int(top.get('opportunity_score') or 0):,}.{intent_note}"
+            answer = compose_cohort_ranking_brief(
+                rows,
+                cohort_label=f"{intent_label} borrowers across the current refreshed coverage",
+                ordering_label=sort_label,
+                source_asset=borrower_asset,
+                scope_note=intent_note.strip(),
             )
             response_sql_query = sql_query
             response_rows = rows
@@ -1000,19 +999,15 @@ def direct_canonical_response(
         except DatabricksSqlError as exc:
             _emit_genie_warning("direct_canonical_genie_top_borrowers_state_failed", exc=exc)
             return None
-        if rows:
-            top = rows[0]
-            answer = (
-                f"I ranked the top {len(rows)} {state_name} ({state_code}) borrowers "
-                f"by lead score from {lead_population_asset}. "
-                f"The current leader is masked borrower {top.get('borrower_id')} "
-                f"with lead score {int(top.get('lead_score') or 0):,}."
-            )
-        else:
-            answer = (
-                f"The trusted lead population returned no {state_name} ({state_code}) "
-                "borrowers for the current refreshed data coverage."
-            )
+        answer = compose_cohort_ranking_brief(
+            rows,
+            cohort_label=f"{state_name} ({state_code}) borrowers in the ranked Lead Queue",
+            ordering_label="lead score",
+            source_asset=lead_population_asset,
+        ) if rows else (
+            f"The trusted lead population returned no {state_name} ({state_code}) "
+            "borrowers for the current refreshed data coverage."
+        )
         return trusted_response(
             question=question,
             sql_query=_CANONICAL_TOP_BORROWERS_BY_STATE_SQL,
@@ -1049,18 +1044,15 @@ def direct_canonical_response(
         except DatabricksSqlError as exc:
             _emit_genie_warning("direct_canonical_genie_top_borrowers_global_failed", exc=exc)
             return None
-        if rows:
-            top = rows[0]
-            answer = (
-                f"I ranked the top {len(rows)} marketing-eligible borrowers by lead score "
-                f"from {lead_population_asset}. The current first borrower is masked "
-                f"{top.get('borrower_id')} with lead score {int(top.get('lead_score') or 0):,}."
-            )
-        else:
-            answer = (
-                "The ranked lead population returned no marketing-eligible borrower rows "
-                "for the current refreshed coverage."
-            )
+        answer = compose_cohort_ranking_brief(
+            rows,
+            cohort_label="marketing-eligible borrowers in the ranked Lead Queue",
+            ordering_label="lead score",
+            source_asset=lead_population_asset,
+        ) if rows else (
+            "The ranked lead population returned no marketing-eligible borrower rows "
+            "for the current refreshed coverage."
+        )
         return trusted_response(
             question=question,
             sql_query=_CANONICAL_TOP_BORROWERS_GLOBAL_SQL,
@@ -1207,17 +1199,11 @@ def direct_canonical_response(
             return None
         listed_assets = [borrower_asset]
         if rows:
-            top = rows[0]
-            top_offer = offer_display_label(
-                str(top.get("recommended_offer_code") or ""),
-                str(top.get("recommended_offer") or ""),
-            )
-            answer = (
-                f"I ranked the top {len(rows)} marketing-eligible listed-for-sale borrowers "
-                f"from {borrower_asset}. The current first borrower is masked "
-                f"{top.get('borrower_id')} in {top.get('city')}, {top.get('state')} "
-                f"with opportunity score {int(top.get('opportunity_score') or 0):,}. "
-                f"Lead with {top_offer} only after review in the governed outreach workflow."
+            answer = compose_cohort_ranking_brief(
+                rows,
+                cohort_label="marketing-eligible listed-for-sale borrowers",
+                ordering_label="opportunity score among active listing signals",
+                source_asset=borrower_asset,
             )
         else:
             answer = (

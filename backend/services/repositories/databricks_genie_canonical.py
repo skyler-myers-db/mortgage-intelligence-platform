@@ -828,8 +828,37 @@ def _brief_offer_paragraph(row: dict[str, Any]) -> str:
     return f"**The offer: {offer}.** {reason[0].upper() + reason[1:] if reason else reason}"
 
 
-def compose_all_segments_brief(rows: list[dict[str, Any]], borrower_asset: str) -> str:
-    """Deterministic analyst brief for the all-segments top-candidates shape.
+def _brief_screen_txt(rows: list[dict[str, Any]]) -> str:
+    top = rows[0] if rows else {}
+    min_spread = _brief_int(top.get("min_spread_bps_applied"))
+    min_equity = _brief_int(top.get("min_equity_pct_applied"))
+    return (
+        f"at least {min_spread} bps of spread with at least {min_equity}% equity"
+        if min_spread and min_equity
+        else "enough spread and equity"
+    )
+
+
+def _brief_terms_txt(rows: list[dict[str, Any]]) -> str:
+    """The shared term-teaching sentence, thresholds read from the rows."""
+
+    return (
+        "Two terms recur below: **rate spread** is how far a borrower's "
+        "current mortgage rate sits above today's market rate, measured in "
+        "basis points (100 bps = 1 percentage point), and a borrower is "
+        "**in the money** when that gap is wide enough to make refinancing "
+        f"pay for itself ({_brief_screen_txt(rows)} under the current policy)."
+    )
+
+
+def compose_borrower_ranking_brief(
+    rows: list[dict[str, Any]],
+    *,
+    intro: str,
+    source_asset: str,
+    empty_message: str,
+) -> str:
+    """Teaching-analyst brief shared by every borrower-level ranking shape.
 
     Written for a Head of Growth, not a mortgage quant: every term is
     explained inline, every number is interpreted in dollars and plain
@@ -840,37 +869,8 @@ def compose_all_segments_brief(rows: list[dict[str, Any]], borrower_asset: str) 
     """
 
     if not rows:
-        return (
-            "The trusted borrower table returned no marketing-eligible, opt-in "
-            "borrowers across the segment portfolio for the current refreshed "
-            "coverage."
-        )
-    refreshed = str(rows[0].get("refreshed_at") or "")[:10]
-    refreshed_txt = f", refreshed {refreshed}," if refreshed else ""
-    top = rows[0]
-    min_spread = _brief_int(top.get("min_spread_bps_applied"))
-    min_equity = _brief_int(top.get("min_equity_pct_applied"))
-    screen_txt = (
-        f"at least {min_spread} bps of spread with at least {min_equity}% equity"
-        if min_spread and min_equity
-        else "enough spread and equity"
-    )
-    blocks: list[str] = [
-        (
-            f"I ranked every marketing-eligible, opt-in borrower in "
-            f"{borrower_asset}{refreshed_txt} by **opportunity score** — a "
-            "0-100 blend of refinance economics, home equity, listing "
-            "activity, portfolio ownership, retention risk, and Cotality's "
-            "behavioral propensity models — with rate-spread economics "
-            "breaking ties. Two terms recur below: **rate spread** is how far "
-            "a borrower's current mortgage rate sits above today's market "
-            "rate, measured in basis points (100 bps = 1 percentage point), "
-            "and a borrower is **in the money** when that gap is wide enough "
-            f"to make refinancing pay for itself ({screen_txt} under the "
-            f"current policy). Here are the top {len(rows)} candidates in "
-            "depth:"
-        )
-    ]
+        return empty_message
+    blocks: list[str] = [intro]
     for rank, row in enumerate(rows, start=1):
         score = _brief_int(row.get("opportunity_score"))
         header = (
@@ -918,8 +918,63 @@ def compose_all_segments_brief(rows: list[dict[str, Any]], borrower_asset: str) 
         "recommendation still requires human approval there before any "
         "outreach happens."
     )
-    blocks.append(f"Source: {borrower_asset}")
+    blocks.append(f"Source: {source_asset}")
     return "\n\n".join(blocks)
+
+
+def compose_all_segments_brief(rows: list[dict[str, Any]], borrower_asset: str) -> str:
+    """The all-segments hero brief, built on the shared ranking composer."""
+
+    refreshed = str(rows[0].get("refreshed_at") or "")[:10] if rows else ""
+    refreshed_txt = f", refreshed {refreshed}," if refreshed else ""
+    intro = (
+        f"I ranked every marketing-eligible, opt-in borrower in "
+        f"{borrower_asset}{refreshed_txt} by **opportunity score** — a "
+        "0-100 blend of refinance economics, home equity, listing "
+        "activity, portfolio ownership, retention risk, and Cotality's "
+        "behavioral propensity models — with rate-spread economics "
+        f"breaking ties. {_brief_terms_txt(rows)} Here are the top "
+        f"{len(rows)} candidates in depth:"
+    )
+    return compose_borrower_ranking_brief(
+        rows,
+        intro=intro,
+        source_asset=borrower_asset,
+        empty_message=(
+            "The trusted borrower table returned no marketing-eligible, opt-in "
+            "borrowers across the segment portfolio for the current refreshed "
+            "coverage."
+        ),
+    )
+
+
+def compose_cohort_ranking_brief(
+    rows: list[dict[str, Any]],
+    *,
+    cohort_label: str,
+    ordering_label: str,
+    source_asset: str,
+    scope_note: str = "",
+) -> str:
+    """Teaching brief for a named ranking cohort (intent, state, Lead Queue)."""
+
+    refreshed = str(rows[0].get("refreshed_at") or "")[:10] if rows else ""
+    refreshed_txt = f", refreshed {refreshed}," if refreshed else ""
+    intro = (
+        f"I ranked the top {len(rows)} {cohort_label} from "
+        f"{source_asset}{refreshed_txt} ordered by {ordering_label}."
+        f"{' ' + scope_note if scope_note else ''} "
+        f"{_brief_terms_txt(rows)} Here is each candidate in depth:"
+    )
+    return compose_borrower_ranking_brief(
+        rows,
+        intro=intro,
+        source_asset=source_asset,
+        empty_message=(
+            f"The trusted borrower table returned no marketing-eligible "
+            f"{cohort_label} for the current refreshed coverage."
+        ),
+    )
 
 _CANONICAL_TOP_REFI_BORROWERS_BY_STATE_SQL = f"""
 SELECT borrower_id
@@ -1217,6 +1272,119 @@ _CANONICAL_TOP_BORROWERS_GLOBAL_INTENT_SQL = {
     "investor": _CANONICAL_TOP_INVESTOR_BORROWERS_GLOBAL_SQL,
     "retention": _CANONICAL_TOP_RETENTION_BORROWERS_GLOBAL_SQL,
 }
+
+# ---------------------------------------------------------------------------
+# Teaching-analyst ranking SQL (2026-08-06). Every borrower-level ranking
+# shape shares one economics-rich SELECT so the analyst brief can interpret
+# each candidate in dollars, rates, and behavioral signals with the
+# run-specific policy thresholds. The generated dicts below REPLACE the
+# per-intent constants above at import time; the legacy constants remain only
+# as documentation of each shape's cohort predicate and ordering.
+# ---------------------------------------------------------------------------
+_RANKING_SELECT_COLUMNS = """b.borrower_id
+     , b.display_name
+     , b.city
+     , b.state
+     , b.zip
+     , array_join(b.segment_codes, ', ') AS segments
+     , b.opportunity_score
+     , b.rate_spread_bps
+     , b.equity_pct
+     , b.equity_estimate
+     , b.current_rate
+     , b.current_lien_balance
+     , b.avm_value
+     , b.in_the_money
+     , b.listed_for_sale
+     , b.listing_status_category
+     , b.related_property_count
+     , b.heloc_propensity_score
+     , b.has_heloc_propensity_trigger
+     , b.is_current_customer
+     , b.min_spread_bps_applied
+     , b.min_equity_pct_applied
+     , b.heloc_equity_min_applied
+     , b.cashout_equity_min_applied
+     , b.recommended_offer_code
+     , b.recommended_offer
+     , b.refreshed_at"""
+
+
+def _borrower_ranking_sql(where: str, order: str, *, state_scoped: bool) -> str:
+    scope = "b.state = :state\n  AND " if state_scoped else ""
+    return (
+        f"SELECT {_RANKING_SELECT_COLUMNS}\n"
+        f"FROM {_BORROWER_360} AS b\n"
+        f"WHERE {scope}{where}\n"
+        f"  AND {_B_ELIGIBLE}\n"
+        "  AND b.consent_status = 'opt_in'\n"
+        f"ORDER BY {order}\n"
+        "LIMIT 10"
+    )
+
+
+_INTENT_RANKING_SPECS: dict[str, tuple[str, str]] = {
+    "refi": (
+        "b.in_the_money = TRUE",
+        "b.opportunity_score DESC, b.rate_spread_bps DESC, b.borrower_id ASC",
+    ),
+    "cash_out": (
+        "b.recommended_offer_code = 'cash_out'",
+        "b.equity_estimate DESC, b.opportunity_score DESC, b.borrower_id ASC",
+    ),
+    "heloc": (
+        "(b.recommended_offer_code IN ('heloc', 'refi_plus_heloc')"
+        " OR b.has_heloc_propensity_trigger = TRUE"
+        " OR array_contains(b.segment_codes, 'permit'))",
+        "b.heloc_propensity_score DESC NULLS LAST, b.equity_estimate DESC, "
+        "b.opportunity_score DESC, b.borrower_id ASC",
+    ),
+    "listed": (
+        "b.listed_for_sale = TRUE",
+        "b.opportunity_score DESC, b.borrower_id ASC",
+    ),
+    "investor": (
+        "(array_contains(b.segment_codes, 'investor') OR b.is_investor = TRUE)",
+        "b.related_property_count DESC NULLS LAST, b.opportunity_score DESC, b.borrower_id ASC",
+    ),
+    "retention": (
+        "array_contains(b.segment_codes, 'retention')",
+        "b.opportunity_score DESC, b.rate_spread_bps DESC, b.borrower_id ASC",
+    ),
+}
+
+_CANONICAL_TOP_BORROWERS_BY_STATE_INTENT_SQL = {
+    intent: _borrower_ranking_sql(where, order, state_scoped=True)
+    for intent, (where, order) in _INTENT_RANKING_SPECS.items()
+}
+_CANONICAL_TOP_BORROWERS_GLOBAL_INTENT_SQL = {
+    intent: _borrower_ranking_sql(where, order, state_scoped=False)
+    for intent, (where, order) in _INTENT_RANKING_SPECS.items()
+}
+_CANONICAL_LISTED_PURCHASE_TOP_SQL = _borrower_ranking_sql(
+    _INTENT_RANKING_SPECS["listed"][0],
+    _INTENT_RANKING_SPECS["listed"][1],
+    state_scoped=False,
+)
+
+# Lead-Queue rankings keep mip.gold.lead_population as the source of the
+# ranked cohort (its rank/score are the operational truth) and join
+# borrower_360 for the economics the analyst brief interprets.
+_LEAD_QUEUE_RANKING_SQL_TEMPLATE = (
+    f"SELECT {_RANKING_SELECT_COLUMNS}\n"
+    "     , lp.rank_overall\n"
+    f"FROM {_LEAD_POPULATION} AS lp\n"
+    f"JOIN {_BORROWER_360} AS b ON b.borrower_id = lp.borrower_id\n"
+    "WHERE {scope}\n"
+    "ORDER BY lp.opportunity_score DESC, lp.rank_overall ASC, lp.borrower_id ASC\n"
+    "LIMIT 10"
+)
+_CANONICAL_TOP_BORROWERS_BY_STATE_SQL = _LEAD_QUEUE_RANKING_SQL_TEMPLATE.format(
+    scope="lp.state = :state"
+)
+_CANONICAL_TOP_BORROWERS_GLOBAL_SQL = _LEAD_QUEUE_RANKING_SQL_TEMPLATE.format(
+    scope=eligible_sql_predicate("lp")
+)
 
 _CANONICAL_TOP_CASH_OUT_BY_EQUITY_SQL = f"""
 SELECT borrower_id

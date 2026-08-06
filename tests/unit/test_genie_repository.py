@@ -814,7 +814,7 @@ def test_top_borrowers_by_state_uses_canonical_lead_population_rows() -> None:
     result = repo.respond("Show me the top 10 borrowers by lead score in Illinois.")
 
     assert result.source == "trusted_sql"
-    assert result.trusted_assets == ["mip.gold.lead_population"]
+    assert result.trusted_assets == ["mip.gold.lead_population", "mip.gold.borrower_360"]
     assert result.proof is not None
     assert result.proof.trusted is True
     assert result.sql_query is not None

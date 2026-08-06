@@ -70,6 +70,7 @@ from backend.services.repositories.databricks_genie_canonical import (
     _specific_top_borrower_intent_note,
     _specific_top_borrower_sort_label,
     compose_all_segments_brief,
+    compose_cohort_ranking_brief,
 )
 from backend.services.repositories.databricks_genie_direct import (
     direct_canonical_response,
@@ -132,7 +133,6 @@ from backend.services.repositories.databricks_genie_visualization import (
     _value_column,  # noqa: F401 - compatibility re-export
 )
 from backend.services.resilience import DependencyDownError
-from backend.services.scoring import offer_display_label
 
 _SOURCE_LINE_RE = re.compile(
     r"(?im)^\s*source\s*:\s*`?[A-Za-z_][\w-]*\.[A-Za-z_]\w*\.[A-Za-z_]\w*`?\.?\s*$"
@@ -881,14 +881,13 @@ def _canonical_genie_answer(
             source="trusted_sql",
         )
         if rows:
-            top = rows[0]
             intent_note = _specific_top_borrower_intent_note(question, intent)
-            answer = (
-                f"I ranked the top {len(rows)} {state_name} ({state_code}) "
-                f"{intent_label} borrowers from {borrower_asset}, ordered by "
-                f"{sort_label}. The current first borrower is masked "
-                f"{top.get('borrower_id')} with opportunity score "
-                f"{int(top.get('opportunity_score') or 0):,}.{intent_note}"
+            answer = compose_cohort_ranking_brief(
+                rows,
+                cohort_label=f"{state_name} ({state_code}) {intent_label} borrowers",
+                ordering_label=sort_label,
+                source_asset=borrower_asset,
+                scope_note=intent_note.strip(),
             )
         elif retention_fallback is not None:
             answer = retention_fallback.answer
@@ -980,14 +979,13 @@ def _canonical_genie_answer(
             source="trusted_sql",
         )
         if rows:
-            top = rows[0]
             intent_note = _specific_top_borrower_intent_note(question, intent)
-            answer = (
-                f"I ranked the top {len(rows)} {intent_label} borrowers across the "
-                f"current refreshed coverage from {borrower_asset}, ordered by "
-                f"{sort_label}. The current first borrower is masked "
-                f"{top.get('borrower_id')} with opportunity score "
-                f"{int(top.get('opportunity_score') or 0):,}.{intent_note}"
+            answer = compose_cohort_ranking_brief(
+                rows,
+                cohort_label=f"{intent_label} borrowers across the current refreshed coverage",
+                ordering_label=sort_label,
+                source_asset=borrower_asset,
+                scope_note=intent_note.strip(),
             )
         elif retention_fallback is not None:
             answer = retention_fallback.answer
@@ -1071,7 +1069,7 @@ def _canonical_genie_answer(
             _emit_genie_warning("canonical_genie_top_borrowers_state_failed", exc=exc)
             return None
         rows = _redact_genie_rows(rows) or []
-        trusted_assets = [lead_population_asset]
+        trusted_assets = [lead_population_asset, borrower_asset]
         question_hash = _genie_question_hash(question)
         proof = _build_genie_proof(
             sql_query=_CANONICAL_TOP_BORROWERS_BY_STATE_SQL,
@@ -1094,19 +1092,15 @@ def _canonical_genie_answer(
             sql_query=_CANONICAL_TOP_BORROWERS_BY_STATE_SQL,
             source="trusted_sql",
         )
-        if rows:
-            top = rows[0]
-            answer = (
-                f"I ranked the top {len(rows)} {state_name} ({state_code}) borrowers "
-                f"by lead score from {lead_population_asset}. "
-                f"The current leader is masked borrower {top.get('borrower_id')} "
-                f"with lead score {int(top.get('lead_score') or 0):,}."
-            )
-        else:
-            answer = (
-                f"The trusted lead population returned no {state_name} ({state_code}) "
-                "borrowers for the current refreshed data coverage."
-            )
+        answer = compose_cohort_ranking_brief(
+            rows,
+            cohort_label=f"{state_name} ({state_code}) borrowers in the ranked Lead Queue",
+            ordering_label="lead score",
+            source_asset=lead_population_asset,
+        ) if rows else (
+            f"The trusted lead population returned no {state_name} ({state_code}) "
+            "borrowers for the current refreshed data coverage."
+        )
         return GenieMessageResponse(
             conversation_id=result.conversation_id,
             message_id=result.message_id,
@@ -1130,7 +1124,7 @@ def _canonical_genie_answer(
             _emit_genie_warning("canonical_genie_top_borrowers_global_failed", exc=exc)
             return None
         rows = _redact_genie_rows(rows) or []
-        trusted_assets = [lead_population_asset]
+        trusted_assets = [lead_population_asset, borrower_asset]
         question_hash = _genie_question_hash(question)
         proof = _build_genie_proof(
             sql_query=_CANONICAL_TOP_BORROWERS_GLOBAL_SQL,
@@ -1153,19 +1147,15 @@ def _canonical_genie_answer(
             sql_query=_CANONICAL_TOP_BORROWERS_GLOBAL_SQL,
             source="trusted_sql",
         )
-        if rows:
-            top = rows[0]
-            answer = (
-                f"I ranked the top {len(rows)} marketing-eligible borrowers by lead "
-                f"score from {lead_population_asset}. The current first borrower is "
-                f"masked {top.get('borrower_id')} with lead score "
-                f"{int(top.get('lead_score') or 0):,}."
-            )
-        else:
-            answer = (
-                "The ranked lead population returned no marketing-eligible borrower "
-                "rows for the current refreshed coverage."
-            )
+        answer = compose_cohort_ranking_brief(
+            rows,
+            cohort_label="marketing-eligible borrowers in the ranked Lead Queue",
+            ordering_label="lead score",
+            source_asset=lead_population_asset,
+        ) if rows else (
+            "The ranked lead population returned no marketing-eligible borrower "
+            "rows for the current refreshed coverage."
+        )
         return GenieMessageResponse(
             conversation_id=result.conversation_id,
             message_id=result.message_id,
@@ -1547,24 +1537,15 @@ def _canonical_genie_answer(
             sql_query=_CANONICAL_LISTED_PURCHASE_TOP_SQL,
             source="trusted_sql",
         )
-        if rows:
-            top = rows[0]
-            top_offer = offer_display_label(
-                str(top.get("recommended_offer_code") or ""),
-                str(top.get("recommended_offer") or ""),
-            )
-            answer = (
-                f"I ranked the top {len(rows)} marketing-eligible listed-for-sale borrowers "
-                f"from {borrower_asset}. The current first borrower is masked "
-                f"{top.get('borrower_id')} in {top.get('city')}, {top.get('state')} "
-                f"with opportunity score {int(top.get('opportunity_score') or 0):,}. "
-                f"Lead with {top_offer} only after review in the governed outreach workflow."
-            )
-        else:
-            answer = (
-                "The trusted borrower table returned no marketing-eligible listed-for-sale "
-                "borrowers for the current refreshed coverage."
-            )
+        answer = compose_cohort_ranking_brief(
+            rows,
+            cohort_label="marketing-eligible listed-for-sale borrowers",
+            ordering_label="opportunity score among active listing signals",
+            source_asset=borrower_asset,
+        ) if rows else (
+            "The trusted borrower table returned no marketing-eligible listed-for-sale "
+            "borrowers for the current refreshed coverage."
+        )
         return GenieMessageResponse(
             conversation_id=result.conversation_id,
             message_id=result.message_id,
@@ -1693,7 +1674,7 @@ def _canonical_genie_answer(
             source="trusted_sql",
         )
         answer = (
-            f"There are {count_int:,} borrowers passing the refinance-economics screen in {city_scope} "
+            f"There are {count_int:,} borrowers passing the refinance-economics screen in {city_scope} — meaning their current mortgage rate sits far enough above today\'s market, with enough home equity, that refinancing typically pays for itself — "
             f"within the current {_current_footprint_label()} evaluation-share scope. "
             f"This is a city-scoped unique borrower count from {borrower_asset}; "
             "it is not the overall share total."
@@ -1758,7 +1739,7 @@ def _canonical_genie_answer(
     )
     geo_text = f" in {state_scope[0]} ({state_scope[1]})" if state_scope else ""
     answer = (
-        f"There are {count_int:,} borrowers passing the refinance-economics screen{geo_text}. "
+        f"There are {count_int:,} borrowers passing the refinance-economics screen{geo_text} — meaning their current mortgage rate sits far enough above today\'s market, with enough home equity, that refinancing typically pays for itself. "
         f"This is a unique borrower count from {borrower_asset} at the "
         "gold borrower grain, so multi-segment borrowers are counted once."
     )
