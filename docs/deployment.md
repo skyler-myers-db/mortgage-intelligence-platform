@@ -18,6 +18,57 @@ npm --prefix frontend run build
 
 FastAPI serves `frontend/dist` automatically if present.
 
+## App source contract (prebuilt frontend, no root npm manifest)
+
+The Databricks App serves the **prebuilt** `frontend/dist/` bundle compiled by
+`scripts/deploy.sh` under the audited CI Node version. The promoted App source
+tree must never contain a root `package.json`/`package-lock.json`: when a root
+`package.json` with a `build` script is present, the Databricks Apps build
+phase runs it on every deployment with the platform's own Node (22.16 today,
+vs the audited 22.22 — the engines mismatch is only an EBADENGINE warning, so
+the build *succeeds*) and recompiles `frontend/dist/` from the uploaded
+`frontend/src/**`, silently replacing the prebuilt bundle. This is how a
+dist-only hotfix kept reverting on the paychex dev workspace on 2026-08-05
+(~5 hours of debugging): the tree still carried a stale root manifest, so
+every deployment rebuilt the old sources over the freshly-synced dist.
+
+Enforcement is two-layer, pinned by
+`tests/unit/test_static_app_bundle_contract.py`:
+
+1. **`databricks.yml` `sync.exclude`** keeps `/package.json` and
+   `/package-lock.json` out of bundle uploads. Verified on Databricks CLI
+   v1.10.0 (2026-08-05 scratch-bundle experiment): a bundle deploy with the
+   exclusion not only skips uploading the manifests but also **deletes
+   previously-uploaded copies** from the target tree, with or without local
+   sync-snapshot state. The exclusion cannot protect a tree that only ever
+   receives deploys from checkouts predating it — the 2026-08-05 paychex
+   re-upload came from an old-lineage worktree whose `databricks.yml` had
+   neither this exclusion nor the current workspace-host anchor.
+2. **`tools/databricks/converge_static_app_source.py`** runs inside
+   `scripts/deploy.sh` immediately before the App promotion: it requires a
+   non-empty `frontend/dist/index.html` in the uploaded tree and deletes any
+   root Node manifests that reached it by other means. It is also the
+   governed way to clean a stale tree by hand — it validates the exact
+   bundle-files path shape and touches nothing but the two manifest files.
+
+Two operational facts to know before assembling any ad-hoc App source tree
+(emergency recovery only — the command of record is `./scripts/deploy.sh`):
+
+- **Source lister budget.** The Apps deployment source snapshot has a hard
+  60-second listing budget; the failure reads `Failed to snapshot source
+  code ... list files timed out after 1m0s. Please consider reducing the
+  number of files in your app.` The full repo tree (~2,400 files) can exceed
+  it on slow workspaces, while ~1,400 files listed fine on the same
+  workspace. Keep ad-hoc source trees well under that.
+- **The frontend typecheck reaches outside `frontend/`.** Two src-co-located
+  Vitest specs (`frontend/src/lib/campaignPrefill.test.ts`,
+  `frontend/src/lib/opportunityScore.test.ts`) import
+  `../../../tests/fixtures/campaign_prefill_segment_parity.json` and
+  `../../../tests/fixtures/score_band_golden.json`, and `tsc -b` typechecks
+  all of `src/**`. Any tree that performs (or accidentally triggers) a
+  frontend build must therefore include those root `tests/fixtures/` files,
+  or the build fails with TS2307.
+
 ## Databricks App
 
 1. Fill `.env.local` with workspace, warehouse, lender/runtime values, and the

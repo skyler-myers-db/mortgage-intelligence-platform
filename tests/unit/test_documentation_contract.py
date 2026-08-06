@@ -132,6 +132,33 @@ def test_current_operator_docs_never_advertise_bare_mutable_deployment() -> None
         assert "./scripts/deploy.sh -t dev" in text or "make deploy-dev" in text
 
 
+def test_deployment_doc_pins_the_prebuilt_app_source_contract() -> None:
+    deployment = _read(ROOT / "docs" / "deployment.md")
+    app_yaml = _read(ROOT / "app.yaml")
+    bundle = _read(ROOT / "databricks.yml")
+
+    for required in (
+        "## App source contract (prebuilt frontend, no root npm manifest)",
+        "converge_static_app_source.py",
+        "list files timed out after 1m0s",
+        "campaignPrefill.test.ts",
+        "opportunityScore.test.ts",
+        "campaign_prefill_segment_parity.json",
+        "score_band_golden.json",
+        "EBADENGINE",
+    ):
+        assert required in deployment
+    # app.yaml's pre-2026-08-05 claim ("deliberately has no root npm manifest
+    # or runtime build command") was falsified in the field: a stale root
+    # manifest in the promoted tree DOES trigger the platform npm rebuild,
+    # which overwrites the prebuilt dist. Both config surfaces must document
+    # the trigger and point at the contract instead of denying the hazard.
+    assert "deliberately has no root npm manifest" not in app_yaml
+    for surface in (app_yaml, bundle):
+        assert "converge_static_app_source" in surface
+        assert 'docs/deployment.md "App source contract"' in surface
+
+
 def test_otlp_operator_docs_use_the_same_governed_target() -> None:
     for relative in (
         "docs/observability.md",
