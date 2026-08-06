@@ -739,10 +739,11 @@ def _restore_live_voice(
                     update={"known_data_gaps": [*proof.known_data_gaps, gap]}
                 )
     elif narrative:
-        if canonical.sql_query == _CANONICAL_TOP_BORROWERS_ALL_SEGMENTS_SQL:
-            # The all-segments brief is the product's deep per-borrower
-            # analysis; a surviving live narrative leads and the verified
-            # brief follows, instead of flattening to a one-line note.
+        if "**#1" in (canonical.answer or ""):
+            # Any teaching-analyst ranking brief (marked by its per-candidate
+            # headers) is the product's deep analysis; a surviving live
+            # narrative leads and the verified brief follows, instead of
+            # flattening to a one-line note.
             answer = f"{narrative}\n\n{canonical.answer}"
         else:
             note = _default_verification_note(
