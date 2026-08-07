@@ -92,6 +92,8 @@ questions:
     # 35,337 paid-off (zero-balance) borrowers no longer count as in the
     # money, so the national ITM total dropped from ~125k to ~89k. Bounds
     # stay generous to survive coverage growth while catching nonsense.
+    # Re-verified 2026-08-06 after the bound-cap guard (at-bound clamped
+    # rates no longer mint spread): live 88,806 — still inside bounds.
     expected_numeric_range:
       min: 50000
       max: 250000
@@ -119,6 +121,7 @@ questions:
       - 147,742
       - 277,139
     # Re-based 2026-08-06 with the active-lien gate (see national count note).
+    # Re-verified 2026-08-06 after the bound-cap guard: live 49,070.
     expected_numeric_range:
       min: 25000
       max: 90000
