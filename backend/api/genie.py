@@ -84,9 +84,6 @@ from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_js
 from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
 from backend.services.observability import emit
 from backend.services.repositories import BorrowerRepository, GenieAnswerRepository
-from backend.services.repositories.databricks_genie_sweep import (
-    is_full_analysis_question,
-)
 from backend.services.repositories.factory import (
     get_borrower_repository,
     get_genie_answer_repository,
@@ -524,11 +521,6 @@ def genie_message_submit(
         # BEFORE any live Genie call. The async lifecycle honors the same
         # posture by resolving the whole turn here instead of creating a live
         # message (QA review H2 — submit previously bypassed the posture).
-        return _inline_repo_resolution()
-    if is_full_analysis_question(payload.question):
-        # "Analyze everything" turns are a multi-part LIVE sweep, not one
-        # Genie message — resolve through the repository pipeline, which
-        # orchestrates the themed sub-turns itself.
         return _inline_repo_resolution()
     try:
         conversation_id, message_id = get_genie_client().submit_message(
