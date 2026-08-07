@@ -246,26 +246,17 @@ def test_genie_retention_list_uses_canonical_row_lookup_not_count_metric() -> No
 
     response = _adapt_genie_response(question, result, sql_client=_SqlClient())  # type: ignore[arg-type]
 
-    assert response.source == "trusted_sql"
+    # Live-first: Genie chose the correct governed signal enum and a row
+    # lookup on its own — its query, rows, and narrative ship as the answer.
+    assert response.source == "genie"
     assert "COUNT(*) AS retention_risk_borrowers" not in (response.sql_query or "")
     assert "e.signal_type = 'competitor_lien'" in (response.sql_query or "")
     assert "e.signal_type = 'lien-change'" not in (response.sql_query or "")
     assert response.table_rows == [
-        {
-            "borrower_id": "B-102FL7THC6Q3L",
-            "city": "Calumet City",
-            "state": "IL",
-            "recommended_offer_code": "retention",
-            "opportunity_score": 88,
-            "latest_competitor_lien_at": "2026-05-09T00:00:00Z",
-            "total_matching_borrowers": 304,
-        }
+        {"borrower_id": "B-102FL7THC6Q3L", "signal_type": "competitor_lien"}
     ]
-    assert response.metric_value == "304"
-    # Voice-first: Genie's narrative leads; the verified total is appended.
+    assert response.metric_value is None
     assert response.answer.startswith("Rows.")
-    assert "Verified against" in response.answer
-    assert "304" in response.answer
 
 
 def test_genie_retention_list_uses_canonical_competitor_lien_signal() -> None:

@@ -3066,28 +3066,23 @@ def test_in_the_money_count_uses_canonical_gold_grain() -> None:
 
     result = repo.respond("How many borrowers are currently in-the-money?")
 
-    assert result.source == "trusted_sql"
-    # Trust boundary (external audit 2026-07-08): the model's 277,139 claim
-    # CONTRADICTS the governed recomputation (147,742), so the verified
-    # deterministic statement leads and the wrong figure never appears in the
-    # answer. The discrepancy is disclosed as a proof gap, not shown as fact.
+    # Live-first with teeth (2026-08-07): Genie's own trusted query and rows
+    # ship, but the audited trust boundary holds — a metric whose grain
+    # contradicts the governed unique-borrower recomputation (147,742) never
+    # renders as fact. The answer teaches the grain and cites the governed
+    # figure; the wrong 277,139 appears only as row data under its own query.
+    assert result.source == "genie"
     assert "277,139" not in result.answer
     assert "147,742" in result.answer
     assert result.proof is not None
-    assert any("unsupported prose was removed" in gap for gap in result.proof.known_data_gaps)
+    assert any("grain or scope" in gap for gap in result.proof.known_data_gaps)
     assert all("277,139" not in gap for gap in result.proof.known_data_gaps)
-    assert result.table_rows == [
-        {
-            "in_the_money_borrowers": 147742,
-            "refreshed_at": "2026-05-04T22:08:34.662Z",
-        }
-    ]
-    assert result.metric_value == "147,742"
+    assert result.table_rows == [{"borrowers": 277139}]
+    assert result.metric_value is None
     assert result.sql_query == (
-        "SELECT COUNT(*) AS in_the_money_borrowers\n"
-        "     , MAX(refreshed_at) AS refreshed_at\n"
-        "FROM mip.gold.borrower_360\n"
-        "WHERE in_the_money = TRUE"
+        "SELECT COUNT(*) AS borrowers "
+        "FROM mip.semantics.borrower_opportunity_metric_view "
+        "WHERE in_the_money = true"
     )
 
 
@@ -3287,25 +3282,19 @@ def test_in_the_money_count_applies_state_scope_when_present() -> None:
 
     result = repo.respond("How many borrowers in Illinois are in the money?")
 
-    # The model's all-footprint 277,139 contradicts the state-scoped verified
-    # count: the governed figure leads, the wrong figure is disclosed as a gap.
+    # Live-first with teeth: the mis-scoped all-footprint figure never renders
+    # as fact; the state-scoped governed count is taught instead. Genie's own
+    # query and rows still ship.
+    assert result.source == "genie"
     assert "277,139" not in result.answer
     assert "70,939" in result.answer
     assert result.proof is not None
-    assert any("unsupported prose was removed" in gap for gap in result.proof.known_data_gaps)
-    assert result.table_rows == [
-        {
-            "in_the_money_borrowers": 70939,
-            "refreshed_at": "2026-05-04T22:08:34.662Z",
-            "state": "IL",
-        }
-    ]
+    assert any("grain or scope" in gap for gap in result.proof.known_data_gaps)
+    assert result.table_rows == [{"borrowers": 277139}]
     assert result.sql_query == (
-        "SELECT COUNT(*) AS in_the_money_borrowers\n"
-        "     , MAX(refreshed_at) AS refreshed_at\n"
-        "FROM mip.gold.borrower_360\n"
-        "WHERE in_the_money = TRUE\n"
-        "  AND state = :state"
+        "SELECT COUNT(*) AS borrowers "
+        "FROM mip.semantics.borrower_opportunity_metric_view "
+        "WHERE in_the_money = true"
     )
     assert sql.parameters == [{"state": "IL"}]
 
@@ -3331,9 +3320,12 @@ def test_in_the_money_count_applies_lowercase_ambiguous_state_code_when_contextu
 
     result = repo.respond("How many borrowers in ok are in the money?")
 
-    assert result.sql_query is not None
-    assert "AND state = :state" in result.sql_query
+    # Live-first: Genie's own consistent count ships; the contextual "ok" ->
+    # OK disambiguation now drives the governed cross-check scoping.
+    assert result.source == "genie"
     assert sql.parameters == [{"state": "OK"}]
+    assert result.proof is not None
+    assert not any("grain or scope" in gap for gap in result.proof.known_data_gaps)
 
 
 def test_in_the_money_count_does_not_scope_common_words_as_state_codes() -> None:
@@ -3397,26 +3389,17 @@ def test_in_the_money_count_applies_city_scope_when_present(
 
     result = repo.respond(question)
 
-    # Unsupported all-footprint claims are removed regardless of their
-    # magnitude relative to the governed city-scoped count.
+    # Live-first with teeth: the mis-scoped all-footprint figure never
+    # renders as fact; the governed city-scoped count is taught instead while
+    # Genie's own query and rows still ship.
+    assert result.source == "genie"
     assert "147,742" not in result.answer
     assert f"{count:,}" in result.answer
     assert result.proof is not None
-    assert any("unsupported prose was removed" in gap for gap in result.proof.known_data_gaps)
-    assert result.table_rows == [
-        {
-            "city": city,
-            "in_the_money_borrowers": count,
-            "refreshed_at": "2026-05-04T22:08:34.662Z",
-        }
-    ]
-    assert result.sql_query == (
-        "SELECT COUNT(*) AS in_the_money_borrowers\n"
-        "     , MAX(refreshed_at) AS refreshed_at\n"
-        "FROM mip.gold.borrower_360\n"
-        "WHERE in_the_money = TRUE\n"
-        "  AND LOWER(city) = LOWER(:city)"
-    )
+    assert any("grain or scope" in gap for gap in result.proof.known_data_gaps)
+    assert result.table_rows == [{"borrowers": 147742}]
+    assert result.sql_query is not None
+    assert "LOWER(city)" not in result.sql_query
     assert sql.parameters == [{"city": city}]
 
 
@@ -3822,25 +3805,26 @@ def test_recognized_shape_live_turn_preserves_genie_voice_and_live_fields() -> N
         sql_client=sql,  # type: ignore[arg-type]
     )
 
-    assert result.source == "trusted_sql"
-    # Genie's own narrative leads (not replaced by canned template phrasing).
+    # Live-first: Genie's own consistent turn IS the answer.
+    assert result.source == "genie"
     assert result.answer.startswith("There are roughly 147,742 borrowers in the money right now.")
-    # Live-intelligence fields carried through exactly like the generic path.
     assert result.genie_status == "COMPLETED"
     # The process summary describes what the governed pipeline actually did,
-    # with one distinct step per stage -- not four repeats of a generic phrase.
+    # with one distinct step per stage: the governed cross-check verifies the
+    # metric and the narrative verification follows -- no canonical override.
     assert [step.kind for step in result.reasoning_trace] == [
         "guardrails",
         "live",
         "trust",
-        "canonical",
         "execute",
+        "verify",
         "verify",
     ]
     contents = [step.content for step in result.reasoning_trace]
     assert len(set(contents)) == len(contents)
     assert "mip.gold.borrower_360" in contents[1]
-    assert "Returned 1 row from mip.gold.borrower_360" in contents[4]
+    assert "Returned 1 row from mip.gold.borrower_360" in contents[3]
+    assert any("Governed cross-check" in c and "matches" in c for c in contents)
     assert result.proof is not None
     assert [step.model_dump() for step in result.proof.reasoning_trace] == [
         step.model_dump() for step in result.reasoning_trace
@@ -3848,8 +3832,7 @@ def test_recognized_shape_live_turn_preserves_genie_voice_and_live_fields() -> N
     assert result.native_visualization is not None
     assert result.native_visualization.attachment_id == "att-1"
     assert result.follow_up_questions == ["Which ZIPs lead on refinance savings?"]
-    # Governance preserved: the re-executed gold-grain count.
-    assert result.metric_value == "147,742"
+    assert result.metric_value is None
 
 
 def test_live_reasoning_omits_title_lowercase_and_uppercase_identity_shapes() -> None:
@@ -3967,11 +3950,16 @@ def test_recognized_shape_verification_note_appends_not_replaces() -> None:
         sql_client=sql,  # type: ignore[arg-type]
     )
 
-    # Agreeing figures: Genie's own narrative remains AND the verified
-    # gold-grain figure is appended after it.
+    # Live-first: agreeing figures mean Genie's own narrative ships as the
+    # answer, and verification is recorded as the consistent governed
+    # cross-check in the process trace instead of an appended note.
+    assert result.source == "genie"
     assert result.answer.startswith("There are about 147,742 borrowers in the money.")
-    assert "Verified against mip.gold.borrower_360: 147,742" in result.answer
-    assert result.answer.index("about 147,742") < result.answer.index("Verified against")
+    assert "Verified against" not in result.answer
+    assert any(
+        "Governed cross-check" in step.content and "matches" in step.content
+        for step in result.reasoning_trace
+    )
 
 
 def test_recognized_shape_strips_entire_narrative_when_any_financial_claim_is_unsupported() -> None:
@@ -3995,12 +3983,15 @@ def test_recognized_shape_strips_entire_narrative_when_any_financial_claim_is_un
         ),  # type: ignore[arg-type]
     )
 
-    assert result.source == "trusted_sql"
-    assert "147,742" in result.answer
+    assert result.source == "genie"
     assert "$999,999" not in result.answer
     assert "7.25%" not in result.answer
+    assert "withheld" in result.answer
     assert result.proof is not None
-    assert any("unsupported prose was removed" in gap for gap in result.proof.known_data_gaps)
+    assert any(
+        "could not be verified against the returned rows" in gap
+        for gap in result.proof.known_data_gaps
+    )
 
 
 def test_recognized_shape_empty_narrative_falls_back_with_honest_gap() -> None:
@@ -4023,12 +4014,13 @@ def test_recognized_shape_empty_narrative_falls_back_with_honest_gap() -> None:
         sql_client=sql,  # type: ignore[arg-type]
     )
 
-    assert result.source == "trusted_sql"
-    # No usable narrative even after repair -> precise deterministic summary,
-    # disclosed honestly in the proof gap notes.
+    assert result.source == "genie"
+    # Live-first with teeth: the empty narrative plus a grain-divergent count
+    # produces the teaching answer citing the governed figure, with Genie's
+    # own query and rows still shipping.
     assert "147,742" in result.answer
     assert result.proof is not None
-    assert any("Genie returned no narrative" in gap for gap in result.proof.known_data_gaps)
+    assert any("grain or scope" in gap for gap in result.proof.known_data_gaps)
 
 
 def test_contradiction_detector_zero_claim_and_identifier_guard() -> None:

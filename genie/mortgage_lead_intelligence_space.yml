@@ -178,6 +178,15 @@ instructions: |
       generate an executable SELECT over the trusted assets, do not provide a
       numeric or strategic answer; say you cannot produce a governed SQL
       answer for that question and cite the closest trusted asset or data gap.
+    - Default ranking policy: when asked for "top borrowers" or "top
+      candidates" without an explicit metric, rank marketing-eligible,
+      opt-in borrowers by opportunity_score, then rate_spread_bps, then
+      borrower_id — the same order the Lead Queue uses — and say so in the
+      narrative. Use a different ordering only when the user names one.
+    - Choose the most specific trusted asset for the question: metric views
+      for aggregates, funnel_snapshot_daily for trends over time,
+      lockin_cohort for loan-vintage questions, evidence_events for trigger
+      timelines, borrower_360/lead_population for borrower-level detail.
     - For top-N and ranking questions, make the narrative a per-row analysis:
       for each returned borrower cite its drivers from the result columns
       (rate spread, equity, listing, related-property count, retention, and
