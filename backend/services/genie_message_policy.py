@@ -225,6 +225,53 @@ def genie_visible_text_unsafe(value: str, *, structured_value: bool = False) -> 
     )
 
 
+def genie_unsafe_visible_field(
+    response: GenieMessageResponse,
+    *,
+    allowed_literals: Sequence[str] = (),
+) -> str | None:
+    """Name the first rendered surface that fails the guard, or None.
+
+    Returns a field LABEL only — never the offending content — so an operator
+    can diagnose a block from logs without the log becoming the leak. A
+    100%-reproducible production block with no logged reason cost real
+    diagnostic time during the 2026-08-07 persona audit.
+    """
+
+    labeled: list[tuple[str, str]] = [("answer", response.answer or "")]
+    labeled += [("follow_up", q) for q in response.follow_up_questions]
+    labeled += [("reasoning_trace", s.kind) for s in response.reasoning_trace]
+    labeled += [("reasoning_trace", s.content) for s in response.reasoning_trace]
+    if response.proof is not None:
+        labeled += [("proof_trace", s.kind) for s in response.proof.reasoning_trace]
+        labeled += [("proof_trace", s.content) for s in response.proof.reasoning_trace]
+    if response.native_visualization is not None and response.native_visualization.title:
+        labeled.append(("native_visualization", response.native_visualization.title))
+    if response.visualization is not None:
+        labeled += [
+            ("visualization", value)
+            for value in (
+                response.visualization.title,
+                response.visualization.reason,
+                response.visualization.x,
+                response.visualization.y,
+                response.visualization.series,
+            )
+            if value
+        ]
+    for label, value in labeled:
+        if value and genie_visible_text_unsafe(
+            _without_allowed_literals(value, allowed_literals)
+        ):
+            return label
+    for value in _visible_text_values(response.table_rows or []):
+        if genie_visible_text_unsafe(
+            _without_allowed_literals(value, allowed_literals), structured_value=True
+        ):
+            return "table_rows"
+    return None
+
+
 def genie_response_has_unsafe_visible_text(
     response: GenieMessageResponse,
     *,

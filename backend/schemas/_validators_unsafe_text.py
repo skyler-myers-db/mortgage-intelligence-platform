@@ -84,7 +84,14 @@ _MECHANICAL_PII_OR_RAW_IDENTIFIER_PATTERNS: tuple[re.Pattern[str], ...] = (
         r"\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b",
         re.IGNORECASE,
     ),
-    re.compile(r"\b\d{9,}\b"),
+    # Long digit runs are raw-identifier shaped (CLIP, account ids). The
+    # fractional tail of a high-precision decimal is NOT: a governed AVG that
+    # Genie did not round ("167.66792784271334") produced a 14-digit run and
+    # blocked the whole answer, which hit every unrounded average/ratio in the
+    # product (live persona audit 2026-08-07, VP-Lending flagship question).
+    # Excluding a run preceded by "<digit>." keeps every standalone identifier
+    # run flagged, including the integer part of a decimal.
+    re.compile(r"(?<!\d\.)\b\d{9,}\b"),
     re.compile(
         r"\[(?:first|last|full)[_\s-]?name\]|\{(?:first|last|full)[_\s-]?name\}|"
         r"\binsert governed\b",

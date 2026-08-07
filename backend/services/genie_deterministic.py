@@ -16,6 +16,7 @@ surface and imports these under their existing names.
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 from typing import Any
 
@@ -34,7 +35,7 @@ from backend.services.genie_audit import (
     genie_audit_entity_id,
     genie_audit_entity_id_from_parts,
 )
-from backend.services.genie_message_policy import GenieMessageRequest
+from backend.services.genie_message_policy import GenieMessageRequest, genie_unsafe_visible_field
 from backend.services.genie_message_policy import (
     genie_response_has_unsafe_visible_text as _genie_response_has_unsafe_visible_text,
 )
@@ -47,8 +48,11 @@ from backend.services.genie_message_policy import (
 from backend.services.genie_sales_ops import sales_ops_genie_response
 from backend.services.genie_source_gaps import source_gap_answer
 from backend.services.lakebase import LakebaseClient, LakebaseError
+from backend.services.observability import emit
 from backend.services.repositories import BorrowerRepository
 from backend.services.sales_state import SalesStateStore
+
+_GENIE_BLOCK_LOG = logging.getLogger("backend.services.genie_deterministic")
 
 _cross_lender_prompt_match = prompt_guardrails.cross_lender_prompt_match
 _footprint_metadata_gap_match = prompt_guardrails.footprint_metadata_gap_match
@@ -126,6 +130,15 @@ def _block_unsafe_genie_output(
     response: GenieMessageResponse,
 ) -> GenieMessageResponse:
     blocked = _policy_blocked_genie_output_response(payload, response)
+    # Name the tripped surface (label only, never content) so a production
+    # block is diagnosable from logs.
+    emit(
+        _GENIE_BLOCK_LOG,
+        "genie_output_blocked",
+        level=logging.WARNING,
+        outcome="blocked",
+        unsafe_field=genie_unsafe_visible_field(response) or "unknown",
+    )
     _required_audit_write(
         audit,
         actor=actor,
