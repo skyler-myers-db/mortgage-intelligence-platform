@@ -102,8 +102,7 @@ from backend.services.repositories.databricks_genie_strategy import (
     _canonical_strategy_board_answer,
 )
 from backend.services.repositories.databricks_genie_sweep import (
-    is_full_analysis_question,
-    run_full_analysis_sweep,
+    run_planned_sweep,
 )
 from backend.services.repositories.databricks_genie_trace import (
     WITHHELD_CONTRADICTED,
@@ -260,14 +259,6 @@ class DatabricksGenieRepository:
                 question,
                 kind=DependencyDownError.KIND_BREAKER_OPEN,
             )
-        if allow_sweep and is_full_analysis_question(question):
-            # "Analyze everything" cannot be one SQL statement. Decompose into
-            # themed LIVE Genie analyses (each through the full policy
-            # pipeline) and assemble the verified results; fall through to the
-            # normal single-turn pipeline when the sweep cannot stand one up.
-            sweep = run_full_analysis_sweep(self, question)
-            if sweep is not None:
-                return sweep
         repaired = False
         try:
             result = self._genie.ask(question, conversation_id=conversation_id)
@@ -282,6 +273,15 @@ class DatabricksGenieRepository:
                 # signal for "the repair actually changed this turn".
                 repaired = regenerated is not result
                 result = regenerated
+                if allow_sweep and not _genie_response_has_query_proof(result):
+                    # Behavioral trigger, no keywords: the live turn AND its
+                    # repair both came back without governed SQL — the ask is
+                    # too broad for one statement. Let the live space plan its
+                    # own decomposition and answer each part itself; fall
+                    # through to the normal pipeline when it cannot.
+                    sweep = run_planned_sweep(self, question)
+                    if sweep is not None:
+                        return sweep
         except DependencyDownError as exc:
             return self._degraded(question, kind=exc.kind)
         except GenieClientError:
@@ -329,6 +329,13 @@ class DatabricksGenieRepository:
                 )
                 repaired = regenerated is not result
                 result = regenerated
+                if not _genie_response_has_query_proof(result):
+                    # Same behavioral trigger as :meth:`respond`: the live
+                    # turn and its repair both lack governed SQL, so the live
+                    # space plans and executes its own decomposition.
+                    sweep = run_planned_sweep(self, question)
+                    if sweep is not None:
+                        return sweep
         except DependencyDownError as exc:
             return self._degraded(question, kind=exc.kind)
         except GenieClientError:
@@ -339,6 +346,16 @@ class DatabricksGenieRepository:
             sql_client=self._sql_client,
             repaired=repaired,
         )
+
+    def ask_raw(self, prompt: str) -> str | None:
+        """Raw narrative text of one live turn (planner use only).
+
+        No adaptation, no policy verdicts — the caller screens and never
+        renders this text; it is parsed for planned sub-questions which then
+        re-enter the full pipeline individually.
+        """
+        result = self._genie.ask(prompt, conversation_id=None)
+        return result.answer_text
 
     def _repair_text_only_genie_answer(
         self,

@@ -1244,8 +1244,11 @@ def test_text_only_all_segments_top_candidates_returns_driver_rich_answer() -> N
     assert "refinance-propensity model" in result.answer
     assert result.proof is not None
     assert result.proof.trusted is True
-    # The live path still tried an ask plus one governed SQL-repair retry.
-    assert len(stub.ask_calls) == 2
+    # The live path tried the ask, one governed SQL-repair retry, and one
+    # agentic planning turn (whose text-only stub reply yields no plan, so the
+    # sweep falls through to the canonical rescue).
+    assert len(stub.ask_calls) == 3
+    assert "numbered list" in stub.ask_calls[2]
 
 
 def test_pii_flagged_narrative_is_withheld_not_refused_for_canonical_shape() -> None:
@@ -1272,9 +1275,10 @@ def test_pii_flagged_narrative_is_withheld_not_refused_for_canonical_shape() -> 
     assert result.proof is not None
     assert any("withheld by the output safety guard" in gap for gap in result.proof.known_data_gaps)
     assert not any("returned no narrative" in gap for gap in result.proof.known_data_gaps)
-    # The repair retry now runs even for guard-flagged narratives (the repair
-    # prompt carries only the question), so the live path made two asks.
-    assert len(stub.ask_calls) == 2
+    # The repair retry runs even for guard-flagged narratives, and the failed
+    # repair then attempts one agentic planning turn (no plan in the stub
+    # reply), so the live path made three asks before the canonical rescue.
+    assert len(stub.ask_calls) == 3
 
 
 def test_top_zip_question_uses_direct_canonical_gold_sql_without_genie_call() -> None:
