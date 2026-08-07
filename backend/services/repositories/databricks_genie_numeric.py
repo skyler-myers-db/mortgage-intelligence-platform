@@ -131,8 +131,37 @@ def _unsupported_answer_numeric_claims(
         support = _numeric_support_values_from_rows(rows, claim=claim)
         if _is_supported(claim.value, support):
             continue
+        if _bounded_claim_holds(answer_text, claim, support):
+            continue
         unsupported.append("unsupported_numeric_claim")
     return unsupported[:5]
+
+
+_BOUND_ABOVE_RE = re.compile(
+    r"(?:above|over|at least|more than|exceed(?:s|ing)?|\+)\s*$", re.IGNORECASE
+)
+_BOUND_BELOW_RE = re.compile(
+    r"(?:below|under|at most|less than|up to|within)\s*$", re.IGNORECASE
+)
+
+
+def _bounded_claim_holds(
+    answer_text: str,
+    claim: _NumericClaim,
+    support: set[float],
+) -> bool:
+    """A threshold phrasing ("above 80%") is supported when the returned
+    values actually satisfy the stated bound — the reader can verify it from
+    the rows even though the bound itself is not a row value."""
+
+    if not support:
+        return False
+    prefix = answer_text[max(0, claim.span[0] - 16) : claim.span[0]]
+    if _BOUND_ABOVE_RE.search(prefix):
+        return max(support) >= claim.value
+    if _BOUND_BELOW_RE.search(prefix):
+        return min(support) <= claim.value
+    return False
 
 
 # The former ``_numeric_claim_blocked_response`` hard refusal was retired
@@ -193,11 +222,36 @@ def _numeric_claim_kind(
     raw: str,
     is_percent: bool,
 ) -> Literal["currency", "percent", "bps", "number"]:
+    if raw.strip().startswith("$"):
+        return "currency"
+    if is_percent:
+        return "percent"
+    # The unit token immediately after the number is authoritative. Dense
+    # narrative lines ("90 score, 93% equity, +350 bps spread") put several
+    # units inside one window; only the adjacent token names THIS number's
+    # unit (live misfire 2026-08-07: scores and property counts classified
+    # as bps because a neighbouring clause said bps).
+    suffix = text[span[1] : span[1] + 24]
+    suffix_match = re.match(
+        r"\s*(bps\b|basis points?\b|percent(?:age points?)?\b|score\b|properties\b|"
+        r"propert(?:y|ies)\b|borrowers?\b|rows?\b|dollars?\b|usd\b)",
+        suffix,
+        re.IGNORECASE,
+    )
+    if suffix_match:
+        unit = suffix_match.group(1).lower()
+        if unit.startswith("bps") or unit.startswith("basis"):
+            return "bps"
+        if unit.startswith("percent"):
+            return "percent"
+        if unit.startswith(("dollar", "usd")):
+            return "currency"
+        return "number"
     before, after = _context(text, span, size=28)
     window = _normalized_window(before, raw, after)
-    if raw.strip().startswith("$") or re.search(r"\b(?:dollars?|usd)\b", window):
+    if re.search(r"\b(?:dollars?|usd)\b", window):
         return "currency"
-    if is_percent or re.search(r"\b(?:percent|percentage)\b", window):
+    if re.search(r"\b(?:percent|percentage)\b", window):
         return "percent"
     if re.search(r"\b(?:bps|basis points?)\b", window):
         return "bps"
@@ -216,6 +270,14 @@ def _numeric_support_values_from_rows(
         return values
     if claim.kind == "number":
         values.add(float(len(rows)))
+    for row in rows:
+        for cell in row.values():
+            if isinstance(cell, str):
+                for token in re.findall(r"-?\d[\d,]*\.?\d*", cell):
+                    try:
+                        _add_supported_variants(values, float(token.replace(",", "")))
+                    except ValueError:
+                        continue
     columns = [
         col
         for col in _row_columns(rows)
