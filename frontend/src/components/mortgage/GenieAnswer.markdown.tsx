@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { SOURCE_LINE_RE, catalogExplorerUrl } from '../../lib/ucAssetLinks';
 
 /** Phrases Genie commonly uses to restate the question before answering. */
 const RESTATEMENT_LEADERS = [
@@ -34,8 +35,50 @@ export function stripQuestionRestatement(answer: string): string {
   return trimmed;
 }
 
+/**
+ * Auto-link the trailing "Source: mip.gold.borrower_360" disclosure Genie
+ * appends to its answers, so the reader can jump straight into the workspace
+ * Catalog Explorer entry for the asset that produced the number.
+ *
+ * Degrades to the original plain text whenever the workspace host is unknown
+ * (health poll not resolved, anonymous health body, older backend) or the
+ * captured token is not a 3-part UC name — a "Source:" line must never
+ * render as a dead or fabricated link.
+ */
+export function renderSourceLinks(text: string, workspaceHost: string | null | undefined): ReactNode[] {
+  if (!workspaceHost || !text.includes('.')) return [text];
+  const out: ReactNode[] = [];
+  const re = new RegExp(SOURCE_LINE_RE.source, SOURCE_LINE_RE.flags);
+  let last = 0;
+  let key = 0;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(text)) !== null) {
+    const [whole, label, asset] = match;
+    const href = catalogExplorerUrl(workspaceHost, asset);
+    if (!href) continue;
+    if (match.index > last) out.push(text.slice(last, match.index));
+    out.push(label);
+    out.push(
+      <a
+        key={`uc-${key++}`}
+        className="uc-asset-link"
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        title={`Open ${asset} in Databricks Catalog Explorer`}
+      >
+        {asset}
+      </a>,
+    );
+    last = match.index + whole.length;
+  }
+  if (out.length === 0) return [text];
+  if (last < text.length) out.push(text.slice(last));
+  return out;
+}
+
 /** Tiny markdown renderer for Genie answers: bold, inline code, bullets. */
-function renderInlineMd(text: string): ReactNode[] {
+function renderInlineMd(text: string, workspaceHost?: string | null): ReactNode[] {
   const out: ReactNode[] = [];
   const re = /(\*\*([^*]+?)\*\*|`([^`]+?)`)/g;
   let last = 0;
@@ -43,7 +86,7 @@ function renderInlineMd(text: string): ReactNode[] {
   let key = 0;
   while ((match = re.exec(text)) !== null) {
     if (match.index > last) {
-      out.push(<span key={key++}>{text.slice(last, match.index)}</span>);
+      out.push(<span key={key++}>{renderSourceLinks(text.slice(last, match.index), workspaceHost)}</span>);
     }
     if (match[2] != null) {
       out.push(<strong key={key++}>{match[2]}</strong>);
@@ -60,12 +103,21 @@ function renderInlineMd(text: string): ReactNode[] {
     last = match.index + match[0].length;
   }
   if (last < text.length) {
-    out.push(<span key={key++}>{text.slice(last)}</span>);
+    out.push(<span key={key++}>{renderSourceLinks(text.slice(last), workspaceHost)}</span>);
   }
   return out;
 }
 
-export function MarkdownAnswer({ text }: { text: string }) {
+export function MarkdownAnswer({
+  text,
+  workspaceHost,
+}: {
+  text: string;
+  /** Workspace origin for Catalog Explorer deep links. Threaded in from
+   *  `useWorkspaceHost()` by the caller so this renderer stays pure and
+   *  testable. Omitted/null ⇒ "Source: …" stays plain text. */
+  workspaceHost?: string | null;
+}) {
   const lines = text.split(/\r?\n/);
   type Block = { type: 'p'; text: string } | { type: 'ul'; items: string[] };
   const blocks: Block[] = [];
@@ -104,7 +156,7 @@ export function MarkdownAnswer({ text }: { text: string }) {
               key={i}
               className={`genie-md-p ${i === 0 ? 'genie-md-p--first' : ''}`}
             >
-              {renderInlineMd(b.text)}
+              {renderInlineMd(b.text, workspaceHost)}
             </p>
           ) : (
             <ul
@@ -112,7 +164,7 @@ export function MarkdownAnswer({ text }: { text: string }) {
               className="genie-md-list"
             >
               {b.items.map((it, j) => (
-                <li key={j}>{renderInlineMd(it)}</li>
+                <li key={j}>{renderInlineMd(it, workspaceHost)}</li>
               ))}
             </ul>
           ),

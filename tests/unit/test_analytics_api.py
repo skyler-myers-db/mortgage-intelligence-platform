@@ -182,7 +182,7 @@ class _AnalyticsSqlClient:
                 "score_band": "high",
                 "in_the_money": True,
             }]
-        if "ROW_NUMBER() OVER (ORDER BY b.opportunity_score DESC, b.clip)" in statement:
+        if "b.rate_spread_bps DESC NULLS LAST, b.borrower_id ASC" in statement and "rank_overall" in statement:
             return [{"borrower_id": "B-48291", "display_name": "Owner anon", "state": "IL", "city": "Chicago", "opportunity_score": 91, "rate_spread_bps": 88, "equity_pct": 42, "recommended_offer": "Refi", "rank_overall": 1}]
         if "segment_dim AS" in statement:
             return [{"segment_code": "itm", "name": "Prime Refi Candidates", "borrower_count": 10, "mean_opportunity_score": 81, "delta_vs_prior_label": "+1%", "description": "test", "approval_rate": 1.2, "outreach_rate": 0.5, "mean_rate_spread_bps": 90, "mean_equity_pct": 40, "in_the_money_borrowers": 8}]
@@ -252,7 +252,7 @@ def test_analytics_repository_uses_governed_gold_and_semantic_sql() -> None:
     assert "AVG(CASE WHEN in_the_money THEN rate_spread_bps END)" in top_zip_sql
     state_sql = next(sql for sql in client.statements if "COUNT(DISTINCT clip)" in sql)
     assert "ORDER BY in_the_money_borrowers DESC, mean_opportunity_score DESC" in state_sql
-    top_borrower_sql = next(sql for sql in client.statements if "ROW_NUMBER() OVER (ORDER BY b.opportunity_score DESC, b.clip)" in sql)
+    top_borrower_sql = next(sql for sql in client.statements if "b.rate_spread_bps DESC NULLS LAST, b.borrower_id ASC" in sql and "rank_overall" in sql)
     assert "FROM mip.gold.borrower_360" in top_borrower_sql
     assert "lead_population" not in top_borrower_sql
 

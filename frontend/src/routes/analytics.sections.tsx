@@ -180,21 +180,26 @@ export function EconomicsView({
               y={(row) => row.borrower_count}
               xLabel="Spread bps"
               yLabel="Borrowers"
+              xUnit="bps"
             />
           </div>
         </section>
         <section className="surface">
           <div className="surface__hdr">
             <h2 className="h-3">Top Borrowers</h2>
-            {/* Re-audit #3 P3 (2026-06-12): rows are borrower records (one
-                per property lien) but the display label is the masked Owner
-                Link identity — without this note, the owner-styled labels
-                read as a mismatch with the B- ids used everywhere else, and
-                a multi-property owner appearing twice looks like a dupe. */}
+            {/* Consistency contract (2026-08-06): this panel now ranks with
+                the exact governed predicate and ordering the Lead Queue and
+                Ask Genie use — one top-10 everywhere. Labels remain the
+                masked owner identity plus the borrower id's last 4; an owner
+                holding multiple eligible properties can still appear more
+                than once because each property loan is its own borrower
+                record. */}
             <p className="analytics-panel-note">
-              One row per borrower record (property lien), labeled by its masked
-              Owner Link identity plus the borrower id&apos;s last 4. An owner
-              holding multiple properties can appear more than once.
+              The same governed ranking Ask Genie and the Lead Queue use:
+              marketing-eligible, opt-in borrowers ordered by opportunity
+              score, then rate-spread economics. Labels show the masked owner
+              identity plus the borrower id&apos;s last 4; an owner with
+              multiple eligible properties can appear more than once.
             </p>
           </div>
           <div className="surface__body">

@@ -53,6 +53,8 @@ import type {
   SavedLeadInput,
   GenieActionResult,
   GenieActionSuggestion,
+  GenieSessionDetail,
+  GenieSessionSummary,
   GenieStartResult,
   GrowthAgentDueMonitorRunRequest,
   GrowthAgentDueMonitorRunResponse,
@@ -107,6 +109,14 @@ export interface HealthPayload {
   dependencies?: Record<string, string>;
   circuit_breakers?: Record<string, string>;
   actor_cache_key?: string | null;
+  /**
+   * Databricks workspace origin (e.g. "https://dbc-x.cloud.databricks.com").
+   * Present on the authenticated health body only; absent on the anonymous
+   * liveness body and on older backends. Consumed by `useWorkspaceHost()` to
+   * build Catalog Explorer deep links for Genie source assets — every caller
+   * degrades to plain text when it is missing.
+   */
+  workspace_host?: string | null;
   /**
    * Deploy-promotion marker state: "enabled" after a governed
    * scripts/deploy.sh promotion, "disabled_baseline_deploy" when the
@@ -1777,6 +1787,23 @@ export const api = {
     postJson<GenieStartResult, { context: Record<string, never> }>(
       '/api/genie/start',
       { context: {} },
+      signal,
+    ),
+
+  /** Past Genie conversations for the current actor, newest first. The
+   *  History menu treats any failure (404 on an older backend, 5xx, network)
+   *  as "History unavailable" — it is an optional affordance, never a
+   *  blocking dependency of the chat. */
+  genieSessions: (signal?: AbortSignal) =>
+    getJson<{ sessions: GenieSessionSummary[] }>('/api/genie/sessions', signal).then(
+      (body) => body.sessions ?? [],
+    ),
+
+  /** Full transcript of one past conversation, in the same
+   *  `{question, response}` turn shape the local transcript store uses. */
+  genieSession: (conversationId: string, signal?: AbortSignal) =>
+    getJson<GenieSessionDetail>(
+      `/api/genie/sessions/${encodeURIComponent(conversationId)}`,
       signal,
     ),
 

@@ -107,7 +107,14 @@ def test_floating_genie_has_no_ai_shaped_seed_answer() -> None:
     text = (REPO / "frontend" / "src" / "components" / "mortgage" / "GenieChat.tsx").read_text(
         encoding="utf-8"
     )
-    assert "useState<ChatMsg[]>([])" in text
+    # The chat may lazily RESTORE the actor's own persisted turns (history
+    # feature, 2026-08-06) — that is replay of governed answers, not a
+    # fabricated seed. The guard's intent stands: no literal AI-shaped
+    # answer payload may be authored into the component itself.
+    assert (
+        "useState<ChatMsg[]>([])" in text
+        or "useState<ChatMsg[]>(() =>\n    turnsToMessages(getGenieTurns()" in text
+    )
     pre_ask = text.split("const ask = async", maxsplit=1)[0]
     assert "payload: {\n        answer:" not in pre_ask
     assert "Answers run against Unity Catalog metric views" not in text

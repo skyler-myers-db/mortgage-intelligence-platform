@@ -8,6 +8,7 @@ import {
   type PropsWithChildren,
 } from 'react';
 import { api, isAbortError, type HealthPayload } from '../lib/api';
+import { normalizeWorkspaceHost } from '../lib/ucAssetLinks';
 
 /**
  * HealthProvider — one `/api/health` poll, shared via context.
@@ -306,4 +307,20 @@ export function useHealth(): HealthContextValue {
  */
 export function useOptionalHealth(): HealthContextValue | null {
   return useContext(HealthContext);
+}
+
+/**
+ * Workspace origin published on the authenticated health body, normalized
+ * and validated (see `normalizeWorkspaceHost`). Returns `null` when the poll
+ * hasn't resolved, when the backend omits `workspace_host` (anonymous body /
+ * older build), when the value fails validation, or when the caller renders
+ * outside a HealthProvider. Callers MUST treat `null` as "render plain text",
+ * never as a reason to fabricate a workspace URL.
+ *
+ * Reuses the shared health poll on purpose — there is exactly one
+ * `/api/health` request per document and this adds no second fetch.
+ */
+export function useWorkspaceHost(): string | null {
+  const ctx = useContext(HealthContext);
+  return normalizeWorkspaceHost(ctx?.health?.workspace_host);
 }

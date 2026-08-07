@@ -3827,12 +3827,23 @@ def test_recognized_shape_live_turn_preserves_genie_voice_and_live_fields() -> N
     assert result.answer.startswith("There are roughly 147,742 borrowers in the money right now.")
     # Live-intelligence fields carried through exactly like the generic path.
     assert result.genie_status == "COMPLETED"
-    assert [step.content for step in result.reasoning_trace] == [
-        "Analyzed the request within the governed Genie workflow."
+    # The process summary describes what the governed pipeline actually did,
+    # with one distinct step per stage -- not four repeats of a generic phrase.
+    assert [step.kind for step in result.reasoning_trace] == [
+        "guardrails",
+        "live",
+        "trust",
+        "canonical",
+        "execute",
+        "verify",
     ]
+    contents = [step.content for step in result.reasoning_trace]
+    assert len(set(contents)) == len(contents)
+    assert "mip.gold.borrower_360" in contents[1]
+    assert "Returned 1 row from mip.gold.borrower_360" in contents[4]
     assert result.proof is not None
-    assert [step.content for step in result.proof.reasoning_trace] == [
-        "Analyzed the request within the governed Genie workflow."
+    assert [step.model_dump() for step in result.proof.reasoning_trace] == [
+        step.model_dump() for step in result.reasoning_trace
     ]
     assert result.native_visualization is not None
     assert result.native_visualization.attachment_id == "att-1"
@@ -3861,12 +3872,19 @@ def test_live_reasoning_omits_title_lowercase_and_uppercase_identity_shapes() ->
         sql_client=_StubSqlClient([{"borrowers": 3}]),  # type: ignore[arg-type]
     )
 
-    assert [step.content for step in result.reasoning_trace] == [
-        "Analyzed the request within the governed Genie workflow.",
-        "Analyzed the request within the governed Genie workflow.",
-        "Analyzed the request within the governed Genie workflow.",
-        "Analyzed the request within the governed Genie workflow.",
+    contents = [step.content for step in result.reasoning_trace]
+    # Raw model thoughts never ship: no identity-shaped thought text survives,
+    # in any casing, and the trace is the server-authored pipeline summary.
+    for fragment in ("John Smith", "john smith", "JOHN SMITH", "Filtering to"):
+        assert all(fragment not in content for content in contents)
+    assert [step.kind for step in result.reasoning_trace] == [
+        "guardrails",
+        "live",
+        "trust",
+        "execute",
+        "verify",
     ]
+    assert len(set(contents)) == len(contents)
 
 
 @pytest.mark.parametrize(

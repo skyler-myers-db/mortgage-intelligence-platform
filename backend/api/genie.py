@@ -36,6 +36,8 @@ from backend.services.genie_answers import (
     GenieActionResponse,
     GenieMessageResponse,
     GenieProgressResponse,
+    GenieSessionDetailResponse,
+    GenieSessionListResponse,
     GenieStartResponse,
     GenieSubmitResponse,
     load_sample_questions,
@@ -51,6 +53,12 @@ from backend.services.genie_deterministic import (
     _deterministic_genie_response,
     _required_audit_write,
     _safe_genie_audit_entity_id,
+)
+from backend.services.genie_history import (
+    genie_session_turns,
+    history_payload_json,
+    history_question_text,
+    list_genie_sessions,
 )
 from backend.services.genie_message_policy import (
     GenieCompleteRequest,
@@ -135,11 +143,12 @@ ON CONFLICT (actor_email, conversation_id) DO UPDATE SET
 _GENIE_MESSAGE_INSERT_SQL = """
 INSERT INTO mip_app.genie_messages (
   conversation_id, message_id, actor_email, question_hash,
-  source, row_count, visualization_kind, trusted_assets, request_id
+  source, row_count, visualization_kind, trusted_assets, request_id,
+  question_text, response_json
 ) VALUES (
   %(conversation_id)s, %(message_id)s, %(actor_email)s, %(question_hash)s,
   %(source)s, %(row_count)s, %(visualization_kind)s, %(trusted_assets)s,
-  %(request_id)s
+  %(request_id)s, %(question_text)s, %(response_json)s::jsonb
 )
 ON CONFLICT (conversation_id, message_id) DO NOTHING
 """
@@ -222,6 +231,12 @@ def _record_genie_session(
         "row_count": int(response.row_count or 0),
         "visualization_kind": response.visualization.kind if response.visualization else None,
         "request_id": f"genie-{uuid4()}",
+        # History replay (2026-08-06). Both fields are already governed: the
+        # question cleared the prompt guard battery and the answer cleared the
+        # visible-text output policy plus row PII redaction. Signed action
+        # tokens are stripped by ``history_payload_json``.
+        "question_text": history_question_text(response.question),
+        "response_json": history_payload_json(response),
     }
     try:
         if getattr(lakebase, "_supports_atomic_transactions", False):
@@ -269,6 +284,43 @@ def genie_start(
         conversation_id=_latest_genie_conversation(lakebase, actor=actor),
         trusted_assets=trusted_assets(),
         sample_questions=load_sample_questions()[:4],
+    )
+
+
+@router.get("/sessions", response_model=GenieSessionListResponse)
+def genie_sessions(
+    request: Request,
+    lakebase: LakebaseDep,
+) -> GenieSessionListResponse:
+    """The requesting actor's recent Ask Genie conversations, newest first.
+
+    AUDIT EXEMPT: read-only listing of the caller's own conversation
+    metadata. It mutates nothing, and the underlying turns each carry their
+    own ``genie.run_query`` audit row from when they were answered.
+    """
+    return list_genie_sessions(lakebase, actor=resolve_actor(request))
+
+
+@router.get("/sessions/{conversation_id}", response_model=GenieSessionDetailResponse)
+def genie_session_detail(
+    conversation_id: str,
+    request: Request,
+    lakebase: LakebaseDep,
+) -> GenieSessionDetailResponse:
+    """Replay one owned conversation as governed question/answer turns.
+
+    Strictly actor-scoped: a conversation owned by anyone else is a 404, so
+    history cannot be probed for other actors' activity. Answers are re-served
+    exactly as they were governed at answer time (output policy + PII
+    redaction already applied before persistence), minus the signed action
+    tokens, which are never replayed.
+
+    AUDIT EXEMPT: read-only replay of the caller's own recorded turns.
+    """
+    return genie_session_turns(
+        lakebase,
+        actor=resolve_actor(request),
+        conversation_id=conversation_id,
     )
 
 

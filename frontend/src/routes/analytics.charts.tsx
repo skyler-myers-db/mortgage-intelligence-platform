@@ -5,8 +5,11 @@
 import {
   useId,
   useMemo,
+  useRef,
+  useState,
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from 'react';
 import { Link, useNavigate } from 'react-router';
@@ -285,14 +288,23 @@ export function LineChart({
   y,
   xLabel,
   yLabel,
+  xUnit,
 }: {
   rows: Array<ScoreBucket | RateSpreadBucket>;
   x: (row: ScoreBucket | RateSpreadBucket) => number;
   y: (row: ScoreBucket | RateSpreadBucket) => number;
   xLabel: string;
   yLabel: string;
+  /** Unit appended to the x value in the hover readout, e.g. "bps" →
+   *  "125 bps". Omitted for unitless axes (opportunity score). */
+  xUnit?: string;
 }) {
   const clipId = useId();
+  // Nearest-point hover readout. Index into `plotted` (never the raw row
+  // array) so the crosshair always lands on a coordinate the chart actually
+  // drew. null = pointer is not over the plot.
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  const hoverLayerRef = useRef<HTMLDivElement | null>(null);
   const chart = useMemo(() => {
     if (rows.length === 0) return null;
     const xs = rows.map(x);
@@ -301,23 +313,47 @@ export function LineChart({
     const maxX = Math.max(...xs);
     const maxY = Math.max(1, ...ys);
     const plotY = (value: number) => 92 - (Math.max(0, Math.min(1, value / maxY)) * 84);
-    const points = rows.map((row) => {
-      const px = maxX === minX ? 50 : ((x(row) - minX) / (maxX - minX)) * 100;
-      const py = plotY(y(row));
-      return `${px.toFixed(2)},${py.toFixed(2)}`;
-    }).join(' ');
+    const plotted = rows.map((row) => {
+      const xValue = x(row);
+      const yValue = y(row);
+      return {
+        xValue,
+        yValue,
+        px: maxX === minX ? 50 : ((xValue - minX) / (maxX - minX)) * 100,
+        py: plotY(yValue),
+      };
+    });
     return {
       minX,
       maxX,
       maxY,
-      points,
+      plotted,
+      points: plotted.map((p) => `${p.px.toFixed(2)},${p.py.toFixed(2)}`).join(' '),
       xTicks: makeTicks(minX, maxX),
       yTicks: makeTicks(0, maxY),
       plotY,
     };
   }, [rows, x, y]);
 
+  // Pointer -> nearest plotted point. Measured off the live bounding rect so
+  // the mapping stays correct at any container width (the SVG is
+  // `preserveAspectRatio="none"`, so the 0-100 viewBox maps linearly onto
+  // whatever width the responsive layout hands us).
+  const onHoverMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const plotted = chart?.plotted;
+    if (!plotted || plotted.length === 0) return;
+    const rect = (hoverLayerRef.current ?? event.currentTarget).getBoundingClientRect();
+    if (rect.width === 0) return;
+    const ratio = ((event.clientX - rect.left) / rect.width) * 100;
+    let nearest = 0;
+    for (let i = 1; i < plotted.length; i += 1) {
+      if (Math.abs(plotted[i].px - ratio) < Math.abs(plotted[nearest].px - ratio)) nearest = i;
+    }
+    setHoverIndex(nearest);
+  };
+
   if (!chart) return <div className="analytics-empty">No distribution returned.</div>;
+  const hovered = hoverIndex === null ? null : chart.plotted[hoverIndex] ?? null;
   return (
     <div className="analytics-chart" role="img" aria-label={`${yLabel} by ${xLabel}`}>
       <div className="analytics-chart__plot">
@@ -352,6 +388,41 @@ export function LineChart({
             ))}
             <polyline points={chart.points} clipPath={`url(#${clipId})`} vectorEffect="non-scaling-stroke" />
           </svg>
+          {/* Hover readout. Entirely `aria-hidden` + non-focusable: the
+              chart already exposes its meaning through the parent
+              `role="img"` + aria-label and the tick text, so this layer adds
+              a pointer affordance without adding a keyboard/AT trap. */}
+          <div
+            ref={hoverLayerRef}
+            className="analytics-chart__hover"
+            aria-hidden="true"
+            onPointerMove={onHoverMove}
+            onPointerLeave={() => setHoverIndex(null)}
+          >
+            {hovered && (
+              <>
+                <span
+                  className="analytics-chart__crosshair"
+                  style={{ '--hover-x': `${hovered.px}%` } as CSSProperties}
+                />
+                <span
+                  className="analytics-chart__hover-dot"
+                  style={{ '--hover-x': `${hovered.px}%`, '--hover-y': `${hovered.py}%` } as CSSProperties}
+                />
+                <span
+                  className={`analytics-chart__tip${hovered.px > 60 ? ' analytics-chart__tip--flip' : ''}`}
+                  style={{ '--hover-x': `${hovered.px}%`, '--hover-y': `${hovered.py}%` } as CSSProperties}
+                >
+                  <span className="analytics-chart__tip-x">
+                    {formatAxisTick(hovered.xValue)}{xUnit ? ` ${xUnit}` : ''}
+                  </span>
+                  <span className="analytics-chart__tip-y">
+                    {hovered.yValue.toLocaleString()} {yLabel.toLowerCase()}
+                  </span>
+                </span>
+              </>
+            )}
+          </div>
           <div className="analytics-chart__x-ticks" aria-hidden="true">
             {chart.xTicks.map((tick) => (
               <span

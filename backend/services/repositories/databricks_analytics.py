@@ -40,6 +40,7 @@ from backend.schemas.analytics import (
 from backend.schemas.funnel import FunnelPopulation
 from backend.services.databricks_sql import DatabricksSqlClient
 from backend.services.databricks_sql_helpers import qualify
+from backend.services.eligibility import eligible_sql_predicate
 from backend.services.repositories.databricks_economics_scatter import (
     economics_points as build_economics_points,
 )
@@ -305,6 +306,11 @@ class DatabricksAnalyticsRepository:
         "ORDER BY spread_bucket_bps"
     )
 
+    # Consistency contract (2026-08-06): this panel must rank EXACTLY like the
+    # governed canonical ranking Genie and the Lead Queue use — same
+    # marketing-eligibility + consent predicate, same ordering (opportunity
+    # score, then rate-spread economics, then borrower_id). One top-10, one
+    # truth, no surface-specific grain or tiebreakers.
     _TOP_BORROWERS_SQL = (
         "WITH ranked AS ( "
         "  SELECT "
@@ -316,7 +322,9 @@ class DatabricksAnalyticsRepository:
         "    b.rate_spread_bps AS rate_spread_bps, "
         "    b.equity_pct AS equity_pct, "
         "    b.recommended_offer AS recommended_offer, "
-        "    ROW_NUMBER() OVER (ORDER BY b.opportunity_score DESC, b.clip) AS rank_overall "
+        "    ROW_NUMBER() OVER ( "
+        "      ORDER BY b.opportunity_score DESC, b.rate_spread_bps DESC NULLS LAST, b.borrower_id ASC "
+        "    ) AS rank_overall "
         f"  FROM {qualify('gold', 'borrower_360')} AS b "
         "  {where} "
         ") "
@@ -661,7 +669,13 @@ class DatabricksAnalyticsRepository:
                     for row in self._execute_template(
                         self._TOP_BORROWERS_SQL,
                         analytics_filters,
-                        extra=["b.opportunity_score >= 50"],
+                        extra=[
+                            "b.opportunity_score >= 50",
+                            # Same actionability gate as the governed canonical
+                            # ranking: one top-10 across Genie, Lead Queue, and
+                            # this panel.
+                            eligible_sql_predicate("b"),
+                        ],
                     )
                 ],
             )

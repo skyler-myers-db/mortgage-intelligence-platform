@@ -98,6 +98,23 @@ export interface GenieStartResult {
   sample_questions?: string[];
 }
 
+/** One row of `GET /api/genie/sessions` — a past conversation the actor can
+ *  reopen from the Genie panel's History menu. */
+export interface GenieSessionSummary {
+  conversation_id: string;
+  title: string;
+  last_activity_at: string;
+  turn_count: number;
+}
+
+/** `GET /api/genie/sessions/{conversation_id}`. `response` is the same
+ *  GenieMessageResponse payload the live chat already renders, so a restored
+ *  session goes through the identical <GenieAnswer> path. */
+export interface GenieSessionDetail {
+  conversation_id?: string | null;
+  turns: Array<{ question: string; response: GenieAnswer }>;
+}
+
 export interface GenieActionSuggestion {
   id: string;
   label: string;
