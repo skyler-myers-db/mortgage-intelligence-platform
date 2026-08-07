@@ -127,6 +127,7 @@ from backend.services.growth_agent_workflows import (
 )
 from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
+from backend.services.observability import emit
 from backend.services.rbac import require_admin
 from backend.services.repositories.databricks_lead_cohorts import (
     normalise_growth_agent_handoff_filters,
@@ -646,7 +647,13 @@ def run_mortgage_growth_agent(
         except HTTPException:
             raise
         except Exception:
-            _LIVE_ANALYSIS_LOG.exception("live_analysis_fallback_failed")
+            emit(
+                _LIVE_ANALYSIS_LOG,
+                "live_analysis_fallback_failed",
+                level=logging.ERROR,
+                outcome="degraded",
+                exc_info=True,
+            )
             analysis = None
         if analysis is not None:
             return analysis

@@ -258,7 +258,43 @@ _REVIEWED_ANALYTIC_LOCATION = (
     r"(?:\s+(?:in|across)\s+(?:the\s+current\s+(?:coverage|portfolio)|"
     r"[A-Za-z]{2}|[A-Z][A-Za-z' -]{2,40}))?"
 )
+# Governed Module 0 product-intent cohorts. Closed list: these are offer
+# codes/segment names the product models, never free-text criteria.
+_REVIEWED_PRODUCT_INTENT = (
+    r"(?:cash[- ]out|heloc|home[- ]equity|refi(?:nance)?|rate[- ]and[- ]term|"
+    r"purchase|listed(?:[- ]for[- ]sale)?|investor|multi[- ]property|"
+    r"retention|recapture|in[- ]the[- ]money|high[- ]equity)"
+)
 _REVIEWED_READ_ONLY_ANALYTIC_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(
+        # Offer strategy by segment ("which offer should we lead with for each
+        # segment, and why?"). The audience grammar read the affirmative
+        # "lead with ... for each segment" as an unreviewed audience decision;
+        # it is the product's core read-only offer-mix question. Live persona
+        # audit 2026-08-07 (marketing-leader).
+        r"^(?:which|what)\s+(?:next[- ]best\s+)?offers?\s+"
+        r"(?:should|do|would)\s+(?:we|i|the\s+team)\s+"
+        r"(?:lead\s+with|use|present|recommend|make|pitch|prioriti[sz]e)\s+"
+        r"(?:for|to|with)\s+(?:each|every|the|our)?\s*"
+        rf"(?:{_REVIEWED_ANALYTIC_DIMENSION}|{_REVIEWED_ANALYTIC_POPULATION})"
+        r"(?:\s*,?\s*and\s+why)?$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        # Ranked product-intent cohort with a per-row rationale ("rank the top
+        # cash-out candidates in Texas and explain why each one qualifies").
+        # The intent vocabulary is closed, so an unknown criterion cannot ride
+        # this shape. Live persona audit 2026-08-07 (sales-manager).
+        r"^(?:rank|show|list|give\s+me|surface)\s+(?:me\s+)?(?:the\s+)?"
+        r"(?:top\s+(?:[0-9]{1,3}\s+)?)?"
+        rf"{_REVIEWED_PRODUCT_INTENT}\s+"
+        r"(?:candidates?|borrowers?|leads?|opportunities)"
+        rf"{_REVIEWED_ANALYTIC_LOCATION}"
+        r"(?:\s*,?\s*and\s+(?:explain|tell\s+me|describe|show)\s+"
+        r"(?:me\s+)?why\s+(?:each|every)(?:\s+one)?\s+"
+        r"(?:qualifies|ranks?|scores?|is\s+(?:a\s+)?(?:strong|good)(?:\s+candidate)?))?$",
+        re.IGNORECASE,
+    ),
     re.compile(
         # Building-permit data is an explicit product source gap. This closed
         # read-only query must reach the Genie source-gap policy rather than
