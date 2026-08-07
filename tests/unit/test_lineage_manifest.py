@@ -34,6 +34,11 @@ client = TestClient(app)
 
 RAW_COTALITY_CATALOG = "cotality_mortgage_data"
 
+# The manifest emits workspace deep links, so the route requires the
+# forwarded workspace identity (conftest only defaults the admin group
+# header, never an identity header).
+ACTOR_HEADERS = {"X-Forwarded-Email": "analyst@summit.example"}
+
 
 def _node_payload(**overrides: object) -> dict[str, object]:
     payload: dict[str, object] = {
@@ -227,7 +232,7 @@ class TestExplorerUrls:
 
 class TestLineageApiContract:
     def test_manifest_endpoint_serves_resolved_manifest(self) -> None:
-        response = client.get("/api/lineage/manifest")
+        response = client.get("/api/lineage/manifest", headers=ACTOR_HEADERS)
         assert response.status_code == 200
         body = response.json()
         assert body["schema_version"] >= 1
@@ -246,4 +251,35 @@ class TestLineageApiContract:
         assert node["fqn"].count(".") == 2
 
     def test_manifest_endpoint_available_on_canonical_prefix(self) -> None:
-        assert client.get("/api/v1/lineage/manifest").status_code == 200
+        assert (
+            client.get("/api/v1/lineage/manifest", headers=ACTOR_HEADERS).status_code == 200
+        )
+
+    def test_manifest_accepts_forwarded_user_without_email(self) -> None:
+        """Apps may forward only ``X-Forwarded-User`` for service identities."""
+        response = client.get(
+            "/api/lineage/manifest",
+            headers={"X-Forwarded-User": "svc-mip-automation"},
+        )
+        assert response.status_code == 200
+
+    @pytest.mark.parametrize("path", ["/api/lineage/manifest", "/api/v1/lineage/manifest"])
+    def test_manifest_rejects_anonymous_callers(self, path: str) -> None:
+        """No forwarded identity -> 401. The payload embeds workspace
+        deep-link URLs, so a non-Apps deploy must not serve it to
+        anonymous callers (GRANTS §11a). The conftest default
+        ``X-Forwarded-Groups: mip-admin`` header is still present on this
+        request, which also pins that a group claim alone never
+        authenticates."""
+        response = client.get(path)
+        assert response.status_code == 401
+        assert response.json() == {"detail": "authenticated identity required"}
+
+    def test_manifest_rejects_spoofed_identity_when_edge_untrusted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """trust_forwarded_headers=False (non-Apps deploy) fails closed even
+        when the caller supplies identity headers."""
+        monkeypatch.setattr(settings, "trust_forwarded_headers", False)
+        response = client.get("/api/lineage/manifest", headers=ACTOR_HEADERS)
+        assert response.status_code == 401

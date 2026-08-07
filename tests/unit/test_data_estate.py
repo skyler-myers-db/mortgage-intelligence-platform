@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 from backend.config.settings import settings
@@ -9,13 +10,49 @@ from backend.services.data_estate import build_data_estate_response
 
 client = TestClient(app)
 
+# The payload emits Catalog Explorer deep links, so the route requires the
+# forwarded workspace identity (conftest only defaults the admin group
+# header, never an identity header).
+ACTOR_HEADERS = {"X-Forwarded-Email": "analyst@summit.example"}
+
 
 def test_data_estate_route_returns_lane_inventory() -> None:
-    response = client.get("/api/data-estate")
+    response = client.get("/api/data-estate", headers=ACTOR_HEADERS)
     assert response.status_code == 200
     body = response.json()
     assert body["public_demo_masking"] is True
     assert isinstance(body["lanes"], list)
+
+
+@pytest.mark.parametrize("path", ["/api/data-estate", "/api/v1/data-estate"])
+def test_data_estate_rejects_anonymous_callers(path: str) -> None:
+    """No forwarded identity -> 401. The payload embeds workspace deep-link
+    URLs, so a non-Apps deploy must not serve it to anonymous callers
+    (GRANTS §11a). The conftest default ``X-Forwarded-Groups: mip-admin``
+    header is still present on this request, which also pins that a group
+    claim alone never authenticates."""
+    response = client.get(path)
+    assert response.status_code == 401
+    assert response.json() == {"detail": "authenticated identity required"}
+
+
+def test_data_estate_rejects_spoofed_identity_when_edge_untrusted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """trust_forwarded_headers=False (non-Apps deploy) fails closed even
+    when the caller supplies identity headers."""
+    monkeypatch.setattr(settings, "trust_forwarded_headers", False)
+    response = client.get("/api/data-estate", headers=ACTOR_HEADERS)
+    assert response.status_code == 401
+
+
+def test_data_estate_accepts_forwarded_user_without_email() -> None:
+    """Apps may forward only ``X-Forwarded-User`` for service identities."""
+    response = client.get(
+        "/api/data-estate",
+        headers={"X-Forwarded-User": "svc-mip-automation"},
+    )
+    assert response.status_code == 200
 
 
 def test_data_estate_separates_first_party_from_live_cotality() -> None:
