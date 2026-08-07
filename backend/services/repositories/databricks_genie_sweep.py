@@ -137,6 +137,75 @@ def plan_sub_questions(
     return planned, dropped
 
 
+def _synthesis_prompt(question: str, sections: list[tuple[str, GenieMessageResponse]]) -> str:
+    digest_lines = []
+    for sub_question, response in sections:
+        snippet = " ".join((response.answer or "").split())[:400]
+        digest_lines.append(f"- {sub_question} -> {snippet}")
+    digest = "\n".join(digest_lines)
+    return (
+        "Do not generate SQL for this message. Below are the verified results "
+        "of the analyses you just ran for the question "
+        f'"{question}":\n\n{digest}\n\n'
+        "Write the executive synthesis in 4 to 8 sentences: the biggest "
+        "cross-cutting insights and what a lender should act on first. Use "
+        "ONLY numbers that appear in the results above, and no headings."
+    )
+
+
+def _synthesize_closing(
+    repo: DatabricksGenieRepository,
+    question: str,
+    sections: list[tuple[str, GenieMessageResponse]],
+) -> tuple[str | None, str | None]:
+    """One live Genie turn writes the cross-section synthesis; verify or omit.
+
+    Returns (synthesis, omission_disclosure). The synthesis ships only when it
+    passes the same claims verification every narrative gets (numbers checked
+    against the union of the sections' returned rows) and the output-text
+    guard; otherwise it is omitted with a disclosed gap. Never authored
+    server-side.
+    """
+
+    from backend.services.genie_message_policy import genie_visible_text_unsafe
+    from backend.services.repositories.databricks_genie_numeric import (
+        _unsupported_answer_numeric_claims,
+    )
+
+    try:
+        draft = repo.ask_raw(_synthesis_prompt(question, sections))
+    except Exception:  # noqa: BLE001 - synthesis is additive, never blocking
+        return None, None
+    draft = (draft or "").strip()
+    if not draft:
+        return None, None
+    combined_rows = [row for _, resp in sections for row in (resp.table_rows or [])]
+    if _unsupported_answer_numeric_claims(draft, combined_rows, question):
+        return None, (
+            "A cross-section synthesis draft was omitted: it carried numbers "
+            "the verified section results could not support."
+        )
+    if genie_visible_text_unsafe(draft):
+        return None, (
+            "A cross-section synthesis draft was withheld by the output "
+            "safety guard."
+        )
+    return draft, None
+
+
+def _live_follow_ups(sections: list[tuple[str, GenieMessageResponse]]) -> list[str]:
+    """Genie's own suggested questions from the live sub-turns (already
+    guard-screened at each turn's adaptation); curated defaults only when the
+    live turns offered none."""
+
+    merged: list[str] = []
+    for _, response in sections:
+        for suggestion in response.follow_up_questions:
+            if suggestion and suggestion not in merged:
+                merged.append(suggestion)
+    return merged[:4] if merged else default_follow_up_questions()
+
+
 def _labeled_sql(sections: list[tuple[str, GenieMessageResponse]]) -> str | None:
     parts: list[str] = []
     for title, response in sections:
@@ -202,6 +271,11 @@ def run_planned_sweep(
     body_parts = [intro]
     for sub_question, response in sections:
         body_parts.append(f"**{sub_question}**\n\n{(response.answer or '').strip()}")
+    synthesis, synthesis_gap = _synthesize_closing(repo, question, sections)
+    if synthesis:
+        body_parts.append(f"**What this adds up to**\n\n{synthesis}")
+    elif synthesis_gap:
+        gaps.append(synthesis_gap)
     answer = "\n\n".join(body_parts)
 
     anchor = max((resp for _, resp in sections), key=lambda r: r.row_count or 0)
@@ -261,6 +335,6 @@ def run_planned_sweep(
         visualization=anchor.visualization,
         actions=anchor.actions,
         table_rows=anchor.table_rows,
-        follow_up_questions=default_follow_up_questions(),
+        follow_up_questions=_live_follow_ups(sections),
         reasoning_trace=trace,
     )

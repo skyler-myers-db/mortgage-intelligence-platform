@@ -70,6 +70,8 @@ class _StubRepo:
 
     def ask_raw(self, prompt: str) -> str | None:
         self.raw_prompts.append(prompt)
+        if "executive synthesis" in prompt:
+            return "The strongest opportunity is refinance economics; act on the 3 verified segments first."
         return self.plan_text
 
     def respond(
@@ -115,9 +117,13 @@ def test_sweep_plans_fresh_and_executes_each_sub_question_live() -> None:
 
     assert result is not None
     assert result.source == "genie"
-    # One planning turn carrying the user's question verbatim, no templates.
-    assert len(repo.raw_prompts) == 1
+    # Two live raw turns: the plan (carrying the user's question verbatim,
+    # no templates) and the Genie-authored closing synthesis.
+    assert len(repo.raw_prompts) == 2
     assert _USER_QUESTION in repo.raw_prompts[0]
+    assert "executive synthesis" in repo.raw_prompts[1]
+    assert "**What this adds up to**" in result.answer
+    assert "act on the 3 verified segments first" in result.answer
     # Every planned sub-question ran as its own live turn with recursion off.
     assert len(repo.calls) == 4
     assert all(allow_sweep is False for _, allow_sweep in repo.calls)

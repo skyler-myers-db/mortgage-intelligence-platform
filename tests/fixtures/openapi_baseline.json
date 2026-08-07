@@ -7049,7 +7049,8 @@
               "high_equity_heloc_watch",
               "branch_capacity_review",
               "source_freshness_sentinel",
-              "custom_segment_watch"
+              "custom_segment_watch",
+              "live_analysis"
             ],
             "title": "Workflow Id",
             "type": "string"
@@ -7771,7 +7772,8 @@
               "high_equity_heloc_watch",
               "branch_capacity_review",
               "source_freshness_sentinel",
-              "custom_segment_watch"
+              "custom_segment_watch",
+              "live_analysis"
             ],
             "title": "Id",
             "type": "string"
@@ -18240,7 +18242,8 @@
                 "high_equity_heloc_watch",
                 "branch_capacity_review",
                 "source_freshness_sentinel",
-                "custom_segment_watch"
+                "custom_segment_watch",
+                "live_analysis"
               ],
               "title": "Workflow Id",
               "type": "string"
@@ -25633,7 +25636,8 @@
                 "high_equity_heloc_watch",
                 "branch_capacity_review",
                 "source_freshness_sentinel",
-                "custom_segment_watch"
+                "custom_segment_watch",
+                "live_analysis"
               ],
               "title": "Workflow Id",
               "type": "string"
