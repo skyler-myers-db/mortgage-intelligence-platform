@@ -20,7 +20,7 @@ from functools import lru_cache
 from pydantic import AliasChoices, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
-from backend.schemas._validators import set_public_lender_name_provider
+from backend.schemas._validators_tenant import set_public_lender_name_provider
 from backend.schemas.lender_identity import (
     effective_public_tenant_id,
     validate_public_lender_identity,

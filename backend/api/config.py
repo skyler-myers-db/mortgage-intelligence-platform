@@ -3,7 +3,7 @@
 from fastapi import APIRouter
 
 from backend.config.settings import settings
-from backend.schemas._validators import normalize_public_lender_ref
+from backend.schemas._validators_tenant import normalize_public_lender_ref
 from backend.schemas.config import ConfigFootprintResponse, ConfigOptionsResponse
 from backend.services.databricks_sql_helpers import qualify
 from backend.services.geography_scope import GeographyScope, load_geography_scope

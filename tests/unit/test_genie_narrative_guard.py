@@ -14,7 +14,7 @@ phrases ("Purchase Mortgage"). These tests pin the corrected boundary:
 
 from __future__ import annotations
 
-from backend.schemas._validators import contains_unsafe_ai_text
+from backend.schemas._validators_unsafe_text import contains_unsafe_ai_text
 from backend.services.genie_answers import GenieMessageResponse
 from backend.services.genie_message_policy import genie_response_has_unsafe_visible_text
 from backend.services.repositories.databricks_genie_policy_helpers import (

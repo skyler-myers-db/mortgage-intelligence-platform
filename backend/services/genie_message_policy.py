@@ -5,12 +5,12 @@ from collections.abc import Mapping, Sequence
 
 from pydantic import BaseModel, Field, field_validator
 
-from backend.schemas._validators import (
-    contains_human_name_shape,
+from backend.schemas._validators_person_names import contains_human_name_shape
+from backend.schemas._validators_protected_class import (
     contains_protected_class_marketing_text,
     contains_protected_class_proxy_marketing_text,
-    contains_unsafe_ai_text,
 )
+from backend.schemas._validators_unsafe_text import contains_unsafe_ai_text
 from backend.services.genie_answers import GenieMessageResponse
 
 

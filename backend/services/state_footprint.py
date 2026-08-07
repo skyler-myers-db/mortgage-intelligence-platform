@@ -26,7 +26,7 @@ import logging
 from dataclasses import dataclass
 from threading import Lock
 
-from backend.schemas._validators import set_state_footprint_provider
+from backend.schemas._validators_tenant import set_state_footprint_provider
 from backend.schemas.usps import US_STATE_NAME_BY_CODE
 from backend.services.observability import emit
 

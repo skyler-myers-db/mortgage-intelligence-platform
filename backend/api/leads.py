@@ -15,7 +15,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
 
-from backend.schemas._validators import normalize_public_lender_ref
+from backend.schemas._validators_tenant import normalize_public_lender_ref
 from backend.schemas.common import validate_internal_staff_email
 from backend.schemas.lead import SEGMENT_CODE_VALUES, LeadSummary
 from backend.schemas.portfolio import PortfolioCriteria

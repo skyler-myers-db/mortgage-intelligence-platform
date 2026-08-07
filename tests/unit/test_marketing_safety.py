@@ -14,7 +14,7 @@ from backend.api.outreach import (
     _assert_final_draft_subject,
 )
 from backend.main import app
-from backend.schemas._validators import contains_protected_class_marketing_text
+from backend.schemas._validators_protected_class import contains_protected_class_marketing_text
 from backend.schemas.growth_agent import GrowthAgentMonitor, GrowthAgentRunRequest
 from backend.schemas.lead import LeadSummary
 from backend.schemas.offer import (

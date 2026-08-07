@@ -21,7 +21,7 @@ from backend.config.runtime_secret_policy import (
     runtime_secret_text,
 )
 from backend.config.settings import settings
-from backend.schemas._validators import normalize_public_lender_ref
+from backend.schemas._validators_tenant import normalize_public_lender_ref
 from backend.schemas.common import validate_public_borrower_id
 from backend.schemas.portfolio import PortfolioCriteria
 from backend.services.audit_store import (

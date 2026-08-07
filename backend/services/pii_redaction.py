@@ -38,7 +38,7 @@ from threading import Lock
 from typing import Any
 
 from backend.config.runtime_secret_policy import require_strong_runtime_secret
-from backend.schemas._validators import is_public_lender_ref, normalize_public_lender_ref
+from backend.schemas._validators_tenant import is_public_lender_ref, normalize_public_lender_ref
 from backend.services.observability import emit
 
 log = logging.getLogger(__name__)

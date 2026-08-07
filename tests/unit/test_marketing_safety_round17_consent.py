@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from backend.api.outreach import _assert_disclosure_backed_draft_body
-from backend.schemas._validators import contains_human_name_shape
+from backend.schemas._validators_person_names import contains_human_name_shape
 from backend.schemas.borrower_copy_names import contains_borrower_copy_contextual_name
 from backend.schemas.borrower_cta_evidence import negative_borrower_cta_evidence
 from backend.schemas.portfolio_campaign import CampaignRecommendationVariant

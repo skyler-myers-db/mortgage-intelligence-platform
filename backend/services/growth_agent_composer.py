@@ -33,7 +33,7 @@ from backend.agents.mortgage_growth_copilot import (
     workspace_client as make_workspace_client,
 )
 from backend.config.settings import Settings, get_settings
-from backend.schemas._validators import contains_unsafe_ai_text
+from backend.schemas._validators_unsafe_text import contains_unsafe_ai_text
 from backend.schemas.agent_plan import (
     MAX_PLAN_STEPS,
     MAX_RATIONALE_LEN,

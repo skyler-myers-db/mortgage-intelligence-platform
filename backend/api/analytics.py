@@ -11,7 +11,7 @@ from typing import Annotated, Literal, get_args
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import ValidationError
 
-from backend.schemas._validators import normalize_public_lender_ref
+from backend.schemas._validators_tenant import normalize_public_lender_ref
 from backend.schemas.analytics import (
     AnalyticsFilters,
     EconomicsAnalyticsResponse,

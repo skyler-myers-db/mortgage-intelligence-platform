@@ -9,7 +9,7 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from backend.api.outreach import _assert_disclosure_backed_draft_body
-from backend.schemas._validators import contains_protected_class_marketing_text
+from backend.schemas._validators_protected_class import contains_protected_class_marketing_text
 from backend.schemas.portfolio_campaign import CampaignRecommendationVariant
 
 _UNSAFE_HEALTH_SELECTION_COPY = (

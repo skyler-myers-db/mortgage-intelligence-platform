@@ -8,7 +8,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from backend.schemas._validators import contains_human_name_shape, normalize_public_lender_ref
+from backend.schemas._validators_person_names import contains_human_name_shape
+from backend.schemas._validators_tenant import normalize_public_lender_ref
 from backend.schemas.common import (
     contains_pii_marker,
     validate_internal_staff_email,
