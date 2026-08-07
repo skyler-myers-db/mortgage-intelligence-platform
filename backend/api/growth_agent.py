@@ -531,11 +531,13 @@ def _live_analysis_fallback(
                 action="growth_agent.live_analysis",
                 entity_type="growth_agent_run",
                 entity_id=run_id,
+                # Keys come from the reviewed audit-metadata allowlist
+                # (backend/services/audit_store.py::_ALLOWED_METADATA_KEYS).
                 payload_json={
-                    "prompt_hash": analysis.question_hash,
-                    "source": analysis.source,
-                    "assets": analysis.trusted_assets,
-                    "genie_conversation_id": analysis.conversation_id or None,
+                    "question_hash": analysis.question_hash,
+                    "source_assets": analysis.trusted_assets,
+                    "conversation_id": analysis.conversation_id or None,
+                    "message_id": analysis.message_id,
                 },
             )
     except (LakebaseError, psycopg.Error) as exc:
