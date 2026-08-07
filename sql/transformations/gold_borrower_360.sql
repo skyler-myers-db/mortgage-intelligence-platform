@@ -478,9 +478,16 @@ enriched AS (
     -- fn_rate_spread's documented "no signal == no opportunity" contract
     -- (returns 0, so downstream fn_in_the_money stays FALSE and non-NULL
     -- consumers are unaffected).
+    -- Bound-cap guard (2026-08-06): fn_bounded_mortgage_rate clamps recorded
+    -- rates into [1%, 15%]. A rate sitting exactly AT a bound is a clamp
+    -- artifact — the true rate is unknown — so it must not mint spread
+    -- economics (live capture: +851 bps "opportunities" were 15%-cap rows).
+    -- The display current_rate still shows the bounded value honestly.
     mip.gold.fn_rate_spread(
       CASE
-        WHEN COALESCE(b.estimated_current_lien_balance, 0) > 0 THEN b.first_pos_rate
+        WHEN COALESCE(b.estimated_current_lien_balance, 0) > 0
+         AND b.first_pos_rate > 0.01 AND b.first_pos_rate < 0.15
+        THEN b.first_pos_rate
       END,
       m.market_rate_fraction
     ) AS rate_spread_bps,
@@ -628,7 +635,9 @@ enriched AS (
     -- means no consolidation economics.
     mip.gold.fn_rate_spread(
       CASE
-        WHEN COALESCE(b.estimated_current_lien_balance, 0) > 0 THEN b.second_pos_rate
+        WHEN COALESCE(b.estimated_current_lien_balance, 0) > 0
+         AND b.second_pos_rate > 0.01 AND b.second_pos_rate < 0.15
+        THEN b.second_pos_rate
       END,
       m.market_rate_fraction
     ) AS second_pos_rate_spread_bps,
@@ -1197,7 +1206,7 @@ COMMENT ON COLUMN mip.gold.borrower_360.county_fips_5 IS '5-char FIPS county cod
 COMMENT ON COLUMN mip.gold.borrower_360.segment_codes IS 'Ordered list of SegmentCode Literals (itm/listed/permit/investor/equity/retention + S1.3 overlays second_lien_itm/heloc_draw_to_payback/home_equity_history/refi_propensity/itm_on_related_property/payoff_loss_leads/permit_activity) this borrower belongs to.';
 COMMENT ON COLUMN mip.gold.borrower_360.equity_estimate IS 'USD: GREATEST(0, avm_value - estimated current lien balance). Current lien uses fn_estimated_upb(first_pos_amount, first_pos_rate, months_elapsed) plus second-position amount when first-lien inputs are present.';
 COMMENT ON COLUMN mip.gold.borrower_360.equity_pct IS '0..100 int available-equity percentage from AVM and estimated current lien balance; falls back to Cotality estimated_cltv only when AVM is missing. Underwater borrowers clamp to 0 for scoring while display LTV can exceed 100. Feeds fn_in_the_money + fn_next_best_offer.';
-COMMENT ON COLUMN mip.gold.borrower_360.rate_spread_bps IS 'fn_rate_spread(first_pos_rate, market_rate_fraction), gated on an ACTIVE lien: 0 when the amortized UPB estimate is fully paid down (nothing to refinance). Positive = above market = refi opportunity.';
+COMMENT ON COLUMN mip.gold.borrower_360.rate_spread_bps IS 'fn_rate_spread(first_pos_rate, market_rate_fraction), gated on an ACTIVE lien and an in-bounds rate: 0 when the amortized UPB estimate is fully paid down (nothing to refinance) or when the bounded rate sits at the 1%/15% clamp (unknown true rate). Positive = above market = refi opportunity.';
 COMMENT ON COLUMN mip.gold.borrower_360.market_rate_fraction IS 'Fractional market rate from silver.market_rates_weekly WHERE is_latest=TRUE. Router maps to WhyPanel.market_rate.';
 COMMENT ON COLUMN mip.gold.borrower_360.opportunity_score IS 'fn_lead_score output. 0..100.';
 COMMENT ON COLUMN mip.gold.borrower_360.confidence IS 'ROUND(mean(5 sub-scores)). 0..100. Matches mock_data._build_borrower.';
