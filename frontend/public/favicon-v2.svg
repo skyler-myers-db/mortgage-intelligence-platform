@@ -1,18 +1,21 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Entrada">
   <title>Entrada</title>
-  <!-- Browser-tab favicon — five-rect two-tone Entrada mark per the
-       brand style guide (2026-05-04). Cyan accents on top-left and
-       bottom-right corners (#66C5FF), navy bars (#025080) on a pale
-       icy background (#CFEFFF) so the mark stays legible at every
-       browser-tab size. The earlier 3-equal-solid-navy-bar variant
-       was a placeholder that did not match the official brand mark
-       — the cyan accents are intentional per the brand guide.
+  <!-- Browser-tab favicon — the measured Entrada "E" centered in the
+       rounded pale-icy tile. Bar geometry mirrors EntradaMark in
+       frontend/src/components/brand/Entrada.tsx exactly (32x22 viewBox
+       pixel-measured from the brand wordmark PNG: bar height 4.5, cyan
+       tip 13/32 ~ 40.6%, flush tokens, cyan diagonal top-left +
+       bottom-right), translated +5y to center vertically in the 32x32
+       tile. Regenerated 2026-08-06; the previous rects used the
+       pre-measurement guess (22-unit bars, 25% tips). The <1/10-unit
+       bar overhang past the rounded corner at y=5/27 is invisible at
+       icon sizes; the PNG raster (tools/render_brand_icons.py) clips it.
   -->
   <rect width="32" height="32" rx="6" ry="6" fill="#CFEFFF"/>
-  <rect x="5"    y="9"  width="5.5"  height="4" fill="#66C5FF"/>
-  <rect x="10.5" y="9"  width="16.5" height="4" fill="#025080"/>
-  <rect x="5"    y="15" width="22"   height="4" fill="#025080"/>
-  <rect x="5"    y="21" width="16.5" height="4" fill="#025080"/>
-  <rect x="21.5" y="21" width="5.5"  height="4" fill="#66C5FF"/>
+  <rect x="0"  y="5"     width="13" height="4.5" fill="#66C5FF"/>
+  <rect x="13" y="5"     width="19" height="4.5" fill="#025080"/>
+  <rect x="0"  y="13.75" width="32" height="4.5" fill="#025080"/>
+  <rect x="0"  y="22.5"  width="19" height="4.5" fill="#025080"/>
+  <rect x="19" y="22.5"  width="13" height="4.5" fill="#66C5FF"/>
 </svg>

@@ -786,7 +786,7 @@ if _FRONTEND_DIST.is_dir() and (_FRONTEND_DIST / "index.html").is_file():
 
     # Catch-all: first look for a real file at `dist/<full_path>`. If it
     # exists, serve it verbatim (static assets dropped into `public/` —
-    # us-counties.json, favicon.svg, future data files — show up at the
+    # us-counties.json, favicon.png, future data files — show up at the
     # dist root and need to be reachable by URL path). Otherwise fall
     # back to index.html so React Router owns the route client-side.
     #
