@@ -1252,10 +1252,10 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
       .first()
       .getAttribute('href');
     expect(iconHref, 'browser tab should prefer the Entrada PNG favicon').toContain(
-      '/favicon.png?v=entrada-20260505',
+      '/favicon.png?v=entrada-20260806',
     );
 
-    const iconResponse = await request.get(`${APP_URL}/favicon.png?v=entrada-20260505`, {
+    const iconResponse = await request.get(`${APP_URL}/favicon.png?v=entrada-20260806`, {
       headers: AUTH_HEADERS,
     });
     expect(iconResponse.status(), 'Entrada favicon asset should be served by the deployed app').toBe(200);
