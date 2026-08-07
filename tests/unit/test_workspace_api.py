@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 
+from backend.config.settings import settings
 from backend.main import app
 from backend.schemas.workspace import SavedLead, WorkspaceState
 from backend.services.repositories import get_lead_repository
@@ -293,4 +294,38 @@ def test_workspace_read_omits_saved_leads_missing_from_live_population() -> None
 def test_workspace_requires_actor_identity() -> None:
     res = client.get("/api/workspace")
     assert res.status_code == 401
-    assert res.json()["detail"] == "workspace identity required"
+    assert res.json()["detail"] == "authenticated identity required"
+
+
+def test_workspace_untrusted_edge_serves_with_marker_actor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GRANTS.md §11a: with ``trust_forwarded_headers=False`` the workspace
+    workflow surface deliberately keeps serving instead of failing closed.
+    Forwarded headers are ignored (spoofable on a non-Apps edge) and state
+    reads/writes attribute to the distinct untrusted-edge marker actor.
+    """
+
+    captured: list[str] = []
+
+    class _Store:
+        def list(self, *, actor: str) -> WorkspaceState:
+            captured.append(actor)
+            return WorkspaceState(saved_leads=[], saved_drafts=[])
+
+    monkeypatch.setattr(settings, "trust_forwarded_headers", False)
+    previous_store = app.dependency_overrides.get(get_workspace_store)
+    app.dependency_overrides[get_workspace_store] = lambda: _Store()
+    try:
+        res = client.get(
+            "/api/workspace",
+            headers={"X-Forwarded-Email": "spoofed@example.com"},
+        )
+    finally:
+        if previous_store is None:
+            app.dependency_overrides.pop(get_workspace_store, None)
+        else:
+            app.dependency_overrides[get_workspace_store] = previous_store
+
+    assert res.status_code == 200
+    assert captured == ["unknown-actor@untrusted-edge"]

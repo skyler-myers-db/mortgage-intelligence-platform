@@ -11,11 +11,13 @@ these tests override per-call where they need to exercise deny paths.
 from __future__ import annotations
 
 import pytest
+from fastapi import HTTPException, Request
 from fastapi.testclient import TestClient
 
 from backend.config.settings import settings
 from backend.main import app
 from backend.services.audit_store import get_audit_store
+from backend.services.rbac import resolve_workflow_actor
 from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
 
 
@@ -279,3 +281,51 @@ def test_put_rules_is_rejected_without_mutating_or_auditing() -> None:
             del app.dependency_overrides[get_audit_store]
         else:
             app.dependency_overrides[get_audit_store] = previous
+
+
+def _bare_request(headers: dict[str, str] | None = None) -> Request:
+    """Build a minimal Starlette request for direct gate-function tests."""
+    raw = [(key.lower().encode(), value.encode()) for key, value in (headers or {}).items()]
+    return Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/",
+            "headers": raw,
+            "query_string": b"",
+        }
+    )
+
+
+def test_resolve_workflow_actor_trusted_edge_matches_shared_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Behind a trusted edge the workflow resolver IS the shared fail-closed
+    gate: forwarded identity in, actor out; no identity, 401 with the shared
+    detail string.
+    """
+    monkeypatch.setattr(settings, "trust_forwarded_headers", True)
+
+    assert (
+        resolve_workflow_actor(_bare_request({"X-Forwarded-Email": "lo@example.com"}))
+        == "lo@example.com"
+    )
+    assert resolve_workflow_actor(_bare_request({"X-Forwarded-User": "lo.user"})) == "lo.user"
+
+    with pytest.raises(HTTPException) as excinfo:
+        resolve_workflow_actor(_bare_request())
+    assert excinfo.value.status_code == 401
+    assert excinfo.value.detail == "authenticated identity required"
+
+
+def test_resolve_workflow_actor_untrusted_edge_serves_marker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GRANTS.md §11a: with trust off, workflow surfaces keep serving with
+    the distinct untrusted-edge marker — forwarded headers are spoofable on
+    a non-Apps edge, so they are ignored rather than admitted or 401'd.
+    """
+    monkeypatch.setattr(settings, "trust_forwarded_headers", False)
+
+    actor = resolve_workflow_actor(_bare_request({"X-Forwarded-Email": "spoofed@example.com"}))
+    assert actor == "unknown-actor@untrusted-edge"

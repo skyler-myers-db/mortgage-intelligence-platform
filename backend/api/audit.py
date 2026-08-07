@@ -11,7 +11,6 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
-from backend.config.settings import settings
 from backend.schemas.audit import (
     AuditEvent,
     AuditEventCreateRequest,
@@ -41,7 +40,7 @@ from backend.services.error_sanitizer import safe_dependency_detail
 from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
 from backend.services.observability import is_safe_correlation_id
-from backend.services.rbac import AdminDep
+from backend.services.rbac import AdminDep, require_authenticated_actor
 
 router = APIRouter(prefix="/audit", tags=["audit"])
 
@@ -80,17 +79,6 @@ def _validate_correlation_filter(value: str) -> str:
     if not is_safe_correlation_id(value):
         raise ValueError("correlation_id must be a non-PII request correlation id")
     return value
-
-
-def _authenticated_actor(request: Request) -> str:
-    """Resolve the current edge identity without admitting a fallback actor."""
-
-    if not settings.trust_forwarded_headers:
-        raise HTTPException(status_code=401, detail="audit identity required")
-    actor = request.headers.get("X-Forwarded-Email") or request.headers.get("X-Forwarded-User")
-    if not actor:
-        raise HTTPException(status_code=401, detail="audit identity required")
-    return actor
 
 
 def _actor_event_summary(event: AuditEvent) -> ActorAuditEventSummary:
@@ -136,7 +124,7 @@ def list_my_events(
 
     if "actor" in request.query_params:
         raise HTTPException(status_code=422, detail="actor filter is not supported")
-    actor = _authenticated_actor(request)
+    actor = require_authenticated_actor(request)
     response.headers["Cache-Control"] = "private, no-store"
     fingerprint = audit_filter_fingerprint(
         {
