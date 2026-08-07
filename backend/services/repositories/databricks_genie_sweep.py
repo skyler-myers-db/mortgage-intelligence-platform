@@ -58,6 +58,9 @@ def _planning_prompt(question: str) -> str:
         "answered by a single SQL statement:\n\n"
         f'"{question}"\n\n'
         "Break it into the specific analytics questions YOU judge most useful, "
+        "phrased as neutral read-only analytics (prefer 'top borrowers by "
+        "opportunity score' over audience-selection wording like 'eligible "
+        "for' or 'characteristics of'), "
         f"between {_MIN_PLANNED} and {_MAX_PLANNED} of them, each self-contained "
         "and answerable with one SQL query over your trusted assets. Choose the "
         "angles yourself based on what the question is really asking and which "
@@ -207,7 +210,7 @@ def run_planned_sweep(
         GenieReasoningStep(
             kind="orchestrate",
             content=(
-                "The broad ask returned no single governed query, so the live "
+                "The broad question produced no single governed query, so the live "
                 f"space planned its own decomposition: {len(planned)} "
                 "sub-analyses, each executed as its own governed turn."
             ),
