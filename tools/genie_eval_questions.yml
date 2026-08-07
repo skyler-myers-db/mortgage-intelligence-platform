@@ -375,3 +375,16 @@ questions:
       - not pass the governed output policy
     min_rows: 1
     max_latency_s: 60
+
+  - id: deep_full_analysis_sweep
+    category: deep-analysis
+    question: Do a full analysis on all of the data -- what are the deepest and most useful insights from everything as a lender?
+    must_cite:
+      - mip.gold.borrower_360
+      - mip.gold.funnel_snapshot_daily
+    forbid_keywords:
+      - did not display the result
+      - not pass the governed output policy
+    min_rows: 1
+    # Seven parallel live Genie turns; wall time tracks the slowest turn.
+    max_latency_s: 180
