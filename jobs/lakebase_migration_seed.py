@@ -1,13 +1,49 @@
-"""Configured lender disclosure seed rendering."""
+"""Configured lender disclosure seed rendering and schema/seed parity preflight."""
 
 from __future__ import annotations
 
 import hashlib
+import re
 
 from backend.schemas.lender_identity import (
     effective_public_tenant_id,
     validate_public_lender_identity,
 )
+
+_ACTIVE_REQUIRES_READY_CONSTRAINT = "campaigns_active_requires_ready_treatment_chk"
+_CAMPAIGN_SEED_INSERT_RE = re.compile(r"INSERT INTO mip_app\.campaigns\b.*?;", re.DOTALL)
+
+
+def _preflight_seed_schema_parity(schema_sql: str, seed_sql: str) -> None:
+    """Reject schema/seed texts that cannot replay together, before any mutation.
+
+    File-level delta ships can leave the deployed tree mixed: a schema.sql that
+    enforces treatment readiness next to an older seed_campaigns.sql that still
+    inserts pre-treatment campaigns as ``'active'``. Postgres validates the
+    proposed insert tuple against table CHECK constraints before ON CONFLICT
+    arbitration, so that mix aborts mid-transaction with a bare constraint
+    violation minutes into the run. Fail here instead with a remediation path.
+    """
+
+    if _ACTIVE_REQUIRES_READY_CONSTRAINT not in schema_sql:
+        return
+    campaign_inserts = _CAMPAIGN_SEED_INSERT_RE.findall(seed_sql)
+    if not campaign_inserts:
+        raise RuntimeError(
+            "lakebase/seed_campaigns.sql contains no mip_app.campaigns seed; "
+            "re-ship lakebase/schema.sql and lakebase/seed_campaigns.sql from "
+            "the same revision, then re-run the migration"
+        )
+    for statement in campaign_inserts:
+        if "'active'" in statement:
+            raise RuntimeError(
+                "lakebase/seed_campaigns.sql still seeds pre-treatment campaigns "
+                f"as active, but lakebase/schema.sql enforces "
+                f"{_ACTIVE_REQUIRES_READY_CONSTRAINT}; the deployed tree mixes "
+                "revisions -- re-ship lakebase/schema.sql and "
+                "lakebase/seed_campaigns.sql from the same commit, then re-run "
+                "the migration"
+            )
 
 
 def _sql_literal(value: str) -> str:

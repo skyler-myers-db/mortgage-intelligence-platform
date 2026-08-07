@@ -213,8 +213,11 @@ from jobs.lakebase_migration_schema_hooks import (
 from jobs.lakebase_migration_schema_hooks import (
     _schema_hook_function_calls as _schema_hook_function_calls,
 )
-from jobs.lakebase_migration_seed import _sql_literal as _sql_literal
 from jobs.lakebase_migration_seed import (  # noqa: E402
+    _preflight_seed_schema_parity as _preflight_seed_schema_parity,
+)
+from jobs.lakebase_migration_seed import _sql_literal as _sql_literal
+from jobs.lakebase_migration_seed import (
     _tenant_disclosure_seed_sql as _tenant_disclosure_seed_sql,
 )
 from jobs.lakebase_migration_transaction import (  # noqa: E402
@@ -389,6 +392,11 @@ def main(
     repo_root = _repo_root()
     schema_sql = (repo_root / "lakebase" / "schema.sql").read_text(encoding="utf-8")
     seed_sql = (repo_root / "lakebase" / "seed_campaigns.sql").read_text(encoding="utf-8")
+    try:
+        _preflight_seed_schema_parity(schema_sql, seed_sql)
+    except Exception as exc:  # noqa: BLE001 -- static repo-authored diagnostic; no secrets
+        print(f"[lakebase-migrate] {exc}", file=sys.stderr)
+        sys.exit(2)
     tenant_disclosure_seed_sql = _tenant_disclosure_seed_sql(
         lender_name=lender_name,
         lender_nmls_id=lender_nmls_id,

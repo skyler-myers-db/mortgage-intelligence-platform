@@ -82,6 +82,31 @@ def test_seed_precedes_legacy_proof_backfill_and_hard_validation() -> None:
     assert "CREATE TRIGGER trg_generated_outreach_drafts_immutable" in post_seed
 
 
+def test_seed_schema_parity_preflight_blocks_mixed_revision_trees() -> None:
+    from jobs import lakebase_migrate
+
+    # The repo's own schema + seed must replay together in one transaction.
+    lakebase_migrate._preflight_seed_schema_parity(_SCHEMA, _SEED)
+
+    # A stale seed blob (pre-treatment campaigns still seeded as active) next
+    # to the current schema is the delta-ship skew that broke the migrate job
+    # on 2026-08-07; the preflight must refuse it before any mutation.
+    stale_seed = _SEED.replace("'archived',", "'active',")
+    assert stale_seed != _SEED
+    with pytest.raises(RuntimeError, match="same commit"):
+        lakebase_migrate._preflight_seed_schema_parity(_SCHEMA, stale_seed)
+
+    # A seed with no campaigns insert at all is a truncated or foreign text.
+    with pytest.raises(RuntimeError, match="same revision"):
+        lakebase_migrate._preflight_seed_schema_parity(
+            _SCHEMA, "SET search_path TO mip_app, public;"
+        )
+
+    # Pre-constraint schemas accept either seed generation.
+    legacy_schema = _SCHEMA.replace("campaigns_active_requires_ready_treatment_chk", "")
+    lakebase_migrate._preflight_seed_schema_parity(legacy_schema, stale_seed)
+
+
 def test_campaign_json_shape_checks_are_post_seed_not_valid_and_deploy_probed() -> None:
     from jobs import lakebase_migrate
 

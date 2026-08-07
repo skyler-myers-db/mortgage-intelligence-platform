@@ -155,6 +155,7 @@ def test_lakebase_manifest_is_ready_only_after_fenced_finalize() -> None:
         LAKEBASE_SCHEMA
     )
     assert "'archived'" in SEED
+    assert "'active'" not in SEED
     assert "status = EXCLUDED.status" in SEED
     assert "WHERE campaigns.treatment_state = 'legacy_unbound'" in SEED
 
