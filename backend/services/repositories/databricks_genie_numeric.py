@@ -242,6 +242,12 @@ def _numeric_support_values_from_rows(
         _add_supported_variants(values, min(col_values))
         _add_supported_variants(values, max(col_values))
         _add_supported_variants(values, sum(col_values) / len(col_values))
+        # Deltas an honest trend narrative derives from the returned rows:
+        # consecutive-row changes, the endpoint change, and the max-min range.
+        for earlier, later in zip(col_values, col_values[1:], strict=False):
+            _add_supported_variants(values, abs(later - earlier))
+        _add_supported_variants(values, abs(col_values[-1] - col_values[0]))
+        _add_supported_variants(values, max(col_values) - min(col_values))
     return values
 
 
@@ -295,6 +301,10 @@ def _column_unit_multiplier(column: str) -> float | None:
         return 1_000
     if re.search(r"(?:^|[_\s-])(?:millions?|m)(?:$|[_\s-])", lower):
         return 1_000_000
+    # Basis-point columns are legitimately narrated as percentage points
+    # ("+350 bps" == "3.50 percentage points"); support the converted form.
+    if re.search(r"(?:^|[_\s-])bps(?:$|[_\s-])", lower):
+        return 0.01
     if re.search(r"(?:^|[_\s-])(?:billions?|b)(?:$|[_\s-])", lower):
         return 1_000_000_000
     return None
