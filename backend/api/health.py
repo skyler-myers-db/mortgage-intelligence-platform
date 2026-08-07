@@ -224,6 +224,13 @@ def _diagnostic_body(
         # QueryClient data if Databricks Apps swaps the workspace identity
         # within the same browser session.
         "actor_cache_key": _actor_cache_key(actor_email),
+        # Validated workspace origin so admin surfaces can deep-link UC
+        # assets exactly like the authenticated browser body does.
+        **(
+            {"workspace_host": origin}
+            if (origin := workspace_origin(settings.databricks_host))
+            else {}
+        ),
         # Slice-13 observability counters. Values reflect the last
         # rolling hour. A non-zero ``breaker_state_changes_last_hour``
         # is the earliest signal that a dependency is flapping; a
