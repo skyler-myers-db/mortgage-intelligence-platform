@@ -48,6 +48,9 @@ GrowthAgentWorkflowId = Literal[
     "branch_capacity_review",
     "source_freshness_sentinel",
     "custom_segment_watch",
+    # Read-only live Genie analysis: the outcome fallback when no reviewed
+    # workflow matches the objective. Never writes state.
+    "live_analysis",
 ]
 GrowthAgentCadence = Literal["daily", "weekly"]
 GrowthAgentSegmentCode = Literal["itm", "listed", "permit", "investor", "equity", "retention"]
