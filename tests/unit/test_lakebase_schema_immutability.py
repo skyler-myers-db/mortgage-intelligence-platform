@@ -82,6 +82,52 @@ def test_seed_precedes_legacy_proof_backfill_and_hard_validation() -> None:
     assert "CREATE TRIGGER trg_generated_outreach_drafts_immutable" in post_seed
 
 
+def test_every_check_constraint_function_call_is_reviewed_for_replay() -> None:
+    """Every builtin a schema CHECK expression calls must pass the hook preflight.
+
+    The executable-hook inventory only sees a constraint once it exists in the
+    live catalog -- i.e. on the run AFTER the one that created it. A constraint
+    calling an unreviewed function therefore passes fresh installs and CI, then
+    breaks every subsequent migrate re-run (d9e5cf44's pg_column_size check
+    took down mip_lakebase_migrate on 2026-08-07 exactly this way).
+    """
+
+    from jobs.lakebase_migration_contracts import _SAFE_SCHEMA_HOOK_FUNCTION_NAMES
+    from jobs.lakebase_migration_schema_hooks import _schema_hook_function_calls
+
+    expressions: list[tuple[str, str]] = []
+    for match in re.finditer(r"ADD CONSTRAINT\s+([a-z0-9_]+)\s+CHECK\s*\(", _SCHEMA):
+        depth, start = 1, match.end()
+        position = start
+        while depth and position < len(_SCHEMA):
+            if _SCHEMA[position] == "(":
+                depth += 1
+            elif _SCHEMA[position] == ")":
+                depth -= 1
+            position += 1
+        expressions.append((match.group(1), _SCHEMA[start : position - 1]))
+    assert expressions, "schema.sql lost its ADD CONSTRAINT ... CHECK statements"
+
+    # Source-only spellings the live inventory can never report: the catalog
+    # renders `x IN (...)` as `x = ANY (ARRAY[...])`, and `any` is reviewed.
+    source_only_spellings = {"in"}
+    unreviewed = sorted(
+        (name, tuple(sorted(unknown)))
+        for name, expression in expressions
+        if (
+            unknown := _schema_hook_function_calls(expression)
+            - _SAFE_SCHEMA_HOOK_FUNCTION_NAMES
+            - source_only_spellings
+        )
+    )
+    assert not unreviewed, (
+        "schema.sql CHECK constraints call functions missing from "
+        f"_SAFE_SCHEMA_HOOK_FUNCTION_NAMES; the NEXT migrate re-run will fail "
+        f"its executable-hook preflight: {unreviewed}"
+    )
+    assert "pg_column_size" in _SAFE_SCHEMA_HOOK_FUNCTION_NAMES
+
+
 def test_seed_schema_parity_preflight_blocks_mixed_revision_trees() -> None:
     from jobs import lakebase_migrate
 

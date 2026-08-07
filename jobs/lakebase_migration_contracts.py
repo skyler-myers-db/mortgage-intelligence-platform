@@ -466,6 +466,9 @@ _SAFE_SCHEMA_HOOK_FUNCTION_NAMES = frozenset(
         "now",
         "nullif",
         "or",
+        # Storage-size measurement only (genie_messages response budget check);
+        # no I/O, settings, or side effects -- same review class as length().
+        "pg_column_size",
     }
     | {
         name
