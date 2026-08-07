@@ -177,7 +177,7 @@ The product is ready when:
 - Every route queries live Unity Catalog / Lakebase; there is no mock runtime path.
 - Evidence drawer opens from every KPI/score/recommendation and cites real Cotality source rows.
 - Human approval writes a row to the Lakebase audit table.
-- `/ask-genie` is grounded in the real `mortgage_lead_intelligence` Genie Space with deterministic prompt-answer guards.
+- `/ask-genie` is grounded in the real `mortgage_lead_intelligence` Genie Space, **live-first**: Genie's own governed SQL, rows, and narrative ARE the answer. Accuracy comes from curated data and a curated space, never from deterministic answer overlays — overlaying a good live turn is 'faking it' and is prohibited. The deterministic layer has exactly two jobs: RESCUE (turns without trusted SQL proof, disclosed in the process trace) and CROSS-CHECK (verify against the governed framing; disclose divergence; never replace). The claims verifier, SQL trust policy, and fair-lending/PII guards are the accuracy-and-compliance contract and stay; any guard that blocks a legitimate analytics question is a bug — fix it by enumerating the real failing case (capture the live turn), never by weakening fail-closed defaults.
 - Resilience is demonstrable: warehouse warm-start hook, retry + circuit breaker around SQL + Genie calls, short-TTL cache for hot KPIs, explicit degraded-state UI when a dependency is down.
 - Backend health, portfolio, leads, borrower, offers, outreach, and audit endpoints return data from real tables.
 - Frontend build passes.

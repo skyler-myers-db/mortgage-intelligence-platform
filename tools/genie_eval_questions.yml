@@ -337,3 +337,41 @@ questions:
       - ask a scoped question
     min_rows: 5
     max_latency_s: 60
+
+  # ---------------------------------------------------------------------------
+  # Breadth certification (2026-08-07, live-first): Genie must be genuinely
+  # capable across the asset catalog, not just borrower_360. Any refusal or
+  # wrong-asset answer here is a curation regression.
+  # ---------------------------------------------------------------------------
+  - id: breadth_funnel_trend_30d
+    category: breadth
+    question: How did the lead population and approvals change over the last 30 days?
+    must_cite:
+      - mip.gold.funnel_snapshot_daily
+    forbid_keywords:
+      - did not display the result
+      - not pass the governed output policy
+    min_rows: 3
+    max_latency_s: 60
+
+  - id: breadth_lockin_cohort
+    category: breadth
+    question: How big is the rate lock-in cohort and what is its median origination rate?
+    must_cite:
+      - mip.gold.lockin_cohort
+    forbid_keywords:
+      - did not display the result
+      - not pass the governed output policy
+    min_rows: 0
+    max_latency_s: 60
+
+  - id: breadth_evidence_signals_7d
+    category: breadth
+    question: What trigger evidence fired in the last 7 days, grouped by signal type?
+    must_cite:
+      - mip.gold.evidence_events
+    forbid_keywords:
+      - did not display the result
+      - not pass the governed output policy
+    min_rows: 1
+    max_latency_s: 60
