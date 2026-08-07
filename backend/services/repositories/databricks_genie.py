@@ -101,6 +101,10 @@ from backend.services.repositories.databricks_genie_policy_helpers import (
 from backend.services.repositories.databricks_genie_strategy import (
     _canonical_strategy_board_answer,
 )
+from backend.services.repositories.databricks_genie_sweep import (
+    is_full_analysis_question,
+    run_full_analysis_sweep,
+)
 from backend.services.repositories.databricks_genie_trace import (
     WITHHELD_CONTRADICTED,
     WITHHELD_NO_NARRATIVE,
@@ -235,6 +239,8 @@ class DatabricksGenieRepository:
         self,
         question: str,
         conversation_id: str | None = None,
+        *,
+        allow_sweep: bool = True,
     ) -> GenieMessageResponse:
         # Product posture (mip_genie_live_first=True): LIVE Genie is the primary
         # answer path for every guardrail-passing question so the answer is
@@ -254,6 +260,14 @@ class DatabricksGenieRepository:
                 question,
                 kind=DependencyDownError.KIND_BREAKER_OPEN,
             )
+        if allow_sweep and is_full_analysis_question(question):
+            # "Analyze everything" cannot be one SQL statement. Decompose into
+            # themed LIVE Genie analyses (each through the full policy
+            # pipeline) and assemble the verified results; fall through to the
+            # normal single-turn pipeline when the sweep cannot stand one up.
+            sweep = run_full_analysis_sweep(self, question)
+            if sweep is not None:
+                return sweep
         repaired = False
         try:
             result = self._genie.ask(question, conversation_id=conversation_id)
