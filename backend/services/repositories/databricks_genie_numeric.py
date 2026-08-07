@@ -311,7 +311,93 @@ def _numeric_support_values_from_rows(
             _add_supported_variants(values, abs(later - earlier))
         _add_supported_variants(values, abs(col_values[-1] - col_values[0]))
         _add_supported_variants(values, max(col_values) - min(col_values))
+        _add_distribution_shape_support(values, col_values, kind=claim.kind)
+    # A PERCENT claim is legitimately derived from a COUNT column (a bucket's
+    # share of the column total), which the claim-kind filter above excludes.
+    # Only SHARE ratios are contributed here — never raw values, quantiles, or
+    # cumulative totals — so a count column can still never support a currency
+    # or bps claim (cross-kind laundering stays closed).
+    if claim.kind == "percent":
+        for col in _row_columns(rows):
+            if _is_genie_identifier_column(col) or _column_looks_dateish(col):
+                continue
+            share_values = [
+                numeric
+                for row in rows
+                if (numeric := _numeric_cell_value(row.get(col))) is not None
+            ]
+            _add_share_support(values, share_values)
     return values
+
+
+def _add_share_support(values: set[float], col_values: list[float]) -> None:
+    """Bucket shares and cumulative shares of a column total (percent only)."""
+
+    if not col_values or len(col_values) > _MAX_DISTRIBUTION_ROWS:
+        return
+    total = sum(col_values)
+    if total <= 0:
+        return
+    running = 0.0
+    for value in col_values:
+        _add_supported_variants(values, 100.0 * value / total)
+        running += value
+        _add_supported_variants(values, 100.0 * running / total)
+        _add_supported_variants(values, 100.0 * (total - running) / total)
+
+
+# Distribution/shape narratives ("the median bucket is X", "62% of borrowers
+# sit above N bps", "the top three bands hold 41,203 borrowers") are the whole
+# point of a histogram question, but every such figure is DERIVED, never a
+# cell literal — so the claims verifier suppressed them and shape questions
+# became structurally unanswerable (live persona audit 2026-08-07, VP-Lending
+# distribution probe returned 101 rows and zero narrative).
+#
+# This is a POSITIVE proof path, not an exemption: each value below is
+# computed from the returned column, so an unsupported number still fails
+# closed. Bounded at O(len(column)) per column.
+_MAX_DISTRIBUTION_ROWS = 2_000
+
+
+def _add_distribution_shape_support(
+    values: set[float],
+    col_values: list[float],
+    *,
+    kind: str,
+) -> None:
+    if not col_values or len(col_values) > _MAX_DISTRIBUTION_ROWS:
+        return
+    ordered = sorted(col_values)
+    count = len(ordered)
+
+    # Order statistics an honest shape narrative cites.
+    def _quantile(fraction: float) -> float:
+        idx = min(count - 1, max(0, int(round(fraction * (count - 1)))))
+        return ordered[idx]
+
+    for fraction in (0.1, 0.25, 0.5, 0.75, 0.9, 0.95):
+        _add_supported_variants(values, _quantile(fraction))
+    if count % 2 == 0:  # even-length median as the mean of the middle pair
+        _add_supported_variants(
+            values, (ordered[count // 2 - 1] + ordered[count // 2]) / 2
+        )
+
+    total = sum(col_values)
+    if total <= 0:
+        return
+    # Cumulative counts from both ends: on a histogram column these are
+    # exactly "N borrowers above/below the threshold" and "the top K bands
+    # hold N". Shares are contributed separately (percent claims only).
+    running = 0.0
+    for value in col_values:
+        running += value
+        _add_supported_variants(values, running)
+        _add_supported_variants(values, total - running)
+    # Shares are PERCENT values. Contributing them to a bare COUNT claim let a
+    # rounded cumulative share stand in for a fabricated borrower count — the
+    # canonical-ranking regression test caught exactly that false accept.
+    if kind == "percent":
+        _add_share_support(values, col_values)
 
 
 def _column_supports_claim_kind(
