@@ -113,3 +113,98 @@ def test_unsafe_field_diagnostic_names_the_surface_without_leaking() -> None:
     assert genie_unsafe_visible_field(named) == "answer"
     leaked_row = _response(table_rows=[{"note": "SSN 123-45-6789"}])
     assert genie_unsafe_visible_field(leaked_row) == "table_rows"
+
+
+# --- Round 2: narrative-quality defects from the same audit -----------------
+
+
+def test_inline_and_multi_asset_citations_are_not_duplicated() -> None:
+    """7 of 24 audited answers printed 'Source:' twice, and a multi-asset
+    citation silently lost its evidence table."""
+
+    from backend.services.repositories.databricks_genie import (
+        _ensure_answer_cites_source,
+    )
+
+    assets = ["mip.gold.borrower_360"]
+    inline = _ensure_answer_cites_source(
+        "There are 88,806 borrowers. Source: mip.gold.borrower_360.", assets
+    )
+    assert inline.count("Source:") == 1
+    own_line = _ensure_answer_cites_source(
+        "Body text.\n\nSource: mip.gold.borrower_360", assets
+    )
+    assert own_line.count("Source:") == 1
+    multi = _ensure_answer_cites_source(
+        "Body. Source: mip.gold.borrower_360, mip.gold.evidence_events.", assets
+    )
+    assert multi.count("Source:") == 1
+    assert "evidence_events" in multi
+    # A genuinely uncited answer still gets its citation.
+    assert "Source:" in _ensure_answer_cites_source("There are 88,806 borrowers.", assets)
+
+
+def test_planner_no_plan_verdict_skips_the_sweep() -> None:
+    """The live space decides a prompt is not analytics ('help'), instead of a
+    keyword gate — and the seven-turn sweep does not fire."""
+
+    from backend.services.repositories.databricks_genie_sweep import (
+        _parse_planned_questions,
+    )
+
+    assert _parse_planned_questions("NO_PLAN") == []
+    assert _parse_planned_questions("no_plan") == []
+    assert (
+        len(
+            _parse_planned_questions(
+                "1. How many borrowers are in the money?\n"
+                "2. Which states lead?\n"
+                "3. What fired recently?"
+            )
+        )
+        == 3
+    )
+
+
+def test_sweep_sections_without_prose_are_suppressed() -> None:
+    """A governed turn whose narrative was withheld carries a plumbing status
+    line; printing it under a section heading is worse than omitting it."""
+
+    from backend.services.genie_answers import GenieMessageResponse
+    from backend.services.repositories.databricks_genie_sweep import _has_rendered_prose
+
+    def _response(answer: str) -> GenieMessageResponse:
+        return GenieMessageResponse(
+            conversation_id="c",
+            question="q",
+            question_hash="h",
+            answer=answer,
+            source="genie",
+            trusted_assets=["mip.gold.borrower_360"],
+        )
+
+    assert (
+        _has_rendered_prose(
+            _response(
+                "Genie ran a governed query against mip.gold.borrower_360 and "
+                "returned 5 rows, shown with the generated SQL. The draft "
+                "narrative was withheld: it contained numbers the app could not verify."
+            )
+        )
+        is False
+    )
+    assert _has_rendered_prose(_response("There are 88,806 borrowers, averaging 167 bps.")) is True
+
+
+def test_divergence_note_passes_the_output_gate() -> None:
+    """The cross-check divergence is now rendered in the answer body, so it
+    must clear the same guard every rendered string clears."""
+
+    from backend.services.genie_message_policy import genie_visible_text_unsafe
+
+    note = (
+        "Governed cross-check: this answer's framing overlaps 0 of 10 borrowers "
+        "with the canonical opportunity ranking; both are governed views — the "
+        "Lead Queue holds the operational list."
+    )
+    assert genie_visible_text_unsafe(note) is False

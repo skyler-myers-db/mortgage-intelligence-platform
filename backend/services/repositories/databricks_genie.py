@@ -667,6 +667,17 @@ def _adapt_genie_response(
     )
     if answer_override is not None:
         answer_text: str | None = answer_override
+    elif cross_check_gaps and not prose_withheld_reason:
+        # Doctrine: disclose divergence — IN THE ANSWER, not only in the
+        # proof drawer. The persona audit confirmed a 0-of-10 ranking overlap
+        # was computed and never shown to the user (the presenter's next click
+        # into Lead Queue would not match the list on screen).
+        divergence_note = " ".join(cross_check_gaps)
+        answer_text = (
+            f"{(result.answer_text or '').strip()}\n\n{divergence_note}"
+            if (result.answer_text or "").strip()
+            else divergence_note
+        )
     elif prose_withheld_reason:
         row_count = len(rows) if rows else 0
         row_word = "row" if row_count == 1 else "rows"
@@ -813,11 +824,22 @@ def _governed_cross_check(
     return _CROSS_CHECK_CLEAN
 
 
+# A citation Genie wrote INLINE at the end of a paragraph, or one naming
+# several assets ("Source: mip.gold.borrower_360, mip.gold.evidence_events"),
+# never matched the own-line pattern above — so the app appended a second,
+# narrower line. That printed a duplicate "Source:" on 7 of 24 audited answers
+# and silently dropped the evidence table from a multi-asset citation
+# (live persona audit 2026-08-07).
+_INLINE_SOURCE_RE = re.compile(
+    r"(?i)source\s*:\s*`?[A-Za-z_][\w-]*\.[A-Za-z_]\w*\.[A-Za-z_]\w*"
+)
+
+
 def _ensure_answer_cites_source(answer: str | None, trusted_assets: list[str]) -> str:
-    """Append a source line when trusted live Genie text omits one."""
+    """Append a source line only when the text cites no asset at all."""
 
     text = (answer or "").strip()
-    if not trusted_assets or _SOURCE_LINE_RE.search(text):
+    if not trusted_assets or _SOURCE_LINE_RE.search(text) or _INLINE_SOURCE_RE.search(text):
         return text
     source = trusted_assets[0]
     if not text:
