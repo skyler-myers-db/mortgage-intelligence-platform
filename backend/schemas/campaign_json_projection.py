@@ -7,7 +7,7 @@ import re
 from collections.abc import Callable
 from typing import Literal, cast
 
-from backend.schemas._validators import (
+from backend.schemas._validators_tenant import (
     configured_public_lender_name,
     normalize_public_lender_ref,
     reviewed_state_codes,

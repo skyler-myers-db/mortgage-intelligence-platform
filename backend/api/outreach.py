@@ -25,7 +25,7 @@ from uuid import uuid4
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 
 from backend.config.settings import settings
-from backend.schemas._validators import assert_no_protected_class_marketing_text
+from backend.schemas._validators_protected_class import assert_no_protected_class_marketing_text
 from backend.schemas.offer import (
     OutreachApproveRequest,
     OutreachApproveResponse,

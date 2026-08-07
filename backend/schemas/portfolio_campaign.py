@@ -6,11 +6,13 @@ from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from backend.schemas._validators import (
-    assert_no_protected_class_marketing_text,
-    contains_confidential_or_internal_text,
+from backend.schemas._validators_person_names import (
     contains_contextual_human_name,
     contains_human_name_shape,
+)
+from backend.schemas._validators_protected_class import assert_no_protected_class_marketing_text
+from backend.schemas._validators_unsafe_text import (
+    contains_confidential_or_internal_text,
     contains_mechanical_pii_or_raw_identifier,
     contains_prompt_injection_text,
 )

@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from backend.schemas._validators import contains_protected_class_marketing_text
+from backend.schemas._validators_protected_class import contains_protected_class_marketing_text
 from backend.schemas.agent_plan import ComposePlanRequest
 from backend.schemas.growth_agent import GrowthAgentPromptRunRequest
 from backend.schemas.marketing_audience_admission import audience_admission_criterion

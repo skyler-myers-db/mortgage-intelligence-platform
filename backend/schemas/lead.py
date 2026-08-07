@@ -6,7 +6,7 @@ from typing import Literal, get_args
 
 from pydantic import BaseModel, Field, field_validator
 
-from backend.schemas._validators import normalize_public_lender_ref
+from backend.schemas._validators_tenant import normalize_public_lender_ref
 from backend.schemas.common import EvidenceEvent
 from backend.schemas.loan_officer import AssignmentLifecycleStatus
 from backend.schemas.why import WhyPanel

@@ -4,12 +4,12 @@ import re
 
 from pydantic import BaseModel, Field
 
-from backend.schemas._validators import (
-    configured_public_lender_name,
-    contains_human_name_shape,
+from backend.schemas._validators_person_names import contains_human_name_shape
+from backend.schemas._validators_protected_class import contains_protected_class_marketing_text
+from backend.schemas._validators_tenant import configured_public_lender_name
+from backend.schemas._validators_unsafe_text import (
     contains_mechanical_pii_or_raw_identifier,
     contains_prompt_injection_text,
-    contains_protected_class_marketing_text,
 )
 
 PUBLIC_BORROWER_ID_PATTERN = re.compile(r"^B-[A-Za-z0-9][A-Za-z0-9_-]{0,126}$")

@@ -17,7 +17,7 @@ from backend.api.outreach import (
     _assert_final_draft_subject,
 )
 from backend.main import app
-from backend.schemas._validators import contains_protected_class_marketing_text
+from backend.schemas._validators_protected_class import contains_protected_class_marketing_text
 from backend.schemas.agent_plan import ComposePlanRequest
 from backend.schemas.borrower_copy_names import contains_borrower_copy_contextual_name
 from backend.schemas.borrower_cta_evidence import (

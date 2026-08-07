@@ -17,7 +17,7 @@ from backend.agents.mortgage_growth_copilot import (
     workspace_client,
 )
 from backend.config.settings import Settings, get_settings
-from backend.schemas._validators import contains_contextual_human_name
+from backend.schemas._validators_person_names import contains_contextual_human_name
 from backend.schemas.portfolio_campaign import assert_public_campaign_text
 from backend.services.capability_serving_probes import (
     query_serving_endpoint,

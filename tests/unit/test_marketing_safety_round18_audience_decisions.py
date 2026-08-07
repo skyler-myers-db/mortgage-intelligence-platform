@@ -13,7 +13,7 @@ import backend.api.growth_agent as growth_agent_api
 import backend.api.growth_agent_compose_routes as growth_agent_compose_api
 from backend.api.outreach import _assert_disclosure_backed_draft_body
 from backend.main import app
-from backend.schemas._validators import contains_protected_class_marketing_text
+from backend.schemas._validators_protected_class import contains_protected_class_marketing_text
 from backend.schemas.agent_plan import ComposePlanRequest
 from backend.schemas.growth_agent import GrowthAgentPromptRunRequest
 from backend.schemas.portfolio_campaign import CampaignRecommendationVariant

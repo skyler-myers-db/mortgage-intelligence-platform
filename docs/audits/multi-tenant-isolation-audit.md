@@ -164,7 +164,7 @@ The product is **architecturally ready for multi-lender deployment** under the d
 ## Sources
 
 - `backend/config/settings.py` — `mip_lender_name`, `mip_tenant_id`, `effective_tenant_id()`, public-lender provider registration
-- `backend/schemas/_validators.py` — configured public lender validation
+- `backend/schemas/_validators_tenant.py` — configured public lender validation (formerly in `_validators.py`)
 - `backend/api/config.py` — `lender_name` and target lender options
 - `backend/api/outreach.py` — configured-lender outreach draft copy
 - `backend/services/disclosures.py` — `resolve_tenant_disclosure()` defaulting through configured tenant id

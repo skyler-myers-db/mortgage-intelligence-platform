@@ -13,7 +13,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from backend.schemas._validators import normalize_public_lender_ref
+from backend.schemas._validators_tenant import normalize_public_lender_ref
 from backend.schemas.lead import SegmentCode
 
 # Schema modules cannot import runtime services. These bounds mirror

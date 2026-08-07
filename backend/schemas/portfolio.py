@@ -6,7 +6,7 @@ from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from backend.schemas._validators import (
+from backend.schemas._validators_tenant import (
     normalize_public_lender_ref,
     reviewed_geography_labels,
     reviewed_state_codes,

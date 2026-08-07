@@ -136,3 +136,33 @@ Both are covered through 2026-09-15 by the decision above. Before that date:
 2. Split `converge_campaign_treatment_access.py` into credential minting,
    identity probing, and group convergence, keeping the probe's secret-free
    diagnostics with the probe.
+
+## 2026-08-06 schema validator split addendum
+
+`backend/schemas/_validators.py` grew from 70 lines (architecture-audit
+baseline) to 961 during the Genie analyst-brief and governance-hardening
+rounds, landing in the same 900–1000 band described above: green in
+`test_architecture_boundaries.py`, red in CI. It was never allowlisted, so the
+gate failed on `main` from roughly PR #129 onward.
+
+**Split completed with this decision — no allowlist entry added.** The module
+is removed and its contents moved verbatim, by responsibility, to five
+modules that each sit below the 500-line warning threshold:
+
+- `_validators_tenant.py` — configured lender name + state-footprint
+  providers, public lender refs, reviewed geography labels.
+- `_validators_protected_class_patterns.py` — the reviewed protected-class /
+  health / proxy vocabulary regexes only, so the term lists stay auditable in
+  one place.
+- `_validators_protected_class.py` — scanning machinery (confusable folding,
+  audience-claim grammar, windowed proxy matching, criterion state) and the
+  fail-closed protected-class detectors.
+- `_validators_person_names.py` — title-case/contextual name-shape detection
+  and the reviewed non-person phrase vocabulary.
+- `_validators_unsafe_text.py` — prompt-injection, confidential/internal,
+  mechanical-PII detectors, and the composite `contains_unsafe_ai_text`.
+
+All 36 import sites now import from the responsibility modules directly;
+there is no re-export facade, so the pile cannot silently regrow behind one
+import path. Pattern equivalence and detector behavior were verified against
+the pre-split module before deletion.

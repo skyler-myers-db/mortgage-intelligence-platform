@@ -2,7 +2,7 @@
 
 import re
 
-from backend.schemas._validators import configured_public_lender_name
+from backend.schemas._validators_tenant import configured_public_lender_name
 
 _STRONG_CLAUSE_BOUNDARY_RE = re.compile(r"[.!?;]+")
 _BORROWER_SUBJECT_RE_FRAGMENT = (

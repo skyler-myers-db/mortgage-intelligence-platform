@@ -3,7 +3,7 @@
 import re
 
 from backend.schemas import borrower_copy_relationship_evidence as relationship_evidence
-from backend.schemas._validators import configured_public_lender_name
+from backend.schemas._validators_tenant import configured_public_lender_name
 from backend.schemas.marketing_audience_admission import (
     remove_audience_admission_clauses_for_identity_scan,
 )
