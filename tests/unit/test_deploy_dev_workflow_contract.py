@@ -229,21 +229,34 @@ def _write_deploy_fixture(path: Path, text: str) -> None:
 
 
 def _sandbox_venv_dir() -> Path:
-    """Locate a real virtualenv whose ``bin/python`` runs the deploy tooling.
+    """Locate a prefix whose ``bin/python`` can run the deploy tooling.
 
     Sandbox checkouts symlink ``.venv`` at this directory so ``deploy.sh``
-    resolves an interpreter that can import the repo's dependencies. The venv
-    running the suite comes first: ``REPO / ".venv"`` does not exist when the
-    suite runs from a worktree or a fresh clone, and a dangling symlink would
-    silently drop ``deploy.sh`` onto a bare ``python3``.
+    resolves an interpreter that can import the repo's dependencies. The
+    prefix running the suite comes first: ``REPO / ".venv"`` does not exist
+    when the suite runs from a worktree, a fresh clone, or CI (which installs
+    requirements into setup-python's base interpreter, not a venv), and a
+    dangling symlink would silently drop ``deploy.sh`` onto a bare
+    ``python3``. The probe is functional on purpose — a venv passes via
+    ``pyvenv.cfg`` adjacency through the symlink, a base prefix passes via
+    its own site-packages, and anything else fails loud here instead of
+    thirty steps into the dry run.
     """
 
     for candidate in (Path(sys.prefix), REPO / ".venv"):
-        if (candidate / "pyvenv.cfg").is_file() and (candidate / "bin" / "python").exists():
+        python = candidate / "bin" / "python"
+        if not python.exists():
+            continue
+        probe = subprocess.run(
+            [str(python), "-c", "import dotenv, pydantic"],
+            capture_output=True,
+            check=False,
+        )
+        if probe.returncode == 0:
             return candidate
     pytest.fail(
-        "no usable virtualenv for the deploy dry-run sandbox; "
-        "run the suite from the project venv (make setup)"
+        "no interpreter prefix with the deploy tooling deps for the dry-run "
+        "sandbox; run the suite from the project venv (make setup)"
     )
 
 
