@@ -23,6 +23,14 @@ REVIEWED_MORTGAGE_ATTRIBUTE_FRAGMENT = (
     r"(?:high|low|current)?\s*(?:property|home)\s+values?|"
     r"(?:competitor|second|existing)\s+liens?|"
     r"(?:heloc|home[- ]?equity)\s+(?:intent|propensity)|"
+    # Governed Module 0 scoring/eligibility columns (2026-08-07): these are
+    # reviewed product attributes (opportunity_score, marketing_eligible,
+    # the >=35% HELOC-eligibility floor), not unknown-criterion surface.
+    r"(?:high(?:est)?|top|low(?:est)?|average|mean)?\s*(?:opportunity|lead)\s+scores?|"
+    r"marketing[- ]?eligib(?:le|ility)|"
+    r"(?:heloc|home[- ]?equity)[- ]?eligib(?:le|ility)|"
+    r"(?:an?\s+)?helocs?|(?:an?\s+)?home[- ]?equity\s+lines?(?:\s+of\s+credit)?|"
+    r"eligib(?:le|ility)\s+for\s+(?:an?\s+)?(?:heloc|refi(?:nance)?|home[- ]?equity(?:\s+line)?)|"
     r"timely\s+retention\s+review\s+signal|"
     r"(?:reviewed|eligible)\s+segment\s+membership|"
     r"(?:fixed|adjustable)[- ]?rate\s+(?:mortgages?|loans?))"
