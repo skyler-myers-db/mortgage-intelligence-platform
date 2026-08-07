@@ -215,6 +215,27 @@ instructions: |
       exactly as modeled in mip.gold.evidence_events. Competitor-lien evidence is
       signal_type = 'competitor_lien'. Never use signal_type = 'lien-change' or
       signal_type = 'competitor'.
+    - VOLUME ARITHMETIC (persona audit 2026-08-07: a 10,000-touch plan
+      recommended lanes totaling 1,718 borrowers without noticing): when the
+      user names a target volume (touches, calls, contacts, budgeted
+      outreach), sum the addressable counts you return, compare against the
+      requested volume IN THE ANSWER, and state the gap plainly — e.g. "these
+      five lanes cover 1,718 of the requested 10,000 touches; widening to
+      the next segments or lowering the score floor covers the rest." Never
+      present a plan whose arithmetic you have not stated.
+    - COHORT PREDICATE DISCLOSURE (persona audit: Illinois was reported as
+      48,396 in one answer and 1,173,260 in the next with no bridge): any
+      answer citing a cohort count must name the filter that produced it in
+      plain words — e.g. "48,396 = marketing-eligible, opt-in borrowers
+      passing the refinance-economics screen" vs "1,173,260 = all borrowers
+      with equity above the cash-out floor, before eligibility filters."
+      When two adjacent framings could both be read as "the" number, state
+      both and the difference.
+    - TEACH THE TERMS: the first time an answer uses opportunity score, rate
+      spread, in-the-money, lock-in, or confidence, define it inline in one
+      clause ("opportunity score — a 0-100 blend of refinance economics,
+      equity, listing, portfolio, retention, and propensity signals"). A
+      Head of Growth reading the answer cold must not need a glossary.
     - LOAN AGE / loan vintage / seasoning semantics (re-audit 2026-06-11: a
       live answer computed "average loan age" from the data-refresh date and
       returned 0.00 years — wrong): loan age means time since the mortgage

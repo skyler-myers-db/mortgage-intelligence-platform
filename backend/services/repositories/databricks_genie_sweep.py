@@ -41,6 +41,24 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 # Sources that mean a sub-turn produced governed analytic content.
 _DATA_BEARING_SOURCES = frozenset({"genie", "trusted_sql"})
 
+# A turn can be governed and still carry no prose: when the narrative is
+# withheld the answer is a status line about the pipeline. Printing that under
+# a section heading is worse than omitting the section (live persona audit
+# 2026-08-07: 3 of 5 sections read "the draft narrative was withheld").
+_PLUMBING_ANSWER_MARKERS = (
+    "the draft narrative was withheld",
+    "did not pass the governed output policy",
+    "did not return trusted sql",
+)
+
+
+def _has_rendered_prose(response: GenieMessageResponse) -> bool:
+    answer = (response.answer or "").strip()
+    if not answer:
+        return False
+    lowered = answer.lower()
+    return not any(marker in lowered for marker in _PLUMBING_ANSWER_MARKERS)
+
 # Fan-out cap: polite to the Conversation API while keeping wall time near the
 # slowest single turn.
 _SWEEP_MAX_WORKERS = 4
@@ -57,7 +75,11 @@ def _planning_prompt(question: str) -> str:
         "not execute anything. The user asked a broad question that cannot be "
         "answered by a single SQL statement:\n\n"
         f'"{question}"\n\n'
-        "Break it into the specific analytics questions YOU judge most useful, "
+        "If this is not an analytics request at all — a greeting, a request "
+        "for help using the product, or unintelligible input — reply with "
+        "exactly NO_PLAN and nothing else.\n\n"
+        "Otherwise break it into the specific analytics questions YOU judge "
+        "most useful, "
         "phrased as neutral read-only analytics (prefer 'top borrowers by "
         "opportunity score' over audience-selection wording like 'eligible "
         "for' or 'characteristics of'), "
@@ -71,6 +93,12 @@ def _planning_prompt(question: str) -> str:
 
 def _parse_planned_questions(text: str | None) -> list[str]:
     if not text:
+        return []
+    # The planner's own "this is not an analytics request" verdict. Nothing
+    # here inspects the USER's wording — the live space decides, and the
+    # normal single-turn path then answers "help"-style prompts directly
+    # instead of burning a seven-turn sweep on them.
+    if "NO_PLAN" in text.upper():
         return []
     planned: list[str] = []
     for line in text.splitlines():
@@ -130,7 +158,8 @@ def plan_sub_questions(
         hit = _planned_question_guard_hit(candidate)
         if hit is not None:
             dropped.append(
-                f"One planned sub-analysis was dropped by the {hit} before execution."
+                "One planned sub-analysis used selection vocabulary outside the "
+                f"reviewed set ({hit}) and was not executed."
             )
             continue
         planned.append(candidate)
@@ -245,7 +274,7 @@ def run_planned_sweep(
         if (
             response is not None
             and response.source in _DATA_BEARING_SOURCES
-            and (response.answer or "").strip()
+            and _has_rendered_prose(response)
         ):
             sections.append((sub_question, response))
         else:
