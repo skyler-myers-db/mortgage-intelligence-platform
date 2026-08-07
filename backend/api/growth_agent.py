@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from collections.abc import Sequence
 from typing import Annotated, Any
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
@@ -487,6 +488,9 @@ def run_custom_growth_agent_workflow(
 
 
 
+_LIVE_ANALYSIS_LOG = logging.getLogger("backend.api.growth_agent.live_analysis")
+
+
 def _live_analysis_fallback(
     payload: GrowthAgentPromptRunRequest,
     request: Request,
@@ -633,7 +637,15 @@ def run_mortgage_growth_agent(
         # Outcome-triggered read path: instead of refusing an objective no
         # reviewed workflow covers, let the live space analyze it (planning
         # its own decomposition when needed). Writes stay workflow-gated.
-        analysis = _live_analysis_fallback(payload, request, lakebase)
+        # A defect in the fallback must degrade to the honest 422 refusal,
+        # never a 500 masking it.
+        try:
+            analysis = _live_analysis_fallback(payload, request, lakebase)
+        except HTTPException:
+            raise
+        except Exception:
+            _LIVE_ANALYSIS_LOG.exception("live_analysis_fallback_failed")
+            analysis = None
         if analysis is not None:
             return analysis
         raise
