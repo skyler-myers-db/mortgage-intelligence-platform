@@ -1,4 +1,4 @@
-"""Fail-closed admin and approver authorization.
+"""Fail-closed admin, approver, and authenticated-actor authorization.
 
 Deployed automation is authorized by exact server-configured identities matched
 against the actor resolved from ``X-Forwarded-Email`` / ``X-Forwarded-User``.
@@ -140,3 +140,41 @@ def require_approver(request: Request) -> str:
 
 # ``ApproverDep`` evaluates to ``str`` (the admitted decision-maker email).
 ApproverDep = Annotated[str, Depends(require_approver)]
+
+
+def require_authenticated_actor(request: Request) -> str:
+    """Fail-closed "any authenticated workspace user" gate for read surfaces.
+
+    Admits the identity forwarded by the trusted Databricks Apps edge
+    (``X-Forwarded-Email`` / ``X-Forwarded-User``); everything else is a
+    401. Unlike ``audit_store.resolve_actor`` this never substitutes
+    ``settings.default_actor`` or the untrusted-edge marker, and it never
+    bumps the identity-fallback counter — that counter is a regression
+    signal for audited writes missing the header inside an Apps deploy,
+    not an auth-failure count (same reasoning as
+    ``backend/api/health.py::_trusted_health_actor``).
+
+    With ``trust_forwarded_headers=False`` (non-Apps deploy,
+    docs/security/GRANTS.md §11a) the caller identity is unknowable at
+    this layer, so the gate fails closed instead of serving governed
+    payloads to anonymous or header-spoofing callers.
+    """
+    if settings.trust_forwarded_headers:
+        actor = request.headers.get("X-Forwarded-Email") or request.headers.get(
+            "X-Forwarded-User"
+        )
+        if actor:
+            return actor
+    emit(
+        log,
+        "authenticated_access_denied",
+        outcome="denied",
+        trusted_edge=settings.trust_forwarded_headers,
+    )
+    raise HTTPException(status_code=401, detail="authenticated identity required")
+
+
+# ``AuthenticatedActorDep`` evaluates to ``str`` (the forwarded workspace
+# identity). Weakest gate tier: proves "some authenticated workspace user",
+# not admin or approver membership.
+AuthenticatedActorDep = Annotated[str, Depends(require_authenticated_actor)]

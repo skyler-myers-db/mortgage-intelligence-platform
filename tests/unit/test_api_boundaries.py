@@ -132,9 +132,12 @@ def test_hashed_static_assets_are_compressed_and_immutable() -> None:
 
 
 def test_data_estate_does_not_shadow_admin_auth_dependency_name() -> None:
-    """Only RBAC-gated routers should expose an ``AdminDep`` alias."""
+    """Only RBAC-gated routers should expose an ``AdminDep`` alias, and the
+    service alias must not read like one (``AdminRulesServiceDep`` was
+    renamed because it suggested an RBAC gate it never was)."""
     assert "AdminDep" not in data_estate_api.__dict__
-    assert "AdminRulesServiceDep" in data_estate_api.__dict__
+    assert "AdminRulesServiceDep" not in data_estate_api.__dict__
+    assert "SourceReadinessDep" in data_estate_api.__dict__
 
 
 # ---------------------------------------------------------------------------
