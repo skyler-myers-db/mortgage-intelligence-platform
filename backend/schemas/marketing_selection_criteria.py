@@ -593,8 +593,14 @@ def _is_reviewed_pre_population_binding(value: str) -> bool:
 
     criterion = re.sub(r"\s+", " ", value.strip(" ,.-"))
     criterion = re.sub(
+        # Interrogative determiners ("Which/What [of the] borrowers are
+        # eligible ...") ask about selection state and bind no criterion
+        # (live turn 2026-08-07: "Which borrowers are eligible for a HELOC?").
+        # Only the determiner is transparent: whatever remains after stripping
+        # must still full-match the reviewed vocabulary below.
         r"^(?:(?:the|these|those|all|any|our|your|only|reviewed|eligible|qualified|"
-        r"marketing[- ]eligible|highest[- ]scoring|prospective|current)(?:\s+|$))+",
+        r"marketing[- ]eligible|highest[- ]scoring|prospective|current|"
+        r"(?:which|what)(?:\s+of)?)(?:\s+|$))+",
         "",
         criterion,
         flags=re.IGNORECASE,
