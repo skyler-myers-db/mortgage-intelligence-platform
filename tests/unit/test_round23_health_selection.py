@@ -54,6 +54,11 @@ _UNREVIEWED_AUDIENCE_FORMATION = (
     "The model screens for hidden assay findings among borrowers.",
     "The workflow nominates only hidden-marker borrowers.",
     "Hidden-marker borrowers are queued.",
+    # Interrogative framing does not launder a criterion out of the
+    # pre-population slot or a trailing co-reference clause.
+    "Which zyrplax borrowers are eligible for a HELOC?",
+    "Which of the zyrplax borrowers are eligible for a refinance?",
+    "Which borrowers are eligible because they carry zyrplax?",
 )
 
 _SAFE_GOVERNED_CONTROLS = (
@@ -86,6 +91,11 @@ _SAFE_NONSELECTION_BUSINESS_TEXT = (
 _SAFE_POLICY_ONLY_CONTROLS = (
     "High equity borrowers are queued.",
     "Reviewed borrowers are queued.",
+    # Interrogative determiners are audience-state questions, not criteria
+    # (live turn 2026-08-07: protected_prompt_match false positive).
+    "Which borrowers are eligible for a HELOC?",
+    "Which borrowers are eligible for a refinance?",
+    "Which of the borrowers are eligible for a HELOC?",
 )
 
 
