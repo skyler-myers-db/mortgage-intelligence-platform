@@ -613,6 +613,17 @@
               }
             ],
             "title": "Warehouse Id"
+          },
+          "workspace_host": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Host"
           }
         },
         "required": [
@@ -7872,6 +7883,17 @@
           "status": {
             "title": "Status",
             "type": "string"
+          },
+          "workspace_host": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Host"
           }
         },
         "required": [
