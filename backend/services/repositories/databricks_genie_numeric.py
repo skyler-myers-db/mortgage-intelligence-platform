@@ -123,6 +123,7 @@ def _unsupported_answer_numeric_claims(
         if _is_measure_claim(answer_text, claim)
         and not _is_identifier_or_date_context(answer_text, claim)
         and not _number_is_query_limit(question, claim)
+        and not _number_is_timeframe(answer_text, claim)
     ]
     if not claims:
         return []
@@ -464,6 +465,18 @@ def _is_iso_date_token(text: str, span: tuple[int, int]) -> bool:
         if match.start() <= span[0] and span[1] <= match.end():
             return True
     return False
+
+
+_TIMEFRAME_SUFFIX_RE = re.compile(
+    r"^[\s-]*(?:calendar\s+|business\s+)?(?:days?|weeks?|months?|quarters?|years?|hours?)\b",
+    re.IGNORECASE,
+)
+
+
+def _number_is_timeframe(text: str, claim: _NumericClaim) -> bool:
+    """"Over the last 30 days" is question framing, not a row measure."""
+
+    return bool(_TIMEFRAME_SUFFIX_RE.match(text[claim.span[1] : claim.span[1] + 24]))
 
 
 def _number_is_query_limit(question: str, claim: _NumericClaim) -> bool:
