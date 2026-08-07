@@ -779,7 +779,7 @@ if _FRONTEND_DIST.is_dir() and (_FRONTEND_DIST / "index.html").is_file():
             headers=headers,
         )
 
-    # Brand artwork (Entrada mark SVG + future brand assets).
+    # Brand artwork (Entrada wordmark PNG + future brand assets).
     _BRAND_DIR = _FRONTEND_DIST / "brand"
     if _BRAND_DIR.is_dir():
         app.mount("/brand", StaticFiles(directory=_BRAND_DIR), name="brand")

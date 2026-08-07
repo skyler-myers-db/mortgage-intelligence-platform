@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Entrada">
   <title>Entrada</title>
-  <!-- Favicon — matches /brand/entrada-mark.svg, scaled into a 32x32 frame
-       with the brand's pale-icy background (#CFEFFF) so the navy bars stay
-       legible at 16/32px. Five-rect two-tone composition per the brand
-       style guide: cyan accents on top-left + bottom-right corners.
+  <!-- Legacy favicon (index.html now links favicon.png + favicon-v2.svg).
+       Five-rect two-tone Entrada mark scaled into a 32x32 frame with the
+       brand's pale-icy background (#CFEFFF) so the navy bars stay legible
+       at 16/32px: cyan accents on top-left + bottom-right corners.
   -->
   <rect width="32" height="32" rx="6" ry="6" fill="#CFEFFF"/>
   <rect x="5"  y="9"  width="5.5"  height="4" fill="#66C5FF"/>
