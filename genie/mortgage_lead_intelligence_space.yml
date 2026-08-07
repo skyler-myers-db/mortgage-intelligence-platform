@@ -695,6 +695,41 @@ example_question_sqls:
         GROUP BY state
         ORDER BY listed_borrowers DESC, avg_listing_days_on_market ASC, state ASC
         LIMIT 5
+  - question: How did the lead population and approvals change over the last 30 days?
+    sql:
+      - |
+        SELECT
+          snapshot_date,
+          addressable_borrowers,
+          in_the_money_borrowers,
+          approved_borrowers,
+          actioned_borrowers
+        FROM mip.gold.funnel_snapshot_daily
+        WHERE snapshot_date >= DATE_SUB(CURRENT_DATE(), 30)
+          AND state = '_ALL'
+          AND segment_code = '_ALL'
+        ORDER BY snapshot_date
+  - question: How big is the rate lock-in cohort and what is its median origination rate?
+    sql:
+      - |
+        SELECT
+          COUNT(*) AS lockin_borrowers,
+          ROUND(PERCENTILE(origination_rate, 0.5) * 100, 3) AS median_origination_rate_pct,
+          ROUND(AVG(equity_pct), 1) AS avg_equity_pct,
+          MAX(refreshed_at) AS refreshed_at
+        FROM mip.gold.lockin_cohort
+  - question: What trigger evidence fired in the last 7 days, grouped by signal type?
+    sql:
+      - |
+        SELECT
+          signal_type,
+          COUNT(*) AS events,
+          ROUND(AVG(confidence), 2) AS avg_confidence,
+          MAX(`timestamp`) AS latest_event_at
+        FROM mip.gold.evidence_events
+        WHERE `timestamp` >= CURRENT_TIMESTAMP() - INTERVAL 7 DAYS
+        GROUP BY signal_type
+        ORDER BY events DESC
   - question: Simulate a stricter top-tier threshold by state.
     sql:
       - |
