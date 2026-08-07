@@ -2483,6 +2483,16 @@ if [[ "$_OAUTH_RECOVERY_VALUE_COUNT" -ne 0 && \
   echo "${RED}[deploy] OAuth credential intent recovery and orphan-lease recovery are mutually exclusive.${RST}" >&2
   exit 4
 fi
+# Every remaining phase — dry-run included — executes repo Python helpers with
+# "$PYTHON" (the App deploy payload emitter at minimum). Without .venv the
+# interpreter silently resolved to a bare python3, which would die dozens of
+# steps later on its first third-party import with a raw traceback. Fail here,
+# after the config gates above so their exact errors keep precedence.
+if ! "$PYTHON" -c 'import dotenv, pydantic' >/dev/null 2>&1; then
+  echo "${RED}[deploy] ERROR: ${PYTHON} cannot import the deploy tooling baseline (python-dotenv + pydantic).${RST}" >&2
+  echo "  create the project venv first: make setup — then re-run." >&2
+  exit 2
+fi
 if [[ "$DRY_RUN" -eq 0 ]]; then
   _M2M_MISSING=""
   for _M2M_NAME in \

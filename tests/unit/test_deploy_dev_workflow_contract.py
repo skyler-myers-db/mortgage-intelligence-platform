@@ -228,6 +228,38 @@ def _write_deploy_fixture(path: Path, text: str) -> None:
         )
 
 
+def _sandbox_venv_dir() -> Path:
+    """Locate a prefix whose ``bin/python`` can run the deploy tooling.
+
+    Sandbox checkouts symlink ``.venv`` at this directory so ``deploy.sh``
+    resolves an interpreter that can import the repo's dependencies. The
+    prefix running the suite comes first: ``REPO / ".venv"`` does not exist
+    when the suite runs from a worktree, a fresh clone, or CI (which installs
+    requirements into setup-python's base interpreter, not a venv), and a
+    dangling symlink would silently drop ``deploy.sh`` onto a bare
+    ``python3``. The probe is functional on purpose — a venv passes via
+    ``pyvenv.cfg`` adjacency through the symlink, a base prefix passes via
+    its own site-packages, and anything else fails loud here instead of
+    thirty steps into the dry run.
+    """
+
+    for candidate in (Path(sys.prefix), REPO / ".venv"):
+        python = candidate / "bin" / "python"
+        if not python.exists():
+            continue
+        probe = subprocess.run(
+            [str(python), "-c", "import dotenv, pydantic"],
+            capture_output=True,
+            check=False,
+        )
+        if probe.returncode == 0:
+            return candidate
+    pytest.fail(
+        "no interpreter prefix with the deploy tooling deps for the dry-run "
+        "sandbox; run the suite from the project venv (make setup)"
+    )
+
+
 def test_sql_contract_scanner_rejects_commented_ddl_without_corrupting_literals() -> None:
     sql = """
     -- CREATE TABLE IF NOT EXISTS mip.gold.hidden_line (id INT);
@@ -4623,7 +4655,7 @@ def test_first_install_dry_run_executes_no_databricks_operations(
         cwd=checkout,
         check=True,
     )
-    (checkout / ".venv").symlink_to(REPO / ".venv", target_is_directory=True)
+    (checkout / ".venv").symlink_to(_sandbox_venv_dir(), target_is_directory=True)
     with (checkout / ".git" / "info" / "exclude").open("a", encoding="utf-8") as exclude:
         exclude.write(".venv\n")
     (checkout / ".env.local").write_text(
@@ -4708,6 +4740,32 @@ def test_first_install_dry_run_executes_no_databricks_operations(
     assert "would verify: campaign treatment table append-only" in result.stdout
     assert "would inspect/create: scope mip and write-once pii-salt-v1" in result.stdout
     assert "deploy Databricks App snapshot with Agent Evaluation proof" in result.stdout
+
+
+def test_deploy_fails_fast_when_python_lacks_repo_tooling_deps() -> None:
+    """A missing .venv must fail with remediation, not a mid-run traceback.
+
+    Without this gate, PYTHON silently falls back to a bare python3 and the
+    run (dry or real) dies at the App deploy payload emitter's dotenv import
+    dozens of steps in. The gate must follow the config validations whose
+    exact errors the sandbox tests above pin, and precede all planning.
+    """
+
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+
+    guard = script.index("import dotenv, pydantic")
+    mask_gate = script.index("MIP_COTALITY_ID_MASK_SECRET is required for target")
+    oauth_gate = script.index(
+        "OAuth credential intent recovery and orphan-lease recovery are mutually exclusive"
+    )
+    m2m_gate = script.index("missing required per-run M2M credential(s)")
+    lease_root = script.index("tools.databricks.app_deployment_lease recovery-root")
+    assert mask_gate < oauth_gate < guard < m2m_gate < lease_root
+
+    guard_block = script[guard : script.index("\nfi\n", guard)]
+    assert "cannot import the deploy tooling baseline (python-dotenv + pydantic)" in guard_block
+    assert "make setup" in guard_block
+    assert "exit 2" in guard_block
 
 
 def test_deploy_dev_wires_separate_required_gateway_signing_keys() -> None:
