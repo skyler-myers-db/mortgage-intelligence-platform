@@ -129,3 +129,51 @@ def test_fair_lending_asks_refuse_with_the_protected_class_reason() -> None:
     assert identity_prompt_match(age_proxy) is False
     assert protected_prompt_match("Target Hispanic neighborhoods with this offer.") is not None
     assert protected_prompt_match("Focus outreach on elderly borrowers.") is not None
+
+
+def test_flagship_trusted_turn_is_live_first_with_cross_check() -> None:
+    """The product's central promise, restated as a pin: when live Genie does
+    the work well (trusted SQL, self-consistent narrative), GENIE's work is
+    the answer — no canonical override — and the governed cross-check runs as
+    verification in the process trace."""
+
+    live = GenieResponse(
+        answer_text="Top candidates ranked by opportunity score.",
+        sql_query=(
+            "SELECT borrower_id, opportunity_score, rate_spread_bps, equity_pct, "
+            "recommended_offer, why_now FROM mip.gold.borrower_360 "
+            "WHERE marketing_eligible = TRUE AND consent_status = 'opt_in' "
+            "ORDER BY opportunity_score DESC, rate_spread_bps DESC LIMIT 10"
+        ),
+        sql_result_rows=[
+            {"borrower_id": f"B-{i:013d}", "opportunity_score": 90 - i}
+            for i in range(10)
+        ],
+        conversation_id="conv-flagship",
+        message_id="msg-flagship",
+    )
+
+    class _Sql:
+        def __init__(self) -> None:
+            self.statements: list[str] = []
+
+        def execute(self, statement: str, parameters: object = None) -> list[dict[str, object]]:
+            self.statements.append(statement)
+            return [{"borrower_id": f"B-{i:013d}"} for i in range(10)]
+
+        def execute_one(self, statement: str, parameters: object = None) -> dict[str, object]:
+            self.statements.append(statement)
+            return {}
+
+    result = _adapt_genie_response(
+        VALID_ANALYTICAL_QUESTIONS[0],
+        live,
+        sql_client=_Sql(),  # type: ignore[arg-type]
+    )
+
+    assert result.source == "genie"
+    assert result.sql_query == live.sql_query
+    assert result.answer.startswith("Top candidates ranked by opportunity score.")
+    assert any(
+        "Governed cross-check" in step.content for step in result.reasoning_trace
+    )

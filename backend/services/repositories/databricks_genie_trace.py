@@ -186,6 +186,40 @@ class GenieProcessTrace:
             "Composed the per-candidate analyst brief from governed row values.",
         )
 
+    def cross_check_ranking(self, *, overlap: int, total: int) -> None:
+        """Record the governed ranking cross-check verdict (verification, not
+        replacement: Genie's own result always remains the answer)."""
+
+        overlap_n = max(int(overlap), 0)
+        total_n = max(int(total), 1)
+        if overlap_n >= total_n:
+            self._add(
+                "verify",
+                "Governed cross-check: matches the canonical opportunity ranking.",
+            )
+        else:
+            self._add(
+                "verify",
+                f"Governed cross-check: overlaps {overlap_n} of {total_n} rows "
+                "with the canonical opportunity ranking; framings differ, both "
+                "are governed.",
+            )
+
+    def cross_check_count(self, *, consistent: bool) -> None:
+        if consistent:
+            self._add(
+                "verify",
+                "Governed cross-check: the metric matches the canonical "
+                "unique-borrower recomputation.",
+            )
+        else:
+            self._add(
+                "verify",
+                "Governed cross-check: the metric differs from the canonical "
+                "unique-borrower recomputation; see the proof drawer for both "
+                "framings.",
+            )
+
     # -- rendering ----------------------------------------------------
 
     def steps(

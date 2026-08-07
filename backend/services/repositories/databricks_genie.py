@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, NamedTuple
 
 from backend.config.settings import settings
 from backend.services.databricks_sql import DatabricksSqlClient, DatabricksSqlError
@@ -460,22 +460,29 @@ def _adapt_genie_response(
             or _pending_feed_gaps_from_rows(rows)
         )
     )
-    # Trusted SQL overlays are allowed to answer known grain-sensitive
-    # questions only when the live Genie turn is not unsafe. They must not
-    # mask untrusted SQL or pending-feed dependence. Text-only turns can
-    # still be answered through this explicit `trusted_sql` source so users see
-    # that the app used a governed canonical query rather than the raw Genie
-    # narrative. A narrative that trips the output text guard does NOT forfeit
-    # a recognized shape: the canonical answer replaces the model prose
-    # entirely (never renders it) and the withholding is disclosed in the
-    # proof, so a prose false positive degrades to a governed deterministic
-    # answer instead of a refusal.
+    # Live-first posture (2026-08-07, product decision): when the live Genie
+    # turn produced policy-trusted SQL, GENIE'S OWN work is the answer — its
+    # query, its rows, its narrative (still subject to the claims guard and
+    # the prose-withholding floor below). The reviewed canonical layer is a
+    # RESCUE for turns without trusted SQL proof (text-only, or stale-enum
+    # SQL the repair retry could not fix), never a replacement for a good
+    # live turn. Accuracy comes from curated data and a curated space; the
+    # deterministic layer verifies and rescues, it does not overwrite.
     unsafe_live_sql = bool(result.sql_query and not trusted_sql)
     stale_evidence_enum_only = bool(
         result.sql_query
         and _trusted_sql_policy_allowing_stale_evidence_enum(result.sql_query, trusted_assets)
     )
-    if (not unsafe_live_sql or stale_evidence_enum_only) and not depends_on_pending_feeds:
+    semantically_broken_sql = bool(
+        result.sql_query
+        and _sql_uses_impossible_retention_conjunction(question, result.sql_query)
+    )
+    canonical_rescue_eligible = (
+        lacks_trusted_proof
+        or (unsafe_live_sql and stale_evidence_enum_only)
+        or semantically_broken_sql
+    ) and not depends_on_pending_feeds
+    if canonical_rescue_eligible:
         canonical = _canonical_genie_answer(
             question=question,
             result=result,
@@ -484,9 +491,8 @@ def _adapt_genie_response(
         if canonical is not None:
             # Governance (re-executed counts, trusted-asset policy, proof,
             # visualization, actions, scrubbing) is done. Restore Genie's own
-            # narrative and live-intelligence fields so a recognized-shape turn
-            # is not flattened into canned phrasing with the live artifacts
-            # dropped.
+            # narrative and live-intelligence fields so a rescued turn is not
+            # flattened into canned phrasing with the live artifacts dropped.
             return _restore_live_voice(
                 canonical,
                 result,
@@ -537,6 +543,13 @@ def _adapt_genie_response(
     if result.sql_query and trusted_sql and not rows and sql_client is not None:
         rows = _redact_genie_rows(_execute_trusted_genie_sql(sql_client, result.sql_query))
     trace.execute(row_count=len(rows) if rows else 0, assets=trusted_assets)
+    # Governed cross-check (verification, never replacement): on recognized
+    # ranking/metric shapes, compare Genie's OWN result against the reviewed
+    # canonical framing and disclose material divergence. Genie's work stays
+    # the answer either way; only a metric that contradicts the governed
+    # unique-borrower definition additionally withholds the prose below.
+    cross = _governed_cross_check(question, rows, sql_client, trace)
+    cross_check_gaps = list(cross.gaps)
     # Trusted SQL is a floor, not a coin flip: from here the governed query,
     # rows, proof, and actions ALWAYS ship. Only the model PROSE is
     # conditionally withheld — when the output safety guard flags its wording,
@@ -545,7 +558,27 @@ def _adapt_genie_response(
     # numbers and guard-flagged prose still never render.
     prose_withheld_gap: str | None = None
     prose_withheld_reason: str | None = None
-    if text_contains_pii:
+    answer_override: str | None = None
+    if cross.count_reference is not None:
+        # Audit teeth (2026-07-08 lineage): a live metric whose grain
+        # contradicts the governed unique-borrower definition must not render
+        # as fact. Genie's query and rows still ship; the answer teaches the
+        # grain difference and cites the governed figure.
+        prose_withheld_gap = (
+            "Genie's draft narrative presented a count whose grain or scope differs "
+            "from the governed unique-borrower definition; the prose was "
+            "withheld and both governed framings are disclosed."
+        )
+        answer_override = (
+            f"The governed definition for this metric counts "
+            f"{cross.count_reference:,} — the canonical unique-borrower "
+            "grain, scoped exactly to the question, where a multi-segment "
+            "borrower counts once. Genie's live framing returned a different "
+            "figure; its query and rows are shown, and the difference comes "
+            "from counting grain or question scope, not data drift."
+        )
+        trace.narrative_withheld(reason=WITHHELD_CONTRADICTED)
+    elif text_contains_pii:
         prose_withheld_gap = (
             "Genie's draft narrative was withheld by the output safety guard; "
             "the governed query results are shown instead."
@@ -582,9 +615,14 @@ def _adapt_genie_response(
         elapsed_ms=result.elapsed_ms,
         reasoning_trace=[step.model_dump() for step in reasoning_trace],
     )
-    if prose_withheld_gap and prose_withheld_gap not in proof.known_data_gaps:
+    extra_gaps = [
+        gap
+        for gap in [prose_withheld_gap, *cross_check_gaps]
+        if gap and gap not in proof.known_data_gaps
+    ]
+    if extra_gaps:
         proof = proof.model_copy(
-            update={"known_data_gaps": [*proof.known_data_gaps, prose_withheld_gap]}
+            update={"known_data_gaps": [*proof.known_data_gaps, *extra_gaps]}
         )
     visualization = _plan_genie_visualization(question, rows)
     actions = _suggest_genie_actions(
@@ -597,10 +635,12 @@ def _adapt_genie_response(
         question_hash=question_hash,
         sql_query=result.sql_query,
     )
-    if prose_withheld_reason:
+    if answer_override is not None:
+        answer_text: str | None = answer_override
+    elif prose_withheld_reason:
         row_count = len(rows) if rows else 0
         row_word = "row" if row_count == 1 else "rows"
-        answer_text: str | None = (
+        answer_text = (
             f"Genie ran a governed query against {trusted_assets[0]} and returned "
             f"{row_count:,} {row_word}, shown with the generated SQL. The draft "
             f"narrative was withheld: {prose_withheld_reason}"
@@ -627,6 +667,120 @@ def _adapt_genie_response(
         reasoning_trace=reasoning_trace,
         genie_status=result.genie_status,
     )
+
+
+class _CrossCheckOutcome(NamedTuple):
+    gaps: list[str]
+    # Canonical unique-borrower count when the live metric materially
+    # diverges from the governed definition; None otherwise.
+    count_reference: int | None
+
+
+_CROSS_CHECK_CLEAN = _CrossCheckOutcome(gaps=[], count_reference=None)
+
+
+def _governed_cross_check(
+    question: str,
+    rows: list[dict[str, Any]] | None,
+    sql_client: DatabricksSqlClient | None,
+    trace: GenieProcessTrace,
+) -> _CrossCheckOutcome:
+    """Verify a trusted LIVE result against the governed canonical framing.
+
+    Verification, never replacement: Genie's own result remains the answer.
+    Adds a verify step to the trace and returns disclosure notes only when the
+    two governed framings materially diverge. Any warehouse error skips the
+    check silently — a failed verification must never degrade a good answer.
+    """
+
+    if sql_client is None or not rows:
+        return _CROSS_CHECK_CLEAN
+    try:
+        ranking_sql: str | None = None
+        params: dict[str, object] | None = None
+        if _canonical_top_borrowers_all_segments_scope(question):
+            ranking_sql = _CANONICAL_TOP_BORROWERS_ALL_SEGMENTS_SQL
+        else:
+            spec_state = _canonical_specific_top_borrowers_state_scope(question)
+            spec_global = _canonical_specific_top_borrowers_global_scope(question)
+            state_scope = _canonical_top_borrowers_state_scope(question)
+            if spec_state is not None:
+                intent, _state_name, state_code = spec_state
+                ranking_sql = _CANONICAL_TOP_BORROWERS_BY_STATE_INTENT_SQL[intent]
+                params = {"state": state_code}
+            elif spec_global is not None:
+                ranking_sql = _CANONICAL_TOP_BORROWERS_GLOBAL_INTENT_SQL[spec_global]
+            elif state_scope is not None:
+                ranking_sql = _CANONICAL_TOP_BORROWERS_BY_STATE_SQL
+                params = {"state": state_scope[1]}
+            elif _canonical_top_borrowers_global_scope(question):
+                ranking_sql = _CANONICAL_TOP_BORROWERS_GLOBAL_SQL
+        if ranking_sql is not None:
+            live_ids = [str(r.get("borrower_id") or "") for r in rows if r.get("borrower_id")]
+            if not live_ids:
+                return _CROSS_CHECK_CLEAN
+            canonical_rows = sql_client.execute(ranking_sql, params) or []
+            canonical_ids = [
+                str(r.get("borrower_id") or "") for r in canonical_rows if r.get("borrower_id")
+            ]
+            if not canonical_ids:
+                return _CROSS_CHECK_CLEAN
+            top_n = min(len(live_ids), len(canonical_ids), 10)
+            overlap = len(set(live_ids[:top_n]) & set(canonical_ids[:top_n]))
+            trace.cross_check_ranking(overlap=overlap, total=top_n)
+            if overlap * 2 < top_n:
+                return _CrossCheckOutcome(
+                    gaps=[
+                        "Governed cross-check: this answer's framing overlaps "
+                        f"{overlap} of {top_n} borrowers with the canonical "
+                        "opportunity ranking; both are governed views — the "
+                        "Lead Queue holds the operational list."
+                    ],
+                    count_reference=None,
+                )
+            return _CROSS_CHECK_CLEAN
+        count_scope = _canonical_in_the_money_count_scope(question)
+        city_scope = None if count_scope else _canonical_itm_city_scope(question)
+        if count_scope or city_scope:
+            if city_scope:
+                count_sql = _CANONICAL_ITM_COUNT_BY_CITY_SQL
+                count_params: dict[str, object] | None = {"city": city_scope}
+            else:
+                count_state = count_scope if isinstance(count_scope, tuple) else None
+                count_sql = (
+                    _CANONICAL_ITM_COUNT_BY_STATE_SQL if count_state else _CANONICAL_ITM_COUNT_SQL
+                )
+                count_params = {"state": count_state[1]} if count_state else None
+            row = sql_client.execute_one(count_sql, count_params) or {}
+            canonical_count = row.get("in_the_money_borrowers")
+            if canonical_count is None:
+                return _CROSS_CHECK_CLEAN
+            canonical_f = float(canonical_count)
+            live_values: list[float] = []
+            for live_row in rows:
+                for value in live_row.values():
+                    try:
+                        live_values.append(float(value))
+                    except (TypeError, ValueError):
+                        continue
+            if not live_values:
+                return _CROSS_CHECK_CLEAN
+            tolerance = max(1.0, 0.01 * canonical_f)
+            consistent = any(abs(value - canonical_f) <= tolerance for value in live_values)
+            trace.cross_check_count(consistent=consistent)
+            if not consistent:
+                return _CrossCheckOutcome(
+                    gaps=[
+                        "Governed cross-check: the canonical unique-borrower "
+                        f"recomputation returns {int(canonical_f):,} for this "
+                        "metric; the live framing differs — compare both "
+                        "governed queries in the proof."
+                    ],
+                    count_reference=int(canonical_f),
+                )
+    except DatabricksSqlError:
+        return _CROSS_CHECK_CLEAN
+    return _CROSS_CHECK_CLEAN
 
 
 def _ensure_answer_cites_source(answer: str | None, trusted_assets: list[str]) -> str:
