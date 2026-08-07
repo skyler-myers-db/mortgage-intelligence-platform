@@ -69,16 +69,28 @@ def test_high_precision_measures_are_not_raw_identifiers(value: str) -> None:
 @pytest.mark.parametrize(
     "value",
     [
-        "123456789012345",  # standalone long id
-        "1234567890",
-        "CLIP 987654321098",
-        "12345678901.5",  # identifier-shaped INTEGER part still flagged
+        "CLIP 987654321098",  # identifier WITH context
         "SSN 123-45-6789",
         "call 312-555-0142",
+        "312-555-0142",  # formatted phone is not a bare numeric cell
     ],
 )
 def test_identifier_and_pii_shapes_still_flagged(value: str) -> None:
     assert genie_visible_text_unsafe(value, structured_value=True) is True, value
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["123456789012345", "1234567890", "12345678901.5"],
+)
+def test_bare_digit_runs_flag_in_prose_but_not_in_governed_cells(value: str) -> None:
+    """Deliberate contract (2026-08-07): a governed row cell that is ENTIRELY a
+    number is a measure — large aggregates otherwise read as phone numbers and
+    blocked whole answers. In PROSE the same digits still fail closed, and
+    contact-data columns are stripped by key before rendering."""
+
+    assert genie_visible_text_unsafe(value) is True, value
+    assert genie_visible_text_unsafe(value, structured_value=True) is False, value
 
 
 def _response(**overrides: object) -> GenieMessageResponse:
@@ -208,3 +220,37 @@ def test_divergence_note_passes_the_output_gate() -> None:
         "Lead Queue holds the operational list."
     )
     assert genie_visible_text_unsafe(note) is False
+
+
+def test_large_whole_number_measures_are_not_phone_numbers() -> None:
+    """A $1.25B aggregate rendered as '1250000000' matched the phone pattern
+    and blocked the sales-manager top-20 answer (live audit 2026-08-07)."""
+
+    from backend.services.genie_message_policy import genie_visible_text_unsafe
+
+    for measure in ("1250000000", "1234567890", "123456789", "88806", "-350"):
+        assert genie_visible_text_unsafe(measure, structured_value=True) is False, measure
+
+
+def test_real_contact_data_in_cells_still_flags() -> None:
+    from backend.services.genie_message_policy import genie_visible_text_unsafe
+
+    for value in (
+        "312-555-0142",
+        "(312) 555-0142",
+        "call 3125550142",
+        "a@b.com",
+        "123-45-6789",
+        "CLIP 987654321098",
+        "431 Maple Street",
+    ):
+        assert genie_visible_text_unsafe(value, structured_value=True) is True, value
+
+
+def test_narrative_prose_is_unaffected_by_the_measure_exemption() -> None:
+    """The exemption is scoped to structured cells; prose still fails closed."""
+
+    from backend.services.genie_message_policy import genie_visible_text_unsafe
+
+    assert genie_visible_text_unsafe("Call 312-555-0142 today") is True
+    assert genie_visible_text_unsafe("1250000000") is True

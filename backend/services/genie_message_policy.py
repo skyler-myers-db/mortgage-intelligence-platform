@@ -199,6 +199,10 @@ _MASKED_ID_CITY_PARENS_RE = re.compile(
 )
 
 
+# A cell holding only a number (optional sign, digits, one decimal point).
+_BARE_NUMERIC_CELL_RE = re.compile(r"[+-]?\d+(?:\.\d+)?")
+
+
 def genie_visible_text_unsafe(value: str, *, structured_value: bool = False) -> bool:
     """Fail-closed scan for one Genie-rendered string on the analytics surface.
 
@@ -216,6 +220,15 @@ def genie_visible_text_unsafe(value: str, *, structured_value: bool = False) -> 
     redaction.
     """
 
+    if structured_value and _BARE_NUMERIC_CELL_RE.fullmatch(value.strip()):
+        # A governed row cell that is ENTIRELY a number is a measure, not an
+        # identity. Large whole numbers otherwise read as phone numbers
+        # ($1,250,000,000 -> "1250000000") or raw identifiers and blocked the
+        # whole answer (live persona audit 2026-08-07, sales-manager top-20).
+        # Real contact data cannot arrive this way: phone/email/SSN columns are
+        # stripped by key at the repository boundary, and a formatted phone
+        # ("312-555-0142") is not a bare numeric cell, so it still scans.
+        return False
     scannable = GENIE_GEO_LOCATION_RE.sub(" ", value)
     scannable = _MASKED_ID_CITY_PARENS_RE.sub(r"\1 ", scannable)
     return contains_unsafe_ai_text(
