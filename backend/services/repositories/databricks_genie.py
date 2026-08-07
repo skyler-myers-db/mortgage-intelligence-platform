@@ -273,15 +273,6 @@ class DatabricksGenieRepository:
                 # signal for "the repair actually changed this turn".
                 repaired = regenerated is not result
                 result = regenerated
-                if allow_sweep and not _genie_response_has_query_proof(result):
-                    # Behavioral trigger, no keywords: the live turn AND its
-                    # repair both came back without governed SQL — the ask is
-                    # too broad for one statement. Let the live space plan its
-                    # own decomposition and answer each part itself; fall
-                    # through to the normal pipeline when it cannot.
-                    sweep = run_planned_sweep(self, question)
-                    if sweep is not None:
-                        return sweep
         except DependencyDownError as exc:
             return self._degraded(question, kind=exc.kind)
         except GenieClientError:
@@ -289,12 +280,21 @@ class DatabricksGenieRepository:
             # 500, malformed JSON). Re-raise so the router translates
             # to 503 + degraded UI. No silent mock fallback.
             raise
-        return _adapt_genie_response(
+        adapted = _adapt_genie_response(
             question,
             result,
             sql_client=self._sql_client,
             repaired=repaired,
         )
+        if allow_sweep and adapted.source == "policy_blocked":
+            # Outcome-triggered, no keywords: no guardrail-passing question is
+            # allowed to end in a governed refusal until the live space has
+            # been given the chance to PLAN its own decomposition and answer
+            # each part itself. An unusable plan returns the honest refusal.
+            sweep = run_planned_sweep(self, question)
+            if sweep is not None:
+                return sweep
+        return adapted
 
     def respond_existing(
         self,
@@ -329,23 +329,22 @@ class DatabricksGenieRepository:
                 )
                 repaired = regenerated is not result
                 result = regenerated
-                if not _genie_response_has_query_proof(result):
-                    # Same behavioral trigger as :meth:`respond`: the live
-                    # turn and its repair both lack governed SQL, so the live
-                    # space plans and executes its own decomposition.
-                    sweep = run_planned_sweep(self, question)
-                    if sweep is not None:
-                        return sweep
         except DependencyDownError as exc:
             return self._degraded(question, kind=exc.kind)
         except GenieClientError:
             raise
-        return _adapt_genie_response(
+        adapted = _adapt_genie_response(
             question,
             result,
             sql_client=self._sql_client,
             repaired=repaired,
         )
+        if adapted.source == "policy_blocked":
+            # Same outcome-triggered planner as :meth:`respond`.
+            sweep = run_planned_sweep(self, question)
+            if sweep is not None:
+                return sweep
+        return adapted
 
     def ask_raw(self, prompt: str) -> str | None:
         """Raw narrative text of one live turn (planner use only).
