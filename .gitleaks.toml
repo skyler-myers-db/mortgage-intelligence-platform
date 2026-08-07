@@ -37,6 +37,11 @@ regexes = [
   # Module 0 masked borrower IDs are synthetic by contract:
   # B-[0-9A-Z]{13}. They are not credentials or real borrower PII.
   '''B-[0-9A-Z]{13}''',
+  # Frontend localStorage key for persisted Genie conversation turns
+  # (frontend/src/lib/genieConversationStore.ts). A browser storage-key
+  # NAME, not a credential; the hyphenated-versioned string trips the
+  # generic-api-key entropy heuristic.
+  '''mip-genie-conversation-v\d+''',
 ]
 
 # Paths where noisy-but-safe strings live. The design_files/ prototypes
