@@ -16,7 +16,17 @@ import {
   writeGenieConversationId,
 } from '../../lib/genieConversation';
 import { NON_PERSISTABLE_SOURCES } from '../../lib/pinnedInsights';
+import {
+  clearGenieTurns,
+  getGenieTurns,
+  persistGenieMessages,
+  setGenieTurns,
+  turnsToMessages,
+  type GenieChatMessage,
+  type GenieTurn,
+} from '../../lib/genieConversationStore';
 import { GENIE_POINTER_RESIZE_HANDLES, useGenieWindow } from './useGenieWindow';
+import { GenieHistoryMenu } from './GenieHistoryMenu';
 
 /**
  * Floating Genie chat panel — `.genie` BEM from the prototype. Fixed
@@ -30,9 +40,7 @@ import { GENIE_POINTER_RESIZE_HANDLES, useGenieWindow } from './useGenieWindow';
  * via the shared <GenieAnswer> subcomponent.
  */
 
-type ChatMsg =
-  | { who: 'user'; text: string }
-  | { who: 'ai'; payload: GenieAnswerShape; sources?: string[] };
+type ChatMsg = GenieChatMessage;
 
 export function sourceAssetsFor(payload: GenieAnswerShape): string[] {
   const seen = new Set<string>();
@@ -66,9 +74,16 @@ export function shouldRenderGenieSourceAssets(payload: GenieAnswerShape): boolea
 export function GenieChat() {
   const { genieOpen, setGenieOpen, lender, refreshWorkspace } = useApp();
   const navigate = useNavigate();
-  const [msgs, setMsgs] = useState<ChatMsg[]>([]);
+  // Transcript restored from the tab-scoped store. The panel is unmounted
+  // whenever it is closed (`{genieOpen ? <GenieChat/> : null}` in AppShell),
+  // so without this the whole conversation died on every close/reopen and on
+  // any navigation that remounted the shell.
+  const [msgs, setMsgs] = useState<ChatMsg[]>(() =>
+    turnsToMessages(getGenieTurns(), sourceAssetsFor),
+  );
   const [input, setInput] = useState('');
   const [typing, setTyping] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   // Live lifecycle telemetry for the in-flight turn (stage, public process
   // steps, generated SQL) driven by the submit → progress → complete flow.
   const [liveProgress, setLiveProgress] = useState<GenieLiveProgress | null>(null);
@@ -118,9 +133,14 @@ export function GenieChat() {
       askGenerationRef.current += 1;
       askAbortRef.current?.abort();
       setConversationId(null);
+      // An actor-boundary reset / 403 invalidates the transcript too: the
+      // conversation is not resumable and the prior actor's questions must
+      // not linger in this tab.
+      clearGenieTurns();
       setMsgs([]);
       setInput('');
       setTyping(false);
+      setHistoryOpen(false);
       setLiveProgress(null);
       setAskStartedAt(null);
     };
@@ -154,6 +174,13 @@ export function GenieChat() {
   useEffect(() => {
     if (bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
   }, [msgs, typing, genieOpen]);
+
+  // Persist the settled transcript. Gated on `typing` so an in-flight turn is
+  // never written — a reload mid-answer restores the last completed exchange
+  // instead of a dangling question with no answer.
+  useEffect(() => {
+    persistGenieMessages(msgs, { inFlight: typing });
+  }, [msgs, typing]);
 
   // R5-12: ESC closes + initial focus + focus restore. Deliberately do
   // NOT trap Tab: the floating Genie panel is a non-modal dialog, and the
@@ -252,9 +279,31 @@ export function GenieChat() {
     if (typing) return;
     suppressBootstrapConversationRef.current = true;
     setConversationId(null);
+    clearGenieTurns();
     setMsgs([]);
     setInput('');
+    setHistoryOpen(false);
     clearGenieConversationState({ notify: true });
+  };
+
+  /**
+   * Restore a past conversation from the History menu. The loaded turns are
+   * the same `{question, response}` shape the local store persists, so they
+   * render through the identical <GenieAnswer> path. The conversation id is
+   * adopted too, so a follow-up continues that Databricks thread rather than
+   * opening an orphan one.
+   */
+  const loadSession = (conversationIdToLoad: string, turns: GenieTurn[]) => {
+    if (typing) return;
+    askGenerationRef.current += 1;
+    askAbortRef.current?.abort();
+    suppressBootstrapConversationRef.current = true;
+    const restored = setGenieTurns(turns);
+    setMsgs(turnsToMessages(restored, sourceAssetsFor));
+    setConversationId(conversationIdToLoad);
+    writeGenieConversationId(conversationIdToLoad);
+    setHistoryOpen(false);
+    setInput('');
   };
 
   const runAction = async (action: GenieActionSuggestion, payload: GenieAnswerShape) => {
@@ -432,9 +481,19 @@ export function GenieChat() {
               <Icon name="db" size={14} />
             </button>
           )}
+          <GenieHistoryMenu
+            open={historyOpen}
+            onToggle={setHistoryOpen}
+            onLoad={loadSession}
+            disabled={typing}
+          />
+          {/* "New thread" is now a labeled control, not an icon-only button:
+              it clears the persisted transcript, so the destructive intent
+              has to be readable. `.btn--ghost .btn--sm` per the design
+              system's existing button vocabulary. */}
           <button
             type="button"
-            className="drawer__close"
+            className="btn btn--ghost btn--sm genie__new-thread"
             onClick={(e) => {
               e.stopPropagation();
               newConversation();
@@ -443,7 +502,8 @@ export function GenieChat() {
             aria-label="Start a new Genie thread"
             title="New thread"
           >
-            <Icon name="chat" size={14} />
+            <Icon name="chat" size={12} />
+            <span className="genie__new-thread-label">New thread</span>
           </button>
           <button
             className="drawer__close"

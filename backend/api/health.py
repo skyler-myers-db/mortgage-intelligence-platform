@@ -76,9 +76,7 @@ def _agent_gateway_binding_sha256() -> str | None:
     supervisor_id = (settings.mip_agent_supervisor_id or "").strip()
     upstream = (settings.mip_agent_supervisor_endpoint or "").strip()
     runtime_application_id = (settings.mip_agent_runtime_client_id or "").strip()
-    # Raw host on purpose: the binding hash must match what the gateway
-    # signed, unlike the validated origin from _validated_workspace_host().
-    raw_workspace_host = (settings.databricks_host or "").strip()
+    workspace_host = (settings.databricks_host or "").strip()
     model_name = settings.mip_agent_gateway_model.strip()
     model_version = settings.mip_agent_gateway_model_version
     inference_table = (settings.mip_ai_gateway_inference_table or "").strip()
@@ -90,7 +88,7 @@ def _agent_gateway_binding_sha256() -> str | None:
         or not supervisor_id
         or not upstream
         or not runtime_application_id
-        or not raw_workspace_host
+        or not workspace_host
         or not model_name
         or model_version is None
         or not inference_table
@@ -104,7 +102,7 @@ def _agent_gateway_binding_sha256() -> str | None:
         supervisor_id=supervisor_id,
         upstream_endpoint=upstream,
         runtime_application_id=runtime_application_id,
-        workspace_host=raw_workspace_host,
+        workspace_host=workspace_host,
         model_name=model_name,
         model_version=model_version,
         inference_table=inference_table,
@@ -112,17 +110,6 @@ def _agent_gateway_binding_sha256() -> str | None:
         proxy_caller_credential_id=proxy_credential_id,
         proxy_caller_secret_reference=proxy_secret_reference,
     )
-
-
-def _validated_workspace_host() -> str | None:
-    """Validated https workspace origin shared by both non-anonymous bodies.
-
-    Single derivation point so the admin body stays a superset of the
-    authenticated body. Returns ``None`` (key omitted) unless
-    ``workspace_origin()`` accepts the configured host.
-    """
-
-    return workspace_origin(settings.databricks_host)
 
 
 def _actor_cache_key(actor_email: str) -> str:
@@ -237,6 +224,13 @@ def _diagnostic_body(
         # QueryClient data if Databricks Apps swaps the workspace identity
         # within the same browser session.
         "actor_cache_key": _actor_cache_key(actor_email),
+        # Validated workspace origin so admin surfaces can deep-link UC
+        # assets exactly like the authenticated browser body does.
+        **(
+            {"workspace_host": origin}
+            if (origin := workspace_origin(settings.databricks_host))
+            else {}
+        ),
         # Slice-13 observability counters. Values reflect the last
         # rolling hour. A non-zero ``breaker_state_changes_last_hour``
         # is the earliest signal that a dependency is flapping; a
@@ -283,11 +277,6 @@ def _diagnostic_body(
         "campaign_treatment_runtime": treatment_runtime,
         "boundary_warning": boundary_warning,
     }
-    # Same validated origin the authenticated body exposes (admin stays a
-    # superset of the authenticated shape).
-    workspace_host = _validated_workspace_host()
-    if workspace_host:
-        body["workspace_host"] = workspace_host
     if settings.mip_git_sha:
         body["git_sha"] = settings.mip_git_sha
     if settings.mip_app_deployment_lease_id:
@@ -359,16 +348,12 @@ def health(request: Request) -> dict[str, Any]:
         "circuit_breakers": breakers,
         "actor_cache_key": _actor_cache_key(actor_email or ""),
     }
-    # Workspace origin for the frontend's Catalog Explorer deep links
-    # ({host}/explore/data/...). Authenticated-only: lineage / data-estate
-    # payloads already emit full explorer URLs via catalog_explorer_url(),
-    # so this adds no exposure beyond R6-09's anonymous-reconnaissance
-    # boundary. The shared workspace_origin() guard rejects anything that
-    # is not a clean https Databricks workspace origin; omit the key
-    # entirely rather than ship an unvalidated or empty value.
-    workspace_host = _validated_workspace_host()
-    if workspace_host:
-        body["workspace_host"] = workspace_host
+    # Workspace origin (scheme+host only, validated) so the UI can deep-link
+    # cited Unity Catalog assets to the Catalog Explorer. Authenticated body
+    # only — the anonymous liveness contract stays {status, mode}.
+    host_origin = workspace_origin(settings.databricks_host)
+    if host_origin:
+        body["workspace_host"] = host_origin
     if settings.mip_git_sha:
         body["git_sha"] = settings.mip_git_sha
     if settings.mip_app_deployment_lease_id:

@@ -163,6 +163,38 @@ class GenieSubmitResponse(BaseModel):
     response: GenieMessageResponse | None = None
 
 
+class GenieSessionSummary(BaseModel):
+    """One row of the actor's Ask Genie history list."""
+
+    conversation_id: str
+    #: First question of the conversation, truncated for the list UI. Empty
+    #: for conversations recorded before turn payloads were persisted.
+    title: str = ""
+    last_activity_at: str | None = None
+    turn_count: int = 0
+
+
+class GenieSessionListResponse(BaseModel):
+    sessions: list[GenieSessionSummary] = Field(default_factory=list)
+
+
+class GenieSessionTurn(BaseModel):
+    """One replayable question/answer pair from a stored conversation.
+
+    ``response`` is the exact governed ``GenieMessageResponse`` the chat
+    already renders. It was scanned by the output policy and PII-redacted
+    before it was ever persisted.
+    """
+
+    question: str
+    response: GenieMessageResponse
+
+
+class GenieSessionDetailResponse(BaseModel):
+    conversation_id: str
+    turns: list[GenieSessionTurn] = Field(default_factory=list)
+
+
 class GenieProgressResponse(BaseModel):
     """Live progress for one in-flight Genie message.
 

@@ -1,11 +1,13 @@
 import { useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { Link } from 'react-router';
 import type {
   GenieActionSuggestion,
   GenieAnswer as GenieAnswerShape,
 } from '../../types';
 import { Icon } from '../Icon';
 import { useApp } from '../AppContext';
+import { useWorkspaceHost } from '../HealthProvider';
 import { GenieActions } from './GenieAnswerActions';
 import {
   GenieBarChart,
@@ -34,6 +36,7 @@ import {
   pickPlan,
 } from './GenieAnswer.logic';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
+import { genieCellHref } from '../../lib/genieCellLinks';
 
 export { stripQuestionRestatement } from './GenieAnswer.markdown';
 export { inferChartFromRows } from './GenieAnswer.logic';
@@ -84,6 +87,10 @@ export function GenieAnswer({
 }: GenieAnswerProps) {
   const { answer, metric_value, table_rows, follow_up_questions, actions } = payload;
   const { setDrawer } = useApp();
+  // Workspace origin for Catalog Explorer deep links on UC asset names.
+  // Reads the shared health poll; null (poll pending / older backend /
+  // rendered outside HealthProvider in a test) degrades to plain text.
+  const workspaceHost = useWorkspaceHost();
   const { pins, pin, unpin } = usePinnedInsights();
   const [showProof, setShowProof] = useState(false);
   const proofDrawerRef = useRef<HTMLElement | null>(null);
@@ -232,7 +239,7 @@ export function GenieAnswer({
       )}
       {proofToggle}
       {nativeVizBadge}
-      {cleanedAnswer && <MarkdownAnswer text={cleanedAnswer} />}
+      {cleanedAnswer && <MarkdownAnswer text={cleanedAnswer} workspaceHost={workspaceHost} />}
       {/* The backend exposes bounded, public process summaries for live Genie
           turns through the existing reasoning_trace wire field. Render them
           as escaped text in a native disclosure. */}
@@ -334,9 +341,22 @@ export function GenieAnswer({
                       {columns.map((c) => {
                         const v = row[c];
                         const isNum = typeof v === 'number' && !isIdentifierColumn(c);
+                        // Linkage: a masked borrower id drills into the same
+                        // Borrower 360 route the drill-down cards use; a state
+                        // code opens the same filtered Lead Queue the
+                        // geography map navigates to on a state click.
+                        // Everything else (including city — no route filters
+                        // by city) renders as plain text.
+                        const href = genieCellHref(c, v);
                         return (
                           <td key={c} className={isNum ? 'num' : undefined}>
-                            {formatCell(c, v)}
+                            {href ? (
+                              <Link className="mono" to={href}>
+                                {formatCell(c, v)}
+                              </Link>
+                            ) : (
+                              formatCell(c, v)
+                            )}
                           </td>
                         );
                       })}
@@ -386,6 +406,7 @@ export function GenieAnswer({
             <div className="drawer__body">
               <GenieProofPanel
                 payload={payload}
+                workspaceHost={workspaceHost}
                 onOpenSource={(source) => {
                   setShowProof(false);
                   setDrawer(source);

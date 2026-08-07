@@ -101,6 +101,14 @@ from backend.services.repositories.databricks_genie_policy_helpers import (
 from backend.services.repositories.databricks_genie_strategy import (
     _canonical_strategy_board_answer,
 )
+from backend.services.repositories.databricks_genie_trace import (
+    WITHHELD_CONTRADICTED,
+    WITHHELD_NO_NARRATIVE,
+    WITHHELD_NO_NARRATIVE_DETERMINISTIC,
+    WITHHELD_UNSAFE_TEXT,
+    WITHHELD_UNVERIFIED_NUMBERS,
+    GenieProcessTrace,
+)
 from backend.services.repositories.databricks_genie_trust import (
     _TRUSTED_GENIE_ASSETS,  # noqa: F401 - compatibility re-export
     _bounded_genie_sql,  # noqa: F401 - compatibility re-export
@@ -246,14 +254,20 @@ class DatabricksGenieRepository:
                 question,
                 kind=DependencyDownError.KIND_BREAKER_OPEN,
             )
+        repaired = False
         try:
             result = self._genie.ask(question, conversation_id=conversation_id)
             if _needs_genie_sql_repair(question, result):
-                result = self._repair_text_only_genie_answer(
+                regenerated = self._repair_text_only_genie_answer(
                     question=question,
                     original=result,
                     conversation_id=conversation_id,
                 )
+                # The repair helper returns the ORIGINAL object when the retry
+                # did not recover governed SQL proof, so identity is the honest
+                # signal for "the repair actually changed this turn".
+                repaired = regenerated is not result
+                result = regenerated
         except DependencyDownError as exc:
             return self._degraded(question, kind=exc.kind)
         except GenieClientError:
@@ -261,7 +275,12 @@ class DatabricksGenieRepository:
             # 500, malformed JSON). Re-raise so the router translates
             # to 503 + degraded UI. No silent mock fallback.
             raise
-        return _adapt_genie_response(question, result, sql_client=self._sql_client)
+        return _adapt_genie_response(
+            question,
+            result,
+            sql_client=self._sql_client,
+            repaired=repaired,
+        )
 
     def respond_existing(
         self,
@@ -285,19 +304,27 @@ class DatabricksGenieRepository:
         breaker_state = self._genie.resilient.breaker.state
         if breaker_state == "open":
             return self._degraded(question, kind=DependencyDownError.KIND_BREAKER_OPEN)
+        repaired = False
         try:
             result = self._genie.resume_message(conversation_id, message_id)
             if _needs_genie_sql_repair(question, result):
-                result = self._repair_text_only_genie_answer(
+                regenerated = self._repair_text_only_genie_answer(
                     question=question,
                     original=result,
                     conversation_id=conversation_id,
                 )
+                repaired = regenerated is not result
+                result = regenerated
         except DependencyDownError as exc:
             return self._degraded(question, kind=exc.kind)
         except GenieClientError:
             raise
-        return _adapt_genie_response(question, result, sql_client=self._sql_client)
+        return _adapt_genie_response(
+            question,
+            result,
+            sql_client=self._sql_client,
+            repaired=repaired,
+        )
 
     def _repair_text_only_genie_answer(
         self,
@@ -384,6 +411,7 @@ def _adapt_genie_response(
     result: GenieResponse,
     *,
     sql_client: DatabricksSqlClient | None = None,
+    repaired: bool = False,
 ) -> GenieMessageResponse:
     """Wrap a live ``GenieResponse`` into the wire contract the UI
     already consumes. We derive ``trusted_assets`` from the SQL query
@@ -397,13 +425,24 @@ def _adapt_genie_response(
     (owner names, raw CLIP, owner_link_id, owner_name_hash, street addresses)
     regardless of what the model decided to select. Customers see zero PII
     columns in Ask Genie results even if the Space drifts.
+
+    ``repaired`` records that the narrative-only SQL repair retry actually
+    changed this turn, so the deterministic process trace can state that step
+    as fact instead of inferring it.
     """
+    trace = GenieProcessTrace()
+    trace.guardrails()
+    if repaired:
+        trace.repair()
     trusted_assets = _merge_trusted_assets(
         _extract_asset_refs(result.sql_query),
         result.trusted_assets,
     )
     rows = _redact_genie_rows(result.sql_result_rows)
     trusted_sql = _trusted_sql_policy(result.sql_query, trusted_assets)
+    trace.live_turn(sql_query=result.sql_query, assets=trusted_assets)
+    if trusted_sql:
+        trace.trust()
     question_hash = _genie_question_hash(question)
     text_contains_pii = _answer_text_contains_pii(result.answer_text)
     lacks_trusted_proof = not result.sql_query or not trusted_assets
@@ -452,6 +491,7 @@ def _adapt_genie_response(
                 canonical,
                 result,
                 narrative_withheld=text_contains_pii,
+                trace=trace,
             )
     if lacks_trusted_proof or unsafe_live_sql or depends_on_pending_feeds:
         if depends_on_pending_feeds:
@@ -496,6 +536,7 @@ def _adapt_genie_response(
         )
     if result.sql_query and trusted_sql and not rows and sql_client is not None:
         rows = _redact_genie_rows(_execute_trusted_genie_sql(sql_client, result.sql_query))
+    trace.execute(row_count=len(rows) if rows else 0, assets=trusted_assets)
     # Trusted SQL is a floor, not a coin flip: from here the governed query,
     # rows, proof, and actions ALWAYS ship. Only the model PROSE is
     # conditionally withheld — when the output safety guard flags its wording,
@@ -510,6 +551,7 @@ def _adapt_genie_response(
             "the governed query results are shown instead."
         )
         prose_withheld_reason = "the output safety guard flagged its wording."
+        trace.narrative_withheld(reason=WITHHELD_UNSAFE_TEXT)
     elif _unsupported_answer_numeric_claims(result.answer_text, rows, question):
         prose_withheld_gap = (
             "Genie's draft narrative included numeric or financial claims that "
@@ -519,10 +561,17 @@ def _adapt_genie_response(
         prose_withheld_reason = (
             "it contained numbers the app could not verify against the returned rows."
         )
-    # Genie enhancement fields (2026-07): scrub once, share between the proof
-    # trace and the top-level response fields so every emitted string clears
-    # the same output PII guard the answer text is held to.
-    reasoning_trace = genie_reasoning_trace_from_thoughts(result.thoughts)
+        trace.narrative_withheld(reason=WITHHELD_UNVERIFIED_NUMBERS)
+    elif (result.answer_text or "").strip():
+        trace.verified()
+    else:
+        trace.narrative_withheld(reason=WITHHELD_NO_NARRATIVE)
+    # Genie enhancement fields (2026-07): the deterministic pipeline trace above
+    # is the process summary; translated live thoughts are appended only when
+    # they add something the pipeline steps do not already state. Every emitted
+    # string clears the same output PII guard the answer text is held to, and
+    # raw thoughts still never cross this boundary.
+    reasoning_trace = trace.steps(genie_reasoning_trace_from_thoughts(result.thoughts))
     proof = _build_genie_proof(
         sql_query=result.sql_query,
         trusted_assets=trusted_assets,
@@ -671,6 +720,7 @@ def _restore_live_voice(
     result: GenieResponse,
     *,
     narrative_withheld: bool = False,
+    trace: GenieProcessTrace | None = None,
 ) -> GenieMessageResponse:
     """Keep a recognized-shape trusted answer's governance but restore voice.
 
@@ -687,9 +737,24 @@ def _restore_live_voice(
     * Carry through ``genie_status``, ``reasoning_trace``,
       ``native_visualization`` and ``follow_up_questions`` from the live result
       exactly like the generic adaptation path does.
+
+    ``trace`` is the in-progress deterministic process trace from
+    ``_adapt_genie_response``; this function appends the canonical /
+    execution / verification / composition steps it alone can observe. A
+    missing trace (direct callers, older tests) starts a fresh one so the
+    canonical half of the story still ships.
     """
-    reasoning_trace = genie_reasoning_trace_from_thoughts(result.thoughts)
+    trace = trace if trace is not None else GenieProcessTrace()
     proof = canonical.proof
+    canonical_rows = canonical.table_rows or []
+    if canonical.metric_value:
+        canonical_shape = "metric"
+    elif len(canonical_rows) > 1:
+        canonical_shape = "ranking"
+    else:
+        canonical_shape = ""
+    trace.canonical(shape=canonical_shape)
+    trace.execute(row_count=len(canonical_rows), assets=canonical.trusted_assets)
     # A guard-flagged narrative is withheld wholesale: the deterministic
     # canonical answer ships instead, and the withholding is disclosed below.
     narrative = "" if narrative_withheld else (result.answer_text or "").strip()
@@ -712,6 +777,18 @@ def _restore_live_voice(
         canonical.table_rows,
         canonical.question,
     )
+    if narrative_withheld:
+        trace.narrative_withheld(reason=WITHHELD_UNSAFE_TEXT)
+    elif narrative and contradicted:
+        trace.narrative_withheld(reason=WITHHELD_CONTRADICTED)
+    elif narrative and unsupported_claims:
+        trace.narrative_withheld(reason=WITHHELD_UNVERIFIED_NUMBERS)
+    elif narrative:
+        trace.verified()
+    else:
+        trace.narrative_withheld(reason=WITHHELD_NO_NARRATIVE_DETERMINISTIC)
+    if "**#1" in (canonical.answer or ""):
+        trace.composed_brief()
     if narrative and contradicted:
         updates["answer"] = canonical.answer
         if proof is not None:
@@ -761,6 +838,7 @@ def _restore_live_voice(
             proof = proof.model_copy(
                 update={"known_data_gaps": [*proof.known_data_gaps, gap]}
             )
+    reasoning_trace = trace.steps(genie_reasoning_trace_from_thoughts(result.thoughts))
     if proof is not None:
         updates["proof"] = proof.model_copy(
             update={

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router';
 import {
   coerceNumber,
   formatCell,
@@ -11,6 +12,7 @@ import { loadUsaStateMap } from './USStateMapData';
 import type { UsaSvgMap } from './USChoroplethMap.utils';
 import { offerDisplayLabel } from '../../lib/offerLanguage';
 import { safeSegmentName } from '../../lib/segmentMetadata';
+import { borrower360Path } from '../../lib/genieCellLinks';
 
 export function strategySegmentLabel(value: unknown): string | null {
   if (value === null || value === undefined || value === '') return null;
@@ -238,13 +240,16 @@ export function GenieBorrowerList({ rows }: { rows: Array<Record<string, unknown
           const id = String(row.borrower_id);
           const score = coerceNumber(row.opportunity_score ?? row.score);
           return (
-            <a key={id} className="genie-board__card" href={`/borrower-360/${encodeURIComponent(id)}`}>
+            // Router <Link>, not a raw <a>: the card used to hard-navigate,
+            // dropping the SPA state (and the open Genie panel) on every
+            // borrower drill-down.
+            <Link key={id} className="genie-board__card" to={borrower360Path(id)}>
               <div className="genie-board__title">{id}</div>
               <div className="genie-board__meta">
                 {[row.city, row.state, row.zip].filter(Boolean).join(', ') || 'Open borrower evidence'}
               </div>
               {score !== null && <div className="genie-board__value">{score.toLocaleString()}</div>}
-            </a>
+            </Link>
           );
         })}
       </div>

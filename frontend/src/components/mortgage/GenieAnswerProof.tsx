@@ -3,13 +3,19 @@ import { drawerForAsset } from '../../lib/drawerSources';
 import { formatTimestamp } from '../../lib/time';
 import type { DrawerSource } from '../AppContext';
 import { Chip, EvidenceChip } from '../Primitives';
+import { Icon } from '../Icon';
+import { catalogExplorerUrl } from '../../lib/ucAssetLinks';
 
 export function GenieProofPanel({
   payload,
   onOpenSource,
+  workspaceHost,
 }: {
   payload: GenieAnswerShape;
   onOpenSource: (source: DrawerSource) => void;
+  /** Workspace origin for Catalog Explorer deep links. null/undefined ⇒ the
+   *  asset chips render exactly as before (no external link affordance). */
+  workspaceHost?: string | null;
 }) {
   const proof = payload.proof;
   if (!proof) return null;
@@ -40,14 +46,39 @@ export function GenieProofPanel({
           <div className="chip-row">
             {assets.map((asset) => {
               const drawer = drawerForAsset(asset);
-              return drawer ? (
-                <EvidenceChip key={asset} source={drawer} onClick={() => onOpenSource(drawer)}>
-                  {asset}
-                </EvidenceChip>
-              ) : (
-                <Chip key={asset} variant="neutral" title={`Source: ${asset}`}>
-                  {asset}
-                </Chip>
+              const explorerUrl = catalogExplorerUrl(workspaceHost, asset);
+              const explorerLink = explorerUrl ? (
+                <a
+                  className="chip chip--neutral uc-asset-link"
+                  href={explorerUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label={`Open ${asset} in Catalog Explorer`}
+                  title={`Open ${asset} in Databricks Catalog Explorer`}
+                >
+                  {/* Drawer-mapped assets keep the in-app evidence chip as the
+                      primary action; this is the escape hatch to the workspace.
+                      Unmapped assets get the asset name on the link itself so
+                      the previously inert chip becomes reachable. */}
+                  {!drawer && <span className="chip__label">{asset}</span>}
+                  <Icon name="export" size={10} />
+                </a>
+              ) : null;
+              return (
+                <span key={asset} className="genie-proof__asset">
+                  {drawer ? (
+                    <EvidenceChip source={drawer} onClick={() => onOpenSource(drawer)}>
+                      {asset}
+                    </EvidenceChip>
+                  ) : (
+                    !explorerLink && (
+                      <Chip variant="neutral" title={`Source: ${asset}`}>
+                        {asset}
+                      </Chip>
+                    )
+                  )}
+                  {explorerLink}
+                </span>
               );
             })}
           </div>

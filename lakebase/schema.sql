@@ -2258,12 +2258,28 @@ VALUES (
 ON CONFLICT (version) DO NOTHING;
 
 -- Genie sessions ------------------------------------------------------
--- Durable state for Databricks Genie conversations. These tables store
--- conversation/message identifiers and proof metadata only; they do NOT
--- store raw user prompts or answer text, because those fields can contain
--- free-form PII-like content. The app can recover the latest conversation
--- after reload while the append-only action_audit ledger remains the
--- governed proof of each read/action.
+-- Durable state for Databricks Genie conversations, so the app can recover
+-- the latest conversation after reload and replay conversation history,
+-- while the append-only action_audit ledger remains the governed proof of
+-- each read/action.
+--
+-- Text posture (revised 2026-08-06, migration
+-- 2026_08_06_genie_history_replay): these tables originally stored
+-- identifiers and proof metadata only, on the grounds that prompts and
+-- answers can carry free-form PII-like content. Conversation history replay
+-- requires the turn text, so `genie_messages.question_text` and
+-- `genie_messages.response_json` now persist it under these invariants,
+-- enforced by the write path in backend/api/genie.py and
+-- backend/services/genie_history.py:
+--   * refused / policy_blocked / degraded / data_gap / out_of_footprint
+--     turns are never recorded, so a guard-tripping prompt is never stored;
+--   * a stored question already cleared the PII, identity, protected-class,
+--     scope and injection prompt guards;
+--   * a stored answer already cleared genie_response_has_unsafe_visible_text
+--     and the row-level PII key denylist, which is why replay does not
+--     re-scan it;
+--   * signed action confirmation tokens are stripped before persistence, so
+--     replaying a transcript never re-authorizes a governed write action.
 CREATE TABLE IF NOT EXISTS mip_app.genie_sessions (
     actor_email        TEXT NOT NULL,
     conversation_id    TEXT NOT NULL,
@@ -3484,5 +3500,44 @@ INSERT INTO mip_app.schema_migrations (version, description)
 VALUES (
     '2026_07_14_hmac_outcome_source_reference',
     'Enforce HMAC-derived auto-<32 lowercase hex> lead outcome source references on new and updated rows while preserving legacy history'
+)
+ON CONFLICT (version) DO NOTHING;
+
+-- Ask Genie conversation history replay --------------------------------
+-- `question_text` and `response_json` let the chat reopen a previous
+-- conversation and re-render the exact governed answer. See the text-posture
+-- note above mip_app.genie_sessions for the governance invariants that make
+-- storing this text safe; the write path enforces them.
+ALTER TABLE mip_app.genie_messages
+    ADD COLUMN IF NOT EXISTS question_text TEXT,
+    ADD COLUMN IF NOT EXISTS response_json JSONB;
+
+ALTER TABLE mip_app.genie_messages
+    DROP CONSTRAINT IF EXISTS genie_messages_question_text_len_chk;
+ALTER TABLE mip_app.genie_messages
+    ADD CONSTRAINT genie_messages_question_text_len_chk
+    CHECK (question_text IS NULL OR length(question_text) <= 4000);
+
+ALTER TABLE mip_app.genie_messages
+    DROP CONSTRAINT IF EXISTS genie_messages_response_json_size_chk;
+ALTER TABLE mip_app.genie_messages
+    ADD CONSTRAINT genie_messages_response_json_size_chk
+    CHECK (
+        response_json IS NULL
+        OR pg_column_size(response_json) <= 1048576
+    );
+
+CREATE INDEX IF NOT EXISTS idx_genie_messages_conversation_created
+    ON mip_app.genie_messages (actor_email, conversation_id, created_at);
+
+COMMENT ON COLUMN mip_app.genie_messages.question_text IS
+    'Guard-battery-cleared user question for history replay; refused prompts are never recorded.';
+COMMENT ON COLUMN mip_app.genie_messages.response_json IS
+    'Governed GenieMessageResponse for history replay: output-policy scanned, PII-redacted, action tokens stripped.';
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_08_06_genie_history_replay',
+    'Persist guarded question text and the governed Genie response payload per turn so the chat can replay owned conversation history'
 )
 ON CONFLICT (version) DO NOTHING;
