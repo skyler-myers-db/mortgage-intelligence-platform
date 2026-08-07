@@ -1,3 +1,4 @@
 - [CI OAuth mint failure must not fall through to localhost](feedback_ci_oauth_fallback.md) — deployed-path mint failure is hard-fail, not silent fallback
 - [Growth Agent Supervisor selection governance](project_growth_agent_supervisor_selection.md) — agent SELECTS workflow (allowlist-bounded); divergence now flagged review_required across step/policy/chip/audit (closed @13cd0b3)
 - [AI Gateway live-probe proof standard](project_ai_gateway_probe_proof.md) — claimable only after live endpoint query plus exact current inference row or async recent deployment-scoped row; proof kind must stay disclosed on public surfaces
+- [R6-09 health disclosure scope](project_r6_09_health_disclosure_scope.md) — R6-09 covers anonymous recon only; test new authenticated-health keys against lineage/data-estate (no auth dep) for marginal exposure

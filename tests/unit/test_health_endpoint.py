@@ -459,6 +459,11 @@ def test_health_authenticated_returns_runtime_status_only(
     monkeypatch.setattr(health_probes, "probe_warehouse", lambda: True)
     monkeypatch.setattr(health_probes, "probe_lakebase", lambda: True)
     monkeypatch.setattr(health_probes, "probe_genie", lambda: True)
+    # Pin the no-workspace-host shape deterministically: a developer shell
+    # with DATABRICKS_HOST exported must not add keys to this exact-set
+    # assertion. The configured-host shape is pinned in
+    # test_health_workspace_host.py.
+    monkeypatch.setattr(health_mod.settings, "databricks_host", None)
 
     res = client.get("/api/health", headers={"X-Forwarded-Email": "skyler@entrada.ai"})
     assert res.status_code == 200
