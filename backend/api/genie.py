@@ -83,6 +83,7 @@ from backend.services.genie_trusted_assets import trusted_assets
 from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
 from backend.services.observability import emit
+from backend.services.rbac import resolve_workflow_actor
 from backend.services.repositories import BorrowerRepository, GenieAnswerRepository
 from backend.services.repositories.factory import (
     get_borrower_repository,
@@ -152,18 +153,6 @@ INSERT INTO mip_app.genie_messages (
 )
 ON CONFLICT (conversation_id, message_id) DO NOTHING
 """
-
-
-def _actor(request: Request) -> str:
-    if settings.trust_forwarded_headers:
-        email = request.headers.get("X-Forwarded-Email")
-        if email:
-            return email
-        user = request.headers.get("X-Forwarded-User")
-        if user:
-            return user
-        raise HTTPException(status_code=401, detail="genie action identity required")
-    return resolve_actor(request)
 
 
 def _safe_audit_write(store: AuditStore, **kwargs: Any) -> None:
@@ -763,7 +752,7 @@ def genie_action(
     _: Annotated[None, Depends(require_json_content_type)],
 ) -> GenieActionResponse:
     _ = audit
-    actor = _actor(request)
+    actor = resolve_workflow_actor(request)
     return handle_genie_action(
         payload,
         actor=actor,

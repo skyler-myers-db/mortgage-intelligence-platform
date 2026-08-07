@@ -12,7 +12,6 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from backend.config.settings import settings
 from backend.schemas.common import validate_public_borrower_id
 from backend.schemas.lead import LeadSummary
 from backend.schemas.workspace import (
@@ -24,7 +23,6 @@ from backend.schemas.workspace import (
     WorkspaceMutationResponse,
     WorkspaceState,
 )
-from backend.services.audit_store import resolve_actor
 from backend.services.disclosures import MissingTenantDisclosureError, resolve_tenant_disclosure
 from backend.services.error_sanitizer import safe_dependency_detail
 from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
@@ -33,6 +31,7 @@ from backend.services.outreach_draft_proof import (
     GeneratedOutreachDraftProofError,
     load_verified_generated_outreach_draft,
 )
+from backend.services.rbac import resolve_workflow_actor
 from backend.services.repositories import (
     LeadRepository,
     OutreachRepository,
@@ -47,21 +46,6 @@ WorkspaceDep = Annotated[WorkspaceStore, Depends(get_workspace_store)]
 LeadRepoDep = Annotated[LeadRepository, Depends(get_lead_repository)]
 OutreachRepoDep = Annotated[OutreachRepository, Depends(get_outreach_repository)]
 LakebaseDep = Annotated[LakebaseClient, Depends(get_lakebase_client)]
-
-
-def _actor(request: Request) -> str:
-    if settings.trust_forwarded_headers:
-        email = request.headers.get("X-Forwarded-Email")
-        if email:
-            return email
-        user = request.headers.get("X-Forwarded-User")
-        if user:
-            return user
-        raise HTTPException(
-            status_code=401,
-            detail="workspace identity required",
-        )
-    return resolve_actor(request)
 
 
 def _as_lakebase_503() -> HTTPException:
@@ -187,7 +171,7 @@ def read_workspace(
     repo: LeadRepoDep,
 ) -> WorkspaceState:
     try:
-        state = store.list(actor=_actor(request))
+        state = store.list(actor=resolve_workflow_actor(request))
         return _hydrate_saved_leads(state, repo)
     except LakebaseError as exc:
         raise _as_lakebase_503() from exc
@@ -219,7 +203,7 @@ def save_lead(
         raise HTTPException(status_code=404, detail=f"Borrower {borrower_id} not found")
     live_input = _lead_input_from_live(live_rows[0])
     try:
-        return store.save_lead(actor=_actor(request), lead=live_input)
+        return store.save_lead(actor=resolve_workflow_actor(request), lead=live_input)
     except LakebaseError as exc:
         raise _as_lakebase_503() from exc
 
@@ -232,7 +216,7 @@ def delete_lead(
 ) -> WorkspaceMutationResponse:
     borrower_id = _path_borrower_id(borrower_id)
     try:
-        return store.delete_lead(actor=_actor(request), borrower_id=borrower_id)
+        return store.delete_lead(actor=resolve_workflow_actor(request), borrower_id=borrower_id)
     except LakebaseError as exc:
         raise _as_lakebase_503() from exc
 
@@ -258,7 +242,7 @@ def save_draft(
     if borrower is None:
         raise HTTPException(status_code=404, detail=f"Borrower {borrower_id} not found")
     _assert_workspace_marketing_eligible(borrower)
-    actor = _actor(request)
+    actor = resolve_workflow_actor(request)
     try:
         generated = load_verified_generated_outreach_draft(
             lakebase,
@@ -325,7 +309,7 @@ def delete_draft(
     borrower_id = _path_borrower_id(borrower_id)
     try:
         return store.delete_draft(
-            actor=_actor(request),
+            actor=resolve_workflow_actor(request),
             borrower_id=borrower_id,
             channel=channel,
         )

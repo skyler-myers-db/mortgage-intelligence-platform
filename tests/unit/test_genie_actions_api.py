@@ -1252,7 +1252,26 @@ def test_genie_actions_require_actor_identity() -> None:
     )
 
     assert res.status_code == 401
-    assert res.json()["detail"] == "genie action identity required"
+    assert res.json()["detail"] == "authenticated identity required"
+
+
+def test_genie_actions_untrusted_edge_serves_as_marker_actor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GRANTS.md §11a: with ``trust_forwarded_headers=False`` the Genie
+    workflow surface does not fail closed at the identity gate. The request
+    proceeds attributed to the untrusted-edge marker actor, where the
+    actor-bound confirmation token (minted for the trusted-edge actor)
+    rejects the replay — a 400, not an authentication 401.
+    """
+
+    payload = _confirmed_payload()
+    monkeypatch.setattr(settings, "trust_forwarded_headers", False)
+
+    res = client.post("/api/genie/actions", json=payload)
+
+    assert res.status_code == 400
+    assert res.json()["detail"] == "Genie action confirmation token is invalid"
 
 
 def test_genie_actions_reject_unknown_action_types() -> None:

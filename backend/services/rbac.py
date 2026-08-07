@@ -178,3 +178,23 @@ def require_authenticated_actor(request: Request) -> str:
 # identity). Weakest gate tier: proves "some authenticated workspace user",
 # not admin or approver membership.
 AuthenticatedActorDep = Annotated[str, Depends(require_authenticated_actor)]
+
+
+def resolve_workflow_actor(request: Request) -> str:
+    """Actor identity for workflow surfaces (workspace inbox, Genie actions).
+
+    Behind a trusted Databricks Apps edge this is exactly
+    ``require_authenticated_actor``: the forwarded identity or a 401.
+
+    With ``trust_forwarded_headers=False`` (non-Apps deploy,
+    docs/security/GRANTS.md §11a) workflow surfaces deliberately KEEP
+    SERVING instead of failing closed: the caller identity is unknowable
+    at this layer, so Lakebase writes and audit rows attribute to
+    ``resolve_actor``'s distinct ``unknown-actor@untrusted-edge`` marker
+    rather than a spoofable header value. Do not adopt this fallback for
+    governed read surfaces — those take ``AuthenticatedActorDep`` and
+    fail closed with a 401.
+    """
+    if settings.trust_forwarded_headers:
+        return require_authenticated_actor(request)
+    return resolve_actor(request)

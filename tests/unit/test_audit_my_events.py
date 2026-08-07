@@ -83,7 +83,7 @@ def test_my_events_requires_an_edge_authenticated_identity(
     )
 
     assert response.status_code == 401
-    assert response.json()["detail"] == "audit identity required"
+    assert response.json()["detail"] == "authenticated identity required"
 
 
 def test_my_events_fails_closed_when_forwarded_identity_is_untrusted(
@@ -96,7 +96,7 @@ def test_my_events_fails_closed_when_forwarded_identity_is_untrusted(
     response = client.get("/api/v1/audit/my-events", headers=ALICE_HEADERS)
 
     assert response.status_code == 401
-    assert response.json()["detail"] == "audit identity required"
+    assert response.json()["detail"] == "authenticated identity required"
 
 
 def test_my_events_rejects_arbitrary_actor_filters(
