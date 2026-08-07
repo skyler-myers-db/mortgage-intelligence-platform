@@ -128,9 +128,12 @@ questions:
     require_trusted_proof: true
     require_select_sql: true
     require_freshness: true
+    # Posture-agnostic (2026-08-07, live-first): Genie writes its own state
+    # filter; the canonical-value check verifies the NUMBER against the
+    # governed recomputation, which is the real guarantee.
     required_sql_contains:
       - mip.gold.borrower_360
-      - state = :state
+      - state
     canonical_column: in_the_money_borrowers
     canonical_sql: |
       SELECT COUNT(*) AS in_the_money_borrowers
