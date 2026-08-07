@@ -21,10 +21,8 @@ class HealthResponse(BaseModel):
     dependencies: dict[str, str] = Field(default_factory=dict)
     circuit_breakers: dict[str, str] = Field(default_factory=dict)
     actor_cache_key: str | None = None
-    # Validated https workspace origin for Catalog Explorer deep links,
-    # produced by the shared ``workspace_origin()`` guard. Authenticated
-    # bodies only; omitted (never empty/null) when DATABRICKS_HOST is unset
-    # or fails validation. Absent on the anonymous liveness body (R6-09).
+    # Validated workspace origin for Catalog Explorer deep links from cited
+    # UC assets. Authenticated health body only.
     workspace_host: str | None = None
     forced_degraded: ForcedDegradedInfo | None = None
     # Deploy-promotion marker state: "enabled" after a governed

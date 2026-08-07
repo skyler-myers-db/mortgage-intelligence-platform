@@ -9,8 +9,15 @@
    ============================================================ */
 .app-shell {
   display: grid;
+  /* --shell-topbar-h drives BOTH the topbar grid row and the rail's brand
+     slot height. Keeping them on one variable is what makes the Entrada
+     mark's vertical center land exactly on the "Mortgage Intelligence
+     Platform" crumb's center — before this, the rail carried its own top
+     padding and the mark sat ~12px below the title at 1440x900. Any future
+     topbar height change stays aligned by construction. */
+  --shell-topbar-h: 56px;
   grid-template-columns: 72px 1fr;
-  grid-template-rows: 56px 1fr;
+  grid-template-rows: var(--shell-topbar-h) 1fr;
   grid-template-areas:
     "rail topbar"
     "rail main";
@@ -303,14 +310,23 @@
   display: flex; flex-direction: column; align-items: stretch;
   background: var(--bg-1);
   border-right: 1px solid var(--line-1);
-  padding: var(--sp-3) var(--sp-2);
+  /* No block-start padding: the brand slot below IS the rail's header band
+     and must be flush with the top of the shell so it mirrors the topbar
+     row exactly. Inline padding is unchanged, so `margin: 0 auto` on
+     .rail__item still centers the M0-M4 boxes on the same vertical axis as
+     the centered mark. */
+  padding: 0 var(--sp-2) var(--sp-3);
   gap: var(--sp-1);
 }
 .rail__brand {
-  width: 56px; height: 56px; margin: 0 auto var(--sp-4);
+  /* Full rail content width x exact topbar height => the mark's center is
+     the topbar's center line. The former 56x56 box with 10px padding left a
+     36px content box that the 47x32 mark overflowed, so it read as
+     off-center inside its own slot. */
+  width: 100%; height: var(--shell-topbar-h); margin: 0 0 var(--sp-3);
   display: grid; place-items: center;
   border-radius: var(--r-lg);
-  padding: 10px;
+  padding: 0;
   text-decoration: none;
   transition: background var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
 }
@@ -323,6 +339,11 @@
 }
 .rail__item {
   width: 56px; height: 56px; margin: 0 auto;
+  /* The rail's 1px right border makes its content box 55px, so a fixed 56px
+     item overflowed by 0.5px on each side — enough to push the M0-M4 boxes
+     off the mark's center line and to bleed the active pill into the border.
+     Clamping keeps every rail box on one vertical axis at every breakpoint. */
+  max-inline-size: 100%;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 3px;
   border-radius: var(--r-md);
@@ -2548,6 +2569,38 @@ a.lineage-node__chip:focus-visible {
 }
 .genie__title { font-size: var(--fs-13); font-weight: 600; color: var(--text-1); }
 .genie__sub { font-size: var(--fs-11); color: var(--text-3); }
+/* Header controls (History, New thread, Close) are fixed-width; the title
+   block is what absorbs the remaining space and truncates. Without
+   min-inline-size:0 the flex title refuses to shrink and pushes the
+   controls out of a narrow panel. */
+.genie-chat__drag-title { min-inline-size: 0; }
+.genie__title,
+.genie__sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.genie__new-thread { flex-shrink: 0; white-space: nowrap; }
+.genie__new-thread-label { white-space: nowrap; }
+/* History menu. Reuses the existing `.filter-menu` / `.filter-menu__item`
+   dropdown primitives; only the right-edge anchor, the fixed width, and the
+   two-line item stack are specific to the Genie panel header.
+   NOTE the `.genie-history` parent on the overrides: `.filter-menu` is
+   declared LATER in this file, so a bare `.genie-history__menu` rule would
+   lose the cascade on `left` / `align-items` and the menu would anchor to
+   the wrong edge with its rows on one line. */
+.genie-history { position: relative; flex-shrink: 0; }
+.genie-history .genie-history__menu {
+  left: auto; inset-inline-end: 0; inline-size: 240px; cursor: default;
+}
+.genie-history .genie-history__item {
+  flex-direction: column; align-items: flex-start; gap: 2px;
+}
+.genie-history .genie-history__item:disabled { opacity: 0.55; cursor: default; }
+.genie-history__state { padding: var(--sp-2); color: var(--text-3); font-size: var(--fs-12); }
+.genie-history__state--error { color: var(--signal-warning); }
+.genie-history__title {
+  max-inline-size: 100%;
+  overflow: hidden; text-overflow: ellipsis;
+  color: var(--text-1); font-weight: 600;
+}
+.genie-history__meta { color: var(--text-3); font-family: var(--font-mono); font-size: var(--fs-11); }
 .genie__body { flex: 1; overflow-y: auto; padding: var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-3); }
 .genie__msg { max-width: 92%; }
 .genie__msg--user {
@@ -3394,7 +3447,17 @@ a.lineage-node__chip:focus-visible {
 }
 .filter:hover { border-color: var(--line-2); color: var(--text-1); }
 .filter.is-active { border-color: var(--accent); color: var(--accent-ink); background: var(--accent-soft); }
-.filter__label { color: var(--text-3); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; margin-right: 2px; }
+/* `white-space: nowrap` + `flex-shrink: 0`: the "ASK" prefix on a Genie
+   follow-up chip (`.filter--question`) is a flex item inside a
+   width-constrained chip, so the flex algorithm was shrinking it below its
+   min-content width and wrapping it to "AS / K". The label is a fixed
+   2-4 character eyebrow — it must never wrap or shrink; the long value
+   next to it is what absorbs the remaining width. */
+.filter__label {
+  color: var(--text-3); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; margin-right: 2px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
 .filter__value { font-weight: 500; color: var(--text-1); font-family: var(--font-mono); font-size: var(--fs-12); }
 .filter.is-active .filter__value { color: var(--accent-ink); }
 .filter--question {
@@ -4454,6 +4517,64 @@ a.lineage-node__chip:focus-visible {
 .analytics-chart__grid {
   stroke: var(--line-1);
 }
+/* Pointer hover readout for the distribution line charts (Rate Spread,
+   Opportunity Score). The layer itself is transparent and aria-hidden; the
+   crosshair, dot, and tip are positioned in the same 0-100 percent space the
+   `preserveAspectRatio="none"` SVG uses, so they track the line at any
+   container width. */
+.analytics-chart__hover {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline: 0;
+  block-size: var(--analytics-chart-h);
+}
+.analytics-chart__crosshair,
+.analytics-chart__hover-dot,
+.analytics-chart__tip {
+  position: absolute;
+  inset-inline-start: var(--hover-x);
+  pointer-events: none;
+}
+.analytics-chart__crosshair {
+  inset-block: 0;
+  inline-size: 1px;
+  background: var(--line-2);
+}
+.analytics-chart__hover-dot,
+.analytics-chart__tip { inset-block-start: var(--hover-y); }
+.analytics-chart__hover-dot {
+  inline-size: var(--sp-2);
+  block-size: var(--sp-2);
+  border-radius: var(--r-pill);
+  background: var(--accent);
+  border: 1px solid var(--bg-1);
+  transform: translate(-50%, -50%);
+}
+.analytics-chart__tip {
+  transform: translate(var(--sp-3), calc(-100% - var(--sp-2)));
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-2);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  background: var(--bg-1);
+  box-shadow: var(--shadow-md);
+  white-space: nowrap;
+  z-index: 1;
+}
+/* Past ~60% of the plot width the tip would overflow the surface; flip it to
+   the left of the crosshair instead. */
+.analytics-chart__tip--flip {
+  transform: translate(calc(-100% - var(--sp-3)), calc(-100% - var(--sp-2)));
+}
+.analytics-chart__tip-x {
+  color: var(--text-1);
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  font-weight: 600;
+}
+.analytics-chart__tip-y { color: var(--text-2); font-size: var(--fs-11); }
 .analytics-line-chart polyline {
   fill: none;
   stroke: var(--accent);
@@ -5104,9 +5225,11 @@ a.lineage-node__chip:focus-visible {
     width: 100%;
   }
   .rail {
-    padding: var(--sp-2) var(--sp-1);
+    padding: 0 var(--sp-1) var(--sp-2);
   }
-  .rail__brand,
+  /* .rail__brand keeps width:100% + height:var(--shell-topbar-h) at every
+     breakpoint so the mark stays on the topbar center line; only the module
+     boxes need an explicit size here. */
   .rail__item {
     width: 48px;
     height: 48px;
@@ -5139,7 +5262,6 @@ a.lineage-node__chip:focus-visible {
   .app-shell {
     grid-template-columns: 80px 1fr;
   }
-  .rail__brand,
   .rail__item {
     width: 60px;
     height: 60px;
@@ -5152,9 +5274,10 @@ a.lineage-node__chip:focus-visible {
 @media (min-width: 2560px) {
   .app-shell {
     grid-template-columns: 96px 1fr;
-    grid-template-rows: 64px 1fr;
+    /* Row height flows from the variable so .rail__brand tracks it and the
+       mark stays centered on the topbar line at this breakpoint too. */
+    --shell-topbar-h: 64px;
   }
-  .rail__brand,
   .rail__item {
     width: 72px;
     height: 72px;
@@ -6289,6 +6412,26 @@ a.lineage-node__chip:focus-visible {
   color: var(--signal-warning);
   font-size: var(--fs-12);
   margin-top: var(--sp-1);
+}
+/* UC asset → Catalog Explorer deep link. Two callers: the inline
+   "Source: mip.gold.borrower_360" disclosure inside a Genie answer
+   paragraph, and the proof drawer's source-asset chip row (where it also
+   carries `.chip .chip--neutral`, so only the link affordance is added
+   here). Mirrors `.lineage-node__chip`'s external-link treatment. */
+.uc-asset-link {
+  color: var(--accent-ink);
+  font-family: var(--font-mono);
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+}
+.uc-asset-link:hover { text-decoration-style: solid; }
+.chip.uc-asset-link { text-decoration: none; }
+.genie-proof__asset {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
 }
 .genie-proof__trace {
   display: flex;

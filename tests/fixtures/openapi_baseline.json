@@ -6218,6 +6218,92 @@
         "title": "GenieReasoningStep",
         "type": "object"
       },
+      "GenieSessionDetailResponse": {
+        "properties": {
+          "conversation_id": {
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "turns": {
+            "items": {
+              "$ref": "#/components/schemas/GenieSessionTurn"
+            },
+            "title": "Turns",
+            "type": "array"
+          }
+        },
+        "required": [
+          "conversation_id"
+        ],
+        "title": "GenieSessionDetailResponse",
+        "type": "object"
+      },
+      "GenieSessionListResponse": {
+        "properties": {
+          "sessions": {
+            "items": {
+              "$ref": "#/components/schemas/GenieSessionSummary"
+            },
+            "title": "Sessions",
+            "type": "array"
+          }
+        },
+        "title": "GenieSessionListResponse",
+        "type": "object"
+      },
+      "GenieSessionSummary": {
+        "description": "One row of the actor's Ask Genie history list.",
+        "properties": {
+          "conversation_id": {
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "last_activity_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Activity At"
+          },
+          "title": {
+            "default": "",
+            "title": "Title",
+            "type": "string"
+          },
+          "turn_count": {
+            "default": 0,
+            "title": "Turn Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "conversation_id"
+        ],
+        "title": "GenieSessionSummary",
+        "type": "object"
+      },
+      "GenieSessionTurn": {
+        "description": "One replayable question/answer pair from a stored conversation.\n\n``response`` is the exact governed ``GenieMessageResponse`` the chat\nalready renders. It was scanned by the output policy and PII-redacted\nbefore it was ever persisted.",
+        "properties": {
+          "question": {
+            "title": "Question",
+            "type": "string"
+          },
+          "response": {
+            "$ref": "#/components/schemas/GenieMessageResponse"
+          }
+        },
+        "required": [
+          "question",
+          "response"
+        ],
+        "title": "GenieSessionTurn",
+        "type": "object"
+      },
       "GenieStartResponse": {
         "properties": {
           "conversation_id": {
@@ -16661,6 +16747,73 @@
         ]
       }
     },
+    "/api/genie/sessions": {
+      "get": {
+        "deprecated": true,
+        "description": "The requesting actor's recent Ask Genie conversations, newest first.\n\nAUDIT EXEMPT: read-only listing of the caller's own conversation\nmetadata. It mutates nothing, and the underlying turns each carry their\nown ``genie.run_query`` audit row from when they were answered.",
+        "operationId": "get_api_genie_sessions_genie_sessions",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenieSessionListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Genie Sessions",
+        "tags": [
+          "genie"
+        ]
+      }
+    },
+    "/api/genie/sessions/{conversation_id}": {
+      "get": {
+        "deprecated": true,
+        "description": "Replay one owned conversation as governed question/answer turns.\n\nStrictly actor-scoped: a conversation owned by anyone else is a 404, so\nhistory cannot be probed for other actors' activity. Answers are re-served\nexactly as they were governed at answer time (output policy + PII\nredaction already applied before persistence), minus the signed action\ntokens, which are never replayed.\n\nAUDIT EXEMPT: read-only replay of the caller's own recorded turns.",
+        "operationId": "get_api_genie_sessions_conversation_id_genie_session_detail",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenieSessionDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Genie Session Detail",
+        "tags": [
+          "genie"
+        ]
+      }
+    },
     "/api/genie/start": {
       "post": {
         "deprecated": true,
@@ -23999,6 +24152,71 @@
           }
         },
         "summary": "Genie Message Submit",
+        "tags": [
+          "genie"
+        ]
+      }
+    },
+    "/api/v1/genie/sessions": {
+      "get": {
+        "description": "The requesting actor's recent Ask Genie conversations, newest first.\n\nAUDIT EXEMPT: read-only listing of the caller's own conversation\nmetadata. It mutates nothing, and the underlying turns each carry their\nown ``genie.run_query`` audit row from when they were answered.",
+        "operationId": "get_api_v1_genie_sessions_genie_sessions",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenieSessionListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Genie Sessions",
+        "tags": [
+          "genie"
+        ]
+      }
+    },
+    "/api/v1/genie/sessions/{conversation_id}": {
+      "get": {
+        "description": "Replay one owned conversation as governed question/answer turns.\n\nStrictly actor-scoped: a conversation owned by anyone else is a 404, so\nhistory cannot be probed for other actors' activity. Answers are re-served\nexactly as they were governed at answer time (output policy + PII\nredaction already applied before persistence), minus the signed action\ntokens, which are never replayed.\n\nAUDIT EXEMPT: read-only replay of the caller's own recorded turns.",
+        "operationId": "get_api_v1_genie_sessions_conversation_id_genie_session_detail",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenieSessionDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Genie Session Detail",
         "tags": [
           "genie"
         ]

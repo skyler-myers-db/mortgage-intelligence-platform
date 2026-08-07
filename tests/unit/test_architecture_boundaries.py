@@ -62,6 +62,11 @@ ROUTE_TEST_MANIFEST: dict[tuple[str, str], str] = {
     ("POST", "/api/genie/message/progress"): "tests/unit/test_genie_async_flow.py",
     ("POST", "/api/genie/message/complete"): "tests/unit/test_genie_async_flow.py",
     ("POST", "/api/genie/start"): "tests/unit/test_api_routes.py",
+    ("GET", "/api/genie/sessions"): "tests/unit/test_genie_history_api.py",
+    (
+        "GET",
+        "/api/genie/sessions/{conversation_id}",
+    ): "tests/unit/test_genie_history_api.py",
     ("GET", "/api/geo/assignment-overlay"): "tests/unit/test_geo_assignment_overlay.py",
     ("GET", "/api/geo/county-rollups"): "tests/unit/test_geo_state_rollups.py",
     ("GET", "/api/geo/state-rollups"): "tests/unit/test_geo_state_rollups.py",
