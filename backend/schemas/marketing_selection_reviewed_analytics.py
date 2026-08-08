@@ -136,4 +136,91 @@ _REVIEWED_READ_ONLY_ANALYTIC_PATTERNS: tuple[re.Pattern[str], ...] = (
         r"(?:moved|changed|shifted|trended)(?:\s+(?:recently|over\s+time|this\s+week))?$",
         re.IGNORECASE,
     ),
+    re.compile(
+        # Superlative ranked-shortlist directive ("rank the strongest
+        # candidates for outreach", "pick the very best refinance
+        # candidates", "give me a curated list of the highest-potential
+        # borrowers"). Every slot is a closed alternation — superlatives,
+        # product intents, population nouns, and purposes — so an unknown
+        # criterion cannot ride the shape. Live capture 2026-08-08: the
+        # audience-formation grammar failed this closed as an unreviewed
+        # audience decision, refusing a fundamental deep-analysis ask.
+        r"^(?:and\s+)?(?:rank|pick|surface|identify|find|curate|list|show|give\s+me|"
+        r"determine)\s+(?:me\s+)?"
+        r"(?:a\s+(?:curated\s+)?list\s+of\s+)?(?:the\s+)?"
+        r"(?:very\s+|absolute\s+|single\s+)?"
+        r"(?:top|best|strongest|highest[- ]potential|most\s+promising)\s+"
+        r"(?:[0-9]{1,3}\s+)?(?:potential\s+)?"
+        rf"(?:{_REVIEWED_PRODUCT_INTENT}\s+)?"
+        r"(?:candidates?|borrowers?|leads?|opportunities|prospects?)"
+        r"(?:\s+(?:for\s+(?:outreach|contact|review|follow[- ]up)|to\s+contact))?$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        # Best-offer-per-borrower directive ("recommend the best offer for
+        # each with reasoning", "what the absolute best curated offer for
+        # each would be and why"). The population tokens and the
+        # answer-format tail are closed; free-text criteria fall through to
+        # the strict criterion machine. Same 2026-08-08 live capture.
+        r"^(?:and\s+)?(?:recommend|determine|identify|pick|choose|select|suggest|"
+        r"tell\s+me|what)\s+"
+        r"(?:what\s+)?(?:the\s+)?(?:absolute\s+)?(?:best|ideal|right|optimal)\s+"
+        r"(?:curated\s+|fit\s+)?offers?\s+(?:for|to)\s+(?:each|every)"
+        r"(?:\s+(?:one|borrower|candidate|lead|prospect|customer))?"
+        r"(?:\s+would\s+be)?"
+        r"(?:\s+with\s+(?:full\s+|clear\s+|detailed\s+)?"
+        r"(?:reasoning|rationale|justification|explanations?))?"
+        r"(?:\s*,?\s*and\s+why)?$",
+        re.IGNORECASE,
+    ),
+)
+
+
+_REVIEWED_ANALYSIS_PREAMBLE_RE = re.compile(
+    # Closed analysis preamble ("Analyze the full dataset of eligible
+    # borrowers and <directive>"). Compound clauses defeated the
+    # ``^…$``-anchored reviewed shapes below, so a reviewed directive
+    # prefixed by an analysis framing failed closed (live capture,
+    # 2026-08-08). Every slot is a closed alternation — an unknown
+    # population or criterion does not match, is not stripped, and the
+    # clause still fails closed.
+    r"^(?:"
+    # Scope framing with no verb ("Across the entire portfolio, …").
+    r"across\s+(?:the\s+)?(?:entire|whole|full|current)?\s*"
+    r"(?:portfolio|book|footprint|coverage|datasets?|pipelines?)\s*,\s*"
+    r"|"
+    r"(?:(?:comprehensively|deeply|thoroughly|fully)\s+)?"
+    # Direct verb ("Comprehensively analyze …") or light-verb form
+    # ("Do a deep analysis of …").
+    r"(?:analyze|analyse|review|examine|study|assess|explore|deep[- ]dive(?:\s+into)?|"
+    r"(?:do|run|perform|conduct|complete)\s+(?:a|an)\s+"
+    r"(?:(?:deep|full|comprehensive|complete|thorough)\s+)?"
+    r"(?:analysis|review|assessment|study|deep[- ]dive)\s+of)\s+"
+    r"(?:(?:the|our|this|every|all)\s+)?(?:(?:full|entire|complete|whole)\s+)?"
+    r"(?:(?:eligible|marketing[- ]eligible|reviewed|contact[- ]eligible)\s+)?"
+    r"(?:datasets?|data\s*sets?|data|portfolios?|books?|pipelines?|populations?|"
+    r"borrowers?|leads?|customers?|prospects?|homeowners?)?"
+    r"(?:\s+of\s+(?:(?:all|our|the)\s+)?(?:(?:eligible|marketing[- ]eligible|reviewed|"
+    r"contact[- ]eligible)\s+)?(?:borrowers?|leads?|customers?|prospects?|homeowners?))?"
+    r"\s*,?\s*and\s+"
+    r")",
+    re.IGNORECASE,
+)
+_REVIEWED_WHY_ASSESSMENT_PREAMBLE_RE = re.compile(
+    # Closed why-assessment preamble ("Evaluate why each borrower is an
+    # especially good candidate, and <directive>"). Same compound-clause
+    # problem and the same posture as the analysis preamble above: the
+    # assessment vocabulary is closed, so an unknown criterion inside the
+    # segment does not match, is not stripped, and the clause fails closed.
+    r"^(?:evaluate|explain|justify|assess|describe|tell\s+me|"
+    r"walk\s+(?:me\s+)?through)\s+(?:me\s+)?"
+    r"(?:why\s+(?:each|every)(?:\s+(?:one|borrower|candidate|lead|prospect|customer))?\s+"
+    r"(?:is|would\s+be|makes)\s+(?:an?\s+)?"
+    r"(?:especially\s+|particularly\s+|very\s+)?"
+    r"(?:strong|good|great|excellent|prime|ideal|top|promising)\s+"
+    r"(?:candidate|prospect|fit|match|choice|opportunity)|"
+    r"each\s+selection|"
+    r"the\s+rationale\s+for\s+each(?:\s+(?:one|borrower|candidate|selection))?)"
+    r"\s*,?\s*and\s+",
+    re.IGNORECASE,
 )

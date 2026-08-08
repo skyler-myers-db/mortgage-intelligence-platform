@@ -13,6 +13,7 @@ from backend.services.genie_answers import GenieMessageResponse, GenieProof
 from backend.services.repositories.databricks_genie_sweep import (
     _parse_planned_questions,
     _planned_question_guard_hit,
+    is_deep_analysis_request,
     run_planned_sweep,
 )
 
@@ -157,3 +158,53 @@ def test_sweep_returns_none_when_plan_unusable() -> None:
 def test_sweep_returns_none_when_too_few_sections_survive() -> None:
     repo = _StubRepo(failures=frozenset({"in-the-money", "states", "lead population"}))
     assert run_planned_sweep(repo, _USER_QUESTION) is None  # type: ignore[arg-type]
+
+
+_DEEP_QUESTION = (
+    "Analyze the full dataset of eligible borrowers and find determine a list of "
+    "absolute top potential borrowers. Evaluate why each borrower is an especially "
+    "good candidate, and what the absolute best curated offer for each would be and why."
+)
+
+_DEEP_PLAN_TEXT = """1. Which borrowers have the highest opportunity scores and what are their rate spreads and equity percentages?
+2. How do the top borrowers compare with the whole eligible population on rate spread and equity?
+3. What is the recommended-offer mix for the top borrowers?
+4. Which states and segments concentrate the top borrowers?
+5. How many top borrowers carry competitor liens or active listings?"""
+
+
+def test_is_deep_analysis_request_classifies_the_family() -> None:
+    assert is_deep_analysis_request(_DEEP_QUESTION)
+    assert is_deep_analysis_request(
+        "Do a deep analysis of our eligible borrowers and rank the top candidates."
+    )
+    # Two analytic parts without explicit depth wording.
+    assert is_deep_analysis_request(
+        "Rank the top borrowers and recommend the best offer for each."
+    )
+    # Single-part asks stay on the single-turn path.
+    assert not is_deep_analysis_request("How many in-the-money borrowers are in TX?")
+    assert not is_deep_analysis_request("Show borrowers by state.")
+    assert not is_deep_analysis_request("What is the average equity percentage?")
+
+
+def test_deep_sweep_uses_deep_plan_floor_and_synthesis() -> None:
+    repo = _StubRepo(plan_text=_DEEP_PLAN_TEXT)
+    result = run_planned_sweep(repo, _DEEP_QUESTION, deep=True)  # type: ignore[arg-type]
+
+    assert result is not None
+    assert result.source == "genie"
+    # The deep planning prompt demands the comparison/offer/concentration
+    # coverage and the wider plan floor.
+    assert "deep-analysis request" in repo.raw_prompts[0]
+    assert "between 5 and 7" in repo.raw_prompts[0]
+    # The deep synthesis contract replaces the generic one.
+    assert "deep executive synthesis" in repo.raw_prompts[1]
+    assert len(repo.calls) == 5
+    assert all(allow_sweep is False for _, allow_sweep in repo.calls)
+
+
+def test_deep_sweep_requires_the_deeper_plan() -> None:
+    # A three-line plan is enough for a rescue sweep but not for a deep ask.
+    repo = _StubRepo()
+    assert run_planned_sweep(repo, _DEEP_QUESTION, deep=True) is None  # type: ignore[arg-type]

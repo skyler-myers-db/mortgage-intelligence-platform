@@ -102,6 +102,7 @@ from backend.services.repositories.databricks_genie_strategy import (
     _canonical_strategy_board_answer,
 )
 from backend.services.repositories.databricks_genie_sweep import (
+    is_deep_analysis_request,
     run_planned_sweep,
 )
 from backend.services.repositories.databricks_genie_trace import (
@@ -259,6 +260,15 @@ class DatabricksGenieRepository:
                 question,
                 kind=DependencyDownError.KIND_BREAKER_OPEN,
             )
+        if allow_sweep and is_deep_analysis_request(question):
+            # A shortlist + per-item why + offer call is inherently
+            # multi-part; a single governed SQL turn answers it at the depth
+            # of one app screen (live capture, 2026-08-08). Deep asks go to
+            # the live space's own planned decomposition first; an unusable
+            # plan falls through to the normal single-turn path.
+            sweep = run_planned_sweep(self, question, deep=True)
+            if sweep is not None:
+                return sweep
         repaired = False
         try:
             result = self._genie.ask(question, conversation_id=conversation_id)
@@ -318,6 +328,14 @@ class DatabricksGenieRepository:
         breaker_state = self._genie.resilient.breaker.state
         if breaker_state == "open":
             return self._degraded(question, kind=DependencyDownError.KIND_BREAKER_OPEN)
+        if is_deep_analysis_request(question):
+            # Same deep-first routing as :meth:`respond`. The submitted live
+            # message's cost is sunk either way; a usable planned
+            # decomposition is the materially deeper answer, and an unusable
+            # plan falls through to completing the submitted turn.
+            sweep = run_planned_sweep(self, question, deep=True)
+            if sweep is not None:
+                return sweep
         repaired = False
         try:
             result = self._genie.resume_message(conversation_id, message_id)

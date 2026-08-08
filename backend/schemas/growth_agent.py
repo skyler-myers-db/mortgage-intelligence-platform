@@ -111,7 +111,14 @@ _PROMPT_COMMON_NAME_RE = re.compile(
     re.IGNORECASE,
 )
 _PROMPT_LOWERCASE_NAME_AFTER_GROUP_RE = re.compile(
+    # A coordinating conjunction after the group noun is transparent: the
+    # pair is extracted from the words that follow it. Without this,
+    # "eligible borrowers and find determine a list" extracted ("and",
+    # "find") as a borrower name and refused the co-pilot's flagship
+    # deep-analysis objective (live capture, 2026-08-08) — while
+    # "borrowers and quorla zembrix" still extracts the real name pair.
     r"\b(?:borrowers?|customers?|prospects?|contacts?|people|person)\s+"
+    r"(?:(?:and|or|plus|then)\s+)?"
     r"([a-z]{2,30})\s+(?:[a-z]\s+)?([a-z]{2,30})\b"
 )
 _PROMPT_LOWERCASE_NAME_AFTER_ACTION_RE = re.compile(
@@ -126,8 +133,13 @@ _PROMPT_LOWERCASE_NAME_AFTER_ACTION_RE = re.compile(
     r"([a-z]{2,30})\s+(?:[a-z]\s+)?([a-z]{2,30})\b"
 )
 _PROMPT_LOWERCASE_NAME_IN_ACTION_CONTEXT_RE = re.compile(
+    # The verb alternation mirrors _PROMPT_LOWERCASE_NAME_SKIP_FIRST's
+    # analytics verbs: a verb that can precede a name pair here must also be
+    # skip-listed as a pair head, or verb chains ("find determine a list")
+    # read the second verb as a first name (live capture, 2026-08-08).
     r"(?=(?i:\b(?:for|named|find|show|locate|search(?:\s+for)?|look\s+up|pull\s+up|"
     r"review|open|prepare|prioritize|identify|select|pick|target|rank|call|contact|"
+    r"determine|evaluate|analyze|analyse|curate|surface|recommend|justify|"
     r"include|add|exclude|focus\s+on|create\s+(?:a|the)\s+cohort\s+around))\s+"
     r"(?:(?i:a|an|the)\s+)?([a-z]{2,30})\s+(?:[a-z]\s+)?([a-z]{2,30})\b"
     r"(?=\s+(?i:for|from|in|into|at|near|with|about|to)\b|[.,;!?]|$))"
@@ -258,6 +270,44 @@ _PROMPT_LOWERCASE_NAME_SKIP_FIRST: frozenset[str] = frozenset(
         "strongest",
         "recent",
         "active",
+        # Coordinating conjunctions and closed analytics verbs can never
+        # begin a personal name. "borrowers and find determine a list"
+        # extracted ("and","find") then ("determine","list") as names and
+        # refused the deep-analysis objective family (live capture,
+        # 2026-08-08). Verbs added here are also in the
+        # _PROMPT_LOWERCASE_NAME_IN_ACTION_CONTEXT_RE alternation so
+        # "determine zembrix quorla" still reads as verb + name pair.
+        "and",
+        "or",
+        "plus",
+        "then",
+        "find",
+        "show",
+        "list",
+        "determine",
+        "identify",
+        "evaluate",
+        "analyze",
+        "analyse",
+        "rank",
+        "surface",
+        "curate",
+        "curated",
+        "recommend",
+        "review",
+        "select",
+        "prioritize",
+        "pick",
+        "give",
+        "tell",
+        "walk",
+        "explain",
+        "justify",
+        "absolute",
+        "potential",
+        "promising",
+        "ideal",
+        "best",
     }
 )
 _PROMPT_REVIEWED_LOWERCASE_PAIRS: frozenset[tuple[str, str]] = frozenset(

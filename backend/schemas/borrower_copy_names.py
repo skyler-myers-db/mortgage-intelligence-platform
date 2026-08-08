@@ -592,6 +592,11 @@ _SAFE_CONTEXT_FIRST_TOKENS: frozenset[str] = frozenset(
         "customers",
         "daily",
         "data",
+        # Distributive determiners can never begin a personal name. "the best
+        # offer for each with reasoning" read ("each","with") as a name and
+        # refused a core deep-analysis ask (live capture, 2026-08-08).
+        "each",
+        "every",
         "eligible",
         "everyone",
         "final",
