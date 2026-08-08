@@ -73,7 +73,7 @@ def test_databricks_yml_contains_required_resource_names():
 def test_bundle_resource_names_are_parameterized_for_isolated_staging():
     content = (REPO / "databricks.yml").read_text(encoding="utf-8")
 
-    assert "host: &default_host https://dbc-149e560d-e056.cloud.databricks.com" in content
+    assert "host: &default_host https://dbc-3aa503a9-4fa8.cloud.databricks.com" in content
     assert "name: ${var.app_name}" in content
     assert "name: ${var.lakebase_instance_name}" in content
     assert "name: ${var.lakebase_catalog_name}" in content
