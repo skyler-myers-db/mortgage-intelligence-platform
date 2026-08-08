@@ -293,3 +293,28 @@ def test_withheld_prose_renders_verified_rows_not_pipeline_chatter() -> None:
         [], ["mip.gold.borrower_360"], withheld_reason="test reason."
     )
     assert "no rows" in empty
+
+
+def test_identifier_columns_render_verbatim_in_the_fallback() -> None:
+    """A ZIP thousands-separated as '75,040' reads as a measure and is wrong
+    on screen (caught in the round-5 live battery)."""
+
+    from backend.services.repositories.databricks_genie import _factual_row_summary
+
+    summary = _factual_row_summary(
+        [
+            {
+                "borrower_id": "B-1U80N33DOEZ9D",
+                "city": "GARLAND",
+                "zip": "75040",
+                "opportunity_score": 70,
+                "equity_estimate": 1250000,
+            }
+        ],
+        ["mip.gold.borrower_360"],
+        withheld_reason="test.",
+    )
+    assert "zip: 75040" in summary
+    assert "75,040" not in summary
+    # Real measures keep their separators.
+    assert "1,250,000" in summary
