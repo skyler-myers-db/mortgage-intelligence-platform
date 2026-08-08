@@ -46,33 +46,34 @@ TBLPROPERTIES (
 )
 AS
 WITH base AS (
+  -- 2026-08-08: state-grain by construction. borrower_360.county_fips_5 is
+  -- NULL now (audit C2 — the share has no honest county key), so grouping by
+  -- it emptied this table and tripped the footprint resolver's fail-closed
+  -- path. The data was always one row per state; group by the real grain.
   SELECT
-    b.county_fips_5                                AS fips_5,
     b.state,
     b.borrower_id,
     b.opportunity_score,
     b.in_the_money,
     b.segment_codes
   FROM mip.gold.borrower_360 AS b
-  WHERE b.county_fips_5 IS NOT NULL
-    AND LENGTH(b.county_fips_5) = 5
+  WHERE b.state IS NOT NULL
 ),
 aggregates AS (
   SELECT
-    fips_5,
-    ANY_VALUE(state)                                                          AS state,
+    state,
     CAST(COUNT(*) AS INT)                                                     AS addressable_borrowers,
     CAST(SUM(CASE WHEN in_the_money THEN 1 ELSE 0 END) AS INT)                AS in_the_money_borrowers,
     CAST(SUM(CASE WHEN mip.gold.fn_high_opportunity(opportunity_score) THEN 1 ELSE 0 END) AS INT) AS high_opportunity_borrowers,
     CAST(ROUND(AVG(opportunity_score)) AS INT)                                AS avg_opportunity_score
   FROM base
-  GROUP BY fips_5
+  GROUP BY state
 ),
 -- Explode segment_codes per CLIP and count per (fips_5, segment_code). Rank
 -- by count DESC (segment_code ASC tiebreak) and pick rank 1 per county.
 exploded_segments AS (
   SELECT
-    b.fips_5,
+    b.state,
     sc AS segment_code
   FROM base AS b
   LATERAL VIEW EXPLODE(b.segment_codes) s AS sc
@@ -80,18 +81,18 @@ exploded_segments AS (
 ),
 segment_counts AS (
   SELECT
-    fips_5,
+    state,
     segment_code,
     COUNT(*) AS cnt,
     ROW_NUMBER() OVER (
-      PARTITION BY fips_5
+      PARTITION BY state
       ORDER BY COUNT(*) DESC, segment_code ASC
     ) AS rn
   FROM exploded_segments
-  GROUP BY fips_5, segment_code
+  GROUP BY state, segment_code
 ),
 top_segment_per_county AS (
-  SELECT fips_5, segment_code AS top_segment_code
+  SELECT state, segment_code AS top_segment_code
   FROM segment_counts
   WHERE rn = 1
 )
@@ -119,7 +120,7 @@ SELECT
   (SELECT refresh_at FROM mip.ref.refresh_run_state ORDER BY captured_at DESC LIMIT 1)              AS snapshot_at
 FROM aggregates AS a
 LEFT JOIN top_segment_per_county AS ts
-  ON ts.fips_5 = a.fips_5;
+  ON ts.state = a.state;
 
 -- Column comments re-applied post-CTAS (2026-06-11 audit P2-8 follow-up):
 -- CREATE OR REPLACE drops DDL column comments on every refresh, and the
