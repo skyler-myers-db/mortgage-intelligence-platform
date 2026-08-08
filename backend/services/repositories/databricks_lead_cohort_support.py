@@ -180,10 +180,21 @@ class LeadCohortQuerySupport:
             marker = int(self._clock.time() // self._cache_ttl_s)
         return f"AND {marker} = {marker}"
 
+    # The ranked-queue quality floor, pinned to the lead_population CTAS
+    # (sql/transformations/gold_lead_population.sql: opportunity_score >= 50).
+    # Geo-filtered reads go to borrower_360 (2026-05-04 FIX beta, map-tile
+    # promise), so the identity row carries BOTH populations: the geography
+    # total and the ranked subset. 2026-08-07 audit C4: a state filter made
+    # the single reported count 4.8x LARGER than the unfiltered queue.
+    RANKED_SCORE_FLOOR = 50
+
     @staticmethod
     def _identity_aggregate_select(alias: str) -> str:
         return (
             f"COUNT(DISTINCT {alias}.borrower_id) AS n, "
+            f"COUNT(DISTINCT CASE WHEN {alias}.opportunity_score >= "
+            f"{LeadCohortQuerySupport.RANKED_SCORE_FLOOR} "
+            f"THEN {alias}.borrower_id END) AS ranked_n, "
             "sha2(concat_ws('|', sort_array(collect_set(CAST("
             f"{alias}.borrower_id AS STRING)))), 256) AS cohort_digest, "
             f"{LeadCohortQuerySupport._legacy_snapshot_select()}"
@@ -301,8 +312,13 @@ snapshot_validation AS (
         snapshot_id = str(row.get(snapshot_key) or "").strip()
         if len(digest) != 64 or not snapshot_id:
             raise ValueError("Lead Queue cohort identity proof is incomplete")
+        total = int(row.get(total_key) or 0)
         return {
-            "total": int(row.get(total_key) or 0),
+            "total": total,
+            # Ranked subset (score >= RANKED_SCORE_FLOOR). Rows read from
+            # lead_population are all ranked by construction, so a missing
+            # key falls back to the total rather than a misleading zero.
+            "ranked_total": int(row.get("ranked_n", total) or 0),
             "cohort_digest": digest,
             "snapshot_id": snapshot_id,
         }

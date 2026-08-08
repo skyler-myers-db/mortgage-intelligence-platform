@@ -56,6 +56,7 @@ def test_cohort_identity_keeps_filters_and_snapshot_sources_in_one_statement() -
     statement = str(captured["statement"])
     assert identity == {
         "total": 3,
+        "ranked_total": 3,
         "cohort_digest": "a" * 64,
         "snapshot_id": "snapshot-1",
     }
@@ -389,6 +390,7 @@ def test_identity_page_is_atomic_and_intentionally_uncached() -> None:
             [],
             {
                 "total": 0,
+                "ranked_total": 0,
                 "cohort_digest": "b" * 64,
                 "snapshot_id": "snapshot-2",
             },

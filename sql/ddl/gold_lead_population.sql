@@ -58,7 +58,7 @@ CREATE TABLE IF NOT EXISTS mip.gold.lead_population (
   recommended_offer         STRING    NOT NULL COMMENT 'Human label (resolved in gold via product_labels map).',
   why_now                   STRING    NOT NULL COMMENT 'Deterministic template per offer code.',
   evidence_ids              ARRAY<STRING> NOT NULL COMMENT 'Ordered evidence_ids (mirrors gold.borrower_360 for this CLIP).',
-  approval_status           STRING    NOT NULL COMMENT '"pending" by default; Lakebase is authoritative for actual state.',
+  approval_status           STRING    NOT NULL COMMENT 'Approval state mirrored from Lakebase at refresh time (inherited from borrower_360); Lakebase remains authoritative between refreshes.',
   current_lender_ref        STRING             COMMENT 'Public-demo-safe current-servicer reference from borrower_360. Never the raw Cotality lender string.',
   -- Secondary-filter fields (2026-04-23). Carried through from
   -- gold.borrower_360 so /segment-intelligence can run real client-side

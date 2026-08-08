@@ -272,8 +272,15 @@ def test_borrower_360_transformation_keeps_permits_fail_closed_but_wires_listing
         r"mip\.silver\.listing_activity", text, re.IGNORECASE
     ), "gold.borrower_360 CTAS must source listed_for_sale from silver.listing_activity."
     assert re.search(
-        r"COALESCE\(cl\.is_active_listing,\s*FALSE\)\s+AS\s+listed_for_sale", text, re.IGNORECASE
+        r"COALESCE\(cl\.is_active_listing,\s*FALSE\)", text, re.IGNORECASE
     ), "gold.borrower_360 CTAS must derive listed_for_sale from current active MLS rows."
+    # 2026-08-07 audit M3: an active flag alone is not a why-now signal — the
+    # listing must also be recent, not future-dated, with sane days-on-market.
+    assert re.search(
+        r"AND\s+cl\.listing_date\s+IS\s+NOT\s+NULL[\s\S]{0,400}AS\s+listed_for_sale",
+        text,
+        re.IGNORECASE,
+    ), "gold.borrower_360 CTAS must gate listed_for_sale on listing recency."
     assert re.search(
         r"mip\.silver\.heloc_propensity", text, re.IGNORECASE
     ), "gold.borrower_360 CTAS must source HELOC intent from silver.heloc_propensity."

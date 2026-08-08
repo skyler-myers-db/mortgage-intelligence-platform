@@ -3896,6 +3896,14 @@ fi
 # -----------------------------------------------------------------------------
 refresh_gold_and_reconcile_function_grants
 
+# Stale-rate guard (audit C1): gold must have scored against the rate silver
+# currently publishes. A standalone FRED run after gold silently skews every
+# spread 20 bps; this makes the skew a loud deploy failure instead.
+step "smoke — gold market rate matches silver is_latest (stale-rate guard)"
+run "$PYTHON" -m tools.databricks.verify_market_rate_alignment \
+  --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
+  --catalog "${MIP_DEFAULT_CATALOG:-mip}"
+
 # -----------------------------------------------------------------------------
 # Step 9: lifecycle sync + funnel snapshot (approval / outreach rates)
 # -----------------------------------------------------------------------------

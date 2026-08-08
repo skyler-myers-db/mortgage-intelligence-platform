@@ -258,6 +258,7 @@ def test_lead_repository_cohort_identity_hashes_complete_distinct_set() -> None:
     sql = str(captured["sql"])
     assert identity == {
         "total": 3,
+        "ranked_total": 3,
         "cohort_digest": "a" * 64,
         "snapshot_id": "2026-07-14 12:00:00",
     }
@@ -308,6 +309,7 @@ def test_lead_repository_atomic_identity_binds_rows_total_digest_and_snapshot() 
     assert [row.borrower_id for row in rows] == ["B-ATOMIC000001"]
     assert identity == {
         "total": 1,
+        "ranked_total": 1,
         "cohort_digest": "d" * 64,
         "snapshot_id": "e" * 64,
     }

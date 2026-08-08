@@ -666,12 +666,12 @@ LEFT JOIN ranked ON TRUE
         geo_projection = (
             f"{_LEAD_POPULATION_SELECT_FROM_B360}, b.opportunity_score AS __rank_order"
             if include_lead_columns
-            else "b.borrower_id"
+            else "b.borrower_id, b.opportunity_score"
         )
         lead_projection = (
             f"{_LEAD_POPULATION_SELECT_FROM_LP}, -lp.rank_overall AS __rank_order"
             if include_lead_columns
-            else "lp.borrower_id"
+            else "lp.borrower_id, lp.opportunity_score"
         )
         if (
             normalised_states
