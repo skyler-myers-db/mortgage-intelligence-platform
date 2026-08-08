@@ -147,6 +147,37 @@ describe('Analytics Sales ops tab', () => {
     expect(document.querySelector('[aria-label="Analytics filters"]')).toBeNull();
   });
 
+  it('headlines the outcome window total so the card cannot contradict its subline', async () => {
+    // Live shape observed 2026-08-08: 8 submitted, nothing funded yet. The
+    // card used to headline `closed_funded` — a bold 0 above "8 submitted".
+    apiMocks.salesOutcomeSummary.mockResolvedValue({
+      total_outcomes: 8,
+      applications_submitted: 8,
+      closed_funded: 0,
+      lost_to_competitor: 0,
+      withdrawn: 0,
+      not_qualified: 0,
+      by_source_system: [],
+      source_statuses: [],
+      by_lo: [],
+      top_competitors: [],
+    });
+
+    await act(async () => {
+      renderAt('/analytics?view=sales-ops');
+    });
+    await settle();
+
+    const card = [...document.querySelectorAll('.sales-ops-card')].find((node) =>
+      node.textContent?.includes('Closed-loop outcomes'),
+    );
+    expect(card?.querySelector('.kpi__value')?.textContent).toBe('8');
+    // Funded is stated explicitly in the breakdown, never implied by the
+    // headline.
+    expect(card?.textContent).toContain('0 funded');
+    expect(card?.textContent).toContain('8 submitted');
+  });
+
   it('renders skeletons, never zeros, while the snapshot queries are in flight', async () => {
     // Hold every sales-ops request open: this is the window in which the
     // page used to claim "STALE APPROVED 0" from its `?? []` fallback.

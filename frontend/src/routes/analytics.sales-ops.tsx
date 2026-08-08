@@ -133,15 +133,6 @@ export function SalesOpsSection() {
       ? 'error'
       : 'ready';
   const loading = cardState === 'loading';
-  const outcomeDistribution = outcomes
-    ? [
-      { label: 'submitted', value: outcomes.applications_submitted },
-      { label: 'funded', value: outcomes.closed_funded },
-      { label: 'lost elsewhere', value: outcomes.lost_to_competitor },
-      { label: 'withdrawn', value: outcomes.withdrawn },
-      { label: 'not qualified', value: outcomes.not_qualified },
-    ]
-    : [];
 
   return (
     <div className="surface">
@@ -232,8 +223,14 @@ export function SalesOpsSection() {
             <div className="eyebrow">
               {hasDryRunOutcomeRows ? 'Outcome ledger · includes dry run' : 'Closed-loop outcomes'}
             </div>
+            {/* The headline is the WINDOW TOTAL, not the funded count. It used
+                to render `closed_funded`, so the card showed a bold 0 above
+                its own subline reading "8 submitted" -- a card contradicting
+                itself. Funded now leads the breakdown, where it can't be
+                mistaken for the total. `total_outcomes` is SUM over every
+                outcome type in the window (sales_state.outcome_summary). */}
             <CardValue state={cardState}>
-              {outcomesError ? '--' : (outcomes?.closed_funded ?? 0).toLocaleString()}
+              {outcomesError ? '--' : (outcomes?.total_outcomes ?? 0).toLocaleString()}
             </CardValue>
             {loading ? (
               <span className="skeleton kpi__delta-skeleton" aria-hidden="true" />
@@ -241,7 +238,7 @@ export function SalesOpsSection() {
               <div className="muted fs-12">
                 {outcomesError
                   ? 'Customer-system outcome counts are unavailable.'
-                  : `${(outcomes?.applications_submitted ?? 0).toLocaleString()} submitted · ${(outcomes?.lost_to_competitor ?? 0).toLocaleString()} lost elsewhere · ${(outcomes?.withdrawn ?? 0).toLocaleString()} withdrawn · ${(outcomes?.not_qualified ?? 0).toLocaleString()} not qualified this week.`}
+                  : `Outcomes recorded this week: ${(outcomes?.closed_funded ?? 0).toLocaleString()} funded · ${(outcomes?.applications_submitted ?? 0).toLocaleString()} submitted · ${(outcomes?.lost_to_competitor ?? 0).toLocaleString()} lost elsewhere · ${(outcomes?.withdrawn ?? 0).toLocaleString()} withdrawn · ${(outcomes?.not_qualified ?? 0).toLocaleString()} not qualified.`}
               </div>
             )}
             <div className="muted fs-12 mt-1">
@@ -255,14 +252,11 @@ export function SalesOpsSection() {
                 Outcome summary unavailable: {outcomesError}
               </div>
             ) : null}
+            {/* The per-type distribution moved into the caption above (funded
+                first), so this list carries only what the caption does not:
+                which competitors took the lost loans. */}
             {loading ? null : !outcomesError && (outcomes?.total_outcomes ?? 0) > 0 ? (
               <div className="sales-ops-list mt-2">
-                {outcomeDistribution.map((row) => (
-                  <div key={row.label} className="split-row">
-                    <span className="mono fs-12">{row.label}</span>
-                    <span className="mono num">{row.value.toLocaleString()}</span>
-                  </div>
-                ))}
                 {(outcomes?.top_competitors ?? []).slice(0, 2).map((row) => (
                   <div key={row.competitor_lender_label} className="split-row">
                     <span className="mono fs-12">{row.competitor_lender_label}</span>
