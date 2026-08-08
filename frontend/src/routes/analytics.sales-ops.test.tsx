@@ -147,6 +147,35 @@ describe('Analytics Sales ops tab', () => {
     expect(document.querySelector('[aria-label="Analytics filters"]')).toBeNull();
   });
 
+  it('renders skeletons, never zeros, while the snapshot queries are in flight', async () => {
+    // Hold every sales-ops request open: this is the window in which the
+    // page used to claim "STALE APPROVED 0" from its `?? []` fallback.
+    const never = new Promise<never>(() => {});
+    apiMocks.salesAging.mockReturnValue(never);
+    apiMocks.salesStandup.mockReturnValue(never);
+    apiMocks.salesConversion.mockReturnValue(never);
+    apiMocks.salesOutcomeSummary.mockReturnValue(never);
+    apiMocks.salesTeam.mockReturnValue(never);
+
+    await act(async () => {
+      renderAt('/analytics?view=sales-ops');
+    });
+    await settle();
+
+    const cards = [...document.querySelectorAll('.sales-ops-card')];
+    expect(cards.length).toBe(4);
+    for (const card of cards) {
+      expect(card.getAttribute('aria-busy')).toBe('true');
+      expect(card.querySelector('.skeleton')).toBeTruthy();
+      // No headline number at all while loading — not even a zero.
+      expect(card.querySelector('.kpi__value')).toBeNull();
+    }
+    // Claims about the window stay unrendered until the window is read.
+    expect(document.body.textContent).not.toContain('No LO dispositions logged this week');
+    expect(document.body.textContent).not.toContain('outcome feeds are not configured yet');
+    expect(document.body.textContent).toContain('Loading roster…');
+  });
+
   it('renders the filter row on analytical tabs and hides it after clicking Sales ops', async () => {
     await act(async () => {
       renderAt('/analytics');
