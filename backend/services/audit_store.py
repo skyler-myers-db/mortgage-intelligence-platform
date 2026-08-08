@@ -15,6 +15,10 @@ from typing import Any, Protocol, runtime_checkable
 from fastapi import Request
 
 from backend.config.settings import settings
+from backend.schemas._validators_person_names import (
+    contains_human_name_shape,
+    titlecase_pair_is_non_person,
+)
 from backend.schemas.audit import AuditEvent
 from backend.schemas.borrower_copy_claims import (
     contains_unsupported_borrower_qualification_claim,
@@ -734,6 +738,8 @@ def _growth_agent_reviewed_text_contains_human_name(text: str) -> bool:
         candidate = match.group(0)
         if candidate.startswith(("[", "{")):
             return True
+        if titlecase_pair_is_non_person(candidate):
+            continue
         words = [word for word in re.split(r"\s+", candidate) if word]
         if words and all(word in _GROWTH_AGENT_REVIEWED_NAME_WORD_ALLOWLIST for word in words):
             continue
@@ -1558,7 +1564,18 @@ def _sanitize_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
                 )
             if (
                 contains_borrower_copy_contextual_name(clean_text)
-                or (key == "notes" and _HUMAN_NAME_OR_PLACEHOLDER_PATTERN.search(clean_text))
+                or (
+                    key == "notes"
+                    and (
+                        contains_human_name_shape(clean_text)
+                        or any(
+                            hit.group(0).startswith(("[", "{"))
+                            for hit in _HUMAN_NAME_OR_PLACEHOLDER_PATTERN.finditer(
+                                clean_text
+                            )
+                        )
+                    )
+                )
                 or (
                     key not in _BORROWER_DRAFT_METADATA_KEYS
                     and _AUDIT_HUMAN_IDENTITY_DIRECTIVE_RE.search(clean_text)

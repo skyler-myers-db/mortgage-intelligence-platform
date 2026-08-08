@@ -4,7 +4,10 @@ import re
 
 from pydantic import BaseModel, Field
 
-from backend.schemas._validators_person_names import contains_human_name_shape
+from backend.schemas._validators_person_names import (
+    contains_human_name_shape,
+    titlecase_pair_is_non_person,
+)
 from backend.schemas._validators_protected_class import contains_protected_class_marketing_text
 from backend.schemas._validators_tenant import configured_public_lender_name
 from backend.schemas._validators_unsafe_text import (
@@ -89,6 +92,7 @@ _PUBLIC_CAMPAIGN_LABEL_WORD_ALLOWLIST: frozenset[str] = frozenset(
         "Growth",
         "Daily",
         "Weekly",
+        "Wave",
     }
 )
 _PUBLIC_LABEL_SUFFIXES = frozenset({"brief", "campaign", "monitor", "watch"})
@@ -175,6 +179,8 @@ def validate_public_campaign_label(value: str, *, field_name: str = "variant_nam
     if contains_human_name_shape(name_scan, include_titlecase=False):
         raise ValueError(f"{field_name} must not contain human-name-shaped text")
     for match in _HUMAN_NAME_SHAPE_PATTERN.finditer(name_scan):
+        if titlecase_pair_is_non_person(match.group(0)):
+            continue
         words = [part.strip() for part in match.group(0).split() if part.strip()]
         if words and all(word in _PUBLIC_CAMPAIGN_LABEL_WORD_ALLOWLIST for word in words):
             continue
@@ -182,7 +188,9 @@ def validate_public_campaign_label(value: str, *, field_name: str = "variant_nam
     words = re.findall(r"[A-Za-z]{2,30}", name_scan)
     if len(words) == 3 and words[-1].casefold() in _PUBLIC_LABEL_SUFFIXES:
         allowed_words = {word.casefold() for word in _PUBLIC_CAMPAIGN_LABEL_WORD_ALLOWLIST}
-        if all(word.casefold() not in allowed_words for word in words[:2]):
+        if all(word.casefold() not in allowed_words for word in words[:2]) and not (
+            titlecase_pair_is_non_person(" ".join(words[:2]))
+        ):
             raise ValueError(f"{field_name} must not contain human-name-shaped text")
     return label
 
@@ -218,10 +226,7 @@ def validate_public_free_comment(
     name_scan = text
     for phrase in (*_PUBLIC_CAMPAIGN_LABEL_PHRASE_ALLOWLIST, configured_public_lender_name()):
         name_scan = name_scan.replace(phrase, "")
-    if _HUMAN_NAME_SHAPE_PATTERN.search(name_scan) or contains_human_name_shape(
-        name_scan,
-        include_titlecase=False,
-    ):
+    if contains_human_name_shape(name_scan):
         raise ValueError(f"{field_name} must not contain human-name-shaped text")
     return text
 
@@ -241,10 +246,7 @@ def validate_no_human_name_shape(value: str, *, field_name: str) -> str:
     name_scan = _UNRESOLVED_PLACEHOLDER_PATTERN.sub(" [redacted] ", name_scan)
     for phrase in (*_PUBLIC_CAMPAIGN_LABEL_PHRASE_ALLOWLIST, configured_public_lender_name()):
         name_scan = name_scan.replace(phrase, "")
-    if _HUMAN_NAME_SHAPE_PATTERN.search(name_scan) or contains_human_name_shape(
-        name_scan,
-        include_titlecase=False,
-    ):
+    if contains_human_name_shape(name_scan):
         raise ValueError(f"{field_name} must not contain human-name-shaped text")
     return text
 

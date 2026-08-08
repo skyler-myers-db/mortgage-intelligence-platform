@@ -8,6 +8,10 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from backend.schemas._validators_person_names import (
+    contains_human_name_shape,
+    titlecase_pair_is_non_person,
+)
 from backend.schemas._validators_protected_class import contains_protected_class_marketing_text
 from backend.schemas._validators_unsafe_text import contains_unsafe_ai_text
 from backend.schemas.borrower_copy_claims import (
@@ -35,6 +39,7 @@ from backend.schemas.growth_agent_segment_intent import (
     is_closed_unsupported_segment_relationship,
 )
 from backend.schemas.marketing_audience_admission import audience_admission_criterion
+from backend.schemas.marketing_safety_terms import UNREVIEWED_LENDER_NAME_RE_FRAGMENT
 from backend.schemas.usps import is_usps_state_code
 
 GrowthAgentWorkflowId = Literal[
@@ -88,11 +93,6 @@ _PROMPT_ADDRESS_CONTEXT_RE = re.compile(
     r"\b(?:at|near|around|address|property|home|house|located|location)\s+$",
     re.IGNORECASE,
 )
-_PROMPT_HUMAN_NAME_RE = re.compile(
-    r"\b(?:for|named|borrowers?|customers?|prospects?|contacts?|person|show|find|review)\s+"
-    r"(?:(?:[A-Z][a-z]{1,30}|[A-Z]{2,30})\s+"
-    r"(?:[A-Z]\s+)?(?:[A-Z][a-z]{1,30}|[A-Z]{2,30}))\b"
-)
 _PROMPT_COMMON_NAME_RE = re.compile(
     r"\b(?:for|named|borrowers?|customers?|prospects?|contacts?|person|show|find|review)\s+"
     r"(?:alice|john|jane|maria|robert|james|mary|michael|david|linda|william|"
@@ -110,7 +110,7 @@ _PROMPT_LOWERCASE_NAME_AFTER_ACTION_RE = re.compile(
     # Deliberately lowercase-only and verb-scoped: widening the verb list or
     # making it case-insensitive false-refuses ordinary analytics phrasings
     # ("Find listed purchase opportunities" reads ("listed","purchase") as a
-    # name). Capitalized proper nouns are _PROMPT_HUMAN_NAME_RE territory;
+    # name). Capitalized proper nouns are contains_human_name_shape territory;
     # lowercase names after verbs outside this list (e.g. "prioritize maria
     # garcia") are a known gap awaiting a real name-detection pass, not more
     # regex.
@@ -296,11 +296,25 @@ _PROMPT_REVIEWED_LOWERCASE_PAIRS: frozenset[tuple[str, str]] = frozenset(
 )
 _PROMPT_LEADING_HUMAN_NAME_RE = re.compile(
     r"^(?!(?i:find|show|list|run|build|open|review|count|check|create|save|how|what|which|"
+    r"rank|prioritize|compare|explain|target|"
     r"source|data|mortgage|growth|prime|home|high|current|daily|branch|heloc|"
     r"genie|cotality|databricks)\b)"
     r"(?:[A-Z][a-z]{1,30}|[A-Z]{2,30})\s+"
     r"(?:[A-Z]\s+)?(?:[A-Z][a-z]{1,30}|[A-Z]{2,30})\b"
 )
+
+
+def _leading_prompt_pair_is_person(name_scan: str) -> bool:
+    """A leading title-case pair is a person unless it is governed vocabulary.
+
+    "Fort Worth borrowers first" leads with geography, not an identity; the
+    shared pair classifier applies the same exemptions every surface uses.
+    """
+
+    match = _PROMPT_LEADING_HUMAN_NAME_RE.search(name_scan)
+    if match is None:
+        return False
+    return not titlecase_pair_is_non_person(match.group(0))
 _PROMPT_PROTECTED_CLASS_RE = re.compile(
     r"\b(?:race|racial|ethnicity|ethnic|religion|religious|gender|sex|sexual|"
     r"national\s+origin|familial\s+status|marital\s+status|disability|disabled|"
@@ -335,8 +349,7 @@ _PROMPT_UNAVAILABLE_SOURCE_RE = re.compile(
     re.IGNORECASE,
 )
 _PROMPT_UNREVIEWED_LENDER_TARGET_RE = re.compile(
-    r"\b(?:wells\s+fargo|rocket\s+mortgage|fairway|loan\s*depot|movement\s+mortgage|"
-    r"chase|bank\s+of\s+america|td\s+bank)\s+(?:customers?|borrowers?|prospects?)\b",
+    rf"\b{UNREVIEWED_LENDER_NAME_RE_FRAGMENT}\s+(?:customers?|borrowers?|prospects?)\b",
     re.IGNORECASE,
 )
 _WORKFLOW_MONITOR_TITLE_RE = re.compile(
@@ -451,9 +464,9 @@ def assert_reviewed_growth_objective(
         or _RAW_IDENTIFIER_RE.search(flat)
         or _PROMPT_STREET_ADDRESS_RE.search(flat)
         or _contains_street_address_without_suffix(flat)
-        or _PROMPT_HUMAN_NAME_RE.search(name_scan)
+        or contains_human_name_shape(name_scan)
         or _PROMPT_COMMON_NAME_RE.search(name_scan)
-        or _PROMPT_LEADING_HUMAN_NAME_RE.search(name_scan)
+        or _leading_prompt_pair_is_person(name_scan)
         or _contains_lowercase_name_after_group(flat)
         or contains_borrower_copy_contextual_name(flat)
         or contains_unsupported_borrower_qualification_claim(flat)

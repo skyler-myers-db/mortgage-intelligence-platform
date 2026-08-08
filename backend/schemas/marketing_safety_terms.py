@@ -631,3 +631,14 @@ def build_protected_health_term_pattern(
     # treatment). Named conditions and phrases such as ``cancer treatment``
     # still match from their unambiguous leading health term.
     return re.compile(rf"\b(?!(?:treatments?)\b)(?:{health_trait})\b", re.IGNORECASE)
+
+
+# Competitor lender names the product refuses to target by. One vocabulary,
+# shared by the Genie prompt guardrail and the growth-agent objective gate so
+# the two surfaces refuse identically (2026-08-07 cross-surface audit: the
+# lists had diverged — loanDepot refused on the co-pilot but passed on Genie).
+UNREVIEWED_LENDER_NAME_RE_FRAGMENT: str = (
+    r"(?:wells\s+fargo|chase|bank\s+of\s+america|td\s+bank|rocket\s+mortgage|"
+    r"quicken\s+loans|lendingtree|fairway|loan\s*depot|movement\s+mortgage|"
+    r"guaranteed\s+rate|united\s+wholesale(?:\s+mortgage)?|uwm)"
+)
