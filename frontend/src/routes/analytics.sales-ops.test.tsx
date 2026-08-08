@@ -147,6 +147,41 @@ describe('Analytics Sales ops tab', () => {
     expect(document.querySelector('[aria-label="Analytics filters"]')).toBeNull();
   });
 
+  it('shows LO display names in week-to-date conversion, falling back to the raw key', async () => {
+    apiMocks.salesTeam.mockResolvedValue([
+      {
+        email: 'lo02@summit.example',
+        display_label: 'Summit LO 02',
+        role: 'loan_officer',
+        capacity_per_day: 25,
+        active: true,
+      },
+    ]);
+    apiMocks.salesConversion.mockResolvedValue({
+      rows: [
+        { group_key: 'lo02@summit.example', application_start_rate: 0.4 },
+        { group_key: 'manager@summit.example', application_start_rate: 0.1 },
+      ],
+    });
+
+    await act(async () => {
+      renderAt('/analytics?view=sales-ops');
+    });
+    await settle();
+
+    const card = [...document.querySelectorAll('.sales-ops-card')].find((node) =>
+      node.textContent?.includes('Week-to-date conversion'),
+    );
+    expect(card?.textContent).toContain('Summit LO 02');
+    expect(card?.textContent).not.toContain('lo02@summit.example');
+    // The raw key stays reachable as the title so the row is still traceable.
+    expect(
+      [...(card?.querySelectorAll('[title]') ?? [])].map((node) => node.getAttribute('title')),
+    ).toContain('lo02@summit.example');
+    // No roster entry -> render the key, never an invented name.
+    expect(card?.textContent).toContain('manager@summit.example');
+  });
+
   it('headlines the outcome window total so the card cannot contradict its subline', async () => {
     // Live shape observed 2026-08-08: 8 submitted, nothing funded yet. The
     // card used to headline `closed_funded` — a bold 0 above "8 submitted".

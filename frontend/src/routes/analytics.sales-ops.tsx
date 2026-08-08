@@ -133,6 +133,17 @@ export function SalesOpsSection() {
       ? 'error'
       : 'ready';
   const loading = cardState === 'loading';
+  // Conversion rows are grouped by LO EMAIL (`group_by: 'lo'`), which is an
+  // internal identifier -- the queue shows every other LO reference as
+  // "Summit LO 01". Resolve through the roster the same page already loads,
+  // and fall back to the raw key when the roster has no entry (a manager or a
+  // deactivated LO can still own dispositions) so a name is never invented.
+  const loanOfficerLabel = (groupKey: string): string => {
+    const match = salesTeam.find(
+      (member) => member.email.toLowerCase() === groupKey.trim().toLowerCase(),
+    );
+    return match?.display_label ?? groupKey;
+  };
 
   return (
     <div className="surface">
@@ -208,7 +219,9 @@ export function SalesOpsSection() {
                 ))
                 : (conversion?.rows ?? []).slice(0, 3).map((row) => (
                   <div key={row.group_key} className="split-row">
-                    <span className="mono fs-12">{row.group_key}</span>
+                    <span className="fs-12" title={row.group_key}>
+                      {loanOfficerLabel(row.group_key)}
+                    </span>
                     <span className="mono num">{Math.round(row.application_start_rate * 100)}%</span>
                   </div>
                 ))}
