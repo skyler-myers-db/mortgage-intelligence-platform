@@ -56,6 +56,24 @@ export function computeDegraded(health: HealthPayload | null): boolean {
   return false;
 }
 
+/**
+ * Should the poll run at the fast cadence? Only when there is something
+ * TRANSIENT to watch recover — a dependency reported down, or a breaker
+ * open. A backend-declared `status: 'degraded'` with every dependency up and
+ * every breaker closed is a deployment-shaped condition (e.g. the treatment
+ * runtime not enabled on a baseline deploy), which does not clear on a
+ * three-second timescale; polling it four times per page view is pure
+ * round-trip cost. Deliberately NOT `computeDegraded`: the pill and the
+ * banner keep reading that, so what the UI SAYS about health is unchanged —
+ * only how often it asks (2026-08-07 audit M4).
+ */
+export function shouldPollFast(health: HealthPayload | null): boolean {
+  if (!health) return false;
+  const deps = health.dependencies ?? {};
+  if (deps.warehouse === 'down' || deps.lakebase === 'down' || deps.genie === 'down') return true;
+  return Object.values(health.circuit_breakers ?? {}).some((state) => state === 'open');
+}
+
 interface HealthProviderProps {
   pollIntervalOkMs?: number;
   pollIntervalDegradedMs?: number;
@@ -171,9 +189,9 @@ export function HealthProvider({
   const [health, setHealth] = useState<HealthPayload | null>(null);
   const [probeMs, setProbeMs] = useState<number | null>(null);
   const [fetchedAt, setFetchedAt] = useState<string | null>(null);
-  // Latest degraded flag in a ref so the polling loop reads the fresh
-  // cadence without being re-registered every time the state flips.
-  const degradedRef = useRef(false);
+  // Latest cadence decision in a ref so the polling loop reads the fresh
+  // value without being re-registered every time the state flips.
+  const pollFastRef = useRef(false);
   // Per-dependency debounce state. Lives in a ref so the tick closure
   // sees the latest pendingUpSince across re-renders without React
   // batching it out of order.
@@ -198,7 +216,7 @@ export function HealthProvider({
     const scheduleNext = () => {
       clearTimer();
       if (cancelled || isHidden()) return;
-      const delay = degradedRef.current ? pollIntervalDegradedMs : pollIntervalOkMs;
+      const delay = pollFastRef.current ? pollIntervalDegradedMs : pollIntervalOkMs;
       timer = setTimeout(() => {
         void tick();
       }, delay);
@@ -222,7 +240,7 @@ export function HealthProvider({
         setHealth(payload);
         setProbeMs(elapsed);
         setFetchedAt(new Date().toISOString());
-        degradedRef.current = computeDegraded(payload);
+        pollFastRef.current = shouldPollFast(payload);
       } catch (err) {
         if (isAbortError(err) || cancelled) return;
         // api.health() swallows network errors internally and returns
@@ -246,7 +264,7 @@ export function HealthProvider({
         setHealth(payload);
         setProbeMs(null);
         setFetchedAt(new Date().toISOString());
-        degradedRef.current = true;
+        pollFastRef.current = true;
       } finally {
         inFlight = false;
       }
