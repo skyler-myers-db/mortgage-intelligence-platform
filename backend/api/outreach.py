@@ -1647,10 +1647,18 @@ def approve_outreach(
     # ``settings.default_actor`` and emits a structured warning so ops
     # sees the fallback in the log trail.
     #
-    # 2026-06-11 audit P2-5: ``require_approver`` gates the decision when
-    # the operator sets MIP_APPROVER_EMAILS; with the default empty
-    # allowlist it admits every authenticated workspace user (documented
-    # Module 0 demo posture) and returns the same edge-resolved actor.
+    # 2026-06-11 audit P2-5 / 2026-08-07 platform audit F7: ``require_approver``
+    # is FAIL-CLOSED. It admits only the exact identities in
+    # MIP_APPROVER_EMAILS / MIP_ADMIN_EMAILS (group matching is a local/test
+    # compatibility path only, per ``backend/services/rbac.py``). With the
+    # default EMPTY allowlist it admits NOBODY -- every caller, including the
+    # workspace owner who deployed the app, gets 403 "forbidden". An earlier
+    # version of this comment claimed the opposite, and a deployment shipped
+    # with no allowlist on the strength of it: approve/reject were unreachable
+    # on the live app, which breaks the contracted approve -> audit demo flow.
+    # Configuring the allowlist is a deployment requirement, not an option.
+    # The admitted actor is the same edge-resolved identity used for the audit
+    # row; ``payload.actor`` is never trusted for attribution.
     actor = require_approver(request)
     safe_rationale = scrub_free_text(payload.rationale) if payload.rationale else None
     safe_bulk_rationale = (

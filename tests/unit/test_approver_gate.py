@@ -4,12 +4,19 @@
 
 * trusted ``mip-approver`` group members are admitted as compatibility;
 * configured automation identities and listed emails are admitted;
-* admins are admitted and empty configuration never fails open;
-  (operator can never lock themselves out), everyone else 403 with the
-  shared ``{"detail": "forbidden"}`` body.
+* admins are admitted;
+* an EMPTY allowlist admits nobody -- not even the workspace owner. Every
+  other caller gets a 403 with the shared ``{"detail": "forbidden"}`` body.
+
+The last point is the one that bites deployments (2026-08-07 platform audit
+F2/F7): configuring ``MIP_APPROVER_EMAILS`` / ``MIP_ADMIN_EMAILS`` is a
+deployment requirement, because an app with an empty allowlist cannot run
+its own contracted approve -> audit flow.
 """
 
 from __future__ import annotations
+
+import pathlib
 
 import pytest
 from fastapi import HTTPException
@@ -53,6 +60,30 @@ def test_empty_allowlists_never_admit_arbitrary_authenticated_actor() -> None:
     with pytest.raises(HTTPException) as exc:
         require_approver(request)
     assert exc.value.status_code == 403
+
+
+def test_no_source_comment_claims_the_empty_allowlist_admits_everyone() -> None:
+    """Guard the proximate cause of the 2026-08-07 audit's F2.
+
+    ``backend/api/outreach.py`` carried a comment stating that with the
+    default empty allowlist ``require_approver`` "admits every authenticated
+    workspace user (documented Module 0 demo posture)". That is the exact
+    inverse of ``rbac.py``, and a deploy shipped with no allowlist on the
+    strength of it -- approve, reject, the admin console, and the audit
+    ledger were all 403 on the live app. Behaviour is pinned by the tests
+    above; this pins the prose, because the prose is what an operator reads
+    before deciding whether the env var matters.
+    """
+    backend = pathlib.Path(__file__).resolve().parents[2] / "backend"
+    offenders = [
+        str(path.relative_to(backend.parent))
+        for path in backend.rglob("*.py")
+        if "admits every authenticated" in path.read_text(encoding="utf-8")
+    ]
+    assert offenders == [], (
+        "these files describe the fail-closed approver gate as fail-open: "
+        f"{offenders}"
+    )
 
 
 def test_trusted_approver_group_is_admitted_as_compatibility() -> None:
