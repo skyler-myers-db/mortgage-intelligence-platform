@@ -2,6 +2,7 @@
 // budget; the analytics route family opts out. Keep this section explicit.
 'use no memo';
 
+import type { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router';
 import { api } from '../lib/api';
@@ -39,6 +40,26 @@ function weekStartIsoDate(): string {
   const diff = day === 0 ? -6 : 1 - day;
   date.setDate(date.getDate() + diff);
   return isoDate(date);
+}
+
+/**
+ * A snapshot headline number. Reuses the KpiCard skeleton slots
+ * (`.skeleton.kpi__value-skeleton`) rather than declaring new CSS, so a
+ * loading sales-ops card reads exactly like a loading KPI card elsewhere.
+ * `loading` renders the shimmer; `error` renders an em-dash. Neither may
+ * render a zero — a zero here is a factual claim about the book.
+ */
+function CardValue({
+  state,
+  children,
+}: {
+  state: 'loading' | 'error' | 'ready';
+  children: ReactNode;
+}) {
+  if (state === 'loading') {
+    return <span className="skeleton kpi__value-skeleton" aria-hidden="true" />;
+  }
+  return <div className="kpi__value">{state === 'error' ? '—' : children}</div>;
 }
 
 export function SalesOpsSection() {
@@ -101,15 +122,28 @@ export function SalesOpsSection() {
   const hasDryRunOutcomeRows = dryRunOutcomeCount > 0;
   const salesTeamError = salesTeamQuery.error instanceof Error ? salesTeamQuery.error.message : null;
   const salesOpsError = salesOpsQuery.error instanceof Error ? salesOpsQuery.error.message : null;
-  const outcomeDistribution = outcomes
-    ? [
-      { label: 'submitted', value: outcomes.applications_submitted },
-      { label: 'funded', value: outcomes.closed_funded },
-      { label: 'lost elsewhere', value: outcomes.lost_to_competitor },
-      { label: 'withdrawn', value: outcomes.withdrawn },
-      { label: 'not qualified', value: outcomes.not_qualified },
-    ]
-    : [];
+  // Every card on this page reads one combined query. Until it resolves the
+  // `?? []` / `?? 0` fallbacks are indistinguishable from real counts, and a
+  // manager who reads "STALE APPROVED 0" while 100+ approvals are aging has
+  // been told the opposite of the truth. Render the KpiCard skeletons instead,
+  // and an em-dash (never a zero) when the query failed outright.
+  const cardState: 'loading' | 'error' | 'ready' = salesOpsQuery.isPending
+    ? 'loading'
+    : salesOpsError
+      ? 'error'
+      : 'ready';
+  const loading = cardState === 'loading';
+  // Conversion rows are grouped by LO EMAIL (`group_by: 'lo'`), which is an
+  // internal identifier -- the queue shows every other LO reference as
+  // "Summit LO 01". Resolve through the roster the same page already loads,
+  // and fall back to the raw key when the roster has no entry (a manager or a
+  // deactivated LO can still own dispositions) so a name is never invented.
+  const loanOfficerLabel = (groupKey: string): string => {
+    const match = salesTeam.find(
+      (member) => member.email.toLowerCase() === groupKey.trim().toLowerCase(),
+    );
+    return match?.display_label ?? groupKey;
+  };
 
   return (
     <div className="surface">
@@ -121,10 +155,16 @@ export function SalesOpsSection() {
           </div>
         </div>
         <div className="chip-row">
-          <Chip variant="neutral">{salesTeam.length} active LOs</Chip>
-          <Chip variant="neutral">
-            {salesTeam.reduce((sum, member) => sum + member.capacity_per_day, 0)} daily capacity
-          </Chip>
+          {salesTeamQuery.isPending ? (
+            <Chip variant="neutral">Loading roster…</Chip>
+          ) : (
+            <>
+              <Chip variant="neutral">{salesTeam.length} active LOs</Chip>
+              <Chip variant="neutral">
+                {salesTeam.reduce((sum, member) => sum + member.capacity_per_day, 0)} daily capacity
+              </Chip>
+            </>
+          )}
           {salesTeamError && <Chip variant="warning">Team unavailable</Chip>}
         </div>
       </div>
@@ -140,9 +180,11 @@ export function SalesOpsSection() {
           </div>
         )}
         <div className="sales-ops-grid">
-          <div className="sales-ops-card">
+          <div className="sales-ops-card" aria-busy={loading}>
             <div className="eyebrow">Stale approved</div>
-            <div className="kpi__value">{staleLeads.length >= 100 ? '100+' : staleLeads.length.toLocaleString()}</div>
+            <CardValue state={cardState}>
+              {staleLeads.length >= 100 ? '100+' : staleLeads.length.toLocaleString()}
+            </CardValue>
             <div className="muted fs-12">
               Approved over 7 days ago with no LO disposition{staleLeads.length >= 100 ? '; showing first 100.' : '.'}
             </div>
@@ -157,37 +199,61 @@ export function SalesOpsSection() {
               ))}
             </div>
           </div>
-          <div className="sales-ops-card">
+          <div className="sales-ops-card" aria-busy={loading}>
             <div className="eyebrow">Yesterday standup</div>
-            <div className="kpi__value">{(standup?.calls_logged ?? 0).toLocaleString()}</div>
-            <div className="muted fs-12">
-              {(standup?.contacts_reached ?? 0).toLocaleString()} reached · {(standup?.callbacks_scheduled ?? 0).toLocaleString()} callbacks · {(standup?.applications_started ?? 0).toLocaleString()} apps.
-            </div>
+            <CardValue state={cardState}>{(standup?.calls_logged ?? 0).toLocaleString()}</CardValue>
+            {loading ? (
+              <span className="skeleton kpi__delta-skeleton" aria-hidden="true" />
+            ) : (
+              <div className="muted fs-12">
+                {(standup?.contacts_reached ?? 0).toLocaleString()} reached · {(standup?.callbacks_scheduled ?? 0).toLocaleString()} callbacks · {(standup?.applications_started ?? 0).toLocaleString()} apps.
+              </div>
+            )}
           </div>
-          <div className="sales-ops-card">
+          <div className="sales-ops-card" aria-busy={loading}>
             <div className="eyebrow">Week-to-date conversion</div>
             <div className="sales-ops-list">
-              {(conversion?.rows ?? []).slice(0, 3).map((row) => (
-                <div key={row.group_key} className="split-row">
-                  <span className="mono fs-12">{row.group_key}</span>
-                  <span className="mono num">{Math.round(row.application_start_rate * 100)}%</span>
-                </div>
-              ))}
-              {(conversion?.rows ?? []).length === 0 && (
+              {loading
+                ? [0, 1, 2].map((row) => (
+                  <span key={row} className="skeleton kpi__delta-skeleton" aria-hidden="true" />
+                ))
+                : (conversion?.rows ?? []).slice(0, 3).map((row) => (
+                  <div key={row.group_key} className="split-row">
+                    <span className="fs-12" title={row.group_key}>
+                      {loanOfficerLabel(row.group_key)}
+                    </span>
+                    <span className="mono num">{Math.round(row.application_start_rate * 100)}%</span>
+                  </div>
+                ))}
+              {/* "No dispositions" is a CLAIM about the week, so it may only
+                  render once the window has actually been read. */}
+              {!loading && (conversion?.rows ?? []).length === 0 && (
                 <div className="muted fs-12">No LO dispositions logged this week.</div>
               )}
             </div>
           </div>
-          <div className="sales-ops-card">
+          <div className="sales-ops-card" aria-busy={loading}>
             <div className="eyebrow">
               {hasDryRunOutcomeRows ? 'Outcome ledger · includes dry run' : 'Closed-loop outcomes'}
             </div>
-            <div className="kpi__value">{outcomesError ? '--' : (outcomes?.closed_funded ?? 0).toLocaleString()}</div>
-            <div className="muted fs-12">
-              {outcomesError
-                ? 'Customer-system outcome counts are unavailable.'
-                : `${(outcomes?.applications_submitted ?? 0).toLocaleString()} submitted · ${(outcomes?.lost_to_competitor ?? 0).toLocaleString()} lost elsewhere · ${(outcomes?.withdrawn ?? 0).toLocaleString()} withdrawn · ${(outcomes?.not_qualified ?? 0).toLocaleString()} not qualified this week.`}
-            </div>
+            {/* The headline is the WINDOW TOTAL, not the funded count. It used
+                to render `closed_funded`, so the card showed a bold 0 above
+                its own subline reading "8 submitted" -- a card contradicting
+                itself. Funded now leads the breakdown, where it can't be
+                mistaken for the total. `total_outcomes` is SUM over every
+                outcome type in the window (sales_state.outcome_summary). */}
+            <CardValue state={cardState}>
+              {outcomesError ? '--' : (outcomes?.total_outcomes ?? 0).toLocaleString()}
+            </CardValue>
+            {loading ? (
+              <span className="skeleton kpi__delta-skeleton" aria-hidden="true" />
+            ) : (
+              <div className="muted fs-12">
+                {outcomesError
+                  ? 'Customer-system outcome counts are unavailable.'
+                  : `Outcomes recorded this week: ${(outcomes?.closed_funded ?? 0).toLocaleString()} funded · ${(outcomes?.applications_submitted ?? 0).toLocaleString()} submitted · ${(outcomes?.lost_to_competitor ?? 0).toLocaleString()} lost elsewhere · ${(outcomes?.withdrawn ?? 0).toLocaleString()} withdrawn · ${(outcomes?.not_qualified ?? 0).toLocaleString()} not qualified.`}
+              </div>
+            )}
             <div className="muted fs-12 mt-1">
               Imported, read-only outcome ledger; no write-back to customer systems.
               {hasDryRunOutcomeRows
@@ -199,14 +265,11 @@ export function SalesOpsSection() {
                 Outcome summary unavailable: {outcomesError}
               </div>
             ) : null}
-            {!outcomesError && (outcomes?.total_outcomes ?? 0) > 0 ? (
+            {/* The per-type distribution moved into the caption above (funded
+                first), so this list carries only what the caption does not:
+                which competitors took the lost loans. */}
+            {loading ? null : !outcomesError && (outcomes?.total_outcomes ?? 0) > 0 ? (
               <div className="sales-ops-list mt-2">
-                {outcomeDistribution.map((row) => (
-                  <div key={row.label} className="split-row">
-                    <span className="mono fs-12">{row.label}</span>
-                    <span className="mono num">{row.value.toLocaleString()}</span>
-                  </div>
-                ))}
                 {(outcomes?.top_competitors ?? []).slice(0, 2).map((row) => (
                   <div key={row.competitor_lender_label} className="split-row">
                     <span className="mono fs-12">{row.competitor_lender_label}</span>

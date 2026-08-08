@@ -42,6 +42,27 @@ export function signedBpsLabel(value: number): string {
 }
 
 /**
+ * A low-high estimate range, collapsed to a single value when the two ends
+ * render identically. A confidence band whose ends are equal is a POINT
+ * estimate, and "$100,000-$100,000" reads as a formatting bug rather than as
+ * the confident number it is — the shape every row takes when the band
+ * columns are absent and both ends fall back to the point value.
+ *
+ * The comparison is on the FORMATTED ends, so two inputs that round to the
+ * same displayed value (100_000.2 / 100_000.4 under `currency`) also collapse
+ * instead of printing a range between two identical strings.
+ */
+export function rangeLabel(
+  low: number,
+  high: number,
+  format: (value: number) => string,
+): string {
+  const lowLabel = format(low);
+  const highLabel = format(high);
+  return lowLabel === highLabel ? lowLabel : `${lowLabel}-${highLabel}`;
+}
+
+/**
  * Compact USD for dense surfaces (table cells, preview grids, narrative
  * prose): rolls up through K *and* M so a $4.41M equity position reads as
  * "$4.4M" instead of "$4410K".

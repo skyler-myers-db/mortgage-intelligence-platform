@@ -14,8 +14,12 @@ import {
   assignmentStatusLabel,
   assignmentStatusVariant,
 } from '../components/mortgage/LeadTable.logic';
-import { approvalFunnelStageDrawer } from '../lib/approvalFunnelDrawerSource';
+import {
+  approvalFunnelStageDrawer,
+  funnelStageDisplayLabel,
+} from '../lib/approvalFunnelDrawerSource';
 import { HIGH_OPPORTUNITY_KPI_LABEL } from '../lib/opportunityScore';
+import { ADDRESSABLE_POPULATION_KPI_LABEL } from '../lib/populationLabels';
 import { formatTimestamp } from '../lib/time';
 import { offerDisplayLabel } from '../lib/offerLanguage';
 import type {
@@ -35,10 +39,16 @@ import { DataTable, LoadState } from './analytics.charts';
  * the exact objects the count was computed from.
  */
 
+/**
+ * Stage headline copy. Shared with the stage's evidence drawer so the card
+ * and the drawer can never disagree: the S1 KPI stages use the pinned
+ * frontend copy (high-opportunity threshold text, and "Addressable
+ * population" — the first stage is COUNT(*) with NO contactability gate,
+ * the ~5.16M addressable book, not the ~76K contact-eligible marketable
+ * subset the server label claimed). The NUMBER is unchanged.
+ */
 function stageDisplayLabel(stage: ApprovalFunnelStage): string {
-  // Keep the S1 canonical high-opportunity KPI copy (threshold text comes
-  // from the pinned frontend constant, never restated here).
-  return stage.stage === 'high_opportunity' ? HIGH_OPPORTUNITY_KPI_LABEL : stage.label;
+  return funnelStageDisplayLabel(stage);
 }
 
 function FunnelStages({ stages }: { stages: ApprovalFunnelStage[] }) {
@@ -279,8 +289,9 @@ export function ApprovalFunnelSection() {
               <div>
                 <h2 className="h-3">Approval funnel — live</h2>
                 <p className="analytics-panel-note">
-                  Population and {HIGH_OPPORTUNITY_KPI_LABEL.toLowerCase()} aggregate over the
-                  governed headline metric view; approved, actioned, and outcome recorded read
+                  {ADDRESSABLE_POPULATION_KPI_LABEL} (the whole reachable book, before the
+                  contactability gate) and {HIGH_OPPORTUNITY_KPI_LABEL.toLowerCase()} aggregate over
+                  the governed headline metric view; approved, actioned, and outcome recorded read
                   live Lakebase workflow state. Open any number&apos;s source chip for its evidence.
                 </p>
               </div>

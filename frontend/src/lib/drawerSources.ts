@@ -292,6 +292,7 @@ type DrawerSourceKey = keyof typeof DRAWER_SOURCES;
 
 const DESTINATION_BY_SOURCE = {
   population: UNITY_CATALOG_DESTINATION,
+  populationMarketable: UNITY_CATALOG_DESTINATION,
   equitySpreadPoints: UNITY_CATALOG_DESTINATION,
   leadPopulation: UNITY_CATALOG_DESTINATION,
   segmentPopulation: UNITY_CATALOG_DESTINATION,

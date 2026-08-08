@@ -335,4 +335,22 @@ describe('LeadTableRow numeric rendering', () => {
 
     expect(document.body.textContent).toContain('$807K');
   });
+
+  it('carries the full property ref on the cell it truncates', () => {
+    renderRow({ clip: 'clip_ref_d8b9f5890b66' });
+
+    const cell = document.querySelector('.lead-table__clip');
+    // Ellipsis truncation is CSS; the title is what keeps the ref readable
+    // once it no longer wraps onto a second line.
+    expect(cell?.getAttribute('title')).toBe('clip_ref_d8b9f5890b66');
+    expect(cell?.textContent).toBe('clip_ref_d8b9f5890b66');
+  });
+
+  it('does not put an unavailable-ref placeholder in the title', () => {
+    renderRow({ clip: '' });
+
+    const cell = document.querySelector('.lead-table__clip');
+    expect(cell?.getAttribute('title')).toBeNull();
+    expect(cell?.textContent).toBe('Property ref unavailable');
+  });
 });

@@ -47,6 +47,7 @@ import {
   type CampaignSetupState,
 } from './portfolio-builder.logic';
 import { HIGH_OPPORTUNITY_KPI_LABEL } from '../lib/opportunityScore';
+import { populationKpiLabel } from '../lib/populationLabels';
 
 /**
  * Portfolio Builder — prototype `.surface` + `.filter-row` composition.
@@ -638,15 +639,26 @@ export default function PortfolioBuilder() {
           {preview && <CampaignBuildGuard preview={preview} />}
 
           <div className="kpi-row kpi-row--spaced">
+            {/* Label AND evidence chip follow the CONTACTABILITY criterion the
+                preview was built with. At the default ("Eligible only") this
+                count has the governed contactability gate pushed down, so it
+                is the marketable subset and the chip must say so — it read
+                "Addressable population", the predicate Home applies, which is
+                the opposite gate. Switch CONTACTABILITY to Any / Suppressed
+                only and both the label and the chip follow. */}
             <KpiCard
-              label="Marketable population"
+              label={populationKpiLabel(committedFilters.marketing_eligibility)}
               valueAnimated={dayZeroSafe(preview, preview?.marketable_population)}
               trend={preview?.trends?.marketable_population?.series}
               delta={formatDelta(preview?.trends?.marketable_population)}
               deltaDir={preview?.trends?.marketable_population?.direction}
               trendNote={preview?.trends?.marketable_population?.note}
               loading={building}
-              source={DRAWER_SOURCES.population}
+              source={
+                committedFilters.marketing_eligibility === 'Eligible only'
+                  ? DRAWER_SOURCES.populationMarketable
+                  : DRAWER_SOURCES.population
+              }
             />
             <KpiCard
               label="Avg. borrower score"

@@ -102,7 +102,12 @@ export function LeadTableRow({
             }}
           >
             <span className="mono lead-table__borrower">{lead.borrower_id}</span>
-            <span className="mono muted lead-table__clip">
+            {/* One opaque token — it truncates with an ellipsis rather than
+                wrapping mid-identifier, so the full ref rides on `title`. */}
+            <span
+              className="mono muted lead-table__clip"
+              title={lead.clip && lead.clip.length > 0 ? lead.clip : undefined}
+            >
               {lead.clip && lead.clip.length > 0 ? lead.clip : 'Property ref unavailable'}
             </span>
           </button>

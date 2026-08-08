@@ -1,4 +1,8 @@
 import type { DrawerSource } from '../components/AppContext';
+import {
+  ADDRESSABLE_POPULATION_KPI_LABEL,
+  MARKETABLE_POPULATION_KPI_LABEL,
+} from './populationLabels';
 
 function defineDrawerSources<T extends Record<string, DrawerSource>>(
   sources: T,
@@ -12,9 +16,9 @@ function defineDrawerSources<T extends Record<string, DrawerSource>>(
  */
 export const DRAWER_SOURCES = defineDrawerSources({
   population: {
-    title: 'Addressable population',
+    title: ADDRESSABLE_POPULATION_KPI_LABEL,
     lineageFamily: 'marketable_population',
-    short: 'Addressable population',
+    short: ADDRESSABLE_POPULATION_KPI_LABEL,
     // Governed anchor (2026-06-11): the marketable-population KPI is
     // COUNT(*) over mip.gold.borrower_360, so this drawer reads that
     // asset's governed metadata. Without an anchor the hero KPI's drawer
@@ -27,6 +31,28 @@ export const DRAWER_SOURCES = defineDrawerSources({
       { label: 'Underlying rows', source: 'mip.gold.borrower_360', value: 'borrower grain' },
       { label: 'Ownership graph', source: 'entity.owner_link', value: 'CLIP-grain' },
       { label: 'Tenant lens', source: 'mip.ref.lender_dictionary', value: 'gold refresh' },
+    ],
+  },
+
+  // Sibling of `population` for surfaces whose count HAS the contactability
+  // gate pushed down (Portfolio Builder's default CONTACTABILITY = "Eligible
+  // only"). Same asset, different predicate — and a materially different
+  // number, so the chip must name the predicate it applied rather than
+  // borrowing the addressable chip's copy.
+  populationMarketable: {
+    title: MARKETABLE_POPULATION_KPI_LABEL,
+    lineageFamily: 'marketable_population',
+    short: `${MARKETABLE_POPULATION_KPI_LABEL} — contact-eligible subset`,
+    assetKey: 'borrower_360',
+    assetPath: 'mip.gold.borrower_360',
+    description:
+      'COUNT(*) over the headline metric view with the build criteria AND the governed contactability gate pushed down: opt-in consent, no suppression reason, not DNC, past the recontact date, and outside the frequency cap. That gate is what separates this count from the addressable population.',
+    signals: [
+      { label: 'KPI measure', source: 'portfolio_headline_metric_view', value: 'COUNT(*)' },
+      { label: 'Eligibility gate', source: 'borrower_360.marketing_eligible', value: 'TRUE' },
+      { label: 'Consent', source: 'borrower_360.consent_status', value: 'opt_in' },
+      { label: 'Suppression', source: 'borrower_360.suppression_reason', value: 'IS NULL' },
+      { label: 'Do-not-contact', source: 'borrower_360.dnc', value: 'FALSE' },
     ],
   },
 
