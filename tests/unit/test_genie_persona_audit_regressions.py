@@ -254,3 +254,42 @@ def test_narrative_prose_is_unaffected_by_the_measure_exemption() -> None:
 
     assert genie_visible_text_unsafe("Call 312-555-0142 today") is True
     assert genie_visible_text_unsafe("1250000000") is True
+
+
+def test_withheld_prose_renders_verified_rows_not_pipeline_chatter() -> None:
+    """When the model's prose is withheld the user must still get the verified
+    data, not a status line about the pipeline (live audit 2026-08-07:
+    withheld turns read as content-free answers)."""
+
+    from backend.services.genie_message_policy import genie_visible_text_unsafe
+    from backend.services.repositories.databricks_genie import _factual_row_summary
+
+    single = _factual_row_summary(
+        [
+            {
+                "in_the_money_borrowers": "88806",
+                "avg_rate_spread_bps": "167.66792784271334",
+            }
+        ],
+        ["mip.gold.borrower_360"],
+        withheld_reason="it carried numbers the returned rows could not verify.",
+    )
+    assert "88,806" in single
+    assert "167.67" in single
+    assert "in the money borrowers" in single
+    assert "withheld" in single  # the disclosure survives
+    assert genie_visible_text_unsafe(single) is False
+
+    multi = _factual_row_summary(
+        [{"state": "IL", "borrowers": 48396}, {"state": "TX", "borrowers": 10914}],
+        ["mip.gold.borrower_360"],
+        withheld_reason="the output safety guard flagged its wording.",
+    )
+    assert "2 rows" in multi
+    assert "48,396" in multi
+    assert genie_visible_text_unsafe(multi) is False
+
+    empty = _factual_row_summary(
+        [], ["mip.gold.borrower_360"], withheld_reason="test reason."
+    )
+    assert "no rows" in empty

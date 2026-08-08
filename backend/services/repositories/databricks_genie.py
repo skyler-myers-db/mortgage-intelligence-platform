@@ -679,12 +679,16 @@ def _adapt_genie_response(
             else divergence_note
         )
     elif prose_withheld_reason:
-        row_count = len(rows) if rows else 0
-        row_word = "row" if row_count == 1 else "rows"
-        answer_text = (
-            f"Genie ran a governed query against {trusted_assets[0]} and returned "
-            f"{row_count:,} {row_word}, shown with the generated SQL. The draft "
-            f"narrative was withheld: {prose_withheld_reason}"
+        # Withholding the model's prose must not leave the user reading
+        # pipeline chatter. The verified rows are already in hand, so render
+        # them factually — values straight from the result, no derivation and
+        # no claims — and disclose why the draft was withheld. (Live persona
+        # audit 2026-08-07: withheld turns rendered a status line and read as
+        # content-free answers.)
+        answer_text = _factual_row_summary(
+            rows,
+            trusted_assets,
+            withheld_reason=prose_withheld_reason,
         )
     else:
         answer_text = result.answer_text
@@ -833,6 +837,69 @@ def _governed_cross_check(
 _INLINE_SOURCE_RE = re.compile(
     r"(?i)source\s*:\s*`?[A-Za-z_][\w-]*\.[A-Za-z_]\w*\.[A-Za-z_]\w*"
 )
+
+
+def _format_cell(value: object) -> str:
+    """Render one governed cell for the factual fallback summary."""
+
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    if isinstance(value, int):
+        return f"{value:,}"
+    if isinstance(value, float):
+        return f"{value:,.2f}".rstrip("0").rstrip(".")
+    text = str(value).strip()
+    try:  # numeric strings arrive from the SQL layer as text
+        numeric = float(text)
+    except (TypeError, ValueError):
+        return text
+    if numeric.is_integer():
+        return f"{int(numeric):,}"
+    return f"{numeric:,.2f}"
+
+
+def _humanize_column(column: str) -> str:
+    return column.replace("_", " ").strip()
+
+
+def _factual_row_summary(
+    rows: list[dict[str, Any]] | None,
+    trusted_assets: list[str],
+    *,
+    withheld_reason: str,
+) -> str:
+    """Render the verified rows plainly when the model's prose is withheld."""
+
+    asset = trusted_assets[0] if trusted_assets else "the trusted assets"
+    disclosure = f"Genie's draft narrative was withheld: {withheld_reason}"
+    if not rows:
+        return (
+            f"The governed query against {asset} returned no rows. {disclosure}"
+        )
+    row_count = len(rows)
+    if row_count == 1:
+        pairs = [
+            f"{_humanize_column(column)}: {_format_cell(value)}"
+            for column, value in rows[0].items()
+            if value is not None
+        ]
+        body = "; ".join(pairs[:8])
+        return (
+            f"From {asset}, the governed query returned {body}. "
+            f"These figures come straight from the returned row. {disclosure}"
+        )
+    first = rows[0]
+    headline_pairs = [
+        f"{_humanize_column(column)}: {_format_cell(value)}"
+        for column, value in first.items()
+        if value is not None
+    ]
+    headline = "; ".join(headline_pairs[:5])
+    return (
+        f"The governed query against {asset} returned {row_count:,} rows, "
+        f"shown in full in the table. The first row reads {headline}. "
+        f"Every value comes straight from the returned rows. {disclosure}"
+    )
 
 
 def _ensure_answer_cites_source(answer: str | None, trusted_assets: list[str]) -> str:
