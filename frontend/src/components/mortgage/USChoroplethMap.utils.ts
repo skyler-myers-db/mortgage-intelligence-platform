@@ -111,6 +111,9 @@ export interface StateFacts {
   avgScore: number;
   lvl: 1 | 2 | 3 | 4;
   topSegment?: string;
+  /** See `HoverState.zipUnassigned`. Null when the rollup predates the
+   *  disclosure field or the state has full ZIP coverage. */
+  zipUnassigned?: number | null;
 }
 
 export function countyDisplayName(rollup: CountyRollup): string {
@@ -121,7 +124,20 @@ export function countyDisplayName(rollup: CountyRollup): string {
   return rollup.fips_5;
 }
 
-export type Level = 'state' | 'county' | 'zip';
+/**
+ * Map drill levels. The county level was removed on 2026-08-08: the
+ * Cotality share carries exactly one county FIPS per state, so
+ * `county_fips_5` is NULL across gold and every county-keyed rollup
+ * returns zero rows — the level rendered a grid of unfilled polygons
+ * that dead-ended. The honest drill is state -> ZIP.
+ *
+ * The county *geometry* helpers below (`buildCountiesPayload`,
+ * `countyDisplayName`, `CountiesPayload`) are deliberately kept: they are
+ * pure and tested, and a licensed county dataset would light the level
+ * back up. See `/api/geo/county-rollups`, which is kept for the same
+ * reason.
+ */
+export type Level = 'state' | 'zip';
 
 export interface Selected {
   level: Level;
@@ -163,6 +179,10 @@ export interface HoverState {
   sourceHint?: string;
   /** Present when the assignment overlay is active (S9). */
   overlay?: HoverOverlay;
+  /** Borrowers in this state that the ZIP drill cannot show (no usable
+   *  5-digit ZIP in the share). Set only when > 0 — the disclosure exists
+   *  to explain why the ZIP tiles sum below the state tile. */
+  zipUnassigned?: number | null;
 }
 
 export interface LeadQueuePathInput {
