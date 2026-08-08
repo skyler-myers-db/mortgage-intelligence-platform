@@ -167,11 +167,12 @@ function formatNumber(value: number | null | undefined): string {
  * render as "Freshness Unavailable", which reads like a data problem
  * (observed 2026-06-11 during the admin-allowlist incident).
  */
-type FreshnessView = AssetFreshness | 'loading' | 'error' | undefined;
+type FreshnessView = AssetFreshness | 'loading' | 'error' | 'restricted' | undefined;
 
 function freshnessLabel(view: FreshnessView): string {
   if (view === 'loading') return 'Checking freshness…';
   if (view === 'error') return 'Metadata not loaded';
+  if (view === 'restricted') return 'Admin-only freshness';
   if (view === 'fresh') return 'Fresh';
   if (view === 'aging') return 'Aging';
   if (view === 'stale') return 'Stale';
@@ -182,6 +183,9 @@ function freshnessHelp(view: FreshnessView): string {
   if (view === 'loading') return 'Reading governed Unity Catalog metadata.';
   if (view === 'error') {
     return 'Governed freshness could not be read for this view — see the notice below. This does not mean the source is stale.';
+  }
+  if (view === 'restricted') {
+    return 'Governed table metadata is an administrator read. The evidence and lineage below are unaffected.';
   }
   if (view === 'fresh') return 'Updated within 7 days.';
   if (view === 'aging') return 'Updated 7-30 days ago.';
@@ -205,7 +209,7 @@ function metadataStatRows(metadata?: AssetMetadataResponse) {
 }
 
 export function EvidenceDrawer() {
-  const { drawer, setDrawer } = useApp();
+  const { drawer, setDrawer, canAccessAdmin } = useApp();
   const open = !!drawer;
   const d = drawer;
   const closeBtnRef = useRef<HTMLButtonElement | null>(null);
@@ -218,10 +222,14 @@ export function EvidenceDrawer() {
   useEffect(() => {
     setTab('overview');
   }, [d]);
+  // /api/admin/assets/:key/metadata is AdminDep-gated. A loan officer opening
+  // an evidence drawer used to fire it and eat a 403 on every open — invisible
+  // in the UI, loud in the browser console (2026-08-07 audit H4). Ask only
+  // when the server-authoritative session says this actor may.
   const metadataQuery = useQuery({
     queryKey: queryKeys.assetMetadata(d?.assetKey),
     queryFn: ({ signal }) => api.assetMetadata(d?.assetKey ?? '', signal),
-    enabled: open && !!d?.assetKey,
+    enabled: open && !!d?.assetKey && canAccessAdmin,
     retry: false,
   });
   // Both tabs use the same governed manifest. Overview presents its compact
@@ -245,11 +253,13 @@ export function EvidenceDrawer() {
   // View-state for the freshness chip: only mapped assets ever issue the
   // governed metadata read, so loading/error states are scoped to them.
   const freshnessView: FreshnessView = d?.assetKey
-    ? metadataQuery.isError
-      ? 'error'
-      : metadataQuery.isPending
-        ? 'loading'
-        : metadata?.freshness
+    ? !canAccessAdmin
+      ? 'restricted'
+      : metadataQuery.isError
+        ? 'error'
+        : metadataQuery.isPending
+          ? 'loading'
+          : metadata?.freshness
     : metadata?.freshness;
   const assetHref = d?.assetKey ? assetDetailHref(d.assetKey) : null;
   const selectTabFromKeyboard = (event: KeyboardEvent<HTMLButtonElement>) => {

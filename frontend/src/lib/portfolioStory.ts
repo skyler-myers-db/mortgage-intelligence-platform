@@ -90,9 +90,15 @@ export function buildPortfolioStory(preview: PortfolioPreview | null | undefined
   const pct = (highIntent / marketable) * 100;
   const pctToken = `${pct.toFixed(pct < 10 ? 1 : 0)}%`;
 
-  const s1 = `Your marketable book stands at ${register(
+  // "Addressable", not "marketable": Home loads the preview with
+  // `marketing_eligibility: 'Any'` (routes/home.tsx), so this count is the
+  // whole book the lender could reach, NOT the governed marketable subset —
+  // which is ~76K against ~5.16M addressable. The number is right; the word
+  // was wrong (2026-08-07 data audit). `marketable_population` stays as the
+  // API field name; only the sentence changed.
+  const s1 = `Your addressable book stands at ${register(
     intToken(marketable),
-    'Marketable population',
+    'Addressable population',
     'population',
     marketable,
   )} borrowers.`;

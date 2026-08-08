@@ -1,6 +1,7 @@
 import { Fragment, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react';
 import type { LeadSummary } from '../../types';
 import { DRAWER_SOURCES } from '../../lib/drawerSources';
+import { compactCurrency, signedBps } from '../../lib/formatters';
 import { offerDisplayLabel } from '../../lib/offerLanguage';
 import { safeSegmentName, segmentColor } from '../../lib/segmentMetadata';
 import { Icon } from '../Icon';
@@ -222,11 +223,11 @@ export function LeadTableRow({
             )}
           </div>
         </td>
-        <td className="num tbl-cell--right">${(lead.equity_estimate / 1000).toFixed(0)}k</td>
+        <td className="num tbl-cell--right">{compactCurrency(lead.equity_estimate)}</td>
         <td
           className={`num tbl-cell--right ${lead.rate_spread_bps >= 75 ? 'lead-table__rate--positive' : 'lead-table__rate--neutral'}`}
         >
-          +{lead.rate_spread_bps}
+          {signedBps(lead.rate_spread_bps)}
         </td>
         <td>
           <span className="mono fs-12 text-1">

@@ -256,3 +256,83 @@ describe('LeadTableRow display fallbacks', () => {
     expect(document.body.textContent).not.toContain('made_up');
   });
 });
+
+/**
+ * Unit rendering (2026-08-07 audit C1 + H1). `rate_spread_bps` is signed and
+ * `equity_estimate` runs past $1M on real rows, so the row and its expanded
+ * preview must both route through the shared formatters.
+ */
+describe('LeadTableRow numeric rendering', () => {
+  let root: Root;
+
+  const renderRow = (overrides: Partial<LeadSummary>, isOpen = false) => {
+    act(() => {
+      root.render(
+        <LeadTableRow
+          lead={{ ...lead, ...overrides }}
+          virtualIndex={0}
+          isOpen={isOpen}
+          approval={undefined}
+          isSelected={false}
+          isSelectable
+          isApprovalEligible
+          bulkApproving={false}
+          salesBusy={false}
+          salesTeamCount={1}
+          pendingApproval={false}
+          onToggleRow={noop}
+          onToggleSelect={noop}
+          onApprove={noop}
+          onReject={noop}
+          onOpenDisposition={noop}
+          onAssignmentUpdate={noop}
+        />,
+      );
+    });
+  };
+
+  beforeEach(() => {
+    document.body.innerHTML = '<table><tbody id="root"></tbody></table>';
+    root = createRoot(document.getElementById('root') as HTMLElement);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    document.body.innerHTML = '';
+    vi.clearAllMocks();
+  });
+
+  it('renders a below-market spread as -422, never +-422', () => {
+    renderRow({ rate_spread_bps: -422 }, true);
+
+    expect(document.body.textContent).toContain('-422');
+    expect(document.body.textContent).not.toContain('+-422');
+    expect(document.body.textContent).toContain('-422 bps');
+  });
+
+  it('renders an at-market spread without a sign', () => {
+    renderRow({ rate_spread_bps: 0 }, true);
+
+    expect(document.body.textContent).toContain('0 bps');
+    expect(document.body.textContent).not.toContain('+0 bps');
+  });
+
+  it('keeps the plus on an above-market spread', () => {
+    renderRow({ rate_spread_bps: 180 }, true);
+
+    expect(document.body.textContent).toContain('+180 bps');
+  });
+
+  it('rolls seven-figure equity up to millions instead of $4410K', () => {
+    renderRow({ equity_estimate: 4_410_000 }, true);
+
+    expect(document.body.textContent).toContain('$4.4M');
+    expect(document.body.textContent).not.toContain('4410');
+  });
+
+  it('keeps the thousands form under $1M', () => {
+    renderRow({ equity_estimate: 806_500 }, true);
+
+    expect(document.body.textContent).toContain('$807K');
+  });
+});

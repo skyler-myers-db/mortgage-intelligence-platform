@@ -2,6 +2,7 @@ import type {
   GenieAnswer as GenieAnswerShape,
   GenieVisualization,
 } from '../../types';
+import { currency } from '../../lib/formatters';
 import { safeSegmentName } from '../../lib/segmentMetadata';
 
 export const MAX_TABLE_ROWS = 10;
@@ -29,9 +30,22 @@ export interface GenieVisualizationPlan {
   viz: GenieVisualization | null;
 }
 
+/**
+ * Columns that are LABELS, not measures: a numeric ZIP is a place, not a
+ * quantity, and thousands-separating it ("75,040") or charting it as the Y
+ * axis is a category error. Anything matching here is excluded from measure
+ * inference and rendered verbatim rather than localized.
+ *
+ * Widened 2026-08-07 after the rendering audit found real gold columns
+ * falling through: `zip5` (mip.gold.address_lookup.zip5), the
+ * `property_zip` / `situs_zip` variants, `apn`, `loan_number`, and every
+ * vintage-style `*_year` column (`year_built` was rendering as "2,019").
+ */
+const ZIP_COLUMN_PATTERN = /(^|_)zip(_?code)?(_?5)?$/i;
+
 const IDENTIFIER_COLUMN_PATTERNS = [
-  /^zip(code)?$/i,
-  /^zip_code$/i,
+  ZIP_COLUMN_PATTERN,
+  /^zipcode$/i,
   /^postal(_code)?$/i,
   /^fips(_\d+)?$/i,
   /^county_fips(_5)?$/i,
@@ -42,6 +56,26 @@ const IDENTIFIER_COLUMN_PATTERNS = [
   /(^|_)id$/i,
   /^id$/i,
   /^clip$/i,
+  /^apn$/i,
+  /(^|_)loan_number$/i,
+  /(^|_)year$/i,
+  /^year_built$/i,
+];
+
+/**
+ * Columns whose numbers are dollars. Rendered as currency so a lien balance
+ * can't be mistaken for a borrower count in the same Genie table (the audit's
+ * H3: `equity_estimate` landed as a bare "412,350"). Percent/score siblings
+ * are deliberately excluded — `equity_pct` ends in `_pct`, not `equity`.
+ */
+const MONEY_COLUMN_PATTERNS = [
+  /(^|_)usd$/i,
+  /(^|_)amount$/i,
+  /(^|_)balance$/i,
+  /(^|_)price$/i,
+  /(^|_)upb$/i,
+  /(^|_)equity(_estimate)?$/i,
+  /(^|_)avm_value$/i,
 ];
 
 const VALUE_COLUMN_PRIORITY = [
@@ -73,6 +107,11 @@ export function isIdentifierColumn(column: string): boolean {
   return IDENTIFIER_COLUMN_PATTERNS.some((pattern) => pattern.test(column));
 }
 
+export function isMoneyColumn(column: string): boolean {
+  if (isIdentifierColumn(column)) return false;
+  return MONEY_COLUMN_PATTERNS.some((pattern) => pattern.test(column));
+}
+
 export function coerceNumber(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
   if (typeof value === 'string') {
@@ -84,15 +123,27 @@ export function coerceNumber(value: unknown): number | null {
   return null;
 }
 
-function coerceMeasure(value: unknown, column: string): number | null {
+/**
+ * Coerce a value ONLY when its column can honestly carry a measure. Every
+ * "what is the metric here" path must use this, never bare `coerceNumber` —
+ * a digit string like "75040" parses fine, which is how a ZIP became a
+ * strategy-board headline number.
+ */
+export function coerceMeasure(value: unknown, column: string): number | null {
   if (isIdentifierColumn(column)) return null;
   return coerceNumber(value);
+}
+
+/** First column in `row` that can honestly serve as a measure, else null. */
+export function findMeasureColumn(row: Record<string, unknown> | undefined): string | null {
+  if (!row) return null;
+  return Object.keys(row).find((column) => coerceMeasure(row[column], column) !== null) ?? null;
 }
 
 export function formatIdentifier(column: string, value: unknown): string {
   if (value === null || value === undefined) return '—';
   const raw = String(value).trim();
-  if (/^zip(code)?$|^zip_code$|^postal(_code)?$/i.test(column)) {
+  if (ZIP_COLUMN_PATTERN.test(column) || /^zipcode$|^postal(_code)?$/i.test(column)) {
     const digits = raw.replace(/\D/g, '');
     if (digits.length > 0 && digits.length <= 5) return digits.padStart(5, '0');
   }
@@ -265,6 +316,9 @@ export function formatCell(column: string, v: unknown): string {
   if (/^segment_codes$/i.test(column)) return formatSegmentValue(v, true);
   if (/^(segment|segment_code|top_segment)$/i.test(column)) return formatSegmentValue(v, false);
   if (isIdentifierColumn(column)) return formatIdentifier(column, v);
-  if (typeof v === 'number') return Number.isInteger(v) ? v.toLocaleString() : v.toFixed(2);
+  if (typeof v === 'number') {
+    if (isMoneyColumn(column)) return currency(v);
+    return Number.isInteger(v) ? v.toLocaleString() : v.toFixed(2);
+  }
   return String(v);
 }

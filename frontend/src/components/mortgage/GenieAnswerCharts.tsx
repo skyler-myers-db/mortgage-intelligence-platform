@@ -1,9 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import {
+  coerceMeasure,
   coerceNumber,
+  findMeasureColumn,
   formatCell,
   humanizeKey,
+  isIdentifierColumn,
   level,
   normalizeState,
   type ChartRow,
@@ -178,7 +181,8 @@ export function GenieMapChart({
   const values = new Map<string, number>();
   for (const row of rows) {
     const state = normalizeState(row[x]);
-    const value = coerceNumber(row[y]);
+    // Shading is a measure axis too — an identifier column must never drive it.
+    const value = coerceMeasure(row[y], y);
     if (!state || value === null) continue;
     values.set(state, value);
   }
@@ -267,24 +271,35 @@ export function GenieStrategyBoard({
   y?: string | null;
 }) {
   const label = x ?? Object.keys(rows[0] ?? {}).find((c) => typeof rows[0]?.[c] === 'string');
-  const value = y ?? Object.keys(rows[0] ?? {}).find((c) => coerceNumber(rows[0]?.[c]) !== null);
-  if (!label || !value || rows.length === 0) return null;
+  // The measure must come from a column that can honestly BE a measure. The
+  // old fallback took the first coercible column, and `coerceNumber` happily
+  // parses a digit string — so a result set with no numeric column rendered
+  // the ZIP ("75,040") as the board's headline metric (2026-08-07 audit C2).
+  // An explicit viz.y gets the same guard: the backend's own _value_column
+  // filters identifiers, so an identifier arriving here is already wrong.
+  const explicitValue = y && !isIdentifierColumn(y) ? y : null;
+  const value = explicitValue ?? findMeasureColumn(rows[0]);
+  if (!label || rows.length === 0) return null;
   return (
     <div className="genie-board">
       <div className="eyebrow genie-chart__title">Strategy board</div>
       <div className="genie-board__grid">
         {rows.slice(0, 6).map((row, i) => {
           const title = formatCell(label, row[label]);
-          const metric = coerceNumber(row[value]);
+          // No measure column → the card carries its label and context only.
+          // Better an unnumbered card than a confident wrong number.
+          const metric = value ? coerceMeasure(row[value], value) : null;
           const offer = strategyOfferLabel(row);
           const segment = strategySegmentLabel(row.segment ?? row.segment_code ?? row.top_segment);
+          const meta = [segment, offer].filter(Boolean).map(String).join(' · ')
+            || (value ? humanizeKey(value) : '');
           return (
             <div key={`${title}-${i}`} className="genie-board__card">
               <div className="genie-board__title">{title}</div>
-              <div className="genie-board__meta">
-                {[segment, offer].filter(Boolean).map(String).join(' · ') || humanizeKey(value)}
-              </div>
-              {metric !== null && <div className="genie-board__value">{metric.toLocaleString()}</div>}
+              {meta && <div className="genie-board__meta">{meta}</div>}
+              {metric !== null && value && (
+                <div className="genie-board__value">{formatCell(value, metric)}</div>
+              )}
             </div>
           );
         })}

@@ -5,7 +5,15 @@ import { readFileSync } from 'node:fs';
 import { stripQuestionRestatement } from './GenieAnswer';
 import { strategySegmentLabel } from './GenieAnswerCharts';
 import { normalizeGenieAnswerLanguage } from '../../lib/genieAnswerLanguage';
-import { formatCell, humanizeKey, inferChartFromRows } from './GenieAnswer.logic';
+import {
+  coerceMeasure,
+  findMeasureColumn,
+  formatCell,
+  humanizeKey,
+  inferChartFromRows,
+  isIdentifierColumn,
+  isMoneyColumn,
+} from './GenieAnswer.logic';
 import {
   shouldPersistConversation,
   shouldRenderGenieSourceAssets,
@@ -184,6 +192,68 @@ describe('Genie table display labels', () => {
     expect(strategySegmentLabel('permit')).toBe('HELOC Intent');
     expect(strategySegmentLabel('retention-risk')).toBe('Unknown segment');
     expect(strategySegmentLabel('made_up')).toBe('Unknown segment');
+  });
+});
+
+/**
+ * 2026-08-07 audit H2: real gold columns were falling through the identifier
+ * list into `toLocaleString()`, so `zip5` rendered "75,040" and `year_built`
+ * rendered "2,019".
+ */
+describe('identifier columns are labels, not measures', () => {
+  it.each([
+    ['zip5', 75040, '75040'],
+    ['zip_code_5', 7504, '07504'],
+    ['property_zip', 7504, '07504'],
+    ['situs_zip', 75040, '75040'],
+    ['apn', 12345678, '12345678'],
+    ['loan_number', 90210, '90210'],
+    ['year_built', 2019, '2019'],
+    ['origination_year', 2019, '2019'],
+  ])('renders %s verbatim, never thousands-separated', (column, value, expected) => {
+    expect(isIdentifierColumn(column)).toBe(true);
+    expect(formatCell(column, value)).toBe(expected);
+    expect(coerceMeasure(value, column)).toBeNull();
+  });
+
+  it('keeps genuine measures out of the identifier list', () => {
+    for (const column of ['borrowers', 'avg_score', 'equity_estimate', 'rate_spread_bps']) {
+      expect(isIdentifierColumn(column)).toBe(false);
+    }
+  });
+
+  it('picks the first honest measure column, skipping identifiers', () => {
+    // The C2 shape: no numeric measure at all, only a ZIP. The board must
+    // find nothing rather than promote the ZIP to a headline metric.
+    expect(findMeasureColumn({ zip: '75040', city: 'Garland' })).toBeNull();
+    expect(findMeasureColumn({ zip5: 75040, borrowers: 1503 })).toBe('borrowers');
+    expect(findMeasureColumn(undefined)).toBeNull();
+  });
+});
+
+/**
+ * 2026-08-07 audit H3: money columns rendered as bare numbers, visually
+ * indistinguishable from a borrower count in the same table.
+ */
+describe('money columns render as currency', () => {
+  it.each([
+    ['equity_estimate', 412350, '$412,350'],
+    ['current_lien_balance', 289000, '$289,000'],
+    ['listing_price', 1795000, '$1,795,000'],
+    ['second_pos_amount', 45000, '$45,000'],
+    ['total_equity_usd', 4201993, '$4,201,993'],
+    ['avg_loan_amount', 320450, '$320,450'],
+  ])('renders %s with a dollar sign and separators', (column, value, expected) => {
+    expect(isMoneyColumn(column)).toBe(true);
+    expect(formatCell(column, value)).toBe(expected);
+  });
+
+  it('does not treat percent, score, or bps siblings as money', () => {
+    for (const column of ['equity_pct', 'avg_score', 'rate_spread_bps', 'borrowers']) {
+      expect(isMoneyColumn(column)).toBe(false);
+    }
+    expect(formatCell('equity_pct', 45)).toBe('45');
+    expect(formatCell('borrowers', 412350)).toBe('412,350');
   });
 });
 

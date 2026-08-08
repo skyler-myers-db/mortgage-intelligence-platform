@@ -345,7 +345,7 @@ export function Topbar() {
         aria-label={`Configured tenant: ${lender}`}
       >
         <Icon name="building" size={12} />
-        <span>{lender}</span>
+        <span className="topbar__pill-tenant">{lender}</span>
       </div>
       {/*
         Single "system status" pill consolidating environment + warehouse
