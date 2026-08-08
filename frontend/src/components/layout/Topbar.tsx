@@ -38,15 +38,32 @@ function openCommandPalette(): void {
  */
 export function systemStatusViewModel(health: HealthPayload | null): {
   dotClass: string;
-  label: 'Probing' | 'Live' | 'Degraded';
+  label: 'Probing' | 'Live' | 'Degraded' | 'Unreachable';
   tooltip: string;
   ariaLabel: string;
 } {
   // Health states:
-  //   probing  → no payload yet; gray dot, tooltip "first probe in flight"
-  //   live     → status==="ok" + every tracked dep === "up"
-  //   degraded → status==="degraded" OR any dep down OR any breaker open
+  //   probing     → no payload yet; gray dot, tooltip "first probe in flight"
+  //   live        → status==="ok" + every tracked dep === "up"
+  //   degraded    → status==="degraded" OR any dep down OR any breaker open
+  //   unreachable → the /api/health probe itself failed (network, auth
+  //                 expiry). The debounce deliberately preserves the last
+  //                 known per-dependency states for missing deps, which used
+  //                 to let a dead probe read as "Live" (2026-08-08 hands-on
+  //                 audit: an expired session rendered a green pill). An
+  //                 unreachable backend must never present as healthy.
   const isProbing = !health;
+  if (!isProbing && health?.status === 'unreachable') {
+    return {
+      dotClass: 'dot amber',
+      label: 'Unreachable',
+      tooltip:
+        'System status · unreachable — the /api/health probe failed ' +
+        '(network or session). Showing last-known dependency states is ' +
+        'not proof of health; refresh to re-authenticate if this persists.',
+      ariaLabel: 'System status: Unreachable.',
+    };
+  }
   const deps = health?.dependencies ?? {};
   const breakers = health?.circuit_breakers ?? {};
   const depEntries = [
