@@ -38,6 +38,7 @@ from backend.services.campaign_treatment import (
     CampaignTreatmentCreateSpec,
 )
 from backend.services.campaign_treatment_runtime import (
+    CAMPAIGN_TREATMENT_RUNTIME_CLIENT_DETAIL,
     CAMPAIGN_TREATMENT_RUNTIME_DISABLED,
     CAMPAIGN_TREATMENT_RUNTIME_ENABLED,
     CampaignTreatmentRuntimeDisabledError,
@@ -95,7 +96,7 @@ def test_treatment_writes_fail_closed_without_marker(
 
     with pytest.raises(
         CampaignTreatmentRuntimeDisabledError,
-        match="disabled until governed access proof",
+        match="governed access proof",
     ):
         require_campaign_treatment_runtime()
 
@@ -178,6 +179,39 @@ def test_disabled_error_maps_to_structured_503() -> None:
     assert payload["reason"] == "campaign_treatment_runtime_disabled"
     assert payload["retryable"] is False
     assert payload["dependency"] == "deployment"
+
+
+def test_client_503_body_keeps_operator_remediation_off_the_wire(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """2026-08-07 platform audit F11.
+
+    Across ~95 probes this was the only error body that named an internal
+    repo artifact to an end user: the detail told the browser to "roll
+    forward with scripts/deploy.sh". The remediation is real and operators
+    need it -- it belongs in the structured log next to the correlation id,
+    not in a response a customer can read. The ``reason`` code stays so
+    clients and the DegradedBanner keep their machine-readable cause.
+    """
+    _baseline_apps_env(monkeypatch)
+
+    with pytest.raises(CampaignTreatmentRuntimeDisabledError) as raised:
+        require_campaign_treatment_runtime()
+
+    detail = str(raised.value)
+    assert detail == CAMPAIGN_TREATMENT_RUNTIME_CLIENT_DETAIL
+    assert "scripts/deploy.sh" not in detail
+    assert "app.yaml" not in detail
+    assert "scripts/deploy.sh" in raised.value.operator_remediation
+
+    response = asyncio.run(
+        _campaign_treatment_runtime_disabled_handler(None, raised.value)  # type: ignore[arg-type]
+    )
+    payload = json.loads(bytes(response.body))
+    assert payload["detail"] == detail
+    assert "deploy.sh" not in json.dumps(payload)
+    assert payload["reason"] == "campaign_treatment_runtime_disabled"
+    assert payload["retryable"] is False
 
 
 def test_health_reports_baseline_deploy_as_degraded(
