@@ -10,3 +10,6 @@
 - [No Pydantic validation on PII fields](feedback_no_pydantic_validation_on_pii_fields.md) — 422 echoes raw input; validate PII fields in the route via HTTPException, not Pydantic validators
 - [Genie live-first routing](project_genie_live_first.md) — live Genie primary; canonical interceptors are a disclosed degraded fallback gated by mip_genie_live_first
 - [Genie visible-text Title-Case trap](project_genie_visible_text_titlecase_trap.md) — server-authored strings trip the name-shape guard; probe every new Genie string first
+- [Shared worktree: never git add -A](feedback_shared_worktree_git_add.md) — other agents edit and commit the same branch concurrently; stage explicit paths, never rewrite history
+- [Fake Lakebase SQL substring dispatch](project_fake_lakebase_sql_dispatch.md) — a reused CTE name silently hits the wrong conftest handler; grep markers before adding SQL
+- [County key removed, geo drill dead](project_county_key_removed_drill_dead.md) — county_fips_5 is NULL everywhere since audit C2; every county-keyed geo read returns empty

@@ -320,7 +320,7 @@ loan_type_fit_rows AS (
     6                                                AS signal_rank
   FROM mip.silver.lien_current AS lc
   WHERE COALESCE(lc.owner_occupancy_code, '') = 'O'
-    AND lc.first_pos_loan_type IN ('CONV','FHA','VA')
+    AND lc.first_pos_loan_type IN ('CNV','CONV','FHA','VA')
     AND lc.situs_state IS NOT NULL
 ),
 -- 8. competitor_lien: current servicer known and not a tenant-lender alias.

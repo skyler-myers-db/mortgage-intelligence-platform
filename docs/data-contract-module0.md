@@ -692,7 +692,9 @@ sub-scores. The scoring surface does not consume race, color, religion,
 national origin, sex, marital status, age, receipt of public assistance,
 consumer-protection exercise, FICO, or credit-bureau tradeline data.
 
-CONV/FHA/VA parity is a contract: owner-occupied `CONV`, `FHA`, and `VA`
+CONV/FHA/VA parity is a contract (the live Cotality share spells conventional
+`CNV`; both spellings are accepted since the 2026-08-08 audit): owner-occupied
+`CNV`/`CONV`, `FHA`, and `VA`
 first-position loan types receive identical fit treatment (`70` before
 property-size additions). Future changes must not rank those three loan types
 asymmetrically without a signed lender fair-lending review. The

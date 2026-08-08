@@ -6,69 +6,153 @@
   "cases": [
     {
       "id": "case_01_conv_below_limit_conventional",
-      "inputs": {"loan_type_code": "CONV", "original_loan_amount": 340000, "conforming_limit_usd": 806500},
+      "inputs": {
+        "loan_type_code": "CONV",
+        "original_loan_amount": 340000,
+        "conforming_limit_usd": 806500
+      },
       "expected_product_type": "conventional",
       "note": "Happy path: conventional code, amount below the limit."
     },
     {
       "id": "case_02_conv_above_limit_jumbo",
-      "inputs": {"loan_type_code": "CONV", "original_loan_amount": 950000, "conforming_limit_usd": 806500},
+      "inputs": {
+        "loan_type_code": "CONV",
+        "original_loan_amount": 950000,
+        "conforming_limit_usd": 806500
+      },
       "expected_product_type": "jumbo",
       "note": "Conventional code with original amount strictly above the governed limit classifies as jumbo."
     },
     {
       "id": "case_03_conv_exactly_at_limit_conventional",
-      "inputs": {"loan_type_code": "CONV", "original_loan_amount": 806500, "conforming_limit_usd": 806500},
+      "inputs": {
+        "loan_type_code": "CONV",
+        "original_loan_amount": 806500,
+        "conforming_limit_usd": 806500
+      },
       "expected_product_type": "conventional",
       "note": "Boundary: a loan EXACTLY at the conforming limit is conforming by FHFA definition. The > contract means equality stays conventional; flipping to >= would fail this case loudly."
     },
     {
       "id": "case_04_fha_maps_fha",
-      "inputs": {"loan_type_code": "FHA", "original_loan_amount": 900000, "conforming_limit_usd": 806500},
+      "inputs": {
+        "loan_type_code": "FHA",
+        "original_loan_amount": 900000,
+        "conforming_limit_usd": 806500
+      },
       "expected_product_type": "fha",
       "note": "FHA maps to fha regardless of amount -- the jumbo overlay applies only to conventional first liens."
     },
     {
       "id": "case_05_va_maps_va",
-      "inputs": {"loan_type_code": "VA", "original_loan_amount": 250000, "conforming_limit_usd": 806500},
+      "inputs": {
+        "loan_type_code": "VA",
+        "original_loan_amount": 250000,
+        "conforming_limit_usd": 806500
+      },
       "expected_product_type": "va",
       "note": "VA maps to va."
     },
     {
       "id": "case_06_null_code_returns_null",
-      "inputs": {"loan_type_code": null, "original_loan_amount": 950000, "conforming_limit_usd": 806500},
+      "inputs": {
+        "loan_type_code": null,
+        "original_loan_amount": 950000,
+        "conforming_limit_usd": 806500
+      },
       "expected_product_type": null,
       "note": "No source code -> NULL (unknown). A large amount alone must NOT be guessed as jumbo: without the code we cannot rule out FHA/VA."
     },
     {
       "id": "case_07_blank_code_returns_null",
-      "inputs": {"loan_type_code": "   ", "original_loan_amount": 340000, "conforming_limit_usd": 806500},
+      "inputs": {
+        "loan_type_code": "   ",
+        "original_loan_amount": 340000,
+        "conforming_limit_usd": 806500
+      },
       "expected_product_type": null,
       "note": "Whitespace-only code is treated as missing."
     },
     {
       "id": "case_08_unrecognized_code_other",
-      "inputs": {"loan_type_code": "PP", "original_loan_amount": 340000, "conforming_limit_usd": 806500},
+      "inputs": {
+        "loan_type_code": "PP",
+        "original_loan_amount": 340000,
+        "conforming_limit_usd": 806500
+      },
       "expected_product_type": "other",
       "note": "A real but unmapped Cotality code (e.g. private-party) lands in other -- the signal is preserved, never dropped or guessed into a marketed bucket."
     },
     {
       "id": "case_09_case_and_whitespace_normalized",
-      "inputs": {"loan_type_code": " conv ", "original_loan_amount": 950000, "conforming_limit_usd": 806500},
+      "inputs": {
+        "loan_type_code": " conv ",
+        "original_loan_amount": 950000,
+        "conforming_limit_usd": 806500
+      },
       "expected_product_type": "jumbo",
       "note": "UPPER(TRIM(...)) normalization: lowercase/padded source codes still classify."
     },
     {
       "id": "case_10_conv_null_amount_conventional",
-      "inputs": {"loan_type_code": "CONV", "original_loan_amount": null, "conforming_limit_usd": 806500},
+      "inputs": {
+        "loan_type_code": "CONV",
+        "original_loan_amount": null,
+        "conforming_limit_usd": 806500
+      },
       "expected_product_type": "conventional",
       "note": "Missing original amount disables only the jumbo test; the code-mapped bucket still returns."
     },
     {
       "id": "case_11_conv_null_limit_conventional",
-      "inputs": {"loan_type_code": "CONV", "original_loan_amount": 950000, "conforming_limit_usd": null},
+      "inputs": {
+        "loan_type_code": "CONV",
+        "original_loan_amount": 950000,
+        "conforming_limit_usd": null
+      },
       "expected_product_type": "conventional",
       "note": "Missing governed limit disables only the jumbo test (misconfiguration must not inflate jumbo counts)."
+    },
+    {
+      "id": "case_12_cnv_below_limit_conventional",
+      "inputs": {
+        "loan_type_code": "CNV",
+        "original_loan_amount": 340000,
+        "conforming_limit_usd": 806500
+      },
+      "expected_product_type": "conventional",
+      "note": "2026-08-08 audit: the live Cotality share spells conventional CNV (2,585,874 rows); the legacy CONV-only test bucketed all of them 'other'."
+    },
+    {
+      "id": "case_13_cnv_above_limit_jumbo",
+      "inputs": {
+        "loan_type_code": "CNV",
+        "original_loan_amount": 950000,
+        "conforming_limit_usd": 806500
+      },
+      "expected_product_type": "jumbo",
+      "note": "CNV follows the same conforming-limit jumbo derivation as CONV."
+    },
+    {
+      "id": "case_14_cnv_lowercase_trimmed",
+      "inputs": {
+        "loan_type_code": " cnv ",
+        "original_loan_amount": null,
+        "conforming_limit_usd": 806500
+      },
+      "expected_product_type": "conventional",
+      "note": "Case/whitespace-insensitive like every other code."
+    },
+    {
+      "id": "case_15_pp_private_party_other",
+      "inputs": {
+        "loan_type_code": "PP",
+        "original_loan_amount": 300000,
+        "conforming_limit_usd": 806500
+      },
+      "expected_product_type": "other",
+      "note": "Private-party financing is real signal outside the marketed buckets."
     }
   ]
 }

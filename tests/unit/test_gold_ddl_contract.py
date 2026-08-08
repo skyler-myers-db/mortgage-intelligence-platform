@@ -701,11 +701,11 @@ def test_fit_loan_type_parity_and_explainability_contract() -> None:
     evidence_sql = (TRANSFORM_DIR / "gold_evidence_events.sql").read_text(encoding="utf-8")
     docs = (REPO_ROOT / "docs" / "data-contract-module0.md").read_text(encoding="utf-8")
 
-    parity_pattern = r"first_pos_loan_type\s+IN\s+\('CONV','FHA','VA'\)\s+THEN\s+70"
+    parity_pattern = r"first_pos_loan_type\s+IN\s+\('CNV','CONV','FHA','VA'\)\s+THEN\s+70"
     assert re.search(parity_pattern, borrower_sql)
     assert re.search(parity_pattern, lead_scores_sql)
     assert "'loan_type_fit'                                  AS signal_type" in evidence_sql
-    assert "first_pos_loan_type IN ('CONV','FHA','VA')" in evidence_sql
+    assert "first_pos_loan_type IN ('CNV','CONV','FHA','VA')" in evidence_sql
     # S1.6 extended the explainability-only exclusion list: product_type and
     # origination_channel rows must never retune the evidence sub-score.
     exclusion = "signal_type NOT IN ('permit', 'loan_type_fit', 'product_type', 'origination_channel')"

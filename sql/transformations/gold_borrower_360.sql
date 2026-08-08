@@ -985,7 +985,7 @@ subscores AS (
     -- (owner-occupant + CONV/FHA/VA with many bedrooms beats everything).
     CAST(LEAST(100, GREATEST(0,
         CASE
-          WHEN w.is_owner_occupied AND w.first_pos_loan_type IN ('CONV','FHA','VA') THEN 70
+          WHEN w.is_owner_occupied AND w.first_pos_loan_type IN ('CNV','CONV','FHA','VA') THEN 70
           WHEN w.is_owner_occupied                                                  THEN 60
           WHEN w.owner_is_corporate                                                 THEN 50
           ELSE 40

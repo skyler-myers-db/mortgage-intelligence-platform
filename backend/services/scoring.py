@@ -613,7 +613,7 @@ def loan_product_type(
     code = loan_type_code.strip().upper()
     if not code:
         return None
-    if code == "CONV":
+    if code in ("CNV", "CONV"):
         if (
             original_loan_amount is not None
             and conforming_limit_usd is not None
