@@ -222,7 +222,18 @@ class DatabricksAnalyticsRepository:
         "    AS offer_recommended_borrowers, "
         "  CAST(SUM(CASE WHEN COALESCE(ls.approval_status, 'pending') = 'approved' THEN 1 ELSE 0 END) AS INT) "
         "    AS approved_borrowers, "
-        "  CAST(SUM(CASE WHEN COALESCE(ls.outreach_status, 'none') = 'actioned' THEN 1 ELSE 0 END) AS INT) "
+        # 2026-08-07 platform audit F5: "Actioned" is rendered as the last
+        # stage of a monotonic funnel, so it MUST be a subset of "Approved".
+        # The old predicate counted outreach_status='actioned' regardless of
+        # approval, which let a borrower who was explicitly REJECTED at the
+        # approval stage reappear in the stage below it (live: 3 approved +
+        # 1 rejected = 4). Beyond the broken containment that is a governance
+        # smell — a rejected borrower must never read as worked. Rejected-
+        # but-actioned rows stay visible in the lifecycle mirror and the
+        # audit ledger; they are simply not counted as funnel throughput.
+        "  CAST(SUM(CASE WHEN COALESCE(ls.approval_status, 'pending') = 'approved' "
+        "                 AND COALESCE(ls.outreach_status, 'none') = 'actioned' "
+        "            THEN 1 ELSE 0 END) AS INT) "
         "    AS actioned_borrowers "
         f"FROM {qualify('gold', 'borrower_360')} AS b "
         f"LEFT JOIN {qualify('gold', 'borrower_lifecycle_state')} AS ls "
@@ -234,7 +245,10 @@ class DatabricksAnalyticsRepository:
         "SELECT "
         "  CAST(SUM(CASE WHEN COALESCE(ls.approval_status, 'pending') = 'approved' THEN 1 ELSE 0 END) AS INT) "
         "    AS approved_borrowers, "
-        "  CAST(SUM(CASE WHEN COALESCE(ls.outreach_status, 'none') = 'actioned' THEN 1 ELSE 0 END) AS INT) "
+        # Same containment contract as _LIVE_FUNNEL_SQL above.
+        "  CAST(SUM(CASE WHEN COALESCE(ls.approval_status, 'pending') = 'approved' "
+        "                 AND COALESCE(ls.outreach_status, 'none') = 'actioned' "
+        "            THEN 1 ELSE 0 END) AS INT) "
         "    AS actioned_borrowers "
         f"FROM {qualify('gold', 'borrower_360')} AS b "
         f"LEFT JOIN {qualify('gold', 'borrower_lifecycle_state')} AS ls "

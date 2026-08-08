@@ -339,7 +339,13 @@ class DatabricksPortfolioRepository:
         "SELECT "
         "  CAST(SUM(CASE WHEN COALESCE(ls.approval_status, 'pending') = 'approved' THEN 1 ELSE 0 END) "
         "    AS INT) AS approved_count, "
-        "  CAST(SUM(CASE WHEN COALESCE(ls.outreach_status, 'none') = 'actioned' THEN 1 ELSE 0 END) "
+        # 2026-08-07 platform audit F5: keep "in outreach" a subset of
+        # "approved" so the Home KPI row and the executive funnel agree and
+        # a rejected borrower never reads as worked. Mirrors the predicate in
+        # DatabricksAnalyticsRepository._LIVE_FUNNEL_SQL.
+        "  CAST(SUM(CASE WHEN COALESCE(ls.approval_status, 'pending') = 'approved' "
+        "                 AND COALESCE(ls.outreach_status, 'none') = 'actioned' "
+        "            THEN 1 ELSE 0 END) "
         "    AS INT) AS in_outreach_count "
         f"FROM {qualify('gold', 'borrower_360')} AS b "
         f"LEFT JOIN {qualify('gold', 'borrower_lifecycle_state')} AS ls "
