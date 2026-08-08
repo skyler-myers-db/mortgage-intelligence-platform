@@ -30,6 +30,10 @@ from backend.services.audit_store import (
 )
 from backend.services.databricks_sql import get_sql_client
 from backend.services.lakebase import get_lakebase_client
+from tests.unit.growth_refusal_contract import (
+    GROWTH_REFUSAL_MESSAGE_RE,
+    assert_refusal_isolation,
+)
 
 _DISCLOSURE = SimpleNamespace(
     body=("Summit Mortgage, NMLS #123456. Equal Housing Lender. " "Reply unsubscribe to opt out.")
@@ -162,9 +166,9 @@ def test_new_structural_families_reject_every_governed_copy_boundary(copy: str) 
     assert contains_borrower_cta_contradiction(copy)
     with pytest.raises(ValidationError, match="call to action"):
         _variant(body=copy)
-    with pytest.raises(ValidationError, match="reviewed, non-PII"):
+    with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
         GrowthAgentPromptRunRequest(prompt=copy)
-    with pytest.raises(ValidationError, match="reviewed, non-PII"):
+    with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
         ComposePlanRequest(objective=copy)
     with pytest.raises(HTTPException, match="call to action"):
         _assert_disclosure_backed_draft_body(
@@ -256,5 +260,5 @@ def test_representative_families_stop_endpoints_before_planners_and_writes(
     assert objective not in compose_response.text
     run_planner.assert_not_called()
     compose_planner.assert_not_called()
-    for dependency in isolated_growth_dependencies:
-        assert dependency.mock_calls == []
+    # The refusal is recorded; SQL and Lakebase stay untouched.
+    assert_refusal_isolation(isolated_growth_dependencies)

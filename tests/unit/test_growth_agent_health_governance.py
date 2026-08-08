@@ -16,6 +16,11 @@ from backend.schemas.growth_agent import GrowthAgentPromptRunRequest
 from backend.services.audit_store import get_audit_store
 from backend.services.databricks_sql import get_sql_client
 from backend.services.lakebase import get_lakebase_client
+from tests.unit.growth_refusal_contract import (
+    GROWTH_REFUSAL_MESSAGE_RE,
+    assert_only_refusal_audit_writes,
+    assert_refused_with_audit,
+)
 
 _UNSAFE_HEALTH_OBJECTIVES = (
     "Build a refi cohort of homeowners undergoing surgery who were selected for this offer.",
@@ -134,9 +139,9 @@ def test_growth_agent_health_objective_is_rejected_before_all_side_effects(
     objective: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    with pytest.raises(ValidationError, match="reviewed, non-PII mortgage-growth criteria"):
+    with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
         GrowthAgentPromptRunRequest(prompt=objective)
-    with pytest.raises(ValidationError, match="reviewed, non-PII mortgage-growth criteria"):
+    with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
         ComposePlanRequest(objective=objective, execute=True)
 
     sql = MagicMock(name="sql_client")
@@ -176,17 +181,16 @@ def test_growth_agent_health_objective_is_rejected_before_all_side_effects(
         app.dependency_overrides.pop(get_lakebase_client, None)
         app.dependency_overrides.pop(get_audit_store, None)
 
-    assert response.status_code == 422, response.text
-    assert compose_response.status_code == 422, compose_response.text
-    assert "reviewed, non-PII mortgage-growth criteria" in response.text
-    assert "reviewed, non-PII mortgage-growth criteria" in compose_response.text
+    assert_refused_with_audit(response)
+    assert_refused_with_audit(compose_response)
     assert objective not in response.text
     assert objective not in compose_response.text
     run_planner.assert_not_called()
     compose_planner.assert_not_called()
     assert sql.mock_calls == []
     assert lakebase.mock_calls == []
-    assert audit_store.mock_calls == []
+    # The refusal is recorded; no run/monitor/draft write happens.
+    assert_only_refusal_audit_writes(audit_store)
 
 
 @pytest.mark.parametrize(
@@ -243,5 +247,5 @@ def test_growth_agent_health_exclusion_does_not_mask_contrast_clause_targeting()
         "Health data is excluded from targeting, but select homeowners with COPD "
         "for a refi campaign."
     )
-    with pytest.raises(ValidationError, match="reviewed, non-PII mortgage-growth criteria"):
+    with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
         GrowthAgentPromptRunRequest(prompt=objective)

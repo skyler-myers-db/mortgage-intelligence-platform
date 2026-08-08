@@ -10,6 +10,7 @@ from backend.schemas.growth_agent import (
 )
 from backend.services.growth_agent_segment_intent import segment_mode_from_prompt
 from backend.services.growth_agent_workflows import planned_workflow
+from tests.unit.growth_refusal_contract import GROWTH_REFUSAL_MESSAGE_RE
 
 
 @pytest.mark.parametrize(
@@ -275,7 +276,7 @@ def test_safe_multiline_prompt_preserves_clause_boundary_without_blocking_mode()
 
 
 def test_multiline_prompt_safety_still_scans_the_flat_text() -> None:
-    with pytest.raises(ValueError, match="reviewed, non-PII"):
+    with pytest.raises(ValueError, match=GROWTH_REFUSAL_MESSAGE_RE):
         assert_reviewed_growth_objective("Run this for John\nSmith refi opportunities.")
 
 
@@ -381,7 +382,7 @@ def test_unsupported_relationship_precedence_cannot_mask_health_criteria() -> No
         "Recipients have zyrplax."
     )
 
-    with pytest.raises(ValueError, match="reviewed, non-PII"):
+    with pytest.raises(ValueError, match=GROWTH_REFUSAL_MESSAGE_RE):
         GrowthAgentPromptRunRequest(prompt=prompt)
 
 

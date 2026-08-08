@@ -276,3 +276,22 @@ def test_battery_has_all_refusal_classes_and_min_count() -> None:
         "off_topic",
         "cross_lender",
     }
+
+
+# The classifier above proves a prompt is refused; these prove the refusal is
+# filed under the right family. "Which zyrplax borrowers ..." is refused by the
+# fail-closed unknown-criterion state, and writing it to the audit ledger as
+# ``protected_class`` put a false fair-lending finding on the record (persona
+# audit, 2026-08-07).
+@pytest.mark.parametrize(
+    ("question", "expected_term"),
+    (
+        ("Segment the borrowers by race.", "race"),
+        ("Rank borrowers by religion for outreach.", "religion"),
+        ("Which zyrplax borrowers are eligible for a HELOC?", "unreviewed_criterion"),
+    ),
+)
+def test_protected_matcher_separates_fair_lending_from_unknown_criteria(
+    question: str, expected_term: str
+) -> None:
+    assert _protected_prompt_match(question) == expected_term

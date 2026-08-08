@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from typing import Literal
 
 from backend.schemas._validators_protected_class_patterns import (
     PROTECTED_AGE_CITIZENSHIP_MARKETING_RE,
@@ -37,6 +38,10 @@ from backend.schemas.marketing_selection_criteria import (
 )
 from backend.schemas.marketing_text_normalization import ascii_confusable_folds
 from backend.schemas.protected_relationships import PROTECTED_RELIGION_FAMILIAL_RELATION_RE
+
+# Governed refusal reasons this module can report. Both are fail-closed
+# rejections; only ``protected_class`` is a fair-lending finding.
+ProtectedClassRefusalReason = Literal["protected_class", "unreviewed_criterion"]
 
 _MARKETING_SYMBOL_CONFUSABLES: dict[int, str] = {
     ord("!"): "i",
@@ -170,18 +175,49 @@ def contains_protected_class_marketing_text(
     detector still runs.
     """
 
+    return (
+        protected_class_marketing_reason(
+            value,
+            assume_reviewed_read_only_analytics=assume_reviewed_read_only_analytics,
+        )
+        is not None
+    )
+
+
+def protected_class_marketing_reason(
+    value: str,
+    *,
+    assume_reviewed_read_only_analytics: bool = False,
+) -> ProtectedClassRefusalReason | None:
+    """Name *why* this module rejects text, or ``None`` when it accepts it.
+
+    Same decision as ``contains_protected_class_marketing_text`` -- this is
+    the implementation, and the boolean delegates here -- but it separates a
+    real protected-class/proxy match from the fail-closed unknown-criterion
+    state. Callers that persist a refusal reason need that split: before it
+    existed, "Which zyrplax borrowers are eligible for a HELOC?" was refused
+    by the unknown-criterion state machine and audited as a fair-lending
+    finding (persona audit, 2026-08-07).
+
+    Direct detectors are consulted before the fail-closed states so a prompt
+    that is both never under-reports as ``unreviewed_criterion``.
+    """
+
     normalized = unicodedata.normalize("NFKC", str(value))
     # Campaign copy is an English-language governed surface. Invisible format
     # controls and non-ASCII alphabetic confusables make exact safety matching
     # non-auditable, so reject rather than attempting a lossy transliteration.
+    # Unscannable text is an unproven-criteria state, not a fair-lending
+    # finding: a Spanish-language campaign label must not be audited as
+    # protected-class targeting.
     if any(unicodedata.category(char) == "Cf" for char in normalized):
-        return True
+        return "unreviewed_criterion"
     if any(
         unicodedata.category(char).startswith("L")
         and not ("A" <= char <= "Z" or "a" <= char <= "z")
         for char in normalized
     ):
-        return True
+        return "unreviewed_criterion"
     # NFKC intentionally preserves ordinary Latin diacritics. Strip combining
     # marks from an NFKD scan copy so accents cannot split a protected term
     # into unrelated ASCII fragments (for example ``Wómën`` or ``Müslïm``).
@@ -200,12 +236,11 @@ def contains_protected_class_marketing_text(
         # whose fail-closed ``population with X`` grammar intentionally cannot
         # infer that each complete product description is governed. Full-match
         # semantics ensure appended or substituted criteria remain scannable.
-        return False
-    if any(
+        return None
+    unreviewed_audience_outcome_claim = any(
         _contains_unreviewed_audience_outcome_claim(candidate)
         for candidate in _structural_audience_scan_variants(mark_folded)
-    ):
-        return True
+    )
     # Scan ordinary prose plus bounded de-obfuscations. The marketing surface
     # has no valid need for leetspeak or split-word spelling; joining up to
     # eight adjacent ASCII tokens catches forms such as ``w0men``, ``wo.men``,
@@ -303,7 +338,11 @@ def contains_protected_class_marketing_text(
             for part in health_semantic_parts
         )
     )
-    return bool(
+    # Direct protected-class, health, national-origin, and proxy detectors
+    # first; the fail-closed unknown-criterion states last. The set of
+    # rejected text is unchanged (this was one ``or`` chain) -- only the
+    # reported reason depends on the order.
+    if (
         PROTECTED_CLASS_MARKETING_RE.search(scannable)
         or PROTECTED_AGE_CITIZENSHIP_MARKETING_RE.search(scannable)
         or PROTECTED_CONTEXTUAL_TRAIT_MARKETING_RE.search(scannable)
@@ -311,10 +350,13 @@ def contains_protected_class_marketing_text(
         or (not reviewed_analytics and PROTECTED_HEALTH_TERM_MARKETING_RE.search(health_scannable))
         or PROTECTED_HEALTH_STATUS_MARKETING_RE.search(health_status_scannable)
         or PROTECTED_HEALTH_GOVERNANCE_INTENT_RE.search(health_scannable)
-        or has_unreviewed_selection_criterion
         or _contains_national_origin_marketing_text(scannable)
         or contains_protected_class_proxy_marketing_text(scannable)
-    )
+    ):
+        return "protected_class"
+    if has_unreviewed_selection_criterion or unreviewed_audience_outcome_claim:
+        return "unreviewed_criterion"
+    return None
 
 
 # Governed national-origin vocabulary used only when the term occurs near a

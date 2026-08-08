@@ -10,6 +10,7 @@ from backend.schemas.agent_plan import ComposePlanRequest
 from backend.schemas.growth_agent import GrowthAgentPromptRunRequest
 from backend.schemas.marketing_audience_admission import audience_admission_criterion
 from backend.schemas.portfolio_campaign import CampaignRecommendationVariant
+from tests.unit.growth_refusal_contract import GROWTH_REFUSAL_MESSAGE_RE
 
 _ADMISSION_VERBS = (
     ("Assign", "assigned"),
@@ -77,9 +78,9 @@ def test_unreviewed_admission_families_reject_every_public_schema_path(
     assert contains_protected_class_marketing_text(copy)
     with pytest.raises(ValidationError, match="protected-class"):
         _variant(copy)
-    with pytest.raises(ValidationError, match="reviewed, non-PII"):
+    with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
         GrowthAgentPromptRunRequest(prompt=copy)
-    with pytest.raises(ValidationError, match="reviewed, non-PII"):
+    with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
         ComposePlanRequest(objective=copy)
 
 

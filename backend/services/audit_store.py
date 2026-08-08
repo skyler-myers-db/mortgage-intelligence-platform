@@ -504,8 +504,31 @@ _LEAD_OUTCOME_SOURCE_SYSTEMS: frozenset[str] = frozenset(
 )
 _PUBLIC_BUSINESS_LABEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 &.,:+-]{0,79}$")
 _PUBLIC_COMPETITOR_LABEL_PATTERN = re.compile(r"^Competitor ([A-Z]|Other)$")
-_GENIE_REFUSAL_REASONS: frozenset[str] = frozenset(
-    {"protected_class", "instruction_override", "pii_request", "scope_bypass", "out_of_scope"}
+# Governed refusal vocabulary, shared by Ask Genie
+# (``genie.refused_prompt``) and the growth co-pilot
+# (``growth_agent.refused_prompt``) so one compliance query spans both
+# surfaces. ``unreviewed_criterion`` names the fail-closed
+# "criteria are not in the reviewed vocabulary" state: before it existed,
+# those refusals were written as ``protected_class``, putting false
+# fair-lending findings in the ledger (persona audit, 2026-08-07).
+#
+# Fair-lending review reads ``protected_class``, ``protected_class_proxy``
+# AND ``unreviewed_criterion``: the last is a selection attempt on an
+# attribute the reviewed vocabulary does not cover, and that state cannot
+# distinguish an invented token from an unlisted health or demographic
+# attribute. It is a "not proven safe" record, not a "proven benign" one.
+_GOVERNED_REFUSAL_REASONS: frozenset[str] = frozenset(
+    {
+        "protected_class",
+        "protected_class_proxy",
+        "instruction_override",
+        "pii_request",
+        "scope_bypass",
+        "out_of_scope",
+        "unreviewed_criterion",
+        "cross_lender_targeting",
+        "unavailable_source",
+    }
 )
 
 _ALLOWED_OFFER_CODES: frozenset[str] = frozenset(NBO_PRODUCT_LABELS) | {"recapture"}
@@ -1101,8 +1124,8 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
         if normalized is None or not _PUBLIC_COMPETITOR_LABEL_PATTERN.fullmatch(normalized):
             raise AuditMetadataValueViolation(field, "must be a governed competitor alias")
     for field, value in _metadata_values_for(metadata, {"refusal_reason"}):
-        if value is not None and str(value) not in _GENIE_REFUSAL_REASONS:
-            raise AuditMetadataValueViolation(field, "must be a governed Genie refusal reason")
+        if value is not None and str(value) not in _GOVERNED_REFUSAL_REASONS:
+            raise AuditMetadataValueViolation(field, "must be a governed refusal reason")
     for field, value in _metadata_values_for(
         metadata,
         {"helpful", "comment_present", "hit", "household_dedup_enabled"},

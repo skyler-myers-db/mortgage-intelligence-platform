@@ -92,7 +92,7 @@ def score_count_reconciliation(response: dict[str, Any], case: dict[str, Any]) -
     destination fingerprint bound to the answer's tool-result hash.
     """
 
-    if case.get("expected_error"):
+    if case.get("expected_error") or case.get("expected_refusal_reason"):
         return {
             "passed": True,
             "checks": {"not_applicable_expected_error": True},
@@ -219,10 +219,16 @@ def score_growth_agent_response(response: dict[str, Any], case: dict[str, Any]) 
     route = str(response.get("route") or "")
     serialized = json.dumps(response, sort_keys=True, default=str).lower()
     expected_error = case.get("expected_error")
-    if expected_error:
+    expected_refusal_reason = case.get("expected_refusal_reason")
+    if expected_error or expected_refusal_reason:
         error_text = str(response.get("error") or response.get("detail") or "")
         checks = {
-            "expected_error": str(expected_error) in error_text,
+            "expected_error": not expected_error or str(expected_error) in error_text,
+            # The guard family is the stable contract; refusal copy is not.
+            "expected_refusal_reason": (
+                not expected_refusal_reason
+                or str(response.get("refusal_reason") or "") == str(expected_refusal_reason)
+            ),
             "no_success_workflow": not workflow.get("id"),
             "no_forbidden_terms": not any(
                 str(term).lower() in serialized for term in case.get("forbidden_terms", [])

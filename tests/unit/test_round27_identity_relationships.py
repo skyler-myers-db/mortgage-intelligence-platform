@@ -25,6 +25,10 @@ from backend.services.audit_store import (
 from backend.services.databricks_sql import get_sql_client
 from backend.services.lakebase import get_lakebase_client
 from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
+from tests.unit.growth_refusal_contract import (
+    GROWTH_REFUSAL_MESSAGE_RE,
+    assert_only_refusal_audit_events,
+)
 from tests.unit.test_growth_agent_api import _FakeLakebaseClient, _FakeSqlClient
 
 _DISCLOSURE = (
@@ -150,9 +154,9 @@ def test_identity_relationships_reject_every_shared_copy_boundary(
         _variant(body=body)
     with pytest.raises(ValidationError, match="human-name-shaped"):
         _variant(subject=relationship, body="Reply YES to review mortgage options.")
-    with pytest.raises(ValidationError, match="reviewed, non-PII"):
+    with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
         GrowthAgentPromptRunRequest(prompt=objective)
-    with pytest.raises(ValidationError, match="reviewed, non-PII"):
+    with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
         ComposePlanRequest(objective=objective)
     with pytest.raises(HTTPException, match="human-name-shaped"):
         outreach_mod._assert_disclosure_backed_draft_body(
@@ -260,4 +264,5 @@ def test_identity_relationships_stop_before_planners_and_writes(
     assert lakebase.audit_events == []
     assert lakebase.monitors == []
     assert lakebase.notification_drafts == []
-    assert audit.list() == []
+    # The refusal is recorded; no run/monitor/draft write happens.
+    assert_only_refusal_audit_events(audit)

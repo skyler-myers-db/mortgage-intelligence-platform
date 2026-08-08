@@ -23,6 +23,7 @@ from backend.services.audit_store import (
 )
 from backend.services.databricks_sql import get_sql_client
 from backend.services.lakebase import get_lakebase_client
+from tests.unit.growth_refusal_contract import assert_refusal_isolation
 
 _DISCLOSURE = MagicMock(
     body="Summit Mortgage, NMLS #123456. Equal Housing Lender. " "Reply unsubscribe to opt out."
@@ -110,5 +111,5 @@ def test_new_health_and_identity_families_stop_before_planners_and_writes(
     assert objective not in compose_response.text
     run_planner.assert_not_called()
     compose_planner.assert_not_called()
-    for dependency in isolated_growth_dependencies:
-        assert dependency.mock_calls == []
+    # The refusal is recorded; SQL and Lakebase stay untouched.
+    assert_refusal_isolation(isolated_growth_dependencies)

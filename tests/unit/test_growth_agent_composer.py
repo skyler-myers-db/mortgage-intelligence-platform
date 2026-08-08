@@ -22,6 +22,7 @@ from tests.fixtures.supervisor_runtime import (
     supervisor_endpoint_details,
     supervisor_metadata,
 )
+from tests.unit.growth_refusal_contract import GROWTH_REFUSAL_MESSAGE_RE
 
 
 def _compose_settings() -> Settings:
@@ -386,9 +387,9 @@ def test_lowercase_name_context_grammar_preserves_governed_mortgage_phrases(
 def test_uncommon_lowercase_names_are_rejected_by_both_request_schemas(
     objective: str,
 ) -> None:
-    with pytest.raises(ValueError, match="reviewed, non-PII"):
+    with pytest.raises(ValueError, match=GROWTH_REFUSAL_MESSAGE_RE):
         GrowthAgentPromptRunRequest(prompt=objective)
-    with pytest.raises(ValueError, match="reviewed, non-PII"):
+    with pytest.raises(ValueError, match=GROWTH_REFUSAL_MESSAGE_RE):
         ComposePlanRequest(objective=objective)
 
 

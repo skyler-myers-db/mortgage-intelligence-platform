@@ -19,6 +19,7 @@ from backend.services.audit_store import (
     get_audit_store,
 )
 from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
+from tests.unit.growth_refusal_contract import GROWTH_REFUSAL_MESSAGE_RE
 
 _DISCLOSURE = (
     "Summit Mortgage, NMLS #123456. Equal Housing Lender. " "Reply unsubscribe to opt out."
@@ -93,9 +94,9 @@ def test_round22_identity_slots_fail_all_shared_text_boundaries(identity_slot: s
         _variant(body=f"{identity_slot}. Reply YES to review mortgage options.")
     with pytest.raises(ValidationError, match="human-name-shaped"):
         _variant(subject=identity_slot, body="Reply YES to review mortgage options.")
-    with pytest.raises(ValidationError, match="reviewed, non-PII"):
+    with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
         GrowthAgentPromptRunRequest(prompt=objective)
-    with pytest.raises(ValidationError, match="reviewed, non-PII"):
+    with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
         ComposePlanRequest(objective=objective)
     with pytest.raises(AuditMetadataValueViolation, match="human-name-shaped"):
         build_safe_audit_metadata({"draft_subject": identity_slot}, action="outreach.approve")

@@ -17,6 +17,10 @@ from backend.services.audit_store import get_audit_store
 from backend.services.databricks_sql import get_sql_client
 from backend.services.lakebase import get_lakebase_client
 from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
+from tests.unit.growth_refusal_contract import (
+    GROWTH_REFUSAL_MESSAGE_RE,
+    assert_only_refusal_audit_events,
+)
 from tests.unit.test_growth_agent_api import _FakeLakebaseClient, _FakeSqlClient
 
 _PII_UNSAFE_OBJECTIVES = (
@@ -169,15 +173,16 @@ def test_round18_unsafe_objectives_reject_before_planners_and_side_effects(
     assert lakebase.audit_events == []
     assert lakebase.monitors == []
     assert lakebase.notification_drafts == []
-    assert audit_store.list() == []
+    # The refusal is recorded; no run/monitor/draft write happens.
+    assert_only_refusal_audit_events(audit_store)
 
 
 @pytest.mark.parametrize("objective", _PII_UNSAFE_OBJECTIVES)
 def test_round18_growth_preflights_reject_identity_relations(objective: str) -> None:
     assert contains_borrower_copy_contextual_name(objective)
-    with pytest.raises(ValidationError, match="reviewed, non-PII"):
+    with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
         GrowthAgentPromptRunRequest(prompt=objective)
-    with pytest.raises(ValidationError, match="reviewed, non-PII"):
+    with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
         ComposePlanRequest(objective=objective)
 
 
@@ -185,9 +190,9 @@ def test_round18_growth_preflights_reject_identity_relations(objective: str) -> 
 def test_round18_growth_preflights_reject_transport_contradictions(
     objective: str,
 ) -> None:
-    with pytest.raises(ValidationError, match="reviewed, non-PII"):
+    with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
         GrowthAgentPromptRunRequest(prompt=objective)
-    with pytest.raises(ValidationError, match="reviewed, non-PII"):
+    with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
         ComposePlanRequest(objective=objective)
 
 

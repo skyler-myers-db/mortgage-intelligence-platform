@@ -19,6 +19,7 @@ from backend.services.audit_store import (
     get_audit_store,
 )
 from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
+from tests.unit.growth_refusal_contract import GROWTH_REFUSAL_MESSAGE_RE
 
 _DISCLOSURE_BODY = (
     "Summit Mortgage, NMLS #123456. Equal Housing Lender. "
@@ -178,9 +179,9 @@ def test_round20_correspondence_headers_fail_campaign_and_growth_schemas(
             subject=identity_header,
             body="Reply YES to review available mortgage options.",
         )
-    with pytest.raises(ValidationError, match="reviewed, non-PII"):
+    with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
         GrowthAgentPromptRunRequest(prompt=objective)
-    with pytest.raises(ValidationError, match="reviewed, non-PII"):
+    with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
         ComposePlanRequest(objective=objective)
 
 

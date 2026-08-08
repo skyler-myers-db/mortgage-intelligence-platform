@@ -29,6 +29,10 @@ from backend.services.audit_store import get_audit_store
 from backend.services.campaign_intelligence import _OFFER_AUDIENCE
 from backend.services.databricks_sql import get_sql_client
 from backend.services.lakebase import get_lakebase_client
+from tests.unit.growth_refusal_contract import (
+    GROWTH_REFUSAL_MESSAGE_RE,
+    assert_refusal_isolation,
+)
 
 _DISCLOSURE = MagicMock(
     body="Summit Mortgage, NMLS #123456. Equal Housing Lender. Reply unsubscribe to opt out."
@@ -154,9 +158,9 @@ def test_formation_morphology_fails_every_public_copy_boundary(selection: str) -
 
 @pytest.mark.parametrize("objective", _UNREVIEWED_AUDIENCE_FORMATION)
 def test_formation_morphology_fails_both_growth_contracts(objective: str) -> None:
-    with pytest.raises(ValidationError, match="reviewed, non-PII mortgage-growth criteria"):
+    with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
         GrowthAgentPromptRunRequest(prompt=objective)
-    with pytest.raises(ValidationError, match="reviewed, non-PII mortgage-growth criteria"):
+    with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
         ComposePlanRequest(objective=objective, execute=True)
 
 
@@ -199,8 +203,8 @@ def test_unseen_formation_stops_before_planners_models_or_audit_writes(
     assert objective not in compose_response.text
     run_planner.assert_not_called()
     compose_planner.assert_not_called()
-    for dependency in isolated_growth_dependencies:
-        assert dependency.mock_calls == []
+    # The refusal is recorded; SQL and Lakebase stay untouched.
+    assert_refusal_isolation(isolated_growth_dependencies)
 
 
 @pytest.mark.parametrize("safe_text", _SAFE_GOVERNED_CONTROLS)
