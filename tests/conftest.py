@@ -448,6 +448,27 @@ class _FakeLakebaseClient:
                 row["borrower_id"] for row in self.approvals if row.get("action") == "approve"
             }
             return {"n": len(lifecycle_borrowers | approval_borrowers)}
+        if "FROM actioned_borrowers" in sql:
+            # S6 funnel actioned / outcome_recorded. Mirrors the executive
+            # funnel's concept: latest approval decision is 'approve' AND a
+            # call_disposition exists. outcome_recorded narrows that set to
+            # active assignments at the terminal status.
+            latest_action: dict[str, str] = {}
+            for row in sorted(
+                self.approvals,
+                key=lambda r: (str(r.get("decided_at") or ""), str(r.get("approval_id") or "")),
+            ):
+                latest_action[row["borrower_id"]] = str(row.get("action") or "")
+            approved_now = {bid for bid, action in latest_action.items() if action == "approve"}
+            dispositioned = {row["borrower_id"] for row in self.dispositions}
+            actioned = approved_now & dispositioned
+            terminal = {
+                row["borrower_id"]
+                for row in self.assignments
+                if row.get("released_at") is None
+                and (row.get("status") or "assigned") == "outcome_recorded"
+            }
+            return {"actioned": len(actioned), "outcome_recorded": len(actioned & terminal)}
         if "FROM mip_app.approvals" in sql and "request_id" in sql:
             return None
         if "FROM mip_app.tenant_disclosures" in sql:

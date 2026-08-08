@@ -19,6 +19,7 @@ import re
 
 import pytest
 
+from backend.services import approval_funnel
 from backend.services.repositories.databricks_analytics import (
     DatabricksAnalyticsRepository,
 )
@@ -115,3 +116,70 @@ def test_executive_renders_approved_immediately_above_actioned() -> None:
     approved = next(s for s in stages if s.stage == "Approved")
     actioned = next(s for s in stages if s.stage == "Actioned")
     assert actioned.borrower_count <= approved.borrower_count
+
+
+# ---------------------------------------------------------------------------
+# 2026-08-08 UX walk: one word, one page, two numbers.
+#
+# The executive funnel and the approval funnel are adjacent tabs on the
+# analytics page. Both publish a stage called "Actioned". The executive tab
+# read gold ``borrower_lifecycle_state`` (approved AND dispositioned -> 3);
+# the approval tab read ``mip_app.lead_assignments`` at-or-past the
+# ``actioned`` LO status (-> 0). A reader had no way to know they were
+# different questions.
+#
+# These pins are on the SQL text, not on returned counts, for the same reason
+# as the containment pins above: a fake client will happily return whatever
+# number the test asks for, so only the predicate proves the concept.
+# ---------------------------------------------------------------------------
+
+_APPROVAL_FUNNEL_ACTIONED = " ".join(approval_funnel._WORKFLOW_STAGE_COUNTS_SQL.split())
+
+
+def test_approval_funnel_actioned_is_the_executive_concept() -> None:
+    """Approved-and-dispositioned, expressed over the Lakebase source tables.
+
+    ``jobs/sync_lifecycle_state.py`` derives the gold mirror the executive
+    funnel reads: ``outreach_status='actioned'`` iff a ``call_dispositions``
+    row exists, ``approval_status='approved'`` iff the LATEST approvals row
+    is an approve. The approval tab must ask that same question of the same
+    tables, so the two stages cannot drift apart again.
+    """
+    assert "FROM mip_app.call_dispositions" in _APPROVAL_FUNNEL_ACTIONED
+    assert "FROM latest_decision WHERE action = 'approve'" in _APPROVAL_FUNNEL_ACTIONED
+    # Latest-decision semantics: an approve-then-reject borrower drops out of
+    # the stage here exactly as it does in the gold mirror.
+    assert "DISTINCT ON (borrower_id) borrower_id, action" in _APPROVAL_FUNNEL_ACTIONED
+    assert (
+        "SELECT borrower_id FROM approved_now INTERSECT "
+        "SELECT DISTINCT borrower_id FROM mip_app.call_dispositions"
+    ) in _APPROVAL_FUNNEL_ACTIONED
+
+
+def test_approval_funnel_actioned_is_not_an_assignment_status_count() -> None:
+    """The exact defect: LO assignment progression is a different question."""
+    actioned_cte = _APPROVAL_FUNNEL_ACTIONED.split("actioned_borrowers AS (")[1].split(
+        "outcome_borrowers AS ("
+    )[0]
+    assert "lead_assignments" not in actioned_cte, (
+        "the Actioned stage must not count LO assignment statuses — that is "
+        "the assignment-progression concept, published per-officer on the "
+        "drill-down, never as a funnel stage sharing the executive's word"
+    )
+
+
+def test_approval_funnel_outcome_stage_stays_inside_actioned() -> None:
+    """Containment: a terminal assignment without outreach is not throughput."""
+    outcome_cte = _APPROVAL_FUNNEL_ACTIONED.split("outcome_borrowers AS (")[1]
+    assert "SELECT borrower_id FROM actioned_borrowers INTERSECT" in outcome_cte
+
+
+def test_approval_funnel_stage_sources_name_the_tables_they_read() -> None:
+    """Evidence labels are the auditor's trail — they must not cite a table
+    the stage no longer reads."""
+    assert (
+        approval_funnel.STAGE_SOURCES["actioned"]
+        == "mip_app.approvals + mip_app.call_dispositions"
+    )
+    for table in approval_funnel.STAGE_SOURCES["actioned"].split(" + "):
+        assert f"FROM {table}" in _APPROVAL_FUNNEL_ACTIONED

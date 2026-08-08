@@ -9,12 +9,32 @@ workflow actually writes — never from a mirror or a snapshot:
                           (``/outreach/approve`` is the primary approval
                           API and does not require an assignment, so the
                           union keeps both entry points honest.)
-* ``actioned``          — distinct borrowers with an active assignment
-                          at-or-past ``actioned``.
-* ``outcome_recorded``  — distinct borrowers whose active assignment
-                          reached the terminal stage (the S6 outcome
-                          feedback row is written in the same
-                          transaction, so the two never diverge).
+* ``actioned``          — distinct borrowers whose LATEST approval decision
+                          is ``approve`` and who have at least one
+                          ``mip_app.call_dispositions`` row.
+* ``outcome_recorded``  — the ``actioned`` set narrowed to borrowers whose
+                          active assignment reached the terminal stage
+                          (the S6 outcome feedback row is written in the
+                          same transaction, so the two never diverge).
+
+2026-08-08 UX walk — "Actioned" meant two different things on adjacent
+analytics tabs. The executive funnel counts gold ``borrower_lifecycle_state``
+rows with ``approval_status='approved' AND outreach_status='actioned'`` (live:
+3). This tab counted ``mip_app.lead_assignments`` rows at-or-past the
+``actioned`` LO-assignment status (live: 0). One word, one page, two numbers.
+
+The stage now reads the SAME concept from the Lakebase tables the gold mirror
+is built from: ``jobs/sync_lifecycle_state.py`` derives
+``outreach_status='actioned'`` from the existence of a ``call_dispositions``
+row and ``approval_status='approved'`` from the latest ``approvals.action``.
+Reading those two tables directly is the live-first source for this tab and is
+exact — the gold mirror is the lagging copy, not the other way round, so any
+difference is one sync behind and is disclosed in the stage's evidence source.
+
+The LO assignment-progression concept is NOT deleted: it stays on the
+per-loan-officer drill-down (:meth:`ApprovalFunnelStore.per_loan_officer`),
+where every column is explicitly an ``mip_app.lead_assignments`` status. It is
+no longer published as a funnel stage called "Actioned".
 
 Reads are cached in a short-TTL cache keyed by the sales-state TTL knob
 (``MIP_SALES_STATE_CACHE_TTL_S``) and invalidated by
@@ -66,17 +86,13 @@ STAGE_LABELS: dict[str, str] = {
 
 STAGE_SOURCES: dict[str, str] = {
     "approved": "mip_app.approvals + mip_app.lead_assignments",
-    "actioned": "mip_app.lead_assignments",
-    "outcome_recorded": "mip_app.lead_assignments + mip_app.feedback",
+    # Same concept as the executive funnel's Actioned stage, read from the
+    # Lakebase tables the gold lifecycle mirror is synced from.
+    "actioned": "mip_app.approvals + mip_app.call_dispositions",
+    "outcome_recorded": (
+        "mip_app.approvals + mip_app.call_dispositions + mip_app.lead_assignments"
+    ),
 }
-
-_STATUS_COUNTS_SQL = """
-SELECT COALESCE(status, 'assigned') AS status,
-       COUNT(DISTINCT borrower_id) AS n
-FROM mip_app.lead_assignments
-WHERE released_at IS NULL
-GROUP BY COALESCE(status, 'assigned')
-"""
 
 _APPROVED_UNION_SQL = """
 SELECT COUNT(*) AS n
@@ -90,6 +106,43 @@ FROM (
     FROM mip_app.approvals
     WHERE action = 'approve'
 ) AS approved_union
+"""
+
+# Lakebase-native twin of the executive funnel's Actioned expression
+# (``approval_status='approved' AND outreach_status='actioned'`` over
+# ``mip.gold.borrower_lifecycle_state``). ``latest_decision`` mirrors the
+# DISTINCT ON ordering in jobs/sync_lifecycle_state.py so an approve-then-
+# reject borrower drops out of the stage exactly as it does in gold.
+#
+# ``outcome_recorded`` is INTERSECTed with the actioned set on purpose: the
+# funnel is rendered as strictly narrowing stages, so a terminal assignment
+# without a recorded disposition must not reappear below a stage it is not
+# in (2026-08-07 audit F5 containment contract).
+_WORKFLOW_STAGE_COUNTS_SQL = """
+WITH latest_decision AS (
+    SELECT DISTINCT ON (borrower_id) borrower_id, action
+    FROM mip_app.approvals
+    ORDER BY borrower_id, decided_at DESC, approval_id::text DESC
+),
+approved_now AS (
+    SELECT borrower_id FROM latest_decision WHERE action = 'approve'
+),
+actioned_borrowers AS (
+    SELECT borrower_id FROM approved_now
+    INTERSECT
+    SELECT DISTINCT borrower_id FROM mip_app.call_dispositions
+),
+outcome_borrowers AS (
+    SELECT borrower_id FROM actioned_borrowers
+    INTERSECT
+    SELECT borrower_id
+    FROM mip_app.lead_assignments
+    WHERE released_at IS NULL
+      AND COALESCE(status, 'assigned') = 'outcome_recorded'
+)
+SELECT
+    (SELECT COUNT(*) FROM actioned_borrowers) AS actioned,
+    (SELECT COUNT(*) FROM outcome_borrowers)  AS outcome_recorded
 """
 
 _RECENT_APPROVALS_SQL = """
@@ -212,17 +265,15 @@ class ApprovalFunnelStore:
 
     def _workflow_counts(self) -> dict[str, int]:
         self._ensure_schema()
-        status_counts: dict[str, int] = {}
-        for row in self._client.fetchall(_STATUS_COUNTS_SQL, limit=len(ASSIGNMENT_LIFECYCLE) + 1):
-            status_counts[str(row.get("status") or "assigned")] = _int(row.get("n"))
         approved_row = self._client.fetchone(_APPROVED_UNION_SQL) or {}
-        # Stage counts are cumulative at-or-past the stage so the funnel
-        # narrows monotonically across the Lakebase stages.
-        actioned = status_counts.get("actioned", 0) + status_counts.get("outcome_recorded", 0)
+        # actioned / outcome_recorded come from one statement whose set
+        # algebra guarantees outcome_recorded ⊆ actioned ⊆ approved, so the
+        # funnel narrows monotonically no matter what the tables hold.
+        stage_row = self._client.fetchone(_WORKFLOW_STAGE_COUNTS_SQL) or {}
         return {
             "approved": _int(approved_row.get("n")),
-            "actioned": actioned,
-            "outcome_recorded": status_counts.get("outcome_recorded", 0),
+            "actioned": _int(stage_row.get("actioned")),
+            "outcome_recorded": _int(stage_row.get("outcome_recorded")),
         }
 
     # -- who approved what -------------------------------------------------

@@ -82,6 +82,21 @@ def _advance(assignment_id: str, statuses: tuple[str, ...]) -> None:
         assert response.status_code == 200, response.text
 
 
+def _dispose(borrower_id: str, lo_email: str = "lo01@summit.example") -> None:
+    """Log a real call disposition — the Lakebase write that makes a
+    borrower 'actioned' in both the executive funnel and this tab."""
+    response = client.post(
+        f"/api/leads/{borrower_id}/disposition",
+        json={
+            "lo_email": lo_email,
+            "outcome": "connected",
+            "notes": "Reviewed refinance options.",
+            "request_id": str(uuid4()),
+        },
+    )
+    assert response.status_code == 200, response.text
+
+
 def test_funnel_zero_state_is_honest_and_population_stages_are_live() -> None:
     body = _funnel()
 
@@ -115,8 +130,13 @@ def test_every_stage_cites_its_source() -> None:
     assert "portfolio_headline_metric_view" in by_stage["population"]
     assert "portfolio_headline_metric_view" in by_stage["high_opportunity"]
     assert "mip_app.approvals" in by_stage["approved"]
-    assert "mip_app.lead_assignments" in by_stage["actioned"]
-    assert "mip_app.feedback" in by_stage["outcome_recorded"]
+    # 2026-08-08 UX walk: the Actioned stage used to cite lead_assignments
+    # while counting a different concept from the executive funnel's
+    # Actioned. It now cites the tables its number is actually derived
+    # from — the same pair jobs/sync_lifecycle_state.py mirrors into gold.
+    assert by_stage["actioned"] == "mip_app.approvals + mip_app.call_dispositions"
+    assert "mip_app.call_dispositions" in by_stage["outcome_recorded"]
+    assert "mip_app.lead_assignments" in by_stage["outcome_recorded"]
 
 
 def test_approving_in_the_api_moves_the_funnel_immediately() -> None:
@@ -134,13 +154,19 @@ def test_approving_in_the_api_moves_the_funnel_immediately() -> None:
 
 
 def test_lifecycle_and_outcome_stages_count_cumulatively() -> None:
-    first = _assign(mock_data.BORROWERS[0].borrower_id, LO_01)
-    second = _assign(mock_data.BORROWERS[1].borrower_id, LO_01)
+    first_id = mock_data.BORROWERS[0].borrower_id
+    second_id = mock_data.BORROWERS[1].borrower_id
+    first = _assign(first_id, LO_01)
+    second = _assign(second_id, LO_01)
     _advance(first["assignment_id"], ("contact_drafted", "approved", "actioned"))
     _advance(
         second["assignment_id"],
         ("contact_drafted", "approved", "actioned"),
     )
+    _approve(first_id)
+    _approve(second_id)
+    _dispose(first_id)
+    _dispose(second_id)
     outcome = client.post(
         f"/api/loan-officers/assignments/{second['assignment_id']}/outcome",
         json={"outcome": "success"},
@@ -148,11 +174,33 @@ def test_lifecycle_and_outcome_stages_count_cumulatively() -> None:
     assert outcome.status_code == 200, outcome.text
 
     body = _funnel()
-    # Both borrowers passed 'approved'; both are at-or-past 'actioned';
-    # one reached the terminal outcome stage.
+    # Both borrowers were approved and then worked (a real call disposition);
+    # one of the two also reached the terminal assignment stage.
     assert _stage(body, "approved")["borrower_count"] == 2
     assert _stage(body, "actioned")["borrower_count"] == 2
     assert _stage(body, "outcome_recorded")["borrower_count"] == 1
+
+
+def test_actioned_needs_outreach_not_just_an_advanced_assignment() -> None:
+    """The regression this stage was rewritten for.
+
+    Advancing an LO assignment to the ``actioned`` status is an internal
+    workflow move, not borrower outreach. The executive funnel has always
+    required an approved borrower with a recorded disposition; this tab used
+    to publish the assignment-progression count under the same word, so one
+    page showed two different numbers for "Actioned" (live 2026-08-08: 3 vs
+    0). Assignment progression alone must not move the stage.
+    """
+    borrower_id = mock_data.BORROWERS[0].borrower_id
+    assignment = _assign(borrower_id, LO_01)
+    _advance(assignment["assignment_id"], ("contact_drafted", "approved", "actioned"))
+    _approve(borrower_id)
+
+    assert _stage(_funnel(), "actioned")["borrower_count"] == 0
+
+    _dispose(borrower_id)
+
+    assert _stage(_funnel(), "actioned")["borrower_count"] == 1
 
 
 def test_per_lo_drill_returns_real_per_officer_counts() -> None:
