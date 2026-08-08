@@ -1310,9 +1310,18 @@ kbd {
   background: var(--bg-2);
 }
 .lead-table__borrower,
-.lead-table__clip,
 .lead-table__zip {
   overflow-wrap: anywhere;
+}
+/* The masked property ref is ONE opaque token: `overflow-wrap: anywhere`
+   guillotined it mid-identifier ("clip_ref_d8b9f5890b" / "66"), which reads
+   as two different refs. Truncate with an ellipsis instead; the row carries
+   the full ref in its title attribute. */
+.lead-table__clip {
+  max-inline-size: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .lead-table__segments {
   display: grid;
@@ -1364,6 +1373,7 @@ kbd {
   display: inline-flex;
   flex-direction: column;
   align-items: flex-start;
+  max-inline-size: 100%;
   gap: var(--sp-1);
   padding: 0;
   border: 0;
