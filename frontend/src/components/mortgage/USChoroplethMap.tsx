@@ -769,7 +769,7 @@ export function USChoroplethMap({
                 avgScore: facts ? facts.avgScore : null,
                 topSegment: facts?.topSegment || undefined,
                 sourceHint: inFootprint
-                  ? 'mip.gold.state_rollup'
+                  ? 'mip.gold.funnel_snapshot_daily + mip.gold.state_top_segment'
                   : 'Outside Cotality evaluation scope',
                 overlay: overlayUnit
                   ? {

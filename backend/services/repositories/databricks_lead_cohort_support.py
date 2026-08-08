@@ -130,7 +130,13 @@ class LeadCohortQuerySupport:
         if stage == "approved":
             return "AND COALESCE(ls.approval_status, 'pending') = 'approved'"
         if stage == "actioned":
-            return "AND COALESCE(ls.outreach_status, 'none') = 'actioned'"
+            # Actioned is a subset of approved (2026-08-07 audit F5): outreach
+            # recorded against a rejected borrower must never present as a
+            # funnel stage below the decision that rejected it.
+            return (
+                "AND COALESCE(ls.approval_status, 'pending') = 'approved' "
+                "AND COALESCE(ls.outreach_status, 'none') = 'actioned'"
+            )
         raise ValueError(f"unsupported funnel_stage: {funnel_stage}")
 
     @staticmethod

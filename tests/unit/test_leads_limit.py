@@ -43,7 +43,10 @@ FUNNEL_STAGE_PREDICATES = {
         "AND b.recommended_offer_code <> 'nurture'"
     ),
     "approved": "COALESCE(ls.approval_status, 'pending') = 'approved'",
-    "actioned": "COALESCE(ls.outreach_status, 'none') = 'actioned'",
+    "actioned": (
+        "COALESCE(ls.approval_status, 'pending') = 'approved' "
+        "AND COALESCE(ls.outreach_status, 'none') = 'actioned'"
+    ),
 }
 
 FUNNEL_SNAPSHOT_EXPRESSIONS = {
@@ -61,7 +64,10 @@ FUNNEL_SNAPSHOT_EXPRESSIONS = {
         "                     AND recommended_offer_code <> 'nurture'"
     ),
     "approved": "CAST(SUM(CASE WHEN approval_status = 'approved' THEN 1 ELSE 0 END) AS INT)",
-    "actioned": "CAST(SUM(CASE WHEN outreach_status = 'actioned' THEN 1 ELSE 0 END) AS INT)",
+    "actioned": (
+        "CAST(SUM(CASE WHEN approval_status = 'approved'\n"
+        "                     AND outreach_status = 'actioned' THEN 1 ELSE 0 END) AS INT)"
+    ),
 }
 
 
