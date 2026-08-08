@@ -24,14 +24,36 @@ describe('layout containment contracts', () => {
 
     expect(css).toMatch(/\.topbar\s*\{[^}]*display:\s*grid;/s);
     expect(css).toMatch(
-      /\.topbar\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\) minmax\(30rem,\s*44rem\) minmax\(0,\s*1fr\);/s,
+      /\.topbar\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\) minmax\(0,\s*32rem\) minmax\(0,\s*1fr\);/s,
     );
     expect(css).toMatch(/\.topbar__search\s*\{[^}]*grid-column:\s*2;/s);
-    expect(css).toMatch(/\.topbar__search\s*\{[^}]*inline-size:\s*min\(44rem,\s*100%\);/s);
+    expect(css).toMatch(/\.topbar__search\s*\{[^}]*inline-size:\s*min\(32rem,\s*100%\);/s);
     expect(css).toContain('.topbar__actions');
     expect(css).toContain('.topbar__search-results');
     expect(css).toContain('.topbar__search-status');
     expect(css).toMatch(/\.topbar__search-results\s*\{[^}]*z-index:\s*60;/s);
+  });
+
+  /**
+   * 2026-08-07 audit M1: the end-justified actions cluster (~375px at
+   * max-content) overflowed its 296px grid track and the opaque tenant pill
+   * covered the search box's ⌘K badge by 26px at 1440x900, on every route.
+   * Measured after the fix: tracks 392/512/392, search centred with 0px
+   * overlap, tenant pill back to one line.
+   */
+  it('keeps the topbar actions cluster inside its own grid track', () => {
+    const css = designCss();
+
+    expect(css).toMatch(/\.topbar__actions\s*\{[^}]*justify-self:\s*end;/s);
+    expect(css).toMatch(/\.topbar__actions\s*\{[^}]*max-inline-size:\s*100%;/s);
+    // A pill is one line high; a long tenant name ellipsizes, never wraps.
+    expect(css).toMatch(/\.topbar__pill\s*\{[^}]*white-space:\s*nowrap;/s);
+    expect(css).toMatch(/\.topbar__pill-tenant\s*\{[^}]*text-overflow:\s*ellipsis;/s);
+    // Below the breakpoint the third track is content-sized instead, so the
+    // cluster still can't be overlapped when the side tracks get tight.
+    expect(css).toMatch(
+      /@media \(max-width:\s*88rem\)\s*\{[\s\S]*?\.topbar\s*\{[^}]*grid-template-columns:[^;]*auto;/s,
+    );
   });
 
   it('prevents lead-table chips from compressing into neighboring cells', () => {
