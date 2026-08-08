@@ -152,7 +152,7 @@ CREATE TABLE IF NOT EXISTS mip.gold.borrower_360 (
   is_payoff_loss            BOOLEAN   NOT NULL COMMENT 'S1.3 payoff_loss_leads segment flag: tenant lien released within 24 months AND the property now carries a competitor lien. Also feeds the future S2.7 competitive view.',
   itm_on_related_property   BOOLEAN   NOT NULL COMMENT 'S1.3 itm_on_related_property segment flag: any Owner Link on this CLIP (S1.1 silver.property_owners, all slots) also holds a DIFFERENT clip that is in the money under the same refresh thresholds.',
   related_itm_property_count INT      NOT NULL COMMENT 'S1.3: count of OTHER in-the-money clips on the strongest Owner Link for this CLIP. Evidence display for itm_on_related_property.',
-  first_pos_loan_type       STRING             COMMENT '1st-lien loan type code (CONV / FHA / VA / etc). Feeds fit sub-score.',
+  first_pos_loan_type       STRING             COMMENT '1st-lien loan type code (CNV / FHA / VA / etc). Feeds fit sub-score.',
   loan_product_type         STRING             COMMENT 'fn_loan_product_type(first_pos_loan_type, first_pos_amount, conforming_loan_limit_applied): conventional / jumbo / fha / va / other. NULL when the Cotality loan type code is missing. Drives the PRODUCT TYPE filter and SegmentCard facets.',
   origination_channel       STRING             COMMENT 'LOS channel of the most recent funded first-party application (loan_officer / digital / branch / call_center in the demo feed). NULL when no funded application resolves to this borrower -- rendered "Unknown", never invented.',
   owner_name_hash           STRING    NOT NULL COMMENT 'sha2(LOWER(TRIM(name)) || salt, 256) propagated from silver.property_master. Internal only -- router strips before /api/*.',

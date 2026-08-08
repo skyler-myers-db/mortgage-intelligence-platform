@@ -790,7 +790,7 @@ scored AS (
     r.cashout_equity_min_pct   AS cashout_equity_min_applied,
     r.retention_min_spread_bps AS retention_min_spread_applied,
     r.conforming_loan_limit_usd AS conforming_loan_limit_applied,
-    -- Product type via frozen UDF: CONV/FHA/VA source codes plus the governed
+    -- Product type via frozen UDF: CNV/FHA/VA source codes plus the governed
     -- conforming-limit jumbo overlay. NULL when the source code is missing.
     mip.gold.fn_loan_product_type(
       e.first_pos_loan_type, e.first_pos_amount, r.conforming_loan_limit_usd
@@ -969,7 +969,7 @@ timeline AS (
 --   - economic_incentive: rows that clear BOTH the 200-bps/35% band
 --     still score ~95+; rows that clear only the 0-bps lane still
 --     score in the mid-30s. Monotonic in spread AND equity.
---   - fit: owner-occupant + CONV/FHA/VA still beats corporate, which
+--   - fit: owner-occupant + CNV/CONV/FHA/VA still beats corporate, which
 --     still beats the fallback. Monotonic in property-size signals.
 --   - relationship: current-customer > competitor-lien > no-relation.
 --     Customer tenure (historical_tenant_distinct_clips) feeds the
@@ -1027,7 +1027,7 @@ subscores AS (
         END
     )) AS INT) AS intent_trigger,
     -- fit: continuous over property-size features. Monotonic
-    -- (owner-occupant + CONV/FHA/VA with many bedrooms beats everything).
+    -- (owner-occupant + CNV/CONV/FHA/VA with many bedrooms beats everything).
     CAST(LEAST(100, GREATEST(0,
         CASE
           WHEN w.is_owner_occupied AND w.first_pos_loan_type IN ('CNV','CONV','FHA','VA') THEN 70
@@ -1381,7 +1381,7 @@ COMMENT ON COLUMN mip.gold.borrower_360.tenant_payoff_date IS 'S1.3: most recent
 COMMENT ON COLUMN mip.gold.borrower_360.is_payoff_loss IS 'S1.3 payoff_loss_leads segment flag: tenant lien released within 24 months AND the property now carries a competitor lien. Also feeds the future S2.7 competitive view.';
 COMMENT ON COLUMN mip.gold.borrower_360.itm_on_related_property IS 'S1.3 itm_on_related_property segment flag: any Owner Link on this CLIP (S1.1 silver.property_owners, all slots) also holds a DIFFERENT clip that is in the money under the same refresh thresholds.';
 COMMENT ON COLUMN mip.gold.borrower_360.related_itm_property_count IS 'S1.3: count of OTHER in-the-money clips on the strongest Owner Link for this CLIP. Evidence display for itm_on_related_property.';
-COMMENT ON COLUMN mip.gold.borrower_360.first_pos_loan_type IS '1st-lien loan type code (CONV / FHA / VA / etc). Feeds fit sub-score.';
+COMMENT ON COLUMN mip.gold.borrower_360.first_pos_loan_type IS '1st-lien loan type code (CNV / FHA / VA / etc). Feeds fit sub-score.';
 COMMENT ON COLUMN mip.gold.borrower_360.loan_product_type IS 'fn_loan_product_type(first_pos_loan_type, first_pos_amount, conforming_loan_limit_applied): conventional / jumbo / fha / va / other. NULL when the Cotality loan type code is missing. Drives the PRODUCT TYPE filter and SegmentCard facets.';
 COMMENT ON COLUMN mip.gold.borrower_360.origination_channel IS 'LOS channel of the most recent funded first-party application (loan_officer / digital / branch / call_center in the demo feed). NULL when no funded application resolves to this borrower -- rendered "Unknown", never invented.';
 COMMENT ON COLUMN mip.gold.borrower_360.owner_name_hash IS 'sha2(LOWER(TRIM(name)) || salt, 256) propagated from silver.property_master. Internal only -- router strips before /api/*.';

@@ -117,7 +117,7 @@ export const mortgageGlossary = {
     aliases: ['loan product type', 'jumbo', 'conventional'],
     category: 'mortgage',
     short: 'The loan product class of the current first-position mortgage.',
-    appContext: 'Derived from the Cotality loan type code (CONV/FHA/VA) with a Jumbo overlay when the original conventional loan amount exceeds the governed FHFA conforming loan limit; Unknown when the source loan type code is missing.',
+    appContext: 'Derived from the Cotality loan type code (CNV/FHA/VA) with a Jumbo overlay when the original conventional loan amount exceeds the governed FHFA conforming loan limit; Unknown when the source loan type code is missing.',
     proof: 'Proof opens the product-type evidence drawer citing mip.silver.lien_current (first-position loan type and amount) and the conforming-limit config.',
   },
   originationChannel: {

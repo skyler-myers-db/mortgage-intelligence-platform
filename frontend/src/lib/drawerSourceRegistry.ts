@@ -523,7 +523,7 @@ export const DRAWER_SOURCES = defineDrawerSources({
     assetPath: 'mip.gold.borrower_360',
     description: 'Derived from first-position loan type plus the governed jumbo limit.',
     signals: [
-      { label: 'Loan type', source: 'lien_current.first_pos_loan_type', value: 'CONV / FHA / VA' },
+      { label: 'Loan type', source: 'lien_current.first_pos_loan_type', value: 'CNV / FHA / VA' },
       { label: 'Original amount', source: 'lien_current.first_pos_amount', value: 'vs limit' },
       { label: 'Conforming limit', source: 'mip.ref.offer_rules_config', value: 'mip_conforming_loan_limit_usd' },
     ],
