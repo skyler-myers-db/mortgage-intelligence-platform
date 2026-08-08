@@ -188,10 +188,26 @@ def test_redact_borrower_row_strips_forbidden_keys() -> None:
     assert not leaks, f"forbidden keys leaked: {leaks}"
 
 
-def test_redact_borrower_row_renames_clip_to_clip_id() -> None:
+def test_redact_borrower_row_masks_clip_under_both_names() -> None:
+    """The dossier and the Lead Queue row must agree on the CLIP ref.
+
+    2026-08-07 platform audit F13: for the same borrower,
+    ``GET /api/v1/leads`` returned ``clip: "clip_ref_d8b9f5890b66"`` while
+    ``GET /api/v1/borrowers/{id}`` returned ``clip: ""``. ``Borrower360``
+    inherits ``LeadSummary.clip`` and this redactor only populated
+    ``clip_id``, so the field defaulted empty. Not masking -- the same
+    masked ref was already leaving through ``clip_id`` -- just dropped, on
+    the surface whose whole job is the evidence story.
+    """
     out = redact_borrower_row(_sample_borrower_row())
     assert re.fullmatch(r"clip_ref_[0-9a-f]{12}", out["clip_id"])
-    assert "clip" not in out
+    assert out["clip"] == out["clip_id"]
+
+
+def test_redact_borrower_row_never_emits_the_raw_clip() -> None:
+    row = _sample_borrower_row()
+    out = redact_borrower_row(row)
+    assert row["clip"] not in {out["clip"], out["clip_id"]}
 
 
 def test_redact_borrower_row_masks_owner_link_id() -> None:
@@ -203,6 +219,7 @@ def test_redact_borrower_row_falls_back_to_public_ids_when_raw_ids_missing() -> 
     out = redact_borrower_row(_sample_borrower_row(clip=None, owner_link_id=None))
 
     assert out["clip_id"] == "clip_demo_B-12345"
+    assert out["clip"] == "clip_demo_B-12345"
     assert out["owner_link_id"] == "ol_demo_B-12345"
 
 

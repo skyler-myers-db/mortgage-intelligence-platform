@@ -543,7 +543,7 @@ def redact_borrower_row(row: dict[str, Any]) -> dict[str, Any]:
 
     Field mapping (from ``docs/data-contract-module0.md`` §3.2 + §12):
 
-    - ``clip``          -> ``clip_id``
+    - ``clip``          -> ``clip_id`` AND ``clip`` (same masked ref; see below)
     - ``delta_vs_prior`` handled on segment rows, not here
     - every other column passes through with PII-safe renames
 
@@ -593,6 +593,16 @@ def redact_borrower_row(row: dict[str, Any]) -> dict[str, Any]:
         "outreach_status": row.get("outreach_status") or "none",
         "approved_at": row.get("approved_at"),
         "outreach_at": row.get("outreach_at"),
+        # ``Borrower360`` inherits ``LeadSummary.clip``, and the Lead Queue
+        # list rows populate it via ``redact_lead_row``. This redactor set
+        # only ``clip_id``, so the dossier answered ``clip: ""`` for the same
+        # borrower the list showed as ``clip_ref_d8b9f5890b66`` (2026-08-07
+        # platform audit F13). That is not masking -- the identical masked
+        # ref was already leaving through ``clip_id`` and through the
+        # ``subject_clip`` on the VIEW_BORROWER audit row -- it was a
+        # dropped field, and CLIP is the Cotality-mastered identifier the
+        # whole evidence story hangs on. Same value, both names.
+        "clip": clip_id,
         # Borrower360 additions:
         "clip_id": clip_id,  # <-- rename + mask at boundary
         # Cotality owner_1_identifier arrives as BIGINT from silver; the
