@@ -250,8 +250,6 @@ async function expectLiveGenieUi(
 type MapDrillTarget = {
   state: string;
   stateName: string;
-  countyFips: string;
-  countyName: string;
 };
 
 function escapeRegExp(value: string): string {
@@ -517,53 +515,32 @@ async function discoverMapDrillTarget(
     footprint.states?.find((row: { state_code?: string }) => row.state_code === stateRollup.state)
       ?.state_name ?? stateRollup.state;
 
-  const countyResp = await request.get(
-    `${API_URL}/api/geo/county-rollups?state=${stateRollup.state}${params.toString() ? `&${params.toString()}` : ''}`,
+  // The drill is state -> ZIP. County discovery is deliberately absent:
+  // the Cotality share carries one county FIPS per state, so
+  // /api/geo/county-rollups is empty for every state and a county-keyed
+  // ZIP request returns []. Asserting otherwise would pin a claim the
+  // data cannot support.
+  const zipResp = await request.get(
+    `${API_URL}/api/geo/zip-rollups?state=${stateRollup.state}${params.toString() ? `&${params.toString()}` : ''}`,
     { headers: AUTH_HEADERS },
   );
-  expect(countyResp.status(), 'county rollups target discovery').toBe(200);
-  const countyPayload = await countyResp.json();
-  let county:
-    | { fips_5?: string; county_name?: string; addressable_borrowers?: number }
-    | undefined;
-  for (const row of countyPayload.rollups as Array<{
-    fips_5?: string;
-    county_name?: string;
-    addressable_borrowers?: number;
-  }>) {
-    if (!row.fips_5 || Number(row.addressable_borrowers ?? 0) <= 0) continue;
-    const zipResp = await request.get(
-      `${API_URL}/api/geo/zip-rollups?county_fips=${row.fips_5}${params.toString() ? `&${params.toString()}` : ''}`,
-      { headers: AUTH_HEADERS },
-    );
-    if (zipResp.status() !== 200) continue;
-    const zipPayload = await zipResp.json();
-    if (Array.isArray(zipPayload.rollups) && zipPayload.rollups.length > 0) {
-      county = row;
-      break;
-    }
-  }
-  expect(county, 'county rollups should expose at least one populated county').toBeTruthy();
-  if (!county) throw new Error('No populated county with ZIP rollups was found');
-  const countyFips = String(county.fips_5 ?? '').trim();
-  expect(countyFips, 'populated county rollup must include a FIPS code').not.toBe('');
-  const rawCountyName = String(county.county_name || countyFips);
-  const countyName = rawCountyName.toLowerCase().endsWith('county')
-    ? rawCountyName
-    : `${rawCountyName} County`;
+  expect(zipResp.status(), 'zip rollups target discovery').toBe(200);
+  const zipPayload = await zipResp.json();
+  expect(
+    Array.isArray(zipPayload.rollups) && zipPayload.rollups.length > 0,
+    `state ${stateRollup.state} should expose at least one populated ZIP rollup`,
+  ).toBe(true);
 
   return {
     state: stateRollup.state,
     stateName,
-    countyFips,
-    countyName,
   };
 }
 
-async function drillStateToCounty(page: Page, target: MapDrillTarget) {
+async function drillStateToZips(page: Page, target: MapDrillTarget) {
   const map = page.locator('.map-wrap').first();
   const state = map.getByRole('button', { name: new RegExp(`^${escapeRegExp(target.stateName)}$`) }).first();
-  const county = map.getByRole('button', { name: new RegExp(escapeRegExp(target.countyName), 'i') }).first();
+  const zipTiles = page.locator('.zip-tiles');
   let lastError: unknown;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     await bringMapIntoViewport(page);
@@ -571,33 +548,10 @@ async function drillStateToCounty(page: Page, target: MapDrillTarget) {
     await clickSvgRegion(page, state, target.stateName);
     try {
       await expect(
-        county,
-        `${target.stateName} pointer click should drill into counties`,
-      ).toBeVisible({ timeout: 5_000 });
-      return;
-    } catch (error) {
-      lastError = error;
-    }
-  }
-  throw lastError;
-}
-
-async function drillCountyToZips(page: Page, target: MapDrillTarget) {
-  const map = page.locator('.map-wrap').first();
-  const county = map.getByRole('button', { name: new RegExp(escapeRegExp(target.countyName), 'i') }).first();
-  const zipTiles = page.locator('.zip-tiles');
-  let lastError: unknown;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    await bringMapIntoViewport(page);
-    await expectMapIdle(page, 'county');
-    await expect(county).toBeVisible({ timeout: 10_000 });
-    await clickSvgRegion(page, county, target.countyName);
-    try {
-      await expect(
         zipTiles,
-        `${target.countyName} pointer click should drill into ZIPs`,
+        `${target.stateName} pointer click should drill straight into ZIPs`,
       ).toBeVisible({ timeout: 5_000 });
-      await expect(page.locator('.map-crumbs')).toContainText(target.countyName, {
+      await expect(page.locator('.map-crumbs')).toContainText(target.stateName, {
         timeout: 5_000,
       });
       return;
@@ -826,7 +780,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await expect(page.getByRole('button', { name: /SEGMENT:\s*2 segments selected \(all selected\)/i })).toBeVisible({ timeout: 20_000 });
   });
 
-  test('segment map drill preserves segment filters through county ZIP and Lead Queue', async ({ page, request }) => {
+  test('segment map drill preserves segment filters through state ZIP and Lead Queue', async ({ page, request }) => {
     await gotoApp(page, '/segment-intelligence');
 
     const selectedSegments = ['Prime Refi Candidates', 'Home Equity Candidate'];
@@ -851,18 +805,11 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     }
     await filteredStateResponse;
 
-    const countyResponse = page.waitForResponse(
-      filteredGeoResponse('/api/geo/county-rollups'),
-      { timeout: 45_000 },
-    );
-    await drillStateToCounty(page, target);
-    await countyResponse;
-
     const zipResponse = page.waitForResponse(
       filteredGeoResponse('/api/geo/zip-rollups'),
       { timeout: 45_000 },
     );
-    await drillCountyToZips(page, target);
+    await drillStateToZips(page, target);
     await zipResponse;
 
     await expect(page.locator('.zip-tiles')).toBeVisible({ timeout: 10_000 });
@@ -896,7 +843,9 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
 	    const url = new URL(page.url());
 	    expect(url.pathname).toBe('/lead-queue');
     expect(url.searchParams.get('state')).toBe(target.state);
-    expect(url.searchParams.get('county')).toBe(target.countyFips);
+    // No county param: the ZIP tile deep-links by state + ZIP, the only
+    // two geography keys the share can actually answer.
+    expect(url.searchParams.get('county')).toBeNull();
     expect(url.searchParams.get('segment_mode')).toBe('any');
     expect(url.searchParams.get('segment_codes')).toContain('equity');
     expect(url.searchParams.get('zip')).toMatch(/^\d{5}$/);
@@ -944,9 +893,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await expect(map).toBeVisible({ timeout: 30_000 });
     await map.scrollIntoViewIfNeeded();
 
-    await drillStateToCounty(page, target);
-
-    await drillCountyToZips(page, target);
+    await drillStateToZips(page, target);
 
     await expect(page.locator('.zip-tiles')).toBeVisible({ timeout: 10_000 });
 
@@ -977,7 +924,9 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     const url = new URL(page.url());
     expect(url.pathname).toBe('/lead-queue');
     expect(url.searchParams.get('state')).toBe(target.state);
-    expect(url.searchParams.get('county')).toBe(target.countyFips);
+    // No county param: the ZIP tile deep-links by state + ZIP, the only
+    // two geography keys the share can actually answer.
+    expect(url.searchParams.get('county')).toBeNull();
     expect(url.searchParams.get('zip')).toMatch(/^\d{5}$/);
     await expect(page.locator('table.tbl')).toBeVisible({ timeout: 45_000 });
   });
