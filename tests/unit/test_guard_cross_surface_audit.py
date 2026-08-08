@@ -251,3 +251,23 @@ def test_cross_lender_vocabulary_is_unified(prompt: str) -> None:
 def test_genie_prose_inherits_the_city_fix() -> None:
     assert genie_visible_text_unsafe("Top metro this week is Fort Worth with 4,821 candidates") is False
     assert genie_visible_text_unsafe("Call John Smith about the refi") is True
+
+
+@pytest.mark.parametrize(
+    "rationale",
+    [
+        # Live approve-rationale refusal 2026-08-08: the greedy pair scan
+        # consumed "Strong Home" before seeing the exempt "Home Equity".
+        "AUDIT-verify: Strong Home Equity fit in the ranked queue.",
+        "High Home Equity potential; Prime Purchase Mortgage timing.",
+    ],
+)
+def test_boundary_artifact_pairs_are_not_names(rationale: str) -> None:
+    assert validate_no_human_name_shape(rationale, field_name="rationale")
+
+
+def test_lexicon_names_never_ride_the_boundary_exemption() -> None:
+    with pytest.raises(ValueError):
+        validate_no_human_name_shape(
+            "Reviewed with John Smith Equity yesterday.", field_name="rationale"
+        )

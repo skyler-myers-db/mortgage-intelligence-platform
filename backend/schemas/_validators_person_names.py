@@ -193,6 +193,27 @@ _CONTEXTUAL_HUMAN_NAME_RE = re.compile(
 )
 
 
+def _pair_is_boundary_artifact(text: str, match: re.Match[str]) -> bool:
+    """True when a flagged pair is the greedy head of a governed phrase.
+
+    "Strong Home Equity fit" — the non-overlapping pair scan consumes
+    "Strong Home" before it can see the exempt "Home Equity" pair (live
+    approve-rationale refusal, 2026-08-08). If the flagged pair's last word
+    begins a governed non-person pair with the next capitalized word, the
+    flag is a tokenization artifact — unless the pair leads with a known
+    first name, which is never exempt this way ("John Smith Equity" stays
+    caught by the lexicon scan regardless).
+    """
+
+    tokens = [token for token in re.split(r"\s+|\|", match.group(0).strip()) if token]
+    if not tokens or tokens[0].casefold() in _COMMON_FIRST_NAMES:
+        return False
+    following = re.match(r"\s+([A-Z][a-z]{1,30})\b", text[match.end() :])
+    if following is None:
+        return False
+    return titlecase_pair_is_non_person(f"{tokens[-1]} {following.group(1)}")
+
+
 def contains_human_name_shape(
     value: str,
     *,
@@ -210,6 +231,7 @@ def contains_human_name_shape(
     text = _LEADING_ANALYTICS_COMMAND_RE.sub(" ", text)
     if include_titlecase and any(
         not titlecase_pair_is_non_person(match.group(0))
+        and not _pair_is_boundary_artifact(text, match)
         for match in _TITLECASE_HUMAN_NAME_RE.finditer(text)
     ):
         return True
