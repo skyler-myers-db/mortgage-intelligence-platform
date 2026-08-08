@@ -839,9 +839,18 @@ _INLINE_SOURCE_RE = re.compile(
 )
 
 
-def _format_cell(value: object) -> str:
-    """Render one governed cell for the factual fallback summary."""
+def _format_cell(value: object, column: str = "") -> str:
+    """Render one governed cell for the factual fallback summary.
 
+    Identifier-shaped columns (zip, year, ids) are rendered verbatim: a ZIP
+    thousands-separated as "75,040" is wrong on screen and reads as a measure.
+    """
+
+    if column and (
+        _is_genie_identifier_column(column)
+        or column.strip().lower() in _VERBATIM_CELL_COLUMNS
+    ):
+        return str(value).strip()
     if isinstance(value, bool):
         return "yes" if value else "no"
     if isinstance(value, int):
@@ -856,6 +865,27 @@ def _format_cell(value: object) -> str:
     if numeric.is_integer():
         return f"{int(numeric):,}"
     return f"{numeric:,.2f}"
+
+
+# Columns rendered verbatim in the factual fallback: codes and years are
+# identifiers, not quantities.
+_VERBATIM_CELL_COLUMNS = frozenset(
+    {
+        "zip",
+        "zipcode",
+        "zip_code",
+        "postal_code",
+        "county_fips_5",
+        "situs_cbsa_code",
+        "cbsa_code",
+        "msa_cbsa_code",
+        "year",
+        "origination_year",
+        "snapshot_date",
+        "refreshed_at",
+        "state",
+    }
+)
 
 
 def _humanize_column(column: str) -> str:
@@ -879,7 +909,7 @@ def _factual_row_summary(
     row_count = len(rows)
     if row_count == 1:
         pairs = [
-            f"{_humanize_column(column)}: {_format_cell(value)}"
+            f"{_humanize_column(column)}: {_format_cell(value, column)}"
             for column, value in rows[0].items()
             if value is not None
         ]
@@ -890,7 +920,7 @@ def _factual_row_summary(
         )
     first = rows[0]
     headline_pairs = [
-        f"{_humanize_column(column)}: {_format_cell(value)}"
+        f"{_humanize_column(column)}: {_format_cell(value, column)}"
         for column, value in first.items()
         if value is not None
     ]
