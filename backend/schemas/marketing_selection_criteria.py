@@ -9,7 +9,9 @@ from backend.schemas.growth_agent_segment_intent import (
 )
 from backend.schemas.marketing_audience_admission import audience_admission_criterion
 from backend.schemas.marketing_selection_reviewed_analytics import (
+    _REVIEWED_ANALYSIS_PREAMBLE_RE,
     _REVIEWED_READ_ONLY_ANALYTIC_PATTERNS,
+    _REVIEWED_WHY_ASSESSMENT_PREAMBLE_RE,
 )
 
 REVIEWED_MORTGAGE_ATTRIBUTE_FRAGMENT = (
@@ -36,6 +38,29 @@ REVIEWED_MORTGAGE_ATTRIBUTE_FRAGMENT = (
     r"eligib(?:le|ility)\s+for\s+(?:an?\s+)?(?:heloc|refi(?:nance)?|home[- ]?equity(?:\s+line)?)|"
     r"timely\s+retention\s+review\s+signal|"
     r"(?:reviewed|eligible)\s+segment\s+membership|"
+    # Modeled potential/upside is the product's own scoring concept
+    # (opportunity score), phrased the way growth leaders ask for it. "the
+    # top 10 borrowers with the highest potential" failed closed as an
+    # unknown criterion (live capture, 2026-08-08).
+    r"(?:the\s+)?(?:absolute\s+)?"
+    r"(?:high(?:est)?|top|strong(?:est)?|great(?:est)?|most|best)?\s*"
+    r"(?:refi(?:nance)?|heloc|growth|opportunity|conversion)?\s*"
+    r"(?:potential|upside)|"
+    # Answer-format adverbials: "recommend the best offer for each with
+    # reasoning" asks for an explained answer, not a selection criterion.
+    # The ambiguous-relationship grammar reads "with <object>" as a
+    # criterion, so the closed adverbial vocabulary lives here (same
+    # capture).
+    r"(?:(?:full|clear|detailed|complete|supporting)\s+)?"
+    r"(?:reasoning|rationale|justifications?|explanations?)|"
+    # Assessment nouns: "evaluate why each borrower is an especially good
+    # candidate" is a why-question about the product's own ranking, but the
+    # declarative co-reference grammar reads "is <X>" as assigning criterion
+    # X. The assessment vocabulary is the product's own ("strong candidate"
+    # already appears in the reviewed analytics shapes). Same capture.
+    r"(?:an?\s+)?(?:especially\s+|particularly\s+|very\s+)?"
+    r"(?:strong|good|great|excellent|prime|ideal|top|promising)\s+"
+    r"(?:candidates?|prospects?|fits?|matches?|opportunit(?:y|ies))|"
     r"(?:fixed|adjustable)[- ]?rate\s+(?:mortgages?|loans?))"
 )
 REVIEWED_MORTGAGE_ATTRIBUTE_LIST_FRAGMENT = (
@@ -582,6 +607,8 @@ def _contains_unreviewed_audience_decision(
 ) -> bool:
     """Require affirmative audience decisions to prove a complete reviewed criterion."""
 
+    clause = _REVIEWED_ANALYSIS_PREAMBLE_RE.sub("", clause, count=1)
+    clause = _REVIEWED_WHY_ASSESSMENT_PREAMBLE_RE.sub("", clause, count=1)
     applied_criterion = _APPLY_CRITERION_WHEN_SELECTING_RE.fullmatch(clause)
     if applied_criterion is not None:
         criterion = _normalize_criterion(applied_criterion.group("criterion"))
