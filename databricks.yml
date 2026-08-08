@@ -31,7 +31,7 @@ bundle:
 # anchor and fails if it finds one — a forkability safeguard so an SE
 # cannot ship a customer deploy still pointing at Entrada's workspace.
 workspace:
-  host: &default_host https://dbc-149e560d-e056.cloud.databricks.com
+  host: &default_host https://dbc-3aa503a9-4fa8.cloud.databricks.com
 
 # Sync: explicitly include the built frontend bundle in the uploaded
 # source tree. `frontend/dist/` is in .gitignore (we don't commit built
