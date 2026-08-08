@@ -59,6 +59,15 @@ SUMMARY_CURRENT_MEASURES: tuple[tuple[str, str], ...] = (
     ("offers_available", "offers available"),
 )
 
+#: Rendered token for a zero movement. A literal "0" next to a KPI label
+#: reads as "zero borrowers" -- the 2026-08-07 platform audit (F12) caught
+#: the live home page saying "Since your last login: 0 high-opportunity, 0
+#: refi candidates, 0 offers available." on a book holding 3,503 / 88,806 /
+#: 5,156,184 of them. The deltas were genuinely zero; the sentence was not
+#: about the deltas. Saying "no change in X" is the same fact, read
+#: correctly, and it is the first sentence a buyer sees on the home route.
+NO_CHANGE_DISPLAY = "no change"
+
 _PHRASING_CACHE_TTL_S = 1800.0
 _PHRASING_FAILURE_TTL_S = 120.0
 _PHRASING_MAX_LEN = 300
@@ -83,11 +92,13 @@ def _delta_highlight(
 ) -> HomeSummaryHighlight:
     """Signed since-last-login movement. ``style="pct"`` renders a signed
     percent when the baseline supports one (non-zero baseline, |pct| >=
-    0.1 after rounding); everything else renders a signed count."""
+    0.1 after rounding); everything else renders a signed count. A zero
+    movement renders :data:`NO_CHANGE_DISPLAY` rather than ``"0"`` -- see
+    that constant for why."""
     delta_pct: float | None = None
     if baseline > 0:
         delta_pct = round(delta / baseline * 100, 1)
-    display = _fmt_signed(delta)
+    display = NO_CHANGE_DISPLAY if delta == 0 else _fmt_signed(delta)
     if style == "pct" and delta != 0 and delta_pct is not None and abs(delta_pct) >= 0.1:
         display = f"{delta_pct:+.1f}%"
     return HomeSummaryHighlight(
@@ -113,8 +124,22 @@ def _current_highlight(measure: str, label: str, *, current: int) -> HomeSummary
     )
 
 
+def _fragment(highlight: HomeSummaryHighlight) -> str:
+    """One "<token> <label>" clause, with the zero-delta reading fixed.
+
+    ``"no change high-opportunity"`` is not English, so a zero movement gets
+    the linking ``in``: ``"no change in high-opportunity"``. The token itself
+    is unchanged, which matters — the frontend locates each highlight inside
+    the sentence by an exact ``value_token`` substring match, so the token
+    must appear verbatim and once per highlight.
+    """
+    if highlight.delta == 0:
+        return f"{highlight.display} in {highlight.label}"
+    return f"{highlight.display} {highlight.label}"
+
+
 def _fragments(highlights: list[HomeSummaryHighlight]) -> str:
-    return ", ".join(f"{h.display} {h.label}" for h in highlights)
+    return ", ".join(_fragment(h) for h in highlights)
 
 
 def compose_home_summary(result: KpiDeltaResult) -> HomeSummaryResponse:
@@ -188,7 +213,7 @@ _PLACEHOLDER_RE = re.compile(r"\{\{(\d+)\}\}")
 
 def phrasing_prompt(summary: HomeSummaryResponse) -> str:
     slots = "; ".join(
-        f"{{{{{i}}}}} = {h.display} {h.label}"
+        f"{{{{{i}}}}} = {_fragment(h)}"
         for i, h in enumerate(summary.highlights)
     )
     return (

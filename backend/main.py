@@ -561,6 +561,13 @@ async def _campaign_treatment_runtime_disabled_handler(
     mirrors the DependencyDownError shape the DegradedBanner already parses,
     with ``retryable: false`` — retrying cannot help until an operator rolls
     forward through scripts/deploy.sh.
+
+    2026-08-07 platform audit F11: the operator remediation used to ship
+    inside ``detail``, making this the only error body in ~95 probes that
+    named an internal repo path to an end user. It now goes to the structured
+    log alongside the correlation id; the wire keeps the machine-readable
+    ``reason`` code plus a generic message, the same split
+    ``safe_dependency_detail`` uses for ``DependencyDownError``.
     """
     emit(
         log,
@@ -569,6 +576,7 @@ async def _campaign_treatment_runtime_disabled_handler(
         dependency="deployment",
         outcome="refused",
         correlation_id=get_correlation_id(),
+        recommended_action=exc.operator_remediation,
     )
     return JSONResponse(
         status_code=503,

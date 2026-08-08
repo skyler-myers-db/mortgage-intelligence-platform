@@ -1037,8 +1037,26 @@ class SalesStateStore:
         request_id: str | None = None,
     ) -> tuple[CallDisposition, str]:
         lo = self.require_disposition_scope(actor=actor, lo_email=lo_email, use_cache=False)
+        # 2026-08-07 platform audit F6. A disposition of ``connected`` asserts
+        # that a borrower WAS CONTACTED, which is a stronger claim than
+        # declining to contact them -- yet declining (``/outreach/reject``) is
+        # approver-gated while this route admitted any active sales-team
+        # member writing against any borrower, approved or not, assigned or
+        # not. Require the same in-scope active assignment ``record_outcome``
+        # already requires (``require_outcome_scope``): a contact claim needs
+        # a governed routing record behind it, and because assignment itself
+        # is gated on ``approval_status == 'approved'``
+        # (``backend/api/sales.py::_ensure_assignable_borrower``) that
+        # transitively restores "approved before contacted" as well.
+        #
+        # No approver allowlist here on purpose: loan officers are the people
+        # who log call outcomes and are deliberately NOT approvers, so gating
+        # on the approver list would make the field workflow unusable. The
+        # assignment IS the authorization record for this actor + borrower.
         assignment = self.active_assignment_for(borrower_id, use_cache=False)
-        if assignment is not None and assignment.assigned_to_email != lo.email:
+        if assignment is None:
+            raise PermissionError("lead disposition requires an in-scope active assignment")
+        if assignment.assigned_to_email != lo.email:
             raise PermissionError("borrower is assigned to another loan officer")
         clean_notes = scrub_free_text(notes) if notes else None
 

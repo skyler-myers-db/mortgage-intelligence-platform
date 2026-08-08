@@ -91,10 +91,14 @@ def test_summary_delta_shape_and_actor_resolution() -> None:
     assert res.status_code == 200
     body = res.json()
     assert body["status"] == "delta"
-    assert [h["display"] for h in body["highlights"]] == ["+1.5%", "+2,250", "0"]
+    assert [h["display"] for h in body["highlights"]] == [
+        "+1.5%",
+        "+2,250",
+        "no change",
+    ]
     assert body["headline"] == (
         "Since your last login: +1.5% high-opportunity, "
-        "+2,250 refi candidates, 0 offers available."
+        "+2,250 refi candidates, no change in offers available."
     )
     # The resolved forwarded identity is what anchors the delta lookup.
     assert stub.actors == ["growth@summit.example"]

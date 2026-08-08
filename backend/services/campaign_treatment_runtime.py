@@ -42,8 +42,37 @@ CAMPAIGN_TREATMENT_RUNTIME_ENABLED = "enabled"
 CAMPAIGN_TREATMENT_RUNTIME_DISABLED = "disabled_baseline_deploy"
 
 
+#: Client-facing 503 detail. Deliberately says WHAT is refused and that a
+#: retry cannot help, and nothing about how to fix it: the fix is an operator
+#: action on the deployment, and the 2026-08-07 platform audit (F11) flagged
+#: this body as the only error response in ~95 probes that named an internal
+#: repo artifact (``scripts/deploy.sh``) to an end user. Structured
+#: ``reason``/``dependency`` fields still carry the machine-readable cause,
+#: exactly like the ``safe_dependency_detail`` pattern for DependencyDownError.
+CAMPAIGN_TREATMENT_RUNTIME_CLIENT_DETAIL = (
+    "Campaign treatment writes are disabled on this deployment until its "
+    "governed access proof completes. Retrying will not help — this needs a "
+    "platform operator."
+)
+
+#: Operator remediation. Goes to the structured log next to the correlation
+#: id, never onto the wire.
+CAMPAIGN_TREATMENT_RUNTIME_OPERATOR_REMEDIATION = (
+    "this deployment did not carry the promoted snapshot marker (bare UI/CLI "
+    "deploys ship the disabled app.yaml baseline); roll forward with "
+    "scripts/deploy.sh to restore treatment writes"
+)
+
+
 class CampaignTreatmentRuntimeDisabledError(RuntimeError):
-    """A campaign-treatment write was attempted before promotion proof."""
+    """A campaign-treatment write was attempted before promotion proof.
+
+    ``str(exc)`` is safe to return to a client. The operator-actionable
+    remediation lives on :attr:`operator_remediation` so the exception handler
+    can log it without putting it in the response body.
+    """
+
+    operator_remediation: str = CAMPAIGN_TREATMENT_RUNTIME_OPERATOR_REMEDIATION
 
 
 def campaign_treatment_runtime_enabled() -> bool:
@@ -78,8 +107,5 @@ def require_campaign_treatment_runtime() -> None:
     if campaign_treatment_runtime_enabled():
         return
     raise CampaignTreatmentRuntimeDisabledError(
-        "Campaign treatment runtime is disabled until governed access proof "
-        "completes. This deployment did not carry the promoted snapshot "
-        "marker (bare UI/CLI deploys ship the disabled app.yaml baseline); "
-        "roll forward with scripts/deploy.sh to restore treatment writes."
+        CAMPAIGN_TREATMENT_RUNTIME_CLIENT_DETAIL
     )

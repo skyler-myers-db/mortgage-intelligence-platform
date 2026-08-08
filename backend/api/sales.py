@@ -368,12 +368,21 @@ def sales_aging(
                 row for row in rows
                 if row.get("assigned_to_email") is None or row.get("assigned_to_email") in visible
             ]
+        # 2026-08-07 platform audit F1: this used to call ``borrower_repo.get``
+        # once per candidate row -- up to 250 sequential warehouse round-trips,
+        # measured at 25 s warm / 55 s cold. The gold row itself is never used
+        # here; the loop only asks "does this borrower still exist?", so one
+        # batched existence lookup answers it for the whole page.
+        candidate_ids = [
+            borrower_id
+            for row in rows
+            if (borrower_id := str(row.get("borrower_id") or ""))
+        ]
+        live_ids = borrower_repo.existing_borrower_ids(candidate_ids)
         live_rows: list[dict[str, object]] = []
         for row in rows:
             borrower_id = str(row.get("borrower_id") or "")
-            if not borrower_id:
-                continue
-            if borrower_repo.get(borrower_id) is None:
+            if not borrower_id or borrower_id not in live_ids:
                 continue
             live_rows.append(row)
             if len(live_rows) >= limit:

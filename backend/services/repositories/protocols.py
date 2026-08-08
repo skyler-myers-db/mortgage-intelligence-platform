@@ -19,6 +19,7 @@ duck-typed compliance can do so cheaply.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:  # cycle-free: genie_answers imports only pydantic/stdlib
@@ -264,6 +265,21 @@ class BorrowerRepository(Protocol):
 
     def get_fresh(self, borrower_id: str) -> Borrower360 | None:
         """Read through the process cache for snapshot reconciliation."""
+        ...
+
+    def existing_borrower_ids(self, borrower_ids: Sequence[str]) -> set[str]:
+        """Return the subset of ``borrower_ids`` still present in gold.
+
+        Existence-only batch companion to :meth:`get`, for callers that hold
+        a list of ids from Lakebase workflow state and need to drop rows whose
+        borrower disappeared from the gold population between refreshes. It
+        exists because doing that with a per-row :meth:`get` is one warehouse
+        round-trip per id — the 2026-08-07 platform audit measured
+        ``GET /api/v1/sales/aging`` at 25 s warm / 55 s cold on 250 rows.
+
+        Returns ids exactly as gold stores them; unknown or malformed ids are
+        simply absent from the result rather than raising.
+        """
         ...
 
     def evidence(self, borrower_id: str) -> list[EvidenceEvent] | None:

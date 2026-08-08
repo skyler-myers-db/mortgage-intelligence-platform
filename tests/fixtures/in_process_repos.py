@@ -13,6 +13,8 @@ synthetic population in ``tests/fixtures/mock_population.py``.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from backend.schemas.analytics import (
     AnalyticsFilters,
     AnalyticsScope,
@@ -736,6 +738,10 @@ class InProcessMockBorrowerRepository:
 
     def get_fresh(self, borrower_id: str) -> Borrower360 | None:
         return self.get(borrower_id)
+
+    def existing_borrower_ids(self, borrower_ids: Sequence[str]) -> set[str]:
+        known = {b.borrower_id for b in mock_data.BORROWERS}
+        return {borrower_id for borrower_id in borrower_ids if borrower_id in known}
 
     def evidence(self, borrower_id: str) -> list[EvidenceEvent] | None:
         borrower = self.get(borrower_id)

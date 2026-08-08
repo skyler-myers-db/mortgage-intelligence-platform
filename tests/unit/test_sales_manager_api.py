@@ -138,6 +138,57 @@ def test_disposition_requires_callback_time_and_updates_lifecycle() -> None:
     assert body["latest_disposition"]["outcome"] == "callback_scheduled"
 
 
+def test_disposition_requires_an_active_assignment() -> None:
+    """A contact claim needs a governed routing record behind it.
+
+    2026-08-07 platform audit F6: ``POST /leads/{id}/disposition`` with
+    ``outcome: "connected"`` asserts a borrower WAS CONTACTED -- a stronger
+    claim than declining to contact them -- yet declining
+    (``/outreach/reject``) was approver-gated while this route admitted any
+    active sales-team member writing against an unapproved, unassigned
+    borrower. The active assignment is the authorization record; because
+    assignment itself requires ``approval_status == 'approved'``, this also
+    restores "approved before contacted".
+    """
+    borrower_id = mock_data.BORROWERS[3].borrower_id
+
+    unassigned = client.post(
+        f"/api/leads/{borrower_id}/disposition",
+        json={"lo_email": "lo01@summit.example", "outcome": "connected"},
+    )
+    assert unassigned.status_code == 403
+    # Same body as every other sales-scope 403 (no leak of lifecycle state).
+    assert unassigned.json()["detail"] == "sales operation is outside the actor scope"
+
+    _approve_for_sales(borrower_id)
+    still_unassigned = client.post(
+        f"/api/leads/{borrower_id}/disposition",
+        json={"lo_email": "lo01@summit.example", "outcome": "connected"},
+    )
+    assert still_unassigned.status_code == 403
+
+    assigned = client.post(
+        f"/api/leads/{borrower_id}/assign",
+        json={"assigned_to_email": "lo01@summit.example", "strategy": "manual"},
+    )
+    assert assigned.status_code == 200
+
+    logged = client.post(
+        f"/api/leads/{borrower_id}/disposition",
+        json={"lo_email": "lo01@summit.example", "outcome": "connected"},
+    )
+    assert logged.status_code == 200
+    assert logged.json()["audit_event_id"]
+
+    # An assignment to somebody else stays a 409 conflict, not a 403 -- the
+    # caller is in scope, the borrower is simply another officer's.
+    other_officer = client.post(
+        f"/api/leads/{borrower_id}/disposition",
+        json={"lo_email": "lo02@summit.example", "outcome": "connected"},
+    )
+    assert other_officer.status_code == 409
+
+
 def test_disposition_request_id_replays_without_duplicate_or_breaker(fake_lakebase_client) -> None:
     borrower_id = mock_data.BORROWERS[1].borrower_id
     _approve_for_sales(borrower_id)
@@ -1253,13 +1304,32 @@ def test_sales_aging_omits_approval_rows_without_live_borrower() -> None:
             ]
 
     class _Borrowers:
-        def get(self, borrower_id: str) -> object | None:
-            return object() if borrower_id == live_borrower_id else None
+        """Counts round-trips so the batching contract is observable.
+
+        2026-08-07 platform audit F1: the route used to call ``get`` once per
+        candidate row (up to 250 sequential warehouse statements, 25 s warm).
+        A ``get`` call from this route is now a regression, so it raises.
+        """
+
+        def __init__(self) -> None:
+            self.bulk_calls: list[list[str]] = []
+
+        def get(self, borrower_id: str) -> object | None:  # pragma: no cover
+            raise AssertionError(
+                "sales/aging must batch its existence check, not call get() per row"
+            )
+
+        def existing_borrower_ids(self, borrower_ids: object) -> set[str]:
+            ids = list(borrower_ids)  # type: ignore[call-overload]
+            self.bulk_calls.append(ids)
+            return {b for b in ids if b == live_borrower_id}
+
+    borrowers = _Borrowers()
 
     previous_store = app.dependency_overrides.get(get_sales_state_store)
     previous_borrowers = app.dependency_overrides.get(get_borrower_repository)
     app.dependency_overrides[get_sales_state_store] = lambda: _Store()
-    app.dependency_overrides[get_borrower_repository] = lambda: _Borrowers()
+    app.dependency_overrides[get_borrower_repository] = lambda: borrowers
     try:
         response = client.get("/api/sales/aging?older_than_days=7")
     finally:
@@ -1276,6 +1346,9 @@ def test_sales_aging_omits_approval_rows_without_live_borrower() -> None:
     borrower_ids = {row["borrower_id"] for row in response.json()}
     assert live_borrower_id in borrower_ids
     assert "B-TEST-ORPHAN" not in borrower_ids
+    # Every candidate id is resolved in a single call, regardless of page size.
+    assert len(borrowers.bulk_calls) == 1
+    assert borrowers.bulk_calls[0] == ["B-TEST-ORPHAN", live_borrower_id]
 
 
 def test_genie_routes_sales_manager_lo_conversion_to_sales_ops_adapter() -> None:

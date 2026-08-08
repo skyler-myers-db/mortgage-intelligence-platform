@@ -267,17 +267,31 @@ class StateFootprintResolver:
         """
         return {s.state_name.lower(): [s.state_code] for s in self._footprint()}
 
-    def default_state_code(self) -> str:
+    def default_state_code(self) -> str | None:
         """Return the USPS code of the row with ``is_default_state = TRUE``.
 
-        If no row is flagged default, return the first row by display order.
-        The UI's broad default is still "All N states"; this is only anchor
-        metadata for APIs that require a single state.
+        If no row is flagged default, fall through to the first row by
+        display order — but ONLY when the active list came from Unity
+        Catalog (live gold coverage or the ``ref.state_footprint`` metadata
+        table). The UI's broad default is still "All N states"; this is only
+        anchor metadata for APIs that require a single state.
+
+        Returns ``None`` on the generic outage fallback. That list is the
+        alphabetical 50-state dictionary, so "first by display order" meant
+        Alabama — a state with zero borrowers in the current share, named as
+        THE default purely because it sorts first (2026-08-07 platform audit).
+        There is no default state when there is no footprint, and callers
+        that require a single state must handle its absence rather than
+        receive a fabricated one. ``using_fallback()`` reports the same
+        condition; this method just stops papering over it.
         """
-        for s in self._footprint():
+        rows = self._footprint()
+        for s in rows:
             if s.is_default_state:
                 return s.state_code
-        return self._footprint()[0].state_code
+        if self._source_status == "fallback":
+            return None
+        return rows[0].state_code
 
     def using_fallback(self) -> bool:
         """Return TRUE when the active list is metadata only.
