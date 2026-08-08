@@ -8,6 +8,33 @@ deprecation window first.
 
 ## Unreleased
 
+### 2026-08-08 deep-analysis question family: guards opened by vocabulary, answers deepened by planning
+
+- **Behavioral (guards):** the deep-analysis question family — "analyze the
+  full dataset of eligible borrowers, list the absolute top potential
+  borrowers, evaluate why each is a good candidate, and what the best curated
+  offer for each would be" — was refused across both Ask Genie and the
+  co-pilot by four guard defects (compound-clause anchoring, unreviewed
+  "with reasoning"/"highest potential" criteria, verb/conjunction pairs read
+  as borrower names, "for each" read as a contextual name). All fixed by
+  closed-vocabulary extension: analysis/why-assessment preamble strips,
+  reviewed potential/assessment/answer-format vocabulary, conjunction
+  transparency plus an analytics-verb skip list, and distributive-determiner
+  safe tokens. A 1,125-paraphrase sweep now passes 100% on both surfaces
+  (was 45% refused on Genie, 91% on the co-pilot); a 23,535-string
+  differential against the previous implementation shows **zero
+  refuse/allow flips** — no detector weakened, swapped-token variants
+  ("zyrplax", health terms, real name pairs) still refuse.
+- **Behavioral (depth):** questions classified as deep-analysis
+  (explicit depth wording, or two-plus analytic parts: ranked shortlist /
+  per-item why / offer call / comparative context) now route to the live
+  space's planned decomposition **first** instead of a single governed SQL
+  turn, with a wider plan floor (5–7 sub-analyses), coverage guidance
+  (cohort signals, population comparison, offer mix, concentration), and a
+  structured deep synthesis — every number still verified against the
+  sections' returned rows. Single-part questions are unchanged; an unusable
+  plan falls through to the existing single-turn path.
+
 ### 2026-08-07 growth co-pilot refusal families + refusal audit trail
 
 - **Additive:** a refused co-pilot prompt on `POST /api/v1/growth-agent/agent/run`

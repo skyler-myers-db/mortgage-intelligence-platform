@@ -65,11 +65,81 @@ _SWEEP_MAX_WORKERS = 4
 
 _MIN_PLANNED = 3
 _MAX_PLANNED = 7
+# Deep-analysis asks get the larger plan floor: a shortlist + per-item why +
+# offer call cannot be told in three queries.
+_MIN_PLANNED_DEEP = 5
 
 _PLAN_LINE_RE = re.compile(r"^\s*(?:\d{1,2}[.)]|[-*•])\s+(.{10,240})\s*$")
 
+# Closed signals for "this question demands a multi-part deep analysis".
+# Live capture 2026-08-08: a top-borrowers/why-each/best-offer ask ran as ONE
+# governed SQL turn — the same single query any app screen runs — because the
+# planner only engaged as a policy-blocked rescue. Two or more distinct
+# analytic parts (or an explicit depth request) route to the planner first.
+_DEPTH_EXPLICIT_RE = re.compile(
+    r"\b(?:deep|comprehensive|complete|thorough|full|in[- ]depth|end[- ]to[- ]end)\b"
+    r".{0,40}\b(?:analysis|analyz|analys|review|dive|assessment|picture|study)",
+    re.IGNORECASE,
+)
+_DEPTH_PART_RES: tuple[re.Pattern[str], ...] = (
+    # Ranked shortlist.
+    re.compile(
+        r"\b(?:top|best|strongest|highest[- ]potential|most\s+promising|rank|curated?\s+list)\b",
+        re.IGNORECASE,
+    ),
+    # Per-item rationale.
+    re.compile(
+        r"\b(?:why\s+each|why\s+every|rationale|justif|reasoning|explain\s+why|"
+        r"evaluate\s+why)\b",
+        re.IGNORECASE,
+    ),
+    # Offer recommendation.
+    re.compile(
+        r"\b(?:best|ideal|right|optimal|recommended?|curated)\s+(?:\w+\s+)?offers?\b",
+        re.IGNORECASE,
+    ),
+    # Comparative / portfolio context.
+    re.compile(
+        r"\b(?:compare|versus|vs\.?|stand\s+out|against\s+the|percentile|"
+        r"across\s+the\s+(?:entire\s+)?(?:portfolio|book|population))\b",
+        re.IGNORECASE,
+    ),
+)
 
-def _planning_prompt(question: str) -> str:
+
+def is_deep_analysis_request(question: str) -> bool:
+    """True when the ask is inherently multi-part (shortlist + why + offer)."""
+
+    if _DEPTH_EXPLICIT_RE.search(question):
+        return True
+    parts = sum(1 for pattern in _DEPTH_PART_RES if pattern.search(question))
+    return parts >= 2
+
+
+def _planning_prompt(question: str, *, deep: bool = False) -> str:
+    if deep:
+        # The angles named here are decomposition COVERAGE hints — the live
+        # space still authors the plan, phrases each sub-question, and can
+        # substitute angles its assets answer better. Nothing here injects
+        # criteria; every sub-question re-enters the full guard battery.
+        angle_guidance = (
+            "This is a deep-analysis request, so the plan must go materially "
+            "beyond a single ranked list. Cover, in the sub-questions YOU "
+            "write: (a) the ranked cohort itself with its governed score and "
+            "the underlying signal columns (rate spread, equity, triggers); "
+            "(b) how those top borrowers compare with the whole eligible "
+            "population on the same measures (averages or percentiles, so "
+            "'why these' is provable); (c) the recommended-offer mix for the "
+            "cohort and the signals behind each offer; (d) at least one "
+            "concentration or co-occurrence angle (geography, segments, "
+            "competitor liens, listing status) that a single screen would "
+            "not show. "
+            f"Plan between {_MIN_PLANNED_DEEP} and {_MAX_PLANNED} questions.\n\n"
+        )
+        count_line = ""
+    else:
+        angle_guidance = ""
+        count_line = f"between {_MIN_PLANNED} and {_MAX_PLANNED} of them, "
     return (
         "Plan, do not query: for this message only, do not generate SQL and do "
         "not execute anything. The user asked a broad question that cannot be "
@@ -78,12 +148,13 @@ def _planning_prompt(question: str) -> str:
         "If this is not an analytics request at all — a greeting, a request "
         "for help using the product, or unintelligible input — reply with "
         "exactly NO_PLAN and nothing else.\n\n"
+        f"{angle_guidance}"
         "Otherwise break it into the specific analytics questions YOU judge "
         "most useful, "
         "phrased as neutral read-only analytics (prefer 'top borrowers by "
         "opportunity score' over audience-selection wording like 'eligible "
         "for' or 'characteristics of'), "
-        f"between {_MIN_PLANNED} and {_MAX_PLANNED} of them, each self-contained "
+        f"{count_line}each self-contained "
         "and answerable with one SQL query over your trusted assets. Choose the "
         "angles yourself based on what the question is really asking and which "
         "of your assets can answer it. Reply ONLY with a numbered list, one "
@@ -141,6 +212,8 @@ def _planned_question_guard_hit(question: str) -> str | None:
 def plan_sub_questions(
     repo: DatabricksGenieRepository,
     question: str,
+    *,
+    deep: bool = False,
 ) -> tuple[list[str], list[str]]:
     """Ask the live space to decompose the question; screen what comes back.
 
@@ -148,7 +221,7 @@ def plan_sub_questions(
     """
 
     try:
-        planning_turn = repo.ask_raw(_planning_prompt(question))
+        planning_turn = repo.ask_raw(_planning_prompt(question, deep=deep))
     except Exception:  # noqa: BLE001 - planner failure falls through honestly
         return [], []
     planned_raw = _parse_planned_questions(planning_turn)
@@ -166,19 +239,43 @@ def plan_sub_questions(
     return planned, dropped
 
 
-def _synthesis_prompt(question: str, sections: list[tuple[str, GenieMessageResponse]]) -> str:
+def _synthesis_prompt(
+    question: str,
+    sections: list[tuple[str, GenieMessageResponse]],
+    *,
+    deep: bool = False,
+) -> str:
+    # Deep syntheses weave per-borrower detail across sections, so each
+    # section keeps a larger verified digest to draw from.
+    budget = 700 if deep else 400
     digest_lines = []
     for sub_question, response in sections:
-        snippet = " ".join((response.answer or "").split())[:400]
+        snippet = " ".join((response.answer or "").split())[:budget]
         digest_lines.append(f"- {sub_question} -> {snippet}")
     digest = "\n".join(digest_lines)
+    if deep:
+        ask = (
+            "Write the deep executive synthesis in 8 to 14 sentences, no "
+            "headings. It must do four things, each grounded ONLY in numbers "
+            "that appear in the results above: name the standout borrowers or "
+            "cohort and the figures that put them on top; say why they stand "
+            "out RELATIVE to the wider population (use the comparison "
+            "numbers); state the offer call and the signal behind it; and end "
+            "with the one cross-cutting insight a lender could not read off "
+            "any single screen. If the results above do not support one of "
+            "these, say so rather than inventing it."
+        )
+    else:
+        ask = (
+            "Write the executive synthesis in 4 to 8 sentences: the biggest "
+            "cross-cutting insights and what a lender should act on first. Use "
+            "ONLY numbers that appear in the results above, and no headings."
+        )
     return (
         "Do not generate SQL for this message. Below are the verified results "
         "of the analyses you just ran for the question "
         f'"{question}":\n\n{digest}\n\n'
-        "Write the executive synthesis in 4 to 8 sentences: the biggest "
-        "cross-cutting insights and what a lender should act on first. Use "
-        "ONLY numbers that appear in the results above, and no headings."
+        f"{ask}"
     )
 
 
@@ -186,6 +283,8 @@ def _synthesize_closing(
     repo: DatabricksGenieRepository,
     question: str,
     sections: list[tuple[str, GenieMessageResponse]],
+    *,
+    deep: bool = False,
 ) -> tuple[str | None, str | None]:
     """One live Genie turn writes the cross-section synthesis; verify or omit.
 
@@ -202,7 +301,7 @@ def _synthesize_closing(
     )
 
     try:
-        draft = repo.ask_raw(_synthesis_prompt(question, sections))
+        draft = repo.ask_raw(_synthesis_prompt(question, sections, deep=deep))
     except Exception:  # noqa: BLE001 - synthesis is additive, never blocking
         return None, None
     draft = (draft or "").strip()
@@ -246,17 +345,22 @@ def _labeled_sql(sections: list[tuple[str, GenieMessageResponse]]) -> str | None
 def run_planned_sweep(
     repo: DatabricksGenieRepository,
     question: str,
+    *,
+    deep: bool = False,
 ) -> GenieMessageResponse | None:
     """Plan the decomposition live, execute each sub-question live, assemble.
 
     Returns ``None`` when the plan cannot be formed or fewer than three
     sub-analyses produce governed content — the caller then continues the
-    normal single-turn pipeline, which fails honestly.
+    normal single-turn pipeline, which fails honestly. ``deep`` widens the
+    plan floor and the synthesis contract for deep-analysis asks; the
+    section floor for shipping stays ``_MIN_PLANNED`` so a partly-failed
+    deep run still ships its surviving sections with disclosed gaps.
     """
 
     started = time.monotonic()
-    planned, dropped = plan_sub_questions(repo, question)
-    if len(planned) < _MIN_PLANNED:
+    planned, dropped = plan_sub_questions(repo, question, deep=deep)
+    if len(planned) < (_MIN_PLANNED_DEEP if deep else _MIN_PLANNED):
         return None
 
     def _one(sub_question: str) -> GenieMessageResponse | None:
@@ -300,7 +404,7 @@ def run_planned_sweep(
     body_parts = [intro]
     for sub_question, response in sections:
         body_parts.append(f"**{sub_question}**\n\n{(response.answer or '').strip()}")
-    synthesis, synthesis_gap = _synthesize_closing(repo, question, sections)
+    synthesis, synthesis_gap = _synthesize_closing(repo, question, sections, deep=deep)
     if synthesis:
         body_parts.append(f"**What this adds up to**\n\n{synthesis}")
     elif synthesis_gap:
@@ -313,9 +417,17 @@ def run_planned_sweep(
         GenieReasoningStep(
             kind="orchestrate",
             content=(
-                "The broad question produced no single governed query, so the live "
-                f"space planned its own decomposition: {len(planned)} "
-                "sub-analyses, each executed as its own governed turn."
+                (
+                    "This is a deep-analysis request, so the live space planned "
+                    f"its own decomposition first: {len(planned)} sub-analyses, "
+                    "each executed as its own governed turn."
+                )
+                if deep
+                else (
+                    "The broad question produced no single governed query, so the "
+                    f"live space planned its own decomposition: {len(planned)} "
+                    "sub-analyses, each executed as its own governed turn."
+                )
             ),
         )
     ]
