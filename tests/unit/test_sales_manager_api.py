@@ -1253,13 +1253,32 @@ def test_sales_aging_omits_approval_rows_without_live_borrower() -> None:
             ]
 
     class _Borrowers:
-        def get(self, borrower_id: str) -> object | None:
-            return object() if borrower_id == live_borrower_id else None
+        """Counts round-trips so the batching contract is observable.
+
+        2026-08-07 platform audit F1: the route used to call ``get`` once per
+        candidate row (up to 250 sequential warehouse statements, 25 s warm).
+        A ``get`` call from this route is now a regression, so it raises.
+        """
+
+        def __init__(self) -> None:
+            self.bulk_calls: list[list[str]] = []
+
+        def get(self, borrower_id: str) -> object | None:  # pragma: no cover
+            raise AssertionError(
+                "sales/aging must batch its existence check, not call get() per row"
+            )
+
+        def existing_borrower_ids(self, borrower_ids: object) -> set[str]:
+            ids = list(borrower_ids)  # type: ignore[call-overload]
+            self.bulk_calls.append(ids)
+            return {b for b in ids if b == live_borrower_id}
+
+    borrowers = _Borrowers()
 
     previous_store = app.dependency_overrides.get(get_sales_state_store)
     previous_borrowers = app.dependency_overrides.get(get_borrower_repository)
     app.dependency_overrides[get_sales_state_store] = lambda: _Store()
-    app.dependency_overrides[get_borrower_repository] = lambda: _Borrowers()
+    app.dependency_overrides[get_borrower_repository] = lambda: borrowers
     try:
         response = client.get("/api/sales/aging?older_than_days=7")
     finally:
@@ -1276,6 +1295,9 @@ def test_sales_aging_omits_approval_rows_without_live_borrower() -> None:
     borrower_ids = {row["borrower_id"] for row in response.json()}
     assert live_borrower_id in borrower_ids
     assert "B-TEST-ORPHAN" not in borrower_ids
+    # Every candidate id is resolved in a single call, regardless of page size.
+    assert len(borrowers.bulk_calls) == 1
+    assert borrowers.bulk_calls[0] == ["B-TEST-ORPHAN", live_borrower_id]
 
 
 def test_genie_routes_sales_manager_lo_conversion_to_sales_ops_adapter() -> None:

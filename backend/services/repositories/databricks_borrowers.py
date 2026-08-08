@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Sequence
 from threading import Lock
 from typing import Any
 
@@ -39,6 +40,9 @@ from backend.services.proof_policy import (
     validate_borrower_proof_sql,
 )
 from backend.services.repositories.databricks_genie_canonical import _US_STATE_FILTERS
+from backend.services.repositories.databricks_lead_cohort_support import (
+    LeadCohortQuerySupport,
+)
 from backend.services.repositories.databricks_shared import (
     _BORROWER_DOSSIER_COLUMNS,
     _EVIDENCE_COLUMNS,
@@ -386,6 +390,50 @@ class DatabricksBorrowerRepository:
             self._cache_generation += 1
             self._cache.invalidate(cache_key)
         return self.get(borrower_id)
+
+    #: Bind-parameter ceiling per existence statement. 250 ids is one
+    #: round-trip for every caller we have today (``/sales/aging`` reads at
+    #: most 500 candidates) while keeping the statement well inside the
+    #: connector's parameter limits on any future larger batch.
+    _EXISTS_CHUNK = 250
+
+    _EXISTS_SQL_TEMPLATE = (
+        "SELECT borrower_id "
+        f"FROM {qualify('gold', 'borrower_dossier')} "
+        "WHERE 1 = 1 {borrower_clause}"
+    )
+
+    def existing_borrower_ids(self, borrower_ids: Sequence[str]) -> set[str]:
+        """Return the subset of ``borrower_ids`` present in the dossier table.
+
+        One statement per :attr:`_EXISTS_CHUNK` ids instead of the per-id
+        ``get()`` loop the sales-aging route used to run (2026-08-07 platform
+        audit F1: 250 sequential round-trips, 25 s warm). Ids are normalised
+        through the same public-id validator the routers use, so a malformed
+        value is dropped rather than bound into SQL.
+        """
+        normalised = LeadCohortQuerySupport.normalise_borrower_ids(list(borrower_ids))
+        if not normalised:
+            return set()
+        found: set[str] = set()
+        for start in range(0, len(normalised), self._EXISTS_CHUNK):
+            chunk = normalised[start : start + self._EXISTS_CHUNK]
+            params: dict[str, object] = {}
+            clause = LeadCohortQuerySupport.in_clause(
+                column="borrower_id",
+                prefix="exists_borrower_id",
+                values=chunk,
+                params=params,
+            )
+            rows = self._client.execute(
+                self._EXISTS_SQL_TEMPLATE.format(borrower_clause=clause),
+                params,
+            )
+            for row in rows or []:
+                value = str(row.get("borrower_id") or "").strip()
+                if value:
+                    found.add(value)
+        return found
 
     def evidence(self, borrower_id: str) -> list[EvidenceEvent] | None:
         # Prefer reading from the dossier's pre-joined evidence array --
