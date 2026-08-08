@@ -289,6 +289,34 @@ def test_zip_rollups_returns_zips_for_populated_county():
         assert r["sample_borrower_id"] is None or r["sample_borrower_id"].startswith("B-")
 
 
+def test_zip_rollups_returns_zips_for_state():
+    """The live drill key. `state` echoes back and `fips_5` stays null so a
+    reader can tell which grain answered."""
+    response = client.get("/api/geo/zip-rollups?state=il")
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["state"] == "IL"
+    assert payload["fips_5"] is None
+    assert len(payload["rollups"]) >= 1
+    for r in payload["rollups"]:
+        assert len(r["zip"]) == 5
+        assert r["state"] == "IL"
+
+
+def test_zip_rollups_requires_exactly_one_geography_key():
+    """Neither key would scan the country; both name two geographies with
+    no single honest answer. Both are 422."""
+    assert client.get("/api/geo/zip-rollups").status_code == 422
+    assert (
+        client.get("/api/geo/zip-rollups?state=IL&county_fips=17031").status_code == 422
+    )
+
+
+def test_zip_rollups_validates_state_shape():
+    assert client.get("/api/geo/zip-rollups?state=ILL").status_code == 422
+    assert client.get("/api/geo/zip-rollups?state=12").status_code == 422
+
+
 def test_zip_rollups_accepts_segment_filter_params():
     response = client.get(
         "/api/geo/zip-rollups?county_fips=17031&segment_codes=itm,equity&segment_mode=all"
@@ -303,13 +331,17 @@ def test_zip_rollups_passes_secondary_portfolio_criteria_to_repository():
 
         def zip_rollups(
             self,
-            fips,
+            fips=None,
             segment_codes=None,
             segment_mode="any",
             portfolio_criteria=None,
+            *,
+            state=None,
         ):
             self.seen = (fips, segment_codes, segment_mode, portfolio_criteria)
-            return ZipRollupResponse(fips_5=fips, rollups=[], snapshot_date="2026-04-22")
+            return ZipRollupResponse(
+                fips_5=fips, state=state, rollups=[], snapshot_date="2026-04-22"
+            )
 
     spy = SpyGeoRepository()
     previous = app.dependency_overrides.get(get_geo_repository)

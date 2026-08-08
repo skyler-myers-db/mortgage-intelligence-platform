@@ -526,6 +526,94 @@ def test_zip_rollups_reads_zip_rollup_table_with_fips_param() -> None:
     assert params == {"fips_5": "17031"}
 
 
+def test_zip_rollups_reads_zip_rollup_table_with_state_param() -> None:
+    """The LIVE drill key. The Cotality share carries one county FIPS per
+    state, so county_fips_5 is NULL across gold.zip_rollup and the state
+    column is the only honest way to scope a ZIP layer."""
+    repo, client = _make_repo()
+    client.responses = [
+        (
+            ".gold.zip_rollup",
+            [
+                {
+                    "zip": "98103",
+                    "state": "WA",
+                    "county_fips_5": None,
+                    "addressable_borrowers": 310,
+                    "avg_opportunity_score": 81,
+                    "top_segment_code": "itm",
+                    "sample_borrower_id": "B-48298",
+                    "snapshot_date": "2026-08-07",
+                },
+            ],
+        ),
+    ]
+    result = repo.zip_rollups(state="WA")
+    assert isinstance(result, ZipRollupResponse)
+    assert result.state == "WA"
+    assert result.fips_5 is None
+    assert result.rollups[0].zip == "98103"
+    # A NULL county on the row must not break the response contract.
+    assert result.rollups[0].county_fips_5 is None
+
+    sql, params = client.calls[0]
+    assert ".gold.zip_rollup" in sql
+    assert "state = :state" in sql
+    assert "county_fips_5 = :fips_5" not in sql
+    assert params == {"state": "WA"}
+
+
+def test_zip_rollups_state_key_is_normalised_and_cached_apart_from_fips() -> None:
+    """`state:WA` and a FIPS grain must never share a cache entry — one
+    returns the whole state, the other a single county."""
+    repo, client = _make_repo()
+    client.responses = [(".gold.zip_rollup", list(_ZIP_ROWS))]
+
+    by_state = repo.zip_rollups(state="wa")
+    assert by_state.state == "WA"
+    repo.zip_rollups("17031")
+    repo.zip_rollups(state="WA")  # cache hit — no fourth call
+
+    assert len(client.calls) == 2
+    assert client.calls[0][1] == {"state": "WA"}
+    assert client.calls[1][1] == {"fips_5": "17031"}
+
+
+def test_zip_rollups_filtered_by_state_reads_borrower_360_with_state() -> None:
+    repo, client = _make_repo()
+    client.responses = [
+        (
+            ".gold.borrower_360",
+            [
+                {
+                    "zip": "98103",
+                    "state": "WA",
+                    "county_fips_5": None,
+                    "addressable_borrowers": 12,
+                    "avg_opportunity_score": 70,
+                    "top_segment_code": "itm",
+                    "sample_borrower_id": "B-98103",
+                    "snapshot_date": None,
+                },
+            ],
+        ),
+    ]
+
+    result = repo.zip_rollups(
+        state="WA",
+        segment_codes=["itm", "equity"],
+        segment_mode="all",
+    )
+
+    assert result.state == "WA"
+    assert result.rollups[0].zip == "98103"
+    sql, params = client.calls[0]
+    assert ".gold.borrower_360" in sql
+    assert "WHERE state = :state" in sql
+    assert "county_fips_5 = :fips_5" not in sql
+    assert params == {"seg_0": "equity", "seg_1": "itm", "state": "WA"}
+
+
 def test_zip_rollups_empty_when_no_rows() -> None:
     repo, client = _make_repo()
     client.responses = []  # no rows match

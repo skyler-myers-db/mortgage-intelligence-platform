@@ -343,6 +343,15 @@ export interface LeadsPageResult {
 export type GeoQueryCriteria = Record<string, string | number | readonly string[] | null | undefined>;
 
 /**
+ * The ZIP-rollup geography key — exactly one, never both. `state` is the
+ * live drill; `countyFips` is reserved for a future licensed county
+ * dataset and returns [] against the current share.
+ */
+export type ZipRollupKey =
+  | { state: string; countyFips?: never }
+  | { countyFips: string; state?: never };
+
+/**
  * S9 assigned-vs-unattended overlay. Mirrors
  * `backend/schemas/geo_overlay.py`: per-geography-unit lead / assigned /
  * unattended counts plus loan-officer coverage. The overlay is the
@@ -1167,15 +1176,28 @@ export const api = {
     );
   },
 
+  /**
+   * Per-ZIP rollups for exactly one geography key.
+   *
+   * `{ state }` is the live drill: the Cotality share carries a single
+   * county FIPS per state, so `county_fips_5` is NULL across gold and a
+   * `{ countyFips }` read returns [] for every county today. The FIPS key
+   * stays on the contract for a future licensed county dataset. The union
+   * type makes "both keys" a compile error, mirroring the API's 422.
+   */
   zipRollups: (
-    countyFips: string,
+    key: ZipRollupKey,
     signal?: AbortSignal,
     segmentCodes?: string[] | null,
     segmentMode: SegmentFilterMode = 'any',
     portfolioCriteria?: GeoQueryCriteria | null,
   ) => {
     const params = new URLSearchParams();
-    params.set('county_fips', countyFips);
+    if (key.state) {
+      params.set('state', key.state.toUpperCase());
+    } else if (key.countyFips) {
+      params.set('county_fips', key.countyFips);
+    }
     if (segmentCodes && segmentCodes.length > 0) {
       params.set('segment_codes', segmentCodes.join(','));
       params.set('segment_mode', segmentMode);

@@ -248,6 +248,41 @@ class TestOverlayService:
         # ZIP inherits the parent county's coverage (17031 explicit).
         assert by_id["60611"].covering_officers == ["Summit LO 01"]
 
+    def test_zip_level_by_state_scopes_to_the_state(self) -> None:
+        """State-keyed ZIP overlay: assignments outside the drilled state
+        must not count, and a NULL county_fips_5 (every live row today)
+        must not drop an in-state assignment."""
+        service, sql = _service(
+            sql_rows=[
+                ("GROUP BY zip", [
+                    {"unit_id": "60611", "lead_count": 6, "state": "IL"},
+                    {"unit_id": "60613", "lead_count": 3, "state": "IL"},
+                ]),
+                ("borrower_id IN", [
+                    {"borrower_id": "B-0000000000001", "state": "IL", "county_fips_5": None, "zip": "60611"},
+                    {"borrower_id": "B-0000000000004", "state": "CA", "county_fips_5": None, "zip": "90210"},
+                ]),
+            ],
+            assignments=[
+                {"borrower_id": "B-0000000000001"},
+                {"borrower_id": "B-0000000000004"},
+            ],
+            officers=_OFFICER_ROWS,
+        )
+        result = service.overlay("zip", state="IL")
+        assert result.state == "IL"
+        assert result.county_fips is None
+        by_id = {u.unit_id: u for u in result.units}
+        assert by_id["60611"].assigned_count == 1
+        assert by_id["60611"].unattended_count == 5
+        assert by_id["60613"].assigned_count == 0
+        # The out-of-state ZIP never becomes a unit.
+        assert "90210" not in by_id
+        # State coverage still resolves the officer layer without a county.
+        assert by_id["60611"].covering_officers == ["Summit LO 01"]
+        lead_sql = sql.calls[0][0]
+        assert "state = :state" in lead_sql
+
     def test_no_active_assignments_short_circuits_geo_resolution(self) -> None:
         service, sql = _service(
             sql_rows=[("GROUP BY state", [{"unit_id": "IL", "lead_count": 7}])],
@@ -293,10 +328,28 @@ class TestOverlayEndpoint:
             resp = client.get("/api/geo/assignment-overlay?level=county")
         assert resp.status_code == 422
 
-    def test_zip_overlay_requires_county_fips(self) -> None:
+    def test_zip_overlay_requires_exactly_one_geography_key(self) -> None:
         with TestClient(app) as client:
-            resp = client.get("/api/geo/assignment-overlay?level=zip")
-        assert resp.status_code == 422
+            assert client.get("/api/geo/assignment-overlay?level=zip").status_code == 422
+            assert (
+                client.get(
+                    "/api/geo/assignment-overlay?level=zip&state=IL&county_fips=17031"
+                ).status_code
+                == 422
+            )
+
+    def test_zip_overlay_drills_from_a_state(self) -> None:
+        """The live key: the ZIP tiles are drilled from a state, so the
+        overlay that recolors them must key on the same unit."""
+        with TestClient(app) as client:
+            resp = client.get("/api/geo/assignment-overlay?level=zip&state=IL")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["state"] == "IL"
+        assert body["county_fips"] is None
+        assert body["units"], "expected state-keyed ZIP overlay units"
+        total = sum(u["unattended_count"] for u in body["units"])
+        assert body["total_unattended"] == total
 
     def test_zip_overlay_drill_matches_fixture_math(self) -> None:
         with TestClient(app) as client:

@@ -1,7 +1,5 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { useNavigate } from 'react-router';
-import type { FeatureCollection } from 'geojson';
-import type { GeometryCollection, Topology } from 'topojson-specification';
 import { Icon } from '../Icon';
 import { Chip, EvidenceChip } from '../Primitives';
 import { api } from '../../lib/api';
@@ -10,15 +8,12 @@ import { ApiError } from '../../lib/api';
 import { DRAWER_SOURCES } from '../../lib/drawerSources';
 import { buildCampaignPrefillSearch, makeCampaignPrefill } from '../../lib/campaignPrefill';
 import { useOptionalFootprint } from '../FootprintProvider';
-import type { CountyRollup, StateRollup, ZipRollup } from '../../types';
+import type { StateRollup, ZipRollup } from '../../types';
 import {
   USCODE_TO_FIPS,
-  buildCountiesPayload,
   buildLeadQueuePath,
   buildQuantileBucketer,
-  countyDisplayName,
   lvlFromCount,
-  type CountiesPayload,
   type HoverState,
   type Level,
   type Selected,
@@ -29,11 +24,10 @@ import { loadUsaStateMap } from './USStateMapData';
 import { USChoroplethMapTooltip } from './USChoroplethMapTooltip';
 import { safeSegmentName } from '../../lib/segmentMetadata';
 
-// Slice13-accuracy-validation: county + ZIP hover numbers now come from
-// /api/geo/county-rollups + /api/geo/zip-rollups (backed by
-// mip.gold.county_rollup + mip.gold.zip_rollup respectively). The prior
-// local county/ZIP fixture literals are gone -- any county / ZIP not
-// returned in the payload renders "—" on hover (honest null).
+// State + ZIP hover numbers come from /api/geo/state-rollups and
+// /api/geo/zip-rollups (backed by mip.gold.funnel_snapshot_daily and
+// mip.gold.zip_rollup). There are no local fixture literals -- any state /
+// ZIP not returned in the payload renders "—" on hover (honest null).
 // The fill-level bucket is derived from addressable_borrowers below.
 
 /**
@@ -42,26 +36,39 @@ import { safeSegmentName } from '../../lib/segmentMetadata';
  * Matches the prototype's `ChoroplethMap`:
  *   - .map-wrap chassis with breadcrumbs, drill-hint chip, legend, map-tip.
  *   - map-region lvl-1..4 fills (color-mix with --accent), is-selected accent.
- *   - level state: 'state' → 'county' → 'zip' → Lead Queue deep-link.
+ *   - level state: 'state' → 'zip' → Lead Queue deep-link.
  *
  * Upgrade vs. prototype: the prototype used hand-drawn stylized polygons. We
  * use us-atlas state TopoJSON (Albers USA pre-projected paths) for real US
  * geography so it reads as a product, not a sketch.
  *
- * Geography scope is data-driven. Click a populated state to drill into
- * whatever counties are present in the live gold rollups, then ZIP-level
- * rollups. The UI copy uses backend scope labels rather than hardcoded demo
- * assumptions.
+ * DESIGN-CONTRACT DEVIATION, 2026-08-08. The prototype's ChoroplethMap
+ * drills state → county → ZIP (`design_files/Module 0 Prototype.html`
+ * ~L1802-1812: `level === 'county' ? TX_COUNTIES : TRAVIS_ZIPS`). We drop
+ * the county step. The Cotality share carries exactly one county FIPS per
+ * state, so `county_fips_5` is NULL on all 5,156,184 borrower_360 rows and
+ * all 677 zip_rollup rows once the fabricated keys were removed as
+ * dishonest. The county level rendered unfilled polygons whose every hover
+ * read "outside the footprint", and county boundaries cannot be drawn
+ * truthfully at all. The prototype's breadcrumb/hint-chip vocabulary is
+ * preserved exactly — only the middle rung is gone. Restore the level when
+ * a licensed county dataset lands; `/api/geo/county-rollups` and the county
+ * geometry helpers in `./USChoroplethMap.utils` are kept for that.
+ *
+ * Geography scope is data-driven: click a populated state to drill into
+ * whatever ZIPs are present in the live gold rollups. The UI copy uses
+ * backend scope labels rather than hardcoded demo assumptions.
  */
 
-// ---------- Live per-state facts ----------
-
-type CountyTopology = Topology<{ counties: GeometryCollection }>;
-
-/** Selection payload emitted on every state/county/ZIP click. State is
- *  2-char uppercase USPS code so consumers can run predicates against
- *  `LeadSummary.state` directly. `county` is the 5-digit FIPS; `zip` is
- *  the 5-digit string. `null` means the user navigated back to US level. */
+/** Selection payload emitted on every state/ZIP click. State is a 2-char
+ *  uppercase USPS code so consumers can run predicates against
+ *  `LeadSummary.state` directly; `zip` is the 5-digit string. `null` means
+ *  the user navigated back to US level.
+ *
+ *  `county` is always null since 2026-08-08 — the map has no county level.
+ *  The field stays on the contract (consumers still forward it to
+ *  `/api/leads`, which still accepts a county predicate) so a licensed
+ *  county dataset needs no consumer change. */
 export interface MapSelection {
   state: string | null;
   county: string | null;
@@ -85,19 +92,10 @@ interface USChoroplethMapProps {
    *  filter the LeadTable). `"navigate"` deep-links to
    *  `/lead-queue?state=XX` so the home-page map acts as a teaser. */
   drillBehavior?: 'filter' | 'navigate';
-  /** Test injection for county TopoJSON; production loads /us-counties.json. */
-  countyTopologyLoader?: () => Promise<unknown>;
-}
-
-async function defaultCountyTopologyLoader(): Promise<unknown> {
-  const topoRes = await fetch('/us-counties.json');
-  if (!topoRes.ok) throw new Error(`topology fetch ${topoRes.status}`);
-  return topoRes.json();
 }
 
 /**
- * US Choropleth Map — state → county → ZIP drill-down over Cotality public
- * records.
+ * US Choropleth Map — state → ZIP drill-down over Cotality public records.
  */
 export function USChoroplethMap({
   height = 420,
@@ -106,7 +104,6 @@ export function USChoroplethMap({
   portfolioCriteria,
   onSelectionChange,
   drillBehavior = 'filter',
-  countyTopologyLoader = defaultCountyTopologyLoader,
 }: USChoroplethMapProps) {
   const [level, setLevel] = useState<Level>('state');
   const [selected, setSelected] = useState<Selected | null>(null);
@@ -121,26 +118,19 @@ export function USChoroplethMap({
     setHover(null);
   }, [level, selected]);
   const [usaMap, setUsaMap] = useState<UsaSvgMap | null>(null);
-  // Which supported state we drilled into (for county rendering).
-  const [countyStateId, setCountyStateId] = useState<string | null>(null);
-  const [countiesByState, setCountiesByState] = useState<Record<string, CountiesPayload>>({});
-  const [countyLoadError, setCountyLoadError] = useState<string | null>(null);
+  // Which state we drilled into (lowercase, matching map location ids).
+  // At ZIP level this is the drilled context and stays put while the user
+  // hovers/clicks individual tiles.
+  const [drillStateId, setDrillStateId] = useState<string | null>(null);
   // Per-state rollups from /api/geo/state-rollups. `null` = loading; `{}`
   // = API unreachable. We keep the static geography interactive, but do
   // not surface static borrower counts while live rollups are loading.
   // Keyed by lowercase state code to match state map location ids.
   const [liveStateFacts, setLiveStateFacts] = useState<Record<string, StateRollup> | null>(null);
-  // Per-state county rollups lazy-loaded on drill. Keyed by uppercase
-  // state code. Each value is a dict keyed by 5-char FIPS so the map's
-  // county renderer can O(1) look up a county's live count / avg score.
-  const [liveCountyFacts, setLiveCountyFacts] = useState<Record<string, Record<string, CountyRollup>>>({});
-  // Per-county ZIP rollups lazy-loaded on county drill. Keyed by 5-char
-  // county FIPS. Value is a dict keyed by 5-digit ZIP.
+  // Per-state ZIP rollups lazy-loaded on drill. Keyed by UPPERCASE state
+  // code (the API key); each value is a dict keyed by 5-digit ZIP so the
+  // tile renderer can O(1) look up a ZIP's live count / avg score.
   const [liveZipFacts, setLiveZipFacts] = useState<Record<string, Record<string, ZipRollup>>>({});
-  // Optional scope note surfaced from /api/geo/county-rollups when the
-  // backend carries `scope_note` on the response. Keyed by uppercase
-  // state code.
-  const [countyScopeByState, setCountyScopeByState] = useState<Record<string, string>>({});
   // S9 assigned-vs-unattended overlay. `overlayOn` toggles the recolor +
   // tooltip extension. `overlayData` is the response for the CURRENT drill
   // level; `null` = not yet loaded, `overlayError` = fetch failed (degraded
@@ -152,13 +142,11 @@ export function USChoroplethMap({
   const navigate = useNavigate();
   const footprint = useOptionalFootprint();
 
-  // Footprint-aware drill allowlist. FIPS is intrinsic geography metadata,
-  // while the active state set comes from FootprintProvider. Every configured
-  // state can drill; renderCountyLevel handles the two cases:
-  //   (a) TopoJSON has polygons for this state   -> render the polys.
-  //   (b) TopoJSON does not                      -> render a scope card
-  //       from live county rollups and let the user jump to ZIPs.
-  const supportedCountyStates = useMemo<Record<string, string>>(() => {
+  // Footprint-aware drill allowlist: the active state set comes from
+  // FootprintProvider, filtered through the intrinsic USPS->FIPS table so a
+  // malformed configured code can never become a drillable region. Every
+  // configured state drills straight to its ZIP tiles.
+  const footprintStates = useMemo<Record<string, string>>(() => {
     const out: Record<string, string> = {};
     for (const code of footprint.stateCodes) {
       const lc = code.toLowerCase();
@@ -183,9 +171,7 @@ export function USChoroplethMap({
 
   useEffect(() => {
     setHover(null);
-    setLiveCountyFacts({});
     setLiveZipFacts({});
-    setCountyScopeByState({});
   }, [segmentFilterKey, segmentFilterMode, portfolioCriteriaKey]);
 
   // Lazy-load the state geography so the TopoJSON conversion lands in its
@@ -241,60 +227,18 @@ export function USChoroplethMap({
     };
   }, [segmentFilter, segmentFilterMode, portfolioCriteria, portfolioCriteriaKey]);
 
-  // Lazy-fetch county rollups on drill. /api/geo/county-rollups?state=XX
-  // returns real counts / avg_score / top_segment_code per FIPS from
-  // mip.gold.county_rollup. Missing counties render "—" (honest null).
+  // Lazy-fetch ZIP rollups when the user drills into a state.
+  // /api/geo/zip-rollups?state=XX reads mip.gold.zip_rollup on its real
+  // grain. A state with no ZIP rows resolves to an empty list; the ZIP
+  // renderer shows an honest empty state with a Lead Queue fallback.
   useEffect(() => {
-    if (level !== 'county' || !countyStateId) return;
-    const stateUC = countyStateId.toUpperCase();
-    if (liveCountyFacts[stateUC]) return;
-    let cancelled = false;
-    api
-      .countyRollups(
-        stateUC,
-        undefined,
-        segmentFilter && segmentFilter.length > 0 ? segmentFilter : null,
-        segmentFilterMode,
-        portfolioCriteria,
-      )
-      .then((payload) => {
-        if (cancelled) return;
-        const byFips: Record<string, CountyRollup> = {};
-        for (const r of payload.rollups) byFips[r.fips_5] = r;
-        setLiveCountyFacts((cur) => ({ ...cur, [stateUC]: byFips }));
-        // Preserve the backend's scope_note verbatim when present so the
-        // UI renders discovered geography coverage without fabricating copy.
-        const scope =
-          (payload as { scope_note?: string | null }).scope_note ?? null;
-        if (scope) {
-          setCountyScopeByState((cur) => ({ ...cur, [stateUC]: scope }));
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          // Empty dict means "we tried, nothing came back" -- hover falls
-          // back to "—" instead of blocking re-fetches on every render.
-          setLiveCountyFacts((cur) => ({ ...cur, [stateUC]: {} }));
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [level, countyStateId, liveCountyFacts, segmentFilter, segmentFilterMode, portfolioCriteria, portfolioCriteriaKey]);
-
-  // Lazy-fetch ZIP rollups when the user drills into any county. The
-  // CTAS only populates ZIPs for counties with borrower rows, so
-  // out-of-footprint counties resolve to an empty list; the UI renders
-  // an "—" hover + no-op click for those.
-  useEffect(() => {
-    if (level !== 'zip') return;
-    const fips = selected?.level === 'county' ? selected.id : null;
-    if (!fips) return;
-    if (liveZipFacts[fips]) return;
+    if (level !== 'zip' || !drillStateId) return;
+    const stateUC = drillStateId.toUpperCase();
+    if (liveZipFacts[stateUC]) return;
     let cancelled = false;
     api
       .zipRollups(
-        fips,
+        { state: stateUC },
         undefined,
         segmentFilter && segmentFilter.length > 0 ? segmentFilter : null,
         segmentFilterMode,
@@ -304,72 +248,22 @@ export function USChoroplethMap({
         if (cancelled) return;
         const byZip: Record<string, ZipRollup> = {};
         for (const r of payload.rollups) byZip[r.zip] = r;
-        setLiveZipFacts((cur) => ({ ...cur, [fips]: byZip }));
+        setLiveZipFacts((cur) => ({ ...cur, [stateUC]: byZip }));
       })
       .catch(() => {
-        if (!cancelled) setLiveZipFacts((cur) => ({ ...cur, [fips]: {} }));
+        // Empty dict means "we tried, nothing came back" -- the renderer
+        // shows the empty state instead of re-fetching on every render.
+        if (!cancelled) setLiveZipFacts((cur) => ({ ...cur, [stateUC]: {} }));
       });
     return () => {
       cancelled = true;
     };
-  }, [level, selected, liveZipFacts, segmentFilter, segmentFilterMode, portfolioCriteria, portfolioCriteriaKey]);
-
-  // Lazy-load real county polygons when drilled into a supported state.
-  // us-counties.json is the national us-atlas county TopoJSON shipped as a
-  // static asset in public/. topojson-client decodes it at runtime; both fetch
-  // + import happen only on first county drill.
-  useEffect(() => {
-    if (level !== 'county' || !countyStateId) return;
-    if (countiesByState[countyStateId]) return;
-    const fips = supportedCountyStates[countyStateId];
-    if (!fips) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const [topoClient, topoRes] = await Promise.all([
-          import('topojson-client'),
-          countyTopologyLoader(),
-        ]);
-        const topology = topoRes as CountyTopology;
-        // topojson-client's feature() returns a GeoJSON FeatureCollection when
-        // the object is a GeometryCollection.
-        // topojson-client's `feature()` typing narrows to Feature for a
-        // single Geometry and FeatureCollection for a GeometryCollection; our
-        // payload is the latter. Cast via `unknown` to bypass the union.
-        const fc = topoClient.feature(
-          topology,
-          topology.objects.counties,
-        ) as unknown as FeatureCollection;
-        // Empty features set = this state is in the footprint but not in
-        // the shipped TopoJSON. Skip storing a payload so the live-rollup
-        // fallback in renderCountyLevel takes over. Without this guard we'd
-        // store an empty CountiesPayload with an Infinity viewBox and render
-        // a blank SVG.
-        const payload = buildCountiesPayload(fc, countyStateId, fips);
-        if (!payload) return;
-        if (!cancelled) {
-          setCountiesByState((cur) => ({ ...cur, [countyStateId]: payload }));
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setCountyLoadError(
-            err instanceof Error
-              ? `Couldn't load county polygons: ${err.message}`
-              : "Couldn't load county polygons.",
-          );
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [level, countyStateId, countiesByState, supportedCountyStates, countyTopologyLoader]);
+  }, [level, drillStateId, liveZipFacts, segmentFilter, segmentFilterMode, portfolioCriteria, portfolioCriteriaKey]);
 
   // S9 overlay fetch. Re-runs on drill level + toggle. Each level maps to a
-  // distinct /api/geo/assignment-overlay call (state | county+state |
-  // zip+county_fips). A fetch failure sets an honest degraded note and
-  // leaves the base borrower view untouched -- never a silent fallback.
-  const overlayCountyFips = selected?.level === 'county' ? selected.id : null;
+  // distinct /api/geo/assignment-overlay call (state | zip+state). A fetch
+  // failure sets an honest degraded note and leaves the base borrower view
+  // untouched -- never a silent fallback.
   useEffect(() => {
     if (!overlayOn) {
       setOverlayData(null);
@@ -378,14 +272,13 @@ export function USChoroplethMap({
       return;
     }
     // Determine the request for the current drill level. Skip until the
-    // parent geo needed for a county/zip request is known.
+    // parent state needed for a ZIP request is known. The ZIP overlay keys
+    // on the same state as the tiles it recolors.
     let request: { level: GeoOverlayLevel; state?: string | null; countyFips?: string | null } | null = null;
     if (level === 'state') {
       request = { level: 'state' };
-    } else if (level === 'county' && countyStateId) {
-      request = { level: 'county', state: countyStateId.toUpperCase() };
-    } else if (level === 'zip' && overlayCountyFips) {
-      request = { level: 'zip', countyFips: overlayCountyFips };
+    } else if (level === 'zip' && drillStateId) {
+      request = { level: 'zip', state: drillStateId.toUpperCase() };
     }
     if (!request) {
       setOverlayData(null);
@@ -418,7 +311,7 @@ export function USChoroplethMap({
       cancelled = true;
       controller.abort();
     };
-  }, [overlayOn, level, countyStateId, overlayCountyFips]);
+  }, [overlayOn, level, drillStateId]);
 
   // The overlay only drives coloring once its payload is actually loaded;
   // while loading or degraded the base borrower coloring stays up (the
@@ -479,32 +372,23 @@ export function USChoroplethMap({
           avgScore: live.avg_score,
           lvl: stateBucketer(live.addressable),
           topSegment: liveTopSegment || undefined,
+          zipUnassigned: live.zip_unassigned_count ?? null,
         };
       }
       return undefined;
     };
   }, [liveStateFacts, stateBucketer]);
 
-  // Quantile bucketer for the county layer of the currently-drilled
-  // state. Computed per-payload so the gradient reads whether the real
-  // counts are in the hundreds or the hundred-thousands (see
-  // `buildQuantileBucketer` docstring).
-  const countyBucketer = useMemo(() => {
-    const stateUC = countyStateId?.toUpperCase() ?? '';
-    const byFips = liveCountyFacts[stateUC];
-    if (!byFips) return lvlFromCount;
-    const counts = Object.values(byFips).map((r) => r.addressable_borrowers ?? 0);
-    return buildQuantileBucketer(counts);
-  }, [countyStateId, liveCountyFacts]);
-
-  // Quantile bucketer for the ZIP layer of the currently-drilled county.
+  // Quantile bucketer for the ZIP layer of the currently-drilled state.
+  // Computed per-payload so the gradient reads whether the real counts are
+  // in the hundreds or the hundred-thousands (see `buildQuantileBucketer`).
   const zipBucketer = useMemo(() => {
-    const fips = selected?.level === 'county' ? selected.id : '';
-    const byZip = liveZipFacts[fips];
+    const stateUC = drillStateId?.toUpperCase() ?? '';
+    const byZip = liveZipFacts[stateUC];
     if (!byZip) return lvlFromCount;
     const counts = Object.values(byZip).map((r) => r.addressable_borrowers ?? 0);
     return buildQuantileBucketer(counts);
-  }, [selected, liveZipFacts]);
+  }, [drillStateId, liveZipFacts]);
 
   // Fire the selection callback when the user drills into / out of a
   // level. Collecting into a single effect keeps the producer logic in
@@ -514,13 +398,14 @@ export function USChoroplethMap({
     const stateCode =
       selected?.level === 'state'
         ? selected.id.toUpperCase()
-        : countyStateId
-          ? countyStateId.toUpperCase()
+        : drillStateId
+          ? drillStateId.toUpperCase()
           : null;
-    const countyFips = selected?.level === 'county' ? selected.id : null;
     const zip = selected?.level === 'zip' ? selected.id : null;
-    onSelectionChange({ state: stateCode, county: countyFips, zip });
-  }, [selected, countyStateId, onSelectionChange]);
+    // `county` is always null: the map has no county level (see
+    // MapSelection). Consumers keep forwarding the field unchanged.
+    onSelectionChange({ state: stateCode, county: null, zip });
+  }, [selected, drillStateId, onSelectionChange]);
 
   const totalCount = useMemo(() => {
     if (level === 'state') {
@@ -529,22 +414,9 @@ export function USChoroplethMap({
       }
       return 0;
     }
-    if (level === 'county') {
-      const stateUC = countyStateId?.toUpperCase() ?? '';
-      const liveByFips = liveCountyFacts[stateUC];
-      if (liveByFips) {
-        return Object.values(liveByFips).reduce(
-          (a, r) => a + (r.addressable_borrowers ?? 0),
-          0,
-        );
-      }
-      // Pre-fetch placeholder: show the state-level count so the legend
-      // doesn't flash 0 while the county payload is in flight.
-      return liveStateFacts?.[countyStateId ?? '']?.addressable ?? 0;
-    }
-    // ZIP level — key off the selected county, not a hardcoded FIPS.
-    const fips = selected?.level === 'county' ? selected.id : null;
-    const liveByZip = fips ? liveZipFacts[fips] : undefined;
+    // ZIP level — key off the drilled state.
+    const stateUC = drillStateId?.toUpperCase() ?? '';
+    const liveByZip = stateUC ? liveZipFacts[stateUC] : undefined;
     if (liveByZip) {
       return Object.values(liveByZip).reduce(
         (a, r) => a + (r.addressable_borrowers ?? 0),
@@ -552,76 +424,40 @@ export function USChoroplethMap({
       );
     }
     return 0;
-  }, [level, countyStateId, selected, liveStateFacts, liveCountyFacts, liveZipFacts]);
+  }, [level, drillStateId, liveStateFacts, liveZipFacts]);
   const mapBusy = useMemo(() => {
     if (!usaMap || liveStateFacts === null) return true;
-    if (level === 'county') {
-      const stateUC = countyStateId?.toUpperCase() ?? '';
-      const rollupsPending = Boolean(countyStateId && liveCountyFacts[stateUC] === undefined);
-      const topologyPending = Boolean(
-        countyStateId
-        && supportedCountyStates[countyStateId]
-        && !countiesByState[countyStateId]
-        && !countyLoadError,
-      );
-      return rollupsPending || topologyPending;
-    }
     if (level === 'zip') {
-      const fips = selected?.level === 'county' ? selected.id : '';
-      return Boolean(fips && liveZipFacts[fips] === undefined);
+      const stateUC = drillStateId?.toUpperCase() ?? '';
+      return Boolean(stateUC && liveZipFacts[stateUC] === undefined);
     }
     return false;
-  }, [
-    countiesByState,
-    countyLoadError,
-    countyStateId,
-    level,
-    liveCountyFacts,
-    liveStateFacts,
-    liveZipFacts,
-    selected,
-    supportedCountyStates,
-    usaMap,
-  ]);
+  }, [drillStateId, level, liveStateFacts, liveZipFacts, usaMap]);
+  // Borrowers in the drilled state that the ZIP layer cannot show. The
+  // backend derives it as (state total - sum of ZIP tiles) off one refresh
+  // anchor, so it IS the on-screen gap rather than a second estimate of it.
+  const zipUnassignedForDrill = useMemo(() => {
+    if (!drillStateId) return 0;
+    return liveStateFacts?.[drillStateId]?.zip_unassigned_count ?? 0;
+  }, [drillStateId, liveStateFacts]);
+  const drillStateName = useMemo(() => {
+    if (!drillStateId) return '';
+    return (
+      usaMap?.locations.find((l) => l.id === drillStateId)?.name
+      ?? drillStateId.toUpperCase()
+    );
+  }, [drillStateId, usaMap]);
   const mapStatus = useMemo(() => {
     if (!usaMap) return 'Loading geography.';
     if (liveStateFacts === null) return 'Loading state borrower rollups.';
-    if (level === 'county') {
-      const stateName = countyStateId
-        ? usaMap.locations.find((l) => l.id === countyStateId)?.name ?? countyStateId.toUpperCase()
-        : 'state';
-      const stateUC = countyStateId?.toUpperCase() ?? '';
-      if (countyStateId && liveCountyFacts[stateUC] === undefined) {
-        return `Loading county rollups for ${stateName}.`;
-      }
-      if (
-        countyStateId
-        && supportedCountyStates[countyStateId]
-        && !countiesByState[countyStateId]
-        && !countyLoadError
-      ) {
-        return `Loading county map shapes for ${stateName}.`;
-      }
-    }
     if (level === 'zip') {
-      const fips = selected?.level === 'county' ? selected.id : '';
-      if (fips && liveZipFacts[fips] === undefined) {
-        return `Loading ZIP rollups for ${selected?.name ?? 'county'}.`;
+      const stateUC = drillStateId?.toUpperCase() ?? '';
+      if (stateUC && liveZipFacts[stateUC] === undefined) {
+        return `Loading ZIP rollups for ${drillStateName || 'state'}.`;
       }
     }
     return 'Geography rollups loaded.';
-  }, [
-    countiesByState,
-    countyLoadError,
-    countyStateId,
-    level,
-    liveCountyFacts,
-    liveStateFacts,
-    liveZipFacts,
-    selected,
-    supportedCountyStates,
-    usaMap,
-  ]);
+  }, [drillStateId, drillStateName, level, liveStateFacts, liveZipFacts, usaMap]);
   const segmentCaption = useMemo(() => {
     if (!segmentFilter || segmentFilter.length === 0) return 'marketable population';
     const labels = segmentFilter.map((code) => safeSegmentName(code) ?? 'Unknown segment');
@@ -632,55 +468,39 @@ export function USChoroplethMap({
   // whichever level the user is on. Used for the "Start campaign" prefill.
   const activeStateCode = useMemo(() => {
     if (selected?.level === 'state') return selected.id.toUpperCase();
-    if (countyStateId) return countyStateId.toUpperCase();
+    if (drillStateId) return drillStateId.toUpperCase();
     return null;
-  }, [selected, countyStateId]);
+  }, [selected, drillStateId]);
 
-  // S9 "Start campaign from this geography" link target. Built from the
-  // drilled unit the map can actually hold selected: a state at US level,
-  // or a county — which stays the drilled context while its ZIP grid is on
-  // screen, because a zip-tile click deep-links to the Lead Queue by the
-  // existing map contract (a persistent per-ZIP selection does not exist
-  // today; the typed prefill contract still carries `zip` for S10).
-  // Carries the current segment filter + mode and, when the overlay is
-  // loaded, the drilled unit's lead / unattended snapshot counts.
+  // S9 "Start campaign from this geography" link target. The state is the
+  // drilled unit at both levels — it stays the campaign context while its
+  // ZIP grid is on screen, because a zip-tile click deep-links to the Lead
+  // Queue by the existing map contract (a persistent per-ZIP selection does
+  // not exist today; the typed prefill contract still carries `zip` for
+  // S10). Carries the current segment filter + mode and, when the overlay
+  // is loaded, the state's lead / unattended snapshot counts.
   const campaignPrefillPath = useMemo(() => {
-    if (!activeStateCode) return null;
-    let campaignLevel: GeoOverlayLevel;
-    let countyFips: string | null = null;
-    let countyName: string | null = null;
+    if (!activeStateCode || selected?.level !== 'state') return null;
     let leadCount: number | null = null;
     let unattendedCount: number | null = null;
-    if (selected?.level === 'county') {
-      campaignLevel = 'county';
-      countyFips = selected.id;
-      countyName = selected.name;
-      if (overlayOn && overlayData) {
-        if (overlayData.level === 'zip' && overlayData.county_fips === selected.id) {
-          // ZIP grid on screen: the county snapshot is the sum of its
-          // ZIP units — the totals the overlay response already carries.
-          leadCount = overlayData.total_leads;
-          unattendedCount = overlayData.total_unattended;
-        } else {
-          const unit = overlayByUnit[selected.id];
-          leadCount = unit ? unit.lead_count : null;
-          unattendedCount = unit ? unit.unattended_count : null;
-        }
+    if (overlayOn && overlayData) {
+      if (overlayData.level === 'zip') {
+        // ZIP grid on screen: the state snapshot is the sum of its ZIP
+        // units — the totals the overlay response already carries.
+        leadCount = overlayData.total_leads;
+        unattendedCount = overlayData.total_unattended;
+      } else {
+        const unit = overlayByUnit[selected.id.toLowerCase()];
+        leadCount = unit ? unit.lead_count : null;
+        unattendedCount = unit ? unit.unattended_count : null;
       }
-    } else if (selected?.level === 'state') {
-      campaignLevel = 'state';
-      const unit = overlayOn ? overlayByUnit[selected.id.toLowerCase()] : undefined;
-      leadCount = unit ? unit.lead_count : null;
-      unattendedCount = unit ? unit.unattended_count : null;
-    } else {
-      return null;
     }
     try {
       const prefill = makeCampaignPrefill({
-        level: campaignLevel,
+        level: 'state',
         state: activeStateCode,
-        countyFips,
-        countyName,
+        countyFips: null,
+        countyName: null,
         segmentCodes: segmentFilter ?? [],
         segmentMode: segmentFilterMode,
         leadCount,
@@ -688,8 +508,8 @@ export function USChoroplethMap({
       });
       return `/portfolio-builder?${buildCampaignPrefillSearch(prefill).toString()}`;
     } catch {
-      // A geography we can't encode coherently (e.g. a non-FIPS parent) just
-      // hides the affordance rather than shipping a broken link.
+      // A geography we can't encode coherently just hides the affordance
+      // rather than shipping a broken link.
       return null;
     }
   }, [
@@ -719,7 +539,7 @@ export function USChoroplethMap({
     >
       {usaMap.locations.map((loc) => {
         const facts = factsFor(loc.id);
-        const inFootprint = Boolean(supportedCountyStates[loc.id]);
+        const inFootprint = Boolean(footprintStates[loc.id]);
         const stateFactsLoading = liveStateFacts === null;
         const overlayUnit = overlayActive ? overlayByUnit[loc.id] : undefined;
         // When the overlay is loaded, the fill tier reflects UNATTENDED
@@ -771,6 +591,10 @@ export function USChoroplethMap({
                 sourceHint: inFootprint
                   ? 'mip.gold.funnel_snapshot_daily + mip.gold.state_top_segment'
                   : 'Outside Cotality evaluation scope',
+                // Disclose the drill gap BEFORE the user drills, so the
+                // ZIP tiles summing below this state's total is expected
+                // rather than discovered.
+                zipUnassigned: facts?.zipUnassigned ?? null,
                 overlay: overlayUnit
                   ? {
                       leadCount: overlayUnit.lead_count,
@@ -800,8 +624,9 @@ export function USChoroplethMap({
                 return;
               }
               if (inFootprint) {
-                setLevel('county');
-                setCountyStateId(loc.id);
+                // Straight to ZIPs — there is no honest county rung.
+                setLevel('zip');
+                setDrillStateId(loc.id);
                 setSelected({ level: 'state', id: loc.id, name: loc.name });
               } else if (facts) {
                 setSelected({ level: 'state', id: loc.id, name: loc.name });
@@ -818,8 +643,9 @@ export function USChoroplethMap({
                 return;
               }
               if (inFootprint) {
-                setLevel('county');
-                setCountyStateId(loc.id);
+                // Straight to ZIPs — there is no honest county rung.
+                setLevel('zip');
+                setDrillStateId(loc.id);
                 setSelected({ level: 'state', id: loc.id, name: loc.name });
               } else if (facts) {
                 setSelected({ level: 'state', id: loc.id, name: loc.name });
@@ -832,225 +658,34 @@ export function USChoroplethMap({
     );
   };
 
-  // ----- COUNTY level: real county polygons from TopoJSON -----------------
-  // Falls back to a live-rollup scope card only if the county polygons for the
-  // state are unavailable. The county name/FIPS comes from the backend, not a
-  // baked demo lookup.
-  const renderCountyLevel = () => {
-    const payload = countyStateId ? countiesByState[countyStateId] : null;
-    const stateName = countyStateId
-      ? usaMap?.locations.find((l) => l.id === countyStateId)?.name ?? ''
-      : '';
-    const stateUC = countyStateId?.toUpperCase() ?? '';
-    const countyFactsForState = liveCountyFacts[stateUC];
-    const countyFactsLoading = countyFactsForState === undefined;
-    const primaryCounty = countyFactsForState
-      ? Object.values(countyFactsForState).sort(
-        (a, b) => (b.addressable_borrowers ?? 0) - (a.addressable_borrowers ?? 0),
-      )[0]
-      : null;
-    if (!payload && !countyLoadError && primaryCounty) {
-      const count = primaryCounty.addressable_borrowers ?? null;
-      const avgScore = primaryCounty.avg_opportunity_score ?? null;
-      const countyName = countyDisplayName(primaryCounty);
-      const scopeLabel =
-        countyScopeByState[stateUC] ??
-        footprint.dataScope?.scope_label ??
-        'Cotality data coverage discovered from gold county rollups';
-      return (
-        <div className="map-stage">
-          <div className="map-center-card">
-            <div className="eyebrow">Cotality data coverage</div>
-            <div className="h-3 text-1">
-              {countyName}, {stateName}
-            </div>
-            <div className="body muted map-center-copy">
-              {scopeLabel}. Drill into {countyName} to see ZIP-level rollups.
-            </div>
-            <div className="map-center-stats">
-              <span>
-                Marketable{' '}
-                <span className="text-1">
-                  {count !== null ? count.toLocaleString() : '—'}
-                </span>
-              </span>
-              <span>
-                Avg. score{' '}
-                <span className="text-1">
-                  {avgScore !== null ? avgScore : '—'}
-                </span>
-              </span>
-            </div>
-            <div className="map-center-actions">
-              <button
-                type="button"
-                className="btn btn--primary"
-                onClick={() => {
-                  setLevel('zip');
-                  setSelected({ level: 'county', id: primaryCounty.fips_5, name: countyName });
-                }}
-              >
-                Drill into {countyName} ZIPs
-              </button>
-            </div>
-          </div>
-        </div>
-      );
-    }
-    if (!payload) {
-      // Loading or error fallback. Do not render state-specific demo
-      // geometry; county shapes and counts must come from the national
-      // TopoJSON + live rollup payload.
-      return (
-        <div className="map-stage map-stage--empty">
-          {countyLoadError ? (
-            <div className="map-center-card map-center-card--narrow">
-              <div className="text-2 mb-2">{countyLoadError}</div>
-              <button
-                type="button"
-                className="btn btn--ghost"
-                onClick={() => {
-                  setCountyLoadError(null);
-                  setCountiesByState((c) => {
-                    const next = { ...c };
-                    if (countyStateId) delete next[countyStateId];
-                    return next;
-                  });
-                }}
-              >
-                Retry county map
-              </button>
-            </div>
-          ) : (
-            'Loading counties…'
-          )}
-        </div>
-      );
-    }
-
-    return (
-      <svg
-        viewBox={payload.viewBox}
-        preserveAspectRatio="xMidYMid meet"
-        className="map-svg-stage"
-      >
-        {payload.features.map((f) => {
-          const liveFacts = countyFactsForState?.[f.id];
-          const count = liveFacts?.addressable_borrowers ?? null;
-          const avgScore = liveFacts?.avg_opportunity_score ?? null;
-          const topSegCode = liveFacts?.top_segment_code ?? null;
-          const topSegment = topSegCode ? (safeSegmentName(topSegCode) ?? undefined) : undefined;
-          const overlayUnit = overlayActive ? overlayByUnit[f.id] : undefined;
-          const overlayLvl =
-            overlayUnit && overlayUnit.unattended_count > 0
-              ? overlayBucketer(overlayUnit.unattended_count)
-              : null;
-          const hasPositiveCount = count !== null && count > 0;
-          const hasFill = overlayActive ? overlayLvl !== null : hasPositiveCount;
-          const lvl = overlayActive ? overlayLvl : hasPositiveCount ? countyBucketer(count) : null;
-          const classes = [
-            'map-region',
-            countyFactsLoading ? 'is-loading' : '',
-            !countyFactsLoading && hasFill ? 'has-data' : '',
-            !countyFactsLoading && !hasFill ? 'is-empty' : '',
-            lvl ? `lvl-${lvl}` : '',
-            selected?.level === 'county' && selected.id === f.id ? 'is-selected' : '',
-          ]
-            .filter(Boolean)
-            .join(' ');
-          return (
-            <path
-              key={f.id}
-              d={f.paths}
-              className={classes}
-              role="button"
-              tabIndex={0}
-              data-target-size-exempt="geographic-shape"
-              aria-label={`${f.name} County`}
-              aria-keyshortcuts="Enter"
-              onMouseEnter={(e) =>
-                setHover({
-                  x: e.clientX,
-                  y: e.clientY,
-                  name: `${f.name} County, ${stateName}`,
-                  // Honest null while the live payload is loading or when it
-                  // did not return a row for this county. The visual class
-                  // distinguishes loading/empty from a small positive count.
-                  count,
-                  avgScore,
-                  topSegment,
-                  sourceHint: 'mip.gold.county_rollup',
-                  overlay: overlayUnit
-                    ? {
-                        leadCount: overlayUnit.lead_count,
-                        assignedCount: overlayUnit.assigned_count,
-                        unattendedCount: overlayUnit.unattended_count,
-                        coveringOfficerCount: overlayUnit.covering_officer_count,
-                        coveringOfficers: overlayUnit.covering_officers,
-                      }
-                    : undefined,
-                })
-              }
-              onMouseMove={(e) =>
-                setHover((h) => (h ? { ...h, x: e.clientX, y: e.clientY } : h))
-              }
-              onMouseLeave={() => setHover(null)}
-              onClick={() => {
-                // Every county drills to ZIP level. The /api/geo/zip-rollups
-                // fetch may return an empty list for out-of-footprint
-                // counties -- the ZIP render handles that with an empty
-                // state + "open in Lead Queue" fallback.
-                setLevel('zip');
-                setSelected({ level: 'county', id: f.id, name: `${f.name} County` });
-              }}
-              onKeyDown={(e) => {
-                if (e.key !== 'Enter' && e.key !== ' ') return;
-                e.preventDefault();
-                setLevel('zip');
-                setSelected({ level: 'county', id: f.id, name: `${f.name} County` });
-              }}
-            />
-          );
-        })}
-      </svg>
-    );
-  };
-
-  // ----- ZIP level: tile grid for the active county. -----------------------
+  // ----- ZIP level: tile grid for the drilled state. -----------------------
   // The ZIP grid is generated from the live ZIP rollup payload for every
-  // county, so the component has no county-specific visual exceptions.
+  // state, so the component has no state-specific visual exceptions.
   const renderZipLevel = () => {
-    const countyFips = selected?.level === 'county' ? selected.id : null;
-    const countyName = selected?.level === 'county' ? selected.name : '';
-    const stateUC =
-      countyStateId?.toUpperCase() ??
-      (countyFips ? Object.entries(USCODE_TO_FIPS).find(([, v]) => countyFips.startsWith(v))?.[0].toUpperCase() ?? '' : '');
-    if (!countyFips) return null;
-    const byZip = liveZipFacts[countyFips];
+    const stateUC = drillStateId?.toUpperCase() ?? '';
+    if (!stateUC) return null;
+    const byZip = liveZipFacts[stateUC];
     const zipsFromApi = byZip ? Object.values(byZip) : [];
 
     if (byZip && zipsFromApi.length === 0) {
-      // API returned empty — county outside the Cotality eval share or
-      // the CTAS hasn't populated ZIPs for it. Give the user a graceful
-      // fallback path. The Lead Queue preserves the county filter via
-      // ?state=XX&county=FFFFF; the Queue resolves "borrowers in this
-      // county" client-side by intersecting ZIPs (see
-      // /lead-queue.tsx::countyZips).
+      // API returned empty — the state is outside the Cotality eval share
+      // or the CTAS hasn't populated ZIPs for it. Give the user a graceful
+      // fallback path into the state's lead queue.
       return (
         <div className="map-stage">
           <div className="map-center-card map-center-card--narrow">
             <div className="text-2 mb-2">
-              No ZIP-level rollup for {countyName}.
+              No ZIP-level rollup for {drillStateName}.
             </div>
             <div className="mb-3">
-              Browse this county&apos;s lead queue — the filter will narrow to borrowers in {countyName}.
+              Browse this state&apos;s lead queue — the filter will narrow to borrowers in {drillStateName}.
             </div>
             <button
               type="button"
               className="btn btn--ghost"
-              onClick={() => navigate(leadQueuePath({ state: stateUC, county: countyFips }))}
+              onClick={() => navigate(leadQueuePath({ state: stateUC }))}
             >
-              Open Lead Queue for {countyName}
+              Open Lead Queue for {drillStateName}
             </button>
           </div>
         </div>
@@ -1076,7 +711,7 @@ export function USChoroplethMap({
     );
     const visible = sorted.slice(0, 24);
     return (
-      <div className="zip-tiles" role="list" aria-label={`ZIPs in ${countyName}`}>
+      <div className="zip-tiles" role="list" aria-label={`ZIPs in ${drillStateName}`}>
         {visible.map((rollup, tileIndex) => {
           const count = rollup.addressable_borrowers ?? null;
           const avgScore = rollup.avg_opportunity_score ?? null;
@@ -1111,7 +746,7 @@ export function USChoroplethMap({
                 setHover({
                   x: e.clientX,
                   y: e.clientY,
-                  name: `ZIP ${rollup.zip}, ${countyName}`,
+                  name: `ZIP ${rollup.zip}, ${drillStateName}`,
                   count,
                   avgScore,
                   topSegment,
@@ -1134,7 +769,7 @@ export function USChoroplethMap({
               onMouseLeave={() => setHover(null)}
 	              onClick={() => {
 	                setSelected({ level: 'zip', id: rollup.zip, name: rollup.zip });
-	                navigate(leadQueuePath({ state: stateUC, county: countyFips, zip: rollup.zip }));
+	                navigate(leadQueuePath({ state: stateUC, zip: rollup.zip }));
 	              }}
 	            >
               <span className="zip-tile__code">{rollup.zip}</span>
@@ -1160,43 +795,24 @@ export function USChoroplethMap({
         <div className="map-crumbs">
           <div className="eyebrow">Geography drill-down</div>
           <div className="topbar__crumbs map-crumbs__trail">
+            {/* US is the single back step — with the county rung gone,
+                zip -> state IS zip -> national. */}
             <button
               type="button"
               className={`filter filter--compact ${level === 'state' ? 'is-active' : ''}`}
               onClick={() => {
                 setLevel('state');
-                setCountyStateId(null);
+                setDrillStateId(null);
                 setSelected(null);
               }}
             >
               <span className="filter__value">US</span>
             </button>
-            {level !== 'state' && (
-              <>
-                <Icon name="chevright" size={11} />
-                <button
-                  type="button"
-                  className={`filter filter--compact ${level === 'county' ? 'is-active' : ''}`}
-                  onClick={() => {
-                    setLevel('county');
-                    const st = countyStateId ?? 'il';
-                    const stName = usaMap?.locations.find((l) => l.id === st)?.name ?? 'State';
-                    setSelected({ level: 'state', id: st, name: stName });
-                  }}
-                >
-                  <span className="filter__value">
-                    {countyStateId
-                      ? usaMap?.locations.find((l) => l.id === countyStateId)?.name ?? 'State'
-                      : 'State'}
-                  </span>
-                </button>
-              </>
-            )}
-            {level === 'zip' && selected?.level === 'county' && (
+            {level === 'zip' && (
               <>
                 <Icon name="chevright" size={11} />
                 <span className="filter filter--compact is-active">
-                  <span className="filter__value">{selected.name}</span>
+                  <span className="filter__value">{drillStateName || 'State'}</span>
                 </span>
               </>
             )}
@@ -1209,18 +825,17 @@ export function USChoroplethMap({
         <div className="map-corner-chips">
           <Chip variant="neutral" icon="pin">
             {level === 'state'
-              ? footprint.dataScope?.county_count
-                ? `${footprint.dataScope.county_count.toLocaleString()} counties · click to drill`
+              ? footprint.dataScope?.zip_count
+                ? `${footprint.dataScope.zip_count.toLocaleString()} ZIPs · click a state to drill`
                 : 'Loading coverage…'
-              : level === 'county'
-                ? (countyStateId && countyScopeByState[countyStateId.toUpperCase()])
-                  ? countyScopeByState[countyStateId.toUpperCase()]
-                  : footprint.dataScope?.scope_label ?? 'Cotality data coverage'
-                : `ZIPs in ${selected?.level === 'county' ? selected.name : 'county'}`}
+              : `ZIPs in ${drillStateName || 'state'}`}
           </Chip>
-          {level !== 'state' && countyStateId && countyScopeByState[countyStateId.toUpperCase()] && level !== 'county' && (
+          {/* Drill-gap disclosure: the ZIP tiles below sum to LESS than the
+              state tile the user just clicked, because the share carries no
+              usable ZIP for these borrowers. Say it where the gap appears. */}
+          {level === 'zip' && zipUnassignedForDrill > 0 && (
             <Chip variant="neutral" icon="db">
-              {countyScopeByState[countyStateId.toUpperCase()]}
+              {zipUnassignedForDrill.toLocaleString()} borrowers without ZIP assignment
             </Chip>
           )}
           {/* S9 overlay toggle — two .filter-style buttons in the prototype's
@@ -1270,7 +885,6 @@ export function USChoroplethMap({
           {mapStatus}
         </div>
         {level === 'state' && renderStateLevel()}
-        {level === 'county' && renderCountyLevel()}
         {level === 'zip' && renderZipLevel()}
       </div>
 

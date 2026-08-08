@@ -6,9 +6,12 @@ import { test, expect, type Page, type Route } from '@playwright/test';
  * module0.spec.ts; real_data.spec.ts owns live validation).
  *
  * Flow under test:
- *   home map → drill Illinois → toggle "Unattended leads" → drill Cook
- *   County → ZIP grid shows per-tile unattended counts → "Start campaign"
+ *   home map → toggle "Unattended leads" → drill Illinois straight to its
+ *   ZIP grid → tiles show per-tile unattended counts → "Start campaign"
  *   → Portfolio Builder shows the typed prefilled draft context.
+ *
+ * There is no county rung: the Cotality share carries one county FIPS per
+ * state, so the county level could never render honest data (2026-08-08).
  */
 
 const API_PREFIX = /\/api\/(?:v1\/)?/;
@@ -84,22 +87,14 @@ async function mockGeo(page: Page) {
       snapshot_date: '2026-07-10',
     }),
   );
-  await page.route(apiPattern('geo/county-rollups'), (route) =>
-    json(route, {
-      state: 'IL',
-      rollups: [
-        { fips_5: '17031', state: 'IL', county_name: 'Cook', addressable_borrowers: 620, in_the_money_borrowers: 310, high_opportunity_borrowers: 260, avg_opportunity_score: 86, top_segment_code: 'itm' },
-      ],
-      snapshot_date: '2026-07-10',
-      scope_note: 'Cotality data coverage for IL: 1 county returned',
-    }),
-  );
+  // ZIP rollups are keyed on state; county_fips_5 is NULL on every live row.
   await page.route(apiPattern('geo/zip-rollups'), (route) =>
     json(route, {
-      fips_5: '17031',
+      state: 'IL',
+      fips_5: null,
       rollups: [
-        { zip: '60611', state: 'IL', county_fips_5: '17031', addressable_borrowers: 94, avg_opportunity_score: 94, top_segment_code: 'itm', sample_borrower_id: 'B-0000000000001' },
-        { zip: '60647', state: 'IL', county_fips_5: '17031', addressable_borrowers: 72, avg_opportunity_score: 82, top_segment_code: 'equity', sample_borrower_id: 'B-0000000000002' },
+        { zip: '60611', state: 'IL', county_fips_5: null, addressable_borrowers: 94, avg_opportunity_score: 94, top_segment_code: 'itm', sample_borrower_id: 'B-0000000000001' },
+        { zip: '60647', state: 'IL', county_fips_5: null, addressable_borrowers: 72, avg_opportunity_score: 82, top_segment_code: 'equity', sample_borrower_id: 'B-0000000000002' },
       ],
       snapshot_date: '2026-07-10',
     }),
@@ -123,24 +118,11 @@ async function mockGeo(page: Page) {
         lead_definition: 'Marketing-eligible borrowers in the live lead queue (mip.gold.borrower_360, marketing_eligible = TRUE)',
       });
     }
-    if (level === 'county') {
-      return json(route, {
-        level: 'county',
-        state: url.searchParams.get('state') ?? 'IL',
-        county_fips: null,
-        units: [
-          { unit_id: '17031', lead_count: 410, assigned_count: 96, unattended_count: 314, covering_officer_count: 1, covering_officers: ['Summit LO 01'] },
-        ],
-        total_leads: 410,
-        total_assigned: 96,
-        total_unattended: 314,
-        lead_definition: 'Marketing-eligible borrowers in the live lead queue (mip.gold.borrower_360, marketing_eligible = TRUE)',
-      });
-    }
+    // level=zip is keyed on state now — county_fips stays null.
     return json(route, {
       level: 'zip',
-      state: 'IL',
-      county_fips: url.searchParams.get('county_fips') ?? '17031',
+      state: url.searchParams.get('state') ?? 'IL',
+      county_fips: null,
       units: [
         { unit_id: '60611', lead_count: 64, assigned_count: 21, unattended_count: 43, covering_officer_count: 1, covering_officers: ['Summit LO 01'] },
         { unit_id: '60647', lead_count: 48, assigned_count: 9, unattended_count: 39, covering_officer_count: 1, covering_officers: ['Summit LO 01'] },
@@ -186,24 +168,21 @@ test.describe('S9 — geo overlay + campaign-from-geo prefill', () => {
   test('drill to ZIP grid, toggle unattended overlay, start prefilled campaign draft', async ({ page }) => {
     await page.goto(APP_URL + '/');
 
-    // --- State level: map up, drill into Illinois. ---
+    // --- State level: map up, overlay on, national totals. ---
     const illinois = page.locator('[aria-label="Illinois"]').first();
     await expect(illinois).toBeVisible({ timeout: 45_000 });
-    await illinois.click();
-
-    // --- County level: the drilled state is the selected unit, so the
-    // campaign affordance is already available. Toggle the overlay. ---
-    await expect(page.getByRole('button', { name: 'Start campaign' })).toBeVisible();
     await page.getByRole('button', { name: 'Unattended leads' }).click();
     await expect(page.getByText('Unattended leads in selection')).toBeVisible();
-    await expect(page.locator('.map-legend')).toContainText('314');
-    await expect(page.locator('.map-legend')).toContainText('410 leads · 96 assigned');
+    await expect(page.locator('.map-legend')).toContainText('1,605');
+    await expect(page.locator('.map-legend')).toContainText('1,745 leads · 140 assigned');
     // Overlay evidence affordance present (never removed).
     await expect(page.locator('.map-legend .evidence-chip')).toBeVisible();
 
-    // --- ZIP level: drill Cook County; tiles carry unattended counts. ---
-    await page.locator('[aria-label="Cook County"]').click();
+    // --- ZIP level: one click from the state, no county rung. The drilled
+    // state is the selected unit, so the campaign affordance appears here. ---
+    await illinois.click();
     await expect(page.locator('.zip-tiles')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole('button', { name: 'Start campaign' })).toBeVisible();
     const firstTile = page.locator('.zip-tile').first();
     await expect(firstTile).toContainText('60611');
     await expect(firstTile).toContainText('43 unattended');
@@ -216,9 +195,11 @@ test.describe('S9 — geo overlay + campaign-from-geo prefill', () => {
     await expect(page).toHaveURL(/\/portfolio-builder\?/);
     const url = new URL(page.url());
     expect(url.searchParams.get('prefill_source')).toBe('geo-drilldown');
-    expect(url.searchParams.get('prefill_level')).toBe('county');
+    // State is the drilled unit — there is no county to encode.
+    expect(url.searchParams.get('prefill_level')).toBe('state');
     expect(url.searchParams.get('states')).toBe('IL');
-    expect(url.searchParams.get('prefill_county_fips')).toBe('17031');
+    expect(url.searchParams.get('prefill_county_fips')).toBeNull();
+    // The ZIP grid is on screen, so the snapshot is the sum of its tiles.
     expect(url.searchParams.get('prefill_lead_count')).toBe('112');
     expect(url.searchParams.get('prefill_unattended_count')).toBe('82');
 
@@ -227,7 +208,7 @@ test.describe('S9 — geo overlay + campaign-from-geo prefill', () => {
     await expect(banner).toBeVisible();
     await expect(banner).toContainText('Campaign draft from geography drill-down');
     await expect(banner).toContainText('State IL — applied');
-    await expect(banner).toContainText('FIPS 17031');
+    await expect(banner).not.toContainText('FIPS');
     await expect(banner).toContainText('when the campaign builder (S10) ships');
     await expect(banner).toContainText('112 leads · 82 unattended at draft time');
 

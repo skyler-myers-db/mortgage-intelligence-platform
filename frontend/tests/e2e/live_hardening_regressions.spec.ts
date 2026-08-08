@@ -478,7 +478,12 @@ test('segment any/all API counts are de-duplicated and intersection-safe', async
   ).toBe(borrowerIds.length);
 });
 
-test('county drilldown distinguishes loading counties from loaded positive and empty counties', async ({ page, request }) => {
+// Re-keyed 2026-08-08 from a county drilldown. The share carries one county
+// FIPS per state, so county_fips_5 is NULL everywhere and the county level
+// was removed — a test asserting live county fills would assert a fiction.
+// The intent survives at the level that exists: a segment-filtered state
+// drill must land on real ZIP tiles carrying real fill tiers.
+test('state drilldown lands on ZIP tiles with live segment-filtered fills', async ({ page, request }) => {
   const query = 'segment_codes=itm,listed&segment_mode=any';
   const states = await getJson<{ rollups: StateRollup[] }>(request, `/api/geo/state-rollups?${query}`);
   const candidates = states.rollups
@@ -487,24 +492,19 @@ test('county drilldown distinguishes loading counties from loaded positive and e
 
   expect(candidates.length, 'expected at least one live state with borrowers for the selected segments').toBeGreaterThan(0);
 
-  let selected: { state: string; stateName: string; countyName: string } | null = null;
+  let selected: { state: string; stateName: string } | null = null;
   for (const state of candidates) {
-    const counties = await getJson<{ rollups: CountyRollup[] }>(
+    const zips = await getJson<{ rollups: Array<{ zip?: string; addressable_borrowers?: number }> }>(
       request,
-      `/api/geo/county-rollups?state=${state.state}&${query}`,
+      `/api/geo/zip-rollups?state=${state.state}&${query}`,
     );
-    const county = counties.rollups.find((row) => countValue(row) > 0);
-    if (county) {
-      selected = {
-        state: state.state,
-        stateName: STATE_NAMES[state.state],
-        countyName: county.county_name,
-      };
+    if (zips.rollups.some((row) => Number(row.addressable_borrowers ?? 0) > 0)) {
+      selected = { state: state.state, stateName: STATE_NAMES[state.state] };
       break;
     }
   }
 
-  expect(selected, 'expected a live county with borrowers for the selected segments').not.toBeNull();
+  expect(selected, 'expected a live state with ZIP rollups for the selected segments').not.toBeNull();
 
   await gotoApp(page, '/segment-intelligence');
   await clickSegment(page, 'Prime Refi Candidates');
@@ -512,12 +512,14 @@ test('county drilldown distinguishes loading counties from loaded positive and e
   await page.locator('path.map-region', { hasText: '' }).first().waitFor({ state: 'visible', timeout: 45_000 });
   await page.locator(`path[aria-label="${selected!.stateName}"]`).click();
 
-  const countyPath = page.locator(`path[aria-label="${selected!.countyName} County"]`).first();
-  await expect(countyPath, `county path ${selected!.countyName}`).toBeVisible({ timeout: 45_000 });
-  await expect(countyPath).toHaveClass(/(?:is-loading|has-data)/);
-  await expect(countyPath).toHaveClass(/has-data/, { timeout: 45_000 });
-  await expect(countyPath).not.toHaveClass(/is-empty/);
-  await expect(countyPath).toHaveClass(/lvl-[1-4]/);
+  const tiles = page.locator('.zip-tiles');
+  await expect(tiles, `ZIP tiles for ${selected!.stateName}`).toBeVisible({ timeout: 45_000 });
+  await expect(tiles).toHaveAttribute('aria-label', `ZIPs in ${selected!.stateName}`);
+  const firstTile = page.locator('.zip-tile').first();
+  await expect(firstTile).toHaveClass(/zip-tile--lvl-[1-4]/);
+  // A real ZIP with a real count, not an em-dash placeholder.
+  await expect(firstTile.locator('.zip-tile__code')).toHaveText(/^\d{5}$/);
+  await expect(firstTile.locator('.zip-tile__count')).not.toHaveText('—');
 });
 
 test('Genie answers valid recommended and free-form questions without policy-blocking', async ({ page, request }) => {

@@ -246,8 +246,9 @@ class DatabricksGeoRepository:
       ``StateRollup.top_segment_code`` extension.
     * ``mip.gold.county_rollup`` -- filtered to the given state at the
       latest snapshot.
-    * ``mip.gold.zip_rollup`` -- filtered to the given county FIPS at
-      the latest snapshot.
+    * ``mip.gold.zip_rollup`` -- filtered to the given state (the live
+      drill) or county FIPS (reserved for licensed county data) at the
+      latest snapshot.
 
     Short-TTL cached (60s default) per-method so a presenter clicking
     between segment-intelligence and home pays one warehouse round-trip
@@ -326,7 +327,13 @@ class DatabricksGeoRepository:
         "ORDER BY addressable_borrowers DESC"
     )
 
-    _ZIP_SQL = (
+    # 2026-08-08: the ZIP layer is keyed on STATE, not county. The Cotality
+    # share carries exactly one county FIPS per state (audit C2), so the
+    # fabricated county keys were removed and `county_fips_5` is NULL on
+    # every zip_rollup row — a county-keyed read returns zero rows for every
+    # county, always. `_ZIP_SQL` (FIPS-keyed) stays for a future licensed
+    # county dataset; `_ZIP_STATE_SQL` is what the map actually drills.
+    _ZIP_SELECT = (
         "SELECT "
         "  zip, "
         "  state, "
@@ -337,10 +344,15 @@ class DatabricksGeoRepository:
         "  sample_borrower_id, "
         "  snapshot_date "
         f"FROM {qualify('gold', 'zip_rollup')} "
-        "WHERE county_fips_5 = :fips_5 "
+    )
+    _ZIP_SNAPSHOT_AND_ORDER = (
         f"  AND snapshot_date = (SELECT MAX(snapshot_date) FROM {qualify('gold', 'zip_rollup')}) "
         "ORDER BY addressable_borrowers DESC"
     )
+
+    _ZIP_SQL = _ZIP_SELECT + "WHERE county_fips_5 = :fips_5 " + _ZIP_SNAPSHOT_AND_ORDER
+
+    _ZIP_STATE_SQL = _ZIP_SELECT + "WHERE state = :state " + _ZIP_SNAPSHOT_AND_ORDER
 
     _STATE_CACHE_KEY = "geo.state_rollups"
     _SCOPE_CACHE_KEY = "geo.scope"
@@ -447,7 +459,10 @@ class DatabricksGeoRepository:
         "    opportunity_score, "
         "    segment_codes "
         f"  FROM {qualify('gold', 'borrower_360')} "
-        "  WHERE county_fips_5 = :fips_5 "
+        # {geo_predicate} is `state = :state` (the live drill) or
+        # `county_fips_5 = :fips_5` (reserved for licensed county data).
+        # Both sides are repo-owned literals — never caller text.
+        "  WHERE {geo_predicate} "
         "    AND zip IS NOT NULL "
         "    AND LENGTH(zip) = 5 "
         "    AND {filter_clause} "
@@ -781,26 +796,39 @@ class DatabricksGeoRepository:
 
     def zip_rollups(
         self,
-        fips_5: str,
+        fips_5: str | None = None,
         segment_codes: list[str] | None = None,
         segment_mode: str = "any",
         portfolio_criteria: PortfolioCriteria | None = None,
+        *,
+        state: str | None = None,
     ) -> ZipRollupResponse:
-        """Fetch per-ZIP rollups for the given 5-char county FIPS."""
-        normalised = str(fips_5 or "")[:5]
+        """Fetch per-ZIP rollups keyed by state (live) or county FIPS.
+
+        Callers pass exactly one key. ``state`` is the drill the map uses
+        — ``mip.gold.zip_rollup`` is grained on state + ZIP and its
+        ``county_fips_5`` is NULL for every row in the current Cotality
+        share, so a FIPS-keyed read returns nothing. ``fips_5`` stays
+        wired for a future licensed county dataset.
+        """
+        normalised_state = str(state or "").upper()[:2]
+        normalised_fips = str(fips_5 or "")[:5]
+        by_state = bool(normalised_state)
+        # Distinct cache grains: `state:WA` can never collide with a FIPS.
+        grain = f"state:{normalised_state}" if by_state else f"fips:{normalised_fips}"
         normalised_segments = self._normalise_geo_segments(segment_codes)
         use_filtered_path = bool(normalised_segments) or portfolio_criteria is not None
         portfolio_key = self._portfolio_cache_key(portfolio_criteria)
         cache_key = (
             self._filtered_geo_cache_key(
                 "geo.zip_rollups",
-                normalised,
+                grain,
                 segment_codes=normalised_segments,
                 segment_mode=segment_mode,
             )
             + f":{portfolio_key}"
             if use_filtered_path
-            else f"geo.zip_rollups:{normalised}"
+            else f"geo.zip_rollups:{grain}"
         )
         def build() -> ZipRollupResponse:
             if use_filtered_path:
@@ -809,13 +837,21 @@ class DatabricksGeoRepository:
                     segment_mode=segment_mode,
                     portfolio_criteria=portfolio_criteria,
                 )
-                params["fips_5"] = normalised
+                if by_state:
+                    params["state"] = normalised_state
+                else:
+                    params["fips_5"] = normalised_fips
                 sql = self._ZIP_FILTER_SQL_TPL.format(
+                    geo_predicate="state = :state" if by_state else "county_fips_5 = :fips_5",
                     filter_clause=filter_clause,
                 )
                 rows = self._client.execute(sql, params) or []
+            elif by_state:
+                rows = self._client.execute(
+                    self._ZIP_STATE_SQL, {"state": normalised_state}
+                ) or []
             else:
-                rows = self._client.execute(self._ZIP_SQL, {"fips_5": normalised}) or []
+                rows = self._client.execute(self._ZIP_SQL, {"fips_5": normalised_fips}) or []
             rollups = [
                 ZipRollup(
                     zip=str(r.get("zip") or "")[:5],
@@ -838,7 +874,8 @@ class DatabricksGeoRepository:
                 raw = rows[0].get("snapshot_date")
                 snapshot_date = str(raw) if raw is not None else None
             return ZipRollupResponse(
-                fips_5=normalised,
+                fips_5=None if by_state else normalised_fips,
+                state=normalised_state or None,
                 rollups=rollups,
                 snapshot_date=snapshot_date,
             )

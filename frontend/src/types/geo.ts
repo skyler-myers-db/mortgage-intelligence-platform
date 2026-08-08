@@ -32,6 +32,11 @@ export interface StateRollup {
   in_the_money: number;
   top_tier_opportunities: number;
   avg_score: number;
+  /** How many of `addressable` the ZIP drill will NOT show, because the
+   *  share carries no usable 5-digit ZIP for them. The state tile and the
+   *  sum of its ZIP tiles disagree by exactly this much, so the UI has to
+   *  say so rather than let a reader find the gap themselves. */
+  zip_unassigned_count?: number | null;
   top_segment_code?: string | null;
 }
 
@@ -69,7 +74,9 @@ export interface ZipRollup {
 }
 
 export interface ZipRollupResponse {
-  fips_5: string;
+  /** Echoes whichever key answered — exactly one is populated. */
+  fips_5?: string | null;
+  state?: string | null;
   rollups: ZipRollup[];
   snapshot_date?: string | null;
 }

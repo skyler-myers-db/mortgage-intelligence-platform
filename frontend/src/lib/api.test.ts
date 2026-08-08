@@ -703,7 +703,7 @@ describe('geo API client', () => {
       portfolioCriteria,
     );
     await api.zipRollups(
-      '12011',
+      { state: 'fl' },
       undefined,
       ['itm', 'investor', 'equity', 'retention'],
       'all',
@@ -723,7 +723,11 @@ describe('geo API client', () => {
 
     const zipUrl = new URL(calls[2].path, 'http://localhost');
     expect(zipUrl.pathname).toBe('/api/v1/geo/zip-rollups');
-    expect(zipUrl.searchParams.get('county_fips')).toBe('12011');
+    // The live ZIP drill key is the STATE. The county grain is dead in the
+    // current share (one FIPS per state), so a county-keyed ZIP request
+    // returns nothing — the map must never send one.
+    expect(zipUrl.searchParams.get('state')).toBe('FL');
+    expect(zipUrl.searchParams.get('county_fips')).toBeNull();
     expect(zipUrl.searchParams.get('segment_codes')).toBe('itm,investor,equity,retention');
     expect(zipUrl.searchParams.get('segment_mode')).toBe('all');
 
@@ -736,6 +740,25 @@ describe('geo API client', () => {
       expect(url.searchParams.get('purchase_intent')).toBe('Listed for sale');
       expect(url.searchParams.get('min_equity_pct_label')).toBe('≥ 25%');
     }
+  });
+
+  it('still sends a county-keyed ZIP rollup request for the reserved key', async () => {
+    // The Lead Queue resolves `?county=FFFFF` to a ZIP set for a scope
+    // chip. That key is honestly empty against the current share, but the
+    // client must keep speaking it so a licensed county dataset needs no
+    // frontend change.
+    const calls: Array<{ path: string }> = [];
+    vi.stubGlobal('fetch', async (path: string) => {
+      calls.push({ path });
+      return jsonResponse(200, { rollups: [], snapshot_date: null });
+    });
+
+    await api.zipRollups({ countyFips: '17031' });
+
+    const url = new URL(calls[0].path, 'http://localhost');
+    expect(url.pathname).toBe('/api/v1/geo/zip-rollups');
+    expect(url.searchParams.get('county_fips')).toBe('17031');
+    expect(url.searchParams.get('state')).toBeNull();
   });
 });
 

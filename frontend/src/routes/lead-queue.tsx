@@ -307,7 +307,7 @@ export default function LeadQueue() {
     let cancelled = false;
     api
       .zipRollups(
-        countyFilter,
+        { countyFips: countyFilter },
         ctrl.signal,
         segmentCodes.length > 0 ? segmentCodes : segment ? [segment] : null,
         segmentMode,

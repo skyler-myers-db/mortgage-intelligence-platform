@@ -15,8 +15,6 @@ test.use({ baseURL: APP_URL, extraHTTPHeaders: AUTH_HEADERS });
 type MapDrillTarget = {
   state: string;
   stateName: string;
-  countyFips: string;
-  countyName: string;
 };
 
 function escapeRegExp(value: string): string {
@@ -72,35 +70,21 @@ async function discoverMapDrillTarget(
     footprint.states?.find((row: { state_code?: string }) => row.state_code === stateRollup.state)
       ?.state_name ?? stateRollup.state;
 
-  const countyResp = await request.get(
-    `${API_URL}/api/geo/county-rollups?state=${stateRollup.state}${params.toString() ? `&${params.toString()}` : ''}`,
+  // The drill is state -> ZIP; there is no county rung to discover (the
+  // share carries one county FIPS per state, so county rollups are empty).
+  const zipResp = await request.get(
+    `${API_URL}/api/geo/zip-rollups?state=${stateRollup.state}${params.toString() ? `&${params.toString()}` : ''}`,
     { headers: AUTH_HEADERS },
   );
-  expect(countyResp.status(), 'county rollups target discovery').toBe(200);
-  const countyPayload = await countyResp.json();
-  let county: { fips_5?: string; county_name?: string; addressable_borrowers?: number } | undefined;
-  for (const row of countyPayload.rollups as Array<{ fips_5?: string; county_name?: string; addressable_borrowers?: number }>) {
-    if (!row.fips_5 || Number(row.addressable_borrowers ?? 0) <= 0) continue;
-    const zipResp = await request.get(
-      `${API_URL}/api/geo/zip-rollups?county_fips=${row.fips_5}${params.toString() ? `&${params.toString()}` : ''}`,
-      { headers: AUTH_HEADERS },
-    );
-    if (zipResp.status() !== 200) continue;
-    const zipPayload = await zipResp.json();
-    if (Array.isArray(zipPayload.rollups) && zipPayload.rollups.length > 0) {
-      county = row;
-      break;
-    }
-  }
-  expect(county, 'county rollups should expose a populated county').toBeTruthy();
-  const rawCountyName = String(county.county_name || county.fips_5);
+  expect(zipResp.status(), 'zip rollups target discovery').toBe(200);
+  const zipPayload = await zipResp.json();
+  expect(
+    Array.isArray(zipPayload.rollups) && zipPayload.rollups.length > 0,
+    `state ${stateRollup.state} should expose a populated ZIP rollup`,
+  ).toBe(true);
   return {
     state: stateRollup.state,
     stateName,
-    countyFips: county.fips_5,
-    countyName: rawCountyName.toLowerCase().endsWith('county')
-      ? rawCountyName
-      : `${rawCountyName} County`,
   };
 }
 
@@ -157,23 +141,14 @@ async function drillToZipLayer(page: Page, target: MapDrillTarget, segmentCodes:
   const map = page.locator('.map-wrap').first();
   await bringMapIntoViewport(page);
   const state = map.getByRole('button', { name: new RegExp(`^${escapeRegExp(target.stateName)}$`) }).first();
-  const countyResponse = page
-    .waitForResponse(filteredGeoResponse(segmentCodes, '/api/geo/county-rollups'), { timeout: 45_000 })
-    .catch((error: Error) => error);
-  await clickSvgRegion(page, state, target.stateName);
-
-  await bringMapIntoViewport(page);
-  const county = map.getByRole('button', { name: new RegExp(escapeRegExp(target.countyName), 'i') }).first();
-  await expect(county, `${target.stateName} pointer click should drill into counties`).toBeVisible({ timeout: 10_000 });
-  const countyResult = await countyResponse;
-  if (countyResult instanceof Error) throw countyResult;
-
   const zipResponse = page
     .waitForResponse(filteredGeoResponse(segmentCodes, '/api/geo/zip-rollups'), { timeout: 45_000 })
     .catch((error: Error) => error);
-  await clickSvgRegion(page, county, target.countyName);
-  await expect(page.locator('.map-crumbs'), `${target.countyName} pointer click should drill into ZIPs`)
-    .toContainText(target.countyName, { timeout: 5_000 });
+  // One click: state -> ZIP tiles.
+  await clickSvgRegion(page, state, target.stateName);
+  await expect(page.locator('.zip-tiles'), `${target.stateName} pointer click should drill into ZIPs`)
+    .toBeVisible({ timeout: 10_000 });
+  await expect(page.locator('.map-crumbs')).toContainText(target.stateName, { timeout: 5_000 });
   const zipResult = await zipResponse;
   if (zipResult instanceof Error) throw zipResult;
 }

@@ -57,6 +57,20 @@ export function USChoroplethMapTooltip({ hover, activeSegNames }: USChoroplethMa
           <span className="map-tip__seg-value">{hover.topSegment}</span>
         </div>
       )}
+      {/* Drill-gap disclosure. The ZIP layer is keyed on a 5-digit ZIP and
+          the share does not carry one for every property, so this state's
+          ZIP tiles will sum BELOW the marketable count above. Disclosed on
+          the state hover — before the drill — so the shortfall is expected
+          rather than discovered. Reuses the existing muted compact row; no
+          new CSS. */}
+      {typeof hover.zipUnassigned === 'number' && hover.zipUnassigned > 0 && (
+        <div className="map-tip__row map-tip__row--compact map-tip__row--muted">
+          <span>ZIP coverage</span>
+          <span className="v map-tip__value--small">
+            {hover.zipUnassigned.toLocaleString()} borrowers without ZIP assignment
+          </span>
+        </div>
+      )}
       {hover.overlay && (
         <div className="map-tip__overlay">
           <div className="map-tip__row map-tip__row--compact">
