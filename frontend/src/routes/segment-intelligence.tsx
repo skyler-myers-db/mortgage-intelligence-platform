@@ -272,9 +272,10 @@ export default function SegmentIntelligence() {
     setSegmentMode((current) => (current === nextMode ? current : nextMode));
   }, [searchParams]);
   // Geography drill state emitted by USChoroplethMap. State is the 2-char
-  // USPS code; null = US level (no geography filter). County/ZIP are pushed
-  // down to /api/leads so the ranked table follows the same state → county
-  // → ZIP cohort the map counted.
+  // USPS code; null = US level (no geography filter). ZIP is pushed down to
+  // /api/leads so the ranked table follows the same state → ZIP cohort the
+  // map counted. `county` is always null (the map has no county level) but
+  // stays wired through for a future licensed county dataset.
   const [mapSelection, setMapSelection] = useState<MapSelection>({
     state: null,
     county: null,

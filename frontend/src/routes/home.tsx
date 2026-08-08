@@ -299,12 +299,15 @@ export default function Home() {
       <div className="section-hdr">
         <div>
           <div className="eyebrow">Geography</div>
-          <div className="h-2">State → county → ZIP → borrower</div>
+          <div className="h-2">State → ZIP → borrower</div>
         </div>
       </div>
-      {/* Home map drills in-place through state/county/ZIP and then opens
-          the filtered Lead Queue. Lead Queue remains the source-of-truth
-          index for borrower selection. Audit exploration is admin-only. */}
+      {/* Home map drills in-place from state to ZIP and then opens the
+          filtered Lead Queue. There is no county rung — the Cotality share
+          carries one county FIPS per state, so county_fips_5 is NULL across
+          gold (see USChoroplethMap's design-contract note). Lead Queue
+          remains the source-of-truth index for borrower selection. Audit
+          exploration is admin-only. */}
       <USChoroplethMap drillBehavior="filter" />
 
       <div className="section-actions">
