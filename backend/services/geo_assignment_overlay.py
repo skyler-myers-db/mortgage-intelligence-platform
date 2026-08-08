@@ -13,6 +13,11 @@ Combines the two live systems of record the platform already trusts:
   (county FIPS in ``coverage_counties``, or the unit's state in
   ``coverage_states``); no geometry.
 
+The ZIP level is keyed on ``state`` (2026-08-08): the Cotality share
+carries one county FIPS per state, so ``county_fips_5`` is NULL across
+``borrower_360`` and a FIPS-keyed ZIP overlay would recolor nothing. The
+FIPS key is still accepted for a future licensed county dataset.
+
 ``unattended = lead_count - assigned_count`` is non-negative by
 construction: the assigned side only counts borrowers that are ALSO in
 the unit's marketing-eligible lead set, so an assignment held by a
@@ -189,6 +194,21 @@ class GeoAssignmentOverlayService:
         "GROUP BY zip"
     )
 
+    # 2026-08-08: the ZIP layer is drilled from a STATE — the share carries
+    # one county FIPS per state, so `county_fips_5` is NULL on every
+    # borrower_360 row and the FIPS-keyed query above returns nothing. The
+    # state projection is a literal, not ANY_VALUE, because the WHERE
+    # clause pins it.
+    _LEAD_ZIP_BY_STATE_SQL = (
+        "SELECT zip AS unit_id, CAST(COUNT(*) AS INT) AS lead_count, "
+        "  :state AS state "
+        f"FROM {qualify('gold', 'borrower_360')} "
+        "WHERE marketing_eligible = TRUE "
+        "  AND state = :state "
+        "  AND zip IS NOT NULL AND LENGTH(zip) = 5 "
+        "GROUP BY zip"
+    )
+
     # Active assignments only: released rows are history, not workload.
     _ASSIGNED_BORROWERS_SQL = (
         "SELECT DISTINCT borrower_id FROM mip_app.lead_assignments "
@@ -272,6 +292,8 @@ class GeoAssignmentOverlayService:
             rows = self._sql.execute(self._LEAD_STATE_SQL) or []
         elif level == "county":
             rows = self._sql.execute(self._LEAD_COUNTY_SQL, {"state": state}) or []
+        elif state:
+            rows = self._sql.execute(self._LEAD_ZIP_BY_STATE_SQL, {"state": state}) or []
         else:
             rows = self._sql.execute(self._LEAD_ZIP_SQL, {"fips_5": county_fips}) or []
         counts: dict[str, int] = {}
@@ -342,9 +364,17 @@ class GeoAssignmentOverlayService:
             if row_state != (state or "") or len(row_fips) != 5:
                 return None
             return row_fips
-        if row_fips != (county_fips or "") or len(row_zip) != 5:
+        # ZIP level: the unit is the ZIP, scoped by whichever key was
+        # drilled. State is the live key; FIPS is reserved for licensed
+        # county data. Neither key means nothing to scope against, so the
+        # row is dropped rather than counted into an unbounded overlay.
+        if len(row_zip) != 5:
             return None
-        return row_zip
+        if county_fips:
+            return row_zip if row_fips == county_fips else None
+        if state:
+            return row_zip if row_state == state else None
+        return None
 
     def _active_officers(self) -> list[CoverageOfficer]:
         rows = self._lakebase.fetchall(self._OFFICERS_SQL, limit=1_000)

@@ -121,8 +121,17 @@ class ZipRollup(BaseModel):
 
 
 class ZipRollupResponse(BaseModel):
-    """Wire envelope — list of ZIPs for a given county FIPS + snapshot date."""
+    """Wire envelope — list of ZIPs for the requested key + snapshot date.
 
-    fips_5: str = Field(min_length=5, max_length=5)
+    Exactly one of ``state`` / ``fips_5`` is populated, echoing whichever
+    key the caller asked with. The state key is the drill the UI uses:
+    the Cotality share carries a single county FIPS per state, so
+    ``county_fips_5`` is NULL on every ``mip.gold.zip_rollup`` row and a
+    county-keyed request legitimately returns zero rollups. The FIPS key
+    stays on the contract for a future licensed county dataset.
+    """
+
+    fips_5: str | None = Field(default=None, min_length=5, max_length=5)
+    state: str | None = Field(default=None, min_length=2, max_length=2)
     rollups: list[ZipRollup]
     snapshot_date: str | None = None

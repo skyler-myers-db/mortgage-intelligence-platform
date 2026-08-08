@@ -11,10 +11,14 @@ given state, backed by ``mip.gold.county_rollup``. The UI lazy-fetches
 when the user drills into a state; counties not present in the payload
 render "—" (honest null).
 
-/api/geo/zip-rollups?county_fips=NNNNN — per-ZIP aggregates within a county
-(5-char FIPS), backed by ``mip.gold.zip_rollup``. Each row carries a
-stable ``sample_borrower_id`` so the UI's ZIP-tile click-through deep-
-links to a real borrower dossier.
+/api/geo/zip-rollups?state=XX — per-ZIP aggregates within a state, backed
+by ``mip.gold.zip_rollup``. Each row carries a stable
+``sample_borrower_id`` so the UI's ZIP-tile click-through deep-links to a
+real borrower dossier. This is the drill the map uses: the Cotality share
+carries exactly one county FIPS per state, so ``county_fips_5`` is NULL on
+every gold row and a county-keyed drill dead-ends. ``?county_fips=NNNNN``
+is still accepted (and returns [] today) so a licensed county dataset can
+light the county grain back up without a contract change.
 """
 from typing import Annotated, Literal
 
@@ -267,7 +271,10 @@ def assignment_overlay(
             min_length=2,
             max_length=2,
             pattern=r"^[A-Za-z]{2}$",
-            description="2-char USPS state code. Required when level=county.",
+            description=(
+                "2-char USPS state code. Required when level=county; the "
+                "live key when level=zip."
+            ),
         ),
     ] = None,
     county_fips: Annotated[
@@ -277,7 +284,10 @@ def assignment_overlay(
             min_length=5,
             max_length=5,
             pattern=r"^\d{5}$",
-            description="5-char county FIPS. Required when level=zip.",
+            description=(
+                "5-char county FIPS. Alternative key when level=zip, "
+                "reserved for licensed county data."
+            ),
         ),
     ] = None,
 ) -> GeoAssignmentOverlayResponse:
@@ -293,8 +303,14 @@ def assignment_overlay(
     """
     if level == "county" and not state:
         raise HTTPException(status_code=422, detail="state is required when level=county")
-    if level == "zip" and not county_fips:
-        raise HTTPException(status_code=422, detail="county_fips is required when level=zip")
+    if level == "zip" and bool(state) == bool(county_fips):
+        # Same XOR contract as /zip-rollups: the ZIP layer is drilled from a
+        # state now that the share carries no usable county grain, and the
+        # overlay must key on the same unit as the tiles it recolors.
+        raise HTTPException(
+            status_code=422,
+            detail="exactly one of state or county_fips is required when level=zip",
+        )
     try:
         return service.overlay(level, state=state, county_fips=county_fips)
     except LakebaseError as exc:
@@ -309,16 +325,32 @@ def assignment_overlay(
 @router.get("/zip-rollups", response_model=ZipRollupResponse)
 def zip_rollups(
     repo: RepoDep,
+    state: Annotated[
+        str | None,
+        Query(
+            min_length=2,
+            max_length=2,
+            pattern=r"^[A-Za-z]{2}$",
+            description=(
+                "2-char USPS state code (uppercased server-side). The live "
+                "ZIP drill key. Mutually exclusive with county_fips."
+            ),
+        ),
+    ] = None,
     county_fips: Annotated[
-        str,
+        str | None,
         Query(
             alias="county_fips",
             min_length=5,
             max_length=5,
             pattern=r"^\d{5}$",
-            description="5-char county FIPS (2-char state + 3-char county).",
+            description=(
+                "5-char county FIPS (2-char state + 3-char county). Reserved "
+                "for licensed county data; returns [] against the current "
+                "share. Mutually exclusive with state."
+            ),
         ),
-    ],
+    ] = None,
     segment_codes: Annotated[
         str | None,
         Query(
@@ -351,15 +383,29 @@ def zip_rollups(
     consent_status: Annotated[str | None, Query(alias="consent_status", max_length=32)] = None,
     recency: Annotated[str | None, Query(alias="recency", max_length=32)] = None,
 ) -> ZipRollupResponse:
-    """Return per-ZIP rollups for the given county FIPS.
+    """Return per-ZIP rollups for the given state, or for a county FIPS.
+
+    Exactly one key is required — 422 when both or neither are supplied,
+    because a request that names two geographies has no single honest
+    answer and a request that names none would scan the country.
+
+    ``state`` is the drill the map uses. ``county_fips`` is kept for a
+    future licensed county dataset; against the current Cotality share it
+    returns an empty list for every county, since the share carries one
+    county FIPS per state and ``mip.gold.zip_rollup.county_fips_5`` is
+    NULL on every row.
 
     Each ZIP carries a stable-ranked ``sample_borrower_id`` so the UI's
     ZIP-tile click-through can deep-link to ``/borrower-360/<id>``.
-    Empty list when the county has no rollup rows (county outside the current
-    Cotality-backed coverage or CTAS hasn't run).
     """
+    if bool(state) == bool(county_fips):
+        raise HTTPException(
+            status_code=422,
+            detail="exactly one of state or county_fips is required",
+        )
     return repo.zip_rollups(
         county_fips,
+        state=state.upper() if state else None,
         segment_codes=_parse_segment_codes(segment_codes),
         segment_mode=_parse_segment_mode(segment_mode),
         portfolio_criteria=_portfolio_criteria_from_geo_query(

@@ -1015,6 +1015,13 @@ _FIXTURE_ZIP_ROLLUPS: dict[str, list[ZipRollup]] = {
     ],
 }
 
+# The live drill is state -> ZIP (the share has no usable county grain), so
+# the fixture mirrors that key too. Same rows as the FIPS entry above so a
+# TestClient drilling IL sees one coherent ZIP story on either key.
+_FIXTURE_ZIP_ROLLUPS_BY_STATE: dict[str, list[ZipRollup]] = {
+    "IL": list(_FIXTURE_ZIP_ROLLUPS["17031"]),
+}
+
 
 class InProcessMockGeoRepository:
     """Test fixture implementing ``GeoRepository`` from the synthetic rollups."""
@@ -1048,15 +1055,26 @@ class InProcessMockGeoRepository:
 
     def zip_rollups(
         self,
-        fips_5: str,
+        fips_5: str | None = None,
         segment_codes: list[str] | None = None,
         segment_mode: str = "any",
         portfolio_criteria: PortfolioCriteria | None = None,
+        *,
+        state: str | None = None,
     ) -> ZipRollupResponse:
         _ = (segment_codes, segment_mode, portfolio_criteria)
+        if state:
+            normalised_state = str(state).upper()[:2]
+            return ZipRollupResponse(
+                fips_5=None,
+                state=normalised_state,
+                rollups=list(_FIXTURE_ZIP_ROLLUPS_BY_STATE.get(normalised_state, [])),
+                snapshot_date="2026-04-22",
+            )
         normalised = str(fips_5 or "")[:5]
         return ZipRollupResponse(
             fips_5=normalised,
+            state=None,
             rollups=list(_FIXTURE_ZIP_ROLLUPS.get(normalised, [])),
             snapshot_date="2026-04-22",
         )
@@ -1081,6 +1099,12 @@ _FIXTURE_OVERLAY_UNITS: dict[tuple[str, str], list[GeoAssignmentOverlayUnit]] = 
         GeoAssignmentOverlayUnit(unit_id="60647", lead_count=48, assigned_count=9, unattended_count=39, covering_officer_count=1, covering_officers=["Summit LO 01"]),
         GeoAssignmentOverlayUnit(unit_id="60613", lead_count=39, assigned_count=0, unattended_count=39, covering_officer_count=1, covering_officers=["Summit LO 01"]),
     ],
+    # State-keyed ZIP overlay — the live drill key.
+    ("zip", "IL"): [
+        GeoAssignmentOverlayUnit(unit_id="60611", lead_count=64, assigned_count=21, unattended_count=43, covering_officer_count=1, covering_officers=["Summit LO 01"]),
+        GeoAssignmentOverlayUnit(unit_id="60647", lead_count=48, assigned_count=9, unattended_count=39, covering_officer_count=1, covering_officers=["Summit LO 01"]),
+        GeoAssignmentOverlayUnit(unit_id="60613", lead_count=39, assigned_count=0, unattended_count=39, covering_officer_count=1, covering_officers=["Summit LO 01"]),
+    ],
 }
 
 
@@ -1097,7 +1121,12 @@ class InProcessMockGeoOverlayService:
         if level == "county":
             key = ("county", str(state or "").upper()[:2])
         elif level == "zip":
-            key = ("zip", str(county_fips or "")[:5])
+            # State is the live ZIP key; FIPS stays for licensed county data.
+            key = (
+                ("zip", str(state).upper()[:2])
+                if state
+                else ("zip", str(county_fips or "")[:5])
+            )
         else:
             key = ("state", "_")
         units = list(_FIXTURE_OVERLAY_UNITS.get(key, []))

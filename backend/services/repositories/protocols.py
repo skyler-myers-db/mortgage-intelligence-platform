@@ -341,8 +341,9 @@ class GeoRepository(Protocol):
       given state at the latest snapshot_date, or ``mip.gold.borrower_360``
       when a segment filter is active.
     * ``zip_rollups`` — ``mip.gold.zip_rollup`` filtered to the given
-      5-char county FIPS at the latest snapshot_date, or ``mip.gold.borrower_360``
-      when a segment filter is active.
+      2-char state (the live drill) or 5-char county FIPS (reserved for
+      licensed county data) at the latest snapshot_date, or
+      ``mip.gold.borrower_360`` when a segment filter is active.
 
     Every method returns a structured response with ``snapshot_date``
     so the UI can show a "data as of YYYY-MM-DD" provenance chip.
@@ -379,10 +380,12 @@ class GeoRepository(Protocol):
 
     def zip_rollups(
         self,
-        fips_5: str,
+        fips_5: str | None = None,
         segment_codes: list[str] | None = None,
         segment_mode: str = "any",
         portfolio_criteria: PortfolioCriteria | None = None,
+        *,
+        state: str | None = None,
     ) -> ZipRollupResponse:
         ...
 

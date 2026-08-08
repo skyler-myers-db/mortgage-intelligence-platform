@@ -13491,13 +13491,20 @@
         "type": "object"
       },
       "ZipRollupResponse": {
-        "description": "Wire envelope \u2014 list of ZIPs for a given county FIPS + snapshot date.",
+        "description": "Wire envelope \u2014 list of ZIPs for the requested key + snapshot date.\n\nExactly one of ``state`` / ``fips_5`` is populated, echoing whichever\nkey the caller asked with. The state key is the drill the UI uses:\nthe Cotality share carries a single county FIPS per state, so\n``county_fips_5`` is NULL on every ``mip.gold.zip_rollup`` row and a\ncounty-keyed request legitimately returns zero rollups. The FIPS key\nstays on the contract for a future licensed county dataset.",
         "properties": {
           "fips_5": {
-            "maxLength": 5,
-            "minLength": 5,
-            "title": "Fips 5",
-            "type": "string"
+            "anyOf": [
+              {
+                "maxLength": 5,
+                "minLength": 5,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fips 5"
           },
           "rollups": {
             "items": {
@@ -13516,10 +13523,22 @@
               }
             ],
             "title": "Snapshot Date"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "maxLength": 2,
+                "minLength": 2,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State"
           }
         },
         "required": [
-          "fips_5",
           "rollups"
         ],
         "title": "ZipRollupResponse",
@@ -16916,7 +16935,7 @@
             }
           },
           {
-            "description": "2-char USPS state code. Required when level=county.",
+            "description": "2-char USPS state code. Required when level=county; the live key when level=zip.",
             "in": "query",
             "name": "state",
             "required": false,
@@ -16932,12 +16951,12 @@
                   "type": "null"
                 }
               ],
-              "description": "2-char USPS state code. Required when level=county.",
+              "description": "2-char USPS state code. Required when level=county; the live key when level=zip.",
               "title": "State"
             }
           },
           {
-            "description": "5-char county FIPS. Required when level=zip.",
+            "description": "5-char county FIPS. Alternative key when level=zip, reserved for licensed county data.",
             "in": "query",
             "name": "county_fips",
             "required": false,
@@ -16953,7 +16972,7 @@
                   "type": "null"
                 }
               ],
-              "description": "5-char county FIPS. Required when level=zip.",
+              "description": "5-char county FIPS. Alternative key when level=zip, reserved for licensed county data.",
               "title": "County Fips"
             }
           }
@@ -17509,21 +17528,49 @@
     "/api/geo/zip-rollups": {
       "get": {
         "deprecated": true,
-        "description": "Return per-ZIP rollups for the given county FIPS.\n\nEach ZIP carries a stable-ranked ``sample_borrower_id`` so the UI's\nZIP-tile click-through can deep-link to ``/borrower-360/<id>``.\nEmpty list when the county has no rollup rows (county outside the current\nCotality-backed coverage or CTAS hasn't run).",
+        "description": "Return per-ZIP rollups for the given state, or for a county FIPS.\n\nExactly one key is required \u2014 422 when both or neither are supplied,\nbecause a request that names two geographies has no single honest\nanswer and a request that names none would scan the country.\n\n``state`` is the drill the map uses. ``county_fips`` is kept for a\nfuture licensed county dataset; against the current Cotality share it\nreturns an empty list for every county, since the share carries one\ncounty FIPS per state and ``mip.gold.zip_rollup.county_fips_5`` is\nNULL on every row.\n\nEach ZIP carries a stable-ranked ``sample_borrower_id`` so the UI's\nZIP-tile click-through can deep-link to ``/borrower-360/<id>``.",
         "operationId": "get_api_geo_zip_rollups_zip_rollups",
         "parameters": [
           {
-            "description": "5-char county FIPS (2-char state + 3-char county).",
+            "description": "2-char USPS state code (uppercased server-side). The live ZIP drill key. Mutually exclusive with county_fips.",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2,
+                  "minLength": 2,
+                  "pattern": "^[A-Za-z]{2}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "2-char USPS state code (uppercased server-side). The live ZIP drill key. Mutually exclusive with county_fips.",
+              "title": "State"
+            }
+          },
+          {
+            "description": "5-char county FIPS (2-char state + 3-char county). Reserved for licensed county data; returns [] against the current share. Mutually exclusive with state.",
             "in": "query",
             "name": "county_fips",
-            "required": true,
+            "required": false,
             "schema": {
-              "description": "5-char county FIPS (2-char state + 3-char county).",
-              "maxLength": 5,
-              "minLength": 5,
-              "pattern": "^\\d{5}$",
-              "title": "County Fips",
-              "type": "string"
+              "anyOf": [
+                {
+                  "maxLength": 5,
+                  "minLength": 5,
+                  "pattern": "^\\d{5}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "5-char county FIPS (2-char state + 3-char county). Reserved for licensed county data; returns [] against the current share. Mutually exclusive with state.",
+              "title": "County Fips"
             }
           },
           {
@@ -24323,7 +24370,7 @@
             }
           },
           {
-            "description": "2-char USPS state code. Required when level=county.",
+            "description": "2-char USPS state code. Required when level=county; the live key when level=zip.",
             "in": "query",
             "name": "state",
             "required": false,
@@ -24339,12 +24386,12 @@
                   "type": "null"
                 }
               ],
-              "description": "2-char USPS state code. Required when level=county.",
+              "description": "2-char USPS state code. Required when level=county; the live key when level=zip.",
               "title": "State"
             }
           },
           {
-            "description": "5-char county FIPS. Required when level=zip.",
+            "description": "5-char county FIPS. Alternative key when level=zip, reserved for licensed county data.",
             "in": "query",
             "name": "county_fips",
             "required": false,
@@ -24360,7 +24407,7 @@
                   "type": "null"
                 }
               ],
-              "description": "5-char county FIPS. Required when level=zip.",
+              "description": "5-char county FIPS. Alternative key when level=zip, reserved for licensed county data.",
               "title": "County Fips"
             }
           }
@@ -24913,21 +24960,49 @@
     },
     "/api/v1/geo/zip-rollups": {
       "get": {
-        "description": "Return per-ZIP rollups for the given county FIPS.\n\nEach ZIP carries a stable-ranked ``sample_borrower_id`` so the UI's\nZIP-tile click-through can deep-link to ``/borrower-360/<id>``.\nEmpty list when the county has no rollup rows (county outside the current\nCotality-backed coverage or CTAS hasn't run).",
+        "description": "Return per-ZIP rollups for the given state, or for a county FIPS.\n\nExactly one key is required \u2014 422 when both or neither are supplied,\nbecause a request that names two geographies has no single honest\nanswer and a request that names none would scan the country.\n\n``state`` is the drill the map uses. ``county_fips`` is kept for a\nfuture licensed county dataset; against the current Cotality share it\nreturns an empty list for every county, since the share carries one\ncounty FIPS per state and ``mip.gold.zip_rollup.county_fips_5`` is\nNULL on every row.\n\nEach ZIP carries a stable-ranked ``sample_borrower_id`` so the UI's\nZIP-tile click-through can deep-link to ``/borrower-360/<id>``.",
         "operationId": "get_api_v1_geo_zip_rollups_zip_rollups",
         "parameters": [
           {
-            "description": "5-char county FIPS (2-char state + 3-char county).",
+            "description": "2-char USPS state code (uppercased server-side). The live ZIP drill key. Mutually exclusive with county_fips.",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2,
+                  "minLength": 2,
+                  "pattern": "^[A-Za-z]{2}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "2-char USPS state code (uppercased server-side). The live ZIP drill key. Mutually exclusive with county_fips.",
+              "title": "State"
+            }
+          },
+          {
+            "description": "5-char county FIPS (2-char state + 3-char county). Reserved for licensed county data; returns [] against the current share. Mutually exclusive with state.",
             "in": "query",
             "name": "county_fips",
-            "required": true,
+            "required": false,
             "schema": {
-              "description": "5-char county FIPS (2-char state + 3-char county).",
-              "maxLength": 5,
-              "minLength": 5,
-              "pattern": "^\\d{5}$",
-              "title": "County Fips",
-              "type": "string"
+              "anyOf": [
+                {
+                  "maxLength": 5,
+                  "minLength": 5,
+                  "pattern": "^\\d{5}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "5-char county FIPS (2-char state + 3-char county). Reserved for licensed county data; returns [] against the current share. Mutually exclusive with state.",
+              "title": "County Fips"
             }
           },
           {
