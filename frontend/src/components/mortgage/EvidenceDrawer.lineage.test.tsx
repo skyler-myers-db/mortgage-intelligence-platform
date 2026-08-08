@@ -35,6 +35,7 @@ vi.mock('../AppContext', () => ({
   useApp: () => ({
     drawer: appMocks.drawer,
     setDrawer: appMocks.setDrawer,
+    canAccessAdmin: true,
   }),
 }));
 

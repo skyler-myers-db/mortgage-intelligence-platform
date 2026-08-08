@@ -2,7 +2,7 @@ import { useEffect, useState, type CSSProperties, type ReactElement, type ReactN
 import { Link, Navigate, useParams } from 'react-router';
 import { api, ApiError } from '../lib/api';
 import type { Borrower360 as Borrower360Type } from '../types';
-import { currency } from '../lib/formatters';
+import { currency, ratePct, ratePctFromFraction, signedBpsLabel } from '../lib/formatters';
 import { PageShell } from '../components/layout/PageShell';
 import { TriggerTimeline } from '../components/mortgage/TriggerTimeline';
 import { BorrowerStoryCard } from '../components/mortgage/BorrowerStoryCard';
@@ -347,7 +347,12 @@ export default function Borrower360() {
                 v=""
                 childEl={
                   <div>
-                    <div className="field__value mono num">{`${currency(b.current_lien_balance)} · ${b.current_rate}%`}</div>
+                    {/* `current_rate` is already percent form in gold
+                        (`first_pos_rate * 100`, unrounded) — render it through
+                        the shared 2-dp rate convention so it can't disagree
+                        with the par rate in the refi-economics panel, and so
+                        an IEEE754 tail (7.000000000000001) never ships. */}
+                    <div className="field__value mono num">{`${currency(b.current_lien_balance)} · ${ratePct(b.current_rate)}`}</div>
                     <div className="field__sub">
                       <div className="chip-row chip-row--baseline">
                         <Chip variant="warning" className="chip--compact" icon="info">
@@ -474,10 +479,13 @@ export default function Borrower360() {
                   {b.why_panel.in_the_money ? <GlossaryTerm term="inTheMoney">Passes refi screen</GlossaryTerm> : 'Below refi screen'}
                 </Chip>
                 <span className="mono num text-1">
-                  +{b.why_panel.rate_spread_bps} bps
+                  {signedBpsLabel(b.why_panel.rate_spread_bps)}
                 </span>
+                {/* `why_panel.market_rate` is FRACTION form
+                    (`market_rate_fraction`), so it scales once here — same
+                    precision as the borrower's own rate above. */}
                 <span className="muted fs-12">
-                  vs. par {(b.why_panel.market_rate * 100).toFixed(3)}%
+                  vs. par {ratePctFromFraction(b.why_panel.market_rate)}
                 </span>
               </div>
               <div className="rationale-box">

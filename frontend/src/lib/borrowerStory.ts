@@ -1,4 +1,5 @@
 import type { Borrower360 } from '../types';
+import { compactCurrency } from './formatters';
 import { offerDisplayLabel } from './offerLanguage';
 
 /**
@@ -30,12 +31,6 @@ export interface BorrowerStory {
   allVerified: boolean;
   /** Numbers found in the prose that map to no verified claim (should be []). */
   unverifiedTokens: string[];
-}
-
-function fmtCurrencyK(n: number): string {
-  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `$${Math.round(n / 1_000)}K`;
-  return `$${Math.round(n)}`;
 }
 
 /** Available equity % from display LTV; underwater LTV clamps the story to 0% equity. */
@@ -108,7 +103,7 @@ export function buildBorrowerStory(b: Borrower360): BorrowerStory {
   if (parts.length > 0) {
     const lienStr =
       typeof b.current_lien_balance === 'number' && b.current_lien_balance > 0
-        ? ` on a ${register(fmtCurrencyK(b.current_lien_balance), 'Lien balance', 'current_lien_balance', b.current_lien_balance)} lien`
+        ? ` on a ${register(compactCurrency(b.current_lien_balance), 'Lien balance', 'current_lien_balance', b.current_lien_balance)} lien`
         : '';
     // Capitalize the first part.
     const joined = parts.join(', ').replace(/^./, (c) => c.toUpperCase());

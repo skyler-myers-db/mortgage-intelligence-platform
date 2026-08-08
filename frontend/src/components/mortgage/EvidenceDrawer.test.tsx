@@ -13,6 +13,7 @@ import type { DrawerSource } from '../AppContext';
 const appMocks = vi.hoisted(() => ({
   drawer: null as DrawerSource | null,
   setDrawer: vi.fn(),
+  canAccessAdmin: true,
 }));
 
 const apiMocks = vi.hoisted(() => ({
@@ -23,6 +24,7 @@ vi.mock('../AppContext', () => ({
   useApp: () => ({
     drawer: appMocks.drawer,
     setDrawer: appMocks.setDrawer,
+    canAccessAdmin: appMocks.canAccessAdmin,
   }),
 }));
 
@@ -152,4 +154,31 @@ describe('EvidenceDrawer accessibility', () => {
     });
     expect(appMocks.setDrawer).toHaveBeenCalledWith(null);
   }, 15_000);
+
+  /**
+   * 2026-08-07 audit H4: opening evidence as a non-admin fired the
+   * AdminDep-gated metadata read and logged a 403 in the console on a core
+   * product route. The drawer degraded fine, the console did not.
+   */
+  it('does not issue the admin-scoped metadata read for a non-admin actor', async () => {
+    appMocks.canAccessAdmin = false;
+
+    await render();
+
+    expect(apiMocks.assetMetadata).not.toHaveBeenCalled();
+    // Honest state, not a fake data problem: the chip says why.
+    expect(document.body.textContent).toContain('Admin-only freshness');
+    expect(document.body.textContent).not.toContain('Metadata not loaded');
+    // The evidence itself is unaffected.
+    expect(document.body.textContent).toContain(SOURCE.description);
+
+    appMocks.canAccessAdmin = true;
+  });
+
+  it('still reads governed metadata for an admin actor', async () => {
+    await render();
+
+    expect(apiMocks.assetMetadata).toHaveBeenCalledWith('lead_population', expect.anything());
+    expect(document.body.textContent).not.toContain('Admin-only freshness');
+  });
 });

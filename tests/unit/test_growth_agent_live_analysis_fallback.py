@@ -7,7 +7,7 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
-import backend.api.growth_agent as growth_api
+import backend.services.growth_agent_live_analysis as live_analysis_service
 from backend.main import app
 from backend.services.databricks_sql import get_sql_client
 from backend.services.genie_answers import GenieMessageResponse, GenieReasoningStep
@@ -75,9 +75,9 @@ def _clear_overrides() -> None:
 def test_unmapped_objective_runs_read_only_live_analysis(monkeypatch) -> None:
     stub_repo = _StubGenieRepo()
     audits: list[dict[str, Any]] = []
-    monkeypatch.setattr(growth_api, "get_genie_answer_repository", lambda: stub_repo)
+    monkeypatch.setattr(live_analysis_service, "get_genie_answer_repository", lambda: stub_repo)
     monkeypatch.setattr(
-        growth_api,
+        live_analysis_service,
         "write_audit_event_in_transaction",
         lambda conn, **kw: audits.append(kw),
     )
@@ -108,7 +108,7 @@ def test_unmapped_objective_runs_read_only_live_analysis(monkeypatch) -> None:
 
 def test_guard_hit_objective_still_refuses(monkeypatch) -> None:
     monkeypatch.setattr(
-        growth_api,
+        live_analysis_service,
         "get_genie_answer_repository",
         lambda: (_ for _ in ()).throw(AssertionError("must not run genie for guarded prompts")),
     )

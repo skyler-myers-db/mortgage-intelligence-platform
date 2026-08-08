@@ -2,6 +2,7 @@ import type { CSSProperties } from 'react';
 import { Link } from 'react-router';
 import type { LeadSummary } from '../../types';
 import { DRAWER_SOURCES } from '../../lib/drawerSources';
+import { compactCurrency, signedBpsLabel } from '../../lib/formatters';
 import { offerDisplayLabel, offerRationale, offerShortDescription } from '../../lib/offerLanguage';
 import { safeSegmentName, segmentColor } from '../../lib/segmentMetadata';
 import { useApp } from '../AppContext';
@@ -44,8 +45,8 @@ export function RowPreview({ lead, approval }: { lead: LeadSummary; approval?: s
         <div className="preview-grid">
           <Cell k="Property ref"  v={propertyRef} mono />
           <Cell k="Location"      v={`${lead.city}, ${lead.state} · ${lead.zip}`} />
-          <Cell k="Equity"        v={`$${(lead.equity_estimate / 1000).toFixed(0)}k`} mono />
-          <Cell k="Rate spread"   v={`+${lead.rate_spread_bps} bps`} mono />
+          <Cell k="Equity"        v={compactCurrency(lead.equity_estimate)} mono />
+          <Cell k="Rate spread"   v={signedBpsLabel(lead.rate_spread_bps)} mono />
           <Cell k="Score"         v={`${lead.opportunity_score}`} mono />
           <Cell k="Signal"        v={`${lead.confidence}%`} mono />
           <Cell k="Approval"      v={approval ?? lead.approval_status ?? 'pending'} />

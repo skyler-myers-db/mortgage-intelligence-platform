@@ -12,6 +12,7 @@ import { Chip } from '../components/Primitives';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { FilterSelect } from '../components/ui/FilterSelect';
 import { useFootprint } from '../components/FootprintProvider';
+import { useApp } from '../components/AppContext';
 import { queryKeys } from '../lib/queryKeys';
 import { LENDER_RELATIONSHIP_OPTIONS } from '../lib/lenderFilters';
 import { LeadQueueTableSkeleton } from './lead-queue.skeleton';
@@ -76,6 +77,7 @@ export default function LeadQueue() {
   const [searchParams, setSearchParams] = useSearchParams();
   const filtersActive = searchParams.toString().length > 0;
   const footprint = useFootprint();
+  const { canAccessAdmin } = useApp();
   const segment = parseSegmentCodes(searchParams.get('segment'))[0];
   const segmentCodes = useMemo(
     () => parseSegmentCodes(searchParams.get('segment_codes')),
@@ -330,12 +332,20 @@ export default function LeadQueue() {
       .portfolioPreview({}, ctrl.signal)
       .then((payload: PortfolioPreview) => setExportRefreshedAt(payload.data_refreshed_at ?? null))
       .catch(() => setExportRefreshedAt(null));
+    // The offer-rules version stamped on an export comes from an admin-scoped
+    // endpoint. A loan officer's visit to this route used to fire it anyway
+    // and eat a 403, which the UI swallowed but the browser console did not
+    // (2026-08-07 audit H4). Ask only when the session says we may.
+    if (!canAccessAdmin) {
+      setRulesVersion(null);
+      return () => ctrl.abort();
+    }
     api
       .adminRules<AdminRulesSummary>(ctrl.signal)
       .then((payload) => setRulesVersion(payload.offer_rules_version ?? null))
       .catch(() => setRulesVersion(null));
     return () => ctrl.abort();
-  }, []);
+  }, [canAccessAdmin]);
 
   const visibleLeads = useMemo(() => {
     return leadsData?.leads ?? [];
@@ -485,14 +495,17 @@ export default function LeadQueue() {
               {stateFilters.length > 0 && <span className="lead-queue-scope__pill">States: {stateFilters.join(', ')}</span>}
               {zipFilters.length > 0 && <span className="lead-queue-scope__pill">ZIPs: {zipFilters.join(', ')}</span>}
               {borrowerIdFilters.length > 0 && <span className="lead-queue-scope__pill">Borrowers: {borrowerIdFilters.length}</span>}
-              {/* Re-audit #3 P3 (2026-06-12): the map tile counts MARKETABLE
-                  borrowers; this queue ranks the scored, contactable subset.
-                  Without the caption the handoff reads as a numbers jump
-                  (e.g. 30,833 on the ZIP tile → 1,379 ranked rows). */}
+              {/* 2026-08-07 audit C4: geo drill-ins show EVERY borrower the
+                  map counted (no score floor — the map-tile promise), so the
+                  old caption claiming a "scored, marketing-eligible subset"
+                  described the inverse of the query. State both real numbers
+                  from the same identity row instead. */}
               <span className="lead-queue-scope__note muted fs-11">
-                Ranked leads are the scored, marketing-eligible subset of this
-                geography&apos;s marketable borrowers — intentionally smaller than
-                the map tile&apos;s population count.
+                {leadsData?.rankedMatching != null
+                  && leadsData?.totalMatching != null
+                  && leadsData.rankedMatching < leadsData.totalMatching
+                  ? `Showing every borrower the map counted for this geography, ranked by opportunity score; ${leadsData.rankedMatching.toLocaleString('en-US')} of ${leadsData.totalMatching.toLocaleString('en-US')} also clear the national queue's score floor.`
+                  : 'Showing every borrower the map counted for this geography, ranked by opportunity score.'}
               </span>
               </>
             ) : null}

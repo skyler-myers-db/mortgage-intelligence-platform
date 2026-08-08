@@ -24,6 +24,10 @@ describe('buildPortfolioStory', () => {
     const s = buildPortfolioStory(preview());
     expect(s.available).toBe(true);
     const prose = s.sentences.join(' ');
+    // The predicate behind this count is `marketing_eligibility: 'Any'`, so
+    // the prose must not claim the governed "marketable" subset.
+    expect(prose).toContain('Your addressable book stands at');
+    expect(prose).not.toContain('marketable');
     // Locale-grouped counts and the derived refinance-economics share all appear.
     expect(prose).toContain('5,156,184');
     expect(prose).toContain('111,726');
@@ -39,7 +43,7 @@ describe('buildPortfolioStory', () => {
   it('grounds each figure to the right gold-table source drawer', () => {
     const s = buildPortfolioStory(preview());
     const byLabel = Object.fromEntries(s.claims.map((c) => [c.label, c.sourceKey]));
-    expect(byLabel['Marketable population']).toBe('population');
+    expect(byLabel['Addressable population']).toBe('population');
     expect(byLabel['Refi-economics screen']).toBe('itm');
     expect(byLabel['Refi-economics share']).toBe('itm');
     expect(byLabel['Opportunity score 75+ count']).toBe('leadScore');

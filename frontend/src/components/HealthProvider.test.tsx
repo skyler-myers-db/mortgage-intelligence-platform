@@ -8,6 +8,7 @@ import {
   HealthProvider,
   applyDownUpDebounce,
   computeDegraded,
+  shouldPollFast,
   useHealth,
   useOptionalHealth,
 } from './HealthProvider';
@@ -82,6 +83,56 @@ describe('computeDegraded', () => {
         circuit_breakers: { warehouse: 'closed', lakebase: 'closed', genie: 'closed' },
       }),
     ).toBe(false);
+  });
+});
+
+/**
+ * Cadence selection is deliberately narrower than `computeDegraded` — the
+ * 2026-08-07 audit measured `/api/v1/health` 3-4x per route load because the
+ * deployed build declares `status: "degraded"` for a deploy-shaped reason
+ * while every dependency is up and every breaker is closed. What the UI SAYS
+ * is unchanged; only how often it asks.
+ */
+describe('shouldPollFast', () => {
+  const allUp = {
+    dependencies: { warehouse: 'up' as const, lakebase: 'up' as const, genie: 'up' as const },
+    circuit_breakers: { warehouse: 'closed' as const, lakebase: 'closed' as const, genie: 'closed' as const },
+  };
+
+  it('does not fast-poll a backend-declared degrade with every dependency up', () => {
+    const payload = { status: 'degraded' as const, mode: 'live', ...allUp };
+    // Still degraded for display…
+    expect(computeDegraded(payload)).toBe(true);
+    // …but nothing here recovers on a 3-second timescale.
+    expect(shouldPollFast(payload)).toBe(false);
+  });
+
+  it('fast-polls a dependency that is actually down', () => {
+    for (const dep of ['warehouse', 'lakebase', 'genie']) {
+      expect(
+        shouldPollFast({
+          status: 'ok',
+          mode: 'live',
+          dependencies: { ...allUp.dependencies, [dep]: 'down' },
+        }),
+      ).toBe(true);
+    }
+  });
+
+  it('fast-polls an open circuit breaker', () => {
+    expect(
+      shouldPollFast({
+        status: 'ok',
+        mode: 'live',
+        dependencies: allUp.dependencies,
+        circuit_breakers: { ...allUp.circuit_breakers, genie: 'open' },
+      }),
+    ).toBe(true);
+  });
+
+  it('stays on the slow cadence before the first probe resolves and when healthy', () => {
+    expect(shouldPollFast(null)).toBe(false);
+    expect(shouldPollFast({ status: 'ok', mode: 'live', ...allUp })).toBe(false);
   });
 });
 
@@ -225,6 +276,62 @@ describe('HealthProvider browser polling', () => {
       document.dispatchEvent(new Event('visibilitychange'));
     });
     expect(fetchHealth).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the slow cadence when the backend declares degraded but all deps are up', async () => {
+    const fetchHealth = vi.fn(async () => ({
+      status: 'degraded' as const,
+      mode: 'live',
+      dependencies: { warehouse: 'up', lakebase: 'up', genie: 'up' },
+      circuit_breakers: { warehouse: 'closed', lakebase: 'closed', genie: 'closed' },
+    }));
+
+    await act(async () => {
+      root.render(
+        <HealthProvider pollIntervalOkMs={8000} pollIntervalDegradedMs={3000} fetchHealth={fetchHealth}>
+          <span>ready</span>
+        </HealthProvider>,
+      );
+    });
+    expect(fetchHealth).toHaveBeenCalledTimes(1);
+
+    // A 9s route-load window used to cost three more probes at the fast
+    // cadence; on the slow cadence it costs one.
+    for (let i = 0; i < 3; i += 1) {
+      await act(async () => {
+        vi.advanceTimersByTime(3_000);
+      });
+    }
+    expect(fetchHealth).toHaveBeenCalledTimes(2);
+  });
+
+  it('still probes fast while a dependency is actually down', async () => {
+    const fetchHealth = vi.fn(async () => ({
+      status: 'degraded' as const,
+      mode: 'live',
+      dependencies: { warehouse: 'down', lakebase: 'up', genie: 'up' },
+    }));
+
+    await act(async () => {
+      root.render(
+        <HealthProvider
+          pollIntervalOkMs={8000}
+          pollIntervalDegradedMs={3000}
+          debounceUpMs={0}
+          fetchHealth={fetchHealth}
+        >
+          <span>ready</span>
+        </HealthProvider>,
+      );
+    });
+    expect(fetchHealth).toHaveBeenCalledTimes(1);
+
+    for (let i = 0; i < 3; i += 1) {
+      await act(async () => {
+        vi.advanceTimersByTime(3_000);
+      });
+    }
+    expect(fetchHealth).toHaveBeenCalledTimes(4);
   });
 });
 

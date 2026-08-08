@@ -167,10 +167,17 @@ equity_rows AS (
     'AVM'                                            AS source_product,
     'mip.silver.lien_current'                   AS source_table,
     'equity'                                         AS signal_type,
-    CONCAT('$',
-           CAST(ROUND(
+    -- Roll to millions above $1M so evidence chips read "$4.4M", not "$4410K"
+    -- (2026-08-07 audit, e2e rendering sweep).
+    CASE
+      WHEN GREATEST(0, COALESCE(lc.avm_value, 0) - COALESCE(lc.estimated_current_lien_balance, 0)) >= 1000000
+      THEN CONCAT('$', format_number(
+             GREATEST(0, COALESCE(lc.avm_value, 0) - COALESCE(lc.estimated_current_lien_balance, 0)) / 1000000.0,
+             1), 'M')
+      ELSE CONCAT('$', CAST(ROUND(
              GREATEST(0, COALESCE(lc.avm_value, 0) - COALESCE(lc.estimated_current_lien_balance, 0)) / 1000.0
-           ) AS STRING), 'K')                        AS signal_value,
+           ) AS STRING), 'K')
+    END                                              AS signal_value,
     'AVM-backed equity estimate using amortized UPB.' AS display_text,
     LEAST(1.0, GREATEST(0.0,
       CASE
@@ -220,7 +227,7 @@ listing_rows AS (
       COALESCE(la.listing_status_description, la.listing_status_category, 'active'),
       CASE
         WHEN la.plausible_listing_price IS NOT NULL
-          THEN CONCAT(' at $', CAST(la.plausible_listing_price AS STRING), ' list price')
+          THEN CONCAT(' at $', format_number(la.plausible_listing_price, 0), ' list price')
         ELSE ''
       END,
       CASE

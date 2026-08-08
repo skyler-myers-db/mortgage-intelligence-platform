@@ -20,7 +20,10 @@ duck-typed compliance can do so cheaply.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
+
+if TYPE_CHECKING:  # cycle-free: genie_answers imports only pydantic/stdlib
+    from backend.services.genie_answers import GenieMessageResponse
 
 from backend.schemas.analytics import (
     AnalyticsFilters,
@@ -396,10 +399,8 @@ class GenieAnswerRepository(Protocol):
         self,
         question: str,
         conversation_id: str | None = None,
-    ) -> object:
-        """Return a ``GenieMessageResponse``. Typed as ``object`` here
-        to avoid a forward-import cycle with ``backend.services
-        .genie_answers``; routers re-annotate to the concrete model."""
+    ) -> GenieMessageResponse:
+        """Return the governed answer for one live Genie turn."""
         ...
 
     def respond_existing(
@@ -408,7 +409,7 @@ class GenieAnswerRepository(Protocol):
         *,
         conversation_id: str,
         message_id: str,
-    ) -> object:
+    ) -> GenieMessageResponse:
         """Complete an already-submitted live Genie message into a governed
         answer (async lifecycle). Same return contract as :meth:`respond`."""
         ...

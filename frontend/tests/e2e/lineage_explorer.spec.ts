@@ -255,7 +255,7 @@ test.describe('Lineage explorer — KPI to Catalog Explorer deep link', () => {
     // manifest response. The drawer must surface drift instead of borrowing
     // nodes from a different KPI family.
     const kpiCard = page
-      .locator('.kpi', { has: page.getByText('Marketable population', { exact: true }) })
+      .locator('.kpi', { has: page.getByText('Addressable population', { exact: true }) })
       .first();
     await expect(kpiCard).toBeVisible({ timeout: 10_000 });
     await kpiCard.locator('.evidence-chip').first().click();

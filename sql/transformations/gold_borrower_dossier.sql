@@ -259,7 +259,7 @@ COMMENT ON COLUMN mip.gold.borrower_dossier.recommended_offer_code IS 'fn_next_b
 COMMENT ON COLUMN mip.gold.borrower_dossier.recommended_offer IS 'Human label.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.why_now IS 'Deterministic template per offer code.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.evidence_ids IS 'Ordered evidence ids.';
-COMMENT ON COLUMN mip.gold.borrower_dossier.approval_status IS 'Default "pending"; Lakebase authoritative.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.approval_status IS 'Approval state mirrored from Lakebase at refresh time (inherited from borrower_360); Lakebase remains authoritative between refreshes.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.owner_link_id IS 'Cotality Owner Link id.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.subject_property IS 'Synthetic city/state/ZIP5 string.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.avm_value IS 'AVM value; 0 when missing.';

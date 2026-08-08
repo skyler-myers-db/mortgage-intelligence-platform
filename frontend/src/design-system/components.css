@@ -110,7 +110,14 @@
   grid-area: topbar;
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(30rem, 44rem) minmax(0, 1fr);
+  /* Symmetric side tracks keep the search on the topbar's centre line. The
+     centre track is capped at 32rem (not 44rem) because the actions cluster
+     — tenant pill + status pill + three icon buttons — measures ~376px at
+     max-content: a 44rem search left only 296px per side track, so the
+     end-justified actions box overflowed its track LEFTWARD and the opaque
+     tenant pill covered the ⌘K badge by 26px at 1440x900 (2026-08-07 audit
+     M1, reproduced on all ten routes). 32rem leaves 392px per side. */
+  grid-template-columns: minmax(0, 1fr) minmax(0, 32rem) minmax(0, 1fr);
   align-items: center;
   gap: var(--sp-4);
   padding: 0 var(--sp-5);
@@ -157,8 +164,8 @@
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  inline-size: min(44rem, 100%);
-  min-inline-size: min(30rem, 100%);
+  inline-size: min(32rem, 100%);
+  min-inline-size: 0;
   padding: var(--sp-1) var(--sp-2);
   border: 1px solid var(--line-1);
   border-radius: var(--r-md);
@@ -214,6 +221,10 @@
   justify-content: flex-end;
   gap: var(--sp-3);
   min-inline-size: 0;
+  /* Cap the end-justified item at its grid track. Without this a grid item
+     sizes to content and overflows the track, sliding under the centered
+     search — the same failure the crumbs rule above fixes on the left. */
+  max-inline-size: 100%;
 }
 .topbar__search-results {
   position: absolute;
@@ -251,6 +262,18 @@
   padding: 5px 10px; border-radius: var(--r-pill);
   background: var(--bg-3); border: 1px solid var(--line-1);
   font-size: var(--fs-12); color: var(--text-2);
+  /* A pill is one line high. Under flex pressure the tenant label used to
+     wrap to two lines inside a 109px pill instead of truncating. */
+  min-inline-size: 0;
+  white-space: nowrap;
+}
+/* Tenant label: the only elastic item in the actions cluster, so an unusually
+   long lender name ellipsizes here rather than pushing the row into the
+   search box. */
+.topbar__pill-tenant {
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .topbar__pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--signal-success); box-shadow: 0 0 8px var(--signal-success); }
 .topbar__pill .dot.amber { background: var(--signal-warning); box-shadow: 0 0 8px var(--signal-warning); }
@@ -259,7 +282,12 @@
   font-family: var(--font-mono);
   font-size: var(--fs-12);
 }
-@media (max-width: 1180px) {
+/* Below 88rem (1408px) the two side tracks can no longer both hold the
+   actions cluster at max-content, so the third track sizes to its content
+   instead: the search gives up exact centering rather than being overlapped.
+   Above it (the contracted 1440x900 demo viewport included) the symmetric,
+   perfectly centered layout above applies. */
+@media (max-width: 88rem) {
   .topbar {
     grid-template-columns: minmax(0, 0.9fr) minmax(22rem, 1.1fr) auto;
   }

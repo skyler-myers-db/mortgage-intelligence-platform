@@ -518,9 +518,24 @@ enriched AS (
     -- back to Cotality-modeled estimated_cltv only when AVM is missing.
     -- Do not cap the upper bound: underwater borrowers should show LTV
     -- > 100 instead of a misleading 100% cap.
+    -- Blanket/portfolio instruments land on single CLIPs with balances up
+    -- to $23.9B (196 distinct amounts across 1,528 rows > $1B; 2026-08-07
+    -- audit H5). Those balances are real instrument amounts but not
+    -- property-level UPB: flag them, and fall back to Cotality-modeled CLTV
+    -- for display LTV so a residence never renders a 2,828,497% LTV.
+    (
+      (b.avm_value IS NOT NULL AND b.avm_value > 0
+        AND COALESCE(b.estimated_current_lien_balance, 0) > 10 * b.avm_value
+        AND COALESCE(b.estimated_current_lien_balance, 0) > 5000000)
+      OR COALESCE(b.estimated_current_lien_balance, 0) > 20000000
+    ) AS lien_is_portfolio_level,
     CAST(
       GREATEST(0, CASE
         WHEN b.avm_value IS NOT NULL AND b.avm_value > 0
+         AND NOT (
+              (COALESCE(b.estimated_current_lien_balance, 0) > 10 * b.avm_value
+                AND COALESCE(b.estimated_current_lien_balance, 0) > 5000000)
+              OR COALESCE(b.estimated_current_lien_balance, 0) > 20000000)
           THEN ROUND(100.0 * COALESCE(b.estimated_current_lien_balance, 0) / b.avm_value)
         WHEN b.estimated_cltv IS NOT NULL AND b.estimated_cltv > 0
           THEN ROUND(b.estimated_cltv)
@@ -600,7 +615,17 @@ enriched AS (
     -- propensity signals so the app never claims a permit was filed when
     -- only a propensity score exists.
     CAST(FALSE AS BOOLEAN) AS has_permit,
-    COALESCE(cl.is_active_listing, FALSE) AS listed_for_sale,
+    -- A listing is a why-now signal only while it is CURRENT: the MLS feed
+    -- carries active rows dated back to 2005, five future-dated rows, and
+    -- negative days-on-market (2026-08-07 audit M3). Gate to a listing
+    -- observed within the last 12 months, not future-dated, with sane DOM.
+    (
+      COALESCE(cl.is_active_listing, FALSE)
+      AND cl.listing_date IS NOT NULL
+      AND cl.listing_date <= DATE((SELECT refresh_at FROM refresh_anchor))
+      AND cl.listing_date >= add_months(DATE((SELECT refresh_at FROM refresh_anchor)), -12)
+      AND COALESCE(cl.days_on_market, 0) >= 0
+    ) AS listed_for_sale,
     cl.listing_status_category,
     cl.listing_status_description,
     cl.listing_date,
@@ -648,9 +673,14 @@ enriched AS (
       ELSE CAST(FLOOR(months_between(DATE((SELECT refresh_at FROM refresh_anchor)), b.first_pos_date)) AS INT)
     END AS first_pos_age_months,
     -- Equity-history signals: appreciation since purchase + tenure.
+    -- Nominal-consideration deeds (quitclaim/family transfers recorded at
+    -- $1-$100) are not a purchase basis: a $10k floor and a sane domain keep
+    -- nine-digit appreciation percentages off every surface (audit M4).
     CAST(CASE
-      WHEN b.purchase_amount IS NOT NULL AND b.purchase_amount > 0
+      WHEN b.purchase_amount IS NOT NULL AND b.purchase_amount >= 10000
        AND b.avm_value IS NOT NULL AND b.avm_value > 0
+       AND ROUND(100.0 * (b.avm_value - b.purchase_amount) / b.purchase_amount)
+           BETWEEN -100 AND 10000
       THEN ROUND(100.0 * (b.avm_value - b.purchase_amount) / b.purchase_amount)
       ELSE NULL
     END AS INT) AS home_value_appreciation_pct,
@@ -1030,7 +1060,10 @@ SELECT
   w.state,
   w.zip,
   w.situs_cbsa_code,
-  w.county_fips_5,
+  -- 2026-08-07 audit C2: the share's fips_county_code is a single constant
+  -- per state (Peoria stamped Cook, Tacoma stamped King). A wrong county key
+  -- is worse than none — geography truth below state level is ZIP.
+  CAST(NULL AS STRING)                                                               AS county_fips_5,
   w.segment_codes,
   w.equity_estimate,
   w.equity_pct,
@@ -1072,15 +1105,32 @@ SELECT
     WHEN 'purchase' THEN
       'The property is listed for sale, so the useful conversation is likely about financing the next home before closing.'
     WHEN 'investor' THEN
-      CONCAT('Owner Link ties ', CAST(w.related_property_count AS STRING),
-             ' related properties, so route the review to an investor-lending specialist.')
+      -- Cite the signal that actually qualified the borrower (2026-08-07
+      -- audit H4: 172,192 single-property corporate/absentee investors read
+      -- "ties 1 related properties" — evidence contradicting the offer).
+      CASE
+        WHEN w.related_property_count >= 2 THEN
+          CONCAT('Owner Link ties ', CAST(w.related_property_count AS STRING),
+                 ' related properties, so route the review to an investor-lending specialist.')
+        WHEN COALESCE(w.owner_is_corporate, FALSE) THEN
+          'The owner of record is a corporate entity, so route the review to an investor-lending specialist.'
+        WHEN COALESCE(w.is_absentee, FALSE) THEN
+          'The owner''s mailing address is away from the subject property, so route the review to an investor-lending specialist.'
+        ELSE
+          'Investor-profile ownership signals are active on this property, so route the review to an investor-lending specialist.'
+      END
     WHEN 'retention' THEN
       'This current-customer relationship has signals worth reviewing, so prioritize a service-focused check-in before the borrower shops alternatives.'
     ELSE
       'No strong borrower benefit is active yet, so keep this borrower in nurture until a clearer signal appears.'
   END                                                                                AS why_now,
   COALESCE(tl.evidence_ids, ARRAY())                                                 AS evidence_ids,
-  'pending'                                                                          AS approval_status,
+  -- Lakebase (mirrored to gold.borrower_lifecycle_state by the sync job) is
+  -- authoritative for approval state; a literal 'pending' contradicted 158
+  -- decided borrowers on every direct gold read (2026-08-07 audit H3). The
+  -- lifecycle contract table is created by mip_init_catalog_schemas before
+  -- any refresh, so this join is safe on first install (empty -> pending).
+  COALESCE(lcs.approval_status, 'pending')                                           AS approval_status,
   w.owner_link_id,
   -- Gold keeps the same ZIP5-or-null contract as silver. Invalid short
   -- fragments (for example a WA row with only 4 digits) are nulled in `base`;
@@ -1089,6 +1139,7 @@ SELECT
          w.state, ' ', COALESCE(w.zip, '00000'))                                      AS subject_property,
   CAST(COALESCE(w.avm_value, 0) AS BIGINT)                                           AS avm_value,
   CAST(COALESCE(w.estimated_current_lien_balance, 0) AS BIGINT)                      AS current_lien_balance,
+  COALESCE(w.lien_is_portfolio_level, FALSE)                                         AS lien_is_portfolio_level,
   CAST(COALESCE(w.estimated_current_lien_balance_low, w.estimated_current_lien_balance, 0) AS BIGINT) AS current_lien_balance_low,
   CAST(COALESCE(w.estimated_current_lien_balance_high, w.estimated_current_lien_balance, 0) AS BIGINT) AS current_lien_balance_high,
   -- current_rate in PERCENT form (5.75), matches Pydantic + mock_data.
@@ -1187,7 +1238,8 @@ SELECT
   (SELECT refresh_at FROM refresh_anchor) AS refreshed_at
 FROM with_segments AS w
 LEFT JOIN subscores AS ss ON ss.clip = w.clip
-LEFT JOIN timeline  AS tl ON tl.clip = w.clip;
+LEFT JOIN timeline  AS tl ON tl.clip = w.clip
+LEFT JOIN mip.gold.borrower_lifecycle_state AS lcs ON lcs.borrower_id = w.borrower_id;
 
 -- Column comments re-applied post-CTAS (2026-06-11 audit P2-8 follow-up):
 -- CREATE OR REPLACE drops DDL column comments on every refresh, and the
@@ -1202,7 +1254,7 @@ COMMENT ON COLUMN mip.gold.borrower_360.city IS 'Situs city from property_master
 COMMENT ON COLUMN mip.gold.borrower_360.state IS 'Situs state from refreshed source coverage.';
 COMMENT ON COLUMN mip.gold.borrower_360.zip IS '5-digit situs ZIP.';
 COMMENT ON COLUMN mip.gold.borrower_360.situs_cbsa_code IS 'CBSA metro code. Gold-only; used for geography drill-down.';
-COMMENT ON COLUMN mip.gold.borrower_360.county_fips_5 IS '5-char FIPS county code (2-char state + 3-char county) from silver.property_master.fips_county_code. Feeds gold.county_rollup + gold.zip_rollup. NULL for the ~0.2% of rows where silver has no county geocode.';
+COMMENT ON COLUMN mip.gold.borrower_360.county_fips_5 IS 'NULL: the Cotality share carries one constant fips_county_code per state (2026-08-07 audit C2), so no honest county key exists. Sub-state geography truth is ZIP (gold.zip_rollup).';
 COMMENT ON COLUMN mip.gold.borrower_360.segment_codes IS 'Ordered list of SegmentCode Literals (itm/listed/permit/investor/equity/retention + S1.3 overlays second_lien_itm/heloc_draw_to_payback/home_equity_history/refi_propensity/itm_on_related_property/payoff_loss_leads/permit_activity) this borrower belongs to.';
 COMMENT ON COLUMN mip.gold.borrower_360.equity_estimate IS 'USD: GREATEST(0, avm_value - estimated current lien balance). Current lien uses fn_estimated_upb(first_pos_amount, first_pos_rate, months_elapsed) plus second-position amount when first-lien inputs are present.';
 COMMENT ON COLUMN mip.gold.borrower_360.equity_pct IS '0..100 int available-equity percentage from AVM and estimated current lien balance; falls back to Cotality estimated_cltv only when AVM is missing. Underwater borrowers clamp to 0 for scoring while display LTV can exceed 100. Feeds fn_in_the_money + fn_next_best_offer.';
@@ -1214,7 +1266,8 @@ COMMENT ON COLUMN mip.gold.borrower_360.recommended_offer_code IS 'fn_next_best_
 COMMENT ON COLUMN mip.gold.borrower_360.recommended_offer IS 'Human label for recommended_offer_code (resolved in SQL via product_labels map).';
 COMMENT ON COLUMN mip.gold.borrower_360.why_now IS 'Deterministic one-sentence template per offer_code. No PII. See data-contract §6.';
 COMMENT ON COLUMN mip.gold.borrower_360.evidence_ids IS 'Ordered evidence_ids from gold.evidence_events (ORDER BY signal_rank).';
-COMMENT ON COLUMN mip.gold.borrower_360.approval_status IS 'Default "pending"; Lakebase authoritative for actual state.';
+COMMENT ON COLUMN mip.gold.borrower_360.lien_is_portfolio_level IS 'TRUE when the estimated lien balance is a blanket/portfolio instrument amount attributed to a single CLIP (balance > 10x AVM and > $5M, or > $20M): real instrument, not property-level UPB. Excluded from headline dollar totals; display LTV falls back to modeled CLTV.';
+COMMENT ON COLUMN mip.gold.borrower_360.approval_status IS 'Approval state mirrored from Lakebase via gold.borrower_lifecycle_state at refresh time; "pending" when undecided. Lakebase remains authoritative between refreshes.';
 COMMENT ON COLUMN mip.gold.borrower_360.owner_link_id IS 'Cotality Owner Link id. Opaque Cotality identifier; not a direct PII risk.';
 COMMENT ON COLUMN mip.gold.borrower_360.subject_property IS 'Synthetic city/state/ZIP5 string. No street address.';
 COMMENT ON COLUMN mip.gold.borrower_360.avm_value IS 'COALESCE(avm_value, 0).';

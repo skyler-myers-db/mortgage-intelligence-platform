@@ -96,7 +96,14 @@ top_segment_per_county AS (
   WHERE rn = 1
 )
 SELECT
-  a.fips_5,
+  -- 2026-08-07 audit C2: the Cotality share carries exactly ONE distinct
+  -- fips_county_code per state (verified against the raw share), so these
+  -- aggregates are STATE-grain. Emitting the degenerate FIPS let the map
+  -- join a real county polygon name onto a whole-state number ("Cook
+  -- County, Illinois — 1,851,040"). Until a real county source exists, no
+  -- county key ships: the state column is the honest grain, and consumers
+  -- (state footprint resolver, map state layer) read state totals.
+  CAST(NULL AS STRING)                               AS fips_5,
   a.state,
   CAST(NULL AS STRING)                               AS county_name,
   a.addressable_borrowers,

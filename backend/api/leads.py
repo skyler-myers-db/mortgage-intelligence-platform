@@ -736,6 +736,11 @@ def list_leads(
         raise HTTPException(status_code=503, detail="Lakebase temporarily unavailable") from exc
     response.headers["X-Total-Matching"] = str(total_matching)
     response.headers["X-Returned-Rows"] = str(len(leads))
+    if identity is not None and "ranked_total" in identity:
+        # Geo-filtered reads report the geography population as the total
+        # (map-tile promise); this header carries the ranked subset
+        # (score >= 50) so the UI can state both truthfully (audit C4).
+        response.headers["X-Ranked-Matching"] = str(identity["ranked_total"])
     if identity is not None:
         response.headers["X-Cohort-Snapshot-ID"] = str(identity["snapshot_id"])
         if include_identity_proof:
