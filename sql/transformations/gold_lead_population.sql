@@ -207,7 +207,7 @@ COMMENT ON COLUMN mip.gold.lead_population.recommended_offer_code IS 'fn_next_be
 COMMENT ON COLUMN mip.gold.lead_population.recommended_offer IS 'Human label (resolved in gold via product_labels map).';
 COMMENT ON COLUMN mip.gold.lead_population.why_now IS 'Deterministic template per offer code.';
 COMMENT ON COLUMN mip.gold.lead_population.evidence_ids IS 'Ordered evidence_ids (mirrors gold.borrower_360 for this CLIP).';
-COMMENT ON COLUMN mip.gold.lead_population.approval_status IS '"pending" by default; Lakebase is authoritative for actual state.';
+COMMENT ON COLUMN mip.gold.lead_population.approval_status IS 'Approval state mirrored from Lakebase at refresh time (inherited from borrower_360); Lakebase remains authoritative between refreshes.';
 COMMENT ON COLUMN mip.gold.lead_population.current_lender_ref IS 'Public-demo-safe current-servicer reference from borrower_360. Never the raw Cotality lender string.';
 COMMENT ON COLUMN mip.gold.lead_population.is_owner_occupied IS 'From gold.borrower_360; drives /segment-intelligence DEMOGRAPHICS filter.';
 COMMENT ON COLUMN mip.gold.lead_population.is_investor IS 'Carried from gold.borrower_360 (derived: multi-property OR corporate OR absentee).';
