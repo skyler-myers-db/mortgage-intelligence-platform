@@ -164,3 +164,50 @@ def test_ordinary_validation_errors_are_untouched() -> None:
     assert response.status_code == 422, response.text
     assert "refusal_reason" not in response.json()
     assert audit_store.list() == []
+
+
+def test_classifier_covers_every_guard_detector() -> None:
+    """The classifier must not silently fall out of sync with the guard.
+
+    A 2026-08-08 rebase renamed a detector in ``unsafe`` (the capitalized
+    name regex became ``contains_human_name_shape``) while the classifier
+    still referenced the old name. Adding a detector upstream without
+    teaching the classifier about it is the quieter version of the same bug:
+    the refusal silently degrades to the generic family.
+    """
+
+    import re
+    from pathlib import Path
+
+    import backend.schemas.growth_agent as growth_agent_schema
+
+    # Resolve through the module, not the working directory: this test must
+    # not depend on pytest being invoked from the repo root.
+    source = Path(growth_agent_schema.__file__).read_text()
+    unsafe = re.search(r"    unsafe = \((.*?)\n    \)\n", source, re.S).group(1)
+    detectors = {re.sub(r"^or ", "", line.strip()) for line in unsafe.strip().splitlines()}
+    classifier = re.search(
+        r"def _growth_prompt_refusal_code.*?\n    return \"unreviewed_criterion\"\n",
+        source,
+        re.S,
+    ).group(0)
+
+    # Detectors deliberately left to the generic family: each is a
+    # "these criteria are not reviewed" rejection with no more specific
+    # name, and each keeps the historical catch-all sentence.
+    generic_family = {
+        "_contains_borrower_cta_contradiction(flat)",
+        "contains_unsafe_ai_text(name_scan)",
+        "contains_unsupported_borrower_qualification_claim(flat)",
+        # Consulted through protected_class_marketing_reason, same implementation.
+        "contains_protected_class_marketing_text(flat)",
+    }
+    unclassified = {
+        detector
+        for detector in detectors
+        if detector not in classifier and detector not in generic_family
+    }
+    assert not unclassified, (
+        "guard detectors have no refusal family and are not listed as generic: "
+        f"{sorted(unclassified)}"
+    )
