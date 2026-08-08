@@ -8,3 +8,5 @@
 - [CSS cascade is source-order](project_css_cascade_order.md) — components.css is flat with no @layer; reusing a primitive declared later needs parent-scoped specificity.
 - [Lead-queue filter plumbing](project_lead_queue_filter_plumbing.md) — a new portfolio filter needs 4 parallel structures in lead-queue.filters.ts; API pass-through is generic.
 - [Component test context mock](project_component_test_context_mock.md) — mock ../AppContext useApp for setDrawer; run tests via npm --prefix frontend (not npx --root) or babel breaks.
+- [Worktree frontend validation](project_worktree_frontend_validation.md) — symlink node_modules to run tests; preview_start serves the MAIN checkout, so verify visuals off `frontend/dist`.
+- [Shared display formatters](project_shared_formatters.md) — lib/formatters.ts owns bps/currency/rate units; never hand-roll a unit in JSX.
