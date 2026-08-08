@@ -87,7 +87,8 @@ USING (
                      AND recommended_offer_code <> 'nurture' THEN 1 ELSE 0 END) AS INT)
                                                                                   AS offer_recommended_borrowers,
       CAST(SUM(CASE WHEN approval_status = 'approved' THEN 1 ELSE 0 END) AS INT)  AS approved_borrowers,
-      CAST(SUM(CASE WHEN outreach_status = 'actioned' THEN 1 ELSE 0 END) AS INT)  AS actioned_borrowers,
+      CAST(SUM(CASE WHEN approval_status = 'approved'
+                     AND outreach_status = 'actioned' THEN 1 ELSE 0 END) AS INT)  AS actioned_borrowers,
       CAST(ROUND(AVG(opportunity_score)) AS INT)                                  AS avg_opportunity_score,
       CURRENT_TIMESTAMP()                                                         AS snapshot_at
     FROM unioned
@@ -105,7 +106,8 @@ USING (
                      AND recommended_offer_code <> 'nurture' THEN 1 ELSE 0 END) AS INT)
                                                                                   AS offer_recommended_borrowers,
       CAST(SUM(CASE WHEN approval_status = 'approved' THEN 1 ELSE 0 END) AS INT)  AS approved_borrowers,
-      CAST(SUM(CASE WHEN outreach_status = 'actioned' THEN 1 ELSE 0 END) AS INT)  AS actioned_borrowers,
+      CAST(SUM(CASE WHEN approval_status = 'approved'
+                     AND outreach_status = 'actioned' THEN 1 ELSE 0 END) AS INT)  AS actioned_borrowers,
       CAST(ROUND(AVG(opportunity_score)) AS INT)                                  AS avg_opportunity_score,
       CURRENT_TIMESTAMP()                                                         AS snapshot_at
     FROM unioned
