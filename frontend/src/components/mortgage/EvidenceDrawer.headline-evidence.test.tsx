@@ -45,7 +45,7 @@ const apiMocks = vi.hoisted(() => ({
 }));
 
 vi.mock('../AppContext', () => ({
-  useApp: () => ({ drawer: appMocks.drawer, setDrawer: appMocks.setDrawer }),
+  useApp: () => ({ drawer: appMocks.drawer, setDrawer: appMocks.setDrawer, canAccessAdmin: true }),
 }));
 
 vi.mock('../../lib/api', () => ({

@@ -38,6 +38,12 @@ const apiMocks = vi.hoisted(() => ({
   adminRules: vi.fn(),
 }));
 
+const appMocks = vi.hoisted(() => ({ canAccessAdmin: true }));
+
+vi.mock('../components/AppContext', () => ({
+  useApp: () => ({ canAccessAdmin: appMocks.canAccessAdmin }),
+}));
+
 vi.mock('../lib/useWarmingUpRetry', () => ({
   useWarmingUpRetry: () => retryMocks.state,
 }));
@@ -244,6 +250,45 @@ describe('LeadQueue filter state', () => {
     queryClient.clear();
     document.body.innerHTML = '';
     vi.clearAllMocks();
+  });
+
+  /**
+   * 2026-08-07 audit H4: the export's rules-version stamp comes from the
+   * AdminDep-gated /api/admin/rules, and this route fired it for every actor.
+   * A loan officer's console filled with 403s on a core product route.
+   */
+  it('does not call the admin-scoped rules endpoint for a non-admin actor', async () => {
+    appMocks.canAccessAdmin = false;
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={['/lead-queue']}>
+            <LeadQueue />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+    });
+    await settle();
+
+    expect(apiMocks.adminRules).not.toHaveBeenCalled();
+    // The rest of the route still loads its own data.
+    expect(apiMocks.portfolioPreview).toHaveBeenCalled();
+    appMocks.canAccessAdmin = true;
+  });
+
+  it('reads the rules version for an admin actor', async () => {
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={['/lead-queue']}>
+            <LeadQueue />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+    });
+    await settle();
+
+    expect(apiMocks.adminRules).toHaveBeenCalled();
   });
 
   it('shows Genie cohort multi-value route filters in dropdown controls', async () => {
