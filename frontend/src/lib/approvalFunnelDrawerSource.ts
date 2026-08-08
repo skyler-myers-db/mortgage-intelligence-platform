@@ -1,5 +1,19 @@
 import type { DrawerSource } from '../components/AppContext';
 import { DRAWER_SOURCES, enrichAsset } from './drawerSources';
+import { HIGH_OPPORTUNITY_KPI_LABEL } from './opportunityScore';
+import { ADDRESSABLE_POPULATION_KPI_LABEL } from './populationLabels';
+
+/**
+ * Display copy for a funnel stage. The two UC stages carry pinned frontend
+ * KPI copy so the tab reads the same words as Home / Portfolio Builder; the
+ * Lakebase workflow stages use the server label as-is. Shared with the KPI
+ * cards so a stage's headline and its evidence drawer can never disagree.
+ */
+export function funnelStageDisplayLabel(stage: { stage: string; label: string }): string {
+  if (stage.stage === 'high_opportunity') return HIGH_OPPORTUNITY_KPI_LABEL;
+  if (stage.stage === 'population') return ADDRESSABLE_POPULATION_KPI_LABEL;
+  return stage.label;
+}
 
 /** Evidence for a live approval-funnel stage count. */
 export function approvalFunnelStageDrawer(stage: {
@@ -8,8 +22,9 @@ export function approvalFunnelStageDrawer(stage: {
   borrower_count: number;
   source: string;
 }): DrawerSource {
+  const displayLabel = funnelStageDisplayLabel(stage);
   const liveCount = {
-    label: `${stage.label} (live)`,
+    label: `${displayLabel} (live)`,
     source: stage.source,
     value: stage.borrower_count.toLocaleString(),
   };
@@ -17,10 +32,10 @@ export function approvalFunnelStageDrawer(stage: {
     const base = DRAWER_SOURCES.portfolioHeadlineView;
     return enrichAsset({
       ...base,
-      title: `${stage.label} — funnel stage`,
+      title: `${displayLabel} — funnel stage`,
       description:
         stage.stage === 'population'
-          ? 'COUNT(*) over the S1 headline metric view — the marketable borrower population every funnel stage narrows from.'
+          ? 'COUNT(*) over the S1 headline metric view with no contactability gate — the addressable borrower book every funnel stage narrows from. The contact-eligible marketable subset is smaller.'
           : 'SUM(is_high_opportunity) over the S1 headline metric view. The predicate is mip.gold.fn_high_opportunity — the canonical governed threshold, never a hardcoded literal.',
       signals: [liveCount, ...(base.signals ?? [])],
     });

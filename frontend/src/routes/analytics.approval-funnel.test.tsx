@@ -223,6 +223,20 @@ describe('ApprovalFunnelSection', () => {
     expect(totals.filter((value) => value === '0').length).toBeGreaterThan(0);
   });
 
+  it('headlines the first stage as the addressable population, not the marketable subset', async () => {
+    await act(async () => renderSection());
+    await settle();
+
+    // The server labels this stage "Marketable population" (see the fixture),
+    // but it is COUNT(*) with NO contactability gate — the addressable book.
+    // The pinned frontend copy wins so the tab matches Home / Portfolio
+    // Builder. The count itself is untouched.
+    const kpiLabels = [...document.querySelectorAll('.kpi__label')].map((el) => el.textContent);
+    expect(kpiLabels).toContain('Addressable population');
+    expect(kpiLabels).not.toContain('Marketable population');
+    expect(document.body.textContent).toContain('5,200');
+  });
+
   it('every funnel stage number opens the EvidenceDrawer with its own source', async () => {
     await act(async () => renderSection());
     await settle();
