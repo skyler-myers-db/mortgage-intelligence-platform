@@ -107,7 +107,7 @@ CREATE TABLE IF NOT EXISTS mip.silver.lien_current (
   first_pos_rate             DOUBLE             COMMENT 'Fractional rate (0.0575 = 5.75%). Values below 1% are NULL; source outliers above 15% are capped at 15%.',
   first_pos_rate_type        STRING             COMMENT 'Rate type code: FIX/ARM/NULL.',
   first_pos_term_months      INT                COMMENT '1st-lien term in months.',
-  first_pos_loan_type        STRING             COMMENT 'Loan type code: CONV/FHA/VA/etc.',
+  first_pos_loan_type        STRING             COMMENT 'Loan type code: CNV/FHA/VA/etc.',
   first_pos_purpose          STRING             COMMENT 'Purpose code: PUR/REF/etc.',
   first_pos_ltv              DOUBLE             COMMENT '1st-lien LTV at origination, 0..100.',
   first_pos_lender_original  STRING             COMMENT 'Originating lender company name. Remapped to controlled vocab at gold.',

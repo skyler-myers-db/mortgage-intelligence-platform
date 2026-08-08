@@ -102,7 +102,7 @@ COMMENT ON COLUMN mip.gold.lockin_cohort.rate_spread_bps IS 'First-position rate
 COMMENT ON COLUMN mip.gold.lockin_cohort.recommended_offer IS 'Human-readable next-best-offer label.';
 COMMENT ON COLUMN mip.gold.lockin_cohort.origination_date IS 'first_pos_date from silver.lien_current.';
 COMMENT ON COLUMN mip.gold.lockin_cohort.origination_rate IS 'first_pos_rate (fractional; < 0.03).';
-COMMENT ON COLUMN mip.gold.lockin_cohort.first_pos_loan_type IS 'CONV / FHA / VA / other; from silver.';
+COMMENT ON COLUMN mip.gold.lockin_cohort.first_pos_loan_type IS 'CNV / FHA / VA / other; from silver.';
 COMMENT ON COLUMN mip.gold.lockin_cohort.first_pos_term_months IS 'Loan term in months; from silver.';
 COMMENT ON COLUMN mip.gold.lockin_cohort.origination_year IS 'YEAR(origination_date) for fast GROUP BY.';
 COMMENT ON COLUMN mip.gold.lockin_cohort.cohort_tag IS 'Stable tag for GROUP BY; today always "sub3_2020_2022".';

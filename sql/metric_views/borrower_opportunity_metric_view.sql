@@ -22,7 +22,7 @@
 --   segment            — deprecated display alias for primary_segment. Kept
 --                        for stale Lakeview / Genie SQL while segment_codes
 --                        remains the membership contract.
---   loan_purpose       — first_pos_loan_type (proxy for loan_purpose; CONV/
+--   loan_purpose       — first_pos_loan_type (proxy for loan_purpose; CNV/
 --                        FHA/VA etc. from share).
 --   loan_product_type  — fn_loan_product_type bucket: conventional / jumbo /
 --                        fha / va / other; NULL when the source code is

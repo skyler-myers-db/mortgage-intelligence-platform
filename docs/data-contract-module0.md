@@ -174,7 +174,7 @@ All silver tables: Delta, managed, cluster by `clip` (liquid clustering where CL
 | `first_pos_rate` | DOUBLE | Y | `CASE WHEN first_position_mortgage_interest_rate IS NULL OR CAST(first_position_mortgage_interest_rate AS DOUBLE) <= 0 THEN NULL ELSE CAST(first_position_mortgage_interest_rate AS DOUBLE) / 100.0 END` | Fractional rate (0.0575 = 5.75%) — matches `fn_rate_spread` contract. Source is percent form. |
 | `first_pos_rate_type` | STRING | Y | `first_position_mortgage_interest_rate_type_code` | `FIX` / `ARM` / NULL. |
 | `first_pos_term_months` | INT | Y | `CAST(first_position_mortgage_term AS INT)` | Term in months. |
-| `first_pos_loan_type` | STRING | Y | `first_position_mortgage_loan_type_code` | `CONV` / `FHA` / `VA` / etc. |
+| `first_pos_loan_type` | STRING | Y | `first_position_mortgage_loan_type_code` | `CNV` / `FHA` / `VA` / etc. |
 | `first_pos_purpose` | STRING | Y | `first_position_mortgage_purpose_code` | `PUR` / `REF` / etc. |
 | `first_pos_ltv` | DOUBLE | Y | `CAST(first_position_mortgage_ltv_loan_to_value AS DOUBLE)` | 1st-lien LTV at origination. |
 | `first_pos_lender_original` | STRING | Y | `first_position_lender_company_name` | Originating lender. |
@@ -488,7 +488,7 @@ All gold tables: Delta, managed, partition/cluster tuned for the Module 0 querie
 | `evidence_id` | STRING | N | `CONCAT('ev-', SUBSTR(sha2(CONCAT(clip, '\|', signal_type, '\|', timestamp), 256), 1, 12))` | `evidence_id` | Stable across refreshes — decoupled from row order so `Borrower360.evidence_ids` lists stay stable. |
 | `source_product` | STRING | N | literal per source (`'Voluntary Lien'`, `'AVM'`, `'Owner Link'`, `'Property'`, `'Mortgage Domain'`, `'Owner Transfer'`, `'Market Rates'`, `'MLS Listings'`, `'HELOC Propensity'`, `'Refi Propensity'`, `'First-Party LOS'`) | `source_product` | |
 | `source_table` | STRING | N | literal UC path (e.g. `'mip.silver.lien_current'`) | `source_table` | **Must be a real UC path** — the EvidenceDrawer shows it. |
-| `signal_type` | STRING | N | controlled vocab includes live `listing`, live `heloc_propensity`, live `refi_propensity`, and reserved `permit` alongside `rate_spread`, `equity`, `loan_type_fit`, `product_type`, `origination_channel`, `competitor_lien`, `multi_property`, `absentee_mailing`, `corporate_owner`, `foreclosure_stage`, `recent_refi`, `recent_payoff`, `recent_sale`, and `market_trend` | `signal_type` | `loan_type_fit` is compliance-visible rationale for the symmetric CONV/FHA/VA fit branch and is excluded from the evidence sub-score. `product_type` and `origination_channel` are explainability-only rows for the S1.6 dimensions and are likewise excluded from the evidence sub-score. `listing`, `heloc_propensity`, and `refi_propensity` are live; `permit` is reserved for true filed-permit data and remains un-emitted. |
+| `signal_type` | STRING | N | controlled vocab includes live `listing`, live `heloc_propensity`, live `refi_propensity`, and reserved `permit` alongside `rate_spread`, `equity`, `loan_type_fit`, `product_type`, `origination_channel`, `competitor_lien`, `multi_property`, `absentee_mailing`, `corporate_owner`, `foreclosure_stage`, `recent_refi`, `recent_payoff`, `recent_sale`, and `market_trend` | `signal_type` | `loan_type_fit` is compliance-visible rationale for the symmetric Conventional/FHA/VA fit branch and is excluded from the evidence sub-score. `product_type` and `origination_channel` are explainability-only rows for the S1.6 dimensions and are likewise excluded from the evidence sub-score. `listing`, `heloc_propensity`, and `refi_propensity` are live; `permit` is reserved for true filed-permit data and remains un-emitted. |
 | `signal_value` | STRING | N | string-cast of the computed value (`'+88 bps'`, `'$285K'`, `'3 properties'`, `'competitor refi'`) | `signal_value` | Human-readable and deterministic. |
 | `display_text` | STRING | N | one-sentence template per `signal_type` | `display_text` | Deterministic; no PII. |
 | `confidence` | DOUBLE | N | per-signal: AVM `confidence_score_mktg`; rate_spread and market_trend `0.92`; Owner-Link derived `0.85`; recent events and competitor/foreclosure signals `0.89`. | `confidence` | 0..1 per `EvidenceEvent` constraint. |
@@ -620,7 +620,7 @@ LEAST(100, GREATEST(0,
 ```
 LEAST(100, GREATEST(0,
     CASE
-      WHEN is_owner_occupied AND first_pos_loan_type IN ('CONV','FHA','VA') THEN 70
+      WHEN is_owner_occupied AND first_pos_loan_type IN ('CNV','CONV','FHA','VA') THEN 70
       WHEN is_owner_occupied                                                THEN 60
       WHEN is_corporate_owner                                               THEN 50
       ELSE 40

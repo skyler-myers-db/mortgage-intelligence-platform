@@ -304,7 +304,7 @@ refi_propensity_rows AS (
     AND rp.refi_propensity_score >= 700
 ),
 -- 7. loan_type_fit: compliance-visible explanation for the fit sub-score's
---    symmetric CONV/FHA/VA owner-occupant boost. This row is intentionally
+--    symmetric CNV/CONV/FHA/VA owner-occupant boost. This row is intentionally
 --    excluded from the evidence sub-score in borrower_360/lead_scores so adding
 --    rationale does not retune opportunity scores.
 loan_type_fit_rows AS (
@@ -314,7 +314,7 @@ loan_type_fit_rows AS (
     'mip.silver.lien_current'                        AS source_table,
     'loan_type_fit'                                  AS signal_type,
     CONCAT(COALESCE(lc.first_pos_loan_type, 'unknown'), ' owner-occupied fit') AS signal_value,
-    'Owner-occupied CONV/FHA/VA loan type receives symmetric product-fit treatment.' AS display_text,
+    'Owner-occupied Conventional/FHA/VA loan type receives symmetric product-fit treatment.' AS display_text,
     0.89                                             AS confidence,
     CAST(lc.ingest_ts AS STRING)                     AS `timestamp`,
     6                                                AS signal_rank

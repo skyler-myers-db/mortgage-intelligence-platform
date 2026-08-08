@@ -599,7 +599,7 @@ def loan_product_type(
     """Return the canonical loan product-type bucket, or ``None`` if unknown.
 
     Mirrors ``mip.gold.fn_loan_product_type`` EXACTLY. The Cotality
-    first-position loan type code (CONV / FHA / VA / other codes) maps to
+    first-position loan type code (CNV / FHA / VA / other codes) maps to
     the lowercase vocabulary in ``LOAN_PRODUCT_TYPES``; a conventional
     first lien whose ORIGINAL amount is strictly greater than the governed
     conforming loan limit classifies as ``'jumbo'``. A loan exactly at the
