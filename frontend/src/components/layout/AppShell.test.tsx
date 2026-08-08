@@ -194,3 +194,18 @@ describe('system status view model', () => {
     expect(status.tooltip).not.toContain('loading');
   });
 });
+
+describe('systemStatusViewModel unreachable honesty', () => {
+  it('an unreachable probe never renders Live, even with preserved dep states', () => {
+    const vm = systemStatusViewModel({
+      status: 'unreachable',
+      mode: 'unknown',
+      // The down/up debounce preserves last-known dep states for missing
+      // deps; a dead probe used to read as Live through them (2026-08-08
+      // hands-on audit, expired session).
+      dependencies: { warehouse: 'up', lakebase: 'up', genie: 'up' },
+    } as never);
+    expect(vm.label).toBe('Unreachable');
+    expect(vm.dotClass).not.toContain('heartbeat');
+  });
+});
