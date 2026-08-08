@@ -34,6 +34,16 @@ class StateRollup(BaseModel):
     join is ``LEFT`` (state has data but no segment-code row yet on
     first deploy); the UI renders a neutral "unknown" segment label
     when null.
+
+    ``zip_unassigned_count`` is the disclosure for the ZIP drill: how many
+    of this state's ``addressable`` borrowers the ZIP layer will NOT show,
+    because ``mip.gold.zip_rollup`` is keyed on a 5-digit ZIP and the
+    Cotality share does not carry one for every property. Live 2026-08-08
+    this is 8.7% of CO and 5.8% of WA, so a reader who adds up the ZIP
+    tiles and compares them to the state total is looking at a real gap.
+    Drilling from a state to its ZIPs and silently losing borrowers on the
+    way down is exactly the kind of number a lender cannot explain to an
+    auditor; the UI must disclose it rather than let the sums disagree.
     """
 
     state: str = Field(min_length=2, max_length=2)
@@ -41,6 +51,7 @@ class StateRollup(BaseModel):
     in_the_money: int = Field(ge=0)
     top_tier_opportunities: int = Field(ge=0)
     avg_score: int = Field(ge=0, le=100)
+    zip_unassigned_count: int = Field(default=0, ge=0)
     top_segment_code: str | None = None
 
 
