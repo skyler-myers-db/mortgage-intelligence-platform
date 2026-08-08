@@ -110,11 +110,51 @@ def test_delta_summary_negative_and_zero_movements() -> None:
         }
     )
     summary = compose_home_summary(result)
-    assert [h.display for h in summary.highlights] == ["-1.5%", "0", "-315"]
+    assert [h.display for h in summary.highlights] == ["-1.5%", "no change", "-315"]
     assert summary.headline == (
         "Since your last login: -1.5% high-opportunity, "
-        "0 refi candidates, -315 offers available."
+        "no change in refi candidates, -315 offers available."
     )
+    # The delta itself is untouched -- only its rendering changed.
+    assert summary.highlights[1].delta == 0
+
+
+def test_zero_delta_never_reads_as_a_zero_total() -> None:
+    """2026-08-07 platform audit F12.
+
+    The live home page opened with "Since your last login: 0
+    high-opportunity, 0 refi candidates, 0 offers available." while the book
+    held 3,503 / 88,806 / 5,156,184 of them. The deltas were genuinely zero;
+    the sentence was not about the deltas, and it is the first thing a buyer
+    reads on the home route.
+    """
+    result = _delta_result().model_copy(
+        update={
+            "deltas": _DELTAS.model_copy(
+                update={
+                    "high_opportunity": 0,
+                    "refi_economics_screen": 0,
+                    "offers_available": 0,
+                }
+            )
+        }
+    )
+    summary = compose_home_summary(result)
+
+    assert summary.headline == (
+        "Since your last login: no change in high-opportunity, "
+        "no change in refi candidates, no change in offers available."
+    )
+    # No bare "0" token anywhere in the sentence a reader could take for a
+    # population count.
+    assert "0 " not in summary.headline
+    # Current totals still ride along for the evidence drawer.
+    assert summary.current.high_opportunity == 88_210
+    assert [h.current for h in summary.highlights] == [88_210, 261_400, 402_330]
+    # Each token still appears exactly once per highlight, so the frontend's
+    # exact-substring attachment keeps working.
+    for highlight in summary.highlights:
+        assert summary.headline.count(f"{highlight.value_token} in {highlight.label}") == 1
 
 
 def test_delta_summary_zero_baseline_falls_back_to_signed_count() -> None:
@@ -343,9 +383,9 @@ def test_service_falls_back_when_genie_writes_its_own_numbers(monkeypatch: Any) 
 
 
 def test_service_skips_enrichment_when_tokens_are_not_distinct(monkeypatch: Any) -> None:
-    # Two zero deltas render the same "0" token; the frontend attaches
-    # evidence drawers by exact token string, so enrichment stays off to
-    # keep number->drawer attachment provable.
+    # Two zero deltas render the same "no change" token; the frontend
+    # attaches evidence drawers by exact token string, so enrichment stays
+    # off to keep number->drawer attachment provable.
     monkeypatch.setattr(settings, "mip_genie_live_first", True)
     asked: list[str] = []
     result = _delta_result().model_copy(
@@ -361,7 +401,7 @@ def test_service_skips_enrichment_when_tokens_are_not_distinct(monkeypatch: Any)
         spawn=_sync_spawn,
     )
     summary = service.summary_for_actor("lo01@summit.example")
-    assert [h.display for h in summary.highlights] == ["+1.5%", "0", "0"]
+    assert [h.display for h in summary.highlights] == ["+1.5%", "no change", "no change"]
     assert summary.phrasing_source == "deterministic"
     assert summary.phrasing_fallback_reason == "genie_duplicate_tokens"
     assert asked == []
