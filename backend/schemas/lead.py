@@ -219,7 +219,15 @@ class Borrower360(LeadSummary):
     current_lien_balance_low: int = 0
     current_lien_balance_high: int = 0
     current_rate: float
-    ltv: int
+    # None when ``ltv_basis_is_unreliable`` — the AVM is below the $10k
+    # plausibility floor or the lien exceeds 5x it (blanket/portfolio
+    # attribution), and Cotality modeled CLTV is missing or itself absurd.
+    # Publishing gold's 0 in that case would read as "free and clear"; the
+    # UI renders an explicit unknown instead. ``avm_value`` and
+    # ``current_lien_balance`` are still populated, so the dossier keeps the
+    # raw facts and withholds only the derived ratio.
+    ltv: int | None = None
+    ltv_basis_is_unreliable: bool = False
     related_property_count: int
     situs_cbsa_code: str | None = None
     first_pos_loan_type: str | None = None

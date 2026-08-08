@@ -138,6 +138,10 @@ _PARITY_COLUMNS: tuple[str, ...] = (
     "current_lien_balance_high",
     "current_rate",
     "ltv",
+    # Travels with ltv: the dossier is what the API reads, so a flag that
+    # stopped at borrower_360 would leave the API unable to tell "unknown"
+    # from "free and clear".
+    "ltv_basis_is_unreliable",
     "related_property_count",
     "is_owner_occupied",
     "is_absentee",

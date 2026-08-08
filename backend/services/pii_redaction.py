@@ -378,6 +378,16 @@ def _optional_str(raw: Any) -> str | None:
     return value or None
 
 
+def _ltv_basis_is_unreliable(row: dict[str, Any]) -> bool:
+    """Whether gold says the row has no trustworthy display-LTV basis.
+
+    Absent on pre-DDL-extension gold rows and on the in-process test
+    fixtures, so a missing column means "basis is fine" — the field keeps
+    rendering exactly as it did before the column existed.
+    """
+    return bool(row.get("ltv_basis_is_unreliable") or False)
+
+
 def _id_mask_secret() -> str:
     configured = (os.environ.get("MIP_COTALITY_ID_MASK_SECRET") or "").strip()
     normalized = configured.lower()
@@ -615,7 +625,14 @@ def redact_borrower_row(row: dict[str, Any]) -> dict[str, Any]:
         "current_lien_balance_low": current_lien_balance_low,
         "current_lien_balance_high": current_lien_balance_high,
         "current_rate": float(row.get("current_rate") or 0.0),
-        "ltv": int(row.get("ltv") or 0),
+        # 2026-08-08 UX walk: withhold display LTV when gold says no
+        # trustworthy basis produced it. The gold column is NOT NULL and
+        # carries 0 in that case, and 0 reads as "free and clear" on a
+        # contact-prioritization surface -- the more dangerous lie of the
+        # two. `ltv_basis_is_unreliable` travels with the field so the UI can
+        # render an explicit unknown instead of a number nobody can act on.
+        "ltv": None if _ltv_basis_is_unreliable(row) else int(row.get("ltv") or 0),
+        "ltv_basis_is_unreliable": _ltv_basis_is_unreliable(row),
         "related_property_count": int(row.get("related_property_count") or 1),
         # S1.1 multi-owner caveat fields. Display-only here: contact
         # suppression is enforced upstream (gold.borrower_360 fails
