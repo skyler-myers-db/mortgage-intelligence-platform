@@ -270,6 +270,16 @@ class DatabricksGeoRepository:
     # table (dominant SegmentCode). LEFT JOIN on state so an empty
     # state_top_segment (first deploy before the CTAS has run) still
     # returns state counts -- top_segment_code just stays NULL.
+    # 2026-08-08 UX walk: the ZIP layer is keyed on a 5-digit ZIP and
+    # gold.zip_rollup filters `LENGTH(zip) = 5`, so borrowers whose share row
+    # carries no usable ZIP vanish between the state tile and the ZIP tiles
+    # (live: CO 8.7%, WA 5.8%). `zip_unassigned` is derived as the difference
+    # between the state total and what the ZIP layer will actually render, so
+    # the disclosed number IS the drill gap by construction — it cannot drift
+    # from the tiles the way a separately-computed count would. Both sides
+    # come from the same refresh anchor, so there is no snapshot skew to
+    # absorb. GREATEST(0, ...) keeps the field non-negative if a partial
+    # zip_rollup rebuild ever overshoots.
     _STATE_SQL = (
         "SELECT "
         "  f.state                         AS state, "
@@ -278,13 +288,21 @@ class DatabricksGeoRepository:
         "  f.high_opportunity_borrowers    AS top_tier_opportunities, "
         "  f.avg_opportunity_score         AS avg_score, "
         "  f.snapshot_date                 AS snapshot_date, "
-        "  ts.top_segment_code             AS top_segment_code "
+        "  ts.top_segment_code             AS top_segment_code, "
+        "  CAST(GREATEST(0, f.addressable_borrowers - COALESCE(zc.zip_covered, 0)) AS INT) "
+        "    AS zip_unassigned "
         f"FROM {qualify('gold', 'funnel_snapshot_daily')} AS f "
         "LEFT JOIN ( "
         "  SELECT state, top_segment_code "
         f"  FROM {qualify('gold', 'state_top_segment')} "
         f"  WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM {qualify('gold', 'state_top_segment')}) "
         ") AS ts ON ts.state = f.state "
+        "LEFT JOIN ( "
+        "  SELECT state, CAST(SUM(addressable_borrowers) AS BIGINT) AS zip_covered "
+        f"  FROM {qualify('gold', 'zip_rollup')} "
+        f"  WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM {qualify('gold', 'zip_rollup')}) "
+        "  GROUP BY state "
+        ") AS zc ON zc.state = f.state "
         "WHERE f.state <> '_ALL' "
         "  AND f.segment_code = '_ALL' "
         f"  AND f.snapshot_date = (SELECT MAX(snapshot_date) FROM {qualify('gold', 'funnel_snapshot_daily')}) "
@@ -352,7 +370,12 @@ class DatabricksGeoRepository:
         "  CAST(SUM(CASE WHEN opportunity_score "
         f"                >= {HIGH_OPPORTUNITY_THRESHOLD} "
         "                THEN 1 ELSE 0 END) AS INT)      AS top_tier_opportunities, "
-        "  CAST(ROUND(AVG(opportunity_score)) AS INT)    AS avg_score "
+        "  CAST(ROUND(AVG(opportunity_score)) AS INT)    AS avg_score, "
+        # Same ZIP-coverage disclosure as _STATE_SQL, computed against the
+        # same filtered universe the tiles will render — the ZIP layer
+        # applies the identical `zip IS NOT NULL AND LENGTH(zip) = 5` gate.
+        "  CAST(SUM(CASE WHEN zip IS NULL OR LENGTH(zip) <> 5 "
+        "                THEN 1 ELSE 0 END) AS INT)      AS zip_unassigned "
         f"FROM {qualify('gold', 'borrower_360')} "
         "WHERE {filter_clause} "
         "GROUP BY state"
@@ -531,6 +554,7 @@ class DatabricksGeoRepository:
                         top_tier_opportunities=int(r.get("top_tier_opportunities") or 0),
                         avg_score=int(r.get("avg_score") or 0),
                         top_segment_code=None,
+                        zip_unassigned_count=max(0, int(r.get("zip_unassigned") or 0)),
                     )
                     for r in rows
                     if r.get("state") and str(r.get("state")) != "_ALL"
@@ -561,6 +585,7 @@ class DatabricksGeoRepository:
                     top_segment_code=(
                         str(r["top_segment_code"]) if r.get("top_segment_code") else None
                     ),
+                    zip_unassigned_count=max(0, int(r.get("zip_unassigned") or 0)),
                 )
                 for r in rows
                 if r.get("state") and str(r.get("state")) != "_ALL"

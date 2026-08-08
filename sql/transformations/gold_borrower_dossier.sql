@@ -174,6 +174,7 @@ SELECT
   b.current_lien_balance_high,
   b.current_rate,
   b.ltv,
+  b.ltv_basis_is_unreliable,
   b.related_property_count,
   b.owner_count,
   b.has_unresolved_owner,
@@ -267,7 +268,8 @@ COMMENT ON COLUMN mip.gold.borrower_dossier.current_lien_balance IS 'Estimated c
 COMMENT ON COLUMN mip.gold.borrower_dossier.current_lien_balance_low IS 'Lower bound of estimated current lien balance confidence band in USD.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.current_lien_balance_high IS 'Upper bound of estimated current lien balance confidence band in USD.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.current_rate IS 'Percent form (5.75).';
-COMMENT ON COLUMN mip.gold.borrower_dossier.ltv IS 'Display LTV int; underwater borrowers may exceed 100.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.ltv IS 'Display LTV int, bounded to 0..500; underwater borrowers may exceed 100. 0 with ltv_basis_is_unreliable=TRUE means UNKNOWN, not free-and-clear.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.ltv_basis_is_unreliable IS 'TRUE when no trustworthy display-LTV basis exists (mirrors borrower_360). The API withholds ltv when TRUE; avm_value and current_lien_balance stay populated.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.related_property_count IS 'From gold.property_owner_bridge.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.owner_count IS 'From borrower_360 (S1.1); occupied owner slots on the CLIP (max 4). Drives the multi-owner caveat chip.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.has_unresolved_owner IS 'From borrower_360 (S1.1); TRUE when any owner slot is unresolved. Such rows are never marketing_eligible (suppression_reason unresolved_owner).';

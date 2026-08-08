@@ -2735,8 +2735,20 @@
             "title": "Loan Product Type"
           },
           "ltv": {
-            "title": "Ltv",
-            "type": "integer"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ltv"
+          },
+          "ltv_basis_is_unreliable": {
+            "default": false,
+            "title": "Ltv Basis Is Unreliable",
+            "type": "boolean"
           },
           "marketing_eligible": {
             "default": true,
@@ -2958,7 +2970,6 @@
           "subject_property",
           "avm_value",
           "current_rate",
-          "ltv",
           "trigger_timeline",
           "evidence_events",
           "why_panel"
@@ -12978,7 +12989,7 @@
         "type": "object"
       },
       "StateRollup": {
-        "description": "One state's addressable + high-intent + top-tier count + avg score.\n\n``state`` is the 2-char USPS code (uppercase) \u2014 the map component\nlowercases it to match the state topology location ids.\n\nFields map 1:1 to ``funnel_snapshot_daily`` columns so the UI never\nhas to re-aggregate: ``addressable`` is the borrower count for the\nstate, ``in_the_money`` is the high-intent subset,\n``top_tier_opportunities`` is the high-opportunity subset (canonical\nthreshold: ``scoring.HIGH_OPPORTUNITY_THRESHOLD`` / ``fn_high_opportunity``)\n(for the lvl-4 hero tier on the choropleth), and ``avg_score`` is\nthe state-wide mean opportunity score.\n\n``top_segment_code`` is the dominant SegmentCode for the state\nsourced from ``mip.gold.state_top_segment``. Nullable because the\njoin is ``LEFT`` (state has data but no segment-code row yet on\nfirst deploy); the UI renders a neutral \"unknown\" segment label\nwhen null.",
+        "description": "One state's addressable + high-intent + top-tier count + avg score.\n\n``state`` is the 2-char USPS code (uppercase) \u2014 the map component\nlowercases it to match the state topology location ids.\n\nFields map 1:1 to ``funnel_snapshot_daily`` columns so the UI never\nhas to re-aggregate: ``addressable`` is the borrower count for the\nstate, ``in_the_money`` is the high-intent subset,\n``top_tier_opportunities`` is the high-opportunity subset (canonical\nthreshold: ``scoring.HIGH_OPPORTUNITY_THRESHOLD`` / ``fn_high_opportunity``)\n(for the lvl-4 hero tier on the choropleth), and ``avg_score`` is\nthe state-wide mean opportunity score.\n\n``top_segment_code`` is the dominant SegmentCode for the state\nsourced from ``mip.gold.state_top_segment``. Nullable because the\njoin is ``LEFT`` (state has data but no segment-code row yet on\nfirst deploy); the UI renders a neutral \"unknown\" segment label\nwhen null.\n\n``zip_unassigned_count`` is the disclosure for the ZIP drill: how many\nof this state's ``addressable`` borrowers the ZIP layer will NOT show,\nbecause ``mip.gold.zip_rollup`` is keyed on a 5-digit ZIP and the\nCotality share does not carry one for every property. Live 2026-08-08\nthis is 8.7% of CO and 5.8% of WA, so a reader who adds up the ZIP\ntiles and compares them to the state total is looking at a real gap.\nDrilling from a state to its ZIPs and silently losing borrowers on the\nway down is exactly the kind of number a lender cannot explain to an\nauditor; the UI must disclose it rather than let the sums disagree.",
         "properties": {
           "addressable": {
             "minimum": 0.0,
@@ -13016,6 +13027,12 @@
           "top_tier_opportunities": {
             "minimum": 0.0,
             "title": "Top Tier Opportunities",
+            "type": "integer"
+          },
+          "zip_unassigned_count": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Zip Unassigned Count",
             "type": "integer"
           }
         },

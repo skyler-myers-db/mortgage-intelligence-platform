@@ -498,8 +498,14 @@ enriched AS (
     -- > 100 while equity_pct stays at 0 for scoring / outreach gating.
     -- The no-signal default stays 0, NOT the complement -- "no data" must
     -- never read as "free and clear" on a contact-prioritization surface.
+    -- Plausible-valuation floor (2026-08-08 UX walk): a valuation below
+    -- $10,000 is not a residence value, it is a fossil (nominal-consideration
+    -- deed, unit-scale defect, placeholder). Same $10k floor the appreciation
+    -- guard already applies to purchase_amount (audit M4) -- one number,
+    -- one meaning. Live count today is zero: this is the guard that keeps it
+    -- zero when the share next carries one, not a cleanup of current rows.
     CAST(CASE
-      WHEN b.avm_value IS NOT NULL AND b.avm_value > 0
+      WHEN b.avm_value IS NOT NULL AND b.avm_value >= 10000
       THEN GREATEST(
         0,
         LEAST(
@@ -511,8 +517,11 @@ enriched AS (
       THEN GREATEST(0, LEAST(100, 100 - GREATEST(0, ROUND(b.estimated_cltv))))
       ELSE 0
     END AS INT) AS equity_pct,
-    CAST(GREATEST(0, COALESCE(b.avm_value, 0) - COALESCE(b.estimated_current_lien_balance, 0)) AS BIGINT)
-      AS equity_estimate,
+    CAST(CASE
+      WHEN b.avm_value IS NOT NULL AND b.avm_value >= 10000
+      THEN GREATEST(0, b.avm_value - COALESCE(b.estimated_current_lien_balance, 0))
+      ELSE 0
+    END AS BIGINT) AS equity_estimate,
     -- LTV: display truth. Prefer AVM / gold-estimated lien math so the
     -- shown LTV ties to current_lien_balance and equity_estimate; fall
     -- back to Cotality-modeled estimated_cltv only when AVM is missing.
@@ -529,19 +538,55 @@ enriched AS (
         AND COALESCE(b.estimated_current_lien_balance, 0) > 5000000)
       OR COALESCE(b.estimated_current_lien_balance, 0) > 20000000
     ) AS lien_is_portfolio_level,
+    -- 2026-08-08 UX walk: the blanket-lien fallback above did not finish the
+    -- job. Falling back to Cotality-modeled `estimated_cltv` swapped one
+    -- absurd ratio for another -- estimated_cltv itself reaches 2,893,340
+    -- (live: 2,304 rows over 500%), so a flagged residence still rendered a
+    -- 2,893,340% LTV, the exact number the flag was written to kill. And the
+    -- blanket thresholds have a floor hole: a lien 15x an AVM but under $5M
+    -- is not flagged, so 11,750 rows displayed 501%-8,585% LTVs.
+    --
+    -- One threshold now governs both branches: 500% (5x). Above that the
+    -- number is not a property-level loan-to-value, whatever arithmetic
+    -- produced it -- deliberately generous, so a genuinely underwater
+    -- borrower at 150%-300% is never suppressed. When neither branch yields
+    -- a trustworthy ratio the row carries `ltv_basis_is_unreliable` and the
+    -- API withholds the value rather than publishing a number a loan officer
+    -- would have to ignore. avm_value and current_lien_balance stay visible
+    -- either way -- only the derived ratio is withheld.
     CAST(
       GREATEST(0, CASE
-        WHEN b.avm_value IS NOT NULL AND b.avm_value > 0
+        WHEN b.avm_value IS NOT NULL AND b.avm_value >= 10000
          AND NOT (
               (COALESCE(b.estimated_current_lien_balance, 0) > 10 * b.avm_value
                 AND COALESCE(b.estimated_current_lien_balance, 0) > 5000000)
               OR COALESCE(b.estimated_current_lien_balance, 0) > 20000000)
+         AND COALESCE(b.estimated_current_lien_balance, 0) <= 5 * b.avm_value
           THEN ROUND(100.0 * COALESCE(b.estimated_current_lien_balance, 0) / b.avm_value)
         WHEN b.estimated_cltv IS NOT NULL AND b.estimated_cltv > 0
+         AND b.estimated_cltv <= 500
           THEN ROUND(b.estimated_cltv)
         ELSE 0
       END)
     AS INT) AS ltv,
+    -- TRUE when neither LTV basis above was usable, so `ltv = 0` means
+    -- "unknown", not "free and clear". The API reads this to withhold the
+    -- field; without it a suppressed ratio would read as a paid-off loan on
+    -- a contact-prioritization surface, which is the more dangerous lie.
+    (
+      NOT (
+        b.avm_value IS NOT NULL AND b.avm_value >= 10000
+        AND NOT (
+             (COALESCE(b.estimated_current_lien_balance, 0) > 10 * b.avm_value
+               AND COALESCE(b.estimated_current_lien_balance, 0) > 5000000)
+             OR COALESCE(b.estimated_current_lien_balance, 0) > 20000000)
+        AND COALESCE(b.estimated_current_lien_balance, 0) <= 5 * b.avm_value
+      )
+      AND NOT (
+        b.estimated_cltv IS NOT NULL AND b.estimated_cltv > 0
+        AND b.estimated_cltv <= 500
+      )
+    ) AS ltv_basis_is_unreliable,
     -- is_investor derived boolean.
     (b.related_property_count >= 2
      OR COALESCE(b.owner_is_corporate, FALSE)
@@ -1152,6 +1197,7 @@ SELECT
     ELSE 0.0
   END AS DOUBLE)                                                                     AS current_rate,
   w.ltv,
+  COALESCE(w.ltv_basis_is_unreliable, FALSE)                                         AS ltv_basis_is_unreliable,
   w.related_property_count,
   w.owner_count,
   w.has_unresolved_owner,
@@ -1267,6 +1313,7 @@ COMMENT ON COLUMN mip.gold.borrower_360.recommended_offer IS 'Human label for re
 COMMENT ON COLUMN mip.gold.borrower_360.why_now IS 'Deterministic one-sentence template per offer_code. No PII. See data-contract §6.';
 COMMENT ON COLUMN mip.gold.borrower_360.evidence_ids IS 'Ordered evidence_ids from gold.evidence_events (ORDER BY signal_rank).';
 COMMENT ON COLUMN mip.gold.borrower_360.lien_is_portfolio_level IS 'TRUE when the estimated lien balance is a blanket/portfolio instrument amount attributed to a single CLIP (balance > 10x AVM and > $5M, or > $20M): real instrument, not property-level UPB. Excluded from headline dollar totals; display LTV falls back to modeled CLTV.';
+COMMENT ON COLUMN mip.gold.borrower_360.ltv_basis_is_unreliable IS 'TRUE when no trustworthy display-LTV basis exists: AVM below the $10k plausibility floor, or lien over 5x AVM (blanket/portfolio attribution), AND modeled CLTV missing or itself over 500%. The API withholds ltv when TRUE; avm_value and current_lien_balance stay populated.';
 COMMENT ON COLUMN mip.gold.borrower_360.approval_status IS 'Approval state mirrored from Lakebase via gold.borrower_lifecycle_state at refresh time; "pending" when undecided. Lakebase remains authoritative between refreshes.';
 COMMENT ON COLUMN mip.gold.borrower_360.owner_link_id IS 'Cotality Owner Link id. Opaque Cotality identifier; not a direct PII risk.';
 COMMENT ON COLUMN mip.gold.borrower_360.subject_property IS 'Synthetic city/state/ZIP5 string. No street address.';
@@ -1275,7 +1322,7 @@ COMMENT ON COLUMN mip.gold.borrower_360.current_lien_balance IS 'Estimated curre
 COMMENT ON COLUMN mip.gold.borrower_360.current_lien_balance_low IS 'Lower bound of the estimated current lien balance confidence band in USD: fn_estimated_upb_confidence_band lower_upb plus second-position amount when first-lien inputs are present; otherwise equals current_lien_balance.';
 COMMENT ON COLUMN mip.gold.borrower_360.current_lien_balance_high IS 'Upper bound of the estimated current lien balance confidence band in USD: fn_estimated_upb_confidence_band upper_upb plus second-position amount when first-lien inputs are present; otherwise equals current_lien_balance.';
 COMMENT ON COLUMN mip.gold.borrower_360.current_rate IS 'PERCENT form (5.75, not 0.0575). 0.0 when no active lien remains (paid-off loans carry no current rate). Matches Pydantic current_rate and mock_data convention.';
-COMMENT ON COLUMN mip.gold.borrower_360.ltv IS 'Display LTV int from estimated current lien balance divided by AVM when AVM is present; not upper-capped, so underwater borrowers may exceed 100.';
+COMMENT ON COLUMN mip.gold.borrower_360.ltv IS 'Display LTV int from estimated current lien balance divided by AVM. Bounded to 0..500: above 5x the valuation the number is not a property-level loan-to-value, and 0 with ltv_basis_is_unreliable=TRUE means UNKNOWN, not free-and-clear. Underwater borrowers still show >100.';
 COMMENT ON COLUMN mip.gold.borrower_360.related_property_count IS 'COALESCE(property_owner_bridge.related_property_count, 1).';
 COMMENT ON COLUMN mip.gold.borrower_360.owner_count IS 'S1.1: occupied owner slots on this CLIP in silver.property_owners (max 4, duplicate Owner Links collapsed). 0 when the source record has no owner information. Drives the multi-owner caveat chip.';
 COMMENT ON COLUMN mip.gold.borrower_360.has_unresolved_owner IS 'S1.1: TRUE when any owner slot classifies unresolved OR no owner rows exist. Fails marketing_eligible closed with suppression_reason unresolved_owner. ROADMAP-TEMPORARY classify+caveat+suppress scope pending Cotality entity resolution (data-contract §2.6).';

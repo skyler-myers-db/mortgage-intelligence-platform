@@ -20,7 +20,7 @@ _BORROWER_360_COLUMNS: str = (
     "opportunity_score, confidence, recommended_offer_code, recommended_offer, "
     "why_now, evidence_ids, approval_status, owner_link_id, subject_property, "
     "avm_value, current_lien_balance, current_lien_balance_low, "
-    "current_lien_balance_high, current_rate, ltv, related_property_count, "
+    "current_lien_balance_high, current_rate, ltv, ltv_basis_is_unreliable, related_property_count, "
     "owner_count, has_unresolved_owner, primary_owner_entity_type, "
     "situs_cbsa_code, first_pos_loan_type, loan_product_type, origination_channel, "
     "is_owner_occupied, is_absentee, is_corporate_owner, is_investor, "

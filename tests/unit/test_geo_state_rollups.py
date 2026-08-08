@@ -374,3 +374,48 @@ def test_zip_rollups_validates_fips_length():
 def test_zip_rollups_rejects_non_numeric_fips():
     response = client.get("/api/geo/zip-rollups?county_fips=abcde")
     assert response.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# 2026-08-08 UX walk: the state -> ZIP drill loses borrowers on the way down.
+#
+# gold.zip_rollup is keyed on a 5-digit ZIP and filters `LENGTH(zip) = 5`, but
+# the Cotality share does not carry a usable ZIP for every property (live:
+# CO 8.7%, WA 5.8%, IL 0.5%). Adding up a state's ZIP tiles therefore lands
+# BELOW its state tile, and nothing on screen said why. The API now carries
+# the gap as a machine-readable field so the UI can disclose it.
+# ---------------------------------------------------------------------------
+
+
+def test_state_rollups_disclose_zip_drill_coverage() -> None:
+    response = client.get("/api/geo/state-rollups")
+    assert response.status_code == 200, response.text
+    for row in response.json()["rollups"]:
+        assert "zip_unassigned_count" in row, (
+            "every state row must disclose how many borrowers the ZIP layer "
+            "will not show — a silent drop is what made the sums disagree"
+        )
+        assert row["zip_unassigned_count"] >= 0
+        assert row["zip_unassigned_count"] <= row["addressable"]
+
+
+def test_state_rollup_zip_gap_is_derived_from_the_zip_layer_itself() -> None:
+    """Pin the derivation, not a number.
+
+    The disclosed gap is ``state total - SUM(zip_rollup.addressable_borrowers)``
+    for the same snapshot, so it equals the drill gap by construction. A
+    separately-computed "count of null ZIPs" could drift from the tiles the
+    reader is actually adding up; this one cannot.
+    """
+    from backend.services.repositories.databricks_geo import DatabricksGeoRepository
+
+    sql = " ".join(DatabricksGeoRepository._STATE_SQL.split())
+    assert "AS zip_unassigned" in sql
+    assert "CAST(SUM(addressable_borrowers) AS BIGINT) AS zip_covered" in sql
+    assert "f.addressable_borrowers - COALESCE(zc.zip_covered, 0)" in sql
+    # The filtered path must disclose the same thing against the filtered
+    # universe — a segment filter that hides ZIP-less borrowers must not
+    # silently reset the disclosure to zero.
+    filtered = " ".join(DatabricksGeoRepository._STATE_FILTER_SQL_TPL.split())
+    assert "zip IS NULL OR LENGTH(zip) <> 5" in filtered
+    assert "AS zip_unassigned" in filtered
