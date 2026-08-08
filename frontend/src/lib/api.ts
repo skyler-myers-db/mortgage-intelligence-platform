@@ -333,6 +333,8 @@ export interface DispositionResponse {
 export interface LeadsPageResult {
   leads: LeadSummary[];
   totalMatching: number | null;
+  /** Ranked subset (score >= 50) of totalMatching on geo-filtered queries. */
+  rankedMatching: number | null;
   returnedRows: number | null;
   truncatedAt: number | null;
   growthAgentVerification: GrowthAgentCohortVerification | null;
@@ -1258,6 +1260,7 @@ export const api = {
     ).then(async ({ data, headers }) => ({
       leads: data,
       totalMatching: headers.get('X-Total-Matching') ? Number(headers.get('X-Total-Matching')) : null,
+      rankedMatching: headers.get('X-Ranked-Matching') ? Number(headers.get('X-Ranked-Matching')) : null,
       returnedRows: headers.get('X-Returned-Rows') ? Number(headers.get('X-Returned-Rows')) : null,
       truncatedAt: headers.get('X-Truncated-At') ? Number(headers.get('X-Truncated-At')) : null,
       growthAgentVerification: growthAgentProof

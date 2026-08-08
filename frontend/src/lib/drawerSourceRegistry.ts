@@ -12,9 +12,9 @@ function defineDrawerSources<T extends Record<string, DrawerSource>>(
  */
 export const DRAWER_SOURCES = defineDrawerSources({
   population: {
-    title: 'Marketable population',
+    title: 'Addressable population',
     lineageFamily: 'marketable_population',
-    short: 'Marketable population',
+    short: 'Addressable population',
     // Governed anchor (2026-06-11): the marketable-population KPI is
     // COUNT(*) over mip.gold.borrower_360, so this drawer reads that
     // asset's governed metadata. Without an anchor the hero KPI's drawer
@@ -307,7 +307,7 @@ export const DRAWER_SOURCES = defineDrawerSources({
     description:
       'Borrower-grain semantic view defining every home headline KPI: marketable population, refi economics screen, high opportunity, offers available, and primary offer paths.',
     signals: [
-      { label: 'Marketable population', source: 'portfolio_headline_metric_view', value: 'COUNT(*)' },
+      { label: 'Addressable population', source: 'portfolio_headline_metric_view', value: 'COUNT(*)' },
       { label: 'Refi economics screen', source: 'in_the_money', value: 'SUM' },
       { label: 'High opportunity', source: 'is_high_opportunity', value: 'fn_high_opportunity' },
       { label: 'Offers available', source: 'offer_available', value: 'non-null offer' },

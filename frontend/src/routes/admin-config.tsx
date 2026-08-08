@@ -91,6 +91,9 @@ function formatThresholdValue(t: ThresholdRow): string {
   if (unit === 'rate_fraction') {
     return `${(t.value * 100).toFixed(3)}%`;
   }
+  if (unit === 'usd') {
+    return `$${Math.round(t.value).toLocaleString('en-US')}`;
+  }
   return `${t.value}`;
 }
 

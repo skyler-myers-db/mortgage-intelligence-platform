@@ -495,14 +495,17 @@ export default function LeadQueue() {
               {stateFilters.length > 0 && <span className="lead-queue-scope__pill">States: {stateFilters.join(', ')}</span>}
               {zipFilters.length > 0 && <span className="lead-queue-scope__pill">ZIPs: {zipFilters.join(', ')}</span>}
               {borrowerIdFilters.length > 0 && <span className="lead-queue-scope__pill">Borrowers: {borrowerIdFilters.length}</span>}
-              {/* Re-audit #3 P3 (2026-06-12): the map tile counts MARKETABLE
-                  borrowers; this queue ranks the scored, contactable subset.
-                  Without the caption the handoff reads as a numbers jump
-                  (e.g. 30,833 on the ZIP tile → 1,379 ranked rows). */}
+              {/* 2026-08-07 audit C4: geo drill-ins show EVERY borrower the
+                  map counted (no score floor — the map-tile promise), so the
+                  old caption claiming a "scored, marketing-eligible subset"
+                  described the inverse of the query. State both real numbers
+                  from the same identity row instead. */}
               <span className="lead-queue-scope__note muted fs-11">
-                Ranked leads are the scored, marketing-eligible subset of this
-                geography&apos;s marketable borrowers — intentionally smaller than
-                the map tile&apos;s population count.
+                {leadsData?.rankedMatching != null
+                  && leadsData?.totalMatching != null
+                  && leadsData.rankedMatching < leadsData.totalMatching
+                  ? `Showing every borrower the map counted for this geography, ranked by opportunity score; ${leadsData.rankedMatching.toLocaleString('en-US')} of ${leadsData.totalMatching.toLocaleString('en-US')} also clear the national queue's score floor.`
+                  : 'Showing every borrower the map counted for this geography, ranked by opportunity score.'}
               </span>
               </>
             ) : null}

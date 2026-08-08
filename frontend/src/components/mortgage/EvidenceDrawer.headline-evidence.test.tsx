@@ -109,7 +109,7 @@ const MANIFEST: LineageManifestResponse = {
  * `.drawer__subtitle` the live spec asserts.
  */
 const HOME_KPI_SOURCES: Array<[string, DrawerSource]> = [
-  ['Marketable population', DRAWER_SOURCES.population],
+  ['Addressable population', DRAWER_SOURCES.population],
   ['Rate + equity screen', DRAWER_SOURCES.itm],
   ['Opportunity score', DRAWER_SOURCES.leadScore],
   ['How the offer path was selected', DRAWER_SOURCES.nbo],
