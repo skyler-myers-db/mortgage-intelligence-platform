@@ -285,14 +285,37 @@ _REVIEWED_READ_ONLY_ANALYTIC_PATTERNS: tuple[re.Pattern[str], ...] = (
         # cash-out candidates in Texas and explain why each one qualifies").
         # The intent vocabulary is closed, so an unknown criterion cannot ride
         # this shape. Live persona audit 2026-08-07 (sales-manager).
-        r"^(?:rank|show|list|give\s+me|surface)\s+(?:me\s+)?(?:the\s+)?"
+        r"^(?:rank|show|list|give\s+me|surface|prioriti[sz]e)\s+(?:me\s+)?(?:the\s+)?"
         r"(?:top\s+(?:[0-9]{1,3}\s+)?)?"
-        rf"{_REVIEWED_PRODUCT_INTENT}\s+"
+        # One or two stacked intent tokens ("in-the-money refi", "purchase
+        # mortgage") — still drawn from the same closed vocabulary, so an
+        # unknown criterion cannot ride the second slot. Live persona audit
+        # 2026-08-07 (co-pilot flagship objective).
+        rf"{_REVIEWED_PRODUCT_INTENT}(?:[\s-]+(?:{_REVIEWED_PRODUCT_INTENT}|mortgage|loan))?\s+"
         r"(?:candidates?|borrowers?|leads?|opportunities)"
         rf"{_REVIEWED_ANALYTIC_LOCATION}"
         r"(?:\s*,?\s*and\s+(?:explain|tell\s+me|describe|show)\s+"
         r"(?:me\s+)?why\s+(?:each|every)(?:\s+one)?\s+"
         r"(?:qualifies|ranks?|scores?|is\s+(?:a\s+)?(?:strong|good)(?:\s+candidate)?))?$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        # Reviewed-population cohort carrying a closed product-intent
+        # with-clause ("show customers with an in-the-money refi", "show
+        # investor borrowers with multiple properties" — the Owner Link
+        # domain rule). The with-clause alternatives are a closed set; a
+        # free-text criterion ("with zyrplax", "with eczema") does not match
+        # and falls through to the strict criterion machine. Live persona
+        # audit 2026-08-07 (co-pilot).
+        r"^(?:show|find|list|rank|surface|give\s+me)\s+(?:me\s+)?(?:the\s+)?"
+        rf"(?:{_REVIEWED_PRODUCT_INTENT}\s+)?"
+        r"(?:customers?|borrowers?|leads?|candidates?|prospects?|homeowners?|owners?)\s+"
+        r"with\s+(?:"
+        rf"(?:(?:a|an|the)\s+)?{_REVIEWED_PRODUCT_INTENT}"
+        rf"(?:[\s-]+(?:{_REVIEWED_PRODUCT_INTENT}|mortgage|loan|refi|refinance|position|offer|opportunity))?"
+        r"|multiple\s+properties"
+        r")"
+        rf"{_REVIEWED_ANALYTIC_LOCATION}$",
         re.IGNORECASE,
     ),
     re.compile(

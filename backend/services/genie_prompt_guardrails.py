@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import re
 
+from backend.schemas.marketing_safety_terms import UNREVIEWED_LENDER_NAME_RE_FRAGMENT
 from backend.services.state_footprint import get_state_footprint_resolver
 
 _INSTRUCTION_OVERRIDE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(
         r"\b(?:ignore|disregard|override|bypass|forget)\b.{0,80}"
-        r"\b(?:previous|prior|system|developer|safety|guardrail|policy|policies|rules|instructions|prompt)\b",
+        r"\b(?:previous|prior|system|developer|safety|guardrails?|policy|policies|rules?|instructions?|prompts?)\b",
         re.IGNORECASE | re.DOTALL,
     ),
     re.compile(
@@ -23,6 +24,14 @@ _INSTRUCTION_OVERRIDE_PATTERNS: tuple[re.Pattern[str], ...] = (
         r"\b(?:print|reveal|show|dump)\b.{0,60}"
         r"\b(?:system|developer)\b.{0,40}\b(?:prompt|instructions|message)\b",
         re.IGNORECASE | re.DOTALL,
+    ),
+    # Persona overrides (2026-08-07 cross-surface audit: no coverage in either
+    # layer). "act as" requires an article so analytics English ("how should we
+    # act as rates drop") never matches.
+    re.compile(
+        r"\byou\s+are\s+now\b|\bfrom\s+now\s+on,?\s+you\b|"
+        r"\bact\s+as\s+(?:a|an|my|the)\b|\bpretend\s+to\s+be\b|\broleplay\s+as\b",
+        re.IGNORECASE,
     ),
 )
 
@@ -44,7 +53,7 @@ _PII_PROMPT_PATTERNS: tuple[re.Pattern[str], ...] = (
         re.IGNORECASE | re.DOTALL,
     ),
     re.compile(
-        r"\b(?:raw|exact)\s+(?:servicer|lender)\s+(?:string|name|value)\b|"
+        r"\b(?:raw|exact)\s+(?:servicer|lender)\s+(?:strings?|names?|values?)\b|"
         r"\b(?:servicer|lender)\s+string\b",
         re.IGNORECASE,
     ),
@@ -109,13 +118,13 @@ _OFF_TOPIC_PROMPT_PATTERNS: tuple[re.Pattern[str], ...] = (
 
 _CROSS_LENDER_PROMPT_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(
-        r"\b(?:wells\s+fargo|chase|rocket\s+mortgage|quicken\s+loans|lendingtree)\b"
+        r"\b" + UNREVIEWED_LENDER_NAME_RE_FRAGMENT + r"\b"
         r".{0,100}\b(?:borrowers?|customers?|customer\s+list|pipeline|leads?)\b",
         re.IGNORECASE | re.DOTALL,
     ),
     re.compile(
         r"\b(?:borrowers?|customers?|customer\s+list|pipeline|leads?)\b"
-        r".{0,100}\b(?:wells\s+fargo|chase|rocket\s+mortgage|quicken\s+loans|lendingtree)\b",
+        r".{0,100}\b" + UNREVIEWED_LENDER_NAME_RE_FRAGMENT + r"\b",
         re.IGNORECASE | re.DOTALL,
     ),
     re.compile(

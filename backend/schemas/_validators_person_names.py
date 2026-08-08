@@ -17,7 +17,13 @@ _TITLECASE_HUMAN_NAME_RE = re.compile(
     r"\b[A-Z][a-z]{1,30}(?:\s+|\s*\|\s*)(?:[A-Z](?:\s+|\s*\|\s*))?" r"[A-Z][a-z]{1,30}\b"
 )
 _LEADING_ANALYTICS_COMMAND_RE = re.compile(
-    r"\b(?:Compare|Explain|Find|List|Open|Prioritize|Rank|Review|Show|Target)\s+(?=[A-Z])"
+    # Analytics commands plus operator-note verbs ("Discussed Home Equity
+    # options", "Approved El Paso wave"): a capitalized verb pairing with the
+    # next capitalized word is sentence structure, not a name. Stripping the
+    # verb never hides a real name — the name pair itself still scans.
+    r"\b(?:Compare|Explain|Find|List|Open|Prioritize|Rank|Review|Show|Target|"
+    r"Approved|Called|Confirmed|Contacted|Discussed|Emailed|Noted|Paused|"
+    r"Rejected|Reviewed|Scheduled|Sent|Shared|Spoke|Updated)\s+(?=[A-Z])"
 )
 # Title-case pairs ending in these words are never person names here:
 # admin/geographic place-name suffixes (Lake Forest, Grand Prairie, Coral
@@ -30,17 +36,50 @@ _NON_PERSON_TITLECASE_SUFFIXES = frozenset(
     {
         # fmt: off
         "borough", "city", "county", "metro", "msa", "parish", "region", "township",
-        "beach", "bluffs", "canyon", "creek", "falls", "forest", "gardens", "grove",
-        "harbor", "heights", "hills", "island", "junction", "lake", "lakes",
-        "meadows", "mesa", "oaks", "park", "pines", "plains", "point", "prairie",
-        "rapids", "ridge", "shores", "springs", "station", "valley", "village",
-        "vista", "woods",
+        "arbor", "bay", "beach", "bluffs", "canyon", "creek", "falls", "forest",
+        "gardens", "grove", "harbor", "heights", "hills", "island", "junction",
+        "lake", "lakes", "meadows", "mesa", "oaks", "park", "pines", "plains",
+        "point", "prairie", "rapids", "ridge", "shores", "springs", "station",
+        "valley", "village", "vista", "woods",
         "equity", "heloc", "loan", "mortgage", "offer", "queue", "refi",
         "refinance", "review",
         "candidate", "candidates", "intent", "risk", "sale", "segment", "segments",
         # fmt: on
     }
 )
+# Mirror rule for the FIRST word of a title-case pair: toponym formants — the
+# Spanish articles and geographic feature nouns US place names are built from
+# (El Paso, Fort Worth, San Antonio, Corpus Christi, Baton Rouge, Round Rock).
+# This is a closed grammatical class with zero overlap with human first names,
+# so exempting it cannot admit a real person (2026-08-07 cross-surface audit:
+# these cities were refused on campaign copy, notes, and rationale fields).
+_NON_PERSON_TITLECASE_PREFIXES = frozenset(
+    {
+        # fmt: off
+        "baton", "boca", "cape", "castle", "cedar", "coral", "corpus", "council",
+        "del", "des", "eagle", "east", "el", "fort", "grand", "lake", "las",
+        "little", "long", "los", "mount", "new", "north", "port", "round",
+        "saint", "san", "santa", "sioux", "south", "st", "terre", "west",
+        # fmt: on
+    }
+)
+
+
+def titlecase_pair_is_non_person(pair_text: str) -> bool:
+    """True when a title-case pair is governed geography/product, not a name.
+
+    A pair is non-person when its last word is an admin/geographic/product
+    suffix (Lake Forest, Home Equity) or its first word is a toponym formant
+    (El Paso, Fort Worth). Shared so every surface classifies identically.
+    """
+
+    tokens = [token for token in re.split(r"\s+|\|", pair_text.strip()) if token]
+    if not tokens:
+        return False
+    return (
+        tokens[-1].casefold() in _NON_PERSON_TITLECASE_SUFFIXES
+        or tokens[0].casefold() in _NON_PERSON_TITLECASE_PREFIXES
+    )
 _COMMON_FIRST_NAMES = frozenset(
     {
         "alice",
@@ -170,11 +209,14 @@ def contains_human_name_shape(
     text = _remove_reviewed_non_person_phrases(str(value), allowed_phrases=allowed_phrases)
     text = _LEADING_ANALYTICS_COMMAND_RE.sub(" ", text)
     if include_titlecase and any(
-        re.split(r"\s+|\|", match.group(0))[-1].casefold() not in _NON_PERSON_TITLECASE_SUFFIXES
+        not titlecase_pair_is_non_person(match.group(0))
         for match in _TITLECASE_HUMAN_NAME_RE.finditer(text)
     ):
         return True
-    if _CONTEXTUAL_HUMAN_NAME_RE.search(text):
+    if any(
+        not _contextual_match_targets_non_person(match)
+        for match in _CONTEXTUAL_HUMAN_NAME_RE.finditer(text)
+    ):
         return True
     words = re.findall(r"[A-Za-z]{2,30}", text.casefold())
     return any(
@@ -199,6 +241,38 @@ def _remove_reviewed_non_person_phrases(
     return cleaned
 
 
+_CONTEXTUAL_TRIGGER_VERBS = frozenset(
+    {
+        "call",
+        "contact",
+        "email",
+        "message",
+        "text",
+        "ask",
+        "target",
+        "prioritize",
+        "dear",
+        "hello",
+        "hi",
+    }
+)
+
+
+def _contextual_match_targets_non_person(match: re.Match[str]) -> bool:
+    """True when a contextual-verb hit targets governed geography/product.
+
+    "Prioritize Purchase Mortgage leads" and "contact Fort Worth homeowners"
+    are product phrasing, not a person being addressed; "call john smith"
+    stays a hit because the pair is not a governed non-person pair.
+    """
+
+    words = [word for word in re.split(r"\s+", match.group(0).strip()) if word]
+    if not words:
+        return False
+    pair = words[1:3] if words[0].casefold() in _CONTEXTUAL_TRIGGER_VERBS else words[:2]
+    return titlecase_pair_is_non_person(" ".join(pair))
+
+
 def contains_contextual_human_name(value: str) -> bool:
     """Detect name-shaped text in contexts where a person is being addressed.
 
@@ -208,4 +282,7 @@ def contains_contextual_human_name(value: str) -> bool:
     ``call john smith`` without treating ordinary sentences as identities.
     """
 
-    return bool(_CONTEXTUAL_HUMAN_NAME_RE.search(str(value)))
+    return any(
+        not _contextual_match_targets_non_person(match)
+        for match in _CONTEXTUAL_HUMAN_NAME_RE.finditer(str(value))
+    )

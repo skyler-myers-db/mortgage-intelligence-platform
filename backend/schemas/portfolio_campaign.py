@@ -71,14 +71,16 @@ _PUBLIC_TEXT_DENYLIST: tuple[str, ...] = (
     r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}",
     r"\b(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}\b",
     r"\b\d{3}-\d{2}-\d{4}\b",
-    r"\b\d{9,}\b",
+    # Unrounded live-UC averages ("167.66792784271334") are measures, not raw
+    # identifiers: never match a decimal's fractional tail (same lookbehind as
+    # the canonical pattern in _validators_unsafe_text).
+    r"(?<!\d\.)\b\d{9,}\b",
     r"\b\d{1,6}\s+[A-Za-z0-9.'-]+\s+(?:st|street|ave|avenue|rd|road|dr|drive|ln|lane|blvd|boulevard|ct|court|way)\b",
     r"\b(?:raw[_\s-]?clip|owner[_\s-]?name|borrower[_\s-]?name|customer[_\s-]?name|prospect[_\s-]?name|street[_\s-]?address|mailing[_\s-]?address)\b",
     r"\[(?:first|last|full)[_\s-]?name\]",
     r"\{(?:first|last|full)[_\s-]?name\}",
     r"\binsert governed\b",
 )
-_HUMAN_NAME_SHAPE_RE = re.compile(r"\b[A-Z][a-z]{1,30}\s+(?:[A-Z]\s+)?[A-Z][a-z]{1,30}\b")
 _CANONICAL_PUBLIC_PLATFORM_LABELS = frozenset({"Databricks Agent Responses"})
 _BORROWER_COPY_UNSUPPORTED_CLAIM_RE = re.compile(
     r"(?:\$|\b\d+(?:\.\d+)?\s*(?:%|percent|bps|basis points?|dollars?)\b|"
@@ -716,8 +718,7 @@ def assert_public_campaign_text(value: object, *, field_name: str, max_length: i
         field_name.endswith("generator_label") and text in _CANONICAL_PUBLIC_PLATFORM_LABELS
     )
     if not is_canonical_platform_label and (
-        _HUMAN_NAME_SHAPE_RE.search(name_scan_text)
-        or contains_contextual_human_name(name_scan_text)
+        contains_contextual_human_name(name_scan_text)
         or contains_borrower_copy_contextual_name(name_scan_text)
         or contains_human_name_shape(name_scan_text)
     ):

@@ -14,10 +14,17 @@ from backend.schemas._validators_protected_class import contains_protected_class
 
 _PROMPT_INJECTION_RE = re.compile(
     r"\b(?:ignore|disregard|override|bypass|forget)\b.{0,80}\b"
-    r"(?:previous|prior|system|developer|safety|guardrail|policy|rules?|instructions?|prompt)\b|"
+    r"(?:previous|prior|system|developer|safety|guardrails?|policy|rules?|instructions?|prompts?)\b|"
     r"\b(?:system|developer)\s+(?:message|prompt)\b|"
     r"\b(?:reveal|show|print|return|expose)\b.{0,60}\b(?:hidden|system|developer)\s+prompt\b|"
     r"\b(?:jailbreak|prompt injection|do anything now|follow these new instructions)\b|"
+    # Persona overrides (2026-08-07 cross-surface audit). Role-scoped so
+    # ordinary copy ("act as your trusted advisor") never matches on the
+    # stricter marketing surfaces that share this pattern.
+    r"\bpretend\s+to\s+be\b|\broleplay\s+as\b|\bfrom\s+now\s+on,?\s+you\b|"
+    r"\byou\s+are\s+now\s+(?:a|an|the|my|unrestricted|free|able|no\s+longer)\b|"
+    r"\bact\s+as\s+(?:a|an)\s+(?:system|admin|administrator|developer|databricks|"
+    r"root|superuser|unrestricted|unfiltered|jailbroken)\b|"
     r"<\|(?:system|developer|assistant|user)\|>|"
     r"^\s*(?:system|developer)\s*:",
     re.IGNORECASE | re.DOTALL | re.MULTILINE,

@@ -47,8 +47,7 @@ LeadOutcomeSourceSystem = Literal[
     "manual_import",
 ]
 
-_NOTE_UNSAFE_TEXT_PATTERN = re.compile(
-    r"\b[A-Z][a-z]{1,30}\s+(?:[A-Z]\s+)?[A-Z][a-z]{1,30}\b|"
+_NOTE_PLACEHOLDER_PATTERN = re.compile(
     r"\[(?:first|last|full)[_\s-]?[Nn]ame\]|\{(?:first|last|full)[_\s-]?[Nn]ame\}",
 )
 _PUBLIC_COMPETITOR_LABEL_PATTERN = re.compile(r"^Competitor ([A-Z]|Other)$")
@@ -214,7 +213,7 @@ class DispositionRequest(BaseModel):
         note = re.sub(r"\s+", " ", value.strip())
         if not note:
             return None
-        if _NOTE_UNSAFE_TEXT_PATTERN.search(note):
+        if _NOTE_PLACEHOLDER_PATTERN.search(note) or contains_human_name_shape(note):
             raise ValueError("notes must not contain names or unresolved placeholders")
         return note
 

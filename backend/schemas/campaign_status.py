@@ -3,7 +3,6 @@
 import hashlib
 import hmac
 import json
-import re
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -92,8 +91,10 @@ class CampaignStatusPatchRequest(BaseModel):
         )
         if not cleaned:
             return None
-        if re.search(r"\b[A-Z][a-z]{1,30}\s+(?:[A-Z]\s+)?[A-Z][a-z]{1,30}\b", cleaned):
-            raise ValueError("campaign status rationale cannot contain human-name-shaped values")
+        # assert_public_campaign_text above already applies the shared
+        # human-name gate with the governed geography/product exemptions; a
+        # second raw title-case scan here refused city and offer phrases
+        # ("Home Equity volume dropped") the shared detector accepts.
         return cleaned
 
     @model_validator(mode="after")
