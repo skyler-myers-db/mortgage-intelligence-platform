@@ -8,8 +8,11 @@
 --            product-type evidence rows.
 --
 -- Domain:    Cotality ships `first_position_mortgage_loan_type_code`
---            (silver.lien_current.first_pos_loan_type) as CONV / FHA / VA /
---            other coded values. "Jumbo" is not a source code -- it is a
+--            (silver.lien_current.first_pos_loan_type) as CNV / FHA / VA /
+--            other coded values (2026-08-08 audit: the live share uses CNV —
+--            2,585,874 rows — while this function tested only the legacy
+--            CONV spelling, so every conventional loan bucketed 'other' and
+--            missed the owner-occupied fit branch; both spellings map). "Jumbo" is not a source code -- it is a
 --            derived classification: a conventional first lien whose
 --            ORIGINAL amount exceeds the governed conforming loan limit.
 --
@@ -20,10 +23,10 @@
 --            - NULL / blank loan_type_code -> NULL. An unknown source code
 --              must read as "unknown", never as a guessed product. This is
 --              the same fail-closed posture as fn_in_the_money's NULL rule.
---            - 'CONV' with original_loan_amount > conforming_limit_usd
+--            - 'CNV'/'CONV' with original_loan_amount > conforming_limit_usd
 --              -> 'jumbo' (strictly greater; a loan exactly at the limit is
 --              conforming by FHFA definition).
---            - 'CONV' otherwise (including NULL amount / NULL limit, where
+--            - 'CNV'/'CONV' otherwise (including NULL amount / NULL limit, where
 --              the jumbo test cannot be evaluated) -> 'conventional'.
 --            - 'FHA' -> 'fha'; 'VA' -> 'va'.
 --            - Any other non-blank source code -> 'other' (the code is real
@@ -57,12 +60,12 @@ COMMENT 'Module 0 canonical loan product-type classification: conventional / jum
 RETURN
   CASE
     WHEN loan_type_code IS NULL OR LENGTH(TRIM(loan_type_code)) = 0 THEN NULL
-    WHEN UPPER(TRIM(loan_type_code)) = 'CONV'
+    WHEN UPPER(TRIM(loan_type_code)) IN ('CNV', 'CONV')
      AND original_loan_amount IS NOT NULL
      AND conforming_limit_usd IS NOT NULL
      AND original_loan_amount > conforming_limit_usd
     THEN 'jumbo'
-    WHEN UPPER(TRIM(loan_type_code)) = 'CONV' THEN 'conventional'
+    WHEN UPPER(TRIM(loan_type_code)) IN ('CNV', 'CONV') THEN 'conventional'
     WHEN UPPER(TRIM(loan_type_code)) = 'FHA'  THEN 'fha'
     WHEN UPPER(TRIM(loan_type_code)) = 'VA'   THEN 'va'
     ELSE 'other'

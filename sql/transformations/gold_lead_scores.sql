@@ -166,7 +166,7 @@ subscores AS (
     -- from the same silver property master row used by borrower_360.
     CAST(LEAST(100, GREATEST(0,
       CASE
-        WHEN b.is_owner_occupied AND b.first_pos_loan_type IN ('CONV','FHA','VA') THEN 70
+        WHEN b.is_owner_occupied AND b.first_pos_loan_type IN ('CNV','CONV','FHA','VA') THEN 70
         WHEN b.is_owner_occupied                                                  THEN 60
         WHEN b.is_corporate_owner                                                 THEN 50
         ELSE 40

@@ -31,7 +31,11 @@ WITH golden (id, loan_type_code, original_loan_amount, conforming_limit_usd, exp
     ('case_08_unrecognized_code_other',           'PP',   340000, 806500, 'other'),
     ('case_09_case_and_whitespace_normalized',    ' conv ', 950000, 806500, 'jumbo'),
     ('case_10_conv_null_amount_conventional',     'CONV', CAST(NULL AS BIGINT), 806500, 'conventional'),
-    ('case_11_conv_null_limit_conventional',      'CONV', 950000, CAST(NULL AS BIGINT), 'conventional')
+    ('case_11_conv_null_limit_conventional',      'CONV', 950000, CAST(NULL AS BIGINT), 'conventional'),
+    ('case_12_cnv_below_limit_conventional',      'CNV', 340000, 806500, 'conventional'),
+    ('case_13_cnv_above_limit_jumbo',             'CNV', 950000, 806500, 'jumbo'),
+    ('case_14_cnv_lowercase_trimmed',             ' cnv ', CAST(NULL AS BIGINT), 806500, 'conventional'),
+    ('case_15_pp_private_party_other',            'PP', 300000, 806500, 'other')
 )
 SELECT
   id,
