@@ -1,6 +1,8 @@
 - [Project TS/JSX quirk](project_ts_jsx.md) — this repo's TS config has no global JSX namespace; use ReactElement instead of JSX.Element.
 - [Design contract discipline](feedback_design_contract.md) — the HTML prototypes in design_files/ are the spec; copy verbatim, then compose.
-- [US choropleth map dependency](project_map_choropleth.md) — @svg-maps/usa, lazy-loaded, lowercase state ids, Albers viewBox 192 9 1028 746.
+- [US choropleth map dependency](project_map_choropleth.md) — drill is state→ZIP (no county rung); zip-rollups take state XOR county_fips; lowercase state ids.
+- [E2E specs are typechecked by nothing](project_e2e_specs_unchecked.md) — tsconfig is src-only and eslint is src/**; verify Playwright edits with a one-off tsc project.
+- [Load the built app after a UI change](feedback_load_the_built_app.md) — green tests miss on-screen copy promising the old behavior; serve dist and grep the DOM.
 - [Footprint context is source of truth](project_footprint_context.md) — FootprintProvider hydrates /api/config/footprint; drives map drill + segment LOCATION + portfolio GEO.
 - [A11y/race patterns](project_a11y_patterns.md) — dialog focus-trap mirrors EvidenceDrawer; hotkeys check activeElement; async handlers need useRef latch.
 - [Warming-up retry pattern](project_warming_up_pattern.md) — cold-start 503s use useWarmingUpRetry + WarmingUpBlock; ApiError carries dependency/correlationId.
@@ -9,4 +11,6 @@
 - [Lead-queue filter plumbing](project_lead_queue_filter_plumbing.md) — a new portfolio filter needs 4 parallel structures in lead-queue.filters.ts; API pass-through is generic.
 - [Component test context mock](project_component_test_context_mock.md) — mock ../AppContext useApp for setDrawer; run tests via npm --prefix frontend (not npx --root) or babel breaks.
 - [Worktree frontend validation](project_worktree_frontend_validation.md) — symlink node_modules to run tests; preview_start serves the MAIN checkout, so verify visuals off `frontend/dist`.
+- [Shared checkout branch race](project_shared_checkout_branch_race.md) — peer agents share the main checkout; their `checkout -b` steals your commits. Work in a worktree.
 - [Shared display formatters](project_shared_formatters.md) — lib/formatters.ts owns bps/currency/rate units; never hand-roll a unit in JSX.
+- [Population labels are not synonyms](project_population_labels.md) — addressable (~5.16M, no gate) vs marketable (~76K, contactability gate); pinned in lib/populationLabels.ts.
