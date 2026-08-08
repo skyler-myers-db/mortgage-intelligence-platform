@@ -104,6 +104,20 @@ describe('currency', () => {
   });
 });
 
+describe('signedBpsLabel spacing', () => {
+  it('separates magnitude and unit with exactly one space', () => {
+    // A 2026-08-08 UX walk read the Borrower 360 refi panel as "+330  bps".
+    // Every bps string in the product comes from this one formatter, and it
+    // emits a single space -- pinned here so a future call site cannot
+    // reintroduce a hand-rolled `{value} + ' bps'` template with two.
+    expect(signedBpsLabel(330)).toBe('+330 bps');
+    for (const value of [330, -422, 0, 1_250]) {
+      expect(signedBpsLabel(value)).not.toMatch(/ {2}/);
+      expect(signedBpsLabel(value).split(' ')).toHaveLength(2);
+    }
+  });
+});
+
 describe('rangeLabel', () => {
   it('collapses a degenerate band to its single value', () => {
     // Live 2026-08-08: the estimated-UPB chip read "$100,000-$100,000".
