@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 import {
   compactCurrency,
   currency,
+  rangeLabel,
   ratePct,
   ratePctFromFraction,
   signedBps,
@@ -100,5 +101,24 @@ describe('rate percent conventions', () => {
 describe('currency', () => {
   it('renders whole dollars with thousands separators', () => {
     expect(currency(806_500)).toBe('$806,500');
+  });
+});
+
+describe('rangeLabel', () => {
+  it('collapses a degenerate band to its single value', () => {
+    // Live 2026-08-08: the estimated-UPB chip read "$100,000-$100,000".
+    expect(rangeLabel(100_000, 100_000, currency)).toBe('$100,000');
+  });
+
+  it('keeps a real band as a range', () => {
+    expect(rangeLabel(95_000, 105_000, currency)).toBe('$95,000-$105,000');
+  });
+
+  it('collapses ends that round to the same displayed value', () => {
+    expect(rangeLabel(100_000.2, 100_000.4, currency)).toBe('$100,000');
+  });
+
+  it('works with any formatter, not just currency', () => {
+    expect(rangeLabel(4_410_000, 4_410_000, compactCurrency)).toBe('$4.4M');
   });
 });

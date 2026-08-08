@@ -2,7 +2,7 @@ import { useEffect, useState, type CSSProperties, type ReactElement, type ReactN
 import { Link, Navigate, useParams } from 'react-router';
 import { api, ApiError } from '../lib/api';
 import type { Borrower360 as Borrower360Type } from '../types';
-import { currency, ratePct, ratePctFromFraction, signedBpsLabel } from '../lib/formatters';
+import { currency, rangeLabel, ratePct, ratePctFromFraction, signedBpsLabel } from '../lib/formatters';
 import { PageShell } from '../components/layout/PageShell';
 import { TriggerTimeline } from '../components/mortgage/TriggerTimeline';
 import { BorrowerStoryCard } from '../components/mortgage/BorrowerStoryCard';
@@ -254,7 +254,11 @@ export default function Borrower360() {
   const saved = isLeadSaved(b.borrower_id);
   const lienBandLow = b.current_lien_balance_low ?? b.current_lien_balance;
   const lienBandHigh = b.current_lien_balance_high ?? b.current_lien_balance;
-  const lienBandLabel = `${currency(lienBandLow)}-${currency(lienBandHigh)}`;
+  // A band whose ends are equal is a point estimate, not a range: rendering it
+  // as "$100,000-$100,000" made a confident number look like a sloppy one. It
+  // is also the shape EVERY row takes when the confidence-band columns are
+  // absent and both ends fall back to `current_lien_balance`.
+  const lienBandLabel = rangeLabel(lienBandLow, lienBandHigh, currency);
   const estimatedUpbBandSource = descriptorFor('fn_estimated_upb_confidence_band');
   const saveCurrentLead = () => {
     saveLead({
