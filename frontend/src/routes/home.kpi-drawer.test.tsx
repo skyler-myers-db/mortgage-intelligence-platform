@@ -86,7 +86,10 @@ describe('Home KPI evidence drawers cite the headline metric view', () => {
   });
 
   const KPI_CHIPS: Array<{ label: string; chipText: string; family: string }> = [
-    { label: 'Marketable population', chipText: 'Marketable population', family: 'marketable_population' },
+    // Card label reads "Addressable" (the Home preview asks for
+    // `marketing_eligibility: 'Any'`); the evidence chip keeps the governed
+    // asset's own name, which the backend lineage manifest also uses.
+    { label: 'Addressable population', chipText: 'Marketable population', family: 'marketable_population' },
     { label: 'Refi economics screen', chipText: 'Rate + equity screen', family: 'in_the_money' },
     { label: 'Opportunity score 75+', chipText: 'Opportunity score', family: 'opportunity_score' },
     { label: 'Primary offer paths', chipText: 'How the offer path was selected', family: 'next_best_offer' },

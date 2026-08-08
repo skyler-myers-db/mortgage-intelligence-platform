@@ -216,8 +216,13 @@ export default function Home() {
       )}
       {!isDayZero && !previewWarming && (
         <div className="kpi-row">
+          {/* "Addressable", not "marketable": HOME_PORTFOLIO_PREVIEW_CRITERIA
+              asks for `marketing_eligibility: 'Any'`, so this KPI counts the
+              whole reachable book, not the governed marketable subset
+              (~76K of ~5.16M). 2026-08-07 data audit — the number is right,
+              the label was claiming a narrower predicate than it applied. */}
           <KpiCard
-            label="Marketable population"
+            label="Addressable population"
             valueAnimated={preview?.marketable_population ?? null}
             trend={preview?.trends?.marketable_population?.series}
             delta={formatDelta(preview?.trends?.marketable_population)}
