@@ -194,6 +194,26 @@ def _refused_genie_response(
     )
 
 
+# ``protected_prompt_match`` returns a reviewed protected-class term or one of
+# these state sentinels. Anything not listed is a direct term match, so the
+# ``.get`` default is ``protected_class``.
+_GENIE_PROTECTED_REFUSAL_REASONS: dict[str, str] = {
+    "protected_class_proxy": "protected_class_proxy",
+    "unreviewed_criterion": "unreviewed_criterion",
+}
+_GENIE_PROTECTED_REFUSAL_GAPS: dict[str, str] = {
+    "protected_class": (
+        "prompt refused before Genie execution due protected-class term in the prompt"
+    ),
+    "protected_class_proxy": (
+        "prompt refused before Genie execution due protected-class proxy in the prompt"
+    ),
+    "unreviewed_criterion": (
+        "prompt refused before Genie execution due unreviewed selection criterion in the prompt"
+    ),
+}
+
+
 def _source_readiness_asset() -> str:
     return qualify("gold", "source_readiness")
 
@@ -229,11 +249,15 @@ def _deterministic_genie_response(
     """
     protected_term = _protected_prompt_match(payload.question)
     if protected_term:
-        refusal_reason = (
-            "protected_class_proxy"
-            if protected_term == "protected_class_proxy"
-            else "protected_class"
-        )
+        # ``protected_term`` is a closed-vocabulary match: a reviewed
+        # protected-class term, or one of the state sentinels. Map it to the
+        # governed refusal reason instead of hardcoding ``protected_class``,
+        # which filed the fail-closed unknown-criterion state as a
+        # fair-lending finding (persona audit, 2026-08-07). The matched term
+        # itself is deliberately not persisted -- it is prompt-derived text,
+        # and the audit ledger's own free-text policy rejects protected-class
+        # vocabulary.
+        refusal_reason = _GENIE_PROTECTED_REFUSAL_REASONS.get(protected_term, "protected_class")
         question_hash = hashlib.sha256(payload.question.encode("utf-8")).hexdigest()[:16]
         _ = background
         _required_audit_write(
@@ -250,7 +274,7 @@ def _deterministic_genie_response(
                 "source_assets": [],
                 "visualization_kind": None,
                 "action_type": "refused_prompt",
-                "refusal_reason": "protected_class",
+                "refusal_reason": refusal_reason,
                 "reason": refusal_reason,
             },
             event_type="RUN_GENIE",
@@ -258,17 +282,25 @@ def _deterministic_genie_response(
         response = _refused_genie_response(
             payload=payload,
             question_hash=question_hash,
+            # An unreviewed criterion is refused, but telling the lender their
+            # question was a fair-lending violation is the wrong refusal
+            # family and reads as the product misunderstanding its own
+            # guardrail. The state cannot tell an invented token from an
+            # unlisted health attribute, so the copy names the exposure
+            # without asserting a protected-class match.
             answer=(
-                "For fair-lending compliance, I cannot segment, score, rank, "
+                "I cannot select or rank borrowers on that criterion: it is "
+                "outside the reviewed Module 0 vocabulary, and selecting on "
+                "unreviewed borrower attributes carries fair-lending exposure. "
+                "Ask using trusted mortgage, lien, equity, segment, and offer "
+                "signals."
+                if refusal_reason == "unreviewed_criterion"
+                else "For fair-lending compliance, I cannot segment, score, rank, "
                 "or target borrowers using protected-class attributes or "
                 "proxies. Ask for a permitted Module 0 strategy using trusted "
                 "mortgage, lien, equity, segment, and offer signals."
             ),
-            known_gap=(
-                "prompt refused before Genie execution due protected-class proxy in the prompt"
-                if refusal_reason == "protected_class_proxy"
-                else "prompt refused before Genie execution due protected-class term in the prompt"
-            ),
+            known_gap=_GENIE_PROTECTED_REFUSAL_GAPS[refusal_reason],
         )
         return response
     override_match = prompt_guardrails.instruction_override_prompt_match(payload.question)

@@ -8,6 +8,35 @@ deprecation window first.
 
 ## Unreleased
 
+### 2026-08-07 growth co-pilot refusal families + refusal audit trail
+
+- **Additive:** a refused co-pilot prompt on `POST /api/v1/growth-agent/agent/run`
+  and `/agent/compose` now returns two new top-level 422 fields:
+  `refusal_reason` (a stable machine code — `protected_class`,
+  `instruction_override`, `cross_lender_targeting`, `unavailable_source`,
+  `pii_request`, `unreviewed_criterion`) and `audit_event_id`. Clients should
+  key off `refusal_reason`; the human-readable sentence in `detail[].msg` is
+  copy and may be re-worded. Ordinary malformed-body 422s are unchanged and
+  carry neither field. The 2026-07-07 PII posture stands: pydantic's
+  `input`/`ctx`/`url` reflection is still stripped, and the refusal path never
+  echoes the prompt.
+- **Behavioral:** refusal messages now name the guard family that fired
+  instead of one catch-all sentence, so a fair-lending targeting attempt is
+  reported as a fair-lending refusal on the co-pilot exactly as it already was
+  on Ask Genie. `unreviewed_criterion` keeps the historical sentence verbatim.
+- **Behavioral:** every co-pilot refusal writes `growth_agent.refused_prompt`
+  to the Lakebase audit ledger (actor, guard family, question digest — never
+  prompt text). If that write fails the request returns 503 rather than a
+  clean 422, so a refusal is never silently unrecorded.
+- **Behavioral:** `genie.refused_prompt` records the true guard family instead
+  of a hardcoded `protected_class`. New reason codes `protected_class_proxy`
+  and `unreviewed_criterion` are governed values; the latter is the
+  fail-closed unknown-criterion state that previously filed as a false
+  fair-lending finding. Fair-lending review must read all three.
+- No detector changed: the set of prompts refused by the protected-class
+  scanner and the Genie prompt matcher is byte-for-byte identical
+  (23,403-string differential check, zero refuse/allow flips).
+
 ### 2026-07-11 S7 economics scatter
 
 - **Breaking (deliberate, single-consumer app API):**

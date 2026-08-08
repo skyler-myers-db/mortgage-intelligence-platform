@@ -29,6 +29,10 @@ from backend.services.audit_store import (
 )
 from backend.services.databricks_sql import get_sql_client
 from backend.services.lakebase import get_lakebase_client
+from tests.unit.growth_refusal_contract import (
+    GROWTH_REFUSAL_MESSAGE_RE,
+    assert_refusal_isolation,
+)
 
 _DISCLOSURE = MagicMock(
     body=("Summit Mortgage, NMLS #123456. Equal Housing Lender. " "Reply unsubscribe to opt out.")
@@ -152,9 +156,9 @@ def test_relation_order_mutations_reject_every_shared_boundary(copy: str) -> Non
             subject=copy,
             body="Contact us to review mortgage options.",
         )
-    with pytest.raises(ValidationError, match="reviewed, non-PII"):
+    with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
         GrowthAgentPromptRunRequest(prompt=copy)
-    with pytest.raises(ValidationError, match="reviewed, non-PII"):
+    with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
         ComposePlanRequest(objective=copy)
     with pytest.raises(HTTPException, match="protected-class"):
         _assert_disclosure_backed_draft_body(
@@ -230,8 +234,8 @@ def test_each_new_relation_order_stops_before_planners_and_writes(
     assert objective not in compose_response.text
     run_planner.assert_not_called()
     compose_planner.assert_not_called()
-    for dependency in isolated_growth_dependencies:
-        assert dependency.mock_calls == []
+    # The refusal is recorded; SQL and Lakebase stay untouched.
+    assert_refusal_isolation(isolated_growth_dependencies)
 
 
 @pytest.mark.parametrize(

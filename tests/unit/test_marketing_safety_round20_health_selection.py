@@ -25,6 +25,11 @@ from backend.services.audit_store import get_audit_store
 from backend.services.databricks_sql import get_sql_client
 from backend.services.genie_message_policy import protected_prompt_match
 from backend.services.lakebase import get_lakebase_client
+from tests.unit.growth_refusal_contract import (
+    GROWTH_REFUSAL_MESSAGE_RE,
+    assert_refusal_isolation,
+    assert_refused_with_audit,
+)
 
 _DISCLOSURE = MagicMock(
     body="Summit Mortgage, NMLS #123456. Equal Housing Lender. Reply unsubscribe to opt out."
@@ -156,7 +161,16 @@ def test_protected_health_selection_rejects_public_campaign_and_final_copy(
     unsafe_text: str,
 ) -> None:
     assert contains_protected_class_marketing_text(unsafe_text) is True
-    assert protected_prompt_match(unsafe_text) == "protected_class_language"
+    # Both codes are fail-closed rejections. Health attributes inside the
+    # reviewed vocabulary name the fair-lending family directly; the rest are
+    # caught by the unreviewed-selection-criterion state, which cannot tell an
+    # unlisted health attribute from an invented token -- so a fair-lending
+    # review reads both codes. See ``_GOVERNED_REFUSAL_REASONS`` in
+    # backend/services/audit_store.py.
+    assert protected_prompt_match(unsafe_text) in {
+        "protected_class_language",
+        "unreviewed_criterion",
+    }
 
     body = f"{unsafe_text} Contact us to review mortgage options."
     with pytest.raises(ValidationError, match="protected-class"):
@@ -175,9 +189,9 @@ def test_protected_health_selection_rejects_public_campaign_and_final_copy(
 def test_protected_health_selection_rejects_both_growth_request_contracts(
     objective: str,
 ) -> None:
-    with pytest.raises(ValidationError, match="reviewed, non-PII mortgage-growth criteria"):
+    with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
         GrowthAgentPromptRunRequest(prompt=objective)
-    with pytest.raises(ValidationError, match="reviewed, non-PII mortgage-growth criteria"):
+    with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
         ComposePlanRequest(objective=objective, execute=True)
 
 
@@ -208,16 +222,14 @@ def test_protected_health_selection_stops_before_planners_models_or_writes(
         headers={"X-Forwarded-Email": "operator@example.com"},
     )
 
-    assert run_response.status_code == 422, run_response.text
-    assert compose_response.status_code == 422, compose_response.text
-    assert "reviewed, non-PII mortgage-growth criteria" in run_response.text
-    assert "reviewed, non-PII mortgage-growth criteria" in compose_response.text
+    assert_refused_with_audit(run_response)
+    assert_refused_with_audit(compose_response)
     assert objective not in run_response.text
     assert objective not in compose_response.text
     run_planner.assert_not_called()
     compose_planner.assert_not_called()
-    for dependency in isolated_growth_dependencies:
-        assert dependency.mock_calls == []
+    # The refusal is recorded; SQL and Lakebase stay untouched.
+    assert_refusal_isolation(isolated_growth_dependencies)
 
 
 @pytest.mark.parametrize("unsafe_text", _PROTECTED_HEALTH_FAMILY_NEIGHBORS)
@@ -225,7 +237,7 @@ def test_protected_health_semantic_families_do_not_depend_on_exact_reproductions
     unsafe_text: str,
 ) -> None:
     assert contains_protected_class_marketing_text(unsafe_text) is True
-    with pytest.raises(ValidationError, match="reviewed, non-PII mortgage-growth criteria"):
+    with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
         GrowthAgentPromptRunRequest(prompt=unsafe_text)
 
 

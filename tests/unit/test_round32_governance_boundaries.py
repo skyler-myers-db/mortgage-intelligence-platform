@@ -27,6 +27,7 @@ from backend.services.audit_store import (
     AuditMetadataValueViolation,
     build_safe_audit_metadata,
 )
+from tests.unit.growth_refusal_contract import GROWTH_REFUSAL_MESSAGE_RE
 
 _DISCLOSURE = SimpleNamespace(
     body="Summit Mortgage, NMLS #123456. Equal Housing Lender. Reply unsubscribe to opt out."
@@ -402,9 +403,9 @@ def _assert_shared_schema_and_delivery_rejection(copy: str, *, reason: str) -> N
         _variant(body=copy)
     with pytest.raises(ValidationError, match=reason):
         _variant(body="Contact us to review mortgage options.", subject=copy)
-    with pytest.raises(ValidationError, match="reviewed, non-PII"):
+    with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
         GrowthAgentPromptRunRequest(prompt=copy)
-    with pytest.raises(ValidationError, match="reviewed, non-PII"):
+    with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
         ComposePlanRequest(objective=copy)
     with pytest.raises(HTTPException, match=reason):
         _assert_disclosure_backed_draft_body(

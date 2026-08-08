@@ -8,8 +8,14 @@ from backend.schemas.common import validate_public_audit_identifier_or_none
 from backend.services.genie_answers import GenieMessageResponse
 
 
-def _letter_digest(seed: str) -> str:
-    """Return a stable audit-safe digest with no phone-shaped digit runs."""
+def audit_safe_letter_digest(seed: str) -> str:
+    """Return a stable audit-safe digest with no phone-shaped digit runs.
+
+    ``entity_id`` is a top-level audit column and runs the PII identifier
+    validator, which rejects long digit runs -- a plain hex digest trips it
+    often enough to be a reliability problem. Shared with the growth-agent
+    refusal record so both surfaces build ids the same way.
+    """
 
     digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:24]
     table = str.maketrans("0123456789abcdef", "abcdefghijklmnop")
@@ -25,7 +31,7 @@ def _public_safe_entity_id(candidate: str | None, *, seed: str) -> str | None:
         value = None
     if value:
         return value
-    return f"geniehash-{_letter_digest(seed)}"
+    return f"geniehash-{audit_safe_letter_digest(seed)}"
 
 
 def genie_audit_entity_id_from_parts(
@@ -43,7 +49,7 @@ def genie_audit_entity_id_from_parts(
         safe = _public_safe_entity_id(candidate, seed=seed)
         if safe:
             return safe
-    return f"geniehash-{_letter_digest(seed)}"
+    return f"geniehash-{audit_safe_letter_digest(seed)}"
 
 
 def genie_audit_entity_id(response: GenieMessageResponse) -> str:

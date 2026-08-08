@@ -27,6 +27,10 @@ from backend.services.databricks_sql import get_sql_client
 from backend.services.genie_message_policy import protected_prompt_match
 from backend.services.lakebase import get_lakebase_client
 from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
+from tests.unit.growth_refusal_contract import (
+    assert_only_refusal_audit_writes,
+    assert_refused_with_audit,
+)
 
 _DISCLOSURE = MagicMock(
     body="Summit Mortgage, NMLS #123456. Equal Housing Lender. Reply unsubscribe to opt out."
@@ -287,15 +291,13 @@ def test_unsafe_objectives_stop_before_planners_sql_lakebase_or_audit(
         app.dependency_overrides.pop(get_lakebase_client, None)
         app.dependency_overrides.pop(get_audit_store, None)
 
-    expected = "prompt must use reviewed, non-PII mortgage-growth criteria"
-    assert run_response.status_code == 422, run_response.text
-    assert compose_response.status_code == 422, compose_response.text
-    assert expected in run_response.text
-    assert expected in compose_response.text
+    assert_refused_with_audit(run_response)
+    assert_refused_with_audit(compose_response)
     assert objective not in run_response.text
     assert objective not in compose_response.text
     run_planner.assert_not_called()
     compose_planner.assert_not_called()
     assert sql.mock_calls == []
     assert lakebase.mock_calls == []
-    assert audit_store.mock_calls == []
+    # The refusal is recorded; no run/monitor/draft write happens.
+    assert_only_refusal_audit_writes(audit_store)

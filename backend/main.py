@@ -542,10 +542,18 @@ app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)
 from fastapi import Request  # noqa: E402 -- handler below needs it
 from fastapi.responses import JSONResponse  # noqa: E402
 
+from backend.schemas.growth_agent_refusal import (  # noqa: E402
+    growth_prompt_refusal_from_errors,
+)
 from backend.services.campaign_treatment_runtime import (  # noqa: E402
     CampaignTreatmentRuntimeDisabledError,
 )
 from backend.services.error_sanitizer import safe_dependency_detail  # noqa: E402
+from backend.services.growth_agent_refusal_audit import (  # noqa: E402
+    GrowthPromptRefusalAuditError,
+    is_growth_agent_path,
+    record_growth_prompt_refusal,
+)
 from backend.services.resilience import DependencyDownError  # noqa: E402
 
 
@@ -649,7 +657,7 @@ async def _dependency_down_handler(_request: Request, exc: DependencyDownError) 
 
 @app.exception_handler(RequestValidationError)
 async def _request_validation_handler(
-    _request: Request,
+    request: Request,
     exc: RequestValidationError,
 ) -> JSONResponse:
     """Mirror FastAPI's 422 shape while adding the request correlation id.
@@ -664,7 +672,45 @@ async def _request_validation_handler(
     street-address question (2026-07-07). The reflection is stripped
     app-wide, not just for growth-agent routes; ``loc``/``msg``/``type``
     keep the error actionable.
+
+    Growth co-pilot guard refusals take an audited branch below. Their guard
+    battery runs in a pydantic validator, so without it a fair-lending
+    targeting attempt is rejected here and leaves no compliance record at
+    all (persona audit, 2026-08-07).
     """
+
+    # Read the guard family from the un-encoded errors: ``ctx`` still holds
+    # the raw exception object here, and is stripped from the body below.
+    refusal = growth_prompt_refusal_from_errors(exc.errors())
+    audit_event_id: str | None = None
+    if refusal is not None:
+        if not is_growth_agent_path(request.url.path):
+            # The guard runs only on co-pilot request models, so a refusal
+            # from anywhere else means a schema moved and its refusals are
+            # going unaudited. Surface that rather than dropping it silently.
+            emit(
+                log,
+                "growth_prompt_refusal_off_route",
+                level=logging.WARNING,
+                outcome="unaudited",
+                refusal_reason=refusal.code,
+                path=request.url.path,
+            )
+        else:
+            try:
+                audit_event_id = record_growth_prompt_refusal(request, refusal)
+            except GrowthPromptRefusalAuditError:
+                # Fail closed: a refusal the ledger never saw must not return
+                # a clean 422 that reads as "recorded and refused".
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "detail": safe_dependency_detail("lakebase"),
+                        "retryable": True,
+                        "dependency": "lakebase",
+                        "correlation_id": get_correlation_id(),
+                    },
+                )
 
     detail = [
         {key: value for key, value in item.items() if key not in ("input", "ctx", "url")}
@@ -673,13 +719,17 @@ async def _request_validation_handler(
         for item in jsonable_encoder(exc.errors())
     ]
 
-    return JSONResponse(
-        status_code=422,
-        content={
-            "detail": detail,
-            "correlation_id": get_correlation_id(),
-        },
-    )
+    content: dict[str, Any] = {
+        "detail": detail,
+        "correlation_id": get_correlation_id(),
+    }
+    if refusal is not None:
+        # Machine-readable family beside the human sentence in ``detail``, so
+        # clients and tests key off the code rather than refusal copy.
+        content["refusal_reason"] = refusal.code
+        if audit_event_id is not None:
+            content["audit_event_id"] = audit_event_id
+    return JSONResponse(status_code=422, content=content)
 
 
 API_ROUTERS = [

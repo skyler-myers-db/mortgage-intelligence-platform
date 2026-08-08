@@ -26,6 +26,11 @@ from backend.services.state_footprint import (
     StateFootprintResolver,
     _reset_state_footprint_resolver_for_tests,
 )
+from tests.unit.growth_refusal_contract import (
+    GROWTH_REFUSAL_MESSAGE_RE,
+    assert_only_refusal_audit_writes,
+    assert_refused_with_audit,
+)
 
 _UNSAFE_AUDIENCE_DECISIONS = (
     "This offer gives priority to homeowners carrying zyrplax.",
@@ -158,9 +163,9 @@ def test_audience_decisions_fail_every_body_and_objective_boundary(unsafe_text: 
             channel="email",
         )
 
-    with pytest.raises(ValidationError, match="reviewed, non-PII mortgage-growth criteria"):
+    with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
         GrowthAgentPromptRunRequest(prompt=unsafe_text)
-    with pytest.raises(ValidationError, match="reviewed, non-PII mortgage-growth criteria"):
+    with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
         ComposePlanRequest(objective=unsafe_text, execute=True)
 
 
@@ -220,7 +225,10 @@ def test_read_only_reviewed_analytics_reach_genie(question: str) -> None:
 @pytest.mark.parametrize("question", _UNSAFE_ANALYTIC_TARGETING_NEIGHBORS)
 def test_analytic_wording_cannot_launder_unreviewed_targeting(question: str) -> None:
     assert contains_protected_class_marketing_text(question) is True
-    assert protected_prompt_match(question) == "protected_class_language"
+    # Refused by the fail-closed unknown-criterion state, which is what these
+    # inventions are. Naming it ``protected_class_language`` put false
+    # fair-lending findings in the audit ledger (persona audit, 2026-08-07).
+    assert protected_prompt_match(question) == "unreviewed_criterion"
 
 
 @pytest.mark.parametrize("objective", _SAFE_REVIEWED_SEGMENT_SIGNAL_OBJECTIVES)
@@ -237,8 +245,8 @@ def test_known_connectors_cannot_launder_an_invented_segment_criterion(
     objective: str,
 ) -> None:
     assert contains_protected_class_marketing_text(objective) is True
-    assert protected_prompt_match(objective) == "protected_class_language"
-    with pytest.raises(ValidationError, match="reviewed, non-PII mortgage-growth criteria"):
+    assert protected_prompt_match(objective) == "unreviewed_criterion"
+    with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
         GrowthAgentPromptRunRequest(prompt=objective)
 
 
@@ -307,15 +315,13 @@ def test_audience_decisions_stop_before_planners_sql_or_storage(
         app.dependency_overrides.pop(get_lakebase_client, None)
         app.dependency_overrides.pop(get_audit_store, None)
 
-    expected_detail = "prompt must use reviewed, non-PII mortgage-growth criteria"
-    assert run_response.status_code == 422, run_response.text
-    assert compose_response.status_code == 422, compose_response.text
-    assert expected_detail in run_response.text
-    assert expected_detail in compose_response.text
+    assert_refused_with_audit(run_response)
+    assert_refused_with_audit(compose_response)
     assert unsafe_text not in run_response.text
     assert unsafe_text not in compose_response.text
     run_planner.assert_not_called()
     compose_planner.assert_not_called()
     assert sql.mock_calls == []
     assert lakebase.mock_calls == []
-    assert audit_store.mock_calls == []
+    # The refusal is recorded; no run/monitor/draft write happens.
+    assert_only_refusal_audit_writes(audit_store)

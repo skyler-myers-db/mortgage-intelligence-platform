@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from datetime import datetime
 from typing import Literal
@@ -12,7 +13,10 @@ from backend.schemas._validators_person_names import (
     contains_human_name_shape,
     titlecase_pair_is_non_person,
 )
-from backend.schemas._validators_protected_class import contains_protected_class_marketing_text
+from backend.schemas._validators_protected_class import (
+    contains_protected_class_marketing_text,
+    protected_class_marketing_reason,
+)
 from backend.schemas._validators_unsafe_text import contains_unsafe_ai_text
 from backend.schemas.borrower_copy_claims import (
     contains_unsupported_borrower_qualification_claim,
@@ -34,6 +38,10 @@ from backend.schemas.common import (
 )
 from backend.schemas.growth_agent_objective_intent import (
     assert_reviewed_growth_segment_objective,
+)
+from backend.schemas.growth_agent_refusal import (
+    GrowthPromptRefusalCode,
+    GrowthPromptRefusalError,
 )
 from backend.schemas.growth_agent_segment_intent import (
     is_closed_unsupported_segment_relationship,
@@ -440,6 +448,65 @@ def _contains_borrower_cta_contradiction(value: str) -> bool:
     return contains_borrower_cta_contradiction(value)
 
 
+def _growth_prompt_refusal_code(flat: str, name_scan: str) -> GrowthPromptRefusalCode:
+    """Name the guard family that rejected an objective.
+
+    Runs only after the battery below has already rejected the text, so it
+    changes no detection -- it decides which of the reviewed refusal reasons
+    the lender and the compliance ledger see.
+
+    Precedence is compliance-first: a prompt that is both a fair-lending
+    violation and PII-bearing is reported as fair lending, because that is
+    the finding a model-risk reviewer must not lose. The fail-closed
+    "criteria are not in the reviewed vocabulary" state is last, so it never
+    absorbs a family that has a specific name.
+    """
+
+    # Direct protected-class / age-proxy terms outrank the marketing state
+    # machine, whose unknown-criterion state is not a fair-lending finding.
+    if _PROMPT_PROTECTED_CLASS_RE.search(flat) or _PROMPT_PROTECTED_AGE_PROXY_RE.search(flat):
+        return "protected_class"
+    marketing_reason = protected_class_marketing_reason(flat)
+    if marketing_reason == "protected_class":
+        return "protected_class"
+    if _PROMPT_JAILBREAK_RE.search(flat):
+        return "instruction_override"
+    if _PROMPT_UNREVIEWED_LENDER_TARGET_RE.search(flat):
+        return "cross_lender_targeting"
+    if _PROMPT_UNAVAILABLE_SOURCE_RE.search(flat):
+        return "unavailable_source"
+    if (
+        contains_pii_marker(flat)
+        or _RAW_IDENTIFIER_RE.search(flat)
+        or _PROMPT_STREET_ADDRESS_RE.search(flat)
+        or _contains_street_address_without_suffix(flat)
+        or contains_human_name_shape(name_scan)
+        or _PROMPT_COMMON_NAME_RE.search(name_scan)
+        or _leading_prompt_pair_is_person(name_scan)
+        or contains_borrower_copy_contextual_name(flat)
+    ):
+        return "pii_request"
+    # The lowercase name-pair heuristic reads any two unreviewed lowercase
+    # words after a population noun as a name, so it also fires on unknown
+    # criteria ("which zyrplax borrowers ..."). When the purpose-built
+    # unknown-criterion state machine agrees, report that instead of telling
+    # the lender their prompt carried a borrower name.
+    if marketing_reason == "unreviewed_criterion":
+        return "unreviewed_criterion"
+    if _contains_lowercase_name_after_group(flat):
+        return "pii_request"
+    return "unreviewed_criterion"
+
+
+def _growth_prompt_refusal(flat: str, name_scan: str) -> GrowthPromptRefusalError:
+    """Build the refusal error, hashing the normalized objective for audit."""
+
+    return GrowthPromptRefusalError(
+        _growth_prompt_refusal_code(flat, name_scan),
+        question_hash=hashlib.sha256(flat.encode("utf-8")).hexdigest()[:16],
+    )
+
+
 def assert_reviewed_growth_objective(
     value: str,
     *,
@@ -482,7 +549,7 @@ def assert_reviewed_growth_objective(
     if unsafe:
         if validate_segment_intent and is_closed_unsupported_segment_relationship(clean):
             assert_reviewed_growth_segment_objective(clean)
-        raise ValueError("prompt must use reviewed, non-PII mortgage-growth criteria")
+        raise _growth_prompt_refusal(flat, name_scan)
     if validate_segment_intent:
         assert_reviewed_growth_segment_objective(clean)
     return clean

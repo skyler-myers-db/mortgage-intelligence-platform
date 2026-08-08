@@ -18,6 +18,7 @@ from backend.services.audit_store import (
     AuditMetadataValueViolation,
     build_safe_audit_metadata,
 )
+from tests.unit.growth_refusal_contract import GROWTH_REFUSAL_MESSAGE_RE
 
 _DISCLOSURE = SimpleNamespace(
     body=("Summit Mortgage, NMLS #123456. Equal Housing Lender. " "Reply unsubscribe to opt out.")
@@ -72,9 +73,9 @@ def test_identity_relations_reject_every_shared_copy_boundary(copy: str) -> None
     assert contains_borrower_copy_contextual_name(copy)
     with pytest.raises(ValidationError, match="human-name-shaped"):
         _variant(body=body)
-    with pytest.raises(ValidationError, match="reviewed, non-PII"):
+    with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
         GrowthAgentPromptRunRequest(prompt=objective)
-    with pytest.raises(ValidationError, match="reviewed, non-PII"):
+    with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
         ComposePlanRequest(objective=objective)
     with pytest.raises(HTTPException, match="human-name-shaped"):
         _assert_disclosure_backed_draft_body(

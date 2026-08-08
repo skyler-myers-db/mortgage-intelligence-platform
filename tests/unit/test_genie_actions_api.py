@@ -788,11 +788,12 @@ def test_genie_message_guardrails_fire_before_repository(
     if expected_reason is not None:
         events = audit.list(action="genie.refused_prompt")
         assert len(events) == 1
-        if expected_reason == "protected_class_proxy":
-            assert events[0].payload_json["refusal_reason"] == "protected_class"
-            assert events[0].payload_json["reason"] == expected_reason
-        else:
-            assert events[0].payload_json["refusal_reason"] == expected_reason
+        # ``refusal_reason`` carries the true guard family. It used to be
+        # hardcoded to ``protected_class`` with the real value hidden in
+        # ``reason``, so a proxy match filed as a plain protected-class
+        # finding (persona audit, 2026-08-07).
+        assert events[0].payload_json["refusal_reason"] == expected_reason
+        assert events[0].payload_json.get("reason", expected_reason) == expected_reason
     else:
         events = audit.list(action="genie.source_gap")
         assert len(events) == 1

@@ -20,6 +20,11 @@ from backend.schemas.portfolio_campaign import CampaignRecommendationVariant
 from backend.services.audit_store import get_audit_store
 from backend.services.databricks_sql import get_sql_client
 from backend.services.lakebase import get_lakebase_client
+from tests.unit.growth_refusal_contract import (
+    GROWTH_REFUSAL_MESSAGE_RE,
+    assert_only_refusal_audit_writes,
+    assert_refused_with_audit,
+)
 
 _UNSAFE_STRUCTURAL_SELECTION_TEXT = (
     "Select homeowners with high equity. Their eligibility hinges on COPD.",
@@ -91,9 +96,9 @@ def test_structural_selection_is_rejected_at_copy_and_objective_boundaries(
             channel="email",
         )
 
-    with pytest.raises(ValidationError, match="reviewed, non-PII mortgage-growth criteria"):
+    with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
         GrowthAgentPromptRunRequest(prompt=unsafe_text)
-    with pytest.raises(ValidationError, match="reviewed, non-PII mortgage-growth criteria"):
+    with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
         ComposePlanRequest(objective=unsafe_text, execute=True)
 
 
@@ -147,15 +152,13 @@ def test_structural_selection_is_rejected_before_planners_or_storage(
         app.dependency_overrides.pop(get_lakebase_client, None)
         app.dependency_overrides.pop(get_audit_store, None)
 
-    assert run_response.status_code == 422, run_response.text
-    assert compose_response.status_code == 422, compose_response.text
-    expected_detail = "prompt must use reviewed, non-PII mortgage-growth criteria"
-    assert expected_detail in run_response.text
-    assert expected_detail in compose_response.text
+    assert_refused_with_audit(run_response)
+    assert_refused_with_audit(compose_response)
     assert unsafe_text not in run_response.text
     assert unsafe_text not in compose_response.text
     run_planner.assert_not_called()
     compose_planner.assert_not_called()
     assert sql.mock_calls == []
     assert lakebase.mock_calls == []
-    assert audit_store.mock_calls == []
+    # The refusal is recorded; no run/monitor/draft write happens.
+    assert_only_refusal_audit_writes(audit_store)

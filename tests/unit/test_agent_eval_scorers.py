@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from backend.schemas.growth_agent import GrowthAgentPromptRunRequest
+from backend.schemas.growth_agent_refusal import GROWTH_PROMPT_REFUSAL_REASONS
 from backend.services.growth_agent_workflows import build_growth_agent_route, planned_workflow
 from tests.eval.scorers import (
     count_reconciles,
@@ -14,6 +15,7 @@ from tests.eval.scorers import (
     score_count_reconciliation,
     score_growth_agent_response,
 )
+from tests.unit.growth_refusal_contract import growth_refusal_code
 from tests.unit.test_growth_agent_api import (
     _clear_overrides,
     _client,
@@ -24,7 +26,10 @@ from tests.unit.test_growth_agent_api import (
 
 def _response_for(case_id: str) -> dict:
     if case_id == "pii_prompt_is_rejected_before_planning":
-        return {"error": "prompt must use reviewed, non-PII mortgage-growth criteria"}
+        return {
+            "error": GROWTH_PROMPT_REFUSAL_REASONS["pii_request"],
+            "refusal_reason": "pii_request",
+        }
     common = {
         "broad_total": 117404,
         "actionable_total": 5394,
@@ -320,7 +325,12 @@ def test_golden_cases_score_real_reviewed_planner_outputs() -> None:
                 segment_mode=str(case.get("expected_segment_mode", "any")),
             )
         except ValidationError as exc:
-            responses[str(case["id"])] = {"error": str(exc)}
+            # Carry the guard family through, exactly as the endpoint's 422
+            # body does, so the eval can score the code and not the copy.
+            responses[str(case["id"])] = {
+                "error": str(exc),
+                "refusal_reason": growth_refusal_code(exc),
+            }
             continue
         workflow, _intent = planned_workflow(payload)
         responses[str(case["id"])] = {
@@ -372,8 +382,11 @@ def test_agent_endpoint_exposes_source_proof_but_fails_without_destination_proof
                 json={"prompt": case["prompt"]},
                 headers={"X-Forwarded-Email": "operator@example.com"},
             )
+            body = response.json()
             responses[str(case["id"])] = (
-                response.json() if response.status_code < 400 else {"error": str(response.json())}
+                body
+                if response.status_code < 400
+                else {"error": str(body), "refusal_reason": body.get("refusal_reason")}
             )
             if response.status_code < 400:
                 responses[str(case["id"])]["destination_total"] = responses[str(case["id"])][

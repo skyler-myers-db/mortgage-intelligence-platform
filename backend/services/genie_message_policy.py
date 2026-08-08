@@ -7,8 +7,8 @@ from pydantic import BaseModel, Field, field_validator
 
 from backend.schemas._validators_person_names import contains_human_name_shape
 from backend.schemas._validators_protected_class import (
-    contains_protected_class_marketing_text,
     contains_protected_class_proxy_marketing_text,
+    protected_class_marketing_reason,
 )
 from backend.schemas._validators_unsafe_text import contains_unsafe_ai_text
 from backend.services.genie_answers import GenieMessageResponse
@@ -137,7 +137,14 @@ def protected_prompt_match(question: str) -> str | None:
             return term
     if contains_protected_class_proxy_marketing_text(scannable):
         return "protected_class_proxy"
-    if contains_protected_class_marketing_text(scannable):
+    # Same rejection set as ``contains_protected_class_marketing_text``, split
+    # by cause: the marketing scanner also fails closed on criteria outside
+    # the reviewed vocabulary ("which zyrplax borrowers ..."), which is not a
+    # fair-lending finding and must not be audited as one.
+    marketing_reason = protected_class_marketing_reason(scannable)
+    if marketing_reason == "unreviewed_criterion":
+        return "unreviewed_criterion"
+    if marketing_reason is not None:
         return "protected_class_language"
     return None
 
