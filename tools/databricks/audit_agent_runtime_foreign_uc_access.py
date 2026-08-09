@@ -6,9 +6,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import socket
-import sys
-import threading
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
@@ -38,6 +35,7 @@ from tools.databricks.converge_campaign_treatment_access import target_identity_
 from tools.databricks.oauth_credential_boundary import (
     held_deployment_credential_assertion,
 )
+from tools.databricks.probe_deadlines import install_probe_deadlines
 from tools.databricks.uc_owner_policy import (
     ApprovedOwnerPolicy,
     TargetServicePrincipal,
@@ -846,44 +844,9 @@ def audit_foreign_uc_access(
 
 
 def main(argv: list[str] | None = None) -> int:
-    # Process-wide socket deadline, clamped at the socket layer itself. Five
-    # deploy runs on 2026-08-09 wedged ~60 minutes each in PySSL_select
-    # reading an HTTPS response the server holds open and never answers
-    # (stack-sampled every time; lsof showed CLOSE_WAIT zombies beside the
-    # wedged ESTABLISHED socket). Config.http_timeout_seconds, a
-    # requests-Session default, and socket.setdefaulttimeout each failed —
-    # some layer always re-applies an explicit ``settimeout(None)``. Patching
-    # ``settimeout`` to convert None to a real deadline closes every path:
-    # no library at any layer can create an unbounded socket in this
-    # process. Scoped to this CLI probe, which has no legitimate hour-long
-    # read anywhere.
-    socket.setdefaulttimeout(120)
-    _original_settimeout = socket.socket.settimeout
-
-    def _bounded_settimeout(self: Any, value: Any) -> None:
-        _original_settimeout(self, 120.0 if value is None else value)
-
-    socket.socket.settimeout = _bounded_settimeout  # type: ignore[method-assign]
-
-    # Wall-clock watchdog: the sixth and final deadline layer. One wedge on
-    # 2026-08-09 outlived even the settimeout(None) clamp, so no socket-level
-    # mechanism is trusted to bound this probe. A daemon timer that hard-exits
-    # the process cannot be defeated by connection state; 900s comfortably
-    # covers three mint attempts with settle loops and backoff. The deploy
-    # treats the exit as a failed step and surfaces it within minutes instead
-    # of losing an hour per wedge.
-    def _watchdog_abort() -> None:
-        print(
-            "[identity-probe] watchdog: probe exceeded 900s wall-clock; aborting "
-            "so the deploy fails visibly instead of hanging",
-            file=sys.stderr,
-            flush=True,
-        )
-        os._exit(3)
-
-    watchdog = threading.Timer(900.0, _watchdog_abort)
-    watchdog.daemon = True
-    watchdog.start()
+    # Hard socket + wall-clock deadlines; rationale and incident trail live
+    # with the implementation in tools.databricks.probe_deadlines.
+    install_probe_deadlines(label="identity-probe")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--application-id", required=True)
     parser.add_argument("--catalog", default="mip")
