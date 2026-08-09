@@ -12,6 +12,7 @@ from threading import Lock
 from typing import Any
 
 from databricks.sdk import WorkspaceClient
+from databricks.sdk.config import Config
 from tools.databricks.agent_runtime_uc_baseline import (
     _MAX_INVENTORY_WORKERS,
     CatalogBindingEvidence,
@@ -863,7 +864,7 @@ def main(argv: list[str] | None = None) -> int:
     audit_foreign_uc_access(
         # Same stalled-read posture as the account client in
         # uc_owner_policy.account_client_from_env (2026-08-09).
-        WorkspaceClient(http_timeout_seconds=120),
+        WorkspaceClient(config=Config(http_timeout_seconds=120)),
         application_id=args.application_id,
         catalog=args.catalog,
         expected_inventory_principal=args.expected_inventory_principal,

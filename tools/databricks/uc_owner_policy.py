@@ -7,6 +7,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 
 from databricks.sdk import AccountClient, WorkspaceClient
+from databricks.sdk.config import Config
 
 
 def _canonical(value: object) -> str:
@@ -36,17 +37,19 @@ def account_client_from_env() -> AccountClient:
         raise RuntimeError("Dedicated account OAuth configuration is not canonical")
     values = raw_values
     return AccountClient(
-        host=values["host"],
-        account_id=values["account_id"],
-        client_id=values["client_id"],
-        client_secret=values["client_secret"],
-        auth_type="oauth-m2m",
-        # Without a client-side timeout, one stalled account-API response
-        # wedges the deploy inside PySSL_select indefinitely — observed twice
-        # on 2026-08-09, ~60 minutes each, stack-sampled both times inside the
-        # step-4 identity probe's credential mint. Same idiom as the Lakebase
-        # bootstrap account client (_SDK_HTTP_TIMEOUT_SECONDS).
-        http_timeout_seconds=120,
+        config=Config(
+            host=values["host"],
+            account_id=values["account_id"],
+            client_id=values["client_id"],
+            client_secret=values["client_secret"],
+            auth_type="oauth-m2m",
+            # Without a client-side timeout, one stalled account-API response
+            # wedges the deploy inside PySSL_select indefinitely — observed
+            # twice on 2026-08-09, ~60 minutes each, stack-sampled both times
+            # inside the step-4 identity probe's credential mint. Same idiom
+            # as the Lakebase bootstrap account client.
+            http_timeout_seconds=120,
+        )
     )
 
 
