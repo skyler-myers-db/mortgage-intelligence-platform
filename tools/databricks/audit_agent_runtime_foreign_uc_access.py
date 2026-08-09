@@ -861,7 +861,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     audit_foreign_uc_access(
-        WorkspaceClient(),
+        # Same stalled-read posture as the account client in
+        # uc_owner_policy.account_client_from_env (2026-08-09).
+        WorkspaceClient(http_timeout_seconds=120),
         application_id=args.application_id,
         catalog=args.catalog,
         expected_inventory_principal=args.expected_inventory_principal,
