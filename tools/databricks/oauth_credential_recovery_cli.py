@@ -19,6 +19,7 @@ from tools.databricks.oauth_credential_recovery import (
     recover_oauth_credential_mutation,
     recover_orphan_credential_mutation_lease,
 )
+from tools.databricks.probe_deadlines import install_probe_deadlines
 from tools.databricks.uc_owner_policy import account_client_from_env
 from tools.databricks.workspace_auth import deployment_workspace_client
 
@@ -177,6 +178,9 @@ def execute(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    # Same wedge class as the step-4 identity probe (2026-08-09): a recovery
+    # run stalled 13 minutes in an accounts-API read with no deadline.
+    install_probe_deadlines(label="credential-recovery")
     print(json.dumps(execute(argv), sort_keys=True))
     return 0
 
