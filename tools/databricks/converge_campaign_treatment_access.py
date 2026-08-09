@@ -338,7 +338,10 @@ def target_identity_groups_probe(
                 print(
                     f"[identity-probe] credential mint attempt {attempt} of "
                     f"{_CREDENTIAL_MINT_ATTEMPTS} hit transient account-inventory "
-                    f"instability: {str(exc)[:120]}",
+                    # The full before/after/added/removed inventory sets are
+                    # the whole diagnostic; the old 120-char cap cut them off
+                    # exactly where they began (2026-08-09 deploy incident).
+                    f"instability: {str(exc)[:600]}",
                     file=sys.stderr,
                     flush=True,
                 )

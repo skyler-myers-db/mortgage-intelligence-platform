@@ -12,6 +12,7 @@ from threading import Lock
 from typing import Any
 
 from databricks.sdk import WorkspaceClient
+from databricks.sdk.config import Config
 from tools.databricks.agent_runtime_uc_baseline import (
     _MAX_INVENTORY_WORKERS,
     CatalogBindingEvidence,
@@ -34,6 +35,7 @@ from tools.databricks.converge_campaign_treatment_access import target_identity_
 from tools.databricks.oauth_credential_boundary import (
     held_deployment_credential_assertion,
 )
+from tools.databricks.probe_deadlines import install_probe_deadlines
 from tools.databricks.uc_owner_policy import (
     ApprovedOwnerPolicy,
     TargetServicePrincipal,
@@ -842,6 +844,9 @@ def audit_foreign_uc_access(
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Hard socket + wall-clock deadlines; rationale and incident trail live
+    # with the implementation in tools.databricks.probe_deadlines.
+    install_probe_deadlines(label="identity-probe")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--application-id", required=True)
     parser.add_argument("--catalog", default="mip")
@@ -861,7 +866,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     audit_foreign_uc_access(
-        WorkspaceClient(),
+        # Same stalled-read posture as the account client in
+        # uc_owner_policy.account_client_from_env (2026-08-09).
+        WorkspaceClient(config=Config(http_timeout_seconds=120)),
         application_id=args.application_id,
         catalog=args.catalog,
         expected_inventory_principal=args.expected_inventory_principal,
