@@ -844,25 +844,24 @@ def audit_foreign_uc_access(
 
 
 def main(argv: list[str] | None = None) -> int:
-    # Process-wide socket deadline PLUS a requests-session default. Four
-    # deploy runs on 2026-08-09 wedged ~60 minutes each in PySSL_select on
-    # the SDK's OAuth token POST (stack-sampled every time). Neither
-    # Config.http_timeout_seconds nor socket.setdefaulttimeout stops it:
-    # requests passes an explicit ``timeout=None`` per call, which overrides
-    # the socket default. Forcing a fallback at the Session layer is the one
-    # seam an explicit None cannot bypass. Scoped to this CLI process; a
-    # probe has no legitimate hour-long read anywhere.
+    # Process-wide socket deadline, clamped at the socket layer itself. Five
+    # deploy runs on 2026-08-09 wedged ~60 minutes each in PySSL_select
+    # reading an HTTPS response the server holds open and never answers
+    # (stack-sampled every time; lsof showed CLOSE_WAIT zombies beside the
+    # wedged ESTABLISHED socket). Config.http_timeout_seconds, a
+    # requests-Session default, and socket.setdefaulttimeout each failed —
+    # some layer always re-applies an explicit ``settimeout(None)``. Patching
+    # ``settimeout`` to convert None to a real deadline closes every path:
+    # no library at any layer can create an unbounded socket in this
+    # process. Scoped to this CLI probe, which has no legitimate hour-long
+    # read anywhere.
     socket.setdefaulttimeout(120)
-    import requests
+    _original_settimeout = socket.socket.settimeout
 
-    _original_request = requests.sessions.Session.request
+    def _bounded_settimeout(self: Any, value: Any) -> None:
+        _original_settimeout(self, 120.0 if value is None else value)
 
-    def _request_with_deadline(self: Any, *args: Any, **kwargs: Any) -> Any:
-        if kwargs.get("timeout") is None:
-            kwargs["timeout"] = 120
-        return _original_request(self, *args, **kwargs)
-
-    requests.sessions.Session.request = _request_with_deadline  # type: ignore[method-assign]
+    socket.socket.settimeout = _bounded_settimeout  # type: ignore[method-assign]
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--application-id", required=True)
     parser.add_argument("--catalog", default="mip")
