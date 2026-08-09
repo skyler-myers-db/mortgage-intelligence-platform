@@ -844,13 +844,25 @@ def audit_foreign_uc_access(
 
 
 def main(argv: list[str] | None = None) -> int:
-    # Process-wide socket deadline. Config.http_timeout_seconds covers SDK
-    # API calls but NOT the SDK's OAuth token POST, which goes out with no
-    # timeout in this SDK version — three deploy runs on 2026-08-09 wedged
-    # ~60 minutes each in PySSL_select on exactly that request (stack-sampled
-    # every time). A CLI probe has no legitimate hour-long read anywhere, so
-    # the blanket default is the correct scope here.
+    # Process-wide socket deadline PLUS a requests-session default. Four
+    # deploy runs on 2026-08-09 wedged ~60 minutes each in PySSL_select on
+    # the SDK's OAuth token POST (stack-sampled every time). Neither
+    # Config.http_timeout_seconds nor socket.setdefaulttimeout stops it:
+    # requests passes an explicit ``timeout=None`` per call, which overrides
+    # the socket default. Forcing a fallback at the Session layer is the one
+    # seam an explicit None cannot bypass. Scoped to this CLI process; a
+    # probe has no legitimate hour-long read anywhere.
     socket.setdefaulttimeout(120)
+    import requests
+
+    _original_request = requests.sessions.Session.request
+
+    def _request_with_deadline(self: Any, *args: Any, **kwargs: Any) -> Any:
+        if kwargs.get("timeout") is None:
+            kwargs["timeout"] = 120
+        return _original_request(self, *args, **kwargs)
+
+    requests.sessions.Session.request = _request_with_deadline  # type: ignore[method-assign]
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--application-id", required=True)
     parser.add_argument("--catalog", default="mip")
