@@ -7,6 +7,8 @@ import argparse
 import json
 import os
 import socket
+import sys
+import threading
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
@@ -862,6 +864,26 @@ def main(argv: list[str] | None = None) -> int:
         _original_settimeout(self, 120.0 if value is None else value)
 
     socket.socket.settimeout = _bounded_settimeout  # type: ignore[method-assign]
+
+    # Wall-clock watchdog: the sixth and final deadline layer. One wedge on
+    # 2026-08-09 outlived even the settimeout(None) clamp, so no socket-level
+    # mechanism is trusted to bound this probe. A daemon timer that hard-exits
+    # the process cannot be defeated by connection state; 900s comfortably
+    # covers three mint attempts with settle loops and backoff. The deploy
+    # treats the exit as a failed step and surfaces it within minutes instead
+    # of losing an hour per wedge.
+    def _watchdog_abort() -> None:
+        print(
+            "[identity-probe] watchdog: probe exceeded 900s wall-clock; aborting "
+            "so the deploy fails visibly instead of hanging",
+            file=sys.stderr,
+            flush=True,
+        )
+        os._exit(3)
+
+    watchdog = threading.Timer(900.0, _watchdog_abort)
+    watchdog.daemon = True
+    watchdog.start()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--application-id", required=True)
     parser.add_argument("--catalog", default="mip")
