@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import socket
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
@@ -843,6 +844,13 @@ def audit_foreign_uc_access(
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Process-wide socket deadline. Config.http_timeout_seconds covers SDK
+    # API calls but NOT the SDK's OAuth token POST, which goes out with no
+    # timeout in this SDK version — three deploy runs on 2026-08-09 wedged
+    # ~60 minutes each in PySSL_select on exactly that request (stack-sampled
+    # every time). A CLI probe has no legitimate hour-long read anywhere, so
+    # the blanket default is the correct scope here.
+    socket.setdefaulttimeout(120)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--application-id", required=True)
     parser.add_argument("--catalog", default="mip")
