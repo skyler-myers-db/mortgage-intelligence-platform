@@ -18,9 +18,11 @@ import os
 import socket
 import sys
 import threading
+import time
 
 _DEADLINE_SECONDS = 120.0
 _WATCHDOG_SECONDS = 900.0
+_STARTUP_SETTLE_ENV = "MIP_PROBE_STARTUP_SETTLE_S"
 
 
 def install_probe_deadlines(*, label: str) -> None:
@@ -54,3 +56,25 @@ def install_probe_deadlines(*, label: str) -> None:
     watchdog = threading.Timer(_WATCHDOG_SECONDS, _watchdog_abort)
     watchdog.daemon = True
     watchdog.start()
+
+    # Fresh-credential settle (2026-08-10 discriminator): with user-auth the
+    # accounts API answered in ~200-700ms while the SAME calls under a
+    # just-minted bounded temp credential stalled indefinitely and its
+    # creates never became visible. Deployment wrappers mint the bounded
+    # credential immediately before exec'ing this process, so a startup
+    # sleep here separates mint from first use, giving the credential time
+    # to propagate. Opt-in via env so ordinary invocations pay nothing.
+    settle_raw = os.environ.get(_STARTUP_SETTLE_ENV, "").strip()
+    if settle_raw:
+        try:
+            settle = min(300.0, max(0.0, float(settle_raw)))
+        except ValueError:
+            settle = 0.0
+        if settle:
+            print(
+                f"[{label}] settling {int(settle)}s before first use of the "
+                "freshly minted bounded credential",
+                file=sys.stderr,
+                flush=True,
+            )
+            time.sleep(settle)
