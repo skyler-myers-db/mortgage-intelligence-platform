@@ -18,15 +18,14 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey,
 from databricks.sdk import WorkspaceClient  # noqa: F401 - injected into CLI adapter
 from databricks.sdk.errors import (
     AlreadyExists,
-    NotFound,
     ResourceAlreadyExists,
-    ResourceDoesNotExist,
 )
 from databricks.sdk.service.workspace import (
     ImportFormat,
     WorkspaceObjectAccessControlRequest,
     WorkspaceObjectPermissionLevel,
 )
+from tools.databricks import app_deployment_lease_record_io as lease_record_io
 from tools.databricks import app_deployment_lease_recovery_checkpoint as recovery_checkpoint
 from tools.databricks import app_deployment_lease_support as lease_support
 from tools.databricks.app_deployment_lease_cli import (
@@ -35,7 +34,6 @@ from tools.databricks.app_deployment_lease_cli import (
 from tools.databricks.app_deployment_lease_cli import (
     source_sha as _source_sha,
 )
-from tools.databricks.probe_deadlines import bounded_workspace_read
 
 LEGACY_LEASE_VERSION = 4
 LEASE_VERSION = 5
@@ -307,21 +305,12 @@ def _read_record(
     path: str,
     app_name: str,
 ) -> dict[str, Any] | None:
-    try:
-        # Bounded, retried download — the streaming read stalls on held-open
-        # responses (2026-08-10 capture); see probe_deadlines.
-        encoded = bounded_workspace_read(workspace, path)
-    except (NotFound, ResourceDoesNotExist):
-        return None
-    record = _verify(
-        lease_support.json_without_duplicate_keys(
-            encoded,
-            artifact="App deployment lease",
-        )
+    return lease_record_io.read_record(
+        workspace,
+        path=path,
+        app_name=app_name,
+        verify=_verify,
     )
-    if record.get("app_name") != app_name.strip():
-        raise RuntimeError("App deployment lease path binding is invalid")
-    return record
 
 
 def _record_path(app_name: str, record: dict[str, Any]) -> str:
