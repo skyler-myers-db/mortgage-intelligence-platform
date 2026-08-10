@@ -19,10 +19,13 @@ import os
 import socket
 import sys
 import threading
-import time
 
 _DEADLINE_SECONDS = 120.0
-_WATCHDOG_SECONDS = 900.0
+# Env-tunable: recovery walks a 30+-record ledger where most streaming
+# reads stall once before clearing on retry (2026-08-10 dumps sat in the
+# bounded join while the walk progressed) — that legitimately needs more
+# wall-clock than the default.
+_WATCHDOG_SECONDS = float(os.environ.get("MIP_PROBE_WATCHDOG_S", "") or 900.0)
 _STARTUP_SETTLE_ENV = "MIP_PROBE_STARTUP_SETTLE_S"
 
 
@@ -68,8 +71,8 @@ def bounded_workspace_read(
     workspace: object,
     path: str,
     *,
-    attempts: int = 3,
-    deadline_seconds: float = 60.0,
+    attempts: int = 5,
+    deadline_seconds: float = 20.0,
 ) -> bytes:
     """Download one workspace file with per-attempt deadlines and retries.
 
@@ -110,25 +113,3 @@ def bounded_workspace_read(
     raise RuntimeError(
         f"workspace read failed after {attempts} bounded attempts: {path}"
     ) from last_error
-
-    # Fresh-credential settle (2026-08-10 discriminator): with user-auth the
-    # accounts API answered in ~200-700ms while the SAME calls under a
-    # just-minted bounded temp credential stalled indefinitely and its
-    # creates never became visible. Deployment wrappers mint the bounded
-    # credential immediately before exec'ing this process, so a startup
-    # sleep here separates mint from first use, giving the credential time
-    # to propagate. Opt-in via env so ordinary invocations pay nothing.
-    settle_raw = os.environ.get(_STARTUP_SETTLE_ENV, "").strip()
-    if settle_raw:
-        try:
-            settle = min(300.0, max(0.0, float(settle_raw)))
-        except ValueError:
-            settle = 0.0
-        if settle:
-            print(
-                f"[{label}] settling {int(settle)}s before first use of the "
-                "freshly minted bounded credential",
-                file=sys.stderr,
-                flush=True,
-            )
-            time.sleep(settle)
