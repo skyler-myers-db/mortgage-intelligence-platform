@@ -183,8 +183,15 @@ class GenieClient:
         self,
         question: str,
         conversation_id: str | None = None,
+        poll_timeout_s: int | None = None,
     ) -> GenieResponse:
         """Ask Genie one question; poll to completion; return the answer.
+
+        ``poll_timeout_s`` overrides the interactive polling deadline for
+        callers that are deliberately slower than a single screen — the
+        planned deep sweep runs cross-population scans that legitimately
+        take 80-120s (measured live 2026-08-10), where the default 45s
+        deadline silently dropped exactly the deepest sections.
 
         If ``conversation_id`` is ``None``, starts a new conversation
         (``POST /conversations``) whose initial message IS the question.
@@ -209,7 +216,13 @@ class GenieClient:
             else:
                 conv_id = conversation_id
                 msg_id = self._append_message(conv_id, question)
-            return self._finish_message(conv_id, msg_id, q_hash=q_hash, start=start)
+            return self._finish_message(
+                conv_id,
+                msg_id,
+                q_hash=q_hash,
+                start=start,
+                poll_timeout_s=poll_timeout_s,
+            )
         except BaseException as exc:
             emit(
                 log,
@@ -314,8 +327,9 @@ class GenieClient:
         q_hash: str,
         start: float,
         operation: str = "ask",
+        poll_timeout_s: int | None = None,
     ) -> GenieResponse:
-        message = self._poll_message(conv_id, msg_id)
+        message = self._poll_message(conv_id, msg_id, timeout_s=poll_timeout_s)
         genie_status = str(message.get("status") or message.get("state") or "") or None
         extracted = self._extract_message_payload(message)
         sql_rows: list[dict[str, Any]] | None = None
@@ -494,13 +508,20 @@ class GenieClient:
             )
         return msg_id
 
-    def _poll_message(self, conversation_id: str, message_id: str) -> dict[str, Any]:
+    def _poll_message(
+        self,
+        conversation_id: str,
+        message_id: str,
+        *,
+        timeout_s: int | None = None,
+    ) -> dict[str, Any]:
         """Poll the message until terminal state or timeout."""
         url = (
             f"{self._host}/api/2.0/genie/spaces/{self._space_id}"
             f"/conversations/{conversation_id}/messages/{message_id}"
         )
-        deadline = time.monotonic() + self._timeout_s
+        budget = self._timeout_s if timeout_s is None else timeout_s
+        deadline = time.monotonic() + budget
         sleep_s = self._POLL_INITIAL_S
         last_state: str | None = None
         while True:
@@ -520,7 +541,7 @@ class GenieClient:
                 )
             if time.monotonic() >= deadline:
                 raise GenieClientError(
-                    f"Genie message polling timed out after {self._timeout_s}s "
+                    f"Genie message polling timed out after {budget}s "
                     f"(last_state={last_state!r})",
                     space_id=self._space_id,
                     conversation_id=conversation_id,
@@ -756,6 +777,7 @@ class ResilientGenieClient:
         self,
         question: str,
         conversation_id: str | None = None,
+        poll_timeout_s: int | None = None,
     ) -> GenieResponse:
         # R6-18: when the breaker was force-opened at boot because
         # GENIE_SPACE_ID was a placeholder string, we give ourselves a
@@ -769,7 +791,11 @@ class ResilientGenieClient:
             lambda: not is_placeholder_space_id(self._client.space_id)
         )
         return self._resilient.call(
-            lambda: self._client.ask(question, conversation_id=conversation_id)
+            lambda: self._client.ask(
+                question,
+                conversation_id=conversation_id,
+                poll_timeout_s=poll_timeout_s,
+            )
         )
 
     def submit_message(

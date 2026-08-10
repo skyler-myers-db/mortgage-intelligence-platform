@@ -119,7 +119,14 @@ _REVIEWED_READ_ONLY_ANALYTIC_PATTERNS: tuple[re.Pattern[str], ...] = (
         # mortgage") — still drawn from the same closed vocabulary, so an
         # unknown criterion cannot ride the second slot. Live persona audit
         # 2026-08-07 (co-pilot flagship objective).
-        rf"{_REVIEWED_PRODUCT_INTENT}(?:[\s-]+(?:{_REVIEWED_PRODUCT_INTENT}|mortgage|loan))?\s+"
+        # The intent token is OPTIONAL: "rank the top opportunities" names no
+        # criterion at all, so there is no unreviewed criterion to smuggle —
+        # it ranks by the governed score. An unknown word in this slot still
+        # fails to match (it is neither an intent token nor a cohort noun),
+        # so "rank the top zyrplax borrowers" keeps falling through to the
+        # strict criterion machine. Live persona probe 2026-08-10
+        # (sales-manager): the whole question was refused because of it.
+        rf"(?:{_REVIEWED_PRODUCT_INTENT}(?:[\s-]+(?:{_REVIEWED_PRODUCT_INTENT}|mortgage|loan))?\s+)?"
         r"(?:candidates?|borrowers?|leads?|opportunities)"
         rf"{_REVIEWED_ANALYTIC_LOCATION}"
         r"(?:\s*,?\s*and\s+(?:explain|tell\s+me|describe|show)\s+"

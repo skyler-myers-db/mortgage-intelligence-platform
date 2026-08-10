@@ -241,6 +241,7 @@ class DatabricksGenieRepository:
         conversation_id: str | None = None,
         *,
         allow_sweep: bool = True,
+        poll_timeout_s: int | None = None,
     ) -> GenieMessageResponse:
         # Product posture (mip_genie_live_first=True): LIVE Genie is the primary
         # answer path for every guardrail-passing question so the answer is
@@ -271,7 +272,13 @@ class DatabricksGenieRepository:
                 return sweep
         repaired = False
         try:
-            result = self._genie.ask(question, conversation_id=conversation_id)
+            # Only the deep sweep sets a deadline; the interactive path
+            # keeps the historical call shape so every client implementation
+            # (and test double) of ask() stays valid.
+            ask_kwargs: dict[str, object] = {"conversation_id": conversation_id}
+            if poll_timeout_s is not None:
+                ask_kwargs["poll_timeout_s"] = poll_timeout_s
+            result = self._genie.ask(question, **ask_kwargs)
             if _needs_genie_sql_repair(question, result):
                 regenerated = self._repair_text_only_genie_answer(
                     question=question,
