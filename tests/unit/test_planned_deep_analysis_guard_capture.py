@@ -77,3 +77,89 @@ def test_live_plan_keeps_enough_sections_to_run_the_deep_sweep() -> None:
 )
 def test_reviewed_shapes_stay_closed(question: str) -> None:
     assert protected_prompt_match(question) is not None
+
+
+LIVE_PERSONA_PROBES = (
+    # Marketing leader: "a deep, comprehensive read" is the same ask as "a deep
+    # analysis"; the depth nouns had no business phrasings, so this ran as a
+    # single turn. Live persona probe 2026-08-10.
+    "Give me a deep, comprehensive read on our offer mix. For every recommended "
+    "offer, what signals drive it, how large is the addressable cohort, how do "
+    "those cohorts differ on equity and rate spread, and where should we "
+    "concentrate spend geographically and why?",
+)
+
+
+@pytest.mark.parametrize("question", LIVE_PERSONA_PROBES)
+def test_persona_depth_phrasings_route_to_the_deep_sweep(question: str) -> None:
+    from backend.services.repositories.databricks_genie_sweep import (
+        is_deep_analysis_request,
+    )
+
+    assert is_deep_analysis_request(question)
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        # The plainest sales ask: a ranked cohort with NO criterion at all.
+        "Rank the top opportunities",
+        "Rank the top borrowers",
+        "Show the top leads",
+    ],
+)
+def test_bare_ranked_cohort_is_reviewed(question: str) -> None:
+    assert protected_prompt_match(question) is None
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Rank the top zyrplax borrowers",
+        "Rank the top hispanic borrowers",
+        "Rank the top borrowers with eczema",
+        "Show me the top christian leads",
+        "list the top female candidates",
+    ],
+)
+def test_bare_ranked_cohort_shape_stays_closed(question: str) -> None:
+    assert protected_prompt_match(question) is not None
+
+
+@pytest.mark.parametrize(
+    "phrasing",
+    [
+        # Investigative asks — live persona probe 2026-08-10 ran an "in-depth
+        # investigation" question as a single 26s turn because the depth nouns
+        # covered analysis/review/dive/study but no investigative vocabulary.
+        "Do an in-depth investigation of the portfolio",
+        "Do a deep investigation of the portfolio",
+        "Do a thorough investigation of the portfolio",
+        "Give me a comprehensive examination of the portfolio",
+        "Run a full audit of the portfolio",
+        "Do a deep exploration of the portfolio",
+    ],
+)
+def test_investigative_phrasings_route_to_the_deep_sweep(phrasing: str) -> None:
+    from backend.services.repositories.databricks_genie_sweep import (
+        is_deep_analysis_request,
+    )
+
+    assert is_deep_analysis_request(phrasing)
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "How many in-the-money borrowers are in TX?",
+        "Show borrowers by state.",
+        "What is the average equity percentage?",
+        "How many leads do we have?",
+    ],
+)
+def test_single_part_asks_stay_on_the_single_turn_path(question: str) -> None:
+    from backend.services.repositories.databricks_genie_sweep import (
+        is_deep_analysis_request,
+    )
+
+    assert not is_deep_analysis_request(question)

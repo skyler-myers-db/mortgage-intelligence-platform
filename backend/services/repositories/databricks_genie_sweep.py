@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from typing import TYPE_CHECKING
 
 from backend.api import genie_guardrails as prompt_guardrails
@@ -61,10 +61,30 @@ def _has_rendered_prose(response: GenieMessageResponse) -> bool:
 
 # Fan-out cap: polite to the Conversation API while keeping wall time near the
 # slowest single turn.
-_SWEEP_MAX_WORKERS = 4
+_SWEEP_MAX_WORKERS = 8
+# Sub-analyses are deliberately deeper than one screen: measured live
+# 2026-08-10, the cross-population scans took 82s, 94s and 120s while the
+# shallow ones took ~40s. The interactive 45s poll deadline therefore
+# dropped precisely the deepest sections, leaving too few to ship and
+# aborting the sweep — the user saw a single-screen answer instead.
+_SWEEP_POLL_TIMEOUT_S = 180
+# Databricks Apps returns 504 at ~300s, so the sweep must finish INSIDE
+# that or the user gets a gateway error instead of an answer (live persona
+# probe 2026-08-10 timed out at 300.7s once deep routing widened). Ship
+# whatever sections completed within the budget and disclose the rest as
+# gaps — the floor still decides whether the sweep is worth shipping.
+_SWEEP_WALL_BUDGET_S = 200.0
 
 _MIN_PLANNED = 3
 _MAX_PLANNED = 7
+# Deep plans ask for MORE candidates than the floor needs. The planner
+# rewords every run, so a phrasing that clears the plan-time guard on one
+# run can trip it on the next; live runs 2026-08-10 lost 2-3 of 7 and
+# landed exactly ON the floor of 5, where one more drop aborts the sweep.
+# Over-planning buys margin without touching the guard — which cannot be
+# relaxed here, since the sweep calls respond() directly and so bypasses
+# the router's guard battery.
+_MAX_PLANNED_DEEP = 10
 # Deep-analysis asks get the larger plan floor: a shortlist + per-item why +
 # offer call cannot be told in three queries.
 _MIN_PLANNED_DEEP = 5
@@ -78,7 +98,9 @@ _PLAN_LINE_RE = re.compile(r"^\s*(?:\d{1,2}[.)]|[-*•])\s+(.{10,240})\s*$")
 # analytic parts (or an explicit depth request) route to the planner first.
 _DEPTH_EXPLICIT_RE = re.compile(
     r"\b(?:deep|comprehensive|complete|thorough|full|in[- ]depth|end[- ]to[- ]end)\b"
-    r".{0,40}\b(?:analysis|analyz|analys|review|dive|assessment|picture|study)",
+    r".{0,40}\b(?:analysis|analyz|analys|review|dive|assessment|picture|study|"
+    r"read|breakdown|rundown|overview|look|investigation|investigat|"
+    r"examination|examin|audit|exploration|explor|teardown|interrogat)",
     re.IGNORECASE,
 )
 _DEPTH_PART_RES: tuple[re.Pattern[str], ...] = (
@@ -134,7 +156,8 @@ def _planning_prompt(question: str, *, deep: bool = False) -> str:
             "concentration or co-occurrence angle (geography, segments, "
             "competitor liens, listing status) that a single screen would "
             "not show. "
-            f"Plan between {_MIN_PLANNED_DEEP} and {_MAX_PLANNED} questions.\n\n"
+            f"Plan between {_MIN_PLANNED_DEEP + 2} and {_MAX_PLANNED_DEEP} "
+            "questions.\n\n"
         )
         count_line = ""
     else:
@@ -162,7 +185,7 @@ def _planning_prompt(question: str, *, deep: bool = False) -> str:
     )
 
 
-def _parse_planned_questions(text: str | None) -> list[str]:
+def _parse_planned_questions(text: str | None, *, deep: bool = False) -> list[str]:
     if not text:
         return []
     # The planner's own "this is not an analytics request" verdict. Nothing
@@ -183,7 +206,7 @@ def _parse_planned_questions(text: str | None) -> list[str]:
             candidate = f"{candidate}?"
         if candidate not in planned:
             planned.append(candidate)
-    return planned[:_MAX_PLANNED]
+    return planned[: (_MAX_PLANNED_DEEP if deep else _MAX_PLANNED)]
 
 
 def _planned_question_guard_hit(question: str) -> str | None:
@@ -224,7 +247,7 @@ def plan_sub_questions(
         planning_turn = repo.ask_raw(_planning_prompt(question, deep=deep))
     except Exception:  # noqa: BLE001 - planner failure falls through honestly
         return [], []
-    planned_raw = _parse_planned_questions(planning_turn)
+    planned_raw = _parse_planned_questions(planning_turn, deep=deep)
     planned: list[str] = []
     dropped: list[str] = []
     for candidate in planned_raw:
@@ -365,12 +388,34 @@ def run_planned_sweep(
 
     def _one(sub_question: str) -> GenieMessageResponse | None:
         try:
-            return repo.respond(sub_question, allow_sweep=False)
+            return repo.respond(
+                sub_question,
+                allow_sweep=False,
+                poll_timeout_s=_SWEEP_POLL_TIMEOUT_S,
+            )
         except Exception:  # noqa: BLE001 - a failed theme becomes a disclosed gap
             return None
 
+    results: list[GenieMessageResponse | None] = [None] * len(planned)
     with ThreadPoolExecutor(max_workers=_SWEEP_MAX_WORKERS) as pool:
-        results = list(pool.map(_one, planned))
+        futures = {
+            pool.submit(_one, sub_question): index
+            for index, sub_question in enumerate(planned)
+        }
+        pending = set(futures)
+        budget_end = started + _SWEEP_WALL_BUDGET_S
+        while pending:
+            remaining = budget_end - time.monotonic()
+            if remaining <= 0:
+                break
+            done, pending = wait(pending, timeout=remaining, return_when=FIRST_COMPLETED)
+            for future in done:
+                try:
+                    results[futures[future]] = future.result()
+                except Exception:  # noqa: BLE001 - becomes a disclosed gap
+                    results[futures[future]] = None
+        for future in pending:
+            future.cancel()
 
     sections: list[tuple[str, GenieMessageResponse]] = []
     gaps: list[str] = list(dropped)

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from backend.services.genie_answers import GenieMessageResponse, GenieProof
 from backend.services.repositories.databricks_genie_sweep import (
+    _SWEEP_POLL_TIMEOUT_S,
     _parse_planned_questions,
     _planned_question_guard_hit,
     is_deep_analysis_request,
@@ -66,6 +67,7 @@ class _StubRepo:
     ) -> None:
         self.plan_text = plan_text
         self.calls: list[tuple[str, bool]] = []
+        self.poll_timeouts: list[int | None] = []
         self.raw_prompts: list[str] = []
         self._failures = failures
 
@@ -81,8 +83,10 @@ class _StubRepo:
         conversation_id: str | None = None,
         *,
         allow_sweep: bool = True,
+        poll_timeout_s: int | None = None,
     ) -> GenieMessageResponse:
         self.calls.append((question, allow_sweep))
+        self.poll_timeouts.append(poll_timeout_s)
         if any(marker in question for marker in self._failures):
             return GenieMessageResponse(
                 conversation_id="",
@@ -197,7 +201,10 @@ def test_deep_sweep_uses_deep_plan_floor_and_synthesis() -> None:
     # The deep planning prompt demands the comparison/offer/concentration
     # coverage and the wider plan floor.
     assert "deep-analysis request" in repo.raw_prompts[0]
-    assert "between 5 and 7" in repo.raw_prompts[0]
+    # Deep plans deliberately over-ask (7-10 against a floor of 5): the
+    # planner rewords every run, so plan-time guard drops vary and a plan
+    # sized to the floor aborts the sweep the moment one is dropped.
+    assert "between 7 and 10" in repo.raw_prompts[0]
     # The deep synthesis contract replaces the generic one.
     assert "deep executive synthesis" in repo.raw_prompts[1]
     assert len(repo.calls) == 5
@@ -208,3 +215,19 @@ def test_deep_sweep_requires_the_deeper_plan() -> None:
     # A three-line plan is enough for a rescue sweep but not for a deep ask.
     repo = _StubRepo()
     assert run_planned_sweep(repo, _DEEP_QUESTION, deep=True) is None  # type: ignore[arg-type]
+
+
+def test_sub_analyses_carry_the_sweep_poll_deadline() -> None:
+    """Deep sections legitimately outrun the interactive 45s deadline.
+
+    Measured live 2026-08-10: cross-population scans took 82-120s, so the
+    interactive deadline timed out exactly the deepest sections and starved
+    the sweep below its section floor.
+    """
+
+    repo = _StubRepo(plan_text=_DEEP_PLAN_TEXT)
+    result = run_planned_sweep(repo, "Do a deep analysis of the portfolio.", deep=True)
+
+    assert result is not None
+    assert repo.poll_timeouts
+    assert all(value == _SWEEP_POLL_TIMEOUT_S for value in repo.poll_timeouts)
