@@ -64,6 +64,54 @@ _REVIEWED_WHOLE_POPULATION = (
 
 _REVIEWED_READ_ONLY_ANALYTIC_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(
+        # Compound sales ask: a ranked cohort followed by any of the closed
+        # follow-on clauses — per-item rationale, the offer call, and the
+        # risk-of-loss question — in any order ("Rank the top opportunities,
+        # explain why each one is especially strong compared to the rest of
+        # the book, what the best curated offer is for each and why, and what
+        # would make me lose them"). Live persona probe 2026-08-10
+        # (sales-manager): refused as an unreviewed criterion because no
+        # ^…$-anchored shape covered a four-part sentence.
+        #
+        # This stays anchored and fully closed ON PURPOSE. Splitting the
+        # sentence and screening the parts was measured and REJECTED: comma
+        # fragments lose the population context the detectors need, so
+        # "Rank borrowers with high equity, eczema, and good scores" is caught
+        # whole but every fragment passes. Requiring the WHOLE string to match
+        # reviewed vocabulary means an unknown criterion anywhere breaks the
+        # match and the clause fails closed.
+        r"^(?:rank|show|list|give\s+me|surface|prioriti[sz]e)\s+(?:me\s+)?(?:the\s+)?"
+        r"(?:top\s+(?:[0-9]{1,3}\s+)?)?"
+        rf"(?:{_REVIEWED_PRODUCT_INTENT}(?:[\s-]+(?:{_REVIEWED_PRODUCT_INTENT}|mortgage|loan))?\s+)?"
+        r"(?:candidates?|borrowers?|leads?|opportunities)"
+        rf"{_REVIEWED_ANALYTIC_LOCATION}"
+        r"(?:"
+        r"\s*,?\s*(?:and\s+)?"
+        r"(?:"
+        # Per-item rationale, optionally against the wider book.
+        r"(?:explain|tell\s+me|describe|show)\s+(?:me\s+)?why\s+"
+        r"(?:each|every)(?:\s+(?:one|borrower|candidate|lead|prospect))?\s+"
+        r"(?:is|ranks?|scores?|qualifies|stands?\s+out)"
+        r"(?:\s+(?:especially|particularly|very)?\s*"
+        r"(?:strong|good|great|promising|compelling))?"
+        rf"(?:\s+compared\s+to\s+{_REVIEWED_WHOLE_POPULATION}|"
+        r"\s+compared\s+to\s+(?:the\s+)?rest\s+of\s+the\s+(?:book|list|portfolio))?"
+        r"|"
+        # The offer call.
+        r"what\s+the\s+(?:best|right|recommended)\s+(?:curated\s+)?offers?\s+"
+        r"(?:is|are)\s+for\s+(?:each|every)(?:\s+one)?(?:\s*,?\s*and\s+why)?"
+        r"|"
+        # Risk of losing the opportunity — a governed retention question.
+        r"what\s+(?:would|could|might)\s+(?:make\s+)?(?:me\s+|us\s+)?"
+        r"(?:lose|losing)\s+(?:them|these|the\s+(?:deal|opportunity))"
+        r"|"
+        r"what\s+(?:is|are)\s+the\s+(?:retention\s+)?risks?"
+        r"(?:\s+of\s+losing\s+(?:them|these))?"
+        r")"
+        r"){1,4}\s*\??$",
+        re.IGNORECASE,
+    ),
+    re.compile(
         # Ranked shortlist plus its governed signal columns ("who are the top
         # 20 eligible borrowers ranked by opportunity score, and what are
         # their rate spread, equity percentage, key triggers, and recommended
@@ -259,13 +307,15 @@ _REVIEWED_ANALYSIS_PREAMBLE_RE = re.compile(
     r"(?:do|run|perform|conduct|complete)\s+(?:a|an)\s+"
     r"(?:(?:deep|full|comprehensive|complete|thorough)\s+)?"
     r"(?:analysis|review|assessment|study|deep[- ]dive)\s+of)\s+"
-    r"(?:(?:the|our|this|every|all)\s+)?(?:(?:full|entire|complete|whole)\s+)?"
+    r"(?:(?:the|our|this|my|every|all)\s+)?(?:(?:full|entire|complete|whole)\s+)?"
+    r"(?:(?:highest[- ]priority|top[- ]priority|priority|top)\s+)?"
     r"(?:(?:eligible|marketing[- ]eligible|reviewed|contact[- ]eligible)\s+)?"
     r"(?:datasets?|data\s*sets?|data|portfolios?|books?|pipelines?|populations?|"
+    r"outreach\s+lists?|call\s+lists?|work\s+lists?|lists?|"
     r"borrowers?|leads?|customers?|prospects?|homeowners?)?"
     r"(?:\s+of\s+(?:(?:all|our|the)\s+)?(?:(?:eligible|marketing[- ]eligible|reviewed|"
     r"contact[- ]eligible)\s+)?(?:borrowers?|leads?|customers?|prospects?|homeowners?))?"
-    r"\s*,?\s*and\s+"
+    r"(?:\s*,?\s*and\s+|\s*[.;]\s+)"
     r")",
     re.IGNORECASE,
 )
