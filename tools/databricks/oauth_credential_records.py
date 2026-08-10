@@ -28,6 +28,7 @@ from tools.databricks.app_deployment_lease_support import key_registry
 from tools.databricks.oauth_credential_record_schema import (
     has_exact_string_fields,
 )
+from tools.databricks.probe_deadlines import bounded_workspace_read
 
 INTENT_VERSION = 4
 OBSERVED_VERSION = 1
@@ -206,8 +207,12 @@ def record_paths(workspace: Any) -> tuple[str, ...]:
 
 
 def read_bytes(workspace: Any, path: str) -> bytes:
+    # Bounded, retried download: the SDK's streaming read can stall
+    # indefinitely on a held-open response, and the quarantine inventory
+    # walks every ledger record (2026-08-10 faulthandler capture). See
+    # tools.databricks.probe_deadlines.bounded_workspace_read.
     try:
-        return workspace.workspace.download(path).read()
+        return bounded_workspace_read(workspace, path)
     except (NotFound, ResourceDoesNotExist) as exc:
         raise RuntimeError(
             f"OAuth credential recovery record disappeared: {path}"

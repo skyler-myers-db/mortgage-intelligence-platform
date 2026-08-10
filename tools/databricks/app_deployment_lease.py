@@ -35,6 +35,7 @@ from tools.databricks.app_deployment_lease_cli import (
 from tools.databricks.app_deployment_lease_cli import (
     source_sha as _source_sha,
 )
+from tools.databricks.probe_deadlines import bounded_workspace_read
 
 LEGACY_LEASE_VERSION = 4
 LEASE_VERSION = 5
@@ -307,12 +308,14 @@ def _read_record(
     app_name: str,
 ) -> dict[str, Any] | None:
     try:
-        stream = workspace.workspace.download(path)
+        # Bounded, retried download — the streaming read stalls on held-open
+        # responses (2026-08-10 capture); see probe_deadlines.
+        encoded = bounded_workspace_read(workspace, path)
     except (NotFound, ResourceDoesNotExist):
         return None
     record = _verify(
         lease_support.json_without_duplicate_keys(
-            stream.read(),
+            encoded,
             artifact="App deployment lease",
         )
     )

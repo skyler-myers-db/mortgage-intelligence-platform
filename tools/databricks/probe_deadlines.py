@@ -63,6 +63,54 @@ def install_probe_deadlines(*, label: str) -> None:
     # dump names the exact blocked line instead of another theory.
     faulthandler.dump_traceback_later(180, repeat=True, file=sys.stderr)
 
+
+def bounded_workspace_read(
+    workspace: object,
+    path: str,
+    *,
+    attempts: int = 3,
+    deadline_seconds: float = 60.0,
+) -> bytes:
+    """Download one workspace file with per-attempt deadlines and retries.
+
+    The 2026-08-10 faulthandler capture pinned every deploy wedge to the
+    SDK's streaming workspace download stalling mid-read on a held-open
+    response, with consecutive dumps at different records — stalls clear on
+    a fresh request. Run each read in a worker thread, abandon it at the
+    deadline, retry. ``NotFound``/``ResourceDoesNotExist`` re-raise
+    untouched so callers keep their missing-record contracts.
+    """
+
+    from databricks.sdk.errors import NotFound
+    from databricks.sdk.errors.platform import ResourceDoesNotExist
+
+    last_error: BaseException | None = None
+    for _attempt in range(attempts):
+        outcome: list[object] = []
+
+        def _download(target: list[object] = outcome) -> None:
+            try:
+                target.append(workspace.workspace.download(path).read())  # type: ignore[attr-defined]
+            except BaseException as exc:  # noqa: BLE001 - dispatched below
+                target.append(exc)
+
+        worker = threading.Thread(target=_download, daemon=True)
+        worker.start()
+        worker.join(deadline_seconds)
+        if worker.is_alive():
+            last_error = RuntimeError(f"workspace read stalled: {path}")
+            continue
+        result = outcome[0] if outcome else RuntimeError("workspace read returned nothing")
+        if isinstance(result, (NotFound, ResourceDoesNotExist)):
+            raise result
+        if isinstance(result, BaseException):
+            last_error = result
+            continue
+        return result  # type: ignore[return-value]
+    raise RuntimeError(
+        f"workspace read failed after {attempts} bounded attempts: {path}"
+    ) from last_error
+
     # Fresh-credential settle (2026-08-10 discriminator): with user-auth the
     # accounts API answered in ~200-700ms while the SAME calls under a
     # just-minted bounded temp credential stalled indefinitely and its
