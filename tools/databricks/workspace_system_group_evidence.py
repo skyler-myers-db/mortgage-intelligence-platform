@@ -60,8 +60,8 @@ def _exact_member_ids(workspace: Any, group_id: str, *, label: str) -> frozenset
     return frozenset(normalized)
 
 
-def workspace_users_group_evidence(workspace: Any) -> dict[str, str]:
-    """Resolve the current-workspace ``users`` system group and its clone."""
+def _scan_users_groups(workspace: Any) -> tuple[dict[str, str], dict[str, str]]:
+    """Return the exact ``users`` system group and any proven clone candidate."""
 
     matches: dict[str, str] = {}
     clone_candidates: dict[str, str] = {}
@@ -112,14 +112,34 @@ def workspace_users_group_evidence(workspace: Any) -> dict[str, str]:
         raise RuntimeError(
             "workspace users system group identity did not resolve exactly once"
         )
-    if clone_candidates:
-        users_group_id = next(iter(matches))
-        users_members = _exact_member_ids(workspace, users_group_id, label="users")
-        clone_group_id = next(iter(clone_candidates))
-        clone_members = _exact_member_ids(workspace, clone_group_id, label="users clone")
-        if not users_members or clone_members != users_members:
-            raise RuntimeError(
-                "workspace users clone group is not an exact clone of the users group"
-            )
-        matches.update(clone_candidates)
+    return matches, clone_candidates
+
+
+def workspace_users_group_evidence(workspace: Any) -> dict[str, str]:
+    """Resolve the immutable current-workspace ``users`` system group."""
+
+    matches, _clone_candidates = _scan_users_groups(workspace)
     return matches
+
+
+def workspace_users_clone_group_evidence(workspace: Any) -> dict[str, str]:
+    """Resolve the Databricks-created ``users`` clone, proven by membership.
+
+    Empty when the workspace never went through the split. The clone is
+    surfaced as a *reviewed* workspace group rather than a system group: the
+    reviewed path additionally proves the group holds exactly ``USER`` on this
+    workspace and nothing on any other workspace in the metastore, which is
+    the stronger contract for a group that carries real entitlements.
+    """
+
+    matches, clone_candidates = _scan_users_groups(workspace)
+    if not clone_candidates:
+        return {}
+    users_members = _exact_member_ids(workspace, next(iter(matches)), label="users")
+    clone_group_id = next(iter(clone_candidates))
+    clone_members = _exact_member_ids(workspace, clone_group_id, label="users clone")
+    if not users_members or clone_members != users_members:
+        raise RuntimeError(
+            "workspace users clone group is not an exact clone of the users group"
+        )
+    return dict(clone_candidates)

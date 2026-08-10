@@ -1,11 +1,11 @@
-"""Databricks-created ``users`` clone counts as a workspace system group.
+"""Databricks-created ``users`` clone resolves as a reviewed workspace group.
 
 Enabling automatic identity management splits the legacy workspace ``users``
 group: ``users`` becomes entitlement-free and a Databricks-generated clone
-carries the legacy entitlements. Both are the same system identity, so the
+carries the legacy entitlements — and the workspace assignment — forward. The
 runtime inherits the clone without any grant of ours. Acceptance requires
 proof the clone's membership is identical to ``users``; every other shape
-still fails closed.
+still fails closed, and ``users`` itself keeps its exact original contract.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from types import SimpleNamespace
 import pytest
 
 from tools.databricks.workspace_system_group_evidence import (
+    workspace_users_clone_group_evidence,
     workspace_users_group_evidence,
 )
 
@@ -73,22 +74,30 @@ def _workspace(
 _LEGACY_ENTITLEMENTS = ("workspace-access", "databricks-sql-access")
 
 
-def test_users_alone_still_resolves_as_the_only_system_group() -> None:
+def test_users_alone_resolves_as_the_only_system_group() -> None:
     workspace = _workspace((_group(_USERS_ID, "users", entitlements=_LEGACY_ENTITLEMENTS),))
     assert workspace_users_group_evidence(workspace) == {_USERS_ID: "users"}
+    assert workspace_users_clone_group_evidence(workspace) == {}
 
 
-def test_exact_clone_is_accepted_beside_the_users_group() -> None:
+def test_clone_never_joins_the_system_group_set() -> None:
     workspace = _workspace(
         (
             _group(_USERS_ID, "users"),
             _group(_CLONE_ID, _CLONE_NAME, entitlements=_LEGACY_ENTITLEMENTS),
         )
     )
-    assert workspace_users_group_evidence(workspace) == {
-        _USERS_ID: "users",
-        _CLONE_ID: _CLONE_NAME,
-    }
+    assert workspace_users_group_evidence(workspace) == {_USERS_ID: "users"}
+
+
+def test_exact_clone_resolves_as_a_reviewed_group() -> None:
+    workspace = _workspace(
+        (
+            _group(_USERS_ID, "users"),
+            _group(_CLONE_ID, _CLONE_NAME, entitlements=_LEGACY_ENTITLEMENTS),
+        )
+    )
+    assert workspace_users_clone_group_evidence(workspace) == {_CLONE_ID: _CLONE_NAME}
 
 
 def test_clone_with_different_membership_is_rejected() -> None:
@@ -100,7 +109,7 @@ def test_clone_with_different_membership_is_rejected() -> None:
         members={_USERS_ID: _MEMBERS, _CLONE_ID: _MEMBERS[:2]},
     )
     with pytest.raises(RuntimeError, match="not an exact clone"):
-        workspace_users_group_evidence(workspace)
+        workspace_users_clone_group_evidence(workspace)
 
 
 def test_clone_of_an_empty_users_group_is_rejected() -> None:
@@ -112,7 +121,7 @@ def test_clone_of_an_empty_users_group_is_rejected() -> None:
         members={_USERS_ID: (), _CLONE_ID: ()},
     )
     with pytest.raises(RuntimeError, match="not an exact clone"):
-        workspace_users_group_evidence(workspace)
+        workspace_users_clone_group_evidence(workspace)
 
 
 @pytest.mark.parametrize(
@@ -132,6 +141,7 @@ def test_lookalike_group_names_stay_ordinary_memberships(name: str) -> None:
             _group(_CLONE_ID, name, entitlements=_LEGACY_ENTITLEMENTS),
         )
     )
+    assert workspace_users_clone_group_evidence(workspace) == {}
     assert workspace_users_group_evidence(workspace) == {_USERS_ID: "users"}
 
 
@@ -154,12 +164,12 @@ def test_clone_entitlements_off_the_legacy_pair_are_rejected(
         )
     )
     with pytest.raises(RuntimeError, match="ambiguous"):
-        workspace_users_group_evidence(workspace)
+        workspace_users_clone_group_evidence(workspace)
 
 
 def test_clone_with_roles_or_external_id_is_rejected() -> None:
     with pytest.raises(RuntimeError, match="incomplete or ambiguous"):
-        workspace_users_group_evidence(
+        workspace_users_clone_group_evidence(
             _workspace(
                 (
                     _group(_USERS_ID, "users"),
@@ -168,7 +178,7 @@ def test_clone_with_roles_or_external_id_is_rejected() -> None:
             )
         )
     with pytest.raises(RuntimeError, match="incomplete or ambiguous"):
-        workspace_users_group_evidence(
+        workspace_users_clone_group_evidence(
             _workspace(
                 (
                     _group(_USERS_ID, "users"),
@@ -186,7 +196,7 @@ def test_account_scoped_clone_resource_type_is_rejected() -> None:
         )
     )
     with pytest.raises(RuntimeError, match="incomplete or ambiguous"):
-        workspace_users_group_evidence(workspace)
+        workspace_users_clone_group_evidence(workspace)
 
 
 def test_two_clones_are_ambiguous_and_rejected() -> None:
@@ -202,7 +212,7 @@ def test_two_clones_are_ambiguous_and_rejected() -> None:
         )
     )
     with pytest.raises(RuntimeError, match="incomplete or ambiguous"):
-        workspace_users_group_evidence(workspace)
+        workspace_users_clone_group_evidence(workspace)
 
 
 def test_missing_users_group_still_fails_even_with_a_clone() -> None:
@@ -210,4 +220,4 @@ def test_missing_users_group_still_fails_even_with_a_clone() -> None:
         (_group(_CLONE_ID, _CLONE_NAME, entitlements=_LEGACY_ENTITLEMENTS),)
     )
     with pytest.raises(RuntimeError, match="did not resolve exactly once"):
-        workspace_users_group_evidence(workspace)
+        workspace_users_clone_group_evidence(workspace)
