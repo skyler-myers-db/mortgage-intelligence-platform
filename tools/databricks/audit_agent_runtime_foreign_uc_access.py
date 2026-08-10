@@ -46,6 +46,7 @@ from tools.databricks.uc_target_identity import (
     workspace_target_identity,
 )
 from tools.databricks.workspace_system_group_evidence import (
+    workspace_users_clone_group_evidence,
     workspace_users_group_evidence,
 )
 
@@ -629,8 +630,17 @@ def audit_foreign_uc_access(
             **probe_kwargs,
         )
     )
+    # The identity-management split leaves the legacy ``users`` entitlements —
+    # and its workspace assignment — on a Databricks-created clone the runtime
+    # still belongs to. Evidence, not configuration, admits it: the clone is
+    # proven to have membership identical to ``users`` before it is reviewed,
+    # and the reviewed path below still requires exactly ``USER`` here and
+    # nothing on any other workspace in the metastore.
     normalized_allowed_workspace_groups = _normalized_target_groups(
-        dict(allowed_workspace_groups or {})
+        {
+            **dict(allowed_workspace_groups or {}),
+            **workspace_users_clone_group_evidence(workspace),
+        }
     )
     (
         account_effective_groups,

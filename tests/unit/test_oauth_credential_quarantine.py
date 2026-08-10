@@ -1198,7 +1198,7 @@ def test_recovery_without_observation_or_delta_retains_global_quarantine(
     live_ids = ["existing"]
     with pytest.raises(
         CredentialMutationQuarantineError,
-        match="delayed create cannot still commit",
+        match="no attributable credential",
     ):
         recover_oauth_credential_mutation(
             workspace,

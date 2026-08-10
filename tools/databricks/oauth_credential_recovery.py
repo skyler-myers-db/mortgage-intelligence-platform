@@ -11,6 +11,9 @@ from typing import Any, cast
 from tools.databricks import app_deployment_lease
 from tools.databricks import oauth_credential_records as records
 from tools.databricks.oauth_credential_creation import prove_stable_credential_ids
+from tools.databricks.oauth_credential_expiry_proof import (
+    prove_unmaterialized_probe_create_harmless,
+)
 from tools.databricks.oauth_credential_quarantine import (
     CREDENTIAL_MUTATION_LEASE_NAME,
     CredentialMutationFence,
@@ -709,16 +712,14 @@ def recover_oauth_credential_mutation(
                     observed_ids=current_ids,
                 )
             if not observed_id:
-                raise_credential_quarantine(
-                    message=(
-                        "OAuth credential recovery has no attributable "
-                        "credential and no provider proof that a delayed "
-                        "create cannot still commit"
-                    ),
-                    label=records.field(intent, "label"),
+                prove_unmaterialized_probe_create_harmless(
+                    workspace,
+                    intent_path=intent_path,
+                    intent=intent,
+                    sink=sink,
+                    delivery_ack=delivery_ack,
                     principal_id=reviewed_principal,
                     before_ids=before_ids,
-                    candidate_ids=frozenset(),
                     fence=fence,
                 )
             restored_ids = current_ids
