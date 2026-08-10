@@ -39,7 +39,9 @@ def test_immutable_ledger_paths_are_mirrorable():
 
 def test_snapshot_hit_serves_disk_bytes_without_any_transport(tmp_path, monkeypatch):
     path = f"{probe_deadlines._LEASE_ROOT}/mip-app.json.aa11.next"
-    (tmp_path / "mip-app.json.aa11.next").write_bytes(b'{"generation_id": "aa11"}')
+    scoped = tmp_path / "DEFAULT"
+    scoped.mkdir()
+    (scoped / "mip-app.json.aa11.next").write_bytes(b'{"generation_id": "aa11"}')
     monkeypatch.setenv(probe_deadlines._MIRROR_DIR_ENV, str(tmp_path))
     monkeypatch.setattr(probe_deadlines, "_mirror_snapshot", {path})
 
@@ -68,7 +70,23 @@ def test_live_read_success_backfills_the_mirror(tmp_path, monkeypatch):
     class _Workspace:
         workspace = _WorkspaceApi()
 
+    (tmp_path / "DEFAULT").mkdir()
     data = probe_deadlines.bounded_workspace_read(_Workspace(), path, attempts=1)
     assert data == b'{"generation_id": "bb22"}'
-    assert (tmp_path / "mip-app.json.bb22").read_bytes() == data
+    assert (tmp_path / "DEFAULT" / "mip-app.json.bb22").read_bytes() == data
     assert path in probe_deadlines._mirror_snapshot
+
+
+def test_mirror_scope_isolates_workspaces_sharing_a_ledger_path(tmp_path, monkeypatch):
+    path = f"{probe_deadlines._LEASE_ROOT}/mip-app.json.cc33.next"
+    for profile, payload in (("DEFAULT", b"pr105-record"), ("paychex", b"paychex-record")):
+        scoped = tmp_path / profile
+        scoped.mkdir()
+        (scoped / "mip-app.json.cc33.next").write_bytes(payload)
+    monkeypatch.setenv(probe_deadlines._MIRROR_DIR_ENV, str(tmp_path))
+    monkeypatch.setattr(probe_deadlines, "_mirror_snapshot", {path})
+
+    monkeypatch.setenv("MIP_PROBE_CLI_PROFILE", "paychex")
+    assert probe_deadlines.bounded_workspace_read(object(), path) == b"paychex-record"
+    monkeypatch.setenv("MIP_PROBE_CLI_PROFILE", "DEFAULT")
+    assert probe_deadlines.bounded_workspace_read(object(), path) == b"pr105-record"

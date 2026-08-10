@@ -97,16 +97,29 @@ def _mirror_immutable(path: str) -> bool:
     return ".json." in basename
 
 
-def _mirror_file(mirror_dir: str, path: str) -> str:
-    return os.path.join(mirror_dir, path.rsplit("/", 1)[-1])
+def _mirror_scope(cli_profile: str) -> str:
+    """Directory component isolating one workspace's ledger from another's.
+
+    Ledger paths are identical across workspaces while their contents are
+    not, so a flat mirror would serve one workspace's signed records for
+    another's identical path. Key the cache by the profile actually used to
+    read it (2026-08-10: the same tree exists on pr105-staging and paychex).
+    """
+
+    safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in cli_profile)
+    return safe or "default"
 
 
-def _mirror_store(path: str, data: bytes) -> None:
+def _mirror_file(mirror_dir: str, path: str, *, scope: str) -> str:
+    return os.path.join(mirror_dir, scope, path.rsplit("/", 1)[-1])
+
+
+def _mirror_store(path: str, data: bytes, *, scope: str) -> None:
     mirror_dir = os.environ.get(_MIRROR_DIR_ENV, "").strip()
     if not mirror_dir or _mirror_snapshot is None or not _mirror_immutable(path):
         return
     try:
-        with open(_mirror_file(mirror_dir, path), "wb") as handle:
+        with open(_mirror_file(mirror_dir, path, scope=scope), "wb") as handle:
             handle.write(data)
         with _mirror_lock:
             _mirror_snapshot.add(path)
@@ -114,7 +127,9 @@ def _mirror_store(path: str, data: bytes) -> None:
         return
 
 
-def _ensure_mirror(mirror_dir: str, cli_profile: str, cli_env: dict[str, str]) -> set[str]:
+def _ensure_mirror(
+    mirror_dir: str, cli_profile: str, cli_env: dict[str, str], *, scope: str
+) -> set[str]:
     """List the live ledger once and prefetch immutable records in parallel.
 
     The 2026-08-10 hour-long recovery was 5k sequential ~0.7s reads over the
@@ -147,8 +162,12 @@ def _ensure_mirror(mirror_dir: str, cli_profile: str, cli_env: dict[str, str]) -
         if (path := str(item.get("path", ""))).startswith(f"{_LEASE_ROOT}/")
         and _mirror_immutable(path)
     ]
-    os.makedirs(mirror_dir, exist_ok=True)
-    reused = {p for p in live_paths if os.path.exists(_mirror_file(mirror_dir, p))}
+    os.makedirs(os.path.join(mirror_dir, scope), exist_ok=True)
+    reused = {
+        p
+        for p in live_paths
+        if os.path.exists(_mirror_file(mirror_dir, p, scope=scope))
+    }
 
     def _fetch(path: str) -> str | None:
         try:
@@ -164,7 +183,7 @@ def _ensure_mirror(mirror_dir: str, cli_profile: str, cli_env: dict[str, str]) -
         if completed.returncode != 0:
             return None
         try:
-            with open(_mirror_file(mirror_dir, path), "wb") as handle:
+            with open(_mirror_file(mirror_dir, path, scope=scope), "wb") as handle:
                 handle.write(completed.stdout)
         except OSError:
             return None
@@ -227,11 +246,14 @@ def bounded_workspace_read(
         "HOME": os.environ.get("HOME", ""),
     }
     mirror_dir = os.environ.get(_MIRROR_DIR_ENV, "").strip()
+    mirror_scope = _mirror_scope(cli_profile)
     if mirror_dir and _mirror_immutable(path):
-        snapshot = _ensure_mirror(mirror_dir, cli_profile, cli_env)
+        snapshot = _ensure_mirror(mirror_dir, cli_profile, cli_env, scope=mirror_scope)
         if path in snapshot:
             try:
-                with open(_mirror_file(mirror_dir, path), "rb") as handle:
+                with open(
+                    _mirror_file(mirror_dir, path, scope=mirror_scope), "rb"
+                ) as handle:
                     return handle.read()
             except OSError:
                 pass
@@ -251,7 +273,7 @@ def bounded_workspace_read(
             last_error = exc
             continue
         if completed.returncode == 0:
-            _mirror_store(path, completed.stdout)
+            _mirror_store(path, completed.stdout, scope=mirror_scope)
             return completed.stdout
         stderr = completed.stderr.decode(errors="replace")
         if (
@@ -283,7 +305,7 @@ def bounded_workspace_read(
         if isinstance(result, BaseException):
             last_error = result
             continue
-        _mirror_store(path, result)  # type: ignore[arg-type]
+        _mirror_store(path, result, scope=mirror_scope)  # type: ignore[arg-type]
         return result  # type: ignore[return-value]
     raise RuntimeError(
         f"workspace read failed after {attempts} bounded attempts: {path}"
