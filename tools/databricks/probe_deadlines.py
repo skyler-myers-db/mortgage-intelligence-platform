@@ -14,6 +14,7 @@ absolutely.
 
 from __future__ import annotations
 
+import faulthandler
 import os
 import socket
 import sys
@@ -56,6 +57,11 @@ def install_probe_deadlines(*, label: str) -> None:
     watchdog = threading.Timer(_WATCHDOG_SECONDS, _watchdog_abort)
     watchdog.daemon = True
     watchdog.start()
+
+    # Periodic thread dumps: every component of the wedging flow passes in
+    # isolation (2026-08-10 discriminators), so when the wedge recurs the
+    # dump names the exact blocked line instead of another theory.
+    faulthandler.dump_traceback_later(180, repeat=True, file=sys.stderr)
 
     # Fresh-credential settle (2026-08-10 discriminator): with user-auth the
     # accounts API answered in ~200-700ms while the SAME calls under a
