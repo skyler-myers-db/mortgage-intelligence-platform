@@ -17,6 +17,7 @@ from __future__ import annotations
 import faulthandler
 import os
 import socket
+import subprocess
 import sys
 import threading
 
@@ -76,18 +77,48 @@ def bounded_workspace_read(
 ) -> bytes:
     """Download one workspace file with per-attempt deadlines and retries.
 
-    The 2026-08-10 faulthandler capture pinned every deploy wedge to the
-    SDK's streaming workspace download stalling mid-read on a held-open
-    response, with consecutive dumps at different records — stalls clear on
-    a fresh request. Run each read in a worker thread, abandon it at the
-    deadline, retry. ``NotFound``/``ResourceDoesNotExist`` re-raise
-    untouched so callers keep their missing-record contracts.
+    Transport note (2026-08-10): the Python SDK's streaming download stalled
+    on ~every ledger record for hours (faulthandler captures inside
+    ``urllib3.response.stream``) while the Go CLI's ``workspace export``
+    answered the same paths in 1-2 seconds every time. The CLI is therefore
+    the primary transport, authenticated by the same environment the SDK
+    client uses; the bounded SDK thread-read remains as fallback for
+    environments without the CLI. ``NotFound``/``ResourceDoesNotExist``
+    keep their shape so callers keep their missing-record contracts.
     """
 
     from databricks.sdk.errors import NotFound
     from databricks.sdk.errors.platform import ResourceDoesNotExist
 
     last_error: BaseException | None = None
+    # Opt-in via env: the deploy wrappers set this so live runs use the CLI;
+    # unit tests with mocked workspace clients never leak network calls.
+    cli_attempts = 2 if os.environ.get("MIP_PROBE_CLI_TRANSPORT", "").strip() else 0
+    for _attempt in range(cli_attempts):
+        try:
+            completed = subprocess.run(
+                ["databricks", "workspace", "export", path],
+                capture_output=True,
+                timeout=30,
+                check=False,
+            )
+        except FileNotFoundError as exc:
+            last_error = exc
+            break
+        except subprocess.TimeoutExpired as exc:
+            last_error = exc
+            continue
+        if completed.returncode == 0:
+            return completed.stdout
+        stderr = completed.stderr.decode(errors="replace")
+        if (
+            "RESOURCE_DOES_NOT_EXIST" in stderr
+            or "does not exist" in stderr
+            or "doesn't exist" in stderr
+        ):
+            raise ResourceDoesNotExist(f"workspace path missing: {path}")
+        last_error = RuntimeError(f"cli export failed ({completed.returncode}): {stderr[:200]}")
+
     for _attempt in range(attempts):
         outcome: list[object] = []
 
