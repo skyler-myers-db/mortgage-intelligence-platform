@@ -37,7 +37,63 @@ _REVIEWED_PRODUCT_INTENT = (
     r"purchase|listed(?:[- ]for[- ]sale)?|investor|multi[- ]property|"
     r"retention|recapture|in[- ]the[- ]money|high[- ]equity)"
 )
+# Signal columns a planned sub-analysis may name alongside a ranked cohort.
+# Closed: every entry is a governed gold column or Module 0 domain signal
+# (CLAUDE.md domain rules), never free text.
+_REVIEWED_ANALYTIC_SIGNAL = (
+    r"(?:opportunity\s+scores?|lead\s+scores?|rate\s+spreads?|equity(?:\s+percentage)?|"
+    r"ltv|loan[- ]to[- ]value|key\s+triggers?|triggers?|recommended\s+offers?|"
+    r"next[- ]best\s+offers?|segment\s+memberships?|segments?|listing\s+status|"
+    r"competitor\s+liens?|listed\s+for\s+sale|investor\s+status|"
+    r"retention\s+risk|heloc\s+propensity)"
+)
+_REVIEWED_ANALYTIC_SIGNAL_LIST = (
+    rf"{_REVIEWED_ANALYTIC_SIGNAL}(?:\s*,?\s*(?:and\s+)?{_REVIEWED_ANALYTIC_SIGNAL})*"
+)
+# "the top 20 (eligible) borrowers" — the cohort noun a planned deep analysis
+# names in nearly every sub-question.
+_REVIEWED_TOP_COHORT = (
+    r"(?:the\s+)?top\s+(?:[0-9]{1,3}\s+)?"
+    r"(?:eligible\s+|marketing[- ]eligible\s+|highest[- ]scoring\s+)?"
+    r"(?:borrowers?|leads?|candidates?|opportunities)"
+)
+_REVIEWED_WHOLE_POPULATION = (
+    r"(?:the\s+)?(?:full|entire|whole|overall|broader)\s+"
+    r"(?:eligible\s+)?(?:borrower\s+)?(?:population|pool|universe|portfolio|group)"
+)
+
 _REVIEWED_READ_ONLY_ANALYTIC_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(
+        # Ranked shortlist plus its governed signal columns ("who are the top
+        # 20 eligible borrowers ranked by opportunity score, and what are
+        # their rate spread, equity percentage, key triggers, and recommended
+        # offer?"). Captured live 2026-08-10 from the governed space's OWN
+        # deep-analysis plan: the criterion machine read it as an unreviewed
+        # criterion, three of seven planned sub-questions were dropped, the
+        # plan fell under the deep floor, and the sweep aborted silently — the
+        # user saw a single-screen answer instead of the deep decomposition.
+        r"^(?:who|what)\s+(?:are|is)\s+"
+        rf"{_REVIEWED_TOP_COHORT}"
+        r"(?:\s+ranked\s+by\s+" + _REVIEWED_ANALYTIC_SIGNAL_LIST + r")?"
+        r"(?:\s*,?\s*and\s+what\s+(?:are|is)\s+(?:their|its)\s+"
+        + _REVIEWED_ANALYTIC_SIGNAL_LIST
+        + r")?\s*\??$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        # Percentile placement of a ranked cohort within the population
+        # ("what is the percentile rank of the top 20 borrowers for
+        # opportunity score, rate spread, and equity percentage within the
+        # entire eligible borrower pool?"). Same live capture.
+        r"^what\s+(?:is|are)\s+the\s+"
+        r"(?:percentile\s+ranks?|percentiles?|rank(?:ings?)?)\s+of\s+"
+        rf"{_REVIEWED_TOP_COHORT}\s+"
+        r"(?:for|on|by|across)\s+"
+        + _REVIEWED_ANALYTIC_SIGNAL_LIST
+        + rf"(?:\s+(?:within|in|against|compared\s+to)\s+{_REVIEWED_WHOLE_POPULATION})?"
+        r"\s*\??$",
+        re.IGNORECASE,
+    ),
     re.compile(
         # Offer strategy by segment ("which offer should we lead with for each
         # segment, and why?"). The audience grammar read the affirmative
