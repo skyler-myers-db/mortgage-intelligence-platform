@@ -94,13 +94,27 @@ def bounded_workspace_read(
     # Opt-in via env: the deploy wrappers set this so live runs use the CLI;
     # unit tests with mocked workspace clients never leak network calls.
     cli_attempts = 2 if os.environ.get("MIP_PROBE_CLI_TRANSPORT", "").strip() else 0
+    # Identity note (2026-08-10): requests authenticated as the per-run
+    # bounded temp identities stall server-side (dumps: the CLI subprocess
+    # itself sat in communicate() for an hour under the wrapper env), while
+    # the same reads under the operator profile answer in seconds. The
+    # ledger walk is read-only and every record is signature-verified
+    # locally, and the lease root grants the holder CAN_MANAGE by design —
+    # so the read transport pins the operator profile with a clean env
+    # rather than inheriting the wrapper's bounded credentials.
+    cli_profile = os.environ.get("MIP_PROBE_CLI_PROFILE", "").strip() or "DEFAULT"
+    cli_env = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "HOME": os.environ.get("HOME", ""),
+    }
     for _attempt in range(cli_attempts):
         try:
             completed = subprocess.run(
-                ["databricks", "workspace", "export", path],
+                ["databricks", "workspace", "export", path, "--profile", cli_profile],
                 capture_output=True,
                 timeout=30,
                 check=False,
+                env=cli_env,
             )
         except FileNotFoundError as exc:
             last_error = exc
