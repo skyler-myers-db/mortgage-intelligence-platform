@@ -3918,6 +3918,19 @@ a.lineage-node__chip:focus-visible {
   align-content: start;
   overflow-y: auto;
 }
+/* Reconciles the visible tiles against the state total. A drill-down that
+   silently shows a third of the population reads as a broken widget, so the
+   remainder is stated here rather than left to the user to notice. */
+.zip-tiles__reconcile {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-top: 1px solid var(--stroke);
+  color: var(--text-2);
+}
+
 .zip-tile {
   display: flex;
   flex-direction: column;

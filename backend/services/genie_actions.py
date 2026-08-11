@@ -67,6 +67,23 @@ _PLACEHOLDER_ACTION_SECRETS = frozenset(
     }
 )
 _MAX_ACTION_FILTER_VALUES = 500
+# Keys the Lead Queue can actually replay (see `_cohort_route_filters`).
+# Anything else in a Genie answer's result_filters is disclosed, not applied.
+_REPLAYABLE_FILTER_KEYS = frozenset(
+    {
+        "zips",
+        "county",
+        "counties",
+        "states",
+        "segment_codes",
+        "segment_mode",
+        "target_lender_ref",
+        "portfolio_criteria",
+        "borrower_ids",
+        "source",
+    }
+)
+_MAX_UNREPLAYABLE_FILTER_KEYS = 12
 _MAX_ACTION_STATE_VALUES = 56
 _CAMPAIGN_IDEMPOTENCY_LOOKUP_ATTEMPTS = 3
 _CAMPAIGN_IDEMPOTENCY_RETRY_DELAY_S = 0.01
@@ -1053,6 +1070,23 @@ def _cohort_route_filters(
         out["borrower_ids"] = payload_borrower_ids
     if out and source in {"genie", "trusted_sql"}:
         out["source"] = source
+    # Name the predicates the Lead Queue CANNOT replay. The reviewed subset
+    # above is geography/segment/lender only, so every numeric threshold in a
+    # Genie answer — opportunity_score, equity_pct, rate_spread_bps, LTV — is
+    # dropped here. Measured live 2026-08-10: "in-the-money borrowers in IL"
+    # is 1,766, but the same answer narrowed to opportunity_score >= 80 is 32
+    # while the replayed queue still returns 1,766 (55x). Losing the segment
+    # too replays to 76,711 (43x). Silently answering a different question
+    # than the one the user just read is the defect; the count reconciliation
+    # in /leads needs to know WHICH predicates went missing to explain it.
+    if out:
+        unreplayable = sorted(
+            str(key)
+            for key in filters
+            if key not in _REPLAYABLE_FILTER_KEYS and str(key).strip()
+        )
+        if unreplayable:
+            out["unreplayable_filters"] = unreplayable[:_MAX_UNREPLAYABLE_FILTER_KEYS]
     _assert_no_pii(out)
     _assert_allowlisted({"result_filters": out})
     return out

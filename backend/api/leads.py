@@ -85,7 +85,7 @@ _ALLOWED_FUNNEL_STAGES: frozenset[str] = frozenset(
 )
 
 _COHORT_FILTER_SELECT_SQL = """
-SELECT route_filters
+SELECT route_filters, row_count
 FROM mip_app.genie_cohorts
 WHERE cohort_id = %(cohort_id)s
   AND actor_email = %(actor_email)s
@@ -119,7 +119,18 @@ def _safe_audit_write(store: AuditStore, **kwargs: object) -> None:
         )
 
 
-def _load_cohort_filters(cohort_id: str, *, actor: str) -> dict[str, object]:
+def _load_cohort_filters(
+    cohort_id: str, *, actor: str
+) -> tuple[dict[str, object], int | None]:
+    """Return the replayable filters and the count the Genie answer stated.
+
+    The stated count is what the user just read on screen. The queue below
+    replays only the reviewed geography/segment subset, so the two can
+    diverge by orders of magnitude (live 2026-08-10: an answer of 32
+    borrowers replays to 1,766). Carrying it here is what lets the response
+    say so instead of quietly showing a different population.
+    """
+
     try:
         row = get_lakebase_client().fetchone(
             _COHORT_FILTER_SELECT_SQL,
@@ -137,7 +148,13 @@ def _load_cohort_filters(cohort_id: str, *, actor: str) -> dict[str, object]:
             raise HTTPException(status_code=422, detail="cohort route filters are invalid") from exc
     if not isinstance(filters_raw, dict):
         raise HTTPException(status_code=422, detail="cohort route filters are invalid")
-    return filters_raw
+    stated_raw = row.get("row_count")
+    stated_count: int | None
+    try:
+        stated_count = int(stated_raw) if stated_raw is not None else None
+    except (TypeError, ValueError):
+        stated_count = None
+    return filters_raw, stated_count
 
 
 @router.get("/leads", response_model=list[LeadSummary])
@@ -517,13 +534,15 @@ def list_leads(
     cohort_filters: dict[str, object] = {}
 
     cohort_has_replay_filter = False
+    cohort_stated_count: int | None = None
+    cohort_unreplayable: list[str] = []
     segment_mode = _parse_segment_mode(segment_mode)
 
     if cohort_id:
         # Cohort id is the governed source of truth. Query params are
         # useful for shareable URLs and visual chips, but they must not
         # widen a confirmed Genie cohort if the URL is edited by hand.
-        cohort_filters = _load_cohort_filters(cohort_id, actor=actor)
+        cohort_filters, cohort_stated_count = _load_cohort_filters(cohort_id, actor=actor)
         segment = None
         state = None
         zip_code = None
@@ -560,6 +579,9 @@ def list_leads(
         cohort_segments = _cohort_list(cohort_filters, "segment_codes")
         if cohort_segments is not None:
             parsed_segments = _parse_segment_codes(",".join(cohort_segments))
+        unreplayable_raw = cohort_filters.get("unreplayable_filters")
+        if isinstance(unreplayable_raw, list):
+            cohort_unreplayable = [str(key) for key in unreplayable_raw if str(key).strip()]
         cohort_target = str(cohort_filters.get("target_lender_ref") or "").strip()
         if cohort_target:
             target_lender_ref = cohort_target
@@ -736,6 +758,20 @@ def list_leads(
         raise HTTPException(status_code=503, detail="Lakebase temporarily unavailable") from exc
     response.headers["X-Total-Matching"] = str(total_matching)
     response.headers["X-Returned-Rows"] = str(len(leads))
+    if cohort_id and cohort_stated_count is not None:
+        # What the Genie answer said, next to what this queue actually matched.
+        # The queue replays only the reviewed geography/segment subset, so an
+        # answer narrowed by any numeric threshold replays broader — measured
+        # live 2026-08-10 at 55x (32 borrowers -> 1,766). The UI compares these
+        # two and says so rather than presenting a different population under
+        # the same question.
+        response.headers["X-Cohort-Stated-Count"] = str(cohort_stated_count)
+        if cohort_stated_count != total_matching:
+            response.headers["X-Cohort-Count-Delta"] = str(total_matching - cohort_stated_count)
+        if cohort_unreplayable:
+            response.headers["X-Cohort-Unreplayable-Filters"] = ",".join(
+                cohort_unreplayable[:12]
+            )
     if identity is not None and "ranked_total" in identity:
         # Geo-filtered reads report the geography population as the total
         # (map-tile promise); this header carries the ranked subset
