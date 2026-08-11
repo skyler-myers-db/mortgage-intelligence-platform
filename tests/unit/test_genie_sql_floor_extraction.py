@@ -325,6 +325,195 @@ def test_live_captured_turn_still_lifts_its_floor() -> None:
     assert _floors(live) == {"min_opportunity_score": 80}
 
 
+# --- Position is not grain -------------------------------------------------
+#
+# An outer WHERE is in filter position even when the outermost FROM is a CTE
+# that re-aggregated the same column name. The bound then filters GROUPS and
+# the queue replays it against BORROWERS.
+
+
+_REAGGREGATING_CTE_SQL = """
+WITH state_scores AS (
+  SELECT state, CAST(ROUND(AVG(opportunity_score)) AS INT) AS opportunity_score,
+         COUNT(*) AS total_matching_borrowers
+  FROM mip.gold.borrower_360 GROUP BY state)
+SELECT state, opportunity_score, total_matching_borrowers
+FROM state_scores WHERE opportunity_score >= 40 ORDER BY opportunity_score DESC
+"""
+
+
+def test_a_bound_lifted_from_a_reaggregating_cte_is_disclosed_not_replayed() -> None:
+    """The grain defect, measured live on paychex gold 2026-08-11.
+
+    ``opportunity_score >= 40`` over ``state_scores`` selects the states whose
+    AVERAGE clears 40 — FL and CA, 70,576 eligible borrowers. Replayed as
+    ``b.opportunity_score >= 40`` per borrower the queue shows 44,268: 26,308
+    dropped, 37%, and ``unreplayable`` was empty so nothing said so.
+    """
+
+    assert _floors(_REAGGREGATING_CTE_SQL) == {}
+    assert _disclosed(_REAGGREGATING_CTE_SQL) == ("opportunity_score_threshold",)
+    # The layer that shipped the truncation: the handoff itself. Rows are the
+    # ones the live warehouse returned for this statement, 2026-08-11.
+    route, filters = _route(
+        "which states average an opportunity score of 40 or better",
+        _REAGGREGATING_CTE_SQL,
+        [
+            {"state": "FL", "opportunity_score": 40, "total_matching_borrowers": 752_572},
+            {"state": "CA", "opportunity_score": 40, "total_matching_borrowers": 900_371},
+        ],
+    )
+    assert filters["states"] == ["FL", "CA"]
+    assert "min_opportunity_score" not in filters
+    assert "min_opportunity_score" not in route
+    assert filters["opportunity_score_threshold"] is True
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        # The same rebinding through a derived table rather than a CTE.
+        "SELECT state, opportunity_score FROM (SELECT state, AVG(opportunity_score) AS "
+        f"opportunity_score FROM {_B360} GROUP BY state) t WHERE opportunity_score >= 40",
+        # A rename: the outer name is not the base column it looks like.
+        "WITH s AS (SELECT state, avg_score AS opportunity_score FROM mip.gold.state_scores) "
+        "SELECT * FROM s WHERE opportunity_score >= 40",
+        # An unresolvable source rebinds everything it offers.
+        "WITH s AS (SELECT state, opportunity_score FROM mip.gold.borrower_360) "
+        "SELECT * FROM missing_cte WHERE opportunity_score >= 40",
+    ],
+)
+def test_a_rebound_column_never_becomes_a_floor(sql: str) -> None:
+    assert _floors(sql) == {}
+    assert _disclosed(sql) == ("opportunity_score_threshold",)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        # A CTE that only filters keeps the base column, so the floor stands.
+        f"WITH eligible AS (SELECT * FROM {_B360} WHERE marketing_eligible = TRUE) "
+        "SELECT * FROM eligible WHERE opportunity_score >= 80",
+        # An explicit pass-through, including the `x AS x` spelling.
+        f"WITH e AS (SELECT borrower_id, opportunity_score AS opportunity_score FROM {_B360}) "
+        "SELECT * FROM e WHERE opportunity_score >= 80",
+        # Projected through a GROUP BY it has to be a grouping key, so
+        # filtering the groups selects exactly the base rows.
+        f"WITH g AS (SELECT opportunity_score, COUNT(*) AS n FROM {_B360} "
+        "GROUP BY opportunity_score) SELECT * FROM g WHERE opportunity_score >= 80",
+    ],
+)
+def test_a_pass_through_column_still_lifts_its_floor(sql: str) -> None:
+    """The gate refuses rebinding, not every CTE."""
+
+    assert _floors(sql) == {"min_opportunity_score": 80}
+    assert _disclosed(sql) == ()
+
+
+def test_a_lateral_view_rebinds_its_own_alias_and_nothing_else() -> None:
+    """"... by segment" is a MIP idiom, and it must not cost the floor.
+
+    ``FROM borrower_360 LATERAL VIEW explode(segment_codes) seg AS
+    segment_code`` multiplies rows but leaves every base column alone, so a
+    bound on a base column still selects the same borrowers. Refusing the
+    whole statement would drop the floor on the shape the repo itself serves
+    (``_CANONICAL_MEAN_RATE_SPREAD_BY_SEGMENT_SQL``); only the alias column is
+    rebound.
+    """
+
+    explode = f"FROM {_B360} LATERAL VIEW explode(segment_codes) seg AS segment_code"
+    assert _floors(f"SELECT segment_code, COUNT(*) {explode} WHERE rate_spread_bps >= 25 "
+                   "GROUP BY segment_code") == {"min_rate_spread_bps": 25}
+    outer = f"FROM {_B360} LATERAL VIEW OUTER explode(segment_codes) seg AS segment_code"
+    assert _floors(f"SELECT segment_code {outer} WHERE opportunity_score >= 80") == {
+        "min_opportunity_score": 80
+    }
+    # The alias itself is not the base column it is named after.
+    aliased = (
+        f"SELECT segment_code FROM {_B360} "
+        "LATERAL VIEW explode(scores) seg AS opportunity_score WHERE opportunity_score >= 80"
+    )
+    assert _floors(aliased) == {}
+    assert _disclosed(aliased) == ("opportunity_score_threshold",)
+
+
+def test_a_rebound_column_cannot_carry_a_criterion_either() -> None:
+    """`min_equity_pct_label` narrows exactly as a floor does."""
+
+    sql = (
+        f"WITH s AS (SELECT state, AVG(equity_pct) AS equity_pct, "
+        f"MAX(is_owner_occupied) AS is_owner_occupied FROM {_B360} GROUP BY state) "
+        "SELECT * FROM s WHERE equity_pct >= 40 AND is_owner_occupied = TRUE"
+    )
+    assert _portfolio_criteria_from_sql(sql) == {}
+    assert _floors(sql) == {}
+    assert _disclosed(sql) == ("equity_pct_threshold",)
+
+
+# --- A string literal is data, never a predicate ---------------------------
+#
+# The tokenizer opaques literals, so a threshold inside one was already out of
+# reach of `floors`. `predicates` re-sliced the RAW sql, so the criteria
+# readers regexed the literal's body and DATA fabricated narrowing criteria
+# (adversarial review 2026-08-11).
+
+
+@pytest.mark.parametrize(
+    "literal",
+    [
+        "is_owner_occupied = true",
+        "recommended_offer_code in (heloc, refi_plus_heloc)",
+        "equity_pct >= 40",
+        "coalesce(related_property_count, 1) >= 5",
+        "current_lien_balance is null and second_pos_amount is null",
+        "listed_for_sale = true",
+    ],
+)
+def test_a_string_literal_body_cannot_spell_a_criterion(literal: str) -> None:
+    sql = f"SELECT * FROM {_B360} WHERE state = 'IL' AND note = '{literal}'"
+    assert _portfolio_criteria_from_sql(sql) == {}
+    assert _floors(sql) == {}
+    assert literal not in " ".join(read_sql_filters(sql).predicates)
+
+
+def test_opaquing_literals_keeps_the_predicates_that_really_are_predicates() -> None:
+    """The offer-code vocabulary is spelled in literals, so they must survive."""
+
+    sql = (
+        f"SELECT * FROM {_B360} WHERE recommended_offer_code IN ('heloc','refi_plus_heloc') "
+        "AND is_owner_occupied = TRUE AND equity_pct >= 25 AND state = 'IL'"
+    )
+    assert _portfolio_criteria_from_sql(sql) == {
+        "occupancy": "Owner-occupied",
+        "product": "HELOC",
+        "min_equity_pct_label": "≥ 25%",
+    }
+    assert _floors(sql) == {"min_equity_pct": 25}
+    assert "state = 'il'" in read_sql_filters(sql).predicates
+
+
+def test_a_string_literal_body_cannot_fabricate_an_intersection() -> None:
+    """`mode="all"` is the narrowing direction, and a literal could spell it."""
+
+    attack = (
+        f"SELECT * FROM {_B360} WHERE array_contains(segment_codes,'itm') "
+        'AND note = "array_contains(segment_codes,\'equity\')"'
+    )
+    assert _mode(attack, ["itm", "equity"]) == "any"
+    real = (
+        f"SELECT * FROM {_B360} WHERE array_contains(segment_codes,'itm') "
+        "AND array_contains(segment_codes,'equity')"
+    )
+    assert _mode(real, ["itm", "equity"]) == "all"
+
+
+def test_a_comment_inside_a_literal_no_longer_truncates_the_predicate() -> None:
+    """Stripping comments from the raw slice used to cut a literal in half."""
+
+    sql = f"SELECT * FROM {_B360} WHERE note = 'a--b' AND is_owner_occupied = TRUE"
+    assert _portfolio_criteria_from_sql(sql) == {"occupancy": "Owner-occupied"}
+
+
 def test_strict_inequality_normalizes_on_whole_number_columns() -> None:
     # Verified live 2026-08-11: opportunity_score, equity_pct and
     # rate_spread_bps are all `int` in gold with zero fractional rows, so

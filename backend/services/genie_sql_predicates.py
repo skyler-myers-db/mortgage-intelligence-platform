@@ -34,8 +34,42 @@ So this module gates on POSITION, not on shape: a bound counts only when it
 stands as a top-level AND-conjunct of the outermost statement's own WHERE /
 inner-join ON / QUALIFY, unnegated and not under an OR. Everything else --
 the select list, HAVING, GROUP BY, ORDER BY, aggregate FILTER clauses, CASE
-arms, string literals, comments, CTE and subquery bodies -- is structurally
-out of reach because the scanner never visits it.
+arms, comments, CTE and subquery bodies -- is structurally out of reach
+because the scanner never visits it.
+
+String literals are opaqued, not skipped
+----------------------------------------
+The tokenizer emits a literal as a contentless ``string`` token, so a
+threshold inside one can never become a floor. ``predicates`` (the accepted
+conjuncts, which callers regex for reviewed criteria) is rebuilt from those
+tokens rather than re-sliced from the raw statement, and a literal body is
+reproduced only when it is a bare ``[A-Za-z0-9_]`` word -- enough for a real
+``recommended_offer_code IN ('heloc','refi_plus_heloc')`` predicate, never
+enough to spell one. Re-slicing the raw text handed the criteria readers the
+literal's body, and DATA fabricated narrowing criteria: ``note =
+'is_owner_occupied = true'`` yielded ``occupancy="Owner-occupied"``
+(adversarial review 2026-08-11).
+
+Position is not grain
+---------------------
+An outer WHERE stands in filter position even when the outermost FROM is not
+a base table. If a CTE re-aggregates and REUSES the column name, the outer
+bound filters GROUPS while the Lead Queue would replay it against individual
+borrowers::
+
+    WITH state_scores AS (
+      SELECT state, CAST(ROUND(AVG(opportunity_score)) AS INT) AS opportunity_score
+      FROM mip.gold.borrower_360 GROUP BY state)
+    SELECT state, opportunity_score FROM state_scores WHERE opportunity_score >= 40
+
+Live 2026-08-11: the bound picked 2 states whose AVERAGE clears 40 (70,576
+eligible borrowers); replayed per-borrower it left 44,268 -- 26,308 dropped
+with no disclosure at all. So a conjunct is admitted only when every name it
+mentions is bound by the outermost FROM to the BASE column of that name: a
+bare pass-through survives (including through a GROUP BY, where a projected
+column must be a grouping key), an expression, an aggregate or a rename does
+not, and a source this reader cannot resolve rebinds everything. A refused
+bound is DISCLOSED, never dropped in silence.
 
 What it deliberately refuses
 ----------------------------
@@ -43,6 +77,9 @@ What it deliberately refuses
 * Outer-join ON clauses: they do not filter the preserved side.
 * CTE/subquery bodies: a real filter can live there, and refusing it replays
   broader, which is disclosed. Guessing replays narrower, which is not.
+* Bounds on a column the outermost FROM rebound (see "Position is not
+  grain"), and every bound at all when a source is a table function, a
+  LATERAL VIEW, a set operation or an unresolvable name.
 * Bound parameters (``>= :min_score``): the value is unknowable here, so the
   threshold is DISCLOSED as unreplayable instead of dropped in silence.
 * Bounds outside the reviewed cohort domain (a negative ``rate_spread_bps``
@@ -58,6 +95,21 @@ import re
 from dataclasses import dataclass
 
 from backend.schemas.genie_numeric_filters import GENIE_NUMERIC_FILTER_BOUNDS
+from backend.services.genie_sql_tokens import (
+    CLAUSE_WORDS,
+    COMMENT_RE,
+    NON_FILTERING_JOIN_WORDS,
+    SET_OPERATOR_WORDS,
+    WHITESPACE_RE,
+    Token,
+    is_base_grain,
+    is_word,
+    matching_paren,
+    qualified_name,
+    rebound_columns,
+    tokenize,
+    unwrap,
+)
 from backend.services.scoring import HIGH_OPPORTUNITY_THRESHOLD
 
 # Numeric floors the Lead Queue replays verbatim, keyed by the gold column and
@@ -94,66 +146,13 @@ _HIGH_OPPORTUNITY_KEY = "min_opportunity_score"
 # disclosure, so the divergence is visible instead of silent.
 _DISCLOSURE_SUFFIX = "_threshold"
 
-_WORD_RE = re.compile(r"[A-Za-z_][A-Za-z_0-9$]*")
-_NUMBER_RE = re.compile(r"\d+(?:\.\d+)?(?:[eE][+-]?\d+)?")
-_COMMENT_RE = re.compile(r"/\*.*?\*/|--[^\n]*", re.DOTALL)
-_WHITESPACE_RE = re.compile(r"\s+")
-_MULTI_CHAR_PUNCT = ("<=>", "->>", "||", "->", "<=", ">=", "<>", "!=", "!<", "!>", "::", "=>")
-
-# A depth-0 word that ends one clause and may begin another. A column or alias
-# that happens to share one of these names closes a region early, which can
-# only cost a floor -- never invent one.
-_CLAUSE_WORDS = frozenset(
-    {
-        "select",
-        "from",
-        "where",
-        "group",
-        "having",
-        "qualify",
-        "window",
-        "order",
-        "limit",
-        "offset",
-        "cluster",
-        "distribute",
-        "sort",
-        "join",
-        "on",
-        "using",
-        "lateral",
-        "values",
-        "into",
-        "tablesample",
-        "pivot",
-        "unpivot",
-        "fetch",
-        "with",
-        "inner",
-        "cross",
-        "outer",
-        "left",
-        "right",
-        "full",
-        "natural",
-        "semi",
-        "anti",
-    }
-)
-_SET_OPERATOR_WORDS = frozenset({"union", "intersect", "except", "minus"})
-# Join flavours whose ON clause does NOT filter the preserved side.
-_NON_FILTERING_JOIN_WORDS = frozenset({"left", "right", "full", "natural", "semi", "anti"})
+# A string literal's body is reproduced in ``predicates`` only when it is a
+# bare word: enough for a real offer-code predicate, never enough to spell a
+# predicate of its own.
+_OPAQUE_LITERAL = "''"
+_PLAIN_LITERAL_RE = re.compile(r"[A-Za-z0-9_]*")
 
 _MAX_SQL_CHARS = 200_000
-_MAX_TOKENS = 20_000
-
-
-@dataclass(frozen=True)
-class _Token:
-    kind: str  # word | number | string | param | punct
-    text: str
-    start: int
-    end: int
 
 
 @dataclass(frozen=True)
@@ -175,118 +174,7 @@ class SqlFilterReading:
 _EMPTY_READING = SqlFilterReading(floors={})
 
 
-def _tokenize(sql: str) -> list[_Token] | None:
-    """Split SQL into tokens, dropping comments and opaquing string literals.
-
-    Returns ``None`` for input this module refuses to reason about (an
-    unterminated comment or quote), which the caller turns into "no floor".
-    """
-
-    tokens: list[_Token] = []
-    index = 0
-    length = len(sql)
-    while index < length:
-        if len(tokens) > _MAX_TOKENS:
-            return None
-        char = sql[index]
-        if char.isspace():
-            index += 1
-            continue
-        if sql.startswith("--", index):
-            newline = sql.find("\n", index)
-            index = length if newline < 0 else newline + 1
-            continue
-        if sql.startswith("/*", index):
-            close = sql.find("*/", index + 2)
-            if close < 0:
-                return None
-            index = close + 2
-            continue
-        if char in "'\"":
-            end = _quoted_end(sql, index, char)
-            if end < 0:
-                return None
-            tokens.append(_Token("string", "", index, end))
-            index = end
-            continue
-        if char == "`":
-            close = sql.find("`", index + 1)
-            if close < 0:
-                return None
-            tokens.append(_Token("word", sql[index + 1 : close].lower(), index, close + 1))
-            index = close + 1
-            continue
-        if char == ":" and not sql.startswith("::", index):
-            named = _WORD_RE.match(sql, index + 1)
-            if named:
-                tokens.append(_Token("param", named.group(0).lower(), index, named.end()))
-                index = named.end()
-                continue
-        word = _WORD_RE.match(sql, index)
-        if word:
-            tokens.append(_Token("word", word.group(0).lower(), index, word.end()))
-            index = word.end()
-            continue
-        number = _NUMBER_RE.match(sql, index)
-        if number:
-            tokens.append(_Token("number", number.group(0), index, number.end()))
-            index = number.end()
-            continue
-        for operator in _MULTI_CHAR_PUNCT:
-            if sql.startswith(operator, index):
-                tokens.append(_Token("punct", operator, index, index + len(operator)))
-                index += len(operator)
-                break
-        else:
-            tokens.append(_Token("punct", char, index, index + 1))
-            index += 1
-    return tokens
-
-
-def _quoted_end(sql: str, start: int, quote: str) -> int:
-    index = start + 1
-    length = len(sql)
-    while index < length:
-        char = sql[index]
-        if char == "\\":
-            index += 2
-            continue
-        if char == quote:
-            if index + 1 < length and sql[index + 1] == quote:
-                index += 2
-                continue
-            return index + 1
-        index += 1
-    return -1
-
-
-def _matching_paren(tokens: list[_Token] | tuple[_Token, ...], start: int) -> int:
-    depth = 0
-    for index in range(start, len(tokens)):
-        token = tokens[index]
-        if token.kind != "punct":
-            continue
-        if token.text == "(":
-            depth += 1
-        elif token.text == ")":
-            depth -= 1
-            if depth == 0:
-                return index
-    return -1
-
-
-def _unwrap(tokens: list[_Token]) -> list[_Token]:
-    while (
-        len(tokens) > 1
-        and tokens[0].kind == "punct"
-        and tokens[0].text == "("
-        and _matching_paren(tokens, 0) == len(tokens) - 1
-    ):
-        tokens = tokens[1:-1]
-    return tokens
-
-
-def _filter_regions(tokens: list[_Token]) -> tuple[tuple[_Token, ...], ...] | None:
+def _filter_regions(tokens: list[Token]) -> tuple[tuple[Token, ...], ...] | None:
     """Token spans of the outermost statement's own row filters.
 
     Only WHERE, QUALIFY, and the ON of a plain/INNER join qualify. Everything
@@ -297,13 +185,13 @@ def _filter_regions(tokens: list[_Token]) -> tuple[tuple[_Token, ...], ...] | No
 
     while tokens and tokens[-1].kind == "punct" and tokens[-1].text == ";":
         tokens = tokens[:-1]
-    tokens = _unwrap(tokens)
+    tokens = unwrap(tokens)
     if not tokens:
         return None
     if tokens[0].kind != "word" or tokens[0].text not in {"select", "with"}:
         return None
 
-    regions: list[tuple[_Token, ...]] = []
+    regions: list[tuple[Token, ...]] = []
     depth = 0
     open_start: int | None = None
     join_modifier = False
@@ -323,14 +211,14 @@ def _filter_regions(tokens: list[_Token]) -> tuple[tuple[_Token, ...], ...] | No
         if depth != 0 or token.kind != "word":
             continue
         word = token.text
-        if word in _SET_OPERATOR_WORDS:
+        if word in SET_OPERATOR_WORDS:
             return None
-        if word in _NON_FILTERING_JOIN_WORDS:
+        if word in NON_FILTERING_JOIN_WORDS:
             join_modifier = True
         elif word == "join":
             join_on_filters = not join_modifier
             join_modifier = False
-        if word not in _CLAUSE_WORDS:
+        if word not in CLAUSE_WORDS:
             continue
         if open_start is not None:
             regions.append(tuple(tokens[open_start:index]))
@@ -343,15 +231,15 @@ def _filter_regions(tokens: list[_Token]) -> tuple[tuple[_Token, ...], ...] | No
 
 
 def _split_conjunction(
-    tokens: tuple[_Token, ...],
-) -> list[tuple[_Token, ...]] | None:
+    tokens: tuple[Token, ...],
+) -> list[tuple[Token, ...]] | None:
     """Split on top-level AND. ``None`` means an OR makes nothing guaranteed.
 
     ``BETWEEN a AND b`` owns its AND, so it never splits a leaf.
     """
 
-    parts: list[tuple[_Token, ...]] = []
-    current: list[_Token] = []
+    parts: list[tuple[Token, ...]] = []
+    current: list[Token] = []
     depth = 0
     pending_between = 0
     for token in tokens:
@@ -377,13 +265,13 @@ def _split_conjunction(
     return parts
 
 
-def _conjuncts(tokens: tuple[_Token, ...]) -> list[tuple[_Token, ...]]:
+def _conjuncts(tokens: tuple[Token, ...]) -> list[tuple[Token, ...]]:
     """Leaf predicates that must ALL hold for a row to survive."""
 
     parts = _split_conjunction(tokens)
     if parts is None:
         return []
-    leaves: list[tuple[_Token, ...]] = []
+    leaves: list[tuple[Token, ...]] = []
     for part in parts:
         if not part:
             continue
@@ -394,7 +282,7 @@ def _conjuncts(tokens: tuple[_Token, ...]) -> list[tuple[_Token, ...]]:
         if (
             part[0].kind == "punct"
             and part[0].text == "("
-            and _matching_paren(part, 0) == len(part) - 1
+            and matching_paren(part, 0) == len(part) - 1
         ):
             leaves.extend(_conjuncts(part[1:-1]))
             continue
@@ -402,25 +290,8 @@ def _conjuncts(tokens: tuple[_Token, ...]) -> list[tuple[_Token, ...]]:
     return leaves
 
 
-def _qualified_name(tokens: tuple[_Token, ...], start: int) -> tuple[str, int] | None:
-    """Read ``[catalog.][schema.][table.]name`` -> (name, next index)."""
 
-    if start >= len(tokens) or tokens[start].kind != "word":
-        return None
-    name = tokens[start].text
-    index = start + 1
-    while (
-        index + 1 < len(tokens)
-        and tokens[index].kind == "punct"
-        and tokens[index].text == "."
-        and tokens[index + 1].kind == "word"
-    ):
-        name = tokens[index + 1].text
-        index += 2
-    return name, index
-
-
-def _number(tokens: tuple[_Token, ...], start: int) -> tuple[float, int] | None:
+def _number(tokens: tuple[Token, ...], start: int) -> tuple[float, int] | None:
     index = start
     sign = 1.0
     if index < len(tokens) and tokens[index].kind == "punct" and tokens[index].text in {"+", "-"}:
@@ -435,7 +306,7 @@ def _number(tokens: tuple[_Token, ...], start: int) -> tuple[float, int] | None:
     return sign * value, index + 1
 
 
-def _is_parameter(tokens: tuple[_Token, ...], start: int) -> bool:
+def _is_parameter(tokens: tuple[Token, ...], start: int) -> bool:
     if start >= len(tokens):
         return False
     token = tokens[start]
@@ -455,16 +326,16 @@ def _floor_value(value: float, *, strict: bool) -> int:
     return math.floor(value)
 
 
-def _high_opportunity_leaf(leaf: tuple[_Token, ...]) -> bool:
+def _high_opportunity_leaf(leaf: tuple[Token, ...]) -> bool:
     """True for a bare ``fn_high_opportunity(...)`` predicate (optionally = TRUE)."""
 
-    named = _qualified_name(leaf, 0)
+    named = qualified_name(leaf, 0)
     if named is None or named[0] != _HIGH_OPPORTUNITY_FN:
         return False
     index = named[1]
     if index >= len(leaf) or leaf[index].kind != "punct" or leaf[index].text != "(":
         return False
-    close = _matching_paren(leaf, index)
+    close = matching_paren(leaf, index)
     if close < 0:
         return False
     rest = leaf[close + 1 :]
@@ -474,7 +345,7 @@ def _high_opportunity_leaf(leaf: tuple[_Token, ...]) -> bool:
     return texts in (["=", "true"], ["is", "true"])
 
 
-def _leaf_bound(leaf: tuple[_Token, ...]) -> tuple[str, int | None] | None:
+def _leaf_bound(leaf: tuple[Token, ...]) -> tuple[str, int | None] | None:
     """Read one conjunct as a cohort floor.
 
     Returns ``(filter key, floor)``; a ``None`` floor means the bound is real
@@ -486,7 +357,7 @@ def _leaf_bound(leaf: tuple[_Token, ...]) -> tuple[str, int | None] | None:
     if _high_opportunity_leaf(leaf):
         return _HIGH_OPPORTUNITY_KEY, HIGH_OPPORTUNITY_THRESHOLD
 
-    named = _qualified_name(leaf, 0)
+    named = qualified_name(leaf, 0)
     if named is not None:
         column, index = named
         entry = SQL_NUMERIC_FLOOR_COLUMNS.get(column)
@@ -501,11 +372,11 @@ def _leaf_bound(leaf: tuple[_Token, ...]) -> tuple[str, int | None] | None:
                     return entry, None
             if operator.kind == "word" and operator.text == "between":
                 low = _number(leaf, index + 1)
-                if low is not None and _is_word(leaf, low[1], "and"):
+                if low is not None and is_word(leaf, low[1], "and"):
                     high = _number(leaf, low[1] + 1)
                     if high is not None and high[1] == len(leaf):
                         return entry, _floor_value(low[0], strict=False)
-                if _is_parameter(leaf, index + 1) and _is_word(leaf, index + 2, "and"):
+                if _is_parameter(leaf, index + 1) and is_word(leaf, index + 2, "and"):
                     return entry, None
 
     # Mirrored form: ``80 <= opportunity_score``.
@@ -514,7 +385,7 @@ def _leaf_bound(leaf: tuple[_Token, ...]) -> tuple[str, int | None] | None:
     if reversed_bound is not None or parameter_first:
         index = reversed_bound[1] if reversed_bound is not None else 1
         if index < len(leaf) and leaf[index].kind == "punct" and leaf[index].text in {"<=", "<"}:
-            mirrored = _qualified_name(leaf, index + 1)
+            mirrored = qualified_name(leaf, index + 1)
             if mirrored is not None and mirrored[1] == len(leaf):
                 entry = SQL_NUMERIC_FLOOR_COLUMNS.get(mirrored[0])
                 if entry is not None:
@@ -526,13 +397,32 @@ def _leaf_bound(leaf: tuple[_Token, ...]) -> tuple[str, int | None] | None:
     return None
 
 
-def _is_word(leaf: tuple[_Token, ...], index: int, word: str) -> bool:
-    return index < len(leaf) and leaf[index].kind == "word" and leaf[index].text == word
+def _leaf_text(sql: str, leaf: tuple[Token, ...]) -> str:
+    """Rebuild one conjunct from its TOKENS, with literal bodies opaqued.
 
+    Re-slicing the raw statement handed the criteria readers text the
+    tokenizer had deliberately made contentless, so a string literal's body
+    was scanned as if it were SQL: ``note = 'is_owner_occupied = true'``
+    fabricated ``occupancy="Owner-occupied"`` out of DATA (adversarial review
+    2026-08-11). A body is reproduced only when it is a bare word, which
+    keeps a real ``recommended_offer_code IN ('heloc','refi_plus_heloc')``
+    readable without letting any literal spell a predicate.
+    """
 
-def _leaf_text(sql: str, leaf: tuple[_Token, ...]) -> str:
-    raw = sql[leaf[0].start : leaf[-1].end]
-    return _WHITESPACE_RE.sub(" ", _COMMENT_RE.sub(" ", raw)).strip().lower()
+    pieces: list[str] = []
+    cursor = leaf[0].start
+    for token in leaf:
+        if token.start > cursor:
+            # Only whitespace and comments can sit between two tokens.
+            pieces.append(COMMENT_RE.sub(" ", sql[cursor : token.start]))
+        if token.kind == "string":
+            body = sql[token.start + 1 : token.end - 1]
+            plain = _PLAIN_LITERAL_RE.fullmatch(body)
+            pieces.append(f"'{body}'" if plain else _OPAQUE_LITERAL)
+        else:
+            pieces.append(sql[token.start : token.end])
+        cursor = token.end
+    return WHITESPACE_RE.sub(" ", "".join(pieces)).strip().lower()
 
 
 def _disclosure_name(key: str) -> str:
@@ -547,28 +437,38 @@ def read_sql_filters(sql_query: str | None) -> SqlFilterReading:
 
     if not sql_query or not sql_query.strip() or len(sql_query) > _MAX_SQL_CHARS:
         return _EMPTY_READING
-    tokens = _tokenize(sql_query)
+    tokens = tokenize(sql_query)
     if not tokens:
         return _EMPTY_READING
     regions = _filter_regions(tokens)
     if not regions:
         return _EMPTY_READING
 
-    leaves: list[tuple[_Token, ...]] = []
+    leaves: list[tuple[Token, ...]] = []
     for region in regions:
         leaves.extend(_conjuncts(region))
     if not leaves:
         return _EMPTY_READING
 
+    # A conjunct only means what it says when the outermost FROM still binds
+    # its names to the base columns: an outer bound over a re-aggregating CTE
+    # filters GROUPS, and replaying it per borrower silently truncates.
+    rebound = rebound_columns(tokens)
     bounds: dict[str, set[int | None]] = {}
+    unreplayable: list[str] = []
+    accepted: list[tuple[Token, ...]] = []
     for leaf in leaves:
         bound = _leaf_bound(leaf)
+        if not is_base_grain(leaf, rebound):
+            if bound is not None:
+                unreplayable.append(_disclosure_name(bound[0]))
+            continue
+        accepted.append(leaf)
         if bound is None:
             continue
         bounds.setdefault(bound[0], set()).add(bound[1])
 
     floors: dict[str, int] = {}
-    unreplayable: list[str] = []
     for key, values in bounds.items():
         minimum, maximum = GENIE_NUMERIC_FILTER_BOUNDS.get(key, (0, 0))
         # Several disagreeing bounds on one column are not one cohort floor,
@@ -584,6 +484,6 @@ def read_sql_filters(sql_query: str | None) -> SqlFilterReading:
         floors[key] = floor
     return SqlFilterReading(
         floors=floors,
-        unreplayable=tuple(sorted(unreplayable)),
-        predicates=tuple(_leaf_text(sql_query, leaf) for leaf in leaves),
+        unreplayable=tuple(sorted(set(unreplayable))),
+        predicates=tuple(_leaf_text(sql_query, leaf) for leaf in accepted),
     )

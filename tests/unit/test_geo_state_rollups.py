@@ -456,6 +456,46 @@ def test_state_rollups_disclose_the_contactable_subset() -> None:
         assert row["contactable"] <= row["addressable"]
 
 
+def test_state_tile_contactable_is_computed_by_the_eligibility_rule() -> None:
+    """The fixture must DERIVE the subset, not declare it.
+
+    ``contactable`` used to be a hardcoded ~4% of ``addressable`` on every
+    fixture row. Two things followed: the number could not move when the
+    eligibility rule moved, and it was identical under every filter — so no
+    route-level test could tell a tile that reports ``contactable`` from one
+    that reports ``addressable``, which is exactly the map-tooltip bug
+    (adversarial review 2026-08-11).
+    """
+
+    from backend.services.eligibility import GoldEligibilityService
+    from tests.fixtures.in_process_repos import _FIXTURE_STATE_POPULATION
+
+    eligibility = GoldEligibilityService()
+    rows = {row["state"]: row for row in client.get("/api/geo/state-rollups").json()["rollups"]}
+    assert rows
+    for state, borrowers in _FIXTURE_STATE_POPULATION.items():
+        row = rows[state]
+        assert row["contactable"] == sum(
+            1 for borrower in borrowers if eligibility.evaluate(borrower).eligible
+        ), f"{state} reports a contactable count the eligibility rule did not produce"
+        # Strictly smaller, so swapping the two fields is visible.
+        assert 0 < row["contactable"] < row["addressable"]
+
+    filtered = client.get("/api/geo/state-rollups?segment_codes=itm")
+    assert filtered.status_code == 200, filtered.text
+    filtered_rows = {row["state"]: row for row in filtered.json()["rollups"]}
+    assert filtered_rows, "a segment filter must not empty the fixture map"
+    moved = [
+        state
+        for state, row in filtered_rows.items()
+        if row["addressable"] < rows[state]["addressable"]
+        and row["contactable"] < rows[state]["contactable"]
+    ]
+    assert moved, "both numbers must narrow with the filter, not just the headline"
+    for row in filtered_rows.values():
+        assert 0 < row["contactable"] < row["addressable"]
+
+
 def test_segment_summaries_disclose_the_contactable_subset() -> None:
     """Same contract on the segment cards, which have the same 23x gap."""
     response = client.get("/api/segments")

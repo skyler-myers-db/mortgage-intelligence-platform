@@ -491,13 +491,18 @@ def list_leads(
         response.headers["X-Cohort-Stated-Count"] = str(cohort_stated_count)
         if cohort_stated_count != total_matching:
             response.headers["X-Cohort-Count-Delta"] = str(total_matching - cohort_stated_count)
-        if cohort_unreplayable:
-            # Already re-folded and capped by CohortReplay: these names are
-            # model-authored and rows written by earlier builds stored them
-            # raw, so a stored `ltv<=80` raised UnicodeEncodeError out of this
-            # route (an unhandled 500 that made the cohort permanently
-            # unopenable) and CRLF made h11 reject the response outright.
-            response.headers["X-Cohort-Unreplayable-Filters"] = ",".join(cohort_unreplayable)
+    if cohort_id and cohort_unreplayable:
+        # Deliberately NOT nested under the stated-count branch. What the queue
+        # could not replay is the reason its number differs, so it has to be
+        # reported even when the cohort row carries no row_count to compare
+        # against — otherwise the one case with no stated count is also the one
+        # that says nothing about why (adversarial review 2026-08-11).
+        # Already re-folded and capped by CohortReplay: these names are
+        # model-authored and rows written by earlier builds stored them raw, so
+        # a stored `ltv<=80` raised UnicodeEncodeError out of this route (an
+        # unhandled 500 that made the cohort permanently unopenable) and CRLF
+        # made h11 reject the response outright.
+        response.headers["X-Cohort-Unreplayable-Filters"] = ",".join(cohort_unreplayable)
     if identity is not None and "ranked_total" in identity:
         # Geo-filtered reads report the geography population as the total
         # (map-tile promise); this header carries the ranked subset

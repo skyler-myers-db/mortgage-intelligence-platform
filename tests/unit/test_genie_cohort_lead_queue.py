@@ -179,3 +179,86 @@ def test_lead_queue_cohort_rejects_invalid_lakebase_route_filters(
 
         assert response.status_code == 422, route_filters
         assert repo.calls == []
+
+
+class _FloorCohortLakebase:
+    """A governed cohort that carries the answer's own numeric floors."""
+
+    def fetchone(self, sql: str, params: dict[str, object] | None = None) -> dict[str, object] | None:
+        _ = (sql, params)
+        return {
+            "route_filters": json.dumps(
+                {
+                    "states": ["IL"],
+                    "min_opportunity_score": 80,
+                    "min_rate_spread_bps": 100,
+                }
+            )
+        }
+
+
+def test_floor_carrying_cohort_survives_the_shared_fixture_double(monkeypatch) -> None:
+    """Run the floors through the SHARED double, not a `**kwargs` capture stub.
+
+    Every other route test here injects `_CaptureLeadRepo`, which absorbs any
+    argument. The double the rest of the suite uses did not accept
+    `min_opportunity_score` / `min_rate_spread_bps` at all, so a floor-carrying
+    cohort raised `TypeError: got an unexpected keyword argument` and the route
+    returned an opaque 500 (adversarial review 2026-08-11). Asserting through
+    the shared double is the only way this stays fixed.
+    """
+
+    monkeypatch.setattr(cohort_replay, "get_lakebase_client", lambda: _FloorCohortLakebase())
+    response = TestClient(app).get(
+        "/api/leads?cohort_id=44444444-4444-4444-4444-444444444444",
+        headers={"X-Forwarded-Email": "lo@example.com"},
+    )
+
+    assert response.status_code == 200, response.text
+    rows = response.json()
+    assert rows, "the floors must narrow the fixture population, not empty it"
+    # Both floors really applied: IL carries 82/87/94-scored borrowers, and
+    # only two of those clear a 100 bps spread.
+    assert [row["opportunity_score"] for row in rows] == [87, 82]
+    assert all(row["state"] == "IL" for row in rows)
+    assert all(row["rate_spread_bps"] >= 100 for row in rows)
+
+
+class _GrainRefusedCohortLakebase:
+    """What the reader now writes for a bound lifted at the wrong grain.
+
+    ``WITH state_scores AS (... AVG(opportunity_score) AS opportunity_score ...
+    GROUP BY state) ... WHERE opportunity_score >= 40`` filters STATES. The
+    floor is refused and named instead of replayed per borrower.
+    """
+
+    def fetchone(self, sql: str, params: dict[str, object] | None = None) -> dict[str, object] | None:
+        _ = (sql, params)
+        return {
+            # `row_count` is what every Genie cohort writer stores, and the
+            # route only reconciles (and discloses) when it is present.
+            "row_count": 2,
+            "route_filters": json.dumps(
+                {
+                    "states": ["FL", "CA"],
+                    "unreplayable_filters": ["opportunity_score_threshold"],
+                }
+            ),
+        }
+
+
+def test_grain_refused_threshold_reaches_the_disclosure_header(monkeypatch) -> None:
+    """Refusing the floor is only safe because the queue SAYS it refused."""
+
+    monkeypatch.setattr(
+        cohort_replay, "get_lakebase_client", lambda: _GrainRefusedCohortLakebase()
+    )
+    response = TestClient(app).get(
+        "/api/leads?cohort_id=55555555-5555-5555-5555-555555555555",
+        headers={"X-Forwarded-Email": "lo@example.com"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert (
+        response.headers["X-Cohort-Unreplayable-Filters"] == "opportunity_score_threshold"
+    )

@@ -771,3 +771,27 @@ def test_stored_disclosure_list_is_capped_on_read(
     assert response.status_code == 200
     header = response.headers["X-Cohort-Unreplayable-Filters"]
     assert len(header.split(",")) == _MAX_UNREPLAYABLE_FILTER_KEYS
+
+
+def test_unreplayable_disclosure_survives_a_cohort_with_no_stated_count() -> None:
+    """The header must not hide inside the stated-count branch.
+
+    Adversarial review 2026-08-11: X-Cohort-Unreplayable-Filters was nested
+    under `if cohort_stated_count is not None`. Genie writers always store
+    row_count so it fired in practice, but a cohort row without one would drop
+    the disclosure silently — and that is precisely the case with no stated
+    count to compare against, i.e. the one where naming what could not be
+    replayed is the ONLY explanation available for the number on screen.
+    """
+
+    import inspect
+
+    import backend.api.leads as leads_api
+
+    source = inspect.getsource(leads_api.list_leads)
+    disclosure = source.index('X-Cohort-Unreplayable-Filters')
+    stated = source.index('cohort_stated_count is not None')
+    guard = source.rindex('if cohort_id and cohort_unreplayable:', 0, disclosure)
+    # The disclosure's own guard must come AFTER the stated-count block, not
+    # be lexically inside it.
+    assert guard > stated
