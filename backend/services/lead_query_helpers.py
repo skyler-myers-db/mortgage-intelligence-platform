@@ -153,6 +153,12 @@ def cohort_numeric_floor(filters: dict[str, object], key: str) -> int | None:
         return None
     if isinstance(raw, bool) or (isinstance(raw, float) and not raw.is_integer()):
         raise HTTPException(status_code=422, detail=f"cohort {key} filter is invalid")
+    # `filters` is JSON decoded from Lakebase, so `raw` is statically `object`.
+    # Narrow before converting rather than leaning on int()'s runtime TypeError:
+    # the stored value is untrusted, and a type the gate never considered
+    # should be refused explicitly, not coerced by accident.
+    if not isinstance(raw, int | float | str):
+        raise HTTPException(status_code=422, detail=f"cohort {key} filter is invalid")
     try:
         value = int(raw)
     except (TypeError, ValueError) as exc:
