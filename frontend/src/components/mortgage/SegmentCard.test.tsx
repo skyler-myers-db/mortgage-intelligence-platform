@@ -330,7 +330,9 @@ describe('SegmentCard', () => {
       render({ code: 'itm', count, contactable });
       const note = container.querySelector('.seg-card__reconcile');
       if (!note) {
-        expect(count).toBe(0);
+        // No note is correct when there is no gap to state: either nobody is
+        // in the segment, or every addressable borrower is contactable.
+        expect(contactable >= count || count === 0).toBe(true);
         continue;
       }
       const [shown, total] = (note.textContent ?? '')
@@ -338,6 +340,18 @@ describe('SegmentCard', () => {
         .map((n) => Number(n.replace(/,/g, '')));
       expect(shown).toBeLessThanOrEqual(total);
     }
+  });
+
+  it('says nothing when contactable equals addressable', () => {
+    // Browser pass 2026-08-11: the default Contactability="Eligible only"
+    // filter makes the addressable count ALREADY the contactable one, so the
+    // note rendered "3,217 contactable of 3,217 addressable" on every card.
+    // The tests above assert the note RENDERS and so could not see the
+    // tautology. Nothing to reconcile, nothing to say.
+    render({ code: 'itm', count: 3217, contactable: 3217 }, vi.fn());
+    expect(container.querySelector('.seg-card__reconcile')).toBeNull();
+    const select = container.querySelector<HTMLButtonElement>('.seg-card__select');
+    expect(select?.getAttribute('aria-label')).not.toContain('contactable');
   });
 
   it('says nothing when the payload does not report contactable', () => {

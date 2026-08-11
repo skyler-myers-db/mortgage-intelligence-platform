@@ -96,7 +96,14 @@ export function SegmentCard({ segment, selected, updating, onClick }: SegmentCar
   // map's ZIP drill. Null (an older payload) renders nothing rather than a
   // fabricated zero.
   const contactable = segment.contactable ?? null;
-  const showsReconcile = contactable !== null && segment.count > 0;
+  // Only when there is actually a gap to state. With the default
+  // Contactability="Eligible only" filter the addressable count IS the
+  // contactable one, so the note rendered "3,217 contactable of 3,217
+  // addressable" on every card -- a tautology that reads as a bug (caught in
+  // the browser, 2026-08-11; the unit tests asserted the note renders and so
+  // could not see it). Nothing to reconcile, nothing to say.
+  const showsReconcile =
+    contactable !== null && segment.count > 0 && contactable < segment.count;
 
   const deltaIsFirstSnapshot =
     segment.delta.trim() === '+0%' ||
