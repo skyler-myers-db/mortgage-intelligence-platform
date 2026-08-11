@@ -13,6 +13,7 @@ from typing import Any
 from urllib.parse import urlencode
 
 from backend.schemas.common import validate_public_borrower_id
+from backend.schemas.lead import GENIE_REPLAY_SEGMENT_CODES
 from backend.services.genie_answers import GenieActionSuggestion, GenieVisualizationSpec
 from backend.services.genie_sql_predicates import SqlFilterReading, read_sql_filters
 
@@ -49,6 +50,60 @@ _PRODUCT_LABEL_CODES: dict[str, frozenset[str]] = {
     "Purchase": frozenset({"purchase"}),
     "Retention": frozenset({"retention"}),
 }
+
+# `array_contains(segment_codes, 'itm')`, with or without a table alias. The
+# code is anchored on its own quotes so a match cannot run past its literal.
+_SEGMENT_CONTAINS_RE = re.compile(
+    r"array_contains\(\s*(?:\w+\.)?segment_codes\s*,\s*['\"]([a-z0-9_]+)['\"]\s*\)"
+)
+# Gold boolean column -> the segment it EXACTLY defines. `segment_codes` is
+# built by a CASE ladder in sql/transformations/gold_borrower_360.sql
+# (`with_segments`), and for these entries the arm is nothing but this one
+# column, so `WHERE <column>` and `array_contains(segment_codes,'<code>')`
+# select the identical population. Genie writes the flag at least as often as
+# the array -- borrower_360 exposes both and the flag is shorter -- and
+# without this map "how many borrowers are in the money?" answered over
+# `WHERE in_the_money` produced NO replayable filter and therefore no cohort
+# action at all.
+#
+# Only arms that are ONE BARE COLUMN belong here. `permit`, `equity`,
+# `retention` and `refi_propensity` are compound (an OR across two columns, a
+# two-sided comparison, a threshold), so no single column stands in for them:
+# filtering on one part of a compound arm is not the segment, and replaying it
+# as the segment would open a population the answer never described. Those
+# columns already reach the queue as reviewed portfolio criteria instead.
+# `itm_on_related_property` is left out for the same reason even though it is
+# exact today -- its arm is a COALESCE, and admitting a wrapper here is how a
+# pin stops being a pin.
+# ``test_segment_flag_columns_match_the_gold_case_ladder`` parses the SQL and
+# fails if an arm here stops being one bare column, or if a compound arm
+# becomes one and is missing.
+_SEGMENT_FLAG_COLUMNS: dict[str, str] = {
+    "in_the_money": "itm",
+    "listed_for_sale": "listed",
+    "is_investor": "investor",
+    "second_lien_itm": "second_lien_itm",
+    "has_heloc_draw_ending": "heloc_draw_to_payback",
+    "has_home_equity_history": "home_equity_history",
+    "is_payoff_loss": "payoff_loss_leads",
+    "has_permit": "permit_activity",
+}
+# `flag`, `flag = TRUE`, `t.flag = 1`. The `= FALSE` form deliberately does NOT
+# match: the optional tail is left in the residue, the span fails the purity
+# check, and the complement is disclosed instead of inverted into membership.
+_SEGMENT_FLAG_TERM_RE = re.compile(
+    r"(?:\w+\.)?(" + "|".join(sorted(_SEGMENT_FLAG_COLUMNS, key=len, reverse=True)) + r")\b"
+    r"(?:\s*=\s*(?:true|1)\b)?"
+)
+# Any mention of a segment-defining name at all. Separates "this conjunct
+# filters segments in a shape we could not read" from "this conjunct is about
+# something else".
+_SEGMENT_COLUMN_RE = re.compile(
+    r"\b(?:segment_codes?|" + "|".join(_SEGMENT_FLAG_COLUMNS) + r")\b"
+)
+# Disclosure name for the former. Identifier-shaped and bounded, like the
+# threshold disclosures it rides alongside in `unreplayable_filters`.
+_SEGMENT_PREDICATE_DISCLOSURE = "segment_codes_predicate"
 
 # `recommended_offer_code = 'x'` or `recommended_offer_code IN ('x', 'y')`.
 # The alternation is anchored on the quotes so the list branch cannot run past
@@ -149,31 +204,99 @@ def _row_values(
     return values
 
 
-def _segment_codes_from_question(question: str) -> list[str]:
-    q = question.lower()
-    codes: list[str] = []
-    if re.search(r"\b(in[-\s]?the[-\s]?money|itm|refi|refinance)\b", q):
-        codes.append("itm")
-    if re.search(r"\b(heloc|equity[-\s]line|equity-credit)\b", q):
-        codes.append("permit")
-    elif "home equity" in q:
-        codes.append("equity")
-    if "investor" in q or "multi-property" in q or "multi property" in q:
-        codes.append("investor")
-    if (
-        "retention" in q
-        or "competitor lien" in q
-        or "current customer" in q
-        or "recapture" in q
-        or "at risk" in q
-        or "going to a competitor" in q
-    ):
-        codes.append("retention")
-    if "listed" in q or "for sale" in q or "purchase" in q:
-        codes.append("listed")
-    if "permit" in q:
-        codes.append("permit")
-    return list(dict.fromkeys(codes))
+def _segment_selection_from_sql(
+    reading: SqlFilterReading,
+) -> tuple[list[str], str, bool]:
+    """Read the segments the ANSWER filtered on out of its own conjuncts.
+
+    Returns ``(codes, mode, unreadable)``.
+
+    This replaces a reader that inferred segments from the QUESTION'S WORDING
+    (deleted 2026-08-11), the last of that family. It failed the same way its
+    siblings did — prose has no position to gate on, so a segment the answer
+    merely *mentioned* was indistinguishable from one it *filtered on*, and the
+    mismatch always narrowed. Live: "Which segment converts best: HELOC,
+    cash-out, or retention?" is answered over all 5,156,184 borrowers (segment
+    is a GROUP BY, not a filter) while the queue opened 468,703 — a comparison
+    read as a cohort. The wording reader also mapped "refi" to ``itm`` and
+    "purchase" to ``listed``, so questions that never named a segment at all
+    still narrowed.
+
+    Segments are read the way the numeric floors are: only from the accepted
+    top-level AND-conjuncts of the outermost statement. A conjunct counts when
+    it is a pure disjunction of ``array_contains(segment_codes, '<code>')``
+    tests, which is exactly the shape the Lead Queue's ``segment_mode="any"``
+    compiles back to. Anything else that names the column — a mixed
+    ``OR`` across two columns, a negation, an equality on the array itself, an
+    unreviewed code — is reported as unreadable rather than guessed at, because
+    every possible guess is a narrowing one. ``(a OR b) AND c`` is a
+    conjunction of disjunctions that the queue's single any/all switch cannot
+    express, so it is unreadable too.
+
+    Reading nothing is safe in a way that reading wrong is not: the queue then
+    opens the population the answer actually described. An answer with no
+    replayable filter at all simply offers no cohort action.
+    """
+
+    # A segment name the reader refused for a reason no re-read can recover --
+    # a negation, a bound over a re-aggregating CTE, a span it could not prove
+    # complete. `unread_predicates` deliberately excludes these.
+    unreadable = bool(_SEGMENT_COLUMN_RE.search(" ".join(reading.unread_filter_words)))
+    disjunctions: list[list[str]] = []
+    # Accepted conjuncts, then the ones the floor reader refused. A refused
+    # span is where a real segment filter usually lives -- "itm OR equity" is
+    # one conjunct, and the splitter will not break an OR apart -- so skipping
+    # them would open every segment for a question that named two. Each span
+    # is accepted ONLY if the WHOLE of it reduces to segment membership tests
+    # joined by OR, which is exactly what ``segment_mode="any"`` replays. A
+    # span that mentions the column in any other shape is disclosed, never
+    # partially read: half of an OR is narrower than the answer, and a
+    # negation is its complement.
+    for predicate in (*reading.predicates, *reading.unread_predicates):
+        if not _SEGMENT_COLUMN_RE.search(predicate):
+            continue
+        codes = list(
+            dict.fromkeys(
+                [
+                    *_SEGMENT_CONTAINS_RE.findall(predicate),
+                    *(
+                        _SEGMENT_FLAG_COLUMNS[flag]
+                        for flag in _SEGMENT_FLAG_TERM_RE.findall(predicate)
+                    ),
+                ]
+            )
+        )
+        residue = _SEGMENT_FLAG_TERM_RE.sub(
+            " ", _SEGMENT_CONTAINS_RE.sub(" ", predicate)
+        )
+        residue = residue.replace("(", " ").replace(")", " ")
+        leftover = residue.split()
+        # Every OR must sit BETWEEN two membership tests. Counting matches
+        # rather than deduped codes matters: `array_contains(...,'itm') OR
+        # in_the_money` is two tests for one code. A span with a dangling `or`
+        # is a fragment of a longer disjunction whose other branches were cut
+        # off, and reading it would replay a strict subset of the answer.
+        matches = len(_SEGMENT_CONTAINS_RE.findall(predicate)) + len(
+            _SEGMENT_FLAG_TERM_RE.findall(predicate)
+        )
+        if (
+            not codes
+            or any(token != "or" for token in leftover)
+            or len(leftover) != matches - 1
+            or any(code not in GENIE_REPLAY_SEGMENT_CODES for code in codes)
+        ):
+            unreadable = True
+            continue
+        disjunctions.append(codes)
+
+    if not disjunctions:
+        return [], "any", unreadable
+    if len(disjunctions) == 1:
+        return disjunctions[0], "any", unreadable
+    if all(len(codes) == 1 for codes in disjunctions):
+        flattened = list(dict.fromkeys(code for codes in disjunctions for code in codes))
+        return flattened, "all", unreadable
+    return [], "any", True
 
 
 def _product_label_from_offer_codes(sql: str) -> str | None:
@@ -338,44 +461,13 @@ def _numeric_floors_from_sql(sql_query: str | None) -> dict[str, int]:
     return read_sql_filters(sql_query).floors
 
 
-def _segment_mode_from_sql(sql_query: str | None, segment_codes: list[str]) -> str:
-    """Return "all" only when every segment is a top-level AND-conjunct.
-
-    Position-gated for the same reason the numeric floors are (adversarial
-    review 2026-08-11): the previous reader regexed the WHOLE statement and
-    called it an intersection whenever the text between two
-    ``array_contains`` calls contained "and" and no "or". Two such calls in
-    different CTEs, or inside a ``COUNT_IF(...)`` breakdown, therefore yielded
-    ``mode="all"`` for an answer that used a union — and "all" is the
-    NARROWING direction, so the Lead Queue silently opened a smaller cohort
-    than the answer described.
-
-    Reading the accepted conjuncts instead makes the select list, HAVING,
-    CASE arms, aggregate filters and CTE bodies structurally unreachable.
-    """
-
-    if not sql_query or len(segment_codes) <= 1:
-        return "any"
-    predicates = read_sql_filters(sql_query).predicates
-    if not predicates:
-        return "any"
-    for code in segment_codes:
-        pattern = re.compile(
-            rf"array_contains\(\s*(?:\w+\.)?segment_codes\s*,\s*['\"]{re.escape(code)}['\"]\s*\)"
-        )
-        # Each code must stand alone as its own conjunct. A conjunct holding
-        # two codes is an OR the splitter refused to break apart.
-        if not any(pattern.search(predicate) for predicate in predicates):
-            return "any"
-    return "all"
-
-
 def _route_from_answer_rows(
     *,
     question: str,
     rows: list[dict[str, Any]] | None,
     borrower_ids: list[str],
     sql_query: str | None = None,
+    declared_segments: tuple[str, ...] = (),
 ) -> tuple[str, dict[str, Any]]:
     params: dict[str, str] = {}
     filter_criteria: dict[str, Any] = {}
@@ -388,8 +480,23 @@ def _route_from_answer_rows(
         and _actionable_total_from_rows(rows) is None
     ):
         states = states[:1]
-    segment_codes = _segment_codes_from_question(question)
     reading = read_sql_filters(sql_query)
+    # Segments come from the ANSWER'S OWN conjuncts, never from the question's
+    # wording: see ``_segment_selection_from_sql``.
+    segment_codes, segment_mode, segments_unreadable = _segment_selection_from_sql(reading)
+    if declared_segments:
+        # A canonical statement this repo AUTHORED, whose segment filter sits
+        # where the position gate cannot see it -- inside a CTE body, or in a
+        # statement whose sources the reader will not resolve. The cohort is
+        # then declared next to the SQL and reviewed with it, which is the one
+        # honest alternative to inference: we are not guessing what someone
+        # else's SQL meant, we are stating what ours does. Never reachable
+        # from a live Genie answer -- ``respond()`` has no declaration to make.
+        segment_codes = [
+            code for code in declared_segments if code in GENIE_REPLAY_SEGMENT_CODES
+        ]
+        segment_mode = "all" if len(segment_codes) > 1 else "any"
+        segments_unreadable = False
     # Portfolio criteria come from the ANSWER'S OWN SQL only. They used to be
     # merged with criteria inferred from the question's wording, which is
     # removed: see ``_portfolio_criteria_from_sql`` for why every criterion
@@ -414,7 +521,6 @@ def _route_from_answer_rows(
         filter_criteria["states"] = states
 
     if segment_codes:
-        segment_mode = _segment_mode_from_sql(sql_query, segment_codes)
         if len(segment_codes) == 1:
             params["segment"] = segment_codes[0]
         else:
@@ -445,7 +551,16 @@ def _route_from_answer_rows(
         filter_criteria[floor_key] = floor
         params[floor_key] = str(floor)
 
-    if reading.unreplayable and _REPLAYABLE_ROUTE_FILTER_KEYS & set(filter_criteria):
+    disclosures = list(reading.unreplayable)
+    if segments_unreadable:
+        # A segment predicate the queue cannot express. Named for the same
+        # reason a threshold is: the queue's count will be broader than the
+        # answer's, and a named reason beats a silent divergence. This fires
+        # even when other conjuncts DID set the cohort's segments -- in
+        # `itm AND (listed OR score >= 80)` the queue replays `itm` and is
+        # still broader on the very axis it filtered.
+        disclosures.append(_SEGMENT_PREDICATE_DISCLOSURE)
+    if disclosures and _REPLAYABLE_ROUTE_FILTER_KEYS & set(filter_criteria):
         # A threshold that really filters the answer but cannot be replayed —
         # a bound parameter whose value never reaches us, a bound outside the
         # reviewed cohort domain, or several disagreeing bounds on one column.
@@ -456,7 +571,7 @@ def _route_from_answer_rows(
         # never added to the URL, and never stand alone — a cohort with no
         # replayable filter is rejected, so a disclosure-only cohort would
         # offer an action that 400s.
-        for disclosure in reading.unreplayable:
+        for disclosure in disclosures:
             filter_criteria[disclosure] = True
 
     if params:
@@ -475,6 +590,7 @@ def _suggest_genie_actions(
     question_hash: str | None,
     sql_query: str | None,
     source: str = "genie",
+    declared_segments: tuple[str, ...] = (),
 ) -> list[GenieActionSuggestion]:
     actions: list[GenieActionSuggestion] = []
     borrower_ids = _borrower_ids_from_rows(rows)
@@ -494,6 +610,7 @@ def _suggest_genie_actions(
         rows=rows,
         borrower_ids=borrower_ids,
         sql_query=sql_query,
+        declared_segments=declared_segments,
     )
     if result_filters:
         base_criteria["result_filters"] = result_filters

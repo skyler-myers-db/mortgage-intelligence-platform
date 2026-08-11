@@ -26,6 +26,7 @@ from backend.schemas.genie_numeric_filters import (
     GENIE_NUMERIC_FILTER_KEYS,
     is_reviewed_numeric_floor,
 )
+from backend.schemas.lead import GENIE_REPLAY_SEGMENT_CODES
 from backend.schemas.portfolio_campaign import (
     assert_public_campaign_text,
 )
@@ -96,7 +97,7 @@ _GENIE_REPLAY_FILTER_KEYS = frozenset(
         "unreplayable_filters",
     }
 )
-_GENIE_SEGMENT_CODES = frozenset({"itm", "listed", "permit", "investor", "equity", "retention"})
+_GENIE_SEGMENT_CODES = GENIE_REPLAY_SEGMENT_CODES
 _GENIE_VISUALIZATION_KINDS = frozenset({"bar", "line", "metric", "pie", "scatter", "table"})
 _GENIE_OPAQUE_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}")
 _PUBLIC_CAMPAIGN_NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9 &(),./:+\-\u2014]{0,79}")

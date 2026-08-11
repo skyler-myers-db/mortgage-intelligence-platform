@@ -971,7 +971,12 @@ def test_county_fips_rows_route_to_county_filtered_lead_queue() -> None:
     action = next(row for row in result.actions if row.id == "open-cohort")
 
     assert action.criteria["result_filters"]["county"] == "12011"
-    assert action.route == "/lead-queue?county=12011&segment=itm"
+    # No `segment=itm`, and the answer is why: this statement has no WHERE at
+    # all, so its 308 is every borrower in the county, not the in-the-money
+    # ones the QUESTION asked about. Replaying `itm` would open a queue
+    # smaller than the number the user just read. The word "in-the-money" in
+    # the question is not evidence that the answer applied it.
+    assert action.route == "/lead-queue?county=12011"
 
 
 def test_multiple_county_rows_preserve_all_counties_for_cohort_action() -> None:
@@ -995,7 +1000,9 @@ def test_multiple_county_rows_preserve_all_counties_for_cohort_action() -> None:
     action = next(row for row in result.actions if row.id == "open-cohort")
 
     assert action.criteria["result_filters"]["counties"] == ["12011", "17031"]
-    assert action.route == "/lead-queue?counties=12011%2C17031&segment=itm"
+    # Same reason as the single-county case: the statement has no WHERE, so
+    # the counts are all borrowers and the cohort must be too.
+    assert action.route == "/lead-queue?counties=12011%2C17031"
 
 
 def test_non_replayable_aggregate_answer_does_not_offer_lead_queue_action() -> None:

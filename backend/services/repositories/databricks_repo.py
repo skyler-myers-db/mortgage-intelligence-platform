@@ -77,7 +77,6 @@ from backend.services.repositories.databricks_genie import (  # noqa: F401
     _route_from_answer_rows,
     _row_columns,
     _row_values,
-    _segment_codes_from_question,
     _source_readiness_only_assets,
     _sql_hash,
     _sql_uses_impossible_retention_conjunction,

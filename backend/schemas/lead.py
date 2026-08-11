@@ -34,6 +34,18 @@ SegmentCode = Literal[
 # Canonical runtime vocabulary derived from the Literal so API allowlists,
 # audit validation, and repositories share exactly one registry.
 SEGMENT_CODE_VALUES: tuple[str, ...] = get_args(SegmentCode)
+# The subset a GENIE ANSWER may hand to a governed action. The Lead Queue can
+# filter on all of SEGMENT_CODE_VALUES, but a cohort a Genie answer opens also
+# becomes a Lakebase cohort row, draft-campaign criteria and an approval
+# record, and only these six are reviewed for that. Three readers enforced it
+# with three private copies -- the Genie cohort writer's regex, the campaign
+# JSON projection's frozenset, and the answer's own segment reader -- so a
+# code the reader emitted could be rejected two layers later, which is exactly
+# how the S1.3 overlay codes came to 400 every governed action on an answer
+# that filtered on one (adversarial review 2026-08-11). One definition now.
+GENIE_REPLAY_SEGMENT_CODES: frozenset[str] = frozenset(
+    {"itm", "listed", "permit", "investor", "equity", "retention"}
+)
 # S1.3 three-state source gating for segments whose driving source can be
 # disconnected or unlicensed: connected / not_connected / not_licensed.
 # Derived from gold.source_readiness; the full entitlement matrix ships in

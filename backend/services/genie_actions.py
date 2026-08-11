@@ -25,6 +25,7 @@ from backend.config.settings import settings
 from backend.schemas._validators_tenant import normalize_public_lender_ref
 from backend.schemas.common import validate_public_borrower_id
 from backend.schemas.genie_numeric_filters import GENIE_NUMERIC_FILTER_BOUNDS
+from backend.schemas.lead import GENIE_REPLAY_SEGMENT_CODES
 from backend.schemas.portfolio import PortfolioCriteria
 from backend.services.audit_store import (
     _assert_allowlisted,
@@ -96,6 +97,10 @@ _REPLAYABLE_FILTER_KEYS = frozenset(
         "source",
         *_REPLAYABLE_NUMERIC_FILTERS,
     }
+)
+# Built from the one canonical replay vocabulary, not spelled out again.
+_GENIE_SEGMENT_CODE_RE = re.compile(
+    r"^(" + "|".join(sorted(GENIE_REPLAY_SEGMENT_CODES)) + r")$", re.IGNORECASE
 )
 _MAX_UNREPLAYABLE_FILTER_KEYS = 12
 _MAX_UNREPLAYABLE_FILTER_KEY_LEN = 64
@@ -1066,7 +1071,7 @@ def _cohort_route_filters(
         filters.get("segment_codes"),
         field="segment_codes",
         max_items=6,
-        pattern=re.compile(r"^(itm|listed|permit|investor|equity|retention)$", re.IGNORECASE),
+        pattern=_GENIE_SEGMENT_CODE_RE,
     )
     if segment_codes:
         out["segment_codes"] = [s.lower() for s in segment_codes]

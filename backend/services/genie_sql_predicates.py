@@ -154,6 +154,12 @@ _PLAIN_LITERAL_RE = re.compile(r"[A-Za-z0-9_]*")
 
 _MAX_SQL_CHARS = 200_000
 
+# Words that are BOTH a clause keyword and a scalar builtin. Only these get the
+# "followed by `(` means function call" treatment -- `WHERE (`, `ON (` and
+# `QUALIFY (` are all ordinary parenthesised predicates, so a blanket rule
+# would stop opening filter regions at all.
+_CLAUSE_WORDS_THAT_ARE_ALSO_FUNCTIONS = frozenset({"left", "right"})
+
 
 @dataclass(frozen=True)
 class SqlFilterReading:
@@ -169,6 +175,33 @@ class SqlFilterReading:
     floors: dict[str, int]
     unreplayable: tuple[str, ...] = ()
     predicates: tuple[str, ...] = ()
+    unread_predicates: tuple[str, ...] = ()
+    """Normalized text of every filter-region conjunct this reader refused.
+
+    READ THE WHOLE SPAN OR NOTHING. These are the shapes the floor reader will
+    not reason about -- ORs, negations, bounds over a re-aggregating CTE -- so
+    a consumer may only accept one by proving the ENTIRE span reduces to a
+    predicate it can replay exactly, the way
+    ``_segment_selection_from_sql`` proves a span is nothing but a disjunction
+    of segment membership tests. Lifting a value out of a span whose remainder
+    you have not accounted for is the truncation bug this module exists to
+    prevent: in ``a OR b`` the ``a`` alone is narrower than the answer, and in
+    ``NOT a`` it is the complement.
+    """
+    unread_filter_words: frozenset[str] = frozenset()
+    """Word tokens of every filter-region conjunct this reader refused.
+
+    A refused conjunct -- an OR, a negation, a bound over a re-aggregating CTE
+    -- is simply not replayed, so the queue opens a cohort BROADER than the
+    answer's. This field exists so a caller can name that on the way past
+    instead of diverging in silence.
+
+    It carries word tokens only. String literals and numbers tokenize as their
+    own kinds and never appear here, so this can answer "was this column
+    filtered in a shape you could not read?" and structurally cannot answer
+    "what value did it filter on?" -- the narrowing question that every
+    deleted text-matching reader got wrong.
+    """
 
 
 _EMPTY_READING = SqlFilterReading(floors={})
@@ -211,6 +244,22 @@ def _filter_regions(tokens: list[Token]) -> tuple[tuple[Token, ...], ...] | None
         if depth != 0 or token.kind != "word":
             continue
         word = token.text
+        if word in _CLAUSE_WORDS_THAT_ARE_ALSO_FUNCTIONS and (
+            index + 1 < len(tokens)
+            and tokens[index + 1].kind == "punct"
+            and tokens[index + 1].text == "("
+        ):
+            # `LEFT(` / `RIGHT(` is a string builtin, not a join keyword. Both
+            # words live in CLAUSE_WORDS for LEFT/RIGHT JOIN, so a call closed
+            # the region mid-predicate: `WHERE array_contains(segment_codes,
+            # 'itm') OR LEFT(zip,3)='606'` handed the caller the fragment
+            # `array_contains(segment_codes,'itm') or`, which reads as a pure
+            # membership test. The queue replayed `itm` alone against an answer
+            # asking for `itm OR zip-prefix` -- a strict subset disclosed to
+            # nobody (adversarial review 2026-08-11). A join keyword is never
+            # followed by `(`, and this runs before the join bookkeeping so a
+            # call cannot mark a later JOIN as non-filtering either.
+            continue
         if word in SET_OPERATOR_WORDS:
             return None
         if word in NON_FILTERING_JOIN_WORDS:
@@ -265,11 +314,30 @@ def _split_conjunction(
     return parts
 
 
-def _conjuncts(tokens: tuple[Token, ...]) -> list[tuple[Token, ...]]:
-    """Leaf predicates that must ALL hold for a row to survive."""
+def _conjuncts(
+    tokens: tuple[Token, ...],
+    dropped: list[tuple[Token, ...]] | None = None,
+    disjunctions: list[tuple[Token, ...]] | None = None,
+) -> list[tuple[Token, ...]]:
+    """Leaf predicates that must ALL hold for a row to survive.
+
+    Spans this refuses are appended to ``dropped`` when a caller passes one.
+    Dropping is always the BROADENING direction — the queue replays fewer
+    filters than the answer applied — but a caller that wants to say so out
+    loud needs to know a filter was there at all.
+
+    ``disjunctions`` collects the subset a caller may legitimately try to
+    re-read: whole spans refused ONLY because they are a top-level OR. A
+    NEGATED span is deliberately not among them -- its population is the
+    complement, so any part of it read as membership is inverted.
+    """
 
     parts = _split_conjunction(tokens)
     if parts is None:
+        if dropped is not None:
+            dropped.append(tokens)
+        if disjunctions is not None:
+            disjunctions.append(tokens)
         return []
     leaves: list[tuple[Token, ...]] = []
     for part in parts:
@@ -278,13 +346,15 @@ def _conjuncts(tokens: tuple[Token, ...]) -> list[tuple[Token, ...]]:
         if part[0].kind == "word" and part[0].text == "not":
             # Negated: the surviving population is the complement, which no
             # cohort floor can express. Drop it rather than invert it.
+            if dropped is not None:
+                dropped.append(part)
             continue
         if (
             part[0].kind == "punct"
             and part[0].text == "("
             and matching_paren(part, 0) == len(part) - 1
         ):
-            leaves.extend(_conjuncts(part[1:-1]))
+            leaves.extend(_conjuncts(part[1:-1], dropped, disjunctions))
             continue
         leaves.append(part)
     return leaves
@@ -445,15 +515,41 @@ def read_sql_filters(sql_query: str | None) -> SqlFilterReading:
         return _EMPTY_READING
 
     leaves: list[tuple[Token, ...]] = []
+    dropped: list[tuple[Token, ...]] = []
+    disjunctions: list[tuple[Token, ...]] = []
     for region in regions:
-        leaves.extend(_conjuncts(region))
-    if not leaves:
-        return _EMPTY_READING
+        leaves.extend(_conjuncts(region, dropped, disjunctions))
 
     # A conjunct only means what it says when the outermost FROM still binds
     # its names to the base columns: an outer bound over a re-aggregating CTE
     # filters GROUPS, and replaying it per borrower silently truncates.
     rebound = rebound_columns(tokens)
+    # Only a whole span refused for SHAPE, at base grain, may be re-read.
+    # Publishing every refused span let a caller re-admit exactly what the
+    # grain gate had just thrown out: `WITH pool AS (SELECT (in_the_money OR
+    # listed_for_sale) AS in_the_money ...) SELECT ... WHERE in_the_money`
+    # was replayed as the `itm` segment alone (adversarial review
+    # 2026-08-11). The floor reader discloses that refusal; re-reading it
+    # silently is strictly worse than never publishing it.
+    readable = [span for span in disjunctions if is_base_grain(span, rebound)]
+    readable_texts = tuple(_leaf_text(sql_query, span) for span in readable)
+    accounted = {id(span) for span in readable}
+
+    def _unread_words() -> frozenset[str]:
+        return frozenset(
+            token.text
+            for span in dropped
+            if id(span) not in accounted
+            for token in span
+            if token.kind == "word"
+        )
+
+    if not leaves:
+        return SqlFilterReading(
+            floors={},
+            unread_predicates=readable_texts,
+            unread_filter_words=_unread_words(),
+        )
     bounds: dict[str, set[int | None]] = {}
     unreplayable: list[str] = []
     accepted: list[tuple[Token, ...]] = []
@@ -462,6 +558,7 @@ def read_sql_filters(sql_query: str | None) -> SqlFilterReading:
         if not is_base_grain(leaf, rebound):
             if bound is not None:
                 unreplayable.append(_disclosure_name(bound[0]))
+            dropped.append(leaf)
             continue
         accepted.append(leaf)
         if bound is None:
@@ -486,4 +583,6 @@ def read_sql_filters(sql_query: str | None) -> SqlFilterReading:
         floors=floors,
         unreplayable=tuple(sorted(set(unreplayable))),
         predicates=tuple(_leaf_text(sql_query, leaf) for leaf in accepted),
+        unread_predicates=readable_texts,
+        unread_filter_words=_unread_words(),
     )

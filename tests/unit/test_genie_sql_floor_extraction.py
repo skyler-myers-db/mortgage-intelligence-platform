@@ -499,12 +499,15 @@ def test_a_string_literal_body_cannot_fabricate_an_intersection() -> None:
         f"SELECT * FROM {_B360} WHERE array_contains(segment_codes,'itm') "
         'AND note = "array_contains(segment_codes,\'equity\')"'
     )
-    assert _mode(attack, ["itm", "equity"]) == "any"
+    # The literal is opaqued before this reader ever sees it, so the spelled
+    # conjunct is not even visible as a segment predicate: the cohort is the
+    # one real conjunct, not the intersection the literal asked for.
+    assert _segments(attack) == (["itm"], "any", False)
     real = (
         f"SELECT * FROM {_B360} WHERE array_contains(segment_codes,'itm') "
         "AND array_contains(segment_codes,'equity')"
     )
-    assert _mode(real, ["itm", "equity"]) == "all"
+    assert _segments(real) == (["itm", "equity"], "all", False)
 
 
 def test_a_comment_inside_a_literal_no_longer_truncates_the_predicate() -> None:
@@ -805,12 +808,13 @@ def test_disclosure_survives_all_five_closed_vocabularies() -> None:
 # "and" and no "or" — true for two calls in different CTEs or inside COUNT_IF.
 
 
-def _mode(sql: str, codes: list[str]) -> str:
+def _segments(sql: str) -> tuple[list[str], str, bool]:
+    from backend.services.genie_sql_predicates import read_sql_filters
     from backend.services.repositories.databricks_genie_actions import (
-        _segment_mode_from_sql,
+        _segment_selection_from_sql,
     )
 
-    return _segment_mode_from_sql(sql, codes)
+    return _segment_selection_from_sql(read_sql_filters(sql))
 
 
 def test_a_real_top_level_intersection_is_still_all() -> None:
@@ -819,15 +823,21 @@ def test_a_real_top_level_intersection_is_still_all() -> None:
         "WHERE array_contains(segment_codes,'itm') "
         "AND array_contains(segment_codes,'equity')"
     )
-    assert _mode(sql, ["itm", "equity"]) == "all"
+    assert _segments(sql) == (["itm", "equity"], "all", False)
+
+
+def test_a_pure_disjunction_is_the_union_the_queue_replays_as_any() -> None:
+    sql = (
+        "SELECT * FROM mip.gold.borrower_360 "
+        "WHERE (array_contains(segment_codes,'itm') "
+        "OR array_contains(segment_codes,'equity')) AND state='IL'"
+    )
+    assert _segments(sql) == (["itm", "equity"], "any", False)
 
 
 @pytest.mark.parametrize(
     "sql",
     [
-        # Union — never an intersection.
-        "SELECT * FROM mip.gold.borrower_360 WHERE array_contains(segment_codes,'itm') "
-        "OR array_contains(segment_codes,'equity')",
         # Breakdown columns: the curated space teaches this idiom.
         "SELECT COUNT_IF(array_contains(segment_codes,'itm')) AS a, "
         "COUNT_IF(array_contains(segment_codes,'equity')) AS b "
@@ -839,8 +849,210 @@ def test_a_real_top_level_intersection_is_still_all() -> None:
         # A CASE arm projects a label and selects nothing.
         "SELECT CASE WHEN array_contains(segment_codes,'itm') AND "
         "array_contains(segment_codes,'equity') THEN 1 END FROM t",
+        # The shape that motivated the whole change: segment is what the answer
+        # GROUPS BY, so the answer spans every segment and filters on none.
+        "SELECT sc, COUNT(*) FROM mip.gold.borrower_360 "
+        "LATERAL VIEW EXPLODE(segment_codes) s AS sc GROUP BY sc",
     ],
 )
-def test_non_filtering_segment_pairs_never_become_an_intersection(sql: str) -> None:
-    assert _mode(sql, ["itm", "equity"]) == "any"
+def test_segments_the_answer_never_filtered_on_yield_no_cohort(sql: str) -> None:
+    codes, mode, unreadable = _segments(sql)
+    assert (codes, mode) == ([], "any")
+    assert unreadable is False
 
+
+@pytest.mark.parametrize(
+    ("sql", "why"),
+    [
+        (
+            # Live case: the queue replayed the strict second branch and opened
+            # 1,991 against an answer reporting 19,166.
+            "SELECT * FROM mip.gold.borrower_360 WHERE "
+            "(array_contains(segment_codes,'retention') "
+            "OR recommended_offer_code='retention')",
+            "an OR across two columns is broader than either column alone",
+        ),
+        (
+            "SELECT * FROM mip.gold.borrower_360 "
+            "WHERE NOT array_contains(segment_codes,'itm')",
+            "negation inverts membership and the queue has no NOT",
+        ),
+        (
+            "SELECT * FROM mip.gold.borrower_360 "
+            "WHERE array_contains(segment_codes,'not_a_reviewed_code')",
+            "an unreviewed code is outside the replayable vocabulary",
+        ),
+        (
+            "SELECT * FROM mip.gold.borrower_360 WHERE "
+            "(array_contains(segment_codes,'itm') OR array_contains(segment_codes,'equity')) "
+            "AND array_contains(segment_codes,'listed')",
+            "a conjunction of disjunctions has no single any/all reading",
+        ),
+    ],
+)
+def test_unreadable_segment_predicates_are_disclosed_not_guessed(sql: str, why: str) -> None:
+    codes, mode, unreadable = _segments(sql)
+    assert (codes, mode) == ([], "any"), why
+    assert unreadable is True, why
+
+
+
+# --- The flag-column map is pinned to the gold CASE ladder ------------------
+
+
+def test_segment_flag_columns_match_the_gold_case_ladder() -> None:
+    """`WHERE in_the_money` may stand in for `itm` only while the SQL says so.
+
+    ``_SEGMENT_FLAG_COLUMNS`` claims a boolean column selects EXACTLY a
+    segment's population. That is true only because the arm building the code
+    in gold_borrower_360 is nothing but that column, and nothing stops someone
+    from making an arm compound later -- at which point the queue would replay
+    a cohort the answer never described, silently and in the narrowing
+    direction. So the claim is re-derived from the SQL on every run.
+
+    It fails in BOTH directions on purpose: a mapped arm that stops being one
+    bare column, and a compound arm that becomes one without being added.
+    """
+
+    from pathlib import Path
+
+    from backend.services.repositories.databricks_genie_actions import (
+        _SEGMENT_FLAG_COLUMNS,
+    )
+
+    sql = Path("sql/transformations/gold_borrower_360.sql").read_text()
+    ladder = sql.split("with_segments AS (", 1)[1].split("AS segment_codes", 1)[0]
+    ladder = re.sub(r"--[^\n]*", " ", ladder)
+    arms = {
+        code: re.sub(r"\s+", " ", expression).strip()
+        for expression, code in re.findall(
+            r"CASE\s+WHEN\s+(.+?)\s+THEN\s+'([a-z_]+)'\s+END", ladder, re.DOTALL
+        )
+    }
+    assert arms, "could not parse the segment CASE ladder"
+
+    expected_single = {code: col for col, code in _SEGMENT_FLAG_COLUMNS.items()}
+    for code, expression in arms.items():
+        bare = re.fullmatch(r"(?:\w+\.)?(\w+)", expression)
+        mapped = expected_single.get(code)
+        if mapped is not None:
+            assert bare is not None, (
+                f"segment {code!r} is mapped to a single boolean column but its arm is "
+                f"now compound ({expression!r}); drop it from _SEGMENT_FLAG_COLUMNS"
+            )
+            assert bare.group(1) == mapped, (
+                f"segment {code!r} is now defined by {bare.group(1)!r}, "
+                f"not {mapped!r}"
+            )
+        else:
+            assert bare is None, (
+                f"segment {code!r} is now exactly the column {expression!r}; add it to "
+                "_SEGMENT_FLAG_COLUMNS so the queue can replay the answer's own filter"
+            )
+    assert set(expected_single) <= set(arms), (
+        f"mapped segments missing from the ladder: {set(expected_single) - set(arms)}"
+    )
+
+
+# --- Refused spans may only be re-read when the refusal was SHAPE alone -----
+#
+# `_segment_selection_from_sql` re-reads conjuncts the floor reader refused,
+# because a real segment filter is usually an OR and the splitter will not
+# break an OR apart. Adversarial review 2026-08-11 found two ways that let a
+# STRICT SUBSET of the answer's population through with no disclosure at all.
+
+
+@pytest.mark.parametrize(
+    ("sql", "why"),
+    [
+        (
+            # LEFT/RIGHT are join keywords AND string builtins. The call used
+            # to close the filter region mid-OR, leaving the fragment
+            # "array_contains(segment_codes,'itm') or" -- which reads as a
+            # pure membership test. Answer: itm UNION zip-prefix. Replay was:
+            # itm alone.
+            f"SELECT COUNT(*) FROM {_B360} "
+            "WHERE array_contains(segment_codes,'itm') OR LEFT(zip, 3) = '606'",
+            "a dangling OR is a fragment of a longer disjunction",
+        ),
+        (
+            f"SELECT * FROM {_B360} WHERE in_the_money OR RIGHT(zip,2)='01'",
+            "same truncation reached through the flag-column spelling",
+        ),
+        (
+            # Two truncated regions compounded into an INTERSECTION: answer
+            # was (itm ∪ z) ∩ (listed ∪ c), replay was itm ∩ listed.
+            f"SELECT COUNT(*) FROM {_B360} b JOIN mip.gold.evidence_events e "
+            "ON array_contains(b.segment_codes,'itm') OR LEFT(b.zip,3)='606' "
+            "WHERE array_contains(b.segment_codes,'listed') OR LEFT(b.city,1)='C'",
+            "two truncations must not compound into a narrowing intersection",
+        ),
+        (
+            # The grain gate refused this leaf; re-reading it reopened exactly
+            # the failure the module's "Position is not grain" section exists
+            # to prevent. Answer: itm UNION listed. Replay was: itm.
+            "WITH pool AS (SELECT clip, state, (in_the_money OR listed_for_sale) "
+            f"AS in_the_money FROM {_B360}) "
+            "SELECT state, COUNT(*) FROM pool WHERE in_the_money GROUP BY state",
+            "a rebound column is not the base column it shadows",
+        ),
+        (
+            "WITH pool AS (SELECT clip, state, ARRAY('itm','listed','equity') "
+            f"AS segment_codes FROM {_B360}) "
+            "SELECT state FROM pool WHERE array_contains(segment_codes,'itm')",
+            "a fabricated array column is not the borrower's segment list",
+        ),
+    ],
+)
+def test_a_refused_span_is_never_re_read_into_a_narrower_cohort(sql: str, why: str) -> None:
+    codes, mode, unreadable = _segments(sql)
+    assert (codes, mode) == ([], "any"), why
+    assert unreadable is True, why
+
+
+def test_a_partially_unread_segment_axis_is_still_disclosed() -> None:
+    """`itm AND (listed OR score >= 80)` replays `itm` -- broader, and it says so.
+
+    The disclosure used to be suppressed whenever any readable conjunct had
+    already set `segment_codes`, on the reasoning that the queue was then "not
+    broader on this axis". It is: the answer intersected a second segment
+    predicate that the queue cannot express.
+    """
+
+    codes, mode, unreadable = _segments(
+        f"SELECT * FROM {_B360} WHERE array_contains(segment_codes,'itm') "
+        "AND (array_contains(segment_codes,'listed') OR opportunity_score >= 80)"
+    )
+    assert (codes, mode) == (["itm"], "any")
+    assert unreadable is True
+
+
+@pytest.mark.parametrize(
+    ("sql", "expected"),
+    [
+        # A genuine parenthesised disjunction still reads exactly -- the
+        # surgical LEFT/RIGHT rule must not stop `WHERE (` opening a region.
+        (
+            f"SELECT * FROM {_B360} WHERE (array_contains(segment_codes,'itm') "
+            "OR array_contains(segment_codes,'equity')) AND state='IL'",
+            (["itm", "equity"], "any", False),
+        ),
+        # Two membership tests, one code: the arity guard counts MATCHES, not
+        # deduped codes, or this legitimate canonical shape would be refused.
+        (
+            f"SELECT * FROM {_B360} "
+            "WHERE array_contains(segment_codes,'investor') OR is_investor = TRUE",
+            (["investor"], "any", False),
+        ),
+        # A real LEFT JOIN is untouched by the function-call rule.
+        (
+            f"SELECT * FROM {_B360} b LEFT JOIN mip.gold.evidence_events e "
+            "ON e.clip = b.clip WHERE in_the_money",
+            (["itm"], "any", False),
+        ),
+    ],
+)
+def test_legitimate_disjunctions_still_replay_exactly(
+    sql: str, expected: tuple[list[str], str, bool]
+) -> None:
+    assert _segments(sql) == expected
