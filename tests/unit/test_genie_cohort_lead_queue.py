@@ -4,7 +4,7 @@ import json
 
 from fastapi.testclient import TestClient
 
-import backend.api.leads as leads_api
+import backend.services.lead_cohort_replay as cohort_replay
 from backend.main import app
 from backend.services.repositories import get_lead_repository
 
@@ -66,7 +66,7 @@ def test_lead_queue_replays_lakebase_cohort_filters_and_ignores_widening_url(
     repo = _CaptureLeadRepo()
     prior = app.dependency_overrides.get(get_lead_repository)
     app.dependency_overrides[get_lead_repository] = lambda: repo
-    monkeypatch.setattr(leads_api, "get_lakebase_client", lambda: _CohortLakebase())
+    monkeypatch.setattr(cohort_replay, "get_lakebase_client", lambda: _CohortLakebase())
     try:
         response = TestClient(app).get(
             "/api/leads?cohort_id=11111111-1111-1111-1111-111111111111"
@@ -102,7 +102,7 @@ def test_lead_queue_cohort_without_target_ignores_url_target_lender(
     repo = _CaptureLeadRepo()
     prior = app.dependency_overrides.get(get_lead_repository)
     app.dependency_overrides[get_lead_repository] = lambda: repo
-    monkeypatch.setattr(leads_api, "get_lakebase_client", lambda: _CohortLakebaseNoTarget())
+    monkeypatch.setattr(cohort_replay, "get_lakebase_client", lambda: _CohortLakebaseNoTarget())
     try:
         response = TestClient(app).get(
             "/api/leads?cohort_id=22222222-2222-2222-2222-222222222222"
@@ -162,7 +162,7 @@ def test_lead_queue_cohort_rejects_invalid_lakebase_route_filters(
         prior = app.dependency_overrides.get(get_lead_repository)
         app.dependency_overrides[get_lead_repository] = lambda repo=repo: repo
         monkeypatch.setattr(
-            leads_api,
+            cohort_replay,
             "get_lakebase_client",
             lambda route_filters=route_filters: _MalformedCohortLakebase(route_filters),
         )
