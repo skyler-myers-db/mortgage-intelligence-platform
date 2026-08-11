@@ -78,6 +78,7 @@ merge_historical_cutover_journal_preservation() {
       fi
       ;;
     stale)
+      # shellcheck disable=SC2034  # Set here, read by scripts/deploy.sh after this lib is sourced.
       STALE_CUTOVER_JOURNAL_PENDING=1
       ;;
     absent)
@@ -104,6 +105,7 @@ journal_preactivation_app_acl_endpoint() {
     [[ "$existing" == "$endpoint" ]] && return 0
   done
   PREACTIVATION_APP_REVOKE_ENDPOINTS+=("$endpoint")
+  # shellcheck disable=SC2034  # Set here, read by scripts/deploy.sh after this lib is sourced.
   PREACTIVATION_APP_ACL_MUTATED=1
 }
 
@@ -399,6 +401,7 @@ load_captured_live_old_resources() {
       "$MIP_REPLACED_AGENT_GATEWAY_ENDPOINT" \
       "$MIP_REPLACED_AGENT_GATEWAY_ENDPOINT_ID" \
       "$MIP_REPLACED_AGENT_GATEWAY_CREATOR"; then
+      # shellcheck disable=SC2034  # Set here, read by scripts/deploy.sh after this lib is sourced.
       CAPTURED_OLD_GATEWAY_LIVE=1
     else
       status=$?
@@ -410,6 +413,7 @@ load_captured_live_old_resources() {
       "$MIP_REPLACED_AGENT_SUPERVISOR_ENDPOINT" \
       "$MIP_REPLACED_AGENT_SUPERVISOR_ENDPOINT_ID" \
       "$MIP_REPLACED_AGENT_SUPERVISOR_CREATOR"; then
+      # shellcheck disable=SC2034  # Set here, read by scripts/deploy.sh after this lib is sourced.
       CAPTURED_OLD_SUPERVISOR_LIVE=1
     else
       status=$?
@@ -566,8 +570,11 @@ complete_captured_runtime_retirement_journal() {
     --app-name "$_GRANTS_APP_NAME" \
     --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
     --deployment-source-git-sha "$SOURCE_GIT_SHA" || return 1
+  # shellcheck disable=SC2034  # Set here, read by scripts/deploy.sh after this lib is sourced.
   CAPTURED_RUNTIME_RETIREMENT_COMPLETE=0
+  # shellcheck disable=SC2034  # Set here, read by scripts/deploy.sh after this lib is sourced.
   AGENT_PROXY_ACCESS_MUTATED=0
+  # shellcheck disable=SC2034  # Set here, read by scripts/deploy.sh after this lib is sourced.
   VERIFIER_GATEWAY_CUTOVER_MUTATED=0
   APP_UPGRADE_STATE="green_verified"
 }

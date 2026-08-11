@@ -2,7 +2,7 @@
 # only `python3` is on PATH. Override by running `make PYTHON=python3 …`.
 PYTHON ?= $(shell [ -x .venv/bin/python ] && echo .venv/bin/python || echo python3)
 
-.PHONY: setup dev-api dev-ui test test-e2e lint build validate bundle-validate bundle-plan bundle-deploy zip \
+.PHONY: setup dev-api dev-ui test test-e2e lint lint-shell build validate bundle-validate bundle-plan bundle-deploy zip \
         provision-genie bundle-validate-env bundle-deploy-dev deploy-dev check-workspace-host \
         configure-workspace render-sql
 
@@ -30,6 +30,18 @@ test-e2e:
 lint:
 	$(PYTHON) -m ruff check backend tests tools
 	npm --prefix frontend run lint
+	$(MAKE) lint-shell
+
+# Shell lint. `git ls-files` is the file list on purpose: it tracks new
+# scripts automatically and never walks dist/ or node_modules.
+# Fails loudly when shellcheck is absent rather than skipping — a lint gate
+# that silently passes when its linter is missing is worse than no gate.
+lint-shell:
+	@command -v shellcheck >/dev/null 2>&1 || { \
+	  echo "shellcheck not found. Install it: brew install shellcheck (macOS) / apt-get install shellcheck (Debian)"; \
+	  exit 1; \
+	}
+	shellcheck --severity=warning $$(git ls-files '*.sh')
 
 # 2026-06-11 audit P2-14: ratcheted mypy gate — exemption list in
 # pyproject.toml [tool.mypy] overrides may only shrink.
