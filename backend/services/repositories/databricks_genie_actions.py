@@ -15,9 +15,6 @@ from urllib.parse import urlencode
 from backend.schemas.common import validate_public_borrower_id
 from backend.services.genie_answers import GenieActionSuggestion, GenieVisualizationSpec
 from backend.services.genie_sql_predicates import SqlFilterReading, read_sql_filters
-from backend.services.repositories.databricks_genie_canonical import (
-    _retention_competitor_lien_list_question,
-)
 
 # Cohort filter keys `_route_from_answer_rows` can emit that the Lead Queue
 # actually replays. A disclosure key rides alongside them but must never be
@@ -38,6 +35,27 @@ _REPLAYABLE_ROUTE_FILTER_KEYS = frozenset(
         "min_equity_pct",
         "min_rate_spread_bps",
     }
+)
+
+# Reviewed `product` label -> the exact offer-code set the Lead Queue compiles
+# it to. Mirrors ``PORTFOLIO_PRODUCT_CODES`` in ``databricks_portfolio`` and is
+# pinned to it by ``tests/unit/test_genie_sql_floor_extraction.py``; it is
+# duplicated rather than imported so this module stays free of the SQL and
+# Lakebase imports that module carries.
+_PRODUCT_LABEL_CODES: dict[str, frozenset[str]] = {
+    "Refi": frozenset({"refi", "refi_plus_heloc"}),
+    "HELOC": frozenset({"heloc", "refi_plus_heloc"}),
+    "Cash-out": frozenset({"cash_out"}),
+    "Purchase": frozenset({"purchase"}),
+    "Retention": frozenset({"retention"}),
+}
+
+# `recommended_offer_code = 'x'` or `recommended_offer_code IN ('x', 'y')`.
+# The alternation is anchored on the quotes so the list branch cannot run past
+# its own closing paren into a neighbouring conjunct.
+_OFFER_CODE_PREDICATE_RE = re.compile(
+    r"\brecommended_offer_code\s*(?:=\s*['\"](?P<single>[a-z_]+)['\"]"
+    r"|in\s*\((?P<list>[^)]*)\))"
 )
 
 
@@ -158,54 +176,38 @@ def _segment_codes_from_question(question: str) -> list[str]:
     return list(dict.fromkeys(codes))
 
 
-def _portfolio_criteria_from_question(question: str) -> dict[str, Any]:
-    q = question.lower()
-    criteria: dict[str, Any] = {}
-    if re.search(r"\b(owner[-\s]?occupied|primary residence)\b", q):
-        criteria["occupancy"] = "Owner-occupied"
-    elif re.search(r"\b(non[-\s]?owner[-\s]?occupied|investment property)\b", q):
-        criteria["occupancy"] = "Non-owner-occupied"
+def _product_label_from_offer_codes(sql: str) -> str | None:
+    """Return a reviewed product label only when the SQL pins the exact code set.
 
-    if re.search(r"\b(open|active)\s+(heloc|second lien|2nd lien)\b", q):
-        criteria["lien_status"] = "Open HELOC"
-    elif re.search(r"\b(open|active)\s+(first lien|1st lien)\b", q):
-        criteria["lien_status"] = "Open 1st lien"
-    elif re.search(r"\b(free\s*(?:&|and)\s*clear)\b", q):
-        criteria["lien_status"] = "Free & clear"
+    A product label is not a synonym for one offer code: the reviewed
+    vocabulary compiles ``HELOC`` to ``recommended_offer_code IN ('heloc',
+    'refi_plus_heloc')`` and ``Refi`` to ``('refi', 'refi_plus_heloc')``. So a
+    label may only be replayed when the answer's own predicate pins *exactly*
+    that set. A strict subset (``= 'heloc'``) would replay BROADER than the
+    answer, and a superset or mixed set would replay NARROWER — the truncation
+    failure this module exists to prevent. When nothing matches exactly we
+    emit no product at all and let the answer's other conjuncts carry the
+    cohort, which errs broad rather than silently dropping borrowers.
+    """
 
-    if re.search(r"\bsingle[-\s]?property owner\b", q):
-        criteria["owner_link"] = "Single-property owner"
-    elif re.search(r"\b(multi[-\s]?property|2[-\s]*4 properties)\b", q):
-        criteria["owner_link"] = "Multi-property (2-4)"
-    elif re.search(r"\b(portfolio investor|5\+ properties)\b", q):
-        criteria["owner_link"] = "Portfolio investor (5+)"
-
-    if "listed for sale" in q:
-        criteria["purchase_intent"] = "Listed for sale"
-    elif "heloc intent" in q or "heloc propensity" in q or "permit" in q:
-        criteria["purchase_intent"] = "HELOC intent"
-
-    if "cash-out" in q or "cash out" in q:
-        criteria["product"] = "Cash-out"
-    elif re.search(r"\bheloc\b", q):
-        criteria["product"] = "HELOC"
-    elif re.search(r"\b(retention|recapture|at risk|going to a competitor)\b", q):
-        criteria["product"] = "Retention"
-
-    if "current customer" in q:
-        criteria["lender_relationship"] = "Current customer"
-    elif "former customer" in q:
-        criteria["lender_relationship"] = "Former customer"
-    elif "competitor" in q and not _retention_competitor_lien_list_question(question):
-        criteria["lender_relationship"] = "Competitor customer"
-
-    equity_match = re.search(
-        r"(?:equity|ltv|loan[-\s]?to[-\s]?value)[^\d]{0,24}(15|25|40)\s*%",
-        q,
-    )
-    if equity_match:
-        criteria["min_equity_pct_label"] = f"≥ {equity_match.group(1)}%"
-    return criteria
+    code_sets: list[frozenset[str]] = []
+    for match in _OFFER_CODE_PREDICATE_RE.finditer(sql):
+        raw = match.group("single") or match.group("list") or ""
+        codes = frozenset(
+            code
+            for code in (part.strip().strip("'\"") for part in raw.split(","))
+            if re.fullmatch(r"[a-z_]+", code)
+        )
+        if codes:
+            code_sets.append(codes)
+    # Two predicates on the same column intersect; replaying either one alone
+    # would misreport the cohort, so only an unambiguous single reading counts.
+    if len(set(code_sets)) != 1:
+        return None
+    for label, label_codes in _PRODUCT_LABEL_CODES.items():
+        if code_sets[0] == label_codes:
+            return label
+    return None
 
 
 def _portfolio_criteria_from_sql(
@@ -213,12 +215,38 @@ def _portfolio_criteria_from_sql(
 ) -> dict[str, Any]:
     """Read reviewed Portfolio Builder criteria out of the answer's own SQL.
 
-    Every criterion below narrows the replayed cohort exactly as a numeric
-    floor does (``min_equity_pct_label`` compiles to ``equity_pct >=``), so it
-    is read from the same position-gated conjuncts rather than from the raw
-    statement text. Matching the whole statement would lift a criterion out of
-    a CASE arm, an aggregate breakdown, a comment, or a CTE body and hand the
-    queue a population the answer never described.
+    The answer's SQL is the ONLY source of these criteria. Every criterion
+    below narrows the replayed cohort exactly as a numeric floor does
+    (``min_equity_pct_label`` compiles to ``equity_pct >=``), so it is read
+    from the same position-gated conjuncts rather than from the raw statement
+    text. Matching the whole statement would lift a criterion out of a CASE
+    arm, an aggregate breakdown, a comment, or a CTE body and hand the queue a
+    population the answer never described.
+
+    A sibling reader that inferred the same criteria from the QUESTION'S
+    WORDING was deleted (adversarial review 2026-08-11). Prose has no position
+    to gate on, so it could not distinguish a filter the answer applied from a
+    word the answer merely mentioned, and it silently narrowed real cohorts:
+
+    * "Show the top 20 investors by related property count" emitted
+      ``owner_link="Multi-property (2-4)"``, i.e. ``related_property_count
+      BETWEEN 2 AND 4`` — against an answer ordered by that column DESC. Live
+      measurement: 10 of 10 returned borrowers dropped, all at 3,686
+      properties.
+    * "How many of our current customers are at risk of going to a
+      competitor?" emitted ``product="Retention"``, turning the answer's
+      ``segment_codes CONTAINS 'retention' OR recommended_offer_code =
+      'retention'`` into the strict second branch. Live: the answer reports
+      19,166 and the queue opened 1,991.
+    * "Show me borrowers who are NOT owner-occupied but have a permit" emitted
+      ``occupancy="Owner-occupied"``: negation is invisible to a keyword
+      match. Live: 39,969 borrowers asked for, 410,821 opened, intersection
+      zero.
+
+    None of these are fixable by better patterns. A comparison ("owner-occupied
+    vs non-owner-occupied"), an enumeration ("HELOC, cash-out, or retention"),
+    an exclusion ("everyone except cash-out") and a filter all put the same
+    word in the same sentence. Only the SQL says which one it was.
     """
 
     if not sql_query:
@@ -288,19 +316,9 @@ def _portfolio_criteria_from_sql(
     elif re.search(r"\bis_competitor_lien\s*=\s*true\b", sql):
         criteria["lender_relationship"] = "Competitor customer"
 
-    if (
-        re.search(r"\brecommended_offer_code\s*=\s*'cash_out'\b", sql)
-        or re.search(
-            r'\brecommended_offer_code\s*=\s*"cash_out"\b',
-            sql,
-        )
-        or re.search(r"\brecommended_offer_code\s+in\s*\([^)]*'cash_out'[^)]*\)", sql)
-    ):
-        criteria["product"] = "Cash-out"
-    elif re.search(r"\brecommended_offer_code\s*=\s*'retention'\b", sql):
-        criteria["product"] = "Retention"
-    elif re.search(r"\brecommended_offer_code\s*=\s*'heloc'\b", sql):
-        criteria["product"] = "HELOC"
+    product = _product_label_from_offer_codes(sql)
+    if product:
+        criteria["product"] = product
 
     equity_match = re.search(r"\bequity_pct\s*>=\s*(15|25|40)\b", sql)
     if equity_match:
@@ -372,10 +390,11 @@ def _route_from_answer_rows(
         states = states[:1]
     segment_codes = _segment_codes_from_question(question)
     reading = read_sql_filters(sql_query)
-    portfolio_criteria = {
-        **_portfolio_criteria_from_question(question),
-        **_portfolio_criteria_from_sql(sql_query, reading),
-    }
+    # Portfolio criteria come from the ANSWER'S OWN SQL only. They used to be
+    # merged with criteria inferred from the question's wording, which is
+    # removed: see ``_portfolio_criteria_from_sql`` for why every criterion
+    # here narrows, and why prose cannot be gated the way SQL conjuncts can.
+    portfolio_criteria = _portfolio_criteria_from_sql(sql_query, reading)
 
     if borrower_ids:
         filter_criteria["borrower_ids"] = borrower_ids

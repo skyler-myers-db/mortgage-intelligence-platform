@@ -1874,8 +1874,14 @@ def test_heloc_genie_action_routes_to_heloc_intent_segment() -> None:
     params = parse_qs(urlsplit(route).query)
     assert params["segment"] == ["permit"]
     assert params["states"] == ["CA"]
+    # From the SQL: `has_heloc_propensity_trigger = TRUE` is the answer's own
+    # top-level conjunct.
     assert params["purchase_intent"] == ["HELOC intent"]
-    assert params["product"] == ["HELOC"]
+    # NOT from the word "HELOC" in the question. A propensity trigger is not a
+    # recommended offer, and this SQL never filtered `recommended_offer_code`.
+    # Live paychex gold 2026-08-11: the answer covers 102,063 CA borrowers and
+    # `product=HELOC` would have opened 86,454 — 15,609 dropped in silence.
+    assert "product" not in params
     assert filters["segment_codes"] == ["permit"]
     assert filters["segment_mode"] == "any"
 

@@ -20,6 +20,10 @@ to 128 -- 599x -- while the answer's own count is 76,711.
 
 Every case below is either a captured live shape, an in-repo constant, or a
 statement form reviewers found the previous text-matching reader mishandled.
+
+Sibling gate: ``tests/unit/test_genie_cohort_criteria_source.py`` pins that the
+same criteria may never be inferred from the QUESTION'S wording, which has no
+position to gate on at all.
 """
 
 from __future__ import annotations
@@ -642,3 +646,4 @@ def test_a_real_top_level_intersection_is_still_all() -> None:
 )
 def test_non_filtering_segment_pairs_never_become_an_intersection(sql: str) -> None:
     assert _mode(sql, ["itm", "equity"]) == "any"
+

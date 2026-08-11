@@ -9,6 +9,7 @@ import json
 import re
 import secrets
 import time
+from collections.abc import Mapping
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
@@ -23,6 +24,7 @@ from backend.config.runtime_secret_policy import (
 from backend.config.settings import settings
 from backend.schemas._validators_tenant import normalize_public_lender_ref
 from backend.schemas.common import validate_public_borrower_id
+from backend.schemas.genie_numeric_filters import GENIE_NUMERIC_FILTER_BOUNDS
 from backend.schemas.portfolio import PortfolioCriteria
 from backend.services.audit_store import (
     _assert_allowlisted,
@@ -68,19 +70,16 @@ _PLACEHOLDER_ACTION_SECRETS = frozenset(
 )
 _MAX_ACTION_FILTER_VALUES = 500
 # Reviewed numeric floors the Lead Queue applies verbatim, mapped to their
-# inclusive upper bound. Each is an integer `>=` predicate over a
+# inclusive (minimum, maximum). Each is an integer `>=` predicate over a
 # gold.borrower_360 column, so a Genie answer narrowed by one of these hands
 # off the SAME population it just reported instead of a broader one:
 #   min_opportunity_score -> b.opportunity_score
 #   min_equity_pct        -> equity_pct (via reviewed PortfolioCriteria)
 #   min_rate_spread_bps   -> b.rate_spread_bps
-# Ranges are the column domains: score/equity are percentages; a 5,000 bps
-# (50pp) spread ceiling is far above any real refinance incentive.
-_REPLAYABLE_NUMERIC_FILTERS: dict[str, int] = {
-    "min_opportunity_score": 100,
-    "min_equity_pct": 100,
-    "min_rate_spread_bps": 5000,
-}
+# The ranges live in ONE place -- backend/schemas/genie_numeric_filters.py --
+# because four other vocabularies validate the same values downstream and a
+# key bounded differently in one of them 500s after the cohort row is written.
+_REPLAYABLE_NUMERIC_FILTERS: Mapping[str, tuple[int, int]] = GENIE_NUMERIC_FILTER_BOUNDS
 # Keys the Lead Queue can actually replay (see `_cohort_route_filters`).
 # Anything else in a Genie answer's result_filters is disclosed, not applied.
 _REPLAYABLE_FILTER_KEYS = frozenset(
@@ -967,7 +966,7 @@ def _list_filter(
     return out
 
 
-def _numeric_floor(raw: Any, *, field: str, maximum: int) -> int | None:
+def _numeric_floor(raw: Any, *, field: str, minimum: int, maximum: int) -> int | None:
     """Return a reviewed integer floor, or None when the answer omitted it.
 
     Closed vocabulary, same posture as the list filters above: the value must
@@ -976,6 +975,10 @@ def _numeric_floor(raw: Any, *, field: str, maximum: int) -> int | None:
     because a coerced threshold would silently replay a different population
     than the answer reported. A `0` floor is kept, not dropped -- for
     ``min_rate_spread_bps`` it is a real predicate (spreads can be negative).
+
+    The range is per field, not shared: score and equity floor at 0, while
+    ``min_rate_spread_bps`` accepts negatives because the column IS negative on
+    half of gold. See ``backend/schemas/genie_numeric_filters.py``.
     """
 
     if raw is None or raw == "":
@@ -992,7 +995,7 @@ def _numeric_floor(raw: Any, *, field: str, maximum: int) -> int | None:
             status_code=400,
             detail=f"Genie cohort {field} filter must be a reviewed integer threshold",
         ) from exc
-    if value < 0 or value > maximum:
+    if value < minimum or value > maximum:
         raise HTTPException(
             status_code=400,
             detail=f"Genie cohort {field} filter is outside the reviewed range",
@@ -1137,8 +1140,10 @@ def _cohort_route_filters(
     # These three keys carry the threshold through to the same `>=` predicate
     # the answer used, so the handoff reproduces the answer's population
     # instead of a broader one under the same heading.
-    for field, maximum in _REPLAYABLE_NUMERIC_FILTERS.items():
-        floor = _numeric_floor(filters.get(field), field=field, maximum=maximum)
+    for field, (minimum, maximum) in _REPLAYABLE_NUMERIC_FILTERS.items():
+        floor = _numeric_floor(
+            filters.get(field), field=field, minimum=minimum, maximum=maximum
+        )
         if floor is not None:
             out[field] = floor
 
@@ -1214,7 +1219,9 @@ def _route_with_cohort(
     for numeric_key in _REPLAYABLE_NUMERIC_FILTERS:
         # The cohort row is the governed source of truth (/leads ignores query
         # params once cohort_id is present); these are on the URL so a shared
-        # link states the thresholds the queue is applying.
+        # link states the thresholds the queue is applying. A negative spread
+        # floor keeps its sign: `-` is unreserved, so urlencode leaves it
+        # literal and the link reads `min_rate_spread_bps=-25`.
         if numeric_key in filters:
             query[numeric_key] = str(filters[numeric_key])
     portfolio_criteria = filters.get("portfolio_criteria")

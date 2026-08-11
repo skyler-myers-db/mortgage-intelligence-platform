@@ -21,6 +21,11 @@ from backend.schemas.campaign_json_inputs import (
     require_exact_json_keys,
 )
 from backend.schemas.common import validate_public_campaign_label
+from backend.schemas.genie_numeric_filters import (
+    GENIE_NUMERIC_FILTER_BOUNDS,
+    GENIE_NUMERIC_FILTER_KEYS,
+    is_reviewed_numeric_floor,
+)
 from backend.schemas.portfolio_campaign import (
     assert_public_campaign_text,
 )
@@ -85,18 +90,12 @@ _GENIE_REPLAY_FILTER_KEYS = frozenset(
         # predicates it could not. A draft campaign built from a
         # threshold-narrowed Genie answer carries these, and this projection
         # gates the decision proof: an unprojected key here means that campaign
-        # can never be approved.
-        "min_opportunity_score",
-        "min_equity_pct",
-        "min_rate_spread_bps",
+        # can never be approved. Splatted from the canonical bounds so the key
+        # set and the ranges cannot drift apart.
+        *GENIE_NUMERIC_FILTER_KEYS,
         "unreplayable_filters",
     }
 )
-_GENIE_NUMERIC_FILTER_BOUNDS: dict[str, int] = {
-    "min_opportunity_score": 100,
-    "min_equity_pct": 100,
-    "min_rate_spread_bps": 5000,
-}
 _GENIE_SEGMENT_CODES = frozenset({"itm", "listed", "permit", "investor", "equity", "retention"})
 _GENIE_VISUALIZATION_KINDS = frozenset({"bar", "line", "metric", "pie", "scatter", "table"})
 _GENIE_OPAQUE_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}")
@@ -466,11 +465,14 @@ def _project_genie_replay_filters(
             pattern=r"B-[0-9A-Z]{13}",
             max_items=500,
         )
-    for numeric_key, maximum in _GENIE_NUMERIC_FILTER_BOUNDS.items():
+    for numeric_key in GENIE_NUMERIC_FILTER_BOUNDS:
         if numeric_key not in value:
             continue
         floor = value[numeric_key]
-        if isinstance(floor, bool) or not isinstance(floor, int) or not 0 <= floor <= maximum:
+        # ``min_rate_spread_bps`` is signed: a negative floor is a real
+        # retention-side question, not a malformed one. Score and equity are
+        # still 0-bounded.
+        if not is_reviewed_numeric_floor(numeric_key, floor):
             raise ValueError(f"criteria.result_filters.{numeric_key} must be a reviewed threshold")
         out[numeric_key] = floor
     if "unreplayable_filters" in value:

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
 
@@ -37,6 +38,12 @@ from backend.schemas.common import (
     validate_public_borrower_id,
     validate_public_campaign_label,
     validate_public_opaque_id,
+)
+from backend.schemas.genie_numeric_filters import (
+    GENIE_NUMERIC_FILTER_BOUNDS,
+    GENIE_NUMERIC_FILTER_KEYS,
+    is_reviewed_numeric_floor,
+    numeric_filter_range_text,
 )
 from backend.schemas.lead import SEGMENT_CODE_VALUES
 from backend.services.agent_tools import registered_agent_tool_names
@@ -577,17 +584,15 @@ _ALLOWED_RESULT_FILTER_KEYS: frozenset[str] = frozenset(
         # the names of the predicates the queue could NOT replay. Both are
         # machine-generated: the floors are bounded integers, the disclosure
         # is a bounded list of identifier-shaped key names (never values).
-        "min_opportunity_score",
-        "min_equity_pct",
-        "min_rate_spread_bps",
+        # Splatted from the canonical bounds so a new floor key can never be
+        # accepted by the cohort writer and rejected by this ledger.
+        *GENIE_NUMERIC_FILTER_KEYS,
         "unreplayable_filters",
     }
 )
-_RESULT_FILTER_NUMERIC_BOUNDS: dict[str, int] = {
-    "min_opportunity_score": 100,
-    "min_equity_pct": 100,
-    "min_rate_spread_bps": 5000,
-}
+# Per-key inclusive (minimum, maximum). ``min_rate_spread_bps`` accepts
+# negatives; score/equity do not. See backend/schemas/genie_numeric_filters.py.
+_RESULT_FILTER_NUMERIC_BOUNDS: Mapping[str, tuple[int, int]] = GENIE_NUMERIC_FILTER_BOUNDS
 _MAX_RESULT_FILTER_VALUES = 500
 _MAX_RESULT_FILTER_STATES = 56
 _MAX_UNREPLAYABLE_RESULT_FILTERS = 12
@@ -1060,15 +1065,16 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
                 raise AuditMetadataValueViolation(
                     field, "contains values outside the reviewed vocabulary"
                 )
-    for numeric_field, maximum in _RESULT_FILTER_NUMERIC_BOUNDS.items():
+    for numeric_field in _RESULT_FILTER_NUMERIC_BOUNDS:
         # Same bounds whether the floor is recorded at the top level of a
         # VIEW_LEADS row or nested in a Genie cohort's result_filters.
         for field, floor in _metadata_values_for(metadata, {numeric_field}):
             if floor is None:
                 continue
-            if isinstance(floor, bool) or not isinstance(floor, int) or not 0 <= floor <= maximum:
+            if not is_reviewed_numeric_floor(numeric_field, floor):
                 raise AuditMetadataValueViolation(
-                    field, f"must be an integer between 0 and {maximum}"
+                    field,
+                    f"must be an integer {numeric_filter_range_text(numeric_field)}",
                 )
     for field, ttl_s in _metadata_values_for(metadata, {"ttl_s"}):
         if not isinstance(ttl_s, int) or isinstance(ttl_s, bool) or ttl_s < 0 or ttl_s > 300:
@@ -1543,14 +1549,13 @@ def _assert_result_filters_value_policy(value: Any) -> None:
             ) from exc
         if aged_days < 1 or aged_days > 90:
             raise AuditMetadataValueViolation("result_filters.aged_days", "must be 1 to 90")
-    for numeric_field, maximum in _RESULT_FILTER_NUMERIC_BOUNDS.items():
+    for numeric_field in _RESULT_FILTER_NUMERIC_BOUNDS:
         if numeric_field not in value:
             continue
-        floor = value[numeric_field]
-        if isinstance(floor, bool) or not isinstance(floor, int) or not 0 <= floor <= maximum:
+        if not is_reviewed_numeric_floor(numeric_field, value[numeric_field]):
             raise AuditMetadataValueViolation(
                 f"result_filters.{numeric_field}",
-                f"must be an integer between 0 and {maximum}",
+                f"must be an integer {numeric_filter_range_text(numeric_field)}",
             )
     if "unreplayable_filters" in value:
         _assert_string_list(

@@ -155,14 +155,33 @@ def test_disclosure_never_becomes_the_only_filter() -> None:
         ("min_opportunity_score", True),
         ("min_opportunity_score", [80]),
         ("min_equity_pct", 101),
+        # Percentages have no negative half; widening the SIGNED spread floor
+        # must not widen these two.
+        ("min_equity_pct", -1),
         ("min_rate_spread_bps", 5001),
-        ("min_rate_spread_bps", -25),
+        ("min_rate_spread_bps", -1001),
+        ("min_rate_spread_bps", "-25 bps"),
+        ("min_rate_spread_bps", -24.5),
+        ("min_rate_spread_bps", [-25]),
     ],
 )
 def test_numeric_floors_must_be_bounded_whole_numbers(field: str, value: object) -> None:
     with pytest.raises(HTTPException) as exc:
         _route_filters(states=["IL"], **{field: value})
     assert exc.value.status_code == 400
+
+
+def test_negative_spread_floor_survives_the_cohort_writer() -> None:
+    """Half the book has a NEGATIVE spread, so `>= -25` is a real question.
+
+    Live 2026-08-11 on paychex gold: rate_spread_bps is negative on 2,561,392
+    of 5,156,184 rows (min -569, p50 0). The floor used to be clamped at 0
+    everywhere downstream, so a retention-side answer was rejected and merely
+    disclosed -- and the queue replayed BROADER than the answer.
+    """
+
+    out = _route_filters(states=["IL"], min_rate_spread_bps=-25)
+    assert out["min_rate_spread_bps"] == -25
 
 
 def test_replayable_key_set_matches_what_the_queue_reads() -> None:
@@ -354,12 +373,52 @@ def test_unreplayable_cohort_still_discloses_the_gap(monkeypatch: pytest.MonkeyP
     assert response.headers["X-Cohort-Unreplayable-Filters"] == "ltv_80"
 
 
+def test_negative_spread_floor_reaches_the_repository(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A retention-side cohort must replay its own floor, sign intact.
+
+    Half of gold has a negative spread, so a cohort stored at ``>= -25`` that
+    replayed without the predicate would open roughly twice the population the
+    answer reported -- the same class of divergence as the 55x score defect,
+    just on the other side of zero.
+    """
+
+    lakebase = _CohortLakebase(
+        {"states": ["IL"], "min_rate_spread_bps": -25, "source": "genie"},
+        4,
+    )
+
+    response, repo = _get_leads(monkeypatch, lakebase, "88888888-8888-8888-8888-888888888888")
+
+    assert response.status_code == 200
+    assert repo.calls[-1]["min_rate_spread_bps"] == -25
+
+
+def test_a_negative_spread_floor_alone_makes_a_cohort_replayable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """It compiles to a real predicate, so it satisfies the fail-closed gate.
+
+    Contrast ``test_a_zero_floor_alone_is_not_a_replayable_cohort``: a 0 score
+    or equity floor excludes nobody and must NOT pass the gate. A spread floor
+    of any value does exclude somebody, so it may stand alone.
+    """
+
+    lakebase = _CohortLakebase({"min_rate_spread_bps": -25, "source": "genie"}, 4)
+
+    response, repo = _get_leads(monkeypatch, lakebase, "99999999-9999-9999-9999-999999999999")
+
+    assert response.status_code == 200
+    assert repo.calls[-1]["min_rate_spread_bps"] == -25
+
+
 @pytest.mark.parametrize(
     "stored",
     [
         {"states": ["IL"], "min_opportunity_score": 101},
         {"states": ["IL"], "min_opportunity_score": "80%"},
-        {"states": ["IL"], "min_rate_spread_bps": -5},
+        {"states": ["IL"], "min_rate_spread_bps": -1001},
         {"states": ["IL"], "min_equity_pct": 100.5},
     ],
 )
