@@ -268,20 +268,28 @@ def test_bound_parameter_is_disclosed_not_dropped() -> None:
     assert _disclosed(positional) == ("opportunity_score_threshold",)
 
 
-def test_negative_bounds_are_read_and_disclosed() -> None:
+def test_negative_bounds_are_read_and_REPLAYED() -> None:
     """`rate_spread_bps` is signed: 2,561,392 of 5,156,184 live rows are < 0.
 
-    The old regex bound (`\\d{1,4}`) could not express -25 at all. It is read
-    now, but the reviewed cohort vocabulary rejects a negative floor (a 400
-    would kill the whole action), so it is disclosed rather than replayed.
+    This test previously asserted the negative was DISCLOSED, and justified it
+    with "the reviewed cohort vocabulary rejects a negative floor" -- which the
+    same branch had already made false. The vocabularies were widened to
+    -1000..5000, but this module kept its own ceiling table with a hardcoded 0
+    lower bound (a sixth copy the consolidation missed), so the floor died
+    here and the queue kept opening 76,711 for an answer of 39,053.
+
+    A test that pins the defect is worse than no test: it makes the broken
+    state look deliberate. It now asserts the floor reaches the cohort.
     """
 
     sql = f"SELECT * FROM {_B360} WHERE state = 'IL' AND rate_spread_bps >= -25"
-    assert _floors(sql) == {}
-    assert _disclosed(sql) == ("rate_spread_bps_threshold",)
+    assert _floors(sql) == {"min_rate_spread_bps": -25}
+    assert _disclosed(sql) == ()
     assert read_sql_filters(f"SELECT * FROM {_B360} WHERE rate_spread_bps >= 0").floors == {
         "min_rate_spread_bps": 0
     }
+    # Out of the reviewed domain is still disclosed, never guessed.
+    assert _floors(f"SELECT * FROM {_B360} WHERE rate_spread_bps >= -2000") == {}
 
 
 def test_mirrored_and_between_bounds_are_real_floors() -> None:

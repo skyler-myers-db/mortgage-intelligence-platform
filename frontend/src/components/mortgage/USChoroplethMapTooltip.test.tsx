@@ -77,4 +77,15 @@ describe('USChoroplethMapTooltip contactable disclosure', () => {
     render({ count: null, contactable: 0 });
     expect(tipText()).not.toContain('Contactable');
   });
+
+  it('says nothing when contactable equals addressable', () => {
+    // Reachable with NO user action: Segment Intelligence defaults
+    // Contactability to "Eligible only", so the filtered state rollup counts
+    // contactable over an already-eligible universe and every tile returns
+    // contactable === addressable (live: IL 76,711 of 76,711). The four cases
+    // above cover non-equal / null / zero / no-count and so could not see it.
+    render({ count: 76711, contactable: 76711 });
+    expect(tipText()).not.toContain('Contactable');
+  });
+
 });

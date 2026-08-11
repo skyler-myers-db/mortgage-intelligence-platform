@@ -57,6 +57,7 @@ import math
 import re
 from dataclasses import dataclass
 
+from backend.schemas.genie_numeric_filters import GENIE_NUMERIC_FILTER_BOUNDS
 from backend.services.scoring import HIGH_OPPORTUNITY_THRESHOLD
 
 # Numeric floors the Lead Queue replays verbatim, keyed by the gold column and
@@ -68,12 +69,19 @@ from backend.services.scoring import HIGH_OPPORTUNITY_THRESHOLD
 # whole number in gold (verified live 2026-08-11 on paychex: typeof = int,
 # zero fractional rows across 5,156,184 rows), so ``> n`` is exactly
 # ``>= n + 1``.
-SQL_NUMERIC_FLOOR_COLUMNS: dict[str, tuple[str, int]] = {
-    "opportunity_score": ("min_opportunity_score", 100),
-    "equity_pct": ("min_equity_pct", 100),
-    "rate_spread_bps": ("min_rate_spread_bps", 5000),
+# Column -> the cohort filter key it feeds. The RANGE is deliberately NOT
+# repeated here: this module used to carry its own ceiling table, which made
+# it a SIXTH per-vocabulary copy that the "one definition, five readers"
+# collapse missed -- and it disagreed with the canonical minimum on the one
+# signed column, so a negative rate-spread floor was parsed correctly and
+# then rejected right here, before it could ever reach a cohort (found by
+# adversarial review 2026-08-11; the workstream that "enabled" it was dead
+# below this line). Bounds come from the shared table or not at all.
+SQL_NUMERIC_FLOOR_COLUMNS: dict[str, str] = {
+    "opportunity_score": "min_opportunity_score",
+    "equity_pct": "min_equity_pct",
+    "rate_spread_bps": "min_rate_spread_bps",
 }
-_FLOOR_CEILINGS: dict[str, int] = {key: ceiling for key, ceiling in SQL_NUMERIC_FLOOR_COLUMNS.values()}
 # Canonical MIP SQL expresses the top tier through a UC function rather than a
 # literal, so the threshold is read from the constant the function is
 # generated from -- but only in the same conjunctive, unnegated position a
@@ -488,17 +496,17 @@ def _leaf_bound(leaf: tuple[_Token, ...]) -> tuple[str, int | None] | None:
                 strict = operator.text == ">"
                 number = _number(leaf, index + 1)
                 if number is not None and number[1] == len(leaf):
-                    return entry[0], _floor_value(number[0], strict=strict)
+                    return entry, _floor_value(number[0], strict=strict)
                 if _is_parameter(leaf, index + 1) and index + 2 == len(leaf):
-                    return entry[0], None
+                    return entry, None
             if operator.kind == "word" and operator.text == "between":
                 low = _number(leaf, index + 1)
                 if low is not None and _is_word(leaf, low[1], "and"):
                     high = _number(leaf, low[1] + 1)
                     if high is not None and high[1] == len(leaf):
-                        return entry[0], _floor_value(low[0], strict=False)
+                        return entry, _floor_value(low[0], strict=False)
                 if _is_parameter(leaf, index + 1) and _is_word(leaf, index + 2, "and"):
-                    return entry[0], None
+                    return entry, None
 
     # Mirrored form: ``80 <= opportunity_score``.
     reversed_bound = _number(leaf, 0)
@@ -511,8 +519,8 @@ def _leaf_bound(leaf: tuple[_Token, ...]) -> tuple[str, int | None] | None:
                 entry = SQL_NUMERIC_FLOOR_COLUMNS.get(mirrored[0])
                 if entry is not None:
                     if reversed_bound is None:
-                        return entry[0], None
-                    return entry[0], _floor_value(
+                        return entry, None
+                    return entry, _floor_value(
                         reversed_bound[0], strict=leaf[index].text == "<"
                     )
     return None
@@ -528,7 +536,7 @@ def _leaf_text(sql: str, leaf: tuple[_Token, ...]) -> str:
 
 
 def _disclosure_name(key: str) -> str:
-    for column, (filter_key, _) in SQL_NUMERIC_FLOOR_COLUMNS.items():
+    for column, filter_key in SQL_NUMERIC_FLOOR_COLUMNS.items():
         if filter_key == key:
             return f"{column}{_DISCLOSURE_SUFFIX}"
     return f"{key}{_DISCLOSURE_SUFFIX}"
@@ -562,7 +570,7 @@ def read_sql_filters(sql_query: str | None) -> SqlFilterReading:
     floors: dict[str, int] = {}
     unreplayable: list[str] = []
     for key, values in bounds.items():
-        maximum = _FLOOR_CEILINGS.get(key, 0)
+        minimum, maximum = GENIE_NUMERIC_FILTER_BOUNDS.get(key, (0, 0))
         # Several disagreeing bounds on one column are not one cohort floor,
         # and a parameter's value is unknowable. Both are disclosed, never
         # guessed.
@@ -570,7 +578,7 @@ def read_sql_filters(sql_query: str | None) -> SqlFilterReading:
             unreplayable.append(_disclosure_name(key))
             continue
         floor = values.pop()
-        if floor is None or not 0 <= floor <= maximum:
+        if floor is None or not minimum <= floor <= maximum:
             unreplayable.append(_disclosure_name(key))
             continue
         floors[key] = floor

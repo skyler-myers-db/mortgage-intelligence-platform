@@ -378,3 +378,44 @@ def test_an_unreplayable_only_cohort_is_still_empty() -> None:
 
     assert _route_filters(min_credit_score=700) == {}
     assert _route_filters(**{"rate_spread_bps BETWEEN -50 AND 0": True}) == {}
+
+
+# --- The reader itself must lift a negative floor ---------------------------
+#
+# Adversarial review 2026-08-11: this workstream was DEAD below the vocabulary
+# layer. genie_sql_predicates carried its own ceiling table -- a SIXTH copy the
+# "one definition, five readers" collapse missed -- with a hardcoded 0 lower
+# bound, so a negative rate-spread floor was parsed correctly and then rejected
+# before it could reach a cohort. The earlier proof injected the floor BELOW
+# the reader and so could not see it. These start at the SQL.
+
+
+def test_reader_lifts_a_negative_rate_spread_floor() -> None:
+    from backend.services.genie_sql_predicates import read_sql_filters
+
+    reading = read_sql_filters(
+        "SELECT * FROM mip.gold.borrower_360 WHERE state='IL' "
+        "AND array_contains(segment_codes,'retention') AND rate_spread_bps >= -25"
+    )
+    assert reading.floors == {"min_rate_spread_bps": -25}
+    assert reading.unreplayable == ()
+
+
+def test_reader_respects_the_canonical_bounds_not_a_local_copy() -> None:
+    from backend.schemas.genie_numeric_filters import GENIE_NUMERIC_FILTER_BOUNDS
+    from backend.services.genie_sql_predicates import read_sql_filters
+
+    low, _high = GENIE_NUMERIC_FILTER_BOUNDS["min_rate_spread_bps"]
+    assert low < 0, "a signed column must admit negative floors"
+    # At the boundary it replays; one past it is disclosed, never guessed.
+    assert read_sql_filters(
+        f"SELECT * FROM t WHERE rate_spread_bps >= {low}"
+    ).floors == {"min_rate_spread_bps": low}
+    assert read_sql_filters(f"SELECT * FROM t WHERE rate_spread_bps >= {low - 1}").floors == {}
+
+
+def test_percentage_columns_still_refuse_negatives() -> None:
+    from backend.services.genie_sql_predicates import read_sql_filters
+
+    for column in ("opportunity_score", "equity_pct"):
+        assert read_sql_filters(f"SELECT * FROM t WHERE {column} >= -5").floors == {}

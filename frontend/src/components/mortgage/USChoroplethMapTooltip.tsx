@@ -59,7 +59,15 @@ export function USChoroplethMapTooltip({ hover, activeSegNames }: USChoroplethMa
           small one reads as a broken link unless the tile says so. Same
           idiom as `.zip-tiles__reconcile` on the ZIP drill; reuses the
           existing muted compact row, no new CSS. */}
-      {typeof hover.contactable === 'number' && hover.count !== null && (
+      {/* Only when there is a gap to state. Segment Intelligence defaults
+          Contactability to "Eligible only", which restricts the universe the
+          filtered rollup counts over -- so contactable EQUALS addressable on
+          every tile and this row rendered "76,711 of 76,711" with no user
+          action at all. SegmentCard got this guard; its sibling carrying the
+          identical disclosure did not (adversarial review 2026-08-11). */}
+      {typeof hover.contactable === 'number' &&
+        hover.count !== null &&
+        hover.contactable < hover.count && (
         <div className="map-tip__row map-tip__row--compact map-tip__row--muted">
           <span>Contactable</span>
           <span className="v num map-tip__value--small">
