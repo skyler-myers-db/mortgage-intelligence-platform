@@ -61,6 +61,9 @@ from backend.services.lead_cohort_replay import (
     resolve_cohort_replay,
 )
 from backend.services.lead_query_helpers import (
+    apply_cohort_equity_floor as _apply_cohort_equity_floor,
+)
+from backend.services.lead_query_helpers import (
     parse_borrower_ids as _parse_borrower_ids,
 )
 from backend.services.lead_query_helpers import (
@@ -265,6 +268,12 @@ def list_leads(
     cohort_has_replay_filter = False
     cohort_stated_count: int | None = None
     cohort_unreplayable: list[str] = []
+    # Reviewed numeric floors carried by a governed Genie cohort. Without them
+    # a score-narrowed answer of 32 replayed as 1,766 (live 2026-08-11).
+    cohort_narrowing_floors: tuple[bool, ...] = ()
+    cohort_min_opportunity_score: int | None = None
+    cohort_min_rate_spread_bps: int | None = None
+    cohort_min_equity_pct: int | None = None
     segment_mode = _parse_segment_mode(segment_mode)
 
     if cohort_id:
@@ -274,7 +283,11 @@ def list_leads(
         replay = resolve_cohort_replay(cohort_id, actor=actor)
         cohort_filters = replay.filters
         cohort_stated_count = replay.stated_count
-        cohort_unreplayable = replay.unreplayable_filters
+        cohort_unreplayable = replay.header_unreplayable_filters
+        cohort_narrowing_floors = replay.narrowing_floors
+        cohort_min_opportunity_score = replay.min_opportunity_score
+        cohort_min_rate_spread_bps = replay.min_rate_spread_bps
+        cohort_min_equity_pct = replay.min_equity_pct
         segment = None
         state = None
         zip_code = None
@@ -325,6 +338,10 @@ def list_leads(
                     county,
                     parsed_segments,
                     target_lender_ref,
+                    # Only floors that compile to a predicate count -- see
+                    # CohortReplay.narrowing_floors for why a zero score or
+                    # equity floor must not open the whole book.
+                    *cohort_narrowing_floors,
                 )
             ),
         )
@@ -350,11 +367,22 @@ def list_leads(
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    if cohort_id and portfolio_criteria is not None:
+        # The equity floor rides the reviewed Portfolio vocabulary, which
+        # already compiles `equity_pct >= :equity_floor`.
+        portfolio_criteria = _apply_cohort_equity_floor(portfolio_criteria, cohort_min_equity_pct)
+
     repo_kwargs: dict[str, object] = {}
     if portfolio_criteria is not None:
         repo_kwargs["portfolio_criteria"] = portfolio_criteria
     if parsed_counties:
         repo_kwargs["county_fipses"] = parsed_counties
+    # Only pass the floors when a governed cohort set them: repositories and
+    # test doubles that predate this contract keep their existing signature.
+    if cohort_min_opportunity_score is not None:
+        repo_kwargs["min_opportunity_score"] = cohort_min_opportunity_score
+    if cohort_min_rate_spread_bps is not None:
+        repo_kwargs["min_rate_spread_bps"] = cohort_min_rate_spread_bps
 
     if cohort_id and not cohort_has_replay_filter:
         raise HTTPException(
@@ -463,10 +491,18 @@ def list_leads(
         response.headers["X-Cohort-Stated-Count"] = str(cohort_stated_count)
         if cohort_stated_count != total_matching:
             response.headers["X-Cohort-Count-Delta"] = str(total_matching - cohort_stated_count)
-        if cohort_unreplayable:
-            response.headers["X-Cohort-Unreplayable-Filters"] = ",".join(
-                cohort_unreplayable[:12]
-            )
+    if cohort_id and cohort_unreplayable:
+        # Deliberately NOT nested under the stated-count branch. What the queue
+        # could not replay is the reason its number differs, so it has to be
+        # reported even when the cohort row carries no row_count to compare
+        # against — otherwise the one case with no stated count is also the one
+        # that says nothing about why (adversarial review 2026-08-11).
+        # Already re-folded and capped by CohortReplay: these names are
+        # model-authored and rows written by earlier builds stored them raw, so
+        # a stored `ltv<=80` raised UnicodeEncodeError out of this route (an
+        # unhandled 500 that made the cohort permanently unopenable) and CRLF
+        # made h11 reject the response outright.
+        response.headers["X-Cohort-Unreplayable-Filters"] = ",".join(cohort_unreplayable)
     if identity is not None and "ranked_total" in identity:
         # Geo-filtered reads report the geography population as the total
         # (map-tile promise); this header carries the ranked subset
@@ -513,6 +549,10 @@ def list_leads(
         audit_payload["target_lender_ref"] = target_lender_ref
     if cohort_id:
         audit_payload["cohort_id"] = cohort_id
+    if cohort_min_opportunity_score is not None:
+        audit_payload["min_opportunity_score"] = cohort_min_opportunity_score
+    if cohort_min_rate_spread_bps is not None:
+        audit_payload["min_rate_spread_bps"] = cohort_min_rate_spread_bps
     if handoff_proof is not None:
         audit_payload.update(
             {

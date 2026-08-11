@@ -57,6 +57,11 @@ export interface SegmentSummary {
   code: SegmentCode;
   name: string;
   count: number;
+  /** Contact-eligible subset of `count` — what this card's Lead Queue link
+   *  actually shows, because the queue applies the eligibility predicate and
+   *  the headline count does not. Undefined/null means "not reported" (an
+   *  older payload), never "nobody is contactable". */
+  contactable?: number | null;
   delta: string;
   avg_score: number;
   description: string;
@@ -713,32 +718,13 @@ export interface AssetMetadataResponse {
   known_data_gaps: string[];
 }
 
-export interface FunnelTotals {
-  snapshot_date?: string | null;
-  addressable_borrowers: number;
-  in_the_money_borrowers: number;
-  high_opportunity_borrowers: number;
-  offer_recommended_borrowers: number;
-  approved_borrowers: number;
-  actioned_borrowers: number;
-}
-
-export interface FunnelStage {
-  stage: string;
-  stage_order: number;
-  borrower_count: number;
-}
-
-export interface ScoreBucket {
-  score_bucket: number;
-  borrower_count: number;
-}
-
-export interface ExecutiveAnalyticsResponse {
-  totals: FunnelTotals;
-  stages: FunnelStage[];
-  score_distribution: ScoreBucket[];
-}
+export type {
+  ExecutiveAnalyticsResponse,
+  ExecutiveProvenance,
+  FunnelStage,
+  FunnelTotals,
+  ScoreBucket,
+} from './types/executiveAnalytics';
 
 export interface StateOpportunityRow {
   state: string;

@@ -431,6 +431,88 @@ def test_state_rollups_disclose_zip_drill_coverage() -> None:
         assert row["zip_unassigned_count"] <= row["addressable"]
 
 
+def test_state_rollups_disclose_the_contactable_subset() -> None:
+    """Every state tile states BOTH numbers.
+
+    The tile's headline is the addressable population; the Lead Queue it
+    links to applies the contact-eligibility predicate and shows a strict
+    subset (live 2026-08-11: IL 76,711 of 1,851,040, a 24x gap). Reporting
+    only the headline sends the reader to a much smaller queue with no
+    explanation, so the wire carries both and the relationship must hold.
+    """
+    response = client.get("/api/geo/state-rollups")
+    assert response.status_code == 200, response.text
+    rows = response.json()["rollups"]
+    assert rows
+    for row in rows:
+        assert "contactable" in row, (
+            "every state row must state the contactable subset alongside "
+            "addressable — one number on the tile and another in the queue "
+            "is what made the map read as a broken link"
+        )
+        if row["contactable"] is None:
+            continue
+        assert row["contactable"] >= 0
+        assert row["contactable"] <= row["addressable"]
+
+
+def test_state_tile_contactable_is_computed_by_the_eligibility_rule() -> None:
+    """The fixture must DERIVE the subset, not declare it.
+
+    ``contactable`` used to be a hardcoded ~4% of ``addressable`` on every
+    fixture row. Two things followed: the number could not move when the
+    eligibility rule moved, and it was identical under every filter — so no
+    route-level test could tell a tile that reports ``contactable`` from one
+    that reports ``addressable``, which is exactly the map-tooltip bug
+    (adversarial review 2026-08-11).
+    """
+
+    from backend.services.eligibility import GoldEligibilityService
+    from tests.fixtures.in_process_repos import _FIXTURE_STATE_POPULATION
+
+    eligibility = GoldEligibilityService()
+    rows = {row["state"]: row for row in client.get("/api/geo/state-rollups").json()["rollups"]}
+    assert rows
+    for state, borrowers in _FIXTURE_STATE_POPULATION.items():
+        row = rows[state]
+        assert row["contactable"] == sum(
+            1 for borrower in borrowers if eligibility.evaluate(borrower).eligible
+        ), f"{state} reports a contactable count the eligibility rule did not produce"
+        # Strictly smaller, so swapping the two fields is visible.
+        assert 0 < row["contactable"] < row["addressable"]
+
+    filtered = client.get("/api/geo/state-rollups?segment_codes=itm")
+    assert filtered.status_code == 200, filtered.text
+    filtered_rows = {row["state"]: row for row in filtered.json()["rollups"]}
+    assert filtered_rows, "a segment filter must not empty the fixture map"
+    moved = [
+        state
+        for state, row in filtered_rows.items()
+        if row["addressable"] < rows[state]["addressable"]
+        and row["contactable"] < rows[state]["contactable"]
+    ]
+    assert moved, "both numbers must narrow with the filter, not just the headline"
+    for row in filtered_rows.values():
+        assert 0 < row["contactable"] < row["addressable"]
+
+
+def test_segment_summaries_disclose_the_contactable_subset() -> None:
+    """Same contract on the segment cards, which have the same 23x gap."""
+    response = client.get("/api/segments")
+    assert response.status_code == 200, response.text
+    segments = response.json()
+    assert segments
+    for segment in segments:
+        assert "contactable" in segment, (
+            "every segment card must state the contactable subset alongside "
+            "its headline count"
+        )
+        if segment["contactable"] is None:
+            continue
+        assert segment["contactable"] >= 0
+        assert segment["contactable"] <= segment["count"]
+
+
 def test_state_rollup_zip_gap_is_derived_from_the_zip_layer_itself() -> None:
     """Pin the derivation, not a number.
 

@@ -17,8 +17,15 @@ import {
   segmentIntelligenceHref,
   zoomScatterLayout,
 } from './analytics';
+import { ExecutiveProvenanceNote } from './analytics.sections';
 import { MAX_SCATTER_POINTS, signalLabel } from './analytics.lib';
-import type { EquitySpreadOverview, EquitySpreadPoint, EquitySpreadPointsResponse } from '../types';
+import { TIMESTAMP_UNAVAILABLE } from '../lib/time';
+import type {
+  EquitySpreadOverview,
+  EquitySpreadPoint,
+  EquitySpreadPointsResponse,
+  ExecutiveProvenance,
+} from '../types';
 
 const OVERVIEW_FIXTURE: EquitySpreadOverview = {
   bins: [
@@ -310,5 +317,69 @@ describe('equity-spread scatter geometry', () => {
     expect(binDensityAlpha(900, 1_800)).toBeGreaterThan(sparse);
     expect(binDensityAlpha(900, 1_800)).toBeLessThan(dense);
     expect(binDensityAlpha(0, 0)).toBe(0.18);
+  });
+});
+
+describe('executive provenance disclosure', () => {
+  // The Executive and Approval-funnel tabs read DIFFERENT planes for the same
+  // words: Approved/Actioned here come from the gold lifecycle mirror, the
+  // funnel tab reads Lakebase directly. The lag is by design and is never
+  // reconciled away, so the note is the only thing standing between a buyer
+  // and two adjacent tabs that silently disagree.
+  const PROVENANCE: ExecutiveProvenance = {
+    snapshot_date: '2026-08-10',
+    lifecycle_synced_at: '2026-08-10 06:15:00',
+    population_source: 'mip.gold.borrower_360',
+    workflow_source: 'mip.gold.borrower_360 + mip.gold.borrower_lifecycle_state',
+    note: 'server note',
+  };
+
+  it('names both gold sources, the as-of boundary, and links the exact tab', () => {
+    const html = renderToStaticMarkup(
+      <MemoryRouter>
+        <ExecutiveProvenanceNote provenance={PROVENANCE} leadParams={{}} />
+      </MemoryRouter>,
+    );
+
+    expect(html).toContain('mip.gold.borrower_360');
+    expect(html).toContain('mip.gold.borrower_lifecycle_state');
+    expect(html).toContain('2026-08-10');
+    expect(html).not.toContain(TIMESTAMP_UNAVAILABLE);
+    expect(html).toContain('href="/analytics?view=approval-funnel"');
+    expect(html).toContain('one sync behind');
+    expect(html).toContain('analytics-panel-note');
+  });
+
+  it('drops the as-of clause when the mirror has never been synced', () => {
+    const html = renderToStaticMarkup(
+      <MemoryRouter>
+        <ExecutiveProvenanceNote
+          provenance={{ ...PROVENANCE, lifecycle_synced_at: null, snapshot_date: null }}
+          leadParams={{}}
+        />
+      </MemoryRouter>,
+    );
+
+    expect(html).not.toContain(TIMESTAMP_UNAVAILABLE);
+    expect(html).not.toContain('synced');
+    expect(html).not.toContain('snapshot ');
+    // The source names and the lag disclosure survive a missing timestamp.
+    expect(html).toContain('mip.gold.borrower_lifecycle_state');
+    expect(html).toContain('one sync behind');
+  });
+
+  it('carries the lender overlay into the approval-funnel link', () => {
+    const html = renderToStaticMarkup(
+      <MemoryRouter>
+        <ExecutiveProvenanceNote
+          provenance={PROVENANCE}
+          leadParams={{ lender_relationship: 'Competitor customer', target_lender_ref: 'Competitor B' }}
+        />
+      </MemoryRouter>,
+    );
+
+    expect(html).toContain('view=approval-funnel');
+    expect(html).toContain('lender_relationship=Competitor+customer');
+    expect(html).toContain('target_lender_ref=Competitor+B');
   });
 });

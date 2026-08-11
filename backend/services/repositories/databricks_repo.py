@@ -72,7 +72,6 @@ from backend.services.repositories.databricks_genie import (  # noqa: F401
     _pending_feed_gaps_from_material,
     _pending_feed_gaps_from_rows,
     _plan_genie_visualization,
-    _portfolio_criteria_from_question,
     _portfolio_criteria_from_sql,
     _redact_genie_rows,
     _route_from_answer_rows,

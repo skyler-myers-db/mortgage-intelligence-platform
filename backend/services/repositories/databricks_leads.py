@@ -135,6 +135,8 @@ class DatabricksLeadRepository:
         approval_status: str | None = None,
         outreach_status: str | None = None,
         aged_days: int | None = None,
+        min_opportunity_score: int | None = None,
+        min_rate_spread_bps: float | None = None,
     ) -> list[LeadSummary]:
         _ = (portfolio_id, cohort_id)
         bounded = self._bound_limit(limit)
@@ -161,6 +163,8 @@ class DatabricksLeadRepository:
                 "approval_status": approval_status,
                 "outreach_status": outreach_status,
                 "aged_days": aged_days,
+                "min_opportunity_score": min_opportunity_score,
+                "min_rate_spread_bps": min_rate_spread_bps,
             },
         )
         cached = self._get_cached_leads(cache_key)
@@ -204,6 +208,12 @@ class DatabricksLeadRepository:
         portfolio_clause = (
             "AND " + portfolio_where.removeprefix("WHERE ").strip() if portfolio_where else ""
         )
+        # Same builder the count and identity paths use, so the ranked rows and
+        # the total can never apply different thresholds.
+        replay_clause, replay_params = self._cohort_queries.numeric_floor_clause(
+            min_opportunity_score=min_opportunity_score,
+            min_rate_spread_bps=min_rate_spread_bps,
+        )
         if "target_lender_ref" in portfolio_params:
             lender_clause = ""
             lender_params = {}
@@ -218,10 +228,12 @@ class DatabricksLeadRepository:
             or funnel_stage
             or lender_clause
             or portfolio_clause
+            or replay_clause
         ):
             params: dict[str, object] = dict(segment_params)
             params.update(lender_params)
             params.update(portfolio_params)
+            params.update(replay_params)
             params.update(lifecycle_params)
             state_clause = self._cohort_queries.in_clause(
                 column="b.state",
@@ -256,7 +268,7 @@ class DatabricksLeadRepository:
                 segment_clause=geo_segment_clause,
                 funnel_stage_clause=funnel_stage_clause,
                 lender_clause=lender_clause,
-                portfolio_clause=portfolio_clause,
+                portfolio_clause=f"{portfolio_clause} {replay_clause}".strip(),
                 lifecycle_clause=lifecycle_clause,
                 freshness_clause=freshness_clause,
                 limit=sql_limit,
@@ -315,6 +327,8 @@ class DatabricksLeadRepository:
         approval_status: str | None = None,
         outreach_status: str | None = None,
         aged_days: int | None = None,
+        min_opportunity_score: int | None = None,
+        min_rate_spread_bps: float | None = None,
     ) -> int:
         cache_key = self._cache_key(
             "lead_count",
@@ -337,6 +351,8 @@ class DatabricksLeadRepository:
                 "approval_status": approval_status,
                 "outreach_status": outreach_status,
                 "aged_days": aged_days,
+                "min_opportunity_score": min_opportunity_score,
+                "min_rate_spread_bps": min_rate_spread_bps,
             },
         )
         if self._cache_ttl_s > 0:
@@ -358,6 +374,8 @@ class DatabricksLeadRepository:
                 target_lender_ref=target_lender_ref,
                 funnel_stage=funnel_stage,
                 portfolio_criteria=portfolio_criteria,
+                min_opportunity_score=min_opportunity_score,
+                min_rate_spread_bps=min_rate_spread_bps,
                 approval_status=approval_status,
                 outreach_status=outreach_status,
                 aged_days=aged_days,
@@ -386,6 +404,8 @@ class DatabricksLeadRepository:
         approval_status: str | None = None,
         outreach_status: str | None = None,
         aged_days: int | None = None,
+        min_opportunity_score: int | None = None,
+        min_rate_spread_bps: float | None = None,
     ) -> dict[str, str | int]:
         """Return complete-set identity proof for an explicitly requested audit."""
 
@@ -404,6 +424,8 @@ class DatabricksLeadRepository:
                 target_lender_ref=target_lender_ref,
                 funnel_stage=funnel_stage,
                 portfolio_criteria=portfolio_criteria,
+                min_opportunity_score=min_opportunity_score,
+                min_rate_spread_bps=min_rate_spread_bps,
                 approval_status=approval_status,
                 outreach_status=outreach_status,
                 aged_days=aged_days,
@@ -450,6 +472,8 @@ class DatabricksLeadRepository:
         approval_status: str | None = None,
         outreach_status: str | None = None,
         aged_days: int | None = None,
+        min_opportunity_score: int | None = None,
+        min_rate_spread_bps: float | None = None,
     ) -> tuple[list[LeadSummary], dict[str, str | int]]:
         """Return page rows and complete-set identity from one uncached statement."""
 
@@ -468,6 +492,8 @@ class DatabricksLeadRepository:
                 target_lender_ref=target_lender_ref,
                 funnel_stage=funnel_stage,
                 portfolio_criteria=portfolio_criteria,
+                min_opportunity_score=min_opportunity_score,
+                min_rate_spread_bps=min_rate_spread_bps,
                 approval_status=approval_status,
                 outreach_status=outreach_status,
                 aged_days=aged_days,

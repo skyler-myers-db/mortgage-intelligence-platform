@@ -111,6 +111,8 @@ export interface StateFacts {
   avgScore: number;
   lvl: 1 | 2 | 3 | 4;
   topSegment?: string;
+  /** See `HoverState.contactable`. Null when the rollup predates the field. */
+  contactable?: number | null;
   /** See `HoverState.zipUnassigned`. Null when the rollup predates the
    *  disclosure field or the state has full ZIP coverage. */
   zipUnassigned?: number | null;
@@ -179,6 +181,13 @@ export interface HoverState {
   sourceHint?: string;
   /** Present when the assignment overlay is active (S9). */
   overlay?: HoverOverlay;
+  /** Contact-eligible subset of `count` for this unit — the borrowers the
+   *  Lead Queue behind this tile actually shows, because the queue applies
+   *  the eligibility predicate and the tile's headline does not. Live
+   *  2026-08-11 IL is 76,711 of 1,851,040, so stating only the headline
+   *  sends the reader to a queue 24x smaller than the number they clicked.
+   *  Null means "not reported" (an older payload), never "nobody". */
+  contactable?: number | null;
   /** Borrowers in this state that the ZIP drill cannot show (no usable
    *  5-digit ZIP in the share). Set only when > 0 — the disclosure exists
    *  to explain why the ZIP tiles sum below the state tile. */

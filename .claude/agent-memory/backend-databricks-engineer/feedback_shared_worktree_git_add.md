@@ -27,6 +27,14 @@ that agent's own commits landed interleaved with mine on the same branch. A
   branch; a rewrite destroys work. Report the muddled attribution instead.
 - Expect the PR you open to contain other agents' commits. That is normal here,
   not a mistake to correct.
+- `tests/fixtures/openapi_baseline.json` is a GENERATED shared file. Any Pydantic
+  response-schema change forces `tools/regen_openapi_baseline.py`, and the regen
+  absorbs whatever other agents' schema edits are live at that moment — on
+  2026-08-11 an executive-provenance change swept in another agent's
+  `SegmentSummary.contactable` / `StateRollup.contactable`. Regenerating twice is
+  normal (their edit landed between my first regen and the contract test). Do not
+  hand-edit the baseline to exclude their fields; the file must match the app.
+  Just say in the report which foreign schemas the regen picked up.
 
 **Rebuilding a contaminated branch** (the coordinator will ask for this):
 1. `git worktree add -b <name>-clean <scratchpad>/wt origin/main` — work in an

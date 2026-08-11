@@ -164,6 +164,11 @@ def state_rollups(
     ``mip.gold.borrower_360`` so the choropleth tooltip can show the
     borrower count for the active segment filter instead of the
     cross-segment total.
+
+    2026-08-11: every row also carries the optional ``contactable`` —
+    the marketing-eligible subset of ``addressable``, i.e. what the Lead
+    Queue this tile links to will actually show. Optional on the wire so
+    an older client is unaffected.
     """
     parsed = _parse_segment_codes(segment_codes)
     parsed_segment_mode = _parse_segment_mode(segment_mode)

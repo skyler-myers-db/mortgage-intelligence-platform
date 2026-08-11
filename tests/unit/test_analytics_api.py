@@ -15,7 +15,7 @@ def test_native_analytics_routes_return_typed_app_payloads() -> None:
 
     executive = client.get("/api/v1/analytics/executive")
     assert executive.status_code == 200
-    assert set(executive.json()) == {"totals", "stages", "score_distribution"}
+    assert set(executive.json()) == {"totals", "stages", "score_distribution", "provenance"}
 
     geography = client.get("/api/v1/analytics/geography")
     assert geography.status_code == 200
@@ -129,6 +129,7 @@ class _AnalyticsSqlClient:
         if "AS addressable_borrowers" in statement:
             return [{
                 "snapshot_date": "2026-05-18",
+                "lifecycle_synced_at": "2026-05-18 06:15:00",
                 "addressable_borrowers": 10,
                 "in_the_money_borrowers": 4,
                 "high_opportunity_borrowers": 3,
@@ -255,6 +256,61 @@ def test_analytics_repository_uses_governed_gold_and_semantic_sql() -> None:
     top_borrower_sql = next(sql for sql in client.statements if "b.rate_spread_bps DESC NULLS LAST, b.borrower_id ASC" in sql and "rank_overall" in sql)
     assert "FROM mip.gold.borrower_360" in top_borrower_sql
     assert "lead_population" not in top_borrower_sql
+
+
+def test_executive_publishes_gold_provenance_for_the_lagging_lifecycle_mirror() -> None:
+    """The executive funnel must disclose WHERE its numbers came from and AS OF when.
+
+    The approval-funnel tab reads Lakebase directly and is exact; this tab reads
+    the gold lifecycle mirror, so its Approved/Actioned counts can trail by one
+    sync. The lag is intentional and is never reconciled away — but it has to be
+    published, or two adjacent tabs disagree with no explanation.
+    """
+    client = _AnalyticsSqlClient()
+    repo = DatabricksAnalyticsRepository(client)  # type: ignore[arg-type]
+
+    executive = repo.executive()
+    provenance = executive.provenance
+
+    # As-of boundaries come from the gold rows themselves, not wall-clock.
+    assert provenance.snapshot_date == "2026-05-18"
+    assert provenance.lifecycle_synced_at == "2026-05-18 06:15:00"
+    assert provenance.population_source == "mip.gold.borrower_360"
+    assert provenance.workflow_source == (
+        "mip.gold.borrower_360 + mip.gold.borrower_lifecycle_state"
+    )
+    assert "sync behind" in provenance.note
+
+    # Per-stage source, the same disclosure shape the approval funnel publishes.
+    by_stage = {stage.stage: stage.source for stage in executive.stages}
+    assert by_stage["Addressable"] == provenance.population_source
+    assert by_stage["Refi Economics"] == provenance.population_source
+    assert by_stage["Opportunity Score 75+"] == provenance.population_source
+    assert by_stage["Primary Offer Selected"] == provenance.population_source
+    # Only the workflow stages read the mirror, so only they can lag.
+    assert by_stage["Approved"] == provenance.workflow_source
+    assert by_stage["Actioned"] == provenance.workflow_source
+
+    funnel_sql = next(sql for sql in client.statements if "AS addressable_borrowers" in sql)
+    assert "MAX(ls.synced_at)" in funnel_sql
+
+
+def test_executive_provenance_survives_an_unsynced_lifecycle_mirror() -> None:
+    """A mirror that has never been synced reports no as-of, not a fake one."""
+
+    class _NoLifecycleRowsClient(_AnalyticsSqlClient):
+        def execute(self, statement: str, _parameters: object | None = None) -> list[dict[str, object]]:
+            rows = super().execute(statement, _parameters)
+            if "AS addressable_borrowers" in statement:
+                return [{**rows[0], "lifecycle_synced_at": None}]
+            return rows
+
+    repo = DatabricksAnalyticsRepository(_NoLifecycleRowsClient())  # type: ignore[arg-type]
+    provenance = repo.executive().provenance
+    assert provenance.lifecycle_synced_at is None
+    # The source names and the lag disclosure are still published.
+    assert provenance.workflow_source.endswith("mip.gold.borrower_lifecycle_state")
+    assert provenance.note
 
 
 def test_analytics_repository_binds_filters_without_string_interpolation() -> None:

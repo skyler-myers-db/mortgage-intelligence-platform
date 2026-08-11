@@ -16,13 +16,17 @@ import {
   formatConversionPct,
 } from './analytics.lib';
 
+// Sources mirror the server's per-stage provenance; the geometry ignores them.
+const POP = 'mip.gold.borrower_360';
+const WORKFLOW = 'mip.gold.borrower_360 + mip.gold.borrower_lifecycle_state';
+
 const STAGES: FunnelStage[] = [
-  { stage: 'Addressable', stage_order: 1, borrower_count: 5_156_184 },
-  { stage: 'Refi Economics', stage_order: 2, borrower_count: 117_189 },
-  { stage: 'Opportunity Score 75+', stage_order: 3, borrower_count: 3_990 },
-  { stage: 'Primary Offer Selected', stage_order: 4, borrower_count: 4_467_395 },
-  { stage: 'Approved', stage_order: 5, borrower_count: 35 },
-  { stage: 'Actioned', stage_order: 6, borrower_count: 3 },
+  { stage: 'Addressable', stage_order: 1, borrower_count: 5_156_184, source: POP },
+  { stage: 'Refi Economics', stage_order: 2, borrower_count: 117_189, source: POP },
+  { stage: 'Opportunity Score 75+', stage_order: 3, borrower_count: 3_990, source: POP },
+  { stage: 'Primary Offer Selected', stage_order: 4, borrower_count: 4_467_395, source: POP },
+  { stage: 'Approved', stage_order: 5, borrower_count: 35, source: WORKFLOW },
+  { stage: 'Actioned', stage_order: 6, borrower_count: 3, source: WORKFLOW },
 ];
 
 describe('buildFunnelSankeyModel (pure geometry)', () => {
@@ -58,8 +62,8 @@ describe('buildFunnelSankeyModel (pure geometry)', () => {
 
   it('sizes node height by count and keeps a zero stage visible as a sliver', () => {
     const model = buildFunnelSankeyModel([
-      { stage: 'Big', stage_order: 1, borrower_count: 1000 },
-      { stage: 'Zero', stage_order: 2, borrower_count: 0 },
+      { stage: 'Big', stage_order: 1, borrower_count: 1000, source: POP },
+      { stage: 'Zero', stage_order: 2, borrower_count: 0, source: POP },
     ]);
     const [big, zero] = model.nodes;
     expect(big.height).toBeGreaterThan(zero.height);
@@ -71,8 +75,8 @@ describe('buildFunnelSankeyModel (pure geometry)', () => {
     // Sliver-recovery: a zero stage followed by a non-zero stage. You can't
     // divide by zero, so conversion is undefined, not 0%.
     const model = buildFunnelSankeyModel([
-      { stage: 'Zero', stage_order: 1, borrower_count: 0 },
-      { stage: 'Recovered', stage_order: 2, borrower_count: 500 },
+      { stage: 'Zero', stage_order: 1, borrower_count: 0, source: POP },
+      { stage: 'Recovered', stage_order: 2, borrower_count: 500, source: POP },
     ]);
     expect(model.nodes[1].conversion).toBeNull();
   });
@@ -213,8 +217,8 @@ describe('FunnelSankey (render + a11y)', () => {
     expect(container.textContent).toContain('Pipeline funnel appears once');
     // All-zero counts are also treated as empty (no misleading funnel).
     mount([
-      { stage: 'A', stage_order: 1, borrower_count: 0 },
-      { stage: 'B', stage_order: 2, borrower_count: 0 },
+      { stage: 'A', stage_order: 1, borrower_count: 0, source: POP },
+      { stage: 'B', stage_order: 2, borrower_count: 0, source: POP },
     ]);
     expect(container.querySelector('[role="link"]')).toBeNull();
   });

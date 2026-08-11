@@ -70,6 +70,11 @@ class FunnelStage(BaseModel):
     stage: str
     stage_order: int = Field(ge=1)
     borrower_count: int = Field(ge=0)
+    # Same per-stage disclosure contract as the approval funnel's
+    # ApprovalFunnelStage.source: every count names the objects it was
+    # computed from, so the two analytics tabs are comparable rather than
+    # merely adjacent. The workflow stages name the lagging gold mirror.
+    source: str
 
 
 class ScoreBucket(BaseModel):
@@ -77,10 +82,29 @@ class ScoreBucket(BaseModel):
     borrower_count: int = Field(ge=0)
 
 
+class ExecutiveProvenance(BaseModel):
+    """As-of boundary for the executive funnel's gold reads.
+
+    ``snapshot_date`` is the scoring refresh boundary carried on
+    ``mip.gold.borrower_360``. ``lifecycle_synced_at`` is the last
+    Lakebase-to-``mip.gold.borrower_lifecycle_state`` mirror sync that touched
+    a lifecycle row — the reason Approved/Actioned here can trail the approval
+    funnel tab, which reads Lakebase directly and is exact. The lag is by
+    design; publishing it is what keeps the two tabs honest.
+    """
+
+    snapshot_date: str | None = None
+    lifecycle_synced_at: str | None = None
+    population_source: str
+    workflow_source: str
+    note: str
+
+
 class ExecutiveAnalyticsResponse(BaseModel):
     totals: FunnelTotals
     stages: list[FunnelStage]
     score_distribution: list[ScoreBucket]
+    provenance: ExecutiveProvenance
 
 
 class StateOpportunityRow(BaseModel):

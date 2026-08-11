@@ -27,6 +27,7 @@ from backend.schemas.analytics import (
     EvidenceBySignalRow,
     EvidenceDailyRow,
     ExecutiveAnalyticsResponse,
+    ExecutiveProvenance,
     FunnelStage,
     FunnelTotals,
     GeographyAnalyticsResponse,
@@ -70,6 +71,7 @@ from backend.schemas.portfolio import (
     PortfolioPreviewRequest,
 )
 from backend.services import economics_scatter
+from backend.services.eligibility import GoldEligibilityService
 from backend.services.genie_answers import (
     GenieActionSuggestion,
     GenieMessageResponse,
@@ -167,13 +169,15 @@ class InProcessMockAnalyticsRepository:
             approved_borrowers=0,
             actioned_borrowers=0,
         )
+        population_source = "mip.gold.borrower_360"
+        workflow_source = "mip.gold.borrower_360 + mip.gold.borrower_lifecycle_state"
         stages = [
-            FunnelStage(stage="Addressable", stage_order=1, borrower_count=addressable),
-            FunnelStage(stage="Refi Economics", stage_order=2, borrower_count=itm),
-            FunnelStage(stage="Top-tier Score", stage_order=3, borrower_count=high),
-            FunnelStage(stage="Primary Offer Selected", stage_order=4, borrower_count=recommended),
-            FunnelStage(stage="Approved", stage_order=5, borrower_count=0),
-            FunnelStage(stage="Actioned", stage_order=6, borrower_count=0),
+            FunnelStage(stage="Addressable", stage_order=1, borrower_count=addressable, source=population_source),
+            FunnelStage(stage="Refi Economics", stage_order=2, borrower_count=itm, source=population_source),
+            FunnelStage(stage="Top-tier Score", stage_order=3, borrower_count=high, source=population_source),
+            FunnelStage(stage="Primary Offer Selected", stage_order=4, borrower_count=recommended, source=population_source),
+            FunnelStage(stage="Approved", stage_order=5, borrower_count=0, source=workflow_source),
+            FunnelStage(stage="Actioned", stage_order=6, borrower_count=0, source=workflow_source),
         ]
         buckets: dict[int, int] = {}
         for borrower in borrowers:
@@ -186,6 +190,13 @@ class InProcessMockAnalyticsRepository:
                 ScoreBucket(score_bucket=bucket, borrower_count=count)
                 for bucket, count in sorted(buckets.items())
             ],
+            provenance=ExecutiveProvenance(
+                snapshot_date=totals.snapshot_date,
+                lifecycle_synced_at="2026-05-18 06:00:00",
+                population_source=population_source,
+                workflow_source=workflow_source,
+                note="Fixture provenance; the live repository publishes the real lag note.",
+            ),
         )
 
     def funnel_population(self) -> FunnelPopulation:
@@ -481,6 +492,44 @@ class InProcessMockAnalyticsRepository:
         )
 
 
+def _filter_by_segments(
+    borrowers: list[Borrower360],
+    segment_codes: list[str] | None,
+    segment_mode: str,
+) -> list[Borrower360]:
+    """Same stack/intersect rule the segment cards and the map both apply."""
+
+    codes = [str(code).strip() for code in segment_codes or [] if str(code).strip()]
+    if not codes:
+        return borrowers
+    if segment_mode == "all":
+        return [b for b in borrowers if all(code in b.segment_codes for code in codes)]
+    return [b for b in borrowers if any(code in b.segment_codes for code in codes)]
+
+
+def _filter_by_portfolio_criteria(
+    borrowers: list[Borrower360],
+    portfolio_criteria: PortfolioCriteria | None,
+) -> list[Borrower360]:
+    if portfolio_criteria is None:
+        return borrowers
+    if portfolio_criteria.occupancy == "Owner-occupied":
+        borrowers = [b for b in borrowers if b.is_owner_occupied is True]
+    elif portfolio_criteria.occupancy == "Non-owner-occupied":
+        borrowers = [b for b in borrowers if b.is_owner_occupied is False]
+    if portfolio_criteria.marketing_eligibility == "Eligible only":
+        borrowers = [b for b in borrowers if b.marketing_eligible is True]
+    elif portfolio_criteria.marketing_eligibility == "Suppressed only":
+        borrowers = [b for b in borrowers if b.marketing_eligible is False]
+    if portfolio_criteria.consent_status == "Opt-in":
+        borrowers = [b for b in borrowers if b.consent_status == "opt_in"]
+    elif portfolio_criteria.consent_status == "Opt-out":
+        borrowers = [b for b in borrowers if b.consent_status == "opt_out"]
+    elif portfolio_criteria.consent_status == "Unknown":
+        borrowers = [b for b in borrowers if b.consent_status == "unknown"]
+    return borrowers
+
+
 class InProcessMockSegmentRepository:
     """Test fixture implementing ``SegmentRepository`` from the synthetic population."""
 
@@ -492,44 +541,31 @@ class InProcessMockSegmentRepository:
         portfolio_criteria: PortfolioCriteria | None = None,
     ) -> list[SegmentSummary]:
         _ = portfolio_id
-        borrowers = list(mock_data.BORROWERS)
-        codes = [str(code).strip() for code in segment_codes or [] if str(code).strip()]
-        if codes:
-            if segment_mode == "all":
-                borrowers = [
-                    borrower for borrower in borrowers
-                    if all(code in borrower.segment_codes for code in codes)
-                ]
-            else:
-                borrowers = [
-                    borrower for borrower in borrowers
-                    if any(code in borrower.segment_codes for code in codes)
-                ]
-        if portfolio_criteria is not None:
-            if portfolio_criteria.occupancy == "Owner-occupied":
-                borrowers = [b for b in borrowers if b.is_owner_occupied is True]
-            elif portfolio_criteria.occupancy == "Non-owner-occupied":
-                borrowers = [b for b in borrowers if b.is_owner_occupied is False]
-            if portfolio_criteria.marketing_eligibility == "Eligible only":
-                borrowers = [b for b in borrowers if b.marketing_eligible is True]
-            elif portfolio_criteria.marketing_eligibility == "Suppressed only":
-                borrowers = [b for b in borrowers if b.marketing_eligible is False]
-            if portfolio_criteria.consent_status == "Opt-in":
-                borrowers = [b for b in borrowers if b.consent_status == "opt_in"]
-            elif portfolio_criteria.consent_status == "Opt-out":
-                borrowers = [b for b in borrowers if b.consent_status == "opt_out"]
-            elif portfolio_criteria.consent_status == "Unknown":
-                borrowers = [b for b in borrowers if b.consent_status == "unknown"]
+        borrowers = _filter_by_portfolio_criteria(
+            _filter_by_segments(list(mock_data.BORROWERS), segment_codes, segment_mode),
+            portfolio_criteria,
+        )
         counts: dict[str, int] = {}
+        contactable: dict[str, int] = {}
         scores: dict[str, list[int]] = {}
+        eligibility = GoldEligibilityService()
         for borrower in borrowers:
+            is_contactable = eligibility.evaluate(borrower).eligible
             for code in borrower.segment_codes:
                 counts[code] = counts.get(code, 0) + 1
+                if is_contactable:
+                    contactable[code] = contactable.get(code, 0) + 1
                 scores.setdefault(code, []).append(borrower.opportunity_score)
         return [
             segment.model_copy(
                 update={
                     "count": counts.get(segment.code, 0),
+                    # Derived from the SAME borrower loop as `count`, through
+                    # the same EligibilityService the production path reads.
+                    # A hardcoded constant here would be a second cohort with
+                    # no relationship to the first -- exactly the defect this
+                    # field exists to close.
+                    "contactable": contactable.get(segment.code, 0),
                     "avg_score": round(
                         sum(scores.get(segment.code, [])) / len(scores.get(segment.code, []))
                     ) if scores.get(segment.code) else 0,
@@ -563,9 +599,24 @@ class InProcessMockLeadRepository:
         approval_status: str | None = None,
         outreach_status: str | None = None,
         aged_days: int | None = None,
+        min_opportunity_score: int | None = None,
+        min_rate_spread_bps: float | None = None,
     ) -> list[LeadSummary]:
         _ = (portfolio_id, cohort_id)
         leads = [LeadSummary(**b.model_dump()) for b in mock_data.BORROWERS]
+        # The floors a governed Genie cohort replays. The double used to omit
+        # them, so `/api/v1/leads?cohort_id=...` on a score-narrowed answer
+        # raised `TypeError: unexpected keyword argument` -- an opaque 500 no
+        # route test could read (adversarial review 2026-08-11).
+        if min_opportunity_score is not None:
+            leads = [lead for lead in leads if lead.opportunity_score >= min_opportunity_score]
+        if min_rate_spread_bps is not None:
+            leads = [
+                lead
+                for lead in leads
+                if lead.rate_spread_bps is not None
+                and lead.rate_spread_bps >= min_rate_spread_bps
+            ]
         if approval_status:
             leads = [lead for lead in leads if lead.approval_status == approval_status]
         if outreach_status:
@@ -662,6 +713,8 @@ class InProcessMockLeadRepository:
         approval_status: str | None = None,
         outreach_status: str | None = None,
         aged_days: int | None = None,
+        min_opportunity_score: int | None = None,
+        min_rate_spread_bps: float | None = None,
     ) -> int:
         _ = limit
         return len(self.list(
@@ -684,6 +737,8 @@ class InProcessMockLeadRepository:
             approval_status=approval_status,
             outreach_status=outreach_status,
             aged_days=aged_days,
+            min_opportunity_score=min_opportunity_score,
+            min_rate_spread_bps=min_rate_spread_bps,
         ))
 
     def is_campaign_treatment_member(
@@ -974,14 +1029,84 @@ class InProcessMockGenieAnswerRepository:
 # slice13-accuracy-validation: added ``top_segment_code`` on each row so
 # tests exercise the StateRollup extension that the USChoroplethMap
 # consumes for its segment-filter dim logic.
-_FIXTURE_STATE_ROLLUPS: list[StateRollup] = [
-    StateRollup(state="IL", addressable=1860, in_the_money=720, top_tier_opportunities=420, avg_score=84, top_segment_code="itm"),
-    StateRollup(state="CA", addressable=900,  in_the_money=420, top_tier_opportunities=260, avg_score=83, top_segment_code="equity"),
-    StateRollup(state="FL", addressable=760,  in_the_money=320, top_tier_opportunities=200, avg_score=81, top_segment_code="investor"),
-    StateRollup(state="TX", addressable=750,  in_the_money=340, top_tier_opportunities=220, avg_score=82, top_segment_code="equity"),
-    StateRollup(state="WA", addressable=740,  in_the_money=300, top_tier_opportunities=190, avg_score=81, top_segment_code="itm"),
-    StateRollup(state="CO", addressable=160,  in_the_money=62,  top_tier_opportunities=42,  avg_score=80, top_segment_code="itm"),
-]
+#
+# `contactable` is the marketing-eligible subset of `addressable` -- the
+# cohort the Lead Queue behind each tile actually shows. It is COMPUTED from
+# the same `GoldEligibilityService` the production path reads, over a
+# generated per-state population whose rows carry real combinations of the
+# gold consent fields. It used to be a hardcoded ~4% of `addressable`, which
+# could not move when the eligibility rule moved and was identical under
+# every filter -- so no route-level test could tell a tile that reports
+# `contactable` from one that reports `addressable` (adversarial review
+# 2026-08-11).
+_FIXTURE_STATE_SIZES: dict[str, int] = {
+    # Proportional to the Apr-2026 share probe in
+    # docs/data-sources-gap-analysis.md §1.
+    "IL": 1860,
+    "CA": 900,
+    "FL": 760,
+    "TX": 750,
+    "WA": 740,
+    "CO": 160,
+}
+
+# One real combination of the gold contactability fields per entry. Which of
+# them are contactable is NOT declared here: `GoldEligibilityService` decides,
+# so a change to the eligibility rule moves these fixtures the way it moves
+# production.
+_FIXTURE_ELIGIBILITY_PROFILES: tuple[dict[str, object], ...] = (
+    {"marketing_eligible": True, "consent_status": "opt_in", "suppression_reason": None, "dnc": False},
+    {"marketing_eligible": True, "consent_status": "unknown", "suppression_reason": None, "dnc": False},
+    {"marketing_eligible": True, "consent_status": "opt_out", "suppression_reason": None, "dnc": False},
+    {"marketing_eligible": False, "consent_status": "opt_in", "suppression_reason": None, "dnc": False},
+    {"marketing_eligible": True, "consent_status": "opt_in", "suppression_reason": "do_not_contact", "dnc": True},
+    {"marketing_eligible": True, "consent_status": "opt_in", "suppression_reason": "litigation_hold", "dnc": False},
+)
+
+
+def _fixture_state_population() -> dict[str, list[Borrower360]]:
+    """Borrower rows per state, cycling the synthetic templates and profiles."""
+
+    population: dict[str, list[Borrower360]] = {}
+    for state, size in _FIXTURE_STATE_SIZES.items():
+        templates = [b for b in mock_data.BORROWERS if b.state == state]
+        if not templates:
+            continue
+        rows: list[Borrower360] = []
+        for index in range(size):
+            template = templates[index % len(templates)]
+            # Advance the profile once per full pass over the templates, so
+            # every template meets every profile. Cycling both on `index`
+            # locks them together, and a filter that selects one template
+            # would then select one eligibility profile -- which is how a
+            # fixture ends up reporting contactable == addressable.
+            profile = _FIXTURE_ELIGIBILITY_PROFILES[
+                (index // len(templates)) % len(_FIXTURE_ELIGIBILITY_PROFILES)
+            ]
+            rows.append(template.model_copy(update=dict(profile)))
+        population[state] = rows
+    return population
+
+
+_FIXTURE_STATE_POPULATION: dict[str, list[Borrower360]] = _fixture_state_population()
+
+
+def _state_rollup(state: str, borrowers: list[Borrower360]) -> StateRollup:
+    eligibility = GoldEligibilityService()
+    segment_counts: dict[str, int] = {}
+    for borrower in borrowers:
+        for code in borrower.segment_codes:
+            segment_counts[code] = segment_counts.get(code, 0) + 1
+    top_segment = max(segment_counts.items(), key=lambda item: (item[1], item[0]))[0]
+    return StateRollup(
+        state=state,
+        addressable=len(borrowers),
+        contactable=sum(1 for b in borrowers if eligibility.evaluate(b).eligible),
+        in_the_money=sum(1 for b in borrowers if "itm" in b.segment_codes),
+        top_tier_opportunities=sum(1 for b in borrowers if is_high_opportunity(b.opportunity_score)),
+        avg_score=round(sum(b.opportunity_score for b in borrowers) / len(borrowers)),
+        top_segment_code=top_segment,
+    )
 
 
 # Fixture county rollups keyed by state. Covers the three anchor
@@ -1032,11 +1157,18 @@ class InProcessMockGeoRepository:
         segment_mode: str = "any",
         portfolio_criteria: PortfolioCriteria | None = None,
     ) -> StateRollupResponse:
-        _ = (segment_codes, segment_mode, portfolio_criteria)
-        return StateRollupResponse(
-            rollups=list(_FIXTURE_STATE_ROLLUPS),
-            snapshot_date="2026-04-22",
-        )
+        # The filters really narrow the population, so `addressable` and
+        # `contactable` move together and independently -- a fixture that
+        # ignored them reported the same pair under every filter.
+        rollups: list[StateRollup] = []
+        for state, borrowers in _FIXTURE_STATE_POPULATION.items():
+            matching = _filter_by_portfolio_criteria(
+                _filter_by_segments(list(borrowers), segment_codes, segment_mode),
+                portfolio_criteria,
+            )
+            if matching:
+                rollups.append(_state_rollup(state, matching))
+        return StateRollupResponse(rollups=rollups, snapshot_date="2026-04-22")
 
     def county_rollups(
         self,

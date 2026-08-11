@@ -21,7 +21,6 @@ from backend.services.genie_client import (
 )
 from backend.services.repositories.databricks_genie_actions import (
     _borrower_ids_from_rows,  # noqa: F401 - compatibility re-export
-    _portfolio_criteria_from_question,  # noqa: F401 - compatibility re-export
     _portfolio_criteria_from_sql,  # noqa: F401 - compatibility re-export
     _route_from_answer_rows,  # noqa: F401 - compatibility re-export
     _row_values,  # noqa: F401 - compatibility re-export

@@ -5164,6 +5164,9 @@
       },
       "ExecutiveAnalyticsResponse": {
         "properties": {
+          "provenance": {
+            "$ref": "#/components/schemas/ExecutiveProvenance"
+          },
           "score_distribution": {
             "items": {
               "$ref": "#/components/schemas/ScoreBucket"
@@ -5185,9 +5188,56 @@
         "required": [
           "totals",
           "stages",
-          "score_distribution"
+          "score_distribution",
+          "provenance"
         ],
         "title": "ExecutiveAnalyticsResponse",
+        "type": "object"
+      },
+      "ExecutiveProvenance": {
+        "description": "As-of boundary for the executive funnel's gold reads.\n\n``snapshot_date`` is the scoring refresh boundary carried on\n``mip.gold.borrower_360``. ``lifecycle_synced_at`` is the last\nLakebase-to-``mip.gold.borrower_lifecycle_state`` mirror sync that touched\na lifecycle row \u2014 the reason Approved/Actioned here can trail the approval\nfunnel tab, which reads Lakebase directly and is exact. The lag is by\ndesign; publishing it is what keeps the two tabs honest.",
+        "properties": {
+          "lifecycle_synced_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lifecycle Synced At"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "population_source": {
+            "title": "Population Source",
+            "type": "string"
+          },
+          "snapshot_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snapshot Date"
+          },
+          "workflow_source": {
+            "title": "Workflow Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "population_source",
+          "workflow_source",
+          "note"
+        ],
+        "title": "ExecutiveProvenance",
         "type": "object"
       },
       "FootprintState": {
@@ -5317,6 +5367,10 @@
             "title": "Borrower Count",
             "type": "integer"
           },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
           "stage": {
             "title": "Stage",
             "type": "string"
@@ -5330,7 +5384,8 @@
         "required": [
           "stage",
           "stage_order",
-          "borrower_count"
+          "borrower_count",
+          "source"
         ],
         "title": "FunnelStage",
         "type": "object"
@@ -12731,6 +12786,18 @@
             "title": "Color",
             "type": "string"
           },
+          "contactable": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contactable"
+          },
           "count": {
             "title": "Count",
             "type": "integer"
@@ -12989,7 +13056,7 @@
         "type": "object"
       },
       "StateRollup": {
-        "description": "One state's addressable + high-intent + top-tier count + avg score.\n\n``state`` is the 2-char USPS code (uppercase) \u2014 the map component\nlowercases it to match the state topology location ids.\n\nFields map 1:1 to ``funnel_snapshot_daily`` columns so the UI never\nhas to re-aggregate: ``addressable`` is the borrower count for the\nstate, ``in_the_money`` is the high-intent subset,\n``top_tier_opportunities`` is the high-opportunity subset (canonical\nthreshold: ``scoring.HIGH_OPPORTUNITY_THRESHOLD`` / ``fn_high_opportunity``)\n(for the lvl-4 hero tier on the choropleth), and ``avg_score`` is\nthe state-wide mean opportunity score.\n\n``top_segment_code`` is the dominant SegmentCode for the state\nsourced from ``mip.gold.state_top_segment``. Nullable because the\njoin is ``LEFT`` (state has data but no segment-code row yet on\nfirst deploy); the UI renders a neutral \"unknown\" segment label\nwhen null.\n\n``zip_unassigned_count`` is the disclosure for the ZIP drill: how many\nof this state's ``addressable`` borrowers the ZIP layer will NOT show,\nbecause ``mip.gold.zip_rollup`` is keyed on a 5-digit ZIP and the\nCotality share does not carry one for every property. Live 2026-08-08\nthis is 8.7% of CO and 5.8% of WA, so a reader who adds up the ZIP\ntiles and compares them to the state total is looking at a real gap.\nDrilling from a state to its ZIPs and silently losing borrowers on the\nway down is exactly the kind of number a lender cannot explain to an\nauditor; the UI must disclose it rather than let the sums disagree.",
+        "description": "One state's addressable + high-intent + top-tier count + avg score.\n\n``state`` is the 2-char USPS code (uppercase) \u2014 the map component\nlowercases it to match the state topology location ids.\n\nFields map 1:1 to ``funnel_snapshot_daily`` columns so the UI never\nhas to re-aggregate: ``addressable`` is the borrower count for the\nstate, ``in_the_money`` is the high-intent subset,\n``top_tier_opportunities`` is the high-opportunity subset (canonical\nthreshold: ``scoring.HIGH_OPPORTUNITY_THRESHOLD`` / ``fn_high_opportunity``)\n(for the lvl-4 hero tier on the choropleth), and ``avg_score`` is\nthe state-wide mean opportunity score.\n\n``top_segment_code`` is the dominant SegmentCode for the state\nsourced from ``mip.gold.state_top_segment``. Nullable because the\njoin is ``LEFT`` (state has data but no segment-code row yet on\nfirst deploy); the UI renders a neutral \"unknown\" segment label\nwhen null.\n\n``zip_unassigned_count`` is the disclosure for the ZIP drill: how many\nof this state's ``addressable`` borrowers the ZIP layer will NOT show,\nbecause ``mip.gold.zip_rollup`` is keyed on a 5-digit ZIP and the\nCotality share does not carry one for every property. Live 2026-08-08\nthis is 8.7% of CO and 5.8% of WA, so a reader who adds up the ZIP\ntiles and compares them to the state total is looking at a real gap.\nDrilling from a state to its ZIPs and silently losing borrowers on the\nway down is exactly the kind of number a lender cannot explain to an\nauditor; the UI must disclose it rather than let the sums disagree.\n\n``contactable`` is the marketing-eligible subset of ``addressable``:\nthe borrowers the state tile links to that the Lead Queue will\nactually show, because the queue applies the contact-eligibility\npredicate and the tile does not. Live 2026-08-11 that is 76,711 of\nIL's 1,851,040 \u2014 a 24x gap that read as a broken link until the tile\nstated the relationship. Optional so an older client, or a cached\nframe written before the field existed, is unaffected; ``None`` means\n\"not reported\", never \"zero\".",
         "properties": {
           "addressable": {
             "minimum": 0.0,
@@ -13001,6 +13068,18 @@
             "minimum": 0.0,
             "title": "Avg Score",
             "type": "integer"
+          },
+          "contactable": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contactable"
           },
           "in_the_money": {
             "minimum": 0.0,
@@ -17275,7 +17354,7 @@
     "/api/geo/state-rollups": {
       "get": {
         "deprecated": true,
-        "description": "Return per-state rollups for the latest funnel snapshot.\n\n60s TTL cache lives in the repository; the router is a thin pass-\nthrough so adding a per-portfolio filter later is a repo change,\nnot a router change.\n\n2026-05-04 (FIX G): when ``segment_codes`` is supplied, the\nrepository switches to a live segment-filtered query against\n``mip.gold.borrower_360`` so the choropleth tooltip can show the\nborrower count for the active segment filter instead of the\ncross-segment total.",
+        "description": "Return per-state rollups for the latest funnel snapshot.\n\n60s TTL cache lives in the repository; the router is a thin pass-\nthrough so adding a per-portfolio filter later is a repo change,\nnot a router change.\n\n2026-05-04 (FIX G): when ``segment_codes`` is supplied, the\nrepository switches to a live segment-filtered query against\n``mip.gold.borrower_360`` so the choropleth tooltip can show the\nborrower count for the active segment filter instead of the\ncross-segment total.\n\n2026-08-11: every row also carries the optional ``contactable`` \u2014\nthe marketing-eligible subset of ``addressable``, i.e. what the Lead\nQueue this tile links to will actually show. Optional on the wire so\nan older client is unaffected.",
         "operationId": "get_api_geo_state_rollups_state_rollups",
         "parameters": [
           {
@@ -20643,6 +20722,7 @@
     "/api/segments": {
       "get": {
         "deprecated": true,
+        "description": "Return one summary per registered segment.\n\n``count`` is the addressable population; the optional ``contactable``\nis its marketing-eligible subset \u2014 what this card's Lead Queue link\nwill actually show, since the queue applies the contact-eligibility\npredicate and the headline count does not. Optional on the wire so an\nolder client is unaffected.",
         "operationId": "get_api_segments_list_segments",
         "parameters": [
           {
@@ -24708,7 +24788,7 @@
     },
     "/api/v1/geo/state-rollups": {
       "get": {
-        "description": "Return per-state rollups for the latest funnel snapshot.\n\n60s TTL cache lives in the repository; the router is a thin pass-\nthrough so adding a per-portfolio filter later is a repo change,\nnot a router change.\n\n2026-05-04 (FIX G): when ``segment_codes`` is supplied, the\nrepository switches to a live segment-filtered query against\n``mip.gold.borrower_360`` so the choropleth tooltip can show the\nborrower count for the active segment filter instead of the\ncross-segment total.",
+        "description": "Return per-state rollups for the latest funnel snapshot.\n\n60s TTL cache lives in the repository; the router is a thin pass-\nthrough so adding a per-portfolio filter later is a repo change,\nnot a router change.\n\n2026-05-04 (FIX G): when ``segment_codes`` is supplied, the\nrepository switches to a live segment-filtered query against\n``mip.gold.borrower_360`` so the choropleth tooltip can show the\nborrower count for the active segment filter instead of the\ncross-segment total.\n\n2026-08-11: every row also carries the optional ``contactable`` \u2014\nthe marketing-eligible subset of ``addressable``, i.e. what the Lead\nQueue this tile links to will actually show. Optional on the wire so\nan older client is unaffected.",
         "operationId": "get_api_v1_geo_state_rollups_state_rollups",
         "parameters": [
           {
@@ -28033,6 +28113,7 @@
     },
     "/api/v1/segments": {
       "get": {
+        "description": "Return one summary per registered segment.\n\n``count`` is the addressable population; the optional ``contactable``\nis its marketing-eligible subset \u2014 what this card's Lead Queue link\nwill actually show, since the queue applies the contact-eligibility\npredicate and the headline count does not. Optional on the wire so an\nolder client is unaffected.",
         "operationId": "get_api_v1_segments_list_segments",
         "parameters": [
           {

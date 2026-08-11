@@ -193,10 +193,18 @@ def test_genie_repairs_impossible_current_customer_competitor_lien_retention_que
     assert "array_contains(segment_codes, 'retention')" in (response.sql_query or "")
     assert sql.sql == response.sql_query
     cohort_action = next(action for action in response.actions if action.id == "open-cohort")
+    # `is_current_customer = TRUE` is a top-level conjunct of the repaired SQL,
+    # so the queue replays it.
     assert "lender_relationship=Current+customer" in (cohort_action.route or "")
-    assert "product=Retention" in (cohort_action.route or "")
+    # `product=Retention` is NOT replayed. It only ever came from the words
+    # "at risk of going to a competitor", and the repaired SQL's retention test
+    # is `array_contains(segment_codes,'retention') OR recommended_offer_code =
+    # 'retention'`. Compiling the label pins the OR onto its second branch:
+    # live paychex gold 2026-08-11, the answer reports 19,166 current customers
+    # at risk and the queue opened 1,991 — 89.6% of the cohort dropped in
+    # silence, and the truncated list is what the user acts on.
+    assert "product=" not in (cohort_action.route or "")
     assert cohort_action.criteria["result_filters"]["portfolio_criteria"] == {
-        "product": "Retention",
         "lender_relationship": "Current customer",
     }
 

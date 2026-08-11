@@ -14,8 +14,48 @@ from urllib.parse import urlencode
 
 from backend.schemas.common import validate_public_borrower_id
 from backend.services.genie_answers import GenieActionSuggestion, GenieVisualizationSpec
-from backend.services.repositories.databricks_genie_canonical import (
-    _retention_competitor_lien_list_question,
+from backend.services.genie_sql_predicates import SqlFilterReading, read_sql_filters
+
+# Cohort filter keys `_route_from_answer_rows` can emit that the Lead Queue
+# actually replays. A disclosure key rides alongside them but must never be
+# the ONLY thing in `result_filters`: `_materialize_genie_cohort` rejects a
+# cohort with no replayable filter, so a disclosure-only cohort would offer an
+# action that 400s.
+_REPLAYABLE_ROUTE_FILTER_KEYS = frozenset(
+    {
+        "borrower_ids",
+        "zips",
+        "county",
+        "counties",
+        "states",
+        "segment_codes",
+        "segment_mode",
+        "portfolio_criteria",
+        "min_opportunity_score",
+        "min_equity_pct",
+        "min_rate_spread_bps",
+    }
+)
+
+# Reviewed `product` label -> the exact offer-code set the Lead Queue compiles
+# it to. Mirrors ``PORTFOLIO_PRODUCT_CODES`` in ``databricks_portfolio`` and is
+# pinned to it by ``tests/unit/test_genie_sql_floor_extraction.py``; it is
+# duplicated rather than imported so this module stays free of the SQL and
+# Lakebase imports that module carries.
+_PRODUCT_LABEL_CODES: dict[str, frozenset[str]] = {
+    "Refi": frozenset({"refi", "refi_plus_heloc"}),
+    "HELOC": frozenset({"heloc", "refi_plus_heloc"}),
+    "Cash-out": frozenset({"cash_out"}),
+    "Purchase": frozenset({"purchase"}),
+    "Retention": frozenset({"retention"}),
+}
+
+# `recommended_offer_code = 'x'` or `recommended_offer_code IN ('x', 'y')`.
+# The alternation is anchored on the quotes so the list branch cannot run past
+# its own closing paren into a neighbouring conjunct.
+_OFFER_CODE_PREDICATE_RE = re.compile(
+    r"\brecommended_offer_code\s*(?:=\s*['\"](?P<single>[a-z_]+)['\"]"
+    r"|in\s*\((?P<list>[^)]*)\))"
 )
 
 
@@ -136,67 +176,88 @@ def _segment_codes_from_question(question: str) -> list[str]:
     return list(dict.fromkeys(codes))
 
 
-def _portfolio_criteria_from_question(question: str) -> dict[str, Any]:
-    q = question.lower()
-    criteria: dict[str, Any] = {}
-    if re.search(r"\b(owner[-\s]?occupied|primary residence)\b", q):
-        criteria["occupancy"] = "Owner-occupied"
-    elif re.search(r"\b(non[-\s]?owner[-\s]?occupied|investment property)\b", q):
-        criteria["occupancy"] = "Non-owner-occupied"
+def _product_label_from_offer_codes(sql: str) -> str | None:
+    """Return a reviewed product label only when the SQL pins the exact code set.
 
-    if re.search(r"\b(open|active)\s+(heloc|second lien|2nd lien)\b", q):
-        criteria["lien_status"] = "Open HELOC"
-    elif re.search(r"\b(open|active)\s+(first lien|1st lien)\b", q):
-        criteria["lien_status"] = "Open 1st lien"
-    elif re.search(r"\b(free\s*(?:&|and)\s*clear)\b", q):
-        criteria["lien_status"] = "Free & clear"
+    A product label is not a synonym for one offer code: the reviewed
+    vocabulary compiles ``HELOC`` to ``recommended_offer_code IN ('heloc',
+    'refi_plus_heloc')`` and ``Refi`` to ``('refi', 'refi_plus_heloc')``. So a
+    label may only be replayed when the answer's own predicate pins *exactly*
+    that set. A strict subset (``= 'heloc'``) would replay BROADER than the
+    answer, and a superset or mixed set would replay NARROWER — the truncation
+    failure this module exists to prevent. When nothing matches exactly we
+    emit no product at all and let the answer's other conjuncts carry the
+    cohort, which errs broad rather than silently dropping borrowers.
+    """
 
-    if re.search(r"\bsingle[-\s]?property owner\b", q):
-        criteria["owner_link"] = "Single-property owner"
-    elif re.search(r"\b(multi[-\s]?property|2[-\s]*4 properties)\b", q):
-        criteria["owner_link"] = "Multi-property (2-4)"
-    elif re.search(r"\b(portfolio investor|5\+ properties)\b", q):
-        criteria["owner_link"] = "Portfolio investor (5+)"
-
-    if "listed for sale" in q:
-        criteria["purchase_intent"] = "Listed for sale"
-    elif "heloc intent" in q or "heloc propensity" in q or "permit" in q:
-        criteria["purchase_intent"] = "HELOC intent"
-
-    if "cash-out" in q or "cash out" in q:
-        criteria["product"] = "Cash-out"
-    elif re.search(r"\bheloc\b", q):
-        criteria["product"] = "HELOC"
-    elif re.search(r"\b(retention|recapture|at risk|going to a competitor)\b", q):
-        criteria["product"] = "Retention"
-
-    if "current customer" in q:
-        criteria["lender_relationship"] = "Current customer"
-    elif "former customer" in q:
-        criteria["lender_relationship"] = "Former customer"
-    elif "competitor" in q and not _retention_competitor_lien_list_question(question):
-        criteria["lender_relationship"] = "Competitor customer"
-
-    equity_match = re.search(
-        r"(?:equity|ltv|loan[-\s]?to[-\s]?value)[^\d]{0,24}(15|25|40)\s*%",
-        q,
-    )
-    if equity_match:
-        criteria["min_equity_pct_label"] = f"≥ {equity_match.group(1)}%"
-    return criteria
+    code_sets: list[frozenset[str]] = []
+    for match in _OFFER_CODE_PREDICATE_RE.finditer(sql):
+        raw = match.group("single") or match.group("list") or ""
+        codes = frozenset(
+            code
+            for code in (part.strip().strip("'\"") for part in raw.split(","))
+            if re.fullmatch(r"[a-z_]+", code)
+        )
+        if codes:
+            code_sets.append(codes)
+    # Two predicates on the same column intersect; replaying either one alone
+    # would misreport the cohort, so only an unambiguous single reading counts.
+    if len(set(code_sets)) != 1:
+        return None
+    for label, label_codes in _PRODUCT_LABEL_CODES.items():
+        if code_sets[0] == label_codes:
+            return label
+    return None
 
 
-def _portfolio_criteria_from_sql(sql_query: str | None) -> dict[str, Any]:
+def _portfolio_criteria_from_sql(
+    sql_query: str | None, reading: SqlFilterReading | None = None
+) -> dict[str, Any]:
+    """Read reviewed Portfolio Builder criteria out of the answer's own SQL.
+
+    The answer's SQL is the ONLY source of these criteria. Every criterion
+    below narrows the replayed cohort exactly as a numeric floor does
+    (``min_equity_pct_label`` compiles to ``equity_pct >=``), so it is read
+    from the same position-gated conjuncts rather than from the raw statement
+    text. Matching the whole statement would lift a criterion out of a CASE
+    arm, an aggregate breakdown, a comment, or a CTE body and hand the queue a
+    population the answer never described.
+
+    A sibling reader that inferred the same criteria from the QUESTION'S
+    WORDING was deleted (adversarial review 2026-08-11). Prose has no position
+    to gate on, so it could not distinguish a filter the answer applied from a
+    word the answer merely mentioned, and it silently narrowed real cohorts:
+
+    * "Show the top 20 investors by related property count" emitted
+      ``owner_link="Multi-property (2-4)"``, i.e. ``related_property_count
+      BETWEEN 2 AND 4`` — against an answer ordered by that column DESC. Live
+      measurement: 10 of 10 returned borrowers dropped, all at 3,686
+      properties.
+    * "How many of our current customers are at risk of going to a
+      competitor?" emitted ``product="Retention"``, turning the answer's
+      ``segment_codes CONTAINS 'retention' OR recommended_offer_code =
+      'retention'`` into the strict second branch. Live: the answer reports
+      19,166 and the queue opened 1,991.
+    * "Show me borrowers who are NOT owner-occupied but have a permit" emitted
+      ``occupancy="Owner-occupied"``: negation is invisible to a keyword
+      match. Live: 39,969 borrowers asked for, 410,821 opened, intersection
+      zero.
+
+    None of these are fixable by better patterns. A comparison ("owner-occupied
+    vs non-owner-occupied"), an enumeration ("HELOC, cash-out, or retention"),
+    an exclusion ("everyone except cash-out") and a filter all put the same
+    word in the same sentence. Only the SQL says which one it was.
+    """
+
     if not sql_query:
         return {}
-    sql = re.sub(r"\s+", " ", sql_query.strip().lower())
+    predicates = (reading or read_sql_filters(sql_query)).predicates
+    sql = " and ".join(predicates)
     if not sql:
         return {}
 
     criteria: dict[str, Any] = {}
-    if re.search(r"\bis_owner_occupied\s*=\s*(true|1)\b", sql) or re.search(
-        r"\bwhere\s+is_owner_occupied\b", sql
-    ):
+    if re.search(r"\bis_owner_occupied\s*=\s*(true|1)\b", sql) or "is_owner_occupied" in predicates:
         criteria["occupancy"] = "Owner-occupied"
     elif re.search(r"\bis_owner_occupied\s*=\s*(false|0)\b", sql):
         criteria["occupancy"] = "Non-owner-occupied"
@@ -255,19 +316,9 @@ def _portfolio_criteria_from_sql(sql_query: str | None) -> dict[str, Any]:
     elif re.search(r"\bis_competitor_lien\s*=\s*true\b", sql):
         criteria["lender_relationship"] = "Competitor customer"
 
-    if (
-        re.search(r"\brecommended_offer_code\s*=\s*'cash_out'\b", sql)
-        or re.search(
-            r'\brecommended_offer_code\s*=\s*"cash_out"\b',
-            sql,
-        )
-        or re.search(r"\brecommended_offer_code\s+in\s*\([^)]*'cash_out'[^)]*\)", sql)
-    ):
-        criteria["product"] = "Cash-out"
-    elif re.search(r"\brecommended_offer_code\s*=\s*'retention'\b", sql):
-        criteria["product"] = "Retention"
-    elif re.search(r"\brecommended_offer_code\s*=\s*'heloc'\b", sql):
-        criteria["product"] = "HELOC"
+    product = _product_label_from_offer_codes(sql)
+    if product:
+        criteria["product"] = product
 
     equity_match = re.search(r"\bequity_pct\s*>=\s*(15|25|40)\b", sql)
     if equity_match:
@@ -275,30 +326,48 @@ def _portfolio_criteria_from_sql(sql_query: str | None) -> dict[str, Any]:
     return criteria
 
 
+def _numeric_floors_from_sql(sql_query: str | None) -> dict[str, int]:
+    """Lift the answer's own numeric thresholds into replayable cohort filters.
+
+    Position-gated, not text-matched: see
+    ``backend/services/genie_sql_predicates`` for why a bound only counts as a
+    cohort floor when it stands as a top-level AND-conjunct of the outermost
+    statement's own WHERE / inner-join ON / QUALIFY.
+    """
+
+    return read_sql_filters(sql_query).floors
+
+
 def _segment_mode_from_sql(sql_query: str | None, segment_codes: list[str]) -> str:
+    """Return "all" only when every segment is a top-level AND-conjunct.
+
+    Position-gated for the same reason the numeric floors are (adversarial
+    review 2026-08-11): the previous reader regexed the WHOLE statement and
+    called it an intersection whenever the text between two
+    ``array_contains`` calls contained "and" and no "or". Two such calls in
+    different CTEs, or inside a ``COUNT_IF(...)`` breakdown, therefore yielded
+    ``mode="all"`` for an answer that used a union — and "all" is the
+    NARROWING direction, so the Lead Queue silently opened a smaller cohort
+    than the answer described.
+
+    Reading the accepted conjuncts instead makes the select list, HAVING,
+    CASE arms, aggregate filters and CTE bodies structurally unreachable.
+    """
+
     if not sql_query or len(segment_codes) <= 1:
         return "any"
-    sql = re.sub(r"\s+", " ", sql_query.strip().lower())
-    if not sql:
+    predicates = read_sql_filters(sql_query).predicates
+    if not predicates:
         return "any"
-
-    positions: list[tuple[int, int, str]] = []
     for code in segment_codes:
-        match = re.search(
-            rf"array_contains\(\s*(?:\w+\.)?segment_codes\s*,\s*['\"]{re.escape(code)}['\"]\s*\)",
-            sql,
+        pattern = re.compile(
+            rf"array_contains\(\s*(?:\w+\.)?segment_codes\s*,\s*['\"]{re.escape(code)}['\"]\s*\)"
         )
-        if not match:
+        # Each code must stand alone as its own conjunct. A conjunct holding
+        # two codes is an OR the splitter refused to break apart.
+        if not any(pattern.search(predicate) for predicate in predicates):
             return "any"
-        positions.append((match.start(), match.end(), code))
-    positions.sort()
-    between_conditions = [
-        sql[positions[idx][1]:positions[idx + 1][0]]
-        for idx in range(len(positions) - 1)
-    ]
-    if between_conditions and all(re.search(r"\band\b", between) and not re.search(r"\bor\b", between) for between in between_conditions):
-        return "all"
-    return "any"
+    return "all"
 
 
 def _route_from_answer_rows(
@@ -320,10 +389,12 @@ def _route_from_answer_rows(
     ):
         states = states[:1]
     segment_codes = _segment_codes_from_question(question)
-    portfolio_criteria = {
-        **_portfolio_criteria_from_question(question),
-        **_portfolio_criteria_from_sql(sql_query),
-    }
+    reading = read_sql_filters(sql_query)
+    # Portfolio criteria come from the ANSWER'S OWN SQL only. They used to be
+    # merged with criteria inferred from the question's wording, which is
+    # removed: see ``_portfolio_criteria_from_sql`` for why every criterion
+    # here narrows, and why prose cannot be gated the way SQL conjuncts can.
+    portfolio_criteria = _portfolio_criteria_from_sql(sql_query, reading)
 
     if borrower_ids:
         filter_criteria["borrower_ids"] = borrower_ids
@@ -367,6 +438,26 @@ def _route_from_answer_rows(
             value = portfolio_criteria.get(key)
             if isinstance(value, str) and value.strip():
                 params[key] = value
+
+    for floor_key, floor in reading.floors.items():
+        # The queue applies these verbatim, so the cohort it opens is the
+        # population the answer just reported rather than a broader one.
+        filter_criteria[floor_key] = floor
+        params[floor_key] = str(floor)
+
+    if reading.unreplayable and _REPLAYABLE_ROUTE_FILTER_KEYS & set(filter_criteria):
+        # A threshold that really filters the answer but cannot be replayed —
+        # a bound parameter whose value never reaches us, a bound outside the
+        # reviewed cohort domain, or several disagreeing bounds on one column.
+        # Naming it makes the queue's broader count self-explaining
+        # (`X-Cohort-Unreplayable-Filters`) instead of a silent divergence.
+        # These keys are outside the replayable vocabulary on purpose: every
+        # downstream gate folds them into `unreplayable_filters`. They are
+        # never added to the URL, and never stand alone — a cohort with no
+        # replayable filter is rejected, so a disclosure-only cohort would
+        # offer an action that 400s.
+        for disclosure in reading.unreplayable:
+            filter_criteria[disclosure] = True
 
     if params:
         return f"/lead-queue?{urlencode(params)}", filter_criteria

@@ -21,6 +21,11 @@ from backend.schemas.campaign_json_inputs import (
     require_exact_json_keys,
 )
 from backend.schemas.common import validate_public_campaign_label
+from backend.schemas.genie_numeric_filters import (
+    GENIE_NUMERIC_FILTER_BOUNDS,
+    GENIE_NUMERIC_FILTER_KEYS,
+    is_reviewed_numeric_floor,
+)
 from backend.schemas.portfolio_campaign import (
     assert_public_campaign_text,
 )
@@ -81,6 +86,14 @@ _GENIE_REPLAY_FILTER_KEYS = frozenset(
         "portfolio_criteria",
         "borrower_ids",
         "source",
+        # Reviewed numeric floors the Lead Queue replays, plus the names of any
+        # predicates it could not. A draft campaign built from a
+        # threshold-narrowed Genie answer carries these, and this projection
+        # gates the decision proof: an unprojected key here means that campaign
+        # can never be approved. Splatted from the canonical bounds so the key
+        # set and the ranges cannot drift apart.
+        *GENIE_NUMERIC_FILTER_KEYS,
+        "unreplayable_filters",
     }
 )
 _GENIE_SEGMENT_CODES = frozenset({"itm", "listed", "permit", "investor", "equity", "retention"})
@@ -451,6 +464,23 @@ def _project_genie_replay_filters(
             field_name="criteria.result_filters.borrower_ids",
             pattern=r"B-[0-9A-Z]{13}",
             max_items=500,
+        )
+    for numeric_key in GENIE_NUMERIC_FILTER_BOUNDS:
+        if numeric_key not in value:
+            continue
+        floor = value[numeric_key]
+        # ``min_rate_spread_bps`` is signed: a negative floor is a real
+        # retention-side question, not a malformed one. Score and equity are
+        # still 0-bounded.
+        if not is_reviewed_numeric_floor(numeric_key, floor):
+            raise ValueError(f"criteria.result_filters.{numeric_key} must be a reviewed threshold")
+        out[numeric_key] = floor
+    if "unreplayable_filters" in value:
+        out["unreplayable_filters"] = _reviewed_text_list(
+            value["unreplayable_filters"],
+            field_name="criteria.result_filters.unreplayable_filters",
+            pattern=r"[a-z0-9_]{1,64}",
+            max_items=12,
         )
     if "source" in value:
         source = str(value["source"] or "").strip()

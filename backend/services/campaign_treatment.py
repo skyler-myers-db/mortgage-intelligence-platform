@@ -10,6 +10,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 from uuid import uuid4
 
+from backend.schemas.genie_numeric_filters import is_reviewed_numeric_floor
 from backend.schemas.portfolio import (
     CAMPAIGN_BUILD_LIMIT,
     HouseholdDedupConfig,
@@ -22,6 +23,7 @@ from backend.services.campaign_targeting import (
 )
 from backend.services.campaign_treatment_runtime import require_campaign_treatment_runtime
 from backend.services.lakebase import LakebaseClient, LakebaseError
+from backend.services.lead_query_helpers import apply_cohort_equity_floor
 from backend.services.repositories.databricks_lead_cohorts import (
     CampaignTreatmentBuildRejected,
     LeadCohortFilters,
@@ -223,6 +225,22 @@ def _strings(value: object) -> list[str] | None:
     return normalized or None
 
 
+def _numeric_floor(filters: dict[str, Any], key: str) -> int | None:
+    """Return a stored reviewed floor, or raise if the criteria are malformed.
+
+    The range comes from the canonical vocabulary rather than the call site, so
+    the approved treatment set is bounded exactly like the cohort the answer
+    handed off -- including the signed ``min_rate_spread_bps`` floor.
+    """
+
+    raw = filters.get(key)
+    if raw is None or raw == "":
+        return None
+    if not is_reviewed_numeric_floor(key, raw):
+        raise ValueError(f"campaign criteria {key} filter is invalid")
+    return int(raw)
+
+
 def cohort_filters_from_campaign_criteria(criteria: dict[str, Any]) -> LeadCohortFilters:
     """Project reviewed Portfolio/Genie criteria into the canonical lead filters."""
 
@@ -241,6 +259,13 @@ def cohort_filters_from_campaign_criteria(criteria: dict[str, Any]) -> LeadCohor
         else top_level_ids or filter_ids
     )
     portfolio_raw = filters.get("portfolio_criteria")
+    # Reviewed numeric floors travel with the answer that built this draft, so
+    # the treatment set is the population the user approved -- not the broader
+    # one that ignoring the thresholds would materialize.
+    portfolio_criteria = apply_cohort_equity_floor(
+        PortfolioCriteria.model_validate(portfolio_raw if isinstance(portfolio_raw, dict) else {}),
+        _numeric_floor(filters, "min_equity_pct"),
+    )
     return LeadCohortFilters(
         segment=str(filters.get("segment") or "").strip() or None,
         state=str(filters.get("state") or "").strip() or None,
@@ -254,9 +279,9 @@ def cohort_filters_from_campaign_criteria(criteria: dict[str, Any]) -> LeadCohor
         segment_mode=str(filters.get("segment_mode") or "any"),
         target_lender_ref=str(filters.get("target_lender_ref") or "").strip() or None,
         funnel_stage=str(filters.get("funnel_stage") or "").strip() or None,
-        portfolio_criteria=PortfolioCriteria.model_validate(
-            portfolio_raw if isinstance(portfolio_raw, dict) else {}
-        ),
+        portfolio_criteria=portfolio_criteria,
+        min_opportunity_score=_numeric_floor(filters, "min_opportunity_score"),
+        min_rate_spread_bps=_numeric_floor(filters, "min_rate_spread_bps"),
         approval_status=str(filters.get("approval_status") or "").strip() or None,
         outreach_status=str(filters.get("outreach_status") or "").strip() or None,
         aged_days=int(filters["aged_days"]) if filters.get("aged_days") is not None else None,

@@ -1016,6 +1016,25 @@ kbd {
   color: var(--text-1); font-variant-numeric: tabular-nums; line-height: var(--lh-tight);
   overflow-wrap: anywhere;
 }
+/* Reconciles the headline count against the cohort the card's Lead Queue
+   link actually shows. The headline is the addressable population; the
+   queue applies the contact-eligibility predicate, so it is a strict
+   subset (live 2026-08-11: 3,217 of 74,335 for Prime Refi). Stating one
+   number and navigating to the other reads as a broken link, so the
+   relationship is stated here. Same idiom as `.zip-tiles__reconcile`,
+   which does this for the map's ZIP drill. */
+.seg-card__reconcile {
+  margin-top: var(--sp-1);
+  font-size: var(--fs-11);
+  font-family: var(--font-mono);
+  color: var(--text-3);
+  line-height: var(--lh-snug);
+  overflow-wrap: anywhere;
+}
+.seg-card__reconcile-value {
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
 .seg-card__count-skeleton {
   inline-size: min(70%, calc(var(--sp-16) * 2 + var(--sp-8)));
   block-size: var(--fs-36);

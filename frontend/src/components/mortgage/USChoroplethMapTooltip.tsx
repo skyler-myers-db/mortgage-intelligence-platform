@@ -51,6 +51,30 @@ export function USChoroplethMapTooltip({ hover, activeSegNames }: USChoroplethMa
           </div>
         </div>
       </div>
+      {/* Addressable-vs-contactable reconciliation, stated on the tile
+          before the click. The KPI above is the addressable population;
+          the Lead Queue this tile links to applies the contact-eligibility
+          predicate, so it shows a strict subset — live 2026-08-11, IL was
+          76,711 of 1,851,040 (24x). Clicking a big number and landing on a
+          small one reads as a broken link unless the tile says so. Same
+          idiom as `.zip-tiles__reconcile` on the ZIP drill; reuses the
+          existing muted compact row, no new CSS. */}
+      {/* Only when there is a gap to state. Segment Intelligence defaults
+          Contactability to "Eligible only", which restricts the universe the
+          filtered rollup counts over -- so contactable EQUALS addressable on
+          every tile and this row rendered "76,711 of 76,711" with no user
+          action at all. SegmentCard got this guard; its sibling carrying the
+          identical disclosure did not (adversarial review 2026-08-11). */}
+      {typeof hover.contactable === 'number' &&
+        hover.count !== null &&
+        hover.contactable < hover.count && (
+        <div className="map-tip__row map-tip__row--compact map-tip__row--muted">
+          <span>Contactable</span>
+          <span className="v num map-tip__value--small">
+            {hover.contactable.toLocaleString()} of {hover.count.toLocaleString()}
+          </span>
+        </div>
+      )}
       {hover.topSegment && (
         <div className="map-tip__seg">
           <span className="map-tip__seg-label">Top segment</span>

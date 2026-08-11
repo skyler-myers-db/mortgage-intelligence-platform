@@ -107,6 +107,14 @@ def list_segments(
     consent_status: str | None = None,
     recency: str | None = None,
 ) -> list[SegmentSummary]:
+    """Return one summary per registered segment.
+
+    ``count`` is the addressable population; the optional ``contactable``
+    is its marketing-eligible subset — what this card's Lead Queue link
+    will actually show, since the queue applies the contact-eligibility
+    predicate and the headline count does not. Optional on the wire so an
+    older client is unaffected.
+    """
     segment_mode = _parse_segment_mode(segment_mode)
     try:
         portfolio_criteria = _portfolio_criteria_from_query(

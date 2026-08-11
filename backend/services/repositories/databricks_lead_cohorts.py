@@ -74,6 +74,10 @@ class LeadCohortFilters:
     target_lender_ref: str | None = None
     funnel_stage: str | None = None
     portfolio_criteria: PortfolioCriteria | None = None
+    # Reviewed numeric floors. A governed Genie cohort sets these so the
+    # queue replays the answer's population; ``min_equity_pct`` travels on
+    # ``portfolio_criteria`` because that vocabulary already compiles it.
+    min_opportunity_score: int | None = None
     min_rate_spread_bps: float | None = None
     min_heloc_propensity_score: float | None = None
     approval_status: str | None = None
@@ -332,19 +336,11 @@ LEFT JOIN ranked ON TRUE
         portfolio_clause = (
             "AND " + portfolio_where.removeprefix("WHERE ").strip() if portfolio_where else ""
         )
-        replay_clauses: list[str] = []
-        replay_params: dict[str, object] = {}
-        if filters.min_rate_spread_bps is not None:
-            replay_clauses.append("b.rate_spread_bps >= :campaign_min_rate_spread_bps")
-            replay_params["campaign_min_rate_spread_bps"] = filters.min_rate_spread_bps
-        if filters.min_heloc_propensity_score is not None:
-            replay_clauses.append(
-                "b.heloc_propensity_score >= :campaign_min_heloc_propensity_score"
-            )
-            replay_params["campaign_min_heloc_propensity_score"] = (
-                filters.min_heloc_propensity_score
-            )
-        replay_clause = " ".join(f"AND {clause}" for clause in replay_clauses)
+        replay_clause, replay_params = self.numeric_floor_clause(
+            min_opportunity_score=filters.min_opportunity_score,
+            min_rate_spread_bps=filters.min_rate_spread_bps,
+            min_heloc_propensity_score=filters.min_heloc_propensity_score,
+        )
         if "target_lender_ref" in portfolio_params:
             lender_clause = ""
             lender_params = {}
@@ -528,6 +524,14 @@ def normalise_lead_queue_handoff_filters(
         normalized["outreach_status"] = filters.outreach_status.strip().lower()
     if filters.aged_days is not None:
         normalized["aged_days"] = max(1, min(int(filters.aged_days), 90))
+    # Numeric floors narrow the cohort, so they belong inside the fingerprint.
+    # /leads refuses to combine a handoff with a persisted cohort, so these are
+    # absent today; carrying them keeps a future caller from narrowing a signed
+    # cohort without changing the proof it was signed against.
+    if filters.min_opportunity_score is not None:
+        normalized["min_opportunity_score"] = int(filters.min_opportunity_score)
+    if filters.min_rate_spread_bps is not None:
+        normalized["min_rate_spread_bps"] = int(filters.min_rate_spread_bps)
     if portfolio_payload:
         normalized["portfolio_criteria"] = portfolio_payload
     return normalized

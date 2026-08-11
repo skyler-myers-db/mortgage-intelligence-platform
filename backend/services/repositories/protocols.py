@@ -186,6 +186,8 @@ class LeadRepository(Protocol):
         approval_status: str | None = None,
         outreach_status: str | None = None,
         aged_days: int | None = None,
+        min_opportunity_score: int | None = None,
+        min_rate_spread_bps: float | None = None,
     ) -> list[LeadSummary]:
         """Return up to ``limit`` ranked leads.
 
@@ -208,6 +210,14 @@ class LeadRepository(Protocol):
         ``portfolio_criteria`` replays Portfolio Builder predicates when
         the CTA opens Lead Queue, so the queue reflects the built population
         rather than a broader generic ranked list.
+
+        ``min_opportunity_score`` / ``min_rate_spread_bps`` replay the
+        numeric thresholds a governed Genie answer used, so a cohort handed
+        off from an answer narrowed by score or spread reproduces that
+        answer's population instead of the broader unfiltered one. They read
+        from ``borrower_360``, alongside the geo path. ``min_equity_pct``
+        travels on ``portfolio_criteria`` because that vocabulary already
+        compiles an equity floor.
         """
         ...
 
@@ -231,6 +241,8 @@ class LeadRepository(Protocol):
         approval_status: str | None = None,
         outreach_status: str | None = None,
         aged_days: int | None = None,
+        min_opportunity_score: int | None = None,
+        min_rate_spread_bps: float | None = None,
     ) -> int:
         """Return the total matching the same predicates as ``list``."""
         ...

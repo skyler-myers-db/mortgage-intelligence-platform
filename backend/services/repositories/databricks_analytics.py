@@ -20,6 +20,7 @@ from backend.schemas.analytics import (
     EvidenceBySignalRow,
     EvidenceDailyRow,
     ExecutiveAnalyticsResponse,
+    ExecutiveProvenance,
     FunnelStage,
     FunnelTotals,
     GeographyAnalyticsResponse,
@@ -74,8 +75,31 @@ def _float_or_none(value: object) -> float | None:
     return float(value)
 
 
+def _text_or_none(value: object) -> str | None:
+    if value is None:
+        return None
+    return str(value)
+
+
 def _filters(filters: AnalyticsFilters | None) -> AnalyticsFilters:
     return filters or AnalyticsFilters()
+
+
+# Provenance for the executive funnel. The scoring stages read borrower_360;
+# the workflow stages additionally read the gold lifecycle MIRROR of Lakebase.
+# jobs/sync_lifecycle_state.py is what closes that gap, so the mirror can trail
+# the approval-funnel tab (which reads mip_app.* directly and is exact). The
+# lag is intentional — see the module docstring on the approval funnel store —
+# and this block is the disclosure the executive side previously omitted.
+_POPULATION_SOURCE = qualify("gold", "borrower_360")
+_LIFECYCLE_SOURCE = qualify("gold", "borrower_lifecycle_state")
+_WORKFLOW_SOURCE = f"{_POPULATION_SOURCE} + {_LIFECYCLE_SOURCE}"
+_LIFECYCLE_LAG_NOTE = (
+    "Approved and Actioned are read from the gold lifecycle mirror of Lakebase, "
+    "as of lifecycle_synced_at. The approval funnel tab reads the Lakebase "
+    "approval tables directly and is exact, so when the two tabs disagree this "
+    "one is a sync behind — by design, not a discrepancy."
+)
 
 
 def _filter_key(filters: AnalyticsFilters) -> str:
@@ -214,6 +238,10 @@ class DatabricksAnalyticsRepository:
     _LIVE_FUNNEL_SQL = (
         "SELECT "
         "  CAST(MAX(DATE(b.refreshed_at)) AS STRING) AS snapshot_date, "
+        # As-of boundary of the Lakebase lifecycle mirror, taken from the gold
+        # rows themselves rather than wall-clock, so the published provenance
+        # describes the data actually returned by THIS statement.
+        "  CAST(MAX(ls.synced_at) AS STRING) AS lifecycle_synced_at, "
         "  CAST(COUNT(*) AS INT) AS addressable_borrowers, "
         "  CAST(SUM(CASE WHEN b.in_the_money THEN 1 ELSE 0 END) AS INT) AS in_the_money_borrowers, "
         "  CAST(SUM(CASE WHEN b.opportunity_score "
@@ -564,12 +592,15 @@ class DatabricksAnalyticsRepository:
                 actioned_borrowers=_int(totals_row.get("actioned_borrowers")),
             )
             stages = [
-                FunnelStage(stage="Addressable", stage_order=1, borrower_count=totals.addressable_borrowers),
-                FunnelStage(stage="Refi Economics", stage_order=2, borrower_count=totals.in_the_money_borrowers),
-                FunnelStage(stage="Opportunity Score 75+", stage_order=3, borrower_count=totals.high_opportunity_borrowers),
-                FunnelStage(stage="Primary Offer Selected", stage_order=4, borrower_count=totals.offer_recommended_borrowers),
-                FunnelStage(stage="Approved", stage_order=5, borrower_count=totals.approved_borrowers),
-                FunnelStage(stage="Actioned", stage_order=6, borrower_count=totals.actioned_borrowers),
+                FunnelStage(stage="Addressable", stage_order=1, borrower_count=totals.addressable_borrowers, source=_POPULATION_SOURCE),
+                FunnelStage(stage="Refi Economics", stage_order=2, borrower_count=totals.in_the_money_borrowers, source=_POPULATION_SOURCE),
+                FunnelStage(stage="Opportunity Score 75+", stage_order=3, borrower_count=totals.high_opportunity_borrowers, source=_POPULATION_SOURCE),
+                FunnelStage(stage="Primary Offer Selected", stage_order=4, borrower_count=totals.offer_recommended_borrowers, source=_POPULATION_SOURCE),
+                # The two workflow stages are the ones that can trail the
+                # approval funnel tab; their source names the mirror, not
+                # the Lakebase tables the mirror is built from.
+                FunnelStage(stage="Approved", stage_order=5, borrower_count=totals.approved_borrowers, source=_WORKFLOW_SOURCE),
+                FunnelStage(stage="Actioned", stage_order=6, borrower_count=totals.actioned_borrowers, source=_WORKFLOW_SOURCE),
             ]
             score_distribution = [
                 ScoreBucket(
@@ -585,6 +616,13 @@ class DatabricksAnalyticsRepository:
                 totals=totals,
                 stages=stages,
                 score_distribution=score_distribution,
+                provenance=ExecutiveProvenance(
+                    snapshot_date=totals.snapshot_date,
+                    lifecycle_synced_at=_text_or_none(totals_row.get("lifecycle_synced_at")),
+                    population_source=_POPULATION_SOURCE,
+                    workflow_source=_WORKFLOW_SOURCE,
+                    note=_LIFECYCLE_LAG_NOTE,
+                ),
             )
 
         return self._cached(f"analytics.executive:{_filter_key(analytics_filters)}", build)

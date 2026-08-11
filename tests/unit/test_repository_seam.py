@@ -13,6 +13,7 @@ production. These tests are the tripwire.
 """
 from __future__ import annotations
 
+import inspect
 import re
 from pathlib import Path
 
@@ -112,6 +113,52 @@ def test_dependency_overrides_satisfy_protocols() -> None:
     assert isinstance(overrides[get_offer_repository](), OfferRepository)
     assert isinstance(overrides[get_outreach_repository](), OutreachRepository)
     assert isinstance(overrides[get_genie_answer_repository](), GenieAnswerRepository)
+
+
+def test_dependency_overrides_accept_every_protocol_parameter() -> None:
+    """Method NAMES are not the contract; parameters are.
+
+    ``@runtime_checkable`` compares names only, so a double can satisfy
+    ``isinstance`` while rejecting an argument the router really sends. That
+    is what happened to the Lead Queue: ``LeadRepository.list`` grew
+    ``min_opportunity_score`` / ``min_rate_spread_bps`` for governed Genie
+    cohort replay, the in-process double did not, and every floor-carrying
+    cohort raised ``TypeError: got an unexpected keyword argument`` -- an
+    opaque 500 rather than a readable assertion (adversarial review
+    2026-08-11). This closes the gap for every repository at once.
+    """
+
+    overrides = app.dependency_overrides
+    pairs = (
+        (PortfolioRepository, get_portfolio_repository),
+        (SegmentRepository, get_segment_repository),
+        (LeadRepository, get_lead_repository),
+        (BorrowerRepository, get_borrower_repository),
+        (OfferRepository, get_offer_repository),
+        (OutreachRepository, get_outreach_repository),
+        (GenieAnswerRepository, get_genie_answer_repository),
+    )
+    drift: list[str] = []
+    for protocol, factory in pairs:
+        double = overrides[factory]()
+        for name, member in vars(protocol).items():
+            if name.startswith("_") or not callable(member):
+                continue
+            implementation = getattr(double, name, None)
+            if implementation is None:
+                drift.append(f"{type(double).__name__}.{name} is missing")
+                continue
+            declared = inspect.signature(member).parameters
+            accepted = inspect.signature(implementation).parameters
+            if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in accepted.values()):
+                # `**kwargs` swallows the drift instead of reporting it, so
+                # the double must name what it accepts.
+                drift.append(f"{type(double).__name__}.{name} hides drift behind **kwargs")
+                continue
+            missing = [p for p in declared if p != "self" and p not in accepted]
+            if missing:
+                drift.append(f"{type(double).__name__}.{name} rejects {missing}")
+    assert not drift, "test doubles diverged from the repository Protocols: " + "; ".join(drift)
 
 
 def test_every_factory_is_overridden_under_pytest() -> None:

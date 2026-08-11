@@ -10,10 +10,12 @@ import { GlossaryTerm } from '../components/GlossaryTerm';
 import { KpiCard } from '../components/mortgage/KpiCard';
 import { friendlyAssetLabel } from '../lib/assetLabels';
 import { offerDisplayLabel } from '../lib/offerLanguage';
+import { formatTimestamp } from '../lib/time';
 import type {
   EconomicsAnalyticsResponse,
   EvidenceBySignalRow,
   ExecutiveAnalyticsResponse,
+  ExecutiveProvenance,
   GeographyAnalyticsResponse,
   SegmentAnalyticsResponse,
   SegmentByStateRow,
@@ -53,6 +55,35 @@ import {
 } from './analytics.charts';
 import { EquitySpreadScatter } from './analytics.equity-scatter';
 import type { AnalyticsQueryOptions } from '../lib/api';
+
+/**
+ * Provenance for the executive funnel. Stages 1-4 aggregate borrower_360;
+ * Approved and Actioned read the gold lifecycle MIRROR of Lakebase, which the
+ * Approval funnel tab reads directly. The mirror can trail by one sync — that
+ * is by design, and the two tabs are never reconciled to match. Publishing the
+ * sources and the mirror's as-of boundary is what lets someone comparing the
+ * tabs see why a number differs instead of guessing which one is broken.
+ */
+export function ExecutiveProvenanceNote({
+  provenance,
+  leadParams,
+}: {
+  provenance: ExecutiveProvenance;
+  leadParams: LenderFilterParams;
+}) {
+  return (
+    <p className="analytics-panel-note">
+      Stages 1&ndash;4 from <span className="mono">{provenance.population_source}</span>
+      {provenance.snapshot_date ? <> (snapshot {provenance.snapshot_date})</> : null}. Approved and
+      Actioned from <span className="mono">{provenance.workflow_source}</span>, the gold mirror of
+      Lakebase
+      {provenance.lifecycle_synced_at ? <>, synced {formatTimestamp(provenance.lifecycle_synced_at)}</> : null}.
+      The <Link to={analyticsHref({ view: 'approval-funnel', ...leadParams })}>Approval funnel</Link> tab
+      reads the Lakebase approval tables directly and is exact, so a higher count there means this
+      mirror is one sync behind &mdash; by design, not a discrepancy.
+    </p>
+  );
+}
 
 export function ExecutiveView({ data, leadParams }: { data: ExecutiveAnalyticsResponse; leadParams: LenderFilterParams }) {
   return (
@@ -97,7 +128,10 @@ export function ExecutiveView({ data, leadParams }: { data: ExecutiveAnalyticsRe
         </section>
         <section className="surface">
           <div className="surface__hdr surface__hdr--split">
-            <h2 className="h-3">Pipeline Metrics</h2>
+            <div>
+              <h2 className="h-3">Pipeline Metrics</h2>
+              <ExecutiveProvenanceNote provenance={data.provenance} leadParams={leadParams} />
+            </div>
             <ScopeChip>Exact figures</ScopeChip>
           </div>
           <div className="surface__body">
