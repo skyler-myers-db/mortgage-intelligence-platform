@@ -44,6 +44,7 @@ from backend.services.repositories import get_genie_answer_repository
 from backend.services.repositories.databricks_genie_actions import (
     _numeric_floors_from_sql,
     _route_from_answer_rows,
+    _suggest_genie_actions,
 )
 from backend.services.scoring import HIGH_OPPORTUNITY_THRESHOLD
 from backend.services.state_footprint import (
