@@ -10,28 +10,58 @@ already masked before API egress.
 from __future__ import annotations
 
 import logging
-from typing import Annotated, Literal
+from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response
 
 from backend.schemas._validators_tenant import normalize_public_lender_ref
 from backend.schemas.common import validate_internal_staff_email
 from backend.schemas.lead import SEGMENT_CODE_VALUES, LeadSummary
-from backend.schemas.portfolio import PortfolioCriteria
+from backend.schemas.lead_query import (
+    DEFAULT_LEAD_LIMIT,
+    MAX_LEAD_LIMIT,
+    AgedDaysParam,
+    ApprovalStatusParam,
+    AssignedToParam,
+    BorrowerIdsParam,
+    CohortIdParam,
+    ConsentStatusParam,
+    CountiesParam,
+    CountyParam,
+    FunnelStageParam,
+    GeographyParam,
+    IncludeIdentityProofParam,
+    IncludeSuppressedForAnalyticsParam,
+    LenderRelationshipParam,
+    LienStatusParam,
+    LimitParam,
+    LoanProductParam,
+    MarketingEligibilityParam,
+    MinEquityPctLabelParam,
+    MinEquityPctParam,
+    OccupancyParam,
+    OriginationChannelParam,
+    OutreachStatusParam,
+    OwnerLinkParam,
+    ProductParam,
+    PurchaseIntentParam,
+    RecencyParam,
+    SegmentCodesParam,
+    SegmentModeParam,
+    StateParam,
+    StatesParam,
+    TargetLenderRefParam,
+    ZipParam,
+    ZipsParam,
+)
 from backend.services.audit_store import AuditStore, get_audit_store, resolve_actor
 from backend.services.lakebase import LakebaseError
-from backend.services.lead_cohort_source import _load_cohort_filters
+from backend.services.lead_cohort_replay import (
+    cohort_portfolio_criteria,
+    resolve_cohort_replay,
+)
 from backend.services.lead_query_helpers import (
     apply_cohort_equity_floor as _apply_cohort_equity_floor,
-)
-from backend.services.lead_query_helpers import (
-    cohort_list as _cohort_list,
-)
-from backend.services.lead_query_helpers import (
-    cohort_numeric_floor as _cohort_numeric_floor,
-)
-from backend.services.lead_query_helpers import (
-    cohort_segment_mode as _cohort_segment_mode,
 )
 from backend.services.lead_query_helpers import (
     parse_borrower_ids as _parse_borrower_ids,
@@ -73,11 +103,11 @@ log = logging.getLogger(__name__)
 
 router = APIRouter(tags=["leads"])
 
-# Kept in sync with DatabricksLeadRepository.{DEFAULT_LIMIT, MAX_LIMIT}.
-# Exposed as module-level constants so the router's Query() annotations
-# and the unit tests can both read one source of truth.
-DEFAULT_LEAD_LIMIT: int = 500
-MAX_LEAD_LIMIT: int = 5000
+# Re-exported: the limit bounds are declared next to the Query() annotation
+# that enforces them, and callers (backend.services.lead_warm, the unit
+# tests) have always read them from here.
+__all__ = ["DEFAULT_LEAD_LIMIT", "MAX_LEAD_LIMIT", "router"]
+
 _ALLOWED_SEGMENT_CODES: frozenset[str] = frozenset(SEGMENT_CODE_VALUES)
 _ALLOWED_FUNNEL_STAGES: frozenset[str] = frozenset(
     {
@@ -89,7 +119,6 @@ _ALLOWED_FUNNEL_STAGES: frozenset[str] = frozenset(
         "actioned",
     }
 )
-
 
 RepoDep = Annotated[LeadRepository, Depends(get_lead_repository)]
 StoreDep = Annotated[AuditStore, Depends(get_audit_store)]
@@ -127,298 +156,40 @@ def list_leads(
     audit: StoreDep,
     sales_state: SalesStateDep,
     segment: str | None = None,
-    segment_codes: Annotated[
-        str | None,
-        Query(
-            alias="segment_codes",
-            description=(
-                "Optional comma-separated SegmentCode list for multi-card "
-                "filters. Use when more than one segment card is active."
-            ),
-        ),
-    ] = None,
-    segment_mode: Annotated[
-        str,
-        Query(
-            description=(
-                "any = segment arrays overlap; all = borrower contains every "
-                "selected segment code."
-            ),
-        ),
-    ] = "any",
+    segment_codes: SegmentCodesParam = None,
+    segment_mode: SegmentModeParam = "any",
     portfolio_id: str | None = None,
-    state: Annotated[
-        str | None,
-        Query(
-            min_length=2,
-            max_length=2,
-            pattern=r"^[A-Za-z]{2}$",
-            description=(
-                "Optional 2-char USPS state code. When present, the repo "
-                "queries borrower_360 directly (no score floor) so the "
-                "returned rows match the per-state map count."
-            ),
-        ),
-    ] = None,
-    zip_code: Annotated[
-        str | None,
-        Query(
-            alias="zip",
-            min_length=5,
-            max_length=5,
-            pattern=r"^\d{5}$",
-            description=(
-                "Optional 5-char ZIP. Same borrower_360 query path as state. "
-                "Use with state for the most narrow filter."
-            ),
-        ),
-    ] = None,
-    county: Annotated[
-        str | None,
-        Query(
-            alias="county",
-            min_length=5,
-            max_length=5,
-            pattern=r"^\d{5}$",
-            description=(
-                "Optional 5-char county FIPS. Same borrower_360 query path "
-                "as state/zip so map drill-downs preserve the counted cohort."
-            ),
-        ),
-    ] = None,
-    states: Annotated[
-        str | None,
-        Query(
-            alias="states",
-            max_length=256,
-            description=(
-                "Optional comma-separated USPS states for Genie-generated "
-                "cohort actions."
-            ),
-        ),
-    ] = None,
-    zips: Annotated[
-        str | None,
-        Query(
-            alias="zips",
-            max_length=4096,
-            description=(
-                "Optional comma-separated 5-digit ZIP list for Genie-generated "
-                "cohort actions."
-            ),
-        ),
-    ] = None,
-    counties: Annotated[
-        str | None,
-        Query(
-            alias="counties",
-            max_length=4096,
-            description=(
-                "Optional comma-separated 5-digit county FIPS list for "
-                "Genie-generated cohort actions."
-            ),
-        ),
-    ] = None,
-    borrower_ids: Annotated[
-        str | None,
-        Query(
-            alias="borrower_ids",
-            max_length=8192,
-            description=(
-                "Optional comma-separated synthetic borrower IDs for Genie "
-                "borrower-list cohort actions."
-            ),
-        ),
-    ] = None,
-    target_lender_ref: Annotated[
-        str | None,
-        Query(
-            alias="target_lender_ref",
-            max_length=64,
-            description="Optional public-demo-safe current-lender ref such as the configured tenant lender or Competitor A.",
-        ),
-    ] = None,
-    geography: Annotated[
-        str | None,
-        Query(
-            alias="geography",
-            max_length=64,
-            description="Optional Portfolio Builder geography label to replay the built population.",
-        ),
-    ] = None,
-    occupancy: Annotated[
-        str | None,
-        Query(
-            alias="occupancy",
-            max_length=64,
-            description="Optional Portfolio Builder occupancy filter.",
-        ),
-    ] = None,
-    lien_status: Annotated[
-        str | None,
-        Query(
-            alias="lien_status",
-            max_length=64,
-            description="Optional Portfolio Builder lien-status filter.",
-        ),
-    ] = None,
-    lender_relationship: Annotated[
-        str | None,
-        Query(
-            alias="lender_relationship",
-            max_length=64,
-            description="Optional Portfolio Builder lender-relationship filter.",
-        ),
-    ] = None,
-    product: Annotated[
-        str | None,
-        Query(
-            alias="product",
-            max_length=64,
-            description="Optional Portfolio Builder product filter.",
-        ),
-    ] = None,
-    loan_product: Annotated[
-        str | None,
-        Query(alias="loan_product", max_length=64, description="Optional loan product-type filter."),
-    ] = None,
-    origination_channel: Annotated[
-        str | None,
-        Query(alias="origination_channel", max_length=64, description="Optional origination-channel filter."),
-    ] = None,
-    min_equity_pct_label: Annotated[
-        str | None,
-        Query(
-            alias="min_equity_pct_label",
-            max_length=32,
-            description="Optional Portfolio Builder display equity threshold.",
-        ),
-    ] = None,
-    min_equity_pct: Annotated[
-        float | None,
-        Query(
-            alias="min_equity_pct",
-            ge=0,
-            le=100,
-            description="Optional numeric Portfolio Builder equity threshold.",
-        ),
-    ] = None,
-    owner_link: Annotated[
-        str | None,
-        Query(
-            alias="owner_link",
-            max_length=64,
-            description="Optional owner-link bucket from Segment Intelligence.",
-        ),
-    ] = None,
-    purchase_intent: Annotated[
-        str | None,
-        Query(
-            alias="purchase_intent",
-            max_length=64,
-            description="Optional purchase-intent bucket from Segment Intelligence.",
-        ),
-    ] = None,
-    marketing_eligibility: Annotated[
-        str,
-        Query(
-            alias="marketing_eligibility",
-            max_length=32,
-            description="Contactability gate. Defaults to Eligible only for fail-closed campaign/export use.",
-        ),
-    ] = "Eligible only",
-    consent_status: Annotated[
-        str | None,
-        Query(
-            alias="consent_status",
-            max_length=32,
-            description="Optional consent filter: Opt-in, Opt-out, Unknown, Any.",
-        ),
-    ] = None,
-    recency: Annotated[
-        str | None,
-        Query(
-            alias="recency",
-            max_length=32,
-            description="Optional touch-recency filter: Untouched 30d/60d/90d or Any.",
-        ),
-    ] = None,
-    include_suppressed_for_analytics: Annotated[
-        bool,
-        Query(
-            alias="include_suppressed_for_analytics",
-            description=(
-                "Admin-only analytics override. When true, clears the default "
-                "Eligible only marketing gate so suppressed/non-opt-in rows can "
-                "be counted or inspected without making them campaign-actionable."
-            ),
-        ),
-    ] = False,
-    include_identity_proof: Annotated[
-        bool,
-        Query(
-            alias="include_identity_proof",
-            description=(
-                "Admin/evaluation-only complete-cohort digest and snapshot headers. "
-                "Disabled by default because it performs an aggregate proof query."
-            ),
-        ),
-    ] = False,
-    approval_status: Annotated[
-        Literal["pending", "approved", "rejected", "hold", "any"],
-        Query(alias="approval_status", description="Sales workflow approval state filter."),
-    ] = "any",
-    outreach_status: Annotated[
-        Literal["none", "queued", "actioned", "sent", "bounced", "replied", "any"],
-        Query(alias="outreach_status", description="Sales workflow outreach state filter."),
-    ] = "any",
-    assigned_to: Annotated[
-        str | None,
-        Query(alias="assigned_to", max_length=256, description="Internal LO email assigned to the lead."),
-    ] = None,
-    aged_days: Annotated[
-        int | None,
-        Query(alias="aged_days", ge=1, le=90, description="Only approved leads aged at least this many days with no outreach."),
-    ] = None,
-    cohort_id: Annotated[
-        str | None,
-        Query(
-            alias="cohort_id",
-            max_length=64,
-            description="Optional Lakebase persisted cohort id produced by a governed Genie action.",
-        ),
-    ] = None,
-    funnel_stage: Annotated[
-        Literal[
-            "addressable",
-            "in_the_money",
-            "high_opportunity",
-            "offer_recommended",
-            "approved",
-            "actioned",
-        ] | None,
-        Query(
-            alias="funnel_stage",
-            description=(
-                "Exact native-analytics Lead Funnel drilldown. When present, "
-                "the repository applies the same gold.borrower_360 predicate "
-                "used by the funnel snapshot so X-Total-Matching equals the "
-                "clicked stage count."
-            ),
-        ),
-    ] = None,
-    limit: Annotated[
-        int,
-        Query(
-            ge=1,
-            le=MAX_LEAD_LIMIT,
-            description=(
-                "Maximum leads to return. Defaults to 500; max 5000. When the "
-                "resultset hits this cap the response sets `X-Truncated-At` "
-                "so the UI can render 'Showing N — refine filters'."
-            ),
-        ),
-    ] = DEFAULT_LEAD_LIMIT,
+    state: StateParam = None,
+    zip_code: ZipParam = None,
+    county: CountyParam = None,
+    states: StatesParam = None,
+    zips: ZipsParam = None,
+    counties: CountiesParam = None,
+    borrower_ids: BorrowerIdsParam = None,
+    target_lender_ref: TargetLenderRefParam = None,
+    geography: GeographyParam = None,
+    occupancy: OccupancyParam = None,
+    lien_status: LienStatusParam = None,
+    lender_relationship: LenderRelationshipParam = None,
+    product: ProductParam = None,
+    loan_product: LoanProductParam = None,
+    origination_channel: OriginationChannelParam = None,
+    min_equity_pct_label: MinEquityPctLabelParam = None,
+    min_equity_pct: MinEquityPctParam = None,
+    owner_link: OwnerLinkParam = None,
+    purchase_intent: PurchaseIntentParam = None,
+    marketing_eligibility: MarketingEligibilityParam = "Eligible only",
+    consent_status: ConsentStatusParam = None,
+    recency: RecencyParam = None,
+    include_suppressed_for_analytics: IncludeSuppressedForAnalyticsParam = False,
+    include_identity_proof: IncludeIdentityProofParam = False,
+    approval_status: ApprovalStatusParam = "any",
+    outreach_status: OutreachStatusParam = "any",
+    assigned_to: AssignedToParam = None,
+    aged_days: AgedDaysParam = None,
+    cohort_id: CohortIdParam = None,
+    funnel_stage: FunnelStageParam = None,
+    limit: LimitParam = DEFAULT_LEAD_LIMIT,
 ) -> list[LeadSummary]:
     # 2026-05-04 FIX β: plumb optional state/zip filters through to the
     # repo. The repo's geo-filtered path bypasses lead_population (which
@@ -497,9 +268,9 @@ def list_leads(
     cohort_has_replay_filter = False
     cohort_stated_count: int | None = None
     cohort_unreplayable: list[str] = []
-    # Reviewed numeric floors carried by a governed Genie cohort. These are
-    # what make the queue answer the SAME question the user just read: without
-    # them a score-narrowed answer of 32 replayed as 1,766 (live 2026-08-11).
+    # Reviewed numeric floors carried by a governed Genie cohort. Without them
+    # a score-narrowed answer of 32 replayed as 1,766 (live 2026-08-11).
+    cohort_narrowing_floors: tuple[bool, ...] = ()
     cohort_min_opportunity_score: int | None = None
     cohort_min_rate_spread_bps: int | None = None
     cohort_min_equity_pct: int | None = None
@@ -509,11 +280,17 @@ def list_leads(
         # Cohort id is the governed source of truth. Query params are
         # useful for shareable URLs and visual chips, but they must not
         # widen a confirmed Genie cohort if the URL is edited by hand.
-        cohort_filters, cohort_stated_count = _load_cohort_filters(cohort_id, actor=actor)
+        replay = resolve_cohort_replay(cohort_id, actor=actor)
+        cohort_filters = replay.filters
+        cohort_stated_count = replay.stated_count
+        cohort_unreplayable = replay.header_unreplayable_filters
+        cohort_narrowing_floors = replay.narrowing_floors
+        cohort_min_opportunity_score = replay.min_opportunity_score
+        cohort_min_rate_spread_bps = replay.min_rate_spread_bps
+        cohort_min_equity_pct = replay.min_equity_pct
         segment = None
         state = None
         zip_code = None
-        county = None
         portfolio_id = None
         geography = None
         occupancy = None
@@ -531,32 +308,14 @@ def list_leads(
         outreach_status = "any"
         assigned_to = None
         aged_days = None
-        target_lender_ref = None
-        parsed_segments = None
-        segment_mode = _cohort_segment_mode(cohort_filters)
-        parsed_states = _cohort_list(cohort_filters, "states", width=2)
-        parsed_zips = _cohort_list(cohort_filters, "zips", width=5, numeric=True)
-        parsed_counties = _cohort_list(cohort_filters, "counties", width=5, numeric=True)
-        parsed_borrower_ids = _cohort_list(cohort_filters, "borrower_ids", borrower_ids=True)
-        cohort_county = str(cohort_filters.get("county") or "").strip()
-        if cohort_county:
-            if not cohort_county.isdigit() or len(cohort_county) != 5:
-                raise HTTPException(status_code=422, detail="cohort county filter is invalid")
-            county = cohort_county
-        cohort_segments = _cohort_list(cohort_filters, "segment_codes")
-        if cohort_segments is not None:
-            parsed_segments = _parse_segment_codes(",".join(cohort_segments))
-        cohort_min_opportunity_score = _cohort_numeric_floor(
-            cohort_filters, "min_opportunity_score"
-        )
-        cohort_min_rate_spread_bps = _cohort_numeric_floor(cohort_filters, "min_rate_spread_bps")
-        cohort_min_equity_pct = _cohort_numeric_floor(cohort_filters, "min_equity_pct")
-        unreplayable_raw = cohort_filters.get("unreplayable_filters")
-        if isinstance(unreplayable_raw, list):
-            cohort_unreplayable = [str(key) for key in unreplayable_raw if str(key).strip()]
-        cohort_target = str(cohort_filters.get("target_lender_ref") or "").strip()
-        if cohort_target:
-            target_lender_ref = cohort_target
+        county = replay.county_fips
+        target_lender_ref = replay.target_lender_ref
+        segment_mode = replay.segment_mode
+        parsed_segments = replay.segment_codes
+        parsed_states = replay.state_codes
+        parsed_zips = replay.zip_codes
+        parsed_counties = replay.county_fipses
+        parsed_borrower_ids = replay.borrower_ids
     try:
         target_lender_ref = normalize_public_lender_ref(target_lender_ref, allow_all=True)
     except ValueError as exc:
@@ -568,56 +327,24 @@ def list_leads(
         target_lender_ref = None
 
     if cohort_id:
-        portfolio_raw = cohort_filters.get("portfolio_criteria")
-        cohort_has_replay_filter = any(
-            (
-                parsed_states,
-                parsed_zips,
-                parsed_counties,
-                parsed_borrower_ids,
-                county,
-                parsed_segments,
-                target_lender_ref,
-                # A floor counts toward "this cohort is narrowed" only when it
-                # actually COMPILES TO A PREDICATE. `min_equity_pct: 0` is
-                # dropped by build_preview_predicates (`equity_floor > 0`), and
-                # a 0 score floor excludes nobody (live minimum is 10) — so
-                # treating either as a replay filter let a cohort whose ONLY
-                # filter was a zero floor pass this gate and return the entire
-                # eligible book, 216,403 rows, under a cohort the user believes
-                # is narrowed. Fail-closed became fail-open (adversarial review
-                # 2026-08-11). Rate spread keeps `is not None`: it is negative
-                # on 2,561,392 of 5,156,184 rows, so `>= 0` genuinely narrows.
-                bool(cohort_min_opportunity_score),
-                cohort_min_rate_spread_bps is not None,
-                bool(cohort_min_equity_pct),
-            )
-        )
-        if isinstance(portfolio_raw, dict):
-            try:
-                original_criteria = PortfolioCriteria(**portfolio_raw)
-            except ValueError as exc:
-                raise HTTPException(
-                    status_code=422,
-                    detail="cohort portfolio criteria are invalid",
-                ) from exc
-            if not original_criteria.has_effective_predicate(count_default_marketing=False):
-                raise HTTPException(
-                    status_code=422,
-                    detail="cohort portfolio criteria are invalid",
+        portfolio_criteria, cohort_has_replay_filter = cohort_portfolio_criteria(
+            cohort_filters,
+            has_replay_filter=any(
+                (
+                    parsed_states,
+                    parsed_zips,
+                    parsed_counties,
+                    parsed_borrower_ids,
+                    county,
+                    parsed_segments,
+                    target_lender_ref,
+                    # Only floors that compile to a predicate count -- see
+                    # CohortReplay.narrowing_floors for why a zero score or
+                    # equity floor must not open the whole book.
+                    *cohort_narrowing_floors,
                 )
-            cohort_has_replay_filter = True
-            safe_portfolio_raw = dict(portfolio_raw)
-            safe_portfolio_raw["marketing_eligibility"] = "Eligible only"
-            safe_portfolio_raw.pop("consent_status", None)
-            portfolio_criteria = PortfolioCriteria(**safe_portfolio_raw)
-        elif portfolio_raw is not None:
-            raise HTTPException(
-                status_code=422,
-                detail="cohort portfolio criteria are invalid",
-            )
-        else:
-            portfolio_criteria = PortfolioCriteria(marketing_eligibility="Eligible only")
+            ),
+        )
     else:
         try:
             portfolio_criteria = _portfolio_criteria_from_query(
@@ -765,25 +492,12 @@ def list_leads(
         if cohort_stated_count != total_matching:
             response.headers["X-Cohort-Count-Delta"] = str(total_matching - cohort_stated_count)
         if cohort_unreplayable:
-            # Re-fold on READ. These names were model-authored and rows written
-            # by earlier builds stored them unfolded, so a stored `ltv<=80`
-            # raised UnicodeEncodeError out of this route — an unhandled 500
-            # that made the cohort permanently unopenable — and CRLF made h11
-            # reject the response outright (adversarial review 2026-08-11).
-            # Header values are latin-1; anything outside the audit vocabulary's
-            # identifier shape is dropped rather than echoed.
-            safe = [
-                key
-                for key in (
-                    "".join(
-                        char for char in str(raw).lower() if char.isalnum() or char == "_"
-                    )[:40]
-                    for raw in cohort_unreplayable
-                )
-                if key
-            ]
-            if safe:
-                response.headers["X-Cohort-Unreplayable-Filters"] = ",".join(safe[:12])
+            # Already re-folded and capped by CohortReplay: these names are
+            # model-authored and rows written by earlier builds stored them
+            # raw, so a stored `ltv<=80` raised UnicodeEncodeError out of this
+            # route (an unhandled 500 that made the cohort permanently
+            # unopenable) and CRLF made h11 reject the response outright.
+            response.headers["X-Cohort-Unreplayable-Filters"] = ",".join(cohort_unreplayable)
     if identity is not None and "ranked_total" in identity:
         # Geo-filtered reads report the geography population as the total
         # (map-tile promise); this header carries the ranked subset

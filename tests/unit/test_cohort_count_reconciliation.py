@@ -16,6 +16,13 @@ the drop was half the fix; these tests pin the other half: the three reviewed
 floors are now REPLAYED, and only genuinely unreviewed predicates are
 disclosed. The closed vocabulary is unchanged — an unknown key is still
 rejected or named, never passed through.
+
+Two assertions from the disclosure-only build are deliberately inverted here
+rather than dropped: a numeric threshold is no longer "named as unreplayable"
+(``test_numeric_thresholds_are_replayed_not_dropped``) and a score floor is no
+longer the example of a filter that cannot stand alone
+(``test_floor_only_cohort_is_replayable_and_not_a_whole_book_replay``). The
+key that still cannot stand alone is an unreviewed one.
 """
 
 from __future__ import annotations
@@ -28,7 +35,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-import backend.services.lead_cohort_source as cohort_source
+import backend.services.lead_cohort_replay as cohort_replay
 from backend.main import app
 from backend.services.genie_actions import (
     _MAX_UNREPLAYABLE_FILTER_KEYS,
@@ -287,7 +294,7 @@ def _get_leads(monkeypatch: pytest.MonkeyPatch, lakebase: _CohortLakebase, cohor
     repo = _CountingLeadRepo()
     prior = app.dependency_overrides.get(get_lead_repository)
     app.dependency_overrides[get_lead_repository] = lambda: repo
-    monkeypatch.setattr(cohort_source, "get_lakebase_client", lambda: lakebase)
+    monkeypatch.setattr(cohort_replay, "get_lakebase_client", lambda: lakebase)
     try:
         response = TestClient(app).get(
             f"/api/leads?cohort_id={cohort_id}",
@@ -586,7 +593,7 @@ def test_a_real_predicate_still_wins_past_a_case_expression() -> None:
 
 @pytest.mark.parametrize("zero_floor", ["min_equity_pct", "min_opportunity_score"])
 def test_a_zero_floor_alone_is_not_a_replayable_cohort(zero_floor: str) -> None:
-    """The action must 400 rather than open the whole book."""
+    """The writer records the floor but must not count it as narrowing."""
 
     from backend.services.genie_actions import _cohort_route_filters
 
@@ -597,6 +604,30 @@ def test_a_zero_floor_alone_is_not_a_replayable_cohort(zero_floor: str) -> None:
     # ...but it must not be the thing that makes the cohort replayable.
     narrowing = bool(stored.get("min_opportunity_score")) or bool(stored.get("min_equity_pct"))
     assert not narrowing
+
+
+@pytest.mark.parametrize("zero_floor", ["min_equity_pct", "min_opportunity_score"])
+def test_a_zero_floor_only_cohort_is_refused_by_the_route(
+    monkeypatch: pytest.MonkeyPatch,
+    zero_floor: str,
+) -> None:
+    """The gate itself: 422 rather than open the entire eligible book.
+
+    This is the assertion that would have caught the fail-open. A cohort whose
+    only filter is a zero floor has no predicate at all, so /leads must refuse
+    it -- and must never reach the repository, which would have counted the
+    whole book (216,403 live).
+    """
+
+    response, repo = _get_leads(
+        monkeypatch,
+        _CohortLakebase({zero_floor: 0, "source": "genie"}, 3),
+        "aaaaaaaa-0000-0000-0000-00000000000a",
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "cohort has no replayable lead filters"
+    assert repo.calls == []
 
 
 def test_a_zero_rate_spread_floor_still_narrows() -> None:
@@ -612,18 +643,131 @@ def test_a_zero_rate_spread_floor_still_narrows() -> None:
     assert stored["min_rate_spread_bps"] is not None
 
 
+def test_a_zero_rate_spread_floor_alone_opens_the_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Contrast the zero score/equity floors: `spread >= 0` excludes somebody."""
+
+    response, repo = _get_leads(
+        monkeypatch,
+        _CohortLakebase({"min_rate_spread_bps": 0, "source": "genie"}, 3),
+        "aaaaaaaa-0000-0000-0000-00000000000b",
+    )
+
+    assert response.status_code == 200
+    assert repo.calls[-1]["min_rate_spread_bps"] == 0
+
+
+# --- Stored disclosure names are model-authored text, not identifiers -------
+#
+# Rows written by earlier builds stored them unfolded. A stored `ltv≤80` raised
+# UnicodeEncodeError OUT of the route (header values are latin-1) -- an
+# unhandled 500 that made the cohort permanently unopenable -- and an embedded
+# CRLF made h11 reject the whole response.
+
+
 @pytest.mark.parametrize(
-    "stored_key",
+    "stored_key,expected",
     [
-        "ltv≤80",            # non-latin-1 -> UnicodeEncodeError out of the route
-        "ltv\r\nX-Injected: pwned",  # CRLF -> h11 rejects the whole response
-        "a" * 5000,                  # unbounded length
+        ("ltv≤80", "ltv_80"),  # non-latin-1 -> UnicodeEncodeError out of the route
+        ("ltv\r\nX-Injected: pwned", "ltv_x_injected_pwned"),  # CRLF -> h11 rejects
+        ("LTV <= 80", "ltv_80"),  # spaces/operators are not identifier chars
+        ("a" * 5000, "a" * 40),  # unbounded length
     ],
 )
-def test_stored_disclosure_names_are_refolded_before_reaching_a_header(stored_key: str) -> None:
-    """Rows written by earlier builds stored these names unfolded."""
+def test_stored_disclosure_names_are_refolded_before_reaching_a_header(
+    monkeypatch: pytest.MonkeyPatch,
+    stored_key: str,
+    expected: str,
+) -> None:
+    response, _repo = _get_leads(
+        monkeypatch,
+        _CohortLakebase(
+            {
+                "states": ["IL"],
+                "unreplayable_filters": [stored_key],
+                "source": "genie",
+            },
+            3,
+        ),
+        "bbbbbbbb-0000-0000-0000-00000000000b",
+    )
 
-    safe = "".join(c for c in stored_key.lower() if c.isalnum() or c == "_")[:40]
-    assert len(safe) <= 40
-    safe.encode("latin-1")  # must not raise
-    assert "\r" not in safe and "\n" not in safe
+    assert response.status_code == 200
+    header = response.headers["X-Cohort-Unreplayable-Filters"]
+    assert header == expected
+    header.encode("latin-1")  # the 500 this closes
+    assert "\r" not in header and "\n" not in header
+    assert all(len(key) <= 40 for key in header.split(","))
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "LTV <= 80",
+        "ltv≤80",
+        "ltv\r\nX-Injected: pwned",
+        "min_credit_score",
+        "  Debt-To-Income  ",
+        "propensity>0.7",
+        "a" * 5000,
+        "<= >=",
+    ],
+)
+def test_read_side_fold_agrees_with_the_writers(raw: str) -> None:
+    """The two folds are duplicated on purpose; they must not drift.
+
+    ``lead_cohort_replay`` re-folds on read without importing the governed
+    action writer. If the two ever disagree, a name written by one build would
+    be silently renamed by the next -- so pin the agreement instead of the
+    implementation.
+    """
+
+    from backend.services.genie_actions import _disclosed_filter_key
+
+    written = _disclosed_filter_key(raw)
+    assert cohort_replay.fold_disclosed_filter_key(raw) == written[:40]
+    # ...and re-folding the writer's own output is a no-op, so a freshly
+    # written name reaches the header exactly as stored.
+    assert cohort_replay.fold_disclosed_filter_key(written) == written[:40]
+
+
+def test_unfoldable_disclosure_names_are_dropped_not_echoed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A name with no identifier characters left folds to empty -- omit it."""
+
+    response, _repo = _get_leads(
+        monkeypatch,
+        _CohortLakebase(
+            {"states": ["IL"], "unreplayable_filters": ["<= >=", "≤"], "source": "genie"},
+            3,
+        ),
+        "bbbbbbbb-0000-0000-0000-00000000000c",
+    )
+
+    assert response.status_code == 200
+    assert "X-Cohort-Unreplayable-Filters" not in response.headers
+
+
+def test_stored_disclosure_list_is_capped_on_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Older rows predate the writer's cap, so the read applies its own."""
+
+    response, _repo = _get_leads(
+        monkeypatch,
+        _CohortLakebase(
+            {
+                "states": ["IL"],
+                "unreplayable_filters": [f"unknown_{i}" for i in range(40)],
+                "source": "genie",
+            },
+            3,
+        ),
+        "bbbbbbbb-0000-0000-0000-00000000000d",
+    )
+
+    assert response.status_code == 200
+    header = response.headers["X-Cohort-Unreplayable-Filters"]
+    assert len(header.split(",")) == _MAX_UNREPLAYABLE_FILTER_KEYS

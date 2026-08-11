@@ -18,3 +18,5 @@
 - [result_filters vocabulary chain](project_result_filters_vocabulary_chain.md) — one cohort filter key = five closed vocabularies; miss one and the action 500s or the campaign is unapprovable
 - [Genie cohort count parity](project_genie_cohort_count_parity.md) — extraction is position-gated; a missing floor is often a deliberate refusal, never re-widen to a whole-statement regex
 - [Pinned score-threshold literal guard](project_pinned_threshold_literal_guard.md) — a dumb repo-wide grep bans the literal in production source, docstrings and comments included
+- [Cohort criteria never from prose](project_cohort_criteria_never_from_prose.md) — question-wording reader deleted 2026-08-11; measured 10x truncations and one zero-overlap inversion
+- [Dead \b after a quoted literal](project_dead_word_boundary_after_quote.md) — `'cash_out'\b` never matches; it silently killed the SQL product reader and made a bad heuristic look load-bearing
