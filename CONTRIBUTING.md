@@ -82,6 +82,14 @@ Key PR gates:
   single canonical source, and backend modules carry docstrings.
 - Frontend lint/test/build/budget: TypeScript, React/Vitest coverage, Vite
   production build, and bundle-size budgets.
+- `make lint-shell` (`shellcheck --severity=warning` over every tracked
+  `*.sh`): shell correctness for `scripts/deploy.sh`, its `scripts/lib/*`
+  libs, and the kill-drill harness. Warning level is deliberate — SC2154
+  catches a function moved into a sourced lib that still reads a
+  caller-scoped variable, which is the way a shell split breaks silently.
+  Suppress a genuine false positive with an inline
+  `# shellcheck disable=SCxxxx  # reason.` at the site, never a blanket
+  exclude.
 - Security job: gitleaks, bandit, pip-audit, and npm audit.
 
 Nightly gates include SQL/Python parity, Lakebase round-trip, Genie live and

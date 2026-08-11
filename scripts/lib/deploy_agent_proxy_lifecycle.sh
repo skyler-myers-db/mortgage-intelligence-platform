@@ -168,6 +168,7 @@ compensate_agent_proxy_access() {
         "$MIP_AGENT_SUPERVISOR_ENDPOINT" \
         "$MIP_AGENT_SUPERVISOR_ENDPOINT_ID" \
         "${captured_preserve_args[@]:0:6}" || return 1
+      # shellcheck disable=SC2034  # Set here, read by scripts/deploy.sh after this lib is sourced.
       CAPTURED_PROXY_BOUNDARY_PROVEN=1
       ;;
     green_verified)

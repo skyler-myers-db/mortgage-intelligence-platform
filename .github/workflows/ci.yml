@@ -1,6 +1,6 @@
 name: ci
 
-# Slice 9 CI -- PR + push workflow. Six jobs run in parallel; in-progress
+# Slice 9 CI -- PR + push workflow. Every job below runs in parallel; in-progress
 # runs on the same ref are cancelled by `concurrency` so rapid pushes only
 # burn one runner per branch. Everything here is credential-free; the
 # nightly workflow (nightly.yml) handles live-UC checks with secrets.
@@ -25,6 +25,10 @@ env:
   # frontend/package.json requires Node >=22.22; follow the current Node 22
   # LTS line so CI receives patch updates while satisfying that floor.
   NODE_VERSION: '22'
+  # Pinned exactly, like every other tool version here: the runner image's
+  # preinstalled shellcheck drifts, and a new release adding one check would
+  # redden CI on a commit that changed no shell at all.
+  SHELLCHECK_VERSION: 'v0.11.0'
   # Placeholder BUNDLE_VARs so `databricks bundle validate` can resolve
   # variable references without any real workspace secrets. The nightly
   # workflow swaps these for real values.
@@ -171,6 +175,32 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Enforce monolith allowlist
         run: python tools/check_file_sizes.py --warn 500 --fail 900
+
+  shell-lint:
+    name: shell (shellcheck)
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install pinned shellcheck
+        run: |
+          set -euo pipefail
+          url="https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          curl -fsSL --retry 3 "$url" | tar -xJ -C /tmp
+          sudo install -m 0755 "/tmp/shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
+          shellcheck --version
+      - name: Lint tracked shell scripts
+        # --severity=warning is the enforced floor. The 85 remaining info-level
+        # findings are almost all SC2030/SC2031 subshell-scope noise, which the
+        # deploy script's M2M subshells trip by design; deploy.sh already
+        # carries targeted `# shellcheck disable=SC2031` directives with
+        # reasons where it matters.
+        #
+        # Warning level is the point of this gate: SC2154 (referenced but not
+        # assigned) is what catches a function moved into scripts/lib/ that
+        # still reads a caller-scoped variable -- the failure mode a shell
+        # split introduces silently and no test here would otherwise see.
+        run: make lint-shell
 
   release-hygiene:
     name: release source hygiene

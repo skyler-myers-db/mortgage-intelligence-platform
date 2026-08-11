@@ -338,7 +338,9 @@ MIP_APP_ROLLBACK_PROXY_CREDENTIAL_IDS=""
 MIP_APP_ROLLBACK_RECORD_VERSION=""
 MIP_APP_ROLLBACK_PROXY_MODE=""
 MIP_APP_ROLLBACK_DEPLOYMENT_ID=""
+# shellcheck disable=SC2034  # MIP_APP_ROLLBACK_* contract surface; emitted by app_deployment_rollback_cli.py, not read in bash.
 MIP_APP_ROLLBACK_GATEWAY_ENDPOINT_ID=""
+# shellcheck disable=SC2034  # MIP_APP_ROLLBACK_* contract surface; emitted by app_deployment_rollback_cli.py, not read in bash.
 MIP_APP_ROLLBACK_GATEWAY_CREATOR=""
 MIP_APP_ROLLBACK_GATEWAY_PIN_JSON=""
 MIP_APP_ROLLBACK_GATEWAY_INFERENCE_TABLE_PREFIX=""
@@ -2355,6 +2357,7 @@ if [[ -z "$_GATEWAY_MODEL_PREVIOUS_KEY_RESOLVED" ]]; then
   )"
 fi
 if [[ -n "$_GATEWAY_MODEL_PREVIOUS_KEY_RESOLVED" ]]; then
+  # shellcheck disable=SC2155  # Splitting would expose printf's status to set -e on a secret export.
   export MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY="$(
     printf '%s' "$_GATEWAY_MODEL_PREVIOUS_KEY_RESOLVED"
   )"

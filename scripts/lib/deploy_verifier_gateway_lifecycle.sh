@@ -96,6 +96,7 @@ compensate_verifier_gateway_access() {
         "$MIP_APP_ROLLBACK_GATEWAY_INFERENCE_TABLE_PREFIX" \
         "${captured_proof_args[@]}" || failed=1
       if [[ "$failed" -eq 0 ]]; then
+        # shellcheck disable=SC2034  # Set here, read by scripts/deploy.sh after this lib is sourced.
         CAPTURED_VERIFIER_BOUNDARY_PROVEN=1
       fi
     fi
