@@ -338,3 +338,95 @@ describe('USChoroplethMap state -> ZIP drill', () => {
     expect(document.body.textContent).toContain('Open Lead Queue for Illinois');
   });
 });
+
+describe('USChoroplethMap ZIP drill reconciles against the state total', () => {
+  let root: Root;
+
+  beforeEach(() => {
+    document.body.innerHTML = '<div id="root"></div>';
+    root = createRoot(document.getElementById('root') as HTMLElement);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    vi.clearAllMocks();
+  });
+
+  /** 30 ZIPs against a 24-tile cap, plus borrowers carrying no ZIP.
+   *
+   * Live audit 2026-08-10 measured this silently: Illinois' state tile read
+   * 1,851,040 while the 24 rendered tiles summed to 553,925 — 70% of the
+   * state invisible with no indication, which reads as a broken widget.
+   */
+  function manyZips(count: number): ZipRollupResponse {
+    return {
+      state: 'IL',
+      fips_5: null,
+      snapshot_date: '2026-08-10',
+      rollups: Array.from({ length: count }, (_, index) => ({
+        zip: String(60000 + index),
+        state: 'IL',
+        county_fips_5: null,
+        addressable_borrowers: 100 - index,
+        avg_opportunity_score: 50,
+        top_segment_code: 'itm',
+        sample_borrower_id: `B-000000000${index}`,
+      })),
+    };
+  }
+
+  it('states how many ZIPs are shown, how many exist, and what is in view', async () => {
+    apiMocks.stateRollups.mockResolvedValue(stateRollupPayload(0));
+    apiMocks.zipRollups.mockResolvedValue(manyZips(30));
+    act(() =>
+      root.render(
+        <MemoryRouter>
+          <USChoroplethMap />
+        </MemoryRouter>,
+      ),
+    );
+    await settle();
+    await drillIntoIllinois();
+
+    const note = document.querySelector('.zip-tiles__reconcile');
+    expect(note).toBeTruthy();
+    expect(note?.textContent).toContain('24');
+    expect(note?.textContent).toContain('30');
+    // Only the capped tiles may be counted as "in view".
+    expect(document.querySelectorAll('.zip-tile').length).toBe(24);
+  });
+
+  it('discloses borrowers that carry no ZIP and so appear in no tile', async () => {
+    apiMocks.stateRollups.mockResolvedValue(stateRollupPayload(4321));
+    apiMocks.zipRollups.mockResolvedValue(manyZips(3));
+    act(() =>
+      root.render(
+        <MemoryRouter>
+          <USChoroplethMap />
+        </MemoryRouter>,
+      ),
+    );
+    await settle();
+    await drillIntoIllinois();
+
+    const note = document.querySelector('.zip-tiles__reconcile');
+    expect(note?.textContent).toContain('4,321');
+    expect(note?.textContent).toContain('no ZIP');
+  });
+
+  it('stays silent when every ZIP fits and none are unassigned', async () => {
+    apiMocks.stateRollups.mockResolvedValue(stateRollupPayload(0));
+    apiMocks.zipRollups.mockResolvedValue(manyZips(3));
+    act(() =>
+      root.render(
+        <MemoryRouter>
+          <USChoroplethMap />
+        </MemoryRouter>,
+      ),
+    );
+    await settle();
+    await drillIntoIllinois();
+
+    expect(document.querySelector('.zip-tiles__reconcile')).toBeNull();
+  });
+});

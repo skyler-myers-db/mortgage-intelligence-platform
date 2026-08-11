@@ -29,6 +29,10 @@ import { safeSegmentName } from '../../lib/segmentMetadata';
 // mip.gold.zip_rollup). There are no local fixture literals -- any state /
 // ZIP not returned in the payload renders "—" on hover (honest null).
 // The fill-level bucket is derived from addressable_borrowers below.
+/** Densest-N ZIP tiles rendered per state. The grid stays readable, but
+ *  the remainder MUST be disclosed — see the reconcile note in
+ *  `renderZipLevel`. */
+const ZIP_TILE_CAP = 24;
 
 /**
  * USChoroplethMap — real interactive US state map with click-to-drill.
@@ -709,8 +713,26 @@ export function USChoroplethMap({
     const sorted = [...zipsFromApi].sort(
       (a, b) => (b.addressable_borrowers ?? 0) - (a.addressable_borrowers ?? 0),
     );
-    const visible = sorted.slice(0, 24);
+    const visible = sorted.slice(0, ZIP_TILE_CAP);
+    // Reconcile what the tiles show against what the STATE tile claimed.
+    // Two independent ways the drill under-counts, both previously silent:
+    //   1. the tile cap hides the tail (IL: 24 of 212 ZIPs = 29.9% of the
+    //      state's borrowers, 1,297,115 invisible — live audit 2026-08-10);
+    //   2. borrowers with no ZIP never appear in zip_rollup at all
+    //      (79,496 across the footprint; CO 8.7%, WA 5.8%).
+    // A drill-down that silently shows a third of the population reads as a
+    // broken widget, so state it.
+    const visibleSum = visible.reduce(
+      (total, rollup) => total + (rollup.addressable_borrowers ?? 0),
+      0,
+    );
+    // liveStateFacts is keyed by LOWERCASE state code (see the rollup fetch).
+    const stateFacts = liveStateFacts?.[stateUC.toLowerCase()];
+    const stateTotal = stateFacts?.addressable ?? null;
+    const unassigned = stateFacts?.zip_unassigned_count ?? null;
+    const hiddenZipCount = sorted.length - visible.length;
     return (
+      <>
       <div className="zip-tiles" role="list" aria-label={`ZIPs in ${drillStateName}`}>
         {visible.map((rollup, tileIndex) => {
           const count = rollup.addressable_borrowers ?? null;
@@ -785,6 +807,33 @@ export function USChoroplethMap({
           );
         })}
       </div>
+      {(hiddenZipCount > 0 || (unassigned ?? 0) > 0) && (
+        <div className="zip-tiles__reconcile text-2" role="note">
+          {hiddenZipCount > 0 && (
+            <span>
+              Showing the {visible.length} densest of {sorted.length.toLocaleString()} ZIPs
+              {' — '}
+              {visibleSum.toLocaleString()}
+              {stateTotal !== null ? ` of ${stateTotal.toLocaleString()}` : ''} borrowers in view.
+            </span>
+          )}
+          {(unassigned ?? 0) > 0 && (
+            <span>
+              {' '}
+              {(unassigned ?? 0).toLocaleString()} borrowers in {drillStateName} carry no ZIP and
+              appear in no tile.
+            </span>
+          )}
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm"
+            onClick={() => navigate(leadQueuePath({ state: stateUC }))}
+          >
+            Open all {stateTotal !== null ? stateTotal.toLocaleString() : ''} in Lead Queue
+          </button>
+        </div>
+      )}
+      </>
     );
   };
 
