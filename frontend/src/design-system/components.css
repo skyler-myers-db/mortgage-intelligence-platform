@@ -3862,6 +3862,18 @@ a.lineage-node__chip:focus-visible {
   padding: var(--sp-2) var(--sp-3);
   font-size: 11px; color: var(--text-3);
 }
+/* The ZIP drill ends with `.zip-tiles__reconcile`, a full-width flow row that
+   states how much of the state is NOT in view. An absolutely-anchored legend
+   lands on top of its first ~190px, so it read "…7 ZIPs — 14,954 of 31,114
+   borrowers in view" with the "Showing the 24 densest of 8" clipped off
+   (measured live 2026-08-11). Since a reconciliation the user cannot read is
+   the bug it exists to prevent, the legend joins the flow below it here. The
+   state map has no such row and keeps the overlay. */
+.map-wrap:has(.zip-tiles) .map-legend {
+  position: static;
+  width: max-content;
+  margin: 0 var(--sp-3) var(--sp-3);
+}
 .map-legend__bar { display: flex; height: 8px; margin: 4px 0; border-radius: 2px; overflow: hidden; width: 140px; }
 .map-legend__bar span { flex: 1; }
 .map-legend__header {
