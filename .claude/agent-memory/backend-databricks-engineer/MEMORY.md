@@ -13,3 +13,8 @@
 - [Shared worktree: never git add -A](feedback_shared_worktree_git_add.md) — other agents edit and commit the same branch concurrently; stage explicit paths, never rewrite history
 - [Fake Lakebase SQL substring dispatch](project_fake_lakebase_sql_dispatch.md) — a reused CTE name silently hits the wrong conftest handler; grep markers before adding SQL
 - [County key removed, geo drill dead](project_county_key_removed_drill_dead.md) — county_fips_5 is NULL everywhere since audit C2; every county-keyed geo read returns empty
+- [Addressable vs contactable ~23x gap](project_addressable_vs_contactable_gap.md) — only 4.2% of borrower_360 is eligible; every new count surface has this gap by default
+- [Contactability never in gold SQL](feedback_contactability_never_in_gold_sql.md) — compute it in Python-generated repo SQL via eligible_sql_predicate(); a CTAS column forks the semantics
+- [result_filters vocabulary chain](project_result_filters_vocabulary_chain.md) — one cohort filter key = five closed vocabularies; miss one and the action 500s or the campaign is unapprovable
+- [Genie cohort count parity](project_genie_cohort_count_parity.md) — extraction is position-gated; a missing floor is often a deliberate refusal, never re-widen to a whole-statement regex
+- [Pinned score-threshold literal guard](project_pinned_threshold_literal_guard.md) — a dumb repo-wide grep bans the literal in production source, docstrings and comments included

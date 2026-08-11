@@ -41,7 +41,11 @@ from backend.services.genie_deterministic import (
 )
 from backend.services.lakebase import LakebaseError, get_lakebase_client
 from backend.services.repositories import get_genie_answer_repository
-from backend.services.repositories.databricks_genie_actions import _route_from_answer_rows
+from backend.services.repositories.databricks_genie_actions import (
+    _numeric_floors_from_sql,
+    _route_from_answer_rows,
+)
+from backend.services.scoring import HIGH_OPPORTUNITY_THRESHOLD
 from backend.services.state_footprint import (
     FootprintState,
     StateFootprintResolver,
@@ -1874,6 +1878,64 @@ def test_heloc_genie_action_routes_to_heloc_intent_segment() -> None:
     assert params["product"] == ["HELOC"]
     assert filters["segment_codes"] == ["permit"]
     assert filters["segment_mode"] == "any"
+
+
+def test_genie_action_carries_the_answers_score_floor_into_the_cohort() -> None:
+    """The threshold the answer measured has to leave the SQL with the cohort.
+
+    Live 2026-08-11: "in-the-money borrowers in IL" answered 1,766 and its
+    cohort replayed 1,766 exactly, but the same question with a score floor
+    answered 32 and still replayed 1,766 (55x) because the floor stayed in the
+    SQL. Lifting it is what makes the two counts reconcile.
+    """
+
+    route, filters = _route_from_answer_rows(
+        question="highest scoring in-the-money borrowers in Illinois",
+        rows=[{"state": "IL"}],
+        borrower_ids=[],
+        sql_query=(
+            "SELECT borrower_id, state FROM mip.gold.borrower_360 "
+            "WHERE array_contains(segment_codes, 'itm') AND state = 'IL' "
+            "AND opportunity_score >= 80"
+        ),
+    )
+
+    params = parse_qs(urlsplit(route).query)
+    assert filters["min_opportunity_score"] == 80
+    assert filters["states"] == ["IL"]
+    assert filters["segment_codes"] == ["itm"]
+    assert params["min_opportunity_score"] == ["80"]
+
+
+def test_genie_action_reads_the_canonical_high_opportunity_function() -> None:
+    # Curated MIP SQL expresses the top tier through the UC function, not a
+    # literal, so the floor has to come from the same constant.
+    floors = _numeric_floors_from_sql(
+        "SELECT * FROM mip.gold.borrower_360 "
+        "WHERE mip.gold.fn_high_opportunity(opportunity_score)"
+    )
+    assert floors == {"min_opportunity_score": HIGH_OPPORTUNITY_THRESHOLD}
+
+
+def test_genie_action_normalizes_strict_inequality_floors() -> None:
+    # Whole-number gold columns: `> n` is exactly `>= n + 1`.
+    assert _numeric_floors_from_sql(
+        "SELECT * FROM mip.gold.borrower_360 WHERE b.rate_spread_bps > 99"
+    ) == {"min_rate_spread_bps": 100}
+
+
+def test_genie_action_skips_ambiguous_and_out_of_range_thresholds() -> None:
+    # A banded scoring expression is not a cohort predicate; guessing one of
+    # its bounds would replay a population the answer never described.
+    assert (
+        _numeric_floors_from_sql(
+            "SELECT CASE WHEN opportunity_score >= 85 THEN 'high' "
+            "WHEN opportunity_score >= 65 THEN 'med' ELSE 'low' END FROM t"
+        )
+        == {}
+    )
+    assert _numeric_floors_from_sql("SELECT * FROM t WHERE opportunity_score >= 900") == {}
+    assert _numeric_floors_from_sql("SELECT * FROM t WHERE state = 'IL'") == {}
 
 
 def test_multi_segment_genie_action_preserves_sql_intersection_mode() -> None:

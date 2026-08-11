@@ -210,6 +210,94 @@ def test_lead_repository_applies_portfolio_criteria_to_borrower_360_path() -> No
     }
 
 
+def test_lead_repository_applies_genie_numeric_floors_to_rows_and_count() -> None:
+    """A replayed threshold must cut the rows AND the total identically.
+
+    Live 2026-08-11: a Genie answer narrowed to ``opportunity_score >= 80``
+    returned 32 borrowers, and the Lead Queue it handed off to replayed 1,766
+    because there was no score predicate anywhere in the queue's SQL.
+    """
+
+    captured: dict[str, object] = {}
+
+    class _Client:
+        def execute(self, sql: str, params: dict[str, object] | None = None) -> list[dict[str, object]]:
+            captured["list_sql"] = sql
+            captured["list_params"] = params or {}
+            return []
+
+        def execute_one(self, sql: str, params: dict[str, object] | None = None) -> dict[str, object]:
+            captured["count_sql"] = sql
+            captured["count_params"] = params or {}
+            return {"n": 32}
+
+    repo = DatabricksLeadRepository(_Client(), cache_ttl_s=0)  # type: ignore[arg-type]
+
+    rows = repo.list(
+        segment=None,
+        portfolio_id=None,
+        state_codes=["IL"],
+        segment_codes=["itm"],
+        min_opportunity_score=80,
+        min_rate_spread_bps=75,
+    )
+    total = repo.count(
+        segment=None,
+        portfolio_id=None,
+        state_codes=["IL"],
+        segment_codes=["itm"],
+        min_opportunity_score=80,
+        min_rate_spread_bps=75,
+    )
+
+    assert rows == []
+    assert total == 32
+    for sql_key, params_key in (("list_sql", "list_params"), ("count_sql", "count_params")):
+        sql = str(captured[sql_key])
+        params = captured[params_key]
+        assert "borrower_360" in sql
+        assert "b.opportunity_score >= :replay_min_opportunity_score" in sql
+        assert "b.rate_spread_bps >= :replay_min_rate_spread_bps" in sql
+        assert params["replay_min_opportunity_score"] == 80  # type: ignore[index]
+        assert params["replay_min_rate_spread_bps"] == 75  # type: ignore[index]
+
+
+def test_lead_repository_floors_take_the_borrower_360_path_without_other_filters() -> None:
+    captured: dict[str, object] = {}
+
+    class _Client:
+        def execute(self, sql: str, params: dict[str, object] | None = None) -> list[dict[str, object]]:
+            captured["sql"] = sql
+            captured["params"] = params or {}
+            return []
+
+    repo = DatabricksLeadRepository(_Client(), cache_ttl_s=0)  # type: ignore[arg-type]
+    repo.list(segment=None, portfolio_id=None, min_opportunity_score=80)
+
+    sql = str(captured["sql"])
+    # lead_population bakes in its own score floor; the replayed threshold has
+    # to read the same table the answer measured.
+    assert "borrower_360" in sql
+    assert "lead_population" not in sql
+    assert captured["params"] == {"replay_min_opportunity_score": 80}
+
+
+def test_lead_repository_caches_each_numeric_floor_separately() -> None:
+    calls: list[dict[str, object]] = []
+
+    class _Client:
+        def execute_one(self, sql: str, params: dict[str, object] | None = None) -> dict[str, object]:
+            calls.append(params or {})
+            return {"n": len(calls)}
+
+    repo = DatabricksLeadRepository(_Client(), cache_ttl_s=60)  # type: ignore[arg-type]
+
+    assert repo.count(segment=None, portfolio_id=None, state_codes=["IL"], min_opportunity_score=80) == 1
+    assert repo.count(segment=None, portfolio_id=None, state_codes=["IL"], min_opportunity_score=80) == 1
+    # A different floor is a different question — it must not read the cache.
+    assert repo.count(segment=None, portfolio_id=None, state_codes=["IL"], min_opportunity_score=50) == 2
+
+
 def test_lead_repository_applies_exact_funnel_stage_predicates_to_borrower_360() -> None:
     captured: dict[str, object] = {}
 

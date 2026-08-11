@@ -431,6 +431,48 @@ def test_state_rollups_disclose_zip_drill_coverage() -> None:
         assert row["zip_unassigned_count"] <= row["addressable"]
 
 
+def test_state_rollups_disclose_the_contactable_subset() -> None:
+    """Every state tile states BOTH numbers.
+
+    The tile's headline is the addressable population; the Lead Queue it
+    links to applies the contact-eligibility predicate and shows a strict
+    subset (live 2026-08-11: IL 76,711 of 1,851,040, a 24x gap). Reporting
+    only the headline sends the reader to a much smaller queue with no
+    explanation, so the wire carries both and the relationship must hold.
+    """
+    response = client.get("/api/geo/state-rollups")
+    assert response.status_code == 200, response.text
+    rows = response.json()["rollups"]
+    assert rows
+    for row in rows:
+        assert "contactable" in row, (
+            "every state row must state the contactable subset alongside "
+            "addressable — one number on the tile and another in the queue "
+            "is what made the map read as a broken link"
+        )
+        if row["contactable"] is None:
+            continue
+        assert row["contactable"] >= 0
+        assert row["contactable"] <= row["addressable"]
+
+
+def test_segment_summaries_disclose_the_contactable_subset() -> None:
+    """Same contract on the segment cards, which have the same 23x gap."""
+    response = client.get("/api/segments")
+    assert response.status_code == 200, response.text
+    segments = response.json()
+    assert segments
+    for segment in segments:
+        assert "contactable" in segment, (
+            "every segment card must state the contactable subset alongside "
+            "its headline count"
+        )
+        if segment["contactable"] is None:
+            continue
+        assert segment["contactable"] >= 0
+        assert segment["contactable"] <= segment["count"]
+
+
 def test_state_rollup_zip_gap_is_derived_from_the_zip_layer_itself() -> None:
     """Pin the derivation, not a number.
 

@@ -297,6 +297,69 @@ describe('SegmentCard', () => {
     expect(container.textContent).toContain('Voluntary Lien');
   });
 
+  // Addressable-vs-contactable disclosure. The headline count is the whole
+  // addressable population; the Lead Queue this card links to applies the
+  // contact-eligibility predicate and shows a strict subset — live
+  // 2026-08-11 that was 3,217 of 74,335 for Prime Refi (23x). The card has
+  // to state the relationship or the click reads as a broken link.
+  it('states the contactable subset alongside the headline count', () => {
+    render(
+      { code: 'itm', count: 74335, contactable: 3217, delta: '+5%', avg_score: 63 },
+      vi.fn(),
+    );
+    const note = container.querySelector('.seg-card__reconcile');
+    expect(note).not.toBeNull();
+    expect(note?.textContent).toContain('3,217');
+    expect(note?.textContent).toContain('74,335');
+    expect(note?.textContent).toContain('contactable');
+    // The relationship is what makes the two numbers legible together —
+    // the smaller one must never be presented as if it stood alone.
+    expect(note?.textContent?.replace(/\s+/g, ' ')).toBe(
+      '3,217 contactable of 74,335 addressable',
+    );
+    // Same disclosure for a screen reader, on the control that navigates.
+    const select = container.querySelector<HTMLButtonElement>('.seg-card__select');
+    expect(select?.getAttribute('aria-label')).toContain('3,217 contactable');
+  });
+
+  it('never reports more contactable than addressable', () => {
+    // The backend clamps a precomputed-vs-live snapshot skew, so the card
+    // should never be handed an inverted pair; assert the rendered numbers
+    // stay in the right order for the payloads it does get.
+    for (const [count, contactable] of [[74335, 3217], [25, 0], [1, 1]]) {
+      render({ code: 'itm', count, contactable });
+      const note = container.querySelector('.seg-card__reconcile');
+      if (!note) {
+        expect(count).toBe(0);
+        continue;
+      }
+      const [shown, total] = (note.textContent ?? '')
+        .match(/[\d,]+/g)!
+        .map((n) => Number(n.replace(/,/g, '')));
+      expect(shown).toBeLessThanOrEqual(total);
+    }
+  });
+
+  it('says nothing when the payload does not report contactable', () => {
+    // An older payload must read "not reported", never a fabricated zero —
+    // "0 contactable of 74,335" is a confident, wrong claim.
+    render({ code: 'itm', count: 74335, delta: '+5%', avg_score: 63 }, vi.fn());
+    expect(container.querySelector('.seg-card__reconcile')).toBeNull();
+    const select = container.querySelector<HTMLButtonElement>('.seg-card__select');
+    expect(select?.getAttribute('aria-label')).not.toContain('contactable');
+  });
+
+  it('suppresses the disclosure on a gated card, like the count itself', () => {
+    render({
+      code: 'listed',
+      count: 5,
+      contactable: 1,
+      source_status: 'not_connected',
+      source_name: 'MLS Listings',
+    });
+    expect(container.querySelector('.seg-card__reconcile')).toBeNull();
+  });
+
   it('opens the evidence drawer from the segment evidence chip', () => {
     render({ code: 'refi_propensity', count: 42, delta: '+5%', avg_score: 71 });
     const chip = container.querySelector<HTMLButtonElement>('.evidence-chip');

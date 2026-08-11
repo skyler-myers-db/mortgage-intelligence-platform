@@ -1,4 +1,17 @@
-"""Databricks-backed segment and geography repositories."""
+"""Databricks-backed segment and geography repositories.
+
+Every headline these repositories serve is an *addressable* count — the
+whole population the Cotality share describes. The Lead Queue behind each
+card and tile applies the contact-eligibility predicate, so it is always a
+strict subset (live 2026-08-11: 216,403 of 5,156,184 borrower_360 rows,
+4.2%). Both numbers are correct; the bug was that neither surface stated
+the relationship, so a reader took one number and landed on the other.
+
+So both rollups now carry ``contactable`` next to the addressable count,
+computed from ``eligibility.eligible_sql_predicate`` — the single module
+that owns contactability semantics. See ``databricks_geo_sql`` for the
+statements and for why this is not a gold column.
+"""
 
 from __future__ import annotations
 
@@ -17,20 +30,42 @@ from backend.schemas.lead import SegmentSummary
 from backend.schemas.portfolio import PortfolioCriteria
 from backend.services.county_names import county_name_for_fips
 from backend.services.databricks_sql import DatabricksSqlClient
-from backend.services.databricks_sql_helpers import qualify
 from backend.services.geography_scope import GeographyScope, load_geography_scope
 from backend.services.observability import emit
+from backend.services.repositories import databricks_geo_sql as geo_sql
 from backend.services.repositories.databricks_portfolio import DatabricksPortfolioRepository
 from backend.services.repositories.databricks_segment_gates import apply_source_gates
-from backend.services.repositories.databricks_shared import _SEGMENT_COLUMNS, _parse_facet_mix
+from backend.services.repositories.databricks_shared import _parse_facet_mix
 from backend.services.resilience import TTLCache
-from backend.services.scoring import HIGH_OPPORTUNITY_THRESHOLD
 from backend.services.segment_predicates import (
     compose_segment_predicate,
     normalise_segment_codes,
 )
 
 log = logging.getLogger("backend.services.repositories.databricks_repo")
+
+
+def _contactable(row: dict[str, object], addressable: int) -> int | None:
+    """Coerce the ``contactable`` aggregate, clamped to ``addressable``.
+
+    ``None`` when the row has no such key: the field is optional on the
+    wire, and a caller reading a pre-change cached frame should see "not
+    reported" rather than a fabricated zero, which would read as "nobody
+    is contactable".
+
+    The clamp is load-bearing on the two unfiltered paths, where a
+    *precomputed* rollup row (``gold.segment_population`` /
+    ``gold.funnel_snapshot_daily``) is joined to a *live* aggregate over
+    ``gold.borrower_360``. A snapshot that lags the base table could make
+    the subset out-count its superset, and the UI states the two as a
+    relationship ("N contactable of M"). Clamping keeps that sentence
+    true; the same reasoning as ``GREATEST(0, ...)`` on ``zip_unassigned``.
+    """
+    raw = row.get("contactable")
+    if raw is None:
+        return None
+    return max(0, min(addressable, int(raw)))  # type: ignore[arg-type]
+
 
 class DatabricksSegmentRepository:
     """Segment rollup serves the national ``state='_ALL'`` row.
@@ -53,76 +88,13 @@ class DatabricksSegmentRepository:
         self._cache = cache if cache is not None else TTLCache()
         self._cache_ttl_s = cache_ttl_s
 
-    _LIST_SQL = (
-        f"SELECT {_SEGMENT_COLUMNS} "
-        f"FROM {qualify('gold', 'segment_population')} "
-        "WHERE state = '_ALL' "
-        "ORDER BY count DESC"
-    )
-
-    # S1.6: facet-mix lambda shared by the two dynamic mix CTEs below. Same
-    # sort contract as the gold_segment_population CTAS: count desc then value.
-    _FACET_MIX_EXPR = (
-        "TRANSFORM(ARRAY_SORT(COLLECT_LIST(STRUCT(cnt, value)), "
-        "(a, b) -> CASE WHEN a.cnt > b.cnt THEN -1 WHEN a.cnt < b.cnt THEN 1 "
-        "WHEN a.value < b.value THEN -1 WHEN a.value > b.value THEN 1 ELSE 0 END), "
-        "x -> STRUCT(x.value AS value, x.cnt AS count))"
-    )
-
-    _LIST_FILTERED_SQL_TPL = (
-        "WITH meta AS ( "
-        f"  SELECT {_SEGMENT_COLUMNS} "
-        f"  FROM {qualify('gold', 'segment_population')} "
-        "  WHERE state = '_ALL' "
-        "), base AS ( "
-        "  SELECT clip, segment_codes, opportunity_score, loan_product_type, origination_channel "
-        f"  FROM {qualify('gold', 'borrower_360')} "
-        "  WHERE {filter_clause} "
-        "), exploded_segments AS ( "
-        "  SELECT DISTINCT clip, sc AS segment_code, opportunity_score, "
-        "    loan_product_type, origination_channel "
-        "  FROM base "
-        "  LATERAL VIEW EXPLODE(segment_codes) s AS sc "
-        "  WHERE sc IS NOT NULL "
-        "), rollup AS ( "
-        "  SELECT "
-        "    segment_code, "
-        "    CAST(COUNT(DISTINCT clip) AS INT) AS count, "
-        "    CAST(ROUND(AVG(opportunity_score)) AS INT) AS avg_score "
-        "  FROM exploded_segments "
-        "  GROUP BY segment_code "
-        "), product_mix AS ( "
-        f"  SELECT segment_code, {_FACET_MIX_EXPR} AS loan_product_mix "
-        "  FROM ( "
-        "    SELECT segment_code, COALESCE(loan_product_type, 'unknown') AS value, "
-        "      CAST(COUNT(DISTINCT clip) AS INT) AS cnt "
-        "    FROM exploded_segments "
-        "    GROUP BY segment_code, COALESCE(loan_product_type, 'unknown') "
-        "  ) GROUP BY segment_code "
-        "), channel_mix AS ( "
-        f"  SELECT segment_code, {_FACET_MIX_EXPR} AS origination_channel_mix "
-        "  FROM ( "
-        "    SELECT segment_code, COALESCE(origination_channel, 'unknown') AS value, "
-        "      CAST(COUNT(DISTINCT clip) AS INT) AS cnt "
-        "    FROM exploded_segments "
-        "    GROUP BY segment_code, COALESCE(origination_channel, 'unknown') "
-        "  ) GROUP BY segment_code "
-        ") "
-        "SELECT "
-        "  m.segment_code, "
-        "  m.name, "
-        "  COALESCE(r.count, 0) AS count, "
-        "  m.delta_vs_prior, "
-        "  COALESCE(r.avg_score, 0) AS avg_score, "
-        "  m.description, "
-        "  m.color, "
-        "  COALESCE(pm.loan_product_mix, CAST(ARRAY() AS ARRAY<STRUCT<value: STRING, count: INT>>)) AS loan_product_mix, "
-        "  COALESCE(cm.origination_channel_mix, CAST(ARRAY() AS ARRAY<STRUCT<value: STRING, count: INT>>)) AS origination_channel_mix "
-        "FROM meta AS m "
-        "LEFT JOIN rollup AS r ON r.segment_code = m.segment_code "
-        "LEFT JOIN product_mix AS pm ON pm.segment_code = m.segment_code "
-        "LEFT JOIN channel_mix AS cm ON cm.segment_code = m.segment_code"
-    )
+    # SQL text lives in `databricks_geo_sql`; these aliases keep the
+    # class-attribute access the tests pin (`_LIST_SQL`, `_LIST_FILTERED_SQL_TPL`).
+    # Both statements now report `contactable` alongside `count` — see that
+    # module's docstring for why the predicate is Python-owned.
+    _LIST_SQL = geo_sql.SEGMENT_LIST_SQL
+    _FACET_MIX_EXPR = geo_sql.FACET_MIX_EXPR
+    _LIST_FILTERED_SQL_TPL = geo_sql.SEGMENT_LIST_FILTERED_SQL_TPL
 
     # Canonical FE display order matching the prototype's seg-grid layout
     # (`design_files/Module 0 Prototype.html` lines 1546–1551 + the gold
@@ -198,6 +170,10 @@ class DatabricksSegmentRepository:
                     code=row["segment_code"],
                     name=row["name"],
                     count=int(row.get("count") or 0),
+                    # The contact-eligible subset of `count`. Both paths
+                    # emit it, so a card that says "N of M" is stating one
+                    # segment's two aggregates, not two cohorts.
+                    contactable=_contactable(row, int(row.get("count") or 0)),
                     # Rename at boundary: gold column is delta_vs_prior.
                     delta=row.get("delta_vs_prior") or "+0%",
                     avg_score=int(row.get("avg_score") or 0),
@@ -267,260 +243,23 @@ class DatabricksGeoRepository:
         self._cache = cache if cache is not None else TTLCache()
         self._cache_ttl_s = cache_ttl_s
 
-    # State rollup: join the funnel snapshot (counts) with the top-segment
-    # table (dominant SegmentCode). LEFT JOIN on state so an empty
-    # state_top_segment (first deploy before the CTAS has run) still
-    # returns state counts -- top_segment_code just stays NULL.
-    # 2026-08-08 UX walk: the ZIP layer is keyed on a 5-digit ZIP and
-    # gold.zip_rollup filters `LENGTH(zip) = 5`, so borrowers whose share row
-    # carries no usable ZIP vanish between the state tile and the ZIP tiles
-    # (live: CO 8.7%, WA 5.8%). `zip_unassigned` is derived as the difference
-    # between the state total and what the ZIP layer will actually render, so
-    # the disclosed number IS the drill gap by construction — it cannot drift
-    # from the tiles the way a separately-computed count would. Both sides
-    # come from the same refresh anchor, so there is no snapshot skew to
-    # absorb. GREATEST(0, ...) keeps the field non-negative if a partial
-    # zip_rollup rebuild ever overshoots.
-    _STATE_SQL = (
-        "SELECT "
-        "  f.state                         AS state, "
-        "  f.addressable_borrowers         AS addressable, "
-        "  f.in_the_money_borrowers        AS in_the_money, "
-        "  f.high_opportunity_borrowers    AS top_tier_opportunities, "
-        "  f.avg_opportunity_score         AS avg_score, "
-        "  f.snapshot_date                 AS snapshot_date, "
-        "  ts.top_segment_code             AS top_segment_code, "
-        "  CAST(GREATEST(0, f.addressable_borrowers - COALESCE(zc.zip_covered, 0)) AS INT) "
-        "    AS zip_unassigned "
-        f"FROM {qualify('gold', 'funnel_snapshot_daily')} AS f "
-        "LEFT JOIN ( "
-        "  SELECT state, top_segment_code "
-        f"  FROM {qualify('gold', 'state_top_segment')} "
-        f"  WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM {qualify('gold', 'state_top_segment')}) "
-        ") AS ts ON ts.state = f.state "
-        "LEFT JOIN ( "
-        "  SELECT state, CAST(SUM(addressable_borrowers) AS BIGINT) AS zip_covered "
-        f"  FROM {qualify('gold', 'zip_rollup')} "
-        f"  WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM {qualify('gold', 'zip_rollup')}) "
-        "  GROUP BY state "
-        ") AS zc ON zc.state = f.state "
-        "WHERE f.state <> '_ALL' "
-        "  AND f.segment_code = '_ALL' "
-        f"  AND f.snapshot_date = (SELECT MAX(snapshot_date) FROM {qualify('gold', 'funnel_snapshot_daily')}) "
-        "ORDER BY f.addressable_borrowers DESC"
-    )
-
-    _COUNTY_SQL = (
-        "SELECT "
-        "  fips_5, "
-        "  state, "
-        "  county_name, "
-        "  addressable_borrowers, "
-        "  in_the_money_borrowers, "
-        "  high_opportunity_borrowers, "
-        "  avg_opportunity_score, "
-        "  top_segment_code, "
-        "  snapshot_date "
-        f"FROM {qualify('gold', 'county_rollup')} "
-        "WHERE state = :state "
-        f"  AND snapshot_date = (SELECT MAX(snapshot_date) FROM {qualify('gold', 'county_rollup')}) "
-        "ORDER BY addressable_borrowers DESC"
-    )
-
-    # 2026-08-08: the ZIP layer is keyed on STATE, not county. The Cotality
-    # share carries exactly one county FIPS per state (audit C2), so the
-    # fabricated county keys were removed and `county_fips_5` is NULL on
-    # every zip_rollup row — a county-keyed read returns zero rows for every
-    # county, always. `_ZIP_SQL` (FIPS-keyed) stays for a future licensed
-    # county dataset; `_ZIP_STATE_SQL` is what the map actually drills.
-    _ZIP_SELECT = (
-        "SELECT "
-        "  zip, "
-        "  state, "
-        "  county_fips_5, "
-        "  addressable_borrowers, "
-        "  avg_opportunity_score, "
-        "  top_segment_code, "
-        "  sample_borrower_id, "
-        "  snapshot_date "
-        f"FROM {qualify('gold', 'zip_rollup')} "
-    )
-    _ZIP_SNAPSHOT_AND_ORDER = (
-        f"  AND snapshot_date = (SELECT MAX(snapshot_date) FROM {qualify('gold', 'zip_rollup')}) "
-        "ORDER BY addressable_borrowers DESC"
-    )
-
-    _ZIP_SQL = _ZIP_SELECT + "WHERE county_fips_5 = :fips_5 " + _ZIP_SNAPSHOT_AND_ORDER
-
-    _ZIP_STATE_SQL = _ZIP_SELECT + "WHERE state = :state " + _ZIP_SNAPSHOT_AND_ORDER
+    # SQL text lives in `databricks_geo_sql`; these aliases keep the
+    # class-attribute access the tests pin (e.g. `_STATE_SQL`,
+    # `_STATE_FILTER_SQL_TPL`). Both state statements now report
+    # `contactable` alongside `addressable` — see that module's docstring
+    # for why the predicate is Python-owned and not a gold column.
+    _STATE_SQL = geo_sql.STATE_SQL
+    _COUNTY_SQL = geo_sql.COUNTY_SQL
+    _ZIP_SELECT = geo_sql.ZIP_SELECT
+    _ZIP_SNAPSHOT_AND_ORDER = geo_sql.ZIP_SNAPSHOT_AND_ORDER
+    _ZIP_SQL = geo_sql.ZIP_SQL
+    _ZIP_STATE_SQL = geo_sql.ZIP_STATE_SQL
+    _STATE_FILTER_SQL_TPL = geo_sql.STATE_FILTER_SQL_TPL
+    _COUNTY_FILTER_SQL_TPL = geo_sql.COUNTY_FILTER_SQL_TPL
+    _ZIP_FILTER_SQL_TPL = geo_sql.ZIP_FILTER_SQL_TPL
 
     _STATE_CACHE_KEY = "geo.state_rollups"
     _SCOPE_CACHE_KEY = "geo.scope"
-
-    # 2026-05-04 (FIX G, round 3): segment-aware per-state counts.
-    # Computed live off mip.gold.borrower_360 (the FULL addressable
-    # population — same source the unfiltered funnel snapshot reads),
-    # with scalar `array_contains` predicates so Databricks SQL parameter
-    # binding never has to coerce a Python list into ARRAY<STRING>.
-    # Multi-segment borrowers are still distinct-counted exactly once even
-    # when the filter selects two of their segments.
-    #
-    # Round-2 (FIX G) queried lead_population, which has a score >= 50
-    # floor baked in. After round-3 reverted the rollup filters (FIX α)
-    # the unfiltered map shows the FULL addressable count per state.
-    # Querying lead_population for the filtered path would have been
-    # inconsistent: filter ON = score-quality subset, filter OFF =
-    # full population. Switching to borrower_360 here keeps both paths
-    # at the same "addressable" definition, so toggling a segment
-    # filter always cuts the count down from the same baseline.
-    _STATE_FILTER_SQL_TPL = (
-        "SELECT "
-        "  state                                        AS state, "
-        "  CAST(COUNT(*) AS INT)                         AS addressable, "
-        "  CAST(SUM(CASE WHEN in_the_money "
-        "                THEN 1 ELSE 0 END) AS INT)      AS in_the_money, "
-        "  CAST(SUM(CASE WHEN opportunity_score "
-        f"                >= {HIGH_OPPORTUNITY_THRESHOLD} "
-        "                THEN 1 ELSE 0 END) AS INT)      AS top_tier_opportunities, "
-        "  CAST(ROUND(AVG(opportunity_score)) AS INT)    AS avg_score, "
-        # Same ZIP-coverage disclosure as _STATE_SQL, computed against the
-        # same filtered universe the tiles will render — the ZIP layer
-        # applies the identical `zip IS NOT NULL AND LENGTH(zip) = 5` gate.
-        "  CAST(SUM(CASE WHEN zip IS NULL OR LENGTH(zip) <> 5 "
-        "                THEN 1 ELSE 0 END) AS INT)      AS zip_unassigned "
-        f"FROM {qualify('gold', 'borrower_360')} "
-        "WHERE {filter_clause} "
-        "GROUP BY state"
-    )
-
-    _COUNTY_FILTER_SQL_TPL = (
-        "WITH base AS ( "
-        "  SELECT "
-        "    county_fips_5 AS fips_5, "
-        "    state, "
-        "    opportunity_score, "
-        "    in_the_money, "
-        "    segment_codes "
-        f"  FROM {qualify('gold', 'borrower_360')} "
-        "  WHERE state = :state "
-        "    AND county_fips_5 IS NOT NULL "
-        "    AND LENGTH(county_fips_5) = 5 "
-        "    AND {filter_clause} "
-        "), aggregates AS ( "
-        "  SELECT "
-        "    fips_5, "
-        "    ANY_VALUE(state) AS state, "
-        "    CAST(COUNT(*) AS INT) AS addressable_borrowers, "
-        "    CAST(SUM(CASE WHEN in_the_money THEN 1 ELSE 0 END) AS INT) AS in_the_money_borrowers, "
-        f"    CAST(SUM(CASE WHEN opportunity_score >= {HIGH_OPPORTUNITY_THRESHOLD} THEN 1 ELSE 0 END) AS INT) AS high_opportunity_borrowers, "
-        "    CAST(ROUND(AVG(opportunity_score)) AS INT) AS avg_opportunity_score "
-        "  FROM base "
-        "  GROUP BY fips_5 "
-        "), exploded_segments AS ( "
-        "  SELECT fips_5, sc AS segment_code "
-        "  FROM base "
-        "  LATERAL VIEW EXPLODE(segment_codes) s AS sc "
-        "  WHERE sc IS NOT NULL "
-        "), segment_counts AS ( "
-        "  SELECT "
-        "    fips_5, "
-        "    segment_code, "
-        "    COUNT(*) AS cnt, "
-        "    ROW_NUMBER() OVER (PARTITION BY fips_5 ORDER BY COUNT(*) DESC, segment_code ASC) AS rn "
-        "  FROM exploded_segments "
-        "  GROUP BY fips_5, segment_code "
-        "), top_segment_per_county AS ( "
-        "  SELECT fips_5, segment_code AS top_segment_code "
-        "  FROM segment_counts "
-        "  WHERE rn = 1 "
-        ") "
-        "SELECT "
-        "  a.fips_5, "
-        "  a.state, "
-        "  CAST(NULL AS STRING) AS county_name, "
-        "  a.addressable_borrowers, "
-        "  a.in_the_money_borrowers, "
-        "  a.high_opportunity_borrowers, "
-        "  a.avg_opportunity_score, "
-        "  ts.top_segment_code, "
-        "  CAST(NULL AS STRING) AS snapshot_date "
-        "FROM aggregates AS a "
-        "LEFT JOIN top_segment_per_county AS ts ON ts.fips_5 = a.fips_5 "
-        "ORDER BY a.addressable_borrowers DESC"
-    )
-
-    _ZIP_FILTER_SQL_TPL = (
-        "WITH base AS ( "
-        "  SELECT "
-        "    zip, "
-        "    state, "
-        "    county_fips_5, "
-        "    borrower_id, "
-        "    opportunity_score, "
-        "    segment_codes "
-        f"  FROM {qualify('gold', 'borrower_360')} "
-        # {geo_predicate} is `state = :state` (the live drill) or
-        # `county_fips_5 = :fips_5` (reserved for licensed county data).
-        # Both sides are repo-owned literals — never caller text.
-        "  WHERE {geo_predicate} "
-        "    AND zip IS NOT NULL "
-        "    AND LENGTH(zip) = 5 "
-        "    AND {filter_clause} "
-        "), aggregates AS ( "
-        "  SELECT "
-        "    state, "
-        "    county_fips_5, "
-        "    zip, "
-        "    CAST(COUNT(*) AS INT) AS addressable_borrowers, "
-        "    CAST(ROUND(AVG(opportunity_score)) AS INT) AS avg_opportunity_score "
-        "  FROM base "
-        "  GROUP BY state, county_fips_5, zip "
-        "), exploded_segments AS ( "
-        "  SELECT state, county_fips_5, zip, sc AS segment_code "
-        "  FROM base "
-        "  LATERAL VIEW EXPLODE(segment_codes) s AS sc "
-        "  WHERE sc IS NOT NULL "
-        "), segment_counts AS ( "
-        "  SELECT "
-        "    state, "
-        "    county_fips_5, "
-        "    zip, "
-        "    segment_code, "
-        "    COUNT(*) AS cnt, "
-        "    ROW_NUMBER() OVER (PARTITION BY state, county_fips_5, zip ORDER BY COUNT(*) DESC, segment_code ASC) AS rn "
-        "  FROM exploded_segments "
-        "  GROUP BY state, county_fips_5, zip, segment_code "
-        "), top_segment_per_zip AS ( "
-        "  SELECT state, county_fips_5, zip, segment_code AS top_segment_code "
-        "  FROM segment_counts "
-        "  WHERE rn = 1 "
-        "), ranked_borrowers AS ( "
-        "  SELECT "
-        "    state, "
-        "    county_fips_5, "
-        "    zip, "
-        "    borrower_id, "
-        "    ROW_NUMBER() OVER (PARTITION BY state, county_fips_5, zip ORDER BY opportunity_score DESC, borrower_id ASC) AS rn "
-        "  FROM base "
-        "), sample_borrower_per_zip AS ( "
-        "  SELECT state, county_fips_5, zip, borrower_id AS sample_borrower_id "
-        "  FROM ranked_borrowers "
-        "  WHERE rn = 1 "
-        ") "
-        "SELECT "
-        "  a.zip, "
-        "  a.state, "
-        "  a.county_fips_5, "
-        "  a.addressable_borrowers, "
-        "  a.avg_opportunity_score, "
-        "  ts.top_segment_code, "
-        "  sb.sample_borrower_id, "
-        "  CAST(NULL AS STRING) AS snapshot_date "
-        "FROM aggregates AS a "
-        "LEFT JOIN top_segment_per_zip AS ts ON ts.state = a.state AND COALESCE(ts.county_fips_5, '') = COALESCE(a.county_fips_5, '') AND ts.zip = a.zip "
-        "LEFT JOIN sample_borrower_per_zip AS sb ON sb.state = a.state AND COALESCE(sb.county_fips_5, '') = COALESCE(a.county_fips_5, '') AND sb.zip = a.zip "
-        "ORDER BY a.addressable_borrowers DESC"
-    )
 
     def state_rollups(
         self,
@@ -565,6 +304,7 @@ class DatabricksGeoRepository:
                     StateRollup(
                         state=str(r.get("state") or "").upper()[:2],
                         addressable=int(r.get("addressable") or 0),
+                        contactable=_contactable(r, int(r.get("addressable") or 0)),
                         in_the_money=int(r.get("in_the_money") or 0),
                         top_tier_opportunities=int(r.get("top_tier_opportunities") or 0),
                         avg_score=int(r.get("avg_score") or 0),
@@ -594,6 +334,7 @@ class DatabricksGeoRepository:
                 StateRollup(
                     state=str(r.get("state") or "").upper()[:2],
                     addressable=int(r.get("addressable") or 0),
+                    contactable=_contactable(r, int(r.get("addressable") or 0)),
                     in_the_money=int(r.get("in_the_money") or 0),
                     top_tier_opportunities=int(r.get("top_tier_opportunities") or 0),
                     avg_score=int(r.get("avg_score") or 0),

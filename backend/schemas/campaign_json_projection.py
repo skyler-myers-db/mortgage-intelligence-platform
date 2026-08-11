@@ -81,8 +81,22 @@ _GENIE_REPLAY_FILTER_KEYS = frozenset(
         "portfolio_criteria",
         "borrower_ids",
         "source",
+        # Reviewed numeric floors the Lead Queue replays, plus the names of any
+        # predicates it could not. A draft campaign built from a
+        # threshold-narrowed Genie answer carries these, and this projection
+        # gates the decision proof: an unprojected key here means that campaign
+        # can never be approved.
+        "min_opportunity_score",
+        "min_equity_pct",
+        "min_rate_spread_bps",
+        "unreplayable_filters",
     }
 )
+_GENIE_NUMERIC_FILTER_BOUNDS: dict[str, int] = {
+    "min_opportunity_score": 100,
+    "min_equity_pct": 100,
+    "min_rate_spread_bps": 5000,
+}
 _GENIE_SEGMENT_CODES = frozenset({"itm", "listed", "permit", "investor", "equity", "retention"})
 _GENIE_VISUALIZATION_KINDS = frozenset({"bar", "line", "metric", "pie", "scatter", "table"})
 _GENIE_OPAQUE_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}")
@@ -451,6 +465,20 @@ def _project_genie_replay_filters(
             field_name="criteria.result_filters.borrower_ids",
             pattern=r"B-[0-9A-Z]{13}",
             max_items=500,
+        )
+    for numeric_key, maximum in _GENIE_NUMERIC_FILTER_BOUNDS.items():
+        if numeric_key not in value:
+            continue
+        floor = value[numeric_key]
+        if isinstance(floor, bool) or not isinstance(floor, int) or not 0 <= floor <= maximum:
+            raise ValueError(f"criteria.result_filters.{numeric_key} must be a reviewed threshold")
+        out[numeric_key] = floor
+    if "unreplayable_filters" in value:
+        out["unreplayable_filters"] = _reviewed_text_list(
+            value["unreplayable_filters"],
+            field_name="criteria.result_filters.unreplayable_filters",
+            pattern=r"[a-z0-9_]{1,64}",
+            max_items=12,
         )
     if "source" in value:
         source = str(value["source"] or "").strip()

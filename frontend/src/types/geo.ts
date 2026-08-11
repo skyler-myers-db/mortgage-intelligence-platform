@@ -29,6 +29,12 @@ export interface ConfigOptions {
 export interface StateRollup {
   state: string;
   addressable: number;
+  /** Contact-eligible subset of `addressable` — what the Lead Queue this
+   *  tile links to actually shows. Live 2026-08-11 IL is 76,711 of
+   *  1,851,040, so a tile that states only the larger number sends the
+   *  reader to a queue 24x smaller. Undefined/null means "not reported"
+   *  (an older payload), never "nobody is contactable". */
+  contactable?: number | null;
   in_the_money: number;
   top_tier_opportunities: number;
   avg_score: number;

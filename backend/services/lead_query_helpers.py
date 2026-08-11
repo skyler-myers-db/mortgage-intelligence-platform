@@ -9,8 +9,18 @@ from fastapi import HTTPException
 from backend.schemas.common import validate_public_borrower_id
 from backend.schemas.lead import SEGMENT_CODE_VALUES
 from backend.schemas.portfolio import PortfolioCriteria
+from backend.services.repositories.databricks_portfolio import PORTFOLIO_EQUITY_THRESHOLDS
 
 _ALLOWED_SEGMENT_CODES: frozenset[str] = frozenset(SEGMENT_CODE_VALUES)
+# Reviewed numeric floors a governed Genie cohort can carry, and the inclusive
+# ceiling each one is validated against. Mirrors
+# ``genie_actions._REPLAYABLE_NUMERIC_FILTERS``; the cohort row is written by
+# that module and read back here, so the two ranges must agree.
+COHORT_NUMERIC_FILTER_BOUNDS: dict[str, int] = {
+    "min_opportunity_score": 100,
+    "min_equity_pct": 100,
+    "min_rate_spread_bps": 5000,
+}
 
 
 def parse_csv_filter(
@@ -120,6 +130,53 @@ def cohort_list(
         if normalized not in out:
             out.append(normalized)
     return out or None
+
+
+def cohort_numeric_floor(filters: dict[str, object], key: str) -> int | None:
+    """Return a reviewed integer floor stored on a governed Genie cohort.
+
+    Closed vocabulary: the key must be one this module knows how to apply, and
+    the stored value must be a whole number inside the reviewed range. A
+    cohort row that fails either check is rejected rather than replayed
+    without the predicate -- replaying it broader is the exact defect this
+    closes (live 2026-08-11: a score-narrowed answer of 32 replayed as 1,766).
+    """
+
+    maximum = COHORT_NUMERIC_FILTER_BOUNDS.get(key)
+    if maximum is None:
+        raise HTTPException(status_code=422, detail=f"cohort {key} filter is invalid")
+    raw = filters.get(key)
+    if raw is None or raw == "":
+        return None
+    if isinstance(raw, bool) or (isinstance(raw, float) and not raw.is_integer()):
+        raise HTTPException(status_code=422, detail=f"cohort {key} filter is invalid")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=f"cohort {key} filter is invalid") from exc
+    if value < 0 or value > maximum:
+        raise HTTPException(status_code=422, detail=f"cohort {key} filter is invalid")
+    return value
+
+
+def apply_cohort_equity_floor(
+    criteria: PortfolioCriteria,
+    floor: int | None,
+) -> PortfolioCriteria:
+    """Fold a cohort's equity floor into the reviewed Portfolio vocabulary.
+
+    ``min_equity_pct`` already compiles to ``equity_pct >= :equity_floor`` in
+    ``build_preview_predicates``, so the cohort reuses that path instead of
+    growing a second equity predicate. The strictest floor wins: a cohort must
+    never come back broader than either the answer's threshold or the
+    portfolio criteria it was built from.
+    """
+
+    if floor is None:
+        return criteria
+    label_floor = PORTFOLIO_EQUITY_THRESHOLDS.get(criteria.min_equity_pct_label or "", 0)
+    effective = max(float(floor), float(criteria.min_equity_pct or 0), float(label_floor))
+    return criteria.model_copy(update={"min_equity_pct": effective})
 
 
 def cohort_segment_mode(filters: dict[str, object]) -> str:

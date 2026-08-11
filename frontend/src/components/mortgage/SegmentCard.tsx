@@ -87,6 +87,17 @@ export function SegmentCard({ segment, selected, updating, onClick }: SegmentCar
     segment.source_status === 'not_connected' || segment.source_status === 'not_licensed';
   const gateLabel = segment.source_status === 'not_licensed' ? 'not licensed' : 'not connected';
 
+  // Addressable-vs-contactable reconciliation. `count` is the whole
+  // addressable population; the Lead Queue this card links to applies the
+  // contact-eligibility predicate, so it shows a strict subset — live
+  // 2026-08-11 that was 3,217 of 74,335 for Prime Refi (23x). Stating one
+  // number and navigating to the other reads as a broken link, so the card
+  // states the relationship. Same idiom as `.zip-tiles__reconcile` on the
+  // map's ZIP drill. Null (an older payload) renders nothing rather than a
+  // fabricated zero.
+  const contactable = segment.contactable ?? null;
+  const showsReconcile = contactable !== null && segment.count > 0;
+
   const deltaIsFirstSnapshot =
     segment.delta.trim() === '+0%' ||
     segment.delta.trim() === '0%' ||
@@ -122,7 +133,11 @@ export function SegmentCard({ segment, selected, updating, onClick }: SegmentCar
           className="seg-card__select"
           onClick={activate}
           aria-pressed={selected ?? false}
-          aria-label={`Select ${displayName} segment — ${segment.count.toLocaleString()} borrowers`}
+          aria-label={
+            showsReconcile
+              ? `Select ${displayName} segment — ${segment.count.toLocaleString()} borrowers, ${contactable.toLocaleString()} contactable`
+              : `Select ${displayName} segment — ${segment.count.toLocaleString()} borrowers`
+          }
         />
       )}
       {selected && emanateKey > 0 && (
@@ -138,6 +153,14 @@ export function SegmentCard({ segment, selected, updating, onClick }: SegmentCar
         </div>
       ) : (
         <div className="seg-card__count num">{segment.count.toLocaleString()}</div>
+      )}
+      {!gated && showsReconcile && (
+        <div className="seg-card__reconcile" role="note">
+          <span className="seg-card__reconcile-value num">
+            {contactable.toLocaleString()}
+          </span>{' '}
+          contactable of {segment.count.toLocaleString()} addressable
+        </div>
       )}
       <div className="seg-card__sub">{displayDescription}</div>
       <div className="seg-card__meta">

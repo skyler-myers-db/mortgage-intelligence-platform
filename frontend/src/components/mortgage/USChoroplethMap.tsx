@@ -376,6 +376,7 @@ export function USChoroplethMap({
           avgScore: live.avg_score,
           lvl: stateBucketer(live.addressable),
           topSegment: liveTopSegment || undefined,
+          contactable: live.contactable ?? null,
           zipUnassigned: live.zip_unassigned_count ?? null,
         };
       }
@@ -595,9 +596,13 @@ export function USChoroplethMap({
                 sourceHint: inFootprint
                   ? 'mip.gold.funnel_snapshot_daily + mip.gold.state_top_segment'
                   : 'Outside Cotality evaluation scope',
-                // Disclose the drill gap BEFORE the user drills, so the
-                // ZIP tiles summing below this state's total is expected
-                // rather than discovered.
+                // Both gaps are disclosed on the tile, BEFORE the click,
+                // so the smaller number the user lands on is expected
+                // rather than discovered: `contactable` is the subset the
+                // Lead Queue behind this tile will show (the queue applies
+                // the eligibility predicate, the tile count does not), and
+                // `zipUnassigned` is the subset the ZIP drill cannot show.
+                contactable: facts?.contactable ?? null,
                 zipUnassigned: facts?.zipUnassigned ?? null,
                 overlay: overlayUnit
                   ? {

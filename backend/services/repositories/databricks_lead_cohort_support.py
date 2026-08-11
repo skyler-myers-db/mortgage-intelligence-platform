@@ -140,6 +140,39 @@ class LeadCohortQuerySupport:
         raise ValueError(f"unsupported funnel_stage: {funnel_stage}")
 
     @staticmethod
+    def numeric_floor_clause(
+        *,
+        min_opportunity_score: float | None = None,
+        min_rate_spread_bps: float | None = None,
+        min_heloc_propensity_score: float | None = None,
+    ) -> tuple[str, dict[str, object]]:
+        """Return the reviewed `>=` floors a Genie answer can hand to the queue.
+
+        One clause builder for the ranked list, the count, and the identity
+        proof: a threshold applied to the rows but not to the total (or the
+        reverse) is exactly the divergence this replaces. Floors read from
+        ``gold.borrower_360``, so any caller using them must take the geo
+        query path.
+        """
+
+        clauses: list[str] = []
+        params: dict[str, object] = {}
+        for name, column, value in (
+            ("replay_min_opportunity_score", "b.opportunity_score", min_opportunity_score),
+            ("replay_min_rate_spread_bps", "b.rate_spread_bps", min_rate_spread_bps),
+            (
+                "replay_min_heloc_propensity_score",
+                "b.heloc_propensity_score",
+                min_heloc_propensity_score,
+            ),
+        ):
+            if value is None:
+                continue
+            clauses.append(f"AND {column} >= :{name}")
+            params[name] = value
+        return " ".join(clauses), params
+
+    @staticmethod
     def in_clause(
         *,
         column: str,

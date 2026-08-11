@@ -27,6 +27,7 @@ from backend.schemas.analytics import (
     EvidenceBySignalRow,
     EvidenceDailyRow,
     ExecutiveAnalyticsResponse,
+    ExecutiveProvenance,
     FunnelStage,
     FunnelTotals,
     GeographyAnalyticsResponse,
@@ -70,6 +71,7 @@ from backend.schemas.portfolio import (
     PortfolioPreviewRequest,
 )
 from backend.services import economics_scatter
+from backend.services.eligibility import GoldEligibilityService
 from backend.services.genie_answers import (
     GenieActionSuggestion,
     GenieMessageResponse,
@@ -167,13 +169,15 @@ class InProcessMockAnalyticsRepository:
             approved_borrowers=0,
             actioned_borrowers=0,
         )
+        population_source = "mip.gold.borrower_360"
+        workflow_source = "mip.gold.borrower_360 + mip.gold.borrower_lifecycle_state"
         stages = [
-            FunnelStage(stage="Addressable", stage_order=1, borrower_count=addressable),
-            FunnelStage(stage="Refi Economics", stage_order=2, borrower_count=itm),
-            FunnelStage(stage="Top-tier Score", stage_order=3, borrower_count=high),
-            FunnelStage(stage="Primary Offer Selected", stage_order=4, borrower_count=recommended),
-            FunnelStage(stage="Approved", stage_order=5, borrower_count=0),
-            FunnelStage(stage="Actioned", stage_order=6, borrower_count=0),
+            FunnelStage(stage="Addressable", stage_order=1, borrower_count=addressable, source=population_source),
+            FunnelStage(stage="Refi Economics", stage_order=2, borrower_count=itm, source=population_source),
+            FunnelStage(stage="Top-tier Score", stage_order=3, borrower_count=high, source=population_source),
+            FunnelStage(stage="Primary Offer Selected", stage_order=4, borrower_count=recommended, source=population_source),
+            FunnelStage(stage="Approved", stage_order=5, borrower_count=0, source=workflow_source),
+            FunnelStage(stage="Actioned", stage_order=6, borrower_count=0, source=workflow_source),
         ]
         buckets: dict[int, int] = {}
         for borrower in borrowers:
@@ -186,6 +190,13 @@ class InProcessMockAnalyticsRepository:
                 ScoreBucket(score_bucket=bucket, borrower_count=count)
                 for bucket, count in sorted(buckets.items())
             ],
+            provenance=ExecutiveProvenance(
+                snapshot_date=totals.snapshot_date,
+                lifecycle_synced_at="2026-05-18 06:00:00",
+                population_source=population_source,
+                workflow_source=workflow_source,
+                note="Fixture provenance; the live repository publishes the real lag note.",
+            ),
         )
 
     def funnel_population(self) -> FunnelPopulation:
@@ -521,15 +532,26 @@ class InProcessMockSegmentRepository:
             elif portfolio_criteria.consent_status == "Unknown":
                 borrowers = [b for b in borrowers if b.consent_status == "unknown"]
         counts: dict[str, int] = {}
+        contactable: dict[str, int] = {}
         scores: dict[str, list[int]] = {}
+        eligibility = GoldEligibilityService()
         for borrower in borrowers:
+            is_contactable = eligibility.evaluate(borrower).eligible
             for code in borrower.segment_codes:
                 counts[code] = counts.get(code, 0) + 1
+                if is_contactable:
+                    contactable[code] = contactable.get(code, 0) + 1
                 scores.setdefault(code, []).append(borrower.opportunity_score)
         return [
             segment.model_copy(
                 update={
                     "count": counts.get(segment.code, 0),
+                    # Derived from the SAME borrower loop as `count`, through
+                    # the same EligibilityService the production path reads.
+                    # A hardcoded constant here would be a second cohort with
+                    # no relationship to the first -- exactly the defect this
+                    # field exists to close.
+                    "contactable": contactable.get(segment.code, 0),
                     "avg_score": round(
                         sum(scores.get(segment.code, [])) / len(scores.get(segment.code, []))
                     ) if scores.get(segment.code) else 0,
@@ -974,13 +996,18 @@ class InProcessMockGenieAnswerRepository:
 # slice13-accuracy-validation: added ``top_segment_code`` on each row so
 # tests exercise the StateRollup extension that the USChoroplethMap
 # consumes for its segment-filter dim logic.
+# `contactable` is the marketing-eligible subset of `addressable` -- the
+# cohort the Lead Queue behind each tile actually shows. Live gold runs
+# ~4% eligible, so the fixture keeps a small subset rather than a number
+# near the headline: a fixture where the two are close would let a
+# regression that swaps one for the other pass unnoticed.
 _FIXTURE_STATE_ROLLUPS: list[StateRollup] = [
-    StateRollup(state="IL", addressable=1860, in_the_money=720, top_tier_opportunities=420, avg_score=84, top_segment_code="itm"),
-    StateRollup(state="CA", addressable=900,  in_the_money=420, top_tier_opportunities=260, avg_score=83, top_segment_code="equity"),
-    StateRollup(state="FL", addressable=760,  in_the_money=320, top_tier_opportunities=200, avg_score=81, top_segment_code="investor"),
-    StateRollup(state="TX", addressable=750,  in_the_money=340, top_tier_opportunities=220, avg_score=82, top_segment_code="equity"),
-    StateRollup(state="WA", addressable=740,  in_the_money=300, top_tier_opportunities=190, avg_score=81, top_segment_code="itm"),
-    StateRollup(state="CO", addressable=160,  in_the_money=62,  top_tier_opportunities=42,  avg_score=80, top_segment_code="itm"),
+    StateRollup(state="IL", addressable=1860, contactable=78, in_the_money=720, top_tier_opportunities=420, avg_score=84, top_segment_code="itm"),
+    StateRollup(state="CA", addressable=900,  contactable=38, in_the_money=420, top_tier_opportunities=260, avg_score=83, top_segment_code="equity"),
+    StateRollup(state="FL", addressable=760,  contactable=32, in_the_money=320, top_tier_opportunities=200, avg_score=81, top_segment_code="investor"),
+    StateRollup(state="TX", addressable=750,  contactable=31, in_the_money=340, top_tier_opportunities=220, avg_score=82, top_segment_code="equity"),
+    StateRollup(state="WA", addressable=740,  contactable=31, in_the_money=300, top_tier_opportunities=190, avg_score=81, top_segment_code="itm"),
+    StateRollup(state="CO", addressable=160,  contactable=6,  in_the_money=62,  top_tier_opportunities=42,  avg_score=80, top_segment_code="itm"),
 ]
 
 

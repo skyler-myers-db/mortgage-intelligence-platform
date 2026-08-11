@@ -9,7 +9,6 @@ already masked before API egress.
 """
 from __future__ import annotations
 
-import json
 import logging
 from typing import Annotated, Literal
 
@@ -20,9 +19,16 @@ from backend.schemas.common import validate_internal_staff_email
 from backend.schemas.lead import SEGMENT_CODE_VALUES, LeadSummary
 from backend.schemas.portfolio import PortfolioCriteria
 from backend.services.audit_store import AuditStore, get_audit_store, resolve_actor
-from backend.services.lakebase import LakebaseError, get_lakebase_client
+from backend.services.lakebase import LakebaseError
+from backend.services.lead_cohort_source import _load_cohort_filters
+from backend.services.lead_query_helpers import (
+    apply_cohort_equity_floor as _apply_cohort_equity_floor,
+)
 from backend.services.lead_query_helpers import (
     cohort_list as _cohort_list,
+)
+from backend.services.lead_query_helpers import (
+    cohort_numeric_floor as _cohort_numeric_floor,
 )
 from backend.services.lead_query_helpers import (
     cohort_segment_mode as _cohort_segment_mode,
@@ -84,13 +90,6 @@ _ALLOWED_FUNNEL_STAGES: frozenset[str] = frozenset(
     }
 )
 
-_COHORT_FILTER_SELECT_SQL = """
-SELECT route_filters, row_count
-FROM mip_app.genie_cohorts
-WHERE cohort_id = %(cohort_id)s
-  AND actor_email = %(actor_email)s
-LIMIT 1
-"""
 
 RepoDep = Annotated[LeadRepository, Depends(get_lead_repository)]
 StoreDep = Annotated[AuditStore, Depends(get_audit_store)]
@@ -117,44 +116,6 @@ def _safe_audit_write(store: AuditStore, **kwargs: object) -> None:
             exc_type=type(exc).__name__,
             outcome="error",
         )
-
-
-def _load_cohort_filters(
-    cohort_id: str, *, actor: str
-) -> tuple[dict[str, object], int | None]:
-    """Return the replayable filters and the count the Genie answer stated.
-
-    The stated count is what the user just read on screen. The queue below
-    replays only the reviewed geography/segment subset, so the two can
-    diverge by orders of magnitude (live 2026-08-10: an answer of 32
-    borrowers replays to 1,766). Carrying it here is what lets the response
-    say so instead of quietly showing a different population.
-    """
-
-    try:
-        row = get_lakebase_client().fetchone(
-            _COHORT_FILTER_SELECT_SQL,
-            {"cohort_id": cohort_id, "actor_email": actor},
-        )
-    except LakebaseError as exc:
-        raise HTTPException(status_code=503, detail="Lakebase temporarily unavailable") from exc
-    if row is None:
-        raise HTTPException(status_code=404, detail="cohort not found")
-    filters_raw = row.get("route_filters") or {}
-    if isinstance(filters_raw, str):
-        try:
-            filters_raw = json.loads(filters_raw)
-        except json.JSONDecodeError as exc:
-            raise HTTPException(status_code=422, detail="cohort route filters are invalid") from exc
-    if not isinstance(filters_raw, dict):
-        raise HTTPException(status_code=422, detail="cohort route filters are invalid")
-    stated_raw = row.get("row_count")
-    stated_count: int | None
-    try:
-        stated_count = int(stated_raw) if stated_raw is not None else None
-    except (TypeError, ValueError):
-        stated_count = None
-    return filters_raw, stated_count
 
 
 @router.get("/leads", response_model=list[LeadSummary])
@@ -536,6 +497,12 @@ def list_leads(
     cohort_has_replay_filter = False
     cohort_stated_count: int | None = None
     cohort_unreplayable: list[str] = []
+    # Reviewed numeric floors carried by a governed Genie cohort. These are
+    # what make the queue answer the SAME question the user just read: without
+    # them a score-narrowed answer of 32 replayed as 1,766 (live 2026-08-11).
+    cohort_min_opportunity_score: int | None = None
+    cohort_min_rate_spread_bps: int | None = None
+    cohort_min_equity_pct: int | None = None
     segment_mode = _parse_segment_mode(segment_mode)
 
     if cohort_id:
@@ -579,6 +546,11 @@ def list_leads(
         cohort_segments = _cohort_list(cohort_filters, "segment_codes")
         if cohort_segments is not None:
             parsed_segments = _parse_segment_codes(",".join(cohort_segments))
+        cohort_min_opportunity_score = _cohort_numeric_floor(
+            cohort_filters, "min_opportunity_score"
+        )
+        cohort_min_rate_spread_bps = _cohort_numeric_floor(cohort_filters, "min_rate_spread_bps")
+        cohort_min_equity_pct = _cohort_numeric_floor(cohort_filters, "min_equity_pct")
         unreplayable_raw = cohort_filters.get("unreplayable_filters")
         if isinstance(unreplayable_raw, list):
             cohort_unreplayable = [str(key) for key in unreplayable_raw if str(key).strip()]
@@ -606,6 +578,19 @@ def list_leads(
                 county,
                 parsed_segments,
                 target_lender_ref,
+                # A floor counts toward "this cohort is narrowed" only when it
+                # actually COMPILES TO A PREDICATE. `min_equity_pct: 0` is
+                # dropped by build_preview_predicates (`equity_floor > 0`), and
+                # a 0 score floor excludes nobody (live minimum is 10) — so
+                # treating either as a replay filter let a cohort whose ONLY
+                # filter was a zero floor pass this gate and return the entire
+                # eligible book, 216,403 rows, under a cohort the user believes
+                # is narrowed. Fail-closed became fail-open (adversarial review
+                # 2026-08-11). Rate spread keeps `is not None`: it is negative
+                # on 2,561,392 of 5,156,184 rows, so `>= 0` genuinely narrows.
+                bool(cohort_min_opportunity_score),
+                cohort_min_rate_spread_bps is not None,
+                bool(cohort_min_equity_pct),
             )
         )
         if isinstance(portfolio_raw, dict):
@@ -655,11 +640,22 @@ def list_leads(
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    if cohort_id and portfolio_criteria is not None:
+        # The equity floor rides the reviewed Portfolio vocabulary, which
+        # already compiles `equity_pct >= :equity_floor`.
+        portfolio_criteria = _apply_cohort_equity_floor(portfolio_criteria, cohort_min_equity_pct)
+
     repo_kwargs: dict[str, object] = {}
     if portfolio_criteria is not None:
         repo_kwargs["portfolio_criteria"] = portfolio_criteria
     if parsed_counties:
         repo_kwargs["county_fipses"] = parsed_counties
+    # Only pass the floors when a governed cohort set them: repositories and
+    # test doubles that predate this contract keep their existing signature.
+    if cohort_min_opportunity_score is not None:
+        repo_kwargs["min_opportunity_score"] = cohort_min_opportunity_score
+    if cohort_min_rate_spread_bps is not None:
+        repo_kwargs["min_rate_spread_bps"] = cohort_min_rate_spread_bps
 
     if cohort_id and not cohort_has_replay_filter:
         raise HTTPException(
@@ -769,9 +765,25 @@ def list_leads(
         if cohort_stated_count != total_matching:
             response.headers["X-Cohort-Count-Delta"] = str(total_matching - cohort_stated_count)
         if cohort_unreplayable:
-            response.headers["X-Cohort-Unreplayable-Filters"] = ",".join(
-                cohort_unreplayable[:12]
-            )
+            # Re-fold on READ. These names were model-authored and rows written
+            # by earlier builds stored them unfolded, so a stored `ltv<=80`
+            # raised UnicodeEncodeError out of this route — an unhandled 500
+            # that made the cohort permanently unopenable — and CRLF made h11
+            # reject the response outright (adversarial review 2026-08-11).
+            # Header values are latin-1; anything outside the audit vocabulary's
+            # identifier shape is dropped rather than echoed.
+            safe = [
+                key
+                for key in (
+                    "".join(
+                        char for char in str(raw).lower() if char.isalnum() or char == "_"
+                    )[:40]
+                    for raw in cohort_unreplayable
+                )
+                if key
+            ]
+            if safe:
+                response.headers["X-Cohort-Unreplayable-Filters"] = ",".join(safe[:12])
     if identity is not None and "ranked_total" in identity:
         # Geo-filtered reads report the geography population as the total
         # (map-tile promise); this header carries the ranked subset
@@ -818,6 +830,10 @@ def list_leads(
         audit_payload["target_lender_ref"] = target_lender_ref
     if cohort_id:
         audit_payload["cohort_id"] = cohort_id
+    if cohort_min_opportunity_score is not None:
+        audit_payload["min_opportunity_score"] = cohort_min_opportunity_score
+    if cohort_min_rate_spread_bps is not None:
+        audit_payload["min_rate_spread_bps"] = cohort_min_rate_spread_bps
     if handoff_proof is not None:
         audit_payload.update(
             {

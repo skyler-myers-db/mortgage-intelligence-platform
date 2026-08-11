@@ -51,6 +51,22 @@ export function USChoroplethMapTooltip({ hover, activeSegNames }: USChoroplethMa
           </div>
         </div>
       </div>
+      {/* Addressable-vs-contactable reconciliation, stated on the tile
+          before the click. The KPI above is the addressable population;
+          the Lead Queue this tile links to applies the contact-eligibility
+          predicate, so it shows a strict subset — live 2026-08-11, IL was
+          76,711 of 1,851,040 (24x). Clicking a big number and landing on a
+          small one reads as a broken link unless the tile says so. Same
+          idiom as `.zip-tiles__reconcile` on the ZIP drill; reuses the
+          existing muted compact row, no new CSS. */}
+      {typeof hover.contactable === 'number' && hover.count !== null && (
+        <div className="map-tip__row map-tip__row--compact map-tip__row--muted">
+          <span>Contactable</span>
+          <span className="v num map-tip__value--small">
+            {hover.contactable.toLocaleString()} of {hover.count.toLocaleString()}
+          </span>
+        </div>
+      )}
       {hover.topSegment && (
         <div className="map-tip__seg">
           <span className="map-tip__seg-label">Top segment</span>

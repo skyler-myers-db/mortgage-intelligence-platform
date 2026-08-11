@@ -67,6 +67,20 @@ _PLACEHOLDER_ACTION_SECRETS = frozenset(
     }
 )
 _MAX_ACTION_FILTER_VALUES = 500
+# Reviewed numeric floors the Lead Queue applies verbatim, mapped to their
+# inclusive upper bound. Each is an integer `>=` predicate over a
+# gold.borrower_360 column, so a Genie answer narrowed by one of these hands
+# off the SAME population it just reported instead of a broader one:
+#   min_opportunity_score -> b.opportunity_score
+#   min_equity_pct        -> equity_pct (via reviewed PortfolioCriteria)
+#   min_rate_spread_bps   -> b.rate_spread_bps
+# Ranges are the column domains: score/equity are percentages; a 5,000 bps
+# (50pp) spread ceiling is far above any real refinance incentive.
+_REPLAYABLE_NUMERIC_FILTERS: dict[str, int] = {
+    "min_opportunity_score": 100,
+    "min_equity_pct": 100,
+    "min_rate_spread_bps": 5000,
+}
 # Keys the Lead Queue can actually replay (see `_cohort_route_filters`).
 # Anything else in a Genie answer's result_filters is disclosed, not applied.
 _REPLAYABLE_FILTER_KEYS = frozenset(
@@ -81,9 +95,12 @@ _REPLAYABLE_FILTER_KEYS = frozenset(
         "portfolio_criteria",
         "borrower_ids",
         "source",
+        *_REPLAYABLE_NUMERIC_FILTERS,
     }
 )
 _MAX_UNREPLAYABLE_FILTER_KEYS = 12
+_MAX_UNREPLAYABLE_FILTER_KEY_LEN = 64
+_UNSAFE_FILTER_KEY_CHARS = re.compile(r"[^a-z0-9_]+")
 _MAX_ACTION_STATE_VALUES = 56
 _CAMPAIGN_IDEMPOTENCY_LOOKUP_ATTEMPTS = 3
 _CAMPAIGN_IDEMPOTENCY_RETRY_DELAY_S = 0.01
@@ -119,6 +136,7 @@ _LEAD_QUEUE_REPLAY_KEYS = frozenset(
         "marketing_eligibility",
         "consent_status",
         "recency",
+        *_REPLAYABLE_NUMERIC_FILTERS,
     }
 )
 _LEAD_QUEUE_PORTFOLIO_QUERY_KEYS = frozenset(
@@ -949,6 +967,51 @@ def _list_filter(
     return out
 
 
+def _numeric_floor(raw: Any, *, field: str, maximum: int) -> int | None:
+    """Return a reviewed integer floor, or None when the answer omitted it.
+
+    Closed vocabulary, same posture as the list filters above: the value must
+    be a whole number inside the column's domain. Fractions, booleans, ranges,
+    expressions, and out-of-range numbers are rejected rather than coerced,
+    because a coerced threshold would silently replay a different population
+    than the answer reported. A `0` floor is kept, not dropped -- for
+    ``min_rate_spread_bps`` it is a real predicate (spreads can be negative).
+    """
+
+    if raw is None or raw == "":
+        return None
+    if isinstance(raw, bool) or (isinstance(raw, float) and not raw.is_integer()):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Genie cohort {field} filter must be a reviewed integer threshold",
+        )
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Genie cohort {field} filter must be a reviewed integer threshold",
+        ) from exc
+    if value < 0 or value > maximum:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Genie cohort {field} filter is outside the reviewed range",
+        )
+    return value
+
+
+def _disclosed_filter_key(key: object) -> str:
+    """Normalize an unreviewed Genie filter name for safe disclosure.
+
+    The key text is model-authored, so it is data, not an identifier we
+    control. Fold it to the audit vocabulary's identifier shape before it
+    reaches the Lakebase cohort row or the audit ledger.
+    """
+
+    normalized = _UNSAFE_FILTER_KEY_CHARS.sub("_", str(key).strip().lower()).strip("_")
+    return normalized[:_MAX_UNREPLAYABLE_FILTER_KEY_LEN]
+
+
 def _cohort_route_filters(
     payload: GenieActionRequest, payload_borrower_ids: list[str]
 ) -> dict[str, Any]:
@@ -1066,24 +1129,36 @@ def _cohort_route_filters(
         if portfolio_criteria:
             out["portfolio_criteria"] = portfolio_criteria
 
+    # Reviewed numeric floors. Measured live 2026-08-11 against paychex gold:
+    # "in-the-money borrowers in IL" is 1,766 and the queue replaying
+    # segment_codes=[itm] + states=[IL] matched it exactly, but the same
+    # answer narrowed to opportunity_score >= 80 is 32 and replayed as 1,766
+    # (55x) because the reviewed subset was geography/segment/lender only.
+    # These three keys carry the threshold through to the same `>=` predicate
+    # the answer used, so the handoff reproduces the answer's population
+    # instead of a broader one under the same heading.
+    for field, maximum in _REPLAYABLE_NUMERIC_FILTERS.items():
+        floor = _numeric_floor(filters.get(field), field=field, maximum=maximum)
+        if floor is not None:
+            out[field] = floor
+
     if payload_borrower_ids:
         out["borrower_ids"] = payload_borrower_ids
     if out and source in {"genie", "trusted_sql"}:
         out["source"] = source
-    # Name the predicates the Lead Queue CANNOT replay. The reviewed subset
-    # above is geography/segment/lender only, so every numeric threshold in a
-    # Genie answer — opportunity_score, equity_pct, rate_spread_bps, LTV — is
-    # dropped here. Measured live 2026-08-10: "in-the-money borrowers in IL"
-    # is 1,766, but the same answer narrowed to opportunity_score >= 80 is 32
-    # while the replayed queue still returns 1,766 (55x). Losing the segment
-    # too replays to 76,711 (43x). Silently answering a different question
-    # than the one the user just read is the defect; the count reconciliation
-    # in /leads needs to know WHICH predicates went missing to explain it.
+    # Name whatever predicates remain outside the reviewed vocabulary (LTV
+    # bands, propensity cuts, anything a future Genie answer invents). The
+    # queue cannot apply them, so /leads reconciles its count against the
+    # stated one and says which predicates went missing rather than
+    # presenting a different population under the same question.
     if out:
         unreplayable = sorted(
-            str(key)
-            for key in filters
-            if key not in _REPLAYABLE_FILTER_KEYS and str(key).strip()
+            {
+                disclosed
+                for key in filters
+                if key not in _REPLAYABLE_FILTER_KEYS
+                and (disclosed := _disclosed_filter_key(key))
+            }
         )
         if unreplayable:
             out["unreplayable_filters"] = unreplayable[:_MAX_UNREPLAYABLE_FILTER_KEYS]
@@ -1136,6 +1211,12 @@ def _route_with_cohort(
 
     if "target_lender_ref" in filters:
         query["target_lender_ref"] = str(filters["target_lender_ref"])
+    for numeric_key in _REPLAYABLE_NUMERIC_FILTERS:
+        # The cohort row is the governed source of truth (/leads ignores query
+        # params once cohort_id is present); these are on the URL so a shared
+        # link states the thresholds the queue is applying.
+        if numeric_key in filters:
+            query[numeric_key] = str(filters[numeric_key])
     portfolio_criteria = filters.get("portfolio_criteria")
     if isinstance(portfolio_criteria, dict):
         for key in sorted(_LEAD_QUEUE_PORTFOLIO_QUERY_KEYS):

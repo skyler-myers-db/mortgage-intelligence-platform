@@ -14,8 +14,30 @@ from urllib.parse import urlencode
 
 from backend.schemas.common import validate_public_borrower_id
 from backend.services.genie_answers import GenieActionSuggestion, GenieVisualizationSpec
+from backend.services.genie_sql_predicates import SqlFilterReading, read_sql_filters
 from backend.services.repositories.databricks_genie_canonical import (
     _retention_competitor_lien_list_question,
+)
+
+# Cohort filter keys `_route_from_answer_rows` can emit that the Lead Queue
+# actually replays. A disclosure key rides alongside them but must never be
+# the ONLY thing in `result_filters`: `_materialize_genie_cohort` rejects a
+# cohort with no replayable filter, so a disclosure-only cohort would offer an
+# action that 400s.
+_REPLAYABLE_ROUTE_FILTER_KEYS = frozenset(
+    {
+        "borrower_ids",
+        "zips",
+        "county",
+        "counties",
+        "states",
+        "segment_codes",
+        "segment_mode",
+        "portfolio_criteria",
+        "min_opportunity_score",
+        "min_equity_pct",
+        "min_rate_spread_bps",
+    }
 )
 
 
@@ -186,17 +208,28 @@ def _portfolio_criteria_from_question(question: str) -> dict[str, Any]:
     return criteria
 
 
-def _portfolio_criteria_from_sql(sql_query: str | None) -> dict[str, Any]:
+def _portfolio_criteria_from_sql(
+    sql_query: str | None, reading: SqlFilterReading | None = None
+) -> dict[str, Any]:
+    """Read reviewed Portfolio Builder criteria out of the answer's own SQL.
+
+    Every criterion below narrows the replayed cohort exactly as a numeric
+    floor does (``min_equity_pct_label`` compiles to ``equity_pct >=``), so it
+    is read from the same position-gated conjuncts rather than from the raw
+    statement text. Matching the whole statement would lift a criterion out of
+    a CASE arm, an aggregate breakdown, a comment, or a CTE body and hand the
+    queue a population the answer never described.
+    """
+
     if not sql_query:
         return {}
-    sql = re.sub(r"\s+", " ", sql_query.strip().lower())
+    predicates = (reading or read_sql_filters(sql_query)).predicates
+    sql = " and ".join(predicates)
     if not sql:
         return {}
 
     criteria: dict[str, Any] = {}
-    if re.search(r"\bis_owner_occupied\s*=\s*(true|1)\b", sql) or re.search(
-        r"\bwhere\s+is_owner_occupied\b", sql
-    ):
+    if re.search(r"\bis_owner_occupied\s*=\s*(true|1)\b", sql) or "is_owner_occupied" in predicates:
         criteria["occupancy"] = "Owner-occupied"
     elif re.search(r"\bis_owner_occupied\s*=\s*(false|0)\b", sql):
         criteria["occupancy"] = "Non-owner-occupied"
@@ -275,30 +308,48 @@ def _portfolio_criteria_from_sql(sql_query: str | None) -> dict[str, Any]:
     return criteria
 
 
+def _numeric_floors_from_sql(sql_query: str | None) -> dict[str, int]:
+    """Lift the answer's own numeric thresholds into replayable cohort filters.
+
+    Position-gated, not text-matched: see
+    ``backend/services/genie_sql_predicates`` for why a bound only counts as a
+    cohort floor when it stands as a top-level AND-conjunct of the outermost
+    statement's own WHERE / inner-join ON / QUALIFY.
+    """
+
+    return read_sql_filters(sql_query).floors
+
+
 def _segment_mode_from_sql(sql_query: str | None, segment_codes: list[str]) -> str:
+    """Return "all" only when every segment is a top-level AND-conjunct.
+
+    Position-gated for the same reason the numeric floors are (adversarial
+    review 2026-08-11): the previous reader regexed the WHOLE statement and
+    called it an intersection whenever the text between two
+    ``array_contains`` calls contained "and" and no "or". Two such calls in
+    different CTEs, or inside a ``COUNT_IF(...)`` breakdown, therefore yielded
+    ``mode="all"`` for an answer that used a union — and "all" is the
+    NARROWING direction, so the Lead Queue silently opened a smaller cohort
+    than the answer described.
+
+    Reading the accepted conjuncts instead makes the select list, HAVING,
+    CASE arms, aggregate filters and CTE bodies structurally unreachable.
+    """
+
     if not sql_query or len(segment_codes) <= 1:
         return "any"
-    sql = re.sub(r"\s+", " ", sql_query.strip().lower())
-    if not sql:
+    predicates = read_sql_filters(sql_query).predicates
+    if not predicates:
         return "any"
-
-    positions: list[tuple[int, int, str]] = []
     for code in segment_codes:
-        match = re.search(
-            rf"array_contains\(\s*(?:\w+\.)?segment_codes\s*,\s*['\"]{re.escape(code)}['\"]\s*\)",
-            sql,
+        pattern = re.compile(
+            rf"array_contains\(\s*(?:\w+\.)?segment_codes\s*,\s*['\"]{re.escape(code)}['\"]\s*\)"
         )
-        if not match:
+        # Each code must stand alone as its own conjunct. A conjunct holding
+        # two codes is an OR the splitter refused to break apart.
+        if not any(pattern.search(predicate) for predicate in predicates):
             return "any"
-        positions.append((match.start(), match.end(), code))
-    positions.sort()
-    between_conditions = [
-        sql[positions[idx][1]:positions[idx + 1][0]]
-        for idx in range(len(positions) - 1)
-    ]
-    if between_conditions and all(re.search(r"\band\b", between) and not re.search(r"\bor\b", between) for between in between_conditions):
-        return "all"
-    return "any"
+    return "all"
 
 
 def _route_from_answer_rows(
@@ -320,9 +371,10 @@ def _route_from_answer_rows(
     ):
         states = states[:1]
     segment_codes = _segment_codes_from_question(question)
+    reading = read_sql_filters(sql_query)
     portfolio_criteria = {
         **_portfolio_criteria_from_question(question),
-        **_portfolio_criteria_from_sql(sql_query),
+        **_portfolio_criteria_from_sql(sql_query, reading),
     }
 
     if borrower_ids:
@@ -367,6 +419,26 @@ def _route_from_answer_rows(
             value = portfolio_criteria.get(key)
             if isinstance(value, str) and value.strip():
                 params[key] = value
+
+    for floor_key, floor in reading.floors.items():
+        # The queue applies these verbatim, so the cohort it opens is the
+        # population the answer just reported rather than a broader one.
+        filter_criteria[floor_key] = floor
+        params[floor_key] = str(floor)
+
+    if reading.unreplayable and _REPLAYABLE_ROUTE_FILTER_KEYS & set(filter_criteria):
+        # A threshold that really filters the answer but cannot be replayed —
+        # a bound parameter whose value never reaches us, a bound outside the
+        # reviewed cohort domain, or several disagreeing bounds on one column.
+        # Naming it makes the queue's broader count self-explaining
+        # (`X-Cohort-Unreplayable-Filters`) instead of a silent divergence.
+        # These keys are outside the replayable vocabulary on purpose: every
+        # downstream gate folds them into `unreplayable_filters`. They are
+        # never added to the URL, and never stand alone — a cohort with no
+        # replayable filter is rejected, so a disclosure-only cohort would
+        # offer an action that 400s.
+        for disclosure in reading.unreplayable:
+            filter_criteria[disclosure] = True
 
     if params:
         return f"/lead-queue?{urlencode(params)}", filter_criteria

@@ -44,10 +44,20 @@ class StateRollup(BaseModel):
     Drilling from a state to its ZIPs and silently losing borrowers on the
     way down is exactly the kind of number a lender cannot explain to an
     auditor; the UI must disclose it rather than let the sums disagree.
+
+    ``contactable`` is the marketing-eligible subset of ``addressable``:
+    the borrowers the state tile links to that the Lead Queue will
+    actually show, because the queue applies the contact-eligibility
+    predicate and the tile does not. Live 2026-08-11 that is 76,711 of
+    IL's 1,851,040 — a 24x gap that read as a broken link until the tile
+    stated the relationship. Optional so an older client, or a cached
+    frame written before the field existed, is unaffected; ``None`` means
+    "not reported", never "zero".
     """
 
     state: str = Field(min_length=2, max_length=2)
     addressable: int = Field(ge=0)
+    contactable: int | None = Field(default=None, ge=0)
     in_the_money: int = Field(ge=0)
     top_tier_opportunities: int = Field(ge=0)
     avg_score: int = Field(ge=0, le=100)

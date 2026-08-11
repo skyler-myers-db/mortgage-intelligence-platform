@@ -64,6 +64,13 @@ class SegmentSummary(BaseModel):
     code: SegmentCode
     name: str
     count: int
+    # Contact-eligible subset of `count` -- the borrowers this card's Lead
+    # Queue link will actually show, since the queue applies the
+    # eligibility predicate and the headline count does not. Live
+    # 2026-08-11: itm 3,217 of 74,335. Optional so older clients and
+    # cached pre-change frames are unaffected; None means "not reported",
+    # never "zero contactable".
+    contactable: int | None = Field(default=None, ge=0)
     delta: str
     avg_score: int = Field(ge=0, le=100)
     description: str
