@@ -167,6 +167,7 @@ def _trusted_sql_response(
     metric_value: str | None = None,
     started_at: float | None = None,
     suppress_actions: bool = False,
+    cohort_segments: tuple[str, ...] = (),
 ) -> GenieMessageResponse:
     question_hash = _genie_question_hash(question)
     message_id = f"trusted-sql-{question_hash}"
@@ -191,6 +192,7 @@ def _trusted_sql_response(
         question_hash=question_hash,
         sql_query=sql_query,
         source="trusted_sql",
+        declared_segments=cohort_segments,
     )
     return GenieMessageResponse(
         conversation_id="",
@@ -1843,6 +1845,13 @@ def direct_canonical_response(
             rows=rows,
             answer=answer,
             metric_value=f"{total_matching:,}",
+            # `array_contains(b.segment_codes,'retention')` is a real
+            # conjunct, but it sits in a subquery this statement selects from
+            # rather than in the outermost statement's own filter position, so
+            # the reader sees no filters at all. Every returned row satisfies
+            # it and `borrower_ids` already pins the cohort, so declaring
+            # `retention` restates the answer instead of narrowing it.
+            cohort_segments=("retention",),
         )
 
     if _retention_risk_question(question):
@@ -1956,6 +1965,16 @@ def direct_canonical_response(
             trusted_assets=trusted_assets,
             rows=rows,
             answer=answer,
+            # The outermost statement joins two CTEs and has no WHERE,
+            # QUALIFY or inner-join ON of its own, so there is no filter
+            # position to read: `broad` restricts on `in_the_money = TRUE` and
+            # `lead_queue` on `array_contains(segment_codes,'itm')`, both
+            # inside CTE bodies the position gate never visits. Per the gold
+            # CASE ladder those two are the same population, so `itm` is exact.
+            # Declared rather than inferred: without it the queue opens every
+            # borrower in those states while the button still promises the
+            # eligible in-the-money subset.
+            cohort_segments=("itm",),
         )
 
     scope = _canonical_in_the_money_count_scope(question)

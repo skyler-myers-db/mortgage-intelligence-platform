@@ -24,7 +24,6 @@ from backend.services.repositories.databricks_genie_actions import (
     _portfolio_criteria_from_sql,  # noqa: F401 - compatibility re-export
     _route_from_answer_rows,  # noqa: F401 - compatibility re-export
     _row_values,  # noqa: F401 - compatibility re-export
-    _segment_codes_from_question,  # noqa: F401 - compatibility re-export
     _sql_hash,  # noqa: F401 - compatibility re-export
     _suggest_genie_actions,
     _total_matching_from_rows,

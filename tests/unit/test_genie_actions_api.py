@@ -1872,7 +1872,6 @@ def test_heloc_genie_action_routes_to_heloc_intent_segment() -> None:
     )
 
     params = parse_qs(urlsplit(route).query)
-    assert params["segment"] == ["permit"]
     assert params["states"] == ["CA"]
     # From the SQL: `has_heloc_propensity_trigger = TRUE` is the answer's own
     # top-level conjunct.
@@ -1882,8 +1881,17 @@ def test_heloc_genie_action_routes_to_heloc_intent_segment() -> None:
     # Live paychex gold 2026-08-11: the answer covers 102,063 CA borrowers and
     # `product=HELOC` would have opened 86,454 — 15,609 dropped in silence.
     assert "product" not in params
-    assert filters["segment_codes"] == ["permit"]
-    assert filters["segment_mode"] == "any"
+    # No `segment` either, and this one is subtle: `permit` IS exactly this
+    # column's population today, because its CASE arm is
+    # `has_permit OR has_heloc_propensity_trigger` and `has_permit` is a
+    # literal FALSE until a filed-permit source lands. But the old value came
+    # from the word "HELOC" in the question, not from that reasoning -- the
+    # same question over `WHERE state = 'CA'` emitted it too. A compound arm
+    # gets no single-column stand-in (see `_SEGMENT_FLAG_COLUMNS`); the answer
+    # already reaches the queue exactly, through `purchase_intent`.
+    assert "segment" not in params
+    assert "segment_codes" not in filters
+    assert "segment_mode" not in filters
 
 
 def test_genie_action_carries_the_answers_score_floor_into_the_cohort() -> None:
@@ -2933,3 +2941,156 @@ def test_request_validation_error_never_echoes_submitted_body() -> None:
         assert "ctx" not in item, item
         assert item.get("loc"), item
         assert item.get("msg"), item
+
+
+# --- Segment predicates the queue cannot replay reach the STORED cohort ------
+#
+# These drive real SQL through `_route_from_answer_rows` into POST
+# /api/genie/actions and assert on the row Lakebase actually received. Testing
+# `_route_from_answer_rows` alone would have passed while both defects below
+# were live (adversarial review 2026-08-11):
+#   * the disclosure was appended to a local list and then never read, so an
+#     answer over `NOT in_the_money` opened all of IL with an EMPTY
+#     `X-Cohort-Unreplayable-Filters` -- the silent divergence this whole
+#     workstream exists to remove;
+#   * the segment reader validated against all 13 SegmentCode values while the
+#     cohort writer and the campaign projection accept 6, so an answer
+#     filtering on an S1.3 overlay segment 400'd all four governed actions.
+
+
+class _SqlDrivenCohortRepo:
+    """Builds its action from `SQL_UNDER_TEST` the way the live path does."""
+
+    SQL_UNDER_TEST = ""
+
+    def respond(
+        self,
+        question: str,
+        conversation_id: str | None = None,
+    ) -> GenieMessageResponse:
+        _ = question
+        rows = [{"state": "IL", "borrowers": 1503}]
+        actions = _suggest_genie_actions(
+            question="How many borrowers does that leave in Illinois?",
+            rows=rows,
+            trusted_assets=["mip.gold.borrower_360"],
+            visualization=None,
+            conversation_id=conversation_id or "conv-sql",
+            message_id="msg-sql",
+            question_hash="hash-sql",
+            sql_query=self.SQL_UNDER_TEST,
+        )
+        return GenieMessageResponse(
+            conversation_id=conversation_id or "conv-sql",
+            message_id="msg-sql",
+            question="How many borrowers does that leave in Illinois?",
+            question_hash="hash-sql",
+            answer="Illinois returned.",
+            source="genie",
+            trusted_assets=["mip.gold.borrower_360"],
+            row_count=len(rows),
+            table_rows=rows,
+            actions=actions,
+        )
+
+
+def _stored_cohort_route_filters(sql: str) -> tuple[int, dict[str, object] | None]:
+    """POST the open_cohort action built from `sql`; return (status, stored row)."""
+
+    repo = type("_Repo", (_SqlDrivenCohortRepo,), {"SQL_UNDER_TEST": sql})
+    lakebase = _RecordingLakebase()
+    prior_repo = app.dependency_overrides.get(get_genie_answer_repository)
+    prior_lakebase = app.dependency_overrides.get(get_lakebase_client)
+    app.dependency_overrides[get_genie_answer_repository] = repo
+    app.dependency_overrides[get_lakebase_client] = lambda: lakebase
+    try:
+        payload = _confirmed_payload_for_action("open_cohort")
+        res = client.post("/api/genie/actions", json=payload, headers=ACTOR_HEADERS)
+    finally:
+        if prior_repo is None:
+            app.dependency_overrides.pop(get_genie_answer_repository, None)
+        else:
+            app.dependency_overrides[get_genie_answer_repository] = prior_repo
+        if prior_lakebase is None:
+            app.dependency_overrides.pop(get_lakebase_client, None)
+        else:
+            app.dependency_overrides[get_lakebase_client] = prior_lakebase
+    stored = next(
+        (
+            json.loads(str(params["route_filters"]))
+            for sql_text, params in lakebase.fetchones
+            if "INSERT INTO mip_app.genie_cohorts" in sql_text
+        ),
+        None,
+    )
+    return res.status_code, stored
+
+
+@pytest.mark.parametrize(
+    ("sql", "why"),
+    [
+        (
+            "SELECT * FROM mip.gold.borrower_360 WHERE NOT in_the_money AND state = 'IL'",
+            "a negation is the complement, which no cohort filter can express",
+        ),
+        (
+            "SELECT * FROM mip.gold.borrower_360 WHERE "
+            "(array_contains(segment_codes,'retention') OR recommended_offer_code='retention') "
+            "AND state = 'IL'",
+            "an OR across two columns is broader than either column alone",
+        ),
+        (
+            "SELECT * FROM mip.gold.borrower_360 WHERE second_lien_itm AND state = 'IL'",
+            "an S1.3 overlay segment is outside the reviewed replay vocabulary",
+        ),
+    ],
+)
+def test_unreplayable_segment_predicate_is_disclosed_in_the_stored_cohort(
+    sql: str, why: str
+) -> None:
+    status, stored = _stored_cohort_route_filters(sql)
+
+    # The action must still succeed: the queue opens BROADER than the answer,
+    # which is a disclosure, not a refusal.
+    assert status == 200, why
+    assert stored is not None, why
+    assert stored["unreplayable_filters"] == ["segment_codes_predicate"], why
+    # ... and it must not have guessed a cohort out of the shape it refused.
+    assert "segment_codes" not in stored, why
+    assert stored["states"] == ["IL"], why
+
+
+def test_a_readable_segment_predicate_still_reaches_the_stored_cohort() -> None:
+    """The control: the same path with a shape the reader CAN replay exactly."""
+
+    status, stored = _stored_cohort_route_filters(
+        "SELECT * FROM mip.gold.borrower_360 WHERE in_the_money AND state = 'IL'"
+    )
+
+    assert status == 200
+    assert stored is not None
+    assert stored["segment_codes"] == ["itm"]
+    assert stored["segment_mode"] == "any"
+    assert "unreplayable_filters" not in stored
+
+
+def test_the_genie_replay_segment_vocabulary_has_exactly_one_definition() -> None:
+    """Three readers used to keep three private copies of this set.
+
+    The answer's segment reader emitted from one, the Genie cohort writer
+    validated against another, and the campaign JSON projection against a
+    third. A code accepted by the first and rejected by the other two is not a
+    validation error, it is a governed action that cannot be taken -- so the
+    set is defined once and every reader is pinned to that object here.
+    """
+
+    from backend.schemas.campaign_json_projection import _GENIE_SEGMENT_CODES
+    from backend.schemas.lead import GENIE_REPLAY_SEGMENT_CODES, SEGMENT_CODE_VALUES
+    from backend.services.genie_actions import _GENIE_SEGMENT_CODE_RE
+
+    assert _GENIE_SEGMENT_CODES is GENIE_REPLAY_SEGMENT_CODES
+    assert set(GENIE_REPLAY_SEGMENT_CODES) <= set(SEGMENT_CODE_VALUES)
+    for code in SEGMENT_CODE_VALUES:
+        assert bool(_GENIE_SEGMENT_CODE_RE.fullmatch(code)) == (
+            code in GENIE_REPLAY_SEGMENT_CODES
+        ), code
