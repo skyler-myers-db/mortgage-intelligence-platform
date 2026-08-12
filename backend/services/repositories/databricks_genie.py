@@ -532,17 +532,38 @@ def _adapt_genie_response(
         result.sql_query
         and _sql_uses_impossible_retention_conjunction(question, result.sql_query)
     )
+    # `depends_on_pending_feeds` is read off the LIVE turn's material -- the SQL
+    # Genie wrote and the rows it returned. It must block that answer, and it
+    # does, below. It must NOT veto the rescue, because the rescue serves a
+    # DIFFERENT statement: whether Genie's discarded SQL happened to mention a
+    # pending feed says nothing about whether the canonical one does.
+    #
+    # Measured live on paychex 2026-08-12: "Which segment converts best: HELOC,
+    # cash-out, or retention?" returns SQL referencing a permit column --
+    # unsurprising, since HELOC Intent IS the permit segment -- so the pending
+    # Building Permits feed set this flag and the rescue never ran. The
+    # canonical statement it would have served reads
+    # `mip.semantics.segment_performance_metric_view` and touches no permit
+    # column at all. The user got a refusal that cited a data gap irrelevant to
+    # the answer they could have had.
     canonical_rescue_eligible = (
         lacks_trusted_proof
         or (unsafe_live_sql and stale_evidence_enum_only)
         or semantically_broken_sql
-    ) and not depends_on_pending_feeds
+    )
     if canonical_rescue_eligible:
         canonical = _canonical_genie_answer(
             question=question,
             result=result,
             sql_client=sql_client,
         )
+        # The guarantee is preserved where it belongs: on the statement actually
+        # being served. A canonical statement that DOES depend on a pending feed
+        # is still refused.
+        if canonical is not None and _pending_feed_gaps_from_material(
+            canonical.sql_query or ""
+        ):
+            canonical = None
         if canonical is not None:
             # Governance (re-executed counts, trusted-asset policy, proof,
             # visualization, actions, scrubbing) is done. Restore Genie's own
