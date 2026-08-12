@@ -99,6 +99,97 @@ _STRUCTURAL_AUDIENCE_KEYWORD_PATTERNS = tuple(
 )
 
 
+# Reviewed leetspeak substitutions. One definition, used by both scan-variant
+# builders below; they previously carried four copies of the same two tables.
+_LEET_TABLES: tuple[dict[int, int], ...] = (
+    str.maketrans("013457", "oleast"),
+    str.maketrans("013457", "oieast"),
+)
+_ALNUM_TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
+_LETTER_RUN_RE = re.compile(r"[A-Za-z]+")
+
+
+def _leet_folded_variants(value: str) -> set[str]:
+    """Leet de-obfuscations of ``value``, skipping tokens that are ALL DIGITS.
+
+    ``w0men``, ``mus1im`` and ``b1ack`` are evasions: the digit sits INSIDE a
+    word, so the token still carries a letter and still folds here. A token
+    with no letter at all is a NUMBER -- a governed count, a ZIP, a year -- and
+    folding it mints letters nobody wrote.
+
+    Measured live on paychex 2026-08-12: "Which Washington cities have between
+    3000 and 4500 total borrowers?" was answered by Genie and then WITHHELD,
+    because NEWCASTLE's count "4,140" separator-folds to the token ``140``,
+    leet-folds to ``lao`` (a member of ``_PROTECTED_NATIONAL_ORIGIN_TERMS``),
+    and "borrowers" sat inside the national-origin proximity window. The
+    governed answer was refused for the VALUE OF A NUMBER, with
+    ``unsafe_field: "answer"`` in the log and nothing else to go on.
+
+    What is given up is the ability to read a protected term out of a string
+    containing NO letters. That is wider than the one term that motivated it:
+    brute-forcing every digit run of length 1-6 over both tables finds ``140``
+    -> ``lao`` and ``1405`` -> ``laos`` in the national-origin bank, ``551``
+    -> ``ssi`` reaching ``(?:ssi|...)\\s+recipients?``, and 37 runs reaching the
+    health bank's open-ended morphology (``415`` -> ``als``; the whole
+    ``-olol`` drug-suffix family via ``010101`` -> ``ololol``). Every one of
+    those was a live false positive too: "Kirkland has 415 borrowers." and
+    "There are 551 recipients in this segment." both blocked before this.
+
+    What is NOT given up is any evasion. An evader writes a word for humans to
+    read, so at least one character is always a letter, and any token carrying
+    a letter still folds in full: ``l40``, ``1ao``, ``la0``, ``x140`` all still
+    match. The split-term joiner is handled separately -- see ``_joiner_tokens``
+    -- because there a lone digit stands in for one letter of a spaced-out
+    term, so skipping it would rejoin ``b 1 a c k`` as ``back``.
+    """
+
+    return {_fold_letter_bearing_tokens(value, table) for table in _LEET_TABLES}
+
+
+def _fold_letter_bearing_tokens(value: str, table: dict[int, int]) -> str:
+    """Apply one leet table to every alphanumeric token that carries a letter.
+
+    ``table`` is a parameter rather than a closed-over loop variable so the
+    substitution cannot pick up a late binding (ruff B023). ``_ALNUM_TOKEN_RE``
+    is ASCII-only and the caller has already NFKC-normalized, so a plain
+    ``isalpha`` is sufficient here.
+    """
+
+    return _ALNUM_TOKEN_RE.sub(
+        lambda match: (
+            match.group(0).translate(table)
+            if any(char.isalpha() for char in match.group(0))
+            else match.group(0)
+        ),
+        value,
+    )
+
+
+def _joiner_tokens(value: str, table: dict[int, int]) -> list[tuple[str, bool]]:
+    """Leet-folded alphanumeric tokens, each flagged as digit-derived or not.
+
+    The flag is the whole point: it lets the split-term joiner reassemble
+    ``b 1 a c k`` (one digit among real letters) while refusing to reassemble
+    ``1,405`` into ``laos`` (every token digit-derived, so the "letters" are an
+    artefact of the fold rather than anything a writer typed).
+    """
+
+    tokens: list[tuple[str, bool]] = []
+    for match in _ALNUM_TOKEN_RE.finditer(value):
+        raw = match.group(0)
+        digit_derived = not any(char.isalpha() for char in raw)
+        # One token per LETTER RUN, not one per alphanumeric run. Only the
+        # digits ``013457`` are in the tables; ``2``, ``6``, ``8`` and ``9``
+        # survive the fold and therefore still SPLIT a word, which is exactly
+        # how ``w2omen`` and ``b8lack`` are caught -- the joiner rebuilds them
+        # from ``w`` + ``omen``. Concatenating the whole run into one token
+        # made those single tokens, and windows start at two, so 160 measured
+        # evasions over the non-table digits went silent.
+        for letter_run in _LETTER_RUN_RE.findall(raw.translate(table)):
+            tokens.append((letter_run, digit_derived))
+    return tokens
+
+
 def _structural_audience_scan_variants(value: str) -> set[str]:
     """Canonicalize only governed audience-claim keywords, preserving sentences."""
 
@@ -120,10 +211,15 @@ def _structural_audience_scan_variants(value: str) -> set[str]:
     variants = {
         value,
         symbol_folded,
-        value.translate(str.maketrans("013457", "oleast")),
-        value.translate(str.maketrans("013457", "oieast")),
-        symbol_folded.translate(str.maketrans("013457", "oleast")),
-        symbol_folded.translate(str.maketrans("013457", "oieast")),
+        # Unscoped fold on purpose. This builder only canonicalizes the eight
+        # audience keywords, and not one of them is reachable from the
+        # digit-fold alphabet ({o,l,i,e,a,s,t}): "may" needs m, "can" needs c
+        # and n, "should" needs h/u/d, "qualify" needs q/u/f/y. So digits
+        # cannot mint an audience claim here, while ``m 4 y benefit`` and
+        # ``c 4 n qualify`` must still canonicalize -- scoping the fold here
+        # silently retired the fail-closed unknown-audience machine.
+        *(value.translate(table) for table in _LEET_TABLES),
+        *(symbol_folded.translate(table) for table in _LEET_TABLES),
     }
     canonical: set[str] = set()
     for variant in variants:
@@ -258,10 +354,7 @@ def protected_class_marketing_reason(
     leet_variants = {
         translated
         for variant in symbol_variants
-        for translated in (
-            variant.translate(str.maketrans("013457", "oleast")),
-            variant.translate(str.maketrans("013457", "oieast")),
-        )
+        for translated in _leet_folded_variants(variant)
     }
 
     # Add only reviewed ASCII lookalike folds. These variants are safety-scan
@@ -291,16 +384,44 @@ def protected_class_marketing_reason(
                 leet_folded,
             )
         )
-        tokenized = re.findall(r"[A-Za-z]+", leet_folded)
-        joined_tokens.update(
-            "".join(tokenized[start:stop])
-            for start in range(len(tokenized))
-            # Only join genuinely split terms. Re-emitting ordinary one-token
-            # windows detaches words such as ``age`` and ``English`` from the
-            # safe context already reviewed above, creating false positives.
-            for stop in range(start + 2, min(len(tokenized), start + 8) + 1)
-            if sum(len(token) for token in tokenized[start:stop]) <= 32
-        )
+    # The SPLIT-TERM joiner needs the UNSCOPED fold, and needs it token-wise.
+    # Skipping all-digit tokens is right for text scanned as-is, but a digit
+    # standing in for one letter of a spaced-out term is itself an all-digit
+    # token: skip it and the joiner rejoins ``b 1 a c k`` as ``back`` and
+    # ``w o m 3 n`` as ``womn``. Sixteen such strings were measured unblocked
+    # before this path existed, on both surfaces.
+    #
+    # So the joiner folds every token, and instead discards any window whose
+    # tokens are ALL digit-derived. That is what keeps ``1,405`` from being
+    # rejoined into ``laos``: both of its tokens come from digits, so the
+    # window carries no letter anyone actually wrote. An evasion always does --
+    # ``b 1 a c k`` still has ``b``, ``a``, ``c``, ``k``.
+    # Unscoped variants, kept for the two consumers that must not change: the
+    # split-term joiner below and the criterion state machine further down.
+    unscoped_leet_variants = {
+        variant.translate(table) for variant in symbol_variants for table in _LEET_TABLES
+    }
+    unscoped_deobfuscated = {
+        re.sub(r"(?<=[A-Za-z])[\-‐-―](?=[A-Za-z])", "", folded)
+        for variant in unscoped_leet_variants
+        for folded in ascii_confusable_folds(variant)
+    }
+    for joiner_source in {
+        folded for variant in symbol_variants for folded in ascii_confusable_folds(variant)
+    }:
+        for table in _LEET_TABLES:
+            tokens = _joiner_tokens(joiner_source, table)
+            joined_tokens.update(
+                "".join(token for token, _ in tokens[start:stop])
+                for start in range(len(tokens))
+                # Only join genuinely split terms. Re-emitting ordinary
+                # one-token windows detaches words such as ``age`` and
+                # ``English`` from the safe context already reviewed above,
+                # creating false positives.
+                for stop in range(start + 2, min(len(tokens), start + 8) + 1)
+                if sum(len(token) for token, _ in tokens[start:stop]) <= 32
+                and not all(digit_derived for _, digit_derived in tokens[start:stop])
+            )
     # Composition order must not reopen the boundary: apply the same bounded
     # folds after punctuation/split-token joining as well as before it.
     ascii_confusable_variants.update(
@@ -328,6 +449,29 @@ def protected_class_marketing_reason(
         mask_protected_health_safe_contexts(part) for part in scannable_parts
     )
     reviewed_analytics = is_reviewed_read_only_analytics_text(mark_folded)
+    # The criterion state machine keeps the UNSCOPED fold, deliberately, and
+    # this is the one place where that matters.
+    #
+    # It is a structural grammar over UNKNOWN tokens, not a vocabulary matcher,
+    # so a number folded into a word-shaped token ("top 50" -> "top so") reads
+    # to it as an unreviewed selection token and refuses. That is how
+    # "Show me the top 50 borrowers with the credit score." and "Identify the
+    # top 10 borrowers with eczema." are refused today: not because the machine
+    # saw "credit score" or "eczema" -- it does not catch either once a numeric
+    # quantifier is present -- but because the fold handed it "so"/"lo".
+    #
+    # Correct outcome, accidental reason. Scoping the fold here removes the
+    # accident and, with it, 31 measured refusals; the underlying hole (a
+    # numeric quantifier blinds the machine) is pre-existing, belongs to the
+    # criterion grammar rather than to the de-obfuscator, and is filed
+    # separately. Feeding this machine the unscoped variants leaves its
+    # behavior bit-for-bit unchanged while the TERM banks above stop reading
+    # numbers as national origins.
+    criterion_semantic_parts = (
+        mark_folded,
+        *sorted(unscoped_leet_variants),
+        *sorted(unscoped_deobfuscated),
+    )
     has_unreviewed_selection_criterion = (
         False
         if (reviewed_analytics or assume_reviewed_read_only_analytics)
@@ -337,7 +481,7 @@ def protected_class_marketing_reason(
                 selection_context_re=PROTECTED_HEALTH_SELECTION_CONTEXT_RE,
             )
             # Separator-folded text is invalid for the clause state machine.
-            for part in health_semantic_parts
+            for part in criterion_semantic_parts
         )
     )
     # Direct protected-class, health, national-origin, and proxy detectors
