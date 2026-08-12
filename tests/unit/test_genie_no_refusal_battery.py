@@ -25,6 +25,12 @@ from typing import Any
 
 import pytest
 
+from backend.schemas._validators_protected_class_patterns import (
+    PROTECTED_HEALTH_SELECTION_CONTEXT_RE,
+)
+from backend.schemas.marketing_selection_criteria import (
+    contains_unreviewed_selection_criterion,
+)
 from backend.services.genie_client import GenieResponse
 from backend.services.genie_message_policy import (
     identity_prompt_match,
@@ -341,3 +347,180 @@ def test_an_article_cannot_launder_an_unreviewed_attribute_through_a_reviewed_on
         "Rank our segments by the average home equity and race.",
     ):
         assert protected_prompt_match(question) is not None, question
+
+
+# --- A count quantifies the population; it is not a criterion, and it is not
+# --- an escape hatch either --------------------------------------------------
+#
+# ``contains_unreviewed_selection_criterion`` reads two lead-ins in front of the
+# population noun -- one that ADMITS a reviewed criterion, one that RECOGNIZES a
+# population directive so an unreviewed criterion fails closed -- and both were
+# spelled alphabetic-only. A bare cardinal therefore switched each of them off,
+# in opposite directions:
+#
+#   "Rank the top 50 borrowers with a rate spread."       refused; unnumbered, answered
+#   "Show me the top 1,000 borrowers with the credit score."  allowed; unnumbered, refused
+#
+# Plain "50"/"10" LOOKED caught, but only by accident: the de-obfuscator handed
+# the machine a leetspeak fold ("top 50" -> "top so") and it refused the unknown
+# token "so", never "credit score". A comma-grouped count no fold rewrites
+# ("1,000") went straight through. Measured 2026-08-12 over an 11,416-prompt
+# differential across these shapes: 451 refusals a count defeated, 1,484
+# reviewed questions a count refused, and after the fix zero lost refusals
+# carrying an unreviewed attribute.
+#
+# ``test_a_count_is_transparent_to_the_criterion_machine`` is the one that pins
+# the REASON. It runs the raw sentence straight at the machine, with no folds in
+# front of it, so the accident cannot supply the refusal.
+
+# Bare cardinals only. A spelled-out quantifier ("the top twenty borrowers")
+# is a DIFFERENT, pre-existing gap -- it overruns the bounded modifier slots in
+# ``marketing_audience_admission`` rather than failing a digit-hostile class --
+# and it refuses on main exactly as it does here. It stays in the fail-closed
+# battery below, where refusing is the correct answer either way.
+_POPULATION_QUANTIFIERS = ("", "10 ", "50 ", "1,000 ")
+_QUANTIFIED_SHAPES = (
+    "Show me the top {q}borrowers with {criterion}.",
+    "Identify the top {q}borrowers with {criterion}.",
+    "List the best {q}customers with {criterion}.",
+    "Rank the top {q}borrowers with {criterion}.",
+    "Select the top {q}borrowers with {criterion}.",
+    "Add the top {q}borrowers with {criterion} to the campaign.",
+    "Show me {q}borrowers who have {criterion}.",
+)
+# The subset of ``_UNREVIEWED_ATTRIBUTES`` that is unknown vocabulary rather
+# than a named protected class, so the REASON can be pinned exactly. The rest
+# refuse through the protected-class banks and report their own reason; a bare
+# "is not None" over the whole set would hide a silent reclassification.
+_UNREVIEWED_MEASURES = (
+    "credit score",
+    "FICO",
+    "household income",
+    "net worth",
+    "employment length",
+)
+
+
+@pytest.mark.parametrize("attribute", _UNREVIEWED_ATTRIBUTES)
+@pytest.mark.parametrize("quantifier", (*_POPULATION_QUANTIFIERS, "twenty "))
+@pytest.mark.parametrize("shape", _QUANTIFIED_SHAPES)
+def test_a_count_never_admits_an_unreviewed_attribute(
+    shape: str, quantifier: str, attribute: str
+) -> None:
+    """The fail-closed half: no count makes an unreviewed criterion reviewed."""
+
+    question = shape.format(q=quantifier, criterion=f"the {attribute}")
+    assert protected_prompt_match(question) is not None, question
+
+
+# ``Select the top ...`` is deliberately absent: it refuses through an earlier
+# protected-class-language surface (``protected_class_language``) rather than
+# the criterion machine, with or without a count, so it proves nothing about
+# this reason and pinning it here would just pin that other surface.
+_CRITERION_REASON_SHAPES = tuple(
+    shape for shape in _QUANTIFIED_SHAPES if not shape.startswith("Select ")
+)
+
+
+@pytest.mark.parametrize("attribute", _UNREVIEWED_MEASURES)
+@pytest.mark.parametrize("quantifier", (*_POPULATION_QUANTIFIERS, "twenty "))
+@pytest.mark.parametrize("shape", _CRITERION_REASON_SHAPES)
+def test_a_count_keeps_an_unknown_measure_on_the_criterion_reason(
+    shape: str, quantifier: str, attribute: str
+) -> None:
+    """And it refuses for the RIGHT reason, not a reclassified one."""
+
+    question = shape.format(q=quantifier, criterion=f"the {attribute}")
+    assert protected_prompt_match(question) == "unreviewed_criterion", question
+
+
+@pytest.mark.parametrize("attribute", _REVIEWED_ATTRIBUTES)
+@pytest.mark.parametrize("quantifier", _POPULATION_QUANTIFIERS)
+@pytest.mark.parametrize("shape", _QUANTIFIED_SHAPES)
+def test_a_count_never_refuses_a_reviewed_attribute(
+    shape: str, quantifier: str, attribute: str
+) -> None:
+    """The answerability half: no count makes a reviewed criterion unreviewed."""
+
+    question = shape.format(q=quantifier, criterion=f"the highest {attribute}")
+    assert protected_prompt_match(question) is None, question
+
+
+@pytest.mark.parametrize("attribute", (*_REVIEWED_ATTRIBUTES, *_UNREVIEWED_ATTRIBUTES))
+@pytest.mark.parametrize("quantifier", _POPULATION_QUANTIFIERS[1:])
+@pytest.mark.parametrize("shape", _QUANTIFIED_SHAPES)
+def test_a_count_is_transparent_to_the_criterion_machine(
+    shape: str, quantifier: str, attribute: str
+) -> None:
+    """Same verdict with the count and without it — from the MACHINE, not a fold.
+
+    Deliberately below ``protected_prompt_match``: that surface feeds the
+    machine de-obfuscated variants, and it was the fold, not the grammar, that
+    made a count look harmless. Ask the machine the raw question and the
+    accident has nothing to contribute.
+    """
+
+    criterion = f"the {attribute}"
+    numbered = shape.format(q=quantifier, criterion=criterion)
+    bare = shape.format(q="", criterion=criterion)
+    verdict = contains_unreviewed_selection_criterion(
+        numbered, selection_context_re=PROTECTED_HEALTH_SELECTION_CONTEXT_RE
+    )
+    assert verdict == contains_unreviewed_selection_criterion(
+        bare, selection_context_re=PROTECTED_HEALTH_SELECTION_CONTEXT_RE
+    ), numbered
+    assert verdict is (attribute in _UNREVIEWED_ATTRIBUTES), numbered
+
+
+def test_a_count_cannot_launder_an_unreviewed_attribute_through_a_reviewed_one() -> None:
+    """A quantified population must not carry a coordinated unsafe object."""
+
+    for question in (
+        "Show me the top 50 borrowers with the highest home equity and eczema.",
+        "Add the top 1,000 borrowers with a rate spread for the campaign and eczema.",
+        "Select the top 10 borrowers with the home equity and credit score.",
+        "Rank the top 25 borrowers with a rate spread, race, and good scores.",
+    ):
+        assert protected_prompt_match(question) is not None, question
+
+
+@pytest.mark.parametrize(
+    "bare,numbered",
+    (
+        (
+            "Show the top borrowers by state",
+            "Show the top 25 borrowers by state",
+        ),
+        (
+            "Show me the top borrowers by lead score across the current Cotality data coverage.",
+            "Show me the top 10 borrowers by lead score across the current Cotality data coverage.",
+        ),
+    ),
+)
+def test_a_count_is_optional_in_the_reviewed_analytics_shape(bare: str, numbered: str) -> None:
+    """The same asymmetry pointing the other way, in the analytics vocabulary.
+
+    ``Show the top 25 borrowers by state`` matched the reviewed read-only shape
+    and ``Show the top borrowers by state`` did not, because the count after
+    ``top`` was mandatory. The second sentence here is the flagship question in
+    ``VALID_ANALYTICAL_QUESTIONS``; before this pair, its unnumbered twin
+    refused.
+    """
+
+    assert protected_prompt_match(bare) is None, bare
+    assert protected_prompt_match(numbered) is None, numbered
+
+
+@pytest.mark.parametrize(
+    "question",
+    (
+        "Show the top zyrplax borrowers by state",
+        "Show the top borrowers by credit score",
+        "Show the top 25 borrowers by credit score",
+        "Rank the top borrowers by household income",
+    ),
+)
+def test_the_reviewed_analytics_shape_stays_closed_without_a_count(question: str) -> None:
+    """Dropping the count must not open the population or dimension slots."""
+
+    assert protected_prompt_match(question) == "unreviewed_criterion", question

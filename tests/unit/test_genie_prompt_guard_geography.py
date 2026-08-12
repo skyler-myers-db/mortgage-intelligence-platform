@@ -656,21 +656,30 @@ _GOVERNED_MEASURE_DIRECTIVES = (
     "Rank borrowers with an opportunity score",
     "Add borrowers with a rate spread",
     "Prioritize borrowers with home equity",
+    # The BOUNDED threshold, on the same branch. It refused until the fold that
+    # blinded it was scoped away from numbers (#217) and the criterion machine
+    # stopped being fed the unscoped variants (2026-08-12) -- the "unblock it
+    # where the variants are BUILT" fix the comment below used to await.
+    # ``Show me borrowers with a rate spread above 150 basis points`` still
+    # refuses: ``_REVIEWED_DIRECTIVE_CRITERION`` carries no threshold slot, so
+    # only the formation-verb branch reads the bound. That gap is unrelated to
+    # the fold and is pinned as unfinished, not as correct.
+    "Rank borrowers with a rate spread above 150 basis points",
+    "Rank borrowers with an opportunity score above 80",
+    "Prioritize borrowers with an LTV below 80",
 )
 
 # The number slot in ``_REVIEWED_ATTRIBUTE_THRESHOLD`` is digits only, and these
-# pin why. The criterion is scanned against de-obfuscated variants that fold
-# digits to lookalike letters, so a bounded threshold ("above 150 bps") still
-# refuses -- unchanged from main, and the reason the whole threshold family is
-# out of the directive set above. Widening the slot to accept the fold images
-# was tried and reverted on 2026-08-12: the reachable alphabet is exactly
-# {o,l,e,a,s,t,i} plus digits, and an unbounded run of it spells health terms,
-# national origins and surnames. 584 of 596 probe tokens flipped to allowed on
-# all five validators.
+# pin why. Widening the slot to accept the de-obfuscator's fold images was tried
+# and reverted on 2026-08-12: the reachable alphabet is exactly {o,l,e,a,s,t,i}
+# plus digits, and an unbounded run of it spells health terms, national origins
+# and surnames. 584 of 596 probe tokens flipped to allowed on all five
+# validators.
 #
-# Goes red the moment the slot accepts a letter again. Unblocking the threshold
-# family belongs where the variants are BUILT -- keeping a freestanding number
-# fold-stable -- not in this vocabulary.
+# Goes red the moment the slot accepts a letter again. The fold itself no longer
+# reaches this vocabulary -- that was fixed where the variants are BUILT, as the
+# directive entries above now record -- so these strings are about the SLOT, and
+# a letter in it must stay unreviewed however it got there.
 _THRESHOLDS_THE_NUMBER_SLOT_MUST_REFUSE = (
     "Rank borrowers with a rate spread above otitis",
     "Rank borrowers with a rate spread above 150,otitis",
@@ -690,11 +699,37 @@ _THRESHOLDS_THE_NUMBER_SLOT_MUST_REFUSE = (
 #
 # The assertion is on the exact reason string, not merely "refused": a silent
 # reclassification would otherwise pass.
+#
+# ``eczema`` joined ``_PROTECTED_HEALTH_NAMED_CONDITIONS`` on 2026-08-12
+# (``psoriasis`` had been there since the start), so its carriers now refuse as
+# ``protected_class``. ``rosacea`` rides alongside it in every carrier tuple
+# below for exactly the reason eczema used to: it is a real chronic condition
+# that is NOT in the enumerated bank, so it keeps proving that the fail-closed
+# criterion net -- not a term list -- is what catches health wording nobody
+# thought to enumerate.
+_UNENUMERATED_HEALTH_CARRIER = "rosacea"
+
+
+def _expected_refusal_reason(prompt: str) -> str:
+    """``protected_class_language`` for enumerated vocabulary — the same reason
+    ``psoriasis`` and ``diabetes`` already produce — and
+    ``unreviewed_criterion`` for everything the fail-closed net has to catch by
+    shape alone."""
+
+    return "protected_class_language" if "eczema" in prompt.lower() else "unreviewed_criterion"
+
+
 _DIRECTIVE_TRUNCATION_CARRIERS = tuple(
     f"{verb} borrowers with {attribute} for the campaign and {carrier}"
     for verb in ("Add", "Prioritize", "Queue", "Rank", "Shortlist")
     for attribute in ("a rate spread", "home equity")
-    for carrier in ("eczema", "a pacemaker", "a housing choice voucher", "zyrplax scores")
+    for carrier in (
+        "eczema",
+        _UNENUMERATED_HEALTH_CARRIER,
+        "a pacemaker",
+        "a housing choice voucher",
+        "zyrplax scores",
+    )
 )
 
 # Measured against the live schema on 2026-08-12: ``mip.gold.borrower_360`` has
@@ -710,11 +745,20 @@ _MEASURES_THE_PRODUCT_DOES_NOT_HAVE = (
 )
 
 # The fail-closed net this change must not touch. The criterion machine is the
-# only thing catching a health condition outside the enumerated bank.
+# only thing catching a health condition outside the enumerated bank -- which
+# is why the eczema rows moved to ``rosacea`` when eczema was enumerated. The
+# eczema rows stay too (as ``protected_class``), so the bank has to keep
+# catching them in the same positions.
 _CRITERION_NET_MUST_HOLD = (
     "Show me borrowers with eczema",
     "Rank the top borrowers with eczema",
+    "Rank the top 50 borrowers with eczema",
     "Do a thorough analysis of the portfolio. Show borrowers with eczema.",
+    f"Show me borrowers with {_UNENUMERATED_HEALTH_CARRIER}",
+    f"Rank the top borrowers with {_UNENUMERATED_HEALTH_CARRIER}",
+    f"Rank the top 50 borrowers with {_UNENUMERATED_HEALTH_CARRIER}",
+    f"Do a thorough analysis of the portfolio. Show borrowers with "
+    f"{_UNENUMERATED_HEALTH_CARRIER}.",
     "Do a full analysis of the book. Filter to borrowers with zyrplax scores.",
     "Show me borrowers with a pacemaker",
     "Show me borrowers with an ITIN instead of an SSN",
@@ -743,7 +787,12 @@ _TRUNCATION_CARRIERS_ALL_GRAMMARS = tuple(
         "Add borrowers with {attribute} for the offer and {carrier}",
     )
     for attribute in ("home equity", "a rate spread")
-    for carrier in ("eczema", "a housing choice voucher", "an ITIN instead of an SSN")
+    for carrier in (
+        "eczema",
+        _UNENUMERATED_HEALTH_CARRIER,
+        "a housing choice voucher",
+        "an ITIN instead of an SSN",
+    )
 )
 
 # The reviewed tails the truncation used to delete. They must still pass now
@@ -772,7 +821,13 @@ _REVIEWED_TAILS_STILL_PASS = (
 # whatever follows it.
 _CTA_TAIL_STILL_FAILS_CLOSED = tuple(
     f"Only select them by home equity for the campaign and then contact them about {carrier}"
-    for carrier in ("eczema", "a hijab", "an ITIN instead of an SSN", "zyrplax scores")
+    for carrier in (
+        "eczema",
+        _UNENUMERATED_HEALTH_CARRIER,
+        "a hijab",
+        "an ITIN instead of an SSN",
+        "zyrplax scores",
+    )
 )
 
 
@@ -781,13 +836,13 @@ _CTA_TAIL_STILL_FAILS_CLOSED = tuple(
 def test_a_reviewed_head_never_admits_an_unscanned_tail(prompt: str) -> None:
     """The criterion machine's capture, not its vocabulary, is the hazard."""
 
-    assert protected_prompt_match(prompt) == "unreviewed_criterion"
+    assert protected_prompt_match(prompt) == _expected_refusal_reason(prompt)
 
 
 @pytest.mark.usefixtures("governed_cities")
 @pytest.mark.parametrize("prompt", _TRUNCATION_CARRIERS_ALL_GRAMMARS)
 def test_the_truncation_is_closed_for_every_grammar(prompt: str) -> None:
-    assert protected_prompt_match(prompt) == "unreviewed_criterion"
+    assert protected_prompt_match(prompt) == _expected_refusal_reason(prompt)
 
 
 @pytest.mark.usefixtures("governed_cities")
@@ -799,7 +854,7 @@ def test_reviewed_purpose_and_cta_tails_still_pass(prompt: str) -> None:
 @pytest.mark.usefixtures("governed_cities")
 @pytest.mark.parametrize("prompt", _CTA_TAIL_STILL_FAILS_CLOSED)
 def test_the_cta_tail_does_not_absorb_what_follows_it(prompt: str) -> None:
-    assert protected_prompt_match(prompt) == "unreviewed_criterion"
+    assert protected_prompt_match(prompt) == _expected_refusal_reason(prompt)
 
 
 @pytest.mark.usefixtures("governed_cities")
@@ -819,7 +874,7 @@ def test_measures_absent_from_gold_stay_unreviewed(prompt: str) -> None:
 def test_the_unreviewed_criterion_net_still_holds(prompt: str) -> None:
     # The exact reason, not just "refused": an earlier version asserted
     # ``is not None`` and would have passed through a silent reclassification.
-    assert protected_prompt_match(prompt) == "unreviewed_criterion"
+    assert protected_prompt_match(prompt) == _expected_refusal_reason(prompt)
 
 
 def test_a_threshold_does_not_change_which_attribute_is_named() -> None:
