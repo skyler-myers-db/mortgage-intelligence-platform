@@ -5,7 +5,10 @@ from collections.abc import Mapping, Sequence
 
 from pydantic import BaseModel, Field, field_validator
 
-from backend.schemas._validators_person_names import contains_human_name_shape
+from backend.schemas._validators_person_names import (
+    contains_human_name_shape,
+    shares_token_with_person_lexicon,
+)
 from backend.schemas._validators_protected_class import (
     contains_protected_class_proxy_marketing_text,
     protected_class_marketing_reason,
@@ -207,13 +210,27 @@ GENIE_GEO_LOCATION_RE = re.compile(
     r"\(?\b[A-Z][A-Za-z.'-]*(?:\s+[A-Z][A-Za-z.'-]*){0,3},\s*[A-Z]{2}\b\)?"
 )
 
-# A parenthetical immediately after a masked borrower ID is always the
-# borrower's CITY in this product ("**B-0YINYSXBPWZBF** (Miramar): ...") —
-# borrower names never render and masked IDs are the only identity. City-only
-# forms lack the ", ST" the geography pattern above needs, so strip them here
-# before the name-shape scan.
-_MASKED_ID_CITY_PARENS_RE = re.compile(
-    r"(B-[0-9A-Z]{13}\*{0,2}[\s:,·—-]*)\(([A-Z][^)]{1,40})\)"
+# A parenthetical qualifier immediately after a masked borrower ID
+# ("**B-0YINYSXBPWZBF** (Miramar): ..."). City-only forms lack the ", ST" the
+# geography pattern above needs, so they are blanked here — for the name-shape
+# scan and nothing else, via ``name_shape_value``.
+#
+# It is NOT always the city, which is why the blank cannot be gated on the
+# governed place dimension. Sweeping the 14 assets bound to the Genie space on
+# paychex 2026-08-12 (18,776 distinct values), a borrower-row answer also writes
+# `recommended_offer` ("Investor Product"), `listing_status_description`
+# ("Active Under Contract", "Coming Soon"), `current_lender_ref` ("Competitor
+# Other") and `evidence_events.source_product` ("Owner Link", "Voluntary Lien +
+# Market Rates") there — every one a title-case shape the person-name heuristic
+# reads as an identity, and none of them a city.
+#
+# The content class is deliberately narrower than the old `[^)]{1,40}`: letters,
+# digits, spaces and the light punctuation those governed values actually use
+# (`·` and `+` are in it because live values need them). `@ : = #` are NOT — a
+# labelled span (`Analyst: <name>`, `clip: ABC123456`) is not a governed
+# descriptor, and admitting it only ever widened the blind spot below.
+_MASKED_ID_PARENTHETICAL_RE = re.compile(
+    r"B-[0-9A-Z]{13}\*{0,2}[\s:,·—-]*\(([A-Z][A-Za-z0-9 .,'&/·+-]{0,48})\)"
 )
 
 
@@ -280,15 +297,52 @@ def genie_visible_text_unsafe(
         # stripped by key at the repository boundary, and a formatted phone
         # ("312-555-0142") is not a bare numeric cell, so it still scans.
         return False
-    name_shape_scannable = GENIE_GEO_LOCATION_RE.sub(" ", value)
-    name_shape_scannable = _MASKED_ID_CITY_PARENS_RE.sub(r"\1 ", name_shape_scannable)
     return contains_unsafe_ai_text(
         value,
         include_titlecase=not structured_value,
         assume_reviewed_read_only_analytics=True,
-        name_shape_value=name_shape_scannable,
+        name_shape_value=_name_shape_scan_copy(value),
         name_shape_allowed_phrases=name_shape_phrases,
         protected_class_allowed_phrases=protected_class_phrases,
+    )
+
+
+def _name_shape_scan_copy(value: str) -> str:
+    """The copy handed to the person-name heuristic, and to nothing else.
+
+    Scoping these two strips to one scanner (PR #207) stopped them deleting
+    text from the fair-lending, PII and confidential scanners. It did not make
+    them *safe for the scanner they do reach*: both still blank their span
+    unconditionally, so the person-name heuristic is simply switched off inside
+    it. On the #207 head, ``**B-0YINYSXBPWZBF** (John Smith)``,
+    ``**B-…** (John Smith, CA)`` and ``Reach John Smith, CA today`` all
+    rendered.
+
+    Each blank is therefore admitted only when the span shares no token with
+    the reviewed person lexicon — the same gate ``genie_place_dimension``
+    applies to its governed exemption sets. A governed descriptor
+    (``(Miramar)``, ``(Active Under Contract)``, ``Lake Forest, CA``) is still
+    blanked; anything carrying a reviewed name keeps scanning. That turns "no
+    borrower name can render here" from an assumption about the gold schema
+    into something this boundary enforces.
+
+    Positional, not phrase-based: a ``name_shape_allowed_phrases`` entry masks
+    every occurrence of the span in the answer, so a name admitted inside the
+    parenthetical would also vanish from a later sentence.
+    """
+
+    def _blank_non_person(match: re.Match[str]) -> str:
+        return match.group(0) if shares_token_with_person_lexicon(match.group(0)) else " "
+
+    scannable = GENIE_GEO_LOCATION_RE.sub(_blank_non_person, value)
+    # Keep the masked ID; only its parenthetical is a name-shape false positive.
+    return _MASKED_ID_PARENTHETICAL_RE.sub(
+        lambda match: (
+            match.group(0)
+            if shares_token_with_person_lexicon(match.group(1))
+            else match.group(0).replace(f"({match.group(1)})", " ")
+        ),
+        scannable,
     )
 
 

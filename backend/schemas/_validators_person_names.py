@@ -44,6 +44,12 @@ _NON_PERSON_TITLECASE_SUFFIXES = frozenset(
         "equity", "heloc", "loan", "mortgage", "offer", "queue", "refi",
         "refinance", "review",
         "candidate", "candidates", "intent", "risk", "sale", "segment", "segments",
+        # Scoring vocabulary. "Opportunity Score" is the product's own ranking
+        # label and Genie writes it into every top-N borrower list; it withheld
+        # a live refinance-plus-HELOC top-10 narrative on paychex 2026-08-12.
+        # Neither word is a surname, and only the pair's LAST word is matched
+        # here, so this exempts "<Word> Score", never a name.
+        "score", "scores", "confidence",
         # fmt: on
     }
 )
@@ -128,6 +134,31 @@ _COMMON_LAST_NAMES = frozenset(
     }
 )
 
+_PERSON_LEXICON = _COMMON_FIRST_NAMES | _COMMON_LAST_NAMES
+_LEXICON_TOKEN_RE = re.compile(r"[^A-Za-z]+")
+
+
+def shares_token_with_person_lexicon(value: str) -> bool:
+    """True when any whole token of ``value`` is a reviewed person name.
+
+    The admission gate for every relaxation that stops scanning a span for
+    identities. ``ELIZABETH`` is a live governed city AND a reviewed first
+    name; ``YORBA LINDA`` carries ``LINDA``. Exempting either would blind the
+    detector to ``Elizabeth Smith``, so a colliding span keeps scanning.
+
+    Shared rather than copied: ``genie_place_dimension`` gates its governed
+    exemption set on this, and the Genie output policy gates its two positional
+    strips on it. Two private copies would drift apart the first time the
+    lexicons grow.
+    """
+
+    return any(
+        token.casefold() in _PERSON_LEXICON
+        for token in _LEXICON_TOKEN_RE.split(value)
+        if token
+    )
+
+
 _REVIEWED_NON_PERSON_PHRASES: tuple[str, ...] = (
     "Mortgage Intelligence Platform",
     "Mortgage Growth Agent",
@@ -143,6 +174,12 @@ _REVIEWED_NON_PERSON_PHRASES: tuple[str, ...] = (
     "Building Permits",
     "Equal Housing Lender",
     "Equal Housing",
+    # The repo-authored redaction label for a non-tenant lien holder
+    # (gold_borrower_360.sql: COALESCE(lr.display_name, 'Competitor Other')),
+    # not a Cotality value. It is the live `current_lender_ref` for most rows,
+    # so it lands in every "which borrowers are with a competitor" answer and
+    # withheld one on paychex 2026-08-12.
+    "Competitor Other",
     "Offer Orchestrator",
     "Portfolio Builder",
     "Genie Conversation",
