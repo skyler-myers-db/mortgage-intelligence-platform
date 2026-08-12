@@ -15,6 +15,7 @@ import { useFootprint } from '../components/FootprintProvider';
 import { useApp } from '../components/AppContext';
 import { queryKeys } from '../lib/queryKeys';
 import { LENDER_RELATIONSHIP_OPTIONS } from '../lib/lenderFilters';
+import { CITY_STATE_PAIR_RE } from '../lib/cityStateFilter';
 import { LeadQueueTableSkeleton } from './lead-queue.skeleton';
 import {
   AGING_FILTER_OPTIONS,
@@ -94,6 +95,10 @@ export default function LeadQueue() {
   );
   const zipFilters = useMemo(
     () => parseCsvParam(searchParams.get('zips'), /^\d{5}$/, 50),
+    [searchParams],
+  );
+  const cityFilters = useMemo(
+    () => parseCsvParam(searchParams.get('cities'), CITY_STATE_PAIR_RE, 50),
     [searchParams],
   );
   const borrowerIdFilters = useMemo(
@@ -221,6 +226,7 @@ export default function LeadQueue() {
         counties: countyFilters,
         states: stateFilters,
         zips: zipFilters,
+        cities: cityFilters,
         borrowerIds: borrowerIdFilters,
       },
       {
@@ -244,6 +250,7 @@ export default function LeadQueue() {
       countyFilters.join(','),
       stateFilters.join(','),
       zipFilters.join(','),
+      cityFilters.join(','),
       borrowerIdFilters.join(','),
       segmentCodes.join(','),
       segmentMode,
@@ -361,6 +368,7 @@ export default function LeadQueue() {
       zipFilter,
       stateFilters,
       zipFilters,
+      cityFilters,
       borrowerIdFilters,
       countyFilter,
       countyFilters,
@@ -384,6 +392,7 @@ export default function LeadQueue() {
       || zipFilter
       || stateFilters.length > 0
       || zipFilters.length > 0
+      || cityFilters.length > 0
       || borrowerIdFilters.length > 0
       || countyFilter
       || countyFilters.length > 0
@@ -409,6 +418,11 @@ export default function LeadQueue() {
   if (zipFilter) heroFilterChips.push({ key: 'zip', variant: 'neutral', label: `zip = ${zipFilter}` });
   if (stateFilters.length > 0) heroFilterChips.push({ key: 'states', variant: 'neutral', label: `states = ${stateFilters.join(', ')}` });
   if (zipFilters.length > 0) heroFilterChips.push({ key: 'zips', variant: 'neutral', label: `zips = ${zipFilters.length} selected` });
+  if (cityFilters.length > 0) {
+    // Spell the pairs out: `CHICAGO~IL` is the whole point, and a count
+    // would hide which state each city was resolved in.
+    heroFilterChips.push({ key: 'cities', variant: 'neutral', label: `cities = ${cityFilters.join(', ')}` });
+  }
   if (borrowerIdFilters.length > 0) heroFilterChips.push({ key: 'borrowers', variant: 'neutral', label: `borrowers = ${borrowerIdFilters.length} selected` });
   if (countyFilter) heroFilterChips.push({ key: 'county', variant: 'neutral', label: `county = ${countyFilter}` });
   if (countyFilters.length > 0) heroFilterChips.push({ key: 'counties', variant: 'neutral', label: `counties = ${countyFilters.length} selected` });
@@ -432,6 +446,7 @@ export default function LeadQueue() {
       || stateFilter
       || stateFilters.length > 0
       || zipFilters.length > 0
+      || cityFilters.length > 0
       || borrowerIdFilters.length > 0,
   );
 
@@ -494,6 +509,7 @@ export default function LeadQueue() {
               {countyFilters.length > 0 && <span className="lead-queue-scope__pill">Counties: {countyFilters.join(', ')}</span>}
               {stateFilters.length > 0 && <span className="lead-queue-scope__pill">States: {stateFilters.join(', ')}</span>}
               {zipFilters.length > 0 && <span className="lead-queue-scope__pill">ZIPs: {zipFilters.join(', ')}</span>}
+              {cityFilters.length > 0 && <span className="lead-queue-scope__pill">Cities: {cityFilters.join(', ')}</span>}
               {borrowerIdFilters.length > 0 && <span className="lead-queue-scope__pill">Borrowers: {borrowerIdFilters.length}</span>}
               {/* 2026-08-07 audit C4: geo drill-ins show EVERY borrower the
                   map counted (no score floor — the map-tile promise), so the

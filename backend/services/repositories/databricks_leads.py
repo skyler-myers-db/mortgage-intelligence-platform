@@ -107,7 +107,8 @@ class DatabricksLeadRepository:
         f"FROM {qualify('gold', 'borrower_360')} b "
         f"LEFT JOIN {qualify('gold', 'borrower_lifecycle_state')} ls "
         "  ON ls.borrower_id = b.borrower_id "
-        "WHERE 1=1 {state_clause} {zip_clause} {county_clause} {borrower_clause} "
+        "WHERE 1=1 {state_clause} {zip_clause} {county_clause} {city_clause} "
+        "{borrower_clause} "
         "{segment_clause} {funnel_stage_clause} {lender_clause} {portfolio_clause} "
         "{lifecycle_clause} {freshness_clause} "
         "ORDER BY b.opportunity_score DESC, b.borrower_id ASC "
@@ -125,6 +126,7 @@ class DatabricksLeadRepository:
         county_fipses: list[str] | None = None,
         state_codes: list[str] | None = None,
         zip_codes: list[str] | None = None,
+        city_states: list[str] | None = None,
         borrower_ids: list[str] | None = None,
         segment_codes: list[str] | None = None,
         segment_mode: str = "any",
@@ -153,6 +155,7 @@ class DatabricksLeadRepository:
                 "county_fipses": county_fipses,
                 "state_codes": state_codes,
                 "zip_codes": zip_codes,
+                "city_states": city_states,
                 "borrower_ids": borrower_ids,
                 "segment_codes": segment_codes,
                 "segment_mode": segment_mode,
@@ -185,6 +188,7 @@ class DatabricksLeadRepository:
             county_fips,
             county_fipses,
         )
+        normalised_cities = self._cohort_queries.normalise_city_states(city_states)
         normalised_borrower_ids = self._cohort_queries.normalise_borrower_ids(borrower_ids)
         lifecycle_clause, lifecycle_params = self._cohort_queries.lifecycle_filter_clause(
             source_alias="b",
@@ -224,6 +228,7 @@ class DatabricksLeadRepository:
             normalised_states
             or normalised_zips
             or normalised_county
+            or normalised_cities
             or normalised_borrower_ids
             or funnel_stage
             or lender_clause
@@ -253,6 +258,10 @@ class DatabricksLeadRepository:
                 values=normalised_county,
                 params=params,
             )
+            city_clause = self._cohort_queries.city_state_clause(
+                values=normalised_cities,
+                params=params,
+            )
             borrower_clause = self._cohort_queries.in_clause(
                 column="b.borrower_id",
                 prefix="borrower_id",
@@ -264,6 +273,7 @@ class DatabricksLeadRepository:
                 state_clause=state_clause,
                 zip_clause=zip_clause,
                 county_clause=county_clause,
+                city_clause=city_clause,
                 borrower_clause=borrower_clause,
                 segment_clause=geo_segment_clause,
                 funnel_stage_clause=funnel_stage_clause,
@@ -317,6 +327,7 @@ class DatabricksLeadRepository:
         county_fipses: list[str] | None = None,
         state_codes: list[str] | None = None,
         zip_codes: list[str] | None = None,
+        city_states: list[str] | None = None,
         borrower_ids: list[str] | None = None,
         segment_codes: list[str] | None = None,
         segment_mode: str = "any",
@@ -341,6 +352,7 @@ class DatabricksLeadRepository:
                 "county_fipses": county_fipses,
                 "state_codes": state_codes,
                 "zip_codes": zip_codes,
+                "city_states": city_states,
                 "borrower_ids": borrower_ids,
                 "segment_codes": segment_codes,
                 "segment_mode": segment_mode,
@@ -368,6 +380,7 @@ class DatabricksLeadRepository:
                 county_fipses=county_fipses,
                 state_codes=state_codes,
                 zip_codes=zip_codes,
+                city_states=city_states,
                 borrower_ids=borrower_ids,
                 segment_codes=segment_codes,
                 segment_mode=segment_mode,
@@ -394,6 +407,7 @@ class DatabricksLeadRepository:
         county_fipses: list[str] | None = None,
         state_codes: list[str] | None = None,
         zip_codes: list[str] | None = None,
+        city_states: list[str] | None = None,
         borrower_ids: list[str] | None = None,
         segment_codes: list[str] | None = None,
         segment_mode: str = "any",
@@ -418,6 +432,7 @@ class DatabricksLeadRepository:
                 county_fipses=county_fipses,
                 state_codes=state_codes,
                 zip_codes=zip_codes,
+                city_states=city_states,
                 borrower_ids=borrower_ids,
                 segment_codes=segment_codes,
                 segment_mode=segment_mode,
@@ -462,6 +477,7 @@ class DatabricksLeadRepository:
         county_fipses: list[str] | None = None,
         state_codes: list[str] | None = None,
         zip_codes: list[str] | None = None,
+        city_states: list[str] | None = None,
         borrower_ids: list[str] | None = None,
         segment_codes: list[str] | None = None,
         segment_mode: str = "any",
@@ -486,6 +502,7 @@ class DatabricksLeadRepository:
                 county_fipses=county_fipses,
                 state_codes=state_codes,
                 zip_codes=zip_codes,
+                city_states=city_states,
                 borrower_ids=borrower_ids,
                 segment_codes=segment_codes,
                 segment_mode=segment_mode,

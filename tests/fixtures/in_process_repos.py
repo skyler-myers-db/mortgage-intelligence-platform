@@ -47,6 +47,7 @@ from backend.schemas.analytics import (
 )
 from backend.schemas.common import EvidenceEvent
 from backend.schemas.funnel import FunnelPopulation
+from backend.schemas.genie_geo_filters import parse_city_state_pair
 from backend.schemas.geo import (
     CountyRollup,
     CountyRollupResponse,
@@ -589,6 +590,7 @@ class InProcessMockLeadRepository:
         county_fipses: list[str] | None = None,
         state_codes: list[str] | None = None,
         zip_codes: list[str] | None = None,
+        city_states: list[str] | None = None,
         borrower_ids: list[str] | None = None,
         segment_codes: list[str] | None = None,
         segment_mode: str = "any",
@@ -680,6 +682,19 @@ class InProcessMockLeadRepository:
         if zip_codes:
             allowed_zips = {code for code in zip_codes if code}
             leads = [lead for lead in leads if lead.zip in allowed_zips]
+        if city_states:
+            # Pair-keyed, like the SQL: a bare name would match
+            # CYPRESS in both CA and TX.
+            allowed_pairs = {
+                (pair[0], pair[1])
+                for token in city_states
+                if (pair := parse_city_state_pair(token)) is not None
+            }
+            leads = [
+                lead for lead in leads
+                if ((lead.city or '').strip().upper(), (lead.state or '').strip().upper())
+                in allowed_pairs
+            ]
         if borrower_ids:
             allowed_ids = {borrower_id for borrower_id in borrower_ids if borrower_id}
             leads = [lead for lead in leads if lead.borrower_id in allowed_ids]
@@ -703,6 +718,7 @@ class InProcessMockLeadRepository:
         county_fipses: list[str] | None = None,
         state_codes: list[str] | None = None,
         zip_codes: list[str] | None = None,
+        city_states: list[str] | None = None,
         borrower_ids: list[str] | None = None,
         segment_codes: list[str] | None = None,
         segment_mode: str = "any",
@@ -727,6 +743,7 @@ class InProcessMockLeadRepository:
             county_fipses=county_fipses,
             state_codes=state_codes,
             zip_codes=zip_codes,
+            city_states=city_states,
             borrower_ids=borrower_ids,
             segment_codes=segment_codes,
             segment_mode=segment_mode,

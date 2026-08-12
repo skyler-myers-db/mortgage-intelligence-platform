@@ -30,6 +30,7 @@ from fastapi import HTTPException
 from backend.schemas.portfolio import PortfolioCriteria
 from backend.services.lakebase import LakebaseError, get_lakebase_client
 from backend.services.lead_query_helpers import (
+    cohort_city_states,
     cohort_list,
     cohort_numeric_floor,
     cohort_segment_mode,
@@ -97,6 +98,9 @@ class CohortReplay:
     segment_mode: str
     state_codes: list[str] | None
     zip_codes: list[str] | None
+    # Reviewed `CITY~ST` pairs. Replayed verbatim so a city-grain answer
+    # opens the cities it named, not the states they sit in.
+    city_states: list[str] | None
     county_fipses: list[str] | None
     borrower_ids: list[str] | None
     segment_codes: list[str] | None
@@ -183,6 +187,7 @@ def resolve_cohort_replay(cohort_id: str, *, actor: str) -> CohortReplay:
     segment_mode = cohort_segment_mode(filters)
     state_codes = cohort_list(filters, "states", width=2)
     zip_codes = cohort_list(filters, "zips", width=5, numeric=True)
+    city_states = cohort_city_states(filters)
     county_fipses = cohort_list(filters, "counties", width=5, numeric=True)
     borrower_ids = cohort_list(filters, "borrower_ids", borrower_ids=True)
 
@@ -209,6 +214,7 @@ def resolve_cohort_replay(cohort_id: str, *, actor: str) -> CohortReplay:
         segment_mode=segment_mode,
         state_codes=state_codes,
         zip_codes=zip_codes,
+        city_states=city_states,
         county_fipses=county_fipses,
         borrower_ids=borrower_ids,
         segment_codes=segment_codes,

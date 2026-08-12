@@ -195,7 +195,9 @@ export interface HoverState {
 }
 
 export interface LeadQueuePathInput {
-  geo: { state?: string; county?: string; zip?: string };
+  /** `cities` carries `CITY~ST` pairs — see `lib/cityStateFilter`. Always a
+   *  pair: a bare name is wrong by 14,631x on the minority side of CYPRESS. */
+  geo: { state?: string; county?: string; zip?: string; cities?: string[] };
   segmentFilter?: string[] | null;
   segmentFilterMode?: 'any' | 'all';
   portfolioCriteria?: Record<string, string | number | null | undefined>;
@@ -208,7 +210,14 @@ export function buildLeadQueuePath({
   portfolioCriteria,
 }: LeadQueuePathInput): string {
   const params = new URLSearchParams();
-  if (geo.state) params.set('state', geo.state);
+  // Ahead of `state` and mutually exclusive with it: the pair already
+  // carries the state, and falling back to it is the 2.3x substitution
+  // (Chicago's 523,010 opening all 1,181,043 of IL).
+  if (geo.cities && geo.cities.length > 0) {
+    params.set('cities', geo.cities.join(','));
+  } else if (geo.state) {
+    params.set('state', geo.state);
+  }
   if (geo.county) params.set('county', geo.county);
   if (geo.zip) params.set('zip', geo.zip);
   if (segmentFilter && segmentFilter.length > 0) {
@@ -223,7 +232,12 @@ export function buildLeadQueuePath({
     if (value === undefined || value === null || value === '') return;
     params.set(key, String(value));
   });
-  return `/lead-queue?${params.toString()}`;
+  // `URLSearchParams` percent-encodes `~` to `%7E`; Python's `urlencode` does
+  // not. Both decode identically and `~` is RFC-3986 unreserved, so restoring
+  // it is a no-op for parsing — but it keeps a frontend-built link
+  // byte-identical to the one the backend emits for the same cohort, which is
+  // what makes `cities=CHICAGO~IL` readable in a shared URL.
+  return `/lead-queue?${params.toString().replace(/%7E/g, '~')}`;
 }
 
 export function buildCountiesPayload(

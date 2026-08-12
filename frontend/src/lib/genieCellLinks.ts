@@ -14,6 +14,7 @@
  */
 
 import { buildLeadQueuePath } from '../components/mortgage/USChoroplethMap.utils';
+import { CITY_COLUMNS, formatCityStatePair, rowStateFor } from './cityStateFilter';
 
 /** Canonical masked borrower id (CLAUDE.md naming rules). */
 export const MASKED_BORROWER_ID_RE = /^B-[0-9A-Z]{13}$/;
@@ -175,11 +176,42 @@ export function segmentLeadQueuePath(
 }
 
 /**
+ * City-filtered Lead Queue link, or null when the row cannot be keyed.
+ *
+ * The state MUST come from the row's own cells. A city name alone is not a
+ * cohort: 5 of the 428 city names in gold live in two states, and the minority
+ * side is tiny (CYPRESS is CA 14,630 / TX 1), so pairing a city with a state
+ * borrowed from anywhere else — the answer's overall state list, a
+ * neighbouring row — invents a cohort the answer never described.
+ *
+ * Returning null means the cell renders as plain text, which is the honest
+ * outcome for a city-only answer. It must never fall back to the state's
+ * queue: that is the 2.3x substitution measured live 2026-08-11 (Chicago's
+ * 523,010 opening all 1,181,043 of IL).
+ */
+export function cityLeadQueuePath(
+  city: unknown,
+  row: Record<string, unknown> | null | undefined,
+  cohort: GenieAnswerCohort = {},
+): string | null {
+  const pair = formatCityStatePair(city, rowStateFor(row));
+  if (!pair) return null;
+  return buildLeadQueuePath({
+    geo: { cities: [pair] },
+    segmentFilter: cohort.segmentFilter,
+    segmentFilterMode: cohort.segmentFilterMode ?? 'any',
+    portfolioCriteria: cohort.portfolioCriteria,
+  });
+}
+
+/**
  * Resolve a table cell to an in-app route, or null when it should render as
- * plain text. `city` intentionally returns null: no route in `app.tsx`
- * supports a city filter (`lead-queue.filters.ts` has no city param), and a
- * link that silently drops the filter misleads the reader — which is exactly
- * why `cohort` exists for the state case.
+ * plain text.
+ *
+ * A `city` cell links ONLY when its own row carries a state. Without one the
+ * cell stays plain text — a link that silently widened the filter to the state
+ * would mislead the reader, which is exactly why `cohort` exists for the state
+ * case.
  */
 export function genieCellHref(
   column: string,
@@ -190,6 +222,9 @@ export function genieCellHref(
   const key = column.trim().toLowerCase();
   if (BORROWER_ID_COLUMNS.has(key) && isMaskedBorrowerId(value)) {
     return borrower360Path(value as string);
+  }
+  if (CITY_COLUMNS.has(key)) {
+    return cityLeadQueuePath(value, row, cohort);
   }
   if (STATE_COLUMNS.has(key) && isStateCode(value)) {
     return stateLeadQueuePath(value as string, cohort);

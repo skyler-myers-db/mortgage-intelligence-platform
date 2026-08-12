@@ -6,6 +6,10 @@ from types import ModuleType
 from typing import Any
 
 from backend.schemas.common import validate_public_borrower_id
+from backend.schemas.genie_geo_filters import (
+    normalise_city_state_pairs,
+    parse_city_state_pair,
+)
 from backend.services.databricks_sql_helpers import qualify
 from backend.services.scoring import HIGH_OPPORTUNITY_THRESHOLD
 from backend.services.segment_predicates import (
@@ -68,6 +72,59 @@ class LeadCohortQuerySupport:
             if len(code) == 5 and code.isdigit() and code not in out:
                 out.append(code)
         return out
+
+    @staticmethod
+    def normalise_city_states(city_states: list[str] | None) -> list[str]:
+        """Return the reviewed ``CITY~ST`` tokens a cohort can filter on.
+
+        Malformed entries are dropped rather than widened -- see
+        ``backend/schemas/genie_geo_filters`` for why a city name without its
+        state is 14,631x wrong on the minority side of ``CYPRESS``.
+        """
+
+        return normalise_city_state_pairs(list(city_states or []))
+
+    @staticmethod
+    def city_state_clause(
+        *,
+        values: list[str],
+        params: dict[str, object],
+        alias: str = "b",
+    ) -> str:
+        """Compile ``CITY~ST`` tokens to an OR-of-ANDs over bound placeholders.
+
+        Each token is a PAIR, so it compiles to a conjunction and the tokens
+        are OR'd together::
+
+            AND ((UPPER(b.city) = :city_0 AND b.state = :cstate_0)
+              OR (UPPER(b.city) = :city_1 AND b.state = :cstate_1))
+
+        Cross-producting the two axes instead -- ``city IN (...) AND state IN
+        (...)`` -- is the bug this shape exists to avoid: given CYPRESS/CA and
+        SUNNYVALE/TX it also matches CYPRESS/TX and SUNNYVALE/CA, two cohorts
+        the answer never described.
+
+        ``UPPER()`` on the city only. Gold stores city uppercase already, so
+        this is defence against a hand-typed URL, not a data quirk; ``state``
+        is compared bare so ``CLUSTER BY (state, clip)`` file pruning survives.
+        """
+
+        if not values:
+            return ""
+        terms: list[str] = []
+        for index, token in enumerate(values):
+            pair = parse_city_state_pair(token)
+            if pair is None:
+                continue
+            city, state = pair
+            city_key = f"city_{index}"
+            state_key = f"cstate_{index}"
+            params[city_key] = city
+            params[state_key] = state
+            terms.append(f"(UPPER({alias}.city) = :{city_key} AND {alias}.state = :{state_key})")
+        if not terms:
+            return ""
+        return f"AND ({' OR '.join(terms)})"
 
     @staticmethod
     def normalise_borrower_ids(borrower_ids: list[str] | None) -> list[str]:

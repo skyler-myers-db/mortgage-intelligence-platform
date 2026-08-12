@@ -91,7 +91,7 @@ describe('GenieAnswer UC + route linkage', () => {
     expect(container.textContent).toContain('Source: mip.gold.borrower_360');
   });
 
-  it('links borrower_id and state table cells, leaving city plain', () => {
+  it('links borrower_id, state, and a city that carries its own state', () => {
     mount(
       payload({
         answer: 'Top borrowers.',
@@ -103,7 +103,24 @@ describe('GenieAnswer UC + route linkage', () => {
     );
     expect(hrefs).toContain(`/borrower-360/${BORROWER}`);
     expect(hrefs).toContain('/lead-queue?state=IL');
-    expect(hrefs.some((h) => h?.includes('Chicago'))).toBe(false);
+    // The row carries both halves of the key, so the city is a real cohort.
+    // It opens the CITY, never the state it sits in.
+    expect(hrefs).toContain('/lead-queue?cities=CHICAGO~IL');
+  });
+
+  it('leaves a city cell plain when its row carries no state', () => {
+    // A bare name is not a cohort: CYPRESS is CA 14,630 / TX 1, so linking it
+    // to any single state's queue would be a guess. Plain text is honest.
+    mount(
+      payload({
+        answer: 'Top cities.',
+        table_rows: [{ city: 'Chicago', borrowers: 523010 }],
+      } as Partial<GenieAnswerShape>),
+    );
+    const hrefs = Array.from(container.querySelectorAll('.genie-answer__table a')).map((a) =>
+      a.getAttribute('href'),
+    );
+    expect(hrefs.some((h) => h?.toLowerCase().includes('chicago'))).toBe(false);
   });
 
   it('leaves a borrower_id that is not a masked id as plain text', () => {

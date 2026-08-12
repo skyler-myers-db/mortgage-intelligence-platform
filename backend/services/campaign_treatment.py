@@ -10,6 +10,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 from uuid import uuid4
 
+from backend.schemas.genie_geo_filters import GENIE_CITY_FILTER_KEY
 from backend.schemas.genie_numeric_filters import is_reviewed_numeric_floor
 from backend.schemas.portfolio import (
     CAMPAIGN_BUILD_LIMIT,
@@ -274,6 +275,9 @@ def cohort_filters_from_campaign_criteria(criteria: dict[str, Any]) -> LeadCohor
         county_fipses=_strings(filters.get("counties")),
         state_codes=_strings(filters.get("states")),
         zip_codes=_strings(filters.get("zips")),
+        # Without this the approved treatment set materializes the STATE
+        # the pairs live in rather than the cities the answer described.
+        city_states=_strings(filters.get(GENIE_CITY_FILTER_KEY)),
         borrower_ids=borrower_ids,
         segment_codes=_strings(filters.get("segment_codes")),
         segment_mode=str(filters.get("segment_mode") or "any"),

@@ -321,6 +321,10 @@ export interface LeadQueueExportFiltersInput {
   zipFilter?: string;
   stateFilters?: string[];
   zipFilters?: string[];
+  /** `CITY~ST` pairs. Unlisted keys are silently dropped by this
+   *  allowlist, so an export of a city cohort would otherwise describe
+   *  itself as unfiltered. */
+  cityFilters?: string[];
   borrowerIdFilters?: string[];
   countyFilter?: string;
   countyFilters?: string[];
@@ -346,6 +350,7 @@ export function buildLeadQueueExportFilters(input: LeadQueueExportFiltersInput):
   if (input.zipFilter) params.set('zip', input.zipFilter);
   if (input.stateFilters?.length) params.set('states', input.stateFilters.join(','));
   if (input.zipFilters?.length) params.set('zips', input.zipFilters.join(','));
+  if (input.cityFilters?.length) params.set('cities', input.cityFilters.join(','));
   if (input.borrowerIdFilters?.length) {
     params.set('borrower_ids', input.borrowerIdFilters.join(','));
   }

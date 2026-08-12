@@ -24,6 +24,11 @@ from backend.config.runtime_secret_policy import (
 from backend.config.settings import settings
 from backend.schemas._validators_tenant import normalize_public_lender_ref
 from backend.schemas.common import validate_public_borrower_id
+from backend.schemas.genie_geo_filters import (
+    GENIE_CITY_FILTER_KEY,
+    MAX_CITY_FILTER_VALUES,
+    parse_city_state_pair,
+)
 from backend.schemas.genie_numeric_filters import GENIE_NUMERIC_FILTER_BOUNDS
 from backend.schemas.lead import GENIE_REPLAY_SEGMENT_CODES
 from backend.schemas.portfolio import PortfolioCriteria
@@ -86,6 +91,7 @@ _REPLAYABLE_NUMERIC_FILTERS: Mapping[str, tuple[int, int]] = GENIE_NUMERIC_FILTE
 _REPLAYABLE_FILTER_KEYS = frozenset(
     {
         "zips",
+        GENIE_CITY_FILTER_KEY,
         "county",
         "counties",
         "states",
@@ -115,6 +121,10 @@ _LEAD_QUEUE_REPLAY_KEYS = frozenset(
         "states",
         "zip",
         "zips",
+        # Plural-only, and stripped off the inbound URL like every other
+        # replayable key: `_route_with_cohort` re-adds it from the cohort row,
+        # so a hand-edited `?cities=…` cannot survive alongside a cohort_id.
+        GENIE_CITY_FILTER_KEY,
         "county",
         "counties",
         "borrower_ids",
@@ -971,6 +981,41 @@ def _list_filter(
     return out
 
 
+def _city_states_filter(raw: Any) -> list[str]:
+    """Validate the cohort's ``CITY~ST`` list, or 400 like every sibling key.
+
+    Deliberately STRICTER than the writer, which fails closed to a disclosure:
+    by the time a payload reaches here the pairs are a reviewed cohort key, and
+    a malformed one is a bad request rather than a city we could not read.
+    """
+
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Genie cohort {GENIE_CITY_FILTER_KEY} filter must be a reviewed list",
+        )
+    out: list[str] = []
+    for item in raw:
+        pair = parse_city_state_pair(item)
+        if pair is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Genie cohort includes invalid replay filter",
+            )
+        value = f"{pair[0]}~{pair[1]}"
+        if value in out:
+            continue
+        if len(out) >= MAX_CITY_FILTER_VALUES:
+            raise HTTPException(
+                status_code=400,
+                detail="Genie cohort includes too many replay filters",
+            )
+        out.append(value)
+    return out
+
+
 def _numeric_floor(raw: Any, *, field: str, minimum: int, maximum: int) -> int | None:
     """Return a reviewed integer floor, or None when the answer omitted it.
 
@@ -1043,6 +1088,9 @@ def _cohort_route_filters(
     )
     if zips:
         out["zips"] = zips
+    city_states = _city_states_filter(filters.get(GENIE_CITY_FILTER_KEY))
+    if city_states:
+        out[GENIE_CITY_FILTER_KEY] = city_states
     county_raw = str(filters.get("county") or "").strip()
     if county_raw:
         if not re.fullmatch(r"^\d{5}$", county_raw):
@@ -1203,6 +1251,11 @@ def _route_with_cohort(
             query[plural] = ",".join(str(v) for v in values)
 
     set_one_or_many(singular="zip", plural="zips", values=filters.get("zips"))
+    # No singular form: one key, always plural. `~` is unreserved, so urlencode
+    # leaves it literal and a shared link reads `cities=CHICAGO~IL`.
+    city_states = filters.get(GENIE_CITY_FILTER_KEY)
+    if isinstance(city_states, list) and city_states:
+        query[GENIE_CITY_FILTER_KEY] = ",".join(str(v) for v in city_states)
     set_one_or_many(singular="state", plural="states", values=filters.get("states"))
     set_one_or_many(singular="county", plural="counties", values=filters.get("counties"))
     borrower_ids = filters.get("borrower_ids")

@@ -8,6 +8,12 @@ from typing import Literal, cast
 from fastapi import HTTPException
 
 from backend.schemas.common import validate_public_borrower_id
+from backend.schemas.genie_geo_filters import (
+    CITY_STATE_SEPARATOR,
+    GENIE_CITY_FILTER_KEY,
+    MAX_CITY_FILTER_VALUES,
+    parse_city_state_pair,
+)
 from backend.schemas.genie_numeric_filters import GENIE_NUMERIC_FILTER_BOUNDS
 from backend.schemas.lead import SEGMENT_CODE_VALUES
 from backend.schemas.portfolio import PortfolioCriteria
@@ -46,6 +52,82 @@ def parse_csv_filter(
             seen.add(value)
             out.append(value)
     return out
+
+
+def parse_city_states(raw: str | None) -> list[str] | None:
+    """Parse ``?cities=CHICAGO~IL,FORT LAUDERDALE~FL`` into reviewed pairs.
+
+    Deliberately NOT ``parse_csv_filter``: that helper checks ``value.isalpha()``
+    and a fixed width, which rejects every multi-word city (``FORT LAUDERDALE``
+    has a space, ``UNION HILL-NOVELTY HILL`` a hyphen) and every pair
+    (``~`` is not alphabetic). 4 of the 428 gold city names are multi-word at
+    the maximum, so reusing it would have silently 422'd most of the vocabulary.
+
+    Raises 422 on a malformed pair rather than dropping it: at this layer the
+    value came from a URL the user can see, so a broken filter must fail
+    visibly instead of quietly opening a wider cohort.
+    """
+
+    if raw is None:
+        return None
+    out: list[str] = []
+    for part in raw.split(","):
+        text = part.strip()
+        if not text:
+            continue
+        pair = parse_city_state_pair(text)
+        if pair is None:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"{GENIE_CITY_FILTER_KEY} must be comma-separated CITY~ST pairs "
+                    "such as CHICAGO~IL"
+                ),
+            )
+        value = f"{pair[0]}{CITY_STATE_SEPARATOR}{pair[1]}"
+        if value in out:
+            continue
+        if len(out) >= MAX_CITY_FILTER_VALUES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{GENIE_CITY_FILTER_KEY} accepts at most {MAX_CITY_FILTER_VALUES} pairs",
+            )
+        out.append(value)
+    return out or None
+
+
+def cohort_city_states(filters: dict[str, object]) -> list[str] | None:
+    """Return the reviewed ``CITY~ST`` pairs stored on a governed cohort.
+
+    A stored cohort gets no more trust than a hand-typed URL, so this applies
+    the same validation ``parse_city_states`` does.
+    """
+
+    raw = filters.get(GENIE_CITY_FILTER_KEY)
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        raise HTTPException(
+            status_code=422,
+            detail=f"cohort {GENIE_CITY_FILTER_KEY} filter is invalid",
+        )
+    out: list[str] = []
+    for item in raw:
+        pair = parse_city_state_pair(item)
+        if pair is None:
+            raise HTTPException(
+                status_code=422,
+                detail=f"cohort {GENIE_CITY_FILTER_KEY} filter is invalid",
+            )
+        value = f"{pair[0]}{CITY_STATE_SEPARATOR}{pair[1]}"
+        if value not in out:
+            out.append(value)
+    if len(out) > MAX_CITY_FILTER_VALUES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"cohort {GENIE_CITY_FILTER_KEY} filter is invalid",
+        )
+    return out or None
 
 
 def parse_segment_codes(raw: str | None) -> list[str] | None:
