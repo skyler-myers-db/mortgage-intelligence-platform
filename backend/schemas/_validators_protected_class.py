@@ -218,7 +218,51 @@ def contains_protected_class_marketing_text(
     )
 
 
+# Repeated short values are the norm on the surface this guard is hottest on:
+# a rendered Genie table re-scans every cell, and in the 20-row live capture of
+# 2026-08-12 (``mip.gold.lead_population``) 106 of 200 cells were duplicates --
+# one 150-character rationale appearing 19 times, a refresh timestamp 20 times.
+# Scanning that turn cost ~4.7s of pure CPU, most of it in the cells.
+#
+# The decision is a pure function of the text and the flag, so memoizing it
+# cannot change any verdict. Bounded twice over: ``maxsize`` caps entries and
+# the length gate keeps a long answer from pinning itself in the cache, which
+# also keeps the win where the repetition actually is.
+_CACHEABLE_SCAN_CHARS = 512
+
+
+@lru_cache(maxsize=1024)
+def _protected_class_marketing_reason_cached(
+    value: str,
+    assume_reviewed_read_only_analytics: bool,
+) -> ProtectedClassRefusalReason | None:
+    return _protected_class_marketing_reason(
+        value, assume_reviewed_read_only_analytics=assume_reviewed_read_only_analytics
+    )
+
+
 def protected_class_marketing_reason(
+    value: str,
+    *,
+    assume_reviewed_read_only_analytics: bool = False,
+) -> ProtectedClassRefusalReason | None:
+    """Name *why* this module rejects text, or ``None`` when it accepts it.
+
+    Memoizing front door for :func:`_protected_class_marketing_reason`; every
+    word of the contract below is that function's.
+    """
+
+    text = str(value)
+    if len(text) <= _CACHEABLE_SCAN_CHARS:
+        return _protected_class_marketing_reason_cached(
+            text, assume_reviewed_read_only_analytics
+        )
+    return _protected_class_marketing_reason(
+        text, assume_reviewed_read_only_analytics=assume_reviewed_read_only_analytics
+    )
+
+
+def _protected_class_marketing_reason(
     value: str,
     *,
     assume_reviewed_read_only_analytics: bool = False,

@@ -38,6 +38,22 @@ REVIEWED_MORTGAGE_ATTRIBUTE_FRAGMENT = (
     # below is unchanged, so an UNREVIEWED attribute stays unreviewed with or
     # without a qualifier -- "average credit score" still refuses, and
     # ``test_aggregate_qualifiers_never_admit_an_unreviewed_attribute`` pins it.
+    # A leading article is orthography on the SAME footing as the aggregate
+    # qualifier below, and for the same reason it belongs here rather than on
+    # one alternative. It was on the potential/upside alternative alone, so
+    # "the highest potential" was reviewed while "the highest opportunity
+    # scores" -- the product's own governed scoring column
+    # (sql/uc_functions/fn_lead_score.sql) -- was not.
+    #
+    # Live on paychex 2026-08-12, both refused in ~2-6s with "it is outside the
+    # reviewed Module 0 vocabulary": "Show me the top 50 borrowers with the
+    # highest opportunity scores." and "Show me the top 20 borrowers with the
+    # highest lead scores." Dropping the article from either made it pass.
+    #
+    # Same fail-closed argument as the aggregate: the alternation below is
+    # untouched, so an UNREVIEWED attribute stays unreviewed with or without
+    # an article -- "the average credit score" still refuses.
+    r"(?:(?:the|a|an)\s+)?"
     r"(?:(?:average|avg|mean|median|typical|high(?:est)?|low(?:est)?|top|bottom)\s+)?"
     r"(?:(?:high|strong|substantial|sufficient|available|usable)\s+(?:home[- ]?)?equity|"
     r"substantial\s+modeled\s+(?:home[- ]?)?equity|"

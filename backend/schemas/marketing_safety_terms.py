@@ -140,7 +140,16 @@ PROTECTED_NATIONAL_ORIGIN_RE = re.compile(
     r"\b(?:"
     + "|".join(
         re.escape(term).replace(r"\ ", r"[ -]")
-        for term in sorted(_PROTECTED_NATIONAL_ORIGIN_TERMS, key=len, reverse=True)
+        # Longest first so ``laotian`` wins over ``lao``, then alphabetically
+        # so the order is TOTAL. Length alone leaves ties to be broken by
+        # frozenset iteration order, which varies with the interpreter's hash
+        # seed: this pattern came out differently on every process start
+        # (``russian`` and ``turkish`` swapping places). Harmless to matching
+        # -- two equal-length literals cannot both match at one position, and
+        # 613 probes over all 122 terms confirmed identical spans -- but it
+        # makes the compiled pattern unhashable as a build artifact, so a
+        # before/after comparison of a refactor reports a false difference.
+        for term in sorted(_PROTECTED_NATIONAL_ORIGIN_TERMS, key=lambda term: (-len(term), term))
     )
     + r")s?\b",
     re.IGNORECASE,
