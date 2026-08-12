@@ -13,7 +13,7 @@ from backend.schemas._validators_protected_class import (
     contains_protected_class_proxy_marketing_text,
     protected_class_marketing_reason,
 )
-from backend.schemas._validators_unsafe_text import contains_unsafe_ai_text
+from backend.schemas._validators_unsafe_text import contains_unsafe_ai_text, mask_governed_phrases
 from backend.services.genie_answers import GenieMessageResponse
 from backend.services.genie_place_dimension import normalize_place_value
 
@@ -134,6 +134,28 @@ def _mask_safe_phrases(question: str) -> str:
 
 
 def protected_prompt_match(question: str) -> str | None:
+    """Name why the prompt guard refuses this question, or None.
+
+    Three of the 428 live gold city values make this refuse an ordinary Module
+    0 question, each through a different detector: ``TACOMA`` (the ``-oma``
+    condition-morphology heuristic), ``HAWAIIAN GARDENS`` (the direct
+    vocabulary), and ``INDIAN HEAD PARK`` (the windowed national-origin bank,
+    which needs the population noun a prompt supplies and a grid cell does
+    not). Captured live 2026-08-12: "Tell me about Tacoma's in-the-money
+    borrowers" refused in ~1.7s, and naming the state does not help because
+    ``GENIE_GEO_LOCATION_RE`` is an output-path strip that never runs here.
+
+    The governed mask reaches ONE scanner: ``protected_class_marketing_reason``,
+    the one that produces those three false positives. The explicit term bank
+    and the proxy scan above it deliberately keep reading the UNMASKED prompt.
+    That is not caution for its own sake -- 16 of the 27 terms in
+    ``_PROTECTED_PROMPT_TERMS`` (``race``, ``gender``, ``male``, ``ethnicity``,
+    ...) have no counterpart in the resolver's canary bank, so a gold city
+    named ``RACE`` could clear that admission gate and would silently disarm
+    this loop if the mask reached it. Masking the narrowest scanner closes
+    that by construction instead of by a second gate.
+    """
+
     scannable = _mask_safe_phrases(question)
     for term in _PROTECTED_PROMPT_TERMS:
         pattern = r"(?<![a-z0-9])" + re.escape(term) + r"(?![a-z0-9])"
@@ -145,7 +167,9 @@ def protected_prompt_match(question: str) -> str | None:
     # by cause: the marketing scanner also fails closed on criteria outside
     # the reviewed vocabulary ("which zyrplax borrowers ..."), which is not a
     # fair-lending finding and must not be audited as one.
-    marketing_reason = protected_class_marketing_reason(scannable)
+    marketing_reason = protected_class_marketing_reason(
+        mask_governed_phrases(scannable, _governed_protected_class_phrases())
+    )
     if marketing_reason == "unreviewed_criterion":
         return "unreviewed_criterion"
     if marketing_reason is not None:
@@ -154,9 +178,26 @@ def protected_prompt_match(question: str) -> str | None:
 
 
 def identity_prompt_match(question: str) -> bool:
-    """Reject person-name-shaped prompts before they enter session state."""
+    """Reject person-name-shaped prompts before they enter session state.
 
-    return contains_human_name_shape(_mask_safe_phrases(question))
+    Two scoped corrections, both confined to the person-name heuristic and
+    neither visible to any other detector:
+
+    * governed city names the title-case pair scan misreads ("Tell me about
+      Aliso Viejo borrowers" — 50 of the 428 live gold values), and
+    * the sentence-initial function word a question opens with ("Which
+      Washington cities ..." reads as the person "Which Washington"; captured
+      live 2026-08-12 as the PII refusal).
+
+    Every PII, injection, and protected-class scan still sees the prompt
+    unmodified, and a real name still refuses: the mask erases whole governed
+    phrases only, and stripping the opening word leaves the name pair intact.
+    """
+
+    scannable = mask_governed_phrases(
+        _mask_safe_phrases(question), _governed_name_shape_phrases()
+    )
+    return contains_human_name_shape(scannable, strip_sentence_initial_function_words=True)
 
 
 def _visible_text_values(value: object) -> list[str]:

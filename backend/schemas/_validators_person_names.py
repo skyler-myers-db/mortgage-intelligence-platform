@@ -25,6 +25,52 @@ _LEADING_ANALYTICS_COMMAND_RE = re.compile(
     r"Approved|Called|Confirmed|Contacted|Discussed|Emailed|Noted|Paused|"
     r"Rejected|Reviewed|Scheduled|Sent|Shared|Spoke|Updated)\s+(?=[A-Z])"
 )
+# Closed English function-word classes, capitalized only because they open a
+# sentence. "Which Washington cities have the most in-the-money borrowers?"
+# reads as the person "Which Washington" to the title-case pair heuristic, and
+# it is not a narrow case: EVERY one of 39 sentence-initial words probed on
+# 2026-08-12 paired with a following proper noun, refusing 289 of the 428
+# governed ``mip.gold.borrower_360`` city values under "Which {City}
+# borrowers ...".
+#
+# Same argument the analytics-command bank above already carries, and the same
+# structural safety property: stripping the leader cannot hide a name, because
+# the following pair still scans in full ("Which Kavita Rangan" -> "Kavita
+# Rangan"). Words that double as human names are deliberately absent -- "Will"
+# and "May" are given names, so "Will Smith qualifies" keeps scanning.
+# ``test_genie_prompt_guard_geography.py`` fails if any entry here ever lands
+# in the person-name lexicons.
+_SENTENCE_INITIAL_FUNCTION_WORDS: tuple[str, ...] = (
+    # fmt: off
+    # interrogatives
+    "Which", "What", "Who", "Whom", "Whose", "Where", "When", "Why", "How",
+    # auxiliaries and modals
+    "Do", "Does", "Did", "Is", "Are", "Was", "Were", "Am", "Be", "Been",
+    "Being", "Has", "Have", "Had", "Can", "Could", "Should", "Would", "Shall",
+    "Must", "Might",
+    # determiners and quantifiers
+    "The", "An", "Any", "All", "Each", "Every", "Some", "Most", "Both", "Many",
+    "Few", "No", "Top", "Only", "Other", "Another", "Same", "Several", "Such",
+    "This", "That", "These", "Those", "Our", "Their",
+    # prepositions, conjunctions, connectives
+    "In", "On", "At", "By", "For", "From", "Of", "To", "With", "Within",
+    "Without", "Among", "Amongst", "Across", "Between", "Before", "After",
+    "During", "Over", "Under", "Near", "Per", "Since", "Than", "Then", "Into",
+    "About", "Against", "Through", "Toward", "Towards", "And", "But", "Or",
+    "Nor", "If", "Also", "However", "Because", "While", "Versus",
+    # sentence-initial adverbs
+    "Just", "Now", "Please", "Overall", "Currently", "Today", "Still", "Even",
+    "Once",
+    # fmt: on
+)
+# Sentence-initial ONLY. Mid-sentence these words are ordinary tokens and a
+# surname can sit right after one ("Contacted Do Nguyen"), so the anchor is
+# what keeps the strip from consuming the first half of a name pair.
+_SENTENCE_INITIAL_FUNCTION_WORD_RE = re.compile(
+    r"(?:(?<=^)|(?<=[.!?;:\n]))(\s*)(?:"
+    + "|".join(_SENTENCE_INITIAL_FUNCTION_WORDS)
+    + r")\s+(?=[A-Z])"
+)
 # Title-case pairs ending in these words are never person names here:
 # admin/geographic place-name suffixes (Lake Forest, Grand Prairie, Coral
 # Springs — city strings are sanctioned analytics output and borrower rows
@@ -256,15 +302,25 @@ def contains_human_name_shape(
     *,
     allowed_phrases: Sequence[str] = (),
     include_titlecase: bool = True,
+    strip_sentence_initial_function_words: bool = False,
 ) -> bool:
     """Detect title-case names and reviewed common lowercase first/last pairs.
 
     General two-word lowercase prose is not treated as an identity. The common
     pair vocabulary closes the audited ``john smith`` class without turning
     ordinary mortgage phrases into false positives.
+
+    ``strip_sentence_initial_function_words`` marks the caller's text as a
+    question a human typed, where the opening word is capitalized by
+    orthography rather than because it names anyone (see
+    :data:`_SENTENCE_INITIAL_FUNCTION_WORDS`). Only the Ask Genie prompt guard
+    opts in; campaign, outreach, and operator-note surfaces pass nothing and
+    are bit-for-bit unchanged.
     """
 
     text = _remove_reviewed_non_person_phrases(str(value), allowed_phrases=allowed_phrases)
+    if strip_sentence_initial_function_words:
+        text = _SENTENCE_INITIAL_FUNCTION_WORD_RE.sub(r"\1", text)
     text = _LEADING_ANALYTICS_COMMAND_RE.sub(" ", text)
     if include_titlecase and any(
         not titlecase_pair_is_non_person(match.group(0))
