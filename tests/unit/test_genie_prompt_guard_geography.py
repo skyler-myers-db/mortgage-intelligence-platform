@@ -649,6 +649,35 @@ _GOVERNED_MEASURE_DIRECTIVES = (
     "Select borrowers with recommended offer",
     "Build a campaign for borrowers with next best offer",
     "Target homeowners having recommended offer",
+    # The directive family, unlocked once the truncation was closed. 150 shapes
+    # measured newly-allowed against main with 0 newly-refused and 0 carrier
+    # leaks across 960 probes.
+    "Rank borrowers with a competitor lien",
+    "Rank borrowers with an opportunity score",
+    "Add borrowers with a rate spread",
+    "Prioritize borrowers with home equity",
+)
+
+# The number slot in ``_REVIEWED_ATTRIBUTE_THRESHOLD`` is digits only, and these
+# pin why. The criterion is scanned against de-obfuscated variants that fold
+# digits to lookalike letters, so a bounded threshold ("above 150 bps") still
+# refuses -- unchanged from main, and the reason the whole threshold family is
+# out of the directive set above. Widening the slot to accept the fold images
+# was tried and reverted on 2026-08-12: the reachable alphabet is exactly
+# {o,l,e,a,s,t,i} plus digits, and an unbounded run of it spells health terms,
+# national origins and surnames. 584 of 596 probe tokens flipped to allowed on
+# all five validators.
+#
+# Goes red the moment the slot accepts a letter again. Unblocking the threshold
+# family belongs where the variants are BUILT -- keeping a freestanding number
+# fold-stable -- not in this vocabulary.
+_THRESHOLDS_THE_NUMBER_SLOT_MUST_REFUSE = (
+    "Rank borrowers with a rate spread above otitis",
+    "Rank borrowers with a rate spread above 150,otitis",
+    "Rank borrowers with home equity above italia",
+    "Add borrowers with an opportunity score above tallit",
+    "Rank borrowers with a rate spread above sotelo",
+    "Prioritize borrowers with an LTV below stasis",
 )
 
 # The leak that killed the directive-branch change, kept RED-side so the next
@@ -700,15 +729,82 @@ def test_directives_naming_a_governed_measure_reach_genie(prompt: str) -> None:
     assert protected_prompt_match(prompt) is None
 
 
+# The same laundering through the OTHER four grammars ``_normalize_criterion``
+# used to truncate. These leaked on main -- the truncation is pre-existing, not
+# something the directive branch introduced -- so they are the proof the fix is
+# at the capture rather than at one caller.
+_TRUNCATION_CARRIERS_ALL_GRAMMARS = tuple(
+    head.format(attribute=attribute, carrier=carrier)
+    for head in (
+        "Only select them by {attribute} for the campaign and {carrier}",
+        "Select the audience. Filter them by {attribute} for the campaign and {carrier}",
+        "Use {attribute} for the campaign and {carrier} when selecting the borrowers",
+        "Move borrowers with {attribute} for the campaign and {carrier} into the campaign",
+        "Add borrowers with {attribute} for the offer and {carrier}",
+    )
+    for attribute in ("home equity", "a rate spread")
+    for carrier in ("eczema", "a housing choice voucher", "an ITIN instead of an SSN")
+)
+
+# The reviewed tails the truncation used to delete. They must still pass now
+# that the vocabulary absorbs them ANCHORED instead.
+#
+# The ``and then contact them`` forms are the commonest spelling of the
+# call-to-action tail and are here because the first anchored version refused
+# 143 of them: ``then`` landed in the optional modal slot, so only ``and
+# contact them`` matched. Absorbing a tail is only a fix if the tail people
+# actually write still passes.
+_REVIEWED_TAILS_STILL_PASS = (
+    "Only select them by home equity for the campaign",
+    "Only select them by home equity for the refi campaign",
+    "Use home equity for the offer when selecting the borrowers",
+    "Only select them by home equity and may contact us about the offer",
+    "Add borrowers with a rate spread for the campaign",
+    "Only select them by home equity for the campaign and then contact them",
+    "Add borrowers with home equity for the campaign and then contact them",
+    "Add borrowers with home equity and then contact them about the offer",
+    "Add borrowers with home equity for the campaign and contact them",
+    "Only select them by home equity for the campaign and then may contact them",
+)
+
+# The same tail with an unreviewed remainder behind it. These are the control
+# for the pair above: absorbing ``and then contact them`` must not absorb
+# whatever follows it.
+_CTA_TAIL_STILL_FAILS_CLOSED = tuple(
+    f"Only select them by home equity for the campaign and then contact them about {carrier}"
+    for carrier in ("eczema", "a hijab", "an ITIN instead of an SSN", "zyrplax scores")
+)
+
+
 @pytest.mark.usefixtures("governed_cities")
 @pytest.mark.parametrize("prompt", _DIRECTIVE_TRUNCATION_CARRIERS)
 def test_a_reviewed_head_never_admits_an_unscanned_tail(prompt: str) -> None:
-    """The criterion machine's capture, not its vocabulary, is the hazard.
+    """The criterion machine's capture, not its vocabulary, is the hazard."""
 
-    Goes red if the directive branch is taught the mortgage-attribute
-    vocabulary again before ``_normalize_criterion``'s truncation is closed.
-    """
+    assert protected_prompt_match(prompt) == "unreviewed_criterion"
 
+
+@pytest.mark.usefixtures("governed_cities")
+@pytest.mark.parametrize("prompt", _TRUNCATION_CARRIERS_ALL_GRAMMARS)
+def test_the_truncation_is_closed_for_every_grammar(prompt: str) -> None:
+    assert protected_prompt_match(prompt) == "unreviewed_criterion"
+
+
+@pytest.mark.usefixtures("governed_cities")
+@pytest.mark.parametrize("prompt", _REVIEWED_TAILS_STILL_PASS)
+def test_reviewed_purpose_and_cta_tails_still_pass(prompt: str) -> None:
+    assert protected_prompt_match(prompt) is None
+
+
+@pytest.mark.usefixtures("governed_cities")
+@pytest.mark.parametrize("prompt", _CTA_TAIL_STILL_FAILS_CLOSED)
+def test_the_cta_tail_does_not_absorb_what_follows_it(prompt: str) -> None:
+    assert protected_prompt_match(prompt) == "unreviewed_criterion"
+
+
+@pytest.mark.usefixtures("governed_cities")
+@pytest.mark.parametrize("prompt", _THRESHOLDS_THE_NUMBER_SLOT_MUST_REFUSE)
+def test_the_threshold_number_slot_never_admits_a_letter(prompt: str) -> None:
     assert protected_prompt_match(prompt) == "unreviewed_criterion"
 
 

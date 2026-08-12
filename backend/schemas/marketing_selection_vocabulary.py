@@ -163,6 +163,20 @@ REVIEWED_ATTRIBUTE_PURPOSE_FRAGMENT = (
 # mip.gold.borrower_360 has 101 columns and NONE of them is fico, credit,
 # savings or risk. Reviewing vocabulary for a measure the product does not
 # have would be inventing a capability, not clearing a false positive.
+#
+# The number slot stays DIGITS ONLY, and that is load-bearing. The criterion is
+# also matched against de-obfuscated scan variants, which translate digits to
+# lookalike letters (``str.maketrans("013457", "oleast")``), so "above 150 bps"
+# arrives as "above lso bps" in one variant and the whole threshold family still
+# refuses. Widening the slot to accept those fold images was tried on
+# 2026-08-12 and reverted the same day: the reachable alphabet is exactly
+# {o,l,e,a,s,t,i} plus digits, an unbounded run of which spells ``otitis``,
+# ``stasis``, ``asia``, ``silesia``, ``tallit`` and the surnames ``salas`` and
+# ``sotelo`` -- 584 of 596 probe tokens flipped from refused to allowed, on all
+# five validators. The vocabulary is the wrong place to absorb a fold: the
+# threshold family has to be unblocked where the variants are BUILT, by keeping
+# a freestanding number fold-stable, which is a separate change with its own
+# evidence. Until then this family refuses, exactly as it does on main.
 _REVIEWED_ATTRIBUTE_THRESHOLD = (
     r"(?:\s+(?:above|over|below|under|at\s+least|at\s+most|greater\s+than|"
     r"less\s+than|more\s+than|fewer\s+than|of\s+at\s+least|of\s+at\s+most|"
@@ -170,8 +184,40 @@ _REVIEWED_ATTRIBUTE_THRESHOLD = (
     r"(?:bps|basis\s+points?|%|percent(?:age)?(?:\s+points?)?|points?)?)?"
 )
 
+# The two tails ``_normalize_criterion`` used to DELETE, absorbed here instead.
+# Deleting them was a fail-open: both strips ended in ``.*$``, so everything
+# after the tail vanished before any vocabulary check and a reviewed head
+# admitted an unscanned remainder --
+#
+#     "a rate spread for the campaign and eczema"
+#       -> truncated to "a rate spread" -> reviewed -> allowed
+#       -> "eczema" never scanned by anything
+#
+# Anchored here, the same sentence no longer matches (the remainder is still
+# in the string), so it fails closed. What a reviewed purpose or call-to-action
+# may contain is now a closed vocabulary rather than "anything at all".
+#
+# ``and then`` is spelled out as its own alternative because "and then contact
+# them" is the commonest form of this tail and ``then`` otherwise lands in the
+# modal slot, refusing 143 strings the truncation had been silently accepting
+# ("Only select them by home equity for the campaign and then contact them").
+_REVIEWED_ATTRIBUTE_CTA_TAIL = (
+    r"(?:\s+(?:and\s+then|and|then)\s+(?:(?:may|can|should)\s+)?"
+    r"(?:contact|call|email|text|message|reply)"
+    r"(?:\s+(?:them|us|me|him|her|"
+    r"(?:the\s+)?(?:borrowers?|homeowners?|customers?|leads?|candidates?|"
+    r"prospects?|clients?|owners?)))?"
+    r"(?:\s+(?:about|regarding|with|on)\s+(?:(?:the|their|an?)\s+)?"
+    r"(?:offers?|options?|reviews?|campaigns?|refinance|refi|heloc|"
+    r"home[- ]equity(?:\s+lines?)?|mortgages?|loans?|rates?|savings?))?)?"
+)
+_REVIEWED_ATTRIBUTE_CLOSING = r"(?:\s+(?:too|as\s+well))?"
+
 _REVIEWED_MORTGAGE_ATTRIBUTE_FULL_RE = re.compile(
     rf"^(?:{REVIEWED_MORTGAGE_ATTRIBUTE_LIST_FRAGMENT})"
-    rf"{_REVIEWED_ATTRIBUTE_THRESHOLD}$",
+    rf"{_REVIEWED_ATTRIBUTE_THRESHOLD}"
+    rf"{REVIEWED_ATTRIBUTE_PURPOSE_FRAGMENT}"
+    rf"{_REVIEWED_ATTRIBUTE_CTA_TAIL}"
+    rf"{_REVIEWED_ATTRIBUTE_CLOSING}$",
     re.IGNORECASE,
 )
