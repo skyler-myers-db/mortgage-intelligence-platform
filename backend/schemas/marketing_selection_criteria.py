@@ -519,6 +519,32 @@ def _is_reviewed_pre_population_binding(value: str) -> bool:
     )
 
 
+def _is_reviewed_directive_criterion(value: str) -> bool:
+    """A directive population's ``with <criterion>`` binding, reviewed either way.
+
+    This branch consulted the SEGMENT vocabulary only, so a directive naming a
+    reviewed MORTGAGE attribute fell through to the fail-closed tail --
+    "Rank borrowers with a competitor lien" refused while every other branch of
+    this machine (``_is_reviewed_admission_criterion``,
+    ``_contains_unreviewed_match``, the applied-criterion path) already accepted
+    that vocabulary.
+
+    Safe only because ``_normalize_criterion`` no longer truncates. While it
+    deleted from " for the <campaign|offer|review>" onward, this branch's
+    end-of-clause capture turned that into a laundering path -- "Add borrowers
+    with a rate spread for the campaign and eczema" was admitted on a reviewed
+    head with the health term riding in the deleted tail. Both vocabularies are
+    closed and anchored now, so an unreviewed remainder keeps the whole
+    criterion unreviewed.
+    """
+
+    criterion = _normalize_criterion(value)
+    return bool(
+        is_closed_reviewed_segment_signal_criterion(criterion)
+        or _REVIEWED_MORTGAGE_ATTRIBUTE_FULL_RE.fullmatch(criterion) is not None
+    )
+
+
 def _is_reviewed_admission_criterion(value: str) -> bool:
     """Recognize only closed mortgage signals inside an admission relation."""
 
@@ -607,21 +633,7 @@ def _contains_unreviewed_audience_decision(
         has_reviewed_segment_binding = (
             _REVIEWED_DIRECTIVE_POPULATION_PREFIX_RE.fullmatch(before_population) is not None
             and signal_binding is not None
-            # NOT the mortgage-attribute vocabulary, even though every other
-            # branch of this machine accepts it and the inconsistency refuses
-            # "Rank borrowers with a competitor lien". Tried on 2026-08-12 and
-            # reverted: this branch captures its criterion to the END of the
-            # clause, and ``_normalize_criterion`` then DELETES from " for the
-            # <campaign|offer|review>" onward before any vocabulary check. The
-            # deleted tail is never scanned, so "Add borrowers with a rate
-            # spread for the campaign and eczema" was admitted on a reviewed
-            # head while the health term rode in the truncated tail -- 250
-            # carrying leaks measured, reaching Genie, the plan composer, the
-            # operator-note field and the persisted campaign label. The
-            # vocabulary is closed; the CAPTURE is not. Re-land only after the
-            # truncation is closed for this branch, and keep
-            # ``_DIRECTIVE_TRUNCATION_CARRIERS`` red while it is open.
-            and is_closed_reviewed_segment_signal_criterion(signal_binding.group("criterion"))
+            and _is_reviewed_directive_criterion(signal_binding.group("criterion"))
         )
         # Affirmative commands that form, order, or prioritize a marketing
         # audience are a closed grammar. The complete clause must have matched
@@ -755,24 +767,24 @@ def build_selection_context_pattern(*, population_re_fragment: str) -> re.Patter
 
 
 def _normalize_criterion(value: str) -> str:
-    criterion = re.sub(r"\s+", " ", value.strip(" ,.-"))
-    criterion = re.sub(r"\s+(?:too|as\s+well)$", "", criterion, flags=re.IGNORECASE)
-    criterion = re.sub(
-        r"\s+for\s+(?:(?:this|the|a)\s+)?"
-        r"(?:(?:refi|refinance|heloc|home[- ]equity|retention|portfolio|purchase|"
-        r"mortgage|loan|servicing)\s+)?(?:campaign|offer|options?|review)\b.*$",
-        "",
-        criterion,
-        flags=re.IGNORECASE,
-    )
-    criterion = re.sub(
-        r"\s+(?:and|then)\s+(?:(?:may|can|should)\s+)?"
-        r"(?:contact|call|email|text|message|reply)\b.*$",
-        "",
-        criterion,
-        flags=re.IGNORECASE,
-    )
-    return criterion.strip(" ,.-")
+    """Collapse whitespace and trim. It no longer DELETES anything.
+
+    Two rules here used to strip a reviewed purpose ("... for the campaign")
+    and a reviewed call-to-action ("... and then contact them") -- but both
+    ended in ``.*$``, so they deleted the ENTIRE remainder of the criterion,
+    unchecked, before any vocabulary lookup. A reviewed head therefore admitted
+    whatever rode behind it: "a rate spread for the campaign and eczema" was
+    normalized to "a rate spread", matched, and the health term was never
+    scanned by anything. Measured 2026-08-12 across five grammars.
+
+    Both tails are now part of the ANCHORED vocabulary
+    (``_REVIEWED_ATTRIBUTE_CTA_TAIL`` and ``REVIEWED_ATTRIBUTE_PURPOSE_FRAGMENT``),
+    so a reviewed purpose or CTA still matches while an unreviewed remainder
+    keeps the whole criterion unreviewed. Fail closed by construction rather
+    than by hoping the deleted span was harmless.
+    """
+
+    return re.sub(r"\s+", " ", value.strip(" ,.-")).strip(" ,.-")
 
 
 def _contains_unreviewed_match(matches: list[re.Match[str]]) -> bool:
