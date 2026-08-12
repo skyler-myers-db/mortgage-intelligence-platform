@@ -454,17 +454,22 @@ _REVIEWED_CONDITIONAL_DIRECTIVE_CRITERION = (
     rf"(?:{REVIEWED_MORTGAGE_ATTRIBUTE_LIST_FRAGMENT})"
     rf"{REVIEWED_ATTRIBUTE_PURPOSE_FRAGMENT}"
 )
+# Words a reviewed directive may open with before naming a population. A COUNT
+# belongs here ("the top 10 borrowers" is "the top borrowers"); the criterion
+# AFTER the population still must match the reviewed attribute grammar, so this
+# cannot admit an unreviewed one. See ``test_selection_criterion_count_invariance``.
+_DIRECTIVE_LEAD_IN = r"(?:(?:[a-z][a-z'-]*|\d{1,9})\s+){1,10}"
 _REVIEWED_AUDIENCE_DECISION_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(
-        rf"^(?:[a-z][a-z'-]*\s+){{1,10}}{_REVIEWED_DIRECTIVE_CRITERION}$",
+        rf"^{_DIRECTIVE_LEAD_IN}{_REVIEWED_DIRECTIVE_CRITERION}$",
         re.IGNORECASE,
     ),
     re.compile(
-        rf"^(?:[a-z][a-z'-]*\s+){{1,10}}{_REVIEWED_CONDITIONAL_DIRECTIVE_CRITERION}$",
+        rf"^{_DIRECTIVE_LEAD_IN}{_REVIEWED_CONDITIONAL_DIRECTIVE_CRITERION}$",
         re.IGNORECASE,
     ),
     re.compile(
-        rf"^(?:[a-z][a-z'-]*\s+){{1,10}}{_REVIEWED_WHOSE_DIRECTIVE_CRITERION}$",
+        rf"^{_DIRECTIVE_LEAD_IN}{_REVIEWED_WHOSE_DIRECTIVE_CRITERION}$",
         re.IGNORECASE,
     ),
     re.compile(
@@ -758,9 +763,13 @@ def _contains_unreviewed_audience_decision(
         # boundary rather than treated as evidence that an unknown criterion is
         # safe.
         prefix = clause[: candidate.start()].strip()
+        # Refusing half of the count-invariance ``_DIRECTIVE_LEAD_IN`` buys
+        # above: a letters-only class dropped this branch the moment a count
+        # appeared, so "Identify the top 10 borrowers with eczema." was never
+        # refused. Leading character stays alphabetic.
         is_population_directive = suffix.strip() != "" and (
             _AUDIENCE_FORMATION_ACTION_RE.search(formation_prefix) is not None
-            or bool(prefix and re.fullmatch(r"[A-Za-z][A-Za-z' -]{0,100}", prefix))
+            or bool(prefix and re.fullmatch(r"[A-Za-z][A-Za-z0-9' -]{0,100}", prefix))
         )
         if (has_governed_outcome or is_population_directive) and has_criterion_connector:
             return True

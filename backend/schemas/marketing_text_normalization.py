@@ -53,7 +53,7 @@ def in_word_leet_folds(value: str) -> set[str]:
     return {_fold_in_word_leet(value, table) for table in _LEET_DIGIT_TABLES}
 
 
-def _fold_in_word_leet(value: str, table: dict[int, str]) -> str:
+def _fold_in_word_leet(value: str, table: dict[int, int]) -> str:
     def fold_run(match: re.Match[str]) -> str:
         start, end = match.span()
         before = value[start - 1] if start else ""
