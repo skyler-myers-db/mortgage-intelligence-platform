@@ -39,10 +39,7 @@ from backend.schemas.marketing_selection_criteria import (
     is_reviewed_campaign_audience_summary_text,
     is_reviewed_read_only_analytics_text,
 )
-from backend.schemas.marketing_text_normalization import (
-    ascii_confusable_folds,
-    in_word_leet_folds,
-)
+from backend.schemas.marketing_text_normalization import ascii_confusable_folds
 from backend.schemas.protected_relationships import PROTECTED_RELIGION_FAMILIAL_RELATION_RE
 
 # Governed refusal reasons this module can report. Both are fail-closed
@@ -103,36 +100,6 @@ _STRUCTURAL_AUDIENCE_KEYWORD_PATTERNS = tuple(
 )
 
 
-@lru_cache(maxsize=512)
-def _mints_governed_term(candidate: str) -> bool:
-    """True when a bare number's folded spelling is itself a governed term.
-
-    The only reason a digit run is ever left unfolded. Consulted with the
-    folded candidate alone -- ``lao``, ``laos``, ``l``, ``e`` -- so it asks a
-    presence question of every direct bank and never a contextual one: at this
-    point there is no sentence to take context from, and the question is
-    whether these letters COULD be a governed term, not whether this sentence
-    uses one that way.
-
-    Kept in one place so the reserved set follows the vocabulary. Widening any
-    bank automatically stops the corresponding number from folding, rather than
-    leaving a stale literal list behind.
-    """
-
-    return any(
-        pattern.search(candidate)
-        for pattern in (
-            PROTECTED_CLASS_MARKETING_RE,
-            PROTECTED_AGE_CITIZENSHIP_MARKETING_RE,
-            PROTECTED_CONTEXTUAL_TRAIT_MARKETING_RE,
-            PROTECTED_RELIGION_FAMILIAL_RELATION_RE,
-            PROTECTED_HEALTH_TERM_MARKETING_RE,
-            PROTECTED_HEALTH_STATUS_MARKETING_RE,
-            PROTECTED_NATIONAL_ORIGIN_RE,
-        )
-    )
-
-
 def _structural_audience_scan_variants(value: str) -> set[str]:
     """Canonicalize only governed audience-claim keywords, preserving sentences."""
 
@@ -151,12 +118,14 @@ def _structural_audience_scan_variants(value: str) -> set[str]:
             else char
         )
     symbol_folded = "".join(in_word_symbols)
-    variants = {value, symbol_folded}
-    variants.update(
-        folded
-        for source in (value, symbol_folded)
-        for folded in in_word_leet_folds(source, mints_governed_term=_mints_governed_term)
-    )
+    variants = {
+        value,
+        symbol_folded,
+        value.translate(str.maketrans("013457", "oleast")),
+        value.translate(str.maketrans("013457", "oieast")),
+        symbol_folded.translate(str.maketrans("013457", "oleast")),
+        symbol_folded.translate(str.maketrans("013457", "oieast")),
+    }
     canonical: set[str] = set()
     for variant in variants:
         folded = variant
@@ -218,16 +187,12 @@ def contains_protected_class_marketing_text(
     )
 
 
-# Repeated short values are the norm on the surface this guard is hottest on:
-# a rendered Genie table re-scans every cell, and in the 20-row live capture of
-# 2026-08-12 (``mip.gold.lead_population``) 106 of 200 cells were duplicates --
-# one 150-character rationale appearing 19 times, a refresh timestamp 20 times.
-# Scanning that turn cost ~4.7s of pure CPU, most of it in the cells.
-#
-# The decision is a pure function of the text and the flag, so memoizing it
-# cannot change any verdict. Bounded twice over: ``maxsize`` caps entries and
-# the length gate keeps a long answer from pinning itself in the cache, which
-# also keeps the win where the repetition actually is.
+# A rendered governed table re-scans every cell, and those repeat heavily: in
+# the live 20-row capture of 2026-08-12 (mip.gold.lead_population) 106 of 200
+# cells were duplicates, one 150-character rationale appearing 19 times. The
+# decision is a pure function of the text and the flag, so memoizing cannot
+# change a verdict; maxsize and the length gate keep a long answer from
+# pinning itself in the cache.
 _CACHEABLE_SCAN_CHARS = 512
 
 
@@ -246,11 +211,7 @@ def protected_class_marketing_reason(
     *,
     assume_reviewed_read_only_analytics: bool = False,
 ) -> ProtectedClassRefusalReason | None:
-    """Name *why* this module rejects text, or ``None`` when it accepts it.
-
-    Memoizing front door for :func:`_protected_class_marketing_reason`; every
-    word of the contract below is that function's.
-    """
+    """Memoizing front door for :func:`_protected_class_marketing_reason`."""
 
     text = str(value)
     if len(text) <= _CACHEABLE_SCAN_CHARS:
@@ -331,12 +292,13 @@ def _protected_class_marketing_reason(
         # while evasions such as ``Wom€n`` and ``Musl!m`` cannot pass.
         mark_folded.translate(_MARKETING_SYMBOL_CONFUSABLES),
     }
-    # Folds every digit run except an isolated one whose folded spelling is
-    # itself a governed term -- see ``in_word_leet_folds``.
     leet_variants = {
         translated
         for variant in symbol_variants
-        for translated in in_word_leet_folds(variant, mints_governed_term=_mints_governed_term)
+        for translated in (
+            variant.translate(str.maketrans("013457", "oleast")),
+            variant.translate(str.maketrans("013457", "oieast")),
+        )
     }
 
     # Add only reviewed ASCII lookalike folds. These variants are safety-scan

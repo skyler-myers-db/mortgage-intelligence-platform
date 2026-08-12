@@ -6,3 +6,4 @@
 - [Mask/guard separator parity + control values](project_mask_guard_separator_parity.md) — detector reads space as `[- ]`, guards written with a literal space launder; and every exemption sweep needs a non-exempt control city
 - [Leet fold: position vs provenance](project_leet_fold_position_vs_provenance.md) — digit-adjacency scoping opens `mus 1 im`; provenance is the axis, and a bare rejoined token still misses context-gated banks
 - [Guard-diff verification method](project_guard_diff_verification_method.md) — git-archive trees + file scripts only (`python -c` ignores PYTHONPATH); shared scratchpad and live worktree both shift under you
+- [Reserved-spelling fold hazard](project_reserved_spelling_fold_hazard.md) — withholding the fold by folded SPELLING makes the number a shield: `140-tian`, `evangelic-415` go open; real reserved set is 687 tokens, not 2
