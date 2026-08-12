@@ -11,7 +11,44 @@ from __future__ import annotations
 
 import re
 
+# An article does not change WHICH attribute is being named: "the highest
+# opportunity scores" selects on ``opportunity_score`` exactly as "highest
+# opportunity scores" does. It belongs to the fragment, not to any one
+# alternative and not to any one embedding site.
+#
+# It was first added inline on the potential/upside alternative (2026-08-08)
+# and then again as a prefix on ``_REVIEWED_MORTGAGE_ATTRIBUTE_FULL_RE``
+# (2026-08-12). Neither reaches the clause patterns in
+# ``marketing_selection_criteria``, which embed the LIST fragment directly and
+# never consult the full matcher -- so every reviewed attribute except
+# potential/upside stayed unreviewed behind an article.
+#
+# Live on paychex 2026-08-12, one word apart:
+#   "Show me the top borrowers with the highest opportunity scores." refused in
+#   ~2s with "it is outside the reviewed Module 0 vocabulary", no SQL;
+#   "Show me the top borrowers with highest opportunity scores." answered in
+#   ~37s, source `genie`, governed SQL against `mip.gold.lead_population`, 10
+#   real rows. `opportunity_score` is the product's own ranking column.
+# Measured matrix: `the` refused across `opportunity score`, `lead score`,
+# `home equity`, `rate spread`, `LTV`, `loan balance`, `property value`,
+# `competitor lien` and `recommended offer`; every one of them passed bare.
+#
+# Hoisted here so the article is admitted once, for every alternative and at
+# every embedding site, instead of per-alternative -- that asymmetry is the
+# bug, twice over. This does NOT weaken the fail-closed default: the
+# alternation below is untouched, so "the highest credit scores" and "the
+# highest FICO" stay unreviewed (control: both still refused live), and a
+# reviewed conjunct cannot carry an unreviewed one ("the home equity and
+# eczema" still fails closed). Measured over 4,102 prompt probes: 803 newly
+# answerable, every one an article-prefixed form of a question that already
+# passed, and zero unreviewed attributes among them. The tests
+# ``test_an_article_never_admits_an_unreviewed_attribute`` and
+# ``test_an_article_cannot_launder_an_unreviewed_attribute_through_a_reviewed_one``
+# pin both halves.
+_REVIEWED_ATTRIBUTE_ARTICLE = r"(?:(?:an?|the)\s+)?"
+
 REVIEWED_MORTGAGE_ATTRIBUTE_FRAGMENT = (
+    rf"{_REVIEWED_ATTRIBUTE_ARTICLE}"
     # An aggregate qualifier is a DESCRIPTOR of a reviewed attribute, not a new
     # selection criterion: "average rate spread" selects on rate spread exactly
     # as "rate spread" does. These were admitted on the opportunity/lead-score
@@ -51,15 +88,18 @@ REVIEWED_MORTGAGE_ATTRIBUTE_FRAGMENT = (
     r"(?:high(?:est)?|top|low(?:est)?|average|mean)?\s*(?:opportunity|lead)\s+scores?|"
     r"marketing[- ]?eligib(?:le|ility)|"
     r"(?:heloc|home[- ]?equity)[- ]?eligib(?:le|ility)|"
-    r"(?:an?\s+)?helocs?|(?:an?\s+)?home[- ]?equity\s+lines?(?:\s+of\s+credit)?|"
+    r"helocs?|home[- ]?equity\s+lines?(?:\s+of\s+credit)?|"
     r"eligib(?:le|ility)\s+for\s+(?:an?\s+)?(?:heloc|refi(?:nance)?|home[- ]?equity(?:\s+line)?)|"
     r"timely\s+retention\s+review\s+signal|"
     r"(?:reviewed|eligible)\s+segment\s+membership|"
     # Modeled potential/upside is the product's own scoring concept
     # (opportunity score), phrased the way growth leaders ask for it. "the
     # top 10 borrowers with the highest potential" failed closed as an
-    # unknown criterion (live capture, 2026-08-08).
-    r"(?:the\s+)?(?:absolute\s+)?"
+    # unknown criterion (live capture, 2026-08-08). The leading article that
+    # capture needed is now hoisted onto the fragment, so this alternative no
+    # longer carries its own -- carrying it here is what made potential/upside
+    # the one reviewed attribute an article did not refuse.
+    r"(?:absolute\s+)?"
     r"(?:high(?:est)?|top|strong(?:est)?|great(?:est)?|most|best)?\s*"
     r"(?:refi(?:nance)?|heloc|growth|opportunity|conversion)?\s*"
     r"(?:potential|upside)|"
@@ -75,7 +115,7 @@ REVIEWED_MORTGAGE_ATTRIBUTE_FRAGMENT = (
     # declarative co-reference grammar reads "is <X>" as assigning criterion
     # X. The assessment vocabulary is the product's own ("strong candidate"
     # already appears in the reviewed analytics shapes). Same capture.
-    r"(?:an?\s+)?(?:especially\s+|particularly\s+|very\s+)?"
+    r"(?:especially\s+|particularly\s+|very\s+)?"
     r"(?:strong|good|great|excellent|prime|ideal|top|promising)\s+"
     r"(?:candidates?|prospects?|fits?|matches?|opportunit(?:y|ies))|"
     r"(?:fixed|adjustable)[- ]?rate\s+(?:mortgages?|loans?)|"
@@ -105,13 +145,16 @@ REVIEWED_ATTRIBUTE_PURPOSE_FRAGMENT = (
     r"mortgage|loan|servicing)\s+)?(?:campaign|offer|options?|review))?"
 )
 
-# An article and a numeric threshold do not change WHICH attribute is being
-# named. "a rate spread above 150 basis points" is the reviewed
-# ``rate_spread_bps`` column with a bound on it, but the criterion is matched
-# whole, so the article and the bound both made it unreviewed -- the whole
-# ranking/threshold family refused (measured over a 9,677-question corpus,
-# 2026-08-12: "Show me borrowers with a rate spread above 150 basis points",
-# "Rank borrowers with an opportunity score above 80").
+# A numeric threshold does not change WHICH attribute is being named. "a rate
+# spread above 150 basis points" is the reviewed ``rate_spread_bps`` column
+# with a bound on it, but the criterion is matched whole, so the article and
+# the bound both made it unreviewed -- the whole ranking/threshold family
+# refused (measured over a 9,677-question corpus, 2026-08-12: "Show me
+# borrowers with a rate spread above 150 basis points", "Rank borrowers with
+# an opportunity score above 80"). The article half of that fix now lives on
+# ``REVIEWED_MORTGAGE_ATTRIBUTE_FRAGMENT`` above, where the clause patterns
+# that embed the fragment directly can see it too; this constant keeps the
+# bound, which is meaningful only against a whole criterion.
 #
 # This cannot admit an unreviewed attribute: the alternation is untouched, so
 # "a FICO above 740" and "borrowers with eczema" stay unreviewed exactly as
@@ -120,7 +163,6 @@ REVIEWED_ATTRIBUTE_PURPOSE_FRAGMENT = (
 # mip.gold.borrower_360 has 101 columns and NONE of them is fico, credit,
 # savings or risk. Reviewing vocabulary for a measure the product does not
 # have would be inventing a capability, not clearing a false positive.
-_REVIEWED_ATTRIBUTE_ARTICLE = r"(?:(?:an?|the)\s+)?"
 _REVIEWED_ATTRIBUTE_THRESHOLD = (
     r"(?:\s+(?:above|over|below|under|at\s+least|at\s+most|greater\s+than|"
     r"less\s+than|more\s+than|fewer\s+than|of\s+at\s+least|of\s+at\s+most|"
@@ -129,8 +171,7 @@ _REVIEWED_ATTRIBUTE_THRESHOLD = (
 )
 
 _REVIEWED_MORTGAGE_ATTRIBUTE_FULL_RE = re.compile(
-    rf"^{_REVIEWED_ATTRIBUTE_ARTICLE}"
-    rf"(?:{REVIEWED_MORTGAGE_ATTRIBUTE_LIST_FRAGMENT})"
+    rf"^(?:{REVIEWED_MORTGAGE_ATTRIBUTE_LIST_FRAGMENT})"
     rf"{_REVIEWED_ATTRIBUTE_THRESHOLD}$",
     re.IGNORECASE,
 )

@@ -254,3 +254,90 @@ def test_an_aggregate_cannot_launder_an_unreviewed_attribute_through_a_reviewed_
         "Rank our segments by average home equity and race.",
     ):
         assert protected_prompt_match(question) is not None, question
+
+
+# --- An article describes a reviewed attribute; it is not a new criterion ----
+#
+# Same shape of asymmetry as the aggregate above, one level down. A leading
+# article was added twice -- inline on the potential/upside alternative
+# (2026-08-08) and as a prefix on `_REVIEWED_MORTGAGE_ATTRIBUTE_FULL_RE`
+# (2026-08-12) -- and neither reached the clause patterns in
+# `marketing_selection_criteria`, which embed the LIST fragment directly and
+# never consult the full matcher. So `potential` was the one reviewed attribute
+# an article did not refuse, and checking the full matcher alone could not see
+# it: `FULL.fullmatch("the highest opportunity scores")` was already True while
+# the prompt boundary still refused the question containing it.
+#
+# Live on paychex 2026-08-12, one word apart:
+#   "Show me the top borrowers with the highest opportunity scores." -> refused
+#   in ~2s, `source: refused`, no SQL, "outside the reviewed Module 0
+#   vocabulary";
+#   "Show me the top borrowers with highest opportunity scores." -> answered in
+#   ~37s, `source: genie`, governed SQL over `mip.gold.lead_population`, 10 real
+#   rows.
+# `opportunity_score` is the product's own ranking column, so this refused the
+# single most central way a growth leader phrases the core question.
+
+_ARTICLES = ("", "the ", "a ", "an ")
+_ARTICLE_SHAPES = (
+    "Show me the top borrowers with {criterion}.",
+    "Show me the top 50 borrowers with {criterion}.",
+    "Rank borrowers with {criterion}.",
+    "Show me borrowers who have {criterion}.",
+)
+
+
+@pytest.mark.parametrize("attribute", _REVIEWED_ATTRIBUTES)
+@pytest.mark.parametrize("qualifier", ("", "highest "))
+@pytest.mark.parametrize("article", _ARTICLES)
+@pytest.mark.parametrize("shape", _ARTICLE_SHAPES)
+def test_an_article_before_a_reviewed_attribute_is_answerable(
+    shape: str, article: str, qualifier: str, attribute: str
+) -> None:
+    """Every reviewed attribute must behave the same way behind an article.
+
+    Parametrized over the clause shapes as well as the vocabulary on purpose:
+    the article reached the full matcher long before it reached these, and a
+    test that only asserted on the matcher stayed green through the whole
+    outage.
+    """
+
+    question = shape.format(criterion=f"{article}{qualifier}{attribute}")
+    assert protected_prompt_match(question) is None, question
+
+
+@pytest.mark.parametrize("attribute", _UNREVIEWED_ATTRIBUTES)
+@pytest.mark.parametrize("article", ("the ", "a ", "an "))
+def test_an_article_never_admits_an_unreviewed_attribute(article: str, attribute: str) -> None:
+    """The fail-closed default must be exactly as strong as before the hoist.
+
+    This is the safety half of the argument for hoisting the article onto
+    ``REVIEWED_MORTGAGE_ATTRIBUTE_FRAGMENT``: the alternation is untouched, so
+    an unreviewed attribute stays unreviewed with or without an article.
+    Measured over 4,102 prompt probes across the shapes above -- 803 newly
+    answerable, every one of them an article-prefixed form of a question that
+    already passed, and zero unreviewed attributes among them.
+    """
+
+    for shape in _ARTICLE_SHAPES:
+        question = shape.format(criterion=f"{article}{attribute}")
+        assert protected_prompt_match(question) is not None, question
+
+
+def test_an_article_cannot_launder_an_unreviewed_attribute_through_a_reviewed_one() -> None:
+    """An article must not become a carrier for a coordinated unsafe object.
+
+    ``marketing_safety_terms`` embeds the reviewed list inside a negative
+    lookahead whose whole job is to stop an allowed prefix from laundering an
+    unsafe object. Widening the fragment widens that lookahead, so the
+    coordination cases are pinned here directly.
+    """
+
+    for question in (
+        "Show me the top borrowers with the highest home equity and eczema.",
+        "Add borrowers with a rate spread for the campaign and eczema.",
+        "Select borrowers with the home equity and credit score.",
+        "Rank our segments by the average rate spread and household income.",
+        "Rank our segments by the average home equity and race.",
+    ):
+        assert protected_prompt_match(question) is not None, question
