@@ -232,6 +232,33 @@ _PROTECTED_HEALTH_CARE_STATUSES = (
 )
 
 
+# The ENUMERATED health vocabulary above, flattened for exact lookup. It
+# deliberately excludes the condition-MORPHOLOGY heuristic the detectors
+# compose with it (``-algia``, ``-emia``, ``-itis``, ``-oma``, ``-osis``):
+# morphology is a spelling family that collides with ordinary proper nouns
+# (the gold city ``TACOMA``), while these are reviewed words that name a
+# condition. The place-dimension admission gate needs that distinction — a
+# gold city named ``CANCER`` must be refused, one named ``TACOMA`` need not be.
+_REVIEWED_NAMED_HEALTH_TERMS: frozenset[str] = frozenset(
+    term.casefold()
+    for group in (
+        _PROTECTED_HEALTH_NAMED_CONDITIONS,
+        _PROTECTED_HEALTH_ABBREVIATIONS,
+        _PROTECTED_HEALTH_TREATMENTS,
+        _PROTECTED_HEALTH_MEDICATIONS,
+        _PROTECTED_HEALTH_CLINICAL_MEASUREMENTS,
+        _PROTECTED_HEALTH_CARE_STATUSES,
+    )
+    for term in group
+)
+
+
+def reviewed_named_health_terms() -> frozenset[str]:
+    """Reviewed, enumerated health vocabulary — no morphology heuristics."""
+
+    return _REVIEWED_NAMED_HEALTH_TERMS
+
+
 def _phrase_fragment(terms: tuple[str, ...]) -> str:
     """Compile reviewed phrases while accepting ordinary space/dash variants."""
 

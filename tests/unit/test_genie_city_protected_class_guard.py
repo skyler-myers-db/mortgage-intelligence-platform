@@ -98,12 +98,28 @@ _GOVERNED_NARRATIVES = (
     "Tacoma, WA leads with 17 in-the-money borrowers.",
     "TACOMA leads with 17 in-the-money borrowers.",
     "Black Diamond, WA has 3,678 borrowers.",
+    "Seattle, WA leads with 1,986 in-the-money borrowers.",
+)
+
+# These four kept their exemption through the boundary-overlap work: the mask
+# is GUARDED, so it erases the city everywhere except beside the term it could
+# damage. "Hawaiian Gardens has 2 borrowers." masks; "Which Native Hawaiian
+# Gardens homeowners" does not, and still refuses.
+_GUARDED_NARRATIVES = (
     "BLACK DIAMOND leads with 3,678 borrowers.",
     "Hawaiian Gardens, CA has 2 borrowers.",
     "HAWAIIAN GARDENS has 2 borrowers.",
     "Indian Head Park, IL has 1,252 borrowers.",
     "INDIAN HEAD PARK has 1,252 borrowers.",
-    "Seattle, WA leads with 1,986 in-the-money borrowers.",
+)
+
+# The suffix-laundering class the guards exist to stop. Masking the whole run
+# ``hawaiian gardens`` would also erase the ``hawaiian`` of ``native
+# hawaiian``; the left guard leaves the occurrence alone so the term scans.
+_SUFFIX_LAUNDERING = (
+    "Target native Hawaiian Gardens applicants for this campaign.",
+    "Target american Indian Head Park families for this campaign.",
+    "Prioritize Native Hawaiian Gardens households.",
 )
 
 # The contract. Each is caught by a detector the governed set cannot reach,
@@ -188,6 +204,24 @@ def test_protected_terms_in_geography_shape_no_longer_render(text: str) -> None:
 @pytest.mark.parametrize("narrative", _GOVERNED_NARRATIVES)
 def test_governed_city_narratives_render(narrative: str) -> None:
     assert genie_visible_text_unsafe(narrative) is False
+
+
+@pytest.mark.usefixtures("governed_cities")
+@pytest.mark.parametrize("narrative", _GUARDED_NARRATIVES)
+def test_guarded_mask_keeps_the_suffix_wearable_exemptions(narrative: str) -> None:
+    assert genie_visible_text_unsafe(narrative) is False
+
+
+@pytest.mark.usefixtures("governed_cities")
+@pytest.mark.parametrize("text", _SUFFIX_LAUNDERING)
+def test_suffix_laundering_still_fails_closed(text: str) -> None:
+    """The pair that makes the guard non-negotiable.
+
+    Goes red together with the test above if the guards are dropped: without
+    them the exemption is either wrong (this passes) or absent (that fails).
+    """
+
+    assert genie_visible_text_unsafe(text) is True
 
 
 @pytest.mark.usefixtures("governed_cities")
@@ -330,13 +364,25 @@ def test_a_gold_city_named_after_a_protected_class_is_refused(bare_term: str) ->
         _reset_governed_place_dimension_for_tests(None)
 
 
-def test_the_gate_admits_only_the_four_live_collisions(
+def test_the_gate_admits_only_the_live_collisions_it_can_prove_safe(
     governed_cities: GovernedPlaceDimensionResolver,
 ) -> None:
-    """Nothing ordinary enters the fair-lending exemption set."""
+    """Nothing ordinary enters the fair-lending exemption set.
+
+    ``Oklahoma`` joins the four live city values: US states share the same
+    ``-oma`` morphology collision and are a closed federal list, so they sit in
+    the same candidate pool and earn admission through the same gate.
+
+    An adversarial review on 2026-08-12 showed the multi-token values can be
+    worn as a SUFFIX by the terms the gate must protect. They keep their
+    exemption because the mask is now GUARDED, and
+    ``_boundary_overlap_canaries`` is what proves the guard holds: drop the
+    guards and those spliced probes disarm, so the gate refuses the value
+    instead of admitting it unsafely.
+    """
 
     assert governed_cities.protected_class_safe_values() == frozenset(
-        {"TACOMA", "BLACK DIAMOND", "HAWAIIAN GARDENS", "INDIAN HEAD PARK"}
+        {"TACOMA", "BLACK DIAMOND", "HAWAIIAN GARDENS", "INDIAN HEAD PARK", "Oklahoma"}
     )
 
 
@@ -393,6 +439,10 @@ def test_a_dead_canary_corner_refuses_rather_than_admits() -> None:
     # A value in no canary at all still sails through: the gate only ever
     # speaks about values it can actually erase.
     assert _disarms_a_protected_class_canary("JUNCTION") is False
+    # ``HAWAIIAN GARDENS`` overlaps ``native hawaiian`` at the boundary, which
+    # the spliced canaries reach — and the GUARD is what saves it there, so the
+    # gate admits it. Remove the guard and this flips to True (the value is
+    # refused) rather than admitting it unsafely: fail-closed either way.
     assert _disarms_a_protected_class_canary("HAWAIIAN GARDENS") is False
 
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
+from functools import lru_cache
 
 from backend.schemas._validators_tenant import configured_public_lender_name
 
@@ -25,6 +26,107 @@ _LEADING_ANALYTICS_COMMAND_RE = re.compile(
     r"Approved|Called|Confirmed|Contacted|Discussed|Emailed|Noted|Paused|"
     r"Rejected|Reviewed|Scheduled|Sent|Shared|Spoke|Updated)\s+(?=[A-Z])"
 )
+# Closed English function-word classes, capitalized only because they open a
+# sentence. "Which Washington cities have the most in-the-money borrowers?"
+# reads as the person "Which Washington" to the title-case pair heuristic, and
+# it is not a narrow case: EVERY one of 39 sentence-initial words probed on
+# 2026-08-12 paired with a following proper noun, refusing 289 of the 428
+# governed ``mip.gold.borrower_360`` city values under "Which {City}
+# borrowers ...".
+#
+# This bank alone is NOT sufficient authority to strip. An adversarial review
+# on 2026-08-12 broke the earlier unconditional version: ``Do`` and ``An`` are
+# ordinary family and given names, so "Do Nguyen qualifies for a HELOC?" had
+# its first token eaten and the lone surname could not pair -- a PII regression
+# against a portfolio whose live gold carries WESTMINSTER, GARDEN GROVE and
+# SANTA ANA. The docstring's claim that "the following pair still scans" holds
+# only for names of three tokens or more, and every word in a bank this size is
+# some two-token name's first half.
+#
+# So the strip is gated on BOTH sides: a function word from this bank AND a
+# following token run that is a KNOWN PLACE (see
+# :func:`_sentence_initial_place_strip_pattern`).
+#
+# The place half is necessary but ALSO not sufficient, which a second review
+# pass on 2026-08-12 proved: 229 of the live gold city values are single tokens
+# that are ordinary family names (MEDINA, PARKER, KENT, CARSON, PRESTON,
+# MILTON, ELIZABETH), so "Do Medina qualifies for a HELOC?" lost its pair --
+# 464 of 468 place terms flipped that way. The place vocabulary cannot fix
+# that: it is legitimately a place AND legitimately a surname.
+#
+# What fixes it is this bank excluding every word attested in FIRST name
+# position. ``Do``, ``An`` and ``No`` are surname-first Vietnamese and Korean
+# family names, which is exactly the position the strip consumes; ``Will`` and
+# ``May`` are given names. Prepositions like ``In``, ``To`` and ``By`` stay:
+# they are attested only in last position ("Medina In"), which the strip never
+# touches. ``test_genie_prompt_guard_geography`` pins the exclusion.
+_SENTENCE_INITIAL_FUNCTION_WORDS: tuple[str, ...] = (
+    # fmt: off
+    # interrogatives
+    "Which", "What", "Who", "Whom", "Whose", "Where", "When", "Why", "How",
+    # auxiliaries and modals ("Do" is excluded -- see the name-collision note)
+    "Does", "Did", "Is", "Are", "Was", "Were", "Am", "Be", "Been",
+    "Being", "Has", "Have", "Had", "Can", "Could", "Should", "Would", "Shall",
+    "Must", "Might",
+    # determiners and quantifiers ("An" and "No" excluded, same reason)
+    "The", "Any", "All", "Each", "Every", "Some", "Most", "Both", "Many",
+    "Few", "Top", "Only", "Other", "Another", "Same", "Several", "Such",
+    "This", "That", "These", "Those", "Our", "Their",
+    # prepositions, conjunctions, connectives
+    "In", "On", "At", "By", "For", "From", "Of", "To", "With", "Within",
+    "Without", "Among", "Amongst", "Across", "Between", "Before", "After",
+    "During", "Over", "Under", "Near", "Per", "Since", "Than", "Then", "Into",
+    "About", "Against", "Through", "Toward", "Towards", "And", "But", "Or",
+    "Nor", "If", "Also", "However", "Because", "While", "Versus",
+    # sentence-initial adverbs
+    "Just", "Now", "Please", "Overall", "Currently", "Today", "Still", "Even",
+    "Once",
+    # fmt: on
+)
+# The federal list, not a coverage footprint: these are the state names a
+# governed analytics question routes by, and unlike the gold ``city`` dimension
+# they never change when Cotality coverage refreshes. Two-word states already
+# live in ``_REVIEWED_NON_PERSON_PHRASES``; the pair heuristic only ever
+# misreads the ONE-word ones, which is what this covers.
+US_STATE_NAMES: tuple[str, ...] = (
+    # fmt: off
+    "Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado",
+    "Connecticut", "Delaware", "Florida", "Georgia", "Hawaii", "Idaho",
+    "Illinois", "Indiana", "Iowa", "Kansas", "Kentucky", "Louisiana", "Maine",
+    "Maryland", "Massachusetts", "Michigan", "Minnesota", "Mississippi",
+    "Missouri", "Montana", "Nebraska", "Nevada", "Ohio", "Oklahoma", "Oregon",
+    "Pennsylvania", "Tennessee", "Texas", "Utah", "Vermont", "Virginia",
+    "Washington", "Wisconsin", "Wyoming",
+    # fmt: on
+)
+
+
+@lru_cache(maxsize=8)
+def _sentence_initial_place_strip_pattern(place_terms: tuple[str, ...]) -> re.Pattern[str] | None:
+    """Strip a sentence-opening function word ONLY before a known place.
+
+    Both halves are load-bearing. Sentence-initial position is what keeps a
+    surname that follows one of these words mid-sentence intact ("Contacted Do
+    Nguyen"); the place lookahead is what keeps a surname that follows one at
+    the START intact ("Do Nguyen qualifies"). Neither alone is enough, and the
+    2026-08-12 review broke the version that had only the first.
+
+    The lookahead is not consumed, so the place itself still reaches every
+    scanner. Function words match case-sensitively (only a Title-case leader
+    can join a title-case pair); the place matches case-insensitively because
+    gold stores ``BELLEVUE`` and users type ``Bellevue``.
+    """
+
+    cleaned = sorted({term.strip() for term in place_terms if term.strip()}, key=len, reverse=True)
+    if not cleaned:
+        return None
+    return re.compile(
+        r"(?:(?<=^)|(?<=[.!?;:\n]))(\s*)(?:"
+        + "|".join(_SENTENCE_INITIAL_FUNCTION_WORDS)
+        + r")\s+(?=(?i:"
+        + "|".join(re.escape(term) for term in cleaned)
+        + r")(?![A-Za-z0-9]))"
+    )
 # Title-case pairs ending in these words are never person names here:
 # admin/geographic place-name suffixes (Lake Forest, Grand Prairie, Coral
 # Springs — city strings are sanctioned analytics output and borrower rows
@@ -41,6 +143,16 @@ _NON_PERSON_TITLECASE_SUFFIXES = frozenset(
         "lake", "lakes", "meadows", "mesa", "oaks", "park", "pines", "plains",
         "point", "prairie", "rapids", "ridge", "shores", "springs", "station",
         "valley", "village", "vista", "woods",
+        # Metro / region formants. "Puget Sound", "Inland Empire", "Bay Area"
+        # and the like are geography drill-down vocabulary (a hero surface per
+        # CLAUDE.md) that the pair scan read as people -- 12 refusals measured
+        # 2026-08-12. This bank is GLOBAL (campaign, outreach and operator-note
+        # validators read it too, exactly as they already do for "park", "bay"
+        # and "forest"), so ``delta`` was dropped after review: it is a real
+        # family name and "Spoke with Marcus Delta" stopped being caught. The
+        # rest are geographic nouns with no attested surname use.
+        "area", "basin", "coast", "empire", "peninsula", "sound",
+        "corridor", "district", "tract", "zone",
         "equity", "heloc", "loan", "mortgage", "offer", "queue", "refi",
         "refinance", "review",
         "candidate", "candidates", "intent", "risk", "sale", "segment", "segments",
@@ -190,6 +302,10 @@ _REVIEWED_NON_PERSON_PHRASES: tuple[str, ...] = (
     "Growth Agent",
     "Lead Queue",
     "Borrower Dossier",
+    # A CLAUDE.md domain term (the Cotality mastered owner/entity relationship
+    # identifier) that the pair scan read as a person: even "What is an Owner
+    # Link?" refused. Sits alongside the other governed product nouns above.
+    "Owner Link",
     "Mosaic AI",
     "Agent Bricks",
     "New Hampshire",
@@ -216,6 +332,10 @@ _CONTEXTUAL_HUMAN_NAME_RE = re.compile(
     # borrowers", "target top segments" are core product phrasings, not
     # person-name lookups. Real names never take these words.
     r"all|any|each|every|only|both|overall|first|next|now|today|top|"
+    # Governed work-artefact nouns. "Give me a ranked call list for today"
+    # matched on "call list for" (4 refusals, 2026-08-12); a call list is a
+    # queue of masked IDs, never a person being addressed.
+    r"lists?|queues?|sheets?|campaigns?|batches?|waves?|rosters?|"
     r"borrowers?|leads?|candidates?|prospects?|customers?|clients?|"
     r"segments?|cohorts?|homeowners?|investors?|people|everyone|anyone|someone|"
     r"is|are|was|were|will|would|can|could|may|might|has|have|had)\b)"
@@ -256,15 +376,28 @@ def contains_human_name_shape(
     *,
     allowed_phrases: Sequence[str] = (),
     include_titlecase: bool = True,
+    sentence_initial_place_terms: Sequence[str] = (),
 ) -> bool:
     """Detect title-case names and reviewed common lowercase first/last pairs.
 
     General two-word lowercase prose is not treated as an identity. The common
     pair vocabulary closes the audited ``john smith`` class without turning
     ordinary mortgage phrases into false positives.
+
+    ``sentence_initial_place_terms`` supplies the KNOWN PLACES (US states plus
+    the live governed city dimension) before which a sentence-opening function
+    word is orthography rather than an identity — "Which Washington cities ..."
+    is not a person named "Which Washington". Passing nothing disables the
+    strip entirely, so campaign, outreach, and operator-note surfaces are
+    bit-for-bit unchanged; only the Ask Genie prompt and answer surfaces opt
+    in. See :func:`_sentence_initial_place_strip_pattern` for why the place
+    half is required.
     """
 
     text = _remove_reviewed_non_person_phrases(str(value), allowed_phrases=allowed_phrases)
+    strip_pattern = _sentence_initial_place_strip_pattern(tuple(sentence_initial_place_terms))
+    if strip_pattern is not None:
+        text = strip_pattern.sub(r"\1", text)
     text = _LEADING_ANALYTICS_COMMAND_RE.sub(" ", text)
     if include_titlecase and any(
         not titlecase_pair_is_non_person(match.group(0))

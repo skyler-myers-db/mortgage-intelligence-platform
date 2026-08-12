@@ -3,3 +3,4 @@
 - [AI Gateway live-probe proof standard](project_ai_gateway_probe_proof.md) — claimable only after live endpoint query plus exact current inference row or async recent deployment-scoped row; proof kind must stay disclosed on public surfaces
 - [R6-09 health disclosure scope](project_r6_09_health_disclosure_scope.md) — R6-09 covers anonymous recon only; test new authenticated-health keys against lineage/data-estate (no auth dep) for marginal exposure
 - [Guard regex private copies](project_guard_regex_private_copies.md) — round-6 Genie fixes never reached 5 files holding stale title-case/9-digit copies; grep every copy before changing a shared validator
+- [Mask/guard separator parity + control values](project_mask_guard_separator_parity.md) — detector reads space as `[- ]`, guards written with a literal space launder; and every exemption sweep needs a non-exempt control city

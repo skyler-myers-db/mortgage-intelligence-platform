@@ -77,7 +77,7 @@ a failed request.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from functools import lru_cache
 from threading import Lock
 from typing import NamedTuple
@@ -126,9 +126,16 @@ class ResolvedPlaceDimension(NamedTuple):
     """Stored-casing values the PROSE person-name heuristic misreads."""
     protected_class_safe: frozenset[str]
     """Stored-casing values the PROSE fair-lending scan misreads."""
+    all_values: frozenset[str]
+    """Every governed city value, unfiltered. NOT an exemption set.
+
+    The sentence-initial strip needs to recognise a place, not to stop scanning
+    one: it only decides whether an opening ``Which``/``The`` is orthography.
+    Nothing is masked from any detector on the strength of membership here.
+    """
 
 
-_EMPTY_DIMENSION = ResolvedPlaceDimension(frozenset(), frozenset(), frozenset())
+_EMPTY_DIMENSION = ResolvedPlaceDimension(frozenset(), frozenset(), frozenset(), frozenset())
 
 
 def normalize_place_value(value: str) -> str:
@@ -307,14 +314,32 @@ _PROTECTED_CLASS_CANARY_SENTENCES: tuple[str, ...] = (
 def _canary_terms() -> tuple[str, ...]:
     """Protected-class terms the canary sweep is built from.
 
-    The national-origin half comes from the detector's own frozenset so the
-    gate cannot drift behind the bank it guards.
+    The national-origin and named-health halves come from the detectors' own
+    vocabularies so the gate cannot drift behind the banks it guards. The
+    health half matters: ``cancer`` was absent from the hand-written list, so a
+    gold city named ``CANCER`` cleared the gate and "Tell me about borrowers
+    with cancer in <city>" lost its health finding (test audit, 2026-08-12).
+    The prompt guard's explicit term bank is folded in for the same reason,
+    and it matters MORE on the answer surface than on the prompt: the prompt
+    scans that bank against unmasked text, but prose has no such bank, so a
+    gold city named ``RACE`` would have disarmed a narrative finding with
+    nothing left to catch it. Morphology is deliberately NOT folded in — that
+    is the ``-oma`` collision the exemption exists to fix.
     """
 
-    from backend.schemas.marketing_safety_terms import _PROTECTED_NATIONAL_ORIGIN_TERMS
+    from backend.schemas.marketing_safety_terms import (
+        _PROTECTED_NATIONAL_ORIGIN_TERMS,
+        reviewed_named_health_terms,
+    )
+    from backend.services.genie_message_policy import _PROTECTED_PROMPT_TERMS
 
     return tuple(
-        sorted(set(_PROTECTED_CLASS_CANARY_TERMS) | set(_PROTECTED_NATIONAL_ORIGIN_TERMS))
+        sorted(
+            set(_PROTECTED_CLASS_CANARY_TERMS)
+            | set(_PROTECTED_NATIONAL_ORIGIN_TERMS)
+            | set(reviewed_named_health_terms())
+            | set(_PROTECTED_PROMPT_TERMS)
+        )
     )
 
 
@@ -330,6 +355,97 @@ def _protected_class_canaries() -> tuple[str, ...]:
             for noun in _PROTECTED_CLASS_AUDIENCE_NOUNS
         )
         + _PROTECTED_CLASS_CANARY_SENTENCES
+    )
+
+
+@lru_cache(maxsize=512)
+def protected_term_overlap_guards(value: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Contexts where erasing this value would damage a protected term.
+
+    Masking is a whole-token-run erase, so a term can only be damaged where the
+    two runs OVERLAP, and for token runs that is exactly two shapes: a suffix of
+    the term equals a prefix of the value (``native`` + ``hawaiian gardens``),
+    or a prefix of the term equals a suffix of the value. Full containment
+    either way is not overlap — the resolver's admission gate already covers it,
+    and guarding it here would stop the mask working at all.
+
+    Returned as (left contexts, right contexts) for
+    :func:`mask_governed_phrases`, so the value is erased everywhere EXCEPT
+    beside the term it could damage.
+    """
+
+    value_tokens = value.split()
+    if not value_tokens:
+        return ((), ())
+    folded_value = [token.casefold() for token in value_tokens]
+    lefts: set[str] = set()
+    rights: set[str] = set()
+    for term in _canary_terms():
+        term_tokens = term.split()
+        folded_term = [token.casefold() for token in term_tokens]
+        for overlap in range(1, min(len(term_tokens), len(value_tokens)) + 1):
+            if len(term_tokens) <= overlap:
+                continue  # containment, not overlap
+            if folded_term[-overlap:] == folded_value[:overlap]:
+                lefts.add(" ".join(term_tokens[:-overlap]))
+            if folded_term[:overlap] == folded_value[-overlap:]:
+                rights.add(" ".join(term_tokens[overlap:]))
+    return (tuple(sorted(lefts)), tuple(sorted(rights)))
+
+
+def governed_protected_class_mask_guards(
+    values: Sequence[str],
+) -> tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...]:
+    """Per-value guards for every governed place masked out of fair lending."""
+
+    return tuple((value, *protected_term_overlap_guards(value)) for value in values)
+
+
+def _boundary_overlap_canaries(value: str) -> tuple[str, ...]:
+    """Canaries where the value's run OVERLAPS a protected term's run.
+
+    The occurrence-scoped gate below skips any canary the value does not appear
+    in, and an adversarial review on 2026-08-12 turned that skip into a
+    laundering path: masking the run ``hawaiian gardens`` also erases the
+    ``hawaiian`` of ``native hawaiian``, so "Which Native Hawaiian Gardens
+    homeowners should we contact" stopped being refused — 216 such strings,
+    built from the gate's OWN must-block term list, and both live values
+    (``HAWAIIAN GARDENS``, ``INDIAN HEAD PARK``) were vehicles.
+
+    Masking is a whole-token-run erase, so a protected term can only be damaged
+    where the two runs overlap, and for token runs that is exactly two shapes:
+    a suffix of the term equals a prefix of the value ("native" + "hawaiian
+    gardens"), or a prefix of the term equals a suffix of the value ("little
+    black" + "neighborhoods"). Full containment either way is already covered —
+    the canary then literally contains the value, so the gate does not skip it.
+    Splicing those two shapes into the same carriers closes the class rather
+    than the two strings that exposed it.
+    """
+
+    value_tokens = value.split()
+    if not value_tokens:
+        return ()
+    folded_value = [token.casefold() for token in value_tokens]
+    spliced: set[str] = set()
+    for term in _canary_terms():
+        term_tokens = term.split()
+        folded_term = [token.casefold() for token in term_tokens]
+        for overlap in range(1, min(len(term_tokens), len(value_tokens)) + 1):
+            if len(term_tokens) <= overlap:
+                # The term is CONTAINED in the value, not overlapping it. The
+                # splice would be the value itself ("Target Hawaiian Gardens
+                # applicant ..."), which is place targeting, not protected-class
+                # targeting -- masking it SHOULD stop blocking. Leaving this in
+                # condemned every value the exemption exists for.
+                continue
+            if folded_term[-overlap:] == folded_value[:overlap]:
+                spliced.add(" ".join(term_tokens[:-overlap] + value_tokens))
+            if folded_term[:overlap] == folded_value[-overlap:]:
+                spliced.add(" ".join(value_tokens + term_tokens[overlap:]))
+    return tuple(
+        _PROTECTED_CLASS_CANARY_CARRIER.format(term=phrase, noun=noun)
+        for phrase in sorted(spliced)
+        for noun in _PROTECTED_CLASS_AUDIENCE_NOUNS
     )
 
 
@@ -370,7 +486,10 @@ def _disarms_a_protected_class_canary(value: str) -> bool:
     -- a gate that masked differently from the guard would prove nothing about
     the guard. Canaries the value does not occur in are skipped rather than
     re-scanned: masking cannot change text it does not match, and the scan is
-    the expensive half.
+    the expensive half. That skip is exactly why the fixed carrier set is not
+    sufficient on its own; :func:`_boundary_overlap_canaries` supplies the
+    probes where the value's run OVERLAPS a protected term's run instead of
+    containing it.
 
     The term x audience-noun cross-product has dead corners -- the bank matches
     ``disabled`` only beside a person noun, so "Target disabled households ..."
@@ -389,8 +508,13 @@ def _disarms_a_protected_class_canary(value: str) -> bool:
     )
     from backend.schemas._validators_unsafe_text import mask_governed_phrases
 
-    for canary in _protected_class_canaries():
-        masked = mask_governed_phrases(canary, (value,))
+    guards = ((value, *protected_term_overlap_guards(value)),)
+    for canary in _protected_class_canaries() + _boundary_overlap_canaries(value):
+        # The SAME guarded mask the consumer uses. A spliced overlap canary
+        # therefore proves the guard holds ("Target native hawaiian gardens
+        # borrowers ..." is left intact and still blocks) instead of condemning
+        # the value; only a value the guard cannot save is refused.
+        masked = mask_governed_phrases(canary, (value,), guards)
         if masked == canary:
             continue
         if not contains_protected_class_marketing_text(
@@ -460,6 +584,16 @@ class GovernedPlaceDimensionResolver:
 
     def _load(self) -> ResolvedPlaceDimension:
         values = self._dimension_reader()
+        # US states join the FAIR-LENDING candidate pool (and only that pool).
+        # They are a closed federal list, not a coverage footprint, so naming
+        # them pins no geography -- and they hit the same -oma morphology the
+        # city dimension does: every question naming Oklahoma refused, 28 of
+        # them, plus "Oklahoma City" and "Oklahoma County" (measured
+        # 2026-08-12). They earn their exemption through the same admission
+        # gate as a city; nothing is exempt because it is on this list.
+        from backend.schemas._validators_person_names import US_STATE_NAMES
+
+        protected_candidates = [*values, *US_STATE_NAMES]
         conflicting = {
             normalize_place_value(value)
             for value in values
@@ -504,7 +638,7 @@ class GovernedPlaceDimensionResolver:
             name_shape_safe = set()
         protected_class_safe: set[str] = set()
         canary_excluded = 0
-        for value in values:
+        for value in protected_candidates:
             if not value.strip() or not self._protected_class_conflict_predicate(value):
                 continue
             if _disarms_a_protected_class_canary(value):
@@ -537,6 +671,7 @@ class GovernedPlaceDimensionResolver:
             conflicting=frozenset(conflicting),
             name_shape_safe=frozenset(name_shape_safe),
             protected_class_safe=frozenset(protected_class_safe),
+            all_values=frozenset(" ".join(value.split()) for value in values if value.strip()),
         )
 
     def _resolve(self) -> ResolvedPlaceDimension:
@@ -606,6 +741,17 @@ class GovernedPlaceDimensionResolver:
         """
 
         return self._resolve().protected_class_safe
+
+    def known_place_values(self) -> frozenset[str]:
+        """Every governed city value — recognition, never exemption.
+
+        Consumed only by the sentence-initial strip, which uses it to decide
+        that a capitalized opening word is grammar. No detector stops scanning
+        anything because a value appears here, so this set needs no admission
+        gate. Degrades to empty like the rest: no places, no strip.
+        """
+
+        return self._resolve().all_values
 
     def invalidate(self) -> None:
         """Drop the cached dimension so the next call re-reads gold."""

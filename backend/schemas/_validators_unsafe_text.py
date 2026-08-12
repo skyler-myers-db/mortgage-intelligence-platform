@@ -175,13 +175,80 @@ def _governed_phrase_pattern(phrases: tuple[str, ...]) -> re.Pattern[str] | None
     )
 
 
-def mask_governed_phrases(value: str, phrases: Sequence[str]) -> str:
-    """Blank whole-token occurrences of governed non-person phrases."""
+@lru_cache(maxsize=64)
+def _guard_context_pattern(context: str, *, trailing: bool) -> re.Pattern[str]:
+    """Match a guard context sitting immediately beside an occurrence.
 
+    Separator-agnostic on purpose. The protected-class scanner folds EVERY
+    non-alphanumeric run to a single space before matching, and compiles its
+    own multi-word terms with ``[- ]``, so ``native-hawaiian`` is the same
+    phrase to it as ``native hawaiian``. A guard that only knew about a literal
+    space was therefore defeated by ordinary orthography — an adversarial
+    review measured 90 evasions across 9 separators, and hyphenated is the
+    canonical spelling of the ethnonyms involved.
+
+    Written as a search over the neighbouring text rather than a lookbehind
+    precisely because the separator run is variable width.
+    """
+
+    if trailing:
+        return re.compile(r"^[^A-Za-z0-9]+" + re.escape(context) + r"(?![A-Za-z0-9])", re.IGNORECASE)
+    return re.compile(
+        r"(?:^|[^A-Za-z0-9])" + re.escape(context) + r"[^A-Za-z0-9]+$", re.IGNORECASE
+    )
+
+
+def _occurrence_is_guarded(
+    text: str,
+    start: int,
+    end: int,
+    left_contexts: tuple[str, ...],
+    right_contexts: tuple[str, ...],
+) -> bool:
+    """True when erasing this occurrence would damage the term beside it."""
+
+    return any(
+        _guard_context_pattern(context, trailing=False).search(text[:start])
+        for context in left_contexts
+    ) or any(
+        _guard_context_pattern(context, trailing=True).search(text[end:])
+        for context in right_contexts
+    )
+
+
+def mask_governed_phrases(
+    value: str,
+    phrases: Sequence[str],
+    guards: Sequence[tuple[str, Sequence[str], Sequence[str]]] = (),
+) -> str:
+    """Blank whole-token occurrences of governed non-person phrases.
+
+    ``guards`` names, per phrase, the neighbouring contexts in which the
+    occurrence must be left alone because erasing it would damage the protected
+    term beside it. Callers that pass none get the plain whole-run erase.
+    """
+
+    text = str(value)
     pattern = _governed_phrase_pattern(tuple(phrases))
     if pattern is None:
-        return str(value)
-    return pattern.sub(" ", str(value))
+        return text
+    if not guards:
+        return pattern.sub(" ", text)
+    by_phrase = {
+        phrase.casefold(): (tuple(left), tuple(right))
+        for phrase, left, right in guards
+        if phrase.strip()
+    }
+
+    def _erase(match: re.Match[str]) -> str:
+        left, right = by_phrase.get(" ".join(match.group(0).split()).casefold(), ((), ()))
+        if (left or right) and _occurrence_is_guarded(
+            text, match.start(), match.end(), left, right
+        ):
+            return match.group(0)
+        return " "
+
+    return pattern.sub(_erase, text)
 
 
 def contains_unsafe_ai_text(
@@ -191,7 +258,9 @@ def contains_unsafe_ai_text(
     assume_reviewed_read_only_analytics: bool = False,
     name_shape_value: str | None = None,
     name_shape_allowed_phrases: Sequence[str] = (),
+    name_shape_sentence_initial_place_terms: Sequence[str] = (),
     protected_class_allowed_phrases: Sequence[str] = (),
+    protected_class_guards: Sequence[tuple[str, Sequence[str], Sequence[str]]] = (),
 ) -> bool:
     """Shared fail-closed guard for model-authored or model-directed prose.
 
@@ -210,6 +279,14 @@ def contains_unsafe_ai_text(
     :func:`contains_human_name_shape` only -- the Genie policy passes its
     ``City, ST`` geography strip here. ``name_shape_allowed_phrases`` masks
     governed place values out of that same copy for the same reason.
+    ``name_shape_sentence_initial_place_terms`` reaches that same scanner and
+    nothing else: it names the places before which a capitalized opening word
+    is orthography, not an identity ("The Washington cities with the most
+    in-the-money borrowers ..." is not a person named "The Washington").
+    Captured live 2026-08-12: that pair, plus "Which Washington" in two
+    follow-up questions, is what withheld the whole governed narrative for
+    "Which Washington cities have the most in-the-money borrowers?". The place
+    is never consumed — it still reaches every scanner here.
 
     ``protected_class_allowed_phrases`` masks governed place values out of the
     copy given to :func:`contains_protected_class_marketing_text` only. This is
@@ -227,7 +304,7 @@ def contains_unsafe_ai_text(
     return (
         contains_mechanical_pii_or_raw_identifier(text)
         or contains_protected_class_marketing_text(
-            mask_governed_phrases(text, protected_class_allowed_phrases),
+            mask_governed_phrases(text, protected_class_allowed_phrases, protected_class_guards),
             assume_reviewed_read_only_analytics=assume_reviewed_read_only_analytics,
         )
         or contains_prompt_injection_text(text)
@@ -235,5 +312,6 @@ def contains_unsafe_ai_text(
         or contains_human_name_shape(
             mask_governed_phrases(name_shape_text, name_shape_allowed_phrases),
             include_titlecase=include_titlecase,
+            sentence_initial_place_terms=name_shape_sentence_initial_place_terms,
         )
     )
