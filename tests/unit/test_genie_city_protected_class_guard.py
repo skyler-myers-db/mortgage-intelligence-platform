@@ -98,12 +98,24 @@ _GOVERNED_NARRATIVES = (
     "Tacoma, WA leads with 17 in-the-money borrowers.",
     "TACOMA leads with 17 in-the-money borrowers.",
     "Black Diamond, WA has 3,678 borrowers.",
+    "Seattle, WA leads with 1,986 in-the-money borrowers.",
+)
+
+# Narrowed 2026-08-12. These rendered while ``HAWAIIAN GARDENS`` and ``INDIAN
+# HEAD PARK`` held a fair-lending exemption; the boundary-overlap gate withdrew
+# it, because the same mask that clears them also clears the ``hawaiian`` of
+# ``native hawaiian`` and the ``indian`` of ``american indian``. The grid rows
+# still render -- ``conflicting_values`` is a different set with a different
+# gate -- so this costs the model's sentence, not the data.
+_WITHHELD_BY_THE_OVERLAP_GATE = (
+    # Uppercase only: the ASCII-confusable fold that makes BLACK DIAMOND a
+    # collision at all applies to the stored casing, and title case already
+    # clears via PROTECTED_CLASS_SAFE_CONTEXT_PATTERNS.
     "BLACK DIAMOND leads with 3,678 borrowers.",
     "Hawaiian Gardens, CA has 2 borrowers.",
     "HAWAIIAN GARDENS has 2 borrowers.",
     "Indian Head Park, IL has 1,252 borrowers.",
     "INDIAN HEAD PARK has 1,252 borrowers.",
-    "Seattle, WA leads with 1,986 in-the-money borrowers.",
 )
 
 # The contract. Each is caught by a detector the governed set cannot reach,
@@ -188,6 +200,20 @@ def test_protected_terms_in_geography_shape_no_longer_render(text: str) -> None:
 @pytest.mark.parametrize("narrative", _GOVERNED_NARRATIVES)
 def test_governed_city_narratives_render(narrative: str) -> None:
     assert genie_visible_text_unsafe(narrative) is False
+
+
+@pytest.mark.usefixtures("governed_cities")
+@pytest.mark.parametrize("narrative", _WITHHELD_BY_THE_OVERLAP_GATE)
+def test_overlap_gate_withdraws_the_suffix_wearable_exemptions(narrative: str) -> None:
+    """The measured cost of closing the suffix-laundering class.
+
+    Pinned deliberately: if a later change restores these, it has almost
+    certainly reopened "Which Native Hawaiian Gardens homeowners should we
+    contact", and this test should be the thing that makes that visible rather
+    than a silent re-widening.
+    """
+
+    assert genie_visible_text_unsafe(narrative) is True
 
 
 @pytest.mark.usefixtures("governed_cities")
@@ -330,14 +356,28 @@ def test_a_gold_city_named_after_a_protected_class_is_refused(bare_term: str) ->
         _reset_governed_place_dimension_for_tests(None)
 
 
-def test_the_gate_admits_only_the_four_live_collisions(
+def test_the_gate_admits_only_the_one_live_collision_it_can_prove_safe(
     governed_cities: GovernedPlaceDimensionResolver,
 ) -> None:
-    """Nothing ordinary enters the fair-lending exemption set."""
+    """Nothing ordinary enters the fair-lending exemption set.
 
-    assert governed_cities.protected_class_safe_values() == frozenset(
-        {"TACOMA", "BLACK DIAMOND", "HAWAIIAN GARDENS", "INDIAN HEAD PARK"}
-    )
+    Narrowed on 2026-08-12 from four values to one. An adversarial review
+    showed the other three can be worn as a SUFFIX by the very terms the gate
+    must protect -- masking ``hawaiian gardens`` also erases the ``hawaiian``
+    of ``native hawaiian``, which turned "Which Native Hawaiian Gardens
+    homeowners should we contact" from refused into allowed, 216 strings in
+    all. ``_boundary_overlap_canaries`` now probes that shape, and the three
+    multi-token values fail it.
+
+    Cost, measured: prose naming ``HAWAIIAN GARDENS`` (2 borrowers) or
+    ``INDIAN HEAD PARK`` (1,252) beside a population noun is withheld again.
+    Their grid rows are unaffected -- ``conflicting_values`` is a separate set
+    -- so the data still renders; only the model's sentence does not.
+    ``TACOMA`` (the single-token value, 17 borrowers) overlaps nothing and
+    keeps its exemption.
+    """
+
+    assert governed_cities.protected_class_safe_values() == frozenset({"TACOMA"})
 
 
 def test_every_canary_term_has_at_least_one_blocking_canary() -> None:
@@ -393,7 +433,10 @@ def test_a_dead_canary_corner_refuses_rather_than_admits() -> None:
     # A value in no canary at all still sails through: the gate only ever
     # speaks about values it can actually erase.
     assert _disarms_a_protected_class_canary("JUNCTION") is False
-    assert _disarms_a_protected_class_canary("HAWAIIAN GARDENS") is False
+    # ``HAWAIIAN GARDENS`` is NOT such a value: it does not appear in any fixed
+    # canary, but it overlaps ``native hawaiian`` at the boundary, which the
+    # spliced canaries reach.
+    assert _disarms_a_protected_class_canary("HAWAIIAN GARDENS") is True
 
 
 def test_the_canary_corpus_covers_the_national_origin_bank() -> None:

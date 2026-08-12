@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from pydantic import BaseModel, Field, field_validator
 
 from backend.schemas._validators_person_names import (
+    US_STATE_NAMES,
     contains_human_name_shape,
     shares_token_with_person_lexicon,
 )
@@ -197,7 +198,28 @@ def identity_prompt_match(question: str) -> bool:
     scannable = mask_governed_phrases(
         _mask_safe_phrases(question), _governed_name_shape_phrases()
     )
-    return contains_human_name_shape(scannable, strip_sentence_initial_function_words=True)
+    return contains_human_name_shape(
+        scannable, sentence_initial_place_terms=_sentence_initial_place_terms()
+    )
+
+
+def _sentence_initial_place_terms() -> tuple[str, ...]:
+    """Places before which an opening ``Which``/``The`` is grammar, not a name.
+
+    US states plus the live governed city dimension. This is RECOGNITION, not
+    exemption: the place itself is not consumed and still reaches every
+    scanner — the vocabulary only decides whether the word in front of it was
+    capitalized by orthography. An unreachable warehouse degrades to the state
+    list alone, and an empty list disables the strip entirely.
+    """
+
+    try:
+        from backend.services.genie_place_dimension import get_governed_place_dimension
+
+        governed = tuple(get_governed_place_dimension().known_place_values())
+    except Exception:  # noqa: BLE001 — the guard must never fail the request
+        governed = ()
+    return US_STATE_NAMES + governed
 
 
 def _visible_text_values(value: object) -> list[str]:
@@ -344,6 +366,12 @@ def genie_visible_text_unsafe(
         assume_reviewed_read_only_analytics=True,
         name_shape_value=_name_shape_scan_copy(value),
         name_shape_allowed_phrases=name_shape_phrases,
+        # Prose only, and the same correction the prompt guard opts into: a
+        # capitalized word opening a sentence is orthography. Structured cells
+        # skip the title-case heuristic wholesale, so it would be a no-op there.
+        name_shape_sentence_initial_place_terms=(
+            () if structured_value else _sentence_initial_place_terms()
+        ),
         protected_class_allowed_phrases=protected_class_phrases,
     )
 

@@ -191,6 +191,7 @@ def contains_unsafe_ai_text(
     assume_reviewed_read_only_analytics: bool = False,
     name_shape_value: str | None = None,
     name_shape_allowed_phrases: Sequence[str] = (),
+    name_shape_sentence_initial_place_terms: Sequence[str] = (),
     protected_class_allowed_phrases: Sequence[str] = (),
 ) -> bool:
     """Shared fail-closed guard for model-authored or model-directed prose.
@@ -210,6 +211,14 @@ def contains_unsafe_ai_text(
     :func:`contains_human_name_shape` only -- the Genie policy passes its
     ``City, ST`` geography strip here. ``name_shape_allowed_phrases`` masks
     governed place values out of that same copy for the same reason.
+    ``name_shape_sentence_initial_place_terms`` reaches that same scanner and
+    nothing else: it names the places before which a capitalized opening word
+    is orthography, not an identity ("The Washington cities with the most
+    in-the-money borrowers ..." is not a person named "The Washington").
+    Captured live 2026-08-12: that pair, plus "Which Washington" in two
+    follow-up questions, is what withheld the whole governed narrative for
+    "Which Washington cities have the most in-the-money borrowers?". The place
+    is never consumed — it still reaches every scanner here.
 
     ``protected_class_allowed_phrases`` masks governed place values out of the
     copy given to :func:`contains_protected_class_marketing_text` only. This is
@@ -235,5 +244,6 @@ def contains_unsafe_ai_text(
         or contains_human_name_shape(
             mask_governed_phrases(name_shape_text, name_shape_allowed_phrases),
             include_titlecase=include_titlecase,
+            sentence_initial_place_terms=name_shape_sentence_initial_place_terms,
         )
     )
