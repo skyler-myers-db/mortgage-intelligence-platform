@@ -108,6 +108,9 @@ from backend.services.repositories import (
     get_portfolio_repository,
     get_segment_repository,
 )
+from backend.services.genie_place_dimension import (
+    _reset_governed_place_dimension_for_tests,
+)
 from backend.services.repositories.factory import _reset_singletons_for_tests
 from backend.services.resilience import _reset_breakers_for_tests
 from backend.services.sales_state import clear_sales_state_cache
@@ -1461,6 +1464,7 @@ def _reset_runtime_singletons_for_tests() -> None:
     _reset_kpi_delta_service_for_tests()
     _reset_home_summary_service_for_tests()
     _reset_state_footprint_resolver_for_tests()
+    _reset_governed_place_dimension_for_tests()
 
 
 def _reset_fake_dependency_state_for_tests() -> None:
