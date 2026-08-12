@@ -230,20 +230,18 @@ class GovernedPlaceDimensionResolver:
                 max_conflicting_values=_MAX_CONFLICTING_VALUES,
             )
             return _EMPTY_DIMENSION
-        name_shape_safe = {
-            " ".join(value.split())
-            for value in values
-            if value.strip()
-            and self._name_shape_conflict_predicate(value)
-            and not _collides_with_person_lexicon(value)
-        }
-        excluded = sum(
-            1
-            for value in values
-            if value.strip()
-            and self._name_shape_conflict_predicate(value)
-            and _collides_with_person_lexicon(value)
-        )
+        # One pass. The predicate runs the name-shape scan over two renderings
+        # per value, so evaluating it twice (once for the set, once for the
+        # excluded count) doubled the load cost for nothing.
+        name_shape_safe: set[str] = set()
+        excluded = 0
+        for value in values:
+            if not value.strip() or not self._name_shape_conflict_predicate(value):
+                continue
+            if _collides_with_person_lexicon(value):
+                excluded += 1
+                continue
+            name_shape_safe.add(" ".join(value.split()))
         if len(name_shape_safe) > _MAX_NAME_SHAPE_VALUES:
             emit(
                 log,
