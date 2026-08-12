@@ -244,6 +244,11 @@ def genie_visible_text_unsafe(
 
     if structured_value and normalize_place_value(value) in governed_cell_values:
         return False
+    name_shape_phrases: tuple[str, ...] = ()
+    if not structured_value:
+        # Prose only. Structured cells already skip the title-case heuristic
+        # wholesale, so resolving this for them would be a wasted read.
+        name_shape_phrases = _governed_name_shape_phrases()
     if structured_value and _BARE_NUMERIC_CELL_RE.fullmatch(value.strip()):
         # A governed row cell that is ENTIRELY a number is a measure, not an
         # identity. Large whole numbers otherwise read as phone numbers
@@ -259,7 +264,24 @@ def genie_visible_text_unsafe(
         scannable,
         include_titlecase=not structured_value,
         assume_reviewed_read_only_analytics=True,
+        name_shape_allowed_phrases=name_shape_phrases,
     )
+
+
+def _governed_name_shape_phrases() -> tuple[str, ...]:
+    """Governed city values the prose person-name heuristic misreads.
+
+    Never raises and never widens anything but the name-shape scan: an
+    unreachable warehouse degrades to no exemption, which is today's
+    (fail-closed) behavior.
+    """
+
+    try:
+        from backend.services.genie_place_dimension import get_governed_place_dimension
+
+        return tuple(get_governed_place_dimension().name_shape_safe_values())
+    except Exception:  # noqa: BLE001 — the guard must never fail the request
+        return ()
 
 
 def _governed_cell_values(override: frozenset[str] | None) -> frozenset[str]:
