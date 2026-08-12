@@ -12,6 +12,7 @@ from backend.schemas._validators_protected_class import (
 )
 from backend.schemas._validators_unsafe_text import contains_unsafe_ai_text
 from backend.services.genie_answers import GenieMessageResponse
+from backend.services.genie_place_dimension import normalize_place_value
 
 
 class GenieMessageRequest(BaseModel):
@@ -210,7 +211,12 @@ _MASKED_ID_CITY_PARENS_RE = re.compile(
 _BARE_NUMERIC_CELL_RE = re.compile(r"[+-]?\d+(?:\.\d+)?")
 
 
-def genie_visible_text_unsafe(value: str, *, structured_value: bool = False) -> bool:
+def genie_visible_text_unsafe(
+    value: str,
+    *,
+    structured_value: bool = False,
+    governed_cell_values: frozenset[str] = frozenset(),
+) -> bool:
     """Fail-closed scan for one Genie-rendered string on the analytics surface.
 
     Ask Genie output is a read-only analytics narrative, not campaign copy:
@@ -225,8 +231,19 @@ def genie_visible_text_unsafe(value: str, *, structured_value: bool = False) -> 
     heuristic, which can only false-positive on structured values ("El Paso",
     "San Antonio", "Purchase Mortgage") — gold rows carry no name columns after
     redaction.
+
+    ``governed_cell_values`` holds normalized values from a governed gold
+    dimension (see ``backend.services.genie_place_dimension``) that these
+    detectors reject as false positives. The exemption is deliberately the
+    narrowest shape that can work: it applies ONLY to structured cells, and
+    ONLY when the cell's ENTIRE value equals a governed dimension value. It is
+    not substring masking, so "black borrowers in TACOMA" is still scanned in
+    full, and no prose path can reach it — a model-authored narrative is never
+    a ``structured_value``.
     """
 
+    if structured_value and normalize_place_value(value) in governed_cell_values:
+        return False
     if structured_value and _BARE_NUMERIC_CELL_RE.fullmatch(value.strip()):
         # A governed row cell that is ENTIRELY a number is a measure, not an
         # identity. Large whole numbers otherwise read as phone numbers
@@ -245,10 +262,30 @@ def genie_visible_text_unsafe(value: str, *, structured_value: bool = False) -> 
     )
 
 
+def _governed_cell_values(override: frozenset[str] | None) -> frozenset[str]:
+    """Governed dimension values exempt from the structured-cell scan.
+
+    Resolved once per response, not once per cell: a full breakdown is ~360
+    rows wide and this must not become a per-cell lookup. Never raises — an
+    unreachable warehouse degrades to no exemption, which is the pre-existing
+    (fail-closed) behavior.
+    """
+
+    if override is not None:
+        return override
+    try:
+        from backend.services.genie_place_dimension import get_governed_place_dimension
+
+        return get_governed_place_dimension().conflicting_values()
+    except Exception:  # noqa: BLE001 — the guard must never fail the request
+        return frozenset()
+
+
 def genie_unsafe_visible_field(
     response: GenieMessageResponse,
     *,
     allowed_literals: Sequence[str] = (),
+    governed_cell_values: frozenset[str] | None = None,
 ) -> str | None:
     """Name the first rendered surface that fails the guard, or None.
 
@@ -284,9 +321,12 @@ def genie_unsafe_visible_field(
             _without_allowed_literals(value, allowed_literals)
         ):
             return label
+    governed_values = _governed_cell_values(governed_cell_values)
     for value in _visible_text_values(response.table_rows or []):
         if genie_visible_text_unsafe(
-            _without_allowed_literals(value, allowed_literals), structured_value=True
+            _without_allowed_literals(value, allowed_literals),
+            structured_value=True,
+            governed_cell_values=governed_values,
         ):
             return "table_rows"
     return None
@@ -296,6 +336,7 @@ def genie_response_has_unsafe_visible_text(
     response: GenieMessageResponse,
     *,
     allowed_literals: Sequence[str] = (),
+    governed_cell_values: frozenset[str] | None = None,
 ) -> bool:
     """Check every model-authored text field rendered by the Genie UI."""
 
@@ -320,6 +361,7 @@ def genie_response_has_unsafe_visible_text(
             if value
         )
     row_values = _visible_text_values(response.table_rows or [])
+    governed_values = _governed_cell_values(governed_cell_values)
     return any(
         genie_visible_text_unsafe(_without_allowed_literals(value, allowed_literals))
         for value in values
@@ -327,6 +369,7 @@ def genie_response_has_unsafe_visible_text(
         genie_visible_text_unsafe(
             _without_allowed_literals(value, allowed_literals),
             structured_value=True,
+            governed_cell_values=governed_values,
         )
         for value in row_values
     )
