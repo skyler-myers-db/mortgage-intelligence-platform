@@ -13,7 +13,9 @@ import unicodedata
 from typing import Literal
 
 from backend.schemas._validators_protected_class_patterns import (
+    GEOGRAPHIC_COMPOSITION_AUDIENCE_FORMATION_RE,
     PROTECTED_AGE_CITIZENSHIP_MARKETING_RE,
+    PROTECTED_CLASS_GEOGRAPHIC_COMPOSITION_PATTERNS,
     PROTECTED_CLASS_MARKETING_RE,
     PROTECTED_CLASS_PROXY_HARD_TARGETING_RE,
     PROTECTED_CLASS_PROXY_PATTERNS,
@@ -352,6 +354,9 @@ def protected_class_marketing_reason(
         or PROTECTED_HEALTH_GOVERNANCE_INTENT_RE.search(health_scannable)
         or _contains_national_origin_marketing_text(scannable)
         or contains_protected_class_proxy_marketing_text(scannable)
+        # Clause-local, on the punctuation-preserving variant: see
+        # ``contains_geographic_composition_proxy_text``.
+        or contains_geographic_composition_proxy_text(mark_folded)
     ):
         return "protected_class"
     if has_unreviewed_selection_criterion or unreviewed_audience_outcome_claim:
@@ -372,6 +377,48 @@ def _contains_national_origin_marketing_text(value: str) -> bool:
             return True
         if PROTECTED_CLASS_PROXY_POPULATION_RE.search(window):
             return True
+    return False
+
+
+_CLAUSE_SPLIT_RE = re.compile(r"[.!?;:\n\r]+")
+
+
+def contains_geographic_composition_proxy_text(value: str) -> bool:
+    """Detect audience selection by the make-up of a PLACE, clause by clause.
+
+    Separate from ``contains_protected_class_proxy_marketing_text`` for one
+    reason: that function is fed the separator-folded scan variant, which joins
+    every representation with spaces and drops punctuation so obfuscated
+    multiword terms cannot hide. The pre-existing proxies survive that because
+    they start with bound tokens (``section 8``, ``limited english``) that do
+    not end sentences.
+
+    Composition adjectives are ordinary predicate adjectives and end sentences
+    constantly. Against the folded text, "Our product set is diverse.
+    Communities we serve are growing quickly." reads as "diverse Communities"
+    and files a fair-lending finding on benign prose -- measured, and the
+    reason a first attempt at this bank was reverted rather than shipped.
+
+    So this scans a punctuation-preserving representation, split into clauses
+    first, and requires the targeting/population context to live in the SAME
+    clause as the match.
+    """
+
+    for clause in _CLAUSE_SPLIT_RE.split(str(value)):
+        if not clause.strip():
+            continue
+        scannable = clause
+        for safe_pattern in PROTECTED_CLASS_PROXY_SAFE_CONTEXT_PATTERNS:
+            scannable = safe_pattern.sub(" ", scannable)
+        for pattern in PROTECTED_CLASS_GEOGRAPHIC_COMPOSITION_PATTERNS:
+            if not pattern.search(scannable):
+                continue
+            if PROTECTED_CLASS_PROXY_HARD_TARGETING_RE.search(scannable):
+                return True
+            if GEOGRAPHIC_COMPOSITION_AUDIENCE_FORMATION_RE.search(scannable):
+                return True
+            if PROTECTED_CLASS_PROXY_POPULATION_RE.search(scannable):
+                return True
     return False
 
 

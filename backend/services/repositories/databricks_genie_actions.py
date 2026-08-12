@@ -104,6 +104,9 @@ _SEGMENT_COLUMN_RE = re.compile(
 # Disclosure name for the former. Identifier-shaped and bounded, like the
 # threshold disclosures it rides alongside in `unreplayable_filters`.
 _SEGMENT_PREDICATE_DISCLOSURE = "segment_codes_predicate"
+# The answer is city-grain and the queue has no city filter, so the cohort is
+# broader than the answer on the geography axis. Same disclosure vocabulary.
+_CITY_GRAIN_DISCLOSURE = "city_grain_unreplayable"
 
 # `recommended_offer_code = 'x'` or `recommended_offer_code IN ('x', 'y')`.
 # The alternation is anchored on the quotes so the list branch cannot run past
@@ -507,6 +510,7 @@ def _route_from_answer_rows(
     # here narrows, and why prose cannot be gated the way SQL conjuncts can.
     portfolio_criteria = _portfolio_criteria_from_sql(sql_query, reading)
 
+    city_disclosures: list[str] = []
     if borrower_ids:
         filter_criteria["borrower_ids"] = borrower_ids
         params["borrower_ids"] = ",".join(borrower_ids)
@@ -523,6 +527,29 @@ def _route_from_answer_rows(
     elif states:
         params["states"] = ",".join(states)
         filter_criteria["states"] = states
+
+    # A CITY answer has no cohort dimension: the Lead Queue cannot filter by
+    # city, so `_row_values` never reads one. That is survivable on its own --
+    # the cohort is simply broader. What is not survivable is doing it in
+    # SILENCE, and there are two shapes, both measured live on paychex gold
+    # 2026-08-11 against an answer stating Chicago = 523,010:
+    #
+    #   rows [{city}]         -> no geography at all: 3,474,216 opened, 6.6x
+    #   rows [{city, state}]  -> the STATE substitutes for the city, which is
+    #                            worse because it looks deliberate:
+    #                            1,181,043 opened, 2.3x
+    #
+    # Naming it is what the `unreplayable_filters` disclosure is for. The real
+    # fix is a `(city, state)` filter on the queue -- city alone is ambiguous
+    # across states (CYPRESS is CA 14,630 / TX 1, so a name-only cohort is
+    # 14,631x wrong on the minority side), so it needs a pair-keyed parameter
+    # threaded through six closed vocabularies, which is its own slice.
+    # Not when `borrower_ids` pinned the cohort: those rows ARE the answer's
+    # population, exactly, and a `city` column alongside them broadens nothing.
+    # A borrower list that happens to project city was the first false positive
+    # this disclosure produced.
+    if not borrower_ids and _row_values(rows, "city", "situs_city"):
+        city_disclosures.append(_CITY_GRAIN_DISCLOSURE)
 
     if segment_codes:
         if len(segment_codes) == 1:
@@ -555,7 +582,7 @@ def _route_from_answer_rows(
         filter_criteria[floor_key] = floor
         params[floor_key] = str(floor)
 
-    disclosures = list(reading.unreplayable)
+    disclosures = [*reading.unreplayable, *city_disclosures]
     if segments_unreadable:
         # A segment predicate the queue cannot express. Named for the same
         # reason a threshold is: the queue's count will be broader than the

@@ -1056,3 +1056,85 @@ def test_legitimate_disjunctions_still_replay_exactly(
     sql: str, expected: tuple[list[str], str, bool]
 ) -> None:
     assert _segments(sql) == expected
+
+
+# --- A city answer has no cohort dimension, and must say so ----------------
+#
+# The Lead Queue cannot filter by city, so `_row_values` never reads one. That
+# alone is survivable -- the cohort is broader. Doing it in SILENCE is not, and
+# measured live on paychex gold 2026-08-11 against an answer stating
+# Chicago = 523,010 cash-out candidates there were TWO shapes:
+#
+#   rows [{city}]        -> no geography at all: 3,474,216 opened, 6.6x
+#   rows [{city, state}] -> the STATE substituted for the city: 1,181,043, 2.3x
+#
+# The second is worse because it looks deliberate. A real city filter needs a
+# (city, state) pair parameter -- city alone is ambiguous across states
+# (CYPRESS is CA 14,630 / TX 1) -- threaded through six closed vocabularies.
+
+
+_CITY_SQL = (
+    f"SELECT city, COUNT(*) AS n FROM {_B360} "
+    "WHERE recommended_offer_code = 'cash_out' GROUP BY city"
+)
+
+
+def test_a_city_only_answer_discloses_that_the_cohort_is_broader() -> None:
+    _, filters = _route_from_answer_rows(
+        question="Which city has the most cash-out candidates?",
+        rows=[{"city": "CHICAGO", "n": 523010}],
+        borrower_ids=[],
+        sql_query=_CITY_SQL,
+    )
+
+    assert filters["city_grain_unreplayable"] is True
+    assert "states" not in filters
+
+
+def test_a_city_answer_that_also_carries_state_still_discloses() -> None:
+    """The state is NOT a stand-in for the city, even though it is a superset."""
+
+    _, filters = _route_from_answer_rows(
+        question="Which city has the most cash-out candidates?",
+        rows=[{"city": "CHICAGO", "state": "IL", "n": 523010}],
+        borrower_ids=[],
+        sql_query=_CITY_SQL,
+    )
+
+    assert filters["states"] == ["IL"]
+    assert filters["city_grain_unreplayable"] is True
+
+
+def test_a_state_answer_is_not_labelled_city_grain() -> None:
+    """The control: no city column, no disclosure."""
+
+    _, filters = _route_from_answer_rows(
+        question="Which state has the most cash-out candidates?",
+        rows=[{"state": "IL", "n": 1181043}],
+        borrower_ids=[],
+        sql_query=_CITY_SQL,
+    )
+
+    assert filters["states"] == ["IL"]
+    assert "city_grain_unreplayable" not in filters
+
+
+def test_a_borrower_list_that_projects_city_is_not_labelled_city_grain() -> None:
+    """`borrower_ids` pins the cohort exactly, so nothing is broader.
+
+    The first false positive this disclosure produced: an answer listing
+    borrowers with a `city` column is not a city-grain answer.
+    """
+
+    _, filters = _route_from_answer_rows(
+        question="Show me the top borrowers.",
+        rows=[
+            {"borrower_id": "B-102FL7THC6Q3L", "city": "Seattle", "state": "WA"},
+            {"borrower_id": "B-11111111111AA", "city": "Chicago", "state": "IL"},
+        ],
+        borrower_ids=["B-102FL7THC6Q3L", "B-11111111111AA"],
+        sql_query=f"SELECT borrower_id, city, state FROM {_B360}",
+    )
+
+    assert "city_grain_unreplayable" not in filters
+    assert filters["borrower_ids"] == ["B-102FL7THC6Q3L", "B-11111111111AA"]

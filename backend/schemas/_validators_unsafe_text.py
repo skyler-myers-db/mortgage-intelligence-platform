@@ -75,14 +75,35 @@ _MECHANICAL_PII_OR_RAW_IDENTIFIER_PATTERNS: tuple[re.Pattern[str], ...] = (
         r"ter|terrace|way|pl|place|pkwy|parkway)\b",
         re.IGNORECASE,
     ),
+    # Bare identifier-column NAMES. `owner_link` is deliberately NOT here: it
+    # is the product's own glossary term (CLAUDE.md: "Owner Link = Cotality
+    # mastered owner/entity relationship identifier"), so it appears in governed
+    # gold prose and as a column header. Blocking the bare name made the Genie
+    # result grid unshowable: measured live on paychex 2026-08-11, 322 of the
+    # 330 distinct `why_now` values carry "Owner Link ties N related
+    # properties...", and every `SELECT ... owner_link_id ...` blocked on the
+    # HEADER alone, because `_visible_text_values` flattens Mapping keys too.
+    # The block surfaced as `unsafe_field: "table_rows"` and looked random only
+    # because Genie re-plans the SQL per turn -- a top-10 answer never projects
+    # those columns, a full breakdown always does.
+    #
+    # It stays blocked WITH A VALUE by the pattern below (`owner_link: ABC123456`),
+    # which is the shape that actually leaks an identifier. The genuinely
+    # PII-bearing column names -- borrower_name, owner_name, street_address --
+    # are untouched.
     re.compile(
-        r"\b(?:clip_ref|raw[_\s-]?clip|owner[_\s-]?link(?:[_\s-]?id)?|"
+        r"\b(?:clip_ref|raw[_\s-]?clip|"
         r"owner[_\s-]?name|borrower[_\s-]?name|customer[_\s-]?name|"
         r"prospect[_\s-]?name|street[_\s-]?address|mailing[_\s-]?address)\b",
         re.IGNORECASE,
     ),
     re.compile(
-        r"\b(?:clip|owner[_\s-]?(?:link|identifier|id)|borrower[_\s-]?identifier)\b"
+        # `owner_link_id` needs the optional `_id` tail explicitly: the bare
+        # `link` alternative stops at "link" and the `\b` then fails against
+        # "_id", so `owner_link_id = QX7T2M9P44` escaped once `owner_link` was
+        # removed from the bare-name pattern above.
+        r"\b(?:clip|owner[_\s-]?(?:link(?:[_\s-]?id)?|identifier|id)|"
+        r"borrower[_\s-]?identifier)\b"
         r"\s*[:#=]\s*[A-Za-z0-9_-]{6,}\b",
         re.IGNORECASE,
     ),
