@@ -4220,3 +4220,57 @@ def test_a_good_live_segment_turn_is_never_overwritten_by_the_rescue() -> None:
 
     assert result.sql_query == live_sql
     assert result.table_rows == [{"segment_code": "retention", "approval_rate": 0.0}]
+
+
+# --- A pending feed blocks the ANSWER SERVED, not the rescue --------------
+#
+# `depends_on_pending_feeds` is read off the LIVE turn's material. It must
+# block that answer -- and it does -- but it used to also veto the rescue,
+# which serves a DIFFERENT statement.
+#
+# Measured live on paychex 2026-08-12: "Which segment converts best: HELOC,
+# cash-out, or retention?" returns SQL referencing a permit column (HELOC
+# Intent IS the permit segment), so the pending Building Permits feed set the
+# flag and the rescue never ran. The canonical statement it would have served
+# reads the segment performance metric view and touches no permit column at
+# all, so the user got a refusal citing a data gap irrelevant to the answer
+# they could have had.
+
+
+def _permit_referencing_turn() -> GenieResponse:
+    return GenieResponse(
+        answer_text="Retention looks strongest.",
+        sql_query="SELECT segment_code FROM some_view WHERE has_permit = TRUE",
+        sql_result_rows=[],
+        conversation_id="conv-permit",
+        message_id="msg-permit",
+    )
+
+
+def test_a_pending_feed_in_genies_sql_does_not_veto_a_clean_rescue() -> None:
+    result = _adapt_genie_response(
+        "Which segment converts best: HELOC, cash-out, or retention?",
+        _permit_referencing_turn(),
+        sql_client=_StubSqlClient(list(_SEGMENT_PERF_ROWS)),  # type: ignore[arg-type]
+    )
+
+    assert result.source == "trusted_sql"
+    assert "segment_performance_metric_view" in (result.sql_query or "")
+
+
+def test_the_pending_feed_guarantee_still_binds_the_statement_actually_served() -> None:
+    """The guarantee moved, it did not weaken.
+
+    A canonical statement that itself depends on a pending feed must still be
+    refused, whatever the live turn looked like.
+    """
+
+    from backend.services.repositories import databricks_genie as module
+
+    assert module._pending_feed_gaps_from_material(
+        "SELECT clip FROM mip.gold.borrower_360 WHERE has_permit = TRUE"
+    )
+    # ...and the statement this rescue serves is clean, which is why it may run.
+    assert not module._pending_feed_gaps_from_material(
+        module._CANONICAL_SEGMENT_APPROVAL_RATE_SQL
+    )
