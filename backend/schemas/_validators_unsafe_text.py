@@ -150,7 +150,10 @@ def contains_mechanical_pii_or_raw_identifier(value: str) -> bool:
     return any(pattern.search(text) for pattern in _MECHANICAL_PII_OR_RAW_IDENTIFIER_PATTERNS)
 
 
-@lru_cache(maxsize=8)
+# Two live sets (name-shape and protected-class) plus the single-value tuples
+# the place resolver's admission gate compiles while it loads. Eviction only
+# costs a recompile, but 16 keeps a load from churning the two hot sets out.
+@lru_cache(maxsize=16)
 def _governed_phrase_pattern(phrases: tuple[str, ...]) -> re.Pattern[str] | None:
     """One alternation for the whole governed set, cached per set.
 
@@ -172,7 +175,7 @@ def _governed_phrase_pattern(phrases: tuple[str, ...]) -> re.Pattern[str] | None
     )
 
 
-def mask_governed_name_shape_phrases(value: str, phrases: Sequence[str]) -> str:
+def mask_governed_phrases(value: str, phrases: Sequence[str]) -> str:
     """Blank whole-token occurrences of governed non-person phrases."""
 
     pattern = _governed_phrase_pattern(tuple(phrases))
@@ -186,7 +189,9 @@ def contains_unsafe_ai_text(
     *,
     include_titlecase: bool = True,
     assume_reviewed_read_only_analytics: bool = False,
+    name_shape_value: str | None = None,
     name_shape_allowed_phrases: Sequence[str] = (),
+    protected_class_allowed_phrases: Sequence[str] = (),
 ) -> bool:
     """Shared fail-closed guard for model-authored or model-directed prose.
 
@@ -196,28 +201,39 @@ def contains_unsafe_ai_text(
     PII, injection, confidential, name-shape, or direct protected-class
     detectors.
 
-    ``name_shape_allowed_phrases`` names governed non-person phrases (the
-    Genie place-dimension resolver supplies them) that the title-case
-    person-name heuristic misreads as identities. Only the copy handed to
-    :func:`contains_human_name_shape` is masked; every other detector below
-    scans ``text`` unmodified. That scoping is the whole safety argument -- a
-    governed value can never launder protected-class, health, PII, injection,
-    or confidential content past this guard, because those scanners never see
-    the masked copy. Callers that pass nothing (campaign and outreach
-    surfaces) are bit-for-bit unchanged.
+    Every relaxation below is scoped to ONE detector, and the scoping is the
+    whole safety argument: a governed value can only ever blind the single
+    scanner it was proven to false-positive against, because no other scanner
+    is handed the rewritten copy.
+
+    ``name_shape_value`` replaces the copy given to
+    :func:`contains_human_name_shape` only -- the Genie policy passes its
+    ``City, ST`` geography strip here. ``name_shape_allowed_phrases`` masks
+    governed place values out of that same copy for the same reason.
+
+    ``protected_class_allowed_phrases`` masks governed place values out of the
+    copy given to :func:`contains_protected_class_marketing_text` only. This is
+    the dangerous one -- it is the fair-lending scanner -- so the resolver that
+    supplies it admits a value only after proving that masking the value cannot
+    disarm a must-block probe -- see
+    ``genie_place_dimension._disarms_a_protected_class_canary``.
+
+    Callers that pass none of the three (campaign and outreach surfaces) are
+    bit-for-bit unchanged.
     """
 
     text = str(value)
+    name_shape_text = text if name_shape_value is None else str(name_shape_value)
     return (
         contains_mechanical_pii_or_raw_identifier(text)
         or contains_protected_class_marketing_text(
-            text,
+            mask_governed_phrases(text, protected_class_allowed_phrases),
             assume_reviewed_read_only_analytics=assume_reviewed_read_only_analytics,
         )
         or contains_prompt_injection_text(text)
         or contains_confidential_or_internal_text(text)
         or contains_human_name_shape(
-            mask_governed_name_shape_phrases(text, name_shape_allowed_phrases),
+            mask_governed_phrases(name_shape_text, name_shape_allowed_phrases),
             include_titlecase=include_titlecase,
         )
     )

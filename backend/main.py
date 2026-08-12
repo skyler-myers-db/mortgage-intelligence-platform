@@ -63,6 +63,7 @@ from backend.services.campaign_treatment_runtime import (
     CAMPAIGN_TREATMENT_RUNTIME_MARKER_ENV,
     campaign_treatment_runtime_enabled,
 )
+from backend.services.genie_place_dimension import warm_governed_place_dimension
 from backend.services.observability import (
     configure_logging,
     emit,
@@ -295,6 +296,8 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
       startup. When ``MIP_LEADS_WARM_INTERVAL_S`` is positive, keep it warm
       with a refresh-ahead loop for demo/performance-critical sessions; the
       deployed app default sets this to 0 so idle workspaces can auto-stop.
+    * Warm the governed place dimension so the Genie output policy never pays
+      its resolve inline on an Ask Genie turn.
     """
     rewarm_task: asyncio.Task[None] | None = None
     # Databricks Apps deployment invariant: log the treatment-runtime marker
@@ -328,6 +331,7 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
         _warm_warehouse()
         _warm_lakebase()
         _warm_hot_lead_cache()
+        warm_governed_place_dimension()
         if settings.mip_leads_warm_interval_s > 0:
             rewarm_task = asyncio.create_task(
                 _lead_cache_rewarm_loop(settings.mip_leads_warm_interval_s)
