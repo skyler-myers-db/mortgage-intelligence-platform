@@ -168,8 +168,19 @@ def protected_prompt_match(question: str) -> str | None:
     # by cause: the marketing scanner also fails closed on criteria outside
     # the reviewed vocabulary ("which zyrplax borrowers ..."), which is not a
     # fair-lending finding and must not be audited as one.
+    # NOT ``assume_reviewed_read_only_analytics=True``, even though the ANSWER
+    # path asserts exactly that and the mismatch refuses ~50 ordinary asks as
+    # ``unreviewed_criterion`` ("Show me borrowers with a rate spread above 150
+    # basis points"). Tried on 2026-08-12 and reverted: the criterion machine
+    # is the ONLY net catching a health condition outside the reviewed
+    # vocabulary, so switching it off here let "Do a thorough analysis of the
+    # portfolio. Show borrowers with eczema." through — a case
+    # ``test_planned_deep_analysis_guard_capture`` pins closed on purpose.
+    # The fix for that class is to extend the reviewed segment-signal
+    # vocabulary with the governed Module 0 measures, not to silence the net.
+    governed_places, governed_guards = _governed_protected_class_mask_args()
     marketing_reason = protected_class_marketing_reason(
-        mask_governed_phrases(scannable, _governed_protected_class_phrases())
+        mask_governed_phrases(scannable, governed_places, governed_guards)
     )
     if marketing_reason == "unreviewed_criterion":
         return "unreviewed_criterion"
@@ -206,11 +217,21 @@ def identity_prompt_match(question: str) -> bool:
 def _sentence_initial_place_terms() -> tuple[str, ...]:
     """Places before which an opening ``Which``/``The`` is grammar, not a name.
 
-    US states plus the live governed city dimension. This is RECOGNITION, not
-    exemption: the place itself is not consumed and still reaches every
-    scanner — the vocabulary only decides whether the word in front of it was
-    capitalized by orthography. An unreachable warehouse degrades to the state
-    list alone, and an empty list disables the strip entirely.
+    US states plus the live governed city dimension, MINUS anything sharing a
+    token with the person-name lexicons — the same gate #208 put on the other
+    two positional strips.
+
+    That exclusion is the whole safety property here. Recognition is not
+    exemption (the place is never consumed and still reaches every scanner),
+    but the strip removes the word IN FRONT of it, and 229 of the live gold
+    values are single tokens that are also family names. Ungated, "Do Medina
+    qualifies for a HELOC?" lost its pair and rendered — 464 of 468 place
+    terms flipped that way for each of ``Do``/``An``/``No`` (adversarial
+    review, 2026-08-12). ``ELIZABETH`` is in this vocabulary and is the exact
+    example the lexicon helper's own docstring is written around.
+
+    An unreachable warehouse degrades to the gated state list alone, and an
+    empty list disables the strip entirely.
     """
 
     try:
@@ -219,7 +240,11 @@ def _sentence_initial_place_terms() -> tuple[str, ...]:
         governed = tuple(get_governed_place_dimension().known_place_values())
     except Exception:  # noqa: BLE001 — the guard must never fail the request
         governed = ()
-    return US_STATE_NAMES + governed
+    return tuple(
+        term
+        for term in US_STATE_NAMES + governed
+        if not shares_token_with_person_lexicon(term)
+    )
 
 
 def _visible_text_values(value: object) -> list[str]:
@@ -343,6 +368,7 @@ def genie_visible_text_unsafe(
         return False
     name_shape_phrases: tuple[str, ...] = ()
     protected_class_phrases: tuple[str, ...] = ()
+    protected_class_guards: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = ()
     if not structured_value:
         # Prose only. Structured cells already skip the title-case heuristic
         # wholesale, and the full-cell exemption above is a strictly tighter
@@ -350,7 +376,9 @@ def genie_visible_text_unsafe(
         # wasted read — and the resolver probes cells through this very
         # function, so a structured path that resolved them would recurse.
         name_shape_phrases = _governed_name_shape_phrases()
-        protected_class_phrases = _governed_protected_class_phrases()
+        protected_class_phrases, protected_class_guards = (
+            _governed_protected_class_mask_args()
+        )
     if structured_value and _BARE_NUMERIC_CELL_RE.fullmatch(value.strip()):
         # A governed row cell that is ENTIRELY a number is a measure, not an
         # identity. Large whole numbers otherwise read as phone numbers
@@ -366,6 +394,7 @@ def genie_visible_text_unsafe(
         assume_reviewed_read_only_analytics=True,
         name_shape_value=_name_shape_scan_copy(value),
         name_shape_allowed_phrases=name_shape_phrases,
+        protected_class_guards=protected_class_guards,
         # Prose only, and the same correction the prompt guard opts into: a
         # capitalized word opening a sentence is orthography. Structured cells
         # skip the title-case heuristic wholesale, so it would be a no-op there.
@@ -431,32 +460,37 @@ def _governed_name_shape_phrases() -> tuple[str, ...]:
         return ()
 
 
-def _governed_protected_class_phrases() -> tuple[str, ...]:
-    """Governed city values the prose fair-lending scan misreads.
+def _governed_protected_class_mask_args() -> tuple[
+    tuple[str, ...], tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...]
+]:
+    """The fair-lending mask's phrases AND their boundary guards, together.
 
-    Four of the 428 live ``mip.gold.borrower_360`` city values (paychex,
-    2026-08-12): ``TACOMA`` (the ``-oma`` condition-morphology heuristic),
-    ``BLACK DIAMOND``, ``HAWAIIAN GARDENS``, and ``INDIAN HEAD PARK`` (the
-    national-origin bank, which needs the population noun a narrative always
-    supplies). Before the geography strip was scoped, the QUALIFIED rendering
-    of all four ("Tacoma, WA ...") passed only because the strip deleted it
-    from this scanner too; the BARE rendering the strip never matched was
-    withheld outright, which is how the live "How many in-the-money borrowers
-    are in Tacoma?" answer came back empty on 2026-08-12.
+    Returned as a pair on purpose: a governed value may subtract only ITSELF
+    from this scanner, and the guards are what stop it subtracting the
+    protected term its run overlaps (``hawaiian gardens`` shares ``hawaiian``
+    with ``native hawaiian``). Handing back phrases whose guards failed to
+    build would be the UNGUARDED erase — exactly the laundering the guards
+    exist to close — so any failure yields no phrases either and the mask is
+    skipped entirely. Fail closed, never fail open.
 
-    Same posture as the name-shape set and the same degraded contract: an
-    unreachable warehouse exempts nothing, so the answer is withheld rather
-    than widened. The resolver's admission gate is what makes this set safe to
-    subtract from a fair-lending detector — see
+    Five of the 428 live gold values plus ``Oklahoma`` qualify today: ``TACOMA``
+    (the ``-oma`` condition-morphology heuristic), ``BLACK DIAMOND``,
+    ``HAWAIIAN GARDENS``, ``INDIAN HEAD PARK``, and the state, which hits the
+    same morphology. The resolver's admission gate is what makes the set safe
+    to subtract from a fair-lending detector — see
     ``genie_place_dimension._disarms_a_protected_class_canary``.
     """
 
     try:
-        from backend.services.genie_place_dimension import get_governed_place_dimension
+        from backend.services.genie_place_dimension import (
+            get_governed_place_dimension,
+            governed_protected_class_mask_guards,
+        )
 
-        return tuple(get_governed_place_dimension().protected_class_safe_values())
+        phrases = tuple(get_governed_place_dimension().protected_class_safe_values())
+        return phrases, governed_protected_class_mask_guards(phrases)
     except Exception:  # noqa: BLE001 — the guard must never fail the request
-        return ()
+        return (), ()
 
 
 def _governed_cell_values(override: frozenset[str] | None) -> frozenset[str]:

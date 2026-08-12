@@ -45,22 +45,32 @@ _LEADING_ANALYTICS_COMMAND_RE = re.compile(
 #
 # So the strip is gated on BOTH sides: a function word from this bank AND a
 # following token run that is a KNOWN PLACE (see
-# :func:`_sentence_initial_place_strip_pattern`). That is what makes it
-# structural rather than a blocklist -- "Do Nguyen" keeps its pair because
-# ``Nguyen`` is not a place, while "Which Washington" and "The Bellevue" clear
-# because those are. Words that double as human names are still kept out as a
-# second line of defence.
+# :func:`_sentence_initial_place_strip_pattern`).
+#
+# The place half is necessary but ALSO not sufficient, which a second review
+# pass on 2026-08-12 proved: 229 of the live gold city values are single tokens
+# that are ordinary family names (MEDINA, PARKER, KENT, CARSON, PRESTON,
+# MILTON, ELIZABETH), so "Do Medina qualifies for a HELOC?" lost its pair --
+# 464 of 468 place terms flipped that way. The place vocabulary cannot fix
+# that: it is legitimately a place AND legitimately a surname.
+#
+# What fixes it is this bank excluding every word attested in FIRST name
+# position. ``Do``, ``An`` and ``No`` are surname-first Vietnamese and Korean
+# family names, which is exactly the position the strip consumes; ``Will`` and
+# ``May`` are given names. Prepositions like ``In``, ``To`` and ``By`` stay:
+# they are attested only in last position ("Medina In"), which the strip never
+# touches. ``test_genie_prompt_guard_geography`` pins the exclusion.
 _SENTENCE_INITIAL_FUNCTION_WORDS: tuple[str, ...] = (
     # fmt: off
     # interrogatives
     "Which", "What", "Who", "Whom", "Whose", "Where", "When", "Why", "How",
-    # auxiliaries and modals
-    "Do", "Does", "Did", "Is", "Are", "Was", "Were", "Am", "Be", "Been",
+    # auxiliaries and modals ("Do" is excluded -- see the name-collision note)
+    "Does", "Did", "Is", "Are", "Was", "Were", "Am", "Be", "Been",
     "Being", "Has", "Have", "Had", "Can", "Could", "Should", "Would", "Shall",
     "Must", "Might",
-    # determiners and quantifiers
-    "The", "An", "Any", "All", "Each", "Every", "Some", "Most", "Both", "Many",
-    "Few", "No", "Top", "Only", "Other", "Another", "Same", "Several", "Such",
+    # determiners and quantifiers ("An" and "No" excluded, same reason)
+    "The", "Any", "All", "Each", "Every", "Some", "Most", "Both", "Many",
+    "Few", "Top", "Only", "Other", "Another", "Same", "Several", "Such",
     "This", "That", "These", "Those", "Our", "Their",
     # prepositions, conjunctions, connectives
     "In", "On", "At", "By", "For", "From", "Of", "To", "With", "Within",
@@ -133,6 +143,16 @@ _NON_PERSON_TITLECASE_SUFFIXES = frozenset(
         "lake", "lakes", "meadows", "mesa", "oaks", "park", "pines", "plains",
         "point", "prairie", "rapids", "ridge", "shores", "springs", "station",
         "valley", "village", "vista", "woods",
+        # Metro / region formants. "Puget Sound", "Inland Empire", "Bay Area"
+        # and the like are geography drill-down vocabulary (a hero surface per
+        # CLAUDE.md) that the pair scan read as people -- 12 refusals measured
+        # 2026-08-12. This bank is GLOBAL (campaign, outreach and operator-note
+        # validators read it too, exactly as they already do for "park", "bay"
+        # and "forest"), so ``delta`` was dropped after review: it is a real
+        # family name and "Spoke with Marcus Delta" stopped being caught. The
+        # rest are geographic nouns with no attested surname use.
+        "area", "basin", "coast", "empire", "peninsula", "sound",
+        "corridor", "district", "tract", "zone",
         "equity", "heloc", "loan", "mortgage", "offer", "queue", "refi",
         "refinance", "review",
         "candidate", "candidates", "intent", "risk", "sale", "segment", "segments",
@@ -312,6 +332,10 @@ _CONTEXTUAL_HUMAN_NAME_RE = re.compile(
     # borrowers", "target top segments" are core product phrasings, not
     # person-name lookups. Real names never take these words.
     r"all|any|each|every|only|both|overall|first|next|now|today|top|"
+    # Governed work-artefact nouns. "Give me a ranked call list for today"
+    # matched on "call list for" (4 refusals, 2026-08-12); a call list is a
+    # queue of masked IDs, never a person being addressed.
+    r"lists?|queues?|sheets?|campaigns?|batches?|waves?|rosters?|"
     r"borrowers?|leads?|candidates?|prospects?|customers?|clients?|"
     r"segments?|cohorts?|homeowners?|investors?|people|everyone|anyone|someone|"
     r"is|are|was|were|will|would|can|could|may|might|has|have|had)\b)"
