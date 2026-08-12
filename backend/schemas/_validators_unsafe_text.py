@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
+from functools import lru_cache
 
 from backend.schemas._validators_person_names import contains_human_name_shape
 from backend.schemas._validators_protected_class import contains_protected_class_marketing_text
@@ -149,24 +150,35 @@ def contains_mechanical_pii_or_raw_identifier(value: str) -> bool:
     return any(pattern.search(text) for pattern in _MECHANICAL_PII_OR_RAW_IDENTIFIER_PATTERNS)
 
 
-def mask_governed_name_shape_phrases(value: str, phrases: Sequence[str]) -> str:
-    """Blank whole-token occurrences of governed non-person phrases.
+@lru_cache(maxsize=8)
+def _governed_phrase_pattern(phrases: tuple[str, ...]) -> re.Pattern[str] | None:
+    """One alternation for the whole governed set, cached per set.
 
     Word-boundary anchored on purpose: a governed value may only ever erase
     ITSELF as a complete token run. ``Lone Tree`` cannot reach ``Lone Treeman``
-    and a hypothetical governed ``Black`` cannot reach ``blackballed``. Longest
-    first so a multiword value is consumed before any single-word prefix of it.
+    and a hypothetical governed ``Black`` cannot reach ``blackballed``.
+    Alternatives are longest-first because Python alternation is ordered, so a
+    multiword value is consumed before any single-word prefix of it.
     """
 
-    masked = str(value)
-    for phrase in sorted({item.strip() for item in phrases if item.strip()}, key=len, reverse=True):
-        masked = re.sub(
-            r"(?<![A-Za-z0-9])" + re.escape(phrase) + r"(?![A-Za-z0-9])",
-            " ",
-            masked,
-            flags=re.IGNORECASE,
-        )
-    return masked
+    cleaned = sorted({item.strip() for item in phrases if item.strip()}, key=len, reverse=True)
+    if not cleaned:
+        return None
+    return re.compile(
+        r"(?<![A-Za-z0-9])(?:"
+        + "|".join(re.escape(phrase) for phrase in cleaned)
+        + r")(?![A-Za-z0-9])",
+        re.IGNORECASE,
+    )
+
+
+def mask_governed_name_shape_phrases(value: str, phrases: Sequence[str]) -> str:
+    """Blank whole-token occurrences of governed non-person phrases."""
+
+    pattern = _governed_phrase_pattern(tuple(phrases))
+    if pattern is None:
+        return str(value)
+    return pattern.sub(" ", str(value))
 
 
 def contains_unsafe_ai_text(
@@ -184,8 +196,8 @@ def contains_unsafe_ai_text(
     PII, injection, confidential, name-shape, or direct protected-class
     detectors.
 
-    ``name_shape_allowed_phrases`` names governed non-person phrases (see
-    :mod:`backend.services.genie_place_dimension`) that the title-case
+    ``name_shape_allowed_phrases`` names governed non-person phrases (the
+    Genie place-dimension resolver supplies them) that the title-case
     person-name heuristic misreads as identities. Only the copy handed to
     :func:`contains_human_name_shape` is masked; every other detector below
     scans ``text`` unmodified. That scoping is the whole safety argument -- a

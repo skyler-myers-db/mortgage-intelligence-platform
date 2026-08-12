@@ -218,14 +218,29 @@ def test_campaign_surface_does_not_inherit_the_exemption() -> None:
 
 
 def test_masking_is_whole_token_anchored() -> None:
-    """A governed value may erase only itself, never a fragment of a longer word."""
+    """A governed value may erase only itself, never a fragment of a longer word.
 
+    Both edges are pinned. A trailing-only guard already stops ``Lone Treeman``;
+    the LEADING guard is what stops a governed value from eating the tail of an
+    unrelated word (``Peachtree`` -> ``Peach``), which is how a city name could
+    otherwise reshape neighbouring prose before the identity scan sees it.
+    """
+
+    # trailing edge
     assert mask_governed_name_shape_phrases("Lone Treeman called", ["Lone Tree"]) == (
         "Lone Treeman called"
     )
     assert mask_governed_name_shape_phrases("blackballed the lead", ["Black"]) == (
         "blackballed the lead"
     )
+    # leading edge
+    assert mask_governed_name_shape_phrases("Peachtree Corners", ["Tree"]) == (
+        "Peachtree Corners"
+    )
+    assert mask_governed_name_shape_phrases("Winterhaven totals", ["Haven"]) == (
+        "Winterhaven totals"
+    )
+    # the value itself is still erased
     assert mask_governed_name_shape_phrases("Lone Tree leads", ["Lone Tree"]).split() == [
         "leads"
     ]
