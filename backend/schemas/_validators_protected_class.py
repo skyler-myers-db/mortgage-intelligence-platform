@@ -38,7 +38,10 @@ from backend.schemas.marketing_selection_criteria import (
     is_reviewed_campaign_audience_summary_text,
     is_reviewed_read_only_analytics_text,
 )
-from backend.schemas.marketing_text_normalization import ascii_confusable_folds
+from backend.schemas.marketing_text_normalization import (
+    ascii_confusable_folds,
+    in_word_leet_folds,
+)
 from backend.schemas.protected_relationships import PROTECTED_RELIGION_FAMILIAL_RELATION_RE
 
 # Governed refusal reasons this module can report. Both are fail-closed
@@ -117,14 +120,10 @@ def _structural_audience_scan_variants(value: str) -> set[str]:
             else char
         )
     symbol_folded = "".join(in_word_symbols)
-    variants = {
-        value,
-        symbol_folded,
-        value.translate(str.maketrans("013457", "oleast")),
-        value.translate(str.maketrans("013457", "oieast")),
-        symbol_folded.translate(str.maketrans("013457", "oleast")),
-        symbol_folded.translate(str.maketrans("013457", "oieast")),
-    }
+    variants = {value, symbol_folded}
+    variants.update(
+        folded for source in (value, symbol_folded) for folded in in_word_leet_folds(source)
+    )
     canonical: set[str] = set()
     for variant in variants:
         folded = variant
@@ -255,13 +254,11 @@ def protected_class_marketing_reason(
         # while evasions such as ``Wom€n`` and ``Musl!m`` cannot pass.
         mark_folded.translate(_MARKETING_SYMBOL_CONFUSABLES),
     }
+    # In-word only: a digit run touching no letter is a number, not an
+    # evasion, and must not fold into a protected term. See
+    # ``in_word_leet_folds``.
     leet_variants = {
-        translated
-        for variant in symbol_variants
-        for translated in (
-            variant.translate(str.maketrans("013457", "oleast")),
-            variant.translate(str.maketrans("013457", "oieast")),
-        )
+        translated for variant in symbol_variants for translated in in_word_leet_folds(variant)
     }
 
     # Add only reviewed ASCII lookalike folds. These variants are safety-scan
