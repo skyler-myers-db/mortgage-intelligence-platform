@@ -1224,6 +1224,11 @@ def _canonical_genie_answer(
     cannot mask a policy failure.
     """
     if sql_client is None:
+        # The ONLY exit in this function that says nothing. Every other one
+        # emits a warning, so a rescue that silently declines is invisible in
+        # the logs and indistinguishable from "no canonical statement matched"
+        # -- which cost two wrong diagnoses of a live refusal (2026-08-12).
+        _emit_genie_warning("canonical_genie_no_sql_client")
         return None
     borrower_asset = qualify("gold", "borrower_360")
     lead_population_asset = qualify("gold", "lead_population")
