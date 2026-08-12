@@ -34,6 +34,7 @@ import pytest
 from backend.schemas._validators_protected_class import (
     _CACHEABLE_SCAN_CHARS,
     _protected_class_marketing_reason,
+    _protected_class_marketing_reason_cached,
     protected_class_marketing_reason,
 )
 
@@ -50,14 +51,20 @@ _CACHE_IDENTITY_CORPUS = (
     "Rank our segments by average rate spread.",
     "",
     "The quick brown fox.",
-    "x" * (_CACHEABLE_SCAN_CHARS + 50),
 )
 
 
 @pytest.mark.parametrize("value", _CACHE_IDENTITY_CORPUS)
 @pytest.mark.parametrize("analytics", (False, True))
 def test_memoized_and_direct_decisions_are_identical(value: str, analytics: bool) -> None:
-    """The cache may not be able to change a verdict, including past its gate."""
+    """The cache may not be able to change a verdict.
+
+    Every entry here is under the gate, because that is the only place the
+    claim has content: past the gate the front door does not consult the
+    cache at all, so an over-length case would assert ``f(x) == f(x)`` against
+    an empty cache. :func:`test_the_gate_bypasses_rather_than_diverges` covers
+    the other side.
+    """
 
     assert protected_class_marketing_reason(
         value, assume_reviewed_read_only_analytics=analytics
@@ -99,3 +106,21 @@ def test_longest_term_still_wins_the_alternation() -> None:
     match = PROTECTED_NATIONAL_ORIGIN_RE.search("laotian borrowers")
     assert match is not None
     assert match.group() == "laotian"
+
+
+def test_the_gate_bypasses_rather_than_diverges() -> None:
+    """Past the length gate the cache is skipped, not consulted-and-wrong.
+
+    Pins the property the over-length parametrize case only appeared to test:
+    a long value leaves the cache untouched AND still agrees with the direct
+    call, so the gate is a bypass rather than a second code path.
+    """
+
+    long_value = "Kent has 1,405 residents. " * 40
+    assert len(long_value) > _CACHEABLE_SCAN_CHARS
+    _protected_class_marketing_reason_cached.cache_clear()
+
+    assert protected_class_marketing_reason(long_value) == _protected_class_marketing_reason(
+        long_value
+    )
+    assert _protected_class_marketing_reason_cached.cache_info().currsize == 0

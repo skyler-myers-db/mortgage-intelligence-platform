@@ -11,6 +11,19 @@ from __future__ import annotations
 
 import re
 
+# A count inside a reviewed analytics shape. It must admit exactly what the
+# directive grammar's lead-in admits, because the two sit on opposite sides of
+# the same decision: `_DIRECTIVE_LEAD_IN` was collapsed to one alphanumeric
+# token class and the refusing `is_population_directive` prefix was widened to
+# accept digits, so any count these ALLOW patterns cannot match now refuses.
+#
+# That asymmetry shipped and was caught by adversarial review on 2026-08-12:
+# "Show the top-25 borrowers by lead score across the current Cotality data
+# coverage." (a verbatim shipped sample question, hyphenated) refused while
+# "top 25" passed. Fused orthography, and counts above 999, are the cases the
+# old `top\s+[0-9]{1,3}\s+` slot could not reach.
+_ANALYTIC_COUNT = r"(?:[0-9]{1,5}|ten|twenty(?:[- ]five)?)"
+
 _REVIEWED_ANALYTIC_POPULATION = (
     r"(?:(?:(?:in[- ]the[- ]money|listed|refinance[- ]ready|retention[- ]risk|"
     r"marketing[- ]eligible|investor|equity[- ]rich|highest[- ]scoring)\s+)?"
@@ -53,7 +66,7 @@ _REVIEWED_ANALYTIC_SIGNAL_LIST = (
 # "the top 20 (eligible) borrowers" — the cohort noun a planned deep analysis
 # names in nearly every sub-question.
 _REVIEWED_TOP_COHORT = (
-    r"(?:the\s+)?top\s+(?:[0-9]{1,3}\s+)?"
+    rf"(?:the\s+)?top(?:[- ]{_ANALYTIC_COUNT})?\s+"
     r"(?:eligible\s+|marketing[- ]eligible\s+|highest[- ]scoring\s+)?"
     r"(?:borrowers?|leads?|candidates?|opportunities)"
 )
@@ -81,7 +94,7 @@ _REVIEWED_READ_ONLY_ANALYTIC_PATTERNS: tuple[re.Pattern[str], ...] = (
         # reviewed vocabulary means an unknown criterion anywhere breaks the
         # match and the clause fails closed.
         r"^(?:rank|show|list|give\s+me|surface|prioriti[sz]e)\s+(?:me\s+)?(?:the\s+)?"
-        r"(?:top\s+(?:[0-9]{1,3}\s+)?)?"
+        rf"(?:top(?:[- ]{_ANALYTIC_COUNT})?\s+)?"
         rf"(?:{_REVIEWED_PRODUCT_INTENT}(?:[\s-]+(?:{_REVIEWED_PRODUCT_INTENT}|mortgage|loan))?\s+)?"
         r"(?:candidates?|borrowers?|leads?|opportunities)"
         rf"{_REVIEWED_ANALYTIC_LOCATION}"
@@ -162,7 +175,7 @@ _REVIEWED_READ_ONLY_ANALYTIC_PATTERNS: tuple[re.Pattern[str], ...] = (
         # The intent vocabulary is closed, so an unknown criterion cannot ride
         # this shape. Live persona audit 2026-08-07 (sales-manager).
         r"^(?:rank|show|list|give\s+me|surface|prioriti[sz]e)\s+(?:me\s+)?(?:the\s+)?"
-        r"(?:top\s+(?:[0-9]{1,3}\s+)?)?"
+        rf"(?:top(?:[- ]{_ANALYTIC_COUNT})?\s+)?"
         # One or two stacked intent tokens ("in-the-money refi", "purchase
         # mortgage") — still drawn from the same closed vocabulary, so an
         # unknown criterion cannot ride the second slot. Live persona audit
@@ -222,7 +235,7 @@ _REVIEWED_READ_ONLY_ANALYTIC_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(
         r"^(?:chart|plot|graph|visualize|display|show|list|count|rank|order|group|compare|"
         r"break\s+down)\s+(?:me\s+)?(?:the\s+)?"
-        r"(?:(?:top|bottom)\s+(?:[0-9]{1,3}|ten|twenty(?:[- ]five)?)\s+)?"
+        rf"(?:(?:top|bottom)[- ]{_ANALYTIC_COUNT}\s+)?"
         rf"{_REVIEWED_ANALYTIC_POPULATION}\s+"
         r"(?:(?:by|grouped\s+by|ordered\s+by|ranked\s+by)\s+)"
         rf"{_REVIEWED_ANALYTIC_DIMENSION}{_REVIEWED_ANALYTIC_LOCATION}$",
@@ -261,7 +274,7 @@ _REVIEWED_READ_ONLY_ANALYTIC_PATTERNS: tuple[re.Pattern[str], ...] = (
         r"(?:a\s+(?:curated\s+)?list\s+of\s+)?(?:the\s+)?"
         r"(?:very\s+|absolute\s+|single\s+)?"
         r"(?:top|best|strongest|highest[- ]potential|most\s+promising)\s+"
-        r"(?:[0-9]{1,3}\s+)?(?:potential\s+)?"
+        rf"(?:{_ANALYTIC_COUNT}\s+)?(?:potential\s+)?"
         rf"(?:{_REVIEWED_PRODUCT_INTENT}\s+)?"
         r"(?:candidates?|borrowers?|leads?|opportunities|prospects?)"
         r"(?:\s+(?:for\s+(?:outreach|contact|review|follow[- ]up)|to\s+contact))?$",
