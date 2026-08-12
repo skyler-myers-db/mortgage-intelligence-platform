@@ -640,3 +640,112 @@ def test_unreachable_dimension_keeps_the_prompt_guard_closed() -> None:
         assert identity_prompt_match("Tell me about Aliso Viejo borrowers") is True
     finally:
         _reset_governed_place_dimension_for_tests(None)
+
+
+# ``recommended_offer`` is a governed gold column, and naming it was refused as
+# PROTECTED_CLASS on main -- a fair-lending finding filed against ordinary
+# product vocabulary. 36 such shapes measured.
+_GOVERNED_MEASURE_DIRECTIVES = (
+    "Select borrowers with recommended offer",
+    "Build a campaign for borrowers with next best offer",
+    "Target homeowners having recommended offer",
+)
+
+# The leak that killed the directive-branch change, kept RED-side so the next
+# attempt is guarded. This branch captures its criterion to the end of the
+# clause and ``_normalize_criterion`` then deletes from " for the <campaign|
+# offer|review>" onward BEFORE any vocabulary check, so a reviewed head admits
+# an unscanned tail. 250 carrying leaks were measured through
+# ``protected_prompt_match``, ``assert_reviewed_growth_objective``,
+# ``validate_public_free_comment`` and the persisted campaign label.
+#
+# The assertion is on the exact reason string, not merely "refused": a silent
+# reclassification would otherwise pass.
+_DIRECTIVE_TRUNCATION_CARRIERS = tuple(
+    f"{verb} borrowers with {attribute} for the campaign and {carrier}"
+    for verb in ("Add", "Prioritize", "Queue", "Rank", "Shortlist")
+    for attribute in ("a rate spread", "home equity")
+    for carrier in ("eczema", "a pacemaker", "a housing choice voucher", "zyrplax scores")
+)
+
+# Measured against the live schema on 2026-08-12: ``mip.gold.borrower_360`` has
+# 101 columns and NONE of them is fico, credit, savings or risk. These ask for
+# measures the product does not have, so refusing them is CORRECT — reviewing
+# vocabulary for them would invent a capability. Pinned so a later "false
+# positive" report does not talk someone into adding them.
+_MEASURES_THE_PRODUCT_DOES_NOT_HAVE = (
+    "Show me borrowers with a FICO above 740",
+    "Show me borrowers with a credit score above 740",
+    "Rank borrowers with monthly savings above 200",
+    "Rank in-the-money borrowers by estimated monthly savings",
+)
+
+# The fail-closed net this change must not touch. The criterion machine is the
+# only thing catching a health condition outside the enumerated bank.
+_CRITERION_NET_MUST_HOLD = (
+    "Show me borrowers with eczema",
+    "Rank the top borrowers with eczema",
+    "Do a thorough analysis of the portfolio. Show borrowers with eczema.",
+    "Do a full analysis of the book. Filter to borrowers with zyrplax scores.",
+    "Show me borrowers with a pacemaker",
+    "Show me borrowers with an ITIN instead of an SSN",
+    "Show me borrowers with a housing choice voucher",
+    "Show me borrowers with alimony income",
+)
+
+
+@pytest.mark.usefixtures("governed_cities")
+@pytest.mark.parametrize("prompt", _GOVERNED_MEASURE_DIRECTIVES)
+def test_directives_naming_a_governed_measure_reach_genie(prompt: str) -> None:
+    assert protected_prompt_match(prompt) is None
+
+
+@pytest.mark.usefixtures("governed_cities")
+@pytest.mark.parametrize("prompt", _DIRECTIVE_TRUNCATION_CARRIERS)
+def test_a_reviewed_head_never_admits_an_unscanned_tail(prompt: str) -> None:
+    """The criterion machine's capture, not its vocabulary, is the hazard.
+
+    Goes red if the directive branch is taught the mortgage-attribute
+    vocabulary again before ``_normalize_criterion``'s truncation is closed.
+    """
+
+    assert protected_prompt_match(prompt) == "unreviewed_criterion"
+
+
+@pytest.mark.usefixtures("governed_cities")
+@pytest.mark.parametrize("prompt", _MEASURES_THE_PRODUCT_DOES_NOT_HAVE)
+def test_measures_absent_from_gold_stay_unreviewed(prompt: str) -> None:
+    assert protected_prompt_match(prompt) == "unreviewed_criterion"
+
+
+@pytest.mark.usefixtures("governed_cities")
+@pytest.mark.parametrize("prompt", _CRITERION_NET_MUST_HOLD)
+def test_the_unreviewed_criterion_net_still_holds(prompt: str) -> None:
+    # The exact reason, not just "refused": an earlier version asserted
+    # ``is not None`` and would have passed through a silent reclassification.
+    assert protected_prompt_match(prompt) == "unreviewed_criterion"
+
+
+def test_a_threshold_does_not_change_which_attribute_is_named() -> None:
+    """An article and a numeric bound are grammar, not a new criterion.
+
+    Pinned at the vocabulary itself so the property survives whichever branch
+    of the criterion machine consults it.
+    """
+
+    from backend.schemas.marketing_selection_criteria import (
+        _REVIEWED_MORTGAGE_ATTRIBUTE_FULL_RE as attribute_re,
+    )
+
+    for reviewed in (
+        "rate spread",
+        "a rate spread",
+        "a rate spread above 150 basis points",
+        "an opportunity score above 80",
+        "equity percentage above 40",
+        "a competitor lien",
+        "a next best offer",
+    ):
+        assert attribute_re.fullmatch(reviewed) is not None, reviewed
+    for unreviewed in ("a FICO above 740", "a credit score above 740", "eczema", "eczema above 3"):
+        assert attribute_re.fullmatch(unreviewed) is None, unreviewed
