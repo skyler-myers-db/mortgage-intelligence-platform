@@ -412,13 +412,9 @@ def _collides_with_person_lexicon(value: str) -> bool:
     fails if this exclusion ever stops firing on a live gold value.
     """
 
-    from backend.schemas._validators_person_names import (
-        _COMMON_FIRST_NAMES,
-        _COMMON_LAST_NAMES,
-    )
+    from backend.schemas._validators_person_names import shares_token_with_person_lexicon
 
-    lexicon = _COMMON_FIRST_NAMES | _COMMON_LAST_NAMES
-    return any(token.casefold() in lexicon for token in value.split())
+    return shares_token_with_person_lexicon(value)
 
 
 class GovernedPlaceDimensionResolver:
