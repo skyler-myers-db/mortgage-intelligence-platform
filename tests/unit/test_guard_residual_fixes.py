@@ -10,22 +10,18 @@ and each is independent of the others:
    pattern useless as a build artifact, and it cost a false "the refactor
    changed something" during the vocabulary split.
 
-2. A leading article was admitted on the potential/upside alternative of the
-   reviewed attribute vocabulary and nowhere else, so "the highest potential"
-   was reviewed while "the highest opportunity scores" -- the product's own
-   governed scoring column -- was refused as an unknown criterion.
-
-3. The scanner re-ran in full for every rendered table cell, and a governed
+2. The scanner re-ran in full for every rendered table cell, and a governed
    table repeats its cells heavily.
 
-The captures for (2), on paychex 2026-08-12, both refused in seconds with "it
-is outside the reviewed Module 0 vocabulary" before any repository call::
-
-    Show me the top 50 borrowers with the highest opportunity scores.
-    Show me the top 20 borrowers with the highest lead scores.
-
-With the article admitted, the same two questions return ``source=genie``,
-``trusted=True``, 50 and 20 rows from ``mip.gold.lead_population``.
+A third residual -- the missing leading article before "the highest
+opportunity scores" -- is deliberately NOT fixed here. See the module note in
+``test_selection_criterion_count_invariance`` and the branch summary: the
+reviewed attribute vocabulary is shared with the CAMPAIGN copy surface, which
+must not inherit the analytics ranking bypass, so widening it broke
+``test_campaign_copy_surface_keeps_fail_closed_ranking_grammar``. Scoping the
+article to the directive grammar does not separate them either, because the
+declarative co-reference "those with X" matches that same grammar. Fixing it
+needs the analytics posture threaded into the criterion machine.
 """
 
 from __future__ import annotations
@@ -39,36 +35,6 @@ from backend.schemas._validators_protected_class import (
     _CACHEABLE_SCAN_CHARS,
     _protected_class_marketing_reason,
     protected_class_marketing_reason,
-)
-from backend.schemas.marketing_selection_reviewed_attributes import (
-    _REVIEWED_MORTGAGE_ATTRIBUTE_FULL_RE,
-)
-
-# Governed Module 0 attributes, each written the way a growth lead writes it.
-# Every one must be reviewed vocabulary with an article in front.
-_REVIEWED_WITH_ARTICLE = (
-    "the highest opportunity scores",
-    "the highest lead scores",
-    "a competitor lien",
-    "the average rate spread",
-    "the highest LTV",
-    "an active property listing",
-    "the highest potential",
-    "the strong equity",
-)
-
-# The fail-closed boundary. An article must not turn an UNREVIEWED attribute
-# into a reviewed one -- that is the whole risk of widening the head of the
-# fragment rather than one alternative.
-_UNREVIEWED_WITH_ARTICLE = (
-    "the average credit score",
-    "a credit score",
-    "the highest FICO",
-    "an eczema diagnosis",
-    "the borrower race",
-    "a zip code",
-    "the highest income",
-    "the largest household",
 )
 
 # Decisions that must not change when the memoizing front door is in play.
@@ -86,24 +52,6 @@ _CACHE_IDENTITY_CORPUS = (
     "The quick brown fox.",
     "x" * (_CACHEABLE_SCAN_CHARS + 50),
 )
-
-
-@pytest.mark.parametrize("phrase", _REVIEWED_WITH_ARTICLE)
-def test_an_article_does_not_make_a_reviewed_attribute_unreviewed(phrase: str) -> None:
-    assert _REVIEWED_MORTGAGE_ATTRIBUTE_FULL_RE.fullmatch(phrase) is not None
-
-
-@pytest.mark.parametrize("phrase", _UNREVIEWED_WITH_ARTICLE)
-def test_an_article_does_not_make_an_unreviewed_attribute_reviewed(phrase: str) -> None:
-    assert _REVIEWED_MORTGAGE_ATTRIBUTE_FULL_RE.fullmatch(phrase) is None
-
-
-@pytest.mark.parametrize("phrase", _REVIEWED_WITH_ARTICLE)
-def test_the_bare_form_is_reviewed_too(phrase: str) -> None:
-    """The article is additive: dropping it must not change the verdict."""
-
-    bare = phrase.split(" ", 1)[1] if phrase.split(" ", 1)[0] in {"the", "a", "an"} else phrase
-    assert _REVIEWED_MORTGAGE_ATTRIBUTE_FULL_RE.fullmatch(bare) is not None
 
 
 @pytest.mark.parametrize("value", _CACHE_IDENTITY_CORPUS)
