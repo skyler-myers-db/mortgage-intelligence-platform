@@ -92,7 +92,11 @@ REVIEWED_MORTGAGE_ATTRIBUTE_FRAGMENT = (
     # it is also the DEI sense of the word, and the protected-class terms are
     # matched before this fragment is ever consulted. Placed last so it cannot
     # shadow "home equity line of credit" or "home equity intent" above.
-    r"(?:home[- ]?equity|equity\s+(?:pct|percent(?:age)?|share)))"
+    r"(?:home[- ]?equity|equity\s+(?:pct|percent(?:age)?|share))|"
+    # The governed next-best-offer column (recommended_offer). Qualifier
+    # required: a bare "offer" is ordinary campaign vocabulary, this is the
+    # product's own ranked recommendation.
+    r"(?:next[- ]?best|recommended)\s+offers?)"
 )
 REVIEWED_MORTGAGE_ATTRIBUTE_LIST_FRAGMENT = (
     rf"(?:{REVIEWED_MORTGAGE_ATTRIBUTE_FRAGMENT})"
@@ -104,8 +108,33 @@ REVIEWED_ATTRIBUTE_PURPOSE_FRAGMENT = (
     r"mortgage|loan|servicing)\s+)?(?:campaign|offer|options?|review))?"
 )
 
+# An article and a numeric threshold do not change WHICH attribute is being
+# named. "a rate spread above 150 basis points" is the reviewed
+# ``rate_spread_bps`` column with a bound on it, but the criterion is matched
+# whole, so the article and the bound both made it unreviewed -- the whole
+# ranking/threshold family refused (measured over a 9,677-question corpus,
+# 2026-08-12: "Show me borrowers with a rate spread above 150 basis points",
+# "Rank borrowers with an opportunity score above 80").
+#
+# This cannot admit an unreviewed attribute: the alternation is untouched, so
+# "a FICO above 740" and "borrowers with eczema" stay unreviewed exactly as
+# before. Deliberately NOT added: FICO, credit score, monthly savings and
+# balance at risk. Measured against the live schema on 2026-08-12 --
+# mip.gold.borrower_360 has 101 columns and NONE of them is fico, credit,
+# savings or risk. Reviewing vocabulary for a measure the product does not
+# have would be inventing a capability, not clearing a false positive.
+_REVIEWED_ATTRIBUTE_ARTICLE = r"(?:(?:an?|the)\s+)?"
+_REVIEWED_ATTRIBUTE_THRESHOLD = (
+    r"(?:\s+(?:above|over|below|under|at\s+least|at\s+most|greater\s+than|"
+    r"less\s+than|more\s+than|fewer\s+than|of\s+at\s+least|of\s+at\s+most|"
+    r">=?|<=?)\s*[0-9][0-9,.]*\s*"
+    r"(?:bps|basis\s+points?|%|percent(?:age)?(?:\s+points?)?|points?)?)?"
+)
+
 _REVIEWED_MORTGAGE_ATTRIBUTE_FULL_RE = re.compile(
-    rf"^(?:{REVIEWED_MORTGAGE_ATTRIBUTE_LIST_FRAGMENT})$",
+    rf"^{_REVIEWED_ATTRIBUTE_ARTICLE}"
+    rf"(?:{REVIEWED_MORTGAGE_ATTRIBUTE_LIST_FRAGMENT})"
+    rf"{_REVIEWED_ATTRIBUTE_THRESHOLD}$",
     re.IGNORECASE,
 )
 _CRITERION_TAIL = r"(?P<criterion>[^.!?;:]{1,120})"
@@ -695,6 +724,20 @@ def _contains_unreviewed_audience_decision(
         has_reviewed_segment_binding = (
             _REVIEWED_DIRECTIVE_POPULATION_PREFIX_RE.fullmatch(before_population) is not None
             and signal_binding is not None
+            # NOT the mortgage-attribute vocabulary, even though every other
+            # branch of this machine accepts it and the inconsistency refuses
+            # "Rank borrowers with a competitor lien". Tried on 2026-08-12 and
+            # reverted: this branch captures its criterion to the END of the
+            # clause, and ``_normalize_criterion`` then DELETES from " for the
+            # <campaign|offer|review>" onward before any vocabulary check. The
+            # deleted tail is never scanned, so "Add borrowers with a rate
+            # spread for the campaign and eczema" was admitted on a reviewed
+            # head while the health term rode in the truncated tail -- 250
+            # carrying leaks measured, reaching Genie, the plan composer, the
+            # operator-note field and the persisted campaign label. The
+            # vocabulary is closed; the CAPTURE is not. Re-land only after the
+            # truncation is closed for this branch, and keep
+            # ``_DIRECTIVE_TRUNCATION_CARRIERS`` red while it is open.
             and is_closed_reviewed_segment_signal_criterion(signal_binding.group("criterion"))
         )
         # Affirmative commands that form, order, or prioritize a marketing
