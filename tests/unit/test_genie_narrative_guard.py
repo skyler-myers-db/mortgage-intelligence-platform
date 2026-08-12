@@ -73,16 +73,47 @@ def test_true_positives_still_fail_closed_on_the_genie_surface() -> None:
     )
 
 
-def test_campaign_copy_surface_keeps_fail_closed_ranking_grammar() -> None:
-    """The default (campaign) surface must NOT inherit the analytics bypass."""
+def test_campaign_copy_surface_does_not_inherit_the_analytics_bypass() -> None:
+    """The default (campaign) surface must NOT inherit the analytics bypass.
 
-    assert (
-        contains_unsafe_ai_text(
-            "The top borrower candidates overall are those with the highest "
-            "opportunity scores."
-        )
-        is True
-    )
+    Until 2026-08-12 this asserted that "... those with the highest opportunity
+    scores." was unsafe on the campaign surface. That sentence proved nothing
+    about the bypass: `opportunity_score` is a reviewed Module 0 column, the
+    campaign surface already accepted the same sentence WITHOUT its article,
+    and only the article made it fail closed. Measured pre-fix on the campaign
+    surface -- "with the highest opportunity scores" unsafe, "with highest
+    opportunity scores" safe -- so the assertion was pinning an article false
+    positive rather than the boundary it names.
+
+    An UNREVIEWED criterion is the real differential, and it is two-sided: the
+    campaign surface fails closed on it, the analytics surface bypasses it.
+    """
+
+    for unreviewed in (
+        "The top borrower candidates overall are those with the highest credit scores.",
+        "The top borrower candidates overall are those with the highest FICO scores.",
+        "The top borrower candidates overall are those with the highest household income.",
+    ):
+        assert contains_unsafe_ai_text(unreviewed) is True, unreviewed
+        assert _answer_text_contains_pii(unreviewed) is False, unreviewed
+
+
+def test_reviewed_ranking_vocabulary_is_accepted_on_both_surfaces() -> None:
+    """A reviewed Module 0 column is admissible copy with or without an article.
+
+    The article is a descriptor, not a criterion, so it must not decide this on
+    either surface. This is the campaign-side half of the fix that made
+    "Show me the top borrowers with the highest opportunity scores." answerable
+    (live capture, paychex 2026-08-12).
+    """
+
+    for reviewed in (
+        "The top borrower candidates overall are those with the highest opportunity scores.",
+        "The top borrower candidates overall are those with highest opportunity scores.",
+        "The top borrower candidates overall are those with the highest home equity.",
+    ):
+        assert contains_unsafe_ai_text(reviewed) is False, reviewed
+        assert _answer_text_contains_pii(reviewed) is False, reviewed
 
 
 def _visible_response(**overrides: object) -> GenieMessageResponse:
