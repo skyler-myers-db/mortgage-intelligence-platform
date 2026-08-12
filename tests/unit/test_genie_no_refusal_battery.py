@@ -177,3 +177,80 @@ def test_flagship_trusted_turn_is_live_first_with_cross_check() -> None:
     assert any(
         "Governed cross-check" in step.content for step in result.reasoning_trace
     )
+
+
+# --- An aggregate qualifier describes a reviewed attribute; it is not a new
+# --- selection criterion -----------------------------------------------------
+#
+# Live on paychex 2026-08-11, "Rank our segments by average rate spread." was
+# refused as `unreviewed_criterion` in ~1s, before any repository call, while
+# `_canonical_mean_rate_spread_by_segment_scope` already matched that exact
+# string and its canonical SQL sat unreachable behind the refusal.
+#
+# Root cause was an asymmetry in `REVIEWED_MORTGAGE_ATTRIBUTE_FRAGMENT`:
+# `average|mean` was admitted on the opportunity/lead-score alternative and
+# nowhere else, so the same aggregate flipped every OTHER reviewed attribute to
+# unreviewed. The fix hoists the qualifier to the front of the fragment.
+
+_AGGREGATE_QUALIFIERS = ("", "average ", "avg ", "mean ", "median ", "high ", "highest ", "top ")
+_REVIEWED_ATTRIBUTES = (
+    "rate spread",
+    "home equity",
+    "equity percentage",
+    "LTV",
+    "loan balance",
+    "property value",
+    "opportunity score",
+    "lead score",
+)
+# Attributes that are NOT reviewed Module 0 vocabulary, and one protected class.
+# An aggregate must not launder any of them into the reviewed set.
+_UNREVIEWED_ATTRIBUTES = (
+    "credit score",
+    "FICO",
+    "household income",
+    "net worth",
+    "employment length",
+    "citizenship",
+    "marital status",
+    "age",
+    "race",
+    "religion",
+)
+
+
+@pytest.mark.parametrize("attribute", _REVIEWED_ATTRIBUTES)
+@pytest.mark.parametrize("qualifier", _AGGREGATE_QUALIFIERS)
+def test_an_aggregate_over_a_reviewed_attribute_is_answerable(
+    qualifier: str, attribute: str
+) -> None:
+    question = f"Rank our segments by {qualifier}{attribute}."
+    assert protected_prompt_match(question) is None, question
+
+
+@pytest.mark.parametrize("attribute", _UNREVIEWED_ATTRIBUTES)
+@pytest.mark.parametrize("qualifier", _AGGREGATE_QUALIFIERS)
+def test_aggregate_qualifiers_never_admit_an_unreviewed_attribute(
+    qualifier: str, attribute: str
+) -> None:
+    """The fail-closed default must be exactly as strong as before the fix.
+
+    This is the test `REVIEWED_MORTGAGE_ATTRIBUTE_FRAGMENT`'s comment points
+    at. It is the whole safety argument for hoisting the qualifier: the
+    attribute alternation is untouched, so an unreviewed attribute stays
+    unreviewed with or without an aggregate in front of it.
+    """
+
+    question = f"Rank our segments by {qualifier}{attribute}."
+    assert protected_prompt_match(question) is not None, question
+
+
+def test_an_aggregate_cannot_launder_an_unreviewed_attribute_through_a_reviewed_one() -> None:
+    """Chaining a reviewed attribute must not carry an unreviewed one with it."""
+
+    for question in (
+        "Select borrowers with home equity and credit score.",
+        "Rank our segments by average rate spread and household income.",
+        "Rank our segments by average home equity and race.",
+    ):
+        assert protected_prompt_match(question) is not None, question

@@ -36,7 +36,7 @@ import {
   pickPlan,
 } from './GenieAnswer.logic';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
-import { genieCellHref } from '../../lib/genieCellLinks';
+import { answerCohortFromActions, genieCellHref } from '../../lib/genieCellLinks';
 
 export { stripQuestionRestatement } from './GenieAnswer.markdown';
 export { inferChartFromRows } from './GenieAnswer.logic';
@@ -99,6 +99,9 @@ export function GenieAnswer({
   const visibleRows = rows.slice(0, MAX_TABLE_ROWS);
   const hiddenRows = Math.max(0, rows.length - MAX_TABLE_ROWS);
   const columns = visibleRows[0] ? Object.keys(visibleRows[0]).slice(0, MAX_TABLE_COLS) : [];
+  // The answer's own filters, so a row link opens the population the row
+  // reports rather than every borrower in that geography.
+  const cellCohort = answerCohortFromActions(actions);
   const chartColumns = rows[0] ? Object.keys(rows[0]) : [];
   const cleanedAnswer = answer ? normalizeGenieAnswerLanguage(stripQuestionRestatement(answer)) : '';
   const isGenieApiAnswer = payload.source === 'genie';
@@ -347,7 +350,7 @@ export function GenieAnswer({
                         // geography map navigates to on a state click.
                         // Everything else (including city — no route filters
                         // by city) renders as plain text.
-                        const href = genieCellHref(c, v);
+                        const href = genieCellHref(c, v, cellCohort, row);
                         return (
                           <td key={c} className={isNum ? 'num' : undefined}>
                             {href ? (

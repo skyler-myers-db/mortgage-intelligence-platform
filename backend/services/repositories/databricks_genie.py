@@ -42,6 +42,7 @@ from backend.services.repositories.databricks_genie_canonical import (
     _CANONICAL_RETENTION_COMPETITOR_LIEN_LIST_SQL,
     _CANONICAL_RETENTION_ELIGIBILITY_SUMMARY_BY_STATE_SQL,
     _CANONICAL_RETENTION_ELIGIBILITY_SUMMARY_GLOBAL_SQL,
+    _CANONICAL_SEGMENT_APPROVAL_RATE_SQL,
     _CANONICAL_TOP_BORROWERS_ALL_SEGMENTS_SQL,
     _CANONICAL_TOP_BORROWERS_BY_STATE_INTENT_SQL,
     _CANONICAL_TOP_BORROWERS_BY_STATE_SQL,
@@ -55,6 +56,7 @@ from backend.services.repositories.databricks_genie_canonical import (
     _canonical_itm_zip_scope,
     _canonical_listed_purchase_scope,
     _canonical_msa_score_scope,
+    _canonical_segment_performance_rescue_scope,
     _canonical_specific_top_borrowers_global_scope,
     _canonical_specific_top_borrowers_state_scope,
     _canonical_top_borrowers_all_segments_scope,
@@ -2024,6 +2026,71 @@ def _canonical_genie_answer(
             visualization=visualization,
             actions=actions,
             table_rows=rows,
+        )
+
+    if _canonical_segment_performance_rescue_scope(question):
+        # RESCUE ONLY. Genie has already failed to return trusted SQL for this
+        # turn, so the choice here is this statement or a refusal -- not this
+        # statement or a live answer. See
+        # ``_canonical_segment_performance_rescue_scope``.
+        try:
+            rows = sql_client.execute(_CANONICAL_SEGMENT_APPROVAL_RATE_SQL)
+        except DatabricksSqlError as exc:
+            _emit_genie_warning("canonical_genie_segment_performance_failed", exc=exc)
+            return None
+        rows = _redact_genie_rows(rows) or []
+        segment_asset = qualify("semantics", "segment_performance_metric_view")
+        trusted_assets = [segment_asset]
+        question_hash = _genie_question_hash(question)
+        proof = _build_genie_proof(
+            sql_query=_CANONICAL_SEGMENT_APPROVAL_RATE_SQL,
+            trusted_assets=trusted_assets,
+            rows=rows,
+            question=question,
+            conversation_id=result.conversation_id,
+            message_id=result.message_id,
+            elapsed_ms=result.elapsed_ms,
+        )
+        visualization = _plan_genie_visualization(question, rows)
+        actions = _suggest_genie_actions(
+            question=question,
+            rows=rows,
+            trusted_assets=trusted_assets,
+            visualization=visualization,
+            conversation_id=result.conversation_id,
+            message_id=result.message_id,
+            question_hash=question_hash,
+            sql_query=_CANONICAL_SEGMENT_APPROVAL_RATE_SQL,
+            source="trusted_sql",
+        )
+        if rows:
+            answer = (
+                "I compared every segment side by side from "
+                f"{segment_asset}: approval rate, outreach rate, borrower count and "
+                "average opportunity score, ordered by approval rate. Approval and "
+                "outreach rates are governed campaign outcomes, so a segment with no "
+                "completed campaigns shows a rate of zero rather than a missing row."
+            )
+        else:
+            answer = (
+                f"The governed segment performance view returned no rows from {segment_asset} "
+                "for the current refreshed coverage, so there is no segment comparison to show."
+            )
+        return GenieMessageResponse(
+            conversation_id=result.conversation_id,
+            message_id=result.message_id,
+            elapsed_ms=result.elapsed_ms,
+            question_hash=question_hash,
+            question=question,
+            answer=answer,
+            source="trusted_sql",
+            trusted_assets=trusted_assets,
+            sql_query=_CANONICAL_SEGMENT_APPROVAL_RATE_SQL,
+            row_count=len(rows),
+            table_rows=rows,
+            proof=proof,
+            visualization=visualization,
+            actions=actions,
         )
 
     scope = _canonical_in_the_money_count_scope(question)

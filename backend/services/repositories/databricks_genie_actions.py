@@ -474,12 +474,16 @@ def _route_from_answer_rows(
     zips = _row_values(rows, "zip", "zip_code", "zipcode", "postal_code", digits=5)
     counties = _row_values(rows, "county_fips_5", "county_fips", "fips_5", "fips", digits=5)
     states = _row_values(rows, "state", "state_code", upper=True)
-    if (
-        states
-        and re.search(r"\bwhich\s+state\b|\bwhat\s+state\b", question.lower())
-        and _actionable_total_from_rows(rows) is None
-    ):
-        states = states[:1]
+    # The rows the answer returned ARE the answer's geography. A reader that
+    # kept only the first one when the QUESTION said "which state" was the last
+    # wording-gated narrowing left in this function, and it failed the same way
+    # its siblings did: live on paychex 2026-08-11, "Which state should we
+    # prioritize next quarter and why?" was answered over six state rows and
+    # recommended CA AND IL in the narrative, while the cohort silently opened
+    # CA alone. Prose cannot tell a superlative apart from a ranking -- an
+    # answer that ranks six states to argue for two still starts with "which
+    # state". When Genie really does mean one state it returns one row, and
+    # that single row narrows the cohort by itself.
     reading = read_sql_filters(sql_query)
     # Segments come from the ANSWER'S OWN conjuncts, never from the question's
     # wording: see ``_segment_selection_from_sql``.
