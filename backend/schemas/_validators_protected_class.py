@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from functools import lru_cache
 from typing import Literal
 
 from backend.schemas._validators_protected_class_patterns import (
@@ -102,6 +103,36 @@ _STRUCTURAL_AUDIENCE_KEYWORD_PATTERNS = tuple(
 )
 
 
+@lru_cache(maxsize=512)
+def _mints_governed_term(candidate: str) -> bool:
+    """True when a bare number's folded spelling is itself a governed term.
+
+    The only reason a digit run is ever left unfolded. Consulted with the
+    folded candidate alone -- ``lao``, ``laos``, ``l``, ``e`` -- so it asks a
+    presence question of every direct bank and never a contextual one: at this
+    point there is no sentence to take context from, and the question is
+    whether these letters COULD be a governed term, not whether this sentence
+    uses one that way.
+
+    Kept in one place so the reserved set follows the vocabulary. Widening any
+    bank automatically stops the corresponding number from folding, rather than
+    leaving a stale literal list behind.
+    """
+
+    return any(
+        pattern.search(candidate)
+        for pattern in (
+            PROTECTED_CLASS_MARKETING_RE,
+            PROTECTED_AGE_CITIZENSHIP_MARKETING_RE,
+            PROTECTED_CONTEXTUAL_TRAIT_MARKETING_RE,
+            PROTECTED_RELIGION_FAMILIAL_RELATION_RE,
+            PROTECTED_HEALTH_TERM_MARKETING_RE,
+            PROTECTED_HEALTH_STATUS_MARKETING_RE,
+            PROTECTED_NATIONAL_ORIGIN_RE,
+        )
+    )
+
+
 def _structural_audience_scan_variants(value: str) -> set[str]:
     """Canonicalize only governed audience-claim keywords, preserving sentences."""
 
@@ -122,7 +153,9 @@ def _structural_audience_scan_variants(value: str) -> set[str]:
     symbol_folded = "".join(in_word_symbols)
     variants = {value, symbol_folded}
     variants.update(
-        folded for source in (value, symbol_folded) for folded in in_word_leet_folds(source)
+        folded
+        for source in (value, symbol_folded)
+        for folded in in_word_leet_folds(source, mints_governed_term=_mints_governed_term)
     )
     canonical: set[str] = set()
     for variant in variants:
@@ -254,11 +287,12 @@ def protected_class_marketing_reason(
         # while evasions such as ``Wom€n`` and ``Musl!m`` cannot pass.
         mark_folded.translate(_MARKETING_SYMBOL_CONFUSABLES),
     }
-    # In-word only: a digit run touching no letter is a number, not an
-    # evasion, and must not fold into a protected term. See
-    # ``in_word_leet_folds``.
+    # Folds every digit run except an isolated one whose folded spelling is
+    # itself a governed term -- see ``in_word_leet_folds``.
     leet_variants = {
-        translated for variant in symbol_variants for translated in in_word_leet_folds(variant)
+        translated
+        for variant in symbol_variants
+        for translated in in_word_leet_folds(variant, mints_governed_term=_mints_governed_term)
     }
 
     # Add only reviewed ASCII lookalike folds. These variants are safety-scan

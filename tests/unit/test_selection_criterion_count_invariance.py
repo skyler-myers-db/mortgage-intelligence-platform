@@ -26,6 +26,15 @@ same decision with and without a count, because a count is orthography, not a
 selection criterion. That is strictly stronger than pinning the two strings
 that happened to be reported -- it is what makes "top 20", "best 25" and
 "first 5" correct for the same reason as "top 10".
+
+The property holds for a count written as ONE alphanumeric token, which is
+every form the product actually produces, including the fused ones
+(``top-10``, ``30-year``, ``2nd``, ``10k``, ``Q3``, ``203k``). It does NOT
+hold for a count carrying a comma or a percent: ``top 1,000`` and ``top 10%``
+sit outside both grammars, so they are neither recognized as reviewed nor
+refused as a directive. That asymmetry predates this work and is unchanged by
+it -- both forms behave identically at 7612b021 -- and closing it means
+widening the refusing prefix too, which needs its own false-positive sweep.
 """
 
 from __future__ import annotations
@@ -64,12 +73,42 @@ _COUNT_PAIRS = (
         "identify the top 100 borrowers with the highest potential",
         "identify the top borrowers with the highest potential",
     ),
+    # Counts fused to a letter. A lead-in built from letters-OR-digits
+    # alternatives cannot match these at all, so the reviewed directive stops
+    # being recognized and refuses while its spaced form is allowed.
+    (
+        "identify the top-10 borrowers with the highest potential",
+        "identify the top borrowers with the highest potential",
+    ),
+    (
+        "Identify the top-10 borrowers with eczema",
+        "Identify the top borrowers with eczema",
+    ),
+    (
+        "Identify the top-25 borrowers with diabetes",
+        "Identify the best borrowers with diabetes",
+    ),
+)
+
+# Mortgage prose is full of tokens that fuse digits to letters. Every one of
+# these refused at the count-invariance commit while its spaced or unnumbered
+# form was allowed; ``30-year`` is the most common adjective in the domain and
+# would have reached a lender demo. Found by adversarial review, 2026-08-12.
+_MIXED_TOKEN_DIRECTIVES = (
+    "Show me the top-10 borrowers with the highest potential",
+    "Show me 30-year fixed borrowers with strong equity",
+    "Show me 2nd lien borrowers with strong equity",
+    "Show me the top 10k borrowers with strong equity",
+    "Show me Q3 borrowers with strong equity",
+    "Show me FHA 203k borrowers with strong equity",
 )
 
 # Health targeting behind a count. Every one is refused only because the
 # population-directive prefix admits digits.
 _MUST_REFUSE = (
     "Identify the top 10 borrowers with eczema",
+    "Identify the top-10 borrowers with eczema",
+    "Identify the top-25 borrowers with diabetes",
     "Identify the top 20 borrowers with eczema",
     "Rank the best 25 borrowers with diabetes",
     "Pick the first 5 borrowers with asthma",
@@ -81,6 +120,8 @@ _MUST_REFUSE = (
 _MUST_ALLOW = (
     "identify the top 10 borrowers with the highest potential",
     "identify the top 100 borrowers with the highest potential",
+    "identify the top-10 borrowers with the highest potential",
+    *_MIXED_TOKEN_DIRECTIVES,
 )
 
 

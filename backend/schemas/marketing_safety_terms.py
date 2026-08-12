@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from backend.schemas.marketing_selection_criteria import (
+from backend.schemas.marketing_selection_reviewed_attributes import (
     REVIEWED_ATTRIBUTE_PURPOSE_FRAGMENT,
     REVIEWED_MORTGAGE_ATTRIBUTE_LIST_FRAGMENT,
 )

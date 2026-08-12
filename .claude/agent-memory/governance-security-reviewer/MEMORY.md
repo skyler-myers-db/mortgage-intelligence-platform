@@ -4,3 +4,5 @@
 - [R6-09 health disclosure scope](project_r6_09_health_disclosure_scope.md) — R6-09 covers anonymous recon only; test new authenticated-health keys against lineage/data-estate (no auth dep) for marginal exposure
 - [Guard regex private copies](project_guard_regex_private_copies.md) — round-6 Genie fixes never reached 5 files holding stale title-case/9-digit copies; grep every copy before changing a shared validator
 - [Mask/guard separator parity + control values](project_mask_guard_separator_parity.md) — detector reads space as `[- ]`, guards written with a literal space launder; and every exemption sweep needs a non-exempt control city
+- [Leet fold: position vs provenance](project_leet_fold_position_vs_provenance.md) — digit-adjacency scoping opens `mus 1 im`; provenance is the axis, and a bare rejoined token still misses context-gated banks
+- [Guard-diff verification method](project_guard_diff_verification_method.md) — git-archive trees + file scripts only (`python -c` ignores PYTHONPATH); shared scratchpad and live worktree both shift under you

@@ -13,101 +13,13 @@ from backend.schemas.marketing_selection_reviewed_analytics import (
     _REVIEWED_READ_ONLY_ANALYTIC_PATTERNS,
     _REVIEWED_WHY_ASSESSMENT_PREAMBLE_RE,
 )
-
-REVIEWED_MORTGAGE_ATTRIBUTE_FRAGMENT = (
-    # An aggregate qualifier is a DESCRIPTOR of a reviewed attribute, not a new
-    # selection criterion: "average rate spread" selects on rate spread exactly
-    # as "rate spread" does. These were admitted on the opportunity/lead-score
-    # alternative below and nowhere else, so the same aggregate flipped every
-    # OTHER reviewed attribute to unreviewed and the prompt failed closed.
-    #
-    # Live on paychex 2026-08-11: "Rank our segments by average rate spread."
-    # was refused with "it is outside the reviewed Module 0 vocabulary" in
-    # ~1s, before any repository call -- while
-    # `_canonical_mean_rate_spread_by_segment_scope` already matched that exact
-    # string and its canonical SQL was sitting there unreachable. Measured
-    # matrix: `rate spread` passed bare and with "high", and refused with
-    # "average", "mean" and "highest"; `home equity`, `LTV`, `loan balance` and
-    # `property value` behaved the same way.
-    #
-    # This does NOT weaken the fail-closed default. The attribute alternation
-    # below is unchanged, so an UNREVIEWED attribute stays unreviewed with or
-    # without a qualifier -- "average credit score" still refuses, and
-    # ``test_aggregate_qualifiers_never_admit_an_unreviewed_attribute`` pins it.
-    r"(?:(?:average|avg|mean|median|typical|high(?:est)?|low(?:est)?|top|bottom)\s+)?"
-    r"(?:(?:high|strong|substantial|sufficient|available|usable)\s+(?:home[- ]?)?equity|"
-    r"substantial\s+modeled\s+(?:home[- ]?)?equity|"
-    r"(?:high|low|rising|falling|current|elevated)\s+"
-    r"(?:mortgage\s+)?(?:rates?|payments?)|"
-    r"(?:high|low|current)?\s*(?:ltv|loan[- ]?to[- ]?value(?:\s+ratio)?)|"
-    r"(?:current|high|low|remaining|outstanding)?\s*(?:loan|mortgage)\s+balances?|"
-    r"(?:listed|active[- ]?listing)\s+(?:homes?|properties)|"
-    r"(?:active\s+)?(?:property|home)\s+listings?|"
-    r"(?:strong|high|positive|current)?\s*rate[- ]?spreads?|"
-    r"(?:refinance|refi|mortgage)\s+economics|"
-    r"(?:high|low|current)?\s*(?:property|home)\s+values?|"
-    r"(?:competitor|second|existing)\s+liens?|"
-    r"(?:heloc|home[- ]?equity)\s+(?:intent|propensity)|"
-    # Governed Module 0 scoring/eligibility columns (2026-08-07): these are
-    # reviewed product attributes (opportunity_score, marketing_eligible,
-    # the >=35% HELOC-eligibility floor), not unknown-criterion surface.
-    r"(?:high(?:est)?|top|low(?:est)?|average|mean)?\s*(?:opportunity|lead)\s+scores?|"
-    r"marketing[- ]?eligib(?:le|ility)|"
-    r"(?:heloc|home[- ]?equity)[- ]?eligib(?:le|ility)|"
-    r"(?:an?\s+)?helocs?|(?:an?\s+)?home[- ]?equity\s+lines?(?:\s+of\s+credit)?|"
-    r"eligib(?:le|ility)\s+for\s+(?:an?\s+)?(?:heloc|refi(?:nance)?|home[- ]?equity(?:\s+line)?)|"
-    r"timely\s+retention\s+review\s+signal|"
-    r"(?:reviewed|eligible)\s+segment\s+membership|"
-    # Modeled potential/upside is the product's own scoring concept
-    # (opportunity score), phrased the way growth leaders ask for it. "the
-    # top 10 borrowers with the highest potential" failed closed as an
-    # unknown criterion (live capture, 2026-08-08).
-    r"(?:the\s+)?(?:absolute\s+)?"
-    r"(?:high(?:est)?|top|strong(?:est)?|great(?:est)?|most|best)?\s*"
-    r"(?:refi(?:nance)?|heloc|growth|opportunity|conversion)?\s*"
-    r"(?:potential|upside)|"
-    # Answer-format adverbials: "recommend the best offer for each with
-    # reasoning" asks for an explained answer, not a selection criterion.
-    # The ambiguous-relationship grammar reads "with <object>" as a
-    # criterion, so the closed adverbial vocabulary lives here (same
-    # capture).
-    r"(?:(?:full|clear|detailed|complete|supporting)\s+)?"
-    r"(?:reasoning|rationale|justifications?|explanations?)|"
-    # Assessment nouns: "evaluate why each borrower is an especially good
-    # candidate" is a why-question about the product's own ranking, but the
-    # declarative co-reference grammar reads "is <X>" as assigning criterion
-    # X. The assessment vocabulary is the product's own ("strong candidate"
-    # already appears in the reviewed analytics shapes). Same capture.
-    r"(?:an?\s+)?(?:especially\s+|particularly\s+|very\s+)?"
-    r"(?:strong|good|great|excellent|prime|ideal|top|promising)\s+"
-    r"(?:candidates?|prospects?|fits?|matches?|opportunit(?:y|ies))|"
-    r"(?:fixed|adjustable)[- ]?rate\s+(?:mortgages?|loans?)|"
-    # Bare "home equity" / "equity percentage". Every other equity alternative
-    # above REQUIRES a qualifier ("strong equity", "substantial equity"), so
-    # "Rank our segments by home equity" -- a plain analytics question about
-    # the signal this product is built on (CLAUDE.md: HELOC/Cash-out
-    # candidates = strong equity) -- failed closed as an unknown criterion,
-    # with or without an aggregate. Deliberately anchored on "home" or on an
-    # explicit percentage noun: bare "equity" on its own is left out because
-    # it is also the DEI sense of the word, and the protected-class terms are
-    # matched before this fragment is ever consulted. Placed last so it cannot
-    # shadow "home equity line of credit" or "home equity intent" above.
-    r"(?:home[- ]?equity|equity\s+(?:pct|percent(?:age)?|share)))"
-)
-REVIEWED_MORTGAGE_ATTRIBUTE_LIST_FRAGMENT = (
-    rf"(?:{REVIEWED_MORTGAGE_ATTRIBUTE_FRAGMENT})"
-    rf"(?:\s+(?:and|or)\s+(?:{REVIEWED_MORTGAGE_ATTRIBUTE_FRAGMENT})){{0,3}}"
-)
-REVIEWED_ATTRIBUTE_PURPOSE_FRAGMENT = (
-    r"(?:\s+for\s+(?:(?:this|the|a)\s+)?"
-    r"(?:(?:refi|refinance|heloc|home[- ]equity|retention|portfolio|purchase|"
-    r"mortgage|loan|servicing)\s+)?(?:campaign|offer|options?|review))?"
+from backend.schemas.marketing_selection_reviewed_attributes import (
+    _REVIEWED_MORTGAGE_ATTRIBUTE_FULL_RE,
+    REVIEWED_ATTRIBUTE_PURPOSE_FRAGMENT,
+    REVIEWED_MORTGAGE_ATTRIBUTE_FRAGMENT,
+    REVIEWED_MORTGAGE_ATTRIBUTE_LIST_FRAGMENT,
 )
 
-_REVIEWED_MORTGAGE_ATTRIBUTE_FULL_RE = re.compile(
-    rf"^(?:{REVIEWED_MORTGAGE_ATTRIBUTE_LIST_FRAGMENT})$",
-    re.IGNORECASE,
-)
 _CRITERION_TAIL = r"(?P<criterion>[^.!?;:]{1,120})"
 _ELIGIBILITY_SUBJECT = (
     r"(?:(?:their|its)\s+|the\s+(?:group|cohort|audience|segment|population|selection)'?s\s+)?"
@@ -454,11 +366,25 @@ _REVIEWED_CONDITIONAL_DIRECTIVE_CRITERION = (
     rf"(?:{REVIEWED_MORTGAGE_ATTRIBUTE_LIST_FRAGMENT})"
     rf"{REVIEWED_ATTRIBUTE_PURPOSE_FRAGMENT}"
 )
-# Words a reviewed directive may open with before naming a population. A COUNT
-# belongs here ("the top 10 borrowers" is "the top borrowers"); the criterion
+# Words a reviewed directive may open with before naming a population. Digits
+# belong here ("the top 10 borrowers" is "the top borrowers"); the criterion
 # AFTER the population still must match the reviewed attribute grammar, so this
-# cannot admit an unreviewed one. See ``test_selection_criterion_count_invariance``.
-_DIRECTIVE_LEAD_IN = r"(?:(?:[a-z][a-z'-]*|\d{1,9})\s+){1,10}"
+# cannot admit an unreviewed one.
+#
+# ONE token class, not letters-or-digits alternatives. Mortgage directives are
+# full of tokens that mix the two -- ``top-10``, ``30-year``, ``2nd`` lien,
+# ``10k`` touches, ``Q3``, FHA ``203k`` -- and an alternation makes each of
+# them unmatchable, so the reviewed directive stops being recognized and
+# refuses while its spaced form is allowed. ``30-year`` alone would have hit a
+# lender demo. ASCII digits only, matching the prefix class in
+# ``_contains_unreviewed_audience_decision``; ``\d`` would also admit
+# non-ASCII digits the rest of this module cannot scan.
+#
+# Counts carrying a comma or percent (``top 1,000``, ``top 10%``) stay outside
+# BOTH grammars -- neither this class nor that prefix admits ``,`` or ``%`` --
+# so they are neither recognized nor refused. Pre-existing and unchanged here;
+# see ``test_selection_criterion_count_invariance``.
+_DIRECTIVE_LEAD_IN = r"(?:[a-z0-9][a-z0-9'-]*\s+){1,10}"
 _REVIEWED_AUDIENCE_DECISION_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(
         rf"^{_DIRECTIVE_LEAD_IN}{_REVIEWED_DIRECTIVE_CRITERION}$",

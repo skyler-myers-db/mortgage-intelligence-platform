@@ -10,8 +10,8 @@ block was caused solely by ``4,140``:
 1. the leetspeak fold applied ``str.maketrans("013457", "oleast")`` to the
    whole string, so the digit run ``140`` became ``lao``;
 2. ``lao`` is a member of the governed national-origin bank;
-3. the separator fold collapsed ``4,140`` to two space-delimited tokens, so
-   ``lao`` stood at a word boundary; and
+3. the comma already bounds that run as a word -- the separator fold is NOT
+   what exposed it, ``a,lao`` matches on its own; and
 4. the national-origin detector needs only a population noun within 120
    characters, which ``borrowers`` supplied.
 
@@ -21,11 +21,18 @@ only one composable purely from the fold alphabet ``{o,l,i,e,a,s,t}``, so this
 was a single collision rather than a systemic hole; the sweep at the bottom of
 this file re-derives that over every bank the scanner consults.
 
-The fix is in :func:`in_word_leet_folds`: a digit run that touches no ASCII
-letter is a number, not an evasion, and cannot mint a protected term. The
-de-obfuscation itself is untouched, which is what ``_LEET_EVASIONS`` exists to
-prove -- every one of those still refuses, and they are the reason the fold is
-in the scanner at all.
+The fix is in :func:`in_word_leet_folds`: an isolated digit run keeps its
+digits when -- and only when -- its folded SPELLING is itself a governed term.
+``lao`` and ``laos`` are that entire reserved set.
+
+The first attempt keyed on POSITION instead, withholding the fold from every
+digit run that touched no letter. It fixed the report and opened a hole:
+``mus 1 im`` is also a digit run touching no letter, its ``1`` folds to a
+harmless ``l``, and it exists only so the scanner's rejoin step can splice
+``muslim`` back together. Adversarial review measured 123 protected terms
+going fully open on the Ask Genie posture, which has no unknown-criterion
+backstop. ``_LEET_EVASIONS`` and ``_SPLIT_WORD_LEET_EVASIONS`` are the two
+halves of the corpus that keep both directions honest.
 """
 
 from __future__ import annotations
@@ -35,7 +42,10 @@ from itertools import product
 
 import pytest
 
-from backend.schemas._validators_protected_class import protected_class_marketing_reason
+from backend.schemas._validators_protected_class import (
+    _mints_governed_term,
+    protected_class_marketing_reason,
+)
 from backend.schemas.marketing_text_normalization import in_word_leet_folds
 from backend.services.genie_message_policy import genie_visible_text_unsafe
 from backend.services.genie_place_dimension import (
@@ -97,6 +107,21 @@ _LEET_EVASIONS = (
     # requiring letters on BOTH sides would let these two through.
     "Target 4sian homeowners for this campaign.",
     "Prioritize latin0 homeowners for this campaign.",
+)
+
+# A digit substitution PLUS the split-word evasion the rejoin step was
+# written for. The digit then touches no letter, so a POSITION-keyed rule
+# leaves it alone and the halves never rejoin. All six rendered on the Ask
+# Genie posture under that rule; the reserved-spelling rule folds them,
+# because ``l``/``a``/``e`` are not governed terms. Adversarial review caught
+# this before release (2026-08-12).
+_SPLIT_WORD_LEET_EVASIONS = (
+    "Target mus 1 im homeowners for this campaign.",
+    "Target mus.1.im homeowners for this campaign.",
+    "Target b 1 ack homeowners for this campaign.",
+    "Target 4 sian homeowners for this campaign.",
+    "Target as 14 n homeowners for this campaign.",
+    "Prioritize latin 0 homeowners for this campaign.",
 )
 
 # The digits both reviewed tables translate; the other four never folded.
@@ -187,15 +212,73 @@ def test_in_word_leet_evasions_stay_withheld_at_the_genie_surface(evasion: str) 
     assert genie_visible_text_unsafe(evasion) is True
 
 
+@pytest.mark.parametrize("evasion", _SPLIT_WORD_LEET_EVASIONS)
+def test_split_word_leet_evasions_refuse_as_a_fair_lending_finding(evasion: str) -> None:
+    """The regression the in-word rule introduced, pinned on BOTH postures.
+
+    The analytics posture is the one that mattered: without it these read as
+    ``unreviewed_criterion`` on the campaign surface, which is still a refusal
+    and would have hidden the hole. Ask Genie bypasses that state machine, so
+    only ``protected_class`` keeps them out of a rendered answer.
+    """
+
+    assert protected_class_marketing_reason(evasion) == "protected_class"
+    assert (
+        protected_class_marketing_reason(evasion, assume_reviewed_read_only_analytics=True)
+        == "protected_class"
+    )
+
+
+@pytest.mark.usefixtures("governed_cities")
+@pytest.mark.parametrize("evasion", _SPLIT_WORD_LEET_EVASIONS)
+def test_split_word_leet_evasions_stay_withheld_at_the_genie_surface(evasion: str) -> None:
+    assert genie_visible_text_unsafe(evasion) is True
+
+
+def test_only_a_number_that_spells_a_governed_term_is_withheld() -> None:
+    """The reserved-spelling rule itself, and its blast radius.
+
+    ``lao`` and ``laos`` are the whole reserved set, so those numbers keep
+    their digits; every other fold still happens, which is what leaves ``1``
+    in ``mus 1 im`` free to become the ``l`` that rejoins ``muslim``. A rule
+    keyed on position instead of spelling cannot separate those two.
+    """
+
+    def fold(value: str) -> set[str]:
+        return in_word_leet_folds(value, mints_governed_term=_mints_governed_term)
+
+    assert _mints_governed_term("lao") is True
+    assert _mints_governed_term("laos") is True
+    for harmless in ("l", "i", "e", "a", "s", "o", "t"):
+        assert _mints_governed_term(harmless) is False, harmless
+
+    # Reserved: the governed spelling keeps its digits, whole literal and per
+    # group. The other reading of ``1`` is kept only because it is provably
+    # harmless -- ``iao`` and ``i,aos`` are not governed terms.
+    assert "lao" not in fold("140")
+    assert "140" in fold("140")
+    assert "a,lao" not in fold("4,140")
+    assert "4,140" in fold("4,140")
+    assert "l,aos" not in fold("1,405")
+    assert "1,405" in fold("1,405")
+    # Not reserved: folds exactly as before, so the rejoin still works.
+    assert "mus l im" in fold("mus 1 im")
+    assert fold("3") == {"e"}
+    assert fold("w0men") == {"women"}
+
+
 @pytest.mark.parametrize(
     ("value", "expected"),
     (
-        # All-digit runs are left alone, whatever their separators.
-        ("4,140", {"4,140"}),
-        ("140", {"140"}),
-        ("1,405 borrowers", {"1,405 borrowers"}),
-        ("3,000 and 4,500", {"3,000 and 4,500"}),
-        # A run touching a letter folds, and ``1`` yields both readings.
+        # Reserved SPELLINGS keep their digits -- but only for the table that
+        # spells the governed term. ``1`` also reads as ``i``, and ``iao`` is
+        # not governed, so that reading still folds and is harmless.
+        ("140", {"140", "iao"}),
+        ("4,140", {"4,140", "a,iao"}),
+        ("1,405 borrowers", {"1,405 borrowers", "i,aos borrowers"}),
+        # Nothing governed here, so an ordinary number folds as it always did.
+        ("3,000 and 4,500", {"e,ooo and a,soo"}),
+        # A run touching a letter folds regardless.
         ("w0men", {"women"}),
         ("mus1im", {"musiim", "muslim"}),
         ("140k", {"laok", "iaok"}),
@@ -203,24 +286,41 @@ def test_in_word_leet_evasions_stay_withheld_at_the_genie_surface(evasion: str) 
     ),
 )
 def test_in_word_leet_folds_contract(value: str, expected: set[str]) -> None:
-    assert in_word_leet_folds(value) == expected
+    assert in_word_leet_folds(value, mints_governed_term=_mints_governed_term) == expected
+
+
+def test_no_bare_number_survives_as_a_governed_term() -> None:
+    """The property, exhaustively, at the function that owns it.
+
+    Not "a number is never rewritten" -- it usually is, and must be, so the
+    rejoin step keeps working. The property is narrower and is the one that
+    matters: whatever a bare number folds to, it is never a governed term.
+    """
+
+    for length in range(1, 5):
+        for combination in product(_FOLDABLE_DIGITS, repeat=length):
+            digits = "".join(combination)
+            for shape in (digits, f"{digits} ", f" {digits}", f"4,{digits}"):
+                for folded in in_word_leet_folds(
+                    shape, mints_governed_term=_mints_governed_term
+                ):
+                    for token in folded.replace(",", " ").split():
+                        assert not _mints_governed_term(token), (shape, folded, token)
 
 
 def test_no_bare_number_can_mint_a_protected_term() -> None:
-    """Re-derive the scope claim instead of trusting it.
+    """The same property where it is actually decided, across every bank.
 
-    Sweeps every foldable digit token up to length four past the scanner, in
-    the narrative shape that triggered the report -- so the search is over
-    numbers the product can actually print, not over the letters they used to
-    become. ``140`` and ``1405`` are both in here, so this is red before the
-    fix and green after it, across every bank the scanner consults rather than
-    just the national-origin one the report traced.
+    Sweeps foldable digit tokens through the scanner in the narrative shape
+    that triggered the report, so the search is over numbers the product can
+    print rather than over the letters they used to become. ``140`` and
+    ``1405`` are both here, which is what makes this red before the fix.
 
-    Four is the useful bound, not a budget compromise: a comma group is at
-    most three digits, the leading group at most three more, and a run longer
-    than that only occurs in an unformatted number, which has no separator to
-    give the folded text a word boundary. After the fix the length stops
-    mattering at all -- an all-digit run is never folded, whatever its size.
+    It cannot fail while the fold is the identity on bare numbers -- the test
+    above proves that separately -- so treat this as the integration half:
+    it is what notices if some LATER stage of the pipeline starts minting
+    letters from digits again, the way ``letter_backed_leet_windows`` could
+    have without its provenance filter.
     """
 
     blocked = [

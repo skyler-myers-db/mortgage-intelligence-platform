@@ -5,3 +5,4 @@
 - [Live signoff recipe for deployed mip-app](project_live_signoff_recipe.md) — UI IS headless-drivable via bearer header (2026-08-07 correction) + auth mint + Genie/feedback/capabilities/growth-agent contracts.
 - [Reconciling confusing pytest count deltas](project_count_delta_reconciliation.md) — diff JUnit test-id SETS (not counts) + check baseline commit's graph position; separates new/removed/skip-flip/pre-baseline effects.
 - [Live browser signoff operational notes](project_browser_signoff_ops.md) — Playwright MCP is repo-sandboxed (screenshot relative then mv); admin capabilities probe takes ~40s; topbar gap = measure form box AND input.
+- [Guard regression harness method](project_guard_regression_harness.md) — two-tree `git archive` differential + fast probe; scratchpad is SHARED with sibling agents and gets clobbered.
