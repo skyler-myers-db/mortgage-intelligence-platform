@@ -139,6 +139,35 @@ US_STATE_NAMES: tuple[str, ...] = (
 )
 
 
+# Governed population and grain nouns. A title-case run followed by one of
+# these is being used as a SCOPE ("Which Boise borrowers ..."), not named as a
+# person -- nobody writes "Which <person> borrowers".
+#
+# Needed because the place half of the strip can only recognise geography the
+# warehouse actually carries, and users ask about places outside the refreshed
+# footprint constantly. Measured 2026-08-12 over 720 prompts naming 18 real US
+# cities outside the 6-state coverage: 466 refused (64.7%), 412 of them as PII
+# -- "Which Boise borrowers are in the money?" answered with "I do not return
+# borrower names, street-level addresses ...". The honest answer is the
+# geography router's "outside the current refreshed data footprint", which is
+# what the question gets once the guard stops reading it as an identity.
+#
+# Safe by the same argument as the place half: the strip removes only the
+# leading function word, so a real name pair behind it still scans in full
+# ("Which John Smith borrowers" -> "John Smith borrowers" -> caught).
+_GOVERNED_POPULATION_NOUNS: tuple[str, ...] = (
+    # fmt: off
+    "borrowers", "borrower", "homeowners", "homeowner", "customers", "customer",
+    "leads", "lead", "candidates", "candidate", "prospects", "prospect",
+    "households", "household", "clients", "client", "owners", "owner",
+    "cities", "city", "counties", "county", "states", "state", "metros",
+    "metro", "markets", "market", "zips", "zip", "neighborhoods",
+    "segments", "segment", "cohorts", "cohort", "properties", "property",
+    "loans", "loan", "accounts", "account", "opportunities", "opportunity",
+    # fmt: on
+)
+
+
 @lru_cache(maxsize=8)
 def _sentence_initial_place_strip_pattern(place_terms: tuple[str, ...]) -> re.Pattern[str] | None:
     """Strip a sentence-opening function word ONLY before a known place.
@@ -158,12 +187,20 @@ def _sentence_initial_place_strip_pattern(place_terms: tuple[str, ...]) -> re.Pa
     cleaned = sorted({term.strip() for term in place_terms if term.strip()}, key=len, reverse=True)
     if not cleaned:
         return None
+    known_place = r"(?i:" + "|".join(re.escape(term) for term in cleaned) + r")(?![A-Za-z0-9])"
+    # A title-case run used as a SCOPE for a governed population noun.
+    scoped_population = (
+        r"[A-Z][a-z]{1,30}(?:\s+[A-Z][a-z]{1,30}){0,2}\s+"
+        r"(?i:" + "|".join(_GOVERNED_POPULATION_NOUNS) + r")(?![A-Za-z0-9])"
+    )
     return re.compile(
         r"(?:(?<=^)|(?<=[.!?;:\n]))(\s*)(?:"
         + "|".join(_SENTENCE_INITIAL_FUNCTION_WORDS)
-        + r")\s+(?=(?i:"
-        + "|".join(re.escape(term) for term in cleaned)
-        + r")(?![A-Za-z0-9]))"
+        + r")\s+(?=(?:"
+        + known_place
+        + r"|"
+        + scoped_population
+        + r"))"
     )
 # Title-case pairs ending in these words are never person names here:
 # admin/geographic place-name suffixes (Lake Forest, Grand Prairie, Coral
