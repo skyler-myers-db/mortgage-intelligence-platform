@@ -148,13 +148,32 @@ def protected_prompt_match(question: str) -> str | None:
 
     The governed mask reaches ONE scanner: ``protected_class_marketing_reason``,
     the one that produces those three false positives. The explicit term bank
-    and the proxy scan above it deliberately keep reading the UNMASKED prompt.
-    That is not caution for its own sake -- 16 of the 27 terms in
+    and the proxy scan above it keep reading the UNMASKED prompt.
+
+    There are two independent layers here, and it is worth being exact about
+    which does what, because an earlier version of this docstring credited the
+    wrong one.
+
+    Layer 1 is the ADMISSION GATE in the resolver. 16 of the 27 terms in
     ``_PROTECTED_PROMPT_TERMS`` (``race``, ``gender``, ``male``, ``ethnicity``,
-    ...) have no counterpart in the resolver's canary bank, so a gold city
-    named ``RACE`` could clear that admission gate and would silently disarm
-    this loop if the mask reached it. Masking the narrowest scanner closes
-    that by construction instead of by a second gate.
+    ...) once had no counterpart in its canary bank, so a gold city named
+    ``RACE`` could clear it. Folding the bank into the canary vocabulary closed
+    that, and it is now the layer that stops a hostile or unlucky dimension
+    from ever reaching the mask.
+
+    Layer 2 is this ordering -- the term bank and the proxy scan read the
+    prompt BEFORE the governed mask touches it.
+
+    Measured 2026-08-12, mutating each independently over 1,088 probes (8
+    sentence shapes x 8 places x 13 terms, against the live-shaped dimension
+    and against a hostile dimension built entirely from the bank's own
+    vocabulary): moving the mask in front of this loop changes 0 verdicts while
+    the gate holds, and opening the gate changes 0 verdicts while this ordering
+    holds. Break BOTH and ``Show me white borrowers in White Plains`` stops
+    being a fair-lending refusal. Neither layer is redundant; each is what
+    makes the other's failure survivable. ``test_the_gate_refuses_every_
+    protected_term_as_a_city`` pins the first and ``test_an_overlapping_place_
+    never_disarms_the_term_it_contains`` pins the pair.
     """
 
     scannable = _mask_safe_phrases(question)
@@ -220,21 +239,34 @@ def identity_prompt_match(question: str) -> bool:
 def _sentence_initial_place_terms() -> tuple[str, ...]:
     """Places before which an opening ``Which``/``The`` is grammar, not a name.
 
-    US states plus the live governed city dimension, MINUS anything sharing a
-    token with the person-name lexicons — the same gate #208 put on the other
-    two positional strips.
+    US states plus the live governed city dimension, UNFILTERED. This list is
+    deliberately not gated on the person-name lexicons the way #208 gated the
+    other two positional strips, and the difference is worth stating because an
+    earlier version of this docstring claimed the opposite.
 
-    That exclusion is the whole safety property here. Recognition is not
-    exemption (the place is never consumed and still reaches every scanner),
-    but the strip removes the word IN FRONT of it, and 229 of the live gold
-    values are single tokens that are also family names. Ungated, "Do Medina
-    qualifies for a HELOC?" lost its pair and rendered — 464 of 468 place
-    terms flipped that way for each of ``Do``/``An``/``No`` (adversarial
-    review, 2026-08-12). ``ELIZABETH`` is in this vocabulary and is the exact
-    example the lexicon helper's own docstring is written around.
+    The gate was tried and removed in #209 for two measured reasons. It removed
+    2 of 468 terms — none of MEDINA, PARKER or KENT is in the 39-name lexicon,
+    so it did not address the hazard it was written for — and it made
+    ``ELIZABETH``, a live gold city, unaskable: +102 refusals for a filter that
+    stopped nothing.
 
-    An unreachable warehouse degrades to the gated state list alone, and an
-    empty list disables the strip entirely.
+    The safety property lives in the FUNCTION-WORD bank instead
+    (``_SENTENCE_INITIAL_FUNCTION_WORDS``), which excludes every word attested
+    in first-name position — ``Do``, ``An`` and ``No`` are surname-first
+    Vietnamese and Korean family names, exactly the slot this strip consumes.
+    That is what keeps "Do Medina qualifies for a HELOC?" scanning whole; 229
+    of the live gold values are single tokens that are also family names, so
+    this vocabulary cannot be the gate. Recognition is not exemption: the place
+    itself is never consumed and still reaches every scanner.
+
+    The lookahead must stay a CLOSED vocabulary. Removing the leader is
+    harmless for a name of two or more tokens and fatal for a one-token name,
+    because ``_TITLECASE_HUMAN_NAME_RE`` needs a pair and nothing is left to
+    pair with. An open title-case run here reopens the hole for every surname
+    (tried in #214, withdrawn).
+
+    An unreachable warehouse degrades to the state list alone, and an empty
+    list disables the strip entirely.
     """
 
     try:
