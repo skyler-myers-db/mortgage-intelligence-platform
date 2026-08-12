@@ -24,7 +24,7 @@ PROTECTED_CLASS_MARKETING_RE = re.compile(
     r"disab(?:ility|ilities)|"
     r"disabled\s+(?:adults?|applicants?|borrowers?|customers?|homeowners?|people|persons?)|"
     r"(?:adults?|applicants?|borrowers?|customers?|homeowners?|people|persons?)\s+"
-    r"(?:who\s+are\s+)?disabled|wheelchair(?:\s+users?)?|elderly|ethnic(?:ity|ities)?|"
+    r"(?:who\s+are\s+)?disabled|wheelchair(?:s|\s+users?)?|elderly|ethnic(?:ity|ities)?|"
     r"familial status(?:es)?|families? with children|family status(?:es)?|"
     r"parents?|dependents?|"
     r"(?:families?|households?|caregivers?)\s+(?:(?:raising|with|of)\s+"
@@ -186,12 +186,87 @@ PROTECTED_CLASS_PROXY_PATTERNS: tuple[re.Pattern[str], ...] = (
         re.IGNORECASE,
     ),
     re.compile(r"\b(?:immigrants?|refugees?)\b", re.IGNORECASE),
-    re.compile(r"\bmosques?\b", re.IGNORECASE),
+    # Every house of worship, not just one. Listing `mosques` alone was an
+    # asymmetry an auditor would (rightly) read as targeting a single faith.
+    re.compile(
+        r"\b(?:mosques?|synagogues?|temples?|churches|church|gurdwaras?|parishes|places?\s+of\s+worship)\b",
+        re.IGNORECASE,
+    ),
     re.compile(
         r"\b(?:section\s*8(?:\s+housing)?|housing[- ]vouchers?|public[- ]assistance)\b",
         re.IGNORECASE,
     ),
 )
+# Geographic-composition proxies: selecting an audience by the demographic or
+# economic make-up of a PLACE. This is the textbook redlining shape and it
+# reads as innocuous business language, which is why each phrasing has to be
+# enumerated. Adversarial review 2026-08-11 measured every string below passing
+# the guard cleanly, including the canonical "Target minority neighborhoods."
+#
+# SCANNED CLAUSE-LOCALLY, never against the separator-folded superset -- see
+# ``contains_geographic_composition_proxy_text``. The folded variant turns
+# "Our product set is diverse. Communities we serve are growing." into
+# "diverse Communities", and an earlier version of this bank filed a
+# fair-lending finding on that benign prose. Composition adjectives are
+# ordinary predicate adjectives; they end sentences all the time.
+#
+# Two words are deliberately ABSENT. "underserved" and "distressed" are CRA
+# vocabulary -- "Compare approval rates in underserved neighborhoods" is an
+# analysis a lender is REQUIRED to run to detect disparate impact, and
+# refusing it would block the self-audit this guard exists to support.
+_COMPOSITION_ADJECTIVE = (
+    r"(?:(?:ethnic(?:ally)?|racial(?:ly)?|cultural(?:ly)?|economic(?:ally)?)[\s-]+)?"
+    r"(?:diverse|diversity|multicultural|mixed|minority|minorities|"
+    r"high[\s-]minority|majority[\s-]minority|"
+    r"up[\s-]and[\s-]coming|transitional|changing|inner[\s-]city|urban[\s-]core|"
+    r"gentrif(?:ied|ying|ication)|"
+    r"low[\s-]income|lower[\s-]income|affluent|wealthy|"
+    r"working[\s-]class|blue[\s-]collar|high[\s-]poverty)"
+)
+# Place nouns at every grain this product actually queries. `markets`, `areas`
+# and `populations` are deliberately EXCLUDED: they are the product's own
+# coverage vocabulary ("rank our growing markets"), and including them turned
+# ordinary portfolio analytics into fair-lending findings.
+_COMPOSITION_PLACE = (
+    r"(?:neighbou?rhoods?|communit(?:y|ies)|districts?|blocks?|"
+    r"(?:census[\s-]+)?tracts?|zips?|zip[\s]*codes?|postal[\s]*codes?|enclaves?|"
+    r"count(?:y|ies)|cit(?:y|ies)|metros?|msas?|states?|suburbs?|boroughs?|"
+    r"corridors?|sides?\s+of\s+town)"
+)
+PROTECTED_CLASS_GEOGRAPHIC_COMPOSITION_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # "diverse neighborhoods", "low-income zip codes", "gentrifying counties"
+    re.compile(rf"\b{_COMPOSITION_ADJECTIVE}\s+{_COMPOSITION_PLACE}\b", re.IGNORECASE),
+    # Reversed: "neighborhoods that are diverse", "zip codes which are affluent"
+    re.compile(
+        rf"\b{_COMPOSITION_PLACE}\s+(?:that|which)\s+are\s+{_COMPOSITION_ADJECTIVE}\b",
+        re.IGNORECASE,
+    ),
+    # "neighborhoods with a high minority share", "tracts with high poverty rates",
+    # "zip codes with above-average minority representation"
+    re.compile(
+        rf"\b{_COMPOSITION_PLACE}\s+with\s+(?:an?|the)?\s*"
+        r"(?:high|large|significant|above[\s-]average|predominantly|mostly|mainly|"
+        r"heavy|growing)\s+"
+        r"(?:concentrations?\s+of\s+|shares?\s+of\s+|numbers?\s+of\s+)?"
+        r"(?:diverse|diversity|minorit(?:y|ies)|immigrants?|poverty|"
+        r"hispanic|latin(?:o|a|x)s?|black|asian|white|foreign[\s-]born)\b",
+        re.IGNORECASE,
+    ),
+    # Coded phrases that ARE the place, with no separate place noun:
+    # "target the urban core", "build a campaign for the inner city".
+    re.compile(r"\b(?:urban[\s-]core|inner[\s-]city|the\s+barrio|the\s+ghetto)\b", re.IGNORECASE),
+    # Place + verb + composition noun: "neighborhoods undergoing gentrification",
+    # "tracts experiencing demographic change".
+    re.compile(
+        rf"\b{_COMPOSITION_PLACE}\s+"
+        r"(?:undergoing|experiencing|seeing|facing|in)\s+"
+        r"(?:rapid\s+|significant\s+)?"
+        r"(?:gentrification|demographic\s+(?:change|shift|transition)|"
+        r"racial\s+(?:change|transition)|white\s+flight|decline)\b",
+        re.IGNORECASE,
+    ),
+)
+
 PROTECTED_CLASS_PROXY_SAFE_CONTEXT_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(
         r"\bspanish[- ]speaking\s+(?:loan officers?|staff|representatives?|"
@@ -212,6 +287,18 @@ PROTECTED_CLASS_PROXY_HARD_TARGETING_RE = re.compile(
     r"\b(?:target|targeting|prioritize|rank|score|segment|filter|exclude|select|"
     r"redline|steer|solicit|prospect|market to|advertise to|campaign to|outreach to|"
     r"contact)\b",
+    re.IGNORECASE,
+)
+# Audience formation phrased as BUILDING rather than targeting. "Build a
+# campaign for the inner city" is the same instruction as "target the inner
+# city", and only the second was caught. Deliberately NOT added to
+# PROTECTED_CLASS_PROXY_HARD_TARGETING_RE above: that regex has other consumers,
+# and widening it there refused an ordinary "Build a campaign for in-the-money
+# borrowers in Illinois" through an unrelated path.
+GEOGRAPHIC_COMPOSITION_AUDIENCE_FORMATION_RE = re.compile(
+    r"\b(?:build|create|launch|design|set\s+up|run|make)\s+(?:an?\s+|the\s+)?"
+    r"(?:campaign|outreach|mailer|list|audience|segment|push|blast)\s+"
+    r"(?:for|in|around|targeting|aimed\s+at)\b",
     re.IGNORECASE,
 )
 PROTECTED_CLASS_PROXY_POPULATION_RE = re.compile(
