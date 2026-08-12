@@ -12,6 +12,7 @@ from backend.schemas.marketing_selection_reviewed_analytics import (
     _REVIEWED_ANALYSIS_PREAMBLE_RE,
     _REVIEWED_READ_ONLY_ANALYTIC_PATTERNS,
     _REVIEWED_WHY_ASSESSMENT_PREAMBLE_RE,
+    GOVERNED_COUNT_FRAGMENT,
 )
 from backend.schemas.marketing_selection_vocabulary import (
     _REVIEWED_MORTGAGE_ATTRIBUTE_FULL_RE,
@@ -366,17 +367,48 @@ _REVIEWED_CONDITIONAL_DIRECTIVE_CRITERION = (
     rf"(?:{REVIEWED_MORTGAGE_ATTRIBUTE_LIST_FRAGMENT})"
     rf"{REVIEWED_ATTRIBUTE_PURPOSE_FRAGMENT}"
 )
+# The words in front of a reviewed criterion. A COUNT belongs to this run:
+# "identify the top 10 borrowers whose ..." is the same reviewed grammar as
+# "identify the top borrowers whose ...", and a letters-only lead-in refused
+# the first while allowing the second. This is the ALLOW-side twin of the same
+# defect ``_drop_audience_count`` fixes on the refuse side, and both halves
+# have to move together: repairing only the refuse side turns 288 silent leaks
+# into 288 false refusals of ordinary top-N analytics.
+#
+# It admits no criterion vocabulary. Whatever follows this run is still matched
+# whole against the closed reviewed alternation, so "identify the top 10
+# borrowers with eczema" does not match here and falls through to the
+# fail-closed states exactly as "identify the top borrowers with eczema" does.
+#
+# ONE token class, not "all letters or all digits". Two homogeneous
+# alternatives reintroduce the very accident this change exists to remove: the
+# criterion is also scanned over de-obfuscated variants folded with
+# ``str.maketrans("013457", "oleast")``, and that fold produces MIXED tokens
+# which match neither alternative --
+#
+#     100     -> loo      both slots accept
+#     1,000   -> l,ooo    letters slot rejects the comma, digits slot rejects
+#                         the letters -> "Rank the top 1,000 borrowers with the
+#                         highest potential." refused while the comma-free form
+#                         passed
+#     022     -> o22      same
+#
+# A slot that must accept a number has to survive the fold, or the fold has to
+# run before the slot is matched. This is the ``top 10 -> top lo`` accident
+# that made the one pre-existing count pin green for the wrong reason, and it
+# was reproduced here in the first draft of this fix.
+_REVIEWED_DIRECTIVE_LEAD_IN = r"(?:[a-z0-9#][a-z0-9,'.#-]*\s+){1,10}"
 _REVIEWED_AUDIENCE_DECISION_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(
-        rf"^(?:[a-z][a-z'-]*\s+){{1,10}}{_REVIEWED_DIRECTIVE_CRITERION}$",
+        rf"^{_REVIEWED_DIRECTIVE_LEAD_IN}{_REVIEWED_DIRECTIVE_CRITERION}$",
         re.IGNORECASE,
     ),
     re.compile(
-        rf"^(?:[a-z][a-z'-]*\s+){{1,10}}{_REVIEWED_CONDITIONAL_DIRECTIVE_CRITERION}$",
+        rf"^{_REVIEWED_DIRECTIVE_LEAD_IN}{_REVIEWED_CONDITIONAL_DIRECTIVE_CRITERION}$",
         re.IGNORECASE,
     ),
     re.compile(
-        rf"^(?:[a-z][a-z'-]*\s+){{1,10}}{_REVIEWED_WHOSE_DIRECTIVE_CRITERION}$",
+        rf"^{_REVIEWED_DIRECTIVE_LEAD_IN}{_REVIEWED_WHOSE_DIRECTIVE_CRITERION}$",
         re.IGNORECASE,
     ),
     re.compile(
@@ -436,6 +468,34 @@ _AFFIRMATIVE_AUDIENCE_DIRECTIVE_RE = re.compile(
     r"(?P<after_population>[^.!?;:]*)$",
     re.IGNORECASE,
 )
+# A freestanding count, in the forms people actually write it. The digits are
+# bounded on the left by something that is not a letter or digit, so a
+# leetspeak substitution INSIDE a word (``w0men``, ``mus1im``, ``3cz3ma``) can
+# never match: in ``3cz3ma`` the run stops at ``3``, the ordinal suffix does not
+# match ``cz``, and the trailing boundary then fails.
+#
+# The marker and the ordinal suffix are consumed WITH the digits. Stripping only
+# the digits left a residue -- ``#``, ``no.``, a stray comma -- and the
+# letters-only test that follows rejected the residue just as it rejected the
+# digits, so "the top #22 borrowers with eczema" went on hiding its criterion.
+# Measured 2026-08-12: 103 leaks for ``#22``, 116 for ``no. 22``, 103 for
+# ``22nd``, 103 for a 13-digit comma-grouped number and 103 for a 40-digit run
+# (the last from a length cap this no longer has).
+#
+# Over-stripping here is safe by construction: the result feeds
+# ``is_population_directive`` ONLY, and recognizing more clauses as directives
+# is monotone toward refusal.
+_AUDIENCE_COUNT_RE = re.compile(
+    rf"(?<![A-Za-z0-9]){GOVERNED_COUNT_FRAGMENT}(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
+# NOT a general "drop punctuation left standing alone" pass. That was tried and
+# it is wrong: "Break down the Investor / Multi-Property segment by state." has
+# a lone ``/`` that no count put there, and erasing it turned a governed
+# segment name into a letters-only run, which made the clause read as a
+# directive and refused two questions in the no-refusal battery. The count
+# pattern consumes its OWN marker and suffix instead, so there is no residue to
+# sweep up and nothing else in the sentence is touched.
 _REVIEWED_DIRECTIVE_POPULATION_PREFIX_RE = re.compile(
     r"^(?:(?:the|reviewed|eligible|qualified|marketing[- ]eligible|highest[- ]scoring)\s*){0,3}$",
     re.IGNORECASE,
@@ -571,6 +631,38 @@ def _is_reviewed_admission_criterion(value: str) -> bool:
     )
 
 
+def _drop_audience_count(prefix: str) -> str:
+    """Remove a freestanding count from the run in front of a population noun.
+
+    ``is_population_directive`` asks whether the words between a verb and a
+    population noun read as an ordinary English run -- whether this is a
+    directive aimed at a population at all. It asked that with a letters-only
+    pattern, so a COUNT broke it, and the criterion that followed was never
+    scanned:
+
+        "Identify the top borrowers with eczema."      -> refused
+        "Identify the top 22 borrowers with eczema."   -> ALLOWED
+
+    A count is a size, not a criterion; "the top 25 borrowers with X" selects
+    on X exactly as "the top borrowers with X" does. Measured on 2026-08-12
+    over 576 probes, 288 leaked -- ``eczema``, ``a hijab``, ``sickle cell
+    trait`` and the rest, through Identify, Show me, List, Find, Give me, Pull,
+    Get, Surface and Highlight. Only ``top 10`` refused, and for the wrong
+    reason: the criterion is also scanned over de-obfuscated variants that fold
+    digits to letters, ``10`` folds to ``lo``, and the fold accidentally
+    restored the letters-only shape. Every N starting with a non-folding digit
+    (2, 6, 8, 9) sailed through. ``test_deep_analysis_question_family`` pinned
+    exactly the one case that passed by accident.
+
+    Only a freestanding run of digits is removed -- never one adjacent to a
+    letter, so ``w0men`` and ``3cz3ma`` are untouched -- and removing it can
+    only make the clause MORE likely to be recognized as a directive, never
+    less. This is the fail-closed direction.
+    """
+
+    return re.sub(r"\s+", " ", _AUDIENCE_COUNT_RE.sub(" ", prefix)).strip()
+
+
 def _contains_unreviewed_audience_decision(
     clause: str,
 ) -> bool:
@@ -695,7 +787,7 @@ def _contains_unreviewed_audience_decision(
         # grammar. Connector words are deliberately constrained at the allow
         # boundary rather than treated as evidence that an unknown criterion is
         # safe.
-        prefix = clause[: candidate.start()].strip()
+        prefix = _drop_audience_count(clause[: candidate.start()].strip())
         is_population_directive = suffix.strip() != "" and (
             _AUDIENCE_FORMATION_ACTION_RE.search(formation_prefix) is not None
             or bool(prefix and re.fullmatch(r"[A-Za-z][A-Za-z' -]{0,100}", prefix))

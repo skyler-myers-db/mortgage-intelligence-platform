@@ -50,10 +50,31 @@ _REVIEWED_ANALYTIC_SIGNAL = (
 _REVIEWED_ANALYTIC_SIGNAL_LIST = (
     rf"{_REVIEWED_ANALYTIC_SIGNAL}(?:\s*,?\s*(?:and\s+)?{_REVIEWED_ANALYTIC_SIGNAL})*"
 )
+# A ranked-cohort count. Grouped with commas or not, and NOT bounded to three
+# digits: "the top 1000 borrowers" and "the top 1,000 borrowers" are the same
+# ordinary ranking question as "the top 100 borrowers", and a 3-digit bound
+# refused both while allowing the third. That is the same defect as the
+# letters-only lead-in in ``marketing_selection_criteria`` -- a COUNT changing
+# whether a clause is recognized -- and it has to be fixed everywhere the count
+# appears or the family stays half-broken.
+#
+# This admits no new vocabulary: what surrounds the count is the same closed
+# analytics shape, so "rank the top 5000 borrowers with eczema" is unaffected
+# and still fails closed.
+#
+# ONE notion of a count, shared by every site that has to recognize one --
+# the refuse-side prefix test and the reviewed lead-in in
+# ``marketing_selection_criteria`` both import it. Keeping separate notions is
+# how this defect keeps reappearing: teach one side that "#22" is a count and
+# not the other, and 60 ordinary questions ("Identify the top #22 borrowers by
+# opportunity score.") start refusing, which is precisely the mirror image of
+# the leak the whole change exists to close.
+GOVERNED_COUNT_FRAGMENT = r"(?:(?:#|nos?\.?)\s*)?[0-9][0-9,.]*(?:st|nd|rd|th)?"
+_REVIEWED_ANALYTIC_COUNT = GOVERNED_COUNT_FRAGMENT
 # "the top 20 (eligible) borrowers" — the cohort noun a planned deep analysis
 # names in nearly every sub-question.
 _REVIEWED_TOP_COHORT = (
-    r"(?:the\s+)?top\s+(?:[0-9]{1,3}\s+)?"
+    r"(?:the\s+)?top\s+(?:" + _REVIEWED_ANALYTIC_COUNT + r"\s+)?"
     r"(?:eligible\s+|marketing[- ]eligible\s+|highest[- ]scoring\s+)?"
     r"(?:borrowers?|leads?|candidates?|opportunities)"
 )
@@ -81,7 +102,7 @@ _REVIEWED_READ_ONLY_ANALYTIC_PATTERNS: tuple[re.Pattern[str], ...] = (
         # reviewed vocabulary means an unknown criterion anywhere breaks the
         # match and the clause fails closed.
         r"^(?:rank|show|list|give\s+me|surface|prioriti[sz]e)\s+(?:me\s+)?(?:the\s+)?"
-        r"(?:top\s+(?:[0-9]{1,3}\s+)?)?"
+        r"(?:top\s+(?:" + _REVIEWED_ANALYTIC_COUNT + r"\s+)?)?"
         rf"(?:{_REVIEWED_PRODUCT_INTENT}(?:[\s-]+(?:{_REVIEWED_PRODUCT_INTENT}|mortgage|loan))?\s+)?"
         r"(?:candidates?|borrowers?|leads?|opportunities)"
         rf"{_REVIEWED_ANALYTIC_LOCATION}"
@@ -162,7 +183,7 @@ _REVIEWED_READ_ONLY_ANALYTIC_PATTERNS: tuple[re.Pattern[str], ...] = (
         # The intent vocabulary is closed, so an unknown criterion cannot ride
         # this shape. Live persona audit 2026-08-07 (sales-manager).
         r"^(?:rank|show|list|give\s+me|surface|prioriti[sz]e)\s+(?:me\s+)?(?:the\s+)?"
-        r"(?:top\s+(?:[0-9]{1,3}\s+)?)?"
+        r"(?:top\s+(?:" + _REVIEWED_ANALYTIC_COUNT + r"\s+)?)?"
         # One or two stacked intent tokens ("in-the-money refi", "purchase
         # mortgage") — still drawn from the same closed vocabulary, so an
         # unknown criterion cannot ride the second slot. Live persona audit
@@ -222,7 +243,7 @@ _REVIEWED_READ_ONLY_ANALYTIC_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(
         r"^(?:chart|plot|graph|visualize|display|show|list|count|rank|order|group|compare|"
         r"break\s+down)\s+(?:me\s+)?(?:the\s+)?"
-        r"(?:(?:top|bottom)\s+(?:[0-9]{1,3}|ten|twenty(?:[- ]five)?)\s+)?"
+        r"(?:(?:top|bottom)\s+(?:" + _REVIEWED_ANALYTIC_COUNT + r"|ten|twenty(?:[- ]five)?)\s+)?"
         rf"{_REVIEWED_ANALYTIC_POPULATION}\s+"
         r"(?:(?:by|grouped\s+by|ordered\s+by|ranked\s+by)\s+)"
         rf"{_REVIEWED_ANALYTIC_DIMENSION}{_REVIEWED_ANALYTIC_LOCATION}$",
@@ -261,7 +282,7 @@ _REVIEWED_READ_ONLY_ANALYTIC_PATTERNS: tuple[re.Pattern[str], ...] = (
         r"(?:a\s+(?:curated\s+)?list\s+of\s+)?(?:the\s+)?"
         r"(?:very\s+|absolute\s+|single\s+)?"
         r"(?:top|best|strongest|highest[- ]potential|most\s+promising)\s+"
-        r"(?:[0-9]{1,3}\s+)?(?:potential\s+)?"
+        r"(?:" + _REVIEWED_ANALYTIC_COUNT + r"\s+)?(?:potential\s+)?"
         rf"(?:{_REVIEWED_PRODUCT_INTENT}\s+)?"
         r"(?:candidates?|borrowers?|leads?|opportunities|prospects?)"
         r"(?:\s+(?:for\s+(?:outreach|contact|review|follow[- ]up)|to\s+contact))?$",
