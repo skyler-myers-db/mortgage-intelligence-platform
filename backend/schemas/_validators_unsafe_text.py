@@ -258,6 +258,7 @@ def contains_unsafe_ai_text(
     assume_reviewed_read_only_analytics: bool = False,
     name_shape_value: str | None = None,
     name_shape_allowed_phrases: Sequence[str] = (),
+    name_shape_guards: Sequence[tuple[str, Sequence[str], Sequence[str]]] = (),
     name_shape_sentence_initial_place_terms: Sequence[str] = (),
     protected_class_allowed_phrases: Sequence[str] = (),
     protected_class_guards: Sequence[tuple[str, Sequence[str], Sequence[str]]] = (),
@@ -310,7 +311,9 @@ def contains_unsafe_ai_text(
         or contains_prompt_injection_text(text)
         or contains_confidential_or_internal_text(text)
         or contains_human_name_shape(
-            mask_governed_phrases(name_shape_text, name_shape_allowed_phrases),
+            mask_governed_phrases(
+                name_shape_text, name_shape_allowed_phrases, name_shape_guards
+            ),
             include_titlecase=include_titlecase,
             sentence_initial_place_terms=name_shape_sentence_initial_place_terms,
         )

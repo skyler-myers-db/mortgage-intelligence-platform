@@ -58,6 +58,10 @@ _LIVE_GOLD_CITIES = (
     "TACOMA",
     "HAWAIIAN GARDENS",
     "INDIAN HEAD PARK",
+    # A nested pair: the short one is exempt, the long one is not.
+    "HAZEL CREST",
+    "EAST HAZEL CREST",
+    "ELK GROVE VILLAGE",
     "BLACK DIAMOND",
     "ALISO VIEJO",
     "FEDERAL WAY",
@@ -522,6 +526,100 @@ def test_a_failed_guard_build_skips_the_mask_entirely(
         assert protected_prompt_match("Tell me about Tacoma's in-the-money borrowers") is not None
     finally:
         _reset_governed_place_dimension_for_tests(None)
+
+
+# A 9,677-question corpus re-sweep plus a 47,936-prompt place x leader sweep
+# (2026-08-12) left these three classes standing after #206 landed.
+_RESIDUALS_NOW_CLEARED = (
+    # ELIZABETH is a live gold city. A person-lexicon filter on the strip's
+    # RECOGNITION vocabulary made it unaskable and unrenderable (+102 refusals)
+    # while removing only 2 of 468 terms and addressing none of the shape its
+    # docstring claimed. The filter is gone; the function-word bank is what
+    # keeps "Do Medina" safe.
+    "Which Elizabeth borrowers are in the money?",
+    "Tell me about Elizabeth borrowers",
+    # HAZEL CREST is exempt; EAST HAZEL CREST is a separate gold city and is
+    # not. Masking the short one out of the long one left "Which East
+    # borrowers", and the HOLE created a fresh title-case pair -- the exemption
+    # manufacturing the refusal it exists to prevent (102 prompts).
+    "Which East Hazel Crest borrowers are in the money?",
+    "Which Elk Grove Village borrowers are in the money?",
+    # Geographic and governed-label formants the pair scan still read as people.
+    "Show me Front Range borrowers",
+    "Rank High Desert leads by opportunity score",
+    "What is the Wasatch Front count?",
+)
+
+_RESIDUAL_NARRATIVES_NOW_RENDER = (
+    "Which Elizabeth borrowers have the highest opportunity score?",
+    "The Front Range accounts for 3,214 in-the-money borrowers.",
+    "The Investor Product segment holds 900 borrowers.",
+    "Competitor Recapture leads the list.",
+)
+
+
+@pytest.mark.usefixtures("governed_cities")
+@pytest.mark.parametrize("prompt", _RESIDUALS_NOW_CLEARED)
+def test_swept_residuals_now_reach_genie(prompt: str) -> None:
+    assert protected_prompt_match(prompt) is None
+    assert identity_prompt_match(prompt) is False
+
+
+@pytest.mark.usefixtures("governed_cities")
+@pytest.mark.parametrize("text", _RESIDUAL_NARRATIVES_NOW_RENDER)
+def test_swept_residual_narratives_now_render(text: str) -> None:
+    assert genie_visible_text_unsafe(text) is False
+
+
+def test_the_structured_path_never_resolves_the_dimension() -> None:
+    """Re-entrancy, pinned with a timeout because the symptom is a HANG.
+
+    The resolver probes cells through ``genie_visible_text_unsafe`` while
+    holding its load lock, so any structured-path call that resolves the
+    dimension deadlocks on a non-reentrant Lock — no assertion fires, CI just
+    times out. Wiring the nesting guards in unconditionally did exactly that
+    on 2026-08-12. This runs the structured path INSIDE a live load and would
+    hang rather than fail if the guard is ever dropped.
+    """
+
+    probed: list[str] = []
+
+    def conflict_probe(value: str) -> bool:
+        probed.append(value)
+        return genie_visible_text_unsafe(value, structured_value=True)
+
+    resolver = GovernedPlaceDimensionResolver(
+        dimension_reader=lambda: ["TACOMA", "HAZEL CREST", "EAST HAZEL CREST"],
+        conflict_predicate=conflict_probe,
+    )
+    _reset_governed_place_dimension_for_tests(resolver)
+    try:
+        assert resolver.conflicting_values() is not None
+        assert probed  # the structured path really ran during the load
+    finally:
+        _reset_governed_place_dimension_for_tests(None)
+
+
+def test_nesting_guard_is_what_clears_the_longer_place(
+    governed_cities: GovernedPlaceDimensionResolver,
+) -> None:
+    """Non-vacuity for the nested-mask fix.
+
+    Without the guard the shorter value is erased out of the longer one and
+    the hole pairs with the sentence-opening word, so this asserts the guard
+    exists AND that the exempt short value is still masked on its own.
+    """
+
+    from backend.schemas._validators_unsafe_text import mask_governed_phrases
+    from backend.services.genie_place_dimension import governed_name_shape_mask_guards
+
+    phrases = tuple(governed_cities.name_shape_safe_values())
+    guards = governed_name_shape_mask_guards(phrases)
+    assert any(phrase == "HAZEL CREST" and left for phrase, left, _ in guards)
+    assert mask_governed_phrases("Which East Hazel Crest borrowers", phrases, guards) == (
+        "Which East Hazel Crest borrowers"
+    )
+    assert mask_governed_phrases("Hazel Crest leads", phrases, guards).strip() == "leads"
 
 
 def test_unreachable_dimension_keeps_the_prompt_guard_closed() -> None:

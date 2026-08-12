@@ -393,6 +393,58 @@ def protected_term_overlap_guards(value: str) -> tuple[tuple[str, ...], tuple[st
     return (tuple(sorted(lefts)), tuple(sorted(rights)))
 
 
+@lru_cache(maxsize=8)
+def _nesting_guards(values: tuple[str, ...], known: tuple[str, ...]) -> tuple[
+    tuple[str, tuple[str, ...], tuple[str, ...]], ...
+]:
+    """Guards stopping an exempt place being erased out of a LONGER place.
+
+    ``HAZEL CREST`` is exempt; ``EAST HAZEL CREST`` is a separate gold city and
+    is not. Masking the short one out of the long one left "Which East
+    borrowers ...", and the hole created a FRESH title-case pair — so the
+    exemption manufactured the refusal it exists to prevent (102 prompts in a
+    47,936-prompt sweep, 2026-08-12). 37 such nestings exist in the live
+    dimension.
+
+    Same guard mechanism as the fair-lending overlap: the surrounding tokens of
+    the longer value become contexts in which the shorter one is left alone.
+    """
+
+    folded = {value: [token.casefold() for token in value.split()] for value in values}
+    guards: list[tuple[str, tuple[str, ...], tuple[str, ...]]] = []
+    for value, value_tokens in folded.items():
+        lefts: set[str] = set()
+        rights: set[str] = set()
+        width = len(value_tokens)
+        for place in known:
+            place_tokens = place.split()
+            if len(place_tokens) <= width:
+                continue
+            folded_place = [token.casefold() for token in place_tokens]
+            for start in range(len(place_tokens) - width + 1):
+                if folded_place[start : start + width] != value_tokens:
+                    continue
+                if start:
+                    lefts.add(" ".join(place_tokens[:start]))
+                if start + width < len(place_tokens):
+                    rights.add(" ".join(place_tokens[start + width :]))
+        if lefts or rights:
+            guards.append((value, tuple(sorted(lefts)), tuple(sorted(rights))))
+    return tuple(guards)
+
+
+def governed_name_shape_mask_guards(
+    values: Sequence[str],
+) -> tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...]:
+    """Nesting guards for the prose/prompt name-shape mask. Never raises."""
+
+    try:
+        known = tuple(get_governed_place_dimension().known_place_values())
+    except Exception:  # noqa: BLE001 — the guard must never fail the request
+        return ()
+    return _nesting_guards(tuple(values), known)
+
+
 def governed_protected_class_mask_guards(
     values: Sequence[str],
 ) -> tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...]:
