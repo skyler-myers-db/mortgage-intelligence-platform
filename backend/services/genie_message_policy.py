@@ -190,9 +190,19 @@ def _without_allowed_literals(value: str, allowed_literals: Sequence[str]) -> st
 # Borrower rows carry the same city/state strings, so citing them in a
 # narrative is sanctioned analytics output — but title-case city names
 # ("Lake Forest, CA") pattern-match the human-name-shape guard. Strip the
-# geography shape before the name-shape scan only. No real-person identity
+# geography shape before the name-shape scan ONLY. No real-person identity
 # can take this shape here: borrower names never render, and display
 # identities are synthetic masked IDs.
+#
+# "Only" is enforced below by handing the stripped copy to
+# ``name_shape_value``. It used to be enforced by nothing: the strip was
+# applied to ``value`` before ``contains_unsafe_ai_text``, so it deleted text
+# from EVERY detector. This pattern matches any 1-4 title-case words followed
+# by ", XX" — it does not know a city from a protected class — so
+# "Target Hawaiian, HI homeowners" and "Prioritize Black, AL borrowers" were
+# erased down to a clean sentence and passed the fair-lending scan. Neither
+# string is a governed place (no such city exists in either state); the guard
+# had simply stopped reading them.
 GENIE_GEO_LOCATION_RE = re.compile(
     r"\(?\b[A-Z][A-Za-z.'-]*(?:\s+[A-Z][A-Za-z.'-]*){0,3},\s*[A-Z]{2}\b\)?"
 )
@@ -240,15 +250,27 @@ def genie_visible_text_unsafe(
     not substring masking, so "black borrowers in TACOMA" is still scanned in
     full, and no prose path can reach it — a model-authored narrative is never
     a ``structured_value``.
+
+    Three relaxations reach the detectors from here, and each one names the
+    single scanner it is allowed to touch: the geography strip and the
+    name-shape phrase set reach ``contains_human_name_shape``, the governed
+    protected-class phrase set reaches
+    ``contains_protected_class_marketing_text``. Nothing reaches the PII,
+    injection, or confidential scanners, which read ``value`` verbatim.
     """
 
     if structured_value and normalize_place_value(value) in governed_cell_values:
         return False
     name_shape_phrases: tuple[str, ...] = ()
+    protected_class_phrases: tuple[str, ...] = ()
     if not structured_value:
         # Prose only. Structured cells already skip the title-case heuristic
-        # wholesale, so resolving this for them would be a wasted read.
+        # wholesale, and the full-cell exemption above is a strictly tighter
+        # match than phrase masking, so resolving either for them would be a
+        # wasted read — and the resolver probes cells through this very
+        # function, so a structured path that resolved them would recurse.
         name_shape_phrases = _governed_name_shape_phrases()
+        protected_class_phrases = _governed_protected_class_phrases()
     if structured_value and _BARE_NUMERIC_CELL_RE.fullmatch(value.strip()):
         # A governed row cell that is ENTIRELY a number is a measure, not an
         # identity. Large whole numbers otherwise read as phone numbers
@@ -258,13 +280,15 @@ def genie_visible_text_unsafe(
         # stripped by key at the repository boundary, and a formatted phone
         # ("312-555-0142") is not a bare numeric cell, so it still scans.
         return False
-    scannable = GENIE_GEO_LOCATION_RE.sub(" ", value)
-    scannable = _MASKED_ID_CITY_PARENS_RE.sub(r"\1 ", scannable)
+    name_shape_scannable = GENIE_GEO_LOCATION_RE.sub(" ", value)
+    name_shape_scannable = _MASKED_ID_CITY_PARENS_RE.sub(r"\1 ", name_shape_scannable)
     return contains_unsafe_ai_text(
-        scannable,
+        value,
         include_titlecase=not structured_value,
         assume_reviewed_read_only_analytics=True,
+        name_shape_value=name_shape_scannable,
         name_shape_allowed_phrases=name_shape_phrases,
+        protected_class_allowed_phrases=protected_class_phrases,
     )
 
 
@@ -280,6 +304,34 @@ def _governed_name_shape_phrases() -> tuple[str, ...]:
         from backend.services.genie_place_dimension import get_governed_place_dimension
 
         return tuple(get_governed_place_dimension().name_shape_safe_values())
+    except Exception:  # noqa: BLE001 — the guard must never fail the request
+        return ()
+
+
+def _governed_protected_class_phrases() -> tuple[str, ...]:
+    """Governed city values the prose fair-lending scan misreads.
+
+    Four of the 428 live ``mip.gold.borrower_360`` city values (paychex,
+    2026-08-12): ``TACOMA`` (the ``-oma`` condition-morphology heuristic),
+    ``BLACK DIAMOND``, ``HAWAIIAN GARDENS``, and ``INDIAN HEAD PARK`` (the
+    national-origin bank, which needs the population noun a narrative always
+    supplies). Before the geography strip was scoped, the QUALIFIED rendering
+    of all four ("Tacoma, WA ...") passed only because the strip deleted it
+    from this scanner too; the BARE rendering the strip never matched was
+    withheld outright, which is how the live "How many in-the-money borrowers
+    are in Tacoma?" answer came back empty on 2026-08-12.
+
+    Same posture as the name-shape set and the same degraded contract: an
+    unreachable warehouse exempts nothing, so the answer is withheld rather
+    than widened. The resolver's admission gate is what makes this set safe to
+    subtract from a fair-lending detector — see
+    ``genie_place_dimension._disarms_a_protected_class_canary``.
+    """
+
+    try:
+        from backend.services.genie_place_dimension import get_governed_place_dimension
+
+        return tuple(get_governed_place_dimension().protected_class_safe_values())
     except Exception:  # noqa: BLE001 — the guard must never fail the request
         return ()
 

@@ -27,7 +27,7 @@ import pytest
 
 from backend.schemas._validators_unsafe_text import (
     contains_unsafe_ai_text,
-    mask_governed_name_shape_phrases,
+    mask_governed_phrases,
 )
 from backend.services.genie_message_policy import genie_visible_text_unsafe
 from backend.services.genie_place_dimension import (
@@ -227,21 +227,21 @@ def test_masking_is_whole_token_anchored() -> None:
     """
 
     # trailing edge
-    assert mask_governed_name_shape_phrases("Lone Treeman called", ["Lone Tree"]) == (
+    assert mask_governed_phrases("Lone Treeman called", ["Lone Tree"]) == (
         "Lone Treeman called"
     )
-    assert mask_governed_name_shape_phrases("blackballed the lead", ["Black"]) == (
+    assert mask_governed_phrases("blackballed the lead", ["Black"]) == (
         "blackballed the lead"
     )
     # leading edge
-    assert mask_governed_name_shape_phrases("Peachtree Corners", ["Tree"]) == (
+    assert mask_governed_phrases("Peachtree Corners", ["Tree"]) == (
         "Peachtree Corners"
     )
-    assert mask_governed_name_shape_phrases("Winterhaven totals", ["Haven"]) == (
+    assert mask_governed_phrases("Winterhaven totals", ["Haven"]) == (
         "Winterhaven totals"
     )
     # the value itself is still erased
-    assert mask_governed_name_shape_phrases("Lone Tree leads", ["Lone Tree"]).split() == [
+    assert mask_governed_phrases("Lone Tree leads", ["Lone Tree"]).split() == [
         "leads"
     ]
 
@@ -250,4 +250,4 @@ def test_masking_is_case_insensitive_for_both_live_renderings() -> None:
     """Genie writes governed cities in stored casing AND title case."""
 
     for rendering in ("FEDERAL WAY", "Federal Way", "federal way"):
-        assert mask_governed_name_shape_phrases(rendering, ["FEDERAL WAY"]).strip() == ""
+        assert mask_governed_phrases(rendering, ["FEDERAL WAY"]).strip() == ""
