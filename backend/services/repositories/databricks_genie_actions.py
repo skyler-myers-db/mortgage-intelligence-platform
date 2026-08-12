@@ -13,6 +13,11 @@ from typing import Any
 from urllib.parse import urlencode
 
 from backend.schemas.common import validate_public_borrower_id
+from backend.schemas.genie_geo_filters import (
+    GENIE_CITY_FILTER_KEY,
+    MAX_CITY_FILTER_VALUES,
+    format_city_state_pair,
+)
 from backend.schemas.lead import GENIE_REPLAY_SEGMENT_CODES
 from backend.services.genie_answers import GenieActionSuggestion, GenieVisualizationSpec
 from backend.services.genie_sql_predicates import SqlFilterReading, read_sql_filters
@@ -26,6 +31,7 @@ _REPLAYABLE_ROUTE_FILTER_KEYS = frozenset(
     {
         "borrower_ids",
         "zips",
+        GENIE_CITY_FILTER_KEY,
         "county",
         "counties",
         "states",
@@ -104,9 +110,14 @@ _SEGMENT_COLUMN_RE = re.compile(
 # Disclosure name for the former. Identifier-shaped and bounded, like the
 # threshold disclosures it rides alongside in `unreplayable_filters`.
 _SEGMENT_PREDICATE_DISCLOSURE = "segment_codes_predicate"
-# The answer is city-grain and the queue has no city filter, so the cohort is
-# broader than the answer on the geography axis. Same disclosure vocabulary.
+# The answer named a city the cohort could NOT be keyed on -- no state beside
+# it in the same row, or a name outside the reviewed shape. The queue then
+# opens a broader population than the answer on the geography axis, and says
+# so. Same disclosure vocabulary as the thresholds.
 _CITY_GRAIN_DISCLOSURE = "city_grain_unreplayable"
+# Column names a Genie answer uses for the two halves of the city key.
+_CITY_COLUMNS: tuple[str, ...] = ("city", "situs_city")
+_STATE_COLUMNS: tuple[str, ...] = ("state", "state_code")
 
 # `recommended_offer_code = 'x'` or `recommended_offer_code IN ('x', 'y')`.
 # The alternation is anchored on the quotes so the list branch cannot run past
@@ -205,6 +216,86 @@ def _row_values(
             if value not in values:
                 values.append(value)
     return values
+
+
+def _first_column_value(row: dict[str, Any], columns: tuple[str, ...]) -> str | None:
+    """Return the first non-empty value ``row`` carries for ``columns``."""
+
+    for column in columns:
+        raw = row.get(column)
+        if raw is None:
+            continue
+        value = str(raw).strip()
+        if value:
+            return value
+    return None
+
+
+def _row_pairs(
+    rows: list[dict[str, Any]] | None,
+    *,
+    left_columns: tuple[str, ...],
+    right_columns: tuple[str, ...],
+) -> list[tuple[str, str]]:
+    """Read a TWO-COLUMN key out of each row, never across rows.
+
+    A row contributes a pair only when it carries BOTH halves itself. A row
+    with a left value and no right value contributes nothing -- a left value
+    alone is not the key.
+
+    Reading the two columns with two separate ``_row_values`` calls and
+    cross-producting them is the bug this exists to prevent. Given rows
+    ``[{CYPRESS, CA}, {SUNNYVALE, TX}]`` the cross product also yields
+    ``CYPRESS~TX`` and ``SUNNYVALE~CA`` -- two cohorts the answer never
+    described, and in the live data the wrong side of a 14,631x split
+    (CYPRESS is CA 14,630 / TX 1, SUNNYVALE is TX 3,833 / CA 1).
+    """
+
+    pairs: list[tuple[str, str]] = []
+    for row in rows or []:
+        left = _first_column_value(row, left_columns)
+        if left is None:
+            continue
+        right = _first_column_value(row, right_columns)
+        if right is None:
+            continue
+        pair = (left, right)
+        if pair not in pairs:
+            pairs.append(pair)
+    return pairs
+
+
+def _city_state_filter_from_rows(rows: list[dict[str, Any]] | None) -> list[str]:
+    """Return the answer's reviewed ``CITY~ST`` tokens, or ``[]`` to fail closed.
+
+    Fails closed AS A UNIT: if any city the answer named did not survive --
+    no state beside it in the same row, or a name outside the reviewed shape
+    -- the whole filter is dropped and the caller discloses
+    ``city_grain_unreplayable`` instead. Replaying only the cities that did
+    parse would answer a NARROWER question than the one on screen under the
+    same heading: the mirror image of the 2.3x state substitution this
+    replaces, and just as silent.
+    """
+
+    named_cities = _row_values(rows, *_CITY_COLUMNS)
+    if not named_cities:
+        return []
+    pairs = _row_pairs(rows, left_columns=_CITY_COLUMNS, right_columns=_STATE_COLUMNS)
+    tokens: list[str] = []
+    for city, state in pairs:
+        token = format_city_state_pair(city, state)
+        if not token:
+            return []
+        if token not in tokens:
+            tokens.append(token)
+    if len(tokens) > MAX_CITY_FILTER_VALUES:
+        return []
+    # Every city the answer named has to be represented. A city that appears
+    # in `named_cities` but in no pair is one whose row carried no state.
+    paired_cities = {city for city, _ in pairs}
+    if any(city not in paired_cities for city in named_cities):
+        return []
+    return tokens
 
 
 def _segment_selection_from_sql(
@@ -510,6 +601,10 @@ def _route_from_answer_rows(
     # here narrows, and why prose cannot be gated the way SQL conjuncts can.
     portfolio_criteria = _portfolio_criteria_from_sql(sql_query, reading)
 
+    # Read as PAIRS, out of one row at a time. `_row_pairs` explains why two
+    # `_row_values` calls would invent cohorts the answer never described.
+    city_states = _city_state_filter_from_rows(rows)
+
     city_disclosures: list[str] = []
     if borrower_ids:
         filter_criteria["borrower_ids"] = borrower_ids
@@ -517,6 +612,15 @@ def _route_from_answer_rows(
     elif zips:
         params["zips"] = ",".join(zips)
         filter_criteria["zips"] = zips
+    elif city_states:
+        # Ahead of `states` on purpose, and mutually exclusive with it: the
+        # pair ALREADY carries the state, so adding `states` alongside would
+        # be redundant at best. Falling THROUGH to it is the 2.3x silent
+        # substitution measured live 2026-08-11 (Chicago's 523,010 opening
+        # all 1,181,043 of IL) -- the shape that looks deliberate and is
+        # therefore worse than opening everything.
+        params[GENIE_CITY_FILTER_KEY] = ",".join(city_states)
+        filter_criteria[GENIE_CITY_FILTER_KEY] = city_states
     elif counties:
         if len(counties) == 1:
             params["county"] = counties[0]
@@ -528,27 +632,30 @@ def _route_from_answer_rows(
         params["states"] = ",".join(states)
         filter_criteria["states"] = states
 
-    # A CITY answer has no cohort dimension: the Lead Queue cannot filter by
-    # city, so `_row_values` never reads one. That is survivable on its own --
-    # the cohort is simply broader. What is not survivable is doing it in
-    # SILENCE, and there are two shapes, both measured live on paychex gold
+    # A city answer the cohort could NOT be keyed on. The queue then opens a
+    # broader population than the answer, which is survivable; doing it in
+    # SILENCE is not. Both silent shapes were measured live on paychex gold
     # 2026-08-11 against an answer stating Chicago = 523,010:
     #
     #   rows [{city}]         -> no geography at all: 3,474,216 opened, 6.6x
-    #   rows [{city, state}]  -> the STATE substitutes for the city, which is
+    #   rows [{city, state}]  -> the STATE substituted for the city, which is
     #                            worse because it looks deliberate:
     #                            1,181,043 opened, 2.3x
     #
-    # Naming it is what the `unreplayable_filters` disclosure is for. The real
-    # fix is a `(city, state)` filter on the queue -- city alone is ambiguous
-    # across states (CYPRESS is CA 14,630 / TX 1, so a name-only cohort is
-    # 14,631x wrong on the minority side), so it needs a pair-keyed parameter
-    # threaded through six closed vocabularies, which is its own slice.
+    # The second shape is now EXACT (`cities` above), so this fires only for
+    # the first: a city with no state beside it in the same row, or a name
+    # outside the reviewed shape. Naming it is what `unreplayable_filters` is
+    # for.
+    #
     # Not when `borrower_ids` pinned the cohort: those rows ARE the answer's
     # population, exactly, and a `city` column alongside them broadens nothing.
     # A borrower list that happens to project city was the first false positive
     # this disclosure produced.
-    if not borrower_ids and _row_values(rows, "city", "situs_city"):
+    if (
+        not borrower_ids
+        and not filter_criteria.get(GENIE_CITY_FILTER_KEY)
+        and _row_values(rows, *_CITY_COLUMNS)
+    ):
         city_disclosures.append(_CITY_GRAIN_DISCLOSURE)
 
     if segment_codes:

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from types import ModuleType
 from typing import Any
 
+from backend.schemas.genie_geo_filters import GENIE_CITY_FILTER_KEY
 from backend.schemas.lead import LeadSummary
 from backend.schemas.portfolio import PortfolioCriteria
 from backend.services.databricks_sql import DatabricksSqlClient
@@ -68,6 +69,11 @@ class LeadCohortFilters:
     county_fipses: list[str] | None = None
     state_codes: list[str] | None = None
     zip_codes: list[str] | None = None
+    # Reviewed ``CITY~ST`` pairs. A pair, never a bare name: see
+    # ``backend/schemas/genie_geo_filters`` for the five names that span two
+    # states and the 14,631x error a name-only cohort makes on the minority
+    # side of ``CYPRESS``.
+    city_states: list[str] | None = None
     borrower_ids: list[str] | None = None
     segment_codes: list[str] | None = None
     segment_mode: str = "any"
@@ -110,7 +116,8 @@ class LeadCohortQueries(LeadCohortQuerySupport):
         f"SELECT {{aggregate_select}} FROM {qualify('gold', 'borrower_360')} b "
         f"LEFT JOIN {qualify('gold', 'borrower_lifecycle_state')} ls "
         "  ON ls.borrower_id = b.borrower_id "
-        "WHERE 1=1 {state_clause} {zip_clause} {county_clause} {borrower_clause} "
+        "WHERE 1=1 {state_clause} {zip_clause} {county_clause} {city_clause} "
+        "{borrower_clause} "
         "{segment_clause} {funnel_stage_clause} {lender_clause} {portfolio_clause} "
         "{lifecycle_clause} {freshness_clause}"
     )
@@ -313,6 +320,7 @@ LEFT JOIN ranked ON TRUE
             filters.county_fips,
             filters.county_fipses,
         )
+        normalised_cities = self.normalise_city_states(filters.city_states)
         normalised_borrower_ids = self.normalise_borrower_ids(filters.borrower_ids)
         lifecycle_clause_geo, lifecycle_params_geo = self.lifecycle_filter_clause(
             source_alias="b",
@@ -360,6 +368,7 @@ LEFT JOIN ranked ON TRUE
             normalised_states
             or normalised_zips
             or normalised_county
+            or normalised_cities
             or normalised_borrower_ids
             or filters.funnel_stage
             or lender_clause
@@ -389,6 +398,10 @@ LEFT JOIN ranked ON TRUE
                     column="b.county_fips_5",
                     prefix="county",
                     values=normalised_county,
+                    params=params,
+                ),
+                city_clause=self.city_state_clause(
+                    values=normalised_cities,
                     params=params,
                 ),
                 borrower_clause=self.in_clause(
@@ -459,6 +472,7 @@ def normalise_growth_agent_handoff_filters(
             county_fipses=_string_list(raw_filters.get("counties")),
             state_codes=_string_list(raw_filters.get("states")),
             zip_codes=_string_list(raw_filters.get("zips")),
+            city_states=_string_list(raw_filters.get(GENIE_CITY_FILTER_KEY)),
             segment_codes=_string_list(raw_filters.get("segment_codes")),
             segment_mode=_optional_text(raw_filters.get("segment_mode")) or "any",
             target_lender_ref=_optional_text(raw_filters.get("target_lender_ref")),
@@ -509,6 +523,12 @@ def normalise_lead_queue_handoff_filters(
     zip_codes = sorted(LeadCohortQueries.normalise_zips(filters.zip_code, filters.zip_codes))
     if zip_codes:
         normalized["zips"] = zip_codes
+    # Inside the fingerprint, like every other narrowing geography key. A
+    # cohort filtered to CHICAGO~IL and one filtered to HOUSTON~TX are
+    # different populations, so they must not sign the same handoff.
+    city_states = sorted(LeadCohortQueries.normalise_city_states(filters.city_states))
+    if city_states:
+        normalized[GENIE_CITY_FILTER_KEY] = city_states
     county_fipses = sorted(
         LeadCohortQueries.normalise_county_fips(filters.county_fips, filters.county_fipses)
     )

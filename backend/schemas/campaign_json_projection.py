@@ -21,6 +21,11 @@ from backend.schemas.campaign_json_inputs import (
     require_exact_json_keys,
 )
 from backend.schemas.common import validate_public_campaign_label
+from backend.schemas.genie_geo_filters import (
+    CITY_STATE_PAIR_RE,
+    GENIE_CITY_FILTER_KEY,
+    MAX_CITY_FILTER_VALUES,
+)
 from backend.schemas.genie_numeric_filters import (
     GENIE_NUMERIC_FILTER_BOUNDS,
     GENIE_NUMERIC_FILTER_KEYS,
@@ -78,6 +83,10 @@ _GENIE_CRITERIA_KEYS = frozenset(
 _GENIE_REPLAY_FILTER_KEYS = frozenset(
     {
         "zips",
+        # A draft campaign built from a city-grain Genie answer carries
+        # this, and this projection gates the approval decision proof: an
+        # unprojected key makes that campaign permanently unapprovable.
+        GENIE_CITY_FILTER_KEY,
         "county",
         "counties",
         "states",
@@ -402,6 +411,13 @@ def _project_genie_replay_filters(
         field_name="criteria.result_filters",
     )
     out: dict[str, object] = {}
+    if GENIE_CITY_FILTER_KEY in value:
+        out[GENIE_CITY_FILTER_KEY] = _reviewed_text_list(
+            value[GENIE_CITY_FILTER_KEY],
+            field_name=f"criteria.result_filters.{GENIE_CITY_FILTER_KEY}",
+            pattern=CITY_STATE_PAIR_RE.pattern,
+            max_items=MAX_CITY_FILTER_VALUES,
+        )
     for key in ("zips", "counties"):
         if key in value:
             out[key] = _reviewed_text_list(

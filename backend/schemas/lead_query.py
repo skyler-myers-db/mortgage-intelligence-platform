@@ -114,6 +114,20 @@ ZipsParam = Annotated[
     ),
 ]
 
+CitiesParam = Annotated[
+    str | None,
+    Query(
+        alias="cities",
+        max_length=4096,
+        description=(
+            "Optional comma-separated CITY~ST pairs (for example "
+            "CHICAGO~IL,FORT LAUDERDALE~FL) for city-grain Genie cohort "
+            "actions. Always a pair: 5 city names in gold span two states, "
+            "so a bare name opens the wrong population."
+        ),
+    ),
+]
+
 CountiesParam = Annotated[
     str | None,
     Query(

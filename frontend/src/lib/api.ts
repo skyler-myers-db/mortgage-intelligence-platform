@@ -1232,7 +1232,7 @@ export const api = {
   leadsPage: (
     segment?: string,
     signal?: AbortSignal,
-    geo?: { state?: string; zip?: string; county?: string; counties?: string[]; states?: string[]; zips?: string[]; borrowerIds?: string[] },
+    geo?: { state?: string; zip?: string; county?: string; counties?: string[]; states?: string[]; zips?: string[]; cities?: string[]; borrowerIds?: string[] },
     opts: LeadQueryOptions = {},
   ) => {
     // 2026-05-04 FIX β: forward state + zip to the API so the backend
@@ -1257,6 +1257,8 @@ export const api = {
     if (geo?.counties && geo.counties.length > 0) params.set('counties', geo.counties.join(','));
     if (geo?.states && geo.states.length > 0) params.set('states', geo.states.join(','));
     if (geo?.zips && geo.zips.length > 0) params.set('zips', geo.zips.join(','));
+    // `CITY~ST` pairs. `~` is unreserved, so it survives the encode literal.
+    if (geo?.cities && geo.cities.length > 0) params.set('cities', geo.cities.join(','));
     if (geo?.borrowerIds && geo.borrowerIds.length > 0) params.set('borrower_ids', geo.borrowerIds.join(','));
     if (opts.targetLenderRef) params.set('target_lender_ref', opts.targetLenderRef);
     if (opts.cohortId) params.set('cohort_id', opts.cohortId);
@@ -1294,7 +1296,7 @@ export const api = {
   leads: (
     segment?: string,
     signal?: AbortSignal,
-    geo?: { state?: string; zip?: string; county?: string; counties?: string[]; states?: string[]; zips?: string[]; borrowerIds?: string[] },
+    geo?: { state?: string; zip?: string; county?: string; counties?: string[]; states?: string[]; zips?: string[]; cities?: string[]; borrowerIds?: string[] },
     opts: LeadQueryOptions = {},
   ) => api.leadsPage(segment, signal, geo, opts).then((page) => page.leads),
 

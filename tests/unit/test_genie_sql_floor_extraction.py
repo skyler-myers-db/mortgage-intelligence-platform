@@ -1058,19 +1058,19 @@ def test_legitimate_disjunctions_still_replay_exactly(
     assert _segments(sql) == expected
 
 
-# --- A city answer has no cohort dimension, and must say so ----------------
+# --- A city answer hands off a city cohort, or says why it could not -------
 #
-# The Lead Queue cannot filter by city, so `_row_values` never reads one. That
-# alone is survivable -- the cohort is broader. Doing it in SILENCE is not, and
-# measured live on paychex gold 2026-08-11 against an answer stating
-# Chicago = 523,010 cash-out candidates there were TWO shapes:
+# Measured live on paychex gold 2026-08-11 against an answer stating
+# Chicago = 523,010 cash-out candidates, a city-grain answer degraded two ways:
 #
 #   rows [{city}]        -> no geography at all: 3,474,216 opened, 6.6x
 #   rows [{city, state}] -> the STATE substituted for the city: 1,181,043, 2.3x
 #
-# The second is worse because it looks deliberate. A real city filter needs a
-# (city, state) pair parameter -- city alone is ambiguous across states
-# (CYPRESS is CA 14,630 / TX 1) -- threaded through six closed vocabularies.
+# The second was worse because it looked deliberate. It is now EXACT: the row
+# carries both halves of the key, so the cohort opens `cities=CHICAGO~IL` and
+# `states` is absent. The first still cannot be keyed -- a bare name is
+# ambiguous across states (CYPRESS is CA 14,630 / TX 1) -- so it keeps the
+# disclosure and adds no geography at all.
 
 
 _CITY_SQL = (
@@ -1089,20 +1089,32 @@ def test_a_city_only_answer_discloses_that_the_cohort_is_broader() -> None:
 
     assert filters["city_grain_unreplayable"] is True
     assert "states" not in filters
+    # Fail closed: a name with no state beside it is not a key.
+    assert "cities" not in filters
 
 
-def test_a_city_answer_that_also_carries_state_still_discloses() -> None:
-    """The state is NOT a stand-in for the city, even though it is a superset."""
+def test_a_city_answer_that_carries_state_opens_the_city_not_the_state() -> None:
+    """The row carries both halves of the key, so the cohort is exact.
 
-    _, filters = _route_from_answer_rows(
+    This inverts the pre-slice expectation. `states == ["IL"]` used to be
+    asserted here: that is the 2.3x substitution (Chicago's 523,010 opening
+    all 1,181,043 of IL) and it is the shape this filter exists to kill.
+    """
+
+    route, filters = _route_from_answer_rows(
         question="Which city has the most cash-out candidates?",
         rows=[{"city": "CHICAGO", "state": "IL", "n": 523010}],
         borrower_ids=[],
         sql_query=_CITY_SQL,
     )
 
-    assert filters["states"] == ["IL"]
-    assert filters["city_grain_unreplayable"] is True
+    assert filters["cities"] == ["CHICAGO~IL"]
+    # The pair already carries the state. Emitting `states` alongside it is
+    # the substitution, one indirection later.
+    assert "states" not in filters
+    assert "city_grain_unreplayable" not in filters
+    # `~` is RFC-3986 unreserved, so the link stays readable.
+    assert "cities=CHICAGO~IL" in route
 
 
 def test_a_state_answer_is_not_labelled_city_grain() -> None:

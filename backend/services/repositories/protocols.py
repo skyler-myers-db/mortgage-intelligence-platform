@@ -176,6 +176,7 @@ class LeadRepository(Protocol):
         county_fipses: list[str] | None = None,
         state_codes: list[str] | None = None,
         zip_codes: list[str] | None = None,
+        city_states: list[str] | None = None,
         borrower_ids: list[str] | None = None,
         segment_codes: list[str] | None = None,
         segment_mode: str = "any",
@@ -192,7 +193,7 @@ class LeadRepository(Protocol):
         """Return up to ``limit`` ranked leads.
 
         ``state`` / ``zip_code`` / ``county_fips`` / ``borrower_ids`` and the multi-value
-        ``state_codes`` / ``zip_codes``
+        ``state_codes`` / ``zip_codes`` / ``city_states``
         (optional, 2026-05-04 FIX beta plus Genie cohort extension):
         when provided, the implementation queries ``mip.gold.borrower_360``
         directly (no score floor) instead of ``mip.gold.lead_population``,
@@ -206,6 +207,11 @@ class LeadRepository(Protocol):
         cards into one de-duplicated cohort; ``"all"`` remains supported
         for analytic intersection filters where a borrower must carry
         every selected segment code.
+
+        ``city_states`` carries reviewed ``CITY~ST`` pairs. Always a pair:
+        5 of the 428 city names in gold span two states, and the minority
+        side is tiny (CYPRESS is CA 14,630 / TX 1), so a bare name opens a
+        population the answer never described.
 
         ``portfolio_criteria`` replays Portfolio Builder predicates when
         the CTA opens Lead Queue, so the queue reflects the built population
@@ -231,6 +237,7 @@ class LeadRepository(Protocol):
         county_fipses: list[str] | None = None,
         state_codes: list[str] | None = None,
         zip_codes: list[str] | None = None,
+        city_states: list[str] | None = None,
         borrower_ids: list[str] | None = None,
         segment_codes: list[str] | None = None,
         segment_mode: str = "any",

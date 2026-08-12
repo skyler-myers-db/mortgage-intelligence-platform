@@ -39,6 +39,11 @@ from backend.schemas.common import (
     validate_public_campaign_label,
     validate_public_opaque_id,
 )
+from backend.schemas.genie_geo_filters import (
+    CITY_STATE_PAIR_RE,
+    GENIE_CITY_FILTER_KEY,
+    MAX_CITY_FILTER_VALUES,
+)
 from backend.schemas.genie_numeric_filters import (
     GENIE_NUMERIC_FILTER_BOUNDS,
     GENIE_NUMERIC_FILTER_KEYS,
@@ -235,6 +240,8 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "counties",
         "states",
         "zips",
+        # Emitted by /leads when the request carried a city cohort.
+        GENIE_CITY_FILTER_KEY,
         "limit",
         "approval_status",
         "outreach_status",
@@ -567,6 +574,10 @@ def _metadata_values_for(
 _ALLOWED_RESULT_FILTER_KEYS: frozenset[str] = frozenset(
     {
         "zips",
+        # Reviewed `(city, state)` pairs. Named from the canonical module
+        # rather than spelled out, so the ledger cannot reject a key the
+        # cohort writer accepted -- the write-then-500 shape of PR #191.
+        GENIE_CITY_FILTER_KEY,
         "states",
         "county",
         "counties",
@@ -1451,6 +1462,15 @@ def _assert_result_filters_value_policy(value: Any) -> None:
         raise AuditMetadataValueViolation(
             "result_filters",
             "contains unreviewed keys: " + ", ".join(sorted(unexpected)),
+        )
+    if GENIE_CITY_FILTER_KEY in value:
+        # Pattern-checked against the SAME regex the cohort writer used,
+        # so a pair one accepts cannot be the pair the other refuses.
+        _assert_string_list(
+            f"result_filters.{GENIE_CITY_FILTER_KEY}",
+            value[GENIE_CITY_FILTER_KEY],
+            pattern=CITY_STATE_PAIR_RE.pattern,
+            max_items=MAX_CITY_FILTER_VALUES,
         )
     if "zips" in value:
         _assert_string_list(

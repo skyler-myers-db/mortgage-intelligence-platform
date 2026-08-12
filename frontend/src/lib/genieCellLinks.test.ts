@@ -31,8 +31,17 @@ describe('genieCellHref', () => {
     expect(genieCellHref('state_code', 'TX')).toBe('/lead-queue?state=TX');
   });
 
-  it('leaves a city cell plain — no route supports a city filter', () => {
+  it('leaves a city cell plain when its own row carries no state', () => {
+    // Fail closed. A bare name is ambiguous across states (CYPRESS is
+    // CA 14,630 / TX 1), so there is no honest cohort to link to.
     expect(genieCellHref('city', 'Chicago')).toBeNull();
+    expect(genieCellHref('city', 'Chicago', {}, { city: 'Chicago', n: 523010 })).toBeNull();
+  });
+
+  it('links a city cell to the (city, state) cohort when the row carries a state', () => {
+    expect(genieCellHref('city', 'Chicago', {}, { city: 'Chicago', state: 'IL' })).toBe(
+      '/lead-queue?cities=CHICAGO~IL',
+    );
   });
 
   it('leaves a borrower_id that does not match the masked shape plain', () => {

@@ -16,6 +16,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request,
 
 from backend.schemas._validators_tenant import normalize_public_lender_ref
 from backend.schemas.common import validate_internal_staff_email
+from backend.schemas.genie_geo_filters import GENIE_CITY_FILTER_KEY
 from backend.schemas.lead import SEGMENT_CODE_VALUES, LeadSummary
 from backend.schemas.lead_query import (
     DEFAULT_LEAD_LIMIT,
@@ -24,6 +25,7 @@ from backend.schemas.lead_query import (
     ApprovalStatusParam,
     AssignedToParam,
     BorrowerIdsParam,
+    CitiesParam,
     CohortIdParam,
     ConsentStatusParam,
     CountiesParam,
@@ -65,6 +67,9 @@ from backend.services.lead_query_helpers import (
 )
 from backend.services.lead_query_helpers import (
     parse_borrower_ids as _parse_borrower_ids,
+)
+from backend.services.lead_query_helpers import (
+    parse_city_states as _parse_city_states,
 )
 from backend.services.lead_query_helpers import (
     parse_csv_filter as _parse_csv_filter,
@@ -165,6 +170,7 @@ def list_leads(
     states: StatesParam = None,
     zips: ZipsParam = None,
     counties: CountiesParam = None,
+    cities: CitiesParam = None,
     borrower_ids: BorrowerIdsParam = None,
     target_lender_ref: TargetLenderRefParam = None,
     geography: GeographyParam = None,
@@ -233,6 +239,9 @@ def list_leads(
     parsed_states = _parse_csv_filter(states, width=2, label="states")
     parsed_zips = _parse_csv_filter(zips, width=5, label="zips", numeric=True)
     parsed_counties = _parse_csv_filter(counties, width=5, label="counties", numeric=True)
+    # Pairs, not a CSV of names: `parse_csv_filter`'s isalpha()/width check
+    # rejects every multi-word city and every `CITY~ST` token.
+    parsed_cities = _parse_city_states(cities)
     parsed_borrower_ids = _parse_borrower_ids(borrower_ids)
     if growth_handoff and (assigned_to or parsed_borrower_ids):
         raise HTTPException(
@@ -315,6 +324,7 @@ def list_leads(
         parsed_states = replay.state_codes
         parsed_zips = replay.zip_codes
         parsed_counties = replay.county_fipses
+        parsed_cities = replay.city_states
         parsed_borrower_ids = replay.borrower_ids
     try:
         target_lender_ref = normalize_public_lender_ref(target_lender_ref, allow_all=True)
@@ -334,6 +344,7 @@ def list_leads(
                     parsed_states,
                     parsed_zips,
                     parsed_counties,
+                    parsed_cities,
                     parsed_borrower_ids,
                     county,
                     parsed_segments,
@@ -398,6 +409,7 @@ def list_leads(
         "county_fips": county,
         "state_codes": parsed_states,
         "zip_codes": parsed_zips,
+        "city_states": parsed_cities,
         "borrower_ids": parsed_borrower_ids,
         "segment_codes": parsed_segments,
         "segment_mode": segment_mode,
@@ -422,6 +434,7 @@ def list_leads(
                     county_fipses=parsed_counties,
                     state_codes=parsed_states,
                     zip_codes=parsed_zips,
+                    city_states=parsed_cities,
                     borrower_ids=parsed_borrower_ids,
                     segment_codes=parsed_segments,
                     segment_mode=segment_mode,
@@ -541,6 +554,8 @@ def list_leads(
         audit_payload["states"] = parsed_states
     if parsed_zips:
         audit_payload["zips"] = parsed_zips
+    if parsed_cities:
+        audit_payload[GENIE_CITY_FILTER_KEY] = parsed_cities
     if parsed_counties:
         audit_payload["counties"] = parsed_counties
     if parsed_borrower_ids:

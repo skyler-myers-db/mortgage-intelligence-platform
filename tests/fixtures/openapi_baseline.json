@@ -18672,6 +18672,25 @@
             }
           },
           {
+            "description": "Optional comma-separated CITY~ST pairs (for example CHICAGO~IL,FORT LAUDERDALE~FL) for city-grain Genie cohort actions. Always a pair: 5 city names in gold span two states, so a bare name opens the wrong population.",
+            "in": "query",
+            "name": "cities",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated CITY~ST pairs (for example CHICAGO~IL,FORT LAUDERDALE~FL) for city-grain Genie cohort actions. Always a pair: 5 city names in gold span two states, so a bare name opens the wrong population.",
+              "title": "Cities"
+            }
+          },
+          {
             "description": "Optional comma-separated synthetic borrower IDs for Genie borrower-list cohort actions.",
             "in": "query",
             "name": "borrower_ids",
@@ -26089,6 +26108,25 @@
               ],
               "description": "Optional comma-separated 5-digit county FIPS list for Genie-generated cohort actions.",
               "title": "Counties"
+            }
+          },
+          {
+            "description": "Optional comma-separated CITY~ST pairs (for example CHICAGO~IL,FORT LAUDERDALE~FL) for city-grain Genie cohort actions. Always a pair: 5 city names in gold span two states, so a bare name opens the wrong population.",
+            "in": "query",
+            "name": "cities",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated CITY~ST pairs (for example CHICAGO~IL,FORT LAUDERDALE~FL) for city-grain Genie cohort actions. Always a pair: 5 city names in gold span two states, so a bare name opens the wrong population.",
+              "title": "Cities"
             }
           },
           {
