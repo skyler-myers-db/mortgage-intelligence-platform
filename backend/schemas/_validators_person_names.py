@@ -60,6 +60,39 @@ _LEADING_ANALYTICS_COMMAND_RE = re.compile(
 # ``May`` are given names. Prepositions like ``In``, ``To`` and ``By`` stay:
 # they are attested only in last position ("Medina In"), which the strip never
 # touches. ``test_genie_prompt_guard_geography`` pins the exclusion.
+#
+# The cardinal row was missing until 2026-08-12, and it is the row a COUNT
+# ANSWER opens with. Captured live on paychex that day: "Which Washington
+# cities have between 3,000 and 4,500 total borrowers?" and Genie's own draft
+# began "Three Washington cities have between 3,000 and 4,500 total
+# borrowers.", which this scanner read as the person "Three Washington" -- so
+# the app dropped Genie's prose for "Genie's draft narrative was withheld: the
+# output safety guard flagged its wording." The loss lands on the model's
+# narrative, not on a typed question. "The"/"Most"/"Several" rendered and
+# "Three"/"Two"/"Ten" did not, purely because the determiner row stopped at
+# the words that do not count. ``Only three ...`` and ``Just three ...``
+# already rendered -- the leader is then a listed function word -- which is
+# what makes the gap arbitrary rather than a deliberate line.
+#
+# Scope is grammatical, not lexical: a word earns a place here only if it can
+# stand IMMEDIATELY before "{Place} {noun}". Cardinals can ("Ninety Washington
+# cities appear in coverage"), and so do ``More``/``Fewer``, the comparative
+# half of the ``Many``/``Most``/``Few`` row already banked. ``Nearly``,
+# ``Roughly``, ``Approximately``, ``Dozens``, ``Half`` and ``First`` cannot --
+# they need an intervening "of", a numeral, or a comma ("Dozens OF Washington
+# cities", "First, Washington cities ..."), and every one of those real forms
+# already renders, so adding them would widen the strip for no live turn.
+# ``Hundred`` and ``Thousand`` are out for the same reason: bare, they never
+# lead. Hyphenated compounds need nothing -- "Twenty-three Washington" never
+# formed a pair, because the pair heuristic requires whitespace.
+#
+# Safety is inherited, not re-argued: these words pass through the same
+# sentence-initial + known-place gate as the rest of the bank, and no cardinal
+# is attested in first-name position (mechanically pinned against both
+# lexicons). A cardinal is in fact a weaker hazard than the quantifiers
+# already banked -- "Seven Medina" is no more a person than "Every Medina" --
+# and a genuine pair elsewhere in a count-led sentence still scans, because
+# the strip removes one leading word and consumes no lookahead.
 _SENTENCE_INITIAL_FUNCTION_WORDS: tuple[str, ...] = (
     # fmt: off
     # interrogatives
@@ -71,7 +104,12 @@ _SENTENCE_INITIAL_FUNCTION_WORDS: tuple[str, ...] = (
     # determiners and quantifiers ("An" and "No" excluded, same reason)
     "The", "Any", "All", "Each", "Every", "Some", "Most", "Both", "Many",
     "Few", "Top", "Only", "Other", "Another", "Same", "Several", "Such",
-    "This", "That", "These", "Those", "Our", "Their",
+    "This", "That", "These", "Those", "Our", "Their", "More", "Fewer",
+    # cardinal quantifiers -- the row a count answer opens with
+    "Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight",
+    "Nine", "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen",
+    "Sixteen", "Seventeen", "Eighteen", "Nineteen", "Twenty", "Thirty",
+    "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety",
     # prepositions, conjunctions, connectives
     "In", "On", "At", "By", "For", "From", "Of", "To", "With", "Within",
     "Without", "Among", "Amongst", "Across", "Between", "Before", "After",
