@@ -4274,3 +4274,28 @@ def test_the_pending_feed_guarantee_still_binds_the_statement_actually_served() 
     assert not module._pending_feed_gaps_from_material(
         module._CANONICAL_SEGMENT_APPROVAL_RATE_SQL
     )
+
+
+def test_a_rescue_declined_for_want_of_a_sql_client_is_not_silent() -> None:
+    """Every other exit in `_canonical_genie_answer` emits a warning.
+
+    This one did not, so a rescue that declined because it had no warehouse
+    was indistinguishable in the logs from "no canonical statement matched".
+    That ambiguity cost two wrong diagnoses of a live refusal on 2026-08-12.
+    """
+
+    from unittest.mock import patch
+
+    from backend.services.repositories import databricks_genie as module
+
+    with patch.object(module, "_emit_genie_warning") as warn:
+        assert (
+            module._canonical_genie_answer(
+                question="Which segment converts best?",
+                result=_text_only_turn("no-sql-client"),
+                sql_client=None,
+            )
+            is None
+        )
+    assert warn.call_args is not None
+    assert warn.call_args[0][0] == "canonical_genie_no_sql_client"
