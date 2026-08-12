@@ -153,6 +153,11 @@ _NON_PERSON_TITLECASE_SUFFIXES = frozenset(
         # rest are geographic nouns with no attested surname use.
         "area", "basin", "coast", "empire", "peninsula", "sound",
         "corridor", "district", "tract", "zone",
+        # Second pass, same class: "Front Range", "High Desert", "Wasatch
+        # Front" refused (18 prompts, 22 answer-surface blocks), and the
+        # governed display labels "Investor Product" and "Competitor
+        # Recapture" read as people in narrative prose.
+        "range", "desert", "front", "product", "recapture",
         "equity", "heloc", "loan", "mortgage", "offer", "queue", "refi",
         "refinance", "review",
         "candidate", "candidates", "intent", "risk", "sale", "segment", "segments",

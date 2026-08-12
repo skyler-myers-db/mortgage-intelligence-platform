@@ -206,8 +206,11 @@ def identity_prompt_match(question: str) -> bool:
     phrases only, and stripping the opening word leaves the name pair intact.
     """
 
+    name_shape_phrases = _governed_name_shape_phrases()
     scannable = mask_governed_phrases(
-        _mask_safe_phrases(question), _governed_name_shape_phrases()
+        _mask_safe_phrases(question),
+        name_shape_phrases,
+        _governed_name_shape_guards(name_shape_phrases),
     )
     return contains_human_name_shape(
         scannable, sentence_initial_place_terms=_sentence_initial_place_terms()
@@ -240,11 +243,7 @@ def _sentence_initial_place_terms() -> tuple[str, ...]:
         governed = tuple(get_governed_place_dimension().known_place_values())
     except Exception:  # noqa: BLE001 — the guard must never fail the request
         governed = ()
-    return tuple(
-        term
-        for term in US_STATE_NAMES + governed
-        if not shares_token_with_person_lexicon(term)
-    )
+    return US_STATE_NAMES + governed
 
 
 def _visible_text_values(value: object) -> list[str]:
@@ -367,6 +366,7 @@ def genie_visible_text_unsafe(
     if structured_value and normalize_place_value(value) in governed_cell_values:
         return False
     name_shape_phrases: tuple[str, ...] = ()
+    name_shape_guards: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = ()
     protected_class_phrases: tuple[str, ...] = ()
     protected_class_guards: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = ()
     if not structured_value:
@@ -376,6 +376,7 @@ def genie_visible_text_unsafe(
         # wasted read — and the resolver probes cells through this very
         # function, so a structured path that resolved them would recurse.
         name_shape_phrases = _governed_name_shape_phrases()
+        name_shape_guards = _governed_name_shape_guards(name_shape_phrases)
         protected_class_phrases, protected_class_guards = (
             _governed_protected_class_mask_args()
         )
@@ -394,6 +395,7 @@ def genie_visible_text_unsafe(
         assume_reviewed_read_only_analytics=True,
         name_shape_value=_name_shape_scan_copy(value),
         name_shape_allowed_phrases=name_shape_phrases,
+        name_shape_guards=name_shape_guards,
         protected_class_guards=protected_class_guards,
         # Prose only, and the same correction the prompt guard opts into: a
         # capitalized word opening a sentence is orthography. Structured cells
@@ -456,6 +458,21 @@ def _governed_name_shape_phrases() -> tuple[str, ...]:
         from backend.services.genie_place_dimension import get_governed_place_dimension
 
         return tuple(get_governed_place_dimension().name_shape_safe_values())
+    except Exception:  # noqa: BLE001 — the guard must never fail the request
+        return ()
+
+
+def _governed_name_shape_guards(
+    values: tuple[str, ...],
+) -> tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...]:
+    """Nesting guards so an exempt place is not erased out of a longer one."""
+
+    try:
+        from backend.services.genie_place_dimension import (
+            governed_name_shape_mask_guards,
+        )
+
+        return governed_name_shape_mask_guards(values)
     except Exception:  # noqa: BLE001 — the guard must never fail the request
         return ()
 
