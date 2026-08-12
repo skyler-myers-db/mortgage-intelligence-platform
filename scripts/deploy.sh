@@ -338,10 +338,11 @@ MIP_APP_ROLLBACK_PROXY_CREDENTIAL_IDS=""
 MIP_APP_ROLLBACK_RECORD_VERSION=""
 MIP_APP_ROLLBACK_PROXY_MODE=""
 MIP_APP_ROLLBACK_DEPLOYMENT_ID=""
-# shellcheck disable=SC2034  # MIP_APP_ROLLBACK_* contract surface; emitted by app_deployment_rollback_cli.py, not read in bash.
-MIP_APP_ROLLBACK_GATEWAY_ENDPOINT_ID=""
-# shellcheck disable=SC2034  # MIP_APP_ROLLBACK_* contract surface; emitted by app_deployment_rollback_cli.py, not read in bash.
-MIP_APP_ROLLBACK_GATEWAY_CREATOR=""
+# This block pre-binds only the names bash later dereferences without a `:-`
+# default, so `set -u` survives the paths that never source the binding env.
+# app_deployment_rollback_cli.py also emits MIP_APP_ROLLBACK_GATEWAY_ENDPOINT_ID
+# and MIP_APP_ROLLBACK_GATEWAY_CREATOR, but bash never reads either: the
+# preservation guards take the same two fields through the pin JSON below.
 MIP_APP_ROLLBACK_GATEWAY_PIN_JSON=""
 MIP_APP_ROLLBACK_GATEWAY_INFERENCE_TABLE_PREFIX=""
 MIP_APP_ROLLBACK_SUPERVISOR_ID=""
