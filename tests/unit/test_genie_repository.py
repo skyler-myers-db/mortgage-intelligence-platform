@@ -718,7 +718,25 @@ def test_cash_out_question_routes_to_offer_filter_not_equity_segment() -> None:
     }
 
 
-def test_singular_state_ranked_question_routes_to_top_state_only() -> None:
+def test_a_ranked_state_answer_opens_every_state_row_it_returned() -> None:
+    """The ROWS are the answer's geography, not the question's grammar.
+
+    This used to keep only the first row whenever the question matched "which
+    state". The wording cannot tell a superlative from a ranking: this question
+    asks for "the most" and its narrative names Illinois, while
+    "Which state should we prioritize next quarter and why?" ranks six states
+    to argue for two. Both start with "which state".
+
+    Live on paychex 2026-08-11, the second shape was answered over six state
+    rows recommending CA AND IL while the cohort silently opened CA alone —
+    the narrowing, invisible direction. Reading the rows instead errs broad
+    (this cohort opens the three states the table shows rather than the one the
+    prose highlights), which `X-Cohort-Count-Delta` surfaces. When Genie
+    really does mean one state it returns one row and the cohort is one state:
+    `test_cash_out_question_routes_to_offer_filter_not_equity_segment` above
+    still pins that, with the same question and a `LIMIT 1` statement.
+    """
+
     live = GenieResponse(
         answer_text="Illinois has the most cash-out borrowers.",
         sql_query=(
@@ -741,9 +759,9 @@ def test_singular_state_ranked_question_routes_to_top_state_only() -> None:
     result = repo.respond("Which state has the most cash-out opportunity right now?")
     action = next(row for row in result.actions if row.id == "open-cohort")
 
-    assert action.route == "/lead-queue?states=IL&product=Cash-out"
+    assert action.route == "/lead-queue?states=IL%2CCA%2CFL&product=Cash-out"
     assert action.criteria["result_filters"] == {
-        "states": ["IL"],
+        "states": ["IL", "CA", "FL"],
         "portfolio_criteria": {"product": "Cash-out"},
     }
 
@@ -4064,3 +4082,141 @@ def test_contradiction_detector_zero_claim_and_identifier_guard() -> None:
         "Borrowers with equity >= 35% qualify; 0.5% margin applies.", "122598"
     )
     assert contradicted is False
+
+
+# --- Comparative segment questions get rescued, not refused ----------------
+#
+# Measured live on paychex 2026-08-11: "Which segment converts best: HELOC,
+# cash-out, or retention?" came back from Genie with `sql_query: null`, so the
+# app refused with `source: policy_blocked` — while
+# `_CANONICAL_SEGMENT_APPROVAL_RATE_SQL` had the comparison the whole time.
+# The matcher required the literal words "approval rate"; the user said
+# "converts best".
+#
+# The rescue is deliberately NOT wired into `direct_canonical_response`, which
+# PREEMPTS the live turn. It fires only after Genie has already failed, where
+# the alternative is a refusal rather than a live answer.
+
+_SEGMENT_PERF_ROWS = [
+    {
+        "segment_code": "retention",
+        "name": "Retention Risk",
+        "segment_borrowers": 19166,
+        "approval_rate": 0.0,
+        "outreach_rate": 0.0,
+        "avg_score": 54.2,
+        "refreshed_at": "2026-08-09T16:56:59Z",
+    },
+    {
+        "segment_code": "itm",
+        "name": "Prime Refi Candidates",
+        "segment_borrowers": 74357,
+        "approval_rate": 0.12,
+        "outreach_rate": 0.31,
+        "avg_score": 61.8,
+        "refreshed_at": "2026-08-09T16:56:59Z",
+    },
+]
+
+
+def _text_only_turn(question_id: str) -> GenieResponse:
+    """A live turn that produced prose but no SQL — the rescue trigger."""
+    return GenieResponse(
+        answer_text="Retention looks strongest.",
+        sql_query=None,
+        sql_result_rows=[],
+        conversation_id=f"conv-{question_id}",
+        message_id=f"msg-{question_id}",
+    )
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Which segment converts best: HELOC, cash-out, or retention?",
+        "Which borrower segment has the highest approval rate?",
+        "Compare approval rates across all segments.",
+        "Which segment has the best average opportunity score?",
+        "Which segment performs best?",
+    ],
+)
+def test_comparative_segment_questions_are_rescued_not_refused(question: str) -> None:
+    sql = _StubSqlClient(list(_SEGMENT_PERF_ROWS))
+
+    result = _adapt_genie_response(
+        question,
+        _text_only_turn("seg-perf"),
+        sql_client=sql,  # type: ignore[arg-type]
+    )
+
+    assert result.source == "trusted_sql", question
+    assert result.source != "policy_blocked", question
+    assert result.trusted_assets == ["mip.semantics.segment_performance_metric_view"]
+    assert result.proof is not None and result.proof.trusted is True
+    assert "segment_performance_metric_view" in (result.sql_query or "")
+    assert result.row_count == len(_SEGMENT_PERF_ROWS)
+    # The comparison itself has to reach the reader, not just a citation.
+    assert result.table_rows == _SEGMENT_PERF_ROWS
+
+
+@pytest.mark.parametrize(
+    ("question", "why"),
+    [
+        (
+            "Rank our segments by average rate spread.",
+            "rate spread is not a column of the segment performance view",
+        ),
+        (
+            "Which segment has the most equity?",
+            "equity is not a column of the view either",
+        ),
+        (
+            "Which state has the highest approval rate?",
+            "a state comparison is not a segment comparison",
+        ),
+    ],
+)
+def test_the_segment_rescue_stands_aside_for_metrics_it_does_not_carry(
+    question: str, why: str
+) -> None:
+    """A confidently wrong answer is worse than no rescue."""
+
+    sql = _StubSqlClient(list(_SEGMENT_PERF_ROWS))
+
+    result = _adapt_genie_response(
+        question,
+        _text_only_turn("seg-foreign"),
+        sql_client=sql,  # type: ignore[arg-type]
+    )
+
+    assert "segment_performance_metric_view" not in (result.sql_query or ""), why
+
+
+def test_a_good_live_segment_turn_is_never_overwritten_by_the_rescue() -> None:
+    """Live-first: the rescue fires only where Genie produced no SQL proof.
+
+    Overlaying a trusted live turn is prohibited by the doctrine — the
+    deterministic layer rescues and cross-checks, it does not replace.
+    """
+
+    live_sql = (
+        "SELECT segment_code, approval_rate FROM mip.semantics.segment_performance_metric_view "
+        "WHERE state = '_ALL'"
+    )
+    live = GenieResponse(
+        answer_text="Retention leads on approval rate.",
+        sql_query=live_sql,
+        sql_result_rows=[{"segment_code": "retention", "approval_rate": 0.0}],
+        conversation_id="conv-live-seg",
+        message_id="msg-live-seg",
+    )
+    sql = _StubSqlClient(list(_SEGMENT_PERF_ROWS))
+
+    result = _adapt_genie_response(
+        "Which segment converts best: HELOC, cash-out, or retention?",
+        live,
+        sql_client=sql,  # type: ignore[arg-type]
+    )
+
+    assert result.sql_query == live_sql
+    assert result.table_rows == [{"segment_code": "retention", "approval_rate": 0.0}]

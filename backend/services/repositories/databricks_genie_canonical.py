@@ -2849,6 +2849,178 @@ def _canonical_segment_approval_rate_scope(question: str) -> bool:
     )
 
 
+# Columns `mip.semantics.segment_performance_metric_view` actually carries, in
+# the words a user reaches for. The view is one row per segment with
+# approval_rate, outreach_rate, count and avg_score, so it answers the whole
+# "compare our segments" family from a single statement.
+_SEGMENT_PERFORMANCE_METRIC_TERMS = (
+    "approval",
+    "approve",
+    "convert",
+    "conversion",
+    "outreach",
+    "opportunity score",
+    "lead score",
+    # NOT "avg score": ``_normalized_question`` rewrites "avg" to "average"
+    # before this list is consulted, so that term could never match.
+    "average score",
+    "perform",
+    "response rate",
+    "win rate",
+    # The view carries `count AS segment_borrowers`, so size comparisons are
+    # answerable from the same statement.
+    "size",
+    "sizes",
+    "how many borrowers",
+    "borrower count",
+    "largest",
+    "smallest",
+)
+# Metrics the view does NOT carry. Naming one means the question belongs to a
+# different statement (rate spread has its own) or to Genie. Standing aside is
+# the whole point: answering a rate-spread question with approval-rate columns
+# would be a confident wrong answer, which is worse than no rescue.
+_SEGMENT_PERFORMANCE_FOREIGN_TERMS = (
+    "rate spread",
+    "spread",
+    "equity",
+    "ltv",
+    "balance",
+    "income",
+    "delinquen",
+    "days on market",
+    "permit",
+    "listing",
+)
+_SEGMENT_COMPARISON_TERMS = (
+    "which",
+    # NOT "what": it is the most common English question word, not a
+    # comparison. With it in the list, "What is the average opportunity score
+    # for the retention segment?" -- a question about ONE segment -- was served
+    # the whole-portfolio ranking of all six.
+    "highest",
+    "lowest",
+    "best",
+    "worst",
+    "top",
+    "rank",
+    "compare",
+    "comparison",
+    "versus",
+    " vs ",
+    "better",
+    "across",
+)
+
+# The statement this predicate serves is ONE ROW PER SEGMENT, nationally
+# (`WHERE state = '_ALL'`), at the current snapshot. It therefore cannot answer
+# a question that varies along any other axis, and the failure is silent: the
+# answer looks authoritative and is about a different population.
+#
+# Adversarial review 2026-08-11 measured all three, each of which turned a
+# refusal into a confidently wrong answer:
+#   * "Which segment performs best in California?"        -> national figures
+#   * "Show me the top 10 borrowers by lead score in each segment" -> 6 rows
+#   * "Which segment converted best last quarter?"        -> today's snapshot
+_SEGMENT_PERFORMANCE_OFF_AXIS_TERMS = (
+    # Geography — the view HAS a state dimension, but this statement pins
+    # `_ALL`. Standing aside is honest; scoping it is a separate change.
+    " in ca",
+    " in tx",
+    " in il",
+    " in fl",
+    " in wa",
+    " in co",
+    "state",
+    "states",
+    "city",
+    "cities",
+    "zip",
+    "county",
+    "market",
+    "markets",
+    "msa",
+    "metro",
+    "region",
+    "california",
+    "texas",
+    "illinois",
+    "florida",
+    "washington",
+    "colorado",
+    # Grain — one row per SEGMENT, never per borrower.
+    "borrower id",
+    "borrowers by",
+    "top 10 borrowers",
+    "top 20 borrowers",
+    "top 5 borrowers",
+    "each borrower",
+    "individual borrower",
+    "list borrowers",
+    "show me borrowers",
+    "which borrowers",
+    # Time — the view is the current snapshot, with no period selector.
+    "last quarter",
+    "last month",
+    "last year",
+    "this quarter",
+    "this month",
+    "year over year",
+    "yoy",
+    "trend",
+    "over time",
+    "since",
+    "january",
+    "february",
+    "march",
+    "april",
+    " may ",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december",
+)
+
+
+def _canonical_segment_performance_rescue_scope(question: str) -> bool:
+    """Comparative "how do our segments stack up" questions, for RESCUE ONLY.
+
+    Deliberately broader than ``_canonical_segment_approval_rate_scope`` and
+    deliberately NOT wired into ``direct_canonical_response``. The direct path
+    PREEMPTS the live Genie turn, and the live-first doctrine reserves that for
+    narrow count prompts -- overlaying a good live turn is prohibited. This
+    predicate runs only after Genie has already failed to return trusted SQL,
+    where the alternative is not a live answer but a refusal.
+
+    Measured live on paychex 2026-08-11: "Which segment converts best: HELOC,
+    cash-out, or retention?" returned `sql_query: null` from Genie, so the app
+    refused -- while `_CANONICAL_SEGMENT_APPROVAL_RATE_SQL` had the answer the
+    whole time. The old matcher required the literal words "approval rate"; the
+    user said "converts best".
+
+    Strict on the METRIC, loose on the PHRASING: the view's columns are a
+    closed set, so a question naming a metric it does not carry gets no rescue
+    rather than a confidently wrong one.
+    """
+
+    q = _normalized_question(question)
+    if "segment" not in q:
+        return False
+    if any(term in q for term in _SEGMENT_PERFORMANCE_FOREIGN_TERMS):
+        return False
+    # Metric is only one of four axes. The statement is national, per-segment
+    # and current, so a question that moves along geography, grain or time is
+    # asking something this rescue cannot answer.
+    if any(term in f" {q} " for term in _SEGMENT_PERFORMANCE_OFF_AXIS_TERMS):
+        return False
+    return any(term in q for term in _SEGMENT_PERFORMANCE_METRIC_TERMS) and any(
+        term in q for term in _SEGMENT_COMPARISON_TERMS
+    )
+
+
 def _canonical_mean_lead_score_by_state_scope(question: str) -> bool:
     q = _normalized_question(question)
     return (

@@ -15,6 +15,26 @@ from backend.schemas.marketing_selection_reviewed_analytics import (
 )
 
 REVIEWED_MORTGAGE_ATTRIBUTE_FRAGMENT = (
+    # An aggregate qualifier is a DESCRIPTOR of a reviewed attribute, not a new
+    # selection criterion: "average rate spread" selects on rate spread exactly
+    # as "rate spread" does. These were admitted on the opportunity/lead-score
+    # alternative below and nowhere else, so the same aggregate flipped every
+    # OTHER reviewed attribute to unreviewed and the prompt failed closed.
+    #
+    # Live on paychex 2026-08-11: "Rank our segments by average rate spread."
+    # was refused with "it is outside the reviewed Module 0 vocabulary" in
+    # ~1s, before any repository call -- while
+    # `_canonical_mean_rate_spread_by_segment_scope` already matched that exact
+    # string and its canonical SQL was sitting there unreachable. Measured
+    # matrix: `rate spread` passed bare and with "high", and refused with
+    # "average", "mean" and "highest"; `home equity`, `LTV`, `loan balance` and
+    # `property value` behaved the same way.
+    #
+    # This does NOT weaken the fail-closed default. The attribute alternation
+    # below is unchanged, so an UNREVIEWED attribute stays unreviewed with or
+    # without a qualifier -- "average credit score" still refuses, and
+    # ``test_aggregate_qualifiers_never_admit_an_unreviewed_attribute`` pins it.
+    r"(?:(?:average|avg|mean|median|typical|high(?:est)?|low(?:est)?|top|bottom)\s+)?"
     r"(?:(?:high|strong|substantial|sufficient|available|usable)\s+(?:home[- ]?)?equity|"
     r"substantial\s+modeled\s+(?:home[- ]?)?equity|"
     r"(?:high|low|rising|falling|current|elevated)\s+"
@@ -61,7 +81,18 @@ REVIEWED_MORTGAGE_ATTRIBUTE_FRAGMENT = (
     r"(?:an?\s+)?(?:especially\s+|particularly\s+|very\s+)?"
     r"(?:strong|good|great|excellent|prime|ideal|top|promising)\s+"
     r"(?:candidates?|prospects?|fits?|matches?|opportunit(?:y|ies))|"
-    r"(?:fixed|adjustable)[- ]?rate\s+(?:mortgages?|loans?))"
+    r"(?:fixed|adjustable)[- ]?rate\s+(?:mortgages?|loans?)|"
+    # Bare "home equity" / "equity percentage". Every other equity alternative
+    # above REQUIRES a qualifier ("strong equity", "substantial equity"), so
+    # "Rank our segments by home equity" -- a plain analytics question about
+    # the signal this product is built on (CLAUDE.md: HELOC/Cash-out
+    # candidates = strong equity) -- failed closed as an unknown criterion,
+    # with or without an aggregate. Deliberately anchored on "home" or on an
+    # explicit percentage noun: bare "equity" on its own is left out because
+    # it is also the DEI sense of the word, and the protected-class terms are
+    # matched before this fragment is ever consulted. Placed last so it cannot
+    # shadow "home equity line of credit" or "home equity intent" above.
+    r"(?:home[- ]?equity|equity\s+(?:pct|percent(?:age)?|share)))"
 )
 REVIEWED_MORTGAGE_ATTRIBUTE_LIST_FRAGMENT = (
     rf"(?:{REVIEWED_MORTGAGE_ATTRIBUTE_FRAGMENT})"
