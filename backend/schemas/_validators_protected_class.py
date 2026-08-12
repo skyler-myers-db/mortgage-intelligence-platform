@@ -396,16 +396,6 @@ def protected_class_marketing_reason(
     # rejoined into ``laos``: both of its tokens come from digits, so the
     # window carries no letter anyone actually wrote. An evasion always does --
     # ``b 1 a c k`` still has ``b``, ``a``, ``c``, ``k``.
-    # Unscoped variants, kept for the two consumers that must not change: the
-    # split-term joiner below and the criterion state machine further down.
-    unscoped_leet_variants = {
-        variant.translate(table) for variant in symbol_variants for table in _LEET_TABLES
-    }
-    unscoped_deobfuscated = {
-        re.sub(r"(?<=[A-Za-z])[\-‐-―](?=[A-Za-z])", "", folded)
-        for variant in unscoped_leet_variants
-        for folded in ascii_confusable_folds(variant)
-    }
     for joiner_source in {
         folded for variant in symbol_variants for folded in ascii_confusable_folds(variant)
     }:
@@ -449,29 +439,23 @@ def protected_class_marketing_reason(
         mask_protected_health_safe_contexts(part) for part in scannable_parts
     )
     reviewed_analytics = is_reviewed_read_only_analytics_text(mark_folded)
-    # The criterion state machine keeps the UNSCOPED fold, deliberately, and
-    # this is the one place where that matters.
+    # The criterion state machine reads the SCOPED fold, like everything else.
     #
-    # It is a structural grammar over UNKNOWN tokens, not a vocabulary matcher,
-    # so a number folded into a word-shaped token ("top 50" -> "top so") reads
-    # to it as an unreviewed selection token and refuses. That is how
-    # "Show me the top 50 borrowers with the credit score." and "Identify the
-    # top 10 borrowers with eczema." are refused today: not because the machine
-    # saw "credit score" or "eczema" -- it does not catch either once a numeric
-    # quantifier is present -- but because the fold handed it "so"/"lo".
+    # It briefly did not. #217 scoped the leetspeak fold away from numbers so
+    # the TERM banks would stop reading a governed count as a national origin,
+    # and handed this machine the unscoped variants to keep its behavior
+    # bit-for-bit unchanged -- because 31 measured refusals depended on the
+    # fold, not on the machine. "Show me the top 50 borrowers with the credit
+    # score." refused because the fold turned "50" into the unknown token "so"
+    # sitting in the criterion position, never because anything recognized
+    # "credit score". Correct outcome, accidental reason, and the accident
+    # evaporated for a comma-grouped count ("the top 1,000 borrowers"), which
+    # no fold rewrites: 451 of those were measured allowed.
     #
-    # Correct outcome, accidental reason. Scoping the fold here removes the
-    # accident and, with it, 31 measured refusals; the underlying hole (a
-    # numeric quantifier blinds the machine) is pre-existing, belongs to the
-    # criterion grammar rather than to the de-obfuscator, and is filed
-    # separately. Feeding this machine the unscoped variants leaves its
-    # behavior bit-for-bit unchanged while the TERM banks above stop reading
-    # numbers as national origins.
-    criterion_semantic_parts = (
-        mark_folded,
-        *sorted(unscoped_leet_variants),
-        *sorted(unscoped_deobfuscated),
-    )
+    # ``_POPULATION_QUANTIFIER`` now makes a bare cardinal transparent to both
+    # of the machine's lead-ins, so the same sentences refuse for the reason
+    # they always should have -- the criterion is unreviewed -- and the
+    # workaround is gone.
     has_unreviewed_selection_criterion = (
         False
         if (reviewed_analytics or assume_reviewed_read_only_analytics)
@@ -481,7 +465,7 @@ def protected_class_marketing_reason(
                 selection_context_re=PROTECTED_HEALTH_SELECTION_CONTEXT_RE,
             )
             # Separator-folded text is invalid for the clause state machine.
-            for part in criterion_semantic_parts
+            for part in health_semantic_parts
         )
     )
     # Direct protected-class, health, national-origin, and proxy detectors

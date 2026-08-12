@@ -164,19 +164,26 @@ REVIEWED_ATTRIBUTE_PURPOSE_FRAGMENT = (
 # savings or risk. Reviewing vocabulary for a measure the product does not
 # have would be inventing a capability, not clearing a false positive.
 #
-# The number slot stays DIGITS ONLY, and that is load-bearing. The criterion is
-# also matched against de-obfuscated scan variants, which translate digits to
-# lookalike letters (``str.maketrans("013457", "oleast")``), so "above 150 bps"
-# arrives as "above lso bps" in one variant and the whole threshold family still
-# refuses. Widening the slot to accept those fold images was tried on
-# 2026-08-12 and reverted the same day: the reachable alphabet is exactly
-# {o,l,e,a,s,t,i} plus digits, an unbounded run of which spells ``otitis``,
-# ``stasis``, ``asia``, ``silesia``, ``tallit`` and the surnames ``salas`` and
-# ``sotelo`` -- 584 of 596 probe tokens flipped from refused to allowed, on all
-# five validators. The vocabulary is the wrong place to absorb a fold: the
-# threshold family has to be unblocked where the variants are BUILT, by keeping
-# a freestanding number fold-stable, which is a separate change with its own
-# evidence. Until then this family refuses, exactly as it does on main.
+# The number slot stays DIGITS ONLY, and that is load-bearing. Widening it to
+# accept the de-obfuscator's fold images was tried on 2026-08-12 and reverted
+# the same day: the reachable alphabet is exactly {o,l,e,a,s,t,i} plus digits,
+# an unbounded run of which spells ``otitis``, ``stasis``, ``asia``,
+# ``silesia``, ``tallit`` and the surnames ``salas`` and ``sotelo`` -- 584 of
+# 596 probe tokens flipped from refused to allowed, on all five validators.
+#
+# The fold was the reason this slot could not be reached at all: the criterion
+# was matched against variants that translate digits to lookalike letters
+# (``str.maketrans("013457", "oleast")``), so "above 150 bps" arrived as "above
+# lso bps" and the threshold family refused. That was the "unblock it where the
+# variants are BUILT" fix this comment used to await, and it has landed --
+# #217 scoped the fold away from numbers, and the criterion machine stopped
+# being handed the unscoped variants (2026-08-12). "Rank borrowers with a rate
+# spread above 150 basis points" is answered now.
+#
+# Still open, and unrelated to the fold: ``_REVIEWED_DIRECTIVE_CRITERION`` in
+# ``marketing_selection_criteria`` embeds the LIST fragment without this
+# threshold, so only the formation-verb branch reads a bound. "Show me
+# borrowers with a rate spread above 150 basis points" therefore still refuses.
 _REVIEWED_ATTRIBUTE_THRESHOLD = (
     r"(?:\s+(?:above|over|below|under|at\s+least|at\s+most|greater\s+than|"
     r"less\s+than|more\s+than|fewer\s+than|of\s+at\s+least|of\s+at\s+most|"

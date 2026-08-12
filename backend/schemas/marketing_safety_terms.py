@@ -170,6 +170,15 @@ _PROTECTED_HEALTH_NAMED_CONDITIONS = (
     "dementia",
     "depression",
     "diabetes",
+    # ``psoriasis`` has been in this bank from the start and ``eczema`` was
+    # not, so the repo's own canonical health carrier refused as an UNKNOWN
+    # criterion rather than as a health term -- the fail-closed net catching it
+    # by shape, not the bank recognizing it. Both are common chronic skin
+    # conditions and the asymmetry was an omission, not a decision. Adding it
+    # moves the reason from ``unreviewed_criterion`` to ``protected_class`` for
+    # every eczema carrier; the sibling expectations in
+    # ``test_genie_prompt_guard_geography`` were updated with it.
+    "eczema",
     "epilepsy",
     "heart disease",
     "high blood pressure",

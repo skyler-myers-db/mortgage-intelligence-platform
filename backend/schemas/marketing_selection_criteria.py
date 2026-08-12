@@ -366,17 +366,40 @@ _REVIEWED_CONDITIONAL_DIRECTIVE_CRITERION = (
     rf"(?:{REVIEWED_MORTGAGE_ATTRIBUTE_LIST_FRAGMENT})"
     rf"{REVIEWED_ATTRIBUTE_PURPOSE_FRAGMENT}"
 )
+# A bare cardinal between the lead-in verb and the population noun QUANTIFIES
+# that population -- "the top 50 borrowers", "the best 25 customers", "the next
+# 1,000 leads". It names no criterion and cannot spell one: a token drawn from
+# ``[0-9,]`` has no vocabulary in it.
+#
+# Both lead-ins below spelled themselves alphabetic-only, so a count switched
+# each of them off, in OPPOSITE directions and for the same reason:
+#
+#   * the reviewed lead-in stopped matching, so "Rank the top 50 borrowers with
+#     a rate spread." fell past the allow branch and refused while the same
+#     sentence without the count was answered (1,484 measured, 2026-08-12);
+#   * the directive lead-in stopped matching, so "Show me the top 1,000
+#     borrowers with the credit score." was NOT recognized as a population
+#     directive and was allowed (451 measured).
+#
+# Plain "50"/"10" appeared to be caught only because the de-obfuscator handed
+# this machine a leetspeak fold of them ("so"/"lo") that reads as an unknown
+# token; comma-grouped counts escaped even that, because a comma is not in the
+# alphabetic class either. Correct outcome, accidental reason -- and the
+# accident disappears the moment the fold is scoped away from numbers (#217).
+_POPULATION_QUANTIFIER = r"(?:[0-9]{1,3}(?:,[0-9]{3})*|[0-9]+)"
+_AUDIENCE_LEAD_IN_TOKEN = rf"(?:[a-z][a-z'-]*|{_POPULATION_QUANTIFIER})"
 _REVIEWED_AUDIENCE_DECISION_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(
-        rf"^(?:[a-z][a-z'-]*\s+){{1,10}}{_REVIEWED_DIRECTIVE_CRITERION}$",
+        rf"^(?:{_AUDIENCE_LEAD_IN_TOKEN}\s+){{1,10}}{_REVIEWED_DIRECTIVE_CRITERION}$",
         re.IGNORECASE,
     ),
     re.compile(
-        rf"^(?:[a-z][a-z'-]*\s+){{1,10}}{_REVIEWED_CONDITIONAL_DIRECTIVE_CRITERION}$",
+        rf"^(?:{_AUDIENCE_LEAD_IN_TOKEN}\s+){{1,10}}"
+        rf"{_REVIEWED_CONDITIONAL_DIRECTIVE_CRITERION}$",
         re.IGNORECASE,
     ),
     re.compile(
-        rf"^(?:[a-z][a-z'-]*\s+){{1,10}}{_REVIEWED_WHOSE_DIRECTIVE_CRITERION}$",
+        rf"^(?:{_AUDIENCE_LEAD_IN_TOKEN}\s+){{1,10}}{_REVIEWED_WHOSE_DIRECTIVE_CRITERION}$",
         re.IGNORECASE,
     ),
     re.compile(
@@ -439,6 +462,14 @@ _AFFIRMATIVE_AUDIENCE_DIRECTIVE_RE = re.compile(
 _REVIEWED_DIRECTIVE_POPULATION_PREFIX_RE = re.compile(
     r"^(?:(?:the|reviewed|eligible|qualified|marketing[- ]eligible|highest[- ]scoring)\s*){0,3}$",
     re.IGNORECASE,
+)
+# The fail-closed half of the quantifier fix (see ``_POPULATION_QUANTIFIER``):
+# an ordinary lead-in phrase in front of a population noun. A strict superset of
+# the alphabetic-only class this replaces -- the same letters, apostrophes,
+# spaces and hyphens, plus bare cardinals -- so it can only ever recognize MORE
+# population directives, never fewer.
+_AUDIENCE_DIRECTIVE_LEAD_IN_RE = re.compile(
+    rf"(?=.{{1,101}}$)[A-Za-z][A-Za-z' -]*(?:{_POPULATION_QUANTIFIER}[A-Za-z' -]*)*",
 )
 _SAFE_CONTEXTUAL_CTA_RE = re.compile(
     r"^(?:may|can|should)\s+(?:contact|call|email|text|message|reply|respond|reach\s+out)"
@@ -698,7 +729,7 @@ def _contains_unreviewed_audience_decision(
         prefix = clause[: candidate.start()].strip()
         is_population_directive = suffix.strip() != "" and (
             _AUDIENCE_FORMATION_ACTION_RE.search(formation_prefix) is not None
-            or bool(prefix and re.fullmatch(r"[A-Za-z][A-Za-z' -]{0,100}", prefix))
+            or bool(prefix and _AUDIENCE_DIRECTIVE_LEAD_IN_RE.fullmatch(prefix))
         )
         if (has_governed_outcome or is_population_directive) and has_criterion_connector:
             return True

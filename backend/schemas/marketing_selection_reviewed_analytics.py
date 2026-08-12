@@ -222,7 +222,14 @@ _REVIEWED_READ_ONLY_ANALYTIC_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(
         r"^(?:chart|plot|graph|visualize|display|show|list|count|rank|order|group|compare|"
         r"break\s+down)\s+(?:me\s+)?(?:the\s+)?"
-        r"(?:(?:top|bottom)\s+(?:[0-9]{1,3}|ten|twenty(?:[- ]five)?)\s+)?"
+        # The COUNT is optional, the rank word is not. "Show the top 25
+        # borrowers by state" matched and "Show the top borrowers by state"
+        # did not -- the same numeric asymmetry ``_POPULATION_QUANTIFIER``
+        # fixes one module over, pointing the other way. A count quantifies a
+        # ranked cohort; it does not decide whether the shape is governed, and
+        # every other slot here (population, dimension, location) is closed, so
+        # dropping it cannot admit an unknown criterion.
+        r"(?:(?:top|bottom)\s+(?:(?:[0-9]{1,3}|ten|twenty(?:[- ]five)?)\s+)?)?"
         rf"{_REVIEWED_ANALYTIC_POPULATION}\s+"
         r"(?:(?:by|grouped\s+by|ordered\s+by|ranked\s+by)\s+)"
         rf"{_REVIEWED_ANALYTIC_DIMENSION}{_REVIEWED_ANALYTIC_LOCATION}$",

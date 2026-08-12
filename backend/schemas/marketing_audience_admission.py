@@ -41,6 +41,15 @@ _CAUSAL_CONDITION = (
 _MODIFIERS = (
     r"(?:(?:the|these|those|all|reviewed|eligible|qualified|marketing[- ]eligible|"
     r"highest[- ]scoring|prospective|current)\s+){0,3}"
+    # A bare cardinal QUANTIFIES the population it precedes -- "the top 50
+    # borrowers", "the next 1,000 leads". Without this slot the count broke the
+    # admission parse, so "Add the top 50 borrowers with the highest rate spread
+    # to the campaign." proved no relation at all and fell through to the
+    # fail-closed tail, while the same sentence without the count was answered.
+    # The count admits nothing on its own: a token drawn from ``[0-9,]`` cannot
+    # spell a criterion, and whatever the criterion group captures must still
+    # satisfy ``_is_reviewed_admission_criterion``.
+    r"(?:(?:[0-9]{1,3}(?:,[0-9]{3})*|[0-9]+)\s+)?"
 )
 _DESTINATION_REFERENCE = rf"(?:the\s+|this\s+|that\s+|a\s+|an\s+)?{_DESTINATION}"
 _DESTINATION_RELATION = rf"(?:into|in|to|on|onto|for|towards?)\s+{_DESTINATION_REFERENCE}"
