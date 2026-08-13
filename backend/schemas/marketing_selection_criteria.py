@@ -19,6 +19,9 @@ from backend.schemas.marketing_selection_reviewed_attributes import (
     REVIEWED_MORTGAGE_ATTRIBUTE_FRAGMENT,
     REVIEWED_MORTGAGE_ATTRIBUTE_LIST_FRAGMENT,
 )
+from backend.schemas.marketing_selection_reviewed_places import (
+    is_governed_analytics_location,
+)
 
 _CRITERION_TAIL = r"(?P<criterion>[^.!?;:]{1,120})"
 _ELIGIBILITY_SUBJECT = (
@@ -581,9 +584,7 @@ def _contains_unreviewed_audience_decision(
     admission = audience_admission_criterion(clause)
     if admission is not None:
         return not _is_reviewed_admission_criterion(admission)
-    if any(
-        pattern.fullmatch(clause) is not None for pattern in _REVIEWED_READ_ONLY_ANALYTIC_PATTERNS
-    ):
+    if matches_reviewed_read_only_analytic_shape(clause):
         return False
     if _REVIEWED_NON_POPULATION_STRATEGY_RE.fullmatch(clause) is not None:
         return False
@@ -702,16 +703,36 @@ def _contains_unreviewed_audience_decision(
     return False
 
 
+def matches_reviewed_read_only_analytic_shape(clause: str) -> bool:
+    """Fullmatch a reviewed analytics shape AND clear its location slot.
+
+    The two halves are one decision and must stay in one function. Matching a
+    shape sets ``reviewed_analytics``, which silences the health-term bank and
+    takes the unknown-criterion state machine out of the decision, so a shape
+    that matched on the regex alone would hand that kill switch to whatever
+    landed in the location capture. Both callers of the pattern tuple used to
+    spell the fullmatch themselves; a check added to one of them would have
+    left the other open.
+    """
+
+    for pattern in _REVIEWED_READ_ONLY_ANALYTIC_PATTERNS:
+        match = pattern.fullmatch(clause)
+        if match is None:
+            continue
+        # ``loc`` is absent from shapes that carry no location slot, and None
+        # when the slot is present but unused. Both mean "no place named".
+        location = match.groupdict().get("loc")
+        if is_governed_analytics_location(location):
+            return True
+    return False
+
+
 def is_reviewed_read_only_analytics_text(value: str) -> bool:
     """Return true only when every clause is a closed, read-only analytics query."""
 
     clauses = [part.strip() for part in re.split(r"[.!?;:\n]+", value) if part.strip()]
     return bool(clauses) and all(
-        any(
-            pattern.fullmatch(clause) is not None
-            for pattern in _REVIEWED_READ_ONLY_ANALYTIC_PATTERNS
-        )
-        for clause in clauses
+        matches_reviewed_read_only_analytic_shape(clause) for clause in clauses
     )
 
 

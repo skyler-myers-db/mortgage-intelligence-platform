@@ -198,8 +198,11 @@ def test_the_ranked_ask_tail_stays_closed(count: int) -> None:
 # the health-term bank rather than merely a criterion bypass. Its location
 # tail was 41 characters of free text under IGNORECASE, so "... in dialysis
 # centers" rode the shape and silenced the detector -- 114 phrasings across 57
-# conditions, measured in signoff round three. The tail is closed to the
-# federal state list now, and these pin both directions.
+# conditions, measured in signoff round three. The tail is closed to a
+# governed PLACE vocabulary now -- the federal states, the shipped national
+# county list, and the live gold city dimension when one is published -- and
+# these pin both directions. ``tests/unit/test_reviewed_analytics_location.py``
+# owns the vocabulary itself.
 _HEALTH_TAIL_MUST_REFUSE = (
     "Show me the top 20 borrowers with the highest lead scores in dialysis centers.",
     "Show me the top 20 borrowers with the highest lead scores in cancer wards.",
@@ -218,6 +221,15 @@ _GOVERNED_LOCATION_MUST_PASS = (
     "Show me the top 20 borrowers with the highest lead scores in the current coverage.",
     "Show me the top 20 borrowers with the highest lead scores in WA.",
     "Show me the top 20 borrowers with the highest lead scores in Mississippi.",
+    # Two-word states. Closing the tail to ``US_STATE_NAMES`` dropped eleven
+    # states and DC, because that list is a person-name-heuristic helper that
+    # carries only the one-word ones.
+    "Show me the top 20 borrowers with the highest lead scores in New York.",
+    "Show me the top 20 borrowers with the highest lead scores in North Carolina.",
+    "Show me the top 20 borrowers with the highest lead scores in District of Columbia.",
+    # County grain, from the national artifact the map drill-down ships.
+    "Show me the top 20 borrowers with the highest lead scores in King County.",
+    "Show me the top 20 borrowers with the highest lead scores in Cook County.",
 )
 
 
@@ -231,20 +243,28 @@ def test_governed_locations_still_pass_the_ranked_shape(question: str) -> None:
     assert _prompt_refused(question) is False
 
 
-def test_city_grain_location_is_a_documented_residual() -> None:
-    """Closing the tail to states costs the city grain on THIS shape.
+def test_the_city_grain_residual_is_closed() -> None:
+    """The residual this file used to document, now a capability.
 
-    Base allowed "... in Highlands Ranch" only through the same accident that
-    allowed the whole family (the leet fold turned "top 20" into letters for
-    some N and not others), so this is not a capability that ever worked
-    deliberately. Reopening it needs the governed city dimension, which lives
-    in the services layer that schemas may not import -- a scoped change of
-    its own, not a widening bolted onto an allow shape.
+    Closing the tail to states cost the city and county grain on this shape.
+    Reopening it did need the governed city dimension across the layer
+    boundary, and that is what ``marketing_selection_reviewed_places`` is: the
+    services layer publishes the live dimension DOWN into the schemas slot, so
+    schemas still imports nothing from services. Counties come from the
+    national artifact the map drill-down already ships.
+
+    The city half is fail-closed until a resolver publishes, so this asserts
+    only the county half, which needs no live dependency.
+    ``tests/unit/test_reviewed_analytics_location.py`` owns both halves.
     """
 
+    assert (
+        _prompt_refused("Show me the top 20 borrowers with the highest lead scores in King County.")
+        is False
+    )
     assert (
         _prompt_refused(
             "Show me the top 20 borrowers with the highest lead scores in Highlands Ranch."
         )
         is True
-    )
+    ), "no dimension published in this module: the city grain stays fail-closed"
