@@ -727,7 +727,15 @@ class GovernedPlaceDimensionResolver:
         )
 
     def _resolve(self) -> ResolvedPlaceDimension:
-        """Load-or-degrade the whole dimension. Never raises."""
+        """Load-or-degrade the whole dimension. Never raises.
+
+        Every resolve PUBLISHES, degraded included: an empty dimension
+        withdraws the prompt guard's city grain rather than leaving a stale
+        vocabulary standing. Imported inside the call because the publisher
+        imports ``ResolvedPlaceDimension`` from here.
+        """
+
+        from backend.services.genie_place_dimension_publish import publish_governed_scope_cities
 
         cached: ResolvedPlaceDimension | None = self._cache.get(_PLACE_DIMENSION_CACHE_KEY)
         if cached is not None:
@@ -756,9 +764,11 @@ class GovernedPlaceDimensionResolver:
                 self._cache.set(
                     _PLACE_DIMENSION_CACHE_KEY, degraded, _PLACE_DIMENSION_FAILURE_TTL_S
                 )
+                publish_governed_scope_cities(degraded)
                 return degraded
             self._warned = False
             self._cache.set(_PLACE_DIMENSION_CACHE_KEY, loaded, self._ttl_s)
+            publish_governed_scope_cities(loaded)
             return loaded
 
     def conflicting_values(self) -> frozenset[str]:
@@ -870,8 +880,18 @@ def warm_governed_place_dimension() -> None:
 def _reset_governed_place_dimension_for_tests(
     resolver: GovernedPlaceDimensionResolver | None = None,
 ) -> None:
-    """Test helper: swap (or clear) the process-wide resolver."""
+    """Test helper: swap (or clear) the process-wide resolver.
+
+    Also withdraws the published geography-scope vocabulary: resolving is a
+    PUBLISHING act now, so a test that resolves a fake dimension would leave
+    its cities in a schemas-layer global for the next test file to inherit.
+    """
+
+    from backend.schemas.marketing_selection_reviewed_places import (
+        register_governed_analytics_cities,
+    )
 
     global _RESOLVER
     with _RESOLVER_LOCK:
         _RESOLVER = resolver
+    register_governed_analytics_cities(())
