@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterable
 from functools import lru_cache
 from pathlib import Path
 from typing import Final
@@ -266,13 +267,15 @@ def register_governed_analytics_cities(values: object) -> int:
     """
 
     global _registered_city_values, _registered_city_input
-    if isinstance(values, str | bytes):
+    # ``object`` on purpose: this is called across a layer boundary by a
+    # resolver that degrades, so a str, a None, or a non-iterable is a real
+    # input and each must mean "publish nothing" rather than raise into a
+    # dimension load. A bare string is iterable and would register 428
+    # single characters, so it is rejected before the Iterable check.
+    if isinstance(values, str | bytes) or not isinstance(values, Iterable):
         candidates: tuple[str, ...] = ()
     else:
-        try:
-            candidates = tuple(str(value) for value in values)  # type: ignore[union-attr]
-        except TypeError:
-            candidates = ()
+        candidates = tuple(str(value) for value in values)
     incoming = frozenset(candidates)
     if incoming == _registered_city_input:
         return len(_registered_city_values)

@@ -214,14 +214,19 @@ def test_the_city_gate_admits_the_rest_of_the_sample() -> None:
 @pytest.mark.parametrize(
     "junk",
     (
-        "SEATTLE",  # a bare string is not a dimension
+        "SEATTLE",  # a bare string IS iterable -- 7 single characters
         object(),  # not iterable at all
+        None,  # what a degraded resolver hands over
+        42,
         ("a b c d e f",),  # more tokens than any governed place value
         ("",),
         ("   ",),
     ),
 )
 def test_registration_is_fail_closed_on_junk(junk: object) -> None:
+    """Called across a layer boundary by a resolver that degrades, so every
+    one of these is a real input and none may raise into a dimension load."""
+
     assert register_governed_analytics_cities(junk) == 0
     assert governed_analytics_cities() == frozenset()
 
