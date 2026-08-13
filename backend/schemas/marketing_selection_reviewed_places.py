@@ -147,8 +147,19 @@ COUNTY_NAME_EXCLUSIONS: Final[frozenset[str]] = frozenset(
 # backtracking ever does settle on a wrong binding, membership rejects it and
 # the clause fails closed, which is a false refusal and never a bypass.
 _LOCATION_TOKEN = r"[A-Za-z][A-Za-z.'-]*"
+# "the whole footprint" said the way the product says it. Closed, and wider
+# than it looks it needs to be: the slot admitted only `the current
+# coverage|portfolio`, while "across the current Cotality data coverage" is
+# the phrasing the repo uses 45 times -- it is the tail of a SHIPPED Genie
+# sample question, and it refused, because the old open slot had been
+# absorbing it as free text rather than recognising it.
+_COVERAGE_PHRASE = (
+    r"the\s+current\s+(?:cotality\s+)?"
+    r"(?:data\s+|refreshed\s+|reviewed\s+)?(?:geography\s+|share\s+)?"
+    r"(?:coverage|portfolio|footprint)"
+)
 REVIEWED_ANALYTIC_LOCATION_FRAGMENT: Final[str] = (
-    r"(?:\s+(?:in|across)\s+(?:the\s+current\s+(?:coverage|portfolio)|"
+    rf"(?:\s+(?:in|across)\s+(?:{_COVERAGE_PHRASE}|"
     r"(?:the\s+state\s+of\s+)?"
     rf"(?P<loc>{_LOCATION_TOKEN}(?:\s+{_LOCATION_TOKEN}){{0,3}}"
     r"(?:\s*,\s*[A-Za-z]{2})?(?:\s*\([A-Za-z]{2}\))?)))?"

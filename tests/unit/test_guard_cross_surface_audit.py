@@ -11,6 +11,8 @@ append-only audit ledger verbatim).
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import pytest
 from fastapi.exceptions import HTTPException
 
@@ -28,6 +30,9 @@ from backend.schemas.common import (
     validate_public_campaign_label,
 )
 from backend.schemas.growth_agent import assert_reviewed_growth_objective
+from backend.schemas.marketing_selection_reviewed_places import (
+    register_governed_analytics_cities,
+)
 from backend.schemas.portfolio_campaign import (
     CampaignRecommendationEvidence,
     assert_public_campaign_text,
@@ -35,6 +40,37 @@ from backend.schemas.portfolio_campaign import (
 from backend.schemas.sales import DispositionRequest
 from backend.services.audit_store import AuditMetadataValueViolation, _sanitize_metadata
 from backend.services.genie_message_policy import genie_visible_text_unsafe
+
+# The cities this file names, published the way ``backend.main``'s lifespan
+# publishes the governed dimension at warm-up.
+#
+# This file asserts two things that used to be in tension: that a city passes
+# every surface, and that "the reviewed-analytics pattern shapes are
+# closed-vocabulary, so nothing else rides them". Both could not be true at
+# once, and the second was the false one -- the shapes' location slot was
+# `[A-Z][A-Za-z' -]{2,40}` under IGNORECASE, so a city passed because ANY
+# title-case string did, health terms included. With the slot closed to a
+# governed place vocabulary, a city name is vocabulary only once a resolver
+# publishes it, which is what the app does before it serves a request and what
+# this fixture does before the assertions run.
+_GOVERNED_CITIES: tuple[str, ...] = (
+    "EL PASO",
+    "FORT WORTH",
+    "SAN ANTONIO",
+    "ROUND ROCK",
+    "CORPUS CHRISTI",
+    "BATON ROUGE",
+    "LAKE FOREST",
+)
+
+
+@pytest.fixture(autouse=True)
+def _governed_place_dimension() -> Iterator[None]:
+    """Publish, then withdraw: the registry is process-wide state."""
+
+    register_governed_analytics_cities(_GOVERNED_CITIES)
+    yield
+    register_governed_analytics_cities(())
 
 
 @pytest.mark.parametrize(

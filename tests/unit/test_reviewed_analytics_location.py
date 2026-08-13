@@ -364,6 +364,40 @@ def test_ungoverned_spellings_do_not_resolve(location: str) -> None:
     assert is_governed_analytics_location(location) is False
 
 
+# Every "the whole footprint" spelling the repo actually uses. The slot
+# admitted only the first two, and "across the current Cotality data coverage"
+# -- the tail of a SHIPPED Genie sample question, and the phrasing the repo
+# uses 45 times -- refused. It had been riding the OPEN slot as free text, so
+# closing the slot to a vocabulary is exactly what exposed it.
+COVERAGE_PHRASES: tuple[str, ...] = (
+    "the current coverage",
+    "the current portfolio",
+    "the current Cotality coverage",
+    "the current Cotality data coverage",
+    "the current refreshed coverage",
+    "the current share footprint",
+    "the current reviewed geography footprint",
+)
+
+
+@pytest.mark.parametrize("phrase", COVERAGE_PHRASES)
+@pytest.mark.parametrize("preposition", ("in", "across"))
+def test_the_coverage_phrasings_the_product_uses_all_resolve(
+    phrase: str, preposition: str
+) -> None:
+    question = (
+        f"Show me the top 10 borrowers with the highest lead scores {preposition} {phrase}."
+    )
+    assert _refused(question) is False
+
+
+def test_the_coverage_branch_is_not_a_free_slot() -> None:
+    """It is an alternation of closed words, not "the current <anything>"."""
+
+    assert _refused(RANKED.format(loc="the current dialysis coverage")) is True
+    assert _refused(RANKED.format(loc="the current eczema portfolio")) is True
+
+
 def test_no_location_named_is_not_a_location_failure() -> None:
     """``None`` means the clause named no place; that is the shape's business."""
 
