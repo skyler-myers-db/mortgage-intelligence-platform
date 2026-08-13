@@ -541,6 +541,55 @@ def _collides_with_person_lexicon(value: str) -> bool:
     return shares_token_with_person_lexicon(value)
 
 
+def _publish_analytics_location_cities(resolved: ResolvedPlaceDimension) -> None:
+    """Hand the governed city dimension to the PROMPT guard's location slot.
+
+    Dependency inversion, not an import the other way: ``backend/schemas`` may
+    not import ``backend/services``, so the layer that owns the live dimension
+    pushes it down. This is a FIFTH surface, and it takes the raw
+    ``all_values`` rather than any set resolved here on purpose -- each surface
+    needs its own admission gate, and the gate for a slot that silences the
+    health bank is not the gate for a prose name-shape false positive. The
+    schemas side screens what it accepts.
+
+    Publishing the DEGRADED resolve matters as much as the loaded one: an empty
+    dimension withdraws the city grain and city questions refuse again, which
+    is the same answer the guard gave before this slot existed.
+
+    Called under ``_load_lock``, which is safe here and would not be for most
+    work in this module: the screening probe runs entirely inside
+    ``backend/schemas``, and schemas cannot import services, so it has no path
+    back to ``_resolve``. That is the same non-reentrant lock the cell probes
+    deadlock on. It costs ~1.2s against the 428 live values, and only on a
+    load that actually changed them -- ``register_governed_analytics_cities``
+    short-circuits an unchanged dimension before screening anything.
+    """
+
+    from backend.schemas.marketing_selection_reviewed_places import (
+        register_governed_analytics_cities,
+    )
+
+    try:
+        admitted = register_governed_analytics_cities(resolved.all_values)
+    except Exception as exc:  # noqa: BLE001 — a guard vocabulary must not 500
+        emit(
+            log,
+            "analytics_location_cities_publish_failed",
+            level=logging.WARNING,
+            outcome="degraded",
+            exc_type=type(exc).__name__,
+            exc_msg=str(exc)[:500],
+        )
+        return
+    emit(
+        log,
+        "analytics_location_cities_published",
+        level=logging.INFO,
+        dimension_values=len(resolved.all_values),
+        admitted_values=admitted,
+    )
+
+
 class GovernedPlaceDimensionResolver:
     """Resolve governed city values that the output-policy scanner rejects."""
 
@@ -704,9 +753,11 @@ class GovernedPlaceDimensionResolver:
                 self._cache.set(
                     _PLACE_DIMENSION_CACHE_KEY, degraded, _PLACE_DIMENSION_FAILURE_TTL_S
                 )
+                _publish_analytics_location_cities(degraded)
                 return degraded
             self._warned = False
             self._cache.set(_PLACE_DIMENSION_CACHE_KEY, loaded, self._ttl_s)
+            _publish_analytics_location_cities(loaded)
             return loaded
 
     def conflicting_values(self) -> frozenset[str]:
@@ -818,8 +869,19 @@ def warm_governed_place_dimension() -> None:
 def _reset_governed_place_dimension_for_tests(
     resolver: GovernedPlaceDimensionResolver | None = None,
 ) -> None:
-    """Test helper: swap (or clear) the process-wide resolver."""
+    """Test helper: swap (or clear) the process-wide resolver.
+
+    Also withdraws the published analytics-location vocabulary. Resolving is a
+    PUBLISHING act now, so a test that resolves a fake dimension leaves its
+    city values in a module global in the schemas layer, where the next test
+    file would silently inherit them.
+    """
+
+    from backend.schemas.marketing_selection_reviewed_places import (
+        register_governed_analytics_cities,
+    )
 
     global _RESOLVER
     with _RESOLVER_LOCK:
         _RESOLVER = resolver
+    register_governed_analytics_cities(())

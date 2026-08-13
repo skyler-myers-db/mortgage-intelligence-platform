@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import re
 
-from backend.schemas._validators_person_names import US_STATE_NAMES
+from backend.schemas.marketing_selection_reviewed_places import (
+    REVIEWED_ANALYTIC_LOCATION_FRAGMENT,
+)
 
 # A count inside a reviewed analytics shape. It sits opposite the directive
 # grammar's lead-in: `_DIRECTIVE_LEAD_IN` was collapsed to one alphanumeric
@@ -35,11 +37,6 @@ from backend.schemas._validators_person_names import US_STATE_NAMES
 # "top 25" passed. Fused orthography, and counts above 999, are the cases the
 # old `top\s+[0-9]{1,3}\s+` slot could not reach.
 _ANALYTIC_COUNT = r"(?:[0-9]{1,5}|ten|twenty(?:[- ]five)?)"
-# The federal state list, reused so the analytics location slot is closed
-# to the same vocabulary the name-shape strip already treats as places.
-_US_STATE_ALTERNATION = "|".join(
-    re.escape(state).replace(r"\ ", r"\s+") for state in US_STATE_NAMES
-)
 
 _REVIEWED_ANALYTIC_POPULATION = (
     r"(?:(?:(?:in[- ]the[- ]money|listed|refinance[- ]ready|retention[- ]risk|"
@@ -56,10 +53,17 @@ _REVIEWED_ANALYTIC_MEASURE = (
     r"(?:listing\s+time\s+on\s+market|lead\s+score|opportunity\s+score|"
     r"borrower\s+count|equity(?:\s+percentage)?|ltv|loan[- ]to[- ]value|rate[- ]spread)"
 )
-_REVIEWED_ANALYTIC_LOCATION = (
-    r"(?:\s+(?:in|across)\s+(?:the\s+current\s+(?:coverage|portfolio)|"
-    r"[A-Za-z]{2}|[A-Z][A-Za-z' -]{2,40}))?"
-)
+# One location grammar, six shapes. This slot used to be spelled two ways:
+# a state-only tail on the ranked ask (closed in b6c38f74) and 41 characters
+# of IGNORECASE free text everywhere else, which is the tail that was closed
+# there for silencing the health bank. The open spelling survived on the five
+# other shapes carrying it, so "Chart borrowers by segment in dialysis
+# centers" and "Show customers with an in-the-money refi in hospice care" were
+# still ALLOWED at 35a9720a. Both spellings are gone; the captured value is
+# checked against the governed place vocabulary by
+# ``is_governed_analytics_location``, which is what makes a city or a county
+# admissible without reopening a free slot for a health term.
+_REVIEWED_ANALYTIC_LOCATION = REVIEWED_ANALYTIC_LOCATION_FRAGMENT
 # Governed Module 0 product-intent cohorts. Closed list: these are offer
 # codes/segment names the product models, never free-text criteria.
 _REVIEWED_PRODUCT_INTENT = (
@@ -129,24 +133,16 @@ _REVIEWED_READ_ONLY_ANALYTIC_PATTERNS: tuple[re.Pattern[str], ...] = (
         r"[0-9][0-9.,]*\s*(?:%|percent|bps|basis\s+points)?"
         rf"(?:\s+and\s+(?:modeled\s+equity|{_REVIEWED_ANALYTIC_SIGNAL})\s*[<>=\u2264\u2265]+\s*"
         r"[0-9][0-9.,]*\s*(?:%|percent|bps|basis\s+points)?){0,3})?"
-        # Location tail, CLOSED to the federal state list plus the coverage
-        # phrases. It was `[A-Z][A-Za-z' -]{2,40}` under IGNORECASE -- 41
-        # characters of free text -- and matching this shape sets
-        # ``reviewed_analytics``, which is a KILL SWITCH for the health-term
-        # bank, not merely a criterion bypass. So "... in dialysis centers"
-        # rode the tail and silenced the detector: 114 health-term phrasings
-        # across 57 conditions went from refused to allowed (signoff round
-        # three). An allow shape in a fail-closed system may not contain an
-        # open slot.
-        rf"(?:\s+(?:in|across)\s+(?:the\s+current\s+(?:coverage|portfolio)|"
-        rf"(?:the\s+state\s+of\s+)?(?:{_US_STATE_ALTERNATION})"
-        # ``ms`` is the one two-letter sequence that is BOTH a USPS code and a
-        # governed term (multiple sclerosis) -- computed by sweeping all 676
-        # pairs against the banks, not assumed -- and this shape sets
-        # ``reviewed_analytics``, which silences the health-term bank. Excluded
-        # here so "... in ms." cannot ride the state slot; Mississippi is still
-        # reachable by name and as "(MS)" after it.
-        rf"(?:\s*\([A-Z]{{2}}\))?|(?!ms\b)[A-Z]{{2}}))?"
+        # The shared location slot. It was `[A-Z][A-Za-z' -]{2,40}` under
+        # IGNORECASE -- 41 characters of free text -- and matching this shape
+        # sets ``reviewed_analytics``, which is a KILL SWITCH for the
+        # health-term bank, not merely a criterion bypass. So "... in dialysis
+        # centers" rode the tail and silenced the detector: 114 health-term
+        # phrasings across 57 conditions went from refused to allowed (signoff
+        # round three). An allow shape in a fail-closed system may not contain
+        # an open slot -- but the vocabulary that closes it is a vocabulary of
+        # PLACES, not of states, so a city or a county reaches the same slot.
+        rf"{_REVIEWED_ANALYTIC_LOCATION}"
         # Closed status tail: "who are currently listed for sale".
         rf"(?:\s+who\s+are\s+(?:currently\s+)?{_REVIEWED_PRODUCT_INTENT})?"
         r"$",
