@@ -13,11 +13,21 @@ import re
 
 from backend.schemas._validators_person_names import US_STATE_NAMES
 
-# A count inside a reviewed analytics shape. It must admit exactly what the
-# directive grammar's lead-in admits, because the two sit on opposite sides of
-# the same decision: `_DIRECTIVE_LEAD_IN` was collapsed to one alphanumeric
+# A count inside a reviewed analytics shape. It sits opposite the directive
+# grammar's lead-in: `_DIRECTIVE_LEAD_IN` was collapsed to one alphanumeric
 # token class and the refusing `is_population_directive` prefix was widened to
 # accept digits, so any count these ALLOW patterns cannot match now refuses.
+#
+# An earlier note here claimed the two slots "must admit exactly" the same
+# counts. They do not, and cannot: the lead-in is an open token class
+# (`[a-z0-9][a-z0-9'-]*`) while this is a closed numeral list. Measured on the
+# shipped ranked ask, in both spaced and hyphenated orthography -- `10`, `25`,
+# `12345`, `ten`, `twenty`, `twenty-five` are admitted by both; `fifty`,
+# `dozen`, `10k`, `123456`, `1000000` are admitted by the lead-in and refused
+# here. (`1,000` and `10%` are refused by BOTH -- neither slot admits a comma
+# or a percent sign.) That gap is the deliberate direction: an unrecognised
+# count refuses. Widen this list only with a measured case, never to chase
+# parity with the lead-in.
 #
 # That asymmetry shipped and was caught by adversarial review on 2026-08-12:
 # "Show the top-25 borrowers by lead score across the current Cotality data

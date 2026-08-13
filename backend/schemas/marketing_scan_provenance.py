@@ -26,16 +26,29 @@ word -- so the decision has to happen AT the match: a protected-term match
 stands unless every character in its span is a digit-minted letter. ``lao``
 from ``4,140`` has none and is dropped; ``laotian`` from ``140-tian`` carries
 ``tian`` and refuses; ``muslim`` from ``mus 1 im`` carries ``mus``/``im`` and
-refuses. The scan text is the base scanner's plus joined windows of nine
-to twelve tokens (the cap was eight, which hid eleven-letter terms spelled
-one letter per token); additional windows can only ADD matches, so that
-widening moves in the refusing direction, and match acceptance is the only
-thing provenance itself changes: it drops matches containing a wholly minted
-word and nothing else. The same commit carries one
-deliberate second change OUTSIDE this module -- joined windows hand the
-context-gated banks their origin sentence for the population-noun test
-(``window_origins`` in the scanner) -- so the full behavior delta is those
-two effects together, each measured separately in the signoff artifacts.
+refuses. The scan text is the base scanner's plus joined windows up to
+``_JOINED_WINDOW_TOKEN_CAP`` tokens (the cap was eight, then twelve, each
+hiding every governed term longer than itself spelled one letter per token).
+
+Widening that cap is NOT provably one-directional, and the earlier claim here
+that extra windows "can only ADD matches" was wrong. Windows are emitted into
+a SORTED blob, and the context-gated banks (national origin, proxies) test a
++/-120 character neighbourhood of it, so a new window does not merely append:
+it can displace whichever window previously sorted beside a match and carry
+that match's population noun out of reach. Nothing in the construction rules
+that out. Only measurement can stand in for the missing proof, and it has to
+be redone per widening: eight-to-twelve was cleared by the signoff-round-two
+probe set (1,836 probes, zero weakenings), and twelve-to-eighteen by the
+14,514-row corpus differential recorded in that change's commit message.
+Treat the direction as measured, never as proved.
+
+Match acceptance is the only thing provenance ITSELF changes: it drops
+matches containing a wholly minted word and nothing else. The same commit
+carries one deliberate second change OUTSIDE this module -- joined windows
+hand the context-gated banks their origin sentence for the population-noun
+test (``window_origins`` in the scanner) -- so the full behavior delta is
+those two effects together, each measured separately in the signoff
+artifacts.
 
 Provenance is carried as a SHADOW STRING, not a mask array: the same
 transforms run on a twin whose leet stage folds digits to the sentinel

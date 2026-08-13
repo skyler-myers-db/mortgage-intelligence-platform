@@ -71,6 +71,16 @@ _SEPARATOR_RUN_RE = re.compile(r"[^A-Za-z0-9]+")
 _IN_WORD_HYPHEN_RE = re.compile(r"(?<=[A-Za-z])[\-‐-―](?=[A-Za-z])")
 _LETTER_RUN_RE = re.compile(r"[A-Za-z]+")
 
+# Longest contiguous single-word literal any governed bank can match:
+# ``neurodevelopmental`` (18) in ``PROTECTED_HEALTH_GOVERNANCE_INTENT_RE``.
+# This is the token cap for joined windows, because the worst-case evader
+# spells a term one letter per token and a window concatenates tokens with no
+# separator -- so a term of N letters needs a window of N tokens to reconstruct
+# at all. Deriving the number here at import time would mean parsing every
+# bank's pattern on every process start; ``test_joined_window_cap.py`` does
+# that derivation instead and fails if any bank ever outgrows this constant.
+_JOINED_WINDOW_TOKEN_CAP = 18
+
 _MARKETING_SYMBOL_CONFUSABLES: dict[int, str] = {
     ord("!"): "i",
     ord("$"): "s",
@@ -341,10 +351,10 @@ def _protected_class_marketing_reason(
         for candidate in _structural_audience_scan_variants(mark_folded)
     )
     # Scan ordinary prose plus bounded de-obfuscations. The marketing surface
-    # has no valid need for leetspeak or split-word spelling; joining up to
-    # eight adjacent ASCII tokens catches forms such as ``w0men``, ``wo.men``,
-    # ``w o m e n``, and ``mus lim`` without stripping the whole sentence into
-    # one unauditable string.
+    # has no valid need for leetspeak or split-word spelling; joining adjacent
+    # ASCII tokens up to ``_JOINED_WINDOW_TOKEN_CAP`` catches forms such as
+    # ``w0men``, ``wo.men``, ``w o m e n``, and ``mus lim`` without stripping
+    # the whole sentence into one unauditable string.
     symbol_variants = {
         mark_folded,
         # Explicit, reviewed in-word symbol substitutions. Keep the original
@@ -378,10 +388,14 @@ def _protected_class_marketing_reason(
     separator_pairs: list[ScanPair] = []
     joined_pairs: list[ScanPair] = []
     window_origins: dict[str, str] = {}
-    # Iterate the DEDUPLICATED variants, as the historical set-based loop
-    # did: for unvaried text the raw pair list holds ten copies of one
-    # string, and running window construction per copy cost ~10x on long
-    # inputs (measured in signoff round two, 6x at 10KB end to end).
+    # Iterate the DEDUPLICATED variants, as the historical set-based loop did.
+    # The saving is structural rather than benchmarked: text containing none
+    # of the confusables enters here as ten pairs that ``merge_pairs``
+    # collapses to one (asserted in ``test_joined_window_cap``), so window
+    # construction runs once instead of ten times. An earlier note here also
+    # claimed "6x at 10KB end to end"; that figure was never reproducible and
+    # has been dropped rather than restated -- ``scratchpad`` harnesses
+    # measure this loop directly if a number is ever needed again.
     for _real, _shadow in merge_pairs(ascii_confusable_pairs).items():
         leet_folded = ScanPair(_real, _shadow)
         # Safety-scan only: campaign prose has no legitimate reason to
@@ -400,16 +414,54 @@ def _protected_class_marketing_reason(
             # Only join genuinely split terms. Re-emitting ordinary one-token
             # windows detaches words such as ``age`` and ``English`` from the
             # safe context already reviewed above, creating false positives.
-            # Twelve tokens, because the longest single-word governed terms
-            # (``millennials``, ``bangladeshi``, ``trinidadian``) are eleven
-            # letters and an evader spells them one letter per token: with an
-            # eight-token cap the term never reconstructed, and the only
-            # thing refusing ``m i 1 1 3 n n i 4 1 5`` was the incidental
-            # ``als`` mint that provenance rightly drops (signoff round two).
-            # The 32-character sum bound keeps the window count finite.
-            for stop in range(start + 2, min(len(tokens), start + 12) + 1):
+            #
+            # The cap is the longest governed literal across EVERY bank, not
+            # across one of them: eleven (``bangladeshi``, ``trinidadian``) is
+            # the maximum for ``PROTECTED_NATIONAL_ORIGIN_RE`` alone, but the
+            # health, trait, geographic-composition, and religion banks reach
+            # much further -- eighteen refusing literals exceed twelve
+            # letters, topping out at ``neurodevelopmental`` (18) in
+            # ``PROTECTED_HEALTH_GOVERNANCE_INTENT_RE``. A shorter cap
+            # silently exempts all
+            # of them from split-token detection: at twelve,
+            # ``How many s c i e n t o l o g i s t borrowers ...`` reached
+            # Genie fully allowed on both the prompt surface and this scanner
+            # while its plain twin refused, because no window of twelve or
+            # fewer tokens spells any governed term it contains.
+            # ``m u s l i m`` (six) kept refusing throughout, which is why the
+            # hole read as closed. Terms that appeared to survive the short
+            # cap sometimes did so by accident:
+            # ``n e u r o d e v e l o p m e n t a l`` refused only because
+            # ``...p M E N t...`` mints ``men`` in the sex/gender bank.
+            #
+            # This cap governs the banks that read the JOINED-WINDOW blob
+            # (``scannable_pair``). It does not reach
+            # ``PROTECTED_HEALTH_TERM_MARKETING_RE``, which searches
+            # ``health_pair`` -- a pair deliberately built without joined
+            # windows so the clause state machine keeps its punctuation. Split
+            # spellings of named conditions are caught there by
+            # ``_dotted_spelling`` over a hand-curated list, so conditions off
+            # that list (``l u p u s``, ``e p i l e p s y``) still evade at any
+            # cap. That is a separate, pre-existing routing gap; widening this
+            # number will not close it.
+            #
+            # The 32-character sum bound below keeps the window count finite
+            # and on ordinary prose it, not this cap, is what binds: across
+            # the 14,514-text review corpus the total emitted window count
+            # moves 379,206 -> 381,124 -> 381,181 at caps 8 -> 12 -> 18, so
+            # widening to eighteen costs +0.015% (only 513 texts change at
+            # all). The cap binds hard only on one-character-per-token
+            # scatter, which is the evasion shape itself: there 12 -> 18 is
+            # 1.54x windows and 2.20x scan-blob characters at the 4,000-char
+            # question limit. That is the trade -- pay on adversarial input,
+            # not on real questions.
+            for stop in range(start + 2, min(len(tokens), start + _JOINED_WINDOW_TOKEN_CAP) + 1):
+                # Token lengths are non-empty letter runs, so this sum is
+                # strictly increasing in ``stop``: once it clears the bound no
+                # wider window can come back under it. ``break``, not
+                # ``continue`` -- both emit exactly the same window set.
                 if sum(len(token.real) for token in tokens[start:stop]) > 32:
-                    continue
+                    break
                 # A governed place beside a number is prose, not a split term.
                 # The window is not emitted at all, rather than merely denied
                 # the origin assist below: denial would leave the match
