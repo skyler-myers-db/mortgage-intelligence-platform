@@ -20,7 +20,7 @@ from backend.main import app
 from backend.schemas._validators_protected_class import contains_protected_class_marketing_text
 from backend.schemas.agent_plan import ComposePlanRequest
 from backend.schemas.growth_agent import GrowthAgentPromptRunRequest
-from backend.schemas.marketing_selection_criteria import (
+from backend.schemas.marketing_selection_reviewed_workflows import (
     is_reviewed_campaign_audience_description_text,
     is_reviewed_campaign_audience_summary_text,
 )
