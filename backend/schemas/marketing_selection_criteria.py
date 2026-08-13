@@ -173,10 +173,19 @@ _AUDIENCE_FORMATION_ACTION_FRAGMENT = (
 _AUDIENCE_FORMATION_NAMED_POPULATION = (
     rf"(?:{_COREFERENCE_POPULATION}|groups?|cohorts?|audiences?|segments?|populations?)"
 )
+# ``[- ]?`` on reviewed compounds, here and in every allow grammar below: the
+# protected-class scanner also evaluates a de-obfuscated variant that deletes
+# intra-word hyphens ("highest-scoring" -> "highestscoring"), and ONE tripping
+# variant refuses the whole prompt. Each reviewed hyphen-or-space compound must
+# therefore spell its own joined fold image too, or the hyphenated twin of an
+# allowed prompt refuses (measured 2026-08-13 at the prompt boundary: "Add the
+# highest-scoring leads to the campaign." refused while the space twin was
+# answered). This is a closed enumeration of already-reviewed compounds, never
+# a fold relaxation: unreviewed compounds still de-obfuscate and fail closed.
 _AUDIENCE_FORMATION_ACTION_RE = re.compile(
     rf"\b{_AUDIENCE_FORMATION_ACTION_FRAGMENT}\s+"
-    r"(?:(?:the|these|those|all|reviewed|eligible|qualified|marketing[- ]eligible|"
-    r"highest[- ]scoring|prospective|current)\s+){0,3}"
+    r"(?:(?:the|these|those|all|reviewed|eligible|qualified|marketing[- ]?eligible|"
+    r"highest[- ]?scoring|prospective|current)\s+){0,3}"
     rf"{_AUDIENCE_FORMATION_NAMED_POPULATION}\b",
     re.IGNORECASE,
 )
@@ -220,7 +229,7 @@ _REVIEWED_SEGMENT_SIGNAL_BINDING_RE = re.compile(
 )
 _SAFE_CHANNEL_CONSENT_REROUTE_RE = re.compile(
     r"^(?:create|build|prepare)\s+(?:a|the)\s+"
-    r"(?:(?:refi|refinance|heloc|home[- ]equity|retention|mortgage)\s+)?campaign\s+"
+    r"(?:(?:refi|refinance|heloc|home[- ]?equity|retention|mortgage)\s+)?campaign\s+"
     rf"for\s+(?:a|the)\s+{_COREFERENCE_POPULATION}\s+whose\s+"
     r"(?:documented\s+)?(?:email|phone|sms|text(?:\s+message)?)\s+opt[ -]?out\s+"
     r"is\s+on\s+file\s+and\s+(?:instead\s+)?"
@@ -387,7 +396,7 @@ _REVIEWED_AUDIENCE_DECISION_PATTERNS: tuple[re.Pattern[str], ...] = (
         rf"(?:{_AUDIENCE_PASSIVE_AUX_FRAGMENT}\s+)?"
         rf"(?:eligible|qualified|{_AUDIENCE_FORMATION_PARTICIPLE_FRAGMENT})"
         r"(?:\s+for\s+(?:(?:this|the|a|an)\s+)?(?:reviewed\s+)?"
-        r"(?:(?:refi|refinance|heloc|home[- ]equity|retention|portfolio|purchase|"
+        r"(?:(?:refi|refinance|heloc|home[- ]?equity|retention|portfolio|purchase|"
         r"mortgage|loan|servicing)\s+)?(?:campaign|offer|options?|review))?$",
         re.IGNORECASE,
     ),
@@ -396,7 +405,7 @@ _REVIEWED_AUDIENCE_DECISION_PATTERNS: tuple[re.Pattern[str], ...] = (
         rf"(?:{_AUDIENCE_PASSIVE_AUX_FRAGMENT}\s+)?"
         rf"(?:eligible|qualified|{_AUDIENCE_FORMATION_PARTICIPLE_FRAGMENT})"
         r"(?:\s+for\s+(?:(?:this|the|a|an)\s+)?(?:reviewed\s+)?"
-        r"(?:(?:refi|refinance|heloc|home[- ]equity|retention|portfolio|purchase|"
+        r"(?:(?:refi|refinance|heloc|home[- ]?equity|retention|portfolio|purchase|"
         r"mortgage|loan|servicing)\s+)?(?:campaign|offer|options?|review))?$",
         re.IGNORECASE,
     ),
@@ -437,7 +446,7 @@ _REVIEWED_BARE_DIRECTIVE_DESTINATION_TAIL = (
 _REVIEWED_BARE_AUDIENCE_DIRECTIVE_RE = re.compile(
     rf"^{_AUDIENCE_DIRECTIVE_PREFIX_FRAGMENT}"
     rf"{_AUDIENCE_FORMATION_COMMAND_FRAGMENT}\s+(?:(?:the|an?)\s+)?"
-    rf"(?:(?:reviewed|eligible|qualified|marketing[- ]eligible|highest[- ]scoring)\s+){{0,2}}"
+    rf"(?:(?:reviewed|eligible|qualified|marketing[- ]?eligible|highest[- ]?scoring)\s+){{0,2}}"
     rf"{_AUDIENCE_DECISION_REFERENCE}"
     r"(?:\s+(?:for\s+(?:(?:this|the|a|an)\s+)?(?:reviewed\s+)?"
     r"(?:campaign|offer|review)|"
@@ -462,7 +471,7 @@ _AFFIRMATIVE_AUDIENCE_DIRECTIVE_RE = re.compile(
     re.IGNORECASE,
 )
 _REVIEWED_DIRECTIVE_POPULATION_PREFIX_RE = re.compile(
-    r"^(?:(?:the|reviewed|eligible|qualified|marketing[- ]eligible|highest[- ]scoring)\s*){0,3}$",
+    r"^(?:(?:the|reviewed|eligible|qualified|marketing[- ]?eligible|highest[- ]?scoring)\s*){0,3}$",
     re.IGNORECASE,
 )
 # The fail-closed half of the quantifier fix (see ``_POPULATION_QUANTIFIER``):
@@ -477,7 +486,7 @@ _SAFE_CONTEXTUAL_CTA_RE = re.compile(
     r"^(?:may|can|should)\s+(?:contact|call|email|text|message|reply|respond|reach\s+out)"
     r"(?:\s+(?:to|with)\s+us|\s+us)?"
     r"(?:\s+to\s+(?:review|discuss|consider|learn\s+about)\s+"
-    r"(?:(?:their|the|available)\s+)?(?:mortgage|loan|refi|refinance|heloc|home[- ]equity)?"
+    r"(?:(?:their|the|available)\s+)?(?:mortgage|loan|refi|refinance|heloc|home[- ]?equity)?"
     r"\s*(?:options?|offer|review))?$",
     re.IGNORECASE,
 )
@@ -540,7 +549,7 @@ def _is_reviewed_pre_population_binding(value: str) -> bool:
         # remains after stripping must still full-match the reviewed
         # vocabulary below.
         r"^(?:(?:the|an?|these|those|all|any|our|your|only|reviewed|eligible|qualified|"
-        r"marketing[- ]eligible|highest[- ]scoring|prospective|current|"
+        r"marketing[- ]?eligible|highest[- ]?scoring|prospective|current|"
         r"(?:which|what)(?:\s+of)?)(?:\s+|$))+",
         "",
         criterion,
