@@ -462,9 +462,16 @@ _REVIEWED_AUDIENCE_DECISION_PATTERNS: tuple[re.Pattern[str], ...] = (
         re.IGNORECASE,
     ),
 )
+# The determiner slot takes ``a``/``an`` exactly as it takes ``the``: the
+# object either way is the same closed population/audience reference, so the
+# article names no criterion. Without it, "Assign an owner." fell past this
+# branch and the bound-population capture below read the bare article itself
+# as an unreviewed criterion, while "Assign the owner." and "Assign owners."
+# were answered (measured 2026-08-13; same family: "Queue a borrower.",
+# "Target a customer.", "Prioritize a lead.", "Shortlist an applicant.").
 _REVIEWED_BARE_AUDIENCE_DIRECTIVE_RE = re.compile(
     rf"^{_AUDIENCE_DIRECTIVE_PREFIX_FRAGMENT}"
-    rf"{_AUDIENCE_FORMATION_COMMAND_FRAGMENT}\s+(?:the\s+)?"
+    rf"{_AUDIENCE_FORMATION_COMMAND_FRAGMENT}\s+(?:(?:the|an?)\s+)?"
     rf"(?:(?:reviewed|eligible|qualified|marketing[- ]eligible|highest[- ]scoring)\s+){{0,2}}"
     rf"{_AUDIENCE_DECISION_REFERENCE}"
     r"(?:\s+for\s+(?:(?:this|the|a|an)\s+)?(?:reviewed\s+)?"
@@ -560,9 +567,13 @@ def _is_reviewed_pre_population_binding(value: str) -> bool:
         # Interrogative determiners ("Which/What [of the] borrowers are
         # eligible ...") ask about selection state and bind no criterion
         # (live turn 2026-08-07: "Which borrowers are eligible for a HELOC?").
-        # Only the determiner is transparent: whatever remains after stripping
-        # must still full-match the reviewed vocabulary below.
-        r"^(?:(?:the|these|those|all|any|our|your|only|reviewed|eligible|qualified|"
+        # ``a``/``an`` joins the list because the bound-population capture
+        # hands this function the bare article: "assign an owner" captured
+        # criterion "an" and refused while the ``the`` twin was answered
+        # (measured 2026-08-13). Only the determiner is transparent: whatever
+        # remains after stripping must still full-match the reviewed
+        # vocabulary below.
+        r"^(?:(?:the|an?|these|those|all|any|our|your|only|reviewed|eligible|qualified|"
         r"marketing[- ]eligible|highest[- ]scoring|prospective|current|"
         r"(?:which|what)(?:\s+of)?)(?:\s+|$))+",
         "",

@@ -141,8 +141,16 @@ _TERSE_IMPERATIVES_STAY_ANSWERABLE = (
     "Sort ascending.",
     "Target lien holder.",
     "Queue the best ones.",
-    # NOT here: "Assign an owner." -- it refuses on main today (pre-existing,
-    # unrelated to any net), so neither verdict is pinnable without lying.
+    # Answerable since the population-article parity fix (2026-08-13): the
+    # bare-directive branch took only ``the`` before a population noun, so
+    # these refused while their ``the``/bare twins answered. Pinned here so a
+    # future net cannot re-break the indefinite-article spelling of the same
+    # command (see test_population_article_parity for the full family).
+    "Assign an owner.",
+    "Queue a borrower.",
+    "Target a customer.",
+    "Prioritize a lead.",
+    "Shortlist an applicant.",
     "Set a threshold.",
     "Group by county.",
     "Group by city.",
