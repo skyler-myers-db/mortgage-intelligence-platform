@@ -124,6 +124,34 @@ _STRUCTURAL_AUDIENCE_KEYWORD_PATTERNS = tuple(
 )
 
 
+@lru_cache(maxsize=2048)
+def _mints_governed_term(candidate: str) -> bool:
+    """True when these letters are themselves a governed term.
+
+    Used only to classify a WHOLLY MINTED run inside a match span: ``als``
+    from ``415`` is a number wearing a term's spelling and vetoes the match,
+    ``loss`` from ``1055`` is an ordinary neighbour word and does not. A
+    presence question over the direct banks -- there is no sentence here to
+    take context from.
+
+    An earlier design used this predicate to withhold the FOLD, which turned
+    the digits into a shield (``140-tian`` rendered). Classifying a run is
+    safe where withholding a fold was not: the scan text is unchanged.
+    """
+
+    return any(
+        pattern.search(candidate)
+        for pattern in (
+            PROTECTED_CLASS_MARKETING_RE,
+            PROTECTED_AGE_CITIZENSHIP_MARKETING_RE,
+            PROTECTED_CONTEXTUAL_TRAIT_MARKETING_RE,
+            PROTECTED_RELIGION_FAMILIAL_RELATION_RE,
+            PROTECTED_HEALTH_TERM_MARKETING_RE,
+            PROTECTED_NATIONAL_ORIGIN_RE,
+        )
+    )
+
+
 def _structural_audience_scan_variants(value: str) -> set[str]:
     """Canonicalize only governed audience-claim keywords, preserving sentences."""
 
@@ -458,16 +486,24 @@ def _protected_class_marketing_reason(
     # rejected text is unchanged (this was one ``or`` chain) -- only the
     # reported reason depends on the order.
     if (
-        search_backed(PROTECTED_CLASS_MARKETING_RE, scannable_pair)
-        or search_backed(PROTECTED_AGE_CITIZENSHIP_MARKETING_RE, scannable_pair)
-        or search_backed(PROTECTED_CONTEXTUAL_TRAIT_MARKETING_RE, scannable_pair)
-        or search_backed(PROTECTED_RELIGION_FAMILIAL_RELATION_RE, scannable_pair)
+        search_backed(PROTECTED_CLASS_MARKETING_RE, scannable_pair, _mints_governed_term)
+        or search_backed(
+            PROTECTED_AGE_CITIZENSHIP_MARKETING_RE, scannable_pair, _mints_governed_term
+        )
+        or search_backed(
+            PROTECTED_CONTEXTUAL_TRAIT_MARKETING_RE, scannable_pair, _mints_governed_term
+        )
+        or search_backed(
+            PROTECTED_RELIGION_FAMILIAL_RELATION_RE, scannable_pair, _mints_governed_term
+        )
         or (
             not reviewed_analytics
-            and search_backed(PROTECTED_HEALTH_TERM_MARKETING_RE, health_pair)
+            and search_backed(PROTECTED_HEALTH_TERM_MARKETING_RE, health_pair, _mints_governed_term)
         )
-        or search_backed(PROTECTED_HEALTH_STATUS_MARKETING_RE, health_status_pair)
-        or search_backed(PROTECTED_HEALTH_GOVERNANCE_INTENT_RE, health_pair)
+        or search_backed(
+            PROTECTED_HEALTH_STATUS_MARKETING_RE, health_status_pair, _mints_governed_term
+        )
+        or search_backed(PROTECTED_HEALTH_GOVERNANCE_INTENT_RE, health_pair, _mints_governed_term)
         or _contains_national_origin_marketing_text(scannable_pair, window_origins)
         or _contains_protected_class_proxy_pair(scannable_pair, window_origins)
         # Clause-local, on the punctuation-preserving variant: see
@@ -490,7 +526,7 @@ def _contains_national_origin_marketing_text(
     for safe_pattern in PROTECTED_CLASS_PROXY_SAFE_CONTEXT_PATTERNS:
         pair = mirror_sub(pair, safe_pattern, " ")
     for match in PROTECTED_NATIONAL_ORIGIN_RE.finditer(pair.real):
-        if not pair.backed(match.start(), match.end()):
+        if not pair.backed(match.start(), match.end(), _mints_governed_term):
             # Every character of the matched term is a digit-minted letter --
             # a NUMBER the leet fold rewrote, ``4,140`` -> ``lao`` -- not a
             # term anyone wrote. The window nouns are irrelevant to a term
@@ -605,7 +641,7 @@ def _contains_protected_class_proxy_pair(
         pair = mirror_sub(pair, safe_pattern, " ")
     for pattern in PROTECTED_CLASS_PROXY_PATTERNS:
         for match in pattern.finditer(pair.real):
-            if not pair.backed(match.start(), match.end()):
+            if not pair.backed(match.start(), match.end(), _mints_governed_term):
                 continue
             window = pair.real[max(0, match.start() - 120) : match.end() + 120]
             if _window_targets_population(window):

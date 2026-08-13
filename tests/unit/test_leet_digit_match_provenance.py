@@ -130,6 +130,17 @@ _EVASIONS_MUST_REFUSE = (
     "Only contact m i 1 1 3 n n i 4 1 5 in Pierce County.",
     "Target v i e t n a m e s e homeowners for a HELOC campaign.",
     "Target b a n g l a d e s h i homeowners for this campaign.",
+    # A governed term whose NEIGHBOUR word is minted. ``1055`` folds to
+    # ``loss``, the health-status bank matches ``borrowers with hearing
+    # loss``, and a veto keyed on "any wholly minted run in the span" dropped
+    # the whole match -- a disability term the author really typed, rendering
+    # at all four boundaries (signoff round three). The veto is keyed on
+    # VOCABULARY now: a minted run vetoes only when those letters are
+    # themselves a governed term. ``als`` is, ``loss`` is not.
+    "borrowers with hearing 1055",
+    "borrowers with vision 1055",
+    "borrowers with sensory 1055",
+    "borrowers with hearing loss",
     # plainly spelled controls
     "Build a campaign audience of laotian homeowners.",
     "black borrowers",

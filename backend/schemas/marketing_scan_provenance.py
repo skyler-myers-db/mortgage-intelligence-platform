@@ -60,6 +60,7 @@ positive, never open the guard.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 
 # One sentinel for every foldable digit. Uppercase so it can never equal a
 # folded letter (both tables emit lowercase); a SOURCE uppercase ``Q`` shadows
@@ -78,40 +79,60 @@ class ScanPair:
         # Length divergence degrades to base behavior (all backed), fail-safe.
         self.shadow = shadow if shadow is not None and len(shadow) == len(real) else real
 
-    def backed(self, start: int, end: int) -> bool:
-        """True when the span holds a source-backed letter AND no minted word.
+    def backed(
+        self,
+        start: int,
+        end: int,
+        mints_governed_term: Callable[[str], bool] | None = None,
+    ) -> bool:
+        """True when the span holds a source-backed letter and no minted TERM.
 
-        Two conditions, both load-bearing. At least one backed letter keeps a
-        wholly minted term from standing on its own (``lao`` from ``4,140``).
-        That alone is not enough: a bank whose pattern matches the term
-        TOGETHER with its population noun hands the noun's provenance to the
-        whole span -- ``415 borrowers`` folds to ``als borrowers``, the
-        health-status pattern matches both words, and ``borrowers`` is backed
-        (measured in signoff round two; ``als`` is the one governed term
-        mintable outside the national-origin bank). So a multi-letter WORD
-        inside the span that is entirely digit-minted vetoes the match: it is
-        a number the fold rewrote, whatever stands beside it. One-letter runs
-        are separator-fold artefacts (``c 4 n c 3 r`` scatters), not words,
-        and stay exempt so scatter evasions keep refusing.
+        Three predicates were tried here and only the third is sound.
+
+        ``any backed letter`` alone lets a bank whose pattern matches the term
+        TOGETHER with its population noun hand the noun's provenance to a
+        minted term: ``415 borrowers`` -> ``als borrowers`` stayed withheld.
+
+        ``veto any wholly-minted multi-letter run`` fixes that and breaks the
+        mirror case -- ``hearing 1055`` -> ``hearing loss`` is a disability
+        term the author really wrote, condemned because its NEIGHBOUR
+        ``loss`` is minted (signoff round three, fail-open at all four
+        boundaries).
+
+        What separates them is not the run's provenance but its VOCABULARY: a
+        wholly minted run vetoes only when those letters are themselves a
+        governed term, i.e. a number wearing the term's spelling. ``als`` is;
+        ``loss`` is not. ``laotian`` from ``140-tian`` is never wholly minted
+        (``tian`` is typed), so it is never vetoed.
+
+        Without a predicate this degrades to the ``any backed letter`` rule,
+        which is the refusing direction.
         """
 
         real = self.real
         shadow = self.shadow
         stop = min(end, len(real))
         any_backed = False
-        run_length = 0
+        run_start = -1
         run_backed = False
         for index in range(start, stop + 1):
             char = real[index] if index < stop else ""
             if char.isalpha():
-                run_length += 1
+                if run_start < 0:
+                    run_start = index
                 if shadow[index] == char:
                     run_backed = True
                     any_backed = True
                 continue
-            if run_length > 1 and not run_backed:
+            if (
+                run_start >= 0
+                and not run_backed
+                and index - run_start > 1
+                and mints_governed_term is not None
+                and mints_governed_term(real[run_start:index])
+            ):
                 return False
-            run_length = 0
+            run_start = -1
             run_backed = False
         return any_backed
 
@@ -247,10 +268,11 @@ def merge_pairs(pairs: list[ScanPair]) -> dict[str, str]:
 def search_backed(
     pattern: re.Pattern[str],
     pair: ScanPair,
+    mints_governed_term: Callable[[str], bool] | None = None,
 ) -> re.Match[str] | None:
-    """First match whose span contains a source-backed letter, else None."""
+    """First match the source actually backs, else None. See :meth:`backed`."""
 
     for match in pattern.finditer(pair.real):
-        if pair.backed(match.start(), match.end()):
+        if pair.backed(match.start(), match.end(), mints_governed_term):
             return match
     return None

@@ -192,3 +192,53 @@ def test_the_ranked_ask_tail_stays_closed(count: int) -> None:
         _prompt_refused(f"Show me the top {count} borrowers with the highest credit scores.")
         is True
     )
+
+
+# The ranked-ask shape sets ``reviewed_analytics``, which is a KILL SWITCH for
+# the health-term bank rather than merely a criterion bypass. Its location
+# tail was 41 characters of free text under IGNORECASE, so "... in dialysis
+# centers" rode the shape and silenced the detector -- 114 phrasings across 57
+# conditions, measured in signoff round three. The tail is closed to the
+# federal state list now, and these pin both directions.
+_HEALTH_TAIL_MUST_REFUSE = (
+    "Show me the top 20 borrowers with the highest lead scores in dialysis centers.",
+    "Show me the top 20 borrowers with the highest lead scores in cancer wards.",
+    "List the top 20 leads with the highest equity in hospice care.",
+    "Show me the top 20 borrowers with the highest lead scores in schizophrenia.",
+    "Show me the top 20 borrowers with the highest lead scores in HIV clinics.",
+)
+_GOVERNED_LOCATION_MUST_PASS = (
+    "Show me the top 20 borrowers with the highest lead scores in Illinois.",
+    "Show me the top 20 borrowers with the highest lead scores in the state of California (CA).",
+    "Show me the top 20 borrowers with the highest lead scores in the current coverage.",
+    "Show me the top 20 borrowers with the highest lead scores in WA.",
+)
+
+
+@pytest.mark.parametrize("question", _HEALTH_TAIL_MUST_REFUSE)
+def test_a_health_term_cannot_ride_the_location_tail(question: str) -> None:
+    assert _prompt_refused(question) is True
+
+
+@pytest.mark.parametrize("question", _GOVERNED_LOCATION_MUST_PASS)
+def test_governed_locations_still_pass_the_ranked_shape(question: str) -> None:
+    assert _prompt_refused(question) is False
+
+
+def test_city_grain_location_is_a_documented_residual() -> None:
+    """Closing the tail to states costs the city grain on THIS shape.
+
+    Base allowed "... in Highlands Ranch" only through the same accident that
+    allowed the whole family (the leet fold turned "top 20" into letters for
+    some N and not others), so this is not a capability that ever worked
+    deliberately. Reopening it needs the governed city dimension, which lives
+    in the services layer that schemas may not import -- a scoped change of
+    its own, not a widening bolted onto an allow shape.
+    """
+
+    assert (
+        _prompt_refused(
+            "Show me the top 20 borrowers with the highest lead scores in Highlands Ranch."
+        )
+        is True
+    )

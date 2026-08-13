@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import re
 
+from backend.schemas._validators_person_names import US_STATE_NAMES
+
 # A count inside a reviewed analytics shape. It must admit exactly what the
 # directive grammar's lead-in admits, because the two sit on opposite sides of
 # the same decision: `_DIRECTIVE_LEAD_IN` was collapsed to one alphanumeric
@@ -23,6 +25,11 @@ import re
 # "top 25" passed. Fused orthography, and counts above 999, are the cases the
 # old `top\s+[0-9]{1,3}\s+` slot could not reach.
 _ANALYTIC_COUNT = r"(?:[0-9]{1,5}|ten|twenty(?:[- ]five)?)"
+# The federal state list, reused so the analytics location slot is closed
+# to the same vocabulary the name-shape strip already treats as places.
+_US_STATE_ALTERNATION = "|".join(
+    re.escape(state).replace(r"\ ", r"\s+") for state in US_STATE_NAMES
+)
 
 _REVIEWED_ANALYTIC_POPULATION = (
     r"(?:(?:(?:in[- ]the[- ]money|listed|refinance[- ]ready|retention[- ]risk|"
@@ -112,10 +119,18 @@ _REVIEWED_READ_ONLY_ANALYTIC_PATTERNS: tuple[re.Pattern[str], ...] = (
         r"[0-9][0-9.,]*\s*(?:%|percent|bps|basis\s+points)?"
         rf"(?:\s+and\s+(?:modeled\s+equity|{_REVIEWED_ANALYTIC_SIGNAL})\s*[<>=\u2264\u2265]+\s*"
         r"[0-9][0-9.,]*\s*(?:%|percent|bps|basis\s+points)?){0,3})?"
-        # Closed location tail, including "in the state of California (CA)".
-        r"(?:\s+(?:in|across)\s+(?:the\s+current\s+(?:coverage|portfolio)|"
-        r"(?:the\s+state\s+of\s+)?[A-Z][A-Za-z' -]{2,40}(?:\s*\([A-Z]{2}\))?|"
-        r"[A-Z]{2}))?"
+        # Location tail, CLOSED to the federal state list plus the coverage
+        # phrases. It was `[A-Z][A-Za-z' -]{2,40}` under IGNORECASE -- 41
+        # characters of free text -- and matching this shape sets
+        # ``reviewed_analytics``, which is a KILL SWITCH for the health-term
+        # bank, not merely a criterion bypass. So "... in dialysis centers"
+        # rode the tail and silenced the detector: 114 health-term phrasings
+        # across 57 conditions went from refused to allowed (signoff round
+        # three). An allow shape in a fail-closed system may not contain an
+        # open slot.
+        rf"(?:\s+(?:in|across)\s+(?:the\s+current\s+(?:coverage|portfolio)|"
+        rf"(?:the\s+state\s+of\s+)?(?:{_US_STATE_ALTERNATION})"
+        rf"(?:\s*\([A-Z]{{2}}\))?|[A-Z]{{2}}))?"
         # Closed status tail: "who are currently listed for sale".
         rf"(?:\s+who\s+are\s+(?:currently\s+)?{_REVIEWED_PRODUCT_INTENT})?"
         r"$",
