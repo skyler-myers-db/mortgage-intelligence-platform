@@ -30,8 +30,21 @@ from backend.schemas._validators_protected_class_patterns import (
     PROTECTED_HEALTH_TERM_MARKETING_RE,
 )
 from backend.schemas.marketing_safety_terms import (
+    _PROTECTED_HEALTH_COORDINATED_CONTINUATION_RE,
+    PROTECTED_HEALTH_SAFE_CONTEXT_PATTERNS,
     PROTECTED_NATIONAL_ORIGIN_RE,
-    mask_protected_health_safe_contexts,
+)
+from backend.schemas.marketing_scan_provenance import (
+    SHADOW_LEET_TABLE,
+    ScanPair,
+    ascii_confusable_fold_pairs,
+    join_pairs,
+    merge_pairs,
+    mirror_sub,
+    regex_pair,
+    search_backed,
+    splice_pair,
+    tokenize_pair,
 )
 from backend.schemas.marketing_selection_criteria import (
     contains_unreviewed_selection_criterion,
@@ -39,12 +52,22 @@ from backend.schemas.marketing_selection_criteria import (
     is_reviewed_campaign_audience_summary_text,
     is_reviewed_read_only_analytics_text,
 )
-from backend.schemas.marketing_text_normalization import ascii_confusable_folds
 from backend.schemas.protected_relationships import PROTECTED_RELIGION_FAMILIAL_RELATION_RE
 
 # Governed refusal reasons this module can report. Both are fail-closed
 # rejections; only ``protected_class`` is a fair-lending finding.
 ProtectedClassRefusalReason = Literal["protected_class", "unreviewed_criterion"]
+
+# The two reviewed leetspeak readings (``1`` is ambiguous between ``l`` and
+# ``i``); the shadow table in ``marketing_scan_provenance`` mirrors the same
+# six digits onto the provenance sentinel.
+_LEET_TABLES = (
+    str.maketrans("013457", "oleast"),
+    str.maketrans("013457", "oieast"),
+)
+_SEPARATOR_RUN_RE = re.compile(r"[^A-Za-z0-9]+")
+_IN_WORD_HYPHEN_RE = re.compile(r"(?<=[A-Za-z])[\-‐-―](?=[A-Za-z])")
+_LETTER_RUN_RE = re.compile(r"[A-Za-z]+")
 
 _MARKETING_SYMBOL_CONFUSABLES: dict[int, str] = {
     ord("!"): "i",
@@ -215,9 +238,7 @@ def protected_class_marketing_reason(
 
     text = str(value)
     if len(text) <= _CACHEABLE_SCAN_CHARS:
-        return _protected_class_marketing_reason_cached(
-            text, assume_reviewed_read_only_analytics
-        )
+        return _protected_class_marketing_reason_cached(text, assume_reviewed_read_only_analytics)
     return _protected_class_marketing_reason(
         text, assume_reviewed_read_only_analytics=assume_reviewed_read_only_analytics
     )
@@ -292,89 +313,116 @@ def _protected_class_marketing_reason(
         # while evasions such as ``Wom€n`` and ``Musl!m`` cannot pass.
         mark_folded.translate(_MARKETING_SYMBOL_CONFUSABLES),
     }
-    leet_variants = {
-        translated
-        for variant in symbol_variants
-        for translated in (
-            variant.translate(str.maketrans("013457", "oleast")),
-            variant.translate(str.maketrans("013457", "oieast")),
-        )
-    }
+    # Every variant is built twice from here: the REAL string, byte-identical
+    # to the historical scan text, and a provenance SHADOW whose leet stage
+    # folds digits to a sentinel letter instead of ``o/l/e/a/s/t`` (see
+    # ``marketing_scan_provenance``). Matching runs on the real text, and a
+    # match stands only if its span holds a source-backed letter -- which is
+    # what stops ``4,140`` minting the national-origin term ``lao`` while
+    # leaving every split evasion caught: ``muslim`` from ``mus 1 im`` keeps
+    # ``mus``/``im``, ``laotian`` from ``140-tian`` keeps ``tian``.
+    leet_pairs = [
+        ScanPair(variant.translate(table), variant.translate(SHADOW_LEET_TABLE))
+        for variant in sorted(symbol_variants)
+        for table in _LEET_TABLES
+    ]
 
     # Add only reviewed ASCII lookalike folds. These variants are safety-scan
     # inputs, never rewritten campaign copy: ``vv`` is commonly substituted
     # for ``w`` and a capital ``I`` for lowercase ``l`` in otherwise ordinary
     # words. Applying both orders catches combinations without opening a
     # general edit-distance matcher that would be difficult to audit.
-    ascii_confusable_variants = {
-        folded for variant in leet_variants for folded in ascii_confusable_folds(variant)
-    }
-    deobfuscated: set[str] = set()
-    separator_folded: set[str] = set()
-    joined_tokens: set[str] = set()
-    for leet_folded in ascii_confusable_variants:
-        separator_folded.add(
-            # Safety-scan only: campaign prose has no legitimate reason to
-            # make punctuation distinguish a protected multiword term. Fold
-            # every non-alphanumeric separator run (including Unicode
-            # bullets/dashes) to one space while preserving the submitted
-            # copy unchanged for ordinary validation/persistence.
-            re.sub(r"[^A-Za-z0-9]+", " ", leet_folded).strip()
-        )
-        deobfuscated.add(
-            re.sub(
-                r"(?<=[A-Za-z])[\-\u2010-\u2015](?=[A-Za-z])",
-                "",
-                leet_folded,
-            )
-        )
-        tokenized = re.findall(r"[A-Za-z]+", leet_folded)
-        joined_tokens.update(
-            "".join(tokenized[start:stop])
-            for start in range(len(tokenized))
+    ascii_confusable_pairs = [
+        folded for pair in leet_pairs for folded in ascii_confusable_fold_pairs(pair)
+    ]
+    deobfuscated_pairs: list[ScanPair] = []
+    separator_pairs: list[ScanPair] = []
+    joined_pairs: list[ScanPair] = []
+    window_origins: dict[str, str] = {}
+    for leet_folded in ascii_confusable_pairs:
+        # Safety-scan only: campaign prose has no legitimate reason to
+        # make punctuation distinguish a protected multiword term. Fold
+        # every non-alphanumeric separator run (including Unicode
+        # bullets/dashes) to one space while preserving the submitted
+        # copy unchanged for ordinary validation/persistence.
+        collapsed = regex_pair(leet_folded, _SEPARATOR_RUN_RE, " ")
+        lead = len(collapsed.real) - len(collapsed.real.lstrip(" "))
+        trail = len(collapsed.real.rstrip(" "))
+        separator_pairs.append(ScanPair(collapsed.real[lead:trail], collapsed.shadow[lead:trail]))
+        deobfuscated_pairs.append(regex_pair(leet_folded, _IN_WORD_HYPHEN_RE, ""))
+        token_spans = list(_LETTER_RUN_RE.finditer(leet_folded.real))
+        tokens = tokenize_pair(leet_folded, _LETTER_RUN_RE)
+        for start in range(len(tokens)):
             # Only join genuinely split terms. Re-emitting ordinary one-token
             # windows detaches words such as ``age`` and ``English`` from the
             # safe context already reviewed above, creating false positives.
-            for stop in range(start + 2, min(len(tokenized), start + 8) + 1)
-            if sum(len(token) for token in tokenized[start:stop]) <= 32
-        )
+            for stop in range(start + 2, min(len(tokens), start + 8) + 1):
+                if sum(len(token.real) for token in tokens[start:stop]) > 32:
+                    continue
+                window = ScanPair(
+                    "".join(token.real for token in tokens[start:stop]),
+                    "".join(token.shadow for token in tokens[start:stop]),
+                )
+                joined_pairs.append(window)
+                # A joined window is a bare token in the sorted scan blob, so
+                # a CONTEXT-GATED bank (national origin, proxies) loses the
+                # population noun that sat beside the split term in the
+                # sentence -- ``140 tian homeowners`` reconstructs ``laotian``
+                # but the noun test used to depend on whichever windows sorted
+                # alongside. Remember where each window came from so the
+                # gated detectors can ask the ORIGIN for the noun instead.
+                origin = leet_folded.real[
+                    max(0, token_spans[start].start() - 120) : token_spans[stop - 1].end() + 120
+                ]
+                existing = window_origins.get(window.real)
+                window_origins[window.real] = (
+                    origin if existing is None else f"{existing} ; {origin}"
+                )
     # Composition order must not reopen the boundary: apply the same bounded
     # folds after punctuation/split-token joining as well as before it.
-    ascii_confusable_variants.update(
+    ascii_confusable_pairs.extend(
         folded
-        for variant in deobfuscated | joined_tokens
-        for folded in ascii_confusable_folds(variant)
+        for pair in (*deobfuscated_pairs, *joined_pairs)
+        for folded in ascii_confusable_fold_pairs(pair)
     )
-    scannable_parts = (
-        mark_folded,
-        *sorted(ascii_confusable_variants),
-        *sorted(deobfuscated),
-        *sorted(separator_folded),
-        *sorted(joined_tokens),
-    )
-    scannable = " ".join(scannable_parts)
+    # Dedup by scan text, OR-merging provenance across generating paths, so
+    # the emitted part lists are exactly the historical sorted sets.
+    ascii_confusable_variants = merge_pairs(ascii_confusable_pairs)
+    leet_variants = merge_pairs(leet_pairs)
+    deobfuscated = merge_pairs(deobfuscated_pairs)
+    separator_folded = merge_pairs(separator_pairs)
+    joined_tokens = merge_pairs(joined_pairs)
+    scannable_parts = [
+        ScanPair(mark_folded),
+        *(ScanPair(real, shadow) for real, shadow in sorted(ascii_confusable_variants.items())),
+        *(ScanPair(real, shadow) for real, shadow in sorted(deobfuscated.items())),
+        *(ScanPair(real, shadow) for real, shadow in sorted(separator_folded.items())),
+        *(ScanPair(real, shadow) for real, shadow in sorted(joined_tokens.items())),
+    ]
+    scannable_pair = join_pairs(scannable_parts, " ")
     for pattern in PROTECTED_CLASS_SAFE_CONTEXT_PATTERNS:
-        scannable = pattern.sub(" ", scannable)
+        scannable_pair = mirror_sub(scannable_pair, pattern, " ")
     # Keep punctuation-preserving representations for criterion state.
-    health_semantic_parts = (mark_folded, *sorted(leet_variants), *sorted(deobfuscated))
-    health_scannable = " ; ".join(
-        mask_protected_health_safe_contexts(part) for part in health_semantic_parts
-    )
+    health_semantic_pairs = [
+        ScanPair(mark_folded),
+        *(ScanPair(real, shadow) for real, shadow in sorted(leet_variants.items())),
+        *(ScanPair(real, shadow) for real, shadow in sorted(deobfuscated.items())),
+    ]
+    masked_health_pairs = [_mask_health_pair(pair) for pair in health_semantic_pairs]
+    health_pair = join_pairs(masked_health_pairs, " ; ")
     # Direct status matching can use lossy separator/token normalization; selection state cannot.
-    health_status_scannable = " ; ".join(
-        mask_protected_health_safe_contexts(part) for part in scannable_parts
-    )
+    health_status_pair = join_pairs([_mask_health_pair(pair) for pair in scannable_parts], " ; ")
     reviewed_analytics = is_reviewed_read_only_analytics_text(mark_folded)
     has_unreviewed_selection_criterion = (
         False
         if (reviewed_analytics or assume_reviewed_read_only_analytics)
         else any(
             contains_unreviewed_selection_criterion(
-                mask_protected_health_safe_contexts(part),
+                masked.real,
                 selection_context_re=PROTECTED_HEALTH_SELECTION_CONTEXT_RE,
             )
             # Separator-folded text is invalid for the clause state machine.
-            for part in health_semantic_parts
+            for masked in masked_health_pairs
         )
     )
     # Direct protected-class, health, national-origin, and proxy detectors
@@ -382,15 +430,18 @@ def _protected_class_marketing_reason(
     # rejected text is unchanged (this was one ``or`` chain) -- only the
     # reported reason depends on the order.
     if (
-        PROTECTED_CLASS_MARKETING_RE.search(scannable)
-        or PROTECTED_AGE_CITIZENSHIP_MARKETING_RE.search(scannable)
-        or PROTECTED_CONTEXTUAL_TRAIT_MARKETING_RE.search(scannable)
-        or PROTECTED_RELIGION_FAMILIAL_RELATION_RE.search(scannable)
-        or (not reviewed_analytics and PROTECTED_HEALTH_TERM_MARKETING_RE.search(health_scannable))
-        or PROTECTED_HEALTH_STATUS_MARKETING_RE.search(health_status_scannable)
-        or PROTECTED_HEALTH_GOVERNANCE_INTENT_RE.search(health_scannable)
-        or _contains_national_origin_marketing_text(scannable)
-        or contains_protected_class_proxy_marketing_text(scannable)
+        search_backed(PROTECTED_CLASS_MARKETING_RE, scannable_pair)
+        or search_backed(PROTECTED_AGE_CITIZENSHIP_MARKETING_RE, scannable_pair)
+        or search_backed(PROTECTED_CONTEXTUAL_TRAIT_MARKETING_RE, scannable_pair)
+        or search_backed(PROTECTED_RELIGION_FAMILIAL_RELATION_RE, scannable_pair)
+        or (
+            not reviewed_analytics
+            and search_backed(PROTECTED_HEALTH_TERM_MARKETING_RE, health_pair)
+        )
+        or search_backed(PROTECTED_HEALTH_STATUS_MARKETING_RE, health_status_pair)
+        or search_backed(PROTECTED_HEALTH_GOVERNANCE_INTENT_RE, health_pair)
+        or _contains_national_origin_marketing_text(scannable_pair, window_origins)
+        or _contains_protected_class_proxy_pair(scannable_pair, window_origins)
         # Clause-local, on the punctuation-preserving variant: see
         # ``contains_geographic_composition_proxy_text``.
         or contains_geographic_composition_proxy_text(mark_folded)
@@ -404,17 +455,62 @@ def _protected_class_marketing_reason(
 # Governed national-origin vocabulary used only when the term occurs near a
 # population or targeting verb. Keeping this explicit makes changes auditable
 # and avoids treating arbitrary geography/product prose as protected targeting.
-def _contains_national_origin_marketing_text(value: str) -> bool:
-    scannable = value
+def _contains_national_origin_marketing_text(
+    pair: ScanPair,
+    window_origins: dict[str, str] | None = None,
+) -> bool:
     for safe_pattern in PROTECTED_CLASS_PROXY_SAFE_CONTEXT_PATTERNS:
-        scannable = safe_pattern.sub(" ", scannable)
-    for match in PROTECTED_NATIONAL_ORIGIN_RE.finditer(scannable):
-        window = scannable[max(0, match.start() - 120) : match.end() + 120]
-        if PROTECTED_CLASS_PROXY_HARD_TARGETING_RE.search(window):
+        pair = mirror_sub(pair, safe_pattern, " ")
+    for match in PROTECTED_NATIONAL_ORIGIN_RE.finditer(pair.real):
+        if not pair.backed(match.start(), match.end()):
+            # Every character of the matched term is a digit-minted letter --
+            # a NUMBER the leet fold rewrote, ``4,140`` -> ``lao`` -- not a
+            # term anyone wrote. The window nouns are irrelevant to a term
+            # that does not exist in the source.
+            continue
+        window = pair.real[max(0, match.start() - 120) : match.end() + 120]
+        if _window_targets_population(window):
             return True
-        if PROTECTED_CLASS_PROXY_POPULATION_RE.search(window):
+        origin = (window_origins or {}).get(match.group())
+        if origin is not None and _window_targets_population(origin):
             return True
     return False
+
+
+def _window_targets_population(window: str) -> bool:
+    return (
+        PROTECTED_CLASS_PROXY_HARD_TARGETING_RE.search(window) is not None
+        or PROTECTED_CLASS_PROXY_POPULATION_RE.search(window) is not None
+    )
+
+
+def _mask_health_pair(pair: ScanPair) -> ScanPair:
+    """``mask_protected_health_safe_contexts``, mirrored onto a scan pair.
+
+    Follows the original loop exactly -- same patterns, same longest-match
+    choice, same coordinated-continuation sentinel -- splicing the shadow at
+    the spans the REAL text matched, because those word patterns cannot be
+    re-run on sentinel text. The inserted ``cancer`` sentinel enters both
+    strings and therefore stays matchable and source-backed, exactly as the
+    original inserts it into the scan copy.
+    ``test_leet_digit_match_provenance`` pins ``.real`` against the original
+    function so the two loops cannot drift apart.
+    """
+
+    for _ in range(16):
+        matches = [
+            match
+            for pattern in PROTECTED_HEALTH_SAFE_CONTEXT_PATTERNS
+            if (match := pattern.search(pair.real)) is not None
+        ]
+        if not matches:
+            break
+        match = max(matches, key=lambda item: item.end() - item.start())
+        if _PROTECTED_HEALTH_COORDINATED_CONTINUATION_RE.match(pair.real[match.end() :]):
+            pair = splice_pair(pair, match.start(), match.end(), " cancer ")
+        else:
+            pair = splice_pair(pair, match.start(), match.end(), " ")
+    return pair
 
 
 _CLAUSE_SPLIT_RE = re.compile(r"[.!?;:\n\r]+")
@@ -465,16 +561,28 @@ def contains_protected_class_proxy_marketing_text(value: str) -> bool:
     The proxy terms are not intrinsically unsafe. Language-access support,
     branch-service coverage, and document section references remain usable;
     borrower/geography selection and explicit targeting fail closed.
+
+    A bare string has no provenance shadow, so every span reads as
+    source-backed and this public form behaves exactly as it always has.
     """
 
-    text = str(value)
+    return _contains_protected_class_proxy_pair(ScanPair(str(value)))
+
+
+def _contains_protected_class_proxy_pair(
+    pair: ScanPair,
+    window_origins: dict[str, str] | None = None,
+) -> bool:
     for safe_pattern in PROTECTED_CLASS_PROXY_SAFE_CONTEXT_PATTERNS:
-        text = safe_pattern.sub(" ", text)
+        pair = mirror_sub(pair, safe_pattern, " ")
     for pattern in PROTECTED_CLASS_PROXY_PATTERNS:
-        for match in pattern.finditer(text):
-            window = text[max(0, match.start() - 120) : match.end() + 120]
-            if PROTECTED_CLASS_PROXY_HARD_TARGETING_RE.search(window):
+        for match in pattern.finditer(pair.real):
+            if not pair.backed(match.start(), match.end()):
+                continue
+            window = pair.real[max(0, match.start() - 120) : match.end() + 120]
+            if _window_targets_population(window):
                 return True
-            if PROTECTED_CLASS_PROXY_POPULATION_RE.search(window):
+            origin = (window_origins or {}).get(match.group())
+            if origin is not None and _window_targets_population(origin):
                 return True
     return False
