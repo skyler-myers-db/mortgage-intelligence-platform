@@ -198,7 +198,84 @@ _PROTECTED_HEALTH_NAMED_CONDITIONS = (
     "substance use disorder",
 )
 
-_PROTECTED_HEALTH_ABBREVIATIONS = ("adhd", "aids", "als", "copd", "hiv", "ms", "ocd")
+# Each of these is unambiguous in ordinary mortgage prose, so each matches
+# standalone. ``ms`` is deliberately NOT here: it is the one entry that is also
+# a USPS state code, and it is handled by ``_TWO_LETTER_MS_RE_FRAGMENT`` below.
+_PROTECTED_HEALTH_ABBREVIATIONS = ("adhd", "aids", "als", "copd", "hiv", "ocd")
+
+# ``MS`` is both multiple sclerosis and the USPS code for Mississippi. Matching
+# it standalone made every governed per-state rollup that named Mississippi a
+# fair-lending finding -- "Borrowers in MS.", "State rollup: 70 MS borrowers
+# and 20 LA borrowers." -- on all of the co-pilot, plan, Genie prompt/planner,
+# visible-prose and visible-cell surfaces at once, and it kept ``MS`` out of the
+# governed place dimension that geography drill-down reads. Mississippi was the
+# only state code affected; the other 50 values were already clean.
+#
+# So the two-letter form is admitted to the bank only beside a health carrier:
+# a relationship phrase immediately before it, or a health noun immediately
+# after it. That is the same shape several other banks already use, and it
+# narrows the TERM rather than exempting the PLACE -- recognizing a place is
+# not authority to strip it, and a place exemption here would have had to hold
+# on every surface separately.
+#
+# Place prepositions are deliberately absent from the carrier list: "borrowers
+# in MS" is Mississippi. Where a relationship ends in a preposition that is
+# ambiguous on its own (``from``, ``by``, ``for``) the whole phrase is listed,
+# so that preposition can never admit the term by itself.
+#
+# Nothing else about multiple sclerosis is relaxed: the spelled-out
+# ``multiple sclerosis`` stays in ``_PROTECTED_HEALTH_NAMED_CONDITIONS`` and
+# still matches unconditioned, and the dotted evasion (``M.S.``, ``m s``) is
+# kept unconditioned below because it has no legitimate geography reading.
+_TWO_LETTER_MS_LEADING_CARRIERS: tuple[str, ...] = (
+    "affected by",
+    "battles",
+    "battling",
+    "experiencing",
+    "facing",
+    "had",
+    "has",
+    "have",
+    "manages",
+    "managing",
+    "prescribed",
+    "recovering from",
+    "remission from",
+    "suffering from",
+    "treated for",
+    "undergoing",
+    # Covers ``diagnosed with``, ``living with``, ``dealing with``,
+    # ``coping with``, ``afflicted with`` and ``treated with`` as well.
+    "with",
+)
+
+_TWO_LETTER_MS_TRAILING_NOUNS: str = (
+    r"(?:affected|care|clinics?|diagnos(?:is|es|ed)|drugs?|flares?|flare[- ]ups?|"
+    r"history|lesions?|meds?|medications?|nurses?|patients?|progression|related|"
+    r"relapses?|remission|specialists?|status|sufferers?|survivors?|symptoms?|"
+    r"therap(?:y|ies)|treatments?)"
+)
+
+
+def _two_letter_ms_fragment() -> str:
+    """Two-letter ``MS`` -- only next to a health carrier, plus dotted forms.
+
+    Python requires each look-behind to be fixed width, so the carrier list is
+    compiled as an alternation OF look-behinds rather than one look-behind of
+    an alternation.
+    """
+
+    leading = "|".join(
+        rf"(?<=\b{re.escape(phrase)}\s)" for phrase in _TWO_LETTER_MS_LEADING_CARRIERS
+    )
+    return (
+        rf"(?:{_dotted_spelling('ms')}|"
+        rf"(?:{leading})\bms\b|"
+        rf"\bms(?=[-\s]+{_TWO_LETTER_MS_TRAILING_NOUNS}\b))"
+    )
+
+
+_TWO_LETTER_MS_RE_FRAGMENT: str = _two_letter_ms_fragment()
 
 _PROTECTED_HEALTH_TREATMENTS = (
     "cancer treatment",
@@ -285,9 +362,16 @@ def _build_health_trait_fragments(
 
     named_conditions = _phrase_fragment(_PROTECTED_HEALTH_NAMED_CONDITIONS)
     condition_abbreviations = "|".join(
-        fragment
-        for term in _PROTECTED_HEALTH_ABBREVIATIONS
-        for fragment in (re.escape(term), _dotted_spelling(term))
+        (
+            *(
+                fragment
+                for term in _PROTECTED_HEALTH_ABBREVIATIONS
+                for fragment in (re.escape(term), _dotted_spelling(term))
+            ),
+            # Carries its own carrier requirement, so every composite that
+            # embeds a medical condition inherits it without restating it.
+            _TWO_LETTER_MS_RE_FRAGMENT,
+        )
     )
     dotted_medical_conditions = "|".join(
         _dotted_spelling(term) for term in ("asthma", "asthmatic", "cancer", "diabetes", "diabetic")
