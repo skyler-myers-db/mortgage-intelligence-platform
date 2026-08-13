@@ -159,6 +159,16 @@ _EVASIONS_MUST_REFUSE = (
 # assistance made these deterministic fair-lending findings until the assist
 # was gated to evasion-shaped windows (a minted character, or three or more
 # tokens); a two-token all-source join is what prose makes by accident.
+#
+# Gating the assist was necessary and not sufficient. A window denied the
+# assist stays in the scan blob, where it is a bare token whose 120-character
+# neighbourhood is whichever OTHER windows sorted alongside -- so the entries
+# below rendered only where sort order happened to keep a population noun
+# away. The longer ``India n/a`` sentences here are the measured proof: same
+# accident, same denial, and they refused. ``marketing_abbreviation_windows``
+# drops the window instead, which is why they can be pinned at all; 359f9066
+# removed the one short entry as non-discriminating, and these restore it with
+# the carriers that actually separate the two behaviours.
 _PROSE_MUST_RENDER = (
     "Which of our borrowers have a Bank of America, N.A. first lien we could recapture?",
     "Bank of America, N.A. holds 4,210 first liens across the ranked borrower list.",
@@ -166,6 +176,20 @@ _PROSE_MUST_RENDER = (
     "The borrower's Audi is registered to the subject property, and the "
     "household appears in the ranked lead queue.",
     "The India n/a rows were dropped before scoring.",
+    "The India n/a rows in the delinquency extract were excluded before the "
+    "borrowers were scored.",
+    "The India n/a rows in the servicing extract were dropped before the "
+    "ranked borrower list was built.",
+    "The India n/a rows in the nightly refresh were discarded, so no "
+    "borrowers were scored from them.",
+    "Rows whose country reads India n/a in the vendor extract were dropped "
+    "before the borrower list was scored.",
+    "The India n/a borrowers were dropped before scoring.",
+    # The servicer and possessive halves of the same family, which refused
+    # once an ordinary analytics verb put a population noun within reach.
+    "Score every Bank of America, N.A. loan in the ranked lead queue.",
+    "Select the Bank of America, N.A. borrowers we could recapture.",
+    "Exclude the borrower's Audi from the collateral list.",
 )
 
 

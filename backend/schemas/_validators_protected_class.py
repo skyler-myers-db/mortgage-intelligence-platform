@@ -29,6 +29,9 @@ from backend.schemas._validators_protected_class_patterns import (
     PROTECTED_HEALTH_STATUS_MARKETING_RE,
     PROTECTED_HEALTH_TERM_MARKETING_RE,
 )
+from backend.schemas.marketing_abbreviation_windows import (
+    window_is_word_beside_an_abbreviated_letter,
+)
 from backend.schemas.marketing_place_windows import window_is_place_beside_a_number
 from backend.schemas.marketing_safety_terms import (
     _PROTECTED_HEALTH_COORDINATED_CONTINUATION_RE,
@@ -470,6 +473,18 @@ def _protected_class_marketing_reason(
                 # sort-order luck this whole mechanism exists to stop
                 # depending on.
                 if window_is_place_beside_a_number(tokens, start, stop):
+                    continue
+                # An abbreviation's lone letter beside a whole word is the
+                # other accident that spells a context-gated term by splice
+                # (``America``+``N``, ``India``+``n``, ``s``+``Audi``). Same
+                # treatment and for the same reason: dropping the window is
+                # the only thing that decides it, because the not-evasion-
+                # shaped verdict below withholds the origin assist and the
+                # blob's own 120-character window hands the population noun
+                # straight back whenever sort order obliges.
+                if window_is_word_beside_an_abbreviated_letter(
+                    leet_folded.real, token_spans, tokens, start, stop
+                ):
                     continue
                 window = ScanPair(
                     "".join(token.real for token in tokens[start:stop]),
