@@ -102,20 +102,23 @@ def test_the_term_banks_still_own_the_banked_twins(prompt: str) -> None:
     assert protected_prompt_match(prompt) == "protected_class_language", prompt
 
 
-# The destination-tailed command refuses for EVERY determiner -- an
-# article-independent, pre-existing family (the active admission command
-# proves no relation, so the affirmative-directive branch fails closed).
-# Article parity must not move it, and the battery measured it unchanged.
-_TAILED_FORMS_STILL_REFUSE = (
+# The destination-tailed command once refused for EVERY determiner -- an
+# article-independent family that #222 measured unchanged and deliberately
+# left pinned refusing. The closed destination tail on the bare-directive
+# branch (``_REVIEWED_BARE_DIRECTIVE_DESTINATION_TAIL``) now admits it for
+# every determiner alike; the family battery and its fail-closed twins live
+# in test_bare_directive_destination_tail.py. Article parity still holds:
+# all three determiners carry the same verdict.
+_TAILED_FORMS_NOW_ANSWERABLE = (
     "Assign an owner to this campaign.",
     "Assign the owner to this campaign.",
     "Assign owners to this campaign.",
 )
 
 
-@pytest.mark.parametrize("prompt", _TAILED_FORMS_STILL_REFUSE)
-def test_the_destination_tailed_family_is_untouched(prompt: str) -> None:
-    assert protected_prompt_match(prompt) == "unreviewed_criterion", prompt
+@pytest.mark.parametrize("prompt", _TAILED_FORMS_NOW_ANSWERABLE)
+def test_the_destination_tailed_family_is_admitted_for_every_determiner(prompt: str) -> None:
+    assert protected_prompt_match(prompt) is None, prompt
 
 
 def test_campaign_copy_surface_moves_with_the_prompt_surface() -> None:

@@ -462,6 +462,27 @@ _REVIEWED_AUDIENCE_DECISION_PATTERNS: tuple[re.Pattern[str], ...] = (
         re.IGNORECASE,
     ),
 )
+# A criterion-free admission command may also name WHERE the population goes:
+# "Assign an owner to this campaign.", "Add these borrowers to the campaign.",
+# "Move the selected borrowers into the queue." Every slot of the tail is a
+# closed literal alternation -- preposition, determiner, optional ``reviewed``,
+# destination noun -- so no open vocabulary can ride inside the span and the
+# command still names no criterion. The admission grammar itself proves this
+# family carries none (``audience_admission_criterion`` returns None: there is
+# no criterion connector to capture), yet the ``for``-only tail below made the
+# verdict hinge on the preposition: "Assign an owner for the campaign."
+# answered while "Assign an owner to this campaign." fell to the
+# affirmative-directive fail-closed tail for EVERY determiner (measured
+# 2026-08-13). Criterion-carrying twins are not this branch's to allow and
+# keep their owners, which all run BEFORE this branch: "... with eczema to
+# this campaign" and "... to this campaign because they rent" parse in
+# ``marketing_audience_admission``, banked populations ("patients") stay with
+# the term banks, and an unreviewed word anywhere else -- "zyrplax borrowers",
+# "the zyrplax campaign" -- breaks the closed shape and still fails closed.
+_REVIEWED_BARE_DIRECTIVE_DESTINATION_TAIL = (
+    r"(?:to|in|into|onto)\s+(?:(?:this|that|the|a|an)\s+)?(?:reviewed\s+)?"
+    r"(?:campaign|cohort|audience|segment|list|(?:lead\s+)?queue|offer|review)"
+)
 # The determiner slot takes ``a``/``an`` exactly as it takes ``the``: the
 # object either way is the same closed population/audience reference, so the
 # article names no criterion. Without it, "Assign an owner." fell past this
@@ -474,8 +495,9 @@ _REVIEWED_BARE_AUDIENCE_DIRECTIVE_RE = re.compile(
     rf"{_AUDIENCE_FORMATION_COMMAND_FRAGMENT}\s+(?:(?:the|an?)\s+)?"
     rf"(?:(?:reviewed|eligible|qualified|marketing[- ]eligible|highest[- ]scoring)\s+){{0,2}}"
     rf"{_AUDIENCE_DECISION_REFERENCE}"
-    r"(?:\s+for\s+(?:(?:this|the|a|an)\s+)?(?:reviewed\s+)?"
-    r"(?:campaign|offer|review))?$",
+    r"(?:\s+(?:for\s+(?:(?:this|the|a|an)\s+)?(?:reviewed\s+)?"
+    r"(?:campaign|offer|review)|"
+    rf"{_REVIEWED_BARE_DIRECTIVE_DESTINATION_TAIL}))?$",
     re.IGNORECASE,
 )
 _REVIEWED_PRENOMINAL_AUDIENCE_DIRECTIVE_RE = re.compile(
