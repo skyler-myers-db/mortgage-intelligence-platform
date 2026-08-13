@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 
 from backend.schemas.marketing_selection_vocabulary import (
-    POPULATION_QUANTIFIER_FRAGMENT,
+    QUANTIFIED_POPULATION_FRAGMENT,
 )
 
 _POPULATION = (
@@ -50,11 +50,32 @@ _MODIFIERS = (
     # bounded modifier run, so "Add the top 50 borrowers with the highest rate
     # spread to the campaign." proved no relation at all and fell through to the
     # fail-closed tail, while the same sentence without the count was answered.
-    # The count admits nothing on its own -- ``POPULATION_QUANTIFIER_FRAGMENT``
-    # is digits or a CLOSED cardinal list, never an open adjective slot -- and
-    # whatever the criterion group captures must still satisfy
-    # ``_is_reviewed_admission_criterion``.
-    rf"(?:{POPULATION_QUANTIFIER_FRAGMENT}\s+)?"
+    # The count admits nothing on its own -- the quantified fragment is an
+    # optional closed lead word (top|best|next|first) plus digits, never an
+    # open adjective slot -- and whatever the criterion group captures must
+    # still satisfy ``_is_reviewed_admission_criterion``.
+    #
+    # The lead word joined the slot on 2026-08-13. The imperative shapes never
+    # needed it (the open action slot absorbed "add the top"), but no passive
+    # or declarative shape has an action slot, so "top" broke the parse there
+    # and the count switched the whole net off in BOTH directions: "The top 50
+    # high equity borrowers are placed into the campaign." refused while its
+    # count-free twin answered, and once the criterion machine learned the
+    # count was transparent, "The top 50 borrowers are placed into the
+    # campaign based on <unreviewed term>." would have proved no relation and
+    # sailed past the criterion capture entirely.
+    rf"(?:{QUANTIFIED_POPULATION_FRAGMENT}\s+)?"
+    # English puts the closed premodifiers AFTER the count -- "the 50 ELIGIBLE
+    # borrowers" -- and with the run only in front of the quantifier, that
+    # order proved no relation at all. The differential battery caught what
+    # that costs: once the count is transparent to the criterion machine,
+    # "The 50 eligible borrowers are placed into the campaign based on
+    # left-handedness." sailed past BOTH nets (measured 2026-08-13, 105
+    # probes), because this grammar could not capture the criterion and the
+    # criterion machine saw only reviewed premodifiers. Adjectives only, no
+    # second determiner: a determiner after a count is not a noun phrase.
+    r"(?:(?:reviewed|eligible|qualified|marketing[- ]eligible|"
+    r"highest[- ]scoring|prospective|current)\s+){0,2}"
 )
 _DESTINATION_REFERENCE = rf"(?:the\s+|this\s+|that\s+|a\s+|an\s+)?{_DESTINATION}"
 _DESTINATION_RELATION = rf"(?:into|in|to|on|onto|for|towards?)\s+{_DESTINATION_REFERENCE}"

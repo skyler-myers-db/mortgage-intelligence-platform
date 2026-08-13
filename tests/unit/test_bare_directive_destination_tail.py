@@ -128,7 +128,13 @@ _CLOSED_SHAPE_KEEPS_FAILING_CLOSED = (
     "Add borrowers to the queue to hide the audit trail.",
     "Assign an owner to this campaign for the review.",
     "Assign a zyrplax borrower to the campaign.",
-    "Add the top 50 borrowers to the campaign.",
+    # "Add the top 50 borrowers to the campaign." sat here as a closed-shape
+    # control, but it was pinning the NEXT false positive, not a control: a
+    # count quantifies the population and names no criterion, and the
+    # quantifier slot admitted it on 2026-08-13. Its family now lives in
+    # ``test_population_quantifier_parity``; the open-vocabulary twin keeps
+    # the fail-closed seat.
+    "Add the top 50 zyrplax borrowers to the campaign.",
 )
 
 

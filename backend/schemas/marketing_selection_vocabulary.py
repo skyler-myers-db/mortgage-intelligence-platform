@@ -84,6 +84,29 @@ _REVIEWED_ATTRIBUTE_ARTICLE = r"(?:(?:an?|the)\s+)?"
 POPULATION_QUANTIFIER_DIGITS = r"(?:[0-9]{1,3}(?:,[0-9]{3})*|[0-9]+)"
 POPULATION_QUANTIFIER_FRAGMENT = POPULATION_QUANTIFIER_DIGITS
 
+# The closed lead words a count composes with: "the TOP 50 borrowers", "the
+# NEXT 1,000 leads", "the BEST 25 customers", "the FIRST 100 applicants".
+#
+# The lead word admits nothing alone -- every embedding site couples it to the
+# digits, so a count-free "the top borrowers" keeps whatever verdict its
+# grammar gives it today. The pair still names no criterion: it says how MANY
+# of an already-formed ranking to take, never who ranks. Without it the
+# CRITERION-FREE quantified command was the only refused member of its family
+# (measured 2026-08-13): "Add the top 50 borrowers to the campaign." refused
+# as ``unreviewed_criterion`` while "Add the top 50 borrowers with the highest
+# rate spread to the campaign." answered -- the criterion-carrying form parsed
+# through the admission grammar's open action slot, and the criterion-free
+# form had no slot for the count anywhere.
+#
+# A LITERAL four-word alternation on purpose, never an open adjective slot and
+# never a fold image: a de-obfuscated variant that mints "b3st" -> "best"
+# still refuses on the original string, which is the direction the variant
+# combiner fails.
+POPULATION_QUANTIFIER_LEAD_WORDS = r"(?:top|best|next|first)"
+QUANTIFIED_POPULATION_FRAGMENT = (
+    rf"(?:{POPULATION_QUANTIFIER_LEAD_WORDS}\s+)?{POPULATION_QUANTIFIER_FRAGMENT}"
+)
+
 REVIEWED_MORTGAGE_ATTRIBUTE_FRAGMENT = (
     rf"{_REVIEWED_ATTRIBUTE_ARTICLE}"
     # An aggregate qualifier is a DESCRIPTOR of a reviewed attribute, not a new
