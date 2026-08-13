@@ -391,7 +391,15 @@ def _build_health_trait_fragments(
     medical_condition = (
         rf"(?:{dotted_medical_conditions}|{condition_abbreviations}|{named_conditions}|"
         rf"{condition_morphology}|"
-        r"heart[- ]attack|diabetic|asthmatic|hiv(?:[- ]positive)?|epileptic|"
+        # The banked condition ADJECTIVES double as population nouns in the
+        # plural ("add diabetics to this campaign"), and the trailing word
+        # boundary every consumer applies means the singular literal can never
+        # reach them. Each plural is enumerated with ``s?`` — a closed two-form
+        # spelling for exactly these three terms, not a morphological rule
+        # applied across the bank (2026-08-13 admission-command capture: the
+        # singular refused on all three guard surfaces while the plural passed
+        # every one).
+        r"heart[- ]attack|diabetics?|asthmatics?|hiv(?:[- ]positive)?|epileptics?|"
         r"terminal[- ]illness(?:es)?|terminally[- ]ill|"
         r"(?:chronic|serious|long[- ]term|terminal|acute)\s+(?:illness(?:es)?|disease|"
         r"conditions?|diagnos(?:is|es)|disorders?|syndromes?)|"
