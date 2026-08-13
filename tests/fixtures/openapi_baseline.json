@@ -594,6 +594,11 @@
             "title": "Mode",
             "type": "string"
           },
+          "protected_class_suppressions_last_hour": {
+            "default": 0,
+            "title": "Protected Class Suppressions Last Hour",
+            "type": "integer"
+          },
           "recent_errors_count": {
             "default": 0,
             "title": "Recent Errors Count",

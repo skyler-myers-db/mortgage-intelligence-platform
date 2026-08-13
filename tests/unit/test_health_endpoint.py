@@ -599,6 +599,9 @@ def test_health_admin_endpoint_returns_full_diagnostics(
         "actor_cache_key",
         "breaker_state_changes_last_hour",
         "recent_errors_count",
+        # Rolling count of fair-lending terms the scanner matched and dropped
+        # as digit-minted. Zero here is a liveness question, not a clean bill.
+        "protected_class_suppressions_last_hour",
         "counters_persistence",
         "log_export",
         "fallback_identity_fallbacks_total",

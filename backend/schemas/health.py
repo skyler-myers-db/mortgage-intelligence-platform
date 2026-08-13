@@ -45,6 +45,7 @@ class AdminHealthResponse(HealthResponse):
     warehouse_id: str | None = None
     breaker_state_changes_last_hour: int = 0
     recent_errors_count: int = 0
+    protected_class_suppressions_last_hour: int = 0
     counters_persistence: str = "process-local"
     log_export: str = "stdout-only"
     fallback_identity_fallbacks_process_total: int = 0

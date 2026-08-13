@@ -34,8 +34,10 @@ import pytest
 from backend.schemas._validators_protected_class import (
     _CACHEABLE_SCAN_CHARS,
     _protected_class_marketing_reason,
-    _protected_class_marketing_reason_cached,
+    _protected_class_marketing_scan,
+    _protected_class_marketing_scan_cached,
     protected_class_marketing_reason,
+    protected_class_marketing_scan,
 )
 
 # Decisions that must not change when the memoizing front door is in play.
@@ -64,13 +66,20 @@ def test_memoized_and_direct_decisions_are_identical(value: str, analytics: bool
     cache at all, so an over-length case would assert ``f(x) == f(x)`` against
     an empty cache. :func:`test_the_gate_bypasses_rather_than_diverges` covers
     the other side.
+
+    Asserted over the whole verdict as well as the reason. The cache holds
+    the digit-mint suppressions too, and a cache that returned the right
+    reason while dropping them would make the fair-lending suppression signal
+    decay as the cache warmed -- invisible to a reason-only comparison, and
+    invisible in production for the same reason.
     """
 
+    assert protected_class_marketing_scan(
+        value, assume_reviewed_read_only_analytics=analytics
+    ) == _protected_class_marketing_scan(value, assume_reviewed_read_only_analytics=analytics)
     assert protected_class_marketing_reason(
         value, assume_reviewed_read_only_analytics=analytics
-    ) == _protected_class_marketing_reason(
-        value, assume_reviewed_read_only_analytics=analytics
-    )
+    ) == _protected_class_marketing_reason(value, assume_reviewed_read_only_analytics=analytics)
 
 
 def test_the_national_origin_pattern_is_identical_across_hash_seeds() -> None:
@@ -118,9 +127,10 @@ def test_the_gate_bypasses_rather_than_diverges() -> None:
 
     long_value = "Kent has 1,405 residents. " * 40
     assert len(long_value) > _CACHEABLE_SCAN_CHARS
-    _protected_class_marketing_reason_cached.cache_clear()
+    _protected_class_marketing_scan_cached.cache_clear()
 
+    assert protected_class_marketing_scan(long_value) == _protected_class_marketing_scan(long_value)
     assert protected_class_marketing_reason(long_value) == _protected_class_marketing_reason(
         long_value
     )
-    assert _protected_class_marketing_reason_cached.cache_info().currsize == 0
+    assert _protected_class_marketing_scan_cached.cache_info().currsize == 0

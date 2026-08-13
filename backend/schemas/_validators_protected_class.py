@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from functools import lru_cache
-from typing import Literal
+from typing import Literal, NamedTuple
 
 from backend.schemas._validators_protected_class_patterns import (
     GEOGRAPHIC_COMPOSITION_AUDIENCE_FORMATION_RE,
@@ -37,11 +37,15 @@ from backend.schemas.marketing_safety_terms import (
 )
 from backend.schemas.marketing_scan_provenance import (
     SHADOW_LEET_TABLE,
+    MintedSuppression,
+    MintedSuppressionKind,
     ScanPair,
+    add_minted_suppressions,
     ascii_confusable_fold_pairs,
     join_pairs,
     merge_pairs,
     mirror_sub,
+    publish_minted_suppressions,
     regex_pair,
     search_backed,
     splice_pair,
@@ -59,6 +63,26 @@ from backend.schemas.protected_relationships import PROTECTED_RELIGION_FAMILIAL_
 # Governed refusal reasons this module can report. Both are fail-closed
 # rejections; only ``protected_class`` is a fair-lending finding.
 ProtectedClassRefusalReason = Literal["protected_class", "unreviewed_criterion"]
+
+
+class ProtectedClassScanVerdict(NamedTuple):
+    """What one scan decided, and what it declined to decide on.
+
+    ``reason`` is the whole of the historical answer. ``suppressions`` names
+    the governed terms this scan matched and then DROPPED because digits, not
+    an author, spelled them -- the rule that lets "NEWCASTLE has 4,140
+    borrowers" render instead of being withheld as national-origin targeting.
+
+    Reported rather than logged because this module may not import the runtime
+    services (``test_architecture_boundaries`` pins that), and reported as
+    labels rather than raised as an event because the caller is what knows the
+    surface: the same suppression is routine on an Ask Genie answer full of
+    counts and worth a closer look on campaign copy.
+    """
+
+    reason: ProtectedClassRefusalReason | None
+    suppressions: tuple[MintedSuppression, ...] = ()
+
 
 # The two reviewed leetspeak readings (``1`` is ambiguous between ``l`` and
 # ``i``); the shadow table in ``marketing_scan_provenance`` mirrors the same
@@ -259,13 +283,40 @@ _CACHEABLE_SCAN_CHARS = 512
 
 
 @lru_cache(maxsize=1024)
-def _protected_class_marketing_reason_cached(
+def _protected_class_marketing_scan_cached(
     value: str,
     assume_reviewed_read_only_analytics: bool,
-) -> ProtectedClassRefusalReason | None:
-    return _protected_class_marketing_reason(
+) -> ProtectedClassScanVerdict:
+    return _protected_class_marketing_scan(
         value, assume_reviewed_read_only_analytics=assume_reviewed_read_only_analytics
     )
+
+
+def protected_class_marketing_scan(
+    value: str,
+    *,
+    assume_reviewed_read_only_analytics: bool = False,
+) -> ProtectedClassScanVerdict:
+    """Memoizing front door for :func:`_protected_class_marketing_scan`.
+
+    The cache holds the whole verdict, not the reason, and the suppressions
+    are republished on every call. That is load-bearing rather than tidy: a
+    rendered governed table re-scans repeated cells, so caching the reason
+    alone would report a suppression the first time a cell was seen and stay
+    silent for the other eighteen -- observability that reads as a falling
+    rate whenever the cache warms.
+    """
+
+    text = str(value)
+    verdict = (
+        _protected_class_marketing_scan_cached(text, assume_reviewed_read_only_analytics)
+        if len(text) <= _CACHEABLE_SCAN_CHARS
+        else _protected_class_marketing_scan(
+            text, assume_reviewed_read_only_analytics=assume_reviewed_read_only_analytics
+        )
+    )
+    publish_minted_suppressions(verdict.suppressions)
+    return verdict
 
 
 def protected_class_marketing_reason(
@@ -273,14 +324,11 @@ def protected_class_marketing_reason(
     *,
     assume_reviewed_read_only_analytics: bool = False,
 ) -> ProtectedClassRefusalReason | None:
-    """Memoizing front door for :func:`_protected_class_marketing_reason`."""
+    """The decision alone, for callers with no use for the scan's provenance."""
 
-    text = str(value)
-    if len(text) <= _CACHEABLE_SCAN_CHARS:
-        return _protected_class_marketing_reason_cached(text, assume_reviewed_read_only_analytics)
-    return _protected_class_marketing_reason(
-        text, assume_reviewed_read_only_analytics=assume_reviewed_read_only_analytics
-    )
+    return protected_class_marketing_scan(
+        value, assume_reviewed_read_only_analytics=assume_reviewed_read_only_analytics
+    ).reason
 
 
 def _protected_class_marketing_reason(
@@ -288,6 +336,18 @@ def _protected_class_marketing_reason(
     *,
     assume_reviewed_read_only_analytics: bool = False,
 ) -> ProtectedClassRefusalReason | None:
+    """The uncached implementation's decision alone. See :func:`_protected_class_marketing_scan`."""
+
+    return _protected_class_marketing_scan(
+        value, assume_reviewed_read_only_analytics=assume_reviewed_read_only_analytics
+    ).reason
+
+
+def _protected_class_marketing_scan(
+    value: str,
+    *,
+    assume_reviewed_read_only_analytics: bool = False,
+) -> ProtectedClassScanVerdict:
     """Name *why* this module rejects text, or ``None`` when it accepts it.
 
     Same decision as ``contains_protected_class_marketing_text`` -- this is
@@ -310,13 +370,13 @@ def _protected_class_marketing_reason(
     # finding: a Spanish-language campaign label must not be audited as
     # protected-class targeting.
     if any(unicodedata.category(char) == "Cf" for char in normalized):
-        return "unreviewed_criterion"
+        return ProtectedClassScanVerdict("unreviewed_criterion")
     if any(
         unicodedata.category(char).startswith("L")
         and not ("A" <= char <= "Z" or "a" <= char <= "z")
         for char in normalized
     ):
-        return "unreviewed_criterion"
+        return ProtectedClassScanVerdict("unreviewed_criterion")
     # NFKC intentionally preserves ordinary Latin diacritics. Strip combining
     # marks from an NFKD scan copy so accents cannot split a protected term
     # into unrelated ASCII fragments (for example ``Wómën`` or ``Müslïm``).
@@ -335,7 +395,7 @@ def _protected_class_marketing_reason(
         # whose fail-closed ``population with X`` grammar intentionally cannot
         # infer that each complete product description is governed. Full-match
         # semantics ensure appended or substituted criteria remain scannable.
-        return None
+        return ProtectedClassScanVerdict(None)
     unreviewed_audience_outcome_claim = any(
         _contains_unreviewed_audience_outcome_claim(candidate)
         for candidate in _structural_audience_scan_variants(mark_folded)
@@ -504,35 +564,82 @@ def _protected_class_marketing_reason(
     # first; the fail-closed unknown-criterion states last. The set of
     # rejected text is unchanged (this was one ``or`` chain) -- only the
     # reported reason depends on the order.
+    # Each bank names itself so a suppression is attributable to the detector
+    # that was stood down. ``suppressions`` is append-only and never consulted
+    # by the decision below -- an observability channel that could change a
+    # verdict would be a second, unreviewed guard.
+    suppressions: list[MintedSuppression] = []
     if (
-        search_backed(PROTECTED_CLASS_MARKETING_RE, scannable_pair, _mints_governed_term)
-        or search_backed(
-            PROTECTED_AGE_CITIZENSHIP_MARKETING_RE, scannable_pair, _mints_governed_term
+        search_backed(
+            PROTECTED_CLASS_MARKETING_RE,
+            scannable_pair,
+            _mints_governed_term,
+            term_bank="protected_class",
+            suppressions=suppressions,
         )
         or search_backed(
-            PROTECTED_CONTEXTUAL_TRAIT_MARKETING_RE, scannable_pair, _mints_governed_term
+            PROTECTED_AGE_CITIZENSHIP_MARKETING_RE,
+            scannable_pair,
+            _mints_governed_term,
+            term_bank="age_citizenship",
+            suppressions=suppressions,
         )
         or search_backed(
-            PROTECTED_RELIGION_FAMILIAL_RELATION_RE, scannable_pair, _mints_governed_term
+            PROTECTED_CONTEXTUAL_TRAIT_MARKETING_RE,
+            scannable_pair,
+            _mints_governed_term,
+            term_bank="contextual_trait",
+            suppressions=suppressions,
+        )
+        or search_backed(
+            PROTECTED_RELIGION_FAMILIAL_RELATION_RE,
+            scannable_pair,
+            _mints_governed_term,
+            term_bank="religion_familial_relation",
+            suppressions=suppressions,
         )
         or (
             not reviewed_analytics
-            and search_backed(PROTECTED_HEALTH_TERM_MARKETING_RE, health_pair, _mints_governed_term)
+            and search_backed(
+                PROTECTED_HEALTH_TERM_MARKETING_RE,
+                health_pair,
+                _mints_governed_term,
+                term_bank="health_term",
+                suppressions=suppressions,
+            )
         )
         or search_backed(
-            PROTECTED_HEALTH_STATUS_MARKETING_RE, health_status_pair, _mints_governed_term
+            PROTECTED_HEALTH_STATUS_MARKETING_RE,
+            health_status_pair,
+            _mints_governed_term,
+            term_bank="health_status",
+            suppressions=suppressions,
         )
-        or search_backed(PROTECTED_HEALTH_GOVERNANCE_INTENT_RE, health_pair, _mints_governed_term)
-        or _contains_national_origin_marketing_text(scannable_pair, window_origins)
-        or _contains_protected_class_proxy_pair(scannable_pair, window_origins)
+        or search_backed(
+            PROTECTED_HEALTH_GOVERNANCE_INTENT_RE,
+            health_pair,
+            _mints_governed_term,
+            term_bank="health_governance_intent",
+            suppressions=suppressions,
+        )
+        or _contains_national_origin_marketing_text(
+            scannable_pair, window_origins, suppressions=suppressions
+        )
+        or _contains_protected_class_proxy_pair(
+            scannable_pair, window_origins, suppressions=suppressions
+        )
         # Clause-local, on the punctuation-preserving variant: see
         # ``contains_geographic_composition_proxy_text``.
         or contains_geographic_composition_proxy_text(mark_folded)
     ):
-        return "protected_class"
+        # A refusal reports no suppression: short-circuiting means the banks
+        # after the one that fired never ran, so the list is a partial record
+        # of a scan whose outcome was "withheld" anyway. The event this exists
+        # to make observable is a suppression that let text THROUGH.
+        return ProtectedClassScanVerdict("protected_class")
     if has_unreviewed_selection_criterion or unreviewed_audience_outcome_claim:
-        return "unreviewed_criterion"
-    return None
+        return ProtectedClassScanVerdict("unreviewed_criterion", tuple(suppressions))
+    return ProtectedClassScanVerdict(None, tuple(suppressions))
 
 
 # Governed national-origin vocabulary used only when the term occurs near a
@@ -541,15 +648,20 @@ def _protected_class_marketing_reason(
 def _contains_national_origin_marketing_text(
     pair: ScanPair,
     window_origins: dict[str, str] | None = None,
+    *,
+    suppressions: list[MintedSuppression] | None = None,
 ) -> bool:
+    dropped: list[MintedSuppressionKind] = []
     for safe_pattern in PROTECTED_CLASS_PROXY_SAFE_CONTEXT_PATTERNS:
         pair = mirror_sub(pair, safe_pattern, " ")
     for match in PROTECTED_NATIONAL_ORIGIN_RE.finditer(pair.real):
-        if not pair.backed(match.start(), match.end(), _mints_governed_term):
+        kind = pair.minted_suppression(match.start(), match.end(), _mints_governed_term)
+        if kind is not None:
             # Every character of the matched term is a digit-minted letter --
             # a NUMBER the leet fold rewrote, ``4,140`` -> ``lao`` -- not a
             # term anyone wrote. The window nouns are irrelevant to a term
             # that does not exist in the source.
+            dropped.append(kind)
             continue
         window = pair.real[max(0, match.start() - 120) : match.end() + 120]
         if _window_targets_population(window):
@@ -557,6 +669,12 @@ def _contains_national_origin_marketing_text(
         origin = (window_origins or {}).get(match.group())
         if origin is not None and _window_targets_population(origin):
             return True
+    # Reported only on the way out, so a drop alongside a term that went on to
+    # refuse is not recorded as having changed anything. This bank has a
+    # second reason to reach here -- a source-backed term with no population
+    # noun beside it -- and that path appends nothing.
+    if suppressions is not None:
+        add_minted_suppressions(suppressions, "national_origin", dropped)
     return False
 
 
@@ -655,12 +773,17 @@ def contains_protected_class_proxy_marketing_text(value: str) -> bool:
 def _contains_protected_class_proxy_pair(
     pair: ScanPair,
     window_origins: dict[str, str] | None = None,
+    *,
+    suppressions: list[MintedSuppression] | None = None,
 ) -> bool:
+    dropped: list[MintedSuppressionKind] = []
     for safe_pattern in PROTECTED_CLASS_PROXY_SAFE_CONTEXT_PATTERNS:
         pair = mirror_sub(pair, safe_pattern, " ")
     for pattern in PROTECTED_CLASS_PROXY_PATTERNS:
         for match in pattern.finditer(pair.real):
-            if not pair.backed(match.start(), match.end(), _mints_governed_term):
+            kind = pair.minted_suppression(match.start(), match.end(), _mints_governed_term)
+            if kind is not None:
+                dropped.append(kind)
                 continue
             window = pair.real[max(0, match.start() - 120) : match.end() + 120]
             if _window_targets_population(window):
@@ -668,4 +791,6 @@ def _contains_protected_class_proxy_pair(
             origin = (window_origins or {}).get(match.group())
             if origin is not None and _window_targets_population(origin):
                 return True
+    if suppressions is not None:
+        add_minted_suppressions(suppressions, "protected_class_proxy", dropped)
     return False

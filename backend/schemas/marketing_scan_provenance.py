@@ -60,13 +60,87 @@ positive, never open the guard.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import Literal, NamedTuple
 
 # One sentinel for every foldable digit. Uppercase so it can never equal a
 # folded letter (both tables emit lowercase); a SOURCE uppercase ``Q`` shadows
 # as itself, agrees with the real string, and correctly reads as backed.
 SHADOW_SENTINEL = "Q"
 SHADOW_LEET_TABLE = str.maketrans("013457", SHADOW_SENTINEL * 6)
+
+# The two ways a governed term can match text nobody typed. Both are the same
+# finding for an auditor -- "a number wore a protected term's spelling and the
+# scanner stood down" -- but they are separate rules that were each wrong at
+# some point in development, so they are reported apart.
+MintedSuppressionKind = Literal["unbacked_span", "minted_term_run"]
+SUPPRESSION_UNBACKED_SPAN: MintedSuppressionKind = "unbacked_span"
+SUPPRESSION_MINTED_TERM_RUN: MintedSuppressionKind = "minted_term_run"
+
+
+class MintedSuppression(NamedTuple):
+    """One governed term dropped because digits, not an author, spelled it.
+
+    Labels only. ``term_bank`` names the detector that matched and ``kind``
+    names which rule dropped it; the matched text is deliberately absent. The
+    block log this parallels is label-only for the same reason, and the
+    content here would be worse than the block log's: the whole point of a
+    suppression is that the span is a rendered BUSINESS NUMBER (``4,140``
+    borrowers), so logging it would put customer measures in the log stream to
+    describe an event that, by construction, did not withhold anything.
+    """
+
+    term_bank: str
+    kind: MintedSuppressionKind
+
+
+# Suppressions are collected per-boundary rather than returned through the
+# boolean scanners that sit between a boundary and the verdict
+# (``contains_unsafe_ai_text`` is two ``or`` chains away from the provenance
+# check). A boundary opens a collector; the scan's front door publishes into
+# whichever one is active. ``None`` means nobody is listening, which is the
+# case for every scanner call outside an instrumented boundary.
+_SUPPRESSION_COLLECTOR: ContextVar[list[MintedSuppression] | None] = ContextVar(
+    "mip_minted_suppressions", default=None
+)
+
+
+@contextmanager
+def collect_minted_suppressions() -> Iterator[list[MintedSuppression]]:
+    """Collect the suppressions raised by scans inside this block.
+
+    Re-entrant by shadowing: a nested collector takes the publications made
+    inside it and the outer one resumes afterwards. Boundaries do not nest
+    today, and shadowing keeps a nested scan from being attributed to an outer
+    surface that did not perform it.
+    """
+
+    collected: list[MintedSuppression] = []
+    token = _SUPPRESSION_COLLECTOR.set(collected)
+    try:
+        yield collected
+    finally:
+        _SUPPRESSION_COLLECTOR.reset(token)
+
+
+def publish_minted_suppressions(suppressions: tuple[MintedSuppression, ...]) -> None:
+    """Hand a scan's suppressions to the active collector, if any.
+
+    Deduplicating, because one term reaches the detectors many times: the scan
+    text is a join of roughly thirty de-obfuscation variants of the same
+    input, so a single ``4,140`` produced three drops of ``lao`` when measured.
+    A boundary wants the distinct (bank, rule) pairs it stood down, not a count
+    of how many variants the scanner happened to build.
+    """
+
+    sink = _SUPPRESSION_COLLECTOR.get()
+    if sink is None:
+        return
+    for suppression in suppressions:
+        if suppression not in sink:
+            sink.append(suppression)
 
 
 class ScanPair:
@@ -86,6 +160,21 @@ class ScanPair:
         mints_governed_term: Callable[[str], bool] | None = None,
     ) -> bool:
         """True when the span holds a source-backed letter and no minted TERM.
+
+        The decision, for callers that only need to know whether the match
+        stands. :meth:`minted_suppression` is the same computation reporting
+        WHICH rule dropped it, and this delegates so the two cannot diverge.
+        """
+
+        return self.minted_suppression(start, end, mints_governed_term) is None
+
+    def minted_suppression(
+        self,
+        start: int,
+        end: int,
+        mints_governed_term: Callable[[str], bool] | None = None,
+    ) -> MintedSuppressionKind | None:
+        """Name the rule that drops this match, or None when the match stands.
 
         Three predicates were tried here and only the third is sound.
 
@@ -107,6 +196,22 @@ class ScanPair:
 
         Without a predicate this degrades to the ``any backed letter`` rule,
         which is the refusing direction.
+
+        The two outcomes are reported apart because they are different rules,
+        and the veto is tested FIRST, so a wholly minted span whose run is
+        governed reports ``minted_term_run`` whether or not a typed neighbour
+        sits inside the match: ``lao`` from ``4,140`` and ``als`` from ``415
+        borrowers`` are both that. ``unbacked_span`` is what remains -- nothing
+        in the span was typed and no minted run is a governed term on its own
+        (``ao`` from ``40``) -- plus every drop when no predicate is supplied.
+
+        Measured on 833 number-bearing sentences across seven governed places
+        and seventeen number shapes, every suppression the detector chain
+        actually produced was ``minted_term_run``; ``unbacked_span`` was only
+        reachable by calling this directly. Both are kept because they are the
+        two real exits and collapsing them would hide which rule fired, but a
+        monitor should expect the second to be rare rather than treat its
+        absence as a fault.
         """
 
         real = self.real
@@ -131,10 +236,10 @@ class ScanPair:
                 and mints_governed_term is not None
                 and mints_governed_term(real[run_start:index])
             ):
-                return False
+                return SUPPRESSION_MINTED_TERM_RUN
             run_start = -1
             run_backed = False
-        return any_backed
+        return None if any_backed else SUPPRESSION_UNBACKED_SPAN
 
 
 def translate_pair(pair: ScanPair, table: dict[int, int], shadow_table: dict[int, int]) -> ScanPair:
@@ -269,10 +374,37 @@ def search_backed(
     pattern: re.Pattern[str],
     pair: ScanPair,
     mints_governed_term: Callable[[str], bool] | None = None,
+    *,
+    term_bank: str = "",
+    suppressions: list[MintedSuppression] | None = None,
 ) -> re.Match[str] | None:
-    """First match the source actually backs, else None. See :meth:`backed`."""
+    """First match the source actually backs, else None. See :meth:`backed`.
 
+    Appends to ``suppressions`` only when a drop was DECISIVE -- this bank
+    matched and nothing survived, so the digit-mint rule is what kept the bank
+    from firing. A drop alongside a surviving match changed no outcome and
+    would report a suppression on text the guard refused anyway.
+    """
+
+    dropped: list[MintedSuppressionKind] = []
     for match in pattern.finditer(pair.real):
-        if pair.backed(match.start(), match.end(), mints_governed_term):
+        kind = pair.minted_suppression(match.start(), match.end(), mints_governed_term)
+        if kind is None:
             return match
+        dropped.append(kind)
+    if suppressions is not None:
+        add_minted_suppressions(suppressions, term_bank, dropped)
     return None
+
+
+def add_minted_suppressions(
+    suppressions: list[MintedSuppression],
+    term_bank: str,
+    kinds: list[MintedSuppressionKind],
+) -> None:
+    """Append the distinct (bank, rule) pairs among ``kinds``, order-stable."""
+
+    for kind in kinds:
+        suppression = MintedSuppression(term_bank, kind)
+        if suppression not in suppressions:
+            suppressions.append(suppression)

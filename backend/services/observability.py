@@ -671,6 +671,7 @@ def _reset_configured_for_tests() -> None:
 
 _BREAKER_CHANGES: deque[tuple[float, str, str, str]] = deque()
 _ERRORS: deque[tuple[float, str, str]] = deque()
+_PROTECTED_CLASS_SUPPRESSIONS: deque[tuple[float, str, str]] = deque()
 _COUNTER_LOCK = threading.Lock()
 _WINDOW_S = 3600.0
 
@@ -711,10 +712,35 @@ def recent_error_count() -> int:
         return len(_ERRORS)
 
 
+def record_protected_class_suppression(*, term_bank: str, kind: str) -> None:
+    """Remember a digit-minted protected-term suppression for the health body.
+
+    Labels only, deliberately: see ``marketing_scan_provenance``. This counts
+    the fair-lending scanner declining to fire because a NUMBER wore a
+    governed term's spelling, which is the opposite of a block -- the text
+    rendered. A non-zero value is normal on a numeric analytics surface; a
+    sustained ZERO on Ask Genie is the interesting reading, because it means
+    a rule that should fire on ordinary counts has stopped firing.
+    """
+
+    now = time.monotonic()
+    with _COUNTER_LOCK:
+        _prune_locked(_PROTECTED_CLASS_SUPPRESSIONS, now)
+        _PROTECTED_CLASS_SUPPRESSIONS.append((now, term_bank, kind))
+
+
+def recent_protected_class_suppressions() -> int:
+    now = time.monotonic()
+    with _COUNTER_LOCK:
+        _prune_locked(_PROTECTED_CLASS_SUPPRESSIONS, now)
+        return len(_PROTECTED_CLASS_SUPPRESSIONS)
+
+
 def _reset_counters_for_tests() -> None:
     with _COUNTER_LOCK:
         _BREAKER_CHANGES.clear()
         _ERRORS.clear()
+        _PROTECTED_CLASS_SUPPRESSIONS.clear()
 
 
 __all__ = [
@@ -727,8 +753,10 @@ __all__ = [
     "is_safe_correlation_id",
     "record_breaker_state_change",
     "record_error",
+    "record_protected_class_suppression",
     "recent_breaker_state_changes",
     "recent_error_count",
+    "recent_protected_class_suppressions",
     "reset_correlation_id",
     "sanitize_correlation_id",
     "set_correlation_id",

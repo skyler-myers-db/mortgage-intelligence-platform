@@ -12,11 +12,15 @@ from backend.schemas._validators_person_names import (
 )
 from backend.schemas._validators_protected_class import (
     contains_protected_class_proxy_marketing_text,
-    protected_class_marketing_reason,
+    protected_class_marketing_scan,
 )
 from backend.schemas._validators_unsafe_text import contains_unsafe_ai_text, mask_governed_phrases
 from backend.services.genie_answers import GenieMessageResponse
 from backend.services.genie_place_dimension import normalize_place_value
+from backend.services.marketing_scan_observability import (
+    observed_minted_suppressions,
+    record_minted_suppressions,
+)
 
 
 class GenieMessageRequest(BaseModel):
@@ -146,7 +150,7 @@ def protected_prompt_match(question: str) -> str | None:
     borrowers" refused in ~1.7s, and naming the state does not help because
     ``GENIE_GEO_LOCATION_RE`` is an output-path strip that never runs here.
 
-    The governed mask reaches ONE scanner: ``protected_class_marketing_reason``,
+    The governed mask reaches ONE scanner: ``protected_class_marketing_scan``,
     the one that produces those three false positives. The explicit term bank
     and the proxy scan above it deliberately keep reading the UNMASKED prompt.
     That is not caution for its own sake -- 16 of the 27 terms in
@@ -179,12 +183,14 @@ def protected_prompt_match(question: str) -> str | None:
     # The fix for that class is to extend the reviewed segment-signal
     # vocabulary with the governed Module 0 measures, not to silence the net.
     governed_places, governed_guards = _governed_protected_class_mask_args()
-    marketing_reason = protected_class_marketing_reason(
+    # A direct caller, so it takes the verdict rather than opening a collector.
+    verdict = protected_class_marketing_scan(
         mask_governed_phrases(scannable, governed_places, governed_guards)
     )
-    if marketing_reason == "unreviewed_criterion":
+    record_minted_suppressions(verdict.suppressions, surface="genie_prompt")
+    if verdict.reason == "unreviewed_criterion":
         return "unreviewed_criterion"
-    if marketing_reason is not None:
+    if verdict.reason is not None:
         return "protected_class_language"
     return None
 
@@ -388,21 +394,24 @@ def genie_visible_text_unsafe(
         # stripped by key at the repository boundary, and a formatted phone
         # ("312-555-0142") is not a bare numeric cell, so it still scans.
         return False
-    return contains_unsafe_ai_text(
-        value,
-        include_titlecase=not structured_value,
-        assume_reviewed_read_only_analytics=True,
-        name_shape_value=_name_shape_scan_copy(value),
-        name_shape_allowed_phrases=name_shape_phrases,
-        protected_class_guards=protected_class_guards,
-        # Prose only, and the same correction the prompt guard opts into: a
-        # capitalized word opening a sentence is orthography. Structured cells
-        # skip the title-case heuristic wholesale, so it would be a no-op there.
-        name_shape_sentence_initial_place_terms=(
-            () if structured_value else _sentence_initial_place_terms()
-        ),
-        protected_class_allowed_phrases=protected_class_phrases,
-    )
+    # Resolved BEFORE the collector opens. The governed dimension probes its
+    # own cells through this very function, so resolving inside the block
+    # would attribute that probe's suppressions to the answer being scanned.
+    sentence_initial_place_terms = () if structured_value else _sentence_initial_place_terms()
+    with observed_minted_suppressions("genie_cell" if structured_value else "genie_answer"):
+        return contains_unsafe_ai_text(
+            value,
+            include_titlecase=not structured_value,
+            assume_reviewed_read_only_analytics=True,
+            name_shape_value=_name_shape_scan_copy(value),
+            name_shape_allowed_phrases=name_shape_phrases,
+            protected_class_guards=protected_class_guards,
+            # Prose only, and the same correction the prompt guard opts into: a
+            # capitalized word opening a sentence is orthography. Structured cells
+            # skip the title-case heuristic wholesale, so it would be a no-op there.
+            name_shape_sentence_initial_place_terms=sentence_initial_place_terms,
+            protected_class_allowed_phrases=protected_class_phrases,
+        )
 
 
 def _name_shape_scan_copy(value: str) -> str:

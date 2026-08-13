@@ -63,6 +63,7 @@ from backend.services.observability import (
     get_otel_handler,
     recent_breaker_state_changes,
     recent_error_count,
+    recent_protected_class_suppressions,
 )
 from backend.services.rbac import AdminDep
 
@@ -239,6 +240,14 @@ def _diagnostic_body(
         # degradation.
         "breaker_state_changes_last_hour": recent_breaker_state_changes(),
         "recent_errors_count": recent_error_count(),
+        # Times the fair-lending scanner matched a governed term and dropped
+        # it because digits the leetspeak fold rewrote spelled the span --
+        # what lets "NEWCASTLE has 4,140 borrowers" render (``4,140`` folds to
+        # ``lao``). Read it as a liveness signal for a correct-but-subtle
+        # suppression, not as an error: a sustained zero on a numeric surface
+        # is the reading worth investigating. The per-bank detail is in the
+        # ``protected_class_term_suppressed`` log event.
+        "protected_class_suppressions_last_hour": recent_protected_class_suppressions(),
         # Slice-13 follow-up: the two counters above are process-local
         # and reset on every container restart. That is intentional --
         # the durable path is the OTLP log exporter (set

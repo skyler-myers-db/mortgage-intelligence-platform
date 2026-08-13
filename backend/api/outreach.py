@@ -81,6 +81,7 @@ from backend.services.lakebase_bootstrap import (
     ensure_approval_followup_columns,
     ensure_approval_idempotency_column,
 )
+from backend.services.marketing_scan_observability import observed_minted_suppressions
 from backend.services.outreach_copy import _safe_offer_code
 from backend.services.outreach_decision_ordering import BORROWER_DECISION_LOCK
 from backend.services.outreach_intelligence import (
@@ -1395,10 +1396,15 @@ def _assert_disclosure_backed_draft_body(
         )
     try:
         borrower_copy = body.replace(disclosure_body, " ").strip()
-        assert_no_protected_class_marketing_text(
-            remove_configured_public_lender_phrase(borrower_copy),
-            field_name="approved draft_body",
-        )
+        # The one boundary where a digit-minted suppression is worth a second
+        # look rather than routine: approved outreach copy is human-authored
+        # and has no reason to carry the counts that make this fire on the
+        # analytics surface.
+        with observed_minted_suppressions("outreach_approval"):
+            assert_no_protected_class_marketing_text(
+                remove_configured_public_lender_phrase(borrower_copy),
+                field_name="approved draft_body",
+            )
         assert_public_campaign_text(
             borrower_copy,
             field_name="approved draft_body",
