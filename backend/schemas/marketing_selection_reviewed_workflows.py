@@ -72,7 +72,7 @@ _REVIEWED_CAMPAIGN_AUDIENCE_SUMMARY_RE = re.compile(
 _REVIEWED_NAMED_LENDER_RATE_QUERY_RE = re.compile(
     r"^(?:[Ll]ist|[Ss]how|[Cc]ount)\s+(?:[A-Z][A-Za-z0-9&.'-]*\s+){1,3}"
     r"(?:borrowers?|customers?|homeowners?|applicants?)\s+whose\s+"
-    r"(?:mortgage\s+)?(?:rate|payment|ltv|loan[- ]to[- ]value|equity)\s+"
+    r"(?:mortgage\s+)?(?:rate|payment|ltv|loan[- ]?to[- ]?value|equity)\s+"
     r"(?:is\s+)?(?:above|below|over|under|at\s+least|no\s+more\s+than)\s+"
     r"[0-9olieast]{1,3}(?:\.[0-9olieast]{1,3})?"
     r"(?:\s*(?:%|percent|bps?|basis\s+points?))?$",

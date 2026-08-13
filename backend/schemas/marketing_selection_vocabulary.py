@@ -164,7 +164,7 @@ REVIEWED_MORTGAGE_ATTRIBUTE_FRAGMENT = (
     # is an ordinary adjective; requiring the noun keeps this to the product's
     # own program vocabulary and cannot admit a geography or a stray modifier.
     r"(?:conventional|conforming|non[- ]?conforming|jumbo|fha|va|usda|"
-    r"government[- ]backed)\s+(?:loans?|mortgages?)|"
+    r"government[- ]?backed)\s+(?:loans?|mortgages?)|"
     r"(?:loan|mortgage)\s+(?:type|program|product)s?|"
     # Bare "home equity" / "equity percentage". Every other equity alternative
     # above REQUIRES a qualifier ("strong equity", "substantial equity"), so
@@ -188,7 +188,7 @@ REVIEWED_MORTGAGE_ATTRIBUTE_LIST_FRAGMENT = (
 )
 REVIEWED_ATTRIBUTE_PURPOSE_FRAGMENT = (
     r"(?:\s+for\s+(?:(?:this|the|a)\s+)?"
-    r"(?:(?:refi|refinance|heloc|home[- ]equity|retention|portfolio|purchase|"
+    r"(?:(?:refi|refinance|heloc|home[- ]?equity|retention|portfolio|purchase|"
     r"mortgage|loan|servicing)\s+)?(?:campaign|offer|options?|review))?"
 )
 
@@ -287,7 +287,7 @@ _REVIEWED_ATTRIBUTE_CTA_TAIL = (
     r"prospects?|clients?|owners?)))?"
     r"(?:\s+(?:about|regarding|with|on)\s+(?:(?:the|their|an?)\s+)?"
     r"(?:offers?|options?|reviews?|campaigns?|refinance|refi|heloc|"
-    r"home[- ]equity(?:\s+lines?)?|mortgages?|loans?|rates?|savings?))?)?"
+    r"home[- ]?equity(?:\s+lines?)?|mortgages?|loans?|rates?|savings?))?)?"
 )
 _REVIEWED_ATTRIBUTE_CLOSING = r"(?:\s+(?:too|as\s+well))?"
 
