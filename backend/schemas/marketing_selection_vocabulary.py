@@ -149,6 +149,23 @@ REVIEWED_MORTGAGE_ATTRIBUTE_FRAGMENT = (
     r"(?:strong|good|great|excellent|prime|ideal|top|promising)\s+"
     r"(?:candidates?|prospects?|fits?|matches?|opportunit(?:y|ies))|"
     r"(?:fixed|adjustable)[- ]?rate\s+(?:mortgages?|loans?)|"
+    # Loan PROGRAM, the sibling of the rate-structure alternative above. It was
+    # missing while `fixed-rate loans` was reviewed, which is an asymmetry
+    # rather than a decision: `loan_product_type` is a governed
+    # ``mip.gold.borrower_360`` column with its own canonical UC function
+    # (``fn_loan_product_type``), and it is populated -- measured live on
+    # paychex 2026-08-12: conventional 2,306,974, fha 303,977, jumbo 278,900,
+    # va 68,071, other 96,187. So "Break down borrowers by loan type." and
+    # "Show borrowers with VA loans in Texas." failed closed as unknown
+    # criteria against a column the product models and Genie can query.
+    #
+    # Both halves are anchored on a loan/mortgage noun on purpose. A bare
+    # ``va`` is the USPS abbreviation for Virginia and a bare ``conventional``
+    # is an ordinary adjective; requiring the noun keeps this to the product's
+    # own program vocabulary and cannot admit a geography or a stray modifier.
+    r"(?:conventional|conforming|non[- ]?conforming|jumbo|fha|va|usda|"
+    r"government[- ]backed)\s+(?:loans?|mortgages?)|"
+    r"(?:loan|mortgage)\s+(?:type|program|product)s?|"
     # Bare "home equity" / "equity percentage". Every other equity alternative
     # above REQUIRES a qualifier ("strong equity", "substantial equity"), so
     # "Rank our segments by home equity" -- a plain analytics question about
