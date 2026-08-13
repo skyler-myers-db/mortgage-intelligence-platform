@@ -29,6 +29,7 @@ from backend.schemas._validators_protected_class_patterns import (
     PROTECTED_HEALTH_STATUS_MARKETING_RE,
     PROTECTED_HEALTH_TERM_MARKETING_RE,
 )
+from backend.schemas.marketing_place_windows import window_is_place_beside_a_number
 from backend.schemas.marketing_safety_terms import (
     _PROTECTED_HEALTH_COORDINATED_CONTINUATION_RE,
     PROTECTED_HEALTH_SAFE_CONTEXT_PATTERNS,
@@ -408,6 +409,15 @@ def _protected_class_marketing_reason(
             # The 32-character sum bound keeps the window count finite.
             for stop in range(start + 2, min(len(tokens), start + 12) + 1):
                 if sum(len(token.real) for token in tokens[start:stop]) > 32:
+                    continue
+                # A governed place beside a number is prose, not a split term.
+                # The window is not emitted at all, rather than merely denied
+                # the origin assist below: denial would leave the match
+                # standing whenever the blob's 120-character window happened
+                # to sort a population noun alongside it, which is the
+                # sort-order luck this whole mechanism exists to stop
+                # depending on.
+                if window_is_place_beside_a_number(tokens, start, stop):
                     continue
                 window = ScanPair(
                     "".join(token.real for token in tokens[start:stop]),
