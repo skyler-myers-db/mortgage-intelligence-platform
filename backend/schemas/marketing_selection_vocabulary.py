@@ -47,6 +47,36 @@ import re
 # pin both halves.
 _REVIEWED_ATTRIBUTE_ARTICLE = r"(?:(?:an?|the)\s+)?"
 
+# A count QUANTIFIES the population it precedes -- "the top 50 borrowers", "the
+# next 1,000 leads". It selects nobody on its own, and it lives here because two
+# other modules need the identical definition: ``marketing_selection_criteria``
+# (both lead-ins) and ``marketing_audience_admission`` (the bounded modifier
+# run).
+#
+# DIGITS ONLY, and the SPELLED-OUT half is deliberately absent.
+#
+# It was built ("the top twenty-five borrowers", a closed 81-form cardinal list,
+# fold-stable across the de-hyphenated variant) and then pulled, because an
+# independent audit found what it is coupled to. Every admission pattern embeds
+# ``_MODIFIERS``, and ``remove_audience_admission_clauses_for_identity_scan``
+# DELETES from the identity scan every clause that parses as an admission. Word
+# cardinals made 550 more clauses parse, so 550 more were deleted before
+# ``contains_borrower_copy_contextual_name`` -- the sole person-name detector in
+# the deep audit-metadata value scan (``audit_store._metadata_pii_value_paths``)
+# -- ever read them.
+#
+# Measured on a 1,320-prompt battery (12 admission shapes x 10 name payloads x
+# 11 count spellings), branch vs origin/main: 106 name detections lost, every
+# one carrying a spelled-out count, ZERO carrying a digit. The digit half is
+# unchanged from main on that surface, which is why it stays.
+#
+# Landing the word half needs the coupling fixed first -- the cheapest correct
+# form is to gate the deletion on ``shares_token_with_person_lexicon``, the same
+# "recognition is not exemption" rule the place-name masks already apply -- plus
+# the control battery that surface has never had. Filed separately.
+POPULATION_QUANTIFIER_DIGITS = r"(?:[0-9]{1,3}(?:,[0-9]{3})*|[0-9]+)"
+POPULATION_QUANTIFIER_FRAGMENT = POPULATION_QUANTIFIER_DIGITS
+
 REVIEWED_MORTGAGE_ATTRIBUTE_FRAGMENT = (
     rf"{_REVIEWED_ATTRIBUTE_ARTICLE}"
     # An aggregate qualifier is a DESCRIPTOR of a reviewed attribute, not a new
@@ -184,11 +214,29 @@ REVIEWED_ATTRIBUTE_PURPOSE_FRAGMENT = (
 # ``marketing_selection_criteria`` embeds the LIST fragment without this
 # threshold, so only the formation-verb branch reads a bound. "Show me
 # borrowers with a rate spread above 150 basis points" therefore still refuses.
-_REVIEWED_ATTRIBUTE_THRESHOLD = (
+REVIEWED_ATTRIBUTE_THRESHOLD = (
     r"(?:\s+(?:above|over|below|under|at\s+least|at\s+most|greater\s+than|"
     r"less\s+than|more\s+than|fewer\s+than|of\s+at\s+least|of\s+at\s+most|"
     r">=?|<=?)\s*[0-9][0-9,.]*\s*"
     r"(?:bps|basis\s+points?|%|percent(?:age)?(?:\s+points?)?|points?)?)?"
+)
+_REVIEWED_ATTRIBUTE_THRESHOLD = REVIEWED_ATTRIBUTE_THRESHOLD
+
+# The reviewed list WITH a bound on it, as its own constant.
+#
+# The bound deliberately does NOT go inside ``REVIEWED_MORTGAGE_ATTRIBUTE_FRAGMENT``
+# even though that is where the article and the aggregate qualifier ended up.
+# The fragment is also consumed PRENOMINALLY, by
+# ``_REVIEWED_PRENOMINAL_AUDIENCE_DIRECTIVE_RE`` in
+# ``marketing_selection_criteria``, where a trailing bound would parse "Select
+# the rate spread above 150 borrowers" and lengthen the span between an
+# attribute and a population noun that can be a bare pronoun. Silent inheritance
+# by an embedding site nobody was thinking about is exactly how the previous two
+# fixes over-reached; a separate constant means each site opts in.
+REVIEWED_MORTGAGE_ATTRIBUTE_BOUND_LIST_FRAGMENT = (
+    rf"(?:{REVIEWED_MORTGAGE_ATTRIBUTE_FRAGMENT}){REVIEWED_ATTRIBUTE_THRESHOLD}"
+    rf"(?:\s+(?:and|or)\s+(?:{REVIEWED_MORTGAGE_ATTRIBUTE_FRAGMENT})"
+    rf"{REVIEWED_ATTRIBUTE_THRESHOLD}){{0,3}}"
 )
 
 # The two tails ``_normalize_criterion`` used to DELETE, absorbed here instead.

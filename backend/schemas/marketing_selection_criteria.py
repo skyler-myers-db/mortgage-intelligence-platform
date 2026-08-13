@@ -15,7 +15,9 @@ from backend.schemas.marketing_selection_reviewed_analytics import (
 )
 from backend.schemas.marketing_selection_vocabulary import (
     _REVIEWED_MORTGAGE_ATTRIBUTE_FULL_RE,
+    POPULATION_QUANTIFIER_DIGITS,
     REVIEWED_ATTRIBUTE_PURPOSE_FRAGMENT,
+    REVIEWED_MORTGAGE_ATTRIBUTE_BOUND_LIST_FRAGMENT,
     REVIEWED_MORTGAGE_ATTRIBUTE_FRAGMENT,
     REVIEWED_MORTGAGE_ATTRIBUTE_LIST_FRAGMENT,
 )
@@ -324,6 +326,25 @@ _IMMEDIATE_AUDIENCE_OUTCOME_RE = re.compile(
     rf"(?:eligible|qualified|{_AUDIENCE_FORMATION_PARTICIPLE_FRAGMENT})\b",
     re.IGNORECASE,
 )
+# Deliberately UNBOUNDED, and this one is a PAIR with a detector in another
+# module. The decision form ("Borrowers with a rate spread above 150 basis
+# points are eligible for the refi campaign") is refused today as
+# ``protected_class`` -- a fair-lending finding filed against the product's own
+# ``rate_spread_bps`` -- and the refusal does not come from this machine at all.
+# It comes from ``PROTECTED_HEALTH_GOVERNANCE_INTENT_RE``, whose allow-lookahead
+# in ``marketing_safety_terms`` reads the UNBOUNDED list, so a bound breaks the
+# allow clause and leaves the detector switched on.
+#
+# Bounding both was implemented, and pulled. Widening that lookahead silences
+# the detector for strictly more strings: measured over a 99,408-prompt sweep,
+# 5,400 refusals lost, of which 3,456 carry an UNENUMERATED health condition
+# (``rosacea``, ``vitiligo``). Every one of those 3,456 has an unbounded twin
+# that already reaches Genie on main -- so the bound was only ever an accidental
+# patch over a pre-existing hole -- but removing 3,456 accidental catches to fix
+# 1,944 false positives is not a trade this machine gets to make on its own.
+#
+# It lands when the hole underneath is closed. The directive and conditional
+# forms below take the bound now, because they touch no detector but this one.
 _REVIEWED_DECISION_CRITERION = (
     rf"(?:{_AUDIENCE_DECISION_REFERENCE})\s+"
     r"(?:with|having|carrying|showing|displaying|dealing\s+with|"
@@ -339,16 +360,24 @@ _REVIEWED_DIRECTIVE_CRITERION = (
     r"by|based\s+on|according\s+to|"
     r"(?:by|according\s+to)\s+(?:whether\s+)?"
     r"(?:(?:they|those|these)\s+)?(?:have|show|carry|meet))\s+"
-    rf"(?:{REVIEWED_MORTGAGE_ATTRIBUTE_LIST_FRAGMENT})"
+    rf"(?:{REVIEWED_MORTGAGE_ATTRIBUTE_BOUND_LIST_FRAGMENT})"
     rf"{REVIEWED_ATTRIBUTE_PURPOSE_FRAGMENT}"
     rf"(?:,\s*(?:provided\s+(?:that\s+)?(?:they|those|these)\s+"
-    rf"(?:have|show|carry|meet)\s+(?:{REVIEWED_MORTGAGE_ATTRIBUTE_LIST_FRAGMENT})"
+    rf"(?:have|show|carry|meet)\s+(?:{REVIEWED_MORTGAGE_ATTRIBUTE_BOUND_LIST_FRAGMENT})"
     rf"{REVIEWED_ATTRIBUTE_PURPOSE_FRAGMENT}|for\s+whom\s+"
-    rf"(?:{REVIEWED_MORTGAGE_ATTRIBUTE_LIST_FRAGMENT})\s+"
+    rf"(?:{REVIEWED_MORTGAGE_ATTRIBUTE_BOUND_LIST_FRAGMENT})\s+"
     r"(?:(?:is|was)\s+)?(?:documented|verified|confirmed|recorded)))?"
     r"(?:\s+and\s+(?:report|summarize|compare)\s+(?:only\s+)?aggregate\s+"
     r"(?:trends?|results?|counts?|metrics?))?"
 )
+# Deliberately UNBOUNDED. Inserting the bound before the copula would admit
+# only "whose rate spread above 150 basis points is documented", which nobody
+# writes. The phrasing people do write -- "whose rate spread IS above 150 basis
+# points" -- needs the bound threaded into the copula COMPLEMENT, next to the
+# closed status vocabulary, which widens a predicate slot rather than a modifier
+# slot. That is a different change with a different control battery and it is
+# filed separately; ``Rank borrowers whose rate spread is above 150 basis
+# points`` still refuses.
 _REVIEWED_WHOSE_DIRECTIVE_CRITERION = (
     rf"(?:{_AUDIENCE_DECISION_REFERENCE})\s+whose\s+"
     rf"(?:{REVIEWED_MORTGAGE_ATTRIBUTE_LIST_FRAGMENT})\s+"
@@ -363,13 +392,13 @@ _REVIEWED_CONDITIONAL_DIRECTIVE_CRITERION = (
     r"(?:(?:they|those|these)\s+)?(?:have|show|carry|meet)\s+|"
     r"(?:if|where)\s+"
     r"(?:(?:they|those|these)\s+)?(?:have|show|carry|meet)\s+)"
-    rf"(?:{REVIEWED_MORTGAGE_ATTRIBUTE_LIST_FRAGMENT})"
+    rf"(?:{REVIEWED_MORTGAGE_ATTRIBUTE_BOUND_LIST_FRAGMENT})"
     rf"{REVIEWED_ATTRIBUTE_PURPOSE_FRAGMENT}"
 )
-# A bare cardinal between the lead-in verb and the population noun QUANTIFIES
-# that population -- "the top 50 borrowers", "the best 25 customers", "the next
-# 1,000 leads". It names no criterion and cannot spell one: a token drawn from
-# ``[0-9,]`` has no vocabulary in it.
+# A count between the lead-in verb and the population noun QUANTIFIES that
+# population -- "the top 50 borrowers", "the best 25 customers", "the next
+# 1,000 leads". It names no criterion, and it cannot spell one:
+# ``POPULATION_QUANTIFIER_FRAGMENT`` is digits or a CLOSED cardinal list.
 #
 # Both lead-ins below spelled themselves alphabetic-only, so a count switched
 # each of them off, in OPPOSITE directions and for the same reason:
@@ -386,7 +415,7 @@ _REVIEWED_CONDITIONAL_DIRECTIVE_CRITERION = (
 # token; comma-grouped counts escaped even that, because a comma is not in the
 # alphabetic class either. Correct outcome, accidental reason -- and the
 # accident disappears the moment the fold is scoped away from numbers (#217).
-_POPULATION_QUANTIFIER = r"(?:[0-9]{1,3}(?:,[0-9]{3})*|[0-9]+)"
+_POPULATION_QUANTIFIER = POPULATION_QUANTIFIER_DIGITS
 _AUDIENCE_LEAD_IN_TOKEN = rf"(?:[a-z][a-z'-]*|{_POPULATION_QUANTIFIER})"
 _REVIEWED_AUDIENCE_DECISION_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(
