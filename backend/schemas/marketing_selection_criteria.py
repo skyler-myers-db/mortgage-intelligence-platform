@@ -20,12 +20,14 @@ from backend.schemas.marketing_selection_reviewed_workflows import (
     _REVIEWED_SCREEN_GATE_WORKFLOW_RE,
 )
 from backend.schemas.marketing_selection_vocabulary import (
-    _REVIEWED_MORTGAGE_ATTRIBUTE_FULL_RE,
     POPULATION_QUANTIFIER_DIGITS,
     REVIEWED_ATTRIBUTE_PURPOSE_FRAGMENT,
     REVIEWED_MORTGAGE_ATTRIBUTE_BOUND_LIST_FRAGMENT,
     REVIEWED_MORTGAGE_ATTRIBUTE_FRAGMENT,
     REVIEWED_MORTGAGE_ATTRIBUTE_LIST_FRAGMENT,
+    matches_reviewed_mortgage_attribute,
+    reviewed_attribute_scope_fragment,
+    reviewed_fullmatch,
 )
 
 _CRITERION_TAIL = r"(?P<criterion>[^.!?;:]{1,120})"
@@ -295,7 +297,9 @@ _REVIEWED_DECISION_CRITERION = (
     r"by|based\s+on|according\s+to|"
     r"who\s+(?:(?:have|show|carry|meet)|suffer\s+from))\s+"
     rf"(?:{REVIEWED_MORTGAGE_ATTRIBUTE_LIST_FRAGMENT})"
+    rf"{reviewed_attribute_scope_fragment('decision_head')}"
     rf"{REVIEWED_ATTRIBUTE_PURPOSE_FRAGMENT}"
+    rf"{reviewed_attribute_scope_fragment('decision_tail')}"
 )
 _REVIEWED_DIRECTIVE_CRITERION = (
     rf"(?:{_AUDIENCE_DECISION_REFERENCE})\s+(?:"
@@ -305,7 +309,9 @@ _REVIEWED_DIRECTIVE_CRITERION = (
     r"(?:by|according\s+to)\s+(?:whether\s+)?"
     r"(?:(?:they|those|these)\s+)?(?:have|show|carry|meet))\s+"
     rf"(?:{REVIEWED_MORTGAGE_ATTRIBUTE_BOUND_LIST_FRAGMENT})"
+    rf"{reviewed_attribute_scope_fragment('directive_head')}"
     rf"{REVIEWED_ATTRIBUTE_PURPOSE_FRAGMENT}"
+    rf"{reviewed_attribute_scope_fragment('directive_tail')}"
     rf"(?:,\s*(?:provided\s+(?:that\s+)?(?:they|those|these)\s+"
     rf"(?:have|show|carry|meet)\s+(?:{REVIEWED_MORTGAGE_ATTRIBUTE_BOUND_LIST_FRAGMENT})"
     rf"{REVIEWED_ATTRIBUTE_PURPOSE_FRAGMENT}|for\s+whom\s+"
@@ -326,7 +332,9 @@ _REVIEWED_WHOSE_DIRECTIVE_CRITERION = (
     rf"(?:{_AUDIENCE_DECISION_REFERENCE})\s+whose\s+"
     rf"(?:{REVIEWED_MORTGAGE_ATTRIBUTE_LIST_FRAGMENT})\s+"
     r"(?:is|are|was|were)\s+(?:active|current|documented|verified|confirmed|recorded)"
+    rf"{reviewed_attribute_scope_fragment('whose_head')}"
     rf"{REVIEWED_ATTRIBUTE_PURPOSE_FRAGMENT}"
+    rf"{reviewed_attribute_scope_fragment('whose_tail')}"
 )
 _REVIEWED_CONDITIONAL_DIRECTIVE_CRITERION = (
     rf"(?:{_AUDIENCE_DECISION_REFERENCE})\s+(?:"
@@ -337,7 +345,9 @@ _REVIEWED_CONDITIONAL_DIRECTIVE_CRITERION = (
     r"(?:if|where)\s+"
     r"(?:(?:they|those|these)\s+)?(?:have|show|carry|meet)\s+)"
     rf"(?:{REVIEWED_MORTGAGE_ATTRIBUTE_BOUND_LIST_FRAGMENT})"
+    rf"{reviewed_attribute_scope_fragment('conditional_head')}"
     rf"{REVIEWED_ATTRIBUTE_PURPOSE_FRAGMENT}"
+    rf"{reviewed_attribute_scope_fragment('conditional_tail')}"
 )
 # A count between the lead-in verb and the population noun QUANTIFIES that
 # population -- "the top 50 borrowers", "the best 25 customers", "the next
@@ -449,6 +459,9 @@ _REVIEWED_PRENOMINAL_AUDIENCE_DIRECTIVE_RE = re.compile(
     rf"{_AUDIENCE_FORMATION_COMMAND_FRAGMENT}\s+(?:the\s+)?"
     rf"(?:{REVIEWED_MORTGAGE_ATTRIBUTE_FRAGMENT})\s+"
     rf"{_AUDIENCE_DECISION_REFERENCE}"
+    # The scope precedes the destination tail because both can appear, and in
+    # that order: "Rank the high LTV borrowers in Texas for the campaign."
+    rf"{reviewed_attribute_scope_fragment('prenominal')}"
     r"(?:\s+(?:in|into|for)\s+(?:(?:this|the|a|an)\s+)?(?:reviewed\s+)?"
     r"(?:cohort|campaign|audience|segment|list|queue|offer|review))?$",
     re.IGNORECASE,
@@ -551,7 +564,7 @@ def _is_reviewed_pre_population_binding(value: str) -> bool:
     criterion = _normalize_criterion(criterion)
     return bool(
         not criterion
-        or _REVIEWED_MORTGAGE_ATTRIBUTE_FULL_RE.fullmatch(criterion) is not None
+        or matches_reviewed_mortgage_attribute(criterion)
         or is_closed_reviewed_segment_signal_criterion(criterion)
     )
 
@@ -578,7 +591,7 @@ def _is_reviewed_directive_criterion(value: str) -> bool:
     criterion = _normalize_criterion(value)
     return bool(
         is_closed_reviewed_segment_signal_criterion(criterion)
-        or _REVIEWED_MORTGAGE_ATTRIBUTE_FULL_RE.fullmatch(criterion) is not None
+        or matches_reviewed_mortgage_attribute(criterion)
     )
 
 
@@ -603,7 +616,7 @@ def _is_reviewed_admission_criterion(value: str) -> bool:
     )
     criterion = _normalize_criterion(criterion)
     return bool(
-        _REVIEWED_MORTGAGE_ATTRIBUTE_FULL_RE.fullmatch(criterion) is not None
+        matches_reviewed_mortgage_attribute(criterion)
         or is_closed_reviewed_segment_signal_criterion(criterion)
     )
 
@@ -619,7 +632,7 @@ def _contains_unreviewed_audience_decision(
     if applied_criterion is not None:
         criterion = _normalize_criterion(applied_criterion.group("criterion"))
         return not (
-            _REVIEWED_MORTGAGE_ATTRIBUTE_FULL_RE.fullmatch(criterion) is not None
+            matches_reviewed_mortgage_attribute(criterion)
             or is_closed_reviewed_segment_signal_criterion(criterion)
         )
     admission = audience_admission_criterion(clause)
@@ -649,11 +662,9 @@ def _contains_unreviewed_audience_decision(
         return False
     if _REVIEWED_BARE_AUDIENCE_DIRECTIVE_RE.fullmatch(clause) is not None:
         return False
-    if _REVIEWED_PRENOMINAL_AUDIENCE_DIRECTIVE_RE.fullmatch(clause) is not None:
+    if reviewed_fullmatch(_REVIEWED_PRENOMINAL_AUDIENCE_DIRECTIVE_RE, clause):
         return False
-    if any(
-        pattern.fullmatch(clause) is not None for pattern in _REVIEWED_AUDIENCE_DECISION_PATTERNS
-    ):
+    if any(reviewed_fullmatch(pattern, clause) for pattern in _REVIEWED_AUDIENCE_DECISION_PATTERNS):
         return False
     for match in _AUDIENCE_FORMATION_BOUND_POPULATION_RE.finditer(clause):
         if not _is_reviewed_pre_population_binding(match.group("criterion") or ""):
@@ -707,7 +718,7 @@ def _contains_unreviewed_audience_decision(
         if post_outcome_criterion is not None:
             criterion = _normalize_criterion(post_outcome_criterion.group("criterion"))
             if not (
-                _REVIEWED_MORTGAGE_ATTRIBUTE_FULL_RE.fullmatch(criterion) is not None
+                matches_reviewed_mortgage_attribute(criterion)
                 or is_closed_reviewed_segment_signal_criterion(criterion)
             ):
                 return True
@@ -815,7 +826,7 @@ def _normalize_criterion(value: str) -> str:
 def _contains_unreviewed_match(matches: list[re.Match[str]]) -> bool:
     for match in matches:
         criterion = _normalize_criterion(match.group("criterion"))
-        if not criterion or _REVIEWED_MORTGAGE_ATTRIBUTE_FULL_RE.fullmatch(criterion) is None:
+        if not criterion or not matches_reviewed_mortgage_attribute(criterion):
             return True
     return False
 

@@ -11,6 +11,13 @@ from __future__ import annotations
 
 import re
 
+from backend.schemas.marketing_selection_reviewed_places import (
+    GOVERNED_PLACE_SHAPE_FRAGMENT,
+    GOVERNED_SCOPE_DEMONSTRATIVE_FRAGMENT,
+    GOVERNED_SCOPE_ZIP_FRAGMENT,
+    is_governed_analytics_location,
+)
+
 # An article does not change WHICH attribute is being named: "the highest
 # opportunity scores" selects on ``opportunity_score`` exactly as "highest
 # opportunity scores" does. It belongs to the fragment, not to any one
@@ -192,6 +199,105 @@ REVIEWED_ATTRIBUTE_PURPOSE_FRAGMENT = (
     r"mortgage|loan|servicing)\s+)?(?:campaign|offer|options?|review))?"
 )
 
+# A GEOGRAPHY SCOPE narrows WHERE a reviewed attribute is measured; it names no
+# second criterion. "a rate spread in Texas" is the reviewed ``rate_spread_bps``
+# column restricted to a state, exactly as "a rate spread" is that column
+# unrestricted -- but the criterion is captured whole
+# (``_CRITERION_TAIL`` is ``[^.!?;:]{1,120}``) and then required to match the
+# reviewed vocabulary, so the scope made every reviewed attribute unreviewed.
+#
+# Measured on b3007754 over ``Show borrowers with {attribute}{ scope}.``, nine
+# reviewed attributes x seven scopes: 49 of 63 refused as
+# ``unreviewed_criterion``. Every attribute passed bare and refused with "in
+# Texas", "in Washington", "in Seattle", "in ZIP 98404", "across Colorado" and
+# "in Cook County". Geography drill-down is a hero surface (CLAUDE.md), so this
+# was the single largest false-positive class left in the grammar.
+#
+# THE PLACE SLOT IS THE WHOLE PROBLEM. Accepting an arbitrary title-case run
+# behind "in" would let a non-place tail ride in behind a reviewed head --
+# "with home equity in dialysis centers" -- and the criterion state machine is
+# the only net that catches a health condition outside the enumerated bank
+# (``psoriasis`` is banked, ``eczema`` is not). So the slot captures a bounded
+# SHAPE and every capture is screened for MEMBERSHIP in the governed place
+# vocabulary by :func:`match_scopes_are_governed`. A shape without that check
+# is an open hole; the two are only ever used together, through
+# :func:`reviewed_fullmatch`.
+#
+# Two deliberate exclusions:
+#
+# * ``for`` is NOT a scope preposition, though it reads like one ("for
+#   Texas"). ``REVIEWED_ATTRIBUTE_PURPOSE_FRAGMENT`` already owns ``\s+for\s+``,
+#   and a scope alternative in front of it would match "for this campaign",
+#   capture "this campaign", fail the membership screen and refuse a phrasing
+#   that is answered today. A regression on a shipped phrasing is not worth a
+#   spelling nobody uses.
+# * a bare five-digit run ("in 98404") is left to the ZIP branch's explicit
+#   keyword. The number slot in this grammar is load-bearing and digits-only on
+#   purpose; a bare cardinal behind a preposition is not distinguishable from a
+#   population count.
+#
+# This cannot admit an unreviewed attribute. The alternation in
+# ``REVIEWED_MORTGAGE_ATTRIBUTE_FRAGMENT`` is untouched, so "a credit score in
+# Texas" and "eczema in Texas" stay unreviewed exactly as they are today, and a
+# reviewed head still cannot carry an unreviewed conjunct across a scope
+# ("home equity in Texas and eczema").
+_SCOPE_GROUP_PREFIX = "geoscope_"
+
+
+def reviewed_attribute_scope_fragment(name: str) -> str:
+    """One optional geography scope, capturing only what needs screening.
+
+    A FACTORY rather than the single constant a purpose/CTA tail gets, because
+    the capture needs a group name and Python's ``re`` rejects a duplicate one
+    -- and these fragments are composed more than once per pattern
+    (``_REVIEWED_AUDIENCE_DECISION_PATTERNS[6]`` alternates two whole criterion
+    grammars inside one pattern). Every caller passes a name unique to its
+    embedding site; the prefix is what
+    :func:`match_scopes_are_governed` keys on, so a new site is screened by
+    construction rather than by remembering to add it to a list.
+
+    The demonstrative and ZIP branches are closed literals and are tried first,
+    so the common phrasings never reach a membership lookup -- which also keeps
+    the county artifact unread until somebody actually names a county.
+    """
+
+    return (
+        r"(?:\s+(?:in|across|within|throughout)\s+"
+        rf"(?:{GOVERNED_SCOPE_DEMONSTRATIVE_FRAGMENT}"
+        rf"|{GOVERNED_SCOPE_ZIP_FRAGMENT}"
+        r"|(?:the\s+state\s+of\s+)?"
+        rf"(?P<{_SCOPE_GROUP_PREFIX}{name}>{GOVERNED_PLACE_SHAPE_FRAGMENT})))?"
+    )
+
+
+def match_scopes_are_governed(match: re.Match[str]) -> bool:
+    """True when every geography scope this match captured names a governed place.
+
+    A group that did not participate is ``None`` and is not a scope at all --
+    the fragment is optional, so an unscoped criterion behaves exactly as it
+    did before the slot existed.
+    """
+
+    return all(
+        is_governed_analytics_location(value)
+        for name, value in match.groupdict().items()
+        if name.startswith(_SCOPE_GROUP_PREFIX) and value is not None
+    )
+
+
+def reviewed_fullmatch(pattern: re.Pattern[str], text: str) -> bool:
+    """Fullmatch a reviewed grammar AND screen its geography scopes, together.
+
+    The only supported way to ask whether text matches a reviewed pattern. A
+    bare ``pattern.fullmatch(...) is not None`` at a call site that embeds a
+    scope slot is an open place hole -- the exact "a check wired into one call
+    site is a check that is not wired in" failure this codebase has already
+    paid for once.
+    """
+
+    match = pattern.fullmatch(text)
+    return match is not None and match_scopes_are_governed(match)
+
 # A numeric threshold does not change WHICH attribute is being named. "a rate
 # spread above 150 basis points" is the reviewed ``rate_spread_bps`` column
 # with a bound on it, but the criterion is matched whole, so the article and
@@ -321,10 +427,28 @@ _REVIEWED_ATTRIBUTE_TAIL_EITHER_ORDER = (
     rf"|{_REVIEWED_ATTRIBUTE_CTA_TAIL}{REVIEWED_ATTRIBUTE_PURPOSE_FRAGMENT})"
 )
 
+# The scope sits on BOTH sides of the purpose/CTA tail, because operators write
+# it either way -- "home equity in Texas for this campaign" and "home equity for
+# this campaign in Texas". Two optional groups rather than a third permutation
+# of the either-order alternation: each is independently optional, so the two
+# spellings cost one group each instead of doubling the branch count.
 _REVIEWED_MORTGAGE_ATTRIBUTE_FULL_RE = re.compile(
     rf"^(?:{REVIEWED_MORTGAGE_ATTRIBUTE_LIST_FRAGMENT})"
     rf"{_REVIEWED_ATTRIBUTE_THRESHOLD}"
+    rf"{reviewed_attribute_scope_fragment('full_head')}"
     rf"{_REVIEWED_ATTRIBUTE_TAIL_EITHER_ORDER}"
+    rf"{reviewed_attribute_scope_fragment('full_tail')}"
     rf"{_REVIEWED_ATTRIBUTE_CLOSING}$",
     re.IGNORECASE,
 )
+
+
+def matches_reviewed_mortgage_attribute(criterion: str) -> bool:
+    """True when a whole captured criterion is reviewed Module 0 vocabulary.
+
+    The one entry point for ``_REVIEWED_MORTGAGE_ATTRIBUTE_FULL_RE``. It exists
+    so the geography-scope screen cannot be forgotten at one of the six call
+    sites that used to fullmatch the pattern directly.
+    """
+
+    return reviewed_fullmatch(_REVIEWED_MORTGAGE_ATTRIBUTE_FULL_RE, criterion)
