@@ -21,6 +21,7 @@ from backend.schemas.marketing_selection_reviewed_workflows import (
 )
 from backend.schemas.marketing_selection_vocabulary import (
     POPULATION_QUANTIFIER_DIGITS,
+    QUANTIFIED_POPULATION_FRAGMENT,
     REVIEWED_ATTRIBUTE_PURPOSE_FRAGMENT,
     REVIEWED_MORTGAGE_ATTRIBUTE_BOUND_LIST_FRAGMENT,
     REVIEWED_MORTGAGE_ATTRIBUTE_FRAGMENT,
@@ -269,10 +270,24 @@ _PASSIVE_AUDIENCE_SELECTION_OUTCOME_RE = re.compile(
     rf"(?:eligible|qualified|{_AUDIENCE_FORMATION_PARTICIPLE_FRAGMENT})\b",
     re.IGNORECASE,
 )
+# The optional destination span and the causal connectors mirror the
+# admission grammar's ``_DESTINATION_RELATION``/``_CONDITION`` exactly. They
+# close a hole the quantifier battery exposed on 2026-08-13, pre-existing on
+# main and count-free: "The high home equity borrowers are placed into the
+# campaign based on left-handedness." sailed, because the admission grammar
+# cannot parse a reviewed-ATTRIBUTE premodifier (only its closed adjectives),
+# the reviewed premodifier made this machine's population prefix transparent,
+# and this capture required the connector to touch the participle -- so the
+# criterion behind the destination was never read by anything. Every slot
+# added is a closed literal; the captured criterion is judged by the same
+# reviewer the admission grammar uses, so "because of their rate spread"
+# stays exactly as answerable through this capture as through that one.
 _OUTCOME_THEN_CRITERION_RE = re.compile(
     rf"^\s+{_AUDIENCE_PASSIVE_AUX_FRAGMENT}\s+"
-    rf"(?:eligible|qualified|{_AUDIENCE_FORMATION_PARTICIPLE_FRAGMENT})\s+"
-    r"(?:by|according\s+to|based\s+on|using)\s+"
+    rf"(?:eligible|qualified|{_AUDIENCE_FORMATION_PARTICIPLE_FRAGMENT})"
+    r"(?:\s+(?:into|in|to|onto)\s+(?:(?:the|this|that|a|an)\s+)?"
+    r"(?:campaign|cohort|audience|segment|population|list|queue|offer))?\s+"
+    r"(?:by|according\s+to|based\s+on|using|because\s+of|due\s+to|owing\s+to)\s+"
     rf"{_CRITERION_TAIL}$",
     re.IGNORECASE,
 )
@@ -453,9 +468,22 @@ _REVIEWED_BARE_DIRECTIVE_DESTINATION_TAIL = (
 # as an unreviewed criterion, while "Assign the owner." and "Assign owners."
 # were answered (measured 2026-08-13; same family: "Queue a borrower.",
 # "Target a customer.", "Prioritize a lead.", "Shortlist an applicant.").
+# The quantifier slot after the determiner takes a count exactly as the
+# determiner takes an article: "the top 50 borrowers" is the same closed
+# population reference as "the borrowers", sized. Without it the CRITERION-FREE
+# quantified command was the only refused member of its family (measured
+# 2026-08-13): "Add the top 50 borrowers to the campaign." fell past this
+# branch and the bound-population capture below read "the top 50" itself as an
+# unreviewed criterion, while the criterion-CARRYING twin ("... with the
+# highest rate spread ...") answered through the admission grammar -- backwards
+# on both ends, since a count quantifies a population and names nobody. The
+# slot is the shared closed fragment (optional top|best|next|first plus
+# digits), so no open vocabulary rides in: "Add the top 50 left-handed
+# borrowers ..." still breaks the shape and still fails closed.
 _REVIEWED_BARE_AUDIENCE_DIRECTIVE_RE = re.compile(
     rf"^{_AUDIENCE_DIRECTIVE_PREFIX_FRAGMENT}"
     rf"{_AUDIENCE_FORMATION_COMMAND_FRAGMENT}\s+(?:(?:the|an?)\s+)?"
+    rf"(?:{QUANTIFIED_POPULATION_FRAGMENT}\s+)?"
     rf"(?:(?:reviewed|eligible|qualified|marketing[- ]?eligible|highest[- ]?scoring)\s+){{0,2}}"
     rf"{_AUDIENCE_DECISION_REFERENCE}"
     r"(?:\s+(?:for\s+(?:(?:this|the|a|an)\s+)?(?:reviewed\s+)?"
@@ -466,6 +494,7 @@ _REVIEWED_BARE_AUDIENCE_DIRECTIVE_RE = re.compile(
 _REVIEWED_PRENOMINAL_AUDIENCE_DIRECTIVE_RE = re.compile(
     rf"^{_AUDIENCE_DIRECTIVE_PREFIX_FRAGMENT}"
     rf"{_AUDIENCE_FORMATION_COMMAND_FRAGMENT}\s+(?:the\s+)?"
+    rf"(?:{QUANTIFIED_POPULATION_FRAGMENT}\s+)?"
     rf"(?:{REVIEWED_MORTGAGE_ATTRIBUTE_FRAGMENT})\s+"
     rf"{_AUDIENCE_DECISION_REFERENCE}"
     # The scope precedes the destination tail because both can appear, and in
@@ -558,12 +587,17 @@ def _is_reviewed_pre_population_binding(value: str) -> bool:
         # ``a``/``an`` joins the list because the bound-population capture
         # hands this function the bare article: "assign an owner" captured
         # criterion "an" and refused while the ``the`` twin was answered
-        # (measured 2026-08-13). Only the determiner is transparent: whatever
+        # (measured 2026-08-13). The quantifier phrase joins for the same
+        # reason on the same day: declarative formation clauses never reach
+        # the imperative allow branches, so "We picked the top 50 borrowers
+        # for the campaign." captured "the top 50" here and refused while the
+        # count-free twin was answered. A count sizes the population; it is
+        # not the criterion. Only the determiner run is transparent: whatever
         # remains after stripping must still full-match the reviewed
-        # vocabulary below.
-        r"^(?:(?:the|an?|these|those|all|any|our|your|only|reviewed|eligible|qualified|"
-        r"marketing[- ]?eligible|highest[- ]?scoring|prospective|current|"
-        r"(?:which|what)(?:\s+of)?)(?:\s+|$))+",
+        # vocabulary below, so "the top 50 left-handed" still fails closed.
+        rf"^(?:(?:the|an?|these|those|all|any|our|your|only|reviewed|eligible|qualified|"
+        rf"marketing[- ]?eligible|highest[- ]?scoring|prospective|current|"
+        rf"(?:which|what)(?:\s+of)?|{QUANTIFIED_POPULATION_FRAGMENT})(?:\s+|$))+",
         "",
         criterion,
         flags=re.IGNORECASE,
@@ -616,6 +650,18 @@ def _is_reviewed_admission_criterion(value: str) -> bool:
         flags=re.IGNORECASE,
     )
     criterion = re.sub(r"^(?:their|the)\s+", "", criterion, flags=re.IGNORECASE)
+    # The criterion-first admission shapes ("<criterion> borrowers are placed
+    # into the campaign") capture everything left of the population noun, so a
+    # count rides in front of the real criterion: "The top 50 high equity
+    # borrowers are placed into the campaign." captured "the top 50 high
+    # equity" and refused while the count-free twin answered (measured
+    # 2026-08-13). The quantifier phrase is transparent -- it sizes the
+    # population -- and ONLY the phrase: what remains must still full-match
+    # the reviewed vocabulary, and a bare count strips to empty, which proves
+    # no criterion and keeps the unproved-relation refusal.
+    criterion = re.sub(
+        rf"^{QUANTIFIED_POPULATION_FRAGMENT}(?:\s+|$)", "", criterion, flags=re.IGNORECASE
+    )
     criterion = re.sub(
         r"\s+(?:is|are|was|were)\s+"
         r"(?:present|current|active|documented|verified|confirmed|recorded)$",
@@ -724,13 +770,10 @@ def _contains_unreviewed_audience_decision(
         ):
             return True
         post_outcome_criterion = _OUTCOME_THEN_CRITERION_RE.fullmatch(suffix)
-        if post_outcome_criterion is not None:
-            criterion = _normalize_criterion(post_outcome_criterion.group("criterion"))
-            if not (
-                matches_reviewed_mortgage_attribute(criterion)
-                or is_closed_reviewed_segment_signal_criterion(criterion)
-            ):
-                return True
+        if post_outcome_criterion is not None and not _is_reviewed_admission_criterion(
+            post_outcome_criterion.group("criterion")
+        ):
+            return True
         passive_selection = _PASSIVE_AUDIENCE_SELECTION_OUTCOME_RE.search(suffix)
         make_cut = _AUDIENCE_MAKE_CUT_OUTCOME_RE.search(suffix)
         decision_outcome = passive_selection or make_cut
