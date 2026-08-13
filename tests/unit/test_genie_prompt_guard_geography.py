@@ -106,15 +106,22 @@ _CORPUS_REFUSALS_NOW_CLEARED = (
 
 # The contract. Each is caught by a scanner the mask never reaches, or by a
 # name pair the sentence-initial strip leaves fully intact.
-_MUST_STAY_REFUSED = (
-    "Show me black borrowers in Tacoma",
-    "Target hawaiian borrowers for a HELOC",
-    "Which Hawaiian Gardens borrowers are Hawaiian?",
-    "Rank Indian Head Park borrowers by Indian ancestry",
-    "Which borrowers are Hispanic in Tacoma?",
-    "Segment Tacoma borrowers by race",
-    "Tell me about borrowers with cancer in Tacoma",
-    "Which Bellevue borrowers are female?",
+# Paired with the EXACT reason, not merely "refused". These prompts split
+# across two mechanisms -- the explicit term bank, which names the term it
+# found, and the marketing scanner behind the governed mask, which reports
+# ``protected_class_language`` -- and the split is the point of the design. An
+# ``is not None`` assertion passes through a silent reclassification, so a
+# change that moved a term-bank hit onto the masked scanner (or the reverse)
+# would look green while the boundary these tests exist to hold had moved.
+_MUST_STAY_REFUSED: tuple[tuple[str, str], ...] = (
+    ("Show me black borrowers in Tacoma", "black"),
+    ("Target hawaiian borrowers for a HELOC", "protected_class_language"),
+    ("Which Hawaiian Gardens borrowers are Hawaiian?", "protected_class_language"),
+    ("Rank Indian Head Park borrowers by Indian ancestry", "protected_class_language"),
+    ("Which borrowers are Hispanic in Tacoma?", "hispanic"),
+    ("Segment Tacoma borrowers by race", "race"),
+    ("Tell me about borrowers with cancer in Tacoma", "protected_class_language"),
+    ("Which Bellevue borrowers are female?", "female"),
 )
 
 # Identities, in the exact shapes the sentence-initial strip could plausibly
@@ -192,9 +199,9 @@ def test_corpus_refusals_now_reach_genie(prompt: str) -> None:
 
 
 @pytest.mark.usefixtures("governed_cities")
-@pytest.mark.parametrize("prompt", _MUST_STAY_REFUSED)
-def test_protected_class_prompts_still_fail_closed(prompt: str) -> None:
-    assert protected_prompt_match(prompt) is not None
+@pytest.mark.parametrize(("prompt", "reason"), _MUST_STAY_REFUSED)
+def test_protected_class_prompts_still_fail_closed(prompt: str, reason: str) -> None:
+    assert protected_prompt_match(prompt) == reason
 
 
 @pytest.mark.usefixtures("governed_cities")
@@ -208,16 +215,18 @@ def test_the_mask_is_live_and_is_what_unblocks_the_prompt(
 ) -> None:
     """Non-vacuity: the passing prompts pass BECAUSE of the mask.
 
-    Without it the same question is still refused by the same scanner, which
-    is what the live 2026-08-12 capture showed.
+    Both halves of the differential are asserted here on purpose. Asserting
+    only the SEATTLE half proves that dimension membership matters and nothing
+    more -- it survives a mask that returns its input unchanged, because with
+    ``TACOMA`` absent there is nothing to mask either way. The pair dies under
+    that mutation, which is the property the test claims to have.
     """
 
+    prompt = "Tell me about Tacoma's in-the-money borrowers"
     assert "TACOMA" in governed_cities.protected_class_safe_values()
+    assert protected_prompt_match(prompt) is None
     _reset_governed_place_dimension_for_tests(_install(("SEATTLE",)))
-    assert (
-        protected_prompt_match("Tell me about Tacoma's in-the-money borrowers")
-        == "protected_class_language"
-    )
+    assert protected_prompt_match(prompt) == "protected_class_language"
 
 
 @pytest.mark.usefixtures("governed_cities")
@@ -247,34 +256,105 @@ def test_the_gate_refuses_every_protected_term_as_a_city(term: str) -> None:
 
 
 def test_the_mask_reaches_one_scanner_even_when_a_value_is_admitted() -> None:
-    """Defence in depth behind the gate.
+    """Defence in depth behind the gate, and an honest account of which.
 
-    ``TACOMA`` is admitted, so the mask genuinely runs on this prompt. The
-    explicit term bank and the proxy scan still read the UNMASKED text, which
-    is why a protected term beside a governed place is still reported by name.
+    ``TACOMA`` and ``BLACK DIAMOND`` are both admitted, so the mask genuinely
+    runs on these prompts; the last two assertions die if it stops running.
+    ``BLACK DIAMOND`` also OVERLAPS a term in the bank, which is the case that
+    matters: masking a value erases the span it occupies, so an overlapping
+    value takes the term with it unless an occurrence guard stops it -- the
+    ``HAWAIIAN GARDENS``/``native hawaiian`` class.
+
+    What this does NOT prove on its own is that the term bank reading UNMASKED
+    text is load-bearing. Measured 2026-08-12 over 1,088 probes, moving the
+    governed mask in front of the term bank changes 0 verdicts -- while the
+    admission gate holds. The gate is the layer that stops a value capable of
+    disarming a term from ever entering the exemption set. Break both and the
+    guard opens; that combination is what
+    ``test_an_overlapping_place_never_disarms_the_term_it_contains`` dies on.
     """
 
-    _install(("TACOMA", "SEATTLE"))
+    _install(("TACOMA", "BLACK DIAMOND", "SEATTLE"))
     try:
+        assert protected_prompt_match("Show me black borrowers in Black Diamond") == "black"
+        assert protected_prompt_match("Segment Black Diamond borrowers by race") == "race"
         assert protected_prompt_match("Show me black borrowers in Tacoma") == "black"
         assert protected_prompt_match("Segment Tacoma borrowers by race") == "race"
         assert protected_prompt_match("Tell me about Tacoma's in-the-money borrowers") is None
+        assert protected_prompt_match("How many Black Diamond borrowers are in the money?") is None
     finally:
         _reset_governed_place_dimension_for_tests(None)
 
 
-@pytest.mark.parametrize("prompt", _MUST_STAY_REFUSED)
-def test_hostile_dimension_cannot_unblock_protected_prompts(prompt: str) -> None:
+# Real US place names that contain, or are, a term in ``_PROTECTED_PROMPT_TERMS``.
+# A dimension is not trusted input -- it is whatever the warehouse currently
+# holds -- so the gate has to survive one built to disarm the bank.
+_HOSTILE_OVERLAP_DIMENSION = (
+    "BLACK DIAMOND",
+    "BLACK RIVER FALLS",
+    "WHITE PLAINS",
+    "RACE",
+    "RACELAND",
+    "GENDER",
+    "MALE",
+    "FEMALE",
+    "AGE",
+    "ASIAN",
+    "TACOMA",
+)
+
+
+@pytest.mark.parametrize(
+    ("prompt", "reason"),
+    (
+        ("Show me black borrowers in Black Diamond", "black"),
+        ("Show me black borrowers in Black River Falls", "black"),
+        ("Show me white borrowers in White Plains", "white"),
+        ("Segment White Plains borrowers by race", "race"),
+        ("Target asian homeowners in Tacoma for a HELOC", "asian"),
+        ("How many Raceland borrowers are female?", "female"),
+    ),
+)
+def test_an_overlapping_place_never_disarms_the_term_it_contains(prompt: str, reason: str) -> None:
+    """Two independent layers, and this is the one that pins the pair.
+
+    Measured on 2026-08-12 by mutating each layer of ``protected_prompt_match``
+    separately and together:
+
+      admission gate opened, mask left behind the term bank -> still refuses
+      gate intact, mask moved in front of the term bank      -> still refuses
+      both                                                   -> ALLOWED
+
+    So neither layer is redundant and neither alone is the safety property.
+    This case goes red only on the third row, which is exactly the gap a
+    single-layer test cannot see. ``TACOMA`` rides along as the non-vacuity
+    control: the resolver must still be admitting something, or this would pass
+    because the exemption set is empty.
+    """
+
+    resolver = _install(_HOSTILE_OVERLAP_DIMENSION)
+    try:
+        assert "TACOMA" in resolver.protected_class_safe_values()
+        assert protected_prompt_match(prompt) == reason
+    finally:
+        _reset_governed_place_dimension_for_tests(None)
+
+
+@pytest.mark.parametrize(("prompt", "reason"), _MUST_STAY_REFUSED)
+def test_hostile_dimension_cannot_unblock_protected_prompts(prompt: str, reason: str) -> None:
     """Even a dimension built from protected vocabulary cannot open the guard.
 
     ``TACOMA`` rides along as the non-vacuity control: the resolver must still
     be producing a non-empty set, otherwise this passes for the wrong reason.
+    The reason is asserted exactly, for the same cause as the pinned set above
+    -- a hostile dimension that merely RELABELLED a refusal would satisfy an
+    ``is not None`` here while having moved the boundary.
     """
 
     resolver = _install(("BLACK", "HISPANIC", "FEMALE", "CANCER", "RACE", "TACOMA", "INDIAN"))
     try:
         assert "TACOMA" in resolver.protected_class_safe_values()
-        assert protected_prompt_match(prompt) is not None
+        assert protected_prompt_match(prompt) == reason
     finally:
         _reset_governed_place_dimension_for_tests(None)
 
