@@ -243,6 +243,34 @@ REVIEWED_ATTRIBUTE_PURPOSE_FRAGMENT = (
 # ("home equity in Texas and eczema").
 _SCOPE_GROUP_PREFIX = "geoscope_"
 
+# A DESTINATION is not a place, and the slot must not steal one.
+#
+# Several patterns already end in an optional ``(?:in|into|for)\s+<determiner>
+# <destination noun>`` tail, and the open place shape happily matches that
+# noun phrase. The regex then FULLMATCHES with the scope group holding "a
+# reviewed cohort", the membership screen rejects it, and a sentence that is
+# answered today refuses -- because ``re`` will not backtrack into a different
+# parse once the overall match has already succeeded. Found by the full unit
+# suite, not by the 15,600-probe differential, whose shapes had no destination
+# tail: "Include high equity borrowers in a reviewed cohort.", "Shortlist high
+# equity homeowners in a reviewed cohort." and one more, all green on main.
+#
+# A lookahead rather than a screen because this must change WHICH PARSE WINS,
+# and only the regex engine can do that. The excluded vocabulary is the closed
+# destination/purpose noun set, and excluding it costs nothing: none of these
+# words is in the governed place gazetteer, so the screen would reject them
+# anyway -- one step too late.
+#
+# ``for`` is excluded from the preposition list for the same class of reason,
+# one tail earlier. This is the general hazard of adding an optional slot in
+# front of other optional slots; the two closed exclusions are what keep it to
+# a parse question rather than a vocabulary one.
+_SCOPE_NOT_A_DESTINATION = (
+    r"(?!(?:(?:this|that|the|an?|our|their|its)\s+)?(?:reviewed\s+)?"
+    r"(?:campaign|cohort|audience|segment|list|queue|offer|review|population|"
+    r"selection|group)s?(?![a-z]))"
+)
+
 
 def reviewed_attribute_scope_fragment(name: str) -> str:
     """One optional geography scope, capturing only what needs screening.
@@ -265,7 +293,7 @@ def reviewed_attribute_scope_fragment(name: str) -> str:
         r"(?:\s+(?:in|across|within|throughout)\s+"
         rf"(?:{GOVERNED_SCOPE_DEMONSTRATIVE_FRAGMENT}"
         rf"|{GOVERNED_SCOPE_ZIP_FRAGMENT}"
-        r"|(?:the\s+state\s+of\s+)?"
+        rf"|{_SCOPE_NOT_A_DESTINATION}(?:the\s+state\s+of\s+)?"
         rf"(?P<{_SCOPE_GROUP_PREFIX}{name}>{GOVERNED_PLACE_SHAPE_FRAGMENT})))?"
     )
 

@@ -292,6 +292,40 @@ def test_a_formation_verb_still_refuses_a_scoped_attribute() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "question",
+    (
+        "Include high equity borrowers in a reviewed cohort.",
+        "Shortlist high equity homeowners in a reviewed cohort.",
+        "Include high equity borrowers in the campaign.",
+        "Rank the high LTV borrowers in this segment.",
+        "Add borrowers with home equity to the queue.",
+        "Select high equity borrowers for the campaign.",
+    ),
+)
+# Not in the list, and deliberately: "Add borrowers with home equity to the
+# REVIEWED queue." refuses on main and on this branch alike. It was in an
+# earlier draft of this test as an invented example, and the branch was
+# briefly suspected before the baseline was checked. Every case above is
+# verified answerable at 26b3ae56.
+def test_the_scope_slot_does_not_steal_a_destination(question: str) -> None:
+    """An optional slot in front of other optional slots changes which parse wins.
+
+    Every one of these is answered on main. The open place shape matches "a
+    reviewed cohort" happily, so the pattern FULLMATCHED with the scope group
+    holding a destination, the membership screen rejected it, and the sentence
+    refused -- ``re`` will not backtrack into another parse once the overall
+    match has succeeded, so no screen can recover it. Three of these were
+    caught by the full unit suite AFTER a 15,600-probe differential reported
+    zero losses; the differential's shapes had no destination tail.
+
+    Fixed in the fragment, by a lookahead over the closed destination noun set,
+    because only the regex engine can decide which parse wins.
+    """
+
+    assert protected_prompt_match(question) is None, question
+
+
 def test_the_capital_i_fold_does_not_hide_the_zip_keyword() -> None:
     """``ZIP`` reaches the grammar as ``ZlP`` on one scan pass.
 

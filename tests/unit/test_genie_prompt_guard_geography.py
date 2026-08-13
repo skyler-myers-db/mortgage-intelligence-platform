@@ -1095,7 +1095,12 @@ def test_a_threshold_does_not_change_which_attribute_is_named() -> None:
     of the criterion machine consults it.
     """
 
-    from backend.schemas.marketing_selection_criteria import (
+    # Moved to ``marketing_selection_vocabulary`` when the geography-scope slot
+    # landed: the criteria module no longer fullmatches this pattern directly,
+    # it goes through ``matches_reviewed_mortgage_attribute`` so the scope
+    # screen cannot be skipped at one call site. The assertions below are
+    # unchanged.
+    from backend.schemas.marketing_selection_vocabulary import (
         _REVIEWED_MORTGAGE_ATTRIBUTE_FULL_RE as attribute_re,
     )
 
