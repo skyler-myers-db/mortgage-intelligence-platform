@@ -45,6 +45,7 @@ from backend.schemas.marketing_scan_provenance import (
     search_backed,
     splice_pair,
     tokenize_pair,
+    translate_pair,
 )
 from backend.schemas.marketing_selection_criteria import (
     contains_unreviewed_selection_criterion,
@@ -322,7 +323,7 @@ def _protected_class_marketing_reason(
     # leaving every split evasion caught: ``muslim`` from ``mus 1 im`` keeps
     # ``mus``/``im``, ``laotian`` from ``140-tian`` keeps ``tian``.
     leet_pairs = [
-        ScanPair(variant.translate(table), variant.translate(SHADOW_LEET_TABLE))
+        translate_pair(ScanPair(variant), table, SHADOW_LEET_TABLE)
         for variant in sorted(symbol_variants)
         for table in _LEET_TABLES
     ]
@@ -339,7 +340,12 @@ def _protected_class_marketing_reason(
     separator_pairs: list[ScanPair] = []
     joined_pairs: list[ScanPair] = []
     window_origins: dict[str, str] = {}
-    for leet_folded in ascii_confusable_pairs:
+    # Iterate the DEDUPLICATED variants, as the historical set-based loop
+    # did: for unvaried text the raw pair list holds ten copies of one
+    # string, and running window construction per copy cost ~10x on long
+    # inputs (measured in signoff round two, 6x at 10KB end to end).
+    for _real, _shadow in merge_pairs(ascii_confusable_pairs).items():
+        leet_folded = ScanPair(_real, _shadow)
         # Safety-scan only: campaign prose has no legitimate reason to
         # make punctuation distinguish a protected multiword term. Fold
         # every non-alphanumeric separator run (including Unicode
@@ -356,7 +362,14 @@ def _protected_class_marketing_reason(
             # Only join genuinely split terms. Re-emitting ordinary one-token
             # windows detaches words such as ``age`` and ``English`` from the
             # safe context already reviewed above, creating false positives.
-            for stop in range(start + 2, min(len(tokens), start + 8) + 1):
+            # Twelve tokens, because the longest single-word governed terms
+            # (``millennials``, ``bangladeshi``, ``trinidadian``) are eleven
+            # letters and an evader spells them one letter per token: with an
+            # eight-token cap the term never reconstructed, and the only
+            # thing refusing ``m i 1 1 3 n n i 4 1 5`` was the incidental
+            # ``als`` mint that provenance rightly drops (signoff round two).
+            # The 32-character sum bound keeps the window count finite.
+            for stop in range(start + 2, min(len(tokens), start + 12) + 1):
                 if sum(len(token.real) for token in tokens[start:stop]) > 32:
                     continue
                 window = ScanPair(
@@ -371,6 +384,21 @@ def _protected_class_marketing_reason(
                 # but the noun test used to depend on whichever windows sorted
                 # alongside. Remember where each window came from so the
                 # gated detectors can ask the ORIGIN for the noun instead.
+                #
+                # Only a window that LOOKS like a split evasion earns that
+                # assist: one carrying a digit-minted character, or one
+                # spliced from three or more tokens. A two-token all-source
+                # join is the shape ordinary prose makes by accident --
+                # ``Bank of America, N.A.`` joins ``America``+``N`` into
+                # ``american``, ``the borrower's Audi`` joins ``s``+``Audi``
+                # into ``saudi`` -- and origin assistance turned those into
+                # deterministic fair-lending findings on servicer and
+                # possessive prose (signoff round two). Without the assist
+                # they fall back to the blob-window test, which is base
+                # behavior.
+                window_is_evasion_shaped = stop - start >= 3 or window.shadow != window.real
+                if not window_is_evasion_shaped:
+                    continue
                 origin = leet_folded.real[
                     max(0, token_spans[start].start() - 120) : token_spans[stop - 1].end() + 120
                 ]

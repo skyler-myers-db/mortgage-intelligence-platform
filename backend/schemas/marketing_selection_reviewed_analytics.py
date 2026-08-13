@@ -77,6 +77,51 @@ _REVIEWED_WHOLE_POPULATION = (
 
 _REVIEWED_READ_ONLY_ANALYTIC_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(
+        # Ranked ask by a governed signal: "Show me the top 20 borrowers with
+        # the highest lead scores." -- a PUBLISHED Genie Space sample question
+        # (genie/mortgage_lead_intelligence_space.yml, "top 20 borrowers by
+        # lead score with rate spread > 75 bps and equity > 35%") and the
+        # exact question of the 2026-08-12 live paychex capture (source=genie,
+        # 20 governed rows). Both refused at the prompt guard on the signoff
+        # tree.
+        #
+        # Base only answered this family by a fold accident: the refusing
+        # branch was letters-only, "top 10" arrived leet-folded as "top lo"
+        # and refused, while any N carrying a digit outside {0,1,3,4,5,7}
+        # ("top 20", "top 26") kept a digit and slipped past. Count-invariance
+        # made every N refuse CONSISTENTLY -- the accidental allows closed and
+        # the shipped question broke. This shape restores the family on the
+        # allow side with a closed tail, which is the separation the reverted
+        # article widening could not achieve: "with the highest lead scores"
+        # matches, "with eczema" cannot, and the campaign-copy declarative
+        # ("The top borrower candidates overall are those with ...") never
+        # matches because the shape requires an imperative or interrogative
+        # lead.
+        r"^(?:show(?:\s+me)?|list|identify|display|what\s+are|give\s+me|rank)\s+"
+        r"(?:the\s+)?"
+        rf"top(?:[- ]{_ANALYTIC_COUNT})?\s+"
+        rf"(?:{_REVIEWED_PRODUCT_INTENT}\s+)?"
+        r"(?:borrowers?|candidates?|leads?|homeowners?|opportunities)\s+"
+        r"(?:with|by)\s+(?:the\s+)?"
+        r"(?:highest|top|best|strongest|largest|most)?\s*"
+        rf"(?:modeled\s+equity|{_REVIEWED_ANALYTIC_SIGNAL})"
+        # Closed numeric-threshold refinements: "with rate spread > 75 bps and
+        # equity > 35%". Signals from the closed list, comparators, numbers,
+        # units -- no free text.
+        rf"(?:\s+with\s+(?:modeled\s+equity|{_REVIEWED_ANALYTIC_SIGNAL})\s*[<>=\u2264\u2265]+\s*"
+        r"[0-9][0-9.,]*\s*(?:%|percent|bps|basis\s+points)?"
+        rf"(?:\s+and\s+(?:modeled\s+equity|{_REVIEWED_ANALYTIC_SIGNAL})\s*[<>=\u2264\u2265]+\s*"
+        r"[0-9][0-9.,]*\s*(?:%|percent|bps|basis\s+points)?){0,3})?"
+        # Closed location tail, including "in the state of California (CA)".
+        r"(?:\s+(?:in|across)\s+(?:the\s+current\s+(?:coverage|portfolio)|"
+        r"(?:the\s+state\s+of\s+)?[A-Z][A-Za-z' -]{2,40}(?:\s*\([A-Z]{2}\))?|"
+        r"[A-Z]{2}))?"
+        # Closed status tail: "who are currently listed for sale".
+        rf"(?:\s+who\s+are\s+(?:currently\s+)?{_REVIEWED_PRODUCT_INTENT})?"
+        r"$",
+        re.IGNORECASE,
+    ),
+    re.compile(
         # Compound sales ask: a ranked cohort followed by any of the closed
         # follow-on clauses — per-item rationale, the offer call, and the
         # risk-of-loss question — in any order ("Rank the top opportunities,

@@ -8,13 +8,16 @@ protected-class targeting (paychex, 2026-08-12).
 
 Four designs that decided BEFORE matching all failed, each measured:
 
-* skipping the fold for isolated digit runs silenced the ``1`` in ``mus 1 im``
-  (123 terms fully open on the Ask Genie posture);
+* skipping the fold for isolated digit runs silenced the ``1`` in
+  ``mus 1 im`` -- adversarial review measured on the order of a hundred
+  protected terms fully open on the Ask Genie posture (the exact count is
+  corpus-dependent; the corpora were not preserved);
 * provenance-filtered rejoin windows missed the context-gated banks
   (``ch-1-nese`` rendered: the rejoined bare token has no population noun);
 * withholding the fold when the folded SPELLING is governed left the run as
   digits, and the rejoin tokenizer skips digits, so the number became a
-  shield (``140-tian`` rendered while ``laotian`` refused; 1,402 weakened);
+  shield -- ``140-tian`` rendered while ``laotian`` refused, with weakenings
+  measured in the low thousands on the review corpus;
 * extending that check to whole-and-per-group still missed spliced windows
   (``1,405,000`` minted ``laos`` from ``l``+``aos``).
 
@@ -23,20 +26,30 @@ word -- so the decision has to happen AT the match: a protected-term match
 stands unless every character in its span is a digit-minted letter. ``lao``
 from ``4,140`` has none and is dropped; ``laotian`` from ``140-tian`` carries
 ``tian`` and refuses; ``muslim`` from ``mus 1 im`` carries ``mus``/``im`` and
-refuses. Relative to the base scanner this is monotone by construction: the
-scan text is byte-identical, so the ONLY reachable behavior change is
-dropping all-digit-minted matches.
+refuses. The scan text is the base scanner's plus joined windows of nine
+to twelve tokens (the cap was eight, which hid eleven-letter terms spelled
+one letter per token); additional windows can only ADD matches, so that
+widening moves in the refusing direction, and match acceptance is the only
+thing provenance itself changes: it drops matches containing a wholly minted
+word and nothing else. The same commit carries one
+deliberate second change OUTSIDE this module -- joined windows hand the
+context-gated banks their origin sentence for the population-noun test
+(``window_origins`` in the scanner) -- so the full behavior delta is those
+two effects together, each measured separately in the signoff artifacts.
 
 Provenance is carried as a SHADOW STRING, not a mask array: the same
 transforms run on a twin whose leet stage folds digits to the sentinel
 letter ``Q`` instead of ``o/l/e/a/s/t``. Every transform downstream of the
 fold decides by character class -- ``[A-Za-z]``, ``[A-Za-z0-9]``, hyphen
 lookarounds -- and the sentinel is a letter, so real and shadow stay the same
-length with the same token structure, and no transform is reimplemented. A
-position is source-backed exactly when the two strings agree there. The only
-steps that must MIRROR the real string's match spans instead of re-running
-are the safe-context substitutions and the health-context mask, because
-their word patterns do not match shadow text; :func:`mirror_sub` does that.
+length with the same token structure, and the class-keyed transforms run
+unmodified on both strings. A position is source-backed exactly when the two
+strings agree there. Two recipes could not be reused and are mirrored as
+pair-aware twins pinned against their originals by
+``test_leet_digit_match_provenance``: :func:`ascii_confusable_fold_pairs`
+here, and ``_mask_health_pair`` in the scanner. The safe-context
+substitutions likewise cannot re-run on sentinel text, so :func:`mirror_sub`
+splices the shadow at the REAL string's match spans.
 
 Fail-safe: if real and shadow ever diverge in length, the pair degrades to
 ``shadow == real`` -- every span reads as source-backed, which is exactly the
@@ -66,14 +79,41 @@ class ScanPair:
         self.shadow = shadow if shadow is not None and len(shadow) == len(real) else real
 
     def backed(self, start: int, end: int) -> bool:
-        """True when any character in [start, end) is a source-backed letter."""
+        """True when the span holds a source-backed letter AND no minted word.
+
+        Two conditions, both load-bearing. At least one backed letter keeps a
+        wholly minted term from standing on its own (``lao`` from ``4,140``).
+        That alone is not enough: a bank whose pattern matches the term
+        TOGETHER with its population noun hands the noun's provenance to the
+        whole span -- ``415 borrowers`` folds to ``als borrowers``, the
+        health-status pattern matches both words, and ``borrowers`` is backed
+        (measured in signoff round two; ``als`` is the one governed term
+        mintable outside the national-origin bank). So a multi-letter WORD
+        inside the span that is entirely digit-minted vetoes the match: it is
+        a number the fold rewrote, whatever stands beside it. One-letter runs
+        are separator-fold artefacts (``c 4 n c 3 r`` scatters), not words,
+        and stay exempt so scatter evasions keep refusing.
+        """
 
         real = self.real
         shadow = self.shadow
-        return any(
-            real[index].isalpha() and shadow[index] == real[index]
-            for index in range(start, min(end, len(real)))
-        )
+        stop = min(end, len(real))
+        any_backed = False
+        run_length = 0
+        run_backed = False
+        for index in range(start, stop + 1):
+            char = real[index] if index < stop else ""
+            if char.isalpha():
+                run_length += 1
+                if shadow[index] == char:
+                    run_backed = True
+                    any_backed = True
+                continue
+            if run_length > 1 and not run_backed:
+                return False
+            run_length = 0
+            run_backed = False
+        return any_backed
 
 
 def translate_pair(pair: ScanPair, table: dict[int, int], shadow_table: dict[int, int]) -> ScanPair:
@@ -88,7 +128,11 @@ def regex_pair(pair: ScanPair, pattern: re.Pattern[str], replacement: str) -> Sc
     Valid only for patterns that match identically on real and shadow -- i.e.
     patterns deciding by character class where the sentinel is equivalent
     (separator runs, hyphens between letters, ``vv`` which no fold emits).
-    The constructor's length check backstops the equivalence.
+    That restriction is the safety argument, and it is NOT machine-enforced:
+    the constructor's length check catches only length divergence, and an
+    equal-length substitution with a word-shaped pattern would desynchronize
+    positions silently. Every pattern passed here must decide by character
+    class alone.
     """
 
     return ScanPair(
@@ -107,7 +151,10 @@ _DOUBLE_V_RE = re.compile(r"vv", re.IGNORECASE)
 
 
 def ascii_confusable_fold_pairs(pair: ScanPair) -> list[ScanPair]:
-    """``ascii_confusable_folds``'s five variants, carried as pairs.
+    """``ascii_confusable_folds``'s recipe, carried as pairs.
+
+    Five entries, at most four distinct (the two fold orders commute); the
+    duplicate is kept so the emitted set stays literally the original's.
 
     Both folds are shadow-safe to run independently: no leet table emits ``v``
     or ``I`` and the sentinel is neither, so ``vv`` runs and capital ``I``s

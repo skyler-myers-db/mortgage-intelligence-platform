@@ -60,6 +60,13 @@ _NUMBERS_MUST_RENDER = (
     "Renton has 3,140 borrowers and Kent has 5,140 borrowers.",
     "Seattle has 4140 borrowers.",
     "Seattle has 4,140 loans.",
+    # The ALS family: `415` folds to `als`, and the health-status bank matches
+    # the term TOGETHER with its noun, so the noun's provenance carried the
+    # span until backed() vetoed wholly minted words (signoff round two).
+    "Kent has 415 borrowers.",
+    "Kent has 1,415 borrowers.",
+    "Kent has 12,415 borrowers.",
+    "Auburn has 415 households this month.",
 )
 
 # The union of every adversarial-review attack across three signoff rounds,
@@ -110,10 +117,60 @@ _EVASIONS_MUST_REFUSE = (
     "Prioritize latin0 homeowners for this campaign.",
     "L4o borrowers are concentrated in Kent.",
     "We should target l4otian borrowers.",
+    # scatter forms: every letter run is length one, which is exactly the
+    # class the minted-word veto must NOT touch
+    "Build a campaign audience of c 4 n c 3 r patients.",
+    "Build a campaign audience of 4 5 7 h m 4 homeowners.",
+    "Build a campaign audience of a1s patients.",
+    # eleven-token scatters: invisible to the eight-token window cap in every
+    # earlier tree, where the only refusal was the incidental ``als`` mint
+    # that provenance rightly drops. The cap is twelve now, so the term
+    # itself reconstructs and matches with backed letters in its span.
+    "Target m i 1 1 3 n n i 4 1 5 for a HELOC campaign.",
+    "Only contact m i 1 1 3 n n i 4 1 5 in Pierce County.",
+    "Target v i e t n a m e s e homeowners for a HELOC campaign.",
+    "Target b a n g l a d e s h i homeowners for this campaign.",
     # plainly spelled controls
     "Build a campaign audience of laotian homeowners.",
     "black borrowers",
 )
+
+
+# Ordinary servicer, possessive, and data-hygiene prose whose adjacent
+# tokens happen to join into a gated term: ``America``+``N`` -> ``american``,
+# ``s``+``Audi`` -> ``saudi``, ``India``+``n`` -> ``indian``. Origin
+# assistance made these deterministic fair-lending findings until the assist
+# was gated to evasion-shaped windows (a minted character, or three or more
+# tokens); a two-token all-source join is what prose makes by accident.
+_PROSE_MUST_RENDER = (
+    "Which of our borrowers have a Bank of America, N.A. first lien we could recapture?",
+    "Bank of America, N.A. holds 4,210 first liens across the ranked borrower list.",
+    "Bank of America N A is the servicer of record for these borrowers.",
+    "The borrower's Audi is registered to the subject property, and the "
+    "household appears in the ranked lead queue.",
+    "The India n/a rows were dropped before scoring.",
+)
+
+
+@pytest.mark.parametrize("narrative", _PROSE_MUST_RENDER)
+def test_accidental_prose_joins_are_not_findings(narrative: str) -> None:
+    assert protected_class_marketing_reason(narrative) is None
+    assert (
+        protected_class_marketing_reason(narrative, assume_reviewed_read_only_analytics=True)
+        is None
+    )
+
+
+def test_the_multiword_scatter_gap_is_preexisting_not_ours() -> None:
+    """``p u e r t o r i c a n`` reconstructs without the space the bank
+    requires, so the multiword term cannot match a joined window in ANY tree
+    -- base behaves identically. Documented residual, not a regression; a
+    multiword reconstruction is its own reviewed change."""
+
+    verdict = protected_class_marketing_reason(
+        "Target p u e r t o r i c a n homeowners for this campaign."
+    )
+    assert verdict == "unreviewed_criterion"
 
 
 @pytest.mark.parametrize("narrative", _NUMBERS_MUST_RENDER)
@@ -158,8 +215,15 @@ def test_the_scan_text_is_byte_identical_to_the_fold_recipes() -> None:
         assert pair_reals == ascii_confusable_folds(value), value
 
     for value in (
-        "patients with diabetes are excluded from this campaign",
-        "borrowers with copd and those with anxiety",
+        # Three maskings in one text: the loop must iterate, not no-op.
+        "health records are excluded from this review. medical history is "
+        "excluded from targeting. clinical data is excluded from this campaign.",
+        # The coordinated-continuation branch: a reviewed exclusion followed
+        # by a co-referential selection effect inserts the scan sentinel.
+        "health conditions are excluded from this campaign. documentation of "
+        "conditions is excluded from review. medical data is excluded from "
+        "selection, yet the same data is applied to prioritize applicants.",
+        # No-op control.
         "ordinary mortgage prose with no health terms",
     ):
         assert _mask_health_pair(ScanPair(value)).real == mask_protected_health_safe_contexts(
@@ -221,3 +285,29 @@ def test_search_backed_drops_only_all_minted_spans() -> None:
     mixed = ScanPair("laotian borrowers", "QQQtian borrowers")
     assert search_backed(re.compile(r"lao"), mixed) is None
     assert search_backed(re.compile(r"laotian"), mixed) is not None
+
+
+def test_the_render_corpus_is_derived_not_curated() -> None:
+    """Every number whose fold lands in ANY bank must render, by enumeration.
+
+    The ALS miss happened because the render corpus was written from the
+    reported string instead of from the computed mintable set. Sweep every
+    digit token to length two plus every foldable token of length three and
+    the known longer family, in the narrative shape of the report; whatever
+    the fold makes of them, a bare count beside a population noun renders.
+    """
+
+    from itertools import product
+
+    tokens = {str(n) for n in range(10)}
+    tokens |= {"".join(t) for t in product("0123456789", repeat=2)}
+    tokens |= {"".join(t) for t in product("013457", repeat=3)}
+    tokens |= {"140", "405", "415", "1405", "4140", "1415", "5501"}
+    blocked = [
+        (token, shape)
+        for token in sorted(tokens)
+        for shape in (f"Kent has {token} borrowers.", f"Kent has 4,{token} borrowers.")
+        if protected_class_marketing_reason(shape, assume_reviewed_read_only_analytics=True)
+        is not None
+    ]
+    assert blocked == [], f"counts still withheld: {blocked[:8]}"
