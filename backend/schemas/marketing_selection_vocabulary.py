@@ -256,10 +256,16 @@ REVIEWED_MORTGAGE_ATTRIBUTE_BOUND_LIST_FRAGMENT = (
 # them" is the commonest form of this tail and ``then`` otherwise lands in the
 # modal slot, refusing 143 strings the truncation had been silently accepting
 # ("Only select them by home equity for the campaign and then contact them").
+#
+# ``(?:to\s+)?`` before the pronoun object because "reply TO them" is how that
+# verb is actually written -- the slot took "reply them" and refused 61
+# ordinary strings ("Only select them by home equity and then reply to them").
+# The preposition admits nothing: the object behind it is the same closed
+# pronoun/population list.
 _REVIEWED_ATTRIBUTE_CTA_TAIL = (
     r"(?:\s+(?:and\s+then|and|then)\s+(?:(?:may|can|should)\s+)?"
     r"(?:contact|call|email|text|message|reply)"
-    r"(?:\s+(?:them|us|me|him|her|"
+    r"(?:\s+(?:to\s+)?(?:them|us|me|him|her|"
     r"(?:the\s+)?(?:borrowers?|homeowners?|customers?|leads?|candidates?|"
     r"prospects?|clients?|owners?)))?"
     r"(?:\s+(?:about|regarding|with|on)\s+(?:(?:the|their|an?)\s+)?"
@@ -268,11 +274,40 @@ _REVIEWED_ATTRIBUTE_CTA_TAIL = (
 )
 _REVIEWED_ATTRIBUTE_CLOSING = r"(?:\s+(?:too|as\s+well))?"
 
+# PURPOSE and CTA in either order, because operators write both:
+#
+#     "a rate spread for the campaign and then contact them"   (purpose first)
+#     "rate spread and contact them for the campaign"          (CTA first)
+#
+# The second form reaches this matcher through the passive-selection capture
+# ("Borrowers are selected based on <criterion>") and refused -- 15 measured
+# strings whose only sin was ordering. This is an ALTERNATION of the two
+# sequences, not a loosening: each branch is the same two closed optional
+# groups, so "purpose CTA purpose", a doubled purpose, or any unreviewed
+# remainder after the pair still leaves text unmatched and the criterion
+# unreviewed.
+#
+# Verified for carriers INSIDE the criterion span, and that is the axis this
+# matcher owns: the battery in ``test_cta_tails_and_terse_imperatives``
+# appends "and eczema" / "about a hijab" to both orders and every one refuses
+# (panel-measured fail-closed over 24,892 probes on that axis). What no FULL_RE
+# composition can see is a carrier OUTSIDE the captured span -- the admission
+# grammar's deliberately open verb slot ("Borrowers are hijab-flagged into the
+# campaign based on <reviewed criterion>"). That slot is a pre-existing gap on
+# main, reachable today with any already-reviewed criterion, and every
+# vocabulary restoration (#212's thresholds, #213's articles, #219's bounds,
+# this ordering) adds phrasings that route through it. Tracked as issue #221
+# with the banks-only-entry-point remediation; do not treat this matcher's
+# battery as evidence about that axis.
+_REVIEWED_ATTRIBUTE_TAIL_EITHER_ORDER = (
+    rf"(?:{REVIEWED_ATTRIBUTE_PURPOSE_FRAGMENT}{_REVIEWED_ATTRIBUTE_CTA_TAIL}"
+    rf"|{_REVIEWED_ATTRIBUTE_CTA_TAIL}{REVIEWED_ATTRIBUTE_PURPOSE_FRAGMENT})"
+)
+
 _REVIEWED_MORTGAGE_ATTRIBUTE_FULL_RE = re.compile(
     rf"^(?:{REVIEWED_MORTGAGE_ATTRIBUTE_LIST_FRAGMENT})"
     rf"{_REVIEWED_ATTRIBUTE_THRESHOLD}"
-    rf"{REVIEWED_ATTRIBUTE_PURPOSE_FRAGMENT}"
-    rf"{_REVIEWED_ATTRIBUTE_CTA_TAIL}"
+    rf"{_REVIEWED_ATTRIBUTE_TAIL_EITHER_ORDER}"
     rf"{_REVIEWED_ATTRIBUTE_CLOSING}$",
     re.IGNORECASE,
 )
