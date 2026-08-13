@@ -34,9 +34,11 @@ from backend.schemas.marketing_safety_terms import (
 )
 from backend.schemas.marketing_selection_criteria import (
     contains_unreviewed_selection_criterion,
+    is_reviewed_read_only_analytics_text,
+)
+from backend.schemas.marketing_selection_reviewed_workflows import (
     is_reviewed_campaign_audience_description_text,
     is_reviewed_campaign_audience_summary_text,
-    is_reviewed_read_only_analytics_text,
 )
 from backend.schemas.marketing_text_normalization import ascii_confusable_folds
 from backend.schemas.protected_relationships import PROTECTED_RELIGION_FAMILIAL_RELATION_RE
