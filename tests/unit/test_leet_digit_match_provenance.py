@@ -67,6 +67,12 @@ _NUMBERS_MUST_RENDER = (
     "Kent has 1,415 borrowers.",
     "Kent has 12,415 borrowers.",
     "Auburn has 415 households this month.",
+    # ``551`` -> ``ssi``. Several banks recognise their term only NEXT TO a
+    # population noun, so a standalone-presence veto predicate missed this
+    # and left the reported defect's own class open on a different noun
+    # (signoff round three).
+    "Kent has 551 recipients.",
+    "Kent has 551 borrowers.",
 )
 
 # The union of every adversarial-review attack across three signoff rounds,

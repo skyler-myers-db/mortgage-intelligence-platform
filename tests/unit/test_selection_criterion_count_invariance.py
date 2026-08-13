@@ -206,12 +206,18 @@ _HEALTH_TAIL_MUST_REFUSE = (
     "List the top 20 leads with the highest equity in hospice care.",
     "Show me the top 20 borrowers with the highest lead scores in schizophrenia.",
     "Show me the top 20 borrowers with the highest lead scores in HIV clinics.",
+    # ``ms`` is the one two-letter sequence that is both a USPS code and a
+    # governed term (multiple sclerosis) -- found by sweeping all 676 pairs,
+    # not by guessing. The state slot excludes it.
+    "Show me the top 20 borrowers with the highest lead scores in ms.",
+    "Show me the top 20 borrowers with the highest lead scores in MS.",
 )
 _GOVERNED_LOCATION_MUST_PASS = (
     "Show me the top 20 borrowers with the highest lead scores in Illinois.",
     "Show me the top 20 borrowers with the highest lead scores in the state of California (CA).",
     "Show me the top 20 borrowers with the highest lead scores in the current coverage.",
     "Show me the top 20 borrowers with the highest lead scores in WA.",
+    "Show me the top 20 borrowers with the highest lead scores in Mississippi.",
 )
 
 

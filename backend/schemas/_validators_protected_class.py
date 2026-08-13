@@ -139,8 +139,17 @@ def _mints_governed_term(candidate: str) -> bool:
     safe where withholding a fold was not: the scan text is unchanged.
     """
 
+    # Asked three ways, because several banks only recognise their term
+    # NEXT TO a population noun. Standalone-presence alone missed ``ssi``
+    # (from ``551``): ``PROTECTED_CLASS_MARKETING_RE`` matches ``ssi
+    # recipients``, never bare ``ssi``, so the run was not classed as
+    # governed and "Kent has 551 recipients." stayed withheld -- the reported
+    # defect's own class on a different noun (signoff round three). Supplying
+    # a noun does not over-fire: ``loss borrowers`` and ``loss recipients``
+    # are both ungoverned, which is what keeps ``hearing 1055`` refusing.
     return any(
-        pattern.search(candidate)
+        pattern.search(probe)
+        for probe in (candidate, f"{candidate} borrowers", f"{candidate} recipients")
         for pattern in (
             PROTECTED_CLASS_MARKETING_RE,
             PROTECTED_AGE_CITIZENSHIP_MARKETING_RE,

@@ -130,7 +130,13 @@ _REVIEWED_READ_ONLY_ANALYTIC_PATTERNS: tuple[re.Pattern[str], ...] = (
         # open slot.
         rf"(?:\s+(?:in|across)\s+(?:the\s+current\s+(?:coverage|portfolio)|"
         rf"(?:the\s+state\s+of\s+)?(?:{_US_STATE_ALTERNATION})"
-        rf"(?:\s*\([A-Z]{{2}}\))?|[A-Z]{{2}}))?"
+        # ``ms`` is the one two-letter sequence that is BOTH a USPS code and a
+        # governed term (multiple sclerosis) -- computed by sweeping all 676
+        # pairs against the banks, not assumed -- and this shape sets
+        # ``reviewed_analytics``, which silences the health-term bank. Excluded
+        # here so "... in ms." cannot ride the state slot; Mississippi is still
+        # reachable by name and as "(MS)" after it.
+        rf"(?:\s*\([A-Z]{{2}}\))?|(?!ms\b)[A-Z]{{2}}))?"
         # Closed status tail: "who are currently listed for sale".
         rf"(?:\s+who\s+are\s+(?:currently\s+)?{_REVIEWED_PRODUCT_INTENT})?"
         r"$",
