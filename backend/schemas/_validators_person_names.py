@@ -205,6 +205,14 @@ _NON_PERSON_TITLECASE_SUFFIXES = frozenset(
         # Neither word is a surname, and only the pair's LAST word is matched
         # here, so this exempts "<Word> Score", never a name.
         "score", "scores", "confidence",
+        # Segment display label. "Investor / Multi-Property" is the governed
+        # label (gold_segment_population.sql meta) the planner carries into its
+        # own sub-questions, and a sentence-initial "For Investor ..." paired as
+        # a person (live planner capture 2026-09-08). The place-gated
+        # sentence-initial strip cannot help: the label is not a place. Only
+        # the pair's LAST word is matched, so this exempts "<Word> Investor",
+        # never a name; "investor" has no attested surname use.
+        "investor",
         # fmt: on
     }
 )

@@ -32,34 +32,113 @@ _REVIEWED_ANALYTIC_LOCATION = (
 )
 # Governed Module 0 product-intent cohorts. Closed list: these are offer
 # codes/segment names the product models, never free-text criteria.
+#
+# ``[- ]?`` on every compound and one spelled fold image (``lnvestor``): the
+# protected-class scanner also runs the criterion machine over a de-hyphenated
+# variant ("in-the-money" -> "inthemoney") and an ASCII-confusable variant that
+# reads a capital ``I`` as ``l`` ("Investor" -> "lnvestor"), and ONE tripping
+# variant refuses the whole prompt (#228; the same rule spells
+# ``(?:insert|lnsert)`` in the formation grammar). Both are closed images of
+# already reviewed words, never a fold relaxation: an unreviewed intent still
+# de-obfuscates and fails closed.
 _REVIEWED_PRODUCT_INTENT = (
-    r"(?:cash[- ]out|heloc|home[- ]equity|refi(?:nance)?|rate[- ]and[- ]term|"
-    r"purchase|listed(?:[- ]for[- ]sale)?|investor|multi[- ]property|"
-    r"retention|recapture|in[- ]the[- ]money|high[- ]equity)"
+    r"(?:cash[- ]?out|heloc|home[- ]?equity|refi(?:nance)?|rate[- ]?and[- ]?term|"
+    r"purchase|listed(?:[- ]?for[- ]?sale)?|investor|lnvestor|multi[- ]?property|"
+    r"retention|recapture|in[- ]?the[- ]?money|high[- ]?equity)"
 )
 # Signal columns a planned sub-analysis may name alongside a ranked cohort.
 # Closed: every entry is a governed gold column or Module 0 domain signal
 # (CLAUDE.md domain rules), never free text.
 _REVIEWED_ANALYTIC_SIGNAL = (
-    r"(?:opportunity\s+scores?|lead\s+scores?|rate\s+spreads?|equity(?:\s+percentage)?|"
-    r"ltv|loan[- ]to[- ]value|key\s+triggers?|triggers?|recommended\s+offers?|"
-    r"next[- ]best\s+offers?|segment\s+memberships?|segments?|listing\s+status|"
+    # An aggregate qualifier describes how a governed signal is summarized
+    # ("average rate spread"); it names no new signal -- the rule
+    # ``REVIEWED_MORTGAGE_ATTRIBUTE_FRAGMENT`` already applies. The unit and
+    # ratio suffixes are how the planner spells the governed columns
+    # (``rate_spread_bps``, ``ltv``): "rate spread bps", "loan-to-value ratio".
+    # Live planner capture 2026-09-08.
+    r"(?:(?:average|avg|mean|median)\s+)?"
+    r"(?:opportunity\s+scores?|lead\s+scores?|rate\s+spreads?(?:\s+bps)?|"
+    r"equity(?:\s+percentage)?|ltv|loan[- ]?to[- ]?value(?:\s+ratios?)?|"
+    r"key\s+triggers?|triggers?|recommended\s+offers?|"
+    r"next[- ]?best\s+offers?|segment\s+memberships?|segments?|listing\s+status|"
     r"competitor\s+liens?|listed\s+for\s+sale|investor\s+status|"
     r"retention\s+risk|heloc\s+propensity)"
 )
 _REVIEWED_ANALYTIC_SIGNAL_LIST = (
     rf"{_REVIEWED_ANALYTIC_SIGNAL}(?:\s*,?\s*(?:and\s+)?{_REVIEWED_ANALYTIC_SIGNAL})*"
 )
+# Premodifiers a planner puts between "top" and the cohort noun. Every entry
+# is a governed Module 0 label: the eligibility flags, the segment display
+# names (gold_segment_population.sql meta -- "Investor / Multi-Property" is two
+# intents joined by the slash the label itself carries; "Retention Risk"), the
+# competitor-lien signal, and the retention population "current customers"
+# (CLAUDE.md domain rules: Retention/Recapture = current/former customers).
+#
+# Captured live 2026-09-08 from the governed space's own deep-analysis plan:
+# "the top current-customer borrowers in the retention-risk cohort", "the top
+# Investor / Multi-Property borrowers" and "the top current customers with
+# retention or recapture risk" each fell to the population-directive tail of
+# the criterion machine (a lead-in phrase, a population noun, a ``by``/``with``
+# connector), and every drop cost the sweep one section.
+_REVIEWED_COHORT_PREMODIFIER = (
+    r"(?:eligible|marketing[- ]?eligible|outreach[- ]?ready|highest[- ]?scoring|"
+    r"current(?:[- ]?customer)?|retention[- ]?risk|competitor[- ]?lien|"
+    rf"{_REVIEWED_PRODUCT_INTENT}(?:\s*/\s*{_REVIEWED_PRODUCT_INTENT})?)"
+)
 # "the top 20 (eligible) borrowers" — the cohort noun a planned deep analysis
-# names in nearly every sub-question.
+# names in nearly every sub-question. "top-tier" is the same ranked cohort
+# named by its band instead of its count.
 _REVIEWED_TOP_COHORT = (
-    r"(?:the\s+)?top\s+(?:[0-9]{1,3}\s+)?"
-    r"(?:eligible\s+|marketing[- ]eligible\s+|highest[- ]scoring\s+)?"
-    r"(?:borrowers?|leads?|candidates?|opportunities)"
+    r"(?:the\s+)?top(?:[- ]?tier)?\s+(?:[0-9]{1,3}\s+)?"
+    rf"(?:{_REVIEWED_COHORT_PREMODIFIER}\s+)?"
+    r"(?:borrowers?|leads?|candidates?|opportunities|customers?)"
+)
+# A ranked cohort scoped to a governed segment ("in the retention-risk
+# cohort", "within the retention-risk or competitor-lien cohorts").
+_REVIEWED_COHORT_SCOPE = (
+    rf"(?:\s+(?:in|within)\s+the\s+{_REVIEWED_COHORT_PREMODIFIER}"
+    rf"(?:\s+or\s+{_REVIEWED_COHORT_PREMODIFIER})?\s+(?:cohorts?|segments?))"
+)
+# The Retention Risk segment's own description bound to its population with
+# ``with`` ("current customers with retention or recapture risk"; the gold
+# label reads "Current-customer or recapture signals"). Measured 2026-09-08:
+# this phrase alone refused eight of nine planned lines and aborted the sweep.
+_REVIEWED_COHORT_SIGNAL_BINDING = (
+    r"(?:\s+with\s+(?:retention|recapture)(?:\s+or\s+(?:retention|recapture))?"
+    r"\s+(?:risk|signals?))"
+)
+# "ranked by opportunity score" / "by opportunity score": the participle is
+# how the planner sometimes says it, not what makes the ranking governed.
+_REVIEWED_RANKING_TAIL = rf"(?:\s+(?:ranked\s+)?by\s+{_REVIEWED_ANALYTIC_SIGNAL_LIST})"
+_REVIEWED_RANKING_ORDER_NOTE = (
+    r"(?:\s*,?\s*using\s+the\s+default\s+(?:ranking|sort)\s+order)"
+)
+# "..., and what are their governed signal columns: <list>" / "..., and for
+# each borrower what are the governed drivers visible in the data — <list>".
+# A colon splits the clause, so the list may be absent here and is scanned as
+# its own clause; an em-dash does not split, so the list is consumed inline.
+# Every noun is closed, and the list itself is the governed signal vocabulary.
+_REVIEWED_SIGNAL_COLUMNS_TAIL = (
+    r"(?:\s*,?\s*and\s+(?:for\s+each\s+(?:borrower|lead|candidate|customer|one)\s+)?"
+    r"what\s+(?:are|is)\s+(?:their|its|the)\s+"
+    r"(?:(?:governed\s+)?(?:signal\s+columns?|drivers?(?:\s+visible\s+in\s+the\s+data)?|"
+    r"signals?)"
+    rf"(?:\s*[\u2014\u2013-]\s*{_REVIEWED_ANALYTIC_SIGNAL_LIST})?"
+    rf"|{_REVIEWED_ANALYTIC_SIGNAL_LIST}))"
+)
+# Closed predicates a planner attaches to a counted population ("borrowers who
+# are both in-the-money and have at least 35% equity"). The equity floor is
+# the product's own HELOC-eligibility threshold, and its number slot is digits
+# only, like every other count in these grammars.
+_REVIEWED_POPULATION_PREDICATE = (
+    rf"(?:{_REVIEWED_PRODUCT_INTENT}|listed\s+for\s+sale|current\s+customers|"
+    r"have\s+(?:a\s+)?competitor\s+liens?|"
+    r"have\s+at\s+least\s+[0-9]{1,3}\s*(?:%|percent)\s+(?:home\s+)?equity)"
 )
 _REVIEWED_WHOLE_POPULATION = (
     r"(?:the\s+)?(?:full|entire|whole|overall|broader)\s+"
-    r"(?:eligible\s+)?(?:borrower\s+)?(?:population|pool|universe|portfolio|group)"
+    r"(?:(?:eligible|marketing[- ]?eligible|outreach[- ]?ready)\s+)?(?:borrower\s+)?"
+    r"(?:population|pool|universe|portfolio|group)"
 )
 
 _REVIEWED_READ_ONLY_ANALYTIC_PATTERNS: tuple[re.Pattern[str], ...] = (
@@ -122,10 +201,20 @@ _REVIEWED_READ_ONLY_ANALYTIC_PATTERNS: tuple[re.Pattern[str], ...] = (
         # user saw a single-screen answer instead of the deep decomposition.
         r"^(?:who|what)\s+(?:are|is)\s+"
         rf"{_REVIEWED_TOP_COHORT}"
-        r"(?:\s+ranked\s+by\s+" + _REVIEWED_ANALYTIC_SIGNAL_LIST + r")?"
-        r"(?:\s*,?\s*and\s+what\s+(?:are|is)\s+(?:their|its)\s+"
-        + _REVIEWED_ANALYTIC_SIGNAL_LIST
-        + r")?\s*\??$",
+        # Second live capture, 2026-09-08: the cohort may be scoped to a
+        # governed segment (before or after the ranking), bound to the
+        # retention signals, ranked with a bare ``by``, annotated with the
+        # default ranking order, and followed by the governed-signal-columns
+        # tail (colon or em-dash list). Each slot is a closed alternation; an
+        # unknown word in any of them breaks the match and the clause falls
+        # through to the strict criterion machine.
+        rf"{_REVIEWED_COHORT_SCOPE}?"
+        rf"{_REVIEWED_COHORT_SIGNAL_BINDING}?"
+        rf"{_REVIEWED_RANKING_TAIL}?"
+        rf"{_REVIEWED_COHORT_SCOPE}?"
+        rf"{_REVIEWED_RANKING_ORDER_NOTE}?"
+        rf"{_REVIEWED_SIGNAL_COLUMNS_TAIL}?"
+        r"\s*\??$",
         re.IGNORECASE,
     ),
     re.compile(
@@ -139,6 +228,48 @@ _REVIEWED_READ_ONLY_ANALYTIC_PATTERNS: tuple[re.Pattern[str], ...] = (
         r"(?:for|on|by|across)\s+"
         + _REVIEWED_ANALYTIC_SIGNAL_LIST
         + rf"(?:\s+(?:within|in|against|compared\s+to)\s+{_REVIEWED_WHOLE_POPULATION})?"
+        r"\s*\??$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        # Geography ranked by the count of a closed-predicate population, with
+        # that cohort's governed averages ("which states rank highest by count
+        # of borrowers who are both in-the-money and have at least 35% equity,
+        # and what are their average opportunity score, ..."). Live planner
+        # capture 2026-09-08: the bound-population capture read "rank highest
+        # by count of" as the criterion forming a "borrowers" audience.
+        rf"^(?:which|what)\s+{_REVIEWED_ANALYTIC_DIMENSION}\s+"
+        r"ranks?\s+(?:highest|lowest)\s+by\s+(?:count|number)\s+of\s+"
+        r"(?:borrowers?|leads?|candidates?|customers?|homeowners?)"
+        rf"(?:\s+who\s+(?:are\s+)?(?:both\s+)?{_REVIEWED_POPULATION_PREDICATE}"
+        rf"(?:\s+and\s+{_REVIEWED_POPULATION_PREDICATE})?)?"
+        rf"(?:\s*,?\s*and\s+what\s+(?:are|is)\s+(?:their|its)\s+"
+        rf"{_REVIEWED_ANALYTIC_SIGNAL_LIST})?"
+        r"\s*\??$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        # Top band against the whole population ("in the highest-volume
+        # states, how do top-tier opportunities (opportunity_score >= 75)
+        # compare with the full outreach-ready population on average
+        # opportunity score, ..."). Same live capture: the bound-population
+        # capture read the adjective "top-tier" as the formation verb ``tier``
+        # binding everything up to "population". The parenthetical is the
+        # governed score column with a digits-only bound; ``ln`` is the
+        # capital-I fold image of a sentence-initial ``In`` (see
+        # ``_REVIEWED_PRODUCT_INTENT``).
+        r"^(?:(?:in|ln)\s+the\s+(?:highest|top|largest)[- ]?volume\s+"
+        rf"{_REVIEWED_ANALYTIC_DIMENSION}\s*,\s*)?"
+        rf"how\s+do(?:es)?\s+{_REVIEWED_TOP_COHORT}"
+        # The same cohort scope and retention binding the ranked-shortlist
+        # shape takes: the planner reuses one cohort description across its
+        # sub-questions, so the phrase that refused there refuses here too.
+        rf"{_REVIEWED_COHORT_SCOPE}?"
+        rf"{_REVIEWED_COHORT_SIGNAL_BINDING}?"
+        r"(?:\s*\(\s*(?:opportunity|lead)[_ ]scores?\s*(?:>=|<=|>|<|=)\s*[0-9]{1,3}\s*\))?"
+        r"\s+compare\s+(?:with|to|against)\s+"
+        rf"{_REVIEWED_WHOLE_POPULATION}"
+        rf"(?:\s+(?:on|in\s+terms\s+of|across|by)\s+{_REVIEWED_ANALYTIC_SIGNAL_LIST})?"
         r"\s*\??$",
         re.IGNORECASE,
     ),
