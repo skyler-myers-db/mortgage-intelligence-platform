@@ -261,6 +261,13 @@ These are the sweep working as designed, not faults. Each shows under
   could not be verified … the prose was withheld and the verified rows are
   shown."** The rewrite failed too: the section shows a plain digest of its
   rows with its chart and table, and no prose from the model.
+- **"Genie's first draft used wording the output safety guard rejects; it
+  rewrote the narrative from the verified figures and the rewrite passed
+  the guard and verification."** The output guard is fail-closed and
+  refuses contact and targeting vocabulary; Genie got one rewrite under the
+  wording rule and it passed. Say nothing unless asked; if asked: "the same
+  filter that blocks a request for names blocks outreach language in an
+  answer, and the agent rewrites rather than argues."
 - **"Governed cross-check: this answer's framing overlaps N of 10 borrowers
   with the canonical opportunity ranking; … the Lead Queue holds the
   operational list."** Genie ranked over the whole marketable population;
