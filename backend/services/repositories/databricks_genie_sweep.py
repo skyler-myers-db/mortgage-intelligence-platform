@@ -81,6 +81,29 @@ def _has_rendered_prose(response: GenieMessageResponse) -> bool:
     return bool(response.table_rows)
 
 
+def _section_is_renderable(title: str | None, response: GenieMessageResponse) -> bool:
+    """Run the router's visible-text scan on ONE section before it is composed.
+
+    Every section now renders its own rows and chart labels, so the router
+    scans all of them. Scanning only at the router meant one unsafe cell in
+    one section (live 2026-09-08: a place value colliding with a protected
+    term) blocked the whole seven-part answer as ``policy_blocked``. The same
+    fail-closed scan applied per section drops just that section, disclosed
+    as a gap; the router scan stays as the final backstop.
+    """
+
+    from backend.services.genie_message_policy import (
+        genie_response_has_unsafe_visible_text,
+        genie_visible_text_unsafe,
+    )
+
+    if title and genie_visible_text_unsafe(title):
+        return False
+    if genie_visible_text_unsafe(response.question):
+        return False
+    return not genie_response_has_unsafe_visible_text(response)
+
+
 def _narrative_was_withheld(response: GenieMessageResponse) -> bool:
     proof = response.proof
     if proof is None:
@@ -614,12 +637,28 @@ def run_planned_sweep(
     sections: list[tuple[str, GenieMessageResponse]] = []
     gaps: list[str] = list(dropped)
     unfinished = 0
+    withheld_by_guard = 0
     for sub_question, response in zip(planned, results, strict=True):
         if (
             response is not None
             and response.source in _DATA_BEARING_SOURCES
             and _has_rendered_prose(response)
         ):
+            if not _section_is_renderable(titles.get(sub_question), response):
+                withheld_by_guard += 1
+                emit(
+                    log,
+                    "genie_sweep_section",
+                    dependency="genie",
+                    outcome="unsafe_visible_text",
+                    section_hash=_genie_question_hash(sub_question),
+                    row_count=response.row_count or 0,
+                )
+                gaps.append(
+                    "One planned section was withheld by the output safety guard "
+                    "and was omitted; the other sections are unaffected."
+                )
+                continue
             sections.append((sub_question, response))
         else:
             if response is None:
@@ -640,6 +679,7 @@ def run_planned_sweep(
         sections=len(sections),
         omitted=len(planned) - len(sections),
         unfinished=unfinished,
+        withheld_by_guard=withheld_by_guard,
         floor=_MIN_PLANNED,
     )
     if len(sections) < _MIN_PLANNED:

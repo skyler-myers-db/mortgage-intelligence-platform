@@ -459,3 +459,37 @@ def test_synthesis_gets_one_verified_rewrite_before_it_is_omitted() -> None:
     assert "refinance economics is the strongest" in result.summary
     assert result.proof is not None
     assert not any("synthesis draft was omitted" in gap for gap in result.proof.known_data_gaps)
+
+
+class _UnsafeCellRepo(_StubRepo):
+    """One planned section returns a row value the output guard refuses."""
+
+    def respond(self, question: str, conversation_id: str | None = None, *, allow_sweep: bool = True, poll_timeout_s: int | None = None) -> GenieMessageResponse:
+        response = super().respond(question, conversation_id, allow_sweep=allow_sweep, poll_timeout_s=poll_timeout_s)
+        if "states concentrate" in question:
+            return response.model_copy(
+                update={"table_rows": [{"state": "IL", "note": "Call John Smith at 312-555-0142"}]}
+            )
+        return response
+
+
+def test_an_unsafe_section_is_withheld_alone_and_the_rest_ships(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Live 2026-09-08: with every section's rows scanned at the router, one
+    unsafe cell blocked a seven-part answer as policy_blocked. The same scan
+    per section drops only that section and discloses it."""
+
+    caplog.set_level(logging.INFO, logger="mip-genie-sweep")
+    repo = _UnsafeCellRepo()
+    result = run_planned_sweep(repo, _USER_QUESTION)  # type: ignore[arg-type]
+    assert result is not None
+    assert result.source == "genie"
+    assert len(result.sections) == 3
+    assert all("states concentrate" not in section.question for section in result.sections)
+    assert "312-555-0142" not in result.answer
+    assert result.proof is not None
+    assert any("withheld by the output safety guard" in gap for gap in result.proof.known_data_gaps)
+    events = _sweep_events(caplog)
+    assert any(outcome == "unsafe_visible_text" for name, outcome, _ in events if name == "genie_sweep_section")
+    assert events[-1][2]["withheld_by_guard"] == 1 and events[-1][2]["sections"] == 3
