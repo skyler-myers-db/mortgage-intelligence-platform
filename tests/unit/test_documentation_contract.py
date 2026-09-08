@@ -7,6 +7,8 @@ import re
 from pathlib import Path
 from urllib.parse import unquote
 
+from tests.fixtures.deploy_script import deploy_entrypoint_text
+
 ROOT = Path(__file__).resolve().parents[2]
 
 CURRENT_OPERATOR_DOCS = [
@@ -250,7 +252,7 @@ def test_load_baseline_has_one_canonical_operator_doc() -> None:
 
 def test_live_smoke_script_uses_canonical_api_v1_by_default() -> None:
     source = _read(ROOT / "scripts" / "smoke_live.sh")
-    deploy_source = _read(ROOT / "scripts" / "deploy.sh")
+    deploy_source = deploy_entrypoint_text()
 
     assert 'API_PREFIX="${MIP_API_PREFIX:-/api/v1}"' in source
     assert "$API_PREFIX/health" in source

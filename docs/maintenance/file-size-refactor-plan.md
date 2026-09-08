@@ -166,3 +166,88 @@ All 36 import sites now import from the responsibility modules directly;
 there is no re-export facade, so the pile cannot silently regrow behind one
 import path. Pattern equivalence and detector behavior were verified against
 the pre-split module before deletion.
+
+## 2026-09-08 deploy command-of-record slicing addendum
+
+`scripts/deploy.sh` (5,080 lines) was covered only through 2026-08-15, so the
+gate has failed on every run since that date (`ALLOWLIST-EXPIRED:
+scripts/deploy.sh expired 2026-08-15`; last green `main` run 2026-08-13, first
+observed failure PR #232). The size gate is not a required check, which is how
+the red streak went unnoticed for three weeks.
+
+**Split completed with this decision — the allowlist entry is removed, not
+re-dated.** The 2026-07-23 plan above assumed the monolith was mostly helper
+functions. It is not: roughly 1,900 lines are functions and roughly 3,150 lines
+are top-level orchestration under the `step` banners, so extracting functions
+alone cannot reach the 900-line limit. The entrypoint is therefore sliced,
+verbatim and in reviewed order, into sourced files under `scripts/lib/`:
+
+| File | Lines | Original range | Content |
+|---|---|---|---|
+| `scripts/deploy.sh` | 480 | — | usage, strict mode, credential unexport, argument parsing, `step`/`run` helpers, `on_error` + `trap … ERR`, exact-source gate, interpreter resolution, deploy-wide state, the sourcing index, the completion banner |
+| `deploy_app_access_lifecycle.sh` | 166 | 391–551 | App identity pin, foreign-catalog binding remediation, sync-contract restore, treatment/release access convergence |
+| `deploy_app_release_lifecycle.sh` | 463 | 566–1022 | signed-blue restore, candidate quiesce/stop, captured App and Gateway ACL convergence, failed-deploy compensation, bootstrap-grant revocation |
+| `deploy_first_install_lifecycle.sh` | 339 | 1024–1356 | first-install journal capture/refresh/recovery/cleanup and `restore_rendered_sql_fail_closed` (the EXIT handler; the `trap … EXIT` statement stays in the entrypoint directly after this source line) |
+| `deploy_identity_lifecycle.sh` | 572 | 1359–1924 | deployment-control resolution, workspace auth binding, M2M/App token minting, bounded-identity wrappers |
+| `deploy_step_preflight_gates.sh` | 487 | 1929–2404 | step 0: preflight and configuration gates |
+| `deploy_step_automation_identities.sh` | 390 | 2406–2783 | step 0 (continued): automation credentials, tooling guard, signed lease, bootstrap recovery, journal read, rollback scope |
+| `deploy_step_signed_blue_proof.sh` | 219 | 2788–2996 | step 0a: signed-blue proof |
+| `deploy_step_bundle_apply.sh` | 428 | 3001–3416 | steps 0a–4: Genie resolution, runtime secrets, render, build, validate/plan/apply, Lakebase role convergence, audits |
+| `deploy_step_lakebase_and_uc_grants.sh` | 309 | 3421–3718 | steps 4b–4d: migration, synced-catalog quiesce, reviewed-function grants, treatment DDL, UC grants, secret scopes |
+| `deploy_step_app_promotion_and_refresh.sh` | 239 | 3723–3950 | steps 5–10: App promotion and capture, silver/gold refresh, lifecycle sync, KPI snapshot, Genie rebind |
+| `deploy_step_agentic_provisioning.sh` | 363 | 3955–4306 | step 10b: sync proof, verifier capture, historical retirement, Supervisor/proxy/Gateway provisioning |
+| `deploy_step_agentic_cutover.sh` | 493 | 4307–4788 | step 10b (continued): agent-proxy boundary proof and the signed cutover |
+| `deploy_step_agent_eval_and_smoke.sh` | 289 | 4793–5070 | steps 10c–11: Agent Evaluation, redeploy, live smoke, fail-closed restore |
+
+The four function libraries and the nine step files are contiguous line ranges
+of the previous file; nothing was reordered. The entrypoint keeps every other
+line in place and replaces each range with a `# shellcheck source=` directive
+plus the source line, so the reviewed step order is still readable top to
+bottom in `scripts/deploy.sh`. Because a sourced file runs in the sourcing
+shell, `set -euo pipefail`, `trap on_error ERR`, the EXIT compensation trap,
+`$0`, `--help`, the positional arguments, and every variable are the same
+objects they were; `./scripts/deploy.sh -t dev` executes the same statements in
+the same order in the same process. Two intentional additions: each step file
+begins with a guard that exits 2 before running anything when it is executed
+directly (a slice run on its own would otherwise start issuing CLI calls
+without strict mode, the exact-source gate, or the lease), and the only
+observable difference on an internal error path is that bash's own diagnostic
+names the step file and its local line.
+
+Proof recorded with this decision:
+
+- Expanding every slice back into the entrypoint (headers and directives
+  stripped) reproduces the pre-split file byte for byte:
+  `sha256 47bb8285619736b3f5d39a32e0f0ed938bf920c0d9a256eb51a04ac01ff36c13`,
+  234,658 bytes, on both sides.
+- `bash -n` passes on the entrypoint and all thirteen slices, which also proves
+  no cut lands inside a compound statement, heredoc, or continuation.
+- `shellcheck --severity=warning $(git ls-files '*.sh')` (the CI gate) passes.
+  Standalone analysis treats each file as its own scope, so step files carry a
+  file-level `disable=SC2034` (top-level state is read by later step files) and
+  two libraries carry the same note for the deploy-wide state their recovery
+  functions assign. SC2154, the check the gate exists for, stays active; a
+  whole-program `-a` pass was measured and rejected because it already reports
+  seven SC2034 findings on the unsplit file.
+- `python tools/check_file_sizes.py --warn 500 --fail 900` passes with no entry
+  for any of the fourteen files.
+- The sandboxed dry run and the deploy contract suite
+  (`tests/unit/test_deploy_dev_workflow_contract.py`) run against the sliced
+  layout; the contracts that pin orchestration order and counts read the
+  command-of-record through `tests/fixtures/deploy_script.py`
+  (`deploy_entrypoint_text()`), which expands the slices back into the
+  entrypoint so every existing index/count assertion keeps its meaning.
+
+The 2026-07-23 addendum's three named libraries map as follows: the App
+lifecycle library became the App-access, App-release, and first-install
+libraries; the identity library is `deploy_identity_lifecycle.sh`; the UC
+grant and job-refresh functions stayed beside their only call sites in
+`deploy_step_lakebase_and_uc_grants.sh` and
+`deploy_step_app_promotion_and_refresh.sh` rather than moving ahead of the
+orchestration, which keeps the slices verbatim.
+
+**Next forcing function.** All eighteen remaining allowlist entries — including
+`frontend/src/design-system/components.css` (6,618 lines) — expire on
+2026-09-15, one week after this decision, and the 2026-08-05 ratchet above says
+a file still oversize on that date blocks merge until it is split. Nothing in
+this addendum extends that date.
