@@ -330,6 +330,28 @@ def test_a_state_premodifier_needs_no_dimension() -> None:
     assert protected_prompt_match("Rank the top 50 Texas borrowers with a rate spread.") is None
 
 
+# A bare USPS code is a closed literal, not a screened capture: the screen
+# refuses a bare ``ms`` on purpose (multiple sclerosis or Mississippi), which
+# is right for a scope tail and would make ``MS`` differ from ``TX`` here. The
+# health reading stays with the term bank's carriers. ``IN`` and ``OR`` are the
+# codes that collide with the function words the place token excludes; ``IN``
+# and ``IL`` also arrive through the capital-I fold.
+@pytest.mark.parametrize("code", ("MS", "TX", "IN", "OR", "IL", "LA", "ME"))
+def test_a_bare_state_code_premodifier_answers_like_any_other(code: str) -> None:
+    assert protected_prompt_match(f"Rank {code} borrowers by opportunity score") is None, code
+    assert protected_prompt_match(f"Show me {code} borrowers with high equity.") is None, code
+
+
+def test_the_state_code_slot_does_not_disarm_the_term_bank() -> None:
+    assert protected_prompt_match("Show me MS patients with high equity.") == (
+        "protected_class_language"
+    )
+    # A two-letter token that is no USPS code is an unknown premodifier again.
+    # (``US`` is not the control: "Rank US borrowers" parses as the verb's
+    # object "rank us", which names nobody.)
+    assert protected_prompt_match("Rank ZZ borrowers by opportunity score") == "unreviewed_criterion"
+
+
 # --- The capital-I fold -----------------------------------------------------
 #
 # ``ascii_confusable_folds`` rewrites every ``I`` as ``l`` and the criterion

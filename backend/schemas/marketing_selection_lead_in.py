@@ -38,8 +38,9 @@ literal that reached the three patterns (84 guard-family test modules,
    "current"), a governed product-intent cohort ("in-the-money",
    "listed-for-sale", "heloc"), a reviewed mortgage attribute ("high
    equity", "high LTV"), a population noun compounding the head
-   ("borrower cohort"), or a governed place ("Indian Head Park
-   borrowers"), captured under the screened ``geoscope_`` prefix so
+   ("borrower cohort"), a bare USPS state code ("MS borrowers", a closed
+   literal list), or a governed place ("Indian Head Park borrowers"),
+   captured under the screened ``geoscope_`` prefix so
    :func:`reviewed_fullmatch` judges membership exactly as it does for a
    scope tail -- recognizing a place shape is not authority to admit it.
 
@@ -64,6 +65,7 @@ from backend.schemas.marketing_selection_vocabulary import (
     POPULATION_QUANTIFIER_LEAD_WORDS,
     REVIEWED_MORTGAGE_ATTRIBUTE_FRAGMENT,
 )
+from backend.schemas.usps import USPS_STATE_CODES
 
 _AUDIENCE_DIRECTIVE_PREFIX_FRAGMENT = (
     r"(?:(?:could|would|can|will)\s+you\s+)?"
@@ -157,8 +159,25 @@ _LEAD_IN_BRIDGE_NOUN = (
 # adjective or population noun cannot sit inside the capture at all.
 _LEAD_IN_PLACE_TOKEN = (
     rf"(?!(?:{_LEAD_IN_DETERMINER}|{POPULATION_QUANTIFIER_LEAD_WORDS}|"
-    rf"{_LEAD_IN_REVIEWED_ADJECTIVE}|{_LEAD_IN_BRIDGE_NOUN}|and|or|of|in|with|by|for|to)"
+    rf"{_LEAD_IN_REVIEWED_ADJECTIVE}|{_LEAD_IN_BRIDGE_NOUN}|and|of|with|by|for|to)"
     rf"(?![A-Za-z])){_LOCATION_TOKEN}"
+)
+# A bare USPS code in front of the population noun -- "MS borrowers", "TX
+# borrowers", the product's own per-state rollup wording -- is a closed
+# 51-literal list, not a screened capture. The screen deliberately refuses a
+# BARE ``ms`` (multiple sclerosis or Mississippi, nothing in the span says
+# which), which is right for a scope tail and wrong here: ``MS`` must be
+# indistinguishable from ``TX`` in this position
+# (``test_marketing_safety_two_letter_ms``), and the health reading is the
+# TERM bank's to catch through its carriers ("MS patients" still refuses).
+# Codes that start with I also spell their capital-I fold image.
+_LEAD_IN_STATE_CODE = (
+    "(?:"
+    + "|".join(
+        sorted({code.lower() for code in USPS_STATE_CODES}
+        | {"l" + code[1:].lower() for code in USPS_STATE_CODES if code.startswith("I")})
+    )
+    + ")"
 )
 
 
@@ -190,7 +209,7 @@ def _lead_in_population_prefix(name: str) -> str:
         rf"(?:{_LEAD_IN_COUNT}\s+)?"
         rf"(?:{_LEAD_IN_REVIEWED_ADJECTIVE}\s+){{0,3}}"
         rf"{cohort}"
-        rf"(?:{_lead_in_place(name)}\s+)?"
+        rf"(?:(?:{_LEAD_IN_STATE_CODE}|{_lead_in_place(name)})\s+)?"
         rf"{cohort}"
         rf"(?:{_LEAD_IN_REVIEWED_ADJECTIVE}\s+){{0,2}}"
         rf"(?:{_COREFERENCE_POPULATION}\s+)?"
