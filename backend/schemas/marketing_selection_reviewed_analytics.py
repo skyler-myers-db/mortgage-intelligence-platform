@@ -291,9 +291,10 @@ _REVIEWED_READ_ONLY_ANALYTIC_PATTERNS: tuple[re.Pattern[str], ...] = (
     ),
     re.compile(
         # Top band against the whole population ("in the highest-volume
-        # states, how do top-tier opportunities (opportunity_score at or above the high-opportunity floor)
-        # compare with the full outreach-ready population on average
-        # opportunity score, ..."). Same live capture: the bound-population
+        # states, how do top-tier opportunities (opportunity_score at or
+        # above the high-opportunity floor) compare with the full
+        # outreach-ready population on average opportunity score, ...").
+        # Same live capture: the bound-population
         # capture read the adjective "top-tier" as the formation verb ``tier``
         # binding everything up to "population". The parenthetical is the
         # governed score column with a digits-only bound; ``ln`` is the
