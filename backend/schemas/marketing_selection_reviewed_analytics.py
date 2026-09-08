@@ -61,6 +61,45 @@ _REVIEWED_WHOLE_POPULATION = (
     r"(?:the\s+)?(?:full|entire|whole|overall|broader)\s+"
     r"(?:eligible\s+)?(?:borrower\s+)?(?:population|pool|universe|portfolio|group)"
 )
+# A closed product-intent with-clause on a reviewed population ("customers
+# with an in-the-money refi", "borrowers with retention signals", "investor
+# borrowers with multiple properties" -- the Owner Link domain rule). Shared
+# by the cohort-listing shape and the cohort-versus-book comparison below.
+# The alternatives are a closed set; a free-text criterion ("with zyrplax",
+# "with eczema") does not match and falls through to the strict criterion
+# machine.
+#
+# ``signals?`` is in the second slot because a segment SIGNAL is the product's
+# own noun for its closed segment vocabulary
+# (``is_closed_reviewed_segment_signal_criterion``), yet "customers with
+# retention signals" refused as an unreviewed criterion while "customers with
+# retention" answered -- one governed noun apart (captured 2026-09-08).
+_REVIEWED_PRODUCT_INTENT_WITH_CLAUSE = (
+    r"with\s+(?:"
+    rf"(?:(?:a|an|the)\s+)?{_REVIEWED_PRODUCT_INTENT}"
+    rf"(?:[\s-]+(?:{_REVIEWED_PRODUCT_INTENT}|mortgage|loan|refi|refinance|position|"
+    r"offer|opportunity|signals?))?"
+    r"|multiple\s+properties"
+    r")"
+)
+# The Module 0 funnel stages a movement question can break down by: the lead
+# population the product builds, the approvals it gates, and the outreach it
+# hands off. Closed, like every list in this module.
+_REVIEWED_FUNNEL_STAGE = (
+    r"(?:lead\s+population|leads?|lead\s+queue|approvals?|outreach|campaigns?|"
+    r"contacts?|responses?|conversions?|handoffs?|(?:the\s+)?queue|segments?|"
+    r"states?|offers?)"
+)
+_REVIEWED_FUNNEL_STAGE_LIST = (
+    rf"{_REVIEWED_FUNNEL_STAGE}(?:\s*,?\s*(?:and\s+)?{_REVIEWED_FUNNEL_STAGE})*"
+)
+# A trailing time window ("over the last 30 days", "this month", "recently").
+# The count is digits only, the unit a closed list.
+_REVIEWED_TRAILING_WINDOW = (
+    r"(?:\s+(?:over|in|during|across)\s+the\s+(?:last|past|previous|trailing)\s+"
+    r"[0-9]{1,3}\s+(?:days?|weeks?|months?|quarters?)|"
+    r"\s+recently|\s+over\s+time|\s+this\s+(?:week|month|quarter))"
+)
 
 _REVIEWED_READ_ONLY_ANALYTIC_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(
@@ -148,11 +187,19 @@ _REVIEWED_READ_ONLY_ANALYTIC_PATTERNS: tuple[re.Pattern[str], ...] = (
         # "lead with ... for each segment" as an unreviewed audience decision;
         # it is the product's core read-only offer-mix question. Live persona
         # audit 2026-08-07 (marketing-leader).
-        r"^(?:which|what)\s+(?:next[- ]best\s+)?offers?\s+"
+        #
+        # The scope tail is OPTIONAL. "what offer should we lead with?" is the
+        # same question over the whole book, and without the tail it fell to
+        # the audience-decision net, which reads the VERB in "lead with" as the
+        # population noun ``lead`` bound to a ``with`` criterion connector,
+        # with ``offer`` supplying the governed outcome (captured 2026-09-08;
+        # "which offer should we recommend first and why?" answered). Every
+        # slot is still a closed alternation, so no criterion can ride in.
+        r"^(?:which|what)\s+(?:next[- ]?best\s+)?offers?\s+"
         r"(?:should|do|would)\s+(?:we|i|the\s+team)\s+"
-        r"(?:lead\s+with|use|present|recommend|make|pitch|prioriti[sz]e)\s+"
-        r"(?:for|to|with)\s+(?:each|every|the|our)?\s*"
-        rf"(?:{_REVIEWED_ANALYTIC_DIMENSION}|{_REVIEWED_ANALYTIC_POPULATION})"
+        r"(?:lead\s+with|use|present|recommend|make|pitch|prioriti[sz]e)"
+        r"(?:\s+(?:for|to|with)\s+(?:each|every|the|our)?\s*"
+        rf"(?:{_REVIEWED_ANALYTIC_DIMENSION}|{_REVIEWED_ANALYTIC_POPULATION}))?"
         r"(?:\s*,?\s*and\s+why)?$",
         re.IGNORECASE,
     ),
@@ -176,6 +223,16 @@ _REVIEWED_READ_ONLY_ANALYTIC_PATTERNS: tuple[re.Pattern[str], ...] = (
         # (sales-manager): the whole question was refused because of it.
         rf"(?:{_REVIEWED_PRODUCT_INTENT}(?:[\s-]+(?:{_REVIEWED_PRODUCT_INTENT}|mortgage|loan))?\s+)?"
         r"(?:candidates?|borrowers?|leads?|opportunities)"
+        # The ranking signal ("the top 15 borrowers BY OPPORTUNITY SCORE and
+        # explain why each one is a strong candidate"). Without it the whole
+        # sentence fell past this shape to the audience-decision net, which
+        # reads "borrowers by <signal>" as a population bound to a criterion
+        # connector behind an open lead-in (captured 2026-09-08; the
+        # signal-free twin and the bare ranked shape both answered). The
+        # signal list is the same closed governed-column vocabulary the
+        # ranked-shortlist shape reads, so an unknown signal ("by zyrplax")
+        # still breaks the shape and still fails closed.
+        rf"(?:\s+(?:ranked\s+by|ordered\s+by|sorted\s+by|by)\s+{_REVIEWED_ANALYTIC_SIGNAL_LIST})?"
         rf"{_REVIEWED_ANALYTIC_LOCATION}"
         r"(?:\s*,?\s*and\s+(?:explain|tell\s+me|describe|show)\s+"
         r"(?:me\s+)?why\s+(?:each|every)(?:\s+one)?\s+"
@@ -193,12 +250,85 @@ _REVIEWED_READ_ONLY_ANALYTIC_PATTERNS: tuple[re.Pattern[str], ...] = (
         r"^(?:show|find|list|rank|surface|give\s+me)\s+(?:me\s+)?(?:the\s+)?"
         rf"(?:{_REVIEWED_PRODUCT_INTENT}\s+)?"
         r"(?:customers?|borrowers?|leads?|candidates?|prospects?|homeowners?|owners?)\s+"
-        r"with\s+(?:"
-        rf"(?:(?:a|an|the)\s+)?{_REVIEWED_PRODUCT_INTENT}"
-        rf"(?:[\s-]+(?:{_REVIEWED_PRODUCT_INTENT}|mortgage|loan|refi|refinance|position|offer|opportunity))?"
-        r"|multiple\s+properties"
-        r")"
+        rf"{_REVIEWED_PRODUCT_INTENT_WITH_CLAUSE}"
         rf"{_REVIEWED_ANALYTIC_LOCATION}$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        # Cohort-versus-book comparison on governed measures ("how do our
+        # current customers with retention signals compare with the rest of
+        # our customers on rate spread and equity?"). The audience-decision
+        # net read "customers with retention signals compare ..." as a
+        # population bound to an open ``with`` criterion, because that net
+        # captures the criterion to the END of the clause and "retention
+        # signals compare with the rest ..." is not a reviewed attribute
+        # (captured 2026-09-08; "customers in the retention segment" answered,
+        # one connector apart). Every slot is closed: the cohort, its optional
+        # intent with-clause, the comparison baseline and the measure list.
+        r"^how\s+do(?:es)?\s+(?:(?:our|the|these)\s+)?(?:(?:current|existing|former)\s+)?"
+        rf"{_REVIEWED_ANALYTIC_POPULATION}"
+        rf"(?:\s+{_REVIEWED_PRODUCT_INTENT_WITH_CLAUSE})?"
+        r"\s+compare\s+(?:with|to|against|versus|vs)\s+"
+        r"(?:the\s+)?rest\s+of\s+(?:our|the)\s+"
+        r"(?:book|portfolio|population|pool|base|customers?|borrowers?|leads?|homeowners?)"
+        rf"(?:\s+on\s+{_REVIEWED_ANALYTIC_SIGNAL_LIST})?$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        # Lender strategy given a cohort's closed product-intent outcome ("what
+        # is the best move for a lender given these borrowers will not
+        # rate-and-term refi"). ``move`` is a NOUN here, but the
+        # bound-population capture reads any formation verb followed within 80
+        # characters by a population noun, so "move for a lender given these
+        # borrowers" captured "for a lender given these" as the criterion and
+        # refused while both halves answered alone (captured 2026-09-08). The
+        # strategy noun, the subordinator, the population and the negated
+        # intent are all closed alternations, so nothing rides the shape:
+        # "... will not take zyrplax" still falls through and still fails
+        # closed.
+        r"^what(?:'s|\s+is|\s+are|\s+would\s+be)\s+(?:the|our|a)\s+"
+        r"(?:best|right|next|smart(?:est)?|optimal|recommended)\s+"
+        r"(?:move|play|step|action|approach|strategy|offer|option|response)\s+"
+        r"for\s+(?:a|the|our)\s+lender\s+"
+        r"(?:given|since|if|when|because|now\s+that)\s+(?:that\s+)?"
+        r"(?:these|those|the|our|such)\s+"
+        r"(?:borrowers?|customers?|homeowners?|leads?|candidates?|prospects?)\s+"
+        r"(?:will\s+not|won't|cannot|can't|do\s+not|don't|are\s+not\s+going\s+to|"
+        r"are\s+unlikely\s+to)\s+"
+        rf"{_REVIEWED_PRODUCT_INTENT}"
+        rf"(?:[\s-]+(?:{_REVIEWED_PRODUCT_INTENT}|refi|refinance|mortgage|loan))?$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        # Funnel movement over a trailing window, by stage and by driver ("do
+        # a comprehensive review of how the funnel moved over the last 30 days
+        # across lead population, approvals, and outreach", "... and which
+        # segments and states drove the change"). ``moved`` is INTRANSITIVE
+        # here -- the funnel is its subject -- but the bound-population
+        # capture reads any formation verb followed within 80 characters by a
+        # population noun, so "moved over the last 30 days across lead
+        # population" captured "over the last 30 days across" as the criterion
+        # of ``lead`` and refused, while the ``changed`` twin answered
+        # (captured 2026-09-08). The preamble, the subject, the window, the
+        # stage list and the driver clause are all closed alternations.
+        r"^(?:(?:do|run|perform|conduct|complete)\s+(?:a|an)\s+"
+        r"(?:(?:deep|full|comprehensive|complete|thorough)\s+)?"
+        r"(?:analysis|review|assessment|study|deep[- ]?dive)\s+of\s+|"
+        r"(?:analy[sz]e|review|examine|assess|explain|summari[sz]e|describe)\s+)?"
+        # Both auxiliary orders: "how the funnel has moved" and the inverted
+        # "how has the funnel moved" the population-movement shape above
+        # already admits.
+        r"how\s+(?:(?:has|have|did|does|do)\s+)?(?:(?:the|our)\s+)?"
+        r"(?:(?:lead|conversion|sales|marketing)\s+)?"
+        r"(?:funnel|pipeline)\s+(?:(?:has|have)\s+)?"
+        r"(?:moved|changed|shifted|trended|performed|progressed)"
+        rf"{_REVIEWED_TRAILING_WINDOW}?"
+        rf"(?:\s+across\s+{_REVIEWED_FUNNEL_STAGE_LIST})?"
+        r"(?:\s*,?\s*and\s+which\s+"
+        rf"{_REVIEWED_ANALYTIC_DIMENSION}(?:\s*,?\s*(?:and\s+)?{_REVIEWED_ANALYTIC_DIMENSION})*"
+        r"\s+(?:drove|drives|is\s+driving|explains?|explained|accounts?\s+for|"
+        r"accounted\s+for|caused)\s+"
+        r"(?:the\s+|that\s+|this\s+)?(?:change|movement|shift|difference|delta|result)s?)?$",
         re.IGNORECASE,
     ),
     re.compile(
