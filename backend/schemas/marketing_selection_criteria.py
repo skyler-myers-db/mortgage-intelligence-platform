@@ -17,8 +17,12 @@ from backend.schemas.marketing_selection_contextual_criteria import (
     _SELF_CONTAINED_CRITERION_PATTERNS,
 )
 from backend.schemas.marketing_selection_reviewed_analytics import (
+    _COORDINATED_GROUPING_DIMENSION,
     _REVIEWED_ANALYSIS_PREAMBLE_RE,
+    _REVIEWED_RANKING_THEN_GROUP_SIZE_RE,
     _REVIEWED_READ_ONLY_ANALYTIC_PATTERNS,
+    _REVIEWED_WEIGHING_ADVERBIAL_RE,
+    _REVIEWED_WEIGHING_MEASURE_TAIL_RE,
     _REVIEWED_WHY_ASSESSMENT_PREAMBLE_RE,
 )
 from backend.schemas.marketing_selection_reviewed_workflows import (
@@ -483,12 +487,27 @@ def _is_reviewed_pre_population_binding(value: str) -> bool:
         # the imperative allow branches, so "We picked the top 50 borrowers
         # for the campaign." captured "the top 50" here and refused while the
         # count-free twin was answered. A count sizes the population; it is
-        # not the criterion. Only the determiner run is transparent: whatever
-        # remains after stripping must still full-match the reviewed
-        # vocabulary below, so "the top 50 left-handed" still fails closed.
+        # not the criterion. A population noun compounding the population
+        # noun behind it ("the ranked BORROWER cohort") and a grouping
+        # dimension coordinated with it ("which STATES AND segments") join for
+        # the same reason (measured 2026-09-08 on the governed space's own
+        # plan): the bound capture prefers a non-empty criterion over the
+        # empty parse when two population nouns touch, and both spans are
+        # closed vocabulary the capture already draws from. The population
+        # noun is transparent ONLY as the last token of the span -- the
+        # capture hands this reviewer the compound's first half alone -- and
+        # nowhere else, because a population noun in front of anything else
+        # is the head of a reviewed attribute, not a determiner: the unguarded
+        # form read "lead score" as the population "lead" plus an unknown
+        # "score" and refused two strings main answers. Only the determiner
+        # run is transparent: whatever remains after stripping must still
+        # full-match the reviewed vocabulary below, so "the top 50
+        # left-handed", "the zyrplax borrower", "the borrower zyrplax" and
+        # "which zyrplax states and" still fail closed.
         rf"^(?:(?:the|an?|these|those|all|any|our|your|only|reviewed|eligible|qualified|"
         rf"marketing[- ]?eligible|highest[- ]?scoring|prospective|current|"
-        rf"(?:which|what)(?:\s+of)?|{QUANTIFIED_POPULATION_FRAGMENT})(?:\s+|$))+",
+        rf"(?:which|what)(?:\s+of)?|{QUANTIFIED_POPULATION_FRAGMENT}|"
+        rf"{_COREFERENCE_POPULATION}(?=\s*$)|{_COORDINATED_GROUPING_DIMENSION})(?:\s+|$))+",
         "",
         criterion,
         flags=re.IGNORECASE,
@@ -501,6 +520,25 @@ def _is_reviewed_pre_population_binding(value: str) -> bool:
         or matches_reviewed_mortgage_attribute(criterion)
         or is_closed_reviewed_segment_signal_criterion(criterion)
     )
+
+
+def _is_reviewed_cross_clause_binding(match: re.Match[str], clause: str) -> bool:
+    """A bound-population span that is a closed clause boundary, not a criterion.
+
+    Both shapes hand their one open slot to the same reviewers every other
+    capture uses; a span that matches neither shape is judged as a criterion.
+    """
+
+    criterion = _normalize_criterion(match.group("criterion") or "")
+    ranking = _REVIEWED_RANKING_THEN_GROUP_SIZE_RE.fullmatch(criterion)
+    if ranking is not None:
+        attribute = _normalize_criterion(ranking.group("criterion"))
+        return matches_reviewed_mortgage_attribute(
+            attribute
+        ) or is_closed_reviewed_segment_signal_criterion(attribute)
+    if _REVIEWED_WEIGHING_ADVERBIAL_RE.fullmatch(criterion) is not None:
+        return _REVIEWED_WEIGHING_MEASURE_TAIL_RE.fullmatch(clause[match.end() :]) is not None
+    return False
 
 
 def _is_reviewed_directive_criterion(value: str) -> bool:
@@ -613,6 +651,8 @@ def _contains_unreviewed_audience_decision(
     if any(reviewed_fullmatch(pattern, clause) for pattern in _REVIEWED_AUDIENCE_DECISION_PATTERNS):
         return False
     for match in _AUDIENCE_FORMATION_BOUND_POPULATION_RE.finditer(clause):
+        if _is_reviewed_cross_clause_binding(match, clause):
+            continue
         if not _is_reviewed_pre_population_binding(match.group("criterion") or ""):
             return True
     directive = _AFFIRMATIVE_AUDIENCE_DIRECTIVE_RE.fullmatch(clause)

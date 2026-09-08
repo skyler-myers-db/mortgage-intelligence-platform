@@ -1269,10 +1269,14 @@ def test_text_only_all_segments_top_candidates_returns_driver_rich_answer() -> N
     assert "refinance-propensity model" in result.answer
     assert result.proof is not None
     assert result.proof.trusted is True
-    # The live path still tried an ask plus one governed SQL-repair retry;
-    # the canonical rescue answered, so the outcome-triggered planner never
-    # ran (it only fires on would-be refusals).
-    assert len(stub.ask_calls) == 2
+    # The essence question is a multi-part ask (ranked shortlist + what makes
+    # each one strong + which offer to make), so the deep-first planner runs
+    # BEFORE the live turn; its empty plan falls through to the live ask plus
+    # one governed SQL-repair retry, and the canonical rescue answers. The
+    # outcome-triggered planner never fires (it only runs on would-be
+    # refusals), so exactly three asks reach the space.
+    assert len(stub.ask_calls) == 3
+    assert stub.ask_calls[0].startswith("Plan, do not query")
 
 
 def test_pii_flagged_narrative_is_withheld_not_refused_for_canonical_shape() -> None:
@@ -1299,9 +1303,12 @@ def test_pii_flagged_narrative_is_withheld_not_refused_for_canonical_shape() -> 
     assert result.proof is not None
     assert any("withheld by the output safety guard" in gap for gap in result.proof.known_data_gaps)
     assert not any("returned no narrative" in gap for gap in result.proof.known_data_gaps)
-    # The repair retry runs even for guard-flagged narratives; the canonical
-    # rescue answered, so the outcome-triggered planner never ran.
-    assert len(stub.ask_calls) == 2
+    # Deep-first planner (its flagged prose parses to no plan), then the live
+    # ask, then the repair retry that runs even for guard-flagged narratives;
+    # the canonical rescue answered, so the outcome-triggered planner never
+    # ran.
+    assert len(stub.ask_calls) == 3
+    assert stub.ask_calls[0].startswith("Plan, do not query")
 
 
 def test_top_zip_question_uses_direct_canonical_gold_sql_without_genie_call() -> None:

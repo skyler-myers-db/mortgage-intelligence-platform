@@ -9,6 +9,10 @@ an unusable plan falls through to the honest single-turn pipeline.
 
 from __future__ import annotations
 
+import logging
+
+import pytest
+
 from backend.services.genie_answers import GenieMessageResponse, GenieProof
 from backend.services.repositories.databricks_genie_sweep import (
     _SWEEP_POLL_TIMEOUT_S,
@@ -42,6 +46,39 @@ def test_plan_parsing_accepts_numbered_and_bulleted_lines() -> None:
 def test_plan_parsing_handles_empty_and_prose_only_text() -> None:
     assert _parse_planned_questions(None) == []
     assert _parse_planned_questions("I cannot break this down.") == []
+
+
+# Live replay 2026-09-08 (paychex space, the user's own "full analysis"
+# question): the deep planner wrote nine lines of 160-336 characters, and the
+# parser's old 240-character cap dropped exactly the three longest — the
+# ranked shortlist with its signal columns, that cohort's comparison with the
+# population, and its offer mix with the signals behind each offer. The plan
+# fell to the deep floor and the sweep aborted to a single-screen answer.
+_LONG_PLAN_LINE = (
+    "3. What are the top 25 marketable borrowers overall by opportunity score, "
+    "with borrower_id, state, city, segment membership, opportunity score, "
+    "confidence, rate spread, equity percentage, listing status, investor flag, "
+    "competitor-lien flag, propensity triggers, recommended offer, and why-now "
+    "fields, and how do they compare with the full marketable population on the "
+    "same measures?"
+)
+
+
+def test_plan_parsing_keeps_long_deep_lines() -> None:
+    assert len(_LONG_PLAN_LINE) > 240
+    planned = _parse_planned_questions(
+        "1. How many borrowers are currently in-the-money?\n" + _LONG_PLAN_LINE + "\n",
+        deep=True,
+    )
+    assert len(planned) == 2
+    assert planned[1].startswith("What are the top 25 marketable borrowers")
+    assert planned[1].endswith("same measures?")
+
+
+def test_plan_parsing_still_rejects_runaway_lines() -> None:
+    runaway = "1. " + ("borrowers " * 200).strip() + "?"
+    assert len(runaway) > 1_500
+    assert _parse_planned_questions(runaway, deep=True) == []
 
 
 def test_planned_questions_are_guard_screened() -> None:
@@ -162,6 +199,68 @@ def test_sweep_returns_none_when_plan_unusable() -> None:
 def test_sweep_returns_none_when_too_few_sections_survive() -> None:
     repo = _StubRepo(failures=frozenset({"in-the-money", "states", "lead population"}))
     assert run_planned_sweep(repo, _USER_QUESTION) is None  # type: ignore[arg-type]
+
+
+def _sweep_events(caplog: pytest.LogCaptureFixture) -> list[tuple[str, str | None, dict]]:
+    return [
+        (
+            str(getattr(rec, "mip_event", "")),
+            getattr(rec, "mip_outcome", None),
+            dict(getattr(rec, "mip_extras", None) or {}),
+        )
+        for rec in caplog.records
+        if rec.name == "mip-genie-sweep"
+    ]
+
+
+def test_sweep_logs_plan_sections_and_result_without_content(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Both shipping gates were silent; the operator must be able to read
+    from the log how many lines the plan kept, what each section returned,
+    and which gate decided — with hashes and labels only, never text."""
+
+    caplog.set_level(logging.INFO, logger="mip-genie-sweep")
+    repo = _StubRepo(failures=frozenset({"states"}))
+    result = run_planned_sweep(repo, _USER_QUESTION)  # type: ignore[arg-type]
+    assert result is not None
+
+    events = _sweep_events(caplog)
+    names = [name for name, _, _ in events]
+    assert names[0] == "genie_sweep_plan"
+    assert names[-1] == "genie_sweep_result"
+    assert names.count("genie_sweep_section") == 4
+
+    _, plan_outcome, plan = events[0]
+    assert plan_outcome == "planned"
+    assert plan["planned"] == 4 and plan["dropped"] == 0 and plan["deep"] is False
+
+    section_outcomes = sorted(outcome for name, outcome, _ in events if name == "genie_sweep_section")
+    assert section_outcomes == ["genie", "genie", "genie", "policy_blocked"]
+    blocked = next(
+        extras for name, outcome, extras in events
+        if name == "genie_sweep_section" and outcome == "policy_blocked"
+    )
+    assert blocked["data_bearing"] is False
+
+    _, result_outcome, summary = events[-1]
+    assert result_outcome == "shipped"
+    assert summary["sections"] == 3 and summary["omitted"] == 1 and summary["unfinished"] == 0
+
+    # Labels and hashes only: no planned question text reaches the log.
+    for _, _, extras in events:
+        assert "states" not in " ".join(str(v) for v in extras.values())
+        assert all(len(str(extras.get(key, ""))) == 16 for key in ("question_hash", "section_hash") if key in extras)
+
+
+def test_sweep_logs_the_plan_floor_abort(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO, logger="mip-genie-sweep")
+    repo = _StubRepo(plan_text="1. Only one planned question here?\n")
+    assert run_planned_sweep(repo, _USER_QUESTION) is None  # type: ignore[arg-type]
+    events = _sweep_events(caplog)
+    assert [name for name, _, _ in events] == ["genie_sweep_plan"]
+    assert events[0][1] == "aborted_plan_floor"
+    assert events[0][2]["planned"] == 1 and events[0][2]["floor"] == 3
 
 
 _DEEP_QUESTION = (
