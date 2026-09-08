@@ -82,19 +82,21 @@ def test_python_requirements_use_real_transitive_lockfile() -> None:
     assert "-r requirements.txt" not in lock
     assert "-r requirements.in" in lock
     assert "uvicorn[standard]==0.47.0" in requirements_in
-    assert "databricks-sql-connector==4.2.6" in requirements_in
+    assert "databricks-sql-connector==4.4.0" in requirements_in
     assert "boto3==1.43.50" in requirements_in
     assert "pg8000==1.31.5" in requirements_in
-    assert "gitpython>=3.1.57,<4" in requirements_in
+    assert "gitpython>=3.1.59,<4" in requirements_in
     assert "cryptography==49.0.0" in requirements_in
     assert "aiohttp>=3.14.3" in requirements_in
     assert "pyasn1>=0.6.4,<1" in requirements_in
+    assert "sqlparse>=0.6.0,<1" in requirements_in
+    assert "thrift>=0.24.0,<0.25" in requirements_in
     for required_pin in (
         "boto3==1.43.50",
         "uvicorn==0.47.0",
-        "databricks-sql-connector==4.2.6",
+        "databricks-sql-connector==4.4.0",
         "pyjwt==2.13.0",
-        "gitpython==3.1.58",
+        "gitpython==3.1.62",
         "cryptography==49.0.0",
         "mlflow==3.15.1",
         "pyarrow==25.0.0",
@@ -103,6 +105,8 @@ def test_python_requirements_use_real_transitive_lockfile() -> None:
         "pg8000==1.31.5",
         "psycopg==3.3.4",
         "opentelemetry-sdk==1.41.1",
+        "sqlparse==0.6.0",
+        "thrift==0.24.0",
     ):
         assert required_pin in lock
 
