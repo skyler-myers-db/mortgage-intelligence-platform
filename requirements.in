@@ -6,7 +6,12 @@ pydantic-settings==2.7.1
 python-dotenv==1.2.2
 httpx==0.28.1
 databricks-sdk==0.103.0
-databricks-sql-connector==4.2.6
+# 4.4.0 is the first non-yanked release that admits thrift 0.24.0 (4.2.6 and
+# 4.3.0 cap thrift<0.23; 4.2.7 capped it <0.24 and was yanked). No first-party
+# module imports databricks.sql -- backend/services/databricks_sql.py drives
+# the warehouse through the REST Statement Execution API -- so the bump changes
+# installed wheels only.
+databricks-sql-connector==4.4.0
 # Required by tools/databricks/run_agent_eval.py. Deploy fails closed if
 # mlflow.genai.evaluate is missing so "MLflow Agent Evaluation" cannot be
 # claimed from local scorer metrics alone.
@@ -32,7 +37,7 @@ cryptography==49.0.0
 # and GHSA-94p4-4cq8-9g67.
 # MLflow and google-auth pull these transitively; pin the reviewed fixes so a
 # lock refresh cannot silently restore the vulnerable releases.
-gitpython>=3.1.57,<4  # adds GHSA-3f7w-8rr8-f37f
+gitpython>=3.1.59,<4  # 3.1.57 added GHSA-3f7w-8rr8-f37f; 3.1.59 adds PYSEC-2026-3785/3786/3787/3788
 pyasn1>=0.6.4,<1
 # Security floor for PYSEC-2026-3545/PYSEC-2026-3546/PYSEC-2026-3547. MLflow
 # pulls aiohttp transitively; keep the reviewed fix explicit so a lock
@@ -49,6 +54,15 @@ pyjwt==2.13.0
 # depends on Pillow; keep the transitive fix explicit so lock refreshes cannot
 # silently reintroduce the vulnerable image decoder.
 pillow==12.3.0
+# Security floor for PYSEC-2026-3696/3697/3698/3699 and GHSA-cfqr-cjx5-5jcm.
+# mlflow-skinny pulls sqlparse transitively and admits anything <1; keep the
+# reviewed fix explicit so a lock refresh cannot silently restore 0.5.x.
+sqlparse>=0.6.0,<1
+# Security floor for GHSA-6pjx-3pjc-mrj8, GHSA-8wv5-x4w7-5gww and
+# GHSA-hwrj-9rr4-24xh, all fixed in thrift 0.24.0. databricks-sql-connector
+# 4.4.0 already requires thrift>=0.24,<0.25; the explicit floor keeps the
+# contract first-party so a future connector pin cannot drag thrift back.
+thrift>=0.24.0,<0.25
 psycopg[binary]>=3.2.10,<3.4
 # libpq discards structured SQLSTATE fields on startup-auth failures. The
 # Lakebase credential fence and replication startup gate use pg8000 only for
