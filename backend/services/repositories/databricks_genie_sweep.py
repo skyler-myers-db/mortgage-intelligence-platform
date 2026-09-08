@@ -15,6 +15,7 @@ and formats; it never authors a question, a figure, or an analytic choice.
 
 from __future__ import annotations
 
+import logging
 import re
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
@@ -31,12 +32,21 @@ from backend.services.genie_message_policy import (
     identity_prompt_match,
     protected_prompt_match,
 )
+from backend.services.observability import emit
 from backend.services.repositories.databricks_genie_trust import _genie_question_hash
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from backend.services.repositories.databricks_genie import (
         DatabricksGenieRepository,
     )
+
+# Sweep observability. Both shipping gates used to be silent: an aborted
+# sweep fell through to the single-turn answer with nothing in the log to
+# say a plan was attempted, how many lines survived the screen, or why a
+# section was omitted (live persona probe 2026-08-10; live demo probe
+# 2026-09-08). Every event here carries labels and hashes only — never a
+# planned question's text, a narrative, or a row.
+log = logging.getLogger("mip-genie-sweep")
 
 # Sources that mean a sub-turn produced governed analytic content.
 _DATA_BEARING_SOURCES = frozenset({"genie", "trusted_sql"})
@@ -89,7 +99,21 @@ _MAX_PLANNED_DEEP = 10
 # offer call cannot be told in three queries.
 _MIN_PLANNED_DEEP = 5
 
-_PLAN_LINE_RE = re.compile(r"^\s*(?:\d{1,2}[.)]|[-*•])\s+(.{10,240})\s*$")
+# A planned line is one numbered or bulleted sentence. The upper bound only
+# rejects runaway text; it must not select which sub-questions survive. Live
+# replay 2026-09-08: with the cap at 240 characters the deep planner's three
+# LONGEST lines — the ranked shortlist with its signal columns, that cohort's
+# comparison with the population, and its offer mix with the signals behind
+# each offer — were dropped by the parser before the guard ever saw them
+# (they ran 250-430 characters), leaving the plan on or under the deep floor
+# and aborting the sweep to a single-screen answer. Every surviving line still
+# re-enters the full guard battery, so a longer line is more screened text,
+# not less. The router accepts prompts to 4,000 characters; 1,500 leaves the
+# runaway bound well inside that.
+_PLAN_LINE_MAX_CHARS = 1_500
+_PLAN_LINE_RE = re.compile(
+    r"^\s*(?:\d{1,2}[.)]|[-*•])\s+(.{10," + str(_PLAN_LINE_MAX_CHARS) + r"})\s*$"
+)
 
 # Closed signals for "this question demands a multi-part deep analysis".
 # Live capture 2026-08-08: a top-borrowers/why-each/best-offer ask ran as ONE
@@ -109,21 +133,31 @@ _DEPTH_PART_RES: tuple[re.Pattern[str], ...] = (
         r"\b(?:top|best|strongest|highest[- ]potential|most\s+promising|rank|curated?\s+list)\b",
         re.IGNORECASE,
     ),
-    # Per-item rationale.
+    # Per-item rationale. "What makes each one a strong candidate" and "why
+    # does each rank where it does" are the same ask as "why each" — the
+    # demo-question screen 2026-09-08 ran the VP's top-candidates question as
+    # a single turn because only the bare "why each" form was recognised.
     re.compile(
         r"\b(?:why\s+each|why\s+every|rationale|justif|reasoning|explain\s+why|"
-        r"evaluate\s+why)\b",
+        r"evaluate\s+why|what\s+makes\s+(?:each|every|them|these|those)|"
+        r"why\s+(?:does|do|is|are|did)\s+(?:each|every|they|these|those))\b",
         re.IGNORECASE,
     ),
-    # Offer recommendation.
+    # Offer recommendation: an adjective-qualified offer, or the direct
+    # "which offer should we make/recommend" call.
     re.compile(
-        r"\b(?:best|ideal|right|optimal|recommended?|curated)\s+(?:\w+\s+)?offers?\b",
+        r"\b(?:(?:best|ideal|right|optimal|recommended?|curated)\s+(?:\w+\s+)?offers?|"
+        r"(?:which|what)\s+offers?\s+(?:should|would|could|do|we)\b|"
+        r"offers?\s+(?:for|to)\s+each)\b",
         re.IGNORECASE,
     ),
-    # Comparative / portfolio context.
+    # Comparative / portfolio context, including the participle and
+    # "relative to / rest of the book" forms of the same comparison.
     re.compile(
-        r"\b(?:compare|versus|vs\.?|stand\s+out|against\s+the|percentile|"
-        r"across\s+the\s+(?:entire\s+)?(?:portfolio|book|population))\b",
+        r"\b(?:compar(?:e|ed|es|ison)|versus|vs\.?|stand\s+out|against\s+the|"
+        r"percentile|relative\s+to|"
+        r"(?:rest|remainder)\s+of\s+the\s+(?:portfolio|book|population|coverage)|"
+        r"(?:across|over)\s+the\s+(?:entire|whole)?\s*(?:portfolio|book|population))\b",
         re.IGNORECASE,
     ),
 )
@@ -383,18 +417,53 @@ def run_planned_sweep(
 
     started = time.monotonic()
     planned, dropped = plan_sub_questions(repo, question, deep=deep)
-    if len(planned) < (_MIN_PLANNED_DEEP if deep else _MIN_PLANNED):
+    plan_floor = _MIN_PLANNED_DEEP if deep else _MIN_PLANNED
+    emit(
+        log,
+        "genie_sweep_plan",
+        dependency="genie",
+        outcome="planned" if len(planned) >= plan_floor else "aborted_plan_floor",
+        duration_ms=round((time.monotonic() - started) * 1000, 1),
+        question_hash=_genie_question_hash(question),
+        deep=deep,
+        planned=len(planned),
+        dropped=len(dropped),
+        floor=plan_floor,
+    )
+    if len(planned) < plan_floor:
         return None
 
     def _one(sub_question: str) -> GenieMessageResponse | None:
+        turn_started = time.monotonic()
         try:
-            return repo.respond(
+            response = repo.respond(
                 sub_question,
                 allow_sweep=False,
                 poll_timeout_s=_SWEEP_POLL_TIMEOUT_S,
             )
-        except Exception:  # noqa: BLE001 - a failed theme becomes a disclosed gap
+        except Exception as exc:  # noqa: BLE001 - a failed theme becomes a disclosed gap
+            emit(
+                log,
+                "genie_sweep_section",
+                dependency="genie",
+                outcome="error",
+                duration_ms=round((time.monotonic() - turn_started) * 1000, 1),
+                section_hash=_genie_question_hash(sub_question),
+                error_type=type(exc).__name__,
+            )
             return None
+        emit(
+            log,
+            "genie_sweep_section",
+            dependency="genie",
+            outcome=response.source,
+            duration_ms=round((time.monotonic() - turn_started) * 1000, 1),
+            section_hash=_genie_question_hash(sub_question),
+            data_bearing=response.source in _DATA_BEARING_SOURCES,
+            rendered_prose=_has_rendered_prose(response),
+            row_count=response.row_count or 0,
+        )
+        return response
 
     results: list[GenieMessageResponse | None] = [None] * len(planned)
     with ThreadPoolExecutor(max_workers=_SWEEP_MAX_WORKERS) as pool:
@@ -419,6 +488,7 @@ def run_planned_sweep(
 
     sections: list[tuple[str, GenieMessageResponse]] = []
     gaps: list[str] = list(dropped)
+    unfinished = 0
     for sub_question, response in zip(planned, results, strict=True):
         if (
             response is not None
@@ -427,10 +497,26 @@ def run_planned_sweep(
         ):
             sections.append((sub_question, response))
         else:
+            if response is None:
+                unfinished += 1
             gaps.append(
                 f"The planned analysis '{sub_question}' returned no governed "
                 "result on this run and was omitted."
             )
+    emit(
+        log,
+        "genie_sweep_result",
+        dependency="genie",
+        outcome="shipped" if len(sections) >= _MIN_PLANNED else "aborted_section_floor",
+        duration_ms=round((time.monotonic() - started) * 1000, 1),
+        question_hash=_genie_question_hash(question),
+        deep=deep,
+        planned=len(planned),
+        sections=len(sections),
+        omitted=len(planned) - len(sections),
+        unfinished=unfinished,
+        floor=_MIN_PLANNED,
+    )
     if len(sections) < _MIN_PLANNED:
         return None
 

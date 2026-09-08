@@ -6282,6 +6282,19 @@ a.lineage-node__chip:focus-visible {
   line-height: var(--lh-body);
 }
 .genie-md-p--first { margin-top: 0; }
+/* Deep-research section titles: one bold run on its own line. A hairline
+   above and a step up in size make a ten-section sweep scannable. */
+.genie-md-p--heading {
+  margin-top: var(--sp-4);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--line-2);
+  font-size: var(--fs-14);
+  color: var(--text-1);
+}
+.genie-md-p--heading.genie-md-p--first {
+  padding-top: 0;
+  border-top: 0;
+}
 .genie-md-list {
   margin: var(--sp-2) 0 0;
   padding-left: var(--sp-5);
