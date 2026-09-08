@@ -393,9 +393,19 @@ jobs:
         #      _create_gateway_secret handler is byte-identical to 3.15.1's,
         #      so pip-audit's silence on 3.16.0 is a range artifact, not a
         #      fix. The ignore stays so a later range extension cannot redden
-        #      CI for a finding whose proof is unchanged.
+        #      CI for a finding whose proof is unchanged. Re-verified
+        #      2026-09-08 by AST-comparing the installed 3.15.1 and 3.16.0
+        #      copies: _create_gateway_secret is identical and raw_proxy
+        #      differs only in budget-accounting plumbing (no api_base
+        #      validation), so 3.16.0 carries the same code the advisory
+        #      describes.
         # Remove this ignore when the advisory gains a first_patched_version,
         # then move the mlflow pin to that release.
+        # Review date: 2026-10-08. Re-check with
+        #   gh api /advisories/GHSA-h7x2-h6g9-p789 --jq '.vulnerabilities[].first_patched_version'
+        # (null on 2026-09-08; advisory last updated 2026-08-31). If it is
+        # still null, re-confirm proofs 1 and 2 above and move this date
+        # forward; if it is set, retire the ignore and bump the pin instead.
         run: pip-audit -r requirements.txt --strict --ignore-vuln GHSA-h7x2-h6g9-p789
 
       - name: npm audit (frontend prod + dev deps)
