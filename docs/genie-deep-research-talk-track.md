@@ -49,9 +49,13 @@ ships whatever sections completed, disclosing the rest as gaps.
    the app was deployed from the UI button without the operator payload —
    redeploy with `tools/databricks/app_deploy_payload.py` (see the runbook
    in the deploy memory); every async Genie turn 500s in that state.
-2. The serverless warehouse `81d08d4fa2d799e9` is RUNNING (a stopped
-   warehouse also flips the pill to Degraded and adds a 40-second warm-start
-   to the first question).
+2. The serverless warehouse `81d08d4fa2d799e9` is RUNNING. It auto-stops
+   after **10 idle minutes**, and while it is stopped the health probe
+   reports warehouse and Genie down and the pill reads **Degraded** (seen
+   2026-09-08, twenty minutes after the last probe). Running Beat 0 five
+   minutes before you start wakes it and the pill returns to Live within
+   one health refresh; if the room runs long between questions, ask a
+   single-turn question every few minutes to keep it warm.
 3. Run the control question once (Beat 0). It warms the space and proves the
    round trip before anyone is watching.
 4. Have the Ask Genie route open with an empty thread ("New thread"); a
