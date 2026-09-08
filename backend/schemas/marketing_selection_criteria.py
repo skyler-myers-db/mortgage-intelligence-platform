@@ -21,6 +21,10 @@ from backend.schemas.marketing_selection_lead_in import (
     _AUDIENCE_FORMATION_COMMAND_FRAGMENT,
     AUDIENCE_LEAD_IN_FRAGMENT,
 )
+from backend.schemas.marketing_selection_ranking_readers import (
+    contains_unreviewed_ranking_adverbial,
+    is_reviewed_hyphenated_participle_prefix,
+)
 from backend.schemas.marketing_selection_reviewed_analytics import (
     _COORDINATED_GROUPING_DIMENSION,
     _REVIEWED_ANALYSIS_PREAMBLE_RE,
@@ -52,13 +56,31 @@ _AUDIENCE_DECISION_REFERENCE = (
     rf"(?:{_COREFERENCE_POPULATION}|groups?|cohorts?|audiences?|segments?|populations?|"
     rf"{_COREFERENCE_SUBJECT})"
 )
+# ``tier`` is a formation verb ("Tier the borrowers by rate spread") and half of
+# the cohort adjective "top-tier", and both embeddings below open on ``\b``,
+# which holds between the hyphen and the ``t``. Measured 2026-09-08 at
+# ``protected_prompt_match``: "How do top-tier opportunities compare against
+# the rest of the outreach-ready population?" parsed as the verb ``tier``
+# binding the criterion "opportunities compare against the rest of the
+# outreach-ready" to a "population" audience and refused as
+# ``unreviewed_criterion``, while "How do top opportunities compare ..." was
+# answered. The fixed-width negative lookbehind narrows the TERM (the same
+# move as the MS/Mississippi carrier): ``tier`` is not a verb directly behind
+# the WORD ``top`` plus a hyphen or one whitespace character. ``\b`` inside
+# the lookbehind keeps the shape closed to that word -- "laptop-tier the
+# borrowers" and "stop tier the borrowers" still read as the verb -- and the
+# clause-initial command fragment above is untouched, so "Tier the borrowers
+# with eczema" keeps its owner. The same misparse survives for other tier
+# compounds ("second-tier", "mid-tier") and for "top-ranked" (``ranked``);
+# each is a separate closed narrowing with its own differential, not taken
+# here.
 _AUDIENCE_FORMATION_ACTION_FRAGMENT = (
     r"(?:select(?:s|ed|ing)?|choos(?:e|es|ing)|chose|chosen|"
     r"pick(?:s|ed|ing)?|target(?:s|ed|ing)?|includ(?:e|es|ed|ing)|"
     r"prioritiz(?:e|es|ed|ing)|favor(?:s|ed|ing)?|rank(?:s|ed|ing)?|"
     r"order(?:s|ed|ing)?|sort(?:s|ed|ing)?|reserv(?:e|es|ed|ing)|"
     r"sequenc(?:e|es|ed|ing)|group(?:s|ed|ing)?|elevat(?:e|es|ed|ing)|"
-    r"tier(?:s|ed|ing)?|screen(?:s|ed|ing)?|queue(?:s|d|ing)?|queuing|"
+    r"(?<!\btop[-\s])tier(?:s|ed|ing)?|screen(?:s|ed|ing)?|queue(?:s|d|ing)?|queuing|"
     r"advanc(?:e|es|ed|ing)|shortlist(?:s|ed|ing)?|nominat(?:e|es|ed|ing)|"
     r"enroll(?:s|ed|ing)?|mov(?:e|es|ed|ing)|transfer(?:s|red|ring)?|"
     r"admit(?:s|ted|ting)?|plac(?:e|es|ed|ing)|add(?:s|ed|ing)?|put(?:s|ting)?|"
@@ -650,10 +672,22 @@ def _contains_unreviewed_audience_decision(
     if any(reviewed_fullmatch(pattern, clause) for pattern in _REVIEWED_AUDIENCE_DECISION_PATTERNS):
         return False
     for match in _AUDIENCE_FORMATION_BOUND_POPULATION_RE.finditer(clause):
+        # The capture starts AT the participle, so a hyphen-attached left half
+        # ("zyrplax-ranked borrowers") sits outside every span it hands to the
+        # reviewers below; it is judged here, first, on its own closed grammar.
+        if not is_reviewed_hyphenated_participle_prefix(match, clause):
+            return True
         if _is_reviewed_cross_clause_binding(match, clause):
             continue
         if not _is_reviewed_pre_population_binding(match.group("criterion") or ""):
             return True
+    # A ranking or weighing adverbial with no population noun inside it ("when
+    # balancing zyrplax", "when ranked by rosacea") never reaches the capture
+    # above and is none of the suffix shapes the candidate loop below reads.
+    if _AUDIENCE_DECISION_REFERENCE_RE.search(clause) is not None and (
+        contains_unreviewed_ranking_adverbial(clause)
+    ):
+        return True
     directive = _AFFIRMATIVE_AUDIENCE_DIRECTIVE_RE.fullmatch(clause)
     if directive is not None:
         before_population = re.sub(
@@ -752,12 +786,17 @@ def build_selection_context_pattern(*, population_re_fragment: str) -> re.Patter
     """Build the bounded audience-selection marker for the criterion state machine."""
 
     audience = rf"(?:{population_re_fragment}|groups?|cohorts?|audiences?|segments?|populations?)"
+    # A private copy of the formation verbs, so it carries the same ``top-tier``
+    # lookbehind as ``_AUDIENCE_FORMATION_ACTION_FRAGMENT``: the adjective must
+    # not mark a selection context either (measured 2026-09-08: "How do top-tier
+    # borrowers compare with the population? They have zyrplax." refused while
+    # the tier-free twin was answered).
     ordinary_action = (
         r"(?:select(?:s|ed|ing)?|choos(?:e|es|ing)|chose|chosen|pick(?:s|ed|ing)?|"
         r"target(?:s|ed|ing)?|includ(?:e|es|ed|ing)|prioritiz(?:e|es|ed|ing)|"
         r"favor(?:s|ed|ing)?|rank(?:s|ed|ing)?|order(?:s|ed|ing)?|sort(?:s|ed|ing)?|"
         r"reserv(?:e|es|ed|ing)|sequenc(?:e|es|ed|ing)|group(?:s|ed|ing)?|"
-        r"elevat(?:e|es|ed|ing)|tier(?:s|ed|ing)?|screen(?:s|ed|ing)?|"
+        r"elevat(?:e|es|ed|ing)|(?<!\btop[-\s])tier(?:s|ed|ing)?|screen(?:s|ed|ing)?|"
         r"queue(?:s|d|ing)?|queuing|advanc(?:e|es|ed|ing)|shortlist(?:s|ed|ing)?|"
         r"nominat(?:e|es|ed|ing)|enroll(?:s|ed|ing)?)"
     )
