@@ -89,7 +89,21 @@ _MAX_PLANNED_DEEP = 10
 # offer call cannot be told in three queries.
 _MIN_PLANNED_DEEP = 5
 
-_PLAN_LINE_RE = re.compile(r"^\s*(?:\d{1,2}[.)]|[-*•])\s+(.{10,240})\s*$")
+# A planned line is one numbered or bulleted sentence. The upper bound only
+# rejects runaway text; it must not select which sub-questions survive. Live
+# replay 2026-09-08: with the cap at 240 characters the deep planner's three
+# LONGEST lines — the ranked shortlist with its signal columns, that cohort's
+# comparison with the population, and its offer mix with the signals behind
+# each offer — were dropped by the parser before the guard ever saw them
+# (they ran 250-430 characters), leaving the plan on or under the deep floor
+# and aborting the sweep to a single-screen answer. Every surviving line still
+# re-enters the full guard battery, so a longer line is more screened text,
+# not less. The router accepts prompts to 4,000 characters; 1,500 leaves the
+# runaway bound well inside that.
+_PLAN_LINE_MAX_CHARS = 1_500
+_PLAN_LINE_RE = re.compile(
+    r"^\s*(?:\d{1,2}[.)]|[-*•])\s+(.{10," + str(_PLAN_LINE_MAX_CHARS) + r"})\s*$"
+)
 
 # Closed signals for "this question demands a multi-part deep analysis".
 # Live capture 2026-08-08: a top-borrowers/why-each/best-offer ask ran as ONE
@@ -109,21 +123,31 @@ _DEPTH_PART_RES: tuple[re.Pattern[str], ...] = (
         r"\b(?:top|best|strongest|highest[- ]potential|most\s+promising|rank|curated?\s+list)\b",
         re.IGNORECASE,
     ),
-    # Per-item rationale.
+    # Per-item rationale. "What makes each one a strong candidate" and "why
+    # does each rank where it does" are the same ask as "why each" — the
+    # demo-question screen 2026-09-08 ran the VP's top-candidates question as
+    # a single turn because only the bare "why each" form was recognised.
     re.compile(
         r"\b(?:why\s+each|why\s+every|rationale|justif|reasoning|explain\s+why|"
-        r"evaluate\s+why)\b",
+        r"evaluate\s+why|what\s+makes\s+(?:each|every|them|these|those)|"
+        r"why\s+(?:does|do|is|are|did)\s+(?:each|every|they|these|those))\b",
         re.IGNORECASE,
     ),
-    # Offer recommendation.
+    # Offer recommendation: an adjective-qualified offer, or the direct
+    # "which offer should we make/recommend" call.
     re.compile(
-        r"\b(?:best|ideal|right|optimal|recommended?|curated)\s+(?:\w+\s+)?offers?\b",
+        r"\b(?:(?:best|ideal|right|optimal|recommended?|curated)\s+(?:\w+\s+)?offers?|"
+        r"(?:which|what)\s+offers?\s+(?:should|would|could|do|we)\b|"
+        r"offers?\s+(?:for|to)\s+each)\b",
         re.IGNORECASE,
     ),
-    # Comparative / portfolio context.
+    # Comparative / portfolio context, including the participle and
+    # "relative to / rest of the book" forms of the same comparison.
     re.compile(
-        r"\b(?:compare|versus|vs\.?|stand\s+out|against\s+the|percentile|"
-        r"across\s+the\s+(?:entire\s+)?(?:portfolio|book|population))\b",
+        r"\b(?:compar(?:e|ed|es|ison)|versus|vs\.?|stand\s+out|against\s+the|"
+        r"percentile|relative\s+to|"
+        r"(?:rest|remainder)\s+of\s+the\s+(?:portfolio|book|population|coverage)|"
+        r"(?:across|over)\s+the\s+(?:entire|whole)?\s*(?:portfolio|book|population))\b",
         re.IGNORECASE,
     ),
 )

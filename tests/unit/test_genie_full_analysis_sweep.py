@@ -44,6 +44,39 @@ def test_plan_parsing_handles_empty_and_prose_only_text() -> None:
     assert _parse_planned_questions("I cannot break this down.") == []
 
 
+# Live replay 2026-09-08 (paychex space, the user's own "full analysis"
+# question): the deep planner wrote nine lines of 160-336 characters, and the
+# parser's old 240-character cap dropped exactly the three longest — the
+# ranked shortlist with its signal columns, that cohort's comparison with the
+# population, and its offer mix with the signals behind each offer. The plan
+# fell to the deep floor and the sweep aborted to a single-screen answer.
+_LONG_PLAN_LINE = (
+    "3. What are the top 25 marketable borrowers overall by opportunity score, "
+    "with borrower_id, state, city, segment membership, opportunity score, "
+    "confidence, rate spread, equity percentage, listing status, investor flag, "
+    "competitor-lien flag, propensity triggers, recommended offer, and why-now "
+    "fields, and how do they compare with the full marketable population on the "
+    "same measures?"
+)
+
+
+def test_plan_parsing_keeps_long_deep_lines() -> None:
+    assert len(_LONG_PLAN_LINE) > 240
+    planned = _parse_planned_questions(
+        "1. How many borrowers are currently in-the-money?\n" + _LONG_PLAN_LINE + "\n",
+        deep=True,
+    )
+    assert len(planned) == 2
+    assert planned[1].startswith("What are the top 25 marketable borrowers")
+    assert planned[1].endswith("same measures?")
+
+
+def test_plan_parsing_still_rejects_runaway_lines() -> None:
+    runaway = "1. " + ("borrowers " * 200).strip() + "?"
+    assert len(runaway) > 1_500
+    assert _parse_planned_questions(runaway, deep=True) == []
+
+
 def test_planned_questions_are_guard_screened() -> None:
     assert _planned_question_guard_hit(
         "How many borrowers are currently in-the-money?"

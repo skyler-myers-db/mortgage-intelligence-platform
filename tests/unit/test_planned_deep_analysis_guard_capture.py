@@ -99,6 +99,33 @@ def test_persona_depth_phrasings_route_to_the_deep_sweep(question: str) -> None:
     assert is_deep_analysis_request(question)
 
 
+# Multi-part asks with NO explicit depth word: the VP's top-candidates question
+# (demo screen 2026-09-08) carries a ranked shortlist, a per-item rationale and
+# an offer call, yet ran as a single turn because the rationale was phrased
+# "what makes each one" (not "why each"), the offer call "which offer should we
+# make" (no adjective), and the comparison "compared with the rest of the
+# population" (a participle, not the bare verb).
+DEMO_MULTI_PART_PROBES = (
+    "Who are the top 15 borrower candidates across all segments overall, what "
+    "makes each one such a strong candidate compared with the rest of the "
+    "population, and which offer should we make to each and why?",
+    "Show the top borrowers and tell me what makes each one a strong candidate.",
+    "Rank the top opportunities and say which offer we should make to each.",
+    "Which borrowers stand out relative to the rest of the book, and why does "
+    "each rank where it does?",
+    "List the strongest candidates and the offer for each.",
+)
+
+
+@pytest.mark.parametrize("question", DEMO_MULTI_PART_PROBES)
+def test_multi_part_demo_phrasings_route_to_the_deep_sweep(question: str) -> None:
+    from backend.services.repositories.databricks_genie_sweep import (
+        is_deep_analysis_request,
+    )
+
+    assert is_deep_analysis_request(question)
+
+
 @pytest.mark.parametrize(
     "question",
     [
@@ -155,6 +182,11 @@ def test_investigative_phrasings_route_to_the_deep_sweep(phrasing: str) -> None:
         "Show borrowers by state.",
         "What is the average equity percentage?",
         "How many leads do we have?",
+        # One analytic part each: an offer call alone, a comparison alone, a
+        # rationale alone. The widened part vocabulary must not promote them.
+        "Which offer should we make to borrower B-0000000000001?",
+        "What is the average rate spread compared with last month?",
+        "What makes each segment different?",
     ],
 )
 def test_single_part_asks_stay_on_the_single_turn_path(question: str) -> None:
