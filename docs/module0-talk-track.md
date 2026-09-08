@@ -210,6 +210,10 @@ Show:
 
 Route: Ask Genie.
 
+For the deep-research version of this beat — Genie planning and executing
+its own multi-part sweep, with verbatim questions verified live per persona —
+use [genie-deep-research-talk-track.md](genie-deep-research-talk-track.md).
+
 Recommended prompt:
 
 > "Which ZIPs have the most in-the-money refinance candidates?"
