@@ -12,6 +12,7 @@ from backend.services.databricks_sql_helpers import qualify
 from backend.services.genie_answers import (
     GenieMessageResponse,
     GenieProof,
+    GenieReasoningStep,
     default_follow_up_questions,
 )
 from backend.services.genie_client import (
@@ -143,6 +144,7 @@ from backend.services.repositories.databricks_genie_visualization import (
     _row_columns,  # noqa: F401 - compatibility re-export
     _text_columns,  # noqa: F401 - compatibility re-export
     _value_column,  # noqa: F401 - compatibility re-export
+    augment_cohort_label,
 )
 from backend.services.resilience import DependencyDownError
 
@@ -303,6 +305,7 @@ class DatabricksGenieRepository:
             sql_client=self._sql_client,
             repaired=repaired,
         )
+        adapted = self._rewrite_unverified_narrative(question, result, adapted)
         if allow_sweep and adapted.source == "policy_blocked":
             # Outcome-triggered, no keywords: no guardrail-passing question is
             # allowed to end in a governed refusal until the live space has
@@ -364,6 +367,7 @@ class DatabricksGenieRepository:
             sql_client=self._sql_client,
             repaired=repaired,
         )
+        adapted = self._rewrite_unverified_narrative(question, result, adapted)
         if adapted.source == "policy_blocked":
             # Same outcome-triggered planner as :meth:`respond`.
             sweep = run_planned_sweep(self, question)
@@ -380,6 +384,65 @@ class DatabricksGenieRepository:
         """
         result = self._genie.ask(prompt, conversation_id=None)
         return result.answer_text
+
+    def _rewrite_unverified_narrative(
+        self,
+        question: str,
+        result: GenieResponse,
+        adapted: GenieMessageResponse,
+    ) -> GenieMessageResponse:
+        """One live rewrite when the claims verifier withheld Genie's prose.
+
+        Only for a data-bearing live turn whose narrative failed numeric
+        verification. The rewrite re-enters the same verification (numeric
+        claims against the rows, PII, output safety); a rewrite that fails
+        leaves the plain row digest in place. Never authors text server-side.
+        """
+
+        from backend.services.genie_message_policy import genie_visible_text_unsafe
+
+        proof = adapted.proof
+        rows = adapted.table_rows or []
+        if adapted.source != "genie" or proof is None or not rows:
+            return adapted
+        if not any(_UNVERIFIED_CLAIMS_GAP_MARKER in gap for gap in proof.known_data_gaps):
+            return adapted
+        try:
+            turn = self._genie.ask(
+                _narrative_repair_prompt(question, rows),
+                conversation_id=result.conversation_id,
+            )
+        except (DependencyDownError, GenieClientError):
+            return adapted
+        draft = (turn.answer_text or "").strip()
+        if not draft:
+            return adapted
+        if _unsupported_answer_numeric_claims(draft, rows, question):
+            return adapted
+        if _answer_text_contains_pii(draft) or genie_visible_text_unsafe(draft):
+            return adapted
+        gaps = [gap for gap in proof.known_data_gaps if _UNVERIFIED_CLAIMS_GAP_MARKER not in gap]
+        gaps.append(_NARRATIVE_REWRITTEN_GAP)
+        step = GenieReasoningStep(
+            kind="verify",
+            content=(
+                "Genie's first draft cited a figure outside its returned rows; it "
+                "rewrote the summary from the verified figures and the rewrite "
+                "was verified against the same rows."
+            ),
+        )
+        return adapted.model_copy(
+            update={
+                "answer": _ensure_answer_cites_source(draft, adapted.trusted_assets),
+                "proof": proof.model_copy(
+                    update={
+                        "known_data_gaps": gaps,
+                        "reasoning_trace": [*proof.reasoning_trace, step],
+                    }
+                ),
+                "reasoning_trace": [*adapted.reasoning_trace, step],
+            }
+        )
 
     def _repair_text_only_genie_answer(
         self,
@@ -700,6 +763,10 @@ def _adapt_genie_response(
         proof = proof.model_copy(
             update={"known_data_gaps": [*proof.known_data_gaps, *extra_gaps]}
         )
+    # Presentation only: a flag co-occurrence result gets a readable cohort
+    # label so its chart and table can be told apart row by row. The claims
+    # verification above already ran on the untouched rows.
+    rows = augment_cohort_label(rows)
     visualization = _plan_genie_visualization(question, rows)
     actions = _suggest_genie_actions(
         question=question,
@@ -938,43 +1005,125 @@ def _humanize_column(column: str) -> str:
     return column.replace("_", " ").strip()
 
 
+_UNIT_SUFFIXES = (
+    ("_bps", " bps"),
+    ("_pct", "%"),
+    ("_percent", "%"),
+    ("_percentage", "%"),
+)
+
+
+def _plain_label(column: str) -> tuple[str, str]:
+    """(business label, unit suffix) for a result column name."""
+
+    lower = column.lower()
+    suffix = ""
+    for marker, unit in _UNIT_SUFFIXES:
+        if lower.endswith(marker):
+            lower = lower[: -len(marker)]
+            suffix = unit
+            break
+    words = lower.replace("_", " ").split()
+    replacements = {"avg": "average", "pct": "percent", "cnt": "count", "num": "number"}
+    words = [replacements.get(word, word) for word in words]
+    return (" ".join(words).strip() or column, suffix)
+
+
+def _plain_pairs(row: dict[str, Any], *, limit: int) -> list[str]:
+    pairs: list[str] = []
+    for column, value in row.items():
+        if value is None:
+            continue
+        label, unit = _plain_label(column)
+        text = _format_cell(value, column)
+        if unit == "%" and not text.endswith("%"):
+            text = f"{text}%"
+        elif unit and not text.endswith(unit):
+            text = f"{text}{unit}"
+        pairs.append(f"{label} {text}")
+        if len(pairs) >= limit:
+            break
+    return pairs
+
+
+def _sentence_join(parts: list[str]) -> str:
+    if not parts:
+        return ""
+    if len(parts) == 1:
+        return parts[0]
+    return ", ".join(parts[:-1]) + " and " + parts[-1]
+
+
 def _factual_row_summary(
     rows: list[dict[str, Any]] | None,
     trusted_assets: list[str],
     *,
     withheld_reason: str,
 ) -> str:
-    """Render the verified rows plainly when the model's prose is withheld."""
+    """Plain-language lead over the verified rows when the model's prose is withheld.
 
-    asset = trusted_assets[0] if trusted_assets else "the trusted assets"
-    disclosure = f"Genie's draft narrative was withheld: {withheld_reason}"
+    Written for the business reader: no asset names, no query talk, and no
+    notice about the withheld draft in the body. The reason the draft was
+    withheld is disclosed where operators look for it — the proof drawer's
+    known data gaps and the process trace — never as body prose (user
+    feedback 2026-09-08: the previous wording read as internal pipeline
+    thoughts, not a report).
+    """
+
+    del trusted_assets, withheld_reason  # disclosed in the proof, not the prose
     if not rows:
-        return (
-            f"The governed query against {asset} returned no rows. {disclosure}"
-        )
+        return "This analysis returned no matching rows."
     row_count = len(rows)
     if row_count == 1:
-        pairs = [
-            f"{_humanize_column(column)}: {_format_cell(value, column)}"
-            for column, value in rows[0].items()
-            if value is not None
-        ]
-        body = "; ".join(pairs[:8])
-        return (
-            f"From {asset}, the governed query returned {body}. "
-            f"These figures come straight from the returned row. {disclosure}"
-        )
-    first = rows[0]
-    headline_pairs = [
-        f"{_humanize_column(column)}: {_format_cell(value, column)}"
-        for column, value in first.items()
-        if value is not None
-    ]
-    headline = "; ".join(headline_pairs[:5])
+        pairs = _plain_pairs(rows[0], limit=8)
+        if not pairs:
+            return "One row was returned; see the table below."
+        lead = _sentence_join(pairs)
+        return f"{lead[0].upper()}{lead[1:]}."
+    lead = _sentence_join(_plain_pairs(rows[0], limit=5))
+    opener = f"{row_count:,} results, shown in the chart and table below."
+    if not lead:
+        return opener
+    return f"{opener} The leading row: {lead}."
+
+
+_NARRATIVE_REPAIR_MAX_ROWS = 12
+_NARRATIVE_REPAIR_MAX_COLS = 8
+_UNVERIFIED_CLAIMS_GAP_MARKER = "could not be verified against the returned rows"
+_NARRATIVE_REWRITTEN_GAP = (
+    "Genie's first draft carried a figure the returned rows could not support; "
+    "it rewrote the narrative from the verified figures and the rewrite passed "
+    "verification."
+)
+
+
+def _narrative_repair_prompt(question: str, rows: list[dict[str, Any]]) -> str:
+    """Ask the space to rewrite its summary from the figures it actually returned.
+
+    Live-first: the deterministic layer never authors the narrative. When
+    Genie's draft cites a number the rows do not contain, the honest next step
+    is to hand Genie its own verified rows and ask for a rewrite, then verify
+    that rewrite exactly as the first draft was verified.
+    """
+
+    digest_lines: list[str] = []
+    for row in rows[:_NARRATIVE_REPAIR_MAX_ROWS]:
+        cells: list[str] = []
+        for column, value in list(row.items())[:_NARRATIVE_REPAIR_MAX_COLS]:
+            if value is None:
+                continue
+            cells.append(f"{_humanize_column(column)}: {_format_cell(value, column)}")
+        if cells:
+            digest_lines.append("- " + "; ".join(cells))
+    digest = "\n".join(digest_lines)
     return (
-        f"The governed query against {asset} returned {row_count:,} rows, "
-        f"shown in full in the table. The first row reads {headline}. "
-        f"Every value comes straight from the returned rows. {disclosure}"
+        "Do not generate SQL for this message. Your previous summary for the "
+        f'question "{question}" used a figure that is not in the rows your query '
+        "returned. Rewrite the summary for a business reader in 2 to 5 "
+        "sentences using ONLY the figures below, exactly as written: no "
+        "rounding, no derived percentages or totals you did not return, no "
+        "table or column names, no SQL, and no mention of this instruction.\n\n"
+        f"Rows:\n{digest}"
     )
 
 

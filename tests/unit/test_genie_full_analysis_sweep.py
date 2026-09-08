@@ -164,8 +164,17 @@ def test_sweep_plans_fresh_and_executes_each_sub_question_live() -> None:
     assert len(repo.raw_prompts) == 2
     assert _USER_QUESTION in repo.raw_prompts[0]
     assert "executive synthesis" in repo.raw_prompts[1]
-    assert "**What this adds up to**" in result.answer
+    # Business-facing composition: the verified summary leads; the method is
+    # disclosed in the trace and proof, never as a body preamble.
+    assert result.answer.startswith("**Summary**")
     assert "act on the 3 verified segments first" in result.answer
+    assert result.summary is not None and "verified segments" in result.summary
+    assert "I asked the governed space" not in result.answer
+    assert "governed SQL" not in result.answer
+    assert len(result.sections) == 4
+    assert all(section.title == section.question for section in result.sections)
+    assert all(section.table_rows for section in result.sections)
+    assert all(section.narrative_withheld is False for section in result.sections)
     # Every planned sub-question ran as its own live turn with recursion off.
     assert len(repo.calls) == 4
     assert all(allow_sweep is False for _, allow_sweep in repo.calls)
@@ -330,3 +339,123 @@ def test_sub_analyses_carry_the_sweep_poll_deadline() -> None:
     assert result is not None
     assert repo.poll_timeouts
     assert all(value == _SWEEP_POLL_TIMEOUT_S for value in repo.poll_timeouts)
+
+
+# ---------------------------------------------------------------------------
+# Titled plans, per-section data and the synthesis rewrite (2026-09-08: the
+# deep answer read as pipeline chatter — question-length headings, a method
+# preamble, one chart for seven findings, and a withheld synthesis with no
+# second chance).
+# ---------------------------------------------------------------------------
+
+from backend.services.repositories.databricks_genie_sweep import (  # noqa: E402
+    _narrative_was_withheld,
+    _parse_planned_items,
+    _split_planned_line,
+    plan_sub_analyses,
+)
+
+
+def test_planned_lines_carry_a_short_title_when_the_planner_supplies_one() -> None:
+    text = """1. Market size by state — How many marketable borrowers are in each state?
+2. Offer mix: What is the recommended-offer mix across the population?
+3. How many borrowers are in-the-money and what is the average rate-and-term spread?
+4. This heading is far too long to be a section title for anyone — Which segments lead?"""
+    items = _parse_planned_items(text, deep=True)
+    assert items == [
+        ("Market size by state", "How many marketable borrowers are in each state?"),
+        ("Offer mix", "What is the recommended-offer mix across the population?"),
+        (None, "How many borrowers are in-the-money and what is the average rate-and-term spread?"),
+        (None, "This heading is far too long to be a section title for anyone — Which segments lead?"),
+    ]
+    # A hyphen is never a separator: in-the-money stays inside the question.
+    assert _split_planned_line("Refi economics - how many are in-the-money?") == (
+        None,
+        "Refi economics - how many are in-the-money?",
+    )
+
+
+def test_titles_are_screened_like_the_questions_they_head() -> None:
+    repo = _StubRepo(
+        plan_text=(
+            "1. Hispanic borrowers — How many borrowers are in-the-money in Illinois?\n"
+            "2. Market size — How many borrowers are in-the-money?\n"
+        )
+    )
+    planned, dropped = plan_sub_analyses(repo, _USER_QUESTION)  # type: ignore[arg-type]
+    assert planned == [("Market size", "How many borrowers are in-the-money?")]
+    assert len(dropped) == 1
+
+
+def test_sections_use_planner_titles_and_carry_their_own_rows() -> None:
+    repo = _StubRepo(
+        plan_text=(
+            "1. Refi economics — How many borrowers are currently in-the-money, and what is the average rate spread?\n"
+            "2. Where the opportunity sits — Which states concentrate the most refinance opportunity right now?\n"
+            "3. Funnel movement — How did the lead population and approvals change over the last 30 days?\n"
+        )
+    )
+    result = run_planned_sweep(repo, _USER_QUESTION)  # type: ignore[arg-type]
+    assert result is not None
+    assert [section.title for section in result.sections] == [
+        "Refi economics",
+        "Where the opportunity sits",
+        "Funnel movement",
+    ]
+    assert result.answer.startswith("**Summary**")
+    assert "**Refi economics**" in result.answer
+    assert "**How many borrowers are currently in-the-money" not in result.answer
+    for section in result.sections:
+        assert section.question.endswith("?")
+        assert section.table_rows and section.row_count == 3
+        assert section.trusted_assets == ["mip.gold.borrower_360"]
+        assert section.sql_query
+
+
+def test_narrative_withheld_flag_reads_the_section_proof() -> None:
+    withheld = GenieMessageResponse(
+        conversation_id="c",
+        question="q",
+        answer="2 results, shown in the chart and table below.",
+        source="genie",
+        trusted_assets=["mip.gold.borrower_360"],
+        proof=GenieProof(
+            known_data_gaps=[
+                "Genie's draft narrative included numeric or financial claims that "
+                "could not be verified against the returned rows; the prose was "
+                "withheld and the verified rows are shown."
+            ]
+        ),
+    )
+    assert _narrative_was_withheld(withheld) is True
+    clean = withheld.model_copy(update={"proof": GenieProof()})
+    assert _narrative_was_withheld(clean) is False
+    assert _narrative_was_withheld(clean.model_copy(update={"proof": None})) is False
+
+
+class _RetryingSynthesisRepo(_StubRepo):
+    """First synthesis cites a figure the rows lack; the rewrite uses the rows."""
+
+    def ask_raw(self, prompt: str) -> str | None:
+        self.raw_prompts.append(prompt)
+        if "Verified figures:" in prompt:
+            return (
+                "Across the verified results, refinance economics is the strongest "
+                "opportunity and the lender should act on those segments first."
+            )
+        if "executive synthesis" in prompt:
+            return "The book holds 4,242,424 borrowers, so act on the 3 verified segments first."
+        return self.plan_text
+
+
+def test_synthesis_gets_one_verified_rewrite_before_it_is_omitted() -> None:
+    repo = _RetryingSynthesisRepo()
+    result = run_planned_sweep(repo, _USER_QUESTION)  # type: ignore[arg-type]
+    assert result is not None
+    assert len(repo.raw_prompts) == 3
+    assert "Verified figures:" in repo.raw_prompts[2]
+    assert result.summary is not None
+    assert "4,242,424" not in result.summary
+    assert "refinance economics is the strongest" in result.summary
+    assert result.proof is not None
+    assert not any("synthesis draft was omitted" in gap for gap in result.proof.known_data_gaps)

@@ -621,6 +621,26 @@ def genie_response_has_unsafe_visible_text(
     """Check every model-authored text field rendered by the Genie UI."""
 
     values = [response.answer, *response.follow_up_questions]
+    if response.summary:
+        values.append(response.summary)
+    section_rows: list[dict[str, object]] = []
+    for section in response.sections:
+        # Section titles are planner-authored model text and render as
+        # headings; the prose and chart labels render beside their rows.
+        values.extend((section.title, section.question, section.answer))
+        if section.visualization is not None:
+            values.extend(
+                value
+                for value in (
+                    section.visualization.title,
+                    section.visualization.reason,
+                    section.visualization.x,
+                    section.visualization.y,
+                    section.visualization.series,
+                )
+                if value
+            )
+        section_rows.extend(section.table_rows or [])
     values.extend(step.kind for step in response.reasoning_trace)
     values.extend(step.content for step in response.reasoning_trace)
     if response.proof is not None:
@@ -640,7 +660,7 @@ def genie_response_has_unsafe_visible_text(
             )
             if value
         )
-    row_values = _visible_text_values(response.table_rows or [])
+    row_values = _visible_text_values([*(response.table_rows or []), *section_rows])
     governed_values = _governed_cell_values(governed_cell_values)
     return any(
         genie_visible_text_unsafe(_without_allowed_literals(value, allowed_literals))

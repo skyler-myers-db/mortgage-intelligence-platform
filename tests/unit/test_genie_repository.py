@@ -1921,7 +1921,11 @@ def test_raw_owner_identifier_answer_text_withholds_prose_ships_governed_rows(
     assert result.sql_query == live.sql_query
     assert result.table_rows == [{"borrowers": 2}]
     assert "1100000134187756" not in result.answer
-    assert "withheld" in result.answer
+    # Disclosed in the proof and the process trace, never as body prose
+    # (user feedback 2026-09-08: the notice read as pipeline chatter).
+    assert "withheld" not in result.answer
+    assert result.proof is not None
+    assert any("withheld" in gap for gap in result.proof.known_data_gaps)
     assert result.proof is not None
     assert any("withheld by the output safety guard" in gap for gap in result.proof.known_data_gaps)
 
@@ -2286,7 +2290,11 @@ def test_pii_answer_text_is_withheld_and_governed_rows_still_ship() -> None:
     assert result.sql_query == live.sql_query
     assert result.table_rows == [{"count": 1}]
     assert "raw@example.com" not in result.answer
-    assert "withheld" in result.answer
+    # Disclosed in the proof and the process trace, never as body prose
+    # (user feedback 2026-09-08: the notice read as pipeline chatter).
+    assert "withheld" not in result.answer
+    assert result.proof is not None
+    assert any("withheld" in gap for gap in result.proof.known_data_gaps)
     assert result.proof is not None
     assert any("withheld by the output safety guard" in gap for gap in result.proof.known_data_gaps)
 
@@ -2355,7 +2363,11 @@ def test_trusted_genie_answer_with_unsupported_numeric_claim_withholds_prose() -
     assert result.sql_query == live.sql_query
     assert result.table_rows == [{"borrowers": 123}]
     assert "999" not in result.answer
-    assert "withheld" in result.answer
+    # Disclosed in the proof and the process trace, never as body prose
+    # (user feedback 2026-09-08: the notice read as pipeline chatter).
+    assert "withheld" not in result.answer
+    assert result.proof is not None
+    assert any("withheld" in gap for gap in result.proof.known_data_gaps)
     assert result.proof is not None
     assert result.proof.trusted is True
     assert any(
@@ -2379,7 +2391,11 @@ def test_numeric_claim_cannot_use_unrelated_matching_count_as_financial_support(
     assert result.source == "genie"
     assert result.table_rows == [{"borrowers": 123}]
     assert "$123" not in result.answer
-    assert "withheld" in result.answer
+    # Disclosed in the proof and the process trace, never as body prose
+    # (user feedback 2026-09-08: the notice read as pipeline chatter).
+    assert "withheld" not in result.answer
+    assert result.proof is not None
+    assert any("withheld" in gap for gap in result.proof.known_data_gaps)
 
 
 def test_numeric_claim_is_not_waived_by_unbound_snapshot_date_language() -> None:
@@ -2397,7 +2413,11 @@ def test_numeric_claim_is_not_waived_by_unbound_snapshot_date_language() -> None
     assert result.source == "genie"
     assert result.table_rows == [{"borrowers": 123}]
     assert "2026" not in result.answer
-    assert "withheld" in result.answer
+    # Disclosed in the proof and the process trace, never as body prose
+    # (user feedback 2026-09-08: the notice read as pipeline chatter).
+    assert "withheld" not in result.answer
+    assert result.proof is not None
+    assert any("withheld" in gap for gap in result.proof.known_data_gaps)
 
 
 def test_trusted_genie_numeric_check_accepts_rounded_percent_claim() -> None:
@@ -2579,7 +2599,11 @@ def test_trusted_genie_numeric_check_rejects_unscaled_word_suffix_claims() -> No
     assert result.source == "genie"
     assert result.table_rows == [{"avg_score": 1.2}]
     assert "1.2 million" not in result.answer
-    assert "withheld" in result.answer
+    # Disclosed in the proof and the process trace, never as body prose
+    # (user feedback 2026-09-08: the notice read as pipeline chatter).
+    assert "withheld" not in result.answer
+    assert result.proof is not None
+    assert any("withheld" in gap for gap in result.proof.known_data_gaps)
 
 
 def test_trusted_genie_numeric_check_ignores_identifier_dates_and_query_limits() -> None:
@@ -2617,7 +2641,11 @@ def test_trusted_genie_numeric_check_blocks_nonzero_claim_on_empty_rows() -> Non
     assert result.source == "genie"
     assert result.table_rows == []
     assert "10" not in result.answer
-    assert "withheld" in result.answer
+    # Disclosed in the proof and the process trace, never as body prose
+    # (user feedback 2026-09-08: the notice read as pipeline chatter).
+    assert "withheld" not in result.answer
+    assert result.proof is not None
+    assert any("withheld" in gap for gap in result.proof.known_data_gaps)
 
 
 def test_backtick_quoted_trusted_sql_is_accepted() -> None:
@@ -4024,7 +4052,11 @@ def test_recognized_shape_strips_entire_narrative_when_any_financial_claim_is_un
     assert result.source == "genie"
     assert "$999,999" not in result.answer
     assert "7.25%" not in result.answer
-    assert "withheld" in result.answer
+    # Disclosed in the proof and the process trace, never as body prose
+    # (user feedback 2026-09-08: the notice read as pipeline chatter).
+    assert "withheld" not in result.answer
+    assert result.proof is not None
+    assert any("withheld" in gap for gap in result.proof.known_data_gaps)
     assert result.proof is not None
     assert any(
         "could not be verified against the returned rows" in gap
@@ -4306,3 +4338,93 @@ def test_a_rescue_declined_for_want_of_a_sql_client_is_not_silent() -> None:
         )
     assert warn.call_args is not None
     assert warn.call_args[0][0] == "canonical_genie_no_sql_client"
+
+
+def test_unverifiable_narrative_is_rewritten_live_from_the_rows_before_the_digest() -> None:
+    """Live-first repair (user feedback 2026-09-08): when the claims verifier
+    withholds Genie's prose, the space gets one chance to rewrite from its own
+    verified rows. A rewrite that passes the same verification ships in
+    Genie's voice; the withholding reason leaves the proof and a verify step
+    records the rewrite. The body never carries the plumbing notice."""
+
+    first = GenieResponse(
+        answer_text="Illinois leads with 99,999 in-the-money borrowers.",
+        sql_query=(
+            "SELECT state, COUNT(*) AS in_the_money_borrowers FROM mip.gold.borrower_360 "
+            "WHERE in_the_money = TRUE GROUP BY state ORDER BY 2 DESC"
+        ),
+        sql_result_rows=[
+            {"state": "IL", "in_the_money_borrowers": 48396},
+            {"state": "TX", "in_the_money_borrowers": 10914},
+        ],
+        conversation_id="conv-rewrite",
+        message_id="msg-rewrite",
+        trusted_assets=["mip.gold.borrower_360"],
+    )
+    rewrite = GenieResponse(
+        answer_text=(
+            "Illinois leads with 48,396 in-the-money borrowers, well ahead of "
+            "Texas at 10,914."
+        ),
+        sql_query=None,
+        sql_result_rows=[],
+        conversation_id="conv-rewrite",
+        message_id="msg-rewrite-2",
+    )
+    stub = _StubClient(_make_breaker("closed"), response=[first, rewrite])
+    repo = DatabricksGenieRepository(stub)  # type: ignore[arg-type]
+
+    result = repo.respond("Which states have the most in-the-money borrowers?")
+
+    assert result.source == "genie"
+    assert len(stub.ask_calls) == 2
+    assert "Rows:" in stub.ask_calls[1]
+    assert "in the money borrowers: 48,396" in stub.ask_calls[1]
+    assert stub.ask_conversation_ids[1] == "conv-rewrite"
+    assert result.answer.startswith("Illinois leads with 48,396 in-the-money borrowers")
+    assert "99,999" not in result.answer
+    assert "withheld" not in result.answer
+    assert result.proof is not None
+    assert not any("could not be verified" in gap for gap in result.proof.known_data_gaps)
+    assert any("rewrote the narrative" in gap for gap in result.proof.known_data_gaps)
+    assert any(
+        step.kind == "verify" and "rewrote" in step.content for step in result.reasoning_trace
+    )
+    assert result.row_count == 2
+
+
+def test_rewrite_that_still_fails_verification_keeps_the_plain_digest() -> None:
+    first = GenieResponse(
+        answer_text="Illinois leads with 99,999 in-the-money borrowers.",
+        sql_query=(
+            "SELECT state, COUNT(*) AS in_the_money_borrowers FROM mip.gold.borrower_360 "
+            "WHERE in_the_money = TRUE GROUP BY state ORDER BY 2 DESC"
+        ),
+        sql_result_rows=[
+            {"state": "IL", "in_the_money_borrowers": 48396},
+            {"state": "TX", "in_the_money_borrowers": 10914},
+        ],
+        conversation_id="conv-rewrite",
+        message_id="msg-rewrite",
+        trusted_assets=["mip.gold.borrower_360"],
+    )
+    still_wrong = GenieResponse(
+        answer_text="Illinois leads with 77,777 in-the-money borrowers.",
+        sql_query=None,
+        sql_result_rows=[],
+        conversation_id="conv-rewrite",
+        message_id="msg-rewrite-2",
+    )
+    stub = _StubClient(_make_breaker("closed"), response=[first, still_wrong])
+    repo = DatabricksGenieRepository(stub)  # type: ignore[arg-type]
+
+    result = repo.respond("Which states have the most in-the-money borrowers?")
+
+    assert len(stub.ask_calls) == 2
+    assert "77,777" not in result.answer
+    assert "99,999" not in result.answer
+    assert result.answer.startswith("2 results, shown in the chart and table below.")
+    assert "state IL" in result.answer and "48,396" in result.answer
+    assert "governed" not in result.answer and "withheld" not in result.answer
+    assert result.proof is not None
+    assert any("could not be verified" in gap for gap in result.proof.known_data_gaps)
