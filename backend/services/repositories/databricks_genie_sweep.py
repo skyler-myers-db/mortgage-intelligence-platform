@@ -15,6 +15,7 @@ and formats; it never authors a question, a figure, or an analytic choice.
 
 from __future__ import annotations
 
+import logging
 import re
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
@@ -31,12 +32,21 @@ from backend.services.genie_message_policy import (
     identity_prompt_match,
     protected_prompt_match,
 )
+from backend.services.observability import emit
 from backend.services.repositories.databricks_genie_trust import _genie_question_hash
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from backend.services.repositories.databricks_genie import (
         DatabricksGenieRepository,
     )
+
+# Sweep observability. Both shipping gates used to be silent: an aborted
+# sweep fell through to the single-turn answer with nothing in the log to
+# say a plan was attempted, how many lines survived the screen, or why a
+# section was omitted (live persona probe 2026-08-10; live demo probe
+# 2026-09-08). Every event here carries labels and hashes only — never a
+# planned question's text, a narrative, or a row.
+log = logging.getLogger("mip-genie-sweep")
 
 # Sources that mean a sub-turn produced governed analytic content.
 _DATA_BEARING_SOURCES = frozenset({"genie", "trusted_sql"})
@@ -407,18 +417,53 @@ def run_planned_sweep(
 
     started = time.monotonic()
     planned, dropped = plan_sub_questions(repo, question, deep=deep)
-    if len(planned) < (_MIN_PLANNED_DEEP if deep else _MIN_PLANNED):
+    plan_floor = _MIN_PLANNED_DEEP if deep else _MIN_PLANNED
+    emit(
+        log,
+        "genie_sweep_plan",
+        dependency="genie",
+        outcome="planned" if len(planned) >= plan_floor else "aborted_plan_floor",
+        duration_ms=round((time.monotonic() - started) * 1000, 1),
+        question_hash=_genie_question_hash(question),
+        deep=deep,
+        planned=len(planned),
+        dropped=len(dropped),
+        floor=plan_floor,
+    )
+    if len(planned) < plan_floor:
         return None
 
     def _one(sub_question: str) -> GenieMessageResponse | None:
+        turn_started = time.monotonic()
         try:
-            return repo.respond(
+            response = repo.respond(
                 sub_question,
                 allow_sweep=False,
                 poll_timeout_s=_SWEEP_POLL_TIMEOUT_S,
             )
-        except Exception:  # noqa: BLE001 - a failed theme becomes a disclosed gap
+        except Exception as exc:  # noqa: BLE001 - a failed theme becomes a disclosed gap
+            emit(
+                log,
+                "genie_sweep_section",
+                dependency="genie",
+                outcome="error",
+                duration_ms=round((time.monotonic() - turn_started) * 1000, 1),
+                section_hash=_genie_question_hash(sub_question),
+                error_type=type(exc).__name__,
+            )
             return None
+        emit(
+            log,
+            "genie_sweep_section",
+            dependency="genie",
+            outcome=response.source,
+            duration_ms=round((time.monotonic() - turn_started) * 1000, 1),
+            section_hash=_genie_question_hash(sub_question),
+            data_bearing=response.source in _DATA_BEARING_SOURCES,
+            rendered_prose=_has_rendered_prose(response),
+            row_count=response.row_count or 0,
+        )
+        return response
 
     results: list[GenieMessageResponse | None] = [None] * len(planned)
     with ThreadPoolExecutor(max_workers=_SWEEP_MAX_WORKERS) as pool:
@@ -443,6 +488,7 @@ def run_planned_sweep(
 
     sections: list[tuple[str, GenieMessageResponse]] = []
     gaps: list[str] = list(dropped)
+    unfinished = 0
     for sub_question, response in zip(planned, results, strict=True):
         if (
             response is not None
@@ -451,10 +497,26 @@ def run_planned_sweep(
         ):
             sections.append((sub_question, response))
         else:
+            if response is None:
+                unfinished += 1
             gaps.append(
                 f"The planned analysis '{sub_question}' returned no governed "
                 "result on this run and was omitted."
             )
+    emit(
+        log,
+        "genie_sweep_result",
+        dependency="genie",
+        outcome="shipped" if len(sections) >= _MIN_PLANNED else "aborted_section_floor",
+        duration_ms=round((time.monotonic() - started) * 1000, 1),
+        question_hash=_genie_question_hash(question),
+        deep=deep,
+        planned=len(planned),
+        sections=len(sections),
+        omitted=len(planned) - len(sections),
+        unfinished=unfinished,
+        floor=_MIN_PLANNED,
+    )
     if len(sections) < _MIN_PLANNED:
         return None
 
