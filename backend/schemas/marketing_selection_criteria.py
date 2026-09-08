@@ -16,6 +16,10 @@ from backend.schemas.marketing_selection_contextual_criteria import (
     _CRITERION_TAIL,
     _SELF_CONTAINED_CRITERION_PATTERNS,
 )
+from backend.schemas.marketing_selection_ranking_readers import (
+    contains_unreviewed_ranking_adverbial,
+    is_reviewed_hyphenated_participle_prefix,
+)
 from backend.schemas.marketing_selection_reviewed_analytics import (
     _COORDINATED_GROUPING_DIMENSION,
     _REVIEWED_ANALYSIS_PREAMBLE_RE,
@@ -651,10 +655,22 @@ def _contains_unreviewed_audience_decision(
     if any(reviewed_fullmatch(pattern, clause) for pattern in _REVIEWED_AUDIENCE_DECISION_PATTERNS):
         return False
     for match in _AUDIENCE_FORMATION_BOUND_POPULATION_RE.finditer(clause):
+        # The capture starts AT the participle, so a hyphen-attached left half
+        # ("zyrplax-ranked borrowers") sits outside every span it hands to the
+        # reviewers below; it is judged here, first, on its own closed grammar.
+        if not is_reviewed_hyphenated_participle_prefix(match, clause):
+            return True
         if _is_reviewed_cross_clause_binding(match, clause):
             continue
         if not _is_reviewed_pre_population_binding(match.group("criterion") or ""):
             return True
+    # A ranking or weighing adverbial with no population noun inside it ("when
+    # balancing zyrplax", "when ranked by rosacea") never reaches the capture
+    # above and is none of the suffix shapes the candidate loop below reads.
+    if _AUDIENCE_DECISION_REFERENCE_RE.search(clause) is not None and (
+        contains_unreviewed_ranking_adverbial(clause)
+    ):
+        return True
     directive = _AFFIRMATIVE_AUDIENCE_DIRECTIVE_RE.fullmatch(clause)
     if directive is not None:
         before_population = re.sub(
