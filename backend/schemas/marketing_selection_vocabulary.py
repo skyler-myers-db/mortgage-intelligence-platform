@@ -209,8 +209,12 @@ REVIEWED_MORTGAGE_ATTRIBUTE_FRAGMENT = (
     r"(?:home[- ]?equity|equity\s+(?:pct|percent(?:age)?|share))|"
     # The governed next-best-offer column (recommended_offer). Qualifier
     # required: a bare "offer" is ordinary campaign vocabulary, this is the
-    # product's own ranked recommendation.
-    r"(?:next[- ]?best|recommended)\s+offers?)"
+    # product's own ranked recommendation. ``[- ]?`` because the governed
+    # space writes it as a compound ("recommended-offer concentration",
+    # planned live 2026-09-08) and the de-obfuscated scan variant deletes that
+    # hyphen; a reviewed compound spells its own fold image (#228) or its
+    # hyphenated twin refuses.
+    r"(?:next[- ]?best|recommended)[- ]?offers?)"
 )
 REVIEWED_MORTGAGE_ATTRIBUTE_LIST_FRAGMENT = (
     rf"(?:{REVIEWED_MORTGAGE_ATTRIBUTE_FRAGMENT})"

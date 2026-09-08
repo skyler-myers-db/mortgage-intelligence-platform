@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import re
 
+from backend.schemas.marketing_selection_vocabulary import REVIEWED_MORTGAGE_ATTRIBUTE_FRAGMENT
+
 _REVIEWED_ANALYTIC_POPULATION = (
     r"(?:(?:(?:in[- ]the[- ]money|listed|refinance[- ]ready|retention[- ]risk|"
     r"marketing[- ]eligible|investor|equity[- ]rich|highest[- ]scoring)\s+)?"
@@ -473,4 +475,61 @@ _REVIEWED_WHY_ASSESSMENT_PREAMBLE_RE = re.compile(
     r"the\s+rationale\s+for\s+each(?:\s+(?:one|borrower|candidate|selection))?)"
     r"\s*,?\s*and\s+",
     re.IGNORECASE,
+)
+
+
+# The bound-population capture in ``marketing_selection_criteria`` reads
+# everything between a formation verb and the NEXT population noun as that
+# population's criterion, so a criterion-free span that crosses a clause
+# boundary is captured whole and fails closed. Two of the governed space's own
+# planned deep-analysis lines bound that way (captured 2026-09-08 on the
+# paychex space; ``test_planned_deep_analysis_cross_clause_bindings`` pins
+# both):
+#
+#   "... when ranked BY AVERAGE OPPORTUNITY SCORE, AND HOW LARGE IS EACH segment"
+#   "... prioritized FIRST WHEN BALANCING borrower volume, average ..."
+#
+# Each is admitted through one closed shape and nothing else. The ranking
+# attribute is judged by the reviewers every other capture uses, so "ranked by
+# rosacea, and how large is each segment" keeps refusing. The weighing list is
+# admitted only when EVERY measure in it is reviewed vocabulary, on both sides
+# of the population noun, so "balancing borrower volume, zyrplax, and equity"
+# keeps refusing too -- that refusal was an accident of the capture (a weighing
+# list with no population noun in it is read by nothing, before or after this
+# change), and the closed list keeps the accident rather than trading it away.
+_REVIEWED_RANKING_THEN_GROUP_SIZE_RE = re.compile(
+    r"^(?:by|according\s+to|based\s+on|on)\s+(?P<criterion>[^,.!?;:]{1,80}?)"
+    r"\s*,?\s+and\s+how\s+(?:(?:large|big|small)\s+(?:is|are)\s+(?:each|every)|many)$",
+    re.IGNORECASE,
+)
+_REVIEWED_WEIGHING_MEASURE = (
+    rf"(?:borrower\s+(?:volume|counts?)|(?:{REVIEWED_MORTGAGE_ATTRIBUTE_FRAGMENT})"
+    r"(?:\s+(?:concentration|mix|share|distribution))?)"
+)
+_REVIEWED_WEIGHING_ADVERBIAL_RE = re.compile(
+    r"^(?:(?:first|next|last)\s+)?(?:when|while)\s+"
+    r"(?:balancing|weighing|considering|trading\s+off)"
+    rf"(?:\s+{_REVIEWED_WEIGHING_MEASURE}(?:\s*,\s*{_REVIEWED_WEIGHING_MEASURE})*"
+    r"\s*,?\s+(?:and|or))?$",
+    re.IGNORECASE,
+)
+# The rest of the clause behind the captured population noun: the other half
+# of the "borrower volume" measure, then the remaining reviewed measures.
+_REVIEWED_WEIGHING_MEASURE_TAIL_RE = re.compile(
+    rf"^\s+(?:volume|counts?)(?:\s*,\s*{_REVIEWED_WEIGHING_MEASURE})*"
+    rf"(?:\s*,?\s+(?:and|or)\s+{_REVIEWED_WEIGHING_MEASURE})?\s*$",
+    re.IGNORECASE,
+)
+# A grouping dimension coordinated with the population noun it precedes --
+# "which STATES AND segments should be prioritized first" -- names no criterion.
+# The slot is the strategy grammar's grouping list plus the analytics ZIP
+# spellings. Measures are deliberately left out: the analytics dimension slot
+# also lists equity, LTV and rate spread, and a measure in this run would strip
+# the head off a reviewed attribute list ("equity and rate spread").
+_GROUPING_DIMENSION = (
+    r"(?:states?|count(?:y|ies)|zip(?:\s+codes?)?|postal\s+codes?|markets?|metros?|"
+    r"segments?|offer\s+lanes?)"
+)
+_COORDINATED_GROUPING_DIMENSION = (
+    rf"(?:{_GROUPING_DIMENSION}\s*,\s*)*{_GROUPING_DIMENSION}\s*,?\s+(?:and|or)"
 )
