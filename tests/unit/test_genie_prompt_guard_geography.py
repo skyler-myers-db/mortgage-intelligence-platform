@@ -95,8 +95,9 @@ _CORPUS_REFUSALS_NOW_CLEARED = (
     "Which Oklahoma cities have the most HELOC candidates?",
     "And Oklahoma?",
     # Metro/region formants the title-case pair scan read as people — 12.
+    # "Rank Inland Empire leads by opportunity score" moved to
+    # ``_PRENOMINAL_REGION_FORMANTS_NOT_GOVERNED`` below.
     "Show me Puget Sound borrowers",
-    "Rank Inland Empire leads by opportunity score",
     "What is the Bay Area in-the-money count?",
     # "call list for" matched the contextual person-name pattern — 4.
     "Give me a ranked call list for today",
@@ -625,10 +626,34 @@ _RESIDUALS_NOW_CLEARED = (
     "Which East Hazel Crest borrowers are in the money?",
     "Which Elk Grove Village borrowers are in the money?",
     # Geographic and governed-label formants the pair scan still read as people.
+    # "Rank High Desert leads by opportunity score" moved to
+    # ``_PRENOMINAL_REGION_FORMANTS_NOT_GOVERNED`` below.
     "Show me Front Range borrowers",
-    "Rank High Desert leads by opportunity score",
     "What is the Wasatch Front count?",
 )
+
+# Region formants in PRENOMINAL position in front of a ranked population. The
+# name-scan half of this file's contract holds -- neither reads as a person --
+# but these two reached Genie only because the criterion machine's lead-in was
+# an OPEN word slot, never through a geography exemption. That slot is a closed
+# vocabulary since 2026-09-08 (``marketing_selection_lead_in``), and its place
+# capture is screened by membership exactly like the criterion scope tail: no
+# gold city, county or state is named Inland Empire or High Desert, so both
+# refuse on the criterion reason, as "Rank Zyrplax Heights leads ..." does. A
+# governed place in the same position answers (``test_audience_lead_in_closed``),
+# and the region behind the preposition still answers as it did on main --
+# "Rank leads in Inland Empire by opportunity score" (measured 2026-09-08).
+_PRENOMINAL_REGION_FORMANTS_NOT_GOVERNED = (
+    "Rank Inland Empire leads by opportunity score",
+    "Rank High Desert leads by opportunity score",
+)
+
+
+@pytest.mark.usefixtures("governed_cities")
+@pytest.mark.parametrize("prompt", _PRENOMINAL_REGION_FORMANTS_NOT_GOVERNED)
+def test_ungoverned_region_formants_refuse_as_criteria_not_as_names(prompt: str) -> None:
+    assert identity_prompt_match(prompt) is False
+    assert protected_prompt_match(prompt) == "unreviewed_criterion"
 
 _RESIDUAL_NARRATIVES_NOW_RENDER = (
     "Which Elizabeth borrowers have the highest opportunity score?",
