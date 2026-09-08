@@ -514,29 +514,28 @@ def test_the_quantifier_slot_is_a_count_not_an_adjective_slot(shape: str, filler
     assert protected_prompt_match(question) is not None, question
 
 
-# --- Found writing the control above: the OTHER branches do not gate it ------
+# --- Found writing the control above: the OTHER branches did not gate it -----
 #
-# ``_REVIEWED_AUDIENCE_DECISION_PATTERNS`` opens with an UNCHECKED lead-in of up
-# to ten word tokens, so on every non-admission branch an unknown pre-nominal
-# modifier is simply swallowed:
+# ``_REVIEWED_AUDIENCE_DECISION_PATTERNS`` used to open with an UNCHECKED
+# lead-in of up to ten word tokens, so on every non-admission branch an unknown
+# pre-nominal modifier was simply swallowed:
 #
-#   "Rank zyrplax borrowers with the highest rate spread."  -> reaches Genie
+#   "Rank zyrplax borrowers with the highest rate spread."  -> reached Genie
 #
-# No count is involved -- measured identical on origin/main -- so this predates
-# the quantifier work and is not caused by it. It is nonetheless a fail-open of
-# the unreviewed-criterion contract: "zyrplax borrowers" IS a selection
-# criterion, expressed prenominally.
+# No count was involved, so it predated the quantifier work. Closed on
+# 2026-09-08: the lead-in is the closed grammar in
+# ``marketing_selection_lead_in`` -- directive prefix, one opening frame,
+# determiners, the count, the reviewed premodifiers and a screened governed
+# place -- so the same prompts refuse on the criterion reason. The fuller
+# battery, the place slot and the capital-I fold live in
+# ``test_audience_lead_in_closed``; this keeps the original red-side probes
+# green in the file that found them.
 #
-# Severity is bounded by measurement, not by hope: every PROTECTED pre-nominal
-# in this position is caught by the term/proxy banks (`diabetic`, `eczema`,
+# Severity was always bounded by measurement: every PROTECTED pre-nominal in
+# this position is caught by the term/proxy banks (`diabetic`, `eczema`,
 # `hispanic`, `elderly`, `disabled`, `pregnant`, `immigrant`, `muslim` all
-# refuse, before and after). What leaks is unknown, non-protected vocabulary.
-#
-# Fixing it means making the token adjacent to the population noun closed, which
-# `re` cannot express as a lookbehind and which today's
-# ``_is_reviewed_pre_population_binding`` would over-refuse (`top` is not in its
-# strip list). That is its own slice with its own differential.
-_PRENOMINAL_LEAK_ON_THE_FREE_LEAD_IN = tuple(
+# refuse, before and after). What leaked was unknown, non-protected vocabulary.
+_UNKNOWN_PRENOMINAL_MODIFIERS = tuple(
     shape.format(filler=filler)
     for shape in (
         "Rank {filler}borrowers with the highest rate spread.",
@@ -546,12 +545,9 @@ _PRENOMINAL_LEAK_ON_THE_FREE_LEAD_IN = tuple(
 )
 
 
-@pytest.mark.parametrize("question", _PRENOMINAL_LEAK_ON_THE_FREE_LEAD_IN)
-def test_an_unknown_prenominal_modifier_still_reaches_genie(question: str) -> None:
-    """Red side of a known, pre-existing fail-open. Goes green when the lead-in
-    is closed; that is the signal to delete this test, not to widen anything."""
-
-    assert protected_prompt_match(question) is None, question
+@pytest.mark.parametrize("question", _UNKNOWN_PRENOMINAL_MODIFIERS)
+def test_an_unknown_prenominal_modifier_never_reaches_genie(question: str) -> None:
+    assert protected_prompt_match(question) == "unreviewed_criterion", question
 
 
 @pytest.mark.parametrize(

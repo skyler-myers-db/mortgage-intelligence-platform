@@ -17,6 +17,7 @@ from backend.schemas.marketing_selection_reviewed_places import (
     GOVERNED_SCOPE_ZIP_FRAGMENT,
     is_governed_analytics_location,
 )
+from backend.schemas.marketing_text_normalization import unfold_capital_i
 
 # An article does not change WHICH attribute is being named: "the highest
 # opportunity scores" selects on ``opportunity_score`` exactly as "highest
@@ -331,10 +332,19 @@ def match_scopes_are_governed(match: re.Match[str]) -> bool:
     A group that did not participate is ``None`` and is not a scope at all --
     the fragment is optional, so an unscoped criterion behaves exactly as it
     did before the slot existed.
+
+    The criterion machine reads the capital-I confusable variant of the text
+    as well as the text as written, and one refusing variant refuses the
+    prompt, so a span is also screened through :func:`unfold_capital_i`:
+    "in Illinois" arrives from that variant as "in lllinois", which no
+    gazetteer holds. Measured 2026-09-08 on main: "Rank borrowers with a rate
+    spread in Illinois." refused as ``unreviewed_criterion`` while the Texas
+    twin answered; Idaho, Indiana and Iowa the same.
     """
 
     return all(
         is_governed_analytics_location(value)
+        or is_governed_analytics_location(unfold_capital_i(value))
         for name, value in match.groupdict().items()
         if name.startswith(_SCOPE_GROUP_PREFIX) and value is not None
     )

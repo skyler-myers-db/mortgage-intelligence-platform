@@ -16,6 +16,11 @@ from backend.schemas.marketing_selection_contextual_criteria import (
     _CRITERION_TAIL,
     _SELF_CONTAINED_CRITERION_PATTERNS,
 )
+from backend.schemas.marketing_selection_lead_in import (
+    _AUDIENCE_DIRECTIVE_PREFIX_FRAGMENT,
+    _AUDIENCE_FORMATION_COMMAND_FRAGMENT,
+    AUDIENCE_LEAD_IN_FRAGMENT,
+)
 from backend.schemas.marketing_selection_reviewed_analytics import (
     _COORDINATED_GROUPING_DIMENSION,
     _REVIEWED_ANALYSIS_PREAMBLE_RE,
@@ -46,14 +51,6 @@ from backend.schemas.marketing_selection_vocabulary import (
 _AUDIENCE_DECISION_REFERENCE = (
     rf"(?:{_COREFERENCE_POPULATION}|groups?|cohorts?|audiences?|segments?|populations?|"
     rf"{_COREFERENCE_SUBJECT})"
-)
-# Keep the scanner's leading-capital-I confusable form of ``Insert`` aligned
-# with ``marketing_audience_admission`` across the selection-state grammar.
-_AUDIENCE_FORMATION_COMMAND_FRAGMENT = (
-    r"(?:select|choose|pick|target|include|prioritize|favor|rank|order|sort|reserve|"
-    r"sequence|group|elevate|tier|screen|queue|advance|shortlist|nominate|enroll|"
-    r"move|transfer|admit|place|add|put|assign|route|direct|(?:insert|lnsert)|"
-    r"allocate|dispatch)"
 )
 _AUDIENCE_FORMATION_ACTION_FRAGMENT = (
     r"(?:select(?:s|ed|ing)?|choos(?:e|es|ing)|chose|chosen|"
@@ -134,11 +131,6 @@ _SAFE_CHANNEL_CONSENT_REROUTE_RE = re.compile(
     r"(?:call|email|text|message)\s+(?:them|the\s+(?:borrower|recipient|customer))"
     r"(?:\s+instead)?$",
     re.IGNORECASE,
-)
-_AUDIENCE_DIRECTIVE_PREFIX_FRAGMENT = (
-    r"(?:(?:could|would|can|will)\s+you\s+)?"
-    r"(?:(?:please|kindly)\s*,?\s+)?"
-    r"(?:(?:(?:go|move)\s+ahead\s+and|proceed\s+(?:to|and))\s+)?"
 )
 _APPLY_CRITERION_WHEN_SELECTING_RE = re.compile(
     rf"^{_AUDIENCE_DIRECTIVE_PREFIX_FRAGMENT}"
@@ -273,8 +265,8 @@ _REVIEWED_CONDITIONAL_DIRECTIVE_CRITERION = (
 # 1,000 leads". It names no criterion, and it cannot spell one:
 # ``POPULATION_QUANTIFIER_FRAGMENT`` is digits or a CLOSED cardinal list.
 #
-# Both lead-ins below spelled themselves alphabetic-only, so a count switched
-# each of them off, in OPPOSITE directions and for the same reason:
+# Both lead-ins spelled themselves alphabetic-only, so a count switched each
+# of them off, in OPPOSITE directions and for the same reason:
 #
 #   * the reviewed lead-in stopped matching, so "Rank the top 50 borrowers with
 #     a rate spread." fell past the allow branch and refused while the same
@@ -288,20 +280,27 @@ _REVIEWED_CONDITIONAL_DIRECTIVE_CRITERION = (
 # token; comma-grouped counts escaped even that, because a comma is not in the
 # alphabetic class either. Correct outcome, accidental reason -- and the
 # accident disappears the moment the fold is scoped away from numbers (#217).
+#
+# The reviewed lead-in itself is CLOSED (``marketing_selection_lead_in``).
+# It was ``(?:[a-z][a-z'-]*|<count>){1,10}`` -- any word -- so an unreviewed
+# premodifier rode in front of the population noun whenever the criterion
+# behind the noun was reviewed: "Who are the top zyrplax borrowers by
+# opportunity score?" reached Genie while "Rank the top zyrplax borrowers"
+# refused (measured 2026-09-08). Every slot is now a closed literal or a
+# screened place capture, so "zyrplax", "left-handed" and "several" break the
+# shape and fall through to the fail-closed captures below.
 _POPULATION_QUANTIFIER = POPULATION_QUANTIFIER_DIGITS
-_AUDIENCE_LEAD_IN_TOKEN = rf"(?:[a-z][a-z'-]*|{_POPULATION_QUANTIFIER})"
 _REVIEWED_AUDIENCE_DECISION_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(
-        rf"^(?:{_AUDIENCE_LEAD_IN_TOKEN}\s+){{1,10}}{_REVIEWED_DIRECTIVE_CRITERION}$",
+        rf"^{AUDIENCE_LEAD_IN_FRAGMENT}{_REVIEWED_DIRECTIVE_CRITERION}$",
         re.IGNORECASE,
     ),
     re.compile(
-        rf"^(?:{_AUDIENCE_LEAD_IN_TOKEN}\s+){{1,10}}"
-        rf"{_REVIEWED_CONDITIONAL_DIRECTIVE_CRITERION}$",
+        rf"^{AUDIENCE_LEAD_IN_FRAGMENT}{_REVIEWED_CONDITIONAL_DIRECTIVE_CRITERION}$",
         re.IGNORECASE,
     ),
     re.compile(
-        rf"^(?:{_AUDIENCE_LEAD_IN_TOKEN}\s+){{1,10}}{_REVIEWED_WHOSE_DIRECTIVE_CRITERION}$",
+        rf"^{AUDIENCE_LEAD_IN_FRAGMENT}{_REVIEWED_WHOSE_DIRECTIVE_CRITERION}$",
         re.IGNORECASE,
     ),
     re.compile(
