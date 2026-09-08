@@ -303,5 +303,16 @@ average spread of 333 bps and 89% equity behind that call.
 
 The retention, geography and investor beats above were re-worded after this
 probe (see their beats) so the planner keeps six to nine of nine lines
-instead of one; the re-worded versions were verified at the planner and
-then live before the demo.
+instead of one. Final verification of the re-worded questions on the
+observability build (commit 7ed74cac), same method:
+
+| Beat | Elapsed | Sub-analyses | Synthesis | Sweep log |
+|---|---|---|---|---|
+| 1 Hero (re-run) | 137s | 6 | yes | planned 7, shipped 7 |
+| 6 Retention (re-worded) | 116s | 7 | omitted | planned 7, shipped 7 |
+| 7 Geography by state (re-worded) | 154s | 5 | yes | planned 6 (3 screened), 5 shipped, 1 policy-blocked |
+| Optional: Investor (re-worded) | 122s | 6 | omitted | planned 7 (3 screened), 6 shipped, 1 policy-blocked |
+
+Every deep beat in this track now ships a multi-section sweep; four of the
+eight core beats also ship the verified synthesis on a typical run, and the
+others disclose why it was withheld.
