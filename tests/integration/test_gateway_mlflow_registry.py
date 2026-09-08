@@ -20,7 +20,7 @@ def test_mlflow_register_model_persists_atomic_gateway_tags(
 ) -> None:
     """Exercise the real MLflow registry API used by provisioning."""
 
-    assert mlflow.__version__ == "3.15.1"
+    assert mlflow.__version__ == "3.16.0"
     original_tracking = mlflow.get_tracking_uri()
     original_registry = mlflow.get_registry_uri()
     database_uri = f"sqlite:///{tmp_path / 'mlflow.db'}"
