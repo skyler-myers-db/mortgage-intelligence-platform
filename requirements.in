@@ -16,22 +16,27 @@ databricks-sql-connector==4.4.0
 # mlflow.genai.evaluate is missing so "MLflow Agent Evaluation" cannot be
 # claimed from local scorer metrics alone.
 # Pinned exactly. A range let the resolver backtrack to mlflow 3.2.0 (24
-# advisories) in order to satisfy a newer cryptography; 3.15.1 is the first
-# release whose bound (cryptography<50) admits the 49.0.0 security fix.
-mlflow==3.15.1
+# advisories) in order to satisfy a newer cryptography; 3.16.0 is the first
+# release whose bound (cryptography<51) admits the 50.x fix for
+# PYSEC-2026-3552. It does NOT close GHSA-h7x2-h6g9-p789 -- its
+# _create_gateway_secret handler is byte-identical to 3.15.1's and the
+# advisory has no patched release -- so ci.yml keeps that ignore with its
+# server-side unreachability proof.
+mlflow==3.16.0
 # MLflow's Unity Catalog registration path reads the newly created model
 # artifacts back from the metastore's S3 storage before marking a version
 # ready. The plain ``mlflow`` extra does not install the AWS artifact client,
 # so CI deploys must carry it explicitly instead of relying on ambient tooling.
 boto3==1.43.50
 # Security floor for GHSA-537c-gmf6-5ccf via google-auth, raised to 49.0.0 for
-# PYSEC-2026-3553 and PYSEC-2026-3554. PYSEC-2026-3552 is fixed only in
-# 50.0.0, which no non-vulnerable mlflow admits (3.15.1 caps cryptography
-# below 50). That advisory is a Bleichenbacher oracle in PKCS#7
-# EnvelopedData decryption; this app never decrypts PKCS#7 or S/MIME — it
-# uses cryptography only for Ed25519 signature verification — so the
-# vulnerable code path is unreachable. See ci.yml's pip-audit ignore.
-cryptography==49.0.0
+# PYSEC-2026-3553 and PYSEC-2026-3554, then to 50.0.1 for PYSEC-2026-3552 (a
+# Bleichenbacher oracle in PKCS#7 EnvelopedData decryption) once mlflow 3.16.0
+# lifted its cap from cryptography<50 to <51. This repo uses cryptography only
+# for Ed25519 signature verification (backend/services/
+# ai_gateway_proof_attestation.py and the tools/databricks attestation,
+# journal, lease and rollback records); the 50.0.0 changelog deprecates FFDH
+# and tightens X.509/DER parsing, neither of which those paths touch.
+cryptography==50.0.1
 # Security floors for GHSA-2f96-g7mh-g2hx, GHSA-v396-v7q4-x2qj,
 # GHSA-956x-8gvw-wg5v, GHSA-8ppf-4f7h-5ppj, GHSA-hm4w-wwcw-mr6r,
 # and GHSA-94p4-4cq8-9g67.
