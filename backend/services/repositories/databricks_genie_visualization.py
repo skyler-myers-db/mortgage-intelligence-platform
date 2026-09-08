@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from decimal import Decimal
 from typing import Any
 
 from backend.services.genie_answers import GenieVisualizationSpec
@@ -68,6 +69,22 @@ def _flag_columns(rows: list[dict[str, Any]] | None) -> list[str]:
     return out
 
 
+# The Genie SQL result serialises every cell as text ("1036", "40.70"), so a
+# numeric column is one whose non-null cells all PARSE as numbers. Live capture
+# 2026-09-08: with an isinstance check the planner never saw a measure in a
+# live result and returned "table" for every answer, leaving charts to the
+# client's guesswork.
+_NUMERIC_TEXT_RE = re.compile(r"^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?$")
+
+
+def _is_numeric_cell(value: Any) -> bool:
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int | float | Decimal):
+        return True
+    return isinstance(value, str) and bool(_NUMERIC_TEXT_RE.match(value.strip()))
+
+
 def _numeric_columns(rows: list[dict[str, Any]] | None) -> list[str]:
     out: list[str] = []
     flags = set(_flag_columns(rows))
@@ -75,18 +92,19 @@ def _numeric_columns(rows: list[dict[str, Any]] | None) -> list[str]:
         if _is_genie_identifier_column(col) or col in flags:
             continue
         values = [row.get(col) for row in rows or [] if row.get(col) is not None]
-        if values and all(
-            isinstance(v, int | float) and not isinstance(v, bool) for v in values
-        ):
+        if values and all(_is_numeric_cell(v) for v in values):
             out.append(col)
     return out
 
 
 def _text_columns(rows: list[dict[str, Any]] | None) -> list[str]:
+    """String columns that are neither flags nor numbers-as-text."""
+
     out: list[str] = []
     flags = set(_flag_columns(rows))
+    numeric = set(_numeric_columns(rows))
     for col in _row_columns(rows):
-        if col in flags:
+        if col in flags or col in numeric:
             continue
         values = [row.get(col) for row in rows or [] if row.get(col) is not None]
         if values and all(isinstance(v, str) for v in values):

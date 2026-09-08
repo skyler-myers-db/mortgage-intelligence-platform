@@ -389,20 +389,28 @@ def _synthesis_prompt(
             "that appear in the results above: name the standout borrowers or "
             "cohort and the figures that put them on top; say why they stand "
             "out RELATIVE to the wider population (use the comparison "
-            "numbers); state the offer call and the signal behind it; and end "
-            "with the one cross-cutting insight a lender could not read off "
+            "numbers); state the recommended offer and the signal behind it; "
+            "and end with the one cross-cutting insight a lender could not read off "
             "any single screen. If the results above do not support one of "
-            "these, say so rather than inventing it. Write for a lending "
-            "executive: no table, column or query names, and no description "
-            "of how the analysis was run."
+            "these, say so rather than inventing it. Copy every figure exactly "
+            "as it appears above — never add, subtract, average, convert or "
+            "turn figures into percentages; compare in words instead. Write "
+            "for a lending executive: no table, column or query names, and no "
+            "description of how the analysis was run. Describe priorities and "
+            "recommended offers; never use the words call, target, contact or "
+            "reach out, and never describe outreach."
         )
     else:
         ask = (
             "Write the executive synthesis in 4 to 8 sentences: the biggest "
             "cross-cutting insights and what a lender should act on first. Use "
-            "ONLY numbers that appear in the results above, and no headings. "
-            "Write for a lending executive: no table, column or query names, "
-            "and no description of how the analysis was run."
+            "ONLY numbers that appear in the results above, copied exactly — "
+            "never add, subtract, average, convert or turn them into "
+            "percentages; compare in words instead — and no headings. Write for "
+            "a lending executive: no table, column or query names, and no "
+            "description of how the analysis was run. Describe priorities and "
+            "recommended offers; never use the words call, target, contact or "
+            "reach out, and never describe outreach."
         )
     return (
         "Do not generate SQL for this message. Below are the verified results "
@@ -462,7 +470,10 @@ def _synthesize_closing(
     return draft, None
 
 
-_SYNTHESIS_REPAIR_MAX_ROWS = 40
+# The rewrite digest must cover EVERY row the synthesis is verified against:
+# a figure quoted from a row outside the digest is unsupported by
+# construction (live 2026-09-08: seven sections, ~100 rows, a 40-row digest).
+_SYNTHESIS_REPAIR_MAX_ROWS = 160
 _SYNTHESIS_REPAIR_MAX_COLS = 8
 
 
@@ -480,10 +491,12 @@ def _synthesis_repair_prompt(question: str, rows: list[dict[str, object]]) -> st
     return (
         "Do not generate SQL for this message. Your synthesis for the question "
         f'"{question}" used a figure that is not in the verified results. '
-        "Rewrite it in 6 to 12 sentences for a lending executive using ONLY "
-        "the figures below, exactly as written: no rounding, no derived "
-        "percentages or totals you did not return, no table, column or query "
-        "names, no headings, and no mention of this instruction.\n\n"
+        "Rewrite it in 6 to 12 sentences for a lending executive. Quote at "
+        "most eight figures, each copied exactly from the list below — never "
+        "add, subtract, average, round, convert or turn figures into "
+        "percentages; compare in words instead. No table, column or query "
+        "names, no headings, no mention of this instruction, and never the "
+        "words call, target, contact or reach out.\n\n"
         f"Verified figures:\n{digest}"
     )
 

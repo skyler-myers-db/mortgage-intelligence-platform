@@ -1122,7 +1122,8 @@ def _narrative_repair_prompt(question: str, rows: list[dict[str, Any]]) -> str:
         "returned. Rewrite the summary for a business reader in 2 to 5 "
         "sentences using ONLY the figures below, exactly as written: no "
         "rounding, no derived percentages or totals you did not return, no "
-        "table or column names, no SQL, and no mention of this instruction.\n\n"
+        "table or column names, no SQL, no mention of this instruction, and "
+        "never the words call, target, contact or reach out.\n\n"
         f"Rows:\n{digest}"
     )
 

@@ -97,3 +97,36 @@ def test_ordinary_state_counts_still_chart_as_bars() -> None:
     assert plan.kind == "bar"
     assert plan.x == "state"
     assert plan.y == "borrowers"
+
+
+# The live Genie SQL result serialises every cell as text. Live capture
+# 2026-09-08: {"zip": "60628", "in_the_money_borrowers": "1036", "state": "IL",
+# "refreshed_at": "2026-08-09T16:56:59.870Z"} planned as "table" because no
+# column was numeric by isinstance, so the backend never charted a live row.
+_TEXT_CELL_ROWS = [
+    {"zip": "60628", "in_the_money_borrowers": "1036", "state": "IL", "refreshed_at": "2026-08-09T16:56:59.870Z"},
+    {"zip": "60617", "in_the_money_borrowers": "1015", "state": "IL", "refreshed_at": "2026-08-09T16:56:59.870Z"},
+    {"zip": "60629", "in_the_money_borrowers": "918", "state": "IL", "refreshed_at": "2026-08-09T16:56:59.870Z"},
+]
+
+
+def test_numbers_serialised_as_text_are_measures() -> None:
+    assert _numeric_columns(_TEXT_CELL_ROWS) == ["in_the_money_borrowers"]
+    assert "in_the_money_borrowers" not in _text_columns(_TEXT_CELL_ROWS)
+    plan = _plan_genie_visualization("Which five ZIP codes have the most in-the-money borrowers?", _TEXT_CELL_ROWS)
+    assert plan is not None
+    assert plan.kind == "bar" and plan.x == "zip" and plan.y == "in_the_money_borrowers"
+
+
+def test_text_state_counts_plan_as_bars_and_single_rows_as_metrics() -> None:
+    states = [
+        {"state": "IL", "in_the_money_borrowers": "40456"},
+        {"state": "FL", "in_the_money_borrowers": "11763"},
+    ]
+    plan = _plan_genie_visualization("Break down in-the-money borrowers by state", states)
+    assert plan is not None and plan.kind == "bar" and plan.x == "state"
+    single = [{"marketable_borrowers": "5156184", "avg_opportunity_score": "38.90"}]
+    metric = _plan_genie_visualization("How many marketable borrowers are there?", single)
+    assert metric is not None and metric.kind == "metric" and metric.y == "marketable_borrowers"
+    # A timestamp or an identifier never reads as a measure.
+    assert _numeric_columns([{"refreshed_at": "2026-08-09T16:56:59.870Z", "zip": "60628"}]) == []
