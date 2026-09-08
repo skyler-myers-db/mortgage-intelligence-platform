@@ -79,7 +79,12 @@ const budgets = {
   // 0.05 KiB above the measured artifact, violating the documented ~5%
   // cross-platform headroom policy. Measured: CSS 140.95 / gzip 23.89.
   initialCssBytes: 148 * KiB, // actual 140.95
-  initialCssGzipBytes: 25 * KiB, // actual 23.89
+  // Re-baselined 2026-09-08 for the Genie thread view + deep-research
+  // sections slice. The 25 KiB gzip gate had drifted to 4 bytes above the
+  // measured artifact (25,596 B) — the next CSS line from anyone would have
+  // tripped it — so restore ~5% headroom per this file's policy. Measured:
+  // gzip 25.00 (macOS zlib; the file documents ~0.5 KiB Linux variance).
+  initialCssGzipBytes: 26.5 * KiB, // actual 25.00
   // Re-baselined 2026-07-10 for the UX declutter slice (batches 1-2). total JS
   // was red on main (990.51 > 990.00); restored ~5% headroom over the measured
   // actual per this file's policy. Batch 2 (asset-label helper, top-leads

@@ -276,8 +276,10 @@ def test_withheld_prose_renders_verified_rows_not_pipeline_chatter() -> None:
     )
     assert "88,806" in single
     assert "167.67" in single
-    assert "in the money borrowers" in single
-    assert "withheld" in single  # the disclosure survives
+    assert "in the money borrowers" in single.lower()
+    # The reason is disclosed in the proof and the process trace, not the body.
+    assert "withheld" not in single
+    assert "mip.gold" not in single
     assert genie_visible_text_unsafe(single) is False
 
     multi = _factual_row_summary(
@@ -285,14 +287,15 @@ def test_withheld_prose_renders_verified_rows_not_pipeline_chatter() -> None:
         ["mip.gold.borrower_360"],
         withheld_reason="the output safety guard flagged its wording.",
     )
-    assert "2 rows" in multi
+    assert "2 results" in multi
+    assert "governed" not in multi
     assert "48,396" in multi
     assert genie_visible_text_unsafe(multi) is False
 
     empty = _factual_row_summary(
         [], ["mip.gold.borrower_360"], withheld_reason="test reason."
     )
-    assert "no rows" in empty
+    assert "no matching rows" in empty
 
 
 def test_identifier_columns_render_verbatim_in_the_fallback() -> None:
@@ -314,7 +317,7 @@ def test_identifier_columns_render_verbatim_in_the_fallback() -> None:
         ["mip.gold.borrower_360"],
         withheld_reason="test.",
     )
-    assert "zip: 75040" in summary
+    assert "zip 75040" in summary
     assert "75,040" not in summary
     # Real measures keep their separators.
     assert "1,250,000" in summary

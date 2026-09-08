@@ -10,7 +10,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { MarkdownAnswer, isSectionHeading } from './GenieAnswer.markdown';
+import { MarkdownAnswer, isSectionHeading, isSourceFootnote } from './GenieAnswer.markdown';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -69,5 +69,63 @@ describe('MarkdownAnswer section headings', () => {
     const first = container.querySelector('p.genie-md-p');
     expect(first?.className).toContain('genie-md-p--first');
     expect(first?.className).toContain('genie-md-p--heading');
+  });
+
+  /**
+   * The trailing "Source: …" disclosure is provenance, not analysis. On its
+   * own line it now reads as a footnote; inside a sentence it stays body copy,
+   * and the Catalog Explorer link is untouched either way.
+   */
+  it('renders a standalone source disclosure as a muted footnote', () => {
+    act(() =>
+      root.render(
+        <MarkdownAnswer
+          text={'Texas leads with 900 borrowers.\n\nSource: mip.gold.borrower_360.'}
+          workspaceHost="https://dbc-test.cloud.databricks.com"
+        />,
+      ),
+    );
+    const paragraphs = Array.from(container.querySelectorAll('p.genie-md-p'));
+    expect(paragraphs).toHaveLength(2);
+    expect(paragraphs[0].classList.contains('genie-md-p--source')).toBe(false);
+    expect(paragraphs[1].classList.contains('genie-md-p--source')).toBe(true);
+    // Still a Catalog Explorer link, still the plain "Source:" label.
+    const link = paragraphs[1].querySelector('a.uc-asset-link');
+    expect(link?.textContent).toBe('mip.gold.borrower_360');
+    expect(paragraphs[1].textContent).toContain('Source: mip.gold.borrower_360');
+  });
+
+  it('leaves a source disclosure inside a sentence as body copy', () => {
+    act(() =>
+      root.render(
+        <MarkdownAnswer
+          text={'The average loan age is 5.25 years. Source: mip.gold.borrower_360.'}
+          workspaceHost={null}
+        />,
+      ),
+    );
+    const paragraph = container.querySelector('p.genie-md-p');
+    expect(paragraph?.classList.contains('genie-md-p--source')).toBe(false);
+  });
+});
+
+describe('isSourceFootnote', () => {
+  it.each([
+    'Source: mip.gold.borrower_360',
+    'Source: mip.gold.borrower_360.',
+    'source: mip.silver.property_features',
+    'Sources: mip.gold.lead_scores',
+    '  Source: mip.gold.borrower_360  ',
+  ])('accepts %s', (line) => {
+    expect(isSourceFootnote(line)).toBe(true);
+  });
+
+  it.each([
+    'The average loan age is 5.25 years. Source: mip.gold.borrower_360.',
+    'Source: borrower_360',
+    'Sources reviewed by the analyst',
+    'Source: mip.gold.borrower_360 and mip.gold.lead_scores',
+  ])('rejects %s', (line) => {
+    expect(isSourceFootnote(line)).toBe(false);
   });
 });

@@ -1988,9 +1988,11 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     expect(followUpPayload.conversation_id).toBe(firstConversationId);
     expectLiveGenieTurn(followUpPayload, 'standalone native Genie follow-up');
 
+    // `.first()`, not `.last()`: the route renders the thread newest-first,
+    // so the follow-up answer sits ABOVE the restored earlier turn.
     const followUpSurface = page.locator('.surface.surface--inset', {
       has: page.getByLabel('Answer source: Databricks Genie Conversation API'),
-    }).last();
+    }).first();
     await expectLiveGenieUi(
       followUpSurface,
       followUpPayload,

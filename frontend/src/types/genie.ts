@@ -11,10 +11,31 @@
  * optional ones (metric_value, table_rows, follow_up_questions) arrived in
  * slice 8 and drive the richer presenter UX.
  */
+/**
+ * One planned sub-analysis of a deep-research sweep, with its own verified
+ * rows and chart plan. Mirrors backend `GenieAnswerSection`.
+ */
+export interface GenieAnswerSection {
+  title: string;
+  question: string;
+  answer: string;
+  trusted_assets?: string[];
+  sql_query?: string | null;
+  row_count?: number | null;
+  table_rows?: Record<string, unknown>[] | null;
+  visualization?: GenieVisualization | null;
+  /** Genie's draft prose failed verification; `answer` is a plain digest of the rows. */
+  narrative_withheld?: boolean;
+}
+
 export interface GenieAnswer {
   answer: string;
   source?: string;
   trusted_assets?: string[];
+  /** Deep-research answers: verified executive summary, rendered first. */
+  summary?: string | null;
+  /** Deep-research answers: one entry per shipped sub-analysis. Empty on single turns. */
+  sections?: GenieAnswerSection[];
   conversation_id?: string;
   message_id?: string | null;
   elapsed_ms?: number | null;

@@ -105,6 +105,30 @@ class GenieStartResponse(BaseModel):
     sample_questions: list[str] = Field(default_factory=list)
 
 
+class GenieAnswerSection(BaseModel):
+    """One planned sub-analysis of a deep-research sweep, with its own data.
+
+    The sweep used to fold every section into one markdown ``answer`` and
+    ship only the largest section's rows, so a seven-part research answer
+    rendered as one chart and one table. Each section now carries its own
+    verified rows and chart plan so the reader gets a visual per finding.
+    ``title`` is Genie-authored (planner-supplied) and, like every other
+    field here, is scanned by the visible-text guard before it renders.
+    """
+
+    title: str
+    question: str
+    answer: str
+    trusted_assets: list[str] = Field(default_factory=list)
+    sql_query: str | None = None
+    row_count: int | None = None
+    table_rows: list[dict[str, Any]] | None = None
+    visualization: GenieVisualizationSpec | None = None
+    #: True when Genie's draft prose could not be verified against the rows
+    #: and the section shows a plain-language digest of the rows instead.
+    narrative_withheld: bool = False
+
+
 class GenieMessageResponse(BaseModel):
     """Wire contract returned by `/api/genie/message`."""
 
@@ -113,6 +137,12 @@ class GenieMessageResponse(BaseModel):
     answer: str
     source: str
     trusted_assets: list[str]
+    #: Deep-research answers: the executive summary (verified synthesis) and
+    #: one entry per shipped sub-analysis. Empty on single-turn answers. The
+    #: ``answer`` field still carries the full markdown for pins, history and
+    #: older clients; a client that understands sections renders these instead.
+    summary: str | None = None
+    sections: list[GenieAnswerSection] = Field(default_factory=list)
     message_id: str | None = None
     elapsed_ms: int | None = None
     question_hash: str | None = None

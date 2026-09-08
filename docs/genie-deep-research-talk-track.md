@@ -25,16 +25,21 @@ What the audience sees:
 
 - The **progress rail** (Understand → Draft SQL → Execute → Format) and the
   public process steps while the sweep runs.
-- The answer opens with the plan disclosure ("I asked the governed space to
-  plan this request itself; it decomposed the question into N sub-analyses
-  ...") followed by **one bold-headed section per sub-question**, each with
-  Genie's own narrative, and a closing **"What this adds up to"** synthesis.
+- The answer opens with **Summary** — Genie's verified executive synthesis —
+  followed by **one titled section per finding** (titles are Genie's own,
+  short, business-worded), each with Genie's narrative and **its own chart
+  and table** built from that section's rows. No method preamble, no table
+  names in the body; a muted source footnote closes each section.
 - **Show proof** exposes the SQL for every section (labelled per section),
   the trusted assets cited, row counts, freshness, and any disclosed gaps
   (a planned line the guard screened, a section that timed out, a synthesis
-  omitted because its numbers could not be verified).
+  omitted because its numbers could not be verified, a first draft Genie
+  rewrote from its verified rows).
 - **Reasoning trace** lists the orchestration step and one "answered live
   over …" step per section.
+- The route keeps the **whole thread**: every question and answer stays on
+  screen, newest first, and the composer clears after each ask. History
+  loads a past conversation; New thread starts a fresh one.
 
 Timing to set expectations out loud: a single governed turn lands in about
 20–25 seconds; a deep sweep lands in roughly 90–200 seconds because it runs
@@ -89,17 +94,21 @@ PII guards a typed prompt gets, then runs as its own governed SQL turn."
 
 When it lands, walk top to bottom:
 
-1. The plan disclosure sentence: how many sub-analyses, which assets.
-2. The population sizing section, then the segment ranking section.
+1. **Summary** first: Genie's own verified synthesis. Read two sentences
+   aloud, then say "every number in that paragraph was checked against the
+   rows below before it was allowed on screen."
+2. The population sizing section, then the segment ranking section, each
+   with its own chart.
 3. The top-candidates section: masked `B-…` IDs only, scores, rate spread,
    equity, triggers, recommended offer. "No names, no addresses — the
    platform masks at the API, UI, export and audit boundary."
 4. The comparison section: "why these" is provable — the top cohort's
    average spread and equity against the population's.
 5. The offer-mix section, then any geography / co-occurrence section.
-6. **What this adds up to** — the synthesis. "Those sentences are Genie's,
-   and every number in them was checked against the rows above. If a number
-   could not be verified the synthesis is withheld and the gap is disclosed."
+6. Back to the top: the Summary is the synthesis of everything below it.
+   "Those sentences are Genie's. If a number in them could not be verified,
+   Genie gets one rewrite from its own verified figures; if that fails too,
+   the summary is withheld and the gap is disclosed."
 7. Show proof: scroll the labelled SQL; count the sections; show the
    disclosed gaps if any.
 
@@ -244,9 +253,14 @@ These are the sweep working as designed, not faults. Each shows under
   was withheld because Genie derived a figure the rows do not contain. Say:
   "every sentence Genie writes is checked against the rows it returned; a
   number it cannot prove does not ship." The sections stand on their own.
+- **"Genie's first draft carried a figure the returned rows could not
+  support; it rewrote the narrative from the verified figures and the
+  rewrite passed verification."** The common case now: the prose you are
+  reading is Genie's second draft, checked like the first.
 - **"Genie's draft narrative included numeric or financial claims that
   could not be verified … the prose was withheld and the verified rows are
-  shown."** Same verifier, one section: the rows ship, the prose does not.
+  shown."** The rewrite failed too: the section shows a plain digest of its
+  rows with its chart and table, and no prose from the model.
 - **"Governed cross-check: this answer's framing overlaps N of 10 borrowers
   with the canonical opportunity ranking; … the Lead Queue holds the
   operational list."** Genie ranked over the whole marketable population;

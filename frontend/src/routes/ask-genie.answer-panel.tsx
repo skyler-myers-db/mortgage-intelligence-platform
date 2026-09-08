@@ -1,23 +1,78 @@
-import type { RefObject } from 'react';
+import { Fragment, useEffect, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
 import type { GenieActionSuggestion, GenieAnswer as GenieAnswerShape } from '../types';
 import type { GenieLiveProgress } from '../lib/api';
 import type { WarmingUpState } from '../lib/useWarmingUpRetry';
 import { Button, Chip, EvidenceChip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { GenieAnswer } from '../components/mortgage/GenieAnswer';
+import { GenieHistoryMenu } from '../components/mortgage/GenieHistoryMenu';
 import { GenieProgress } from '../components/mortgage/GenieProgress';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { drawerForAsset } from '../lib/drawerSources';
+import {
+  getGenieTurns,
+  getGenieTurnsServerSnapshot,
+  setGenieTurns,
+  subscribeGenieTurns,
+  type GenieTurn,
+} from '../lib/genieConversationStore';
 
 /**
- * AskGenieAnswerPanel — the composer + answer surface extracted from
+ * AskGenieAnswerPanel — the composer + conversation surface extracted from
  * `ask-genie.tsx` (props in, callbacks out; mirrors the
  * ask-genie.compose-plan-card / ask-genie.growth-run-card precedent).
  *
- * Behavior is unchanged from the inlined version. The source-chip
- * classification depends only on `payload`, so it lives here rather than in
- * the parent — it moved wholesale with the surface it annotates.
+ * The route used to show ONE answer: asking a second question erased the
+ * first, so the deep-dive view had no conversation even though the floating
+ * panel kept one. Both surfaces now read the same tab-scoped transcript store
+ * (`lib/genieConversationStore`), so a thread started in the bubble continues
+ * here and vice versa.
+ *
+ * Ordering is LATEST FIRST: the composer stays at the top of the page and the
+ * newest exchange sits directly under it, with older turns below an "Earlier
+ * in this thread" divider — no scrolling to find the answer you just asked
+ * for.
+ *
+ * The source-chip classification depends only on `payload`, so it lives here
+ * rather than in the parent — it moved wholesale with the surface it
+ * annotates, and is now computed per turn.
  */
+
+interface SourceChip {
+  label: string;
+  title?: string;
+  variant?: 'warning';
+}
+
+/** Governed source values that intentionally stop before showing data. */
+const BLOCKED_SOURCES = new Set(['policy_blocked', 'refused', 'data_gap', 'out_of_footprint']);
+
+const BLOCKED_CHIP_LABELS: Record<string, string> = {
+  refused: 'Prompt refused',
+  data_gap: 'Source pending',
+  out_of_footprint: 'Outside footprint',
+};
+
+export function sourceChipFor(payload: GenieAnswerShape): SourceChip | null {
+  const sourceLabel = payload.source ?? '';
+  if (sourceLabel === 'degraded') {
+    return {
+      label: 'Genie reconnecting',
+      title:
+        'The Genie answer path is temporarily unavailable. Live answers will resume after health recovers.',
+      variant: 'warning',
+    };
+  }
+  if (BLOCKED_SOURCES.has(sourceLabel)) {
+    return {
+      label: BLOCKED_CHIP_LABELS[sourceLabel] ?? 'Policy blocked',
+      title: 'The answer was not displayed because it did not meet the governed Genie policy.',
+      variant: 'warning',
+    };
+  }
+  const label = payload.trusted_assets?.[0] || sourceLabel || '';
+  return label ? { label } : null;
+}
 
 export interface AskGenieAnswerPanelProps {
   questionRef: RefObject<HTMLTextAreaElement | null>;
@@ -28,6 +83,11 @@ export interface AskGenieAnswerPanelProps {
   onAsk: (question: string) => void;
   /** Start a fresh Genie thread. */
   onNewThread: () => void;
+  /** Adopt a past conversation from the History menu (id + restored turns). */
+  onLoadSession: (conversationId: string, turns: GenieTurn[]) => void;
+  /** A turn settled and was appended to the thread; the parent clears the
+   *  composer so it never keeps the question that was just answered. */
+  onSettled?: (question: string) => void;
   loading: boolean;
   warmingUp: WarmingUpState | null;
   errorMsg: string | null;
@@ -45,12 +105,65 @@ export interface AskGenieAnswerPanelProps {
   actionStatus: string | null;
 }
 
+function GenieThreadTurn({
+  turn,
+  onFollowUp,
+  onAction,
+}: {
+  turn: GenieTurn;
+  onFollowUp: (question: string, conversationId: string | null) => void;
+  onAction: (action: GenieActionSuggestion) => void;
+}) {
+  const chip = sourceChipFor(turn.response);
+  const drawerForSource = chip ? drawerForAsset(chip.label) : null;
+  return (
+    <div className="surface surface--inset">
+      <div className="surface__body">
+        {chip && (
+          <div className="chip-row mb-3">
+            <span className="muted fs-11">Source:</span>
+            {chip.variant === 'warning' ? (
+              // Degraded / governed refusal: warning chip with tooltip so the
+              // user knows why no data is shown. Not clickable.
+              <Chip variant="warning" icon="info" title={chip.title}>
+                {chip.label}
+              </Chip>
+            ) : drawerForSource ? (
+              // Specific UC asset → open the matching drawer entry.
+              <EvidenceChip source={drawerForSource}>{chip.label}</EvidenceChip>
+            ) : (
+              // Generic / unknown source → inert chip so a click doesn't open
+              // the wrong drawer. (Prior code defaulted to NBO and was
+              // misleading.)
+              <Chip variant="neutral" title={`Source: ${chip.label}`}>
+                {chip.label}
+              </Chip>
+            )}
+          </div>
+        )}
+        {/* withChart=true: opt this deep-dive view in to the auto-detected
+            chart for top-N / per-state-style table_rows payloads. The floating
+            bubble does NOT pass this prop, so its compact form is unchanged. */}
+        <GenieAnswer
+          payload={turn.response}
+          question={turn.question || undefined}
+          onFollowUp={onFollowUp}
+          onAction={onAction}
+          withChart
+        />
+      </div>
+    </div>
+  );
+}
+
 export function AskGenieAnswerPanel({
   questionRef,
   question,
   onQuestionChange,
   onAsk,
   onNewThread,
+  onLoadSession,
+  onSettled,
   loading,
   warmingUp,
   errorMsg,
@@ -64,40 +177,66 @@ export function AskGenieAnswerPanel({
   onAction,
   actionStatus,
 }: AskGenieAnswerPanelProps) {
-  const sourceLabel = payload?.source ?? '';
-  // The backend emits "genie" for live answers, or governed refusal/degraded
-  // source values when it intentionally stops before showing data.
-  const isDegraded = sourceLabel === 'degraded';
-  const isBlocked =
-    sourceLabel === 'policy_blocked' ||
-    sourceLabel === 'refused' ||
-    sourceLabel === 'data_gap' ||
-    sourceLabel === 'out_of_footprint';
-  const sourceChip = isDegraded
-    ? 'Genie reconnecting'
-    : isBlocked
-      ? sourceLabel === 'refused'
-        ? 'Prompt refused'
-        : sourceLabel === 'data_gap'
-          ? 'Source pending'
-          : sourceLabel === 'out_of_footprint'
-            ? 'Outside footprint'
-          : 'Policy blocked'
-      : payload?.trusted_assets?.[0] || sourceLabel || '';
-  const sourceChipTitle = isDegraded
-    ? 'The Genie answer path is temporarily unavailable. Live answers will resume after health recovers.'
-    : isBlocked
-      ? 'The answer was not displayed because it did not meet the governed Genie policy.'
-    : undefined;
-  const sourceChipVariant: 'warning' | undefined = isDegraded || isBlocked ? 'warning' : undefined;
-  const drawerForSource = sourceChip ? drawerForAsset(sourceChip) : null;
   const composerSampleQuestions = sampleQuestions.slice(0, 4);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const storedTurns = useSyncExternalStore(
+    subscribeGenieTurns,
+    getGenieTurns,
+    getGenieTurnsServerSnapshot,
+  );
+  const inFlight = loading || warmingUp !== null;
+
+  // A settled payload joins the thread on the SAME render it arrives, so the
+  // answer never disappears for a frame between "progress done" and "turn
+  // stored". The effect below only persists what is already being shown.
+  //
+  // `submittedQuestion === null` means no question is outstanding (New
+  // thread, a restored session, an actor-boundary reset). The cached answer
+  // of the question that WAS outstanding must not be re-adopted then — it
+  // belongs to a thread the user just left.
+  const answered = submittedQuestion !== null ? payload : null;
+  // Anywhere in the thread, not just at the end: the floating panel writes to
+  // the same store, so this route's settled turn can already have another
+  // surface's turn stacked on top of it.
+  const isStored = storedTurns.some((turn) => turn.response === answered);
+  const pendingTurn: GenieTurn | null =
+    answered && !isStored ? { question: submittedQuestion ?? '', response: answered } : null;
+  const thread = pendingTurn ? [...storedTurns, pendingTurn] : storedTurns;
+
+  // Append-once latch. StrictMode re-runs effects with the same closure, and
+  // the payload object is stable across re-renders, so identity is the guard.
+  const appendedRef = useRef<GenieAnswerShape | null>(null);
+  useEffect(() => {
+    if (submittedQuestion === null || !payload || appendedRef.current === payload) return;
+    appendedRef.current = payload;
+    const stored = getGenieTurns();
+    if (stored.some((turn) => turn.response === payload)) return;
+    // setGenieTurns enforces MAX_STORED_TURNS (oldest-first eviction).
+    setGenieTurns([...stored, { question: submittedQuestion, response: payload }]);
+    onSettled?.(submittedQuestion);
+  }, [payload, submittedQuestion, onSettled]);
+
+  const latest = thread[thread.length - 1] ?? null;
+  const earlier = thread.slice(0, -1).reverse();
+  const turnKey = (turn: GenieTurn, index: number) =>
+    `${turn.response.message_id ?? turn.response.question_hash ?? 'turn'}-${index}`;
 
   return (
     <div className="surface">
-      <div className="surface__hdr">
-        <Icon name="sparkle" size={14} className="icon-accent" />
-        <div className="h-4">Ask a question</div>
+      <div className="surface__hdr surface__hdr--split">
+        <div className="surface__hdr-main">
+          <Icon name="sparkle" size={14} className="icon-accent" />
+          <div className="h-4">Ask a question</div>
+        </div>
+        <GenieHistoryMenu
+          open={historyOpen}
+          onToggle={setHistoryOpen}
+          onLoad={(conversationId, turns) => {
+            setHistoryOpen(false);
+            onLoadSession(conversationId, turns);
+          }}
+          disabled={inFlight}
+        />
       </div>
       <div className="surface__body">
         <textarea
@@ -172,13 +311,6 @@ export function AskGenieAnswerPanel({
             <WarmingUpBlock state={warmingUp} title="Asking Genie" compact />
           </div>
         )}
-        {loading && !warmingUp && (
-          <div className="surface surface--inset mt-4">
-            <div className="surface__body">
-              <GenieProgress progress={liveProgress} startedAt={askStartedAt} />
-            </div>
-          </div>
-        )}
         {errorMsg && !warmingUp && (
           <div
             className="surface surface--inset surface--danger mt-4"
@@ -198,7 +330,10 @@ export function AskGenieAnswerPanel({
             </div>
           </div>
         )}
-        {!payload && !loading && !warmingUp && !errorMsg && (
+        {actionStatus && (
+          <div className="status-callout status-callout--info mt-3">{actionStatus}</div>
+        )}
+        {thread.length === 0 && !inFlight && !errorMsg && (
           <div className="surface surface--inset mt-4">
             <div className="surface__body genie-empty">
               <div className="genie-empty__icon">
@@ -213,48 +348,47 @@ export function AskGenieAnswerPanel({
             </div>
           </div>
         )}
-        {payload && (
-          <div
-            className="surface surface--inset mt-4"
-          >
-            <div className="surface__body">
-              {sourceChip && (
-                <div className="chip-row mb-3">
-                  <span className="muted fs-11">Source:</span>
-                  {sourceChipVariant === 'warning' ? (
-                    // Degraded: warning chip with tooltip so the user
-                    // knows Genie is reconnecting. Not clickable.
-                    <Chip
-                      variant="warning"
-                      icon="info"
-                      title={sourceChipTitle}
-                    >
-                      {sourceChip}
-                    </Chip>
-                  ) : drawerForSource ? (
-                    // Specific UC asset → open the matching drawer entry.
-                    <EvidenceChip source={drawerForSource}>{sourceChip}</EvidenceChip>
-                  ) : (
-                    // Generic / unknown source → inert chip so a click
-                    // doesn't open the wrong drawer. (Prior code
-                    // defaulted to NBO and was misleading.)
-                    <Chip variant="neutral" title={`Source: ${sourceChip}`}>
-                      {sourceChip}
-                    </Chip>
-                  )}
-                </div>
-              )}
-              {/* withChart=true: opt this deep-dive view in to the
-                  auto-detected bar chart for top-N / per-state-style
-                  table_rows payloads. The floating bubble does NOT
-                  pass this prop, so its compact form is unchanged. */}
-              <GenieAnswer payload={payload} question={submittedQuestion ?? undefined} onFollowUp={onFollowUp} onAction={onAction} withChart />
-              {actionStatus && (
-                <div className="status-callout status-callout--info mt-3">
-                  {actionStatus}
-                </div>
-              )}
-            </div>
+        {(thread.length > 0 || inFlight) && (
+          <div className="genie-thread mt-4">
+            {inFlight && submittedQuestion && (
+              <>
+                <div className="genie__msg genie__msg--user">{submittedQuestion}</div>
+                {loading && !warmingUp && (
+                  <div className="surface surface--inset">
+                    <div className="surface__body">
+                      <GenieProgress progress={liveProgress} startedAt={askStartedAt} />
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+            {latest && (
+              <>
+                {latest.question && (
+                  <div className="genie__msg genie__msg--user">{latest.question}</div>
+                )}
+                <GenieThreadTurn
+                  key={turnKey(latest, thread.length - 1)}
+                  turn={latest}
+                  onFollowUp={onFollowUp}
+                  onAction={onAction}
+                />
+              </>
+            )}
+            {earlier.length > 0 && (
+              <div className="eyebrow">Earlier in this thread</div>
+            )}
+            {/* Fragment, not a wrapper div: the user bubble aligns itself to
+                the right edge of `.genie-thread`, so every bubble and card
+                must stay a DIRECT flex child of it. */}
+            {earlier.map((turn, i) => (
+              <Fragment key={turnKey(turn, earlier.length - 1 - i)}>
+                {turn.question && (
+                  <div className="genie__msg genie__msg--user">{turn.question}</div>
+                )}
+                <GenieThreadTurn turn={turn} onFollowUp={onFollowUp} onAction={onAction} />
+              </Fragment>
+            ))}
           </div>
         )}
       </div>

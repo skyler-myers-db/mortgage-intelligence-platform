@@ -5686,6 +5686,88 @@
         "title": "GenieActionSuggestion",
         "type": "object"
       },
+      "GenieAnswerSection": {
+        "description": "One planned sub-analysis of a deep-research sweep, with its own data.\n\nThe sweep used to fold every section into one markdown ``answer`` and\nship only the largest section's rows, so a seven-part research answer\nrendered as one chart and one table. Each section now carries its own\nverified rows and chart plan so the reader gets a visual per finding.\n``title`` is Genie-authored (planner-supplied) and, like every other\nfield here, is scanned by the visible-text guard before it renders.",
+        "properties": {
+          "answer": {
+            "title": "Answer",
+            "type": "string"
+          },
+          "narrative_withheld": {
+            "default": false,
+            "title": "Narrative Withheld",
+            "type": "boolean"
+          },
+          "question": {
+            "title": "Question",
+            "type": "string"
+          },
+          "row_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Row Count"
+          },
+          "sql_query": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sql Query"
+          },
+          "table_rows": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Table Rows"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "trusted_assets": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Trusted Assets",
+            "type": "array"
+          },
+          "visualization": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GenieVisualizationSpec"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "title",
+          "question",
+          "answer"
+        ],
+        "title": "GenieAnswerSection",
+        "type": "object"
+      },
       "GenieCompleteRequest": {
         "description": "Finish an in-flight Genie message into a governed answer.\n\n``question`` must hash-match the token minted at submit, which makes the\nguarded prompt and the completed answer cryptographically the same turn.",
         "properties": {
@@ -5968,6 +6050,13 @@
             ],
             "title": "Row Count"
           },
+          "sections": {
+            "items": {
+              "$ref": "#/components/schemas/GenieAnswerSection"
+            },
+            "title": "Sections",
+            "type": "array"
+          },
           "source": {
             "title": "Source",
             "type": "string"
@@ -5982,6 +6071,17 @@
               }
             ],
             "title": "Sql Query"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary"
           },
           "table_rows": {
             "anyOf": [

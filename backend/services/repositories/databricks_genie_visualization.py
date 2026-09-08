@@ -1,6 +1,8 @@
 """Visualization planning helpers for Databricks Genie responses."""
 from __future__ import annotations
 
+import re
+from decimal import Decimal
 from typing import Any
 
 from backend.services.genie_answers import GenieVisualizationSpec
@@ -40,24 +42,114 @@ def _is_genie_identifier_column(column: str) -> bool:
     return lower in _GENIE_IDENTIFIER_COLUMNS or lower.endswith("_id")
 
 
-def _numeric_columns(rows: list[dict[str, Any]] | None) -> list[str]:
+_FLAG_STRINGS = frozenset({"true", "false"})
+COHORT_LABEL_COLUMN = "cohort"
+
+
+def _is_flag_value(value: Any) -> bool:
+    if isinstance(value, bool):
+        return True
+    return isinstance(value, str) and value.strip().lower() in _FLAG_STRINGS
+
+
+def _flag_columns(rows: list[dict[str, Any]] | None) -> list[str]:
+    """Columns whose every non-null value is a boolean (or "true"/"false").
+
+    Live capture 2026-09-08: a four-flag co-occurrence result charted as
+    twelve bars all labelled "true" because the SQL result serialised the
+    booleans as strings and the first all-string column became the label.
+    A flag is a filter, not a category axis and not a measure.
+    """
+
     out: list[str] = []
     for col in _row_columns(rows):
-        if _is_genie_identifier_column(col):
+        values = [row.get(col) for row in rows or [] if row.get(col) is not None]
+        if values and all(_is_flag_value(v) for v in values):
+            out.append(col)
+    return out
+
+
+# The Genie SQL result serialises every cell as text ("1036", "40.70"), so a
+# numeric column is one whose non-null cells all PARSE as numbers. Live capture
+# 2026-09-08: with an isinstance check the planner never saw a measure in a
+# live result and returned "table" for every answer, leaving charts to the
+# client's guesswork.
+_NUMERIC_TEXT_RE = re.compile(r"^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?$")
+
+
+def _is_numeric_cell(value: Any) -> bool:
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int | float | Decimal):
+        return True
+    return isinstance(value, str) and bool(_NUMERIC_TEXT_RE.match(value.strip()))
+
+
+def _numeric_columns(rows: list[dict[str, Any]] | None) -> list[str]:
+    out: list[str] = []
+    flags = set(_flag_columns(rows))
+    for col in _row_columns(rows):
+        if _is_genie_identifier_column(col) or col in flags:
             continue
         values = [row.get(col) for row in rows or [] if row.get(col) is not None]
-        if values and all(isinstance(v, int | float) for v in values):
+        if values and all(_is_numeric_cell(v) for v in values):
             out.append(col)
     return out
 
 
 def _text_columns(rows: list[dict[str, Any]] | None) -> list[str]:
+    """String columns that are neither flags nor numbers-as-text."""
+
     out: list[str] = []
+    flags = set(_flag_columns(rows))
+    numeric = set(_numeric_columns(rows))
     for col in _row_columns(rows):
+        if col in flags or col in numeric:
+            continue
         values = [row.get(col) for row in rows or [] if row.get(col) is not None]
         if values and all(isinstance(v, str) for v in values):
             out.append(col)
     return out
+
+
+def _humanize_flag(column: str) -> str:
+    words = column.replace("_", " ").strip()
+    words = re.sub(r"\s+flag$", "", words, flags=re.IGNORECASE)
+    words = re.sub(r"^(?:is|has)\s+", "", words, flags=re.IGNORECASE)
+    return words.strip().capitalize() if words else column
+
+
+def augment_cohort_label(rows: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
+    """Add a readable ``cohort`` label when the rows are a flag co-occurrence.
+
+    Only when two or more flag columns describe each row and no other text
+    column can label it: each row's flags that are true are joined into one
+    label ("In the money · Equity · Investor"). Presentation only — no
+    numeric value is added, so the claims verifier's support set is
+    unchanged. Returns the input untouched in every other case.
+    """
+
+    if not rows:
+        return rows
+    flags = _flag_columns(rows)
+    if len(flags) < 2 or _text_columns(rows) or COHORT_LABEL_COLUMN in _row_columns(rows):
+        return rows
+    labelled: list[dict[str, Any]] = []
+    for row in rows:
+        on = [
+            _humanize_flag(col)
+            for col in flags
+            if (value := row.get(col)) is not None
+            and (value is True or str(value).strip().lower() == "true")
+        ]
+        label = " · ".join(on) if on else "None of these"
+        labelled.append({COHORT_LABEL_COLUMN: label, **row})
+    return labelled
+
+
+def _labels_are_distinct(rows: list[dict[str, Any]] | None, label: str) -> bool:
+    values = [row.get(label) for row in rows or []]
+    return len({str(v) for v in values}) == len(values)
 
 
 def _dateish_columns(rows: list[dict[str, Any]] | None) -> list[str]:
@@ -117,8 +209,11 @@ def _label_column(rows: list[dict[str, Any]] | None, question: str) -> str | Non
         preferred = ["msa_cbsa_code", "cbsa_code", "msa", "market", *preferred]
     if "state" in q or "map" in q:
         preferred = ["state", *preferred]
+    flags = set(_flag_columns(rows))
+    if COHORT_LABEL_COLUMN in cols:
+        return COHORT_LABEL_COLUMN
     for col in preferred:
-        if col in cols:
+        if col in cols and col not in flags:
             return col
     texts = _text_columns(rows)
     return texts[0] if texts else None
@@ -204,13 +299,22 @@ def _plan_genie_visualization(
             y=value,
             reason="single-row numeric result",
         )
-    if label and value and row_count >= 2:
+    if label and value and row_count >= 2 and _labels_are_distinct(rows, label):
         return GenieVisualizationSpec(
             kind="bar",
             title=f"{value} by {label}",
             x=label,
             y=value,
             reason="categorical result with numeric measure",
+        )
+    if label and value and row_count >= 2:
+        # Repeated labels (a flag, a coarse bucket) cannot be bars: the reader
+        # would see several bars with the same name and no way to tell them
+        # apart. The table carries the full row.
+        return GenieVisualizationSpec(
+            kind="table",
+            title="Query result",
+            reason="label column repeats across rows",
         )
     if row_count > 0:
         return GenieVisualizationSpec(kind="table", title="Query result")

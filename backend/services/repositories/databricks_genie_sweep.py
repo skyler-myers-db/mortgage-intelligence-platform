@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING
 
 from backend.api import genie_guardrails as prompt_guardrails
 from backend.services.genie_answers import (
+    GenieAnswerSection,
     GenieMessageResponse,
     GenieProof,
     GenieReasoningStep,
@@ -63,11 +64,54 @@ _PLUMBING_ANSWER_MARKERS = (
 
 
 def _has_rendered_prose(response: GenieMessageResponse) -> bool:
+    """A section ships when it carries prose or rows a reader can use.
+
+    A withheld draft no longer renders as a status line: the adapter writes
+    a plain-language digest of the verified rows (and, live-first, asks
+    Genie for a verified rewrite first), so a section with rows is content
+    even when its first draft failed verification. Only the legacy plumbing
+    markers — kept for older responses — still disqualify prose.
+    """
+
     answer = (response.answer or "").strip()
-    if not answer:
+    if answer:
+        lowered = answer.lower()
+        if not any(marker in lowered for marker in _PLUMBING_ANSWER_MARKERS):
+            return True
+    return bool(response.table_rows)
+
+
+def _section_is_renderable(title: str | None, response: GenieMessageResponse) -> bool:
+    """Run the router's visible-text scan on ONE section before it is composed.
+
+    Every section now renders its own rows and chart labels, so the router
+    scans all of them. Scanning only at the router meant one unsafe cell in
+    one section (live 2026-09-08: a place value colliding with a protected
+    term) blocked the whole seven-part answer as ``policy_blocked``. The same
+    fail-closed scan applied per section drops just that section, disclosed
+    as a gap; the router scan stays as the final backstop.
+    """
+
+    from backend.services.genie_message_policy import (
+        genie_response_has_unsafe_visible_text,
+        genie_visible_text_unsafe,
+    )
+
+    if title and genie_visible_text_unsafe(title):
         return False
-    lowered = answer.lower()
-    return not any(marker in lowered for marker in _PLUMBING_ANSWER_MARKERS)
+    if genie_visible_text_unsafe(response.question):
+        return False
+    return not genie_response_has_unsafe_visible_text(response)
+
+
+def _narrative_was_withheld(response: GenieMessageResponse) -> bool:
+    proof = response.proof
+    if proof is None:
+        return False
+    return any(
+        "withheld" in gap.lower() and "narrative" in gap.lower()
+        for gap in proof.known_data_gaps
+    )
 
 # Fan-out cap: polite to the Conversation API while keeping wall time near the
 # slowest single turn.
@@ -215,11 +259,36 @@ def _planning_prompt(question: str, *, deep: bool = False) -> str:
         "and answerable with one SQL query over your trusted assets. Choose the "
         "angles yourself based on what the question is really asking and which "
         "of your assets can answer it. Reply ONLY with a numbered list, one "
-        "question per line, no preamble and no closing text."
+        "line per question and no preamble or closing text. Format every line "
+        "as `Title — question`: the Title is a section heading of at most six "
+        "plain words a lending executive would use (for example `Market size "
+        "by state — How many marketable borrowers are in each state?`)."
     )
 
 
-def _parse_planned_questions(text: str | None, *, deep: bool = False) -> list[str]:
+# `Title — question`. The planner is asked for an em dash; a colon is accepted
+# because models drift to it. A hyphen is NOT a separator (in-the-money,
+# rate-and-term) — a line without a recognised separator is all question.
+_PLAN_TITLE_RE = re.compile(r"^(?P<title>[^:—]{3,80}?)\s*[—:]\s+(?P<question>.{10,})$")
+_MAX_TITLE_WORDS = 8
+
+
+def _split_planned_line(candidate: str) -> tuple[str | None, str]:
+    match = _PLAN_TITLE_RE.match(candidate)
+    if not match:
+        return None, candidate
+    title = match.group("title").strip().strip("\"'*_`")
+    question = match.group("question").strip()
+    if not title or len(title.split()) > _MAX_TITLE_WORDS or not question:
+        return None, candidate
+    return title, question
+
+
+def _parse_planned_items(
+    text: str | None, *, deep: bool = False
+) -> list[tuple[str | None, str]]:
+    """(title, question) per planned line; title is None when the line had none."""
+
     if not text:
         return []
     # The planner's own "this is not an analytics request" verdict. Nothing
@@ -228,7 +297,8 @@ def _parse_planned_questions(text: str | None, *, deep: bool = False) -> list[st
     # instead of burning a seven-turn sweep on them.
     if "NO_PLAN" in text.upper():
         return []
-    planned: list[str] = []
+    planned: list[tuple[str | None, str]] = []
+    seen: set[str] = set()
     for line in text.splitlines():
         match = _PLAN_LINE_RE.match(line)
         if not match:
@@ -236,11 +306,18 @@ def _parse_planned_questions(text: str | None, *, deep: bool = False) -> list[st
         candidate = match.group(1).strip().strip("\"'")
         if not candidate:
             continue
-        if not candidate.endswith("?"):
-            candidate = f"{candidate}?"
-        if candidate not in planned:
-            planned.append(candidate)
+        title, question = _split_planned_line(candidate)
+        if not question.endswith("?"):
+            question = f"{question}?"
+        if question in seen:
+            continue
+        seen.add(question)
+        planned.append((title, question))
     return planned[: (_MAX_PLANNED_DEEP if deep else _MAX_PLANNED)]
+
+
+def _parse_planned_questions(text: str | None, *, deep: bool = False) -> list[str]:
+    return [question for _, question in _parse_planned_items(text, deep=deep)]
 
 
 def _planned_question_guard_hit(question: str) -> str | None:
@@ -277,22 +354,40 @@ def plan_sub_questions(
     Returns (planned, dropped_disclosures). Planning failures return ([], []).
     """
 
+    planned_items, dropped = plan_sub_analyses(repo, question, deep=deep)
+    return [question_text for _, question_text in planned_items], dropped
+
+
+def plan_sub_analyses(
+    repo: DatabricksGenieRepository,
+    question: str,
+    *,
+    deep: bool = False,
+) -> tuple[list[tuple[str | None, str]], list[str]]:
+    """Titled decomposition: (title, question) per surviving planned line.
+
+    The title is planner-authored model text and is screened with the same
+    battery as the question it heads; a title that trips the screen drops the
+    whole line.
+    """
+
     try:
         planning_turn = repo.ask_raw(_planning_prompt(question, deep=deep))
     except Exception:  # noqa: BLE001 - planner failure falls through honestly
         return [], []
-    planned_raw = _parse_planned_questions(planning_turn, deep=deep)
-    planned: list[str] = []
+    planned: list[tuple[str | None, str]] = []
     dropped: list[str] = []
-    for candidate in planned_raw:
-        hit = _planned_question_guard_hit(candidate)
+    for title, candidate in _parse_planned_items(planning_turn, deep=deep):
+        hit = _planned_question_guard_hit(candidate) or (
+            _planned_question_guard_hit(title) if title else None
+        )
         if hit is not None:
             dropped.append(
                 "One planned sub-analysis used selection vocabulary outside the "
                 f"reviewed set ({hit}) and was not executed."
             )
             continue
-        planned.append(candidate)
+        planned.append((title, candidate))
     return planned, dropped
 
 
@@ -317,16 +412,28 @@ def _synthesis_prompt(
             "that appear in the results above: name the standout borrowers or "
             "cohort and the figures that put them on top; say why they stand "
             "out RELATIVE to the wider population (use the comparison "
-            "numbers); state the offer call and the signal behind it; and end "
-            "with the one cross-cutting insight a lender could not read off "
+            "numbers); state the recommended offer and the signal behind it; "
+            "and end with the one cross-cutting insight a lender could not read off "
             "any single screen. If the results above do not support one of "
-            "these, say so rather than inventing it."
+            "these, say so rather than inventing it. Copy every figure exactly "
+            "as it appears above — never add, subtract, average, convert or "
+            "turn figures into percentages; compare in words instead. Write "
+            "for a lending executive: no table, column or query names, and no "
+            "description of how the analysis was run. Describe priorities and "
+            "recommended offers; never use the words call, target, contact or "
+            "reach out, and never describe outreach."
         )
     else:
         ask = (
             "Write the executive synthesis in 4 to 8 sentences: the biggest "
             "cross-cutting insights and what a lender should act on first. Use "
-            "ONLY numbers that appear in the results above, and no headings."
+            "ONLY numbers that appear in the results above, copied exactly — "
+            "never add, subtract, average, convert or turn them into "
+            "percentages; compare in words instead — and no headings. Write for "
+            "a lending executive: no table, column or query names, and no "
+            "description of how the analysis was run. Describe priorities and "
+            "recommended offers; never use the words call, target, contact or "
+            "reach out, and never describe outreach."
         )
     return (
         "Do not generate SQL for this message. Below are the verified results "
@@ -357,6 +464,7 @@ def _synthesize_closing(
         _unsupported_answer_numeric_claims,
     )
 
+    combined_rows = [row for _, resp in sections for row in (resp.table_rows or [])]
     try:
         draft = repo.ask_raw(_synthesis_prompt(question, sections, deep=deep))
     except Exception:  # noqa: BLE001 - synthesis is additive, never blocking
@@ -364,18 +472,56 @@ def _synthesize_closing(
     draft = (draft or "").strip()
     if not draft:
         return None, None
-    combined_rows = [row for _, resp in sections for row in (resp.table_rows or [])]
     if _unsupported_answer_numeric_claims(draft, combined_rows, question):
-        return None, (
-            "A cross-section synthesis draft was omitted: it carried numbers "
-            "the verified section results could not support."
-        )
+        # Live-first repair: hand Genie the verified figures and ask once for
+        # a rewrite, then verify the rewrite exactly like the first draft.
+        try:
+            retry = repo.ask_raw(_synthesis_repair_prompt(question, combined_rows))
+        except Exception:  # noqa: BLE001 - the retry is additive too
+            retry = None
+        draft = (retry or "").strip()
+        if not draft or _unsupported_answer_numeric_claims(draft, combined_rows, question):
+            return None, (
+                "A cross-section synthesis draft was omitted: it carried numbers "
+                "the verified section results could not support."
+            )
     if genie_visible_text_unsafe(draft):
         return None, (
             "A cross-section synthesis draft was withheld by the output "
             "safety guard."
         )
     return draft, None
+
+
+# The rewrite digest must cover EVERY row the synthesis is verified against:
+# a figure quoted from a row outside the digest is unsupported by
+# construction (live 2026-09-08: seven sections, ~100 rows, a 40-row digest).
+_SYNTHESIS_REPAIR_MAX_ROWS = 160
+_SYNTHESIS_REPAIR_MAX_COLS = 8
+
+
+def _synthesis_repair_prompt(question: str, rows: list[dict[str, object]]) -> str:
+    lines: list[str] = []
+    for row in rows[:_SYNTHESIS_REPAIR_MAX_ROWS]:
+        cells = [
+            f"{column.replace('_', ' ')}: {value}"
+            for column, value in list(row.items())[:_SYNTHESIS_REPAIR_MAX_COLS]
+            if value is not None
+        ]
+        if cells:
+            lines.append("- " + "; ".join(cells))
+    digest = "\n".join(lines)
+    return (
+        "Do not generate SQL for this message. Your synthesis for the question "
+        f'"{question}" used a figure that is not in the verified results. '
+        "Rewrite it in 6 to 12 sentences for a lending executive. Quote at "
+        "most eight figures, each copied exactly from the list below — never "
+        "add, subtract, average, round, convert or turn figures into "
+        "percentages; compare in words instead. No table, column or query "
+        "names, no headings, no mention of this instruction, and never the "
+        "words call, target, contact or reach out.\n\n"
+        f"Verified figures:\n{digest}"
+    )
 
 
 def _live_follow_ups(sections: list[tuple[str, GenieMessageResponse]]) -> list[str]:
@@ -416,7 +562,9 @@ def run_planned_sweep(
     """
 
     started = time.monotonic()
-    planned, dropped = plan_sub_questions(repo, question, deep=deep)
+    planned_items, dropped = plan_sub_analyses(repo, question, deep=deep)
+    planned = [question_text for _, question_text in planned_items]
+    titles = {question_text: title for title, question_text in planned_items}
     plan_floor = _MIN_PLANNED_DEEP if deep else _MIN_PLANNED
     emit(
         log,
@@ -489,12 +637,28 @@ def run_planned_sweep(
     sections: list[tuple[str, GenieMessageResponse]] = []
     gaps: list[str] = list(dropped)
     unfinished = 0
+    withheld_by_guard = 0
     for sub_question, response in zip(planned, results, strict=True):
         if (
             response is not None
             and response.source in _DATA_BEARING_SOURCES
             and _has_rendered_prose(response)
         ):
+            if not _section_is_renderable(titles.get(sub_question), response):
+                withheld_by_guard += 1
+                emit(
+                    log,
+                    "genie_sweep_section",
+                    dependency="genie",
+                    outcome="unsafe_visible_text",
+                    section_hash=_genie_question_hash(sub_question),
+                    row_count=response.row_count or 0,
+                )
+                gaps.append(
+                    "One planned section was withheld by the output safety guard "
+                    "and was omitted; the other sections are unaffected."
+                )
+                continue
             sections.append((sub_question, response))
         else:
             if response is None:
@@ -515,6 +679,7 @@ def run_planned_sweep(
         sections=len(sections),
         omitted=len(planned) - len(sections),
         unfinished=unfinished,
+        withheld_by_guard=withheld_by_guard,
         floor=_MIN_PLANNED,
     )
     if len(sections) < _MIN_PLANNED:
@@ -526,20 +691,35 @@ def run_planned_sweep(
             if asset not in assets:
                 assets.append(asset)
 
-    intro = (
-        f"I asked the governed space to plan this request itself; it decomposed "
-        f"the question into {len(planned)} sub-analyses and answered each with "
-        f"its own governed SQL over {', '.join(assets)}. Every section below is "
-        "Genie's own answer — the generated SQL for each is in the proof drawer."
-    )
-    body_parts = [intro]
-    for sub_question, response in sections:
-        body_parts.append(f"**{sub_question}**\n\n{(response.answer or '').strip()}")
+    # Business-facing composition: the verified summary leads, then one
+    # titled section per sub-analysis, each carrying its own rows and chart.
+    # How the answer was produced (the plan, the per-section governed SQL) is
+    # disclosed in the process trace and the proof drawer, not in the body
+    # (user feedback 2026-09-08: the method preamble read as internal
+    # pipeline thoughts to a business reader).
     synthesis, synthesis_gap = _synthesize_closing(repo, question, sections, deep=deep)
-    if synthesis:
-        body_parts.append(f"**What this adds up to**\n\n{synthesis}")
-    elif synthesis_gap:
+    if synthesis_gap:
         gaps.append(synthesis_gap)
+    answer_sections: list[GenieAnswerSection] = []
+    for sub_question, response in sections:
+        answer_sections.append(
+            GenieAnswerSection(
+                title=titles.get(sub_question) or sub_question,
+                question=sub_question,
+                answer=(response.answer or "").strip(),
+                trusted_assets=list(response.trusted_assets),
+                sql_query=response.sql_query,
+                row_count=response.row_count,
+                table_rows=response.table_rows,
+                visualization=response.visualization,
+                narrative_withheld=_narrative_was_withheld(response),
+            )
+        )
+    body_parts: list[str] = []
+    if synthesis:
+        body_parts.append(f"**Summary**\n\n{synthesis}")
+    for section in answer_sections:
+        body_parts.append(f"**{section.title}**\n\n{section.answer}")
     answer = "\n\n".join(body_parts)
 
     anchor = max((resp for _, resp in sections), key=lambda r: r.row_count or 0)
@@ -599,6 +779,8 @@ def run_planned_sweep(
         question=question,
         question_hash=_genie_question_hash(question),
         answer=answer,
+        summary=synthesis,
+        sections=answer_sections,
         source="genie",
         trusted_assets=assets,
         sql_query=_labeled_sql(sections),

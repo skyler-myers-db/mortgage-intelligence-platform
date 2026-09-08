@@ -87,6 +87,19 @@ export function isSectionHeading(text: string): boolean {
   return /^\*\*[^*]+\*\*$/.test(text.trim());
 }
 
+/**
+ * A paragraph that is NOTHING but "Source: catalog.schema.table" is a
+ * footnote, not a claim. Genie closes most answers with one; at body size it
+ * competed with the analysis for attention. Same SOURCE_LINE_RE shape as the
+ * Catalog Explorer linker (anchored, optional sentence period), so the link
+ * behavior is untouched — only the type treatment changes.
+ */
+const SOURCE_FOOTNOTE_RE = new RegExp(`^${SOURCE_LINE_RE.source}\\.?$`, 'i');
+
+export function isSourceFootnote(text: string): boolean {
+  return SOURCE_FOOTNOTE_RE.test(text.trim());
+}
+
 /** Tiny markdown renderer for Genie answers: bold, inline code, bullets. */
 function renderInlineMd(text: string, workspaceHost?: string | null): ReactNode[] {
   const out: ReactNode[] = [];
@@ -166,7 +179,9 @@ export function MarkdownAnswer({
               key={i}
               className={`genie-md-p ${i === 0 ? 'genie-md-p--first' : ''} ${
                 isSectionHeading(b.text) ? 'genie-md-p--heading' : ''
-              }`.trim()}
+              } ${isSourceFootnote(b.text) ? 'genie-md-p--source' : ''}`
+                .replace(/\s+/g, ' ')
+                .trim()}
             >
               {renderInlineMd(b.text, workspaceHost)}
             </p>

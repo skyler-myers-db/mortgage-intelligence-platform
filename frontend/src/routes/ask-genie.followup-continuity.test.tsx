@@ -61,6 +61,7 @@ vi.mock('react-router', async () => {
   return { ...actual, useNavigate: () => navigate };
 });
 
+import { clearGenieTurns } from '../lib/genieConversationStore';
 import AskGenie from './ask-genie';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -120,6 +121,9 @@ describe('Ask Genie conversation continuity', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     installLocalStorage();
+    // The route renders the shared Genie transcript; without this the turns
+    // of the previous test are still on screen when the next one mounts.
+    clearGenieTurns();
     growthAgent.mockResolvedValue(HOME);
     growthAgentCapabilities.mockResolvedValue(HOME);
     genieStart.mockResolvedValue(START);
