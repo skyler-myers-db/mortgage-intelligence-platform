@@ -2679,6 +2679,10 @@ a.lineage-node__chip:focus-visible {
 .genie__msg--ai .sources {
   display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px;
 }
+/* Ask Genie route transcript. Same `.genie__msg--user` bubble as the floating
+   panel; latest turn first, older turns under an `.eyebrow` divider whose
+   spacing comes from this container's gap. */
+.genie-thread { display: flex; flex-direction: column; gap: var(--sp-3); }
 .genie__input {
   border-top: 1px solid var(--line-1);
   padding: var(--sp-3);
@@ -6294,6 +6298,14 @@ a.lineage-node__chip:focus-visible {
 .genie-md-p--heading.genie-md-p--first {
   padding-top: 0;
   border-top: 0;
+}
+/* Source disclosure ("Source: mip.gold.borrower_360") on its own line is a
+   footnote, not a claim — muted and one step down from body copy. */
+/* margin-top is inherited from `.genie-md-p` (var(--sp-2)) — do not repeat it;
+   the initial-CSS gzip gate has ~20 bytes of headroom. */
+.genie-md-p--source {
+  font-size: var(--fs-11);
+  color: var(--text-3);
 }
 .genie-md-list {
   margin: var(--sp-2) 0 0;

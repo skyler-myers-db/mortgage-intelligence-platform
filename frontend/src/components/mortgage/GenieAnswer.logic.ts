@@ -176,7 +176,42 @@ function formatSegmentValue(value: unknown, multiple: boolean): string {
   return safeSegmentName(raw) ?? 'Unknown segment';
 }
 
-function chooseValueColumn(columns: string[], types: Record<string, 'str' | 'num' | 'mixed'>): string | null {
+/**
+ * Boolean-valued columns are neither labels nor measures.
+ *
+ * A co-occurrence table (four segment flags + one borrower count) arrives
+ * over the wire with the flags as real booleans OR as the strings
+ * "true"/"false". The string form used to satisfy "first all-string column"
+ * and became the bar label, so a twelve-row table charted as twelve bars all
+ * labelled "true". Tag them separately and keep them out of both roles.
+ */
+function isBooleanLike(value: unknown): boolean {
+  if (typeof value === 'boolean') return true;
+  if (typeof value !== 'string') return false;
+  const cleaned = value.trim().toLowerCase();
+  return cleaned === 'true' || cleaned === 'false';
+}
+
+function isTrueFlag(value: unknown): boolean {
+  if (typeof value === 'boolean') return value;
+  return typeof value === 'string' && value.trim().toLowerCase() === 'true';
+}
+
+/** True when every non-null value in `column` is a boolean or "true"/"false". */
+export function isFlagColumn(rows: Array<Record<string, unknown>>, column: string): boolean {
+  let seen = false;
+  for (const row of rows) {
+    const value = row[column];
+    if (value === null || value === undefined) continue;
+    if (!isBooleanLike(value)) return false;
+    seen = true;
+  }
+  return seen;
+}
+
+type ColumnType = 'str' | 'num' | 'mixed' | 'flag';
+
+function chooseValueColumn(columns: string[], types: Record<string, ColumnType>): string | null {
   const candidates = columns.filter((col) => types[col] === 'num' && !isIdentifierColumn(col));
   if (candidates.length === 0) return null;
   for (const preferred of VALUE_COLUMN_PRIORITY) {
@@ -201,6 +236,62 @@ function chartFromColumns(
   return { rows: projected, labelCol, valueCol, source: 'table_rows' };
 }
 
+/** Repeated bar labels are not a chart — one bar per label or nothing. */
+function hasDuplicateLabels(projected: ChartRow[]): boolean {
+  return new Set(projected.map((row) => row.label)).size < projected.length;
+}
+
+/**
+ * Distinctness is judged on the RAW label values of the rows that actually
+ * project, not on their rendered form: `formatCell` pads a 4-digit ZIP, so
+ * two genuinely different rows can share a rendered label. A repeated raw
+ * value means the column does not identify the row — chart nothing and let
+ * the table carry it.
+ */
+function distinctLabelChart(
+  rows: Array<Record<string, unknown>>,
+  labelCol: string,
+  valueCol: string,
+): InferredChart | null {
+  const chart = chartFromColumns(rows, labelCol, valueCol);
+  if (!chart) return null;
+  const seen = new Set<string>();
+  for (const row of rows) {
+    if (coerceMeasure(row[valueCol], valueCol) === null) continue;
+    const key = String(row[labelCol]);
+    if (seen.has(key)) return null;
+    seen.add(key);
+  }
+  return chart;
+}
+
+/** "in_the_money_flag" -> "In The Money" — the flag name as a cohort label. */
+function flagCohortName(column: string): string {
+  return humanizeKey(column).replace(/\s+Flag$/i, '');
+}
+
+/**
+ * A table that is only flags plus a measure describes cohorts, not
+ * categories: each row's identity is the COMBINATION of flags that are
+ * true. Compose that combination into the bar label so a co-occurrence
+ * sweep reads as "In The Money · Equity" instead of "true".
+ */
+function chartFromFlagCohorts(
+  rows: Array<Record<string, unknown>>,
+  flagCols: string[],
+  valueCol: string,
+): InferredChart | null {
+  const projected: ChartRow[] = [];
+  for (const row of rows) {
+    const value = coerceMeasure(row[valueCol], valueCol);
+    if (value === null) continue;
+    const active = flagCols.filter((col) => isTrueFlag(row[col])).map(flagCohortName);
+    projected.push({ label: active.length > 0 ? active.join(' · ') : 'No flags', value });
+  }
+  if (projected.length < 2 || hasDuplicateLabels(projected)) return null;
+  return { rows: projected, labelCol: 'cohort', valueCol, source: 'table_rows' };
+}
+
 function chartFromVisualization(
   rows: Array<Record<string, unknown>>,
   viz: GenieVisualization | null,
@@ -208,7 +299,10 @@ function chartFromVisualization(
   if (!viz?.x || !viz.y) return null;
   const columns = new Set(Object.keys(rows[0] ?? {}));
   if (!columns.has(viz.x) || !columns.has(viz.y)) return null;
-  return chartFromColumns(rows, viz.x, viz.y);
+  // A backend-chosen x is still refused when it cannot carry distinct bar
+  // labels — same fallback as inference: no chart, the table stands.
+  if (isFlagColumn(rows, viz.x)) return null;
+  return distinctLabelChart(rows, viz.x, viz.y);
 }
 
 export function inferChartFromRows(
@@ -220,8 +314,12 @@ export function inferChartFromRows(
   // Walk the columns once and tag each as "all string" / "all
   // numeric" / "mixed". Skip rows where the value is null/undefined
   // -- they're "missing" not "wrong type".
-  const types: Record<string, 'str' | 'num' | 'mixed'> = {};
+  const types: Record<string, ColumnType> = {};
   for (const col of columns) {
+    if (isFlagColumn(rows, col)) {
+      types[col] = 'flag';
+      continue;
+    }
     let hasStr = false;
     let hasNum = false;
     let hasMixed = false;
@@ -243,8 +341,13 @@ export function inferChartFromRows(
   }
   const labelCol = columns.find((c) => types[c] === 'str');
   const valueCol = chooseValueColumn(columns, types);
-  if (!labelCol || !valueCol) return null;
-  return chartFromColumns(rows, labelCol, valueCol);
+  if (!valueCol) return null;
+  if (labelCol) return distinctLabelChart(rows, labelCol, valueCol);
+  // No categorical column at all: a two-or-more-flag table still charts,
+  // labelled by the cohort each row describes.
+  const flagCols = columns.filter((c) => types[c] === 'flag');
+  if (flagCols.length >= 2) return chartFromFlagCohorts(rows, flagCols, valueCol);
+  return null;
 }
 
 const STATE_NAME_TO_CODE: Record<string, string> = {

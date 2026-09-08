@@ -1,6 +1,5 @@
 import { useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Link } from 'react-router';
 import type {
   GenieActionSuggestion,
   GenieAnswer as GenieAnswerShape,
@@ -9,13 +8,7 @@ import { Icon } from '../Icon';
 import { useApp } from '../AppContext';
 import { useWorkspaceHost } from '../HealthProvider';
 import { GenieActions } from './GenieAnswerActions';
-import {
-  GenieBarChart,
-  GenieBorrowerList,
-  GenieLineChart,
-  GenieMapChart,
-  GenieStrategyBoard,
-} from './GenieAnswerCharts';
+import { GenieAnswerSections, GenieRowsVisual } from './GenieAnswer.sections';
 import { MarkdownAnswer, stripQuestionRestatement } from './GenieAnswer.markdown';
 import { normalizeGenieAnswerLanguage } from '../../lib/genieAnswerLanguage';
 import { GenieProofPanel } from './GenieAnswerProof';
@@ -26,17 +19,9 @@ import {
   isTrustedGenieSource,
   usePinnedInsights,
 } from '../../lib/pinnedInsights';
-import {
-  coerceNumber,
-  formatCell,
-  humanizeKey,
-  isIdentifierColumn,
-  MAX_TABLE_COLS,
-  MAX_TABLE_ROWS,
-  pickPlan,
-} from './GenieAnswer.logic';
+import { humanizeKey, pickPlan } from './GenieAnswer.logic';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
-import { answerCohortFromActions, genieCellHref } from '../../lib/genieCellLinks';
+import { answerCohortFromActions } from '../../lib/genieCellLinks';
 
 export { stripQuestionRestatement } from './GenieAnswer.markdown';
 export { inferChartFromRows } from './GenieAnswer.logic';
@@ -96,14 +81,19 @@ export function GenieAnswer({
   const proofDrawerRef = useRef<HTMLElement | null>(null);
   const proofCloseRef = useRef<HTMLButtonElement | null>(null);
   const rows = Array.isArray(table_rows) ? table_rows : [];
-  const visibleRows = rows.slice(0, MAX_TABLE_ROWS);
-  const hiddenRows = Math.max(0, rows.length - MAX_TABLE_ROWS);
-  const columns = visibleRows[0] ? Object.keys(visibleRows[0]).slice(0, MAX_TABLE_COLS) : [];
   // The answer's own filters, so a row link opens the population the row
   // reports rather than every borrower in that geography.
   const cellCohort = answerCohortFromActions(actions);
   const chartColumns = rows[0] ? Object.keys(rows[0]) : [];
   const cleanedAnswer = answer ? normalizeGenieAnswerLanguage(stripQuestionRestatement(answer)) : '';
+  // Deep-research sweep: each planned sub-analysis ships its own verified
+  // prose, rows and chart plan. When they are present they ARE the answer
+  // body — the top-level `answer` is the stitched narrative they were cut
+  // from, and the top-level rows are only the last sub-query's.
+  const sections = Array.isArray(payload.sections) ? payload.sections : [];
+  const hasSections = sections.length > 0;
+  const summaryText = (payload.summary ?? '').trim();
+  const narrative = hasSections && summaryText ? summaryText : cleanedAnswer;
   const isGenieApiAnswer = payload.source === 'genie';
   const isGovernedActionResult = payload.source === GOVERNED_ACTION_SOURCE;
   // Live Genie identifiers are duplicated into proof so the governed audit
@@ -133,8 +123,8 @@ export function GenieAnswer({
   const pinnable =
     Boolean(question) &&
     isTrustedGenieSource(payload.source) &&
-    (Boolean(metric_value) || rows.length > 0 || cleanedAnswer.length > 0);
-  const pinObject = pinnable ? buildPinFromAnswer(payload, cleanedAnswer, question!) : null;
+    (Boolean(metric_value) || rows.length > 0 || narrative.length > 0);
+  const pinObject = pinnable ? buildPinFromAnswer(payload, narrative, question!) : null;
   const isPinned = pinObject ? pins.some((p) => p.id === pinObject.id) : false;
   // Follow-up chips: Genie's own suggestions, or a deterministic fallback so
   // the loop never dead-ends. Only the SYNTHESIZED fallback is gated on the
@@ -153,8 +143,9 @@ export function GenieAnswer({
         : [];
   // Chart is optional and only computed from structured table_rows.
   // Answer prose is never parsed into visualization data.
-  const plan = withChart ? pickPlan(payload, rows, chartColumns) : { kind: 'none', chart: null, viz: null };
-  const chart = plan.chart;
+  const plan = withChart && !hasSections
+    ? pickPlan(payload, rows, chartColumns)
+    : { kind: 'none', chart: null, viz: null };
   const proofToggle = payload.proof ? (
     <div className="genie-proof-toggle">
       <button
@@ -202,7 +193,7 @@ export function GenieAnswer({
     metric_value !== null && metric_value !== undefined && metric_value !== ''
       ? String(metric_value)
       : '',
-    cleanedAnswer,
+    narrative,
   ].filter(Boolean).join(' ');
   const sourceDisclosure = isGovernedActionResult
     ? {
@@ -242,7 +233,18 @@ export function GenieAnswer({
       )}
       {proofToggle}
       {nativeVizBadge}
-      {cleanedAnswer && <MarkdownAnswer text={cleanedAnswer} workspaceHost={workspaceHost} />}
+      {/* Sections ARE the body when the sweep shipped them; the stitched
+          top-level `answer` would repeat every one of them. */}
+      {hasSections ? (
+        <GenieAnswerSections
+          summary={payload.summary}
+          sections={sections}
+          workspaceHost={workspaceHost}
+          cellCohort={cellCohort}
+        />
+      ) : (
+        cleanedAnswer && <MarkdownAnswer text={cleanedAnswer} workspaceHost={workspaceHost} />
+      )}
       {/* The backend exposes bounded, public process summaries for live Genie
           turns through the existing reasoning_trace wire field. Render them
           as escaped text in a native disclosure. */}
@@ -272,107 +274,11 @@ export function GenieAnswer({
           </div>
         </details>
       )}
-      {/* FIX Δ3: chart renders BEFORE the underlying table so the user
-          sees the visual summary first; the table stays as the
-          authoritative data source below. Only renders when withChart
-          is true (Ask Genie deep-dive route only) AND the data shape
-          is chartable (1 categorical + 1 numeric column). */}
-      {plan.kind === 'strategy_board' && (
-        <GenieStrategyBoard rows={rows} x={plan.viz?.x} y={plan.viz?.y} />
-      )}
-      {plan.kind === 'borrower_list' && <GenieBorrowerList rows={rows} />}
-      {plan.kind === 'map' && (
-        <GenieMapChart rows={rows} x={plan.viz?.x ?? chart?.labelCol} y={plan.viz?.y ?? chart?.valueCol} />
-      )}
-      {plan.kind === 'line' && chart && (
-        <GenieLineChart data={chart.rows} labelCol={chart.labelCol} valueCol={chart.valueCol} />
-      )}
-      {(plan.kind === 'bar' || plan.kind === 'funnel' || (!['strategy_board', 'borrower_list', 'map', 'line'].includes(plan.kind) && chart)) && chart && (
-        <GenieBarChart
-          data={chart.rows}
-          labelCol={chart.labelCol}
-          valueCol={chart.valueCol}
-        />
-      )}
-      {/* A single METRIC row is a set of headline facts, not a table —
-          render it as a stat strip (value-first, KPI style) so answers like
-          "count + avg spread + refreshed at" read at a glance. A single
-          RECORD row (identifier columns, e.g. a borrower id) keeps the
-          table: masked ids as KPI headlines misread, and borrower_list
-          plans already render their own list above (QA M6). */}
-      {visibleRows.length === 1 &&
-      columns.length > 0 &&
-      plan.kind === 'none' &&
-      columns.every((c) => !isIdentifierColumn(c)) &&
-      // Warehouse rows arrive as strings — coerce like the chart layer does.
-      columns.some((c) => coerceNumber(visibleRows[0][c]) !== null) ? (
-        <dl className="genie-answer__stats" aria-label="Genie answer headline facts">
-          {columns.map((c) => {
-            const v = visibleRows[0][c];
-            const isNum = coerceNumber(v) !== null && !isIdentifierColumn(c);
-            return (
-              <div key={c} className="genie-answer__stat">
-                <dt className="genie-answer__stat-label">{humanizeKey(c)}</dt>
-                <dd className={`genie-answer__stat-value${isNum ? ' num' : ''}`}>
-                  {formatCell(c, v)}
-                </dd>
-              </div>
-            );
-          })}
-        </dl>
-      ) : (
-        visibleRows.length > 0 &&
-        columns.length > 0 && (
-          <>
-            <div
-              className="genie-answer__table-scroll"
-              role="region"
-              aria-label="Genie answer table"
-              tabIndex={0}
-            >
-              <table className="genie-answer__table">
-                <thead>
-                  <tr>
-                    {columns.map((c) => (
-                      <th key={c}>{humanizeKey(c)}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {visibleRows.map((row, i) => (
-                    <tr key={i}>
-                      {columns.map((c) => {
-                        const v = row[c];
-                        const isNum = typeof v === 'number' && !isIdentifierColumn(c);
-                        // Linkage: a masked borrower id drills into the same
-                        // Borrower 360 route the drill-down cards use; a state
-                        // code opens the same filtered Lead Queue the
-                        // geography map navigates to on a state click.
-                        // Everything else (including city — no route filters
-                        // by city) renders as plain text.
-                        const href = genieCellHref(c, v, cellCohort, row);
-                        return (
-                          <td key={c} className={isNum ? 'num' : undefined}>
-                            {href ? (
-                              <Link className="mono" to={href}>
-                                {formatCell(c, v)}
-                              </Link>
-                            ) : (
-                              formatCell(c, v)
-                            )}
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            {hiddenRows > 0 && (
-              <div className="genie-answer__more">+{hiddenRows} more row{hiddenRows === 1 ? '' : 's'}</div>
-            )}
-          </>
-        )
+      {/* Chart + capped table for the top-level rows. A sections answer
+          renders one visual PER section instead (above), so this block
+          would otherwise repeat the last sub-query's rows. */}
+      {!hasSections && (
+        <GenieRowsVisual rows={rows} plan={plan} cellCohort={cellCohort} />
       )}
       {payload.proof && showProof && typeof document !== 'undefined' && createPortal(
         <>

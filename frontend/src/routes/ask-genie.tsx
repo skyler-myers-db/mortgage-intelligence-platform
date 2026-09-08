@@ -29,6 +29,11 @@ import {
   readGenieConversationId,
   writeGenieConversationId,
 } from '../lib/genieConversation';
+import {
+  clearGenieTurns,
+  setGenieTurns,
+  type GenieTurn,
+} from '../lib/genieConversationStore';
 import { queryKeys } from '../lib/queryKeys';
 import { GrowthAgentDraftPanel } from './ask-genie.growth-agent-drafts';
 import { AskGenieAnswerPanel } from './ask-genie.answer-panel';
@@ -201,6 +206,7 @@ export default function AskGenie() {
     if (!(error instanceof ApiError) || error.status !== 403) return;
     setConversationId(null);
     setSubmittedConversationId(null);
+    clearGenieTurns();
     clearGenieConversationState({ notify: true });
   }, [error]);
 
@@ -213,6 +219,9 @@ export default function AskGenie() {
       setQuestion('');
       setActiveAssetPath(null);
       setActionStatus(null);
+      // An actor-boundary reset invalidates the transcript too: the prior
+      // actor's questions must not linger in this tab. Mirrors GenieChat.
+      clearGenieTurns();
     };
     window.addEventListener(GENIE_CONVERSATION_RESET_EVENT, onActorBoundaryReset);
     return () => {
@@ -241,8 +250,40 @@ export default function AskGenie() {
     setSubmittedConversationId(null);
     setSubmittedQuestion(null);
     setActiveAssetPath(null);
-    setActionStatus('Started a new Genie thread.');
+    setQuestion('');
+    clearGenieTurns();
+    // Order matters: the reset event this dispatches is handled synchronously
+    // by this route's own listener, which clears `actionStatus`. Setting the
+    // confirmation BEFORE the dispatch left it permanently invisible.
     clearGenieConversationState({ notify: true });
+    setActionStatus('Started a new Genie thread.');
+  }
+
+  /**
+   * Restore a past conversation from the History menu. The loaded turns are
+   * the same `{question, response}` shape the local store persists, so they
+   * render through the identical <GenieAnswer> path. The conversation id is
+   * adopted too, so a follow-up continues that Databricks thread rather than
+   * opening an orphan one. Mirrors GenieChat.loadSession.
+   */
+  function loadSession(conversationIdToLoad: string, turns: GenieTurn[]) {
+    suppressBootstrapConversationRef.current = true;
+    setGenieTurns(turns);
+    setConversationId(conversationIdToLoad);
+    // Drop the in-memory answer so the settled turn of the PREVIOUS thread
+    // cannot re-append itself onto the restored one.
+    setSubmittedConversationId(null);
+    setSubmittedQuestion(null);
+    setQuestion('');
+    setActiveAssetPath(null);
+    setActionStatus(null);
+    writeGenieConversationId(conversationIdToLoad);
+  }
+
+  /** A turn settled: the composer must not keep the question it answered.
+   *  Left alone when the user has already typed the next one. */
+  function clearAnsweredQuestion(asked: string) {
+    setQuestion((current) => (current.trim() === asked.trim() ? '' : current));
   }
 
   function scopeToTrustedAsset(asset: { label: string; path: string }) {
@@ -766,6 +807,8 @@ export default function AskGenie() {
           }}
           onAsk={ask}
           onNewThread={newConversation}
+          onLoadSession={loadSession}
+          onSettled={clearAnsweredQuestion}
           loading={loading}
           warmingUp={warmingUp}
           errorMsg={errorMsg}
