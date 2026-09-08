@@ -77,6 +77,16 @@ export function renderSourceLinks(text: string, workspaceHost: string | null | u
   return out;
 }
 
+/**
+ * A paragraph that is nothing but one bold run is a section heading. The
+ * deep-research sweep titles each planned sub-analysis and its closing
+ * synthesis this way (`**<sub-question>**` on its own line), so a ten-section
+ * answer needs those lines to read as headings rather than as bold prose.
+ */
+export function isSectionHeading(text: string): boolean {
+  return /^\*\*[^*]+\*\*$/.test(text.trim());
+}
+
 /** Tiny markdown renderer for Genie answers: bold, inline code, bullets. */
 function renderInlineMd(text: string, workspaceHost?: string | null): ReactNode[] {
   const out: ReactNode[] = [];
@@ -154,7 +164,9 @@ export function MarkdownAnswer({
           b.type === 'p' ? (
             <p
               key={i}
-              className={`genie-md-p ${i === 0 ? 'genie-md-p--first' : ''}`}
+              className={`genie-md-p ${i === 0 ? 'genie-md-p--first' : ''} ${
+                isSectionHeading(b.text) ? 'genie-md-p--heading' : ''
+              }`.trim()}
             >
               {renderInlineMd(b.text, workspaceHost)}
             </p>
