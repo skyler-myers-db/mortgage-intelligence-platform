@@ -341,3 +341,18 @@ observability build (commit 7ed74cac), same method:
 Every deep beat in this track now ships a multi-section sweep; four of the
 eight core beats also ship the verified synthesis on a typical run, and the
 others disclose why it was withheld.
+
+Final verification after the business-readable composition landed (per-section
+charts, summary first, governed-label literals, guard-aware rewrites; commit
+176b2e29, app deployment 8 on 2026-09-08 22:06Z):
+
+| Question | Elapsed | Sections (chart kinds) | Summary |
+|---|---|---|---|
+| 1 Hero: full analysis of the marketable population | 177s | 7 (state bar, offer bar, cohort bar, offer-code bar, 2 tables, borrower list) | yes |
+| 1 Follow-up: top five ZIPs (same thread) | 21s | single turn, ZIP bar | — |
+| 2 Head of Growth: addressable market | 119s | 5 (metric, segment bar, offer bar, 2 tables) | yes |
+| Cohort comparison (the question that once drew twelve "true" bars) | 96s | 6 (2 metrics, 3 cohort bars, 1 table) | yes |
+
+Section titles on that run were Genie's own: "Marketable population size",
+"Offer mix overview", "Why these borrowers", "Offer rationale by cohort",
+"Geography concentration", "Signal co-occurrence", "Evidence behind leaders".
