@@ -129,7 +129,12 @@ REVIEWED_MORTGAGE_ATTRIBUTE_FRAGMENT = (
     # below is unchanged, so an UNREVIEWED attribute stays unreviewed with or
     # without a qualifier -- "average credit score" still refuses, and
     # ``test_aggregate_qualifiers_never_admit_an_unreviewed_attribute`` pins it.
-    r"(?:(?:average|avg|mean|median|typical|high(?:est)?|low(?:est)?|top|bottom)\s+)?"
+    #
+    # ``most``/``fewest`` are the count-noun twins of ``highest``/``lowest``
+    # ("the most live triggers", "the most competitor liens"), hoisted here for
+    # the same reason as ``highest`` -- and they admit nothing on their own:
+    # "the most credit scores" stays unreviewed.
+    r"(?:(?:average|avg|mean|median|typical|high(?:est)?|low(?:est)?|top|bottom|most|fewest)\s+)?"
     r"(?:(?:high|strong|substantial|sufficient|available|usable)\s+(?:home[- ]?)?equity|"
     r"substantial\s+modeled\s+(?:home[- ]?)?equity|"
     r"(?:high|low|rising|falling|current|elevated)\s+"
@@ -208,6 +213,23 @@ REVIEWED_MORTGAGE_ATTRIBUTE_FRAGMENT = (
     # matched before this fragment is ever consulted. Placed last so it cannot
     # shadow "home equity line of credit" or "home equity intent" above.
     r"(?:home[- ]?equity|equity\s+(?:pct|percent(?:age)?|share))|"
+    # The why-now TRIGGER signal: the evidence events (listing, permit, lien,
+    # rate) the Lead Queue and the dossier's trigger timeline are built on
+    # (CLAUDE.md domain rules; ``has_heloc_propensity_trigger`` and the
+    # ``why_now`` evidence on ``mip.gold.borrower_360``). The analytics-shape
+    # surface already reviews ``key triggers?|triggers?``
+    # (``_REVIEWED_ANALYTIC_SIGNAL``); this fragment did not, so the health
+    # governance-intent net -- whose generic ``population with <object>``
+    # branch fails closed on any object outside this list -- withheld a live
+    # deep-synthesis sentence: "the best immediate targets are not simply the
+    # borrowers with the most visible live triggers on a single screen"
+    # (paychex, 2026-09-08). The words are the synthesis prompt's own ("signal
+    # columns (rate spread, equity, triggers)"). The premodifiers are a closed
+    # set and the head noun is anchored: "trigger finger" and "migraine
+    # triggers" stay unreviewed, and a conjunct still cannot launder ("the
+    # most triggers and eczema"). ``why[- ]?now`` spells its own fold image.
+    r"(?:(?:live|active|recent|visible|current|key|new|multiple|several|stacked)\s+){0,2}"
+    r"(?:why[- ]?now\s+)?triggers?|"
     # The governed next-best-offer column (recommended_offer). Qualifier
     # required: a bare "offer" is ordinary campaign vocabulary, this is the
     # product's own ranked recommendation. ``[- ]?`` because the governed
@@ -225,6 +247,17 @@ REVIEWED_ATTRIBUTE_PURPOSE_FRAGMENT = (
     r"(?:\s+for\s+(?:(?:this|the|a)\s+)?"
     r"(?:(?:refi|refinance|heloc|home[- ]?equity|retention|portfolio|purchase|"
     r"mortgage|loan|servicing)\s+)?(?:campaign|offer|options?|review))?"
+    # A PRESENTATION LOCUS: where a reviewed attribute is read, not a second
+    # criterion. "the most live triggers on a single screen" names the same
+    # governed signal as "the most live triggers". The phrase is the deep
+    # synthesis prompt's own ("the one cross-cutting insight a lender could
+    # not read off any single screen") and the model echoes it (live capture,
+    # paychex 2026-09-08). It lives on the tail, beside the purpose, for the
+    # reason the article lives on the fragment: it belongs to no one
+    # alternative. Closed literals only -- no determiner slot, no open noun --
+    # so it can carry nothing: "on a single dashboard" and "on a single screen
+    # and eczema" both leave text unmatched and stay unreviewed.
+    r"(?:\s+(?:visible\s+)?on\s+(?:a\s+single|any\s+single|one|the\s+same)\s+screen)?"
 )
 
 # A GEOGRAPHY SCOPE narrows WHERE a reviewed attribute is measured; it names no

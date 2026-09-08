@@ -377,6 +377,25 @@ _CONTEXTUAL_HUMAN_NAME_RE = re.compile(
     # Prepositions after the verb ("target for reverse mortgages", "call with
     # an offer") are sentence structure, never a person's first name.
     r"(?!(?:for|with|on|in|by|from|into|over|under|near|toward|towards|across|during|after|against|without|"
+    # The rest of that closed class. The row above stopped at the prepositions
+    # somebody had seen after these verbs, so a NOUN reading of the verb --
+    # "the offer call inside that top cohort", "the target of this campaign",
+    # "contact via email" -- paired the preposition with the next word as a
+    # lowercase name and refused the sentence (Genie deep-synthesis capture,
+    # paychex 2026-09-08: ``call inside that`` withheld the whole executive
+    # synthesis, and "offer call" is the synthesis prompt's own vocabulary). A
+    # preposition is never a person's first name, and excluding one hides no
+    # name the other two scans can see: a title-case pair ("call inside Zara
+    # Quinlan") and a lexicon pair ("call inside john smith") still read
+    # whatever follows it. A lowercase name outside the lexicon right after a
+    # preposition was already beyond this pattern's reach ("ask about zara
+    # quinlan", "call with zara quinlan"), and that is unchanged, not widened
+    # by a different rule. ``per`` is deliberately ABSENT -- Per is an
+    # attested Scandinavian given name, so "call per hansen" keeps scanning --
+    # and so are the verb particles (``up``, ``out``, ``back``): a name
+    # naturally follows "call up".
+    r"inside|outside|within|beyond|behind|above|below|around|along|between|among|"
+    r"through|throughout|upon|onto|via|until|since|of|as|like|"
     r"to|the|a|an|and|or|at|about|before|if|when|this|that|these|those|your|our|us|me|you|"
     r"them|him|her|it|then|provider|carrier|system|platform|service|gateway|authorization|consent|permission|outreach|contact|records?|"
     # Domain population/ranking vocabulary: "prioritize overall", "contact
@@ -388,7 +407,9 @@ _CONTEXTUAL_HUMAN_NAME_RE = re.compile(
     # queue of masked IDs, never a person being addressed.
     r"lists?|queues?|sheets?|campaigns?|batches?|waves?|rosters?|"
     r"borrowers?|leads?|candidates?|prospects?|customers?|clients?|"
-    r"segments?|cohorts?|homeowners?|investors?|people|everyone|anyone|someone|"
+    # "target audience" is a noun compound over the same population class
+    # (same 2026-09-08 capture family: "The target audience for this offer").
+    r"segments?|cohorts?|audiences?|homeowners?|investors?|people|everyone|anyone|someone|"
     r"is|are|was|were|will|would|can|could|may|might|has|have|had)\b)"
     r"[A-Za-z]{2,30}\s+[A-Za-z]{2,30}\b|"
     # "X Y qualifies" catches case-normalized names ("john smith qualifies").
