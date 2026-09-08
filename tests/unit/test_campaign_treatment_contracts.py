@@ -9,12 +9,13 @@ from backend.schemas.portfolio import (
     PortfolioPreviewRequest,
 )
 from backend.services.databricks_sql_helpers import qualify
+from tests.fixtures.deploy_script import deploy_entrypoint_text
 from tools.render_sql import render
 
 DDL = Path("sql/ddl/001_catalogs_schemas.sql").read_text(encoding="utf-8")
 LAKEBASE_SCHEMA = Path("lakebase/schema.sql").read_text(encoding="utf-8")
 SEED = Path("lakebase/seed_campaigns.sql").read_text(encoding="utf-8")
-DEPLOY = Path("scripts/deploy.sh").read_text(encoding="utf-8")
+DEPLOY = deploy_entrypoint_text()
 ROLLBACK = Path("tools/databricks/app_deployment_rollback.py").read_text(encoding="utf-8")
 GRANTS = Path("docs/security/GRANTS.md").read_text(encoding="utf-8")
 LIVE_IDEMPOTENCY = Path("tests/integration/test_lakebase_idempotency_live.py").read_text(

@@ -2,13 +2,15 @@ from pathlib import Path
 
 import yaml
 
+from tests.fixtures.deploy_script import deploy_entrypoint_text
+
 ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_bundle_uploads_prebuilt_frontend_without_root_npm_wrapper() -> None:
     bundle = yaml.safe_load((ROOT / "databricks.yml").read_text(encoding="utf-8"))
     app = yaml.safe_load((ROOT / "app.yaml").read_text(encoding="utf-8"))
-    deploy = (ROOT / "scripts" / "deploy.sh").read_text(encoding="utf-8")
+    deploy = deploy_entrypoint_text()
     sync = bundle["sync"]
 
     assert "frontend/dist/**" in sync["include"]
@@ -21,7 +23,7 @@ def test_bundle_uploads_prebuilt_frontend_without_root_npm_wrapper() -> None:
 
 
 def test_every_snapshot_converges_static_source_immediately_before_activation() -> None:
-    deploy = (ROOT / "scripts" / "deploy.sh").read_text(encoding="utf-8")
+    deploy = deploy_entrypoint_text()
     function_start = deploy.index("deploy_app_snapshot() {")
     function_end = deploy.index("\n}", function_start)
     function_body = deploy[function_start:function_end]

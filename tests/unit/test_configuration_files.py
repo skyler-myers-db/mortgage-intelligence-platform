@@ -2,6 +2,8 @@ import re
 import subprocess
 from pathlib import Path
 
+from tests.fixtures.deploy_script import deploy_entrypoint_text
+
 REPO = Path(__file__).resolve().parents[2]
 
 
@@ -148,7 +150,7 @@ def test_lakebase_jobs_receive_the_same_bundle_resource_namespace():
 
 
 def test_deploy_resolves_resource_namespace_before_workspace_mutation():
-    content = (REPO / "scripts" / "deploy.sh").read_text(encoding="utf-8")
+    content = deploy_entrypoint_text()
     namespace = content.index('MIP_APP_NAME="$(deployment_control_value MIP_APP_NAME mip-app)"')
     genie_resolution = content.index(
         'step "resolve governed Genie space before App secret and bundle mutation"'
@@ -170,7 +172,7 @@ def test_deploy_resolves_resource_namespace_before_workspace_mutation():
 
 
 def test_deploy_overwrites_stale_genie_id_before_bundle_and_after_rebind():
-    content = (REPO / "scripts" / "deploy.sh").read_text(encoding="utf-8")
+    content = deploy_entrypoint_text()
     first_resolve = content.index(
         'step "resolve governed Genie space before App secret and bundle mutation"'
     )
@@ -196,7 +198,7 @@ def test_deploy_overwrites_stale_genie_id_before_bundle_and_after_rebind():
 
 
 def test_every_verifier_convergence_uses_the_normalized_lakebase_instance():
-    content = (REPO / "scripts" / "deploy.sh").read_text(encoding="utf-8")
+    content = deploy_entrypoint_text()
     calls = content.split("-m tools.databricks.provision_m2m_oauth")[1:]
     verifier_calls = [
         call.split("step ", 1)[0]
@@ -257,7 +259,7 @@ def test_governed_deploy_wires_otlp_without_global_app_yaml_secret():
     """Durable OTLP overlays the existing governed target, not a parallel one."""
     app_yaml = (REPO / "app.yaml").read_text(encoding="utf-8")
     bundle = (REPO / "databricks.yml").read_text(encoding="utf-8")
-    deploy = (REPO / "scripts" / "deploy.sh").read_text(encoding="utf-8")
+    deploy = deploy_entrypoint_text()
 
     assert "MIP_OTEL_HEADERS" not in app_yaml
     assert "prod_otlp:" not in bundle

@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+from tests.fixtures.deploy_script import deploy_entrypoint_text
+
 ROOT = Path(__file__).resolve().parents[2]
 FRONTEND = ROOT / "frontend"
 
@@ -104,7 +106,7 @@ def test_python_requirements_use_real_transitive_lockfile() -> None:
     ):
         assert required_pin in lock
 
-    deploy = (ROOT / "scripts" / "deploy.sh").read_text(encoding="utf-8")
+    deploy = deploy_entrypoint_text()
     assert "import boto3, mlflow" in deploy
     assert deploy.index("import boto3, mlflow") < deploy.index(
         "DEPLOY_INVENTORY_PRINCIPAL="
