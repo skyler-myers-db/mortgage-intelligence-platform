@@ -612,14 +612,72 @@ def genie_unsafe_visible_field(
     return None
 
 
+_ROW_LITERAL_MIN = 3
+_ROW_LITERAL_MAX = 64
+_ROW_LITERAL_CAP = 400
+
+
+def governed_row_literals(
+    rows: Sequence[Mapping[str, object]] | None,
+) -> tuple[str, ...]:
+    """String cell values of governed gold rows, usable verbatim in prose.
+
+    Live capture 2026-09-08: a section narrative was withheld on the phrase
+    "Permit Activity" — the display name of a gold segment, sitting in the
+    same answer's rows — because two Title Case words outside the mortgage
+    lexicon read as a person name. The identical value renders in the table
+    beside the prose (structured cells skip the name-shape heuristic). A
+    label the governed rows already put on screen may be quoted by the
+    narrative; only the rest of the prose stays under the full scan. Values
+    with digits, very short or very long values, and flags are never
+    literals, so a phone-shaped or free-text cell cannot ride along.
+    """
+
+    literals: list[str] = []
+    seen: set[str] = set()
+    for row in rows or ():
+        for value in row.values():
+            if not isinstance(value, str):
+                continue
+            text = value.strip()
+            if (
+                len(text) < _ROW_LITERAL_MIN
+                or len(text) > _ROW_LITERAL_MAX
+                or any(ch.isdigit() for ch in text)
+                or text.lower() in {"true", "false"}
+                or text in seen
+            ):
+                continue
+            seen.add(text)
+            literals.append(text)
+            if len(literals) >= _ROW_LITERAL_CAP:
+                return tuple(literals)
+    return tuple(literals)
+
+
+def governed_response_literals(response: GenieMessageResponse) -> tuple[str, ...]:
+    """The answer's own governed row values: top-level rows plus every section's."""
+
+    rows: list[Mapping[str, object]] = list(response.table_rows or [])
+    for section in response.sections:
+        rows.extend(section.table_rows or [])
+    return governed_row_literals(rows)
+
+
 def genie_response_has_unsafe_visible_text(
     response: GenieMessageResponse,
     *,
     allowed_literals: Sequence[str] = (),
     governed_cell_values: frozenset[str] | None = None,
 ) -> bool:
-    """Check every model-authored text field rendered by the Genie UI."""
+    """Check every model-authored text field rendered by the Genie UI.
 
+    The answer's own governed row values are allowed literals for its prose
+    (see ``governed_row_literals``); the caller's ``allowed_literals`` add to
+    them.
+    """
+
+    allowed_literals = (*allowed_literals, *governed_response_literals(response))
     values = [response.answer, *response.follow_up_questions]
     if response.summary:
         values.append(response.summary)

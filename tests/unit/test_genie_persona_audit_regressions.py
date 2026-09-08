@@ -321,3 +321,47 @@ def test_identifier_columns_render_verbatim_in_the_fallback() -> None:
     assert "75,040" not in summary
     # Real measures keep their separators.
     assert "1,250,000" in summary
+
+
+def test_governed_row_labels_may_be_quoted_by_the_prose() -> None:
+    """Live 2026-09-08: the segment display name "Permit Activity" (two Title
+    Case words outside the mortgage lexicon) read as a person name and
+    withheld a section's narrative while the same value sat in the table
+    beside it. A label the governed rows already put on screen is an allowed
+    literal for that answer's prose; everything else stays under the scan."""
+
+    from backend.services.genie_answers import GenieMessageResponse
+    from backend.services.genie_message_policy import (
+        genie_response_has_unsafe_visible_text,
+        genie_visible_text_unsafe,
+        governed_row_literals,
+    )
+
+    rows = [
+        {"segment_code": "permit", "name": "Permit Activity", "borrowers": "1204", "listed": "true"},
+        {"segment_code": "equity", "name": "Home Equity Candidate", "borrowers": "3339173", "listed": "false"},
+    ]
+    literals = governed_row_literals(rows)
+    assert "Permit Activity" in literals and "Home Equity Candidate" in literals
+    # Numbers-as-text, flags and short codes are never literals.
+    assert "1204" not in literals and "true" not in literals
+    assert "permit" in literals  # a plain code is harmless and may be quoted
+
+    prose = "The segment with the lowest average score is Permit Activity at 0."
+    assert genie_visible_text_unsafe(prose) is True  # the raw scanner still refuses it
+
+    def _response(answer: str) -> GenieMessageResponse:
+        return GenieMessageResponse(
+            conversation_id="c", question="q", answer=answer, source="genie",
+            trusted_assets=["mip.gold.segment_population"], table_rows=rows,
+        )
+
+    assert genie_response_has_unsafe_visible_text(_response(prose)) is False
+    # The exemption is the label, not a licence: real contact text still fails.
+    assert genie_response_has_unsafe_visible_text(
+        _response("Call John Smith at 312-555-0142 about Permit Activity.")
+    ) is True
+    # Without the rows the same prose is refused — the literal must be governed data
+    # in THIS answer.
+    bare = _response(prose).model_copy(update={"table_rows": None})
+    assert genie_response_has_unsafe_visible_text(bare) is True

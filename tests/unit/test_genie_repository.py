@@ -4428,3 +4428,60 @@ def test_rewrite_that_still_fails_verification_keeps_the_plain_digest() -> None:
     assert "governed" not in result.answer and "withheld" not in result.answer
     assert result.proof is not None
     assert any("could not be verified" in gap for gap in result.proof.known_data_gaps)
+
+
+def test_guard_withheld_narrative_gets_one_reworded_rewrite() -> None:
+    """A draft the output guard refuses gets one live rewrite with the wording
+    rule; a clean rewrite ships in Genie's voice and the guard gap becomes the
+    reworded disclosure."""
+
+    first = GenieResponse(
+        answer_text="Contact John Smith at 312-555-0142; Illinois leads with 48,396 borrowers.",
+        sql_query="SELECT state, COUNT(*) AS in_the_money_borrowers FROM mip.gold.borrower_360 GROUP BY state",
+        sql_result_rows=[
+            {"state": "IL", "in_the_money_borrowers": 48396},
+            {"state": "TX", "in_the_money_borrowers": 10914},
+        ],
+        conversation_id="conv-reword",
+        message_id="msg-reword",
+        trusted_assets=["mip.gold.borrower_360"],
+    )
+    rewrite = GenieResponse(
+        answer_text="Illinois leads with 48,396 in-the-money borrowers, ahead of Texas at 10,914.",
+        sql_query=None,
+        sql_result_rows=[],
+        conversation_id="conv-reword",
+        message_id="msg-reword-2",
+    )
+    stub = _StubClient(_make_breaker("closed"), response=[first, rewrite])
+    repo = DatabricksGenieRepository(stub)  # type: ignore[arg-type]
+
+    result = repo.respond("Which states have the most in-the-money borrowers?")
+
+    assert len(stub.ask_calls) == 2
+    assert "compliance filter" in stub.ask_calls[1]
+    assert result.answer.startswith("Illinois leads with 48,396")
+    assert "John Smith" not in result.answer and "312-555" not in result.answer
+    assert result.proof is not None
+    assert not any("withheld by the output safety guard" in gap for gap in result.proof.known_data_gaps)
+    assert any("used wording the output safety guard rejects" in gap for gap in result.proof.known_data_gaps)
+
+
+def test_narrative_quoting_a_gold_label_from_its_own_rows_is_not_withheld() -> None:
+    labelled = GenieResponse(
+        answer_text="The lowest segment is Permit Activity at 0 borrowers.",
+        sql_query="SELECT segment_code, name, borrowers FROM mip.gold.segment_population",
+        sql_result_rows=[{"segment_code": "permit", "name": "Permit Activity", "borrowers": 0}],
+        conversation_id="conv-label",
+        message_id="msg-label",
+        trusted_assets=["mip.gold.segment_population"],
+    )
+    stub = _StubClient(_make_breaker("closed"), response=labelled)
+    repo = DatabricksGenieRepository(stub)  # type: ignore[arg-type]
+
+    result = repo.respond("Which segment has the lowest average score?")
+
+    assert len(stub.ask_calls) == 1  # no rewrite was needed
+    assert "Permit Activity" in result.answer
+    assert result.proof is not None
+    assert not any("withheld" in gap for gap in result.proof.known_data_gaps)
