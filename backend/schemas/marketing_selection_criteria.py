@@ -59,13 +59,31 @@ _AUDIENCE_FORMATION_COMMAND_FRAGMENT = (
     r"move|transfer|admit|place|add|put|assign|route|direct|(?:insert|lnsert)|"
     r"allocate|dispatch)"
 )
+# ``tier`` is a formation verb ("Tier the borrowers by rate spread") and half of
+# the cohort adjective "top-tier", and both embeddings below open on ``\b``,
+# which holds between the hyphen and the ``t``. Measured 2026-09-08 at
+# ``protected_prompt_match``: "How do top-tier opportunities compare against
+# the rest of the outreach-ready population?" parsed as the verb ``tier``
+# binding the criterion "opportunities compare against the rest of the
+# outreach-ready" to a "population" audience and refused as
+# ``unreviewed_criterion``, while "How do top opportunities compare ..." was
+# answered. The fixed-width negative lookbehind narrows the TERM (the same
+# move as the MS/Mississippi carrier): ``tier`` is not a verb directly behind
+# the WORD ``top`` plus a hyphen or one whitespace character. ``\b`` inside
+# the lookbehind keeps the shape closed to that word -- "laptop-tier the
+# borrowers" and "stop tier the borrowers" still read as the verb -- and the
+# clause-initial command fragment above is untouched, so "Tier the borrowers
+# with eczema" keeps its owner. The same misparse survives for other tier
+# compounds ("second-tier", "mid-tier") and for "top-ranked" (``ranked``);
+# each is a separate closed narrowing with its own differential, not taken
+# here.
 _AUDIENCE_FORMATION_ACTION_FRAGMENT = (
     r"(?:select(?:s|ed|ing)?|choos(?:e|es|ing)|chose|chosen|"
     r"pick(?:s|ed|ing)?|target(?:s|ed|ing)?|includ(?:e|es|ed|ing)|"
     r"prioritiz(?:e|es|ed|ing)|favor(?:s|ed|ing)?|rank(?:s|ed|ing)?|"
     r"order(?:s|ed|ing)?|sort(?:s|ed|ing)?|reserv(?:e|es|ed|ing)|"
     r"sequenc(?:e|es|ed|ing)|group(?:s|ed|ing)?|elevat(?:e|es|ed|ing)|"
-    r"tier(?:s|ed|ing)?|screen(?:s|ed|ing)?|queue(?:s|d|ing)?|queuing|"
+    r"(?<!\btop[-\s])tier(?:s|ed|ing)?|screen(?:s|ed|ing)?|queue(?:s|d|ing)?|queuing|"
     r"advanc(?:e|es|ed|ing)|shortlist(?:s|ed|ing)?|nominat(?:e|es|ed|ing)|"
     r"enroll(?:s|ed|ing)?|mov(?:e|es|ed|ing)|transfer(?:s|red|ring)?|"
     r"admit(?:s|ted|ting)?|plac(?:e|es|ed|ing)|add(?:s|ed|ing)?|put(?:s|ting)?|"
@@ -769,12 +787,17 @@ def build_selection_context_pattern(*, population_re_fragment: str) -> re.Patter
     """Build the bounded audience-selection marker for the criterion state machine."""
 
     audience = rf"(?:{population_re_fragment}|groups?|cohorts?|audiences?|segments?|populations?)"
+    # A private copy of the formation verbs, so it carries the same ``top-tier``
+    # lookbehind as ``_AUDIENCE_FORMATION_ACTION_FRAGMENT``: the adjective must
+    # not mark a selection context either (measured 2026-09-08: "How do top-tier
+    # borrowers compare with the population? They have zyrplax." refused while
+    # the tier-free twin was answered).
     ordinary_action = (
         r"(?:select(?:s|ed|ing)?|choos(?:e|es|ing)|chose|chosen|pick(?:s|ed|ing)?|"
         r"target(?:s|ed|ing)?|includ(?:e|es|ed|ing)|prioritiz(?:e|es|ed|ing)|"
         r"favor(?:s|ed|ing)?|rank(?:s|ed|ing)?|order(?:s|ed|ing)?|sort(?:s|ed|ing)?|"
         r"reserv(?:e|es|ed|ing)|sequenc(?:e|es|ed|ing)|group(?:s|ed|ing)?|"
-        r"elevat(?:e|es|ed|ing)|tier(?:s|ed|ing)?|screen(?:s|ed|ing)?|"
+        r"elevat(?:e|es|ed|ing)|(?<!\btop[-\s])tier(?:s|ed|ing)?|screen(?:s|ed|ing)?|"
         r"queue(?:s|d|ing)?|queuing|advanc(?:e|es|ed|ing)|shortlist(?:s|ed|ing)?|"
         r"nominat(?:e|es|ed|ing)|enroll(?:s|ed|ing)?)"
     )

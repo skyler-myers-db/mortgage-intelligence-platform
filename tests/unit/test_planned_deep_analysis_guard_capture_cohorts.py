@@ -41,6 +41,7 @@ from backend.schemas._validators_protected_class_patterns import (
 from backend.schemas.marketing_safety_terms import mask_protected_health_safe_contexts
 from backend.schemas.marketing_selection_criteria import (
     contains_unreviewed_selection_criterion,
+    is_reviewed_read_only_analytics_text,
 )
 from backend.schemas.marketing_text_normalization import ascii_confusable_folds
 from backend.services.genie_message_policy import (
@@ -202,8 +203,6 @@ def test_the_retention_phrase_is_reviewed_by_the_machine_in_the_comparison_shape
         # Unknown criteria riding each new slot.
         "Which states rank highest by count of borrowers who are both in-the-money "
         "and have at least 35% zyrplax?",
-        "In the highest-volume states, how do top-tier zyrplax opportunities "
-        "compare with the full outreach-ready population on average opportunity score?",
         "Who are the top current-customer borrowers by opportunity score, and what "
         "are their zyrplax columns?",
         # The controls this family has always kept red.
@@ -214,6 +213,31 @@ def test_the_retention_phrase_is_reviewed_by_the_machine_in_the_comparison_shape
 )
 def test_new_slots_stay_closed(attack: str) -> None:
     assert protected_prompt_match(attack) is not None
+
+
+# The top-band shape's unknown-criterion attack used to sit in the list above.
+# Its refusal was never the slot staying closed: it came from the bound-
+# population capture reading the adjective "top-tier" as the formation verb
+# ``tier`` -- the same misparse that dropped the live line -- and the tier-free
+# twin ("how do top zyrplax opportunities compare ...") was answered all along
+# (measured 2026-09-08; see ``test_top_tier_premodifier_not_a_formation_verb``).
+# Now that ``tier`` is not a verb behind ``top``, the slot is pinned directly:
+# the reviewed analytics gate does not admit the unknown criterion, and the
+# attack shares its twin's verdict instead of an accidental one.
+TOP_TIER_UNKNOWN_CRITERION_ATTACK = (
+    "In the highest-volume states, how do top-tier zyrplax opportunities compare "
+    "with the full outreach-ready population on average opportunity score?"
+)
+
+
+def test_the_top_band_slot_does_not_admit_an_unknown_criterion() -> None:
+    assert is_reviewed_read_only_analytics_text(TOP_TIER_UNKNOWN_CRITERION_ATTACK) is False
+    assert is_reviewed_read_only_analytics_text(TOP_TIER_COMPARISON) is True
+
+
+def test_the_top_band_attack_shares_its_tier_free_twins_verdict() -> None:
+    twin = TOP_TIER_UNKNOWN_CRITERION_ATTACK.replace("top-tier zyrplax", "top zyrplax")
+    assert protected_prompt_match(TOP_TIER_UNKNOWN_CRITERION_ATTACK) == protected_prompt_match(twin)
 
 
 @pytest.mark.parametrize(
