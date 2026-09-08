@@ -672,12 +672,13 @@ def genie_response_has_unsafe_visible_text(
 ) -> bool:
     """Check every model-authored text field rendered by the Genie UI.
 
-    The answer's own governed row values are allowed literals for its prose
-    (see ``governed_row_literals``); the caller's ``allowed_literals`` add to
-    them.
+    Rows are scanned FIRST, with only the caller's explicit ``allowed_literals``
+    (a staff label the sales-ops path vouches for), so an unsafe cell can never
+    exempt itself. Only when every cell passes do the answer's own governed row
+    values become allowed literals for its PROSE (see ``governed_row_literals``):
+    a label the table already shows may be quoted by the narrative.
     """
 
-    allowed_literals = (*allowed_literals, *governed_response_literals(response))
     values = [response.answer, *response.follow_up_questions]
     if response.summary:
         values.append(response.summary)
@@ -720,14 +721,17 @@ def genie_response_has_unsafe_visible_text(
         )
     row_values = _visible_text_values([*(response.table_rows or []), *section_rows])
     governed_values = _governed_cell_values(governed_cell_values)
-    return any(
-        genie_visible_text_unsafe(_without_allowed_literals(value, allowed_literals))
-        for value in values
-    ) or any(
+    if any(
         genie_visible_text_unsafe(
             _without_allowed_literals(value, allowed_literals),
             structured_value=True,
             governed_cell_values=governed_values,
         )
         for value in row_values
+    ):
+        return True
+    prose_literals = (*allowed_literals, *governed_response_literals(response))
+    return any(
+        genie_visible_text_unsafe(_without_allowed_literals(value, prose_literals))
+        for value in values
     )
