@@ -17,10 +17,11 @@ import re
 from pathlib import Path
 
 from backend.schemas.kpi_deltas import HEADLINE_COUNT_MEASURES
+from tests.fixtures.deploy_script import deploy_entrypoint_text
 
 REPO = Path(__file__).resolve().parents[2]
 BUNDLE = (REPO / "databricks.yml").read_text(encoding="utf-8")
-DEPLOY = (REPO / "scripts" / "deploy.sh").read_text(encoding="utf-8")
+DEPLOY = deploy_entrypoint_text()
 SCHEMA = (REPO / "lakebase" / "schema.sql").read_text(encoding="utf-8")
 JOB = (REPO / "jobs" / "kpi_snapshot.py").read_text(encoding="utf-8")
 SERVICE = (REPO / "backend" / "services" / "kpi_deltas.py").read_text(encoding="utf-8")

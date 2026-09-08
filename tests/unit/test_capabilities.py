@@ -57,6 +57,7 @@ from backend.services.databricks_sql import get_sql_client
 from backend.services.genie_client import get_genie_client
 from backend.services.lakebase import get_lakebase_client
 from backend.services.resilience import TTLCache
+from tests.fixtures.deploy_script import deploy_entrypoint_text
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _TEST_GIT_SHA = "69ff206fa7667589a28498c6554779f7f6c18c08"
@@ -1913,7 +1914,7 @@ def test_uc_growth_agent_tool_sql_contracts_are_present() -> None:
 
 
 def test_growth_agent_function_grants_are_documented_and_deployed() -> None:
-    deploy = (_REPO_ROOT / "scripts" / "deploy.sh").read_text(encoding="utf-8")
+    deploy = deploy_entrypoint_text()
     grants = (_REPO_ROOT / "docs" / "security" / "GRANTS.md").read_text(encoding="utf-8")
     for function_name in ("fn_build_cohort", "fn_segment_counts", "fn_lead_queue_url"):
         grant = "GRANT EXECUTE ON FUNCTION"
@@ -1924,7 +1925,7 @@ def test_growth_agent_function_grants_are_documented_and_deployed() -> None:
 
 
 def test_ai_gateway_audit_grant_is_table_scoped() -> None:
-    deploy = (_REPO_ROOT / "scripts" / "deploy.sh").read_text(encoding="utf-8")
+    deploy = deploy_entrypoint_text()
     grants = (_REPO_ROOT / "docs" / "security" / "GRANTS.md").read_text(encoding="utf-8")
     assert "GRANT USE SCHEMA, SELECT ON SCHEMA ${_GRANTS_CATALOG}.audit" not in deploy
     assert "GRANT USE SCHEMA ON SCHEMA ${_GRANTS_CATALOG}.audit" in deploy

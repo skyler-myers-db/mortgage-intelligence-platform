@@ -20,19 +20,20 @@ from backend.services.ai_gateway_proof_attestation import (
     derive_gateway_proof_verify_key,
 )
 from backend.services.databricks_jobs import MANAGED_JOBS
+from tests.fixtures.deploy_script import (
+    DEPLOY_SCRIPT,
+    DEPLOY_SOURCED_SCRIPTS,
+    DEPLOY_STEP_SCRIPTS,
+    deploy_contract_text,
+    deploy_entrypoint_text,
+)
 from tools.databricks import lakebase_oauth_role_bootstrap_admission as admission
 from tools.databricks import lakebase_oauth_role_bootstrap_orchestration as orchestration
 
 REPO = Path(__file__).resolve().parents[2]
 DEPLOY_DEV = REPO / ".github" / "workflows" / "deploy-dev.yml"
 NIGHTLY = REPO / ".github" / "workflows" / "nightly.yml"
-DEPLOY_SCRIPT = REPO / "scripts" / "deploy.sh"
-DEPLOY_LIB_SCRIPTS = (
-    REPO / "scripts" / "lib" / "deploy_agent_proxy_lifecycle.sh",
-    REPO / "scripts" / "lib" / "deploy_verifier_gateway_lifecycle.sh",
-    REPO / "scripts" / "lib" / "deploy_cutover_journal_lifecycle.sh",
-    REPO / "scripts" / "lib" / "deploy_supervisor_creation_lifecycle.sh",
-)
+DEPLOY_LIB_SCRIPTS = DEPLOY_SOURCED_SCRIPTS
 BUNDLE_CONFIG = REPO / "databricks.yml"
 
 
@@ -198,14 +199,19 @@ def _continued_command_tokens(block: str, command_fragment: str) -> list[str]:
 
 
 def _deploy_contract_text() -> str:
-    """Return deploy.sh with reviewed sourced libraries expanded in place."""
+    """Return deploy.sh with every sourced library and step file expanded in place."""
 
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
-    for source in DEPLOY_LIB_SCRIPTS:
-        source_line = f'. "$REPO_ROOT/scripts/lib/{source.name}"'
-        assert script.count(source_line) == 1
-        script = script.replace(source_line, source.read_text(encoding="utf-8"))
-    return script
+    return deploy_contract_text()
+
+
+def _deploy_entrypoint_text() -> str:
+    """Return the command-of-record as it reads with its sliced files back in place.
+
+    The contracts below pin ordering and counts in the orchestration, which now
+    lives in sourced step files; this is that orchestration as one text.
+    """
+
+    return deploy_entrypoint_text()
 
 
 def _shell_function(name: str) -> str:
@@ -304,7 +310,7 @@ def _install_environment_recorder(tmp_path: Path) -> tuple[Path, Path]:
 
 
 def _deploy_exit_trap_block() -> str:
-    text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    text = _deploy_entrypoint_text()
     start = text.index("restore_rendered_sql_fail_closed() {")
     trap_line = "trap restore_rendered_sql_fail_closed EXIT"
     end = text.index(trap_line, start) + len(trap_line)
@@ -312,21 +318,21 @@ def _deploy_exit_trap_block() -> str:
 
 
 def _runtime_grant_revoke_block() -> str:
-    text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    text = _deploy_entrypoint_text()
     start = text.index("revoke_agent_runtime_bootstrap_grants() {")
     end = text.index("restore_rendered_sql_fail_closed() {", start)
     return text[start:end]
 
 
 def _first_install_capture_finalize_block() -> str:
-    text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    text = _deploy_entrypoint_text()
     start = text.index("finalize_signed_first_install_capture() {")
     end = text.index("refresh_first_install_journal_status() {", start)
     return text[start:end]
 
 
 def _first_install_cleanup_block() -> str:
-    text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    text = _deploy_entrypoint_text()
     start = text.index("refresh_first_install_journal_status() {")
     end = text.index("restore_rendered_sql_fail_closed() {", start)
     return text[start:end]
@@ -340,28 +346,28 @@ def _app_failure_compensation_block() -> str:
 
 
 def _deploy_auth_function_block() -> str:
-    text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    text = _deploy_entrypoint_text()
     start = text.index("dotenv_value() {")
     end = text.index("# Step 0: preflight", start)
     return text[start:end]
 
 
 def _identity_casefold_function_block() -> str:
-    text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    text = _deploy_entrypoint_text()
     start = text.index("same_identity_casefold() {")
     end = text.index("\n}\n", start) + len("\n}\n")
     return text[start:end]
 
 
 def _proof_heartbeat_launcher_block() -> str:
-    text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    text = _deploy_entrypoint_text()
     start = text.index("start_proof_signing_heartbeat() {")
     end = text.index("\n}\n", start) + len("\n}\n")
     return text[start:end]
 
 
 def _first_snapshot_decision_block() -> str:
-    text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    text = _deploy_entrypoint_text()
     start = text.index('if [[ "$APP_UPGRADE_STATE" == "first_install" ]]; then')
     end = text.index(
         "\nfi\n\n# -----------------------------------------------------------------------------",
@@ -372,7 +378,7 @@ def _first_snapshot_decision_block() -> str:
 
 
 def _unsigned_candidate_rollback_block() -> str:
-    text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    text = _deploy_entrypoint_text()
     release_gate = text.index('if [[ "$DRY_RUN" -eq 0 && "$FINAL_APP_PROVEN" -eq 1 ]]; then')
     start = text.index('elif [[ "$DRY_RUN" -eq 0 ]]; then', release_gate)
     end = text.index(
@@ -1094,8 +1100,30 @@ def test_deploy_sources_reviewed_lifecycle_libraries_without_option_or_trap_drif
         assert "\nexit " not in text
 
 
+def test_deploy_step_files_are_verbatim_slices_that_refuse_direct_execution() -> None:
+    entrypoint = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    assert entrypoint.count("\n") < 900
+    for path in DEPLOY_STEP_SCRIPTS:
+        text = path.read_text(encoding="utf-8")
+        assert text.startswith("# shellcheck shell=bash\n# Deploy step file. ")
+        assert '[[ "${BASH_SOURCE[0]}" != "$0" ]] || {' in text
+        result = subprocess.run(
+            ["bash", str(path)],
+            cwd=REPO,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert result.returncode == 2
+        assert "is a step file; run ./scripts/deploy.sh instead" in result.stderr
+        assert result.stdout == ""
+    ordered = [step.name for step in DEPLOY_STEP_SCRIPTS]
+    positions = [entrypoint.index(f'. "$REPO_ROOT/scripts/lib/{name}"') for name in ordered]
+    assert positions == sorted(positions)
+
+
 def test_supervisor_creation_lifecycle_recovers_before_cleanup_and_separates_authority() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
     recovery = script.index("\nrun recover_pending_supervisor_creation\n")
     stale_retirement = script.index('\nif [[ "$STALE_CUTOVER_JOURNAL_PENDING" -eq 1 ]]', recovery)
     historical_cleanup = script.index(
@@ -1193,7 +1221,7 @@ def test_first_install_absent_audit_schema_needs_no_stale_grant_revoke(
 
 
 def test_stale_runtime_bootstrap_grants_are_reconciled_before_build_or_bundle() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
     lease = script.index("tools.databricks.app_deployment_lease acquire")
     verifier_role_recovery = script.index(
         'step "recover interrupted verifier Lakebase role bootstrap"'
@@ -1234,7 +1262,7 @@ def test_stale_runtime_bootstrap_grants_are_reconciled_before_build_or_bundle() 
 
 
 def test_existing_app_is_stopped_and_identity_pinned_before_binding_update() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
     existing_update = script.index('step "update existing Databricks App resource bindings')
     identity_read = script.index("_BINDING_APP_ID _BINDING_APP_CLIENT_ID", existing_update)
     stop = script.index("tools.databricks.stop_app_fail_closed", identity_read)
@@ -1252,7 +1280,7 @@ def test_existing_app_is_stopped_and_identity_pinned_before_binding_update() -> 
 
 
 def test_all_post_inventory_name_mutations_have_exact_identity_boundaries() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
     update = script.index('databricks apps update "$_GRANTS_APP_NAME"')
     assert script.rfind('assert_expected_app_identity "$_GRANTS_APP_NAME"', 0, update) > 0
     assert script.index('assert_expected_app_identity "$_GRANTS_APP_NAME"', update) > update
@@ -1274,7 +1302,7 @@ def test_all_post_inventory_name_mutations_have_exact_identity_boundaries() -> N
 
 
 def test_lakebase_access_proof_brackets_binding_role_rotation_and_migration() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
     initial_proof = script.index("LAKEBASE_RUNTIME_ACCESS_PROVEN=0")
     binding_build = script.index("tools.databricks.app_resource_bindings build")
     proof_invalidated = script.index("LAKEBASE_RUNTIME_ACCESS_PROVEN=0", binding_build)
@@ -1357,7 +1385,7 @@ def test_secondary_treatment_compensation_reauthenticates_pinned_app_first() -> 
 
 
 def test_every_lakebase_role_recovery_gets_bounded_signing_and_account_authority() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
     command = '"$PYTHON" -m tools.databricks.converge_lakebase_oauth_role'
     bounded = re.findall(
         r"run_with_lakebase_bootstrap_authority \\\n\s+"
@@ -1374,7 +1402,7 @@ def test_every_lakebase_role_recovery_gets_bounded_signing_and_account_authority
 
 
 def test_every_app_rollback_gets_bounded_signing_and_account_authority() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
     command = '"$PYTHON" -m tools.databricks.app_deployment_rollback'
     bounded = re.findall(
         r"run_with_account_identity \\\n\s+"
@@ -1599,7 +1627,7 @@ def test_success_path_exit_still_revokes_runtime_bootstrap_grants(tmp_path: Path
 
 
 def test_deploy_mints_and_remints_distinct_admin_bearer_for_agent_eval() -> None:
-    text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    text = _deploy_entrypoint_text()
 
     assert "dotenv_value MIP_ADMIN_BEARER_TOKEN" not in text
     assert "databricks auth token" not in text
@@ -1620,7 +1648,7 @@ def test_deploy_mints_and_remints_distinct_admin_bearer_for_agent_eval() -> None
 def test_dynamic_app_identity_separation_is_casefolded_before_recovery(
     tmp_path: Path,
 ) -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
     existing_identity = script.index("_EXISTING_APP_SP_CLIENT_ID _EXISTING_APP_SP_SCIM_ID")
     existing_guard = script.index(
         "if same_identity_casefold \\\n"
@@ -1794,7 +1822,7 @@ MIP_CUTOVER_SIGNED_BLUE_SUPERVISOR_PIN_JSON='{{"supervisor_id":"blue-supervisor"
 
 
 def test_deploy_requires_control_plane_and_runtime_uc_boundary_proofs() -> None:
-    text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    text = _deploy_entrypoint_text()
     early_preflight = text.index(
         'step "preflight agent-runtime foreign UC access before Lakebase bootstrap mutation"'
     )
@@ -1848,7 +1876,7 @@ def test_deploy_requires_control_plane_and_runtime_uc_boundary_proofs() -> None:
 
 
 def test_pii_salt_is_generated_in_a_secure_payload_and_never_logged() -> None:
-    text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    text = _deploy_entrypoint_text()
     block = text[
         text.index('step "provision pii-salt secret scope') : text.index(
             'step "provision dedicated signed App rollback-contract secret scope"'
@@ -1863,7 +1891,7 @@ def test_pii_salt_is_generated_in_a_secure_payload_and_never_logged() -> None:
 
 
 def test_retained_model_audit_is_read_only_and_rotation_action_is_absent() -> None:
-    text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    text = _deploy_entrypoint_text()
     export = text.index(
         'step "export the exact live Gateway resource contract under runtime authority"'
     )
@@ -2064,7 +2092,7 @@ def test_deploy_dev_has_cost_and_permission_guards() -> None:
 
 def test_deploy_dev_requires_explicit_admin_rbac_and_mints_distinct_app_bearers() -> None:
     text = DEPLOY_DEV.read_text(encoding="utf-8")
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
 
     assert "MIP_ADMIN_EMAILS: ${{ vars.MIP_ADMIN_EMAILS }}" in text
     assert "MIP_ADMIN_GROUP_NAME: ${{ vars.MIP_ADMIN_GROUP_NAME }}" in text
@@ -2098,7 +2126,7 @@ def test_deploy_dev_requires_explicit_admin_rbac_and_mints_distinct_app_bearers(
 
 def test_deploy_uses_isolated_release_probe_only_during_signed_capture_gate() -> None:
     workflow = DEPLOY_DEV.read_text(encoding="utf-8")
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
 
     assert (
         workflow.count(
@@ -2170,7 +2198,7 @@ def test_deploy_uses_isolated_release_probe_only_during_signed_capture_gate() ->
 
 
 def test_cached_agentic_env_cannot_override_deployment_sync_contract(tmp_path: Path) -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
     cache_source = script.index('. "$AGENTIC_ENV_CACHE"')
     production_restore = script.index(
         'restore_deployment_sync_contract "$AGENTIC_ENV_CACHE"', cache_source
@@ -2224,7 +2252,7 @@ def test_cached_agentic_env_cannot_override_deployment_sync_contract(tmp_path: P
 def test_rebase_first_install_waits_for_stopped_existing_app_before_snapshot(
     tmp_path: Path,
 ) -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
     guard = script.index('if [[ "$APP_UPGRADE_STATE" == "first_install" ]]; then')
     wait = script.index("wait_for_app_deployable", guard)
     snapshot = script.index(
@@ -2311,7 +2339,7 @@ def test_explicit_unsigned_candidate_rollback_delegates_to_quarantine_aware_rest
 
 def test_deploy_uses_dedicated_verifier_for_gateway_proof_writes() -> None:
     workflow = DEPLOY_DEV.read_text(encoding="utf-8")
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
     bundle = BUNDLE_CONFIG.read_text(encoding="utf-8")
 
     for secret in (
@@ -2547,13 +2575,13 @@ def test_deploy_uses_isolated_identity_for_agent_resource_ownership() -> None:
 def test_deploy_accepts_numeric_app_service_principal_ids() -> None:
     """The live Databricks Apps API emits service_principal_id as a number."""
 
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
 
     assert 'str(json.load(sys.stdin).get("service_principal_id") or "").strip()' in script
 
 
 def test_deploy_reconciles_every_app_facing_identity_only_after_app_creation() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
 
     bundle_create = script.index(
         'step "deploy non-App bundle resources without activating an App candidate"'
@@ -2608,7 +2636,7 @@ def test_deploy_reconciles_every_app_facing_identity_only_after_app_creation() -
 
 
 def test_gateway_proof_failure_only_blocks_strict_release_deploys() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
 
     proof_step = script.index('step "verify AI Gateway exact inference-row proof')
     next_step = script.index("wait_for_app_deployable", proof_step)
@@ -2625,7 +2653,7 @@ def test_gateway_proof_failure_only_blocks_strict_release_deploys() -> None:
 
 
 def test_gateway_grant_delivery_is_retryable_and_only_blocks_strict_release() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
     workflow = NIGHTLY.read_text(encoding="utf-8")
 
     grant_start = script.index("AI_GATEWAY_GRANTS_READY=1")
@@ -2640,7 +2668,7 @@ def test_gateway_grant_delivery_is_retryable_and_only_blocks_strict_release() ->
 
 
 def test_fresh_deploy_creates_verifier_lakebase_role_before_first_migration() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
 
     absent_or_converged = script.index(
         'step "prove absent or converge governed treatment table before first App creation"'
@@ -2679,7 +2707,7 @@ def test_fresh_deploy_creates_verifier_lakebase_role_before_first_migration() ->
 
 
 def test_full_lakebase_migration_never_runs_after_app_snapshot_activation() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
 
     migration = script.index(
         'run_job_with_retry databricks bundle run mip_lakebase_migrate -t "$TARGET"'
@@ -2697,7 +2725,7 @@ def test_full_lakebase_migration_never_runs_after_app_snapshot_activation() -> N
 
 
 def test_first_install_never_uses_an_app_inclusive_bundle_deploy_before_migration() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
 
     app_create = script.index('run_json_to_file "$APP_CREATE_RESULT" databricks apps create')
     identity_claim = script.index("tools.databricks.app_first_install_journal claim", app_create)
@@ -2728,7 +2756,7 @@ def test_first_install_never_uses_an_app_inclusive_bundle_deploy_before_migratio
 
 
 def test_failed_first_install_uses_signed_journal_for_exact_cleanup() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
 
     cleanup = script.index("refresh_first_install_journal_status()")
     trap = script.index("restore_rendered_sql_fail_closed()", cleanup)
@@ -2803,7 +2831,7 @@ printf '%s|%s|%s|%s\n' \
 
 
 def test_first_install_bind_arms_ambiguous_cleanup_before_remote_mutation() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
     create = script.index('run_json_to_file "$APP_CREATE_RESULT" databricks apps create')
     arm = script.index("FIRST_INSTALL_APP_BOUND=1", create)
     bind = script.index("tools.databricks.bundle_env deployment bind", create)
@@ -2812,7 +2840,7 @@ def test_first_install_bind_arms_ambiguous_cleanup_before_remote_mutation() -> N
 
 
 def test_signed_capture_disarms_first_install_deletion_before_journal_retirement() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
     finalizer = script.index("finalize_signed_first_install_capture()")
     finalizer_end = script.index("refresh_first_install_journal_status()", finalizer)
     finalizer_block = script[finalizer:finalizer_end]
@@ -2995,7 +3023,7 @@ def test_committed_app_delete_can_retire_orphaned_first_install_journal(
 
 
 def test_initial_retry_routes_claimed_and_unclaimed_absence_separately() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
     status = script.index(
         'step "read signed first-install journal at the immediate recovery boundary"'
     )
@@ -3017,7 +3045,7 @@ def test_initial_retry_routes_claimed_and_unclaimed_absence_separately() -> None
 
 
 def test_local_deploy_loads_complete_proof_verification_key_registry() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
 
     assert "dotenv_value MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY" in script
     assert "dotenv_value MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS" in script
@@ -3030,7 +3058,7 @@ def test_local_deploy_loads_complete_proof_verification_key_registry() -> None:
 def test_agent_proxy_credential_is_atomic_and_reproved_after_cleanup() -> None:
     workflow = DEPLOY_DEV.read_text(encoding="utf-8")
     nightly = NIGHTLY.read_text(encoding="utf-8")
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
 
     assert (
         "DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE: "
@@ -3081,7 +3109,7 @@ def test_agent_proxy_credential_is_atomic_and_reproved_after_cleanup() -> None:
 
 
 def test_expired_lease_recovery_uses_durable_signed_lease_root() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
     recovery = script.index("tools.databricks.app_deployment_lease recovery-root")
     acquire = script.index("tools.databricks.app_deployment_lease acquire", recovery)
 
@@ -3095,7 +3123,7 @@ def test_expired_lease_recovery_uses_durable_signed_lease_root() -> None:
 
 
 def test_reviewed_foreign_catalog_remediation_uses_stopped_signed_blue_window() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
     stop = script.index(
         'step "stop the exact App before foreign-catalog recovery or fresh remediation"'
     )
@@ -3243,7 +3271,7 @@ def test_foreign_catalog_helper_searches_full_lineage_before_absence(
 
 
 def test_foreign_catalog_remediation_rejects_absent_or_unstable_app() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
     status = script.index(
         'step "read signed first-install journal at the immediate recovery boundary"'
     )
@@ -3264,7 +3292,7 @@ def test_foreign_catalog_remediation_rejects_absent_or_unstable_app() -> None:
 
 
 def test_first_install_creation_is_preceded_by_signed_durable_recovery_intent() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
 
     inventory = script.index('_EXISTING_APPS_JSON="$(databricks apps list -o json)"')
     status = script.index(
@@ -3318,7 +3346,7 @@ def test_first_install_creation_is_preceded_by_signed_durable_recovery_intent() 
 
 
 def test_acquired_deployment_lease_id_is_wired_into_exit_cleanup() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
     source_lease = script.index('. "$APP_DEPLOYMENT_LEASE_ENV"')
     cleanup_guard = script.index('-n "${APP_DEPLOYMENT_LEASE_ID:-}"')
     cleanup_release = script.index('--lease-id "$APP_DEPLOYMENT_LEASE_ID"')
@@ -3423,7 +3451,7 @@ def test_every_cutover_journal_clear_proves_all_endpoint_group_principals() -> N
 
 
 def test_normal_cutover_journal_clear_follows_every_final_boundary() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
     retirement = script.index(
         'step "retire pinned blue runtime resources only after every green release gate"'
     )
@@ -3462,7 +3490,7 @@ def test_normal_cutover_journal_clear_follows_every_final_boundary() -> None:
 
 
 def test_gateway_model_archive_and_dual_proof_order_is_release_fenced() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
     historical_cleanup = script.index(
         'step "attest and retire every unrelated historical runtime endpoint before green provisioning"'
     )
@@ -3813,7 +3841,7 @@ exit "$status"
 
 
 def test_only_authenticated_old_supervisor_app_pin_is_reviewed_during_activation() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
     classifier = _shell_function("classify_journaled_old_supervisor_app_access")
     assert "MIP_REPLACED_AGENT_SUPERVISOR_ENDPOINT" in classifier
     assert "pinned_serving_endpoint_status" in classifier
@@ -3837,7 +3865,7 @@ def test_only_authenticated_old_supervisor_app_pin_is_reviewed_during_activation
 
 
 def test_configured_supervisor_name_reaches_historical_cleanup() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
     cleanup = script[
         script.index("tools.databricks.reconcile_historical_agent_endpoints cleanup") :
     ]
@@ -3848,7 +3876,7 @@ def test_configured_supervisor_name_reaches_historical_cleanup() -> None:
 def test_historical_cleanup_receives_only_bounded_proof_signing_authority(
     tmp_path: Path,
 ) -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
     cleanup_command = (
         'run_with_proof_signing_authority \\\n'
         '  "$PYTHON" -m tools.databricks.reconcile_historical_agent_endpoints cleanup'
@@ -3912,7 +3940,7 @@ def test_historical_cleanup_receives_only_bounded_proof_signing_authority(
 
 
 def test_fresh_deploy_creates_governed_uc_tables_before_table_grants() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
     bundle = yaml.safe_load(BUNDLE_CONFIG.read_text(encoding="utf-8"))
 
     migration = script.index(
@@ -4106,7 +4134,7 @@ def test_workflow_bundle_target_inventory_handles_shell_boundaries() -> None:
 
 
 def test_lakebase_sync_access_is_target_bound_and_converged_around_provisioning() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
 
     migration = script.index(
         'run_job_with_retry databricks bundle run mip_lakebase_migrate -t "$TARGET"'
@@ -4207,7 +4235,7 @@ def test_lakebase_sync_access_is_target_bound_and_converged_around_provisioning(
 
 
 def test_reviewed_function_execute_grants_are_reconciled_after_gold_refresh() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
 
     helper = _shell_function("reconcile_reviewed_function_execute_grants")
     publisher = _shell_function("run_job_and_reconcile_reviewed_function_grants")
@@ -4498,7 +4526,7 @@ initialize_uc_targets_and_reconcile_function_grants
 
 
 def test_deployer_sync_provision_command_is_exact_and_cannot_skip_sync() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
     start = script.index('step "prove agentic Lakebase Sync under deployer authority"')
     end = script.index(
         'step "converge exact app read-only access to proven Lakebase synced tables"', start
@@ -4542,7 +4570,7 @@ def test_deployer_sync_provision_command_is_exact_and_cannot_skip_sync() -> None
 
 
 def test_agentic_rotation_and_retirement_pass_exact_managed_group_identities() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
     supervisor_start = script.index(
         'step "provision the managed Supervisor under the dedicated agent-runtime identity"'
     )
@@ -4573,7 +4601,7 @@ def test_agentic_rotation_and_retirement_pass_exact_managed_group_identities() -
 
 
 def test_pipeline_namespace_bootstrap_is_leased_and_precedes_bundle_apply() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
 
     lease = script.index("tools.databricks.app_deployment_lease acquire")
     compensation = script.index("APP_FAIL_CLOSED_ARMED=1")
@@ -4588,7 +4616,7 @@ def test_pipeline_namespace_bootstrap_is_leased_and_precedes_bundle_apply() -> N
 
 
 def test_first_install_dry_run_does_not_require_a_live_app_identity() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
 
     resolve_start = script.index('if [[ "$DRY_RUN" -eq 0 ]]; then\n  APP_RESOURCE_JSON=')
     quiesce = script.index(
@@ -4751,7 +4779,7 @@ def test_deploy_fails_fast_when_python_lacks_repo_tooling_deps() -> None:
     exact errors the sandbox tests above pin, and precede all planning.
     """
 
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
 
     guard = script.index("import dotenv, pydantic")
     mask_gate = script.index("MIP_COTALITY_ID_MASK_SECRET is required for target")
@@ -4791,13 +4819,13 @@ def test_deploy_dev_wires_separate_required_gateway_signing_keys() -> None:
     assert "MIP_GENIE_ACTION_SECRET_CURRENT" in required_loop
     assert "MIP_AI_GATEWAY_PROOF_SIGNING_KEY" in required_loop
     assert "MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY" in required_loop
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
     assert "model-attestation and verifier-proof keys must be distinct" in script
     assert "MIP_ALLOW_RUNTIME_MODEL_ATTESTATION_SIGNING" in script
 
 
 def test_app_snapshot_payload_forwards_exact_lakebase_deployment_control() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
     start = script.index("emit_app_deploy_payload() {")
     end = script.index("\n}\n", start)
     function = script[start:end]
@@ -4809,7 +4837,7 @@ def test_app_snapshot_payload_forwards_exact_lakebase_deployment_control() -> No
 
 
 def test_otlp_is_an_exact_overlay_on_the_governed_target_and_rollback() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
     bundle = BUNDLE_CONFIG.read_text(encoding="utf-8")
 
     otlp_preflight = script.index(
@@ -4831,7 +4859,7 @@ def test_otlp_is_an_exact_overlay_on_the_governed_target_and_rollback() -> None:
 
 
 def test_deploy_holds_signed_workspace_lease_through_durable_capture() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
 
     acquire = script.index("tools.databricks.app_deployment_lease acquire")
     heartbeat = script.index("tools.databricks.app_deployment_lease heartbeat")
@@ -4974,7 +5002,7 @@ def test_nightly_exporters_receive_only_model_attestation_public_keys() -> None:
 
 
 def test_deploy_unexports_private_signing_keys_before_first_child_process() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
     prefix = script[: script.index('REPO_ROOT="$(cd')]
 
     assert (
@@ -5142,7 +5170,7 @@ def test_deploy_dev_wires_optional_approved_uc_owner_contract() -> None:
     assert (
         "DATABRICKS_ACCOUNT_CLIENT_SECRET: " "${{ secrets.DATABRICKS_ACCOUNT_CLIENT_SECRET }}"
     ) in workflow
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
     assert "dotenv_value MIP_UC_APPROVED_OWNER_PRINCIPALS" in script
     assert "deployment_control_value MIP_UC_FOREIGN_CATALOG_BINDING_POLICY" in script
     assert 'resolve_m2m_credential "$_ACCOUNT_AUTH_NAME"' in script
@@ -5248,7 +5276,7 @@ def test_deploy_dev_wires_optional_approved_uc_owner_contract() -> None:
 
 
 def test_active_app_binding_hash_includes_complete_proxy_credential_binding() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
     start = script.index('AGENT_RUNTIME_BINDING_SHA256="$($PYTHON -')
     end = script.index("\nPYEOF", start)
     block = script[start:end]
@@ -5348,7 +5376,7 @@ def test_oauth_credential_quarantine_retains_borrowed_deployment_lease(
 
 
 def test_deploy_exports_exact_source_and_quarantine_marker_under_signed_lease() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
     source_assignment = script.index('MIP_DEPLOYMENT_SOURCE_GIT_SHA="$SOURCE_GIT_SHA"')
     source_export = script.index("export MIP_DEPLOYMENT_SOURCE_GIT_SHA")
     lease_acquire = script.index("tools.databricks.app_deployment_lease acquire")
@@ -5371,7 +5399,7 @@ def test_deploy_exports_exact_source_and_quarantine_marker_under_signed_lease() 
 
 
 def test_oauth_credential_recovery_is_explicit_complete_and_lease_bound() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
 
     for name in (
         "MIP_OAUTH_CREDENTIAL_RECOVERY_INTENT_PATH",
@@ -5400,7 +5428,7 @@ def test_oauth_credential_recovery_is_explicit_complete_and_lease_bound() -> Non
 
 
 def test_oauth_orphan_lease_recovery_is_complete_exclusive_and_lease_bound() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
 
     for name in (
         "MIP_OAUTH_CREDENTIAL_ORPHAN_LEASE_ID",
@@ -5668,7 +5696,7 @@ def test_deploy_dev_wires_optional_salesforce_external_id_upsert_without_preflig
 
 
 def test_deploy_script_requires_cotality_mask_secret_for_prod_target(tmp_path: Path) -> None:
-    text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    text = _deploy_entrypoint_text()
 
     assert 'APP_RUNTIME_ENV="${APP_ENV:-}"' in text
     assert "MIP_COTALITY_ID_MASK_SECRET is required for target" in text
@@ -5687,7 +5715,7 @@ def test_deploy_script_requires_cotality_mask_secret_for_prod_target(tmp_path: P
     script_dir.mkdir(parents=True)
     bin_dir.mkdir()
     deploy_copy = script_dir / "deploy.sh"
-    _write_deploy_fixture(deploy_copy, text)
+    _write_deploy_fixture(deploy_copy, DEPLOY_SCRIPT.read_text(encoding="utf-8"))
     deploy_copy.chmod(0o755)
     (repo / ".env.local").write_text(
         "DATABRICKS_HOST=https://example.cloud.databricks.com\n" "DATABRICKS_WAREHOUSE_ID=abc123\n",
@@ -5907,7 +5935,7 @@ def test_deploy_script_rejects_placeholder_cotality_mask_secret(tmp_path: Path) 
 
 
 def test_exact_source_gate_allows_standard_ignored_artifacts(tmp_path: Path) -> None:
-    text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    text = _deploy_entrypoint_text()
     assert 'APP_GIT_SHA="$SOURCE_GIT_SHA"' in text
     assert text.count("verify_exact_deploy_source") >= 3
     assert text.rindex("verify_exact_deploy_source") < text.index(
@@ -5917,7 +5945,7 @@ def test_exact_source_gate_allows_standard_ignored_artifacts(tmp_path: Path) -> 
     script_dir = repo / "scripts"
     script_dir.mkdir(parents=True)
     deploy_copy = script_dir / "deploy.sh"
-    _write_deploy_fixture(deploy_copy, text)
+    _write_deploy_fixture(deploy_copy, DEPLOY_SCRIPT.read_text(encoding="utf-8"))
     deploy_copy.chmod(0o755)
     _commit_deploy_fixture(repo)
     (repo / ".env.local").write_text("local-only=true\n", encoding="utf-8")
@@ -6022,7 +6050,7 @@ def test_deploy_timeout_covers_two_serial_auth_expiry_fences_with_margin() -> No
 
 
 def test_agent_proxy_acl_lifecycle_is_bound_and_compensated_before_lease_release() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
     first_proxy_step = script.index(
         'step "grant and globally audit the dedicated Supervisor proxy caller"'
     )
@@ -6167,7 +6195,7 @@ false
 
 
 def test_signed_blue_gateway_is_preserved_and_audited_only_during_cutover() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
     verifier_cutover = script[
         script.index(
             'step "converge dedicated verifier access to the green Gateway before cutover"'
@@ -6206,7 +6234,7 @@ def test_signed_blue_gateway_is_preserved_and_audited_only_during_cutover() -> N
 
 
 def test_verifier_gateway_cutover_is_identity_pinned_and_compensated() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
     cutover = script[
         script.index(
             'step "capture the verifier immutable identity before retirement admission"'
@@ -6908,7 +6936,7 @@ printf 'flag=%s count=%s\\n' "$PREACTIVATION_APP_ACL_MUTATED" \
 
 
 def test_historical_runtime_cleanup_precedes_green_provisioning_and_preserves_signed_blue() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
     stale_resume = script.index(
         'step "resume exact stale runtime retirement under the signed-blue boundary"'
     )
@@ -6973,7 +7001,7 @@ def test_historical_runtime_cleanup_precedes_green_provisioning_and_preserves_si
 
 
 def test_supervisor_only_cutover_archives_after_gateway_handoff_before_lifecycle_proof() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
     gateway = script.index(
         'step "provision the governed outer Gateway under agent-runtime authority"'
     )
@@ -7139,7 +7167,7 @@ printf '%s\\n' "${{HISTORICAL_ENDPOINT_PRESERVE_ARGS[@]}}"
 
 
 def test_completed_redeploy_supervisor_command_pins_proxy_identity_explicitly() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_entrypoint_text()
     start = script.index(
         'step "provision the managed Supervisor under the dedicated agent-runtime identity"'
     )
