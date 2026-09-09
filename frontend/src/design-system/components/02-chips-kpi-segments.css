@@ -1,0 +1,583 @@
+/* ============================================================
+   CHIPS
+   ============================================================ */
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 8px; border-radius: var(--r-pill);
+  background: var(--chip-bg); border: 1px solid var(--chip-line);
+  color: var(--chip-text); font-size: var(--fs-11); font-weight: 500;
+  font-family: var(--font-mono); letter-spacing: 0.02em;
+  white-space: nowrap;
+  min-inline-size: 0;
+  min-block-size: var(--sp-6);
+  max-inline-size: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chip__label {
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* S8 BEM extension: dismiss affordance for removable filter chips (segment
+ * intersection on the Lead Queue). The prototype `.chip` block has no
+ * dismiss element; this adds one without touching the base chip metrics. */
+.chip__remove {
+  display: inline-flex; align-items: center; justify-content: center;
+  /* 2px/1px are deliberate sub-token hairlines: the spacing scale bottoms
+   * out at --sp-1 (4px), which would visibly inflate the 3px-padded chip.
+   * The prototype's own .chip block (design_files/index.html §CHIPS) uses
+   * raw 3px/6px/8px metrics below the token scale for the same reason. */
+  margin-inline-start: 2px; padding: 1px;
+  border: none; border-radius: var(--r-pill);
+  background: transparent; color: inherit;
+  cursor: pointer; opacity: 0.65;
+  transition: opacity var(--dur-fast) ease, background var(--dur-fast) ease;
+}
+.chip__remove:hover,
+.chip__remove:focus-visible { opacity: 1; background: var(--bg-3); }
+.chip--neutral { background: var(--bg-3); border-color: var(--line-1); color: var(--text-2); }
+.chip--success { background: var(--status-success-soft-muted); border-color: var(--status-success-line-strong); color: var(--status-success-ink); }
+.chip--warning { background: var(--status-warning-soft-muted); border-color: var(--status-warning-line-strong); color: var(--status-warning-ink); }
+.chip--danger  { background: var(--status-danger-soft-muted); border-color: var(--status-danger-line-strong); color: var(--status-danger-ink); }
+[data-theme="light"] .chip--success { color: var(--signal-success); }
+[data-theme="light"] .chip--warning { color: var(--entrada-navy); }
+[data-theme="light"] .chip--danger { color: var(--signal-danger); }
+
+/* Segment-hued chip. Component sets --chip-hue as an inline var (segment
+ * palette entry) and leaves border + fill to color-mix. Text color is
+ * driven from --chip-hue in dark (readable on navy), and from --text-1
+ * navy in light (the 2026-04-22 light-theme audit flagged bright
+ * teal/pink/blue chip text on white at 1.57/2.65/1.91:1 -- below AA).
+ * Border + fill keep the segment hue so the color semantics are
+ * preserved in both themes. */
+.chip--segment {
+  color: var(--chip-hue, var(--accent));
+  background: color-mix(in oklab, var(--chip-hue, var(--accent)) 14%, transparent);
+  border-color: color-mix(in oklab, var(--chip-hue, var(--accent)) 35%, transparent);
+}
+[data-theme="light"] .chip--segment { color: var(--text-1); }
+.chip--compact {
+  padding: 2px 6px;
+  font-size: 10px;
+  min-block-size: var(--sp-6);
+}
+
+.chip .src-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
+
+/* Evidence chip — clickable, opens data source drawer */
+.evidence-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 2px 7px 2px 6px;
+  border-radius: var(--r-sm);
+  background: var(--chip-bg);
+  border: 1px solid var(--chip-line);
+  color: var(--chip-text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11); font-weight: 500;
+  cursor: pointer;
+  transition: all var(--dur-fast) var(--ease);
+  letter-spacing: 0;
+  min-inline-size: 0;
+  min-block-size: calc(var(--sp-6) + var(--sp-1));
+  max-inline-size: 100%;
+}
+.evidence-chip:hover { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-ink); }
+.evidence-chip .e-ico { font-size: 9px; opacity: 0.7; }
+.evidence-chip__label {
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Source-freshness dot — 6px circle after the chip label, 4px gap (via
+   inline-flex gap on .evidence-chip). Additive to the chip variant; does
+   NOT replace the chip's border color, which stays driven by semantic
+   meaning (success/warn/neutral/danger). */
+.evidence-chip__dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  margin-left: -2px; /* trims the flex gap to 4px visual after the label */
+  flex-shrink: 0;
+  background: var(--text-3);
+}
+
+/* Evidence hover micro-preview (re-audit #4 Buyer-Wow #8). Portal-rendered
+   to document.body with position:fixed coords, so it never clips inside the
+   lead table's overflow:auto. Decorative (aria-hidden); the drawer is the
+   real a11y path. */
+.evidence-hovercard {
+  position: fixed;
+  z-index: 1000;
+  inline-size: 15rem;
+  max-inline-size: calc(100vw - var(--sp-6));
+  transform: translateX(-50%);
+  padding: var(--sp-3);
+  background: var(--bg-1);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-md);
+  pointer-events: none; /* never intercepts the click that opens the drawer */
+  animation: evidence-hovercard-in var(--dur-fast) var(--ease);
+}
+.evidence-hovercard--above { transform: translate(-50%, -100%); }
+.evidence-hovercard__title {
+  font-size: var(--fs-12);
+  font-weight: 600;
+  color: var(--text-1);
+  margin-block-end: var(--sp-1);
+}
+.evidence-hovercard__row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: var(--fs-11);
+  color: var(--text-3);
+  margin-block-end: var(--sp-2);
+}
+.evidence-hovercard__dot {
+  inline-size: 6px;
+  block-size: 6px;
+  border-radius: 50%;
+  background: var(--text-3);
+  flex-shrink: 0;
+}
+.evidence-hovercard__signal {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding-block: var(--sp-1);
+  border-block-start: 1px solid var(--line-1);
+}
+.evidence-hovercard__signal-label { font-size: var(--fs-11); color: var(--text-3); }
+.evidence-hovercard__signal-value { font-size: var(--fs-12); color: var(--text-1); }
+.evidence-hovercard__cta {
+  margin-block-start: var(--sp-2);
+  font-size: var(--fs-11);
+  color: var(--accent-ink);
+}
+/* Opacity-only so the entrance never fights the placement transform
+   (translateX(-50%) for below, translate(-50%,-100%) for above). */
+@keyframes evidence-hovercard-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .evidence-hovercard { animation: none; }
+}
+
+/* Freshness legend — tiny inline rail used inside the evidence drawer
+   header so operators learn the vocabulary without a tooltip. */
+.freshness-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: var(--fs-11);
+  color: var(--text-3);
+}
+.freshness-legend__item { display: inline-flex; align-items: center; gap: 4px; }
+.freshness-legend__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.evidence-chip__dot--fresh,
+.evidence-hovercard__dot--fresh,
+.freshness-legend__dot--fresh { background: var(--signal-success); }
+.evidence-chip__dot--aging,
+.evidence-hovercard__dot--aging,
+.freshness-legend__dot--aging { background: var(--signal-warning); }
+.evidence-chip__dot--stale,
+.evidence-hovercard__dot--stale,
+.freshness-legend__dot--stale { background: var(--text-3); }
+
+/* ============================================================
+   KPI CARD
+   ============================================================ */
+.kpi {
+  position: relative;
+  background: var(--bg-2);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-lg);
+  padding: var(--pad-card);
+  overflow: hidden;
+  transition: all var(--dur-base) var(--ease);
+  /* Cap individual card width so a 4-card row on an ultra-wide monitor
+     doesn't balloon each card to 600–800px of whitespace. With
+     auto-fit + minmax on .kpi-row (below), cards stay compact and the
+     row centers under the content cap. */
+  max-width: 480px;
+  width: 100%;
+}
+.kpi::before {
+  content: ''; position: absolute; inset: 0 0 auto 0; height: 1px;
+  background: linear-gradient(90deg, transparent, var(--chip-line), transparent);
+  opacity: 0.6;
+}
+.kpi:hover {
+  border-color: var(--chip-line);
+  transform: translateY(-2px);
+  box-shadow: var(--kpi-glow);
+}
+@media (prefers-reduced-motion: reduce) {
+  .kpi:hover { transform: none; }
+}
+.kpi__label {
+  font-size: var(--fs-11); font-weight: 500; letter-spacing: var(--tracking-caps);
+  text-transform: uppercase; color: var(--text-3); margin-bottom: var(--sp-3);
+}
+.kpi__value {
+  font-family: var(--font-sans); font-weight: 600;
+  /* Clamp so the big number scales smoothly from laptop (~24px) through
+     design target (~28–32px at 1440) to QHD/ultra-wide (~36px) without
+     a hard media-query step. --fs-36 is kept as an upper anchor via
+     the clamp max. */
+  font-size: var(--fs-kpi-big);
+  letter-spacing: var(--tracking-tight);
+  color: var(--text-1); line-height: 1;
+  font-variant-numeric: tabular-nums;
+  display: flex; align-items: baseline; gap: var(--sp-2);
+}
+.kpi__unit { font-size: var(--fs-kpi-unit); color: var(--text-3); font-weight: 500; }
+
+/* Sleek one-time KPI entrance (re-audit #4 #2). A brief settle — value
+   fades up, sparkline strokes in left-to-right — fired ONCE per KPI per
+   session (gated in JS by useFirstAppearance, so route re-entry never
+   replays it). Deliberately NOT a number-rolling count-up: this reads as
+   an enterprise metric settling, not a casino ticker. */
+.kpi__value--enter {
+  animation: kpi-value-enter var(--dur-slow) var(--ease) both;
+}
+@keyframes kpi-value-enter {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.spark__line--draw {
+  /* 220 is a safe over-estimate of the path length for the 64px spark;
+     the browser clamps the visible dash to the actual length. */
+  stroke-dasharray: 220;
+  stroke-dashoffset: 220;
+  animation: spark-draw 700ms var(--ease) 80ms forwards;
+}
+@keyframes spark-draw {
+  to { stroke-dashoffset: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .kpi__value--enter { animation: none; }
+  .spark__line--draw {
+    animation: none;
+    stroke-dasharray: none;
+    stroke-dashoffset: 0;
+  }
+}
+.kpi__delta {
+  display: inline-flex; align-items: center; gap: 4px;
+  margin-top: var(--sp-3);
+  font-size: var(--fs-12);
+  color: var(--signal-success);
+  font-family: var(--font-mono);
+}
+.kpi__delta.down { color: var(--signal-danger); }
+.kpi__delta.flat { color: var(--text-3); }
+.kpi__note {
+  margin-top: var(--sp-2);
+  max-width: calc(100% - 96px);
+  color: var(--text-3);
+  font-size: var(--fs-11);
+  line-height: 1.45;
+}
+.kpi__spark { position: absolute; right: 12px; bottom: 12px; opacity: 0.65; }
+.kpi__source {
+  margin-top: var(--sp-3); padding-top: var(--sp-3);
+  border-top: 1px dashed var(--line-1);
+  display: flex; align-items: center; gap: var(--sp-2);
+  font-size: var(--fs-11); color: var(--text-3);
+}
+.kpi.is-loading {
+  pointer-events: none;
+}
+.kpi__value-skeleton {
+  width: min(72%, 220px);
+  height: var(--fs-kpi-big);
+  border-radius: var(--r-sm);
+}
+.kpi__delta-skeleton {
+  width: min(48%, 140px);
+  height: var(--fs-14);
+  border-radius: var(--r-sm);
+  margin-top: var(--sp-3);
+}
+
+/* ============================================================
+   SEGMENT CARD
+   ============================================================ */
+.seg-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-2);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-lg);
+  padding: var(--pad-card);
+  /* Not `pointer`: the card is a container, not a control. The pointer
+     affordance belongs to `.seg-card__select` (the stretched selection
+     button) and to the chips, so the cursor never promises a click that
+     does nothing — e.g. on a gated card, which has no select button. */
+  cursor: default;
+  transition: all var(--dur-base) var(--ease);
+  overflow: hidden;
+  text-align: left;
+  width: 100%;
+  min-block-size: 184px;
+  color: inherit;
+  font-family: inherit;
+}
+/* Whole-card selection target. See the SegmentCard.tsx header comment: the
+   prototype's "the whole card selects" contract is preserved by stretching a
+   real <button> across the card instead of putting `role="button"` on the
+   card itself. Sits above the card content (z-index 1) so any click that is
+   not on a chip selects; the chips are lifted to z-index 2 below. */
+.seg-card__select {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  appearance: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  border-radius: var(--r-lg);
+  cursor: pointer;
+}
+/* Inset the focus ring: the card clips overflow, so the global
+   `:focus-visible { outline-offset: 2px }` would be cut off. */
+.seg-card__select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -3px;
+  border-radius: var(--r-lg);
+}
+/* Chips keep their own click target above the selection overlay. This is what
+   replaced six `stopPropagation()` handlers: the evidence and breakdown chips
+   are no longer descendants of the selection control, so their clicks cannot
+   reach it in the first place. */
+.seg-card__evidence,
+.seg-card__facet-chip {
+  position: relative;
+  z-index: 2;
+}
+.seg-card::before {
+  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+  background: var(--seg-color, var(--accent));
+  opacity: 0.9;
+}
+.seg-card::after {
+  content: ''; position: absolute; inset: 0;
+  background: radial-gradient(400px 200px at 100% -20%, color-mix(in oklab, var(--seg-color, var(--accent)) 22%, transparent), transparent 60%);
+  opacity: 0.35; pointer-events: none;
+}
+.seg-card:hover { border-color: var(--line-2); transform: translateY(-1px); }
+.seg-card.is-selected {
+  border-color: var(--seg-color, var(--accent));
+  box-shadow: 0 0 0 1px var(--seg-color, var(--accent)), 0 10px 30px -12px color-mix(in oklab, var(--seg-color, var(--accent)) 40%, transparent);
+}
+.seg-card.is-updating {
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 18%, transparent);
+}
+/* S1.3 gated segment panel: source not connected / not licensed. The card
+   stays in the grid (registry completeness) but reads as inert — dashed
+   border, muted accent, no hover lift, and no `.seg-card__select` button at
+   all (SegmentCard.tsx renders none), so there is nothing to click. Counts
+   are never fabricated; the em-dash count + warning chip say why. */
+.seg-card--gated {
+  border-style: dashed;
+  border-color: var(--line-2);
+}
+.seg-card--gated:hover { transform: none; border-color: var(--line-2); }
+.seg-card--gated::before { opacity: 0.35; }
+.seg-card--gated::after { opacity: 0.12; }
+.seg-card__count--gated { color: var(--text-4); }
+/* Evidence chip slot in the meta row; pushes to the row end. */
+.seg-card__evidence { margin-left: auto; display: inline-flex; }
+.seg-card--skeleton {
+  cursor: default;
+  pointer-events: none;
+}
+.seg-card--skeleton::before {
+  background: var(--line-2);
+}
+.seg-card--skeleton::after {
+  opacity: 0;
+}
+.seg-card__hdr {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+  min-inline-size: 0;
+}
+.seg-card__badge {
+  width: 26px; height: 26px; border-radius: 7px;
+  display: grid; place-items: center;
+  background: color-mix(in oklab, var(--seg-color, var(--accent)) 18%, transparent);
+  color: var(--seg-ink, var(--seg-color, var(--accent)));
+  font-size: 13px;
+  flex: 0 0 26px;
+}
+.seg-card__badge--skeleton {
+  background: var(--bg-3);
+}
+.seg-card__title {
+  min-inline-size: 0;
+  font-size: var(--fs-14);
+  font-weight: 600;
+  color: var(--text-1);
+  line-height: var(--lh-snug);
+  overflow-wrap: anywhere;
+}
+.seg-card__title-skeleton {
+  inline-size: min(72%, calc(var(--sp-16) * 2));
+  block-size: var(--fs-18);
+  margin-block-start: var(--sp-1);
+}
+.seg-card__count {
+  font-family: var(--font-sans); font-weight: 600;
+  font-size: var(--fs-28); letter-spacing: var(--tracking-tight);
+  color: var(--text-1); font-variant-numeric: tabular-nums; line-height: var(--lh-tight);
+  overflow-wrap: anywhere;
+}
+/* Reconciles the headline count against the cohort the card's Lead Queue
+   link actually shows. The headline is the addressable population; the
+   queue applies the contact-eligibility predicate, so it is a strict
+   subset (live 2026-08-11: 3,217 of 74,335 for Prime Refi). Stating one
+   number and navigating to the other reads as a broken link, so the
+   relationship is stated here. Same idiom as `.zip-tiles__reconcile`,
+   which does this for the map's ZIP drill. */
+.seg-card__reconcile {
+  margin-top: var(--sp-1);
+  font-size: var(--fs-11);
+  font-family: var(--font-mono);
+  color: var(--text-3);
+  line-height: var(--lh-snug);
+  overflow-wrap: anywhere;
+}
+.seg-card__reconcile-value {
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.seg-card__count-skeleton {
+  inline-size: min(70%, calc(var(--sp-16) * 2 + var(--sp-8)));
+  block-size: var(--fs-36);
+  margin-block: var(--sp-4) var(--sp-3);
+}
+.seg-card__sub {
+  margin-top: 6px;
+  font-size: var(--fs-12);
+  color: var(--text-3);
+  line-height: var(--lh-snug);
+  overflow-wrap: anywhere;
+}
+.seg-card__sub-skeleton {
+  inline-size: 88%;
+  block-size: var(--fs-13);
+  margin-block-start: var(--sp-2);
+}
+.seg-card__sub-skeleton--short {
+  inline-size: 64%;
+}
+.seg-card__meta {
+  display: flex;
+  row-gap: var(--sp-1);
+  column-gap: var(--sp-3);
+  margin-top: var(--sp-3);
+  font-size: var(--fs-11); color: var(--text-3);
+  font-family: var(--font-mono);
+  flex-wrap: wrap;
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+.seg-card__meta .up { color: var(--signal-success); }
+.seg-card__meta-skeleton {
+  inline-size: calc(var(--sp-16) * 2);
+  block-size: var(--fs-11);
+}
+.seg-card__meta-skeleton--short {
+  inline-size: var(--sp-12);
+}
+[data-theme="light"] .seg-card { --seg-ink: var(--text-1); }
+
+/* Pending-source variant — see SegmentCard.tsx + the gold rollup CTAS
+ * comment block. The card is a non-button when its predicate is blocked
+ * pending an upstream Cotality Delta Share; we strip the hover lift and
+ * cursor-affordance so the user reads it as informational, not
+ * interactive. The `--seg-color` accent bar at the top still picks up
+ * the segment hue so the card retains its segment identity.
+ * Prototype-parity-audit P0-2 (2026-05-04). */
+.seg-card--pending {
+  cursor: default;
+  opacity: 0.78;
+}
+.seg-card--pending:hover {
+  border-color: var(--line-1);
+  transform: none;
+}
+.seg-card--pending::after {
+  display: none;
+}
+.seg-card__count--pending {
+  font-size: var(--fs-13);
+  color: var(--text-3);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+}
+.seg-card__meta--pending { color: var(--signal-warning); }
+.seg-card__meta-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+
+/* S1.6 — borrower-dimension facet rows (loan product + origination channel).
+ * Sits under the meta row; one row per dimension: a small caps label followed
+ * by evidence chips that open the EvidenceDrawer without toggling selection.
+ *
+ * `margin-top: auto` pins the breakdown to the bottom edge of the card (the
+ * card is a column flex container) so the card's slack collects in the middle
+ * instead of pushing chips toward the geometric centre. That matters because
+ * the centre is where an untargeted click — a user's, or Playwright's default
+ * click point — lands: it should hit the selection overlay, not a chip. */
+.seg-card__facets {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-top: auto;
+  padding-top: var(--sp-3);
+}
+.seg-card__facet-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  min-inline-size: 0;
+}
+.seg-card__facet-label {
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin-inline-end: var(--sp-1);
+}
+/* Layout wrapper only. The hover and focus treatments live on the
+   `.evidence-chip` button inside it — the wrapper is a <span> with no border
+   and no tabindex, so styling its own :hover/:focus-visible painted nothing. */
+.seg-card__facet-chip {
+  display: inline-flex;
+  min-inline-size: 0;
+}
+

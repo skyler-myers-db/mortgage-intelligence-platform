@@ -462,3 +462,43 @@ cohort-filter, rate-spread floor, contact-eligibility, Genie actions,
 outreach-reject, admin RBAC, household rollup, growth-agent API, API-routes,
 typecheck-ratchet, architecture and sales-manager files pass, and the
 worker's `mypy backend` run reports no issues in 269 files. Entry removed.
+
+### frontend/src/design-system/components.css (6,630 -> 20)
+
+Plan item 8 allowed route-specific CSS to move out "only where the prototype
+BEM contract remains preserved". Slicing the file verbatim preserves it
+entirely: the entry keeps the original six header lines and becomes one
+`@import` per slice, in the original order, and Vite inlines the imports in
+place so the cascade is unchanged. Every cut is at brace depth 0; twelve of
+the fourteen slices open with an original section banner, and the last
+(`14-genie-markdown-and-proof.css`) starts inside the 1,149-line
+ROUTE COMPOSITION HELPERS section because that one section could not stay
+under 900 lines on its own. No text was added to any slice, so the expansion
+is byte-identical.
+
+| File (`design-system/components/`) | Lines | Original lines |
+|---|---|---|
+| `01-app-shell.css` | 561 | 7–567 |
+| `02-chips-kpi-segments.css` | 583 | 568–1150 |
+| `03-score-and-table.css` | 419 | 1151–1569 |
+| `04-approval-and-drawer.css` | 487 | 1570–2056 |
+| `05-command-palette.css` | 438 | 2057–2494 |
+| `06-genie-chat.css` | 753 | 2495–3247 |
+| `07-audit-and-filter-chips.css` | 307 | 3248–3554 |
+| `08-map.css` | 474 | 3555–4028 |
+| `09-console-and-layout.css` | 318 | 4029–4346 |
+| `10-native-analytics.css` | 586 | 4347–4932 |
+| `11-skeleton-menu-and-genie-answer.css` | 264 | 4933–5196 |
+| `12-motion-and-viewport.css` | 285 | 5197–5481 |
+| `13-route-composition.css` | 793 | 5482–6274 |
+| `14-genie-markdown-and-proof.css` | 356 | 6275–6630 |
+
+Proof: `tools/refactor_proof.py css <pre> components.css` reports 14 slices,
+a byte-identical expansion, and an identical class inventory (992 selectors
+on both sides); the integrator re-ran it against the committed branch. The
+production build emits a bit-for-bit identical stylesheet (same content hash,
+size and sha256 for the index and analytics CSS chunks), and the bundle
+budget passes. The CSS-literal lint globs every `.css` file, so the slices
+stay covered. The three vitest files that read the stylesheet as text now do
+so through one helper, `frontend/src/test/designCss.ts`, which expands the
+entry's imports in place; every assertion is unchanged. Entry removed.

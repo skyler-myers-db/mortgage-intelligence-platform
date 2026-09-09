@@ -1,0 +1,753 @@
+/* ============================================================
+   GENIE CHAT PANEL
+   ============================================================ */
+.genie {
+  position: fixed; bottom: var(--sp-4); right: var(--sp-4);
+  /* Default size — inline `width` / `height` / `max-height` from the
+     React component override these when the user has resized the
+     panel (FIX Δ2, 2026-05-04, persisted in localStorage). */
+  width: 420px; max-height: 640px;
+  background: var(--bg-1);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-lg);
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  z-index: 30;
+  /* Disable the open/close transform transition for `width`/`height`
+     so the resize drag tracks the pointer instantly — without this
+     each pointer-move would tween over var(--dur-slow) and feel
+     mushy. The opacity + transform tween for open/close still runs. */
+  transform: translateY(12px) scale(0.98); opacity: 0; pointer-events: none;
+  transition: opacity var(--dur-slow) var(--ease),
+              transform var(--dur-slow) var(--ease);
+}
+.genie:not(.is-open) { visibility: hidden; }
+.genie.is-open { visibility: visible; }
+/* Resize handle — top-left corner. Visible affordance: an arrow
+   glyph in a small square. Hover/focus brightens it so keyboard
+   users can see when it's selected. The button itself is positioned
+   absolute against `.genie` so it sits above the .genie__hdr but
+   doesn't displace the avatar. */
+.genie__resize {
+  position: absolute;
+  top: calc(-1 * var(--sp-2));
+  left: calc(-1 * var(--sp-3));
+  width: var(--sp-5);
+  height: var(--sp-5);
+  display: grid;
+  place-items: center;
+  background: color-mix(in oklab, var(--bg-2) 82%, transparent);
+  border: 1px solid transparent;
+  border-radius: 0 0 var(--r-md) 0;
+  color: var(--text-3);
+  font-size: var(--fs-12);
+  cursor: nwse-resize;
+  z-index: 3;
+  opacity: 0.82;
+  transition: background var(--dur-fast) var(--ease),
+              color var(--dur-fast) var(--ease),
+              border-color var(--dur-fast) var(--ease),
+              opacity var(--dur-fast) var(--ease);
+}
+.genie__resize:hover,
+.genie__resize:focus-visible {
+  background: var(--bg-3);
+  color: var(--text-1);
+  border-color: var(--line-2);
+  opacity: 1;
+  outline: none;
+}
+.genie__resize:active {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+/* FIX ζ2 (2026-05-04): 7 invisible edge / corner pointer-targets so
+   the user can resize from any side. The visible affordance is only
+   the cursor change on hover — keeping these invisible avoids
+   visually crowding the panel. The keyboard-accessible visible
+   handle is .genie__resize (top-left corner, button); these 7 are
+   pointer-only siblings.
+   The hit area is 6 px wide on edges, 12×12 on corners — large
+   enough to grab without being a click trap on adjacent UI. */
+.genie__resize-edge {
+  position: absolute;
+  z-index: 2;
+  background: transparent;
+}
+/* Edges */
+.genie__resize-edge--n {
+  top: 0; left: 26px; right: 12px; height: 6px;
+  cursor: ns-resize;
+}
+.genie__resize-edge--s {
+  bottom: 0; left: 12px; right: 12px; height: 6px;
+  cursor: ns-resize;
+}
+.genie__resize-edge--e {
+  top: 12px; bottom: 12px; right: 0; width: 6px;
+  cursor: ew-resize;
+}
+.genie__resize-edge--w {
+  top: 26px; bottom: 12px; left: 0; width: 6px;
+  cursor: ew-resize;
+}
+/* Corners — square hit zones overlap edges so corner-grabbing wins */
+.genie__resize-edge--ne {
+  top: 0; right: 0; width: 12px; height: 12px;
+  cursor: nesw-resize;
+}
+.genie__resize-edge--se {
+  bottom: 0; right: 0; width: 12px; height: 12px;
+  cursor: nwse-resize;
+}
+.genie__resize-edge--sw {
+  bottom: 0; left: 0; width: 12px; height: 12px;
+  cursor: nesw-resize;
+}
+.genie.is-open { transform: translateY(0) scale(1); opacity: 1; pointer-events: auto; }
+.genie__hdr {
+  padding: var(--sp-3) var(--sp-4);
+  display: flex; align-items: center; gap: var(--sp-3);
+  border-bottom: 1px solid var(--line-1);
+  background: linear-gradient(90deg, color-mix(in oklab, var(--accent) 10%, transparent), transparent);
+  cursor: grab;
+  user-select: none;
+}
+.genie__hdr--dragging { cursor: grabbing; }
+.genie__avatar {
+  width: 28px; height: 28px; border-radius: 8px;
+  background: conic-gradient(from 210deg, var(--entrada-navy), var(--entrada-teal), var(--entrada-bright), var(--entrada-navy));
+  position: relative;
+}
+.genie__avatar::after {
+  content: ''; position: absolute; inset: 2px; border-radius: 6px;
+  background: var(--bg-1);
+}
+.genie__avatar::before {
+  content: '\2726'; position: absolute; inset: 0;
+  display: grid; place-items: center;
+  z-index: 1; color: var(--accent-ink); font-size: 14px;
+}
+.genie__title { font-size: var(--fs-13); font-weight: 600; color: var(--text-1); }
+.genie__sub { font-size: var(--fs-11); color: var(--text-3); }
+/* Header controls (History, New thread, Close) are fixed-width; the title
+   block is what absorbs the remaining space and truncates. Without
+   min-inline-size:0 the flex title refuses to shrink and pushes the
+   controls out of a narrow panel. */
+.genie-chat__drag-title { min-inline-size: 0; }
+.genie__title,
+.genie__sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.genie__new-thread { flex-shrink: 0; white-space: nowrap; }
+.genie__new-thread-label { white-space: nowrap; }
+/* History menu. Reuses the existing `.filter-menu` / `.filter-menu__item`
+   dropdown primitives; only the right-edge anchor, the fixed width, and the
+   two-line item stack are specific to the Genie panel header.
+   NOTE the `.genie-history` parent on the overrides: `.filter-menu` is
+   declared LATER in this file, so a bare `.genie-history__menu` rule would
+   lose the cascade on `left` / `align-items` and the menu would anchor to
+   the wrong edge with its rows on one line. */
+.genie-history { position: relative; flex-shrink: 0; }
+.genie-history .genie-history__menu {
+  left: auto; inset-inline-end: 0; inline-size: 240px; cursor: default;
+}
+.genie-history .genie-history__item {
+  flex-direction: column; align-items: flex-start; gap: 2px;
+}
+.genie-history .genie-history__item:disabled { opacity: 0.55; cursor: default; }
+.genie-history__state { padding: var(--sp-2); color: var(--text-3); font-size: var(--fs-12); }
+.genie-history__state--error { color: var(--signal-warning); }
+.genie-history__title {
+  max-inline-size: 100%;
+  overflow: hidden; text-overflow: ellipsis;
+  color: var(--text-1); font-weight: 600;
+}
+.genie-history__meta { color: var(--text-3); font-family: var(--font-mono); font-size: var(--fs-11); }
+.genie__body { flex: 1; overflow-y: auto; padding: var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-3); }
+.genie__msg { max-width: 92%; }
+.genie__msg--user {
+  align-self: flex-end;
+  background: var(--accent-soft); color: var(--text-1);
+  border: 1px solid var(--chip-line);
+  padding: var(--sp-2) var(--sp-3); border-radius: 12px 12px 4px 12px;
+  font-size: var(--fs-13);
+}
+.genie__msg--ai {
+  align-self: flex-start;
+  font-size: var(--fs-13); color: var(--text-2);
+}
+.genie__msg--ai .bubble {
+  background: var(--bg-2); border: 1px solid var(--line-1);
+  padding: var(--sp-3); border-radius: 12px 12px 12px 4px;
+  color: var(--text-1);
+}
+.genie__msg--ai .sources {
+  display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px;
+}
+/* Ask Genie route transcript. Same `.genie__msg--user` bubble as the floating
+   panel; latest turn first, older turns under an `.eyebrow` divider whose
+   spacing comes from this container's gap. */
+.genie-thread { display: flex; flex-direction: column; gap: var(--sp-3); }
+.genie__input {
+  border-top: 1px solid var(--line-1);
+  padding: var(--sp-3);
+  display: flex; gap: var(--sp-2);
+}
+.genie__input input {
+  flex: 1; background: var(--bg-2); border: 1px solid var(--line-1);
+  color: var(--text-1); padding: 8px 12px; border-radius: var(--r-md);
+  font-family: var(--font-sans); font-size: var(--fs-13);
+  outline: none;
+}
+.genie__input input:focus { border-color: var(--accent); }
+/* DELIBERATE DEVIATION from the prototype (re-audit 2026-06-11 corrected
+   the earlier "parity" claim): Module 0 Prototype.html:773-785 renders the
+   fixed FAB at ALL widths (display: grid, no hiding media query). We hide
+   it at desktop because a fixed bottom-right FAB collides with the lead
+   table and choropleth at 1440, and the topbar Genie icon is the desktop
+   entry; the max-width:720px block below restores the FAB on mobile.
+   Pinned by components.test.ts as a documented deviation-by-choice. */
+.genie__fab {
+  position: fixed; bottom: var(--sp-4); right: var(--sp-4);
+  width: 52px; height: 52px; border-radius: 50%;
+  background: linear-gradient(135deg, var(--entrada-navy), var(--entrada-teal));
+  border: 1px solid var(--surface-inset-shadow);
+  color: var(--text-on-solid); display: none; place-items: center;
+  cursor: pointer;
+  box-shadow: 0 8px 24px -8px var(--entrada-teal);
+  z-index: 29;
+  transition: transform var(--dur-base) var(--ease);
+}
+.genie__fab:hover { transform: translateY(-2px); }
+.genie__fab.is-hidden { transform: translateY(20px) scale(0.6); opacity: 0; pointer-events: none; }
+@media (max-width: 720px) {
+  .genie__fab {
+    display: grid;
+    bottom: calc(var(--sp-4) + 56px);
+  }
+}
+.genie-empty {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+}
+.genie-empty__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--sp-8);
+  height: var(--sp-8);
+  border: 1px solid var(--line-3);
+  border-radius: var(--r-md);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  flex: 0 0 auto;
+}
+.genie-empty__title {
+  color: var(--text-1);
+  font-weight: 600;
+  font-size: var(--fs-13);
+}
+.genie-empty__copy {
+  margin-top: var(--sp-1);
+  color: var(--text-3);
+  font-size: var(--fs-12);
+  line-height: var(--lh-snug);
+}
+.genie-empty__suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+.genie-composer__samples {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+
+.growth-agent {
+  margin-block-end: var(--gap-grid);
+}
+.growth-agent__controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(calc(var(--sp-16) * 2), calc(var(--sp-16) * 3));
+  gap: var(--sp-4);
+  align-items: start;
+  margin-block-end: var(--sp-4);
+}
+.growth-agent__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+.growth-agent__field > span:first-child {
+  color: var(--text-3);
+  font-size: var(--fs-11);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+}
+.growth-agent__hint {
+  color: var(--text-3);
+  font-size: var(--fs-11);
+  line-height: var(--lh-snug);
+}
+.growth-agent-capabilities {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(calc(var(--sp-16) * 4), 1fr));
+  gap: var(--sp-3);
+  margin-block-end: var(--sp-4);
+}
+.growth-agent-capability {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: start;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+  background: var(--bg-2);
+}
+.growth-agent-command {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--sp-4);
+  align-items: end;
+  padding: var(--sp-4);
+  margin-block-end: var(--sp-4);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  background: var(--bg-1);
+}
+.growth-agent-command__main {
+  min-width: 0;
+}
+.growth-agent-command__prompt {
+  min-height: calc(var(--sp-16) * 2);
+}
+.growth-agent-command__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  justify-content: flex-end;
+}
+.growth-agent__cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(calc(var(--sp-16) * 4), 1fr));
+  gap: var(--sp-3);
+}
+.growth-agent-card {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+  background: color-mix(in oklab, var(--bg-2) 82%, transparent);
+}
+.growth-agent-card--loading {
+  min-height: calc(var(--sp-16) * 3);
+}
+.growth-agent-card__head {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: flex-start;
+}
+.growth-agent-card__icon {
+  width: var(--sp-8);
+  height: var(--sp-8);
+  border-radius: var(--r-md);
+  display: inline-grid;
+  place-items: center;
+  color: var(--accent);
+  background: var(--accent-soft);
+  flex: 0 0 auto;
+}
+.growth-agent-card__title {
+  color: var(--text-1);
+  font-weight: 650;
+  font-size: var(--fs-14);
+  line-height: var(--lh-snug);
+}
+.growth-agent-card__trigger,
+.growth-agent-card__copy,
+.growth-agent-card__proof-line,
+.growth-agent-step__detail {
+  color: var(--text-3);
+  font-size: var(--fs-12);
+  line-height: var(--lh-snug);
+}
+.growth-agent-card__copy {
+  margin: 0;
+}
+.growth-agent-card__copy--structured {
+  white-space: pre-wrap;
+}
+.growth-agent-card__proof {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.growth-agent-card__proof-line {
+  display: grid;
+  grid-template-columns: var(--sp-4) minmax(0, 1fr);
+  gap: var(--sp-2);
+  align-items: start;
+}
+.growth-agent-card__proof-line svg {
+  color: var(--status-success-ink);
+}
+.growth-agent-card__assets {
+  margin-top: auto;
+}
+.growth-agent-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+.growth-agent-custom {
+  margin-block-start: var(--sp-4);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  background: var(--bg-1);
+}
+.growth-agent-custom__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  border-bottom: 1px solid var(--line-1);
+}
+.growth-agent-custom__body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  align-items: end;
+  padding: var(--sp-4);
+}
+.growth-agent-custom__body .chip-row {
+  flex: 1 1 calc(var(--sp-16) * 4);
+  align-self: center;
+}
+.growth-agent-custom__body .growth-agent__field {
+  flex: 1 1 calc(var(--sp-16) * 3 + var(--sp-8));
+}
+.growth-agent-custom__body .growth-agent-card__actions {
+  flex: 1 1 auto;
+}
+.growth-agent-run {
+  margin-block-start: var(--sp-4);
+  padding: var(--sp-4);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  background: var(--bg-1);
+}
+.growth-agent-run__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+.growth-agent-run__trace,
+.growth-agent-run__governance {
+  margin-block-start: var(--sp-3);
+}
+.growth-agent-governance-list {
+  display: grid;
+  gap: var(--sp-2);
+  margin-block-start: var(--sp-2);
+}
+.growth-agent-governance-item {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: start;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-sm);
+  background: var(--bg-2);
+}
+.growth-agent-run__intent {
+  margin-block-start: var(--sp-3);
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  line-height: var(--lh-snug);
+}
+.growth-agent-run__metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sp-3);
+  margin-block: var(--sp-4);
+}
+.growth-agent-run__metrics > div {
+  min-width: 0;
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+  padding: var(--sp-3);
+  background: var(--bg-2);
+}
+.growth-agent-run__metrics span {
+  display: block;
+  color: var(--text-3);
+  font-size: var(--fs-11);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+}
+.growth-agent-run__metrics strong {
+  display: block;
+  margin-top: var(--sp-2);
+  color: var(--text-1);
+  font-family: var(--font-mono);
+  font-size: var(--fs-22);
+}
+.growth-agent-run__body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--sp-4);
+}
+.growth-agent-run__section {
+  min-width: 0;
+}
+.growth-agent-timeline,
+.growth-agent-policy-list,
+.growth-agent-monitor-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}
+.growth-agent-step,
+.growth-agent-policy {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--sp-2);
+  align-items: start;
+}
+.growth-agent-step > svg {
+  color: var(--status-success-ink);
+  margin-top: var(--sp-1);
+}
+.growth-agent-step--review_required > svg {
+  color: var(--status-warning-ink);
+}
+.growth-agent-step--blocked > svg {
+  color: var(--status-danger-ink);
+}
+.growth-agent-step__title {
+  color: var(--text-1);
+  font-size: var(--fs-12);
+  font-weight: 600;
+}
+.growth-agent-step__meta {
+  margin-top: var(--sp-1);
+  color: var(--text-4);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+}
+.growth-agent-run__assets {
+  margin-block-start: var(--sp-4);
+}
+.growth-agent-monitors {
+  margin-block-start: var(--sp-4);
+}
+.growth-agent-monitor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: var(--sp-3);
+  align-items: center;
+  text-align: left;
+  color: var(--text-2);
+  background: var(--bg-2);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+  padding: var(--sp-3);
+}
+.growth-agent-monitor:hover,
+.growth-agent-monitor:focus-visible {
+  border-color: var(--line-3);
+  color: var(--text-1);
+}
+.growth-agent-monitor__main {
+  min-width: 0;
+  display: grid;
+  gap: var(--sp-1);
+}
+.growth-agent-monitor__main span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.growth-agent-monitor__main span:nth-child(2),
+.growth-agent-monitor strong {
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+}
+.growth-agent-monitor__actions {
+  display: inline-flex;
+  gap: var(--sp-2);
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 48rem) {
+  .growth-agent-command,
+  .growth-agent__controls,
+  .growth-agent-run__body,
+  .growth-agent-run__metrics {
+    grid-template-columns: 1fr;
+  }
+  .growth-agent-command__actions {
+    justify-content: flex-start;
+  }
+}
+
+.typing-dots { display: inline-flex; gap: 3px; padding: 6px 0; }
+.typing-dots span { width: 6px; height: 6px; border-radius: 50%; background: var(--text-3); animation: tdot 1.2s infinite; }
+.typing-dots span:nth-child(2) { animation-delay: 0.15s; }
+.typing-dots span:nth-child(3) { animation-delay: 0.3s; }
+@keyframes tdot { 0%, 60%, 100% { opacity: 0.3; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-3px); } }
+
+.genie-progress {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.genie-progress__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--text-1);
+  font-size: var(--fs-13);
+  font-weight: 600;
+}
+.genie-progress__rail {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: var(--sp-1);
+}
+.genie-progress__rail span {
+  height: 3px;
+  border-radius: var(--r-pill);
+  background: var(--bg-3);
+}
+.genie-progress__rail span.is-active {
+  background: var(--accent);
+  box-shadow: 0 0 10px var(--accent-soft);
+}
+.genie-progress__label { flex: 1; min-width: 0; }
+.genie-progress__elapsed {
+  color: var(--text-3);
+  font-size: var(--fs-11);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.genie-progress__stages {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.genie-progress__stage {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  color: var(--text-3);
+  font-size: var(--fs-11);
+  white-space: nowrap;
+}
+.genie-progress__stage:not(:last-child)::after {
+  content: '';
+  width: var(--sp-4);
+  height: 1px;
+  background: var(--bg-3);
+  margin-left: var(--sp-1);
+}
+.genie-progress__stage-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--bg-3);
+  color: var(--accent-contrast);
+  flex: none;
+}
+.genie-progress__stage.is-done { color: var(--text-2); }
+.genie-progress__stage.is-done .genie-progress__stage-dot {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.genie-progress__stage.is-active { color: var(--text-1); font-weight: 600; }
+.genie-progress__stage.is-active .genie-progress__stage-dot {
+  border-color: var(--accent);
+  box-shadow: 0 0 8px var(--accent-soft);
+  animation: genie-progress-pulse 1.2s ease-in-out infinite;
+}
+@keyframes genie-progress-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(0.82); opacity: 0.6; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .genie-progress__stage.is-active .genie-progress__stage-dot { animation: none; }
+}
+.genie-progress__trace {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.genie-progress__trace-step {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  color: var(--text-2);
+  font-size: var(--fs-11);
+  line-height: var(--lh-snug);
+}
+.genie-progress__trace-step svg { flex: none; transform: translateY(1px); }
+.genie-progress__sql summary {
+  cursor: pointer;
+  color: var(--text-3);
+  font-size: var(--fs-11);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  user-select: none;
+}
+.genie-progress__sql summary:hover { color: var(--text-2); }
+.genie-progress__sql pre {
+  margin: var(--sp-2) 0 0;
+  padding: var(--sp-3);
+  background: var(--bg-1);
+  border: 1px solid var(--bg-3);
+  border-radius: var(--r-md);
+  font-size: var(--fs-11);
+  line-height: var(--lh-body);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 180px;
+  overflow-y: auto;
+}
+.genie-progress--dense { gap: var(--sp-1); }
+.genie-progress--dense .genie-progress__head {
+  font-size: var(--fs-12);
+  font-weight: 500;
+}
+.genie-progress--dense .genie-progress__stage-label { display: none; }
+.genie-progress--dense .genie-progress__stage.is-active .genie-progress__stage-label {
+  display: inline;
+}
+.genie-progress--dense .genie-progress__sql pre { max-height: 120px; }
+

@@ -1,0 +1,318 @@
+/* ============================================================
+   TWEAKS / CONSOLE PANEL
+   ============================================================ */
+.tweaks {
+  position: fixed; inset: 72px var(--sp-4) var(--sp-4) auto;
+  width: 300px;
+  background: var(--bg-1);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-lg);
+  z-index: 50;
+  display: none;
+  flex-flow: column;
+}
+.tweaks.is-open { display: flex; }
+.tweaks__hdr {
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--line-1);
+  display: flex; align-items: center;
+}
+.tweaks__hdr-icon { color: var(--accent-ink); }
+.tweaks__title { font-size: var(--fs-13); font-weight: 600; }
+.tweaks__body {
+  padding: var(--sp-4); display: grid; gap: var(--sp-4);
+  flex: 1; overflow: auto;
+}
+.tweak-row label { font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.06em; display: block; margin-bottom: 6px; }
+.tweak-row .swatches { display: flex; gap: 6px; }
+.tweak-row .sw {
+  width: 24px; height: 24px; border-radius: 6px; cursor: pointer;
+  border: 2px solid transparent; transition: all var(--dur-fast) var(--ease);
+}
+.tweak-row .sw--bright { background: var(--entrada-bright); }
+.tweak-row .sw--teal { background: var(--entrada-teal); }
+.tweak-row .sw--navy { background: var(--entrada-navy); }
+.tweak-row .sw--red { background: var(--entrada-red); }
+.tweak-row .sw.is-active { border-color: var(--text-1); }
+.tweak-row select, .tweak-row input[type="text"] {
+  width: 100%; background: var(--bg-2); border: 1px solid var(--line-1);
+  color: var(--text-1); font-family: var(--font-sans); font-size: var(--fs-13);
+  padding: 6px 10px; border-radius: var(--r-md); outline: none;
+}
+.tweak-row .segmented {
+  display: flex; background: var(--bg-2); border: 1px solid var(--line-1);
+  border-radius: var(--r-md); padding: 2px;
+}
+.tweak-row .segmented button {
+  flex: 1; background: transparent; border: 0; padding: 5px 8px;
+  font-size: var(--fs-12); color: var(--text-2); cursor: pointer;
+  border-radius: 4px; font-family: var(--font-sans);
+}
+.tweak-row .segmented button.is-active { background: var(--accent-soft); color: var(--accent-ink); }
+.tweak-row .row { display: flex; align-items: center; justify-content: space-between; }
+.tweak-row .row label { margin: 0; }
+.tweak-row .switch {
+  position: relative; width: var(--sp-10); height: var(--sp-6); border-radius: 999px;
+  background: var(--bg-3); border: 1px solid var(--line-1); cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+.tweak-row .switch::after {
+  content: '';
+  position: absolute;
+  top: calc(var(--sp-1) / 2);
+  left: calc(var(--sp-1) / 2);
+  width: var(--sp-5);
+  height: var(--sp-5);
+  border-radius: 50%;
+  background: var(--text-3);
+  transition: all var(--dur-fast) var(--ease);
+}
+.tweak-row .switch.on { background: var(--accent-soft); border-color: var(--accent); }
+.tweak-row .switch.on::after {
+  left: calc(var(--sp-10) - var(--sp-5) - (var(--sp-1) / 2));
+  background: var(--accent);
+}
+.saved-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.saved-workspace__summary {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  color: var(--text-3);
+  font-size: var(--fs-12);
+}
+.saved-workspace__item {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: flex-start;
+  padding: var(--sp-2);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+  background: var(--bg-2);
+  color: var(--text-2);
+  text-decoration: none;
+}
+.saved-workspace__item:hover {
+  border-color: var(--accent);
+  color: var(--text-1);
+}
+.saved-workspace__body {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  font-size: var(--fs-12);
+}
+.saved-workspace__proof {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+.saved-workspace__body > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-3);
+}
+.status-dot--ok { background: var(--signal-success); }
+.status-dot--warn { background: var(--signal-warning); }
+.status-dot--error { background: var(--signal-danger); }
+
+.trusted-asset {
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--bg-1);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+}
+.trusted-asset--button {
+  display: grid;
+  width: 100%;
+  gap: var(--sp-1);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.trusted-asset--button:hover,
+.trusted-asset--button:focus-visible {
+  border-color: var(--line-3);
+  background: var(--bg-3);
+}
+.trusted-asset--button.is-active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.trusted-asset__label {
+  font-size: var(--fs-13);
+  color: var(--text-1);
+}
+.trusted-asset__path {
+  margin-top: var(--sp-1);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  color: var(--text-3);
+  overflow-wrap: anywhere;
+}
+/* ============================================================
+   LAYOUT HELPERS (Module 0 specific, per prototype)
+   ------------------------------------------------------------
+   Layout reflow is driven by @container queries against the
+   `main` container we declared on `.main` above. This is the
+   correct unit of measurement because the Console (right-rail,
+   300px overlay) eats ~324px of horizontal room without
+   changing the viewport width — a pure viewport @media rule
+   would keep a 4-col KPI row while the actual available space
+   is closer to 1000px. A few viewport-scoped @media rules
+   remain below for *shell chrome* (rail width, topbar height)
+   that genuinely belongs to the viewport.
+   ============================================================ */
+
+/* KPI row — auto-fit + minmax means the browser naturally picks
+   the right number of columns for the container width. The
+   container-query breakpoints override when we need a specific
+   count (e.g. force 1-col on very narrow containers even though
+   240px would still fit two). */
+.kpi-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--gap-grid);
+  justify-content: start;
+}
+.section-hdr { display: flex; align-items: baseline; justify-content: space-between; margin: 28px 0 12px; gap: var(--sp-4); }
+.section-hdr .h-2 { margin: 0; }
+.section-hdr__titleline {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  min-block-size: calc(var(--sp-10) + var(--sp-2));
+}
+.stable-refresh-region {
+  position: relative;
+}
+.stable-refresh-region.is-updating {
+  transition: filter var(--dur-base) var(--ease);
+  filter: saturate(0.9);
+}
+.stable-refresh-status {
+  position: absolute;
+  inset-block-start: var(--sp-3);
+  inset-inline-end: var(--sp-4);
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  min-block-size: var(--sp-6);
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-pill);
+  background: var(--bg-3);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  font-weight: 500;
+  box-shadow: var(--shadow-1);
+  pointer-events: none;
+}
+.stable-refresh-region--table.is-updating::before {
+  content: attr(data-status);
+  position: absolute;
+  inset-block-start: var(--sp-3);
+  inset-inline-end: var(--sp-4);
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  min-block-size: var(--sp-6);
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-pill);
+  background: var(--bg-3);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+}
+.stable-status-chip.is-idle {
+  visibility: hidden;
+}
+.stable-status-chip {
+  justify-content: center;
+  min-inline-size: calc(var(--sp-16) * 3);
+}
+
+/* Segment grid — 6 cards is the design-target ≥ 1440px band.
+   Below that the auto-fit in the container-query stepdowns
+   produces 4 / 3 / 2 / 1 cols. The base rule uses a flexible
+   auto-fit so resizes between breakpoints stay graceful. */
+.seg-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+.proto-hero {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  margin-bottom: 24px; gap: 24px;
+  flex-wrap: wrap;
+}
+.proto-hero h1 { font-size: var(--fs-hero); font-weight: 600; letter-spacing: -0.02em; margin: 0 0 4px; line-height: var(--lh-tight); }
+.proto-hero .lede { color: var(--text-2); font-size: 14px; max-width: 640px; margin: 0; }
+.proto-hero__actions {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  flex-shrink: 0;
+  min-inline-size: 0;
+  max-inline-size: min(42vw, calc(var(--sp-16) * 24));
+}
+.page-filter-chips {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: var(--sp-2);
+  min-block-size: var(--sp-10);
+  block-size: var(--sp-10);
+  min-inline-size: 0;
+  max-inline-size: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.page-filter-chips.is-empty {
+  visibility: hidden;
+}
+.page-filter-chips .chip {
+  max-inline-size: calc(var(--sp-16) * 8);
+}
+
+/* 2026-05-04 fix (Ranked Borrowers alignment): defensively guarantee
+   that every direct child of .main__inner aligns to the same x as the
+   proto-hero block. Without this, surfaces inside the lead-queue
+   route appeared shifted right relative to the page title — a
+   .surface inline `overflow: hidden` was establishing a new BFC
+   that, combined with the table's natural min-content width, was
+   pushing the surface off the .main__inner left edge. The reset
+   ensures `.surface` (and any other direct child element) starts at
+   x=0 of .main__inner regardless of inner content width. */
+.main__inner > .surface,
+.main__inner > .approval,
+.main__inner > .layoutA-grid,
+.main__inner > .kpi-row,
+.main__inner > .seg-grid {
+  margin-inline: 0;
+  width: 100%;
+}
+.audit-panel { max-height: 260px; overflow-y: auto; }
+
