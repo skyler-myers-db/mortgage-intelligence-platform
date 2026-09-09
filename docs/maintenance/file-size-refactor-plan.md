@@ -606,3 +606,31 @@ runtime. The mappers and cache accessors had to leave the hub module because
 the mixins read them at module scope (keeping them behind would be an import
 cycle); they are re-exported, and no test patches them on the module. Entry
 removed.
+
+### backend/services/repositories/databricks_portfolio.py (2,047 -> 688)
+
+Plan item 6: query-builder, mapper, persistence.
+
+| File | Lines | Content |
+|---|---|---|
+| `backend/services/repositories/databricks_portfolio.py` | 688 | `DatabricksPortfolioRepository(_PortfolioCampaignPersistence)`: preview, funnel, day-zero and household-dedup, plus re-exports |
+| `.../databricks_portfolio_predicates.py` | 282 | product codes and equity thresholds, `build_preview_predicates`, `build_kpi_trend`, cache-key and JSON helpers |
+| `.../databricks_portfolio_campaign_mappers.py` | 379 | the normalized-variant SQL, the public variant fields, `_public_campaign_variant`, the projections, `campaign_summary_from_row` |
+| `.../databricks_portfolio_campaign_sql.py` | 262 | `_PortfolioCampaignSql`: the six campaign statements verbatim |
+| `.../databricks_portfolio_campaigns.py` | 584 | `_PortfolioCampaignPersistence(_PortfolioCampaignSql)`: retry constants, the Lakebase client accessor, `create`, `list_campaigns`, `get`, `patch_status` and their helpers |
+
+The campaign block calls only its own methods and the preview path never
+calls it, so the base-class split is complete; `_client` is annotated (never
+assigned) on the persistence class so the campaign methods type-check
+against the client the repository constructor binds. Proof:
+`defset --flatten-classes --allow-changed log`: pre 58 definitions, post 61
+across five files, removed none; the additions are `__all__` and the
+`_client` annotation. The campaign mappers bind the same logger object by
+its explicit name (`backend.services.repositories.databricks_portfolio`)
+so the four structured events they emit keep their logger name. The eight
+monkeypatch targets in `tests/unit/test_portfolio_repo_timezone.py`
+(`time.sleep`, `get_correlation_id`) moved with their callers to the
+campaigns module; the old module no longer binds either name, so a stale
+target would have raised rather than silently missed. The campaign SQL is a
+fourth module because keeping it beside the methods left that file at ~830
+lines with no headroom. Entry removed.
