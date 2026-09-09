@@ -743,3 +743,42 @@ repository, process-trace, persona-regression, sweep-deadline,
 narrative-guard, direct, retention-risk, no-refusal battery,
 typecheck-ratchet and architecture files pass, and mypy reports no issues.
 Entry removed.
+
+### backend/api/outreach.py (2,200 -> 764)
+
+The 2026-08-05 addendum's four steps for the human-approval and audit path:
+draft generation and verification, the atomic decision commit, campaign
+treatment assignment and eligibility gating, and a router that keeps only
+routing, request validation and response mapping. All four services live
+under `backend/services/`, so the router imports nothing from `backend.api`.
+
+| File | Lines | Content |
+|---|---|---|
+| `backend/api/outreach.py` | 764 | module docstring, router, the four dependency aliases, `draft_outreach`, `approve_outreach`, `reject_outreach`, importing every helper by name so the routes still call them as module globals |
+| `backend/services/outreach_decision_intent.py` | 357 | the leaf: canonical intent hashing, campaign-decision proof normalization and fingerprint, approve/reject intent construction and replay matching |
+| `backend/services/outreach_decision_commit.py` | 452 | the approvals ledger statements and campaign decision lock, existing-approval lookup and replay, `_supports_atomic_outreach_write`, `_lock_and_revalidate_campaign_decision`, `_commit_outreach_decision_atomic` |
+| `backend/services/outreach_campaign_gate.py` | 348 | campaign access and variant lookups, `_resolve_governed_campaign_variant`, `_enforce_contact_eligibility`, evidence-id derivation, marketing audit payload, disclosure resolution, reject rationale |
+| `backend/services/outreach_drafts.py` | 391 | generated-draft statements, draft verification and placeholder assertions, `_persist_generated_outreach_draft` |
+
+The module graph is acyclic: intent is the leaf; commit and the campaign gate
+import intent; drafts imports intent and the campaign gate; the router
+imports all four. Proof: `defset`: pre 54 definitions, post 54 across five
+files, removed none, added none, text-changed none. The public wire contract
+is unchanged: `app.openapi()` serialized with sorted keys is identical
+between a pristine main tree and the integrated tree across all 188 `/api`
+paths and 211 component schemas (the only difference in the raw documents is
+the `/{full_path}` SPA fallback route, which `backend/main.py` mounts only
+when a built frontend is present; the pristine tree has no build), and the
+committed OpenAPI baseline tests pass. The autouse conftest patch of
+`enqueue_lifecycle_trigger` and the one object-form patch of
+`_resolve_governed_campaign_variant` still land on names the routes read from
+the router module; the three outreach test files that reached helpers the
+router no longer binds (`_APPROVAL_LOOKUP_BY_REQUEST_ID`,
+`_CAMPAIGN_DECISION_LOCK_LOOKUP`, `_lock_and_revalidate_campaign_decision`,
+`_campaign_decision_proof_fingerprint`, `_canonical_intent`,
+`_existing_approval_response_or_conflict`, `BORROWER_DECISION_LOCK`,
+`settings`) now import them from the owning module, because ruff forbids
+keeping dead imports on the router for tests and a patch on a name the caller
+cannot see fails silently (before the repoint one file failed with 503s, not
+attribute errors). Services raising `HTTPException` follow existing practice
+(19 modules under `backend/services/` already do). Entry removed.

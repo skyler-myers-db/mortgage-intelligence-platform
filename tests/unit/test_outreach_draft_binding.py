@@ -10,7 +10,6 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.api import outreach as outreach_mod
 from backend.config.settings import settings
 from backend.main import app
 from backend.schemas.portfolio import HouseholdDedupConfig, project_public_campaign_json_field
@@ -19,6 +18,7 @@ from backend.services.campaign_intelligence import (
     campaign_criteria_fingerprint,
 )
 from backend.services.campaign_targeting import campaign_treatment_fingerprint
+from backend.services.outreach_decision_commit import _CAMPAIGN_DECISION_LOCK_LOOKUP
 from backend.services.repositories import get_lead_repository, get_outreach_repository
 
 client = TestClient(app)
@@ -272,7 +272,7 @@ def _enable_atomic_campaign_decisions(monkeypatch, lakebase) -> None:
         ) -> _Result:
             values = params or {}
             lakebase.executes.append((sql, values))
-            if sql == outreach_mod._CAMPAIGN_DECISION_LOCK_LOOKUP:
+            if sql == _CAMPAIGN_DECISION_LOCK_LOOKUP:
                 return _Result(lakebase.fetchone(sql, values))
             if "pg_advisory_xact_lock" in sql:
                 return _Result(None)
@@ -848,7 +848,7 @@ def test_campaign_approval_persists_proof_binding_and_replays_before_borrower_fe
         if "INSERT INTO mip_app.approvals" in sql
     )
     executed_sql = [sql for sql, _params in fake_lakebase_client.executes]
-    campaign_lock_index = executed_sql.index(outreach_mod._CAMPAIGN_DECISION_LOCK_LOOKUP)
+    campaign_lock_index = executed_sql.index(_CAMPAIGN_DECISION_LOCK_LOOKUP)
     borrower_lock_index = next(
         index
         for index, sql in enumerate(executed_sql)
@@ -955,7 +955,7 @@ def test_campaign_rejection_locks_and_persists_exact_owner_treatment_proof(
 
     assert response.status_code == 200, response.text
     executed_sql = [sql for sql, _params in fake_lakebase_client.executes]
-    campaign_lock_index = executed_sql.index(outreach_mod._CAMPAIGN_DECISION_LOCK_LOOKUP)
+    campaign_lock_index = executed_sql.index(_CAMPAIGN_DECISION_LOCK_LOOKUP)
     borrower_lock_index = next(
         index
         for index, sql in enumerate(executed_sql)
