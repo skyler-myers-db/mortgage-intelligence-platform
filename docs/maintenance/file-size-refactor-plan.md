@@ -672,3 +672,37 @@ catalog-qualified count SQL, so that test now reloads
 the hub binds names once at import time with no reload machinery. 421 tests
 across the provision-space, SQL-floor, repository and narrative-guard files
 pass on the integrated tree. Entry removed.
+
+### backend/services/repositories/databricks_genie_direct.py (2,100 -> 568)
+
+The 2026-06-17 addendum: population, segment, offer, ZIP/location and
+governance-response dispatchers. `direct_canonical_response` was one
+1,809-line function of top-level `if <scope>(question): ... return`
+branches. It is now a dispatcher whose skeleton is unchanged: each extracted
+branch became `if <same test>: return _direct_<name>(ctx[, local])`, where a
+frozen `_DirectContext` carries the prologue locals (question, SQL client,
+the trusted-response closure, the eight asset names, the trusted-asset list)
+and each helper opens with `name = ctx.name` lines for exactly the fields it
+reads, followed by the original body dedented one level.
+
+| File | Lines | Content |
+|---|---|---|
+| `databricks_genie_direct.py` | 568 | `_DirectContext`, `_trusted_sql_response`, `_guide_response`, the dispatcher and its default-count tail |
+| `databricks_genie_direct_population.py` | 624 | counts, shares, equity and negative-equity thresholds, listed, investor and HELOC counts, home-equity distribution, addressable market, ranked lead population |
+| `databricks_genie_direct_rankings.py` | 545 | top borrowers by state, global, all segments and specific intents, cash-out by equity, investor by related property, HELOC ZIPs, strategy board |
+| `databricks_genie_direct_segments.py` | 551 | refinance comparisons and drivers, top-tier compare, investor by state, mean spread, approval rate, offer mix, savings gap, HELOC recommendation, listed product and days on market, lock-in, top cohorts |
+| `databricks_genie_direct_metrics.py` | 180 | mean lead score by state, evidence events yesterday and this quarter, weekly distribution, approval trend |
+| `databricks_genie_direct_retention.py` | 135 | competitor lien list, retention risk |
+| `databricks_genie_direct_geo.py` | 120 | ITM ZIPs, ITM state breakdown |
+| `databricks_genie_direct_responses.py` | 51 | segment display labels and `_data_gap_response`, which the branches call (keeping them in the dispatcher would be an import cycle) |
+
+Proof: `tools/refactor_proof.py branches <pre>:direct_canonical_response
+databricks_genie_direct.py:direct_canonical_response --modules
+databricks_genie_direct*.py` reports 80 skeleton statements and 45 extracted
+branches, every body verbatim, no name out of scope; `defset` on the same
+files shows nothing removed, the 45 helpers and the context added, and only
+the dispatcher itself text-changed (the integrator re-ran both). The branch
+modules import `_DirectContext` under `TYPE_CHECKING`. 2,194 tests across
+the direct, repository, SQL-floor, narrative-guard, provision-space, persona
+regression, process-trace, retention-risk, no-refusal battery, architecture
+and typecheck-ratchet files pass, and mypy reports no issues. Entry removed.
