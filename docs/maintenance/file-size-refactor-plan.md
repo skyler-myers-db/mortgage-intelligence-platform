@@ -578,3 +578,31 @@ read this file as text for the HMAC rotation contract
 (`tests/unit/test_disaster_recovery_contract.py`) now reads the tokens
 module, which is where that contract lives. Sixteen imports whose only
 consumers moved out left the routing module. Entry removed.
+
+### backend/services/sales_state.py (1,778 -> 163)
+
+Plan item 6: query-builder, mapper, persistence. The store class alone was
+1,459 lines, so the class is split by responsibility into a core and two
+mixins that inherit it, and every method keeps its exact text.
+
+| File | Lines | Content |
+|---|---|---|
+| `backend/services/sales_state.py` | 163 | `SalesStateStore(_SalesStateWrites, _SalesStateReporting)` with the original docstring and an empty body, the dependency accessors, `hydrate_leads_with_sales_state`, `new_server_request_id`, re-exports |
+| `backend/services/sales_state_mappers.py` | 228 | module cache state, the outcome-source vocabulary, the shared SQL, cache accessors, the row-to-schema mappers |
+| `backend/services/sales_state_core.py` | 539 | `_SalesStateCore`: constructor, scope guards, every read path, `_insert_audit_event` |
+| `backend/services/sales_state_writes.py` | 570 | `_SalesStateWrites(_SalesStateCore)`: `assign_lead`, `distribute`, `log_disposition`, `record_outcome` |
+| `backend/services/sales_state_reporting.py` | 434 | `_SalesStateReporting(_SalesStateCore)`: lifecycle, aging, standup, conversion, campaign-performance funnel, outcome summary |
+
+The self-call graph was checked first: writes and reporting call only core
+methods and never each other, so no class calls a method it cannot see and
+mypy accepts the mixins without signature edits. Proof:
+`defset --flatten-classes --allow-changed latest_dispositions_for`: pre 61
+definitions, post 62 across five files (the addition is `__all__`), removed
+none. The one allowed change is type-only and lives in
+`latest_dispositions_for`, a core reader that leaves the mypy-exempt module:
+a stale `type: ignore[dict-item]` was dropped and the returned values are
+`cast` to `CallDisposition` before `model_copy`; `cast` is an identity at
+runtime. The mappers and cache accessors had to leave the hub module because
+the mixins read them at module scope (keeping them behind would be an import
+cycle); they are re-exported, and no test patches them on the module. Entry
+removed.
