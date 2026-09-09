@@ -634,3 +634,41 @@ campaigns module; the old module no longer binds either name, so a stale
 target would have raised rather than silently missed. The campaign SQL is a
 fourth module because keeping it beside the methods left that file at ~830
 lines with no headroom. Entry removed.
+
+### backend/services/repositories/databricks_genie_canonical.py (3,166 -> 380)
+
+The 2026-06-17 addendum: prompt classifiers, SQL templates, result-shaping
+helpers. Seven responsibility modules sit behind an import hub that keeps the
+single import surface every caller uses.
+
+| File | Lines | Original lines |
+|---|---|---|
+| `databricks_genie_canonical.py` (hub) | 380 | re-exports of every top-level name plus `__all__` |
+| `databricks_genie_canonical_sql.py` | 403 | 83–317, 340–497: asset names, count/share/distribution/geography SQL |
+| `databricks_genie_canonical_ranking_sql.py` | 536 | 319–338, 499–590, 979–1387: every borrower-ranking shape, including the 2026-08-06 re-assignment block and the legacy assignments it supersedes, in their original relative order |
+| `databricks_genie_canonical_metric_sql.py` | 407 | 1389–1780: metric, time-series, lock-in, retention and MSA SQL |
+| `databricks_genie_canonical_briefs.py` | 394 | 593–977: analyst-brief result shaping |
+| `databricks_genie_canonical_scopes.py` | 397 | 14–81, 1782–2094: scope dataclasses, question normalizers, intent predicates, the US state vocabulary |
+| `databricks_genie_canonical_population_scopes.py` | 519 | 2097–2591: population and geography classifiers |
+| `databricks_genie_canonical_intent_scopes.py` | 593 | 2594–3166: top-borrower, segment and time-series classifiers |
+
+Import order is a directed acyclic graph (sql, ranking sql, scopes,
+population scopes, intent scopes; metric sql and briefs are leaves). The
+population/intent cut is at line 2591 rather than the sketched 2611 because
+`_canonical_top_borrowers_state_scope` calls a specific-intent helper and the
+two modules would otherwise import each other. The hub re-exports every
+top-level name, not only the 116 imported elsewhere, because
+`tests/unit/test_genie_sql_floor_extraction.py` enumerates the `_CANONICAL_*_SQL`
+corpus through `vars()` and asserts it is exhaustively declared.
+
+Proof: `defset` pre 178 definitions, post 179 across eight files, removed
+none, text-changed none; the one addition is the hub's `__all__`. One
+integration change on top of the worker's commit: the hub had grown an
+`importlib.reload` cascade so that reloading the hub would re-run the split
+modules; the only caller of that behavior is one test
+(`tests/unit/test_provision_genie_space.py`) that re-derives the
+catalog-qualified count SQL, so that test now reloads
+`databricks_genie_canonical_sql`, the module that defines the constant, and
+the hub binds names once at import time with no reload machinery. 421 tests
+across the provision-space, SQL-floor, repository and narrative-guard files
+pass on the integrated tree. Entry removed.
