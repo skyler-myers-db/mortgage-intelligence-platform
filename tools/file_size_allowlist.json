@@ -1,7 +1,6 @@
 {
   "expires": {
     "backend/api/outreach.py": "2026-09-15",
-    "backend/services/capabilities.py": "2026-09-15",
     "backend/services/audit_store.py": "2026-09-15",
     "backend/services/genie_actions.py": "2026-09-15",
     "backend/services/repositories/databricks_genie.py": "2026-09-15",

@@ -416,3 +416,22 @@ orchestration module; the documentation-contract scan of this file (no
 unversioned API paths) still passes. 132 tests across the bootstrap,
 outreach-reject, sales-manager, documentation-contract, architecture,
 typecheck-ratchet, loan-officer and approval-funnel files pass. Entry removed.
+
+### backend/services/capabilities.py (911 -> 460)
+
+The 2026-07-13 addendum: capability discovery, live workspace probes, and
+proof-ledger status shaping behind one public snapshot API.
+
+| File | Lines | Content |
+|---|---|---|
+| `backend/services/capabilities.py` | 460 | discovery (`probe_capabilities`), contract-presence checks, `_status_from_live`, the cached snapshot API, re-exports |
+| `backend/services/capabilities_models.py` | 85 | `CapabilityStatus`, `Capability`, `LiveCapabilityStatus`, the live map alias, constants, and the one helper both halves call |
+| `backend/services/capabilities_live_probes.py` | 425 | `collect_live_capability_statuses` and every `_probe_*` workspace probe |
+
+Proof: `defset`: pre 36 definitions, post 36 across three files, removed
+none, added none, text-changed none. Import direction is models, then live
+probes, then discovery, so there is no cycle. The only monkeypatched module
+attribute in the capability tests is `get_settings`, whose reader
+`probe_capabilities` stayed put. 370 tests across the capabilities,
+growth-agent API, admin-operations, health-endpoint, architecture and
+documentation-contract files pass. Entry removed.
