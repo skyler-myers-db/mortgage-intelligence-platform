@@ -782,3 +782,43 @@ keeping dead imports on the router for tests and a patch on a name the caller
 cannot see fails silently (before the repoint one file failed with 503s, not
 attribute errors). Services raising `HTTPException` follow existing practice
 (19 modules under `backend/services/` already do). Entry removed.
+
+### Outcome
+
+Every entry that was due to expire on 2026-09-15 is split and removed; the
+allowlist is empty for the first time since the gate was introduced.
+
+| Original file | Before | After | New modules |
+|---|---|---|---|
+| `tools/e2e_borrower_audit.py` | 1,526 | 343 | 5 |
+| `tools/databricks/converge_campaign_treatment_access.py` | 936 | 423 | 1 |
+| `frontend/src/components/mortgage/LeadTable.tsx` | 1,261 | 567 | 5 |
+| `frontend/src/components/mortgage/USChoroplethMap.tsx` | 1,044 | 677 | 3 |
+| `backend/services/resilience.py` | 986 | 223 | 2 |
+| `backend/services/lakebase_bootstrap.py` | 927 | 489 | 2 |
+| `backend/services/capabilities.py` | 911 | 460 | 2 |
+| `backend/services/audit_store.py` | 1,872 | 260 | 3 |
+| `frontend/src/design-system/components.css` | 6,630 | 20 | 14 |
+| `frontend/src/lib/api.ts` | 2,195 | 112 | 14 |
+| `backend/services/genie_client.py` | 983 | 772 | 1 |
+| `backend/services/genie_actions.py` | 1,529 | 819 | 2 |
+| `backend/services/sales_state.py` | 1,778 | 163 | 4 |
+| `backend/services/repositories/databricks_portfolio.py` | 2,047 | 688 | 4 |
+| `backend/services/repositories/databricks_genie_canonical.py` | 3,166 | 380 | 7 |
+| `backend/services/repositories/databricks_genie_direct.py` | 2,100 | 568 | 7 |
+| `backend/services/repositories/databricks_genie.py` | 2,410 | 799 | 6 |
+| `backend/api/outreach.py` | 2,200 | 764 | 4 |
+
+34,501 lines that lived in eighteen files now live in 104, every one under
+900 (the largest new module is 793 lines). No consumer outside a split
+changed except the tests named under each file. Gates on the integrated
+branch: ruff, mypy (304 files, no exemption added), the file-size gate,
+eslint, `tsc -b`, the production build and bundle budget, the full frontend
+suite (1,085 tests) and the full backend unit suite.
+
+**Watch list.** Five files sit between 750 and 900 lines and are the ones most
+likely to cross the limit again: `genie_actions.py` (819),
+`databricks_genie.py` (799), `13-route-composition.css` (793),
+`genie_client.py` (772) and `outreach.py` (764). The next edit that pushes
+one of them over 900 should split it rather than list it; the tools and the
+patterns above make that a same-day change.
