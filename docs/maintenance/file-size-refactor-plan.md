@@ -435,3 +435,30 @@ attribute in the capability tests is `get_settings`, whose reader
 `probe_capabilities` stayed put. 370 tests across the capabilities,
 growth-agent API, admin-operations, health-endpoint, architecture and
 documentation-contract files pass. Entry removed.
+
+### backend/services/audit_store.py (1,872 -> 260)
+
+Plan item 6: the policy/persistence boundary. The metadata vocabulary and its
+validators are policy; the store, actor resolution and singleton are
+persistence.
+
+| File | Lines | Content |
+|---|---|---|
+| `backend/services/audit_store.py` | 260 | fallback identity counter, `build_safe_audit_metadata`, the `AuditStore` protocol, `resolve_actor`, event-type coercion, the store singleton and proxy, re-exports of every name imported elsewhere |
+| `backend/services/audit_metadata_policy.py` | 663 | PII denylist, every metadata key and value vocabulary, the three audit exceptions |
+| `backend/services/audit_metadata_validation.py` | 534 | key/PII/allowlist validators, top-level column, portfolio-criteria, result-filter and decision-input value policies, `_sanitize_metadata` |
+| `backend/services/audit_metadata_public_values.py` | 583 | `_assert_public_safe_values` alone (507 lines) |
+
+Proof: `defset --allow-changed _metadata_keys_deep`: pre 77 definitions,
+post 77 across four files, removed none, added none. The one allowed change
+is type-only: the second branch of `_metadata_keys_deep` no longer re-annotates
+`out` (`out: set[str] = set()` became `out = set()`), which is the
+`[no-redef]` error the module's mypy exemption had been hiding; the first
+branch already declares the type for the function scope, so runtime behavior
+is unchanged and the validation module type-checks without an exemption.
+Layering is policy, then validation, then public values, then the store.
+660 tests across the audit-store contract, PII denylist, my-events,
+cohort-filter, rate-spread floor, contact-eligibility, Genie actions,
+outreach-reject, admin RBAC, household rollup, growth-agent API, API-routes,
+typecheck-ratchet, architecture and sales-manager files pass, and the
+worker's `mypy backend` run reports no issues in 269 files. Entry removed.
