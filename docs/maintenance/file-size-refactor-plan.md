@@ -251,3 +251,45 @@ orchestration, which keeps the slices verbatim.
 2026-09-15, one week after this decision, and the 2026-08-05 ratchet above says
 a file still oversize on that date blocks merge until it is split. Nothing in
 this addendum extends that date.
+
+## 2026-09-08 allowlist-expiry addendum
+
+All eighteen remaining allowlist entries expire on 2026-09-15 and the
+2026-08-05 ratchet above forbids another re-date, so from 2026-09-16 the gate
+would fail every pull request with one `ALLOWLIST-EXPIRED` line per file. The
+gate is not a required check, which is how a red `main` lands silently. This
+addendum records the splits made in the week before the cliff, one commit per
+file, each commit removing that file's allowlist entry in the same change.
+
+Every split is proven with `tools/refactor_proof.py`, added with this
+addendum: `defset` compares every top-level definition (functions, classes,
+assignments; class members when `--flatten-classes`) of the pre-split blob
+against the union of the post-split files and passes only when nothing was
+removed or textually changed; `branches` proves a branch extraction from a
+giant dispatcher function (skeleton verbatim, every extracted body verbatim,
+no name left out of scope); `css` proves a stylesheet slicing (byte-identical
+`@import` expansion plus an identical class-selector inventory). The tool was
+validated against the two earlier criteria splits (d404b423, b7125331: 64 and
+72 definitions, none changed) before use. Where a move is not verbatim
+(mypy-driven type fixes in code leaving an exempt module, or a component
+extraction), the deviation is enumerated under the file.
+
+### tools/e2e_borrower_audit.py (1,526 -> 343)
+
+Plan item 7: SQL fetchers, recompute model, comparators, report rendering.
+
+| File | Lines | Content |
+|---|---|---|
+| `tools/e2e_borrower_audit.py` | 343 | docstring, sys.path shim, `run_audit`, client construction, CLI |
+| `tools/e2e_borrower_audit_model.py` | 71 | gold-threshold constants, `Mismatch`, `ClipAudit` |
+| `tools/e2e_borrower_audit_fetch.py` | 370 | sampling, raw-share, gold-row and evidence fetchers |
+| `tools/e2e_borrower_audit_recompute.py` | 299 | independent Python re-computation of the gold row |
+| `tools/e2e_borrower_audit_compare.py` | 320 | raw-vs-silver, raw-vs-gold, gold-vs-API comparators |
+| `tools/e2e_borrower_audit_report.py` | 200 | `_hash_clip`, `render_report` |
+
+Proof: `defset` pre 31 definitions, post 31 across six files, removed none,
+added none, text-changed none. `python tools/e2e_borrower_audit.py --help`
+resolves the sibling imports through the shim, and the `tools.*` import path
+resolves under pytest. `tests/unit/test_next_best_offer.py` now pins
+`NBO_PRODUCT_LABELS` in the recompute module, where the offer-label lookup
+lives. Entry removed.

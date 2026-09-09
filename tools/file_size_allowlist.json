@@ -15,7 +15,6 @@
     "frontend/src/components/mortgage/USChoroplethMap.tsx": "2026-09-15",
     "frontend/src/design-system/components.css": "2026-09-15",
     "frontend/src/lib/api.ts": "2026-09-15",
-    "tools/e2e_borrower_audit.py": "2026-09-15",
     "backend/services/genie_client.py": "2026-09-15",
     "tools/databricks/converge_campaign_treatment_access.py": "2026-09-15"
   },
