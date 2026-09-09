@@ -4326,8 +4326,9 @@ def test_a_rescue_declined_for_want_of_a_sql_client_is_not_silent() -> None:
     from unittest.mock import patch
 
     from backend.services.repositories import databricks_genie as module
+    from backend.services.repositories import databricks_genie_canonical_answer as dispatch
 
-    with patch.object(module, "_emit_genie_warning") as warn:
+    with patch.object(dispatch, "_emit_genie_warning") as warn:
         assert (
             module._canonical_genie_answer(
                 question="Which segment converts best?",

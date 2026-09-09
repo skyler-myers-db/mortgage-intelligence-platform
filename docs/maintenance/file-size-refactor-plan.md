@@ -706,3 +706,40 @@ modules import `_DirectContext` under `TYPE_CHECKING`. 2,194 tests across
 the direct, repository, SQL-floor, narrative-guard, provision-space, persona
 regression, process-trace, retention-risk, no-refusal battery, architecture
 and typecheck-ratchet files pass, and mypy reports no issues. Entry removed.
+
+### backend/services/repositories/databricks_genie.py (2,410 -> 799)
+
+Plan item 4 for this file: guardrails and response shaping separated from
+the repository. Two verbatim moves plus one branch extraction.
+
+| File | Lines | Content |
+|---|---|---|
+| `databricks_genie.py` | 799 | `DatabricksGenieRepository`, `_adapt_genie_response`, the degraded-fallback annotation, re-exports |
+| `databricks_genie_narrative.py` | 453 | cell formatting, plain labels, factual row summaries, narrative repair prompt, verification notes, metric contradiction check, `_restore_live_voice` |
+| `databricks_genie_cross_check.py` | 149 | `_CrossCheckOutcome` and `_governed_cross_check` |
+| `databricks_genie_canonical_answer.py` | 227 | `_CanonicalAnswerContext`, the `_canonical_genie_answer` dispatcher and its tail |
+| `databricks_genie_canonical_answer_rankings.py` | 464 | top borrowers by state, global, all segments and specific intents |
+| `databricks_genie_canonical_answer_geo.py` | 470 | ITM ZIPs, HELOC ZIPs, cash-out by state, listed purchase, MSA score, ITM count by city |
+| `databricks_genie_canonical_answer_retention.py` | 286 | competitor lien list, retention risk, segment-performance rescue |
+
+Proof: `branches <pre>:_canonical_genie_answer
+databricks_genie_canonical_answer.py:_canonical_genie_answer --modules
+databricks_genie_canonical_answer*.py` reports 42 skeleton statements and 14
+extracted branches with exactly three findings, each the same one-line
+type-only edit (`count = row.get(...)` became `count: Any = row.get(...)`,
+in `_answer_retention_risk`, `_answer_in_the_money_count_by_city`, and the
+dispatcher tail); running the proof against copies with those three lines
+reverted prints `branches proof OK`, so nothing else differs. Those are the
+three `int()`-of-`Any | None` errors the module's mypy exemption had been
+hiding, surfaced because the bodies now live in type-checked modules.
+`defset --allow-changed _canonical_genie_answer`: pre 28 definitions, post
+43 across seven files, removed none; the additions are the 14 helpers and
+the context. The one test that patched `_emit_genie_warning` on the
+repository module (`tests/unit/test_genie_repository.py`) now patches the
+dispatcher module, where that name is read. 49 imports whose only consumers
+moved out left the repository module; the two names other modules still
+reach through it keep compatibility re-exports. 2,006 tests across the
+repository, process-trace, persona-regression, sweep-deadline,
+narrative-guard, direct, retention-risk, no-refusal battery,
+typecheck-ratchet and architecture files pass, and mypy reports no issues.
+Entry removed.
