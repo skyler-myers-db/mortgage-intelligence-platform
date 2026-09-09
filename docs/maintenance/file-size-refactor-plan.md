@@ -556,3 +556,25 @@ re-exports carry the repo's existing compatibility-re-export `noqa` marker.
 393 tests across the client, feedback-client, capabilities, home-summary,
 async-flow, provision-space, retention-risk and repository files pass; the
 registry module type-checks without an exemption. Entry removed.
+
+### backend/services/genie_actions.py (1,529 -> 819)
+
+Plan item 4 for this file: action routing separated from the token contract
+and the reviewed cohort filters.
+
+| File | Lines | Content |
+|---|---|---|
+| `backend/services/genie_actions.py` | 819 | the SQL constants, idempotency lookups, confirmation validation, audit payload, `_campaign_criteria`, cohort routing and materialization, `_campaign_treatment_coordinator` (a test patch target, kept beside its caller), `handle_genie_action` |
+| `backend/services/genie_action_tokens.py` | 385 | the signed confirmation-token contract: claim material, rotation-aware key resolution, the wire codec, issue/sign/decode, and the constants only it reads |
+| `backend/services/genie_action_filters.py` | 400 | the reviewed cohort route filters and the closed filter-key vocabularies the Lead Queue replay shares |
+
+Dependencies run one way (actions, then tokens, then filters); the claim
+material moved with the tokens because the token claims bind it and the
+confirmation validator re-derives it. Proof: `defset`: pre 65 definitions,
+post 65 across three files, removed none, added none, text-changed none.
+Every name any other module or test imports from `genie_actions` is
+re-exported, so no call site outside these files changed; the one test that
+read this file as text for the HMAC rotation contract
+(`tests/unit/test_disaster_recovery_contract.py`) now reads the tokens
+module, which is where that contract lives. Sixteen imports whose only
+consumers moved out left the routing module. Entry removed.
