@@ -396,3 +396,23 @@ through the module (`_reset_breakers_for_tests`, `get_breaker`,
 resilience, observability, config-cache, error-sanitizer, load-test,
 health-endpoint, treatment-gate, Lakebase-pool and workspace-host files pass.
 Entry removed.
+
+### backend/services/lakebase_bootstrap.py (927 -> 489)
+
+The 2026-07-13 addendum: migration SQL, migration-state predicates, bootstrap
+orchestration, with advisory-lock and idempotency behavior independently
+testable.
+
+| File | Lines | Content |
+|---|---|---|
+| `backend/services/lakebase_bootstrap.py` | 489 | the `ensure_*` orchestration, the process lock and the five bootstrapped flags (module globals the tests set directly), test hooks, re-exports |
+| `backend/services/lakebase_bootstrap_sql.py` | 341 | every DDL tuple, preflight query and advisory-lock key |
+| `backend/services/lakebase_bootstrap_state.py` | 165 | the five `_*_already_applied` predicates and both advisory-lock release helpers |
+
+Proof: `defset --allow-changed log`: pre 36 definitions, post 37 across
+three files, removed none, added none, only the per-module logger duplicated.
+The DDL names the bootstrap tests assert on stay importable from the
+orchestration module; the documentation-contract scan of this file (no
+unversioned API paths) still passes. 132 tests across the bootstrap,
+outreach-reject, sales-manager, documentation-contract, architecture,
+typecheck-ratchet, loan-officer and approval-funnel files pass. Entry removed.
