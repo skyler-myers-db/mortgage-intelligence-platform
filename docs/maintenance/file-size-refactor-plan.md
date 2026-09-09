@@ -502,3 +502,33 @@ budget passes. The CSS-literal lint globs every `.css` file, so the slices
 stay covered. The three vitest files that read the stylesheet as text now do
 so through one helper, `frontend/src/test/designCss.ts`, which expands the
 entry's imports in place; every assertion is unchanged. Entry removed.
+
+### frontend/src/lib/api.ts (2,195 -> 112)
+
+Plan item 1: typed endpoint clients by route group. Two facts shaped the
+split: 61 files import from `../lib/api` and 39 test files mock that module
+path, so `frontend/src/lib/api.ts` stays the only import path (it re-exports
+every name it exported before, 37 in all) and no consumer changed.
+`frontend/src/lib/api.test.ts` sits at 899 lines and is byte-identical.
+
+| File | Lines | Content |
+|---|---|---|
+| `lib/api.ts` | 112 | type re-exports, transport re-exports, `api` composed from the route-group objects in the original member order, plus `leads` (which calls `api.leadsPage` through the exported object) |
+| `lib/apiTypes.ts` | 298 | the response and query interfaces (original lines 104–384, byte-identical body) |
+| `lib/apiTransport.ts` | 611 | `ApiError`, retry and 503 parsing, growth-agent proof helpers, the JSON verbs (original lines 386–978; eleven definitions gained an `export` keyword and nothing else) |
+| `lib/apiClients/*.ts` | 56–234 each | twelve route-group objects: analytics, portfolio, geo, leads, outreach, sales, activation, genie, growthAgent, audit, workspace, admin |
+
+`portfolio.ts` and `leads.ts` each export two objects because the original
+literal interleaves their members with other groups; that is what keeps the
+member order exact.
+
+Proof: `tools/refactor_proof_object_members.mjs <pre> lib/api.ts api`, added
+with this commit, resolves every spread in the composed object back to its
+module and compares the member list with the original literal: 88 members on
+both sides, identical order, no text differences (the integrator re-ran it
+against the committed branch). `Object.keys(api)` at runtime is identical
+between a pristine base tree and the split tree (88 keys, same digest), and
+the export surface of `api.ts` is the same 37 names. eslint at
+`--max-warnings 0`, the full vitest suite (137 files, 1,085 tests), `tsc -b`,
+the production build and the bundle budget pass (initial JS moved from
+398.24 to 398.40 KiB raw). Entry removed.
