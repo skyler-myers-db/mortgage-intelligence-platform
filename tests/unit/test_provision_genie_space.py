@@ -379,23 +379,26 @@ def test_space_spec_substitutes_configured_catalog(
 def test_backend_genie_trust_and_canonical_sql_follow_configured_catalog(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from backend.services.repositories import databricks_genie_canonical as canonical_mod
+    # The count SQL is derived in the split module that defines it; the
+    # canonical hub only re-exports names bound at import time (2026-09-08
+    # split, docs/maintenance/file-size-refactor-plan.md).
+    from backend.services.repositories import databricks_genie_canonical_sql as canonical_sql_mod
     from backend.services.repositories import databricks_genie_trust as trust_mod
 
     original_catalog = settings.mip_default_catalog
     monkeypatch.setattr(settings, "mip_default_catalog", "acme_mip")
     try:
         trust = importlib.reload(trust_mod)
-        canonical = importlib.reload(canonical_mod)
+        canonical_sql = importlib.reload(canonical_sql_mod)
 
         assert "acme_mip.gold.borrower_360" in trust._TRUSTED_GENIE_ASSETS
         assert "mip.gold.borrower_360" not in trust._TRUSTED_GENIE_ASSETS
-        assert "FROM acme_mip.gold.borrower_360" in canonical._CANONICAL_ITM_COUNT_SQL
-        assert "FROM mip.gold.borrower_360" not in canonical._CANONICAL_ITM_COUNT_SQL
+        assert "FROM acme_mip.gold.borrower_360" in canonical_sql._CANONICAL_ITM_COUNT_SQL
+        assert "FROM mip.gold.borrower_360" not in canonical_sql._CANONICAL_ITM_COUNT_SQL
     finally:
         monkeypatch.setattr(settings, "mip_default_catalog", original_catalog)
         importlib.reload(trust_mod)
-        importlib.reload(canonical_mod)
+        importlib.reload(canonical_sql_mod)
 
 
 def test_genie_geography_zero_count_is_not_zero_demand() -> None:

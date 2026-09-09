@@ -14,6 +14,13 @@ from backend.schemas.portfolio import (
     project_public_campaign_json_field,
 )
 from backend.services.campaign_targeting import campaign_treatment_fingerprint
+from backend.services.outreach_decision_commit import (
+    _APPROVAL_LOOKUP_BY_REQUEST_ID,
+    _CAMPAIGN_DECISION_LOCK_LOOKUP,
+    BORROWER_DECISION_LOCK,
+    _lock_and_revalidate_campaign_decision,
+)
+from backend.services.outreach_decision_intent import _campaign_decision_proof_fingerprint
 
 CAMPAIGN_ID = "11111111-1111-4111-8111-111111111111"
 
@@ -94,9 +101,9 @@ class _Connection:
         self.executed.append(sql)
         if "pg_advisory_xact_lock" in sql:
             return _Result(None)
-        if sql == outreach._APPROVAL_LOOKUP_BY_REQUEST_ID:
+        if sql == _APPROVAL_LOOKUP_BY_REQUEST_ID:
             return _Result(self.existing)
-        if sql == outreach._CAMPAIGN_DECISION_LOCK_LOOKUP:
+        if sql == _CAMPAIGN_DECISION_LOCK_LOOKUP:
             return _Result(self.campaign)
         raise AssertionError(f"decision advanced beyond campaign proof lock: {sql}")
 
@@ -167,7 +174,7 @@ def _commit(
 def test_terminal_campaign_rolls_back_before_decision_insert(status: str) -> None:
     campaign = _campaign_row(status=status)
     lakebase = _Lakebase(campaign)
-    expected = outreach._campaign_decision_proof_fingerprint(campaign)
+    expected = _campaign_decision_proof_fingerprint(campaign)
 
     with pytest.raises(HTTPException) as exc_info:
         _commit(lakebase, expected_proof=expected)
@@ -175,9 +182,9 @@ def test_terminal_campaign_rolls_back_before_decision_insert(status: str) -> Non
     assert exc_info.value.status_code == 409
     assert lakebase.rolled_back is True
     assert lakebase.connection.executed == [
-        outreach.BORROWER_DECISION_LOCK,
-        outreach._APPROVAL_LOOKUP_BY_REQUEST_ID,
-        outreach._CAMPAIGN_DECISION_LOCK_LOOKUP,
+        BORROWER_DECISION_LOCK,
+        _APPROVAL_LOOKUP_BY_REQUEST_ID,
+        _CAMPAIGN_DECISION_LOCK_LOOKUP,
     ]
     assert "FOR SHARE" in lakebase.connection.executed[-1]
     assert "FOR KEY SHARE" not in lakebase.connection.executed[-1]
@@ -198,7 +205,7 @@ def test_campaign_proof_drift_rolls_back_before_decision_insert(
     changed: object,
 ) -> None:
     validated = _campaign_row()
-    expected = outreach._campaign_decision_proof_fingerprint(validated)
+    expected = _campaign_decision_proof_fingerprint(validated)
     changed_campaign = _campaign_row()
     changed_campaign[field] = changed
     lakebase = _Lakebase(changed_campaign)
@@ -210,9 +217,9 @@ def test_campaign_proof_drift_rolls_back_before_decision_insert(
     assert "targeting proof changed" in str(exc_info.value.detail)
     assert lakebase.rolled_back is True
     assert lakebase.connection.executed == [
-        outreach.BORROWER_DECISION_LOCK,
-        outreach._APPROVAL_LOOKUP_BY_REQUEST_ID,
-        outreach._CAMPAIGN_DECISION_LOCK_LOOKUP,
+        BORROWER_DECISION_LOCK,
+        _APPROVAL_LOOKUP_BY_REQUEST_ID,
+        _CAMPAIGN_DECISION_LOCK_LOOKUP,
     ]
 
 
@@ -246,7 +253,7 @@ def test_internally_valid_targeting_contract_drift_still_rolls_back(
     changed: object,
 ) -> None:
     validated = _campaign_row()
-    expected = outreach._campaign_decision_proof_fingerprint(validated)
+    expected = _campaign_decision_proof_fingerprint(validated)
     changed_campaign = _campaign_row()
     changed_campaign[field] = changed
     _refresh_contract_fingerprint(changed_campaign)
@@ -259,9 +266,9 @@ def test_internally_valid_targeting_contract_drift_still_rolls_back(
     assert "targeting proof changed" in str(exc_info.value.detail)
     assert lakebase.rolled_back is True
     assert lakebase.connection.executed == [
-        outreach.BORROWER_DECISION_LOCK,
-        outreach._APPROVAL_LOOKUP_BY_REQUEST_ID,
-        outreach._CAMPAIGN_DECISION_LOCK_LOOKUP,
+        BORROWER_DECISION_LOCK,
+        _APPROVAL_LOOKUP_BY_REQUEST_ID,
+        _CAMPAIGN_DECISION_LOCK_LOOKUP,
     ]
 
 
@@ -289,8 +296,8 @@ def test_committed_retry_replays_before_archived_campaign_lock() -> None:
     assert created is False
     assert lakebase.rolled_back is False
     assert lakebase.connection.executed == [
-        outreach.BORROWER_DECISION_LOCK,
-        outreach._APPROVAL_LOOKUP_BY_REQUEST_ID,
+        BORROWER_DECISION_LOCK,
+        _APPROVAL_LOOKUP_BY_REQUEST_ID,
     ]
 
 
@@ -314,11 +321,11 @@ def test_action_appropriate_status_accepts_exact_locked_proof(
     campaign = _campaign_row(status=status)
     connection = _Connection(campaign)
 
-    outreach._lock_and_revalidate_campaign_decision(
+    _lock_and_revalidate_campaign_decision(
         connection,
         campaign_id=CAMPAIGN_ID,
         action=action,
-        expected_proof_fingerprint=outreach._campaign_decision_proof_fingerprint(campaign),
+        expected_proof_fingerprint=_campaign_decision_proof_fingerprint(campaign),
     )
 
-    assert connection.executed == [outreach._CAMPAIGN_DECISION_LOCK_LOOKUP]
+    assert connection.executed == [_CAMPAIGN_DECISION_LOCK_LOOKUP]

@@ -23,9 +23,7 @@ from databricks.sdk.errors import (
     ResourceConflict,
     ResourceDoesNotExist,
 )
-from tools.databricks.converge_campaign_treatment_access import (
-    target_group_membership_probe,
-)
+from tools.databricks.campaign_treatment_identity_probe import target_group_membership_probe
 from tools.databricks.oauth_credential_boundary import (
     held_deployment_credential_assertion,
 )

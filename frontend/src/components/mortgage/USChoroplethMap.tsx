@@ -1,14 +1,10 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { Icon } from '../Icon';
-import { Chip, EvidenceChip } from '../Primitives';
-import { api } from '../../lib/api';
-import type { GeoAssignmentOverlayResponse, GeoAssignmentOverlayUnit, GeoOverlayLevel } from '../../lib/api';
-import { ApiError } from '../../lib/api';
-import { DRAWER_SOURCES } from '../../lib/drawerSources';
+import { Chip } from '../Primitives';
+import type { GeoAssignmentOverlayUnit } from '../../lib/api';
 import { buildCampaignPrefillSearch, makeCampaignPrefill } from '../../lib/campaignPrefill';
 import { useOptionalFootprint } from '../FootprintProvider';
-import type { StateRollup, ZipRollup } from '../../types';
 import {
   USCODE_TO_FIPS,
   buildLeadQueuePath,
@@ -18,10 +14,11 @@ import {
   type Level,
   type Selected,
   type StateFacts,
-  type UsaSvgMap,
 } from './USChoroplethMap.utils';
-import { loadUsaStateMap } from './USStateMapData';
+import { USChoroplethMapLegend } from './USChoroplethMapLegend';
 import { USChoroplethMapTooltip } from './USChoroplethMapTooltip';
+import { USChoroplethMapZipLevel } from './USChoroplethMapZipLevel';
+import { useChoroplethLiveFacts } from './useChoroplethLiveFacts';
 import { safeSegmentName } from '../../lib/segmentMetadata';
 
 // State + ZIP hover numbers come from /api/geo/state-rollups and
@@ -29,10 +26,6 @@ import { safeSegmentName } from '../../lib/segmentMetadata';
 // mip.gold.zip_rollup). There are no local fixture literals -- any state /
 // ZIP not returned in the payload renders "—" on hover (honest null).
 // The fill-level bucket is derived from addressable_borrowers below.
-/** Densest-N ZIP tiles rendered per state. The grid stays readable, but
- *  the remainder MUST be disclosed — see the reconcile note in
- *  `renderZipLevel`. */
-const ZIP_TILE_CAP = 24;
 
 /**
  * USChoroplethMap — real interactive US state map with click-to-drill.
@@ -45,6 +38,14 @@ const ZIP_TILE_CAP = 24;
  * Upgrade vs. prototype: the prototype used hand-drawn stylized polygons. We
  * use us-atlas state TopoJSON (Albers USA pre-projected paths) for real US
  * geography so it reads as a product, not a sketch.
+ *
+ * This module owns the drill state machine (level / selected / hover /
+ * drillStateId), the memoized derivations over it, the real US state paths,
+ * the breadcrumbs + corner chips, and the tooltip portal. Everything else
+ * lives in focused siblings — `useChoroplethLiveFacts` (topology, state and
+ * ZIP rollups, the S9 overlay), `USChoroplethMapZipLevel` (the ZIP tile grid
+ * and its reconcile note), `USChoroplethMapLegend`, and
+ * `USChoroplethMapTooltip`.
  *
  * DESIGN-CONTRACT DEVIATION, 2026-08-08. The prototype's ChoroplethMap
  * drills state → county → ZIP (`design_files/Module 0 Prototype.html`
@@ -121,28 +122,10 @@ export function USChoroplethMap({
   useEffect(() => {
     setHover(null);
   }, [level, selected]);
-  const [usaMap, setUsaMap] = useState<UsaSvgMap | null>(null);
   // Which state we drilled into (lowercase, matching map location ids).
   // At ZIP level this is the drilled context and stays put while the user
   // hovers/clicks individual tiles.
   const [drillStateId, setDrillStateId] = useState<string | null>(null);
-  // Per-state rollups from /api/geo/state-rollups. `null` = loading; `{}`
-  // = API unreachable. We keep the static geography interactive, but do
-  // not surface static borrower counts while live rollups are loading.
-  // Keyed by lowercase state code to match state map location ids.
-  const [liveStateFacts, setLiveStateFacts] = useState<Record<string, StateRollup> | null>(null);
-  // Per-state ZIP rollups lazy-loaded on drill. Keyed by UPPERCASE state
-  // code (the API key); each value is a dict keyed by 5-digit ZIP so the
-  // tile renderer can O(1) look up a ZIP's live count / avg score.
-  const [liveZipFacts, setLiveZipFacts] = useState<Record<string, Record<string, ZipRollup>>>({});
-  // S9 assigned-vs-unattended overlay. `overlayOn` toggles the recolor +
-  // tooltip extension. `overlayData` is the response for the CURRENT drill
-  // level; `null` = not yet loaded, `overlayError` = fetch failed (degraded
-  // note in the legend, base borrower view stays functional).
-  const [overlayOn, setOverlayOn] = useState(false);
-  const [overlayData, setOverlayData] = useState<GeoAssignmentOverlayResponse | null>(null);
-  const [overlayError, setOverlayError] = useState<string | null>(null);
-  const [overlayLoading, setOverlayLoading] = useState(false);
   const navigate = useNavigate();
   const footprint = useOptionalFootprint();
 
@@ -159,163 +142,29 @@ export function USChoroplethMap({
     }
     return out;
   }, [footprint.stateCodes]);
-  const segmentFilterKey = useMemo(
-    () => (segmentFilter && segmentFilter.length > 0 ? segmentFilter.join(',') : ''),
-    [segmentFilter],
-  );
-  const portfolioCriteriaKey = useMemo(
-    () => JSON.stringify(portfolioCriteria ?? {}),
-    [portfolioCriteria],
-  );
   const leadQueuePath = useMemo(() => {
     return (geo: { state?: string; county?: string; zip?: string }) => {
       return buildLeadQueuePath({ geo, segmentFilter, segmentFilterMode, portfolioCriteria });
     };
   }, [portfolioCriteria, segmentFilter, segmentFilterMode]);
 
-  useEffect(() => {
-    setHover(null);
-    setLiveZipFacts({});
-  }, [segmentFilterKey, segmentFilterMode, portfolioCriteriaKey]);
-
-  // Lazy-load the state geography so the TopoJSON conversion lands in its
-  // own code-split chunk instead of the main bundle.
-  useEffect(() => {
-    let cancelled = false;
-    loadUsaStateMap().then((map) => {
-      if (!cancelled) setUsaMap(map);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  // Fetch per-state rollups from the backend. Counts, score, tint, and
-  // top-segment labels all come from the live response; on error the map
-  // stays interactive but metric fields render as unknown.
-  //
-  // 2026-05-04 (FIX G): the effect now re-runs whenever segmentFilter
-  // changes so the per-state counts (and the choropleth bucketer
-  // derived from them) reflect the active segment selection. Without
-  // a filter we use the cross-segment _ALL row; with a filter we hit
-  // the segment-aware path. `segmentFilterMode="any"` counts a
-  // de-duplicated OR cohort; `segmentFilterMode="all"` counts borrowers
-  // that match every selected segment.
-  useEffect(() => {
-    let cancelled = false;
-    setHover(null);
-    setLiveStateFacts(null);
-    api
-      .stateRollups(
-        segmentFilter && segmentFilter.length > 0 ? segmentFilter : null,
-        undefined,
-        segmentFilterMode,
-        portfolioCriteria,
-      )
-      .then((payload) => {
-        if (cancelled) return;
-        const byCode: Record<string, StateRollup> = {};
-        for (const r of payload.rollups) {
-          byCode[r.state.toLowerCase()] = r;
-        }
-        setLiveStateFacts(byCode);
-      })
-      .catch(() => {
-        // Keep the geography interactive, but do not surface static
-        // borrower counts as if they were live. The tooltip renders
-        // "—" until the rollup endpoint recovers.
-        if (!cancelled) setLiveStateFacts({});
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [segmentFilter, segmentFilterMode, portfolioCriteria, portfolioCriteriaKey]);
-
-  // Lazy-fetch ZIP rollups when the user drills into a state.
-  // /api/geo/zip-rollups?state=XX reads mip.gold.zip_rollup on its real
-  // grain. A state with no ZIP rows resolves to an empty list; the ZIP
-  // renderer shows an honest empty state with a Lead Queue fallback.
-  useEffect(() => {
-    if (level !== 'zip' || !drillStateId) return;
-    const stateUC = drillStateId.toUpperCase();
-    if (liveZipFacts[stateUC]) return;
-    let cancelled = false;
-    api
-      .zipRollups(
-        { state: stateUC },
-        undefined,
-        segmentFilter && segmentFilter.length > 0 ? segmentFilter : null,
-        segmentFilterMode,
-        portfolioCriteria,
-      )
-      .then((payload) => {
-        if (cancelled) return;
-        const byZip: Record<string, ZipRollup> = {};
-        for (const r of payload.rollups) byZip[r.zip] = r;
-        setLiveZipFacts((cur) => ({ ...cur, [stateUC]: byZip }));
-      })
-      .catch(() => {
-        // Empty dict means "we tried, nothing came back" -- the renderer
-        // shows the empty state instead of re-fetching on every render.
-        if (!cancelled) setLiveZipFacts((cur) => ({ ...cur, [stateUC]: {} }));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [level, drillStateId, liveZipFacts, segmentFilter, segmentFilterMode, portfolioCriteria, portfolioCriteriaKey]);
-
-  // S9 overlay fetch. Re-runs on drill level + toggle. Each level maps to a
-  // distinct /api/geo/assignment-overlay call (state | zip+state). A fetch
-  // failure sets an honest degraded note and leaves the base borrower view
-  // untouched -- never a silent fallback.
-  useEffect(() => {
-    if (!overlayOn) {
-      setOverlayData(null);
-      setOverlayError(null);
-      setOverlayLoading(false);
-      return;
-    }
-    // Determine the request for the current drill level. Skip until the
-    // parent state needed for a ZIP request is known. The ZIP overlay keys
-    // on the same state as the tiles it recolors.
-    let request: { level: GeoOverlayLevel; state?: string | null; countyFips?: string | null } | null = null;
-    if (level === 'state') {
-      request = { level: 'state' };
-    } else if (level === 'zip' && drillStateId) {
-      request = { level: 'zip', state: drillStateId.toUpperCase() };
-    }
-    if (!request) {
-      setOverlayData(null);
-      return;
-    }
-    const controller = new AbortController();
-    let cancelled = false;
-    setOverlayLoading(true);
-    setOverlayError(null);
-    setOverlayData(null);
-    api
-      .assignmentOverlay(request.level, {
-        state: request.state,
-        countyFips: request.countyFips,
-        signal: controller.signal,
-      })
-      .then((payload) => {
-        if (cancelled) return;
-        setOverlayData(payload);
-        setOverlayLoading(false);
-      })
-      .catch((err: unknown) => {
-        if (cancelled || (err instanceof ApiError && err.aborted)) return;
-        const dep = err instanceof ApiError && err.dependency ? ` (${err.dependency})` : '';
-        setOverlayError(`Coverage overlay unavailable${dep}. Showing borrower counts.`);
-        setOverlayData(null);
-        setOverlayLoading(false);
-      });
-    return () => {
-      cancelled = true;
-      controller.abort();
-    };
-  }, [overlayOn, level, drillStateId]);
+  const {
+    usaMap,
+    liveStateFacts,
+    liveZipFacts,
+    overlayOn,
+    setOverlayOn,
+    overlayData,
+    overlayError,
+    overlayLoading,
+  } = useChoroplethLiveFacts({
+    level,
+    drillStateId,
+    segmentFilter,
+    segmentFilterMode,
+    portfolioCriteria,
+    setHover,
+  });
 
   // The overlay only drives coloring once its payload is actually loaded;
   // while loading or degraded the base borrower coloring stays up (the
@@ -670,177 +519,7 @@ export function USChoroplethMap({
   // ----- ZIP level: tile grid for the drilled state. -----------------------
   // The ZIP grid is generated from the live ZIP rollup payload for every
   // state, so the component has no state-specific visual exceptions.
-  const renderZipLevel = () => {
-    const stateUC = drillStateId?.toUpperCase() ?? '';
-    if (!stateUC) return null;
-    const byZip = liveZipFacts[stateUC];
-    const zipsFromApi = byZip ? Object.values(byZip) : [];
-
-    if (byZip && zipsFromApi.length === 0) {
-      // API returned empty — the state is outside the Cotality eval share
-      // or the CTAS hasn't populated ZIPs for it. Give the user a graceful
-      // fallback path into the state's lead queue.
-      return (
-        <div className="map-stage">
-          <div className="map-center-card map-center-card--narrow">
-            <div className="text-2 mb-2">
-              No ZIP-level rollup for {drillStateName}.
-            </div>
-            <div className="mb-3">
-              Browse this state&apos;s lead queue — the filter will narrow to borrowers in {drillStateName}.
-            </div>
-            <button
-              type="button"
-              className="btn btn--ghost"
-              onClick={() => navigate(leadQueuePath({ state: stateUC }))}
-            >
-              Open Lead Queue for {drillStateName}
-            </button>
-          </div>
-        </div>
-      );
-    }
-
-    if (!byZip) {
-      return (
-        <div className="map-stage map-stage--empty">
-          Loading ZIPs…
-        </div>
-      );
-    }
-
-    // HTML/CSS grid (not SVG) so
-    // the tiles use design-system tokens (r-md, sp, typography) and sit
-    // cleanly in the map viewport, not overlapping the breadcrumbs above.
-    // Sorted descending by count so densest ZIPs land top-left (Pareto).
-    // Click deep-links to the filtered Lead Queue — seeing all borrowers
-    // in the ZIP is the user's actual goal, not a single random sample.
-    const sorted = [...zipsFromApi].sort(
-      (a, b) => (b.addressable_borrowers ?? 0) - (a.addressable_borrowers ?? 0),
-    );
-    const visible = sorted.slice(0, ZIP_TILE_CAP);
-    // Reconcile what the tiles show against what the STATE tile claimed.
-    // Two independent ways the drill under-counts, both previously silent:
-    //   1. the tile cap hides the tail (IL: 24 of 212 ZIPs = 29.9% of the
-    //      state's borrowers, 1,297,115 invisible — live audit 2026-08-10);
-    //   2. borrowers with no ZIP never appear in zip_rollup at all
-    //      (79,496 across the footprint; CO 8.7%, WA 5.8%).
-    // A drill-down that silently shows a third of the population reads as a
-    // broken widget, so state it.
-    const visibleSum = visible.reduce(
-      (total, rollup) => total + (rollup.addressable_borrowers ?? 0),
-      0,
-    );
-    // liveStateFacts is keyed by LOWERCASE state code (see the rollup fetch).
-    const stateFacts = liveStateFacts?.[stateUC.toLowerCase()];
-    const stateTotal = stateFacts?.addressable ?? null;
-    const unassigned = stateFacts?.zip_unassigned_count ?? null;
-    const hiddenZipCount = sorted.length - visible.length;
-    return (
-      <>
-      <div className="zip-tiles" role="list" aria-label={`ZIPs in ${drillStateName}`}>
-        {visible.map((rollup, tileIndex) => {
-          const count = rollup.addressable_borrowers ?? null;
-          const avgScore = rollup.avg_opportunity_score ?? null;
-          const topSegCode = rollup.top_segment_code ?? null;
-          const topSegment = topSegCode ? (safeSegmentName(topSegCode) ?? undefined) : undefined;
-          const overlayUnit = overlayActive ? overlayByUnit[rollup.zip] : undefined;
-          const unattended = overlayUnit ? overlayUnit.unattended_count : null;
-          const lvl = overlayActive
-            ? (overlayUnit ? overlayBucketer(overlayUnit.unattended_count) : 1)
-            : zipBucketer(count);
-          const isSelected =
-            selected?.level === 'zip' && selected.id === rollup.zip;
-          const classes = [
-            'zip-tile',
-            `zip-tile--lvl-${lvl}`,
-            isSelected ? 'is-selected' : '',
-          ]
-            .filter(Boolean)
-            .join(' ');
-          return (
-            <button
-              key={rollup.zip}
-              type="button"
-              className={classes}
-              // Staggered "settle into the grid" entrance (Buyer-Wow #4):
-              // the stage cap keeps later tiles from lagging; CSS gates the
-              // animation behind prefers-reduced-motion.
-              style={{ '--tile-i': Math.min(tileIndex, 24) } as CSSProperties}
-              role="listitem"
-              aria-label={`ZIP ${rollup.zip}, ${count !== null ? `${count.toLocaleString()} borrowers` : 'no data'}`}
-              onMouseEnter={(e) =>
-                setHover({
-                  x: e.clientX,
-                  y: e.clientY,
-                  name: `ZIP ${rollup.zip}, ${drillStateName}`,
-                  count,
-                  avgScore,
-                  topSegment,
-                  sourceHint: 'mip.gold.zip_rollup',
-                  overlay: overlayUnit
-                    ? {
-                        leadCount: overlayUnit.lead_count,
-                        assignedCount: overlayUnit.assigned_count,
-                        unattendedCount: overlayUnit.unattended_count,
-                        coveringOfficerCount: overlayUnit.covering_officer_count,
-                        coveringOfficers:
-                          isSelected ? overlayUnit.covering_officers : undefined,
-                      }
-                    : undefined,
-                })
-              }
-              onMouseMove={(e) =>
-                setHover((h) => (h ? { ...h, x: e.clientX, y: e.clientY } : h))
-              }
-              onMouseLeave={() => setHover(null)}
-	              onClick={() => {
-	                setSelected({ level: 'zip', id: rollup.zip, name: rollup.zip });
-	                navigate(leadQueuePath({ state: stateUC, zip: rollup.zip }));
-	              }}
-	            >
-              <span className="zip-tile__code">{rollup.zip}</span>
-              <span className="zip-tile__count">
-                {count !== null ? count.toLocaleString() : '—'}
-              </span>
-              {overlayActive && (
-                <span className="zip-tile__overlay">
-                  {unattended !== null ? unattended.toLocaleString() : '—'} unattended
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </div>
-      {(hiddenZipCount > 0 || (unassigned ?? 0) > 0) && (
-        <div className="zip-tiles__reconcile text-2" role="note">
-          {hiddenZipCount > 0 && (
-            <span>
-              Showing the {visible.length} densest of {sorted.length.toLocaleString()} ZIPs
-              {' — '}
-              {visibleSum.toLocaleString()}
-              {stateTotal !== null ? ` of ${stateTotal.toLocaleString()}` : ''} borrowers in view.
-            </span>
-          )}
-          {(unassigned ?? 0) > 0 && (
-            <span>
-              {' '}
-              {(unassigned ?? 0).toLocaleString()} borrowers in {drillStateName} carry no ZIP and
-              appear in no tile.
-            </span>
-          )}
-          <button
-            type="button"
-            className="btn btn--ghost btn--sm"
-            onClick={() => navigate(leadQueuePath({ state: stateUC }))}
-          >
-            Open all {stateTotal !== null ? stateTotal.toLocaleString() : ''} in Lead Queue
-          </button>
-        </div>
-      )}
-      </>
-    );
-  };
+  const drillStateUC = drillStateId?.toUpperCase() ?? '';
 
   return (
     <div className="map-wrap" style={{ height }}>
@@ -939,7 +618,25 @@ export function USChoroplethMap({
           {mapStatus}
         </div>
         {level === 'state' && renderStateLevel()}
-        {level === 'zip' && renderZipLevel()}
+        {level === 'zip' && drillStateUC !== '' && (
+          <USChoroplethMapZipLevel
+            drillStateName={drillStateName}
+            byZip={liveZipFacts[drillStateUC]}
+            // liveStateFacts is keyed by LOWERCASE state code (see the rollup fetch).
+            stateFacts={liveStateFacts?.[drillStateUC.toLowerCase()]}
+            zipBucketer={zipBucketer}
+            overlayActive={overlayActive}
+            overlayByUnit={overlayByUnit}
+            overlayBucketer={overlayBucketer}
+            selectedZip={selected?.level === 'zip' ? selected.id : null}
+            setHover={setHover}
+            onSelectZip={(zip) => {
+              setSelected({ level: 'zip', id: zip, name: zip });
+              navigate(leadQueuePath({ state: drillStateUC, zip }));
+            }}
+            onOpenStateQueue={() => navigate(leadQueuePath({ state: drillStateUC }))}
+          />
+        )}
       </div>
 
       {/* Legend — explicit "Colored by" label so the user understands why
@@ -947,79 +644,15 @@ export function USChoroplethMap({
           the same state. On segments-with-filter, the gradient reflects
           quantiles within the filtered segment; on home it's the full
           marketable population. Fix G, 2026-04-23. */}
-      <div className="map-legend">
-        <div className="map-legend__header">
-          <span>
-            {overlayOn ? 'Unattended leads in selection' : 'Borrowers in selection'}{' '}
-            <span className="map-legend__value">
-              {overlayOn
-                ? overlayData
-                  ? overlayData.total_unattended.toLocaleString()
-                  : '—'
-                : totalCount.toLocaleString()}
-            </span>
-          </span>
-        </div>
-        {overlayOn && overlayData && (
-          // S9 overlay facts: the two inputs of the subtraction, plus the
-          // evidence affordance tracing them to Lakebase + Unity Catalog.
-          <div className="map-legend__overlay-facts">
-            <span>
-              {overlayData.total_leads.toLocaleString()} leads ·{' '}
-              {overlayData.total_assigned.toLocaleString()} assigned
-            </span>
-            <EvidenceChip source={DRAWER_SOURCES.assignmentOverlay}>
-              {DRAWER_SOURCES.assignmentOverlay.short}
-            </EvidenceChip>
-          </div>
-        )}
-        <div className="map-legend__bar">
-          <span className="lvl-0" />
-          <span className="lvl-1" />
-          <span className="lvl-2" />
-          <span className="lvl-3" />
-          <span className="lvl-4" />
-        </div>
-        <div className="map-legend__range">
-          <span>Lower</span>
-          <span>Higher</span>
-        </div>
-        <div className="map-legend__caption">
-          Colored by:{' '}
-          <span className="text-2">
-            {overlayOn
-              ? overlayData
-                ? `unattended leads — ${overlayData.lead_definition} minus active assignments${
-                    // N2 honesty: the overlay is segment-agnostic. When a
-                    // segment filter is shading the borrower view, say so
-                    // instead of letting the two numbers read as one scope.
-                    segmentFilter && segmentFilter.length > 0
-                      ? ' · overlay counts cover ALL marketing-eligible leads, not just the selected segments'
-                      : ''
-                  }`
-                : overlayLoading
-                  ? 'unattended leads (loading coverage overlay…)'
-                  : 'unattended leads'
-              : segmentCaption}
-          </span>
-        </div>
-        {overlayOn && overlayError && (
-          // Explicit degraded state: the overlay dependency is down; the
-          // base borrower view stays fully functional. Never a silent
-          // fallback.
-          <div className="map-legend__caption map-legend__caption--degraded" role="status">
-            {overlayError}
-          </div>
-        )}
-        {/* Keyboard affordance: always in the DOM for screen readers,
-            revealed visually by .map-wrap:focus-within when a region is
-            focused. Copy matches the actual handlers — Enter/Space drill
-            in (onKeyDown on each geography); there is no Esc handler, so
-            backing out is via the breadcrumb trail above the map. */}
-        <div className="map-legend__hint">
-          <kbd>Enter</kbd> or <kbd>Space</kbd> drills in · use the breadcrumbs to go back
-        </div>
-      </div>
+      <USChoroplethMapLegend
+        overlayOn={overlayOn}
+        overlayData={overlayData}
+        overlayLoading={overlayLoading}
+        overlayError={overlayError}
+        totalCount={totalCount}
+        segmentCaption={segmentCaption}
+        segmentFilter={segmentFilter}
+      />
 
       {/* Hover tooltip — infographic-style card. Portaled to document.body
           so `.map-wrap { overflow: hidden }` can never clip it and so the

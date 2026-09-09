@@ -1,0 +1,307 @@
+/* ============================================================
+   AUDIT LOG ROW
+   ============================================================ */
+.audit {
+  display: grid;
+  grid-template-columns: 110px 26px 1fr auto;
+  gap: var(--sp-3); align-items: center;
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--line-1);
+  font-size: var(--fs-12);
+}
+.audit__time { font-family: var(--font-mono); color: var(--text-3); font-size: 11px; }
+.audit__ico {
+  width: 22px; height: 22px; border-radius: 6px;
+  display: grid; place-items: center;
+  background: var(--accent-soft); color: var(--accent-ink); font-size: 12px;
+}
+.audit__ico.green { background: var(--status-success-soft); color: var(--status-success-ink); }
+.audit__ico.amber { background: var(--status-warning-soft); color: var(--signal-warning); }
+.audit__ico.red   { background: var(--status-danger-soft); color: var(--status-danger-ink); }
+[data-theme="light"] .audit__ico.green { color: var(--signal-success); }
+[data-theme="light"] .audit__ico.red   { color: var(--signal-danger); }
+.audit__body { min-width: 0; }
+.audit__what { color: var(--text-1); font-weight: 500; }
+.audit__who { color: var(--text-3); font-size: 11px; }
+.audit__who--system { color: var(--text-3); font-style: italic; }
+.audit-panel__pad { padding: var(--sp-3); }
+.audit-panel__message {
+  padding: var(--sp-3);
+  color: var(--text-2);
+}
+.audit-panel__message--danger { color: var(--signal-danger); }
+.surface__ft--wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+}
+.dependency-row { display: inline-flex; align-items: center; gap: var(--sp-1); }
+.dependency-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-3);
+}
+.dependency-dot--up { background: var(--signal-success); }
+.dependency-dot--down { background: var(--signal-danger); }
+.surface__ft-spacer { margin-left: auto; }
+
+/* ============================================================
+   FILTER CHIPS (Portfolio Builder)
+   ============================================================ */
+.filter-row {
+  display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-3);
+  align-items: flex-start;
+}
+.filter-row--lead-queue {
+  /* No min-height reservation: every FilterSelect renders synchronously, so
+     there is no refetch CLS to guard against (dropped the 3-row reservation
+     2026-07-10). The <=640px container rule below keeps a scroll cap. */
+  align-content: flex-start;
+}
+.filter-row--stacked {
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: stretch;
+}
+.filter-row--spaced { margin-top: var(--gap-grid); }
+.filter-row__spacer { flex: 1; }
+.filter-row__controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-3);
+  align-items: flex-start;
+  inline-size: 100%;
+}
+.filter-row__group {
+  display: inline-flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  inline-size: 15rem;
+  max-inline-size: 100%;
+}
+.filter-row__hint {
+  font-size: var(--fs-11);
+  margin-top: 0;
+  max-inline-size: 100%;
+  line-height: var(--lh-snug);
+}
+.filter-row__hint--full {
+  order: 99;
+  flex: 0 0 100%;
+  inline-size: 100%;
+  min-inline-size: 100%;
+  max-inline-size: 100%;
+}
+.segment-mode-control {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  inline-size: 100%;
+  padding: var(--sp-3);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+  background: var(--bg-2);
+}
+.segment-mode-control .segmented {
+  display: flex;
+  background: var(--bg-1);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+  padding: var(--sp-1);
+  gap: var(--sp-1);
+}
+.segment-mode-control .segmented button {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  background: transparent;
+  border: 0;
+  color: var(--text-2);
+  cursor: pointer;
+  border-radius: var(--r-sm);
+  font-family: var(--font-sans);
+  font-size: var(--fs-12);
+  font-weight: 650;
+  padding: var(--sp-2) var(--sp-3);
+}
+.segment-mode-control .segmented button.is-active {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+.segment-mode-control .segmented__meta {
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  font-weight: 500;
+}
+.segment-mode-control .segmented button.is-active .segmented__meta {
+  color: currentColor;
+}
+.segment-mode-control__total {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+  color: var(--text-2);
+}
+.segment-mode-control__total .num {
+  color: var(--text-1);
+  font-size: var(--fs-18);
+  font-weight: 650;
+}
+/* Inline "Save build" naming form. Re-audit #3 P1 (2026-06-12): replaces
+   window.prompt(), whose synchronous native dialog froze the renderer
+   under automation and broke the enterprise-product posture. */
+.save-build-form {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+  flex-wrap: wrap;
+}
+.save-build-form__label {
+  font-size: var(--fs-12);
+  color: var(--text-3);
+}
+.save-build-form__input {
+  flex: 0 1 22rem;
+  min-inline-size: 12rem;
+}
+.save-build-form__error {
+  flex: 0 0 100%;
+  font-size: var(--fs-12);
+  color: var(--signal-danger);
+}
+.campaign-build-guard {
+  margin-top: var(--sp-4);
+}
+.campaign-build-guard--blocked {
+  border-color: color-mix(in oklab, var(--signal-warning) 55%, var(--line-2));
+  background: color-mix(in oklab, var(--signal-warning) 8%, var(--bg-2));
+}
+.campaign-build-guard > .chip {
+  flex: 0 0 auto;
+}
+
+/* Campaign ROI projector (re-audit #4 Buyer-Wow #7). Board-room headline
+   + tunable assumptions; pure client-side, tokens only. */
+.roi-projector__headline {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-3);
+  margin-block-end: var(--sp-4);
+}
+.roi-projector__headline-figure {
+  font-size: var(--fs-36);
+  font-weight: 600;
+  letter-spacing: var(--tracking-tight);
+  line-height: var(--lh-tight);
+  color: var(--accent-ink);
+}
+.roi-projector__headline-label {
+  font-size: var(--fs-13);
+  color: var(--text-2);
+}
+.roi-projector__assumptions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+  gap: var(--sp-3);
+  margin-block-end: var(--sp-4);
+}
+.roi-projector__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  font-size: var(--fs-11);
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+}
+.roi-projector__derived {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: var(--sp-3);
+}
+.roi-projector__stat {
+  padding: var(--sp-3);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+  background: var(--bg-2);
+}
+.roi-projector__stat--emphasis {
+  border-color: var(--line-3);
+  background: var(--accent-soft);
+}
+.roi-projector__stat-label {
+  font-size: var(--fs-11);
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  margin-block-end: var(--sp-1);
+}
+.roi-projector__stat-value {
+  font-size: var(--fs-18);
+  font-weight: 600;
+  color: var(--text-1);
+}
+.filter-root { position: relative; }
+.filter {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 10px 6px 8px;
+  background: var(--bg-2); border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+  font-size: var(--fs-12); color: var(--text-2);
+  cursor: pointer; transition: all var(--dur-fast) var(--ease);
+  font-family: var(--font-sans);
+}
+.filter:hover { border-color: var(--line-2); color: var(--text-1); }
+.filter.is-active { border-color: var(--accent); color: var(--accent-ink); background: var(--accent-soft); }
+/* `white-space: nowrap` + `flex-shrink: 0`: the "ASK" prefix on a Genie
+   follow-up chip (`.filter--question`) is a flex item inside a
+   width-constrained chip, so the flex algorithm was shrinking it below its
+   min-content width and wrapping it to "AS / K". The label is a fixed
+   2-4 character eyebrow — it must never wrap or shrink; the long value
+   next to it is what absorbs the remaining width. */
+.filter__label {
+  color: var(--text-3); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; margin-right: 2px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.filter__value { font-weight: 500; color: var(--text-1); font-family: var(--font-mono); font-size: var(--fs-12); }
+.filter.is-active .filter__value { color: var(--accent-ink); }
+.filter--question {
+  width: 100%;
+  text-align: left;
+}
+.filter--question .filter__text { color: var(--text-2); }
+.filter__value--question {
+  font-family: var(--font-sans);
+  color: var(--text-1);
+}
+/* Light theme: --accent for bright/teal is washed out on white (~1.8:1 /
+ * ~1.6:1, below WCAG AA 4.5:1). Flagged in the 2026-04-22 light-theme
+ * audit on every route (active nav tab, active map filter, active
+ * density/theme toggle, active density chip). --accent-ink resolves to
+ * the accent hue in dark and to a darker navy in light-with-bright/teal
+ * accent so text clears AA while the border/fill (drawn from --accent
+ * and --accent-soft) keeps the "active" color affordance. */
+[data-theme="light"] .filter.is-active .filter__label,
+[data-theme="light"] .filter.is-active .filter__value { color: var(--accent-ink); }
+
+/* Route nav chips sit over Home's dark hero surface during theme flips.
+ * Keep their light-theme surface explicit so dark text never resolves
+ * against the underlying navy page chrome. */
+[data-theme="light"] .route-nav .filter:not(.is-active) {
+  background-color: var(--bg-1);
+  background-image: none;
+  color: var(--text-2);
+}
+[data-theme="light"] .route-nav .filter:not(.is-active) .filter__value {
+  color: var(--text-1);
+}
+

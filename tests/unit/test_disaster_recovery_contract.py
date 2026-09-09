@@ -65,7 +65,9 @@ def test_action_audit_export_helper_is_copy_only() -> None:
 def test_hmac_rotation_contract_is_exposed_to_operators() -> None:
     env_example = Path(".env.example").read_text(encoding="utf-8")
     settings_py = Path("backend/config/settings.py").read_text(encoding="utf-8")
-    genie_actions = Path("backend/services/genie_actions.py").read_text(encoding="utf-8")
+    genie_action_tokens = Path("backend/services/genie_action_tokens.py").read_text(
+        encoding="utf-8"
+    )
 
     for name in (
         "MIP_GENIE_ACTION_SECRET_CURRENT",
@@ -83,5 +85,5 @@ def test_hmac_rotation_contract_is_exposed_to_operators() -> None:
     ):
         assert attr in settings_py
 
-    assert '"kid"' in genie_actions
-    assert "_previous_action_token_key" in genie_actions
+    assert '"kid"' in genie_action_tokens
+    assert "_previous_action_token_key" in genie_action_tokens

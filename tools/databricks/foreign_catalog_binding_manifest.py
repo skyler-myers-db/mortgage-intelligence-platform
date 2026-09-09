@@ -22,9 +22,7 @@ from tools.databricks.audit_agent_runtime_foreign_uc_access import (
     _normalized_target_groups,
     parse_foreign_catalog_binding_policy,
 )
-from tools.databricks.converge_campaign_treatment_access import (
-    target_identity_groups_probe,
-)
+from tools.databricks.campaign_treatment_identity_probe import target_identity_groups_probe
 from tools.databricks.foreign_catalog_binding_catalog import (
     desired_bindings,
     desired_snapshot,
