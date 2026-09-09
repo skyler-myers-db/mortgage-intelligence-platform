@@ -376,3 +376,23 @@ two moved effects reset the tooltip, so the hook receives the component's
 `setHover` (a state setter, stable identity); the ZIP component receives
 `onSelectZip`/`onOpenStateQueue` callbacks so navigation stays with the
 component that owns the drill state. Entry removed.
+
+### backend/services/resilience.py (986 -> 223)
+
+Plan item 5: circuit breaker, retry policy, TTL cache, dependency error.
+
+| File | Lines | Content |
+|---|---|---|
+| `backend/services/resilience.py` | 223 | `with_retry`, `Resilient`, the type variable, and re-exports with the byte-identical `__all__` |
+| `backend/services/resilience_breaker.py` | 373 | `DependencyDownError`, `CircuitBreaker`, the breaker registry (`get_breaker`, `all_breakers`, the test reset) |
+| `backend/services/resilience_cache.py` | 456 | `TTLCache`, the stale-while-revalidate executor pair and its `atexit` hook, `StaleWhileRevalidateCache` |
+
+Proof: `defset --allow-changed log`: pre 18 definitions, post 19 across three
+files, removed none, added none; the only text change is the module logger,
+which each new module now defines for itself. All 46 importers keep importing
+from `backend.services.resilience`; the tests that reach the breaker registry
+through the module (`_reset_breakers_for_tests`, `get_breaker`,
+`CircuitBreaker`) resolve through the re-exports. 154 tests across the
+resilience, observability, config-cache, error-sanitizer, load-test,
+health-endpoint, treatment-gate, Lakebase-pool and workspace-host files pass.
+Entry removed.
