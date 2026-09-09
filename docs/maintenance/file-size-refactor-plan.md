@@ -354,3 +354,25 @@ the virtualizer's effects (mutually independent); and two `eslint-disable`
 comments were added for `react-hooks/purity` and `react-hooks/refs` findings
 that the `useVirtualizer` compiler bailout had masked inside the old
 function (the lines themselves are unchanged). Entry removed.
+
+### frontend/src/components/mortgage/USChoroplethMap.tsx (1,044 -> 677)
+
+Plan item 3: topology loading, drill state, legend/tooltip, SVG rendering.
+The tooltip (`USChoroplethMapTooltip.tsx`) and utilities already existed.
+
+| File | Lines | Content |
+|---|---|---|
+| `USChoroplethMap.tsx` | 677 | drill state machine, memoized derivations, real US state paths, breadcrumbs and chips, tooltip portal |
+| `useChoroplethLiveFacts.ts` | 222 | lazily imported topology, per-state rollups (re-fetching on segment filter, mode, criteria), ZIP rollups on drill, the assignment overlay |
+| `USChoroplethMapZipLevel.tsx` | 212 | the former `renderZipLevel` closure as a component with explicit props, plus `ZIP_TILE_CAP` |
+| `USChoroplethMapLegend.tsx` | 110 | the `.map-legend` block |
+
+Proof: the same render-equivalence harness printed hashes for four states
+(state level, drilled ZIP level, overlay on, state selected); all four match
+the pristine base tree byte for byte with a deterministic base. The three
+map suites plus the four route tests that mount the map (48 tests), the full
+frontend suite, eslint, `tsc -b`, build and budget pass. Structural notes:
+two moved effects reset the tooltip, so the hook receives the component's
+`setHover` (a state setter, stable identity); the ZIP component receives
+`onSelectZip`/`onOpenStateQueue` callbacks so navigation stays with the
+component that owns the drill state. Entry removed.
