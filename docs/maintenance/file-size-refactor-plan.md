@@ -320,3 +320,37 @@ three tools and three tests that imported probe names from the converger
 `audit_agent_runtime_foreign_uc_access`, and their tests plus the
 credential-settle-window tests) now import them from the probe module. Entry
 removed.
+
+### frontend/src/components/mortgage/LeadTable.tsx (1,261 -> 567)
+
+Plan item 2: table shell, row, row preview, bulk approval, sales disposition.
+The row (`LeadTableRow.tsx`) and decision panels already existed; this pass
+extracts the remaining responsibilities. It is a hook/component extraction,
+not a verbatim move, so the proof is render equivalence plus the suites.
+
+| File | Lines | Content |
+|---|---|---|
+| `LeadTable.tsx` | 567 | props, campaign binding, sorting, virtualization, table shell, `renderSortHeader`, `exportCsv`, composition |
+| `useLeadApprovalActions.ts` | 541 | approve/reject/submit, reject-panel state, selection set, `bulkApprove` with its in-flight latches, bulk toast and its effects, focus restore |
+| `useLeadSalesActions.ts` | 223 | sales overrides (and the merged `displayLeads`), assignment, disposition panel state, sales toast |
+| `useLeadTableHotkeys.ts` | 40 | latest-handler ref plus the single window keydown listener |
+| `LeadTableBulkActions.tsx` | 183 | `.bulk-actions` toolbar and bulk result toast |
+| `LeadTableStatusChips.tsx` | 90 | growth-agent proof row, campaign-binding status and provenance rows |
+
+Proof: a throwaway vitest harness (not committed) mounted the table in the
+providers the suites use and printed `sha256(container.innerHTML)` for five
+states (default list, expanded row with the reject panel, bulk toolbar,
+sorted by score, virtualized); all five hashes match a pristine
+`git archive` base tree byte for byte, and two base runs agree, so the
+harness is deterministic. The eight LeadTable suites (72 tests), the full
+frontend suite (1,085 tests), eslint at `--max-warnings 0`, `tsc -b`, the
+production build and the bundle budget pass. Deviations, all recorded in the
+commit: `approvalError` stays in the shell because both hooks write the one
+`.table-error` alert; the sales hook returns `displayLeads` because the
+override merge is the only consumer of the overrides; `assignSelected`
+takes the selection and clear callback as arguments so the success path's
+state-update order is unchanged; the two sales effects now register before
+the virtualizer's effects (mutually independent); and two `eslint-disable`
+comments were added for `react-hooks/purity` and `react-hooks/refs` findings
+that the `useVirtualizer` compiler bailout had masked inside the old
+function (the lines themselves are unchanged). Entry removed.
