@@ -9,11 +9,11 @@ from tests.fixtures.oauth_credential_session import (
     install_in_memory_credential_mutation_session,
 )
 from tools.databricks import oauth_credential_creation
-from tools.databricks.converge_campaign_treatment_access import (
-    _effective_privileges,
+from tools.databricks.campaign_treatment_identity_probe import (
     target_group_membership_probe,
     target_identity_groups_probe,
 )
+from tools.databricks.converge_campaign_treatment_access import _effective_privileges
 from tools.databricks.converge_campaign_treatment_access import (
     converge_campaign_treatment_access as _converge_campaign_treatment_access,
 )

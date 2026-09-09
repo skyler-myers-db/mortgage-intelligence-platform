@@ -6,9 +6,7 @@ import pytest
 from databricks.sdk.errors import PermissionDenied, ResourceAlreadyExists, ResourceDoesNotExist
 
 from tools.databricks import oauth_credential_creation
-from tools.databricks.converge_campaign_treatment_access import (
-    target_group_membership_probe,
-)
+from tools.databricks.campaign_treatment_identity_probe import target_group_membership_probe
 from tools.databricks.ensure_pipeline_namespace import ensure_pipeline_namespace
 
 

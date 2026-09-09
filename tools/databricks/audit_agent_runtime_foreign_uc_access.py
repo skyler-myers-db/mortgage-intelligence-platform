@@ -31,7 +31,7 @@ from tools.databricks.agent_runtime_uc_inventory import (
 from tools.databricks.audit_global_m2m_access import (
     assert_workspace_admin_inventory_identity,
 )
-from tools.databricks.converge_campaign_treatment_access import target_identity_groups_probe
+from tools.databricks.campaign_treatment_identity_probe import target_identity_groups_probe
 from tools.databricks.oauth_credential_boundary import (
     held_deployment_credential_assertion,
 )

@@ -293,3 +293,30 @@ resolves the sibling imports through the shim, and the `tools.*` import path
 resolves under pytest. `tests/unit/test_next_best_offer.py` now pins
 `NBO_PRODUCT_LABELS` in the recompute module, where the offer-label lookup
 lives. Entry removed.
+
+### tools/databricks/converge_campaign_treatment_access.py (936 -> 423)
+
+The 2026-08-05 "Two thresholds" item asked for credential minting, identity
+probing, and group convergence. The mint is the inner loop of
+`target_identity_groups_probe` (one 245-line function: mint an exact
+short-lived credential, read the target identity inside the
+ambient-credential-free environment with the bounded settle window, restore
+on failure), so separating it from the probe would not be a verbatim move.
+The split is therefore two-way, with the probe's secret-free diagnostics
+staying with the probe as the plan required:
+
+| File | Lines | Content |
+|---|---|---|
+| `tools/databricks/converge_campaign_treatment_access.py` | 423 | identifier quoting, object presence, effective-privilege assertions, table grant convergence, CLI |
+| `tools/databricks/campaign_treatment_identity_probe.py` | 535 | settle window and mint retry policy, ambient-auth isolation, fingerprints and failure diagnostics, `target_identity_groups_probe`, `target_group_membership_probe` |
+
+Proof: `defset` pre 39 definitions, post 39 across two files, removed none,
+added none, text-changed none. The deploy command of record still invokes
+`python -m tools.databricks.converge_campaign_treatment_access`, whose
+entrypoint and `deployment_workspace_client()` call are unchanged (the
+deploy-contract pins that name the helper pass). No re-export facade: the
+three tools and three tests that imported probe names from the converger
+(`ensure_pipeline_namespace`, `foreign_catalog_binding_manifest`,
+`audit_agent_runtime_foreign_uc_access`, and their tests plus the
+credential-settle-window tests) now import them from the probe module. Entry
+removed.
