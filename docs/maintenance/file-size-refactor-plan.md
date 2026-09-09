@@ -532,3 +532,27 @@ the export surface of `api.ts` is the same 37 names. eslint at
 `--max-warnings 0`, the full vitest suite (137 files, 1,085 tests), `tsc -b`,
 the production build and the bundle budget pass (initial JS moved from
 398.24 to 398.40 KiB raw). Entry removed.
+
+### backend/services/genie_client.py (983 -> 772)
+
+The 2026-08-05 "Two thresholds" item 1: transport/retry, message lifecycle
+polling, response normalization. The lifecycle and normalization are methods
+of one `GenieClient` class whose transport the client tests monkeypatch
+(`urllib.request.urlopen`, `time.sleep`) through this module, so the class
+stays whole; what leaves is the process-wide registry around it.
+
+| File | Lines | Content |
+|---|---|---|
+| `backend/services/genie_client.py` | 772 | `GenieClientError`, `GenieResponse`, `GenieClient` (transport, lifecycle, normalization), re-exports with the unchanged `__all__` |
+| `backend/services/genie_client_registry.py` | 259 | `ResilientGenieClient`, the client singleton and lock, space-id resolution and placeholder detection, `get_genie_client`, the test reset |
+
+Proof: `defset`: pre 16 definitions, post 16 across two files, removed none,
+added none, text-changed none. Both modules defer their cross-imports to
+the bottom of the file so either import order works (verified both ways);
+the re-exported functions are the same objects, so dependency-override
+identity checks still hold. Two ruff-driven edits outside the moved text:
+the now-unused `Lock` import left `genie_client.py`, and the four private
+re-exports carry the repo's existing compatibility-re-export `noqa` marker.
+393 tests across the client, feedback-client, capabilities, home-summary,
+async-flow, provision-space, retention-risk and repository files pass; the
+registry module type-checks without an exemption. Entry removed.
