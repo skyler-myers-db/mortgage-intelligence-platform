@@ -579,6 +579,27 @@ export function LeadTable({
         {truncatedAt !== null && totalMatching !== null && totalMatching > leads.length && (
           <span className="muted"> · capped at {truncatedAt.toLocaleString()}</span>
         )}
+        {/* Audit tables-02: sorting reorders only the rows already loaded
+            (the server returns the top-ranked window) and nothing said so;
+            no header could reach toggleSort('rank') either. */}
+        {sortKey !== 'rank' && (
+          <>
+            <span data-testid="lead-sort-scope">
+              · sorted within the loaded {sortedLeads.length.toLocaleString()}
+              {totalMatching !== null && totalMatching > sortedLeads.length
+                ? `, not across all ${totalMatching.toLocaleString()} matching`
+                : ''}
+            </span>
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm"
+              onClick={() => toggleSort('rank')}
+              data-testid="lead-sort-reset"
+            >
+              Reset to rank
+            </button>
+          </>
+        )}
       </div>
     </div>
   );
