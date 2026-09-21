@@ -15,6 +15,12 @@
  *    DESIGN (no POST) — and the preview now says "approved", so the
  *    no-op is legible;
  * 3. keydown from an editable element (the row checkbox) never approves.
+ *
+ * Focus scope (audit tables-v2 / a11y-09, 2026-09-21, WCAG 2.1.4): the
+ * listener is window-level, so with a row expanded A used to approve — and
+ * write an audit row — from a filter button, the evidence drawer or Genie
+ * chrome. Pins 4-8 below: A/R act only while focus is inside the `.tbl-wrap`
+ * region and no dialog, drawer, listbox or menu is open.
  */
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -311,6 +317,176 @@ describe('LeadTable A/R hotkeys from row-internal focus', () => {
 
     expect(draftOutreach).not.toHaveBeenCalled();
     expect(approve).not.toHaveBeenCalled();
+  });
+
+  describe('focus scope (tables-v2 / a11y-09)', () => {
+    const strays: HTMLElement[] = [];
+
+    function addToBody(html: string): HTMLElement {
+      const host = document.createElement('div');
+      host.innerHTML = html;
+      const el = host.firstElementChild as HTMLElement;
+      document.body.appendChild(el);
+      strays.push(el);
+      return el;
+    }
+
+    afterEach(() => {
+      strays.splice(0).forEach((el) => el.remove());
+    });
+
+    it("does not approve when 'a' is pressed on a focused button outside the table", async () => {
+      mount();
+      expandViaBorrowerButton();
+      const filterButton = addToBody('<button type="button" class="filter">STATE</button>');
+      filterButton.focus();
+      expect(document.activeElement).toBe(filterButton);
+
+      pressKey(filterButton, 'a');
+      pressKey(filterButton, 'r');
+      await flush();
+
+      expect(draftOutreach).not.toHaveBeenCalled();
+      expect(approve).not.toHaveBeenCalled();
+      // R must not open the reject panel either.
+      expect(container.querySelector('.decision-panel')).toBeNull();
+    });
+
+    it('does not approve from the table header controls outside the scroll region', async () => {
+      mount();
+      expandViaBorrowerButton();
+      const exportButton = container.querySelector<HTMLButtonElement>('[data-testid="lead-export"]');
+      if (!exportButton) throw new Error('export button not rendered');
+      exportButton.focus();
+
+      pressKey(exportButton, 'a');
+      await flush();
+
+      expect(draftOutreach).not.toHaveBeenCalled();
+      expect(approve).not.toHaveBeenCalled();
+    });
+
+    it('does not approve when nothing is focused (keydown lands on body)', async () => {
+      mount();
+      const btn = expandViaBorrowerButton();
+      btn.blur();
+
+      pressKey(document.body, 'a');
+      await flush();
+
+      expect(draftOutreach).not.toHaveBeenCalled();
+      expect(approve).not.toHaveBeenCalled();
+    });
+
+    it('does not approve while the evidence drawer is open, even with focus in the table', async () => {
+      mount();
+      const btn = expandViaBorrowerButton();
+      addToBody(
+        '<aside class="drawer is-open" role="dialog" aria-modal="true" aria-hidden="false">'
+        + '<button type="button">Close</button></aside>',
+      );
+
+      pressKey(btn, 'a');
+      await flush();
+
+      expect(draftOutreach).not.toHaveBeenCalled();
+      expect(approve).not.toHaveBeenCalled();
+    });
+
+    it('does not approve from inside the evidence drawer', async () => {
+      mount();
+      expandViaBorrowerButton();
+      const drawer = addToBody(
+        '<aside class="drawer is-open" role="dialog" aria-modal="true" aria-hidden="false">'
+        + '<button type="button">Close</button></aside>',
+      );
+      const close = drawer.querySelector('button') as HTMLButtonElement;
+      close.focus();
+
+      pressKey(close, 'a');
+      await flush();
+
+      expect(draftOutreach).not.toHaveBeenCalled();
+      expect(approve).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['an open filter listbox', '<ul class="filter-menu" role="listbox"><li role="option">IL</li></ul>'],
+      ['an open menu', '<div class="filter-menu" role="menu"><button role="menuitem">Past chat</button></div>'],
+      ['the open command palette', '<div class="cmdk"><div class="cmdk__panel" role="dialog" aria-modal="true"></div></div>'],
+      ['the open Genie panel', '<div class="genie is-open" role="dialog" aria-hidden="false"></div>'],
+    ])('does not approve while %s is open', async (_name, html) => {
+      mount();
+      const btn = expandViaBorrowerButton();
+      addToBody(html);
+
+      pressKey(btn, 'a');
+      await flush();
+
+      expect(draftOutreach).not.toHaveBeenCalled();
+      expect(approve).not.toHaveBeenCalled();
+    });
+
+    it('still approves with the always-mounted drawer and Genie panel CLOSED', async () => {
+      mount();
+      const btn = expandViaBorrowerButton();
+      addToBody('<aside class="drawer" role="dialog" aria-modal="true" aria-hidden="true"></aside>');
+      addToBody(
+        '<div class="genie" role="dialog" aria-hidden="true"><div role="menu"></div></div>',
+      );
+
+      pressKey(btn, 'a');
+      await flush();
+
+      expect(draftOutreach).toHaveBeenCalledTimes(1);
+      expect(approve).toHaveBeenCalledTimes(1);
+    });
+
+    it('still approves when focus is on the table scroll region itself (click-row-then-A)', async () => {
+      mount();
+      expandViaBorrowerButton();
+      const region = container.querySelector<HTMLDivElement>('.tbl-wrap');
+      if (!region) throw new Error('table region not rendered');
+      region.focus();
+      expect(document.activeElement).toBe(region);
+
+      pressKey(region, 'a');
+      await flush();
+
+      expect(draftOutreach).toHaveBeenCalledTimes(1);
+      expect(approve).toHaveBeenCalledTimes(1);
+    });
+
+    it("still opens the reject panel when 'r' is pressed with focus in the table", () => {
+      mount();
+      const btn = expandViaBorrowerButton();
+      expect(container.querySelector('.decision-panel')).toBeNull();
+
+      pressKey(btn, 'r');
+
+      expect(container.querySelector('.decision-panel')).not.toBeNull();
+    });
+
+    it('advertises A / R only on the expanded row and Shift+A on bulk approve', () => {
+      mount();
+      const approveBtn = () => container.querySelector('[data-testid="lead-approve-B-AAAAAAAAAAAA1"]');
+      const rejectBtn = () => container.querySelector('[data-testid="lead-reject-B-AAAAAAAAAAAA1"]');
+      expect(approveBtn()?.getAttribute('aria-keyshortcuts')).toBeNull();
+      expect(rejectBtn()?.getAttribute('aria-keyshortcuts')).toBeNull();
+
+      expandViaBorrowerButton();
+      expect(approveBtn()?.getAttribute('aria-keyshortcuts')).toBe('A');
+      expect(rejectBtn()?.getAttribute('aria-keyshortcuts')).toBe('R');
+
+      const checkbox = container.querySelector<HTMLInputElement>(
+        '[data-testid="lead-select-B-AAAAAAAAAAAA1"]',
+      );
+      if (!checkbox) throw new Error('lead checkbox not rendered');
+      act(() => checkbox.click());
+      expect(
+        container.querySelector('[data-testid="lead-bulk-approve"]')?.getAttribute('aria-keyshortcuts'),
+      ).toBe('Shift+A');
+    });
   });
 
   it('never approves from an editable element', async () => {

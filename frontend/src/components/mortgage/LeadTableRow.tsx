@@ -264,6 +264,9 @@ export function LeadTableRow({
                   onApprove(lead.borrower_id);
                 }}
                 aria-label={`Approve ${lead.borrower_id}`}
+                // A / R are bound to the EXPANDED row only, so only that row
+                // advertises them (audit a11y-09).
+                aria-keyshortcuts={isOpen ? 'A' : undefined}
                 data-testid={`lead-approve-${lead.borrower_id}`}
               >
                 {pendingApproval ? 'Approving…' : 'Approve'}
@@ -272,6 +275,7 @@ export function LeadTableRow({
                 type="button"
                 className="btn btn--sm lead-table__reject"
                 aria-label={`Reject ${lead.borrower_id}`}
+                aria-keyshortcuts={isOpen ? 'R' : undefined}
                 title="Reject"
                 disabled={approvalActionsDisabled || pendingApproval}
                 aria-describedby={approvalActionsDisabled ? 'campaign-binding-status' : undefined}

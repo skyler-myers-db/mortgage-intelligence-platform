@@ -127,6 +127,7 @@ export function LeadTableBulkActions({
           aria-describedby={campaignBindingBlocked ? 'campaign-binding-status' : undefined}
           data-testid="lead-bulk-approve"
           aria-label={`Approve ${selectedApprovalEligibleCount} eligible leads`}
+          aria-keyshortcuts="Shift+A"
         >
           {bulkApproving ? 'Approving…' : `Approve ${selectedApprovalEligibleCount} eligible`}
         </Button>

@@ -188,9 +188,11 @@ export function LeadTable({
 
   /**
    * Keyboard: A approves / R rejects the expanded row; Shift+A fires
-   * bulk-approve when >= 1 row is selected. We listen at the window
-   * level but bail out if focus is inside an editable element so typing
-   * in the Genie chat or a filter input never triggers approval.
+   * bulk-approve when >= 1 row is selected. The listener is window-level,
+   * but `useLeadTableHotkeys` only forwards keystrokes whose focus is inside
+   * the `.tbl-wrap` region with no dialog, drawer, listbox or menu open
+   * (audit tables-v2 / a11y-09, WCAG 2.1.4) — so A on a filter button, in
+   * the evidence drawer or on Genie chrome never approves a borrower.
    */
   useLeadTableHotkeys((e: KeyboardEvent) => {
     // R5-12 (2026-04-23): belt-and-suspenders check against both the
@@ -225,7 +227,7 @@ export function LeadTable({
       e.preventDefault();
       approval.setPendingReject(expanded);
     }
-  });
+  }, tableWrapRef);
 
   const stop = (e: ReactKeyboardEvent | ReactMouseEvent) => e.stopPropagation();
 
@@ -329,7 +331,7 @@ export function LeadTable({
                 makes the affordance scannable — an LO scrolling the
                 queue can spot the shortcut without reading prose.
               */}
-              Click a row to expand the preview. Keyboard: <kbd>A</kbd> approve, <kbd>R</kbd> reject the expanded row while it is still pending.
+              Click a row to expand the preview. Keyboard: <kbd>A</kbd> approve, <kbd>R</kbd> reject the expanded row while it is still pending. Shortcuts act only while focus is in the table and no panel or menu is open.
             </div>
           </div>
         </div>
