@@ -262,6 +262,21 @@ export function EvidenceDrawer() {
           : metadata?.freshness
     : metadata?.freshness;
   const assetHref = d?.assetKey ? assetDetailHref(d.assetKey) : null;
+  // /data-estate/assets/:key is served by the same AdminDep-gated metadata
+  // read as `metadataQuery` above, so the actions that land there are gated
+  // exactly like that read. For the buyer personas (not admins) the drawer's
+  // primary action used to end on a 403 page (2026-09-21 audit critic-03);
+  // the proof itself — explanation, signals, governed assets, lineage — stays.
+  const assetDetailsHref =
+    canAccessAdmin && destination.kind === 'unity_catalog' ? assetHref : null;
+  // Lakebase destinations are non-admin app surfaces; the readiness ledger is
+  // an asset-detail page, so it is an admin action too.
+  const destinationAction =
+    destination.kind === 'lakebase' || (destination.kind === 'readiness' && canAccessAdmin)
+      ? destination
+      : null;
+  const catalogExplorerUrl =
+    destination.kind !== 'lakebase' ? metadata?.catalog_explorer_url ?? null : null;
   const selectTabFromKeyboard = (event: KeyboardEvent<HTMLButtonElement>) => {
     const tabs: DrawerTab[] = ['overview', 'lineage'];
     const currentIndex = tabs.indexOf(tab);
@@ -637,31 +652,33 @@ export function EvidenceDrawer() {
                 </>
               )}
 
-              <div className="drawer__actions">
-                {assetHref && destination.kind === 'unity_catalog' && (
-                  <Link className="btn btn--primary btn--sm" to={assetHref} onClick={() => setDrawer(null)}>
-                    <Icon name="db" size={12} />
-                    View asset details
-                  </Link>
-                )}
-                {(destination.kind === 'lakebase' || destination.kind === 'readiness') && (
-                  <Link className="btn btn--primary btn--sm" to={destination.href} onClick={() => setDrawer(null)}>
-                    <Icon name={destination.kind === 'readiness' ? 'db' : 'search'} size={12} />
-                    {destination.actionLabel}
-                  </Link>
-                )}
-                {metadata?.catalog_explorer_url && destination.kind !== 'lakebase' && (
-                  <a
-                    className="btn btn--ghost btn--sm"
-                    href={metadata.catalog_explorer_url}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    <Icon name="export" size={12} />
-                    Catalog Explorer
-                  </a>
-                )}
-              </div>
+              {(assetDetailsHref || destinationAction || catalogExplorerUrl) && (
+                <div className="drawer__actions">
+                  {assetDetailsHref && (
+                    <Link className="btn btn--primary btn--sm" to={assetDetailsHref} onClick={() => setDrawer(null)}>
+                      <Icon name="db" size={12} />
+                      View asset details
+                    </Link>
+                  )}
+                  {destinationAction && (
+                    <Link className="btn btn--primary btn--sm" to={destinationAction.href} onClick={() => setDrawer(null)}>
+                      <Icon name={destinationAction.kind === 'readiness' ? 'db' : 'search'} size={12} />
+                      {destinationAction.actionLabel}
+                    </Link>
+                  )}
+                  {catalogExplorerUrl && (
+                    <a
+                      className="btn btn--ghost btn--sm"
+                      href={catalogExplorerUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      <Icon name="export" size={12} />
+                      Catalog Explorer
+                    </a>
+                  )}
+                </div>
+              )}
 
               {d.eventDate && (
                 <div className="drawer__updated">

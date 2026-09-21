@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { PageShell } from '../components/layout/PageShell';
 import { Chip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
+import { AccessDenied } from '../components/ui/AccessDenied';
 import { Skeleton } from '../components/ui/Skeleton';
 import { api, ApiError } from '../lib/api';
 import { assetHrefForSource } from '../lib/drawerSources';
@@ -76,17 +77,30 @@ export default function AssetRoute() {
         </div>
       )}
 
-      {query.isError && (
+      {/* The buyer personas are not admins. Their proof journey used to end
+          here with "Return home" as the only exit (2026-09-21 audit
+          critic-03): name the role and offer the way back to the evidence. */}
+      {query.isError && error?.status === 403 && (
+        <AccessDenied
+          title="Administrator access required"
+          requiredRole="Administrator"
+          testId="asset-access-denied"
+        >
+          Asset detail shows the governed schema, tags, DDL contract, and observed lineage of a
+          Unity Catalog object, so it is limited to the Administrator role. The explanation,
+          signals, and governed lineage in every source drawer stay available to all roles.
+        </AccessDenied>
+      )}
+
+      {query.isError && error?.status !== 403 && (
         <section className="surface">
           <div className="surface__hdr">
             <Icon name="shield" size={14} className="icon-accent" />
-            <div className="h-4">{error?.status === 403 ? 'Admin access required' : 'Asset unavailable'}</div>
+            <div className="h-4">Asset unavailable</div>
           </div>
           <div className="surface__body">
             <p className="body flush">
-              {error?.status === 403
-                ? 'Detailed UC metadata includes schema, tags, DDL contract, and observed lineage, so it is available only to governed administrators.'
-                : 'This asset is not in the Module 0 trusted registry, or the warehouse metadata endpoint is unavailable.'}
+              This asset is not in the Module 0 trusted registry, or the warehouse metadata endpoint is unavailable.
             </p>
             <div className="chip-row mt-3">
               <Link className="btn btn--primary btn--sm" to="/">
