@@ -178,15 +178,22 @@ export function FunnelBars({ stages, leadParams = {} }: { stages: FunnelStage[];
 }
 
 /**
- * FunnelSankey (re-audit Buyer-Wow #5) — the value story at a glance: a
- * flowing pipeline funnel (addressable → in-the-money → high-opportunity →
- * offers → approved → actioned) rendered as connected ribbons that narrow
- * with each stage's drop-off. Pure client-side SVG over the SAME
+ * FunnelSankey (re-audit Buyer-Wow #5) — the value story at a glance: the
+ * activation stages (addressable, refi economics, high-opportunity, approved,
+ * actioned) rendered as connected ribbons. Pure client-side SVG over the SAME
  * FunnelStage[] the Pipeline Metrics bars use — no new data, fully
  * deterministic. Each stage is a keyboard-focusable link to its slice of
  * the lead queue; the ribbons draw in ONCE on first appearance (gated by
  * useFirstAppearance, disabled under prefers-reduced-motion). The exact
  * figures stay in the Pipeline Metrics bars below.
+ *
+ * Labels (2026-09-21 audit, dataviz-v1 + dataviz-03): the stages are
+ * independent cuts of the addressable book, NOT a kept-versus-dropped
+ * pipeline, so each prints its share of ADDRESSABLE and only the one
+ * SQL-nested pair (Approved → Actioned) prints a conversion — see
+ * NESTED_FUNNEL_STAGE_PAIRS in analytics.lib.ts. Small stages draw at a
+ * minimum visible thickness on the unchanged linear scale, and the chart
+ * says "not to scale" whenever it does that.
  */
 export function FunnelSankey({
   stages,
@@ -221,12 +228,16 @@ export function FunnelSankey({
     }
   };
 
-  return (
+  const chart = (
     <svg
       className={`funnel-sankey${animate ? ' funnel-sankey--enter' : ''}`}
       viewBox={`0 0 ${model.viewWidth} ${model.viewHeight}`}
       role="group"
-      aria-label="Pipeline funnel — each stage links to its borrowers in the lead queue"
+      aria-label={
+        'Activation funnel — each stage is its share of the addressable population, not a conversion '
+        + 'from the stage before it; only Approved to Actioned is nested. Each stage links to its '
+        + `borrowers in the lead queue.${model.notToScale ? ' Ribbon thickness is not to scale for the smaller stages.' : ''}`
+      }
       preserveAspectRatio="xMidYMid meet"
     >
       <defs>
@@ -244,15 +255,25 @@ export function FunnelSankey({
         />
       ))}
       {model.nodes.map((node) => {
-        const conv = formatConversionPct(node.conversion);
         const stageLabel = funnelStageDisplayLabel({ stage: node.stage, stage_order: node.stageOrder });
+        // Two kinds of ratio, never confused: every stage's share of the
+        // addressable superset, and a conversion ONLY where the model says
+        // SQL nests the stage inside a parent (Approved → Actioned).
+        const sharePct = formatConversionPct(node.shareOfAddressable);
+        const share = sharePct ? `${sharePct} of addressable` : null;
+        const convPct = node.nestedIn ? formatConversionPct(node.conversion) : null;
+        const conv = convPct && node.nestedIn
+          ? `${convPct} of ${funnelStageDisplayLabel(node.nestedIn).toLowerCase()}`
+          : null;
+        // Stack above the bar, nearest line last: count, share, conversion.
+        const lines = [share, conv].filter((line): line is string => line !== null);
         return (
           <g
             key={node.stageOrder}
             className="funnel-sankey__node"
             role="link"
             tabIndex={0}
-            aria-label={`${stageLabel}: ${fmt(node.count)} borrowers${conv ? `, ${conv} from previous stage` : ''}. Open in lead queue.`}
+            aria-label={`${stageLabel}: ${[`${fmt(node.count)} borrowers`, ...lines].join(', ')}. Open in lead queue.`}
             onClick={() => go(node)}
             onKeyDown={onKey(node)}
           >
@@ -264,14 +285,26 @@ export function FunnelSankey({
               height={node.height}
               rx={3}
             />
-            <text className="funnel-sankey__count" x={node.xCenter} y={node.yTop - 18} textAnchor="middle">
+            <text
+              className="funnel-sankey__count"
+              x={node.xCenter}
+              y={node.yTop - 18 - Math.max(0, lines.length - 1) * 13}
+              textAnchor="middle"
+            >
               {fmt(node.count)}
             </text>
-            {conv && (
-              <text className="funnel-sankey__conv" x={node.xCenter} y={node.yTop - 5} textAnchor="middle">
-                {conv}
+            {lines.map((line, idx) => (
+              <text
+                key={line}
+                className="funnel-sankey__conv"
+                data-ratio={line === share ? 'share-of-addressable' : 'nested-conversion'}
+                x={node.xCenter}
+                y={node.yTop - 5 - (lines.length - 1 - idx) * 13}
+                textAnchor="middle"
+              >
+                {line}
               </text>
-            )}
+            ))}
             <text className="funnel-sankey__label" x={node.xCenter} y={node.yBottom + 18} textAnchor="middle">
               {stageLabel}
             </text>
@@ -279,6 +312,18 @@ export function FunnelSankey({
         );
       })}
     </svg>
+  );
+
+  return (
+    <>
+      {chart}
+      {model.notToScale && (
+        <p className="analytics-panel-note" data-testid="funnel-sankey-scale-note">
+          Not to scale: stages too small to see in proportion are drawn at a minimum ribbon thickness.
+          The printed counts and shares of addressable are exact.
+        </p>
+      )}
+    </>
   );
 }
 

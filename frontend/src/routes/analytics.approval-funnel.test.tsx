@@ -158,7 +158,8 @@ vi.mock('../lib/api', () => ({
   api: apiMocks,
 }));
 
-import { ApprovalFunnelSection } from './analytics.approval-funnel';
+import { APPROVAL_FUNNEL_NESTED_IN, ApprovalFunnelSection } from './analytics.approval-funnel';
+import { HIGH_OPPORTUNITY_KPI_LABEL } from '../lib/opportunityScore';
 
 async function settle(): Promise<void> {
   await act(async () => {
@@ -235,6 +236,49 @@ describe('ApprovalFunnelSection', () => {
     expect(kpiLabels).toContain('Addressable population');
     expect(kpiLabels).not.toContain('Marketable population');
     expect(document.body.textContent).toContain('5,200');
+  });
+
+  // 2026-09-21 audit (dataviz-v1): the stage cards printed "N% of <previous
+  // card>" for every adjacent pair. Approved is read from Lakebase approvals
+  // and need not be high-opportunity, so that ratio was not a conversion.
+  it('prints a percentage only where SQL nests one stage inside another', async () => {
+    funnelData = {
+      ...ZERO_FUNNEL,
+      stages: ZERO_FUNNEL.stages.map((stage) => {
+        if (stage.stage === 'approved') return { ...stage, borrower_count: 160 };
+        if (stage.stage === 'actioned') return { ...stage, borrower_count: 40 };
+        if (stage.stage === 'outcome_recorded') return { ...stage, borrower_count: 10 };
+        return stage;
+      }),
+    };
+    await act(async () => renderSection());
+    await settle();
+
+    const deltaByLabel = Object.fromEntries(
+      [...document.querySelectorAll('.kpi')].map((card) => [
+        card.querySelector('.kpi__label')?.textContent ?? '',
+        card.querySelector('.kpi__delta')?.textContent?.trim() ?? null,
+      ]),
+    );
+    expect(deltaByLabel['Addressable population']).toBeNull();
+    // 830 / 5,200: one statement over the headline view, a true subset.
+    expect(deltaByLabel[HIGH_OPPORTUNITY_KPI_LABEL]).toBe('16% of addressable population');
+    // 160 / 830 = 19% is the ratio that used to print here.
+    expect(deltaByLabel.Approved).toBeNull();
+    expect(document.body.textContent).not.toContain('19% of');
+    // Set algebra in the workflow statement guarantees these two.
+    expect(deltaByLabel.Actioned).toBe('25% of approved');
+    expect(deltaByLabel['Outcome recorded']).toBe('25% of actioned');
+    expect(document.body.textContent).toContain('Approved is not a subset of the high-opportunity cut');
+  });
+
+  it('declares exactly the SQL-guaranteed nestings, and none for Approved', () => {
+    expect(APPROVAL_FUNNEL_NESTED_IN).toEqual({
+      high_opportunity: 'population',
+      actioned: 'approved',
+      outcome_recorded: 'actioned',
+    });
+    expect(APPROVAL_FUNNEL_NESTED_IN.approved).toBeUndefined();
   });
 
   it('every funnel stage number opens the EvidenceDrawer with its own source', async () => {
