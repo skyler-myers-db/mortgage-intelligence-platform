@@ -114,6 +114,24 @@ function cssScrollMarginTop(target: Element): number {
 }
 
 /**
+ * Distance from the top of `main`'s scrollable content to `target`, read from
+ * the `offsetTop` chain. Unlike `getBoundingClientRect()` this ignores
+ * transforms, which matters here: a new route enters with `route-in`
+ * (`translateY(4px)` → 0), so a rect read at navigation time is 4px off its
+ * resting place. Returns null when `main` is not in the target's offsetParent
+ * chain (it is `position: relative` in the shell, so it normally is).
+ */
+function offsetTopWithin(main: HTMLElement, target: HTMLElement): number | null {
+  let top = 0;
+  let node: HTMLElement | null = target;
+  while (node && node !== main) {
+    top += node.offsetTop;
+    node = node.offsetParent instanceof HTMLElement ? node.offsetParent : null;
+  }
+  return node === main ? top : null;
+}
+
+/**
  * Scroll `main` so the `#hash` target sits just under the sticky route nav.
  * Returns false while the target is not in the DOM yet (lazy route). Targets
  * outside `main` (the skip links' `#main-content` / `#workspace-console`) are
@@ -128,8 +146,10 @@ function scrollHashTargetIntoView(main: HTMLElement, hash: string): boolean {
   const nav = main.querySelector(STICKY_NAV_SELECTOR);
   const navHeight = nav ? nav.getBoundingClientRect().height : 0;
   const margin = Math.max(cssScrollMarginTop(target), navHeight);
-  const delta = target.getBoundingClientRect().top - main.getBoundingClientRect().top;
-  main.scrollTop = Math.max(0, main.scrollTop + delta - margin);
+  const offset =
+    offsetTopWithin(main, target) ??
+    main.scrollTop + target.getBoundingClientRect().top - main.getBoundingClientRect().top;
+  main.scrollTop = Math.max(0, offset - margin);
   return true;
 }
 

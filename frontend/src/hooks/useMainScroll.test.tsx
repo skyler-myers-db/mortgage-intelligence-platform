@@ -263,6 +263,34 @@ describe('useMainScroll', () => {
     expect(main().scrollTop).toBe(1400 - 96);
   });
 
+  it('places the target by layout offset, so the route entrance transform cannot skew it', async () => {
+    await mount(['/home']);
+    rects.set('route-nav', { top: 100, height: 53 });
+    // Mid-animation the rect says 1504 (translateY(4px)); the layout offset says 1400.
+    rects.set('clip', { top: 1504, height: 120 });
+    rects.set('main-content', { top: 100, height: 800 });
+    const offsetTop = vi.spyOn(HTMLElement.prototype, 'offsetTop', 'get').mockImplementation(function top(
+      this: HTMLElement,
+    ) {
+      return this.id === 'clip' ? 1400 : 0;
+    });
+    // happy-dom does not implement offsetParent at all; define it for this test.
+    Object.defineProperty(HTMLElement.prototype, 'offsetParent', {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.id === 'clip' ? main() : null;
+      },
+    });
+
+    try {
+      await go('/glossary#clip');
+      expect(main().scrollTop).toBe(1400 - 64);
+    } finally {
+      offsetTop.mockRestore();
+      Reflect.deleteProperty(HTMLElement.prototype, 'offsetParent');
+    }
+  });
+
   it('a hash change on the same page jumps to the new target', async () => {
     await mount(['/glossary']);
     await userScrollTo(300);
