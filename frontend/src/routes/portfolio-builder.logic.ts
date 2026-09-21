@@ -527,16 +527,28 @@ export function isDayZero(preview: PortfolioPreview | null): boolean {
  * defaults. Pure and deterministic so the demo never surprises and the
  * math is unit-pinnable.
  */
-/** Compact USD formatter for the projector headline ($2.3M, $940K, $1.2B, $1.5T). */
+/**
+ * Compact USD formatter for the projector headline ($2.3M, $940K, $1.2B, $1.5T).
+ *
+ * The unit is chosen AFTER rounding. Choosing it from the raw value rendered
+ * 999,600 as "$1000K" — the thousands branch rounds up to a four-digit figure
+ * that belongs to the next unit (2026-09-21 audit, responsive-04). Every
+ * boundary rolls over the same way: $999.6 -> "$1K", 999,950,000 -> "$1.0B".
+ */
 export function formatUsdCompact(n: number): string {
   if (!Number.isFinite(n)) return '—';
   const abs = Math.abs(n);
+  const dollars = Math.round(abs);
+  if (dollars === 0) return '$0'; // never "-$0"
   const sign = n < 0 ? '-' : '';
-  if (abs >= 1_000_000_000_000) return `${sign}$${(abs / 1_000_000_000_000).toFixed(1)}T`;
-  if (abs >= 1_000_000_000) return `${sign}$${(abs / 1_000_000_000).toFixed(1)}B`;
-  if (abs >= 1_000_000) return `${sign}$${(abs / 1_000_000).toFixed(1)}M`;
-  if (abs >= 1_000) return `${sign}$${Math.round(abs / 1_000)}K`;
-  return `${sign}$${Math.round(abs)}`;
+  if (dollars < 1_000) return `${sign}$${dollars}`;
+  const thousands = Math.round(abs / 1_000);
+  if (thousands < 1_000) return `${sign}$${thousands}K`;
+  for (const [divisor, suffix] of [[1_000_000, 'M'], [1_000_000_000, 'B']] as const) {
+    const scaled = (abs / divisor).toFixed(1);
+    if (Number(scaled) < 1_000) return `${sign}$${scaled}${suffix}`;
+  }
+  return `${sign}$${(abs / 1_000_000_000_000).toFixed(1)}T`;
 }
 
 export function dayZeroSafe(

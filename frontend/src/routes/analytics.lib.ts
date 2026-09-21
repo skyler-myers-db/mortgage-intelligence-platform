@@ -103,9 +103,17 @@ export function fmt(n: number | null | undefined): string {
   return COMPACT_FORMAT.format(n);
 }
 
+/**
+ * Compact USD. The sign belongs in front of the currency symbol: prefixing
+ * "$" to an already-signed compact number rendered a negative equity total
+ * as "$-4.41M" (2026-09-21 audit, responsive-04). The magnitude is formatted
+ * unsigned and the sign re-attached, so every non-negative value renders
+ * exactly as before; a value that rounds to zero carries no sign.
+ */
 export function fmtCurrency(n: number | null | undefined): string {
-  if (n === null || n === undefined) return '—';
-  return `$${COMPACT_FORMAT.format(n)}`;
+  if (n === null || n === undefined || !Number.isFinite(n)) return '—';
+  const magnitude = COMPACT_FORMAT.format(Math.abs(n));
+  return n < 0 && magnitude !== '0' ? `-$${magnitude}` : `$${magnitude}`;
 }
 
 export function borrowerDisplay(row: Pick<TopBorrowerAnalyticsRow, 'display_name' | 'borrower_id'>): string {
