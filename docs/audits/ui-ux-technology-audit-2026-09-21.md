@@ -1,5 +1,7 @@
 # UI/UX, Strategy and Frontend Technology Audit — 2026-09-21
 
+> **Internal validation artifact — not approved for public release.** Multi-agent read-only audit of UI/UX design, strategy and frontend technology, with adversarial verification of every finding. Screenshots referenced here were rendered from synthetic test fixtures, never live borrower data.
+
 Scope: every UI/UX surface, the design system, the frontend stack, and the API-to-UI delivery path of Module 0. Question asked: is it the latest and greatest everywhere, where is the room to upgrade, and what would take it over the top visually and in performance.
 
 Full evidence for every item below (file:line, verifier notes, constraint conflicts) is in the companion register: [ui-ux-technology-audit-2026-09-21-findings.md](ui-ux-technology-audit-2026-09-21-findings.md). Finding ids such as `runtime-02` refer to it.
