@@ -14,6 +14,7 @@ import { createIdlePreloader } from '../../lib/prefetch';
 import { clearActorScopedBrowserState } from '../../lib/actorScopedBrowserState';
 import { clearActorScopedMemoryCaches } from '../../lib/actorScopedMemoryCaches';
 import { useMainScroll } from '../../hooks/useMainScroll';
+import { useRouteAnnouncer } from '../../hooks/useRouteAnnouncer';
 
 const LazyConsole = lazyWithPreload(() =>
   import('./Console').then((module) => ({ default: module.Console })),
@@ -61,7 +62,10 @@ const preloadDrawerSources = createIdlePreloader(() => import('../../lib/drawerS
  *     parity). `<main id="main-content">` is the primary content
  *     landmark.
  *   - Route continuity (audit 2026-09-21): `useMainScroll` resets / restores
- *     the persistent `.main` scroller per history entry.
+ *     the persistent `.main` scroller per history entry, and
+ *     `useRouteAnnouncer` sets the per-route document title, moves focus to
+ *     the page heading and writes the page name into the one polite
+ *     `.sr-only` live region below (WCAG 2.4.2, 2.4.3, 4.1.3).
  */
 export function AppShell({ children }: PropsWithChildren) {
   return (
@@ -122,7 +126,9 @@ function AppShellInner({ children }: PropsWithChildren) {
   const queryClient = useQueryClient();
   const actorCacheKeyRef = useRef<string | null>(null);
   const mainRef = useRef<HTMLElement | null>(null);
+  const routeAnnouncerRef = useRef<HTMLDivElement | null>(null);
   useMainScroll(mainRef);
+  useRouteAnnouncer(mainRef, routeAnnouncerRef);
 
   useEffect(() => {
     const cancelConsole = preloadConsole();
@@ -176,6 +182,17 @@ function AppShellInner({ children }: PropsWithChildren) {
       <Rail />
       <Topbar />
       <CommandPalette />
+      {/* Persistent route announcer. Left empty on purpose: useRouteAnnouncer
+          writes the page name here after each navigation, and React never
+          re-renders its content away. */}
+      <div
+        ref={routeAnnouncerRef}
+        className="sr-only"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        data-route-announcer=""
+      />
       <main ref={mainRef} id="main-content" tabIndex={-1} className="main">
         <DegradedBanner />
         {children}
