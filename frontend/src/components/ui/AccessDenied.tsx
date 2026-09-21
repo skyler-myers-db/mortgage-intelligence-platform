@@ -27,14 +27,31 @@ interface AccessDeniedProps {
   requiredRole: string;
   /** Why the surface is restricted, in one or two sentences. */
   children: ReactNode;
+  /**
+   * `denied`: the server said this actor lacks the role. `unverified`: the
+   * role check itself did not complete, so the surface stays closed
+   * (fail-closed) without claiming the actor lacks a role nobody confirmed.
+   */
+  status?: 'denied' | 'unverified';
+  /** Offered for `unverified`: re-run the check that did not complete. */
+  onRetry?: () => void;
   testId?: string;
 }
 
-export function AccessDenied({ title, requiredRole, children, testId }: AccessDeniedProps) {
+export function AccessDenied({
+  title,
+  requiredRole,
+  children,
+  status = 'denied',
+  onRetry,
+  testId,
+}: AccessDeniedProps) {
   const headingId = useId();
   const navigate = useNavigate();
   const location = useLocation();
   const canGoBack = location.key !== 'default';
+  const unverified = status === 'unverified';
+  const canRetry = unverified && onRetry !== undefined;
 
   return (
     <section className="surface" aria-labelledby={headingId} data-testid={testId}>
@@ -43,22 +60,34 @@ export function AccessDenied({ title, requiredRole, children, testId }: AccessDe
           <Icon name="shield" size={14} className="icon-accent" />
           <h2 className="h-4" id={headingId}>{title}</h2>
         </div>
-        <Chip variant="warning" icon="info">403 · Access denied</Chip>
+        <Chip variant="warning" icon="info">
+          {unverified ? 'Access not verified' : '403 · Access denied'}
+        </Chip>
       </div>
       <div className="surface__body">
         <p className="body flush">{children}</p>
         <p className="muted fs-12" data-testid="access-denied-role">
-          Required role: <strong>{requiredRole}</strong>. Your session does not have it, so nothing
-          restricted was loaded. Ask your workspace administrator to grant the {requiredRole} role if
-          you need this view.
+          Required role: <strong>{requiredRole}</strong>.{' '}
+          {unverified
+            ? 'Your session could not be checked, so this view stays closed and nothing restricted was loaded.'
+            : `Your session does not have it, so nothing restricted was loaded. Ask your workspace administrator to grant the ${requiredRole} role if you need this view.`}
         </p>
         <div className="chip-row mt-3">
+          {canRetry && (
+            <button type="button" className="btn btn--primary btn--sm" onClick={onRetry}>
+              Check access again
+            </button>
+          )}
           {canGoBack && (
-            <button type="button" className="btn btn--primary btn--sm" onClick={() => navigate(-1)}>
+            <button
+              type="button"
+              className={`btn btn--sm ${canRetry ? 'btn--ghost' : 'btn--primary'}`}
+              onClick={() => navigate(-1)}
+            >
               Back to previous page
             </button>
           )}
-          <Link className={`btn btn--sm ${canGoBack ? 'btn--ghost' : 'btn--primary'}`} to="/">
+          <Link className={`btn btn--sm ${canGoBack || canRetry ? 'btn--ghost' : 'btn--primary'}`} to="/">
             <Icon name="home" size={12} />
             Go to Home
           </Link>
