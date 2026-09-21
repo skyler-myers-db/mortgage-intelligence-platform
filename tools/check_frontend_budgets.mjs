@@ -78,7 +78,17 @@ const budgets = {
   // campaign-handoff slices settled. The inherited 141 KiB gate left only
   // 0.05 KiB above the measured artifact, violating the documented ~5%
   // cross-platform headroom policy. Measured: CSS 140.95 / gzip 23.89.
-  initialCssBytes: 148 * KiB, // actual 140.95
+  // Re-baselined 2026-09-21 for the "A new version is available" notice
+  // (audit bundle-01): .degraded-banner--info + .degraded-banner__actions,
+  // 0.24 KiB of shell CSS that must be in the initial stylesheet because the
+  // notice exists for the moment lazy chunks stop resolving. The gate had
+  // drifted to 0.09 KiB (0.06%) above the measured base (147.91 KiB), so any
+  // shell rule from anyone would have tripped it. The same slice's glossary
+  // :target styling was moved to a lazy route stylesheet first
+  // (routes/glossary.css) to keep it out of this number. Measured: CSS 148.15
+  // / gzip 25.02; restore ~5% headroom per policy. The gzip gate below still
+  // has 5.9% and is unchanged.
+  initialCssBytes: 156 * KiB, // actual 148.15
   // Re-baselined 2026-09-08 for the Genie thread view + deep-research
   // sections slice. The 25 KiB gzip gate had drifted to 4 bytes above the
   // measured artifact (25,596 B) — the next CSS line from anyone would have
