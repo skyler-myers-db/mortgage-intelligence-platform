@@ -76,38 +76,61 @@ export function buildBorrowerStory(b: Borrower360): BorrowerStory {
   const descriptor = ownerDescriptor(b);
   const props = b.related_property_count ?? 0;
 
-  // Sentence 1 — who they are, with the owner-graph property count when it
-  // is a real multi-property signal.
-  let s1 = `This ${locale}${descriptor}`;
-  if (props > 1) {
-    s1 += ` holds ${register(`${props} properties`, 'Related properties', 'related_property_count', props)} via the owner graph`;
-  }
-  s1 += '.';
+  // Who they are. Registered first so claim order stays subject -> economics.
+  const multiProperty = props > 1;
+  const subject = `This ${locale}${descriptor}`;
+  const holdings = multiProperty
+    ? ` holds ${register(`${props} properties`, 'Related properties', 'related_property_count', props)} via the owner graph`
+    : '';
 
-  // Sentence 2 — the economic trigger: rate, spread, lien, equity.
-  const parts: string[] = [];
+  // The economic trigger: rate, spread, equity, lien. Each clause carries the
+  // verb it needs when it has to follow the subject directly (`lead`); the
+  // bare `text` is what a continuing clause, or a sentence of its own, uses.
+  // `register` runs exactly once per figure either way.
+  const parts: Array<{ text: string; lead: string }> = [];
   if (typeof b.current_rate === 'number' && b.current_rate > 0) {
-    parts.push(`carries a ${register(`${b.current_rate.toFixed(2)}%`, 'Current rate', 'current_rate', b.current_rate)} rate`);
+    const clause = `carries a ${register(`${b.current_rate.toFixed(2)}%`, 'Current rate', 'current_rate', b.current_rate)} rate`;
+    parts.push({ text: clause, lead: clause });
   }
   // Only claim "above market" for a genuine positive spread — a zero or
   // negative spread (at/below market) is not an above-market trigger, and
   // "-120 bps above market" would be backwards prose.
   if (typeof b.rate_spread_bps === 'number' && b.rate_spread_bps > 0) {
-    parts.push(`${register(`${b.rate_spread_bps} bps`, 'Rate spread', 'rate_spread_bps', b.rate_spread_bps)} above market`);
+    const clause = `${register(`${b.rate_spread_bps} bps`, 'Rate spread', 'rate_spread_bps', b.rate_spread_bps)} above market`;
+    parts.push({ text: clause, lead: `is ${clause}` });
   }
   const eq = equityPct(b);
   if (eq !== null) {
-    parts.push(`with ${register(`${Math.round(eq)}% equity`, 'Equity', 'ltv', Math.round(eq))}`);
+    const token = register(`${Math.round(eq)}% equity`, 'Equity', 'ltv', Math.round(eq));
+    parts.push({ text: `with ${token}`, lead: `has ${token}` });
   }
+  const lienStr =
+    parts.length > 0 && typeof b.current_lien_balance === 'number' && b.current_lien_balance > 0
+      ? ` on a ${register(compactCurrency(b.current_lien_balance), 'Lien balance', 'current_lien_balance', b.current_lien_balance)} lien`
+      : '';
+
+  // Sentence 1 and 2. A multi-property owner gets the owner-graph sentence,
+  // then the economics as a sentence of its own. Without that clause, "This
+  // Chicago, IL homeowner." is a fragment — and it opened the story for EVERY
+  // single-property borrower (2026-09-21 audit, visual-v2) — so the subject
+  // takes the economics as its predicate instead. With neither, the subject
+  // becomes a plain sentence; it adds no figure, so nothing new to verify.
+  let s1: string;
   let s2 = '';
-  if (parts.length > 0) {
-    const lienStr =
-      typeof b.current_lien_balance === 'number' && b.current_lien_balance > 0
-        ? ` on a ${register(compactCurrency(b.current_lien_balance), 'Lien balance', 'current_lien_balance', b.current_lien_balance)} lien`
-        : '';
-    // Capitalize the first part.
-    const joined = parts.join(', ').replace(/^./, (c) => c.toUpperCase());
-    s2 = `${joined}${lienStr}.`;
+  if (multiProperty) {
+    s1 = `${subject}${holdings}.`;
+    if (parts.length > 0) {
+      const joined = parts.map((p) => p.text).join(', ').replace(/^./, (c) => c.toUpperCase());
+      s2 = `${joined}${lienStr}.`;
+    }
+  } else if (parts.length > 0) {
+    const predicate = [parts[0].lead, ...parts.slice(1).map((p) => p.text)].join(', ');
+    s1 = `${subject} ${predicate}${lienStr}.`;
+  } else {
+    // `descriptor` is a closed set (ownerDescriptor), so a vowel test is exact.
+    const article = /^[aeiou]/i.test(descriptor) ? 'an' : 'a';
+    const where = b.city && b.state ? ` in ${b.city}, ${b.state}` : '';
+    s1 = `This borrower is ${article} ${descriptor}${where}.`;
   }
 
   // Sentence 3 — the recommendation (no number to verify; the offer is text).
