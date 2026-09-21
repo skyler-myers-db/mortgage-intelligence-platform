@@ -9,6 +9,7 @@ import {
   assetKeyForSource,
   evidenceDestinationFor,
 } from '../../lib/drawerSources';
+import { useExitRetained } from '../../hooks/useExitRetained';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { queryKeys } from '../../lib/queryKeys';
 import { formatTimestamp } from '../../lib/time';
@@ -210,18 +211,26 @@ function metadataStatRows(metadata?: AssetMetadataResponse) {
 
 export function EvidenceDrawer() {
   const { drawer, setDrawer, canAccessAdmin } = useApp();
+  // `open` follows the LIVE source: the focus trap releases and focus returns
+  // to the trigger the moment the exit starts.
   const open = !!drawer;
-  const d = drawer;
   const closeBtnRef = useRef<HTMLButtonElement | null>(null);
   const drawerRef = useRef<HTMLElement | null>(null);
+  // `d` is what the panel shows. setDrawer(null) used to empty the body in the
+  // same commit that started the slide-out, so the drawer animated out blank
+  // (2026-09-21 audit css-03). The closing source stays rendered until the
+  // panel's own exit transition ends.
+  const d = useExitRetained(drawer, drawerRef);
   const overviewTabRef = useRef<HTMLButtonElement | null>(null);
   const lineageTabRef = useRef<HTMLButtonElement | null>(null);
   const [tab, setTab] = useState<DrawerTab>('overview');
   // Every drawer open starts on Overview — a lineage deep-dive on one
-  // source must not leak into the next source's drawer.
+  // source must not leak into the next source's drawer. Keyed on the live
+  // source and skipped on close, so the retained body does not flip tabs
+  // while it slides out.
   useEffect(() => {
-    setTab('overview');
-  }, [d]);
+    if (drawer) setTab('overview');
+  }, [drawer]);
   // /api/admin/assets/:key/metadata is AdminDep-gated. A loan officer opening
   // an evidence drawer used to fire it and eat a 403 on every open — invisible
   // in the UI, loud in the browser console (2026-08-07 audit H4). Ask only
@@ -317,6 +326,9 @@ export function EvidenceDrawer() {
         aria-labelledby={d ? 'evidence-drawer-title' : undefined}
         aria-label={d ? undefined : 'Data source and lineage'}
         aria-hidden={!open}
+        // The closing source stays rendered while the panel slides out; inert
+        // keeps that retained copy out of the tab order and the pointer path.
+        inert={!open}
       >
         <div className="drawer__hdr">
           <div className="drawer__source-icon">
