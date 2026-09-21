@@ -99,10 +99,10 @@ export function ErrorSurface({
           <Icon name={kind === 'chunk' ? 'bolt' : 'info'} size={16} />
         </div>
         <div className="error-surface__copy">
-          <h1 className="error-surface__title">{title}</h1>
-          <p className="error-surface__sub">{sub}</p>
+          <h1 className="h-3">{title}</h1>
+          <p className="body error-surface__sub">{sub}</p>
           {routeLabel && (
-            <p className="error-surface__meta mono">Route · {routeLabel}</p>
+            <p className="mono muted error-surface__meta">Route · {routeLabel}</p>
           )}
         </div>
         <div className="error-surface__actions">

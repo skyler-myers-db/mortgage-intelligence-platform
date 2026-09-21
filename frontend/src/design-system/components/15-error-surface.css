@@ -38,22 +38,12 @@
   flex: 1 1 20rem;
   min-width: 0;
 }
-.error-surface__title {
-  margin: 0;
-  font-size: var(--fs-16);
-  font-weight: 600;
-  line-height: var(--lh-snug);
-  color: var(--text-1);
-}
-.error-surface__sub {
-  margin: var(--sp-1) 0 0;
-  font-size: var(--fs-13);
-  color: var(--text-2);
-}
+/* Type comes from the prototype helpers on the same elements: the title is
+   `.h-3`, the sub is `.body`, the meta line is `.mono.muted`. */
+.error-surface__sub { margin: var(--sp-1) 0 0; }
 .error-surface__meta {
   margin: var(--sp-2) 0 0;
   font-size: var(--fs-11);
-  color: var(--text-3);
 }
 .error-surface__actions {
   display: flex;
