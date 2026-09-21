@@ -770,8 +770,8 @@ if _FRONTEND_DIST.is_dir() and (_FRONTEND_DIST / "index.html").is_file():
     # brotli's smaller payloads reach the wire. Identity fallback keeps the
     # pre-precompress behaviour: GZipMiddleware compresses dynamically
     # (Starlette skips responses that already carry Content-Encoding, so
-    # nothing is double-compressed). SecurityHeadersMiddleware continues to
-    # stamp the immutable Cache-Control for every /assets/ response.
+    # nothing is double-compressed). SecurityHeadersMiddleware stamps the
+    # immutable Cache-Control on served assets and ``no-store`` on the 404.
     _ASSETS_DIR = _FRONTEND_DIST / "assets"
 
     @app.get("/assets/{asset_path:path}", response_model=None, include_in_schema=False)
