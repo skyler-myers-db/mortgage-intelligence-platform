@@ -4,8 +4,8 @@
  *
  * The hygiene self-tests opt out by name so that the violation they cause on
  * purpose does not fail them; they then assert the violation was COLLECTED
- * with a readable message. A test that does not opt out fails on the same
- * input (see docs/testing.md for the mutation check).
+ * with a readable message. That a test which does NOT opt out fails on the
+ * same input is pinned in hygieneGate.fixture.spec.ts.
  */
 import { SCORE_BUCKETS } from './data/analytics';
 import { BORROWERS, LEADS, MASKED_BORROWER_ID, PRIMARY_BORROWER } from './data/borrowers';
