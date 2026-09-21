@@ -255,11 +255,19 @@ export default function LeadQueue() {
     [leadsRequest, growthAgentProofKey],
     { queryKey: leadsPageQuery.queryKey, keepPreviousData: true },
   );
-  const loading = leadsData === null && warmingUp === null && error === null;
-  const queueRefetchWarming = leadsData !== null && warmingUp !== null;
-  const queueUpdating = leadsData !== null && (leadsFetching || queueRefetchWarming);
+  // Audit states-v1 (2026-09-21): the queue used to mount LeadTable with an
+  // empty array whenever `warmingUp` or `error` was set, so a cold start or a
+  // failed load read as "Showing 0 ranked borrowers" — a false zero in an
+  // evidence-first product. The table now mounts ONLY when a payload exists.
+  // TanStack keeps `failureReason` after the final retry, so `warmingUp`
+  // outlives the retry loop; `error` is set only once it has given up. From
+  // then on the honest surface is the error + Retry, not "retrying…".
+  const warming = error === null ? warmingUp : null;
+  const hasQueue = leadsData !== null;
+  const queueRefetchWarming = hasQueue && warming !== null;
+  const queueUpdating = hasQueue && (leadsFetching || queueRefetchWarming);
   const queueStatusLabel = queueRefetchWarming
-    ? `${warmingUp.label} (${warmingUp.attempt}/${warmingUp.maxAttempts})`
+    ? `${warming.label} (${warming.attempt}/${warming.maxAttempts})`
     : 'updating';
   const loadError = error ? formatLeadQueueLoadError(error) : null;
 
@@ -634,10 +642,10 @@ export default function LeadQueue() {
           Sales team unavailable: {salesTeamError} — lead assignment to LOs is degraded until it reconnects.
         </div>
       )}
-      {warmingUp && leadsData === null && (
-        <WarmingUpBlock state={warmingUp} title="Ranked borrowers loading" compact />
+      {warming && !hasQueue && (
+        <WarmingUpBlock state={warming} title="Ranked borrowers loading" compact />
       )}
-      {loadError && !warmingUp && (
+      {loadError && !warming && (
         <div
           role="alert"
           className="status-callout status-callout--danger"
@@ -664,15 +672,19 @@ export default function LeadQueue() {
           )}
         </div>
       )}
-      {loading && !loadError && !warmingUp && (
+      {/* The table slot while no payload exists: first load AND warm-up. The
+          DegradedBanner can suppress WarmingUpBlock, so the skeleton — never a
+          zero-count table — is what holds the slot. A load error shows only
+          the alert above. */}
+      {!hasQueue && !loadError && (
         <LeadQueueTableSkeleton />
       )}
-      {countyLoading && !loading && !loadError && !warmingUp && (
+      {countyLoading && hasQueue && !loadError && !warming && (
         <div className="muted body mb-grid">
           Resolving county ZIPs…
         </div>
       )}
-      {!loading && !loadError && !warmingUp && !countyLoading && visibleLeads.length === 0 && (
+      {hasQueue && !loadError && !warming && !countyLoading && visibleLeads.length === 0 && (
         <div className="muted body mb-grid">
           {countyFilter && countyZips && countyZips.size === 0
             ? 'No ZIP-level rollup for this county in the current Cotality data coverage.'
@@ -681,7 +693,7 @@ export default function LeadQueue() {
               : 'No leads match this filter.'}
         </div>
       )}
-      {!loading && (
+      {hasQueue && (
         <div
           className={`stable-refresh-region stable-refresh-region--table ${queueUpdating ? 'is-updating' : ''}`}
           aria-busy={queueUpdating}
