@@ -4,6 +4,17 @@ const liveE2E = process.env.E2E_LIVE === '1';
 const browserMatrix = process.env.E2E_BROWSER_MATRIX === '1';
 const liveFailureArtifacts = process.env.E2E_LIVE_FAILURE_ARTIFACTS === '1' && !process.env.CI;
 
+// Credential-free fixture mode (E2E_FIXTURE=1): runs ONLY *.fixture.spec.ts
+// against a production build served by `vite preview`, with every API call
+// answered by tests/e2e/fixture/mockApi.ts. It never boots uvicorn. The port
+// comes from E2E_FIXTURE_PORT (strict) so parallel agents and CI never
+// collide, and the server is never reused so a run cannot attach to someone
+// else's build. See docs/testing.md ("Fixture harness").
+const fixtureE2E = process.env.E2E_FIXTURE === '1';
+const fixturePort = Number(process.env.E2E_FIXTURE_PORT || 4273);
+const fixtureWorkers = Number(process.env.E2E_FIXTURE_WORKERS || 4);
+const FIXTURE_SPEC = /.*\.fixture\.spec\.ts$/;
+
 /**
  * Playwright config for the Module 0 product golden path.
  *
@@ -29,27 +40,52 @@ const liveFailureArtifacts = process.env.E2E_LIVE_FAILURE_ARTIFACTS === '1' && !
  * production frontend and runs the route-fulfilled Growth Agent handoff
  * contract without booting the credential-gated backend. The nightly
  * workflow runs the live suite with real credentials against the deployed app.
+ * The `e2e-fixture` job runs fixture mode (E2E_FIXTURE=1, above): every route
+ * rendered against typed fixtures, with the hygiene gate on.
  */
 export default defineConfig({
   testDir: './tests/e2e',
-  testMatch: /.*\.spec\.ts$/,
-  timeout: liveE2E ? 90_000 : 30_000,
+  testMatch: fixtureE2E ? FIXTURE_SPEC : /.*\.spec\.ts$/,
+  // Fixture specs need the fixture web server and mock API, so every other
+  // mode (local, live, browser matrix, `--list`) must never collect them.
+  testIgnore: fixtureE2E ? [] : FIXTURE_SPEC,
+  timeout: fixtureE2E ? 60_000 : liveE2E ? 90_000 : 30_000,
+  ...(fixtureE2E ? { expect: { timeout: 10_000 } } : {}),
   snapshotPathTemplate: '{testDir}/{testFilePath}-snapshots/{arg}{-projectName}{ext}',
-  fullyParallel: false,
-  workers: 1,
+  fullyParallel: fixtureE2E,
+  workers: fixtureE2E ? fixtureWorkers : 1,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
-  reporter: process.env.CI ? [['list'], ['github']] : 'list',
+  reporter: fixtureE2E && process.env.CI
+    ? [['list'], ['github'], ['html', { open: 'never', outputFolder: 'playwright-report' }]]
+    : process.env.CI ? [['list'], ['github']] : 'list',
   use: {
-    baseURL: 'http://localhost:5173',
+    baseURL: fixtureE2E ? `http://127.0.0.1:${fixturePort}` : 'http://localhost:5173',
     viewport: { width: 1440, height: 900 },
-    video: liveE2E && !liveFailureArtifacts ? 'off' : 'retain-on-failure',
+    // Fixture mode keeps the trace (DOM snapshots + network) and a failure
+    // screenshot; always-on video encoding roughly doubles wall time on a
+    // loaded runner and adds nothing the trace does not show.
+    video: fixtureE2E || (liveE2E && !liveFailureArtifacts) ? 'off' : 'retain-on-failure',
     screenshot: liveE2E && !liveFailureArtifacts ? 'off' : 'only-on-failure',
     trace: liveE2E && !liveFailureArtifacts ? 'off' : 'retain-on-failure',
     actionTimeout: liveE2E ? 20_000 : 10_000,
-    navigationTimeout: liveE2E ? 30_000 : 15_000,
+    navigationTimeout: liveE2E || fixtureE2E ? 30_000 : 15_000,
   },
-  projects: browserMatrix
+  projects: fixtureE2E
+    ? [
+        {
+          name: 'fixture-chromium',
+          use: {
+            ...devices['Desktop Chrome'],
+            viewport: { width: 1440, height: 900 },
+            // Pinned so formatted dates and numbers match on every machine.
+            locale: 'en-US',
+            timezoneId: 'America/New_York',
+            contextOptions: { reducedMotion: 'reduce' },
+          },
+        },
+      ]
+    : browserMatrix
     ? [
         {
           name: 'chromium',
@@ -91,7 +127,15 @@ export default defineConfig({
   // Only boot local uvicorn + vite when the spec isn't already pointing
   // at a deployed origin. A Playwright run against a Databricks App URL
   // doesn't need (and can't use) a local backend.
-  webServer: process.env.MIP_APP_URL
+  webServer: fixtureE2E
+    ? {
+        // Serves frontend/dist; `npm run build` must already have run.
+        command: `node ./node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port ${fixturePort} --strictPort`,
+        url: `http://127.0.0.1:${fixturePort}`,
+        reuseExistingServer: false,
+        timeout: 120_000,
+      }
+    : process.env.MIP_APP_URL
     ? undefined
     : [
         {
