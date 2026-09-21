@@ -1868,16 +1868,17 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     ).toBeVisible({ timeout: 30_000 });
     await expect(page.getByLabel('Outreach draft — review only')).toBeVisible();
 
-    // Real data: the draft textarea is prefilled with a borrower-aware
+    // Real data: the review-only draft block is filled with a borrower-aware
     // message ("Hi <first name> — based on recent public-record signals…").
     // We only assert it is non-empty; the actual lender / city strings vary
-    // per borrower.
-    const draft = page.locator('textarea').first();
+    // per borrower. It is read-only text, not a textarea (2026-09-21 audit
+    // critic-02), so this reads text where it used to read an input value.
+    const draft = page.getByTestId('outreach-draft');
     await expect(draft).toBeVisible();
     await expect
-      .poll(async () => ((await draft.inputValue()) ?? '').trim().length, { timeout: 30_000 })
+      .poll(async () => ((await draft.textContent()) ?? '').trim().length, { timeout: 30_000 })
       .toBeGreaterThan(40);
-    await expect(draft).not.toHaveValue(/public-record signals|the right offer/i);
+    await expect(draft).not.toHaveText(/public-record signals|the right offer/i);
     const intelligence = page.getByTestId('offer-message-intelligence');
     await expect(intelligence).toBeVisible({ timeout: 30_000 });
     await expect(intelligence).toContainText(

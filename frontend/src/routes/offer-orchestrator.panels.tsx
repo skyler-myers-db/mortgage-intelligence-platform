@@ -18,6 +18,7 @@ import {
   type RejectReasonCode,
 } from './offer-orchestrator.constants';
 import { humanizeThresholdKey, shortSourceLabel } from './offer-orchestrator.helpers';
+import { OutreachReviewCopy } from './offer-orchestrator.review-copy';
 
 export function OfferOrchestratorEmptyState() {
   return (
@@ -473,27 +474,11 @@ function DraftOutreachPanel({
             </div>
           </div>
         )}
-        {draftChannel !== 'sms' && (
-          <label className="field mb-3">
-            <span className="field__label">Subject</span>
-            <input
-              aria-label="Outreach subject — review only"
-              value={draftSubject}
-              maxLength={120}
-              readOnly
-              disabled={!draftLoaded || draftSavePending}
-              data-testid="outreach-subject"
-            />
-          </label>
-        )}
-        <textarea
-          key={borrower?.borrower_id ?? 'empty'}
-          aria-label="Outreach draft — review only"
-          value={draftText}
-          readOnly
-          disabled={!draftLoaded || draftSavePending}
-          data-testid="outreach-draft"
-          className="route-textarea route-textarea--outreach"
+        <OutreachReviewCopy
+          channel={draftChannel}
+          subject={draftSubject}
+          body={draftText}
+          current={draftLoaded && !draftSavePending}
         />
         <p className="muted fs-12 mt-2">
           Review the exact audited copy before approval. To change the message, regenerate a new

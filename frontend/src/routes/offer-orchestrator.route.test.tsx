@@ -272,6 +272,22 @@ describe('OfferOrchestrator route behavior', () => {
     }
   }
 
+  // The reviewed subject and message are read-only text blocks, not form
+  // controls (2026-09-21 audit critic-02), so these read text and ARIA state
+  // where the tests used to read .value / .disabled / .readOnly.
+  const reviewSubject = () => container.querySelector<HTMLElement>('[data-testid="outreach-subject"]');
+  const reviewBody = () => container.querySelector<HTMLElement>('[data-testid="outreach-draft"]');
+  /** The audited draft is loaded and current: its copy is not marked aria-disabled. */
+  const reviewCopyCurrent = () => {
+    const body = reviewBody();
+    return body !== null && body.getAttribute('aria-disabled') !== 'true';
+  };
+  /** Review only: plain text, with nothing a user could type into. */
+  const isReadOnlyText = (element: HTMLElement) =>
+    !['INPUT', 'TEXTAREA'].includes(element.tagName)
+    && !element.isContentEditable
+    && element.querySelector('input, textarea, [contenteditable]') === null;
+
   function button(text: string): HTMLButtonElement {
     const match = [...container.querySelectorAll<HTMLButtonElement>('button')].find(
       (candidate) => candidate.textContent?.trim() === text,
@@ -291,11 +307,12 @@ describe('OfferOrchestrator route behavior', () => {
     expect(container.textContent).not.toContain('Offer draft unavailable');
 
     await act(async () => pendingDraft.resolve(DRAFT));
-    await waitUntil(() => container.querySelector<HTMLInputElement>('[data-testid="outreach-subject"]')?.value === DRAFT.subject);
-    const subject = container.querySelector<HTMLInputElement>('[data-testid="outreach-subject"]')!;
-    const body = container.querySelector<HTMLTextAreaElement>('[data-testid="outreach-draft"]')!;
-    expect(subject.readOnly).toBe(true);
-    expect(body.readOnly).toBe(true);
+    await waitUntil(() => reviewSubject()?.textContent === DRAFT.subject);
+    const subject = reviewSubject()!;
+    const body = reviewBody()!;
+    expect(isReadOnlyText(subject)).toBe(true);
+    expect(isReadOnlyText(body)).toBe(true);
+    expect(body.textContent).toBe(DRAFT.body);
 
     await act(async () => {
       container.querySelector<HTMLButtonElement>('[data-testid="hero-approve"]')!.click();
@@ -326,10 +343,7 @@ describe('OfferOrchestrator route behavior', () => {
       + `&variant_name=${encodeURIComponent(variantName)}`,
     );
 
-    await waitUntil(() => (
-      container.querySelector<HTMLTextAreaElement>('[data-testid="outreach-draft"]')?.disabled
-      === false
-    ));
+    await waitUntil(reviewCopyCurrent);
     const provenance = container.querySelector('[data-testid="offer-campaign-provenance"]');
     expect(provenance?.textContent).toContain('Campaign-bound draft');
     expect(provenance?.textContent).toContain('campaign 7e373ef5-d4b');
@@ -376,10 +390,7 @@ describe('OfferOrchestrator route behavior', () => {
       `/offer-orchestrator/${BORROWER_ID}?campaign_id=${campaignId}`
       + `&variant_name=${encodeURIComponent(variantName)}`,
     );
-    await waitUntil(() => (
-      container.querySelector<HTMLTextAreaElement>('[data-testid="outreach-draft"]')?.disabled
-      === false
-    ));
+    await waitUntil(reviewCopyCurrent);
 
     act(() => button('Reject').click());
     await waitUntil(() => [...container.querySelectorAll('button')].some(
@@ -408,18 +419,14 @@ describe('OfferOrchestrator route behavior', () => {
     };
     mount();
 
-    await waitUntil(() => container.querySelector<HTMLInputElement>('[data-testid="outreach-subject"]')?.value === 'email subject');
-    expect(container.querySelector<HTMLTextAreaElement>('[data-testid="outreach-draft"]')?.value)
-      .toBe('email governed body');
+    await waitUntil(() => reviewSubject()?.textContent === 'email subject');
+    expect(reviewBody()?.textContent).toBe('email governed body');
     expect(button('Save draft').disabled).toBe(false);
   });
 
   it('shows the durable audit reference after a rejection succeeds', async () => {
     mount();
-    await waitUntil(() => (
-      container.querySelector<HTMLTextAreaElement>('[data-testid="outreach-draft"]')?.disabled
-      === false
-    ));
+    await waitUntil(reviewCopyCurrent);
 
     act(() => button('Reject').click());
     await waitUntil(() => [...container.querySelectorAll('button')].some(
@@ -441,14 +448,14 @@ describe('OfferOrchestrator route behavior', () => {
       })
     ));
     mount();
-    await waitUntil(() => container.querySelector<HTMLTextAreaElement>('[data-testid="outreach-draft"]')?.disabled === false);
-    const body = container.querySelector<HTMLTextAreaElement>('[data-testid="outreach-draft"]')!;
-    expect(body.readOnly).toBe(true);
+    await waitUntil(reviewCopyCurrent);
+    expect(isReadOnlyText(reviewBody()!)).toBe(true);
 
     act(() => button('Save draft').click());
     await waitUntil(() => container.textContent?.includes('Saving…') === true);
     expect(button('Saving…').disabled).toBe(true);
-    expect(body.disabled).toBe(true);
+    // While the save is in flight the copy is marked not-current.
+    expect(reviewBody()?.getAttribute('aria-disabled')).toBe('true');
     expect(appMocks.savedDrafts[`${BORROWER_ID}::email`]).toBeUndefined();
 
     await act(async () => pendingSave.resolve({
@@ -463,15 +470,14 @@ describe('OfferOrchestrator route behavior', () => {
       updated_at: '2026-07-13T12:00:00Z',
     }));
     await waitUntil(() => container.textContent?.includes('Draft saved') === true);
-    expect(body.disabled).toBe(false);
+    expect(reviewCopyCurrent()).toBe(true);
   });
 
   it('surfaces persistence failure without unlocking audited copy', async () => {
     appMocks.saveDraft.mockRejectedValue(new Error('Lakebase unavailable'));
     mount();
-    await waitUntil(() => container.querySelector<HTMLTextAreaElement>('[data-testid="outreach-draft"]')?.disabled === false);
-    expect(container.querySelector<HTMLTextAreaElement>('[data-testid="outreach-draft"]')?.readOnly)
-      .toBe(true);
+    await waitUntil(reviewCopyCurrent);
+    expect(isReadOnlyText(reviewBody()!)).toBe(true);
 
     act(() => button('Save draft').click());
     await waitUntil(() => container.textContent?.includes("Couldn't save draft: Lakebase unavailable") === true);
@@ -543,7 +549,7 @@ describe('OfferOrchestrator route behavior', () => {
   ])('keeps approval unchanged when reject returns a $label', async ({ arrange, message }) => {
     arrange();
     mount();
-    await waitUntil(() => container.querySelector<HTMLTextAreaElement>('[data-testid="outreach-draft"]')?.disabled === false);
+    await waitUntil(reviewCopyCurrent);
 
     act(() => button('Reject').click());
     await waitUntil(() => [...container.querySelectorAll('button')].some(
@@ -609,19 +615,18 @@ describe('OfferOrchestrator route behavior', () => {
     expect(container.textContent).toContain('Review and approve outreach');
 
     act(() => button('Retry draft').click());
-    await waitUntil(() => container.querySelector<HTMLTextAreaElement>('[data-testid="outreach-draft"]')?.value === DRAFT.body);
+    await waitUntil(() => reviewBody()?.textContent === DRAFT.body);
     expect(apiMocks.draftOutreach).toHaveBeenCalledTimes(2);
   });
 
   it('switches channels by loading a new exact audited draft', async () => {
     mount();
-    await waitUntil(() => container.querySelector<HTMLTextAreaElement>('[data-testid="outreach-draft"]')?.disabled === false);
-    const body = container.querySelector<HTMLTextAreaElement>('[data-testid="outreach-draft"]')!;
-    expect(body.readOnly).toBe(true);
+    await waitUntil(reviewCopyCurrent);
+    expect(isReadOnlyText(reviewBody()!)).toBe(true);
 
     act(() => button('SMS').click());
     await waitUntil(() => apiMocks.draftOutreach.mock.calls.length === 2);
     expect(apiMocks.draftOutreach.mock.calls[1][1]).toBe('sms');
-    await waitUntil(() => container.querySelector<HTMLTextAreaElement>('[data-testid="outreach-draft"]')?.value === 'sms governed body');
+    await waitUntil(() => reviewBody()?.textContent === 'sms governed body');
   });
 });
