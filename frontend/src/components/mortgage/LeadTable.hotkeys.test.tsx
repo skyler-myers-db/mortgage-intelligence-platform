@@ -47,6 +47,12 @@ const DRAFT = {
 };
 
 let approvalsFixture: Record<string, 'approved' | 'rejected'> = {};
+const APPROVER_SESSION = {
+  canApprove: true,
+  actorEmail: 'approver.one@summit.example' as string | null,
+  sessionStatus: 'ready' as 'loading' | 'ready' | 'error',
+};
+let sessionFixture = { ...APPROVER_SESSION };
 
 vi.mock('../AppContext', () => ({
   useApp: () => ({
@@ -58,6 +64,7 @@ vi.mock('../AppContext', () => ({
     setDrawer: vi.fn(),
     showEvidence: true,
     showConfidence: true,
+    ...sessionFixture,
   }),
 }));
 
@@ -102,6 +109,7 @@ describe('LeadTable A/R hotkeys from row-internal focus', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     approvalsFixture = {};
+    sessionFixture = { ...APPROVER_SESSION };
     draftOutreach.mockResolvedValue(DRAFT);
     approve.mockResolvedValue({ approved: true });
     campaign.mockResolvedValue({
@@ -411,10 +419,10 @@ describe('LeadTable A/R hotkeys from row-internal focus', () => {
     });
 
     it.each([
-      ['an open filter listbox', '<ul class="filter-menu" role="listbox"><li role="option">IL</li></ul>'],
-      ['an open menu', '<div class="filter-menu" role="menu"><button role="menuitem">Past chat</button></div>'],
-      ['the open command palette', '<div class="cmdk"><div class="cmdk__panel" role="dialog" aria-modal="true"></div></div>'],
-      ['the open Genie panel', '<div class="genie is-open" role="dialog" aria-hidden="false"></div>'],
+      ['a filter listbox', '<ul class="filter-menu" role="listbox"><li role="option">IL</li></ul>'],
+      ['a menu', '<div class="filter-menu" role="menu"><button role="menuitem">Past chat</button></div>'],
+      ['the command palette', '<div class="cmdk"><div class="cmdk__panel" role="dialog" aria-modal="true"></div></div>'],
+      ['the Genie panel', '<div class="genie is-open" role="dialog" aria-hidden="false"></div>'],
     ])('does not approve while %s is open', async (_name, html) => {
       mount();
       const btn = expandViaBorrowerButton();
@@ -486,6 +494,104 @@ describe('LeadTable A/R hotkeys from row-internal focus', () => {
       expect(
         container.querySelector('[data-testid="lead-bulk-approve"]')?.getAttribute('aria-keyshortcuts'),
       ).toBe('Shift+A');
+    });
+  });
+
+  describe('approver role gate (flow-02 / shell-06)', () => {
+    const approveBtn = () => container.querySelector<HTMLButtonElement>(
+      '[data-testid="lead-approve-B-AAAAAAAAAAAA1"]',
+    );
+    const rejectBtn = () => container.querySelector<HTMLButtonElement>(
+      '[data-testid="lead-reject-B-AAAAAAAAAAAA1"]',
+    );
+
+    it('keeps the gate visible but disabled, with the accessible reason, for a non-approver', () => {
+      sessionFixture = { canApprove: false, actorEmail: 'analyst@summit.example', sessionStatus: 'ready' };
+      mount();
+      expandViaBorrowerButton();
+
+      const status = container.querySelector('[data-testid="approver-role-status"]');
+      expect(status?.textContent).toContain('Requires approver role');
+      expect(status?.textContent).toContain('analyst@summit.example');
+      for (const btn of [approveBtn(), rejectBtn()]) {
+        expect(btn).not.toBeNull();
+        expect(btn!.disabled).toBe(true);
+        expect(btn!.getAttribute('title')).toBe('Requires approver role');
+        expect(btn!.getAttribute('aria-describedby')).toBe(status!.id);
+        // A disabled, gated control must not advertise a live shortcut.
+        expect(btn!.getAttribute('aria-keyshortcuts')).toBeNull();
+      }
+      expect(container.querySelector('[data-testid="lead-approving-as"]')).toBeNull();
+    });
+
+    it('A / R / Shift+A do nothing for a non-approver, before any draft call', async () => {
+      sessionFixture = { canApprove: false, actorEmail: null, sessionStatus: 'ready' };
+      mount();
+      const checkbox = container.querySelector<HTMLInputElement>(
+        '[data-testid="lead-select-B-AAAAAAAAAAAA1"]',
+      );
+      if (!checkbox) throw new Error('lead checkbox not rendered');
+      act(() => checkbox.click());
+      const btn = expandViaBorrowerButton();
+
+      pressKey(btn, 'a');
+      pressKey(btn, 'r');
+      act(() => {
+        btn.dispatchEvent(new KeyboardEvent('keydown', {
+          key: 'A', shiftKey: true, bubbles: true, cancelable: true,
+        }));
+      });
+      await flush();
+
+      expect(draftOutreach).not.toHaveBeenCalled();
+      expect(approve).not.toHaveBeenCalled();
+      expect(container.querySelector('.decision-panel')).toBeNull();
+    });
+
+    it('disables bulk approve with the reason for a non-approver and never drafts on click', async () => {
+      sessionFixture = { canApprove: false, actorEmail: null, sessionStatus: 'ready' };
+      mount();
+      const checkbox = container.querySelector<HTMLInputElement>(
+        '[data-testid="lead-select-B-AAAAAAAAAAAA1"]',
+      );
+      if (!checkbox) throw new Error('lead checkbox not rendered');
+      act(() => checkbox.click());
+
+      const bulk = container.querySelector<HTMLButtonElement>('[data-testid="lead-bulk-approve"]');
+      expect(bulk).not.toBeNull();
+      expect(bulk!.disabled).toBe(true);
+      expect(bulk!.getAttribute('title')).toBe('Requires approver role');
+      expect(bulk!.getAttribute('aria-describedby')).toBe('approver-role-status');
+      expect(container.querySelector('[data-testid="approver-role-status"]')?.textContent)
+        .toContain('for this sign-in');
+
+      act(() => bulk!.click());
+      act(() => approveBtn()?.click());
+      await flush();
+
+      expect(draftOutreach).not.toHaveBeenCalled();
+      expect(approve).not.toHaveBeenCalled();
+    });
+
+    it('says "checking" rather than a false missing-role claim while the session loads', () => {
+      sessionFixture = { canApprove: false, actorEmail: null, sessionStatus: 'loading' };
+      mount();
+
+      const status = container.querySelector('[data-testid="approver-role-status"]');
+      expect(status?.textContent).toContain('Checking approver role');
+      expect(status?.textContent).not.toContain('Requires approver role');
+      expect(approveBtn()!.disabled).toBe(true);
+    });
+
+    it('names the approver the audit row will carry and leaves the controls live', () => {
+      mount();
+
+      expect(container.querySelector('[data-testid="approver-role-status"]')).toBeNull();
+      expect(container.querySelector('[data-testid="lead-approving-as"]')?.textContent)
+        .toBe('approver.one@summit.example');
+      expect(approveBtn()!.disabled).toBe(false);
+      expect(rejectBtn()!.disabled).toBe(false);
+      expect(approveBtn()!.getAttribute('aria-describedby')).toBeNull();
     });
   });
 

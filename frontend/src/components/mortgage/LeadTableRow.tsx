@@ -20,6 +20,7 @@ import {
 } from './LeadTable.logic';
 import { AssignmentLifecycleAdvance } from './AssignmentLifecycleAdvance';
 import { RowPreview } from './LeadRowPreview';
+import { APPROVER_ROLE_STATUS_ID, describedBy } from './approverGate';
 import { ScoreBadge } from './ScoreBadge';
 
 interface LeadTableRowProps {
@@ -32,6 +33,8 @@ interface LeadTableRowProps {
   isSelectable: boolean;
   isApprovalEligible: boolean;
   approvalActionsDisabled?: boolean;
+  /** Non-null = the actor may not approve; the text is the accessible reason. */
+  approverGate?: string | null;
   bulkApproving: boolean;
   salesBusy: boolean;
   salesTeamCount: number;
@@ -54,6 +57,7 @@ export function LeadTableRow({
   isSelectable,
   isApprovalEligible,
   approvalActionsDisabled = false,
+  approverGate = null,
   bulkApproving,
   salesBusy,
   salesTeamCount,
@@ -68,6 +72,11 @@ export function LeadTableRow({
   const stop = (e: ReactMouseEvent) => e.stopPropagation();
   const toggleRow = () => onToggleRow(lead, isOpen);
   const resolvedAriaRowIndex = ariaRowIndex ?? virtualIndex + 2;
+  const gated = approverGate !== null;
+  const decisionDescribedBy = describedBy(
+    gated && APPROVER_ROLE_STATUS_ID,
+    approvalActionsDisabled && 'campaign-binding-status',
+  );
 
   return (
     <Fragment>
@@ -257,16 +266,17 @@ export function LeadTableRow({
                 variant="primary"
                 size="sm"
                 icon="check"
-                disabled={approvalActionsDisabled || pendingApproval}
-                aria-describedby={approvalActionsDisabled ? 'campaign-binding-status' : undefined}
+                disabled={gated || approvalActionsDisabled || pendingApproval}
+                aria-describedby={decisionDescribedBy}
+                title={approverGate ?? undefined}
                 onClick={(e) => {
                   e.stopPropagation();
                   onApprove(lead.borrower_id);
                 }}
                 aria-label={`Approve ${lead.borrower_id}`}
                 // A / R are bound to the EXPANDED row only, so only that row
-                // advertises them (audit a11y-09).
-                aria-keyshortcuts={isOpen ? 'A' : undefined}
+                // advertises them (audit a11y-09); never for a gated actor.
+                aria-keyshortcuts={isOpen && !gated ? 'A' : undefined}
                 data-testid={`lead-approve-${lead.borrower_id}`}
               >
                 {pendingApproval ? 'Approving…' : 'Approve'}
@@ -275,10 +285,10 @@ export function LeadTableRow({
                 type="button"
                 className="btn btn--sm lead-table__reject"
                 aria-label={`Reject ${lead.borrower_id}`}
-                aria-keyshortcuts={isOpen ? 'R' : undefined}
-                title="Reject"
-                disabled={approvalActionsDisabled || pendingApproval}
-                aria-describedby={approvalActionsDisabled ? 'campaign-binding-status' : undefined}
+                aria-keyshortcuts={isOpen && !gated ? 'R' : undefined}
+                title={approverGate ?? 'Reject'}
+                disabled={gated || approvalActionsDisabled || pendingApproval}
+                aria-describedby={decisionDescribedBy}
                 onClick={(e) => {
                   e.stopPropagation();
                   onReject(lead.borrower_id);

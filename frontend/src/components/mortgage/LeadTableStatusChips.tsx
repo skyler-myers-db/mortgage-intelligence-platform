@@ -13,6 +13,7 @@ import { Chip } from '../Primitives';
 import type { GrowthAgentCohortVerification } from '../../lib/api';
 import type { CampaignBinding } from './LeadTable.logic';
 import type { CampaignBindingState } from './useLeadApprovalActions';
+import { APPROVER_ROLE_STATUS_ID } from './approverGate';
 
 interface LeadTableStatusChipsProps {
   growthAgentVerification: GrowthAgentCohortVerification | null;
@@ -23,6 +24,10 @@ interface LeadTableStatusChipsProps {
   campaignBinding: CampaignBinding | null;
   /** Borrower id of the expanded row, if any — drives the bound-offer link. */
   expandedBorrowerId: string | null;
+  /** Non-null = the actor may not approve; rendered as the visible reason. */
+  approverGate?: string | null;
+  /** The signed-in actor's own identity, named in the gate line when known. */
+  actorEmail?: string | null;
 }
 
 export function LeadTableStatusChips({
@@ -31,9 +36,22 @@ export function LeadTableStatusChips({
   requestedCampaignBinding,
   campaignBinding,
   expandedBorrowerId,
+  approverGate = null,
+  actorEmail = null,
 }: LeadTableStatusChipsProps) {
   return (
     <>
+      {approverGate !== null && (
+        // The approve / reject / bulk-approve controls point their
+        // aria-describedby here: the gate stays visible, with its reason.
+        <div id={APPROVER_ROLE_STATUS_ID} className="table-neutral chip-row" role="status" data-testid="approver-role-status">
+          <Chip variant="warning" icon="shield">{approverGate}</Chip>
+          <span>
+            Approve, reject and bulk approve are disabled
+            {actorEmail ? <> for <span className="mono">{actorEmail}</span></> : ' for this sign-in'}.
+          </span>
+        </div>
+      )}
       {growthAgentVerification && (
         <div className="table-success chip-row" role="status" data-testid="growth-agent-cohort-proof">
           <Chip variant="success" icon="shield">Verified Growth Agent cohort</Chip>

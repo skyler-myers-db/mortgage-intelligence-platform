@@ -36,6 +36,14 @@ export interface WorkspaceState {
 
 export interface SessionResponse {
   can_access_admin: boolean;
+  /** Same fail-closed decision `require_approver` enforces server-side. */
+  can_approve: boolean;
+  /**
+   * The caller's own forwarded identity — the name an approval's audit row
+   * is recorded under. Null when the edge forwarded none. Display only:
+   * never send it to telemetry.
+   */
+  actor_email?: string | null;
 }
 
 export interface WorkspaceMutationResult {

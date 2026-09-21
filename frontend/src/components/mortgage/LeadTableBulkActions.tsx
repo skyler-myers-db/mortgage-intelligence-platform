@@ -11,6 +11,7 @@ import type { RefObject } from 'react';
 import type { SalesTeamMember } from '../../types';
 import { Button } from '../Primitives';
 import type { BulkToast } from './useLeadApprovalActions';
+import { APPROVER_ROLE_STATUS_ID, describedBy } from './approverGate';
 
 interface LeadTableBulkActionsProps {
   selectionCount: number;
@@ -20,6 +21,8 @@ interface LeadTableBulkActionsProps {
   bulkRationale: string;
   onBulkRationaleChange: (value: string) => void;
   campaignBindingBlocked: boolean;
+  /** Non-null = the actor may not approve; the text is the accessible reason. */
+  approverGate?: string | null;
   salesTeam: SalesTeamMember[];
   salesBusy: boolean;
   selectedAssignee: string;
@@ -38,6 +41,7 @@ export function LeadTableBulkActions({
   bulkRationale,
   onBulkRationaleChange,
   campaignBindingBlocked,
+  approverGate = null,
   salesTeam,
   salesBusy,
   selectedAssignee,
@@ -123,11 +127,18 @@ export function LeadTableBulkActions({
           size="sm"
           icon={bulkApproving ? undefined : 'check'}
           onClick={onBulkApprove}
-          disabled={campaignBindingBlocked || bulkApproving || selectedApprovalEligibleCount === 0}
-          aria-describedby={campaignBindingBlocked ? 'campaign-binding-status' : undefined}
+          disabled={
+            approverGate !== null || campaignBindingBlocked || bulkApproving
+            || selectedApprovalEligibleCount === 0
+          }
+          aria-describedby={describedBy(
+            approverGate !== null && APPROVER_ROLE_STATUS_ID,
+            campaignBindingBlocked && 'campaign-binding-status',
+          )}
+          title={approverGate ?? undefined}
           data-testid="lead-bulk-approve"
           aria-label={`Approve ${selectedApprovalEligibleCount} eligible leads`}
-          aria-keyshortcuts="Shift+A"
+          aria-keyshortcuts={approverGate === null ? 'Shift+A' : undefined}
         >
           {bulkApproving ? 'Approving…' : `Approve ${selectedApprovalEligibleCount} eligible`}
         </Button>

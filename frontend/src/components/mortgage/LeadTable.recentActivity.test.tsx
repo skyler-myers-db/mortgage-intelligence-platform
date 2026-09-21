@@ -26,6 +26,9 @@ vi.mock('../AppContext', () => ({
     setDrawer: vi.fn(),
     showEvidence: true,
     showConfidence: true,
+    canApprove: true,
+    actorEmail: 'approver.one@summit.example',
+    sessionStatus: 'ready',
   }),
 }));
 

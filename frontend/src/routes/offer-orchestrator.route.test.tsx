@@ -34,6 +34,8 @@ const appMocks = vi.hoisted(() => ({
   saveDraft: vi.fn(),
   removeSavedDraft: vi.fn(),
   setDrawer: vi.fn(),
+  canApprove: true,
+  actorEmail: 'approver.one@summit.example' as string | null,
 }));
 
 vi.mock('../lib/api', () => {
@@ -73,6 +75,9 @@ vi.mock('../components/AppContext', () => ({
     showEvidence: true,
     showConfidence: true,
     canAccessAdmin: false,
+    canApprove: appMocks.canApprove,
+    actorEmail: appMocks.actorEmail,
+    sessionStatus: 'ready',
   }),
 }));
 
@@ -187,6 +192,8 @@ describe('OfferOrchestrator route behavior', () => {
     clearBorrowerCache();
     appMocks.approvals = {};
     appMocks.savedDrafts = {};
+    appMocks.canApprove = true;
+    appMocks.actorEmail = 'approver.one@summit.example';
     appMocks.setApproval.mockImplementation((borrowerId: string, status: 'approved' | 'rejected') => {
       appMocks.approvals[borrowerId] = status;
     });
@@ -412,6 +419,53 @@ describe('OfferOrchestrator route behavior', () => {
     expect(container.querySelector<HTMLTextAreaElement>('[data-testid="outreach-draft"]')?.value)
       .toBe('email governed body');
     expect(button('Save draft').disabled).toBe(false);
+  });
+
+  it('names the approver on the approval banner (flow-02)', async () => {
+    mount();
+    await waitUntil(() => container.querySelector('[data-testid="approval-actor"]') !== null);
+
+    expect(container.querySelector('[data-testid="approval-actor"]')?.textContent)
+      .toBe('Approving as approver.one@summit.example');
+    expect(container.querySelector('[data-testid="approval-gate-reason"]')).toBeNull();
+  });
+
+  it('keeps the approval gate visible but inert for a non-approver (flow-02)', async () => {
+    appMocks.canApprove = false;
+    appMocks.actorEmail = 'analyst@summit.example';
+    mount();
+    // Wait for the audited draft: from here the ONLY thing between this actor
+    // and an approval is the role gate (an approver's buttons are live now).
+    await waitUntil(() => (
+      container.querySelector<HTMLTextAreaElement>('[data-testid="outreach-draft"]')?.disabled
+      === false
+    ));
+
+    const reason = container.querySelector('[data-testid="approval-gate-reason"]');
+    expect(reason?.textContent).toContain('Requires approver role');
+    expect(reason?.textContent).toContain('analyst@summit.example');
+    expect(container.querySelector('[data-testid="approval-actor"]')).toBeNull();
+    const hero = container.querySelector<HTMLButtonElement>('[data-testid="hero-approve"]')!;
+    expect(hero.disabled).toBe(true);
+    expect(hero.getAttribute('title')).toBe('Requires approver role');
+    for (const label of ['Approve outreach', 'Reject']) {
+      expect(button(label).disabled).toBe(true);
+      expect(button(label).getAttribute('aria-describedby')).toBe(reason!.id);
+    }
+
+    await act(async () => {
+      hero.click();
+      button('Approve outreach').click();
+      button('Reject').click();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+
+    expect(apiMocks.approve).not.toHaveBeenCalled();
+    expect(apiMocks.reject).not.toHaveBeenCalled();
+    // Reject's first step is opening the rationale review: it must stay shut.
+    expect([...container.querySelectorAll('button')].some(
+      (candidate) => candidate.textContent?.trim() === 'Confirm reject',
+    )).toBe(false);
   });
 
   it('shows the durable audit reference after a rejection succeeds', async () => {

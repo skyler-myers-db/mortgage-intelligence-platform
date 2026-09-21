@@ -30,6 +30,7 @@ import { LeadDispositionPanel, LeadRejectPanel } from './LeadTableDecisionPanels
 import { useLeadApprovalActions, type CampaignBindingState } from './useLeadApprovalActions';
 import { useLeadSalesActions } from './useLeadSalesActions';
 import { useLeadTableHotkeys } from './useLeadTableHotkeys';
+import { approverGateReason } from './approverGate';
 import type { LeadTableProps, SortDir, SortKey } from './LeadTable.types';
 
 export { buildLeadCsv } from './LeadTable.csv';
@@ -118,7 +119,12 @@ export function LeadTable({
   // Shared error surface: both the approval path and the sales-ops path
   // report into the single `.table-error` alert this shell renders.
   const [approvalError, setApprovalError] = useState<string | null>(null);
-  const { approvals, setApproval, setLastBorrowerId, openConsoleRecentActivity } = useApp();
+  const {
+    approvals, setApproval, setLastBorrowerId, openConsoleRecentActivity,
+    canApprove, actorEmail, sessionStatus,
+  } = useApp();
+  // Audit flow-02 / shell-06: non-approvers keep a VISIBLE but disabled gate.
+  const approverGate = approverGateReason(canApprove, sessionStatus);
 
   useEffect(() => {
     if (expanded) setLastBorrowerId(expanded);
@@ -182,6 +188,7 @@ export function LeadTable({
     campaignBinding,
     campaignBindingState,
     campaignBindingBlocked,
+    canApprove: approverGate === null,
     tableWrapRef,
     setApprovalError,
   });
@@ -205,6 +212,8 @@ export function LeadTable({
     if (isEditableTarget(e.target as Element | null)) return;
     if (isEditableTarget(document.activeElement)) return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
+    // Non-approvers: A / R / Shift+A do nothing, before any draft call.
+    if (approverGate !== null) return;
     const key = e.key.toLowerCase();
     if (campaignBindingBlocked && (key === 'a' || key === 'r')) return;
     // Shift+A: bulk approve. Takes precedence over single-row A when
@@ -332,6 +341,9 @@ export function LeadTable({
                 queue can spot the shortcut without reading prose.
               */}
               Click a row to expand the preview. Keyboard: <kbd>A</kbd> approve, <kbd>R</kbd> reject the expanded row while it is still pending. Shortcuts act only while focus is in the table and no panel or menu is open.
+              {approverGate === null && actorEmail && (
+                <> Approving as <span className="mono" data-testid="lead-approving-as">{actorEmail}</span>.</>
+              )}
             </div>
           </div>
         </div>
@@ -354,6 +366,8 @@ export function LeadTable({
         requestedCampaignBinding={requestedCampaignBinding}
         campaignBinding={campaignBinding}
         expandedBorrowerId={expanded}
+        approverGate={approverGate}
+        actorEmail={actorEmail}
       />
       {approval.pendingReject && (
         <LeadRejectPanel
@@ -491,6 +505,7 @@ export function LeadTable({
                     isSelectable={isSelectable}
                     isApprovalEligible={isApprovalEligible}
                     approvalActionsDisabled={campaignBindingBlocked}
+                    approverGate={approverGate}
                     bulkApproving={approval.bulkApproving}
                     salesBusy={sales.salesBusy}
                     salesTeamCount={salesTeam.length}
@@ -526,6 +541,7 @@ export function LeadTable({
           bulkRationale={approval.bulkRationale}
           onBulkRationaleChange={approval.setBulkRationale}
           campaignBindingBlocked={campaignBindingBlocked}
+          approverGate={approverGate}
           salesTeam={salesTeam}
           salesBusy={sales.salesBusy}
           selectedAssignee={sales.selectedAssignee}
