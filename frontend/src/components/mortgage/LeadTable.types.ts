@@ -6,6 +6,10 @@ export interface LeadExportContext {
   filters?: string;
   refreshedAt?: string | null;
   rulesVersion?: string | null;
+  /** Which rows the file holds: the operator's selection or the loaded list. */
+  scope?: 'selected_rows' | 'loaded_rows';
+  /** On-screen order the rows were written in, e.g. `rank` or `equity desc`. */
+  rowOrder?: string;
 }
 
 export interface LeadTableProps {

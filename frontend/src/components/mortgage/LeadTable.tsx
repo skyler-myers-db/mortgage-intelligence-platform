@@ -7,7 +7,12 @@ import { Button } from '../Primitives';
 import { useApp } from '../AppContext';
 import { api } from '../../lib/api';
 import { queryKeys } from '../../lib/queryKeys';
-import { buildLeadCsv } from './LeadTable.csv';
+import {
+  buildLeadCsv,
+  describeLeadCsvExport,
+  downloadLeadCsv,
+  planLeadCsvExport,
+} from './LeadTable.csv';
 import {
   LEAD_EXPANDED_PREVIEW_ESTIMATE_PX,
   LEAD_ROW_ESTIMATE_PX,
@@ -119,6 +124,7 @@ export function LeadTable({
   // Shared error surface: both the approval path and the sales-ops path
   // report into the single `.table-error` alert this shell renders.
   const [approvalError, setApprovalError] = useState<string | null>(null);
+  const [exportNotice, setExportNotice] = useState<string | null>(null);
   const {
     approvals, setApproval, setLastBorrowerId, openConsoleRecentActivity,
     canApprove, actorEmail, sessionStatus,
@@ -251,27 +257,38 @@ export function LeadTable({
   }
 
   /**
-   * Export the currently-visible leads as CSV. Client-side only: the
-   * bytes come straight from the `leads` prop the caller already passed
-   * in (which is the real /api/leads payload after any segment/filter
-   * narrowing the parent route applied). We do NOT invent a server-side
-   * export endpoint or synthesize fields the payload doesn't carry — so
-   * PII stays suppressed by construction.
+   * Export as CSV. Client-side only: the bytes come from the real /api/leads
+   * payload the parent route already narrowed. We do NOT invent a server-side
+   * export endpoint or synthesize fields the payload doesn't carry — so PII
+   * stays suppressed by construction.
+   *
+   * Audit tables-08 (2026-09-21): the export used to serialise the raw
+   * `leads` prop — ignoring the selection AND the sort — and its label
+   * counted pre-gate rows, so it could announce "500 leads" and write zero.
+   * It now writes the selection when one exists, otherwise the rows in their
+   * on-screen order, and every count is the post-eligibility count.
    */
+  const csvExport = planLeadCsvExport(sortedLeads, approval.selectedIds);
+  const csvExportCount = csvExport.rows.length;
+  const csvExportNoun = csvExport.scope === 'selected_rows'
+    ? 'selected'
+    : csvExportCount === 1 ? 'lead' : 'leads';
   function exportCsv() {
-    if (leads.length === 0) return;
-    const csv = buildLeadCsv(leads, approvals, exportContext);
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    const stamp = new Date().toISOString().slice(0, 10);
-    a.download = `mip-leads-${stamp}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    if (csvExportCount === 0) return;
+    const rowOrder = sortKey === 'rank' ? 'rank' : `${sortKey} ${sortDir}`;
+    downloadLeadCsv(buildLeadCsv(csvExport.rows, approvals, {
+      ...exportContext,
+      scope: csvExport.scope,
+      rowOrder,
+    }));
+    setExportNotice(describeLeadCsvExport(csvExport, rowOrder));
   }
+
+  useEffect(() => {
+    if (!exportNotice) return;
+    const t = window.setTimeout(() => setExportNotice(null), 8000);
+    return () => window.clearTimeout(t);
+  }, [exportNotice]);
 
   function toggleSort(key: SortKey) {
     if (key === 'rank') {
@@ -352,11 +369,14 @@ export function LeadTable({
             size="sm"
             icon="export"
             onClick={exportCsv}
-            disabled={leads.length === 0}
+            disabled={csvExportCount === 0}
             data-testid="lead-export"
-            aria-label={`Export ${leads.length} leads as CSV`}
+            aria-label={`Export ${csvExportCount.toLocaleString()} ${csvExportNoun} as CSV`}
+            title={csvExportCount === 0 && csvExport.excluded > 0
+              ? 'Every row in scope is excluded by the marketing-eligibility gate'
+              : undefined}
           >
-            Export list
+            Export {csvExportCount.toLocaleString()} {csvExportNoun}
           </Button>
         </div>
       </div>
@@ -400,6 +420,11 @@ export function LeadTable({
           onCancel={() => sales.setPendingDisposition(null)}
           onSubmit={() => void sales.submitDisposition()}
         />
+      )}
+      {exportNotice && (
+        <div role="status" aria-live="polite" className="table-success" data-testid="lead-export-notice">
+          {exportNotice}
+        </div>
       )}
       {sales.salesToast && (
         <div role="status" aria-live="polite" className="table-success">
