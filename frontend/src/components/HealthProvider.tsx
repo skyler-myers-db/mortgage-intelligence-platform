@@ -7,8 +7,10 @@ import {
   useState,
   type PropsWithChildren,
 } from 'react';
+import { QueryClientContext } from '@tanstack/react-query';
 import { api, isAbortError, type HealthPayload } from '../lib/api';
 import { normalizeWorkspaceHost } from '../lib/ucAssetLinks';
+import { recoveredDependencies, refetchRecoveredQueries } from './healthRecovery';
 
 /**
  * HealthProvider — one `/api/health` poll, shared via context.
@@ -22,6 +24,11 @@ import { normalizeWorkspaceHost } from '../lib/ucAssetLinks';
  * Consumers pull the latest payload with `useHealth()`.
  *
  * Round-2 hole-finder #21, 2026-04-23.
+ *
+ * Audit 2026-09-21: the poll also owns an edge nothing else can see.
+ *   - Recovery (`states-03`): when a dependency crosses down → up, the mounted
+ *     queries that failed because of THAT dependency are refetched (see
+ *     `healthRecovery.ts`), so panels recover on every route, not only Home.
  */
 
 interface HealthContextValue {
@@ -189,6 +196,11 @@ export function HealthProvider({
   const [health, setHealth] = useState<HealthPayload | null>(null);
   const [probeMs, setProbeMs] = useState<number | null>(null);
   const [fetchedAt, setFetchedAt] = useState<string | null>(null);
+  // Optional on purpose: isolated mounts (unit tests, stories) have no
+  // QueryClientProvider, and `useQueryClient()` would throw there.
+  const queryClient = useContext(QueryClientContext);
+  // Breaker states from the previous probe, for the open → closed edge.
+  const breakersRef = useRef<HealthPayload['circuit_breakers']>(undefined);
   // Latest cadence decision in a ref so the polling loop reads the fresh
   // value without being re-registered every time the state flips.
   const pollFastRef = useRef(false);
@@ -236,11 +248,19 @@ export function HealthProvider({
           performance.now(),
           debounceUpMs,
         );
+        const recovered = recoveredDependencies(
+          debounceRef.current,
+          next,
+          breakersRef.current,
+          payload.circuit_breakers,
+        );
         debounceRef.current = next;
+        breakersRef.current = payload.circuit_breakers;
         setHealth(payload);
         setProbeMs(elapsed);
         setFetchedAt(new Date().toISOString());
         pollFastRef.current = shouldPollFast(payload);
+        if (queryClient) refetchRecoveredQueries(queryClient, recovered);
       } catch (err) {
         if (isAbortError(err) || cancelled) return;
         // api.health() swallows network errors internally and returns
@@ -290,7 +310,7 @@ export function HealthProvider({
         document.removeEventListener('visibilitychange', onVisibilityChange);
       }
     };
-  }, [fetchHealth, pollIntervalDegradedMs, pollIntervalOkMs, debounceUpMs]);
+  }, [fetchHealth, pollIntervalDegradedMs, pollIntervalOkMs, debounceUpMs, queryClient]);
 
   const value = useMemo<HealthContextValue>(
     () => ({
