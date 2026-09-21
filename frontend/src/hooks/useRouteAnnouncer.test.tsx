@@ -160,6 +160,19 @@ describe('useRouteAnnouncer', () => {
     expect(announcer().textContent).toBe('Borrower 360');
   });
 
+  it('re-announces when two consecutive pages share a label', async () => {
+    await mount('/lead-queue');
+    await go('/borrower-360/first');
+    expect(announcer().textContent).toBe('Borrower 360');
+
+    await go('/borrower-360/second');
+
+    // Same words, different text node value: the live region speaks again.
+    expect(announcer().textContent).toBe('Borrower 360\u00A0');
+    await go('/borrower-360/third');
+    expect(announcer().textContent).toBe('Borrower 360');
+  });
+
   it('names an unknown path "Page not found"', async () => {
     await mount('/lead-queue');
 

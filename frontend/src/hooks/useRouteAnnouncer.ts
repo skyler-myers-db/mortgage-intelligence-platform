@@ -69,8 +69,12 @@ export function useRouteAnnouncer(
     const pathnameChanged = previous.pathname !== pathname;
     if (!pathnameChanged && previous.hash === hash) return undefined;
 
-    if (pathnameChanged && liveRegionRef.current) {
-      liveRegionRef.current.textContent = label;
+    const live = liveRegionRef.current;
+    if (pathnameChanged && live) {
+      // A live region only speaks when its text CHANGES. Two consecutive pages
+      // can share a label (detail routes whose id is not a masked id), so a
+      // repeat toggles a trailing no-break space to stay audible.
+      live.textContent = live.textContent === label ? `${label}\u00A0` : label;
     }
     const main = mainRef.current;
     if (!main || focusHeldByDialog()) return undefined;
