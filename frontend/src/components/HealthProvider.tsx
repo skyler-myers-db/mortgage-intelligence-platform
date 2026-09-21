@@ -25,10 +25,15 @@ import { recoveredDependencies, refetchRecoveredQueries } from './healthRecovery
  *
  * Round-2 hole-finder #21, 2026-04-23.
  *
- * Audit 2026-09-21: the poll also owns an edge nothing else can see.
+ * Audit 2026-09-21: the poll also owns two edges nothing else can see.
  *   - Recovery (`states-03`): when a dependency crosses down → up, the mounted
  *     queries that failed because of THAT dependency are refetched (see
  *     `healthRecovery.ts`), so panels recover on every route, not only Home.
+ *   - New build (`bundle-01`): the health body carries `git_sha`. The first
+ *     non-empty sha is remembered; a later, different non-empty sha flips
+ *     `updateAvailable` so the shell can offer a reload before a stale tab
+ *     asks for a chunk that no longer exists. Bare deploys report no sha and
+ *     are ignored.
  */
 
 interface HealthContextValue {
@@ -40,6 +45,8 @@ interface HealthContextValue {
   fetchedAt: string | null;
   /** True when any dependency is down or the backend returned status='degraded'. */
   degraded: boolean;
+  /** True once a poll reports a different build than the one this tab loaded. */
+  updateAvailable: boolean;
 }
 
 const HealthContext = createContext<HealthContextValue | null>(null);
@@ -196,9 +203,12 @@ export function HealthProvider({
   const [health, setHealth] = useState<HealthPayload | null>(null);
   const [probeMs, setProbeMs] = useState<number | null>(null);
   const [fetchedAt, setFetchedAt] = useState<string | null>(null);
+  const [updateAvailable, setUpdateAvailable] = useState(false);
   // Optional on purpose: isolated mounts (unit tests, stories) have no
   // QueryClientProvider, and `useQueryClient()` would throw there.
   const queryClient = useContext(QueryClientContext);
+  // Build this tab booted from: the first non-empty `git_sha` the poll saw.
+  const loadedGitShaRef = useRef<string | null>(null);
   // Breaker states from the previous probe, for the open → closed edge.
   const breakersRef = useRef<HealthPayload['circuit_breakers']>(undefined);
   // Latest cadence decision in a ref so the polling loop reads the fresh
@@ -256,6 +266,11 @@ export function HealthProvider({
         );
         debounceRef.current = next;
         breakersRef.current = payload.circuit_breakers;
+        const gitSha = (rawPayload.git_sha ?? '').trim();
+        if (gitSha) {
+          if (loadedGitShaRef.current === null) loadedGitShaRef.current = gitSha;
+          else if (gitSha !== loadedGitShaRef.current) setUpdateAvailable(true);
+        }
         setHealth(payload);
         setProbeMs(elapsed);
         setFetchedAt(new Date().toISOString());
@@ -318,8 +333,9 @@ export function HealthProvider({
       probeMs,
       fetchedAt,
       degraded: computeDegraded(health),
+      updateAvailable,
     }),
-    [health, probeMs, fetchedAt],
+    [health, probeMs, fetchedAt, updateAvailable],
   );
 
   return <HealthContext.Provider value={value}>{children}</HealthContext.Provider>;

@@ -22,7 +22,9 @@ import { apiPath } from '../../lib/apiPaths';
  *
  * BEM class names (`degraded-banner`, `__ico`, `__body`, `__title`,
  * `__sub`, `__dot`) live in `design-system/components.css` and mirror
- * the `.approval` surface's token vocabulary (amber warning).
+ * the `.approval` surface's token vocabulary (amber warning). The
+ * `--info` modifier and `__actions` element are used by <VersionNotice>,
+ * which shares this slot at the top of `<main>`.
  */
 
 export interface HealthPayload {

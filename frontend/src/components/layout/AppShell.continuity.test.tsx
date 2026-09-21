@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes, useNavigate, type NavigateFunction } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { api } from '../../lib/api';
 import { AppShell } from './AppShell';
 import { PageShell } from './PageShell';
 
@@ -55,6 +56,8 @@ describe('AppShell route continuity', () => {
     queryClient.clear();
     window.sessionStorage.clear();
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   async function mount(initialEntry: string): Promise<HTMLElement> {
@@ -117,5 +120,31 @@ describe('AppShell route continuity', () => {
     expect(document.title).toBe('Borrower 360 · B-0123456789ABC · Mortgage Intelligence Platform');
     expect(region.textContent).toBe('Borrower 360 · B-0123456789ABC');
     expect(document.activeElement).toBe(container.querySelector('main h1'));
+  });
+
+  it('offers a reload inside <main> when the backend build changes under the open tab', async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
+    let gitSha = 'abc1234';
+    vi.spyOn(api, 'health').mockImplementation(async () => ({
+      status: 'ok',
+      mode: 'live',
+      dependencies: { warehouse: 'up', lakebase: 'up', genie: 'up' },
+      git_sha: gitSha,
+    }));
+    const main = await mount('/lead-queue');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(main.querySelector('.degraded-banner--info')).toBeNull();
+
+    gitSha = 'def5678'; // a deploy lands; the next 8 s health poll sees it
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(8000);
+    });
+
+    expect(main.querySelector('.degraded-banner--info')?.textContent).toContain('A new version is available');
+    expect(main.querySelector('.degraded-banner--info button')?.textContent).toBe('Reload');
+    Reflect.deleteProperty(document, 'visibilityState');
   });
 });

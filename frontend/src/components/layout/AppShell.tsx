@@ -8,6 +8,7 @@ import { Topbar } from './Topbar';
 import { CommandPalette } from '../command/CommandPalette';
 import { EvidenceDrawer } from '../mortgage/EvidenceDrawer';
 import { DegradedBanner } from '../mortgage/DegradedBanner';
+import { VersionNotice } from '../mortgage/VersionNotice';
 import { Icon } from '../Icon';
 import { lazyWithPreload, preloadBestEffort } from '../../lib/lazyPreload';
 import { createIdlePreloader } from '../../lib/prefetch';
@@ -195,6 +196,7 @@ function AppShellInner({ children }: PropsWithChildren) {
       />
       <main ref={mainRef} id="main-content" tabIndex={-1} className="main">
         <DegradedBanner />
+        <VersionNotice />
         {children}
       </main>
       <EvidenceDrawer />

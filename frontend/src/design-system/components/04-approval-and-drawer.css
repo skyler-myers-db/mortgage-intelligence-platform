@@ -458,6 +458,19 @@
   0%, 100% { opacity: 1; }
   50%      { opacity: 0.35; }
 }
+/* Info variant + action slot: the "A new version is available" notice
+   (VersionNotice) shares the banner's slot and layout but is information,
+   not a warning, so it swaps the amber family for the accent family.
+   `__actions` mirrors `.approval__actions`. */
+.degraded-banner--info {
+  background: var(--accent-soft);
+  border-color: var(--chip-line);
+}
+.degraded-banner--info .degraded-banner__ico {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+.degraded-banner__actions { display: flex; gap: var(--sp-2); flex: 0 0 auto; }
 
 /* ============================================================
    DATA SOURCE DRAWER

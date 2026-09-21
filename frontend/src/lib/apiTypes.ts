@@ -38,6 +38,12 @@ export interface HealthPayload {
    * status reports degraded). Absent on the anonymous liveness body.
    */
   campaign_treatment_runtime?: string;
+  /**
+   * Commit the running backend was built from. Present only after a governed
+   * scripts/deploy.sh promotion; bare deploys omit it. HealthProvider compares
+   * it across polls to offer a reload when a new build ships under an open tab.
+   */
+  git_sha?: string | null;
   forced_degraded?: {
     active: boolean;
     dependency: string;
