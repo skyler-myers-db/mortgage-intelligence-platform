@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router';
 import { api, type LeadsPageResult } from '../lib/api';
+import { leadsQuery, type LeadsRequest } from '../lib/leadsQuery';
 import { useConfigOptionsQuery } from '../lib/configOptionsQuery';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import type { PortfolioPreview, SalesTeamMember } from '../types';
@@ -208,6 +209,38 @@ export default function LeadQueue() {
   // lead_population, so ZIPs whose borrowers didn't make the national
   // top 500 rendered as 0 rows (the "ZIP shows 19 but queue shows 0"
   // bug). Re-runs when state, zip, or segment changes.
+  // Audit runtime-02 / tables-v1 (2026-09-21): ONE request object feeds the
+  // fetcher and the query key (see lib/leadsQuery.ts). The key used to be a
+  // second hand-written list that forgot `cities`, so two city drill-downs
+  // shared one cache entry and the table showed the wrong cohort.
+  const leadsRequest: LeadsRequest = {
+    segment,
+    geo: {
+      state: stateFilter,
+      zip: zipFilter,
+      county: countyFilter,
+      counties: countyFilters,
+      states: stateFilters,
+      zips: zipFilters,
+      cities: cityFilters,
+      borrowerIds: borrowerIdFilters,
+    },
+    opts: {
+      segmentCodes,
+      segmentMode,
+      targetLenderRef,
+      cohortId,
+      funnelStage,
+      portfolioCriteria,
+      approvalStatus: approvalStatus === 'any' ? 'any' : approvalStatus as 'pending' | 'approved' | 'rejected' | 'hold',
+      outreachStatus: outreachStatus === 'any' ? 'any' : outreachStatus as 'none' | 'queued' | 'actioned' | 'sent' | 'bounced' | 'replied',
+      assignedTo,
+      agedDays,
+    },
+  };
+  // The Growth Agent proof is the one input api.leadsPage reads from outside
+  // the request (window.location), so its URL fingerprint rides in the key.
+  const leadsPageQuery = leadsQuery('lead-queue', leadsRequest, [growthAgentProofKey]);
   const {
     data: leadsData,
     warmingUp,
@@ -216,79 +249,11 @@ export default function LeadQueue() {
     isFetching: leadsFetching,
     isPlaceholderData: leadsPlaceholderData,
   } = useWarmingUpRetry<LeadsPageResult>(
-    (signal) => api.leadsPage(
-      segment,
-      signal,
-      {
-        state: stateFilter,
-        zip: zipFilter,
-        county: countyFilter,
-        counties: countyFilters,
-        states: stateFilters,
-        zips: zipFilters,
-        cities: cityFilters,
-        borrowerIds: borrowerIdFilters,
-      },
-      {
-        segmentCodes,
-        segmentMode,
-        targetLenderRef,
-        cohortId,
-        funnelStage,
-        portfolioCriteria,
-        approvalStatus: approvalStatus === 'any' ? 'any' : approvalStatus as 'pending' | 'approved' | 'rejected' | 'hold',
-        outreachStatus: outreachStatus === 'any' ? 'any' : outreachStatus as 'none' | 'queued' | 'actioned' | 'sent' | 'bounced' | 'replied',
-        assignedTo,
-        agedDays,
-      },
-    ),
-    [
-      segment,
-      stateFilter,
-      zipFilter,
-      countyFilter,
-      countyFilters.join(','),
-      stateFilters.join(','),
-      zipFilters.join(','),
-      cityFilters.join(','),
-      borrowerIdFilters.join(','),
-      segmentCodes.join(','),
-      segmentMode,
-      targetLenderRef,
-      JSON.stringify(portfolioCriteria ?? {}),
-      cohortId,
-      funnelStage,
-      approvalStatus,
-      outreachStatus,
-      assignedTo,
-      agedDays,
-      growthAgentProofKey,
-    ],
-    {
-      queryKey: queryKeys.leads([
-        'lead-queue',
-        segment ?? '',
-        stateFilter ?? '',
-        zipFilter ?? '',
-        countyFilter ?? '',
-        countyFilters.join(','),
-        stateFilters.join(','),
-        zipFilters.join(','),
-        borrowerIdFilters.join(','),
-        segmentCodes.join(','),
-        segmentMode,
-        targetLenderRef ?? '',
-        JSON.stringify(portfolioCriteria ?? {}),
-        cohortId ?? '',
-        funnelStage ?? '',
-        approvalStatus,
-        outreachStatus,
-        assignedTo ?? '',
-        agedDays ?? '',
-        growthAgentProofKey,
-      ]),
-      keepPreviousData: true,
-    },
+    leadsPageQuery.fetcher,
+    // Ignored while `queryKey` is passed (see useWarmingUpRetry); kept equal
+    // to the key's inputs so the fallback key stays correct if that changes.
+    [leadsRequest, growthAgentProofKey],
+    { queryKey: leadsPageQuery.queryKey, keepPreviousData: true },
   );
   const loading = leadsData === null && warmingUp === null && error === null;
   const queueRefetchWarming = leadsData !== null && warmingUp !== null;
