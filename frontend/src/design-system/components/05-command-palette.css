@@ -365,15 +365,6 @@
 .glossary-term:hover .glossary-term__tip,.glossary-term:focus-visible .glossary-term__tip{opacity:1;transform:translateY(0)}.glossary-term__tip-title,.glossary-term__tip-context{display:block}.glossary-term__tip-title{margin-bottom:var(--sp-1);color:var(--text-1);font-weight:700}.glossary-term__tip-context{margin-top:var(--sp-2);color:var(--text-3)}
 .glossary-layout{display:grid;grid-template-columns:minmax(220px,.28fr) minmax(0,1fr);gap:var(--gap-grid)}.glossary-index{align-self:start;position:sticky;top:var(--sp-4)}.glossary-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--sp-4)}
 .glossary-entry{padding-block:var(--sp-3);border-bottom:1px solid var(--line-1)}.glossary-entry:last-child{border-bottom:0}.glossary-entry__term{margin:0;color:var(--text-1);font-size:var(--fs-18);line-height:var(--lh-snug)}.glossary-entry__aliases{display:flex;flex-wrap:wrap;gap:var(--sp-2);margin-top:var(--sp-1);color:var(--text-3);font-size:var(--fs-11)}.glossary-entry__detail{margin-top:var(--sp-3)}.glossary-entry__detail>p{margin:var(--sp-1) 0 0;color:var(--text-2);font-size:var(--fs-13);line-height:var(--lh-body)}
-/* Glossary deep links (/glossary#clip, category chips). `scroll-margin-top`
-   clears the sticky .route-nav for native fragment jumps; useMainScroll reads
-   the same value for client-side navigation. `:target` only matches a native
-   fragment navigation (history.pushState never updates it), so the route also
-   sets `.is-target` from the router's hash. The spread shadow widens the tint
-   into the grid gap without moving any layout. */
-.glossary-section,.glossary-entry{scroll-margin-top:var(--sp-16)}
-.glossary-entry:target,.glossary-entry.is-target{background:var(--accent-soft);border-radius:var(--r-md);box-shadow:0 0 0 var(--sp-2) var(--accent-soft)}
-.glossary-section:target,.glossary-section.is-target{border-color:var(--chip-line)}
 @media(max-width:900px){.proof-formula-grid,.glossary-layout,.glossary-grid{grid-template-columns:1fr}.glossary-index{position:static}}
 
 .lineage-node {

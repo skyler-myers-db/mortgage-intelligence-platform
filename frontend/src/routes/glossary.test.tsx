@@ -1,8 +1,15 @@
+// @ts-expect-error Frontend app types intentionally exclude Node globals; this
+// unit test reads the route stylesheet as text under Vitest only.
+import { readFileSync } from 'node:fs';
+// @ts-expect-error see node:fs note above.
+import { join } from 'node:path';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
 import { describe, expect, it } from 'vitest';
 import { designCss } from '../test/designCss';
 import GlossaryRoute from './glossary';
+
+declare const process: { cwd(): string };
 
 /**
  * Glossary deep links (audit 2026-09-21 `shell-03`): every <GlossaryTerm> in
@@ -61,11 +68,16 @@ describe('GlossaryRoute hash targets', () => {
   });
 
   it('styles the target from tokens and clears the sticky route nav', () => {
-    const css = designCss();
+    const css: string = readFileSync(join(process.cwd(), 'src', 'routes', 'glossary.css'), 'utf8');
 
-    expect(css).toMatch(/\.glossary-section,\.glossary-entry\{scroll-margin-top:var\(--sp-16\)\}/);
+    expect(css).toMatch(/\.glossary-section,\s*\.glossary-entry\s*\{\s*scroll-margin-top:\s*var\(--sp-16\);/);
     expect(css).toMatch(
-      /\.glossary-entry:target,\.glossary-entry\.is-target\{background:var\(--accent-soft\);border-radius:var\(--r-md\)/,
+      /\.glossary-entry:target,\s*\.glossary-entry\.is-target\s*\{\s*background:\s*var\(--accent-soft\);/,
     );
+    expect(css).toMatch(/\.glossary-section:target,\s*\.glossary-section\.is-target\s*\{/);
+  });
+
+  it('ships that styling with the lazy route, not the initial stylesheet', () => {
+    expect(designCss()).not.toContain('is-target');
   });
 });

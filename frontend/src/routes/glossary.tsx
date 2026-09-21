@@ -3,6 +3,7 @@ import { PageShell } from '../components/layout/PageShell';
 import { Chip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { glossaryEntries, type GlossaryCategory } from '../lib/mortgageGlossary';
+import './glossary.css';
 
 const CATEGORY_LABELS: Record<GlossaryCategory, string> = {
   property: 'Property and ownership',
