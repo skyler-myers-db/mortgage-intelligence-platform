@@ -13,6 +13,7 @@ import { lazyWithPreload, preloadBestEffort } from '../../lib/lazyPreload';
 import { createIdlePreloader } from '../../lib/prefetch';
 import { clearActorScopedBrowserState } from '../../lib/actorScopedBrowserState';
 import { clearActorScopedMemoryCaches } from '../../lib/actorScopedMemoryCaches';
+import { useMainScroll } from '../../hooks/useMainScroll';
 
 const LazyConsole = lazyWithPreload(() =>
   import('./Console').then((module) => ({ default: module.Console })),
@@ -59,6 +60,8 @@ const preloadDrawerSources = createIdlePreloader(() => import('../../lib/drawerS
  *     `<header>` landmark (implicit `banner` role + explicit for AT
  *     parity). `<main id="main-content">` is the primary content
  *     landmark.
+ *   - Route continuity (audit 2026-09-21): `useMainScroll` resets / restores
+ *     the persistent `.main` scroller per history entry.
  */
 export function AppShell({ children }: PropsWithChildren) {
   return (
@@ -118,6 +121,8 @@ function AppShellInner({ children }: PropsWithChildren) {
   const { health } = useHealth();
   const queryClient = useQueryClient();
   const actorCacheKeyRef = useRef<string | null>(null);
+  const mainRef = useRef<HTMLElement | null>(null);
+  useMainScroll(mainRef);
 
   useEffect(() => {
     const cancelConsole = preloadConsole();
@@ -171,7 +176,7 @@ function AppShellInner({ children }: PropsWithChildren) {
       <Rail />
       <Topbar />
       <CommandPalette />
-      <main id="main-content" tabIndex={-1} className="main">
+      <main ref={mainRef} id="main-content" tabIndex={-1} className="main">
         <DegradedBanner />
         {children}
       </main>
