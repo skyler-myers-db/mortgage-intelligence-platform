@@ -370,7 +370,8 @@ export interface Borrower360 extends LeadSummary {
   current_lien_balance_low?: number;
   current_lien_balance_high?: number;
   current_rate: number;
-  ltv: number;
+  ltv: number | null; // wire is `int | None`: withheld when ltv_basis_is_unreliable
+  ltv_basis_is_unreliable?: boolean;
   related_property_count: number;
   situs_cbsa_code?: string | null;
   first_pos_loan_type?: string | null;
