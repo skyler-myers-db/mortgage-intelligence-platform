@@ -168,11 +168,20 @@ export function useMainScroll(mainRef: RefObject<HTMLElement | null>): void {
 
   // Record the live offset against the current history entry, and let real
   // user scroll intent cancel a restore that is still waiting for content.
+  //
+  // `scroll` alone is not a reliable record of where the user left: it is
+  // delivered on the next rendering opportunity, so the last movement before a
+  // click can be missing, and a throttled or background tab delivers none at
+  // all (seen in a real browser: scrollTop 2200, zero scroll events, 451
+  // restored). So the offset is also captured at the moments a navigation can
+  // begin, while the outgoing route is still in the DOM: any click (capture
+  // phase, before a link's handler navigates), `popstate` (Back / Forward:
+  // React has not committed the new route yet) and `pagehide` (reload).
   useEffect(() => {
     const main = mainRef.current;
     if (!main) return undefined;
     const offsets = (offsetsRef.current ??= readStoredOffsets());
-    const onScroll = () => {
+    const capture = () => {
       const key = activeKeyRef.current;
       if (key === null || restoringRef.current) return;
       rememberOffset(offsets, key, main.scrollTop);
@@ -180,17 +189,24 @@ export function useMainScroll(mainRef: RefObject<HTMLElement | null>): void {
     const onUserIntent = () => {
       cancelPendingRef.current?.();
     };
-    const onPageHide = () => writeStoredOffsets(offsets);
-    main.addEventListener('scroll', onScroll, { passive: true });
+    const onPageHide = () => {
+      capture();
+      writeStoredOffsets(offsets);
+    };
+    main.addEventListener('scroll', capture, { passive: true });
     for (const type of USER_SCROLL_INTENT_EVENTS) {
       main.addEventListener(type, onUserIntent, { passive: true });
     }
+    window.addEventListener('click', capture, { capture: true, passive: true });
+    window.addEventListener('popstate', capture);
     window.addEventListener('pagehide', onPageHide);
     return () => {
-      main.removeEventListener('scroll', onScroll);
+      main.removeEventListener('scroll', capture);
       for (const type of USER_SCROLL_INTENT_EVENTS) {
         main.removeEventListener(type, onUserIntent);
       }
+      window.removeEventListener('click', capture, { capture: true });
+      window.removeEventListener('popstate', capture);
       window.removeEventListener('pagehide', onPageHide);
     };
   }, [mainRef]);

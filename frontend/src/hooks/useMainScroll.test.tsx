@@ -185,6 +185,46 @@ describe('useMainScroll', () => {
     expect(main().scrollTop).toBe(300);
   });
 
+  it('captures the offset at click time, even when no scroll event was delivered', async () => {
+    await mount(['/lead-queue']);
+    // The last scroll movement before a click has no `scroll` event yet, and a
+    // throttled tab delivers none at all: move the offset WITHOUT the event.
+    main().scrollTop = 770;
+    await act(async () => {
+      main().dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await go('/borrower-360/B-0123456789ABC');
+    expect(main().scrollTop).toBe(0);
+
+    await go(-1);
+
+    expect(main().scrollTop).toBe(770);
+  });
+
+  it('captures the offset on popstate, before the router commits the Back navigation', async () => {
+    await mount(['/lead-queue']);
+    await go('/analytics');
+    main().scrollTop = 300; // no scroll event delivered
+    await act(async () => {
+      window.dispatchEvent(new Event('popstate'));
+    });
+    await go(-1);
+
+    await go(1);
+
+    expect(main().scrollTop).toBe(300);
+  });
+
+  it('captures the offset on pagehide, so a reload restores what was on screen', async () => {
+    await mount([{ pathname: '/lead-queue', key: 'entry-9' }]);
+    main().scrollTop = 2200; // no scroll event delivered
+    await act(async () => {
+      window.dispatchEvent(new Event('pagehide'));
+    });
+
+    expect(readStoredOffsets().get('entry-9')).toBe(2200);
+  });
+
   it('waits for content to be tall enough before restoring, then restores once', async () => {
     await mount(['/lead-queue']);
     await userScrollTo(770);
