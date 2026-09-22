@@ -332,6 +332,16 @@
   top: 0;
   z-index: var(--z-sticky);
 }
+/* The route nav is an app-added element (the prototype has a rail plus
+   `.segmented`, design_files/index.html:926-935) that RouteNav.tsx builds
+   from `.filter` anchors; tokens.css only sets `a { color: inherit }`, so
+   the labels rendered with the browser's default underline and read as raw
+   links (2026-09-21 audit visual-05, S part). Hover keeps the chip's own
+   border/colour step and focus keeps the global ring, so neither state
+   relies on the underline. */
+.route-nav .filter,
+.route-nav .filter:hover,
+.route-nav .filter:focus-visible { text-decoration: none; }
 
 /* Left rail */
 .rail {

@@ -331,3 +331,24 @@ test.describe('pressed states', () => {
     }
   });
 });
+
+test.describe('route navigation links', () => {
+  test('nav labels render without the browser underline and still show hover and focus', async ({ app, page }) => {
+    await app.gotoRoute('/lead-queue');
+    const links = page.getByRole('navigation', { name: 'Main navigation' }).getByRole('link');
+    const count = await links.count();
+    expect(count).toBeGreaterThan(3);
+    for (let index = 0; index < count; index += 1) {
+      await expect(links.nth(index)).toHaveCSS('text-decoration-line', 'none');
+    }
+    const idle = links.filter({ hasText: 'Home' });
+    const before = await idle.evaluate((link) => getComputedStyle(link).borderColor);
+    await idle.hover();
+    await expect.poll(() => idle.evaluate((link) => getComputedStyle(link).borderColor), 'hover changes the chip border').not.toBe(before);
+    await expect(idle).toHaveCSS('text-decoration-line', 'none');
+    await idle.focus();
+    await expect(idle).toBeFocused();
+    await expect(idle, 'keyboard focus draws the ring, not an underline').toHaveCSS('outline-style', 'solid');
+    await expect(idle).toHaveCSS('text-decoration-line', 'none');
+  });
+});

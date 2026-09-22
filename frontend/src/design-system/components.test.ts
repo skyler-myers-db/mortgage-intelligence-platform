@@ -497,6 +497,14 @@ describe('layout containment contracts', () => {
     expect((css.match(/:active/g) ?? []).length).toBeGreaterThanOrEqual(30);
   });
 
+  /** 2026-09-21 audit visual-05 (S part): route-nav anchors had no
+   * text-decoration reset. Prototype-contract `.chip` and `.filter__value`
+   * styling stays untouched; only the app-added nav loses the underline. */
+  it('renders route-nav links without the browser underline', () => {
+    const css = designCss();
+    expect(css).toMatch(/\.route-nav \.filter,\s*\.route-nav \.filter:hover,\s*\.route-nav \.filter:focus-visible\s*\{\s*text-decoration:\s*none;/s);
+  });
+
   it('lets segment cards wrap content instead of clipping labels or pending copy', () => {
     const css = designCss();
 
