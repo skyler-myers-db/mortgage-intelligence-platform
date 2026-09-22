@@ -108,16 +108,16 @@ test.use({ hygieneOptOut: ['console.error'] });            // the whole check, f
 An API call with no fixture is answered `501`, recorded, and **fails the test with its method and path**:
 
 ```
-[unregistered-api] GET /api/sales/aging?older_than_days=7 has no registered fixture.
+[unregistered-api] GET /api/v1/sales/aging?older_than_days=7 has no registered fixture.
 ```
 
 It is never answered with a retryable 503, because the app would render a believable "warming up" state and fixture drift would pass unnoticed. To fix it, add a typed entry to the matching module under `fixture/data/` (one module per API domain; keep each well under 400 lines):
 
 ```ts
-fixture('GET', '/api/sales/aging', () => json<SalesAgingLead[]>(AGING)),
+fixture('GET', '/api/v1/sales/aging', () => json<SalesAgingLead[]>(AGING)),
 ```
 
-The explicit type argument is the contract check: `tsc` rejects a payload that does not match the frontend's response type. Patterns are Express-style (`/api/borrowers/:id/lifecycle`), `/api/v1/...` is matched as `/api/...`, the more specific pattern wins, and registering the same `METHOD pattern` twice throws.
+The explicit type argument is the contract check: `tsc` rejects a payload that does not match the frontend's response type. Patterns are Express-style (`/api/v1/borrowers/:id/lifecycle`); both patterns and requests are version-normalized, so `/api/v1/...` and `/api/...` match each other, the more specific pattern wins, and registering the same `METHOD pattern` twice throws.
 
 Only reads are registered by default. A test that exercises a write (approve, reject, assign, save) registers its own handler with `mockApi.register(...)`, so it controls the response timing; that is what a pessimistic-approval assertion needs. Fixture data is synthetic only: masked ids matching `B-[0-9A-Z]{13}`, lender `Summit Mortgage`, no names or contact fields. Headline numbers reconcile across panels (`data/reference.ts`), and `harness.fixture.spec.ts` pins that.
 
@@ -128,7 +128,7 @@ A route never renders degraded by accident. Ask for it:
 ```ts
 import { WAREHOUSE_WARMING_UP } from './mockApi';
 
-app.degrade('/api/leads', WAREHOUSE_WARMING_UP);              // the backend's retryable 503 body
+app.degrade('/api/v1/leads', WAREHOUSE_WARMING_UP);           // the backend's retryable 503 body
 app.degrade(/^\/api\/analytics\//, { status: 500, body: { detail: 'boom' } });
 ```
 
