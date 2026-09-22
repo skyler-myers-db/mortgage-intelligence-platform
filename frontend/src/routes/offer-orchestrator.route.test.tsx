@@ -340,6 +340,8 @@ describe('OfferOrchestrator route behavior', () => {
     expect(appMocks.setApproval).toHaveBeenCalledWith(BORROWER_ID, 'approved');
     expect(container.textContent).toContain('audit: audit-1');
     expect(container.textContent).toContain('approval: approval-1');
+    // motion-06: the success burst fires for an approval made in this view.
+    expect(container.querySelector('.burst')).not.toBeNull();
   }, 12_000);
 
   it('keeps saved campaign provenance attached through draft and approval', async () => {
@@ -558,6 +560,10 @@ describe('OfferOrchestrator route behavior', () => {
     expect(approve.disabled).toBe(true);
     expect(container.textContent).toContain('activation approval approval-persisted');
     expect(apiMocks.approve).not.toHaveBeenCalled();
+    // motion-06: a durable approval from an earlier session renders the
+    // approved chip but never replays the success burst.
+    expect(container.textContent).toContain('Approved · governed internal queue');
+    expect(container.querySelector('.burst')).toBeNull();
   });
 
   it.each([

@@ -674,7 +674,7 @@ interface OfferDetailsRowsProps {
 
 export function OfferDetailsRows({ recommendation }: OfferDetailsRowsProps) {
   return (
-    <Reveal className="layoutA-grid mt-grid">
+    <Reveal revealKey="offer-orchestrator:details-rows" className="layoutA-grid mt-grid">
       <AlternativesPanel recommendation={recommendation} />
       <ThresholdsPanel recommendation={recommendation} />
     </Reveal>

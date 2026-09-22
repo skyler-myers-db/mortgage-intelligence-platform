@@ -15,8 +15,15 @@ interface SparklineProps {
   direction?: 'up' | 'down' | 'flat';
   /**
    * When true, the stroke draws in left-to-right once (the KPI one-time
-   * entrance, re-audit #4 #2). Pure CSS via stroke-dasharray/offset; honors
+   * entrance, re-audit #4 #2) and the area fill fades in over the same
+   * window. Pure CSS via stroke-dasharray/offset; honors
    * prefers-reduced-motion. Off by default so non-KPI usages are unchanged.
+   *
+   * The stroke path carries `pathLength="1"` so the CSS dash of 1 maps 1:1
+   * to the visible line whatever its real length (audit motion-07: a fixed
+   * dash of 220 on a ~64-124px path finished the draw in the first
+   * 50-100ms of its 700ms window). No measurement, no effect, no fallback
+   * needed in test environments.
    */
   drawIn?: boolean;
 }
@@ -68,10 +75,15 @@ export function Sparkline({ points, width = 64, height = 20, direction, drawIn =
           <stop offset="100%" stopColor={stroke} stopOpacity="0" />
         </linearGradient>
       </defs>
-      <path d={areaPath} fill={`url(#${gradientId})`} />
+      <path
+        className={drawIn ? 'spark__area spark__area--fade' : 'spark__area'}
+        d={areaPath}
+        fill={`url(#${gradientId})`}
+      />
       <path
         className={drawIn ? 'spark__line spark__line--draw' : 'spark__line'}
         d={path}
+        pathLength={1}
         fill="none"
         stroke={stroke}
         strokeWidth="1.25"

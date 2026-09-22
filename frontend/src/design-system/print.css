@@ -126,4 +126,13 @@
     border-color: var(--line-2);
     box-shadow: none;
   }
+
+  /* Scroll-revealed blocks (trigger timeline, offer details) sit at
+     opacity 0 until they enter the viewport; a print before scrolling
+     used to leave them blank on paper. Force the revealed state. */
+  .reveal-on-scroll {
+    opacity: 1 !important;
+    transform: none !important;
+    transition: none;
+  }
 }

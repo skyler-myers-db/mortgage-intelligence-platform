@@ -115,6 +115,10 @@
   --dur-burst: 720ms;
   --dur-emanate: 1200ms;
   --dur-mesh: 60s;
+  /* Stroke draw-ins (sparkline): a symmetric ease so the line neither
+     snaps in nor stalls at the end of its window. */
+  --dur-draw: 700ms;
+  --ease-draw: cubic-bezier(0.45, 0, 0.55, 1);
 
   /* ---------- Component semantic colors ---------- */
   --surface-scrim: rgba(2, 16, 31, 0.55);

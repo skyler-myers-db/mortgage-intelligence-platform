@@ -1,18 +1,27 @@
+import wordmarkUrl from '../../assets/entrada-wordmark.webp';
+
 /**
  * Entrada brand marks.
  *
  * Both shapes derive from the official Entrada brand style guide
- * (Brand Style Guide.pptx + the high-res wordmark PNG shipped at
- * `frontend/public/brand/entrada-wordmark.png`):
+ * (Brand Style Guide.pptx + the high-res wordmark PNG master kept at
+ * `frontend/src/assets/entrada-wordmark.png`):
  *
  *   - Short shorthand mark   → `<EntradaMark>` renders the 5-rect
  *     "E" composition inline so the bars can switch to currentColor
  *     on dark backgrounds (rail icons, monochrome surfaces).
  *   - Full wordmark          → `<EntradaWordmark>` renders the
- *     official PNG via <img> so it always reads exactly as the brand
+ *     official raster via <img> so it always reads exactly as the brand
  *     guide intended (Conquera Medium letterforms, brand cyan/navy
- *     palette baked in). Sized by `height` so the aspect ratio is
- *     preserved across the rail/topbar/footer surfaces.
+ *     palette baked in). Sized by `height`; `width` is derived from the
+ *     2048:214 master ratio so the header never shifts while it decodes.
+ *
+ * Shipped asset (audit bundle-v1): `entrada-wordmark.webp` is a LOSSLESS,
+ * pixel-identical re-encode of the PNG master (2048x214 RGBA, 8,704 B vs
+ * 34,758 B), imported through Vite so it is content-hashed and served
+ * immutable by the /assets route. The PNG master is not imported and so is
+ * not shipped. Regenerate the WebP from the master with:
+ *   cwebp -lossless -exact -z 9 entrada-wordmark.png -o entrada-wordmark.webp
  *
  * Mark geometry (32x22 viewBox = 16:11 ≈ 1.45:1 width:height, palette
  * per brand guide):
@@ -26,7 +35,7 @@
  *
  * 2026-05-04 #3 (round 2) fix: the previous 26x22 viewBox was closer
  * but still didn't match the wordmark E. Pixel-measured the brand
- * wordmark PNG (frontend/public/brand/entrada-wordmark.png) directly:
+ * wordmark PNG (frontend/src/assets/entrada-wordmark.png) directly:
  *   - E painted region:    218w × 151h  →  aspect 1.444 : 1
  *   - Bar thickness:       30px → 19.9% of height  →  4.37 in 22-unit space
  *   - Cyan tip:            84px / 218px = 38.5% of bar width
@@ -92,9 +101,19 @@ export function EntradaMark({ size = 24, className, monochrome = false }: Entrad
   );
 }
 
+// Intrinsic size of the wordmark master (2048x214, ~9.57:1). The rendered
+// width is derived from the requested height so the <img> reserves its box
+// before the bytes arrive (no layout shift) and never stretches.
+export const WORDMARK_INTRINSIC_WIDTH = 2048;
+export const WORDMARK_INTRINSIC_HEIGHT = 214;
+
+export function wordmarkWidthForHeight(height: number): number {
+  return Math.round(height * (WORDMARK_INTRINSIC_WIDTH / WORDMARK_INTRINSIC_HEIGHT));
+}
+
 interface EntradaWordmarkProps {
-  /** Rendered height of the wordmark in px. Width scales to preserve
-   * the aspect ratio of the source PNG (~9.57:1 — 2048x214). */
+  /** Rendered height of the wordmark in px. Width is derived from the
+   * 2048:214 master ratio (~9.57:1) and set explicitly on the <img>. */
   height?: number;
   /**
    * Back-compat alias for `height`. The pre-2026-05-04 wordmark
@@ -109,13 +128,15 @@ interface EntradaWordmarkProps {
 
 export function EntradaWordmark({ height, fontSize, className }: EntradaWordmarkProps) {
   // Resolve final height: explicit `height` wins, then `fontSize`
-  // (back-compat alias), then a sane default. Source PNG is 2048x214 —
-  // display height drives width so the wordmark never stretches.
+  // (back-compat alias), then a sane default. Display height drives width
+  // so the wordmark never stretches; both are set as attributes so the box
+  // is reserved before the asset decodes.
   const finalHeight = height ?? fontSize ?? 28;
   return (
     <img
-      src="/brand/entrada-wordmark.png"
+      src={wordmarkUrl}
       alt="Entrada"
+      width={wordmarkWidthForHeight(finalHeight)}
       height={finalHeight}
       className={`entrada-wordmark-img ${className ?? ''}`.trim()}
     />
