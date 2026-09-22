@@ -4,7 +4,7 @@
   inset-block-start: var(--dot-y);
   transform: translate(-50%, -50%);
   pointer-events: auto;
-  z-index: 3;
+  z-index: var(--z-raised-3);
 }
 .analytics-scatter__cluster-marker {
   min-inline-size: var(--sp-6);
@@ -37,7 +37,7 @@
   background: var(--bg-1);
   box-shadow: var(--shadow-lg);
   overflow: hidden;
-  z-index: 4;
+  z-index: var(--z-raised-4);
 }
 .analytics-scatter__cluster--align-start .analytics-scatter__cluster-panel {
   inset-inline-start: 0;

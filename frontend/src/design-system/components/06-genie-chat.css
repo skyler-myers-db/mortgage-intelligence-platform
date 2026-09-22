@@ -13,17 +13,31 @@
   box-shadow: var(--shadow-lg);
   display: flex; flex-direction: column;
   overflow: hidden;
-  z-index: 30;
+  z-index: var(--z-genie);
   /* Disable the open/close transform transition for `width`/`height`
      so the resize drag tracks the pointer instantly — without this
      each pointer-move would tween over var(--dur-slow) and feel
      mushy. The opacity + transform tween for open/close still runs. */
   transform: translateY(12px) scale(0.98); opacity: 0; pointer-events: none;
-  transition: opacity var(--dur-slow) var(--ease),
-              transform var(--dur-slow) var(--ease);
+  visibility: hidden;
+  /* The closed rule IS the exit: fade + settle on the exit pair, then
+     `visibility` flips once they end, so the panel is seen leaving instead
+     of vanishing (2026-09-21 audit motion-01 / css-03). `.genie.is-open`
+     below carries the entry pair. */
+  transition: opacity var(--dur-exit) var(--ease-exit),
+              transform var(--dur-exit) var(--ease-exit),
+              visibility 0s linear var(--dur-exit);
 }
-.genie:not(.is-open) { visibility: hidden; }
-.genie.is-open { visibility: visible; }
+/* The docked panel and the Console share the right-edge anchor, and the
+   app's full-height Console (z --z-console) covered the right 300px of the
+   panel, including its composer (2026-09-21 audit responsive-v1). While the
+   Console is open the docked panel moves left of it so both stay usable.
+   An undocked (dragged) position is the user's own and is left alone; below
+   1280px the Console is a bottom sheet and 12-motion-and-viewport.css
+   handles that band. */
+[data-console="open"] .genie:not(.is-undocked) {
+  right: calc(var(--console-w) + var(--sp-4) * 2);
+}
 /* Resize handle — top-left corner. Visible affordance: an arrow
    glyph in a small square. Hover/focus brightens it so keyboard
    users can see when it's selected. The button itself is positioned
@@ -43,7 +57,7 @@
   color: var(--text-3);
   font-size: var(--fs-12);
   cursor: nwse-resize;
-  z-index: 3;
+  z-index: var(--z-raised-3);
   opacity: 0.82;
   transition: background var(--dur-fast) var(--ease),
               color var(--dur-fast) var(--ease),
@@ -73,7 +87,7 @@
    enough to grab without being a click trap on adjacent UI. */
 .genie__resize-edge {
   position: absolute;
-  z-index: 2;
+  z-index: var(--z-raised-2);
   background: transparent;
 }
 /* Edges */
@@ -106,7 +120,18 @@
   bottom: 0; left: 0; width: 12px; height: 12px;
   cursor: nesw-resize;
 }
-.genie.is-open { transform: translateY(0) scale(1); opacity: 1; pointer-events: auto; }
+.genie.is-open {
+  transform: translateY(0) scale(1); opacity: 1; pointer-events: auto;
+  visibility: visible;
+  transition: opacity var(--dur-slow) var(--ease),
+              transform var(--dur-slow) var(--ease),
+              visibility 0s linear 0s;
+}
+@media (prefers-reduced-motion: reduce) {
+  /* No visibility hold: hide the moment the panel closes (see .drawer). */
+  .genie,
+  .genie.is-open { transition-property: opacity, transform; }
+}
 .genie__hdr {
   padding: var(--sp-3) var(--sp-4);
   display: flex; align-items: center; gap: var(--sp-3);
@@ -128,7 +153,7 @@
 .genie__avatar::before {
   content: '\2726'; position: absolute; inset: 0;
   display: grid; place-items: center;
-  z-index: 1; color: var(--accent-ink); font-size: 14px;
+  z-index: var(--z-raised); color: var(--accent-ink); font-size: 14px;
 }
 .genie__title { font-size: var(--fs-13); font-weight: 600; color: var(--text-1); }
 .genie__sub { font-size: var(--fs-11); color: var(--text-3); }
@@ -216,10 +241,11 @@
   color: var(--text-on-solid); display: none; place-items: center;
   cursor: pointer;
   box-shadow: 0 8px 24px -8px var(--entrada-teal);
-  z-index: 29;
+  z-index: var(--z-genie-fab);
   transition: transform var(--dur-base) var(--ease);
 }
 .genie__fab:hover { transform: translateY(-2px); }
+.genie__fab:active { scale: var(--pressed-scale); }
 .genie__fab.is-hidden { transform: translateY(20px) scale(0.6); opacity: 0; pointer-events: none; }
 @media (max-width: 720px) {
   .genie__fab {
@@ -573,6 +599,7 @@
   border-color: var(--line-3);
   color: var(--text-1);
 }
+.growth-agent-monitor:active { translate: 0 var(--pressed-shift); }
 .growth-agent-monitor__main {
   min-width: 0;
   display: grid;

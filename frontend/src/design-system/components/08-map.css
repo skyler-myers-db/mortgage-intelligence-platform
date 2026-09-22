@@ -89,7 +89,7 @@
 }
 .map-hdr {
   position: relative;
-  z-index: 2;
+  z-index: var(--z-raised-2);
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   align-items: start;
@@ -243,9 +243,9 @@
   transform: translate(-50%, calc(-100% - 10px));
   /* z-index has to sit above every surface, rail, and drawer because the
      tip is portaled to document.body and can appear over any page
-     chrome. Kept below the 1000-tier used by modal scrims so focus-
+     chrome. Kept below the --z-modal / --z-palette tier so focus-
      trapped modals still occlude it. 2026-04-23. */
-  z-index: 900;
+  z-index: var(--z-map-tip);
 }
 .map-tip__name {
   color: var(--text-1);
