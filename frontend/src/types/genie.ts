@@ -76,7 +76,8 @@ export interface GenieAnswer {
    */
   refusal_reason?: GenieRefusalReason | null;
   /**
-   * Full SHA-256 of the normalized refused question. The only token the
+   * Full SHA-256 of the refused question over the exact bytes the audit
+   * ledger hashes (its first 16 hex are `question_hash`). The only token the
    * "This was legitimate" report sends; the question text never leaves the
    * panel. Absent on answers and on older backends.
    */

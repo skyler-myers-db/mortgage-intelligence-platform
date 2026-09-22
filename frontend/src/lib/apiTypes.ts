@@ -119,7 +119,7 @@ export interface GenieResult {
   genie_status?: string | null;
   /** Coarse family of a withheld turn; absent on answers (audit `genie-05`). */
   refusal_reason?: GenieRefusalReason | null;
-  /** Full SHA-256 of the normalized refused question; the report's only key. */
+  /** Full SHA-256 of the refused question (the audit ledger's exact bytes); the report's only key. */
   refusal_report_hash?: string | null;
 }
 

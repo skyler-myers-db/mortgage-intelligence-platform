@@ -3545,7 +3545,8 @@ ON CONFLICT (version) DO NOTHING;
 -- Genie refusal false-positive reports --------------------------------
 -- "This was legitimate" on a governed refusal (audit 2026-09-21 genie-05).
 -- Hash-only by design: the refused prompt is never round-tripped or stored,
--- so the row carries the full SHA-256 of the normalized question, the coarse
+-- so the row carries the full SHA-256 of the question bytes the audit ledger
+-- hashes (its first 16 hex equal the refusal's question_hash), the coarse
 -- refusal family the answer already disclosed, the actor, and the audit link.
 -- One row per (actor, hash, family) keeps replays from inflating counts.
 CREATE TABLE IF NOT EXISTS mip_app.genie_refusal_reports (

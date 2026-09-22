@@ -174,9 +174,10 @@ class GenieMessageResponse(BaseModel):
     #: ``policy_blocked``): one value per refusal sentence the answer already
     #: shows, never the guard rule or matched term. ``None`` on answers.
     refusal_reason: GenieRefusalReason | None = None
-    #: Full SHA-256 of the normalized refused question, the only token the
-    #: false-positive report endpoint accepts. Refused prompt text is never
-    #: round-tripped. ``None`` on answers.
+    #: Full SHA-256 of the exact refused question bytes the audit ledger
+    #: hashes (its first 16 hex are the refusal's ``question_hash``), the only
+    #: token the false-positive report endpoint accepts. Refused prompt text
+    #: is never round-tripped. ``None`` on answers.
     refusal_report_hash: str | None = None
 
 

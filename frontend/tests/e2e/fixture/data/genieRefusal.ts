@@ -6,10 +6,11 @@
  * the floating panel receives an inline (completed) governed refusal, and
  * `POST /api/genie/refusal-report` with its own capturing handler.
  *
- * The report hash mirrors the backend rule (SHA-256 of the whitespace-
- * collapsed, lower-cased question) so the spec can prove the POST carries
- * that digest and nothing typed by the user. Fixture data only; never used
- * by the running app.
+ * The report hash mirrors the backend rule: SHA-256 over the exact bytes the
+ * audit ledger hashes, i.e. the question after `GenieMessageRequest`'s
+ * whitespace collapse, with NO case folding, so `hash.slice(0, 16)` is the
+ * turn's `question_hash`. The spec proves the POST carries that digest and
+ * nothing typed by the user. Fixture data only; never used by the running app.
  */
 import { createHash } from 'node:crypto';
 import type { GenieRefusalReason } from '../../../../src/types';
@@ -58,8 +59,8 @@ const REFUSAL_ANSWERS: Record<GenieRefusalReason, string> = {
 };
 
 export function refusalReportHash(question: string): string {
-  const normalized = question.replace(/\s+/g, ' ').trim().toLowerCase();
-  return createHash('sha256').update(normalized, 'utf8').digest('hex');
+  const validated = question.replace(/\s+/g, ' ').trim();
+  return createHash('sha256').update(validated, 'utf8').digest('hex');
 }
 
 export function refusedTurn(reason: GenieRefusalReason, question: string): GenieResult {

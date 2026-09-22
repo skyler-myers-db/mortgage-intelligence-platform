@@ -81,10 +81,14 @@ def record_genie_refusal_report(
                 accepted=True, duplicate=True, report_id=None, audit_event_id=None
             )
         report_id = str(inserted["report_id"])
-        # Audits keep the ledger's established 16-hex short form; the report
-        # row holds the full digest. Only governed audit codes are written
-        # under ``refusal_reason``; families without one (outreach, output
-        # policy, unknown) are still fully recorded on the report row.
+        # ``question_hash[:16]`` IS the ledger label of the refusal being
+        # reported: the refused_prompt / response_blocked rows hash the same
+        # question bytes (``refusal_report_hash``), so this row joins to its
+        # refusal on ``question_hash`` (and on ``entity_id`` whenever the
+        # ledger's entity id is that label or the conversation/message id).
+        # The report row holds the full digest. Only governed audit codes are
+        # written under ``refusal_reason``; families without one (outreach,
+        # output policy, unknown) are still fully recorded on the report row.
         payload_json: dict[str, Any] = {
             "conversation_id": conversation_id,
             "message_id": message_id,

@@ -37,9 +37,10 @@ _OPAQUE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 class GenieRefusalReportRequest(BaseModel):
     """Hash-only report body. There is deliberately no field for prompt text."""
 
-    #: Full SHA-256 of the normalized refused question, as returned on the
-    #: refused turn's ``refusal_report_hash``. Shape-checked in the route so
-    #: the rejection message is fixed and never reflects the value.
+    #: Full SHA-256 of the refused question (the audit ledger's exact bytes),
+    #: as returned on the refused turn's ``refusal_report_hash``. Shape-checked
+    #: in the route so the rejection message is fixed and never reflects the
+    #: value.
     question_hash: str = Field(min_length=1, max_length=128)
     refusal_reason: GenieRefusalReason
     conversation_id: str | None = Field(default=None, max_length=128)

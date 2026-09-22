@@ -31,6 +31,7 @@ from backend.services.genie_deterministic import (
     _policy_blocked_genie_output_response,
 )
 from backend.services.genie_message_policy import GenieMessageRequest, protected_prompt_match
+from backend.services.genie_progress import genie_question_hash
 from backend.services.genie_refusal_reason import (
     GENIE_REFUSAL_REASONS,
     GenieRefusalReason,
@@ -124,14 +125,15 @@ def test_wire_enum_is_coarse_and_closed() -> None:
     assert "health" not in GENIE_REFUSAL_REASONS
 
 
-def test_report_hash_is_the_full_digest_of_the_normalized_question() -> None:
-    raw = "  Which   States have\tthe most PRIME refi candidates? "
-    expected = hashlib.sha256(
-        b"which states have the most prime refi candidates?"
-    ).hexdigest()
-    assert refusal_report_hash(raw) == expected
-    assert refusal_report_hash("which states have the most prime refi candidates?") == expected
+def test_report_hash_is_the_full_digest_of_the_exact_question_bytes() -> None:
+    # No case or whitespace folding: the report hash is over the same bytes
+    # the audit ledger hashes, so its 16-hex prefix IS the ledger label.
+    question = "Which States have the most PRIME refi candidates?"
+    expected = hashlib.sha256(question.encode("utf-8")).hexdigest()
+    assert refusal_report_hash(question) == expected
     assert len(expected) == 64
+    assert expected[:16] == genie_question_hash(question)
+    assert refusal_report_hash(question.lower()) != expected
 
 
 def test_output_policy_block_names_its_family() -> None:

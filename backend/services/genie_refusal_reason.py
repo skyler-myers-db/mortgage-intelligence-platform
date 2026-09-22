@@ -16,9 +16,13 @@ matched term itself never leaves the backend. No new detection is added
 here: the family is derived from the classification the guard battery
 already computed.
 
-``refusal_report_hash`` is the full SHA-256 of the whitespace-normalized
-lower-cased question. The false-positive report endpoint accepts only that
-hash, so a refused prompt is never round-tripped or stored as text.
+``refusal_report_hash`` is the full SHA-256 of the EXACT question bytes the
+audit ledger hashes (the validated ``GenieMessageRequest.question``), with no
+further normalization. Its first 16 hex therefore equal the ``question_hash``
+on the ``genie.refused_prompt`` / ``genie.response_blocked`` audit row, so a
+"this was legitimate" report joins to the refusal it reports. The
+false-positive report endpoint accepts only that hash, so a refused prompt is
+never round-tripped or stored as text.
 """
 
 from __future__ import annotations
@@ -63,7 +67,6 @@ GENIE_REFUSAL_AUDIT_CODES: dict[str, str] = {
     "out_of_scope": "out_of_scope",
 }
 
-_WHITESPACE_RE = re.compile(r"\s+")
 REFUSAL_REPORT_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -73,17 +76,16 @@ def refusal_family_for_protected_code(audit_code: str) -> GenieRefusalReason:
     return _PROTECTED_AUDIT_CODE_TO_FAMILY.get(audit_code, "protected_class")
 
 
-def normalize_question_for_report(question: str) -> str:
-    """Whitespace-collapse and lower-case so trivially different retypes match."""
-
-    return _WHITESPACE_RE.sub(" ", question).strip().lower()
-
-
 def refusal_report_hash(question: str) -> str:
-    """Full SHA-256 (64 lowercase hex) of the normalized refused question."""
+    """Full SHA-256 (64 lowercase hex) of the refused question's exact bytes.
 
-    normalized = normalize_question_for_report(question)
-    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    Pass the same string the ledger hashes (``payload.question``). No case or
+    whitespace folding happens here: the request validator has already
+    collapsed whitespace, and any further folding would break the join
+    between ``hash[:16]`` and the ledger's ``question_hash`` label.
+    """
+
+    return hashlib.sha256(question.encode("utf-8")).hexdigest()
 
 
 def is_refusal_report_hash(value: str) -> bool:

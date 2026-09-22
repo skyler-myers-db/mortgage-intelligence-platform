@@ -10,15 +10,27 @@ enter the ledger.
 
 from __future__ import annotations
 
+import json
 from contextlib import contextmanager
 from typing import Any
+from unittest.mock import MagicMock
 from uuid import uuid4
 
+import pytest
+from fastapi import BackgroundTasks
 from fastapi.testclient import TestClient
 
 from backend.main import _backpressure_controller, app
+from backend.schemas.audit import AuditEvent
+from backend.services.genie_answers import GenieMessageResponse, GenieProof
+from backend.services.genie_deterministic import (
+    _block_unsafe_genie_output,
+    _deterministic_genie_response,
+)
+from backend.services.genie_message_policy import GenieMessageRequest
 from backend.services.genie_refusal_reason import refusal_report_hash
 from backend.services.lakebase import LakebaseError, get_lakebase_client
+from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
 
 client = TestClient(app)
 ACTOR = "lo@example.com"
@@ -136,6 +148,86 @@ def test_report_writes_one_row_and_one_audit_event_in_order() -> None:
     # only on the report row.
     assert QUESTION_HASH[:16] in audit["metadata"]
     assert QUESTION_HASH not in audit["metadata"]
+
+
+def _report_from_refusal(lakebase: _FakeLakebase, refused: GenieMessageResponse) -> dict[str, Any]:
+    """File the report exactly as the card does, from the refused turn's own fields."""
+
+    _install(lakebase)
+    response = client.post(
+        REPORT_PATH,
+        json={
+            "question_hash": refused.refusal_report_hash,
+            "refusal_reason": refused.refusal_reason,
+            "conversation_id": refused.conversation_id or None,
+            "message_id": refused.message_id,
+        },
+        headers=ACTOR_HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    assert len(lakebase.audit_rows) == 1
+    return lakebase.audit_rows[0]
+
+
+def _single_ledger_row(audit: InMemoryAuditStore, action: str) -> AuditEvent:
+    rows = [event for event in audit.list(limit=50) if event.action == action]
+    assert len(rows) == 1, [event.action for event in audit.list(limit=50)]
+    return rows[0]
+
+
+@pytest.mark.parametrize(
+    ("prompt", "conversation_id"),
+    [
+        # Mixed case and runs of whitespace: any case/space folding on one
+        # side only would split the join.
+        ("Target  HISPANIC   neighborhoods with this Offer.", None),
+        ("Which  ZYRPLAX borrowers are   eligible for a HELOC?", "01f13d4968af1b249dc388fd5b18b195"),
+    ],
+)
+def test_report_audit_joins_the_refused_prompt_ledger_row(
+    prompt: str, conversation_id: str | None
+) -> None:
+    ledger = InMemoryAuditStore()
+    refused = _deterministic_genie_response(
+        GenieMessageRequest(question=prompt, conversation_id=conversation_id),
+        actor=ACTOR,
+        audit=ledger,
+        background=BackgroundTasks(),
+        lakebase=MagicMock(),
+        borrower_repo=MagicMock(),
+    )
+    assert refused is not None and refused.source == "refused"
+    refusal_row = _single_ledger_row(ledger, "genie.refused_prompt")
+
+    report_row = _report_from_refusal(_FakeLakebase(), refused)
+
+    metadata = json.loads(report_row["metadata"])
+    assert metadata["question_hash"] == refusal_row.payload_json["question_hash"]
+    assert report_row["entity_id"] == refusal_row.entity_id
+    assert metadata["refusal_reason"] == refusal_row.payload_json["refusal_reason"]
+
+
+def test_report_audit_joins_the_response_blocked_ledger_row() -> None:
+    ledger = InMemoryAuditStore()
+    payload = GenieMessageRequest(question="How many  In-The-Money borrowers are in Ohio?")
+    live = GenieMessageResponse(
+        conversation_id="01f13d4968af1b249dc388fd5b18b195",
+        message_id="01f13d4a0b7c1e5f8a2b3c4d5e6f7a8b",
+        question=payload.question,
+        answer="Unsafe generated text.",
+        source="genie",
+        trusted_assets=[],
+        proof=GenieProof(),
+    )
+    blocked = _block_unsafe_genie_output(ledger, actor=ACTOR, payload=payload, response=live)
+    assert blocked.source == "policy_blocked"
+    blocked_row = _single_ledger_row(ledger, "genie.response_blocked")
+
+    report_row = _report_from_refusal(_FakeLakebase(), blocked)
+
+    metadata = json.loads(report_row["metadata"])
+    assert metadata["question_hash"] == blocked_row.payload_json["question_hash"]
+    assert report_row["entity_id"] == blocked_row.entity_id
 
 
 def test_replay_for_the_same_actor_hash_and_family_is_a_duplicate_without_a_second_audit() -> None:
