@@ -54,6 +54,8 @@ export const auditApi = {
       event_type?: string | null;
       since?: string | null;
       until?: string | null;
+      /** Every row of one request (the backend already accepted it; audit tables-10). */
+      correlation_id?: string | null;
       cursor?: string | null;
       /** One ledger row by its audit id (the Decision receipt's explorer deep link). */
       event_id?: string | null;

@@ -1,0 +1,11 @@
+/* ============================================================
+   Audit explorer filter bar (audit flow-04 phase 1 / tables-10).
+   Modifiers of the existing .filter-row block only; no new block.
+   The bar mixes labelled native inputs with a FilterSelect whose
+   label sits inside its trigger (the Lead Queue idiom), so the
+   controls align on their bottom edge instead of their top.
+   Validation messages render in the full-width
+   .filter-row__hint--full line, so no group grows taller.
+   ============================================================ */
+.filter-row--audit { align-items: flex-end; }
+.filter-row__group--date { inline-size: 10rem; }
