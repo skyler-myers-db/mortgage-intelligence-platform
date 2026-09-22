@@ -323,3 +323,32 @@ def test_lakebase_store_filters_by_audit_id_and_never_casts_a_non_uuid() -> None
     assert "audit_id = %(event_id)s::uuid" in sql
     assert params["event_id"] == wanted
     assert params["limit"] == 1
+
+
+def test_explorer_pins_one_ledger_row_by_event_id_and_refuses_a_malformed_id() -> None:
+    first = _approve(ALICE_WRITE)
+    second = _reject(ALICE_WRITE)
+
+    page = client.get(
+        "/api/v1/audit/events/page",
+        params={"event_id": first["audit_event_id"]},
+        headers=CAROL_ADMIN,
+    )
+    assert page.status_code == 200, page.text
+    assert [row["event_id"] for row in page.json()["items"]] == [first["audit_event_id"]]
+
+    events = client.get(
+        "/api/v1/audit/events",
+        params={"event_id": second["audit_event_id"]},
+        headers=CAROL_ADMIN,
+    )
+    assert events.status_code == 200, events.text
+    assert [row["event_id"] for row in events.json()] == [second["audit_event_id"]]
+
+    malformed = client.get(
+        "/api/v1/audit/events/page",
+        params={"event_id": "alice@summit.example"},
+        headers=CAROL_ADMIN,
+    )
+    assert malformed.status_code == 422
+    assert malformed.json()["detail"] == "invalid event_id"
