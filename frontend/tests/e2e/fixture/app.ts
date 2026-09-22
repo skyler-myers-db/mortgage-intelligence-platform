@@ -96,9 +96,9 @@ export class AppDriver {
     );
   }
 
-  /** Opt an endpoint into an explicit degraded state (see MockApi.degrade). */
-  degrade(endpointPattern: string | RegExp, options: DegradeOptions): void {
-    this.mockApi.degrade(endpointPattern, options);
+  /** Opt an endpoint into an explicit degraded state (see MockApi.degrade); returns the restore function. */
+  degrade(endpointPattern: string | RegExp, options: DegradeOptions): () => void {
+    return this.mockApi.degrade(endpointPattern, options);
   }
 
   /** Open the Console right rail from the topbar and wait for its real body. */
@@ -144,5 +144,57 @@ export class AppDriver {
     const expanded = this.page.locator('table.tbl tbody tr.tbl__expand').first();
     await expect(expanded).toBeVisible();
     return expanded;
+  }
+
+  /** The topbar's Genie launcher (rendered at every width; the FAB is not). */
+  genieToggle(): Locator {
+    return this.page.getByRole('banner').getByRole('button', { name: 'Toggle Genie chat' });
+  }
+
+  /** The floating Genie panel, whether or not it is open. */
+  geniePanel(): Locator {
+    return this.page.locator('.genie[role="dialog"]');
+  }
+
+  /** The evidence drawer (`aside.drawer`), whether or not it is open. */
+  evidenceDrawer(): Locator {
+    return this.page.locator('aside.drawer[role="dialog"]');
+  }
+
+  /**
+   * Open the evidence drawer from an evidence chip. Defaults to the first KPI
+   * card's source chip on the current route. Returns the open drawer.
+   */
+  async openEvidenceDrawer(chip?: Locator): Promise<Locator> {
+    const target = chip ?? this.page.locator('.kpi .kpi__source .evidence-chip').first();
+    await expect(target).toBeVisible();
+    await target.click();
+    const drawer = this.evidenceDrawer();
+    await expect(drawer).toHaveClass(/is-open/);
+    await expect(drawer.getByRole('button', { name: 'Close drawer' })).toBeVisible();
+    return drawer;
+  }
+
+  /** Open one FilterSelect / MultiFilterSelect menu by its label; returns the listbox. */
+  async openFilterMenu(label: string): Promise<Locator> {
+    const trigger = this.page.locator(`button[aria-haspopup="listbox"][aria-label^="${label}:"]`).first();
+    await expect(trigger).toBeVisible();
+    if ((await trigger.getAttribute('aria-expanded')) !== 'true') await trigger.click();
+    const menu = this.page.getByRole('listbox', { name: label });
+    await expect(menu).toBeVisible();
+    return menu;
+  }
+
+  /**
+   * Ask Genie from the floating panel. The caller registers the turn's
+   * submit / progress / complete fixtures first (data/genieTurn.ts); nothing
+   * answers a turn by default.
+   */
+  async askGenie(question: string): Promise<Locator> {
+    const dialog = await this.openGenie();
+    const input = dialog.getByRole('textbox', { name: 'Ask Genie' });
+    await input.fill(question);
+    await dialog.getByRole('button', { name: 'Ask' }).click();
+    return dialog;
   }
 }
