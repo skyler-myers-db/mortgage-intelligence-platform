@@ -251,3 +251,574 @@ orchestration, which keeps the slices verbatim.
 2026-09-15, one week after this decision, and the 2026-08-05 ratchet above says
 a file still oversize on that date blocks merge until it is split. Nothing in
 this addendum extends that date.
+
+## 2026-09-08 allowlist-expiry addendum
+
+All eighteen remaining allowlist entries expire on 2026-09-15 and the
+2026-08-05 ratchet above forbids another re-date, so from 2026-09-16 the gate
+would fail every pull request with one `ALLOWLIST-EXPIRED` line per file. The
+gate is not a required check, which is how a red `main` lands silently. This
+addendum records the splits made in the week before the cliff, one commit per
+file, each commit removing that file's allowlist entry in the same change.
+
+Every split is proven with `tools/refactor_proof.py`, added with this
+addendum: `defset` compares every top-level definition (functions, classes,
+assignments; class members when `--flatten-classes`) of the pre-split blob
+against the union of the post-split files and passes only when nothing was
+removed or textually changed; `branches` proves a branch extraction from a
+giant dispatcher function (skeleton verbatim, every extracted body verbatim,
+no name left out of scope); `css` proves a stylesheet slicing (byte-identical
+`@import` expansion plus an identical class-selector inventory). The tool was
+validated against the two earlier criteria splits (d404b423, b7125331: 64 and
+72 definitions, none changed) before use. Where a move is not verbatim
+(mypy-driven type fixes in code leaving an exempt module, or a component
+extraction), the deviation is enumerated under the file.
+
+### tools/e2e_borrower_audit.py (1,526 -> 343)
+
+Plan item 7: SQL fetchers, recompute model, comparators, report rendering.
+
+| File | Lines | Content |
+|---|---|---|
+| `tools/e2e_borrower_audit.py` | 343 | docstring, sys.path shim, `run_audit`, client construction, CLI |
+| `tools/e2e_borrower_audit_model.py` | 71 | gold-threshold constants, `Mismatch`, `ClipAudit` |
+| `tools/e2e_borrower_audit_fetch.py` | 370 | sampling, raw-share, gold-row and evidence fetchers |
+| `tools/e2e_borrower_audit_recompute.py` | 299 | independent Python re-computation of the gold row |
+| `tools/e2e_borrower_audit_compare.py` | 320 | raw-vs-silver, raw-vs-gold, gold-vs-API comparators |
+| `tools/e2e_borrower_audit_report.py` | 200 | `_hash_clip`, `render_report` |
+
+Proof: `defset` pre 31 definitions, post 31 across six files, removed none,
+added none, text-changed none. `python tools/e2e_borrower_audit.py --help`
+resolves the sibling imports through the shim, and the `tools.*` import path
+resolves under pytest. `tests/unit/test_next_best_offer.py` now pins
+`NBO_PRODUCT_LABELS` in the recompute module, where the offer-label lookup
+lives. Entry removed.
+
+### tools/databricks/converge_campaign_treatment_access.py (936 -> 423)
+
+The 2026-08-05 "Two thresholds" item asked for credential minting, identity
+probing, and group convergence. The mint is the inner loop of
+`target_identity_groups_probe` (one 245-line function: mint an exact
+short-lived credential, read the target identity inside the
+ambient-credential-free environment with the bounded settle window, restore
+on failure), so separating it from the probe would not be a verbatim move.
+The split is therefore two-way, with the probe's secret-free diagnostics
+staying with the probe as the plan required:
+
+| File | Lines | Content |
+|---|---|---|
+| `tools/databricks/converge_campaign_treatment_access.py` | 423 | identifier quoting, object presence, effective-privilege assertions, table grant convergence, CLI |
+| `tools/databricks/campaign_treatment_identity_probe.py` | 535 | settle window and mint retry policy, ambient-auth isolation, fingerprints and failure diagnostics, `target_identity_groups_probe`, `target_group_membership_probe` |
+
+Proof: `defset` pre 39 definitions, post 39 across two files, removed none,
+added none, text-changed none. The deploy command of record still invokes
+`python -m tools.databricks.converge_campaign_treatment_access`, whose
+entrypoint and `deployment_workspace_client()` call are unchanged (the
+deploy-contract pins that name the helper pass). No re-export facade: the
+three tools and three tests that imported probe names from the converger
+(`ensure_pipeline_namespace`, `foreign_catalog_binding_manifest`,
+`audit_agent_runtime_foreign_uc_access`, and their tests plus the
+credential-settle-window tests) now import them from the probe module. Entry
+removed.
+
+### frontend/src/components/mortgage/LeadTable.tsx (1,261 -> 567)
+
+Plan item 2: table shell, row, row preview, bulk approval, sales disposition.
+The row (`LeadTableRow.tsx`) and decision panels already existed; this pass
+extracts the remaining responsibilities. It is a hook/component extraction,
+not a verbatim move, so the proof is render equivalence plus the suites.
+
+| File | Lines | Content |
+|---|---|---|
+| `LeadTable.tsx` | 567 | props, campaign binding, sorting, virtualization, table shell, `renderSortHeader`, `exportCsv`, composition |
+| `useLeadApprovalActions.ts` | 541 | approve/reject/submit, reject-panel state, selection set, `bulkApprove` with its in-flight latches, bulk toast and its effects, focus restore |
+| `useLeadSalesActions.ts` | 223 | sales overrides (and the merged `displayLeads`), assignment, disposition panel state, sales toast |
+| `useLeadTableHotkeys.ts` | 40 | latest-handler ref plus the single window keydown listener |
+| `LeadTableBulkActions.tsx` | 183 | `.bulk-actions` toolbar and bulk result toast |
+| `LeadTableStatusChips.tsx` | 90 | growth-agent proof row, campaign-binding status and provenance rows |
+
+Proof: a throwaway vitest harness (not committed) mounted the table in the
+providers the suites use and printed `sha256(container.innerHTML)` for five
+states (default list, expanded row with the reject panel, bulk toolbar,
+sorted by score, virtualized); all five hashes match a pristine
+`git archive` base tree byte for byte, and two base runs agree, so the
+harness is deterministic. The eight LeadTable suites (72 tests), the full
+frontend suite (1,085 tests), eslint at `--max-warnings 0`, `tsc -b`, the
+production build and the bundle budget pass. Deviations, all recorded in the
+commit: `approvalError` stays in the shell because both hooks write the one
+`.table-error` alert; the sales hook returns `displayLeads` because the
+override merge is the only consumer of the overrides; `assignSelected`
+takes the selection and clear callback as arguments so the success path's
+state-update order is unchanged; the two sales effects now register before
+the virtualizer's effects (mutually independent); and two `eslint-disable`
+comments were added for `react-hooks/purity` and `react-hooks/refs` findings
+that the `useVirtualizer` compiler bailout had masked inside the old
+function (the lines themselves are unchanged). Entry removed.
+
+### frontend/src/components/mortgage/USChoroplethMap.tsx (1,044 -> 677)
+
+Plan item 3: topology loading, drill state, legend/tooltip, SVG rendering.
+The tooltip (`USChoroplethMapTooltip.tsx`) and utilities already existed.
+
+| File | Lines | Content |
+|---|---|---|
+| `USChoroplethMap.tsx` | 677 | drill state machine, memoized derivations, real US state paths, breadcrumbs and chips, tooltip portal |
+| `useChoroplethLiveFacts.ts` | 222 | lazily imported topology, per-state rollups (re-fetching on segment filter, mode, criteria), ZIP rollups on drill, the assignment overlay |
+| `USChoroplethMapZipLevel.tsx` | 212 | the former `renderZipLevel` closure as a component with explicit props, plus `ZIP_TILE_CAP` |
+| `USChoroplethMapLegend.tsx` | 110 | the `.map-legend` block |
+
+Proof: the same render-equivalence harness printed hashes for four states
+(state level, drilled ZIP level, overlay on, state selected); all four match
+the pristine base tree byte for byte with a deterministic base. The three
+map suites plus the four route tests that mount the map (48 tests), the full
+frontend suite, eslint, `tsc -b`, build and budget pass. Structural notes:
+two moved effects reset the tooltip, so the hook receives the component's
+`setHover` (a state setter, stable identity); the ZIP component receives
+`onSelectZip`/`onOpenStateQueue` callbacks so navigation stays with the
+component that owns the drill state. Entry removed.
+
+### backend/services/resilience.py (986 -> 223)
+
+Plan item 5: circuit breaker, retry policy, TTL cache, dependency error.
+
+| File | Lines | Content |
+|---|---|---|
+| `backend/services/resilience.py` | 223 | `with_retry`, `Resilient`, the type variable, and re-exports with the byte-identical `__all__` |
+| `backend/services/resilience_breaker.py` | 373 | `DependencyDownError`, `CircuitBreaker`, the breaker registry (`get_breaker`, `all_breakers`, the test reset) |
+| `backend/services/resilience_cache.py` | 456 | `TTLCache`, the stale-while-revalidate executor pair and its `atexit` hook, `StaleWhileRevalidateCache` |
+
+Proof: `defset --allow-changed log`: pre 18 definitions, post 19 across three
+files, removed none, added none; the only text change is the module logger,
+which each new module now defines for itself. All 46 importers keep importing
+from `backend.services.resilience`; the tests that reach the breaker registry
+through the module (`_reset_breakers_for_tests`, `get_breaker`,
+`CircuitBreaker`) resolve through the re-exports. 154 tests across the
+resilience, observability, config-cache, error-sanitizer, load-test,
+health-endpoint, treatment-gate, Lakebase-pool and workspace-host files pass.
+Entry removed.
+
+### backend/services/lakebase_bootstrap.py (927 -> 489)
+
+The 2026-07-13 addendum: migration SQL, migration-state predicates, bootstrap
+orchestration, with advisory-lock and idempotency behavior independently
+testable.
+
+| File | Lines | Content |
+|---|---|---|
+| `backend/services/lakebase_bootstrap.py` | 489 | the `ensure_*` orchestration, the process lock and the five bootstrapped flags (module globals the tests set directly), test hooks, re-exports |
+| `backend/services/lakebase_bootstrap_sql.py` | 341 | every DDL tuple, preflight query and advisory-lock key |
+| `backend/services/lakebase_bootstrap_state.py` | 165 | the five `_*_already_applied` predicates and both advisory-lock release helpers |
+
+Proof: `defset --allow-changed log`: pre 36 definitions, post 37 across
+three files, removed none, added none, only the per-module logger duplicated.
+The DDL names the bootstrap tests assert on stay importable from the
+orchestration module; the documentation-contract scan of this file (no
+unversioned API paths) still passes. 132 tests across the bootstrap,
+outreach-reject, sales-manager, documentation-contract, architecture,
+typecheck-ratchet, loan-officer and approval-funnel files pass. Entry removed.
+
+### backend/services/capabilities.py (911 -> 460)
+
+The 2026-07-13 addendum: capability discovery, live workspace probes, and
+proof-ledger status shaping behind one public snapshot API.
+
+| File | Lines | Content |
+|---|---|---|
+| `backend/services/capabilities.py` | 460 | discovery (`probe_capabilities`), contract-presence checks, `_status_from_live`, the cached snapshot API, re-exports |
+| `backend/services/capabilities_models.py` | 85 | `CapabilityStatus`, `Capability`, `LiveCapabilityStatus`, the live map alias, constants, and the one helper both halves call |
+| `backend/services/capabilities_live_probes.py` | 425 | `collect_live_capability_statuses` and every `_probe_*` workspace probe |
+
+Proof: `defset`: pre 36 definitions, post 36 across three files, removed
+none, added none, text-changed none. Import direction is models, then live
+probes, then discovery, so there is no cycle. The only monkeypatched module
+attribute in the capability tests is `get_settings`, whose reader
+`probe_capabilities` stayed put. 370 tests across the capabilities,
+growth-agent API, admin-operations, health-endpoint, architecture and
+documentation-contract files pass. Entry removed.
+
+### backend/services/audit_store.py (1,872 -> 260)
+
+Plan item 6: the policy/persistence boundary. The metadata vocabulary and its
+validators are policy; the store, actor resolution and singleton are
+persistence.
+
+| File | Lines | Content |
+|---|---|---|
+| `backend/services/audit_store.py` | 260 | fallback identity counter, `build_safe_audit_metadata`, the `AuditStore` protocol, `resolve_actor`, event-type coercion, the store singleton and proxy, re-exports of every name imported elsewhere |
+| `backend/services/audit_metadata_policy.py` | 663 | PII denylist, every metadata key and value vocabulary, the three audit exceptions |
+| `backend/services/audit_metadata_validation.py` | 534 | key/PII/allowlist validators, top-level column, portfolio-criteria, result-filter and decision-input value policies, `_sanitize_metadata` |
+| `backend/services/audit_metadata_public_values.py` | 583 | `_assert_public_safe_values` alone (507 lines) |
+
+Proof: `defset --allow-changed _metadata_keys_deep`: pre 77 definitions,
+post 77 across four files, removed none, added none. The one allowed change
+is type-only: the second branch of `_metadata_keys_deep` no longer re-annotates
+`out` (`out: set[str] = set()` became `out = set()`), which is the
+`[no-redef]` error the module's mypy exemption had been hiding; the first
+branch already declares the type for the function scope, so runtime behavior
+is unchanged and the validation module type-checks without an exemption.
+Layering is policy, then validation, then public values, then the store.
+660 tests across the audit-store contract, PII denylist, my-events,
+cohort-filter, rate-spread floor, contact-eligibility, Genie actions,
+outreach-reject, admin RBAC, household rollup, growth-agent API, API-routes,
+typecheck-ratchet, architecture and sales-manager files pass, and the
+worker's `mypy backend` run reports no issues in 269 files. Entry removed.
+
+### frontend/src/design-system/components.css (6,630 -> 20)
+
+Plan item 8 allowed route-specific CSS to move out "only where the prototype
+BEM contract remains preserved". Slicing the file verbatim preserves it
+entirely: the entry keeps the original six header lines and becomes one
+`@import` per slice, in the original order, and Vite inlines the imports in
+place so the cascade is unchanged. Every cut is at brace depth 0; twelve of
+the fourteen slices open with an original section banner, and the last
+(`14-genie-markdown-and-proof.css`) starts inside the 1,149-line
+ROUTE COMPOSITION HELPERS section because that one section could not stay
+under 900 lines on its own. No text was added to any slice, so the expansion
+is byte-identical.
+
+| File (`design-system/components/`) | Lines | Original lines |
+|---|---|---|
+| `01-app-shell.css` | 561 | 7–567 |
+| `02-chips-kpi-segments.css` | 583 | 568–1150 |
+| `03-score-and-table.css` | 419 | 1151–1569 |
+| `04-approval-and-drawer.css` | 487 | 1570–2056 |
+| `05-command-palette.css` | 438 | 2057–2494 |
+| `06-genie-chat.css` | 753 | 2495–3247 |
+| `07-audit-and-filter-chips.css` | 307 | 3248–3554 |
+| `08-map.css` | 474 | 3555–4028 |
+| `09-console-and-layout.css` | 318 | 4029–4346 |
+| `10-native-analytics.css` | 586 | 4347–4932 |
+| `11-skeleton-menu-and-genie-answer.css` | 264 | 4933–5196 |
+| `12-motion-and-viewport.css` | 285 | 5197–5481 |
+| `13-route-composition.css` | 793 | 5482–6274 |
+| `14-genie-markdown-and-proof.css` | 356 | 6275–6630 |
+
+Proof: `tools/refactor_proof.py css <pre> components.css` reports 14 slices,
+a byte-identical expansion, and an identical class inventory (992 selectors
+on both sides); the integrator re-ran it against the committed branch. The
+production build emits a bit-for-bit identical stylesheet (same content hash,
+size and sha256 for the index and analytics CSS chunks), and the bundle
+budget passes. The CSS-literal lint globs every `.css` file, so the slices
+stay covered. The three vitest files that read the stylesheet as text now do
+so through one helper, `frontend/src/test/designCss.ts`, which expands the
+entry's imports in place; every assertion is unchanged. Entry removed.
+
+### frontend/src/lib/api.ts (2,195 -> 112)
+
+Plan item 1: typed endpoint clients by route group. Two facts shaped the
+split: 61 files import from `../lib/api` and 39 test files mock that module
+path, so `frontend/src/lib/api.ts` stays the only import path (it re-exports
+every name it exported before, 37 in all) and no consumer changed.
+`frontend/src/lib/api.test.ts` sits at 899 lines and is byte-identical.
+
+| File | Lines | Content |
+|---|---|---|
+| `lib/api.ts` | 112 | type re-exports, transport re-exports, `api` composed from the route-group objects in the original member order, plus `leads` (which calls `api.leadsPage` through the exported object) |
+| `lib/apiTypes.ts` | 298 | the response and query interfaces (original lines 104–384, byte-identical body) |
+| `lib/apiTransport.ts` | 611 | `ApiError`, retry and 503 parsing, growth-agent proof helpers, the JSON verbs (original lines 386–978; eleven definitions gained an `export` keyword and nothing else) |
+| `lib/apiClients/*.ts` | 56–234 each | twelve route-group objects: analytics, portfolio, geo, leads, outreach, sales, activation, genie, growthAgent, audit, workspace, admin |
+
+`portfolio.ts` and `leads.ts` each export two objects because the original
+literal interleaves their members with other groups; that is what keeps the
+member order exact.
+
+Proof: `tools/refactor_proof_object_members.mjs <pre> lib/api.ts api`, added
+with this commit, resolves every spread in the composed object back to its
+module and compares the member list with the original literal: 88 members on
+both sides, identical order, no text differences (the integrator re-ran it
+against the committed branch). `Object.keys(api)` at runtime is identical
+between a pristine base tree and the split tree (88 keys, same digest), and
+the export surface of `api.ts` is the same 37 names. eslint at
+`--max-warnings 0`, the full vitest suite (137 files, 1,085 tests), `tsc -b`,
+the production build and the bundle budget pass (initial JS moved from
+398.24 to 398.40 KiB raw). Entry removed.
+
+### backend/services/genie_client.py (983 -> 772)
+
+The 2026-08-05 "Two thresholds" item 1: transport/retry, message lifecycle
+polling, response normalization. The lifecycle and normalization are methods
+of one `GenieClient` class whose transport the client tests monkeypatch
+(`urllib.request.urlopen`, `time.sleep`) through this module, so the class
+stays whole; what leaves is the process-wide registry around it.
+
+| File | Lines | Content |
+|---|---|---|
+| `backend/services/genie_client.py` | 772 | `GenieClientError`, `GenieResponse`, `GenieClient` (transport, lifecycle, normalization), re-exports with the unchanged `__all__` |
+| `backend/services/genie_client_registry.py` | 259 | `ResilientGenieClient`, the client singleton and lock, space-id resolution and placeholder detection, `get_genie_client`, the test reset |
+
+Proof: `defset`: pre 16 definitions, post 16 across two files, removed none,
+added none, text-changed none. Both modules defer their cross-imports to
+the bottom of the file so either import order works (verified both ways);
+the re-exported functions are the same objects, so dependency-override
+identity checks still hold. Two ruff-driven edits outside the moved text:
+the now-unused `Lock` import left `genie_client.py`, and the four private
+re-exports carry the repo's existing compatibility-re-export `noqa` marker.
+393 tests across the client, feedback-client, capabilities, home-summary,
+async-flow, provision-space, retention-risk and repository files pass; the
+registry module type-checks without an exemption. Entry removed.
+
+### backend/services/genie_actions.py (1,529 -> 819)
+
+Plan item 4 for this file: action routing separated from the token contract
+and the reviewed cohort filters.
+
+| File | Lines | Content |
+|---|---|---|
+| `backend/services/genie_actions.py` | 819 | the SQL constants, idempotency lookups, confirmation validation, audit payload, `_campaign_criteria`, cohort routing and materialization, `_campaign_treatment_coordinator` (a test patch target, kept beside its caller), `handle_genie_action` |
+| `backend/services/genie_action_tokens.py` | 385 | the signed confirmation-token contract: claim material, rotation-aware key resolution, the wire codec, issue/sign/decode, and the constants only it reads |
+| `backend/services/genie_action_filters.py` | 400 | the reviewed cohort route filters and the closed filter-key vocabularies the Lead Queue replay shares |
+
+Dependencies run one way (actions, then tokens, then filters); the claim
+material moved with the tokens because the token claims bind it and the
+confirmation validator re-derives it. Proof: `defset`: pre 65 definitions,
+post 65 across three files, removed none, added none, text-changed none.
+Every name any other module or test imports from `genie_actions` is
+re-exported, so no call site outside these files changed; the one test that
+read this file as text for the HMAC rotation contract
+(`tests/unit/test_disaster_recovery_contract.py`) now reads the tokens
+module, which is where that contract lives. Sixteen imports whose only
+consumers moved out left the routing module. Entry removed.
+
+### backend/services/sales_state.py (1,778 -> 163)
+
+Plan item 6: query-builder, mapper, persistence. The store class alone was
+1,459 lines, so the class is split by responsibility into a core and two
+mixins that inherit it, and every method keeps its exact text.
+
+| File | Lines | Content |
+|---|---|---|
+| `backend/services/sales_state.py` | 163 | `SalesStateStore(_SalesStateWrites, _SalesStateReporting)` with the original docstring and an empty body, the dependency accessors, `hydrate_leads_with_sales_state`, `new_server_request_id`, re-exports |
+| `backend/services/sales_state_mappers.py` | 228 | module cache state, the outcome-source vocabulary, the shared SQL, cache accessors, the row-to-schema mappers |
+| `backend/services/sales_state_core.py` | 539 | `_SalesStateCore`: constructor, scope guards, every read path, `_insert_audit_event` |
+| `backend/services/sales_state_writes.py` | 570 | `_SalesStateWrites(_SalesStateCore)`: `assign_lead`, `distribute`, `log_disposition`, `record_outcome` |
+| `backend/services/sales_state_reporting.py` | 434 | `_SalesStateReporting(_SalesStateCore)`: lifecycle, aging, standup, conversion, campaign-performance funnel, outcome summary |
+
+The self-call graph was checked first: writes and reporting call only core
+methods and never each other, so no class calls a method it cannot see and
+mypy accepts the mixins without signature edits. Proof:
+`defset --flatten-classes --allow-changed latest_dispositions_for`: pre 61
+definitions, post 62 across five files (the addition is `__all__`), removed
+none. The one allowed change is type-only and lives in
+`latest_dispositions_for`, a core reader that leaves the mypy-exempt module:
+a stale `type: ignore[dict-item]` was dropped and the returned values are
+`cast` to `CallDisposition` before `model_copy`; `cast` is an identity at
+runtime. The mappers and cache accessors had to leave the hub module because
+the mixins read them at module scope (keeping them behind would be an import
+cycle); they are re-exported, and no test patches them on the module. Entry
+removed.
+
+### backend/services/repositories/databricks_portfolio.py (2,047 -> 688)
+
+Plan item 6: query-builder, mapper, persistence.
+
+| File | Lines | Content |
+|---|---|---|
+| `backend/services/repositories/databricks_portfolio.py` | 688 | `DatabricksPortfolioRepository(_PortfolioCampaignPersistence)`: preview, funnel, day-zero and household-dedup, plus re-exports |
+| `.../databricks_portfolio_predicates.py` | 282 | product codes and equity thresholds, `build_preview_predicates`, `build_kpi_trend`, cache-key and JSON helpers |
+| `.../databricks_portfolio_campaign_mappers.py` | 379 | the normalized-variant SQL, the public variant fields, `_public_campaign_variant`, the projections, `campaign_summary_from_row` |
+| `.../databricks_portfolio_campaign_sql.py` | 262 | `_PortfolioCampaignSql`: the six campaign statements verbatim |
+| `.../databricks_portfolio_campaigns.py` | 584 | `_PortfolioCampaignPersistence(_PortfolioCampaignSql)`: retry constants, the Lakebase client accessor, `create`, `list_campaigns`, `get`, `patch_status` and their helpers |
+
+The campaign block calls only its own methods and the preview path never
+calls it, so the base-class split is complete; `_client` is annotated (never
+assigned) on the persistence class so the campaign methods type-check
+against the client the repository constructor binds. Proof:
+`defset --flatten-classes --allow-changed log`: pre 58 definitions, post 61
+across five files, removed none; the additions are `__all__` and the
+`_client` annotation. The campaign mappers bind the same logger object by
+its explicit name (`backend.services.repositories.databricks_portfolio`)
+so the four structured events they emit keep their logger name. The eight
+monkeypatch targets in `tests/unit/test_portfolio_repo_timezone.py`
+(`time.sleep`, `get_correlation_id`) moved with their callers to the
+campaigns module; the old module no longer binds either name, so a stale
+target would have raised rather than silently missed. The campaign SQL is a
+fourth module because keeping it beside the methods left that file at ~830
+lines with no headroom. Entry removed.
+
+### backend/services/repositories/databricks_genie_canonical.py (3,166 -> 380)
+
+The 2026-06-17 addendum: prompt classifiers, SQL templates, result-shaping
+helpers. Seven responsibility modules sit behind an import hub that keeps the
+single import surface every caller uses.
+
+| File | Lines | Original lines |
+|---|---|---|
+| `databricks_genie_canonical.py` (hub) | 380 | re-exports of every top-level name plus `__all__` |
+| `databricks_genie_canonical_sql.py` | 403 | 83–317, 340–497: asset names, count/share/distribution/geography SQL |
+| `databricks_genie_canonical_ranking_sql.py` | 536 | 319–338, 499–590, 979–1387: every borrower-ranking shape, including the 2026-08-06 re-assignment block and the legacy assignments it supersedes, in their original relative order |
+| `databricks_genie_canonical_metric_sql.py` | 407 | 1389–1780: metric, time-series, lock-in, retention and MSA SQL |
+| `databricks_genie_canonical_briefs.py` | 394 | 593–977: analyst-brief result shaping |
+| `databricks_genie_canonical_scopes.py` | 397 | 14–81, 1782–2094: scope dataclasses, question normalizers, intent predicates, the US state vocabulary |
+| `databricks_genie_canonical_population_scopes.py` | 519 | 2097–2591: population and geography classifiers |
+| `databricks_genie_canonical_intent_scopes.py` | 593 | 2594–3166: top-borrower, segment and time-series classifiers |
+
+Import order is a directed acyclic graph (sql, ranking sql, scopes,
+population scopes, intent scopes; metric sql and briefs are leaves). The
+population/intent cut is at line 2591 rather than the sketched 2611 because
+`_canonical_top_borrowers_state_scope` calls a specific-intent helper and the
+two modules would otherwise import each other. The hub re-exports every
+top-level name, not only the 116 imported elsewhere, because
+`tests/unit/test_genie_sql_floor_extraction.py` enumerates the `_CANONICAL_*_SQL`
+corpus through `vars()` and asserts it is exhaustively declared.
+
+Proof: `defset` pre 178 definitions, post 179 across eight files, removed
+none, text-changed none; the one addition is the hub's `__all__`. One
+integration change on top of the worker's commit: the hub had grown an
+`importlib.reload` cascade so that reloading the hub would re-run the split
+modules; the only caller of that behavior is one test
+(`tests/unit/test_provision_genie_space.py`) that re-derives the
+catalog-qualified count SQL, so that test now reloads
+`databricks_genie_canonical_sql`, the module that defines the constant, and
+the hub binds names once at import time with no reload machinery. 421 tests
+across the provision-space, SQL-floor, repository and narrative-guard files
+pass on the integrated tree. Entry removed.
+
+### backend/services/repositories/databricks_genie_direct.py (2,100 -> 568)
+
+The 2026-06-17 addendum: population, segment, offer, ZIP/location and
+governance-response dispatchers. `direct_canonical_response` was one
+1,809-line function of top-level `if <scope>(question): ... return`
+branches. It is now a dispatcher whose skeleton is unchanged: each extracted
+branch became `if <same test>: return _direct_<name>(ctx[, local])`, where a
+frozen `_DirectContext` carries the prologue locals (question, SQL client,
+the trusted-response closure, the eight asset names, the trusted-asset list)
+and each helper opens with `name = ctx.name` lines for exactly the fields it
+reads, followed by the original body dedented one level.
+
+| File | Lines | Content |
+|---|---|---|
+| `databricks_genie_direct.py` | 568 | `_DirectContext`, `_trusted_sql_response`, `_guide_response`, the dispatcher and its default-count tail |
+| `databricks_genie_direct_population.py` | 624 | counts, shares, equity and negative-equity thresholds, listed, investor and HELOC counts, home-equity distribution, addressable market, ranked lead population |
+| `databricks_genie_direct_rankings.py` | 545 | top borrowers by state, global, all segments and specific intents, cash-out by equity, investor by related property, HELOC ZIPs, strategy board |
+| `databricks_genie_direct_segments.py` | 551 | refinance comparisons and drivers, top-tier compare, investor by state, mean spread, approval rate, offer mix, savings gap, HELOC recommendation, listed product and days on market, lock-in, top cohorts |
+| `databricks_genie_direct_metrics.py` | 180 | mean lead score by state, evidence events yesterday and this quarter, weekly distribution, approval trend |
+| `databricks_genie_direct_retention.py` | 135 | competitor lien list, retention risk |
+| `databricks_genie_direct_geo.py` | 120 | ITM ZIPs, ITM state breakdown |
+| `databricks_genie_direct_responses.py` | 51 | segment display labels and `_data_gap_response`, which the branches call (keeping them in the dispatcher would be an import cycle) |
+
+Proof: `tools/refactor_proof.py branches <pre>:direct_canonical_response
+databricks_genie_direct.py:direct_canonical_response --modules
+databricks_genie_direct*.py` reports 80 skeleton statements and 45 extracted
+branches, every body verbatim, no name out of scope; `defset` on the same
+files shows nothing removed, the 45 helpers and the context added, and only
+the dispatcher itself text-changed (the integrator re-ran both). The branch
+modules import `_DirectContext` under `TYPE_CHECKING`. 2,194 tests across
+the direct, repository, SQL-floor, narrative-guard, provision-space, persona
+regression, process-trace, retention-risk, no-refusal battery, architecture
+and typecheck-ratchet files pass, and mypy reports no issues. Entry removed.
+
+### backend/services/repositories/databricks_genie.py (2,410 -> 799)
+
+Plan item 4 for this file: guardrails and response shaping separated from
+the repository. Two verbatim moves plus one branch extraction.
+
+| File | Lines | Content |
+|---|---|---|
+| `databricks_genie.py` | 799 | `DatabricksGenieRepository`, `_adapt_genie_response`, the degraded-fallback annotation, re-exports |
+| `databricks_genie_narrative.py` | 453 | cell formatting, plain labels, factual row summaries, narrative repair prompt, verification notes, metric contradiction check, `_restore_live_voice` |
+| `databricks_genie_cross_check.py` | 149 | `_CrossCheckOutcome` and `_governed_cross_check` |
+| `databricks_genie_canonical_answer.py` | 227 | `_CanonicalAnswerContext`, the `_canonical_genie_answer` dispatcher and its tail |
+| `databricks_genie_canonical_answer_rankings.py` | 464 | top borrowers by state, global, all segments and specific intents |
+| `databricks_genie_canonical_answer_geo.py` | 470 | ITM ZIPs, HELOC ZIPs, cash-out by state, listed purchase, MSA score, ITM count by city |
+| `databricks_genie_canonical_answer_retention.py` | 286 | competitor lien list, retention risk, segment-performance rescue |
+
+Proof: `branches <pre>:_canonical_genie_answer
+databricks_genie_canonical_answer.py:_canonical_genie_answer --modules
+databricks_genie_canonical_answer*.py` reports 42 skeleton statements and 14
+extracted branches with exactly three findings, each the same one-line
+type-only edit (`count = row.get(...)` became `count: Any = row.get(...)`,
+in `_answer_retention_risk`, `_answer_in_the_money_count_by_city`, and the
+dispatcher tail); running the proof against copies with those three lines
+reverted prints `branches proof OK`, so nothing else differs. Those are the
+three `int()`-of-`Any | None` errors the module's mypy exemption had been
+hiding, surfaced because the bodies now live in type-checked modules.
+`defset --allow-changed _canonical_genie_answer`: pre 28 definitions, post
+43 across seven files, removed none; the additions are the 14 helpers and
+the context. The one test that patched `_emit_genie_warning` on the
+repository module (`tests/unit/test_genie_repository.py`) now patches the
+dispatcher module, where that name is read. 49 imports whose only consumers
+moved out left the repository module; the two names other modules still
+reach through it keep compatibility re-exports. 2,006 tests across the
+repository, process-trace, persona-regression, sweep-deadline,
+narrative-guard, direct, retention-risk, no-refusal battery,
+typecheck-ratchet and architecture files pass, and mypy reports no issues.
+Entry removed.
+
+### backend/api/outreach.py (2,200 -> 764)
+
+The 2026-08-05 addendum's four steps for the human-approval and audit path:
+draft generation and verification, the atomic decision commit, campaign
+treatment assignment and eligibility gating, and a router that keeps only
+routing, request validation and response mapping. All four services live
+under `backend/services/`, so the router imports nothing from `backend.api`.
+
+| File | Lines | Content |
+|---|---|---|
+| `backend/api/outreach.py` | 764 | module docstring, router, the four dependency aliases, `draft_outreach`, `approve_outreach`, `reject_outreach`, importing every helper by name so the routes still call them as module globals |
+| `backend/services/outreach_decision_intent.py` | 357 | the leaf: canonical intent hashing, campaign-decision proof normalization and fingerprint, approve/reject intent construction and replay matching |
+| `backend/services/outreach_decision_commit.py` | 452 | the approvals ledger statements and campaign decision lock, existing-approval lookup and replay, `_supports_atomic_outreach_write`, `_lock_and_revalidate_campaign_decision`, `_commit_outreach_decision_atomic` |
+| `backend/services/outreach_campaign_gate.py` | 348 | campaign access and variant lookups, `_resolve_governed_campaign_variant`, `_enforce_contact_eligibility`, evidence-id derivation, marketing audit payload, disclosure resolution, reject rationale |
+| `backend/services/outreach_drafts.py` | 391 | generated-draft statements, draft verification and placeholder assertions, `_persist_generated_outreach_draft` |
+
+The module graph is acyclic: intent is the leaf; commit and the campaign gate
+import intent; drafts imports intent and the campaign gate; the router
+imports all four. Proof: `defset`: pre 54 definitions, post 54 across five
+files, removed none, added none, text-changed none. The public wire contract
+is unchanged: `app.openapi()` serialized with sorted keys is identical
+between a pristine main tree and the integrated tree across all 188 `/api`
+paths and 211 component schemas (the only difference in the raw documents is
+the `/{full_path}` SPA fallback route, which `backend/main.py` mounts only
+when a built frontend is present; the pristine tree has no build), and the
+committed OpenAPI baseline tests pass. The autouse conftest patch of
+`enqueue_lifecycle_trigger` and the one object-form patch of
+`_resolve_governed_campaign_variant` still land on names the routes read from
+the router module; the three outreach test files that reached helpers the
+router no longer binds (`_APPROVAL_LOOKUP_BY_REQUEST_ID`,
+`_CAMPAIGN_DECISION_LOCK_LOOKUP`, `_lock_and_revalidate_campaign_decision`,
+`_campaign_decision_proof_fingerprint`, `_canonical_intent`,
+`_existing_approval_response_or_conflict`, `BORROWER_DECISION_LOCK`,
+`settings`) now import them from the owning module, because ruff forbids
+keeping dead imports on the router for tests and a patch on a name the caller
+cannot see fails silently (before the repoint one file failed with 503s, not
+attribute errors). Services raising `HTTPException` follow existing practice
+(19 modules under `backend/services/` already do). Entry removed.
+
+### Outcome
+
+Every entry that was due to expire on 2026-09-15 is split and removed; the
+allowlist is empty for the first time since the gate was introduced.
+
+| Original file | Before | After | New modules |
+|---|---|---|---|
+| `tools/e2e_borrower_audit.py` | 1,526 | 343 | 5 |
+| `tools/databricks/converge_campaign_treatment_access.py` | 936 | 423 | 1 |
+| `frontend/src/components/mortgage/LeadTable.tsx` | 1,261 | 567 | 5 |
+| `frontend/src/components/mortgage/USChoroplethMap.tsx` | 1,044 | 677 | 3 |
+| `backend/services/resilience.py` | 986 | 223 | 2 |
+| `backend/services/lakebase_bootstrap.py` | 927 | 489 | 2 |
+| `backend/services/capabilities.py` | 911 | 460 | 2 |
+| `backend/services/audit_store.py` | 1,872 | 260 | 3 |
+| `frontend/src/design-system/components.css` | 6,630 | 20 | 14 |
+| `frontend/src/lib/api.ts` | 2,195 | 112 | 14 |
+| `backend/services/genie_client.py` | 983 | 772 | 1 |
+| `backend/services/genie_actions.py` | 1,529 | 819 | 2 |
+| `backend/services/sales_state.py` | 1,778 | 163 | 4 |
+| `backend/services/repositories/databricks_portfolio.py` | 2,047 | 688 | 4 |
+| `backend/services/repositories/databricks_genie_canonical.py` | 3,166 | 380 | 7 |
+| `backend/services/repositories/databricks_genie_direct.py` | 2,100 | 568 | 7 |
+| `backend/services/repositories/databricks_genie.py` | 2,410 | 799 | 6 |
+| `backend/api/outreach.py` | 2,200 | 764 | 4 |
+
+34,501 lines that lived in eighteen files now live in 104, every one under
+900 (the largest new module is 793 lines). No consumer outside a split
+changed except the tests named under each file. Gates on the integrated
+branch: ruff, mypy (304 files, no exemption added), the file-size gate,
+eslint, `tsc -b`, the production build and bundle budget, the full frontend
+suite (1,085 tests) and the full backend unit suite.
+
+**Watch list.** Five files sit between 750 and 900 lines and are the ones most
+likely to cross the limit again: `genie_actions.py` (819),
+`databricks_genie.py` (799), `13-route-composition.css` (793),
+`genie_client.py` (772) and `outreach.py` (764). The next edit that pushes
+one of them over 900 should split it rather than list it; the tools and the
+patterns above make that a same-day change.

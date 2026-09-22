@@ -1711,7 +1711,7 @@ def test_create_resolves_concurrent_insert_with_separate_lookup(monkeypatch):
         lambda: lakebase,
     )
     monkeypatch.setattr(
-        "backend.services.repositories.databricks_portfolio.time.sleep",
+        "backend.services.repositories.databricks_portfolio_campaigns.time.sleep",
         lambda _delay: None,
     )
     repo = DatabricksPortfolioRepository(client)  # type: ignore[arg-type]
@@ -1752,7 +1752,7 @@ def test_create_bounds_empty_post_conflict_idempotency_lookup(monkeypatch):
         lambda: lakebase,
     )
     monkeypatch.setattr(
-        "backend.services.repositories.databricks_portfolio.time.sleep",
+        "backend.services.repositories.databricks_portfolio_campaigns.time.sleep",
         lambda _delay: None,
     )
     repo = DatabricksPortfolioRepository(client)  # type: ignore[arg-type]
@@ -1886,7 +1886,7 @@ def test_campaign_status_retry_replays_one_audited_transition(monkeypatch):
         lambda: lakebase,
     )
     monkeypatch.setattr(
-        "backend.services.repositories.databricks_portfolio.get_correlation_id",
+        "backend.services.repositories.databricks_portfolio_campaigns.get_correlation_id",
         lambda: "campaign-status-request-1",
     )
     repo = DatabricksPortfolioRepository(_StubClient(_preview_row(), []))  # type: ignore[arg-type]
@@ -1964,7 +1964,7 @@ def test_campaign_status_allows_repeated_lifecycle_cycle_and_stable_old_replay(m
         lambda: lakebase,
     )
     monkeypatch.setattr(
-        "backend.services.repositories.databricks_portfolio.get_correlation_id",
+        "backend.services.repositories.databricks_portfolio_campaigns.get_correlation_id",
         lambda: next(request_ids),
     )
     repo = DatabricksPortfolioRepository(_StubClient(_preview_row(), []))  # type: ignore[arg-type]
@@ -2030,7 +2030,7 @@ def test_campaign_status_request_identity_payload_mismatch_is_conflict(monkeypat
         lambda: lakebase,
     )
     monkeypatch.setattr(
-        "backend.services.repositories.databricks_portfolio.get_correlation_id",
+        "backend.services.repositories.databricks_portfolio_campaigns.get_correlation_id",
         lambda: "campaign-status-request-mismatch",
     )
     repo = DatabricksPortfolioRepository(_StubClient(_preview_row(), []))  # type: ignore[arg-type]
@@ -2074,7 +2074,7 @@ def test_campaign_status_replay_binds_expected_source_status(monkeypatch) -> Non
         lambda: lakebase,
     )
     monkeypatch.setattr(
-        "backend.services.repositories.databricks_portfolio.get_correlation_id",
+        "backend.services.repositories.databricks_portfolio_campaigns.get_correlation_id",
         lambda: "campaign-status-expected-source-replay",
     )
     repo = DatabricksPortfolioRepository(_StubClient(_preview_row(), []))  # type: ignore[arg-type]
@@ -2119,7 +2119,7 @@ def test_campaign_status_lost_update_maps_to_conflict(monkeypatch):
         lambda: lakebase,
     )
     monkeypatch.setattr(
-        "backend.services.repositories.databricks_portfolio.time.sleep",
+        "backend.services.repositories.databricks_portfolio_campaigns.time.sleep",
         lambda _delay: None,
     )
     repo = DatabricksPortfolioRepository(_StubClient(_preview_row(), []))  # type: ignore[arg-type]
@@ -2194,7 +2194,7 @@ def test_distinct_status_correlations_allow_only_one_expected_source_update(monk
         lambda: lakebase,
     )
     monkeypatch.setattr(
-        "backend.services.repositories.databricks_portfolio.get_correlation_id",
+        "backend.services.repositories.databricks_portfolio_campaigns.get_correlation_id",
         lambda: next(correlations),
     )
     repo = DatabricksPortfolioRepository(_StubClient(_preview_row(), []))  # type: ignore[arg-type]

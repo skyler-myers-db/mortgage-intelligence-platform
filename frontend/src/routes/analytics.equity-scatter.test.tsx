@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 // @ts-expect-error see node:fs note above.
 import { join } from 'node:path';
+import { designCss } from '../test/designCss';
 import {
   SCORE_BAND_HIGH_MIN,
   SCORE_BAND_MED_MIN,
@@ -353,9 +354,9 @@ describe('Equity versus rate spread score-band legend', () => {
 
   it('keeps scatter loading height stable while reducing the chart height on narrow containers', () => {
     const css = [
-      join(process.cwd(), 'src', 'design-system', 'components.css'),
-      join(process.cwd(), 'src', 'routes', 'analytics.scatter.css'),
-    ].map((path) => readFileSync(path, 'utf8')).join('\n');
+      designCss(),
+      readFileSync(join(process.cwd(), 'src', 'routes', 'analytics.scatter.css'), 'utf8'),
+    ].join('\n');
 
     expect(css).toMatch(/\.analytics-chart-panel--scatter\s*\{[^}]*min-height:/s);
     expect(css).toMatch(

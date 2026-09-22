@@ -1,0 +1,535 @@
+#!/usr/bin/env python3
+"""Bounded target-identity probes for the campaign-treatment access converger.
+
+Mints a short-lived exact OAuth credential for the target principal, reads its
+effective groups inside an ambient-credential-free environment with a bounded
+settle window, and reports secret-free diagnostics on failure. Split out of
+``converge_campaign_treatment_access.py`` on 2026-09-08; every definition moved
+verbatim (see ``docs/maintenance/file-size-refactor-plan.md``).
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import sys
+import time
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from typing import Any
+
+from databricks.sdk import AccountClient, WorkspaceClient
+from tools.databricks.oauth_credential_creation import (
+    ExactOAuthCredential,
+    create_exact_oauth_credential,
+    revoke_exact_oauth_credential,
+)
+from tools.databricks.oauth_credential_quarantine import (
+    CredentialMutationContext,
+    CredentialMutationQuarantineError,
+)
+
+# Bounded settle window for new-credential propagation.
+#
+# CORRECTION (2026-08-04): this was first added believing propagation was the
+# cause of the step-4 `invalid_client` failures. That premise was DISPROVEN by
+# measurement — three trials against this same principal, at this same 300s
+# lifetime, authenticated in 1.4-2.3s, and the window ran its full deadline in
+# CI without ever succeeding. It is retained only as defense-in-depth for a
+# genuinely slow mint, and costs at most `_CREDENTIAL_SETTLE_DEADLINE_S` on a
+# doomed attempt. The actual CI failure is being diagnosed by
+# `_describe_probe_failure` instead.
+#
+# It is not an authorization fallback: the credential stays bound to the same
+# principal, every identity assertion after the call is unchanged, and cleanup
+# remains fatal. Any non-auth error, and any auth rejection still standing at
+# the deadline, propagates unchanged.
+_OAUTH_AUTH_REJECTION_CODES = frozenset(
+    {
+        "invalid_client",
+        "invalid_grant",
+        "unauthenticated",
+        "unauthorized_client",
+    }
+)
+_OAUTH_ERROR_CODE_RE = re.compile(r"^(?P<code>[a-z][a-z0-9_]*)\s*:")
+_CREDENTIAL_SETTLE_DEADLINE_S = 90.0
+_CREDENTIAL_SETTLE_INTERVAL_S = 5.0
+
+# Bounded mint-and-prove retry.
+#
+# CI evidence (2026-08-04) shows the account-side secret inventory for the
+# target principal is transiently unstable, in two forms: a create whose
+# post-create listing fails the exact before+{new} check ("incomplete or
+# ambiguous"), and a create that validates but whose credential is absent
+# moments later. Both leave the probe holding nothing usable, and the original
+# design mints exactly once, so either form aborts the entire deployment.
+#
+# Each attempt independently re-reads `before_ids`, validates exactly, and
+# restores on failure — the governance contract per attempt is unchanged. Only
+# the number of attempts is new, so a transient inventory blip no longer ends
+# the deploy while a genuine, persistent failure still does.
+_CREDENTIAL_MINT_ATTEMPTS = 3
+_CREDENTIAL_MINT_BACKOFF_S = 10.0
+_CREDENTIAL_INSTABILITY_MARKERS = (
+    "incomplete or ambiguous",
+    "did not become stable",
+)
+
+
+def _is_transient_credential_instability(error: BaseException) -> bool:
+    text = str(error).casefold()
+    return any(marker in text for marker in _CREDENTIAL_INSTABILITY_MARKERS)
+
+
+def _is_oauth_auth_rejection(error: BaseException) -> bool:
+    match = _OAUTH_ERROR_CODE_RE.match(str(error).strip())
+    return bool(match) and match.group("code") in _OAUTH_AUTH_REJECTION_CODES
+
+
+def read_identity_with_credential_settle(
+    read_identity: Callable[[], Any],
+    *,
+    sleep: Callable[[float], None] = time.sleep,
+    monotonic: Callable[[], float] = time.monotonic,
+    deadline_s: float = _CREDENTIAL_SETTLE_DEADLINE_S,
+    interval_s: float = _CREDENTIAL_SETTLE_INTERVAL_S,
+) -> Any:
+    """Read the target identity, absorbing new-credential propagation only."""
+
+    deadline = monotonic() + deadline_s
+    while True:
+        try:
+            return read_identity()
+        except BaseException as exc:
+            if not _is_oauth_auth_rejection(exc) or monotonic() >= deadline:
+                raise
+        sleep(interval_s)
+
+
+_TEMPORARY_PROBE_SECRET_LIFETIME = "300s"
+
+
+# Ambient deployer credentials that must not leak into the bounded target
+# identity proof. ``account_client_from_env`` already builds the account plane
+# with an explicit Config "without inheriting workspace credentials"; the
+# target workspace client was constructed from bare kwargs, so the SDK could
+# still merge whatever the deploy shell exported (the workflow sets
+# DATABRICKS_HOST/TOKEN/AUTH_TYPE=pat for the deployer). The SDK resolves its
+# token lazily at request time, so the read must run inside the same isolation
+# as the construction.
+_AMBIENT_AUTH_ENV_VARS = (
+    "DATABRICKS_TOKEN",
+    "DATABRICKS_AUTH_TYPE",
+    "DATABRICKS_CLIENT_ID",
+    "DATABRICKS_CLIENT_SECRET",
+    "DATABRICKS_CONFIG_PROFILE",
+    "DATABRICKS_CONFIG_FILE",
+    "DATABRICKS_HOST",
+    "DATABRICKS_USERNAME",
+    "DATABRICKS_PASSWORD",
+)
+
+
+@contextmanager
+def isolated_target_auth_env() -> Iterator[tuple[str, ...]]:
+    """Remove ambient Databricks auth env for the duration of a probe.
+
+    Yields the names (never values) of the variables that were removed so a
+    failure can report the ambient state it ran against. Always restored.
+    """
+
+    saved = {name: os.environ.pop(name) for name in _AMBIENT_AUTH_ENV_VARS if name in os.environ}
+    try:
+        yield tuple(sorted(saved))
+    finally:
+        os.environ.update(saved)
+
+
+def _fingerprint(value: object) -> str:
+    """Stable, non-secret fingerprint of an identifier.
+
+    CI masks secret VALUES in logs, which hides exactly the identifiers a
+    failure analysis needs (which service principal, which host, which
+    account). A truncated SHA-256 is not the secret, so it survives masking
+    and can be compared against a locally computed digest of a known-good id.
+    """
+
+    import hashlib
+
+    text = str(value or "").strip()
+    if not text:
+        return "<unset>"
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+
+
+def _probe_timeline(minted_at: float) -> str:
+    """Seconds elapsed since the temporary credential was minted."""
+
+    return f"seconds_since_mint={time.monotonic() - minted_at:.1f}"
+
+
+def _credential_presence(account: object, principal_id: str, credential_id: str) -> str:
+    """Report whether the just-minted credential still exists account-side.
+
+    Distinguishes "something deleted our secret between mint and use" (a
+    concurrency/reaper problem in our own tooling) from "the secret exists and
+    the platform refuses it" (a Databricks-side problem). Never raises.
+    """
+
+    try:
+        secrets = list(account.service_principal_secrets.list(principal_id))  # type: ignore[attr-defined]
+        ids = {str(getattr(item, "id", "")) for item in secrets}
+        inventory = ";".join(
+            f"{str(getattr(item, 'id', ''))[:8]}@{getattr(item, 'status', '?')}"
+            f"/exp={getattr(item, 'expire_time', '?')}"
+            for item in secrets
+        )
+        return (
+            f"minted_credential_present={str(credential_id in ids).lower()} "
+            f"minted_id_prefix={credential_id[:8]} "
+            f"account_secret_count={len(ids)} "
+            f"account_inventory=[{inventory}]"
+        )
+    except Exception as exc:  # noqa: BLE001 - diagnostic only
+        return f"credential_presence_error={type(exc).__name__}: {str(exc)[:80]}"
+
+
+def _describe_probe_failure(
+    error: BaseException,
+    *,
+    workspace: object,
+    application_id: str,
+    host: str,
+    stripped_env: tuple[str, ...],
+    account_scim_id: str = "",
+    credential_state: str = "",
+) -> str:
+    """Build a secret-free description of a target-identity auth failure.
+
+    The step-4 ``invalid_client`` rejection reproduced only on CI runners and
+    never locally (three trials at the same 300s lifetime authenticated in
+    1.4-2.3s), so the deciding evidence — which client id and auth mode the
+    SDK actually resolved — has to come from the failing environment itself.
+    Values are never emitted: only identifiers already present in deploy logs
+    and the NAMES of ambient variables.
+    """
+
+    config = getattr(getattr(workspace, "api_client", None), "_cfg", None) or getattr(
+        workspace, "config", None
+    )
+    resolved_client = str(getattr(config, "client_id", "") or "")
+    return (
+        "[identity-probe] target authentication failed: "
+        f"error={type(error).__name__}: {str(error)[:120]} | "
+        f"intended_client_id={application_id} | "
+        f"resolved_client_id={resolved_client or '<unset>'} | "
+        f"client_id_matches={str(resolved_client == application_id).lower()} | "
+        f"resolved_auth_type={getattr(config, 'auth_type', None) or '<unset>'} | "
+        f"resolved_host={str(getattr(config, 'host', '') or host)} | "
+        f"ambient_auth_env_removed={','.join(stripped_env) or '<none>'} | "
+        f"ambient_auth_env_remaining="
+        f"{','.join(sorted(n for n in _AMBIENT_AUTH_ENV_VARS if n in os.environ)) or '<none>'} | "
+        # Mask-proof identity fingerprints: CI redacts the values themselves,
+        # which is precisely what a failure analysis needs to compare.
+        f"fp_client_id={_fingerprint(application_id)} | "
+        f"fp_host={_fingerprint(host)} | "
+        f"fp_account_scim_id={_fingerprint(account_scim_id)} | "
+        f"fp_account_id={_fingerprint(os.environ.get('DATABRICKS_ACCOUNT_ID'))} | "
+        f"fp_account_client_id={_fingerprint(os.environ.get('DATABRICKS_ACCOUNT_CLIENT_ID'))} | "
+        f"fp_account_host={_fingerprint(os.environ.get('DATABRICKS_ACCOUNT_HOST'))} | "
+        f"{credential_state}"
+    )
+
+
+def _canonical(value: object) -> str:
+    return str(value or "").strip().casefold()
+
+
+def target_identity_groups_probe(
+    account: AccountClient,
+    account_sp_id: str,
+    application_id: str,
+    *,
+    expected_workspace_scim_id: str,
+    workspace_host: str,
+    assert_single_writer: Callable[[], None],
+    workspace_factory: Callable[..., WorkspaceClient] = WorkspaceClient,
+) -> dict[str, str]:
+    """Return authoritative effective groups as the target App identity.
+
+    Account SCIM cannot prove a negative membership result when Automatic
+    Identity Management is enabled. Mint a bounded target-SP credential and
+    read that identity's own SCIM ``groups`` collection instead. SCIM defines
+    that collection to include direct, nested, and dynamically calculated
+    membership, so this proof needs no SQL warehouse authority. Cleanup
+    failure is always fatal.
+    """
+
+    host = workspace_host.strip()
+    if not host:
+        raise RuntimeError("Workspace host is required for target identity proof")
+    principal_id = account_sp_id.strip()
+    if not principal_id:
+        raise RuntimeError("Account service-principal id is required for identity proof")
+    workspace_principal_id = expected_workspace_scim_id.strip()
+    if not workspace_principal_id:
+        raise RuntimeError("Workspace service-principal id is required for identity proof")
+    credential: ExactOAuthCredential | None = None
+    probe_error: BaseException | None = None
+    effective_groups: dict[str, str] = {}
+
+    def _mint_probe_credential() -> ExactOAuthCredential:
+        """Mint one temporary credential, retrying transient inventory blips.
+
+        Every attempt performs the full exact-inventory contract (fresh
+        before_ids, exact validation, restore-on-failure); a quarantine or any
+        non-instability error propagates immediately and unchanged.
+        """
+
+        last_error: BaseException | None = None
+        for attempt in range(1, _CREDENTIAL_MINT_ATTEMPTS + 1):
+            try:
+                return _create_probe_credential()
+            except CredentialMutationQuarantineError:
+                raise
+            except BaseException as exc:
+                if not _is_transient_credential_instability(exc):
+                    raise
+                last_error = exc
+                print(
+                    f"[identity-probe] credential mint attempt {attempt} of "
+                    f"{_CREDENTIAL_MINT_ATTEMPTS} hit transient account-inventory "
+                    # The full before/after/added/removed inventory sets are
+                    # the whole diagnostic; the old 120-char cap cut them off
+                    # exactly where they began (2026-08-09 deploy incident).
+                    f"instability: {str(exc)[:600]}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                if attempt < _CREDENTIAL_MINT_ATTEMPTS:
+                    time.sleep(_CREDENTIAL_MINT_BACKOFF_S)
+        assert last_error is not None
+        raise last_error
+
+    def _create_probe_credential() -> ExactOAuthCredential:
+        return create_exact_oauth_credential(
+            principal_id=principal_id,
+            list_credentials=lambda: account.service_principal_secrets.list(
+                principal_id
+            ),
+            create_credential=lambda: account.service_principal_secrets.create(
+                principal_id,
+                lifetime=_TEMPORARY_PROBE_SECRET_LIFETIME,
+            ),
+            delete_credential=lambda credential_id: (
+                account.service_principal_secrets.delete(
+                    principal_id,
+                    credential_id,
+                )
+            ),
+            assert_single_writer=assert_single_writer,
+            mutation_context=CredentialMutationContext(
+                authority_scope="account",
+                authority_identity=application_id,
+                provider_api="account.service_principal_secrets",
+                operation_mode="temporary_probe",
+                sink_descriptor="temporary:target-identity-membership-probe",
+                credential_lifetime_seconds=300,
+            ),
+            label="temporary target identity",
+        )
+
+    try:
+        credential = _mint_probe_credential()
+        minted_at = time.monotonic()
+        # Presence at t~0 separates "the create never persisted" from
+        # "something reaped it during the probe window".
+        presence_at_mint = _credential_presence(
+            account, principal_id, credential.credential_id
+        )
+        # Construct AND read inside one isolation window: the SDK fetches its
+        # token lazily on the first request, so ambient deployer credentials
+        # would otherwise still be in scope when the token is minted.
+        with isolated_target_auth_env() as stripped_env:
+            target_workspace = workspace_factory(
+                host=host,
+                client_id=application_id,
+                client_secret=credential.secret,
+                auth_type="oauth-m2m",
+            )
+            try:
+                identity = read_identity_with_credential_settle(
+                    lambda: target_workspace.api_client.do(
+                        "GET",
+                        "/api/2.0/preview/scim/v2/Me",
+                        query={"attributes": "id,userName,groups"},
+                        headers={"Accept": "application/json"},
+                    )
+                )
+            except BaseException as exc:
+                # Emit the resolved-config evidence before unwinding; this is
+                # the only place the failing environment can be observed. The
+                # raw token-endpoint call captures the server's own
+                # error_description, which the SDK truncates away.
+                print(
+                    _describe_probe_failure(
+                        exc,
+                        workspace=target_workspace,
+                        application_id=application_id,
+                        host=host,
+                        stripped_env=stripped_env,
+                        account_scim_id=principal_id,
+                        # Decisive: does the credential we just minted still
+                        # EXIST at the moment authentication is refused? If it
+                        # vanished, something reaped it (concurrency); if it is
+                        # present, the credential is real and the platform is
+                        # rejecting it.
+                        credential_state=(
+                            _credential_presence(
+                                account, principal_id, credential.credential_id
+                            )
+                            + " "
+                            + _probe_timeline(minted_at)
+                            + " | at_mint: "
+                            + presence_at_mint
+                        ),
+                    ),
+                    file=sys.stderr,
+                    flush=True,
+                )
+                raise
+        if not isinstance(identity, dict):
+            raise RuntimeError("Target identity membership proof returned a malformed identity")
+        identity_id = identity.get("id")
+        identity_name = identity.get("userName")
+        if (
+            not isinstance(identity_id, str)
+            or not identity_id
+            or identity_id != identity_id.strip()
+            or not isinstance(identity_name, str)
+            or not identity_name
+            or identity_name != identity_name.strip()
+        ):
+            raise RuntimeError(
+                "Target identity membership proof returned a malformed identity"
+            )
+        if (
+            identity_id != workspace_principal_id
+            or identity_name != application_id
+        ):
+            raise RuntimeError("Temporary credential authenticated as a different target identity")
+        if "groups" not in identity:
+            raise RuntimeError(
+                "Target identity membership proof omitted the authoritative groups collection"
+            )
+        groups = identity["groups"]
+        if not isinstance(groups, list):
+            raise RuntimeError(
+                "Target identity membership proof returned a malformed groups collection"
+            )
+        group_ids_by_name: dict[str, str] = {}
+        for group in groups:
+            if not isinstance(group, dict):
+                raise RuntimeError("Target identity membership proof returned a malformed group")
+            observed_id = group.get("value")
+            observed_name = group.get("display")
+            if observed_id in (None, ""):
+                raise RuntimeError(
+                    "Target identity membership proof returned a group without an id"
+                )
+            if observed_name in (None, ""):
+                raise RuntimeError(
+                    "Target identity membership proof returned a group without a display name"
+                )
+            if (
+                not isinstance(observed_id, str)
+                or observed_id != observed_id.strip()
+                or not isinstance(observed_name, str)
+                or observed_name != observed_name.strip()
+            ):
+                raise RuntimeError(
+                    "Target identity membership proof returned a malformed group"
+                )
+            canonical_name = observed_name.casefold()
+            if observed_id in effective_groups:
+                raise RuntimeError(
+                    "Target identity membership proof returned a duplicate group id"
+                )
+            if canonical_name in group_ids_by_name:
+                raise RuntimeError(
+                    "Target identity membership proof returned a duplicate group name"
+                )
+            effective_groups[observed_id] = observed_name
+            group_ids_by_name[canonical_name] = observed_id
+    except BaseException as exc:
+        probe_error = exc
+    finally:
+        if credential is not None:
+            try:
+                revoke_exact_oauth_credential(
+                    credential,
+                    principal_id=principal_id,
+                    list_credentials=lambda: account.service_principal_secrets.list(
+                        principal_id
+                    ),
+                    delete_credential=lambda credential_id: (
+                        account.service_principal_secrets.delete(
+                            principal_id,
+                            credential_id,
+                        )
+                    ),
+                    assert_single_writer=assert_single_writer,
+                    label="temporary target identity",
+                )
+            except CredentialMutationQuarantineError:
+                raise
+            except BaseException as cleanup_error:
+                raise RuntimeError(
+                    "Temporary target identity credential cleanup could not be proven"
+                ) from cleanup_error
+    if probe_error is not None:
+        raise probe_error
+    return effective_groups
+
+
+def target_group_membership_probe(
+    account: AccountClient,
+    account_sp_id: str,
+    application_id: str,
+    owner_group_id: str,
+    owner_group: str,
+    *,
+    expected_workspace_scim_id: str,
+    workspace_host: str,
+    assert_single_writer: Callable[[], None],
+    workspace_factory: Callable[..., WorkspaceClient] = WorkspaceClient,
+) -> bool:
+    """Evaluate one owner group against the target's authoritative snapshot."""
+
+    group_id = owner_group_id.strip()
+    if not group_id:
+        raise RuntimeError("Account group id is required for identity proof")
+    group_name = owner_group.strip()
+    if not group_name:
+        raise RuntimeError("Account group name is required for identity proof")
+    effective_groups = target_identity_groups_probe(
+        account,
+        account_sp_id,
+        application_id,
+        expected_workspace_scim_id=expected_workspace_scim_id,
+        workspace_host=workspace_host,
+        assert_single_writer=assert_single_writer,
+        workspace_factory=workspace_factory,
+    )
+    expected_name = _canonical(group_name)
+    observed_name = effective_groups.get(group_id)
+    if observed_name is not None:
+        if _canonical(observed_name) != expected_name:
+            raise RuntimeError(
+                "Target identity membership proof returned a mismatched group name"
+            )
+        return True
+    if any(_canonical(name) == expected_name for name in effective_groups.values()):
+        raise RuntimeError("Target identity membership proof returned a mismatched group id")
+    return False

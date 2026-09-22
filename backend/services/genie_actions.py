@@ -2,36 +2,15 @@
 
 from __future__ import annotations
 
-import base64
 import hashlib
-import hmac
 import json
-import re
-import secrets
 import time
-from collections.abc import Mapping
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
-from uuid import uuid4
 
 from fastapi import HTTPException
 
-from backend.config.runtime_secret_policy import (
-    require_distinct_rotation_secrets,
-    require_strong_runtime_secret,
-    runtime_secret_text,
-)
-from backend.config.settings import settings
-from backend.schemas._validators_tenant import normalize_public_lender_ref
-from backend.schemas.common import validate_public_borrower_id
-from backend.schemas.genie_geo_filters import (
-    GENIE_CITY_FILTER_KEY,
-    MAX_CITY_FILTER_VALUES,
-    parse_city_state_pair,
-)
-from backend.schemas.genie_numeric_filters import GENIE_NUMERIC_FILTER_BOUNDS
-from backend.schemas.lead import GENIE_REPLAY_SEGMENT_CODES
-from backend.schemas.portfolio import PortfolioCriteria
+from backend.schemas.genie_geo_filters import GENIE_CITY_FILTER_KEY
 from backend.services.audit_store import (
     _assert_allowlisted,
     _assert_no_pii,
@@ -39,12 +18,35 @@ from backend.services.audit_store import (
     _sanitize_metadata,
 )
 from backend.services.error_sanitizer import safe_dependency_detail
+from backend.services.genie_action_filters import (
+    _GENIE_SEGMENT_CODE_RE,  # noqa: F401 - compatibility re-export
+    _LEAD_QUEUE_PORTFOLIO_QUERY_KEYS,
+    _LEAD_QUEUE_REPLAY_KEYS,
+    _MAX_UNREPLAYABLE_FILTER_KEYS,  # noqa: F401 - compatibility re-export
+    _REPLAYABLE_FILTER_KEYS,  # noqa: F401 - compatibility re-export
+    _REPLAYABLE_NUMERIC_FILTERS,
+    _cohort_route_filters,
+    _disclosed_filter_key,  # noqa: F401 - compatibility re-export
+)
+from backend.services.genie_action_tokens import (
+    _action_token_claims,
+    _action_token_keys,  # noqa: F401 - compatibility re-export
+    _current_action_token_key,  # noqa: F401 - compatibility re-export
+    _decode_action_token,
+    _previous_action_token_key,  # noqa: F401 - compatibility re-export
+    _sign_action_claims,  # noqa: F401 - compatibility re-export
+    borrower_ids,
+    criteria_summary,
+    decode_genie_claims,  # noqa: F401 - compatibility re-export
+    genie_claims_key_id,  # noqa: F401 - compatibility re-export
+    issue_response_action_tokens,  # noqa: F401 - compatibility re-export
+    normalize_live_campaign_run_marker,
+    sign_genie_claims,  # noqa: F401 - compatibility re-export
+)
 from backend.services.genie_answers import (
     GenieActionRequest,
     GenieActionResponse,
-    GenieMessageResponse,
 )
-from backend.services.genie_trusted_assets import trusted_assets
 from backend.services.lakebase import LakebaseClient, LakebaseError
 from backend.services.observability import get_correlation_id
 from backend.services.workspace_store import WorkspaceStore
@@ -58,114 +60,8 @@ _ALLOWED_ACTION_TYPES = frozenset(
         "show_rationale",
     }
 )
-
-_ACTION_TOKEN_TTL_S = 2 * 60 * 60
-_PROCESS_ACTION_SECRET = secrets.token_urlsafe(32)
-_LOCAL_TEST_APP_ENVS = frozenset({"local", "test"})
-_PLACEHOLDER_ACTION_SECRETS = frozenset(
-    {
-        "redacted",
-        "changeme",
-        "change-me",
-        "change_me",
-        "placeholder",
-        "example",
-        "your-secret",
-        "your_secret",
-    }
-)
-_MAX_ACTION_FILTER_VALUES = 500
-# Reviewed numeric floors the Lead Queue applies verbatim, mapped to their
-# inclusive (minimum, maximum). Each is an integer `>=` predicate over a
-# gold.borrower_360 column, so a Genie answer narrowed by one of these hands
-# off the SAME population it just reported instead of a broader one:
-#   min_opportunity_score -> b.opportunity_score
-#   min_equity_pct        -> equity_pct (via reviewed PortfolioCriteria)
-#   min_rate_spread_bps   -> b.rate_spread_bps
-# The ranges live in ONE place -- backend/schemas/genie_numeric_filters.py --
-# because four other vocabularies validate the same values downstream and a
-# key bounded differently in one of them 500s after the cohort row is written.
-_REPLAYABLE_NUMERIC_FILTERS: Mapping[str, tuple[int, int]] = GENIE_NUMERIC_FILTER_BOUNDS
-# Keys the Lead Queue can actually replay (see `_cohort_route_filters`).
-# Anything else in a Genie answer's result_filters is disclosed, not applied.
-_REPLAYABLE_FILTER_KEYS = frozenset(
-    {
-        "zips",
-        GENIE_CITY_FILTER_KEY,
-        "county",
-        "counties",
-        "states",
-        "segment_codes",
-        "segment_mode",
-        "target_lender_ref",
-        "portfolio_criteria",
-        "borrower_ids",
-        "source",
-        *_REPLAYABLE_NUMERIC_FILTERS,
-    }
-)
-# Built from the one canonical replay vocabulary, not spelled out again.
-_GENIE_SEGMENT_CODE_RE = re.compile(
-    r"^(" + "|".join(sorted(GENIE_REPLAY_SEGMENT_CODES)) + r")$", re.IGNORECASE
-)
-_MAX_UNREPLAYABLE_FILTER_KEYS = 12
-_MAX_UNREPLAYABLE_FILTER_KEY_LEN = 64
-_UNSAFE_FILTER_KEY_CHARS = re.compile(r"[^a-z0-9_]+")
-_MAX_ACTION_STATE_VALUES = 56
 _CAMPAIGN_IDEMPOTENCY_LOOKUP_ATTEMPTS = 3
 _CAMPAIGN_IDEMPOTENCY_RETRY_DELAY_S = 0.01
-_LIVE_CAMPAIGN_RUN_MARKER_RE = re.compile(r"gha[a-j]+r[a-j]+")
-_LEAD_QUEUE_REPLAY_KEYS = frozenset(
-    {
-        "state",
-        "states",
-        "zip",
-        "zips",
-        # Plural-only, and stripped off the inbound URL like every other
-        # replayable key: `_route_with_cohort` re-adds it from the cohort row,
-        # so a hand-edited `?cities=…` cannot survive alongside a cohort_id.
-        GENIE_CITY_FILTER_KEY,
-        "county",
-        "counties",
-        "borrower_ids",
-        "segment",
-        "segment_codes",
-        "segment_mode",
-        "target_lender_ref",
-        "cohort_id",
-        "funnel_stage",
-        "approval_status",
-        "outreach_status",
-        "assigned_to",
-        "aged_days",
-        "limit",
-        "geography",
-        "occupancy",
-        "lien_status",
-        "lender_relationship",
-        "product",
-        "min_equity_pct_label",
-        "owner_link",
-        "purchase_intent",
-        "marketing_eligibility",
-        "consent_status",
-        "recency",
-        *_REPLAYABLE_NUMERIC_FILTERS,
-    }
-)
-_LEAD_QUEUE_PORTFOLIO_QUERY_KEYS = frozenset(
-    {
-        "geography",
-        "occupancy",
-        "lien_status",
-        "lender_relationship",
-        "product",
-        "min_equity_pct_label",
-        "owner_link",
-        "purchase_intent",
-        "recency",
-    }
-)
 
 _CAMPAIGN_INSERT_SQL = """
 WITH upserted_campaign AS (
@@ -331,26 +227,6 @@ ON CONFLICT (cohort_id, borrower_id) DO UPDATE SET
 """
 
 
-def borrower_ids(ids: list[str]) -> list[str]:
-    out: list[str] = []
-    for value in ids:
-        try:
-            borrower_id = validate_public_borrower_id(str(value))
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=400,
-                detail="Genie action includes invalid borrower id",
-            ) from exc
-        if borrower_id not in out:
-            out.append(borrower_id)
-    if len(out) > _MAX_ACTION_FILTER_VALUES:
-        raise HTTPException(
-            status_code=400,
-            detail="Genie action returned too many borrower filters to replay safely",
-        )
-    return out
-
-
 def _genie_event_type(action_type: str) -> str:
     return f"GENIE_ACTION_{action_type.upper()}"
 
@@ -361,315 +237,6 @@ def _reviewed_audit_metadata(action: str, payload: dict[str, Any]) -> str:
     _assert_allowlisted(metadata)
     _assert_public_safe_values(metadata)
     return json.dumps(metadata)
-
-
-def criteria_summary(criteria: dict[str, Any]) -> tuple[str, list[str], list[str], str | None]:
-    """Return the audited digest for reviewed Genie action criteria."""
-
-    source_assets = _validated_source_assets(criteria)
-    criteria_keys = sorted(str(k) for k in criteria)
-    canonical_payload = {
-        str(k): criteria[k] for k in sorted(criteria, key=lambda value: str(value))
-    }
-    canonical = json.dumps(
-        canonical_payload,
-        sort_keys=True,
-        default=str,
-        separators=(",", ":"),
-    )
-    criteria_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
-    visualization_kind = criteria.get("visualization_kind")
-    return (
-        criteria_hash,
-        criteria_keys,
-        source_assets,
-        str(visualization_kind) if visualization_kind else None,
-    )
-
-
-def _validated_source_assets(criteria: dict[str, Any]) -> list[str]:
-    assets = [str(v) for v in criteria.get("source_assets", []) if isinstance(v, str)]
-    trusted = set(trusted_assets())
-    invalid = [asset for asset in assets if asset not in trusted]
-    if invalid:
-        raise HTTPException(status_code=400, detail="Genie action includes untrusted source assets")
-    return assets[:10]
-
-
-def _configured_secret_bytes(
-    configured: Any,
-    *,
-    name: str,
-    require_strong: bool,
-) -> bytes | None:
-    value = runtime_secret_text(
-        configured,
-        extra_placeholders=_PLACEHOLDER_ACTION_SECRETS,
-    )
-    if value is None:
-        return None
-    if require_strong:
-        value = require_strong_runtime_secret(
-            value,
-            name=name,
-            extra_placeholders=_PLACEHOLDER_ACTION_SECRETS,
-        )
-    return value.encode("utf-8")
-
-
-def _action_token_key_id() -> str:
-    value = (settings.mip_genie_action_secret_kid or "").strip()
-    return value or "v1"
-
-
-def _current_action_token_key() -> tuple[str, bytes]:
-    app_env = (settings.app_env or "").strip().lower()
-    require_strong = app_env not in _LOCAL_TEST_APP_ENVS
-    try:
-        secret = _configured_secret_bytes(
-            settings.mip_genie_action_secret_current,
-            name="MIP_GENIE_ACTION_SECRET_CURRENT",
-            require_strong=require_strong,
-        )
-    except ValueError as exc:
-        raise RuntimeError(str(exc)) from exc
-    if secret is not None:
-        return _action_token_key_id(), secret
-
-    if app_env not in _LOCAL_TEST_APP_ENVS:
-        raise RuntimeError(
-            "MIP_GENIE_ACTION_SECRET_CURRENT is required outside local/test app environments"
-        )
-
-    legacy_secret = _configured_secret_bytes(
-        settings.mip_genie_action_secret,
-        name="MIP_GENIE_ACTION_SECRET",
-        require_strong=False,
-    )
-    if legacy_secret is not None:
-        return _action_token_key_id(), legacy_secret
-    return "process", _PROCESS_ACTION_SECRET.encode("utf-8")
-
-
-def _previous_action_token_key() -> tuple[str, bytes] | None:
-    app_env = (settings.app_env or "").strip().lower()
-    try:
-        secret = _configured_secret_bytes(
-            settings.mip_genie_action_secret_previous,
-            name="MIP_GENIE_ACTION_SECRET_PREVIOUS",
-            require_strong=app_env not in _LOCAL_TEST_APP_ENVS,
-        )
-    except ValueError as exc:
-        raise RuntimeError(str(exc)) from exc
-    if secret is None:
-        return None
-    current = _current_action_token_key()[1].decode("utf-8")
-    try:
-        require_distinct_rotation_secrets(
-            current,
-            secret.decode("utf-8"),
-            current_name="MIP_GENIE_ACTION_SECRET_CURRENT",
-            previous_name="MIP_GENIE_ACTION_SECRET_PREVIOUS",
-        )
-    except ValueError as exc:
-        raise RuntimeError(str(exc)) from exc
-    key_id = (settings.mip_genie_action_secret_previous_kid or "").strip() or "previous"
-    return key_id, secret
-
-
-def _action_token_keys(*, kid_hint: str | None = None) -> list[tuple[str, bytes]]:
-    keys = [_current_action_token_key()]
-    previous = _previous_action_token_key()
-    if previous is not None:
-        keys.append(previous)
-    if kid_hint:
-        matching = [item for item in keys if item[0] == kid_hint]
-        nonmatching = [item for item in keys if item[0] != kid_hint]
-        return matching + nonmatching
-    return keys
-
-
-def _action_token_secret() -> bytes:
-    """Return the current signing secret.
-
-    Kept as a small compatibility helper for tests and adjacent modules; new
-    verification code uses ``_action_token_keys`` so previous-key grace windows
-    can validate in-flight tokens during rotation.
-    """
-
-    _key_id, secret = _current_action_token_key()
-    return secret
-
-
-def current_action_token_secret_for_cache() -> str:
-    """Return a stable, non-logged secret string for actor-cache hashing."""
-
-    return _action_token_secret().decode("utf-8")
-
-
-def _b64url_encode(raw: bytes) -> str:
-    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
-
-
-def _b64url_decode(value: str) -> bytes:
-    padded = value + ("=" * (-len(value) % 4))
-    return base64.urlsafe_b64decode(padded.encode("ascii"))
-
-
-def _action_token_claims(
-    *,
-    actor: str,
-    action_type: str,
-    borrower_ids: list[str],
-    criteria: dict[str, Any],
-    route: str | None,
-    conversation_id: str | None,
-    message_id: str | None,
-    question_hash: str | None,
-    request_id: str,
-    expires_at: int,
-    nonce: str,
-    key_id: str | None = None,
-    live_campaign_run_marker: str | None = None,
-) -> dict[str, Any]:
-    criteria_hash, _criteria_keys, source_assets, _visualization_kind = criteria_summary(criteria)
-    claims = {
-        "v": 1,
-        "actor": actor,
-        "action_type": action_type,
-        "borrower_ids": sorted(set(borrower_ids)),
-        "conversation_id": conversation_id or "",
-        "criteria_hash": criteria_hash,
-        "exp": expires_at,
-        "message_id": message_id or "",
-        "nonce": nonce,
-        "question_hash": question_hash or "",
-        "request_id": request_id,
-        "route": route or "",
-        "trusted_assets": sorted(set(source_assets)),
-    }
-    if key_id is not None:
-        claims["kid"] = key_id
-    if live_campaign_run_marker is not None:
-        claims["live_campaign_run_marker"] = live_campaign_run_marker
-    return claims
-
-
-def normalize_live_campaign_run_marker(value: object) -> str | None:
-    """Accept only the non-PII marker format derived by the live workflow."""
-
-    if value is None or value == "":
-        return None
-    marker = str(value).strip()
-    if len(marker) > 40 or not _LIVE_CAMPAIGN_RUN_MARKER_RE.fullmatch(marker):
-        raise ValueError("live campaign run marker is invalid")
-    return marker
-
-
-def _sign_action_claims(claims: dict[str, Any]) -> str:
-    canonical = json.dumps(claims, sort_keys=True, separators=(",", ":"), default=str)
-    body = _b64url_encode(canonical.encode("utf-8"))
-    sig = hmac.new(
-        _action_token_secret(),
-        body.encode("ascii"),
-        hashlib.sha256,
-    ).digest()
-    return f"{body}.{_b64url_encode(sig)}"
-
-
-def issue_response_action_tokens(
-    response: GenieMessageResponse,
-    *,
-    actor: str,
-    live_campaign_run_marker: str | None = None,
-) -> None:
-    normalized_run_marker = normalize_live_campaign_run_marker(live_campaign_run_marker)
-    signed_actions = []
-    for action in response.actions:
-        expires_at = int(time.time()) + _ACTION_TOKEN_TTL_S
-        request_id = action.request_id or f"genie-action-{uuid4()}"
-        action.request_id = request_id
-        key_id, _secret = _current_action_token_key()
-        try:
-            claims = _action_token_claims(
-                actor=actor,
-                action_type=action.action_type,
-                borrower_ids=borrower_ids(action.borrower_ids),
-                criteria=action.criteria,
-                route=action.route,
-                conversation_id=response.conversation_id,
-                message_id=response.message_id,
-                question_hash=response.question_hash,
-                request_id=request_id,
-                expires_at=expires_at,
-                nonce=secrets.token_urlsafe(12),
-                key_id=key_id,
-                live_campaign_run_marker=(
-                    normalized_run_marker
-                    if action.action_type == "create_draft_campaign"
-                    else None
-                ),
-            )
-        except HTTPException:
-            # Response actions are optional affordances. If a raw Genie answer
-            # returns an oversized or unsafe replay action, preserve the answer
-            # and proof but omit the unsafe confirmation path. Confirmed action
-            # requests still use the strict validators below.
-            continue
-        action.confirmation_token = _sign_action_claims(claims)
-        signed_actions.append(action)
-    response.actions = signed_actions
-
-
-def sign_genie_claims(claims: dict[str, Any]) -> str:
-    """Public HMAC signer for Genie-surface claims (progress tokens, actions).
-
-    Same key material, rotation grace, and wire format as action tokens so
-    one audited secret path covers every signed Genie surface. Callers must
-    include a distinct ``kind`` claim; verifiers reject foreign kinds.
-    """
-
-    return _sign_action_claims(claims)
-
-
-def decode_genie_claims(token: str) -> dict[str, Any]:
-    """Public verifier counterpart to :func:`sign_genie_claims`."""
-
-    return _decode_action_token(token)
-
-
-def genie_claims_key_id() -> str:
-    """Expose the current signing key id for claims that carry ``kid``."""
-
-    return _current_action_token_key()[0]
-
-
-def _decode_action_token(token: str) -> dict[str, Any]:
-    try:
-        body, supplied_sig = token.split(".", 1)
-        claims = json.loads(_b64url_decode(body).decode("utf-8"))
-        if not isinstance(claims, dict):
-            raise ValueError("claims body is not an object")
-        actual_sig = _b64url_decode(supplied_sig)
-        kid_hint = str(claims.get("kid") or "") or None
-        for _key_id, secret in _action_token_keys(kid_hint=kid_hint):
-            expected_sig = hmac.new(
-                secret,
-                body.encode("ascii"),
-                hashlib.sha256,
-            ).digest()
-            if hmac.compare_digest(actual_sig, expected_sig):
-                break
-        else:
-            raise ValueError("bad signature")
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400,
-            detail="Genie action confirmation token is invalid",
-        ) from exc
-    if not isinstance(claims, dict):
-        raise HTTPException(status_code=400, detail="Genie action confirmation token is invalid")
-    return claims
 
 
 def _lookup_existing_genie_action(
@@ -945,283 +512,6 @@ def _campaign_criteria(payload: GenieActionRequest) -> dict[str, Any]:
     sql_hash = payload.criteria.get("sql_hash")
     if sql_hash:
         out["sql_hash"] = str(sql_hash)
-    return out
-
-
-def _list_filter(
-    raw: Any,
-    *,
-    field: str,
-    max_items: int,
-    pattern: re.Pattern[str],
-) -> list[str]:
-    if raw is None:
-        return []
-    if not isinstance(raw, list):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Genie cohort {field} filter must be a reviewed list",
-        )
-    out: list[str] = []
-    for item in raw:
-        value = str(item).strip()
-        if not pattern.fullmatch(value):
-            raise HTTPException(
-                status_code=400,
-                detail="Genie cohort includes invalid replay filter",
-            )
-        value = value.upper() if pattern.pattern != r"^\d{5}$" else value
-        if value not in out:
-            if len(out) >= max_items:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Genie cohort includes too many replay filters",
-                )
-            out.append(value)
-    return out
-
-
-def _city_states_filter(raw: Any) -> list[str]:
-    """Validate the cohort's ``CITY~ST`` list, or 400 like every sibling key.
-
-    Deliberately STRICTER than the writer, which fails closed to a disclosure:
-    by the time a payload reaches here the pairs are a reviewed cohort key, and
-    a malformed one is a bad request rather than a city we could not read.
-    """
-
-    if raw is None:
-        return []
-    if not isinstance(raw, list):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Genie cohort {GENIE_CITY_FILTER_KEY} filter must be a reviewed list",
-        )
-    out: list[str] = []
-    for item in raw:
-        pair = parse_city_state_pair(item)
-        if pair is None:
-            raise HTTPException(
-                status_code=400,
-                detail="Genie cohort includes invalid replay filter",
-            )
-        value = f"{pair[0]}~{pair[1]}"
-        if value in out:
-            continue
-        if len(out) >= MAX_CITY_FILTER_VALUES:
-            raise HTTPException(
-                status_code=400,
-                detail="Genie cohort includes too many replay filters",
-            )
-        out.append(value)
-    return out
-
-
-def _numeric_floor(raw: Any, *, field: str, minimum: int, maximum: int) -> int | None:
-    """Return a reviewed integer floor, or None when the answer omitted it.
-
-    Closed vocabulary, same posture as the list filters above: the value must
-    be a whole number inside the column's domain. Fractions, booleans, ranges,
-    expressions, and out-of-range numbers are rejected rather than coerced,
-    because a coerced threshold would silently replay a different population
-    than the answer reported. A `0` floor is kept, not dropped -- for
-    ``min_rate_spread_bps`` it is a real predicate (spreads can be negative).
-
-    The range is per field, not shared: score and equity floor at 0, while
-    ``min_rate_spread_bps`` accepts negatives because the column IS negative on
-    half of gold. See ``backend/schemas/genie_numeric_filters.py``.
-    """
-
-    if raw is None or raw == "":
-        return None
-    if isinstance(raw, bool) or (isinstance(raw, float) and not raw.is_integer()):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Genie cohort {field} filter must be a reviewed integer threshold",
-        )
-    try:
-        value = int(raw)
-    except (TypeError, ValueError) as exc:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Genie cohort {field} filter must be a reviewed integer threshold",
-        ) from exc
-    if value < minimum or value > maximum:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Genie cohort {field} filter is outside the reviewed range",
-        )
-    return value
-
-
-def _disclosed_filter_key(key: object) -> str:
-    """Normalize an unreviewed Genie filter name for safe disclosure.
-
-    The key text is model-authored, so it is data, not an identifier we
-    control. Fold it to the audit vocabulary's identifier shape before it
-    reaches the Lakebase cohort row or the audit ledger.
-    """
-
-    normalized = _UNSAFE_FILTER_KEY_CHARS.sub("_", str(key).strip().lower()).strip("_")
-    return normalized[:_MAX_UNREPLAYABLE_FILTER_KEY_LEN]
-
-
-def _cohort_route_filters(
-    payload: GenieActionRequest, payload_borrower_ids: list[str]
-) -> dict[str, Any]:
-    """Return the reviewed, lead-queue-replayable filter subset."""
-
-    filters_raw = payload.criteria.get("result_filters")
-    if filters_raw is not None and not isinstance(filters_raw, dict):
-        raise HTTPException(
-            status_code=400,
-            detail="Genie cohort result_filters must be a reviewed object",
-        )
-    filters = filters_raw if isinstance(filters_raw, dict) else {}
-    out: dict[str, Any] = {}
-    source = str(payload.criteria.get("source") or "genie")
-
-    zips = _list_filter(
-        filters.get("zips"),
-        field="zips",
-        max_items=_MAX_ACTION_FILTER_VALUES,
-        pattern=re.compile(r"^\d{5}$"),
-    )
-    if zips:
-        out["zips"] = zips
-    city_states = _city_states_filter(filters.get(GENIE_CITY_FILTER_KEY))
-    if city_states:
-        out[GENIE_CITY_FILTER_KEY] = city_states
-    county_raw = str(filters.get("county") or "").strip()
-    if county_raw:
-        if not re.fullmatch(r"^\d{5}$", county_raw):
-            raise HTTPException(
-                status_code=400,
-                detail="Genie cohort includes invalid county filter",
-            )
-        out["county"] = county_raw
-    counties = _list_filter(
-        filters.get("counties"),
-        field="counties",
-        max_items=_MAX_ACTION_FILTER_VALUES,
-        pattern=re.compile(r"^\d{5}$"),
-    )
-    if counties:
-        out["counties"] = counties
-    states = _list_filter(
-        filters.get("states"),
-        field="states",
-        max_items=_MAX_ACTION_STATE_VALUES,
-        pattern=re.compile(r"^[A-Za-z]{2}$"),
-    )
-    if states:
-        out["states"] = states
-    segment_codes = _list_filter(
-        filters.get("segment_codes"),
-        field="segment_codes",
-        max_items=6,
-        pattern=_GENIE_SEGMENT_CODE_RE,
-    )
-    if segment_codes:
-        out["segment_codes"] = [s.lower() for s in segment_codes]
-        mode = str(filters.get("segment_mode") or "any").lower()
-        if mode not in {"any", "all"}:
-            raise HTTPException(
-                status_code=400,
-                detail="Genie cohort includes invalid segment mode",
-            )
-        out["segment_mode"] = mode
-    target_lender_ref = str(filters.get("target_lender_ref") or "").strip()
-    if target_lender_ref:
-        try:
-            target_lender_ref = (
-                normalize_public_lender_ref(
-                    target_lender_ref,
-                    allow_all=True,
-                )
-                or ""
-            )
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=400,
-                detail="Genie cohort includes unsafe lender alias",
-            ) from exc
-    if target_lender_ref and target_lender_ref != "All":
-        out["target_lender_ref"] = target_lender_ref
-
-    portfolio_raw = filters.get("portfolio_criteria")
-    if portfolio_raw is None:
-        portfolio_raw = payload.criteria.get("portfolio_criteria")
-    if portfolio_raw is not None and not isinstance(portfolio_raw, dict):
-        raise HTTPException(
-            status_code=400,
-            detail="Genie cohort includes unreviewed portfolio criteria",
-        )
-    if isinstance(portfolio_raw, dict):
-        try:
-            portfolio_model = PortfolioCriteria(**portfolio_raw)
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=400,
-                detail="Genie cohort includes unreviewed portfolio criteria",
-            ) from exc
-        if portfolio_model.marketing_eligibility not in {None, "Eligible only"}:
-            raise HTTPException(
-                status_code=400,
-                detail="Genie cohort includes unsupported marketing eligibility filter",
-            )
-        if portfolio_model.consent_status not in {None, "Any"}:
-            raise HTTPException(
-                status_code=400,
-                detail="Genie cohort includes unsupported consent filter",
-            )
-        if not portfolio_model.has_effective_predicate(count_default_marketing=False):
-            raise HTTPException(
-                status_code=400,
-                detail="Genie cohort includes unreviewed portfolio criteria",
-            )
-        portfolio_criteria = portfolio_model.model_dump(exclude_none=True)
-        portfolio_criteria["marketing_eligibility"] = "Eligible only"
-        portfolio_criteria.pop("consent_status", None)
-        if portfolio_criteria:
-            out["portfolio_criteria"] = portfolio_criteria
-
-    # Reviewed numeric floors. Measured live 2026-08-11 against paychex gold:
-    # "in-the-money borrowers in IL" is 1,766 and the queue replaying
-    # segment_codes=[itm] + states=[IL] matched it exactly, but the same
-    # answer narrowed to opportunity_score >= 80 is 32 and replayed as 1,766
-    # (55x) because the reviewed subset was geography/segment/lender only.
-    # These three keys carry the threshold through to the same `>=` predicate
-    # the answer used, so the handoff reproduces the answer's population
-    # instead of a broader one under the same heading.
-    for field, (minimum, maximum) in _REPLAYABLE_NUMERIC_FILTERS.items():
-        floor = _numeric_floor(
-            filters.get(field), field=field, minimum=minimum, maximum=maximum
-        )
-        if floor is not None:
-            out[field] = floor
-
-    if payload_borrower_ids:
-        out["borrower_ids"] = payload_borrower_ids
-    if out and source in {"genie", "trusted_sql"}:
-        out["source"] = source
-    # Name whatever predicates remain outside the reviewed vocabulary (LTV
-    # bands, propensity cuts, anything a future Genie answer invents). The
-    # queue cannot apply them, so /leads reconciles its count against the
-    # stated one and says which predicates went missing rather than
-    # presenting a different population under the same question.
-    if out:
-        unreplayable = sorted(
-            {
-                disclosed
-                for key in filters
-                if key not in _REPLAYABLE_FILTER_KEYS
-                and (disclosed := _disclosed_filter_key(key))
-            }
-        )
-        if unreplayable:
-            out["unreplayable_filters"] = unreplayable[:_MAX_UNREPLAYABLE_FILTER_KEYS]
-    _assert_no_pii(out)
-    _assert_allowlisted({"result_filters": out})
     return out
 
 

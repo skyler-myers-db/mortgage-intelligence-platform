@@ -116,7 +116,11 @@ def test_next_best_offer_importable_from_scoring_module() -> None:
 
 
 def test_e2e_borrower_audit_reuses_canonical_offer_label_map() -> None:
-    audit_tool = Path(__file__).resolve().parents[2] / "tools" / "e2e_borrower_audit.py"
+    # The recompute model is the module that labels offers (split out of the
+    # CLI on 2026-09-08; see docs/maintenance/file-size-refactor-plan.md).
+    audit_tool = (
+        Path(__file__).resolve().parents[2] / "tools" / "e2e_borrower_audit_recompute.py"
+    )
     text = audit_tool.read_text(encoding="utf-8")
 
     assert "OFFER_LABELS =" not in text

@@ -1,0 +1,438 @@
+/* ============================================================
+   ⌘K COMMAND PALETTE (re-audit #4 Buyer-Wow #1)
+   Above every surface, rail, drawer, and the Genie FAB (z 900).
+   ============================================================ */
+.cmdk {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-block-start: 14vh;
+  padding-inline: var(--sp-4);
+  background: var(--surface-scrim);
+  backdrop-filter: blur(3px);
+  animation: cmdk-scrim-in var(--dur-fast) var(--ease);
+}
+.cmdk__panel {
+  inline-size: min(40rem, 100%);
+  max-block-size: 70vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-1);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-lg), var(--kpi-glow);
+  overflow: hidden;
+  animation: cmdk-panel-in var(--dur-base) var(--ease);
+}
+.cmdk__search {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border-block-end: 1px solid var(--line-1);
+  color: var(--text-3);
+}
+.cmdk__input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  color: var(--text-1);
+  font-size: var(--fs-16);
+  outline: none;
+}
+.cmdk__input::placeholder { color: var(--text-4); }
+.cmdk__hint,
+.cmdk__footer kbd {
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  color: var(--text-3);
+  background: var(--bg-3);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-sm);
+  padding: 1px var(--sp-1);
+}
+.cmdk__list {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--sp-2);
+}
+.cmdk__group + .cmdk__group { margin-block-start: var(--sp-2); }
+.cmdk__group-label {
+  font-size: var(--fs-11);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  color: var(--text-3);
+  padding: var(--sp-2) var(--sp-2) var(--sp-1);
+}
+.cmdk__row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  inline-size: 100%;
+  padding: var(--sp-2) var(--sp-2);
+  border: none;
+  border-radius: var(--r-md);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  text-align: start;
+  transition: background var(--dur-fast) var(--ease);
+}
+.cmdk__row.is-active { background: var(--accent-soft); color: var(--text-1); }
+.cmdk__row-icon { color: var(--text-3); flex-shrink: 0; }
+.cmdk__row.is-active .cmdk__row-icon { color: var(--accent-ink); }
+.cmdk__row-label { font-size: var(--fs-13); font-weight: 500; }
+.cmdk__row-hint {
+  margin-inline-start: auto;
+  font-size: var(--fs-11);
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-inline-size: 50%;
+}
+.cmdk__empty,
+.cmdk__status {
+  padding: var(--sp-4);
+  font-size: var(--fs-12);
+  color: var(--text-3);
+  text-align: center;
+}
+.cmdk__status--error { color: var(--signal-danger); }
+.cmdk__footer {
+  display: flex;
+  gap: var(--sp-4);
+  padding: var(--sp-2) var(--sp-4);
+  border-block-start: 1px solid var(--line-1);
+  font-size: var(--fs-11);
+  color: var(--text-3);
+}
+.cmdk__footer span { display: inline-flex; align-items: center; gap: var(--sp-1); }
+
+@keyframes cmdk-scrim-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes cmdk-panel-in {
+  from { opacity: 0; transform: translateY(-8px) scale(0.99); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cmdk,
+  .cmdk__panel { animation: none; }
+}
+.drawer__hdr {
+  padding: var(--sp-4) var(--sp-5); border-bottom: 1px solid var(--line-1);
+  display: flex; align-items: center; gap: var(--sp-3);
+}
+.drawer__body { flex: 1; overflow-y: auto; padding: var(--sp-5); }
+.drawer__close {
+  margin-left: auto;
+  width: 28px; height: 28px; border-radius: 6px;
+  border: 1px solid var(--line-1); background: transparent; color: var(--text-2);
+  display: grid; place-items: center; cursor: pointer;
+}
+.drawer__close:hover { background: var(--bg-3); }
+.drawer__source-icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  border-radius: var(--r-md);
+}
+.drawer__title { font-size: var(--fs-13); font-weight: 600; }
+.drawer__subtitle { font-size: var(--fs-11); color: var(--text-3); }
+.drawer__hdr-main { min-inline-size: 0; }
+.drawer__updated {
+  margin-top: var(--sp-4);
+  font-size: var(--fs-11);
+  color: var(--text-3);
+}
+.drawer__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-top: var(--sp-4);
+}
+/* Drawer tabs — the prototype's `.layout-tabs` tablist pattern
+   (design_files/Module 0 Prototype.html:958-960) placed under the
+   drawer header: Overview keeps the source explanation, Lineage renders
+   the governed manifest chain. */
+.drawer__tabs {
+  display: flex;
+  gap: var(--sp-1);
+  margin: var(--sp-3) var(--sp-5) 0;
+  padding: var(--sp-1);
+  background: var(--bg-2);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+}
+.drawer__tab {
+  flex: 1;
+  background: transparent;
+  border: 0;
+  padding: var(--sp-1) var(--sp-3);
+  font-size: var(--fs-12);
+  font-family: var(--font-sans);
+  font-weight: 500;
+  color: var(--text-2);
+  cursor: pointer;
+  border-radius: var(--r-sm);
+}
+.drawer__tab:hover { color: var(--text-1); }
+.drawer__tab.is-active { background: var(--accent-soft); color: var(--accent); }
+.source-summary,
+.source-card {
+  padding: var(--sp-3);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+  background: color-mix(in oklab, var(--bg-2) 84%, transparent);
+}
+.source-summary__top {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  align-items: center;
+  margin-bottom: var(--sp-3);
+}
+.source-card { margin-top: var(--sp-3); color: var(--text-2); }
+.source-card--warning {
+  border-color: color-mix(in oklab, var(--signal-warning) 45%, var(--line-2));
+  background: color-mix(in oklab, var(--signal-warning) 8%, var(--bg-2));
+}
+.source-card--subtle { background: color-mix(in oklab, var(--accent) 5%, transparent); }
+.source-freshness {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: var(--sp-6);
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-pill);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  text-transform: capitalize;
+}
+.source-freshness::before {
+  content: "";
+  inline-size: var(--sp-2);
+  block-size: var(--sp-2);
+  margin-inline-end: var(--sp-2);
+  border-radius: var(--r-pill);
+  background: var(--text-4);
+}
+.source-freshness--fresh::before { background: var(--signal-success); }
+.source-freshness--aging::before { background: var(--signal-warning); }
+.source-freshness--stale::before { background: var(--signal-danger); }
+/* Distinct chip states for the drawer's metadata fetch lifecycle
+   (re-audit 2026-06-11): 'checking' pulses on the accent, 'fetch failed'
+   warns — neither may wear the unavailable/no-timestamp look. */
+.source-freshness--loading::before {
+  background: var(--accent);
+  animation: freshness-pulse 1.2s ease-in-out infinite;
+}
+.source-freshness--error::before { background: var(--signal-warning); }
+@keyframes freshness-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .source-freshness--loading::before { animation: none; }
+}
+.source-stat-grid,
+.asset-card-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--sp-3);
+}
+.drawer .source-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.source-stat,
+.asset-metric {
+  min-inline-size: 0;
+  padding: var(--sp-3);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+  background: var(--bg-2);
+}
+.source-stat span,
+.asset-metric span,
+.asset-metric em {
+  display: block;
+  color: var(--text-3);
+  font-size: var(--fs-11);
+  font-style: normal;
+}
+.source-stat strong,
+.asset-metric strong {
+  display: block;
+  margin-top: var(--sp-1);
+  color: var(--text-1);
+  font-size: var(--fs-13);
+  overflow-wrap: anywhere;
+}
+.lineage-node--link {
+  display: block;
+  color: inherit;
+  text-decoration: none;
+}
+.lineage-node--link:hover,
+.lineage-node--link:focus-visible {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.asset-layout {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-grid);
+}
+.asset-hero .surface__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+.asset-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  align-items: center;
+}
+.asset-table-wrap { overflow-x: auto; }
+.asset-table td,
+.asset-table th { vertical-align: top; }
+.asset-ddl {
+  margin: 0;
+  max-block-size: 420px;
+  overflow: auto;
+  padding: var(--sp-4);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+  background: var(--bg-0);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  line-height: var(--lh-body);
+  white-space: pre-wrap;
+}
+.asset-callout {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+  color: var(--text-2);
+  font-size: var(--fs-12);
+}
+.asset-callout span {
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid color-mix(in oklab, var(--signal-warning) 45%, var(--line-2));
+  border-radius: var(--r-md);
+  background: color-mix(in oklab, var(--signal-warning) 7%, transparent);
+}
+.asset-tag-grid,
+.asset-lineage {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-3);
+}
+@media(max-width:900px){
+  .source-stat-grid,
+  .asset-card-grid,
+  .asset-tag-grid,
+  .asset-lineage { grid-template-columns: 1fr; }
+}
+
+.proof-drawer{width:min(760px,100vw)}
+.proof-drawer__body,.proof-components,.proof-branches{display:flex;flex-direction:column;gap:var(--sp-3)}
+.proof-tabs,.proof-status-row,.proof-component__meta,.proof-evidence-row__meta,.proof-component__fields{display:flex;flex-wrap:wrap;gap:var(--sp-2)}
+.proof-tabs{padding:var(--sp-3) var(--sp-5);border-bottom:1px solid var(--line-1);overflow-x:auto}
+.proof-tab{display:inline-flex;align-items:center;gap:var(--sp-2);min-block-size:var(--sp-8);padding:0 var(--sp-3);border:1px solid var(--line-1);border-radius:var(--r-md);background:var(--bg-2);color:var(--text-2);font-family:var(--font-mono);font-size:var(--fs-12);cursor:pointer}
+.proof-tab.is-active,.proof-tab:hover,.proof-tab:focus-visible{border-color:var(--accent);color:var(--accent-ink);background:var(--accent-soft)}
+.proof-callout,.proof-formula,.proof-component,.proof-branch,.proof-evidence-row,.proof-sql-card{padding:var(--sp-3);border:1px solid var(--line-1);border-radius:var(--r-md);background:var(--bg-2)}
+.proof-callout{color:var(--text-2)}.proof-callout--warning{border-color:color-mix(in oklab,var(--signal-warning) 55%,var(--line-2));background:color-mix(in oklab,var(--signal-warning) 8%,var(--bg-2))}.proof-callout--subtle{background:color-mix(in oklab,var(--accent) 5%,transparent);font-size:var(--fs-12)}
+.proof-list{margin:var(--sp-2) 0 0;padding-inline-start:var(--sp-5);color:var(--text-2)}
+.proof-formula-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--sp-3)}
+.proof-formula__expr,.proof-formula__result,.proof-formula__source{margin-top:var(--sp-2);overflow-wrap:anywhere}.proof-formula__expr{color:var(--text-2)}.proof-formula__result,.proof-component__label,.proof-branch__label,.proof-sql-card__title,.proof-evidence-row__title{color:var(--text-1);font-weight:700}.proof-formula__source,.proof-component__meta,.proof-evidence-row__meta{color:var(--text-3);font-size:var(--fs-11)}
+.proof-component,.proof-branch,.proof-evidence-row,.proof-sql-card{background:color-mix(in oklab,var(--bg-2) 80%,transparent)}
+.proof-component__top{display:flex;justify-content:space-between;gap:var(--sp-3)}.proof-component__score{color:var(--accent-ink);font-size:var(--fs-18);font-weight:700}
+.proof-component__bar{position:relative;block-size:var(--sp-2);margin-top:var(--sp-3);overflow:hidden;border-radius:var(--r-pill);background:var(--bg-3)}.proof-component__bar>span{position:absolute;inset:0 auto 0 0;inline-size:var(--bar-pct,0%);background:linear-gradient(90deg,var(--seg-itm),var(--accent));border-radius:inherit}
+.proof-component__fields{margin-top:var(--sp-2)}.proof-component__fields>span,.proof-sql-card__hash{padding:var(--sp-1) var(--sp-2);border:1px solid var(--line-1);border-radius:var(--r-sm);background:var(--bg-3);color:var(--text-2);font-size:var(--fs-11)}
+.proof-branch.is-selected{border-color:var(--signal-success);box-shadow:0 0 0 1px color-mix(in oklab,var(--signal-success) 35%,transparent)}.proof-branch.is-passed:not(.is-selected){border-color:var(--line-2)}
+.proof-sql-card__sql{margin:var(--sp-3) 0;padding:var(--sp-3);max-block-size:calc(var(--sp-16) + var(--sp-16));overflow:auto;border:1px solid var(--line-1);border-radius:var(--r-md);background:var(--bg-0);color:var(--text-2);font-family:var(--font-mono);font-size:var(--fs-11);line-height:var(--lh-body);white-space:pre-wrap}
+.glossary-term{position:relative;display:inline-flex;color:inherit;text-decoration:underline dotted;text-underline-offset:.18em;cursor:help}.glossary-term:hover,.glossary-term:focus-visible{color:var(--accent)}
+.glossary-term__tip{position:absolute;inset-inline-start:0;inset-block-end:calc(100% + var(--sp-2));inline-size:min(300px,80vw);padding:var(--sp-3);border:1px solid var(--line-2);border-radius:var(--r-md);background:var(--bg-1);box-shadow:var(--shadow-md);color:var(--text-2);font-size:var(--fs-12);line-height:var(--lh-snug);opacity:0;pointer-events:none;transform:translateY(var(--sp-1));transition:opacity var(--dur-fast) var(--ease),transform var(--dur-fast) var(--ease);z-index:45}
+.glossary-term:hover .glossary-term__tip,.glossary-term:focus-visible .glossary-term__tip{opacity:1;transform:translateY(0)}.glossary-term__tip-title,.glossary-term__tip-context{display:block}.glossary-term__tip-title{margin-bottom:var(--sp-1);color:var(--text-1);font-weight:700}.glossary-term__tip-context{margin-top:var(--sp-2);color:var(--text-3)}
+.glossary-layout{display:grid;grid-template-columns:minmax(220px,.28fr) minmax(0,1fr);gap:var(--gap-grid)}.glossary-index{align-self:start;position:sticky;top:var(--sp-4)}.glossary-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--sp-4)}
+.glossary-entry{padding-block:var(--sp-3);border-bottom:1px solid var(--line-1)}.glossary-entry:last-child{border-bottom:0}.glossary-entry__term{margin:0;color:var(--text-1);font-size:var(--fs-18);line-height:var(--lh-snug)}.glossary-entry__aliases{display:flex;flex-wrap:wrap;gap:var(--sp-2);margin-top:var(--sp-1);color:var(--text-3);font-size:var(--fs-11)}.glossary-entry__detail{margin-top:var(--sp-3)}.glossary-entry__detail>p{margin:var(--sp-1) 0 0;color:var(--text-2);font-size:var(--fs-13);line-height:var(--lh-body)}
+@media(max-width:900px){.proof-formula-grid,.glossary-layout,.glossary-grid{grid-template-columns:1fr}.glossary-index{position:static}}
+
+.lineage-node {
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--bg-2);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+  margin-bottom: var(--sp-2);
+}
+.lineage-node__label { font-size: var(--fs-11); color: var(--text-3); letter-spacing: var(--tracking-caps); text-transform: uppercase; margin-bottom: 4px; }
+.lineage-node__name {
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  color: var(--text-1);
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+.lineage-node__meta { font-size: var(--fs-11); color: var(--text-3); margin-top: var(--sp-1); }
+/* Manifest lineage chips — prototype `.chip` carrying a full UC FQN, so it
+   must wrap instead of the base chip's nowrap; anchors deep-link to Catalog
+   Explorer with the accent hover the drawer's link nodes already use. */
+.lineage-node__chip {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-decoration: none;
+}
+/* The FQN inside a chip keeps `.lineage-node__name` for BEM/evidence parity
+   but defers to the chip's own type scale and ink, so adopting the class did
+   not restyle the governed-asset rows. */
+.lineage-node__chip .lineage-node__name {
+  font-size: inherit;
+  color: inherit;
+}
+.governed-assets__list {
+  display: grid;
+  grid-template-columns: 1fr;
+  align-items: stretch;
+}
+.governed-assets__list .lineage-node__chip {
+  inline-size: 100%;
+  justify-content: space-between;
+}
+.observed-lineage__asset {
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+a.lineage-node__chip:hover,
+a.lineage-node__chip:focus-visible {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.lineage-node--signal {
+  display: grid;
+  /* fit-content(50%): the value column only takes the width it needs and
+     wraps past half the row, so a long value ("applied during gold refresh")
+     can never squeeze the label/source column into ugly mid-word wraps or
+     read as overlapping it (operator report 2026-06-11, "Configured tenant
+     lens" signal row). */
+  grid-template-columns: minmax(0, 1fr) fit-content(50%);
+  align-items: start;
+  gap: var(--sp-3);
+}
+.lineage-node__value {
+  color: var(--text-1);
+  font-size: var(--fs-13);
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+.lineage-arrow { text-align: center; color: var(--text-4); font-family: var(--font-mono); font-size: 14px; padding: 2px 0; }
+

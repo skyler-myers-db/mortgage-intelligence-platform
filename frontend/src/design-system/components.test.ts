@@ -4,11 +4,8 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 // @ts-expect-error CSS lint helper is an ESM Node script used by lint/tests only.
 import { findCssLiteralViolations } from '../../../tools/lint_css_literals.mjs';
+import { designCss } from '../test/designCss';
 
-const designCss = () => readFileSync(
-  new URL('./components.css', import.meta.url),
-  'utf8',
-);
 const tokensCss = () => readFileSync(
   new URL('./tokens.css', import.meta.url),
   'utf8',

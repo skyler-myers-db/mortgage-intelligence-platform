@@ -1,0 +1,561 @@
+/* ============================================================
+   APP SHELL
+   ============================================================ */
+.app-shell {
+  display: grid;
+  /* --shell-topbar-h drives BOTH the topbar grid row and the rail's brand
+     slot height. Keeping them on one variable is what makes the Entrada
+     mark's vertical center land exactly on the "Mortgage Intelligence
+     Platform" crumb's center — before this, the rail carried its own top
+     padding and the mark sat ~12px below the title at 1440x900. Any future
+     topbar height change stays aligned by construction. */
+  --shell-topbar-h: 56px;
+  grid-template-columns: 72px 1fr;
+  grid-template-rows: var(--shell-topbar-h) 1fr;
+  grid-template-areas:
+    "rail topbar"
+    "rail main";
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+}
+
+.topbar,
+.rail,
+.route-nav,
+.main,
+.surface,
+.drawer,
+.data-estate__lane,
+.topbar__search,
+.topbar__pill,
+.topbar__icon-btn {
+  transition:
+    background-color var(--dur-base) var(--ease),
+    border-color var(--dur-base) var(--ease),
+    color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-base) var(--ease);
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .topbar,
+  .rail,
+  .route-nav,
+  .main,
+  .surface,
+  .drawer,
+  .data-estate__lane,
+  .topbar__search,
+  .topbar__pill,
+  .topbar__icon-btn {
+    transition: none;
+  }
+}
+
+/* Skip-link — visually hidden until keyboard-focused. Standard a11y
+   pattern: keyboard users tab once to surface the link, which jumps
+   past the 72px Rail + Topbar and lands focus on the right-rail
+   Console (#workspace-console). Uses design-system tokens so it
+   honours theme + accent switches. */
+.sr-skip-link {
+  position: absolute;
+  top: var(--sp-2);
+  left: var(--sp-2);
+  z-index: 100;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--accent);
+  color: var(--bg-1);
+  border-radius: var(--r-md);
+  font-size: var(--fs-12);
+  font-weight: 600;
+  text-decoration: none;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  overflow: hidden;
+  white-space: nowrap;
+  width: 1px;
+  height: 1px;
+}
+.sr-skip-link:focus,
+.sr-skip-link:focus-visible {
+  display: inline-flex;
+  align-items: center;
+  clip: auto;
+  clip-path: none;
+  overflow: visible;
+  width: auto;
+  height: auto;
+  min-inline-size: var(--sp-6);
+  min-block-size: var(--sp-6);
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Top bar */
+.topbar {
+  grid-area: topbar;
+  min-width: 0;
+  display: grid;
+  /* Symmetric side tracks keep the search on the topbar's centre line. The
+     centre track is capped at 32rem (not 44rem) because the actions cluster
+     — tenant pill + status pill + three icon buttons — measures ~376px at
+     max-content: a 44rem search left only 296px per side track, so the
+     end-justified actions box overflowed its track LEFTWARD and the opaque
+     tenant pill covered the ⌘K badge by 26px at 1440x900 (2026-08-07 audit
+     M1, reproduced on all ten routes). 32rem leaves 392px per side. */
+  grid-template-columns: minmax(0, 1fr) minmax(0, 32rem) minmax(0, 1fr);
+  align-items: center;
+  gap: var(--sp-4);
+  padding: 0 var(--sp-5);
+  background: color-mix(in oklab, var(--bg-1) 88%, transparent);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--line-1);
+  position: relative;
+  z-index: 10;
+}
+.topbar__crumbs {
+  justify-self: start;
+  min-inline-size: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  /* Reserve breathing room before the centered search so a long crumb
+     (e.g. "Segment Intelligence") truncates with ellipsis instead of ending
+     flush against the search box. Combines with the topbar grid gap. */
+  padding-inline-end: var(--sp-4);
+  /* Cap the item at its grid area: a start-justified grid item sizes to
+     content and can overflow its track, sliding under the centered search
+     (measured 20px overlap on the longest crumb at 1440px). With the cap,
+     the ellipsis rules above actually bind and the grid gap stays clear. */
+  max-inline-size: 100%;
+  color: var(--text-2);
+  font-size: var(--fs-13);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.topbar__crumbs .sep { color: var(--text-4); }
+.topbar__crumbs .cur {
+  color: var(--text-1);
+  font-weight: 500;
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.topbar__spacer { display: none; }
+.topbar__search {
+  grid-column: 2;
+  justify-self: center;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  inline-size: min(32rem, 100%);
+  min-inline-size: 0;
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+  background: var(--bg-2);
+  color: var(--text-2);
+}
+.topbar__search input {
+  inline-size: 100%;
+  min-block-size: var(--sp-6);
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-1);
+  font: inherit;
+  font-size: var(--fs-12);
+}
+.topbar__search-kbd {
+  margin-inline-start: auto;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-block-size: var(--sp-6);
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--line-2, var(--line-1));
+  border-bottom-width: 2px;
+  border-radius: var(--r-sm, 4px);
+  background: var(--bg-3);
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-standard), border-color var(--dur-fast) var(--ease-standard);
+}
+.topbar__search-kbd:hover { color: var(--text-1); border-color: var(--accent); }
+.topbar__search-kbd:focus-visible {
+  outline: calc(var(--sp-1) / 2) solid var(--accent);
+  outline-offset: calc(var(--sp-1) / 2);
+}
+
+.topbar__search input:focus-visible {
+  outline: calc(var(--sp-1) / 2) solid var(--accent);
+  outline-offset: calc(var(--sp-1) / 2);
+  border-radius: var(--r-sm);
+}
+.topbar__actions {
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-3);
+  min-inline-size: 0;
+  /* Cap the end-justified item at its grid track. Without this a grid item
+     sizes to content and overflows the track, sliding under the centered
+     search — the same failure the crumbs rule above fixes on the left. */
+  max-inline-size: 100%;
+}
+.topbar__search-results {
+  position: absolute;
+  inset-block-start: calc(100% + var(--sp-1));
+  inset-inline: 0;
+  display: grid;
+  gap: var(--sp-1);
+  padding: var(--sp-2);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  background: var(--bg-2);
+  box-shadow: var(--shadow-md);
+  z-index: 60;
+}
+.topbar__search-result {
+  display: grid;
+  gap: var(--sp-1);
+  padding: var(--sp-2);
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-2);
+  text-align: left;
+  cursor: pointer;
+}
+.topbar__search-result:hover { background: var(--bg-3); color: var(--text-1); }
+.topbar__search-status {
+  padding: var(--sp-2);
+  color: var(--text-3);
+  font-size: var(--fs-12);
+}
+.topbar__search-status--error { color: var(--signal-warning); }
+.topbar__pill {
+  display: inline-flex; align-items: center; gap: var(--sp-2);
+  padding: 5px 10px; border-radius: var(--r-pill);
+  background: var(--bg-3); border: 1px solid var(--line-1);
+  font-size: var(--fs-12); color: var(--text-2);
+  /* A pill is one line high. Under flex pressure the tenant label used to
+     wrap to two lines inside a 109px pill instead of truncating. */
+  min-inline-size: 0;
+  white-space: nowrap;
+}
+/* Tenant label: the only elastic item in the actions cluster, so an unusually
+   long lender name ellipsizes here rather than pushing the row into the
+   search box. */
+.topbar__pill-tenant {
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.topbar__pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--signal-success); box-shadow: 0 0 8px var(--signal-success); }
+.topbar__pill .dot.amber { background: var(--signal-warning); box-shadow: 0 0 8px var(--signal-warning); }
+.topbar__pill .dot.danger { background: var(--signal-danger); box-shadow: 0 0 8px var(--signal-danger); }
+.topbar__pill-label {
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+}
+/* Below 88rem (1408px) the two side tracks can no longer both hold the
+   actions cluster at max-content, so the third track sizes to its content
+   instead: the search gives up exact centering rather than being overlapped.
+   Above it (the contracted 1440x900 demo viewport included) the symmetric,
+   perfectly centered layout above applies. */
+@media (max-width: 88rem) {
+  .topbar {
+    grid-template-columns: minmax(0, 0.9fr) minmax(22rem, 1.1fr) auto;
+  }
+  .topbar__search {
+    inline-size: 100%;
+    min-inline-size: min(22rem, 100%);
+  }
+}
+/* Slow, steady heartbeat on the "serverless-xl" live-warehouse dot. Signals
+   the workspace is alive without being attention-grabbing. */
+.topbar__pill .dot.is-heartbeat {
+  animation: topbar-heartbeat var(--dur-heartbeat) var(--ease) infinite;
+  will-change: box-shadow, transform;
+}
+@keyframes topbar-heartbeat {
+  0%   { box-shadow: 0 0 0 0 color-mix(in oklab, var(--signal-success) 55%, transparent), 0 0 8px var(--signal-success); transform: scale(1); }
+  55%  { box-shadow: 0 0 0 5px color-mix(in oklab, var(--signal-success) 0%, transparent), 0 0 12px var(--signal-success); transform: scale(1.08); }
+  100% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--signal-success) 0%, transparent), 0 0 8px var(--signal-success); transform: scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .topbar__pill .dot.is-heartbeat { animation: none; }
+}
+.topbar__icon-btn {
+  width: 34px; height: 34px; border-radius: var(--r-md);
+  display: grid; place-items: center;
+  background: transparent; border: 1px solid var(--line-1); color: var(--text-2);
+  cursor: pointer; transition: all var(--dur-fast) var(--ease);
+}
+.topbar__icon-btn:hover { background: var(--bg-3); color: var(--text-1); border-color: var(--line-2); }
+.topbar__icon-btn.is-active { background: var(--accent-soft); color: var(--accent-ink); border-color: var(--chip-line); }
+
+.route-nav {
+  display: flex;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-6);
+  border-bottom: 1px solid var(--line-1);
+  background: color-mix(in oklab, var(--bg-1) 72%, transparent);
+  backdrop-filter: blur(8px);
+  flex-wrap: wrap;
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+
+/* Left rail */
+.rail {
+  grid-area: rail;
+  display: flex; flex-direction: column; align-items: stretch;
+  background: var(--bg-1);
+  border-right: 1px solid var(--line-1);
+  /* No block-start padding: the brand slot below IS the rail's header band
+     and must be flush with the top of the shell so it mirrors the topbar
+     row exactly. Inline padding is unchanged, so `margin: 0 auto` on
+     .rail__item still centers the M0-M4 boxes on the same vertical axis as
+     the centered mark. */
+  padding: 0 var(--sp-2) var(--sp-3);
+  gap: var(--sp-1);
+}
+.rail__brand {
+  /* Full rail content width x exact topbar height => the mark's center is
+     the topbar's center line. The former 56x56 box with 10px padding left a
+     36px content box that the 47x32 mark overflowed, so it read as
+     off-center inside its own slot. */
+  width: 100%; height: var(--shell-topbar-h); margin: 0 0 var(--sp-3);
+  display: grid; place-items: center;
+  border-radius: var(--r-lg);
+  padding: 0;
+  text-decoration: none;
+  transition: background var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
+}
+.rail__brand:hover {
+  background: color-mix(in oklab, var(--entrada-navy) 10%, transparent);
+}
+.rail__brand:focus-visible {
+  outline: 2px solid var(--entrada-bright);
+  outline-offset: 2px;
+}
+.rail__item {
+  width: 56px; height: 56px; margin: 0 auto;
+  /* The rail's 1px right border makes its content box 55px, so a fixed 56px
+     item overflowed by 0.5px on each side — enough to push the M0-M4 boxes
+     off the mark's center line and to bleed the active pill into the border.
+     Clamping keeps every rail box on one vertical axis at every breakpoint. */
+  max-inline-size: 100%;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 3px;
+  border-radius: var(--r-md);
+  border: 1px solid transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: all var(--dur-fast) var(--ease);
+  background: transparent;
+  position: relative;
+  text-decoration: none;
+}
+.rail__item:hover { background: var(--bg-3); color: var(--text-1); }
+.rail__item.is-active {
+  background: var(--accent-soft);
+  border-color: var(--chip-line);
+  color: var(--accent-ink);
+}
+.rail__item.is-active::before {
+  content:''; position:absolute; left:-10px; top:14px; bottom:14px; width:3px;
+  background: var(--accent); border-radius: 3px;
+}
+.rail__item .mod { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.06em; }
+.rail__item .ico { font-size: 16px; }
+.rail__item--disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.rail__item--disabled:hover {
+  background: transparent;
+  color: var(--text-3);
+}
+.rail__spacer { flex: 1; }
+
+/* Main */
+.main {
+  grid-area: main;
+  min-width: 0;
+  overflow-y: auto;
+  position: relative;
+  transition: padding-right var(--dur-base) var(--ease);
+  /* Establish an inline-size container so .kpi-row, .seg-grid and
+     .layoutA-grid can reflow based on their actual available width
+     (Console open vs. closed at a constant viewport, for example)
+     instead of forcing viewport-scale @media rules to guess. */
+  container-type: inline-size;
+  container-name: main;
+}
+.main__inner {
+  padding: var(--sp-6) var(--sp-6) var(--sp-12);
+  /* No max-width here. The max-width rule belongs to `.main__content`
+     (our wrapper) so the cap can differ per route (1920 text-dense,
+     2400 hero-map). `.main__inner` should always fill its parent. */
+  width: 100%;
+}
+/* Ultra-wide cap: on monitors beyond ~2000px we center the content in a
+   1920px column so the KPI cards, segment grid and table stay at a
+   human-readable line length. The outer .main remains full-bleed so the
+   ambient gradients keep filling the viewport; .main__content is the
+   centered column that holds the actual page. The hero map route opts
+   out via .main__content--wide-map (below). */
+.main__content {
+  max-width: min(100%, 1920px);
+  margin-inline: auto;
+}
+/* When the Console is docked open at top-right (fixed 300px card), reserve
+   a right gutter on .main so long rows do not slide under it. The Console is
+   position:fixed, so we can't rely on flow; an explicit gutter is the fix. */
+[data-console="open"] .main { padding-right: 324px; }
+@media (prefers-reduced-motion: reduce) {
+  .main { transition: none; }
+}
+
+/* ============================================================
+   TYPOGRAPHY
+   ============================================================ */
+.h-display { font-size: var(--fs-36); font-weight: 600; letter-spacing: var(--tracking-tight); line-height: var(--lh-tight); color: var(--text-1); }
+.h-1 { font-size: var(--fs-28); font-weight: 600; letter-spacing: var(--tracking-tight); line-height: var(--lh-tight); color: var(--text-1); margin: 0; }
+.h-2 { font-size: var(--fs-22); font-weight: 600; letter-spacing: var(--tracking-tight); line-height: var(--lh-snug); color: var(--text-1); margin: 0; }
+.h-3 { font-size: var(--fs-18); font-weight: 600; letter-spacing: var(--tracking-tight); line-height: var(--lh-snug); color: var(--text-1); margin: 0; }
+.h-4 { font-size: var(--fs-14); font-weight: 600; letter-spacing: var(--tracking-body); color: var(--text-1); margin: 0; }
+.eyebrow { font-size: var(--fs-11); font-weight: 500; letter-spacing: var(--tracking-caps); text-transform: uppercase; color: var(--text-3); }
+.body { color: var(--text-2); font-size: var(--fs-14); }
+.muted { color: var(--text-3); }
+
+/* ============================================================
+   SURFACES
+   ============================================================ */
+.surface {
+  background: var(--bg-2);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-sm);
+}
+.surface--elev { box-shadow: var(--shadow-md); }
+.surface__hdr {
+  display: flex; align-items: center; gap: var(--sp-3);
+  padding: var(--sp-4) var(--pad-card);
+  border-bottom: 1px solid var(--line-1);
+}
+.surface__body { padding: var(--pad-card); }
+.surface__ft {
+  padding: var(--sp-3) var(--pad-card);
+  border-top: 1px solid var(--line-1);
+  display: flex; align-items: center; gap: var(--sp-2);
+  color: var(--text-3); font-size: var(--fs-12);
+}
+.surface__hdr--split { justify-content: space-between; }
+.surface__hdr-main { display: flex; align-items: center; gap: var(--sp-3); }
+.surface__icon {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--r-md);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+}
+.surface__body--stack { display: flex; flex-direction: column; gap: var(--sp-3); }
+.surface__body--stack-sm { display: flex; flex-direction: column; gap: var(--sp-2); }
+.surface__body--inline { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
+.surface__body--grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-4); }
+.surface--inset { background: var(--bg-1); }
+.surface--danger { border-color: var(--signal-danger); }
+
+/* ============================================================
+   BUTTONS
+   ============================================================ */
+.btn {
+  display: inline-flex; align-items: center; gap: var(--sp-2);
+  padding: 8px 14px; border-radius: var(--r-md);
+  min-block-size: var(--sp-8);
+  font-family: var(--font-sans); font-size: var(--fs-13); font-weight: 500;
+  letter-spacing: var(--tracking-body);
+  border: 1px solid var(--line-2); background: transparent; color: var(--text-1);
+  cursor: pointer; transition: all var(--dur-fast) var(--ease);
+  white-space: nowrap;
+  text-decoration: none;
+}
+.btn:hover { background: var(--bg-3); border-color: var(--line-3); }
+.btn--primary {
+  background: var(--accent); color: var(--accent-contrast); border-color: transparent;
+  box-shadow: 0 1px 0 var(--surface-inset-shadow) inset, 0 4px 14px -4px var(--accent);
+}
+.btn--primary:hover { background: var(--accent-hover); }
+.btn--ghost { border-color: transparent; color: var(--text-2); }
+.btn--ghost:hover { color: var(--text-1); background: var(--bg-3); }
+.btn--sm { padding: 5px 10px; min-block-size: var(--sp-6); font-size: var(--fs-12); border-radius: var(--r-sm); }
+.btn--danger { color: var(--signal-danger); border-color: var(--status-danger-line-strong); }
+.btn--danger:hover { background: var(--status-danger-soft-subtle); }
+.btn--success { background: var(--signal-success); border-color: transparent; color: var(--text-on-solid); }
+.btn[disabled] {
+  cursor: not-allowed;
+  box-shadow: none;
+  background: var(--bg-3);
+  border-color: var(--line-2);
+  color: var(--text-2);
+}
+.btn--primary[disabled] {
+  background: var(--bg-3);
+  border-color: var(--line-2);
+  color: var(--text-1);
+}
+
+/* ============================================================
+   KEYBOARD HINT
+   ------------------------------------------------------------
+   Subtle keycap chip, matched to .chip dimensions so a hint
+   like "Keyboard: <kbd>A</kbd> approve" reads as a tappable
+   key rather than inline code. Used in surface subtitles
+   (Lead Queue) and any page that advertises a hotkey.
+   Prototype-parity-audit P2 (2026-05-04).
+   ============================================================ */
+kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  padding: 1px 6px;
+  border: 1px solid var(--line-2, var(--line-1));
+  border-bottom-width: 2px;
+  border-radius: var(--r-sm, 4px);
+  background: var(--bg-3);
+  color: var(--text-1);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: 0;
+  white-space: nowrap;
+  box-shadow: 0 1px 0 var(--surface-key-shadow);
+}
+

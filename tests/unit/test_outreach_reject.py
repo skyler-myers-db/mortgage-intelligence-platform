@@ -35,12 +35,15 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.api import outreach as outreach_mod
+from backend.config.settings import settings
 from backend.main import app
 from backend.services import job_trigger, lakebase_bootstrap
 from backend.services.audit_decision_inputs import DECISION_INPUT_KEYS
 from backend.services.audit_store import get_audit_store
 from backend.services.lakebase import LakebaseError, get_lakebase_client
 from backend.services.lakebase_bootstrap import _reset_bootstrap_for_tests
+from backend.services.outreach_decision_commit import _existing_approval_response_or_conflict
+from backend.services.outreach_decision_intent import _canonical_intent
 from backend.services.repositories import get_outreach_repository
 from backend.services.resilience import _reset_breakers_for_tests
 from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
@@ -608,9 +611,9 @@ def test_draft_outreach_uses_configured_lender_name(
         "Acme Mortgage",
         frozenset({"7654321"}),
     )
-    monkeypatch.setattr(outreach_mod.settings, "mip_lender_name", "Acme Mortgage")
-    monkeypatch.setattr(outreach_mod.settings, "mip_lender_nmls_id", "7654321")
-    monkeypatch.setattr(outreach_mod.settings, "mip_tenant_id", None)
+    monkeypatch.setattr(settings, "mip_lender_name", "Acme Mortgage")
+    monkeypatch.setattr(settings, "mip_lender_nmls_id", "7654321")
+    monkeypatch.setattr(settings, "mip_tenant_id", None)
 
     response = TestClient(app).post(
         "/api/outreach/draft",
@@ -1414,8 +1417,8 @@ def test_owner_claim_upgrade_preserves_no_key_replay(
         "campaign_id": campaign_id,
         "rationale": "reviewed",
     }
-    legacy_intent = outreach_mod._canonical_intent(legacy_payload)
-    current_intent = outreach_mod._canonical_intent(
+    legacy_intent = _canonical_intent(legacy_payload)
+    current_intent = _canonical_intent(
         {**legacy_payload, "campaign_owner_email": owner_claim}
     )
 
@@ -1436,7 +1439,7 @@ def test_owner_claim_upgrade_preserves_no_key_replay(
         "approval_id": "11111111-1111-4111-8111-111111111112",
         "audit_event_id": "11111111-1111-4111-8111-111111111113",
     }
-    replay = outreach_mod._existing_approval_response_or_conflict(
+    replay = _existing_approval_response_or_conflict(
         {
             "approval_id": stored_response["approval_id"],
             "actor_email": "lo@example.com",

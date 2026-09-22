@@ -1,0 +1,474 @@
+/* ============================================================
+   MAP
+   ============================================================ */
+.map-wrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  background: var(--map-wrap-bg);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+}
+.map-wrap .map-svg-stage { display: block; width: 100%; height: 100%; }
+.map-corner-chips .chip svg {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 auto;
+}
+/* Animated level transitions (Buyer-Wow #4). `.map-levels` is the keyed
+   wrapper around the three drill stages. It MUST be flex-transparent: it
+   takes `.map-wrap`'s flex:1 slot and re-exposes it to the stage inside, so
+   wrapping never collapses the hero map. The enter animation is a subtle
+   GPU-friendly zoom/fade that replays each drill (the wrapper re-mounts on
+   `level` change); reduced-motion disables it. */
+.map-levels {
+  flex: 1 1 0;
+  min-block-size: 0;
+  display: flex;
+  flex-direction: column;
+  animation: map-level-in var(--dur-base) var(--ease);
+}
+.map-levels > .map-svg-stage,
+.map-levels > .map-stage,
+.map-levels > .zip-tiles {
+  flex: 1 1 0;
+  min-block-size: 0;
+}
+@keyframes map-level-in {
+  from { opacity: 0; transform: scale(0.985); }
+  to { opacity: 1; transform: scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .map-levels { animation: none; }
+}
+
+.map-svg-stage {
+  flex: 1 1 0;
+  min-height: 0;
+  height: auto;
+}
+.map-stage {
+  flex: 1 1 0;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  padding: var(--sp-4);
+}
+.map-stage--empty {
+  color: var(--text-3);
+  font-size: var(--fs-12);
+}
+.map-center-card {
+  max-width: 360px;
+  text-align: center;
+  display: grid;
+  gap: var(--sp-3);
+}
+.map-center-card--narrow {
+  max-width: 320px;
+  color: var(--text-3);
+  font-size: var(--fs-12);
+}
+.map-center-copy {
+  font-size: var(--fs-12);
+  line-height: var(--lh-body);
+}
+.map-center-stats {
+  display: flex;
+  justify-content: center;
+  gap: var(--sp-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  color: var(--text-3);
+}
+.map-center-actions {
+  display: flex;
+  justify-content: center;
+  gap: var(--sp-2);
+}
+.map-hdr {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--sp-3);
+  margin: var(--sp-3) var(--sp-4) var(--sp-5);
+  pointer-events: none;
+}
+.map-crumbs {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  pointer-events: auto;
+}
+.map-crumbs__trail { font-size: var(--fs-12); }
+/* Re-audit #3 P3 (2026-06-12): the trail container clips at its edge
+   ("Cook Cou" cut mid-glyph at the ZIP level). Let each crumb shrink and
+   ellipsize its own label instead of being guillotined by the wrapper. */
+.map-crumbs__trail .filter { min-inline-size: 0; max-inline-size: 100%; }
+.map-crumbs__trail .filter__value {
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.filter--compact { padding: 3px 8px; }
+.map-corner-chips {
+  display: flex;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  min-width: 0;
+  pointer-events: none;
+}
+.map-corner-chips .chip {
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: var(--lh-snug);
+}
+/* S9 assigned-vs-unattended overlay chrome. The corner-chip tray is
+   pointer-events:none so passive chips never eat map hovers; the overlay
+   toggle and the start-campaign action are interactive and opt back in. */
+.map-overlay-toggle {
+  display: inline-flex;
+  gap: var(--sp-1);
+  pointer-events: auto;
+}
+.map-start-campaign { pointer-events: auto; }
+/* Legend facts row: the two inputs of the unattended subtraction plus the
+   evidence chip tracing them to Lakebase + Unity Catalog.
+   font-size 10px: the map micro-copy hairline scale shared by
+   .map-legend__range / .map-legend__caption / .map-tip__row--muted — no
+   --fs-* token exists below --fs-11, and minting one for map hairline
+   text alone would invite drive-by use at body scale. */
+.map-legend__overlay-facts {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  margin-top: var(--sp-1);
+  font-size: 10px;
+  color: var(--text-3);
+}
+.map-legend__caption--degraded { color: var(--status-danger-ink); }
+[data-theme="light"] .map-legend__caption--degraded { color: var(--signal-danger); }
+/* Secondary line on a ZIP tile while the overlay is active.
+   font-size 10px: matches .zip-tile__count's hairline scale (no token
+   below --fs-11; see the .map-legend__overlay-facts note). */
+.zip-tile__overlay {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--accent-ink);
+}
+/* Grouped overlay rows inside the hover tooltip. */
+.map-tip__overlay {
+  margin-top: var(--sp-1);
+}
+.map-region {
+  fill: var(--map-region-fill);
+  stroke: color-mix(in oklab, var(--accent) 50%, transparent);
+  stroke-width: 0.9;
+  cursor: pointer;
+  transition: fill var(--dur-fast) var(--ease), stroke var(--dur-fast) var(--ease);
+}
+[data-theme="light"] .map-region { stroke: color-mix(in oklab, var(--entrada-navy) 35%, transparent); }
+/* Hover brighten: users reported the prior 1.2px accent stroke was easy
+   to miss on dense map layers. Bump stroke weight, add a soft accent
+   glow, and lift the hovered path into the stacking context so its
+   neighbours don't clip the glow. 2026-04-23. */
+.map-region:hover {
+  fill: var(--bg-4);
+  stroke: var(--accent);
+  stroke-width: 2;
+  filter: drop-shadow(0 0 8px color-mix(in oklab, var(--accent) 40%, transparent));
+}
+.map-region:hover { paint-order: stroke fill; }
+.map-region.is-loading {
+  fill: color-mix(in oklab, var(--accent) 12%, var(--bg-3));
+  opacity: 0.72;
+  animation: map-region-pulse 1.2s var(--ease) infinite;
+}
+.map-region.is-empty {
+  fill: var(--map-region-fill);
+  opacity: 0.46;
+}
+.map-region.has-data.lvl-1 { fill: color-mix(in oklab, var(--accent) 24%, var(--bg-3)); }
+.map-region.lvl-1 { fill: color-mix(in oklab, var(--accent) 15%, var(--bg-3)); }
+.map-region.lvl-2 { fill: color-mix(in oklab, var(--accent) 30%, var(--bg-3)); }
+.map-region.lvl-3 { fill: color-mix(in oklab, var(--accent) 50%, var(--bg-3)); }
+.map-region.lvl-4 { fill: color-mix(in oklab, var(--accent) 70%, var(--bg-3)); }
+.map-region.is-selected { fill: var(--accent); stroke: var(--text-1); stroke-width: 1; }
+@keyframes map-region-pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 0.85; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .map-region.is-loading { animation: none; }
+}
+.map-status,
+.sr-only {
+  position: absolute;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  overflow: hidden;
+  white-space: nowrap;
+  width: 1px;
+  height: 1px;
+}
+/* WCAG 2.4.7 Focus Visible (Level AA): map paths are keyboard-reachable
+   (role="button", tabIndex=0) and keyboard-actionable (Enter/Space handlers),
+   so they need a visible focus indicator. Default UA outlines on SVG are
+   inconsistent across Chromium/WebKit/Firefox; opt into the accent ring
+   explicitly. Hole-finder round 2 #7, 2026-04-23. */
+.map-region:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  stroke: var(--text-1);
+  stroke-width: 1;
+}
+.map-tip {
+  position: absolute; pointer-events: none;
+  background: var(--surface-2, var(--bg-1));
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  padding: var(--sp-3) var(--sp-3);
+  box-shadow: var(--shadow-md);
+  font-size: var(--fs-12);
+  width: 280px;
+  transform: translate(-50%, calc(-100% - 10px));
+  /* z-index has to sit above every surface, rail, and drawer because the
+     tip is portaled to document.body and can appear over any page
+     chrome. Kept below the 1000-tier used by modal scrims so focus-
+     trapped modals still occlude it. 2026-04-23. */
+  z-index: 900;
+}
+.map-tip__name {
+  color: var(--text-1);
+  font-weight: 700;
+  font-size: var(--fs-14);
+  margin-bottom: var(--sp-2);
+  display: flex; align-items: center; gap: var(--sp-2);
+}
+.map-tip__kpis {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
+}
+.map-tip__kpi {
+  background: color-mix(in oklab, var(--accent) 6%, transparent);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-sm, 6px);
+  padding: var(--sp-2);
+}
+.map-tip__kpi-label {
+  color: var(--text-3);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 2px;
+}
+.map-tip__kpi-value {
+  color: var(--text-1);
+  font-family: var(--font-mono);
+  font-size: var(--fs-14);
+  font-weight: 600;
+}
+.map-tip__row { display: flex; justify-content: space-between; color: var(--text-3); font-family: var(--font-mono); font-size: 11px; gap: var(--sp-3); }
+.map-tip__row .v { color: var(--text-1); }
+.map-tip__row--compact {
+  margin-top: 0;
+  border-top: 1px dashed var(--line-1);
+  padding-top: var(--sp-2);
+}
+.map-tip__row--muted {
+  font-size: 10px;
+  color: var(--text-3);
+}
+.map-tip__value--small { font-size: 10px; }
+.map-retry-text { cursor: pointer; }
+.map-tip__seg {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--sp-2);
+  background: color-mix(in oklab, var(--accent) 10%, transparent);
+  border-radius: var(--r-sm, 6px);
+  margin-bottom: var(--sp-2);
+}
+.map-tip__seg-label { color: var(--text-3); font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; }
+.map-tip__seg-value { color: var(--text-1); font-weight: 600; font-size: var(--fs-12); }
+
+.map-legend {
+  position: absolute; left: var(--sp-3); bottom: var(--sp-3);
+  background: color-mix(in oklab, var(--bg-1) 80%, transparent);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--line-1); border-radius: var(--r-md);
+  padding: var(--sp-2) var(--sp-3);
+  font-size: 11px; color: var(--text-3);
+}
+/* The ZIP drill ends with `.zip-tiles__reconcile`, a full-width flow row that
+   states how much of the state is NOT in view. An absolutely-anchored legend
+   lands on top of its first ~190px, so it read "…7 ZIPs — 14,954 of 31,114
+   borrowers in view" with the "Showing the 24 densest of 8" clipped off
+   (measured live 2026-08-11). Since a reconciliation the user cannot read is
+   the bug it exists to prevent, the legend joins the flow below it here. The
+   state map has no such row and keeps the overlay. */
+.map-wrap:has(.zip-tiles) .map-legend {
+  position: static;
+  width: max-content;
+  margin: 0 var(--sp-3) var(--sp-3);
+}
+.map-legend__bar { display: flex; height: 8px; margin: 4px 0; border-radius: 2px; overflow: hidden; width: 140px; }
+.map-legend__bar span { flex: 1; }
+.map-legend__header {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+.map-legend__value {
+  color: var(--text-1);
+  font-family: var(--font-mono);
+  margin-left: var(--sp-2);
+}
+.map-legend__bar .lvl-0 { background: var(--bg-3); }
+.map-legend__bar .lvl-1 { background: color-mix(in oklab, var(--accent) 15%, var(--bg-3)); }
+.map-legend__bar .lvl-2 { background: color-mix(in oklab, var(--accent) 30%, var(--bg-3)); }
+.map-legend__bar .lvl-3 { background: color-mix(in oklab, var(--accent) 50%, var(--bg-3)); }
+.map-legend__bar .lvl-4 { background: color-mix(in oklab, var(--accent) 70%, var(--bg-3)); }
+.map-legend__range {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+}
+.map-legend__caption {
+  font-size: 10px;
+  color: var(--text-3);
+  margin-top: var(--sp-1);
+  line-height: var(--lh-snug);
+}
+/* Keyboard discoverability hint for the focusable geographies. Always
+   present in the DOM so screen readers announce it as part of the legend,
+   but visually hidden (mirrors the .sr-skip-link technique) until a map
+   region takes keyboard focus — then .map-wrap:focus-within reveals it so
+   sighted keyboard users learn the drill affordance. */
+.map-legend__hint {
+  display: block;
+  margin-top: var(--sp-1);
+  font-size: 10px;
+  color: var(--text-3);
+  line-height: var(--lh-snug);
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  overflow: hidden;
+  white-space: nowrap;
+  width: 1px;
+  height: 1px;
+}
+.map-legend__hint kbd {
+  font-size: 10px;
+  color: var(--text-1);
+}
+.map-wrap:focus-within .map-legend__hint {
+  clip: auto;
+  clip-path: none;
+  overflow: visible;
+  white-space: normal;
+  width: auto;
+  height: auto;
+}
+
+/* ZIP-tile grid — the drill's ZIP layer for non-Cook counties. Rendered as
+   an HTML/CSS grid (not SVG) so tiles use design-system tokens and land
+   cleanly in the map viewport without overlapping the breadcrumbs above.
+   Tile backgrounds step through quantile buckets via the --lvl-% variable
+   (no hex colors inlined). Prior SVG-rect implementation sat on top of the
+   breadcrumb row and was visually loud. 2026-04-23. */
+.zip-tiles {
+  padding: var(--sp-3);
+  flex: 1 1 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(88px, 1fr));
+  gap: var(--sp-2);
+  align-content: start;
+  overflow-y: auto;
+}
+/* Reconciles the visible tiles against the state total. A drill-down that
+   silently shows a third of the population reads as a broken widget, so the
+   remainder is stated here rather than left to the user to notice. */
+.zip-tiles__reconcile {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-top: 1px solid var(--stroke);
+  color: var(--text-2);
+}
+
+.zip-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: var(--sp-2) var(--sp-2);
+  border-radius: var(--r-md);
+  border: 1px solid color-mix(in oklab, var(--accent) 25%, transparent);
+  background: color-mix(in oklab, var(--accent) 6%, transparent);
+  color: var(--text-1);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
+  min-height: 56px;
+  /* Staggered "settle into the grid" entrance (Buyer-Wow #4): each tile
+     fades in, delayed by its capped index (--tile-i), so borrowers settle
+     into the grid in sequence. OPACITY-ONLY by design — a `transform` in
+     this keyframe would be retained by the `both` fill-mode and permanently
+     override the :hover lift below (a real bug caught in signoff). The
+     zoom/scale feel comes from the .map-levels wrapper, which is not the
+     hovered element. Disabled under reduced motion. */
+  animation: zip-tile-in var(--dur-base) var(--ease) both;
+  animation-delay: calc(var(--tile-i, 0) * 16ms);
+}
+@keyframes zip-tile-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .zip-tile {
+    animation: none;
+  }
+}
+.zip-tile--lvl-1 { background: color-mix(in oklab, var(--accent) 6%, transparent); }
+.zip-tile--lvl-2 { background: color-mix(in oklab, var(--accent) 12%, transparent); }
+.zip-tile--lvl-3 { background: color-mix(in oklab, var(--accent) 20%, transparent); }
+.zip-tile--lvl-4 { background: color-mix(in oklab, var(--accent) 30%, transparent); border-color: color-mix(in oklab, var(--accent) 45%, transparent); }
+.zip-tile:hover {
+  border-color: var(--accent);
+  background: color-mix(in oklab, var(--accent) 24%, transparent);
+  transform: translateY(-1px);
+}
+.zip-tile.is-selected {
+  border-color: var(--accent);
+  background: color-mix(in oklab, var(--accent) 36%, transparent);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
+.zip-tile__code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-14);
+  font-weight: 600;
+  color: var(--text-1);
+  letter-spacing: 0.02em;
+}
+.zip-tile__count {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-3);
+}
+

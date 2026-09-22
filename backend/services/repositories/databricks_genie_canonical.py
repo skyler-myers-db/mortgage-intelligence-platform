@@ -1,3166 +1,380 @@
-"""Canonical SQL and question-scope helpers for Databricks Genie answers."""
+"""Import hub for the canonical Genie SQL and question-scope helpers.
+
+The canonical layer was one 3,166-line module until the 2026-06-17 file-size
+refactor split it by responsibility (see
+``docs/maintenance/file-size-refactor-plan.md``). This module keeps the single
+import surface every caller already uses: it re-exports every top-level name
+the split modules define, so both ``from ... import NAME`` and reflection over
+``vars()`` (tests/unit/test_genie_sql_floor_extraction.py enumerates the
+``_CANONICAL_*_SQL`` corpus that way) see exactly what they saw before.
+
+The hub binds names once, at import time. A test that needs the
+catalog-qualified SQL re-derived reloads the split module that defines it
+(``databricks_genie_canonical_sql`` for the count SQL), not this hub.
+"""
 
 from __future__ import annotations
 
-import re
-from dataclasses import dataclass
-from typing import Any
-
-from backend.services.databricks_sql_helpers import qualify
-from backend.services.eligibility import eligible_sql_predicate
-from backend.services.scoring import HIGH_OPPORTUNITY_THRESHOLD, offer_display_label
-
-
-@dataclass(frozen=True)
-class CanonicalRetentionEligibilityFallback:
-    sql_query: str
-    rows: list[dict[str, Any]]
-    answer: str
-    metric_value: str
-    suppress_actions: bool = True
-
-
-@dataclass(frozen=True)
-class CanonicalEquityThresholdScope:
-    threshold_pct: float
-    strict_greater: bool
-    asks_share: bool
-
-
-@dataclass(frozen=True)
-class CanonicalNegativeEquityScope:
-    asks_share: bool
-
-
-@dataclass(frozen=True)
-class CanonicalListedCountScope:
-    state_name: str | None = None
-    state_code: str | None = None
-
-
-def _retention_eligibility_fallback_from_summary(
-    summary_rows: list[dict[str, Any]] | None,
-    *,
-    state_name: str | None = None,
-    state_code: str | None = None,
-) -> CanonicalRetentionEligibilityFallback | None:
-    if not summary_rows:
-        return None
-
-    summary = summary_rows[0]
-    retention_count = int(summary.get("retention_segment_borrowers") or 0)
-    marketing_count = int(summary.get("marketing_eligible_retention_borrowers") or 0)
-    action_ready_count = int(summary.get("action_ready_retention_borrowers") or 0)
-
-    if state_name and state_code:
-        answer = (
-            f"{state_name} ({state_code}) has {retention_count:,} borrowers in the "
-            "Retention Risk segment, but none qualify for the action-ready best-retention "
-            f"queue after marketing-eligibility and opt-in consent filters "
-            f"({marketing_count:,} marketing-eligible; {action_ready_count:,} opt-in). "
-            "Competitor-lien evidence questions use a separate evidence workflow and may "
-            "return borrowers that are not action-ready for outreach."
-        )
-        sql_query = _CANONICAL_RETENTION_ELIGIBILITY_SUMMARY_BY_STATE_SQL
-    else:
-        answer = (
-            f"The current coverage has {retention_count:,} borrowers in the Retention "
-            "Risk segment, but none qualify for the action-ready best-retention queue "
-            f"after marketing-eligibility and opt-in consent filters "
-            f"({marketing_count:,} marketing-eligible; {action_ready_count:,} opt-in). "
-            "Competitor-lien evidence questions use a separate evidence workflow and may "
-            "return borrowers that are not action-ready for outreach."
-        )
-        sql_query = _CANONICAL_RETENTION_ELIGIBILITY_SUMMARY_GLOBAL_SQL
-
-    return CanonicalRetentionEligibilityFallback(
-        sql_query=sql_query,
-        rows=summary_rows,
-        answer=answer,
-        metric_value=f"{action_ready_count:,}",
-    )
-
-# S1.4: canonical fail-closed contactability predicates (single interface).
-_ELIGIBLE = eligible_sql_predicate()
-_B_ELIGIBLE = eligible_sql_predicate("b")
-_BORROWER_360 = qualify("gold", "borrower_360")
-_EVIDENCE_EVENTS = qualify("gold", "evidence_events")
-_FUNNEL_SNAPSHOT_DAILY = qualify("gold", "funnel_snapshot_daily")
-_LEAD_POPULATION = qualify("gold", "lead_population")
-_LOCKIN_COHORT = qualify("gold", "lockin_cohort")
-_SEGMENT_POPULATION = qualify("gold", "segment_population")
-_SEGMENT_PERFORMANCE_METRIC_VIEW = qualify("semantics", "segment_performance_metric_view")
-
-_CANONICAL_ITM_COUNT_SQL = f"""
-SELECT COUNT(*) AS in_the_money_borrowers
-     , MAX(refreshed_at) AS refreshed_at
-FROM {_BORROWER_360}
-WHERE in_the_money = TRUE
-""".strip()
-
-_CANONICAL_ITM_COUNT_AVG_SPREAD_SQL = f"""
-SELECT COUNT(*) AS in_the_money_borrowers
-     , CAST(ROUND(AVG(rate_spread_bps), 1) AS DOUBLE) AS avg_rate_spread_bps
-     , MAX(refreshed_at) AS refreshed_at
-FROM {_BORROWER_360}
-WHERE in_the_money = TRUE
-""".strip()
-
-_CANONICAL_HELOC_COUNT_SQL = f"""
-SELECT COUNT(*) AS equity_capacity_borrowers
-     , CAST(ROUND(AVG(equity_pct), 1) AS DOUBLE) AS avg_equity_pct
-     , MAX(refreshed_at) AS refreshed_at
-FROM {_BORROWER_360}
-WHERE equity_pct >= 35
-""".strip()
-
-_CANONICAL_EQUITY_THRESHOLD_COUNT_SQL = f"""
-SELECT CAST(COUNT_IF(equity_pct >= :min_equity_pct) AS BIGINT)
-         AS equity_capacity_borrowers
-     , CAST(COUNT(*) AS BIGINT) AS total_borrowers
-     , CAST(ROUND(
-         100.0 * COUNT_IF(equity_pct >= :min_equity_pct) / NULLIF(COUNT(*), 0)
-       , 2) AS DOUBLE) AS borrower_share_pct
-     , CAST(ROUND(AVG(CASE WHEN equity_pct >= :min_equity_pct THEN equity_pct END), 1)
-         AS DOUBLE) AS avg_equity_pct
-     , MAX(refreshed_at) AS refreshed_at
-FROM {_BORROWER_360}
-""".strip()
-
-_CANONICAL_EQUITY_THRESHOLD_STRICT_COUNT_SQL = f"""
-SELECT CAST(COUNT_IF(equity_pct > :min_equity_pct) AS BIGINT)
-         AS equity_capacity_borrowers
-     , CAST(COUNT(*) AS BIGINT) AS total_borrowers
-     , CAST(ROUND(
-         100.0 * COUNT_IF(equity_pct > :min_equity_pct) / NULLIF(COUNT(*), 0)
-       , 2) AS DOUBLE) AS borrower_share_pct
-     , CAST(ROUND(AVG(CASE WHEN equity_pct > :min_equity_pct THEN equity_pct END), 1)
-         AS DOUBLE) AS avg_equity_pct
-     , MAX(refreshed_at) AS refreshed_at
-FROM {_BORROWER_360}
-""".strip()
-
-_CANONICAL_NEGATIVE_EQUITY_COUNT_SQL = f"""
-SELECT CAST(COUNT_IF(ltv > 100) AS BIGINT) AS underwater_borrowers
-     , CAST(COUNT(*) AS BIGINT) AS total_borrowers
-     , CAST(ROUND(
-         100.0 * COUNT_IF(ltv > 100) / NULLIF(COUNT(*), 0)
-       , 2) AS DOUBLE) AS borrower_share_pct
-     , CAST(ROUND(PERCENTILE_APPROX(CASE WHEN ltv > 100 THEN ltv END, 0.5), 1)
-         AS DOUBLE) AS median_underwater_ltv_pct
-     , CAST(COUNT_IF(ltv > 500) AS BIGINT) AS high_ltv_tail_borrowers
-     , MAX(refreshed_at) AS refreshed_at
-FROM {_BORROWER_360}
-""".strip()
-
-_CANONICAL_HOME_EQUITY_DISTRIBUTION_SQL = f"""
-WITH banded AS (
-  SELECT CASE
-           WHEN equity_pct IS NULL THEN 'Unknown'
-           WHEN ltv > 100 THEN 'Underwater (LTV > 100)'
-           WHEN equity_pct < 15 THEN '0-14%'
-           WHEN equity_pct < 35 THEN '15-34%'
-           WHEN equity_pct < 50 THEN '35-49%'
-           WHEN equity_pct < 75 THEN '50-74%'
-           ELSE '75%+'
-         END AS equity_band
-       , CASE
-           WHEN equity_pct IS NULL THEN 99
-           WHEN ltv > 100 THEN 0
-           WHEN equity_pct < 15 THEN 1
-           WHEN equity_pct < 35 THEN 2
-           WHEN equity_pct < 50 THEN 3
-           WHEN equity_pct < 75 THEN 4
-           ELSE 5
-         END AS sort_order
-       , equity_pct
-       , refreshed_at
-  FROM {_BORROWER_360}
+from backend.services.repositories.databricks_genie_canonical_briefs import (
+    _BRIEF_OVERLAY_SIGNALS,
+    _brief_city_label,
+    _brief_int,
+    _brief_money,
+    _brief_offer_paragraph,
+    _brief_position_sentences,
+    _brief_screen_txt,
+    _brief_signal_sentences,
+    _brief_terms_txt,
+    compose_all_segments_brief,
+    compose_borrower_ranking_brief,
+    compose_cohort_ranking_brief,
 )
-SELECT equity_band
-     , CAST(COUNT(*) AS BIGINT) AS borrowers
-     , CAST(ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 1) AS DOUBLE)
-         AS borrower_share_pct
-     , CAST(ROUND(AVG(equity_pct), 1) AS DOUBLE) AS avg_equity_pct
-     , MAX(refreshed_at) AS refreshed_at
-FROM banded
-GROUP BY equity_band, sort_order
-ORDER BY sort_order
-""".strip()
-
-_CANONICAL_ADDRESSABLE_MARKET_SQL = f"""
-SELECT COUNT(*) AS marketable_population
-     , MAX(refreshed_at) AS refreshed_at
-FROM {_BORROWER_360}
-WHERE {_ELIGIBLE}
-  AND is_owner_occupied = TRUE
-  AND current_lien_balance > 0
-  AND COALESCE(second_pos_amount, 0) = 0
-  AND equity_pct >= 15
-""".strip()
-
-_CANONICAL_RANKED_LEAD_POPULATION_SQL = f"""
-SELECT COUNT(*) AS ranked_leads
-     , MAX(refreshed_at) AS refreshed_at
-FROM {_LEAD_POPULATION}
-WHERE {_ELIGIBLE}
-""".strip()
-
-_CANONICAL_ITM_COUNT_BY_STATE_SQL = f"""
-SELECT COUNT(*) AS in_the_money_borrowers
-     , MAX(refreshed_at) AS refreshed_at
-FROM {_BORROWER_360}
-WHERE in_the_money = TRUE
-  AND state = :state
-""".strip()
-
-_CANONICAL_ITM_COUNT_BY_CITY_SQL = f"""
-SELECT COUNT(*) AS in_the_money_borrowers
-     , MAX(refreshed_at) AS refreshed_at
-FROM {_BORROWER_360}
-WHERE in_the_money = TRUE
-  AND LOWER(city) = LOWER(:city)
-""".strip()
-
-_CANONICAL_ITM_TOP_ZIPS_SQL = f"""
-SELECT zip
-     , state
-     , COUNT(*) AS in_the_money_borrowers
-     , CAST(ROUND(AVG(opportunity_score), 1) AS DOUBLE) AS avg_score
-     , MAX(refreshed_at) AS refreshed_at
-FROM {_BORROWER_360}
-WHERE in_the_money = TRUE
-  AND zip IS NOT NULL
-  AND TRIM(zip) <> ''
-GROUP BY zip, state
-ORDER BY in_the_money_borrowers DESC, avg_score DESC, zip ASC
-LIMIT 10
-""".strip()
-
-_CANONICAL_ITM_TOP_LEAD_QUEUE_ZIPS_SQL = f"""
-SELECT zip
-     , state
-     , COUNT(*) AS in_the_money_leads
-     , CAST(ROUND(AVG(opportunity_score), 1) AS DOUBLE) AS avg_score
-     , MAX(refreshed_at) AS refreshed_at
-FROM {_LEAD_POPULATION}
-WHERE array_contains(segment_codes, 'itm')
-  AND {_ELIGIBLE}
-  AND consent_status = 'opt_in'
-  AND zip IS NOT NULL
-  AND TRIM(zip) <> ''
-GROUP BY zip, state
-ORDER BY in_the_money_leads DESC, avg_score DESC, zip ASC
-LIMIT 10
-""".strip()
-
-_CANONICAL_ITM_BY_STATE_SQL = f"""
-WITH broad AS (
-  SELECT state
-       , COUNT(*) AS in_the_money_borrowers
-       , CAST(ROUND(AVG(rate_spread_bps), 1) AS DOUBLE) AS avg_rate_spread_bps
-       , CAST(ROUND(AVG(opportunity_score), 1) AS DOUBLE) AS avg_score
-       , MAX(refreshed_at) AS refreshed_at
-  FROM {_BORROWER_360}
-  WHERE in_the_money = TRUE
-    AND state IS NOT NULL
-    AND TRIM(state) <> ''
-  GROUP BY state
-),
-lead_queue AS (
-  SELECT state
-       , COUNT(*) AS lead_queue_borrowers
-  FROM {_BORROWER_360}
-  WHERE array_contains(segment_codes, 'itm')
-    AND {_ELIGIBLE}
-    AND state IS NOT NULL
-    AND TRIM(state) <> ''
-  GROUP BY state
+from backend.services.repositories.databricks_genie_canonical_intent_scopes import (
+    _ALL_SEGMENTS_SCOPE_TERMS,
+    _SEGMENT_COMPARISON_TERMS,
+    _SEGMENT_PERFORMANCE_FOREIGN_TERMS,
+    _SEGMENT_PERFORMANCE_METRIC_TERMS,
+    _SEGMENT_PERFORMANCE_OFF_AXIS_TERMS,
+    _TOP_BORROWER_WHY_TERMS,
+    _canonical_approval_trend_30d_scope,
+    _canonical_evidence_events_quarter_scope,
+    _canonical_evidence_events_yesterday_scope,
+    _canonical_heloc_recommendation_borrowers_scope,
+    _canonical_investor_top_by_related_property_scope,
+    _canonical_itm_offer_mix_scope,
+    _canonical_lead_score_weekly_distribution_scope,
+    _canonical_listed_by_product_rate_scope,
+    _canonical_listed_days_on_market_by_state_scope,
+    _canonical_lockin_by_state_scope,
+    _canonical_lockin_median_rate_scope,
+    _canonical_lockin_size_scope,
+    _canonical_mean_lead_score_by_state_scope,
+    _canonical_mean_rate_spread_by_segment_scope,
+    _canonical_segment_approval_rate_scope,
+    _canonical_segment_performance_rescue_scope,
+    _canonical_specific_top_borrowers_global_scope,
+    _canonical_specific_top_borrowers_state_scope,
+    _canonical_top_borrowers_all_segments_scope,
+    _canonical_top_borrowers_global_scope,
+    _canonical_top_borrowers_state_scope,
+    _canonical_top_cash_out_by_equity_scope,
+    _canonical_top_cohorts_scope,
+    _has_all_segments_scope,
+    _projected_monthly_savings_gap_scope,
+    _specific_top_borrower_intent,
+    _specific_top_borrower_intent_label,
+    _specific_top_borrower_intent_note,
+    _specific_top_borrower_intents,
+    _specific_top_borrower_sort_label,
 )
-SELECT b.state
-     , b.in_the_money_borrowers
-     , COALESCE(l.lead_queue_borrowers, 0) AS lead_queue_borrowers
-     , b.avg_rate_spread_bps
-     , b.avg_score
-     , b.refreshed_at
-FROM broad b
-LEFT JOIN lead_queue l ON l.state = b.state
-ORDER BY b.in_the_money_borrowers DESC, b.avg_score DESC, b.state ASC
-LIMIT 20
-""".strip()
-
-_CANONICAL_HELOC_TOP_ZIPS_SQL = f"""
-SELECT zip
-     , state
-     , COUNT(*) AS equity_capacity_borrowers
-     , CAST(ROUND(AVG(equity_pct), 1) AS DOUBLE) AS avg_equity_pct
-     , CAST(ROUND(AVG(opportunity_score), 1) AS DOUBLE) AS avg_score
-     , MAX(refreshed_at) AS refreshed_at
-FROM {_BORROWER_360}
-WHERE equity_pct >= 35
-  AND zip IS NOT NULL
-  AND TRIM(zip) <> ''
-GROUP BY zip, state
-ORDER BY equity_capacity_borrowers DESC, avg_equity_pct DESC, zip ASC
-LIMIT 5
-""".strip()
-
-_CANONICAL_CASH_OUT_TOP_STATE_SQL = f"""
-SELECT state
-     , COUNT(*) AS cash_out_borrowers
-     , MAX(refreshed_at) AS refreshed_at
-FROM {_BORROWER_360}
-WHERE recommended_offer_code = 'cash_out'
-GROUP BY state
-ORDER BY cash_out_borrowers DESC, state ASC
-LIMIT 1
-""".strip()
-
-_CANONICAL_LISTED_PURCHASE_TOP_SQL = f"""
-SELECT borrower_id
-     , display_name
-     , city
-     , state
-     , zip
-     , opportunity_score
-     , recommended_offer_code
-     , recommended_offer
-     , first_pos_loan_type
-     , current_rate
-     , listing_status_category
-     , refreshed_at
-FROM {_BORROWER_360}
-WHERE listed_for_sale = TRUE
-  AND {_ELIGIBLE}
-  AND consent_status = 'opt_in'
-ORDER BY opportunity_score DESC, borrower_id ASC
-LIMIT 10
-""".strip()
-
-_CANONICAL_LISTED_COUNT_SQL = f"""
-SELECT CAST(COUNT(*) AS BIGINT) AS listed_borrowers
-     , MAX(refreshed_at) AS refreshed_at
-FROM {_BORROWER_360}
-WHERE listed_for_sale = TRUE
-""".strip()
-
-_CANONICAL_LISTED_COUNT_BY_STATE_SQL = f"""
-SELECT CAST(COUNT(*) AS BIGINT) AS listed_borrowers
-     , MAX(refreshed_at) AS refreshed_at
-FROM {_BORROWER_360}
-WHERE listed_for_sale = TRUE
-  AND state = :state
-""".strip()
-
-_CANONICAL_INVESTOR_COUNT_SQL = f"""
-SELECT CAST(COUNT(*) AS BIGINT) AS investor_borrowers
-     , MAX(refreshed_at) AS refreshed_at
-FROM {_BORROWER_360}
-WHERE array_contains(segment_codes, 'investor')
-""".strip()
-
-_CANONICAL_ITM_SHARE_SQL = f"""
-SELECT CAST(COUNT_IF(in_the_money = TRUE) AS BIGINT) AS in_the_money_borrowers
-     , CAST(COUNT(*) AS BIGINT) AS total_borrowers
-     , CAST(ROUND(
-         100.0 * COUNT_IF(in_the_money = TRUE) / NULLIF(COUNT(*), 0)
-       , 2) AS DOUBLE) AS borrower_share_pct
-     , MAX(refreshed_at) AS refreshed_at
-FROM {_BORROWER_360}
-""".strip()
-
-_CANONICAL_REFI_EQUITY_SIGNAL_COMPARE_SQL = f"""
-SELECT CAST(COUNT(*) AS BIGINT) AS marketable_borrowers
-     , CAST(COUNT_IF(recommended_offer_code IN ('refi', 'refi_plus_heloc')) AS BIGINT)
-         AS refinance_candidates
-     , CAST(COUNT_IF(recommended_offer_code IN ('heloc', 'cash_out', 'refi_plus_heloc')) AS BIGINT)
-         AS home_equity_candidates
-     , CAST(COUNT_IF(recommended_offer_code = 'refi_plus_heloc') AS BIGINT)
-         AS refi_plus_home_equity_candidates
-     , CAST(ROUND(AVG(
-         CASE WHEN recommended_offer_code IN ('refi', 'refi_plus_heloc')
-              THEN rate_spread_bps END
-       ), 1) AS DOUBLE) AS avg_refi_rate_spread_bps
-     , CAST(ROUND(AVG(
-         CASE WHEN recommended_offer_code IN ('heloc', 'cash_out', 'refi_plus_heloc')
-              THEN equity_pct END
-       ), 1) AS DOUBLE) AS avg_home_equity_pct
-     , CAST(ROUND(AVG(
-         CASE WHEN recommended_offer_code IN ('heloc', 'cash_out', 'refi_plus_heloc')
-              THEN heloc_propensity_score END
-       ), 1) AS DOUBLE) AS avg_heloc_propensity_score
-     , CAST(COUNT_IF(has_refi_propensity_trigger = TRUE) AS BIGINT) AS refi_propensity_triggers
-     , CAST(COUNT_IF(has_heloc_propensity_trigger = TRUE) AS BIGINT) AS heloc_propensity_triggers
-     , MAX(refreshed_at) AS refreshed_at
-FROM {_BORROWER_360}
-WHERE {_ELIGIBLE}
-  AND consent_status = 'opt_in'
-""".strip()
-
-_CANONICAL_REFI_DRIVER_SQL = f"""
-SELECT e.signal_type
-     , CAST(COUNT(DISTINCT b.borrower_id) AS BIGINT) AS borrowers
-     , CAST(ROUND(AVG(e.confidence), 3) AS DOUBLE) AS avg_confidence
-     , MAX(to_timestamp(e.`timestamp`)) AS latest_evidence_at
-FROM {_BORROWER_360} AS b
-JOIN {_EVIDENCE_EVENTS} AS e
-  ON e.clip = b.clip
-WHERE {_B_ELIGIBLE}
-  AND b.consent_status = 'opt_in'
-  AND b.recommended_offer_code IN ('refi', 'refi_plus_heloc')
-  AND e.signal_type IN (
-    'rate_spread',
-    'equity',
-    'market_trend',
-    'refi_propensity',
-    'heloc_propensity',
-    'recent_refi',
-    'recent_payoff'
-  )
-GROUP BY e.signal_type
-ORDER BY borrowers DESC, avg_confidence DESC, signal_type ASC
-LIMIT 8
-""".strip()
-
-_CANONICAL_ITM_TOP_TIER_COMPARE_SQL = f"""
-SELECT CAST(COUNT(*) AS BIGINT) AS marketable_borrowers
-     , CAST(COUNT_IF(in_the_money = TRUE) AS BIGINT) AS in_the_money_borrowers
-     , CAST(COUNT_IF(opportunity_score >= {HIGH_OPPORTUNITY_THRESHOLD}) AS BIGINT) AS top_tier_borrowers
-     , CAST(COUNT_IF(in_the_money = TRUE AND opportunity_score >= {HIGH_OPPORTUNITY_THRESHOLD}) AS BIGINT)
-         AS overlap_borrowers
-     , CAST(ROUND(AVG(CASE WHEN in_the_money = TRUE THEN rate_spread_bps END), 1) AS DOUBLE)
-         AS avg_in_the_money_rate_spread_bps
-     , CAST(ROUND(AVG(CASE WHEN opportunity_score >= {HIGH_OPPORTUNITY_THRESHOLD} THEN opportunity_score END), 1) AS DOUBLE)
-         AS avg_top_tier_score
-     , MAX(refreshed_at) AS refreshed_at
-FROM {_BORROWER_360}
-WHERE {_ELIGIBLE}
-  AND consent_status = 'opt_in'
-""".strip()
-
-_CANONICAL_STRATEGY_BOARD_SQL = f"""
-WITH exploded_segments AS (
-  SELECT state
-       , segment_code
-       , borrower_id
-       , opportunity_score
-       , recommended_offer_code
-       , recommended_offer
-       , refreshed_at
-  FROM {_BORROWER_360}
-  LATERAL VIEW explode(segment_codes) seg AS segment_code
-  WHERE {_ELIGIBLE}
-    AND consent_status = 'opt_in'
-    AND state IS NOT NULL
-    AND TRIM(state) <> ''
-    AND segment_code IN ('itm', 'equity', 'investor', 'retention')
-    AND recommended_offer_code <> 'nurture'
-),
-segment_geo AS (
-  SELECT state
-       , segment_code
-       , COUNT(DISTINCT borrower_id) AS marketable_borrowers
-       , CAST(ROUND(AVG(opportunity_score), 1) AS DOUBLE) AS avg_score
-       , MAX(refreshed_at) AS refreshed_at
-  FROM exploded_segments
-  GROUP BY state, segment_code
-),
-offer_mix AS (
-  SELECT state
-       , segment_code
-       , recommended_offer_code
-       , recommended_offer
-       , COUNT(DISTINCT borrower_id) AS offer_borrowers
-       , ROW_NUMBER() OVER (
-           PARTITION BY state, segment_code
-           ORDER BY COUNT(DISTINCT borrower_id) DESC, recommended_offer_code ASC
-         ) AS offer_rank
-  FROM exploded_segments
-  GROUP BY state, segment_code, recommended_offer_code, recommended_offer
+from backend.services.repositories.databricks_genie_canonical_metric_sql import (
+    _CANONICAL_APPROVAL_TREND_30D_SQL,
+    _CANONICAL_CURRENT_CUSTOMER_RETENTION_RISK_SQL,
+    _CANONICAL_EVIDENCE_EVENTS_THIS_QUARTER_SQL,
+    _CANONICAL_EVIDENCE_EVENTS_YESTERDAY_SQL,
+    _CANONICAL_HELOC_RECOMMENDATION_BORROWERS_SQL,
+    _CANONICAL_INVESTOR_SEGMENT_BY_STATE_SQL,
+    _CANONICAL_INVESTOR_TOP_BY_RELATED_PROPERTY_SQL,
+    _CANONICAL_ITM_OFFER_MIX_SQL,
+    _CANONICAL_LEAD_SCORE_WEEKLY_DISTRIBUTION_SQL,
+    _CANONICAL_LISTED_BY_PRODUCT_RATE_SQL,
+    _CANONICAL_LISTED_DAYS_ON_MARKET_BY_STATE_SQL,
+    _CANONICAL_LOCKIN_BY_STATE_SQL,
+    _CANONICAL_LOCKIN_COHORT_SIZE_SQL,
+    _CANONICAL_LOCKIN_MEDIAN_RATE_SQL,
+    _CANONICAL_MEAN_LEAD_SCORE_BY_STATE_SQL,
+    _CANONICAL_MEAN_RATE_SPREAD_BY_SEGMENT_SQL,
+    _CANONICAL_MSA_SCORE_SQL,
+    _CANONICAL_RETENTION_COMPETITOR_LIEN_LIST_BY_STATE_SQL,
+    _CANONICAL_RETENTION_COMPETITOR_LIEN_LIST_SQL,
+    _CANONICAL_SEGMENT_APPROVAL_RATE_SQL,
+    _CANONICAL_TOP_CASH_OUT_BY_EQUITY_SQL,
+    _CANONICAL_TOP_COHORTS_SQL,
 )
-SELECT sg.state
-     , sg.segment_code
-     , sg.marketable_borrowers
-     , sg.avg_score
-     , om.recommended_offer_code AS leading_offer_code
-     , om.recommended_offer AS leading_recommended_offer
-     , om.offer_borrowers AS leading_offer_borrowers
-     , sg.refreshed_at
-FROM segment_geo AS sg
-LEFT JOIN offer_mix AS om
-  ON sg.state = om.state
- AND sg.segment_code = om.segment_code
- AND om.offer_rank = 1
-WHERE sg.marketable_borrowers > 0
-ORDER BY sg.avg_score DESC, sg.marketable_borrowers DESC, sg.state ASC, sg.segment_code ASC
-LIMIT 12
-""".strip()
-
-_CANONICAL_TOP_BORROWERS_BY_STATE_SQL = f"""
-SELECT borrower_id
-     , display_name
-     , city
-     , state
-     , zip
-     , opportunity_score AS lead_score
-     , recommended_offer_code
-     , recommended_offer
-     , rank_within_state
-     , refreshed_at
-FROM {_LEAD_POPULATION}
-WHERE state = :state
-ORDER BY opportunity_score DESC, rank_within_state ASC, borrower_id ASC
-LIMIT 10
-""".strip()
-
-_CANONICAL_TOP_BORROWERS_GLOBAL_SQL = f"""
-SELECT borrower_id
-     , display_name
-     , city
-     , state
-     , zip
-     , opportunity_score AS lead_score
-     , recommended_offer_code
-     , recommended_offer
-     , rank_overall
-     , refreshed_at
-FROM {_LEAD_POPULATION}
-WHERE {_ELIGIBLE}
-ORDER BY opportunity_score DESC, rank_overall ASC, borrower_id ASC
-LIMIT 10
-""".strip()
-
-# Driver-rich variant of the global top-borrowers ranking for "top candidates
-# across all segments + what makes each one strong + which offer" questions.
-# Carries the raw economics (rate, balance, home value), the behavioral
-# signals, and the run-specific policy thresholds so the analyst brief can
-# interpret every number in plain language, plus a SQL-computed ``why_now``
-# driver summary for the table view — all grounded in gold columns, never
-# model prose.
-_CANONICAL_TOP_BORROWERS_ALL_SEGMENTS_SQL = f"""
-SELECT borrower_id
-     , display_name
-     , city
-     , state
-     , zip
-     , array_join(segment_codes, ', ') AS segments
-     , opportunity_score
-     , rate_spread_bps
-     , equity_pct
-     , equity_estimate
-     , current_rate
-     , current_lien_balance
-     , avm_value
-     , in_the_money
-     , listed_for_sale
-     , listing_status_category
-     , related_property_count
-     , heloc_propensity_score
-     , has_heloc_propensity_trigger
-     , is_current_customer
-     , min_spread_bps_applied
-     , min_equity_pct_applied
-     , heloc_equity_min_applied
-     , cashout_equity_min_applied
-     , concat_ws(' | ',
-         CASE
-           WHEN in_the_money = TRUE AND rate_spread_bps IS NOT NULL
-           THEN concat('In the money: +', CAST(CAST(ROUND(rate_spread_bps, 0) AS BIGINT) AS STRING), ' bps rate spread')
-         END,
-         CASE
-           WHEN equity_pct IS NOT NULL AND equity_pct >= 35
-           THEN concat('Strong equity: ', CAST(CAST(ROUND(equity_pct, 0) AS BIGINT) AS STRING), '%')
-         END,
-         CASE WHEN listed_for_sale = TRUE THEN 'Listed for sale' END,
-         CASE
-           WHEN related_property_count IS NOT NULL AND related_property_count >= 2
-           THEN concat('Investor: ', CAST(related_property_count AS STRING), ' related properties')
-         END,
-         CASE WHEN array_contains(segment_codes, 'retention') THEN 'Retention / recapture risk' END,
-         CASE WHEN has_heloc_propensity_trigger = TRUE THEN 'HELOC propensity trigger' END
-       ) AS why_now
-     , recommended_offer_code
-     , recommended_offer
-     , refreshed_at
-FROM {_BORROWER_360}
-WHERE {_ELIGIBLE}
-  AND consent_status = 'opt_in'
-ORDER BY opportunity_score DESC, rate_spread_bps DESC NULLS LAST, borrower_id ASC
-LIMIT 10
-""".strip()
-
-
-def _brief_money(value: Any) -> str | None:
-    """Format a dollar amount the way an analyst would say it aloud."""
-
-    try:
-        amount = float(value)
-    except (TypeError, ValueError):
-        return None
-    if amount <= 0:
-        return None
-    if amount >= 1_000_000:
-        return f"${amount / 1_000_000:.2f}M"
-    if amount >= 1_000:
-        return f"${amount / 1_000:.0f}k"
-    return f"${amount:,.0f}"
-
-
-def _brief_city_label(row: dict[str, Any]) -> str:
-    city = str(row.get("city") or "").strip()
-    state = str(row.get("state") or "").strip()
-    if city and state:
-        return f"{city.title()}, {state}"
-    return city.title() or state or "coverage area"
-
-
-def _brief_int(value: Any) -> int | None:
-    try:
-        return int(round(float(value)))
-    except (TypeError, ValueError):
-        return None
-
-
-# Overlay segment codes translated into the sentence an analyst would say.
-# Raw codes like ``heloc_draw_to_payback`` must never reach the narrative.
-_BRIEF_OVERLAY_SIGNALS: tuple[tuple[str, str], ...] = (
-    (
-        "heloc_draw_to_payback",
-        "an existing home-equity line is nearing the end of its draw period, "
-        "which usually brings a payment jump — a natural moment to restructure",
-    ),
-    (
-        "home_equity_history",
-        "they have borrowed against home equity before, so the product is familiar territory",
-    ),
-    (
-        "second_lien_itm",
-        "they carry an expensive second lien that is worth consolidating",
-    ),
-    (
-        "refi_propensity",
-        "Cotality's refinance-propensity model independently flags them as likely to act",
-    ),
-    (
-        "itm_on_related_property",
-        "another property they own also passes the refinance screen",
-    ),
-    (
-        "payoff_loss_leads",
-        "they recently paid off a loan, which opens a recapture window",
-    ),
+from backend.services.repositories.databricks_genie_canonical_population_scopes import (
+    _canonical_addressable_market_scope,
+    _canonical_cash_out_state_scope,
+    _canonical_equity_threshold_scope,
+    _canonical_heloc_count_scope,
+    _canonical_heloc_zip_scope,
+    _canonical_home_equity_distribution_scope,
+    _canonical_investor_count_scope,
+    _canonical_investor_segment_by_state_scope,
+    _canonical_itm_city_scope,
+    _canonical_itm_count_avg_spread_scope,
+    _canonical_itm_lead_queue_zip_scope,
+    _canonical_itm_share_scope,
+    _canonical_itm_state_breakdown_scope,
+    _canonical_itm_top_tier_compare_scope,
+    _canonical_itm_zip_scope,
+    _canonical_listed_count_scope,
+    _canonical_listed_purchase_scope,
+    _canonical_msa_score_scope,
+    _canonical_negative_equity_scope,
+    _canonical_ranked_lead_population_scope,
+    _canonical_refi_driver_scope,
+    _canonical_refi_equity_signal_compare_scope,
+    _canonical_strategy_board_scope,
+)
+from backend.services.repositories.databricks_genie_canonical_ranking_sql import (
+    _CANONICAL_LISTED_PURCHASE_TOP_SQL,
+    _CANONICAL_RETENTION_ELIGIBILITY_SUMMARY_BY_STATE_SQL,
+    _CANONICAL_RETENTION_ELIGIBILITY_SUMMARY_GLOBAL_SQL,
+    _CANONICAL_TOP_BORROWERS_ALL_SEGMENTS_SQL,
+    _CANONICAL_TOP_BORROWERS_BY_STATE_INTENT_SQL,
+    _CANONICAL_TOP_BORROWERS_BY_STATE_SQL,
+    _CANONICAL_TOP_BORROWERS_GLOBAL_INTENT_SQL,
+    _CANONICAL_TOP_BORROWERS_GLOBAL_SQL,
+    _CANONICAL_TOP_CASH_OUT_BORROWERS_BY_STATE_SQL,
+    _CANONICAL_TOP_CASH_OUT_BORROWERS_GLOBAL_SQL,
+    _CANONICAL_TOP_HELOC_BORROWERS_BY_STATE_SQL,
+    _CANONICAL_TOP_HELOC_BORROWERS_GLOBAL_SQL,
+    _CANONICAL_TOP_INVESTOR_BORROWERS_BY_STATE_SQL,
+    _CANONICAL_TOP_INVESTOR_BORROWERS_GLOBAL_SQL,
+    _CANONICAL_TOP_LISTED_BORROWERS_BY_STATE_SQL,
+    _CANONICAL_TOP_LISTED_BORROWERS_GLOBAL_SQL,
+    _CANONICAL_TOP_REFI_BORROWERS_BY_STATE_SQL,
+    _CANONICAL_TOP_REFI_BORROWERS_GLOBAL_SQL,
+    _CANONICAL_TOP_RETENTION_BORROWERS_BY_STATE_SQL,
+    _CANONICAL_TOP_RETENTION_BORROWERS_GLOBAL_SQL,
+    _INTENT_RANKING_SPECS,
+    _LEAD_QUEUE_RANKING_SQL_TEMPLATE,
+    _RANKING_SELECT_COLUMNS,
+    _borrower_ranking_sql,
+)
+from backend.services.repositories.databricks_genie_canonical_scopes import (
+    _AMBIGUOUS_STATE_CODES,
+    _US_STATE_FILTERS,
+    CanonicalEquityThresholdScope,
+    CanonicalListedCountScope,
+    CanonicalNegativeEquityScope,
+    CanonicalRetentionEligibilityFallback,
+    _ambiguous_state_code_match_is_contextual,
+    _canonical_in_the_money_count_scope,
+    _canonical_itm_state_scope,
+    _current_footprint_label,
+    _format_pct_threshold,
+    _has_count_intent,
+    _has_equity_share_result_intent,
+    _has_global_coverage_scope,
+    _has_itm_intent,
+    _has_rank_intent,
+    _has_share_intent,
+    _has_strong_rank_intent,
+    _has_unsupported_geo_scope,
+    _normalized_question,
+    _retention_competitor_lien_list_question,
+    _retention_eligibility_fallback_from_summary,
+    _retention_risk_question,
+)
+from backend.services.repositories.databricks_genie_canonical_sql import (
+    _B_ELIGIBLE,
+    _BORROWER_360,
+    _CANONICAL_ADDRESSABLE_MARKET_SQL,
+    _CANONICAL_CASH_OUT_TOP_STATE_SQL,
+    _CANONICAL_EQUITY_THRESHOLD_COUNT_SQL,
+    _CANONICAL_EQUITY_THRESHOLD_STRICT_COUNT_SQL,
+    _CANONICAL_HELOC_COUNT_SQL,
+    _CANONICAL_HELOC_TOP_ZIPS_SQL,
+    _CANONICAL_HOME_EQUITY_DISTRIBUTION_SQL,
+    _CANONICAL_INVESTOR_COUNT_SQL,
+    _CANONICAL_ITM_BY_STATE_SQL,
+    _CANONICAL_ITM_COUNT_AVG_SPREAD_SQL,
+    _CANONICAL_ITM_COUNT_BY_CITY_SQL,
+    _CANONICAL_ITM_COUNT_BY_STATE_SQL,
+    _CANONICAL_ITM_COUNT_SQL,
+    _CANONICAL_ITM_SHARE_SQL,
+    _CANONICAL_ITM_TOP_LEAD_QUEUE_ZIPS_SQL,
+    _CANONICAL_ITM_TOP_TIER_COMPARE_SQL,
+    _CANONICAL_ITM_TOP_ZIPS_SQL,
+    _CANONICAL_LISTED_COUNT_BY_STATE_SQL,
+    _CANONICAL_LISTED_COUNT_SQL,
+    _CANONICAL_NEGATIVE_EQUITY_COUNT_SQL,
+    _CANONICAL_RANKED_LEAD_POPULATION_SQL,
+    _CANONICAL_REFI_DRIVER_SQL,
+    _CANONICAL_REFI_EQUITY_SIGNAL_COMPARE_SQL,
+    _CANONICAL_STRATEGY_BOARD_SQL,
+    _ELIGIBLE,
+    _EVIDENCE_EVENTS,
+    _FUNNEL_SNAPSHOT_DAILY,
+    _LEAD_POPULATION,
+    _LOCKIN_COHORT,
+    _SEGMENT_PERFORMANCE_METRIC_VIEW,
+    _SEGMENT_POPULATION,
 )
 
-
-def _brief_position_sentences(row: dict[str, Any]) -> list[str]:
-    """The borrower's mortgage position, in plain dollars-and-rates English."""
-
-    sentences: list[str] = []
-    balance = _brief_int(row.get("current_lien_balance")) or 0
-    avm = _brief_money(row.get("avm_value"))
-    equity_money = _brief_money(row.get("equity_estimate"))
-    equity_pct = _brief_int(row.get("equity_pct"))
-    rate = row.get("current_rate")
-    rate_f = None
-    try:
-        rate_f = float(rate) if rate is not None and float(rate) > 0 else None
-    except (TypeError, ValueError):
-        rate_f = None
-    if balance > 0 and rate_f is not None and avm:
-        base = (
-            f"They are paying {rate_f:.2f}% on roughly "
-            f"{_brief_money(balance)} of remaining mortgage against a home "
-            f"valued around {avm}"
-        )
-        if equity_money and equity_pct is not None:
-            base += (
-                f", which leaves about {equity_money} of equity — they own "
-                f"{equity_pct}% of the home's value outright"
-            )
-        sentences.append(base + ".")
-    elif balance == 0 and avm:
-        owned = (
-            f"They own the home outright — no mortgage balance remains against "
-            f"a value of about {avm}"
-        )
-        if equity_money:
-            owned += f", so all {equity_money} of it is equity"
-        sentences.append(owned + ".")
-    spread = _brief_int(row.get("rate_spread_bps"))
-    min_spread = _brief_int(row.get("min_spread_bps_applied"))
-    if row.get("in_the_money") and spread and rate_f is not None:
-        market = rate_f - spread / 100.0
-        points = spread / 100.0
-        threshold_txt = (
-            f" — well past the {min_spread}-bps mark where a refinance typically "
-            "starts paying for itself"
-            if min_spread and spread >= 2 * min_spread
-            else (
-                f" — clearing the {min_spread}-bps refinance threshold"
-                if min_spread
-                else ""
-            )
-        )
-        sentences.append(
-            f"Today's market rate is roughly {market:.2f}%, so they are "
-            f"overpaying by about {points:.2f} percentage points "
-            f"({spread} basis points){threshold_txt}."
-        )
-    return sentences
-
-
-def _brief_signal_sentences(row: dict[str, Any]) -> list[str]:
-    """Behavioral and ownership signals, translated from codes into stories."""
-
-    sentences: list[str] = []
-    segments = {code.strip() for code in str(row.get("segments") or "").split(",")}
-    if row.get("listed_for_sale"):
-        status = str(row.get("listing_status_category") or "").strip().lower()
-        # Only annotate with a readable status word — single-letter source
-        # codes ("a") add noise, not meaning, for a general reader.
-        status_txt = (
-            f" ({status})" if len(status) >= 4 and status not in {"none", "unknown"} else ""
-        )
-        sentences.append(
-            f"The home is actively listed for sale{status_txt} — the strongest "
-            "intent signal in the funnel, because when it sells this borrower "
-            "needs financing for the next one."
-        )
-    related = _brief_int(row.get("related_property_count")) or 0
-    if related >= 2:
-        sentences.append(
-            f"Cotality's mastered ownership records tie them to {related} "
-            "properties in total, marking an experienced multi-property "
-            "investor rather than a first-time borrower."
-        )
-    propensity = _brief_int(row.get("heloc_propensity_score"))
-    if row.get("has_heloc_propensity_trigger") and propensity:
-        sentences.append(
-            f"Cotality's HELOC-propensity model scores them {propensity} out "
-            "of 999 — top-tier likelihood of opening a home-equity line, "
-            "based on behavioral and property patterns, not marketing guesses."
-        )
-    overlays = [text for code, text in _BRIEF_OVERLAY_SIGNALS if code in segments]
-    if overlays:
-        joined = "; ".join(overlays[:3])
-        sentences.append(f"On top of that, {joined}.")
-    if row.get("is_current_customer"):
-        sentences.append(
-            "They are also an existing customer, so this is a retention "
-            "conversation, not a cold introduction."
-        )
-    return sentences
-
-
-def _brief_offer_paragraph(row: dict[str, Any]) -> str:
-    """The offer, the reason it follows from the numbers, and the play."""
-
-    code = str(row.get("recommended_offer_code") or "")
-    offer = offer_display_label(code, str(row.get("recommended_offer") or ""))
-    spread = _brief_int(row.get("rate_spread_bps"))
-    equity_pct = _brief_int(row.get("equity_pct"))
-    heloc_min = _brief_int(row.get("heloc_equity_min_applied"))
-    cashout_min = _brief_int(row.get("cashout_equity_min_applied"))
-    equity_money = _brief_money(row.get("equity_estimate"))
-    balance = _brief_int(row.get("current_lien_balance")) or 0
-    spread_clause = (
-        f"the {spread}-bps rate gap makes the refinance case on its own"
-        if spread
-        else "the rate economics make the refinance case"
-    )
-    equity_clause = (
-        f"{equity_pct}% equity"
-        + (f" (about {equity_money})" if equity_money else "")
-        + (f" clears the {heloc_min}% home-equity bar" if heloc_min else "")
-    )
-    plays = {
-        "refi_plus_heloc": (
-            f"{spread_clause}, and {equity_clause}, so the same conversation can "
-            "add a home-equity line. The play: lead with the rate savings, then "
-            "present the equity line as optional flexibility rather than a "
-            "second pitch."
-        ),
-        "refi": (
-            f"{spread_clause}; equity sits below the "
-            f"{heloc_min or 'home-equity'}% bar, so keep it a clean "
-            "rate-improvement conversation without upsell noise."
-        ),
-        "heloc": (
-            f"{equity_clause}, and the propensity signals say the appetite is "
-            "there. The play: an equity line that leaves their current "
-            "first mortgage untouched."
-        ),
-        "cash_out": (
-            (
-                "There is no rate incentive to lead with, but "
-                if not row.get("in_the_money")
-                else ""
-            )
-            + f"{equity_clause}"
-            + (f" (cash-out threshold: {cashout_min}%)" if cashout_min else "")
-            + (
-                ". With no remaining mortgage, this is unlocking cash against a "
-                "debt-free home on their terms."
-                if balance == 0
-                else ". The play: convert locked-up equity into usable cash in one refinance."
-            )
-        ),
-        "purchase": (
-            "the active listing means a purchase-loan need on the next home. "
-            "The play: get a pre-approval in place before the sale closes, so "
-            "the financing is ready the day they buy."
-        ),
-        "investor": (
-            "the multi-property profile routes to investor financing — "
-            "portfolio-aware terms rather than a single-home product."
-        ),
-        "retention": (
-            "the relationship plus rate-drift signals say a competitor could "
-            "take this loan; the play is a proactive retention review before "
-            "that call happens."
-        ),
-        "nurture": (
-            "the signals are real but early — keep them in the funnel and "
-            "let the triggers mature before spending an outreach touch."
-        ),
-    }
-    reason = plays.get(code, "the governed next-best-offer rules select it from this row's signals.")
-    return f"**The offer: {offer}.** {reason[0].upper() + reason[1:] if reason else reason}"
-
-
-def _brief_screen_txt(rows: list[dict[str, Any]]) -> str:
-    top = rows[0] if rows else {}
-    min_spread = _brief_int(top.get("min_spread_bps_applied"))
-    min_equity = _brief_int(top.get("min_equity_pct_applied"))
-    return (
-        f"at least {min_spread} bps of spread with at least {min_equity}% equity"
-        if min_spread and min_equity
-        else "enough spread and equity"
-    )
-
-
-def _brief_terms_txt(rows: list[dict[str, Any]]) -> str:
-    """The shared term-teaching sentence, thresholds read from the rows."""
-
-    return (
-        "Two terms recur below: **rate spread** is how far a borrower's "
-        "current mortgage rate sits above today's market rate, measured in "
-        "basis points (100 bps = 1 percentage point), and a borrower is "
-        "**in the money** when that gap is wide enough to make refinancing "
-        f"pay for itself ({_brief_screen_txt(rows)} under the current policy)."
-    )
-
-
-def compose_borrower_ranking_brief(
-    rows: list[dict[str, Any]],
-    *,
-    intro: str,
-    source_asset: str,
-    empty_message: str,
-) -> str:
-    """Teaching-analyst brief shared by every borrower-level ranking shape.
-
-    Written for a Head of Growth, not a mortgage quant: every term is
-    explained inline, every number is interpreted in dollars and plain
-    English, raw segment codes never leak into prose, and each candidate ends
-    with the concrete play. Every figure reads from the governed rows, so the
-    brief can never carry an unverifiable claim. Renders through the answer
-    markdown (paragraph blocks, ``**bold**``).
-    """
-
-    if not rows:
-        return empty_message
-    blocks: list[str] = [intro]
-    for rank, row in enumerate(rows, start=1):
-        score = _brief_int(row.get("opportunity_score"))
-        header = (
-            f"**#{rank} · {row.get('borrower_id')} · {_brief_city_label(row)} · "
-            f"opportunity score {score if score is not None else '—'}/100.**"
-        )
-        story = " ".join(
-            [*_brief_position_sentences(row), *_brief_signal_sentences(row)]
-        )
-        offer_par = _brief_offer_paragraph(row)
-        blocks.append(f"{header} {story}".strip())
-        blocks.append(offer_par)
-    itm_rows = [r for r in rows if r.get("in_the_money")]
-    listed_rows = [r for r in rows if r.get("listed_for_sale")]
-    investor_rows = [r for r in rows if (_brief_int(r.get("related_property_count")) or 0) >= 2]
-    heloc_rows = [r for r in rows if r.get("has_heloc_propensity_trigger")]
-    cohort_bits: list[str] = []
-    if itm_rows:
-        spreads = [
-            float(r["rate_spread_bps"]) for r in itm_rows if r.get("rate_spread_bps") is not None
-        ]
-        if spreads:
-            avg = int(round(sum(spreads) / len(spreads)))
-            cohort_bits.append(
-                f"{len(itm_rows)} of {len(rows)} are in the money with an "
-                f"average gap of about {avg} bps (~{avg / 100:.1f} percentage "
-                "points above market)"
-            )
-        else:
-            cohort_bits.append(f"{len(itm_rows)} of {len(rows)} are in the money")
-    if listed_rows:
-        cohort_bits.append(f"{len(listed_rows)} have homes actively listed for sale")
-    if investor_rows:
-        cohort_bits.append(f"{len(investor_rows)} are multi-property investors")
-    if heloc_rows:
-        cohort_bits.append(
-            f"{len(heloc_rows)} carry top-tier HELOC-propensity model scores"
-        )
-    cohort_txt = (
-        f"**The cohort picture:** {'; '.join(cohort_bits)}. " if cohort_bits else ""
-    )
-    blocks.append(
-        f"{cohort_txt}Offers come from the governed next-best-offer rules — "
-        "the same decision tree the Lead Queue uses — and every "
-        "recommendation still requires human approval there before any "
-        "outreach happens."
-    )
-    blocks.append(f"Source: {source_asset}")
-    return "\n\n".join(blocks)
-
-
-def compose_all_segments_brief(rows: list[dict[str, Any]], borrower_asset: str) -> str:
-    """The all-segments hero brief, built on the shared ranking composer."""
-
-    refreshed = str(rows[0].get("refreshed_at") or "")[:10] if rows else ""
-    refreshed_txt = f", refreshed {refreshed}," if refreshed else ""
-    intro = (
-        f"I ranked every marketing-eligible, opt-in borrower in "
-        f"{borrower_asset}{refreshed_txt} by **opportunity score** — a "
-        "0-100 blend of refinance economics, home equity, listing "
-        "activity, portfolio ownership, retention risk, and Cotality's "
-        "behavioral propensity models — with rate-spread economics "
-        f"breaking ties. {_brief_terms_txt(rows)} Here are the top "
-        f"{len(rows)} candidates in depth:"
-    )
-    return compose_borrower_ranking_brief(
-        rows,
-        intro=intro,
-        source_asset=borrower_asset,
-        empty_message=(
-            "The trusted borrower table returned no marketing-eligible, opt-in "
-            "borrowers across the segment portfolio for the current refreshed "
-            "coverage."
-        ),
-    )
-
-
-def compose_cohort_ranking_brief(
-    rows: list[dict[str, Any]],
-    *,
-    cohort_label: str,
-    ordering_label: str,
-    source_asset: str,
-    scope_note: str = "",
-) -> str:
-    """Teaching brief for a named ranking cohort (intent, state, Lead Queue)."""
-
-    refreshed = str(rows[0].get("refreshed_at") or "")[:10] if rows else ""
-    refreshed_txt = f", refreshed {refreshed}," if refreshed else ""
-    intro = (
-        f"I ranked the top {len(rows)} {cohort_label} from "
-        f"{source_asset}{refreshed_txt} ordered by {ordering_label}."
-        f"{' ' + scope_note if scope_note else ''} "
-        f"{_brief_terms_txt(rows)} Here is each candidate in depth:"
-    )
-    return compose_borrower_ranking_brief(
-        rows,
-        intro=intro,
-        source_asset=source_asset,
-        empty_message=(
-            f"The trusted borrower table returned no marketing-eligible "
-            f"{cohort_label} for the current refreshed coverage."
-        ),
-    )
-
-_CANONICAL_TOP_REFI_BORROWERS_BY_STATE_SQL = f"""
-SELECT borrower_id
-     , display_name
-     , city
-     , state
-     , zip
-     , rate_spread_bps
-     , equity_pct
-     , opportunity_score
-     , recommended_offer_code
-     , recommended_offer
-     , refreshed_at
-FROM {_BORROWER_360}
-WHERE state = :state
-  AND in_the_money = TRUE
-  AND {_ELIGIBLE}
-  AND consent_status = 'opt_in'
-ORDER BY opportunity_score DESC, rate_spread_bps DESC, borrower_id ASC
-LIMIT 10
-""".strip()
-
-_CANONICAL_TOP_CASH_OUT_BORROWERS_BY_STATE_SQL = f"""
-SELECT borrower_id
-     , display_name
-     , city
-     , state
-     , zip
-     , equity_estimate
-     , equity_pct
-     , opportunity_score
-     , recommended_offer_code
-     , recommended_offer
-     , refreshed_at
-FROM {_BORROWER_360}
-WHERE state = :state
-  AND recommended_offer_code = 'cash_out'
-  AND {_ELIGIBLE}
-  AND consent_status = 'opt_in'
-ORDER BY equity_estimate DESC, opportunity_score DESC, borrower_id ASC
-LIMIT 10
-""".strip()
-
-_CANONICAL_TOP_HELOC_BORROWERS_BY_STATE_SQL = f"""
-SELECT borrower_id
-     , display_name
-     , city
-     , state
-     , zip
-     , equity_estimate
-     , equity_pct
-     , heloc_propensity_score
-     , opportunity_score
-     , recommended_offer_code
-     , recommended_offer
-     , refreshed_at
-FROM {_BORROWER_360}
-WHERE state = :state
-  AND (
-    recommended_offer_code IN ('heloc', 'refi_plus_heloc')
-    OR has_heloc_propensity_trigger = TRUE
-    OR array_contains(segment_codes, 'permit')
-  )
-  AND {_ELIGIBLE}
-  AND consent_status = 'opt_in'
-ORDER BY heloc_propensity_score DESC NULLS LAST, equity_estimate DESC, opportunity_score DESC, borrower_id ASC
-LIMIT 10
-""".strip()
-
-_CANONICAL_TOP_LISTED_BORROWERS_BY_STATE_SQL = f"""
-SELECT borrower_id
-     , display_name
-     , city
-     , state
-     , zip
-     , opportunity_score
-     , recommended_offer_code
-     , recommended_offer
-     , listing_status_category
-     , refreshed_at
-FROM {_BORROWER_360}
-WHERE state = :state
-  AND listed_for_sale = TRUE
-  AND {_ELIGIBLE}
-  AND consent_status = 'opt_in'
-ORDER BY opportunity_score DESC, borrower_id ASC
-LIMIT 10
-""".strip()
-
-_CANONICAL_TOP_INVESTOR_BORROWERS_BY_STATE_SQL = f"""
-SELECT borrower_id
-     , display_name
-     , city
-     , state
-     , zip
-     , related_property_count
-     , opportunity_score
-     , recommended_offer_code
-     , recommended_offer
-     , refreshed_at
-FROM {_BORROWER_360}
-WHERE state = :state
-  AND (array_contains(segment_codes, 'investor') OR is_investor = TRUE)
-  AND {_ELIGIBLE}
-  AND consent_status = 'opt_in'
-ORDER BY related_property_count DESC NULLS LAST, opportunity_score DESC, borrower_id ASC
-LIMIT 10
-""".strip()
-
-_CANONICAL_TOP_RETENTION_BORROWERS_BY_STATE_SQL = f"""
-SELECT borrower_id
-     , display_name
-     , city
-     , state
-     , zip
-     , rate_spread_bps
-     , opportunity_score
-     , recommended_offer_code
-     , recommended_offer
-     , refreshed_at
-FROM {_BORROWER_360}
-WHERE state = :state
-  AND array_contains(segment_codes, 'retention')
-  AND {_ELIGIBLE}
-  AND consent_status = 'opt_in'
-ORDER BY opportunity_score DESC, rate_spread_bps DESC, borrower_id ASC
-LIMIT 10
-""".strip()
-
-_CANONICAL_RETENTION_ELIGIBILITY_SUMMARY_BY_STATE_SQL = f"""
-SELECT CAST(COUNT_IF(array_contains(segment_codes, 'retention')) AS BIGINT)
-         AS retention_segment_borrowers
-     , CAST(COUNT_IF(array_contains(segment_codes, 'retention') AND {_ELIGIBLE}) AS BIGINT)
-         AS marketing_eligible_retention_borrowers
-     , CAST(COUNT_IF(
-         array_contains(segment_codes, 'retention')
-         AND {_ELIGIBLE}
-         AND consent_status = 'opt_in'
-       ) AS BIGINT) AS action_ready_retention_borrowers
-     , MAX(refreshed_at) AS refreshed_at
-FROM {_BORROWER_360}
-WHERE state = :state
-""".strip()
-
-_CANONICAL_TOP_BORROWERS_BY_STATE_INTENT_SQL = {
-    "refi": _CANONICAL_TOP_REFI_BORROWERS_BY_STATE_SQL,
-    "cash_out": _CANONICAL_TOP_CASH_OUT_BORROWERS_BY_STATE_SQL,
-    "heloc": _CANONICAL_TOP_HELOC_BORROWERS_BY_STATE_SQL,
-    "listed": _CANONICAL_TOP_LISTED_BORROWERS_BY_STATE_SQL,
-    "investor": _CANONICAL_TOP_INVESTOR_BORROWERS_BY_STATE_SQL,
-    "retention": _CANONICAL_TOP_RETENTION_BORROWERS_BY_STATE_SQL,
-}
-
-_CANONICAL_TOP_REFI_BORROWERS_GLOBAL_SQL = f"""
-SELECT borrower_id
-     , display_name
-     , city
-     , state
-     , zip
-     , rate_spread_bps
-     , equity_pct
-     , opportunity_score
-     , recommended_offer_code
-     , recommended_offer
-     , refreshed_at
-FROM {_BORROWER_360}
-WHERE in_the_money = TRUE
-  AND {_ELIGIBLE}
-  AND consent_status = 'opt_in'
-ORDER BY opportunity_score DESC, rate_spread_bps DESC, borrower_id ASC
-LIMIT 10
-""".strip()
-
-_CANONICAL_TOP_CASH_OUT_BORROWERS_GLOBAL_SQL = f"""
-SELECT borrower_id
-     , display_name
-     , city
-     , state
-     , zip
-     , equity_estimate
-     , equity_pct
-     , opportunity_score
-     , recommended_offer_code
-     , recommended_offer
-     , refreshed_at
-FROM {_BORROWER_360}
-WHERE recommended_offer_code = 'cash_out'
-  AND {_ELIGIBLE}
-  AND consent_status = 'opt_in'
-ORDER BY equity_estimate DESC, opportunity_score DESC, borrower_id ASC
-LIMIT 10
-""".strip()
-
-_CANONICAL_TOP_HELOC_BORROWERS_GLOBAL_SQL = f"""
-SELECT borrower_id
-     , display_name
-     , city
-     , state
-     , zip
-     , equity_estimate
-     , equity_pct
-     , heloc_propensity_score
-     , opportunity_score
-     , recommended_offer_code
-     , recommended_offer
-     , refreshed_at
-FROM {_BORROWER_360}
-WHERE (
-    recommended_offer_code IN ('heloc', 'refi_plus_heloc')
-    OR has_heloc_propensity_trigger = TRUE
-    OR array_contains(segment_codes, 'permit')
-  )
-  AND {_ELIGIBLE}
-  AND consent_status = 'opt_in'
-ORDER BY heloc_propensity_score DESC NULLS LAST, equity_estimate DESC, opportunity_score DESC, borrower_id ASC
-LIMIT 10
-""".strip()
-
-_CANONICAL_TOP_LISTED_BORROWERS_GLOBAL_SQL = f"""
-SELECT borrower_id
-     , display_name
-     , city
-     , state
-     , zip
-     , opportunity_score
-     , recommended_offer_code
-     , recommended_offer
-     , listing_status_category
-     , refreshed_at
-FROM {_BORROWER_360}
-WHERE listed_for_sale = TRUE
-  AND {_ELIGIBLE}
-  AND consent_status = 'opt_in'
-ORDER BY opportunity_score DESC, borrower_id ASC
-LIMIT 10
-""".strip()
-
-_CANONICAL_TOP_INVESTOR_BORROWERS_GLOBAL_SQL = f"""
-SELECT borrower_id
-     , display_name
-     , city
-     , state
-     , zip
-     , related_property_count
-     , opportunity_score
-     , recommended_offer_code
-     , recommended_offer
-     , refreshed_at
-FROM {_BORROWER_360}
-WHERE (array_contains(segment_codes, 'investor') OR is_investor = TRUE)
-  AND {_ELIGIBLE}
-  AND consent_status = 'opt_in'
-ORDER BY related_property_count DESC NULLS LAST, opportunity_score DESC, borrower_id ASC
-LIMIT 10
-""".strip()
-
-_CANONICAL_TOP_RETENTION_BORROWERS_GLOBAL_SQL = f"""
-SELECT borrower_id
-     , display_name
-     , city
-     , state
-     , zip
-     , rate_spread_bps
-     , opportunity_score
-     , recommended_offer_code
-     , recommended_offer
-     , refreshed_at
-FROM {_BORROWER_360}
-WHERE array_contains(segment_codes, 'retention')
-  AND {_ELIGIBLE}
-  AND consent_status = 'opt_in'
-ORDER BY opportunity_score DESC, rate_spread_bps DESC, borrower_id ASC
-LIMIT 10
-""".strip()
-
-_CANONICAL_RETENTION_ELIGIBILITY_SUMMARY_GLOBAL_SQL = f"""
-SELECT CAST(COUNT_IF(array_contains(segment_codes, 'retention')) AS BIGINT)
-         AS retention_segment_borrowers
-     , CAST(COUNT_IF(array_contains(segment_codes, 'retention') AND {_ELIGIBLE}) AS BIGINT)
-         AS marketing_eligible_retention_borrowers
-     , CAST(COUNT_IF(
-         array_contains(segment_codes, 'retention')
-         AND {_ELIGIBLE}
-         AND consent_status = 'opt_in'
-       ) AS BIGINT) AS action_ready_retention_borrowers
-     , MAX(refreshed_at) AS refreshed_at
-FROM {_BORROWER_360}
-""".strip()
-
-_CANONICAL_TOP_BORROWERS_GLOBAL_INTENT_SQL = {
-    "refi": _CANONICAL_TOP_REFI_BORROWERS_GLOBAL_SQL,
-    "cash_out": _CANONICAL_TOP_CASH_OUT_BORROWERS_GLOBAL_SQL,
-    "heloc": _CANONICAL_TOP_HELOC_BORROWERS_GLOBAL_SQL,
-    "listed": _CANONICAL_TOP_LISTED_BORROWERS_GLOBAL_SQL,
-    "investor": _CANONICAL_TOP_INVESTOR_BORROWERS_GLOBAL_SQL,
-    "retention": _CANONICAL_TOP_RETENTION_BORROWERS_GLOBAL_SQL,
-}
-
-# ---------------------------------------------------------------------------
-# Teaching-analyst ranking SQL (2026-08-06). Every borrower-level ranking
-# shape shares one economics-rich SELECT so the analyst brief can interpret
-# each candidate in dollars, rates, and behavioral signals with the
-# run-specific policy thresholds. The generated dicts below REPLACE the
-# per-intent constants above at import time; the legacy constants remain only
-# as documentation of each shape's cohort predicate and ordering.
-# ---------------------------------------------------------------------------
-_RANKING_SELECT_COLUMNS = """b.borrower_id
-     , b.display_name
-     , b.city
-     , b.state
-     , b.zip
-     , array_join(b.segment_codes, ', ') AS segments
-     , b.opportunity_score
-     , b.rate_spread_bps
-     , b.equity_pct
-     , b.equity_estimate
-     , b.current_rate
-     , b.current_lien_balance
-     , b.avm_value
-     , b.in_the_money
-     , b.listed_for_sale
-     , b.listing_status_category
-     , b.related_property_count
-     , b.heloc_propensity_score
-     , b.has_heloc_propensity_trigger
-     , b.is_current_customer
-     , b.min_spread_bps_applied
-     , b.min_equity_pct_applied
-     , b.heloc_equity_min_applied
-     , b.cashout_equity_min_applied
-     , b.recommended_offer_code
-     , b.recommended_offer
-     , b.refreshed_at"""
-
-
-def _borrower_ranking_sql(where: str, order: str, *, state_scoped: bool) -> str:
-    scope = "b.state = :state\n  AND " if state_scoped else ""
-    return (
-        f"SELECT {_RANKING_SELECT_COLUMNS}\n"
-        f"FROM {_BORROWER_360} AS b\n"
-        f"WHERE {scope}{where}\n"
-        f"  AND {_B_ELIGIBLE}\n"
-        "  AND b.consent_status = 'opt_in'\n"
-        f"ORDER BY {order}\n"
-        "LIMIT 10"
-    )
-
-
-_INTENT_RANKING_SPECS: dict[str, tuple[str, str]] = {
-    "refi": (
-        "b.in_the_money = TRUE",
-        "b.opportunity_score DESC, b.rate_spread_bps DESC, b.borrower_id ASC",
-    ),
-    "cash_out": (
-        "b.recommended_offer_code = 'cash_out'",
-        "b.equity_estimate DESC, b.opportunity_score DESC, b.borrower_id ASC",
-    ),
-    "heloc": (
-        "(b.recommended_offer_code IN ('heloc', 'refi_plus_heloc')"
-        " OR b.has_heloc_propensity_trigger = TRUE"
-        " OR array_contains(b.segment_codes, 'permit'))",
-        "b.heloc_propensity_score DESC NULLS LAST, b.equity_estimate DESC, "
-        "b.opportunity_score DESC, b.borrower_id ASC",
-    ),
-    "listed": (
-        "b.listed_for_sale = TRUE",
-        "b.opportunity_score DESC, b.borrower_id ASC",
-    ),
-    "investor": (
-        "(array_contains(b.segment_codes, 'investor') OR b.is_investor = TRUE)",
-        "b.related_property_count DESC NULLS LAST, b.opportunity_score DESC, b.borrower_id ASC",
-    ),
-    "retention": (
-        "array_contains(b.segment_codes, 'retention')",
-        "b.opportunity_score DESC, b.rate_spread_bps DESC, b.borrower_id ASC",
-    ),
-}
-
-_CANONICAL_TOP_BORROWERS_BY_STATE_INTENT_SQL = {
-    intent: _borrower_ranking_sql(where, order, state_scoped=True)
-    for intent, (where, order) in _INTENT_RANKING_SPECS.items()
-}
-_CANONICAL_TOP_BORROWERS_GLOBAL_INTENT_SQL = {
-    intent: _borrower_ranking_sql(where, order, state_scoped=False)
-    for intent, (where, order) in _INTENT_RANKING_SPECS.items()
-}
-_CANONICAL_LISTED_PURCHASE_TOP_SQL = _borrower_ranking_sql(
-    _INTENT_RANKING_SPECS["listed"][0],
-    _INTENT_RANKING_SPECS["listed"][1],
-    state_scoped=False,
-)
-
-# Lead-Queue rankings keep mip.gold.lead_population as the source of the
-# ranked cohort (its rank/score are the operational truth) and join
-# borrower_360 for the economics the analyst brief interprets.
-_LEAD_QUEUE_RANKING_SQL_TEMPLATE = (
-    f"SELECT {_RANKING_SELECT_COLUMNS}\n"
-    "     , lp.rank_overall\n"
-    f"FROM {_LEAD_POPULATION} AS lp\n"
-    f"JOIN {_BORROWER_360} AS b ON b.borrower_id = lp.borrower_id\n"
-    "WHERE {scope}\n"
-    "ORDER BY lp.opportunity_score DESC, lp.rank_overall ASC, lp.borrower_id ASC\n"
-    "LIMIT 10"
-)
-_CANONICAL_TOP_BORROWERS_BY_STATE_SQL = _LEAD_QUEUE_RANKING_SQL_TEMPLATE.format(
-    scope="lp.state = :state"
-)
-_CANONICAL_TOP_BORROWERS_GLOBAL_SQL = _LEAD_QUEUE_RANKING_SQL_TEMPLATE.format(
-    scope=eligible_sql_predicate("lp")
-)
-
-_CANONICAL_TOP_CASH_OUT_BY_EQUITY_SQL = f"""
-SELECT borrower_id
-     , display_name
-     , city
-     , state
-     , zip
-     , equity_estimate
-     , equity_pct
-     , opportunity_score
-     , recommended_offer_code
-     , recommended_offer
-     , refreshed_at
-FROM {_BORROWER_360}
-WHERE recommended_offer_code IN ('cash_out', 'heloc', 'refi_plus_heloc')
-  AND {_ELIGIBLE}
-  AND consent_status = 'opt_in'
-ORDER BY equity_estimate DESC, opportunity_score DESC, borrower_id ASC
-LIMIT 10
-""".strip()
-
-_CANONICAL_INVESTOR_TOP_BY_RELATED_PROPERTY_SQL = f"""
-SELECT borrower_id
-     , display_name
-     , city
-     , state
-     , zip
-     , related_property_count
-     , opportunity_score
-     , recommended_offer_code
-     , recommended_offer
-     , refreshed_at
-FROM {_BORROWER_360}
-WHERE array_contains(segment_codes, 'investor')
-  AND related_property_count >= 2
-  AND {_ELIGIBLE}
-ORDER BY related_property_count DESC, opportunity_score DESC, borrower_id ASC
-LIMIT 20
-""".strip()
-
-_CANONICAL_MEAN_RATE_SPREAD_BY_SEGMENT_SQL = f"""
-SELECT segment_code
-     , COUNT(DISTINCT borrower_id) AS borrowers
-     , CAST(ROUND(AVG(rate_spread_bps), 1) AS DOUBLE) AS avg_rate_spread_bps
-     , MAX(refreshed_at) AS refreshed_at
-FROM {_BORROWER_360}
-LATERAL VIEW explode(segment_codes) seg AS segment_code
-WHERE rate_spread_bps IS NOT NULL
-GROUP BY segment_code
-ORDER BY borrowers DESC, segment_code ASC
-""".strip()
-
-_CANONICAL_SEGMENT_APPROVAL_RATE_SQL = f"""
-SELECT segment_code
-     , name
-     , count AS segment_borrowers
-     , approval_rate
-     , outreach_rate
-     , avg_score
-     , refreshed_at
-FROM {_SEGMENT_PERFORMANCE_METRIC_VIEW}
-WHERE state = '_ALL'
-  AND count > 0
-ORDER BY approval_rate DESC NULLS LAST, outreach_rate DESC NULLS LAST, count DESC, segment_code ASC
-LIMIT 10
-""".strip()
-
-_CANONICAL_MEAN_LEAD_SCORE_BY_STATE_SQL = f"""
-SELECT state
-     , COUNT(*) AS borrowers
-     , CAST(ROUND(AVG(opportunity_score), 1) AS DOUBLE) AS avg_lead_score
-     , MAX(refreshed_at) AS refreshed_at
-FROM {_BORROWER_360}
-WHERE state IS NOT NULL
-  AND TRIM(state) <> ''
-GROUP BY state
-ORDER BY avg_lead_score DESC, borrowers DESC, state ASC
-LIMIT 20
-""".strip()
-
-_CANONICAL_EVIDENCE_EVENTS_YESTERDAY_SQL = f"""
-SELECT signal_type
-     , COUNT(*) AS evidence_events
-     , MAX(to_timestamp(`timestamp`)) AS latest_evidence_at
-FROM {_EVIDENCE_EVENTS}
-WHERE to_date(to_timestamp(`timestamp`)) = date_sub(current_date(), 1)
-GROUP BY signal_type
-ORDER BY evidence_events DESC, signal_type ASC
-""".strip()
-
-_CANONICAL_LEAD_SCORE_WEEKLY_DISTRIBUTION_SQL = f"""
-SELECT date_trunc('WEEK', snapshot_date) AS week_start
-     , COUNT(*) AS snapshot_rows
-     , CAST(SUM(addressable_borrowers) AS BIGINT) AS addressable_borrowers
-     , CAST(ROUND(AVG(avg_opportunity_score), 1) AS DOUBLE) AS avg_opportunity_score
-     , CAST(SUM(high_opportunity_borrowers) AS BIGINT) AS high_opportunity_borrowers
-     , MAX(snapshot_at) AS snapshot_at
-FROM {_FUNNEL_SNAPSHOT_DAILY}
-WHERE state = '_ALL'
-  AND segment_code = '_ALL'
-  AND snapshot_date >= date_sub(current_date(), 14)
-GROUP BY date_trunc('WEEK', snapshot_date)
-ORDER BY week_start DESC
-LIMIT 2
-""".strip()
-
-_CANONICAL_APPROVAL_TREND_30D_SQL = f"""
-SELECT snapshot_date
-     , approved_borrowers AS approvals
-     , actioned_borrowers
-     , addressable_borrowers
-     , snapshot_at
-FROM {_FUNNEL_SNAPSHOT_DAILY}
-WHERE state = '_ALL'
-  AND segment_code = '_ALL'
-  AND snapshot_date >= date_sub(current_date(), 30)
-ORDER BY snapshot_date ASC
-""".strip()
-
-_CANONICAL_EVIDENCE_EVENTS_THIS_QUARTER_SQL = f"""
-SELECT signal_type
-     , COUNT(*) AS evidence_events
-     , MAX(to_timestamp(`timestamp`)) AS latest_evidence_at
-FROM {_EVIDENCE_EVENTS}
-WHERE to_timestamp(`timestamp`) >= date_trunc('QUARTER', current_timestamp())
-GROUP BY signal_type
-ORDER BY evidence_events DESC, signal_type ASC
-""".strip()
-
-_CANONICAL_ITM_OFFER_MIX_SQL = f"""
-SELECT recommended_offer_code
-     , recommended_offer
-     , COUNT(*) AS borrowers
-     , CAST(ROUND(AVG(opportunity_score), 1) AS DOUBLE) AS avg_score
-     , MAX(refreshed_at) AS refreshed_at
-FROM {_BORROWER_360}
-WHERE array_contains(segment_codes, 'itm')
-GROUP BY recommended_offer_code, recommended_offer
-ORDER BY borrowers DESC, recommended_offer_code ASC
-""".strip()
-
-_CANONICAL_HELOC_RECOMMENDATION_BORROWERS_SQL = f"""
-SELECT borrower_id
-     , display_name
-     , city
-     , state
-     , zip
-     , recommended_offer_code
-     , recommended_offer
-     , equity_estimate
-     , equity_pct
-     , heloc_propensity_score
-     , opportunity_score
-     , refreshed_at
-FROM {_BORROWER_360}
-WHERE recommended_offer_code IN ('heloc', 'refi_plus_heloc')
-  AND {_ELIGIBLE}
-  AND consent_status = 'opt_in'
-ORDER BY opportunity_score DESC, equity_estimate DESC, borrower_id ASC
-LIMIT 50
-""".strip()
-
-_CANONICAL_LISTED_BY_PRODUCT_RATE_SQL = f"""
-SELECT COALESCE(NULLIF(first_pos_loan_type, ''), 'Unknown') AS first_pos_loan_type
-     , COUNT(*) AS listed_borrowers
-     , CAST(ROUND(AVG(current_rate), 2) AS DOUBLE) AS avg_current_rate
-     , MAX(refreshed_at) AS refreshed_at
-FROM {_BORROWER_360}
-WHERE listed_for_sale = TRUE
-GROUP BY COALESCE(NULLIF(first_pos_loan_type, ''), 'Unknown')
-ORDER BY listed_borrowers DESC, first_pos_loan_type ASC
-""".strip()
-
-_CANONICAL_LISTED_DAYS_ON_MARKET_BY_STATE_SQL = f"""
-SELECT state
-     , COUNT(*) AS listed_borrowers
-     , CAST(ROUND(AVG(listing_days_on_market), 1) AS DOUBLE)
-         AS avg_listing_days_on_market
-     , CAST(ROUND(AVG(listing_price), 0) AS BIGINT) AS avg_listing_price
-     , MAX(refreshed_at) AS refreshed_at
-FROM {_BORROWER_360}
-WHERE listed_for_sale = TRUE
-  AND state IS NOT NULL
-  AND TRIM(state) <> ''
-GROUP BY state
-ORDER BY listed_borrowers DESC, avg_listing_days_on_market ASC, state ASC
-LIMIT 5
-""".strip()
-
-_CANONICAL_LOCKIN_COHORT_SIZE_SQL = f"""
-SELECT COUNT(*) AS lockin_borrowers
-     , MAX(refreshed_at) AS refreshed_at
-FROM {_LOCKIN_COHORT}
-""".strip()
-
-_CANONICAL_LOCKIN_MEDIAN_RATE_SQL = f"""
-SELECT CAST(ROUND(percentile_approx(origination_rate * 100, 0.5), 3) AS DOUBLE)
-         AS median_rate_pct
-     , COUNT(*) AS lockin_borrowers
-     , MAX(refreshed_at) AS refreshed_at
-FROM {_LOCKIN_COHORT}
-""".strip()
-
-_CANONICAL_LOCKIN_BY_STATE_SQL = f"""
-SELECT state
-     , COUNT(*) AS lockin_borrowers
-     , CAST(ROUND(AVG(opportunity_score), 1) AS DOUBLE) AS avg_score
-     , MAX(refreshed_at) AS refreshed_at
-FROM {_LOCKIN_COHORT}
-WHERE state IS NOT NULL
-  AND TRIM(state) <> ''
-GROUP BY state
-ORDER BY lockin_borrowers DESC, state ASC
-""".strip()
-
-_CANONICAL_TOP_COHORTS_SQL = f"""
-SELECT segment_code
-     , name
-     , count AS borrowers
-     , avg_score
-     , refreshed_at
-FROM {_SEGMENT_POPULATION}
-WHERE state = '_ALL'
-  AND count > 0
-ORDER BY count DESC, avg_score DESC, segment_code ASC
-LIMIT 10
-""".strip()
-
-_CANONICAL_CURRENT_CUSTOMER_RETENTION_RISK_SQL = f"""
-SELECT COUNT(*) AS retention_risk_borrowers
-     , MAX(refreshed_at) AS refreshed_at
-FROM {_BORROWER_360}
-WHERE is_current_customer = TRUE
-  AND (
-    array_contains(segment_codes, 'retention')
-    OR recommended_offer_code = 'retention'
-)
-""".strip()
-
-_CANONICAL_RETENTION_COMPETITOR_LIEN_LIST_SQL = f"""
-WITH matches AS (
-  SELECT b.borrower_id
-       , b.city
-       , b.state
-       , b.recommended_offer_code
-       , b.opportunity_score
-       , MAX(to_timestamp(e.`timestamp`)) AS latest_competitor_lien_at
-  FROM {_BORROWER_360} AS b
-  JOIN {_EVIDENCE_EVENTS} AS e
-    ON e.clip = b.clip
-  WHERE array_contains(b.segment_codes, 'retention')
-    AND e.signal_type = 'competitor_lien'
-    AND to_timestamp(e.`timestamp`) >= current_timestamp() - interval 30 days
-  GROUP BY b.borrower_id
-         , b.city
-         , b.state
-         , b.recommended_offer_code
-         , b.opportunity_score
-),
-ranked AS (
-  SELECT borrower_id
-       , city
-       , state
-       , recommended_offer_code
-       , opportunity_score
-       , latest_competitor_lien_at
-       , COUNT(*) OVER () AS total_matching_borrowers
-  FROM matches
-)
-SELECT borrower_id
-     , city
-     , state
-     , recommended_offer_code
-     , opportunity_score
-     , latest_competitor_lien_at
-     , total_matching_borrowers
-FROM ranked
-ORDER BY latest_competitor_lien_at DESC
-       , opportunity_score DESC
-       , borrower_id ASC
-LIMIT 50
-""".strip()
-
-_CANONICAL_RETENTION_COMPETITOR_LIEN_LIST_BY_STATE_SQL = f"""
-WITH matches AS (
-  SELECT b.borrower_id
-       , b.city
-       , b.state
-       , b.recommended_offer_code
-       , b.opportunity_score
-       , MAX(to_timestamp(e.`timestamp`)) AS latest_competitor_lien_at
-  FROM {_BORROWER_360} AS b
-  JOIN {_EVIDENCE_EVENTS} AS e
-    ON e.clip = b.clip
-  WHERE b.state = :state
-    AND array_contains(b.segment_codes, 'retention')
-    AND e.signal_type = 'competitor_lien'
-    AND to_timestamp(e.`timestamp`) >= current_timestamp() - interval 30 days
-  GROUP BY b.borrower_id
-         , b.city
-         , b.state
-         , b.recommended_offer_code
-         , b.opportunity_score
-),
-ranked AS (
-  SELECT borrower_id
-       , city
-       , state
-       , recommended_offer_code
-       , opportunity_score
-       , latest_competitor_lien_at
-       , COUNT(*) OVER () AS total_matching_borrowers
-  FROM matches
-)
-SELECT borrower_id
-     , city
-     , state
-     , recommended_offer_code
-     , opportunity_score
-     , latest_competitor_lien_at
-     , total_matching_borrowers
-FROM ranked
-ORDER BY latest_competitor_lien_at DESC
-       , opportunity_score DESC
-       , borrower_id ASC
-LIMIT 50
-""".strip()
-
-_CANONICAL_MSA_SCORE_SQL = f"""
-WITH borrower_markets AS (
-  SELECT situs_cbsa_code
-       , COALESCE(NULLIF(city, ''), 'Unknown') AS city
-       , state
-       , opportunity_score
-       , refreshed_at
-  FROM {_BORROWER_360}
-  WHERE situs_cbsa_code IS NOT NULL
-    AND TRIM(situs_cbsa_code) <> ''
-),
-market_scores AS (
-  SELECT situs_cbsa_code AS msa_cbsa_code
-       , CAST(COUNT(*) AS BIGINT) AS borrowers
-       , CAST(ROUND(AVG(opportunity_score), 1) AS DOUBLE) AS avg_score
-       , MAX(refreshed_at) AS refreshed_at
-  FROM borrower_markets
-  GROUP BY situs_cbsa_code
-),
-city_counts AS (
-  SELECT situs_cbsa_code
-       , city
-       , state
-       , COUNT(*) AS city_borrowers
-  FROM borrower_markets
-  GROUP BY situs_cbsa_code, city, state
-),
-city_ranked AS (
-  SELECT situs_cbsa_code
-       , city
-       , state
-       , city_borrowers
-       , ROW_NUMBER() OVER (
-           PARTITION BY situs_cbsa_code
-           ORDER BY city_borrowers DESC, city ASC, state ASC
-         ) AS rn
-  FROM city_counts
-)
-SELECT CONCAT(cr.city, ', ', cr.state, ' (CBSA ', ms.msa_cbsa_code, ')') AS market
-     , ms.msa_cbsa_code
-     , ms.borrowers
-     , ms.avg_score
-     , ms.refreshed_at
-FROM market_scores AS ms
-LEFT JOIN city_ranked AS cr
-  ON cr.situs_cbsa_code = ms.msa_cbsa_code
- AND cr.rn = 1
-ORDER BY ms.borrowers DESC, ms.avg_score DESC, ms.msa_cbsa_code ASC
-LIMIT 5
-""".strip()
-
-_CANONICAL_INVESTOR_SEGMENT_BY_STATE_SQL = f"""
-SELECT segment_code
-     , state
-     , count AS investor_borrowers
-     , avg_score
-     , delta_vs_prior
-     , refreshed_at
-FROM {_SEGMENT_POPULATION}
-WHERE segment_code = 'investor'
-  AND state <> '_ALL'
-  AND count > 0
-ORDER BY count DESC, avg_score DESC, state ASC
-LIMIT 20
-""".strip()
-
-_US_STATE_FILTERS: tuple[tuple[str, str], ...] = (
-    ("alabama", "AL"),
-    ("alaska", "AK"),
-    ("arizona", "AZ"),
-    ("arkansas", "AR"),
-    ("california", "CA"),
-    ("colorado", "CO"),
-    ("connecticut", "CT"),
-    ("delaware", "DE"),
-    ("florida", "FL"),
-    ("georgia", "GA"),
-    ("hawaii", "HI"),
-    ("idaho", "ID"),
-    ("illinois", "IL"),
-    ("indiana", "IN"),
-    ("iowa", "IA"),
-    ("kansas", "KS"),
-    ("kentucky", "KY"),
-    ("louisiana", "LA"),
-    ("maine", "ME"),
-    ("maryland", "MD"),
-    ("massachusetts", "MA"),
-    ("michigan", "MI"),
-    ("minnesota", "MN"),
-    ("mississippi", "MS"),
-    ("missouri", "MO"),
-    ("montana", "MT"),
-    ("nebraska", "NE"),
-    ("nevada", "NV"),
-    ("new hampshire", "NH"),
-    ("new jersey", "NJ"),
-    ("new mexico", "NM"),
-    ("new york", "NY"),
-    ("north carolina", "NC"),
-    ("north dakota", "ND"),
-    ("ohio", "OH"),
-    ("oklahoma", "OK"),
-    ("oregon", "OR"),
-    ("pennsylvania", "PA"),
-    ("rhode island", "RI"),
-    ("south carolina", "SC"),
-    ("south dakota", "SD"),
-    ("tennessee", "TN"),
-    ("texas", "TX"),
-    ("utah", "UT"),
-    ("vermont", "VT"),
-    ("virginia", "VA"),
-    ("washington", "WA"),
-    ("west virginia", "WV"),
-    ("wisconsin", "WI"),
-    ("wyoming", "WY"),
-)
-_AMBIGUOUS_STATE_CODES: frozenset[str] = frozenset({"HI", "ID", "IN", "ME", "OH", "OK", "OR"})
-
-
-def _ambiguous_state_code_match_is_contextual(question: str, match: re.Match[str]) -> bool:
-    before = question[: match.start()]
-    after = question[match.end() :]
-    has_geo_preface = bool(
-        re.search(
-            r"(?:^|[\s(,/;:-])(?:in|for|from|state|states|market|coverage|geography|geo)[:\s]+$",
-            before,
-            flags=re.IGNORECASE,
-        )
-    )
-    if not has_geo_preface and not before.rstrip().endswith(("(", "[")):
-        return False
-    next_word = re.match(r"[\s,;:.-]+([A-Za-z]+)", after)
-    if next_word is None:
-        return True
-    return next_word.group(1).lower() in {"is", "are", "has", "have", "with", "and"}
-
-
-def _current_footprint_label() -> str:
-    from backend.services.state_footprint import get_state_footprint_resolver
-
-    codes = get_state_footprint_resolver().state_codes()
-    return " / ".join(codes) if codes else "configured"
-
-
-def _retention_competitor_lien_list_question(question: str) -> bool:
-    q = question.lower()
-    asks_for_rows = bool(
-        re.search(r"\bborrowers?\b", q)
-        and (
-            re.search(r"\b(which|show|list|find|who are|give me)\b", q)
-            or re.search(r"\bretention(?:[-\s]risk)?\s+borrowers?\b", q)
-            or re.search(r"\bborrowers?\s+with\b", q)
-        )
-    )
-    retention_scope = bool(
-        re.search(
-            r"\b(retention(?: list| cohort| borrowers?| leads?| candidates?)?|retention-risk|retention risk|recapture)\b",
-            q,
-        )
-    )
-    competitor_signal = "competitor lien" in q or "competitor-lien" in q
-    return asks_for_rows and retention_scope and competitor_signal
-
-
-def _retention_risk_question(question: str) -> bool:
-    q = question.lower()
-    if _retention_competitor_lien_list_question(question):
-        return False
-    has_customer_scope = bool(re.search(r"\b(current|summit|customer|customers)\b", q))
-    has_retention_risk_phrase = bool(re.search(r"\bretention[-\s]?risk\b", q))
-    has_risk_intent = bool(
-        re.search(
-            r"\b(retention|recapture|at risk|risk of going|going to a competitor|"
-            r"shop(?:ping)?(?: a)? competitor|competitor recapture)\b",
-            q,
-        )
-    )
-    if has_retention_risk_phrase:
-        return True
-    return has_customer_scope and has_risk_intent
-
-
-def _canonical_itm_state_scope(question: str) -> tuple[str, str] | None:
-    q = question.lower()
-    for name, code in _US_STATE_FILTERS:
-        name_pattern = r"(?<![a-z0-9])" + re.escape(name) + r"(?![a-z0-9])"
-        code_pattern = r"(?<![A-Za-z0-9])" + re.escape(code) + r"(?![A-Za-z0-9])"
-        code_match = False
-        exact_code_matches = tuple(re.finditer(code_pattern, question, flags=re.IGNORECASE))
-        if exact_code_matches:
-            code_match = code not in _AMBIGUOUS_STATE_CODES or any(
-                _ambiguous_state_code_match_is_contextual(question, match)
-                for match in exact_code_matches
-            )
-        if re.search(name_pattern, q) or code_match:
-            return name.title(), code
-    return None
-
-
-def _canonical_in_the_money_count_scope(question: str) -> tuple[str, str] | None | bool:
-    q = _normalized_question(question)
-    if not _has_itm_intent(q):
-        return False
-    if "borrower" not in q:
-        return False
-    if not _has_count_intent(q):
-        return False
-    breakdown_terms = (
-        " by ",
-        "break down",
-        "broken down",
-        " by state",
-        "by-state",
-        "state by state",
-        "top ",
-        "rank",
-        "zip",
-        "county",
-        "msa",
-        "market",
-        "average",
-        "avg",
-        "mean",
-    )
-    if any(term in q for term in breakdown_terms) or re.search(r"\blist\b", q):
-        return None
-    state_scope = _canonical_itm_state_scope(question)
-    if state_scope is not None:
-        return state_scope
-    if re.search(
-        r"\bborrowers?\b(?:\s+[a-z0-9-]+){0,6}\s+"
-        r"(?:in|for|near|around|within)\s+(?!the\b|the-money\b)[a-z]",
-        q,
-    ):
-        return None
-    if re.search(r"\bin[- ]the[- ]money\s+in\s+[a-z]", q):
-        return None
-    return True
-
-
-def _normalized_question(question: str) -> str:
-    q = re.sub(r"[^a-z0-9\s%.-]+", " ", question.lower())
-    q = re.sub(r"\s+", " ", q).strip()
-    replacements = {
-        "borower": "borrower",
-        "borowers": "borrowers",
-        "borrowr": "borrower",
-        "borrowrs": "borrowers",
-        " equty": " equity",
-        " equiy": " equity",
-        " equit ": " equity ",
-        " in teh money": " in the money",
-        " rn ": " right now ",
-        "avg": "average",
-    }
-    for needle, replacement in replacements.items():
-        q = q.replace(needle, replacement)
-    return re.sub(r"\s+", " ", q).strip()
-
-
-def _has_count_intent(q: str) -> bool:
-    return bool(
-        re.search(
-            r"\b(how many|count|count of|number of|total|total number|size of|how big)\b",
-            q,
-        )
-    )
-
-
-def _has_share_intent(q: str) -> bool:
-    return bool(re.search(r"\b(share|percent|percentage|ratio|what portion)\b", q))
-
-
-def _has_strong_rank_intent(q: str) -> bool:
-    return bool(
-        re.search(
-            r"\b(top|highest|rank|ranked|ranking|best|first|prioritize)\b",
-            q,
-        )
-    )
-
-
-def _has_equity_share_result_intent(q: str) -> bool:
-    """Return True when the user asks for a share, not just a percent threshold."""
-
-    return bool(
-        re.search(
-            r"\b(share|percentage|ratio|what portion|what percent|percent of borrowers|"
-            r"percentage of borrowers)\b",
-            q,
-        )
-    )
-
-
-def _format_pct_threshold(value: float) -> str:
-    return f"{value:g}"
-
-
-def _has_rank_intent(q: str) -> bool:
-    return bool(
-        re.search(
-            r"\b(top|highest|rank|ranked|ranking|show|list|best|first|prioritize)\b",
-            q,
-        )
-    )
-
-
-def _has_itm_intent(q: str) -> bool:
-    return any(
-        term in q
-        for term in (
-            "in-the-money",
-            "in the money",
-            "itm",
-            "prime refi",
-            "refi economic",
-            "refinance economic",
-            "refinance incentive",
-            "refi incentive",
-            "economic incentive",
-            "rate incentive",
-            "refinance opportunity",
-            "refi opportunity",
-        )
-    )
-
-
-def _has_global_coverage_scope(q: str) -> bool:
-    return any(
-        term in q
-        for term in (
-            "current cotality data coverage",
-            "current cotality coverage",
-            "current data coverage",
-            "current coverage",
-            "current refreshed coverage",
-            "across coverage",
-            "across the coverage",
-            "currently",
-            "overall",
-            "national",
-            "right now",
-        )
-    )
-
-
-def _has_unsupported_geo_scope(question: str, q: str) -> bool:
-    if _canonical_itm_state_scope(question) is not None:
-        return True
-    geo_terms = (
-        "zip",
-        "zips",
-        "zipcode",
-        "zip code",
-        "postal",
-        "county",
-        "msa",
-        "cbsa",
-        "metro",
-        "state by state",
-        "by state",
-    )
-    if any(term in q for term in geo_terms):
-        return True
-    if re.search(
-        r"\b(?:in|for|near|around|within)\s+(?:zip\s*)?\d{3,5}(?:-\d{4})?\b",
-        q,
-    ):
-        return True
-    return bool(
-        re.search(
-            r"\b(?:in|for|near|around|within)\s+"
-            r"(?!the\b|the-money\b|current\b|all\b|overall\b|national\b|coverage\b)"
-            r"[a-z][a-z0-9 .-]{1,40}\b",
-            q,
-        )
-    )
-
-
-def _canonical_itm_count_avg_spread_scope(question: str) -> bool:
-    q = _normalized_question(question)
-    if not _has_global_coverage_scope(q) or _has_unsupported_geo_scope(question, q):
-        return False
-    has_itm = _has_itm_intent(q)
-    asks_count = _has_count_intent(q)
-    asks_spread = (
-        ("rate spread" in q or "spread" in q)
-        and any(term in q for term in ("average", "avg", "mean"))
-    )
-    return has_itm and "borrower" in q and asks_count and asks_spread
-
-
-def _canonical_equity_threshold_scope(question: str) -> CanonicalEquityThresholdScope | None:
-    q = _normalized_question(question)
-    if _has_unsupported_geo_scope(question, q):
-        return None
-    equity_terms = (
-        "home equity",
-        "modeled equity",
-        "equity pct",
-        "equity percent",
-        "equity percentage",
-        "equity capacity",
-        "high equity",
-        "strong equity",
-        "equity",
-    )
-    if not any(term in q for term in equity_terms):
-        return None
-    if not (_has_count_intent(q) or _has_share_intent(q)):
-        return None
-    if any(term in q for term in ("distribution", "histogram", "bucket", "band", "break down", "breakdown")):
-        return None
-    threshold: float = 35.0
-    strict_greater = False
-    threshold_match = re.search(
-        r"\b(?P<op>at least|>=|over|more than|above|greater than|greater than or equal to)"
-        r"\s*(?P<threshold>\d{1,3}(?:\.\d+)?)\s*(?:%|percent|percentage)?",
-        q,
-    )
-    if threshold_match:
-        threshold = float(threshold_match.group("threshold"))
-        strict_greater = threshold_match.group("op") in {
-            "over",
-            "more than",
-            "above",
-            "greater than",
-        }
-    elif "high equity" not in q and "strong equity" not in q:
-        return None
-    if threshold < 0:
-        return None
-    return CanonicalEquityThresholdScope(
-        threshold_pct=threshold,
-        strict_greater=strict_greater,
-        asks_share=_has_equity_share_result_intent(q) and not _has_count_intent(q),
-    )
-
-
-def _canonical_negative_equity_scope(question: str) -> CanonicalNegativeEquityScope | None:
-    q = _normalized_question(question)
-    if _has_unsupported_geo_scope(question, q):
-        return None
-    negative_terms = (
-        "negative equity",
-        "underwater",
-        "equity below 0",
-        "equity below zero",
-        "below zero equity",
-        "less than 0% equity",
-        "less than 0 percent equity",
-        "under 0% equity",
-        "under 0 percent equity",
-    )
-    if not any(term in q for term in negative_terms):
-        return None
-    if not (_has_count_intent(q) or _has_share_intent(q) or "borrower" in q):
-        return None
-    return CanonicalNegativeEquityScope(
-        asks_share=_has_equity_share_result_intent(q) and not _has_count_intent(q),
-    )
-
-
-def _canonical_heloc_count_scope(question: str) -> bool:
-    q = _normalized_question(question)
-    if not _has_global_coverage_scope(q) or _has_unsupported_geo_scope(question, q):
-        return False
-    has_equity_capacity = any(
-        term in q
-        for term in ("heloc", "home equity", "equity line", "modeled equity", "equity capacity")
-    ) or "borrower" in q
-    asks_count = _has_count_intent(q)
-    has_equity_threshold = "35" in q and "equity" in q
-    return has_equity_capacity and asks_count and has_equity_threshold
-
-
-def _canonical_listed_count_scope(question: str) -> CanonicalListedCountScope | None:
-    q = _normalized_question(question)
-    listed_terms = (
-        "listed for sale",
-        "listed-for-sale",
-        "listed borrower",
-        "listed borrowers",
-        "listing",
-        "listings",
-        "mls",
-        "for sale",
-    )
-    if not any(term in q for term in listed_terms):
-        return None
-    if not _has_count_intent(q):
-        return None
-    if _has_strong_rank_intent(q):
-        return None
-    if any(term in q for term in ("loan product", "days on market", "current rate", "average rate")):
-        return None
-    state_scope = _canonical_itm_state_scope(question)
-    if state_scope is not None:
-        return CanonicalListedCountScope(
-            state_name=state_scope[0],
-            state_code=state_scope[1],
-        )
-    if any(term in q for term in ("zip", "zipcode", "zip code", "county", "msa", "cbsa", "metro")):
-        return None
-    return CanonicalListedCountScope()
-
-
-def _canonical_investor_count_scope(question: str) -> bool:
-    q = _normalized_question(question)
-    if _has_unsupported_geo_scope(question, q):
-        return False
-    investor_terms = ("investor", "investors", "multi-property", "multi property")
-    if not any(term in q for term in investor_terms):
-        return False
-    if not _has_count_intent(q):
-        return False
-    return not _has_strong_rank_intent(q)
-
-
-def _canonical_itm_share_scope(question: str) -> bool:
-    q = _normalized_question(question)
-    if _has_unsupported_geo_scope(question, q):
-        return False
-    return _has_itm_intent(q) and "borrower" in q and _has_share_intent(q)
-
-
-def _canonical_home_equity_distribution_scope(question: str) -> bool:
-    q = _normalized_question(question)
-    if _has_unsupported_geo_scope(question, q):
-        return False
-    equity_terms = (
-        "home equity",
-        "modeled equity",
-        "equity pct",
-        "equity percent",
-        "equity percentage",
-        "equity distribution",
-    )
-    distribution_terms = (
-        "distribution",
-        "histogram",
-        "bucket",
-        "buckets",
-        "band",
-        "bands",
-        "break down",
-        "breakdown",
-        "by equity",
-        "by home equity",
-    )
-    return (
-        ("equity" in q or any(term in q for term in equity_terms))
-        and any(term in q for term in distribution_terms)
-        and (
-            any(term in q for term in ("borrower", "borrowers", "coverage", "portfolio", "population", "show"))
-            or any(term in q for term in ("modeled equity", "home equity", "equity band", "equity bands"))
-        )
-    )
-
-
-def _canonical_addressable_market_scope(question: str) -> bool:
-    q = _normalized_question(question)
-    if not _has_global_coverage_scope(q) or _has_unsupported_geo_scope(question, q):
-        return False
-    product_terms = (
-        "heloc",
-        "home equity",
-        "in-the-money",
-        "in the money",
-        "refi",
-        "refinance",
-        "cash-out",
-        "cash out",
-        "listed",
-        "listing",
-        "permit",
-        "investor",
-        "retention",
-    )
-    return (
-        "borrower" in q
-        and (
-            "addressable market" in q
-            or "market size" in q
-            or "marketable population" in q
-            or (
-                "eligible borrower" in q
-                and not any(term in q for term in product_terms)
-            )
-        )
-    )
-
-
-def _canonical_ranked_lead_population_scope(question: str) -> bool:
-    q = _normalized_question(question)
-    if _has_unsupported_geo_scope(question, q):
-        return False
-    count_terms = ("how many", "count", "number of", "size")
-    ranked_terms = (
-        "ranked lead population",
-        "ranked leads",
-        "lead queue",
-        "action ready lead",
-        "action-ready lead",
-    )
-    return any(term in q for term in ranked_terms) and any(term in q for term in count_terms)
-
-
-def _canonical_itm_city_scope(question: str) -> str | None:
-    q = re.sub(r"[^a-z0-9\s-]+", " ", question.lower())
-    q = re.sub(r"[-]+", " ", q)
-    q = re.sub(r"\s+", " ", q).strip()
-    if "in the money" not in q or "borrower" not in q:
-        return None
-    if not any(term in q for term in ("how many", "count", "total number", "number of")):
-        return None
-    city_start = q.rfind(" in ")
-    if city_start <= q.find("in the money"):
-        return None
-    city = q[city_start + 4 :].strip()
-    city = re.sub(r"\b(?:right now|currently|today|this week|this month)\b.*$", "", city)
-    city = city.strip()
-    if not city:
-        return None
-    if re.match(r"\d", city):
-        return None
-    blocked_geo_terms = {"state", "states", "zip", "zips", "msa", "market", "markets", "county"}
-    if any(term in city.split() for term in blocked_geo_terms):
-        return None
-    state_names = {name for name, _code in _US_STATE_FILTERS}
-    state_codes = {code.lower() for _name, code in _US_STATE_FILTERS}
-    city_terms = set(city.split())
-    if city in state_names or city.lower() in state_codes:
-        return None
-    if city_terms & state_names or city_terms & state_codes:
-        return None
-    return " ".join(part.capitalize() for part in city.split())
-
-
-def _canonical_msa_score_scope(question: str) -> bool:
-    q = re.sub(r"[^a-z0-9\s]+", " ", question.lower())
-    q = re.sub(r"\s+", " ", q).strip()
-    score_terms = (
-        "lead score",
-        "opportunity score",
-        "avg score",
-        "average score",
-        "mean score",
-        "mean lead score",
-    )
-    geo_terms = ("msa", "cbsa", "market", "markets")
-    top_terms = ("top five", "top 5", "five markets", "5 markets")
-    return (
-        "compare" in q
-        and any(term in q for term in score_terms)
-        and any(term in q for term in geo_terms)
-        and any(term in q for term in top_terms)
-    )
-
-
-def _canonical_itm_zip_scope(question: str) -> bool:
-    q = _normalized_question(question)
-    zip_terms = ("zip", "zips", "zipcode", "zipcodes", "zip code", "zip codes", "postal")
-    rank_terms = (
-        "top",
-        "most",
-        "highest",
-        "rank",
-        "ranked",
-        "which",
-        "show",
-        "list",
-        "break down",
-        "by zip",
-    )
-    refi_terms = ("in-the-money", "in the money", "itm", "refi", "refinance")
-    return (
-        any(term in q for term in zip_terms)
-        and any(term in q for term in rank_terms)
-        and any(term in q for term in refi_terms)
-        and any(term in q for term in ("borrower", "lead", "candidate", "loan officer", "savings"))
-    )
-
-
-def _canonical_itm_lead_queue_zip_scope(question: str) -> bool:
-    q = _normalized_question(question)
-    if not _canonical_itm_zip_scope(question):
-        return False
-    return any(
-        term in q
-        for term in (
-            "lead queue",
-            "loan officer",
-            "lo ",
-            "work first",
-            "leads",
-            "lead ",
-            "actionable",
-            "ranked",
-        )
-    )
-
-
-def _canonical_itm_state_breakdown_scope(question: str) -> bool:
-    q = _normalized_question(question)
-    return (
-        _has_itm_intent(q)
-        and any(term in q for term in ("borrower", "lead", "candidate", "segment"))
-        and "state" in q
-        and any(
-            term in q for term in ("break down", "breakdown", "by state", "state by state", "table")
-        )
-    )
-
-
-def _canonical_heloc_zip_scope(question: str) -> bool:
-    q = re.sub(r"[^a-z0-9\s-]+", " ", question.lower())
-    q = re.sub(r"\s+", " ", q).strip()
-    if any(term in q for term in ("permit", "permits", "listing", "listings", "mls")):
-        return False
-    zip_terms = ("zip", "zips", "zipcode", "zipcodes", "zip code", "zip codes", "postal")
-    rank_terms = ("top", "most", "highest", "rank", "ranked", "which", "show", "list", "by zip")
-    heloc_terms = ("heloc", "home equity", "equity line", "modeled equity", "equity capacity")
-    equity_terms = ("equity", "eligible", "eligibility", "candidate", "borrower", "lead")
-    return (
-        any(term in q for term in heloc_terms)
-        and any(term in q for term in zip_terms)
-        and any(term in q for term in rank_terms)
-        and any(term in q for term in equity_terms)
-    )
-
-
-def _canonical_cash_out_state_scope(question: str) -> bool:
-    q = _normalized_question(question)
-    cash_out_terms = ("cash-out", "cash out", "cashout")
-    rank_terms = ("top", "most", "highest", "rank", "ranked", "which", "show")
-    return (
-        any(term in q for term in cash_out_terms)
-        and "state" in q
-        and any(term in q for term in rank_terms)
-    )
-
-
-def _canonical_listed_purchase_scope(question: str) -> bool:
-    q = _normalized_question(question)
-    listed_terms = ("listed for sale", "listing", "listings", "mls", "for-sale")
-    purchase_terms = (
-        "purchase",
-        "purchase financing",
-        "next home",
-        "buy next",
-        "homebuy",
-        "financing help",
-    )
-    return (
-        any(term in q for term in listed_terms)
-        and any(term in q for term in purchase_terms)
-        and _has_rank_intent(q)
-    )
-
-
-def _canonical_refi_equity_signal_compare_scope(question: str) -> bool:
-    q = _normalized_question(question)
-    refi_terms = ("refi", "refinance", "rate-and-term", "rate and term")
-    equity_terms = (
-        "home equity",
-        "heloc",
-        "equity line",
-        "cash-out",
-        "cash out",
-        "equity outreach",
-    )
-    comparison_terms = (
-        "compare",
-        "choose",
-        "choosing",
-        "decide",
-        "deciding",
-        "between",
-        "which signals",
-        "what signals",
-        "signals should",
-    )
-    return (
-        any(term in q for term in refi_terms)
-        and any(term in q for term in equity_terms)
-        and any(term in q for term in comparison_terms)
-    )
-
-
-def _canonical_refi_driver_scope(question: str) -> bool:
-    q = _normalized_question(question)
-    refi_terms = ("refi", "refinance", "rate refinance", "rate-and-term")
-    driver_terms = (
-        "driver",
-        "drivers",
-        "signal",
-        "signals",
-        "strongest",
-        "why",
-        "rationale",
-        "what is driving",
-        "what drives",
-    )
-    return (
-        any(term in q for term in refi_terms)
-        and any(term in q for term in driver_terms)
-        and any(term in q for term in ("opportunity", "candidate", "borrower", "outreach", "right now"))
-    )
-
-
-def _canonical_itm_top_tier_compare_scope(question: str) -> bool:
-    q = _normalized_question(question)
-    has_itm = any(term in q for term in ("in-the-money", "in the money", "itm"))
-    has_top_tier = any(
-        term in q
-        for term in (
-            "top tier",
-            "top-tier",
-            "opportunity score",
-            "score 75",
-            "75+",
-            "high intent",
-            "high-intent",
-        )
-    )
-    compare_terms = ("versus", "vs", "difference", "different", "same", "compare", "mean")
-    return has_itm and has_top_tier and any(term in q for term in compare_terms)
-
-
-def _canonical_strategy_board_scope(question: str) -> bool:
-    q = re.sub(r"[^a-z0-9\s]+", " ", question.lower())
-    q = re.sub(r"\s+", " ", q).strip()
-    # "call/contact N borrowers — which segments, states, offers?" is the
-    # same capacity-allocation ask as "spend N outreach touches"; both route
-    # to the state-segment-offer strategy board.
-    spend_terms = ("spend", "allocate", "prioritize", "focus", "deploy", "call", "contact", "reach")
-    touch_terms = (
-        "outreach touch",
-        "outreach touches",
-        "touches",
-        "contacts",
-        "campaign",
-        "borrowers",
-        "leads",
-        "calls",
-        "people",
-    )
-    strategy_terms = ("strategy", "where should", "which state", "which segment")
-    has_touch_count = bool(re.search(r"\b\d{2,7}\b", q)) or "10k" in q
-    return (
-        any(term in q for term in spend_terms)
-        and any(term in q for term in touch_terms)
-        and (has_touch_count or any(term in q for term in strategy_terms))
-        and any(term in q for term in (*strategy_terms, "offer", "offers", "touches", "campaign"))
-    )
-
-
-def _canonical_investor_segment_by_state_scope(question: str) -> bool:
-    q = re.sub(r"[^a-z0-9\s/-]+", " ", question.lower())
-    q = re.sub(r"\s+", " ", q).strip()
-    investor_terms = (
-        "investor",
-        "multi property",
-        "multi-property",
-        "multi property segment",
-        "multi-property segment",
-    )
-    state_terms = ("state", "by state", "broken down", "breakdown", "break down")
-    return (
-        any(term in q for term in investor_terms)
-        and "segment" in q
-        and any(term in q for term in state_terms)
-    )
-
-
-def _canonical_top_borrowers_state_scope(question: str) -> tuple[str, str] | None:
-    q = re.sub(r"[^a-z0-9\s-]+", " ", question.lower())
-    q = re.sub(r"\s+", " ", q).strip()
-    if _retention_competitor_lien_list_question(question):
-        return None
-    if _specific_top_borrower_intent(q) is not None:
-        return None
-    if not _has_rank_intent(q):
-        return None
-    if not any(term in q for term in ("borrower", "borrowers", "lead", "leads")):
-        return None
-    if not (
-        any(term in q for term in ("lead score", "opportunity score", "score", "offer", "any offer"))
-        or "best" in q
-    ):
-        return None
-    return _canonical_itm_state_scope(question)
-
-
-_ALL_SEGMENTS_SCOPE_TERMS = (
-    "across all segments",
-    "across segments",
-    "across every segment",
-    "all segments",
-    "every segment",
-    "across the portfolio",
-    "entire portfolio",
-    "whole portfolio",
-    "portfolio-wide",
-    "portfolio wide",
-)
-
-# "Why" language that asks for per-borrower rationale, not just a ranking.
-_TOP_BORROWER_WHY_TERMS = (
-    "why",
-    "what makes",
-    "reason",
-    "rationale",
-    "explain",
-    "driver",
-    "justif",
-)
-
-
-def _has_all_segments_scope(q: str) -> bool:
-    return any(term in q for term in _ALL_SEGMENTS_SCOPE_TERMS)
-
-
-def _canonical_top_borrowers_global_scope(question: str) -> bool:
-    q = _normalized_question(question)
-    if _retention_competitor_lien_list_question(question):
-        return False
-    if not (_has_global_coverage_scope(q) or _has_all_segments_scope(q)):
-        return False
-    if _canonical_itm_state_scope(question) is not None:
-        return False
-    if _specific_top_borrower_intent(q) is not None:
-        return False
-    return (
-        _has_rank_intent(q)
-        and any(
-            term in q
-            for term in ("borrower", "borrowers", "lead", "leads", "candidate", "candidates")
-        )
-        and (
-            any(
-                term in q
-                for term in (
-                    "lead score",
-                    "opportunity score",
-                    "score",
-                    "offer",
-                    "any offer",
-                    "candidate",
-                    "candidates",
-                )
-            )
-            or "best" in q
-        )
-    )
-
-
-def _canonical_top_borrowers_all_segments_scope(question: str) -> bool:
-    """Global candidate ranking that also asks WHY each borrower is strong.
-
-    Matches "top borrower candidates across all segments — what makes each one
-    a good candidate and which offer should we make?"-family questions. The
-    per-intent and per-state scopes stay in charge of their narrower shapes.
-    """
-    q = _normalized_question(question)
-    if not _canonical_top_borrowers_global_scope(question):
-        return False
-    if _canonical_listed_purchase_scope(question):
-        return False
-    return any(term in q for term in _TOP_BORROWER_WHY_TERMS)
-
-
-def _specific_top_borrower_intent(q: str) -> str | None:
-    """Return an explicit borrower intent that must not be answered generically."""
-    intents = _specific_top_borrower_intents(q)
-    return intents[0] if intents else None
-
-
-def _specific_top_borrower_intents(q: str) -> list[str]:
-    """Return explicit borrower intents in the deterministic ranking order."""
-    intents: list[str] = []
-
-    def add(intent: str, predicate: bool) -> None:
-        if predicate and intent not in intents:
-            intents.append(intent)
-
-    if any(term in q for term in ("cash-out", "cash out", "cashout")):
-        add("cash_out", True)
-    add(
-        "heloc",
-        any(
-            term in q
-            for term in (
-                "heloc",
-                "home equity",
-                "equity line",
-                "equity-line",
-                "equity-credit",
-                "permit",
-                "permits",
-            )
-        ),
-    )
-    add(
-        "listed",
-        any(
-            term in q
-            for term in ("listed for sale", "listed-for-sale", "listing", "listings", "mls", "for sale")
-        )
-        or bool(re.search(r"\blisted\s+(borrowers?|leads?|candidates?)\b", q)),
-    )
-    add(
-        "investor",
-        any(term in q for term in ("investor", "multi-property", "multi property", "related property")),
-    )
-    add(
-        "retention",
-        any(term in q for term in ("retention", "recapture", "current customer", "former customer")),
-    )
-    add(
-        "refi",
-        _has_itm_intent(q) or any(term in q for term in ("refi", "refinance")),
-    )
-    return intents
-
-
-def _specific_top_borrower_intent_label(intent: str) -> str:
-    return {
-        "cash_out": "cash-out refinance",
-        "heloc": "home-equity / HELOC",
-        "listed": "listed-for-sale purchase",
-        "investor": "Investor / Multi-Property",
-        "retention": "retention-risk",
-        "refi": "Prime Refi Candidate",
-    }.get(intent, "specific-intent")
-
-
-def _specific_top_borrower_sort_label(intent: str) -> str:
-    return {
-        "cash_out": "estimated equity, then opportunity score",
-        "heloc": "HELOC propensity, estimated equity, then opportunity score",
-        "listed": "opportunity score among active listing signals",
-        "investor": "related-property count, then opportunity score",
-        "retention": "opportunity score, then rate spread",
-        "refi": "opportunity score, then rate-spread economics",
-    }.get(intent, "the governed borrower ranking")
-
-
-def _specific_top_borrower_intent_note(question: str, selected_intent: str) -> str:
-    intents = _specific_top_borrower_intents(_normalized_question(question))
-    other_intents = [intent for intent in intents if intent != selected_intent]
-    if not other_intents:
-        return ""
-    labels = ", ".join(_specific_top_borrower_intent_label(intent) for intent in other_intents)
-    return (
-        f" I detected additional intent language ({labels}) and used "
-        f"{_specific_top_borrower_intent_label(selected_intent)} as the primary ranking lens; "
-        "ask for a combined segment if you want an intersection."
-    )
-
-
-def _canonical_specific_top_borrowers_state_scope(question: str) -> tuple[str, str, str] | None:
-    q = _normalized_question(question)
-    if _retention_competitor_lien_list_question(question):
-        return None
-    if _canonical_listed_purchase_scope(question):
-        return None
-    if not _has_rank_intent(q):
-        return None
-    if not any(term in q for term in ("borrower", "borrowers", "lead", "leads", "candidate", "candidates")):
-        return None
-    intent = _specific_top_borrower_intent(q)
-    if intent is None:
-        return None
-    state_scope = _canonical_itm_state_scope(question)
-    if state_scope is None:
-        return None
-    state_name, state_code = state_scope
-    return intent, state_name, state_code
-
-
-def _canonical_specific_top_borrowers_global_scope(question: str) -> str | None:
-    q = _normalized_question(question)
-    if _retention_competitor_lien_list_question(question):
-        return None
-    if _canonical_listed_purchase_scope(question):
-        return None
-    if not _has_rank_intent(q):
-        return None
-    if not any(term in q for term in ("borrower", "borrowers", "lead", "leads", "candidate", "candidates")):
-        return None
-    if _canonical_itm_state_scope(question) is not None:
-        return None
-    if any(term in q for term in ("which state", "what state", "by state", "state by state", "state has", "states have")):
-        return None
-    return _specific_top_borrower_intent(q)
-
-
-def _canonical_top_cash_out_by_equity_scope(question: str) -> bool:
-    q = _normalized_question(question)
-    return (
-        any(term in q for term in ("cash-out", "cash out", "cashout"))
-        and any(term in q for term in ("top", "show", "list", "rank"))
-        and "equity" in q
-        and any(term in q for term in ("borrower", "candidate", "lead"))
-    )
-
-
-def _canonical_investor_top_by_related_property_scope(question: str) -> bool:
-    q = _normalized_question(question)
-    return (
-        any(term in q for term in ("investor", "multi-property", "multi property"))
-        and any(term in q for term in ("related property", "property count", "properties"))
-        and any(term in q for term in ("top", "show", "list", "rank"))
-        and any(term in q for term in ("borrower", "borrowers", "masked"))
-    )
-
-
-def _canonical_mean_rate_spread_by_segment_scope(question: str) -> bool:
-    q = _normalized_question(question)
-    return (
-        any(term in q for term in ("mean rate spread", "average rate spread", "avg rate spread"))
-        and "segment" in q
-    )
-
-
-def _canonical_segment_approval_rate_scope(question: str) -> bool:
-    q = _normalized_question(question)
-    return "segment" in q and "approval rate" in q and any(
-        term in q for term in ("highest", "top", "rank", "which", "show")
-    )
-
-
-# Columns `mip.semantics.segment_performance_metric_view` actually carries, in
-# the words a user reaches for. The view is one row per segment with
-# approval_rate, outreach_rate, count and avg_score, so it answers the whole
-# "compare our segments" family from a single statement.
-_SEGMENT_PERFORMANCE_METRIC_TERMS = (
-    "approval",
-    "approve",
-    "convert",
-    "conversion",
-    "outreach",
-    "opportunity score",
-    "lead score",
-    # NOT "avg score": ``_normalized_question`` rewrites "avg" to "average"
-    # before this list is consulted, so that term could never match.
-    "average score",
-    "perform",
-    "response rate",
-    "win rate",
-    # The view carries `count AS segment_borrowers`, so size comparisons are
-    # answerable from the same statement.
-    "size",
-    "sizes",
-    "how many borrowers",
-    "borrower count",
-    "largest",
-    "smallest",
-)
-# Metrics the view does NOT carry. Naming one means the question belongs to a
-# different statement (rate spread has its own) or to Genie. Standing aside is
-# the whole point: answering a rate-spread question with approval-rate columns
-# would be a confident wrong answer, which is worse than no rescue.
-_SEGMENT_PERFORMANCE_FOREIGN_TERMS = (
-    "rate spread",
-    "spread",
-    "equity",
-    "ltv",
-    "balance",
-    "income",
-    "delinquen",
-    "days on market",
-    "permit",
-    "listing",
-)
-_SEGMENT_COMPARISON_TERMS = (
-    "which",
-    # NOT "what": it is the most common English question word, not a
-    # comparison. With it in the list, "What is the average opportunity score
-    # for the retention segment?" -- a question about ONE segment -- was served
-    # the whole-portfolio ranking of all six.
-    "highest",
-    "lowest",
-    "best",
-    "worst",
-    "top",
-    "rank",
-    "compare",
-    "comparison",
-    "versus",
-    " vs ",
-    "better",
-    "across",
-)
-
-# The statement this predicate serves is ONE ROW PER SEGMENT, nationally
-# (`WHERE state = '_ALL'`), at the current snapshot. It therefore cannot answer
-# a question that varies along any other axis, and the failure is silent: the
-# answer looks authoritative and is about a different population.
-#
-# Adversarial review 2026-08-11 measured all three, each of which turned a
-# refusal into a confidently wrong answer:
-#   * "Which segment performs best in California?"        -> national figures
-#   * "Show me the top 10 borrowers by lead score in each segment" -> 6 rows
-#   * "Which segment converted best last quarter?"        -> today's snapshot
-_SEGMENT_PERFORMANCE_OFF_AXIS_TERMS = (
-    # Geography — the view HAS a state dimension, but this statement pins
-    # `_ALL`. Standing aside is honest; scoping it is a separate change.
-    " in ca",
-    " in tx",
-    " in il",
-    " in fl",
-    " in wa",
-    " in co",
-    "state",
-    "states",
-    "city",
-    "cities",
-    "zip",
-    "county",
-    "market",
-    "markets",
-    "msa",
-    "metro",
-    "region",
-    "california",
-    "texas",
-    "illinois",
-    "florida",
-    "washington",
-    "colorado",
-    # Grain — one row per SEGMENT, never per borrower.
-    "borrower id",
-    "borrowers by",
-    "top 10 borrowers",
-    "top 20 borrowers",
-    "top 5 borrowers",
-    "each borrower",
-    "individual borrower",
-    "list borrowers",
-    "show me borrowers",
-    "which borrowers",
-    # Time — the view is the current snapshot, with no period selector.
-    "last quarter",
-    "last month",
-    "last year",
-    "this quarter",
-    "this month",
-    "year over year",
-    "yoy",
-    "trend",
-    "over time",
-    "since",
-    "january",
-    "february",
-    "march",
-    "april",
-    " may ",
-    "june",
-    "july",
-    "august",
-    "september",
-    "october",
-    "november",
-    "december",
-)
-
-
-def _canonical_segment_performance_rescue_scope(question: str) -> bool:
-    """Comparative "how do our segments stack up" questions, for RESCUE ONLY.
-
-    Deliberately broader than ``_canonical_segment_approval_rate_scope`` and
-    deliberately NOT wired into ``direct_canonical_response``. The direct path
-    PREEMPTS the live Genie turn, and the live-first doctrine reserves that for
-    narrow count prompts -- overlaying a good live turn is prohibited. This
-    predicate runs only after Genie has already failed to return trusted SQL,
-    where the alternative is not a live answer but a refusal.
-
-    Measured live on paychex 2026-08-11: "Which segment converts best: HELOC,
-    cash-out, or retention?" returned `sql_query: null` from Genie, so the app
-    refused -- while `_CANONICAL_SEGMENT_APPROVAL_RATE_SQL` had the answer the
-    whole time. The old matcher required the literal words "approval rate"; the
-    user said "converts best".
-
-    Strict on the METRIC, loose on the PHRASING: the view's columns are a
-    closed set, so a question naming a metric it does not carry gets no rescue
-    rather than a confidently wrong one.
-    """
-
-    q = _normalized_question(question)
-    if "segment" not in q:
-        return False
-    if any(term in q for term in _SEGMENT_PERFORMANCE_FOREIGN_TERMS):
-        return False
-    # Metric is only one of four axes. The statement is national, per-segment
-    # and current, so a question that moves along geography, grain or time is
-    # asking something this rescue cannot answer.
-    if any(term in f" {q} " for term in _SEGMENT_PERFORMANCE_OFF_AXIS_TERMS):
-        return False
-    return any(term in q for term in _SEGMENT_PERFORMANCE_METRIC_TERMS) and any(
-        term in q for term in _SEGMENT_COMPARISON_TERMS
-    )
-
-
-def _canonical_mean_lead_score_by_state_scope(question: str) -> bool:
-    q = _normalized_question(question)
-    return (
-        any(term in q for term in ("mean lead score", "average lead score", "avg lead score"))
-        and "state" in q
-        and any(term in q for term in ("compare", "break down", "breakdown", "by state"))
-    )
-
-
-def _canonical_evidence_events_yesterday_scope(question: str) -> bool:
-    q = _normalized_question(question)
-    return (
-        "evidence" in q
-        and "event" in q
-        and "yesterday" in q
-        and any(term in q for term in ("trigger type", "signal type", "grouped", "by trigger"))
-    )
-
-
-def _canonical_lead_score_weekly_distribution_scope(question: str) -> bool:
-    q = _normalized_question(question)
-    return (
-        "lead score" in q
-        and any(term in q for term in ("distribution", "avg", "average", "mean"))
-        and any(term in q for term in ("this week", "week"))
-        and any(term in q for term in ("last week", "prior week", "previous week"))
-    )
-
-
-def _canonical_approval_trend_30d_scope(question: str) -> bool:
-    q = _normalized_question(question)
-    return "approval" in q and "trend" in q and any(
-        term in q for term in ("30 days", "last 30", "thirty days")
-    )
-
-
-def _canonical_evidence_events_quarter_scope(question: str) -> bool:
-    q = _normalized_question(question)
-    return (
-        "evidence" in q
-        and "event" in q
-        and any(term in q for term in ("quarter", "qtd", "this q"))
-        and any(term in q for term in ("trigger type", "signal type", "grouped", "by trigger"))
-    )
-
-
-def _canonical_itm_offer_mix_scope(question: str) -> bool:
-    q = _normalized_question(question)
-    return (
-        any(term in q for term in ("offer mix", "recommended offer", "next best offer", "nbo"))
-        and any(term in q for term in ("in-the-money", "in the money", "itm"))
-        and "segment" in q
-    )
-
-
-def _projected_monthly_savings_gap_scope(question: str) -> bool:
-    q = _normalized_question(question)
-    return (
-        any(term in q for term in ("projected monthly savings", "monthly savings"))
-        and any(term in q for term in ("trusted asset", "asset", "column", "approved refi"))
-    )
-
-
-def _canonical_heloc_recommendation_borrowers_scope(question: str) -> bool:
-    q = _normalized_question(question)
-    return (
-        "borrower" in q
-        and any(term in q for term in ("heloc recommendation", "got a heloc", "recommended heloc"))
-    )
-
-
-def _canonical_listed_by_product_rate_scope(question: str) -> bool:
-    q = _normalized_question(question)
-    return (
-        any(term in q for term in ("listed-for-sale", "listed for sale", "listing"))
-        and any(term in q for term in ("loan product", "product"))
-        and any(term in q for term in ("average current rate", "avg current rate", "current rate"))
-        and any(term in q for term in ("break down", "breakdown", "by"))
-    )
-
-
-def _canonical_listed_days_on_market_by_state_scope(question: str) -> bool:
-    q = _normalized_question(question)
-    listed_terms = ("listed-for-sale", "listed for sale", "listing", "listings", "mls")
-    days_terms = (
-        "days on market",
-        "day on market",
-        "listing days",
-        "market days",
-        "dom",
-    )
-    state_terms = ("by state", "state", "states")
-    ranking_terms = (
-        "top",
-        "leading",
-        "lead",
-        "highest",
-        "largest",
-        "most",
-        "break down",
-        "breakdown",
-    )
-    return (
-        any(term in q for term in listed_terms)
-        and any(term in q for term in days_terms)
-        and any(term in q for term in state_terms)
-        and (
-            any(term in q for term in ("average", "avg", "mean"))
-            or any(term in q for term in ranking_terms)
-        )
-    )
-
-
-def _canonical_lockin_size_scope(question: str) -> bool:
-    q = _normalized_question(question)
-    return (
-        any(term in q for term in ("lock-in cohort", "lock in cohort", "sub-3", "sub 3"))
-        and any(term in q for term in ("how big", "how many", "count", "size"))
-    )
-
-
-def _canonical_lockin_median_rate_scope(question: str) -> bool:
-    q = _normalized_question(question)
-    return any(term in q for term in ("lock-in cohort", "lock in cohort")) and any(
-        term in q for term in ("median rate", "median interest rate")
-    )
-
-
-def _canonical_lockin_by_state_scope(question: str) -> bool:
-    q = _normalized_question(question)
-    return (
-        any(term in q for term in ("lock-in cohort", "lock in cohort"))
-        and "state" in q
-        and any(term in q for term in ("break down", "breakdown", "by state", "state by state"))
-    )
-
-
-def _canonical_top_cohorts_scope(question: str) -> bool:
-    q = _normalized_question(question)
-    return (
-        any(term in q for term in ("top cohorts", "top cohort", "largest cohorts", "top segments"))
-        and not any(term in q for term in ("borrower", "masked borrower", "lead score"))
-    )
+__all__ = [
+    "CanonicalEquityThresholdScope",
+    "CanonicalListedCountScope",
+    "CanonicalNegativeEquityScope",
+    "CanonicalRetentionEligibilityFallback",
+    "_ALL_SEGMENTS_SCOPE_TERMS",
+    "_AMBIGUOUS_STATE_CODES",
+    "_BORROWER_360",
+    "_BRIEF_OVERLAY_SIGNALS",
+    "_B_ELIGIBLE",
+    "_CANONICAL_ADDRESSABLE_MARKET_SQL",
+    "_CANONICAL_APPROVAL_TREND_30D_SQL",
+    "_CANONICAL_CASH_OUT_TOP_STATE_SQL",
+    "_CANONICAL_CURRENT_CUSTOMER_RETENTION_RISK_SQL",
+    "_CANONICAL_EQUITY_THRESHOLD_COUNT_SQL",
+    "_CANONICAL_EQUITY_THRESHOLD_STRICT_COUNT_SQL",
+    "_CANONICAL_EVIDENCE_EVENTS_THIS_QUARTER_SQL",
+    "_CANONICAL_EVIDENCE_EVENTS_YESTERDAY_SQL",
+    "_CANONICAL_HELOC_COUNT_SQL",
+    "_CANONICAL_HELOC_RECOMMENDATION_BORROWERS_SQL",
+    "_CANONICAL_HELOC_TOP_ZIPS_SQL",
+    "_CANONICAL_HOME_EQUITY_DISTRIBUTION_SQL",
+    "_CANONICAL_INVESTOR_COUNT_SQL",
+    "_CANONICAL_INVESTOR_SEGMENT_BY_STATE_SQL",
+    "_CANONICAL_INVESTOR_TOP_BY_RELATED_PROPERTY_SQL",
+    "_CANONICAL_ITM_BY_STATE_SQL",
+    "_CANONICAL_ITM_COUNT_AVG_SPREAD_SQL",
+    "_CANONICAL_ITM_COUNT_BY_CITY_SQL",
+    "_CANONICAL_ITM_COUNT_BY_STATE_SQL",
+    "_CANONICAL_ITM_COUNT_SQL",
+    "_CANONICAL_ITM_OFFER_MIX_SQL",
+    "_CANONICAL_ITM_SHARE_SQL",
+    "_CANONICAL_ITM_TOP_LEAD_QUEUE_ZIPS_SQL",
+    "_CANONICAL_ITM_TOP_TIER_COMPARE_SQL",
+    "_CANONICAL_ITM_TOP_ZIPS_SQL",
+    "_CANONICAL_LEAD_SCORE_WEEKLY_DISTRIBUTION_SQL",
+    "_CANONICAL_LISTED_BY_PRODUCT_RATE_SQL",
+    "_CANONICAL_LISTED_COUNT_BY_STATE_SQL",
+    "_CANONICAL_LISTED_COUNT_SQL",
+    "_CANONICAL_LISTED_DAYS_ON_MARKET_BY_STATE_SQL",
+    "_CANONICAL_LISTED_PURCHASE_TOP_SQL",
+    "_CANONICAL_LOCKIN_BY_STATE_SQL",
+    "_CANONICAL_LOCKIN_COHORT_SIZE_SQL",
+    "_CANONICAL_LOCKIN_MEDIAN_RATE_SQL",
+    "_CANONICAL_MEAN_LEAD_SCORE_BY_STATE_SQL",
+    "_CANONICAL_MEAN_RATE_SPREAD_BY_SEGMENT_SQL",
+    "_CANONICAL_MSA_SCORE_SQL",
+    "_CANONICAL_NEGATIVE_EQUITY_COUNT_SQL",
+    "_CANONICAL_RANKED_LEAD_POPULATION_SQL",
+    "_CANONICAL_REFI_DRIVER_SQL",
+    "_CANONICAL_REFI_EQUITY_SIGNAL_COMPARE_SQL",
+    "_CANONICAL_RETENTION_COMPETITOR_LIEN_LIST_BY_STATE_SQL",
+    "_CANONICAL_RETENTION_COMPETITOR_LIEN_LIST_SQL",
+    "_CANONICAL_RETENTION_ELIGIBILITY_SUMMARY_BY_STATE_SQL",
+    "_CANONICAL_RETENTION_ELIGIBILITY_SUMMARY_GLOBAL_SQL",
+    "_CANONICAL_SEGMENT_APPROVAL_RATE_SQL",
+    "_CANONICAL_STRATEGY_BOARD_SQL",
+    "_CANONICAL_TOP_BORROWERS_ALL_SEGMENTS_SQL",
+    "_CANONICAL_TOP_BORROWERS_BY_STATE_INTENT_SQL",
+    "_CANONICAL_TOP_BORROWERS_BY_STATE_SQL",
+    "_CANONICAL_TOP_BORROWERS_GLOBAL_INTENT_SQL",
+    "_CANONICAL_TOP_BORROWERS_GLOBAL_SQL",
+    "_CANONICAL_TOP_CASH_OUT_BORROWERS_BY_STATE_SQL",
+    "_CANONICAL_TOP_CASH_OUT_BORROWERS_GLOBAL_SQL",
+    "_CANONICAL_TOP_CASH_OUT_BY_EQUITY_SQL",
+    "_CANONICAL_TOP_COHORTS_SQL",
+    "_CANONICAL_TOP_HELOC_BORROWERS_BY_STATE_SQL",
+    "_CANONICAL_TOP_HELOC_BORROWERS_GLOBAL_SQL",
+    "_CANONICAL_TOP_INVESTOR_BORROWERS_BY_STATE_SQL",
+    "_CANONICAL_TOP_INVESTOR_BORROWERS_GLOBAL_SQL",
+    "_CANONICAL_TOP_LISTED_BORROWERS_BY_STATE_SQL",
+    "_CANONICAL_TOP_LISTED_BORROWERS_GLOBAL_SQL",
+    "_CANONICAL_TOP_REFI_BORROWERS_BY_STATE_SQL",
+    "_CANONICAL_TOP_REFI_BORROWERS_GLOBAL_SQL",
+    "_CANONICAL_TOP_RETENTION_BORROWERS_BY_STATE_SQL",
+    "_CANONICAL_TOP_RETENTION_BORROWERS_GLOBAL_SQL",
+    "_ELIGIBLE",
+    "_EVIDENCE_EVENTS",
+    "_FUNNEL_SNAPSHOT_DAILY",
+    "_INTENT_RANKING_SPECS",
+    "_LEAD_POPULATION",
+    "_LEAD_QUEUE_RANKING_SQL_TEMPLATE",
+    "_LOCKIN_COHORT",
+    "_RANKING_SELECT_COLUMNS",
+    "_SEGMENT_COMPARISON_TERMS",
+    "_SEGMENT_PERFORMANCE_FOREIGN_TERMS",
+    "_SEGMENT_PERFORMANCE_METRIC_TERMS",
+    "_SEGMENT_PERFORMANCE_METRIC_VIEW",
+    "_SEGMENT_PERFORMANCE_OFF_AXIS_TERMS",
+    "_SEGMENT_POPULATION",
+    "_TOP_BORROWER_WHY_TERMS",
+    "_US_STATE_FILTERS",
+    "_ambiguous_state_code_match_is_contextual",
+    "_borrower_ranking_sql",
+    "_brief_city_label",
+    "_brief_int",
+    "_brief_money",
+    "_brief_offer_paragraph",
+    "_brief_position_sentences",
+    "_brief_screen_txt",
+    "_brief_signal_sentences",
+    "_brief_terms_txt",
+    "_canonical_addressable_market_scope",
+    "_canonical_approval_trend_30d_scope",
+    "_canonical_cash_out_state_scope",
+    "_canonical_equity_threshold_scope",
+    "_canonical_evidence_events_quarter_scope",
+    "_canonical_evidence_events_yesterday_scope",
+    "_canonical_heloc_count_scope",
+    "_canonical_heloc_recommendation_borrowers_scope",
+    "_canonical_heloc_zip_scope",
+    "_canonical_home_equity_distribution_scope",
+    "_canonical_in_the_money_count_scope",
+    "_canonical_investor_count_scope",
+    "_canonical_investor_segment_by_state_scope",
+    "_canonical_investor_top_by_related_property_scope",
+    "_canonical_itm_city_scope",
+    "_canonical_itm_count_avg_spread_scope",
+    "_canonical_itm_lead_queue_zip_scope",
+    "_canonical_itm_offer_mix_scope",
+    "_canonical_itm_share_scope",
+    "_canonical_itm_state_breakdown_scope",
+    "_canonical_itm_state_scope",
+    "_canonical_itm_top_tier_compare_scope",
+    "_canonical_itm_zip_scope",
+    "_canonical_lead_score_weekly_distribution_scope",
+    "_canonical_listed_by_product_rate_scope",
+    "_canonical_listed_count_scope",
+    "_canonical_listed_days_on_market_by_state_scope",
+    "_canonical_listed_purchase_scope",
+    "_canonical_lockin_by_state_scope",
+    "_canonical_lockin_median_rate_scope",
+    "_canonical_lockin_size_scope",
+    "_canonical_mean_lead_score_by_state_scope",
+    "_canonical_mean_rate_spread_by_segment_scope",
+    "_canonical_msa_score_scope",
+    "_canonical_negative_equity_scope",
+    "_canonical_ranked_lead_population_scope",
+    "_canonical_refi_driver_scope",
+    "_canonical_refi_equity_signal_compare_scope",
+    "_canonical_segment_approval_rate_scope",
+    "_canonical_segment_performance_rescue_scope",
+    "_canonical_specific_top_borrowers_global_scope",
+    "_canonical_specific_top_borrowers_state_scope",
+    "_canonical_strategy_board_scope",
+    "_canonical_top_borrowers_all_segments_scope",
+    "_canonical_top_borrowers_global_scope",
+    "_canonical_top_borrowers_state_scope",
+    "_canonical_top_cash_out_by_equity_scope",
+    "_canonical_top_cohorts_scope",
+    "_current_footprint_label",
+    "_format_pct_threshold",
+    "_has_all_segments_scope",
+    "_has_count_intent",
+    "_has_equity_share_result_intent",
+    "_has_global_coverage_scope",
+    "_has_itm_intent",
+    "_has_rank_intent",
+    "_has_share_intent",
+    "_has_strong_rank_intent",
+    "_has_unsupported_geo_scope",
+    "_normalized_question",
+    "_projected_monthly_savings_gap_scope",
+    "_retention_competitor_lien_list_question",
+    "_retention_eligibility_fallback_from_summary",
+    "_retention_risk_question",
+    "_specific_top_borrower_intent",
+    "_specific_top_borrower_intent_label",
+    "_specific_top_borrower_intent_note",
+    "_specific_top_borrower_intents",
+    "_specific_top_borrower_sort_label",
+    "compose_all_segments_brief",
+    "compose_borrower_ranking_brief",
+    "compose_cohort_ranking_brief",
+]

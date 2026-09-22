@@ -13,9 +13,7 @@ import os
 
 import pytest
 
-from tools.databricks.converge_campaign_treatment_access import (
-    read_identity_with_credential_settle,
-)
+from tools.databricks.campaign_treatment_identity_probe import read_identity_with_credential_settle
 
 
 class _Clock:
@@ -122,7 +120,7 @@ def test_isolated_auth_env_strips_and_restores() -> None:
     """Ambient deployer credentials must not be visible to the target probe."""
     import os
 
-    from tools.databricks.converge_campaign_treatment_access import (
+    from tools.databricks.campaign_treatment_identity_probe import (
         _AMBIENT_AUTH_ENV_VARS,
         isolated_target_auth_env,
     )
@@ -143,7 +141,7 @@ def test_isolated_auth_env_strips_and_restores() -> None:
 def test_isolated_auth_env_restores_on_exception() -> None:
     import os
 
-    from tools.databricks.converge_campaign_treatment_access import isolated_target_auth_env
+    from tools.databricks.campaign_treatment_identity_probe import isolated_target_auth_env
 
     os.environ["DATABRICKS_TOKEN"] = "ambient"
     try:
@@ -155,7 +153,7 @@ def test_isolated_auth_env_restores_on_exception() -> None:
 
 
 def test_probe_failure_description_is_secret_free_and_actionable() -> None:
-    from tools.databricks.converge_campaign_treatment_access import (
+    from tools.databricks.campaign_treatment_identity_probe import (
         _AMBIENT_AUTH_ENV_VARS,
         _describe_probe_failure,
     )
@@ -204,7 +202,7 @@ def test_probe_failure_description_is_secret_free_and_actionable() -> None:
 
 
 def test_transient_instability_markers_are_recognized() -> None:
-    from tools.databricks.converge_campaign_treatment_access import (
+    from tools.databricks.campaign_treatment_identity_probe import (
         _is_transient_credential_instability,
     )
 
