@@ -200,28 +200,36 @@ async function kpiRowTops(page: Page): Promise<number[]> {
   return cards.evaluateAll((elements) => elements.map((element) => Math.round(element.getBoundingClientRect().top)));
 }
 
+/** Four cards on at most two rows, and no row holding a single card: the
+ * 3+1 layout also has two distinct tops, so counting tops alone is vacuous. */
+async function expectNoOrphanRow(page: Page): Promise<void> {
+  const rows = new Map<number, number>();
+  for (const top of await kpiRowTops(page)) rows.set(top, (rows.get(top) ?? 0) + 1);
+  expect(rows.size, 'four KPIs occupy at most two rows').toBeLessThanOrEqual(2);
+  for (const [top, count] of rows) expect(count, `row at ${top}px holds more than one card`).toBeGreaterThanOrEqual(2);
+}
+
 test.describe('KPI band never orphans a card', () => {
   test('Home with the Console open lays four KPIs out without a lone card', async ({ app, page }) => {
     await app.gotoRoute('/');
     await app.openConsole();
-    const rows = new Map<number, number>();
-    for (const top of await kpiRowTops(page)) rows.set(top, (rows.get(top) ?? 0) + 1);
-    expect(rows.size, 'four KPIs occupy at most two rows').toBeLessThanOrEqual(2);
-    for (const [top, count] of rows) expect(count, `row at ${top}px holds more than one card`).toBeGreaterThanOrEqual(2);
+    await expectNoOrphanRow(page);
   });
 
   test('a 1280-wide laptop without the Console shows four KPIs as 2x2', async ({ app, page }) => {
     await page.setViewportSize({ width: 1280, height: 720 });
     await app.gotoRoute('/');
-    const tops = await kpiRowTops(page);
-    expect(new Set(tops).size).toBe(2);
+    await expectNoOrphanRow(page);
   });
 });
 
 test.describe('overlay exits animate', () => {
   // The harness runs under prefers-reduced-motion: reduce; these cases
-  // need the real motion contract.
+  // need the real motion contract. Playwright's actionability wait stalls on
+  // rAF-driven reveals under heavy machine load, so give them the slow budget
+  // rather than a retry.
   test.use({ contextOptions: { reducedMotion: 'no-preference' } });
+  test.slow();
 
   test('the evidence drawer stays visible while it slides out and hides when the exit ends', async ({ app, page }) => {
     await app.gotoRoute('/');
