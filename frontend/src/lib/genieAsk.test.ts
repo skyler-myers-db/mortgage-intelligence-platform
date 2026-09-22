@@ -79,6 +79,42 @@ describe('askGenieLive', () => {
     expect(complete).toHaveBeenCalledWith('conv-1', 'msg-1', 'tok', 'question?', undefined);
   });
 
+  it('stamps the submit response\'s deep flag onto every progress update (genie-01 phase 0)', async () => {
+    const terminal = progressOf({ status: 'COMPLETED', stage: 'complete', terminal: true });
+    vi.spyOn(api, 'genieComplete').mockResolvedValue({
+      answer: 'final answer',
+      source: 'genie',
+      trusted_assets: [],
+    });
+
+    for (const [submitDeep, expected] of [
+      [true, true],
+      [false, false],
+      // An older backend omits the field entirely: never guessed as deep.
+      [undefined, false],
+    ] as const) {
+      vi.spyOn(api, 'genieSubmit').mockResolvedValue({
+        completed: false,
+        conversation_id: 'conv-1',
+        message_id: 'msg-1',
+        progress_token: 'tok',
+        ...(submitDeep === undefined ? {} : { deep: submitDeep }),
+      });
+      const states = [progressOf({ status: 'ASKING_AI', stage: 'drafting' }), terminal];
+      vi.spyOn(api, 'genieProgress').mockImplementation(() =>
+        Promise.resolve(states.shift() ?? terminal),
+      );
+      const seen: Array<boolean | undefined> = [];
+
+      await askGenieLive('question?', null, {
+        sleep: noSleep,
+        onProgress: (p) => seen.push(p.deep),
+      });
+
+      expect(seen).toEqual([expected, expected]);
+    }
+  });
+
   it('throws GenieLiveError with the canned hint on a failed turn', async () => {
     vi.spyOn(api, 'genieSubmit').mockResolvedValue({
       completed: false,

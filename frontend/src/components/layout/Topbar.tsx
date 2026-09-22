@@ -5,6 +5,11 @@ import { Icon } from '../Icon';
 import { useHealth } from '../HealthProvider';
 import { useFootprint } from '../FootprintProvider';
 import { api, type HealthPayload } from '../../lib/api';
+import {
+  GENIE_LAUNCHER_STATUS_ID,
+  genieLauncherStateClass,
+  useGenieTurnStatus,
+} from '../../lib/genieTurnStatus';
 import type { LeadSummary } from '../../types';
 
 // Platform-aware command-palette shortcut label. Mac shows ⌘K; everyone else
@@ -166,6 +171,9 @@ export function currentCrumb(path: string): string {
 
 export function Topbar() {
   const { lender, theme, setTheme, genieOpen, setGenieOpen, consoleOpen, setConsoleOpen } = useApp();
+  // A Genie turn keeps running behind the closed panel; this toggle is the
+  // only desktop launcher, so it carries the running ring / answer-ready badge.
+  const genieTurn = useGenieTurnStatus();
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const crumb = currentCrumb(pathname);
@@ -397,10 +405,11 @@ export function Topbar() {
         <Icon name={theme === 'dark' ? 'sun' : 'moon'} size={15} />
       </button>
       <button
-        className={`topbar__icon-btn ${genieOpen ? 'is-active' : ''}`}
+        className={`topbar__icon-btn ${genieOpen ? 'is-active' : ''} ${genieLauncherStateClass(genieTurn)}`}
         onClick={() => setGenieOpen(!genieOpen)}
         title="Ask Genie"
         aria-label="Toggle Genie chat"
+        aria-describedby={genieTurn === 'idle' ? undefined : GENIE_LAUNCHER_STATUS_ID}
         aria-pressed={genieOpen}
         type="button"
       >

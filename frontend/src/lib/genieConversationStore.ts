@@ -3,11 +3,17 @@ import type { GenieAnswer as GenieAnswerShape } from '../types';
 /**
  * Genie conversation transcript store.
  *
- * The floating Genie panel is mounted conditionally (`{genieOpen ? <GenieChat/> : null}`
- * in AppShell), so closing the panel — or any remount — used to destroy the
- * entire visible conversation. This module keeps the turn list in a
- * module-level cache mirrored into `sessionStorage`, so the transcript
- * survives panel close/reopen and route navigation for the life of the tab.
+ * The turn list lives in a module-level cache mirrored into `sessionStorage`,
+ * so the transcript survives a reload and route navigation for the life of
+ * the tab, and is SHARED: the floating panel and the `/ask-genie` route read
+ * and append to the same list.
+ *
+ * Since the 2026-09-21 audit (`runtime-01` / `genie-02`) the floating panel
+ * stays mounted while closed, so it no longer re-hydrates on every open. It
+ * mirrors this store instead (`useGenieTranscript`) and writes through
+ * `appendGenieTurn`, which appends to the CURRENT list rather than replacing
+ * it with a private copy — a turn the route settled while a panel turn was
+ * in flight is never overwritten.
  *
  * Scope decisions:
  *   - `sessionStorage`, not `localStorage`: a transcript is tab-scoped
@@ -17,9 +23,10 @@ import type { GenieAnswer as GenieAnswerShape } from '../types';
  *     is the rendered transcript.
  *   - Capped at MAX_STORED_TURNS so a long booth session cannot grow the
  *     quota unbounded; the OLDEST turns are dropped first.
- *   - Writes happen on turn completion only. An in-flight turn is never
- *     persisted, so a reload mid-answer restores the last settled state
- *     rather than a half-rendered bubble.
+ *   - Writes happen on turn completion only: the panel keeps the in-flight
+ *     question in its own `pendingQuestion` state and appends the turn once
+ *     the answer lands, so a reload mid-answer restores the last settled
+ *     state rather than a half-rendered bubble.
  *   - The persisted shape is deliberately `{question, response}[]` — the
  *     same shape `GET /api/genie/sessions/{id}` returns — so loading a past
  *     session and restoring local state go through one code path.
@@ -116,6 +123,12 @@ export function setGenieTurns(turns: GenieTurn[]): GenieTurn[] {
   return cache;
 }
 
+/** Append one settled turn to the current transcript. Reads the live list at
+ *  call time, so a turn another surface settled in the meantime is kept. */
+export function appendGenieTurn(question: string, response: GenieAnswerShape): GenieTurn[] {
+  return setGenieTurns([...getGenieTurns(), { question, response }]);
+}
+
 /** Drop the transcript (New thread, actor boundary reset, 403). */
 export function clearGenieTurns(): void {
   cache = EMPTY;
@@ -123,24 +136,10 @@ export function clearGenieTurns(): void {
   emit();
 }
 
-/** Convert rendered messages into the persisted turn shape. An `ai` message
- *  is paired with the `user` message immediately before it. */
-export function messagesToTurns(messages: readonly GenieChatMessage[]): GenieTurn[] {
-  const turns: GenieTurn[] = [];
-  for (let i = 0; i < messages.length; i += 1) {
-    const message = messages[i];
-    if (message.who !== 'ai') continue;
-    const previous = messages[i - 1];
-    turns.push({
-      question: previous && previous.who === 'user' ? previous.text : '',
-      response: message.payload,
-    });
-  }
-  return turns;
-}
-
-/** Inverse of `messagesToTurns`. Also the adapter for a loaded history
- *  session, whose `turns` arrive in exactly this shape. */
+/** Rendered-message adapter for the transcript (and for a loaded history
+ *  session, whose `turns` arrive in exactly this shape). Read-only: the
+ *  panel never converts rendered messages back into turns — every write goes
+ *  through `appendGenieTurn` / `setGenieTurns`, so there is one write path. */
 export function turnsToMessages(
   turns: readonly GenieTurn[],
   sourcesFor?: (payload: GenieAnswerShape) => string[],
@@ -156,16 +155,4 @@ export function turnsToMessages(
     });
   }
   return messages;
-}
-
-/**
- * Persist the settled transcript. No-ops while a turn is in flight so a
- * half-complete exchange is never written.
- */
-export function persistGenieMessages(
-  messages: readonly GenieChatMessage[],
-  { inFlight }: { inFlight: boolean },
-): void {
-  if (inFlight) return;
-  setGenieTurns(messagesToTurns(messages));
 }
