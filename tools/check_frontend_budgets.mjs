@@ -78,13 +78,19 @@ const budgets = {
   // campaign-handoff slices settled. The inherited 141 KiB gate left only
   // 0.05 KiB above the measured artifact, violating the documented ~5%
   // cross-platform headroom policy. Measured: CSS 140.95 / gzip 23.89.
-  // Re-baselined 2026-09-21 for the ErrorBoundary recovery surface
-  // (`.error-surface`, design-system/components/15-error-surface.css, +0.70
-  // KiB). It has to ship in the initial CSS: it is what renders when a lazy
-  // chunk cannot load, so it cannot live in one. The base branch had drifted
-  // to 147.91 of 148 (0.09 KiB of headroom), so any CSS line from anyone
-  // tripped the gate. Measured: CSS 148.61 / gzip 25.13; restore ~5% headroom.
-  initialCssBytes: 157 * KiB, // actual 148.61
+  // Re-baselined 2026-09-22 at the wave-0 integration of the UI/UX audit
+  // (docs/audits/ui-ux-technology-audit-2026-09-21.md). Four lanes each added
+  // shell CSS that must ship in the initial stylesheet, and the gate had
+  // drifted to 0.09 KiB of headroom over the 147.91 KiB base, so every one of
+  // them tripped it: the ErrorBoundary recovery surface (15-error-surface.css,
+  // +0.70 KiB; it renders when a lazy chunk cannot load, so it cannot be
+  // lazy), the "A new version is available" notice (.degraded-banner--info,
+  // +0.24 KiB; glossary :target styling was moved to a lazy route stylesheet
+  // to keep it out of this number), the Genie launcher running/answer-ready
+  // states (16-genie-fab-status.css, +1.43 KiB) and the sparkline draw/fade
+  // tokens plus print reveal rule (+0.29 KiB). Measured after the merge:
+  // see the INTEGRATION_MEASURED marker below; ~5% headroom per policy.
+  initialCssBytes: 157 * KiB, // INTEGRATION_MEASURED
   // Re-baselined 2026-09-08 for the Genie thread view + deep-research
   // sections slice. The 25 KiB gzip gate had drifted to 4 bytes above the
   // measured artifact (25,596 B) — the next CSS line from anyone would have

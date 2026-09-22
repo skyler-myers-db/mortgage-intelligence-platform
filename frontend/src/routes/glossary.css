@@ -1,0 +1,24 @@
+/* Glossary deep links (/glossary#clip from a <GlossaryTerm>, category chips).
+   Route-level on purpose: imported by routes/glossary.tsx so it ships in the
+   glossary's lazy CSS chunk, not the initial stylesheet (same pattern as
+   analytics.scatter.css).
+
+   `scroll-margin-top` clears the sticky .route-nav for native fragment jumps;
+   useMainScroll reads the same value for client-side navigation. `:target`
+   only matches a native fragment navigation (history.pushState never updates
+   it), so the route also sets `.is-target` from the router's hash. The spread
+   shadow widens the tint into the grid gap without moving any layout. */
+.glossary-section,
+.glossary-entry {
+  scroll-margin-top: var(--sp-16);
+}
+.glossary-entry:target,
+.glossary-entry.is-target {
+  background: var(--accent-soft);
+  border-radius: var(--r-md);
+  box-shadow: 0 0 0 var(--sp-2) var(--accent-soft);
+}
+.glossary-section:target,
+.glossary-section.is-target {
+  border-color: var(--chip-line);
+}

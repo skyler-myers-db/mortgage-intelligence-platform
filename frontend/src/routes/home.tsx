@@ -1,4 +1,3 @@
-import { useEffect, useRef } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { PageShell } from '../components/layout/PageShell';
 import { KpiCard } from '../components/mortgage/KpiCard';
@@ -76,7 +75,6 @@ export default function Home() {
   const warehouseDown =
     healthCtx?.health?.dependencies?.warehouse === 'down' ||
     healthCtx?.health?.dependencies?.lakebase === 'down';
-  const previousWarehouseDown = useRef(warehouseDown);
   const {
     data: preview,
     warmingUp: previewWarming,
@@ -104,11 +102,6 @@ export default function Home() {
     queryKey: queryKeys.homeSummary(),
   });
   const summaryLoading = !summary && !summaryError && !summaryWarming;
-
-  useEffect(() => {
-    if (previousWarehouseDown.current && !warehouseDown && previewErrorObj) retryPreview();
-    previousWarehouseDown.current = warehouseDown;
-  }, [previewErrorObj, retryPreview, warehouseDown]);
 
   const queued = preview?.high_intent_leads ?? null;
   const kpisLoading = preview === null && !previewError && !previewWarming;
@@ -165,8 +158,10 @@ export default function Home() {
           the red error. The system-wide DegradedBanner already says
           "reconnecting"; a contradictory red tile underneath made the
           app look broken when it was correctly cold-starting. The
-          tile auto-recovers when health flips back to up (effect
-          below increments reloadToken). */}
+          tile recovers on its own: on the down -> up edge HealthProvider
+          refetches every mounted query that failed because of the
+          recovered dependency (components/healthRecovery.ts), on every
+          route, so Home no longer carries a private recovery effect. */}
       {previewError && !previewWarming && warehouseDown && (
         <div
           role="status"
