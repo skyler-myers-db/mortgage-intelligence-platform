@@ -157,7 +157,7 @@
 }
 .genie-history .genie-history__item:disabled { opacity: 0.55; cursor: default; }
 .genie-history__state { padding: var(--sp-2); color: var(--text-3); font-size: var(--fs-12); }
-.genie-history__state--error { color: var(--signal-warning); }
+.genie-history__state--error { color: var(--signal-warning-ink); }
 .genie-history__title {
   max-inline-size: 100%;
   overflow: hidden; text-overflow: ellipsis;

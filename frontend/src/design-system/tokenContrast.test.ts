@@ -68,13 +68,30 @@ function textPairs(): Pair[] {
       pairs.push({ finding: 'responsive-02', fg, bg, min: AA_TEXT });
     }
   }
-  // Signal colours used as text (.kpi__delta, verdicts, callouts). The
-  // warning hue itself is a fill (dots, bars, freshness legend) and stays
-  // prototype amber; --signal-warning-ink is the text-safe variant.
+  // Signal colours used as text (.kpi__delta, verdicts, callouts, the
+  // search-error status, Genie history/proof states, the bulk-action toast).
+  // The warning hue itself is a fill (dots, bars, freshness legend) and stays
+  // prototype amber; --signal-warning-ink is the text-safe variant and the
+  // partials may not paint text with the fill (tokenUsage.test.ts). --bg-3
+  // is the hover/well surface menus and toasts sit on.
   for (const fg of ['--signal-success', '--signal-danger', '--signal-warning-ink']) {
-    for (const bg of ['--bg-0', '--bg-1', '--bg-2']) {
+    for (const bg of ['--bg-0', '--bg-1', '--bg-2', '--bg-3']) {
       pairs.push({ finding: 'a11y-01', fg, bg, min: AA_TEXT });
     }
+  }
+  // Amber icon glyphs (.approval__ico, .degraded-banner__ico on
+  // --status-warning-soft-strong; .audit__ico.amber on --status-warning-soft)
+  // take the ink too: WCAG 1.4.11 non-text contrast on the tinted fill.
+  for (const base of ['--bg-1', '--bg-2']) {
+    for (const soft of ['--status-warning-soft', '--status-warning-soft-strong']) {
+      pairs.push({ finding: 'a11y-01', fg: '--signal-warning-ink', bg: soft, base, min: AA_UI });
+    }
+  }
+  // Active evidence-drawer tab: --accent-ink on the --accent-soft fill over
+  // the drawer's --bg-2 tab strip (and --bg-1 where the same fill backs
+  // active filters). It used to paint --accent (1.75:1 in light + bright).
+  for (const base of ['--bg-1', '--bg-2']) {
+    pairs.push({ finding: 'a11y-01', fg: '--accent-ink', bg: '--accent-soft', base, min: AA_TEXT });
   }
   // Accent ink: every accent-coloured text site (active nav, filters, links).
   for (const bg of ['--bg-0', '--bg-1', '--bg-2']) {
@@ -93,8 +110,8 @@ function textPairs(): Pair[] {
   }
   // Status inks on the fills they actually sit on: `--status-*-soft` under
   // .score--high/.score--med and .audit__ico, `--status-*-soft-muted` under
-  // .chip--success/warning/danger. (`--status-warning-soft-strong` only ever
-  // carries the fill hue, --signal-warning, on the offer-mock banner.)
+  // .chip--success/warning/danger. (`--status-warning-soft-strong` carries
+  // the icon glyphs gated above and the offer-mock banner.)
   for (const tone of ['success', 'warning', 'danger']) {
     const fg = `--status-${tone}-ink`;
     for (const bg of ['--bg-1', '--bg-2']) {

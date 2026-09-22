@@ -250,7 +250,7 @@
   color: var(--text-3);
   font-size: var(--fs-12);
 }
-.topbar__search-status--error { color: var(--signal-warning); }
+.topbar__search-status--error { color: var(--signal-warning-ink); }
 .topbar__pill {
   display: inline-flex; align-items: center; gap: var(--sp-2);
   padding: 5px 10px; border-radius: var(--r-pill);

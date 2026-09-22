@@ -550,7 +550,7 @@
   letter-spacing: var(--tracking-caps);
   text-transform: uppercase;
 }
-.seg-card__meta--pending { color: var(--signal-warning); }
+.seg-card__meta--pending { color: var(--signal-warning-ink); }
 .seg-card__meta-item {
   display: inline-flex;
   align-items: center;

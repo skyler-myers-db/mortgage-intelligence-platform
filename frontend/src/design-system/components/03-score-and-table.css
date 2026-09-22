@@ -344,7 +344,7 @@
 }
 .bulk-actions__toast { font-size: var(--fs-12); }
 .bulk-actions__toast--ok { color: var(--signal-success); }
-.bulk-actions__toast--warn { color: var(--signal-warning); }
+.bulk-actions__toast--warn { color: var(--signal-warning-ink); }
 .bulk-actions__toast--danger { color: var(--signal-danger); }
 .table-error,
 .table-success,

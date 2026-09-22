@@ -9,6 +9,10 @@
  *    (`--ease-standard` was referenced three times and never defined).
  *  - visual-03 / css-02: `color-scheme` is declared per theme and forced
  *    light for print, where print.css relies on Canvas / CanvasText.
+ *  - a11y-01: no partial paints text or a glyph with the amber fill hue
+ *    (`color: var(--signal-warning)`, 2.15:1 on the light surfaces); warning
+ *    copy and amber icons consume `--signal-warning-ink`, and the active
+ *    evidence-drawer tab consumes `--accent-ink`, not `--accent`.
  */
 import { describe, expect, it } from 'vitest';
 import { designCss } from '../test/designCss';
@@ -57,5 +61,48 @@ describe('native control scheme (visual-03 / css-02)', () => {
     expect(tokens).toMatch(/:root,\s*\[data-theme="dark"\]\s*\{\s*color-scheme:\s*dark;\s*\}/);
     expect(tokens).toMatch(/\[data-theme="light"\]\s*\{\s*color-scheme:\s*light;\s*\}/);
     expect(tokens).toMatch(/@media print\s*\{[^}]*color-scheme:\s*light;/s);
+  });
+});
+
+/** `selector { block }` pairs of the expanded component CSS (nested blocks are not modelled; none carry `color:`). */
+function rules(css: string): Array<{ selector: string; block: string }> {
+  const text = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  return [...text.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((match) => ({
+    selector: match[1].trim().replace(/\s+/g, ' '),
+    block: match[2],
+  }));
+}
+
+describe('warning copy and glyphs use the ink token (a11y-01)', () => {
+  it('never paints text or a glyph with the amber fill hue', () => {
+    // `color:` only: background, border, box-shadow and color-mix() tints keep
+    // the prototype amber. The lookbehind excludes border-color / background-color.
+    const offenders = rules(components)
+      .filter((rule) => /(?<![-\w])color:\s*var\(--signal-warning\)/.test(rule.block))
+      .map((rule) => rule.selector);
+    expect(offenders, 'use var(--signal-warning-ink) for text and icon glyphs').toEqual([]);
+  });
+
+  it('consumes --signal-warning-ink at every warning text and glyph site', () => {
+    const consumers = rules(components)
+      .filter((rule) => /(?<![-\w])color:\s*var\(--signal-warning-ink\)/.test(rule.block))
+      .map((rule) => rule.selector);
+    expect(consumers).toEqual(
+      expect.arrayContaining([
+        '.topbar__search-status--error',
+        '.seg-card__meta--pending',
+        '.bulk-actions__toast--warn',
+        '.genie-history__state--error',
+        '.genie-proof__gap',
+        '.approval__ico',
+        '.degraded-banner__ico',
+        '.audit__ico.amber',
+      ]),
+    );
+  });
+
+  it('paints the active evidence-drawer tab with --accent-ink', () => {
+    const active = rules(components).find((rule) => rule.selector === '.drawer__tab.is-active');
+    expect(active?.block).toMatch(/(?<![-\w])color:\s*var\(--accent-ink\)/);
   });
 });

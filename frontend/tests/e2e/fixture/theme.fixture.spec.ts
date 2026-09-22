@@ -12,9 +12,14 @@
  *     Console's System option follows OS flips live;
  *  e. every theme x accent pair paints a visible focus ring from the shared
  *     token and passes axe color-contrast on / and /lead-queue.
+ *
+ * States the axe loop never renders (warning copy, amber glyphs, the active
+ * evidence-drawer tab, text-input focus) are proven in
+ * contrastStates.fixture.spec.ts.
  */
 import AxeBuilder from '@axe-core/playwright';
 import type { Page } from '@playwright/test';
+import { asComputedRgb, centerPixel, relativeLuminance } from './renderedColor';
 import { expect, test, type FixtureTheme } from './test';
 
 const ACCENTS = ['bright', 'teal', 'navy', 'red'] as const;
@@ -69,32 +74,6 @@ async function traceRootAttribute(page: Page, attribute: string): Promise<void> 
       trace.atDomContentLoaded = document.documentElement.getAttribute(name);
     });
   }, attribute);
-}
-
-/** Colour of the centre pixel of an element, from a real screenshot decoded in-page. */
-async function centerPixel(page: Page, selector: string): Promise<[number, number, number]> {
-  const png = await page.locator(selector).first().screenshot();
-  return page.evaluate(async (base64) => {
-    const image = new Image();
-    image.src = `data:image/png;base64,${base64}`;
-    await image.decode();
-    const canvas = document.createElement('canvas');
-    canvas.width = image.width;
-    canvas.height = image.height;
-    const context = canvas.getContext('2d');
-    if (!context) throw new Error('2d canvas unavailable');
-    context.drawImage(image, 0, 0);
-    const [r, g, b] = context.getImageData(Math.floor(image.width / 2), Math.floor(image.height / 2), 1, 1).data;
-    return [r, g, b] as [number, number, number];
-  }, png.toString('base64'));
-}
-
-function relativeLuminance([r, g, b]: [number, number, number]): number {
-  const channel = (v: number) => {
-    const c = v / 255;
-    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
-  };
-  return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
 }
 
 async function colorContrastViolations(page: Page): Promise<string[]> {
@@ -152,7 +131,7 @@ for (const theme of THEMES) {
     const checkbox = 'table.tbl input[type="checkbox"]';
     await expect(page.locator(checkbox).first()).toBeVisible();
     expect(await page.locator(checkbox).first().evaluate((el) => getComputedStyle(el).colorScheme)).toBe(theme);
-    const pixel = await centerPixel(page, checkbox);
+    const pixel = await centerPixel(page, page.locator(checkbox).first());
     const luminance = relativeLuminance(pixel);
     if (theme === 'dark') {
       expect(luminance, `checkbox fill rgb(${pixel.join(', ')}) must not be light in the dark theme`).toBeLessThan(0.3);
@@ -230,15 +209,7 @@ for (const theme of THEMES) {
       expect(ring.outlineColor).not.toBe(TRANSPARENT);
       // The rendered ring is the resolved token (compare through a probe so
       // hex and rgb() spellings meet in the same computed form).
-      const tokenAsRgb = await page.evaluate((hex) => {
-        const probe = document.createElement('span');
-        probe.style.color = hex;
-        document.body.appendChild(probe);
-        const rgb = getComputedStyle(probe).color;
-        probe.remove();
-        return rgb;
-      }, ring.token);
-      expect(ring.outlineColor).toBe(tokenAsRgb);
+      expect(ring.outlineColor).toBe(await asComputedRgb(page, ring.token));
 
       const exception = DOCUMENTED_AXE_EXCEPTIONS[`${theme}/${accent}`];
       let excepted = 0;

@@ -182,7 +182,7 @@
   border-radius: var(--r-sm);
 }
 .drawer__tab:hover { color: var(--text-1); }
-.drawer__tab.is-active { background: var(--accent-soft); color: var(--accent); }
+.drawer__tab.is-active { background: var(--accent-soft); color: var(--accent-ink); }
 .source-summary,
 .source-card {
   padding: var(--sp-3);

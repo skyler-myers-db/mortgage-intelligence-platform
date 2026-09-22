@@ -411,7 +411,7 @@
 }
 .approval__ico {
   width: 32px; height: 32px; border-radius: 8px;
-  background: var(--status-warning-soft-strong); color: var(--signal-warning);
+  background: var(--status-warning-soft-strong); color: var(--signal-warning-ink);
   display: grid; place-items: center; font-size: 16px;
   flex: 0 0 auto;
 }
@@ -440,7 +440,7 @@
 }
 .degraded-banner__ico {
   width: 32px; height: 32px; border-radius: 8px;
-  background: var(--status-warning-soft-strong); color: var(--signal-warning);
+  background: var(--status-warning-soft-strong); color: var(--signal-warning-ink);
   display: grid; place-items: center; font-size: 16px;
   flex: 0 0 auto;
 }

@@ -32,9 +32,11 @@
   --signal-danger:  #F87171;
   --signal-info:    #66C5FF;
   /* Text-safe warning. The amber hue above is a FILL (status dots, signal
-     bars, freshness legend) and stays prototype amber in both themes; on the
-     light theme it reads 2.15:1 as text (2026-09-21 audit a11y-01), so text
-     sites take this token instead. Dark: the hue itself clears AA. */
+     bars, freshness legend, color-mix tints) and stays prototype amber in
+     both themes; on the light theme it reads 2.15:1 as text (2026-09-21
+     audit a11y-01), so every `color:` site in the partials (warning copy
+     and the amber icon glyphs) takes this token instead; tokenUsage.test.ts
+     forbids `color: var(--signal-warning)`. Dark: the hue itself clears AA. */
   --signal-warning-ink: var(--signal-warning);
 
   /* ---------- Segment palette (chips, map fills) ---------- */

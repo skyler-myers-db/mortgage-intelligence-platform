@@ -16,7 +16,7 @@
   background: var(--accent-soft); color: var(--accent-ink); font-size: 12px;
 }
 .audit__ico.green { background: var(--status-success-soft); color: var(--status-success-ink); }
-.audit__ico.amber { background: var(--status-warning-soft); color: var(--signal-warning); }
+.audit__ico.amber { background: var(--status-warning-soft); color: var(--signal-warning-ink); }
 .audit__ico.red   { background: var(--status-danger-soft); color: var(--status-danger-ink); }
 [data-theme="light"] .audit__ico.green { color: var(--signal-success); }
 [data-theme="light"] .audit__ico.red   { color: var(--signal-danger); }
