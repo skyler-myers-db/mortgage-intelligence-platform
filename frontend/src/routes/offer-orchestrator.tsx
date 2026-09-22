@@ -12,7 +12,6 @@ import { ConfidenceMeter } from '../components/mortgage/ConfidenceMeter';
 import { Button, Chip } from '../components/Primitives';
 import { useApp } from '../components/AppContext';
 import { approverGateReason } from '../components/mortgage/approverGate';
-import { ActivationLoopPanel } from '../components/activation/ActivationLoopPanel';
 import { invalidateOperationalQueries } from '../lib/queryKeys';
 import { offerDisplayLabel } from '../lib/offerLanguage';
 import { BORROWER_CACHE, clearBorrowerCache, readBorrowerCache } from './offer-orchestrator.cache';
@@ -25,6 +24,7 @@ import {
 } from './offer-orchestrator.panels';
 import { draftProofMatchesSnapshot, offerSnapshotMatches, resolveOfferApprovalStatus } from './offer-orchestrator.snapshot';
 import { OfferSnapshotReconciliation } from './offer-orchestrator.snapshot-status';
+import { OfferDecisionOutcome } from './offer-orchestrator.decision';
 import {
   OfferLoadErrorRoute,
   OfferOrchestratorEmptyRoute,
@@ -800,64 +800,19 @@ export default function OfferOrchestrator() {
           </div>
         </>
       )}
-      {routingConfirm && (routingConfirm.email || routingConfirm.followUpAt) && (
-        <div className="outreach-routing__confirm mt-grid" role="status" data-testid="routing-confirm">
-          <Chip variant="success">
-            {routingConfirm.email ? `Assigned to ${routingConfirm.email}` : 'Unassigned'}
-            {routingConfirm.followUpAt
-              ? ` · follow-up ${new Date(routingConfirm.followUpAt).toLocaleDateString(undefined, {
-                  month: 'short',
-                  day: 'numeric',
-                })}`
-              : ''}
-          </Chip>
-        </div>
-      )}
-
-      {effectiveApproval === 'approved' && (
-        <>
-          <div className="surface mt-grid">
-            <div className="surface__body surface__body--inline">
-              <span
-                className={
-                  justApproved?.id === id && justApproved.reloadToken === reloadToken
-                    ? 'burst inline-flex'
-                    : 'inline-flex'
-                }
-              >
-                <Chip variant="success" icon="check">Approved · governed internal queue</Chip>
-              </span>
-              {auditId && <span className="mono muted fs-11">audit: {auditId}</span>}
-              {approvalId && <span className="mono muted fs-11">approval: {approvalId}</span>}
-            </div>
-          </div>
-          <ActivationLoopPanel
-            borrowerId={b?.borrower_id ?? id}
-            offerCode={rec?.offer_code ?? b?.recommended_offer_code ?? null}
-            channel={activeDraftChannel}
-            approvalId={approvalId}
-            approved
-          />
-        </>
-      )}
-      {effectiveApproval === 'rejected' && (
-        <div className="surface mt-grid">
-          <div className="surface__body surface__body--inline">
-            <Chip variant="danger" icon="cross">Rejected</Chip>
-            {auditId && <span className="mono muted fs-11">audit: {auditId}</span>}
-          </div>
-        </div>
-      )}
-      {approveError && (
-        <div
-          className="surface surface--danger mt-grid"
-          role="alert"
-        >
-          <div className="surface__body text-danger">
-            {approveError}
-          </div>
-        </div>
-      )}
+      <OfferDecisionOutcome
+        id={id}
+        b={b}
+        rec={rec}
+        activeDraftChannel={activeDraftChannel}
+        effectiveApproval={effectiveApproval}
+        justApproved={justApproved}
+        reloadToken={reloadToken}
+        auditId={auditId}
+        approvalId={approvalId}
+        approveError={approveError}
+        routingConfirm={routingConfirm}
+      />
     </PageShell>
   );
 }
