@@ -82,7 +82,7 @@ test('lead queue shows the ranked borrowers', async ({ app, page }) => {
 });
 ```
 
-`app` also provides `openConsole()`, `openGenie()` (the topbar toggle; `.genie__fab` is hidden above 720px), `openCommandPalette()`, `expandFirstLeadRow()`, `settle()` and `degrade()`. `routes.ts` lists every route plus each Analytics tab; iterate it rather than re-listing paths. The app scrolls inside `.main`, so Playwright's `fullPage` screenshot option does nothing; scroll or resize `.main` instead.
+`app` also provides `openConsole()`, `openGenie()` (the topbar toggle; `.genie__fab` is hidden above 720px), `openCommandPalette()`, `expandFirstLeadRow()`, `settle()`, `degrade()` (returns a function that lifts the degraded state again, for recovery tests), `genieToggle()` and `geniePanel()` (the launcher and the docked panel, open or not), `evidenceDrawer()` / `openEvidenceDrawer(chip?)`, `openFilterMenu(label)` and `askGenie(question)`. Nothing answers a Genie turn by default: a spec that asks one first calls `registerGenieTurn(mockApi, script)` from `data/genieTurn.ts`, which scripts submit, progress and completion and returns counters plus `finishGenieTurn()` / `releaseComplete()` so the test owns the timing. `routes.ts` lists every route plus each Analytics tab; iterate it rather than re-listing paths. The app scrolls inside `.main`, so Playwright's `fullPage` screenshot option does nothing; scroll or resize `.main` instead.
 
 ### Hygiene: what fails a test
 
