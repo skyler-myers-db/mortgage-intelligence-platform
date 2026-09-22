@@ -194,7 +194,7 @@ export class AppDriver {
     const dialog = await this.openGenie();
     const input = dialog.getByRole('textbox', { name: 'Ask Genie' });
     await input.fill(question);
-    await dialog.getByRole('button', { name: 'Ask' }).click();
+    await dialog.getByRole('button', { name: 'Ask', exact: true }).click();
     return dialog;
   }
 }
