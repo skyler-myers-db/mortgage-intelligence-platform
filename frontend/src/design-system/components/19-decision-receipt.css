@@ -66,10 +66,18 @@
 }
 .decision-receipt__copied { color: var(--text-3); font-size: var(--fs-11); }
 
-/* The queue's expanded row hosts the receipt above the preview grid. */
+/* The queue's expanded row hosts the receipt above the preview grid. The
+   expanded cell spans all 15 nowrap columns, so like .tbl__expand-inner--lead
+   (03-score-and-table.css, Re-audit #3 P3) the slot pins to the scrollport's
+   left edge and caps at the `main` container width; otherwise the receipt's
+   right column and its "Open in audit explorer" link sit past the visible
+   edge, reachable only by horizontal scroll. */
 .tbl__expand-inner--receipt {
   padding-block-end: 0;
   border-bottom: 0;
+  position: sticky;
+  left: 0;
+  max-inline-size: calc(100cqw - 2 * var(--pad-card));
 }
 
 /* One-shot stagger: each row lands in sequence; the delay is capped at
