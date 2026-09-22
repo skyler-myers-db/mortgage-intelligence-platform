@@ -484,6 +484,7 @@ resources:
     #  11. state_top_segment             (needs borrower_360 -- geography rollup)
     #  12. source_readiness              (needs refreshed gold outputs + upstream probes; app-readable admin summary)
     #  13. refresh_semantics_views       (needs lead_population + segment_population + borrower_dossier)
+    #  14. rate_window_weekly            (needs borrower_360 + silver.lien_current + silver.market_rates_weekly -- why-now rate window)
     #
     # The DDL manifest (003_gold_tables.sql) is CREATE TABLE IF NOT EXISTS,
     # so running it on every refresh is safe and picks up any newly-added
@@ -744,6 +745,23 @@ resources:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
               path: sql/_rendered/transformations/gold_equity_spread_points.sql
+        # "Why now" rate window (2026-09-21 UI/UX audit, dataviz-08): the
+        # weekly FRED series against the current fixed-rate book's note-rate
+        # band plus the per-week in-the-money count via the canonical
+        # fn_rate_spread / fn_in_the_money primitives. Reads gold.borrower_360
+        # (behind the freshness sentinel), silver.lien_current and the full
+        # silver.market_rates_weekly history (seeded on first boot, refreshed
+        # by mip_fred_rates_ingest); writes its own sibling table, so it
+        # parallelizes with the rollups. The app reads this table and never
+        # runs a per-request percentile over the book.
+        - task_key: ctas_rate_window_weekly
+          description: "Rebuild mip.gold.rate_window_weekly via CTAS (weekly market rate vs. the current fixed-rate book, in-the-money count per week)."
+          depends_on:
+            - task_key: assert_borrower_360_fresh
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/transformations/gold_rate_window_weekly.sql
         - task_key: ctas_state_top_segment
           description: "Rebuild mip.gold.state_top_segment via CTAS (per-state dominant SegmentCode + share %)."
           depends_on:
