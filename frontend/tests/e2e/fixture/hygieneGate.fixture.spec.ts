@@ -6,15 +6,11 @@
  * thing that can fail it is the hygiene teardown in test.ts. If that gate ever
  * stops throwing, these "unexpectedly pass" and the suite goes red.
  *
- * Tracing is off for this file (it is a worker option, so it cannot be scoped
- * to a describe): with trace 'retain-on-failure', Playwright 1.59 stalls for
- * the whole test timeout while finalizing the trace of an unexpected pass,
- * which would turn the clear "Expected to fail, but passed." into a misleading
- * timeout for whoever broke the gate.
+ * The expected failure is cheap: the harness discards the browser trace when
+ * a test's outcome matches its expectation (`failureTrace` in test.ts), so
+ * these do not pay for trace finalization.
  */
 import { test } from './test';
-
-test.use({ trace: 'off' });
 
 test.describe('hygiene gate fails a test that did not opt out', () => {
   test('on a console.error', async ({ app, page }) => {

@@ -14,6 +14,12 @@ const fixtureE2E = process.env.E2E_FIXTURE === '1';
 const fixturePort = Number(process.env.E2E_FIXTURE_PORT || 4273);
 const fixtureWorkers = Number(process.env.E2E_FIXTURE_WORKERS || 4);
 const FIXTURE_SPEC = /.*\.fixture\.spec\.ts$/;
+// Internal to the harness self-test: tests/e2e/fixture/runner.fixture.spec.ts
+// spawns a nested Playwright run (E2E_FIXTURE_NESTED=1) that collects ONLY
+// tests/e2e/fixture/nested/*.nested.ts, which fail on purpose and need no web
+// server. Nothing else sets this variable.
+const nestedFixtureRun = fixtureE2E && process.env.E2E_FIXTURE_NESTED === '1';
+const NESTED_SPEC = /.*\.nested\.ts$/;
 
 /**
  * Playwright config for the Module 0 product golden path.
@@ -45,7 +51,7 @@ const FIXTURE_SPEC = /.*\.fixture\.spec\.ts$/;
  */
 export default defineConfig({
   testDir: './tests/e2e',
-  testMatch: fixtureE2E ? FIXTURE_SPEC : /.*\.spec\.ts$/,
+  testMatch: nestedFixtureRun ? NESTED_SPEC : fixtureE2E ? FIXTURE_SPEC : /.*\.spec\.ts$/,
   // Fixture specs need the fixture web server and mock API, so every other
   // mode (local, live, browser matrix, `--list`) must never collect them.
   testIgnore: fixtureE2E ? [] : FIXTURE_SPEC,
@@ -62,12 +68,19 @@ export default defineConfig({
   use: {
     baseURL: fixtureE2E ? `http://127.0.0.1:${fixturePort}` : 'http://localhost:5173',
     viewport: { width: 1440, height: 900 },
-    // Fixture mode keeps the trace (DOM snapshots + network) and a failure
-    // screenshot; always-on video encoding roughly doubles wall time on a
-    // loaded runner and adds nothing the trace does not show.
+    // Fixture mode keeps a failure screenshot and a failure trace (DOM
+    // snapshots + network); always-on video encoding roughly doubles wall
+    // time on a loaded runner and adds nothing the trace does not show.
     video: fixtureE2E || (liveE2E && !liveFailureArtifacts) ? 'off' : 'retain-on-failure',
     screenshot: liveE2E && !liveFailureArtifacts ? 'off' : 'only-on-failure',
-    trace: liveE2E && !liveFailureArtifacts ? 'off' : 'retain-on-failure',
+    // Fixture mode records its failure trace in tests/e2e/fixture/test.ts
+    // (`failureTrace`) and must keep Playwright's own trace OFF: with
+    // 'retain-on-failure', Playwright 1.59 merges the context and test traces
+    // through its bundled yauzl, which on Node 26 never finishes reading a
+    // zip entry over 64 KiB (the failure screenshot always is one), so every
+    // failing test stalled for the whole test timeout and reported a spurious
+    // "Test timeout exceeded". runner.fixture.spec.ts pins the fast failure.
+    trace: fixtureE2E || (liveE2E && !liveFailureArtifacts) ? 'off' : 'retain-on-failure',
     actionTimeout: liveE2E ? 20_000 : 10_000,
     navigationTimeout: liveE2E || fixtureE2E ? 30_000 : 15_000,
   },
@@ -127,7 +140,9 @@ export default defineConfig({
   // Only boot local uvicorn + vite when the spec isn't already pointing
   // at a deployed origin. A Playwright run against a Databricks App URL
   // doesn't need (and can't use) a local backend.
-  webServer: fixtureE2E
+  webServer: nestedFixtureRun
+    ? undefined
+    : fixtureE2E
     ? {
         // Serves frontend/dist; `npm run build` must already have run.
         command: `node ./node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port ${fixturePort} --strictPort`,
