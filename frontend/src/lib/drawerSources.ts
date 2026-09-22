@@ -77,6 +77,7 @@ export const ASSET_KEYS_BY_SOURCE: Readonly<Record<string, string>> = {
   'mip.gold.county_rollup': 'county_rollup',
   'mip.gold.zip_rollup': 'zip_rollup',
   'mip.gold.equity_spread_points': 'equity_spread_points',
+  'mip.gold.rate_window_weekly': 'rate_window_weekly',
   'mip.gold.fn_bounded_mortgage_rate': 'fn_bounded_mortgage_rate',
   'mip.gold.fn_estimated_upb': 'fn_estimated_upb',
   'mip.gold.fn_estimated_upb_confidence_band': 'fn_estimated_upb_confidence_band',
@@ -142,6 +143,7 @@ export function drawerForAsset(rawSource: string): DrawerSource | null {
   if (key === 'mip_app.call_dispositions') return DRAWER_SOURCES.callDispositions;
   if (key === 'mip_app.lead_outcomes') return DRAWER_SOURCES.leadOutcomes;
   if (key.includes('equity_spread_points')) return enrichAsset(DRAWER_SOURCES.equitySpreadPoints);
+  if (key.includes('rate_window_weekly')) return enrichAsset(DRAWER_SOURCES.rateWindow);
   if (key.includes('fn_rate_spread')) return enrichAsset(DRAWER_SOURCES.marketRate);
   if (key.includes('fn_estimated_upb_confidence_band')) return enrichAsset(DRAWER_SOURCES.lien);
   if (key.includes('fn_estimated_upb')) return enrichAsset(DRAWER_SOURCES.lien);
@@ -310,6 +312,7 @@ const DESTINATION_BY_SOURCE = {
   avm: UNITY_CATALOG_DESTINATION,
   itm: UNITY_CATALOG_DESTINATION,
   marketRate: UNITY_CATALOG_DESTINATION,
+  rateWindow: UNITY_CATALOG_DESTINATION,
   portfolioHeadlineView: UNITY_CATALOG_DESTINATION,
   leadGenerationView: UNITY_CATALOG_DESTINATION,
   segmentPerformanceView: UNITY_CATALOG_DESTINATION,

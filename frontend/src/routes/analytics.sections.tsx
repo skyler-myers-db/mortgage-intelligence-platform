@@ -51,6 +51,7 @@ import {
   SectionHeader,
 } from './analytics.charts';
 import { EquitySpreadScatter } from './analytics.equity-scatter';
+import { RateWindowSection } from './analytics.rate-window';
 import type { AnalyticsQueryOptions } from '../lib/api';
 
 /**
@@ -91,6 +92,7 @@ export function ExecutiveView({ data, leadParams }: { data: ExecutiveAnalyticsRe
         <KpiCard label="Primary Offer Paths" value={fmt(data.totals.offer_recommended_borrowers)} delta="Offer path assigned" deltaDir="up" />
         <KpiCard label="Approved Outreach" value={fmt(data.totals.approved_borrowers)} delta={`${fmt(data.totals.actioned_borrowers)} actioned`} deltaDir="flat" />
       </div>
+      <RateWindowSection />
       <section className="surface analytics-section">
         <div className="surface__hdr surface__hdr--split">
           <div>

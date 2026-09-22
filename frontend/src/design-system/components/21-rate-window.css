@@ -1,0 +1,137 @@
+/* ============================================================
+   Rate window ("Why now") — 2026-09-21 audit dataviz-08 / dataviz-06.
+   `.rate-window` is an app-extension BEM block: the prototype
+   (design_files/index.html) has no time-series chart, so this
+   composes prototype primitives (.surface, .btn, .analytics-table)
+   with the analytics chart chrome (.analytics-chart__*) and tokens.
+   Two stacked panels share one x-axis; never a dual axis.
+   ============================================================ */
+.rate-window__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+.rate-window__panels {
+  display: grid;
+  gap: var(--sp-4);
+}
+.rate-window__panel-title {
+  margin: 0 0 var(--sp-2);
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  font-weight: 600;
+}
+/* The chart chrome reserves a rotated y-axis label gutter and x-tick room;
+   the rates panel has neither (the axis is shared below), so reclaim both. */
+.rate-window__panel .analytics-chart {
+  padding-inline-start: 0;
+}
+.rate-window__panel--rates .analytics-chart {
+  --analytics-chart-h: calc(var(--sp-16) + var(--sp-16) + var(--sp-16));
+}
+.rate-window__panel--rates .analytics-chart__canvas {
+  padding-block-end: 0;
+}
+.rate-window__panel--itm .analytics-chart {
+  --analytics-chart-h: calc(var(--sp-16) + var(--sp-16));
+}
+.rate-window__svg {
+  overflow: visible;
+}
+.rate-window__band {
+  fill: var(--accent-soft);
+  stroke: none;
+}
+.rate-window__median {
+  fill: none;
+  stroke: var(--text-3);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
+}
+.rate-window__market {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2.4;
+}
+.rate-window__threshold {
+  stroke: var(--status-warning-ink);
+  stroke-width: 1.5;
+  stroke-dasharray: 6 4;
+}
+.rate-window__itm-area {
+  fill: var(--accent-soft);
+}
+.rate-window__itm-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+.rate-window__ref-label,
+.rate-window__current {
+  position: absolute;
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  font-weight: 600;
+  line-height: var(--lh-tight);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.rate-window__ref-label {
+  inset-inline-start: var(--sp-2);
+  inset-block-start: var(--tick-pos);
+  transform: translateY(calc(-100% - var(--sp-1)));
+  color: var(--status-warning-ink);
+}
+.rate-window__current {
+  inset-inline-end: 0;
+  inset-block-start: var(--tick-pos);
+  transform: translateY(calc(-100% - var(--sp-2)));
+  padding: 0 var(--sp-1);
+  border-radius: var(--r-sm);
+  background: var(--bg-1);
+  color: var(--text-1);
+}
+.rate-window__current-dot {
+  position: absolute;
+  inset-inline-start: var(--dot-x);
+  inset-block-start: var(--dot-y);
+  inline-size: var(--sp-2);
+  block-size: var(--sp-2);
+  border-radius: var(--r-pill);
+  background: var(--accent);
+  box-shadow: 0 0 0 var(--sp-1) var(--accent-soft);
+  transform: translate(-50%, -50%);
+}
+.rate-window__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  margin-top: var(--sp-2);
+  color: var(--text-2);
+  font-size: var(--fs-11);
+}
+.rate-window__legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+.rate-window__swatch {
+  inline-size: var(--sp-4);
+  block-size: var(--sp-1);
+  border-radius: var(--r-pill);
+  background: var(--accent);
+}
+.rate-window__swatch--median { background: var(--text-3); }
+.rate-window__swatch--band { block-size: var(--sp-2); background: var(--accent-soft); }
+.rate-window__swatch--threshold { background: var(--status-warning-ink); }
+.rate-window__asof {
+  margin-top: var(--sp-3);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .rate-window__market,
+  .rate-window__itm-line,
+  .rate-window__current-dot {
+    transition: opacity var(--dur-base) var(--ease);
+  }
+}
