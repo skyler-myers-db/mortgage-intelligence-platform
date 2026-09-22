@@ -17,8 +17,17 @@
  *     non-modal Genie panel declines when focus is outside it, which lets the
  *     key fall through to the layer below (or to the page) instead of being
  *     swallowed by a panel the user is not working in.
- *   - A keypress some inner widget already handled (`defaultPrevented`) is
- *     left alone.
+ *   - The listener runs at the window CAPTURE phase, so it sees the keypress
+ *     before any element-level or bubble-phase handler. An accepting layer
+ *     therefore pre-empts those handlers. That is the point for overlays,
+ *     and it is also why every Escape-closable overlay must be ON the stack:
+ *     an Escape handler bound to an element or to `window` at bubble phase
+ *     never runs while a layer accepts. (Known off-stack handlers:
+ *     `analytics.equity-scatter` cluster `onKeyDown` and the
+ *     `analytics.sections` MultiSelect window listener — a follow-up.)
+ *   - The `defaultPrevented` check only defers to another capture-phase
+ *     `window` listener registered before this one; nothing else runs
+ *     earlier.
  *
  * Deliberately not a React context: layers live in different subtrees and
  * portals, and the ordering that matters is open order, not tree order.
