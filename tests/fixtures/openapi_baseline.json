@@ -6039,6 +6039,39 @@
             "title": "Reasoning Trace",
             "type": "array"
           },
+          "refusal_reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "protected_class",
+                  "unreviewed_criterion",
+                  "pii_request",
+                  "instruction_override",
+                  "outreach_instruction",
+                  "scope_bypass",
+                  "out_of_scope",
+                  "output_policy",
+                  "unknown"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refusal Reason"
+          },
+          "refusal_report_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refusal Report Hash"
+          },
           "row_count": {
             "anyOf": [
               {
@@ -6382,6 +6415,102 @@
           "content"
         ],
         "title": "GenieReasoningStep",
+        "type": "object"
+      },
+      "GenieRefusalReportRequest": {
+        "description": "Hash-only report body. There is deliberately no field for prompt text.",
+        "properties": {
+          "conversation_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversation Id"
+          },
+          "message_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message Id"
+          },
+          "question_hash": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Question Hash",
+            "type": "string"
+          },
+          "refusal_reason": {
+            "enum": [
+              "protected_class",
+              "unreviewed_criterion",
+              "pii_request",
+              "instruction_override",
+              "outreach_instruction",
+              "scope_bypass",
+              "out_of_scope",
+              "output_policy",
+              "unknown"
+            ],
+            "title": "Refusal Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "question_hash",
+          "refusal_reason"
+        ],
+        "title": "GenieRefusalReportRequest",
+        "type": "object"
+      },
+      "GenieRefusalReportResponse": {
+        "properties": {
+          "accepted": {
+            "title": "Accepted",
+            "type": "boolean"
+          },
+          "audit_event_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audit Event Id"
+          },
+          "duplicate": {
+            "title": "Duplicate",
+            "type": "boolean"
+          },
+          "report_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Id"
+          }
+        },
+        "required": [
+          "accepted",
+          "duplicate"
+        ],
+        "title": "GenieRefusalReportResponse",
         "type": "object"
       },
       "GenieSessionDetailResponse": {
@@ -16981,6 +17110,59 @@
         ]
       }
     },
+    "/api/genie/refusal-report": {
+      "post": {
+        "deprecated": true,
+        "description": "Record a hash-only false-positive report for a governed refusal.\n\nThe actor comes from the edge identity header. The report row and its\n``GENIE_REFUSAL_REPORT`` audit event commit together\n(``record_genie_refusal_report``); a replay for the same actor, hash and\nfamily is acknowledged as a duplicate without a second row.",
+        "operationId": "post_api_genie_refusal_report_genie_refusal_report",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenieRefusalReportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenieRefusalReportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Genie Refusal Report",
+        "tags": [
+          "genie"
+        ]
+      }
+    },
     "/api/genie/sessions": {
       "get": {
         "deprecated": true,
@@ -24435,6 +24617,58 @@
           }
         },
         "summary": "Genie Message Submit",
+        "tags": [
+          "genie"
+        ]
+      }
+    },
+    "/api/v1/genie/refusal-report": {
+      "post": {
+        "description": "Record a hash-only false-positive report for a governed refusal.\n\nThe actor comes from the edge identity header. The report row and its\n``GENIE_REFUSAL_REPORT`` audit event commit together\n(``record_genie_refusal_report``); a replay for the same actor, hash and\nfamily is acknowledged as a duplicate without a second row.",
+        "operationId": "post_api_v1_genie_refusal_report_genie_refusal_report",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenieRefusalReportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenieRefusalReportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Genie Refusal Report",
         "tags": [
           "genie"
         ]

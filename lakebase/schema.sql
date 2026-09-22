@@ -3541,3 +3541,43 @@ VALUES (
     'Persist guarded question text and the governed Genie response payload per turn so the chat can replay owned conversation history'
 )
 ON CONFLICT (version) DO NOTHING;
+
+-- Genie refusal false-positive reports --------------------------------
+-- "This was legitimate" on a governed refusal (audit 2026-09-21 genie-05).
+-- Hash-only by design: the refused prompt is never round-tripped or stored,
+-- so the row carries the full SHA-256 of the normalized question, the coarse
+-- refusal family the answer already disclosed, the actor, and the audit link.
+-- One row per (actor, hash, family) keeps replays from inflating counts.
+CREATE TABLE IF NOT EXISTS mip_app.genie_refusal_reports (
+    report_id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    actor_email      TEXT NOT NULL,
+    question_hash    TEXT NOT NULL CHECK (question_hash ~ '^[0-9a-f]{64}$'),
+    refusal_reason   TEXT NOT NULL CHECK (refusal_reason IN (
+                         'protected_class', 'unreviewed_criterion', 'pii_request',
+                         'instruction_override', 'outreach_instruction', 'scope_bypass',
+                         'out_of_scope', 'output_policy', 'unknown'
+                     )),
+    conversation_id  TEXT CHECK (
+                         conversation_id IS NULL
+                         OR conversation_id ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+                     ),
+    message_id       TEXT CHECK (
+                         message_id IS NULL
+                         OR message_id ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+                     ),
+    audit_event_id   UUID REFERENCES mip_app.action_audit(audit_id),
+    reported_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_genie_refusal_report_actor_hash_reason
+        UNIQUE (actor_email, question_hash, refusal_reason)
+);
+CREATE INDEX IF NOT EXISTS idx_genie_refusal_reports_reason
+    ON mip_app.genie_refusal_reports (refusal_reason, reported_at DESC);
+COMMENT ON TABLE mip_app.genie_refusal_reports IS
+    'Hash-only lender reports that a governed Genie refusal was a false positive; the refused question text is never stored.';
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_09_22_genie_refusal_reports',
+    'Hash-only Genie refusal false-positive reports: coarse refusal family, full question digest, actor, audit link; one row per actor/hash/family'
+)
+ON CONFLICT (version) DO NOTHING;

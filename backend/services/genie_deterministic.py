@@ -45,6 +45,11 @@ from backend.services.genie_message_policy import (
 from backend.services.genie_message_policy import (
     protected_prompt_match as _protected_prompt_match,
 )
+from backend.services.genie_refusal_reason import (
+    GenieRefusalReason,
+    refusal_family_for_protected_code,
+    refusal_report_hash,
+)
 from backend.services.genie_sales_ops import sales_ops_genie_response
 from backend.services.genie_source_gaps import source_gap_answer
 from backend.services.lakebase import LakebaseClient, LakebaseError
@@ -119,6 +124,8 @@ def _policy_blocked_genie_output_response(
             message_id=response.message_id,
         ),
         table_rows=[],
+        refusal_reason="output_policy",
+        refusal_report_hash=refusal_report_hash(payload.question),
     )
 
 
@@ -169,11 +176,14 @@ def _refused_genie_response(
     question_hash: str,
     answer: str,
     known_gap: str,
+    refusal_reason: GenieRefusalReason,
 ) -> GenieMessageResponse:
     # PII posture (external audit 2026-07-07): a refused prompt is not
     # round-tripped. The UI renders the question it already holds locally,
     # so the response carries only the hash — nothing typed by the user
-    # appears anywhere in a refusal body.
+    # appears anywhere in a refusal body. ``refusal_reason`` is the coarse
+    # family of ``answer`` (audit 2026-09-21 genie-05), never the guard
+    # rule or the matched term.
     return GenieMessageResponse(
         conversation_id=payload.conversation_id or "",
         question="",
@@ -191,6 +201,8 @@ def _refused_genie_response(
             conversation_id=payload.conversation_id,
         ),
         table_rows=[],
+        refusal_reason=refusal_reason,
+        refusal_report_hash=refusal_report_hash(payload.question),
     )
 
 
@@ -301,6 +313,7 @@ def _deterministic_genie_response(
                 "mortgage, lien, equity, segment, and offer signals."
             ),
             known_gap=_GENIE_PROTECTED_REFUSAL_GAPS[refusal_reason],
+            refusal_reason=refusal_family_for_protected_code(refusal_reason),
         )
         return response
     override_match = prompt_guardrails.instruction_override_prompt_match(payload.question)
@@ -334,6 +347,7 @@ def _deterministic_genie_response(
                 "question over trusted lead, lien, equity, segment, and offer signals."
             ),
             known_gap="prompt refused before Genie execution due instruction-override pattern",
+            refusal_reason="instruction_override",
         )
         return response
     if _is_outreach_writer_request(payload.question):
@@ -383,6 +397,8 @@ def _deterministic_genie_response(
             ),
             follow_up_questions=load_sample_questions()[:2],
             table_rows=[],
+            refusal_reason="outreach_instruction",
+            refusal_report_hash=refusal_report_hash(payload.question),
         )
         return response
     pii_match = prompt_guardrails.pii_prompt_match(payload.question)
@@ -419,6 +435,7 @@ def _deterministic_genie_response(
                 "offer, and evidence instead."
             ),
             known_gap="prompt refused before Genie execution due PII request pattern",
+            refusal_reason="pii_request",
         )
         return response
     scope_bypass_match = prompt_guardrails.scope_bypass_prompt_match(payload.question)
@@ -453,6 +470,7 @@ def _deterministic_genie_response(
                 "segment, geography, trigger, or offer question instead."
             ),
             known_gap="prompt refused before Genie execution due scope-bypass pattern",
+            refusal_reason="scope_bypass",
         )
         return response
     source_gap_match = prompt_guardrails.source_gap_prompt_match(payload.question)
@@ -534,6 +552,7 @@ def _deterministic_genie_response(
                 "That request is outside the Module 0 mortgage analytics scope."
             ),
             known_gap="prompt refused before Genie execution due off-topic pattern",
+            refusal_reason="out_of_scope",
         )
         return response
     cross_lender_match = prompt_guardrails.cross_lender_prompt_match(payload.question)
@@ -571,6 +590,7 @@ def _deterministic_genie_response(
             known_gap=(
                 "prompt refused before Genie execution due cross-lender customer-list pattern"
             ),
+            refusal_reason="out_of_scope",
         )
         return response
     try:
