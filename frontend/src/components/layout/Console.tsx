@@ -160,7 +160,6 @@ export function Console() {
                 onClick={() => setThemePreference(option.value)}
                 type="button"
                 aria-pressed={themePreference === option.value}
-                title={option.value === 'system' ? 'Follow the operating system appearance' : undefined}
               >
                 {option.label}
               </button>
