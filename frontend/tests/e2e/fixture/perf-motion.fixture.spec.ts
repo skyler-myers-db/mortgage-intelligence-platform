@@ -88,8 +88,13 @@ test.describe('brand wordmark', () => {
       };
     });
     expect(box.complete).toBe(true);
-    expect(box.naturalWidth).toBe(2048);
-    expect(box.naturalHeight).toBe(214);
+    expect(box.naturalWidth).toBeGreaterThan(0);
+    expect(box.naturalHeight).toBeGreaterThan(0);
+    // The reserved box has the asset's own proportions (width is rounded to
+    // a whole pixel), so the image never stretches: derived from the decoded
+    // asset rather than pinned, so a re-exported master still passes.
+    const widthForAttrHeight = (box.naturalWidth / box.naturalHeight) * box.attrHeight;
+    expect(Math.abs(widthForAttrHeight - box.attrWidth), 'the box matches the asset aspect ratio').toBeLessThanOrEqual(1);
     expect(Math.abs(box.renderedHeight - box.attrHeight)).toBeLessThanOrEqual(1);
     expect(Math.abs(box.renderedWidth - box.attrWidth)).toBeLessThanOrEqual(1);
     const shifts = await page.evaluate(
