@@ -11,17 +11,15 @@ import { ApiError, api, isAbortError, type GenieLiveProgress } from '../../lib/a
 import { GenieLiveError, askGenieLive } from '../../lib/genieAsk';
 import type { GenieActionSuggestion, GenieAnswer as GenieAnswerShape } from '../../types';
 import { Icon } from '../Icon';
-import { Button, Chip, EvidenceChip } from '../Primitives';
-import { GenieAnswer, GOVERNED_ACTION_SOURCE } from './GenieAnswer';
-import { GenieProgress, genieProgressLabel } from './GenieProgress';
-import { drawerForAsset } from '../../lib/drawerSources';
+import { Button } from '../Primitives';
+import { GOVERNED_ACTION_SOURCE } from './GenieAnswer';
+import { genieProgressLabel } from './GenieProgress';
 import {
   GENIE_CONVERSATION_RESET_EVENT,
   clearGenieConversationState,
   readGenieConversationId,
   writeGenieConversationId,
 } from '../../lib/genieConversation';
-import { NON_PERSISTABLE_SOURCES } from '../../lib/pinnedInsights';
 import {
   appendGenieTurn,
   clearGenieTurns,
@@ -40,6 +38,15 @@ import { useGeniePanelDismissal } from './useGeniePanelDismissal';
 import { useGenieTranscript } from './useGenieTranscript';
 import { useGenieTranscriptScroll } from './useGenieTranscriptScroll';
 import { GenieHistoryMenu } from './GenieHistoryMenu';
+import { GenieChatBody } from './GenieChatBody';
+import { shouldPersistConversation, sourceAssetsFor } from './GenieChat.helpers';
+
+export {
+  shouldPersistConversation,
+  shouldRenderGenieSourceAssets,
+  sourceAssetsFor,
+  warningLabelForSource,
+} from './GenieChat.helpers';
 
 /**
  * Floating Genie chat panel — `.genie` BEM from the prototype. Fixed
@@ -64,35 +71,6 @@ const COMPOSER_BUSY_HINT_ID = 'genie-composer-busy';
 const ASKING_REASON =
   'Genie is still answering. Keep drafting: Ask unlocks when this answer lands. Closing the panel does not stop it.';
 const ACTION_REASON = 'A governed action is running. Ask unlocks when it finishes.';
-
-export function sourceAssetsFor(payload: GenieAnswerShape): string[] {
-  const seen = new Set<string>();
-  const assets = [
-    ...(payload.proof?.source_assets ?? []),
-    ...(payload.trusted_assets ?? []),
-  ];
-  for (const raw of assets) {
-    const asset = typeof raw === 'string' ? raw.trim() : '';
-    if (asset) seen.add(asset);
-  }
-  return Array.from(seen).slice(0, 4);
-}
-
-export function shouldPersistConversation(payload: GenieAnswerShape): boolean {
-  return Boolean(payload.conversation_id && !NON_PERSISTABLE_SOURCES.has(String(payload.source ?? '')));
-}
-
-export function warningLabelForSource(source: string | undefined): string | null {
-  if (source === 'degraded') return 'Genie reconnecting';
-  if (source === 'policy_blocked' || source === 'refused') return 'Governed refusal';
-  if (source === 'data_gap') return 'Pending source feed';
-  if (source === 'out_of_footprint') return 'Outside footprint';
-  return null;
-}
-
-export function shouldRenderGenieSourceAssets(payload: GenieAnswerShape): boolean {
-  return warningLabelForSource(payload.source) === null && sourceAssetsFor(payload).length > 0;
-}
 
 export function GenieChat() {
   const { genieOpen, setGenieOpen, lender, refreshWorkspace } = useApp();
@@ -431,7 +409,6 @@ export function GenieChat() {
   };
 
   const busyReason = asking ? ASKING_REASON : actionRunning ? ACTION_REASON : null;
-  const lastAnswerIndex = msgs.reduce((last, m, i) => (m.who === 'ai' ? i : last), -1);
   // While a turn runs the announcer carries stage CHANGES only (the same
   // label the progress card shows); once it settles, the landing message.
   const announcerText = asking ? genieProgressLabel(liveProgress) : announcement;
@@ -605,122 +582,20 @@ export function GenieChat() {
             <Icon name="close" size={14} />
           </button>
         </div>
-        <div className="genie__body" ref={bodyRef}>
-          {msgs.map((m, i) =>
-            m.who === 'user' ? (
-              <div key={i} className="genie__msg genie__msg--user">{m.text}</div>
-            ) : (
-              <div
-                key={i}
-                ref={i === lastAnswerIndex ? lastAnswerRef : undefined}
-                className="genie__msg genie__msg--ai"
-              >
-                <div className="bubble">
-                  <GenieAnswer
-                    payload={m.payload}
-                    question={(() => {
-                      const prev = msgs[i - 1];
-                      return prev && prev.who === 'user' ? prev.text : undefined;
-                    })()}
-                    onFollowUp={(q, followUpConversationId) =>
-                      void ask(q, followUpConversationId, Date.now())
-                    }
-                    followUpDisabledReason={busyReason}
-                    announce={false}
-                    onAction={(action) => runAction(action, m.payload)}
-                    dense
-                  />
-                </div>
-                {/* Source chip row. The backend emits "genie" (live)
-                    or governed refusal/degraded source values. Warning
-                    chips never pretend to be data-bearing answers. */}
-                {warningLabelForSource(m.payload.source) && (
-                  <div className="sources">
-                    <Chip
-                      variant="warning"
-                      icon="info"
-                      title={
-                        m.payload.source === 'degraded'
-                          ? 'The Genie answer path is temporarily unavailable. Live answers will resume after health recovers.'
-                          : 'This answer intentionally stopped before displaying a live result.'
-                      }
-                    >
-                      {warningLabelForSource(m.payload.source)}
-                    </Chip>
-                  </div>
-                )}
-                {shouldRenderGenieSourceAssets(m.payload) && (
-                  <div className="sources">
-                    {(m.sources && m.sources.length > 0 ? m.sources : sourceAssetsFor(m.payload)).map((s, j) => {
-                      const drawer = drawerForAsset(s);
-                      if (drawer === null) {
-                        // Source string doesn't map to a specific drawer
-                        // entry — render an inert neutral chip so the
-                        // user can read the source label without being
-                        // misled into the wrong drawer (the prior
-                        // "default to NBO" routing was confusing per
-                        // 2026-05-04 user feedback).
-                        return (
-                          <Chip key={j} variant="neutral" title={`Source: ${s}`}>
-                            {s}
-                          </Chip>
-                        );
-                      }
-                      return (
-                        <EvidenceChip key={j} source={drawer} title={`Source: ${s}`}>
-                          {s}
-                        </EvidenceChip>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            )
-          )}
-          {pendingQuestion && (
-            <div className="genie__msg genie__msg--user">{pendingQuestion}</div>
-          )}
-          {typing && (
-            <div className="genie__msg genie__msg--ai">
-              <div className="bubble">
-                <GenieProgress
-                  dense
-                  progress={liveProgress}
-                  startedAt={askStartedAt}
-                  announce={false}
-                  paused={!genieOpen}
-                />
-              </div>
-            </div>
-          )}
-          {msgs.length === 0 && !typing && (
-            <div className="genie-chat__samples">
-              <div className="surface surface--inset">
-                <div className="surface__body genie-empty">
-                  <div className="genie-empty__icon">
-                    <Icon name="sparkle" size={16} />
-                  </div>
-                  <div>
-                    <div className="genie-empty__title">Ask about your book — coverage, segments, borrowers, market shifts.</div>
-                    <p className="genie-empty__copy">
-                      Data-bearing answers appear only after Genie returns trusted SQL, source assets, and proof.
-                    </p>
-                  </div>
-                </div>
-              </div>
-              {sampleQuestions.map((s) => (
-                <button
-                  key={s}
-                  className="filter genie-chat__sample"
-                  onClick={() => void ask(s, undefined, Date.now())}
-                  type="button"
-                >
-                  <Icon name="sparkle" size={11} /> {s}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+        <GenieChatBody
+          open={genieOpen}
+          bodyRef={bodyRef}
+          lastAnswerRef={lastAnswerRef}
+          messages={msgs}
+          pendingQuestion={pendingQuestion}
+          typing={typing}
+          liveProgress={liveProgress}
+          askStartedAt={askStartedAt}
+          busyReason={busyReason}
+          starters={sampleQuestions}
+          onAsk={(q, followUpConversationId) => void ask(q, followUpConversationId, Date.now())}
+          onAction={runAction}
+        />
         <form
           className="genie__input"
           onSubmit={(e) => {
