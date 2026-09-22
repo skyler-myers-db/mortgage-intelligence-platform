@@ -22,6 +22,7 @@ import {
   type CampaignBinding,
 } from './LeadTable.logic';
 import type { RejectReasonCode } from './LeadTable.types';
+import type { LeadDecisionReceipt } from './DecisionReceipt';
 import { APPROVER_ROLE_REQUIRED } from './approverGate';
 
 /** Verification state of a `?campaign_id=&variant_name=` URL binding. */
@@ -116,6 +117,13 @@ export function useLeadApprovalActions({
   // retrying. R5-21
   // (2026-04-23).
   const [bulkToast, setBulkToast] = useState<BulkToast | null>(null);
+  // wow-stage-3: the audit row each row decision wrote, keyed by borrower.
+  // The expanded row reads it back as a Decision receipt; the id comes from
+  // the POST response and nothing else about the receipt is kept here.
+  const [decisionReceipts, setDecisionReceipts] = useState<Record<string, LeadDecisionReceipt>>({});
+  const recordDecision = (borrowerId: string, receipt: LeadDecisionReceipt) => {
+    setDecisionReceipts((cur) => ({ ...cur, [borrowerId]: receipt }));
+  };
 
   /**
    * Approve from the queue without leaving the page. Uses the same
@@ -196,6 +204,7 @@ export function useLeadApprovalActions({
       );
       if (res.approved) {
         setApproval(borrowerId, 'approved');
+        recordDecision(borrowerId, { auditEventId: res.audit_event_id ?? null, decision: 'approved' });
         if (!extras.suppressInvalidation) void invalidateOperationalQueries(queryClient);
         return 'ok';
       }
@@ -267,6 +276,7 @@ export function useLeadApprovalActions({
       );
       if (res.rejected) {
         setApproval(borrowerId, 'rejected');
+        recordDecision(borrowerId, { auditEventId: res.audit_event_id ?? null, decision: 'rejected' });
         void invalidateOperationalQueries(queryClient);
         return true;
       }
@@ -558,5 +568,6 @@ export function useLeadApprovalActions({
     bulkRationaleOpen,
     bulkToast,
     setBulkToast,
+    decisionReceipts,
   };
 }

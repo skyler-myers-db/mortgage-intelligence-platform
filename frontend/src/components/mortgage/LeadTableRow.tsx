@@ -19,6 +19,7 @@ import {
   relationshipVariant,
 } from './LeadTable.logic';
 import { AssignmentLifecycleAdvance } from './AssignmentLifecycleAdvance';
+import type { LeadDecisionReceipt } from './DecisionReceipt';
 import { RowPreview } from './LeadRowPreview';
 import { APPROVER_ROLE_STATUS_ID, describedBy } from './approverGate';
 import { ScoreBadge } from './ScoreBadge';
@@ -39,6 +40,8 @@ interface LeadTableRowProps {
   salesBusy: boolean;
   salesTeamCount: number;
   pendingApproval: boolean;
+  /** The audit row this row's decision wrote; the expanded preview reads it back. */
+  decisionReceipt?: LeadDecisionReceipt | null;
   onToggleRow: (lead: LeadSummary, isOpen: boolean) => void;
   onToggleSelect: (borrowerId: string) => void;
   onApprove: (borrowerId: string) => void;
@@ -62,6 +65,7 @@ export function LeadTableRow({
   salesBusy,
   salesTeamCount,
   pendingApproval,
+  decisionReceipt = null,
   onToggleRow,
   onToggleSelect,
   onApprove,
@@ -304,7 +308,7 @@ export function LeadTableRow({
       {isOpen && (
         <tr className="tbl__expand" aria-rowindex={resolvedAriaRowIndex + 1}>
           <td colSpan={15}>
-            <RowPreview lead={lead} approval={approval} />
+            <RowPreview lead={lead} approval={approval} decisionReceipt={decisionReceipt} />
           </td>
         </tr>
       )}
