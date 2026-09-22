@@ -1,4 +1,5 @@
-import { Suspense, useState, type ComponentType } from 'react';
+import { Suspense, useEffect, useState, type ComponentType } from 'react';
+import { subscribeGenieOpenRequests } from '../../lib/genieOpen';
 import { Icon } from '../Icon';
 
 interface GenieDockProps {
@@ -27,12 +28,17 @@ interface GenieDockProps {
  * Launcher: the chat renders its own `.genie__fab` (with the running ring and
  * answer-ready badge), so the shell's FAB exists only until the chat has
  * mounted. Rendering both would put two launchers on the same spot.
+ *
+ * Open requests (audit `genie-04`): `openGenie({ prompt })` from any surface
+ * reaches the shell here as a window event and opens the panel; the queued
+ * prefill is consumed by the chat once it is open. Nothing is submitted.
  */
 export function GenieDock({ open, onOpen, onWarm, Chat }: GenieDockProps) {
   const [everOpened, setEverOpened] = useState(open);
   // Latch during render (the documented "adjust state when a prop changes"
   // pattern) so the chat mounts in the same commit the panel first opens.
   if (open && !everOpened) setEverOpened(true);
+  useEffect(() => subscribeGenieOpenRequests(onOpen), [onOpen]);
 
   return (
     <>

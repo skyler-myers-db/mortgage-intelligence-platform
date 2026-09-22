@@ -13,6 +13,10 @@
  *   Regenerate  re-asks the same question as a NEW turn (second submit);
  *               never offered on a refusal, which would only repeat itself
  *   ArrowUp     an empty composer recalls the last question
+ *
+ * And the page-context slice (`genie-04`, phase 1): `openGenie({ prompt })`
+ * PREFILLS the composer and never submits; the empty state shows the
+ * starters curated for the current route.
  */
 
 import { act } from 'react';
@@ -21,6 +25,8 @@ import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GenieLiveProgress, GenieSubmitResult } from '../../lib/api';
 import { clearGenieTurns, getGenieTurns } from '../../lib/genieConversationStore';
+import { genieStartersForRoute } from '../../lib/genieContext';
+import { consumeGeniePrefill, openGenie } from '../../lib/genieOpen';
 import type { GenieAnswer, GenieStartResult } from '../../types';
 
 const mocks = vi.hoisted(() => ({
@@ -178,6 +184,7 @@ describe('floating Genie conversational controls', () => {
     act(() => root.unmount());
     container.remove();
     clearGenieTurns();
+    consumeGeniePrefill();
   });
 
   function render() {
@@ -434,5 +441,57 @@ describe('floating Genie conversational controls', () => {
     expect(container.querySelector('button[aria-label="Regenerate answer"]')).toBeNull();
     expect(container.querySelector('button[aria-label="Retry question"]')).toBeNull();
     expect(container.querySelector('button[aria-label="Edit question"]')).not.toBeNull();
+  });
+
+  it('openGenie({ prompt }) prefills the composer and never submits', async () => {
+    render();
+    await flush();
+    act(() => openGenie({ prompt: 'Break down in-the-money borrowers by current coverage state; which state leads?' }));
+    await flush();
+    expect(input().value).toBe('Break down in-the-money borrowers by current coverage state; which state leads?');
+    expect(mocks.genieSubmit).not.toHaveBeenCalled();
+    expect(container.querySelector('.genie__msg--user')).toBeNull();
+
+    // A request made while the panel is closed waits for the next open.
+    setOpen(false);
+    act(() => openGenie({ prompt: 'Compare mean lead score by current coverage state.' }));
+    await flush();
+    expect(input().value).toBe('Break down in-the-money borrowers by current coverage state; which state leads?');
+    setOpen(true);
+    await flush();
+    expect(input().value).toBe('Compare mean lead score by current coverage state.');
+    // Still nothing sent: only the user's own Ask submits.
+    await flush();
+    expect(mocks.genieSubmit).not.toHaveBeenCalled();
+    expect(getGenieTurns()).toEqual([]);
+  });
+
+  it('a prefill arriving mid-turn fills the composer but the running turn is untouched and nothing new is sent', async () => {
+    render();
+    const turn = await startLiveTurn('How many borrowers are in the money?');
+    act(() => openGenie({ prompt: 'Compare mean lead score by current coverage state.' }));
+    await flush();
+    expect(input().value).toBe('Compare mean lead score by current coverage state.');
+    expect(turn.signal.aborted).toBe(false);
+    expect(mocks.genieSubmit.mock.calls.length).toBe(1);
+    expect(askButton().disabled).toBe(true);
+  });
+
+  it('the empty state shows the route starters instead of the identical server list', async () => {
+    route = '/lead-queue';
+    render();
+    await waitUntil(() => mocks.genieStart.mock.calls.length === 1);
+    await flush();
+    const chips = Array.from(container.querySelectorAll('.genie-chat__sample')).map((el) => el.textContent?.trim());
+    expect(chips).toEqual(genieStartersForRoute('/lead-queue'));
+    expect(chips).not.toContain('Server starter one');
+  });
+
+  it('falls back to the server starters on a route without curated ones', async () => {
+    route = '/ask-genie';
+    render();
+    await waitUntil(() => container.querySelectorAll('.genie-chat__sample').length === 2);
+    const chips = Array.from(container.querySelectorAll('.genie-chat__sample')).map((el) => el.textContent?.trim());
+    expect(chips).toEqual(['Server starter one', 'Server starter two']);
   });
 });

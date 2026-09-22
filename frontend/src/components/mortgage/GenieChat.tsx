@@ -6,7 +6,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
-import { useNavigate } from 'react-router';
+import { useLocation, useNavigate } from 'react-router';
 import { useApp } from '../AppContext';
 import { ApiError, api, isAbortError, type GenieLiveProgress } from '../../lib/api';
 import { GenieLiveError, askGenieLive } from '../../lib/genieAsk';
@@ -21,6 +21,8 @@ import {
   readGenieConversationId,
   writeGenieConversationId,
 } from '../../lib/genieConversation';
+import { genieStartersForRoute } from '../../lib/genieContext';
+import { consumeGeniePrefill, subscribeGeniePrefill } from '../../lib/genieOpen';
 import {
   appendGenieTurn,
   clearGenieTurns,
@@ -72,6 +74,10 @@ export {
  * in an empty composer recalls the last question. There is no server-side
  * cancel: Genie may still finish a stopped turn, and its reply is discarded.
  *
+ * Page context (`genie-04`, phase 1): the empty state shows the starters
+ * curated for the current route, and `openGenie({ prompt })` from any surface
+ * PREFILLS the composer (lib/genieOpen) -- it never submits.
+ *
  * The AI message shape now holds the full GenieAnswer payload so
  * metric_value / table_rows / follow_up_questions all render in the bubble
  * via the shared <GenieAnswer> subcomponent.
@@ -87,6 +93,7 @@ const MAX_STOPPED_TURNS = 20;
 export function GenieChat() {
   const { genieOpen, setGenieOpen, lender, refreshWorkspace } = useApp();
   const navigate = useNavigate();
+  const { pathname } = useLocation();
   // Settled transcript, mirrored from the shared tab-scoped store (the
   // `/ask-genie` route appends to the same list). The question of the turn in
   // flight is NOT in it: it lives in `pendingQuestion` until the turn settles.
@@ -259,6 +266,21 @@ export function GenieChat() {
       el.setSelectionRange(text.length, text.length);
     });
   }, []);
+
+  // `openGenie({ prompt })` prefill (genie-04): consumed while the panel is
+  // open -- on open for a request made while it was closed or not yet
+  // mounted, and at once for one made while it is already open. A prefill
+  // replaces the draft (the user just asked for it) and is NEVER sent: only
+  // the user's own Ask submits it.
+  useEffect(() => {
+    if (!genieOpen) return undefined;
+    const apply = () => {
+      const prompt = consumeGeniePrefill();
+      if (prompt !== null) loadComposer(prompt);
+    };
+    apply();
+    return subscribeGeniePrefill(apply);
+  }, [genieOpen, loadComposer]);
 
   // Launcher status for the topbar toggle and the FAB. Only meaningful while
   // the panel is closed; an open panel shows its own progress.
@@ -489,6 +511,10 @@ export function GenieChat() {
   };
 
   const busyReason = asking ? ASKING_REASON : actionRunning ? ACTION_REASON : null;
+  // Per-route starters replace the identical global set (genie-04); the
+  // server's list stays the fallback for routes without curated ones.
+  const routeStarters = genieStartersForRoute(pathname);
+  const starters = routeStarters.length > 0 ? routeStarters : sampleQuestions;
   // While a turn runs the announcer carries stage CHANGES only (the same
   // label the progress card shows); once it settles, the landing message.
   const announcerText = asking ? genieProgressLabel(liveProgress) : announcement;
@@ -674,7 +700,7 @@ export function GenieChat() {
           liveProgress={liveProgress}
           askStartedAt={askStartedAt}
           busyReason={busyReason}
-          starters={sampleQuestions}
+          starters={starters}
           onAsk={(q, followUpConversationId) => void ask(q, followUpConversationId, Date.now())}
           onAction={runAction}
           onEdit={loadComposer}

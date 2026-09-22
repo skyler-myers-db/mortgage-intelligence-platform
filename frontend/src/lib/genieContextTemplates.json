@@ -1,0 +1,68 @@
+{
+  "starters": {
+    "itmCount": "How many borrowers across the current Cotality data coverage are currently in-the-money, and what is the average rate spread?",
+    "itmByState": "Break down in-the-money borrowers by current coverage state; which state leads?",
+    "equity35": "How many borrowers have at least 35% modeled equity across the current Cotality data coverage?",
+    "addressable": "What is the addressable market size — how many eligible borrowers across the current Cotality data coverage?",
+    "top10Score": "Show the top 10 borrowers by lead score across the current Cotality data coverage.",
+    "top5Zips": "Which 5 ZIP codes have the most in-the-money borrowers across the current Cotality data coverage?",
+    "investorTop20": "Show the top 20 masked borrower IDs in the Investor/Multi-Property segment by related property count.",
+    "spreadBySegment": "What is the mean rate spread by segment across the current Cotality data coverage?",
+    "approvalBySegment": "Which segments have the highest approval rate?",
+    "scoreByState": "Compare mean lead score by current coverage state.",
+    "evidenceYesterday": "How many evidence events were recorded yesterday, grouped by trigger type?",
+    "weekOverWeek": "Compare this week's lead score distribution to last week's.",
+    "approvalTrend": "What is the approval trend over the last 30 days?",
+    "offerMixItm": "What offer mix is recommended for the In-the-Money segment?",
+    "helocRecs": "Which borrowers got a HELOC recommendation across the current Cotality data coverage?",
+    "listedByProduct": "Break down the Listed-for-Sale segment by loan product and average current rate.",
+    "lockinSize": "How big is the 2020–2022 sub-3% lock-in cohort across the current Cotality data coverage?",
+    "staleApproved": "Show approved leads that have not been touched in 7 days.",
+    "approvedToApp": "How many leads went from approved to application started this week?"
+  },
+  "routeStarters": {
+    "/": ["addressable", "itmCount", "itmByState", "scoreByState"],
+    "/portfolio-builder": ["addressable", "equity35", "spreadBySegment", "top5Zips"],
+    "/segment-intelligence": ["spreadBySegment", "approvalBySegment", "listedByProduct", "itmByState"],
+    "/lead-queue": ["top10Score", "staleApproved", "approvedToApp", "top5Zips"],
+    "/borrower-360": ["helocRecs", "equity35", "investorTop20", "lockinSize"],
+    "/borrower-360/:id": ["helocRecs", "equity35", "investorTop20", "lockinSize"],
+    "/offer-orchestrator": ["offerMixItm", "helocRecs", "equity35", "listedByProduct"],
+    "/offer-orchestrator/:id": ["offerMixItm", "helocRecs", "equity35", "listedByProduct"],
+    "/analytics": ["weekOverWeek", "approvalTrend", "evidenceYesterday", "scoreByState"],
+    "/admin-config": ["evidenceYesterday", "approvalTrend", "approvedToApp"],
+    "/glossary": ["itmCount", "addressable", "spreadBySegment"],
+    "/data-estate/assets/:assetKey": ["itmCount", "addressable", "spreadBySegment"]
+  },
+  "kpiPrompts": {
+    "addressable population": "What is the addressable market size — how many eligible borrowers across the current Cotality data coverage?",
+    "addressable borrowers": "What is the addressable market size — how many eligible borrowers across the current Cotality data coverage?",
+    "marketable population": "How many eligible borrowers across the current Cotality data coverage clear the contactability screen, and which state leads?",
+    "refi economics screen": "How many borrowers across the current Cotality data coverage are currently in-the-money, and what is the average rate spread?",
+    "refi economics": "How many borrowers across the current Cotality data coverage are currently in-the-money, and what is the average rate spread?",
+    "opportunity score 75+": "How many borrowers across the current Cotality data coverage have an opportunity score of 75+, and which state leads?",
+    "primary offer paths": "Break down the recommended offer mix across the current Cotality data coverage.",
+    "avg. borrower score": "Compare mean lead score by current coverage state.",
+    "approved outreach": "What is the approval trend over the last 30 days?"
+  },
+  "segmentTemplate": "Which states have the most borrowers in the {segment} segment?",
+  "stateTemplate": "Which 5 ZIP codes in {state} have the most in-the-money borrowers?",
+  "leadTemplate": "How many borrowers in {state} are in the {segment} segment, and what is the average rate spread?",
+  "segmentsWithoutTemplates": {
+    "permit_activity": "Gated until a Cotality permit source lands: the source-gap guard refuses every question about it, so offering one would be a dead end."
+  },
+  "stateNames": {
+    "AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas", "CA": "California",
+    "CO": "Colorado", "CT": "Connecticut", "DE": "Delaware", "DC": "District of Columbia",
+    "FL": "Florida", "GA": "Georgia", "HI": "Hawaii", "ID": "Idaho", "IL": "Illinois",
+    "IN": "Indiana", "IA": "Iowa", "KS": "Kansas", "KY": "Kentucky", "LA": "Louisiana",
+    "ME": "Maine", "MD": "Maryland", "MA": "Massachusetts", "MI": "Michigan",
+    "MN": "Minnesota", "MS": "Mississippi", "MO": "Missouri", "MT": "Montana",
+    "NE": "Nebraska", "NV": "Nevada", "NH": "New Hampshire", "NJ": "New Jersey",
+    "NM": "New Mexico", "NY": "New York", "NC": "North Carolina", "ND": "North Dakota",
+    "OH": "Ohio", "OK": "Oklahoma", "OR": "Oregon", "PA": "Pennsylvania", "RI": "Rhode Island",
+    "SC": "South Carolina", "SD": "South Dakota", "TN": "Tennessee", "TX": "Texas",
+    "UT": "Utah", "VT": "Vermont", "VA": "Virginia", "WA": "Washington", "WV": "West Virginia",
+    "WI": "Wisconsin", "WY": "Wyoming"
+  }
+}
