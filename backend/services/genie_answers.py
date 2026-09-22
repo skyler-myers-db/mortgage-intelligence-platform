@@ -190,6 +190,17 @@ class GenieSubmitResponse(BaseModel):
     #: recorded to Lakebase session ownership.
     progress_token: str | None = None
     question_hash: str | None = None
+    #: True when completion will answer this live turn with the deep-research
+    #: sweep (planned governed sub-analyses) instead of a single turn. Decided
+    #: from the question alone, by the same predicate completion routes on, so
+    #: it is known before any Genie work starts. The sweep runs inside the one
+    #: blocking completion call for 90-200 s AFTER the submitted message is
+    #: already terminal; the UI uses this flag to name that wait honestly
+    #: instead of reporting the answer as ready. Always False for turns that
+    #: resolved inline (``completed=True``). No duration is published: the
+    #: only number the server holds is a wall budget for one phase of the
+    #: sweep, which is a ceiling, not an expected duration.
+    deep: bool = False
     response: GenieMessageResponse | None = None
 
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 import pytest
 from fastapi import HTTPException, Request
 from fastapi.testclient import TestClient
+from httpx import Response
 
 from backend.config.settings import settings
 from backend.main import app
@@ -96,9 +97,13 @@ def test_session_returns_only_admin_capability_from_same_group_rule(
     )
 
     assert admitted.status_code == 200
-    assert admitted.json() == {"can_access_admin": True, "can_approve": True}
+    assert admitted.json() == {
+        "can_access_admin": True, "can_approve": True, "actor_email": None,
+    }
     assert denied.status_code == 200
-    assert denied.json() == {"can_access_admin": False, "can_approve": False}
+    assert denied.json() == {
+        "can_access_admin": False, "can_approve": False, "actor_email": None,
+    }
     assert compat.status_code == 200
     assert compat.json() == admitted.json()
 
@@ -116,7 +121,11 @@ def test_session_and_admin_gate_share_email_allowlist_rule(
     session = client.get("/api/v1/session", headers=headers)
     admin = client.get("/api/admin/rules", headers=headers)
 
-    assert session.json() == {"can_access_admin": True, "can_approve": True}
+    assert session.json() == {
+        "can_access_admin": True,
+        "can_approve": True,
+        "actor_email": "operator@example.com",
+    }
     assert admin.status_code == 200, admin.text
 
 
@@ -146,11 +155,20 @@ def test_session_separates_approver_automation_from_admin_and_verifier(
         headers={"X-Forwarded-Email": "verifier-client", "X-Forwarded-Groups": ""},
     )
 
+    def capabilities(response: Response) -> dict[str, bool]:
+        body = response.json()
+        return {key: body[key] for key in ("can_access_admin", "can_approve")}
+
     expected_operator = {"can_access_admin": False, "can_approve": True}
-    assert normal.json() == expected_operator
-    assert operator2.json() == expected_operator
-    assert admin.json() == {"can_access_admin": True, "can_approve": True}
-    assert verifier.json() == {"can_access_admin": False, "can_approve": False}
+    assert capabilities(normal) == expected_operator
+    assert capabilities(operator2) == expected_operator
+    assert capabilities(admin) == {"can_access_admin": True, "can_approve": True}
+    assert capabilities(verifier) == {"can_access_admin": False, "can_approve": False}
+    # Each caller is told only its own forwarded identity; X-Forwarded-User is
+    # the same fallback the approver gate resolves.
+    assert normal.json()["actor_email"] == "normal-client"
+    assert operator2.json()["actor_email"] == "operator2-client"
+    assert verifier.json()["actor_email"] == "verifier-client"
 
 
 def test_sandbox_rejects_group_only_and_accepts_exact_admin_identity(
@@ -235,7 +253,9 @@ def test_admin_respects_trust_forwarded_headers_flag(
     session_denied = client.get(
         "/api/v1/session", headers={"X-Forwarded-Groups": "mip-admin"}
     )
-    assert session_denied.json() == {"can_access_admin": False, "can_approve": False}
+    assert session_denied.json() == {
+        "can_access_admin": False, "can_approve": False, "actor_email": None,
+    }
 
     # Trust re-enabled -- same header admits again.
     monkeypatch.setattr(settings, "trust_forwarded_headers", True)
@@ -246,7 +266,9 @@ def test_admin_respects_trust_forwarded_headers_flag(
     session_admitted = client.get(
         "/api/v1/session", headers={"X-Forwarded-Groups": "mip-admin"}
     )
-    assert session_admitted.json() == {"can_access_admin": True, "can_approve": True}
+    assert session_admitted.json() == {
+        "can_access_admin": True, "can_approve": True, "actor_email": None,
+    }
 
 
 def test_admin_fallback_group_always_admitted(client: TestClient) -> None:

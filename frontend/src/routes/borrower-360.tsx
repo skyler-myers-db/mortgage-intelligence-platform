@@ -24,6 +24,7 @@ import { safeSegmentName, segmentByCode } from '../lib/segmentMetadata';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import { queryKeys } from '../lib/queryKeys';
 import { useApp } from '../components/AppContext';
+import { LtvEquityValue } from './borrower-360.ltv-field';
 
 /**
  * Borrower 360 — per-borrower dossier composed in `.surface` blocks.
@@ -374,16 +375,7 @@ export default function Borrower360() {
               <Field
                 k={<><GlossaryTerm term="ltv">LTV</GlossaryTerm> / Equity</>}
                 v=""
-                childEl={
-                  hasAvm ? (
-                    <div className="field__value mono num">{`${b.ltv}% · ${currency(b.equity_estimate)}`}</div>
-                  ) : (
-                    <div>
-                      <div className="field__value mono num">—</div>
-                      <div className="field__sub">Not a zero-equity signal; AVM was unavailable.</div>
-                    </div>
-                  )
-                }
+                childEl={<LtvEquityValue borrower={b} />}
               />
               <Field k="Related properties" v={`${b.related_property_count} (via owner graph)`} />
               {/* Raw source codes read as noise ("42660 · CNV"): the CBSA gets
@@ -464,7 +456,7 @@ export default function Borrower360() {
             </div>
           </div>
 
-          <Reveal>
+          <Reveal revealKey="borrower-360:trigger-timeline">
             <div className="surface">
               <div className="surface__hdr">
                 <Icon name="bolt" size={14} className="icon-accent" />

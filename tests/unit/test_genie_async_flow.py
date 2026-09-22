@@ -537,3 +537,87 @@ def test_progress_terminal_parity_with_client_states(status: str) -> None:
         assert progress.failed is True
         assert progress.error_hint
 
+
+# --- 2026-09-21 audit genie-01 phase 0: the completion wait is named honestly ---
+
+DEEP_QUESTION = (
+    "Analyze the full dataset of eligible borrowers, list the absolute top "
+    "potential borrowers, evaluate why each is a good candidate, and what the "
+    "best curated offer for each would be"
+)
+
+
+def test_submit_flags_deep_turns_with_the_predicate_completion_routes_on(
+    monkeypatch: Any,
+) -> None:
+    """``deep`` is published at submit and cannot drift from completion.
+
+    ``respond_existing`` routes on ``is_deep_analysis_request``; the submit
+    response must report exactly that verdict, for both polarities, so the UI
+    labels the 90-200 s sweep wait as deep research and an ordinary turn as
+    verification.
+    """
+
+    from backend.services.repositories.databricks_genie_sweep import (
+        is_deep_analysis_request,
+    )
+
+    assert is_deep_analysis_request(DEEP_QUESTION) is True
+    assert is_deep_analysis_request(QUESTION) is False
+
+    for question, expected in ((DEEP_QUESTION, True), (QUESTION, False)):
+        client, repo, audit, lakebase = (
+            _FakeGenieClient(),
+            _FakeRepo(),
+            _FakeAudit(),
+            _FakeLakebase(),
+        )
+        _overrides(monkeypatch, client=client, repo=repo, audit=audit, lakebase=lakebase)
+
+        res = TestClient(app).post(
+            "/api/genie/message/submit", json={"question": question}, headers=HEADERS
+        )
+
+        assert res.status_code == 200
+        body = res.json()
+        # A live turn: the flag only means something when completion will run.
+        assert body["completed"] is False, body
+        assert body["deep"] is expected
+        assert client.submitted == [(question, None)]
+
+
+def test_submit_inline_resolution_is_never_deep(monkeypatch: Any) -> None:
+    """A turn that resolved inline has no completion wait to describe."""
+
+    client, repo, audit, lakebase = _FakeGenieClient(), _FakeRepo(), _FakeAudit(), _FakeLakebase()
+    _overrides(monkeypatch, client=client, repo=repo, audit=audit, lakebase=lakebase)
+
+    res = TestClient(app).post(
+        "/api/genie/message/submit",
+        json={"question": "What is the phone number for borrower John Smith?"},
+        headers=HEADERS,
+    )
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["completed"] is True
+    assert body["deep"] is False
+
+
+def test_no_progress_stage_claims_the_answer_is_ready() -> None:
+    """COMPLETED is Genie's message finishing, not a renderable answer.
+
+    The governed completion (verification, output policy, audit and, for deep
+    asks, the whole sweep) still runs after it, so no server stage label may
+    tell the user the answer is ready.
+    """
+
+    from backend.services.genie_progress import _STAGE_BY_STATUS
+
+    completed = build_genie_progress({"status": "COMPLETED", "attachments": []})
+    assert completed.terminal is True
+    assert completed.failed is False
+    assert completed.stage == "complete"
+    assert completed.stage_label == "Verifying the answer against its rows"
+    for _stage, label in _STAGE_BY_STATUS.values():
+        assert "ready" not in label.lower(), label

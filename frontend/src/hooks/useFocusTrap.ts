@@ -1,4 +1,5 @@
 import { useEffect, useRef, type RefObject } from 'react';
+import { pushEscapeLayer } from '../lib/escapeStack';
 
 const FOCUSABLE_SELECTOR = [
   'button:not([disabled])',
@@ -44,13 +45,14 @@ export function useFocusTrap<TContainer extends HTMLElement, TInitial extends HT
       initialTarget?.focus();
     });
 
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        onCloseRef.current();
-        return;
-      }
+    // Escape goes through the shared topmost-layer stack (audit 2026-09-21
+    // runtime-v2): a trap opened above another overlay closes ALONE, instead
+    // of every open layer reacting to the same keypress.
+    const popEscapeLayer = pushEscapeLayer(() => {
+      onCloseRef.current();
+    });
 
+    const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Tab') return;
 
       const container = containerRef.current;
@@ -81,6 +83,7 @@ export function useFocusTrap<TContainer extends HTMLElement, TInitial extends HT
 
     window.addEventListener('keydown', onKeyDown);
     return () => {
+      popEscapeLayer();
       window.removeEventListener('keydown', onKeyDown);
       if (lastFocused && typeof lastFocused.focus === 'function' && document.contains(lastFocused)) {
         lastFocused.focus();

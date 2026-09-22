@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest';
 // @ts-expect-error Frontend app types intentionally exclude Node globals; this
 // unit test reads the design-system CSS text under Vitest only.
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
+// @ts-expect-error see node:fs note above.
+import { join } from 'node:path';
 // @ts-expect-error CSS lint helper is an ESM Node script used by lint/tests only.
 import { findCssLiteralViolations } from '../../../tools/lint_css_literals.mjs';
 import { designCss } from '../test/designCss';
+
+declare const process: { cwd(): string };
 
 const tokensCss = () => readFileSync(
   new URL('./tokens.css', import.meta.url),
@@ -28,7 +32,7 @@ describe('layout containment contracts', () => {
     expect(css).toContain('.topbar__actions');
     expect(css).toContain('.topbar__search-results');
     expect(css).toContain('.topbar__search-status');
-    expect(css).toMatch(/\.topbar__search-results\s*\{[^}]*z-index:\s*60;/s);
+    expect(css).toMatch(/\.topbar__search-results\s*\{[^}]*z-index:\s*var\(--z-search\);/s);
   });
 
   /**
@@ -134,8 +138,9 @@ describe('layout containment contracts', () => {
 
   it('layers the ⌘K command palette above the Genie FAB and dims with a scrim (re-audit #4 #1)', () => {
     const css = designCss();
-    // Genie FAB is z 900; the palette must sit above everything.
-    expect(css).toMatch(/\.cmdk\s*\{[^}]*z-index:\s*1000;/s);
+    // The palette sits at the top of the overlay scale (--z-palette, 1000),
+    // above the Genie FAB (--z-genie-fab, 29) and the map tip (--z-map-tip, 900).
+    expect(css).toMatch(/\.cmdk\s*\{[^}]*z-index:\s*var\(--z-palette\);/s);
     expect(css).toMatch(/\.cmdk\s*\{[^}]*background:\s*var\(--surface-scrim\);/s);
     expect(css).toContain('.cmdk__row.is-active');
     // Entrance animation is disabled under reduced motion.
@@ -158,6 +163,27 @@ describe('layout containment contracts', () => {
     expect(css).toMatch(/\.spark__line--draw\s*\{[^}]*stroke-dashoffset:/s);
     // Reduced motion: no entrance, sparkline fully drawn (offset 0).
     expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.spark__line--draw\s*\{[^}]*stroke-dashoffset:\s*0;/s);
+  });
+
+  /**
+   * Audit motion-07: a dash of 220 on a ~64-124px path drew the line in the
+   * first 50-100ms of its window. The stroke path sets pathLength="1"
+   * (Sparkline.tsx), so the dash and offset must be exactly 1 and the draw
+   * must run on the shared draw tokens; the area fill fades in over the same
+   * window and reduced motion shows both fully.
+   */
+  it('draws the sparkline 1:1 against a normalised path and fades the area over the same window', () => {
+    const css = designCss();
+    expect(css).toMatch(/\.spark__line--draw\s*\{[^}]*stroke-dasharray:\s*1;/s);
+    expect(css).toMatch(/\.spark__line--draw\s*\{[^}]*stroke-dashoffset:\s*1;/s);
+    expect(css).toMatch(/\.spark__line--draw\s*\{[^}]*animation:\s*spark-draw var\(--dur-draw\) var\(--ease-draw\)/s);
+    expect(css).toMatch(/\.spark__area--fade\s*\{[^}]*opacity:\s*0;/s);
+    expect(css).toMatch(/\.spark__area--fade\s*\{[^}]*animation:\s*spark-area-fade var\(--dur-draw\) var\(--ease-draw\)/s);
+    expect(css).toMatch(/@keyframes spark-area-fade\s*\{[^}]*to\s*\{\s*opacity:\s*1;/s);
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.spark__area--fade\s*\{[^}]*opacity:\s*1;/s);
+    const tokens = tokensCss();
+    expect(tokens).toMatch(/--dur-draw:\s*700ms;/);
+    expect(tokens).toMatch(/--ease-draw:\s*cubic-bezier\(/);
   });
 
   it('gives the funnel Sankey a focus-visible affordance and a reduced-motion off-switch (Buyer-Wow #5)', () => {
@@ -278,6 +304,205 @@ describe('layout containment contracts', () => {
     expect(css).toMatch(/\.filter-menu__item\.is-selected\s*\{[^}]*color:\s*var\(--accent-ink\);/s);
     expect(css).toMatch(/\.text-accent\s*\{[^}]*color:\s*var\(--accent-ink\);/s);
     expect(css).toMatch(/\.icon-accent\s*\{[^}]*color:\s*var\(--accent-ink\);/s);
+  });
+
+  /**
+   * 2026-09-21 audit visual-02 / shell-02 / responsive-01: the Console body
+   * was an auto-track grid, so the 432px property-lookup row widened every
+   * row past the 300px panel and `.tweak-row label` restyled the lookup's
+   * own field labels. The rendered proof is console-layout.fixture.spec.ts;
+   * this pins the CSS contract it relies on.
+   */
+  it('constrains the Console body to one track and scopes its row labels', () => {
+    const css = designCss();
+
+    expect(css).toMatch(/\.tweaks__body\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/s);
+    expect(css).toMatch(/\.tweak-row > label,\s*\.tweak-row > \.row > label\s*\{/s);
+    expect(css).not.toMatch(/\n\.tweak-row label\s*\{/);
+    // The compact lookup wraps its audit chip and stacks its field grid.
+    expect(css).toMatch(/\.property-lookup--compact \.surface__hdr\s*\{[^}]*flex-wrap:\s*wrap;/s);
+    expect(css).toMatch(/\.property-lookup--compact \.field-grid\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/s);
+    expect(css).toMatch(/\.property-lookup--compact \.form-input\s*\{[^}]*inline-size:\s*100%;[^}]*min-inline-size:\s*0;/s);
+  });
+
+  /**
+   * 2026-09-21 audit responsive-06: the 961-1280 band forced 3 columns and
+   * orphaned the fourth KPI (Console open at 1440, or a 1280 laptop). The
+   * quantity query lays exactly four cards out 2x2; other counts keep the
+   * band's three columns. Rendered proof: console-layout.fixture.spec.ts.
+   */
+  it('lays four KPIs out 2x2 in the 961-1280px container band', () => {
+    const css = designCss();
+    expect(css).toMatch(
+      /@container main \(min-width: 961px\) and \(max-width: 1280px\)\s*\{\s*\.kpi-row:has\(> :nth-child\(4\):last-child\)\s*\{\s*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);/s,
+    );
+  });
+
+  /**
+   * 2026-09-21 audit css-08: 17 magic z-index values. Every declaration now
+   * reads a `--z-*` token; the token values ARE the numbers the sites used
+   * before, so this is a pure refactor of the stacking order (the pairs are
+   * listed in the commit that introduced the scale).
+   */
+  it('reads every z-index from the --z-* scale and keeps its numeric values', () => {
+    const css = designCss();
+    const routeCss = readdirSync(join(process.cwd(), 'src', 'routes'))
+      .filter((name: string) => name.endsWith('.css'))
+      .map((name: string) => readFileSync(join(process.cwd(), 'src', 'routes', name), 'utf8'))
+      .join('\n');
+    const stripComments = (text: string) => text.replace(/\/\*[\s\S]*?\*\//g, '');
+
+    const numericLiterals = [...stripComments(`${css}\n${routeCss}`).matchAll(/z-index\s*:\s*(-?\d+)\s*[;}]/g)]
+      .map((match) => match[0]);
+    expect(numericLiterals, 'a z-index outside tokens.css must read a --z-* token').toEqual([]);
+
+    const declared = [...stripComments(`${css}\n${routeCss}`).matchAll(/z-index\s*:\s*var\(--z-([a-z0-9-]+)\)/g)]
+      .map((match) => match[1]);
+    expect(declared.length).toBeGreaterThanOrEqual(30);
+
+    const tokens = tokensCss();
+    const scale = Object.fromEntries(
+      [...tokens.matchAll(/--z-([a-z0-9-]+):\s*(-?\d+);/g)].map((match) => [match[1], Number(match[2])]),
+    );
+    for (const name of new Set(declared)) {
+      expect(scale, `--z-${name} is defined in tokens.css`).toHaveProperty(name);
+    }
+    expect(scale).toMatchObject({
+      below: -1, base: 0, raised: 1, 'raised-2': 2, 'raised-3': 3, 'raised-4': 4,
+      sticky: 5, topbar: 10, menu: 20, 'genie-fab': 29, genie: 30,
+      'drawer-scrim': 40, drawer: 41, tooltip: 45, console: 50, search: 60,
+      'skip-link': 100, 'map-tip': 900, hovercard: 1000, modal: 1000, palette: 1000,
+    });
+    // The overlay chain the shell depends on, in order.
+    expect(scale.genie).toBeGreaterThan(scale['genie-fab']);
+    expect(scale.drawer).toBeGreaterThan(scale['drawer-scrim']);
+    expect(scale['drawer-scrim']).toBeGreaterThan(scale.genie);
+    expect(scale.console).toBeGreaterThan(scale.drawer);
+    expect(scale.palette).toBeGreaterThan(scale['map-tip']);
+  });
+
+  /**
+   * 2026-09-21 audit responsive-v1: Console (--z-console) and the docked Genie
+   * panel shared the right-edge anchor, so both open at 1440x900 hid the
+   * panel's right 300px and its composer. The docked panel now moves left of
+   * the Console by its width; undocked (dragged) panels are left alone and
+   * the < 1280 bottom-sheet band drops the sheet under the Genie layer
+   * instead. Rendered proof: console-layout.fixture.spec.ts.
+   */
+  it('moves the docked Genie panel clear of an open Console', () => {
+    const css = designCss();
+    expect(css).toMatch(/:root\s*\{\s*--console-w:\s*300px;\s*\}/);
+    expect(css).toMatch(/\.tweaks\s*\{[^}]*width:\s*var\(--console-w\);/s);
+    expect(css).toMatch(/\[data-console="open"\] \.genie:not\(\.is-undocked\)\s*\{\s*right:\s*calc\(var\(--console-w\) \+ var\(--sp-4\) \* 2\);/s);
+    expect(css).toMatch(/@media \(max-width: 1279px\)\s*\{[\s\S]*?\.tweaks\s*\{[^}]*z-index:\s*var\(--z-sheet\);/s);
+    expect(css).toMatch(/@media \(min-width: 2560px\)\s*\{[\s\S]*?--console-w:\s*340px;/s);
+    expect(tokensCss()).toMatch(/--z-sheet:\s*25;/);
+  });
+
+  /**
+   * 2026-09-21 audit motion-01 / css-03: `visibility` was not in the drawer's
+   * or the Genie panel's transition list, so each flipped hidden the instant
+   * it closed and its slide / fade never showed. The closed rule now holds
+   * visibility for --dur-exit; the open rule flips it at 0s; reduced motion
+   * zeroes the delay. The Console gains an @starting-style entry and an
+   * allow-discrete display exit (additive to the prototype's hard cut).
+   * Rendered proof: console-layout.fixture.spec.ts.
+   */
+  it('lets the drawer, Genie panel and Console animate out before they hide', () => {
+    const css = designCss();
+    const tokens = tokensCss();
+    expect(tokens).toMatch(/--dur-exit:\s*216ms;/);
+    expect(tokens).toMatch(/--ease-exit:\s*cubic-bezier\(/);
+
+    expect(css).toMatch(/\.drawer\s*\{[^}]*visibility:\s*hidden;[^}]*transition:\s*transform var\(--dur-exit\) var\(--ease-exit\),\s*visibility 0s linear var\(--dur-exit\);/s);
+    expect(css).toMatch(/\.drawer\.is-open\s*\{[^}]*visibility:\s*visible;[^}]*transition:\s*transform var\(--dur-slow\) var\(--ease\),\s*visibility 0s linear 0s;/s);
+    expect(css).not.toMatch(/\.drawer:not\(\.is-open\)/);
+
+    expect(css).toMatch(/\.genie\s*\{[^}]*visibility:\s*hidden;[^}]*visibility 0s linear var\(--dur-exit\);/s);
+    expect(css).toMatch(/\.genie\.is-open\s*\{[^}]*visibility:\s*visible;[^}]*visibility 0s linear 0s;/s);
+    expect(css).not.toMatch(/\.genie:not\(\.is-open\)/);
+
+    expect(css).toMatch(/\.tweaks\s*\{[^}]*display:\s*none;[^}]*transition:[^}]*display var\(--dur-fast\) allow-discrete;/s);
+    expect(css).toMatch(/\.tweaks\.is-open\s*\{[^}]*display:\s*flex;[^}]*display var\(--dur-base\) allow-discrete;/s);
+    expect(css).toMatch(/@starting-style\s*\{\s*\.tweaks\.is-open\s*\{\s*opacity:\s*0;/s);
+
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{\s*\*,[\s\S]*?transition-delay:\s*0s !important;/s);
+    // Reduced motion drops the visibility hold entirely (a pending 0.01ms
+    // transition would still show the panel until the next frame commits).
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{[^}]*\.drawer,\s*\.drawer\.is-open\s*\{\s*transition-property:\s*transform;/s);
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{[^}]*\.genie,\s*\.genie\.is-open\s*\{\s*transition-property:\s*opacity, transform;/s);
+  });
+
+  /**
+   * 2026-09-21 audit motion-02: exactly one `:active` rule existed
+   * (`.genie__resize:active`). Every interactive family now has a pressed
+   * state on the shared --pressed-shift / --pressed-scale tokens (additive
+   * to the prototype, which defines none).
+   */
+  it('gives every interactive family a pressed state on the shared tokens', () => {
+    const css = designCss();
+    const tokens = tokensCss();
+    expect(tokens).toMatch(/--pressed-shift:\s*1px;/);
+    expect(tokens).toMatch(/--pressed-scale:\s*0\.98;/);
+
+    const nudged = [
+      '.btn:active:not([disabled])',
+      '.topbar__icon-btn:active',
+      '.topbar__search-kbd:active',
+      '.topbar__search-result:active',
+      '.chip__remove:active',
+      '.evidence-chip:active',
+      '.tbl__sort:active',
+      '.lead-table__borrower-btn:active',
+      '.pinned-insights__unpin:active',
+      '.login-summary__num:active',
+      '.portfolio-summary__claim:active',
+      '.offer-mock__close:active',
+      '.cmdk__row:active',
+      '.drawer__close:active',
+      '.drawer__tab:active',
+      '.proof-tab:active',
+      'a.lineage-node__chip:active',
+      '.lineage-node--link:active',
+      '.growth-agent-monitor:active',
+      '.segment-mode-control .segmented button:active',
+      '.filter:active',
+      '.tweak-row .segmented button:active',
+      '.saved-workspace__item:active',
+      '.trusted-asset--button:active',
+    ];
+    const scaled = [
+      '.rail__brand:active',
+      '.rail__item:active:not(.rail__item--disabled)',
+      '.seg-card:has(.seg-card__select:active)',
+      '.genie__fab:active',
+      '.tweak-row .sw:active',
+      '.tweak-row .switch:active',
+    ];
+    const escape = (selector: string) => selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    for (const selector of nudged) {
+      expect(css, `${selector} nudges down by --pressed-shift`).toMatch(
+        new RegExp(`${escape(selector)}[^{]*\\{[^}]*translate:\\s*0 var\\(--pressed-shift\\)`, 's'),
+      );
+    }
+    for (const selector of scaled) {
+      expect(css, `${selector} settles to --pressed-scale`).toMatch(
+        new RegExp(`${escape(selector)}[^{]*\\{[^}]*scale:\\s*var\\(--pressed-scale\\)`, 's'),
+      );
+    }
+    // Table rows deepen instead: a transform would break their borders.
+    expect(css).toMatch(/\.tbl tbody tr:active\s*\{\s*background:\s*var\(--bg-4\);/s);
+    // Primary buttons also lose their halo while held.
+    expect(css).toMatch(/\.btn--primary:active:not\(\[disabled\]\)\s*\{[^}]*background:\s*var\(--accent-hover\);/s);
+    expect((css.match(/:active/g) ?? []).length).toBeGreaterThanOrEqual(30);
+  });
+
+  /** 2026-09-21 audit visual-05 (S part): route-nav anchors had no
+   * text-decoration reset. Prototype-contract `.chip` and `.filter__value`
+   * styling stays untouched; only the app-added nav loses the underline. */
+  it('renders route-nav links without the browser underline', () => {
+    const css = designCss();
+    expect(css).toMatch(/\.route-nav \.filter,\s*\.route-nav \.filter:hover,\s*\.route-nav \.filter:focus-visible\s*\{\s*text-decoration:\s*none;/s);
   });
 
   it('lets segment cards wrap content instead of clipping labels or pending copy', () => {

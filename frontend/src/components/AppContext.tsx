@@ -61,6 +61,12 @@ interface AppCtxValue {
   setDensity: (d: Density) => void;
   lender: string;
   canAccessAdmin: boolean;
+  /** Server-decided approver capability; false until /session says otherwise. */
+  canApprove: boolean;
+  /** The signed-in actor's own forwarded identity, for "Approving as …". */
+  actorEmail: string | null;
+  /** Lets gated controls say "checking" instead of a false "requires role". */
+  sessionStatus: 'loading' | 'ready' | 'error';
   showEvidence: boolean;
   setShowEvidence: (v: boolean) => void;
   showConfidence: boolean;
@@ -197,6 +203,14 @@ export function AppProvider({ children }: PropsWithChildren) {
   // refetches. Authorization-sensitive surfaces therefore fail closed on the
   // first load without flickering away after access has been established.
   const canAccessAdmin = sessionQuery.data?.can_access_admin === true;
+  // Audit flow-02 / shell-06: the approve UI used to ignore `can_approve`, so
+  // non-approvers got live Approve buttons that wrote a DRAFT_OUTREACH audit
+  // row and then 403'd. The server 403 stays the real enforcement.
+  const canApprove = sessionQuery.data?.can_approve === true;
+  const actorEmail = sessionQuery.data?.actor_email?.trim() || null;
+  const sessionStatus = sessionQuery.data
+    ? 'ready'
+    : sessionQuery.isError ? 'error' : 'loading';
   const workspaceQuery = useQuery({
     queryKey: [...queryKeys.workspace(), workspaceReloadToken],
     queryFn: ({ signal }) => api.workspace(signal),
@@ -428,6 +442,9 @@ export function AppProvider({ children }: PropsWithChildren) {
       density, setDensity,
       lender,
       canAccessAdmin,
+      canApprove,
+      actorEmail,
+      sessionStatus,
       showEvidence, setShowEvidence,
       showConfidence, setShowConfidence,
       consoleOpen, setConsoleOpen,
@@ -451,7 +468,8 @@ export function AppProvider({ children }: PropsWithChildren) {
     }),
     [
       theme, setTheme, accent, setAccent, density, setDensity,
-      lender, canAccessAdmin, showEvidence, showConfidence, consoleOpen, setConsoleOpen,
+      lender, canAccessAdmin, canApprove, actorEmail, sessionStatus,
+      showEvidence, showConfidence, consoleOpen, setConsoleOpen,
       recentActivityFocusRequest, openConsoleRecentActivity, acknowledgeRecentActivityFocus,
       drawer, genieOpen, approvals, setApproval,
       lastBorrowerIdState, setLastBorrowerId, clearActorScopedState,

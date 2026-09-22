@@ -8,11 +8,14 @@ import { Topbar } from './Topbar';
 import { CommandPalette } from '../command/CommandPalette';
 import { EvidenceDrawer } from '../mortgage/EvidenceDrawer';
 import { DegradedBanner } from '../mortgage/DegradedBanner';
-import { Icon } from '../Icon';
+import { VersionNotice } from '../mortgage/VersionNotice';
+import { GenieDock } from './GenieDock';
 import { lazyWithPreload, preloadBestEffort } from '../../lib/lazyPreload';
 import { createIdlePreloader } from '../../lib/prefetch';
 import { clearActorScopedBrowserState } from '../../lib/actorScopedBrowserState';
 import { clearActorScopedMemoryCaches } from '../../lib/actorScopedMemoryCaches';
+import { useMainScroll } from '../../hooks/useMainScroll';
+import { useRouteAnnouncer } from '../../hooks/useRouteAnnouncer';
 
 const LazyConsole = lazyWithPreload(() =>
   import('./Console').then((module) => ({ default: module.Console })),
@@ -59,6 +62,11 @@ const preloadDrawerSources = createIdlePreloader(() => import('../../lib/drawerS
  *     `<header>` landmark (implicit `banner` role + explicit for AT
  *     parity). `<main id="main-content">` is the primary content
  *     landmark.
+ *   - Route continuity (audit 2026-09-21): `useMainScroll` resets / restores
+ *     the persistent `.main` scroller per history entry, and
+ *     `useRouteAnnouncer` sets the per-route document title, moves focus to
+ *     the page heading and writes the page name into the one polite
+ *     `.sr-only` live region below (WCAG 2.4.2, 2.4.3, 4.1.3).
  */
 export function AppShell({ children }: PropsWithChildren) {
   return (
@@ -118,6 +126,10 @@ function AppShellInner({ children }: PropsWithChildren) {
   const { health } = useHealth();
   const queryClient = useQueryClient();
   const actorCacheKeyRef = useRef<string | null>(null);
+  const mainRef = useRef<HTMLElement | null>(null);
+  const routeAnnouncerRef = useRef<HTMLDivElement | null>(null);
+  useMainScroll(mainRef);
+  useRouteAnnouncer(mainRef, routeAnnouncerRef);
 
   useEffect(() => {
     const cancelConsole = preloadConsole();
@@ -171,8 +183,20 @@ function AppShellInner({ children }: PropsWithChildren) {
       <Rail />
       <Topbar />
       <CommandPalette />
-      <main id="main-content" tabIndex={-1} className="main">
+      {/* Persistent route announcer. Left empty on purpose: useRouteAnnouncer
+          writes the page name here after each navigation, and React never
+          re-renders its content away. */}
+      <div
+        ref={routeAnnouncerRef}
+        className="sr-only"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        data-route-announcer=""
+      />
+      <main ref={mainRef} id="main-content" tabIndex={-1} className="main">
         <DegradedBanner />
+        <VersionNotice />
         {children}
       </main>
       <EvidenceDrawer />
@@ -201,21 +225,9 @@ function AppShellInner({ children }: PropsWithChildren) {
           />
         )}
       </Suspense>
-      {!genieOpen && (
-        <button
-          className="genie__fab"
-          onClick={openGenie}
-          onMouseEnter={warmGenie}
-          onFocus={warmGenie}
-          aria-label="Open Genie"
-          type="button"
-        >
-          <Icon name="sparkle" size={22} />
-        </button>
-      )}
-      <Suspense fallback={null}>
-        {genieOpen ? <LazyGenieChat /> : null}
-      </Suspense>
+      {/* Mounted on first open and never unmounted: closing only hides the
+          panel, so an in-flight Genie turn survives (see GenieDock). */}
+      <GenieDock open={genieOpen} onOpen={openGenie} onWarm={warmGenie} Chat={LazyGenieChat} />
     </div>
   );
 }

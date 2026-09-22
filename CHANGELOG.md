@@ -8,6 +8,23 @@ deprecation window first.
 
 ## Unreleased
 
+### 2026-09-22 Genie async lifecycle: `deep` on submit, honest completion-wait label
+
+- **Additive:** `POST /api/genie/message/submit` now returns `deep: bool`
+  (default `false`). It is `true` when the completion call will answer the
+  live turn with the deep-research sweep, decided from the question by the
+  same predicate completion routes on. Always `false` for turns that resolve
+  inline (`completed=true`). No duration hint is published: the only number
+  the server holds is a wall budget for one phase of the sweep, which is a
+  ceiling and not an expected duration.
+  `tests/fixtures/openapi_baseline.json` regenerated in the same commit.
+- **Behavioral (copy):** the `COMPLETED` stage label on
+  `POST /api/genie/message/progress` changes from "Answer ready — verifying
+  and formatting" to "Verifying the answer against its rows". `COMPLETED` is
+  Genie's message finishing; the governed completion (and, for deep asks, a
+  90-200 s sweep) still runs after it, so the server no longer tells the user
+  an answer is ready before one can be rendered. Stage keys are unchanged.
+
 ### 2026-08-08 deep-analysis question family: guards opened by vocabulary, answers deepened by planning
 
 - **Behavioral (guards):** the deep-analysis question family — "analyze the

@@ -1,18 +1,50 @@
 /* ============================================================
    TWEAKS / CONSOLE PANEL
    ============================================================ */
+/* Docked Console width. Shared with the floating Genie panel, which moves
+   left of the Console while it is open (06-genie-chat.css); widened at
+   >= 2560px in 12-motion-and-viewport.css. */
+:root { --console-w: 300px; }
 .tweaks {
   position: fixed; inset: 72px var(--sp-4) var(--sp-4) auto;
-  width: 300px;
+  width: var(--console-w);
   background: var(--bg-1);
   border: 1px solid var(--line-2);
   border-radius: var(--r-lg);
   box-shadow: var(--shadow-lg);
-  z-index: 50;
+  z-index: var(--z-console);
   display: none;
   flex-flow: column;
+  /* Animated open / close. ADDITIVE DEVIATION from the prototype, which
+     hard-cuts the panel through display none/block (Module 0
+     Prototype.html:904-906): `@starting-style` gives the entry and
+     `transition-behavior: allow-discrete` on `display` keeps the panel
+     rendered through the exit (2026-09-21 audit motion-01). The closed rule
+     is the exit pair; `.is-open` the entry pair. `translate`, not
+     `transform`, so the resting value is `none` and the panel never becomes
+     a containing block for fixed descendants. */
+  opacity: 0;
+  translate: var(--sp-3) 0;
+  transition:
+    opacity var(--dur-fast) var(--ease-exit),
+    translate var(--dur-fast) var(--ease-exit),
+    display var(--dur-fast) allow-discrete;
 }
-.tweaks.is-open { display: flex; }
+.tweaks.is-open {
+  display: flex;
+  opacity: 1;
+  translate: none;
+  transition:
+    opacity var(--dur-base) var(--ease),
+    translate var(--dur-base) var(--ease),
+    display var(--dur-base) allow-discrete;
+}
+@starting-style {
+  .tweaks.is-open {
+    opacity: 0;
+    translate: var(--sp-3) 0;
+  }
+}
 .tweaks__hdr {
   padding: var(--sp-3) var(--sp-4);
   border-bottom: 1px solid var(--line-1);
@@ -22,9 +54,20 @@
 .tweaks__title { font-size: var(--fs-13); font-weight: 600; }
 .tweaks__body {
   padding: var(--sp-4); display: grid; gap: var(--sp-4);
+  /* One constrained track. The prototype body is a flex column
+     (design_files/index.html:913); the implicit `auto` grid track sized
+     every row to its max-content (the property-lookup header measured
+     432px inside the 300px panel) and pushed the Light / Compact halves of
+     the segmented controls behind an inner horizontal scroll
+     (2026-09-21 audit visual-02 / shell-02 / responsive-01). */
+  grid-template-columns: minmax(0, 1fr);
   flex: 1; overflow: auto;
 }
-.tweak-row label { font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.06em; display: block; margin-bottom: 6px; }
+/* Direct labels only (own row, or the label/switch `.row`): the descendant
+   form of this rule also restyled the field labels of the PropertyLookupPanel
+   mounted inside a row. */
+.tweak-row > label,
+.tweak-row > .row > label { font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.06em; display: block; margin-bottom: 6px; }
 .tweak-row .swatches { display: flex; gap: 6px; }
 .tweak-row .sw {
   width: 24px; height: 24px; border-radius: 6px; cursor: pointer;
@@ -35,6 +78,7 @@
 .tweak-row .sw--navy { background: var(--entrada-navy); }
 .tweak-row .sw--red { background: var(--entrada-red); }
 .tweak-row .sw.is-active { border-color: var(--text-1); }
+.tweak-row .sw:active { scale: var(--pressed-scale); }
 .tweak-row select, .tweak-row input[type="text"] {
   width: 100%; background: var(--bg-2); border: 1px solid var(--line-1);
   color: var(--text-1); font-family: var(--font-sans); font-size: var(--fs-13);
@@ -50,6 +94,7 @@
   border-radius: 4px; font-family: var(--font-sans);
 }
 .tweak-row .segmented button.is-active { background: var(--accent-soft); color: var(--accent-ink); }
+.tweak-row .segmented button:active { translate: 0 var(--pressed-shift); }
 .tweak-row .row { display: flex; align-items: center; justify-content: space-between; }
 .tweak-row .row label { margin: 0; }
 .tweak-row .switch {
@@ -73,6 +118,15 @@
   left: calc(var(--sp-10) - var(--sp-5) - (var(--sp-1) / 2));
   background: var(--accent);
 }
+.tweak-row .switch:active { scale: var(--pressed-scale); }
+/* PropertyLookupPanel in its compact (Console) form. The ~266px track holds
+   neither the header's nowrap "Every lookup audited" chip beside the title
+   nor two side-by-side inputs, so the header wraps the chip onto its own
+   line and the ZIP / State grid stacks. Not a prototype element; the
+   prototype Console carries no form (Module 0 Prototype.html:1441-1481). */
+.property-lookup--compact .surface__hdr { flex-wrap: wrap; }
+.property-lookup--compact .field-grid { grid-template-columns: minmax(0, 1fr); }
+.property-lookup--compact .form-input { inline-size: 100%; min-inline-size: 0; }
 .saved-workspace {
   display: flex;
   flex-direction: column;
@@ -100,6 +154,7 @@
   border-color: var(--accent);
   color: var(--text-1);
 }
+.saved-workspace__item:active { translate: 0 var(--pressed-shift); }
 .saved-workspace__body {
   display: grid;
   min-width: 0;
@@ -154,6 +209,7 @@
   border-color: var(--accent);
   background: var(--accent-soft);
 }
+.trusted-asset--button:active { translate: 0 var(--pressed-shift); }
 .trusted-asset__label {
   font-size: var(--fs-13);
   color: var(--text-1);
@@ -190,6 +246,17 @@
   gap: var(--gap-grid);
   justify-content: start;
 }
+/* Four KPIs in the 961-1280px container band (Console open at 1440x900, or a
+   1280 laptop) lay out 2x2 instead of the band's 3 + 1, which orphaned the
+   fourth card on its own row (2026-09-21 audit responsive-06). The quantity
+   query outranks the band rule in 10-native-analytics.css by specificity and
+   leaves any other card count (the N-stage funnel row) on the band's three
+   columns. */
+@container main (min-width: 961px) and (max-width: 1280px) {
+  .kpi-row:has(> :nth-child(4):last-child) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
 .section-hdr { display: flex; align-items: baseline; justify-content: space-between; margin: 28px 0 12px; gap: var(--sp-4); }
 .section-hdr .h-2 { margin: 0; }
 .section-hdr__titleline {
@@ -210,7 +277,7 @@
   position: absolute;
   inset-block-start: var(--sp-3);
   inset-inline-end: var(--sp-4);
-  z-index: 3;
+  z-index: var(--z-raised-3);
   display: inline-flex;
   align-items: center;
   min-block-size: var(--sp-6);
@@ -230,7 +297,7 @@
   position: absolute;
   inset-block-start: var(--sp-3);
   inset-inline-end: var(--sp-4);
-  z-index: 2;
+  z-index: var(--z-raised-2);
   display: inline-flex;
   align-items: center;
   min-block-size: var(--sp-6);

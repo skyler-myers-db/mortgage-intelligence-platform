@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { Icon } from '../Icon';
+import { pushEscapeLayer } from '../../lib/escapeStack';
 
 /**
  * FilterSelect — presenter-friendly replacement for the old cycle-on-click
@@ -33,17 +34,16 @@ export function FilterSelect({ label, value, options, onChange }: FilterSelectPr
       if (!rootRef.current) return;
       if (!rootRef.current.contains(e.target as Node)) setOpen(false);
     };
-    const onEsc = (e: globalThis.KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setOpen(false);
-        btnRef.current?.focus();
-      }
-    };
+    // Shared topmost-layer Escape stack (audit 2026-09-21 runtime-v2): an open
+    // menu is the top layer, so Escape closes the menu and nothing beneath it.
+    const popEscapeLayer = pushEscapeLayer(() => {
+      setOpen(false);
+      btnRef.current?.focus();
+    });
     window.addEventListener('mousedown', onDown);
-    window.addEventListener('keydown', onEsc);
     return () => {
       window.removeEventListener('mousedown', onDown);
-      window.removeEventListener('keydown', onEsc);
+      popEscapeLayer();
     };
   }, [open]);
 

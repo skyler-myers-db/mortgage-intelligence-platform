@@ -62,6 +62,35 @@ export default [
       ],
     },
   },
+  // Credential-free e2e fixture harness. Linted at the same bar as src, and
+  // it may import TYPES from src (so fixtures are checked against the app's
+  // own response contracts) but never runtime code: the harness must drive
+  // the built app from outside, not link against it. The legacy specs beside
+  // it are not linted yet; their known type errors are tracked separately.
+  {
+    files: ["tests/e2e/fixture/**/*.ts"],
+    languageOptions: {
+      parser: tsParser,
+      parserOptions: { ecmaVersion: "latest", sourceType: "module" },
+    },
+    plugins: { "@typescript-eslint": tsPlugin },
+    rules: {
+      ...tsPlugin.configs.recommended.rules,
+      "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
+      "@typescript-eslint/no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: ["**/src/**"],
+              allowTypeImports: true,
+              message: "Fixture harness files may only `import type` from frontend/src.",
+            },
+          ],
+        },
+      ],
+    },
+  },
   // Import-hygiene guard: production code (routes, lib, non-test components)
   // must not silently pull from src/mocks. Tests + Storybook may import
   // fixture data; production code must not. Regressions here re-introduce

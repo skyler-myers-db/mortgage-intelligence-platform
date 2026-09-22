@@ -22,6 +22,7 @@ import {
   type CampaignBinding,
 } from './LeadTable.logic';
 import type { RejectReasonCode } from './LeadTable.types';
+import { APPROVER_ROLE_REQUIRED } from './approverGate';
 
 /** Verification state of a `?campaign_id=&variant_name=` URL binding. */
 export type CampaignBindingState = 'absent' | 'invalid' | 'verified' | 'validating';
@@ -42,6 +43,13 @@ export interface UseLeadApprovalActionsInput {
   campaignBinding: CampaignBinding | null;
   campaignBindingState: CampaignBindingState;
   campaignBindingBlocked: boolean;
+  /**
+   * The session's `can_approve`. When false every decision entry point
+   * returns BEFORE the draft call: `/outreach/draft` is not approver-gated
+   * and writes a DRAFT_OUTREACH audit row, so a non-approver's click used to
+   * leave an audit trace and then 403 (audit flow-02).
+   */
+  canApprove: boolean;
   /** The always-mounted table scroll region — the post-bulk focus fallback. */
   tableWrapRef: RefObject<HTMLDivElement | null>;
   /** Shared with the sales-ops hook: the table renders one error alert. */
@@ -57,6 +65,7 @@ export function useLeadApprovalActions({
   campaignBinding,
   campaignBindingState,
   campaignBindingBlocked,
+  canApprove,
   tableWrapRef,
   setApprovalError,
 }: UseLeadApprovalActionsInput) {
@@ -133,6 +142,10 @@ export function useLeadApprovalActions({
     // to true and produce a second audit row. The ref flips
     // immediately.
     if (rowInFlightRef.current[borrowerId]) return 'duplicate';
+    if (!canApprove) {
+      setApprovalError(`${APPROVER_ROLE_REQUIRED}.`);
+      return 'backend';
+    }
     if (campaignBindingBlocked) {
       setApprovalError(
         campaignBindingState === 'validating'
@@ -224,6 +237,10 @@ export function useLeadApprovalActions({
   ): Promise<boolean> {
     // R5-04: synchronous latch — see approveLead above.
     if (rowInFlightRef.current[borrowerId]) return false;
+    if (!canApprove) {
+      setApprovalError(`${APPROVER_ROLE_REQUIRED}.`);
+      return false;
+    }
     if (campaignBindingBlocked) {
       setApprovalError(
         campaignBindingState === 'validating'
@@ -349,6 +366,10 @@ export function useLeadApprovalActions({
     // schedules — producing two parallel loops with the same selection
     // and two audit rows per borrower. Flip the ref before any await.
     if (bulkInFlightRef.current || bulkApproving) return;
+    if (!canApprove) {
+      setApprovalError(`${APPROVER_ROLE_REQUIRED}.`);
+      return;
+    }
     if (campaignBindingBlocked) {
       setApprovalError(
         campaignBindingState === 'validating'

@@ -11,6 +11,7 @@ import { ScoreBadge } from '../components/mortgage/ScoreBadge';
 import { ConfidenceMeter } from '../components/mortgage/ConfidenceMeter';
 import { Button, Chip } from '../components/Primitives';
 import { useApp } from '../components/AppContext';
+import { approverGateReason } from '../components/mortgage/approverGate';
 import { ActivationLoopPanel } from '../components/activation/ActivationLoopPanel';
 import { invalidateOperationalQueries } from '../lib/queryKeys';
 import { offerDisplayLabel } from '../lib/offerLanguage';
@@ -49,6 +50,11 @@ export default function OfferOrchestrator() {
   const [approveError, setApproveError] = useState<string | null>(null);
   const [auditId, setAuditId] = useState<string | null>(null);
   const [approvalId, setApprovalId] = useState<string | null>(null);
+  // The approval the user just made in THIS view (borrower + load
+  // generation). The success burst keys off this, never off durable
+  // approval_status, so a stale approval never celebrates again on load and
+  // a reload of the same borrower does not replay it (audit motion-06).
+  const [justApproved, setJustApproved] = useState<{ id: string; reloadToken: number } | null>(null);
   const [lifecycle, setLifecycle] = useState<BorrowerLifecycle | null>(null);
   const [approving, setApproving] = useState<boolean>(false);
   const [reloadToken, setReloadToken] = useState<number>(0);
@@ -99,7 +105,12 @@ export default function OfferOrchestrator() {
     saveDraft,
     removeSavedDraft,
     canAccessAdmin,
+    canApprove,
+    actorEmail,
+    sessionStatus,
   } = useApp();
+  // Audit flow-02: gate the approve controls on the session's can_approve.
+  const approverGate = approverGateReason(canApprove, sessionStatus);
   const approval = id ? approvals[id] : undefined;
   const savedDraftKey = id ? `${id}::${activeDraftChannel}` : null;
 
@@ -468,7 +479,7 @@ export default function OfferOrchestrator() {
   };
 
   const onApprove = async () => {
-    if (approving || snapshotReconciling) return;
+    if (approving || snapshotReconciling || approverGate !== null) return;
     setApproveError(null);
     if (campaignBindingError) {
       setApproveError('Campaign handoff is incomplete. Reopen the saved campaign before approval.');
@@ -502,6 +513,7 @@ export default function OfferOrchestrator() {
         setApproval(id, 'approved');
         setAuditId(res.audit_event_id ?? null);
         setApprovalId(res.approval_id ?? null);
+        setJustApproved({ id, reloadToken });
         setRoutingConfirm({
           email: res.assigned_to_email ?? (assignedTo || null),
           followUpAt: res.follow_up_at ?? null,
@@ -523,7 +535,7 @@ export default function OfferOrchestrator() {
   };
 
   const onReject = async () => {
-    if (approving || snapshotReconciling) return;
+    if (approving || snapshotReconciling || approverGate !== null) return;
     if (campaignBindingError) {
       setApproveError('Campaign handoff is incomplete. Reopen the saved campaign before rejection.');
       return;
@@ -609,7 +621,8 @@ export default function OfferOrchestrator() {
               size="sm"
               icon="check"
               onClick={() => void onApprove()}
-              disabled={snapshotReconciling || !rec || !draftReady || effectiveApproval === 'approved'}
+              disabled={approverGate !== null || snapshotReconciling || !rec || !draftReady || effectiveApproval === 'approved'}
+              title={approverGate ?? undefined}
               aria-label={
                 effectiveApproval === 'approved'
                   ? `Borrower ${b.borrower_id} already approved`
@@ -781,6 +794,8 @@ export default function OfferOrchestrator() {
               onReject={() => void onReject()}
               approveDisabled={snapshotReconciling || !draftReady}
               isSubmitting={approving || snapshotReconciling}
+              approverGate={approverGate}
+              actorEmail={actorEmail}
             />
           </div>
         </>
@@ -803,7 +818,13 @@ export default function OfferOrchestrator() {
         <>
           <div className="surface mt-grid">
             <div className="surface__body surface__body--inline">
-              <span className="burst inline-flex">
+              <span
+                className={
+                  justApproved?.id === id && justApproved.reloadToken === reloadToken
+                    ? 'burst inline-flex'
+                    : 'inline-flex'
+                }
+              >
                 <Chip variant="success" icon="check">Approved · governed internal queue</Chip>
               </span>
               {auditId && <span className="mono muted fs-11">audit: {auditId}</span>}

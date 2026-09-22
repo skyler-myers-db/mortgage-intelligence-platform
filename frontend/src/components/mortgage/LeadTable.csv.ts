@@ -15,6 +15,74 @@ function csvValue(raw: unknown): string {
   return String(raw);
 }
 
+/**
+ * S1.4 fail-closed export gate: eligible, opt-in, and not do-not-contact.
+ * Gold already folds dnc/opt-out into marketing_eligible; the explicit
+ * checks are defense-in-depth so a stale row can never leak into a CSV.
+ * Exported so the button label and the confirmation count the SAME rows the
+ * file will hold (audit tables-08: the label said "500 leads" while the gate
+ * wrote zero rows).
+ */
+export function isLeadCsvExportable(lead: LeadSummary): boolean {
+  return (
+    lead.marketing_eligible === true &&
+    lead.dnc !== true &&
+    (lead.consent_status ?? 'opt_in') === 'opt_in'
+  );
+}
+
+export interface LeadCsvExportPlan {
+  /** Post-eligibility rows, in the on-screen (sorted) order. */
+  rows: LeadSummary[];
+  scope: 'selected_rows' | 'loaded_rows';
+  /** Rows in scope that the eligibility gate dropped. */
+  excluded: number;
+}
+
+/**
+ * What an export would write right now (audit tables-08). The selection wins
+ * when one exists; otherwise the currently sorted rows — never the unsorted
+ * `leads` prop, which ignored both.
+ */
+export function planLeadCsvExport(
+  sortedLeads: LeadSummary[],
+  selectedIds: ReadonlySet<string>,
+): LeadCsvExportPlan {
+  const selected = sortedLeads.filter((lead) => selectedIds.has(lead.borrower_id));
+  const inScope = selected.length > 0 ? selected : sortedLeads;
+  const rows = inScope.filter(isLeadCsvExportable);
+  return {
+    rows,
+    scope: selected.length > 0 ? 'selected_rows' : 'loaded_rows',
+    excluded: inScope.length - rows.length,
+  };
+}
+
+/** The confirmation line: the real row count, scope, order and exclusions. */
+export function describeLeadCsvExport(plan: LeadCsvExportPlan, rowOrder: string): string {
+  const count = plan.rows.length;
+  const what = `${count.toLocaleString()} ${plan.scope === 'selected_rows' ? 'selected ' : ''}`
+    + `lead${count === 1 ? '' : 's'}`;
+  const order = rowOrder === 'rank' ? 'in rank order' : `sorted by ${rowOrder}`;
+  const excluded = plan.excluded > 0
+    ? ` ${plan.excluded.toLocaleString()} excluded by the marketing-eligibility gate.`
+    : '';
+  return `Exported ${what} ${order}.${excluded}`;
+}
+
+/** Anchor-download the CSV. Client-side only: no server export endpoint. */
+export function downloadLeadCsv(csv: string): void {
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `mip-leads-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 export function buildLeadCsv(
   leads: LeadSummary[],
   approvals: Record<string, string | undefined> = {},
@@ -61,18 +129,15 @@ export function buildLeadCsv(
     'dnc',
     'eligibility_source',
   ];
-  // S1.4 fail-closed export gate: eligible, opt-in, and not do-not-contact.
-  // Gold already folds dnc/opt-out into marketing_eligible; the explicit
-  // checks are defense-in-depth so a stale row can never leak into a CSV.
-  const exportableLeads = leads.filter(
-    (lead) =>
-      lead.marketing_eligible === true &&
-      lead.dnc !== true &&
-      (lead.consent_status ?? 'opt_in') === 'opt_in',
-  );
+  // Re-applied here even though callers plan with the same predicate: the
+  // gate must hold for ANY caller of buildLeadCsv.
+  const exportableLeads = leads.filter(isLeadCsvExportable);
   const metadata = [
     ['generated_at', context.generatedAt ?? new Date().toISOString()],
     ['filters', context.filters ?? 'none'],
+    ['export_scope', context.scope ?? 'loaded_rows'],
+    ['row_order', context.rowOrder ?? 'rank'],
+    ['exported_rows', exportableLeads.length],
     ['suppression_policy', 'eligible_only_default; non-eligible visible rows are excluded from client CSV'],
     ['consent_provenance', 'synthetic-by-design demo consent fields; eligibility_source column carries the per-row source'],
     ['refreshed_at', context.refreshedAt ?? 'unknown'],

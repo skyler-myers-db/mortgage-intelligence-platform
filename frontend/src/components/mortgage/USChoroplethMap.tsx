@@ -349,13 +349,18 @@ export function USChoroplethMap({
         unattendedCount = unit ? unit.unattended_count : null;
       }
     }
+    // Hoisted out of the `try`: React Compiler 1.0 cannot lower a value block
+    // (`??`, `?:`, `?.`) inside try/catch and silently bails out of the WHOLE
+    // component when it meets one. `node tools/react_compiler_coverage.mjs`
+    // reports it; keep the try body free of such expressions.
+    const segmentCodes = segmentFilter ?? [];
     try {
       const prefill = makeCampaignPrefill({
         level: 'state',
         state: activeStateCode,
         countyFips: null,
         countyName: null,
-        segmentCodes: segmentFilter ?? [],
+        segmentCodes,
         segmentMode: segmentFilterMode,
         leadCount,
         unattendedCount,

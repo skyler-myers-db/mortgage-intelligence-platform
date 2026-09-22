@@ -39,6 +39,89 @@ describe('buildBorrowerStory', () => {
     expect(prose).toContain('Primary offer: Refinance + home-equity review.');
   });
 
+  // The common case. Pinned as a whole string, beside the investor golden
+  // above: the 2026-09-21 audit (visual-v2) found every single-property story
+  // opening with the fragment "This Chicago, IL homeowner." because only the
+  // 41-property investor had a golden test.
+  function singleProperty(overrides: Partial<Borrower360> = {}): Borrower360 {
+    return dossier({
+      related_property_count: 1,
+      is_investor: false,
+      current_rate: 5.75,
+      rate_spread_bps: 88,
+      ltv: 54,
+      avm_value: 625_000,
+      current_lien_balance: 340_000,
+      // A label offerLanguage passes through verbatim (see the 5/1 ARM test).
+      recommended_offer: 'Refi to 5/1 ARM',
+      ...overrides,
+    });
+  }
+
+  it('keeps the multi-property story as two sentences (golden)', () => {
+    expect(buildBorrowerStory(dossier({ recommended_offer: 'Refi to 5/1 ARM' })).sentences).toEqual([
+      'This Chicago, IL investor holds 41 properties via the owner graph.',
+      'Carries a 10.04% rate, 356 bps above market, with 93% equity on a $42K lien.',
+      'Primary offer: Refi to 5/1 ARM.',
+    ]);
+  });
+
+  it('opens a single-property story with a full sentence, not a fragment (golden)', () => {
+    const story = buildBorrowerStory(singleProperty());
+    expect(story.sentences).toEqual([
+      'This Chicago, IL homeowner carries a 5.75% rate, 88 bps above market, with 46% equity on a $340K lien.',
+      'Primary offer: Refi to 5/1 ARM.',
+    ]);
+    // Same claims, same order, all verified: joining the sentences must not
+    // touch claim registration or the number verifier.
+    expect(story.claims.map((c) => [c.field, c.token, c.verified])).toEqual([
+      ['current_rate', '5.75%', true],
+      ['rate_spread_bps', '88 bps', true],
+      ['ltv', '46% equity', true],
+      ['current_lien_balance', '$340K', true],
+    ]);
+    expect(story.unverifiedTokens).toEqual([]);
+    expect(story.allVerified).toBe(true);
+  });
+
+  it('never emits a verbless opening sentence, whichever figure leads', () => {
+    const fragment = /^This (?:[A-Z][^.]*, [A-Z]{2} )?(?:investor|current customer|former customer|owner-occupant|homeowner)\.$/;
+    const cases: Array<[Partial<Borrower360>, string]> = [
+      [{}, 'This Chicago, IL homeowner carries a 5.75% rate, 88 bps above market, with 46% equity on a $340K lien.'],
+      // No current rate on file: the spread leads and needs its own verb.
+      [{ current_rate: 0 }, 'This Chicago, IL homeowner is 88 bps above market, with 46% equity on a $340K lien.'],
+      // Free and clear: only equity is known.
+      [
+        { current_rate: 0, rate_spread_bps: 0, current_lien_balance: 0, ltv: 0 },
+        'This Chicago, IL homeowner has 100% equity.',
+      ],
+      // Nothing economic to say: a plain sentence, no figure, nothing to verify.
+      [
+        { current_rate: 0, rate_spread_bps: 0, current_lien_balance: 0, avm_value: 0 },
+        'This borrower is a homeowner in Chicago, IL.',
+      ],
+      [
+        { current_rate: 0, rate_spread_bps: 0, avm_value: 0, is_owner_occupied: true, city: null as never },
+        'This borrower is an owner-occupant.',
+      ],
+    ];
+    for (const [overrides, expected] of cases) {
+      const story = buildBorrowerStory(singleProperty(overrides));
+      expect(story.sentences[0]).toBe(expected);
+      expect(story.sentences[0]).not.toMatch(fragment);
+      expect(story.allVerified).toBe(true);
+    }
+  });
+
+  it('still flags a stray number in the locale of a figure-free single-property story', () => {
+    const story = buildBorrowerStory(
+      singleProperty({ current_rate: 0, rate_spread_bps: 0, avm_value: 0, city: 'Area 51' }),
+    );
+    expect(story.sentences[0]).toBe('This borrower is a homeowner in Area 51, IL.');
+    expect(story.unverifiedTokens).toEqual(['51']);
+    expect(story.allVerified).toBe(false);
+  });
+
   it('verifies every numeric claim against its source field', () => {
     const story = buildBorrowerStory(dossier());
     expect(story.allVerified).toBe(true);

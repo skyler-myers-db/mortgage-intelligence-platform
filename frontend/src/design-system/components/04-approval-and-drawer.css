@@ -92,6 +92,10 @@
   transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
 }
 .pinned-insights__unpin:hover { color: var(--signal-danger); border-color: var(--signal-danger); }
+.pinned-insights__unpin:active,
+.login-summary__num:active,
+.portfolio-summary__claim:active,
+.offer-mock__close:active { translate: 0 var(--pressed-shift); }
 
 .genie-answer__pin-row { margin-block-start: var(--sp-3); }
 
@@ -292,7 +296,7 @@
 .offer-mock-scrim {
   position: fixed;
   inset: 0;
-  z-index: 1000;
+  z-index: var(--z-modal);
   display: grid;
   place-items: center;
   padding: var(--sp-4);
@@ -458,6 +462,19 @@
   0%, 100% { opacity: 1; }
   50%      { opacity: 0.35; }
 }
+/* Info variant + action slot: the "A new version is available" notice
+   (VersionNotice) shares the banner's slot and layout but is information,
+   not a warning, so it swaps the amber family for the accent family.
+   `__actions` mirrors `.approval__actions`. */
+.degraded-banner--info {
+  background: var(--accent-soft);
+  border-color: var(--chip-line);
+}
+.degraded-banner--info .degraded-banner__ico {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+.degraded-banner__actions { display: flex; gap: var(--sp-2); flex: 0 0 auto; }
 
 /* ============================================================
    DATA SOURCE DRAWER
@@ -468,7 +485,7 @@
   backdrop-filter: blur(2px);
   opacity: 0; pointer-events: none;
   transition: opacity var(--dur-base) var(--ease);
-  z-index: 40;
+  z-index: var(--z-drawer-scrim);
 }
 .drawer-scrim.is-open { opacity: 1; pointer-events: auto; }
 .drawer {
@@ -478,10 +495,32 @@
   border-left: 1px solid var(--line-2);
   box-shadow: var(--shadow-lg);
   transform: translateX(100%);
-  transition: transform var(--dur-slow) var(--ease);
-  z-index: 41;
+  visibility: hidden;
+  /* The closed rule IS the exit: the slide-out runs on the exit pair and
+     `visibility` flips only once it ends, so the panel is seen leaving
+     (2026-09-21 audit motion-01 / css-03). The prototype drawer
+     (design_files/index.html:665-676) has no visibility rule at all; the
+     app's instant `visibility: hidden` had been cutting its own slide-out.
+     EvidenceDrawer.tsx keeps the closing source rendered until
+     `transitionend` (useExitRetained). */
+  transition:
+    transform var(--dur-exit) var(--ease-exit),
+    visibility 0s linear var(--dur-exit);
+  z-index: var(--z-drawer);
   display: flex; flex-direction: column;
 }
-.drawer:not(.is-open) { visibility: hidden; }
-.drawer.is-open { transform: translateX(0); }
+.drawer.is-open {
+  transform: translateX(0);
+  visibility: visible;
+  transition:
+    transform var(--dur-slow) var(--ease),
+    visibility 0s linear 0s;
+}
+@media (prefers-reduced-motion: reduce) {
+  /* No visibility hold at all: the panel hides the moment it closes rather
+     than on the next frame (a pending 0.01ms transition still holds the
+     "visible" side until a frame commits). */
+  .drawer,
+  .drawer.is-open { transition-property: transform; }
+}
 
