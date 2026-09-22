@@ -315,6 +315,10 @@
 }
 .topbar__icon-btn:hover { background: var(--bg-3); color: var(--text-1); border-color: var(--line-2); }
 .topbar__icon-btn.is-active { background: var(--accent-soft); color: var(--accent-ink); border-color: var(--chip-line); }
+/* Pressed (audit motion-02; see tokens.css "Pressed state"). */
+.topbar__icon-btn:active,
+.topbar__search-kbd:active,
+.topbar__search-result:active { translate: 0 var(--pressed-shift); }
 
 .route-nav {
   display: flex;
@@ -400,6 +404,8 @@
   background: transparent;
   color: var(--text-3);
 }
+.rail__brand:active,
+.rail__item:active:not(.rail__item--disabled) { scale: var(--pressed-scale); }
 .rail__spacer { flex: 1; }
 
 /* Main */
@@ -531,6 +537,13 @@
   background: var(--bg-3);
   border-color: var(--line-2);
   color: var(--text-1);
+}
+/* Pressed: every .btn variant nudges down; primary also drops its halo so the
+   press reads as the button meeting the surface (audit motion-02). */
+.btn:active:not([disabled]) { translate: 0 var(--pressed-shift); }
+.btn--primary:active:not([disabled]) {
+  background: var(--accent-hover);
+  box-shadow: 0 1px 0 var(--surface-inset-shadow) inset;
 }
 
 /* ============================================================

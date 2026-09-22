@@ -433,6 +433,70 @@ describe('layout containment contracts', () => {
     expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{[^}]*\.genie,\s*\.genie\.is-open\s*\{\s*transition-property:\s*opacity, transform;/s);
   });
 
+  /**
+   * 2026-09-21 audit motion-02: exactly one `:active` rule existed
+   * (`.genie__resize:active`). Every interactive family now has a pressed
+   * state on the shared --pressed-shift / --pressed-scale tokens (additive
+   * to the prototype, which defines none).
+   */
+  it('gives every interactive family a pressed state on the shared tokens', () => {
+    const css = designCss();
+    const tokens = tokensCss();
+    expect(tokens).toMatch(/--pressed-shift:\s*1px;/);
+    expect(tokens).toMatch(/--pressed-scale:\s*0\.98;/);
+
+    const nudged = [
+      '.btn:active:not([disabled])',
+      '.topbar__icon-btn:active',
+      '.topbar__search-kbd:active',
+      '.topbar__search-result:active',
+      '.chip__remove:active',
+      '.evidence-chip:active',
+      '.tbl__sort:active',
+      '.lead-table__borrower-btn:active',
+      '.pinned-insights__unpin:active',
+      '.login-summary__num:active',
+      '.portfolio-summary__claim:active',
+      '.offer-mock__close:active',
+      '.cmdk__row:active',
+      '.drawer__close:active',
+      '.drawer__tab:active',
+      '.proof-tab:active',
+      'a.lineage-node__chip:active',
+      '.lineage-node--link:active',
+      '.growth-agent-monitor:active',
+      '.segment-mode-control .segmented button:active',
+      '.filter:active',
+      '.tweak-row .segmented button:active',
+      '.saved-workspace__item:active',
+      '.trusted-asset--button:active',
+    ];
+    const scaled = [
+      '.rail__brand:active',
+      '.rail__item:active:not(.rail__item--disabled)',
+      '.seg-card:has(.seg-card__select:active)',
+      '.genie__fab:active',
+      '.tweak-row .sw:active',
+      '.tweak-row .switch:active',
+    ];
+    const escape = (selector: string) => selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    for (const selector of nudged) {
+      expect(css, `${selector} nudges down by --pressed-shift`).toMatch(
+        new RegExp(`${escape(selector)}[^{]*\\{[^}]*translate:\\s*0 var\\(--pressed-shift\\)`, 's'),
+      );
+    }
+    for (const selector of scaled) {
+      expect(css, `${selector} settles to --pressed-scale`).toMatch(
+        new RegExp(`${escape(selector)}[^{]*\\{[^}]*scale:\\s*var\\(--pressed-scale\\)`, 's'),
+      );
+    }
+    // Table rows deepen instead: a transform would break their borders.
+    expect(css).toMatch(/\.tbl tbody tr:active\s*\{\s*background:\s*var\(--bg-4\);/s);
+    // Primary buttons also lose their halo while held.
+    expect(css).toMatch(/\.btn--primary:active:not\(\[disabled\]\)\s*\{[^}]*background:\s*var\(--accent-hover\);/s);
+    expect((css.match(/:active/g) ?? []).length).toBeGreaterThanOrEqual(30);
+  });
+
   it('lets segment cards wrap content instead of clipping labels or pending copy', () => {
     const css = designCss();
 

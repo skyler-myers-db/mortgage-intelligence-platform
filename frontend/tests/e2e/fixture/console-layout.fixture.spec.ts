@@ -304,3 +304,30 @@ test.describe('overlay exits are instant under reduced motion', () => {
     instant(await closeAndSampleExit(page, '.genie', 'Close Genie'), 'Genie');
   });
 });
+
+test.describe('pressed states', () => {
+  test('a held button, nav chip and Console control show the shared pressed offset', async ({ app, page }) => {
+    await app.gotoRoute('/');
+    const panel = await app.openConsole();
+    // Targets whose click keeps the page where it is (Home stays Home).
+    const targets: Array<[string, Locator]> = [
+      ['button', panel.getByRole('button', { name: 'Refresh' })],
+      ['nav chip', page.getByRole('navigation', { name: 'Main navigation' }).getByRole('link', { name: 'Home' })],
+      ['Console segmented control', panel.getByRole('button', { name: 'Compact' })],
+    ];
+    // The Console's recent-activity query refetches on mount and disables
+    // Refresh meanwhile; a disabled button has no pressed state by design.
+    await app.settle();
+    for (const [label, target] of targets) {
+      await expect(target).toBeEnabled();
+      await target.scrollIntoViewIfNeeded();
+      const box = await boxOf(target);
+      await expect(target).toHaveCSS('translate', 'none');
+      await page.mouse.move((box.left + box.right) / 2, (box.top + box.bottom) / 2);
+      await page.mouse.down();
+      await expect(target, `${label} nudges down while held`).toHaveCSS('translate', '0px 1px');
+      await page.mouse.up();
+      await expect(target, `${label} settles back on release`).toHaveCSS('translate', 'none');
+    }
+  });
+});

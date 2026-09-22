@@ -245,6 +245,7 @@
   transition: transform var(--dur-base) var(--ease);
 }
 .genie__fab:hover { transform: translateY(-2px); }
+.genie__fab:active { scale: var(--pressed-scale); }
 .genie__fab.is-hidden { transform: translateY(20px) scale(0.6); opacity: 0; pointer-events: none; }
 @media (max-width: 720px) {
   .genie__fab {
@@ -598,6 +599,7 @@
   border-color: var(--line-3);
   color: var(--text-1);
 }
+.growth-agent-monitor:active { translate: 0 var(--pressed-shift); }
 .growth-agent-monitor__main {
   min-width: 0;
   display: grid;

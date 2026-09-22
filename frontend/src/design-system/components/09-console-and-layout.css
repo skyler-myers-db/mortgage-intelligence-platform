@@ -78,6 +78,7 @@
 .tweak-row .sw--navy { background: var(--entrada-navy); }
 .tweak-row .sw--red { background: var(--entrada-red); }
 .tweak-row .sw.is-active { border-color: var(--text-1); }
+.tweak-row .sw:active { scale: var(--pressed-scale); }
 .tweak-row select, .tweak-row input[type="text"] {
   width: 100%; background: var(--bg-2); border: 1px solid var(--line-1);
   color: var(--text-1); font-family: var(--font-sans); font-size: var(--fs-13);
@@ -93,6 +94,7 @@
   border-radius: 4px; font-family: var(--font-sans);
 }
 .tweak-row .segmented button.is-active { background: var(--accent-soft); color: var(--accent-ink); }
+.tweak-row .segmented button:active { translate: 0 var(--pressed-shift); }
 .tweak-row .row { display: flex; align-items: center; justify-content: space-between; }
 .tweak-row .row label { margin: 0; }
 .tweak-row .switch {
@@ -116,6 +118,7 @@
   left: calc(var(--sp-10) - var(--sp-5) - (var(--sp-1) / 2));
   background: var(--accent);
 }
+.tweak-row .switch:active { scale: var(--pressed-scale); }
 /* PropertyLookupPanel in its compact (Console) form. The ~266px track holds
    neither the header's nowrap "Every lookup audited" chip beside the title
    nor two side-by-side inputs, so the header wraps the chip onto its own
@@ -151,6 +154,7 @@
   border-color: var(--accent);
   color: var(--text-1);
 }
+.saved-workspace__item:active { translate: 0 var(--pressed-shift); }
 .saved-workspace__body {
   display: grid;
   min-width: 0;
@@ -205,6 +209,7 @@
   border-color: var(--accent);
   background: var(--accent-soft);
 }
+.trusted-asset--button:active { translate: 0 var(--pressed-shift); }
 .trusted-asset__label {
   font-size: var(--fs-13);
   color: var(--text-1);

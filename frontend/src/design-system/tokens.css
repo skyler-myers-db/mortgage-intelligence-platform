@@ -410,3 +410,15 @@ input[type="checkbox"] {
   --dur-exit: 216ms;
   --ease-exit: cubic-bezier(0.4, 0, 1, 1);
 }
+
+/* ---------- Pressed state ----------
+ * One recipe for every interactive family (2026-09-21 audit motion-02;
+ * additive, the prototype defines no :active): controls nudge down by
+ * --pressed-shift, cards / rail items / swatches settle to --pressed-scale.
+ * Both are individual transform properties, so they compose with a hover
+ * `transform` and stay on the compositor.
+ */
+:root {
+  --pressed-shift: 1px;
+  --pressed-scale: 0.98;
+}

@@ -36,6 +36,7 @@
 }
 .chip__remove:hover,
 .chip__remove:focus-visible { opacity: 1; background: var(--bg-3); }
+.chip__remove:active { translate: 0 var(--pressed-shift); }
 .chip--neutral { background: var(--bg-3); border-color: var(--line-1); color: var(--text-2); }
 .chip--success { background: var(--status-success-soft-muted); border-color: var(--status-success-line-strong); color: var(--status-success-ink); }
 .chip--warning { background: var(--status-warning-soft-muted); border-color: var(--status-warning-line-strong); color: var(--status-warning-ink); }
@@ -83,6 +84,7 @@
   max-inline-size: 100%;
 }
 .evidence-chip:hover { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-ink); }
+.evidence-chip:active { translate: 0 var(--pressed-shift); }
 .evidence-chip .e-ico { font-size: 9px; opacity: 0.7; }
 .evidence-chip__label {
   min-inline-size: 0;
@@ -397,6 +399,9 @@
   opacity: 0.35; pointer-events: none;
 }
 .seg-card:hover { border-color: var(--line-2); transform: translateY(-1px); }
+/* Pressed: the whole card settles while its stretched select button is held
+   (audit motion-02; `scale` composes with the hover lift above). */
+.seg-card:has(.seg-card__select:active) { scale: var(--pressed-scale); }
 .seg-card.is-selected {
   border-color: var(--seg-color, var(--accent));
   box-shadow: 0 0 0 1px var(--seg-color, var(--accent)), 0 10px 30px -12px color-mix(in oklab, var(--seg-color, var(--accent)) 40%, transparent);

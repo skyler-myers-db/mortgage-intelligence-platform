@@ -92,6 +92,10 @@
   transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
 }
 .pinned-insights__unpin:hover { color: var(--signal-danger); border-color: var(--signal-danger); }
+.pinned-insights__unpin:active,
+.login-summary__num:active,
+.portfolio-summary__claim:active,
+.offer-mock__close:active { translate: 0 var(--pressed-shift); }
 
 .genie-answer__pin-row { margin-block-start: var(--sp-3); }
 

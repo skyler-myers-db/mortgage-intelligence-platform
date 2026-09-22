@@ -82,6 +82,9 @@
 }
 .tbl tbody tr { cursor: pointer; transition: background var(--dur-fast) var(--ease); }
 .tbl tbody tr:hover { background: var(--bg-3); }
+/* Pressed row: a deeper well rather than a transform, which would break the
+   table's row borders (audit motion-02). */
+.tbl tbody tr:active { background: var(--bg-4); }
 .tbl tbody tr.is-expanded { background: var(--accent-soft); }
 .tbl td.is-primary { color: var(--text-1); font-weight: 500; }
 .tbl td.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
@@ -138,6 +141,8 @@
   cursor: pointer;
 }
 .tbl__sort:hover { color: var(--text-1); }
+.tbl__sort:active,
+.lead-table__borrower-btn:active { translate: 0 var(--pressed-shift); }
 .lead-table__borrower { font-size: var(--fs-12); color: var(--text-1); }
 .lead-table__clip { font-size: 10px; }
 .lead-table__zip { font-size: var(--fs-11); }
