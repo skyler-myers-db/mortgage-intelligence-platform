@@ -31,6 +31,14 @@ export interface FixtureOptions {
   hygieneOptOut: HygieneCheck[];
   /** Frozen `Date.now()` for the page (ISO string), or null for the real clock. */
   fixtureNow: string | null;
+  /**
+   * Record the trace's screencast (a screenshot per frame). Default: true.
+   * A spec that runs real motion sets it false: a page that animates
+   * continuously makes the screencast capture every frame, which roughly
+   * doubles those tests under load. DOM snapshots and sources are always
+   * recorded, so a failure trace stays debuggable.
+   */
+  traceScreenshots: boolean;
 }
 
 export interface FixtureHarness {
@@ -48,9 +56,10 @@ function isUnexpectedOutcome(testInfo: TestInfo): boolean {
 export const test = base.extend<FixtureOptions & FixtureHarness>({
   hygieneOptOut: [[], { option: true }],
   fixtureNow: [FIXTURE_NOW, { option: true }],
+  traceScreenshots: [true, { option: true }],
 
   failureTrace: [
-    async ({ context }, use, testInfo) => {
+    async ({ context, traceScreenshots }, use, testInfo) => {
       // Fixture mode keeps Playwright's own `trace` option OFF (see
       // playwright.config.ts) and records the failure trace here. With
       // `trace: 'retain-on-failure'`, Playwright 1.59 finalizes a failed test
@@ -61,7 +70,7 @@ export const test = base.extend<FixtureOptions & FixtureHarness>({
       // exceeded". Saving a context trace to a path only writes through yazl,
       // so it completes on every Node. runner.fixture.spec.ts pins this.
       await context.tracing.start({
-        screenshots: true,
+        screenshots: traceScreenshots,
         snapshots: true,
         sources: true,
         title: testInfo.titlePath.join(' › '),

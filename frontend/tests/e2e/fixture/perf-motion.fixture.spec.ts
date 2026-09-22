@@ -106,7 +106,10 @@ test.describe('brand wordmark', () => {
 
 test.describe('KPI sparkline draw', () => {
   test.describe('with motion allowed', () => {
-    test.use({ contextOptions: { reducedMotion: 'no-preference' } });
+    // Real motion animates continuously; the trace screencast would capture
+    // every frame and roughly double these tests under load (DOM snapshots
+    // stay on, so a failure trace is still debuggable).
+    test.use({ contextOptions: { reducedMotion: 'no-preference' }, traceScreenshots: false });
 
     test('strokes in across its 700 ms window on first appearance and not on route re-entry', async ({ app, page }) => {
       await app.gotoRoute('/');
@@ -160,7 +163,10 @@ test.describe('KPI sparkline draw', () => {
 
 test.describe('Borrower 360 trigger timeline reveal', () => {
   test.describe('with motion allowed', () => {
-    test.use({ contextOptions: { reducedMotion: 'no-preference' } });
+    // Real motion animates continuously; the trace screencast would capture
+    // every frame and roughly double these tests under load (DOM snapshots
+    // stay on, so a failure trace is still debuggable).
+    test.use({ contextOptions: { reducedMotion: 'no-preference' }, traceScreenshots: false });
 
     test('fades once per session: the second dossier renders it visible at first paint', async ({ app, page }) => {
       await app.gotoRoute('/lead-queue');
