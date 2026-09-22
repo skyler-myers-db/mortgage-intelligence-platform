@@ -1,7 +1,7 @@
 /* ============================================================
-   GENIE SURVIVABILITY — launcher status, composer busy hint
+   GENIE SURVIVABILITY — launcher status, composer busy hint, answer anchor
    ------------------------------------------------------------
-   Audit 2026-09-21 (runtime-01 / genie-02 / genie-v2).
+   Audit 2026-09-21 (runtime-01 / genie-02 / genie-v2 / motion-v2).
 
    DOCUMENTED BEM EXTENSION of the prototype. design_files/index.html:773-785
    defines `.genie__fab` with two states only (rest, `.is-hidden`); the
@@ -90,3 +90,8 @@
   cursor: not-allowed;
   opacity: 0.55;
 }
+
+/* Answer anchor (motion-v2). A new answer is scrolled to its START, so the
+   Summary-first composition lands on screen instead of the follow-up chips;
+   the margin keeps the bubble off the panel header's edge. */
+.genie__msg { scroll-margin-block-start: var(--sp-3); }

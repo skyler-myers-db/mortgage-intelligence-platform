@@ -38,6 +38,7 @@ import {
 import { GENIE_POINTER_RESIZE_HANDLES, useGenieWindow } from './useGenieWindow';
 import { useGeniePanelDismissal } from './useGeniePanelDismissal';
 import { useGenieTranscript } from './useGenieTranscript';
+import { useGenieTranscriptScroll } from './useGenieTranscriptScroll';
 import { GenieHistoryMenu } from './GenieHistoryMenu';
 
 /**
@@ -126,6 +127,8 @@ export function GenieChat() {
   // both read `asking === false` from their render's closure. Also read by
   // the open effect below, which must not re-run when a turn starts/settles.
   const askInFlightRef = useRef(false);
+  // The reset listener below is bound once, before the scroll hook exists.
+  const cancelAnchorRef = useRef<() => void>(() => undefined);
   const genieOpenRef = useRef(genieOpen);
   useEffect(() => {
     genieOpenRef.current = genieOpen;
@@ -192,6 +195,7 @@ export function GenieChat() {
       setAskStartedAt(null);
       setUnseenAnswer(false);
       setAnnouncement('');
+      cancelAnchorRef.current();
     };
     window.addEventListener(GENIE_CONVERSATION_RESET_EVENT, onActorBoundaryReset);
     return () => {
@@ -221,12 +225,23 @@ export function GenieChat() {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const fabRef = useRef<HTMLButtonElement | null>(null);
+  const lastAnswerRef = useRef<HTMLDivElement | null>(null);
   const closePanel = useCallback(() => setGenieOpen(false), [setGenieOpen]);
   useGeniePanelDismissal({ open: genieOpen, panelRef, inputRef, fabRef, onClose: closePanel });
 
+  // A settled answer is scrolled to its START; everything else sticks to the
+  // bottom (audit `motion-v2`).
+  const { anchorNextAnswer, cancelAnchor } = useGenieTranscriptScroll({
+    open: genieOpen,
+    bodyRef,
+    lastAnswerRef,
+    messages: msgs,
+    pendingQuestion,
+    busy: typing,
+  });
   useEffect(() => {
-    if (bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
-  }, [msgs, pendingQuestion, typing, genieOpen]);
+    cancelAnchorRef.current = cancelAnchor;
+  }, [cancelAnchor]);
 
   // Opening the panel: the badge has done its job, and the conversation id is
   // re-read because `/ask-genie` may have advanced the shared thread while the
@@ -251,10 +266,12 @@ export function GenieChat() {
     setGenieTurnStatus(launcherStatus);
   }, [launcherStatus]);
 
-  /** One settled bubble: append to the shared transcript, tell screen
-   *  readers, and badge the launcher if the panel is closed. */
+  /** One settled bubble: append to the shared transcript, anchor the scroll
+   *  to its start, tell screen readers, and badge the launcher if the panel
+   *  is closed. */
   const landBubble = (question: string, payload: GenieAnswerShape, spoken: string) => {
     appendGenieTurn(question, payload);
+    anchorNextAnswer();
     setAnnouncement(spoken);
     if (!genieOpenRef.current) setUnseenAnswer(true);
   };
@@ -365,6 +382,7 @@ export function GenieChat() {
     askAbortRef.current?.abort();
     suppressBootstrapConversationRef.current = true;
     setGenieTurns(turns);
+    cancelAnchor();
     setConversationId(conversationIdToLoad);
     writeGenieConversationId(conversationIdToLoad);
     setHistoryOpen(false);
@@ -413,6 +431,7 @@ export function GenieChat() {
   };
 
   const busyReason = asking ? ASKING_REASON : actionRunning ? ACTION_REASON : null;
+  const lastAnswerIndex = msgs.reduce((last, m, i) => (m.who === 'ai' ? i : last), -1);
   // While a turn runs the announcer carries stage CHANGES only (the same
   // label the progress card shows); once it settles, the landing message.
   const announcerText = asking ? genieProgressLabel(liveProgress) : announcement;
@@ -591,7 +610,11 @@ export function GenieChat() {
             m.who === 'user' ? (
               <div key={i} className="genie__msg genie__msg--user">{m.text}</div>
             ) : (
-              <div key={i} className="genie__msg genie__msg--ai">
+              <div
+                key={i}
+                ref={i === lastAnswerIndex ? lastAnswerRef : undefined}
+                className="genie__msg genie__msg--ai"
+              >
                 <div className="bubble">
                   <GenieAnswer
                     payload={m.payload}

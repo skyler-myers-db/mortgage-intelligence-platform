@@ -54,4 +54,8 @@ describe('Genie launcher status partial (audit 2026-09-21 runtime-01 / genie-02)
     expect(css).not.toMatch(/\d+px/);
     expect(css).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(/);
   });
+
+  it('keeps a landed answer off the panel header when scrolled to its start (motion-v2)', () => {
+    expect(declarations()).toMatch(/\.genie__msg\s*\{\s*scroll-margin-block-start:\s*var\(--sp-3\);/);
+  });
 });

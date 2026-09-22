@@ -10,6 +10,7 @@
  *                          focus is inside it
  *   genie-v2               a second ask mid-turn never replaces the first
  *   genie-v1 / a11y-06     one persistent announcer, outside the panel
+ *   motion-v2              a landed answer is scrolled to its START
  */
 
 import { act, useRef } from 'react';
@@ -157,16 +158,35 @@ describe('floating Genie survivability', () => {
   let root: Root;
   let drawerOpen = false;
   const closeDrawer = vi.fn();
+  const scrollIntoView = vi.fn();
 
   beforeEach(() => {
     Object.values(mocks).forEach((mock) => mock.mockReset());
     closeDrawer.mockReset();
+    scrollIntoView.mockReset();
     appState.genieOpen = true;
     drawerOpen = false;
     installLocalStorage();
     clearGenieTurns();
     mocks.genieStart.mockResolvedValue(START);
     mocks.genieFeedback.mockResolvedValue({ accepted: true });
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      configurable: true,
+      writable: true,
+      value: function scrollIntoViewSpy(this: Element, options?: ScrollIntoViewOptions) {
+        scrollIntoView(this, options);
+      },
+    });
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: (query: string) => ({
+        matches: false,
+        media: query,
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+      }),
+    });
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -295,13 +315,19 @@ describe('floating Genie survivability', () => {
     expect(document.getElementById('genie-launcher-status')?.textContent).toContain('answer ready');
     expect(getGenieTurnStatus()).toBe('ready');
     expect(announcer().textContent).toBe('Answer ready');
+    // The closed panel did not scroll anything yet.
+    expect(scrollIntoView).not.toHaveBeenCalled();
 
     setOpen(true);
     await flush();
 
     expect(fab().classList.contains('is-genie-ready')).toBe(false);
     expect(getGenieTurnStatus()).toBe('idle');
-    expect(container.textContent).toContain('124,946 borrowers');
+    // Opening lands on the START of the unseen answer, without animation.
+    const answers = container.querySelectorAll('.genie__msg--ai');
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(scrollIntoView.mock.calls[0][0]).toBe(answers[answers.length - 1]);
+    expect(scrollIntoView.mock.calls[0][1]).toEqual({ block: 'start', behavior: 'auto' });
   });
 
   it('still aborts the turn and clears everything on an actor-boundary reset (fail-closed)', async () => {
@@ -461,6 +487,63 @@ describe('floating Genie survivability', () => {
     await waitUntil(() => announcer().textContent === 'Answer ready');
     // The settled answer mounts no second, pre-populated status region.
     expect(dialog().querySelectorAll('[role="status"]')).toHaveLength(0);
+  });
+
+  it('scrolls a landed answer to its START instead of jumping to the end (motion-v2)', async () => {
+    render();
+    const body = container.querySelector<HTMLElement>('.genie__body');
+    if (!body) throw new Error('transcript body not rendered');
+    Object.defineProperty(body, 'scrollHeight', { configurable: true, value: 1_000 });
+
+    const turn = await startLiveTurn('How many borrowers are in the money?');
+    // Sending a question still sticks to the bottom.
+    expect(body.scrollTop).toBe(1_000);
+    body.scrollTop = 120;
+
+    await act(async () => {
+      turn.progress.resolve(TERMINAL);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await waitUntil(() => mocks.genieComplete.mock.calls.length === 1);
+    body.scrollTop = 120;
+    await act(async () => {
+      turn.complete.resolve(answer());
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await waitUntil(() => container.textContent?.includes('124,946 borrowers') ?? false);
+
+    const answers = container.querySelectorAll('.genie__msg--ai');
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(scrollIntoView.mock.calls[0][0]).toBe(answers[answers.length - 1]);
+    expect(scrollIntoView.mock.calls[0][1]).toEqual({ block: 'start', behavior: 'smooth' });
+    // The end-jump is gone: nothing forced the transcript to scrollHeight.
+    expect(body.scrollTop).toBe(120);
+  });
+
+  it('does not animate the answer scroll under prefers-reduced-motion', async () => {
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: (query: string) => ({
+        matches: query.includes('prefers-reduced-motion'),
+        media: query,
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+      }),
+    });
+    render();
+    const turn = await startLiveTurn('How many borrowers are in the money?');
+    await act(async () => {
+      turn.progress.resolve(TERMINAL);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await waitUntil(() => mocks.genieComplete.mock.calls.length === 1);
+    await act(async () => {
+      turn.complete.resolve(answer());
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await waitUntil(() => scrollIntoView.mock.calls.length === 1);
+    expect(scrollIntoView.mock.calls[0][1]).toEqual({ block: 'start', behavior: 'auto' });
   });
 
   it('shows a turn the /ask-genie route settled while the panel sat closed', async () => {
