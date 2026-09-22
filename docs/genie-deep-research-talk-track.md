@@ -261,6 +261,13 @@ These are the sweep working as designed, not faults. Each shows under
   could not be verified … the prose was withheld and the verified rows are
   shown."** The rewrite failed too: the section shows a plain digest of its
   rows with its chart and table, and no prose from the model.
+- **"Genie's first draft used wording the output safety guard rejects; it
+  rewrote the narrative from the verified figures and the rewrite passed
+  the guard and verification."** The output guard is fail-closed and
+  refuses contact and targeting vocabulary; Genie got one rewrite under the
+  wording rule and it passed. Say nothing unless asked; if asked: "the same
+  filter that blocks a request for names blocks outreach language in an
+  answer, and the agent rewrites rather than argues."
 - **"Governed cross-check: this answer's framing overlaps N of 10 borrowers
   with the canonical opportunity ranking; … the Lead Queue holds the
   operational list."** Genie ranked over the whole marketable population;
@@ -334,3 +341,18 @@ observability build (commit 7ed74cac), same method:
 Every deep beat in this track now ships a multi-section sweep; four of the
 eight core beats also ship the verified synthesis on a typical run, and the
 others disclose why it was withheld.
+
+Final verification after the business-readable composition landed (per-section
+charts, summary first, governed-label literals, guard-aware rewrites; commit
+176b2e29, app deployment 8 on 2026-09-08 22:06Z):
+
+| Question | Elapsed | Sections (chart kinds) | Summary |
+|---|---|---|---|
+| 1 Hero: full analysis of the marketable population | 177s | 7 (state bar, offer bar, cohort bar, offer-code bar, 2 tables, borrower list) | yes |
+| 1 Follow-up: top five ZIPs (same thread) | 21s | single turn, ZIP bar | — |
+| 2 Head of Growth: addressable market | 119s | 5 (metric, segment bar, offer bar, 2 tables) | yes |
+| Cohort comparison (the question that once drew twelve "true" bars) | 96s | 6 (2 metrics, 3 cohort bars, 1 table) | yes |
+
+Section titles on that run were Genie's own: "Marketable population size",
+"Offer mix overview", "Why these borrowers", "Offer rationale by cohort",
+"Geography concentration", "Signal co-occurrence", "Evidence behind leaders".

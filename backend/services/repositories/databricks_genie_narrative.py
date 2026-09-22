@@ -184,14 +184,26 @@ def _factual_row_summary(
 _NARRATIVE_REPAIR_MAX_ROWS = 12
 _NARRATIVE_REPAIR_MAX_COLS = 8
 _UNVERIFIED_CLAIMS_GAP_MARKER = "could not be verified against the returned rows"
+_SAFETY_GUARD_GAP_MARKER = "withheld by the output safety guard"
 _NARRATIVE_REWRITTEN_GAP = (
     "Genie's first draft carried a figure the returned rows could not support; "
     "it rewrote the narrative from the verified figures and the rewrite passed "
     "verification."
 )
+_NARRATIVE_REWORDED_GAP = (
+    "Genie's first draft used wording the output safety guard rejects; it "
+    "rewrote the narrative from the verified figures and the rewrite passed "
+    "the guard and verification."
+)
+_WORDING_RULE = (
+    "Never use the words call, target, contact or reach out, never describe "
+    "outreach, never name a person, and do not wrap words in asterisks."
+)
 
 
-def _narrative_repair_prompt(question: str, rows: list[dict[str, Any]]) -> str:
+def _narrative_repair_prompt(
+    question: str, rows: list[dict[str, Any]], *, reason: str = "figure"
+) -> str:
     """Ask the space to rewrite its summary from the figures it actually returned.
 
     Live-first: the deterministic layer never authors the narrative. When
@@ -210,14 +222,18 @@ def _narrative_repair_prompt(question: str, rows: list[dict[str, Any]]) -> str:
         if cells:
             digest_lines.append("- " + "; ".join(cells))
     digest = "\n".join(digest_lines)
+    cause = (
+        "used a figure that is not in the rows your query returned"
+        if reason == "figure"
+        else "used wording the compliance filter rejects"
+    )
     return (
         "Do not generate SQL for this message. Your previous summary for the "
-        f'question "{question}" used a figure that is not in the rows your query '
-        "returned. Rewrite the summary for a business reader in 2 to 5 "
-        "sentences using ONLY the figures below, exactly as written: no "
-        "rounding, no derived percentages or totals you did not return, no "
-        "table or column names, no SQL, no mention of this instruction, and "
-        "never the words call, target, contact or reach out.\n\n"
+        f'question "{question}" {cause}. Rewrite the summary for a business '
+        "reader in 2 to 5 sentences using ONLY the figures below, exactly as "
+        "written: no rounding, no derived percentages or totals you did not "
+        "return, no table or column names, no SQL, no mention of this "
+        f"instruction. {_WORDING_RULE}\n\n"
         f"Rows:\n{digest}"
     )
 

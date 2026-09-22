@@ -493,3 +493,49 @@ def test_an_unsafe_section_is_withheld_alone_and_the_rest_ships(
     events = _sweep_events(caplog)
     assert any(outcome == "unsafe_visible_text" for name, outcome, _ in events if name == "genie_sweep_section")
     assert events[-1][2]["withheld_by_guard"] == 1 and events[-1][2]["sections"] == 3
+
+
+class _WordingRetryRepo(_StubRepo):
+    """First synthesis uses a word the output guard refuses; the rewrite does not."""
+
+    def ask_raw(self, prompt: str) -> str | None:
+        self.raw_prompts.append(prompt)
+        if "Verified figures:" in prompt and "compliance filter" in prompt:
+            return "Refinance economics is the strongest opportunity; act on those segments first."
+        if "executive synthesis" in prompt:
+            return "This gives the cleanest product call because there is no offer ambiguity."
+        return self.plan_text
+
+
+def test_synthesis_gets_one_guard_aware_rewrite_before_it_is_withheld() -> None:
+    repo = _WordingRetryRepo()
+    result = run_planned_sweep(repo, _USER_QUESTION)  # type: ignore[arg-type]
+    assert result is not None
+    assert len(repo.raw_prompts) == 3
+    assert "compliance filter" in repo.raw_prompts[2]
+    assert result.summary is not None and "cleanest product call" not in result.summary
+    assert result.proof is not None
+    assert not any("withheld by the output safety guard" in gap for gap in result.proof.known_data_gaps)
+
+
+class _LabelledRowsRepo(_StubRepo):
+    """Section rows carry a Title Case gold label the prose quotes."""
+
+    def respond(self, question: str, conversation_id: str | None = None, *, allow_sweep: bool = True, poll_timeout_s: int | None = None) -> GenieMessageResponse:
+        response = super().respond(question, conversation_id, allow_sweep=allow_sweep, poll_timeout_s=poll_timeout_s)
+        return response.model_copy(
+            update={
+                "answer": "The lowest segment is Permit Activity at 0 borrowers.",
+                "table_rows": [{"segment_code": "permit", "name": "Permit Activity", "borrowers": "0"}],
+            }
+        )
+
+
+def test_a_section_quoting_its_own_gold_label_still_ships() -> None:
+    repo = _LabelledRowsRepo()
+    result = run_planned_sweep(repo, _USER_QUESTION)  # type: ignore[arg-type]
+    assert result is not None
+    assert len(result.sections) == 4
+    assert all("Permit Activity" in section.answer for section in result.sections)
+    assert result.proof is not None
+    assert not any("withheld by the output safety guard" in gap for gap in result.proof.known_data_gaps)

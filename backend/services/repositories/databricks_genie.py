@@ -17,6 +17,10 @@ from backend.services.genie_client import (
     GenieResponse,
     ResilientGenieClient,
 )
+from backend.services.genie_message_policy import (
+    _without_allowed_literals,
+    governed_row_literals,
+)
 from backend.services.repositories.databricks_genie_actions import (
     _borrower_ids_from_rows,  # noqa: F401 - compatibility re-export
     _portfolio_criteria_from_sql,  # noqa: F401 - compatibility re-export
@@ -41,7 +45,9 @@ from backend.services.repositories.databricks_genie_direct import (
     direct_canonical_response,
 )
 from backend.services.repositories.databricks_genie_narrative import (
+    _NARRATIVE_REWORDED_GAP,
     _NARRATIVE_REWRITTEN_GAP,
+    _SAFETY_GUARD_GAP_MARKER,
     _SOURCE_LINE_RE,  # noqa: F401 - compatibility re-export
     _UNVERIFIED_CLAIMS_GAP_MARKER,
     _default_verification_note,  # noqa: F401 - compatibility re-export
@@ -377,11 +383,14 @@ class DatabricksGenieRepository:
         rows = adapted.table_rows or []
         if adapted.source != "genie" or proof is None or not rows:
             return adapted
-        if not any(_UNVERIFIED_CLAIMS_GAP_MARKER in gap for gap in proof.known_data_gaps):
+        unverified = any(_UNVERIFIED_CLAIMS_GAP_MARKER in gap for gap in proof.known_data_gaps)
+        guarded = any(_SAFETY_GUARD_GAP_MARKER in gap for gap in proof.known_data_gaps)
+        if not (unverified or guarded):
             return adapted
+        reason = "figure" if unverified else "wording"
         try:
             turn = self._genie.ask(
-                _narrative_repair_prompt(question, rows),
+                _narrative_repair_prompt(question, rows, reason=reason),
                 conversation_id=result.conversation_id,
             )
         except (DependencyDownError, GenieClientError):
@@ -391,16 +400,25 @@ class DatabricksGenieRepository:
             return adapted
         if _unsupported_answer_numeric_claims(draft, rows, question):
             return adapted
-        if _answer_text_contains_pii(draft) or genie_visible_text_unsafe(draft):
+        scannable = _without_allowed_literals(draft, governed_row_literals(rows))
+        if _answer_text_contains_pii(scannable) or genie_visible_text_unsafe(scannable):
             return adapted
-        gaps = [gap for gap in proof.known_data_gaps if _UNVERIFIED_CLAIMS_GAP_MARKER not in gap]
-        gaps.append(_NARRATIVE_REWRITTEN_GAP)
+        gaps = [
+            gap
+            for gap in proof.known_data_gaps
+            if _UNVERIFIED_CLAIMS_GAP_MARKER not in gap and _SAFETY_GUARD_GAP_MARKER not in gap
+        ]
+        gaps.append(_NARRATIVE_REWRITTEN_GAP if unverified else _NARRATIVE_REWORDED_GAP)
         step = GenieReasoningStep(
             kind="verify",
             content=(
                 "Genie's first draft cited a figure outside its returned rows; it "
                 "rewrote the summary from the verified figures and the rewrite "
                 "was verified against the same rows."
+                if unverified
+                else "Genie's first draft used wording the output safety guard "
+                "rejects; it rewrote the summary from the verified figures and "
+                "the rewrite passed the guard and verification."
             ),
         )
         return adapted.model_copy(
@@ -534,7 +552,13 @@ def _adapt_genie_response(
     if trusted_sql:
         trace.trust()
     question_hash = _genie_question_hash(question)
-    text_contains_pii = _answer_text_contains_pii(result.answer_text)
+    # A label the governed rows already put on screen may be quoted by the
+    # narrative (live 2026-09-08: the segment name "Permit Activity" read as a
+    # person name and withheld the section's prose while the same value sat
+    # in the table beside it). Everything else in the prose stays scanned.
+    text_contains_pii = _answer_text_contains_pii(
+        _without_allowed_literals(result.answer_text or "", governed_row_literals(rows))
+    )
     lacks_trusted_proof = not result.sql_query or not trusted_assets
     gaps = _known_data_gaps_for_result(
         question=question,

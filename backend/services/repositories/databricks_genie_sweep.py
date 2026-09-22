@@ -93,13 +93,16 @@ def _section_is_renderable(title: str | None, response: GenieMessageResponse) ->
     """
 
     from backend.services.genie_message_policy import (
+        _without_allowed_literals,
         genie_response_has_unsafe_visible_text,
         genie_visible_text_unsafe,
+        governed_row_literals,
     )
 
-    if title and genie_visible_text_unsafe(title):
+    literals = governed_row_literals(response.table_rows)
+    if title and genie_visible_text_unsafe(_without_allowed_literals(title, literals)):
         return False
-    if genie_visible_text_unsafe(response.question):
+    if genie_visible_text_unsafe(_without_allowed_literals(response.question, literals)):
         return False
     return not genie_response_has_unsafe_visible_text(response)
 
@@ -459,12 +462,17 @@ def _synthesize_closing(
     server-side.
     """
 
-    from backend.services.genie_message_policy import genie_visible_text_unsafe
+    from backend.services.genie_message_policy import (
+        _without_allowed_literals,
+        genie_visible_text_unsafe,
+        governed_row_literals,
+    )
     from backend.services.repositories.databricks_genie_numeric import (
         _unsupported_answer_numeric_claims,
     )
 
     combined_rows = [row for _, resp in sections for row in (resp.table_rows or [])]
+    literals = governed_row_literals(combined_rows)
     try:
         draft = repo.ask_raw(_synthesis_prompt(question, sections, deep=deep))
     except Exception:  # noqa: BLE001 - synthesis is additive, never blocking
@@ -485,11 +493,26 @@ def _synthesize_closing(
                 "A cross-section synthesis draft was omitted: it carried numbers "
                 "the verified section results could not support."
             )
-    if genie_visible_text_unsafe(draft):
-        return None, (
-            "A cross-section synthesis draft was withheld by the output "
-            "safety guard."
-        )
+    if genie_visible_text_unsafe(_without_allowed_literals(draft, literals)):
+        # Live 2026-09-08: the guard refused an ordinary synthesis on "the
+        # cleanest product call because…". One guard-aware rewrite, verified
+        # like the first draft; a second hit omits the synthesis for real.
+        try:
+            reworded = repo.ask_raw(
+                _synthesis_repair_prompt(question, combined_rows, reason="wording")
+            )
+        except Exception:  # noqa: BLE001 - the retry is additive too
+            reworded = None
+        draft = (reworded or "").strip()
+        if (
+            not draft
+            or _unsupported_answer_numeric_claims(draft, combined_rows, question)
+            or genie_visible_text_unsafe(_without_allowed_literals(draft, literals))
+        ):
+            return None, (
+                "A cross-section synthesis draft was withheld by the output "
+                "safety guard."
+            )
     return draft, None
 
 
@@ -500,7 +523,9 @@ _SYNTHESIS_REPAIR_MAX_ROWS = 160
 _SYNTHESIS_REPAIR_MAX_COLS = 8
 
 
-def _synthesis_repair_prompt(question: str, rows: list[dict[str, object]]) -> str:
+def _synthesis_repair_prompt(
+    question: str, rows: list[dict[str, object]], *, reason: str = "figure"
+) -> str:
     lines: list[str] = []
     for row in rows[:_SYNTHESIS_REPAIR_MAX_ROWS]:
         cells = [
@@ -511,15 +536,21 @@ def _synthesis_repair_prompt(question: str, rows: list[dict[str, object]]) -> st
         if cells:
             lines.append("- " + "; ".join(cells))
     digest = "\n".join(lines)
+    cause = (
+        "used a figure that is not in the verified results"
+        if reason == "figure"
+        else "used wording the compliance filter rejects"
+    )
     return (
         "Do not generate SQL for this message. Your synthesis for the question "
-        f'"{question}" used a figure that is not in the verified results. '
+        f'"{question}" {cause}. '
         "Rewrite it in 6 to 12 sentences for a lending executive. Quote at "
         "most eight figures, each copied exactly from the list below — never "
         "add, subtract, average, round, convert or turn figures into "
         "percentages; compare in words instead. No table, column or query "
-        "names, no headings, no mention of this instruction, and never the "
-        "words call, target, contact or reach out.\n\n"
+        "names, no headings, no mention of this instruction, never the words "
+        "call, target, contact or reach out, never a person's name, and no "
+        "asterisks around words.\n\n"
         f"Verified figures:\n{digest}"
     )
 
