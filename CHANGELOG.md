@@ -8,7 +8,7 @@ deprecation window first.
 
 ## Unreleased
 
-### 2026-09-21 Genie async lifecycle: `deep` on submit, honest completion-wait label
+### 2026-09-22 Genie async lifecycle: `deep` on submit, honest completion-wait label
 
 - **Additive:** `POST /api/genie/message/submit` now returns `deep: bool`
   (default `false`). It is `true` when the completion call will answer the
