@@ -20,6 +20,7 @@ SERVER_OWNED_AUDIT_EVENT_TYPES: frozenset[str] = frozenset(
         "LEAD_ASSIGN",
         "LEAD_ASSIGNMENT_STATUS",
         "LEAD_DISTRIBUTE",
+        "LEAD_EXPORT",
         "LEAD_OUTCOME",
         "LEAD_OUTCOME_RECORDED",
         "OUTREACH_APPROVE",

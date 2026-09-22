@@ -8629,6 +8629,121 @@
         "title": "LeadAssignment",
         "type": "object"
       },
+      "LeadExportReceipt": {
+        "description": "The ledger entry the download waits for.",
+        "properties": {
+          "actor": {
+            "title": "Actor",
+            "type": "string"
+          },
+          "audit_event_id": {
+            "title": "Audit Event Id",
+            "type": "string"
+          },
+          "borrower_ids_sha256": {
+            "title": "Borrower Ids Sha256",
+            "type": "string"
+          },
+          "csv_sha256": {
+            "title": "Csv Sha256",
+            "type": "string"
+          },
+          "event_type": {
+            "const": "LEAD_EXPORT",
+            "default": "LEAD_EXPORT",
+            "title": "Event Type",
+            "type": "string"
+          },
+          "filter_fingerprint": {
+            "title": "Filter Fingerprint",
+            "type": "string"
+          },
+          "recorded_at": {
+            "title": "Recorded At",
+            "type": "string"
+          },
+          "row_count": {
+            "title": "Row Count",
+            "type": "integer"
+          },
+          "scope": {
+            "enum": [
+              "selected",
+              "loaded"
+            ],
+            "title": "Scope",
+            "type": "string"
+          }
+        },
+        "required": [
+          "audit_event_id",
+          "actor",
+          "scope",
+          "row_count",
+          "csv_sha256",
+          "borrower_ids_sha256",
+          "filter_fingerprint",
+          "recorded_at"
+        ],
+        "title": "LeadExportReceipt",
+        "type": "object"
+      },
+      "LeadExportReceiptRequest": {
+        "description": "What the client declares about the file it is about to download.",
+        "properties": {
+          "borrower_ids": {
+            "description": "Masked borrower ids in the order the file holds them.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 5000,
+            "minItems": 1,
+            "title": "Borrower Ids",
+            "type": "array"
+          },
+          "borrower_ids_sha256": {
+            "description": "SHA-256 (hex) of the compact JSON array of borrower_ids, computed client-side; the server recomputes it from borrower_ids and refuses the receipt on a mismatch.",
+            "title": "Borrower Ids Sha256",
+            "type": "string"
+          },
+          "csv_sha256": {
+            "description": "SHA-256 (hex) of the exact CSV bytes handed to the download.",
+            "title": "Csv Sha256",
+            "type": "string"
+          },
+          "filters": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "The Lead Queue query parameters the exported rows were read with (the same string the CSV's `# filters=` metadata line carries). Only their fingerprint is written to the ledger.",
+            "title": "Filters",
+            "type": "object"
+          },
+          "row_count": {
+            "maximum": 5000.0,
+            "minimum": 1.0,
+            "title": "Row Count",
+            "type": "integer"
+          },
+          "scope": {
+            "enum": [
+              "selected",
+              "loaded"
+            ],
+            "title": "Scope",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope",
+          "row_count",
+          "csv_sha256",
+          "borrower_ids",
+          "borrower_ids_sha256"
+        ],
+        "title": "LeadExportReceiptRequest",
+        "type": "object"
+      },
       "LeadOutcome": {
         "properties": {
           "assigned_to_email": {
@@ -15970,6 +16085,25 @@
               ],
               "title": "Until"
             }
+          },
+          {
+            "description": "Open the ledger on one event (the explorer's ?audit_event_id= deep link). A public-safe opaque id; PII-shaped text is refused.",
+            "in": "query",
+            "name": "event_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Open the ledger on one event (the explorer's ?audit_event_id= deep link). A public-safe opaque id; PII-shaped text is refused.",
+              "title": "Event Id"
+            }
           }
         ],
         "responses": {
@@ -19296,6 +19430,59 @@
           }
         },
         "summary": "List Leads",
+        "tags": [
+          "leads"
+        ]
+      }
+    },
+    "/api/leads/export-receipt": {
+      "post": {
+        "deprecated": true,
+        "description": "Write the ``LEAD_EXPORT`` ledger row a CSV download must wait for.\n\nThe request correlation id is recorded by the audit store itself; no\nbody or header value is copied into the row's identifier columns.",
+        "operationId": "post_api_leads_export_receipt_create_lead_export_receipt",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LeadExportReceiptRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeadExportReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Lead Export Receipt",
         "tags": [
           "leads"
         ]
@@ -23448,6 +23635,25 @@
               ],
               "title": "Until"
             }
+          },
+          {
+            "description": "Open the ledger on one event (the explorer's ?audit_event_id= deep link). A public-safe opaque id; PII-shaped text is refused.",
+            "in": "query",
+            "name": "event_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Open the ledger on one event (the explorer's ?audit_event_id= deep link). A public-safe opaque id; PII-shaped text is refused.",
+              "title": "Event Id"
+            }
           }
         ],
         "responses": {
@@ -26735,6 +26941,58 @@
           }
         },
         "summary": "List Leads",
+        "tags": [
+          "leads"
+        ]
+      }
+    },
+    "/api/v1/leads/export-receipt": {
+      "post": {
+        "description": "Write the ``LEAD_EXPORT`` ledger row a CSV download must wait for.\n\nThe request correlation id is recorded by the audit store itself; no\nbody or header value is copied into the row's identifier columns.",
+        "operationId": "post_api_v1_leads_export_receipt_create_lead_export_receipt",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LeadExportReceiptRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeadExportReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Lead Export Receipt",
         "tags": [
           "leads"
         ]

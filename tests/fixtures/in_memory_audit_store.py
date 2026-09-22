@@ -101,8 +101,11 @@ class InMemoryAuditStore:
         correlation_id: str | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
+        event_id: str | None = None,
     ) -> list[AuditEvent]:
         filtered = self._events
+        if event_id:
+            filtered = [e for e in filtered if e.event_id == event_id]
         if actor:
             filtered = [e for e in filtered if e.actor == actor]
         if action:

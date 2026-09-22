@@ -290,6 +290,7 @@ class LakebaseAuditStore:
         correlation_id: str | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
+        event_id: str | None = None,
     ) -> list[AuditEvent]:
         clauses: list[str] = [
             "pg_visible_in_snapshot("
@@ -326,6 +327,13 @@ class LakebaseAuditStore:
         if correlation_id:
             clauses.append("correlation_id = %(correlation_id)s")
             params["correlation_id"] = correlation_id
+        if event_id:
+            # Deep links (`?audit_event_id=`) open the explorer on one row.
+            # `audit_id` is a UUID column; compare as text so a non-UUID id
+            # (validated public-safe upstream) matches nothing instead of
+            # raising a cast error out of the page read.
+            clauses.append("audit_id::text = %(event_id)s")
+            params["event_id"] = event_id
         if action:
             clauses.append("metadata->>'action' = %(action)s")
             params["action"] = action
