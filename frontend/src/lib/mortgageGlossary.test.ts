@@ -38,6 +38,8 @@ const REQUIRED_TERMS = [
   'evidenceTraceability',
   'piiMasking',
   'platformCapabilityStatus',
+  // Genie refusal card link target (audit 2026-09-21 genie-05).
+  'reviewedVocabulary',
 ] as const;
 
 const PRINCIPLE_TERMS = [

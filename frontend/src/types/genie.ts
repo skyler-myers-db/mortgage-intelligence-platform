@@ -69,7 +69,31 @@ export interface GenieAnswer {
    * to human-readable staged progress copy. Unknown/absent → generic state.
    */
   genie_status?: string | null;
+  /**
+   * Coarse family of a withheld turn (`source` `refused` / `policy_blocked`):
+   * one value per refusal sentence the answer already shows, never the guard
+   * rule or the matched term. Absent on answers and on older backends.
+   */
+  refusal_reason?: GenieRefusalReason | null;
+  /**
+   * Full SHA-256 of the normalized refused question. The only token the
+   * "This was legitimate" report sends; the question text never leaves the
+   * panel. Absent on answers and on older backends.
+   */
+  refusal_report_hash?: string | null;
 }
+
+/** Wire families for a withheld Genie turn (audit 2026-09-21 `genie-05`). */
+export type GenieRefusalReason =
+  | 'protected_class'
+  | 'unreviewed_criterion'
+  | 'pii_request'
+  | 'instruction_override'
+  | 'outreach_instruction'
+  | 'scope_bypass'
+  | 'out_of_scope'
+  | 'output_policy'
+  | 'unknown';
 
 export interface GenieNativeVisualization {
   attachment_id: string;

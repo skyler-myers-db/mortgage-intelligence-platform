@@ -102,6 +102,8 @@ export interface AskGenieAnswerPanelProps {
   submittedQuestion: string | null;
   onFollowUp: (question: string, conversationId: string | null) => void;
   onAction: (action: GenieActionSuggestion) => void;
+  /** Refusal card "Edit question": restore the refused prompt to the composer. */
+  onEditQuestion?: (question: string) => void;
   actionStatus: string | null;
 }
 
@@ -109,10 +111,12 @@ function GenieThreadTurn({
   turn,
   onFollowUp,
   onAction,
+  onEditQuestion,
 }: {
   turn: GenieTurn;
   onFollowUp: (question: string, conversationId: string | null) => void;
   onAction: (action: GenieActionSuggestion) => void;
+  onEditQuestion?: (question: string) => void;
 }) {
   const chip = sourceChipFor(turn.response);
   const drawerForSource = chip ? drawerForAsset(chip.label) : null;
@@ -149,6 +153,7 @@ function GenieThreadTurn({
           question={turn.question || undefined}
           onFollowUp={onFollowUp}
           onAction={onAction}
+          onEditQuestion={onEditQuestion}
           withChart
         />
       </div>
@@ -175,6 +180,7 @@ export function AskGenieAnswerPanel({
   submittedQuestion,
   onFollowUp,
   onAction,
+  onEditQuestion,
   actionStatus,
 }: AskGenieAnswerPanelProps) {
   const composerSampleQuestions = sampleQuestions.slice(0, 4);
@@ -372,6 +378,7 @@ export function AskGenieAnswerPanel({
                   turn={latest}
                   onFollowUp={onFollowUp}
                   onAction={onAction}
+                  onEditQuestion={onEditQuestion}
                 />
               </>
             )}
@@ -386,7 +393,12 @@ export function AskGenieAnswerPanel({
                 {turn.question && (
                   <div className="genie__msg genie__msg--user">{turn.question}</div>
                 )}
-                <GenieThreadTurn turn={turn} onFollowUp={onFollowUp} onAction={onAction} />
+                <GenieThreadTurn
+                  turn={turn}
+                  onFollowUp={onFollowUp}
+                  onAction={onAction}
+                  onEditQuestion={onEditQuestion}
+                />
               </Fragment>
             ))}
           </div>

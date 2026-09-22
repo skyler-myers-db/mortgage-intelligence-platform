@@ -820,6 +820,11 @@ export default function AskGenie() {
           submittedQuestion={submittedQuestion}
           onFollowUp={ask}
           onAction={runAction}
+          onEditQuestion={(q) => {
+            setQuestion(q);
+            setActiveAssetPath(null);
+            questionRef.current?.focus();
+          }}
           actionStatus={actionStatus}
         />
 

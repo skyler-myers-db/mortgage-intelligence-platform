@@ -318,6 +318,15 @@ export const mortgageGlossary = {
     appContext: 'Borrower 360 uses app-scoped references and evidence fields. Contact fields in this environment are synthetic.',
     proof: 'Evidence rows are redacted at the API boundary before any value renders on screen.',
   },
+  reviewedVocabulary: {
+    id: 'reviewed-vocabulary',
+    term: 'Reviewed vocabulary',
+    aliases: ['reviewed criteria', 'permitted selection signals'],
+    category: 'governance',
+    short: 'The mortgage, lien, equity, listing, segment, geography, trigger, and offer signals Genie may select, rank, and explain borrowers on.',
+    appContext: 'Ask Genie and the growth co-pilot answer questions phrased in this vocabulary. A question that selects on protected-class attributes, proxies, personal identifiers, or an attribute outside the reviewed list is withheld, and the refusal card offers a compliant rewording.',
+    proof: 'Every refusal names its family and the reviewed alternatives; the pre-Genie guard battery and the reviewed criterion list are pinned by unit tests.',
+  },
   platformCapabilityStatus: {
     id: 'platform-capability-status',
     term: 'Platform capability status',
