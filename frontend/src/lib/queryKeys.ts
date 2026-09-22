@@ -15,6 +15,8 @@ export const queryKeys = {
   leads: (criteria: readonly unknown[]) => ['mip', 'leads', ...criteria] as const,
   borrower: (borrowerId: string | null | undefined) => ['mip', 'borrower', borrowerId ?? ''] as const,
   borrowerProof: (borrowerId: string | null | undefined) => ['mip', 'borrower', borrowerId ?? '', 'proof'] as const,
+  borrowerLifecycle: (borrowerId: string | null | undefined) =>
+    ['mip', 'borrower', borrowerId ?? '', 'lifecycle'] as const,
   offerRecommendation: (borrowerId: string | null | undefined) =>
     ['mip', 'offer', 'recommendation', borrowerId ?? ''] as const,
   outreachDraft: (borrowerId: string | null | undefined, channel: string) =>
@@ -35,6 +37,8 @@ export const queryKeys = {
   auditEvents: (criteria: readonly unknown[]) => ['mip', 'audit', 'events', ...criteria] as const,
   auditRollups: (period: string, groupBy?: string | null) =>
     ['mip', 'audit', 'rollups', period, groupBy ?? 'event_type'] as const,
+  auditReceipt: (auditEventId: string | null | undefined) =>
+    ['mip', 'audit', 'receipt', auditEventId ?? ''] as const,
   genieStart: () => ['mip', 'genie', 'start'] as const,
   genieAnswer: (criteria: readonly unknown[]) => ['mip', 'genie', 'answer', ...criteria] as const,
   growthAgent: () => ['mip', 'growth-agent'] as const,

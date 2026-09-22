@@ -6,7 +6,7 @@
  * exported `api` object in the original order. Consumers import `api` from
  * `../api` — never from this module.
  */
-import type { AuditEventRow, AuditEventPage, ActorAuditEventPage } from '../apiTypes';
+import type { AuditEventRow, AuditEventPage, ActorAuditEventPage, DecisionReceipt } from '../apiTypes';
 import { getJson } from '../apiTransport';
 
 export const auditApi = {
@@ -55,6 +55,8 @@ export const auditApi = {
       since?: string | null;
       until?: string | null;
       cursor?: string | null;
+      /** One ledger row by its audit id (the Decision receipt's explorer deep link). */
+      event_id?: string | null;
     } = {},
   ) => {
     const params = new URLSearchParams();
@@ -66,6 +68,14 @@ export const auditApi = {
     });
     return getJson<AuditEventPage>(`/api/audit/events/page?${params.toString()}`, signal);
   },
+
+  /**
+   * The Decision receipt: the persisted audit row an approve / reject wrote,
+   * read back after the write resolves. Actor-or-admin scoped on the
+   * backend, so another approver's receipt answers 403.
+   */
+  auditReceipt: (auditEventId: string, signal?: AbortSignal) =>
+    getJson<DecisionReceipt>(`/api/audit/receipt/${encodeURIComponent(auditEventId)}`, signal),
 
   myAuditEvents: (limit = 8, signal?: AbortSignal, cursor?: string | null) => {
     const params = new URLSearchParams();

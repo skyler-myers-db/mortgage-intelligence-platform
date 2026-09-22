@@ -1,10 +1,16 @@
-"""``GET /api/audit/events/page?event_id=`` -- the audit explorer deep link.
+"""``GET /api/audit/events[/page]?event_id=`` -- the audit explorer deep link.
 
 Audit flow-04 / tables-10 (2026-09-21): every ``audit_event_id`` becomes a
 link the explorer opens to. The store already filtered on actor, event type,
 correlation id and a time window; ``event_id`` was the one thing missing, so a
-link could only scan pages hoping to find its row. This pins the filter at
-the HTTP layer, the cursor binding, and the PII refusal on the parameter.
+link could only scan pages hoping to find its row.
+
+One implementation serves both lanes that needed it: the decision-receipt
+filter (``is_valid_audit_event_id``'s closed id alphabet on both routes, a
+UUID-typed primary-key comparison in Lakebase). ``test_audit_receipt.py``
+pins the happy path on both routes; this file pins the edges the export
+receipt's deep link relies on: an unknown id is an empty page, not an error;
+PII-shaped text is refused on both routes; the cursor binds the filter.
 """
 
 from __future__ import annotations
@@ -80,9 +86,10 @@ def test_unknown_event_id_is_an_empty_page_not_an_error(audit_store: InMemoryAud
     assert response.json() == {"items": [], "next_cursor": None}
 
 
-def test_pii_shaped_event_id_is_refused(audit_store: InMemoryAuditStore) -> None:
+@pytest.mark.parametrize("path", ["/api/v1/audit/events/page", "/api/v1/audit/events"])
+def test_pii_shaped_event_id_is_refused(audit_store: InMemoryAuditStore, path: str) -> None:
     response = client.get(
-        "/api/v1/audit/events/page",
+        path,
         params={"event_id": "someone@example.com"},
         headers=ADMIN_HEADERS,
     )

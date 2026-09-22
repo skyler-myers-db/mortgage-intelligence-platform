@@ -30,7 +30,7 @@ class _SalesStateReporting(_SalesStateCore):
             self._client.fetchone(
                 """
             WITH latest_approval AS (
-                SELECT approval_id, action, offer_code, decided_at
+                SELECT approval_id, action, offer_code, decided_at, audit_event_id
                 FROM mip_app.approvals
                 WHERE borrower_id = %(borrower_id)s
                 ORDER BY decided_at DESC, approval_id::text DESC
@@ -57,6 +57,7 @@ class _SalesStateReporting(_SalesStateCore):
                 END AS outreach_status,
                 CASE WHEN a.action = 'approve' THEN a.approval_id ELSE NULL END AS approval_id,
                 CASE WHEN a.action = 'approve' THEN a.decided_at ELSE NULL END AS approved_at,
+                a.audit_event_id AS audit_event_id,
                 d.disposition_at AS outreach_at,
                 now() AS synced_at
             FROM latest_approval a
@@ -71,6 +72,7 @@ class _SalesStateReporting(_SalesStateCore):
             "approval_status": row.get("approval_status") or "pending",
             "outreach_status": row.get("outreach_status") or "none",
             "approval_id": str(row["approval_id"]) if row.get("approval_id") else None,
+            "audit_event_id": str(row["audit_event_id"]) if row.get("audit_event_id") else None,
             "approved_at": row.get("approved_at"),
             "outreach_at": row.get("outreach_at"),
             "synced_at": row.get("synced_at"),

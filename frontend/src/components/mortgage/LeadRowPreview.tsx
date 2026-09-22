@@ -8,6 +8,7 @@ import { safeSegmentName, segmentColor } from '../../lib/segmentMetadata';
 import { useApp } from '../AppContext';
 import { Button, EvidenceChip } from '../Primitives';
 import { ConfidenceMeter } from './ConfidenceMeter';
+import { DecisionReceipt, type LeadDecisionReceipt } from './DecisionReceipt';
 import { ScoreBadge } from './ScoreBadge';
 import { dispositionLabel, outreachLabel } from './LeadTable.logic';
 
@@ -18,8 +19,19 @@ import { dispositionLabel, outreachLabel } from './LeadTable.logic';
  *   `lead.approval_status`, so right after an approve the chip said
  *   "Approved" while this panel still said "pending" — which then made
  *   the (correctly no-op'ing) A/R hotkeys look broken on a terminal row.
+ * @param decisionReceipt The audit row a row approve / reject in this
+ *   session wrote. The expanded row reads it back as a Decision receipt
+ *   (wow-stage-3); nothing about the receipt is taken from the POST body.
  */
-export function RowPreview({ lead, approval }: { lead: LeadSummary; approval?: string }) {
+export function RowPreview({
+  lead,
+  approval,
+  decisionReceipt = null,
+}: {
+  lead: LeadSummary;
+  approval?: string;
+  decisionReceipt?: LeadDecisionReceipt | null;
+}) {
   const { setLastBorrowerId, saveLead, isLeadSaved } = useApp();
   // Prefer the display-safe Cotality property ref projected by the
   // backend. Raw CLIP is masked server-side for public demo safety.
@@ -39,6 +51,17 @@ export function RowPreview({ lead, approval }: { lead: LeadSummary; approval?: s
     });
   };
   return (
+    <>
+      {decisionReceipt?.auditEventId && (
+        <div className="tbl__expand-inner tbl__expand-inner--receipt">
+          <DecisionReceipt
+            auditEventId={decisionReceipt.auditEventId}
+            reveal
+            compact
+            score={{ opportunityScore: lead.opportunity_score, confidence: lead.confidence }}
+          />
+        </div>
+      )}
     <div className="tbl__expand-inner tbl__expand-inner--lead">
       <div>
         <div className="eyebrow mb-2">Borrower 360 preview</div>
@@ -145,6 +168,7 @@ export function RowPreview({ lead, approval }: { lead: LeadSummary; approval?: s
         </div>
       </div>
     </div>
+    </>
   );
 }
 

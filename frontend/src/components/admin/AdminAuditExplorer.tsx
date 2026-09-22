@@ -1,5 +1,6 @@
 import { Fragment, useState } from 'react';
 import type { FormEvent } from 'react';
+import { useSearchParams } from 'react-router';
 import { Chip } from '../Primitives';
 import { Icon } from '../Icon';
 import { WarmingUpBlock } from '../ui/WarmingUpBlock';
@@ -49,11 +50,15 @@ export function AdminAuditExplorer() {
   const [pageCursors, setPageCursors] = useState<Array<string | null>>([null]);
   const [expandedEventId, setExpandedEventId] = useState<string | null>(null);
   const [copyState, setCopyState] = useState<AuditCopyState | null>(null);
+  // wow-stage-3: the Decision receipt deep-links here as
+  // `?audit_event_id=<id>`; the explorer pins that one ledger row.
+  const [searchParams] = useSearchParams();
+  const eventIdFilter = (searchParams.get('audit_event_id') ?? '').trim();
 
   const entityValue = entityFilter.trim();
   const entityIsBorrower = /^B-[A-Z0-9]+$/i.test(entityValue);
   const filtersActive = Boolean(
-    entityFilter.trim() || actionFilter.trim() || eventTypeFilter.trim(),
+    entityFilter.trim() || actionFilter.trim() || eventTypeFilter.trim() || eventIdFilter,
   );
   const page = pageCursors.length - 1;
   const pageCursor = pageCursors[page] ?? null;
@@ -69,9 +74,10 @@ export function AdminAuditExplorer() {
       borrower_id: entityValue && entityIsBorrower ? entityValue : null,
       action: actionFilter.trim() || null,
       event_type: eventTypeFilter.trim() || null,
+      event_id: eventIdFilter || null,
       cursor: pageCursor,
     }),
-    [entityValue, entityIsBorrower, actionFilter, eventTypeFilter, pageCursor],
+    [entityValue, entityIsBorrower, actionFilter, eventTypeFilter, eventIdFilter, pageCursor],
     {
       queryKey: queryKeys.auditEvents([
         'explorer',
@@ -79,6 +85,7 @@ export function AdminAuditExplorer() {
         entityIsBorrower,
         actionFilter,
         eventTypeFilter,
+        eventIdFilter,
         pageCursor,
       ]),
       keepPreviousData: false,
@@ -271,6 +278,9 @@ export function AdminAuditExplorer() {
               )}
               {eventTypeFilter.trim() && (
                 <Chip variant="neutral">event = {eventTypeFilter.trim()}</Chip>
+              )}
+              {eventIdFilter && (
+                <Chip variant="neutral" icon="audit">audit event = {eventIdFilter}</Chip>
               )}
               <span className="muted fs-12">
                 Showing rows {firstShownRow}-{lastShownRow} that match the applied filters.

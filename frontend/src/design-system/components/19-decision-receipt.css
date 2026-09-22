@@ -1,0 +1,113 @@
+/* ============================================================
+   DECISION RECEIPT — the approver's read-back of the Lakebase audit
+   row their approve / reject wrote. New BEM block: the prototype
+   (design_files/index.html) defines no receipt, so this composes the
+   prototype's .surface (:355), .chip (:405) and .evidence-chip with
+   the .field__label / .field__value pair and the token vocabulary
+   only. Nothing renders until the read-back confirms the row; the
+   one-shot stagger below plays on the finished receipt.
+   ============================================================ */
+.decision-receipt { position: relative; }
+.decision-receipt--approved {
+  border-color: color-mix(in oklab, var(--signal-success) 45%, var(--line-1));
+}
+.decision-receipt--rejected {
+  border-color: color-mix(in oklab, var(--signal-danger) 45%, var(--line-1));
+}
+.decision-receipt--held {
+  border-color: color-mix(in oklab, var(--signal-warning) 45%, var(--line-1));
+}
+.decision-receipt__hdr-note {
+  margin-inline-start: auto;
+  color: var(--text-3);
+  font-size: var(--fs-11);
+  text-align: end;
+}
+.decision-receipt__grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sp-3) var(--sp-4);
+  margin: 0;
+}
+.decision-receipt--compact .decision-receipt__grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.decision-receipt__row { min-width: 0; }
+.decision-receipt__row dd { margin: 0; }
+.decision-receipt__value--mono {
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  overflow-wrap: anywhere;
+}
+.decision-receipt__section { margin-top: var(--sp-4); }
+.decision-receipt__ids {
+  margin-top: var(--sp-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  color: var(--text-3);
+  overflow-wrap: anywhere;
+}
+.decision-receipt__score {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.decision-receipt__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  inline-size: 100%;
+}
+.decision-receipt__actions .decision-receipt__explorer { margin-inline-start: auto; }
+.decision-receipt__skeleton {
+  display: grid;
+  gap: var(--sp-2);
+}
+.decision-receipt__copied { color: var(--text-3); font-size: var(--fs-11); }
+
+/* The queue's expanded row hosts the receipt above the preview grid. */
+.tbl__expand-inner--receipt {
+  padding-block-end: 0;
+  border-bottom: 0;
+}
+
+/* One-shot stagger: each row lands in sequence; the delay is capped at
+   --dur-burst so the longest receipt finishes inside 1.1 s. Reduced
+   motion renders the finished receipt at once. */
+.decision-receipt--reveal .decision-receipt__row,
+.decision-receipt--reveal .decision-receipt__section,
+.decision-receipt--reveal .surface__ft {
+  animation: decision-receipt-in var(--dur-slow) var(--ease) both;
+  animation-delay: min(calc(var(--receipt-i, 0) * var(--dur-fast) / 2), var(--dur-burst));
+}
+@keyframes decision-receipt-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .decision-receipt--reveal .decision-receipt__row,
+  .decision-receipt--reveal .decision-receipt__section,
+  .decision-receipt--reveal .surface__ft { animation: none; }
+}
+
+/* Print: "Print receipt" clones the receipt into .decision-receipt-print
+   and flags <html data-print="decision-receipt">; only the clone prints,
+   on the Canvas/CanvasText tokens print.css already sets. */
+.decision-receipt-print { display: none; }
+@media print {
+  html[data-print="decision-receipt"] #root { display: none; }
+  html[data-print="decision-receipt"] .decision-receipt-print {
+    display: block;
+    inline-size: 100%;
+  }
+  .decision-receipt {
+    break-inside: avoid;
+    border: 1pt solid var(--line-2);
+  }
+  .decision-receipt__grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .decision-receipt__actions { display: none; }
+  .decision-receipt--reveal .decision-receipt__row,
+  .decision-receipt--reveal .decision-receipt__section,
+  .decision-receipt--reveal .surface__ft { animation: none; }
+}

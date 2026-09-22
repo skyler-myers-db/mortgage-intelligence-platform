@@ -28,6 +28,7 @@ from backend.api import (
     analytics,
     assets,
     audit,
+    audit_receipt,
     borrowers,
     campaigns,
     config,
@@ -716,6 +717,7 @@ API_ROUTERS = [
     genie.router,
     genie_feedback_routes.router,
     audit.router,
+    audit_receipt.router,
     telemetry.router,
     workspace.router,
 ]

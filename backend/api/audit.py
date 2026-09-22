@@ -20,7 +20,6 @@ from backend.schemas.audit import (
 from backend.schemas.common import (
     validate_public_audit_entity_type,
     validate_public_audit_event_type,
-    validate_public_audit_identifier_or_none,
     validate_public_borrower_id,
 )
 from backend.services.audit_event_types import is_server_owned_audit_event_type
@@ -37,6 +36,7 @@ from backend.services.audit_store import (
     get_audit_store,
     resolve_actor,
 )
+from backend.services.audit_store_receipt import is_valid_audit_event_id
 from backend.services.error_sanitizer import safe_dependency_detail
 from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
@@ -183,7 +183,10 @@ def list_events(
     correlation_id: Annotated[str | None, Query(max_length=128)] = None,
     since: datetime | None = None,
     until: datetime | None = None,
+    event_id: Annotated[str | None, Query(max_length=64)] = None,
 ) -> list[AuditEvent]:
+    if event_id is not None and not is_valid_audit_event_id(event_id):
+        raise HTTPException(status_code=422, detail="invalid event_id")
     if borrower_id is not None:
         try:
             validate_public_borrower_id(borrower_id)
@@ -207,6 +210,7 @@ def list_events(
             correlation_id=correlation_id,
             since=since,
             until=until,
+            event_id=event_id,
         )
     except LakebaseError as exc:
         # No silent fallback. The operator sees 503 and can decide
@@ -232,19 +236,12 @@ def list_event_page(
     correlation_id: Annotated[str | None, Query(max_length=128)] = None,
     since: datetime | None = None,
     until: datetime | None = None,
-    event_id: Annotated[
-        str | None,
-        Query(
-            max_length=128,
-            description=(
-                "Open the ledger on one event (the explorer's ?audit_event_id= "
-                "deep link). A public-safe opaque id; PII-shaped text is refused."
-            ),
-        ),
-    ] = None,
+    event_id: Annotated[str | None, Query(max_length=64)] = None,
 ) -> AuditEventPage:
     """Traverse a snapshot of the append-only audit ledger without page drift."""
 
+    if event_id is not None and not is_valid_audit_event_id(event_id):
+        raise HTTPException(status_code=422, detail="invalid event_id")
     if borrower_id is not None:
         try:
             validate_public_borrower_id(borrower_id)
@@ -255,11 +252,6 @@ def list_event_page(
             correlation_id = _validate_correlation_filter(correlation_id)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail="invalid correlation_id") from exc
-    if event_id is not None:
-        try:
-            event_id = validate_public_audit_identifier_or_none(event_id)
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail="invalid event_id") from exc
     filters = {
         "limit": limit,
         "actor": actor,

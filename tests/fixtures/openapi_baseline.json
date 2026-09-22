@@ -3023,6 +3023,17 @@
               }
             ]
           },
+          "audit_event_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audit Event Id"
+          },
           "borrower_id": {
             "title": "Borrower Id",
             "type": "string"
@@ -4439,6 +4450,191 @@
           "lanes"
         ],
         "title": "DataEstateResponse",
+        "type": "object"
+      },
+      "DecisionReceipt": {
+        "description": "Public-safe projection of one decision row in ``mip_app.action_audit``.",
+        "properties": {
+          "approval_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approval Id"
+          },
+          "approver": {
+            "title": "Approver",
+            "type": "string"
+          },
+          "audit_event_id": {
+            "title": "Audit Event Id",
+            "type": "string"
+          },
+          "borrower_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Borrower Id"
+          },
+          "campaign_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campaign Id"
+          },
+          "channel": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Channel"
+          },
+          "copy_generation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Copy Generation Id"
+          },
+          "copy_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Copy Hash"
+          },
+          "correlation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Correlation Id"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "decision": {
+            "enum": [
+              "approved",
+              "rejected",
+              "held"
+            ],
+            "title": "Decision",
+            "type": "string"
+          },
+          "event_type": {
+            "title": "Event Type",
+            "type": "string"
+          },
+          "evidence_assets": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Evidence Assets",
+            "type": "array"
+          },
+          "evidence_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Evidence Ids",
+            "type": "array"
+          },
+          "offer_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Offer Code"
+          },
+          "offer_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Offer Label"
+          },
+          "rationale_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rationale Code"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "variant_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Variant Name"
+          }
+        },
+        "required": [
+          "audit_event_id",
+          "event_type",
+          "decision",
+          "approver",
+          "created_at"
+        ],
+        "title": "DecisionReceipt",
         "type": "object"
       },
       "DimensionFacetCount": {
@@ -15864,6 +16060,23 @@
               ],
               "title": "Until"
             }
+          },
+          {
+            "in": "query",
+            "name": "event_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Event Id"
+            }
           }
         ],
         "responses": {
@@ -16087,21 +16300,19 @@
             }
           },
           {
-            "description": "Open the ledger on one event (the explorer's ?audit_event_id= deep link). A public-safe opaque id; PII-shaped text is refused.",
             "in": "query",
             "name": "event_id",
             "required": false,
             "schema": {
               "anyOf": [
                 {
-                  "maxLength": 128,
+                  "maxLength": 64,
                   "type": "string"
                 },
                 {
                   "type": "null"
                 }
               ],
-              "description": "Open the ledger on one event (the explorer's ?audit_event_id= deep link). A public-safe opaque id; PII-shaped text is refused.",
               "title": "Event Id"
             }
           }
@@ -16193,6 +16404,50 @@
           }
         },
         "summary": "List My Events",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
+    "/api/audit/receipt/{audit_event_id}": {
+      "get": {
+        "deprecated": true,
+        "description": "Return the receipt for one decision row the caller may see.",
+        "operationId": "get_api_audit_receipt_audit_event_id_read_decision_receipt",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "audit_event_id",
+            "required": true,
+            "schema": {
+              "title": "Audit Event Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read Decision Receipt",
         "tags": [
           "audit"
         ]
@@ -23415,6 +23670,23 @@
               ],
               "title": "Until"
             }
+          },
+          {
+            "in": "query",
+            "name": "event_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Event Id"
+            }
           }
         ],
         "responses": {
@@ -23637,21 +23909,19 @@
             }
           },
           {
-            "description": "Open the ledger on one event (the explorer's ?audit_event_id= deep link). A public-safe opaque id; PII-shaped text is refused.",
             "in": "query",
             "name": "event_id",
             "required": false,
             "schema": {
               "anyOf": [
                 {
-                  "maxLength": 128,
+                  "maxLength": 64,
                   "type": "string"
                 },
                 {
                   "type": "null"
                 }
               ],
-              "description": "Open the ledger on one event (the explorer's ?audit_event_id= deep link). A public-safe opaque id; PII-shaped text is refused.",
               "title": "Event Id"
             }
           }
@@ -23742,6 +24012,49 @@
           }
         },
         "summary": "List My Events",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
+    "/api/v1/audit/receipt/{audit_event_id}": {
+      "get": {
+        "description": "Return the receipt for one decision row the caller may see.",
+        "operationId": "get_api_v1_audit_receipt_audit_event_id_read_decision_receipt",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "audit_event_id",
+            "required": true,
+            "schema": {
+              "title": "Audit Event Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read Decision Receipt",
         "tags": [
           "audit"
         ]
