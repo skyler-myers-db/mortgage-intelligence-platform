@@ -122,7 +122,9 @@ test.describe('new-version notice', () => {
       return { body };
     });
     await app.gotoRoute('/glossary');
-    await expect.poll(() => polls, { timeout: 20_000 }).toBeGreaterThanOrEqual(3);
+    // A third poll proves the second (empty-sha) reply was processed. At the
+    // 8 s healthy cadence it lands at ~16 s; the budget leaves room for load.
+    await expect.poll(() => polls, { timeout: 30_000 }).toBeGreaterThanOrEqual(3);
     await expect(page.locator('.degraded-banner--info')).toHaveCount(0);
   });
 });
