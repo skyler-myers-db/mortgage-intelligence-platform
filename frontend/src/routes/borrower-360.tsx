@@ -464,7 +464,7 @@ export default function Borrower360() {
             </div>
           </div>
 
-          <Reveal>
+          <Reveal revealKey="borrower-360:trigger-timeline">
             <div className="surface">
               <div className="surface__hdr">
                 <Icon name="bolt" size={14} className="icon-accent" />

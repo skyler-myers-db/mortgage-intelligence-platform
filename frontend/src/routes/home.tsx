@@ -324,7 +324,7 @@ export default function Home() {
         </Button>
       </div>
 
-      <Reveal>
+      <Reveal revealKey="home:brand-signature">
         <div className="brand-signature" aria-hidden="true">
           <EntradaWordmark height={44} />
         </div>

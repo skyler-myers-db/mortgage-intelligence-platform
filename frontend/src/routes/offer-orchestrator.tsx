@@ -49,6 +49,11 @@ export default function OfferOrchestrator() {
   const [approveError, setApproveError] = useState<string | null>(null);
   const [auditId, setAuditId] = useState<string | null>(null);
   const [approvalId, setApprovalId] = useState<string | null>(null);
+  // The approval the user just made in THIS view (borrower + load
+  // generation). The success burst keys off this, never off durable
+  // approval_status, so a stale approval never celebrates again on load and
+  // a reload of the same borrower does not replay it (audit motion-06).
+  const [justApproved, setJustApproved] = useState<{ id: string; reloadToken: number } | null>(null);
   const [lifecycle, setLifecycle] = useState<BorrowerLifecycle | null>(null);
   const [approving, setApproving] = useState<boolean>(false);
   const [reloadToken, setReloadToken] = useState<number>(0);
@@ -502,6 +507,7 @@ export default function OfferOrchestrator() {
         setApproval(id, 'approved');
         setAuditId(res.audit_event_id ?? null);
         setApprovalId(res.approval_id ?? null);
+        setJustApproved({ id, reloadToken });
         setRoutingConfirm({
           email: res.assigned_to_email ?? (assignedTo || null),
           followUpAt: res.follow_up_at ?? null,
@@ -803,7 +809,13 @@ export default function OfferOrchestrator() {
         <>
           <div className="surface mt-grid">
             <div className="surface__body surface__body--inline">
-              <span className="burst inline-flex">
+              <span
+                className={
+                  justApproved?.id === id && justApproved.reloadToken === reloadToken
+                    ? 'burst inline-flex'
+                    : 'inline-flex'
+                }
+              >
                 <Chip variant="success" icon="check">Approved · governed internal queue</Chip>
               </span>
               {auditId && <span className="mono muted fs-11">audit: {auditId}</span>}
