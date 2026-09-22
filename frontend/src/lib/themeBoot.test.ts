@@ -25,6 +25,7 @@ import { TokenCascade, readTokensCss } from '../test/tokenCascade';
 import {
   ACCENTS,
   ACCENT_STORAGE_KEY,
+  CONSOLE_OPEN_STORAGE_KEY,
   DENSITIES,
   DENSITY_STORAGE_KEY,
   THEME_COLOR_TOKEN,
@@ -42,11 +43,18 @@ interface BootScenario {
   prefersDark: boolean | 'unavailable';
 }
 
-function runBoot(scenario: BootScenario): { theme: string | null; accent: string | null; density: string | null; themeColor: string | null } {
+interface BootResult {
+  theme: string | null;
+  accent: string | null;
+  density: string | null;
+  themeColor: string | null;
+}
+
+function runBoot(scenario: BootScenario): BootResult {
   installLocalStorage();
   for (const [key, value] of Object.entries(scenario.stored)) window.localStorage.setItem(key, value);
   const root = document.documentElement;
-  for (const attr of ['data-theme', 'data-accent', 'data-density']) root.removeAttribute(attr);
+  for (const attr of ['data-theme', 'data-accent', 'data-density', 'data-console']) root.removeAttribute(attr);
   document.head.innerHTML = '<meta name="theme-color" content="#000000">';
   const original = window.matchMedia;
   if (scenario.prefersDark === 'unavailable') {
@@ -85,6 +93,7 @@ describe('theme-boot.js mirrors lib/themePreference.ts', () => {
     expect(bootSource).toContain(`var THEME_KEY = '${THEME_STORAGE_KEY}';`);
     expect(bootSource).toContain(`var ACCENT_KEY = '${ACCENT_STORAGE_KEY}';`);
     expect(bootSource).toContain(`var DENSITY_KEY = '${DENSITY_STORAGE_KEY}';`);
+    expect(bootSource).toContain(`var CONSOLE_KEY = '${CONSOLE_OPEN_STORAGE_KEY}';`);
     expect(bootConstant('THEME_PREFERENCES')).toEqual([...THEME_PREFERENCES]);
     expect(bootConstant('ACCENTS')).toEqual([...ACCENTS]);
     expect(bootConstant('DENSITIES')).toEqual([...DENSITIES]);
@@ -124,6 +133,17 @@ describe('theme-boot.js mirrors lib/themePreference.ts', () => {
       prefersDark: false,
     });
     expect(result).toEqual({ theme: 'light', accent: 'bright', density: 'comfortable', themeColor: '#F4F7FA' });
+  });
+
+  it('pre-sets the Console gutter the way AppContext reflects the stored flag', () => {
+    const consoleState = (stored: Record<string, string>): string | null => {
+      runBoot({ stored, prefersDark: true });
+      return document.documentElement.getAttribute('data-console');
+    };
+    expect(consoleState({ 'mip.consoleOpen': 'true' })).toBe('open');
+    expect(consoleState({ 'mip.consoleOpen': 'false' })).toBe('closed');
+    expect(consoleState({})).toBe('closed');
+    expect(consoleState({ 'mip.consoleOpen': 'yes' })).toBe('closed');
   });
 
   it('applies stored accent and density', () => {

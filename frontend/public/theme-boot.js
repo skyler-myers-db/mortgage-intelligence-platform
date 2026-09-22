@@ -4,8 +4,10 @@
  * Loaded as a classic, render-blocking script from <head> (CSP is
  * script-src 'self', so it cannot be inline). It applies data-theme /
  * data-accent / data-density to <html> BEFORE the first paint so a
- * light-theme user never sees a dark flash while React mounts, and sets
- * <meta name="theme-color"> to the page background of that theme.
+ * light-theme user never sees a dark flash while React mounts, sets
+ * <meta name="theme-color"> to the page background of that theme, and
+ * pre-sets data-console so the .main Console gutter does not shift in
+ * after mount for a presenter who left the Console open.
  *
  * It MIRRORS frontend/src/lib/themePreference.ts: same storage keys, same
  * accepted values, same fallbacks (garbage is ignored, nothing stored
@@ -22,6 +24,7 @@
   var THEME_KEY = 'mip.theme';
   var ACCENT_KEY = 'mip.accent';
   var DENSITY_KEY = 'mip.density';
+  var CONSOLE_KEY = 'mip.consoleOpen';
   var THEME_PREFERENCES = ['dark', 'light', 'system'];
   var ACCENTS = ['bright', 'teal', 'navy', 'red'];
   var DENSITIES = ['comfortable', 'compact'];
@@ -53,6 +56,8 @@
     root.setAttribute('data-theme', theme);
     root.setAttribute('data-accent', stored(ACCENT_KEY, ACCENTS) || 'bright');
     root.setAttribute('data-density', stored(DENSITY_KEY, DENSITIES) || 'comfortable');
+    /* AppContext persists 'true' | 'false' and reflects it as open | closed. */
+    root.setAttribute('data-console', stored(CONSOLE_KEY, ['true']) === 'true' ? 'open' : 'closed');
     var meta = document.querySelector('meta[name="theme-color"]');
     if (meta) meta.setAttribute('content', THEME_COLORS[theme]);
   } catch (error) {

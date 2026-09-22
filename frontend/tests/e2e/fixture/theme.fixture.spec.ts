@@ -3,7 +3,8 @@
  * visual-03, css-02, responsive-03, css-01, css-v1, a11y-01, responsive-02).
  *
  *  a. a stored light theme is on the FIRST painted document, before React
- *     mounts (public/theme-boot.js, render-blocking in <head>);
+ *     mounts (public/theme-boot.js, render-blocking in <head>), and so is a
+ *     Console the presenter left open (no .main gutter shift after mount);
  *  b. `color-scheme` follows the theme, so a native checkbox in the Lead
  *     Queue paints dark in the dark theme (pixel-sampled, not just computed);
  *  c. <meta name="theme-color"> follows the theme;
@@ -31,14 +32,14 @@ const DOCUMENTED_AXE_EXCEPTIONS: Record<string, RegExp> = {
   'dark/red': /foreground color: #ffffff, background color: #ff3621/,
 };
 
-interface ThemeTrace {
+interface AttributeTrace {
   atDomContentLoaded: string | null;
   transitions: string[];
 }
 
 declare global {
   interface Window {
-    __mipThemeTrace?: ThemeTrace;
+    __mipAttrTrace?: Record<string, AttributeTrace>;
   }
 }
 
@@ -56,18 +57,18 @@ async function seedStorage(page: Page, key: string, value: string): Promise<void
   );
 }
 
-/** Record data-theme at DOMContentLoaded and every transition it goes through. */
-async function traceThemeAttribute(page: Page): Promise<void> {
-  await page.addInitScript(() => {
-    const trace: ThemeTrace = { atDomContentLoaded: null, transitions: [] };
-    window.__mipThemeTrace = trace;
+/** Record one <html> attribute at DOMContentLoaded and every transition it goes through. */
+async function traceRootAttribute(page: Page, attribute: string): Promise<void> {
+  await page.addInitScript((name) => {
+    const trace: AttributeTrace = { atDomContentLoaded: null, transitions: [] };
+    (window.__mipAttrTrace ??= {})[name] = trace;
     new MutationObserver(() => {
-      trace.transitions.push(document.documentElement.getAttribute('data-theme') ?? 'none');
-    }).observe(document, { attributes: true, subtree: true, attributeFilter: ['data-theme'] });
+      trace.transitions.push(document.documentElement.getAttribute(name) ?? 'none');
+    }).observe(document, { attributes: true, subtree: true, attributeFilter: [name] });
     document.addEventListener('DOMContentLoaded', () => {
-      trace.atDomContentLoaded = document.documentElement.getAttribute('data-theme');
+      trace.atDomContentLoaded = document.documentElement.getAttribute(name);
     });
-  });
+  }, attribute);
 }
 
 /** Colour of the centre pixel of an element, from a real screenshot decoded in-page. */
@@ -112,14 +113,31 @@ test('a stored light theme is painted before React mounts, even when the OS pref
   // The OS says dark, so only the pre-paint bootstrap can make the first
   // document light; React's post-mount effect is too late for first paint.
   await page.emulateMedia({ colorScheme: 'dark' });
-  await traceThemeAttribute(page);
+  await traceRootAttribute(page, 'data-theme');
   await app.gotoRoute('/');
 
-  const trace = await page.evaluate(() => window.__mipThemeTrace);
+  const trace = await page.evaluate(() => window.__mipAttrTrace?.['data-theme']);
   expect(trace?.atDomContentLoaded, 'data-theme must already be set when the parser finishes').toBe('light');
   expect(trace?.transitions, 'the document never passes through the dark default').not.toContain('dark');
   expect(trace?.transitions.length).toBeGreaterThan(0);
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+});
+
+test('a Console left open is on the first painted document, so .main never shifts after mount', async ({ app, page }) => {
+  // React reflects `data-console` in a post-mount effect; without the
+  // bootstrap the first frame paints .main without its Console gutter and
+  // the whole page shifts 324px once the effect runs.
+  await seedStorage(page, 'mip.consoleOpen', 'true');
+  await traceRootAttribute(page, 'data-console');
+  await app.gotoRoute('/');
+
+  const trace = await page.evaluate(() => window.__mipAttrTrace?.['data-console']);
+  expect(trace?.atDomContentLoaded, 'data-console must already be set when the parser finishes').toBe('open');
+  expect(trace?.transitions, 'the document never passes through the closed default').not.toContain('closed');
+  await expect(page.locator('html')).toHaveAttribute('data-console', 'open');
+  await expect(page.getByRole('complementary', { name: 'Workspace console' }).locator('.tweaks__body')).toBeVisible();
+  const gutter = await page.locator('.main').evaluate((el) => parseFloat(getComputedStyle(el).paddingRight));
+  expect(gutter, 'the Console gutter is applied').toBeGreaterThanOrEqual(300);
 });
 
 for (const theme of THEMES) {

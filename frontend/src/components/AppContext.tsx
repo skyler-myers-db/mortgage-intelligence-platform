@@ -20,6 +20,7 @@ import {
   DEFAULT_DENSITY,
   DEFAULT_THEME_PREFERENCE,
   DENSITIES,
+  CONSOLE_OPEN_STORAGE_KEY,
   DENSITY_STORAGE_KEY,
   THEME_PREFERENCES,
   THEME_STORAGE_KEY,
@@ -204,7 +205,7 @@ export function AppProvider({ children }: PropsWithChildren) {
   // layout. Presenter preference persists across reloads via localStorage
   // (same pattern as theme/accent/density).
   const [consoleOpen, setConsoleOpenState] = useState<boolean>(() =>
-    readStoredBool('mip.consoleOpen', false),
+    readStoredBool(CONSOLE_OPEN_STORAGE_KEY, false),
   );
   const [recentActivityFocusRequest, setRecentActivityFocusRequest] = useState(0);
   const [drawer, setDrawer] = useState<DrawerSource | null>(null);
@@ -282,7 +283,7 @@ export function AppProvider({ children }: PropsWithChildren) {
   useEffect(() => {
     document.documentElement.setAttribute('data-console', consoleOpen ? 'open' : 'closed');
     try {
-      window.localStorage.setItem('mip.consoleOpen', consoleOpen ? 'true' : 'false');
+      window.localStorage.setItem(CONSOLE_OPEN_STORAGE_KEY, consoleOpen ? 'true' : 'false');
     } catch {
       // ignore
     }

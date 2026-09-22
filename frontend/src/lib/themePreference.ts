@@ -19,6 +19,13 @@ export type Density = 'comfortable' | 'compact';
 export const THEME_STORAGE_KEY = 'mip.theme';
 export const ACCENT_STORAGE_KEY = 'mip.accent';
 export const DENSITY_STORAGE_KEY = 'mip.density';
+/**
+ * Console-open flag AppContext persists as 'true' | 'false' (anything else
+ * reads as closed). theme-boot.js pre-sets `data-console` from it so the
+ * `.main` Console gutter is on the first paint instead of shifting in after
+ * React mounts.
+ */
+export const CONSOLE_OPEN_STORAGE_KEY = 'mip.consoleOpen';
 
 export const THEMES: readonly Theme[] = ['dark', 'light'];
 export const THEME_PREFERENCES: readonly ThemePreference[] = ['dark', 'light', 'system'];
