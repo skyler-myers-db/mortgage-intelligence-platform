@@ -13,7 +13,7 @@
   box-shadow: var(--shadow-lg);
   display: flex; flex-direction: column;
   overflow: hidden;
-  z-index: 30;
+  z-index: var(--z-genie);
   /* Disable the open/close transform transition for `width`/`height`
      so the resize drag tracks the pointer instantly — without this
      each pointer-move would tween over var(--dur-slow) and feel
@@ -43,7 +43,7 @@
   color: var(--text-3);
   font-size: var(--fs-12);
   cursor: nwse-resize;
-  z-index: 3;
+  z-index: var(--z-raised-3);
   opacity: 0.82;
   transition: background var(--dur-fast) var(--ease),
               color var(--dur-fast) var(--ease),
@@ -73,7 +73,7 @@
    enough to grab without being a click trap on adjacent UI. */
 .genie__resize-edge {
   position: absolute;
-  z-index: 2;
+  z-index: var(--z-raised-2);
   background: transparent;
 }
 /* Edges */
@@ -128,7 +128,7 @@
 .genie__avatar::before {
   content: '\2726'; position: absolute; inset: 0;
   display: grid; place-items: center;
-  z-index: 1; color: var(--accent-ink); font-size: 14px;
+  z-index: var(--z-raised); color: var(--accent-ink); font-size: 14px;
 }
 .genie__title { font-size: var(--fs-13); font-weight: 600; color: var(--text-1); }
 .genie__sub { font-size: var(--fs-11); color: var(--text-3); }
@@ -216,7 +216,7 @@
   color: var(--text-on-solid); display: none; place-items: center;
   cursor: pointer;
   box-shadow: 0 8px 24px -8px var(--entrada-teal);
-  z-index: 29;
+  z-index: var(--z-genie-fab);
   transition: transform var(--dur-base) var(--ease);
 }
 .genie__fab:hover { transform: translateY(-2px); }

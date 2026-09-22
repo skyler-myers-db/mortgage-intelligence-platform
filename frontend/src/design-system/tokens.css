@@ -363,3 +363,37 @@ input[type="checkbox"] {
 .num  { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
 .divider { height: 1px; background: var(--line-1); }
 .vdivider { width: 1px; background: var(--line-1); }
+
+/* ---------- Layering (z-index scale) ----------
+ * Every z-index in component CSS reads one of these (components.test.ts
+ * fails on a numeric literal outside this file). Values are the ones the
+ * prototype port already used, so mapping onto the scale changed no
+ * stacking order (2026-09-21 audit css-08). Two groups:
+ *   local   -- layers inside a component's own stacking context
+ *              (a sticky thead, the selection overlay on a segment card)
+ *   overlay -- fixed / sticky chrome ordered against each other
+ */
+:root {
+  --z-below: -1;
+  --z-base: 0;
+  --z-raised: 1;
+  --z-raised-2: 2;
+  --z-raised-3: 3;
+  --z-raised-4: 4;
+
+  --z-sticky: 5;        /* route nav */
+  --z-topbar: 10;
+  --z-menu: 20;         /* filter dropdowns */
+  --z-genie-fab: 29;
+  --z-genie: 30;
+  --z-drawer-scrim: 40;
+  --z-drawer: 41;
+  --z-tooltip: 45;      /* glossary term tip */
+  --z-console: 50;
+  --z-search: 60;       /* topbar search results (inside the topbar context) */
+  --z-skip-link: 100;
+  --z-map-tip: 900;
+  --z-hovercard: 1000;  /* evidence hover card (pointer-events: none) */
+  --z-modal: 1000;      /* offer-mock scrim */
+  --z-palette: 1000;    /* command palette */
+}

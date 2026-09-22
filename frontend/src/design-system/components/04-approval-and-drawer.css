@@ -292,7 +292,7 @@
 .offer-mock-scrim {
   position: fixed;
   inset: 0;
-  z-index: 1000;
+  z-index: var(--z-modal);
   display: grid;
   place-items: center;
   padding: var(--sp-4);
@@ -481,7 +481,7 @@
   backdrop-filter: blur(2px);
   opacity: 0; pointer-events: none;
   transition: opacity var(--dur-base) var(--ease);
-  z-index: 40;
+  z-index: var(--z-drawer-scrim);
 }
 .drawer-scrim.is-open { opacity: 1; pointer-events: auto; }
 .drawer {
@@ -492,7 +492,7 @@
   box-shadow: var(--shadow-lg);
   transform: translateX(100%);
   transition: transform var(--dur-slow) var(--ease);
-  z-index: 41;
+  z-index: var(--z-drawer);
   display: flex; flex-direction: column;
 }
 .drawer:not(.is-open) { visibility: hidden; }

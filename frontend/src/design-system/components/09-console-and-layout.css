@@ -8,7 +8,7 @@
   border: 1px solid var(--line-2);
   border-radius: var(--r-lg);
   box-shadow: var(--shadow-lg);
-  z-index: 50;
+  z-index: var(--z-console);
   display: none;
   flex-flow: column;
 }
@@ -240,7 +240,7 @@
   position: absolute;
   inset-block-start: var(--sp-3);
   inset-inline-end: var(--sp-4);
-  z-index: 3;
+  z-index: var(--z-raised-3);
   display: inline-flex;
   align-items: center;
   min-block-size: var(--sp-6);
@@ -260,7 +260,7 @@
   position: absolute;
   inset-block-start: var(--sp-3);
   inset-inline-end: var(--sp-4);
-  z-index: 2;
+  z-index: var(--z-raised-2);
   display: inline-flex;
   align-items: center;
   min-block-size: var(--sp-6);

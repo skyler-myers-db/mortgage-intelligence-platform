@@ -110,7 +110,7 @@
    real a11y path. */
 .evidence-hovercard {
   position: fixed;
-  z-index: 1000;
+  z-index: var(--z-hovercard);
   inline-size: 15rem;
   max-inline-size: calc(100vw - var(--sp-6));
   transform: translateX(-50%);
@@ -356,12 +356,12 @@
 /* Whole-card selection target. See the SegmentCard.tsx header comment: the
    prototype's "the whole card selects" contract is preserved by stretching a
    real <button> across the card instead of putting `role="button"` on the
-   card itself. Sits above the card content (z-index 1) so any click that is
-   not on a chip selects; the chips are lifted to z-index 2 below. */
+   card itself. Sits above the card content (--z-raised) so any click that is
+   not on a chip selects; the chips are lifted to --z-raised-2 below. */
 .seg-card__select {
   position: absolute;
   inset: 0;
-  z-index: 1;
+  z-index: var(--z-raised);
   appearance: none;
   margin: 0;
   padding: 0;
@@ -384,7 +384,7 @@
 .seg-card__evidence,
 .seg-card__facet-chip {
   position: relative;
-  z-index: 2;
+  z-index: var(--z-raised-2);
 }
 .seg-card::before {
   content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;

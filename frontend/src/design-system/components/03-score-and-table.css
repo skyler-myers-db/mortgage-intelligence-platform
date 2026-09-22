@@ -65,7 +65,7 @@
   font-size: var(--fs-13);
 }
 .tbl thead th {
-  position: sticky; top: 0; z-index: 1;
+  position: sticky; top: 0; z-index: var(--z-raised);
   background: var(--bg-2);
   text-align: left; padding: var(--sp-3) var(--sp-4);
   font-size: var(--fs-11); font-weight: 500; letter-spacing: var(--tracking-caps);
@@ -319,7 +319,7 @@
   background: var(--bg-1);
   position: sticky;
   bottom: 0;
-  z-index: 2;
+  z-index: var(--z-raised-2);
 }
 .bulk-actions__label { font-size: var(--fs-13); color: var(--text-1); }
 .bulk-actions__controls {

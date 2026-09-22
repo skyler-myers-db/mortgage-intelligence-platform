@@ -69,7 +69,7 @@
   position: absolute;
   top: var(--sp-2);
   left: var(--sp-2);
-  z-index: 100;
+  z-index: var(--z-skip-link);
   padding: var(--sp-2) var(--sp-3);
   background: var(--accent);
   color: var(--bg-1);
@@ -119,7 +119,7 @@
   backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--line-1);
   position: relative;
-  z-index: 10;
+  z-index: var(--z-topbar);
 }
 .topbar__crumbs {
   justify-self: start;
@@ -231,7 +231,7 @@
   border-radius: var(--r-md);
   background: var(--bg-2);
   box-shadow: var(--shadow-md);
-  z-index: 60;
+  z-index: var(--z-search);
 }
 .topbar__search-result {
   display: grid;
@@ -323,7 +323,7 @@
   flex-wrap: wrap;
   position: sticky;
   top: 0;
-  z-index: 5;
+  z-index: var(--z-sticky);
 }
 
 /* Left rail */

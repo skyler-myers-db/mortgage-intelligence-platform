@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest';
 // @ts-expect-error Frontend app types intentionally exclude Node globals; this
 // unit test reads the design-system CSS text under Vitest only.
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
+// @ts-expect-error see node:fs note above.
+import { join } from 'node:path';
 // @ts-expect-error CSS lint helper is an ESM Node script used by lint/tests only.
 import { findCssLiteralViolations } from '../../../tools/lint_css_literals.mjs';
 import { designCss } from '../test/designCss';
+
+declare const process: { cwd(): string };
 
 const tokensCss = () => readFileSync(
   new URL('./tokens.css', import.meta.url),
@@ -28,7 +32,7 @@ describe('layout containment contracts', () => {
     expect(css).toContain('.topbar__actions');
     expect(css).toContain('.topbar__search-results');
     expect(css).toContain('.topbar__search-status');
-    expect(css).toMatch(/\.topbar__search-results\s*\{[^}]*z-index:\s*60;/s);
+    expect(css).toMatch(/\.topbar__search-results\s*\{[^}]*z-index:\s*var\(--z-search\);/s);
   });
 
   /**
@@ -134,8 +138,9 @@ describe('layout containment contracts', () => {
 
   it('layers the ⌘K command palette above the Genie FAB and dims with a scrim (re-audit #4 #1)', () => {
     const css = designCss();
-    // Genie FAB is z 900; the palette must sit above everything.
-    expect(css).toMatch(/\.cmdk\s*\{[^}]*z-index:\s*1000;/s);
+    // The palette sits at the top of the overlay scale (--z-palette, 1000),
+    // above the Genie FAB (--z-genie-fab, 29) and the map tip (--z-map-tip, 900).
+    expect(css).toMatch(/\.cmdk\s*\{[^}]*z-index:\s*var\(--z-palette\);/s);
     expect(css).toMatch(/\.cmdk\s*\{[^}]*background:\s*var\(--surface-scrim\);/s);
     expect(css).toContain('.cmdk__row.is-active');
     // Entrance animation is disabled under reduced motion.
@@ -331,6 +336,49 @@ describe('layout containment contracts', () => {
     expect(css).toMatch(
       /@container main \(min-width: 961px\) and \(max-width: 1280px\)\s*\{\s*\.kpi-row:has\(> :nth-child\(4\):last-child\)\s*\{\s*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);/s,
     );
+  });
+
+  /**
+   * 2026-09-21 audit css-08: 17 magic z-index values. Every declaration now
+   * reads a `--z-*` token; the token values ARE the numbers the sites used
+   * before, so this is a pure refactor of the stacking order (the pairs are
+   * listed in the commit that introduced the scale).
+   */
+  it('reads every z-index from the --z-* scale and keeps its numeric values', () => {
+    const css = designCss();
+    const routeCss = readdirSync(join(process.cwd(), 'src', 'routes'))
+      .filter((name: string) => name.endsWith('.css'))
+      .map((name: string) => readFileSync(join(process.cwd(), 'src', 'routes', name), 'utf8'))
+      .join('\n');
+    const stripComments = (text: string) => text.replace(/\/\*[\s\S]*?\*\//g, '');
+
+    const numericLiterals = [...stripComments(`${css}\n${routeCss}`).matchAll(/z-index\s*:\s*(-?\d+)\s*[;}]/g)]
+      .map((match) => match[0]);
+    expect(numericLiterals, 'a z-index outside tokens.css must read a --z-* token').toEqual([]);
+
+    const declared = [...stripComments(`${css}\n${routeCss}`).matchAll(/z-index\s*:\s*var\(--z-([a-z0-9-]+)\)/g)]
+      .map((match) => match[1]);
+    expect(declared.length).toBeGreaterThanOrEqual(30);
+
+    const tokens = tokensCss();
+    const scale = Object.fromEntries(
+      [...tokens.matchAll(/--z-([a-z0-9-]+):\s*(-?\d+);/g)].map((match) => [match[1], Number(match[2])]),
+    );
+    for (const name of new Set(declared)) {
+      expect(scale, `--z-${name} is defined in tokens.css`).toHaveProperty(name);
+    }
+    expect(scale).toMatchObject({
+      below: -1, base: 0, raised: 1, 'raised-2': 2, 'raised-3': 3, 'raised-4': 4,
+      sticky: 5, topbar: 10, menu: 20, 'genie-fab': 29, genie: 30,
+      'drawer-scrim': 40, drawer: 41, tooltip: 45, console: 50, search: 60,
+      'skip-link': 100, 'map-tip': 900, hovercard: 1000, modal: 1000, palette: 1000,
+    });
+    // The overlay chain the shell depends on, in order.
+    expect(scale.genie).toBeGreaterThan(scale['genie-fab']);
+    expect(scale.drawer).toBeGreaterThan(scale['drawer-scrim']);
+    expect(scale['drawer-scrim']).toBeGreaterThan(scale.genie);
+    expect(scale.console).toBeGreaterThan(scale.drawer);
+    expect(scale.palette).toBeGreaterThan(scale['map-tip']);
   });
 
   it('lets segment cards wrap content instead of clipping labels or pending copy', () => {
