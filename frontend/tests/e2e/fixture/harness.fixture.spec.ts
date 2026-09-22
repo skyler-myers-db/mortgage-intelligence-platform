@@ -67,11 +67,11 @@ test.describe('hygiene collects what it must fail on', () => {
     const status = await page.evaluate(async () => (await fetch('/api/v1/not-a-fixture?probe=1')).status);
     expect(status).toBe(501);
     expect(mockApi.unregistered).toEqual([
-      { method: 'GET', path: '/api/not-a-fixture', search: 'probe=1', status: 501, outcome: 'unregistered' },
+      { method: 'GET', path: '/api/v1/not-a-fixture', search: 'probe=1', status: 501, outcome: 'unregistered' },
     ]);
     const collected = hygiene.collected();
     expect(collected.map((violation) => violation.check)).toEqual(['unregistered-api']);
-    expect(formatViolations('probe', collected)).toContain('[unregistered-api] GET /api/not-a-fixture?probe=1 has no registered fixture');
+    expect(formatViolations('probe', collected)).toContain('[unregistered-api] GET /api/v1/not-a-fixture?probe=1 has no registered fixture');
     expect(hygiene.violations(), 'opted out by name for this self-test only').toEqual([]);
   });
 

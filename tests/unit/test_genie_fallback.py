@@ -111,9 +111,22 @@ def test_floating_genie_has_no_ai_shaped_seed_answer() -> None:
     # feature, 2026-08-06) — that is replay of governed answers, not a
     # fabricated seed. The guard's intent stands: no literal AI-shaped
     # answer payload may be authored into the component itself.
+    # 2026-09-22 (audit genie-02): the transcript moved into the
+    # useGenieTranscript hook so the panel can stay mounted while closed. The
+    # hook may only seed from the actor's persisted turns, never a literal.
+    hook = (REPO / "frontend" / "src" / "components" / "mortgage" / "useGenieTranscript.ts").read_text(
+        encoding="utf-8"
+    )
+    seeded_by_hook = (
+        "useGenieTranscript(" in text
+        and "const turns = getGenieTurns();" in hook
+        and "turnsToMessages(turns" in hook
+        and "answer:" not in hook
+    )
     assert (
         "useState<ChatMsg[]>([])" in text
         or "useState<ChatMsg[]>(() =>\n    turnsToMessages(getGenieTurns()" in text
+        or seeded_by_hook
     )
     pre_ask = text.split("const ask = async", maxsplit=1)[0]
     assert "payload: {\n        answer:" not in pre_ask

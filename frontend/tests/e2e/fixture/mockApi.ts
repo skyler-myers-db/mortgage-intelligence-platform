@@ -105,9 +105,12 @@ interface CompiledPattern {
   specificity: number;
 }
 
-function compilePattern(pattern: string): CompiledPattern {
+function compilePattern(rawPattern: string): CompiledPattern {
+  // Patterns are version-normalized exactly like request paths, so a fixture
+  // may be registered under the canonical `/api/v1/...` path the app calls.
+  const pattern = normalizeApiPath(rawPattern);
   if (!pattern.startsWith('/api/')) {
-    throw new Error(`Fixture pattern must start with /api/ (got "${pattern}")`);
+    throw new Error(`Fixture pattern must start with /api/ (got "${rawPattern}")`);
   }
   const paramNames: string[] = [];
   let specificity = 0;
@@ -257,6 +260,9 @@ export class MockApi {
 
   private async respond(route: Route, request: Request, url: URL, method: string, path: string): Promise<ApiCall> {
     const search = url.search.replace(/^\?/, '');
+    // Report the path the app actually requested (canonical `/api/v1/...`),
+    // matching is done on the version-normalized `path`.
+    const requestedPath = url.pathname;
     const degraded = this.degradeRules.find(
       (rule) => rule.matches(path) && (!rule.options.method || rule.options.method === method),
     );
@@ -270,9 +276,9 @@ export class MockApi {
     if (!hit) {
       this.unregisteredUrls.add(request.url());
       await this.fulfill(route, 501, undefined, {
-        detail: `No fixture registered for ${method} ${path} (fixture harness).`,
+        detail: `No fixture registered for ${method} ${requestedPath} (fixture harness).`,
       });
-      return { method, path, search, status: 501, outcome: 'unregistered' };
+      return { method, path: requestedPath, search, status: 501, outcome: 'unregistered' };
     }
 
     const reply = await hit.entry.handler({
