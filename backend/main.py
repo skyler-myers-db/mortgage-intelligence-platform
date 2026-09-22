@@ -72,12 +72,12 @@ from backend.services.observability import (
     sanitize_correlation_id,
     set_correlation_id,
 )
+from backend.services.security_headers import SecurityHeadersMiddleware
 from backend.services.static_assets import select_asset_variant
 from backend.services.visit_tracking import VisitTrackingMiddleware
-from backend.version import api_version
+from backend.version import API_VERSION, api_version
 
 log = logging.getLogger("mip-runtime")
-API_VERSION = "v1"
 CANONICAL_API_PREFIX = f"/api/{API_VERSION}"
 COMPAT_API_PREFIX = "/api"
 
@@ -471,55 +471,6 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
             reset_correlation_id(token)
 
 
-class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-    """Attach browser security headers to every app response.
-
-    The Databricks Apps edge owns authentication and may add its own
-    platform headers after this middleware runs. These headers cover the
-    application-controlled browser posture: no content sniffing, no
-    framing, conservative referrer behavior, no ambient device APIs, and
-    a CSP tuned for the static Vite SPA served from this same origin.
-    """
-
-    _CSP = (
-        "default-src 'self'; "
-        "base-uri 'self'; "
-        "object-src 'none'; "
-        "frame-ancestors 'none'; "
-        "script-src 'self'; "
-        "style-src 'self' 'unsafe-inline'; "
-        "img-src 'self' data: blob:; "
-        "font-src 'self' data:; "
-        "connect-src 'self'; "
-        "form-action 'self'"
-    )
-
-    async def dispatch(
-        self, request: StarletteRequest, call_next: Any
-    ) -> StarletteResponse:
-        response = await call_next(request)
-        response.headers.setdefault(
-            "Strict-Transport-Security",
-            "max-age=31536000; includeSubDomains",
-        )
-        response.headers.setdefault("X-Content-Type-Options", "nosniff")
-        response.headers.setdefault("X-Frame-Options", "DENY")
-        response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
-        response.headers.setdefault(
-            "Permissions-Policy",
-            "geolocation=(), camera=(), microphone=()",
-        )
-        response.headers.setdefault("Content-Security-Policy", self._CSP)
-        if request.url.path.startswith("/api/"):
-            response.headers.setdefault("X-API-Version", API_VERSION)
-        if request.url.path.startswith("/assets/"):
-            response.headers.setdefault(
-                "Cache-Control",
-                "public, max-age=31536000, immutable",
-            )
-        return response
-
-
 _backpressure_controller = BackpressureController()
 
 app.add_middleware(BackpressureMiddleware, controller=_backpressure_controller)
@@ -819,8 +770,8 @@ if _FRONTEND_DIST.is_dir() and (_FRONTEND_DIST / "index.html").is_file():
     # brotli's smaller payloads reach the wire. Identity fallback keeps the
     # pre-precompress behaviour: GZipMiddleware compresses dynamically
     # (Starlette skips responses that already carry Content-Encoding, so
-    # nothing is double-compressed). SecurityHeadersMiddleware continues to
-    # stamp the immutable Cache-Control for every /assets/ response.
+    # nothing is double-compressed). SecurityHeadersMiddleware stamps the
+    # immutable Cache-Control on served assets and ``no-store`` on the 404.
     _ASSETS_DIR = _FRONTEND_DIST / "assets"
 
     @app.get("/assets/{asset_path:path}", response_model=None, include_in_schema=False)

@@ -78,7 +78,13 @@ const budgets = {
   // campaign-handoff slices settled. The inherited 141 KiB gate left only
   // 0.05 KiB above the measured artifact, violating the documented ~5%
   // cross-platform headroom policy. Measured: CSS 140.95 / gzip 23.89.
-  initialCssBytes: 148 * KiB, // actual 140.95
+  // Re-baselined 2026-09-21 for the ErrorBoundary recovery surface
+  // (`.error-surface`, design-system/components/15-error-surface.css, +0.70
+  // KiB). It has to ship in the initial CSS: it is what renders when a lazy
+  // chunk cannot load, so it cannot live in one. The base branch had drifted
+  // to 147.91 of 148 (0.09 KiB of headroom), so any CSS line from anyone
+  // tripped the gate. Measured: CSS 148.61 / gzip 25.13; restore ~5% headroom.
+  initialCssBytes: 157 * KiB, // actual 148.61
   // Re-baselined 2026-09-08 for the Genie thread view + deep-research
   // sections slice. The 25 KiB gzip gate had drifted to 4 bytes above the
   // measured artifact (25,596 B) — the next CSS line from anyone would have
