@@ -215,3 +215,20 @@ def test_borrower_ids_digest_matches_the_browser_canonical_form() -> None:
     # The browser hashes `JSON.stringify(ids)`: compact, ordered, ASCII.
     assert borrower_ids_digest(IDS) == _sha256('["B-AAAAAAAAAAAA1","B-AAAAAAAAAAAA2"]')
     assert borrower_ids_digest(list(reversed(IDS))) != borrower_ids_digest(IDS)
+
+
+def test_unversioned_alias_is_deprecated_and_writes_the_same_single_row(
+    audit_store: InMemoryAuditStore,
+) -> None:
+    # Every /api/v1 route keeps a deprecated /api alias (route manifest key
+    # `POST /api/leads/export-receipt`); the alias is the same audited write.
+    response = client.post(
+        "/api/leads/export-receipt", json=_declaration(), headers=ACTOR_HEADERS
+    )
+
+    assert response.status_code == 200, response.text
+    rows = audit_store.list(limit=10)
+    assert [row.event_type for row in rows] == ["LEAD_EXPORT"]
+    assert response.json()["audit_event_id"] == rows[0].event_id
+    deprecated = app.openapi()["paths"]["/api/leads/export-receipt"]["post"].get("deprecated")
+    assert deprecated is True
