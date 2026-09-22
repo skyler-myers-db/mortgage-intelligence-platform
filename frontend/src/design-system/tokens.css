@@ -112,6 +112,11 @@
   --dur-base: 200ms;
   --dur-slow: 360ms;
   --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  /* Alias consumed by the Cmd-K keycap, login-summary numbers and claim
+     chips. It was referenced but never defined, which made those
+     transitions invalid at computed-value time and snap (2026-09-21 audit
+     motion-04). Same curve as --ease; do not rename either. */
+  --ease-standard: var(--ease);
 
   /* ---------- Ambient / fx durations ---------- */
   --dur-ambient-1: 42s;
@@ -155,6 +160,18 @@
     radial-gradient(600px 400px at 80% 70%, rgba(92,225,230,0.10), transparent 60%),
     var(--bg-2);
   --map-region-fill: var(--bg-3);
+}
+
+/* ---------- Native control scheme ----------
+ * Tells the UA which scheme native checkboxes, selects, pickers, spinners,
+ * autofill and scrollbars should paint in. Without it every native control
+ * rendered light inside the dark theme (2026-09-21 audit visual-03 /
+ * css-02 / responsive-03). Print forces light because print.css remaps the
+ * surfaces to Canvas / CanvasText, which follow color-scheme. */
+:root, [data-theme="dark"] { color-scheme: dark; }
+[data-theme="light"] { color-scheme: light; }
+@media print {
+  :root, [data-theme="dark"], [data-theme="light"] { color-scheme: light; }
 }
 
 /* ============================================================
