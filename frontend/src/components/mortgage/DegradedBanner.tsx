@@ -22,7 +22,9 @@ import { apiPath } from '../../lib/apiPaths';
  *
  * BEM class names (`degraded-banner`, `__ico`, `__body`, `__title`,
  * `__sub`, `__dot`) live in `design-system/components.css` and mirror
- * the `.approval` surface's token vocabulary (amber warning).
+ * the `.approval` surface's token vocabulary (amber warning). The
+ * `--info` modifier and `__actions` element are used by <VersionNotice>,
+ * which shares this slot at the top of `<main>`.
  */
 
 export interface HealthPayload {
@@ -179,7 +181,11 @@ export function DegradedBanner({
   if (!downDep) return null;
 
   const title = `Reconnecting to ${friendlyDependencyName(downDep)}`;
-  const sub = `Live data will resume automatically. This page refreshes every ${Math.round(pollIntervalDegradedMs / 1000)} seconds.`;
+  // Truthful copy (audit 2026-09-21 `states-03`): it is the health CHECK that
+  // repeats every few seconds, not the page. When the check sees the
+  // dependency back, HealthProvider refetches the mounted panels that failed
+  // because of it (healthRecovery.ts), which is what makes "on their own" true.
+  const sub = `Checking the connection every ${Math.round(pollIntervalDegradedMs / 1000)} seconds. Panels that could not load will reload on their own once it is back.`;
 
   return (
     <div

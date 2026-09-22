@@ -1,7 +1,22 @@
 import { lazyWithPreload, preloadBestEffort } from './lazyPreload';
 import { createIdlePreloader } from './prefetch';
 
-export const HomeRoute = lazyWithPreload(() => import('../routes/home'));
+// Audit bundle-07: the Home hero map needs the state geometry chunk, which the
+// map used to request only from a mount effect, a fourth sequential fetch
+// after the route chunk. Start it beside the route chunk instead. The loader
+// is shared by HomeRoute.preload (hover/idle) and the lazy render, so the
+// geometry is warmed on whichever comes first; loadUsaStateMap is
+// single-flight, so nothing is fetched twice. Best-effort: a geometry failure
+// must never fail the route, and the map's own load retries later. The module
+// is dynamically imported so the initial bundle carries no map code.
+function warmHomeGeometry(): Promise<unknown> {
+  return import('../components/mortgage/USStateMapData').then((mod) => mod.loadUsaStateMap());
+}
+
+export const HomeRoute = lazyWithPreload(() => {
+  preloadBestEffort(warmHomeGeometry);
+  return import('../routes/home');
+});
 export const AnalyticsRoute = lazyWithPreload(() => import('../routes/analytics'));
 export const AssetRoute = lazyWithPreload(() => import('../routes/asset'));
 export const PortfolioBuilderRoute = lazyWithPreload(() => import('../routes/portfolio-builder'));

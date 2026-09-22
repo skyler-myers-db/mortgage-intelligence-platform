@@ -1,0 +1,61 @@
+/* ============================================================
+   ERROR SURFACE (ErrorBoundary fallback)
+   ============================================================
+   Declared prototype extension. design_files/index.html has no error-page
+   pattern, so this is a new BEM block. It composes the prototype's
+   `.surface` / `.surface__body` / `.btn` and mirrors the icon tile + title +
+   sub + actions layout of `.approval` (design_files/index.html:634-651),
+   the same shape `.degraded-banner` was derived from. It uses the danger
+   token family rather than amber because the content is gone, not merely
+   waiting on a dependency.
+
+   `--route` sits inside <main> where a route would have rendered, inset
+   to the same gutter as `.main__inner`.
+   `--page` is the root boundary: no AppShell exists around it, so it
+   centres itself in the viewport.
+*/
+.error-surface {
+  margin: var(--sp-6);
+  border-color: var(--status-danger-line-strong);
+}
+.error-surface__body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-4);
+}
+.error-surface__ico {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: var(--sp-8);
+  height: var(--sp-8);
+  border-radius: var(--r-md);
+  background: var(--status-danger-soft);
+  color: var(--signal-danger);
+}
+.error-surface__copy {
+  flex: 1 1 20rem;
+  min-width: 0;
+}
+/* Type comes from the prototype helpers on the same elements: the title is
+   `.h-3`, the sub is `.body`, the meta line is `.mono.muted`. */
+.error-surface__sub { margin: var(--sp-1) 0 0; }
+.error-surface__meta {
+  margin: var(--sp-2) 0 0;
+  font-size: var(--fs-11);
+}
+.error-surface__actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: var(--sp-2);
+}
+
+.error-surface--page {
+  position: fixed;
+  inset-block-start: 50%;
+  inset-inline: var(--sp-6);
+  max-inline-size: 48rem;
+  margin: 0 auto;
+  transform: translateY(-50%);
+}

@@ -59,6 +59,44 @@ describe('ApprovalBanner', () => {
     expect(approve).toContain('disabled');
   });
 
+  // Audit flow-02 / shell-06 (2026-09-21): the banner was identity- and
+  // role-blind. Non-approvers keep a VISIBLE gate: disabled, with a reason.
+  it('prints whose approval this is for an approver', () => {
+    const html = renderToStaticMarkup(
+      <ApprovalBanner count={1} actorEmail="approver.one@summit.example" />,
+    );
+    expect(html).toContain('Approving as');
+    expect(html).toContain('approver.one@summit.example');
+    expect(html).not.toMatch(/<button[^>]*disabled/);
+    expect(html).not.toContain('Requires approver role');
+  });
+
+  it('stays visible but disables both buttons, with the described reason, for a non-approver', () => {
+    const html = renderToStaticMarkup(
+      <ApprovalBanner
+        count={1}
+        approverGate="Requires approver role"
+        actorEmail="analyst@summit.example"
+      />,
+    );
+    expect(html).toContain('Human approval required before outreach');
+    expect(html).not.toContain('Approving as');
+    const reasonId = html.match(/<div class="approval__sub" id="([^"]+)"[^>]*>Requires approver role/)?.[1];
+    expect(reasonId).toBeTruthy();
+    const buttons = [...html.matchAll(/<button([^>]*)>/g)].map((match) => match[1]);
+    expect(buttons).toHaveLength(2);
+    for (const attrs of buttons) {
+      expect(attrs).toContain('disabled');
+      expect(attrs).toContain(`aria-describedby="${reasonId}"`);
+      expect(attrs).toContain('title="Requires approver role"');
+    }
+  });
+
+  it('prints no identity line when the edge forwarded none', () => {
+    const html = renderToStaticMarkup(<ApprovalBanner count={1} />);
+    expect(html).not.toContain('Approving as');
+  });
+
   it('pluralizes the default sub-copy for count>1', () => {
     const one = renderToStaticMarkup(<ApprovalBanner count={1} />);
     expect(one).toContain('1 borrower pending review.');

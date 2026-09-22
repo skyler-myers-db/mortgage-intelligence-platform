@@ -16,6 +16,7 @@ import { FilterSelect } from '../components/ui/FilterSelect';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { useFootprint } from '../components/FootprintProvider';
 import { queryKeys } from '../lib/queryKeys';
+import { leadsQuery } from '../lib/leadsQuery';
 import { useConfigOptionsQuery } from '../lib/configOptionsQuery';
 import { isPublicLenderRef, LENDER_RELATIONSHIP_OPTIONS } from '../lib/lenderFilters';
 
@@ -382,6 +383,15 @@ export default function SegmentIntelligence() {
     }),
     [mapSelection.state, mapSelection.county, mapSelection.zip, selectedLocationState],
   );
+  // One request object feeds the fetcher AND the key (audit runtime-02).
+  const leadsPageQuery = leadsQuery('segment-intelligence', {
+    geo: serverGeo,
+    opts: {
+      segmentCodes: activeSegs.length > 0 ? activeSegs : undefined,
+      segmentMode,
+      portfolioCriteria: secondaryPortfolioCriteria,
+    },
+  });
   const {
     data: leadsData,
     warmingUp: leadsWarming,
@@ -389,25 +399,9 @@ export default function SegmentIntelligence() {
     manualRetry: retryLeads,
     isFetching: leadsFetching,
   } = useWarmingUpRetry<LeadsPageResult>(
-    (signal) =>
-      api.leadsPage(undefined, signal, serverGeo, {
-        segmentCodes: activeSegs.length > 0 ? activeSegs : undefined,
-        segmentMode,
-        portfolioCriteria: secondaryPortfolioCriteria,
-      }),
-    [activeSegsKey, segmentMode, secondaryPortfolioCriteria, serverGeo.state, serverGeo.county, serverGeo.zip],
-    {
-      queryKey: queryKeys.leads([
-        'segment-intelligence',
-        activeSegsKey,
-        segmentMode,
-        JSON.stringify(secondaryPortfolioCriteria),
-        serverGeo.state ?? '',
-        serverGeo.county ?? '',
-        serverGeo.zip ?? '',
-      ]),
-      keepPreviousData: true,
-    },
+    leadsPageQuery.fetcher,
+    [leadsPageQuery.queryKey], // ignored while queryKey is passed
+    { queryKey: leadsPageQuery.queryKey, keepPreviousData: true },
   );
   const segments = useMemo(() => segmentsData ?? [], [segmentsData]);
   const segmentLabelByCode = useMemo(

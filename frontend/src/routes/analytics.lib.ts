@@ -103,9 +103,17 @@ export function fmt(n: number | null | undefined): string {
   return COMPACT_FORMAT.format(n);
 }
 
+/**
+ * Compact USD. The sign belongs in front of the currency symbol: prefixing
+ * "$" to an already-signed compact number rendered a negative equity total
+ * as "$-4.41M" (2026-09-21 audit, responsive-04). The magnitude is formatted
+ * unsigned and the sign re-attached, so every non-negative value renders
+ * exactly as before; a value that rounds to zero carries no sign.
+ */
 export function fmtCurrency(n: number | null | undefined): string {
-  if (n === null || n === undefined) return '—';
-  return `$${COMPACT_FORMAT.format(n)}`;
+  if (n === null || n === undefined || !Number.isFinite(n)) return '—';
+  const magnitude = COMPACT_FORMAT.format(Math.abs(n));
+  return n < 0 && magnitude !== '0' ? `-$${magnitude}` : `$${magnitude}`;
 }
 
 export function borrowerDisplay(row: Pick<TopBorrowerAnalyticsRow, 'display_name' | 'borrower_id'>): string {
@@ -395,12 +403,46 @@ export function analyticsHref(params: Record<string, RouteParamValue>): string {
 // data. Produces viewBox-space nodes + connecting ribbon paths so the SVG
 // component stays a thin renderer and the math is unit-pinnable.
 // ---------------------------------------------------------------------------
+//
+// What the stages ARE (2026-09-21 audit, dataviz-v1). Addressable is COUNT(*)
+// over the population; every other stage is an independent SUM(CASE ...) over
+// those same rows (sql/transformations/gold_funnel_snapshot_daily.sql, and
+// DatabricksAnalyticsRepository._LIVE_FUNNEL_SQL for the filtered path). A
+// high-opportunity borrower need not pass the refi-economics screen and an
+// approved borrower need not be high-opportunity, so "stage / previous stage"
+// is a ratio of unrelated counts, not a conversion. Addressable is the one
+// guaranteed superset, so every stage is labelled with its share of THAT.
+export const ADDRESSABLE_STAGE_ORDER = 1;
+
+/**
+ * Stage pairs (parent -> child, by stage_order) where SQL guarantees
+ * child ⊆ parent, so child / parent IS a conversion. There is exactly one:
+ * Actioned is `approval_status = 'approved' AND outreach_status = 'actioned'`
+ * in all three statements that produce it (the gold snapshot CTAS,
+ * _LIVE_FUNNEL_SQL and _LIVE_WORKFLOW_COUNTS_SQL). Add a pair here only with
+ * the SQL that proves the nesting.
+ */
+export const NESTED_FUNNEL_STAGE_PAIRS: ReadonlyArray<readonly [parent: number, child: number]> = [[5, 6]];
+
 export interface SankeyNode {
   stage: string;
   stageOrder: number;
   count: number;
-  /** Conversion from the previous stage (0..1); null for the first stage. */
+  /**
+   * Share of the Addressable stage (0..1). Null for Addressable itself, and
+   * when Addressable is absent from the stages or empty (undefined, not 0%).
+   */
+  shareOfAddressable: number | null;
+  /**
+   * Conversion from `nestedIn` (0..1) — ONLY for a pair in
+   * NESTED_FUNNEL_STAGE_PAIRS whose parent stage is present and non-empty.
+   * Null everywhere else: adjacency on the chart is not nesting in the data.
+   */
   conversion: number | null;
+  /** The SQL-guaranteed parent stage `conversion` is measured against. */
+  nestedIn: Pick<FunnelStage, 'stage' | 'stage_order'> | null;
+  /** True when the node is drawn at the minimum thickness, not in proportion. */
+  clamped: boolean;
   xCenter: number;
   yTop: number;
   yBottom: number;
@@ -419,42 +461,76 @@ export interface SankeyModel {
   viewHeight: number;
   nodes: SankeyNode[];
   ribbons: SankeyRibbon[];
+  /**
+   * True when at least one non-empty stage is drawn at the minimum thickness.
+   * The renderer must then say so: thickness stops encoding magnitude for
+   * those stages, and a chart that silently stops being proportional is worse
+   * than one that says "not to scale".
+   */
+  notToScale: boolean;
 }
 
-export const SANKEY_VIEW = { width: 1000, height: 240, padX: 70, padY: 44, nodeWidth: 16 } as const;
+// `minNodeHeight` (2026-09-21 audit, dataviz-03): at real magnitudes (5.16M,
+// 117K, 3.9K, 35, 3) a linear scale with a 3-unit floor drew stages two to
+// five as 3-4px hairlines. The scale stays LINEAR — a log or sqrt scale would
+// misstate proportions in a product sold on reconcilable numbers — and a
+// non-empty stage simply never draws thinner than this, with `notToScale`
+// disclosing it. An EMPTY stage keeps the thin `emptyNodeHeight` sliver: a
+// visible ribbon into a stage with zero borrowers would imply a flow.
+export const SANKEY_VIEW = {
+  width: 1000,
+  height: 240,
+  padX: 70,
+  padY: 44,
+  nodeWidth: 16,
+  minNodeHeight: 12,
+  emptyNodeHeight: 3,
+} as const;
 
 export function buildFunnelSankeyModel(
   stages: ReadonlyArray<FunnelStage>,
   view = SANKEY_VIEW,
 ): SankeyModel {
   const ordered = [...stages].sort((a, b) => a.stage_order - b.stage_order);
-  const { width, height, padX, padY, nodeWidth } = view;
-  const empty: SankeyModel = { viewWidth: width, viewHeight: height, nodes: [], ribbons: [] };
+  const { width, height, padX, padY, nodeWidth, minNodeHeight, emptyNodeHeight } = view;
+  const empty: SankeyModel = { viewWidth: width, viewHeight: height, nodes: [], ribbons: [], notToScale: false };
   if (ordered.length === 0) return empty;
 
   const maxCount = Math.max(...ordered.map((s) => Math.max(0, s.borrower_count)), 1);
   const maxBarH = height - padY * 2;
-  const minBarH = 3; // a zero/near-zero stage stays visible as a sliver
   const usableW = width - padX * 2;
   const stepX = ordered.length > 1 ? usableW / (ordered.length - 1) : 0;
   const midY = height / 2;
+  const countOf = (stageOrder: number): number | null => {
+    const found = ordered.find((s) => s.stage_order === stageOrder);
+    return found ? Math.max(0, found.borrower_count) : null;
+  };
+  const addressable = countOf(ADDRESSABLE_STAGE_ORDER);
 
   const nodes: SankeyNode[] = ordered.map((s, i) => {
     const count = Math.max(0, s.borrower_count);
-    const h = Math.max(minBarH, (count / maxCount) * maxBarH);
-    const prev = i > 0 ? Math.max(0, ordered[i - 1].borrower_count) : null;
-    // Conversion is defined only as a narrowing from a non-empty prior
-    // stage. First stage -> null; prev=0 -> null (undefined, not a fake 0%).
-    // A stage that grew keeps its raw ratio here; the formatter suppresses
-    // the >100% label. The Executive view filters non-narrowing NBO coverage
-    // out of the main activation funnel, while this generic model remains
-    // honest for any stage array passed to it.
-    const conversion = i === 0 ? null : prev && prev > 0 ? count / prev : null;
+    const proportional = (count / maxCount) * maxBarH;
+    const clamped = count > 0 && proportional < minNodeHeight;
+    const h = count === 0 ? emptyNodeHeight : Math.max(minNodeHeight, proportional);
+    // A ratio is published only against a population SQL guarantees contains
+    // this stage, and only when that population is non-empty: dividing by an
+    // empty parent is undefined, not a fake 0%.
+    const shareOfAddressable =
+      s.stage_order !== ADDRESSABLE_STAGE_ORDER && addressable !== null && addressable > 0
+        ? count / addressable
+        : null;
+    const pair = NESTED_FUNNEL_STAGE_PAIRS.find(([, child]) => child === s.stage_order);
+    const parent = pair ? ordered.find((p) => p.stage_order === pair[0]) : undefined;
+    const parentCount = parent ? Math.max(0, parent.borrower_count) : 0;
+    const nested = parent !== undefined && parentCount > 0;
     return {
       stage: s.stage,
       stageOrder: s.stage_order,
       count,
-      conversion,
+      shareOfAddressable,
+      conversion: nested ? count / parentCount : null,
+      nestedIn: nested ? { stage: parent.stage, stage_order: parent.stage_order } : null,
+      clamped,
       xCenter: padX + i * stepX,
       yTop: midY - h / 2,
       yBottom: midY + h / 2,
@@ -478,15 +554,20 @@ export function buildFunnelSankeyModel(
     ribbons.push({ path, fromOrder: a.stageOrder, toOrder: b.stageOrder });
   }
 
-  return { viewWidth: width, viewHeight: height, nodes, ribbons };
+  return {
+    viewWidth: width,
+    viewHeight: height,
+    nodes,
+    ribbons,
+    notToScale: nodes.some((node) => node.clamped),
+  };
 }
 
 /**
- * Compact percent for a conversion ratio (0.0427 → "4.3%"). Returns null —
- * i.e. "show no conversion label" — for an undefined conversion (null) or a
- * stage that GREW vs its predecessor (ratio > 1), where a "conversion"
- * percentage is meaningless (the real funnel is non-monotonic at the offer
- * stage). A stage that exactly held (100%) still shows.
+ * Compact percent for a share or conversion ratio (0.0427 → "4.3%"). Returns
+ * null — i.e. "show no label" — for an undefined ratio (null) or one above
+ * 100%, which a subset can never produce: a label there would be reporting a
+ * data problem as a percentage. A ratio of exactly 100% still shows.
  */
 export function formatConversionPct(conversion: number | null): string | null {
   if (conversion === null || !Number.isFinite(conversion) || conversion > 1.0001) return null;

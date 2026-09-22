@@ -72,6 +72,7 @@ from backend.services.genie_progress import (
     build_genie_progress,
     genie_question_binding_hash,
     genie_question_hash,
+    genie_turn_is_deep,
     mint_genie_progress_token,
     verify_genie_progress_token,
 )
@@ -568,6 +569,9 @@ def genie_message_submit(
             question_hash=question_binding_hash,
         ),
         question_hash=question_hash,
+        # Known now, from the question alone: lets the UI label the long
+        # completion wait as deep research instead of "Answer ready".
+        deep=genie_turn_is_deep(payload.question),
     )
 
 

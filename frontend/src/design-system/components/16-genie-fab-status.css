@@ -1,0 +1,97 @@
+/* ============================================================
+   GENIE SURVIVABILITY — launcher status, composer busy hint, answer anchor
+   ------------------------------------------------------------
+   Audit 2026-09-21 (runtime-01 / genie-02 / genie-v2 / motion-v2).
+
+   DOCUMENTED BEM EXTENSION of the prototype. design_files/index.html:773-785
+   defines `.genie__fab` with two states only (rest, `.is-hidden`); the
+   prototype has no concept of a turn that outlives the open panel. Genie
+   turns run 30-200 s and the panel covers the page, so the panel now stays
+   mounted while closed and its launchers must say so:
+
+     .is-genie-running  a turn is in flight behind the closed panel
+     .is-genie-ready    an answer landed while closed and is still unseen
+
+   The same two state classes apply to BOTH launchers — the mobile
+   `.genie__fab` and the desktop `.topbar__icon-btn` Genie toggle — because
+   the FAB is `display: none` above 720px (06-genie-chat.css), where the
+   topbar toggle is the only launcher. Tokens only; no new colors.
+   ============================================================ */
+.topbar__icon-btn.is-genie-running,
+.topbar__icon-btn.is-genie-ready { position: relative; }
+
+/* Running ring: an accent outline that breathes around the launcher. It
+   inherits the launcher's own radius, so it reads the same on the round FAB
+   and the square topbar toggle (an orbiting arc would visibly rotate the
+   square one). `.genie__fab` is already `position: fixed`, which anchors the
+   pseudo-element without any change to the prototype rule. */
+.genie__fab.is-genie-running::after,
+.topbar__icon-btn.is-genie-running::after {
+  content: "";
+  position: absolute;
+  inset: calc(-1 * var(--sp-1));
+  border-radius: inherit;
+  border: calc(var(--sp-1) / 2) solid var(--accent);
+  pointer-events: none;
+  animation: genie-launcher-ring var(--dur-heartbeat) ease-in-out infinite;
+}
+@keyframes genie-launcher-ring {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
+
+/* Answer-ready badge: a success dot on the launcher's top-right corner,
+   ringed in the page background so it reads on both launchers and themes. */
+.genie__fab.is-genie-ready::after,
+.topbar__icon-btn.is-genie-ready::after {
+  content: "";
+  position: absolute;
+  top: calc(-1 * var(--sp-1));
+  right: calc(-1 * var(--sp-1));
+  width: var(--sp-3);
+  height: var(--sp-3);
+  border-radius: var(--r-pill);
+  background: var(--signal-success);
+  box-shadow: 0 0 0 calc(var(--sp-1) / 2) var(--bg-0);
+  pointer-events: none;
+  animation: genie-launcher-badge var(--dur-heartbeat) var(--ease) infinite;
+}
+.topbar__icon-btn.is-genie-ready {
+  color: var(--accent-ink);
+  border-color: var(--chip-line);
+}
+@keyframes genie-launcher-badge {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.18); }
+}
+
+/* Reduced motion: the ring holds at full strength and the badge stops
+   breathing. Both states stay legible without any movement. */
+@media (prefers-reduced-motion: reduce) {
+  .genie__fab.is-genie-running::after,
+  .topbar__icon-btn.is-genie-running::after,
+  .genie__fab.is-genie-ready::after,
+  .topbar__icon-btn.is-genie-ready::after { animation: none; }
+}
+
+/* Composer busy hint (genie-v2). New element `.genie__input-hint`: the
+   prototype composer (index.html:760-772) has no in-flight state at all.
+   While a turn runs, Ask and the follow-up chips are disabled and this line
+   says why; the input itself stays editable so the next question can be
+   drafted. */
+.genie__input-hint {
+  margin: 0;
+  padding: 0 var(--sp-3) var(--sp-3);
+  font-size: var(--fs-11);
+  line-height: 1.4;
+  color: var(--text-3);
+}
+.genie-answer__followups .filter[disabled] {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+/* Answer anchor (motion-v2). A new answer is scrolled to its START, so the
+   Summary-first composition lands on screen instead of the follow-up chips;
+   the margin keeps the bubble off the panel header's edge. */
+.genie__msg { scroll-margin-block-start: var(--sp-3); }

@@ -6,6 +6,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useRef } from 'react';
+import { escapeLayerCount } from '../lib/escapeStack';
 import { useFocusTrap } from './useFocusTrap';
 
 function TrapHarness({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -57,6 +58,8 @@ describe('useFocusTrap', () => {
     launcher.focus();
 
     await render(true);
+    // The open trap is one layer on the shared Escape stack (runtime-v2).
+    expect(escapeLayerCount()).toBe(1);
 
     const buttons = Array.from(document.querySelectorAll('button'));
     const close = buttons.find((button) => button.textContent === 'Close');
@@ -89,5 +92,6 @@ describe('useFocusTrap', () => {
 
     await render(false);
     expect(document.activeElement).toBe(launcher);
+    expect(escapeLayerCount()).toBe(0);
   });
 });

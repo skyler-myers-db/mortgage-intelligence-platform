@@ -3,10 +3,9 @@ import type { GenieAnswer } from '../types';
 import {
   GENIE_CONVERSATION_TURNS_KEY,
   MAX_STORED_TURNS,
+  appendGenieTurn,
   clearGenieTurns,
   getGenieTurns,
-  messagesToTurns,
-  persistGenieMessages,
   setGenieTurns,
   subscribeGenieTurns,
   turnsToMessages,
@@ -48,12 +47,8 @@ afterEach(() => {
 });
 
 describe('genie transcript store — persist / restore', () => {
-  it('persists a settled transcript to sessionStorage under the versioned key', () => {
-    const messages: GenieChatMessage[] = [
-      { who: 'user', text: 'How many borrowers are in the money?' },
-      { who: 'ai', payload: answer('12,480 borrowers.') },
-    ];
-    persistGenieMessages(messages, { inFlight: false });
+  it('persists a settled turn to sessionStorage under the versioned key', () => {
+    appendGenieTurn('How many borrowers are in the money?', answer('12,480 borrowers.'));
 
     const raw = values.get(GENIE_CONVERSATION_TURNS_KEY);
     expect(raw).toBeTruthy();
@@ -62,18 +57,11 @@ describe('genie transcript store — persist / restore', () => {
     ]);
   });
 
-  it('restores the full conversation — including the latest answer — after a remount', async () => {
-    persistGenieMessages(
-      [
-        { who: 'user', text: 'first' },
-        { who: 'ai', payload: answer('first answer') },
-        { who: 'user', text: 'second' },
-        { who: 'ai', payload: answer('second answer') },
-      ],
-      { inFlight: false },
-    );
+  it('restores the full conversation — including the latest answer — after a reload', async () => {
+    appendGenieTurn('first', answer('first answer'));
+    appendGenieTurn('second', answer('second answer'));
 
-    // A remount (panel closed then reopened) re-reads sessionStorage.
+    // A reload re-reads sessionStorage.
     const restored = turnsToMessages(await hydrateFresh());
     expect(restored.map((m) => (m.who === 'user' ? m.text : m.payload.answer))).toEqual([
       'first',
@@ -83,23 +71,17 @@ describe('genie transcript store — persist / restore', () => {
     ]);
   });
 
-  it('never writes while a turn is in flight', () => {
-    persistGenieMessages([{ who: 'user', text: 'q1' }, { who: 'ai', payload: answer('a1') }], {
-      inFlight: false,
-    });
-    const settled = values.get(GENIE_CONVERSATION_TURNS_KEY);
+  it('appends to the LIVE list, keeping a turn another surface settled in the meantime', () => {
+    // The floating panel starts a turn; while it runs, /ask-genie settles one.
+    const before = getGenieTurns();
+    setGenieTurns([turn('route question')]);
 
-    // A pending question with no answer yet must not overwrite the settled state.
-    persistGenieMessages(
-      [
-        { who: 'user', text: 'q1' },
-        { who: 'ai', payload: answer('a1') },
-        { who: 'user', text: 'q2 (pending)' },
-      ],
-      { inFlight: true },
-    );
+    // The panel's write reads the current list at call time, not the copy it
+    // held when its turn started, so the route's turn is never overwritten.
+    appendGenieTurn('panel question', answer('panel answer'));
 
-    expect(values.get(GENIE_CONVERSATION_TURNS_KEY)).toBe(settled);
+    expect(getGenieTurns().map((t) => t.question)).toEqual(['route question', 'panel question']);
+    expect(getGenieTurns()).not.toBe(before);
   });
 
   it('caps stored turns at MAX_STORED_TURNS, dropping the oldest', () => {
@@ -149,22 +131,22 @@ describe('genie transcript store — new thread', () => {
   });
 });
 
-describe('message <-> turn adapters', () => {
-  it('round-trips a normal alternating conversation', () => {
-    const messages: GenieChatMessage[] = [
+describe('turn -> message adapter', () => {
+  it('renders a normal alternating conversation as user/ai pairs', () => {
+    const expected: GenieChatMessage[] = [
       { who: 'user', text: 'q1' },
-      { who: 'ai', payload: answer('a1') },
+      { who: 'ai', payload: answer('a1'), sources: undefined },
       { who: 'user', text: 'q2' },
-      { who: 'ai', payload: answer('a2') },
+      { who: 'ai', payload: answer('a2'), sources: undefined },
     ];
-    expect(turnsToMessages(messagesToTurns(messages))).toEqual(messages);
+    expect(turnsToMessages([turn('q1', 'a1'), turn('q2', 'a2')])).toEqual(expected);
   });
 
   it('keeps an answer that has no originating question (governed action result)', () => {
-    const messages: GenieChatMessage[] = [{ who: 'ai', payload: answer('Saved 12 borrowers.') }];
-    const turns = messagesToTurns(messages);
-    expect(turns).toEqual([{ question: '', response: answer('Saved 12 borrowers.') }]);
-    expect(turnsToMessages(turns)).toEqual(messages);
+    const turns: GenieTurn[] = [{ question: '', response: answer('Saved 12 borrowers.') }];
+    expect(turnsToMessages(turns)).toEqual([
+      { who: 'ai', payload: answer('Saved 12 borrowers.'), sources: undefined },
+    ]);
   });
 
   it('attaches derived source assets when a resolver is supplied', () => {

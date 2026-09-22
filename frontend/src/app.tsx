@@ -1,6 +1,8 @@
-import { Suspense, useEffect } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Navigate, Route, Routes, useLocation } from 'react-router';
+import { ErrorBoundary } from './components/ErrorBoundary';
+import { routeLabelForPath } from './components/ErrorBoundaryFallback';
 import { AppShell } from './components/layout/AppShell';
 import { RouteNav } from './components/layout/RouteNav';
 import { Skeleton } from './components/ui/Skeleton';
@@ -21,6 +23,9 @@ import {
 } from './lib/routePreloaders';
 import { api } from './lib/api';
 import type { SessionResponse } from './types';
+
+// Lazy: the denied page must not cost the initial bundle anything.
+const AdminAccessDeniedRoute = lazy(() => import('./routes/admin-config.access-denied'));
 
 function RouteFallback() {
   return (
@@ -43,6 +48,10 @@ function RouteFallback() {
  * boundary. Backend AdminDep checks remain the security boundary; this guard
  * prevents a denied deep link from rendering an operator console full of 403
  * panels while the navigation correctly hides the same destination.
+ *
+ * A denied actor gets a 403 surface naming the required role and a way back,
+ * not a silent redirect to Home (2026-09-21 audit shell-06). A session check
+ * that failed stays closed too, but says so instead of claiming a missing role.
  */
 export function AdminRouteGate() {
   const session = useQuery<SessionResponse>({
@@ -52,7 +61,7 @@ export function AdminRouteGate() {
   });
 
   if (session.isPending) return <RouteFallback />;
-  if (!session.data?.can_access_admin) return <Navigate to="/" replace />;
+  if (!session.data?.can_access_admin) return <AdminAccessDeniedRoute unverified={session.isError} />;
   return <AdminConfigRoute />;
 }
 
@@ -61,34 +70,45 @@ export function AdminRouteGate() {
  * CSS `.route-transition` animation replays for each route. Scope is only
  * the inner `<main>` content; AppShell, Topbar, Rail, Console, and the
  * floating Genie panel don't animate.
+ *
+ * The route ErrorBoundary wraps the Suspense (a boundary inside PageShell
+ * could not catch a failed lazy chunk or a route-level throw) and resets on
+ * pathname, so a broken route leaves the shell usable and navigating away
+ * clears it even if the `key` re-mount is ever dropped.
  */
 function RouteTransition() {
   const { pathname } = useLocation();
   return (
     <div key={pathname} className="route-transition">
-      <Suspense fallback={<RouteFallback />}>
-        <Routes>
-          <Route path="/" element={<HomeRoute />} />
-          <Route path="/analytics" element={<AnalyticsRoute />} />
-          <Route path="/data-estate/assets/:assetKey" element={<AssetRoute />} />
-          <Route path="/portfolio-builder" element={<PortfolioBuilderRoute />} />
-          <Route path="/segment-intelligence" element={<SegmentIntelligenceRoute />} />
-          <Route path="/lead-queue" element={<LeadQueueRoute />} />
-          <Route path="/borrower-360" element={<Borrower360Route />} />
-          <Route path="/borrower-360/:id" element={<Borrower360Route />} />
-          <Route path="/glossary" element={<GlossaryRoute />} />
-          <Route path="/offer-orchestrator" element={<OfferOrchestratorRoute />} />
-          <Route path="/offer-orchestrator/:id" element={<OfferOrchestratorRoute />} />
-          <Route path="/ask-genie" element={<AskGenieRoute />} />
-          <Route path="/admin-config" element={<AdminRouteGate />} />
-          {/* Outreach drafting lives inside /offer-orchestrator; any
-              legacy /outreach-composer link redirects to the lead queue
-              so a visitor never lands on a blank shell. */}
-          <Route path="/outreach-composer" element={<Navigate to="/lead-queue" replace />} />
-          <Route path="/outreach-composer/:id" element={<Navigate to="/lead-queue" replace />} />
-          <Route path="*" element={<NotFoundRoute />} />
-        </Routes>
-      </Suspense>
+      <ErrorBoundary
+        boundary="route"
+        resetKey={pathname}
+        routeLabel={routeLabelForPath(pathname)}
+      >
+        <Suspense fallback={<RouteFallback />}>
+          <Routes>
+            <Route path="/" element={<HomeRoute />} />
+            <Route path="/analytics" element={<AnalyticsRoute />} />
+            <Route path="/data-estate/assets/:assetKey" element={<AssetRoute />} />
+            <Route path="/portfolio-builder" element={<PortfolioBuilderRoute />} />
+            <Route path="/segment-intelligence" element={<SegmentIntelligenceRoute />} />
+            <Route path="/lead-queue" element={<LeadQueueRoute />} />
+            <Route path="/borrower-360" element={<Borrower360Route />} />
+            <Route path="/borrower-360/:id" element={<Borrower360Route />} />
+            <Route path="/glossary" element={<GlossaryRoute />} />
+            <Route path="/offer-orchestrator" element={<OfferOrchestratorRoute />} />
+            <Route path="/offer-orchestrator/:id" element={<OfferOrchestratorRoute />} />
+            <Route path="/ask-genie" element={<AskGenieRoute />} />
+            <Route path="/admin-config" element={<AdminRouteGate />} />
+            {/* Outreach drafting lives inside /offer-orchestrator; any
+                legacy /outreach-composer link redirects to the lead queue
+                so a visitor never lands on a blank shell. */}
+            <Route path="/outreach-composer" element={<Navigate to="/lead-queue" replace />} />
+            <Route path="/outreach-composer/:id" element={<Navigate to="/lead-queue" replace />} />
+            <Route path="*" element={<NotFoundRoute />} />
+          </Routes>
+        </Suspense>
+      </ErrorBoundary>
     </div>
   );
 }

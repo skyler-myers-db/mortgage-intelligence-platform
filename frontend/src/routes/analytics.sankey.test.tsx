@@ -10,6 +10,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FunnelStage } from '../types';
 import {
+  NESTED_FUNNEL_STAGE_PAIRS,
   SANKEY_VIEW,
   activationFunnelStages,
   buildFunnelSankeyModel,
@@ -53,40 +54,111 @@ describe('buildFunnelSankeyModel (pure geometry)', () => {
     ]);
   });
 
-  it('computes conversion as count/previous (null for the first stage)', () => {
+  // 2026-09-21 audit (dataviz-v1). The stages are independent SUM(CASE ...)
+  // cuts of the addressable rows, so "count / previous stage" is a ratio of
+  // unrelated counts. These pin what replaced it.
+  it('labels every stage with its share of ADDRESSABLE, the one guaranteed superset', () => {
     const model = buildFunnelSankeyModel(STAGES);
-    expect(model.nodes[0].conversion).toBeNull();
-    expect(model.nodes[1].conversion).toBeCloseTo(117_189 / 5_156_184, 6);
-    expect(model.nodes[5].conversion).toBeCloseTo(3 / 35, 6);
+    expect(model.nodes[0].shareOfAddressable).toBeNull(); // addressable itself
+    expect(model.nodes[1].shareOfAddressable).toBeCloseTo(117_189 / 5_156_184, 9);
+    expect(model.nodes[2].shareOfAddressable).toBeCloseTo(3_990 / 5_156_184, 9);
+    expect(model.nodes[3].shareOfAddressable).toBeCloseTo(4_467_395 / 5_156_184, 9);
+    expect(model.nodes[4].shareOfAddressable).toBeCloseTo(35 / 5_156_184, 12);
+    expect(model.nodes[5].shareOfAddressable).toBeCloseTo(3 / 5_156_184, 12);
+    // A subset can never exceed its superset.
+    expect(model.nodes.every((n) => n.shareOfAddressable === null || n.shareOfAddressable <= 1)).toBe(true);
   });
 
-  it('sizes node height by count and keeps a zero stage visible as a sliver', () => {
+  it('publishes a conversion ONLY for the SQL-nested pair, Approved -> Actioned', () => {
+    expect(NESTED_FUNNEL_STAGE_PAIRS).toEqual([[5, 6]]);
+    const model = buildFunnelSankeyModel(STAGES);
+    // Refi economics / score 75+ / offers / approved are independent cuts:
+    // high-opportunity borrowers need not be in the money, approved borrowers
+    // need not be high-opportunity. No stage-to-stage ratio is published.
+    expect(model.nodes.slice(0, 5).map((n) => n.conversion)).toEqual([null, null, null, null, null]);
+    expect(model.nodes.slice(0, 5).map((n) => n.nestedIn)).toEqual([null, null, null, null, null]);
+    const actioned = model.nodes[5];
+    expect(actioned.conversion).toBeCloseTo(3 / 35, 9);
+    expect(actioned.nestedIn).toEqual({ stage: 'Approved', stage_order: 5 });
+    // The same holds on the five-stage activation funnel the Executive view draws.
+    const activation = buildFunnelSankeyModel(activationFunnelStages(STAGES));
+    expect(activation.nodes.map((n) => n.conversion === null)).toEqual([true, true, true, true, false]);
+  });
+
+  it('never publishes the defect value: high-opportunity over refi-economics', () => {
+    const model = buildFunnelSankeyModel(STAGES);
+    const defect = 3_990 / 117_189; // what "from previous stage" used to print (3.4%)
+    for (const node of model.nodes) {
+      expect(node.conversion ?? -1).not.toBeCloseTo(defect, 6);
+      expect(node.shareOfAddressable ?? -1).not.toBeCloseTo(defect, 6);
+    }
+  });
+
+  it('treats a ratio against an absent or empty parent as undefined (null), not a fake 0%', () => {
+    // No Approved stage in the array: Actioned has nothing to be nested in.
+    const orphan = buildFunnelSankeyModel([
+      { stage: 'Addressable', stage_order: 1, borrower_count: 1000, source: POP },
+      { stage: 'Actioned', stage_order: 6, borrower_count: 3, source: WORKFLOW },
+    ]);
+    expect(orphan.nodes[1].conversion).toBeNull();
+    expect(orphan.nodes[1].nestedIn).toBeNull();
+    // Approved is present but empty: you cannot divide by zero.
+    const emptyParent = buildFunnelSankeyModel([
+      { stage: 'Addressable', stage_order: 1, borrower_count: 1000, source: POP },
+      { stage: 'Approved', stage_order: 5, borrower_count: 0, source: WORKFLOW },
+      { stage: 'Actioned', stage_order: 6, borrower_count: 0, source: WORKFLOW },
+    ]);
+    expect(emptyParent.nodes[2].conversion).toBeNull();
+    expect(emptyParent.nodes[1].shareOfAddressable).toBe(0); // a real 0% of a non-empty book
+    // Addressable empty or missing: share is undefined too.
+    const emptyBook = buildFunnelSankeyModel([
+      { stage: 'Addressable', stage_order: 1, borrower_count: 0, source: POP },
+      { stage: 'Refi Economics', stage_order: 2, borrower_count: 500, source: POP },
+    ]);
+    expect(emptyBook.nodes[1].shareOfAddressable).toBeNull();
+    const noBook = buildFunnelSankeyModel([
+      { stage: 'Refi Economics', stage_order: 2, borrower_count: 500, source: POP },
+    ]);
+    expect(noBook.nodes[0].shareOfAddressable).toBeNull();
+  });
+
+  // 2026-09-21 audit (dataviz-03): live magnitudes drew stages two to five as
+  // 3-4px hairlines. Linear scale kept; a non-empty stage has a visible floor
+  // and the model says when it used it.
+  it('draws every non-empty stage at a visible minimum thickness and flags it as not to scale', () => {
+    const model = buildFunnelSankeyModel(activationFunnelStages(STAGES));
+    const maxBarH = SANKEY_VIEW.height - SANKEY_VIEW.padY * 2;
+    expect(model.nodes[0].height).toBeCloseTo(maxBarH, 6); // the largest stage is to scale
+    expect(model.nodes[0].clamped).toBe(false);
+    for (const node of model.nodes.slice(1)) {
+      expect(node.height).toBe(SANKEY_VIEW.minNodeHeight);
+      expect(node.clamped).toBe(true);
+    }
+    expect(SANKEY_VIEW.minNodeHeight).toBeGreaterThanOrEqual(10); // not a hairline
+    expect(model.notToScale).toBe(true);
+  });
+
+  it('stays linear and silent when every stage is large enough to draw in proportion', () => {
+    const model = buildFunnelSankeyModel([
+      { stage: 'Addressable', stage_order: 1, borrower_count: 1000, source: POP },
+      { stage: 'Refi Economics', stage_order: 2, borrower_count: 500, source: POP },
+    ]);
+    expect(model.nodes[1].height).toBeCloseTo(model.nodes[0].height / 2, 6); // true proportion
+    expect(model.nodes.some((n) => n.clamped)).toBe(false);
+    expect(model.notToScale).toBe(false);
+  });
+
+  it('keeps an EMPTY stage a thin sliver: no visible ribbon into zero borrowers', () => {
     const model = buildFunnelSankeyModel([
       { stage: 'Big', stage_order: 1, borrower_count: 1000, source: POP },
       { stage: 'Zero', stage_order: 2, borrower_count: 0, source: POP },
     ]);
     const [big, zero] = model.nodes;
     expect(big.height).toBeGreaterThan(zero.height);
-    expect(zero.height).toBeGreaterThan(0); // never invisible
-    expect(zero.conversion).toBe(0); // a real 0% drop from a non-empty prior
-  });
-
-  it('treats conversion from an empty prior stage as undefined (null), not a fake 0%', () => {
-    // Sliver-recovery: a zero stage followed by a non-zero stage. You can't
-    // divide by zero, so conversion is undefined, not 0%.
-    const model = buildFunnelSankeyModel([
-      { stage: 'Zero', stage_order: 1, borrower_count: 0, source: POP },
-      { stage: 'Recovered', stage_order: 2, borrower_count: 500, source: POP },
-    ]);
-    expect(model.nodes[1].conversion).toBeNull();
-  });
-
-  it('keeps the raw ratio for a stage that grew (non-monotonic real funnel)', () => {
-    // Mirrors production: offer_recommended (4.47M) balloons past
-    // high_opportunity (3,878). The model keeps the raw >1 ratio; the
-    // formatter is what suppresses the nonsensical label.
-    const model = buildFunnelSankeyModel(STAGES);
-    expect(model.nodes[3].conversion).toBeGreaterThan(1);
+    expect(zero.height).toBe(SANKEY_VIEW.emptyNodeHeight); // never invisible
+    expect(zero.height).toBeLessThan(SANKEY_VIEW.minNodeHeight);
+    expect(zero.clamped).toBe(false);
+    expect(model.notToScale).toBe(false);
   });
 
   it('lays nodes left-to-right within the padded viewBox', () => {
@@ -155,13 +227,63 @@ describe('FunnelSankey (render + a11y)', () => {
     const first = links[0];
     expect(first.getAttribute('aria-label')).toContain('Addressable');
     expect(first.getAttribute('aria-label')).toContain('Open in lead queue');
-    // The In-the-Money node (a narrowing) announces its conversion.
-    expect(links[1].getAttribute('aria-label')).toMatch(/from previous stage/);
-    // The first node never announces a conversion.
-    expect(first.getAttribute('aria-label')).not.toMatch(/from previous stage/);
-    // The grown Offer-Recommended node (>100%) omits the meaningless
-    // conversion rather than announcing "115000% from previous stage".
-    expect(links[3].getAttribute('aria-label')).not.toMatch(/from previous stage/);
+  });
+
+  // 2026-09-21 audit (dataviz-v1): the rendered chart, not just the model.
+  it('announces and prints share of addressable, never a stage-to-stage conversion', () => {
+    mount(STAGES);
+    const links = [...container.querySelectorAll('[role="link"]')];
+    const labels = links.map((l) => l.getAttribute('aria-label') ?? '');
+    for (const label of labels) expect(label).not.toMatch(/from previous stage/);
+    expect(labels[0]).toBe('Addressable: 5.16M borrowers. Open in lead queue.');
+    expect(labels[1]).toBe('Refi economics: 117.19K borrowers, 2.3% of addressable. Open in lead queue.');
+    // 3,990 / 117,189 = 3.4% was the published "conversion"; the honest
+    // figure is 3,990 / 5,156,184 = 0.1% of addressable.
+    expect(labels[2]).toContain('0.1% of addressable');
+    expect(labels[2]).not.toContain('3.4%');
+    expect(labels[3]).toContain('87% of addressable'); // offers: a share, not ">100% conversion"
+    expect(labels[4]).toBe('Approved: 35 borrowers, <0.1% of addressable. Open in lead queue.');
+    // Visible text mirrors the accessible name.
+    const printed = (link: Element) => [...link.querySelectorAll('.funnel-sankey__conv')].map((t) => t.textContent);
+    expect(printed(links[0])).toEqual([]);
+    expect(printed(links[1])).toEqual(['2.3% of addressable']);
+    expect(printed(links[4])).toEqual(['<0.1% of addressable']);
+  });
+
+  it('keeps a conversion label only on Actioned, measured against Approved', () => {
+    mount(STAGES);
+    const links = [...container.querySelectorAll('[role="link"]')];
+    const conversions = links.map((l) => l.querySelector('[data-ratio="nested-conversion"]')?.textContent ?? null);
+    expect(conversions).toEqual([null, null, null, null, null, '8.6% of approved']);
+    expect(links[5].getAttribute('aria-label')).toBe(
+      'Actioned: 3 borrowers, <0.1% of addressable, 8.6% of approved. Open in lead queue.',
+    );
+    // The two lines and the count stack without sharing a baseline.
+    const ys = [...links[5].querySelectorAll('text')].slice(0, 3).map((t) => Number(t.getAttribute('y')));
+    expect(new Set(ys).size).toBe(3);
+  });
+
+  it('says the chart is not to scale whenever a stage is drawn at the minimum thickness', () => {
+    mount(activationFunnelStages(STAGES));
+    const note = container.querySelector('[data-testid="funnel-sankey-scale-note"]');
+    expect(note?.textContent).toContain('Not to scale');
+    expect(note?.textContent).toContain('exact');
+    const svgLabel = container.querySelector('svg')!.getAttribute('aria-label') ?? '';
+    expect(svgLabel).toContain('share of the addressable population');
+    expect(svgLabel).toContain('not a conversion');
+    expect(svgLabel).toContain('not to scale');
+    // Drawn, not hairline: every bar is at least the visible minimum.
+    const heights = [...container.querySelectorAll('.funnel-sankey__bar')].map((b) => Number(b.getAttribute('height')));
+    expect(Math.min(...heights)).toBeGreaterThanOrEqual(SANKEY_VIEW.minNodeHeight);
+  });
+
+  it('omits the not-to-scale note when every stage is drawn in proportion', () => {
+    mount([
+      { stage: 'Addressable', stage_order: 1, borrower_count: 1000, source: POP },
+      { stage: 'Refi Economics', stage_order: 2, borrower_count: 500, source: POP },
+    ]);
+    expect(container.querySelector('[data-testid="funnel-sankey-scale-note"]')).toBeNull();
+    expect(container.querySelector('svg')!.getAttribute('aria-label')).not.toContain('not to scale');
   });
 
   it('animates the ribbon draw ONCE on first appearance, never on re-mount (no demo-ticker replay)', () => {

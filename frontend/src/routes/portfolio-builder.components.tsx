@@ -1,9 +1,18 @@
 import { type ChangeEvent, useMemo, useState } from 'react';
 import { Icon } from '../components/Icon';
+import { MultiFilterSelect } from '../components/ui/MultiFilterSelect';
 import type { CampaignPerformanceFunnelResponse, PortfolioPreview } from '../types';
 import type { FootprintState } from './portfolio-builder.logic';
-import { formatUsdCompact, stateLabel } from './portfolio-builder.logic';
+import { formatUsdCompact } from './portfolio-builder.logic';
 
+/**
+ * GEO picker for step one of the product flow. It used to be a private
+ * mouse-only listbox (`li role=option` with onClick and nothing else), which
+ * locked keyboard and screen-reader users out of choosing states — WCAG 2.1.1
+ * Level A (2026-09-21 audit a11y-v1). It now adapts the tenant footprint onto
+ * the shared focus-managed MultiFilterSelect: same `.filter` / `.filter-menu`
+ * BEM, same `value` / `onChange` shape for the route.
+ */
 export function StateMultiSelect({
   label,
   allLabel,
@@ -17,66 +26,22 @@ export function StateMultiSelect({
   value: string[];
   onChange: (next: string[]) => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const active = value.length > 0;
-  const display = !active
-    ? allLabel
-    : value.length === 1
-      ? stateLabel(value[0], states)
-      : `${value.length} states`;
-  const toggleState = (code: string) => {
-    const next = value.includes(code)
-      ? value.filter((state) => state !== code)
-      : [...value, code];
-    onChange(next.length === states.length ? [] : next);
-  };
+  const options = useMemo(
+    () => states.map((state) => ({ value: state.state_code, label: state.state_name })),
+    [states],
+  );
 
   return (
-    <div className="filter-root">
-      <button
-        type="button"
-        className={`filter ${active ? 'is-active' : ''}`}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        aria-label={`${label}: ${display}`}
-        onClick={() => setOpen((next) => !next)}
-      >
-        <span className="filter__label">{label}</span>
-        <span className="filter__value">{display}</span>
-        <Icon name="chevdown" size={11} />
-      </button>
-      {open && (
-        <ul className="filter-menu" role="listbox" aria-label={label}>
-          <li
-            role="option"
-            aria-selected={!active}
-            className={`filter-menu__item${!active ? ' is-selected' : ''}`}
-            onClick={() => {
-              onChange([]);
-              setOpen(false);
-            }}
-          >
-            {allLabel}
-            {!active && <Icon name="check" size={11} />}
-          </li>
-          {states.map((state) => {
-            const selected = value.includes(state.state_code);
-            return (
-              <li
-                key={state.state_code}
-                role="option"
-                aria-selected={selected}
-                className={`filter-menu__item${selected ? ' is-selected' : ''}`}
-                onClick={() => toggleState(state.state_code)}
-              >
-                {state.state_name}
-                {selected && <Icon name="check" size={11} />}
-              </li>
-            );
-          })}
-        </ul>
-      )}
-    </div>
+    <MultiFilterSelect
+      label={label}
+      allLabel={allLabel}
+      selected={value}
+      options={options}
+      formatCount={(count) => `${count} states`}
+      // Every state selected is the same cohort as no state filter: collapse
+      // it to the default so the saved criteria stay footprint-relative.
+      onChange={(next) => onChange(next.length === states.length ? [] : next)}
+    />
   );
 }
 

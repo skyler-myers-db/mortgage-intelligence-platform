@@ -2,10 +2,9 @@
 // Keep this route explicit: chart-scale derivations use targeted useMemo below.
 'use no memo';
 
-import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useMemo } from 'react';
 import { HIGH_OPPORTUNITY_SCORE_LABEL } from '../lib/opportunityScore';
 import { Link } from 'react-router';
-import { Icon } from '../components/Icon';
 import { GlossaryTerm } from '../components/GlossaryTerm';
 import { KpiCard } from '../components/mortgage/KpiCard';
 import { friendlyAssetLabel } from '../lib/assetLabels';
@@ -39,9 +38,7 @@ import {
   leadQueueHref,
   segmentIntelligenceHref,
   signalLabel,
-  toggleSelected,
   type LenderFilterParams,
-  type MultiFilterOption,
 } from './analytics.lib';
 import {
   Bars,
@@ -99,7 +96,11 @@ export function ExecutiveView({ data, leadParams }: { data: ExecutiveAnalyticsRe
           <div>
             <h2 className="h-3">Activation funnel</h2>
             <p className="analytics-panel-note">
-              Narrowing path from addressable borrower to actioned outreach.
+              Each stage is an independent cut of the addressable book, shown as its
+              share of addressable &mdash; not a conversion from the stage before it. A
+              high-opportunity borrower need not pass the refi-economics screen, and an
+              approved borrower need not be high-opportunity. Only Approved &rarr; Actioned
+              is nested, so only it carries a conversion.
               Offer-path coverage remains in Pipeline Metrics because nearly every
               borrower receives a governed branch, including nurture.
             </p>
@@ -347,200 +348,10 @@ function EvidenceExamplesTable({ rows }: { rows: SignalEvidenceExample[] }) {
   );
 }
 
-function MultiFilterSelect<T extends string>({
-  label,
-  allLabel,
-  selected,
-  options,
-  onChange,
-}: {
-  label: string;
-  allLabel: string;
-  selected: readonly T[];
-  options: ReadonlyArray<MultiFilterOption<T>>;
-  onChange: (next: T[]) => void;
-}) {
-  const menuId = useId();
-  const [open, setOpen] = useState(false);
-  const [focusIdx, setFocusIdx] = useState(0);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const btnRef = useRef<HTMLButtonElement>(null);
-  const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  const selectedSet = useMemo(() => new Set(selected), [selected]);
-  const active = selected.length > 0;
-  const display = selected.length === 0
-    ? allLabel
-    : selected.length === 1
-      ? options.find((option) => option.value === selected[0])?.label ?? selected[0]
-      : `${selected.length} selected`;
-
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (event: MouseEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const onKey = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setOpen(false);
-        btnRef.current?.focus();
-      }
-    };
-    window.addEventListener('mousedown', onDown);
-    window.addEventListener('keydown', onKey);
-    return () => {
-      window.removeEventListener('mousedown', onDown);
-      window.removeEventListener('keydown', onKey);
-    };
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    const selectedIdx = options.findIndex((option) => selectedSet.has(option.value));
-    setFocusIdx(selectedIdx >= 0 ? selectedIdx + 1 : 0);
-  }, [open, options, selectedSet]);
-
-  useEffect(() => {
-    if (!open) return;
-    optionRefs.current[focusIdx]?.focus();
-  }, [focusIdx, open]);
-
-  const itemCount = options.length + 1;
-  const activeOptionId = `${menuId}-option-${focusIdx}`;
-
-  const pickIndex = (idx: number) => {
-    if (idx === 0) {
-      onChange([]);
-      return;
-    }
-    const option = options[idx - 1];
-    if (option) onChange(toggleSelected(selected, option.value));
-  };
-
-  const onTriggerKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-      event.preventDefault();
-      if (!open) {
-        setOpen(true);
-        return;
-      }
-      setFocusIdx((idx) => (
-        event.key === 'ArrowDown'
-          ? (idx + 1) % itemCount
-          : (idx - 1 + itemCount) % itemCount
-      ));
-    } else if (event.key === 'Home' && open) {
-      event.preventDefault();
-      setFocusIdx(0);
-    } else if (event.key === 'End' && open) {
-      event.preventDefault();
-      setFocusIdx(itemCount - 1);
-    } else if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault();
-      if (!open) {
-        setOpen(true);
-        return;
-      }
-      pickIndex(focusIdx);
-    } else if (event.key === 'Escape' && open) {
-      event.preventDefault();
-      setOpen(false);
-    }
-  };
-
-  const onOptionKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-      event.preventDefault();
-      setFocusIdx((idx) => (
-        event.key === 'ArrowDown'
-          ? (idx + 1) % itemCount
-          : (idx - 1 + itemCount) % itemCount
-      ));
-    } else if (event.key === 'Home') {
-      event.preventDefault();
-      setFocusIdx(0);
-    } else if (event.key === 'End') {
-      event.preventDefault();
-      setFocusIdx(itemCount - 1);
-    } else if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault();
-      pickIndex(focusIdx);
-    } else if (event.key === 'Escape') {
-      event.preventDefault();
-      setOpen(false);
-      btnRef.current?.focus();
-    }
-  };
-
-  return (
-    <div ref={rootRef} className="filter-root">
-      <button
-        ref={btnRef}
-        type="button"
-        className={`filter ${active ? 'is-active' : ''}`}
-        onClick={() => setOpen((value) => !value)}
-        onKeyDown={onTriggerKeyDown}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        aria-controls={open ? menuId : undefined}
-        aria-activedescendant={open ? activeOptionId : undefined}
-        aria-label={`${label}: ${display}`}
-      >
-        <span className="filter__label">{label}</span>
-        <span className="filter__value">{display}</span>
-        <Icon name="chevdown" size={11} />
-      </button>
-      {open && (
-        <ul id={menuId} className="filter-menu filter-menu--multi" role="listbox" aria-label={label} aria-multiselectable="true">
-          <li role="presentation">
-            <button
-              ref={(node) => {
-                optionRefs.current[0] = node;
-              }}
-              id={`${menuId}-option-0`}
-              type="button"
-              role="option"
-              aria-selected={!active}
-              tabIndex={focusIdx === 0 ? 0 : -1}
-              className={`filter-menu__item${!active ? ' is-selected' : ''}${focusIdx === 0 ? ' is-focused' : ''}`}
-              onMouseEnter={() => setFocusIdx(0)}
-              onKeyDown={onOptionKeyDown}
-              onClick={() => onChange([])}
-            >
-              {allLabel}
-              {!active && <Icon name="check" size={11} />}
-            </button>
-          </li>
-          {options.map((option, idx) => {
-            const selectedOption = selectedSet.has(option.value);
-            return (
-              <li key={option.value} role="presentation">
-                <button
-                  ref={(node) => {
-                    optionRefs.current[idx + 1] = node;
-                  }}
-                  id={`${menuId}-option-${idx + 1}`}
-                  type="button"
-                  role="option"
-                  aria-selected={selectedOption}
-                  tabIndex={focusIdx === idx + 1 ? 0 : -1}
-                  className={`filter-menu__item${selectedOption ? ' is-selected' : ''}${focusIdx === idx + 1 ? ' is-focused' : ''}`}
-                  onMouseEnter={() => setFocusIdx(idx + 1)}
-                  onKeyDown={onOptionKeyDown}
-                  onClick={() => onChange(toggleSelected(selected, option.value))}
-                >
-                  {option.label}
-                  {selectedOption && <Icon name="check" size={11} />}
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-    </div>
-  );
-}
-
-export { MultiFilterSelect };
+// MultiFilterSelect moved to components/ui (2026-09-21 audit a11y-v1) so the
+// Portfolio Builder state picker shares it; re-exported so analytics imports
+// keep resolving here.
+export { MultiFilterSelect } from '../components/ui/MultiFilterSelect';
 
 export function SignalsView({
   data,

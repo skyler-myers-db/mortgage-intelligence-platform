@@ -106,6 +106,16 @@ export interface UseWarmingUpRetryOpts {
   keepPreviousData?: boolean;
 }
 
+/**
+ * `deps` is IGNORED whenever `opts.queryKey` is passed — and every production
+ * caller passes one. It only seeds the fallback key `['warming-up-retry',
+ * ...deps]`. A value listed in `deps` but missing from `queryKey` therefore
+ * does NOT refetch and does NOT get its own cache entry: that is exactly how
+ * the Lead Queue served one city's rows under another city's chip (audit
+ * runtime-02, 2026-09-21). Build the key from the same object the fetcher
+ * reads (see `lib/leadsQuery.ts`) instead of maintaining two lists. The
+ * parameter stays for now because 25 call sites pass it.
+ */
 export function useWarmingUpRetry<T>(
   fetcher: (signal: AbortSignal) => Promise<T>,
   deps: unknown[],

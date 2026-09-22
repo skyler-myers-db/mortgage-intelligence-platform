@@ -25,6 +25,7 @@ import { offerDisplayLabel } from '../lib/offerLanguage';
 import type {
   ApprovalFunnelResponse,
   ApprovalFunnelStage,
+  ApprovalFunnelStageName,
   LoanOfficerFunnelDetailResponse,
   LoanOfficerFunnelRow,
 } from '../types';
@@ -51,21 +52,43 @@ function stageDisplayLabel(stage: ApprovalFunnelStage): string {
   return funnelStageDisplayLabel(stage);
 }
 
+/**
+ * Stage -> the stage SQL guarantees CONTAINS it. A "N% of <parent>" label is
+ * printed only for these (2026-09-21 audit, dataviz-v1): the cards sit in a
+ * row, but adjacency is not nesting.
+ *
+ *  - high_opportunity ⊆ population: one statement, SUM(CASE is_high_opportunity)
+ *    beside COUNT(*) over the headline metric view (_FUNNEL_POPULATION_SQL).
+ *  - actioned ⊆ approved and outcome_recorded ⊆ actioned: the set algebra of
+ *    _WORKFLOW_STAGE_COUNTS_SQL in backend/services/approval_funnel.py
+ *    (latest-decision approvals INTERSECT call_dispositions, then INTERSECT
+ *    terminal assignments), all inside the approved union.
+ *  - approved has NO parent. It is read from Lakebase approvals; an approved
+ *    borrower need not be in the high-opportunity cut, so "N% of
+ *    high-opportunity" was a ratio of unrelated counts, not a conversion.
+ */
+export const APPROVAL_FUNNEL_NESTED_IN: Partial<Record<ApprovalFunnelStageName, ApprovalFunnelStageName>> = {
+  high_opportunity: 'population',
+  actioned: 'approved',
+  outcome_recorded: 'actioned',
+};
+
 function FunnelStages({ stages }: { stages: ApprovalFunnelStage[] }) {
   const ordered = [...stages].sort((a, b) => a.stage_order - b.stage_order);
   return (
     <div className="kpi-row">
-      {ordered.map((stage, idx) => {
-        const prev = idx > 0 ? ordered[idx - 1] : null;
-        const conversion = prev && prev.borrower_count > 0
-          ? formatConversionPct(stage.borrower_count / prev.borrower_count)
+      {ordered.map((stage) => {
+        const parentName = APPROVAL_FUNNEL_NESTED_IN[stage.stage];
+        const parent = parentName ? ordered.find((candidate) => candidate.stage === parentName) : undefined;
+        const conversion = parent && parent.borrower_count > 0
+          ? formatConversionPct(stage.borrower_count / parent.borrower_count)
           : null;
         return (
           <KpiCard
             key={stage.stage}
             label={stageDisplayLabel(stage)}
             valueAnimated={stage.borrower_count}
-            delta={conversion ? `${conversion} of ${stageDisplayLabel(prev!).toLowerCase()}` : undefined}
+            delta={conversion && parent ? `${conversion} of ${stageDisplayLabel(parent).toLowerCase()}` : undefined}
             deltaDir="flat"
             source={approvalFunnelStageDrawer(stage)}
           />
@@ -293,6 +316,8 @@ export function ApprovalFunnelSection() {
                   contactability gate) and {HIGH_OPPORTUNITY_KPI_LABEL.toLowerCase()} aggregate over
                   the governed headline metric view; approved, actioned, and outcome recorded read
                   live Lakebase workflow state. Open any number&apos;s source chip for its evidence.
+                  A percentage appears only where one stage is contained in another; Approved is
+                  not a subset of the high-opportunity cut, so it carries none.
                 </p>
               </div>
               <Link className="btn btn--sm" to="/lead-queue">Open queue</Link>

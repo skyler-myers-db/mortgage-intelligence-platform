@@ -1,4 +1,3 @@
-import { useEffect, useRef } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { PageShell } from '../components/layout/PageShell';
 import { KpiCard } from '../components/mortgage/KpiCard';
@@ -20,9 +19,10 @@ import { EntradaWordmark } from '../components/brand/Entrada';
 import { formatRefreshed } from '../lib/formatRefreshed';
 import type { HomeSummary, KpiTrend, PortfolioPreview } from '../types';
 import { HIGH_OPPORTUNITY_KPI_LABEL } from '../lib/opportunityScore';
+import { ApprovalQueueBanner } from './home.approval-banner';
 
 export const HOME_PORTFOLIO_PREVIEW_CRITERIA = { marketing_eligibility: 'Any' } as const;
-export const APPROVAL_QUEUE_STATE_LABEL = 'current lifecycle state';
+export { APPROVAL_QUEUE_STATE_LABEL } from './home.approval-banner';
 
 export function requestHomePortfolioPreview(signal?: AbortSignal) {
   return api.portfolioPreview(HOME_PORTFOLIO_PREVIEW_CRITERIA, signal);
@@ -76,7 +76,6 @@ export default function Home() {
   const warehouseDown =
     healthCtx?.health?.dependencies?.warehouse === 'down' ||
     healthCtx?.health?.dependencies?.lakebase === 'down';
-  const previousWarehouseDown = useRef(warehouseDown);
   const {
     data: preview,
     warmingUp: previewWarming,
@@ -104,11 +103,6 @@ export default function Home() {
     queryKey: queryKeys.homeSummary(),
   });
   const summaryLoading = !summary && !summaryError && !summaryWarming;
-
-  useEffect(() => {
-    if (previousWarehouseDown.current && !warehouseDown && previewErrorObj) retryPreview();
-    previousWarehouseDown.current = warehouseDown;
-  }, [previewErrorObj, retryPreview, warehouseDown]);
 
   const queued = preview?.high_intent_leads ?? null;
   const kpisLoading = preview === null && !previewError && !previewWarming;
@@ -165,8 +159,10 @@ export default function Home() {
           the red error. The system-wide DegradedBanner already says
           "reconnecting"; a contradictory red tile underneath made the
           app look broken when it was correctly cold-starting. The
-          tile auto-recovers when health flips back to up (effect
-          below increments reloadToken). */}
+          tile recovers on its own: on the down -> up edge HealthProvider
+          refetches every mounted query that failed because of the
+          recovered dependency (components/healthRecovery.ts), on every
+          route, so Home no longer carries a private recovery effect. */}
       {previewError && !previewWarming && warehouseDown && (
         <div
           role="status"
@@ -272,29 +268,13 @@ export default function Home() {
         <PortfolioSummaryCard preview={preview ?? null} loading={kpisLoading} />
       )}
 
-      <div
-        role="region"
-        aria-label="Approval queue"
-        className="approval mt-grid"
-      >
-        <div className="approval__ico"><Icon name="shield" size={16} /></div>
-        <div className="approval__body">
-          <div className="approval__title">Approval queue</div>
-          <div className="approval__sub">
-            {queued !== null
-              ? `${queued.toLocaleString()} borrowers pass the refinance-economics screen. ${(
-                  preview?.approved_count ?? 0
-                ).toLocaleString()} approved and ${(
-                  preview?.in_outreach_count ?? 0
-                ).toLocaleString()} in outreach in ${APPROVAL_QUEUE_STATE_LABEL}.`
-              : 'Borrowers passing the refinance-economics screen are ready for loan-officer review.'}
-          </div>
-        </div>
-        <Link to="/lead-queue?segment=itm" className="btn btn--sm btn--primary">
-          Open review queue
-          <Icon name="chevright" size={13} />
-        </Link>
-      </div>
+      {/* States BOTH numbers — contactable of whole-book — because its button
+          opens the contactable-only queue (flow-v1; see the component). */}
+      <ApprovalQueueBanner
+        screenCount={queued}
+        approvedCount={preview?.approved_count ?? 0}
+        inOutreachCount={preview?.in_outreach_count ?? 0}
+      />
 
       <div className="section-hdr">
         <div>
@@ -324,7 +304,7 @@ export default function Home() {
         </Button>
       </div>
 
-      <Reveal>
+      <Reveal revealKey="home:brand-signature">
         <div className="brand-signature" aria-hidden="true">
           <EntradaWordmark height={44} />
         </div>

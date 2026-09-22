@@ -63,7 +63,13 @@ _STAGE_BY_STATUS: dict[str, tuple[str, str]] = {
     "ASKING_AI": ("drafting", "Drafting a governed SQL plan"),
     "PENDING_WAREHOUSE": ("executing", "Waking the SQL warehouse"),
     "EXECUTING_QUERY": ("executing", "Running the governed query"),
-    "COMPLETED": ("complete", "Answer ready — verifying and formatting"),
+    # COMPLETED is Genie's message finishing, NOT the governed answer being
+    # ready: claims verification, the output policy, the audit write and — for
+    # deep asks — the whole planned sweep still run inside the completion
+    # call. This label used to read "Answer ready" for that entire 90-200 s
+    # wait (audit 2026-09-21 genie-01). "Answer ready" belongs to the client,
+    # at the moment it holds a renderable answer.
+    "COMPLETED": ("complete", "Verifying the answer against its rows"),
     "FAILED": ("failed", "Genie could not complete this question"),
     "CANCELED": ("failed", "The Genie turn was cancelled"),
     "CANCELLED": ("failed", "The Genie turn was cancelled"),
@@ -91,6 +97,22 @@ _FAILURE_HINTS: dict[str, str] = {
     "TIMEOUT": "This Genie turn timed out. Ask the question again.",
     "QUERY_RESULT_EXPIRED": "The Genie result expired before pickup. Ask the question again.",
 }
+
+
+def genie_turn_is_deep(question: str) -> bool:
+    """Whether completion will answer ``question`` with the deep sweep.
+
+    Delegates to the exact predicate the repository routes on at completion,
+    so the flag the submit response publishes can never drift from what the
+    completion call actually does. Imported lazily: the sweep module pulls in
+    the whole repository pipeline, which this module's importers do not need.
+    """
+
+    from backend.services.repositories.databricks_genie_sweep import (
+        is_deep_analysis_request,
+    )
+
+    return is_deep_analysis_request(question)
 
 
 def genie_question_hash(question: str) -> str:

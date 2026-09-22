@@ -103,7 +103,9 @@ export function buildPortfolioStory(preview: PortfolioPreview | null | undefined
     marketable,
   )} borrowers.`;
 
-  let s2 = `${register(intToken(highIntent), 'Refi-economics screen', 'itm', highIntent)} pass the refinance-economics screen -- ${register(
+  // A real em dash, not the ASCII " -- " stand-in: this sentence is buyer-
+  // facing prose on the landing screen (2026-09-21 audit, visual-06).
+  let s2 = `${register(intToken(highIntent), 'Refi-economics screen', 'itm', highIntent)} pass the refinance-economics screen — ${register(
     pctToken,
     'Refi-economics share',
     'itm',

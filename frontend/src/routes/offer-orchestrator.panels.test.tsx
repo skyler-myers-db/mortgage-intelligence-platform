@@ -84,17 +84,17 @@ describe('OfferReviewGrid message intelligence', () => {
     expect(intelligence?.textContent).toContain('Primary offer:');
     expect(intelligence?.textContent).toContain('mip.gold.borrower_360');
     expect(intelligence?.querySelectorAll('.evidence-chip')).toHaveLength(2);
-    expect(container.querySelector<HTMLInputElement>('[data-testid="outreach-subject"]')?.value)
+    expect(container.querySelector('[data-testid="outreach-subject"]')?.textContent)
       .toBe('A clearer mortgage review');
     const regenerateButton = Array.from(container.querySelectorAll('button')).find(
       (button) => button.textContent?.trim() === 'Regenerate',
     );
     expect(regenerateButton?.disabled).toBe(false);
     expect(container.textContent).toContain('Review the exact audited copy before approval');
-    expect(container.querySelector<HTMLInputElement>('[data-testid="outreach-subject"]')?.readOnly)
-      .toBe(true);
-    expect(container.querySelector<HTMLTextAreaElement>('[data-testid="outreach-draft"]')?.readOnly)
-      .toBe(true);
+    // Review only: the certified copy is plain text, never a control to type into.
+    expect(container.querySelector(
+      'input[data-testid="outreach-subject"], textarea[data-testid="outreach-draft"], [contenteditable]',
+    )).toBeNull();
     expect(container.querySelector('a[href="/admin-config#offer-rules"]')).not.toBeNull();
     act(() => regenerateButton?.click());
     expect(regenerate).not.toHaveBeenCalled();
@@ -195,8 +195,8 @@ describe('OfferReviewGrid message intelligence', () => {
     ));
 
     expect(container.textContent).toContain('Warehouse warming up');
-    expect(container.querySelector<HTMLTextAreaElement>('[data-testid="outreach-draft"]')?.disabled)
-      .toBe(true);
+    expect(container.querySelector('[data-testid="outreach-draft"]')?.getAttribute('aria-disabled'))
+      .toBe('true');
     expect(container.querySelector<HTMLButtonElement>('[aria-label="Save outreach draft for B-WARMING"]')?.disabled)
       .toBe(true);
     expect(container.textContent).toContain('LO call follow-up within 5 days');
@@ -241,10 +241,10 @@ describe('OfferReviewGrid message intelligence', () => {
 
     expect(container.querySelector('[data-testid="draft-unavailable-note"]')?.textContent)
       .toContain('audited draft could not be loaded');
-    expect(container.querySelector<HTMLInputElement>('[data-testid="outreach-subject"]')?.disabled)
-      .toBe(true);
-    expect(container.querySelector<HTMLTextAreaElement>('[data-testid="outreach-draft"]')?.disabled)
-      .toBe(true);
+    expect(container.querySelector('[data-testid="outreach-subject"]')?.getAttribute('aria-disabled'))
+      .toBe('true');
+    expect(container.querySelector('[data-testid="outreach-draft"]')?.getAttribute('aria-disabled'))
+      .toBe('true');
     expect(container.querySelector<HTMLButtonElement>('[aria-label="Save outreach draft for B-ERROR"]')?.disabled)
       .toBe(true);
   });

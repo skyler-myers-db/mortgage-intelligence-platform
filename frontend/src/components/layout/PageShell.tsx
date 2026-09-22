@@ -11,6 +11,12 @@ import { EntradaWordmark } from '../brand/Entrada';
  * Routes with a hero viz that should break past the cap (Home's
  * USChoropleth map) pass `wideMap` to add `.main__content--wide-map`,
  * which widens the cap to 2400px. See components.css "ULTRA-WIDE" block.
+ *
+ * Accessibility: the `<h1>` carries `tabIndex={-1}` so the shell's
+ * `useRouteAnnouncer` can move focus to it after a navigation (audit
+ * 2026-09-21 `a11y-03`). It is never in the Tab order. The document title is
+ * NOT set here: hero titles are questions ("Who should we contact, ..."), not
+ * page names, so the title comes from `lib/routeMeta` via the shell.
  */
 
 interface PageShellProps {
@@ -43,7 +49,7 @@ export function PageShell({
           <div className="proto-hero">
             <div>
               {eyebrow && <div className="eyebrow">{eyebrow}</div>}
-              {title && <h1>{title}</h1>}
+              {title && <h1 tabIndex={-1}>{title}</h1>}
               {lede && <p className="lede">{lede}</p>}
             </div>
             {heroRight && (
