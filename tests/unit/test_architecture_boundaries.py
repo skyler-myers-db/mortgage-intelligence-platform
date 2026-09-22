@@ -33,6 +33,7 @@ ROUTE_TEST_MANIFEST: dict[tuple[str, str], str] = {
     ("GET", "/api/analytics/geography"): "tests/unit/test_api_routes.py",
     ("GET", "/api/analytics/segments"): "tests/unit/test_api_routes.py",
     ("GET", "/api/analytics/signals"): "tests/unit/test_api_routes.py",
+    ("GET", "/api/analytics/rate-window"): "tests/unit/test_analytics_rate_window_api.py",
     ("GET", "/api/analytics/funnel"): "tests/unit/test_approval_funnel_api.py",
     ("GET", "/api/analytics/funnel/loan-officers/{loan_officer_id}"): "tests/unit/test_approval_funnel_api.py",
     ("GET", "/api/activation/destinations"): "tests/unit/test_activation_api.py",
