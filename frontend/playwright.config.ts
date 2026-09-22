@@ -81,7 +81,12 @@ export default defineConfig({
     // failing test stalled for the whole test timeout and reported a spurious
     // "Test timeout exceeded". runner.fixture.spec.ts pins the fast failure.
     trace: fixtureE2E || (liveE2E && !liveFailureArtifacts) ? 'off' : 'retain-on-failure',
-    actionTimeout: liveE2E ? 20_000 : 10_000,
+    // Fixture mode runs several Chromium workers on one shared runner; a
+    // click's post-action wait was measured at >10 s once under load
+    // (harness expandFirstLeadRow, load average 18, 4 workers) while the
+    // same click takes ~1.3 s unloaded. 15 s keeps a stuck action failing
+    // fast without turning machine load into a red run.
+    actionTimeout: liveE2E ? 20_000 : fixtureE2E ? 15_000 : 10_000,
     navigationTimeout: liveE2E || fixtureE2E ? 30_000 : 15_000,
   },
   projects: fixtureE2E
