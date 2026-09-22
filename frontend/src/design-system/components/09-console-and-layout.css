@@ -22,9 +22,20 @@
 .tweaks__title { font-size: var(--fs-13); font-weight: 600; }
 .tweaks__body {
   padding: var(--sp-4); display: grid; gap: var(--sp-4);
+  /* One constrained track. The prototype body is a flex column
+     (design_files/index.html:913); the implicit `auto` grid track sized
+     every row to its max-content (the property-lookup header measured
+     432px inside the 300px panel) and pushed the Light / Compact halves of
+     the segmented controls behind an inner horizontal scroll
+     (2026-09-21 audit visual-02 / shell-02 / responsive-01). */
+  grid-template-columns: minmax(0, 1fr);
   flex: 1; overflow: auto;
 }
-.tweak-row label { font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.06em; display: block; margin-bottom: 6px; }
+/* Direct labels only (own row, or the label/switch `.row`): the descendant
+   form of this rule also restyled the field labels of the PropertyLookupPanel
+   mounted inside a row. */
+.tweak-row > label,
+.tweak-row > .row > label { font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.06em; display: block; margin-bottom: 6px; }
 .tweak-row .swatches { display: flex; gap: 6px; }
 .tweak-row .sw {
   width: 24px; height: 24px; border-radius: 6px; cursor: pointer;
@@ -73,6 +84,14 @@
   left: calc(var(--sp-10) - var(--sp-5) - (var(--sp-1) / 2));
   background: var(--accent);
 }
+/* PropertyLookupPanel in its compact (Console) form. The ~266px track holds
+   neither the header's nowrap "Every lookup audited" chip beside the title
+   nor two side-by-side inputs, so the header wraps the chip onto its own
+   line and the ZIP / State grid stacks. Not a prototype element; the
+   prototype Console carries no form (Module 0 Prototype.html:1441-1481). */
+.property-lookup--compact .surface__hdr { flex-wrap: wrap; }
+.property-lookup--compact .field-grid { grid-template-columns: minmax(0, 1fr); }
+.property-lookup--compact .form-input { inline-size: 100%; min-inline-size: 0; }
 .saved-workspace {
   display: flex;
   flex-direction: column;

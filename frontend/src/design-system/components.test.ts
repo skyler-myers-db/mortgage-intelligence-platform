@@ -301,6 +301,25 @@ describe('layout containment contracts', () => {
     expect(css).toMatch(/\.icon-accent\s*\{[^}]*color:\s*var\(--accent-ink\);/s);
   });
 
+  /**
+   * 2026-09-21 audit visual-02 / shell-02 / responsive-01: the Console body
+   * was an auto-track grid, so the 432px property-lookup row widened every
+   * row past the 300px panel and `.tweak-row label` restyled the lookup's
+   * own field labels. The rendered proof is console-layout.fixture.spec.ts;
+   * this pins the CSS contract it relies on.
+   */
+  it('constrains the Console body to one track and scopes its row labels', () => {
+    const css = designCss();
+
+    expect(css).toMatch(/\.tweaks__body\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/s);
+    expect(css).toMatch(/\.tweak-row > label,\s*\.tweak-row > \.row > label\s*\{/s);
+    expect(css).not.toMatch(/\n\.tweak-row label\s*\{/);
+    // The compact lookup wraps its audit chip and stacks its field grid.
+    expect(css).toMatch(/\.property-lookup--compact \.surface__hdr\s*\{[^}]*flex-wrap:\s*wrap;/s);
+    expect(css).toMatch(/\.property-lookup--compact \.field-grid\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/s);
+    expect(css).toMatch(/\.property-lookup--compact \.form-input\s*\{[^}]*inline-size:\s*100%;[^}]*min-inline-size:\s*0;/s);
+  });
+
   it('lets segment cards wrap content instead of clipping labels or pending copy', () => {
     const css = designCss();
 
