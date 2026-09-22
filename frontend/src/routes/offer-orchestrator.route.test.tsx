@@ -14,6 +14,7 @@ import type {
   SavedDraft,
   SavedDraftInput,
 } from '../types';
+import type { DecisionReceipt as DecisionReceiptPayload } from '../lib/apiTypes';
 
 const apiMocks = vi.hoisted(() => ({
   borrower: vi.fn(),
@@ -23,6 +24,7 @@ const apiMocks = vi.hoisted(() => ({
   salesTeam: vi.fn(),
   approve: vi.fn(),
   reject: vi.fn(),
+  auditReceipt: vi.fn(),
 }));
 
 const appMocks = vi.hoisted(() => ({
@@ -174,6 +176,37 @@ const DRAFT = {
   evidence_assets: ['mip.gold.borrower_360'],
 };
 
+/**
+ * The ledger read-back (GET /api/audit/receipt/{id}). Values here are
+ * deliberately ones the approve / reject POST bodies above do NOT carry
+ * (approver, copy hash, correlation id), so a receipt showing them proves it
+ * was read back from the row, not assembled from the POST.
+ */
+function ledgerReceipt(auditEventId: string): DecisionReceiptPayload {
+  const rejected = auditEventId.startsWith('audit-reject');
+  return {
+    audit_event_id: auditEventId,
+    event_type: rejected ? 'OUTREACH_REJECT' : 'APPROVE',
+    decision: rejected ? 'rejected' : 'approved',
+    approval_id: rejected ? 'approval-reject-1' : 'approval-1',
+    borrower_id: BORROWER_ID,
+    offer_code: 'rate_term_refi',
+    offer_label: 'Rate and term refinance review',
+    campaign_id: null,
+    variant_name: null,
+    channel: 'email',
+    rationale_code: rejected ? 'low_intent' : null,
+    copy_generation_id: rejected ? null : 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    copy_hash: rejected ? null : 'ledger-hash-'.padEnd(64, 'b'),
+    approver: 'ledger.approver@summit.example',
+    request_id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+    correlation_id: 'corr-ledger-0001',
+    created_at: '2026-07-13T12:05:00Z',
+    evidence_ids: ['ev-1', 'ev-2'],
+    evidence_assets: ['mip.gold.fn_next_best_offer', 'mip.gold.fn_lead_score'],
+  };
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((res) => {
@@ -239,6 +272,7 @@ describe('OfferOrchestrator route behavior', () => {
       audit_event_id: 'audit-reject-1',
       approval_id: 'approval-reject-1',
     });
+    apiMocks.auditReceipt.mockReset().mockImplementation(async (id: string) => ledgerReceipt(id));
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -336,12 +370,54 @@ describe('OfferOrchestrator route behavior', () => {
       draft_source_refreshed_at: DRAFT.source_refreshed_at,
       channel: 'email',
     });
-    await waitUntil(() => container.textContent?.includes('Approved') === true);
+    await waitUntil(() => container.querySelector('[data-testid="decision-receipt"]') !== null);
     expect(appMocks.setApproval).toHaveBeenCalledWith(BORROWER_ID, 'approved');
-    expect(container.textContent).toContain('audit: audit-1');
-    expect(container.textContent).toContain('approval: approval-1');
-    // motion-06: the success burst fires for an approval made in this view.
-    expect(container.querySelector('.burst')).not.toBeNull();
+    // wow-stage-3: the approval moment ends in the ledger row, read back by
+    // the audit id the POST returned; the old `audit: <uuid>` mono and the
+    // one-shot .burst chip are retired in favour of the receipt's reveal.
+    expect(apiMocks.auditReceipt).toHaveBeenCalledWith('audit-1', expect.anything());
+    const receipt = container.querySelector<HTMLElement>('[data-testid="decision-receipt"]')!;
+    expect(receipt.dataset.auditEventId).toBe('audit-1');
+    expect(receipt.classList.contains('decision-receipt--reveal')).toBe(true);
+    expect(receipt.textContent).toContain('ledger.approver@summit.example');
+    expect(receipt.textContent).toContain('corr-ledger-0001');
+    expect(receipt.textContent).toContain('approval-1');
+    expect(receipt.querySelectorAll('.evidence-chip')).toHaveLength(2);
+    expect(container.textContent).not.toContain('audit: audit-1');
+    expect(container.querySelector('.burst')).toBeNull();
+  }, 12_000);
+
+  it('renders nothing of the decision before the write resolves, then only the read-back (pessimistic)', async () => {
+    const pendingApprove = deferred<{ approved: boolean; audit_event_id: string; approval_id: string }>();
+    apiMocks.approve.mockReturnValue(pendingApprove.promise);
+    const pendingReceipt = deferred<DecisionReceiptPayload>();
+    apiMocks.auditReceipt.mockReturnValue(pendingReceipt.promise);
+    mount();
+    await waitUntil(reviewCopyCurrent);
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[data-testid="hero-approve"]')!.click();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    await waitUntil(() => apiMocks.approve.mock.calls.length === 1);
+    // The POST is in flight: no receipt, no recording skeleton, no approved chip.
+    expect(container.querySelector('[data-testid="decision-receipt"]')).toBeNull();
+    expect(container.querySelector('[data-testid="decision-receipt-pending"]')).toBeNull();
+    expect(container.querySelector<HTMLButtonElement>('[data-testid="hero-approve"]')!.textContent).toContain('Approve');
+    expect(container.textContent).not.toContain('Approved');
+    expect(apiMocks.auditReceipt).not.toHaveBeenCalled();
+
+    await act(async () => pendingApprove.resolve({ approved: true, audit_event_id: 'audit-1', approval_id: 'approval-1' }));
+    await waitUntil(() => container.querySelector('[data-testid="decision-receipt-pending"]') !== null);
+    // The write returned but the row is not read back yet: skeleton only.
+    expect(container.textContent).toContain('Recording decision…');
+    expect(container.querySelector('[data-testid="decision-receipt"]')).toBeNull();
+    expect(container.textContent).not.toContain('ledger.approver@summit.example');
+
+    await act(async () => pendingReceipt.resolve(ledgerReceipt('audit-1')));
+    await waitUntil(() => container.querySelector('[data-testid="decision-receipt"]') !== null);
+    expect(container.querySelector('[data-testid="decision-receipt-pending"]')).toBeNull();
+    expect(container.textContent).toContain('ledger.approver@summit.example');
   }, 12_000);
 
   it('keeps saved campaign provenance attached through draft and approval', async () => {
@@ -487,9 +563,15 @@ describe('OfferOrchestrator route behavior', () => {
     ));
     act(() => button('Confirm reject').click());
 
-    await waitUntil(() => container.textContent?.includes('Rejected') === true);
+    await waitUntil(() => container.querySelector('[data-testid="decision-receipt"]') !== null);
     expect(appMocks.setApproval).toHaveBeenCalledWith(BORROWER_ID, 'rejected');
-    expect(container.textContent).toContain('audit: audit-reject-1');
+    expect(apiMocks.auditReceipt).toHaveBeenCalledWith('audit-reject-1', expect.anything());
+    const receipt = container.querySelector<HTMLElement>('[data-testid="decision-receipt"]')!;
+    expect(receipt.dataset.auditEventId).toBe('audit-reject-1');
+    expect(receipt.classList.contains('decision-receipt--rejected')).toBe(true);
+    expect(receipt.textContent).toContain('Rejected');
+    expect(receipt.textContent).toContain('Low intent');
+    expect(container.textContent).not.toContain('audit: audit-reject-1');
   });
 
   it('keeps exact audited copy locked while persistence succeeds', async () => {
@@ -557,10 +639,30 @@ describe('OfferOrchestrator route behavior', () => {
     expect(approve.disabled).toBe(true);
     expect(container.textContent).toContain('activation approval approval-persisted');
     expect(apiMocks.approve).not.toHaveBeenCalled();
-    // motion-06: a durable approval from an earlier session renders the
-    // approved chip but never replays the success burst.
+    // motion-06: a durable approval whose lifecycle row carries no audit id
+    // renders the approved chip; nothing celebrates and nothing is read back.
     expect(container.textContent).toContain('Approved · governed internal queue');
     expect(container.querySelector('.burst')).toBeNull();
+    expect(container.querySelector('[data-testid="decision-receipt"]')).toBeNull();
+    expect(apiMocks.auditReceipt).not.toHaveBeenCalled();
+  });
+
+  it('reads a durable decision back as a finished receipt without the reveal', async () => {
+    apiMocks.borrowerLifecycle.mockResolvedValue({
+      ...LIFECYCLE,
+      approval_status: 'approved',
+      approval_id: 'approval-persisted',
+      audit_event_id: 'audit-persisted',
+      approved_at: '2026-07-12T12:00:00Z',
+    });
+    mount();
+
+    await waitUntil(() => container.querySelector('[data-testid="decision-receipt"]') !== null);
+    expect(apiMocks.auditReceipt).toHaveBeenCalledWith('audit-persisted', expect.anything());
+    const receipt = container.querySelector<HTMLElement>('[data-testid="decision-receipt"]')!;
+    expect(receipt.dataset.auditEventId).toBe('audit-persisted');
+    expect(receipt.classList.contains('decision-receipt--reveal')).toBe(false);
+    expect(apiMocks.approve).not.toHaveBeenCalled();
   });
 
   it.each([

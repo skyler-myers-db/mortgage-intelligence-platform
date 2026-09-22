@@ -1,40 +1,45 @@
 /**
- * The approval-result panel of the Offer Orchestrator: the routing
- * confirmation chip, the approved / rejected surfaces and the write-failure
- * alert. Moved verbatim out of offer-orchestrator.tsx (file-size gate); the
- * route passes the same values it used to read inline.
+ * The decision outcome of the Offer Orchestrator: the routing confirmation
+ * chip, the Decision receipt for an approved / rejected borrower, the
+ * activation loop for an approval, and the write-failure alert.
+ *
+ * The receipt renders only from the ledger read-back (DecisionReceipt), so a
+ * decision made in this view shows "Recording decision…" until the row is
+ * confirmed. A durable decision from an earlier session renders the finished
+ * receipt without the reveal; a durable approval whose lifecycle row carries
+ * no audit id keeps the plain approved chip.
  */
-import type { Borrower360 as Borrower360Type, OfferRecommendation } from '../types';
 import { ActivationLoopPanel } from '../components/activation/ActivationLoopPanel';
+import { DecisionReceipt } from '../components/mortgage/DecisionReceipt';
 import { Chip } from '../components/Primitives';
 import type { OutreachChannel } from './offer-orchestrator.constants';
 
 export interface OfferDecisionOutcomeProps {
-  id: string;
-  b: Borrower360Type | null;
-  rec: OfferRecommendation | null;
-  activeDraftChannel: OutreachChannel;
+  borrowerId: string;
+  offerCode: string | null;
+  channel: OutreachChannel;
   effectiveApproval: string | undefined;
-  justApproved: { id: string; reloadToken: number } | null;
-  reloadToken: number;
+  /** Audit row of the decision shown: the POST's id, or the lifecycle's for a durable decision. */
   auditId: string | null;
+  /** The decision was made in this view (borrower + load generation): play the receipt reveal. */
+  justDecided: boolean;
   approvalId: string | null;
   approveError: string | null;
   routingConfirm: { email: string | null; followUpAt: string | null } | null;
+  score: { opportunityScore: number; confidence: number } | null;
 }
 
 export function OfferDecisionOutcome({
-  id,
-  b,
-  rec,
-  activeDraftChannel,
+  borrowerId,
+  offerCode,
+  channel,
   effectiveApproval,
-  justApproved,
-  reloadToken,
   auditId,
+  justDecided,
   approvalId,
   approveError,
   routingConfirm,
+  score,
 }: OfferDecisionOutcomeProps) {
   return (
     <>
@@ -54,37 +59,35 @@ export function OfferDecisionOutcome({
 
       {effectiveApproval === 'approved' && (
         <>
-          <div className="surface mt-grid">
-            <div className="surface__body surface__body--inline">
-              <span
-                className={
-                  justApproved?.id === id && justApproved.reloadToken === reloadToken
-                    ? 'burst inline-flex'
-                    : 'inline-flex'
-                }
-              >
+          {auditId ? (
+            <DecisionReceipt auditEventId={auditId} reveal={justDecided} score={score} className="mt-grid" />
+          ) : (
+            <div className="surface mt-grid">
+              <div className="surface__body surface__body--inline">
                 <Chip variant="success" icon="check">Approved · governed internal queue</Chip>
-              </span>
-              {auditId && <span className="mono muted fs-11">audit: {auditId}</span>}
-              {approvalId && <span className="mono muted fs-11">approval: {approvalId}</span>}
+                {approvalId && <span className="mono muted fs-11">approval: {approvalId}</span>}
+              </div>
             </div>
-          </div>
+          )}
           <ActivationLoopPanel
-            borrowerId={b?.borrower_id ?? id}
-            offerCode={rec?.offer_code ?? b?.recommended_offer_code ?? null}
-            channel={activeDraftChannel}
+            borrowerId={borrowerId}
+            offerCode={offerCode}
+            channel={channel}
             approvalId={approvalId}
             approved
           />
         </>
       )}
       {effectiveApproval === 'rejected' && (
-        <div className="surface mt-grid">
-          <div className="surface__body surface__body--inline">
-            <Chip variant="danger" icon="cross">Rejected</Chip>
-            {auditId && <span className="mono muted fs-11">audit: {auditId}</span>}
+        auditId ? (
+          <DecisionReceipt auditEventId={auditId} reveal={justDecided} score={score} className="mt-grid" />
+        ) : (
+          <div className="surface mt-grid">
+            <div className="surface__body surface__body--inline">
+              <Chip variant="danger" icon="cross">Rejected</Chip>
+            </div>
           </div>
-        </div>
+        )
       )}
       {approveError && (
         <div
