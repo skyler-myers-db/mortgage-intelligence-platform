@@ -78,7 +78,16 @@ const budgets = {
   // campaign-handoff slices settled. The inherited 141 KiB gate left only
   // 0.05 KiB above the measured artifact, violating the documented ~5%
   // cross-platform headroom policy. Measured: CSS 140.95 / gzip 23.89.
-  initialCssBytes: 148 * KiB, // actual 140.95
+  // Re-baselined 2026-09-22 for the Genie survivability slice (audit
+  // runtime-01 / genie-02 / genie-v2 / motion-v2): the launcher running-ring
+  // and answer-ready badge on `.genie__fab` and the topbar toggle, the
+  // composer busy hint, and the answer scroll anchor live in one new
+  // design-system partial (16-genie-fab-status.css, +1.43 KiB raw). The
+  // inherited 148 KiB gate had drifted to 0.09 KiB above the base artifact
+  // (measured without the partial: 147.91), so any CSS line would have
+  // tripped it. Measured with the partial: CSS 149.34 / gzip 25.25; restore
+  // ~5% headroom per this file's policy. The gzip gate keeps its headroom.
+  initialCssBytes: 157 * KiB, // actual 149.34
   // Re-baselined 2026-09-08 for the Genie thread view + deep-research
   // sections slice. The 25 KiB gzip gate had drifted to 4 bytes above the
   // measured artifact (25,596 B) — the next CSS line from anyone would have

@@ -3,11 +3,17 @@ import type { GenieAnswer as GenieAnswerShape } from '../types';
 /**
  * Genie conversation transcript store.
  *
- * The floating Genie panel is mounted conditionally (`{genieOpen ? <GenieChat/> : null}`
- * in AppShell), so closing the panel — or any remount — used to destroy the
- * entire visible conversation. This module keeps the turn list in a
- * module-level cache mirrored into `sessionStorage`, so the transcript
- * survives panel close/reopen and route navigation for the life of the tab.
+ * The turn list lives in a module-level cache mirrored into `sessionStorage`,
+ * so the transcript survives a reload and route navigation for the life of
+ * the tab, and is SHARED: the floating panel and the `/ask-genie` route read
+ * and append to the same list.
+ *
+ * Since the 2026-09-21 audit (`runtime-01` / `genie-02`) the floating panel
+ * stays mounted while closed, so it no longer re-hydrates on every open. It
+ * mirrors this store instead (`useGenieTranscript`) and writes through
+ * `appendGenieTurn`, which appends to the CURRENT list rather than replacing
+ * it with a private copy — a turn the route settled while a panel turn was
+ * in flight is never overwritten.
  *
  * Scope decisions:
  *   - `sessionStorage`, not `localStorage`: a transcript is tab-scoped
@@ -114,6 +120,12 @@ export function setGenieTurns(turns: GenieTurn[]): GenieTurn[] {
   persist(cache);
   emit();
   return cache;
+}
+
+/** Append one settled turn to the current transcript. Reads the live list at
+ *  call time, so a turn another surface settled in the meantime is kept. */
+export function appendGenieTurn(question: string, response: GenieAnswerShape): GenieTurn[] {
+  return setGenieTurns([...getGenieTurns(), { question, response }]);
 }
 
 /** Drop the transcript (New thread, actor boundary reset, 403). */
