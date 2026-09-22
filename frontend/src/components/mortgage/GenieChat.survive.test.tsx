@@ -458,6 +458,29 @@ describe('floating Genie survivability', () => {
     expect(closeDrawer).toHaveBeenCalledTimes(1);
   });
 
+  it('closes a trap layer opened ABOVE Genie, never Genie, even with focus inside the panel (runtime-v2 stack)', async () => {
+    // The case above passes on Genie's own focus-inside decline alone: focus
+    // sat in the drawer. This one pins the STACK. Genie opens first, so its
+    // layer is below; the trap opens above it; then the user works in Genie —
+    // the exact state in which Genie's handler would accept the key. Only the
+    // top-only walk keeps Genie open and closes the drawer. An uncoordinated
+    // trap (its own bubble-phase window listener) is pre-empted here: Genie
+    // consumes the capture-phase keypress and the WRONG layer closes.
+    render();
+    await flush();
+    drawerOpen = true;
+    render();
+    await flush();
+
+    act(() => input().focus());
+    expect(document.activeElement).toBe(input());
+
+    pressEscape();
+    expect(closeDrawer).toHaveBeenCalledTimes(1);
+    expect(mocks.setGenieOpen).not.toHaveBeenCalled();
+    expect(dialog().classList.contains('is-open')).toBe(true);
+  });
+
   it('announces through one persistent region outside the panel, never from inside it (a11y-06)', async () => {
     render();
     const turn = await startLiveTurn('How many borrowers are in the money?');
