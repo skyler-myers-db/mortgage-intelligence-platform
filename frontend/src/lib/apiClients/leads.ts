@@ -15,6 +15,7 @@ import type {
   OfferRecommendation,
 } from '../../types';
 import type { LeadQueryOptions } from '../apiTypes';
+import type { LeadExportReceipt, LeadExportReceiptRequest } from './leadExport';
 import {
   _growthAgentProofFromLocation,
   _verifyGrowthAgentCohort,
@@ -87,6 +88,18 @@ export const leadsPageApi = {
         : null,
     }));
   },
+
+  /**
+   * The LEAD_EXPORT ledger row a CSV download waits for (audit tables-08).
+   * Retries happen only on the backend's retryable 503/429 bodies, where no
+   * row was written, so a receipt is never recorded twice for one click.
+   */
+  leadExportReceipt: (declaration: LeadExportReceiptRequest, signal?: AbortSignal) =>
+    postJson<LeadExportReceipt, LeadExportReceiptRequest>(
+      '/api/leads/export-receipt',
+      declaration,
+      signal,
+    ),
 };
 
 export const borrowerApi = {

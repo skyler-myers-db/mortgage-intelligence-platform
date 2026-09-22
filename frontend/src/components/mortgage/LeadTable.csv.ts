@@ -3,7 +3,12 @@ import type { LeadExportContext } from './LeadTable.types';
 import { offerDisplayLabel } from '../../lib/offerLanguage';
 import { safeSegmentName } from '../../lib/segmentMetadata';
 
-function csvEscape(raw: string): string {
+/**
+ * Formula-injection-safe CSV cell: a leading `= + - @` is neutralised with a
+ * quote prefix before the usual quoting. Exported so the audit explorer's
+ * page export (flow-04) writes cells through the same gate.
+ */
+export function csvEscape(raw: string): string {
   const v = /^[=+\-@]/.test(raw) ? `'${raw}` : raw;
   return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
 }

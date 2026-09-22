@@ -14,8 +14,9 @@
  * 3. the file follows the on-screen sort;
  * 4. a selection, when one exists, is what gets exported.
  *
- * The server-side export audit receipt is a later wave; nothing here calls
- * an audit endpoint.
+ * Wave 1a added the LEAD_EXPORT receipt the download waits for; here the
+ * receipt resolves immediately so these tests keep pinning scope and counts.
+ * LeadTable.exportReceipt.test.tsx pins the receipt ordering itself.
  */
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -45,7 +46,19 @@ vi.mock('../AppContext', () => ({
 }));
 
 vi.mock('../../lib/api', () => ({
-  api: {},
+  api: {
+    leadExportReceipt: vi.fn(async () => ({
+      audit_event_id: 'evt-receipt-0001',
+      event_type: 'LEAD_EXPORT',
+      actor: 'approver@summit-mortgage.example',
+      scope: 'loaded',
+      row_count: 0,
+      csv_sha256: 'a'.repeat(64),
+      borrower_ids_sha256: 'b'.repeat(64),
+      filter_fingerprint: 'c'.repeat(64),
+      recorded_at: '2026-09-21T00:00:00.000Z',
+    })),
+  },
   ApiError: class extends Error {},
   isAbortError: () => false,
 }));
@@ -161,8 +174,11 @@ describe('LeadTable CSV export', () => {
   };
 
   async function exportedCsv(): Promise<string> {
-    act(() => exportButton().click());
-    expect(blobs).toHaveLength(1);
+    await act(async () => {
+      exportButton().click();
+    });
+    // The download waits for the receipt (hashing + POST are async).
+    await vi.waitFor(() => expect(blobs).toHaveLength(1));
     return blobs[0].text();
   }
 
@@ -180,14 +196,16 @@ describe('LeadTable CSV export', () => {
     expect(exportButton().disabled).toBe(false);
   });
 
-  it('disables the export, with the reason, when the gate would write zero rows', () => {
+  it('disables the export, with the reason, when the gate would write zero rows', async () => {
     mount([lead(SUPPRESSED, 400_000, { marketing_eligible: false }), lead(DNC, 300_000, { dnc: true })]);
 
     expect(exportButton().disabled).toBe(true);
     expect(exportButton().getAttribute('aria-label')).toBe('Export 0 leads as CSV');
     expect(exportButton().getAttribute('title')).toContain('marketing-eligibility gate');
 
-    act(() => exportButton().click());
+    await act(async () => {
+      exportButton().click();
+    });
     expect(blobs).toHaveLength(0);
     expect(container.querySelector('[data-testid="lead-export-notice"]')).toBeNull();
   });
@@ -200,9 +218,11 @@ describe('LeadTable CSV export', () => {
     expect(csv).toContain('# exported_rows=2');
     expect(csv).toContain('# export_scope=loaded_rows');
     expect(csv).toContain('# row_order=rank');
-    expect(container.querySelector('[data-testid="lead-export-notice"]')?.textContent).toBe(
-      'Exported 2 leads in rank order. 2 excluded by the marketing-eligibility gate.',
-    );
+    await vi.waitFor(() => {
+      expect(container.querySelector('[data-testid="lead-export-notice"]')?.textContent).toBe(
+        'Exported 2 leads in rank order. 2 excluded by the marketing-eligibility gate.',
+      );
+    });
   });
 
   it('writes the rows in the on-screen sort order', async () => {
@@ -231,8 +251,10 @@ describe('LeadTable CSV export', () => {
     expect(dataRowIds(csv)).toEqual([B]);
     expect(csv).toContain('# export_scope=selected_rows');
     expect(csv).toContain('# exported_rows=1');
-    expect(container.querySelector('[data-testid="lead-export-notice"]')?.textContent).toBe(
-      'Exported 1 selected lead in rank order.',
-    );
+    await vi.waitFor(() => {
+      expect(container.querySelector('[data-testid="lead-export-notice"]')?.textContent).toBe(
+        'Exported 1 selected lead in rank order.',
+      );
+    });
   });
 });
