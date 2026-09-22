@@ -1,8 +1,7 @@
 import { lazy, Suspense, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Navigate, Route, Routes, useLocation } from 'react-router';
-import { ErrorBoundary } from './components/ErrorBoundary';
-import { routeLabelForPath } from './components/ErrorBoundaryFallback';
+import { RouteErrorBoundary } from './components/ErrorBoundaryRoute';
 import { AppShell } from './components/layout/AppShell';
 import { RouteNav } from './components/layout/RouteNav';
 import { Skeleton } from './components/ui/Skeleton';
@@ -74,17 +73,15 @@ export function AdminRouteGate() {
  * The route ErrorBoundary wraps the Suspense (a boundary inside PageShell
  * could not catch a failed lazy chunk or a route-level throw) and resets on
  * pathname, so a broken route leaves the shell usable and navigating away
- * clears it even if the `key` re-mount is ever dropped.
+ * clears it even if the `key` re-mount is ever dropped. Its Try again first
+ * discards the failed route's cached queries (components/ErrorBoundaryRoute)
+ * so the re-mounted route re-reads its data.
  */
 function RouteTransition() {
   const { pathname } = useLocation();
   return (
     <div key={pathname} className="route-transition">
-      <ErrorBoundary
-        boundary="route"
-        resetKey={pathname}
-        routeLabel={routeLabelForPath(pathname)}
-      >
+      <RouteErrorBoundary pathname={pathname}>
         <Suspense fallback={<RouteFallback />}>
           <Routes>
             <Route path="/" element={<HomeRoute />} />
@@ -108,7 +105,7 @@ function RouteTransition() {
             <Route path="*" element={<NotFoundRoute />} />
           </Routes>
         </Suspense>
-      </ErrorBoundary>
+      </RouteErrorBoundary>
     </div>
   );
 }

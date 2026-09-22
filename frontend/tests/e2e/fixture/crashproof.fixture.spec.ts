@@ -1,7 +1,8 @@
 /**
  * Rendered-layer proofs for the wave-0 crash-proofing (audit stack-01,
  * shell-01, states-01, bundle-01, shell-v2): the stale-chunk reload, the
- * route error boundary, and the no-skeleton render of a preloaded route.
+ * route error boundary with its Try again re-read, and the no-skeleton
+ * render of a preloaded route.
  *
  * Every test runs the production build under the fixture harness; the only
  * thing faked is the API (and, for the stale-chunk case, one hashed chunk
@@ -9,6 +10,7 @@
  */
 import type { Page, Route } from '@playwright/test';
 import type { Borrower360 } from '../../../src/types';
+import { ERROR_SURFACE_SELECTOR } from './app';
 import { PRIMARY_BORROWER } from './data/borrowers';
 import { expect, test } from './test';
 
@@ -21,6 +23,28 @@ async function retireChunk(page: Page, chunkPrefix: string): Promise<void> {
   await page.route(new RegExp(`/assets/${chunkPrefix}-[^/]+\\.js$`), (route: Route) =>
     route.fulfill({ status: 404, contentType: 'text/plain', body: 'retired chunk (fixture)' }),
   );
+}
+
+/**
+ * Record every distinct rendering of the error surface for the rest of the
+ * test (from the next document on), so a leak check covers each state the
+ * surface passed through, not only the moment a test looks at it.
+ */
+async function recordErrorSurfaces(page: Page): Promise<() => Promise<string[]>> {
+  await page.addInitScript((selector) => {
+    const win = window as Window & { __errorSurfaceHtml?: string[] };
+    const seen = new Set<string>();
+    win.__errorSurfaceHtml = [];
+    new MutationObserver(() => {
+      for (const node of document.querySelectorAll(selector)) {
+        const html = node.outerHTML;
+        if (seen.has(html)) continue;
+        seen.add(html);
+        win.__errorSurfaceHtml?.push(html);
+      }
+    }).observe(document, { childList: true, subtree: true, characterData: true, attributes: true });
+  }, ERROR_SURFACE);
+  return () => page.evaluate(() => (window as Window & { __errorSurfaceHtml?: string[] }).__errorSurfaceHtml ?? []);
 }
 
 /** Count full document loads from now on (client-side route changes fire none). */
@@ -78,7 +102,7 @@ test.describe('stale chunk after a deploy', () => {
 });
 
 test.describe('render throw inside a route', () => {
-  test('is caught by the route boundary with Try again and Reload, and leaks no borrower id', async ({ hygiene, mockApi, page }) => {
+  test('is caught by the route boundary without leaking the id, and Try again re-reads the fixed data', async ({ app, hygiene, mockApi, page }) => {
     hygiene.allow('console.error', /\[mip\] client error/);
     // React 19 also prints the boundary-caught error through its own console
     // channel before onCaughtError runs.
@@ -90,12 +114,18 @@ test.describe('render throw inside a route', () => {
     page.on('console', (message) => {
       if (message.type() === 'error' && /\[mip\] client error/.test(message.text())) caughtReports += 1;
     });
+    const errorSurfaceRenderings = await recordErrorSurfaces(page);
+    const borrowerPath = `/api/borrowers/${PRIMARY_BORROWER.borrower_id}`;
+    const borrowerReads = () => mockApi.calls.filter((call) => call.path === borrowerPath).length;
 
     // `evidence_events` is a required array on the wire; a null one is a
-    // payload Borrower 360 provably cannot render (it maps over it).
+    // payload Borrower 360 provably cannot render (it maps over it). The URL
+    // carries a query string so the leak check below has one to find.
     const broken = { ...PRIMARY_BORROWER, evidence_events: null } as unknown as Borrower360;
     mockApi.register<Borrower360>('GET', '/api/borrowers/:id', () => ({ body: broken }));
-    await page.goto(`/borrower-360/${PRIMARY_BORROWER.borrower_id}`, { waitUntil: 'domcontentloaded' });
+    await page.goto(`/borrower-360/${PRIMARY_BORROWER.borrower_id}?from=lead-queue&state=TX`, {
+      waitUntil: 'domcontentloaded',
+    });
 
     const surface = page.locator(ERROR_SURFACE);
     await expect(surface).toBeVisible();
@@ -104,30 +134,44 @@ test.describe('render throw inside a route', () => {
     await expect(surface.getByRole('button', { name: 'Try again' })).toBeVisible();
     await expect(surface.getByRole('button', { name: 'Reload' })).toBeVisible();
     await expect(surface).toContainText('Route · Borrower 360');
-
-    const surfaceHtml = await surface.evaluate((node) => node.outerHTML);
-    expect(surfaceHtml).not.toContain(PRIMARY_BORROWER.borrower_id);
-    expect(surfaceHtml).not.toMatch(/[?&][a-z_]+=/);
-    expect(surfaceHtml).not.toContain('Cannot read properties');
+    await expect.poll(() => caughtReports, 'the boundary reported the catch once').toBe(1);
+    const readsAtCatch = borrowerReads();
+    expect(readsAtCatch, 'the route read the (malformed) borrower').toBeGreaterThan(0);
 
     // The shell around it is intact.
     await expect(page.getByRole('navigation', { name: 'Primary navigation' })).toBeVisible();
     await expect(page.getByRole('banner')).toBeVisible();
 
-    // Try again clears the boundary and re-renders the route. The bad payload
-    // is still what the query cache holds (fresh for 30 s, and never stale
-    // under the frozen clock), so no refetch happens even after the API is
-    // fixed: the route throws again and the boundary catches it AGAIN (a
-    // second report, still no white page). Reload is the path to a fresh
-    // fetch. Pinned as observed on the integrated base; see the lane report.
-    await expect.poll(() => caughtReports).toBe(1);
+    // Nothing re-reads by itself while the surface is up: once the mock API
+    // has gone quiet, the borrower read count is unchanged.
+    await expect.poll(() => mockApi.inflight === 0 && mockApi.idleMs >= 500).toBe(true);
+    expect(borrowerReads(), 'no passive re-read behind the error surface').toBe(readsAtCatch);
+
+    // The API is fixed; the user clicks Try again.
     mockApi.register<Borrower360>('GET', '/api/borrowers/:id', () => ({ body: PRIMARY_BORROWER }));
-    const borrowerReadsBefore = mockApi.calls.filter((call) => call.path.startsWith('/api/borrowers/')).length;
     await surface.getByRole('button', { name: 'Try again' }).click();
-    await expect.poll(() => caughtReports, 'the boundary caught the re-rendered throw').toBe(2);
-    await expect(surface).toBeVisible();
-    await expect(surface).toHaveAttribute('data-error-kind', 'render');
-    expect(mockApi.calls.filter((call) => call.path.startsWith('/api/borrowers/')).length).toBe(borrowerReadsBefore);
+
+    const main = page.locator('#main-content');
+    await expect(main.locator('h1')).toHaveText(`Borrower ${PRIMARY_BORROWER.borrower_id}`);
+    await app.settle();
+    await expect(main).toContainText(PRIMARY_BORROWER.clip);
+    await expect(main).toContainText(PRIMARY_BORROWER.evidence_events[0].display_text);
+    await expect(page.locator(ERROR_SURFACE_SELECTOR), 'the recovered route shows no error surface').toHaveCount(0);
+    expect(borrowerReads(), 'Try again issued exactly one (user-initiated) re-read').toBe(readsAtCatch + 1);
+    expect(caughtReports, 'the fixed data rendered without a second catch').toBe(1);
+    expect(await page.locator('#root').evaluate((node) => node.childElementCount)).toBeGreaterThan(0);
+    await expect(page.getByRole('navigation', { name: 'Primary navigation' })).toBeVisible();
+    await expect(page.getByRole('banner')).toBeVisible();
+
+    // No rendering of the error surface, at any point, carried the borrower
+    // id, the URL's query string or the raw error message.
+    const renderings = await errorSurfaceRenderings();
+    expect(renderings.length, 'the error surface was recorded').toBeGreaterThan(0);
+    for (const html of renderings) {
+      expect(html).not.toContain(PRIMARY_BORROWER.borrower_id);
+      expect(html).not.toMatch(/[?&][a-z_]+=/);
+      expect(html).not.toContain('Cannot read properties');
+    }
   });
 });
 

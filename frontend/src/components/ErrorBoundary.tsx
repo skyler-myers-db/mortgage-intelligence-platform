@@ -14,8 +14,11 @@ import { ErrorSurface, type ErrorSurfaceVariant } from './ErrorBoundaryFallback'
  * Recovery differs by failure kind:
  *   - chunk  : Reload only. React.lazy caches the rejected import, so
  *              re-rendering can never succeed.
- *   - render : "Try again" clears the boundary and re-renders the children;
- *              Reload is the fallback.
+ *   - render : "Try again" runs `onRetry`, then clears the boundary and
+ *              re-renders the children; Reload is the fallback. The route
+ *              boundary (ErrorBoundaryRoute) uses `onRetry` to discard the
+ *              failed route's cached queries, so the re-mounted route re-reads
+ *              its data instead of re-throwing on the same cached payload.
  *
  * Logging is NOT done here: React reports every boundary-caught error to the
  * root's `onCaughtError` (lib/clientErrorLog), which reads this boundary's
@@ -33,6 +36,8 @@ interface ErrorBoundaryProps {
   variant?: ErrorSurfaceVariant;
   /** Injected in tests; defaults to a full page reload. */
   onReload?: () => void;
+  /** Runs on Try again, before the boundary clears and re-renders its children. */
+  onRetry?: () => void;
   children: ReactNode;
 }
 
@@ -62,6 +67,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
   }
 
   private readonly retry = () => {
+    this.props.onRetry?.();
     this.setState({ error: null, hasError: false });
   };
 
