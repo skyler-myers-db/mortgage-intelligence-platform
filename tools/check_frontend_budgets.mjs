@@ -78,7 +78,13 @@ const budgets = {
   // campaign-handoff slices settled. The inherited 141 KiB gate left only
   // 0.05 KiB above the measured artifact, violating the documented ~5%
   // cross-platform headroom policy. Measured: CSS 140.95 / gzip 23.89.
-  initialCssBytes: 148 * KiB, // actual 140.95
+  // Re-baselined 2026-09-22 for the motion quick wins (audit motion-06/07):
+  // the sparkline area fade + draw tokens and the @media print reveal rule
+  // add ~0.3 KiB to the single initial stylesheet. The 148 KiB gate had
+  // drifted to 0.09 KiB above the measured artifact (147.91) before that
+  // slice, so restore ~5% headroom per this file's policy. Measured: CSS
+  // 148.20 / gzip 25.06 (the gzip gate keeps its headroom and is unchanged).
+  initialCssBytes: 156 * KiB, // actual 148.20
   // Re-baselined 2026-09-08 for the Genie thread view + deep-research
   // sections slice. The 25 KiB gzip gate had drifted to 4 bytes above the
   // measured artifact (25,596 B) — the next CSS line from anyone would have
