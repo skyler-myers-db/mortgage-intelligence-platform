@@ -125,7 +125,7 @@ test.describe('Offer Orchestrator review copy', () => {
       scrollHeight: node.scrollHeight,
       clientHeight: node.clientHeight,
       tag: node.tagName,
-      editable: node.isContentEditable,
+      editable: (node as HTMLElement).isContentEditable,
     }));
     expect(draftMetrics.tag).not.toBe('TEXTAREA');
     expect(draftMetrics.editable).toBe(false);

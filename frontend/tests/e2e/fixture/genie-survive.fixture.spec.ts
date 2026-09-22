@@ -107,7 +107,7 @@ test.describe('Escape layering', () => {
 });
 
 test.describe('mid-turn composer', () => {
-  test('holds a second ask while a turn is in flight and keeps the draft', async ({ app, page, mockApi }) => {
+  test('holds a second ask while a turn is in flight and keeps the draft', async ({ app, mockApi }) => {
     // First turn lands an answer with follow-up chips.
     const first = registerGenieTurn(mockApi, { holdProgress: false, answer: genieAnswerFixture() });
     await app.gotoRoute('/lead-queue');
