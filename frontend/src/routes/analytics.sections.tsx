@@ -99,7 +99,11 @@ export function ExecutiveView({ data, leadParams }: { data: ExecutiveAnalyticsRe
           <div>
             <h2 className="h-3">Activation funnel</h2>
             <p className="analytics-panel-note">
-              Narrowing path from addressable borrower to actioned outreach.
+              Each stage is an independent cut of the addressable book, shown as its
+              share of addressable &mdash; not a conversion from the stage before it. A
+              high-opportunity borrower need not pass the refi-economics screen, and an
+              approved borrower need not be high-opportunity. Only Approved &rarr; Actioned
+              is nested, so only it carries a conversion.
               Offer-path coverage remains in Pipeline Metrics because nearly every
               borrower receives a governed branch, including nurture.
             </p>

@@ -40,6 +40,17 @@ describe('buildPortfolioStory', () => {
     expect(s.asOf).toBe('2026-06-12T04:16:35Z');
   });
 
+  it('joins the screen count and its share with an em dash, never an ASCII " -- "', () => {
+    // 2026-09-21 audit (visual-06): the landing-screen briefing shipped the
+    // typewriter stand-in. The verifier must be indifferent to the dash.
+    const s = buildPortfolioStory(preview());
+    const prose = s.sentences.join(' ');
+    expect(prose).toContain('pass the refinance-economics screen — 2.2% of the book');
+    expect(prose).not.toContain('--');
+    expect(s.allVerified).toBe(true);
+    expect(s.unverifiedTokens).toEqual([]);
+  });
+
   it('grounds each figure to the right gold-table source drawer', () => {
     const s = buildPortfolioStory(preview());
     const byLabel = Object.fromEntries(s.claims.map((c) => [c.label, c.sourceKey]));

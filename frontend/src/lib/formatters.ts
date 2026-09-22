@@ -86,6 +86,20 @@ export function compactCurrency(value: number): string {
 }
 
 /**
+ * Display LTV, an integer percent (0-500; underwater borrowers exceed 100).
+ *
+ * `null` is the API's explicit "withheld": `Borrower360.ltv` is `int | None`
+ * on the wire and is None whenever gold flags `ltv_basis_is_unreliable`.
+ * Interpolating it raw rendered "null%" (2026-09-21 audit, quality-04). It
+ * renders the unknown glyph instead — never a fabricated 0%, which on a
+ * contact-prioritization surface reads as "free and clear".
+ */
+export function ltvPct(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return UNKNOWN;
+  return `${Math.round(value)}%`;
+}
+
+/**
  * A rate already in PERCENT form (0-100), at the product's one rate
  * precision. `mip.gold.borrower_360.current_rate` is `first_pos_rate * 100`
  * with no ROUND in SQL, so `0.07 * 100` reaches the UI as

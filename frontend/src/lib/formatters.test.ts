@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 import {
   compactCurrency,
   currency,
+  ltvPct,
   rangeLabel,
   ratePct,
   ratePctFromFraction,
@@ -115,6 +116,21 @@ describe('signedBpsLabel spacing', () => {
       expect(signedBpsLabel(value)).not.toMatch(/ {2}/);
       expect(signedBpsLabel(value).split(' ')).toHaveLength(2);
     }
+  });
+});
+
+describe('ltvPct', () => {
+  it('renders a reported display LTV as a whole percent', () => {
+    expect(ltvPct(54)).toBe('54%');
+    expect(ltvPct(0)).toBe('0%'); // a REPORTED 0 is a real value (free and clear)
+    expect(ltvPct(137)).toBe('137%'); // underwater borrowers exceed 100
+  });
+
+  it('renders the unknown glyph for a withheld LTV, never "null%"', () => {
+    // 2026-09-21 audit (quality-04): the wire type is `int | None`.
+    expect(ltvPct(null)).toBe('—');
+    expect(ltvPct(undefined)).toBe('—');
+    expect(ltvPct(Number.NaN)).toBe('—');
   });
 });
 
