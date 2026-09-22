@@ -5,8 +5,9 @@
  * Genie panel, a filter menu).
  *
  * Any violation fails, with one escape hatch: KNOWN_VIOLATIONS below, keyed
- * by route + state + rule id, each entry naming the audit finding that owns
- * the fix and the day it was recorded. The map is a RATCHET: an entry that
+ * by route + state + rule id and pinned to a selector the violating nodes
+ * must match, each entry naming the audit finding that owns the fix and the
+ * day it was recorded. The map is a RATCHET: an entry that
  * no longer reproduces fails the test too, so a fix retires its entry in the
  * same change. Best-practice rules stay advisory and are not scanned here.
  */
@@ -45,24 +46,42 @@ interface KnownViolation {
   recorded: string;
   /** Themes the violation reproduces in. It must reproduce in each, and in no other. */
   themes: readonly FixtureTheme[];
+  /**
+   * CSS selector every violating node must match. A node of the same rule
+   * elsewhere on the page is not covered by the entry and fails the test.
+   */
+  nodes: string;
 }
 
 /**
  * `${route}|${state}|${ruleId}` → owner. Populated only with what reproduced
  * on the integrated wave-0 base on the recorded date.
  */
+const A11Y_01: KnownViolation = { finding: 'a11y-01', recorded: '2026-09-22', themes: ['light'], nodes: 'aside.drawer .drawer__tab.is-active' };
+const A11Y_02: KnownViolation = { finding: 'a11y-02', recorded: '2026-09-22', themes: ['dark', 'light'], nodes: 'ul.filter-menu[role="listbox"]' };
+
 const KNOWN_VIOLATIONS: Readonly<Record<string, KnownViolation>> = {
   // a11y-01: the selected evidence tab (`.drawer__tab.is-active`) uses the
   // light accent as text on a light surface (1.75:1). Light theme only.
-  'home|evidence-drawer|color-contrast': { finding: 'a11y-01', recorded: '2026-09-22', themes: ['light'] },
-  'lead-queue|evidence-drawer|color-contrast': { finding: 'a11y-01', recorded: '2026-09-22', themes: ['light'] },
-  'borrower-360|evidence-drawer|color-contrast': { finding: 'a11y-01', recorded: '2026-09-22', themes: ['light'] },
-  'offer-orchestrator|evidence-drawer|color-contrast': { finding: 'a11y-01', recorded: '2026-09-22', themes: ['light'] },
-  'ask-genie|evidence-drawer|color-contrast': { finding: 'a11y-01', recorded: '2026-09-22', themes: ['light'] },
+  'home|evidence-drawer|color-contrast': A11Y_01,
+  'lead-queue|evidence-drawer|color-contrast': A11Y_01,
+  'borrower-360|evidence-drawer|color-contrast': A11Y_01,
+  'offer-orchestrator|evidence-drawer|color-contrast': A11Y_01,
+  'ask-genie|evidence-drawer|color-contrast': A11Y_01,
   // a11y-02: FilterSelect's open `ul.filter-menu` listbox scrolls but takes
   // no keyboard focus (no option ids / activedescendant). Both themes.
-  'lead-queue|filter-menu|scrollable-region-focusable': { finding: 'a11y-02', recorded: '2026-09-22', themes: ['dark', 'light'] },
+  'lead-queue|filter-menu|scrollable-region-focusable': A11Y_02,
 };
+
+// A mistyped key would sit in the map, never match, and hide nothing: fail
+// at load instead, so every entry names a route and state this spec scans.
+for (const key of Object.keys(KNOWN_VIOLATIONS)) {
+  const [routeName, state, ruleId] = key.split('|');
+  const route = AXE_ROUTES.find((candidate) => candidate.name === routeName);
+  if (!route || !route.states.includes(state as AxeState) || !ruleId) {
+    throw new Error(`KNOWN_VIOLATIONS key "${key}" does not name a scanned route|state|rule`);
+  }
+}
 
 async function enterState(app: AppDriver, page: Page, state: AxeState): Promise<void> {
   switch (state) {
@@ -83,9 +102,25 @@ async function enterState(app: AppDriver, page: Page, state: AxeState): Promise<
   }
 }
 
-function describeViolation(violation: AxeResults['violations'][number]): string {
-  const targets = violation.nodes.slice(0, 3).map((node) => node.target.join(' ')).join(' ; ');
-  return `${violation.id} [${violation.impact ?? 'n/a'}] ${violation.help} (${violation.nodes.length} node(s): ${targets})`;
+type AxeViolation = AxeResults['violations'][number];
+
+function describeViolation(violation: AxeViolation, nodes: AxeViolation['nodes'] = violation.nodes): string {
+  const targets = nodes.slice(0, 3).map((node) => node.target.join(' ')).join(' ; ');
+  return `${violation.id} [${violation.impact ?? 'n/a'}] ${violation.help} (${nodes.length} node(s): ${targets})`;
+}
+
+/** The violating nodes that do NOT match `selector` (resolved in the page, not by axe's selector text). */
+async function nodesOutside(page: Page, violation: AxeViolation, selector: string): Promise<AxeViolation['nodes']> {
+  const targets = violation.nodes.map((node) => node.target.join(' '));
+  const inside = await page.evaluate(
+    ([paths, expected]) =>
+      paths.map((path) => {
+        const element = document.querySelector(path);
+        return element !== null && element.matches(expected);
+      }),
+    [targets, selector] as const,
+  );
+  return violation.nodes.filter((_node, index) => !inside[index]);
 }
 
 for (const theme of FIXTURE_THEMES) {
@@ -103,7 +138,12 @@ for (const theme of FIXTURE_THEMES) {
         const unknown: string[] = [];
         for (const violation of results.violations) {
           const known = KNOWN_VIOLATIONS[`${route.name}|${state}|${violation.id}`];
-          if (!known || !known.themes.includes(theme)) unknown.push(describeViolation(violation));
+          if (!known || !known.themes.includes(theme)) {
+            unknown.push(describeViolation(violation));
+            continue;
+          }
+          const uncovered = await nodesOutside(page, violation, known.nodes);
+          if (uncovered.length > 0) unknown.push(`${describeViolation(violation, uncovered)} outside ${known.nodes}`);
         }
         const stale: string[] = [];
         for (const [key, known] of Object.entries(KNOWN_VIOLATIONS)) {
