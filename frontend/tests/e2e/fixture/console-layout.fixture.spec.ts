@@ -85,6 +85,11 @@ async function closeAndSampleExit(page: Page, panelSelector: string, closeLabel:
       const style = getComputedStyle(panel);
       return { visibility: style.visibility, transform: style.transform, open: panel.classList.contains('is-open') };
     };
+    // Measure the exit from a SETTLED open panel. On a fast runner the test can
+    // close the panel before its entry has moved it at all; the browser then
+    // has no before/after difference to transition and creates no exit
+    // transition, which says nothing about the exit contract.
+    await Promise.all(panel.getAnimations().map((animation) => animation.finished.catch(() => undefined)));
     close.click();
     await new Promise((resolve) => setTimeout(resolve, 0));
     const justClosed = read();
