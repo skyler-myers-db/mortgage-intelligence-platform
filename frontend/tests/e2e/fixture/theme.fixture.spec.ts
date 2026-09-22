@@ -9,7 +9,7 @@
  *     Queue paints dark in the dark theme (pixel-sampled, not just computed);
  *  c. <meta name="theme-color"> follows the theme;
  *  d. nothing stored + `prefers-color-scheme: light` boots light, and the
- *     Console's System option follows OS flips live;
+ *     Console's System option follows OS flips live, theme-color included;
  *  e. every theme x accent pair paints a visible focus ring from the shared
  *     token and passes axe color-contrast on / and /lead-queue.
  *
@@ -74,6 +74,22 @@ async function traceRootAttribute(page: Page, attribute: string): Promise<void> 
       trace.atDomContentLoaded = document.documentElement.getAttribute(name);
     });
   }, attribute);
+}
+
+/**
+ * `<meta name="theme-color">` and the painted `--bg-0`, both as computed
+ * rgb() so hex spellings meet. An absent or empty meta reads as '' (a probe
+ * would otherwise inherit the body colour and look like a real value).
+ */
+async function themeColorAndPageBackground(page: Page): Promise<{ meta: string; background: string }> {
+  const [meta, background] = await page.evaluate(() => [
+    document.querySelector('meta[name="theme-color"]')?.getAttribute('content')?.trim() ?? '',
+    getComputedStyle(document.documentElement).getPropertyValue('--bg-0').trim(),
+  ]);
+  return {
+    meta: meta ? await asComputedRgb(page, meta) : '',
+    background: await asComputedRgb(page, background),
+  };
 }
 
 async function colorContrastViolations(page: Page): Promise<string[]> {
@@ -174,8 +190,19 @@ test('with nothing stored the app follows the OS, and the Console System option 
 
   await themeGroup.getByRole('button', { name: 'System' }).click();
   await expect(html).toHaveAttribute('data-theme', 'light');
+  const lightChrome = await themeColorAndPageBackground(page);
+  expect(lightChrome.meta, 'theme-color is the light page background').toBe(lightChrome.background);
+
   await page.emulateMedia({ colorScheme: 'dark' });
   await expect(html, 'System follows an OS flip without a reload').toHaveAttribute('data-theme', 'dark');
+  // theme-boot.js only sets theme-color once, at boot; after a live flip the
+  // browser chrome follows only if AppContext re-syncs the meta.
+  await expect
+    .poll(async () => (await themeColorAndPageBackground(page)).meta, { message: 'theme-color follows the live OS flip' })
+    .not.toBe(lightChrome.meta);
+  const darkChrome = await themeColorAndPageBackground(page);
+  expect(darkChrome.meta, 'theme-color is the dark page background').toBe(darkChrome.background);
+
   await page.emulateMedia({ colorScheme: 'light' });
   await expect(html).toHaveAttribute('data-theme', 'light');
   expect(await page.evaluate(() => window.localStorage.getItem('mip.theme'))).toBe('system');
