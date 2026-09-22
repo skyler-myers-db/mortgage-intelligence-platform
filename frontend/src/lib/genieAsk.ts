@@ -85,6 +85,12 @@ export async function askGenieLive(
     throw new GenieLiveError('Genie submission is missing its progress identifiers.');
   }
 
+  // Known at submit time (audit 2026-09-21 `genie-01` phase 0): a deep turn
+  // spends 90-200 s inside the completion call below, after Genie's own turn
+  // is already terminal. Stamp the flag onto every progress update so the rail
+  // can name that wait instead of claiming the answer is ready.
+  const deep = submitted.deep === true;
+
   const deadline = Date.now() + MAX_LIVE_WAIT_MS;
   let consecutiveFailures = 0;
   for (;;) {
@@ -103,7 +109,7 @@ export async function askGenieLive(
       if (consecutiveFailures >= MAX_CONSECUTIVE_POLL_FAILURES) throw err;
     }
     if (progress) {
-      onProgress?.(progress);
+      onProgress?.({ ...progress, deep });
       if (progress.failed) {
         throw new GenieLiveError(
           progress.error_hint ?? 'Genie could not complete this question.',
