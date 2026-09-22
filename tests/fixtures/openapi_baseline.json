@@ -6519,6 +6519,11 @@
             ],
             "title": "Conversation Id"
           },
+          "deep": {
+            "default": false,
+            "title": "Deep",
+            "type": "boolean"
+          },
           "message_id": {
             "anyOf": [
               {
