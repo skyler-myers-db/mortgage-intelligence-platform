@@ -40,9 +40,6 @@
 .chip--success { background: var(--status-success-soft-muted); border-color: var(--status-success-line-strong); color: var(--status-success-ink); }
 .chip--warning { background: var(--status-warning-soft-muted); border-color: var(--status-warning-line-strong); color: var(--status-warning-ink); }
 .chip--danger  { background: var(--status-danger-soft-muted); border-color: var(--status-danger-line-strong); color: var(--status-danger-ink); }
-[data-theme="light"] .chip--success { color: var(--signal-success); }
-[data-theme="light"] .chip--warning { color: var(--entrada-navy); }
-[data-theme="light"] .chip--danger { color: var(--signal-danger); }
 
 /* Segment-hued chip. Component sets --chip-hue as an inline var (segment
  * palette entry) and leaves border + fill to color-mix. Text color is

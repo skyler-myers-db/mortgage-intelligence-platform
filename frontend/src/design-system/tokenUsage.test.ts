@@ -14,6 +14,9 @@
  *    copy and amber icons consume `--signal-warning-ink`, the active
  *    evidence-drawer tab consumes `--accent-ink`, not `--accent`, and the
  *    three text inputs no longer switch the shared focus ring off.
+ *  - responsive-02: the light theme is carried by the tokens (light
+ *    `--status-*-ink`, `--signal-*`), not by `[data-theme="light"]` rules in
+ *    the partials that shadow them per selector (twelve were retired).
  */
 import { describe, expect, it } from 'vitest';
 import { designCss } from '../test/designCss';
@@ -123,5 +126,26 @@ describe('text inputs keep the shared focus ring (a11y-01)', () => {
       const off = own.filter((rule) => /(?<![-\w])outline:\s*(?:none|0)(?![\w.%])/.test(rule.block));
       expect(off.map((rule) => rule.selector), `${selector} must keep the global focus ring`).toEqual([]);
     }
+  });
+});
+
+describe('light theme is carried by tokens, not per-selector overrides (responsive-02)', () => {
+  it('has no [data-theme="light"] rule that repaints a status or brand hue', () => {
+    // These shadowed the token-level light inks (e.g. .chip--warning navy
+    // where tokens.css and the prototype, design_files/index.html:416, say
+    // #B45309). A light-only rule may still remap to --text-* / --accent-ink.
+    const offenders = rules(components)
+      .filter((rule) => /\[data-theme="light"\]/.test(rule.selector))
+      .filter((rule) => /(?<![-\w])color:\s*var\(--(?:signal-|status-|entrada-)/.test(rule.block))
+      .map((rule) => rule.selector);
+    expect(offenders, 'move the light value into tokens.css instead').toEqual([]);
+  });
+
+  it('keeps the remaining light-only colour remaps on the text and accent-ink tokens', () => {
+    const remaining = rules(components)
+      .filter((rule) => /\[data-theme="light"\]/.test(rule.selector))
+      .flatMap((rule) => [...rule.block.matchAll(/(?<![-\w])color:\s*([^;]+);/g)].map((m) => m[1].trim()));
+    expect(remaining.length).toBeGreaterThan(0);
+    for (const value of remaining) expect(value).toMatch(/^var\(--(?:text-[1-4]|accent-ink)\)$/);
   });
 });

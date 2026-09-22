@@ -133,8 +133,6 @@
 }
 .borrower-story__verdict--ok { color: var(--status-success-ink); }
 .borrower-story__verdict--warn { color: var(--status-warning-ink); }
-[data-theme="light"] .borrower-story__verdict--ok { color: var(--signal-success); }
-[data-theme="light"] .borrower-story__verdict--warn { color: var(--entrada-navy); }
 
 /* "Since your last login" personalized summary (Home, S4). The narrative
    sentence carries inline evidence numbers: each figure is a button that
@@ -247,8 +245,6 @@
 }
 .portfolio-summary__verdict--ok { color: var(--status-success-ink); }
 .portfolio-summary__verdict--warn { color: var(--status-warning-ink); }
-[data-theme="light"] .portfolio-summary__verdict--ok { color: var(--signal-success); }
-[data-theme="light"] .portfolio-summary__verdict--warn { color: var(--entrada-navy); }
 
 /* Outreach routing (Feature C): loan-officer assignment + follow-up reminder
    captured at approval time. */
