@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties, type ReactElement, type ReactNode } from 'react';
+import { useEffect, useId, useState, type CSSProperties, type ReactElement, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, Navigate, useParams } from 'react-router';
 import { api, ApiError } from '../lib/api';
@@ -100,7 +100,11 @@ export default function Borrower360() {
     retry: false,
   });
   const latestDecisionAuditId = lifecycleQuery.data?.audit_event_id ?? null;
-  const [latestDecisionOpen, setLatestDecisionOpen] = useState(false);
+  // Open state is keyed to the audit id, so moving to another borrower (or a
+  // newer decision) closes the receipt instead of reading a different row.
+  const [openDecisionAuditId, setOpenDecisionAuditId] = useState<string | null>(null);
+  const latestDecisionOpen = latestDecisionAuditId !== null && openDecisionAuditId === latestDecisionAuditId;
+  const latestDecisionRegionId = useId();
 
   // Borrower 360 is a per-borrower detail page; without an id in the URL
   // there is no borrower to show. Render a proper empty-state landing
@@ -311,8 +315,9 @@ export default function Borrower360() {
               variant="ghost"
               size="sm"
               icon="audit"
-              aria-pressed={latestDecisionOpen}
-              onClick={() => setLatestDecisionOpen((open) => !open)}
+              aria-expanded={latestDecisionOpen}
+              aria-controls={latestDecisionRegionId}
+              onClick={() => setOpenDecisionAuditId(latestDecisionOpen ? null : latestDecisionAuditId)}
               data-testid="latest-decision-toggle"
             >
               Latest decision
@@ -321,8 +326,10 @@ export default function Borrower360() {
         </>
       }
     >
-      {latestDecisionOpen && latestDecisionAuditId && (
-        <DecisionReceipt auditEventId={latestDecisionAuditId} className="mb-grid" />
+      {latestDecisionAuditId && (
+        <div id={latestDecisionRegionId} hidden={!latestDecisionOpen}>
+          {latestDecisionOpen && <DecisionReceipt auditEventId={latestDecisionAuditId} className="mb-grid" />}
+        </div>
       )}
       <div className="layoutA-grid">
         {/* Left column — Borrower dossier + trigger timeline stacked */}
