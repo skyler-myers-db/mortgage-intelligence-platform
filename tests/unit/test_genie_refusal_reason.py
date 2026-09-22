@@ -25,11 +25,11 @@ from fastapi.testclient import TestClient
 import backend.api.genie as genie_api
 from backend.main import app
 from backend.services.audit_store import get_audit_store
+from backend.services.genie_answers import GenieMessageResponse, GenieProof
 from backend.services.genie_deterministic import (
     _deterministic_genie_response,
     _policy_blocked_genie_output_response,
 )
-from backend.services.genie_answers import GenieMessageResponse, GenieProof
 from backend.services.genie_message_policy import GenieMessageRequest, protected_prompt_match
 from backend.services.genie_refusal_reason import (
     GENIE_REFUSAL_REASONS,
@@ -109,7 +109,7 @@ def test_protected_audit_codes_fold_onto_one_coarse_family() -> None:
 
 
 def test_wire_enum_is_coarse_and_closed() -> None:
-    assert GENIE_REFUSAL_REASONS == {
+    assert {
         "protected_class",
         "unreviewed_criterion",
         "pii_request",
@@ -119,7 +119,7 @@ def test_wire_enum_is_coarse_and_closed() -> None:
         "out_of_scope",
         "output_policy",
         "unknown",
-    }
+    } == GENIE_REFUSAL_REASONS
     assert "protected_class_proxy" not in GENIE_REFUSAL_REASONS
     assert "health" not in GENIE_REFUSAL_REASONS
 

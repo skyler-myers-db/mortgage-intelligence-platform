@@ -5,10 +5,11 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from jobs import lakebase_migrate
 from backend.services.genie_refusal_reason import GENIE_REFUSAL_REASONS
+from jobs import lakebase_migrate
 
-_SCHEMA = Path("lakebase/schema.sql").read_text(encoding="utf-8")
+ROOT = Path(__file__).resolve().parents[2]
+_SCHEMA = (ROOT / "lakebase" / "schema.sql").read_text(encoding="utf-8")
 
 
 def _report_table_ddl() -> str:

@@ -300,6 +300,7 @@ def test_public_audit_event_cannot_forge_genie_actions() -> None:
         "DELETE_DRAFT",
         "DRAFT_OUTREACH",
         "GENIE_FEEDBACK",
+        "GENIE_REFUSAL_REPORT",
         "GROWTH_AGENT_RUN",
         "LEAD_ASSIGN",
         "LEAD_DISTRIBUTE",
