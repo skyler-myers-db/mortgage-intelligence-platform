@@ -29,7 +29,7 @@ describe('AdminRouteGate', () => {
   });
 
   it('redirects a denied direct admin deep link before mounting the console', async () => {
-    vi.spyOn(api, 'session').mockResolvedValue({ can_access_admin: false });
+    vi.spyOn(api, 'session').mockResolvedValue({ can_access_admin: false, can_approve: false });
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });

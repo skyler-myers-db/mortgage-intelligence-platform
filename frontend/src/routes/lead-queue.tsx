@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router';
 import { api, type LeadsPageResult } from '../lib/api';
+import { leadsQuery, type LeadsRequest } from '../lib/leadsQuery';
 import { useConfigOptionsQuery } from '../lib/configOptionsQuery';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import type { PortfolioPreview, SalesTeamMember } from '../types';
@@ -208,6 +209,38 @@ export default function LeadQueue() {
   // lead_population, so ZIPs whose borrowers didn't make the national
   // top 500 rendered as 0 rows (the "ZIP shows 19 but queue shows 0"
   // bug). Re-runs when state, zip, or segment changes.
+  // Audit runtime-02 / tables-v1 (2026-09-21): ONE request object feeds the
+  // fetcher and the query key (see lib/leadsQuery.ts). The key used to be a
+  // second hand-written list that forgot `cities`, so two city drill-downs
+  // shared one cache entry and the table showed the wrong cohort.
+  const leadsRequest: LeadsRequest = {
+    segment,
+    geo: {
+      state: stateFilter,
+      zip: zipFilter,
+      county: countyFilter,
+      counties: countyFilters,
+      states: stateFilters,
+      zips: zipFilters,
+      cities: cityFilters,
+      borrowerIds: borrowerIdFilters,
+    },
+    opts: {
+      segmentCodes,
+      segmentMode,
+      targetLenderRef,
+      cohortId,
+      funnelStage,
+      portfolioCriteria,
+      approvalStatus: approvalStatus === 'any' ? 'any' : approvalStatus as 'pending' | 'approved' | 'rejected' | 'hold',
+      outreachStatus: outreachStatus === 'any' ? 'any' : outreachStatus as 'none' | 'queued' | 'actioned' | 'sent' | 'bounced' | 'replied',
+      assignedTo,
+      agedDays,
+    },
+  };
+  // The Growth Agent proof is the one input api.leadsPage reads from outside
+  // the request (window.location), so its URL fingerprint rides in the key.
+  const leadsPageQuery = leadsQuery('lead-queue', leadsRequest, [growthAgentProofKey]);
   const {
     data: leadsData,
     warmingUp,
@@ -216,85 +249,25 @@ export default function LeadQueue() {
     isFetching: leadsFetching,
     isPlaceholderData: leadsPlaceholderData,
   } = useWarmingUpRetry<LeadsPageResult>(
-    (signal) => api.leadsPage(
-      segment,
-      signal,
-      {
-        state: stateFilter,
-        zip: zipFilter,
-        county: countyFilter,
-        counties: countyFilters,
-        states: stateFilters,
-        zips: zipFilters,
-        cities: cityFilters,
-        borrowerIds: borrowerIdFilters,
-      },
-      {
-        segmentCodes,
-        segmentMode,
-        targetLenderRef,
-        cohortId,
-        funnelStage,
-        portfolioCriteria,
-        approvalStatus: approvalStatus === 'any' ? 'any' : approvalStatus as 'pending' | 'approved' | 'rejected' | 'hold',
-        outreachStatus: outreachStatus === 'any' ? 'any' : outreachStatus as 'none' | 'queued' | 'actioned' | 'sent' | 'bounced' | 'replied',
-        assignedTo,
-        agedDays,
-      },
-    ),
-    [
-      segment,
-      stateFilter,
-      zipFilter,
-      countyFilter,
-      countyFilters.join(','),
-      stateFilters.join(','),
-      zipFilters.join(','),
-      cityFilters.join(','),
-      borrowerIdFilters.join(','),
-      segmentCodes.join(','),
-      segmentMode,
-      targetLenderRef,
-      JSON.stringify(portfolioCriteria ?? {}),
-      cohortId,
-      funnelStage,
-      approvalStatus,
-      outreachStatus,
-      assignedTo,
-      agedDays,
-      growthAgentProofKey,
-    ],
-    {
-      queryKey: queryKeys.leads([
-        'lead-queue',
-        segment ?? '',
-        stateFilter ?? '',
-        zipFilter ?? '',
-        countyFilter ?? '',
-        countyFilters.join(','),
-        stateFilters.join(','),
-        zipFilters.join(','),
-        borrowerIdFilters.join(','),
-        segmentCodes.join(','),
-        segmentMode,
-        targetLenderRef ?? '',
-        JSON.stringify(portfolioCriteria ?? {}),
-        cohortId ?? '',
-        funnelStage ?? '',
-        approvalStatus,
-        outreachStatus,
-        assignedTo ?? '',
-        agedDays ?? '',
-        growthAgentProofKey,
-      ]),
-      keepPreviousData: true,
-    },
+    leadsPageQuery.fetcher,
+    // Ignored while `queryKey` is passed (see useWarmingUpRetry); kept equal
+    // to the key's inputs so the fallback key stays correct if that changes.
+    [leadsRequest, growthAgentProofKey],
+    { queryKey: leadsPageQuery.queryKey, keepPreviousData: true },
   );
-  const loading = leadsData === null && warmingUp === null && error === null;
-  const queueRefetchWarming = leadsData !== null && warmingUp !== null;
-  const queueUpdating = leadsData !== null && (leadsFetching || queueRefetchWarming);
+  // Audit states-v1 (2026-09-21): the queue used to mount LeadTable with an
+  // empty array whenever `warmingUp` or `error` was set, so a cold start or a
+  // failed load read as "Showing 0 ranked borrowers" — a false zero in an
+  // evidence-first product. The table now mounts ONLY when a payload exists.
+  // TanStack keeps `failureReason` after the final retry, so `warmingUp`
+  // outlives the retry loop; `error` is set only once it has given up. From
+  // then on the honest surface is the error + Retry, not "retrying…".
+  const warming = error === null ? warmingUp : null;
+  const hasQueue = leadsData !== null;
+  const queueRefetchWarming = hasQueue && warming !== null;
+  const queueUpdating = hasQueue && (leadsFetching || queueRefetchWarming);
   const queueStatusLabel = queueRefetchWarming
-    ? `${warmingUp.label} (${warmingUp.attempt}/${warmingUp.maxAttempts})`
+    ? `${warming.label} (${warming.attempt}/${warming.maxAttempts})`
     : 'updating';
   const loadError = error ? formatLeadQueueLoadError(error) : null;
 
@@ -669,10 +642,10 @@ export default function LeadQueue() {
           Sales team unavailable: {salesTeamError} — lead assignment to LOs is degraded until it reconnects.
         </div>
       )}
-      {warmingUp && leadsData === null && (
-        <WarmingUpBlock state={warmingUp} title="Ranked borrowers loading" compact />
+      {warming && !hasQueue && (
+        <WarmingUpBlock state={warming} title="Ranked borrowers loading" compact />
       )}
-      {loadError && !warmingUp && (
+      {loadError && !warming && (
         <div
           role="alert"
           className="status-callout status-callout--danger"
@@ -699,15 +672,19 @@ export default function LeadQueue() {
           )}
         </div>
       )}
-      {loading && !loadError && !warmingUp && (
+      {/* The table slot while no payload exists: first load AND warm-up. The
+          DegradedBanner can suppress WarmingUpBlock, so the skeleton — never a
+          zero-count table — is what holds the slot. A load error shows only
+          the alert above. */}
+      {!hasQueue && !loadError && (
         <LeadQueueTableSkeleton />
       )}
-      {countyLoading && !loading && !loadError && !warmingUp && (
+      {countyLoading && hasQueue && !loadError && !warming && (
         <div className="muted body mb-grid">
           Resolving county ZIPs…
         </div>
       )}
-      {!loading && !loadError && !warmingUp && !countyLoading && visibleLeads.length === 0 && (
+      {hasQueue && !loadError && !warming && !countyLoading && visibleLeads.length === 0 && (
         <div className="muted body mb-grid">
           {countyFilter && countyZips && countyZips.size === 0
             ? 'No ZIP-level rollup for this county in the current Cotality data coverage.'
@@ -716,7 +693,7 @@ export default function LeadQueue() {
               : 'No leads match this filter.'}
         </div>
       )}
-      {!loading && (
+      {hasQueue && (
         <div
           className={`stable-refresh-region stable-refresh-region--table ${queueUpdating ? 'is-updating' : ''}`}
           aria-busy={queueUpdating}

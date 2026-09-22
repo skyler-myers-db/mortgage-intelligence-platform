@@ -62,7 +62,7 @@ describe('role-aware navigation', () => {
   });
 
   it('shows the Admin destination in both navs after an affirmative session response', () => {
-    queryClient.setQueryData<SessionResponse>(SESSION_QUERY_KEY, { can_access_admin: true });
+    queryClient.setQueryData<SessionResponse>(SESSION_QUERY_KEY, { can_access_admin: true, can_approve: true });
     expectAdminVisible(renderNavigation(queryClient));
   });
 
@@ -74,7 +74,7 @@ describe('role-aware navigation', () => {
     });
 
     expectAdminHidden(renderNavigation(queryClient));
-    initial.resolve({ can_access_admin: true });
+    initial.resolve({ can_access_admin: true, can_approve: true });
     await initialFetch;
     expectAdminVisible(renderNavigation(queryClient));
 
@@ -89,7 +89,7 @@ describe('role-aware navigation', () => {
     expect(queryClient.isFetching({ queryKey: SESSION_QUERY_KEY })).toBe(1);
     expectAdminVisible(renderNavigation(queryClient));
 
-    background.resolve({ can_access_admin: true });
+    background.resolve({ can_access_admin: true, can_approve: true });
     await backgroundFetch;
     expectAdminVisible(renderNavigation(queryClient));
   });

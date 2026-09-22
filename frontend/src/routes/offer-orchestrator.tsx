@@ -11,6 +11,7 @@ import { ScoreBadge } from '../components/mortgage/ScoreBadge';
 import { ConfidenceMeter } from '../components/mortgage/ConfidenceMeter';
 import { Button, Chip } from '../components/Primitives';
 import { useApp } from '../components/AppContext';
+import { approverGateReason } from '../components/mortgage/approverGate';
 import { ActivationLoopPanel } from '../components/activation/ActivationLoopPanel';
 import { invalidateOperationalQueries } from '../lib/queryKeys';
 import { offerDisplayLabel } from '../lib/offerLanguage';
@@ -99,7 +100,12 @@ export default function OfferOrchestrator() {
     saveDraft,
     removeSavedDraft,
     canAccessAdmin,
+    canApprove,
+    actorEmail,
+    sessionStatus,
   } = useApp();
+  // Audit flow-02: gate the approve controls on the session's can_approve.
+  const approverGate = approverGateReason(canApprove, sessionStatus);
   const approval = id ? approvals[id] : undefined;
   const savedDraftKey = id ? `${id}::${activeDraftChannel}` : null;
 
@@ -468,7 +474,7 @@ export default function OfferOrchestrator() {
   };
 
   const onApprove = async () => {
-    if (approving || snapshotReconciling) return;
+    if (approving || snapshotReconciling || approverGate !== null) return;
     setApproveError(null);
     if (campaignBindingError) {
       setApproveError('Campaign handoff is incomplete. Reopen the saved campaign before approval.');
@@ -523,7 +529,7 @@ export default function OfferOrchestrator() {
   };
 
   const onReject = async () => {
-    if (approving || snapshotReconciling) return;
+    if (approving || snapshotReconciling || approverGate !== null) return;
     if (campaignBindingError) {
       setApproveError('Campaign handoff is incomplete. Reopen the saved campaign before rejection.');
       return;
@@ -609,7 +615,8 @@ export default function OfferOrchestrator() {
               size="sm"
               icon="check"
               onClick={() => void onApprove()}
-              disabled={snapshotReconciling || !rec || !draftReady || effectiveApproval === 'approved'}
+              disabled={approverGate !== null || snapshotReconciling || !rec || !draftReady || effectiveApproval === 'approved'}
+              title={approverGate ?? undefined}
               aria-label={
                 effectiveApproval === 'approved'
                   ? `Borrower ${b.borrower_id} already approved`
@@ -781,6 +788,8 @@ export default function OfferOrchestrator() {
               onReject={() => void onReject()}
               approveDisabled={snapshotReconciling || !draftReady}
               isSubmitting={approving || snapshotReconciling}
+              approverGate={approverGate}
+              actorEmail={actorEmail}
             />
           </div>
         </>

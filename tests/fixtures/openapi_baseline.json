@@ -12964,6 +12964,18 @@
       },
       "SessionResponse": {
         "properties": {
+          "actor_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The caller's own identity as forwarded by the trusted Databricks Apps edge (X-Forwarded-Email, else X-Forwarded-User): the name an approval's audit row is recorded under. Null when the edge forwarded none or forwarded headers are not trusted; never a configured default actor.",
+            "title": "Actor Email"
+          },
           "can_access_admin": {
             "title": "Can Access Admin",
             "type": "boolean"

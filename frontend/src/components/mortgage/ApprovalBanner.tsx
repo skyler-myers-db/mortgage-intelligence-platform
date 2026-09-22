@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useId, useRef } from 'react';
 import { Icon } from '../Icon';
 import { Button } from '../Primitives';
 
@@ -15,6 +15,14 @@ import { Button } from '../Primitives';
  *     fire-and-forget handler,
  *   - disables both buttons during submission and sets `aria-busy` on
  *     the region so screen readers announce the transient state.
+ *
+ * Audit flow-02 / shell-06 (2026-09-21): the banner used to be identity- and
+ * role-blind. It now names whose approval this is ("Approving as …") and,
+ * for an actor the session says cannot approve, keeps the gate VISIBLE with
+ * both buttons disabled and the reason attached via `aria-describedby`. The
+ * identity line is a second `.approval__sub` — no new BEM; the prototype
+ * banner (design_files/index.html `.approval`) has no identity element, so
+ * this is an additive departure made for the audit-trail promise.
  */
 
 interface ApprovalBannerProps {
@@ -33,6 +41,14 @@ interface ApprovalBannerProps {
    * for callers that don't thread their own async state through.
    */
   isSubmitting?: boolean;
+  /**
+   * Non-null = the signed-in actor may not approve (see `approverGateReason`);
+   * the text is the accessible reason. The server-side 403 stays the real
+   * enforcement — this only stops the doomed click and explains it.
+   */
+  approverGate?: string | null;
+  /** The signed-in actor's own forwarded identity, when the edge sent one. */
+  actorEmail?: string | null;
 }
 
 export function ApprovalBanner({
@@ -46,6 +62,8 @@ export function ApprovalBanner({
   approveDisabled,
   rejectDisabled,
   isSubmitting,
+  approverGate = null,
+  actorEmail = null,
 }: ApprovalBannerProps) {
   const sub =
     text ?? `${count} borrower${count === 1 ? '' : 's'} pending review.`;
@@ -54,10 +72,12 @@ export function ApprovalBanner({
   // when the caller doesn't pass `isSubmitting`.
   const inFlightRef = useRef<boolean>(false);
   const busy = Boolean(isSubmitting);
+  const gated = approverGate !== null;
+  const gateId = useId();
 
   const guard = (fn?: () => void | Promise<void>) => async () => {
     if (!fn) return;
-    if (inFlightRef.current || busy) return;
+    if (gated || inFlightRef.current || busy) return;
     inFlightRef.current = true;
     try {
       await fn();
@@ -66,7 +86,7 @@ export function ApprovalBanner({
     }
   };
 
-  const buttonsDisabled = Boolean(disabled) || busy;
+  const buttonsDisabled = Boolean(disabled) || busy || gated;
 
   return (
     <div
@@ -79,6 +99,16 @@ export function ApprovalBanner({
       <div className="approval__body">
         <div className="approval__title">Human approval required before outreach</div>
         <div className="approval__sub">{sub}</div>
+        {gated ? (
+          <div className="approval__sub" id={gateId} role="status" data-testid="approval-gate-reason">
+            {approverGate}
+            {actorEmail && <> · signed in as <span className="mono">{actorEmail}</span></>}
+          </div>
+        ) : actorEmail && (
+          <div className="approval__sub" data-testid="approval-actor">
+            Approving as <span className="mono">{actorEmail}</span>
+          </div>
+        )}
       </div>
       <div className="approval__actions">
         <Button
@@ -87,6 +117,8 @@ export function ApprovalBanner({
           onClick={() => void guard(onReject)()}
           icon="cross"
           disabled={buttonsDisabled || Boolean(rejectDisabled)}
+          aria-describedby={gated ? gateId : undefined}
+          title={approverGate ?? undefined}
         >
           {rejectLabel}
         </Button>
@@ -96,6 +128,8 @@ export function ApprovalBanner({
           onClick={() => void guard(onApprove)()}
           icon="check"
           disabled={buttonsDisabled || Boolean(approveDisabled)}
+          aria-describedby={gated ? gateId : undefined}
+          title={approverGate ?? undefined}
         >
           {busy ? 'Submitting…' : approveLabel}
         </Button>

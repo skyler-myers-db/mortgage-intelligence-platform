@@ -7,7 +7,12 @@ import { Button } from '../Primitives';
 import { useApp } from '../AppContext';
 import { api } from '../../lib/api';
 import { queryKeys } from '../../lib/queryKeys';
-import { buildLeadCsv } from './LeadTable.csv';
+import {
+  buildLeadCsv,
+  describeLeadCsvExport,
+  downloadLeadCsv,
+  planLeadCsvExport,
+} from './LeadTable.csv';
 import {
   LEAD_EXPANDED_PREVIEW_ESTIMATE_PX,
   LEAD_ROW_ESTIMATE_PX,
@@ -30,6 +35,7 @@ import { LeadDispositionPanel, LeadRejectPanel } from './LeadTableDecisionPanels
 import { useLeadApprovalActions, type CampaignBindingState } from './useLeadApprovalActions';
 import { useLeadSalesActions } from './useLeadSalesActions';
 import { useLeadTableHotkeys } from './useLeadTableHotkeys';
+import { approverGateReason } from './approverGate';
 import type { LeadTableProps, SortDir, SortKey } from './LeadTable.types';
 
 export { buildLeadCsv } from './LeadTable.csv';
@@ -118,7 +124,13 @@ export function LeadTable({
   // Shared error surface: both the approval path and the sales-ops path
   // report into the single `.table-error` alert this shell renders.
   const [approvalError, setApprovalError] = useState<string | null>(null);
-  const { approvals, setApproval, setLastBorrowerId, openConsoleRecentActivity } = useApp();
+  const [exportNotice, setExportNotice] = useState<string | null>(null);
+  const {
+    approvals, setApproval, setLastBorrowerId, openConsoleRecentActivity,
+    canApprove, actorEmail, sessionStatus,
+  } = useApp();
+  // Audit flow-02 / shell-06: non-approvers keep a VISIBLE but disabled gate.
+  const approverGate = approverGateReason(canApprove, sessionStatus);
 
   useEffect(() => {
     if (expanded) setLastBorrowerId(expanded);
@@ -182,15 +194,18 @@ export function LeadTable({
     campaignBinding,
     campaignBindingState,
     campaignBindingBlocked,
+    canApprove: approverGate === null,
     tableWrapRef,
     setApprovalError,
   });
 
   /**
    * Keyboard: A approves / R rejects the expanded row; Shift+A fires
-   * bulk-approve when >= 1 row is selected. We listen at the window
-   * level but bail out if focus is inside an editable element so typing
-   * in the Genie chat or a filter input never triggers approval.
+   * bulk-approve when >= 1 row is selected. The listener is window-level,
+   * but `useLeadTableHotkeys` only forwards keystrokes whose focus is inside
+   * the `.tbl-wrap` region with no dialog, drawer, listbox or menu open
+   * (audit tables-v2 / a11y-09, WCAG 2.1.4) — so A on a filter button, in
+   * the evidence drawer or on Genie chrome never approves a borrower.
    */
   useLeadTableHotkeys((e: KeyboardEvent) => {
     // R5-12 (2026-04-23): belt-and-suspenders check against both the
@@ -203,6 +218,8 @@ export function LeadTable({
     if (isEditableTarget(e.target as Element | null)) return;
     if (isEditableTarget(document.activeElement)) return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
+    // Non-approvers: A / R / Shift+A do nothing, before any draft call.
+    if (approverGate !== null) return;
     const key = e.key.toLowerCase();
     if (campaignBindingBlocked && (key === 'a' || key === 'r')) return;
     // Shift+A: bulk approve. Takes precedence over single-row A when
@@ -225,7 +242,7 @@ export function LeadTable({
       e.preventDefault();
       approval.setPendingReject(expanded);
     }
-  });
+  }, tableWrapRef);
 
   const stop = (e: ReactKeyboardEvent | ReactMouseEvent) => e.stopPropagation();
 
@@ -240,27 +257,38 @@ export function LeadTable({
   }
 
   /**
-   * Export the currently-visible leads as CSV. Client-side only: the
-   * bytes come straight from the `leads` prop the caller already passed
-   * in (which is the real /api/leads payload after any segment/filter
-   * narrowing the parent route applied). We do NOT invent a server-side
-   * export endpoint or synthesize fields the payload doesn't carry — so
-   * PII stays suppressed by construction.
+   * Export as CSV. Client-side only: the bytes come from the real /api/leads
+   * payload the parent route already narrowed. We do NOT invent a server-side
+   * export endpoint or synthesize fields the payload doesn't carry — so PII
+   * stays suppressed by construction.
+   *
+   * Audit tables-08 (2026-09-21): the export used to serialise the raw
+   * `leads` prop — ignoring the selection AND the sort — and its label
+   * counted pre-gate rows, so it could announce "500 leads" and write zero.
+   * It now writes the selection when one exists, otherwise the rows in their
+   * on-screen order, and every count is the post-eligibility count.
    */
+  const csvExport = planLeadCsvExport(sortedLeads, approval.selectedIds);
+  const csvExportCount = csvExport.rows.length;
+  const csvExportNoun = csvExport.scope === 'selected_rows'
+    ? 'selected'
+    : csvExportCount === 1 ? 'lead' : 'leads';
   function exportCsv() {
-    if (leads.length === 0) return;
-    const csv = buildLeadCsv(leads, approvals, exportContext);
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    const stamp = new Date().toISOString().slice(0, 10);
-    a.download = `mip-leads-${stamp}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    if (csvExportCount === 0) return;
+    const rowOrder = sortKey === 'rank' ? 'rank' : `${sortKey} ${sortDir}`;
+    downloadLeadCsv(buildLeadCsv(csvExport.rows, approvals, {
+      ...exportContext,
+      scope: csvExport.scope,
+      rowOrder,
+    }));
+    setExportNotice(describeLeadCsvExport(csvExport, rowOrder));
   }
+
+  useEffect(() => {
+    if (!exportNotice) return;
+    const t = window.setTimeout(() => setExportNotice(null), 8000);
+    return () => window.clearTimeout(t);
+  }, [exportNotice]);
 
   function toggleSort(key: SortKey) {
     if (key === 'rank') {
@@ -329,7 +357,10 @@ export function LeadTable({
                 makes the affordance scannable — an LO scrolling the
                 queue can spot the shortcut without reading prose.
               */}
-              Click a row to expand the preview. Keyboard: <kbd>A</kbd> approve, <kbd>R</kbd> reject the expanded row while it is still pending.
+              Click a row to expand the preview. Keyboard: <kbd>A</kbd> approve, <kbd>R</kbd> reject the expanded row while it is still pending. Shortcuts act only while focus is in the table and no panel or menu is open.
+              {approverGate === null && actorEmail && (
+                <> Approving as <span className="mono" data-testid="lead-approving-as">{actorEmail}</span>.</>
+              )}
             </div>
           </div>
         </div>
@@ -338,11 +369,14 @@ export function LeadTable({
             size="sm"
             icon="export"
             onClick={exportCsv}
-            disabled={leads.length === 0}
+            disabled={csvExportCount === 0}
             data-testid="lead-export"
-            aria-label={`Export ${leads.length} leads as CSV`}
+            aria-label={`Export ${csvExportCount.toLocaleString()} ${csvExportNoun} as CSV`}
+            title={csvExportCount === 0 && csvExport.excluded > 0
+              ? 'Every row in scope is excluded by the marketing-eligibility gate'
+              : undefined}
           >
-            Export list
+            Export {csvExportCount.toLocaleString()} {csvExportNoun}
           </Button>
         </div>
       </div>
@@ -352,6 +386,8 @@ export function LeadTable({
         requestedCampaignBinding={requestedCampaignBinding}
         campaignBinding={campaignBinding}
         expandedBorrowerId={expanded}
+        approverGate={approverGate}
+        actorEmail={actorEmail}
       />
       {approval.pendingReject && (
         <LeadRejectPanel
@@ -384,6 +420,11 @@ export function LeadTable({
           onCancel={() => sales.setPendingDisposition(null)}
           onSubmit={() => void sales.submitDisposition()}
         />
+      )}
+      {exportNotice && (
+        <div role="status" aria-live="polite" className="table-success" data-testid="lead-export-notice">
+          {exportNotice}
+        </div>
       )}
       {sales.salesToast && (
         <div role="status" aria-live="polite" className="table-success">
@@ -489,6 +530,7 @@ export function LeadTable({
                     isSelectable={isSelectable}
                     isApprovalEligible={isApprovalEligible}
                     approvalActionsDisabled={campaignBindingBlocked}
+                    approverGate={approverGate}
                     bulkApproving={approval.bulkApproving}
                     salesBusy={sales.salesBusy}
                     salesTeamCount={salesTeam.length}
@@ -524,6 +566,7 @@ export function LeadTable({
           bulkRationale={approval.bulkRationale}
           onBulkRationaleChange={approval.setBulkRationale}
           campaignBindingBlocked={campaignBindingBlocked}
+          approverGate={approverGate}
           salesTeam={salesTeam}
           salesBusy={sales.salesBusy}
           selectedAssignee={sales.selectedAssignee}
@@ -560,6 +603,27 @@ export function LeadTable({
         )}
         {truncatedAt !== null && totalMatching !== null && totalMatching > leads.length && (
           <span className="muted"> · capped at {truncatedAt.toLocaleString()}</span>
+        )}
+        {/* Audit tables-02: sorting reorders only the rows already loaded
+            (the server returns the top-ranked window) and nothing said so;
+            no header could reach toggleSort('rank') either. */}
+        {sortKey !== 'rank' && (
+          <>
+            <span data-testid="lead-sort-scope">
+              · sorted within the loaded {sortedLeads.length.toLocaleString()}
+              {totalMatching !== null && totalMatching > sortedLeads.length
+                ? `, not across all ${totalMatching.toLocaleString()} matching`
+                : ''}
+            </span>
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm"
+              onClick={() => toggleSort('rank')}
+              data-testid="lead-sort-reset"
+            >
+              Reset to rank
+            </button>
+          </>
         )}
       </div>
     </div>
