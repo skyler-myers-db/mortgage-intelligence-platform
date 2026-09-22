@@ -15,6 +15,7 @@ import type { GenieAnswer as GenieAnswerShape } from '../../types';
 vi.mock('../AppContext', () => ({ useApp: () => ({ setDrawer: vi.fn() }) }));
 
 import { GenieAnswer } from './GenieAnswer';
+import { refusalRephraseChips } from './genieRefusal';
 import { PINNED_INSIGHTS_KEY, clearPinnedInsights } from '../../lib/pinnedInsights';
 
 function payload(overrides: Partial<GenieAnswerShape> = {}): GenieAnswerShape {
@@ -191,7 +192,14 @@ describe('GenieAnswer pin + fallback', () => {
         onFollowUp={() => {}}
       />,
     ));
-    expect(container.querySelectorAll('.filter--question').length).toBe(0);
+    expect(container.querySelector('.genie-answer__followups')).toBeNull();
+    // The only "Ask" chips are the refusal card's guard-validated rewordings
+    // (audit 2026-09-21 `genie-05`), never a pivot on the withheld result.
+    const chips = Array.from(container.querySelectorAll('.filter--question'));
+    expect(chips.every((chip) => chip.closest('[data-testid="genie-refusal-card"]'))).toBe(true);
+    expect(chips.map((chip) => chip.querySelector('.filter__value')?.textContent)).toEqual([
+      ...refusalRephraseChips('output_policy'),
+    ]);
   });
 
   it('still honors backend-provided follow-ups even on a non-trusted source', () => {

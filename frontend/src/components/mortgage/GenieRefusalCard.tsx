@@ -82,6 +82,9 @@ export function GenieRefusalCard({
   const inFlightRef = useRef(false);
   const identity = `${reportHash ?? ''}:${reason}`;
   const identityRef = useRef(identity);
+  // The report button unmounts on success; focus moves to its confirmation
+  // so keyboard and screen-reader users keep their place (not <body>).
+  const reportedRef = useRef<HTMLSpanElement>(null);
 
   useEffect(() => {
     identityRef.current = identity;
@@ -90,6 +93,10 @@ export function GenieRefusalCard({
     setReporting(false);
     setReportError(null);
   }, [identity]);
+
+  useEffect(() => {
+    if (reported) reportedRef.current?.focus();
+  }, [reported]);
 
   const report = async () => {
     if (!reportHash || inFlightRef.current || reported) return;
@@ -174,7 +181,8 @@ export function GenieRefusalCard({
             className="btn btn--ghost btn--sm"
             onClick={() => void report()}
             disabled={reporting}
-            aria-label="Report this refusal as a legitimate question"
+            // WCAG 2.5.3: the accessible name starts with the visible label.
+            aria-label="This was legitimate: report this refusal for review"
             data-testid="genie-refusal-report"
           >
             <Icon name="thumbup" size={12} />
@@ -182,7 +190,12 @@ export function GenieRefusalCard({
           </button>
         )}
         {reported && (
-          <span className="genie-answer__refusal-reported" role="status">
+          <span
+            ref={reportedRef}
+            className="genie-answer__refusal-reported"
+            role="status"
+            tabIndex={-1}
+          >
             <Icon name="check" size={12} className="icon-accent" />
             Reported for review
           </span>

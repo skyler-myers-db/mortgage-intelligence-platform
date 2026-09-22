@@ -58,7 +58,7 @@ export const GENIE_REFUSAL_FAMILIES: Record<GenieRefusalReason, GenieRefusalFami
   output_policy: {
     title: 'Answer withheld before display',
     sentence:
-      'Genie produced a result the product could not verify against trusted SQL and source assets, so it was not shown. A narrower question over the trusted assets usually verifies.',
+      'Genie produced a result that did not pass the governed checks before display, so it was not shown. A narrower aggregate question over the trusted assets usually does.',
   },
   unknown: {
     title: 'Question withheld',

@@ -156,9 +156,38 @@ describe('GenieRefusalCard inside GenieAnswer', () => {
     });
     expect(JSON.stringify(body)).not.toContain('zyrplax');
     expect(container.querySelector('[data-testid="genie-refusal-report"]')).toBeNull();
-    expect(container.querySelector('.genie-answer__refusal-reported')?.textContent).toContain(
-      'Reported for review',
+    const confirmation = container.querySelector<HTMLElement>('.genie-answer__refusal-reported');
+    expect(confirmation?.textContent).toContain('Reported for review');
+    // The button unmounted; focus lands on the confirmation, not <body>.
+    expect(document.activeElement).toBe(confirmation);
+    expect(confirmation?.getAttribute('tabindex')).toBe('-1');
+  });
+
+  it('names the report button with its visible label first (WCAG 2.5.3)', () => {
+    act(() => root.render(
+      <GenieAnswer payload={refused('protected_class')} question={QUESTION} onFollowUp={() => {}} />,
+    ));
+    const button = container.querySelector<HTMLButtonElement>('[data-testid="genie-refusal-report"]');
+    const visible = button?.textContent?.trim() ?? '';
+    const accessibleName = button?.getAttribute('aria-label') ?? visible;
+    expect(visible).toBe('This was legitimate');
+    expect(accessibleName.startsWith(visible)).toBe(true);
+  });
+
+  it('shows only the card chips, not a second row of backend follow-ups, on a refusal', () => {
+    act(() => root.render(
+      <GenieAnswer
+        payload={refused('outreach_instruction', {
+          follow_up_questions: ['Which states have the most prime refi candidates?', 'Show the HELOC cohort.'],
+        })}
+        question={QUESTION}
+        onFollowUp={() => {}}
+      />,
+    ));
+    expect(container.querySelectorAll('[data-testid="genie-refusal-chip"]')).toHaveLength(
+      refusalRephraseChips('outreach_instruction').length,
     );
+    expect(container.querySelector('.genie-answer__followups')).toBeNull();
   });
 
   it('offers no report control when the turn carries no report hash', () => {

@@ -152,9 +152,14 @@ export function GenieAnswer({
   // Explicit backend follow_up_questions are deliberately STILL honored on any
   // source: where the backend attaches them (e.g. warm-start `degraded`,
   // outreach `refused`) they are generic governed sample questions, not
-  // refusal-referential pivots. Do not "tighten" this to drop them.
-  const effectiveFollowUps =
-    follow_up_questions && follow_up_questions.length > 0
+  // refusal-referential pivots. Do not "tighten" this to drop them. The one
+  // exception is a withheld turn: <GenieRefusalCard> already offers the
+  // family's guard-validated rewordings as its own "Ask" row, so a second row
+  // of backend samples would only duplicate it (audit 2026-09-21 `genie-05`).
+  const withheld = isWithheldGenieSource(payload.source);
+  const effectiveFollowUps = withheld
+    ? []
+    : follow_up_questions && follow_up_questions.length > 0
       ? follow_up_questions
       : isTrustedGenieSource(payload.source)
         ? buildFallbackFollowUps(payload)
@@ -269,7 +274,7 @@ export function GenieAnswer({
           lender language, offers guard-validated rewordings, restores the
           original question, links the reviewed vocabulary and files a
           hash-only false-positive report (audit 2026-09-21 `genie-05`). */}
-      {isWithheldGenieSource(payload.source) && (
+      {withheld && (
         <GenieRefusalCard
           payload={payload}
           question={question}
