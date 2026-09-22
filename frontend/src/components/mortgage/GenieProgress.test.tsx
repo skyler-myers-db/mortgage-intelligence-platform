@@ -257,6 +257,29 @@ describe('GenieProgress: live region discipline (genie-v1 / a11y-06)', () => {
     observer.disconnect();
   });
 
+  it('stops the clock while paused (card hidden) and catches up on resume', () => {
+    const startedAt = Date.now();
+    const ticker = () => container.querySelector('.genie-progress__elapsed')!;
+    act(() => root.render(<GenieProgress progress={LIVE_EXECUTING} startedAt={startedAt} paused />));
+    expect(ticker().textContent).toBe('0s');
+
+    act(() => {
+      vi.advanceTimersByTime(5_000);
+    });
+    // No interval drives a hidden card.
+    expect(ticker().textContent).toBe('0s');
+
+    act(() =>
+      root.render(<GenieProgress progress={LIVE_EXECUTING} startedAt={startedAt} paused={false} />),
+    );
+    // Shown again: the real elapsed time, not the frozen one.
+    expect(ticker().textContent).toBe('5s');
+    act(() => {
+      vi.advanceTimersByTime(1_000);
+    });
+    expect(ticker().textContent).toBe('6s');
+  });
+
   it('announces a stage CHANGE exactly once, and nothing for trace or SQL growth', () => {
     const startedAt = Date.now();
     act(() => root.render(<GenieProgress progress={LIVE_EXECUTING} startedAt={startedAt} />));

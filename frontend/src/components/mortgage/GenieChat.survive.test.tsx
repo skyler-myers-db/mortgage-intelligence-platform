@@ -306,6 +306,14 @@ describe('floating Genie survivability', () => {
     pressEscape();
     expect(turn.signal.aborted).toBe(false);
 
+    // The hidden card's clock is paused: no once-a-second state update runs
+    // behind a closed panel. (Real timers: the interval would tick at 1 s.)
+    const ticker = () => dialog().querySelector('.genie-progress__elapsed')?.textContent;
+    const frozenAt = ticker();
+    expect(frozenAt).toMatch(/^\d+s$/);
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 1_250)));
+    expect(ticker()).toBe(frozenAt);
+
     await act(async () => {
       turn.progress.resolve(TERMINAL);
       await new Promise((resolve) => setTimeout(resolve, 0));

@@ -688,6 +688,7 @@ export function GenieChat() {
                   progress={liveProgress}
                   startedAt={askStartedAt}
                   announce={false}
+                  paused={!genieOpen}
                 />
               </div>
             </div>

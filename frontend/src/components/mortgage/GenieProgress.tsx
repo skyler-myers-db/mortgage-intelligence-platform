@@ -91,12 +91,17 @@ function dedupeTrace(trace: Array<{ kind: string; content: string }>): string[] 
   return out;
 }
 
-function ElapsedTicker({ startedAt }: { startedAt: number }) {
+function ElapsedTicker({ startedAt, paused }: { startedAt: number; paused: boolean }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
+    // A hidden card (the floating panel closed mid-turn) has nothing to show
+    // a clock to, so no interval drives state updates behind it. Resuming
+    // reads the real clock first: it kept running while the interval did not.
+    if (paused) return undefined;
+    setNow(Date.now());
     const timer = window.setInterval(() => setNow(Date.now()), 1_000);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [paused]);
   const seconds = Math.max(0, Math.round((now - startedAt) / 1000));
   // aria-hidden and OUTSIDE every live region (audit 2026-09-21 `genie-v1` /
   // `a11y-06`): a once-a-second text change inside `role="status"` re-queued
@@ -132,6 +137,7 @@ export function GenieProgress({
   progress = null,
   startedAt = null,
   announce = true,
+  paused = false,
 }: {
   dense?: boolean;
   /** A raw Genie message status for callers without the live lifecycle. */
@@ -144,6 +150,10 @@ export function GenieProgress({
    * floating panel passes `false`: its own persistent announcer lives outside
    * the panel so it still speaks while the panel is closed. */
   announce?: boolean;
+  /** Stop the elapsed clock's interval while the card is not visible (the
+   * floating panel closed mid-turn). The turn itself is untouched; the clock
+   * catches up when the card is shown again. */
+  paused?: boolean;
 }) {
   const label = genieProgressLabel(progress, status);
   const stages = stagesFor(Boolean(progress?.deep));
@@ -186,7 +196,7 @@ export function GenieProgress({
       <div className="genie-progress__head">
         <Icon name="sparkle" size={12} className="icon-accent" />
         <span className="genie-progress__label">{label}</span>
-        {startedAt != null ? <ElapsedTicker startedAt={startedAt} /> : null}
+        {startedAt != null ? <ElapsedTicker startedAt={startedAt} paused={paused} /> : null}
       </div>
 
       <ol className="genie-progress__stages" aria-label="Genie lifecycle stages">
