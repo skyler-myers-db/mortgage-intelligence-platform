@@ -46,7 +46,7 @@ function segment(
 }
 
 export const SEGMENTS: readonly SegmentSummary[] = [
-  segment('itm', 'Prime Refi Candidates', TOTALS.inTheMoney, 1286, '+18%', 82, 'Lien rate >= 75 bps above par and equity >= 15%.'),
+  segment('itm', 'Prime Refi Candidates', TOTALS.inTheMoney, TOTALS.contactableInTheMoney, '+18%', 82, 'Lien rate >= 75 bps above par and equity >= 15%.'),
   segment('listed', 'Listed for Sale', 1840, 214, '+9%', 77, 'Current active or under-contract Cotality MLS listing.'),
   segment('permit', 'HELOC Intent', 2405, 301, '+11%', 80, 'Cotality HELOC propensity score indicates equity-credit demand.'),
   segment('investor', 'Investor / Multi-Property', 1892, 187, '+6%', 79, 'Owner Link shows 2+ properties or repeat behavior.'),
