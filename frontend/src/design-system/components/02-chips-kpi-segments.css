@@ -373,7 +373,7 @@
 /* Inset the focus ring: the card clips overflow, so the global
    `:focus-visible { outline-offset: 2px }` would be cut off. */
 .seg-card__select:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
   outline-offset: -3px;
   border-radius: var(--r-lg);
 }

@@ -177,7 +177,7 @@
 .login-summary__num:focus-visible {
   /* 2px/1px: focus-ring hairlines below the 4px token scale; intentional
      raw px, matching .portfolio-summary__claim:focus-visible. */
-  outline: 2px solid var(--accent-ink);
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
   outline-offset: 1px;
 }
 .login-summary__num-ico { opacity: 0.6; }
@@ -230,7 +230,7 @@
 }
 .portfolio-summary__claim:hover { filter: brightness(1.06); }
 .portfolio-summary__claim:focus-visible {
-  outline: 2px solid var(--accent-ink);
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
   outline-offset: 1px;
 }
 .portfolio-summary__claim--unverified {
@@ -282,8 +282,8 @@
   font-size: var(--fs-13);
 }
 .outreach-routing__select:focus-visible {
-  outline: calc(var(--sp-1) / 2) solid var(--accent);
-  outline-offset: calc(var(--sp-1) / 2);
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
 }
 .outreach-routing__confirm { display: flex; }
 

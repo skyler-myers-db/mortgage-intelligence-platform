@@ -70,7 +70,7 @@
 .filter-menu__item.is-focused { background: var(--bg-3); color: var(--text-1); }
 .filter-menu__item.is-selected { color: var(--accent-ink); }
 .filter-menu__item:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
   outline-offset: 1px;
 }
 
