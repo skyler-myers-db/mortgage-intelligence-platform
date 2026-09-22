@@ -1,12 +1,17 @@
 import { useEffect, useRef, type RefObject } from 'react';
 import { pushEscapeLayer } from '../../lib/escapeStack';
 
+/** The topbar's Genie toggle (`Topbar.tsx`): the launcher that is rendered at
+ *  every width. The panel's own `.genie__fab` is `display: none` above 720px
+ *  (06-genie-chat.css), so focusing it on desktop silently drops focus. */
+const TOPBAR_TOGGLE_SELECTOR = 'button[aria-label="Toggle Genie chat"]';
+
 interface UseGeniePanelDismissalOptions {
   open: boolean;
   panelRef: RefObject<HTMLElement | null>;
   inputRef: RefObject<HTMLElement | null>;
-  /** The panel's own launcher: the focus fallback when whatever opened the
-   *  panel is no longer in the document. */
+  /** The panel's own launcher: the LAST focus fallback when whatever opened
+   *  the panel is no longer in the document and there is no topbar toggle. */
   fabRef: RefObject<HTMLElement | null>;
   onClose: () => void;
 }
@@ -50,12 +55,16 @@ export function useGeniePanelDismissal({
       });
     }
     // On close, return focus to whatever opened the panel (the topbar toggle
-    // or a launcher). The shell's pre-mount launcher is replaced by the
-    // panel's own once the panel has mounted, so fall back to that one.
+    // or a launcher). When the opener has left the document — a command
+    // palette item, the shell's pre-mount launcher — prefer the topbar
+    // toggle, which exists at every width; the panel's own FAB is the last
+    // resort because it is hidden on desktop.
     const opener = openerRef.current;
     if (!opener) return undefined;
     openerRef.current = null;
-    const target = document.contains(opener) ? opener : fabRef.current;
+    const target = document.contains(opener)
+      ? opener
+      : (document.querySelector<HTMLElement>(TOPBAR_TOGGLE_SELECTOR) ?? fabRef.current);
     target?.focus();
     return undefined;
   }, [fabRef, inputRef, open, panelRef]);

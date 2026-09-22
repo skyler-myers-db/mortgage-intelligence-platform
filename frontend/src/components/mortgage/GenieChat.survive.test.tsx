@@ -157,6 +157,8 @@ describe('floating Genie survivability', () => {
   let container: HTMLDivElement;
   let root: Root;
   let drawerOpen = false;
+  // The topbar's Genie toggle (the launcher rendered at every width).
+  let topbarToggle = true;
   const closeDrawer = vi.fn();
   const scrollIntoView = vi.fn();
 
@@ -166,6 +168,7 @@ describe('floating Genie survivability', () => {
     scrollIntoView.mockReset();
     appState.genieOpen = true;
     drawerOpen = false;
+    topbarToggle = true;
     installLocalStorage();
     clearGenieTurns();
     mocks.genieStart.mockResolvedValue(START);
@@ -203,6 +206,11 @@ describe('floating Genie survivability', () => {
       root.render(
         <MemoryRouter>
           <button type="button" id="page-control">Page control</button>
+          {topbarToggle && (
+            <button type="button" aria-label="Toggle Genie chat" aria-pressed={appState.genieOpen}>
+              Genie
+            </button>
+          )}
           <GenieChat />
           <DrawerLayer open={drawerOpen} onClose={closeDrawer} />
         </MemoryRouter>,
@@ -479,6 +487,35 @@ describe('floating Genie survivability', () => {
     expect(closeDrawer).toHaveBeenCalledTimes(1);
     expect(mocks.setGenieOpen).not.toHaveBeenCalled();
     expect(dialog().classList.contains('is-open')).toBe(true);
+  });
+
+  /** Open the panel from a transient control (a command-palette item) that is
+   *  gone by the time the panel closes. Returns the closed-panel focus target. */
+  async function closeAfterOpenerLeft(): Promise<Element | null> {
+    const opener = document.createElement('button');
+    opener.type = 'button';
+    document.body.appendChild(opener);
+    opener.focus();
+    render();
+    await flush();
+    opener.remove();
+
+    setOpen(false);
+    await flush();
+    return document.activeElement;
+  }
+
+  it('returns focus to the topbar toggle when the opener has left the document', async () => {
+    // The panel's own FAB is display:none on desktop, so it cannot take focus
+    // there; the topbar toggle exists at every width.
+    const focused = await closeAfterOpenerLeft();
+    expect(focused).toBe(container.querySelector('button[aria-label="Toggle Genie chat"]'));
+    expect(focused).not.toBe(fab());
+  });
+
+  it('falls back to the FAB only when there is no topbar toggle', async () => {
+    topbarToggle = false;
+    expect(await closeAfterOpenerLeft()).toBe(fab());
   });
 
   it('announces through one persistent region outside the panel, never from inside it (a11y-06)', async () => {
