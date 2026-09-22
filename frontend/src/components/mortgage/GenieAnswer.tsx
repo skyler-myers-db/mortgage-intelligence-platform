@@ -60,6 +60,11 @@ interface GenieAnswerProps {
    *  Off by default so the floating GenieChat bubble stays compact;
    *  the Ask Genie deep-dive route opts in. (FIX Δ3, 2026-05-04). */
   withChart?: boolean;
+  /** When set, the follow-up chips render disabled with this reason. The
+   *  floating panel passes it while a turn is in flight: a chip used to start
+   *  a second ask that silently aborted the running one (audit 2026-09-21
+   *  `genie-v2`). */
+  followUpDisabledReason?: string | null;
 }
 
 export function GenieAnswer({
@@ -69,6 +74,7 @@ export function GenieAnswer({
   question,
   dense = false,
   withChart = false,
+  followUpDisabledReason = null,
 }: GenieAnswerProps) {
   const { answer, metric_value, table_rows, follow_up_questions, actions } = payload;
   const { setDrawer } = useApp();
@@ -334,6 +340,8 @@ export function GenieAnswer({
               type="button"
               className="filter filter--question"
               onClick={() => onFollowUp(q, liveConversationId ?? null)}
+              disabled={Boolean(followUpDisabledReason)}
+              title={followUpDisabledReason ?? undefined}
             >
               <span className="filter__label">Ask</span>
               <span className="filter__value filter__value--question">{q}</span>

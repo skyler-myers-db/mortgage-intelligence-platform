@@ -8,6 +8,7 @@
  *                          actor-boundary reset still aborts it (fail-closed)
  *   runtime-v2             one Escape closes one layer, and Genie only when
  *                          focus is inside it
+ *   genie-v2               a second ask mid-turn never replaces the first
  */
 
 import { act, useRef } from 'react';
@@ -324,6 +325,76 @@ describe('floating Genie survivability', () => {
     // And the composer is usable again for the new actor.
     setOpen(true);
     expect(askButton().disabled).toBe(false);
+  });
+
+  it('holds a second ask while a turn is in flight instead of replacing it (genie-v2)', async () => {
+    render();
+    // A settled answer with follow-up chips, resolved inline.
+    mocks.genieSubmit.mockResolvedValueOnce({
+      completed: true,
+      response: answer({
+        answer: 'Opportunity volume is steady.',
+        follow_up_questions: ['Break this down by state'],
+      }),
+    });
+    act(() => setInputValue(input(), 'Show current opportunity volume'));
+    await act(async () => {
+      askButton().click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await waitUntil(() => container.textContent?.includes('Opportunity volume is steady.') ?? false);
+    const chip = () => {
+      const el = container.querySelector<HTMLButtonElement>('.genie-answer__followups button');
+      if (!el) throw new Error('follow-up chip not rendered');
+      return el;
+    };
+    expect(chip().disabled).toBe(false);
+
+    const turn = await startLiveTurn('Which states lead on refinance opportunity?');
+    expect(mocks.genieSubmit).toHaveBeenCalledTimes(2);
+
+    // Sending is held, with a reason a screen reader can reach from the input.
+    expect(askButton().disabled).toBe(true);
+    expect(chip().disabled).toBe(true);
+    expect(chip().title).toContain('Genie is still answering');
+    const hint = document.getElementById('genie-composer-busy');
+    expect(hint?.textContent).toContain('Genie is still answering');
+    expect(input().getAttribute('aria-describedby')).toBe('genie-composer-busy');
+
+    // Drafting is not: the input stays editable.
+    expect(input().disabled).toBe(false);
+    act(() => setInputValue(input(), 'And by county?'));
+    expect(input().value).toBe('And by county?');
+
+    // Enter (a raw form submit, which bypasses the disabled button) and a
+    // stale chip click must not start a second turn or touch the first.
+    const form = container.querySelector<HTMLFormElement>('form.genie__input');
+    await act(async () => {
+      form?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      chip().click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(mocks.genieSubmit).toHaveBeenCalledTimes(2);
+    expect(turn.signal.aborted).toBe(false);
+    expect(input().value).toBe('And by county?');
+    expect(container.querySelectorAll('.genie__msg--user')).toHaveLength(2);
+
+    await act(async () => {
+      turn.progress.resolve(TERMINAL);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await waitUntil(() => mocks.genieComplete.mock.calls.length === 1);
+    await act(async () => {
+      turn.complete.resolve(answer());
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await waitUntil(() => container.textContent?.includes('124,946 borrowers') ?? false);
+
+    // The running turn got its answer; the draft survived; sending is back.
+    expect(askButton().disabled).toBe(false);
+    expect(chip().disabled).toBe(false);
+    expect(document.getElementById('genie-composer-busy')).toBeNull();
+    expect(input().value).toBe('And by county?');
   });
 
   it('closes only the top layer per Escape, and Genie only when focus is inside it (runtime-v2)', async () => {

@@ -1,7 +1,7 @@
 /* ============================================================
-   GENIE SURVIVABILITY — launcher status
+   GENIE SURVIVABILITY — launcher status, composer busy hint
    ------------------------------------------------------------
-   Audit 2026-09-21 (runtime-01 / genie-02).
+   Audit 2026-09-21 (runtime-01 / genie-02 / genie-v2).
 
    DOCUMENTED BEM EXTENSION of the prototype. design_files/index.html:773-785
    defines `.genie__fab` with two states only (rest, `.is-hidden`); the
@@ -72,4 +72,21 @@
   .topbar__icon-btn.is-genie-running::after,
   .genie__fab.is-genie-ready::after,
   .topbar__icon-btn.is-genie-ready::after { animation: none; }
+}
+
+/* Composer busy hint (genie-v2). New element `.genie__input-hint`: the
+   prototype composer (index.html:760-772) has no in-flight state at all.
+   While a turn runs, Ask and the follow-up chips are disabled and this line
+   says why; the input itself stays editable so the next question can be
+   drafted. */
+.genie__input-hint {
+  margin: 0;
+  padding: 0 var(--sp-3) var(--sp-3);
+  font-size: var(--fs-11);
+  line-height: 1.4;
+  color: var(--text-3);
+}
+.genie-answer__followups .filter[disabled] {
+  cursor: not-allowed;
+  opacity: 0.55;
 }

@@ -59,6 +59,11 @@ import { GenieHistoryMenu } from './GenieHistoryMenu';
  * via the shared <GenieAnswer> subcomponent.
  */
 
+const COMPOSER_BUSY_HINT_ID = 'genie-composer-busy';
+const ASKING_REASON =
+  'Genie is still answering. Keep drafting: Ask unlocks when this answer lands. Closing the panel does not stop it.';
+const ACTION_REASON = 'A governed action is running. Ask unlocks when it finishes.';
+
 export function sourceAssetsFor(payload: GenieAnswerShape): string[] {
   const seen = new Set<string>();
   const assets = [
@@ -115,8 +120,9 @@ export function GenieChat() {
   // conversation id or append an orphan bubble to the cleared thread.
   const askAbortRef = useRef<AbortController | null>(null);
   const askGenerationRef = useRef(0);
-  // In-flight latch for the open effect below, which must not re-run when a
-  // turn starts or settles (a ref, not `asking`).
+  // Synchronous in-flight latch (audit `genie-v2`): two submits in one tick
+  // both read `asking === false` from their render's closure. Also read by
+  // the open effect below, which must not re-run when a turn starts/settles.
   const askInFlightRef = useRef(false);
   const genieOpenRef = useRef(genieOpen);
   useEffect(() => {
@@ -262,6 +268,12 @@ export function GenieChat() {
   ) => {
     const trimmed = q.trim();
     if (!trimmed) return;
+    // A second ask NEVER replaces a running turn (audit `genie-v2`). It used
+    // to abort the in-flight controller and swallow the abort, which silently
+    // destroyed a 200-second deep turn and left its question bubble unanswered.
+    // The controls are disabled while busy; this guard is what holds when a
+    // keypress or a stale chip gets through anyway. The draft is left intact.
+    if (askInFlightRef.current || actionRunning) return;
     askInFlightRef.current = true;
     const activeConversationId = followUpConversationId ?? conversationId;
     if (!activeConversationId) {
@@ -274,7 +286,6 @@ export function GenieChat() {
     setLiveProgress(null);
     setAskStartedAt(startedAt);
     const generation = ++askGenerationRef.current;
-    askAbortRef.current?.abort();
     const controller = new AbortController();
     askAbortRef.current = controller;
     const isCurrent = () => askGenerationRef.current === generation;
@@ -386,6 +397,8 @@ export function GenieChat() {
       setActionRunning(false);
     }
   };
+
+  const busyReason = asking ? ASKING_REASON : actionRunning ? ACTION_REASON : null;
 
   return (
     <>
@@ -566,6 +579,7 @@ export function GenieChat() {
                     onFollowUp={(q, followUpConversationId) =>
                       void ask(q, followUpConversationId, Date.now())
                     }
+                    followUpDisabledReason={busyReason}
                     onAction={(action) => runAction(action, m.payload)}
                     dense
                   />
@@ -661,15 +675,33 @@ export function GenieChat() {
             void ask(input, undefined, Date.now());
           }}
         >
+          {/* The input stays editable mid-turn so the next question can be
+              drafted; only sending is held (audit `genie-v2`). */}
           <input
             ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder="Ask about borrowers, segments, triggers…"
             aria-label="Ask Genie"
+            aria-describedby={busyReason ? COMPOSER_BUSY_HINT_ID : undefined}
           />
-          <Button variant="primary" size="sm" type="submit" icon="send" aria-label="Ask">Ask</Button>
+          <Button
+            variant="primary"
+            size="sm"
+            type="submit"
+            icon="send"
+            aria-label="Ask"
+            disabled={busyReason !== null}
+            title={busyReason ?? undefined}
+          >
+            Ask
+          </Button>
         </form>
+        {busyReason && (
+          <p id={COMPOSER_BUSY_HINT_ID} className="genie__input-hint">
+            {busyReason}
+          </p>
+        )}
       </div>
     </>
   );
