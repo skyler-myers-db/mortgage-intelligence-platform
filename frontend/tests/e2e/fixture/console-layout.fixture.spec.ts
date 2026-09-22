@@ -5,7 +5,7 @@
  * visual-05). Every assertion here reads geometry or computed style from the
  * production build; nothing is pinned as a known defect.
  */
-import type { Locator } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
 import { expect, test } from './test';
 
 interface Box {
@@ -92,5 +92,29 @@ test.describe('Console rail fits its own panel', () => {
     await expect(rowLabel).toHaveCSS('text-transform', 'uppercase');
     const fieldLabel = panel.locator('.property-lookup form label').first();
     await expect(fieldLabel).toHaveCSS('text-transform', 'none');
+  });
+});
+
+async function kpiRowTops(page: Page): Promise<number[]> {
+  const cards = page.locator('.kpi-row > .kpi');
+  await expect(cards).toHaveCount(4);
+  return cards.evaluateAll((elements) => elements.map((element) => Math.round(element.getBoundingClientRect().top)));
+}
+
+test.describe('KPI band never orphans a card', () => {
+  test('Home with the Console open lays four KPIs out without a lone card', async ({ app, page }) => {
+    await app.gotoRoute('/');
+    await app.openConsole();
+    const rows = new Map<number, number>();
+    for (const top of await kpiRowTops(page)) rows.set(top, (rows.get(top) ?? 0) + 1);
+    expect(rows.size, 'four KPIs occupy at most two rows').toBeLessThanOrEqual(2);
+    for (const [top, count] of rows) expect(count, `row at ${top}px holds more than one card`).toBeGreaterThanOrEqual(2);
+  });
+
+  test('a 1280-wide laptop without the Console shows four KPIs as 2x2', async ({ app, page }) => {
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await app.gotoRoute('/');
+    const tops = await kpiRowTops(page);
+    expect(new Set(tops).size).toBe(2);
   });
 });

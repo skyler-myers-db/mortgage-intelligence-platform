@@ -209,6 +209,17 @@
   gap: var(--gap-grid);
   justify-content: start;
 }
+/* Four KPIs in the 961-1280px container band (Console open at 1440x900, or a
+   1280 laptop) lay out 2x2 instead of the band's 3 + 1, which orphaned the
+   fourth card on its own row (2026-09-21 audit responsive-06). The quantity
+   query outranks the band rule in 10-native-analytics.css by specificity and
+   leaves any other card count (the N-stage funnel row) on the band's three
+   columns. */
+@container main (min-width: 961px) and (max-width: 1280px) {
+  .kpi-row:has(> :nth-child(4):last-child) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
 .section-hdr { display: flex; align-items: baseline; justify-content: space-between; margin: 28px 0 12px; gap: var(--sp-4); }
 .section-hdr .h-2 { margin: 0; }
 .section-hdr__titleline {

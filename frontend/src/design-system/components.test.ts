@@ -320,6 +320,19 @@ describe('layout containment contracts', () => {
     expect(css).toMatch(/\.property-lookup--compact \.form-input\s*\{[^}]*inline-size:\s*100%;[^}]*min-inline-size:\s*0;/s);
   });
 
+  /**
+   * 2026-09-21 audit responsive-06: the 961-1280 band forced 3 columns and
+   * orphaned the fourth KPI (Console open at 1440, or a 1280 laptop). The
+   * quantity query lays exactly four cards out 2x2; other counts keep the
+   * band's three columns. Rendered proof: console-layout.fixture.spec.ts.
+   */
+  it('lays four KPIs out 2x2 in the 961-1280px container band', () => {
+    const css = designCss();
+    expect(css).toMatch(
+      /@container main \(min-width: 961px\) and \(max-width: 1280px\)\s*\{\s*\.kpi-row:has\(> :nth-child\(4\):last-child\)\s*\{\s*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);/s,
+    );
+  });
+
   it('lets segment cards wrap content instead of clipping labels or pending copy', () => {
     const css = designCss();
 
