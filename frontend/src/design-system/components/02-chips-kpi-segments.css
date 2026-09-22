@@ -257,14 +257,27 @@
   to { opacity: 1; transform: translateY(0); }
 }
 .spark__line--draw {
-  /* 220 is a safe over-estimate of the path length for the 64px spark;
-     the browser clamps the visible dash to the actual length. */
-  stroke-dasharray: 220;
-  stroke-dashoffset: 220;
-  animation: spark-draw 700ms var(--ease) 80ms forwards;
+  /* The stroke path sets pathLength="1" (Sparkline.tsx), so a dash of 1 is
+     exactly the visible line: the offset animates from fully hidden to
+     fully drawn across the whole --dur-draw window instead of finishing in
+     the first 50-100ms of it (audit motion-07; the old dash of 220 on a
+     ~64-124px path). Symmetric --ease-draw so the line neither snaps in
+     nor stalls. */
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: spark-draw var(--dur-draw) var(--ease-draw) 80ms forwards;
 }
 @keyframes spark-draw {
   to { stroke-dashoffset: 0; }
+}
+/* The gradient fill used to pop in under a still-drawing line; fade it
+   over the same window (opacity only: compositor-friendly). */
+.spark__area--fade {
+  opacity: 0;
+  animation: spark-area-fade var(--dur-draw) var(--ease-draw) 80ms forwards;
+}
+@keyframes spark-area-fade {
+  to { opacity: 1; }
 }
 @media (prefers-reduced-motion: reduce) {
   .kpi__value--enter { animation: none; }
@@ -272,6 +285,10 @@
     animation: none;
     stroke-dasharray: none;
     stroke-dashoffset: 0;
+  }
+  .spark__area--fade {
+    animation: none;
+    opacity: 1;
   }
 }
 .kpi__delta {

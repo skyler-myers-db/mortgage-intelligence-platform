@@ -160,6 +160,27 @@ describe('layout containment contracts', () => {
     expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.spark__line--draw\s*\{[^}]*stroke-dashoffset:\s*0;/s);
   });
 
+  /**
+   * Audit motion-07: a dash of 220 on a ~64-124px path drew the line in the
+   * first 50-100ms of its window. The stroke path sets pathLength="1"
+   * (Sparkline.tsx), so the dash and offset must be exactly 1 and the draw
+   * must run on the shared draw tokens; the area fill fades in over the same
+   * window and reduced motion shows both fully.
+   */
+  it('draws the sparkline 1:1 against a normalised path and fades the area over the same window', () => {
+    const css = designCss();
+    expect(css).toMatch(/\.spark__line--draw\s*\{[^}]*stroke-dasharray:\s*1;/s);
+    expect(css).toMatch(/\.spark__line--draw\s*\{[^}]*stroke-dashoffset:\s*1;/s);
+    expect(css).toMatch(/\.spark__line--draw\s*\{[^}]*animation:\s*spark-draw var\(--dur-draw\) var\(--ease-draw\)/s);
+    expect(css).toMatch(/\.spark__area--fade\s*\{[^}]*opacity:\s*0;/s);
+    expect(css).toMatch(/\.spark__area--fade\s*\{[^}]*animation:\s*spark-area-fade var\(--dur-draw\) var\(--ease-draw\)/s);
+    expect(css).toMatch(/@keyframes spark-area-fade\s*\{[^}]*to\s*\{\s*opacity:\s*1;/s);
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.spark__area--fade\s*\{[^}]*opacity:\s*1;/s);
+    const tokens = tokensCss();
+    expect(tokens).toMatch(/--dur-draw:\s*700ms;/);
+    expect(tokens).toMatch(/--ease-draw:\s*cubic-bezier\(/);
+  });
+
   it('gives the funnel Sankey a focus-visible affordance and a reduced-motion off-switch (Buyer-Wow #5)', () => {
     const css = designCss();
     expect(css).toContain('.funnel-sankey__node');
