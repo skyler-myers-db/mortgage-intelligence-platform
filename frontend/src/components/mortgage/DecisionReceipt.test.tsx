@@ -17,9 +17,11 @@ vi.mock('../../lib/api', () => {
   class ApiError extends Error {
     status: number | null;
 
-    constructor(message: string, status: number | null = 500) {
+    // Same signature as the real ApiError (lib/apiTransport.ts) so the
+    // call sites below type-check against the module they import.
+    constructor(message: string, opts: { path: string; status?: number | null } = { path: '' }) {
       super(message);
-      this.status = status;
+      this.status = opts.status ?? 500;
     }
   }
   return { api: apiMocks, ApiError };
@@ -178,7 +180,7 @@ describe('DecisionReceipt', () => {
   });
 
   it('shows a neutral "Recorded; receipt unavailable" state with the audit id on a scoped 403', async () => {
-    apiMocks.auditReceipt.mockRejectedValue(new ApiError('forbidden', 403));
+    apiMocks.auditReceipt.mockRejectedValue(new ApiError('forbidden', { path: '/api/v1/audit/receipt', status: 403 }));
     mount();
     await settle();
 
@@ -190,7 +192,7 @@ describe('DecisionReceipt', () => {
   });
 
   it('offers a retry for a non-scoped read-back failure', async () => {
-    apiMocks.auditReceipt.mockRejectedValueOnce(new ApiError('lakebase unavailable', 503)).mockResolvedValue(LEDGER);
+    apiMocks.auditReceipt.mockRejectedValueOnce(new ApiError('lakebase unavailable', { path: '/api/v1/audit/receipt', status: 503 })).mockResolvedValue(LEDGER);
     mount();
     await settle();
 
