@@ -65,6 +65,10 @@ interface GenieAnswerProps {
    *  a second ask that silently aborted the running one (audit 2026-09-21
    *  `genie-v2`). */
   followUpDisabledReason?: string | null;
+  /** Mount the answer's own screen-reader status region. The floating panel
+   *  passes `false` because it owns one persistent announcer that also speaks
+   *  while the panel is closed (audit 2026-09-21 `a11y-06`). */
+  announce?: boolean;
 }
 
 export function GenieAnswer({
@@ -75,6 +79,7 @@ export function GenieAnswer({
   dense = false,
   withChart = false,
   followUpDisabledReason = null,
+  announce = true,
 }: GenieAnswerProps) {
   const { answer, metric_value, table_rows, follow_up_questions, actions } = payload;
   const { setDrawer } = useApp();
@@ -217,9 +222,11 @@ export function GenieAnswer({
 
   return (
     <div className="genie-answer">
-      <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
-        {liveAnswerAnnouncement}
-      </div>
+      {announce && (
+        <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+          {liveAnswerAnnouncement}
+        </div>
+      )}
       {sourceDisclosure && (
         <div
           className="genie-answer__api-source"

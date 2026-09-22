@@ -9,6 +9,7 @@
  *   runtime-v2             one Escape closes one layer, and Genie only when
  *                          focus is inside it
  *   genie-v2               a second ask mid-turn never replaces the first
+ *   genie-v1 / a11y-06     one persistent announcer, outside the panel
  */
 
 import { act, useRef } from 'react';
@@ -226,6 +227,11 @@ describe('floating Genie survivability', () => {
     if (!el) throw new Error('FAB not rendered');
     return el;
   };
+  const announcer = () => {
+    const el = container.querySelector<HTMLElement>('[data-genie-announcer="panel"]');
+    if (!el) throw new Error('panel announcer not rendered');
+    return el;
+  };
   const pressEscape = () => {
     act(() => {
       window.dispatchEvent(
@@ -288,6 +294,7 @@ describe('floating Genie survivability', () => {
     expect(fab().classList.contains('is-genie-ready')).toBe(true);
     expect(document.getElementById('genie-launcher-status')?.textContent).toContain('answer ready');
     expect(getGenieTurnStatus()).toBe('ready');
+    expect(announcer().textContent).toBe('Answer ready');
 
     setOpen(true);
     await flush();
@@ -321,6 +328,7 @@ describe('floating Genie survivability', () => {
     expect(container.querySelectorAll('.genie__msg')).toHaveLength(0);
     expect(window.localStorage.getItem('mip.genie.conversationId')).toBeNull();
     expect(fab().classList.contains('is-genie-ready')).toBe(false);
+    expect(announcer().textContent).toBe('');
 
     // And the composer is usable again for the new actor.
     setOpen(true);
@@ -422,6 +430,37 @@ describe('floating Genie survivability', () => {
     expect(mocks.setGenieOpen).toHaveBeenCalledTimes(1);
     expect(mocks.setGenieOpen).toHaveBeenCalledWith(false);
     expect(closeDrawer).toHaveBeenCalledTimes(1);
+  });
+
+  it('announces through one persistent region outside the panel, never from inside it (a11y-06)', async () => {
+    render();
+    const turn = await startLiveTurn('How many borrowers are in the money?');
+
+    // The announcer is not inside the dialog (which is aria-hidden when
+    // closed), and nothing inside the dialog is a live region mid-turn.
+    expect(dialog().contains(announcer())).toBe(false);
+    expect(dialog().querySelectorAll('[role="status"], [aria-live]')).toHaveLength(0);
+    const ticker = dialog().querySelector('.genie-progress__elapsed');
+    expect(ticker).not.toBeNull();
+    expect(ticker?.closest('[role="status"], [aria-live]')).toBeNull();
+    expect(announcer().textContent).toBe('Waiting for Genie response');
+
+    await act(async () => {
+      turn.progress.resolve(TERMINAL);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await waitUntil(() => mocks.genieComplete.mock.calls.length === 1);
+    // Genie's own turn is done but the answer is NOT renderable yet.
+    expect(announcer().textContent).toBe('Verifying the answer against its rows');
+    expect(container.textContent).not.toContain('Answer ready');
+
+    await act(async () => {
+      turn.complete.resolve(answer());
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await waitUntil(() => announcer().textContent === 'Answer ready');
+    // The settled answer mounts no second, pre-populated status region.
+    expect(dialog().querySelectorAll('[role="status"]')).toHaveLength(0);
   });
 
   it('shows a turn the /ask-genie route settled while the panel sat closed', async () => {

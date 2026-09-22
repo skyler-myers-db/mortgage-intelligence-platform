@@ -13,7 +13,7 @@ import type { GenieActionSuggestion, GenieAnswer as GenieAnswerShape } from '../
 import { Icon } from '../Icon';
 import { Button, Chip, EvidenceChip } from '../Primitives';
 import { GenieAnswer, GOVERNED_ACTION_SOURCE } from './GenieAnswer';
-import { GenieProgress } from './GenieProgress';
+import { GenieProgress, genieProgressLabel } from './GenieProgress';
 import { drawerForAsset } from '../../lib/drawerSources';
 import {
   GENIE_CONVERSATION_RESET_EVENT,
@@ -110,6 +110,8 @@ export function GenieChat() {
   const [historyOpen, setHistoryOpen] = useState(false);
   // An answer that landed while the panel was closed and has not been opened.
   const [unseenAnswer, setUnseenAnswer] = useState(false);
+  // What the persistent screen-reader announcer says once a turn settles.
+  const [announcement, setAnnouncement] = useState('');
   // Live lifecycle telemetry for the in-flight turn (stage, public process
   // steps, generated SQL) driven by the submit → progress → complete flow.
   const [liveProgress, setLiveProgress] = useState<GenieLiveProgress | null>(null);
@@ -178,8 +180,8 @@ export function GenieChat() {
       setConversationId(null);
       // An actor-boundary reset / 403 invalidates the transcript too: the
       // conversation is not resumable and the prior actor's questions must
-      // not linger in this tab — including the in-flight question and the
-      // unseen-answer badge.
+      // not linger in this tab — including the in-flight question, the
+      // unseen-answer badge and the last spoken announcement.
       clearGenieTurns();
       setPendingQuestion(null);
       setInput('');
@@ -189,6 +191,7 @@ export function GenieChat() {
       setLiveProgress(null);
       setAskStartedAt(null);
       setUnseenAnswer(false);
+      setAnnouncement('');
     };
     window.addEventListener(GENIE_CONVERSATION_RESET_EVENT, onActorBoundaryReset);
     return () => {
@@ -248,10 +251,11 @@ export function GenieChat() {
     setGenieTurnStatus(launcherStatus);
   }, [launcherStatus]);
 
-  /** One settled bubble: append to the shared transcript and badge the
-   *  launcher if the panel is closed. */
-  const landBubble = (question: string, payload: GenieAnswerShape) => {
+  /** One settled bubble: append to the shared transcript, tell screen
+   *  readers, and badge the launcher if the panel is closed. */
+  const landBubble = (question: string, payload: GenieAnswerShape, spoken: string) => {
     appendGenieTurn(question, payload);
+    setAnnouncement(spoken);
     if (!genieOpenRef.current) setUnseenAnswer(true);
   };
 
@@ -304,7 +308,9 @@ export function GenieChat() {
         setConversationId(returnedConversationId);
         writeGenieConversationId(returnedConversationId);
       }
-      landBubble(trimmed, res);
+      // The only place "Answer ready" is ever said: the governed answer is in
+      // hand and renderable (audit `genie-01` phase 0, `a11y-06`).
+      landBubble(trimmed, res, 'Answer ready');
     } catch (err) {
       if (!isCurrent() || isAbortError(err)) return;
       if (err instanceof ApiError && err.status === 403) {
@@ -317,7 +323,11 @@ export function GenieChat() {
           : err instanceof Error
             ? `Genie session reset: ${err.message}`
             : 'Genie session reset.';
-      landBubble(trimmed, { answer, source: 'degraded', trusted_assets: [] });
+      landBubble(
+        trimmed,
+        { answer, source: 'degraded', trusted_assets: [] },
+        'Genie could not complete this question.',
+      );
     } finally {
       // A superseded turn (reset / teardown) already had its state cleared by
       // whoever invalidated it, in-flight latch included.
@@ -372,19 +382,23 @@ export function GenieChat() {
       });
       if (!result.ok) {
         const failed = `Action failed: ${result.message}`;
-        landBubble('', { answer: failed, source: 'degraded', trusted_assets: [] });
+        landBubble('', { answer: failed, source: 'degraded', trusted_assets: [] }, failed);
         return;
       }
       if (action.action_type === 'save_borrowers') refreshWorkspace();
       const confirmed = result.audit_event_id
         ? `${result.message} Audit event ${result.audit_event_id}.`
         : result.message;
-      landBubble('', {
-        answer: confirmed,
-        source: GOVERNED_ACTION_SOURCE,
-        trusted_assets: [],
-        conversation_id: payload.conversation_id,
-      });
+      landBubble(
+        '',
+        {
+          answer: confirmed,
+          source: GOVERNED_ACTION_SOURCE,
+          trusted_assets: [],
+          conversation_id: payload.conversation_id,
+        },
+        confirmed,
+      );
       if (result.route) navigate(result.route);
     } catch (err) {
       if (err instanceof ApiError && err.status === 403) {
@@ -392,21 +406,30 @@ export function GenieChat() {
         clearGenieConversationState({ notify: true });
       }
       const failed = err instanceof Error ? `Action failed: ${err.message}` : 'Action failed.';
-      landBubble('', { answer: failed, source: 'degraded', trusted_assets: [] });
+      landBubble('', { answer: failed, source: 'degraded', trusted_assets: [] }, failed);
     } finally {
       setActionRunning(false);
     }
   };
 
   const busyReason = asking ? ASKING_REASON : actionRunning ? ACTION_REASON : null;
+  // While a turn runs the announcer carries stage CHANGES only (the same
+  // label the progress card shows); once it settles, the landing message.
+  const announcerText = asking ? genieProgressLabel(liveProgress) : announcement;
 
   return (
     <>
-      {/* Lives OUTSIDE `.genie`: the panel is aria-hidden while closed, and
-          the launchers' `aria-describedby` target must keep working then. */}
+      {/* Both live OUTSIDE `.genie`: the panel is aria-hidden while closed,
+          and these must keep working then. The first is the launchers'
+          `aria-describedby` target; the second is the panel's ONE persistent
+          polite announcer (audit `a11y-06`): stage changes, then "Answer
+          ready" once. The elapsed ticker is nowhere near it. */}
       <span id={GENIE_LAUNCHER_STATUS_ID} className="sr-only">
         {genieLauncherStatusText(launcherStatus)}
       </span>
+      <div className="sr-only" role="status" aria-live="polite" data-genie-announcer="panel">
+        {announcerText}
+      </div>
       <button
         ref={fabRef}
         className={[
@@ -580,6 +603,7 @@ export function GenieChat() {
                       void ask(q, followUpConversationId, Date.now())
                     }
                     followUpDisabledReason={busyReason}
+                    announce={false}
                     onAction={(action) => runAction(action, m.payload)}
                     dense
                   />
@@ -636,7 +660,12 @@ export function GenieChat() {
           {typing && (
             <div className="genie__msg genie__msg--ai">
               <div className="bubble">
-                <GenieProgress dense progress={liveProgress} startedAt={askStartedAt} />
+                <GenieProgress
+                  dense
+                  progress={liveProgress}
+                  startedAt={askStartedAt}
+                  announce={false}
+                />
               </div>
             </div>
           )}
