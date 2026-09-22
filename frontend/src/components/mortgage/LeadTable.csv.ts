@@ -2,16 +2,9 @@ import type { LeadSummary } from '../../types';
 import type { LeadExportContext } from './LeadTable.types';
 import { offerDisplayLabel } from '../../lib/offerLanguage';
 import { safeSegmentName } from '../../lib/segmentMetadata';
-
-/**
- * Formula-injection-safe CSV cell: a leading `= + - @` is neutralised with a
- * quote prefix before the usual quoting. Exported so the audit explorer's
- * page export (flow-04) writes cells through the same gate.
- */
-export function csvEscape(raw: string): string {
-  const v = /^[=+\-@]/.test(raw) ? `'${raw}` : raw;
-  return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
-}
+// The formula-injection gate lives in lib/csv.ts, shared with the audit
+// explorer's page export (flow-04).
+import { csvEscape, downloadCsvText } from '../../lib/csv';
 
 function csvValue(raw: unknown): string {
   if (raw === null || raw === undefined) return '';
@@ -77,15 +70,7 @@ export function describeLeadCsvExport(plan: LeadCsvExportPlan, rowOrder: string)
 
 /** Anchor-download the CSV. Client-side only: no server export endpoint. */
 export function downloadLeadCsv(csv: string): void {
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `mip-leads-${new Date().toISOString().slice(0, 10)}.csv`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  downloadCsvText(csv, `mip-leads-${new Date().toISOString().slice(0, 10)}.csv`);
 }
 
 export function buildLeadCsv(
