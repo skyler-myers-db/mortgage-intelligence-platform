@@ -21,6 +21,16 @@ interface ControlBox extends Box {
 
 const CONTROL_SELECTOR = 'button, input, select, textarea, a[href]';
 
+function overlaps(a: Box, b: Box): boolean {
+  return a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+}
+
+async function boxOf(locator: Locator): Promise<Box> {
+  const box = await locator.boundingBox();
+  if (!box) throw new Error('element has no bounding box');
+  return { left: box.x, top: box.y, right: box.x + box.width, bottom: box.y + box.height };
+}
+
 /**
  * Each control inside `.tweaks__body`, scrolled into view (the body scrolls
  * vertically by design) and measured against the panel's own box.
@@ -92,6 +102,52 @@ test.describe('Console rail fits its own panel', () => {
     await expect(rowLabel).toHaveCSS('text-transform', 'uppercase');
     const fieldLabel = panel.locator('.property-lookup form label').first();
     await expect(fieldLabel).toHaveCSS('text-transform', 'none');
+  });
+});
+
+test.describe('Console and Genie share the right edge without colliding', () => {
+  test('opening the Console then Genie keeps both panels apart and on screen', async ({ app, page }) => {
+    await app.gotoRoute('/');
+    const consolePanel = await app.openConsole();
+    const genie = await app.openGenie();
+
+    const consoleBox = await boxOf(consolePanel);
+    const genieBox = await boxOf(genie);
+    expect(overlaps(consoleBox, genieBox), 'the Genie panel must not sit under the Console').toBe(false);
+
+    const viewport = page.viewportSize();
+    if (!viewport) throw new Error('viewport size is unset');
+    expect(genieBox.left).toBeGreaterThanOrEqual(0);
+    expect(genieBox.right).toBeLessThanOrEqual(viewport.width);
+    expect(genieBox.top).toBeGreaterThanOrEqual(0);
+    expect(genieBox.bottom).toBeLessThanOrEqual(viewport.height);
+
+    // Interactive controls of each panel stay clear of the other panel.
+    const askBox = await boxOf(genie.getByRole('button', { name: 'Ask' }));
+    const inputBox = await boxOf(genie.getByRole('textbox', { name: 'Ask Genie' }));
+    const lightBox = await boxOf(consolePanel.getByRole('button', { name: 'Light' }));
+    expect(overlaps(askBox, consoleBox)).toBe(false);
+    expect(overlaps(inputBox, consoleBox)).toBe(false);
+    expect(overlaps(lightBox, genieBox)).toBe(false);
+
+    // Closing the Console returns the docked panel to its right-edge anchor.
+    await consolePanel.getByRole('button', { name: 'Close console' }).click();
+    await expect.poll(async () => (await boxOf(genie)).right).toBeGreaterThan(genieBox.right);
+  });
+
+  test('a Genie panel the user dragged keeps its own position', async ({ app, page }) => {
+    await app.gotoRoute('/');
+    const genie = await app.openGenie();
+    const header = genie.locator('.genie__hdr');
+    const start = await boxOf(header);
+    await page.mouse.move(start.left + 8, start.top + 8);
+    await page.mouse.down();
+    await page.mouse.move(start.left - 300, start.top - 200, { steps: 6 });
+    await page.mouse.up();
+    await expect(genie).toHaveClass(/is-undocked/);
+    const dragged = await boxOf(genie);
+    await app.openConsole();
+    expect(await boxOf(genie)).toEqual(dragged);
   });
 });
 

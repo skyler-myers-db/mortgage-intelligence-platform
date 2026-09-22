@@ -1,9 +1,13 @@
 /* ============================================================
    TWEAKS / CONSOLE PANEL
    ============================================================ */
+/* Docked Console width. Shared with the floating Genie panel, which moves
+   left of the Console while it is open (06-genie-chat.css); widened at
+   >= 2560px in 12-motion-and-viewport.css. */
+:root { --console-w: 300px; }
 .tweaks {
   position: fixed; inset: 72px var(--sp-4) var(--sp-4) auto;
-  width: 300px;
+  width: var(--console-w);
   background: var(--bg-1);
   border: 1px solid var(--line-2);
   border-radius: var(--r-lg);

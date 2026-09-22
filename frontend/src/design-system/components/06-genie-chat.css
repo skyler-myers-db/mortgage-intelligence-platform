@@ -24,6 +24,16 @@
 }
 .genie:not(.is-open) { visibility: hidden; }
 .genie.is-open { visibility: visible; }
+/* The docked panel and the Console share the right-edge anchor, and the
+   app's full-height Console (z --z-console) covered the right 300px of the
+   panel, including its composer (2026-09-21 audit responsive-v1). While the
+   Console is open the docked panel moves left of it so both stay usable.
+   An undocked (dragged) position is the user's own and is left alone; below
+   1280px the Console is a bottom sheet and 12-motion-and-viewport.css
+   handles that band. */
+[data-console="open"] .genie:not(.is-undocked) {
+  right: calc(var(--console-w) + var(--sp-4) * 2);
+}
 /* Resize handle — top-left corner. Visible affordance: an arrow
    glyph in a small square. Hover/focus brightens it so keyboard
    users can see when it's selected. The button itself is positioned

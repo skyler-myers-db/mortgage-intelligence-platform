@@ -381,6 +381,24 @@ describe('layout containment contracts', () => {
     expect(scale.palette).toBeGreaterThan(scale['map-tip']);
   });
 
+  /**
+   * 2026-09-21 audit responsive-v1: Console (--z-console) and the docked Genie
+   * panel shared the right-edge anchor, so both open at 1440x900 hid the
+   * panel's right 300px and its composer. The docked panel now moves left of
+   * the Console by its width; undocked (dragged) panels are left alone and
+   * the < 1280 bottom-sheet band drops the sheet under the Genie layer
+   * instead. Rendered proof: console-layout.fixture.spec.ts.
+   */
+  it('moves the docked Genie panel clear of an open Console', () => {
+    const css = designCss();
+    expect(css).toMatch(/:root\s*\{\s*--console-w:\s*300px;\s*\}/);
+    expect(css).toMatch(/\.tweaks\s*\{[^}]*width:\s*var\(--console-w\);/s);
+    expect(css).toMatch(/\[data-console="open"\] \.genie:not\(\.is-undocked\)\s*\{\s*right:\s*calc\(var\(--console-w\) \+ var\(--sp-4\) \* 2\);/s);
+    expect(css).toMatch(/@media \(max-width: 1279px\)\s*\{[\s\S]*?\.tweaks\s*\{[^}]*z-index:\s*var\(--z-sheet\);/s);
+    expect(css).toMatch(/@media \(min-width: 2560px\)\s*\{[\s\S]*?--console-w:\s*340px;/s);
+    expect(tokensCss()).toMatch(/--z-sheet:\s*25;/);
+  });
+
   it('lets segment cards wrap content instead of clipping labels or pending copy', () => {
     const css = designCss();
 

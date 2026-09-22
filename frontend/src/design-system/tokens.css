@@ -384,6 +384,7 @@ input[type="checkbox"] {
   --z-sticky: 5;        /* route nav */
   --z-topbar: 10;
   --z-menu: 20;         /* filter dropdowns */
+  --z-sheet: 25;        /* Console as a bottom sheet (< 1280px), under Genie */
   --z-genie-fab: 29;
   --z-genie: 30;
   --z-drawer-scrim: 40;

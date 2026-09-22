@@ -142,10 +142,19 @@
     width: auto;
     max-height: 50vh;
     border-radius: var(--r-lg) var(--r-lg) 0 0;
+    /* As a bottom sheet the Console spans the whole width, so the docked
+       Genie panel (whose inline height is the user's, up to 900px) cannot be
+       moved clear of it. The sheet drops below the Genie layer instead: the
+       panel stays whole and the sheet's left side stays reachable
+       (audit responsive-v1; degraded band only). */
+    z-index: var(--z-sheet);
   }
   [data-console="open"] .main {
     padding-right: var(--sp-6);
     padding-bottom: calc(50vh + var(--sp-6));
+  }
+  [data-console="open"] .genie:not(.is-undocked) {
+    right: var(--sp-4);
   }
 }
 
@@ -178,8 +187,8 @@
   [data-console="open"] .main {
     padding-right: 360px;
   }
-  .tweaks {
-    width: 340px;
+  :root {
+    --console-w: 340px;
   }
 }
 
