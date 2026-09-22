@@ -14,12 +14,13 @@ const apiMocks = vi.hoisted(() => ({
 }));
 
 vi.mock('../../lib/api', () => {
+  // Same constructor shape as the real ApiError (message, { path, status }).
   class ApiError extends Error {
     status: number | null;
 
-    constructor(message: string, status: number | null = 500) {
+    constructor(message: string, opts: { path: string; status?: number | null } = { path: '' }) {
       super(message);
-      this.status = status;
+      this.status = opts.status ?? null;
     }
   }
   return { api: apiMocks, ApiError };
@@ -46,6 +47,7 @@ import { PRINT_HOST_CLASS } from './DecisionReceipt.actions';
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const AUDIT_ID = '5b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d';
+const RECEIPT_PATH = `/api/v1/audit/receipt/${AUDIT_ID}`;
 
 const LEDGER: DecisionReceiptPayload = {
   audit_event_id: AUDIT_ID,
@@ -178,7 +180,7 @@ describe('DecisionReceipt', () => {
   });
 
   it('shows a neutral "Recorded; receipt unavailable" state with the audit id on a scoped 403', async () => {
-    apiMocks.auditReceipt.mockRejectedValue(new ApiError('forbidden', 403));
+    apiMocks.auditReceipt.mockRejectedValue(new ApiError('forbidden', { path: RECEIPT_PATH, status: 403 }));
     mount();
     await settle();
 
@@ -190,7 +192,7 @@ describe('DecisionReceipt', () => {
   });
 
   it('offers a retry for a non-scoped read-back failure', async () => {
-    apiMocks.auditReceipt.mockRejectedValueOnce(new ApiError('lakebase unavailable', 503)).mockResolvedValue(LEDGER);
+    apiMocks.auditReceipt.mockRejectedValueOnce(new ApiError('lakebase unavailable', { path: RECEIPT_PATH, status: 503 })).mockResolvedValue(LEDGER);
     mount();
     await settle();
 
