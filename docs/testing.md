@@ -92,7 +92,7 @@ Every fixture test fails, after its own assertions, on any of:
 | --- | --- |
 | `pageerror` | Uncaught exception or unhandled rejection in the page. |
 | `console.error` | Any `console.error`. An error thrown inside a timer callback also lands here, because the frozen clock runs timers itself. |
-| `csp` | A `securitypolicyviolation`. The harness serves every document with the production policy, read at test time from `SecurityHeadersMiddleware._CSP` in `backend/main.py`. |
+| `csp` | A `securitypolicyviolation`. The harness serves every document with the production policy, read at test time from `SecurityHeadersMiddleware._CSP` in `backend/services/security_headers.py` (falling back to `backend/main.py`). |
 | `request-failed` | A same-origin request that failed (aborted requests are ignored). |
 | `unregistered-api` | An API call with no registered fixture. |
 
