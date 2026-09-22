@@ -11,8 +11,9 @@
  *    light for print, where print.css relies on Canvas / CanvasText.
  *  - a11y-01: no partial paints text or a glyph with the amber fill hue
  *    (`color: var(--signal-warning)`, 2.15:1 on the light surfaces); warning
- *    copy and amber icons consume `--signal-warning-ink`, and the active
- *    evidence-drawer tab consumes `--accent-ink`, not `--accent`.
+ *    copy and amber icons consume `--signal-warning-ink`, the active
+ *    evidence-drawer tab consumes `--accent-ink`, not `--accent`, and the
+ *    three text inputs no longer switch the shared focus ring off.
  */
 import { describe, expect, it } from 'vitest';
 import { designCss } from '../test/designCss';
@@ -104,5 +105,23 @@ describe('warning copy and glyphs use the ink token (a11y-01)', () => {
   it('paints the active evidence-drawer tab with --accent-ink', () => {
     const active = rules(components).find((rule) => rule.selector === '.drawer__tab.is-active');
     expect(active?.block).toMatch(/(?<![-\w])color:\s*var\(--accent-ink\)/);
+  });
+});
+
+describe('text inputs keep the shared focus ring (a11y-01)', () => {
+  // These rules outrank the global `:focus-visible` (tokens.css), so an
+  // `outline: none` in them removed the ring and left only the prototype's
+  // 1px `--accent` border swap (design_files/index.html:770-772), 1.9:1 in
+  // light + bright and invisible under forced colours.
+  const TEXT_INPUTS = ['.genie__input input', '.admin-filter-input', '.form-input'];
+
+  it('never switches the outline off on a text-entry control', () => {
+    const all = rules(components);
+    for (const selector of TEXT_INPUTS) {
+      const own = all.filter((rule) => rule.selector.split(',').map((part) => part.trim()).includes(selector));
+      expect(own.length, `${selector} is still styled in the partials`).toBeGreaterThan(0);
+      const off = own.filter((rule) => /(?<![-\w])outline:\s*(?:none|0)(?![\w.%])/.test(rule.block));
+      expect(off.map((rule) => rule.selector), `${selector} must keep the global focus ring`).toEqual([]);
+    }
   });
 });

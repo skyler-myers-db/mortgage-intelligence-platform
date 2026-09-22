@@ -198,8 +198,12 @@
   flex: 1; background: var(--bg-2); border: 1px solid var(--line-1);
   color: var(--text-1); padding: 8px 12px; border-radius: var(--r-md);
   font-family: var(--font-sans); font-size: var(--fs-13);
-  outline: none;
 }
+/* The outline is deliberately left on: the global :focus-visible ring
+   (tokens.css, --focus-ring-*) marks focus. DELIBERATE departure from
+   design_files/index.html:770-772, which switched the outline off and kept
+   only this accent border swap: 1.9:1 in light + bright, and invisible under
+   forced colours (2026-09-21 audit a11y-01). The swap stays as a second cue. */
 .genie__input input:focus { border-color: var(--accent); }
 /* DELIBERATE DEVIATION from the prototype (re-audit 2026-06-11 corrected
    the earlier "parity" claim): Module 0 Prototype.html:773-785 renders the

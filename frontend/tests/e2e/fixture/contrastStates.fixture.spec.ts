@@ -13,10 +13,14 @@
  *  b. amber icon glyphs clear WCAG 1.4.11 3:1 on their tinted tiles: the
  *     Home approval queue and the degraded-dependency banner;
  *  c. the active evidence-drawer tab paints `--accent-ink` on its fill for
- *     every accent (it painted `--accent`, 1.75:1 in light + bright).
+ *     every accent (it painted `--accent`, 1.75:1 in light + bright);
+ *  d. the three text inputs whose rules switched the outline off (Genie
+ *     composer, property lookup `.form-input`, admin audit
+ *     `.admin-filter-input`) show the shared `--focus-ring-*` ring at 3:1.
  */
 import type { Locator, Page } from '@playwright/test';
 import type { HealthPayload } from '../../../src/lib/apiTypes';
+import type { AppDriver } from './app';
 import { HEALTH_OK } from './data/shell';
 import { json } from './mockApi';
 import { asComputedRgb, contrastRatio, parseRgb, renderedColors, tokenValue } from './renderedColor';
@@ -144,5 +148,60 @@ for (const accent of ACCENTS) {
     const ratio = contrastRatio(painted.fg, painted.bg);
     expect(ratio, `${painted.color} on rgb(${painted.bg.join(', ')}) = ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(AA_TEXT);
     expect(painted.color, 'paints --accent-ink').toBe(await asComputedRgb(page, await tokenValue(active, '--accent-ink')));
+  });
+}
+
+interface TextInputCase {
+  name: string;
+  route: string;
+  locate: (app: AppDriver, page: Page) => Promise<Locator>;
+}
+
+const TEXT_INPUTS: readonly TextInputCase[] = [
+  {
+    name: 'Genie composer',
+    route: '/',
+    locate: async (app) => (await app.openGenie()).getByRole('textbox', { name: 'Ask Genie' }),
+  },
+  {
+    name: 'property lookup .form-input',
+    route: '/lead-queue',
+    locate: async (_app, page) =>
+      page.locator('#main-content').getByRole('textbox', { name: 'Property lookup — street address' }),
+  },
+  {
+    name: 'admin audit .admin-filter-input',
+    route: '/admin-config',
+    locate: async (_app, page) => page.locator('#main-content .admin-filter-input').first(),
+  },
+];
+
+for (const input of TEXT_INPUTS) {
+  test(`light: the ${input.name} shows the shared focus ring`, async ({ app, page }) => {
+    await app.setTheme('light');
+    await app.gotoRoute(input.route);
+    const field = await input.locate(app, page);
+    await expect(field).toBeVisible();
+
+    await page.keyboard.press('Tab');
+    await field.focus();
+    const ring = await field.evaluate((el) => {
+      const style = getComputedStyle(el);
+      return {
+        matchesFocusVisible: el.matches(':focus-visible'),
+        outlineStyle: style.outlineStyle,
+        outlineWidth: style.outlineWidth,
+        outlineColor: style.outlineColor,
+        token: style.getPropertyValue('--focus-ring-color').trim(),
+      };
+    });
+    expect(ring.matchesFocusVisible).toBe(true);
+    expect(ring.outlineStyle, 'the rule must not switch the global ring off').toBe('solid');
+    expect(ring.outlineWidth).toBe('2px');
+    expect(ring.outlineColor).toBe(await asComputedRgb(page, ring.token));
+    // The ring is drawn outside the field, on its container's surface.
+    const surface = await renderedColors(field.locator('xpath=..'));
+    const ratio = contrastRatio(parseRgb(ring.outlineColor), surface.bg);
+    expect(ratio, `${ring.outlineColor} on rgb(${surface.bg.join(', ')})`).toBeGreaterThanOrEqual(AA_UI);
   });
 }
