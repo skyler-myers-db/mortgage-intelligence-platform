@@ -385,6 +385,7 @@ class _FakeLakebaseClient:
                 if disposition
                 else ("queued" if action == "approve" else "none"),
                 "approval_id": approval.get("approval_id") if action == "approve" else None,
+                "audit_event_id": approval.get("audit_event_id") if approval else None,
                 "approved_at": approval.get("decided_at") if action == "approve" else None,
                 "outreach_at": disposition.get("occurred_at") if disposition else None,
                 "synced_at": datetime.now(UTC),
