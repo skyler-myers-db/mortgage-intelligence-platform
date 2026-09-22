@@ -1,0 +1,46 @@
+/* ============================================================
+   GENIE CONVERSATIONAL CONTROLS, PAGE-CONTEXT ENTRY POINTS AND
+   ANSWER TOOLBAR (audit 2026-09-21 wave 1: genie-03, genie-04, genie-06)
+
+   Every rule here is an additive BEM extension of a prototype block. The
+   prototype (design_files/index.html) has no Stop, Edit or Regenerate on
+   its chat bubbles (lines 741-760), no assistant affordance on `.kpi` or
+   `.seg-card`, and no toolbar under a Genie answer. Shapes reuse the
+   existing `.btn .btn--ghost .btn--sm` and `.chip` vocabulary; only
+   placement is new. Tokens only: no literal colors or pixel values.
+   ============================================================ */
+
+/* Turn controls under the progress bubble (Stop). */
+.genie__turn-controls {
+  display: flex;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}
+
+/* Per-bubble actions: Edit under a question; Regenerate / Retry under an
+   answer. The question row hugs the right edge like the bubble above it
+   (`.genie__body` and `.genie-thread` are flex columns). */
+.genie__msg-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+}
+.genie__msg-actions--user {
+  align-self: flex-end;
+  max-width: 92%;
+  /* Tuck the row under its bubble instead of a full column gap away. */
+  margin-top: calc(var(--sp-2) * -1);
+}
+.genie__msg--ai .genie__msg-actions {
+  margin-top: var(--sp-2);
+}
+
+/* A stopped turn: the question stays in the transcript and the answer slot
+   says the reply was discarded. */
+.genie__msg--stopped .bubble {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--text-3);
+}

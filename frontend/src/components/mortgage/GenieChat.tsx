@@ -3,6 +3,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
 import { useNavigate } from 'react-router';
@@ -23,6 +24,7 @@ import {
 import {
   appendGenieTurn,
   clearGenieTurns,
+  getGenieTurns,
   setGenieTurns,
   type GenieTurn,
 } from '../../lib/genieConversationStore';
@@ -38,7 +40,7 @@ import { useGeniePanelDismissal } from './useGeniePanelDismissal';
 import { useGenieTranscript } from './useGenieTranscript';
 import { useGenieTranscriptScroll } from './useGenieTranscriptScroll';
 import { GenieHistoryMenu } from './GenieHistoryMenu';
-import { GenieChatBody } from './GenieChatBody';
+import { GenieChatBody, type StoppedTurn } from './GenieChatBody';
 import { shouldPersistConversation, sourceAssetsFor } from './GenieChat.helpers';
 
 export {
@@ -62,6 +64,14 @@ export {
  * badge until the panel is opened again. The actor-boundary reset still
  * aborts the turn and clears everything.
  *
+ * Conversational controls (audit 2026-09-21 `genie-03`, client-only slice):
+ * Stop abandons the client turn, bumps the generation so a late reply is
+ * ignored, gives the question back to the composer and leaves a "Stopped"
+ * note in the transcript; Retry / Regenerate re-ask as a NEW turn (a Genie
+ * thread cannot rewrite its history); Edit reloads a sent question; ArrowUp
+ * in an empty composer recalls the last question. There is no server-side
+ * cancel: Genie may still finish a stopped turn, and its reply is discarded.
+ *
  * The AI message shape now holds the full GenieAnswer payload so
  * metric_value / table_rows / follow_up_questions all render in the bubble
  * via the shared <GenieAnswer> subcomponent.
@@ -69,8 +79,10 @@ export {
 
 const COMPOSER_BUSY_HINT_ID = 'genie-composer-busy';
 const ASKING_REASON =
-  'Genie is still answering. Keep drafting: Ask unlocks when this answer lands. Closing the panel does not stop it.';
+  'Genie is still answering. Keep drafting: Ask unlocks when this answer lands, or press Stop. Closing the panel does not stop it.';
 const ACTION_REASON = 'A governed action is running. Ask unlocks when it finishes.';
+/** Stopped-turn notes kept in the panel (they are not transcript turns). */
+const MAX_STOPPED_TURNS = 20;
 
 export function GenieChat() {
   const { genieOpen, setGenieOpen, lender, refreshWorkspace } = useApp();
@@ -95,9 +107,11 @@ export function GenieChat() {
   // steps, generated SQL) driven by the submit → progress → complete flow.
   const [liveProgress, setLiveProgress] = useState<GenieLiveProgress | null>(null);
   const [askStartedAt, setAskStartedAt] = useState<number | null>(null);
+  // Turns the user stopped, kept in transcript order (see GenieChatBody).
+  const [stoppedTurns, setStoppedTurns] = useState<StoppedTurn[]>([]);
   // Abort + generation control for the in-flight live turn (QA M3): a
-  // conversation reset or New thread must stop the poll loop, and a turn
-  // that resolves AFTER a reset must not re-persist the previous actor's
+  // conversation reset, New thread or Stop must stop the poll loop, and a
+  // turn that resolves AFTER that must not re-persist the previous actor's
   // conversation id or append an orphan bubble to the cleared thread.
   const askAbortRef = useRef<AbortController | null>(null);
   const askGenerationRef = useRef(0);
@@ -105,6 +119,8 @@ export function GenieChat() {
   // both read `asking === false` from their render's closure. Also read by
   // the open effect below, which must not re-run when a turn starts/settles.
   const askInFlightRef = useRef(false);
+  // The most recently sent question (ArrowUp recall); read in handlers only.
+  const lastQuestionRef = useRef<string | null>(null);
   // The reset listener below is bound once, before the scroll hook exists.
   const cancelAnchorRef = useRef<() => void>(() => undefined);
   const genieOpenRef = useRef(genieOpen);
@@ -158,11 +174,12 @@ export function GenieChat() {
       askAbortRef.current?.abort();
       askAbortRef.current = null;
       askInFlightRef.current = false;
+      lastQuestionRef.current = null;
       setConversationId(null);
       // An actor-boundary reset / 403 invalidates the transcript too: the
       // conversation is not resumable and the prior actor's questions must
       // not linger in this tab — including the in-flight question, the
-      // unseen-answer badge and the last spoken announcement.
+      // stopped notes, the unseen-answer badge and the last announcement.
       clearGenieTurns();
       setPendingQuestion(null);
       setInput('');
@@ -171,6 +188,7 @@ export function GenieChat() {
       setHistoryOpen(false);
       setLiveProgress(null);
       setAskStartedAt(null);
+      setStoppedTurns([]);
       setUnseenAnswer(false);
       setAnnouncement('');
       cancelAnchorRef.current();
@@ -231,6 +249,17 @@ export function GenieChat() {
     if (!askInFlightRef.current) setConversationId(readGenieConversationId());
   }, [genieOpen]);
 
+  /** Put `text` in the composer and move the caret to its end. */
+  const loadComposer = useCallback((text: string) => {
+    setInput(text);
+    queueMicrotask(() => {
+      const el = inputRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(text.length, text.length);
+    });
+  }, []);
+
   // Launcher status for the topbar toggle and the FAB. Only meaningful while
   // the panel is closed; an open panel shows its own progress.
   const launcherStatus: GenieTurnStatus = genieOpen
@@ -274,6 +303,7 @@ export function GenieChat() {
     // keypress or a stale chip gets through anyway. The draft is left intact.
     if (askInFlightRef.current || actionRunning) return;
     askInFlightRef.current = true;
+    lastQuestionRef.current = trimmed;
     const activeConversationId = followUpConversationId ?? conversationId;
     if (!activeConversationId) {
       setConversationId(null);
@@ -295,8 +325,8 @@ export function GenieChat() {
           if (isCurrent()) setLiveProgress(p);
         },
       })) as GenieAnswerShape;
-      // A reset/new-thread while in flight invalidates this turn: never
-      // re-persist its conversation id or append to the cleared thread.
+      // A reset / new thread / Stop while in flight invalidates this turn:
+      // never re-persist its conversation id or append it to the thread.
       if (!isCurrent()) return;
       const returnedConversationId = res.conversation_id ?? null;
       if (returnedConversationId && shouldPersistConversation(res)) {
@@ -324,8 +354,8 @@ export function GenieChat() {
         'Genie could not complete this question.',
       );
     } finally {
-      // A superseded turn (reset / teardown) already had its state cleared by
-      // whoever invalidated it, in-flight latch included.
+      // A superseded turn (reset / teardown / Stop) already had its state
+      // cleared by whoever invalidated it, in-flight latch included.
       if (isCurrent()) {
         askInFlightRef.current = false;
         askAbortRef.current = null;
@@ -337,11 +367,48 @@ export function GenieChat() {
     }
   };
 
+  /**
+   * Stop the in-flight live turn (genie-03, client-only). The generation bump
+   * is what makes a reply that still arrives -- the server keeps working;
+   * there is no cancel endpoint yet -- land nowhere: not in the transcript,
+   * not in the persisted conversation id. The abort ends the poll loop. The
+   * question goes back to the composer unless the user is drafting another
+   * one there (a draft is never overwritten; the note's Edit reloads the
+   * stopped question), and a "Stopped" note keeps the transcript honest. New
+   * thread and History unlock because nothing is in flight any more.
+   */
+  const stopTurn = () => {
+    if (!askInFlightRef.current) return;
+    askGenerationRef.current += 1;
+    askAbortRef.current?.abort();
+    askAbortRef.current = null;
+    askInFlightRef.current = false;
+    const question = pendingQuestion ?? '';
+    setAsking(false);
+    setPendingQuestion(null);
+    setLiveProgress(null);
+    setAskStartedAt(null);
+    cancelAnchor();
+    const restore = question !== '' && input.trim() === '';
+    if (question) {
+      setStoppedTurns((prev) =>
+        [...prev, { atTurnIndex: getGenieTurns().length, question }].slice(-MAX_STOPPED_TURNS),
+      );
+    }
+    if (restore) loadComposer(question);
+    setAnnouncement(
+      restore
+        ? 'Stopped. The question is back in the composer.'
+        : 'Stopped. Your draft was kept; Edit reloads the stopped question.',
+    );
+  };
+
   const newConversation = () => {
     if (typing) return;
     suppressBootstrapConversationRef.current = true;
     setConversationId(null);
     clearGenieTurns();
+    setStoppedTurns([]);
     setInput('');
     setHistoryOpen(false);
     clearGenieConversationState({ notify: true });
@@ -360,6 +427,7 @@ export function GenieChat() {
     askAbortRef.current?.abort();
     suppressBootstrapConversationRef.current = true;
     setGenieTurns(turns);
+    setStoppedTurns([]);
     cancelAnchor();
     setConversationId(conversationIdToLoad);
     writeGenieConversationId(conversationIdToLoad);
@@ -406,6 +474,18 @@ export function GenieChat() {
     } finally {
       setActionRunning(false);
     }
+  };
+
+  /** ArrowUp in an EMPTY composer recalls the last question (genie-03). */
+  const onComposerKeyDown = (e: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (e.key !== 'ArrowUp' || input !== '') return;
+    const lastFromTranscript = [...msgs].reverse().find((m) => m.who === 'user');
+    const last =
+      lastQuestionRef.current ??
+      (lastFromTranscript && lastFromTranscript.who === 'user' ? lastFromTranscript.text : null);
+    if (!last) return;
+    e.preventDefault();
+    loadComposer(last);
   };
 
   const busyReason = asking ? ASKING_REASON : actionRunning ? ACTION_REASON : null;
@@ -587,7 +667,9 @@ export function GenieChat() {
           bodyRef={bodyRef}
           lastAnswerRef={lastAnswerRef}
           messages={msgs}
+          stoppedTurns={stoppedTurns}
           pendingQuestion={pendingQuestion}
+          asking={asking}
           typing={typing}
           liveProgress={liveProgress}
           askStartedAt={askStartedAt}
@@ -595,6 +677,8 @@ export function GenieChat() {
           starters={sampleQuestions}
           onAsk={(q, followUpConversationId) => void ask(q, followUpConversationId, Date.now())}
           onAction={runAction}
+          onEdit={loadComposer}
+          onStop={stopTurn}
         />
         <form
           className="genie__input"
@@ -609,6 +693,7 @@ export function GenieChat() {
             ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
+            onKeyDown={onComposerKeyDown}
             placeholder="Ask about borrowers, segments, triggers…"
             aria-label="Ask Genie"
             aria-describedby={busyReason ? COMPOSER_BUSY_HINT_ID : undefined}
