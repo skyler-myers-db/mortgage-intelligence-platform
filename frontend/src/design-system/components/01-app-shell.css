@@ -44,6 +44,9 @@
     animation-iteration-count: 1 !important;
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
+    /* The drawer and Genie panel hold `visibility` for --dur-exit so their
+       slide / fade is seen; with reduced motion they must hide at once. */
+    transition-delay: 0s !important;
   }
 
   .topbar,

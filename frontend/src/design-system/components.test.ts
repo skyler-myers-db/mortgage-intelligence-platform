@@ -399,6 +399,40 @@ describe('layout containment contracts', () => {
     expect(tokensCss()).toMatch(/--z-sheet:\s*25;/);
   });
 
+  /**
+   * 2026-09-21 audit motion-01 / css-03: `visibility` was not in the drawer's
+   * or the Genie panel's transition list, so each flipped hidden the instant
+   * it closed and its slide / fade never showed. The closed rule now holds
+   * visibility for --dur-exit; the open rule flips it at 0s; reduced motion
+   * zeroes the delay. The Console gains an @starting-style entry and an
+   * allow-discrete display exit (additive to the prototype's hard cut).
+   * Rendered proof: console-layout.fixture.spec.ts.
+   */
+  it('lets the drawer, Genie panel and Console animate out before they hide', () => {
+    const css = designCss();
+    const tokens = tokensCss();
+    expect(tokens).toMatch(/--dur-exit:\s*216ms;/);
+    expect(tokens).toMatch(/--ease-exit:\s*cubic-bezier\(/);
+
+    expect(css).toMatch(/\.drawer\s*\{[^}]*visibility:\s*hidden;[^}]*transition:\s*transform var\(--dur-exit\) var\(--ease-exit\),\s*visibility 0s linear var\(--dur-exit\);/s);
+    expect(css).toMatch(/\.drawer\.is-open\s*\{[^}]*visibility:\s*visible;[^}]*transition:\s*transform var\(--dur-slow\) var\(--ease\),\s*visibility 0s linear 0s;/s);
+    expect(css).not.toMatch(/\.drawer:not\(\.is-open\)/);
+
+    expect(css).toMatch(/\.genie\s*\{[^}]*visibility:\s*hidden;[^}]*visibility 0s linear var\(--dur-exit\);/s);
+    expect(css).toMatch(/\.genie\.is-open\s*\{[^}]*visibility:\s*visible;[^}]*visibility 0s linear 0s;/s);
+    expect(css).not.toMatch(/\.genie:not\(\.is-open\)/);
+
+    expect(css).toMatch(/\.tweaks\s*\{[^}]*display:\s*none;[^}]*transition:[^}]*display var\(--dur-fast\) allow-discrete;/s);
+    expect(css).toMatch(/\.tweaks\.is-open\s*\{[^}]*display:\s*flex;[^}]*display var\(--dur-base\) allow-discrete;/s);
+    expect(css).toMatch(/@starting-style\s*\{\s*\.tweaks\.is-open\s*\{\s*opacity:\s*0;/s);
+
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{\s*\*,[\s\S]*?transition-delay:\s*0s !important;/s);
+    // Reduced motion drops the visibility hold entirely (a pending 0.01ms
+    // transition would still show the panel until the next frame commits).
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{[^}]*\.drawer,\s*\.drawer\.is-open\s*\{\s*transition-property:\s*transform;/s);
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{[^}]*\.genie,\s*\.genie\.is-open\s*\{\s*transition-property:\s*opacity, transform;/s);
+  });
+
   it('lets segment cards wrap content instead of clipping labels or pending copy', () => {
     const css = designCss();
 

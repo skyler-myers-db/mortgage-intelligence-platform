@@ -491,10 +491,32 @@
   border-left: 1px solid var(--line-2);
   box-shadow: var(--shadow-lg);
   transform: translateX(100%);
-  transition: transform var(--dur-slow) var(--ease);
+  visibility: hidden;
+  /* The closed rule IS the exit: the slide-out runs on the exit pair and
+     `visibility` flips only once it ends, so the panel is seen leaving
+     (2026-09-21 audit motion-01 / css-03). The prototype drawer
+     (design_files/index.html:665-676) has no visibility rule at all; the
+     app's instant `visibility: hidden` had been cutting its own slide-out.
+     EvidenceDrawer.tsx keeps the closing source rendered until
+     `transitionend` (useExitRetained). */
+  transition:
+    transform var(--dur-exit) var(--ease-exit),
+    visibility 0s linear var(--dur-exit);
   z-index: var(--z-drawer);
   display: flex; flex-direction: column;
 }
-.drawer:not(.is-open) { visibility: hidden; }
-.drawer.is-open { transform: translateX(0); }
+.drawer.is-open {
+  transform: translateX(0);
+  visibility: visible;
+  transition:
+    transform var(--dur-slow) var(--ease),
+    visibility 0s linear 0s;
+}
+@media (prefers-reduced-motion: reduce) {
+  /* No visibility hold at all: the panel hides the moment it closes rather
+     than on the next frame (a pending 0.01ms transition still holds the
+     "visible" side until a frame commits). */
+  .drawer,
+  .drawer.is-open { transition-property: transform; }
+}
 

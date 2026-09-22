@@ -15,8 +15,36 @@
   z-index: var(--z-console);
   display: none;
   flex-flow: column;
+  /* Animated open / close. ADDITIVE DEVIATION from the prototype, which
+     hard-cuts the panel through display none/block (Module 0
+     Prototype.html:904-906): `@starting-style` gives the entry and
+     `transition-behavior: allow-discrete` on `display` keeps the panel
+     rendered through the exit (2026-09-21 audit motion-01). The closed rule
+     is the exit pair; `.is-open` the entry pair. `translate`, not
+     `transform`, so the resting value is `none` and the panel never becomes
+     a containing block for fixed descendants. */
+  opacity: 0;
+  translate: var(--sp-3) 0;
+  transition:
+    opacity var(--dur-fast) var(--ease-exit),
+    translate var(--dur-fast) var(--ease-exit),
+    display var(--dur-fast) allow-discrete;
 }
-.tweaks.is-open { display: flex; }
+.tweaks.is-open {
+  display: flex;
+  opacity: 1;
+  translate: none;
+  transition:
+    opacity var(--dur-base) var(--ease),
+    translate var(--dur-base) var(--ease),
+    display var(--dur-base) allow-discrete;
+}
+@starting-style {
+  .tweaks.is-open {
+    opacity: 0;
+    translate: var(--sp-3) 0;
+  }
+}
 .tweaks__hdr {
   padding: var(--sp-3) var(--sp-4);
   border-bottom: 1px solid var(--line-1);

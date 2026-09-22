@@ -63,6 +63,49 @@ async function bodyOverflow(panel: Locator): Promise<{ scrollWidth: number; clie
   }));
 }
 
+interface RunningTransition {
+  property: string;
+  playState: string;
+  duration: number;
+  delay: number;
+}
+
+/**
+ * Close a panel from inside the page and read its state right after React
+ * has flushed the click (one macrotask), then again once every running
+ * transition on the panel has finished. Sampling in-page keeps the first
+ * read well inside the exit window even on a loaded runner.
+ */
+async function closeAndSampleExit(page: Page, panelSelector: string, closeLabel: string) {
+  return page.evaluate(async ([selector, label]) => {
+    const panel = document.querySelector<HTMLElement>(selector);
+    const close = panel?.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`);
+    if (!panel || !close) throw new Error(`no ${selector} panel with a "${label}" control`);
+    const read = () => {
+      const style = getComputedStyle(panel);
+      return { visibility: style.visibility, transform: style.transform, open: panel.classList.contains('is-open') };
+    };
+    close.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const justClosed = read();
+    const running: RunningTransition[] = panel
+      .getAnimations()
+      .filter((animation): animation is CSSTransition => animation instanceof CSSTransition)
+      .map((transition) => ({
+        property: transition.transitionProperty,
+        playState: transition.playState,
+        duration: Number(transition.effect?.getTiming().duration ?? 0),
+        delay: Number(transition.effect?.getTiming().delay ?? 0),
+      }));
+    const pending = panel.getAnimations().map((animation) => animation.finished.catch(() => undefined));
+    await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)));
+    const nextFrame = read();
+    await Promise.all(pending);
+    const afterExit = read();
+    return { justClosed, running, nextFrame, afterExit };
+  }, [panelSelector, closeLabel] as const);
+}
+
 test.describe('Console rail fits its own panel', () => {
   for (const viewport of [{ width: 1440, height: 900 }, { width: 1280, height: 720 }]) {
     for (const route of ['/', '/lead-queue']) {
@@ -172,5 +215,92 @@ test.describe('KPI band never orphans a card', () => {
     await app.gotoRoute('/');
     const tops = await kpiRowTops(page);
     expect(new Set(tops).size).toBe(2);
+  });
+});
+
+test.describe('overlay exits animate', () => {
+  // The harness runs under prefers-reduced-motion: reduce; these cases
+  // need the real motion contract.
+  test.use({ contextOptions: { reducedMotion: 'no-preference' } });
+
+  test('the evidence drawer stays visible while it slides out and hides when the exit ends', async ({ app, page }) => {
+    await app.gotoRoute('/');
+    await page.locator('.kpi .evidence-chip').first().click();
+    const drawer = page.locator('aside.drawer');
+    await expect(drawer).toHaveClass(/is-open/);
+    await expect(drawer).toBeVisible();
+
+    const exit = await closeAndSampleExit(page, 'aside.drawer', 'Close drawer');
+    expect(exit.justClosed.open).toBe(false);
+    expect(exit.justClosed.visibility, 'mid-exit the drawer is still visible').toBe('visible');
+    const slide = exit.running.find((t) => t.property === 'transform');
+    expect(slide?.playState, 'the slide-out is running').toBe('running');
+    expect(slide?.duration).toBeGreaterThan(0);
+    const visibilityHold = exit.running.find((t) => t.property === 'visibility');
+    expect(visibilityHold, 'visibility flips only after the slide-out').toBeDefined();
+    expect(visibilityHold?.delay ?? 0).toBeGreaterThanOrEqual(slide?.duration ?? Number.POSITIVE_INFINITY);
+    expect(exit.afterExit.visibility).toBe('hidden');
+    await expect(drawer).toBeHidden();
+  });
+
+  test('the Genie panel fades out before it hides', async ({ app, page }) => {
+    await app.gotoRoute('/');
+    await app.openGenie();
+    const exit = await closeAndSampleExit(page, '.genie', 'Close Genie');
+    expect(exit.justClosed.open).toBe(false);
+    expect(exit.justClosed.visibility).toBe('visible');
+    expect(exit.running.some((t) => t.property === 'opacity' && t.playState === 'running')).toBe(true);
+    expect(exit.running.find((t) => t.property === 'visibility')?.delay ?? 0).toBeGreaterThan(0);
+    expect(exit.afterExit.visibility).toBe('hidden');
+  });
+
+  test('the Console rail transitions in when it opens', async ({ app, page }) => {
+    await app.gotoRoute('/');
+    const entering = await page.evaluate(async () => {
+      const toggle = document.querySelector<HTMLButtonElement>('header [aria-label="Toggle console"]');
+      if (!toggle) throw new Error('no Console toggle in the topbar');
+      toggle.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const panel = document.querySelector<HTMLElement>('aside.tweaks.is-open');
+      if (!panel) throw new Error('no open Console panel after the toggle');
+      return {
+        opacity: getComputedStyle(panel).opacity,
+        transitions: panel
+          .getAnimations()
+          .filter((animation): animation is CSSTransition => animation instanceof CSSTransition)
+          .map((transition) => transition.transitionProperty),
+      };
+    });
+    expect(entering.transitions, 'an opacity entry transition is running').toContain('opacity');
+    expect(Number(entering.opacity), 'the panel starts from its @starting-style').toBeLessThan(1);
+    await expect(page.getByRole('complementary', { name: 'Workspace console' }).locator('.tweaks__body')).toBeVisible();
+    await expect(page.locator('aside.tweaks.is-open')).toHaveCSS('opacity', '1');
+  });
+});
+
+test.describe('overlay exits are instant under reduced motion', () => {
+  // Under reduced motion the panels drop `visibility` from their transition
+  // list (a pending 0.01ms transition would still hold the visible side until
+  // a frame commits), so the flip lands in the same style recalc as the close.
+  const instant = (exit: Awaited<ReturnType<typeof closeAndSampleExit>>, label: string) => {
+    expect(exit.justClosed.open, `${label} closed`).toBe(false);
+    expect(exit.justClosed.visibility, `${label} hidden in the closing recalc`).toBe('hidden');
+    expect(exit.running.map((transition) => transition.property), `${label} has no visibility transition`).not.toContain('visibility');
+    for (const transition of exit.running) {
+      expect(transition.delay, `${label} ${transition.property} has no delay`).toBe(0);
+      expect(transition.duration, `${label} ${transition.property} is instant`).toBeLessThanOrEqual(1);
+    }
+    expect(exit.nextFrame.visibility).toBe('hidden');
+    expect(exit.afterExit.visibility).toBe('hidden');
+  };
+
+  test('the evidence drawer and the Genie panel hide immediately when closed', async ({ app, page }) => {
+    await app.gotoRoute('/');
+    await page.locator('.kpi .evidence-chip').first().click();
+    await expect(page.locator('aside.drawer')).toHaveClass(/is-open/);
+    instant(await closeAndSampleExit(page, 'aside.drawer', 'Close drawer'), 'drawer');
+
+    await app.openGenie();
+    instant(await closeAndSampleExit(page, '.genie', 'Close Genie'), 'Genie');
   });
 });
