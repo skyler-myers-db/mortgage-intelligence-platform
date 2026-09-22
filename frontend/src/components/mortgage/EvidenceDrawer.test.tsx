@@ -8,6 +8,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EvidenceDrawer } from './EvidenceDrawer';
+import { DRAWER_SOURCES } from '../../lib/drawerSources';
 import type { DrawerSource } from '../AppContext';
 
 const appMocks = vi.hoisted(() => ({
@@ -18,6 +19,7 @@ const appMocks = vi.hoisted(() => ({
 
 const apiMocks = vi.hoisted(() => ({
   assetMetadata: vi.fn(),
+  lineageManifest: vi.fn(),
 }));
 
 vi.mock('../AppContext', () => ({
@@ -31,6 +33,7 @@ vi.mock('../AppContext', () => ({
 vi.mock('../../lib/api', () => ({
   api: {
     assetMetadata: apiMocks.assetMetadata,
+    lineageManifest: apiMocks.lineageManifest,
   },
 }));
 
@@ -180,5 +183,113 @@ describe('EvidenceDrawer accessibility', () => {
 
     expect(apiMocks.assetMetadata).toHaveBeenCalledWith('lead_population', expect.anything());
     expect(document.body.textContent).not.toContain('Admin-only freshness');
+  });
+});
+
+/**
+ * 2026-09-21 audit critic-03. The buyer personas are not admins, yet the
+ * drawer's primary action sent them to the AdminDep-gated asset-detail route:
+ * their proof journey ended on a 403 page. Every drawer action that lands on
+ * /data-estate/assets/* is gated like the metadata read beside it; the proof
+ * content is not.
+ */
+describe('EvidenceDrawer admin-only actions', () => {
+  let root: Root;
+  let queryClient: QueryClient;
+
+  beforeEach(() => {
+    document.body.innerHTML = '<div id="root"></div>';
+    root = createRoot(document.getElementById('root') as HTMLElement);
+    queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: Infinity } },
+    });
+    appMocks.setDrawer.mockClear();
+    apiMocks.lineageManifest.mockResolvedValue({
+      schema_version: 1,
+      manifest_path: 'backend/resources/lineage_manifest.json',
+      families: [],
+    });
+    apiMocks.assetMetadata.mockResolvedValue({
+      freshness: 'fresh',
+      status: 'ready',
+      object_type: 'table',
+      observed_in_unity_catalog: true,
+      observation_source: 'system.information_schema.tables',
+      lineage: [],
+      catalog_explorer_url: null,
+    });
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    queryClient.clear();
+    document.body.innerHTML = '';
+    appMocks.canAccessAdmin = true;
+    vi.clearAllMocks();
+  });
+
+  async function renderDrawer(source: DrawerSource, canAccessAdmin: boolean): Promise<void> {
+    appMocks.drawer = source;
+    appMocks.canAccessAdmin = canAccessAdmin;
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter>
+            <EvidenceDrawer />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+    });
+    await settle();
+  }
+
+  const assetRouteLinks = (): HTMLAnchorElement[] =>
+    [...document.querySelectorAll<HTMLAnchorElement>('.drawer a')].filter((link) =>
+      (link.getAttribute('href') ?? '').startsWith('/data-estate/assets/'),
+    );
+
+  it('never offers a non-admin the asset-detail action, and keeps the proof usable', async () => {
+    await renderDrawer(SOURCE, false);
+
+    expect(assetRouteLinks()).toEqual([]);
+    expect(document.body.textContent).not.toContain('View asset details');
+    // No orphaned action row left behind when it has nothing to hold.
+    expect(document.querySelector('.drawer__actions')).toBeNull();
+
+    // The proof itself is intact: explanation, where it is used, both tabs.
+    expect(document.body.textContent).toContain(SOURCE.description);
+    expect(document.body.textContent).toContain('Ranked borrower table');
+    const lineageTab = document.getElementById('drawer-tab-lineage') as HTMLButtonElement;
+    await act(async () => lineageTab.click());
+    expect(lineageTab.getAttribute('aria-selected')).toBe('true');
+    expect(document.getElementById('drawer-panel-lineage')).not.toBeNull();
+  });
+
+  it('keeps the asset-detail action for an admin', async () => {
+    await renderDrawer(SOURCE, true);
+
+    expect(assetRouteLinks().map((link) => link.textContent?.trim())).toEqual(['View asset details']);
+    expect(assetRouteLinks()[0].getAttribute('href')).toBe('/data-estate/assets/lead_population');
+  });
+
+  it('gates the readiness ledger action too: it is an asset-detail page', async () => {
+    await renderDrawer(DRAWER_SOURCES.permit, false);
+    expect(assetRouteLinks()).toEqual([]);
+    expect(document.body.textContent).not.toContain('View source readiness');
+    // The readiness explanation and its governed object still render.
+    expect(document.body.textContent).toContain('Pending source readiness');
+    expect(document.body.textContent).toContain('mip.gold.source_readiness');
+
+    await renderDrawer(DRAWER_SOURCES.permit, true);
+    expect(assetRouteLinks().map((link) => link.textContent?.trim())).toEqual(['View source readiness']);
+  });
+
+  it('leaves non-admin app destinations alone', async () => {
+    await renderDrawer(DRAWER_SOURCES.callDispositions, false);
+
+    const action = [...document.querySelectorAll<HTMLAnchorElement>('.drawer__actions a')].map(
+      (link) => [link.textContent?.trim(), link.getAttribute('href')],
+    );
+    expect(action).toEqual([['Open sales operations', '/analytics?view=sales-ops']]);
   });
 });

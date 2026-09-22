@@ -9,6 +9,7 @@ import {
   assetKeyForSource,
   evidenceDestinationFor,
 } from '../../lib/drawerSources';
+import { useExitRetained } from '../../hooks/useExitRetained';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { queryKeys } from '../../lib/queryKeys';
 import { formatTimestamp } from '../../lib/time';
@@ -210,18 +211,26 @@ function metadataStatRows(metadata?: AssetMetadataResponse) {
 
 export function EvidenceDrawer() {
   const { drawer, setDrawer, canAccessAdmin } = useApp();
+  // `open` follows the LIVE source: the focus trap releases and focus returns
+  // to the trigger the moment the exit starts.
   const open = !!drawer;
-  const d = drawer;
   const closeBtnRef = useRef<HTMLButtonElement | null>(null);
   const drawerRef = useRef<HTMLElement | null>(null);
+  // `d` is what the panel shows. setDrawer(null) used to empty the body in the
+  // same commit that started the slide-out, so the drawer animated out blank
+  // (2026-09-21 audit css-03). The closing source stays rendered until the
+  // panel's own exit transition ends.
+  const d = useExitRetained(drawer, drawerRef);
   const overviewTabRef = useRef<HTMLButtonElement | null>(null);
   const lineageTabRef = useRef<HTMLButtonElement | null>(null);
   const [tab, setTab] = useState<DrawerTab>('overview');
   // Every drawer open starts on Overview — a lineage deep-dive on one
-  // source must not leak into the next source's drawer.
+  // source must not leak into the next source's drawer. Keyed on the live
+  // source and skipped on close, so the retained body does not flip tabs
+  // while it slides out.
   useEffect(() => {
-    setTab('overview');
-  }, [d]);
+    if (drawer) setTab('overview');
+  }, [drawer]);
   // /api/admin/assets/:key/metadata is AdminDep-gated. A loan officer opening
   // an evidence drawer used to fire it and eat a 403 on every open — invisible
   // in the UI, loud in the browser console (2026-08-07 audit H4). Ask only
@@ -262,6 +271,21 @@ export function EvidenceDrawer() {
           : metadata?.freshness
     : metadata?.freshness;
   const assetHref = d?.assetKey ? assetDetailHref(d.assetKey) : null;
+  // /data-estate/assets/:key is served by the same AdminDep-gated metadata
+  // read as `metadataQuery` above, so the actions that land there are gated
+  // exactly like that read. For the buyer personas (not admins) the drawer's
+  // primary action used to end on a 403 page (2026-09-21 audit critic-03);
+  // the proof itself — explanation, signals, governed assets, lineage — stays.
+  const assetDetailsHref =
+    canAccessAdmin && destination.kind === 'unity_catalog' ? assetHref : null;
+  // Lakebase destinations are non-admin app surfaces; the readiness ledger is
+  // an asset-detail page, so it is an admin action too.
+  const destinationAction =
+    destination.kind === 'lakebase' || (destination.kind === 'readiness' && canAccessAdmin)
+      ? destination
+      : null;
+  const catalogExplorerUrl =
+    destination.kind !== 'lakebase' ? metadata?.catalog_explorer_url ?? null : null;
   const selectTabFromKeyboard = (event: KeyboardEvent<HTMLButtonElement>) => {
     const tabs: DrawerTab[] = ['overview', 'lineage'];
     const currentIndex = tabs.indexOf(tab);
@@ -302,6 +326,9 @@ export function EvidenceDrawer() {
         aria-labelledby={d ? 'evidence-drawer-title' : undefined}
         aria-label={d ? undefined : 'Data source and lineage'}
         aria-hidden={!open}
+        // The closing source stays rendered while the panel slides out; inert
+        // keeps that retained copy out of the tab order and the pointer path.
+        inert={!open}
       >
         <div className="drawer__hdr">
           <div className="drawer__source-icon">
@@ -637,31 +664,33 @@ export function EvidenceDrawer() {
                 </>
               )}
 
-              <div className="drawer__actions">
-                {assetHref && destination.kind === 'unity_catalog' && (
-                  <Link className="btn btn--primary btn--sm" to={assetHref} onClick={() => setDrawer(null)}>
-                    <Icon name="db" size={12} />
-                    View asset details
-                  </Link>
-                )}
-                {(destination.kind === 'lakebase' || destination.kind === 'readiness') && (
-                  <Link className="btn btn--primary btn--sm" to={destination.href} onClick={() => setDrawer(null)}>
-                    <Icon name={destination.kind === 'readiness' ? 'db' : 'search'} size={12} />
-                    {destination.actionLabel}
-                  </Link>
-                )}
-                {metadata?.catalog_explorer_url && destination.kind !== 'lakebase' && (
-                  <a
-                    className="btn btn--ghost btn--sm"
-                    href={metadata.catalog_explorer_url}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    <Icon name="export" size={12} />
-                    Catalog Explorer
-                  </a>
-                )}
-              </div>
+              {(assetDetailsHref || destinationAction || catalogExplorerUrl) && (
+                <div className="drawer__actions">
+                  {assetDetailsHref && (
+                    <Link className="btn btn--primary btn--sm" to={assetDetailsHref} onClick={() => setDrawer(null)}>
+                      <Icon name="db" size={12} />
+                      View asset details
+                    </Link>
+                  )}
+                  {destinationAction && (
+                    <Link className="btn btn--primary btn--sm" to={destinationAction.href} onClick={() => setDrawer(null)}>
+                      <Icon name={destinationAction.kind === 'readiness' ? 'db' : 'search'} size={12} />
+                      {destinationAction.actionLabel}
+                    </Link>
+                  )}
+                  {catalogExplorerUrl && (
+                    <a
+                      className="btn btn--ghost btn--sm"
+                      href={catalogExplorerUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      <Icon name="export" size={12} />
+                      Catalog Explorer
+                    </a>
+                  )}
+                </div>
+              )}
 
               {d.eventDate && (
                 <div className="drawer__updated">

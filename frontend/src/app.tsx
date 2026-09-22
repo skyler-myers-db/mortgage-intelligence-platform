@@ -1,4 +1,4 @@
-import { Suspense, useEffect } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Navigate, Route, Routes, useLocation } from 'react-router';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -24,6 +24,9 @@ import {
 import { api } from './lib/api';
 import type { SessionResponse } from './types';
 
+// Lazy: the denied page must not cost the initial bundle anything.
+const AdminAccessDeniedRoute = lazy(() => import('./routes/admin-config.access-denied'));
+
 function RouteFallback() {
   return (
     <div className="surface" aria-busy="true" role="status">
@@ -45,6 +48,10 @@ function RouteFallback() {
  * boundary. Backend AdminDep checks remain the security boundary; this guard
  * prevents a denied deep link from rendering an operator console full of 403
  * panels while the navigation correctly hides the same destination.
+ *
+ * A denied actor gets a 403 surface naming the required role and a way back,
+ * not a silent redirect to Home (2026-09-21 audit shell-06). A session check
+ * that failed stays closed too, but says so instead of claiming a missing role.
  */
 export function AdminRouteGate() {
   const session = useQuery<SessionResponse>({
@@ -54,7 +61,7 @@ export function AdminRouteGate() {
   });
 
   if (session.isPending) return <RouteFallback />;
-  if (!session.data?.can_access_admin) return <Navigate to="/" replace />;
+  if (!session.data?.can_access_admin) return <AdminAccessDeniedRoute unverified={session.isError} />;
   return <AdminConfigRoute />;
 }
 
