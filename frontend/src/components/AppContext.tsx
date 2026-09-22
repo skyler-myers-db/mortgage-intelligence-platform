@@ -13,6 +13,26 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { useConfigOptionsQuery } from '../lib/configOptionsQuery';
 import { queryKeys } from '../lib/queryKeys';
+import {
+  ACCENTS,
+  ACCENT_STORAGE_KEY,
+  DEFAULT_ACCENT,
+  DEFAULT_DENSITY,
+  DEFAULT_THEME_PREFERENCE,
+  DENSITIES,
+  DENSITY_STORAGE_KEY,
+  THEME_PREFERENCES,
+  THEME_STORAGE_KEY,
+  readStoredChoice,
+  resolveTheme,
+  subscribeSystemTheme,
+  syncThemeColorMeta,
+  systemPrefersDark,
+  type Accent,
+  type Density,
+  type Theme,
+  type ThemePreference,
+} from '../lib/themePreference';
 import type {
   ConfigOptions,
   SavedDraft,
@@ -26,11 +46,15 @@ import type {
  * AppContext — theme, accent, density, configured tenant, drawer, Genie, approvals,
  * evidence toggles. Ported from the Module 0 prototype so every page shares
  * one provider and writes data-theme/data-accent/data-density to <html>.
+ *
+ * Theme model: `themePreference` is what the user chose (dark, light or
+ * system); `theme` is what is painted. public/theme-boot.js applies the same
+ * attributes before first paint from the same storage keys (see
+ * lib/themePreference.ts), so the post-mount effect below only re-asserts
+ * them and takes over live changes (Console, OS scheme flips).
  */
 
-export type Theme = 'dark' | 'light';
-export type Accent = 'bright' | 'teal' | 'navy' | 'red';
-export type Density = 'comfortable' | 'compact';
+export type { Accent, Density, Theme, ThemePreference };
 
 export interface DrawerSource {
   title: string;
@@ -53,8 +77,13 @@ export interface DrawerSource {
 }
 
 interface AppCtxValue {
+  /** The painted theme (system preference already resolved). */
   theme: Theme;
+  /** Pin an explicit theme; the Topbar toggle and Cmd-K use this. */
   setTheme: (t: Theme) => void;
+  /** What the user chose, including `system`; the Console control edits this. */
+  themePreference: ThemePreference;
+  setThemePreference: (p: ThemePreference) => void;
   accent: Accent;
   setAccent: (a: Accent) => void;
   density: Density;
@@ -99,17 +128,6 @@ interface AppCtxValue {
 
 const AppCtx = createContext<AppCtxValue | null>(null);
 
-function readStored<T extends string>(key: string, fallback: T, allowed: readonly T[]): T {
-  if (typeof window === 'undefined') return fallback;
-  try {
-    const raw = window.localStorage.getItem(key);
-    if (raw && (allowed as readonly string[]).includes(raw)) return raw as T;
-  } catch {
-    // ignore (SSR / private mode)
-  }
-  return fallback;
-}
-
 function readStoredBool(key: string, fallback: boolean): boolean {
   if (typeof window === 'undefined') return fallback;
   try {
@@ -121,10 +139,6 @@ function readStoredBool(key: string, fallback: boolean): boolean {
   }
   return fallback;
 }
-
-const THEMES: readonly Theme[] = ['dark', 'light'];
-const ACCENTS: readonly Accent[] = ['bright', 'teal', 'navy', 'red'];
-const DENSITIES: readonly Density[] = ['comfortable', 'compact'];
 
 export function shouldInstallRum(configOptions: Pick<ConfigOptions, 'rum_enabled'> | undefined): boolean {
   return configOptions?.rum_enabled === true;
@@ -167,9 +181,17 @@ function mapDraftsByBorrowerChannel(items: SavedDraft[]): Record<string, SavedDr
 }
 
 export function AppProvider({ children }: PropsWithChildren) {
-  const [theme, setThemeState] = useState<Theme>(() => readStored('mip.theme', 'dark', THEMES));
-  const [accent, setAccentState] = useState<Accent>(() => readStored('mip.accent', 'bright', ACCENTS));
-  const [density, setDensityState] = useState<Density>(() => readStored('mip.density', 'comfortable', DENSITIES));
+  const [themePreference, setThemePreferenceState] = useState<ThemePreference>(() =>
+    readStoredChoice(THEME_STORAGE_KEY, DEFAULT_THEME_PREFERENCE, THEME_PREFERENCES),
+  );
+  const [systemDark, setSystemDark] = useState<boolean>(() => systemPrefersDark());
+  const theme = resolveTheme(themePreference, systemDark);
+  const [accent, setAccentState] = useState<Accent>(() =>
+    readStoredChoice(ACCENT_STORAGE_KEY, DEFAULT_ACCENT, ACCENTS),
+  );
+  const [density, setDensityState] = useState<Density>(() =>
+    readStoredChoice(DENSITY_STORAGE_KEY, DEFAULT_DENSITY, DENSITIES),
+  );
   // Module 0 does not support arbitrary client-side lender switching.
   // The tenant label is display-only; lender predicates are resolved by
   // backend configuration and the Unity Catalog gold views.
@@ -233,19 +255,27 @@ export function AppProvider({ children }: PropsWithChildren) {
     };
   }, [rumEnabled]);
 
+  // Follow the OS scheme live while the preference is `system`. Subscribed
+  // unconditionally so a later switch to System already has the current
+  // value; resolveTheme ignores it for an explicit dark/light.
+  useEffect(() => subscribeSystemTheme(setSystemDark), []);
+
   useEffect(() => {
     const root = document.documentElement;
     root.setAttribute('data-theme', theme);
     root.setAttribute('data-accent', accent);
     root.setAttribute('data-density', density);
+    // Browser chrome (Safari tab bar, PWA title bar) follows the page
+    // background of the painted theme; theme-boot.js set the boot value.
+    syncThemeColorMeta(root);
     try {
-      window.localStorage.setItem('mip.theme', theme);
-      window.localStorage.setItem('mip.accent', accent);
-      window.localStorage.setItem('mip.density', density);
+      window.localStorage.setItem(THEME_STORAGE_KEY, themePreference);
+      window.localStorage.setItem(ACCENT_STORAGE_KEY, accent);
+      window.localStorage.setItem(DENSITY_STORAGE_KEY, density);
     } catch {
       // ignore
     }
-  }, [theme, accent, density]);
+  }, [theme, themePreference, accent, density]);
 
   // Reflect console-open state on <html> (so .app-shell can pad .main when the
   // Console overlays the right edge) and persist the presenter's preference.
@@ -286,7 +316,8 @@ export function AppProvider({ children }: PropsWithChildren) {
     workspaceQuery.isSuccess,
   ]);
 
-  const setTheme = useCallback((t: Theme) => setThemeState(t), []);
+  const setTheme = useCallback((t: Theme) => setThemePreferenceState(t), []);
+  const setThemePreference = useCallback((p: ThemePreference) => setThemePreferenceState(p), []);
   const setAccent = useCallback((a: Accent) => setAccentState(a), []);
   const setDensity = useCallback((d: Density) => setDensityState(d), []);
   const setConsoleOpen = useCallback((v: boolean) => setConsoleOpenState(v), []);
@@ -438,6 +469,7 @@ export function AppProvider({ children }: PropsWithChildren) {
   const value = useMemo<AppCtxValue>(
     () => ({
       theme, setTheme,
+      themePreference, setThemePreference,
       accent, setAccent,
       density, setDensity,
       lender,
@@ -467,7 +499,7 @@ export function AppProvider({ children }: PropsWithChildren) {
       refreshWorkspace,
     }),
     [
-      theme, setTheme, accent, setAccent, density, setDensity,
+      theme, setTheme, themePreference, setThemePreference, accent, setAccent, density, setDensity,
       lender, canAccessAdmin, canApprove, actorEmail, sessionStatus,
       showEvidence, showConfidence, consoleOpen, setConsoleOpen,
       recentActivityFocusRequest, openConsoleRecentActivity, acknowledgeRecentActivityFocus,
