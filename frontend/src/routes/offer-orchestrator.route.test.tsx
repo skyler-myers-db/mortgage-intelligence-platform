@@ -448,10 +448,7 @@ describe('OfferOrchestrator route behavior', () => {
     mount();
     // Wait for the audited draft: from here the ONLY thing between this actor
     // and an approval is the role gate (an approver's buttons are live now).
-    await waitUntil(() => (
-      container.querySelector<HTMLTextAreaElement>('[data-testid="outreach-draft"]')?.disabled
-      === false
-    ));
+    await waitUntil(reviewCopyCurrent);
 
     const reason = container.querySelector('[data-testid="approval-gate-reason"]');
     expect(reason?.textContent).toContain('Requires approver role');

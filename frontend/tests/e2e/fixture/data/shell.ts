@@ -64,7 +64,13 @@ export const CONFIG_OPTIONS: ConfigOptions = {
 };
 
 export const shellFixtures: FixtureEntry[] = [
-  fixture('GET', '/api/session', () => json<SessionResponse>({ can_access_admin: true })),
+  fixture('GET', '/api/session', () =>
+    json<SessionResponse>({
+      can_access_admin: true,
+      can_approve: true,
+      actor_email: 'approver@summit-mortgage.example',
+    }),
+  ),
   fixture('GET', '/api/workspace', () => json<WorkspaceState>({ saved_leads: [], saved_drafts: [] })),
   fixture('GET', '/api/health', () => json<HealthPayload>(HEALTH_OK)),
   fixture('GET', '/api/config/options', () => json<ConfigOptions>(CONFIG_OPTIONS)),

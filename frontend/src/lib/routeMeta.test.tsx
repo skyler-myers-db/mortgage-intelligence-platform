@@ -118,7 +118,11 @@ describe('route tables stay pinned to routeMeta', () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, staleTime: Infinity } },
     });
-    queryClient.setQueryData<SessionResponse>(['session', 'access'], { can_access_admin: true });
+    queryClient.setQueryData<SessionResponse>(['session', 'access'], {
+      can_access_admin: true,
+      can_approve: true,
+      actor_email: null,
+    });
     const html = renderToStaticMarkup(
       <QueryClientProvider client={queryClient}>
         <MemoryRouter initialEntries={['/']}>

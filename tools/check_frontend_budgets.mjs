@@ -48,8 +48,19 @@ const budgets = {
   // evidence chip and lineage node can resolve immediately and consistently,
   // plus native Genie feedback and the shared offer/campaign evidence controls.
   // Measured: initial JS 396.40 / gzip 119.85; restore ~5% headroom per policy.
-  initialJsBytes: 417 * KiB, // actual 396.40
-  initialJsGzipBytes: 126 * KiB, // actual 119.85
+  // Re-baselined 2026-09-22 at the wave-0 integration of the UI/UX audit
+  // (docs/audits/ui-ux-technology-audit-2026-09-21.md). Shell code that has
+  // to live in the initial chunk grew by 16.9 KiB raw / 6.2 KiB gzip across
+  // five lanes: the route + root ErrorBoundary, chunk-load detection and the
+  // one-shot vite:preloadError reload (it must run before any lazy chunk can
+  // fail); routeMeta, useMainScroll, the route announcer and the version
+  // notice (shell continuity); the session can_approve / actor identity
+  // threading; the GenieDock that keeps an in-flight turn alive while the
+  // panel is closed plus the shared Escape stack; session-keyed Reveal and
+  // the hashed wordmark. The raw gate had 0.4% headroom left and gzip had
+  // none. Measured: initial JS 415.31 / gzip 128.25; restore ~5% headroom.
+  initialJsBytes: 436 * KiB, // actual 415.31
+  initialJsGzipBytes: 135 * KiB, // actual 128.25
   // Bumped 2026-06-11 for the re-audit #4 Buyer-Wow tranche: ⌘K command
   // palette (.cmdk*), portal evidence hover-card (.evidence-hovercard*),
   // sleek one-time KPI entrance (.kpi__value--enter / .spark__line--draw),
@@ -89,8 +100,9 @@ const budgets = {
   // to keep it out of this number), the Genie launcher running/answer-ready
   // states (16-genie-fab-status.css, +1.43 KiB) and the sparkline draw/fade
   // tokens plus print reveal rule (+0.29 KiB). Measured after the merge:
-  // see the INTEGRATION_MEASURED marker below; ~5% headroom per policy.
-  initialCssBytes: 157 * KiB, // INTEGRATION_MEASURED
+  // CSS 150.57 / gzip 25.48; ~5% headroom per policy (the gzip gate keeps
+  // 4% and is unchanged).
+  initialCssBytes: 158 * KiB, // actual 150.57
   // Re-baselined 2026-09-08 for the Genie thread view + deep-research
   // sections slice. The 25 KiB gzip gate had drifted to 4 bytes above the
   // measured artifact (25,596 B) — the next CSS line from anyone would have
@@ -119,8 +131,15 @@ const budgets = {
   // documented ~5% headroom on both raw and compressed totals; this also
   // absorbs the zlib platform variance called out above without weakening the
   // initial-bundle or largest-lazy-chunk gates.
-  totalJsBytes: 1170 * KiB, // actual 1113.49
-  totalJsGzipBytes: 377 * KiB, // actual 358.35
+  // Re-baselined 2026-09-22 at the wave-0 integration of the UI/UX audit:
+  // the initial-chunk growth above plus four new lazy chunks (the admin
+  // 403 surface, the keyboard-operable MultiFilterSelect shared by the
+  // Portfolio Builder state picker, the glossary route stylesheet's module,
+  // and the Genie launcher status helpers). Measured: total JS 1178.21 KiB
+  // / gzip 385.07 KiB across 48 chunks; ~5% headroom on both totals. The
+  // largest-lazy-chunk gates are unchanged (states-albers 79.68 / 28.88).
+  totalJsBytes: 1237 * KiB, // actual 1178.21
+  totalJsGzipBytes: 405 * KiB, // actual 385.07
   maxLazyJsBytes: 104 * KiB, // actual 98.40 (was 160 -- tightened)
   maxLazyJsGzipBytes: 34 * KiB, // actual 32.06 (was 60 -- tightened)
   fontAssetCount: 14, // exact by policy
@@ -128,7 +147,9 @@ const budgets = {
 };
 
 function bytes(n) {
-  if (n >= KiB * KiB) return `${(n / (KiB * KiB)).toFixed(2)} MiB`;
+  // Totals above 1 MiB also print the exact KiB so a re-baseline can cite the
+  // measured actual in the same unit the gates are declared in.
+  if (n >= KiB * KiB) return `${(n / (KiB * KiB)).toFixed(2)} MiB (${(n / KiB).toFixed(2)} KiB)`;
   return `${(n / KiB).toFixed(2)} KiB`;
 }
 
