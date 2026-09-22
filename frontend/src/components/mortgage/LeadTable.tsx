@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { useSearchParams } from 'react-router';
+import { Link, useSearchParams } from 'react-router';
 import { Icon } from '../Icon';
 import { Button } from '../Primitives';
 import { useApp } from '../AppContext';
@@ -359,9 +359,9 @@ export function LeadTable({
               Exported {exportState.rowCount.toLocaleString()} {exportState.rowCount === 1 ? 'row' : 'rows'}
               {' · audit '}
               {canAccessAdmin ? (
-                <a className="mono" href={auditEventHref(exportState.receipt.audit_event_id)}>
+                <Link className="mono" to={auditEventHref(exportState.receipt.audit_event_id)}>
                   {exportState.receipt.audit_event_id}
-                </a>
+                </Link>
               ) : (
                 <span className="mono">{exportState.receipt.audit_event_id}</span>
               )}
