@@ -55,10 +55,12 @@ function press(key: string, init: KeyboardEventInit = {}): void {
 const trigger = (): HTMLButtonElement =>
   document.querySelector<HTMLButtonElement>('button.filter') as HTMLButtonElement;
 const listbox = (): HTMLElement | null => document.querySelector<HTMLElement>('[role="listbox"]');
-const options = (): HTMLButtonElement[] =>
-  [...document.querySelectorAll<HTMLButtonElement>('[role="option"]')];
+const options = (): HTMLElement[] =>
+  [...document.querySelectorAll<HTMLElement>('[role="option"]')];
+// a11y-02: the listbox holds DOM focus while open, so IT carries
+// aria-activedescendant; the trigger button never does.
 const activeOption = (): HTMLElement | null => {
-  const id = trigger().getAttribute('aria-activedescendant');
+  const id = listbox()?.getAttribute('aria-activedescendant');
   return id ? document.getElementById(id) : null;
 };
 
@@ -97,20 +99,21 @@ describe('Portfolio Builder state picker — keyboard operation', () => {
       'Illinois',
       'Texas',
     ]);
-    // aria-activedescendant must resolve to an element, and DOM focus rides it.
+    // aria-activedescendant must resolve to an element on the focused listbox.
     expect(activeOption()).toBe(options()[0]);
-    expect(document.activeElement).toBe(options()[0]);
+    expect(document.activeElement).toBe(listbox());
+    expect(trigger().hasAttribute('aria-activedescendant')).toBe(false);
   });
 
   it('arrow keys, Home and End move the active option (aria-activedescendant changes)', () => {
     render();
     press('ArrowDown');
-    const first = trigger().getAttribute('aria-activedescendant');
+    const first = listbox()?.getAttribute('aria-activedescendant');
 
     press('ArrowDown');
-    expect(trigger().getAttribute('aria-activedescendant')).not.toBe(first);
+    expect(listbox()?.getAttribute('aria-activedescendant')).not.toBe(first);
     expect(activeOption()?.textContent).toBe('Arizona');
-    expect(document.activeElement).toBe(activeOption());
+    expect(document.activeElement).toBe(listbox());
 
     press('ArrowDown');
     expect(activeOption()?.textContent).toBe('Illinois');
@@ -123,8 +126,9 @@ describe('Portfolio Builder state picker — keyboard operation', () => {
     press('Home');
     expect(activeOption()?.textContent).toBe('All 3 states');
 
-    // Exactly one option is in the tab order at a time (roving tabindex).
-    expect(options().filter((option) => option.tabIndex === 0)).toHaveLength(1);
+    // The focused listbox is the one tab stop; options are not tabbable.
+    expect(listbox()?.tabIndex).toBe(0);
+    expect(options().filter((option) => option.tabIndex >= 0)).toHaveLength(0);
   });
 
   it('Space toggles a state, keeps the menu open, and leaves the active option where the user is', () => {
@@ -144,7 +148,7 @@ describe('Portfolio Builder state picker — keyboard operation', () => {
     expect(trigger().getAttribute('aria-label')).toBe('GEO: 2 states');
     // The active option stays on Texas; it must not jump back up to Arizona.
     expect(activeOption()?.textContent).toBe('Texas');
-    expect(document.activeElement).toBe(options()[3]);
+    expect(activeOption()).toBe(options()[3]);
 
     press(' ');
     expect(changes).toHaveBeenLastCalledWith(['AZ']);
@@ -188,7 +192,8 @@ describe('Portfolio Builder state picker — keyboard operation', () => {
     // Non-vacuity: the menu really is open with focus inside it. Against the
     // old mouse-only picker nothing opened, so "closed after Tab" proved nothing.
     expect(listbox()).not.toBeNull();
-    expect(document.activeElement).toBe(options()[1]);
+    expect(document.activeElement).toBe(listbox());
+    expect(activeOption()).toBe(options()[1]);
 
     const tab = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
     act(() => {

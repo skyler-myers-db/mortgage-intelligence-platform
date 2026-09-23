@@ -22,9 +22,10 @@
  *     therefore pre-empts those handlers. That is the point for overlays,
  *     and it is also why every Escape-closable overlay must be ON the stack:
  *     an Escape handler bound to an element or to `window` at bubble phase
- *     never runs while a layer accepts. (Known off-stack handlers:
- *     `analytics.equity-scatter` cluster `onKeyDown` and the
- *     `analytics.sections` MultiSelect window listener — a follow-up.)
+ *     never runs while a layer accepts. (Known off-stack handler:
+ *     `analytics.equity-scatter` cluster `onKeyDown` — a follow-up. The
+ *     MultiFilterSelect window listener moved onto the stack with the
+ *     shared listbox hook, audit a11y-02.)
  *   - The `defaultPrevented` check only defers to another capture-phase
  *     `window` listener registered before this one; nothing else runs
  *     earlier.

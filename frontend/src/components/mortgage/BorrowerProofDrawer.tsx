@@ -11,6 +11,7 @@ import { Button, Chip } from '../Primitives';
 import { Icon } from '../Icon';
 import { Skeleton } from '../ui/Skeleton';
 import { GlossaryTerm } from '../GlossaryTerm';
+import { useTabs } from '../ui/useTabs';
 
 type ProofTab = 'math' | 'evidence' | 'lineage' | 'reproduce';
 
@@ -26,6 +27,7 @@ const TABS: Array<{ id: ProofTab; label: string; icon: 'audit' | 'layers' | 'flo
   { id: 'lineage', label: 'Lineage', icon: 'flow' },
   { id: 'reproduce', label: 'Reproduce', icon: 'db' },
 ];
+const TAB_IDS: readonly ProofTab[] = TABS.map((item) => item.id);
 
 function formatWeight(value: number): string {
   return `${Math.round(value * 100)}%`;
@@ -43,6 +45,9 @@ function formulaRows(proof: BorrowerProof): ProofFormulaLine[] {
 
 export function BorrowerProofDrawer({ borrowerId, open, onClose }: BorrowerProofDrawerProps) {
   const [tab, setTab] = useState<ProofTab>('math');
+  // APG tabs (audit a11y-02): arrow keys, Home/End, roving tabindex, and the
+  // body is the tabpanel the selected tab controls.
+  const tabs = useTabs({ tabs: TAB_IDS, selected: tab, onSelect: setTab, idBase: 'proof-drawer' });
   const [copiedHash, setCopiedHash] = useState<string | null>(null);
   const closeBtnRef = useRef<HTMLButtonElement | null>(null);
   const panelRef = useRef<HTMLElement | null>(null);
@@ -96,15 +101,12 @@ export function BorrowerProofDrawer({ borrowerId, open, onClose }: BorrowerProof
           </button>
         </div>
 
-        <div className="proof-tabs" role="tablist" aria-label="Proof sections">
+        <div className="proof-tabs" {...tabs.tabListProps} aria-label="Proof sections">
           {TABS.map((item) => (
             <button
               key={item.id}
-              type="button"
-              role="tab"
-              aria-selected={tab === item.id}
+              {...tabs.tabProps(item.id)}
               className={`proof-tab ${tab === item.id ? 'is-active' : ''}`}
-              onClick={() => setTab(item.id)}
             >
               <Icon name={item.icon} size={12} />
               <span>{item.label}</span>
@@ -112,7 +114,7 @@ export function BorrowerProofDrawer({ borrowerId, open, onClose }: BorrowerProof
           ))}
         </div>
 
-        <div className="drawer__body proof-drawer__body">
+        <div className="drawer__body proof-drawer__body" {...tabs.panelProps(tab)}>
           {proofQuery.isPending && (
             <div className="stack-md" aria-busy="true" role="status">
               <Skeleton width="62%" height={16} rounded="sm" />
