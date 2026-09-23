@@ -138,8 +138,14 @@ test.describe('mid-turn composer', () => {
     // Typing still works; Enter does not submit a second turn.
     await input.fill('Which counties carry the most?');
     await expect(input).toHaveValue('Which counties carry the most?');
+    const pollsAtEnter = second.progressPolls;
     await input.press('Enter');
     await expect(input).toHaveValue('Which counties carry the most?');
+    // Barrier for a submit the keypress might start asynchronously: let the
+    // held turn complete one more progress poll (1.5 s cadence), then wait
+    // for the mock API to be quiet with nothing in flight.
+    await expect.poll(() => second.progressPolls, 'the held turn polled again after Enter').toBeGreaterThan(pollsAtEnter);
+    await app.settle();
     expect(second.submits).toBe(1);
     expect(first.submits).toBe(1);
     await expect(dialog.locator('.genie__msg--user')).toHaveCount(2);

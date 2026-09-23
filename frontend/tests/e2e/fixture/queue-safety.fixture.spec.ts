@@ -104,8 +104,11 @@ test.describe('A / R hotkeys are scoped to focus inside the table', () => {
 
     held.release();
     await expect(cell.locator('.chip--success')).toHaveText(/Approved/);
+    await app.settle();
     expect(approveCalls(mockApi)).toBe(1);
     expect(held.received).toBe(1);
+    // Nor a second draft: each draft POST writes a DRAFT_OUTREACH audit row.
+    expect(draftCalls(mockApi), 'the duplicate A drafted nothing').toBe(1);
   });
 });
 
