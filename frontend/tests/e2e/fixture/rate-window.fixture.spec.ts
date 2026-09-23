@@ -302,29 +302,33 @@ test.describe('analytics executive: why-now rate window', () => {
   test('the rate window is requested beside the executive read and says the tab filters do not apply', async ({ app, page, mockApi }) => {
     const executive = analyticsFixtures.find((entry) => entry.method === 'GET' && entry.pattern === '/api/analytics/executive');
     if (!executive) throw new Error('executive fixture missing');
-    let markRateWindowRequested: () => void = () => undefined;
-    const rateWindowRequested = new Promise<boolean>((resolve) => {
-      markRateWindowRequested = () => resolve(true);
+    // Hold the executive answer until the rate window has been asked for, with
+    // no timer: a waterfall (the rate window requested only once the Executive
+    // tab has rendered) never asks while the hold is open, so the route never
+    // settles and the test fails. The finally only lets teardown drain.
+    type Release = 'rate-window-request' | 'test-end';
+    let release: (by: Release) => void = () => undefined;
+    const hold = new Promise<Release>((resolve) => {
+      release = resolve;
     });
-    let requestedBeforeExecutiveAnswered = false;
+    let executiveReleasedBy: Release | null = null;
     mockApi.register('GET', '/api/analytics/rate-window', () => {
-      markRateWindowRequested();
+      release('rate-window-request');
       return json<RateWindowResponse>(RATE_WINDOW);
     });
-    // Hold the executive answer until the rate window has been asked for; the
-    // bound only ends the failing case (a waterfall never asks first).
     mockApi.register('GET', '/api/analytics/executive', async (request) => {
-      requestedBeforeExecutiveAnswered = await Promise.race([
-        rateWindowRequested,
-        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 5_000)),
-      ]);
+      executiveReleasedBy = await hold;
       return executive.handler(request);
     });
 
     await app.setTheme('light');
-    await app.gotoRoute('/analytics?states=CA');
-    await expect(page.getByTestId('rate-window')).toBeVisible();
-    expect(requestedBeforeExecutiveAnswered, 'rate window requested while the executive read was still open').toBe(true);
+    try {
+      await app.gotoRoute('/analytics?states=CA');
+      await expect(page.getByTestId('rate-window')).toBeVisible();
+    } finally {
+      release('test-end');
+    }
+    expect(executiveReleasedBy, 'the executive read was answered only after the rate window was requested').toBe('rate-window-request');
     await expect(page.getByTestId('rate-window-unfiltered')).toHaveText('All states: filters not applied');
   });
 
