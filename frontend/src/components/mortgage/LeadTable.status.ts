@@ -116,8 +116,7 @@ export interface LeadComplianceFlag {
 export function leadComplianceFlags(lead: LeadSummary): LeadComplianceFlag[] {
   const flags: LeadComplianceFlag[] = [];
   const source = lead.eligibility_source ?? 'synthetic_seed';
-  const unresolvedOwner = lead.has_unresolved_owner === true;
-  if (unresolvedOwner) {
+  if (lead.has_unresolved_owner === true) {
     flags.push({
       key: 'owner_unresolved',
       label: 'Owner unresolved',
@@ -129,10 +128,12 @@ export function leadComplianceFlags(lead: LeadSummary): LeadComplianceFlag[] {
   if (lead.dnc === true) {
     flags.push({ key: 'dnc', label: 'DNC', variant: 'danger', title: `DNC source: ${source}` });
   }
-  // Gold stamps every unresolved-owner row suppression_reason=unresolved_owner;
-  // the Owner unresolved flag already says so, so it is not repeated.
-  const suppressedByOwner = unresolvedOwner && lead.suppression_reason === 'unresolved_owner';
-  if (lead.marketing_eligible === false && lead.dnc !== true && !suppressedByOwner) {
+  // Every non-DNC row that is not marketing-eligible reads "Suppressed" in
+  // its visible text, including the unresolved-owner rows gold stamps
+  // suppression_reason=unresolved_owner: "Owner unresolved" names the cause,
+  // not the suppression, and the CONTACTABILITY "Suppressed only" filter
+  // returns these rows. A DNC row keeps its DNC flag (as before this lane).
+  if (lead.marketing_eligible === false && lead.dnc !== true) {
     flags.push({
       key: 'suppressed',
       label: 'Suppressed',

@@ -106,8 +106,13 @@ test.describe('one-line rows and the merged Status cell', () => {
     // DNC plus workflow state still fits one row at the density token.
     expect(await rowHeight(page.locator(ROWS).nth(2))).toBe(44);
 
+    // An unresolved owner is suppressed from marketing, and the row says so
+    // in its visible text, next to the cause (the CONTACTABILITY "Suppressed
+    // only" filter returns exactly these rows).
     const unresolved = page.getByTestId(`lead-status-${UNRESOLVED_OWNER_LEAD.borrower_id}`);
     await expectReachable(unresolved.locator('.chip', { hasText: 'Owner unresolved' }), 'the Owner unresolved chip');
+    await expectReachable(unresolved.locator('.chip', { hasText: /^Suppressed$/ }), 'the Suppressed chip of the unresolved-owner row');
+    await expect(unresolved.locator('.lead-table__more'), 'compliance flags never fold into +n').toHaveCount(0);
 
     // The timestamps, the lifecycle control and Log live in the expanded row.
     const dncRow = page.locator(ROWS).nth(2);
