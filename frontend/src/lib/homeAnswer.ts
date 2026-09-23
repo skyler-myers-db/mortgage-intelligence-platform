@@ -108,7 +108,11 @@ export interface WhyNowTrigger {
   highlight: HomeSummaryHighlight;
   /** The server-minted token, verbatim ("+2,250", "+1.5%", "no change"). */
   display: string;
-  /** Joins the token to the noun: "no change" reads "no change in ...". */
+  /**
+   * Joins the token to the noun. A count reads as borrowers ("+2,250
+   * borrowers whose ..."); "no change" and a percent read as a change IN the
+   * population ("+1.5% in borrowers with ..."), never as a share of it.
+   */
   joiner: string;
   noun: string;
   href: string | null;
@@ -126,7 +130,7 @@ export function whyNowTriggers(summary: HomeSummary | null | undefined): WhyNowT
     return {
       highlight,
       display: highlight.display,
-      joiner: highlight.delta === 0 ? ' in ' : ' ',
+      joiner: highlight.delta === 0 || highlight.display.trim().endsWith('%') ? ' in ' : ' ',
       noun: copy?.noun ?? highlight.label,
       href: copy ? copy.href : null,
     };

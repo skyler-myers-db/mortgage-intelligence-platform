@@ -99,6 +99,22 @@ describe('whyNowTriggers', () => {
     expect(unknown.noun).toBe('future things');
   });
 
+  it('reads a percent as a change in the population, a count as borrowers', () => {
+    const [pct, , count] = whyNowTriggers(SUMMARY);
+    // "+1.5% borrowers with ..." would read as a share of borrowers.
+    expect(`${pct.display}${pct.joiner}${pct.noun}`).toBe(
+      '+1.5% in borrowers with an opportunity score of 75+',
+    );
+    expect(`${count.display}${count.joiner}${count.noun}`).toBe('+190 borrowers with an offer decision');
+    const negative = whyNowTriggers({
+      ...SUMMARY,
+      highlights: [{ ...SUMMARY.highlights[0], display: '-0.4%', value_token: '-0.4%', delta: -2, delta_pct: -0.4 }],
+    })[0];
+    expect(`${negative.display}${negative.joiner}${negative.noun}`).toBe(
+      '-0.4% in borrowers with an opportunity score of 75+',
+    );
+  });
+
   it('is empty for an absent summary', () => {
     expect(whyNowTriggers(null)).toEqual([]);
     expect(whyNowTriggers({ ...SUMMARY, highlights: undefined } as unknown as HomeSummary)).toEqual([]);

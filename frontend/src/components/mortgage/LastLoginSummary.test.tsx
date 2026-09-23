@@ -199,6 +199,14 @@ describe('LastLoginSummary (the answer band WHY NOW column)', () => {
     expect(chips().map((chip) => chip.textContent)).toEqual(['no change']);
   });
 
+  it('reads a percent token as a change in the population, never as a share of it', () => {
+    render(DELTA_SUMMARY);
+    const [pct, count] = Array.from(container.querySelectorAll('.home-answer__trigger')).map((el) => el.textContent);
+    // "+1.5% borrowers with ..." read as "1.5% of borrowers".
+    expect(pct).toBe('+1.5% in borrowers with an opportunity score of 75+');
+    expect(count).toBe('+2,250 borrowers whose rate and equity pass the refinance screen');
+  });
+
   it('first visit renders welcome copy, no delta language, no snapshot citation', () => {
     render(FIRST_VISIT_SUMMARY);
     expect(container.textContent).toContain('Welcome to your book');

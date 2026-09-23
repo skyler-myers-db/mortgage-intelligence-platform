@@ -20,9 +20,11 @@ import type { EconomicsAnalyticsResponse } from '../../types';
  * WHO to contact: the first five rows of the governed canonical ranking.
  *
  * Source is `GET /api/analytics/economics` `top_borrowers` — opportunity
- * score >= 50 plus the contact-eligibility predicate, ordered by score then
- * rate spread: the same top ten Ask Genie and the Lead Queue show. It is an
- * audit-free aggregate read. `GET /api/leads` would give the same rows but
+ * score >= 50 plus the contact-eligibility predicate, ordered by score, then
+ * rate spread, then borrower id (databricks_analytics.py). The Lead Queue
+ * breaks ties at the top score differently (`rank_overall` is a DENSE_RANK
+ * on score, then CLIP), so the copy says "ranked by opportunity score", not
+ * "the queue's top five". It is an audit-free aggregate read. `GET /api/leads` would give the same rows but
  * writes a VIEW_LEADS audit row per call, and Home must never audit on
  * render (TopLeadsQuickPick, which does read /api/leads, stays on the
  * Borrower 360 / Offer empty states where a click-through is the intent).
@@ -46,11 +48,13 @@ const WHO_SOURCE: DrawerSource = {
   assetKey: 'borrower_360',
   assetPath: 'mip.gold.borrower_360',
   description:
-    'The ranking the Lead Queue and Ask Genie share: contact-eligible borrowers with an opportunity '
-    + 'score of 50 or more, ordered by opportunity score, then rate spread.',
+    'The governed canonical ranking: contact-eligible borrowers (eligibility, consent, suppression, '
+    + 'do-not-contact and recontact gates) with an opportunity score of 50 or more, ordered by '
+    + 'opportunity score, then rate spread.',
   signals: [
     { label: 'Floor', source: 'borrower_360.opportunity_score', value: '>= 50' },
-    { label: 'Eligibility', source: 'marketing-eligible, opt-in', value: 'contactable only' },
+    { label: 'Eligibility gate', source: 'borrower_360.marketing_eligible', value: 'TRUE' },
+    { label: 'Consent', source: 'borrower_360.consent_status', value: 'opt_in' },
     { label: 'Order', source: 'opportunity_score, rate_spread_bps', value: 'descending' },
   ],
 };
@@ -124,7 +128,7 @@ export function HomeAnswerWho() {
       <p className="home-answer__note">
         {warmingUp
           ? 'Warehouse warming up; the ranking loads on its own.'
-          : 'Contactable borrowers only, ranked as the Lead Queue ranks them.'}
+          : 'Contactable borrowers only, ranked by opportunity score.'}
       </p>
     </section>
   );
