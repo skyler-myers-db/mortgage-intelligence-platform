@@ -22,6 +22,7 @@
  *    row; the old in-page routing chip is gone.
  *  - Entry uses @starting-style; reduced motion drops the transition.
  */
+import AxeBuilder from '@axe-core/playwright';
 import type { Locator, Page } from '@playwright/test';
 import type { DecisionReceipt } from '../../../src/lib/apiTypes';
 import { PRIMARY_BORROWER } from './data/borrowers';
@@ -83,6 +84,15 @@ function toastRegion(page: Page): Locator {
   return page.locator('section.toast-region[aria-label="Notifications"]');
 }
 
+/** WCAG 2.0/2.1/2.2 A + AA violations inside `selector` (the axe gate's tag set). */
+async function axeViolations(page: Page, selector: string): Promise<string[]> {
+  const results = await new AxeBuilder({ page })
+    .include(selector)
+    .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'])
+    .analyze();
+  return results.violations.map((violation) => `${violation.id}: ${violation.nodes.map((node) => node.target.join(' ')).join(' ; ')}`);
+}
+
 test.describe('unsaved-changes guard (states-05)', () => {
   test('a dirty page stops a rail click; Stay keeps the page and the typed value, Leave goes', async ({ app, page }) => {
     await dirtyPortfolio(app, page);
@@ -91,6 +101,7 @@ test.describe('unsaved-changes guard (states-05)', () => {
     let dialog = await expectBlockedOnPortfolio(page);
     // A native modal: the page behind it is inert and the dialog is on the top layer.
     expect(await dialog.evaluate((node) => node.matches(':modal'))).toBe(true);
+    expect(await axeViolations(page, 'dialog.unsaved-dialog'), 'WCAG A/AA inside the open dialog').toEqual([]);
     await dialog.getByRole('button', { name: 'Stay' }).click();
     await expect(dialog).toHaveCount(0);
     await expect(page).toHaveURL(/\/portfolio-builder$/);
@@ -222,6 +233,7 @@ test.describe('toast region (states-07 slice 1)', () => {
       await app.settle();
       await expect(toast).toHaveCount(1);
       expect(saved).toEqual(['Summit IL refi cohort']);
+      expect(await axeViolations(page, 'section.toast-region'), `WCAG A/AA in the toast region (${theme})`).toEqual([]);
 
       // Bottom-centre inside the 1440x900 viewport, painted above the page.
       const box = await toast.boundingBox();
@@ -268,6 +280,7 @@ test.describe('toast region (states-07 slice 1)', () => {
     await expect(share).toHaveText('Share this build');
     const { fg, bg } = await renderedColors(failure.locator('.toast__ico'));
     expect(contrastRatio(fg, bg)).toBeGreaterThanOrEqual(3);
+    expect(await axeViolations(page, 'section.toast-region'), 'WCAG A/AA with a failure toast').toEqual([]);
   });
 
   test('an approval routed to a loan officer is announced with its audit link', async ({ app, mockApi, page }) => {
