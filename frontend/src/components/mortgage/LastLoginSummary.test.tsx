@@ -180,6 +180,11 @@ describe('LastLoginSummary (the answer band WHY NOW column)', () => {
     // population, so the trigger links nowhere rather than somewhere wrong.
     expect(triggerLink(2)).toBeNull();
     expect(container.textContent).toContain('borrowers with an offer decision');
+    // The counts are whole-book; the queue is the contactable subset (the
+    // ~23x addressable-vs-contactable gap), and the column says so.
+    expect(container.querySelector('.home-answer__note')?.textContent).toContain(
+      'each link opens the contactable subset in the Lead Queue',
+    );
   });
 
   it('reads a zero movement as "no change in", never as zero borrowers', () => {

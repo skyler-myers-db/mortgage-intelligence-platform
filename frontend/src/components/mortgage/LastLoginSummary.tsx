@@ -106,7 +106,10 @@ export function LastLoginSummary({
         </ul>
       )}
       {valid && summary && !loading && (
-        <p className="home-answer__note">{loginSummarySubtitle(summary)}</p>
+        <p className="home-answer__note">
+          {loginSummarySubtitle(summary)} Whole book; each link opens the contactable
+          subset in the Lead Queue.
+        </p>
       )}
     </section>
   );
