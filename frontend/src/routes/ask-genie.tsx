@@ -384,7 +384,12 @@ export default function AskGenie() {
         <GrowthAgentMonitorsPanel
           agent={growthAgent}
           onOpenRoute={openRoute}
-          onOpenWorkflows={() => selectTab('workflows')}
+          onOpenWorkflows={() => {
+            selectTab('workflows');
+            // The button hides its own panel; focus the Workflows tab (always
+            // in the tablist) so keyboard focus does not fall to <body>.
+            document.getElementById(askGenieTabId('workflows'))?.focus();
+          }}
         />
       </section>
     </PageShell>

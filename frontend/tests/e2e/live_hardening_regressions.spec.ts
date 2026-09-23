@@ -539,7 +539,9 @@ test('Genie answers valid recommended and free-form questions without policy-blo
   await page.locator('textarea[aria-label="Ask Genie — question"]').fill(questions[0]);
   await page.getByRole('button', { name: /^Ask Genie$/i }).first().click();
   await expect(page.getByText(/Policy blocked|Genie reconnecting|Genie is warming up/i)).toHaveCount(0, { timeout: 60_000 });
-  await expect(page.getByText(/mip\.gold\.lead_population/i).first()).toBeVisible({ timeout: 60_000 });
+  // flow-10 (2026-09-23): source chips show a plain label and carry the
+  // governed UC path in their title attribute, so the pin reads the title.
+  await expect(page.locator('[title*="mip.gold.lead_population" i]').first()).toBeVisible({ timeout: 60_000 });
 });
 
 test('Genie state-breakdown action reconciles broad answer with eligible Lead Queue subset', async ({ request }) => {

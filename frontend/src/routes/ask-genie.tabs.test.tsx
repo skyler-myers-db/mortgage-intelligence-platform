@@ -222,9 +222,13 @@ describe('/ask-genie page tabs', () => {
     mount('/ask-genie?tab=monitors');
     await waitUntil(() => container.textContent?.includes('No saved monitors yet.') ?? false);
 
-    act(() => button(/^Open workflows$/).click());
+    const openWorkflows = button(/^Open workflows$/);
+    openWorkflows.focus();
+    act(() => openWorkflows.click());
     expect(currentLocation).toBe('/ask-genie?tab=workflows');
     expect(selectedTab().textContent).toBe('Workflows');
+    // The button hid its own panel: focus lands on the selected tab, not <body>.
+    expect(document.activeElement).toBe(selectedTab());
   });
 
   // Scope: copy this route AUTHORS (hero, headings, empty states, captions).
