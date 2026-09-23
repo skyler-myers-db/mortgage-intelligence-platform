@@ -186,9 +186,36 @@ describe('DecisionReceipt', () => {
 
     expect(receipt()).toBeNull();
     const unavailable = container.querySelector<HTMLElement>('[data-testid="decision-receipt-unavailable"]')!;
+    expect(unavailable.dataset.receiptState).toBe('forbidden');
     expect(unavailable.textContent).toContain('Recorded; receipt unavailable');
     expect(unavailable.querySelector('[data-testid="decision-receipt-audit-id"]')?.textContent).toContain(AUDIT_ID);
     expect([...unavailable.querySelectorAll('button')].map((button) => button.textContent?.trim())).toEqual(['Copy audit id']);
+  });
+
+  it('does not call a 404 read-back recorded: it says the ledger found no row and keeps the retry', async () => {
+    apiMocks.auditReceipt
+      .mockRejectedValueOnce(new ApiError('receipt not found', { path: RECEIPT_PATH, status: 404 }))
+      .mockResolvedValue(LEDGER);
+    mount();
+    await settle();
+
+    expect(receipt()).toBeNull();
+    const unavailable = container.querySelector<HTMLElement>('[data-testid="decision-receipt-unavailable"]')!;
+    expect(unavailable.dataset.receiptState).toBe('not-found');
+    expect(unavailable.textContent).toContain(
+      'The write returned this audit id, but the ledger read-back did not find a decision row for it.',
+    );
+    expect(unavailable.textContent).toContain('Ledger row not found');
+    // Nothing on the not-found state claims the row is in the ledger.
+    expect(unavailable.textContent).not.toContain('is in the audit ledger');
+    expect(unavailable.textContent).not.toContain('Recorded');
+    expect(unavailable.querySelector('[data-testid="decision-receipt-audit-id"]')?.textContent).toContain(AUDIT_ID);
+    const buttons = [...unavailable.querySelectorAll('button')];
+    expect(buttons.map((button) => button.textContent?.trim())).toEqual(['Copy audit id', 'Retry read-back']);
+
+    await act(async () => buttons[1].click());
+    await settle();
+    expect(receipt()).not.toBeNull();
   });
 
   it('offers a retry for a non-scoped read-back failure', async () => {

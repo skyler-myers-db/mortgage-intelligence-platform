@@ -9,7 +9,9 @@
  * construction: nothing on the card comes from the POST body; while the
  * read-back is in flight the card is a "Recording decision…" skeleton, and a
  * refused read (another approver's row, no admin) is a neutral "Recorded;
- * receipt unavailable" state that still shows the audit id.
+ * receipt unavailable" state that still shows the audit id. A 404 (no
+ * decision row for the id the write returned) is NOT shown as recorded: it
+ * says the ledger did not confirm the row and keeps "Retry read-back".
  *
  * BEM block `.decision-receipt` (frontend/src/design-system/components/
  * 19-decision-receipt.css), an extension of the prototype's `.surface`.
@@ -108,6 +110,16 @@ function receiptRows(receipt: DecisionReceiptPayload): ReceiptRow[] {
   return rows;
 }
 
+/** Why the read-back did not return a receipt. */
+type UnavailableState = 'forbidden' | 'not-found' | 'error';
+
+function unavailableState(error: unknown): UnavailableState {
+  const status = error instanceof ApiError ? error.status : null;
+  if (status === 403) return 'forbidden';
+  if (status === 404) return 'not-found';
+  return 'error';
+}
+
 function staggerIndex(index: number): CSSProperties {
   return { '--receipt-i': index } as CSSProperties;
 }
@@ -173,24 +185,38 @@ export function DecisionReceipt({
   }
 
   if (query.isError || !query.data) {
-    const status = query.error instanceof ApiError ? query.error.status : null;
-    const scoped = status === 403 || status === 404;
+    const state = unavailableState(query.error);
     const message = query.error instanceof Error ? query.error.message : 'unreachable';
+    // Only a 403 is "in the ledger, not yours to read". A 404 means the
+    // read-back found no decision row for the id the write returned: the
+    // integrity failure the read-back exists to catch, so it claims nothing
+    // about the ledger and keeps the retry.
+    const notFound = state === 'not-found';
+    const explanation = state === 'forbidden'
+      ? DECISION_RECEIPT_COPY.unavailableScoped
+      : notFound
+        ? DECISION_RECEIPT_COPY.unavailableNotFound
+        : `${DECISION_RECEIPT_COPY.unavailableError} ${message}`;
     return (
       <section
         className={`${blockClass} decision-receipt--unavailable`}
         role="status"
         aria-labelledby={titleId}
         data-testid="decision-receipt-unavailable"
+        data-receipt-state={state}
       >
         <div className="surface__hdr">
-          <Chip variant="neutral" icon="shield">{DECISION_RECEIPT_COPY.recorded}</Chip>
-          <div className="h-4" id={titleId}>{DECISION_RECEIPT_COPY.unavailableTitle}</div>
+          {notFound ? (
+            <Chip variant="warning" icon="audit">{DECISION_RECEIPT_COPY.unconfirmed}</Chip>
+          ) : (
+            <Chip variant="neutral" icon="shield">{DECISION_RECEIPT_COPY.recorded}</Chip>
+          )}
+          <div className="h-4" id={titleId}>
+            {notFound ? DECISION_RECEIPT_COPY.notFoundTitle : DECISION_RECEIPT_COPY.unavailableTitle}
+          </div>
         </div>
         <div className="surface__body">
-          <p className="muted fs-12 flush">
-            {scoped ? DECISION_RECEIPT_COPY.unavailableScoped : `${DECISION_RECEIPT_COPY.unavailableError} ${message}`}
-          </p>
+          <p className="muted fs-12 flush">{explanation}</p>
           <div className="decision-receipt__ids" data-testid="decision-receipt-audit-id">
             audit event {auditEventId}
           </div>
@@ -198,7 +224,7 @@ export function DecisionReceipt({
         <div className="surface__ft">
           <div className="decision-receipt__actions">
             <Button size="sm" icon="doc" onClick={() => void onCopy()}>{copyLabel}</Button>
-            {!scoped && (
+            {state !== 'forbidden' && (
               <Button size="sm" onClick={() => void query.refetch()}>{DECISION_RECEIPT_COPY.retry}</Button>
             )}
           </div>

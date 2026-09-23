@@ -17,6 +17,10 @@ export const DECISION_RECEIPT_COPY = {
   unavailableScoped:
     'The decision is in the audit ledger. This receipt is scoped to the approver who wrote it or an admin.',
   unavailableError: "Couldn't read the ledger row back:",
+  unconfirmed: 'Unconfirmed',
+  notFoundTitle: 'Ledger row not found',
+  unavailableNotFound:
+    'The write returned this audit id, but the ledger read-back did not find a decision row for it.',
   evidence: 'Evidence cited',
   noEvidenceAssets: 'No governed assets recorded for this offer branch.',
   scoreAtDecision: 'Score at decision',
