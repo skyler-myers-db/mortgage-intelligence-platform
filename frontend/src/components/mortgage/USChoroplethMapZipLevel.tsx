@@ -16,7 +16,7 @@ import { useEffect, useRef, useState, type CSSProperties, type Dispatch, type Se
 import type { GeoAssignmentOverlayUnit } from '../../lib/api';
 import { safeSegmentName } from '../../lib/segmentMetadata';
 import type { StateRollup, ZipRollup } from '../../types';
-import { moveRovingFocus, showCardOnFocus, zipAriaLabel } from './USChoroplethMap.a11y';
+import { claimDrillFocus, moveRovingFocus, showCardOnFocus, zipAriaLabel } from './USChoroplethMap.a11y';
 import { classify, type ChoroplethScale } from './USChoroplethMap.scale';
 import type { HoverState } from './USChoroplethMap.utils';
 
@@ -37,9 +37,10 @@ interface USChoroplethMapZipLevelProps {
   overlayByUnit: Record<string, GeoAssignmentOverlayUnit>;
   /** ZIP currently selected, or null. Gates covering-officer disclosure. */
   selectedZip: string | null;
-  /** Move focus to the tab-stop tile once the grid renders (keyboard drill). */
+  /** Move focus here once the rung renders (keyboard drill): to the tab-stop
+   *  tile, or to "Open Lead Queue" when the state has no ZIP rollup. */
   autoFocus?: boolean;
-  /** Called once focus has moved, so a later Back navigation does not steal it. */
+  /** Called once the rung has a focus target, so a later Back navigation does not steal focus. */
   onAutoFocused?: () => void;
   setHover: Dispatch<SetStateAction<HoverState | null>>;
   /** Select the ZIP and deep-link to its filtered Lead Queue. */
@@ -75,9 +76,15 @@ export function USChoroplethMapZipLevel({
     ?? visible[0]?.zip
     ?? null;
   const listRef = useRef<HTMLUListElement | null>(null);
+  const emptyActionRef = useRef<HTMLButtonElement | null>(null);
   useEffect(() => {
     if (!autoFocus) return;
-    listRef.current?.querySelector<HTMLElement>('[data-map-unit][tabindex="0"]')?.focus();
+    // The state path that had focus is gone. Without a tile (an empty
+    // rollup), the empty state's action is the target, never <body>.
+    const tile = listRef.current?.querySelector<HTMLElement>('[data-map-unit][tabindex="0"]') ?? null;
+    const target = tile ?? emptyActionRef.current;
+    if (!target) return;
+    claimDrillFocus(target);
     onAutoFocused?.();
   }, [autoFocus, onAutoFocused]);
 
@@ -95,6 +102,7 @@ export function USChoroplethMapZipLevel({
             Browse this state&apos;s lead queue — the filter will narrow to borrowers in {drillStateName}.
           </div>
           <button
+            ref={emptyActionRef}
             type="button"
             className="btn btn--ghost"
             onClick={onOpenStateQueue}

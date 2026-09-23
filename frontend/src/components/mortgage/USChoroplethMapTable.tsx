@@ -8,8 +8,14 @@
  *
  * Prototype vocabulary: `.tbl` / `.tbl__sort` (design_files/index.html:595,
  * the ranked-borrower table); `.map-table` only sizes it inside the map.
+ *
+ * A state row's button drills, which re-mounts the stage and removes that
+ * button. The ZIP table then takes focus itself (it is named by its
+ * caption), so a keyboard or screen-reader user lands on the drilled data
+ * instead of <body>.
  */
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { claimDrillFocus } from './USChoroplethMap.a11y';
 import type { MapClass } from './USChoroplethMap.scale';
 
 export interface MapTableRow {
@@ -32,13 +38,30 @@ interface USChoroplethMapTableProps {
   caption: string;
   rows: MapTableRow[];
   overlayActive: boolean;
+  /** Take focus once rendered: a drill from a row of the previous table removed the focused button. */
+  autoFocus?: boolean;
+  /** Called once focus has moved, so a later Back navigation does not steal it. */
+  onAutoFocused?: () => void;
 }
 
 const fmt = (value: number | null | undefined) =>
   typeof value === 'number' ? value.toLocaleString('en-US') : '—';
 
-export function USChoroplethMapTable({ unitLabel, caption, rows, overlayActive }: USChoroplethMapTableProps) {
+export function USChoroplethMapTable({
+  unitLabel,
+  caption,
+  rows,
+  overlayActive,
+  autoFocus = false,
+  onAutoFocused,
+}: USChoroplethMapTableProps) {
   const [direction, setDirection] = useState<'descending' | 'ascending'>('descending');
+  const tableRef = useRef<HTMLTableElement | null>(null);
+  useEffect(() => {
+    if (!autoFocus) return;
+    claimDrillFocus(tableRef.current);
+    onAutoFocused?.();
+  }, [autoFocus, onAutoFocused]);
   const sorted = useMemo(() => {
     const sign = direction === 'descending' ? -1 : 1;
     return [...rows].sort((a, b) => sign * (a.count - b.count) || a.name.localeCompare(b.name));
@@ -47,7 +70,7 @@ export function USChoroplethMapTable({ unitLabel, caption, rows, overlayActive }
   const showContactable = rows.some((row) => typeof row.contactable === 'number');
   return (
     <div className="map-table" data-testid="map-table">
-      <table className="tbl map-table__table">
+      <table ref={tableRef} className="tbl map-table__table" tabIndex={-1}>
         <caption className="sr-only">{caption}</caption>
         <thead>
           <tr>

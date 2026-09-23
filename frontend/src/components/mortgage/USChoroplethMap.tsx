@@ -126,9 +126,15 @@ export function USChoroplethMap({
   const [hover, setHover] = useState<HoverState | null>(null);
   const [overlayOn, setOverlayOn] = useState(false);
   const [view, setView] = useState<MapView>('map');
-  // A keyboard drill moves focus on to the ZIP tiles (the state path it came
-  // from is gone); a pointer drill or a Back navigation does not.
-  const [keyboardDrill, setKeyboardDrill] = useState(false);
+  // A keyboard drill, and any drill from a table row, removes the control
+  // that had focus (the state path, the row's button). Focus then moves on to
+  // the drilled level (a ZIP tile, the empty state's action or the ZIP table)
+  // rather than falling to <body>; a warming / failed stage holds it
+  // meanwhile. The request names the drilled state and stays open until a
+  // final target mounts; a pointer drill or a Back navigation makes none.
+  const [drillFocusFor, setDrillFocusFor] = useState<string | null>(null);
+  const drillFocus = drillFocusFor !== null && drillFocusFor === current.state;
+  const onDrillFocused = useCallback(() => setDrillFocusFor(null), []);
   const navigate = useNavigate();
   const footprint = useOptionalFootprint();
 
@@ -280,7 +286,7 @@ export function USChoroplethMap({
   }, [activeStateCode, current.zip, overlayOn, overlayData, overlayByUnit, segmentFilter, segmentFilterMode]);
 
   const activateState = useCallback(
-    (location: UsaSvgMapLocation, hasFacts: boolean, viaKeyboard: boolean) => {
+    (location: UsaSvgMapLocation, hasFacts: boolean, moveFocus: boolean) => {
       if (drillBehavior === 'navigate') {
         // Home-page teaser → deep-link to the filtered queue, only for a
         // state with data; clicking an unsupported state is a no-op.
@@ -289,7 +295,7 @@ export function USChoroplethMap({
       }
       if (!footprintStates[location.id] && !hasFacts) return;
       // Straight to ZIPs — there is no honest county rung.
-      setKeyboardDrill(viaKeyboard);
+      setDrillFocusFor(moveFocus ? location.id.toUpperCase() : null);
       changeSelection({ state: location.id.toUpperCase(), county: null, zip: null });
     },
     [changeSelection, drillBehavior, footprintStates, leadQueuePath, navigate],
@@ -314,7 +320,8 @@ export function USChoroplethMap({
             contactable: rollup.contactable,
             unattended: overlayActive ? overlayByUnit[location.id]?.unattended_count ?? null : undefined,
             cls: classify(scale, value(rollup.addressable, location.id)),
-            onOpen: drillBehavior === 'filter' ? () => activateState(location, true, false) : undefined,
+            // The row's button is gone after the drill, whatever pressed it.
+            onOpen: drillBehavior === 'filter' ? () => activateState(location, true, true) : undefined,
           };
         });
     }
@@ -343,6 +350,7 @@ export function USChoroplethMap({
               Open Lead Queue for {drillStateName}
             </button>
           ) : undefined}
+          autoFocus={drillFocus}
         />
       );
     }
@@ -358,6 +366,8 @@ export function USChoroplethMap({
             : `Marketable borrowers by ZIP in ${drillStateName}, ${segmentCaption}`}
           rows={tableRows}
           overlayActive={overlayActive}
+          autoFocus={drillFocus}
+          onAutoFocused={onDrillFocused}
         />
       );
     }
@@ -387,8 +397,8 @@ export function USChoroplethMap({
         overlayActive={overlayActive}
         overlayByUnit={overlayByUnit}
         selectedZip={current.zip}
-        autoFocus={keyboardDrill}
-        onAutoFocused={() => setKeyboardDrill(false)}
+        autoFocus={drillFocus}
+        onAutoFocused={onDrillFocused}
         setHover={setHover}
         onSelectZip={(zip) => {
           // Record the ZIP on this entry, then open its queue: Back returns

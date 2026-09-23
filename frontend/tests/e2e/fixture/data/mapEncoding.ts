@@ -6,11 +6,12 @@
  * whose counts land one or more states in every class of the sqrt scale,
  * so a spec can compare every painted step with its legend swatch. It is
  * registered with `mockApi.register(...)` by the spec that needs it, never
- * added to the default registry.
+ * added to the default registry. `emptyZipRollupsFixture` is the same kind of
+ * override: every state answers with no ZIP rollup, the honest empty rung.
  *
  * Synthetic numbers only.
  */
-import type { StateRollupResponse } from '../../../../src/types';
+import type { StateRollupResponse, ZipRollupResponse } from '../../../../src/types';
 import { fixture, json, type FixtureEntry } from '../mockApi';
 import { SNAPSHOT_DATE } from './reference';
 
@@ -43,4 +44,14 @@ export const MAP_ALL_CLASSES_ROLLUPS: StateRollupResponse = {
 /** The override entry, for `mockApi.register(entry.method, entry.pattern, entry.handler)`. */
 export const mapAllClassesFixture: FixtureEntry = fixture('GET', '/api/geo/state-rollups', () =>
   json<StateRollupResponse>(MAP_ALL_CLASSES_ROLLUPS),
+);
+
+/** Per-test override: the drilled state has no ZIP-level rollup (`rollups: []`). */
+export const emptyZipRollupsFixture: FixtureEntry = fixture('GET', '/api/geo/zip-rollups', ({ query }) =>
+  json<ZipRollupResponse>({
+    state: (query.get('state') ?? '').toUpperCase(),
+    fips_5: null,
+    rollups: [],
+    snapshot_date: SNAPSHOT_DATE,
+  }),
 );

@@ -18,6 +18,7 @@ import { createMipQueryClient } from '../../lib/queryClient';
 import { ApiError } from '../../lib/api';
 import type { StateRollupResponse, ZipRollupResponse } from '../../types';
 import { USChoroplethMap } from './USChoroplethMap';
+import { claimDrillFocus } from './USChoroplethMap.a11y';
 import { EMPTY_MAP_SELECTION, type MapSelection } from './USChoroplethMap.selection';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -283,5 +284,42 @@ describe('USChoroplethMap encoding, resilience and URL control (dataviz-02 / dat
     await act(async () => back?.click());
     expect(document.querySelector('[data-testid="map-table"]')).toBeNull();
     expect(path('il')).not.toBeNull();
+  });
+});
+
+describe('claimDrillFocus (a11y-04: a drill never drops focus to <body>)', () => {
+  afterEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  function buttons(...names: string[]): HTMLButtonElement[] {
+    return names.map((name) => {
+      const button = document.createElement('button');
+      button.textContent = name;
+      document.body.append(button);
+      return button;
+    });
+  }
+
+  it('takes focus that fell to <body> when the drill removed the focused control', () => {
+    const [target] = buttons('Open Lead Queue for Arizona');
+    expect(document.activeElement).toBe(document.body);
+    expect(claimDrillFocus(target)).toBe(true);
+    expect(document.activeElement).toBe(target);
+  });
+
+  it('moves on from the interim stage a pending drill parked focus on', () => {
+    const [stage, retry] = buttons('ZIP rollups for Arizona', 'Retry');
+    stage.focus();
+    expect(claimDrillFocus(retry, stage)).toBe(true);
+    expect(document.activeElement).toBe(retry);
+  });
+
+  it('never pulls focus away from where the user moved it, and ignores a missing target', () => {
+    const [elsewhere, target] = buttons('Clear geography', 'ZIP 85004');
+    elsewhere.focus();
+    expect(claimDrillFocus(target)).toBe(false);
+    expect(document.activeElement).toBe(elsewhere);
+    expect(claimDrillFocus(null)).toBe(false);
   });
 });

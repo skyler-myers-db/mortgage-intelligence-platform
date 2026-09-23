@@ -13,12 +13,15 @@
  *    shared link opens the drill, and "Clear geography" resets map and table
  *    together.
  *  - Keyboard: one Tab stop reaches the states, arrows move between them with
- *    the card showing, and "View as table" lists the map's numbers.
+ *    the card showing, and "View as table" lists the map's numbers. A drill
+ *    that removes the focused control (a table row, a state with no ZIP
+ *    rollup, a ZIP read still warming up) hands focus to the drilled level,
+ *    never to <body>.
  */
 import AxeBuilder from '@axe-core/playwright';
 import type { Page } from '@playwright/test';
 import type { FixtureTheme } from './app';
-import { MAP_ALL_CLASSES_COUNTS, mapAllClassesFixture } from './data/mapEncoding';
+import { MAP_ALL_CLASSES_COUNTS, emptyZipRollupsFixture, mapAllClassesFixture } from './data/mapEncoding';
 import { STATES, TOTALS, stateByCode } from './data/reference';
 import { WAREHOUSE_WARMING_UP } from './mockApi';
 import { contrastRatio, type Rgb } from './renderedColor';
@@ -121,6 +124,18 @@ async function readMapPaint(page: Page): Promise<MapPaint> {
 async function waitForStateFills(page: Page): Promise<void> {
   await expect(page.locator('path.map-region.has-data').first()).toBeVisible();
   await expect(page.locator('.map-levels')).toHaveAttribute('aria-busy', 'false');
+}
+
+/** Focus a state path and press Enter: the keyboard drill. */
+async function keyboardDrill(page: Page, stateId: string): Promise<void> {
+  await page.locator(`path[data-map-unit="${stateId}"]`).focus();
+  await page.keyboard.press('Enter');
+}
+
+/** Focus is on exactly one element inside the map, not lost to <body>. */
+async function expectFocusInMap(page: Page): Promise<void> {
+  await expect(page.locator('.map-wrap :focus')).toHaveCount(1);
+  expect(await page.evaluate(() => document.activeElement === document.body)).toBe(false);
 }
 
 test.describe('ramp and legend encoding (dataviz-02 / responsive-05)', () => {
@@ -355,12 +370,64 @@ test.describe('keyboard, screen reader and table access (a11y-04)', () => {
       const scan = await new AxeBuilder({ page }).include('.map-wrap').withTags(WCAG_TAGS).analyze();
       expect(scan.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`)).toEqual([]);
 
-      // A state row drills like the map does.
-      await table.getByRole('button', { name: 'Texas' }).click();
+      // A state row drills like the map does. The row's button goes with the
+      // drill, so focus moves to the ZIP table (named by its caption).
+      await table.getByRole('button', { name: 'Texas' }).focus();
+      await page.keyboard.press('Enter');
       await expect(page).toHaveURL(/geo_state=TX/);
       await expect(page.getByTestId('map-table-total')).toHaveText((stateByCode('TX')?.addressable ?? 0).toLocaleString('en-US'));
+      await expect(page.getByRole('table', { name: /^Marketable borrowers by ZIP in Texas/ })).toBeFocused();
+      await expectFocusInMap(page);
       await page.getByRole('button', { name: 'View as map' }).click();
       await expect(page.getByRole('list', { name: 'ZIPs in Texas' })).toBeVisible();
     });
   }
+});
+
+test.describe('a drill never drops focus to <body> (a11y-04)', () => {
+  test('Enter on a state with no ZIP rollup focuses its Lead Queue action', async ({ app, mockApi, page }) => {
+    mockApi.register(emptyZipRollupsFixture.method, emptyZipRollupsFixture.pattern, emptyZipRollupsFixture.handler);
+    await app.setTheme('dark');
+    await app.gotoRoute('/');
+    await waitForStateFills(page);
+
+    await keyboardDrill(page, 'az');
+    await expect(page).toHaveURL(/geo_state=AZ/);
+    await expect(page.locator('.map-wrap')).toContainText('No ZIP-level rollup for Arizona.');
+    await expect(page.getByRole('button', { name: 'Open Lead Queue for Arizona' })).toBeFocused();
+    await expectFocusInMap(page);
+  });
+
+  test('a ZIP read still warming up holds focus on the stage, then hands it to the first ZIP', async ({ app, page }) => {
+    await app.setTheme('light');
+    await app.gotoRoute('/');
+    await waitForStateFills(page);
+    const recover = app.degrade('/api/geo/zip-rollups', WAREHOUSE_WARMING_UP);
+
+    await keyboardDrill(page, 'az');
+    const stage = page.getByRole('group', { name: 'ZIP rollups for Arizona' });
+    await expect(stage.getByTestId('warming-up-block')).toBeVisible({ timeout: 20_000 });
+    await expect(stage).toBeFocused();
+
+    recover();
+    const firstZip = page.getByRole('list', { name: 'ZIPs in Arizona' }).getByRole('button').first();
+    await expect(firstZip).toBeFocused({ timeout: 20_000 });
+    await expect(page.locator('.map-tip .map-tip__name')).toHaveText(/^ZIP \d{5}, Arizona$/);
+  });
+
+  test('a failed ZIP read focuses Retry, and Retry hands focus to the first ZIP', async ({ app, page }) => {
+    await app.setTheme('dark');
+    await app.gotoRoute('/');
+    await waitForStateFills(page);
+    const recover = app.degrade('/api/geo/zip-rollups', { status: 500, body: { detail: 'fixture: ZIP rollups are down' } });
+
+    await keyboardDrill(page, 'az');
+    const retry = page.locator('.map-wrap').getByRole('button', { name: 'Retry' });
+    await expect(retry).toBeFocused();
+    await expectFocusInMap(page);
+
+    recover();
+    await page.keyboard.press('Enter');
+    await expect(page.getByRole('list', { name: 'ZIPs in Arizona' }).getByRole('button').first()).toBeFocused();
+  });
 });

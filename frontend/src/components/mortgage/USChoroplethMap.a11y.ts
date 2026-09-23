@@ -101,3 +101,21 @@ export function showCardOnFocus(element: Element, show: (anchor: { x: number; y:
     if (element.ownerDocument.activeElement === element) show(focusAnchor(element));
   });
 }
+
+/**
+ * Give focus to `target` after a drill unmounted the control that held it
+ * (the state path, the table row's button): without this, focus falls to
+ * `<body>` and a keyboard or screen-reader user is thrown back to the top of
+ * the document. It only claims focus that is lost (on `<body>`) or parked on
+ * `interim` (the warming / failed stage a pending drill took it to), so a
+ * rollup that resolves late never pulls focus away from where the user
+ * moved it. Returns whether `target` now has focus.
+ */
+export function claimDrillFocus(target: HTMLElement | null, interim: Element | null = null): boolean {
+  if (!target) return false;
+  const doc = target.ownerDocument;
+  const active = doc.activeElement;
+  if (active && active !== doc.body && active !== interim) return false;
+  target.focus();
+  return doc.activeElement === target;
+}
