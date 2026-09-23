@@ -41,7 +41,9 @@ describe('answer plain text', () => {
   it('flattens markdown, keeps the headline metric, and includes EVERY row, not the capped table', () => {
     const text = answerPlainText(payload());
     expect(text.startsWith('1,600 borrowers')).toBe(true);
-    expect(text).toContain('Texas leads with 900 in-the-money borrowers.');
+    // The wording the bubble displays, not the raw wire text.
+    expect(text).toContain('Texas leads with 900 borrowers passing the refinance-economics screen.');
+    expect(text).not.toContain('in-the-money');
     expect(text).not.toContain('**');
     expect(text).not.toContain('`');
     // Tab-separated rows with humanized headers, all five columns present.

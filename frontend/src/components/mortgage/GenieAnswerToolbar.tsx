@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import type { GenieAnswer as GenieAnswerShape } from '../../types';
 import { Icon } from '../Icon';
+import { normalizeGenieAnswerLanguage } from '../../lib/genieAnswerLanguage';
 import { formatCell, humanizeKey } from './GenieAnswer.logic';
+import { stripQuestionRestatement } from './GenieAnswer.markdown';
 
 /* ------------------------------------------------------------------------
  * Answer toolbar: Copy SQL / Copy answer (audit 2026-09-21 `genie-06`).
@@ -36,6 +38,9 @@ function rowsAsText(rows: Array<Record<string, unknown>>): string {
  * The whole answer as plain text: headline metric, the narrative (or the
  * summary plus every section of a deep-research sweep), and EVERY row --
  * not the capped table -- so what the user copies is the answer's data.
+ * The narrative is copied in the wording the bubble DISPLAYS (the same
+ * restatement strip and product-language normalization GenieAnswer applies),
+ * so the clipboard never says something the screen did not.
  */
 export function answerPlainText(payload: GenieAnswerShape): string {
   const parts: string[] = [];
@@ -52,7 +57,7 @@ export function answerPlainText(payload: GenieAnswerShape): string {
       parts.push([title, body, rows].filter(Boolean).join('\n'));
     }
   } else if ((payload.answer ?? '').trim()) {
-    parts.push(plainText(payload.answer));
+    parts.push(plainText(normalizeGenieAnswerLanguage(stripQuestionRestatement(payload.answer))));
   }
   if (sections.length === 0 && Array.isArray(payload.table_rows) && payload.table_rows.length > 0) {
     parts.push(rowsAsText(payload.table_rows));
@@ -103,7 +108,7 @@ export function GenieAnswerToolbar({ payload }: { payload: GenieAnswerShape }) {
   };
 
   return (
-    <div className="genie-answer__toolbar" role="group" aria-label="Answer actions">
+    <div className="genie-answer__toolbar" role="group" aria-label="Copy this answer">
       {sql && (
         <button
           type="button"
