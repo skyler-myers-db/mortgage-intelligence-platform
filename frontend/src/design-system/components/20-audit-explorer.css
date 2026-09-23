@@ -9,3 +9,23 @@
    ============================================================ */
 .filter-row--audit { align-items: flex-end; }
 .filter-row__group--date { inline-size: 10rem; }
+
+/* ============================================================
+   Lead Queue export button while its LEAD_EXPORT receipt is
+   pending (audit tables-08, same lane). The pending state is
+   aria-disabled plus aria-busy, never native `disabled` (a focused
+   button that turns disabled drops keyboard focus), so without
+   this it would look and hover as active. It takes the
+   .btn[disabled] look from 01-app-shell.css with a progress
+   cursor: the click is being recorded, not refused. A state rule
+   on the existing .btn inside .lead-table__header-actions; no new
+   block.
+   ============================================================ */
+.lead-table__header-actions .btn[aria-busy="true"],
+.lead-table__header-actions .btn[aria-busy="true"]:hover {
+  cursor: progress;
+  box-shadow: none;
+  background: var(--bg-3);
+  border-color: var(--line-2);
+  color: var(--text-2);
+}

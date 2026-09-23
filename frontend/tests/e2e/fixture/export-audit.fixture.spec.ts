@@ -68,6 +68,17 @@ const focusedControl = (page: import('@playwright/test').Page) =>
     return testId ? `${active.tagName} ${testId}` : active.tagName;
   });
 
+/** A colour token as the computed value the page paints (for toHaveCSS). */
+const resolvedColor = (page: import('@playwright/test').Page, token: string) =>
+  page.evaluate((name) => {
+    const probe = document.createElement('span');
+    probe.style.color = `var(${name})`;
+    document.body.append(probe);
+    const value = getComputedStyle(probe).color;
+    probe.remove();
+    return value;
+  }, token);
+
 test.describe('audited lead CSV export', () => {
   test('two selected rows: one receipt, and the download waits for it', async ({ app, page, mockApi }) => {
     const receipts: LeadExportReceiptRequest[] = [];
@@ -155,11 +166,16 @@ test.describe('audited lead CSV export', () => {
     await expect(exportButton).toHaveText('Recording export…');
     await expect(exportButton).toHaveAttribute('aria-disabled', 'true');
     expect(await focusedControl(page), 'focus while the receipt is held').toBe(EXPORT_BUTTON_FOCUSED);
+    // It also looks unavailable (the .btn[disabled] colours, a progress cursor),
+    // not like an active button that merely changed its label.
+    await expect(exportButton).toHaveCSS('cursor', 'progress');
+    await expect(exportButton).toHaveCSS('color', await resolvedColor(page, '--text-2'));
 
     releaseReceipt();
     await downloadEvent;
     await expect(page.getByTestId('lead-export-receipt')).toContainText(`audit ${EXPORT_RECEIPT_ID}`);
     await expect(exportButton).not.toHaveAttribute('aria-disabled');
+    await expect(exportButton).toHaveCSS('cursor', 'pointer');
     expect(await focusedControl(page), 'focus after the download').toBe(EXPORT_BUTTON_FOCUSED);
     expect(receipts).toBe(1);
   });
