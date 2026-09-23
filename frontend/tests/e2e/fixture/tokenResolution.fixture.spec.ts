@@ -7,6 +7,7 @@
  * shorthand at computed-value time; a per-selector override shadows a
  * token) fails here even when the source-level gates pass.
  */
+import { PRIMARY_BORROWER } from './data/borrowers';
 import { asComputedRgb, contrastRatio, parseRgb, renderedColors, tokenValue } from './renderedColor';
 import { expect, test, type FixtureTheme } from './test';
 
@@ -97,6 +98,26 @@ for (const theme of THEMES) {
     expect(await asComputedRgb(page, await tokenValue(panel, '--scatter-score-med')), 'the panel band token').toBe(ink);
     const painted = await renderedColors(band);
     expect(painted.color, 'legend band text').toBe(ink);
+    const ratio = contrastRatio(painted.fg, painted.bg);
+    expect(ratio, `${painted.color} on rgb(${painted.bg.join(', ')}) = ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5);
+  });
+}
+
+for (const theme of THEMES) {
+  test(`${theme}: the offer prototype's "Not a live offer" banner paints the warning ink at AA (responsive-02)`, async ({ app, page }) => {
+    // The compliance disclaimer on the borrower-offer prototype was 1.29:1 in
+    // the light theme (register responsive-02). It paints
+    // --status-warning-ink on its own --status-warning-soft tint, so read it
+    // rendered, composited over what is really behind the banner.
+    await app.setTheme(theme);
+    await app.gotoRoute(`/offer-orchestrator/${PRIMARY_BORROWER.borrower_id}`);
+    await page.getByTestId('preview-borrower-offer').click();
+    const banner = page.getByTestId('borrower-offer-mock').getByRole('note');
+    await expect(banner).toContainText('Not a live offer');
+    const painted = await renderedColors(banner);
+    expect(painted.color, 'paints --status-warning-ink').toBe(
+      await asComputedRgb(page, await tokenValue(banner, '--status-warning-ink')),
+    );
     const ratio = contrastRatio(painted.fg, painted.bg);
     expect(ratio, `${painted.color} on rgb(${painted.bg.join(', ')}) = ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5);
   });
