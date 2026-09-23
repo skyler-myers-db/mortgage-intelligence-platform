@@ -465,6 +465,22 @@ test.describe('Segments filters live in the URL (flow-09)', () => {
     await expect(cardSelect(page, 'Prime Refi Candidates')).toHaveAttribute('aria-pressed', 'false');
     await expect(page.getByRole('button', { name: 'Clear filters' })).toBeDisabled();
   });
+
+  // Review round 2: on the footprint's fallback a `?state=TX` deep link
+  // showed 'LOCATION: TX' while the control's options listed only 'All'.
+  test('a state code the footprint cannot verify stays the LOCATION value and is one of its options', async ({ app, mockApi, page }) => {
+    mockApi.register('GET', '/api/config/footprint', () => json({ states: [], geography_scope: null, using_fallback: true }));
+    await app.gotoRoute(`${ROUTE}?state=TX`);
+    const trigger = filterTrigger(page, 'LOCATION');
+    await expect(trigger).toHaveAttribute('aria-label', 'LOCATION: TX');
+    await trigger.click();
+    const listbox = page.getByRole('listbox', { name: 'LOCATION' });
+    await expect(listbox.getByRole('option')).toHaveText(['All', 'TX']);
+    await expect(listbox.getByRole('option', { name: 'TX' })).toHaveAttribute('aria-selected', 'true');
+    await listbox.getByRole('option', { name: 'All' }).click();
+    await expect(trigger).toHaveAttribute('aria-label', 'LOCATION: All');
+    expect(new URL(page.url()).searchParams.has('state')).toBe(false);
+  });
 });
 
 test.describe('Borrower 360 proof drawer (flow-09)', () => {

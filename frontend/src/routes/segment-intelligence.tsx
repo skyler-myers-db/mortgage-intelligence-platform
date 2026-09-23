@@ -121,6 +121,16 @@ export default function SegmentIntelligence() {
     () => new Map(Object.entries(locationToStates).map(([name, codes]) => [codes[0] ?? 'All', name])),
     [locationToStates],
   );
+  // While the footprint cannot vouch for a URL's state code (still loading,
+  // or on its fallback) the parser keeps the code the link asked for; list
+  // it under its code so the control's options include the value it shows
+  // and applies, as the Lead Queue's state control does.
+  const locationOptions = useMemo(
+    () => (chipFilters.location === 'All' || stateNameByCode.has(chipFilters.location)
+      ? locationToStates
+      : { ...locationToStates, [chipFilters.location]: [chipFilters.location] }),
+    [chipFilters.location, locationToStates, stateNameByCode],
+  );
   // Geography drill state emitted by USChoroplethMap. State is the 2-char
   // USPS code; null = US level (no geography filter). ZIP is pushed down to
   // /api/leads so the ranked table follows the same state → ZIP cohort the
@@ -443,8 +453,8 @@ export default function SegmentIntelligence() {
           <FilterSelect
             label="LOCATION"
             value={stateNameByCode.get(chipFilters.location) ?? chipFilters.location}
-            options={Object.keys(locationToStates)}
-            onChange={(v) => setChipFilter('location', locationToStates[v]?.[0] ?? 'All')}
+            options={Object.keys(locationOptions)}
+            onChange={(v) => setChipFilter('location', locationOptions[v]?.[0] ?? 'All')}
           />
           <FilterSelect
             label="OCCUPANCY"
