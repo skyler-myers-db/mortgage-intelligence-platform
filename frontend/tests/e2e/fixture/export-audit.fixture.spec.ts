@@ -217,7 +217,7 @@ test.describe('audit explorer', () => {
     await explorer.getByLabel('ACTOR', { exact: true }).fill(EXPORT_ACTOR);
     await explorer.getByLabel('SINCE', { exact: true }).fill('2026-07-10');
     await explorer.getByLabel('UNTIL', { exact: true }).fill('2026-07-14');
-    await explorer.getByRole('button', { name: /^Event type: / }).click();
+    await explorer.getByRole('combobox', { name: /^Event type: / }).click();
     await explorer.getByRole('option', { name: 'Outreach approved', exact: true }).click();
     await explorer.getByRole('button', { name: 'Apply filters' }).click();
 
@@ -244,7 +244,7 @@ test.describe('audit explorer', () => {
     await expect(explorer.getByLabel('ACTOR', { exact: true })).toHaveValue(EXPORT_ACTOR);
     await expect(explorer.getByLabel('SINCE', { exact: true })).toHaveValue('2026-07-10');
     await expect(explorer.getByLabel('UNTIL', { exact: true })).toHaveValue('2026-07-14');
-    await expect(explorer.getByRole('button', { name: 'Event type: Outreach approved' })).toBeVisible();
+    await expect(explorer.getByRole('combobox', { name: 'Event type: Outreach approved' })).toBeVisible();
     await expect(explorer.getByLabel('Applied audit filters')).toContainText('event = Outreach approved · APPROVE');
     await expect(explorer.locator('table[aria-label="Audit events"] tbody tr[data-audit-event-id]')).toHaveCount(1);
   });

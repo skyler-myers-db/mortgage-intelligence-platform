@@ -386,7 +386,7 @@ test('Segment Intelligence stacks selected segments into an any-match cohort and
   expect(url.searchParams.get('segment_mode')).toBe('all');
   expect(url.searchParams.get('segment_codes') ?? url.searchParams.get('segments')).toMatch(/itm/);
   expect(url.searchParams.get('segment_codes') ?? url.searchParams.get('segments')).toMatch(/listed/);
-  await expect(page.getByRole('button', { name: /SEGMENT:\s*2 segments selected \(all selected\)/i })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole('combobox', { name: /SEGMENT:\s*2 segments selected \(all selected\)/i })).toBeVisible({ timeout: 20_000 });
 });
 
 /**
@@ -592,9 +592,9 @@ test('Genie open-cohort action, Lead Queue URL, dropdowns, and rows agree', asyn
     await expect(page.getByText(new RegExp(`zip = ${zips[0]}`, 'i'))).toBeVisible();
   }
   if (segments.length > 1) {
-    await expect(page.getByRole('button', { name: /SEGMENT:\s*\d+ segments selected/i })).toBeVisible();
+    await expect(page.getByRole('combobox', { name: /SEGMENT:\s*\d+ segments selected/i })).toBeVisible();
   } else {
-    await expect(page.getByRole('button', { name: /SEGMENT:\s*Prime Refi Candidates/i })).toBeVisible();
+    await expect(page.getByRole('combobox', { name: /SEGMENT:\s*Prime Refi Candidates/i })).toBeVisible();
   }
 
   if (zips.length > 0) {

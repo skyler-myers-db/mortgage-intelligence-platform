@@ -632,9 +632,9 @@ test('Portfolio Builder retains KPI and campaign anchors during an explicit filt
   await expect(page.getByText('Campaign setup', { exact: true })).toBeVisible({ timeout: 30_000 });
   await settleInitialLayout(page);
 
-  await page.getByRole('button', { name: /^PRODUCT:/i }).click();
+  await page.getByRole('combobox', { name: /^PRODUCT:/i }).click();
   await page.getByRole('option', { name: 'Refi', exact: true }).click();
-  await expect(page.getByRole('button', { name: /^PRODUCT: Refi$/i })).toBeVisible();
+  await expect(page.getByRole('combobox', { name: /^PRODUCT: Refi$/i })).toBeVisible();
   const anchors: Anchor[] = [
     { name: 'portfolio-filter-surface', locator: page.locator('.surface', { hasText: 'Filters' }).first() },
     { name: 'portfolio-kpi-row', locator: kpiRow },
@@ -701,7 +701,7 @@ test('Lead Queue keeps controls and retained rows anchored while a state transit
   await resetLayoutShift(page);
 
   gate.arm();
-  await page.getByRole('button', { name: /^STATE:/i }).click();
+  await page.getByRole('combobox', { name: /^STATE:/i }).click();
   await page.getByRole('option', { name: 'IL', exact: true }).click();
   await gate.waitForCount();
   await expect(region).toHaveAttribute('aria-busy', 'true');
