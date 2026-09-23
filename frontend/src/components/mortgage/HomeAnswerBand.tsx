@@ -49,9 +49,9 @@ export function HomeAnswerBand({
             <p className="home-answer__briefing">{story.sentences.join(' ')}</p>
           ) : null}
           {!previewLoading && story.available && !story.allVerified && (
-            <div className="portfolio-summary__verdict portfolio-summary__verdict--warn" role="status">
+            <div className="home-answer__verdict" role="status">
               <Icon name="info" size={11} />
-              Some figures could not be verified against the snapshot — review before presenting.
+              <span>Some figures could not be verified against the snapshot — review before presenting.</span>
             </div>
           )}
         </div>

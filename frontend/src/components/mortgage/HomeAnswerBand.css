@@ -38,6 +38,22 @@
   color: var(--text-2);
   text-wrap: pretty;
 }
+/* The unverified-figures warning takes the row space beside the briefing
+   (it wraps inside that space) instead of adding a line under it, so a
+   preview that fails verification does not push the map below the fold. */
+.home-answer__verdict {
+  flex: 1 1 24ch;
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-1);
+  font-size: var(--fs-12);
+  line-height: var(--lh-snug);
+  color: var(--status-warning-ink);
+}
+.home-answer__verdict > svg {
+  flex: 0 0 auto;
+  align-self: center;
+}
 .home-answer__briefing-skeleton {
   display: block;
   block-size: var(--sp-5);
@@ -48,13 +64,19 @@
 
 .home-answer__grid {
   display: grid;
-  /* WHO carries the widest rows (id, place, offer, score on one line). */
-  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr) minmax(0, 1fr);
+  /* WHO carries the widest rows (id, place, offer, score on one line).
+     WHAT TO OFFER gets a little of WHY NOW's width: its "Also" line and
+     note wrap at a live book's widest labels and counts, WHY NOW's three
+     short triggers do not. */
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 0.95fr) minmax(0, 1.05fr);
 }
+/* --sp-2 between a column's parts (not --sp-3): at 1440x900 the band's
+   height decides whether the map's header clears the fold, and the four
+   gaps of the offer column are the cheapest height in the band. */
 .home-answer__col {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-3);
+  gap: var(--sp-2);
   min-inline-size: 0;
   padding: var(--sp-4) var(--pad-card);
 }
@@ -97,7 +119,8 @@
    they never rely on color alone inside running text. */
 .home-answer__trigger-text a,
 .home-answer__empty a,
-.offer-mix__label[href] {
+.offer-mix__label[href],
+.offer-mix__more-label {
   color: var(--accent-ink);
   text-decoration: underline;
   text-decoration-thickness: from-font;
@@ -216,6 +239,23 @@
   display: block;
   line-height: var(--sp-6);
 }
+/* Offers past the legend rows share one wrapping line (OfferMixBar):
+   the column's height is bounded whatever the book's offer vocabulary. */
+.offer-mix__more {
+  margin: 0;
+  font-size: var(--fs-12);
+  line-height: var(--lh-body);
+  color: var(--text-3);
+  text-wrap: pretty;
+}
+.offer-mix__more-item {
+  white-space: nowrap;
+}
+.offer-mix__more-item > .offer-mix__swatch {
+  display: inline-block;
+  margin-inline-end: var(--sp-1);
+  vertical-align: baseline;
+}
 .offer-mix__pct {
   font-family: var(--font-mono);
   font-size: var(--fs-11);
@@ -236,8 +276,6 @@
 .offer-mix__swatch[data-offer="investor"] { background: var(--seg-investor); }
 .offer-mix__seg[data-offer="retention"],
 .offer-mix__swatch[data-offer="retention"] { background: var(--seg-retention); }
-.offer-mix__seg[data-offer="nurture"],
-.offer-mix__swatch[data-offer="nurture"] { background: var(--text-3); }
 
 /* Narrow containers (Console open on a laptop, tablets): stack the three
    answers; the divider moves to the top edge. */

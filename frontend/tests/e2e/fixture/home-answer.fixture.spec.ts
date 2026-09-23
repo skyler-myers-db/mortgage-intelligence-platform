@@ -6,6 +6,13 @@
  *  - the answer band sits fully above the fold with the top five ranked
  *    borrowers (WHO), one evidence-chipped trigger per last-login highlight
  *    (WHY NOW) and an offer-mix bar whose segments make 100% (WHAT TO OFFER);
+ *  - it still does with the TALLEST payload the vocabulary allows (all seven
+ *    actionable offer codes plus "Monitor for later", five WHO rows, three
+ *    triggers and the unverified-figures warning), and the map and its
+ *    heading still clear the fold: a layout property, not a fixture shape;
+ *  - WHAT TO OFFER reconciles with the "Primary offer paths" KPI on a
+ *    live-shaped, nurture-dominant book: no "Monitor for later" segment, the
+ *    note's total is the KPI's number, the printed percents make 100;
  *  - the geography map starts above the fold, paired with a side panel;
  *  - KPI values are at least the size of the page title;
  *  - no two cards touch: every measured gap is at least --gap-grid;
@@ -16,10 +23,20 @@
  *
  * Mutation checks (reported in the lane summary): restoring the KPI clamp at
  * 1440 fails "KPI values are at least the size of the page title"; removing
- * the Home grid gap fails "no two cards touch".
+ * the Home grid gap fails "no two cards touch"; drawing every offer as a
+ * legend row fails "the tallest answer band"; putting "Monitor for later"
+ * back in the bar fails "WHAT TO OFFER reconciles".
  */
-import type { Page } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
 import { BORROWERS } from './data/borrowers';
+import {
+  LIVE_ACTIONABLE_MIX,
+  LIVE_MONITOR_COUNT,
+  LIVE_SHAPED_HOME_PREVIEW,
+  MAX_HOME_PREVIEW,
+  MAX_HOME_SUMMARY,
+  homePreviewHandler,
+} from './data/homeAnswer';
 import { HOME_SUMMARY, PORTFOLIO_PREVIEW } from './data/portfolio';
 import { FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
@@ -62,6 +79,26 @@ async function cardBoxes(page: Page): Promise<Box[]> {
       };
     });
   });
+}
+
+/** The printed percents of the legend rows and the "Also" line, in order. */
+async function printedPercents(band: Locator): Promise<{ values: number[]; texts: string[] }> {
+  const pct = band.locator('.offer-mix__pct');
+  const values = await pct.evaluateAll((nodes) => nodes.map((node) => Number(node.getAttribute('data-percent'))));
+  const texts = await pct.allTextContents();
+  return { values, texts };
+}
+
+/**
+ * The map's own heading ("Geography drill-down"): a map whose top edge merely
+ * grazes the fold shows a border, not a map. Its heading clearing the fold is
+ * what tells a reader the geography hero is there.
+ */
+async function mapHeadingBottom(page: Page): Promise<number> {
+  const heading = page.locator('#main-content .map-wrap').getByText('Geography drill-down', { exact: true });
+  await expect(heading).toBeVisible();
+  const box = (await heading.boundingBox())!;
+  return box.y + box.height;
 }
 
 async function gapGridPx(page: Page): Promise<number> {
@@ -113,14 +150,45 @@ for (const theme of FIXTURE_THEMES) {
       const widths = await segments.evaluateAll((nodes) => nodes.map((node) => node.getBoundingClientRect().width));
       const barWidth = (await bar.boundingBox())!.width;
       expect(Math.abs(widths.reduce((sum, width) => sum + width, 0) - barWidth)).toBeLessThanOrEqual(1);
-      const percents = await band.locator('.offer-mix__pct').evaluateAll((nodes) =>
-        nodes.map((node) => Number(node.getAttribute('data-percent'))),
-      );
-      expect(percents.reduce((sum, value) => sum + value, 0)).toBe(100);
-      await expect(band.locator('.offer-mix__pct')).toHaveText(percents.map((value) => `${value}%`));
-      await expect(bar).toHaveAttribute('aria-label', /^Recommended-offer mix: .+%\.$/);
+      const percents = await printedPercents(band);
+      expect(percents.values.reduce((sum, value) => sum + value, 0)).toBe(100);
+      expect(percents.texts).toEqual(percents.values.map((value) => (value === 0 ? '<1%' : `${value}%`)));
+      await expect(bar).toHaveAttribute('aria-label', /^Primary offer mix: .+%\.$/);
 
       await page.screenshot({ path: test.info().outputPath(`home-${theme}.png`) });
+    });
+
+    test('the tallest answer band still clears the fold and leaves the map above it', async ({ app, mockApi, page }) => {
+      mockApi.register('POST', '/api/portfolio/preview', homePreviewHandler(MAX_HOME_PREVIEW));
+      mockApi.register('GET', '/api/home/summary', () => ({ body: MAX_HOME_SUMMARY }));
+      await app.gotoRoute('/');
+      const band = page.locator('.home-answer');
+      // The payload really is the maximum: every actionable offer, the
+      // unverified-figures warning, five WHO rows, three triggers.
+      await expect(band.locator('.offer-mix__seg')).toHaveCount(LIVE_ACTIONABLE_MIX.length);
+      await expect(band.locator('.offer-mix__more')).toBeVisible();
+      await expect(band.getByRole('status').filter({ hasText: 'could not be verified' })).toBeVisible();
+      await expect(band.locator('.home-answer__who-row')).toHaveCount(5);
+      await expect(band.locator('.home-answer__trigger')).toHaveCount(MAX_HOME_SUMMARY.highlights.length);
+
+      const bandBox = (await band.boundingBox())!;
+      const mapBox = (await page.locator('#main-content .map-wrap').boundingBox())!;
+      const headingBottom = await mapHeadingBottom(page);
+      test.info().annotations.push({
+        type: 'geometry',
+        description:
+          `${theme}: band ${bandBox.y.toFixed(1)}-${(bandBox.y + bandBox.height).toFixed(1)}, ` +
+          `map top ${mapBox.y.toFixed(1)}, map heading bottom ${headingBottom.toFixed(1)}`,
+      });
+      expect(bandBox.y + bandBox.height, 'answer band bottom edge').toBeLessThanOrEqual(FOLD);
+      expect(mapBox.y, 'map top edge').toBeLessThan(FOLD);
+      expect(headingBottom, 'map heading bottom edge').toBeLessThanOrEqual(FOLD);
+      // Seven-digit live magnitudes still fit the --fs-36 KPI values.
+      const overflowing = await page.locator('#main-content .kpi__value').evaluateAll((nodes) =>
+        nodes.filter((node) => node.scrollWidth > node.clientWidth + 0.5).map((node) => node.textContent),
+      );
+      expect(overflowing).toEqual([]);
+      await page.screenshot({ path: test.info().outputPath(`home-max-${theme}.png`) });
     });
 
     test('the geography map starts above the fold beside a side panel', async ({ page }) => {
@@ -128,6 +196,7 @@ for (const theme of FIXTURE_THEMES) {
       const mapBox = await map.boundingBox();
       expect(mapBox, 'map has a box').not.toBeNull();
       expect(mapBox!.y, 'map top edge').toBeLessThan(FOLD);
+      expect(await mapHeadingBottom(page), 'map heading bottom edge').toBeLessThanOrEqual(FOLD);
       // The prototype's layoutA pairing: the map on the left, a side panel on the right.
       const side = page.locator('.home-geo .home-side');
       const sideBox = await side.boundingBox();
@@ -226,6 +295,10 @@ test.describe('Home answer band links and reads', () => {
     const offers = page.locator('.offer-mix__legend');
     await expect(offers.getByRole('link', { name: 'Refinance review', exact: true })).toHaveAttribute('href', '/lead-queue?product=Refi');
     await expect(offers.getByRole('link', { name: 'Cash-out refinance review' })).toHaveAttribute('href', '/lead-queue?product=Cash-out');
+    // Offers past the four legend rows keep their own filter link on the "Also" line.
+    const also = page.locator('.offer-mix__more');
+    await expect(also.getByRole('link', { name: 'Next-home purchase loan' })).toHaveAttribute('href', '/lead-queue?product=Purchase');
+    await expect(also.getByRole('link', { name: 'Customer retention review' })).toHaveAttribute('href', '/lead-queue?product=Retention');
     await offers.getByRole('link', { name: 'Home-equity line review' }).click();
     await expect(page).toHaveURL(/\/lead-queue\?product=HELOC$/);
     await app.settle();
@@ -234,7 +307,7 @@ test.describe('Home answer band links and reads', () => {
   test('Home never reads the lead list or a borrower, on load or on hover', async ({ app, mockApi, page }) => {
     await app.gotoRoute('/');
     await expect(page.locator('.home-answer__who-row')).toHaveCount(5);
-    for (const row of await page.locator('.home-answer__who-row, .home-answer__trigger a, .offer-mix__label[href]').all()) {
+    for (const row of await page.locator('.home-answer__who-row, .home-answer__trigger a, .offer-mix__label[href], .offer-mix__more-label').all()) {
       await row.hover();
     }
     await app.settle();
@@ -243,6 +316,38 @@ test.describe('Home answer band links and reads', () => {
     expect(reads.filter((call) => BORROWER_READ.test(call.path)), 'borrower reads write VIEW_BORROWER').toEqual([]);
     // WHO comes from the audit-free economics ranking instead.
     expect(reads.some((call) => /\/analytics\/economics$/.test(call.path))).toBe(true);
+  });
+
+  test('WHAT TO OFFER reconciles with the Primary offer paths KPI on a live-shaped book', async ({ app, mockApi, page }) => {
+    mockApi.register('POST', '/api/portfolio/preview', homePreviewHandler(LIVE_SHAPED_HOME_PREVIEW));
+    await app.gotoRoute('/');
+    const band = page.locator('.home-answer');
+    // "Monitor for later" is ~97% of this book's offer decisions and no offer:
+    // it is never a segment, a legend row or a link.
+    await expect(band.locator('.offer-mix__seg')).toHaveCount(LIVE_ACTIONABLE_MIX.length);
+    await expect(band.locator('.offer-mix__seg[data-offer="nurture"], .offer-mix__swatch[data-offer="nurture"]')).toHaveCount(0);
+    await expect(band.locator('.offer-mix__label, .offer-mix__more-label').filter({ hasText: 'Monitor for later' })).toHaveCount(0);
+
+    // The bar's 100% is the KPI's population, stated with the KPI's own number.
+    const kpi = page.locator('.kpi', { hasText: 'Primary offer paths' }).locator('.kpi__value');
+    await expect(kpi).toHaveText(LIVE_SHAPED_HOME_PREVIEW.offers_recommended!.toLocaleString('en-US'));
+    const kpiText = ((await kpi.textContent()) ?? '').trim();
+    const note = band.locator('.home-answer__col--offer .home-answer__note');
+    const noteTotal = /Share of the ([\d,]+) borrowers with a primary offer path/.exec((await note.textContent()) ?? '')?.[1];
+    expect(noteTotal, 'the note names the KPI number').toBe(kpiText);
+    await expect(note).toContainText(`${LIVE_MONITOR_COUNT.toLocaleString('en-US')} more are on Monitor for later`);
+    // The briefing states the same number.
+    await expect(band.locator('.home-answer__briefing')).toContainText(`${kpiText} have a primary offer path`);
+
+    // Printed percents (legend rows plus the "Also" line) make 100, and the
+    // leading offer reads its real share, not the 1-2% a nurture bar left it.
+    const percents = await printedPercents(band);
+    expect(percents.values).toHaveLength(LIVE_ACTIONABLE_MIX.length);
+    expect(percents.values.reduce((sum, value) => sum + value, 0)).toBe(100);
+    expect(percents.texts[0], 'Refinance review: 55,871 of 122,389 offer paths').toBe('45%');
+    const shares = (await band.locator('.offer-mix__seg').evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-share'))))
+      .map(Number);
+    expect(shares.reduce((sum, share) => sum + share, 0)).toBeCloseTo(100, 2);
   });
 
   test('a failed ranking read leaves a quiet status in WHO, never an alert', async ({ app, page }) => {
