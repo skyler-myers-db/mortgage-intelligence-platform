@@ -319,10 +319,10 @@ describe('floating Genie conversational controls', () => {
     // A stopped turn has no answer to regenerate: its re-ask is "Ask again".
     expect(container.querySelector('.genie__msg-actions--user button[aria-label="Regenerate answer"]')).toBeNull();
     armInlineAnswer(answer({ answer: 'Texas leads.' }));
-    const askAgain = container.querySelector<HTMLButtonElement>(
-      '.genie__msg-actions--user button[aria-label="Ask this question again"]',
-    );
-    expect(askAgain?.textContent).toBe('Ask again');
+    const askAgain = Array.from(
+      container.querySelectorAll<HTMLButtonElement>('.genie__msg-actions--user button'),
+    ).find((button) => button.textContent === 'Ask again');
+    expect(askAgain).toBeDefined();
     await click(askAgain!);
     await waitUntil(() => container.textContent?.includes('Texas leads.') ?? false);
     expect(mocks.genieSubmit.mock.calls.length).toBe(2);

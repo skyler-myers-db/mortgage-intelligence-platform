@@ -94,6 +94,8 @@ export function GenieTurnActions({
           Regenerate
         </button>
       )}
+      {/* No aria-label: the accessible name is the visible "Ask again"
+          (WCAG 2.5.3 Label in Name); the tooltip describes it. */}
       {onAskAgain && (
         <button
           type="button"
@@ -101,7 +103,6 @@ export function GenieTurnActions({
           onClick={() => onAskAgain(question)}
           disabled={disabled}
           title={disabled ? (disabledReason ?? undefined) : 'Ask this question again as a new Genie turn'}
-          aria-label="Ask this question again"
         >
           Ask again
         </button>
