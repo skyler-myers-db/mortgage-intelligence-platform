@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from '../Icon';
 import { useListboxNavigation } from './useListboxNavigation';
-import { useMenuPlacement } from './useMenuPlacement';
+import { menuSpaceStyle, useMenuPlacement } from './useMenuPlacement';
 
 /**
  * MultiFilterSelect — the multi-select sibling of FilterSelect. Same prototype
@@ -93,7 +93,7 @@ export function MultiFilterSelect<T extends string>({
     multiple: true,
     initialIndex,
   });
-  const placement = useMenuPlacement(open, btnRef, listRef);
+  const menuLayout = useMenuPlacement(open, btnRef, listRef);
 
   // The listbox owns focus while it is open.
   useEffect(() => {
@@ -139,7 +139,8 @@ export function MultiFilterSelect<T extends string>({
         <ul
           ref={listRef}
           id={listbox.listboxId}
-          className={`filter-menu filter-menu--multi${placement === 'above' ? ' filter-menu--up' : ''}`}
+          className={`filter-menu filter-menu--multi${menuLayout.placement === 'above' ? ' filter-menu--up' : ''}`}
+          style={menuSpaceStyle(menuLayout)}
           role="listbox"
           aria-label={label}
           aria-multiselectable="true"

@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { Icon } from '../Icon';
 import { useListboxNavigation } from './useListboxNavigation';
-import { useMenuPlacement } from './useMenuPlacement';
+import { menuSpaceStyle, useMenuPlacement } from './useMenuPlacement';
 
 /**
  * FilterSelect — presenter-friendly replacement for the old cycle-on-click
@@ -47,7 +47,7 @@ export function FilterSelect({ label, value, options, onChange }: FilterSelectPr
     labels: options,
     initialIndex: selectedIndex,
   });
-  const placement = useMenuPlacement(open, btnRef, menuRef);
+  const menuLayout = useMenuPlacement(open, btnRef, menuRef);
 
   const active = value !== options[0];
 
@@ -80,7 +80,8 @@ export function FilterSelect({ label, value, options, onChange }: FilterSelectPr
         <ul
           ref={menuRef}
           id={listbox.listboxId}
-          className={`filter-menu${placement === 'above' ? ' filter-menu--up' : ''}`}
+          className={`filter-menu${menuLayout.placement === 'above' ? ' filter-menu--up' : ''}`}
+          style={menuSpaceStyle(menuLayout)}
           role="listbox"
           aria-label={label}
           // Keep DOM focus on the combobox while the pointer picks an option.
