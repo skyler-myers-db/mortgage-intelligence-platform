@@ -16,7 +16,12 @@
  * Opening travels as a window event that `GenieDock` turns into
  * `setGenieOpen(true)`; the prefill waits in this module until the mounted
  * panel consumes it -- when it opens, or at once when it is already open.
+ * An actor-boundary reset (`GENIE_CONVERSATION_RESET_EVENT`) drops a prefill
+ * nobody consumed, e.g. when the panel chunk failed to load, so one actor's
+ * question can never surface in the next actor's composer.
  */
+
+import { GENIE_CONVERSATION_RESET_EVENT } from './genieConversation';
 
 export interface OpenGenieOptions {
   /** The composer text. Prefilled verbatim; never submitted. */
@@ -28,9 +33,20 @@ export const GENIE_OPEN_REQUEST_EVENT = 'mip:genie-open-request';
 
 let pendingPrefill: string | null = null;
 const prefillListeners = new Set<() => void>();
+let resetListenerInstalled = false;
+
+/** Installed on the first queued prefill, not at import (no load-time side effect). */
+function dropPrefillOnActorBoundaryReset(): void {
+  if (resetListenerInstalled || typeof window === 'undefined') return;
+  resetListenerInstalled = true;
+  window.addEventListener(GENIE_CONVERSATION_RESET_EVENT, () => {
+    pendingPrefill = null;
+  });
+}
 
 /** Queue a composer prefill for the panel. Replaces any earlier one. */
 export function requestGeniePrefill(prompt: string): void {
+  dropPrefillOnActorBoundaryReset();
   pendingPrefill = prompt;
   for (const listener of prefillListeners) listener();
 }

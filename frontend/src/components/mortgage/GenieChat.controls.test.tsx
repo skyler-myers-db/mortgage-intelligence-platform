@@ -24,6 +24,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GenieLiveProgress, GenieSubmitResult } from '../../lib/api';
+import { clearGenieConversationState } from '../../lib/genieConversation';
 import { clearGenieTurns, getGenieTurns } from '../../lib/genieConversationStore';
 import { genieStartersForRoute } from '../../lib/genieContext';
 import { consumeGeniePrefill, openGenie } from '../../lib/genieOpen';
@@ -550,6 +551,24 @@ describe('floating Genie conversational controls', () => {
     await flush();
     expect(mocks.genieSubmit).not.toHaveBeenCalled();
     expect(getGenieTurns()).toEqual([]);
+  });
+
+  it('an actor-boundary reset drops a queued prefill, so the next actor never finds it in the composer', async () => {
+    render();
+    await flush();
+    setOpen(false);
+    act(() => openGenie({ prompt: 'Compare mean lead score by current coverage state.' }));
+    act(() => clearGenieConversationState({ notify: true }));
+    setOpen(true);
+    await flush();
+    expect(input().value).toBe('');
+    // A prefill queued after the reset is the new actor's own and still lands.
+    setOpen(false);
+    act(() => openGenie({ prompt: 'What is the approval trend over the last 30 days?' }));
+    setOpen(true);
+    await flush();
+    expect(input().value).toBe('What is the approval trend over the last 30 days?');
+    expect(mocks.genieSubmit).not.toHaveBeenCalled();
   });
 
   it('a prefill that replaces a typed draft says so; one over an empty composer says nothing', async () => {
