@@ -14,6 +14,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, useLocation } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { escapeLayerCount } from '../../lib/escapeStack';
 import type { LeadSummary } from '../../types';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -150,6 +151,23 @@ describe('Topbar borrower search — keyboard', () => {
 
     press('Escape');
     expect(input().value).toBe('');
+  });
+
+  it('results that land after focus left stay closed and off the Escape stack', async () => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    await act(async () => {
+      setter?.call(input(), 'Chic');
+      input().dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    // Leave before the debounced search answers.
+    act(() => document.getElementById('elsewhere')?.focus());
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    });
+    expect(apiMocks.borrowerSearch).toHaveBeenCalledTimes(1);
+    expect(listbox()).toBeNull();
+    expect(input().getAttribute('aria-expanded')).toBe('false');
+    expect(escapeLayerCount()).toBe(0);
   });
 
   it('closes when focus leaves the search', async () => {

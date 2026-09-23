@@ -229,6 +229,11 @@ export function Topbar() {
     }
     const ctrl = new AbortController();
     setBorrowerSearchStatus('loading');
+    // Results that land after focus left the search stay closed: an open
+    // popup nobody is in would still sit on the Escape stack.
+    const reopenIfFocused = () => {
+      if (document.activeElement === searchInputRef.current) setSearchOpen(true);
+    };
     const t = window.setTimeout(() => {
       api
         .borrowerSearch(q, ctrl.signal)
@@ -237,14 +242,14 @@ export function Topbar() {
           setBorrowerResults(rows);
           setBorrowerSearchTerm(q);
           setBorrowerSearchStatus(rows.length > 0 ? 'idle' : 'empty');
-          setSearchOpen(true);
+          reopenIfFocused();
         })
         .catch(() => {
           if (ctrl.signal.aborted) return;
           setBorrowerResults([]);
           setBorrowerSearchTerm(q);
           setBorrowerSearchStatus('error');
-          setSearchOpen(true);
+          reopenIfFocused();
         });
     }, 180);
     return () => {
