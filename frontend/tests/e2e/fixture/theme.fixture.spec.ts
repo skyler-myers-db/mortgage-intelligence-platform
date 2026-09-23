@@ -10,16 +10,24 @@
  *  c. <meta name="theme-color"> follows the theme;
  *  d. nothing stored + `prefers-color-scheme: light` boots light, and the
  *     Console's System option follows OS flips live, theme-color included;
- *  e. every theme x accent pair paints a visible focus ring from the shared
- *     token and passes axe color-contrast on / and /lead-queue.
+ *  e. every theme x accent pair paints the shared token focus ring at 3:1,
+ *     from the global :focus-visible rule and from a bespoke one, and passes
+ *     axe color-contrast on / and /lead-queue.
  *
  * States the axe loop never renders (warning copy, amber glyphs, the active
  * evidence-drawer tab, text-input focus) are proven in
  * contrastStates.fixture.spec.ts.
  */
 import AxeBuilder from '@axe-core/playwright';
-import type { Page } from '@playwright/test';
-import { asComputedRgb, centerPixel, relativeLuminance } from './renderedColor';
+import type { Locator, Page } from '@playwright/test';
+import {
+  asComputedRgb,
+  centerPixel,
+  contrastRatio,
+  parseRgb,
+  relativeLuminance,
+  renderedColors,
+} from './renderedColor';
 import { expect, test, type FixtureTheme } from './test';
 
 const ACCENTS = ['bright', 'teal', 'navy', 'red'] as const;
@@ -90,6 +98,35 @@ async function themeColorAndPageBackground(page: Page): Promise<{ meta: string; 
     meta: meta ? await asComputedRgb(page, meta) : '',
     background: await asComputedRgb(page, background),
   };
+}
+
+/**
+ * Focus `target` (after a keyboard Tab) and assert its ring: matches
+ * :focus-visible, 2px solid, colour equal to the resolved
+ * `--focus-ring-color` (compared through a probe so hex and rgb() spellings
+ * meet), and WCAG 1.4.11 3:1 against the surface it is drawn on. The ring
+ * sits outside the element (outline-offset), so that surface is the parent's.
+ */
+async function expectTokenRing(page: Page, target: Locator, label: string): Promise<void> {
+  await target.focus();
+  const ring = await target.evaluate((el) => {
+    const style = getComputedStyle(el);
+    return {
+      matchesFocusVisible: el.matches(':focus-visible'),
+      outlineStyle: style.outlineStyle,
+      outlineWidth: style.outlineWidth,
+      outlineColor: style.outlineColor,
+      token: style.getPropertyValue('--focus-ring-color').trim(),
+    };
+  });
+  expect(ring.matchesFocusVisible, `${label} matches :focus-visible`).toBe(true);
+  expect(ring.outlineStyle, label).toBe('solid');
+  expect(ring.outlineWidth, label).toBe('2px');
+  expect(ring.outlineColor, label).not.toBe(TRANSPARENT);
+  expect(ring.outlineColor, `${label} paints the resolved --focus-ring-color`).toBe(await asComputedRgb(page, ring.token));
+  const surface = await renderedColors(target.locator('xpath=..'));
+  const ratio = contrastRatio(parseRgb(ring.outlineColor), surface.bg);
+  expect(ratio, `${label}: ${ring.outlineColor} on rgb(${surface.bg.join(', ')}) = ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(3);
 }
 
 async function colorContrastViolations(page: Page): Promise<string[]> {
@@ -211,6 +248,10 @@ test('with nothing stored the app follows the OS, and the Console System option 
 for (const theme of THEMES) {
   for (const accent of ACCENTS) {
     test(`${theme} + ${accent}: visible token focus ring and no colour-contrast violations`, async ({ app, page }) => {
+      // Two settled route loads and two full-page axe passes: under a loaded
+      // runner this exceeds the default 60 s budget (observed 1.4-1.7 min at
+      // load average ~250). A slow budget, not a retry.
+      test.slow();
       await app.setTheme(theme);
       await seedStorage(page, 'mip.accent', accent);
       await app.gotoRoute('/');
@@ -218,25 +259,12 @@ for (const theme of THEMES) {
 
       // Keyboard first so a later script focus() keeps :focus-visible.
       await page.keyboard.press('Tab');
-      const link = page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link').first();
-      await link.focus();
-      const ring = await link.evaluate((el) => {
-        const style = getComputedStyle(el);
-        return {
-          matchesFocusVisible: el.matches(':focus-visible'),
-          outlineStyle: style.outlineStyle,
-          outlineWidth: style.outlineWidth,
-          outlineColor: style.outlineColor,
-          token: style.getPropertyValue('--focus-ring-color').trim(),
-        };
-      });
-      expect(ring.matchesFocusVisible).toBe(true);
-      expect(ring.outlineStyle).toBe('solid');
-      expect(ring.outlineWidth).toBe('2px');
-      expect(ring.outlineColor).not.toBe(TRANSPARENT);
-      // The rendered ring is the resolved token (compare through a probe so
-      // hex and rgb() spellings meet in the same computed form).
-      expect(ring.outlineColor).toBe(await asComputedRgb(page, ring.token));
+      const nav = page.getByRole('navigation', { name: 'Primary navigation' });
+      // The brand link has a bespoke rule (.rail__brand:focus-visible); the
+      // module links have none, so only the ONE global :focus-visible rule in
+      // tokens.css can paint their ring. Both must be the token ring.
+      await expectTokenRing(page, nav.getByRole('link', { name: 'Entrada home' }), 'rail brand (bespoke rule)');
+      await expectTokenRing(page, nav.locator('a.rail__item').first(), 'rail module link (global rule)');
 
       const exception = DOCUMENTED_AXE_EXCEPTIONS[`${theme}/${accent}`];
       let excepted = 0;
