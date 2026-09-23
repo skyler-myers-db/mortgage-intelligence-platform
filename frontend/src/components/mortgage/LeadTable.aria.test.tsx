@@ -127,18 +127,25 @@ describe('LeadTable aria-sort columnheaders', () => {
     const trigger = container.querySelector<HTMLButtonElement>('[data-testid="lead-status-sort"]');
     expect(trigger?.getAttribute('aria-haspopup')).toBe('menu');
     act(() => trigger!.click());
-    const items = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="menu"] [role="menuitemradio"]'));
+    // The menu is portalled to <body> (a short queue's scrollport clipped it)
+    // and named by the trigger's aria-controls.
+    const menu = document.getElementById(trigger!.getAttribute('aria-controls') ?? '');
+    expect(menu?.getAttribute('role')).toBe('menu');
+    expect(menu?.parentElement).toBe(document.body);
+    expect(container.contains(menu)).toBe(false);
+    const items = Array.from(menu!.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'));
     expect(items.map((item) => item.textContent)).toEqual(['Relationship', 'Assigned to', 'Outreach']);
     act(() => items[2].click());
 
     const statusTh = trigger!.closest('th');
-    expect(container.querySelector('[role="menu"]')).toBeNull();
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+    expect(trigger!.hasAttribute('aria-controls')).toBe(false);
     expect(statusTh?.getAttribute('aria-sort')).toBe('descending');
     expect(trigger!.getAttribute('aria-label')).toBe('Status, sorted by Outreach. Sort options');
     expect(container.querySelector('[data-testid="lead-sort-scope"]')?.textContent).toContain('sorted within the loaded 2');
 
     act(() => trigger!.click());
-    const checked = container.querySelector('[role="menuitemradio"][aria-checked="true"]');
+    const checked = document.querySelector('[role="menuitemradio"][aria-checked="true"]');
     expect(checked?.textContent).toBe('Outreach');
     act(() => (checked as HTMLButtonElement).click());
     expect(statusTh?.getAttribute('aria-sort')).toBe('ascending');

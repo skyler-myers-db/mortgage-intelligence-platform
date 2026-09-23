@@ -96,15 +96,14 @@
 .lead-table__flag { flex-shrink: 0; }
 .lead-table__empty { color: var(--text-3); }
 
-/* Status header menu: the `.filter-menu` dropdown anchored to the header's
-   end edge so it opens over the Signal / Score columns, not under the pin. */
-.lead-table__status-header.is-open { z-index: var(--z-raised-4); }
-.lead-table__status-header .lead-table__status-menu {
+/* Status header menu: the `.filter-menu` dropdown, portalled to <body> and
+   fixed under the header's end edge (LeadTableStatusSortMenu sets `top` /
+   `right` from the header's box), so the table's scrollport cannot clip it
+   on a short queue and it opens over Signal / Score, not under the pin. */
+.filter-menu.lead-table__status-menu {
+  position: fixed;
   left: auto;
-  inset-inline-end: 0;
-  text-transform: none;
-  letter-spacing: normal;
-  font-weight: 400;
+  margin-block-start: var(--sp-1);
 }
 
 /* Expanded row: the workflow strip that took the row's timestamps,

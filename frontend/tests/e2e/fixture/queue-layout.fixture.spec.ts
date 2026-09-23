@@ -213,6 +213,40 @@ test.describe('the pinned Approval column', () => {
   });
 });
 
+test.describe('the Status sort menu', () => {
+  test('opens fully on screen over a one-borrower deep link, sorts by keyboard, and Tab leaves it from the header', async ({ app, page, mockApi }) => {
+    registerQueueLayoutLeads(mockApi, () => [PRIMARY_BORROWER]);
+    await app.gotoRoute(`/lead-queue?borrower_ids=${encodeURIComponent(PRIMARY_BORROWER.borrower_id)}`);
+    await expect(page.locator(ROWS)).toHaveCount(1);
+    const trigger = page.getByTestId('lead-status-sort');
+    await trigger.click();
+    const menu = page.getByRole('menu', { name: 'Sort the Status column by' });
+    await expect(menu).toBeVisible();
+    // The one-row scrollport is shorter than the menu: every item must still
+    // be the topmost element at its centre, not clipped behind an inner scroll.
+    const items = menu.getByRole('menuitemradio');
+    await expect(items).toHaveText(['Relationship', 'Assigned to', 'Outreach']);
+    for (let index = 0; index < 3; index += 1) {
+      await expectReachable(items.nth(index), `Status menu item ${index + 1}`);
+    }
+    const wrap = page.locator('.tbl-wrap');
+    expect(await wrap.evaluate((el) => el.scrollHeight - el.clientHeight), 'opening the menu adds no inner scroll').toBeLessThanOrEqual(0);
+
+    await page.keyboard.press('ArrowDown');
+    await expect(items.nth(1)).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(menu).toHaveCount(0);
+    await expect(trigger).toBeFocused();
+    await expect(trigger).toHaveAccessibleName('Status, sorted by Assigned to. Sort options');
+
+    await trigger.press('ArrowDown');
+    await expect(menu).toBeVisible();
+    await page.keyboard.press('Shift+Tab');
+    await expect(menu).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Sort by Signal' }), 'Shift+Tab from the menu lands before the Status header').toBeFocused();
+  });
+});
+
 test.describe('column presets', () => {
   test('?view=sales-ops adds the four workflow columns and keeps Approve pinned; the View control writes the URL', async ({ app, page }) => {
     await app.gotoRoute('/lead-queue?view=sales-ops');
