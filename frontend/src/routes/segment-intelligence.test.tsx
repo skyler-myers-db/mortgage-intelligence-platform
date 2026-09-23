@@ -7,7 +7,7 @@ import {
   segmentCardQuerySelection,
   segmentModeFromSearch,
   segmentSearchParamsForState,
-} from './segment-intelligence';
+} from './segment-intelligence.filters';
 
 describe('segment intelligence lender overlay URL state', () => {
   it('starts without a selected segment so cards render standalone counts', () => {
@@ -79,21 +79,24 @@ describe('segment intelligence lender overlay URL state', () => {
       segment_mode: 'all',
     });
 
+    // `any` is the default mode and is omitted from the URL (flow-09).
     const any = segmentSearchParamsForState(base, ['itm', 'equity'], 'any');
     expect(any.get('owner_link')).toBe('Portfolio investor (5+)');
     expect(any.get('segment')).toBeNull();
     expect(any.get('segment_codes')).toBe('itm,equity');
-    expect(any.get('segment_mode')).toBe('any');
+    expect(any.get('segment_mode')).toBeNull();
 
     const single = segmentSearchParamsForState(any, ['listed'], 'any');
     expect(single.get('segment')).toBe('listed');
     expect(single.get('segment_codes')).toBeNull();
     expect(single.get('segment_mode')).toBeNull();
 
+    // The URL is the only copy of the mode now, so a user who picks
+    // "All selected" before the cards keeps the choice.
     const emptyIntersection = segmentSearchParamsForState(single, [], 'all');
     expect(emptyIntersection.get('segment')).toBeNull();
     expect(emptyIntersection.get('segment_codes')).toBeNull();
-    expect(emptyIntersection.get('segment_mode')).toBeNull();
+    expect(emptyIntersection.get('segment_mode')).toBe('all');
   });
 
   it('uses selected-cohort segment counts only after cards are selected', () => {

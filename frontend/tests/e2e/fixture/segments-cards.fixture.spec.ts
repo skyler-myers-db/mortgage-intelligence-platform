@@ -149,3 +149,111 @@ test.describe('segment card facets keep one evidence trigger each', () => {
     await expect(select).toHaveAttribute('aria-pressed', 'false');
   });
 });
+
+/** The FilterSelect trigger for one Segments filter (its label is `LABEL: value`). */
+function filterTrigger(page: Page, label: string): Locator {
+  return page.locator(`button[aria-haspopup="listbox"][aria-label^="${label}:"]`);
+}
+
+function cardSelect(page: Page, title: string): Locator {
+  return page.locator('.seg-grid .seg-card', { hasText: title }).locator('.seg-card__select');
+}
+
+function modeButton(page: Page, label: 'Any selected' | 'All selected'): Locator {
+  return page.getByRole('group', { name: 'Segment match mode' }).getByRole('button', { name: new RegExp(`^${label}`) });
+}
+
+test.describe('Segments filters live in the URL (flow-09)', () => {
+  test('a deep link restores the selected cards, the match mode and every secondary filter', async ({ app, mockApi, page }) => {
+    const deepLink = new URLSearchParams({
+      segment_codes: 'itm,equity',
+      segment_mode: 'all',
+      state: 'TX',
+      occupancy: 'Owner-occupied',
+      lien_status: 'Open HELOC',
+      min_equity_pct_label: '≥ 25%',
+      marketing_eligibility: 'Any',
+      recency: 'Untouched 30d',
+    });
+    await app.gotoRoute(`${ROUTE}?${deepLink.toString()}`);
+
+    await expect(cardSelect(page, 'Prime Refi Candidates')).toHaveAttribute('aria-pressed', 'true');
+    await expect(cardSelect(page, 'Home Equity Candidate')).toHaveAttribute('aria-pressed', 'true');
+    await expect(cardSelect(page, 'Listed for Sale')).toHaveAttribute('aria-pressed', 'false');
+    await expect(modeButton(page, 'All selected')).toHaveAttribute('aria-pressed', 'true');
+    await expect(filterTrigger(page, 'LOCATION')).toHaveAttribute('aria-label', 'LOCATION: Texas');
+    await expect(filterTrigger(page, 'OCCUPANCY')).toHaveAttribute('aria-label', 'OCCUPANCY: Owner-occupied');
+    await expect(filterTrigger(page, 'LIEN')).toHaveAttribute('aria-label', 'LIEN: Open 2nd lien / HELOC');
+    await expect(filterTrigger(page, 'CASH-OUT')).toHaveAttribute('aria-label', 'CASH-OUT: Equity ≥ 25%');
+    await expect(filterTrigger(page, 'CONTACTABILITY')).toHaveAttribute('aria-label', 'CONTACTABILITY: Any');
+    await expect(filterTrigger(page, 'RECENCY')).toHaveAttribute('aria-label', 'RECENCY: Untouched 30d');
+
+    // The data is the restored view, not just the controls: the cards were
+    // counted for the All-selected intersection with the restored criteria.
+    const segmentsCall = mockApi.calls.filter((call) => call.path === '/api/segments').at(-1);
+    const sent = new URLSearchParams(segmentsCall?.search ?? '');
+    expect(sent.get('segment_codes')).toBe('itm,equity');
+    expect(sent.get('segment_mode')).toBe('all');
+    expect(sent.get('occupancy')).toBe('Owner-occupied');
+    expect(sent.get('lien_status')).toBe('Open HELOC');
+    expect(sent.get('min_equity_pct_label')).toBe('≥ 25%');
+    expect(sent.get('recency')).toBe('Untouched 30d');
+    expect(sent.has('marketing_eligibility')).toBe(false);
+    const leadsCall = mockApi.calls.filter((call) => call.path === '/api/leads').at(-1);
+    expect(new URLSearchParams(leadsCall?.search ?? '').get('state')).toBe('TX');
+  });
+
+  test('changing a filter writes the URL; Back and Forward restore the previous view', async ({ app, page }) => {
+    await app.gotoRoute(ROUTE);
+    expect(new URL(page.url()).search).toBe('');
+
+    await (await app.openFilterMenu('OCCUPANCY')).getByRole('option', { name: 'Owner-occupied', exact: true }).click();
+    await expect(page).toHaveURL(/[?&]occupancy=Owner-occupied(&|$)/);
+    await app.settle();
+    await (await app.openFilterMenu('LIEN')).getByRole('option', { name: 'Free & clear', exact: true }).click();
+    await expect(page).toHaveURL(/[?&]lien_status=Free\+%26\+clear(&|$)/);
+    await expect(filterTrigger(page, 'LIEN')).toHaveAttribute('aria-label', 'LIEN: Free & clear');
+    await app.settle();
+
+    await page.goBack();
+    await expect(page).not.toHaveURL(/lien_status=/);
+    await expect(filterTrigger(page, 'LIEN')).toHaveAttribute('aria-label', 'LIEN: Any');
+    await expect(filterTrigger(page, 'OCCUPANCY')).toHaveAttribute('aria-label', 'OCCUPANCY: Owner-occupied');
+
+    await page.goBack();
+    await expect.poll(() => new URL(page.url()).search).toBe('');
+    await expect(filterTrigger(page, 'OCCUPANCY')).toHaveAttribute('aria-label', 'OCCUPANCY: All');
+
+    await page.goForward();
+    await expect(filterTrigger(page, 'OCCUPANCY')).toHaveAttribute('aria-label', 'OCCUPANCY: Owner-occupied');
+    await app.settle();
+
+    // Choosing the default removes the key rather than writing it.
+    await (await app.openFilterMenu('OCCUPANCY')).getByRole('option', { name: 'All', exact: true }).click();
+    await expect.poll(() => new URL(page.url()).search).toBe('');
+  });
+
+  test('the All-selected mode is kept before any card is selected and survives a reload', async ({ app, page }) => {
+    await app.gotoRoute(ROUTE);
+    await modeButton(page, 'All selected').click();
+    await expect(page).toHaveURL(/[?&]segment_mode=all(&|$)/);
+    await expect(modeButton(page, 'All selected')).toHaveAttribute('aria-pressed', 'true');
+    await page.reload();
+    await app.settle();
+    await expect(modeButton(page, 'All selected')).toHaveAttribute('aria-pressed', 'true');
+    await cardSelect(page, 'Listed for Sale').click();
+    await expect(page).toHaveURL(/[?&]segment=listed(&|$)/);
+    await expect(page).toHaveURL(/[?&]segment_mode=all(&|$)/);
+  });
+
+  test('Clear filters removes every Segments filter from the URL in one step', async ({ app, page }) => {
+    await app.gotoRoute(`${ROUTE}?segment=itm&occupancy=Owner-occupied&consent_status=Opt-in&target_lender_ref=Competitor+B`);
+    await expect(filterTrigger(page, 'TARGET LIEN HOLDER')).toHaveAttribute('aria-label', 'TARGET LIEN HOLDER: Competitor B');
+    await expect(filterTrigger(page, 'CONSENT')).toHaveAttribute('aria-label', 'CONSENT: Opt-in');
+    await page.getByRole('button', { name: 'Clear filters' }).click();
+    await expect.poll(() => new URL(page.url()).search).toBe('');
+    await expect(filterTrigger(page, 'CONSENT')).toHaveAttribute('aria-label', 'CONSENT: Any');
+    await expect(cardSelect(page, 'Prime Refi Candidates')).toHaveAttribute('aria-pressed', 'false');
+    await expect(page.getByRole('button', { name: 'Clear filters' })).toBeDisabled();
+  });
+});
