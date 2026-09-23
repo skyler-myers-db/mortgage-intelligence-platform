@@ -13,7 +13,7 @@
  * a write: the transport retries only the backend's retryable bodies, where
  * no row was written.
  */
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, ApiError, isAbortError } from '../../lib/api';
 import {
   buildLeadExportDeclaration,
@@ -31,7 +31,8 @@ import type { LeadExportContext } from './LeadTable.types';
 export type LeadCsvExportState =
   | { status: 'idle' }
   | { status: 'pending'; rowCount: number }
-  | { status: 'done'; rowCount: number; notice: string; receipt: LeadExportReceipt }
+  /** `notice` is the confirmation strip; null once it has retired. */
+  | { status: 'done'; rowCount: number; notice: string | null; receipt: LeadExportReceipt }
   | { status: 'error'; message: string };
 
 export interface LeadCsvExportRequest {
@@ -43,6 +44,14 @@ export interface LeadCsvExportRequest {
 }
 
 const EXPORT_NOT_DOWNLOADED = 'Nothing was downloaded.';
+
+/**
+ * How long the confirmation strip stays up, as before the receipt existed
+ * (the sales toast in the same table retires the same way). The receipt
+ * line with the audit id is the durable record and stays until the next
+ * export.
+ */
+export const LEAD_EXPORT_NOTICE_MS = 8000;
 
 export function describeLeadExportFailure(error: unknown): string {
   if (error instanceof ApiError) {
@@ -69,6 +78,15 @@ export function useLeadCsvExport() {
   // One receipt per click: a second click while the first is in flight would
   // otherwise write a second LEAD_EXPORT row for the same file.
   const inflight = useRef(false);
+
+  // The confirmation strip retires on its own; the receipt line does not.
+  useEffect(() => {
+    if (state.status !== 'done' || state.notice === null) return undefined;
+    const timer = window.setTimeout(() => {
+      setState((current) => (current.status === 'done' ? { ...current, notice: null } : current));
+    }, LEAD_EXPORT_NOTICE_MS);
+    return () => window.clearTimeout(timer);
+  }, [state]);
 
   async function exportCsv({ plan, approvals, exportContext, rowOrder }: LeadCsvExportRequest): Promise<void> {
     if (inflight.current || plan.rows.length === 0) return;

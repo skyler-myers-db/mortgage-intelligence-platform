@@ -432,7 +432,7 @@ export function LeadTable({
           onSubmit={() => void sales.submitDisposition()}
         />
       )}
-      {exportState.status === 'done' && (
+      {exportState.status === 'done' && exportState.notice && (
         <div role="status" aria-live="polite" className="table-success" data-testid="lead-export-notice">
           {exportState.notice}
         </div>

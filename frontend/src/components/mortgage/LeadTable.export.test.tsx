@@ -26,6 +26,7 @@ import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LeadTable } from './LeadTable';
 import { describeLeadCsvExport, planLeadCsvExport } from './LeadTable.csv';
+import { LEAD_EXPORT_NOTICE_MS } from './useLeadCsvExport';
 import type { LeadSummary } from '../../types';
 
 vi.mock('../AppContext', () => ({
@@ -151,6 +152,7 @@ describe('LeadTable CSV export', () => {
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -223,6 +225,24 @@ describe('LeadTable CSV export', () => {
         'Exported 2 leads in rank order. 2 excluded by the marketing-eligibility gate.',
       );
     });
+  });
+
+  it('retires the confirmation strip after 8 seconds and keeps the audit receipt line', async () => {
+    // Only timeouts are faked: hashing, the receipt and React's scheduler run as usual.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    mount(MIXED);
+    await exportedCsv();
+    const notice = () => container.querySelector('[data-testid="lead-export-notice"]');
+    const receiptLine = () => container.querySelector('[data-testid="lead-export-receipt"]');
+    await vi.waitFor(() => expect(notice()).not.toBeNull());
+    expect(receiptLine()?.textContent).toBe('Exported 2 rows · audit evt-receipt-0001');
+
+    act(() => {
+      vi.advanceTimersByTime(LEAD_EXPORT_NOTICE_MS);
+    });
+
+    expect(notice()).toBeNull();
+    expect(receiptLine()?.textContent).toBe('Exported 2 rows · audit evt-receipt-0001');
   });
 
   it('writes the rows in the on-screen sort order', async () => {
