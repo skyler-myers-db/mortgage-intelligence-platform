@@ -272,6 +272,24 @@ async function walkFocus(page: Page, key: 'Tab' | 'Shift+Tab', done: (stop: Focu
   return { reached: false, visited, hidden };
 }
 
+/**
+ * How far the scroller's scroll-padding falls short of each sticky bar's
+ * size, in px (0 when it clears the bar). Read from the browser's computed
+ * style, so it measures what focus scrolling actually uses.
+ */
+async function clearanceShortfall(page: Page) {
+  return page.evaluate(() => {
+    const main = document.querySelector<HTMLElement>('.main')!;
+    const style = getComputedStyle(main);
+    const composerHeight = document.querySelector<HTMLElement>('form.genie-composer')!.offsetHeight;
+    const navHeight = document.querySelector<HTMLElement>('.route-nav')!.offsetHeight;
+    return {
+      composer: Math.max(0, composerHeight - Number.parseFloat(style.scrollPaddingBlockEnd)),
+      routeNav: Math.max(0, navHeight - Number.parseFloat(style.scrollPaddingBlockStart)),
+    };
+  });
+}
+
 async function askDeepQuestion(page: Page) {
   await composer(page).fill(GENIE_QUESTION);
   await page.locator('form.genie-composer').getByRole('button', { name: 'Ask Genie', exact: true }).click();
@@ -308,6 +326,10 @@ test.describe('focus is never hidden behind a sticky bar (WCAG 2.2 SC 2.4.11)', 
           .poll(async () => (await mustBox(page.locator('form.genie-composer'), 'composer')).height)
           .toBeGreaterThan(fallback);
       }
+      // The scroller's clearance covers both bars at their current size.
+      await expect
+        .poll(() => clearanceShortfall(page), { message: 'scroll-padding short of the sticky bars (px)' })
+        .toEqual({ composer: 0, routeNav: 0 });
 
       // From the top of the conversation, walk forward to the composer. The
       // thread runs past the fold, so the stops below it start under the dock.
@@ -327,6 +349,30 @@ test.describe('focus is never hidden behind a sticky bar (WCAG 2.2 SC 2.4.11)', 
       expect(walk.hidden, 'focus stops entirely behind a sticky bar').toEqual([]);
     });
   }
+
+  test('the clearance applies only while the Ask tab shows', async ({ app, page }) => {
+    const padding = () =>
+      page.locator('.main').evaluate((main) => {
+        const style = getComputedStyle(main);
+        return { start: style.scrollPaddingBlockStart, end: style.scrollPaddingBlockEnd };
+      });
+    await app.gotoRoute('/ask-genie');
+    await expect.poll(clearanceShortfall.bind(null, page)).toEqual({ composer: 0, routeNav: 0 });
+    await tab(page, 'Workflows').click();
+    await expect(agentPrompt(page)).toBeVisible();
+    expect(await padding(), 'no clearance on the Workflows tab').toEqual({ start: 'auto', end: 'auto' });
+    await page.goBack();
+    await expect(composer(page)).toBeVisible();
+    await expect.poll(clearanceShortfall.bind(null, page)).toEqual({ composer: 0, routeNav: 0 });
+    // Leaving the route drops the rule and the measured sizes with it.
+    await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('link', { name: 'Glossary' }).click();
+    await expect(page.locator('#main-content h1')).toHaveText('Mortgage intelligence glossary');
+    expect(await padding(), 'no clearance after leaving the route').toEqual({ start: 'auto', end: 'auto' });
+    expect(
+      await page.locator('.main').evaluate((main) => main.style.getPropertyValue('--genie-composer-block-size')),
+      'the measured size is removed on unmount',
+    ).toBe('');
+  });
 
   test('Shift+Tab up through an answer keeps every focus stop clear of the route nav', async ({ app, mockApi, page }) => {
     registerGenieTurn(mockApi, { answer: genieDeepAnswerFixture(), holdProgress: false });
