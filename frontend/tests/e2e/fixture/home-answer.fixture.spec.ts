@@ -167,7 +167,6 @@ for (const theme of FIXTURE_THEMES) {
       // The payload really is the maximum: every actionable offer, the
       // unverified-figures warning, five WHO rows, three triggers.
       await expect(band.locator('.offer-mix__seg')).toHaveCount(LIVE_ACTIONABLE_MIX.length);
-      await expect(band.locator('.offer-mix__more')).toBeVisible();
       await expect(band.getByRole('status').filter({ hasText: 'could not be verified' })).toBeVisible();
       await expect(band.locator('.home-answer__who-row')).toHaveCount(5);
       await expect(band.locator('.home-answer__trigger')).toHaveCount(MAX_HOME_SUMMARY.highlights.length);
@@ -184,6 +183,9 @@ for (const theme of FIXTURE_THEMES) {
       expect(bandBox.y + bandBox.height, 'answer band bottom edge').toBeLessThanOrEqual(FOLD);
       expect(mapBox.y, 'map top edge').toBeLessThan(FOLD);
       expect(headingBottom, 'map heading bottom edge').toBeLessThanOrEqual(FOLD);
+      // How it fits: four legend rows, the other three offers on one "Also" line.
+      await expect(band.locator('.offer-mix__item')).toHaveCount(4);
+      await expect(band.locator('.offer-mix__more .offer-mix__more-label')).toHaveCount(LIVE_ACTIONABLE_MIX.length - 4);
       // Seven-digit live magnitudes still fit the --fs-36 KPI values.
       const overflowing = await page.locator('#main-content .kpi__value').evaluateAll((nodes) =>
         nodes.filter((node) => node.scrollWidth > node.clientWidth + 0.5).map((node) => node.textContent),
