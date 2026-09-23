@@ -164,6 +164,30 @@ describe('Lead Queue filter bar', () => {
     expect(params.get('state')).toBe('IL');
   });
 
+  it('hands focus to the next Remove button when a hero chip goes, and to More filters after the last one', async () => {
+    await mountAt('/lead-queue?owner_link=Portfolio+investor+%285%2B%29&purchase_intent=HELOC+intent&outreach_status=sent');
+    const removes = () => [...byTestId('lead-queue-active-filters')!.querySelectorAll<HTMLButtonElement>('.filter__remove')];
+    const label = (button: Element | null) => button?.getAttribute('aria-label');
+
+    // Remove the middle chip: the one that slides into its place takes focus.
+    removes()[1].focus();
+    await act(async () => removes()[1].click());
+    expect(removes().map(label)).toEqual([
+      'Remove OWNER LINK: Portfolio investor (5+) filter',
+      'Remove OUTREACH: Sent filter',
+    ]);
+    expect(label(document.activeElement)).toBe('Remove OUTREACH: Sent filter');
+
+    // Remove the last chip in the row: the one before it takes focus.
+    await act(async () => removes()[1].click());
+    expect(label(document.activeElement)).toBe('Remove OWNER LINK: Portfolio investor (5+) filter');
+
+    // No chip left: focus lands on the More filters toggle, never on <body>.
+    await act(async () => removes()[0].click());
+    expect(removes()).toHaveLength(0);
+    expect(document.activeElement).toBe(byTestId('lead-queue-more-filters'));
+  });
+
   it('Clear all drops every filter but keeps the column preset', async () => {
     await mountAt('/lead-queue?view=sales-ops&state=IL&owner_link=Portfolio+investor+%285%2B%29');
     const clearAll = byTestId<HTMLButtonElement>('lead-queue-clear-all')!;

@@ -333,6 +333,8 @@ test.describe('the collapsed filter wall', () => {
     await remove.click();
     await expect.poll(() => new URL(page.url()).searchParams.has('owner_link')).toBe(false);
     await expect(hero).toHaveCount(0);
+    // The last chip is gone: focus lands on the More filters toggle, never on <body>.
+    await expect(toggle).toBeFocused();
 
     const again = await app.openFilterMenu('OWNER LINK');
     await again.getByRole('option', { name: 'Portfolio investor (5+)' }).click();
@@ -371,6 +373,11 @@ test.describe('the collapsed filter wall', () => {
       await expect.poll(() => new URL(page.url()).searchParams.has('owner_link')).toBe(false);
       expect(new URL(page.url()).searchParams.get('zip')).toBe('60601');
       await expect(removes).toHaveCount(5);
+      // Focus is handed to the Remove button that took its place, not dropped on <body>.
+      await expect(removes.first()).toBeFocused();
+      await page.keyboard.press('Enter');
+      await expect(removes).toHaveCount(4);
+      await expect(removes.first()).toBeFocused();
     });
   }
 

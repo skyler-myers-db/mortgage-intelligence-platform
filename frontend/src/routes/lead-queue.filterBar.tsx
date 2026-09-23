@@ -1,4 +1,4 @@
-import { useId, useState, type ReactNode } from 'react';
+import { useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { Icon } from '../components/Icon';
 import type { LeadQueueFilterChip } from './lead-queue.activeFilters';
 import './lead-queue.css';
@@ -21,12 +21,15 @@ export function LeadQueueFilterBar({
   moreActiveCount,
   filtersActive,
   onClearAll,
+  moreToggleRef,
 }: {
   core: ReactNode;
   more: ReactNode;
   moreActiveCount: number;
   filtersActive: boolean;
   onClearAll: () => void;
+  /** The "More filters" toggle, where focus lands when the last hero chip is removed. */
+  moreToggleRef?: RefObject<HTMLButtonElement | null>;
 }) {
   const [open, setOpen] = useState(false);
   const panelId = useId();
@@ -35,6 +38,7 @@ export function LeadQueueFilterBar({
       <div className="filter-row filter-row--lead-queue" role="group" aria-label="Queue filters">
         {core}
         <button
+          ref={moreToggleRef}
           type="button"
           className={`filter lead-queue-filters__more${moreActiveCount > 0 ? ' is-active' : ''}`}
           aria-expanded={open}
@@ -81,24 +85,45 @@ export function LeadQueueFilterBar({
  * (`.page-filter-chips--lead-queue`): the shared row is one nowrap line
  * justified to the end, whose start-edge overflow cannot be scrolled, so a
  * third active filter clipped the first chips and their Remove buttons.
+ *
+ * Removing a chip unmounts the Remove button that had focus; focus moves to
+ * the Remove button that took its place (or the one before it), and to
+ * `focusFallbackRef` (the "More filters" toggle) once no chip is left, so a
+ * keyboard user is never dropped on `<body>`.
  */
 export function LeadQueueHeroFilterChips({
   chips,
   onRemove,
+  focusFallbackRef,
 }: {
   chips: readonly LeadQueueFilterChip[];
   onRemove: (chip: LeadQueueFilterChip) => void;
+  focusFallbackRef?: RefObject<HTMLElement | null>;
 }) {
+  const rowRef = useRef<HTMLDivElement | null>(null);
+  const removedRef = useRef<{ key: string; index: number } | null>(null);
+  useLayoutEffect(() => {
+    const removed = removedRef.current;
+    if (!removed || chips.some((chip) => chip.key === removed.key)) return;
+    removedRef.current = null;
+    // Only repair a LOST focus; never pull focus from somewhere the user went.
+    const active = document.activeElement;
+    if (active && active !== document.body && document.contains(active)) return;
+    const buttons = rowRef.current?.querySelectorAll<HTMLButtonElement>('.filter__remove') ?? [];
+    const next = buttons.length > 0 ? buttons[Math.min(removed.index, buttons.length - 1)] : null;
+    (next ?? focusFallbackRef?.current)?.focus();
+  }, [chips, focusFallbackRef]);
   const empty = chips.length === 0;
   return (
     <div
+      ref={rowRef}
       className={`page-filter-chips page-filter-chips--lead-queue ${empty ? 'is-empty' : ''}`}
       role={empty ? undefined : 'group'}
       aria-label={empty ? undefined : 'Active filters'}
       aria-hidden={empty || undefined}
       data-testid="lead-queue-active-filters"
     >
-      {chips.map((chip) => (
+      {chips.map((chip, index) => (
         <span key={chip.key} className="filter is-active filter--removable" title={`${chip.label}: ${chip.value}`}>
           <span className="filter__label">{chip.label}</span>
           <span className="filter__value">{chip.value}</span>
@@ -106,7 +131,10 @@ export function LeadQueueHeroFilterChips({
             type="button"
             className="filter__remove"
             aria-label={`Remove ${chip.label}: ${chip.value} filter`}
-            onClick={() => onRemove(chip)}
+            onClick={() => {
+              removedRef.current = { key: chip.key, index };
+              onRemove(chip);
+            }}
           >
             <Icon name="cross" size={9} />
           </button>

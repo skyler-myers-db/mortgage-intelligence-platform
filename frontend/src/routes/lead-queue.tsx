@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router';
 import { api, type LeadsPageResult } from '../lib/api';
@@ -90,6 +90,7 @@ export default function LeadQueue() {
   const filtersActive = hasLeadQueueFilters(searchParams);
   const footprint = useFootprint();
   const { canAccessAdmin } = useApp();
+  const moreFiltersToggleRef = useRef<HTMLButtonElement | null>(null);
   const segment = parseSegmentCodes(searchParams.get('segment'))[0];
   const segmentCodes = useMemo(
     () => parseSegmentCodes(searchParams.get('segment_codes')),
@@ -406,6 +407,7 @@ export default function LeadQueue() {
         <LeadQueueHeroFilterChips
           chips={activeFilterChips}
           onRemove={(chip) => setSearchParams(searchParamsWithoutFilter(searchParams, chip.params))}
+          focusFallbackRef={moreFiltersToggleRef}
         />
       }
     >
@@ -469,6 +471,7 @@ export default function LeadQueue() {
           <LeadQueueFilterBar
             filtersActive={filtersActive}
             onClearAll={clearAllFilters}
+            moreToggleRef={moreFiltersToggleRef}
             moreActiveCount={moreActiveCount}
             core={(
               <>
