@@ -40,6 +40,30 @@ test.describe('analytics executive: why-now rate window', () => {
     await expect(panel.locator('.rate-window__panel--itm .analytics-chart__tick--x').first()).toBeVisible();
   });
 
+  test('the book median is drawn in the colour its legend swatch names, not the market accent', async ({ app, page }) => {
+    await app.setTheme('dark');
+    await app.gotoRoute('/analytics');
+
+    const panel = page.getByTestId('rate-window');
+    await expect(panel.locator('polyline.rate-window__median')).toHaveCount(1);
+    const colours = await panel.evaluate((root) => {
+      const style = (selector: string) => {
+        const el = root.querySelector(selector);
+        if (!el) throw new Error(`missing ${selector}`);
+        return getComputedStyle(el);
+      };
+      return {
+        median: style('polyline.rate-window__median').stroke,
+        medianSwatch: style('.rate-window__swatch--median').backgroundColor,
+        market: style('polyline.rate-window__market').stroke,
+        marketSwatch: style('.rate-window__legend-item:first-child .rate-window__swatch').backgroundColor,
+      };
+    });
+    expect(colours.median, 'median stroke matches its legend swatch').toBe(colours.medianSwatch);
+    expect(colours.median, 'median and market are distinct encodings').not.toBe(colours.market);
+    expect(colours.market, 'market stroke matches its legend swatch').toBe(colours.marketSwatch);
+  });
+
   test('the evidence chip opens the drawer on the rate-window destination citing both source tables', async ({ app, page }) => {
     await app.setTheme('light');
     await app.gotoRoute('/analytics');
