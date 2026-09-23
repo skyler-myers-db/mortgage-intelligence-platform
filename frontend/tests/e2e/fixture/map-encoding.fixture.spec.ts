@@ -457,6 +457,9 @@ test.describe('controlled, deep-linkable drill (dataviz-04)', () => {
     await expect(page.locator('path[data-map-unit="tx"]')).toBeVisible();
     await expect(page.locator('.chip', { hasText: 'state: TX' })).toHaveCount(0);
     await expect(total).toHaveText(TOTALS.contactable.toLocaleString('en-US'));
+    // The button removed itself; focus lands on the map's US crumb, not <body>.
+    await expect(page.locator('.map-crumbs__trail').getByRole('button', { name: 'US' })).toBeFocused();
+    await expectFocusInMap(page);
   });
 });
 
