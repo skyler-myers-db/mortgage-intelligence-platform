@@ -301,7 +301,7 @@ export default function AskGenie() {
     <PageShell
       eyebrow="Genie"
       title="Ask Genie"
-      lede="Ask about your book in plain language: coverage, segments, borrowers and market shifts. Every answer shows the figures behind it and where they came from, and any follow-up action still needs your approval."
+      lede="Ask about your book in plain language: coverage, segments, borrowers and market shifts. Answers drawn from your data show the figures behind them and where they came from, and any follow-up action still needs your approval."
       heroRight={<AskGenieTabs tab={tab} onSelect={selectTab} />}
     >
       <section
