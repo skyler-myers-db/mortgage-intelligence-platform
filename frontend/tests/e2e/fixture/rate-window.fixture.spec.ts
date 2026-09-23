@@ -242,7 +242,8 @@ test.describe('analytics executive: why-now rate window', () => {
 
     // The default `bright` accent overrides the light theme's navy --accent
     // with #66C5FF, which drew the market line at 1.91:1 on white and the
-    // book band (#66C5FF at 14%) at about 1.07:1, i.e. invisible.
+    // book band (#66C5FF at 14%) at 1.09:1, i.e. invisible. Measured after
+    // the fix: light 8.74:1 lines, 1.31:1 band; dark 8.27:1, 1.35:1.
     test(`${theme} theme: the market and in-the-money lines clear 3:1 and the book band reads against the panel`, async ({ app, page }) => {
       await app.setTheme(theme);
       await app.gotoRoute('/analytics');
@@ -256,7 +257,7 @@ test.describe('analytics executive: why-now rate window', () => {
       expect(itm, `in-the-money line ${fmtRgb(ink.itm)} on panel ${fmtRgb(ink.surface)}: ${itm.toFixed(2)}:1 (WCAG 1.4.11)`).toBeGreaterThanOrEqual(3);
       // The band is a range fill under the lines, not a sole carrier of
       // meaning (the table and the p25/p75 columns carry it), so it needs to
-      // read as a tint, not 3:1: the dark theme's measures about 1.33:1.
+      // read as a tint, not 3:1: the dark theme's measures 1.35:1.
       expect(band, `book band ${fmtRgb(ink.bandOverSurface)} on panel ${fmtRgb(ink.surface)}: ${band.toFixed(2)}:1`).toBeGreaterThanOrEqual(1.25);
       expect(ink.bandSwatch, 'band legend swatch names the band fill').toEqual(ink.bandOverSurface);
     });

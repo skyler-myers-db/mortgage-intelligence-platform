@@ -12,14 +12,15 @@
    needs 4.5:1, 1.4.11 needs 3:1). The light theme darkens the warning hue
    toward --text-1 rather than borrowing the navy the warning chips use
    (02-chips-kpi-segments.css), which would read as the market line
-   (--accent) or the median (--text-3). At 45% it measures about 6.8:1 on
-   white and still clears 4.5:1 over the book band the label can sit on.
+   (--accent) or the median (--text-3). At 45% it measures 6.79:1 on white
+   and 5.19:1 over the book band the label can sit on.
    The data ink (market line, in-the-money line, current print) and the band
    fill follow the accent. The default `bright` accent overrides the light
    theme's navy --accent with #66C5FF (1.91:1 on white, audit visual-08 /
    dataviz-09), so the light theme draws them from --accent-ink, the
    existing per-accent light-safe precedent (tokens.css), and gives the book
-   band a fill that reads on white instead of the 1.07:1 --accent-soft. */
+   band a fill that reads on white (1.31:1, the dark band's 1.35:1) instead
+   of the 1.09:1 --accent-soft. */
 .rate-window {
   --rate-window-screen-ink: var(--status-warning-ink);
   --rate-window-data-ink: var(--accent);
