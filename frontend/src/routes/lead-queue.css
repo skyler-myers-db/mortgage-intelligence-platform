@@ -25,11 +25,24 @@
   }
 }
 
+/* The hero's active-filter row wraps instead of scrolling. The shared
+   `.page-filter-chips` row (09-console-and-layout.css) is one nowrap line
+   justified to the end with overflow-x: auto, and overflow past a
+   flex-end start edge cannot be scrolled to: with three or more active
+   filters the first chips and their Remove buttons were clipped and
+   unreachable. Every chip and its Remove button stay on screen. */
+.page-filter-chips.page-filter-chips--lead-queue {
+  flex-wrap: wrap;
+  row-gap: var(--sp-1);
+  block-size: auto;
+  overflow: visible;
+}
+
 /* Removable hero chip: the `.filter` pill as a static label with a dismiss
    button. It is not itself a control, so it keeps still when pressed. */
 .filter--removable {
   flex-shrink: 0;
-  max-inline-size: calc(var(--sp-16) * 5);
+  max-inline-size: min(100%, calc(var(--sp-16) * 5));
   padding-inline-end: var(--sp-1);
   cursor: default;
 }

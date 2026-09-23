@@ -41,6 +41,10 @@ async function rowHeight(row: Locator): Promise<number> {
   return row.evaluate((el) => el.getBoundingClientRect().height);
 }
 
+/** Six non-core filters: more hero chips than one line of the hero's action slot holds. */
+const SIX_FILTERS = '/lead-queue?owner_link=Portfolio+investor+%285%2B%29&purchase_intent=HELOC+intent'
+  + '&recency=Untouched+30d&outreach_status=sent&aged_days=14&zip=60601';
+
 test.describe('the ranked-borrower table fits 1440x900 with the Console closed', () => {
   for (const theme of FIXTURE_THEMES) {
     test(`Score and Approve of the first 8 rows are on screen, unoccluded, with no horizontal scroll (${theme})`, async ({ app, page }) => {
@@ -259,6 +263,28 @@ test.describe('the collapsed filter wall', () => {
     await expect.poll(() => new URL(page.url()).search).toBe('?view=sales-ops');
     await expect(page.getByTestId('lead-queue-clear-all')).toBeDisabled();
   });
+
+  for (const theme of FIXTURE_THEMES) {
+    test(`six active filters: every hero chip's Remove button is reachable, Console closed and open (${theme})`, async ({ app, page }) => {
+      await app.setTheme(theme);
+      await app.gotoRoute(SIX_FILTERS);
+      const hero = page.getByRole('group', { name: 'Active filters' });
+      const removes = hero.getByRole('button', { name: /^Remove .+ filter$/ });
+      await expect(removes).toHaveCount(6);
+      for (const phase of ['Console closed', 'Console open'] as const) {
+        if (phase === 'Console open') await app.openConsole();
+        for (let index = 0; index < 6; index += 1) {
+          const remove = removes.nth(index);
+          await expectReachable(remove, `${phase}: ${(await remove.getAttribute('aria-label')) ?? `Remove button ${index + 1}`}`);
+        }
+      }
+      // The first chip, the one the one-line row clipped, removes only its own filter.
+      await removes.first().click();
+      await expect.poll(() => new URL(page.url()).searchParams.has('owner_link')).toBe(false);
+      expect(new URL(page.url()).searchParams.get('zip')).toBe('60601');
+      await expect(removes).toHaveCount(5);
+    });
+  }
 });
 
 test.describe('axe stays clean on the new queue states', () => {

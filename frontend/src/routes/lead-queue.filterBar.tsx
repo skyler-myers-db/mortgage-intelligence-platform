@@ -77,7 +77,10 @@ export function LeadQueueFilterBar({
  * Hero chip row: one removable `.filter` chip per active non-core filter.
  * `.filter__remove` is a BEM extension of the prototype's `.filter` pill
  * (design_files/index.html:826-838 has no dismiss element); the pill's own
- * label / value typography is unchanged.
+ * label / value typography is unchanged. The row WRAPS
+ * (`.page-filter-chips--lead-queue`): the shared row is one nowrap line
+ * justified to the end, whose start-edge overflow cannot be scrolled, so a
+ * third active filter clipped the first chips and their Remove buttons.
  */
 export function LeadQueueHeroFilterChips({
   chips,
@@ -89,7 +92,7 @@ export function LeadQueueHeroFilterChips({
   const empty = chips.length === 0;
   return (
     <div
-      className={`page-filter-chips ${empty ? 'is-empty' : ''}`}
+      className={`page-filter-chips page-filter-chips--lead-queue ${empty ? 'is-empty' : ''}`}
       role={empty ? undefined : 'group'}
       aria-label={empty ? undefined : 'Active filters'}
       aria-hidden={empty || undefined}
