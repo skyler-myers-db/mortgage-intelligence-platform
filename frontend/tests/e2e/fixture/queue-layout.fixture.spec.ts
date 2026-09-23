@@ -285,6 +285,18 @@ test.describe('the collapsed filter wall', () => {
       await expect(removes).toHaveCount(5);
     });
   }
+
+  test('the hero lede is one line and claims no sending', async ({ app, page }) => {
+    await app.gotoRoute('/lead-queue');
+    const lede = page.locator('.proto-hero .lede');
+    await expect(lede).toHaveText('Expand a row, then approve or reject. Decisions are audited; nothing is sent automatically.');
+    const lines = await lede.evaluate((el) => {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      return new Set([...range.getClientRects()].map((rect) => Math.round(rect.top))).size;
+    });
+    expect(lines, 'the lede renders on one line at 1440').toBe(1);
+  });
 });
 
 test.describe('axe stays clean on the new queue states', () => {

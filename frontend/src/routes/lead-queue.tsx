@@ -401,7 +401,7 @@ export default function LeadQueue() {
     <PageShell
       eyebrow="Lead Queue"
       title="Ranked borrowers"
-      lede="Expand a row for its evidence, then approve or reject. Nothing is sent until you approve."
+      lede="Expand a row, then approve or reject. Decisions are audited; nothing is sent automatically."
       heroRight={
         <LeadQueueHeroFilterChips
           chips={activeFilterChips}
