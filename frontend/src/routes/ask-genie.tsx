@@ -10,7 +10,6 @@ import type {
 } from '../types';
 import { useApp } from '../components/AppContext';
 import { PageShell } from '../components/layout/PageShell';
-import { Chip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { descriptorFor } from '../lib/drawerSources';
 import {
@@ -26,13 +25,21 @@ import {
 } from '../lib/genieConversationStore';
 import { queryKeys } from '../lib/queryKeys';
 import { AskGenieAnswerPanel } from './ask-genie.answer-panel';
+import { GrowthAgentMonitorsPanel } from './ask-genie.growth-agent-monitors';
 import { GrowthAgentPanel } from './ask-genie.growth-agent-panel';
 import { useGrowthAgentWorkspace } from './ask-genie.growth-agent-state';
+import {
+  AskGenieTabs,
+  askGeniePanelId,
+  askGenieTabId,
+  useAskGenieTab,
+} from './ask-genie.tabs';
 import { formatGrowthAgentCount } from './ask-genie.growth-run-card';
 import {
   buildTrustedAssetQuestion,
   trustedAssetsForCatalog,
 } from './ask-genie.growth-agent.helpers';
+import './ask-genie.css';
 
 export { formatGrowthAgentCount };
 export {
@@ -53,8 +60,20 @@ function shouldPersistConversation(payload: GenieAnswerShape): boolean {
   return Boolean(payload.conversation_id && !NON_PERSISTABLE_SOURCES.has(String(payload.source ?? '')));
 }
 
+/**
+ * `/ask-genie` — conversation first (audit 2026-09-21 `visual-07`, `genie-09`,
+ * `flow-10`). The page is titled what the nav calls it and opens on the Ask
+ * tab: the thread, the suggestions and the docked composer. The Mortgage
+ * Growth Agent's workflows and saved monitors are the Workflows and Saved
+ * monitors tabs, selected by `?tab=` so they deep-link and Back works.
+ *
+ * Inactive panels stay mounted and `hidden`: the Ask panel owns the effect
+ * that appends a settled answer to the shared thread store, so a turn that
+ * lands while the user is on another tab still reaches the floating panel.
+ */
 export default function AskGenie() {
   const navigate = useNavigate();
+  const [tab, selectTab] = useAskGenieTab();
   const { refreshWorkspace, setDrawer } = useApp();
   const questionRef = useRef<HTMLTextAreaElement>(null);
   const suppressBootstrapConversationRef = useRef(false);
@@ -276,70 +295,98 @@ export default function AskGenie() {
     }
   }
 
+  const openRoute = (route: string) => navigate(route);
+
   return (
     <PageShell
-      eyebrow="Mortgage Growth Agent"
-      title="Mortgage growth co-pilot"
-      lede="Use the Genie Conversation API for portfolio analysis, then compose and run reviewed growth workflows with human approval at the action boundary. Databricks Agent Responses automation is identified only when the configured capability is ready."
-      heroRight={<Chip variant="neutral" icon="sparkle">Genie analytics + reviewed automation</Chip>}
+      eyebrow="Genie"
+      title="Ask Genie"
+      lede="Ask about your book in plain language: coverage, segments, borrowers and market shifts. Every answer shows the figures behind it and where they came from, and any follow-up action still needs your approval."
+      heroRight={<AskGenieTabs tab={tab} onSelect={selectTab} />}
     >
-      <GrowthAgentPanel agent={growthAgent} onOpenRoute={(route) => navigate(route)} />
+      <section
+        role="tabpanel"
+        id={askGeniePanelId('ask')}
+        aria-labelledby={askGenieTabId('ask')}
+        hidden={tab !== 'ask'}
+      >
+        <div className="layoutA-grid">
+          <AskGenieAnswerPanel
+            questionRef={questionRef}
+            question={question}
+            onQuestionChange={(value) => {
+              setQuestion(value);
+              setActiveAssetPath(null);
+            }}
+            onAsk={ask}
+            onNewThread={newConversation}
+            onLoadSession={loadSession}
+            onSettled={clearAnsweredQuestion}
+            loading={loading}
+            warmingUp={warmingUp}
+            errorMsg={errorMsg}
+            onRetry={manualRetry}
+            sampleQuestions={sampleQuestions}
+            payload={payload}
+            liveProgress={liveProgress}
+            askStartedAt={askStartedAt}
+            submittedQuestion={submittedQuestion}
+            onFollowUp={ask}
+            onAction={runAction}
+            onEditQuestion={(q) => {
+              setQuestion(q);
+              setActiveAssetPath(null);
+              questionRef.current?.focus();
+            }}
+            actionStatus={actionStatus}
+            sourceAssets={genieStartQuery.data?.trusted_assets ?? []}
+          />
 
-      <div className="layoutA-grid">
-        <AskGenieAnswerPanel
-          questionRef={questionRef}
-          question={question}
-          onQuestionChange={(value) => {
-            setQuestion(value);
-            setActiveAssetPath(null);
-          }}
-          onAsk={ask}
-          onNewThread={newConversation}
-          onLoadSession={loadSession}
-          onSettled={clearAnsweredQuestion}
-          loading={loading}
-          warmingUp={warmingUp}
-          errorMsg={errorMsg}
-          onRetry={manualRetry}
-          sampleQuestions={sampleQuestions}
-          payload={payload}
-          liveProgress={liveProgress}
-          askStartedAt={askStartedAt}
-          submittedQuestion={submittedQuestion}
-          onFollowUp={ask}
-          onAction={runAction}
-          onEditQuestion={(q) => {
-            setQuestion(q);
-            setActiveAssetPath(null);
-            questionRef.current?.focus();
-          }}
-          actionStatus={actionStatus}
-        />
+          <div className="stack-grid">
+            <div className="surface">
+              <div className="surface__hdr">
+                <Icon name="layers" size={14} className="icon-accent" />
+                <div className="h-4">Trusted sources</div>
+              </div>
+              <div className="surface__body trusted-asset-list">
+                {trustedAssets.map((a) => (
+                  <button
+                    key={a.path}
+                    title={a.path}
+                    type="button"
+                    className={`trusted-asset trusted-asset--button${activeAssetPath === a.path ? ' is-active' : ''}`}
+                    onClick={() => scopeToTrustedAsset(a)}
+                    aria-pressed={activeAssetPath === a.path}
+                  >
+                    <div className="trusted-asset__label">{a.label}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
 
-        <div className="stack-grid">
-          <div className="surface">
-            <div className="surface__hdr">
-              <Icon name="layers" size={14} className="icon-accent" />
-              <div className="h-4">Trusted assets</div>
-            </div>
-            <div className="surface__body trusted-asset-list">
-              {trustedAssets.map((a) => (
-                <button
-                  key={a.path}
-                  title={a.path}
-                  type="button"
-                  className={`trusted-asset trusted-asset--button${activeAssetPath === a.path ? ' is-active' : ''}`}
-                  onClick={() => scopeToTrustedAsset(a)}
-                  aria-pressed={activeAssetPath === a.path}
-                >
-                  <div className="trusted-asset__label">{a.label}</div>
-                </button>
-              ))}
-            </div>
           </div>
-
         </div>
-      </div>
+      </section>
+      <section
+        role="tabpanel"
+        id={askGeniePanelId('workflows')}
+        aria-labelledby={askGenieTabId('workflows')}
+        hidden={tab !== 'workflows'}
+      >
+        <GrowthAgentPanel agent={growthAgent} onOpenRoute={openRoute} />
+      </section>
+      <section
+        role="tabpanel"
+        id={askGeniePanelId('monitors')}
+        aria-labelledby={askGenieTabId('monitors')}
+        hidden={tab !== 'monitors'}
+      >
+        <GrowthAgentMonitorsPanel
+          agent={growthAgent}
+          onOpenRoute={openRoute}
+          onOpenWorkflows={() => selectTab('workflows')}
+        />
+      </section>
     </PageShell>
   );
 }

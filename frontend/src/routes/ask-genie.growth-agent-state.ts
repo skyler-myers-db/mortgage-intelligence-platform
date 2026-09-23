@@ -15,6 +15,15 @@ import type {
 } from '../types';
 import { parseGrowthAgentStateInput } from './ask-genie.growth-agent.helpers';
 
+/** The `/ask-genie` tab an action was started from; its feedback renders there. */
+export type GrowthAgentRunOrigin = 'workflows' | 'monitors';
+
+/** An action in flight: where it was started and what it is doing, in lender copy. */
+export interface GrowthAgentActiveRun {
+  origin: GrowthAgentRunOrigin;
+  label: string;
+}
+
 /**
  * Growth Agent workspace state for `/ask-genie`: the reviewed workflow
  * catalog, saved watchlists, the objective / scope / cadence inputs, and the
@@ -22,6 +31,12 @@ import { parseGrowthAgentStateInput } from './ask-genie.growth-agent.helpers';
  * (file-size gate) so the route can compose the conversation and the Growth
  * Agent as separate surfaces; the requests, validation and pending flags are
  * unchanged.
+ *
+ * `runOrigin` and `activeRun` (audit 2026-09-21 `genie-09`) say which tab an
+ * action was started from, so its progress, error and result render in that
+ * tab rather than in a tab the user cannot see. `activeRun` is an honest
+ * indeterminate state: each run is one blocking request with no server step
+ * events, so the UI names the action and nothing more.
  */
 export function useGrowthAgentWorkspace() {
   const [agentStateText, setAgentStateText] = useState('');
@@ -43,6 +58,13 @@ export function useGrowthAgentWorkspace() {
   const [customMode, setCustomMode] = useState<GrowthAgentSegmentMode>('any');
   const [composePlan, setComposePlan] = useState<ComposePlanResponse | null>(null);
   const [composePending, setComposePending] = useState<'compose' | 'execute' | null>(null);
+  const [runOrigin, setRunOrigin] = useState<GrowthAgentRunOrigin>('workflows');
+  const [activeRun, setActiveRun] = useState<GrowthAgentActiveRun | null>(null);
+
+  function beginRun(origin: GrowthAgentRunOrigin, label: string) {
+    setRunOrigin(origin);
+    setActiveRun({ origin, label });
+  }
 
   function clearGrowthAgentFeedback() {
     setLatestGrowthRun(null);
@@ -66,6 +88,7 @@ export function useGrowthAgentWorkspace() {
   });
 
   async function runGrowthAgentWorkflow(workflow: GrowthAgentWorkflow, saveMonitor: boolean) {
+    setRunOrigin('workflows');
     const parsed = parseGrowthAgentStateInput(agentStateText);
     if (parsed.invalid.length > 0) {
       setLatestGrowthRun(null);
@@ -74,6 +97,7 @@ export function useGrowthAgentWorkspace() {
     }
     setGrowthAgentPending(workflow.id);
     setGrowthAgentPendingAction(saveMonitor ? 'save' : 'run');
+    beginRun('workflows', saveMonitor ? `Saving ${workflow.title} as a watchlist` : `Running ${workflow.title}`);
     setLatestGrowthRun(null);
     setGrowthAgentError(null);
     try {
@@ -93,10 +117,12 @@ export function useGrowthAgentWorkspace() {
     } finally {
       setGrowthAgentPending(null);
       setGrowthAgentPendingAction(null);
+      setActiveRun(null);
     }
   }
 
   async function runMortgageGrowthAgentPrompt(saveMonitor: boolean) {
+    setRunOrigin('workflows');
     const parsed = parseGrowthAgentStateInput(agentStateText);
     const prompt = agentPrompt.trim();
     if (parsed.invalid.length > 0) {
@@ -111,6 +137,7 @@ export function useGrowthAgentWorkspace() {
     }
     setPromptAgentPending(true);
     setPromptAgentPendingAction(saveMonitor ? 'save' : 'run');
+    beginRun('workflows', saveMonitor ? 'Saving your objective as a reviewed watchlist' : 'Planning a reviewed workflow for your objective');
     setLatestGrowthRun(null);
     setGrowthAgentError(null);
     try {
@@ -131,10 +158,12 @@ export function useGrowthAgentWorkspace() {
     } finally {
       setPromptAgentPending(false);
       setPromptAgentPendingAction(null);
+      setActiveRun(null);
     }
   }
 
   async function composeGrowthAgentPlan(execute: boolean) {
+    setRunOrigin('workflows');
     const parsed = parseGrowthAgentStateInput(agentStateText);
     const objective = agentPrompt.trim();
     if (parsed.invalid.length > 0) {
@@ -148,6 +177,7 @@ export function useGrowthAgentWorkspace() {
       return;
     }
     setComposePending(execute ? 'execute' : 'compose');
+    beginRun('workflows', execute ? 'Composing and running a plan for your objective' : 'Composing a plan for your objective');
     setComposePlan(null);
     setGrowthAgentError(null);
     try {
@@ -161,10 +191,12 @@ export function useGrowthAgentWorkspace() {
       setGrowthAgentError(err instanceof Error ? err.message : 'Compose plan failed.');
     } finally {
       setComposePending(null);
+      setActiveRun(null);
     }
   }
 
   async function runCustomGrowthAgentWorkflow(saveMonitor: boolean) {
+    setRunOrigin('workflows');
     const parsed = parseGrowthAgentStateInput(agentStateText);
     if (parsed.invalid.length > 0) {
       setLatestGrowthRun(null);
@@ -178,6 +210,7 @@ export function useGrowthAgentWorkspace() {
     }
     setGrowthAgentPending('custom_segment_watch');
     setCustomAgentPendingAction(saveMonitor ? 'save' : 'run');
+    beginRun('workflows', saveMonitor ? 'Saving the custom segment watchlist' : 'Running the custom segment workflow');
     setLatestGrowthRun(null);
     setGrowthAgentError(null);
     try {
@@ -201,11 +234,13 @@ export function useGrowthAgentWorkspace() {
     } finally {
       setGrowthAgentPending(null);
       setCustomAgentPendingAction(null);
+      setActiveRun(null);
     }
   }
 
   async function rerunGrowthAgentMonitor(monitor: GrowthAgentMonitor) {
     setMonitorPending(monitor.monitor_id);
+    beginRun('monitors', `Re-running ${monitor.name}`);
     setLatestGrowthRun(null);
     setLatestGrowthDrafts([]);
     setGrowthAgentError(null);
@@ -217,11 +252,13 @@ export function useGrowthAgentWorkspace() {
       setGrowthAgentError(err instanceof Error ? err.message : 'Saved Growth Agent watchlist rerun failed.');
     } finally {
       setMonitorPending(null);
+      setActiveRun(null);
     }
   }
 
   async function draftGrowthAgentMonitorNotifications(monitor: GrowthAgentMonitor) {
     setMonitorDraftPending(monitor.monitor_id);
+    beginRun('monitors', `Drafting Slack and Teams notes for ${monitor.name}`);
     setLatestGrowthRun(null);
     setLatestGrowthDrafts([]);
     setGrowthAgentError(null);
@@ -234,6 +271,7 @@ export function useGrowthAgentWorkspace() {
       setGrowthAgentError(err instanceof Error ? err.message : 'Saved watchlist draft handoff failed.');
     } finally {
       setMonitorDraftPending(null);
+      setActiveRun(null);
     }
   }
 
@@ -273,6 +311,8 @@ export function useGrowthAgentWorkspace() {
     setCustomMode,
     composePlan,
     composePending,
+    runOrigin,
+    activeRun,
     workflowsLoading: growthAgentQuery.isPending,
     workflowsError: growthAgentQuery.error,
     stateParsePreview,

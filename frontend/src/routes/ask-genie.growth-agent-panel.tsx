@@ -2,16 +2,13 @@ import { Button, Chip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { humanizeAssetMentions } from '../lib/assetLabels';
 import type { GrowthAgentCadence, GrowthAgentSegmentMode } from '../types';
-import { ComposePlanCard } from './ask-genie.compose-plan-card';
-import { GrowthAgentDraftPanel } from './ask-genie.growth-agent-drafts';
+import { GrowthAgentRunSlot } from './ask-genie.growth-agent-run-slot';
 import type { GrowthAgentWorkspace } from './ask-genie.growth-agent-state';
 import {
   CUSTOM_SEGMENTS,
   renderSourceAssetChip,
   workflowIcon,
 } from './ask-genie.growth-agent.helpers';
-import { GrowthAgentRunCard } from './ask-genie.growth-run-card';
-import { SavedGrowthAgentMonitors } from './ask-genie.saved-monitors';
 
 interface GrowthAgentPanelProps {
   agent: GrowthAgentWorkspace;
@@ -19,18 +16,21 @@ interface GrowthAgentPanelProps {
 }
 
 /**
- * The Mortgage Growth Agent surface on `/ask-genie`: objective box, state
- * scope and review interval, the reviewed workflow cards, the custom segment
- * builder, the latest run / composed plan, watchlist drafts and saved
- * watchlists. Moved verbatim out of `routes/ask-genie.tsx` (file-size gate);
- * state and handlers live in `useGrowthAgentWorkspace`.
+ * The Workflows tab of `/ask-genie`: the Mortgage Growth Agent's objective
+ * box, state scope and review interval, the reviewed workflow cards and the
+ * custom segment builder. Moved out of `routes/ask-genie.tsx` (file-size
+ * gate); state and handlers live in `useGrowthAgentWorkspace`.
+ *
+ * Audit 2026-09-21 `genie-09`: the run slot (progress, error, result,
+ * composed plan) sits directly under the controls, above the cards, so a run
+ * reports where it runs instead of below the custom builder. Saved
+ * watchlists and their drafts moved to the Saved monitors tab.
  */
 export function GrowthAgentPanel({ agent, onOpenRoute }: GrowthAgentPanelProps) {
   const {
     agentBusy,
     stateParsePreview,
     workflows,
-    monitors,
     growthAgentPending,
     growthAgentPendingAction,
     promptAgentPending,
@@ -45,8 +45,11 @@ export function GrowthAgentPanel({ agent, onOpenRoute }: GrowthAgentPanelProps) 
       <div className="surface__hdr">
         <Icon name="bolt" size={14} className="icon-accent" />
         <div>
-          <div className="h-4">Mortgage Growth Agent</div>
-          <div className="muted fs-12">Reviewed workflow runs, saved watchlists, and human-review Lead Queue handoffs.</div>
+          <h2 className="h-4">Mortgage growth co-pilot</h2>
+          <div className="muted fs-12">
+            Describe a borrower-growth goal and the Mortgage Growth Agent picks a reviewed workflow, counts the
+            eligible borrowers and opens them in the Lead Queue for review. Nothing is sent without human approval.
+          </div>
         </div>
       </div>
       <div className="surface__body">
@@ -144,20 +147,17 @@ export function GrowthAgentPanel({ agent, onOpenRoute }: GrowthAgentPanelProps) 
                   <option value="daily">Daily interval</option>
                   <option value="weekly">Weekly interval</option>
                 </select>
-                <span className="growth-agent__hint">Saved watchlists stay paused until an admin enables the scheduler.</span>
+                <span className="growth-agent__hint">Saved watchlists stay paused until an admin turns on scheduled runs.</span>
           </label>
         </div>
 
-        {agent.growthAgentError && (
-          <div className="status-callout status-callout--danger mt-3" role="alert">
-            {agent.growthAgentError}
-          </div>
-        )}
         {agent.workflowsError && (
           <div className="status-callout status-callout--danger mt-3" role="alert">
             Could not load Growth Agent workflows.
           </div>
         )}
+
+        <GrowthAgentRunSlot agent={agent} origin="workflows" onOpenRoute={onOpenRoute} />
 
         <section className="growth-agent__cards" aria-label="Governed Growth Agent workflows">
           {workflows.map((workflow) => {
@@ -210,7 +210,7 @@ export function GrowthAgentPanel({ agent, onOpenRoute }: GrowthAgentPanelProps) 
           })}
           {agent.workflowsLoading && (
             <div className="surface surface--inset growth-agent-card growth-agent-card--loading">
-              <div className="surface__body">Loading governed workflows…</div>
+              <div className="surface__body">Loading workflows…</div>
             </div>
           )}
         </section>
@@ -221,11 +221,11 @@ export function GrowthAgentPanel({ agent, onOpenRoute }: GrowthAgentPanelProps) 
             <div>
               <div className="h-4">Build a custom segment workflow</div>
               <div className="muted fs-12">
-                Combine reviewed Module 0 segment signals, reconcile to eligible leads, then save the watchlist filters.
+                Combine reviewed borrower segments, count the borrowers eligible for outreach, then save the filters as a watchlist.
               </div>
             </div>
             <div className="spacer" />
-            <Chip variant="neutral" icon="shield">Reviewed vocabulary only</Chip>
+            <Chip variant="neutral" icon="shield">Reviewed segments only</Chip>
           </div>
           <div className="growth-agent-custom__body">
             <div className="chip-row" role="group" aria-label="Custom workflow segments">
@@ -259,7 +259,7 @@ export function GrowthAgentPanel({ agent, onOpenRoute }: GrowthAgentPanelProps) 
                 <option value="all">All selected segments</option>
               </select>
               <span className="growth-agent__hint">
-                Any de-duplicates borrowers across selected segments; All requires every selected segment.
+                Any counts each borrower once across the selected segments; All requires every selected segment.
               </span>
             </label>
             <div className="growth-agent-card__actions">
@@ -284,34 +284,6 @@ export function GrowthAgentPanel({ agent, onOpenRoute }: GrowthAgentPanelProps) 
             </div>
           </div>
         </section>
-
-        {agent.latestGrowthRun && (
-          <GrowthAgentRunCard
-            run={agent.latestGrowthRun}
-            onOpenRoute={onOpenRoute}
-            renderSourceAssetChip={renderSourceAssetChip}
-          />
-        )}
-
-        {agent.composePlan && (
-          <ComposePlanCard
-            response={agent.composePlan}
-            onOpenRoute={onOpenRoute}
-            renderSourceAssetChip={renderSourceAssetChip}
-          />
-        )}
-
-        <GrowthAgentDraftPanel drafts={agent.latestGrowthDrafts} />
-
-        <SavedGrowthAgentMonitors
-          monitors={monitors}
-          monitorPending={agent.monitorPending}
-          draftPending={agent.monitorDraftPending}
-          actionsDisabled={agentBusy}
-          onRun={agent.rerunGrowthAgentMonitor}
-          onDraft={agent.draftGrowthAgentMonitorNotifications}
-          onOpen={onOpenRoute}
-        />
       </div>
     </div>
   );

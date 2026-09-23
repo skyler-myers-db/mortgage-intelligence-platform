@@ -17,6 +17,7 @@ import {
   subscribeGenieTurns,
   type GenieTurn,
 } from '../lib/genieConversationStore';
+import { renderSourceAssetChip } from './ask-genie.growth-agent.helpers';
 
 /**
  * AskGenieAnswerPanel — the composer + conversation surface extracted from
@@ -106,7 +107,13 @@ export interface AskGenieAnswerPanelProps {
   /** Refusal card "Edit question": restore the refused prompt to the composer. */
   onEditQuestion?: (question: string) => void;
   actionStatus: string | null;
+  /** Governed sources Genie reads (from `/api/genie/start`); the empty state
+   *  cites them as evidence chips, so every source is one click from its proof. */
+  sourceAssets?: readonly string[];
 }
+
+/** How many source chips the empty state shows. */
+const EMPTY_STATE_SOURCE_CHIPS = 3;
 
 function GenieThreadTurn({
   turn,
@@ -183,6 +190,7 @@ export function AskGenieAnswerPanel({
   onAction,
   onEditQuestion,
   actionStatus,
+  sourceAssets = [],
 }: AskGenieAnswerPanelProps) {
   const composerSampleQuestions = sampleQuestions.slice(0, 4);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -391,8 +399,15 @@ export function AskGenieAnswerPanel({
               <div>
                 <div className="genie-empty__title">Ask about your book — coverage, segments, borrowers, market shifts.</div>
                 <p className="genie-empty__copy">
-                  Trusted SQL, source assets, freshness, and approval-safe actions appear with each answer.
+                  Each answer shows the figures it used, where they came from and how fresh they are. Any follow-up
+                  action still needs your approval.
                 </p>
+                {sourceAssets.length > 0 && (
+                  <div className="chip-row mt-2" role="group" aria-label="Sources Genie answers from">
+                    <span className="muted fs-11">Answers come from:</span>
+                    {sourceAssets.slice(0, EMPTY_STATE_SOURCE_CHIPS).map((asset) => renderSourceAssetChip(asset))}
+                  </div>
+                )}
               </div>
             </div>
           </div>

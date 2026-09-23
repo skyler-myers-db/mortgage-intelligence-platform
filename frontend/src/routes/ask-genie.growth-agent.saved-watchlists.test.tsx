@@ -8,12 +8,14 @@ import type { GrowthAgentRunResponse } from '../types';
 import {
   HOME,
   RUN,
+  activePanel,
   button,
   container,
   createGrowthAgentMonitorNotificationDrafts,
   growthAgent,
   mount,
   navigate,
+  openTab,
   registerGrowthAgentRoutePanelHooks,
   rerunGrowthAgentMonitor,
   runMortgageGrowthAgent,
@@ -81,8 +83,11 @@ describe('AskGenie Growth Agent saved watchlists', () => {
       monitor_name: 'Mortgage Growth Agent - IL',
     });
     await waitUntil(() => container.textContent?.includes('Mortgage Growth Agent - IL') ?? false);
-    expect(container.textContent).toContain('Saved watchlists');
-    expect(container.textContent).toContain('5,394');
+    // The saved watchlist lives on the Saved monitors tab (audit visual-07).
+    openTab('Saved monitors');
+    expect(activePanel().textContent).toContain('Mortgage Growth Agent - IL');
+    expect(activePanel().textContent).toContain('Saved watchlists');
+    expect(activePanel().textContent).toContain('5,394');
   });
 
   it('re-runs saved watchlists without replaying raw prompt text', async () => {
@@ -107,7 +112,7 @@ describe('AskGenie Growth Agent saved watchlists', () => {
     growthAgent
       .mockResolvedValueOnce({ ...HOME, monitors: [savedMonitor] })
       .mockResolvedValueOnce({ ...HOME, monitors: [savedMonitor] });
-    mount();
+    mount('/ask-genie?tab=monitors');
     await waitUntil(() => container.textContent?.includes('Mortgage Growth Agent - IL') ?? false);
 
     act(() => button(/^Run now$/).click());
@@ -118,6 +123,8 @@ describe('AskGenie Growth Agent saved watchlists', () => {
       {},
     ]);
     await waitUntil(() => container.textContent?.includes('Saved watchlist runner') ?? false);
+    // The re-run reports on the tab it was started from (audit genie-09).
+    expect(activePanel().querySelector('[aria-label="Latest Growth Agent run"]')).not.toBeNull();
     expect(container.textContent).toContain('Saved watchlist re-run: Mortgage Growth Agent - IL.');
     expect(container.textContent).toContain('Eligible subset');
     expect(container.textContent).not.toContain('run this for John Smith');
@@ -140,7 +147,7 @@ describe('AskGenie Growth Agent saved watchlists', () => {
       last_run_id: RUN.run_id,
     };
     growthAgent.mockResolvedValue({ ...HOME, monitors: [savedMonitor] });
-    mount();
+    mount('/ask-genie?tab=monitors');
     await waitUntil(() => container.textContent?.includes('Mortgage Growth Agent - IL') ?? false);
 
     act(() => button(/^Draft Slack\/Teams$/).click());
@@ -179,7 +186,7 @@ describe('AskGenie Growth Agent saved watchlists', () => {
       last_run_id: RUN.run_id,
     };
     growthAgent.mockResolvedValue({ ...HOME, monitors: [pausedMonitor] });
-    mount();
+    mount('/ask-genie?tab=monitors');
     await waitUntil(() => container.textContent?.includes('Paused refi watchlist') ?? false);
 
     expect(container.textContent).toContain('Paused');
@@ -213,16 +220,17 @@ describe('AskGenie Growth Agent saved watchlists', () => {
         resolveRerun = resolve;
       }),
     );
-    mount();
+    mount('/ask-genie?tab=monitors');
     await waitUntil(() => container.textContent?.includes('Mortgage Growth Agent - IL') ?? false);
 
     act(() => button(/^Run now$/).click());
     await waitUntil(() => rerunGrowthAgentMonitor.mock.calls.length === 1);
+    expect(button(/^Open$/).disabled).toBe(false);
 
+    openTab('Workflows');
     expect(button(/^Plan reviewed workflow$/).disabled).toBe(true);
     expect(button(/^Run$/).disabled).toBe(true);
     expect(button(/^Run custom$/).disabled).toBe(true);
-    expect(button(/^Open$/).disabled).toBe(false);
 
     await act(async () => {
       resolveRerun?.(RUN);

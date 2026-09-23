@@ -224,7 +224,7 @@ test('Growth Agent run, saved watchlist, and Lead Queue handoff are live and rec
   page,
   request,
 }) => {
-  await gotoApp(page, '/ask-genie');
+  await gotoApp(page, '/ask-genie?tab=workflows');
 
   await expect(page.getByText('Mortgage Growth Agent').first()).toBeVisible();
   await expect(page.getByText('Borrower Dossier Review')).toBeVisible();
@@ -315,6 +315,8 @@ test('Growth Agent run, saved watchlist, and Lead Queue handoff are live and rec
   await expect(page.getByLabel('Growth Agent governance proof')).toContainText('PII-safe output');
   await expect(page.getByText(new RegExp(`Run correlation ${run.trace_id.slice(-12)}`, 'i'))).toBeVisible();
   await expect(page.getByText(new RegExp(`Hash ${run.tool_result_hash.slice(0, 12)}`))).toBeVisible();
+  // Saved watchlists live on their own tab of /ask-genie (audit 2026-09-21 visual-07).
+  await page.getByRole('tab', { name: 'Saved monitors' }).click();
   await expect(page.getByLabel('Saved Growth Agent watchlists')).toContainText(
     'Daily Refi Opportunity Brief',
   );
@@ -357,7 +359,7 @@ test('custom Growth Agent Any and All workflows reconcile to live Lead Queue tot
   page,
   request,
 }) => {
-  await gotoApp(page, '/ask-genie');
+  await gotoApp(page, '/ask-genie?tab=workflows');
   await expect(page.getByLabel('Build a custom Growth Agent workflow')).toBeVisible();
 
   await page.getByLabel('Growth Agent state scope').fill('IL TX');
@@ -389,7 +391,7 @@ test('custom Growth Agent Any and All workflows reconcile to live Lead Queue tot
   expect(anyUrl.searchParams.get('segment_mode')).toBe('any');
   expect(anyUrl.searchParams.get('marketing_eligibility')).toBe('Eligible only');
 
-  await gotoApp(page, '/ask-genie');
+  await gotoApp(page, '/ask-genie?tab=workflows');
   await page.getByLabel('Growth Agent state scope').fill('IL TX');
   await page.getByLabel('Custom Growth Agent segment logic').selectOption('all');
   await expect(page.getByLabel('Custom Growth Agent segment logic')).toHaveValue('all');
@@ -454,7 +456,7 @@ test('natural-language Mortgage Growth Agent routes to reviewed tools and reconc
   request,
 }) => {
   const expectAgentFramework = await agentOrchestratorIsClaimable(request);
-  await gotoApp(page, '/ask-genie');
+  await gotoApp(page, '/ask-genie?tab=workflows');
 
   await page.getByLabel('Growth Agent state scope').fill('IL');
   await page
@@ -547,7 +549,7 @@ test('natural-language dossier and data-ops specialists use governed traces and 
   request,
 }) => {
   const expectAgentFramework = await agentOrchestratorIsClaimable(request);
-  await gotoApp(page, '/ask-genie');
+  await gotoApp(page, '/ask-genie?tab=workflows');
 
   await page
     .getByLabel('Mortgage Growth Agent prompt')

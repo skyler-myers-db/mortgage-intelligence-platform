@@ -1,0 +1,57 @@
+/* /ask-genie route styles (audit 2026-09-21 visual-07 / genie-09).
+   Route-level on purpose: imported by routes/ask-genie.tsx so it ships in the
+   route's lazy CSS chunk, not the initial stylesheet (same pattern as
+   glossary.css and analytics.scatter.css). */
+
+/* Page tabs: the prototype's `.layout-tabs` tablist (design_files/Module 0
+   Prototype.html:958-960), placed in the hero's right slot as the prototype
+   does at :2148-2152. Tokenized; the one departure is the selected tab's ink:
+   --accent-ink instead of the prototype's --accent, which is 1.75:1 in light
+   + bright (the evidence drawer tab took the same fix, audit a11y-01). The
+   ring is the global :focus-visible one. */
+.layout-tabs {
+  display: flex;
+  gap: var(--sp-1);
+  padding: var(--sp-1);
+  background: var(--bg-2);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+}
+.layout-tabs button {
+  min-block-size: calc(var(--sp-6) + var(--sp-1));
+  padding: var(--sp-1) var(--sp-3);
+  background: transparent;
+  border: 0;
+  border-radius: var(--r-sm);
+  color: var(--text-2);
+  font-family: var(--font-sans);
+  font-size: var(--fs-12);
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.layout-tabs button:hover { color: var(--text-1); }
+.layout-tabs button:active { translate: 0 var(--pressed-shift); }
+.layout-tabs button.is-active {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+/* Growth Agent run slot (genie-09): the run's progress and result sit under
+   the controls, above the workflow cards. The cards keep their gap whether or
+   not a run card is showing (the controls' bottom margin collapses into it). */
+.growth-agent__controls ~ .growth-agent__cards {
+  margin-block-start: var(--sp-4);
+}
+/* The slot scrolls itself into view when a run starts from a card below;
+   clear the sticky route nav, as glossary.css does for deep links. */
+.growth-agent-run {
+  scroll-margin-block: var(--sp-16) var(--sp-4);
+}
+.growth-agent-run--pending .growth-agent-run__head {
+  align-items: flex-start;
+}
+.growth-agent-run--pending .typing-dots {
+  flex: none;
+}

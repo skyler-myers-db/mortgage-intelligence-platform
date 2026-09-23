@@ -1132,7 +1132,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
 
   test('Growth Agent actionable total matches the destination Lead Queue total', async ({ page }) => {
     test.setTimeout(120_000);
-    await gotoApp(page, '/ask-genie');
+    await gotoApp(page, '/ask-genie?tab=workflows');
 
     const workflowCard = page.locator('.growth-agent-card', {
       hasText: 'Daily Refi Opportunity Brief',
@@ -1923,7 +1923,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     // views. Only the standalone /ask-genie page has this; the floating
     // FAB from Home (covered in `genie FAB returns a non-empty answer`
     // above) does NOT.
-    await expect(page.getByText(/Trusted assets/i)).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText(/Trusted sources/i)).toBeVisible({ timeout: 5_000 });
     await expect(page.getByText(/gold\.lead_population/)).toBeVisible();
     await expect(page.getByText(/semantics\.lead_generation_metric_view/)).toBeVisible();
 
