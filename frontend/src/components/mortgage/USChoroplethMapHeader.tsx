@@ -20,6 +20,8 @@ interface USChoroplethMapHeaderProps {
   onBackToUs: () => void;
   /** Distinct ZIPs in coverage (backend scope), or null while loading. */
   coverageZipCount: number | null;
+  /** False while the stage is warming up or failed: no state is drawn to click. */
+  drillHint: boolean;
   /** Borrowers in the drilled state the ZIP layer cannot show. */
   zipUnassigned: number;
   overlayOn: boolean;
@@ -36,6 +38,7 @@ export function USChoroplethMapHeader({
   drillStateName,
   onBackToUs,
   coverageZipCount,
+  drillHint,
   zipUnassigned,
   overlayOn,
   setOverlayOn,
@@ -72,12 +75,12 @@ export function USChoroplethMapHeader({
 
       {/* Drill hint chip + optional Cotality coverage chip. The scope copy
           comes from backend-discovered gold rollups instead of a fixed demo
-          statement. */}
+          statement. No "click a state" while the stage draws no states. */}
       <div className="map-corner-chips">
         <Chip variant="neutral" icon="pin">
           {!drilled
             ? coverageZipCount
-              ? `${coverageZipCount.toLocaleString()} ZIPs · click a state to drill`
+              ? `${coverageZipCount.toLocaleString()} ZIPs${drillHint ? ' · click a state to drill' : ''}`
               : 'Loading coverage…'
             : `ZIPs in ${drillStateName || 'state'}`}
         </Chip>

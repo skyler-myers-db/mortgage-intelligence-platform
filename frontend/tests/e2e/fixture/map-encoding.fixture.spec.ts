@@ -20,10 +20,12 @@
  */
 import AxeBuilder from '@axe-core/playwright';
 import type { Locator, Page } from '@playwright/test';
+import type { HealthPayload } from '../../../src/lib/apiTypes';
 import type { FixtureTheme } from './app';
 import { MAP_ALL_CLASSES_COUNTS, emptyZipRollupsFixture, mapAllClassesFixture } from './data/mapEncoding';
 import { STATES, TOTALS, stateByCode } from './data/reference';
-import { WAREHOUSE_WARMING_UP } from './mockApi';
+import { HEALTH_OK } from './data/shell';
+import { WAREHOUSE_WARMING_UP, type MockApi } from './mockApi';
 import { contrastRatio, type Rgb } from './renderedColor';
 import { expect, test } from './test';
 
@@ -120,6 +122,27 @@ async function readMapPaint(page: Page): Promise<MapPaint> {
     return { swatches, states, zips };
   });
 }
+
+/**
+ * Answer /api/health the way a cold warehouse does: its `SELECT 1` probe
+ * fails, so health reports the warehouse down (the DegradedBanner shows and
+ * WarmingUpBlock steps aside). Returns the switch that brings it back up.
+ */
+function coldWarehouseHealth(mockApi: MockApi): () => void {
+  let warehouse: 'down' | 'up' = 'down';
+  mockApi.register<HealthPayload>('GET', '/api/health', () => ({
+    body:
+      warehouse === 'down'
+        ? { ...HEALTH_OK, status: 'degraded', dependencies: { warehouse: 'down', lakebase: 'up', genie: 'up' } }
+        : HEALTH_OK,
+  }));
+  return () => {
+    warehouse = 'up';
+  };
+}
+
+const stateRollupCalls = (mockApi: MockApi, status: number) =>
+  mockApi.calls.filter((call) => call.path === '/api/geo/state-rollups' && call.status === status).length;
 
 async function waitForStateFills(page: Page): Promise<void> {
   await expect(page.locator('path.map-region.has-data').first()).toBeVisible();
@@ -268,6 +291,8 @@ test.describe('resilience (dataviz-04)', () => {
     const block = page.locator('.map-wrap .map-stage [data-testid="warming-up-block"]');
     await expect(block).toBeVisible({ timeout: 20_000 });
     await expect(block).toContainText('State borrower rollups');
+    // The block tells the story; the stage adds no second line.
+    await expect(page.locator('.map-wrap .map-stage .map-center-card')).toHaveCount(0);
     await expect(page.locator('.map-legend__value')).toHaveText('—');
     await expect(page.locator('.map-wrap')).not.toContainText(/Borrowers in selection\s*0\b/);
     await expect(page.locator('.map-levels')).toHaveAttribute('aria-busy', 'false');
@@ -279,6 +304,37 @@ test.describe('resilience (dataviz-04)', () => {
     await waitForStateFills(page);
     await expect(block).toHaveCount(0);
     await expect(page.locator('.map-legend__value')).toHaveText(TOTALS.addressable.toLocaleString('en-US'));
+  });
+
+  test('a cold warehouse the health poll reports down still says so in the stage, never a blank box or a 0', async ({ app, mockApi, page }) => {
+    const warehouseUp = coldWarehouseHealth(mockApi);
+    await app.setTheme('light');
+    const recover = app.degrade('/api/geo/state-rollups', WAREHOUSE_WARMING_UP);
+    await app.gotoRoute('/');
+
+    // The banner owns the cold-start story, so the WarmingUpBlock steps aside...
+    await expect(page.locator('.degraded-banner').first()).toBeVisible();
+    const stage = page.locator('.map-wrap .map-stage');
+    await expect(stage.getByTestId('warming-up-block')).toHaveCount(0);
+    // ...and the stage still names what it waits for, visibly.
+    const line = stage.locator('.map-center-card');
+    await expect(line).toBeVisible({ timeout: 20_000 });
+    await expect(line).toHaveText(/^State borrower rollups: Warehouse warming up\. Retrying automatically \(attempt \d of 6\)\.$/);
+    expect((await stage.innerText()).trim()).not.toBe('');
+    await expect(page.locator('.map-legend__value')).toHaveText('—');
+    await expect(page.locator('.map-wrap')).not.toContainText(/Borrowers in selection\s*0\b/);
+    // No state is drawn, so the corner chip does not invite a click on one.
+    await expect(page.locator('.map-corner-chips')).not.toContainText('click a state to drill');
+    const axe = await new AxeBuilder({ page }).include('.map-wrap').withTags(WCAG_TAGS).analyze();
+    expect(axe.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`)).toEqual([]);
+
+    // The warehouse comes back. Nothing is clicked.
+    recover();
+    warehouseUp();
+    await waitForStateFills(page);
+    await expect(line).toHaveCount(0);
+    await expect(page.locator('.map-legend__value')).toHaveText(TOTALS.addressable.toLocaleString('en-US'));
+    await expect(page.locator('.map-corner-chips')).toContainText('click a state to drill');
   });
 });
 

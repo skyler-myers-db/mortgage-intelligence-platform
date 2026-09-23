@@ -6,6 +6,11 @@
  * USChoroplethMap.tsx holds exactly one component (the React Compiler
  * coverage control in USChoroplethMap.compiler.test.ts reads the file).
  *
+ * On a cold warehouse the health poll reports the warehouse down as well,
+ * and WarmingUpBlock then renders nothing (the DegradedBanner owns the
+ * story, see USChoroplethMap.warming). The stage still says what it is
+ * waiting for, in one line, so the hero is never a blank box.
+ *
  * Keyboard drill (audit a11y-04): when a keyboard drill lands here, focus
  * parks on the stage while it warms up, or on Retry once the read failed,
  * instead of falling to <body>. That is not the drill's final target, so the
@@ -15,6 +20,7 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import { WarmingUpBlock } from '../ui/WarmingUpBlock';
 import { claimDrillFocus } from './USChoroplethMap.a11y';
+import { useWarmingBlockDefers } from './USChoroplethMap.warming';
 import type { GeoRead } from './useChoroplethLiveFacts';
 
 interface MapUnavailableProps {
@@ -30,6 +36,7 @@ export function MapUnavailable({ read, what, fallback, autoFocus = false }: MapU
   const stageRef = useRef<HTMLDivElement | null>(null);
   const retryRef = useRef<HTMLButtonElement | null>(null);
   const warming = read.warmingUp !== null;
+  const blockDefers = useWarmingBlockDefers(read.warmingUp);
   useEffect(() => {
     if (!autoFocus) return;
     // Warming -> failed keeps this stage mounted: focus parked on it moves on to Retry.
@@ -38,7 +45,14 @@ export function MapUnavailable({ read, what, fallback, autoFocus = false }: MapU
 
   return (
     <div ref={stageRef} className="map-stage map-stage--status" role="group" aria-label={what} tabIndex={-1}>
-      {read.warmingUp ? (
+      {read.warmingUp && blockDefers ? (
+        <div className="map-center-card">
+          <div className="text-2">
+            {what}: {read.warmingUp.label}. Retrying automatically (attempt {read.warmingUp.attempt} of{' '}
+            {read.warmingUp.maxAttempts}).
+          </div>
+        </div>
+      ) : read.warmingUp ? (
         <WarmingUpBlock state={read.warmingUp} title={what} compact />
       ) : (
         <div className="map-center-card">

@@ -426,6 +426,7 @@ export function USChoroplethMap({
         drillStateName={drillStateName}
         onBackToUs={() => changeSelection(EMPTY_MAP_SELECTION)}
         coverageZipCount={footprint.dataScope?.zip_count ?? null}
+        drillHint={primary.warmingUp === null && primary.error === null}
         zipUnassigned={zipUnassignedForDrill}
         overlayOn={overlayOn}
         setOverlayOn={setOverlayOn}
