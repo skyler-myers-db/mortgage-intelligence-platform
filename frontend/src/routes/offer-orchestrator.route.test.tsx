@@ -668,6 +668,8 @@ describe('OfferOrchestrator route behavior', () => {
     expect(receipt.classList.contains('decision-receipt--reveal')).toBe(false);
     // Today's score is not the score at an earlier session's decision.
     expect(receipt.querySelector('[data-testid="decision-receipt-score"]')).toBeNull();
+    // Opening a decided borrower is not news: the live region stays quiet.
+    expect(container.querySelector('[data-testid="decision-receipt-announcement"]')?.textContent).toBe('');
     expect(receipt.textContent).not.toContain('Score at decision');
     expect(apiMocks.approve).not.toHaveBeenCalled();
   });

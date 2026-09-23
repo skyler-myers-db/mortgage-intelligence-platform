@@ -354,6 +354,8 @@ test.describe('decision receipt', () => {
     await expect(unavailable).not.toContainText('The write returned');
     await expect(page.getByTestId('decision-receipt')).toHaveCount(0);
     await expect(page.getByTestId('decision-receipt-pending')).toHaveCount(0);
+    // A passive read of an earlier decision is not announced on page load.
+    await expect(page.getByTestId('decision-receipt-announcement')).toHaveText('');
   });
 
   test('a failed approve write keeps the failure surface and reads nothing back', async ({ app, page, mockApi }) => {
@@ -402,8 +404,10 @@ test.describe('decision receipt', () => {
     const receipt = page.getByTestId('decision-receipt');
     await expect(receipt).toBeVisible();
     await expectLedgerRow(receipt);
-    // A durable decision is shown finished: no reveal replays on a later visit.
+    // A durable decision is shown finished: no reveal replays on a later
+    // visit, and reading it back is not announced as a new decision.
     await expect(receipt).not.toHaveClass(/decision-receipt--reveal/);
+    await expect(page.getByTestId('decision-receipt-announcement')).toHaveText('');
     await expect(page.locator(`#${await toggle.getAttribute('aria-controls')}`)).toContainText('Decision receipt');
   });
 

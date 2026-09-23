@@ -58,8 +58,10 @@ export interface DecisionReceiptProps {
   decision?: DecisionOutcome;
   /**
    * The audit id came from an approve / reject write made in this view, not
-   * from a durable decision record. Words the not-found state as a write
-   * the ledger did not confirm.
+   * from a durable decision record. Words the pending state "Recording
+   * decision…" and the not-found state as a write the ledger did not
+   * confirm, and announces the outcome. A passive read of an earlier
+   * decision reads "Reading decision receipt…" and stays quiet.
    */
   decidedHere?: boolean;
   /** Plays the one-shot stagger reveal for a decision made in this view. */
@@ -147,7 +149,8 @@ function unavailableState(error: unknown): UnavailableState {
  * and role between the pending, unavailable and read-back states, so the
  * announcement lives outside it in one node that stays mounted and is
  * updated in place: a screen reader hears the decision once the ledger
- * confirms it (flow-03).
+ * confirms it (flow-03). Only a decision made in this view is announced; a
+ * durable receipt read on page load or from "Latest decision" is not news.
  */
 function ReceiptAnnouncement({ message }: { message: string }) {
   return (
@@ -212,11 +215,15 @@ export function DecisionReceipt({
   const blockClass = ['surface', 'decision-receipt', compact ? 'decision-receipt--compact' : '', className]
     .filter(Boolean)
     .join(' ');
+  const announce = (message: string) => (decidedHere ? message : '');
 
   if (query.isPending) {
+    // A passive read is not a write: it never says "Recording decision…".
+    const pendingTitle = decidedHere ? DECISION_RECEIPT_COPY.recording : DECISION_RECEIPT_COPY.reading;
+    const pendingNote = decidedHere ? DECISION_RECEIPT_COPY.recordingNote : DECISION_RECEIPT_COPY.readingNote;
     return (
       <>
-        <ReceiptAnnouncement message={DECISION_RECEIPT_COPY.recordingNote} />
+        <ReceiptAnnouncement message={announce(pendingNote)} />
         <section
           className={`${blockClass} decision-receipt--pending`}
           aria-busy="true"
@@ -224,8 +231,8 @@ export function DecisionReceipt({
         >
           <div className="surface__hdr">
             <Icon name="audit" size={14} className="icon-accent" />
-            <div className="h-4">{DECISION_RECEIPT_COPY.recording}</div>
-            <span className="decision-receipt__hdr-note">{DECISION_RECEIPT_COPY.recordingNote}</span>
+            <div className="h-4">{pendingTitle}</div>
+            <span className="decision-receipt__hdr-note">{pendingNote}</span>
           </div>
           <div className="surface__body decision-receipt__skeleton">
             <Skeleton width="42%" />
@@ -257,7 +264,7 @@ export function DecisionReceipt({
     return (
       <>
         <ReceiptAnnouncement
-          message={`${outcome ? `${outcome.label}. ` : ''}${title}, audit event ${auditEventId}`}
+          message={announce(`${outcome ? `${outcome.label}. ` : ''}${title}, audit event ${auditEventId}`)}
         />
         <section
           className={`${blockClass} decision-receipt--unavailable`}
@@ -308,7 +315,7 @@ export function DecisionReceipt({
 
   return (
     <>
-      <ReceiptAnnouncement message={announcement} />
+      <ReceiptAnnouncement message={announce(announcement)} />
       <section
         ref={cardRef}
         className={`${blockClass} decision-receipt--${receipt.decision}${playReveal ? ' decision-receipt--reveal' : ''}`}

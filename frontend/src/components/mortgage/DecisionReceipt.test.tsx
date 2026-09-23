@@ -128,7 +128,7 @@ describe('DecisionReceipt', () => {
   it('renders the recording skeleton until the ledger read-back resolves, then only ledger values', async () => {
     const pending = deferred<DecisionReceiptPayload>();
     apiMocks.auditReceipt.mockReturnValue(pending.promise);
-    mount({ reveal: true, score: { opportunityScore: 91, confidence: 94 } });
+    mount({ decidedHere: true, reveal: true, score: { opportunityScore: 91, confidence: 94 } });
     await settle();
 
     expect(apiMocks.auditReceipt).toHaveBeenCalledWith(AUDIT_ID, expect.anything());
@@ -178,7 +178,7 @@ describe('DecisionReceipt', () => {
     const pending = deferred<DecisionReceiptPayload>();
     apiMocks.auditReceipt.mockReturnValue(pending.promise);
     const onRevealed = vi.fn();
-    mount({ reveal: true, onRevealed });
+    mount({ decidedHere: true, reveal: true, onRevealed });
     await settle();
     expect(onRevealed).not.toHaveBeenCalled();
 
@@ -189,14 +189,14 @@ describe('DecisionReceipt', () => {
 
     // The parent records "revealed" and re-renders with reveal=false: this
     // mount keeps its reveal (no class flip mid-stagger).
-    mount({ reveal: false, onRevealed });
+    mount({ decidedHere: true, reveal: false, onRevealed });
     await settle();
     expect(receipt()!.classList.contains('decision-receipt--reveal')).toBe(true);
 
     // A fresh mount (collapse + re-expand) renders the receipt finished.
     act(() => root.unmount());
     root = createRoot(container);
-    mount({ reveal: false, onRevealed });
+    mount({ decidedHere: true, reveal: false, onRevealed });
     await settle();
     expect(receipt()!.classList.contains('decision-receipt--reveal')).toBe(false);
     expect(announcement()!.textContent).toBe(`Decision receipt: Approved, audit event ${AUDIT_ID}`);
@@ -217,9 +217,29 @@ describe('DecisionReceipt', () => {
     expect(card.querySelector('[data-testid="decision-receipt-score"]')).toBeNull();
   });
 
+  it('reads a durable decision quietly: no "Recording decision…" and nothing announced', async () => {
+    const pending = deferred<DecisionReceiptPayload>();
+    apiMocks.auditReceipt.mockReturnValue(pending.promise);
+    mount({ decision: 'approved' });
+    await settle();
+
+    const skeleton = container.querySelector<HTMLElement>('[data-testid="decision-receipt-pending"]')!;
+    expect(skeleton.textContent).toContain('Reading decision receipt…');
+    expect(skeleton.textContent).not.toContain('Recording decision');
+    expect(container.textContent).not.toContain('Reading the ledger row back');
+    const live = announcement()!;
+    expect(live.textContent).toBe('');
+
+    await act(async () => pending.resolve(LEDGER));
+    await settle();
+    expect(receipt()).not.toBeNull();
+    expect(announcement()).toBe(live);
+    expect(live.textContent).toBe('');
+  });
+
   it('shows a neutral "Recorded; receipt unavailable" state with the audit id on a scoped 403', async () => {
     apiMocks.auditReceipt.mockRejectedValue(new ApiError('forbidden', { path: RECEIPT_PATH, status: 403 }));
-    mount();
+    mount({ decidedHere: true });
     await settle();
 
     expect(receipt()).toBeNull();

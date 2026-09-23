@@ -12,6 +12,9 @@ export const DECISION_RECEIPT_COPY = {
   announceRecorded: 'Decision receipt recorded',
   recording: 'Recording decision…',
   recordingNote: 'Reading the ledger row back',
+  /** A passive read of an earlier decision (page load, "Latest decision"). */
+  reading: 'Reading decision receipt…',
+  readingNote: 'From the Lakebase audit ledger',
   readBackNote: 'Read back from the Lakebase audit ledger',
   recorded: 'Recorded',
   unavailableTitle: 'Recorded; receipt unavailable',
