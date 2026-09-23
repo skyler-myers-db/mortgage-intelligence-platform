@@ -18,7 +18,7 @@ import { createMipQueryClient } from '../../lib/queryClient';
 import { ApiError } from '../../lib/api';
 import type { StateRollupResponse, ZipRollupResponse } from '../../types';
 import { USChoroplethMap } from './USChoroplethMap';
-import { claimDrillFocus } from './USChoroplethMap.a11y';
+import { MAP_DRILL_EXIT_ATTR, claimDrillFocus, drillExitOriginatedInMap } from './USChoroplethMap.a11y';
 import { EMPTY_MAP_SELECTION, type MapSelection } from './USChoroplethMap.selection';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -349,5 +349,27 @@ describe('claimDrillFocus (a11y-04: a drill never drops focus to <body>)', () =>
     expect(claimDrillFocus(target)).toBe(false);
     expect(document.activeElement).toBe(elsewhere);
     expect(claimDrillFocus(null)).toBe(false);
+  });
+});
+
+describe('drillExitOriginatedInMap (a page-level reset never hands focus to the map)', () => {
+  afterEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  it('answers only for the map itself or a control marked as the map\'s exit', () => {
+    const mapRoot = document.createElement('div');
+    const tile = document.createElement('button');
+    mapRoot.append(tile);
+    const clearGeography = document.createElement('button');
+    clearGeography.setAttribute(MAP_DRILL_EXIT_ATTR, '');
+    const heroClear = document.createElement('button');
+    document.body.append(mapRoot, clearGeography, heroClear);
+
+    expect(drillExitOriginatedInMap(tile, mapRoot)).toBe(true);
+    expect(drillExitOriginatedInMap(clearGeography, mapRoot)).toBe(true);
+    expect(drillExitOriginatedInMap(heroClear, mapRoot)).toBe(false);
+    expect(drillExitOriginatedInMap(null, mapRoot)).toBe(false);
+    expect(drillExitOriginatedInMap(tile, null)).toBe(false);
   });
 });

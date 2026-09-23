@@ -585,6 +585,9 @@ export default function SegmentIntelligence() {
                 variant="ghost"
                 icon="cross"
                 onClick={() => setMapSelection(EMPTY_MAP_SELECTION)}
+                // The map's own exit control (USChoroplethMap.a11y MAP_DRILL_EXIT_ATTR):
+                // focus lands on the map's US crumb when this removes itself.
+                data-map-drill-exit=""
               >
                 Clear geography
               </Button>

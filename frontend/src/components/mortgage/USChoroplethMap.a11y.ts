@@ -103,6 +103,28 @@ export function showCardOnFocus(element: Element, show: (anchor: { x: number; y:
 }
 
 /**
+ * Marks a control OUTSIDE the map that belongs to it: activating it ends the
+ * drill and removes the control itself (Segment Intelligence's "Clear
+ * geography" in the chip row above the map). Only such a control, or one
+ * inside the map, hands focus to the map when the drill ends.
+ */
+export const MAP_DRILL_EXIT_ATTR = 'data-map-drill-exit';
+
+/**
+ * Whether the drill that just ended was ended by the map or by a control that
+ * belongs to it: the element that last took focus is inside `mapRoot`, or
+ * carries `MAP_DRILL_EXIT_ATTR`. A page-level control that also resets the
+ * drill ("Clear filters" in a route hero, which disables itself) is not the
+ * map's to answer, so the map never pulls focus, and the page scroll with it,
+ * across the page to its own crumb.
+ */
+export function drillExitOriginatedInMap(lastFocused: Element | null, mapRoot: Element | null): boolean {
+  if (!lastFocused) return false;
+  if (lastFocused.closest(`[${MAP_DRILL_EXIT_ATTR}]`)) return true;
+  return mapRoot !== null && mapRoot.contains(lastFocused);
+}
+
+/**
  * Give focus to `target` after a drill unmounted the control that held it
  * (the state path, the table row's button): without this, focus falls to
  * `<body>` and a keyboard or screen-reader user is thrown back to the top of

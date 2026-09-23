@@ -461,6 +461,35 @@ test.describe('controlled, deep-linkable drill (dataviz-04)', () => {
     await expect(page.locator('.map-crumbs__trail').getByRole('button', { name: 'US' })).toBeFocused();
     await expectFocusInMap(page);
   });
+
+  // Review round 3: the hero's "Clear filters" also ends the drill and then
+  // disables itself, so focus falls to <body>. The map must not claim it: a
+  // claim scrolled .main about 1,040px down to the map's crumb.
+  for (const how of ['keyboard', 'mouse'] as const) {
+    test(`the hero's Clear filters (${how}) ends the drill without pulling focus or scroll to the map`, async ({ app, page }) => {
+      await app.setTheme('dark');
+      await app.gotoRoute('/segment-intelligence?geo_state=TX');
+      await expect(page.getByRole('list', { name: 'ZIPs in Texas' })).toBeVisible();
+      const main = page.locator('.main');
+      await main.evaluate((el) => { el.scrollTop = 0; });
+
+      const clear = page.getByRole('button', { name: 'Clear filters' });
+      if (how === 'keyboard') {
+        await clear.focus();
+        await page.keyboard.press('Enter');
+      } else {
+        await clear.click();
+      }
+      await expect(page).not.toHaveURL(/geo_state=/);
+      await expect(page.locator('ul.zip-tiles')).toHaveCount(0);
+      await expect(page.locator('path[data-map-unit="tx"]')).toBeVisible();
+      await expect(page.locator('.map-crumbs__trail').getByRole('button', { name: 'US' })).not.toBeFocused();
+      // Let any late focus claim (the drill ends in an effect) land before measuring.
+      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      expect(await main.evaluate((el) => el.scrollTop), 'the page did not scroll to the map').toBe(0);
+      expect(await page.evaluate(() => Boolean(document.activeElement?.closest('.map-wrap'))), 'focus is not in the map').toBe(false);
+    });
+  }
 });
 
 test.describe('keyboard, screen reader and table access (a11y-04)', () => {

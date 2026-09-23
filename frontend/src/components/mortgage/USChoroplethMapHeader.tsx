@@ -11,7 +11,7 @@ import { Icon } from '../Icon';
 import { Chip } from '../Primitives';
 import { genieStatePrompt } from '../../lib/genieContext';
 import { GenieAskAbout } from './GenieAskAbout';
-import { claimDrillFocus } from './USChoroplethMap.a11y';
+import { claimDrillFocus, drillExitOriginatedInMap } from './USChoroplethMap.a11y';
 
 export type MapView = 'map' | 'table';
 
@@ -49,14 +49,32 @@ export function USChoroplethMapHeader({
   campaignPrefillPath,
   onStartCampaign,
 }: USChoroplethMapHeaderProps) {
-  // A control outside the map that ends the drill removes itself (Segment
-  // Intelligence's "Clear geography", a vanished ZIP tile on Back), and focus
-  // would fall to <body>. It lands on the US crumb, the national view now on
-  // screen. Focus the user still holds elsewhere is never taken.
+  // A control that ends the drill can remove itself (Segment Intelligence's
+  // "Clear geography", a vanished ZIP tile on Back), and focus would fall to
+  // <body>. It lands on the US crumb, the national view now on screen, but
+  // only when the drill was ended from the map or from a control marked as
+  // the map's (MAP_DRILL_EXIT_ATTR): a page-level "Clear filters" that
+  // disables itself must not send focus, and the scroll, down to the map.
+  // Focus the user still holds elsewhere is never taken (claimDrillFocus).
   const usCrumbRef = useRef<HTMLButtonElement | null>(null);
+  const lastFocused = useRef<Element | null>(null);
+  useEffect(() => {
+    const doc = usCrumbRef.current?.ownerDocument;
+    if (!doc) return undefined;
+    const onFocusIn = (event: FocusEvent) => {
+      lastFocused.current = event.target instanceof Element ? event.target : null;
+    };
+    doc.addEventListener('focusin', onFocusIn, true);
+    return () => doc.removeEventListener('focusin', onFocusIn, true);
+  }, []);
   const wasDrilled = useRef(drilled);
   useEffect(() => {
-    if (wasDrilled.current && !drilled) claimDrillFocus(usCrumbRef.current);
+    if (wasDrilled.current && !drilled) {
+      const crumb = usCrumbRef.current;
+      if (drillExitOriginatedInMap(lastFocused.current, crumb?.closest('.map-wrap') ?? null)) {
+        claimDrillFocus(crumb);
+      }
+    }
     wasDrilled.current = drilled;
   }, [drilled]);
 
