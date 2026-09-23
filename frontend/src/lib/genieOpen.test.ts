@@ -10,7 +10,6 @@ import {
   GENIE_OPEN_REQUEST_EVENT,
   consumeGeniePrefill,
   openGenie,
-  peekGeniePrefill,
   subscribeGenieOpenRequests,
   subscribeGeniePrefill,
 } from './genieOpen';
@@ -23,14 +22,16 @@ afterEach(() => {
 describe('openGenie', () => {
   it('queues the prompt and asks the dock to open, and never submits anything', () => {
     const opens: number[] = [];
-    const prefills: string[] = [];
+    let prefillNotices = 0;
     const unsubscribeOpen = subscribeGenieOpenRequests(() => opens.push(1));
-    const unsubscribePrefill = subscribeGeniePrefill(() => prefills.push(peekGeniePrefill() ?? ''));
+    const unsubscribePrefill = subscribeGeniePrefill(() => {
+      prefillNotices += 1;
+    });
     const fetchSpy = vi.spyOn(globalThis, 'fetch');
     try {
       openGenie({ prompt: 'Compare mean lead score by current coverage state.' });
       expect(opens).toEqual([1]);
-      expect(prefills).toEqual(['Compare mean lead score by current coverage state.']);
+      expect(prefillNotices).toBe(1);
       expect(consumeGeniePrefill()).toBe('Compare mean lead score by current coverage state.');
       // Consumed once: a second read finds nothing.
       expect(consumeGeniePrefill()).toBeNull();
@@ -59,6 +60,6 @@ describe('openGenie', () => {
       unsubscribe();
     }
     expect(opens).toEqual([]);
-    expect(peekGeniePrefill()).toBeNull();
+    expect(consumeGeniePrefill()).toBeNull();
   });
 });

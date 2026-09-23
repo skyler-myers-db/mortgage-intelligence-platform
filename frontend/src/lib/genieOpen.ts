@@ -42,11 +42,6 @@ export function consumeGeniePrefill(): string | null {
   return prompt;
 }
 
-/** Tests: what is queued, without consuming it. */
-export function peekGeniePrefill(): string | null {
-  return pendingPrefill;
-}
-
 export function subscribeGeniePrefill(listener: () => void): () => void {
   prefillListeners.add(listener);
   return () => {
