@@ -111,7 +111,9 @@ describe('print keeps the accent family monochrome (css-01)', () => {
         .flatMap((rule) => [...customProperties(rule.block)]),
     );
     expect(printRemap.get('--accent')).toBe('CanvasText');
-    for (const [name, value] of customProperties(resets[0]?.block ?? '')) {
+    const reset = customProperties(resets[0]?.block ?? '');
+    expect(reset.size, 'the print reset declares the accent family').toBeGreaterThan(0);
+    for (const [name, value] of reset) {
       // print.css has no --accent-ink; it prints like --accent.
       expect(value, name).toBe(printRemap.get(name) ?? printRemap.get('--accent'));
     }
