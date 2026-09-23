@@ -1,9 +1,9 @@
 /**
  * Rendered-layer proofs for the wave-1c lane "shell-wayfinding" (audit
- * 2026-09-21 shell-04, shell-06, shell-08): the topbar identity menu, linked
- * breadcrumbs with the queue context, and the Borrower 360 pager and J/K keys.
- * Every assertion reads the built app's DOM, geometry or computed style at
- * 1440x900.
+ * 2026-09-21 shell-04, shell-06, shell-08, motion-01): the topbar identity
+ * menu, linked breadcrumbs with the queue context, the Borrower 360 pager and
+ * J/K keys, and the Console exit motion. Every assertion reads the built app's
+ * DOM, geometry or computed style at 1440x900.
  */
 import type { Locator, Page } from '@playwright/test';
 import { expect, test, type FixtureTheme } from './test';
@@ -226,5 +226,115 @@ test.describe('queue-to-dossier wayfinding (shell-04)', () => {
     const assetCrumbs = page.getByRole('navigation', { name: 'Breadcrumb' });
     await expect(assetCrumbs.getByRole('link', { name: 'Data estate' })).toHaveAttribute('href', '/admin-config');
     await expect(assetCrumbs.locator('[aria-current="page"]')).toHaveText('Governed asset');
+  });
+});
+
+interface ConsoleSample {
+  inDom: boolean;
+  open: boolean;
+  display: string;
+  opacity: number;
+  transitions: Array<{ property: string; playState: string; duration: number; easing: string }>;
+}
+
+/**
+ * Open the Console from the topbar, wait for its ENTRY to finish (a close
+ * that lands before the entry moved the panel has nothing to transition,
+ * which says nothing about the exit), close it from inside the page and read
+ * the panel one macrotask later, then once every transition on it is done.
+ * Mirrors closeAndSampleExit in console-layout.fixture.spec.ts; sampling
+ * in-page keeps the first read inside the exit window on a loaded runner.
+ */
+async function closeConsoleAndSample(page: Page) {
+  return page.evaluate(async () => {
+    const toggle = document.querySelector<HTMLButtonElement>('header [aria-label="Toggle console"]');
+    if (!toggle) throw new Error('no Console toggle in the topbar');
+    toggle.click();
+    let panel: HTMLElement | null = null;
+    for (let attempt = 0; attempt < 200 && !panel?.querySelector('.tweaks__body'); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      panel = document.querySelector<HTMLElement>('aside.tweaks.is-open');
+    }
+    if (!panel) throw new Error('the Console did not open');
+    const entry = panel.getAnimations().filter((a): a is CSSTransition => a instanceof CSSTransition);
+    const entryDuration = Math.max(0, ...entry.map((t) => Number(t.effect?.getTiming().duration ?? 0)));
+    await Promise.all(panel.getAnimations().map((a) => a.finished.catch(() => undefined)));
+    const read = (element: HTMLElement): ConsoleSample => {
+      const style = getComputedStyle(element);
+      return {
+        inDom: element.isConnected,
+        open: element.classList.contains('is-open'),
+        display: style.display,
+        opacity: Number(style.opacity),
+        transitions: element
+          .getAnimations()
+          .filter((a): a is CSSTransition => a instanceof CSSTransition)
+          .map((t) => ({
+            property: t.transitionProperty,
+            playState: t.playState,
+            duration: Number(t.effect?.getTiming().duration ?? 0),
+            easing: String(t.effect?.getTiming().easing ?? ''),
+          })),
+      };
+    };
+    const close = panel.querySelector<HTMLButtonElement>('[aria-label="Close console"]');
+    if (!close) throw new Error('no Close console control');
+    close.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const justClosed = read(panel);
+    const inert = panel.inert;
+    // Whatever element holds the landmark at that moment: the closing panel
+    // with motion, the empty placeholder once there is nothing to wait for.
+    const landmarkNow = document.getElementById('workspace-console');
+    const landmarkJustClosed = landmarkNow ? read(landmarkNow) : null;
+    await Promise.all(panel.getAnimations().map((a) => a.finished.catch(() => undefined)));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const landmark = document.getElementById('workspace-console');
+    return {
+      entryDuration,
+      justClosed,
+      inert,
+      landmarkJustClosed,
+      afterExit: landmark ? read(landmark) : null,
+      samePanelAfterExit: landmark === panel,
+    };
+  });
+}
+
+test.describe('Console motion (motion-01)', () => {
+  test.use({ contextOptions: { reducedMotion: 'no-preference' }, traceScreenshots: false });
+  test.slow();
+
+  test('the Console fades out on the ease-in exit curve, faster than it came in, before it leaves', async ({ app, page }) => {
+    await app.gotoRoute('/');
+    const exit = await closeConsoleAndSample(page);
+    const sample: ConsoleSample = exit.justClosed;
+    expect(sample.inDom, 'the closing Console is still the mounted panel').toBe(true);
+    expect(sample.open).toBe(false);
+    expect(sample.display, 'allow-discrete holds display through the exit').toBe('flex');
+    expect(exit.inert, 'a closing Console takes no focus or clicks').toBe(true);
+    const fade = sample.transitions.find((t) => t.property === 'opacity');
+    expect(fade?.playState, 'the fade-out is running').toBe('running');
+    expect(fade?.easing).toBe('cubic-bezier(0.4, 0, 1, 1)');
+    expect(exit.entryDuration).toBeGreaterThan(0);
+    // Exit ~0.6x the entry (--dur-fast 120ms vs --dur-base 200ms).
+    expect((fade?.duration ?? 0) / exit.entryDuration).toBeCloseTo(0.6, 1);
+    expect(exit.afterExit?.display).toBe('none');
+    await expect(page.getByRole('complementary', { name: 'Workspace console', includeHidden: true })).toBeHidden();
+  });
+});
+
+test.describe('Console motion under reduced motion (motion-01)', () => {
+  test('closing hides the Console at once', async ({ app, page }) => {
+    await app.gotoRoute('/');
+    const exit = await closeConsoleAndSample(page);
+    // One macrotask after the click the landmark is already gone from view:
+    // nothing held the panel for an exit the user asked not to see.
+    expect(exit.landmarkJustClosed?.open).toBe(false);
+    expect(exit.landmarkJustClosed?.display, 'hidden in the closing task').toBe('none');
+    for (const transition of exit.landmarkJustClosed?.transitions ?? []) {
+      expect(transition.duration, `${transition.property} is instant`).toBeLessThanOrEqual(1);
+    }
+    expect(exit.afterExit?.display).toBe('none');
   });
 });

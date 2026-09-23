@@ -128,6 +128,7 @@ export function Console() {
       role="complementary"
       aria-label="Workspace console"
       aria-hidden={!consoleOpen}
+      inert={!consoleOpen}
       tabIndex={-1}
     >
       <div className="tweaks__hdr">
