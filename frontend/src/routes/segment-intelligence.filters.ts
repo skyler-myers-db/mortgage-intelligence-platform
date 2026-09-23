@@ -273,9 +273,11 @@ export function segmentModeFromSearch(searchParams: URLSearchParams): SegmentFil
 }
 
 /**
- * Write the selected cards and the match mode. `any` is the default and is
- * omitted; `all` is kept even with fewer than two cards selected, so a user
- * who picks the mode before the cards does not lose the choice.
+ * Write the selected cards and the match mode. A multi-card selection always
+ * carries its mode, the convention every route shares (the Lead Queue and
+ * its deep links write `segment_codes` with `segment_mode`). Otherwise `any`
+ * is the default and is omitted, while `all` is kept even with fewer than
+ * two cards, so a user who picks the mode before the cards keeps the choice.
  */
 export function segmentSearchParamsForState(
   searchParams: URLSearchParams,
@@ -291,7 +293,7 @@ export function segmentSearchParamsForState(
   } else if (segments.length > 1) {
     next.set('segment_codes', segments.join(','));
   }
-  if (mode === 'all') next.set('segment_mode', 'all');
+  if (segments.length > 1 || mode === 'all') next.set('segment_mode', mode);
   else next.delete('segment_mode');
   return next;
 }

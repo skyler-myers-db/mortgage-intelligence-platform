@@ -79,12 +79,13 @@ describe('segment intelligence lender overlay URL state', () => {
       segment_mode: 'all',
     });
 
-    // `any` is the default mode and is omitted from the URL (flow-09).
+    // A multi-card selection always carries its mode (the cross-route
+    // convention the Lead Queue shares).
     const any = segmentSearchParamsForState(base, ['itm', 'equity'], 'any');
     expect(any.get('owner_link')).toBe('Portfolio investor (5+)');
     expect(any.get('segment')).toBeNull();
     expect(any.get('segment_codes')).toBe('itm,equity');
-    expect(any.get('segment_mode')).toBeNull();
+    expect(any.get('segment_mode')).toBe('any');
 
     const single = segmentSearchParamsForState(any, ['listed'], 'any');
     expect(single.get('segment')).toBe('listed');
