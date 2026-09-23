@@ -13,13 +13,12 @@ import {
   QUEUE_CONTEXT_STORAGE_KEY,
   QUEUE_MASKED_ID_RE,
   clearQueueContext,
-  publishQueueContext,
   queueCrumbLabel,
-  queueFilterLabel,
   queueHref,
-  queuePosition,
   resolveQueueContext,
 } from './queueContext';
+import { publishQueueContext, queueFilterLabel } from './queueContextPublish';
+import { queuePosition } from './queuePosition';
 
 const IDS = ['B-0000000000001', 'B-0000000000002', 'B-0000000000003'];
 

@@ -15,7 +15,7 @@ import { FilterSelect } from '../components/ui/FilterSelect';
 import { useFootprint } from '../components/FootprintProvider';
 import { useApp } from '../components/AppContext';
 import { queryKeys } from '../lib/queryKeys';
-import { queueFilterLabel, usePublishQueueContext } from '../lib/queueContext';
+import { queueFilterLabel, usePublishQueueContext } from '../lib/queueContextPublish';
 import { LENDER_RELATIONSHIP_OPTIONS } from '../lib/lenderFilters';
 import { CITY_STATE_PAIR_RE } from '../lib/cityStateFilter';
 import { LeadQueueTableSkeleton } from './lead-queue.skeleton';

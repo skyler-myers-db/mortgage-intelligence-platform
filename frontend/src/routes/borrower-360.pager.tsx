@@ -1,6 +1,7 @@
 import { useNavigate } from 'react-router';
 import { Icon } from '../components/Icon';
-import { queuePosition, type QueueContext } from '../lib/queueContext';
+import type { QueueContext } from '../lib/queueContext';
+import { queuePosition } from '../lib/queuePosition';
 import { borrowerPath } from '../lib/routeMeta';
 import { usePagerHotkeys } from '../lib/usePagerHotkeys';
 import './borrower-360.pager.css';

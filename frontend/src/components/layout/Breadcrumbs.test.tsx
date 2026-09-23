@@ -11,7 +11,8 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { clearQueueContext, publishQueueContext, type QueueContext } from '../../lib/queueContext';
+import { clearQueueContext, type QueueContext } from '../../lib/queueContext';
+import { publishQueueContext } from '../../lib/queueContextPublish';
 import { Breadcrumbs } from './Breadcrumbs';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;

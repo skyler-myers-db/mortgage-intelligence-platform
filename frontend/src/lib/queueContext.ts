@@ -1,4 +1,4 @@
-import { useEffect, useSyncExternalStore } from 'react';
+import { useSyncExternalStore } from 'react';
 
 /**
  * The canonical masked borrower id (CLAUDE.md naming rules), spelled here
@@ -30,6 +30,11 @@ export const QUEUE_MASKED_ID_RE = /^B-[0-9A-Z]{13}$/;
  * Only masked `B-` ids are kept; anything else is dropped on read and write.
  * Nothing here fetches: reading a context never opens (and never audits) a
  * borrower.
+ *
+ * This module is the READ side and ships in the initial chunk (the topbar
+ * breadcrumbs resolve it on every route). The Lead Queue's writer lives in
+ * lib/queueContextPublish.ts and the pager's arithmetic in lib/queuePosition.ts,
+ * so both ride their lazy route chunks instead.
  */
 
 export const QUEUE_CONTEXT_STORAGE_KEY = 'mip.queueContext';
@@ -53,15 +58,8 @@ export interface QueueLinkState {
   queue: QueueContext;
 }
 
-export interface QueuePosition {
-  /** 1-based position of the borrower in the queue. */
-  position: number;
-  total: number;
-  previous: string | null;
-  next: string | null;
-}
-
-function asQueueContext(value: unknown): QueueContext | null {
+/** A well-formed context with masked ids only, or null. */
+export function asQueueContext(value: unknown): QueueContext | null {
   if (!value || typeof value !== 'object') return null;
   const raw = value as Record<string, unknown>;
   const { epoch, search, label, ids } = raw;
@@ -105,17 +103,11 @@ function subscribe(listener: () => void): () => void {
   return () => listeners.delete(listener);
 }
 
-function newEpoch(): string {
-  const cryptoApi = typeof globalThis.crypto !== 'undefined' ? globalThis.crypto : undefined;
-  if (cryptoApi && typeof cryptoApi.randomUUID === 'function') return cryptoApi.randomUUID();
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-}
-
-/** Record the queue the actor is looking at. Keeps the epoch of the session. */
-export function publishQueueContext(input: { search: string; label: string; ids: readonly string[] }): QueueContext | null {
-  const epoch = current()?.epoch ?? newEpoch();
-  const next = asQueueContext({ epoch, search: input.search, label: input.label, ids: [...input.ids] });
-  if (!next) return null;
+/**
+ * Make `next` the live context: this tab's snapshot and the stored fallback.
+ * Only lib/queueContextPublish.ts calls it, with an already-validated context.
+ */
+export function storeQueueContext(next: QueueContext): void {
   snapshot = next;
   try {
     window.sessionStorage.setItem(QUEUE_CONTEXT_STORAGE_KEY, JSON.stringify(next));
@@ -123,7 +115,11 @@ export function publishQueueContext(input: { search: string; label: string; ids:
     // Storage can be unavailable; the in-memory copy still serves this tab.
   }
   emit();
-  return next;
+}
+
+/** The live context of this tab (the storage epoch writers keep). */
+export function currentQueueContext(): QueueContext | null {
+  return current();
 }
 
 /** Drop the in-memory copy (the actor-scoped clear removes the stored key). */
@@ -166,30 +162,6 @@ export function useQueueLinkState(): QueueLinkState | undefined {
   return published ? { queue: published } : undefined;
 }
 
-/** Publish the rendered queue whenever it settles (never placeholder rows). */
-export function usePublishQueueContext(
-  queue: { search: string; label: string; ids: readonly string[] } | null,
-): void {
-  const search = queue?.search ?? null;
-  const label = queue?.label ?? '';
-  const key = queue ? queue.ids.join(',') : null;
-  useEffect(() => {
-    if (search === null || key === null) return;
-    publishQueueContext({ search, label, ids: key === '' ? [] : key.split(',') });
-  }, [search, label, key]);
-}
-
-export function queuePosition(context: QueueContext, borrowerId: string): QueuePosition | null {
-  const index = context.ids.indexOf(borrowerId);
-  if (index === -1) return null;
-  return {
-    position: index + 1,
-    total: context.ids.length,
-    previous: index > 0 ? context.ids[index - 1] : null,
-    next: index < context.ids.length - 1 ? context.ids[index + 1] : null,
-  };
-}
-
 /** `/lead-queue?...`: the exact filtered queue the context came from. */
 export function queueHref(context: QueueContext | null): `/lead-queue${string}` {
   return `/lead-queue${context?.search ?? ''}`;
@@ -198,9 +170,4 @@ export function queueHref(context: QueueContext | null): `/lead-queue${string}` 
 /** "Lead Queue · IL · In the Money", or "Lead Queue" for the unfiltered queue. */
 export function queueCrumbLabel(context: QueueContext | null): string {
   return context?.label ? `Lead Queue · ${context.label}` : 'Lead Queue';
-}
-
-/** "IL · In the Money · +2 filters" from the queue's active filter values. */
-export function queueFilterLabel(parts: ReadonlyArray<string | null | undefined | false>): string {
-  return parts.filter((part): part is string => typeof part === 'string' && part.trim().length > 0).join(' · ');
 }
