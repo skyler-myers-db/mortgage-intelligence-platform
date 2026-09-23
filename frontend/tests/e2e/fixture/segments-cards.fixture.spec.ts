@@ -65,7 +65,9 @@ interface CountGeometry {
   height: number;
   lineHeight: number;
   right: number;
-  /** Right edge of the card's content box: the count must not run past it. */
+  /** Right edge of the card's `avg`, or null when the card shows none. */
+  avgRight: number | null;
+  /** Right edge of the card's content box: neither may run past it. */
   cardContentRight: number;
 }
 
@@ -79,11 +81,13 @@ async function countGeometry(page: Page): Promise<CountGeometry[]> {
       const cardContentRight = cardBox && cardStyle
         ? cardBox.right - parseFloat(cardStyle.paddingRight) - parseFloat(cardStyle.borderRightWidth)
         : Number.NaN;
+      const avg = card?.querySelector('.seg-card__avg');
       return {
         text: count.textContent ?? '',
         height: box.height,
         lineHeight: parseFloat(getComputedStyle(count).lineHeight),
         right: box.right,
+        avgRight: avg ? avg.getBoundingClientRect().right : null,
         cardContentRight,
       };
     }),
@@ -142,6 +146,9 @@ for (const theme of FIXTURE_THEMES) {
           expect(count.lineHeight, `line-height of "${count.text}"`).toBeGreaterThan(0);
           expect(Math.abs(count.height - count.lineHeight), `"${count.text}" renders on one line`).toBeLessThanOrEqual(0.5);
           expect(count.right, `"${count.text}" ends inside its card`).toBeLessThanOrEqual(count.cardContentRight + 0.5);
+          // `avg` gives way by wrapping below the count, never by running out of the card.
+          expect(count.avgRight, `avg beside "${count.text}"`).not.toBeNull();
+          expect(count.avgRight ?? Number.POSITIVE_INFINITY, `avg beside "${count.text}" ends inside its card`).toBeLessThanOrEqual(count.cardContentRight + 0.5);
         }
         expectRowsAligned(await cardGeometry(page));
       });
