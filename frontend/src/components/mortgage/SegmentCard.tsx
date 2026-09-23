@@ -58,7 +58,10 @@ import './SegmentCard.css';
  * note is one line, `avg` sits beside the count so the meta row keeps the
  * evidence chip and the Ask Genie entry on one line, and each facet is one
  * share bar (SegmentFacetBar). The headline count never wraps: when a six- to
- * eight-digit count leaves no room, `avg` wraps below it.
+ * eight-digit count leaves no room, `avg` wraps below it. The meta row's
+ * status stays one line too: a first snapshot shows a compact `Δ —` (the
+ * sentence is screen-reader text) and a zero-count card states its reason
+ * in the otherwise empty reconcile slot.
  *
  * Emanation: when `selected` flips false → true, we mount a single
  * `.seg-card__emanate` span with a fresh key. The CSS animation is one-shot
@@ -168,14 +171,21 @@ export function SegmentCard({ segment, selected, updating, onClick }: SegmentCar
         )}
         {!gated && !hasNoBorrowers && <span className="seg-card__avg">avg {segment.avg_score}</span>}
       </div>
-      {/* Always rendered, even empty, so every card keeps the same rows. */}
+      {/* Always rendered, even empty, so every card keeps the same rows. A
+          zero-count card has no gap to reconcile, so the slot says why the
+          count is zero instead of wrapping the meta row. */}
       <div className="seg-card__reconcile-slot">
         {!gated && showsReconcile && (
           <div className="seg-card__reconcile" role="note">
             <span className="seg-card__reconcile-value num">
               {contactable.toLocaleString()}
             </span>{' '}
-            of {segment.count.toLocaleString()} contactable
+            contactable of {segment.count.toLocaleString()}
+          </div>
+        )}
+        {!gated && hasNoBorrowers && (
+          <div className="seg-card__reconcile seg-card__reconcile--empty" role="note">
+            no borrowers in current view
           </div>
         )}
       </div>
@@ -186,10 +196,13 @@ export function SegmentCard({ segment, selected, updating, onClick }: SegmentCar
             <span className="chip chip--warning">{gateLabel}</span>
             {segment.source_name && <span>{segment.source_name}</span>}
           </>
-        ) : hasNoBorrowers ? (
-          <span>no borrowers in current view</span>
-        ) : deltaIsFirstSnapshot ? (
-          <span>first snapshot · deltas pending</span>
+        ) : hasNoBorrowers ? null : deltaIsFirstSnapshot ? (
+          // One line beside the evidence chip and Ask Genie at the 1440
+          // target: the compact token is seen, the sentence is read.
+          <span className="seg-card__delta-pending">
+            <span aria-hidden="true">Δ —</span>
+            <span className="sr-only">first snapshot · deltas pending</span>
+          </span>
         ) : (
           <span className={segment.delta.startsWith('-') ? 'down' : 'up'}>
             {segment.delta.startsWith('-') ? '▼' : '▲'} {segment.delta}

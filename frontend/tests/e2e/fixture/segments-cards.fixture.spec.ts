@@ -116,16 +116,28 @@ for (const theme of FIXTURE_THEMES) {
       expectRowsAligned(cards);
     });
 
-    test('rows stay aligned when one card has no reconcile note, a wrapped meta row or a single facet', async ({ app, mockApi, page }) => {
+    test('rows stay aligned and within 260px when cards have no reconcile note, a pending delta, a single facet or no borrowers', async ({ app, mockApi, page }) => {
       registerVariedSegments(mockApi);
       await app.gotoRoute(ROUTE);
       const cards = await cardGeometry(page);
       expect(cards).toHaveLength(6);
-      // The payload really varies: one card has no reconcile note and one
-      // shows a single facet, so an unshared row grid would drift.
-      await expect(page.locator('.seg-card__reconcile')).toHaveCount(5);
-      await expect(page.locator('.seg-card__facet-chip')).toHaveCount(11);
+      // The payload really varies: one card has no reconcile note, one shows
+      // a single facet and one has no borrowers (no avg, no facets), so an
+      // unshared row grid would drift.
+      await expect(page.locator('.seg-card__reconcile:not(.seg-card__reconcile--empty)')).toHaveCount(4);
+      await expect(page.locator('.seg-card__facet-chip')).toHaveCount(9);
       expectRowsAligned(cards);
+
+      // The fresh-deploy status and the zero-count reason each keep their
+      // card inside the target: neither wraps the meta row (review round 1).
+      const pending = page.locator('.seg-card', { hasText: 'HELOC Intent' });
+      await expect(pending.locator('.seg-card__meta')).toContainText('Δ —');
+      await expect(pending.locator('.seg-card__meta .sr-only')).toHaveText('first snapshot · deltas pending');
+      const empty = page.locator('.seg-card', { hasText: 'Retention Risk' });
+      await expect(empty.locator('.seg-card__reconcile--empty')).toHaveText('no borrowers in current view');
+      for (const card of cards) {
+        expect(card.height, `height of "${card.code}"`).toBeLessThanOrEqual(MAX_CARD_HEIGHT);
+      }
     });
 
     // A national footprint puts headline counts at six to eight digits. The

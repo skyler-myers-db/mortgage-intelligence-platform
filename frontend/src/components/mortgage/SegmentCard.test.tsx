@@ -96,6 +96,23 @@ describe('SegmentCard', () => {
     expect(container.textContent).toContain('no borrowers in current view');
     expect(container.textContent).not.toContain('+42%');
     expect(container.textContent).not.toContain('avg 0');
+    // The reason sits in the reconcile slot (empty for a zero count), so it
+    // never wraps the meta row beside the evidence chip and Ask Genie.
+    expect(container.querySelector('.seg-card__reconcile-slot .seg-card__reconcile--empty')?.textContent?.trim()).toBe(
+      'no borrowers in current view',
+    );
+    expect(container.querySelector('.seg-card__meta')?.textContent).not.toContain('no borrowers');
+  });
+
+  it('shows a compact pending-delta token on a first snapshot and speaks the sentence', () => {
+    render({ code: 'itm', count: 12, delta: '+0%', avg_score: 70 });
+    const meta = container.querySelector('.seg-card__meta');
+    const pending = meta?.querySelector('.seg-card__delta-pending');
+    expect(pending?.querySelector('[aria-hidden="true"]')?.textContent).toBe('Δ —');
+    expect(pending?.querySelector('.sr-only')?.textContent).toBe('first snapshot · deltas pending');
+    // No "+0%" claim of a flat count, and no visible run-on sentence.
+    expect(meta?.textContent).not.toContain('+0%');
+    expect(container.querySelector('.seg-card__reconcile--empty')).toBeNull();
   });
 
   it('prefers canonical presentation copy over stale backend labels', () => {
@@ -353,8 +370,10 @@ describe('SegmentCard', () => {
     expect(note?.textContent).toContain('contactable');
     // The relationship is what makes the two numbers legible together —
     // the smaller one must never be presented as if it stood alone.
-    expect(note?.textContent?.replace(/\s+/g, ' ')).toBe(
-      '3,217 of 74,335 contactable',
+    // "N contactable of M": the app-wide idiom (Home's approval banner cites
+    // this card for it).
+    expect(note?.textContent?.replace(/\s+/g, ' ').trim()).toBe(
+      '3,217 contactable of 74,335',
     );
     // Same disclosure for a screen reader, on the control that navigates.
     const select = container.querySelector<HTMLButtonElement>('.seg-card__select');

@@ -7,8 +7,11 @@
  * was not shared across cards would still look aligned. This payload varies
  * exactly the content a real footprint varies, one difference per card:
  *   - `listed` has no contactable gap, so it renders no reconcile note;
- *   - `permit` is on its first snapshot, so its meta row wraps;
- *   - `investor` has no origination-channel mix, so one facet renders.
+ *   - `permit` is on its first snapshot (`+0%`, what every card reads after
+ *     a fresh deploy), so its meta row carries the pending-delta status;
+ *   - `investor` has no origination-channel mix, so one facet renders;
+ *   - `retention` has no borrowers in the current view, so it shows no avg,
+ *     no delta and no facets, and its reconcile slot says why.
  * With the subgrid every card still puts each row at the same y.
  */
 import type { SegmentSummary } from '../../../../src/types';
@@ -23,6 +26,8 @@ function varied(row: SegmentSummary): SegmentSummary {
       return { ...row, delta: '+0%' };
     case 'investor':
       return { ...row, origination_channel_mix: [] };
+    case 'retention':
+      return { ...row, count: 0, contactable: 0, loan_product_mix: [], origination_channel_mix: [] };
     default:
       return row;
   }
