@@ -177,12 +177,41 @@ test('a pointer pick still selects and closes the filter menu', async ({ app, pa
   await app.settle();
 });
 
+/**
+ * Every block in the Analytics tabpanel spans the page column edge to edge,
+ * like the tablist above it (the panel is a plain wrapper; the
+ * `.main__inner > .surface` rules it steps between must not have mattered).
+ */
+async function expectPanelFlushWithTabs(page: Page): Promise<void> {
+  const edges = await page.evaluate(() => {
+    const box = (node: Element) => {
+      const rect = node.getBoundingClientRect();
+      return { left: rect.left, right: rect.right };
+    };
+    const tabs = document.querySelector('.analytics-tabs');
+    const panel = document.querySelector('[role="tabpanel"]');
+    return {
+      tabs: tabs ? box(tabs) : null,
+      blocks: [...(panel?.children ?? [])].map((node) => ({ name: node.className, ...box(node) })),
+    };
+  });
+  expect(edges.tabs).not.toBeNull();
+  expect(edges.blocks.length).toBeGreaterThan(0);
+  for (const block of edges.blocks) {
+    expect(block.left, `${block.name} left edge`).toBeCloseTo(edges.tabs?.left ?? -1, 0);
+    expect(block.right, `${block.name} right edge`).toBeCloseTo(edges.tabs?.right ?? -1, 0);
+  }
+}
+
 test('Analytics view tabs switch with the arrow keys', async ({ app, page }) => {
   await app.gotoRoute('/analytics');
   const tablist = page.getByRole('tablist', { name: 'Analytics views' });
   const executive = tablist.getByRole('tab', { name: 'Executive' });
   await expect(executive).toHaveAttribute('tabindex', '0');
   await expect(tablist.getByRole('tab', { name: 'Geography' })).toHaveAttribute('tabindex', '-1');
+
+  // The tabpanel wraps the filters and the view; it must not move them.
+  await expectPanelFlushWithTabs(page);
   await executive.focus();
 
   await page.keyboard.press('ArrowRight');
@@ -200,6 +229,8 @@ test('Analytics view tabs switch with the arrow keys', async ({ app, page }) => 
   await expect(salesOps).toBeFocused();
   await expect(page).toHaveURL(/[?&]view=sales-ops(&|$)/);
   await app.settle();
+  // Sales ops renders a bare `.surface` that used to sit directly in `.main__inner`.
+  await expectPanelFlushWithTabs(page);
 
   await page.keyboard.press('Home');
   await expect(executive).toBeFocused();
