@@ -250,6 +250,22 @@ describe('AdminAuditExplorer', () => {
     expect(lastCall()).toMatchObject({ actor: null, event_type: 'LEAD_EXPORT' });
   });
 
+  it('moves focus to the next chip, then to Apply, as filter chips are removed', async () => {
+    await render('/admin-config?audit_actor=approver%40summit-mortgage.example&audit_event_type=LEAD_EXPORT');
+    const removeEvent = button(/^Remove event filter$/);
+    removeEvent.focus();
+    act(() => removeEvent.click());
+    await settle();
+
+    expect(seen.location.search).toBe('?audit_actor=approver%40summit-mortgage.example');
+    expect(document.activeElement?.getAttribute('aria-label')).toBe('Remove actor filter');
+
+    act(() => (document.activeElement as HTMLButtonElement).click());
+    await settle();
+    expect(seen.location.search).toBe('');
+    expect(document.activeElement).toBe(button(/^Apply filters$/));
+  });
+
   it('shows human labels with the raw code kept in a mono chip', async () => {
     await render('/admin-config');
     const rows = [...container.querySelectorAll('table[aria-label="Audit events"] tbody tr')];

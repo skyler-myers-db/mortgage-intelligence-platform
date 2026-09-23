@@ -15,7 +15,7 @@
  * governed `role=alert` message below, not the browser's own bubble, and
  * only the control(s) at fault carry `aria-invalid`.
  */
-import { useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type RefObject } from 'react';
 import { Chip } from '../Primitives';
 import { FilterSelect } from '../ui/FilterSelect';
 import {
@@ -39,9 +39,11 @@ const ERROR_ID = 'audit-filter-error';
 interface FilterFormProps {
   applied: AuditExplorerFilters;
   onApply: (next: AuditExplorerFilters) => void;
+  /** The Apply button, where focus lands when the last filter chip is removed. */
+  applyButtonRef?: RefObject<HTMLButtonElement | null>;
 }
 
-export function AuditExplorerFilterForm({ applied, onApply }: FilterFormProps) {
+export function AuditExplorerFilterForm({ applied, onApply, applyButtonRef }: FilterFormProps) {
   const [draft, setDraft] = useState<AuditExplorerFilters>(applied);
   const [error, setError] = useState<AuditFilterError | null>(null);
   // A new applied set from outside the form (a deep link, a chip removal,
@@ -179,7 +181,7 @@ export function AuditExplorerFilterForm({ applied, onApply }: FilterFormProps) {
         />
       </label>
       <div className="admin-filter-actions">
-        <button type="submit" className="btn btn--default btn--sm">
+        <button type="submit" className="btn btn--default btn--sm" ref={applyButtonRef}>
           Apply filters
         </button>
         <button
@@ -204,6 +206,8 @@ interface ChipLaneProps {
   applied: AuditExplorerFilters;
   summary: string;
   onRemove: (key: keyof AuditExplorerFilters) => void;
+  /** Focus target once no chip is left to move to (the form's Apply button). */
+  emptiedFocusRef?: RefObject<HTMLElement | null>;
 }
 
 const CHIP_LABELS: Record<keyof AuditExplorerFilters, string> = {
@@ -221,24 +225,44 @@ function chipValue(key: keyof AuditExplorerFilters, value: string): string {
   return key === 'eventType' ? `${eventTypeCodeLabel(value)} · ${value}` : value;
 }
 
-/** The applied filters as removable chips, one per URL parameter. */
-export function AuditAppliedFilterChips({ applied, summary, onRemove }: ChipLaneProps) {
+/**
+ * The applied filters as removable chips, one per URL parameter. Removing a
+ * chip unmounts the focused remove button, so focus moves on to the chip that
+ * takes its place (or the one before it), then to the Apply button once none
+ * is left, instead of dropping to <body>.
+ */
+export function AuditAppliedFilterChips({ applied, summary, onRemove, emptiedFocusRef }: ChipLaneProps) {
   const active = hasActiveAuditFilters(applied);
   const keys = (Object.keys(CHIP_LABELS) as Array<keyof AuditExplorerFilters>).filter((key) => applied[key]);
+  const laneRef = useRef<HTMLDivElement>(null);
+  const removedIndex = useRef<number | null>(null);
+  const keysKey = keys.join(',');
+  useEffect(() => {
+    const index = removedIndex.current;
+    if (index === null) return;
+    removedIndex.current = null;
+    const removeButtons = laneRef.current?.querySelectorAll<HTMLButtonElement>('.chip__remove') ?? [];
+    const next = removeButtons.length > 0 ? removeButtons[Math.min(index, removeButtons.length - 1)] : null;
+    (next ?? emptiedFocusRef?.current)?.focus();
+  }, [keysKey, emptiedFocusRef]);
   return (
     <div
+      ref={laneRef}
       className={`audit-filter-chip-lane chip-row mt-3 ${active ? '' : 'is-empty'}`}
       aria-label="Applied audit filters"
       aria-hidden={!active}
     >
       {active && (
         <>
-          {keys.map((key) => (
+          {keys.map((key, index) => (
             <Chip
               key={key}
               variant="neutral"
               icon={key === 'eventId' ? 'audit' : undefined}
-              onRemove={() => onRemove(key)}
+              onRemove={() => {
+                removedIndex.current = index;
+                onRemove(key);
+              }}
               removeLabel={`Remove ${CHIP_LABELS[key]} filter`}
             >
               {CHIP_LABELS[key]} = {chipValue(key, applied[key])}

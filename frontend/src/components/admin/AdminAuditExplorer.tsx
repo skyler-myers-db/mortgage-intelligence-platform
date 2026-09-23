@@ -50,6 +50,7 @@ export function AdminAuditExplorer() {
   const location = useLocation();
   const navigate = useNavigate();
   const explorerRef = useRef<HTMLDivElement>(null);
+  const applyButtonRef = useRef<HTMLButtonElement>(null);
   const searchParams = new URLSearchParams(location.search);
   const applied = parseAuditExplorerFilters(searchParams);
   const appliedKey = auditFiltersKey(applied);
@@ -205,9 +206,10 @@ export function AdminAuditExplorer() {
             {copyState.message}
           </div>
         )}
-        <AuditExplorerFilterForm applied={applied} onApply={applyFilters} />
+        <AuditExplorerFilterForm applied={applied} onApply={applyFilters} applyButtonRef={applyButtonRef} />
         <AuditAppliedFilterChips
           applied={applied}
+          emptiedFocusRef={applyButtonRef}
           summary={`Showing rows ${firstShownRow}-${lastShownRow} that match the applied filters.`}
           onRemove={(key) => applyFilters({ ...applied, [key]: '' })}
         />

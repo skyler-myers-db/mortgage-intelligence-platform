@@ -265,6 +265,26 @@ test.describe('audit explorer', () => {
     expect(requests).toHaveLength(requestsBefore);
   });
 
+  test('removing a filter chip hands focus to the next chip, then to Apply', async ({ app, page, mockApi }) => {
+    const requests: URLSearchParams[] = [];
+    mockApi.register('GET', '/api/audit/events/page', filteringAuditPage(requests));
+    await app.gotoRoute(`/admin-config?audit_actor=${encodeURIComponent(EXPORT_ACTOR)}&audit_event_type=APPROVE#audit`);
+    const explorer = page.locator('#audit');
+    const chips = explorer.getByLabel('Applied audit filters');
+    await expect(chips).toContainText('event = Outreach approved · APPROVE');
+
+    const removeEvent = chips.getByRole('button', { name: 'Remove event filter' });
+    await removeEvent.focus();
+    await page.keyboard.press('Enter');
+    await expect(page).not.toHaveURL(/audit_event_type=/);
+    await expect(chips.getByRole('button', { name: 'Remove actor filter' })).toBeFocused();
+
+    await page.keyboard.press('Enter');
+    await expect(page).not.toHaveURL(/audit_actor=/);
+    await expect(explorer.getByRole('button', { name: 'Apply filters' })).toBeFocused();
+    await expect.poll(() => requests[requests.length - 1]?.get('actor')).toBeNull();
+  });
+
   test('a deep link opens its event; its correlation id opens the whole request', async ({ app, page, mockApi }) => {
     const requests: URLSearchParams[] = [];
     mockApi.register('GET', '/api/audit/events/page', filteringAuditPage(requests));
