@@ -168,20 +168,27 @@ test.describe('Borrower 360 trigger timeline reveal', () => {
     // stay on, so a failure trace is still debuggable).
     test.use({ contextOptions: { reducedMotion: 'no-preference' }, traceScreenshots: false });
 
-    test('fades once per session: the second dossier renders it visible at first paint', async ({ app, page }) => {
-      await app.gotoRoute('/lead-queue');
-      await app.expandFirstLeadRow();
-      await page.locator('table.tbl tbody tr.tbl__expand').getByRole('link', { name: 'Open Borrower 360' }).click();
-      await expect(page).toHaveURL(new RegExp(`/borrower-360/${LEADS[0].borrower_id}$`));
-      await app.settle();
+    test('fades in on its first appearance this session, once scrolled into view', async ({ app, page }) => {
+      await app.gotoRoute(`/borrower-360/${LEADS[0].borrower_id}`);
       const reveal = page.locator('.reveal-on-scroll', { hasText: 'Trigger timeline' });
       await expect(reveal).toHaveCount(1);
       // First appearance this session: hidden until it scrolls into view.
       await expect(reveal).not.toHaveClass(/is-visible/);
       await reveal.scrollIntoViewIfNeeded();
       await expect(reveal).toHaveClass(/is-visible/);
+    });
+
+    test('does not fade again: the next dossier this session renders it visible at first paint', async ({ app, page }) => {
+      // The first dossier's mount is this page load's first appearance of
+      // the reveal key (it starts hidden); that alone spends the fade.
+      await app.gotoRoute(`/borrower-360/${LEADS[0].borrower_id}`);
+      const first = page.locator('.reveal-on-scroll', { hasText: 'Trigger timeline' });
+      await expect(first).toHaveCount(1);
+      await expect(first).not.toHaveClass(/is-visible/);
 
       // Record whether each later reveal node is inserted already visible.
+      // The recorder lives on this document, so it also proves the next
+      // dossier is reached without a page load.
       await page.evaluate(() => {
         const win = window as Window & { __reveals?: Array<{ visibleAtInsert: boolean }> };
         win.__reveals = [];
@@ -196,11 +203,10 @@ test.describe('Borrower 360 trigger timeline reveal', () => {
         }).observe(document.getElementById('main-content')!, { childList: true, subtree: true });
       });
 
-      await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('link', { name: 'Leads' }).click();
-      await app.settle();
-      const secondRow = page.locator(`table.tbl tbody [aria-label="Toggle preview for lead ${LEADS[1].borrower_id}"]`);
-      await secondRow.click();
-      await page.locator('table.tbl tbody tr.tbl__expand').getByRole('link', { name: 'Open Borrower 360' }).click();
+      // Open the next borrower from the topbar search (a client-side route change).
+      const search = page.getByRole('search').getByLabel('Search borrowers');
+      await search.fill(LEADS[1].borrower_id);
+      await search.press('Enter');
       await expect(page).toHaveURL(new RegExp(`/borrower-360/${LEADS[1].borrower_id}$`));
       await app.settle();
       const second = page.locator('.reveal-on-scroll', { hasText: 'Trigger timeline' });
