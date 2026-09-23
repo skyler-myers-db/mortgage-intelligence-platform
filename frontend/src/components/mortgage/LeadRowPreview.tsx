@@ -5,7 +5,9 @@ import { DRAWER_SOURCES } from '../../lib/drawerSources';
 import { compactCurrency, signedBpsLabel } from '../../lib/formatters';
 import { offerDisplayLabel, offerRationale, offerShortDescription } from '../../lib/offerLanguage';
 import { safeSegmentName, segmentColor } from '../../lib/segmentMetadata';
+import { genieLeadPrompt } from '../../lib/genieContext';
 import { useApp } from '../AppContext';
+import { GenieAskAbout } from './GenieAskAbout';
 import { Button, EvidenceChip } from '../Primitives';
 import { ConfidenceMeter } from './ConfidenceMeter';
 import { ScoreBadge } from './ScoreBadge';
@@ -27,6 +29,7 @@ export function RowPreview({ lead, approval }: { lead: LeadSummary; approval?: s
     ? lead.clip
     : 'Property ref unavailable';
   const saved = isLeadSaved(lead.borrower_id);
+  const askPrompt = genieLeadPrompt({ segmentCodes: lead.segment_codes, stateCode: lead.state });
   const saveCurrentLead = () => {
     saveLead({
       borrower_id: lead.borrower_id,
@@ -70,6 +73,14 @@ export function RowPreview({ lead, approval }: { lead: LeadSummary; approval?: s
             );
           })}
         </div>
+        {/* "Ask Genie about this borrower's segment and state" (genie-04):
+            the prompt names the registered segment and the federal state
+            only -- never the masked id, the property ref or a contact field. */}
+        {askPrompt && (
+          <div className="chip-row mt-2">
+            <GenieAskAbout prompt={askPrompt} subject="borrower's segment and state" />
+          </div>
+        )}
       </div>
 
       <div>

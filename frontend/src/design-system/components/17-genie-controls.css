@@ -44,3 +44,42 @@
   gap: var(--sp-2);
   color: var(--text-3);
 }
+
+/* "Ask Genie about this" entry point (genie-04): a ghost button tinted with
+   the accent ink so it reads as a Genie affordance, not a generic action.
+   The prototype's `.kpi` (design_files/index.html:441) and `.seg-card`
+   (:488) carry no assistant affordance; this is an additive extension. */
+.genie-ask-about {
+  gap: var(--sp-1);
+  color: var(--accent-ink);
+}
+.genie-ask-about:hover,
+.genie-ask-about:focus-visible {
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+}
+/* Compact form for the dense cards: a square target no smaller than the
+   `.btn--sm` block size, so the icon-only control keeps a 24px hit area. */
+.genie-ask-about--icon {
+  justify-content: center;
+  min-inline-size: var(--sp-6);
+  padding-inline: 0;
+}
+
+/* KPI: top-right corner, out of the value / delta / source flow so the card
+   height does not change. The label keeps clear of it. */
+.kpi__ask {
+  position: absolute;
+  top: var(--sp-2);
+  right: var(--sp-2);
+}
+.kpi--askable .kpi__label {
+  padding-inline-end: var(--sp-6);
+}
+/* Segment card: beside the evidence chip, above the stretched
+   `.seg-card__select` button like `.seg-card__evidence`. */
+.seg-card__ask {
+  position: relative;
+  z-index: 2;
+  display: inline-flex;
+}
