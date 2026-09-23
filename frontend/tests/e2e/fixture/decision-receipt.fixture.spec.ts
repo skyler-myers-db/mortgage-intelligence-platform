@@ -133,15 +133,16 @@ test.describe('decision receipt', () => {
     const flow = registerHeldApproveFlow(mockApi);
     await app.gotoRoute(`/offer-orchestrator/${BORROWER_ID}`);
     const main = page.locator('#main-content');
-    const hero = page.getByTestId('hero-approve');
-    await expect(hero).toBeEnabled();
-    await hero.click();
+    const gate = page.getByTestId('offer-action-bar');
+    const approve = gate.getByRole('button', { name: 'Approve outreach' });
+    await expect(approve).toBeEnabled();
+    await approve.click();
 
     // The approve POST is held open: nothing of the decision renders yet.
     await expect.poll(() => flow.approveGate.received, 'the approve POST reached the ledger').toBe(true);
     await expect(main.getByTestId('decision-receipt')).toHaveCount(0);
     await expect(main.getByTestId('decision-receipt-pending')).toHaveCount(0);
-    await expect(hero).toHaveText('Approve');
+    await expect(gate.locator('.approval'), 'the gate stays up while the write is held').toBeVisible();
     expect(await approvedChips(page), 'no Approved chip before the write resolves').toBe(0);
     expect(receiptCalls(mockApi), 'nothing is read back before the write resolves').toBe(0);
 
@@ -165,7 +166,7 @@ test.describe('decision receipt', () => {
     await expect(receipt.locator('.chip', { hasText: APPROVED_CHIP })).toBeVisible();
     await expect(receipt.getByTestId('decision-receipt-explorer-link')).toHaveAttribute('href', EXPLORER_HREF);
     await expect(receipt.getByRole('button', { name: `Copy audit id ${APPROVE_AUDIT_ID}` })).toBeVisible();
-    await expect(hero).toHaveText('Approved');
+    await expect(gate, 'the decided borrower has no approval gate').toHaveCount(0);
     // The pre-receipt surfaces are retired.
     await expect(page.locator('.burst')).toHaveCount(0);
     await expect(page.getByText(/^audit: /)).toHaveCount(0);
@@ -306,7 +307,7 @@ test.describe('decision receipt', () => {
     app.degrade('/api/audit/receipt/:id', { method: 'GET', status: 403, body: { detail: 'forbidden' } });
     await app.gotoRoute(`/offer-orchestrator/${BORROWER_ID}`);
 
-    await page.getByTestId('hero-approve').click();
+    await page.getByRole('button', { name: 'Approve outreach' }).click();
 
     const unavailable = page.getByTestId('decision-receipt-unavailable');
     await expect(unavailable).toBeVisible();
@@ -325,7 +326,7 @@ test.describe('decision receipt', () => {
     app.degrade('/api/audit/receipt/:id', { method: 'GET', status: 404, body: { detail: 'audit event not found' } });
     await app.gotoRoute(`/offer-orchestrator/${BORROWER_ID}`);
 
-    await page.getByTestId('hero-approve').click();
+    await page.getByRole('button', { name: 'Approve outreach' }).click();
 
     const unavailable = page.getByTestId('decision-receipt-unavailable');
     await expect(unavailable).toBeVisible();
@@ -351,9 +352,9 @@ test.describe('decision receipt', () => {
     await expect(unavailable).toBeVisible();
     await expect(unavailable).toHaveAttribute('data-receipt-state', 'forbidden');
     // The decision itself stays on the page: nothing else here says Rejected
-    // (the review panel is hidden and the hero button reads "Approve").
+    // (the review panel and the approval gate are hidden).
     await expect(unavailable.getByTestId('decision-receipt-outcome').locator('.chip--danger')).toHaveText(/^\s*Rejected\s*$/);
-    await expect(page.getByTestId('hero-approve')).toHaveText('Approve');
+    await expect(page.getByTestId('offer-action-bar')).toHaveCount(0);
     await expect(unavailable).toContainText('Recorded; receipt unavailable');
     await expect(unavailable.getByTestId('decision-receipt-audit-id')).toContainText(REJECT_AUDIT_ID);
     await expect(unavailable).not.toContainText('The write returned');
@@ -366,13 +367,13 @@ test.describe('decision receipt', () => {
   test('a failed approve write keeps the failure surface and reads nothing back', async ({ app, page, mockApi }) => {
     app.degrade('/api/outreach/approve', { method: 'POST', status: 500, body: { detail: 'audit write failed (fixture)' } });
     await app.gotoRoute(`/offer-orchestrator/${BORROWER_ID}`);
-    const hero = page.getByTestId('hero-approve');
+    const approve = page.getByRole('button', { name: 'Approve outreach' });
 
-    await hero.click();
+    await approve.click();
 
     const failure = page.locator('#main-content .surface--danger[role="alert"]');
     await expect(failure).toContainText("Couldn't write approval: audit write failed (fixture)");
-    await expect(hero).toHaveText('Approve');
+    await expect(approve).toBeEnabled();
     await expect(page.getByTestId('decision-receipt')).toHaveCount(0);
     await expect(page.getByTestId('decision-receipt-pending')).toHaveCount(0);
     await expect(page.getByTestId('decision-receipt-unavailable')).toHaveCount(0);

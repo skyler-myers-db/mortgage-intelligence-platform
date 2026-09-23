@@ -358,7 +358,7 @@ describe('OfferOrchestrator route behavior', () => {
     expect(body.textContent).toBe(DRAFT.body);
 
     await act(async () => {
-      container.querySelector<HTMLButtonElement>('[data-testid="hero-approve"]')!.click();
+      button('Approve outreach').click();
       await new Promise((resolve) => setTimeout(resolve, 50));
     });
     await waitUntil(() => apiMocks.approve.mock.calls.length === 1);
@@ -400,14 +400,16 @@ describe('OfferOrchestrator route behavior', () => {
     await waitUntil(reviewCopyCurrent);
 
     await act(async () => {
-      container.querySelector<HTMLButtonElement>('[data-testid="hero-approve"]')!.click();
+      button('Approve outreach').click();
       await new Promise((resolve) => setTimeout(resolve, 50));
     });
     await waitUntil(() => apiMocks.approve.mock.calls.length === 1);
-    // The POST is in flight: no receipt, no recording skeleton, no approved chip.
+    // The POST is in flight: no receipt, no recording skeleton, no approved
+    // chip; the gate is still up, busy, with nothing that reads "Approved".
     expect(container.querySelector('[data-testid="decision-receipt"]')).toBeNull();
     expect(container.querySelector('[data-testid="decision-receipt-pending"]')).toBeNull();
-    expect(container.querySelector<HTMLButtonElement>('[data-testid="hero-approve"]')!.textContent).toContain('Approve');
+    expect(container.querySelector('[data-testid="offer-action-bar"] .approval')).not.toBeNull();
+    expect(button('Submitting…').disabled).toBe(true);
     expect(container.textContent).not.toContain('Approved');
     expect(apiMocks.auditReceipt).not.toHaveBeenCalled();
 
@@ -461,7 +463,7 @@ describe('OfferOrchestrator route behavior', () => {
     expect(apiMocks.draftOutreach).toHaveBeenCalledTimes(1);
 
     await act(async () => {
-      container.querySelector<HTMLButtonElement>('[data-testid="hero-approve"]')!.click();
+      button('Approve outreach').click();
       await new Promise((resolve) => setTimeout(resolve, 50));
     });
     await waitUntil(() => apiMocks.approve.mock.calls.length === 1);
@@ -534,16 +536,13 @@ describe('OfferOrchestrator route behavior', () => {
     expect(reason?.textContent).toContain('Requires approver role');
     expect(reason?.textContent).toContain('analyst@summit.example');
     expect(container.querySelector('[data-testid="approval-actor"]')).toBeNull();
-    const hero = container.querySelector<HTMLButtonElement>('[data-testid="hero-approve"]')!;
-    expect(hero.disabled).toBe(true);
-    expect(hero.getAttribute('title')).toBe('Requires approver role');
     for (const label of ['Approve outreach', 'Reject']) {
       expect(button(label).disabled).toBe(true);
       expect(button(label).getAttribute('aria-describedby')).toBe(reason!.id);
+      expect(button(label).getAttribute('title')).toBe('Requires approver role');
     }
 
     await act(async () => {
-      hero.click();
       button('Approve outreach').click();
       button('Reject').click();
       await new Promise((resolve) => setTimeout(resolve, 50));
@@ -638,9 +637,12 @@ describe('OfferOrchestrator route behavior', () => {
     mount();
 
     await waitUntil(() => container.querySelector('[data-testid="activation-loop"]') !== null);
-    const approve = container.querySelector<HTMLButtonElement>('[data-testid="hero-approve"]')!;
-    expect(approve.textContent).toContain('Approved');
-    expect(approve.disabled).toBe(true);
+    // Decided: the docked gate is gone, so nothing offers to approve again.
+    expect(container.querySelector('[data-testid="offer-action-bar"]')).toBeNull();
+    expect(container.querySelector('.approval')).toBeNull();
+    expect([...container.querySelectorAll('button')].some(
+      (candidate) => /^Approve/.test(candidate.textContent?.trim() ?? ''),
+    )).toBe(false);
     expect(container.textContent).toContain('activation approval approval-persisted');
     expect(apiMocks.approve).not.toHaveBeenCalled();
     // motion-06: a durable approval whose lifecycle row carries no audit id
@@ -677,7 +679,7 @@ describe('OfferOrchestrator route behavior', () => {
   // Another approver (or an LO) opens a decided borrower: the receipt
   // read-back is theirs to refuse (403) or may miss (404), but the page must
   // still say what was decided. For a rejection nothing else on the page does:
-  // the review panel is hidden and the hero button reads "Approve".
+  // the review panel and the decision bar are hidden.
   it.each([
     { durable: 'rejected' as const, status: 403, state: 'forbidden', label: 'Rejected' },
     { durable: 'rejected' as const, status: 404, state: 'not-found', label: 'Rejected' },

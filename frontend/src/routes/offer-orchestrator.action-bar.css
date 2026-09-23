@@ -1,0 +1,72 @@
+/* Offer Orchestrator decision bar (2026-09-21 audit visual-v1). Route-local:
+   imported by offer-orchestrator.action-bar.tsx so it ships in the route's
+   lazy CSS chunk, not the initial stylesheet (as ask-genie.css does for the
+   docked composer).
+
+   The loan-officer routing and the `.approval` gate dock at the bottom of
+   `.main`, the app's scroller, with `position: sticky`, so at 1440x900 both
+   are on screen without scrolling and stay there while the page scrolls.
+   Sticky, not fixed: the bar keeps its place in flow, so at the end of the
+   page it rests above the footer and hides nothing for good, and it stays
+   inside `.main`'s content box, which already clears the docked Console
+   (`[data-console="open"] .main` padding in 01-app-shell.css).
+
+   DECLARED DEPARTURE from the prototype, which renders `.approval` in flow
+   (design_files/Module 0 Prototype.html:1495-1506, placed at :2181); the
+   audit report lists the sticky Approval among its declared deviations
+   (section 10 item 10). `.offer-action-bar` is a new app block: the
+   prototype has no action bar. The `.approval` rules themselves
+   (04-approval-and-drawer.css) are untouched. Tokens only. */
+.offer-action-bar {
+  position: sticky;
+  inset-block-end: 0;
+  z-index: var(--z-sticky);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  margin-block-start: var(--gap-grid);
+  padding-block: var(--sp-3);
+  /* The topbar's frosted recipe (01-app-shell.css `.topbar`): the page
+     scrolls underneath without its text showing through the gate's copy. */
+  background: color-mix(in oklab, var(--bg-1) 88%, transparent);
+  backdrop-filter: blur(12px);
+  border-block-start: 1px solid var(--line-2);
+  container: offer-action-bar / inline-size;
+}
+
+/* Routing and the gate side by side when the gate keeps room for its copy
+   (1440 with the Console closed), stacked otherwise (Console open, laptops). */
+.offer-action-bar__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--sp-3);
+}
+@container offer-action-bar (min-width: 75rem) {
+  .offer-action-bar__row {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: stretch;
+  }
+  .offer-action-bar__row > .outreach-routing { align-content: center; }
+}
+
+/* Focus Not Obscured (WCAG 2.2 SC 2.4.11, technique C43): `.main` keeps the
+   bar's block size, plus room for the focus ring, as scroll-padding at its
+   end, so a control that takes focus from below the view stops above the bar
+   instead of behind it. The size is measured by the bar itself
+   (offer-orchestrator.action-bar.tsx); the fallback covers the side-by-side
+   bar before the first measurement. */
+.main:has(.offer-action-bar) {
+  scroll-padding-block-end: calc(
+    var(--offer-action-bar-block-size, calc(var(--sp-16) * 2))
+    + var(--focus-ring-width) + var(--focus-ring-offset)
+  );
+}
+
+/* Below 721px the floating Genie launcher (`.genie__fab`, 52px at the
+   bottom-right, 06-genie-chat.css) is shown; keep the Approve button clear
+   of it. */
+@media (max-width: 720px) {
+  .offer-action-bar {
+    padding-inline-end: calc(var(--sp-12) + var(--sp-1) + var(--sp-4) * 2);
+  }
+}

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import type { WarmingUpState } from '../lib/useWarmingUpRetry';
 import type { Borrower360 as Borrower360Type, OfferRecommendation } from '../types';
@@ -65,6 +65,12 @@ interface RejectRationalePanelProps {
   onSubmit: () => void;
 }
 
+/**
+ * Reject's first click opens this form inside the docked decision bar
+ * (offer-orchestrator.action-bar.tsx), above the Reject button that opened
+ * it. Focus moves to the reason on open, so keyboard and screen-reader users
+ * land in the form rather than staying on a button far from it.
+ */
 export function RejectRationalePanel({
   reasonCode,
   rationale,
@@ -73,9 +79,14 @@ export function RejectRationalePanel({
   onCancel,
   onSubmit,
 }: RejectRationalePanelProps) {
+  const reasonRef = useRef<HTMLSelectElement>(null);
+  useEffect(() => {
+    reasonRef.current?.focus();
+  }, []);
   return (
     <form
-      className="surface mb-grid"
+      className="surface"
+      aria-label="Reject rationale"
       onSubmit={(e) => {
         e.preventDefault();
         onSubmit();
@@ -91,6 +102,7 @@ export function RejectRationalePanel({
         <label className="decision-panel__field">
           <span className="field__label">Reason</span>
           <select
+            ref={reasonRef}
             value={reasonCode}
             onChange={(e) => onReasonChange(e.target.value as RejectReasonCode)}
           >
@@ -205,15 +217,22 @@ export function OfferReviewGrid({
   borrowerId,
   canAccessAdmin = false,
 }: OfferReviewGridProps) {
+  // The left column stacks the offer's reasoning (primary offer, the
+  // alternatives ruled out, the thresholds applied) beside the taller draft,
+  // instead of one Primary offer card stretched to the draft's height with
+  // the other two in a second row below the fold (2026-09-21 audit visual-v1).
   return (
     <div className="layoutA-grid">
-      <PrimaryOfferPanel
-        borrower={borrower}
-        recommendation={recommendation}
-        productLabel={productLabel}
-        leadIsSaved={leadIsSaved}
-        saveCurrentLead={saveCurrentLead}
-      />
+      <div className="stack-grid">
+        <PrimaryOfferPanel
+          borrower={borrower}
+          recommendation={recommendation}
+          productLabel={productLabel}
+          leadIsSaved={leadIsSaved}
+          saveCurrentLead={saveCurrentLead}
+        />
+        <OfferDetailsStack recommendation={recommendation} />
+      </div>
       <DraftOutreachPanel
         borrower={borrower}
         borrowerId={borrowerId}
@@ -668,20 +687,20 @@ function DraftOutreachPanel({
   );
 }
 
-interface OfferDetailsRowsProps {
+interface OfferDetailsProps {
   recommendation: OfferRecommendation | null;
 }
 
-export function OfferDetailsRows({ recommendation }: OfferDetailsRowsProps) {
+function OfferDetailsStack({ recommendation }: OfferDetailsProps) {
   return (
-    <Reveal revealKey="offer-orchestrator:details-rows" className="layoutA-grid mt-grid">
+    <Reveal revealKey="offer-orchestrator:details-rows" className="stack-grid">
       <AlternativesPanel recommendation={recommendation} />
       <ThresholdsPanel recommendation={recommendation} />
     </Reveal>
   );
 }
 
-function AlternativesPanel({ recommendation }: OfferDetailsRowsProps) {
+function AlternativesPanel({ recommendation }: OfferDetailsProps) {
   return (
     <div className="surface">
       <div className="surface__hdr">
@@ -722,7 +741,7 @@ function AlternativesPanel({ recommendation }: OfferDetailsRowsProps) {
   );
 }
 
-function ThresholdsPanel({ recommendation }: OfferDetailsRowsProps) {
+function ThresholdsPanel({ recommendation }: OfferDetailsProps) {
   return (
     <div className="surface">
       <div className="surface__hdr">
