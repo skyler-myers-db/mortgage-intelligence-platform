@@ -58,6 +58,16 @@ const SHA256_HEX = /^[0-9a-f]{64}$/;
 const exportOrder = (page: import('@playwright/test').Page) =>
   page.evaluate(() => [...(window.__mipExportOrder ?? [])]);
 
+const EXPORT_BUTTON_FOCUSED = 'BUTTON lead-export';
+/** The focused element as `TAG data-testid`, so a focus drop reads as `BODY`. */
+const focusedControl = (page: import('@playwright/test').Page) =>
+  page.evaluate(() => {
+    const active = document.activeElement;
+    if (!active) return 'none';
+    const testId = active.getAttribute('data-testid');
+    return testId ? `${active.tagName} ${testId}` : active.tagName;
+  });
+
 test.describe('audited lead CSV export', () => {
   test('two selected rows: one receipt, and the download waits for it', async ({ app, page, mockApi }) => {
     const receipts: LeadExportReceiptRequest[] = [];
@@ -118,6 +128,40 @@ test.describe('audited lead CSV export', () => {
       .toHaveAttribute('aria-expanded', 'true');
     await expect(explorer.locator('tbody tr[data-audit-event-id] td.is-primary > div').first()).toHaveText('Lead list exported');
     expect(await exportOrder(page), 'client-side navigation: the page-order probe survived').toContain('download');
+  });
+
+  test('keyboard focus stays on the export button across a held receipt', async ({ app, page, mockApi }) => {
+    let releaseReceipt: () => void = () => undefined;
+    const receiptHeld = new Promise<void>((resolve) => {
+      releaseReceipt = resolve;
+    });
+    let receipts = 0;
+    mockApi.register<LeadExportReceipt>('POST', '/api/leads/export-receipt', async ({ body }) => {
+      receipts += 1;
+      await receiptHeld;
+      return json<LeadExportReceipt>(leadExportReceiptFor(body as LeadExportReceiptRequest));
+    });
+    await app.gotoRoute('/lead-queue');
+    await page.locator('table.tbl tbody [data-testid^="lead-select-B-"]').nth(0).check();
+
+    const exportButton = page.getByTestId('lead-export');
+    await exportButton.focus();
+    expect(await focusedControl(page)).toBe(EXPORT_BUTTON_FOCUSED);
+    const downloadEvent = page.waitForEvent('download');
+    await page.keyboard.press('Enter');
+    await expect.poll(() => receipts).toBe(1);
+
+    // Pending: announced as busy and unavailable, but still the focused control.
+    await expect(exportButton).toHaveText('Recording export…');
+    await expect(exportButton).toHaveAttribute('aria-disabled', 'true');
+    expect(await focusedControl(page), 'focus while the receipt is held').toBe(EXPORT_BUTTON_FOCUSED);
+
+    releaseReceipt();
+    await downloadEvent;
+    await expect(page.getByTestId('lead-export-receipt')).toContainText(`audit ${EXPORT_RECEIPT_ID}`);
+    await expect(exportButton).not.toHaveAttribute('aria-disabled');
+    expect(await focusedControl(page), 'focus after the download').toBe(EXPORT_BUTTON_FOCUSED);
+    expect(receipts).toBe(1);
   });
 
   test('a refused receipt (422) downloads nothing and says why', async ({ app, page, mockApi }) => {

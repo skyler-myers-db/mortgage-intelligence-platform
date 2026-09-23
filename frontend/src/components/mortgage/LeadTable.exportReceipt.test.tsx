@@ -205,9 +205,11 @@ describe('LeadTable audited export', () => {
     await clickExport();
     await vi.waitFor(() => expect(receiptCalls).toHaveLength(1));
 
-    // Receipt in flight: nothing downloaded, the button says so.
+    // Receipt in flight: nothing downloaded, the button says so. It is
+    // aria-disabled, not natively disabled, so keyboard focus stays on it.
     expect(blobs).toHaveLength(0);
-    expect(exportButton().disabled).toBe(true);
+    expect(exportButton().getAttribute('aria-disabled')).toBe('true');
+    expect(exportButton().disabled).toBe(false);
     expect(exportButton().textContent).toContain('Recording export');
     expect(container.querySelector('[data-testid="lead-export-receipt"]')).toBeNull();
 
@@ -221,6 +223,7 @@ describe('LeadTable audited export', () => {
     const link = receipt?.querySelector('a');
     expect(link?.getAttribute('href')).toBe('/admin-config?audit_event_id=evt-receipt-4242#audit');
     expect(exportButton().disabled).toBe(false);
+    expect(exportButton().hasAttribute('aria-disabled')).toBe(false);
     expect(exportButton().textContent).toContain('Export 2 leads');
   });
 

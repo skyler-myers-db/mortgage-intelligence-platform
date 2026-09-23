@@ -371,7 +371,11 @@ export function LeadTable({
             size="sm"
             icon={exporting ? undefined : 'export'}
             onClick={exportCsv}
-            disabled={csvExportCount === 0 || exporting}
+            // Pending is aria-disabled, never native `disabled`: a focused
+            // button that turns disabled drops keyboard focus to <body>.
+            // useLeadCsvExport's in-flight guard ignores a second click.
+            disabled={csvExportCount === 0}
+            aria-disabled={exporting || undefined}
             aria-busy={exporting || undefined}
             data-testid="lead-export"
             aria-label={exporting
