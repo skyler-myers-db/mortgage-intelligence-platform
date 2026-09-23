@@ -74,8 +74,9 @@ export function AdminRouteGate() {
  * could not catch a failed lazy chunk or a route-level throw) and resets on
  * pathname, so a broken route leaves the shell usable and navigating away
  * clears it even if the `key` re-mount is ever dropped. Its Try again first
- * discards the failed route's cached queries (components/ErrorBoundaryRoute)
- * so the re-mounted route re-reads its data.
+ * discards every cached query no mounted component observes, the failed
+ * route's among them (components/ErrorBoundaryRoute), so the re-mounted route
+ * re-reads its data.
  */
 function RouteTransition() {
   const { pathname } = useLocation();

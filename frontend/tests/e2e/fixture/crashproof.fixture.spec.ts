@@ -12,6 +12,8 @@ import type { Page, Route } from '@playwright/test';
 import type { Borrower360 } from '../../../src/types';
 import { ERROR_SURFACE_SELECTOR } from './app';
 import { PRIMARY_BORROWER } from './data/borrowers';
+import type { Hygiene } from './hygiene';
+import type { MockApi } from './mockApi';
 import { expect, test } from './test';
 
 const ERROR_SURFACE = '[data-testid="error-surface"]';
@@ -45,6 +47,40 @@ async function recordErrorSurfaces(page: Page): Promise<() => Promise<string[]>>
     }).observe(document, { childList: true, subtree: true, characterData: true, attributes: true });
   }, ERROR_SURFACE);
   return () => page.evaluate(() => (window as Window & { __errorSurfaceHtml?: string[] }).__errorSurfaceHtml ?? []);
+}
+
+/**
+ * Console noise a caught render throw produces, which is the behaviour under
+ * test: the app's message-free client error report, and React 19 printing the
+ * boundary-caught error through its own console channel before onCaughtError.
+ */
+function allowCaughtRenderThrow(hygiene: Hygiene): void {
+  hygiene.allow('console.error', /\[mip\] client error/);
+  hygiene.allow('console.error', /Cannot read properties of null/);
+  hygiene.allow('console.error', /above error occurred|recreate this component tree/);
+}
+
+/** Every boundary catch is reported once through lib/clientErrorLog; count them. */
+function countCaughtReports(page: Page): () => number {
+  let reports = 0;
+  page.on('console', (message) => {
+    if (message.type() === 'error' && /\[mip\] client error/.test(message.text())) reports += 1;
+  });
+  return () => reports;
+}
+
+/**
+ * `evidence_events` is a required array on the wire; a null one is a payload
+ * Borrower 360 provably cannot render (it maps over it).
+ */
+function answerMalformedBorrower(mockApi: MockApi): void {
+  const broken = { ...PRIMARY_BORROWER, evidence_events: null } as unknown as Borrower360;
+  mockApi.register<Borrower360>('GET', '/api/borrowers/:id', () => ({ body: broken }));
+}
+
+function borrowerReadCounter(mockApi: MockApi): () => number {
+  const borrowerPath = `/api/borrowers/${PRIMARY_BORROWER.borrower_id}`;
+  return () => mockApi.calls.filter((call) => call.path === borrowerPath).length;
 }
 
 /** Count full document loads from now on (client-side route changes fire none). */
@@ -103,26 +139,13 @@ test.describe('stale chunk after a deploy', () => {
 
 test.describe('render throw inside a route', () => {
   test('is caught by the route boundary without leaking the id, and Try again re-reads the fixed data', async ({ app, hygiene, mockApi, page }) => {
-    hygiene.allow('console.error', /\[mip\] client error/);
-    // React 19 also prints the boundary-caught error through its own console
-    // channel before onCaughtError runs.
-    hygiene.allow('console.error', /Cannot read properties of null/);
-    hygiene.allow('console.error', /above error occurred|recreate this component tree/);
-
-    // Every boundary catch is reported once through lib/clientErrorLog.
-    let caughtReports = 0;
-    page.on('console', (message) => {
-      if (message.type() === 'error' && /\[mip\] client error/.test(message.text())) caughtReports += 1;
-    });
+    allowCaughtRenderThrow(hygiene);
+    const caughtReports = countCaughtReports(page);
     const errorSurfaceRenderings = await recordErrorSurfaces(page);
-    const borrowerPath = `/api/borrowers/${PRIMARY_BORROWER.borrower_id}`;
-    const borrowerReads = () => mockApi.calls.filter((call) => call.path === borrowerPath).length;
+    const borrowerReads = borrowerReadCounter(mockApi);
 
-    // `evidence_events` is a required array on the wire; a null one is a
-    // payload Borrower 360 provably cannot render (it maps over it). The URL
-    // carries a query string so the leak check below has one to find.
-    const broken = { ...PRIMARY_BORROWER, evidence_events: null } as unknown as Borrower360;
-    mockApi.register<Borrower360>('GET', '/api/borrowers/:id', () => ({ body: broken }));
+    // The URL carries a query string so the leak check below has one to find.
+    answerMalformedBorrower(mockApi);
     await page.goto(`/borrower-360/${PRIMARY_BORROWER.borrower_id}?from=lead-queue&state=TX`, {
       waitUntil: 'domcontentloaded',
     });
@@ -134,7 +157,7 @@ test.describe('render throw inside a route', () => {
     await expect(surface.getByRole('button', { name: 'Try again' })).toBeVisible();
     await expect(surface.getByRole('button', { name: 'Reload' })).toBeVisible();
     await expect(surface).toContainText('Route · Borrower 360');
-    await expect.poll(() => caughtReports, 'the boundary reported the catch once').toBe(1);
+    await expect.poll(caughtReports, 'the boundary reported the catch once').toBe(1);
     const readsAtCatch = borrowerReads();
     expect(readsAtCatch, 'the route read the (malformed) borrower').toBeGreaterThan(0);
 
@@ -158,7 +181,7 @@ test.describe('render throw inside a route', () => {
     await expect(main).toContainText(PRIMARY_BORROWER.evidence_events[0].display_text);
     await expect(page.locator(ERROR_SURFACE_SELECTOR), 'the recovered route shows no error surface').toHaveCount(0);
     expect(borrowerReads(), 'Try again issued exactly one (user-initiated) re-read').toBe(readsAtCatch + 1);
-    expect(caughtReports, 'the fixed data rendered without a second catch').toBe(1);
+    expect(caughtReports(), 'the fixed data rendered without a second catch').toBe(1);
     expect(await page.locator('#root').evaluate((node) => node.childElementCount)).toBeGreaterThan(0);
     await expect(page.getByRole('navigation', { name: 'Primary navigation' })).toBeVisible();
     await expect(page.getByRole('banner')).toBeVisible();
@@ -172,6 +195,51 @@ test.describe('render throw inside a route', () => {
       expect(html).not.toMatch(/[?&][a-z_]+=/);
       expect(html).not.toContain('Cannot read properties');
     }
+  });
+
+  test('Try again also recovers a Back revisit that re-threw from the payload the first visit cached', async ({ app, hygiene, mockApi, page }) => {
+    allowCaughtRenderThrow(hygiene);
+    const caughtReports = countCaughtReports(page);
+    const borrowerReads = borrowerReadCounter(mockApi);
+    const surface = page.locator(ERROR_SURFACE);
+    const dossierPath = `/borrower-360/${PRIMARY_BORROWER.borrower_id}`;
+
+    answerMalformedBorrower(mockApi);
+    await page.goto(dossierPath, { waitUntil: 'domcontentloaded' });
+    await expect(surface).toBeVisible();
+    await expect(surface).toHaveAttribute('data-error-kind', 'render');
+    await expect.poll(caughtReports, 'the first visit was caught once').toBe(1);
+    const readsAtCatch = borrowerReads();
+    expect(readsAtCatch, 'the route read the (malformed) borrower').toBeGreaterThan(0);
+
+    // The user leaves for the Lead Queue...
+    await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('link', { name: 'Leads' }).click();
+    await expect(page).toHaveURL(/\/lead-queue$/);
+    await app.settle();
+    await expect(surface).toHaveCount(0);
+
+    // ...and comes back with Back, well inside the cache's lifetime. The route
+    // throws on its first render straight from the cached payload: a render
+    // that throws never commits, so it subscribes no observer and reads nothing.
+    await page.goBack();
+    await expect(page).toHaveURL(new RegExp(`${dossierPath}$`));
+    await expect(surface).toBeVisible();
+    await expect(surface).toHaveAttribute('data-error-kind', 'render');
+    await expect.poll(caughtReports, 'the revisit re-threw and was caught once more').toBe(2);
+    await expect.poll(() => mockApi.inflight === 0 && mockApi.idleMs >= 500).toBe(true);
+    expect(borrowerReads(), 'the revisit re-threw from the cache without a borrower read').toBe(readsAtCatch);
+
+    // The API is fixed; the user clicks Try again.
+    mockApi.register<Borrower360>('GET', '/api/borrowers/:id', () => ({ body: PRIMARY_BORROWER }));
+    await surface.getByRole('button', { name: 'Try again' }).click();
+
+    const main = page.locator('#main-content');
+    await expect(main.locator('h1')).toHaveText(`Borrower ${PRIMARY_BORROWER.borrower_id}`);
+    await app.settle();
+    await expect(main).toContainText(PRIMARY_BORROWER.evidence_events[0].display_text);
+    await expect(page.locator(ERROR_SURFACE_SELECTOR), 'the recovered route shows no error surface').toHaveCount(0);
+    expect(borrowerReads(), 'Try again issued exactly one (user-initiated) re-read').toBe(readsAtCatch + 1);
+    expect(caughtReports(), 'the fixed data rendered without a further catch').toBe(2);
   });
 });
 

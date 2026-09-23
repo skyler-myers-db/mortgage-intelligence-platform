@@ -16,9 +16,10 @@ import { ErrorSurface, type ErrorSurfaceVariant } from './ErrorBoundaryFallback'
  *              re-rendering can never succeed.
  *   - render : "Try again" runs `onRetry`, then clears the boundary and
  *              re-renders the children; Reload is the fallback. The route
- *              boundary (ErrorBoundaryRoute) uses `onRetry` to discard the
- *              failed route's cached queries, so the re-mounted route re-reads
- *              its data instead of re-throwing on the same cached payload.
+ *              boundary (ErrorBoundaryRoute) uses `onRetry` to discard every
+ *              cached query no mounted component observes (the failed route's
+ *              among them), so the re-mounted route re-reads its data instead
+ *              of re-throwing on the same cached payload.
  *
  * Logging is NOT done here: React reports every boundary-caught error to the
  * root's `onCaughtError` (lib/clientErrorLog), which reads this boundary's
