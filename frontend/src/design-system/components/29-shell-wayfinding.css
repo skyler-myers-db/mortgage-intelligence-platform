@@ -1,7 +1,8 @@
 /* ============================================================
    SHELL WAYFINDING (wave 1c, audit 2026-09-21 shell-04 / shell-06)
    Initial-stylesheet rules only: the identity popup's styles load on
-   demand (components/layout/IdentityMenuPanel.css).
+   demand (components/layout/IdentityMenuPanel.css) and the dossier pager's
+   ship with the Borrower 360 chunk (routes/borrower-360.pager.css).
    ============================================================ */
 /* Identity menu anchor: ADDITIVE to the prototype topbar, which has no
    account control (design_files/Module 0 Prototype.html:1206-1243). The

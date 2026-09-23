@@ -1,8 +1,9 @@
 /**
  * Rendered-layer proofs for the wave-1c lane "shell-wayfinding" (audit
- * 2026-09-21 shell-04, shell-06, shell-08): the topbar identity menu and the
- * linked breadcrumbs with the queue context. Every assertion reads the built
- * app's DOM, geometry or computed style at 1440x900.
+ * 2026-09-21 shell-04, shell-06, shell-08): the topbar identity menu, linked
+ * breadcrumbs with the queue context, and the Borrower 360 pager and J/K keys.
+ * Every assertion reads the built app's DOM, geometry or computed style at
+ * 1440x900.
  */
 import type { Locator, Page } from '@playwright/test';
 import { expect, test, type FixtureTheme } from './test';
@@ -107,6 +108,14 @@ test.describe('identity menu (shell-06)', () => {
   });
 });
 
+/** Masked ids of the dossiers the app read (GET /api/borrowers/:id only). */
+function dossierReads(calls: ReadonlyArray<{ method: string; path: string }>): string[] {
+  return calls
+    .filter((call) => call.method === 'GET')
+    .map((call) => /^\/api\/borrowers\/(B-[0-9A-Z]{13})$/.exec(call.path)?.[1])
+    .filter((id): id is string => Boolean(id));
+}
+
 /** The masked ids of the ranked rows, in the order the queue shows them. */
 async function queueIds(page: Page): Promise<string[]> {
   const rows = page.locator('table.tbl tbody tr:not(.tbl__expand)');
@@ -153,13 +162,55 @@ test.describe('queue-to-dossier wayfinding (shell-04)', () => {
     });
   }
 
-  test('a dossier opened by URL keeps its queue crumb through the session fallback; Offer and asset crumbs link to real indexes', async ({ app, page }) => {
+  test('the pager steps through the queue with J / K and never reads a neighbour ahead of time', async ({ app, page, mockApi }) => {
+    await app.gotoRoute('/lead-queue?state=IL');
+    const ids = await queueIds(page);
+    await openDossierFromQueue(page, 1);
+    await app.settle();
+
+    const pager = page.getByRole('navigation', { name: 'Lead queue position' });
+    await expect(pager).toContainText('2 of 3 in IL');
+    // Opening a dossier writes a VIEW_BORROWER audit row: only the one opened
+    // was read, not the previous or next borrower.
+    expect(dossierReads(mockApi.calls)).toEqual([ids[1]]);
+
+    await page.keyboard.press('j');
+    await expect(page).toHaveURL(new RegExp(`/borrower-360/${ids[2]}$`));
+    await app.settle();
+    await expect(pager).toContainText('3 of 3 in IL');
+    await expect(pager.getByRole('button', { name: 'Next' })).toBeDisabled();
+    expect(dossierReads(mockApi.calls)).toEqual([ids[1], ids[2]]);
+    await page.keyboard.press('k');
+    await expect(page).toHaveURL(new RegExp(`/borrower-360/${ids[1]}$`));
+    await app.settle();
+    // Back on a dossier read moments ago: the cached read serves it, and
+    // still nothing ahead of the reviewer (ids[0]) was read.
+    expect(dossierReads(mockApi.calls)).not.toContain(ids[0]);
+    await pager.getByRole('button', { name: 'Previous' }).click();
+    await expect(page).toHaveURL(new RegExp(`/borrower-360/${ids[0]}$`));
+    await app.settle();
+    await expect(pager).toContainText('1 of 3 in IL');
+    expect([...new Set(dossierReads(mockApi.calls))]).toEqual([ids[1], ids[2], ids[0]]);
+
+    // Scoped like the queue cursor: J typed into the topbar search is text.
+    const searchBox = page.getByRole('combobox', { name: 'Search borrowers' });
+    await searchBox.focus();
+    await page.keyboard.press('j');
+    await expect(searchBox).toHaveValue('j');
+    await expect(page).toHaveURL(new RegExp(`/borrower-360/${ids[0]}$`));
+    // The crumb still returns to the exact filtered queue after paging.
+    await expect(page.getByRole('navigation', { name: 'Breadcrumb' }).getByRole('link', { name: 'Lead Queue · IL' }))
+      .toHaveAttribute('href', '/lead-queue?state=IL');
+  });
+
+  test('a dossier opened by URL keeps its queue through the session fallback; Offer and asset crumbs link to real indexes', async ({ app, page }) => {
     await app.gotoRoute('/lead-queue?state=IL');
     const ids = await queueIds(page);
     // A fresh document with no history state: the stored queue lists it.
     await app.gotoRoute(`/borrower-360/${ids[2]}`);
     const crumbs = page.getByRole('navigation', { name: 'Breadcrumb' });
     await expect(crumbs.getByRole('link', { name: 'Lead Queue · IL' })).toHaveAttribute('href', '/lead-queue?state=IL');
+    await expect(page.getByRole('navigation', { name: 'Lead queue position' })).toContainText('3 of 3 in IL');
 
     await page.getByRole('link', { name: 'Build outreach draft' }).click();
     await expect(page).toHaveURL(new RegExp(`/offer-orchestrator/${ids[2]}$`));
@@ -169,6 +220,7 @@ test.describe('queue-to-dossier wayfinding (shell-04)', () => {
     await crumbs.getByRole('link', { name: ids[2] }).click();
     await expect(page).toHaveURL(new RegExp(`/borrower-360/${ids[2]}$`));
     await expect(crumbs.locator('[aria-current="page"]')).toHaveText(ids[2]);
+    await expect(page.getByRole('navigation', { name: 'Lead queue position' })).toContainText('3 of 3');
 
     await app.gotoRoute('/data-estate/assets/borrower_360');
     const assetCrumbs = page.getByRole('navigation', { name: 'Breadcrumb' });
