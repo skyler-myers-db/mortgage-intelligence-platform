@@ -32,6 +32,10 @@
   );
 }
 
+/* The VIEW preset pill keeps its label and value on one line when the
+   Console narrows the header ("Sales / ops" wrapped). */
+.lead-table__header-actions .filter { white-space: nowrap; }
+
 /* One line per cell: a primary value, then `+n`. Chips shrink with an
    ellipsis; the `+n` and compliance flags never do. */
 .lead-table__line {

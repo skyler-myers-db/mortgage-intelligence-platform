@@ -227,6 +227,16 @@ test.describe('column presets', () => {
       await expectReachable(flags.locator('.chip', { hasText: 'Owner unresolved' }), `the Owner unresolved chip (${view} view)`);
     });
   }
+
+  test('the VIEW pill keeps "Sales ops" on one line when the Console narrows the header', async ({ app, page }) => {
+    await app.gotoRoute('/lead-queue?view=sales-ops');
+    const pill = page.locator('.lead-table__header-actions button[aria-haspopup="listbox"][aria-label^="VIEW:"]');
+    await expect(pill).toContainText('Sales ops');
+    const closed = await pill.evaluate((el) => el.getBoundingClientRect().height);
+    await app.openConsole();
+    await expect.poll(() => pill.evaluate((el) => el.getBoundingClientRect().height), 'one line with the Console open').toBe(closed);
+    await expectReachable(pill, 'the VIEW pill with the Console open');
+  });
 });
 
 test.describe('the table scroller fills to the fold from its own top edge', () => {

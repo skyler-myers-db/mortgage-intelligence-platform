@@ -10,8 +10,11 @@ export const BULK_APPROVE_CONCURRENCY = 3;
  * estimate on first paint, so the comfortable height is the safe default.
  */
 export const LEAD_ROW_ESTIMATE_PX = 44;
-/** Borrower 360 preview plus the workflow strip that took the row's timestamps and actions. */
-export const LEAD_EXPANDED_PREVIEW_ESTIMATE_PX = 440;
+/**
+ * Borrower 360 preview plus the workflow strip that took the row's timestamps
+ * and actions: measured at 514px at 1440x900, so the estimate starts there.
+ */
+export const LEAD_EXPANDED_PREVIEW_ESTIMATE_PX = 520;
 export const LEAD_ROW_OVERSCAN = 12;
 export const LEAD_VIRTUALIZATION_THRESHOLD = 120;
 

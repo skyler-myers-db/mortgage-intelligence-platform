@@ -47,7 +47,7 @@ export interface LeadTableColumn {
   key: LeadTableColumnKey;
   /** Visible header text (empty for the checkbox and chevron columns). */
   label: string;
-  /** `<col>` class that owns the width (03-score-and-table / 22-queue-layout). */
+  /** `<col>` class that owns the width (design-system/components/03-score-and-table.css). */
   colClass: string;
   /** Present on columns whose header is a sort button. */
   sortKey?: SortKey;

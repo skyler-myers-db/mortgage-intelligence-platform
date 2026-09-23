@@ -331,7 +331,7 @@ export function LeadTable({
                 makes the affordance scannable — an LO scrolling the
                 queue can spot the shortcut without reading prose.
               */}
-              Expand a row to preview. <kbd>A</kbd> approves, <kbd>R</kbd> rejects the expanded pending row while focus is in the table.
+              Expand a row to preview. <kbd>A</kbd> approves, <kbd>R</kbd> rejects it while the table has focus and no panel or menu is open.
               {approverGate === null && actorEmail && (
                 <> Approving as <span className="mono" data-testid="lead-approving-as">{actorEmail}</span>.</>
               )}
