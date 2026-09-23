@@ -106,8 +106,14 @@ test.describe('ramp and legend encoding (dataviz-02 / responsive-05)', () => {
       await waitForStateFills(page);
 
       const national = await readMapPaint(page);
-      // Adjacent steps (no data -> lvl-1 -> ... -> lvl-4) are clearly apart.
-      const lightness = national.swatches.map(oklabL);
+      // Adjacent painted steps (no data -> lvl-1 -> ... -> lvl-4), measured on
+      // the state fills themselves, are clearly apart.
+      const painted = [0, 1, 2, 3, 4].map((cls) => {
+        const state = national.states.find((s) => s.cls === cls);
+        if (!state) throw new Error(`no state painted class ${cls}`);
+        return state.fill;
+      });
+      const lightness = painted.map(oklabL);
       for (let step = 1; step < lightness.length; step += 1) {
         const delta = Math.abs(lightness[step] - lightness[step - 1]);
         expect(delta, `${theme} step ${step - 1} -> ${step}: L ${lightness.map((l) => l.toFixed(3)).join(' ')}`).toBeGreaterThanOrEqual(0.06);
@@ -118,7 +124,7 @@ test.describe('ramp and legend encoding (dataviz-02 / responsive-05)', () => {
         expect(Math.sign(lightness[step] - lightness[step - 1])).toBe(direction);
       }
       // Not a pale wash: the top step stands off the empty base.
-      expect(contrastRatio(national.swatches[4], national.swatches[0])).toBeGreaterThanOrEqual(3);
+      expect(contrastRatio(painted[4], painted[0])).toBeGreaterThanOrEqual(3);
 
       // Every class 1-4 is painted, and every painted state equals its swatch.
       const expected: Record<string, number> = { il: 4, tx: 4, ca: 3, fl: 3, az: 2, wa: 2, co: 1, ga: 1 };
