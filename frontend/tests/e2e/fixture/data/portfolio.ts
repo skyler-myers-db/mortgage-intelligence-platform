@@ -12,7 +12,7 @@ import type {
   PortfolioPreview,
   SalesTeamMember,
 } from '../../../../src/types';
-import { fixture, json, type FixtureEntry } from '../mockApi';
+import { fixture, json, type FixtureEntry, type FixtureRequest } from '../mockApi';
 import { SNAPSHOT_AT, TOTALS } from './reference';
 
 function trend(latest: number, growthPct: number): KpiTrend {
@@ -59,6 +59,42 @@ export const PORTFOLIO_PREVIEW: PortfolioPreview = {
   in_outreach_count: TOTALS.actioned,
 };
 
+/**
+ * The preview under `marketing_eligibility: 'Eligible only'`, the Lead Queue's
+ * default contactability that Portfolio Builder, Segment Intelligence and
+ * Home's approval-queue banner request. The real endpoint applies the
+ * eligibility predicate to the one aggregate statement, so every headline
+ * count is the contactable subset (reference.ts TOTALS.contactable*), while
+ * the lifecycle counts (approved / in outreach) are the same rows either way.
+ */
+export const CONTACTABLE_PORTFOLIO_PREVIEW: PortfolioPreview = {
+  ...PORTFOLIO_PREVIEW,
+  marketable_population: TOTALS.contactable,
+  high_intent_leads: TOTALS.contactableInTheMoney,
+  top_tier_opportunities: TOTALS.contactableHighOpportunity,
+  offers_recommended: TOTALS.contactableOffersRecommended,
+  total_current_lien_balance_usd: TOTALS.contactable * 318400,
+  offer_mix: [
+    { offer_code: 'refi_plus_heloc', borrower_count: 890 },
+    { offer_code: 'refi', borrower_count: 720 },
+    { offer_code: 'heloc', borrower_count: 490 },
+    { offer_code: 'cash_out', borrower_count: 270 },
+    { offer_code: 'purchase', borrower_count: 150 },
+    { offer_code: 'retention', borrower_count: 90 },
+  ],
+  trends: {
+    marketable_population: trend(TOTALS.contactable, 1.2),
+    high_intent_leads: trend(TOTALS.contactableInTheMoney, 4.6),
+    top_tier_opportunities: trend(TOTALS.contactableHighOpportunity, 1.5),
+    offers_recommended: trend(TOTALS.contactableOffersRecommended, 3.1),
+  },
+};
+
+function previewFor(request: FixtureRequest): PortfolioPreview {
+  const criteria = (request.body as { criteria?: { marketing_eligibility?: unknown } } | null)?.criteria;
+  return criteria?.marketing_eligibility === 'Eligible only' ? CONTACTABLE_PORTFOLIO_PREVIEW : PORTFOLIO_PREVIEW;
+}
+
 export const HOME_SUMMARY: HomeSummary = {
   status: 'delta',
   previous_visit_at: '2026-07-09T14:30:00+00:00',
@@ -85,7 +121,7 @@ export const SALES_TEAM: SalesTeamMember[] = [
 ];
 
 export const portfolioFixtures: FixtureEntry[] = [
-  fixture('POST', '/api/portfolio/preview', () => json<PortfolioPreview>(PORTFOLIO_PREVIEW)),
+  fixture('POST', '/api/portfolio/preview', (request) => json<PortfolioPreview>(previewFor(request))),
   fixture('POST', '/api/portfolio/campaign-recommendation', () =>
     json<CampaignRecommendationResponse>({
       generation_mode: 'reviewed_fallback',

@@ -51,33 +51,36 @@ export const offerFixtures: FixtureEntry[] = [
       thresholds_applied: { min_spread_bps: 75, min_equity_pct: 15 },
     });
   }),
-  fixture('POST', '/api/outreach/draft', (request) => {
-    const borrower = borrowerById(requestedBorrowerId(request)) ?? PRIMARY_BORROWER;
-    const channel = requestedChannel(request);
-    return json<OutreachDraftResult>({
-      generation_id: 'gen-fixture-0001',
-      response_hash: 'c'.repeat(64),
-      source_refreshed_at: SNAPSHOT_AT,
-      borrower_id: borrower.borrower_id,
-      campaign_id: null,
-      variant_name: null,
-      offer_code: borrower.recommended_offer_code ?? 'refi',
-      channel,
-      subject: channel === 'email' ? 'A quick review of your mortgage options' : null,
-      body: [
-        'Hello,',
-        'Based on current market rates and your estimated home equity, a mortgage review may lower your monthly cost. A loan officer can walk you through the numbers, with no obligation.',
-        `${LENDER_NAME} · NMLS #000000 · Equal Housing Lender`,
-      ].join('\n\n'),
-      status: 'draft',
-      disclosure_version: 'fixture-2026-07',
-      disclosure_state: borrower.state,
-      marketing_eligible: true,
-      generation_mode: 'governed_fallback',
-      generator_label: 'Reviewed outreach template',
-      strategy_summary: 'Benefit-led framing; human approval is required before any send.',
-      evidence_summary: borrower.evidence_events.map((event) => event.display_text),
-      evidence_assets: ['mip.gold.borrower_360', 'mip.gold.evidence_events'],
-    });
-  }),
+  fixture('POST', '/api/outreach/draft', (request) => json<OutreachDraftResult>(outreachDraftFor(request))),
 ];
+
+/** The governed draft for the requested borrower and channel; specs override fields on it. */
+export function outreachDraftFor(request: FixtureRequest): OutreachDraftResult {
+  const borrower = borrowerById(requestedBorrowerId(request)) ?? PRIMARY_BORROWER;
+  const channel = requestedChannel(request);
+  return {
+    generation_id: 'gen-fixture-0001',
+    response_hash: 'c'.repeat(64),
+    source_refreshed_at: SNAPSHOT_AT,
+    borrower_id: borrower.borrower_id,
+    campaign_id: null,
+    variant_name: null,
+    offer_code: borrower.recommended_offer_code ?? 'refi',
+    channel,
+    subject: channel === 'email' ? 'A quick review of your mortgage options' : null,
+    body: [
+      'Hello,',
+      'Based on current market rates and your estimated home equity, a mortgage review may lower your monthly cost. A loan officer can walk you through the numbers, with no obligation.',
+      `${LENDER_NAME} · NMLS #000000 · Equal Housing Lender`,
+    ].join('\n\n'),
+    status: 'draft',
+    disclosure_version: 'fixture-2026-07',
+    disclosure_state: borrower.state,
+    marketing_eligible: true,
+    generation_mode: 'governed_fallback',
+    generator_label: 'Reviewed outreach template',
+    strategy_summary: 'Benefit-led framing; human approval is required before any send.',
+    evidence_summary: borrower.evidence_events.map((event) => event.display_text),
+    evidence_assets: ['mip.gold.borrower_360', 'mip.gold.evidence_events'],
+  };
+}
