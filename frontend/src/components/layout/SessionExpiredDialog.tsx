@@ -1,3 +1,7 @@
+// Shell-initial, rendered at most once per document: compiler memo caches
+// would only add initial-chunk bytes (see DegradedBanner.tsx).
+'use no memo';
+
 import { useCallback, useId, useLayoutEffect, useRef, useSyncExternalStore } from 'react';
 import { Icon } from '../Icon';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
