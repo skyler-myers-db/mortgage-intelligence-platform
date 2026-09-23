@@ -83,7 +83,16 @@ export function ExecutiveProvenanceNote({
   );
 }
 
-export function ExecutiveView({ data, leadParams }: { data: ExecutiveAnalyticsResponse; leadParams: LenderFilterParams }) {
+export function ExecutiveView({
+  data,
+  leadParams,
+  filtersActive = false,
+}: {
+  data: ExecutiveAnalyticsResponse;
+  leadParams: LenderFilterParams;
+  /** The tab's state / segment / lender filters narrow the KPIs; the rate window says it ignores them. */
+  filtersActive?: boolean;
+}) {
   return (
     <>
       <div className="kpi-row">
@@ -92,7 +101,7 @@ export function ExecutiveView({ data, leadParams }: { data: ExecutiveAnalyticsRe
         <KpiCard label="Primary Offer Paths" value={fmt(data.totals.offer_recommended_borrowers)} delta="Offer path assigned" deltaDir="up" />
         <KpiCard label="Approved Outreach" value={fmt(data.totals.approved_borrowers)} delta={`${fmt(data.totals.actioned_borrowers)} actioned`} deltaDir="flat" />
       </div>
-      <RateWindowSection />
+      <RateWindowSection filtersActive={filtersActive} />
       <section className="surface analytics-section">
         <div className="surface__hdr surface__hdr--split">
           <div>

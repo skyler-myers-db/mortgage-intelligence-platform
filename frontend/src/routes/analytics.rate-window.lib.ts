@@ -1,7 +1,7 @@
 /**
  * Pure model for the "Why now" rate window (dataviz-08 / dataviz-06): the
  * weekly market rate against the book's note-rate band, the in-the-money
- * count per week, the spread sentence, and the labelled refi-screen line.
+ * count per week, the spread sentence, and the labelled spread-screen line.
  *
  * Everything here is deterministic layout math over the API payload so the
  * SVG component stays a thin renderer and the arithmetic is unit-pinnable
@@ -41,9 +41,18 @@ export function niceTicks(min: number, max: number, count = 5): number[] {
   return Array.from({ length: steps + 1 }, (_, idx) => Number((start + idx * step).toFixed(decimals)));
 }
 
-/** Basis points the book's median note rate sits ABOVE the market rate (positive = refi tailwind). */
+/**
+ * Basis points the book's median note rate sits ABOVE the market rate
+ * (positive = refi tailwind). Rounds half to even, like the governed
+ * fn_rate_spread (BROUND), so a 12.5 bps gap reads 12 here and there. The
+ * percent inputs carry binary noise (7.10 - 6.22 = 0.8799999...), so the raw
+ * value is snapped to 1e-6 bps before the tie test.
+ */
 export function spreadBps(medianPct: number, marketPct: number): number {
-  return Math.round((medianPct - marketPct) * 100);
+  const raw = Number(((medianPct - marketPct) * 100).toFixed(6));
+  const floor = Math.floor(raw);
+  if (raw - floor === 0.5) return floor % 2 === 0 ? floor : floor + 1;
+  return Math.round(raw);
 }
 
 export function spreadSentence(bps: number): string {
@@ -120,6 +129,8 @@ export interface RateWindowModel {
   rate: { min: number; max: number; ticks: number[] };
   itm: { max: number; ticks: number[] };
   xTicks: RateWindowXTick[];
+  /** Accessible description of the chart image: every number the marks draw. */
+  ariaLabel: string;
 }
 
 /** Vertical position (0..100, top-down) inside the rate panel, with a small inset so edge strokes stay visible. */
@@ -186,7 +197,7 @@ export function buildRateWindowModel(response: RateWindowResponse): RateWindowMo
           return {
             minSpreadBps,
             ratePct,
-            label: `Refi screen: ${minSpreadBps} bps below the book median (${formatRatePct(ratePct)})`,
+            label: `Spread screen: ${minSpreadBps} bps below the book median (${formatRatePct(ratePct)})`,
           };
         })()
       : null;
@@ -199,7 +210,20 @@ export function buildRateWindowModel(response: RateWindowResponse): RateWindowMo
   const itmTicks = niceTicks(0, itmMax, 5);
 
   const bookLienCount = Math.max(0, response.book_lien_count);
-  const itmSentence = `${current.itmCount.toLocaleString('en-US')} of ${bookLienCount.toLocaleString('en-US')} fixed-rate liens clear the refi screen at this week's rate.`;
+  // "In the money" is the full fn_in_the_money rule (spread AND equity); the
+  // reference line is only its spread leg, so the two never share a name.
+  const itmSentence = `${current.itmCount.toLocaleString('en-US')} of ${bookLienCount.toLocaleString('en-US')} fixed-rate liens in the whole book are in the money at this week's rate (spread and equity screens).`;
+  const spreadText = bps === null
+    ? 'The fixed-rate book is empty, so there is no median note rate to compare against.'
+    : spreadSentence(bps);
+  const ariaLabel = [
+    `${RATE_WINDOW_TITLE}.`,
+    `30-year fixed ${formatRatePct(current.marketPct)} in the week of ${current.week}` +
+      (bookMedianPct === null ? '.' : ` against a book median note rate of ${formatRatePct(bookMedianPct)}.`),
+    spreadText,
+    threshold ? `${threshold.label}.` : null,
+    itmSentence,
+  ].filter((part): part is string => part !== null).join(' ');
 
   return {
     points,
@@ -210,13 +234,12 @@ export function buildRateWindowModel(response: RateWindowResponse): RateWindowMo
     bookLienCount,
     bookAsOf: response.book_as_of ?? null,
     spreadBps: bps,
-    spreadSentence: bps === null
-      ? 'The fixed-rate book is empty, so there is no median note rate to compare against.'
-      : spreadSentence(bps),
+    spreadSentence: spreadText,
     itmSentence,
     threshold,
     rate: { min: rateTicks[0], max: rateTicks[rateTicks.length - 1], ticks: rateTicks },
     itm: { max: itmTicks[itmTicks.length - 1], ticks: itmTicks },
     xTicks: buildXTicks(points),
+    ariaLabel,
   };
 }

@@ -3,7 +3,7 @@
  *
  * Rendered-layer pins for the "Why now" rate window (dataviz-08 /
  * dataviz-06): two stacked panels on one axis, the spread sentence, the
- * labelled refi-screen line, the evidence chip's drawer destination, the
+ * labelled spread-screen line, the evidence chip's drawer destination, the
  * table alternative and the warming-up degraded state.
  */
 import { act } from 'react';
@@ -96,10 +96,12 @@ describe('RateWindowPanel', () => {
     expect(container.querySelectorAll('.rate-window__panel svg')).toHaveLength(2);
     const summary = container.querySelector('[data-testid="rate-window-summary"]');
     expect(summary?.textContent).toContain("The 30-year is 88 bps below the book's median note rate.");
-    expect(summary?.textContent).toContain("1,956 of 48,210 fixed-rate liens clear the refi screen at this week's rate.");
+    expect(summary?.textContent).toContain(
+      "1,956 of 48,210 fixed-rate liens in the whole book are in the money at this week's rate (spread and equity screens).",
+    );
     // dataviz-06: a labelled reference line, not just a stroke.
     expect(container.querySelector('[data-testid="rate-window-threshold"]')?.textContent)
-      .toBe('Refi screen: 75 bps below the book median (6.35%)');
+      .toBe('Spread screen: 75 bps below the book median (6.35%)');
     expect(container.querySelectorAll('line.rate-window__threshold')).toHaveLength(1);
     expect(container.querySelector('[data-testid="rate-window-current"]')?.textContent).toContain('6.22%');
     // Only the bottom panel carries the week ticks: one x-axis, never two.
@@ -107,18 +109,35 @@ describe('RateWindowPanel', () => {
     expect(container.querySelectorAll('.rate-window__panel--itm .analytics-chart__tick--x').length).toBeGreaterThan(1);
     // The disclosure names today's book against the historical rate.
     expect(container.querySelector('[data-testid="rate-window-asof"]')?.textContent).toContain("Today's book (as of");
-    // The image has an accessible description carrying the same sentence.
-    expect(container.querySelector('.rate-window__panels')?.getAttribute('aria-label')).toContain('88 bps below');
+    // The image has an accessible description carrying the current print, the
+    // spread and the threshold value, not just the sentence.
+    const described = container.querySelector('.rate-window__panels')?.getAttribute('aria-label') ?? '';
+    expect(described).toContain('30-year fixed 6.22%');
+    expect(described).toContain('88 bps below');
+    expect(described).toContain('Spread screen: 75 bps below the book median (6.35%)');
     // The edge month labels are anchored inside the plot.
     const xTicks = container.querySelectorAll('.rate-window__panel--itm .analytics-chart__tick--x');
     expect(xTicks[0].classList.contains('rate-window__xtick--start')).toBe(true);
     expect(xTicks[xTicks.length - 1].classList.contains('rate-window__xtick--end')).toBe(true);
+    // Unfiltered by design, and says so only when a filter would suggest otherwise.
+    expect(container.querySelector('[data-testid="rate-window-unfiltered"]')).toBeNull();
+    expect(container.querySelector('[data-testid="rate-window-asof"]')?.textContent).toContain('filters above do not');
+  });
+
+  it('flags that the tab filters do not apply while a filter is active', () => {
+    act(() => {
+      root.render(<RateWindowPanel data={RESPONSE} filtersActive />);
+    });
+    expect(container.querySelector('[data-testid="rate-window-unfiltered"]')?.textContent)
+      .toBe('All states: filters not applied');
   });
 
   it('offers a table alternative listing the same weeks', () => {
     render();
-    const toggle = container.querySelector<HTMLButtonElement>('button[aria-pressed]');
+    const toggle = container.querySelector<HTMLButtonElement>('[data-testid="rate-window-view-toggle"]');
+    // One mechanism: the label names the view it switches to, no aria-pressed on top.
     expect(toggle?.textContent).toBe('View as table');
+    expect(toggle?.hasAttribute('aria-pressed')).toBe(false);
     act(() => toggle?.click());
     expect(container.querySelectorAll('.rate-window__panel svg')).toHaveLength(0);
     const rows = container.querySelectorAll('[data-testid="rate-window-table"] tbody tr');
@@ -126,7 +145,8 @@ describe('RateWindowPanel', () => {
     expect(rows[0].textContent).toContain(WEEKS[0].week);
     expect(rows[rows.length - 1].textContent).toContain('(current)');
     expect(rows[rows.length - 1].textContent).toContain('1,956');
-    act(() => container.querySelector<HTMLButtonElement>('button[aria-pressed]')?.click());
+    expect(toggle?.textContent).toBe('View as chart');
+    act(() => toggle?.click());
     expect(container.querySelectorAll('.rate-window__panel svg')).toHaveLength(2);
   });
 
@@ -138,6 +158,13 @@ describe('RateWindowPanel', () => {
     const cited = (DRAWER_SOURCES.rateWindow.signals ?? []).map((s) => s.source);
     expect(cited).toContain('mip.silver.market_rates_weekly');
     expect(cited).toContain('mip.gold.rate_window_weekly');
+    // The band is measured from the book tables, and the rule cites the UC
+    // function paths so each signal deep-links to its asset page.
+    expect(cited).toContain('mip.silver.lien_current');
+    expect(cited).toContain('mip.gold.borrower_360');
+    expect(cited).toContain('mip.gold.fn_rate_spread');
+    expect(cited).toContain('mip.gold.fn_in_the_money');
+    for (const source of cited) expect(source).toMatch(/^mip\.[a-z_]+\.[a-z0-9_]+$/);
   });
 
   it('draws no threshold line and no band when the book is empty', () => {

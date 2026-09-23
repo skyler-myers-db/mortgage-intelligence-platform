@@ -1,7 +1,7 @@
 /**
  * Pure-model pins for the "Why now" rate window (dataviz-08 / dataviz-06):
  * the 1-2-5 nice ticks, the spread arithmetic and sentence, the labelled
- * refi-screen line, and the shared-axis layout.
+ * spread-screen line, and the shared-axis layout.
  */
 import { describe, expect, it } from 'vitest';
 import type { RateWindowResponse } from '../types';
@@ -62,6 +62,14 @@ describe('spread arithmetic', () => {
     expect(spreadSentence(88)).toBe("The 30-year is 88 bps below the book's median note rate.");
   });
 
+  it('rounds half to even like the governed fn_rate_spread (BROUND)', () => {
+    expect(spreadBps(6.125, 6.0)).toBe(12);
+    expect(spreadBps(6.135, 6.0)).toBe(14);
+    expect(spreadBps(6.0, 6.125)).toBe(-12);
+    expect(spreadBps(6.0, 6.135)).toBe(-14);
+    expect(spreadBps(6.126, 6.0)).toBe(13);
+  });
+
   it('flips the direction when the market is above the book and handles parity', () => {
     expect(spreadBps(6.0, 6.4)).toBe(-40);
     expect(spreadSentence(-40)).toBe("The 30-year is 40 bps above the book's median note rate.");
@@ -78,11 +86,13 @@ describe('buildRateWindowModel', () => {
     expect(model.current.week).toBe('2026-04-13');
     expect(model.spreadBps).toBe(88);
     expect(model.spreadSentence).toBe("The 30-year is 88 bps below the book's median note rate.");
-    expect(model.itmSentence).toBe("1,956 of 48,210 fixed-rate liens clear the refi screen at this week's rate.");
+    expect(model.itmSentence).toBe(
+      "1,956 of 48,210 fixed-rate liens in the whole book are in the money at this week's rate (spread and equity screens).",
+    );
     expect(model.threshold).toEqual({
       minSpreadBps: 75,
       ratePct: 6.35,
-      label: 'Refi screen: 75 bps below the book median (6.35%)',
+      label: 'Spread screen: 75 bps below the book median (6.35%)',
     });
     // The rate domain covers the band, the market line and the threshold; the
     // in-the-money domain starts at zero so the area reads as a count.
@@ -94,6 +104,12 @@ describe('buildRateWindowModel', () => {
     expect(model.points.map((p) => p.x)).toEqual([0, 50, 100]);
     expect(model.xTicks[0]).toEqual({ x: 0, label: 'Mar 2026', anchor: 'start', minor: false });
     expect(model.xTicks[model.xTicks.length - 1]).toMatchObject({ x: 100, label: 'Apr 2026', anchor: 'end', minor: false });
+    // The image's accessible description carries every number the marks draw.
+    expect(model.ariaLabel).toContain('30-year fixed 6.22% in the week of 2026-04-13');
+    expect(model.ariaLabel).toContain('book median note rate of 7.10%');
+    expect(model.ariaLabel).toContain('88 bps below');
+    expect(model.ariaLabel).toContain('Spread screen: 75 bps below the book median (6.35%).');
+    expect(model.ariaLabel).toContain('1,956 of 48,210');
   });
 
   it('maps values top-down inside each panel with the baseline at the bottom', () => {

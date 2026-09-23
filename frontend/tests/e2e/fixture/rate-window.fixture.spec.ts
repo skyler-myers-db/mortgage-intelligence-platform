@@ -2,14 +2,16 @@
  * Lane rate-window (dataviz-08 / dataviz-06): the "Why now" surface on the
  * Analytics Executive tab, rendered against the synthetic 60-week series in
  * data/rateWindow.ts. Pins the rendered layer: two stacked panels on one
- * x-axis, the spread sentence for the fixture's numbers, the labelled refi
+ * x-axis, the spread sentence for the fixture's numbers, the labelled spread
  * screen line, the mark colours against their legend, the axis geometry at
- * 1440 / 1280 / 390, the evidence chip's drawer destination, the warming-up
- * degraded state and the table alternative.
+ * 1440 / 1280 / 390, the parallel request, the evidence chip's drawer
+ * destination, the warming-up degraded state and the table alternative.
  */
 import type { Page } from '@playwright/test';
-import { RATE_WINDOW_EXPECTED, RATE_WINDOW_WEEK_COUNT } from './data/rateWindow';
-import { WAREHOUSE_WARMING_UP } from './mockApi';
+import type { RateWindowResponse } from '../../../src/types';
+import { analyticsFixtures } from './data/analytics';
+import { RATE_WINDOW, RATE_WINDOW_EXPECTED, RATE_WINDOW_WEEK_COUNT } from './data/rateWindow';
+import { json, WAREHOUSE_WARMING_UP } from './mockApi';
 import { expect, test } from './test';
 
 interface Box {
@@ -70,7 +72,7 @@ function expectAxisInsidePanel(geometry: AxisGeometry, label: string): void {
 }
 
 test.describe('analytics executive: why-now rate window', () => {
-  test('draws two stacked panels on one axis, states the spread in words and labels the refi screen', async ({ app, page }) => {
+  test('draws two stacked panels on one axis, states the spread in words and labels the spread screen', async ({ app, page }) => {
     await app.setTheme('dark');
     await app.gotoRoute('/analytics');
 
@@ -158,6 +160,35 @@ test.describe('analytics executive: why-now rate window', () => {
     ).toBe(false);
     // The detail is hidden on a narrow plot, never lost: the text and the image description keep it.
     await expect(page.getByTestId('rate-window-threshold')).toHaveText(RATE_WINDOW_EXPECTED.thresholdLabel);
+  });
+
+  test('the rate window is requested beside the executive read and says the tab filters do not apply', async ({ app, page, mockApi }) => {
+    const executive = analyticsFixtures.find((entry) => entry.method === 'GET' && entry.pattern === '/api/analytics/executive');
+    if (!executive) throw new Error('executive fixture missing');
+    let markRateWindowRequested: () => void = () => undefined;
+    const rateWindowRequested = new Promise<boolean>((resolve) => {
+      markRateWindowRequested = () => resolve(true);
+    });
+    let requestedBeforeExecutiveAnswered = false;
+    mockApi.register('GET', '/api/analytics/rate-window', () => {
+      markRateWindowRequested();
+      return json<RateWindowResponse>(RATE_WINDOW);
+    });
+    // Hold the executive answer until the rate window has been asked for; the
+    // bound only ends the failing case (a waterfall never asks first).
+    mockApi.register('GET', '/api/analytics/executive', async (request) => {
+      requestedBeforeExecutiveAnswered = await Promise.race([
+        rateWindowRequested,
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 5_000)),
+      ]);
+      return executive.handler(request);
+    });
+
+    await app.setTheme('light');
+    await app.gotoRoute('/analytics?states=CA');
+    await expect(page.getByTestId('rate-window')).toBeVisible();
+    expect(requestedBeforeExecutiveAnswered, 'rate window requested while the executive read was still open').toBe(true);
+    await expect(page.getByTestId('rate-window-unfiltered')).toHaveText('All states: filters not applied');
   });
 
   test('the evidence chip opens the drawer on the rate-window destination citing both source tables', async ({ app, page }) => {

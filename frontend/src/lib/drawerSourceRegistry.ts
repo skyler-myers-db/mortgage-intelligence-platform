@@ -338,9 +338,12 @@ export const DRAWER_SOURCES = defineDrawerSources({
     description:
       "Weekly FRED MORTGAGE30US print joined to today's fixed-rate book: the p25 / median / p75 note rates and the count in the money at each week's rate, using the same fn_rate_spread and fn_in_the_money primitives as scoring. The book is as-of the current refresh and applied to every week; this is not a portfolio history. Built by the gold refresh job, never per request.",
     signals: [
+      { label: 'Weekly series', source: 'mip.gold.rate_window_weekly', value: 'precomputed per refresh, read as-is' },
       { label: 'Market rate', source: 'mip.silver.market_rates_weekly', value: 'FRED MORTGAGE30US, weekly' },
-      { label: 'Book band', source: 'mip.gold.rate_window_weekly', value: 'p25 / median / p75' },
-      { label: 'In the money', source: 'fn_in_the_money(fn_rate_spread)', value: 'per week' },
+      { label: 'Book note rates', source: 'mip.silver.lien_current', value: 'fixed-rate first liens: p25 / median / p75' },
+      { label: 'Book gates', source: 'mip.gold.borrower_360', value: 'active lien, equity, lender thresholds' },
+      { label: 'Rate spread', source: 'mip.gold.fn_rate_spread', value: "note rate vs that week's print" },
+      { label: 'In the money', source: 'mip.gold.fn_in_the_money', value: 'spread and equity, per week' },
       { label: 'Book as of', source: 'mip.ref.refresh_run_state', value: 'current refresh' },
     ],
   },

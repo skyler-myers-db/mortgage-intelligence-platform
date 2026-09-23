@@ -165,10 +165,4 @@
     white-space: normal;
   }
 }
-@media (prefers-reduced-motion: no-preference) {
-  .rate-window__market,
-  .rate-window__itm-line,
-  .rate-window__current-dot {
-    transition: opacity var(--dur-base) var(--ease);
-  }
-}
+/* The chart is static: no mark animates, so reduced motion needs no override. */

@@ -3,7 +3,7 @@
  * 60-week MORTGAGE30US series ending on 2026-04-13 against one fixed-rate
  * book band. The numbers are chosen so the spec can state the expected
  * sentence exactly: book median 7.10% against a current print of 6.22% is
- * 88 bps, the refi screen sits 75 bps below the median at 6.35%, and the
+ * 88 bps, the spread screen sits 75 bps below the median at 6.35%, and the
  * last week counts 1,956 of 48,210 liens in the money.
  */
 import type { RateWindowResponse, RateWindowWeek } from '../../../../src/types';
@@ -64,8 +64,8 @@ export const RATE_WINDOW_EXPECTED = {
   lastWeek: isoWeek(RATE_WINDOW_WEEK_COUNT - 1),
   currentPrint: '6.22%',
   spreadSentence: "The 30-year is 88 bps below the book's median note rate.",
-  itmSentence: "1,956 of 48,210 fixed-rate liens clear the refi screen at this week's rate.",
-  thresholdLabel: 'Refi screen: 75 bps below the book median (6.35%)',
+  itmSentence: "1,956 of 48,210 fixed-rate liens in the whole book are in the money at this week's rate (spread and equity screens).",
+  thresholdLabel: 'Spread screen: 75 bps below the book median (6.35%)',
 } as const;
 
 export const rateWindowFixtures: FixtureEntry[] = [
