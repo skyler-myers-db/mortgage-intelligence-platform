@@ -1,74 +1,88 @@
 /**
  * useChoroplethLiveFacts — every network-backed fact the geography map
- * renders: the lazily-imported state topology, the per-state rollups (which
- * re-fetch on segment filter / mode / portfolio criteria), the per-state ZIP
- * rollups fetched on drill, and the S9 assigned-vs-unattended overlay.
- * Extracted from USChoroplethMap.tsx (file-size gate, plan item 3); the drill
- * state itself (level / selected / hover / drillStateId) stays in the
- * component, so the hover reset those effects perform arrives here as the
- * component's own `setHover`.
+ * renders: the lazily-imported state topology, the per-state rollups (keyed
+ * on segment filter / mode / portfolio criteria), the drilled state's ZIP
+ * rollups, and the S9 assigned-vs-unattended overlay.
+ *
+ * Audit dataviz-04 (2026-09-21): the rollups used raw effects whose `.catch`
+ * turned a cold warehouse into an empty map, a confident "0" and no retry.
+ * They now run through `useWarmingUpRetry`, the app's cold-start loop, on
+ * `mip/geo/...` query keys, so Home and Segment Intelligence share one cache
+ * entry per cohort and a 503 `warming_up` keeps retrying with a visible
+ * WarmingUpBlock. Unknown stays unknown (`null`), never `{}` or zero.
+ *
+ * Every read here is an aggregate over gold tables or Lakebase assignment
+ * counts (`backend/api/geo.py`); none writes an audit row, so the default
+ * refetch behaviour cannot inflate governance evidence.
  */
 
-import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { api, ApiError } from '../../lib/api';
 import type { GeoAssignmentOverlayResponse, GeoOverlayLevel } from '../../lib/api';
+import { queryKeys } from '../../lib/queryKeys';
+import {
+  useWarmingUpRetry,
+  type UseWarmingUpRetryResult,
+  type WarmingUpState,
+} from '../../lib/useWarmingUpRetry';
 import type { StateRollup, ZipRollup } from '../../types';
-import type { HoverState, Level, UsaSvgMap } from './USChoroplethMap.utils';
+import type { UsaSvgMap } from './USChoroplethMap.utils';
 import { loadUsaStateMap } from './USStateMapData';
 
+type Criteria = Record<string, string | number | null | undefined>;
+
+/** Geography rollup keys under the app's `mip` root (never collide with other reads). */
+export const geoQueryKeys = {
+  stateRollups: (cohort: readonly unknown[]) => [...queryKeys.all, 'geo', 'state-rollups', ...cohort] as const,
+  zipRollups: (state: string, cohort: readonly unknown[]) =>
+    [...queryKeys.all, 'geo', 'zip-rollups', state, ...cohort] as const,
+  assignmentOverlay: (level: GeoOverlayLevel, state: string | null) =>
+    [...queryKeys.all, 'geo', 'assignment-overlay', level, state ?? ''] as const,
+};
+
+/** One rollup read as the map renders it. `data === null` means unknown. */
+export interface GeoRead<T> {
+  data: T | null;
+  /** Non-null while a 503 retry loop is running (warehouse warming, breaker cooling). */
+  warmingUp: WarmingUpState | null;
+  /** Non-null once the read failed for good (retries exhausted or non-retryable). */
+  error: Error | null;
+  /** True for the first load of this key (no data, no warming, no error yet). */
+  loading: boolean;
+  retry: () => void;
+}
+
 export interface UseChoroplethLiveFactsInput {
-  /** Current drill level — the ZIP and overlay fetches key off it. */
-  level: Level;
-  /** Lowercase state id the user drilled into, or null at US level. */
-  drillStateId: string | null;
+  /** Uppercase USPS code of the drilled state, or null at the national view. */
+  drillState: string | null;
   segmentFilter?: string[];
   segmentFilterMode: 'any' | 'all';
-  portfolioCriteria?: Record<string, string | number | null | undefined>;
-  /** The component's own hover setter. Stable across renders (useState), so
-   *  listing it in the dep arrays below never re-runs a fetch. */
-  setHover: Dispatch<SetStateAction<HoverState | null>>;
+  portfolioCriteria?: Criteria;
+  /** Whether the "Unattended leads" overlay is on (the overlay is only read then). */
+  overlayOn: boolean;
+}
+
+function geoRead<T>(result: UseWarmingUpRetryResult<T>, enabled: boolean): GeoRead<T> {
+  const data = enabled ? result.data : null;
+  const warmingUp = enabled ? result.warmingUp : null;
+  const error = enabled && data === null ? result.error : null;
+  return {
+    data,
+    warmingUp,
+    error,
+    loading: enabled && data === null && warmingUp === null && error === null,
+    retry: result.manualRetry,
+  };
 }
 
 export function useChoroplethLiveFacts({
-  level,
-  drillStateId,
+  drillState,
   segmentFilter,
   segmentFilterMode,
   portfolioCriteria,
-  setHover,
+  overlayOn,
 }: UseChoroplethLiveFactsInput) {
   const [usaMap, setUsaMap] = useState<UsaSvgMap | null>(null);
-  // Per-state rollups from /api/geo/state-rollups. `null` = loading; `{}`
-  // = API unreachable. We keep the static geography interactive, but do
-  // not surface static borrower counts while live rollups are loading.
-  // Keyed by lowercase state code to match state map location ids.
-  const [liveStateFacts, setLiveStateFacts] = useState<Record<string, StateRollup> | null>(null);
-  // Per-state ZIP rollups lazy-loaded on drill. Keyed by UPPERCASE state
-  // code (the API key); each value is a dict keyed by 5-digit ZIP so the
-  // tile renderer can O(1) look up a ZIP's live count / avg score.
-  const [liveZipFacts, setLiveZipFacts] = useState<Record<string, Record<string, ZipRollup>>>({});
-  // S9 assigned-vs-unattended overlay. `overlayOn` toggles the recolor +
-  // tooltip extension. `overlayData` is the response for the CURRENT drill
-  // level; `null` = not yet loaded, `overlayError` = fetch failed (degraded
-  // note in the legend, base borrower view stays functional).
-  const [overlayOn, setOverlayOn] = useState(false);
-  const [overlayData, setOverlayData] = useState<GeoAssignmentOverlayResponse | null>(null);
-  const [overlayError, setOverlayError] = useState<string | null>(null);
-  const [overlayLoading, setOverlayLoading] = useState(false);
-
-  const segmentFilterKey = useMemo(
-    () => (segmentFilter && segmentFilter.length > 0 ? segmentFilter.join(',') : ''),
-    [segmentFilter],
-  );
-  const portfolioCriteriaKey = useMemo(
-    () => JSON.stringify(portfolioCriteria ?? {}),
-    [portfolioCriteria],
-  );
-
-  useEffect(() => {
-    setHover(null);
-    setLiveZipFacts({});
-  }, [segmentFilterKey, segmentFilterMode, portfolioCriteriaKey, setHover]);
 
   // Lazy-load the state geography so the TopoJSON conversion lands in its
   // own code-split chunk instead of the main bundle.
@@ -82,141 +96,64 @@ export function useChoroplethLiveFacts({
     };
   }, []);
 
-  // Fetch per-state rollups from the backend. Counts, score, tint, and
-  // top-segment labels all come from the live response; on error the map
-  // stays interactive but metric fields render as unknown.
-  //
-  // 2026-05-04 (FIX G): the effect now re-runs whenever segmentFilter
-  // changes so the per-state counts (and the choropleth bucketer
-  // derived from them) reflect the active segment selection. Without
-  // a filter we use the cross-segment _ALL row; with a filter we hit
-  // the segment-aware path. `segmentFilterMode="any"` counts a
-  // de-duplicated OR cohort; `segmentFilterMode="all"` counts borrowers
-  // that match every selected segment.
-  useEffect(() => {
-    let cancelled = false;
-    setHover(null);
-    setLiveStateFacts(null);
-    api
-      .stateRollups(
-        segmentFilter && segmentFilter.length > 0 ? segmentFilter : null,
-        undefined,
-        segmentFilterMode,
-        portfolioCriteria,
-      )
-      .then((payload) => {
-        if (cancelled) return;
+  // The cohort half of every rollup key, built from the values the fetchers
+  // read. Without a segment filter the API ignores segment_mode, so it is
+  // normalised to `any` and Home's national read shares one entry.
+  const segments = useMemo(
+    () => (segmentFilter && segmentFilter.length > 0 ? segmentFilter : null),
+    [segmentFilter],
+  );
+  const mode = segments ? segmentFilterMode : 'any';
+  const cohort = useMemo(
+    () => [segments?.join(',') ?? '', mode, JSON.stringify(portfolioCriteria ?? {})] as const,
+    [segments, mode, portfolioCriteria],
+  );
+
+  const stateResult = useWarmingUpRetry<Record<string, StateRollup>>(
+    (signal) =>
+      api.stateRollups(segments, signal, mode, portfolioCriteria).then((payload) => {
+        // Keyed by lowercase USPS code to match the map's location ids.
         const byCode: Record<string, StateRollup> = {};
-        for (const r of payload.rollups) {
-          byCode[r.state.toLowerCase()] = r;
-        }
-        setLiveStateFacts(byCode);
-      })
-      .catch(() => {
-        // Keep the geography interactive, but do not surface static
-        // borrower counts as if they were live. The tooltip renders
-        // "—" until the rollup endpoint recovers.
-        if (!cancelled) setLiveStateFacts({});
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [segmentFilter, segmentFilterMode, portfolioCriteria, portfolioCriteriaKey, setHover]);
+        for (const rollup of payload.rollups) byCode[rollup.state.toLowerCase()] = rollup;
+        return byCode;
+      }),
+    [], // ignored: the key below carries every input the fetcher reads
+    { queryKey: geoQueryKeys.stateRollups(cohort) },
+  );
 
-  // Lazy-fetch ZIP rollups when the user drills into a state.
-  // /api/geo/zip-rollups?state=XX reads mip.gold.zip_rollup on its real
-  // grain. A state with no ZIP rows resolves to an empty list; the ZIP
-  // renderer shows an honest empty state with a Lead Queue fallback.
-  useEffect(() => {
-    if (level !== 'zip' || !drillStateId) return;
-    const stateUC = drillStateId.toUpperCase();
-    if (liveZipFacts[stateUC]) return;
-    let cancelled = false;
-    api
-      .zipRollups(
-        { state: stateUC },
-        undefined,
-        segmentFilter && segmentFilter.length > 0 ? segmentFilter : null,
-        segmentFilterMode,
-        portfolioCriteria,
-      )
-      .then((payload) => {
-        if (cancelled) return;
+  const zipEnabled = drillState !== null;
+  const zipResult = useWarmingUpRetry<Record<string, ZipRollup>>(
+    (signal) =>
+      api.zipRollups({ state: drillState ?? '' }, signal, segments, mode, portfolioCriteria).then((payload) => {
         const byZip: Record<string, ZipRollup> = {};
-        for (const r of payload.rollups) byZip[r.zip] = r;
-        setLiveZipFacts((cur) => ({ ...cur, [stateUC]: byZip }));
-      })
-      .catch(() => {
-        // Empty dict means "we tried, nothing came back" -- the renderer
-        // shows the empty state instead of re-fetching on every render.
-        if (!cancelled) setLiveZipFacts((cur) => ({ ...cur, [stateUC]: {} }));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [level, drillStateId, liveZipFacts, segmentFilter, segmentFilterMode, portfolioCriteria, portfolioCriteriaKey]);
+        for (const rollup of payload.rollups) byZip[rollup.zip] = rollup;
+        return byZip;
+      }),
+    [],
+    { queryKey: geoQueryKeys.zipRollups(drillState ?? '', cohort), enabled: zipEnabled },
+  );
 
-  // S9 overlay fetch. Re-runs on drill level + toggle. Each level maps to a
-  // distinct /api/geo/assignment-overlay call (state | zip+state). A fetch
-  // failure sets an honest degraded note and leaves the base borrower view
-  // untouched -- never a silent fallback.
-  useEffect(() => {
-    if (!overlayOn) {
-      setOverlayData(null);
-      setOverlayError(null);
-      setOverlayLoading(false);
-      return;
-    }
-    // Determine the request for the current drill level. Skip until the
-    // parent state needed for a ZIP request is known. The ZIP overlay keys
-    // on the same state as the tiles it recolors.
-    let request: { level: GeoOverlayLevel; state?: string | null; countyFips?: string | null } | null = null;
-    if (level === 'state') {
-      request = { level: 'state' };
-    } else if (level === 'zip' && drillStateId) {
-      request = { level: 'zip', state: drillStateId.toUpperCase() };
-    }
-    if (!request) {
-      setOverlayData(null);
-      return;
-    }
-    const controller = new AbortController();
-    let cancelled = false;
-    setOverlayLoading(true);
-    setOverlayError(null);
-    setOverlayData(null);
-    api
-      .assignmentOverlay(request.level, {
-        state: request.state,
-        countyFips: request.countyFips,
-        signal: controller.signal,
-      })
-      .then((payload) => {
-        if (cancelled) return;
-        setOverlayData(payload);
-        setOverlayLoading(false);
-      })
-      .catch((err: unknown) => {
-        if (cancelled || (err instanceof ApiError && err.aborted)) return;
-        const dep = err instanceof ApiError && err.dependency ? ` (${err.dependency})` : '';
-        setOverlayError(`Coverage overlay unavailable${dep}. Showing borrower counts.`);
-        setOverlayData(null);
-        setOverlayLoading(false);
-      });
-    return () => {
-      cancelled = true;
-      controller.abort();
-    };
-  }, [overlayOn, level, drillStateId]);
+  // The overlay keys on the same unit as the fill it recolours: states at the
+  // national view, the drilled state's ZIPs below it.
+  const overlayLevel: GeoOverlayLevel = drillState ? 'zip' : 'state';
+  const overlayResult = useWarmingUpRetry<GeoAssignmentOverlayResponse>(
+    (signal) => api.assignmentOverlay(overlayLevel, { state: drillState, signal }),
+    [],
+    { queryKey: geoQueryKeys.assignmentOverlay(overlayLevel, drillState), enabled: overlayOn },
+  );
+  const overlay = geoRead(overlayResult, overlayOn);
+  const overlayDependency = overlay.error instanceof ApiError && overlay.error.dependency
+    ? ` (${overlay.error.dependency})`
+    : '';
 
   return {
     usaMap,
-    liveStateFacts,
-    liveZipFacts,
-    overlayOn,
-    setOverlayOn,
-    overlayData,
-    overlayError,
-    overlayLoading,
+    states: geoRead(stateResult, true),
+    zips: geoRead(zipResult, zipEnabled),
+    overlayData: overlay.data,
+    // A failed overlay is an honest degraded note in the legend; the base
+    // borrower view stays up — never a silent fallback.
+    overlayError: overlay.error ? `Coverage overlay unavailable${overlayDependency}. Showing borrower counts.` : null,
+    overlayLoading: overlay.loading || overlay.warmingUp !== null,
   };
 }

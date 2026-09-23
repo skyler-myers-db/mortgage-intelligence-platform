@@ -2,6 +2,7 @@ import { Link, useNavigate } from 'react-router';
 import { PageShell } from '../components/layout/PageShell';
 import { KpiCard } from '../components/mortgage/KpiCard';
 import { USChoroplethMap } from '../components/mortgage/USChoroplethMap';
+import { useMapSelectionParams } from '../components/mortgage/useMapSelectionParams';
 import { PinnedInsights } from '../components/mortgage/PinnedInsights';
 import { PortfolioSummaryCard } from '../components/mortgage/PortfolioSummaryCard';
 import { LastLoginSummary } from '../components/mortgage/LastLoginSummary';
@@ -64,6 +65,7 @@ export default function Home() {
   // so normal loading is visually distinct from a genuinely unknown value.
   const { lender, canAccessAdmin } = useApp();
   const navigate = useNavigate();
+  const [mapSelection, setMapSelection] = useMapSelectionParams();
   const healthCtx = useOptionalHealth();
   // True when the shared health poll has confirmed warehouse / lakebase is
   // down. While that's the case we keep the warming-up tile visible
@@ -288,7 +290,7 @@ export default function Home() {
           gold (see USChoroplethMap's design-contract note). Lead Queue
           remains the source-of-truth index for borrower selection. Audit
           exploration is admin-only. */}
-      <USChoroplethMap drillBehavior="filter" />
+      <USChoroplethMap drillBehavior="filter" selection={mapSelection} onSelectionChange={setMapSelection} />
 
       <div className="section-actions">
         <Link to="/portfolio-builder" className="btn btn--primary" aria-label="Build a lead portfolio">

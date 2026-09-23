@@ -4,7 +4,13 @@ import type { CountyRollup } from '../../types';
 // Shared shape consumed by the state-level map renderers. The payload is
 // built from us-atlas state TopoJSON, keeping IDs in the existing lowercase
 // USPS format so rollup lookups and drill links do not change.
-export interface UsaSvgMapLocation { name: string; id: string; path: string }
+export interface UsaSvgMapLocation {
+  name: string;
+  id: string;
+  path: string;
+  /** Where the state's label sits (area centroid of its largest polygon), in viewBox units. */
+  labelAt?: [number, number];
+}
 export interface UsaSvgMap { label: string; viewBox: string; locations: UsaSvgMapLocation[] }
 
 // USPS (lowercase) -> FIPS-2 map. Values are intrinsic per-state constants,
@@ -56,6 +62,7 @@ export function buildUsaStateMapPayload(fc: FeatureCollection, pad = 0): UsaSvgM
       id: code,
       name: stateDisplayName(rawName, code),
       path,
+      labelAt: labelAnchor(feature.geometry) ?? undefined,
     });
   }
 
@@ -78,38 +85,41 @@ export function buildUsaStateMapPayload(fc: FeatureCollection, pad = 0): UsaSvgM
   };
 }
 
-/** Fixed-threshold fallback used only when no distribution is available. */
-export function lvlFromCount(count: number | null | undefined): 1 | 2 | 3 | 4 {
-  if (count === null || count === undefined || count <= 0) return 1;
-  if (count >= 500) return 4;
-  if (count >= 250) return 3;
-  if (count >= 100) return 2;
-  return 1;
-}
-
-/** Build a quantile-based bucketer from the live count distribution. */
-export function buildQuantileBucketer(counts: number[]): (count: number | null | undefined) => 1 | 2 | 3 | 4 {
-  const nonZero = counts.filter((c) => c > 0).sort((a, b) => a - b);
-  if (nonZero.length < 4) {
-    return lvlFromCount;
+/**
+ * Area centroid of the largest polygon's outer ring (shoelace formula), so a
+ * state label lands on the mainland rather than between islands. Null for a
+ * degenerate or non-polygon geometry.
+ */
+export function labelAnchor(geom: Geometry): [number, number] | null {
+  const rings = geom.type === 'Polygon'
+    ? [geom.coordinates[0]]
+    : geom.type === 'MultiPolygon'
+      ? geom.coordinates.map((poly) => poly[0])
+      : [];
+  let best: { area: number; x: number; y: number } | null = null;
+  for (const ring of rings) {
+    if (!ring || ring.length < 3) continue;
+    let twiceArea = 0;
+    let cx = 0;
+    let cy = 0;
+    for (let i = 0; i < ring.length; i += 1) {
+      const [x0, y0] = ring[i];
+      const [x1, y1] = ring[(i + 1) % ring.length];
+      const cross = x0 * y1 - x1 * y0;
+      twiceArea += cross;
+      cx += (x0 + x1) * cross;
+      cy += (y0 + y1) * cross;
+    }
+    if (twiceArea === 0) continue;
+    const area = Math.abs(twiceArea / 2);
+    if (!best || area > best.area) best = { area, x: cx / (3 * twiceArea), y: cy / (3 * twiceArea) };
   }
-  const q = (p: number) => nonZero[Math.min(nonZero.length - 1, Math.floor(nonZero.length * p))];
-  const q25 = q(0.25);
-  const q50 = q(0.5);
-  const q75 = q(0.75);
-  return (count) => {
-    if (count === null || count === undefined || count <= 0) return 1;
-    if (count >= q75) return 4;
-    if (count >= q50) return 3;
-    if (count >= q25) return 2;
-    return 1;
-  };
+  return best ? [Number(best.x.toFixed(1)), Number(best.y.toFixed(1))] : null;
 }
 
 export interface StateFacts {
   count: number;
   avgScore: number;
-  lvl: 1 | 2 | 3 | 4;
   topSegment?: string;
   /** See `HoverState.contactable`. Null when the rollup predates the field. */
   contactable?: number | null;

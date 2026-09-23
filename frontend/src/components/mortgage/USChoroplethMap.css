@@ -1,0 +1,152 @@
+/* ============================================================
+   Geography map: encoding, keyboard and table additions
+   (2026-09-21 audit dataviz-02 / responsive-05 / dataviz-04 / a11y-04).
+   Imported by USChoroplethMap.tsx so it ships with the lazy Home /
+   Segments chunk, not the initial stylesheet. The prototype chassis
+   (.map-wrap, .map-region, .map-legend, .zip-tile) stays in
+   design-system/components/08-map.css.
+
+   New app-added blocks / elements, none of which exist in the prototype:
+   .map-label (state labels), .map-legend__break / __end / __scale (break
+   values between the prototype's Lower / Higher words), .map-table (the
+   "View as table" view), .zip-tiles__item (list items around the ZIP
+   buttons), .map-stage--status (warming-up / unavailable stage).
+   ============================================================ */
+
+/* Segment filter: a state whose top segment is outside the filter recedes. */
+.map-region.is-dimmed { opacity: 0.3; }
+
+/* USPS labels on populated states. Sized in SVG user units (the Albers
+   viewBox is ~975 wide, drawn at ~0.5-0.7x in the hero map), so the token
+   lands at roughly 10-12px on screen. The halo is the state's own step, so a
+   label that spills onto a neighbour stays legible; the fill is the step's
+   AA ink. */
+.map-label {
+  font-family: var(--font-mono);
+  font-size: var(--fs-18);
+  font-weight: 600;
+  text-anchor: middle;
+  dominant-baseline: central;
+  pointer-events: none;
+  paint-order: stroke;
+  stroke-width: 3;
+  stroke-linejoin: round;
+}
+.map-label--lvl-1 { fill: var(--map-ramp-ink-1); stroke: var(--map-ramp-1); }
+.map-label--lvl-2 { fill: var(--map-ramp-ink-2); stroke: var(--map-ramp-2); }
+.map-label--lvl-3 { fill: var(--map-ramp-ink-3); stroke: var(--map-ramp-3); }
+.map-label--lvl-4 { fill: var(--map-ramp-ink-4); stroke: var(--map-ramp-4); }
+
+/* Legend: the five swatches and the break values share one width and one
+   five-column grid, so each break sits on the boundary it names (break k
+   starts class k + 1). Wider than the prototype's 140px bar
+   (Module 0 Prototype.html:888) so three values fit between the words. */
+.map-legend .map-legend__bar,
+.map-legend .map-legend__range {
+  inline-size: calc(var(--sp-12) * 4);
+}
+.map-legend .map-legend__range {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  grid-template-rows: auto auto;
+}
+.map-legend__end { grid-row: 2; grid-column: 1; justify-self: start; }
+.map-legend__end--high { grid-column: 5; justify-self: end; }
+.map-legend__break {
+  grid-row: 1;
+  justify-self: start;
+  translate: -50% 0;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+}
+.map-legend__break--1 { grid-column: 3; }
+.map-legend__break--2 { grid-column: 4; }
+.map-legend__break--3 { grid-column: 5; }
+.map-legend__scale { color: var(--text-3); }
+
+/* ZIP tiles are buttons inside list items (a11y-04). */
+.zip-tiles {
+  list-style: none;
+  margin: 0;
+}
+.zip-tiles__item {
+  display: flex;
+  min-inline-size: 0;
+}
+.zip-tiles__item > .zip-tile { flex: 1 1 auto; }
+
+/* The view switch opts back into pointer events like the overlay toggle
+   (the corner tray is pointer-events: none so passive chips never eat
+   hovers). */
+.map-view-toggle { pointer-events: auto; }
+
+/* Warming-up / unavailable stage: the WarmingUpBlock sits inside the map. */
+.map-stage--status .warming-block {
+  inline-size: min(100%, calc(var(--sp-16) * 7));
+}
+
+/* "View as table". */
+.map-levels > .map-table {
+  flex: 1 1 0;
+  min-block-size: 0;
+}
+.map-table {
+  overflow: auto;
+  margin: 0 var(--sp-3) var(--sp-3);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+}
+.map-table__table tbody tr { cursor: default; }
+.map-table__table tbody th,
+.map-table__table tfoot th,
+.map-table__table tfoot td {
+  padding: 0 var(--sp-4);
+  height: var(--row-h);
+  border-bottom: 1px solid var(--line-1);
+  text-align: start;
+  font-weight: 500;
+  color: var(--text-1);
+  white-space: nowrap;
+}
+.map-table__table tfoot th,
+.map-table__table tfoot td {
+  font-weight: 600;
+  border-bottom: 0;
+}
+.map-table__table .tbl-cell--right { text-align: end; }
+.map-table__table tfoot td.tbl-cell--right {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.map-table__swatch {
+  display: inline-block;
+  inline-size: var(--sp-3);
+  block-size: var(--sp-3);
+  margin-inline-end: var(--sp-2);
+  border-radius: var(--r-sm);
+  box-shadow: inset 0 0 0 1px var(--line-2);
+  vertical-align: middle;
+}
+.map-table__swatch.lvl-0 { background: var(--map-ramp-0); }
+.map-table__swatch.lvl-1 { background: var(--map-ramp-1); }
+.map-table__swatch.lvl-2 { background: var(--map-ramp-2); }
+.map-table__swatch.lvl-3 { background: var(--map-ramp-3); }
+.map-table__swatch.lvl-4 { background: var(--map-ramp-4); }
+.map-table__open {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: var(--accent-ink);
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+  cursor: pointer;
+}
+/* Like the ZIP grid, the table fills the stage: the legend joins the flow
+   below it instead of covering the last rows. */
+.map-wrap:has(.map-table) .map-legend {
+  position: static;
+  width: max-content;
+  margin: 0 var(--sp-3) var(--sp-3);
+}

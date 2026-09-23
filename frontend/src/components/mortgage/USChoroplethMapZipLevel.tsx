@@ -1,15 +1,23 @@
 /**
  * USChoroplethMapZipLevel — the ZIP rung of the geography drill: the densest-N
- * tile grid for the drilled state, the honest empty / loading states, and the
- * reconcile note that discloses what the grid cannot show. Extracted from
- * USChoroplethMap.tsx's `renderZipLevel` closure (file-size gate, plan item
- * 3); markup, class names, and copy are unchanged.
+ * tile grid for the drilled state, the honest empty state, and the reconcile
+ * note that discloses what the grid cannot show. Extracted from
+ * USChoroplethMap.tsx's `renderZipLevel` closure (file-size gate, plan item 3).
+ *
+ * Audit a11y-04 / dataviz-02 (2026-09-21): the tiles are real buttons inside
+ * list items (they used to be `<button role="listitem">`, which stripped the
+ * button role), one roving Tab stop with arrow-key movement, a data-rich
+ * accessible name, and the hover card on keyboard focus. Tiles paint the
+ * same four-step ramp as the state map and the legend (`--map-ramp-*`), not a
+ * private alpha ramp the legend never showed.
  */
 
-import type { CSSProperties, Dispatch, SetStateAction } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type Dispatch, type SetStateAction } from 'react';
 import type { GeoAssignmentOverlayUnit } from '../../lib/api';
 import { safeSegmentName } from '../../lib/segmentMetadata';
 import type { StateRollup, ZipRollup } from '../../types';
+import { focusAnchor, moveRovingFocus, zipAriaLabel } from './USChoroplethMap.a11y';
+import { classify, type ChoroplethScale } from './USChoroplethMap.scale';
 import type { HoverState } from './USChoroplethMap.utils';
 
 /** Densest-N ZIP tiles rendered per state. The grid stays readable, but
@@ -19,16 +27,20 @@ export const ZIP_TILE_CAP = 24;
 interface USChoroplethMapZipLevelProps {
   /** Display name for the drilled state, used in copy and aria labels. */
   drillStateName: string;
-  /** ZIP rollups for the drilled state. `undefined` = still loading. */
-  byZip: Record<string, ZipRollup> | undefined;
+  /** ZIP rollups for the drilled state, keyed by ZIP. */
+  byZip: Record<string, ZipRollup>;
   /** State-level rollup for the drilled state — the reconcile denominator. */
   stateFacts: StateRollup | undefined;
-  zipBucketer: (count: number | null | undefined) => 1 | 2 | 3 | 4;
+  /** The scale the fill follows (borrowers, or unattended leads under the overlay). */
+  scale: ChoroplethScale | null;
   overlayActive: boolean;
   overlayByUnit: Record<string, GeoAssignmentOverlayUnit>;
-  overlayBucketer: (count: number | null | undefined) => 1 | 2 | 3 | 4;
   /** ZIP currently selected, or null. Gates covering-officer disclosure. */
   selectedZip: string | null;
+  /** Move focus to the tab-stop tile once the grid renders (keyboard drill). */
+  autoFocus?: boolean;
+  /** Called once focus has moved, so a later Back navigation does not steal it. */
+  onAutoFocused?: () => void;
   setHover: Dispatch<SetStateAction<HoverState | null>>;
   /** Select the ZIP and deep-link to its filtered Lead Queue. */
   onSelectZip: (zip: string) => void;
@@ -40,18 +52,36 @@ export function USChoroplethMapZipLevel({
   drillStateName,
   byZip,
   stateFacts,
-  zipBucketer,
+  scale,
   overlayActive,
   overlayByUnit,
-  overlayBucketer,
   selectedZip,
+  autoFocus = false,
+  onAutoFocused,
   setHover,
   onSelectZip,
   onOpenStateQueue,
 }: USChoroplethMapZipLevelProps) {
-  const zipsFromApi = byZip ? Object.values(byZip) : [];
+  const zipsFromApi = Object.values(byZip);
+  // Sorted descending by count so densest ZIPs land top-left (Pareto).
+  const sorted = [...zipsFromApi].sort(
+    (a, b) => (b.addressable_borrowers ?? 0) - (a.addressable_borrowers ?? 0),
+  );
+  const visible = sorted.slice(0, ZIP_TILE_CAP);
+  const [activeZip, setActiveZip] = useState<string | null>(null);
+  const tabStopZip =
+    (activeZip && visible.some((rollup) => rollup.zip === activeZip) ? activeZip : null)
+    ?? (selectedZip && visible.some((rollup) => rollup.zip === selectedZip) ? selectedZip : null)
+    ?? visible[0]?.zip
+    ?? null;
+  const listRef = useRef<HTMLUListElement | null>(null);
+  useEffect(() => {
+    if (!autoFocus) return;
+    listRef.current?.querySelector<HTMLElement>('[data-map-unit][tabindex="0"]')?.focus();
+    onAutoFocused?.();
+  }, [autoFocus, onAutoFocused]);
 
-  if (byZip && zipsFromApi.length === 0) {
+  if (zipsFromApi.length === 0) {
     // API returned empty — the state is outside the Cotality eval share
     // or the CTAS hasn't populated ZIPs for it. Give the user a graceful
     // fallback path into the state's lead queue.
@@ -76,24 +106,6 @@ export function USChoroplethMapZipLevel({
     );
   }
 
-  if (!byZip) {
-    return (
-      <div className="map-stage map-stage--empty">
-        Loading ZIPs…
-      </div>
-    );
-  }
-
-  // HTML/CSS grid (not SVG) so
-  // the tiles use design-system tokens (r-md, sp, typography) and sit
-  // cleanly in the map viewport, not overlapping the breadcrumbs above.
-  // Sorted descending by count so densest ZIPs land top-left (Pareto).
-  // Click deep-links to the filtered Lead Queue — seeing all borrowers
-  // in the ZIP is the user's actual goal, not a single random sample.
-  const sorted = [...zipsFromApi].sort(
-    (a, b) => (b.addressable_borrowers ?? 0) - (a.addressable_borrowers ?? 0),
-  );
-  const visible = sorted.slice(0, ZIP_TILE_CAP);
   // Reconcile what the tiles show against what the STATE tile claimed.
   // Two independent ways the drill under-counts, both previously silent:
   //   1. the tile cap hides the tail (IL: 24 of 212 ZIPs = 29.9% of the
@@ -111,7 +123,19 @@ export function USChoroplethMapZipLevel({
   const hiddenZipCount = sorted.length - visible.length;
   return (
     <>
-    <div className="zip-tiles" role="list" aria-label={`ZIPs in ${drillStateName}`}>
+    <ul
+      ref={listRef}
+      className="zip-tiles"
+      role="list"
+      aria-label={`ZIPs in ${drillStateName}`}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape') {
+          setHover(null);
+          return;
+        }
+        moveRovingFocus(event);
+      }}
+    >
       {visible.map((rollup, tileIndex) => {
         const count = rollup.addressable_borrowers ?? null;
         const avgScore = rollup.avg_opportunity_score ?? null;
@@ -119,68 +143,79 @@ export function USChoroplethMapZipLevel({
         const topSegment = topSegCode ? (safeSegmentName(topSegCode) ?? undefined) : undefined;
         const overlayUnit = overlayActive ? overlayByUnit[rollup.zip] : undefined;
         const unattended = overlayUnit ? overlayUnit.unattended_count : null;
-        const lvl = overlayActive
-          ? (overlayUnit ? overlayBucketer(overlayUnit.unattended_count) : 1)
-          : zipBucketer(count);
+        const cls = classify(scale, overlayActive ? unattended : count) ?? 0;
         const isSelected = selectedZip === rollup.zip;
         const classes = [
           'zip-tile',
-          `zip-tile--lvl-${lvl}`,
+          `zip-tile--lvl-${cls}`,
           isSelected ? 'is-selected' : '',
         ]
           .filter(Boolean)
           .join(' ');
+        const hover = (x: number, y: number): HoverState => ({
+          x,
+          y,
+          name: `ZIP ${rollup.zip}, ${drillStateName}`,
+          count,
+          avgScore,
+          topSegment,
+          sourceHint: 'mip.gold.zip_rollup',
+          overlay: overlayUnit
+            ? {
+                leadCount: overlayUnit.lead_count,
+                assignedCount: overlayUnit.assigned_count,
+                unattendedCount: overlayUnit.unattended_count,
+                coveringOfficerCount: overlayUnit.covering_officer_count,
+                coveringOfficers:
+                  isSelected ? overlayUnit.covering_officers : undefined,
+              }
+            : undefined,
+        });
         return (
-          <button
-            key={rollup.zip}
-            type="button"
-            className={classes}
-            // Staggered "settle into the grid" entrance (Buyer-Wow #4):
-            // the stage cap keeps later tiles from lagging; CSS gates the
-            // animation behind prefers-reduced-motion.
-            style={{ '--tile-i': Math.min(tileIndex, 24) } as CSSProperties}
-            role="listitem"
-            aria-label={`ZIP ${rollup.zip}, ${count !== null ? `${count.toLocaleString()} borrowers` : 'no data'}`}
-            onMouseEnter={(e) =>
-              setHover({
-                x: e.clientX,
-                y: e.clientY,
-                name: `ZIP ${rollup.zip}, ${drillStateName}`,
+          <li key={rollup.zip} className="zip-tiles__item">
+            <button
+              type="button"
+              className={classes}
+              // Staggered "settle into the grid" entrance (Buyer-Wow #4):
+              // the stage cap keeps later tiles from lagging; CSS gates the
+              // animation behind prefers-reduced-motion.
+              style={{ '--tile-i': Math.min(tileIndex, 24) } as CSSProperties}
+              data-map-unit={rollup.zip}
+              data-map-class={cls}
+              tabIndex={rollup.zip === tabStopZip ? 0 : -1}
+              aria-label={zipAriaLabel(rollup.zip, {
                 count,
                 avgScore,
                 topSegment,
-                sourceHint: 'mip.gold.zip_rollup',
-                overlay: overlayUnit
-                  ? {
-                      leadCount: overlayUnit.lead_count,
-                      assignedCount: overlayUnit.assigned_count,
-                      unattendedCount: overlayUnit.unattended_count,
-                      coveringOfficerCount: overlayUnit.covering_officer_count,
-                      coveringOfficers:
-                        isSelected ? overlayUnit.covering_officers : undefined,
-                    }
-                  : undefined,
-              })
-            }
-            onMouseMove={(e) =>
-              setHover((h) => (h ? { ...h, x: e.clientX, y: e.clientY } : h))
-            }
-            onMouseLeave={() => setHover(null)}
-            onClick={() => onSelectZip(rollup.zip)}
-          >
-            <span className="zip-tile__code">{rollup.zip}</span>
-            <span className="zip-tile__count">
-              {count !== null ? count.toLocaleString() : '—'}
-            </span>
-            {overlayActive && (
-              <span className="zip-tile__overlay">
-                {unattended !== null ? unattended.toLocaleString() : '—'} unattended
+                unattended: overlayActive ? unattended : undefined,
+              })}
+              onMouseEnter={(e) => setHover(hover(e.clientX, e.clientY))}
+              onMouseMove={(e) =>
+                setHover((h) => (h ? { ...h, x: e.clientX, y: e.clientY } : h))
+              }
+              onMouseLeave={() => setHover(null)}
+              onFocus={(e) => {
+                setActiveZip(rollup.zip);
+                const anchor = focusAnchor(e.currentTarget);
+                setHover(hover(anchor.x, anchor.y));
+              }}
+              onBlur={() => setHover(null)}
+              onClick={() => onSelectZip(rollup.zip)}
+            >
+              <span className="zip-tile__code">{rollup.zip}</span>
+              <span className="zip-tile__count">
+                {count !== null ? count.toLocaleString() : '—'}
               </span>
-            )}
-          </button>
+              {overlayActive && (
+                <span className="zip-tile__overlay">
+                  {unattended !== null ? unattended.toLocaleString() : '—'} unattended
+                </span>
+              )}
+            </button>
+          </li>
         );
       })}
-    </div>
+    </ul>
     {(hiddenZipCount > 0 || (unassigned ?? 0) > 0) && (
       <div className="zip-tiles__reconcile text-2" role="note">
         {hiddenZipCount > 0 && (

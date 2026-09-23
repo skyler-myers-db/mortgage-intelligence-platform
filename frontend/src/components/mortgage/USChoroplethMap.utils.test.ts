@@ -5,37 +5,27 @@ import {
   buildUsaStateMapPayload,
   buildCountiesPayload,
   buildLeadQueuePath,
-  buildQuantileBucketer,
   countyDisplayName,
   featureBBox,
+  FIPS_TO_USCODE,
   geometryToPath,
-  lvlFromCount,
+  labelAnchor,
 } from './USChoroplethMap.utils';
 import type { CountyRollup } from '../../types';
 import type { Feature, FeatureCollection } from 'geojson';
 
 describe('USChoroplethMap geography helpers', () => {
-  it('keeps the fixed fallback scale bounded to four levels', () => {
-    expect(lvlFromCount(null)).toBe(1);
-    expect(lvlFromCount(0)).toBe(1);
-    expect(lvlFromCount(100)).toBe(2);
-    expect(lvlFromCount(250)).toBe(3);
-    expect(lvlFromCount(500)).toBe(4);
-  });
-
-  it('builds quantile buckets from live non-zero distributions', () => {
-    const bucket = buildQuantileBucketer([0, 10, 20, 30, 40, 50, 60, 70]);
-    expect(bucket(0)).toBe(1);
-    expect(bucket(10)).toBe(1);
-    expect(bucket(30)).toBe(2);
-    expect(bucket(50)).toBe(3);
-    expect(bucket(70)).toBe(4);
-  });
-
-  it('falls back to fixed thresholds when there are too few non-zero values', () => {
-    const bucket = buildQuantileBucketer([0, 10, 20, 30]);
-    expect(bucket(10)).toBe(1);
-    expect(bucket(500)).toBe(4);
+  it('anchors a label at the area centroid of the largest polygon', () => {
+    // A 10x10 square and a far-off 2x2 island: the label sits on the square.
+    const anchor = labelAnchor({
+      type: 'MultiPolygon',
+      coordinates: [
+        [[[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]]],
+        [[[50, 50], [52, 50], [52, 52], [50, 52], [50, 50]]],
+      ],
+    });
+    expect(anchor).toEqual([5, 5]);
+    expect(labelAnchor({ type: 'Point', coordinates: [1, 1] })).toBeNull();
   });
 
   it('formats county names without double-appending County', () => {
@@ -168,6 +158,15 @@ describe('USChoroplethMap geography helpers', () => {
       'Washington, DC',
     );
     expect(payload.locations.every((location) => location.path.startsWith('M'))).toBe(true);
+    // Every state gets a label anchor inside its own bounding box.
+    for (const feature of fc.features) {
+      const id = String(feature.id ?? '').padStart(2, '0');
+      const location = payload.locations.find((candidate) => candidate.id === FIPS_TO_USCODE[id]);
+      if (!location) continue;
+      const [x0, y0, x1, y1] = featureBBox(feature);
+      const [lx, ly] = location.labelAt ?? [Number.NaN, Number.NaN];
+      expect(lx >= x0 && lx <= x1 && ly >= y0 && ly <= y1, `${location.id} label inside its box`).toBe(true);
+    }
   });
 
   it('keeps Genie state-map lookups aligned with normalized USPS values', () => {
