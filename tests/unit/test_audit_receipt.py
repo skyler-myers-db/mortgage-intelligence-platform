@@ -12,7 +12,8 @@ request. Pinned here:
   (or the outreach body already stored on the row) cannot leak;
 * the evidence-asset registry the receipt cites equals the Offer
   Orchestrator's for every offer branch;
-* the Lakebase store filters by ``audit_id`` and never casts a non-UUID.
+* the Lakebase store filters by ``audit_id`` and never casts a non-UUID;
+* a receipt read appends no audit row.
 """
 
 from __future__ import annotations
@@ -178,6 +179,20 @@ def test_admin_reads_any_receipt_and_sees_the_stored_approver() -> None:
 
     assert response.status_code == 200, response.text
     assert response.json()["approver"] == ALICE
+
+
+def test_reading_a_receipt_writes_no_audit_row(audit_store: InMemoryAuditStore) -> None:
+    # The receipt is a pure read of the ledger: re-reading, or an admin
+    # reading it, must never append a row (no audit side effect on a read
+    # the UI issues after every decision).
+    approved = _approve(ALICE_WRITE)
+    rows_before = len(audit_store.list(limit=100_000))
+
+    assert _receipt(approved["audit_event_id"], ALICE_READ).status_code == 200
+    assert _receipt(approved["audit_event_id"], ALICE_READ).status_code == 200
+    assert _receipt(approved["audit_event_id"], CAROL_ADMIN).status_code == 200
+
+    assert len(audit_store.list(limit=100_000)) == rows_before
 
 
 # A fixed, well-formed UUID no write ever issued: a ``uuid4()`` here would
