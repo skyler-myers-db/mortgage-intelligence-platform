@@ -16,12 +16,16 @@ interface GrowthAgentMonitorsPanelProps {
  * `genie-09`): saved watchlists, their re-run and draft actions, and the
  * progress / result of an action started here. The list component is
  * unchanged; it only moved out of the Growth Agent surface.
+ *
+ * No `aria-busy` on this surface: it would hold the run slot's in-progress
+ * `role="status"` announcement until the run ends, when that card is gone.
+ * The monitor buttons already say Running… and are disabled while busy.
  */
 export function GrowthAgentMonitorsPanel({ agent, onOpenRoute, onOpenWorkflows }: GrowthAgentMonitorsPanelProps) {
   const { monitors } = agent;
   const empty = monitors.length === 0 && !agent.workflowsLoading;
   return (
-    <div className="surface growth-agent" aria-busy={agent.agentBusy}>
+    <div className="surface growth-agent">
       <div className="surface__hdr">
         <Icon name="bell" size={14} className="icon-accent" />
         <div>

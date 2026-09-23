@@ -25,6 +25,10 @@ interface GrowthAgentPanelProps {
  * composed plan) sits directly under the controls, above the cards, so a run
  * reports where it runs instead of below the custom builder. Saved
  * watchlists and their drafts moved to the Saved monitors tab.
+ *
+ * `aria-busy` marks only the workflow cards, never the whole surface: a busy
+ * subtree holds its live-region announcements until it settles, and the run
+ * slot's in-progress `role="status"` card is gone by then.
  */
 export function GrowthAgentPanel({ agent, onOpenRoute }: GrowthAgentPanelProps) {
   const {
@@ -41,7 +45,7 @@ export function GrowthAgentPanel({ agent, onOpenRoute }: GrowthAgentPanelProps) 
   } = agent;
 
   return (
-    <div className="surface growth-agent" aria-busy={agentBusy}>
+    <div className="surface growth-agent">
       <div className="surface__hdr">
         <Icon name="bolt" size={14} className="icon-accent" />
         <div>
@@ -159,7 +163,7 @@ export function GrowthAgentPanel({ agent, onOpenRoute }: GrowthAgentPanelProps) 
 
         <GrowthAgentRunSlot agent={agent} origin="workflows" onOpenRoute={onOpenRoute} />
 
-        <section className="growth-agent__cards" aria-label="Governed Growth Agent workflows">
+        <section className="growth-agent__cards" aria-label="Governed Growth Agent workflows" aria-busy={agentBusy}>
           {workflows.map((workflow) => {
             const pending = growthAgentPending === workflow.id;
             return (

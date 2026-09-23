@@ -154,6 +154,11 @@ describe('/ask-genie page tabs', () => {
     // The run slot sits above the workflow cards, not below the custom builder.
     const cards = activePanel().querySelector('.growth-agent__cards');
     expect(pending && cards && pending.compareDocumentPosition(cards) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // A busy subtree holds its live-region announcements until it settles,
+    // and this card is gone by then: the status must sit outside any
+    // aria-busy ancestor. The busy marker stays on the cards the run blocks.
+    expect(pending?.closest('[aria-busy="true"]')).toBeNull();
+    expect(cards?.getAttribute('aria-busy')).toBe('true');
 
     await act(async () => {
       resolveRun?.(RUN);
@@ -175,9 +180,9 @@ describe('/ask-genie page tabs', () => {
 
     act(() => button(/^Run now$/).click());
     await waitUntil(() => rerunGrowthAgentMonitor.mock.calls.length === 1);
-    expect(activePanel().querySelector('[aria-label="Growth Agent run in progress"]')?.textContent).toContain(
-      'Re-running Mortgage Growth Agent - IL',
-    );
+    const pending = activePanel().querySelector('[role="status"][aria-label="Growth Agent run in progress"]');
+    expect(pending?.textContent).toContain('Re-running Mortgage Growth Agent - IL');
+    expect(pending?.closest('[aria-busy="true"]')).toBeNull();
 
     await act(async () => {
       resolveRerun?.(RUN);
