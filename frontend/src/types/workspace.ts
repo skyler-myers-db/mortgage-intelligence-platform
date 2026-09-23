@@ -44,6 +44,18 @@ export interface SessionResponse {
    * never send it to telemetry.
    */
   actor_email?: string | null;
+  /**
+   * Readable label derived from the same forwarded identity (no directory
+   * lookup): "jane.doe@..." reads "Jane Doe". Null exactly when actor_email
+   * is. Display only: never send it to telemetry.
+   */
+  actor_display_name?: string | null;
+  /**
+   * Capability tiers as display labels, most privileged first
+   * ("Administrator", "Approver", else "Workspace user"). The can_* flags
+   * stay the authorization contract; these are for the identity menu.
+   */
+  role_labels?: string[];
 }
 
 export interface WorkspaceMutationResult {

@@ -57,6 +57,8 @@ def test_session_identity_matches_the_actor_the_approver_gate_admits(
         "can_access_admin": False,
         "can_approve": True,
         "actor_email": _ACTOR,
+        "actor_display_name": "Approver One",
+        "role_labels": ["Approver"],
     }
 
 
@@ -97,6 +99,8 @@ def test_session_ignores_forwarded_identity_when_the_edge_is_untrusted(
         "can_access_admin": False,
         "can_approve": False,
         "actor_email": None,
+        "actor_display_name": None,
+        "role_labels": [],
     }
 
 
@@ -111,12 +115,14 @@ def test_session_never_logs_the_actor_identity(
         )
 
     assert response.json()["actor_email"] == _ACTOR
+    assert response.json()["actor_display_name"] == "Approver One"
     # Non-vacuity: the request really was logged, just without the identity.
     assert any(record.name == "mip.http" for record in caplog.records)
     logged = "\n".join(
         f"{record.getMessage()} {record.__dict__}" for record in caplog.records
     )
     assert _ACTOR not in logged
+    assert "Approver One" not in logged
 
 
 def test_compat_and_versioned_session_paths_agree(client: TestClient) -> None:
@@ -126,3 +132,86 @@ def test_compat_and_versioned_session_paths_agree(client: TestClient) -> None:
         client.get("/api/session", headers=headers).json()
         == client.get("/api/v1/session", headers=headers).json()
     )
+
+
+# --- shell-06: display name and role labels for the topbar identity menu ---
+
+
+@pytest.mark.parametrize(
+    ("identity", "expected"),
+    [
+        ("jane.doe@summit.example", "Jane Doe"),
+        ("jane_doe@summit.example", "Jane Doe"),
+        ("mary-ann.lee@summit.example", "Mary Ann Lee"),
+        # Not a letters-only word list: shown verbatim, never guessed at.
+        ("jdoe@summit.example", "jdoe"),
+        ("jdoe2@summit.example", "jdoe2"),
+        ("j.doe.@summit.example", "j.doe."),
+        # A non-email forwarded identity (service principal) is its own label.
+        ("service-client", "service-client"),
+    ],
+)
+def test_display_name_is_derived_from_the_forwarded_identity_only(
+    client: TestClient,
+    identity: str,
+    expected: str,
+) -> None:
+    header = "X-Forwarded-Email" if "@" in identity else "X-Forwarded-User"
+    body = client.get(
+        "/api/v1/session", headers={header: identity, "X-Forwarded-Groups": ""}
+    ).json()
+
+    assert body["actor_email"] == identity
+    assert body["actor_display_name"] == expected
+
+
+def test_display_name_follows_the_audited_identity_not_the_user_header(
+    client: TestClient,
+) -> None:
+    """Email wins over User for the label exactly as for the audit actor."""
+    body = client.get(
+        "/api/v1/session",
+        headers={
+            "X-Forwarded-Email": _ACTOR,
+            "X-Forwarded-User": "someone.else",
+            "X-Forwarded-Groups": "",
+        },
+    ).json()
+
+    assert body["actor_display_name"] == "Approver One"
+
+
+def test_role_labels_name_the_capability_tiers_the_server_decided(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "admin_emails", "admin.person@summit.example")
+    monkeypatch.setattr(settings, "admin_identities", "")
+    monkeypatch.setattr(settings, "approver_emails", _ACTOR)
+    monkeypatch.setattr(settings, "approver_identities", "")
+
+    def labels(email: str) -> list[str]:
+        body = client.get(
+            "/api/v1/session",
+            headers={"X-Forwarded-Email": email, "X-Forwarded-Groups": ""},
+        ).json()
+        # Labels never contradict the authorization booleans.
+        assert ("Administrator" in body["role_labels"]) is body["can_access_admin"]
+        assert ("Approver" in body["role_labels"]) is body["can_approve"]
+        return list(body["role_labels"])
+
+    assert labels("admin.person@summit.example") == ["Administrator", "Approver"]
+    assert labels(_ACTOR) == ["Approver"]
+    assert labels("analyst@summit.example") == ["Workspace user"]
+
+
+def test_no_forwarded_identity_means_no_name_and_no_roles(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "default_actor", "demo.default@summit.example")
+
+    body = client.get("/api/v1/session", headers={"X-Forwarded-Groups": ""}).json()
+
+    assert body["actor_display_name"] is None
+    assert body["role_labels"] == []

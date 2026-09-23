@@ -13618,6 +13618,18 @@
       },
       "SessionResponse": {
         "properties": {
+          "actor_display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A readable label for the caller's own forwarded identity, derived from the same header as actor_email and nothing else (no directory lookup): an email's local part with dot, underscore or hyphen separated letter words read as capitalised words (jane.doe@... -> 'Jane Doe'), else the local part verbatim; a non-email identity verbatim. Null exactly when actor_email is.",
+            "title": "Actor Display Name"
+          },
           "actor_email": {
             "anyOf": [
               {
@@ -13637,6 +13649,14 @@
           "can_approve": {
             "title": "Can Approve",
             "type": "boolean"
+          },
+          "role_labels": {
+            "description": "Display labels for the capability tiers this session holds, most privileged first: 'Administrator' (can_access_admin), 'Approver' (can_approve), else 'Workspace user' for any forwarded identity. Empty when no identity was forwarded. Labels only: the can_* booleans stay the authorization contract.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Role Labels",
+            "type": "array"
           }
         },
         "required": [
