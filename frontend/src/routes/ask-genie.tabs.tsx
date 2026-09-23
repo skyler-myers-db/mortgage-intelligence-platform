@@ -1,4 +1,4 @@
-import { useCallback, useRef, type KeyboardEvent } from 'react';
+import { useCallback, useLayoutEffect, useRef, type KeyboardEvent } from 'react';
 import { useLocation, useNavigate, useSearchParams, type NavigateOptions } from 'react-router';
 
 /**
@@ -14,6 +14,14 @@ import { useLocation, useNavigate, useSearchParams, type NavigateOptions } from 
  * pass over the tabs is ONE history entry, not one per key press: the first
  * key press pushes, later ones replace it, and arrowing back to the tab the
  * pass started on returns to that entry. Back then undoes the whole pass.
+ *
+ * The router renders a new location in a transition, so a second key can
+ * land before the first key's tab has rendered. Each key therefore moves
+ * from the tab it was pressed on (the focused tab), and the hook keeps the
+ * selection it last wrote (tab and pass origin) in a ref that every commit of
+ * a new location re-syncs, instead of reading the last rendered URL: with
+ * the rendered URL, End then Home pressed quickly pushed a second entry and
+ * Home's Back step landed on the wrong tab.
  *
  * Markup is the prototype's `.layout-tabs` tablist (design_files/Module 0
  * Prototype.html:958-960, placed in the hero's right slot as at :2148-2152)
@@ -67,9 +75,15 @@ export function useAskGenieTab(): [AskGenieTab, (next: AskGenieTab, input?: AskG
   // Set only on an entry a keyboard pass wrote; that entry was pushed from
   // the pass's origin, so the origin is always the entry right before it.
   const passOrigin = keyboardPassOrigin(location.state);
+  // The selection this hook last wrote, ahead of the router's render of it.
+  const latestRef = useRef({ tab, passOrigin });
+  useLayoutEffect(() => {
+    latestRef.current = { tab, passOrigin };
+  }, [location.key, tab, passOrigin]);
   const selectTab = useCallback(
     (next: AskGenieTab, input: AskGenieTabInput = 'pointer') => {
-      if (next === tab) return;
+      const latest = latestRef.current;
+      if (next === latest.tab) return;
       const write = (options?: NavigateOptions) =>
         setSearchParams((current) => {
           const params = new URLSearchParams(current);
@@ -77,14 +91,27 @@ export function useAskGenieTab(): [AskGenieTab, (next: AskGenieTab, input?: AskG
           else params.set(ASK_GENIE_TAB_PARAM, next);
           return params;
         }, options);
-      if (input === 'keyboard' && passOrigin !== null) {
-        if (next === passOrigin) navigate(-1);
-        else write({ replace: true, state: { [KEYBOARD_PASS_ORIGIN]: passOrigin } });
+      if (input === 'keyboard' && latest.passOrigin !== null) {
+        const origin = latest.passOrigin;
+        // Back to the entry the pass was pushed from, which carries no pass.
+        if (next === origin) {
+          latestRef.current = { tab: next, passOrigin: null };
+          navigate(-1);
+          return;
+        }
+        latestRef.current = { tab: next, passOrigin: origin };
+        write({ replace: true, state: { [KEYBOARD_PASS_ORIGIN]: origin } });
         return;
       }
-      write(input === 'keyboard' ? { state: { [KEYBOARD_PASS_ORIGIN]: tab } } : undefined);
+      if (input === 'keyboard') {
+        latestRef.current = { tab: next, passOrigin: latest.tab };
+        write({ state: { [KEYBOARD_PASS_ORIGIN]: latest.tab } });
+        return;
+      }
+      latestRef.current = { tab: next, passOrigin: null };
+      write();
     },
-    [tab, passOrigin, setSearchParams, navigate],
+    [setSearchParams, navigate],
   );
   return [tab, selectTab];
 }
@@ -99,7 +126,9 @@ export function AskGenieTabs({ tab, onSelect }: AskGenieTabsProps) {
   const ids = ASK_GENIE_TABS.map((item) => item.id);
 
   const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
-    const index = ids.indexOf(tab);
+    // The tab the key was pressed on: focus moves at once, the render later.
+    const pressedOn = ids.find((id) => askGenieTabId(id) === event.currentTarget.id) ?? tab;
+    const index = ids.indexOf(pressedOn);
     let next: AskGenieTab | null = null;
     if (event.key === 'ArrowRight' || event.key === 'ArrowDown') next = ids[(index + 1) % ids.length];
     else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') next = ids[(index - 1 + ids.length) % ids.length];

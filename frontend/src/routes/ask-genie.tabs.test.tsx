@@ -136,6 +136,32 @@ describe('/ask-genie page tabs', () => {
     expect(navigate).toHaveBeenCalledWith(-1);
   });
 
+  it('keeps one keyboard pass one entry when keys land before the router renders', async () => {
+    mount('/ask-genie');
+    await waitUntil(() => tabs().length === 3);
+    act(() => selectedTab().focus());
+    const press = (key: string) =>
+      (document.activeElement ?? selectedTab()).dispatchEvent(
+        new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }),
+      );
+
+    // One act(): the router renders a new location in a transition, so no
+    // key here sees the previous key's tab rendered (a fast typist, or a
+    // busy main thread, in the browser).
+    act(() => {
+      press('ArrowRight');
+      press('ArrowRight');
+      press('ArrowLeft');
+      press('ArrowLeft');
+    });
+    // Ask → Workflows → Saved monitors → Workflows → Ask: each key moved from
+    // the tab it was pressed on, and the last one returned to the pass's
+    // origin entry instead of writing another.
+    expect(document.activeElement?.textContent).toBe('Ask');
+    expect(navigate).toHaveBeenCalledTimes(1);
+    expect(navigate).toHaveBeenCalledWith(-1);
+  });
+
   it('shows a run in progress on the Workflows tab, then its result in the same place', async () => {
     let resolveRun: ((value: GrowthAgentRunResponse) => void) | undefined;
     runGrowthAgentWorkflow.mockReturnValueOnce(
