@@ -128,6 +128,11 @@
   transform: translateY(calc(-100% - var(--sp-1)));
   color: var(--rate-window-screen-ink);
 }
+/* A screen near the top of the rate domain (REF_LABEL_MIN_Y_PCT) would lift
+   its label out of the plot into the panel title: hang it below the line. */
+.rate-window .rate-window__ref-label--below {
+  transform: translateY(var(--sp-1));
+}
 .rate-window__current {
   inset-inline-end: 0;
   inset-block-start: var(--tick-pos);

@@ -17,6 +17,7 @@ import {
   itmY,
   rateY,
   RATE_WINDOW_TITLE,
+  REF_LABEL_MIN_Y_PCT,
   type RateWindowModel,
 } from './analytics.rate-window.lib';
 
@@ -134,6 +135,7 @@ function RateWindowCharts({ model }: { model: RateWindowModel }) {
   const itmArea = `${model.points[0].x.toFixed(2)},100 ${itmLine} ${model.points[model.points.length - 1].x.toFixed(2)},100`;
   const currentY = rateY(model, model.current.marketPct);
   const thresholdY = model.threshold ? rateY(model, model.threshold.ratePct) : null;
+  const refLabelBelow = thresholdY !== null && thresholdY < REF_LABEL_MIN_Y_PCT;
   return (
     <div className="rate-window__panels" role="img" aria-label={model.ariaLabel}>
       <div className="rate-window__panel rate-window__panel--rates" data-testid="rate-window-rates">
@@ -167,7 +169,11 @@ function RateWindowCharts({ model }: { model: RateWindowModel }) {
               {model.threshold && thresholdY !== null && (
                 // textContent always equals model.threshold.label; a narrow
                 // plot hides the detail span and keeps name + rate.
-                <span className="rate-window__ref-label" style={tickStyle(thresholdY)} data-testid="rate-window-threshold">
+                <span
+                  className={`rate-window__ref-label${refLabelBelow ? ' rate-window__ref-label--below' : ''}`}
+                  style={tickStyle(thresholdY)}
+                  data-testid="rate-window-threshold"
+                >
                   Spread screen
                   <span className="rate-window__ref-detail">: {model.threshold.minSpreadBps} bps below the book median</span>
                   {` (${formatRatePct(model.threshold.ratePct)})`}

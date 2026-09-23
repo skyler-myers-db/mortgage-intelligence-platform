@@ -133,6 +133,15 @@ export interface RateWindowModel {
   ariaLabel: string;
 }
 
+/**
+ * The spread-screen label rises above its line. The rate plot is 3 x --sp-16
+ * tall and the label needs one --fs-11 line at --lh-tight plus the --sp-1 gap
+ * above it (about 9% of the plot), two lines where a narrow plot wraps it.
+ * A line nearer the top than this (rateY, top-down) would push the label out
+ * of the plot into the panel title, so the label drops beneath the line.
+ */
+export const REF_LABEL_MIN_Y_PCT = 18;
+
 /** Vertical position (0..100, top-down) inside the rate panel, with a small inset so edge strokes stay visible. */
 export function rateY(model: Pick<RateWindowModel, 'rate'>, value: number): number {
   const span = model.rate.max - model.rate.min;

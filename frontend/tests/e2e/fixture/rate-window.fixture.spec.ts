@@ -11,7 +11,7 @@
 import type { Page } from '@playwright/test';
 import type { RateWindowResponse } from '../../../src/types';
 import { analyticsFixtures } from './data/analytics';
-import { RATE_WINDOW, RATE_WINDOW_EXPECTED, RATE_WINDOW_WEEK_COUNT } from './data/rateWindow';
+import { RATE_WINDOW, RATE_WINDOW_EXPECTED, RATE_WINDOW_SCREEN_NEAR_TOP, RATE_WINDOW_WEEK_COUNT } from './data/rateWindow';
 import { json, WAREHOUSE_WARMING_UP } from './mockApi';
 import { expect, test } from './test';
 
@@ -298,6 +298,29 @@ test.describe('analytics executive: why-now rate window', () => {
     // The detail is hidden on a narrow plot, never lost: the text and the image description keep it.
     await expect(page.getByTestId('rate-window-threshold')).toHaveText(RATE_WINDOW_EXPECTED.thresholdLabel);
   });
+
+  for (const width of [1440, 390]) {
+    test(`at ${width}px a spread screen near the top of the rate domain hangs its label inside the plot`, async ({ app, page, mockApi }) => {
+      mockApi.register('GET', '/api/analytics/rate-window', () => json<RateWindowResponse>(RATE_WINDOW_SCREEN_NEAR_TOP));
+      await page.setViewportSize({ width, height: width < 768 ? 844 : 900 });
+      await app.setTheme('dark');
+      await app.gotoRoute('/analytics');
+      await expect(page.getByTestId('rate-window-threshold')).toHaveText('Spread screen: 5 bps below the book median (6.95%)');
+
+      const geometry = await axisGeometry(page);
+      const rates = geometry.canvases[0];
+      expect(rates, 'rate plot rendered').toBeDefined();
+      expect(geometry.threshold, 'threshold label rendered').not.toBeNull();
+      if (!rates || !geometry.threshold) return;
+      expect(
+        inside(geometry.threshold, rates),
+        `threshold label ${fmt(geometry.threshold)} inside the rate plot ${fmt(rates)}, not up in the panel title`,
+      ).toBe(true);
+      if (geometry.current) {
+        expect(intersects(geometry.threshold, geometry.current), 'threshold label clear of the current print').toBe(false);
+      }
+    });
+  }
 
   test('the rate window is requested beside the executive read and says the tab filters do not apply', async ({ app, page, mockApi }) => {
     const executive = analyticsFixtures.find((entry) => entry.method === 'GET' && entry.pattern === '/api/analytics/executive');

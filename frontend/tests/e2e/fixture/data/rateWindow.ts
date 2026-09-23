@@ -68,6 +68,23 @@ export const RATE_WINDOW_EXPECTED = {
   thresholdLabel: 'Spread screen: 75 bps below the book median (6.35%)',
 } as const;
 
+/**
+ * Edge case for the spread-screen label: a book whose median is also its p75
+ * and the top of the rate domain (nice ticks 5.0..7.0 add no headroom), with
+ * a 5 bps screen, so the screen line sits about 6% from the top of the plot.
+ */
+export const RATE_WINDOW_SCREEN_NEAR_TOP: RateWindowResponse = {
+  ...RATE_WINDOW,
+  weeks: RATE_WINDOW_WEEKS.map((week, index) => ({
+    ...week,
+    market_rate_pct: Number((5 + index / (RATE_WINDOW_WEEK_COUNT - 1)).toFixed(2)),
+    book_median_pct: 7,
+    book_p25_pct: 6.8,
+    book_p75_pct: 7,
+  })),
+  thresholds: { ...THRESHOLDS, min_spread_bps: 5 },
+};
+
 export const rateWindowFixtures: FixtureEntry[] = [
   fixture('GET', '/api/analytics/rate-window', () => json<RateWindowResponse>(RATE_WINDOW)),
 ];
