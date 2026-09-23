@@ -1,0 +1,120 @@
+/* ============================================================
+   RANKED-BORROWER TABLE — one-line rows, merged Status, presets
+   (audit visual-01, tables-01, tables-04, tables-05, flow-01).
+   Shipped with the lazy LeadTable chunk so the shell stylesheet
+   stays inside its budget; the base `.tbl` rules, the column
+   widths and the Approval pin live in
+   design-system/components/03-score-and-table.css.
+   ============================================================ */
+
+/* Width below which each view scrolls horizontally behind the pinned
+   Approval column: the fixed column widths (03-score-and-table.css) plus a
+   170px floor for Primary offer. Default = the prototype's columns plus
+   Status (design_files/Module 0 Prototype.html:2013-2023) and fits the
+   1,318px scrollport at 1440x900 with the Console closed. */
+.lead-table__table--default { min-inline-size: 1278px; }
+.lead-table__table--sales-ops { min-inline-size: 1596px; }
+
+/* Declared prototype deviation: the prototype fixes the table scroller at
+   maxHeight 480 (design_files/Module 0 Prototype.html:2009) and the app used
+   a fixed 520px. The Lead Queue's scroller now fills the viewport below the
+   shell chrome (topbar, route nav, the table surface header and footer) and
+   is floored at the prototype's 480px, so a 900px-tall screen shows the
+   ranked list instead of five rows in a box. */
+.tbl-wrap.tbl-wrap--fill {
+  max-height: none;
+  max-block-size: max(480px, calc(100dvh - var(--shell-topbar-h, var(--sp-12)) - var(--sp-16) * 3));
+}
+
+/* One line per cell: a primary value, then `+n`. Chips shrink with an
+   ellipsis; the `+n` and compliance flags never do. */
+.lead-table__line {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-inline-size: 0;
+  max-inline-size: 100%;
+}
+.lead-table__line > .chip {
+  flex: 0 1 auto;
+  min-inline-size: 0;
+}
+.lead-table__line > .lead-table__more,
+.lead-table__line > .evidence-chip {
+  flex: 0 0 auto;
+}
+.lead-table__more {
+  cursor: pointer;
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+.lead-table__more:hover {
+  border-color: var(--line-2);
+  color: var(--text-1);
+}
+.lead-table__offer {
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lead-table__location { line-height: var(--lh-snug); }
+.lead-table__city {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Status cell: compliance flags first (always in full), then the primary
+   workflow chip + `+n`. The two groups wrap only when a row carries both a
+   compliance flag and a workflow state that do not fit one line. */
+.lead-table__status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1);
+  min-inline-size: 0;
+}
+.lead-table__status > .lead-table__line { flex: 1 1 0; }
+.lead-table__flags {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+}
+.lead-table__flag { flex-shrink: 0; }
+.lead-table__empty { color: var(--text-3); }
+
+/* Status header menu: the `.filter-menu` dropdown anchored to the header's
+   end edge so it opens over the Signal / Score columns, not under the pin. */
+.lead-table__status-header.is-open { z-index: var(--z-raised-4); }
+.lead-table__status-header .lead-table__status-menu {
+  left: auto;
+  inset-inline-end: 0;
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 400;
+}
+
+/* Expanded row: the workflow strip that took the row's timestamps,
+   lifecycle-advance control and Log button. Pinned to the scrollport's
+   start edge like the preview above it. */
+.lead-row-workflow {
+  position: sticky;
+  left: 0;
+  max-inline-size: calc(100cqw - 2 * var(--pad-card));
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.lead-row-workflow__fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3) var(--sp-6);
+}
+.lead-row-workflow__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-inline-size: 0;
+}

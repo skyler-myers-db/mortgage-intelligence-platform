@@ -60,10 +60,18 @@ describe('layout containment contracts', () => {
   it('prevents lead-table chips from compressing into neighboring cells', () => {
     const css = designCss();
 
+    // The lazy LeadTable chunk ships its one-line cell rules with it.
+    const tableCss = readFileSync(join(process.cwd(), 'src/components/mortgage/LeadTable.css'), 'utf8');
+
     expect(css).toMatch(/\.tbl-wrap\s*\{[^}]*overflow:\s*auto;/s);
-    expect(css).toMatch(/\.lead-table__table\s*\{[^}]*inline-size:\s*max-content;/s);
+    // Audit visual-01: the table fills its scrollport (fixed layout) and a
+    // preset scrolls below its minimum width; `inline-size: max-content` let
+    // header text widen it past the 1,318px scrollport at 1440x900.
+    expect(css).toMatch(/\.lead-table__table\s*\{[^}]*table-layout:\s*fixed;[^}]*inline-size:\s*100%;/s);
+    expect(tableCss).toMatch(/\.lead-table__table--default\s*\{[^}]*min-inline-size:/s);
     expect(css).toMatch(/\.chip__label\s*\{[^}]*text-overflow:\s*ellipsis;/s);
-    expect(css).toMatch(/\.lead-table__segments\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/s);
+    expect(css).toMatch(/\.lead-table__segments \.chip\s*\{[^}]*text-overflow:\s*ellipsis;/s);
+    expect(tableCss).toMatch(/\.lead-table__line > \.chip\s*\{[^}]*min-inline-size:\s*0;/s);
   });
 
   it('keeps small interactive chips at the WCAG 2.2 AA touch-target floor', () => {

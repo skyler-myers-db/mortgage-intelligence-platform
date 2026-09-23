@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Link, useSearchParams } from 'react-router';
@@ -14,9 +14,9 @@ import {
   LEAD_EXPANDED_PREVIEW_ESTIMATE_PX,
   LEAD_ROW_ESTIMATE_PX,
   LEAD_ROW_OVERSCAN,
-  LEAD_TABLE_COL_COUNT,
   LEAD_VIRTUALIZATION_THRESHOLD,
 } from './LeadTable.constants';
+import { leadTableColumnCount, leadTableColumns } from './LeadTable.columns';
 import {
   isEditableTarget,
   isLeadApprovalEligible,
@@ -25,7 +25,9 @@ import {
   sortValue,
   verifiedCampaignBinding,
 } from './LeadTable.logic';
+import { LeadTableHead } from './LeadTableHead';
 import { LeadTableRow } from './LeadTableRow';
+import { LeadTableViewControl } from './LeadTableViewControl';
 import { LeadTableBulkActions, LeadTableBulkToast } from './LeadTableBulkActions';
 import { LeadTableStatusChips } from './LeadTableStatusChips';
 import { LeadDispositionPanel, LeadRejectPanel } from './LeadTableDecisionPanels';
@@ -34,6 +36,7 @@ import { useLeadSalesActions } from './useLeadSalesActions';
 import { useLeadTableHotkeys } from './useLeadTableHotkeys';
 import { approverGateReason } from './approverGate';
 import type { LeadTableProps, SortDir, SortKey } from './LeadTable.types';
+import './LeadTable.css';
 
 export { buildLeadCsv } from './LeadTable.csv';
 export {
@@ -44,6 +47,7 @@ export {
   isLeadSelectableForSalesOps,
 } from './LeadTable.logic';
 export type { LeadExportContext } from './LeadTable.types';
+export type { LeadTableView } from './LeadTable.columns';
 
 /**
  * LeadTable — prototype `.surface` + `.tbl` BEM. Sticky thead, hover, row
@@ -82,6 +86,9 @@ export function LeadTable({
   growthAgentVerification = null,
   exportContext,
   salesTeam = [],
+  view = 'default',
+  onViewChange,
+  fillHeight = false,
 }: LeadTableProps) {
   'use no memo';
 
@@ -115,6 +122,8 @@ export function LeadTable({
           : 'invalid';
   const campaignBindingBlocked = hasCampaignBindingRequest && campaignBinding === null;
   const tableWrapRef = useRef<HTMLDivElement | null>(null);
+  const columns = leadTableColumns(view);
+  const columnCount = leadTableColumnCount(view);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>('rank');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
@@ -240,8 +249,6 @@ export function LeadTable({
     }
   }, tableWrapRef);
 
-  const stop = (e: ReactKeyboardEvent | ReactMouseEvent) => e.stopPropagation();
-
   /** Assign / distribute the current selection. The selection set lives in
    *  the approval hook, so the shell hands both it and the clear callback to
    *  the sales hook — see `useLeadSalesActions.assignSelected`. */
@@ -295,30 +302,6 @@ export function LeadTable({
     });
   }
 
-  // 2026-06-11 audit P3 a11y: renderSortHeader returns the full <th> so
-  // `aria-sort` lives on the columnheader role (the only role where the
-  // ARIA spec defines it — putting it on the inner button would be
-  // invalid ARIA and ignored by screen readers).
-  const renderSortHeader = (key: SortKey, label: string, thClassName?: string) => (
-    <th
-      className={thClassName}
-      aria-sort={sortKey === key ? (sortDir === 'desc' ? 'descending' : 'ascending') : 'none'}
-    >
-      <button
-        type="button"
-        className="tbl__sort"
-        onClick={() => toggleSort(key)}
-        aria-label={`Sort by ${label}`}
-        aria-pressed={sortKey === key}
-      >
-        <span>{label}</span>
-        {sortKey === key && key !== 'rank' && (
-          <Icon name={sortDir === 'desc' ? 'down' : 'up'} size={10} />
-        )}
-      </button>
-    </th>
-  );
-
   return (
     // 2026-05-04 fix (alignment): removed inline `overflow: hidden`.
     // It was establishing a new block formatting context that, combined
@@ -346,7 +329,7 @@ export function LeadTable({
                 makes the affordance scannable — an LO scrolling the
                 queue can spot the shortcut without reading prose.
               */}
-              Click a row to expand the preview. Keyboard: <kbd>A</kbd> approve, <kbd>R</kbd> reject the expanded row while it is still pending. Shortcuts act only while focus is in the table and no panel or menu is open.
+              Expand a row to preview. <kbd>A</kbd> approves, <kbd>R</kbd> rejects the expanded pending row while focus is in the table.
               {approverGate === null && actorEmail && (
                 <> Approving as <span className="mono" data-testid="lead-approving-as">{actorEmail}</span>.</>
               )}
@@ -354,6 +337,7 @@ export function LeadTable({
           </div>
         </div>
         <div className="lead-table__header-actions">
+          {onViewChange && <LeadTableViewControl view={view} onChange={onViewChange} />}
           {exportState.status === 'done' && (
             <span className="muted fs-12" data-testid="lead-export-receipt">
               Exported {exportState.rowCount.toLocaleString()} {exportState.rowCount === 1 ? 'row' : 'rows'}
@@ -449,68 +433,28 @@ export function LeadTable({
       )}
       <div
         ref={tableWrapRef}
-        className="tbl-wrap"
+        className={fillHeight ? 'tbl-wrap tbl-wrap--fill' : 'tbl-wrap'}
         role="region"
         tabIndex={0}
         aria-label="Ranked borrowers table scroll region"
       >
         <table
-          className="tbl lead-table__table"
+          className={`tbl lead-table__table lead-table__table--${view}`}
           aria-rowcount={sortedLeads.length + 1 + (hasExpandedRow ? 1 : 0)}
         >
-          <colgroup>
-            <col className="lead-table__col-select" />
-            <col className="lead-table__col-expand" />
-            <col className="lead-table__col-borrower" />
-            <col className="lead-table__col-location" />
-            <col className="lead-table__col-relationship" />
-            <col className="lead-table__col-assignment" />
-            <col className="lead-table__col-outreach" />
-            <col className="lead-table__col-disposition" />
-            <col className="lead-table__col-segments" />
-            <col className="lead-table__col-equity" />
-            <col className="lead-table__col-rate" />
-            <col className="lead-table__col-offer" />
-            <col className="lead-table__col-score" />
-            <col className="lead-table__col-confidence" />
-            <col className="lead-table__col-approval" />
-          </colgroup>
-          <thead>
-            <tr>
-              <th className="tbl-cell--select">
-                <input
-                  type="checkbox"
-                  aria-label="Select all eligible leads"
-                  checked={approval.headerCheckboxState.checked}
-                  ref={(el) => {
-                    if (el) el.indeterminate = approval.headerCheckboxState.indeterminate;
-                  }}
-                  disabled={approval.selectableIds.length === 0 || approval.bulkApproving}
-                  onChange={approval.toggleSelectAll}
-                  onClick={stop}
-                  data-testid="lead-select-all"
-                />
-              </th>
-              <th className="tbl-cell--narrow"></th>
-              <th>Borrower</th>
-              <th>Location</th>
-              {renderSortHeader('relationship', 'Relationship')}
-              {renderSortHeader('assignment', 'Assigned to')}
-              {renderSortHeader('outreach', 'Outreach')}
-              <th>Last touch</th>
-              <th>Segments</th>
-              {renderSortHeader('equity', 'Equity', 'tbl-cell--right')}
-              {renderSortHeader('rate', 'Rate Δ (bps)', 'tbl-cell--right')}
-              <th>Primary offer</th>
-              {renderSortHeader('score', 'Score', 'tbl-cell--right')}
-              {renderSortHeader('confidence', 'Signal')}
-              <th className="tbl-cell--approval lead-table__approval-header">Approval</th>
-            </tr>
-          </thead>
+          <LeadTableHead
+            columns={columns}
+            sortKey={sortKey}
+            sortDir={sortDir}
+            onSort={toggleSort}
+            headerCheckbox={approval.headerCheckboxState}
+            selectAllDisabled={approval.selectableIds.length === 0 || approval.bulkApproving}
+            onToggleSelectAll={approval.toggleSelectAll}
+          />
           {shouldVirtualize && topSpacerHeight > 0 && (
             <tbody aria-hidden="true">
               <tr aria-hidden="true" className="lead-table__virtual-spacer">
-                <td colSpan={LEAD_TABLE_COL_COUNT} style={{ height: topSpacerHeight }} />
+                <td colSpan={columnCount} style={{ height: topSpacerHeight }} />
               </tr>
             </tbody>
           )}
@@ -537,6 +481,7 @@ export function LeadTable({
                   <LeadTableRow
                     lead={lead}
                     virtualIndex={virtualIndex}
+                    view={view}
                     ariaRowIndex={virtualIndex + 2 + (
                       hasExpandedRow && virtualIndex > expandedRowIndex ? 1 : 0
                     )}
@@ -568,7 +513,7 @@ export function LeadTable({
             {shouldVirtualize && bottomSpacerHeight > 0 && (
               <tbody aria-hidden="true">
               <tr aria-hidden="true" className="lead-table__virtual-spacer">
-                <td colSpan={LEAD_TABLE_COL_COUNT} style={{ height: bottomSpacerHeight }} />
+                <td colSpan={columnCount} style={{ height: bottomSpacerHeight }} />
               </tr>
               </tbody>
             )}

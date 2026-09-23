@@ -73,13 +73,18 @@ const baseLead: LeadSummary = {
   outreach_status: 'none',
 };
 
-function renderRow(root: Root, lead: LeadSummary) {
+/**
+ * Audit tables-04: the one-line row keeps one Status chip; the lifecycle
+ * stage chip and its advance control moved to the expanded row's workflow
+ * strip, so the lifecycle assertions render the row open.
+ */
+function renderRow(root: Root, lead: LeadSummary, isOpen = true) {
   act(() => {
     root.render(
       <LeadTableRow
         lead={lead}
         virtualIndex={0}
-        isOpen={false}
+        isOpen={isOpen}
         approval={undefined}
         isSelected={false}
         isSelectable={false}
@@ -112,6 +117,10 @@ describe('assignment lifecycle chip', () => {
     vi.clearAllMocks();
   });
 
+  const workflowChips = (selector = '.chip') => [
+    ...document.querySelectorAll(`[data-testid="lead-workflow-${baseLead.borrower_id}"] ${selector}`),
+  ];
+
   it('renders the lifecycle chip with prototype BEM classes for an assigned lead', () => {
     renderRow(root, {
       ...baseLead,
@@ -119,8 +128,7 @@ describe('assignment lifecycle chip', () => {
       assigned_to_label: 'Summit LO 01',
       assignment_status: 'contact_drafted',
     });
-    const chips = [...document.querySelectorAll('.chip')];
-    const lifecycleChip = chips.find((chip) =>
+    const lifecycleChip = workflowChips().find((chip) =>
       chip.querySelector('.chip__label')?.textContent === 'Contact drafted',
     );
     expect(lifecycleChip).toBeTruthy();
@@ -133,18 +141,39 @@ describe('assignment lifecycle chip', () => {
       assigned_to_email: 'lo01@summit.example',
       assignment_status: 'approved',
     });
-    const approved = [...document.querySelectorAll('.chip.chip--success .chip__label')].map(
-      (el) => el.textContent,
-    );
+    const approved = workflowChips('.chip.chip--success .chip__label').map((el) => el.textContent);
     expect(approved).toContain('Approved');
   });
 
-  it('renders no lifecycle chip when the lead is unassigned', () => {
-    renderRow(root, { ...baseLead, assigned_to_email: null, assignment_status: null });
+  it('keeps the lifecycle stage, its advance control and the timestamp out of the one-line row', () => {
+    const assigned = {
+      ...baseLead,
+      assigned_to_email: 'lo01@summit.example',
+      assigned_to_label: 'Summit LO 01',
+      assignment_status: 'contact_drafted' as const,
+      assignment_id: 'asg-1',
+      assigned_at: '2026-07-13T14:05:00Z',
+    };
+    renderRow(root, assigned, false);
+    const status = document.querySelector(`[data-testid="lead-status-${baseLead.borrower_id}"]`);
+    // One chip: the assignee, with the stage in its title, never a stack.
+    expect([...(status?.querySelectorAll('.chip__label') ?? [])].map((el) => el.textContent)).toEqual(['Summit LO 01']);
+    expect(status?.querySelector('.chip')?.getAttribute('title')).toBe('Assigned to Summit LO 01 · Contact drafted');
+    expect(document.querySelector(`[data-testid="lifecycle-advance-${baseLead.borrower_id}"]`)).toBeNull();
+
+    renderRow(root, assigned, true);
+    expect(document.querySelector(`[data-testid="lifecycle-advance-${baseLead.borrower_id}"]`)).not.toBeNull();
+  });
+
+  it('renders no lifecycle chip and no "Unassigned" chip when the lead is unassigned', () => {
+    renderRow(root, { ...baseLead, assigned_to_email: null, assignment_status: null }, false);
     const labels = [...document.querySelectorAll('.chip__label')].map((el) => el.textContent);
-    expect(labels).toContain('Unassigned');
+    expect(labels).not.toContain('Unassigned');
     expect(labels).not.toContain('Assigned');
     expect(labels).not.toContain('Contact drafted');
+    const status = document.querySelector(`[data-testid="lead-status-${baseLead.borrower_id}"]`);
+    expect(status?.querySelector('[aria-hidden="true"]')?.textContent).toBe('—');
+    expect(status?.textContent).toBe('—No workflow activity');
   });
 });
 

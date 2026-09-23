@@ -1,5 +1,6 @@
 import type { LeadSummary, SalesTeamMember } from '../../types';
 import type { GrowthAgentCohortVerification } from '../../lib/api';
+import type { LeadTableView } from './LeadTable.columns';
 
 export interface LeadExportContext {
   generatedAt?: string;
@@ -19,6 +20,12 @@ export interface LeadTableProps {
   growthAgentVerification?: GrowthAgentCohortVerification | null;
   exportContext?: LeadExportContext;
   salesTeam?: SalesTeamMember[];
+  /** Column preset (audit tables-05). Default: the prototype columns + Status. */
+  view?: LeadTableView;
+  /** Renders the View control; the route persists the choice in `?view=`. */
+  onViewChange?: (view: LeadTableView) => void;
+  /** Size the scroller to the viewport (floored at 480px) instead of the fixed 520px cap. */
+  fillHeight?: boolean;
 }
 
 export type RejectReasonCode =

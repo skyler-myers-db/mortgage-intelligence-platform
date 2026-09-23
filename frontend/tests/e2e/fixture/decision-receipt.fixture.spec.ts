@@ -199,7 +199,10 @@ test.describe('decision receipt', () => {
 
   test('lead queue reads back the ledger row in the expanded row after a row approve', async ({ app, page, mockApi }) => {
     const flow = registerHeldApproveFlow(mockApi);
-    await app.gotoRoute('/lead-queue');
+    // The Default preset fits the 1440 scrollport (queue-layout lane); the
+    // Sales ops preset keeps the table wider than it, which is the case the
+    // fit assertions below are about.
+    await app.gotoRoute('/lead-queue?view=sales-ops');
     await app.expandFirstLeadRow();
     // The expanded row that belongs to this borrower: the sibling of the row
     // holding its approval cell (the cell outlives the Approve button).

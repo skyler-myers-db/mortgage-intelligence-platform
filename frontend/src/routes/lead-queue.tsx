@@ -24,6 +24,7 @@ import {
   CONTACTABILITY_FILTER_OPTIONS,
   CONSENT_FILTER_OPTIONS,
   FUNNEL_STAGE_LABELS,
+  LEAD_TABLE_VIEW_PARAM,
   LOAN_PRODUCT_FILTER_OPTIONS,
   ORIGINATION_CHANNEL_FILTER_OPTIONS,
   OWNER_LINK_FILTER_OPTIONS,
@@ -43,9 +44,11 @@ import {
   parseFunnelStage,
   parsePortfolioCriteria,
   parseSegmentCodes,
+  parseLeadTableView,
   parseTargetLenderRef,
   portfolioFilterEntries,
   searchParamsAfterSegmentRemoval,
+  searchParamsWithLeadTableView,
   segmentDisplayLabel,
   segmentFilterChips,
   segmentFilterDisplayValue,
@@ -127,6 +130,7 @@ export default function LeadQueue() {
   );
   const cohortId = (searchParams.get('cohort_id') ?? '').trim() || undefined;
   const funnelStage = parseFunnelStage(searchParams.get('funnel_stage'));
+  const tableView = parseLeadTableView(searchParams.get(LEAD_TABLE_VIEW_PARAM));
   const stateOptions = useMemo(() => {
     const states = footprint.ready && !footprint.usingFallback
       ? footprint.states.map((s) => s.state_code).sort()
@@ -708,6 +712,9 @@ export default function LeadQueue() {
               : leadsData?.growthAgentVerification ?? null}
             exportContext={exportContext}
             salesTeam={salesTeam}
+            view={tableView}
+            onViewChange={(next) => setSearchParams(searchParamsWithLeadTableView(searchParams, next))}
+            fillHeight
           />
         </div>
       )}

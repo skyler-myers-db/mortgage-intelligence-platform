@@ -104,9 +104,12 @@ async function assertNoObviousTextOverlap(page: Page, label: string): Promise<vo
             if (cx < 0 || cy < 0 || cx > window.innerWidth || cy > window.innerHeight) {
               return false;
             }
-            return document.elementsFromPoint(cx, cy).some((el) =>
-              node === el || node.contains(el) || el.contains(node),
-            );
+            // The TOPMOST element only: elementsFromPoint also lists elements
+            // painted under an opaque sticky cell (the pinned Approval
+            // column), which made every scrolled-under cell read as an
+            // overlap and forced the pin's deletion in 74f8eda1.
+            const top = document.elementFromPoint(cx, cy);
+            return top !== null && (node === top || node.contains(top));
           })(),
           selector: node.className || node.tagName.toLowerCase(),
         };
