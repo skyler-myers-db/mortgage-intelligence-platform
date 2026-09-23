@@ -1,0 +1,284 @@
+/**
+ * Rendered-layer proofs for the wave-1c session-recovery lane (audit
+ * states-02, critic-v2, shell-v1, states-10), at 1440x900.
+ *
+ * The failure shapes are the ones captured on the live Databricks Apps proxy
+ * with no session (2026-09-23): `/api/*` answers 401 with a `{}` JSON body.
+ * An unreachable app is every `/api/*` request aborted; offline is
+ * `context.setOffline(true)`.
+ *
+ * Time: the harness freezes `Date` and leaves timers running; `clock.runFor`
+ * fast-forwards them deterministically (no wall-clock sleeps), which is how
+ * "nothing retries" and "the second probe" are proven.
+ */
+import AxeBuilder from '@axe-core/playwright';
+import type { Locator, Page, Route } from '@playwright/test';
+import { PRIMARY_BORROWER } from './data/borrowers';
+import { EVERY_API_PATH, PROXY_SESSION_EXPIRED, holdDefaultFixture } from './data/sessionRecovery';
+import { WAREHOUSE_WARMING_UP, type ApiCall } from './mockApi';
+import { FIXTURE_THEMES } from './routes';
+import { expect, test } from './test';
+
+const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'];
+/** Longer than three healthy health-poll intervals (8 s) and a full warming-retry budget. */
+const QUIET_WINDOW_MS = 30_000;
+/** Matches `.skeleton::after`'s computed animation name while it sweeps. */
+const SWEEP = 'skeleton-sweep';
+
+function sessionDialog(page: Page): Locator {
+  return page.getByRole('alertdialog', { name: 'Your session ended' });
+}
+
+function navLink(page: Page, name: string): Locator {
+  return page.getByRole('navigation', { name: 'Main navigation' }).getByRole('link', { name });
+}
+
+function key(call: ApiCall): string {
+  return `${call.method} ${call.path}${call.search ? `?${call.search}` : ''}`;
+}
+
+/** The computed animation of a skeleton's shimmer band, and of the block itself. */
+async function shimmer(skeleton: Locator): Promise<{ band: string; block: string }> {
+  return skeleton.evaluate((el) => ({
+    band: getComputedStyle(el, '::after').animationName,
+    block: getComputedStyle(el).animationName,
+  }));
+}
+
+test.describe('an ended session (the proxy answers 401 {})', () => {
+  for (const theme of FIXTURE_THEMES) {
+    test(`opens ONE blocking session dialog with focus on Reload, and no request retries (${theme})`, async ({ app, page, mockApi }) => {
+      await app.setTheme(theme);
+      await app.gotoRoute('/lead-queue');
+      const before = mockApi.calls.length;
+      app.degrade(EVERY_API_PATH, PROXY_SESSION_EXPIRED);
+
+      // An uncached route: its reads are the first to meet the 401.
+      await navLink(page, 'Analytics').click();
+      const dialog = sessionDialog(page);
+      await expect(dialog).toBeVisible();
+      await expect(page.locator('dialog.session-dialog')).toHaveCount(1);
+      await expect(dialog).toContainText('Reload to sign in.');
+      await expect(dialog.locator('[data-session-unrecorded]'), 'nothing was being recorded').toHaveCount(0);
+      const reload = dialog.getByRole('button', { name: 'Reload' });
+      await expect(reload).toBeFocused();
+
+      // Blocking: Tab stays inside, Escape does not dismiss it, the page
+      // behind is inert, and no connection banner competes with it.
+      await page.keyboard.press('Tab');
+      await expect(reload).toBeFocused();
+      await page.keyboard.press('Shift+Tab');
+      await expect(reload).toBeFocused();
+      await page.keyboard.press('Escape');
+      await expect(dialog).toBeVisible();
+      await expect(reload).toBeFocused();
+      expect(
+        await page.locator('dialog.session-dialog').evaluate((el) => el.matches(':modal')),
+        'opened with showModal(), so the page behind is inert',
+      ).toBe(true);
+      await expect(page.locator('.degraded-banner')).toHaveCount(0);
+
+      // No retry storm: every 401'd request was sent once, and nothing (the
+      // health poll included) reaches the proxy after the dialog opened.
+      const expired = () => mockApi.calls.slice(before).filter((call) => call.status === 401);
+      const atOpen = expired().length;
+      expect(atOpen, 'the route really met the 401').toBeGreaterThan(0);
+      await page.clock.runFor(QUIET_WINDOW_MS);
+      expect(expired().length, 'no request after the session ended').toBe(atOpen);
+      const perRequest = new Map<string, number>();
+      for (const call of expired()) perRequest.set(key(call), (perRequest.get(key(call)) ?? 0) + 1);
+      expect([...perRequest.entries()].filter(([, count]) => count > 1), 'no request was retried').toEqual([]);
+
+      const axe = await new AxeBuilder({ page }).include('dialog.session-dialog').withTags(WCAG_TAGS).analyze();
+      expect(axe.violations.map((violation) => `${violation.id}: ${violation.nodes.map((node) => node.target.join(' ')).join(', ')}`)).toEqual([]);
+    });
+  }
+
+  test('an approval in flight when the session ends says it was NOT recorded, and the row never reads Approved', async ({ app, page }) => {
+    await app.gotoRoute('/lead-queue');
+    const id = PRIMARY_BORROWER.borrower_id;
+    const cell = page.getByTestId(`lead-approval-cell-${id}`);
+    const approve = cell.getByRole('button', { name: `Approve ${id}` });
+    await expect(approve).toBeVisible();
+    app.degrade(EVERY_API_PATH, PROXY_SESSION_EXPIRED);
+
+    await approve.click();
+    const dialog = sessionDialog(page);
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator('[data-session-unrecorded="approval"]')).toHaveText(
+      'Your approval was not recorded. Approve it again after you sign in.',
+    );
+    await expect(cell).not.toContainText('Approved');
+  });
+
+  test('Reload keeps the page the user was on', async ({ app, page }) => {
+    await app.gotoRoute('/analytics?view=geography');
+    app.degrade(EVERY_API_PATH, PROXY_SESSION_EXPIRED);
+    await page.getByRole('tab', { name: 'Economics' }).click();
+    const dialog = sessionDialog(page);
+    await expect(dialog).toBeVisible();
+    const url = page.url();
+
+    const reloaded = page.waitForEvent('load');
+    await dialog.getByRole('button', { name: 'Reload' }).click();
+    await reloaded;
+    expect(page.url()).toBe(url);
+    // The proxy still has no session, so the fresh document asks again.
+    await expect(sessionDialog(page)).toBeVisible();
+  });
+});
+
+test.describe('an unreachable app (every /api request aborted)', () => {
+  test('shows "Connection lost" with Reload only after the SECOND failed probe, then recovers on its own', async ({ app, page, hygiene }) => {
+    // The aborted requests are this test's own doing.
+    hygiene.allow('request-failed', /\/api\/v1\/\S* failed: net::ERR_FAILED/);
+    hygiene.allow('console.error', /Failed to load resource: net::ERR_FAILED \(http:\/\/[^)]+\/api\/v1\//);
+    await app.gotoRoute('/analytics');
+
+    let probes = 0;
+    const abort = async (route: Route) => {
+      if (new URL(route.request().url()).pathname.endsWith('/health')) probes += 1;
+      await route.abort('failed');
+    };
+    await page.route('**/api/**', abort);
+
+    // A read that cannot reach the server makes the shell probe at once.
+    await page.getByRole('tab', { name: 'Geography' }).click();
+    const banner = page.locator('.degraded-banner[data-connection="unreachable"]');
+    await expect.poll(() => probes).toBeGreaterThanOrEqual(1);
+    await expect(banner, 'one failed probe is a blip, not an outage').toHaveCount(0);
+
+    await page.clock.runFor(3_000);
+    await expect.poll(() => probes).toBeGreaterThanOrEqual(2);
+    await expect(banner).toBeVisible();
+    await expect(banner).toContainText('Connection lost');
+    await expect(banner.getByRole('button', { name: 'Reload' })).toBeVisible();
+    await expect(sessionDialog(page)).toHaveCount(0);
+    // The failed panel speaks plainly, never the browser's transport string.
+    await expect(page.locator('#main-content')).toContainText('The app could not be reached.');
+    await expect(page.locator('#main-content')).not.toContainText('Failed to fetch');
+
+    await page.unroute('**/api/**', abort);
+    await page.clock.runFor(3_000);
+    await expect(banner).toHaveCount(0);
+    // The panel that could not reach the server reloads on its own.
+    await expect(page.getByRole('heading', { name: 'Opportunity by State' })).toBeVisible();
+  });
+});
+
+test.describe('offline', () => {
+  // Real motion, so "no shimmer" is not vacuous (the harness default is reduce).
+  test.use({ contextOptions: { reducedMotion: 'no-preference' }, traceScreenshots: false });
+
+  test('shows the offline banner, pauses queries and stops the skeleton shimmer, then resumes', async ({ app, page, mockApi, context }) => {
+    await app.gotoRoute('/analytics');
+    const skeleton = page.locator('[data-analytics-skeleton]');
+
+    // Control, online: a held read shows the skeleton WITH the transform sweep
+    // (the block itself no longer animates its background).
+    const held = holdDefaultFixture(mockApi, 'GET', '/api/analytics/geography');
+    await page.getByRole('tab', { name: 'Geography' }).click();
+    await expect(skeleton).toBeVisible();
+    await expect(skeleton).toHaveAttribute('aria-busy', 'true');
+    expect(await shimmer(skeleton.locator('.skeleton').first())).toEqual({ band: SWEEP, block: 'none' });
+    held.release();
+    await expect(skeleton).toHaveCount(0);
+
+    await context.setOffline(true);
+    const banner = page.locator('.degraded-banner[data-connection="offline"]');
+    await expect(banner).toBeVisible();
+    await expect(banner).toContainText('You are offline');
+    await expect(banner.getByRole('button')).toHaveCount(0);
+
+    const economicsCalls = () => mockApi.calls.filter((call) => call.path === '/api/analytics/economics').length;
+    await page.getByRole('tab', { name: 'Economics' }).click();
+    await expect(skeleton).toBeVisible();
+    await expect(skeleton).toContainText('Waiting for a connection');
+    await expect(skeleton).toHaveAttribute('aria-busy', 'false');
+    const bands = await skeleton.locator('.skeleton').evaluateAll((els) =>
+      els.map((el) => getComputedStyle(el, '::after').animationName),
+    );
+    expect(bands.length).toBeGreaterThan(0);
+    expect(new Set(bands), 'no shimmer while the query is paused').toEqual(new Set(['none']));
+    expect(economicsCalls(), 'the paused query never fired').toBe(0);
+
+    await context.setOffline(false);
+    await expect(banner).toHaveCount(0);
+    await expect(skeleton).toHaveCount(0);
+    expect(economicsCalls(), 'it fired once the network returned').toBe(1);
+  });
+});
+
+test.describe('skeletons shaped like what they stand in for (states-10)', () => {
+  for (const theme of FIXTURE_THEMES) {
+    test(`the Lead Queue skeleton rows are within 2px of the rendered rows, column for column (${theme})`, async ({ app, page, mockApi }) => {
+      await app.setTheme(theme);
+      const held = holdDefaultFixture(mockApi, 'GET', '/api/leads');
+      await page.goto('/lead-queue', { waitUntil: 'domcontentloaded' });
+
+      const skeletonRows = page.locator('.lead-queue-skeleton tbody tr');
+      await expect(skeletonRows.first()).toBeVisible();
+      const skeletonHeights = await skeletonRows.evaluateAll((rows) => rows.map((row) => row.getBoundingClientRect().height));
+      const skeletonColumns = await page
+        .locator('.lead-queue-skeleton thead th')
+        .evaluateAll((ths) => ths.map((th) => Math.round(th.getBoundingClientRect().width)));
+
+      held.release();
+      await app.settle();
+      const rows = page.locator('table.lead-table__table:not([aria-hidden]) tbody tr[aria-rowindex]:not(.tbl__expand)');
+      await expect(rows.nth(7)).toBeVisible();
+      const renderedHeights = await rows.evaluateAll((els) => els.slice(0, 8).map((row) => row.getBoundingClientRect().height));
+      const renderedColumns = await page
+        .locator('table.lead-table__table:not([aria-hidden]) thead th')
+        .evaluateAll((ths) => ths.map((th) => Math.round(th.getBoundingClientRect().width)));
+
+      const rendered = renderedHeights[0];
+      expect(rendered, 'one-line rows at --row-h').toBeGreaterThan(30);
+      for (const height of [...skeletonHeights, ...renderedHeights]) {
+        expect(Math.abs(height - rendered), `row height ${height} vs rendered ${rendered}`).toBeLessThanOrEqual(2);
+      }
+      expect(skeletonColumns.length).toBe(renderedColumns.length);
+      skeletonColumns.forEach((width, index) => {
+        expect(Math.abs(width - renderedColumns[index]), `column ${index + 1} width`).toBeLessThanOrEqual(2);
+      });
+    });
+  }
+
+  test('an Analytics dashboard reserves its loaded grid while it loads', async ({ app, page, mockApi }) => {
+    await app.gotoRoute('/analytics');
+    const held = holdDefaultFixture(mockApi, 'GET', '/api/analytics/geography');
+    await page.getByRole('tab', { name: 'Geography' }).click();
+    const skeleton = page.locator('[data-analytics-skeleton]');
+    await expect(skeleton).toBeVisible();
+    const reserved = await skeleton.evaluate((el) => ({
+      height: el.getBoundingClientRect().height,
+      grid: getComputedStyle(el.querySelector('.layoutA-grid')!).gridTemplateColumns,
+    }));
+
+    held.release();
+    await app.settle();
+    const loaded = await page.locator('.layoutA-grid.analytics-grid').first().evaluate((grid) => ({
+      grid: getComputedStyle(grid).gridTemplateColumns,
+      height: grid.parentElement!.getBoundingClientRect().height,
+    }));
+    expect(reserved.grid, 'the same grid track sizes as the loaded view').toBe(loaded.grid);
+    // The old placeholder was three text lines in one card (~120px).
+    expect(reserved.height).toBeGreaterThan(loaded.height * 0.6);
+    expect(reserved.height).toBeLessThan(loaded.height * 1.4);
+  });
+
+  test('Home keeps its KPI row mounted, in its loading state, through a warehouse warm-up', async ({ app, page }) => {
+    const recover = app.degrade('/api/portfolio/preview', WAREHOUSE_WARMING_UP);
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    // Wait for the warm-up itself (the transport's own retries end first).
+    await expect(page.getByTestId('warming-up-block')).toBeVisible({ timeout: 15_000 });
+    const cards = page.locator('.kpi-row > .kpi');
+    await expect(cards).toHaveCount(4);
+    await expect(page.locator('.kpi-row > .kpi.is-loading')).toHaveCount(4);
+
+    recover();
+    await page.clock.runFor(6_000);
+    await expect(page.locator('.kpi-row > .kpi.is-loading')).toHaveCount(0);
+    await expect(cards).toHaveCount(4);
+  });
+});
