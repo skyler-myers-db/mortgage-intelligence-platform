@@ -1,3 +1,9 @@
+// The hook ships in the initial chunk (the topbar search uses it). React
+// Compiler memo caches around its per-render handlers cost 1.5 KiB raw /
+// 0.7 KiB gzip there and buy nothing: the handlers go straight onto DOM
+// elements, and the effects read the latest state through useEffectEvent.
+'use no memo';
+
 import {
   useEffect,
   useEffectEvent,
