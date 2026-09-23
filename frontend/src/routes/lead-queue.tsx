@@ -18,6 +18,14 @@ import { queryKeys } from '../lib/queryKeys';
 import { LENDER_RELATIONSHIP_OPTIONS } from '../lib/lenderFilters';
 import { CITY_STATE_PAIR_RE } from '../lib/cityStateFilter';
 import { LeadQueueTableSkeleton } from './lead-queue.skeleton';
+import { LeadQueueFilterBar, LeadQueueHeroFilterChips } from './lead-queue.filterBar';
+import {
+  hasLeadQueueFilters,
+  leadQueueActiveFilterChips,
+  moreFiltersActiveCount,
+  searchParamsCleared,
+  searchParamsWithoutFilter,
+} from './lead-queue.activeFilters';
 import {
   AGING_FILTER_OPTIONS,
   APPROVAL_FILTER_OPTIONS,
@@ -46,10 +54,8 @@ import {
   parseSegmentCodes,
   parseLeadTableView,
   parseTargetLenderRef,
-  portfolioFilterEntries,
   searchParamsAfterSegmentRemoval,
   searchParamsWithLeadTableView,
-  segmentDisplayLabel,
   segmentFilterChips,
   segmentFilterDisplayValue,
 } from './lead-queue.filters';
@@ -80,7 +86,8 @@ interface AdminRulesSummary {
 
 export default function LeadQueue() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const filtersActive = searchParams.toString().length > 0;
+  // `?view=` is a column preset, not a filter: it never enables Clear all.
+  const filtersActive = hasLeadQueueFilters(searchParams);
   const footprint = useFootprint();
   const { canAccessAdmin } = useApp();
   const segment = parseSegmentCodes(searchParams.get('segment'))[0];
@@ -123,10 +130,6 @@ export default function LeadQueue() {
   const portfolioCriteria = useMemo(
     () => parsePortfolioCriteria(searchParams, targetLenderOptions),
     [searchParams, targetLenderOptions],
-  );
-  const portfolioFilters = useMemo(
-    () => portfolioFilterEntries(portfolioCriteria),
-    [portfolioCriteria],
   );
   const cohortId = (searchParams.get('cohort_id') ?? '').trim() || undefined;
   const funnelStage = parseFunnelStage(searchParams.get('funnel_stage'));
@@ -362,59 +365,26 @@ export default function LeadQueue() {
     refreshedAt: exportRefreshedAt,
     rulesVersion,
   };
-  const heroFiltersActive = Boolean(
-    segment
-      || segmentCodes.length > 0
-      || stateFilter
-      || zipFilter
-      || stateFilters.length > 0
-      || zipFilters.length > 0
-      || cityFilters.length > 0
-      || borrowerIdFilters.length > 0
-      || countyFilter
-      || countyFilters.length > 0
-      || targetLenderRef
-      || portfolioCriteria
-      || cohortId
-      || funnelStage
-      || approvalStatus !== 'any'
-      || outreachStatus !== 'any'
-      || assignedTo
-      || agedDays,
-  );
-  const heroFilterChips: Array<{ key: string; variant: 'neutral' | 'success'; label: string }> = [];
-  if (segment) heroFilterChips.push({ key: 'segment', variant: 'neutral', label: `segment = ${segmentDisplayLabel(segment)}` });
-  if (segmentCodes.length > 0) {
-    heroFilterChips.push({
-      key: 'segments',
-      variant: 'neutral',
-      label: `segments = ${segmentCodes.map(segmentDisplayLabel).join(', ')} (${segmentMode === 'all' ? 'all selected' : 'any selected'})`,
-    });
-  }
-  if (stateFilter) heroFilterChips.push({ key: 'state', variant: 'neutral', label: `state = ${stateFilter}` });
-  if (zipFilter) heroFilterChips.push({ key: 'zip', variant: 'neutral', label: `zip = ${zipFilter}` });
-  if (stateFilters.length > 0) heroFilterChips.push({ key: 'states', variant: 'neutral', label: `states = ${stateFilters.join(', ')}` });
-  if (zipFilters.length > 0) heroFilterChips.push({ key: 'zips', variant: 'neutral', label: `zips = ${zipFilters.length} selected` });
-  if (cityFilters.length > 0) {
-    // Spell the pairs out: `CHICAGO~IL` is the whole point, and a count
-    // would hide which state each city was resolved in.
-    heroFilterChips.push({ key: 'cities', variant: 'neutral', label: `cities = ${cityFilters.join(', ')}` });
-  }
-  if (borrowerIdFilters.length > 0) heroFilterChips.push({ key: 'borrowers', variant: 'neutral', label: `borrowers = ${borrowerIdFilters.length} selected` });
-  if (countyFilter) heroFilterChips.push({ key: 'county', variant: 'neutral', label: `county = ${countyFilter}` });
-  if (countyFilters.length > 0) heroFilterChips.push({ key: 'counties', variant: 'neutral', label: `counties = ${countyFilters.length} selected` });
-  if (targetLenderRef) heroFilterChips.push({ key: 'lender', variant: 'neutral', label: `lender = ${targetLenderRef}` });
-  if (funnelStage) heroFilterChips.push({ key: 'stage', variant: 'success', label: `stage = ${FUNNEL_STAGE_LABELS[funnelStage]}` });
-  for (const filter of portfolioFilters) {
-    heroFilterChips.push({ key: `portfolio-${filter.key}`, variant: 'neutral', label: `${filter.label} = ${filter.value}` });
-  }
-  if (approvalStatus !== 'any') heroFilterChips.push({ key: 'approval', variant: 'neutral', label: `approval = ${approvalStatus}` });
-  if (outreachStatus !== 'any') heroFilterChips.push({ key: 'outreach', variant: 'neutral', label: `outreach = ${outreachStatus}` });
-  if (assignedTo) heroFilterChips.push({ key: 'assigned', variant: 'neutral', label: `assigned = ${assignedTo}` });
-  if (agedDays) heroFilterChips.push({ key: 'aged', variant: 'neutral', label: `aged > ${agedDays}d` });
-  if (cohortId) heroFilterChips.push({ key: 'cohort', variant: 'success', label: 'Genie cohort' });
-  const visibleHeroFilterChips = heroFilterChips.slice(0, 3);
-  const hiddenHeroFilterCount = Math.max(heroFilterChips.length - visibleHeroFilterChips.length, 0);
+  // Audit tables-06: the hero lists the active NON-core filters as removable
+  // chips (their pills sit collapsed behind "More filters"); core filters
+  // stay visible as highlighted pills in the filter row.
+  const activeFilterChips = leadQueueActiveFilterChips({
+    targetLenderRef,
+    portfolioCriteria,
+    outreachStatus,
+    assignedTo,
+    agedDays,
+    zipFilter,
+    zipFilters,
+    cityFilters,
+    countyFilter,
+    countyFilters,
+    borrowerIdFilters,
+    cohortId,
+    funnelStage,
+  });
+  const moreActiveCount = moreFiltersActiveCount(activeFilterChips);
+  const clearAllFilters = () => setSearchParams(searchParamsCleared(searchParams));
   const scopeFiltersActive = Boolean(
     funnelStage
       || zipFilter
@@ -431,43 +401,15 @@ export default function LeadQueue() {
     <PageShell
       eyebrow="Lead Queue"
       title="Ranked borrowers"
-      lede="Click a row to expand the borrower preview. Approve, reject, assign to LOs, log call outcomes, or open Borrower 360 for the full dossier. Keyboard: while the expanded row is still pending, A approves and R rejects."
+      lede="Expand a row for its evidence, then approve or reject. Nothing is sent until you approve."
       heroRight={
-        <div
-          className={`page-filter-chips ${heroFiltersActive ? '' : 'is-empty'}`}
-          aria-hidden={!heroFiltersActive || undefined}
-        >
-          {heroFiltersActive ? (
-          <>
-            {visibleHeroFilterChips.map((chip) => (
-              <Chip key={chip.key} variant={chip.variant}>
-                {chip.label}
-              </Chip>
-            ))}
-            {hiddenHeroFilterCount > 0 && <Chip variant="neutral">+{hiddenHeroFilterCount} filters</Chip>}
-          </>
-          ) : null}
-        </div>
+        <LeadQueueHeroFilterChips
+          chips={activeFilterChips}
+          onRemove={(chip) => setSearchParams(searchParamsWithoutFilter(searchParams, chip.params))}
+        />
       }
     >
       <div className="surface mb-grid">
-        <div className="surface__hdr surface__hdr--split">
-          <div className="surface__hdr-main">
-            <div className="h-4">Queue filters</div>
-            <div className="muted fs-12">
-              Narrow the operational queue without hand-editing the URL.
-            </div>
-          </div>
-          <button
-            type="button"
-            className="btn btn--ghost btn--sm"
-            disabled={!filtersActive}
-            aria-disabled={!filtersActive}
-            onClick={() => setSearchParams(new URLSearchParams())}
-          >
-            Clear filters
-          </button>
-        </div>
         <div className="surface__body">
           <div
             className={`lead-queue-scope ${scopeFiltersActive ? '' : 'is-empty'}`}
@@ -524,117 +466,128 @@ export default function LeadQueue() {
               )}
             </div>
           )}
-          <div className="filter-row filter-row--lead-queue">
-            <FilterSelect
-              label="STATE"
-              value={stateFilterDisplay}
-              options={stateFilterOptions}
-              onChange={(v) => {
-                if (v === stateFilterDisplay && stateFilters.length > 0) return;
-                updateParam('state', v === 'All states' ? null : v);
-              }}
-            />
-            <FilterSelect
-              label="RELATIONSHIP"
-              value={relationshipFilter}
-              options={[...LENDER_RELATIONSHIP_OPTIONS]}
-              onChange={(v) => updateParam('lender_relationship', v)}
-            />
-            <FilterSelect
-              label="TARGET LIEN HOLDER"
-              value={targetLenderRef ?? 'All'}
-              options={targetLenderOptions}
-              onChange={(v) => updateParam('target_lender_ref', v)}
-            />
-            <FilterSelect
-              label="OWNER LINK"
-              value={ownerLinkFilter}
-              options={[...OWNER_LINK_FILTER_OPTIONS]}
-              onChange={(v) => updateParam('owner_link', v)}
-            />
-            <FilterSelect
-              label="PURCHASE INTENT"
-              value={purchaseIntentFilter}
-              options={[...PURCHASE_INTENT_FILTER_OPTIONS]}
-              onChange={(v) => updateParam('purchase_intent', v)}
-            />
-            <FilterSelect
-              label="SEGMENT"
-              value={segmentFilter}
-              options={segmentFilterOptions}
-              onChange={(v) => {
-                if (v === segmentFilter && segmentCodes.length > 0) return;
-                const code = SEGMENT_OPTION_TO_CODE[v];
-                updateParam('segment', code);
-              }}
-            />
-            <FilterSelect
-              label="PRODUCT"
-              value={productFilter}
-              options={[...PRODUCT_FILTER_OPTIONS]}
-              onChange={(v) => updateParam('product', v)}
-            />
-            <FilterSelect
-              label="PRODUCT TYPE"
-              value={loanProductFilter}
-              options={[...LOAN_PRODUCT_FILTER_OPTIONS]}
-              onChange={(v) => updateParam('loan_product', v === 'All loan products' ? null : v)}
-            />
-            <FilterSelect
-              label="CHANNEL"
-              value={originationChannelFilter}
-              options={[...ORIGINATION_CHANNEL_FILTER_OPTIONS]}
-              onChange={(v) => updateParam('origination_channel', v === 'All channels' ? null : v)}
-            />
-            <FilterSelect
-              label="CONTACTABILITY"
-              value={contactabilityFilter}
-              options={[...CONTACTABILITY_FILTER_OPTIONS]}
-              onChange={(v) => updateParam(
-                'marketing_eligibility',
-                v === 'Eligible only' ? null : v,
-              )}
-            />
-            <FilterSelect
-              label="CONSENT"
-              value={consentFilter}
-              options={[...CONSENT_FILTER_OPTIONS]}
-              onChange={(v) => updateParam('consent_status', v)}
-            />
-            <FilterSelect
-              label="RECENCY"
-              value={recencyFilter}
-              options={[...RECENCY_FILTER_OPTIONS]}
-              onChange={(v) => updateParam('recency', v)}
-            />
-            <FilterSelect
-              label="APPROVAL"
-              value={approvalFilterDisplayValue(approvalStatus, funnelStage)}
-              options={[...APPROVAL_FILTER_OPTIONS]}
-              onChange={(v) => updateWorkflowParam('approval_status', v === 'Any approval' ? null : v.toLowerCase())}
-            />
-            <FilterSelect
-              label="OUTREACH"
-              value={outreachFilterDisplayValue(outreachStatus, funnelStage)}
-              options={[...OUTREACH_FILTER_OPTIONS]}
-              onChange={(v) => updateWorkflowParam('outreach_status', v === 'Any outreach' ? null : v.toLowerCase())}
-            />
-            <FilterSelect
-              label="ASSIGNED"
-              value={assignedTo ?? 'All LOs'}
-              options={['All LOs', ...salesTeam.map((member) => member.email)]}
-              onChange={(v) => updateParam('assigned_to', v === 'All LOs' ? null : v)}
-            />
-            <FilterSelect
-              label="AGING"
-              value={agedDays ? `Aged >${agedDays}d` : 'Any age'}
-              options={[...AGING_FILTER_OPTIONS]}
-              onChange={(v) => {
-                const match = v.match(/>(\d+)d/);
-                updateParam('aged_days', match ? match[1] : null);
-              }}
-            />
-          </div>
+          <LeadQueueFilterBar
+            filtersActive={filtersActive}
+            onClearAll={clearAllFilters}
+            moreActiveCount={moreActiveCount}
+            core={(
+              <>
+                <FilterSelect
+                  label="STATE"
+                  value={stateFilterDisplay}
+                  options={stateFilterOptions}
+                  onChange={(v) => {
+                    if (v === stateFilterDisplay && stateFilters.length > 0) return;
+                    updateParam('state', v === 'All states' ? null : v);
+                  }}
+                />
+                <FilterSelect
+                  label="SEGMENT"
+                  value={segmentFilter}
+                  options={segmentFilterOptions}
+                  onChange={(v) => {
+                    if (v === segmentFilter && segmentCodes.length > 0) return;
+                    const code = SEGMENT_OPTION_TO_CODE[v];
+                    updateParam('segment', code);
+                  }}
+                />
+                <FilterSelect
+                  label="RELATIONSHIP"
+                  value={relationshipFilter}
+                  options={[...LENDER_RELATIONSHIP_OPTIONS]}
+                  onChange={(v) => updateParam('lender_relationship', v)}
+                />
+                <FilterSelect
+                  label="PRODUCT"
+                  value={productFilter}
+                  options={[...PRODUCT_FILTER_OPTIONS]}
+                  onChange={(v) => updateParam('product', v)}
+                />
+                <FilterSelect
+                  label="APPROVAL"
+                  value={approvalFilterDisplayValue(approvalStatus, funnelStage)}
+                  options={[...APPROVAL_FILTER_OPTIONS]}
+                  onChange={(v) => updateWorkflowParam('approval_status', v === 'Any approval' ? null : v.toLowerCase())}
+                />
+              </>
+            )}
+            more={(
+              <>
+                <FilterSelect
+                  label="TARGET LIEN HOLDER"
+                  value={targetLenderRef ?? 'All'}
+                  options={targetLenderOptions}
+                  onChange={(v) => updateParam('target_lender_ref', v)}
+                />
+                <FilterSelect
+                  label="OWNER LINK"
+                  value={ownerLinkFilter}
+                  options={[...OWNER_LINK_FILTER_OPTIONS]}
+                  onChange={(v) => updateParam('owner_link', v)}
+                />
+                <FilterSelect
+                  label="PURCHASE INTENT"
+                  value={purchaseIntentFilter}
+                  options={[...PURCHASE_INTENT_FILTER_OPTIONS]}
+                  onChange={(v) => updateParam('purchase_intent', v)}
+                />
+                <FilterSelect
+                  label="PRODUCT TYPE"
+                  value={loanProductFilter}
+                  options={[...LOAN_PRODUCT_FILTER_OPTIONS]}
+                  onChange={(v) => updateParam('loan_product', v === 'All loan products' ? null : v)}
+                />
+                <FilterSelect
+                  label="CHANNEL"
+                  value={originationChannelFilter}
+                  options={[...ORIGINATION_CHANNEL_FILTER_OPTIONS]}
+                  onChange={(v) => updateParam('origination_channel', v === 'All channels' ? null : v)}
+                />
+                <FilterSelect
+                  label="CONTACTABILITY"
+                  value={contactabilityFilter}
+                  options={[...CONTACTABILITY_FILTER_OPTIONS]}
+                  onChange={(v) => updateParam(
+                    'marketing_eligibility',
+                    v === 'Eligible only' ? null : v,
+                  )}
+                />
+                <FilterSelect
+                  label="CONSENT"
+                  value={consentFilter}
+                  options={[...CONSENT_FILTER_OPTIONS]}
+                  onChange={(v) => updateParam('consent_status', v)}
+                />
+                <FilterSelect
+                  label="RECENCY"
+                  value={recencyFilter}
+                  options={[...RECENCY_FILTER_OPTIONS]}
+                  onChange={(v) => updateParam('recency', v)}
+                />
+                <FilterSelect
+                  label="OUTREACH"
+                  value={outreachFilterDisplayValue(outreachStatus, funnelStage)}
+                  options={[...OUTREACH_FILTER_OPTIONS]}
+                  onChange={(v) => updateWorkflowParam('outreach_status', v === 'Any outreach' ? null : v.toLowerCase())}
+                />
+                <FilterSelect
+                  label="ASSIGNED"
+                  value={assignedTo ?? 'All LOs'}
+                  options={['All LOs', ...salesTeam.map((member) => member.email)]}
+                  onChange={(v) => updateParam('assigned_to', v === 'All LOs' ? null : v)}
+                />
+                <FilterSelect
+                  label="AGING"
+                  value={agedDays ? `Aged >${agedDays}d` : 'Any age'}
+                  options={[...AGING_FILTER_OPTIONS]}
+                  onChange={(v) => {
+                    const match = v.match(/>(\d+)d/);
+                    updateParam('aged_days', match ? match[1] : null);
+                  }}
+                />
+              </>
+            )}
+          />
         </div>
       </div>
       {/* Assign-degradation stays visible: the Sales ops snapshot moved to the
@@ -659,7 +612,7 @@ export default function LeadQueue() {
             <button
               type="button"
               className="btn btn--ghost btn--sm"
-              onClick={() => setSearchParams(new URLSearchParams())}
+              onClick={clearAllFilters}
               aria-label="Clear invalid lead queue filters"
             >
               Clear filters

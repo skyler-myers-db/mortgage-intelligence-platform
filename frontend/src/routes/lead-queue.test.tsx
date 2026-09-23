@@ -312,7 +312,8 @@ describe('LeadQueue filter state', () => {
 
     expect(document.querySelector('button[aria-label="STATE: 2 states selected"]')).toBeTruthy();
     expect(document.querySelector('button[aria-label="SEGMENT: 2 segments selected (any selected)"]')).toBeTruthy();
-    expect(document.body.textContent).toContain('segments = Prime Refi Candidates, Home Equity Candidate (any selected)');
+    expect(document.querySelector('[aria-label="Active segment filters"]')?.textContent)
+      .toContain('Prime Refi CandidatesHome Equity Candidate');
     expect(document.querySelector('button[aria-label="RELATIONSHIP: Competitor customer"]')).toBeTruthy();
     expect(document.querySelector('button[aria-label="PRODUCT: HELOC"]')).toBeTruthy();
     expect(document.querySelector('button[aria-label="OWNER LINK: Portfolio investor (5+)"]')).toBeTruthy();
@@ -345,7 +346,7 @@ describe('LeadQueue filter state', () => {
     await settle();
 
     expect(document.querySelector('button[aria-label="SEGMENT: 2 segments selected (all selected)"]')).toBeTruthy();
-    expect(document.body.textContent).toContain('segments = Prime Refi Candidates, Home Equity Candidate (all selected)');
+    expect(document.body.textContent).toContain('Intersection — every borrower is in all selected segments.');
   });
 
   it('collapses the analytics-drilldown scope strip when no drilldown params are present', async () => {
@@ -361,7 +362,7 @@ describe('LeadQueue filter state', () => {
     await settle();
 
     // The scope strip is present but flagged is-empty (CSS collapses it) so the
-    // "Queue filters" header sits directly above the dropdowns with no dead space.
+    // filter pills sit at the top of the filter surface with no dead space.
     const scope = document.querySelector('.lead-queue-scope');
     expect(scope).toBeTruthy();
     expect(scope?.classList.contains('is-empty')).toBe(true);
@@ -400,9 +401,7 @@ describe('LeadQueue filter state', () => {
     });
     await settle();
 
-    const filtersHeading = [...document.querySelectorAll('.h-4')].find(
-      (el) => el.textContent === 'Queue filters',
-    );
+    const filtersHeading = document.querySelector('[role="group"][aria-label="Queue filters"]');
     const lookupPanel = document.querySelector('.property-lookup');
     expect(filtersHeading).toBeTruthy();
     expect(lookupPanel).toBeTruthy();

@@ -1,6 +1,6 @@
 /**
  * Rendered-layer proofs for the wave-1b Lead Queue layout lane (audit
- * visual-01, tables-01, flow-01, tables-04, tables-05), at the
+ * visual-01, tables-01, flow-01, tables-04, tables-05, tables-06), at the
  * contracted 1440x900 viewport.
  *
  * "On screen" is proven twice for every control that matters: Playwright's
@@ -9,6 +9,7 @@
  * pinned Approval column, under the Console, or clipped by the table's
  * scrollport does not pass.
  */
+import AxeBuilder from '@axe-core/playwright';
 import type { Locator, Page } from '@playwright/test';
 import { PRIMARY_BORROWER } from './data/borrowers';
 import { DNC_LEAD, UNRESOLVED_OWNER_LEAD, registerQueueLayoutLeads } from './data/queueLayout';
@@ -47,12 +48,6 @@ test.describe('the ranked-borrower table fits 1440x900 with the Console closed',
       await app.gotoRoute('/lead-queue');
       const rows = page.locator(ROWS);
       await expect(rows.nth(7)).toBeVisible();
-      // The 16-pill filter wall still sits above the table in this slice:
-      // scroll the table to the top of the page before sampling.
-      await page.locator('.main').evaluate((main) => {
-        const wrap = document.querySelector('.tbl-wrap');
-        if (wrap) main.scrollTop += wrap.getBoundingClientRect().top - 140;
-      });
 
       const overflow = await wrapOverflow(page);
       expect(overflow.scrollWidth, '.tbl-wrap has no horizontal overflow').toBeLessThanOrEqual(overflow.clientWidth);
@@ -71,6 +66,16 @@ test.describe('the ranked-borrower table fits 1440x900 with the Console closed',
         await expectReachable(approve, `row ${index + 1} Approve`);
       }
       expect(approveButtons, 'the fixture queue has pending rows to approve').toBeGreaterThanOrEqual(7);
+
+      const fold = page.viewportSize()?.height ?? 900;
+      const aboveTheFold = await rows.evaluateAll(
+        (elements, bottom) => elements.filter((el) => {
+          const rect = el.getBoundingClientRect();
+          return rect.top >= 0 && rect.bottom <= bottom;
+        }).length,
+        fold,
+      );
+      expect(aboveTheFold, 'ranked rows fully visible above the fold').toBeGreaterThanOrEqual(8);
     });
   }
 });
@@ -169,3 +174,67 @@ test.describe('column presets', () => {
   });
 });
 
+test.describe('the collapsed filter wall', () => {
+  test('More filters expands inline; an applied non-core filter is a removable hero chip; Clear all resets the URL', async ({ app, page }) => {
+    await app.gotoRoute('/lead-queue');
+    for (const label of ['STATE', 'SEGMENT', 'RELATIONSHIP', 'PRODUCT', 'APPROVAL']) {
+      await expect(page.locator(`button[aria-haspopup="listbox"][aria-label^="${label}:"]`), `${label} is a core pill`).toBeVisible();
+    }
+    const ownerLink = page.locator('button[aria-haspopup="listbox"][aria-label^="OWNER LINK:"]');
+    await expect(ownerLink, 'non-core pills start collapsed').toBeHidden();
+    const clearAll = page.getByTestId('lead-queue-clear-all');
+    await expect(clearAll).toBeDisabled();
+
+    const toggle = page.getByTestId('lead-queue-more-filters');
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    await expect(page.getByRole('group', { name: 'More queue filters' })).toBeVisible();
+    const menu = await app.openFilterMenu('OWNER LINK');
+    await menu.getByRole('option', { name: 'Multi-property (2-4)' }).click();
+    await expect.poll(() => new URL(page.url()).searchParams.get('owner_link')).toBe('Multi-property (2-4)');
+    await app.settle();
+
+    const hero = page.getByRole('group', { name: 'Active filters' });
+    const remove = hero.getByRole('button', { name: 'Remove OWNER LINK: Multi-property (2-4) filter' });
+    await expectReachable(remove, 'the removable OWNER LINK chip');
+    await expect(toggle).toHaveAccessibleName('More filters (1 active)');
+    await remove.click();
+    await expect.poll(() => new URL(page.url()).searchParams.has('owner_link')).toBe(false);
+    await expect(hero).toHaveCount(0);
+
+    const again = await app.openFilterMenu('OWNER LINK');
+    await again.getByRole('option', { name: 'Portfolio investor (5+)' }).click();
+    const state = await app.openFilterMenu('STATE');
+    await state.getByRole('option', { name: 'IL', exact: true }).click();
+    await expect.poll(() => new URL(page.url()).search).toContain('state=IL');
+    await expect(clearAll).toBeEnabled();
+    await clearAll.click();
+    await expect.poll(() => new URL(page.url()).search, 'Clear all resets the URL').toBe('');
+    await expect(clearAll).toBeDisabled();
+  });
+
+  test('Clear all keeps the column preset: ?view= is not a filter', async ({ app, page }) => {
+    await app.gotoRoute('/lead-queue?view=sales-ops&owner_link=Portfolio+investor+%285%2B%29');
+    await page.getByTestId('lead-queue-clear-all').click();
+    await expect.poll(() => new URL(page.url()).search).toBe('?view=sales-ops');
+    await expect(page.getByTestId('lead-queue-clear-all')).toBeDisabled();
+  });
+});
+
+test.describe('axe stays clean on the new queue states', () => {
+  for (const theme of FIXTURE_THEMES) {
+    test(`hero chip + More filters open + Status sort menu open (${theme})`, async ({ app, page }) => {
+      await app.setTheme(theme);
+      await app.gotoRoute('/lead-queue?owner_link=Portfolio+investor+%285%2B%29');
+      await page.getByTestId('lead-queue-more-filters').click();
+      await page.getByTestId('lead-status-sort').click();
+      await expect(page.getByRole('menu', { name: 'Sort the Status column by' })).toBeVisible();
+      const results = await new AxeBuilder({ page })
+        .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'])
+        .analyze();
+      const found = results.violations.map((violation) => `${violation.id}: ${violation.nodes.map((node) => node.target.join(' ')).join(' ; ')}`);
+      expect(found).toEqual([]);
+    });
+  }
+});
