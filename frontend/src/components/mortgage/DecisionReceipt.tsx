@@ -17,7 +17,7 @@
  * so the page never stops saying what was decided.
  *
  * BEM block `.decision-receipt` (frontend/src/design-system/components/
- * 19-decision-receipt.css), an extension of the prototype's `.surface`.
+ * DecisionReceipt.css, shipped with this lazy module), an extension of the prototype's `.surface`.
  */
 import { useEffect, useId, useRef, useState, type CSSProperties } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -36,6 +36,7 @@ import { ConfidenceMeter } from './ConfidenceMeter';
 import { ScoreBadge } from './ScoreBadge';
 import { DECISION_RECEIPT_COPY, decisionChip, humanizeReasonCode, receiptChannelLabel } from './DecisionReceipt.copy';
 import { copyAuditId, printReceipt } from './DecisionReceipt.actions';
+import './DecisionReceipt.css';
 
 /** What a queue row remembers about the decision it just made. */
 export interface LeadDecisionReceipt {

@@ -9,10 +9,13 @@
  */
 import fs from 'node:fs';
 import type { Locator, Page } from '@playwright/test';
-import type { ApproveResult } from '../../../src/lib/apiTypes';
+import type { LeadExportReceipt, LeadExportReceiptRequest } from '../../../src/lib/apiClients/leadExport';
+import type { ApproveResult, DecisionReceipt } from '../../../src/lib/apiTypes';
 import type { SessionResponse } from '../../../src/types';
 import { LEADS, PRIMARY_BORROWER } from './data/borrowers';
-import { WAREHOUSE_WARMING_UP, type MockApi } from './mockApi';
+import { ledgerReceipt } from './data/decisionReceipt';
+import { leadExportReceiptFor } from './data/exportAudit';
+import { json, WAREHOUSE_WARMING_UP, type MockApi } from './mockApi';
 import { expect, test } from './test';
 
 const APPROVER_EMAIL = 'approver@summit-mortgage.example';
@@ -43,6 +46,11 @@ function registerHeldApprove(mockApi: MockApi): HeldApprove {
     const body = request.body as { borrower_id?: string } | null;
     return { body: { approved: true, approval_id: 'apr-fixture-0001', audit_event_id: `audit-${body?.borrower_id ?? 'unknown'}` } };
   });
+  // A resolved approval is read back from the ledger before the Decision
+  // receipt renders (wow-stage-3), so the held approve needs its receipt.
+  mockApi.register<DecisionReceipt>('GET', '/api/audit/receipt/:id', ({ params }) =>
+    json<DecisionReceipt>(ledgerReceipt(params.id, PRIMARY_BORROWER, 'approved')),
+  );
   return {
     get received() {
       return received;
@@ -191,7 +199,12 @@ test.describe('column sort scope', () => {
 });
 
 test.describe('CSV export', () => {
-  test('exports exactly the selected rows and says so', async ({ app, page }) => {
+  test('exports exactly the selected rows and says so', async ({ app, mockApi, page }) => {
+    // The download starts only after the server writes its LEAD_EXPORT
+    // receipt (tables-08), so the export needs that endpoint answered.
+    mockApi.register<LeadExportReceipt>('POST', '/api/leads/export-receipt', ({ body }) =>
+      json<LeadExportReceipt>(leadExportReceiptFor(body as LeadExportReceiptRequest)),
+    );
     await app.gotoRoute('/lead-queue');
     const [first, second] = LEADS.filter((lead) => lead.approval_status === 'pending').slice(0, 2);
     await page.getByTestId(`lead-select-${first.borrower_id}`).check();

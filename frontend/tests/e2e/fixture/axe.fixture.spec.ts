@@ -57,17 +57,13 @@ interface KnownViolation {
  * `${route}|${state}|${ruleId}` → owner. Populated only with what reproduced
  * on the integrated wave-0 base on the recorded date.
  */
-const A11Y_01: KnownViolation = { finding: 'a11y-01', recorded: '2026-09-22', themes: ['light'], nodes: 'aside.drawer .drawer__tab.is-active' };
 const A11Y_02: KnownViolation = { finding: 'a11y-02', recorded: '2026-09-22', themes: ['dark', 'light'], nodes: 'ul.filter-menu[role="listbox"]' };
 
 const KNOWN_VIOLATIONS: Readonly<Record<string, KnownViolation>> = {
-  // a11y-01: the selected evidence tab (`.drawer__tab.is-active`) uses the
-  // light accent as text on a light surface (1.75:1). Light theme only.
-  'home|evidence-drawer|color-contrast': A11Y_01,
-  'lead-queue|evidence-drawer|color-contrast': A11Y_01,
-  'borrower-360|evidence-drawer|color-contrast': A11Y_01,
-  'offer-orchestrator|evidence-drawer|color-contrast': A11Y_01,
-  'ask-genie|evidence-drawer|color-contrast': A11Y_01,
+  // a11y-01 (the selected evidence tab painted the light accent at 1.75:1)
+  // was retired 2026-09-23: the theme x accent token lane moved
+  // `.drawer__tab.is-active` onto --accent-ink and the five
+  // `*|evidence-drawer|color-contrast` entries stopped reproducing.
   // a11y-02: FilterSelect's open `ul.filter-menu` listbox scrolls but takes
   // no keyboard focus (no option ids / activedescendant). Both themes.
   'lead-queue|filter-menu|scrollable-region-focusable': A11Y_02,

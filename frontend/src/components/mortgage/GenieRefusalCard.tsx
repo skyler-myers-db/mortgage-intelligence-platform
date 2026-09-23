@@ -9,6 +9,7 @@ import {
   refusalFamilyFor,
   refusalRephraseChips,
 } from './genieRefusal';
+import './GenieRefusalCard.css';
 
 /**
  * GenieRefusalCard — the helpful, compliant refusal (audit 2026-09-21

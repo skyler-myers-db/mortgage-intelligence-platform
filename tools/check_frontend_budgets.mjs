@@ -108,7 +108,16 @@ const budgets = {
   // measured artifact (25,596 B) — the next CSS line from anyone would have
   // tripped it — so restore ~5% headroom per this file's policy. Measured:
   // gzip 25.00 (macOS zlib; the file documents ~0.5 KiB Linux variance).
-  initialCssGzipBytes: 26.5 * KiB, // actual 25.00
+  // Re-baselined 2026-09-23 at the wave-1 integration of the UI/UX audit.
+  // The shell stylesheet now carries the theme x accent AA token matrix,
+  // color-scheme and the single focus-ring system (theme-contrast), plus the
+  // wave-0 shell rules above; raw CSS stays inside its gate. The four
+  // wave-1 feature stylesheets that belong to lazy surfaces (decision
+  // receipt, Genie refusal card, analytics rate window, Genie turn controls)
+  // ship with their lazy chunks instead, and the dead `.admin-filter-input`
+  // rules were removed, before this bump. Measured: CSS 155.76 / gzip 26.55;
+  // ~5% headroom per policy.
+  initialCssGzipBytes: 28 * KiB, // actual 26.55
   // Re-baselined 2026-07-10 for the UX declutter slice (batches 1-2). total JS
   // was red on main (990.51 > 990.00); restored ~5% headroom over the measured
   // actual per this file's policy. Batch 2 (asset-label helper, top-leads
@@ -138,8 +147,16 @@ const budgets = {
   // and the Genie launcher status helpers). Measured: total JS 1178.21 KiB
   // / gzip 385.07 KiB across 48 chunks; ~5% headroom on both totals. The
   // largest-lazy-chunk gates are unchanged (states-albers 79.68 / 28.88).
-  totalJsBytes: 1237 * KiB, // actual 1178.21
-  totalJsGzipBytes: 405 * KiB, // actual 385.07
+  // Re-baselined 2026-09-23 at the wave-1 integration: eight new lazy
+  // chunks and route-chunk growth for the Decision receipt read-back UI,
+  // the audited lead export receipt and the URL-driven audit explorer
+  // (filters, labels, page CSV), the Genie refusal card, the Genie turn
+  // controls and page-context templates, the analytics "why now" rate
+  // window, and the RouteErrorBoundary retry. Initial JS is 421.07 / gzip
+  // 130.17, inside its gate. Measured: total JS 1256.01 KiB / gzip 412.22
+  // KiB across 56 chunks; ~5% headroom on both totals.
+  totalJsBytes: 1319 * KiB, // actual 1256.01
+  totalJsGzipBytes: 433 * KiB, // actual 412.22
   maxLazyJsBytes: 104 * KiB, // actual 98.40 (was 160 -- tightened)
   maxLazyJsGzipBytes: 34 * KiB, // actual 32.06 (was 60 -- tightened)
   fontAssetCount: 14, // exact by policy

@@ -20,6 +20,7 @@ import {
   REF_LABEL_MIN_Y_PCT,
   type RateWindowModel,
 } from './analytics.rate-window.lib';
+import './analytics.rate-window.css';
 
 /**
  * The rate-window read. The Analytics route calls this too, beside the

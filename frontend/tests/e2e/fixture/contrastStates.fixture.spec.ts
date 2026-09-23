@@ -15,8 +15,8 @@
  *  c. the active evidence-drawer tab paints `--accent-ink` on its fill for
  *     every accent (it painted `--accent`, 1.75:1 in light + bright);
  *  d. the three text inputs whose rules switched the outline off (Genie
- *     composer, property lookup `.form-input`, admin audit
- *     `.admin-filter-input`) show the shared `--focus-ring-*` ring at 3:1;
+ *     composer, property lookup `.form-input`, the admin audit explorer's
+ *     `.form-input` filters) show the shared `--focus-ring-*` ring at 3:1;
  *  e. the Analytics activation-funnel Sankey node, whose SVG focus ring is a
  *     stroke, strokes the ring colour at 3:1 (it stroked `--accent`, 1.9:1);
  *  f. in every theme x accent, the text and glyph rules that painted the
@@ -241,9 +241,12 @@ const TEXT_INPUTS: readonly TextInputCase[] = [
       page.locator('#main-content').getByRole('textbox', { name: 'Property lookup — street address' }),
   },
   {
-    name: 'admin audit .admin-filter-input',
+    // The audit explorer's filters are shared `.form-input` fields since the
+    // flow-04 / tables-10 explorer rewrite (the old `.admin-filter-input`
+    // class is gone), so this pins the ring on the admin surface itself.
+    name: 'admin audit filter .form-input',
     route: '/admin-config',
-    locate: async (_app, page) => page.locator('#main-content .admin-filter-input').first(),
+    locate: async (_app, page) => page.locator('#main-content form[aria-label="Audit filters"] .form-input').first(),
   },
 ];
 

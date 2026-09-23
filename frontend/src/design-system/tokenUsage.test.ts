@@ -225,7 +225,9 @@ describe('text inputs keep the shared focus ring (a11y-01)', () => {
   // `outline: none` in them removed the ring and left only the prototype's
   // 1px `--accent` border swap (design_files/index.html:770-772), 1.9:1 in
   // light + bright and invisible under forced colours.
-  const TEXT_INPUTS = ['.genie__input input', '.admin-filter-input', '.form-input'];
+  // `.admin-filter-input` retired with the audit explorer rewrite, whose
+  // filters are `.form-input` fields.
+  const TEXT_INPUTS = ['.genie__input input', '.form-input'];
 
   it('never switches the outline off on a text-entry control', () => {
     const all = rules(components);
