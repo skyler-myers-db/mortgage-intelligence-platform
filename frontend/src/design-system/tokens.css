@@ -563,3 +563,14 @@ input[type="checkbox"] {
 [data-accent="red"] {
   --map-ramp-ink-3: var(--text-1);
 }
+
+/* ---------- Shell feedback (audit states-05 / states-07) ----------
+ * The toast region and the "Leave without saving?" dialog
+ * (components/32-feedback.css). --z-toast only applies where the Popover
+ * API is missing; otherwise the region sits in the top layer.
+ */
+:root {
+  --toast-w: 360px;
+  --dialog-w: 480px;
+  --z-toast: 1100;
+}

@@ -1,0 +1,18 @@
+/* ============================================================
+   "LEAVE WITHOUT SAVING?" DIALOG (2026-09-21 audit states-05)
+   ============================================================
+   DECLARED EXTENSION. The prototype (design_files/index.html) has no
+   confirm dialog. The native <dialog> takes `.surface .surface--elev` for
+   its card and wraps the prototype's `.approval` banner (index.html
+   `.approval`), so only the modal box, its scrim and the banner's wrap are
+   new here. It ships in the initial stylesheet because the dialog must
+   render in the same frame a navigation is blocked. The toast block lives
+   with its lazy chunk (components/feedback/Toaster.css). */
+.unsaved-dialog {
+  padding: var(--sp-4);
+  color: var(--text-1);
+  max-inline-size: min(var(--dialog-w), calc(100vw - 2 * var(--sp-6)));
+}
+.unsaved-dialog::backdrop { background: var(--surface-scrim); }
+.unsaved-dialog .approval { flex-wrap: wrap; }
+.unsaved-dialog .approval__actions { margin-inline-start: auto; }
