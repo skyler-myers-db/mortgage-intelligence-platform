@@ -552,6 +552,23 @@ describe('floating Genie conversational controls', () => {
     expect(getGenieTurns()).toEqual([]);
   });
 
+  it('a prefill that replaces a typed draft says so; one over an empty composer says nothing', async () => {
+    render();
+    await flush();
+    const announcer = () => container.querySelector('[data-genie-announcer="panel"]')?.textContent ?? '';
+    act(() => openGenie({ prompt: 'Compare mean lead score by current coverage state.' }));
+    await flush();
+    expect(input().value).toBe('Compare mean lead score by current coverage state.');
+    expect(announcer()).not.toContain('draft was replaced');
+
+    act(() => setInputValue(input(), 'my own half-written question'));
+    act(() => openGenie({ prompt: 'Break down in-the-money borrowers by current coverage state; which state leads?' }));
+    await flush();
+    expect(input().value).toBe('Break down in-the-money borrowers by current coverage state; which state leads?');
+    expect(announcer()).toContain('draft was replaced');
+    expect(mocks.genieSubmit).not.toHaveBeenCalled();
+  });
+
   it('a prefill arriving mid-turn fills the composer but the running turn is untouched and nothing new is sent', async () => {
     render();
     const turn = await startLiveTurn('How many borrowers are in the money?');

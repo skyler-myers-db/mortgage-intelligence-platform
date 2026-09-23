@@ -281,12 +281,18 @@ export function GenieChat() {
   // open -- on open for a request made while it was closed or not yet
   // mounted, and at once for one made while it is already open. A prefill
   // replaces the draft (the user just asked for it) and is NEVER sent: only
-  // the user's own Ask submits it.
+  // the user's own Ask submits it. Replacing a draft is said out loud, so it
+  // never disappears silently.
   useEffect(() => {
     if (!genieOpen) return undefined;
     const apply = () => {
       const prompt = consumeGeniePrefill();
-      if (prompt !== null) loadComposer(prompt);
+      if (prompt === null) return;
+      const draft = inputRef.current?.value.trim() ?? '';
+      loadComposer(prompt);
+      if (draft !== '' && draft !== prompt.trim()) {
+        setAnnouncement('Your Genie draft was replaced by the question you opened. Nothing was sent.');
+      }
     };
     apply();
     return subscribeGeniePrefill(apply);
