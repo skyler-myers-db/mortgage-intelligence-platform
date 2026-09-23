@@ -7,7 +7,7 @@
  * (file-size gate, plan item 2); markup and class names are unchanged.
  */
 
-import type { RefObject } from 'react';
+import type { ReactNode, RefObject } from 'react';
 import type { SalesTeamMember } from '../../types';
 import { Button } from '../Primitives';
 import type { BulkToast } from './useLeadApprovalActions';
@@ -31,6 +31,16 @@ interface LeadTableBulkActionsProps {
   onClearSelection: () => void;
   onBulkApprove: () => void;
   bulkApproveBtnRef: RefObject<HTMLButtonElement | null>;
+  /** The shared-rationale field (Shift+A and the Cmd-K verb focus it). */
+  bulkRationaleRef?: RefObject<HTMLInputElement | null>;
+  /** The gate's review block (count by offer, sample drafts), under the rationale. */
+  gateReview?: ReactNode;
+  /** Sample drafts are on screen: the toolbar stops being sticky. */
+  samplesShown?: boolean;
+  /** The assignee select (the Cmd-K "Assign selected…" verb focuses it). */
+  assigneeRef?: RefObject<HTMLSelectElement | null>;
+  /** Single-key shortcuts are on: advertise Shift+A. */
+  shortcutsLive?: boolean;
 }
 
 export function LeadTableBulkActions({
@@ -50,21 +60,32 @@ export function LeadTableBulkActions({
   onClearSelection,
   onBulkApprove,
   bulkApproveBtnRef,
+  bulkRationaleRef,
+  gateReview = null,
+  samplesShown = false,
+  assigneeRef,
+  shortcutsLive = true,
 }: LeadTableBulkActionsProps) {
+  const gateOpen = selectionCount > 1 && bulkRationaleOpen;
   return (
     <div
       role="toolbar"
       aria-label="Bulk actions"
       data-testid="lead-bulk-actions"
-      className="bulk-actions"
+      className={[
+        'bulk-actions',
+        gateOpen ? 'bulk-actions--gate' : '',
+        gateOpen && samplesShown ? 'bulk-actions--samples' : '',
+      ].filter(Boolean).join(' ')}
     >
       <div className="bulk-actions__label">
         <span className="mono num">{selectionCount}</span> {selectionCount === 1 ? 'lead' : 'leads'} selected
       </div>
-      {selectionCount > 1 && bulkRationaleOpen && (
+      {gateOpen && (
         <label className="bulk-actions__rationale">
           <span className="field__label">Shared approval rationale</span>
           <input
+            ref={bulkRationaleRef}
             value={bulkRationale}
             onChange={(e) => onBulkRationaleChange(e.target.value)}
             maxLength={500}
@@ -78,6 +99,7 @@ export function LeadTableBulkActions({
             <label className="bulk-actions__assignee">
               <span className="field__label">Assign to</span>
               <select
+                ref={assigneeRef}
                 value={selectedAssignee}
                 onChange={(e) => onSelectedAssigneeChange(e.target.value)}
                 disabled={salesBusy}
@@ -138,11 +160,12 @@ export function LeadTableBulkActions({
           title={approverGate ?? undefined}
           data-testid="lead-bulk-approve"
           aria-label={`Approve ${selectedApprovalEligibleCount} eligible leads`}
-          aria-keyshortcuts={approverGate === null ? 'Shift+A' : undefined}
+          aria-keyshortcuts={approverGate === null && shortcutsLive ? 'Shift+A' : undefined}
         >
           {bulkApproving ? 'Approving…' : `Approve ${selectedApprovalEligibleCount} eligible`}
         </Button>
       </div>
+      {gateOpen && gateReview}
     </div>
   );
 }

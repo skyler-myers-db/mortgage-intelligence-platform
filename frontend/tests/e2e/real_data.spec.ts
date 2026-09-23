@@ -1790,7 +1790,12 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
 
     const row = page.locator('table.tbl tbody tr', { hasText: borrowerId! }).first();
     await expect(row).toBeVisible({ timeout: 45_000 });
+    // Wave 1c (flow-03): Approve opens the review with the governed draft;
+    // Confirm approves exactly that copy.
     await approveButton.click();
+    const confirm = page.getByTestId('lead-approve-review-confirm');
+    await expect(page.getByTestId('lead-approve-review-subject')).not.toBeEmpty({ timeout: 45_000 });
+    await confirm.click();
 
     await expect
       .poll(

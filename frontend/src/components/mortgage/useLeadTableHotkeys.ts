@@ -1,49 +1,30 @@
 /**
- * useLeadTableHotkeys — binds the ranked-borrower table's window-level
- * keydown listener exactly once while always invoking the freshest handler,
- * and only hands it keystrokes that are IN SCOPE for the table.
- * Extracted from LeadTable.tsx (file-size gate, plan item 2); the binding
- * and scope semantics are pinned by LeadTable.hotkeys.test.
+ * useLeadTableHotkeys — registers the ranked-borrower table's shortcuts in
+ * the shared keymap (lib/keymap.ts, scope `lead-queue`) and keeps them
+ * focus-scoped. Before wave 1c this hook bound its own `window` listener;
+ * the registry now owns dispatch, the single-key switch and the `?` sheet,
+ * and this hook owns only the table's scope rule.
  */
 
 import { useEffect, useRef, type RefObject } from 'react';
+import { hasOpenOverlay, registerKeyBinding } from '../../lib/keymap';
+import { leadTableHotkeys, type LeadTableKeymapActions } from './LeadTable.keymap';
 import { isEditableTarget } from './LeadTable.logic';
 
 /**
- * Anything that, while open, owns the keyboard: modal and non-modal dialogs
- * (evidence drawer, borrower proof drawer, command palette, the floating
- * Genie panel), listboxes (filter menus, topbar search results) and menus.
- * The always-mounted drawers and the Genie panel toggle `aria-hidden`, so a
- * closed one never matches.
- */
-const OPEN_OVERLAY_SELECTOR = [
-  '[role="dialog"]',
-  '[role="alertdialog"]',
-  '[role="listbox"]',
-  '[role="menu"]',
-  'dialog[open]',
-].join(',');
-
-function hasOpenOverlay(doc: Document): boolean {
-  for (const el of doc.querySelectorAll(OPEN_OVERLAY_SELECTOR)) {
-    if (el.closest('[aria-hidden="true"]') === null) return true;
-  }
-  return false;
-}
-
-/**
- * Scope gate for the single-key row shortcuts (A approve / R reject /
- * Shift+A bulk approve). Audit tables-v2 / a11y-09 (2026-09-21): the listener
- * is window-level and used to exempt only editable targets, so pressing A with
- * a row expanded while focus sat on a filter button, inside the evidence
- * drawer or on Genie chrome approved a borrower and wrote an audit row. WCAG
- * 2.1.4 (Level A) requires a single-character shortcut to be switchable off,
- * remappable, or active only on focus; this is the focus-scoped form.
+ * Scope gate for the table's single-key shortcuts (J / K / arrows / Enter /
+ * X / A / R / Shift+A). Audit tables-v2 / a11y-09 (2026-09-21): the listener
+ * used to be window-level with only an editable-target exemption, so A with a
+ * row expanded approved a borrower from a filter button, the evidence drawer
+ * or Genie chrome. WCAG 2.1.4 (Level A) requires a single-character shortcut
+ * to be switchable off, remappable, or active only on focus; this is the
+ * focus-scoped form (the Console switch is the off form).
  *
  * A keystroke is in scope only when ALL hold:
  *   1. the event target AND document.activeElement are inside `scope` (the
  *      `.tbl-wrap` region) — an unfocused page (`body`) is out of scope;
- *   2. no dialog, drawer, listbox, menu or command palette is open;
+ *   2. no dialog, drawer, listbox, menu or command palette is open (the
+ *      approve-review dialog included);
  *   3. neither the target nor the active element is an input, textarea,
  *      select or contenteditable.
  *
@@ -64,41 +45,54 @@ export function isLeadTableHotkeyInScope(
   return !hasOpenOverlay(doc);
 }
 
+export interface LeadTableHotkey {
+  id: string;
+  keys: readonly string[];
+  /** What the `?` sheet says the key does. */
+  description: string;
+  /**
+   * Return `false` to decline (the key keeps its native behaviour).
+   * `scope` is the table region the key fired in.
+   */
+  run: (event: KeyboardEvent, scope: HTMLElement | null) => boolean | void;
+}
+
 /**
- * The keydown logic closes over many per-render values (the expanded row,
- * approvals, the lead lookup, the approve/bulk-approve closures). The
- * original effect had NO dep array, so it removed+re-added the window
- * listener on EVERY render (re-audit #4 nit). A dep array can't fix that
- * cleanly — those closures have unstable identity, so the effect would still
- * re-bind every render (or go stale if deps are omitted). The latest-handler
- * ref binds the listener exactly once and always calls the freshest logic.
+ * The handlers close over per-render values (the cursor, approvals, the
+ * review), so they are read through a latest-value ref: the bindings are
+ * registered once per distinct key set and always call the freshest logic.
+ * The key set changes when the approver gate does (A / R / Shift+A are
+ * registered only for an approver), and that re-registers.
  *
- * @param handler the current render's keydown logic. Stored in a ref during
- *   render (not in an effect) so the very first keypress after a render
- *   already sees the new closure. Only called for in-scope keystrokes.
+ * @param actions this render's row actions (LeadTable.keymap builds the
+ *   keys from them). Stored in a ref during render (not in an effect) so
+ *   the first keypress after a render already sees them.
  * @param scopeRef the table scroll region the shortcuts are scoped to.
  */
 export function useLeadTableHotkeys(
-  handler: (e: KeyboardEvent) => void,
+  actions: LeadTableKeymapActions,
   scopeRef: RefObject<HTMLElement | null>,
 ): void {
   'use no memo';
 
-  const keyHandlerRef = useRef<(e: KeyboardEvent) => void>(() => {});
-  // The write IS the pattern: the listener is bound once, so the ref has to
-  // carry the current render's closure. Assigning it in an effect instead
-  // would leave the listener one commit stale, which is the staleness this
-  // hook exists to avoid. Unchanged from the pre-split component — where the
-  // same write sat inside LeadTable and was masked from this rule by the
-  // useVirtualizer (`react-hooks/incompatible-library`) compiler bailout.
+  const hotkeys = leadTableHotkeys(actions);
+  const latestRef = useRef<readonly LeadTableHotkey[]>(hotkeys);
+  // The write IS the pattern: see the doc comment above.
   // eslint-disable-next-line react-hooks/refs
-  keyHandlerRef.current = handler;
+  latestRef.current = hotkeys;
+  const signature = hotkeys.map((hotkey) => `${hotkey.id}=${hotkey.keys.join('+')}`).join('|');
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (!isLeadTableHotkeyInScope(e, scopeRef.current)) return;
-      keyHandlerRef.current(e);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [scopeRef]);
+    const offs = latestRef.current.map((hotkey) => registerKeyBinding({
+      id: `lead-table-${hotkey.id}`,
+      scope: 'lead-queue',
+      keys: hotkey.keys,
+      description: hotkey.description,
+      when: (event) => isLeadTableHotkeyInScope(event, scopeRef.current),
+      run: (event) => {
+        const current = latestRef.current.find((candidate) => candidate.id === hotkey.id);
+        return current ? current.run(event, scopeRef.current) : false;
+      },
+    }));
+    return () => offs.forEach((off) => off());
+  }, [signature, scopeRef]);
 }

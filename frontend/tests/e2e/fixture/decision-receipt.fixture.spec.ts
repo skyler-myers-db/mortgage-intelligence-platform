@@ -211,7 +211,10 @@ test.describe('decision receipt', () => {
     const expanded = page.locator(`tr:has([data-testid="lead-approval-cell-${BORROWER_ID}"]) + tr.tbl__expand`);
     await expect(expanded, 'the first ranked row is the primary fixture borrower').toBeVisible();
 
+    // Wave 1c (flow-03): the first Approve opens the review in the expanded
+    // row; Confirm approves the draft it shows.
     await page.getByTestId(`lead-approve-${BORROWER_ID}`).click();
+    await expanded.getByTestId('lead-approve-review-confirm').click();
     await expect.poll(() => flow.approveGate.received, 'the row approve POST reached the ledger').toBe(true);
     await expect(expanded.getByTestId('decision-receipt')).toHaveCount(0);
     await expect(expanded.getByTestId('decision-receipt-pending')).toHaveCount(0);

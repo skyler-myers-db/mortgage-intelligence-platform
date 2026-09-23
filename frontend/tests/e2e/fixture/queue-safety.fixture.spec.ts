@@ -64,7 +64,7 @@ function approvalCell(page: Page, borrowerId: string): Locator {
 }
 
 test.describe('A / R hotkeys are scoped to focus inside the table', () => {
-  test('A on a filter button or inside the evidence drawer approves nothing; A inside the table approves once, pessimistically', async ({ app, mockApi, page }) => {
+  test('A on a filter button or inside the evidence drawer approves nothing; A inside the table opens the review and Enter approves once, pessimistically', async ({ app, mockApi, page }) => {
     const held = registerHeldApprove(mockApi);
     await app.gotoRoute('/lead-queue');
     const id = PRIMARY_BORROWER.borrower_id;
@@ -94,19 +94,29 @@ test.describe('A / R hotkeys are scoped to focus inside the table', () => {
     await expect(drawer).not.toHaveClass(/is-open/);
     await expect(page.locator('table.tbl tbody tr.tbl__expand'), 'the row is still expanded').toHaveCount(1);
 
-    // 3. Focus inside the table scroll region: in scope.
+    // 3. Focus inside the table scroll region: in scope. A opens the approve
+    //    review (wave 1c, flow-03): it drafts on that intent and shows the
+    //    copy, and nothing is approved until Enter confirms that draft.
     await page.getByRole('region', { name: 'Ranked borrowers table scroll region' }).focus();
     await page.keyboard.press('a');
+    const review = page.locator('table.tbl tbody tr.tbl__expand').getByTestId('lead-approve-review');
+    await expect(review.getByTestId('lead-approve-review-subject')).not.toBeEmpty();
+    expect(draftCalls(mockApi)).toBe(1);
+    expect(held.received, 'A alone approves nothing').toBe(0);
+    const confirm = review.getByTestId('lead-approve-review-confirm');
+    await expect(confirm).toBeFocused();
+    await page.keyboard.press('Enter');
     const approveButton = cell.getByRole('button', { name: `Approve ${id}` });
     await expect(approveButton).toHaveText('Approving…');
     await expect(approveButton).toBeDisabled();
+    await expect(confirm).toHaveText('Approving…');
     await expect.poll(() => held.received, 'exactly one approve POST left the browser').toBe(1);
-    expect(draftCalls(mockApi)).toBe(1);
     // The reply is still held: no "Approved" chip may exist yet.
     await expect(cell).not.toContainText('Approved');
     await expect(cell.locator('.chip--success')).toHaveCount(0);
     expect(approveCalls(mockApi), 'the approve reply has not returned').toBe(0);
-    // A second A while the row is in flight is a duplicate, not a second POST.
+    // A second Enter or A while the row is in flight is not a second POST.
+    await page.keyboard.press('Enter');
     await page.keyboard.press('a');
     expect(held.received).toBe(1);
 
@@ -116,7 +126,7 @@ test.describe('A / R hotkeys are scoped to focus inside the table', () => {
     expect(approveCalls(mockApi)).toBe(1);
     expect(held.received).toBe(1);
     // Nor a second draft: each draft POST writes a DRAFT_OUTREACH audit row.
-    expect(draftCalls(mockApi), 'the duplicate A drafted nothing').toBe(1);
+    expect(draftCalls(mockApi), 'the duplicate keys drafted nothing').toBe(1);
   });
 });
 
