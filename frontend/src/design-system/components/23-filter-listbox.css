@@ -34,3 +34,18 @@
   outline: var(--focus-ring-width) solid var(--focus-ring-color);
   outline-offset: calc(-1 * var(--focus-ring-width));
 }
+
+/* Topbar search results (shell-07): a listbox inside the results
+   panel, so the loading / empty / error status lines sit beside it
+   instead of inside a role="listbox" that may only own options. The
+   active row is the input's aria-activedescendant; the input is always
+   :focus-visible while focused, so the ring marks it. */
+.topbar__search-list {
+  display: grid;
+  gap: var(--sp-1);
+}
+.topbar__search-result.is-active { background: var(--bg-3); color: var(--text-1); }
+.topbar__search input:focus-visible ~ .topbar__search-results .topbar__search-result.is-active {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: calc(-1 * var(--focus-ring-width));
+}
