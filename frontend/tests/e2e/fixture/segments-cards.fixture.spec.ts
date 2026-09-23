@@ -130,14 +130,14 @@ for (const theme of FIXTURE_THEMES) {
 
       // The fresh-deploy status and the zero-count reason each keep their
       // card inside the target: neither wraps the meta row (review round 1).
+      for (const card of cards) {
+        expect(card.height, `height of "${card.code}"`).toBeLessThanOrEqual(MAX_CARD_HEIGHT);
+      }
       const pending = page.locator('.seg-card', { hasText: 'HELOC Intent' });
       await expect(pending.locator('.seg-card__meta')).toContainText('Δ —');
       await expect(pending.locator('.seg-card__meta .sr-only')).toHaveText('first snapshot · deltas pending');
       const empty = page.locator('.seg-card', { hasText: 'Retention Risk' });
       await expect(empty.locator('.seg-card__reconcile--empty')).toHaveText('no borrowers in current view');
-      for (const card of cards) {
-        expect(card.height, `height of "${card.code}"`).toBeLessThanOrEqual(MAX_CARD_HEIGHT);
-      }
     });
 
     // A national footprint puts headline counts at six to eight digits. The
