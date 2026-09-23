@@ -132,6 +132,11 @@ def test_series_shape_is_one_latest_week_with_no_missing_print(warehouse: tuple[
 def test_book_count_matches_the_borrower_360_fixed_rate_subset(
     warehouse: tuple[str, str, str], latest_week: dict[str, Any]
 ) -> None:
+    # Non-vacuity first: if the live rate-type code were not 'FIX', both
+    # sides would count nothing and 0 == 0 would pass.
+    assert latest_week["book_lien_count"] > 0, (
+        "the rate window's fixed-rate book is empty: check lien_current.first_pos_rate_type codes against the 'FIX' gate"
+    )
     rows = _run_sql(warehouse, f"SELECT CAST(COUNT(*) AS BIGINT) {_BOOK_GATES}")
     assert int(rows[0][0]) == latest_week["book_lien_count"]
 
