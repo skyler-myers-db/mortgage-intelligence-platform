@@ -1,14 +1,10 @@
 import { useEffect, useRef } from 'react';
+import { usePrefersReducedMotion } from '../lib/usePrefersReducedMotion';
 import { ComposePlanCard } from './ask-genie.compose-plan-card';
 import { GrowthAgentDraftPanel } from './ask-genie.growth-agent-drafts';
 import type { GrowthAgentRunOrigin, GrowthAgentWorkspace } from './ask-genie.growth-agent-state';
 import { renderSourceAssetChip } from './ask-genie.growth-agent.helpers';
 import { GrowthAgentRunCard } from './ask-genie.growth-run-card';
-
-function prefersReducedMotion(): boolean {
-  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
-  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-}
 
 /**
  * The run in flight, shown where the result will land (audit 2026-09-21
@@ -23,12 +19,15 @@ function prefersReducedMotion(): boolean {
  */
 export function GrowthAgentRunPending({ label }: { label: string }) {
   const ref = useRef<HTMLElement>(null);
+  const reducedMotion = usePrefersReducedMotion();
+  // Once per run card: a motion-preference change mid-run does not re-scroll.
+  const revealedRef = useRef(false);
   useEffect(() => {
     const node = ref.current;
-    if (node && typeof node.scrollIntoView === 'function') {
-      node.scrollIntoView({ block: 'nearest', behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
-    }
-  }, []);
+    if (revealedRef.current || !node || typeof node.scrollIntoView !== 'function') return;
+    revealedRef.current = true;
+    node.scrollIntoView({ block: 'nearest', behavior: reducedMotion ? 'auto' : 'smooth' });
+  }, [reducedMotion]);
   return (
     <section
       ref={ref}

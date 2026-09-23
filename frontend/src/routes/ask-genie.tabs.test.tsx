@@ -196,6 +196,13 @@ describe('/ask-genie page tabs', () => {
     expect(selectedTab().textContent).toBe('Workflows');
   });
 
+  // Scope: copy this route AUTHORS (hero, headings, empty states, captions).
+  // Server-sent workflow and monitor text is emptied on purpose, because it
+  // is not route copy: the workflow registry's proof points still name
+  // columns (e.g. 'borrower_360.in_the_money',
+  // backend/services/growth_agent_workflows.py) and the fixture harness's
+  // read 'Governed SQL'. Plain lender wording for them is a backend copy
+  // follow-up; this lint neither fixes nor vouches for it.
   it('keeps plumbing words out of the route copy (flow-10)', async () => {
     growthAgent.mockResolvedValue({ ...HOME, workflows: [], monitors: [] });
     for (const path of ['/ask-genie', '/ask-genie?tab=workflows', '/ask-genie?tab=monitors']) {

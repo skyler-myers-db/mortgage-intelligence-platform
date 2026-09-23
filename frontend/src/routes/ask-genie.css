@@ -117,7 +117,9 @@
   .genie-composer .genie-composer__input { resize: vertical; }
 }
 .genie-composer .btn { flex: none; }
-.surface__body > .genie-thread ~ *,
+/* The suggestions keep their gap under the thread or the empty state; the
+   status, warming and error callouts between them carry their own mt-*. */
+.surface__body > .genie-thread ~ .genie-composer__samples,
 .surface__body > .surface--inset + .genie-composer__samples {
   margin-top: var(--sp-4);
 }

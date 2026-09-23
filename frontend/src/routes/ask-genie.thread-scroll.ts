@@ -1,9 +1,5 @@
 import { useEffect, useRef, type RefObject } from 'react';
-
-function prefersReducedMotion(): boolean {
-  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
-  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-}
+import { usePrefersReducedMotion } from '../lib/usePrefersReducedMotion';
 
 /**
  * Keep the newest exchange of the `/ask-genie` thread in view (audit
@@ -27,6 +23,7 @@ export function useRevealLatestExchange(
   anchorKey: string,
 ): void {
   const previousKeyRef = useRef(anchorKey);
+  const reducedMotion = usePrefersReducedMotion();
   useEffect(() => {
     if (previousKeyRef.current === anchorKey) return;
     previousKeyRef.current = anchorKey;
@@ -42,6 +39,6 @@ export function useRevealLatestExchange(
     const viewBottom = dockRef.current?.getBoundingClientRect().top ?? window.innerHeight;
     const top = anchor.getBoundingClientRect().top;
     if (top >= viewTop && top + anchor.offsetHeight <= viewBottom) return;
-    anchor.scrollIntoView({ block: 'start', behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
-  }, [anchorKey, anchorRef, dockRef]);
+    anchor.scrollIntoView({ block: 'start', behavior: reducedMotion ? 'auto' : 'smooth' });
+  }, [anchorKey, anchorRef, dockRef, reducedMotion]);
 }
