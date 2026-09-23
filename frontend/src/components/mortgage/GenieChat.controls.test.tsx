@@ -32,6 +32,8 @@ import type { GenieAnswer, GenieStartResult } from '../../types';
 const mocks = vi.hoisted(() => ({
   genieAction: vi.fn(),
   genieFeedback: vi.fn(),
+  genieSession: vi.fn(),
+  genieSessions: vi.fn(),
   genieStart: vi.fn(),
   genieSubmit: vi.fn(),
   genieProgress: vi.fn(),
@@ -50,6 +52,8 @@ vi.mock('../../lib/api', async () => {
     api: {
       genieAction: mocks.genieAction,
       genieFeedback: mocks.genieFeedback,
+      genieSession: mocks.genieSession,
+      genieSessions: mocks.genieSessions,
       genieStart: mocks.genieStart,
       genieSubmit: mocks.genieSubmit,
       genieProgress: mocks.genieProgress,
@@ -400,6 +404,47 @@ describe('floating Genie conversational controls', () => {
     arrowUp();
     expect(input().value).toBe('a draft');
     expect(mocks.genieSubmit.mock.calls.length).toBe(1);
+  });
+
+  it('ArrowUp never recalls a question from a thread that New thread cleared or History replaced', async () => {
+    render();
+    const arrowUp = () =>
+      act(() => {
+        input().dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true }));
+      });
+    armInlineAnswer(answer({ answer: 'First thread answer.' }));
+    act(() => setInputValue(input(), 'Which states lead?'));
+    await click(askButton());
+    await waitUntil(() => container.textContent?.includes('First thread answer.') ?? false);
+
+    // New thread: nothing to recall.
+    await click(newThread());
+    await flush();
+    arrowUp();
+    await flush();
+    expect(input().value).toBe('');
+
+    // History restore: ArrowUp recalls the RESTORED thread's last question,
+    // not the one asked in the thread it replaced.
+    armInlineAnswer(answer({ answer: 'Second thread answer.' }));
+    act(() => setInputValue(input(), 'How many HELOC candidates are there?'));
+    await click(askButton());
+    await waitUntil(() => container.textContent?.includes('Second thread answer.') ?? false);
+    mocks.genieSessions.mockResolvedValue([
+      { conversation_id: 'conv-past', title: 'Past thread', last_activity_at: '2026-09-20T12:00:00Z', turn_count: 1 },
+    ]);
+    mocks.genieSession.mockResolvedValue({
+      conversation_id: 'conv-past',
+      turns: [{ question: 'Which segments lead in Texas?', response: answer({ answer: 'Restored answer.' }) }],
+    });
+    await click(history());
+    await waitUntil(() => container.querySelector('.genie-history__item') !== null);
+    await click(query<HTMLButtonElement>('.genie-history__item', 'history row'));
+    await waitUntil(() => container.textContent?.includes('Restored answer.') ?? false);
+    expect(input().value).toBe('');
+    arrowUp();
+    await flush();
+    expect(input().value).toBe('Which segments lead in Texas?');
   });
 
   it('Stop never overwrites a draft: the draft stays and the note offers Edit for the stopped question', async () => {

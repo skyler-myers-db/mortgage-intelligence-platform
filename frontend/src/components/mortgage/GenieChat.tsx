@@ -462,6 +462,9 @@ export function GenieChat() {
     askGenerationRef.current += 1;
     askAbortRef.current?.abort();
     suppressBootstrapConversationRef.current = true;
+    // ArrowUp recalls from the restored thread (its last question), not from
+    // the one it replaced.
+    lastQuestionRef.current = null;
     setGenieTurns(turns);
     setStoppedTurns([]);
     cancelAnchor();
