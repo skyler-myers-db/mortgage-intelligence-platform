@@ -20,7 +20,7 @@
  */
 import AxeBuilder from '@axe-core/playwright';
 import type { Locator, Page } from '@playwright/test';
-import type { HealthPayload } from '../../../src/lib/apiTypes';
+import type { GeoAssignmentOverlayResponse, HealthPayload } from '../../../src/lib/apiTypes';
 import type { FixtureTheme } from './app';
 import { MAP_ALL_CLASSES_COUNTS, emptyZipRollupsFixture, mapAllClassesFixture } from './data/mapEncoding';
 import { STATES, TOTALS, stateByCode } from './data/reference';
@@ -368,6 +368,56 @@ test.describe('resilience (dataviz-04)', () => {
     await expect(retry).toHaveCount(0);
     await expect(page.locator('.map-legend__value')).toHaveText(TOTALS.addressable.toLocaleString('en-US'));
     expect(stateRollupCalls(mockApi, 200)).toBeGreaterThan(0);
+  });
+});
+
+test.describe('assignment overlay freshness (dataviz-04)', () => {
+  test('turning "Unattended leads" on again reads the live assignments, not a cached count', async ({ app, mockApi, page }) => {
+    // A synthetic overlay whose unattended total drops once a lead is assigned.
+    let assigned = 100;
+    const overlayCalls = () => mockApi.calls.filter((call) => call.path === '/api/geo/assignment-overlay').length;
+    mockApi.register<GeoAssignmentOverlayResponse>('GET', '/api/geo/assignment-overlay', () => {
+      const units = STATES.map((state, index) => {
+        const unitAssigned = index === 0 ? assigned : 0;
+        return {
+          unit_id: state.code,
+          lead_count: state.contactable,
+          assigned_count: unitAssigned,
+          unattended_count: state.contactable - unitAssigned,
+          covering_officer_count: 1,
+          covering_officers: ['Loan Officer A'],
+        };
+      });
+      return {
+        body: {
+          level: 'state',
+          state: null,
+          county_fips: null,
+          units,
+          total_leads: TOTALS.contactable,
+          total_assigned: assigned,
+          total_unattended: TOTALS.contactable - assigned,
+          lead_definition: 'Marketing-eligible borrowers in mip.gold.borrower_360 without an active assignment.',
+        },
+      };
+    });
+    await app.setTheme('dark');
+    await app.gotoRoute('/');
+    await waitForStateFills(page);
+
+    const toggle = page.getByRole('group', { name: 'Map coloring' });
+    const value = page.locator('.map-legend__value');
+    await toggle.getByRole('button', { name: 'Unattended leads' }).click();
+    await expect(value).toHaveText((TOTALS.contactable - 100).toLocaleString('en-US'));
+    expect(overlayCalls()).toBe(1);
+
+    // A lead is assigned elsewhere; the user flips the colouring back and forth.
+    assigned = 101;
+    await toggle.getByRole('button', { name: 'Borrowers' }).click();
+    await expect(value).toHaveText(TOTALS.addressable.toLocaleString('en-US'));
+    await toggle.getByRole('button', { name: 'Unattended leads' }).click();
+    await expect(value).toHaveText((TOTALS.contactable - 101).toLocaleString('en-US'));
+    expect(overlayCalls()).toBe(2);
   });
 });
 

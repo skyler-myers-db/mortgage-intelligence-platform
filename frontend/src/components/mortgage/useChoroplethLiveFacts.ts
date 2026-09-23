@@ -139,12 +139,16 @@ export function useChoroplethLiveFacts({
   );
 
   // The overlay keys on the same unit as the fill it recolours: states at the
-  // national view, the drilled state's ZIPs below it.
+  // national view, the drilled state's ZIPs below it. It counts live Lakebase
+  // assignments, which change under the user (a lead assigned in the queue),
+  // and invalidateOperationalQueries does not cover `geo`: staleTime 0 makes
+  // every toggle on read it again, as the pre-query-cache effect did. The
+  // cached payload still paints meanwhile. An aggregate read: no audit row.
   const overlayLevel: GeoOverlayLevel = drillState ? 'zip' : 'state';
   const overlayResult = useWarmingUpRetry<GeoAssignmentOverlayResponse>(
     (signal) => api.assignmentOverlay(overlayLevel, { state: drillState, signal }),
     [],
-    { queryKey: geoQueryKeys.assignmentOverlay(overlayLevel, drillState), enabled: overlayOn },
+    { queryKey: geoQueryKeys.assignmentOverlay(overlayLevel, drillState), enabled: overlayOn, staleTime: 0 },
   );
   const overlay = geoRead(overlayResult, overlayOn);
   const overlayDependency = overlay.error instanceof ApiError && overlay.error.dependency
