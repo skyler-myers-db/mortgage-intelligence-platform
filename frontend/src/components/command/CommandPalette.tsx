@@ -10,6 +10,7 @@ import { useNavigate } from 'react-router';
 import { useApp } from '../AppContext';
 import { Icon, type IconName } from '../Icon';
 import { api } from '../../lib/api';
+import { openGenie } from '../../lib/genieOpen';
 import type { LeadSummary } from '../../types';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import {
@@ -29,14 +30,23 @@ import {
  *
  * Open with ⌘K (mac) / Ctrl+K. The existing "/" topbar-search shortcut is
  * untouched; this is the heavier cross-surface launcher.
+ *
+ * "Ask Genie: <typed text>" (audit 2026-09-21 `shell-07` / `genie-04`): any
+ * query of two or more characters also offers a row that opens the floating
+ * Genie panel with the text PREFILLED in its composer (`openGenie`). It never
+ * submits and adds no endpoint: the user presses Ask, and the question takes
+ * the same guarded ask path as any typed question.
  */
 
 type FlatItem =
   | { kind: 'action'; action: CommandAction }
+  | { kind: 'genie'; prompt: string }
   | { kind: 'borrower'; lead: LeadSummary };
 
 const DEBOUNCE_MS = 160;
 const MAX_BORROWERS = 6;
+/** Typed text this long or longer also offers "Ask Genie: <text>". */
+const MIN_GENIE_QUERY = 2;
 
 export function CommandPalette() {
   const navigate = useNavigate();
@@ -134,12 +144,14 @@ export function CommandPalette() {
     () => filterCommandActions(query, commandActionsForAccess(canAccessAdmin)),
     [canAccessAdmin, query],
   );
+  const genieQuery = query.trim();
   const items: FlatItem[] = useMemo(
     () => [
       ...actions.map((action) => ({ kind: 'action' as const, action })),
+      ...(genieQuery.length >= MIN_GENIE_QUERY ? [{ kind: 'genie' as const, prompt: genieQuery }] : []),
       ...borrowers.map((lead) => ({ kind: 'borrower' as const, lead })),
     ],
-    [actions, borrowers],
+    [actions, borrowers, genieQuery],
   );
 
   // Clamp the active index whenever the result set shrinks.
@@ -152,6 +164,11 @@ export function CommandPalette() {
       if (item.kind === 'borrower') {
         close();
         navigate(`/borrower-360/${item.lead.borrower_id}`);
+        return;
+      }
+      if (item.kind === 'genie') {
+        close();
+        openGenie({ prompt: item.prompt });
         return;
       }
       const { target } = item.action;
@@ -199,6 +216,7 @@ export function CommandPalette() {
   const optionId = (i: number) => `cmdk-option-${i}`;
   let runningIndex = -1;
   const actionItems = items.filter((it) => it.kind === 'action') as Extract<FlatItem, { kind: 'action' }>[];
+  const genieItems = items.filter((it) => it.kind === 'genie') as Extract<FlatItem, { kind: 'genie' }>[];
   const borrowerItems = items.filter((it) => it.kind === 'borrower') as Extract<FlatItem, { kind: 'borrower' }>[];
 
   return (
@@ -240,7 +258,9 @@ export function CommandPalette() {
         </div>
 
         <div className="cmdk__list" id="cmdk-listbox" role="listbox" ref={listRef}>
-          {items.length === 0 && (
+          {/* The Genie row is a way out, not a match: the empty state still
+              says so when no page, action or borrower matched. */}
+          {actionItems.length === 0 && borrowerItems.length === 0 && (
             <div className="cmdk__empty" role="status">
               No pages, actions, or borrowers match “{query.trim()}”.
             </div>
@@ -261,6 +281,29 @@ export function CommandPalette() {
                     icon={item.action.icon}
                     label={item.action.label}
                     hint={item.action.hint}
+                    onActivate={() => runItem(item)}
+                    onHover={() => setActiveIndex(i)}
+                  />
+                );
+              })}
+            </div>
+          )}
+
+          {genieItems.length > 0 && (
+            <div className="cmdk__group" role="group" aria-label="Ask Genie">
+              <div className="cmdk__group-label">Ask Genie</div>
+              {genieItems.map((item) => {
+                runningIndex += 1;
+                const i = runningIndex;
+                return (
+                  <CommandRow
+                    key="ask-genie"
+                    index={i}
+                    optionId={optionId(i)}
+                    active={i === activeIndex}
+                    icon="sparkle"
+                    label={`Ask Genie: ${item.prompt}`}
+                    hint="Opens Genie with this question; you press Ask"
                     onActivate={() => runItem(item)}
                     onHover={() => setActiveIndex(i)}
                   />

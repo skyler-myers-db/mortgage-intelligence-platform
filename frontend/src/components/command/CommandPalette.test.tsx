@@ -156,10 +156,14 @@ describe('CommandPalette', () => {
     expect(dialog()).toBeNull();
   });
 
-  it('shows an empty state when nothing matches', () => {
+  it('shows an empty state when nothing matches, with the Ask Genie handoff as the only row', () => {
     pressMetaK();
     setQuery('zzzznope');
-    expect(container.querySelectorAll('[role="option"]').length).toBe(0);
+    // Since audit 2026-09-21 `shell-07` the palette never dead-ends: the
+    // typed text can always be handed to Genie (a prefill, never a submit).
+    const options = container.querySelectorAll('[role="option"]');
+    expect(options.length).toBe(1);
+    expect(options[0].textContent).toContain('Ask Genie: zzzznope');
     expect(container.querySelector('.cmdk__empty')!.textContent).toContain('No pages, actions, or borrowers');
   });
 
