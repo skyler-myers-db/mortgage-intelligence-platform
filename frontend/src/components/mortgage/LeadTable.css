@@ -53,11 +53,12 @@
 .lead-table__line > .evidence-chip {
   flex: 0 0 auto;
 }
+/* A `<button>` wearing the prototype's `+n` chip: `.chip` / `.chip--compact`
+   already set its mono 10px type, weight and colour; only the UA button
+   line-height needs resetting. */
 .lead-table__more {
   cursor: pointer;
-  font: inherit;
-  font-family: var(--font-mono);
-  font-size: 10px;
+  line-height: inherit;
 }
 .lead-table__more:hover {
   border-color: var(--line-2);

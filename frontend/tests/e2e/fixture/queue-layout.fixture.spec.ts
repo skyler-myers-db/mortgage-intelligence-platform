@@ -108,6 +108,12 @@ test.describe('one-line rows and the merged Status cell', () => {
     // The workflow states fold into +n; the compliance flag never does.
     const more = dncStatus.locator('.lead-table__more');
     await expect(more).toHaveText('+3');
+    // The `+n` button wears the prototype's compact chip type, not the UA button font.
+    const type = (el: Element) => {
+      const style = getComputedStyle(el);
+      return `${style.fontFamily} ${style.fontSize} ${style.fontWeight} ${style.letterSpacing}`;
+    };
+    expect(await more.evaluate(type)).toBe(await dncStatus.locator('.lead-table__line > .chip').first().evaluate(type));
     const spoken = (await more.getAttribute('aria-label')) ?? '';
     expect(spoken).toMatch(/^3 more statuses: /);
     expect(spoken).toContain('Assigned to: Summit LO 01');
