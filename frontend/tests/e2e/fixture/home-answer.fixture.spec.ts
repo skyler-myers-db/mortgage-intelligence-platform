@@ -13,6 +13,7 @@
  *  - WHAT TO OFFER reconciles with the "Primary offer paths" KPI on a
  *    live-shaped, nurture-dominant book: no "Monitor for later" segment, the
  *    note's total is the KPI's number, the printed percents make 100;
+ *  - the hero's evidence claim is true: each evidence chip opens its source;
  *  - the geography map starts above the fold, paired with a side panel;
  *  - KPI values are at least the size of the page title;
  *  - no two cards touch: every measured gap is at least --gap-grid;
@@ -348,6 +349,22 @@ test.describe('Home answer band links and reads', () => {
     const shares = (await band.locator('.offer-mix__seg').evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-share'))))
       .map(Number);
     expect(shares.reduce((sum, share) => sum + share, 0)).toBeCloseTo(100, 2);
+  });
+
+  test("the hero's evidence claim holds: each evidence chip in the band opens its source", async ({ app, page }) => {
+    await app.gotoRoute('/');
+    await expect(page.locator('#main-content .lede')).toHaveText(
+      "Today's briefing answers all three; each evidence chip opens the source behind its figure.",
+    );
+    // The briefing's figures are prose, not controls: the lede must not say they open anything.
+    await expect(page.locator('.home-answer__briefing').locator('a, button')).toHaveCount(0);
+    const chips = page.locator('.home-answer .evidence-chip');
+    await expect(chips).toHaveCount(2 + HOME_SUMMARY.highlights.length);
+    for (const name of ['Governed ranking', HOME_SUMMARY.highlights[0].display, 'Offer rules']) {
+      const drawer = await app.openEvidenceDrawer(page.locator('.home-answer .evidence-chip', { hasText: name }).first());
+      await drawer.getByRole('button', { name: 'Close drawer' }).click();
+      await expect(drawer).not.toHaveClass(/is-open/);
+    }
   });
 
   test('a failed ranking read leaves a quiet status in WHO, never an alert', async ({ app, page }) => {

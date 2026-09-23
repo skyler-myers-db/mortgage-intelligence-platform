@@ -17,9 +17,10 @@ import './HomeAnswerBand.css';
  * It replaces two cards that answered none of the three: "Since your last
  * login" (now the WHY NOW column) and "Your book today" (now the briefing
  * line, the same verified sentence from lib/portfolioStory, held to a 72ch
- * measure). Every figure keeps an evidence path: the briefing's numbers are
- * the KPI cards' own values (each KPI carries its drawer), and every column
- * carries an EvidenceChip.
+ * measure). Every figure keeps an evidence path through an EvidenceChip: the
+ * briefing's numbers are the KPI cards' own values (each KPI card's chip
+ * opens its drawer), and every column header carries one. The figures
+ * themselves are plain text; only the chips open evidence.
  *
  * New BEM block `.home-answer` (the prototype has no answer band); its parts
  * reuse prototype primitives: `.surface`, `.chip`, `.score`, `.evidence-chip`.

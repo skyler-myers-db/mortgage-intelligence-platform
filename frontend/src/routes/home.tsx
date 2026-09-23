@@ -126,7 +126,7 @@ export default function Home() {
     <PageShell
       eyebrow={lender}
       title="Who should we contact, why now, and with what offer?"
-      lede="Today's briefing answers all three. Every number opens the source evidence behind it."
+      lede="Today's briefing answers all three; each evidence chip opens the source behind its figure."
       wideMap
       heroRight={
         <>
