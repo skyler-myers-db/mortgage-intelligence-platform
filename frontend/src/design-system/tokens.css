@@ -363,9 +363,13 @@
  * prototype ring is `2px solid var(--accent)` (design_files/index.html:211);
  * because [data-accent] always overrides the light theme's --accent, that
  * read 1.91:1 on white with the default accent. The ring now follows
- * --accent-ink, which is AA-tuned per theme x accent, so the DARK theme is
- * unchanged and the LIGHT theme departs from the prototype colour on
- * purpose. Bespoke rings in the component partials consume these tokens. */
+ * --accent-ink, which is AA-tuned per theme x accent. Where the ring differs
+ * from the prototype: every light pair (the ink, not --accent); dark + navy
+ * and dark + red, whose ink is #66C5FF / #FF5A47 (see above), not the
+ * accent; and .rail__brand, whose ring was always --entrada-bright and now
+ * follows the accent in every dark pair. Otherwise dark + bright and dark +
+ * teal paint the prototype ring unchanged. Bespoke rings in the partials
+ * consume these tokens. */
 :root {
   --focus-ring-color: var(--accent-ink);
   --focus-ring-width: 2px;
