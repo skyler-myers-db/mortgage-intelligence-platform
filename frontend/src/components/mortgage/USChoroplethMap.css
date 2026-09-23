@@ -147,6 +147,14 @@
 .map-table__swatch.lvl-2 { background: var(--map-ramp-2); }
 .map-table__swatch.lvl-3 { background: var(--map-ramp-3); }
 .map-table__swatch.lvl-4 { background: var(--map-ramp-4); }
+/* Drill focus targets (a11y-04) that fill a clipping box: the ZIP table
+   fills the .map-table scroll box and the status stage fills the map, so
+   the default ring (drawn outside, offset 2px) was clipped away. Draw it
+   inside their own box. */
+.map-table__table:focus-visible,
+.map-stage--status:focus-visible {
+  outline-offset: calc(-1 * var(--focus-ring-width));
+}
 .map-table__open {
   padding: 0;
   border: 0;

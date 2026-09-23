@@ -19,7 +19,7 @@
  *    never to <body>.
  */
 import AxeBuilder from '@axe-core/playwright';
-import type { Page } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
 import type { FixtureTheme } from './app';
 import { MAP_ALL_CLASSES_COUNTS, emptyZipRollupsFixture, mapAllClassesFixture } from './data/mapEncoding';
 import { STATES, TOTALS, stateByCode } from './data/reference';
@@ -153,6 +153,20 @@ async function legendCoverage(page: Page, stateId: string): Promise<number> {
     }
     return inside === 0 ? 1 : covered / inside;
   }, stateId);
+}
+
+/**
+ * The focused element shows its focus ring inside its own box. The ZIP table
+ * and the status stage fill a clipping box, which hid a ring drawn outside.
+ */
+async function expectInsetFocusRing(target: Locator): Promise<void> {
+  const ring = await target.evaluate((el) => {
+    const style = getComputedStyle(el);
+    return { style: style.outlineStyle, width: parseFloat(style.outlineWidth), offset: parseFloat(style.outlineOffset) };
+  });
+  expect(ring.style).not.toBe('none');
+  expect(ring.width).toBeGreaterThan(0);
+  expect(ring.offset + ring.width, 'ring drawn inside the box').toBeLessThanOrEqual(0);
 }
 
 /** Focus is on exactly one element inside the map, not lost to <body>. */
@@ -419,8 +433,10 @@ test.describe('keyboard, screen reader and table access (a11y-04)', () => {
       await page.keyboard.press('Enter');
       await expect(page).toHaveURL(/geo_state=TX/);
       await expect(page.getByTestId('map-table-total')).toHaveText((stateByCode('TX')?.addressable ?? 0).toLocaleString('en-US'));
-      await expect(page.getByRole('table', { name: /^Marketable borrowers by ZIP in Texas/ })).toBeFocused();
+      const zipTable = page.getByRole('table', { name: /^Marketable borrowers by ZIP in Texas/ });
+      await expect(zipTable).toBeFocused();
       await expectFocusInMap(page);
+      await expectInsetFocusRing(zipTable);
       // The ZIP rows scroll inside the map; the total row stays in view.
       const scroller = page.getByTestId('map-table');
       expect(await scroller.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
@@ -457,6 +473,7 @@ test.describe('a drill never drops focus to <body> (a11y-04)', () => {
     const stage = page.getByRole('group', { name: 'ZIP rollups for Arizona' });
     await expect(stage.getByTestId('warming-up-block')).toBeVisible({ timeout: 20_000 });
     await expect(stage).toBeFocused();
+    await expectInsetFocusRing(stage);
 
     recover();
     const firstZip = page.getByRole('list', { name: 'ZIPs in Arizona' }).getByRole('button').first();
