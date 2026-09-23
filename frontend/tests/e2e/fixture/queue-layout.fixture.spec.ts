@@ -177,6 +177,40 @@ test.describe('column presets', () => {
     await again.getByRole('option', { name: 'Sales ops' }).click();
     await expect.poll(() => new URL(page.url()).searchParams.get('view')).toBe('sales-ops');
   });
+
+  for (const view of ['default', 'sales-ops'] as const) {
+    test(`every chip and button of the first 6 rows stays inside its own cell, compliance rows included (${view} view)`, async ({ app, page, mockApi }) => {
+      registerQueueLayoutLeads(mockApi);
+      await app.gotoRoute(view === 'sales-ops' ? '/lead-queue?view=sales-ops' : '/lead-queue');
+      await expect(page.locator(ROWS).nth(5)).toBeVisible();
+
+      const layout = await page.locator(ROWS).evaluateAll((rows) => {
+        const escapes: string[] = [];
+        let checked = 0;
+        rows.slice(0, 6).forEach((row, index) => {
+          row.querySelectorAll<HTMLElement>('.chip, button').forEach((el) => {
+            const cell = el.closest('td');
+            if (!cell) return;
+            checked += 1;
+            const box = el.getBoundingClientRect();
+            const td = cell.getBoundingClientRect();
+            if (box.right > td.right + 0.5 || box.left < td.left - 0.5) {
+              escapes.push(`row ${index + 1} "${(el.textContent ?? '').trim()}" x ${box.left}-${box.right} leaves its cell x ${td.left}-${td.right}`);
+            }
+          });
+        });
+        return { checked, escapes };
+      });
+      expect(layout.checked, 'the check saw the rows\' chips and buttons').toBeGreaterThanOrEqual(24);
+      expect(layout.escapes).toEqual([]);
+
+      // The unresolved-owner row carries both compliance flags in full.
+      const flags = page.getByTestId(`lead-compliance-${UNRESOLVED_OWNER_LEAD.borrower_id}`);
+      await expect(flags.locator('.lead-table__flag')).toHaveText(['Owner unresolved', 'Suppressed']);
+      await expectReachable(flags.locator('.chip', { hasText: /^Suppressed$/ }), `the Suppressed chip (${view} view)`);
+      await expectReachable(flags.locator('.chip', { hasText: 'Owner unresolved' }), `the Owner unresolved chip (${view} view)`);
+    });
+  }
 });
 
 test.describe('the collapsed filter wall', () => {

@@ -169,7 +169,9 @@
 .lead-table__col-expand { width: 32px; }
 .lead-table__col-borrower { width: 128px; }
 .lead-table__col-location { width: 104px; }
-.lead-table__col-relationship { width: 112px; }
+/* Sales ops: wide enough for the widest compliance flag ("Owner unresolved"
+   with its icon, ~129px) plus the cell padding; the flags wrap below it. */
+.lead-table__col-relationship { width: 148px; }
 .lead-table__col-assignment { width: 124px; }
 .lead-table__col-outreach { width: 112px; }
 .lead-table__col-disposition { width: 120px; }

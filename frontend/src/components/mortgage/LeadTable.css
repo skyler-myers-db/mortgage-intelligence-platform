@@ -8,12 +8,14 @@
    ============================================================ */
 
 /* Width below which each view scrolls horizontally behind the pinned
-   Approval column: the fixed column widths (03-score-and-table.css) plus a
-   170px floor for Primary offer. Default = the prototype's columns plus
-   Status (design_files/Module 0 Prototype.html:2013-2023) and fits the
-   1,318px scrollport at 1440x900 with the Console closed. */
+   Approval column: the sum of the fixed column widths
+   (03-score-and-table.css) plus a 170px floor for Primary offer. Default =
+   the prototype's columns plus Status (design_files/Module 0
+   Prototype.html:2013-2023) and fits the 1,318px scrollport at 1440x900 with
+   the Console closed. Sales ops = Default - Status (150) + Relationship (148)
+   + Assigned to (124) + Outreach (112) + Last touch (120). */
 .lead-table__table--default { min-inline-size: 1278px; }
-.lead-table__table--sales-ops { min-inline-size: 1596px; }
+.lead-table__table--sales-ops { min-inline-size: 1632px; }
 
 /* Declared prototype deviation: the prototype fixes the table scroller at
    maxHeight 480 (design_files/Module 0 Prototype.html:2009) and the app used
