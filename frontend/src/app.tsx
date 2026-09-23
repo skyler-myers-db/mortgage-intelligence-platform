@@ -4,7 +4,7 @@ import { Navigate, Route, Routes, useLocation } from 'react-router';
 import { RouteErrorBoundary } from './components/ErrorBoundaryRoute';
 import { AppShell } from './components/layout/AppShell';
 import { RouteNav } from './components/layout/RouteNav';
-import { Skeleton } from './components/ui/Skeleton';
+import { RouteFallback } from './components/layout/RouteFallback';
 import {
   AdminConfigRoute,
   AnalyticsRoute,
@@ -25,22 +25,6 @@ import type { SessionResponse } from './types';
 
 // Lazy: the denied page must not cost the initial bundle anything.
 const AdminAccessDeniedRoute = lazy(() => import('./routes/admin-config.access-denied'));
-
-function RouteFallback() {
-  return (
-    <div className="surface" aria-busy="true" role="status">
-      <div className="surface__hdr">
-        <Skeleton width={28} height={28} rounded="md" />
-        <Skeleton width={180} height={18} rounded="sm" />
-      </div>
-      <div className="surface__body surface__body--stack-sm">
-        <Skeleton width="55%" height={16} rounded="sm" />
-        <Skeleton width="80%" height={12} rounded="sm" />
-        <Skeleton width="70%" height={12} rounded="sm" />
-      </div>
-    </div>
-  );
-}
 
 /**
  * AdminRouteGate keeps the server-authoritative session decision at the route

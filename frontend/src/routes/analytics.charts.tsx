@@ -36,30 +36,18 @@ import {
   type DailyEvidenceTotal,
   type LenderFilterParams,
 } from './analytics.lib';
-
-function LoadingPanel({ title }: { title: string }) {
-  return (
-    <div className="surface">
-      <div className="surface__hdr">
-        <div className="surface__icon"><Icon name="db" size={14} /></div>
-        <h2 className="h-3">{title}</h2>
-      </div>
-      <div className="surface__body analytics-state" aria-busy="true">
-        <span className="skeleton analytics-state__line" />
-        <span className="skeleton analytics-state__line analytics-state__line--wide" />
-        <span className="skeleton analytics-state__line" />
-      </div>
-    </div>
-  );
-}
+import { AnalyticsSkeleton, ANALYTICS_SKELETONS, type AnalyticsSkeletonShape } from './analytics.skeleton';
 
 export function LoadState<T>({
   query,
   title,
+  skeleton = ANALYTICS_SKELETONS.panel,
   children,
 }: {
   query: UseWarmingUpRetryResult<T>;
   title: string;
+  /** The loaded view's shape, reserved while it loads (analytics.skeleton.tsx). */
+  skeleton?: AnalyticsSkeletonShape;
   children: (data: T) => ReactNode;
 }) {
   if (query.data) {
@@ -99,7 +87,7 @@ export function LoadState<T>({
       </div>
     );
   }
-  return <LoadingPanel title={title} />;
+  return <AnalyticsSkeleton title={title} shape={skeleton} />;
 }
 
 export function SectionHeader({ title, action }: { title: string; action?: ReactNode }) {

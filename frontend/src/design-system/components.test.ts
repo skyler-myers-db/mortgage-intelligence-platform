@@ -7,6 +7,7 @@ import { join } from 'node:path';
 // @ts-expect-error CSS lint helper is an ESM Node script used by lint/tests only.
 import { findCssLiteralViolations } from '../../../tools/lint_css_literals.mjs';
 import { designCss } from '../test/designCss';
+import { featureStylesheets } from '../test/featureCss';
 
 declare const process: { cwd(): string };
 
@@ -260,8 +261,12 @@ describe('layout containment contracts', () => {
   it('renders skeleton placeholders for slow lead and data-estate loads', () => {
     const css = designCss();
 
-    expect(css).toContain('.lead-queue-skeleton__row');
-    expect(css).toMatch(/\.lead-queue-skeleton__row\s*\{[^}]*grid-template-columns:/s);
+    // The Lead Queue skeleton renders the real `.tbl.lead-table__table`
+    // (audit states-10), so the shell CSS carries no private grid for it;
+    // its cell shapes ship with the lazy route stylesheet.
+    expect(css).not.toContain('.lead-queue-skeleton__row');
+    const leadQueueSkeleton = featureStylesheets().find((sheet) => sheet.file === 'src/routes/lead-queue.skeleton.css');
+    expect(leadQueueSkeleton?.css).toContain('.lead-queue-skeleton__bar');
     expect(css).toContain('.data-estate__lane-skeleton-main');
     expect(css).toContain('.data-estate__asset--skeleton');
   });
