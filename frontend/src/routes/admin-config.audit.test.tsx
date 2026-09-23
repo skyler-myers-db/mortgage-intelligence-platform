@@ -198,6 +198,8 @@ describe('AdminConfig audit explorer', () => {
     expect(document.getElementById(detailId as string)).toBeNull();
 
     const table = document.querySelector('table[aria-label="Audit events"]');
+    expect(table?.textContent).toContain('Outreach approved');
+    expect(table?.querySelector('.chip.mono')?.textContent).toBe('APPROVE');
     expect(table?.textContent).toContain('outreach.approve');
     expect(table?.textContent).toContain('approval-42');
     expect(table?.textContent).toContain('vera@summit.example');
@@ -215,7 +217,12 @@ describe('AdminConfig audit explorer', () => {
     expect(details?.textContent).toContain('ev-002');
     expect(details?.textContent).toContain('offer_code');
     expect(details?.textContent).toContain('minimum_score');
-    expect(details?.querySelector('a')).toBeNull();
+    // flow-04: the only links are back into the explorer itself (this event
+    // on its own, and every row of its request); nothing links out.
+    expect([...(details?.querySelectorAll('a') ?? [])].map((a) => a.getAttribute('href'))).toEqual([
+      '/admin-config?audit_event_id=evt-8ecf7294#audit',
+      '/admin-config?audit_correlation_id=corr-admin-audit-42#audit',
+    ]);
 
     act(() => expand.click());
     expect(expand.getAttribute('aria-expanded')).toBe('false');
@@ -258,26 +265,30 @@ describe('AdminConfig audit explorer', () => {
     await renderAdmin();
     const entity = document.querySelector<HTMLInputElement>('input[placeholder="B-... or approval UUID"]');
     const action = document.querySelector<HTMLInputElement>('input[placeholder="outreach.approve"]');
-    const eventType = document.querySelector<HTMLInputElement>('input[placeholder="APPROVE"]');
-    expect(entity && action && eventType).toBeTruthy();
+    expect(entity && action).toBeTruthy();
 
     act(() => {
       setNativeValue(entity!, 'B-ABC123');
       setNativeValue(action!, 'outreach.approve');
-      setNativeValue(eventType!, 'APPROVE');
     });
+    // Event type is a FilterSelect fed by the labels registry (tables-10).
+    act(() => buttonByLabel(/^Event type: /).click());
+    const option = [...document.querySelectorAll('[role="option"]')]
+      .find((candidate) => candidate.textContent === 'Outreach approved');
+    act(() => (option as HTMLElement).click());
     act(() => buttonByLabel(/^Apply filters$/).click());
+    await settle();
 
     const explorerKeys = apiMocks.hookKeys.filter((key) => key.includes('explorer'));
-    expect(explorerKeys[explorerKeys.length - 1]).toEqual(expect.arrayContaining([
-      'B-ABC123',
-      true,
-      'outreach.approve',
-      'APPROVE',
-    ]));
+    const appliedKey = String(explorerKeys[explorerKeys.length - 1][4]);
+    expect(Object.fromEntries(new URLSearchParams(appliedKey))).toEqual({
+      audit_entity: 'B-ABC123',
+      audit_action: 'outreach.approve',
+      audit_event_type: 'APPROVE',
+    });
     expect(document.body.textContent).toContain('entity = B-ABC123');
     expect(document.body.textContent).toContain('action = outreach.approve');
-    expect(document.body.textContent).toContain('event = APPROVE');
+    expect(document.body.textContent).toContain('event = Outreach approved · APPROVE');
   });
 
   it('normalizes borrower references and rejects malformed B-prefixed filters', async () => {

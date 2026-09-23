@@ -202,6 +202,8 @@ _MUTATION_AUDIT_EXPECTATIONS: dict[str, tuple[str, ...]] = {
     "run_due_growth_agent_monitors_all_actors": ("_run_due_monitor_rows(",),
     "create_growth_agent_monitor_notification_drafts": ("create_notification_drafts(",),
     "log_event": ("store.write(",),
+    # LEAD_EXPORT receipt: the whole route body is the audited write.
+    "create_lead_export_receipt": ("write_lead_export_receipt(",),
     "save_lead": ("store.save_lead(",),
     "delete_lead": ("store.delete_lead(",),
     "save_draft": ("store.save_draft(",),

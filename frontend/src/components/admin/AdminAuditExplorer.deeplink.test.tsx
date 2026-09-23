@@ -100,21 +100,27 @@ describe('AdminAuditExplorer receipt deep link', () => {
   } as const;
   const location = () => document.querySelector('[data-testid="location"]')?.textContent;
   const lastExplorerKey = () => [...hook.keys].reverse().find((key) => key.includes('explorer'));
+  /** The explorer keys one applied filter set as a single string part, so the
+   * pinned id is looked for inside the key's parts rather than as an element. */
+  const keyMentions = (key: ReadonlyArray<unknown> | undefined, needle: string) => (
+    (key ?? []).some((part) => typeof part === 'string' && part.includes(needle))
+  );
 
   it.each(Object.keys(dropPin) as Array<keyof typeof dropPin>)(
     '%s collapses the expanded pinned row',
     (control) => {
       hook.rows = [row(PINNED_ID)];
       render();
-      expect(lastExplorerKey()).toContain(PINNED_ID);
-      const expand = button(new RegExp(`^Expand audit event ${PINNED_ID}$`));
-      act(() => expand.click());
-      expect(expand.getAttribute('aria-expanded')).toBe('true');
+      expect(keyMentions(lastExplorerKey(), PINNED_ID)).toBe(true);
+      // The explorer opens a deep-linked row on arrival (flow-04), so the
+      // pinned row starts expanded; dropping the pin must collapse it.
+      const pinned = button(new RegExp(`^Collapse audit event ${PINNED_ID}$`));
+      expect(pinned.getAttribute('aria-expanded')).toBe('true');
 
       act(() => dropPin[control]());
 
       expect(location()).toBe('/admin-config#audit');
-      expect(lastExplorerKey()).not.toContain(PINNED_ID);
+      expect(keyMentions(lastExplorerKey(), PINNED_ID)).toBe(false);
       // The same row comes back unpinned, collapsed like after Clear.
       const toggle = button(new RegExp(`^(Expand|Collapse) audit event ${PINNED_ID}$`));
       expect(toggle.getAttribute('aria-expanded')).toBe('false');

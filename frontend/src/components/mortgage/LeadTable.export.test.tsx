@@ -14,8 +14,9 @@
  * 3. the file follows the on-screen sort;
  * 4. a selection, when one exists, is what gets exported.
  *
- * The server-side export audit receipt is a later wave; nothing here calls
- * an audit endpoint.
+ * Wave 1a added the LEAD_EXPORT receipt the download waits for; here the
+ * receipt resolves immediately so these tests keep pinning scope and counts.
+ * LeadTable.exportReceipt.test.tsx pins the receipt ordering itself.
  */
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -25,6 +26,7 @@ import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LeadTable } from './LeadTable';
 import { describeLeadCsvExport, planLeadCsvExport } from './LeadTable.csv';
+import { LEAD_EXPORT_NOTICE_MS } from './useLeadCsvExport';
 import type { LeadSummary } from '../../types';
 
 vi.mock('../AppContext', () => ({
@@ -45,7 +47,19 @@ vi.mock('../AppContext', () => ({
 }));
 
 vi.mock('../../lib/api', () => ({
-  api: {},
+  api: {
+    leadExportReceipt: vi.fn(async () => ({
+      audit_event_id: 'evt-receipt-0001',
+      event_type: 'LEAD_EXPORT',
+      actor: 'approver@summit-mortgage.example',
+      scope: 'loaded',
+      row_count: 0,
+      csv_sha256: 'a'.repeat(64),
+      borrower_ids_sha256: 'b'.repeat(64),
+      filter_fingerprint: 'c'.repeat(64),
+      recorded_at: '2026-09-21T00:00:00.000Z',
+    })),
+  },
   ApiError: class extends Error {},
   isAbortError: () => false,
 }));
@@ -120,9 +134,25 @@ describe('LeadTable CSV export', () => {
   let container: HTMLDivElement;
   let root: Root;
   let blobs: Blob[];
+  // An export still hashing when its test ends (a timeout under load) would
+  // download into the NEXT test's blobs. Every export hashes through
+  // crypto.subtle.digest first, so track those digests and drain them before
+  // the test is torn down (as LeadTable.exportReceipt.test.tsx does).
+  const pendingDigests = new Set<Promise<ArrayBuffer>>();
 
   beforeEach(() => {
     blobs = [];
+    const subtle = globalThis.crypto.subtle;
+    const digest = subtle.digest.bind(subtle);
+    vi.spyOn(subtle, 'digest').mockImplementation((algorithm, data) => {
+      const pending = digest(algorithm, data);
+      pendingDigests.add(pending);
+      const settled = () => {
+        pendingDigests.delete(pending);
+      };
+      pending.then(settled, settled);
+      return pending;
+    });
     // Capture the bytes handed to the download; never navigate.
     vi.spyOn(URL, 'createObjectURL').mockImplementation((blob: Blob | MediaSource) => {
       blobs.push(blob as Blob);
@@ -135,7 +165,13 @@ describe('LeadTable CSV export', () => {
     root = createRoot(container);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    vi.useRealTimers();
+    // Let a late export finish (post its receipt, download) inside this test.
+    await act(async () => {
+      await Promise.allSettled([...pendingDigests]);
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+    });
     act(() => root.unmount());
     container.remove();
     vi.restoreAllMocks();
@@ -161,8 +197,11 @@ describe('LeadTable CSV export', () => {
   };
 
   async function exportedCsv(): Promise<string> {
-    act(() => exportButton().click());
-    expect(blobs).toHaveLength(1);
+    await act(async () => {
+      exportButton().click();
+    });
+    // The download waits for the receipt (hashing + POST are async).
+    await vi.waitFor(() => expect(blobs).toHaveLength(1));
     return blobs[0].text();
   }
 
@@ -180,14 +219,16 @@ describe('LeadTable CSV export', () => {
     expect(exportButton().disabled).toBe(false);
   });
 
-  it('disables the export, with the reason, when the gate would write zero rows', () => {
+  it('disables the export, with the reason, when the gate would write zero rows', async () => {
     mount([lead(SUPPRESSED, 400_000, { marketing_eligible: false }), lead(DNC, 300_000, { dnc: true })]);
 
     expect(exportButton().disabled).toBe(true);
     expect(exportButton().getAttribute('aria-label')).toBe('Export 0 leads as CSV');
     expect(exportButton().getAttribute('title')).toContain('marketing-eligibility gate');
 
-    act(() => exportButton().click());
+    await act(async () => {
+      exportButton().click();
+    });
     expect(blobs).toHaveLength(0);
     expect(container.querySelector('[data-testid="lead-export-notice"]')).toBeNull();
   });
@@ -200,9 +241,29 @@ describe('LeadTable CSV export', () => {
     expect(csv).toContain('# exported_rows=2');
     expect(csv).toContain('# export_scope=loaded_rows');
     expect(csv).toContain('# row_order=rank');
-    expect(container.querySelector('[data-testid="lead-export-notice"]')?.textContent).toBe(
-      'Exported 2 leads in rank order. 2 excluded by the marketing-eligibility gate.',
-    );
+    await vi.waitFor(() => {
+      expect(container.querySelector('[data-testid="lead-export-notice"]')?.textContent).toBe(
+        'Exported 2 leads in rank order. 2 excluded by the marketing-eligibility gate.',
+      );
+    });
+  });
+
+  it('retires the confirmation strip after 8 seconds and keeps the audit receipt line', async () => {
+    // Only timeouts are faked: hashing, the receipt and React's scheduler run as usual.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    mount(MIXED);
+    await exportedCsv();
+    const notice = () => container.querySelector('[data-testid="lead-export-notice"]');
+    const receiptLine = () => container.querySelector('[data-testid="lead-export-receipt"]');
+    await vi.waitFor(() => expect(notice()).not.toBeNull());
+    expect(receiptLine()?.textContent).toBe('Exported 2 rows · audit evt-receipt-0001');
+
+    act(() => {
+      vi.advanceTimersByTime(LEAD_EXPORT_NOTICE_MS);
+    });
+
+    expect(notice()).toBeNull();
+    expect(receiptLine()?.textContent).toBe('Exported 2 rows · audit evt-receipt-0001');
   });
 
   it('writes the rows in the on-screen sort order', async () => {
@@ -231,8 +292,10 @@ describe('LeadTable CSV export', () => {
     expect(dataRowIds(csv)).toEqual([B]);
     expect(csv).toContain('# export_scope=selected_rows');
     expect(csv).toContain('# exported_rows=1');
-    expect(container.querySelector('[data-testid="lead-export-notice"]')?.textContent).toBe(
-      'Exported 1 selected lead in rank order.',
-    );
+    await vi.waitFor(() => {
+      expect(container.querySelector('[data-testid="lead-export-notice"]')?.textContent).toBe(
+        'Exported 1 selected lead in rank order.',
+      );
+    });
   });
 });

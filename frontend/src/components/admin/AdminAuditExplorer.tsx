@@ -1,13 +1,36 @@
-import { Fragment, useState } from 'react';
-import type { FormEvent } from 'react';
-import { useLocation, useNavigate, useSearchParams } from 'react-router';
+/**
+ * Audit explorer (admin-config `#audit`, admin-gated with the route).
+ *
+ * Audit flow-04 phase 1 / tables-10 (2026-09-21): the filters live in the URL
+ * (AdminAuditExplorer.params.ts) so a view can be shared, bookmarked and
+ * deep-linked; the controls expose what the API already accepted (actor, a
+ * day window, event type, correlation id); rows read as human labels with the
+ * raw code kept in a mono chip (AdminAuditExplorer.labels.ts); every audit id
+ * links to the explorer opened on that row (`?audit_event_id=`), which the
+ * explorer expands and scrolls into view on arrival; and the current page
+ * downloads as CSV.
+ */
+import { useRef, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router';
 import { Chip } from '../Primitives';
 import { Icon } from '../Icon';
 import { WarmingUpBlock } from '../ui/WarmingUpBlock';
-import { api, type AuditEventPage, type AuditEventRow } from '../../lib/api';
+import { api, type AuditEventPage } from '../../lib/api';
 import { queryKeys } from '../../lib/queryKeys';
-import { formatTimestamp } from '../../lib/time';
 import { useWarmingUpRetry } from '../../lib/useWarmingUpRetry';
+import { downloadAuditPageCsv } from './AdminAuditExplorer.csv';
+import { useScrollDeepLinkedRow } from './AdminAuditExplorer.deepLink';
+import { AuditAppliedFilterChips, AuditExplorerFilterForm } from './AdminAuditExplorer.filters';
+import { auditEventLabel } from './AdminAuditExplorer.labels';
+import {
+  auditEventPageQuery,
+  auditFiltersKey,
+  hasActiveAuditFilters,
+  parseAuditExplorerFilters,
+  serializeAuditExplorerFilters,
+  type AuditExplorerFilters,
+} from './AdminAuditExplorer.params';
+import { AUDIT_TABLE_CONTEXT, AuditEventTableRow, formatAuditTimestamp } from './AdminAuditExplorer.row';
 
 interface AuditRollupRow {
   bucket_start: string;
@@ -15,55 +38,46 @@ interface AuditRollupRow {
   event_count: number;
 }
 
-type AdminAuditEvent = AuditEventRow;
-
 interface AuditCopyState {
   value: string;
   message: string;
   failed: boolean;
 }
 
-const AUDIT_TABLE_CONTEXT = 'mip_app.action_audit';
 const AUDIT_PAGE_SIZE = 25;
 
-function normalizeAuditEntityDraft(value: string): { value: string; error: string | null } {
-  const trimmed = value.trim();
-  if (!/^b-/i.test(trimmed)) return { value: trimmed, error: null };
-  const normalized = trimmed.toUpperCase();
-  if (!/^B-[A-Z0-9]+$/.test(normalized)) {
-    return {
-      value: '',
-      error: 'Borrower reference must use B- followed by letters and numbers only.',
-    };
-  }
-  return { value: normalized, error: null };
-}
-
 export function AdminAuditExplorer() {
-  const [entityDraft, setEntityDraft] = useState<string>('');
-  const [actionDraft, setActionDraft] = useState<string>('');
-  const [eventTypeDraft, setEventTypeDraft] = useState<string>('');
-  const [entityFilter, setEntityFilter] = useState<string>('');
-  const [actionFilter, setActionFilter] = useState<string>('');
-  const [eventTypeFilter, setEventTypeFilter] = useState<string>('');
-  const [entityDraftError, setEntityDraftError] = useState<string | null>(null);
-  const [pageCursors, setPageCursors] = useState<Array<string | null>>([null]);
-  const [expandedEventId, setExpandedEventId] = useState<string | null>(null);
-  const [copyState, setCopyState] = useState<AuditCopyState | null>(null);
-  // wow-stage-3: the Decision receipt deep-links here as
-  // `?audit_event_id=<id>`; the explorer pins that one ledger row.
-  const [searchParams] = useSearchParams();
   const location = useLocation();
   const navigate = useNavigate();
-  const eventIdFilter = (searchParams.get('audit_event_id') ?? '').trim();
-
-  const entityValue = entityFilter.trim();
-  const entityIsBorrower = /^B-[A-Z0-9]+$/i.test(entityValue);
-  const filtersActive = Boolean(
-    entityFilter.trim() || actionFilter.trim() || eventTypeFilter.trim() || eventIdFilter,
+  const explorerRef = useRef<HTMLDivElement>(null);
+  const applyButtonRef = useRef<HTMLButtonElement>(null);
+  const searchParams = new URLSearchParams(location.search);
+  const applied = parseAuditExplorerFilters(searchParams);
+  const appliedKey = auditFiltersKey(applied);
+  // Cursor pages and the expanded row belong to one applied filter set; a
+  // new set (Apply, a chip removal, a deep link, Back) starts on page 1.
+  const [cursorState, setCursorState] = useState<{ key: string; cursors: Array<string | null> }>(
+    { key: appliedKey, cursors: [null] },
   );
+  const [expandedState, setExpandedState] = useState<{ key: string; id: string | null } | null>(null);
+  const [copyState, setCopyState] = useState<AuditCopyState | null>(null);
+
+  const pageCursors = cursorState.key === appliedKey ? cursorState.cursors : [null];
   const page = pageCursors.length - 1;
   const pageCursor = pageCursors[page] ?? null;
+  const filtersActive = hasActiveAuditFilters(applied);
+  // A deep link opens its row: expanded until the user collapses it.
+  const expandedEventId = expandedState?.key === appliedKey
+    ? expandedState.id
+    : applied.eventId || null;
+
+  const applyFilters = (next: AuditExplorerFilters) => {
+    const params = serializeAuditExplorerFilters(next, searchParams).toString();
+    navigate(
+      { search: params ? `?${params}` : '', hash: location.hash },
+      { preventScrollReset: true },
+    );
+  };
 
   const {
     data: pageRows,
@@ -72,28 +86,17 @@ export function AdminAuditExplorer() {
     isFetching,
   } = useWarmingUpRetry<AuditEventPage>(
     (signal) => api.auditEventPage(AUDIT_PAGE_SIZE, signal, {
-      entity_id: entityValue && !entityIsBorrower ? entityValue : null,
-      borrower_id: entityValue && entityIsBorrower ? entityValue : null,
-      action: actionFilter.trim() || null,
-      event_type: eventTypeFilter.trim() || null,
-      event_id: eventIdFilter || null,
+      ...auditEventPageQuery(applied),
       cursor: pageCursor,
     }),
-    [entityValue, entityIsBorrower, actionFilter, eventTypeFilter, eventIdFilter, pageCursor],
+    [appliedKey, pageCursor],
     {
-      queryKey: queryKeys.auditEvents([
-        'explorer',
-        entityValue,
-        entityIsBorrower,
-        actionFilter,
-        eventTypeFilter,
-        eventIdFilter,
-        pageCursor,
-      ]),
+      queryKey: queryKeys.auditEvents(['explorer', appliedKey, pageCursor]),
       keepPreviousData: false,
     },
   );
   const events = pageRows?.items ?? (pageRows === null ? null : []);
+  useScrollDeepLinkedRow(explorerRef, applied.eventId, events);
   const hasNextPage = Boolean(pageRows?.next_cursor);
   const firstShownRow = events?.length ? page * AUDIT_PAGE_SIZE + 1 : 0;
   const lastShownRow = page * AUDIT_PAGE_SIZE + (events?.length ?? 0);
@@ -124,52 +127,9 @@ export function AdminAuditExplorer() {
       : 'unreachable'
     : null;
 
-  const applyFilters = (event?: FormEvent<HTMLFormElement>) => {
-    event?.preventDefault();
-    const normalizedEntity = normalizeAuditEntityDraft(entityDraft);
-    if (normalizedEntity.error) {
-      setEntityDraftError(normalizedEntity.error);
-      return;
-    }
-    setEntityDraftError(null);
-    setEntityDraft(normalizedEntity.value);
-    setEntityFilter(normalizedEntity.value);
-    setActionFilter(actionDraft.trim());
-    setEventTypeFilter(eventTypeDraft.trim());
-    setPageCursors([null]);
-    setExpandedEventId(null);
-  };
-  // The pinned row lives in the URL, so clearing it is a navigation: drop
-  // `audit_event_id` in place (replace, so Back does not re-pin it) and keep
-  // the `#audit` hash so the page stays on the explorer.
-  const clearEventIdFilter = () => {
-    if (!searchParams.has('audit_event_id')) return;
-    const next = new URLSearchParams(searchParams);
-    next.delete('audit_event_id');
-    const search = next.toString();
-    navigate(
-      { pathname: location.pathname, search: search ? `?${search}` : '', hash: location.hash },
-      { replace: true },
-    );
-  };
-  // The pinned chip's dismiss drops the pin the way Clear does: back to the
-  // first page with nothing expanded, keeping the other applied filters.
-  const dismissEventIdFilter = () => {
-    clearEventIdFilter();
-    setPageCursors([null]);
-    setExpandedEventId(null);
-  };
-  const clearFilters = () => {
-    clearEventIdFilter();
-    setEntityDraft('');
-    setActionDraft('');
-    setEventTypeDraft('');
-    setEntityFilter('');
-    setActionFilter('');
-    setEventTypeFilter('');
-    setEntityDraftError(null);
-    setPageCursors([null]);
-    setExpandedEventId(null);
+  const goToPage = (cursors: Array<string | null>) => {
+    setExpandedState({ key: appliedKey, id: null });
+    setCursorState({ key: appliedKey, cursors });
   };
   const copyValue = async (value: string, label: string) => {
     try {
@@ -186,6 +146,7 @@ export function AdminAuditExplorer() {
 
   return (
     <div
+      ref={explorerRef}
       className="surface mt-grid"
       id="audit"
       tabIndex={-1}
@@ -195,7 +156,7 @@ export function AdminAuditExplorer() {
         <div>
           <div className="h-4" id="audit-explorer-title">Audit explorer</div>
           <div className="muted fs-12">
-            Filter the Lakebase ledger by borrower/approval id, action, or event type.
+            Filter the Lakebase ledger by actor, day, event type, entity or correlation id.
           </div>
         </div>
         <div className="chip-row">
@@ -210,6 +171,17 @@ export function AdminAuditExplorer() {
             {copyState?.value === AUDIT_TABLE_CONTEXT && !copyState.failed
               ? 'Copied table context'
               : 'Copy table context'}
+          </button>
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm"
+            onClick={() => events && downloadAuditPageCsv(events, page)}
+            disabled={!events?.length || updating}
+            aria-label={`Download page ${page + 1} of the audit explorer as CSV`}
+            title="Download the rows on this page as CSV"
+          >
+            <Icon name="export" size={12} />
+            Page CSV
           </button>
           <Chip variant={error ? 'warning' : filtersActive ? 'success' : 'neutral'}>
             {error
@@ -234,90 +206,13 @@ export function AdminAuditExplorer() {
             {copyState.message}
           </div>
         )}
-        <form className="filter-row" onSubmit={applyFilters}>
-          <label className="filter-row__group">
-            <span className="field__label">ENTITY ID</span>
-            <input
-              className="admin-filter-input"
-              value={entityDraft}
-              onChange={(event) => {
-                setEntityDraft(event.target.value);
-                setEntityDraftError(null);
-              }}
-              placeholder="B-... or approval UUID"
-              aria-invalid={Boolean(entityDraftError)}
-              aria-describedby={entityDraftError ? 'audit-entity-filter-error' : undefined}
-            />
-            {entityDraftError && (
-              <span id="audit-entity-filter-error" className="text-danger fs-11" role="alert">
-                {entityDraftError}
-              </span>
-            )}
-          </label>
-          <label className="filter-row__group">
-            <span className="field__label">ACTION</span>
-            <input
-              className="admin-filter-input"
-              value={actionDraft}
-              onChange={(event) => setActionDraft(event.target.value)}
-              placeholder="outreach.approve"
-            />
-          </label>
-          <label className="filter-row__group">
-            <span className="field__label">EVENT TYPE</span>
-            <input
-              className="admin-filter-input"
-              value={eventTypeDraft}
-              onChange={(event) => setEventTypeDraft(event.target.value)}
-              placeholder="APPROVE"
-            />
-          </label>
-          <div className="admin-filter-actions">
-            <button type="submit" className="btn btn--default btn--sm">
-              Apply filters
-            </button>
-            <button
-              type="button"
-              className="btn btn--ghost btn--sm"
-              onClick={clearFilters}
-              disabled={!filtersActive && !entityDraft && !actionDraft && !eventTypeDraft}
-            >
-              Clear
-            </button>
-          </div>
-        </form>
-        <div
-          className={`audit-filter-chip-lane chip-row mt-3 ${filtersActive ? '' : 'is-empty'}`}
-          aria-label="Applied audit filters"
-          aria-hidden={!filtersActive}
-        >
-          {filtersActive && (
-            <>
-              {entityFilter.trim() && (
-                <Chip variant="neutral">entity = {entityFilter.trim()}</Chip>
-              )}
-              {actionFilter.trim() && (
-                <Chip variant="neutral">action = {actionFilter.trim()}</Chip>
-              )}
-              {eventTypeFilter.trim() && (
-                <Chip variant="neutral">event = {eventTypeFilter.trim()}</Chip>
-              )}
-              {eventIdFilter && (
-                <Chip
-                  variant="neutral"
-                  icon="audit"
-                  onRemove={dismissEventIdFilter}
-                  removeLabel="Remove audit event filter"
-                >
-                  audit event = {eventIdFilter}
-                </Chip>
-              )}
-              <span className="muted fs-12">
-                Showing rows {firstShownRow}-{lastShownRow} that match the applied filters.
-              </span>
-            </>
-          )}
-        </div>
+        <AuditExplorerFilterForm applied={applied} onApply={applyFilters} applyButtonRef={applyButtonRef} />
+        <AuditAppliedFilterChips
+          applied={applied}
+          emptiedFocusRef={applyButtonRef}
+          summary={`Showing rows ${firstShownRow}-${lastShownRow} that match the applied filters.`}
+          onRemove={(key) => applyFilters({ ...applied, [key]: '' })}
+        />
         {warmingUp && events === null && (
           <div className="mt-3">
             <WarmingUpBlock state={warmingUp} title="Audit explorer loading" compact />
@@ -340,7 +235,10 @@ export function AdminAuditExplorer() {
             <div className="admin-rollups__grid">
               {(rollups ?? []).slice(0, 6).map((row) => (
                 <div key={`${row.bucket_start}-${row.event_type}`} className="admin-rollup">
-                  <span className="mono fs-12">{row.event_type}</span>
+                  <span className="fs-12">
+                    {auditEventLabel({ event_type: row.event_type, action: row.event_type })}
+                  </span>
+                  <span className="mono muted fs-11">{row.event_type}</span>
                   <strong>{row.event_count.toLocaleString()}</strong>
                   <span className="muted fs-11">{formatAuditTimestamp(row.bucket_start)}</span>
                 </div>
@@ -365,7 +263,7 @@ export function AdminAuditExplorer() {
                 <thead>
                   <tr>
                     <th scope="col" aria-label="Event details" />
-                    <th scope="col">Action</th>
+                    <th scope="col">Event</th>
                     <th scope="col">Entity</th>
                     <th scope="col">Actor</th>
                     <th scope="col">Time</th>
@@ -378,9 +276,10 @@ export function AdminAuditExplorer() {
                       event={event}
                       expanded={expandedEventId === event.event_id}
                       copiedValue={copyState?.failed ? null : copyState?.value ?? null}
-                      onToggle={() => setExpandedEventId((current) => (
-                        current === event.event_id ? null : event.event_id
-                      ))}
+                      onToggle={() => setExpandedState({
+                        key: appliedKey,
+                        id: expandedEventId === event.event_id ? null : event.event_id,
+                      })}
                       onCopy={(value, label) => void copyValue(value, label)}
                     />
                   ))}
@@ -391,7 +290,9 @@ export function AdminAuditExplorer() {
               <div className="muted fs-12">
                 {page > 0
                   ? 'No more audit rows match these filters on this page.'
-                  : 'No audit rows match these filters.'}
+                  : applied.eventId
+                    ? 'No audit event has this id. It may belong to another environment.'
+                    : 'No audit rows match these filters.'}
               </div>
             )}
             <div className="section-actions admin-audit-pagination" aria-label="Audit result pages">
@@ -399,10 +300,7 @@ export function AdminAuditExplorer() {
                 type="button"
                 className="btn btn--ghost btn--sm"
                 disabled={page === 0 || updating}
-                onClick={() => {
-                  setExpandedEventId(null);
-                  setPageCursors((current) => current.slice(0, -1));
-                }}
+                onClick={() => goToPage(pageCursors.slice(0, -1))}
               >
                 Previous
               </button>
@@ -413,8 +311,7 @@ export function AdminAuditExplorer() {
                 disabled={!hasNextPage || updating}
                 onClick={() => {
                   if (!pageRows?.next_cursor) return;
-                  setExpandedEventId(null);
-                  setPageCursors((current) => [...current, pageRows.next_cursor]);
+                  goToPage([...pageCursors, pageRows.next_cursor]);
                 }}
               >
                 Next
@@ -425,167 +322,4 @@ export function AdminAuditExplorer() {
       </div>
     </div>
   );
-}
-
-function auditEventDetailId(eventId: string): string {
-  return `audit-event-${eventId.replace(/[^A-Za-z0-9_-]/g, '-')}`;
-}
-
-function auditRecordQuery(eventId: string): string {
-  const escaped = eventId.replace(/'/g, "''");
-  return `SELECT * FROM ${AUDIT_TABLE_CONTEXT} WHERE audit_id = '${escaped}';`;
-}
-
-function formatAuditMetadataValue(value: unknown): string {
-  if (value === null) return 'null';
-  if (typeof value === 'string') return value;
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return 'Value unavailable';
-  }
-}
-
-function AuditDetailValue({ label, value }: { label: string; value: string | null | undefined }) {
-  return (
-    <div className="lineage-node">
-      <div className="lineage-node__label">{label}</div>
-      <div className="lineage-node__name">{value || 'Not recorded'}</div>
-    </div>
-  );
-}
-
-function AuditEventTableRow({
-  event,
-  expanded,
-  copiedValue,
-  onToggle,
-  onCopy,
-}: {
-  event: AdminAuditEvent;
-  expanded: boolean;
-  copiedValue: string | null;
-  onToggle: () => void;
-  onCopy: (value: string, label: string) => void;
-}) {
-  const detailId = auditEventDetailId(event.event_id);
-  const metadata = Object.entries(event.payload_json ?? {}).sort(([left], [right]) => (
-    left.localeCompare(right)
-  ));
-  const evidenceIds = event.evidence_ids ?? [];
-
-  return (
-    <Fragment>
-      <tr className={expanded ? 'is-expanded' : ''}>
-        <td>
-          <button
-            type="button"
-            className="btn btn--ghost btn--sm"
-            onClick={onToggle}
-            aria-expanded={expanded}
-            aria-controls={detailId}
-            aria-label={`${expanded ? 'Collapse' : 'Expand'} audit event ${event.event_id}`}
-            title={`${expanded ? 'Collapse' : 'Expand'} event details`}
-          >
-            <Icon name={expanded ? 'chevdown' : 'chevright'} size={13} />
-          </button>
-        </td>
-        <td className="is-primary">
-          <div>{event.action}</div>
-          <div className="mono muted fs-11">{event.event_type ?? 'Unclassified'}</div>
-        </td>
-        <td>
-          <div>{event.entity_type}</div>
-          <div className="mono muted fs-11">{event.entity_id}</div>
-        </td>
-        <td>{event.actor}</td>
-        <td>
-          <time dateTime={event.created_at} title={event.created_at}>
-            {formatAuditTimestamp(event.created_at)}
-          </time>
-        </td>
-      </tr>
-      {expanded && (
-        <tr className="tbl__expand">
-          <td colSpan={5}>
-            <div className="tbl__expand-inner" id={detailId}>
-              <div className="admin-rules-detail__hdr">
-                <div>
-                  <div className="h-5">Event details</div>
-                  <div className="muted fs-12">{event.action}</div>
-                </div>
-                <div className="chip-row">
-                  <button
-                    type="button"
-                    className="btn btn--ghost btn--sm"
-                    onClick={() => onCopy(event.event_id, 'Event ID')}
-                    aria-label={`Copy event ID ${event.event_id}`}
-                    title="Copy event ID"
-                  >
-                    <Icon name="doc" size={12} />
-                    {copiedValue === event.event_id ? 'Copied event ID' : 'Copy event ID'}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn--ghost btn--sm"
-                    onClick={() => onCopy(auditRecordQuery(event.event_id), 'Lakebase record query')}
-                    aria-label={`Copy Lakebase query for audit event ${event.event_id}`}
-                    title="Copy a query for this Lakebase row"
-                  >
-                    <Icon name="db" size={12} />
-                    {copiedValue === auditRecordQuery(event.event_id)
-                      ? 'Copied record query'
-                      : 'Copy record query'}
-                  </button>
-                </div>
-              </div>
-
-              <div className="admin-rollups__grid mt-3">
-                <AuditDetailValue label="Event ID" value={event.event_id} />
-                <AuditDetailValue label="Request ID" value={event.request_id} />
-                <AuditDetailValue label="Correlation ID" value={event.correlation_id} />
-                <AuditDetailValue label="Masked subject reference" value={event.subject_clip} />
-                <AuditDetailValue label="Subject segment" value={event.subject_segment} />
-              </div>
-
-              <div className="mt-3">
-                <div className="field__label">EVIDENCE IDS</div>
-                <div className="chip-row mt-2">
-                  {evidenceIds.length > 0 ? evidenceIds.map((evidenceId) => (
-                    <Chip key={evidenceId} variant="neutral" className="lineage-node__chip">
-                      {evidenceId}
-                    </Chip>
-                  )) : (
-                    <span className="muted fs-12">None recorded</span>
-                  )}
-                </div>
-              </div>
-
-              <div className="mt-3">
-                <div className="field__label">REVIEWED METADATA</div>
-                {metadata.length > 0 ? (
-                  <div className="admin-rollups__grid mt-2">
-                    {metadata.map(([key, value]) => (
-                      <AuditDetailValue
-                        key={key}
-                        label={key}
-                        value={formatAuditMetadataValue(value)}
-                      />
-                    ))}
-                  </div>
-                ) : (
-                  <div className="muted fs-12 mt-2">No metadata recorded.</div>
-                )}
-              </div>
-            </div>
-          </td>
-        </tr>
-      )}
-    </Fragment>
-  );
-}
-
-function formatAuditTimestamp(iso: string): string {
-  return formatTimestamp(iso, { withYear: false });
 }
