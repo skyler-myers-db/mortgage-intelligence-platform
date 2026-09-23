@@ -18,6 +18,22 @@ export async function copyAuditId(auditEventId: string): Promise<boolean> {
   }
 }
 
+const ID_REFERENCE_ATTRIBUTES = ['aria-labelledby', 'aria-describedby', 'aria-controls'] as const;
+
+/**
+ * A copy of the card for the print host. It sits beside the live card until
+ * `afterprint`, so it drops every `id` (the `useId` title id) and the ARIA
+ * references to them: the document never holds duplicate ids.
+ */
+function printableClone(card: HTMLElement): HTMLElement {
+  const clone = card.cloneNode(true) as HTMLElement;
+  for (const element of [clone, ...clone.querySelectorAll<HTMLElement>('*')]) {
+    element.removeAttribute('id');
+    for (const attribute of ID_REFERENCE_ATTRIBUTES) element.removeAttribute(attribute);
+  }
+  return clone;
+}
+
 /**
  * Print the receipt only: clone the card into a print host outside the app
  * root, flag `<html data-print="decision-receipt">` so the print sheet hides
@@ -29,7 +45,7 @@ export function printReceipt(card: HTMLElement | null): boolean {
   const root = document.documentElement;
   const host = document.createElement('div');
   host.className = PRINT_HOST_CLASS;
-  host.appendChild(card.cloneNode(true));
+  host.appendChild(printableClone(card));
   document.body.appendChild(host);
   root.dataset[PRINT_MODE_ATTRIBUTE] = PRINT_MODE_VALUE;
   const cleanup = () => {

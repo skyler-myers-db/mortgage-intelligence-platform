@@ -292,6 +292,10 @@ describe('DecisionReceipt', () => {
     expect(document.documentElement.dataset.print).toBe('decision-receipt');
     const host = document.querySelector<HTMLElement>(`.${PRINT_HOST_CLASS}`)!;
     expect(host.querySelector('[data-testid="decision-receipt"]')?.textContent).toContain(AUDIT_ID);
+    // The clone never duplicates the live card's ids (or points at them).
+    const liveTitleId = card.getAttribute('aria-labelledby')!;
+    expect(document.querySelectorAll(`[id="${liveTitleId}"]`)).toHaveLength(1);
+    expect(host.querySelectorAll('[id], [aria-labelledby], [aria-describedby], [aria-controls]')).toHaveLength(0);
     act(() => {
       window.dispatchEvent(new Event('afterprint'));
     });
