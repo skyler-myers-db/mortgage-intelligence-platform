@@ -5,7 +5,9 @@ import { buildCampaignPrefillSearch, makeCampaignPrefill } from '../../lib/campa
 import { useOptionalFootprint } from '../FootprintProvider';
 import {
   USCODE_TO_FIPS,
+  ZIP_TILE_CAP,
   buildLeadQueuePath,
+  densestZips,
   type HoverState,
   type Level,
   type UsaSvgMapLocation,
@@ -182,12 +184,17 @@ export function USChoroplethMap({
   }, [overlayData]);
 
   // One scale per painted level: the legend prints the same breaks the
-  // fill uses (see USChoroplethMap.scale).
+  // fill uses (see USChoroplethMap.scale). The ZIP scale is built over the
+  // tiles the grid shows, and the legend says so when ZIPs are left out.
   const scale = useMemo(() => {
     if (overlayActive && overlayData) return buildChoroplethScale(overlayData.units.map((u) => u.unattended_count));
-    if (level === 'zip') return zipFacts ? buildChoroplethScale(Object.values(zipFacts).map((r) => r.addressable_borrowers)) : null;
+    if (level === 'zip') return zipFacts ? buildChoroplethScale(densestZips(zipFacts).map((r) => r.addressable_borrowers)) : null;
     return stateFacts ? buildChoroplethScale(Object.values(stateFacts).map((r) => r.addressable)) : null;
   }, [level, overlayActive, overlayData, stateFacts, zipFacts]);
+  const zipCount = zipFacts ? Object.keys(zipFacts).length : 0;
+  const scaleScope = level === 'zip' && !overlayActive && zipCount > ZIP_TILE_CAP
+    ? `over the ${ZIP_TILE_CAP} densest of ${zipCount.toLocaleString('en-US')} ZIPs`
+    : null;
 
   const activeSegNames = useMemo(() => {
     if (!segmentFilter || segmentFilter.length === 0) return null;
@@ -462,6 +469,7 @@ export function USChoroplethMap({
         overlayError={overlayError}
         totalCount={totalCount}
         scale={scale}
+        scaleScope={scaleScope}
         segmentCaption={segmentCaption}
         segmentFilter={segmentFilter}
       />

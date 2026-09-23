@@ -26,6 +26,8 @@ interface USChoroplethMapLegendProps {
   totalCount: number | null;
   /** The class scale the map is painted with; null when nothing is painted. */
   scale: ChoroplethScale | null;
+  /** Which units the scale was built over, when not all of them ("over the 24 densest of 212 ZIPs"). */
+  scaleScope?: string | null;
   /** "marketable population" / "opportunity within <segments>". */
   segmentCaption: string;
   /** Active segment filter — drives the overlay's scope-mismatch note. */
@@ -39,6 +41,7 @@ export function USChoroplethMapLegend({
   overlayError,
   totalCount,
   scale,
+  scaleScope = null,
   segmentCaption,
   segmentFilter,
 }: USChoroplethMapLegendProps) {
@@ -88,15 +91,24 @@ export function USChoroplethMapLegend({
       </div>
       <div className="map-legend__range" data-scale={scale?.kind ?? 'none'} aria-hidden="true">
         <span className="map-legend__end">Lower</span>
-        {scale?.breaks.map((value, index) => (
-          <span
-            key={index}
-            className={`map-legend__break map-legend__break--${index + 1}`}
-            data-break={value}
-          >
-            {formatBreak(value)}
-          </span>
-        ))}
+        {scale?.breaks.map((value, index) => {
+          const label = formatBreak(value);
+          // A break that prints like the one before it (a tie collapsed a
+          // class, or compact rounding) is printed once: "1 1 2" read as a
+          // typo. The exact value stays in data-break and the title; the
+          // bar's accessible name lists the exact ranges.
+          const repeat = index > 0 && formatBreak(scale.breaks[index - 1]) === label;
+          return (
+            <span
+              key={index}
+              className={`map-legend__break map-legend__break--${index + 1}`}
+              data-break={value}
+              title={value.toLocaleString('en-US')}
+            >
+              {repeat ? '' : label}
+            </span>
+          );
+        })}
         <span className="map-legend__end map-legend__end--high">Higher</span>
       </div>
       <div className="map-legend__caption">
@@ -121,6 +133,7 @@ export function USChoroplethMapLegend({
           <span className="map-legend__scale">
             {' · '}
             {scale.kind === 'sqrt' ? 'square-root scale' : 'quartiles'}
+            {scaleScope ? ` ${scaleScope}` : ''}
           </span>
         )}
       </div>

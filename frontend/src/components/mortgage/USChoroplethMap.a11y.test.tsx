@@ -285,6 +285,34 @@ describe('USChoroplethMap encoding, resilience and URL control (dataviz-02 / dat
     expect(document.querySelector('[data-testid="map-table"]')).toBeNull();
     expect(path('il')).not.toBeNull();
   });
+
+  it('scales the ZIP fill over the tiles the grid shows, and says so in the legend', async () => {
+    // Long-tailed like live Illinois (the 24 densest of 212): over all 120
+    // ZIPs every visible tile sits above the 75th percentile and paints one
+    // class; over the 24 shown, the fill tells them apart.
+    const rollups = Array.from({ length: 120 }, (_, index) => ({
+      zip: String(60600 + index),
+      state: 'IL',
+      addressable_borrowers: Math.round(40000 / (index + 1)),
+      avg_opportunity_score: 80,
+      top_segment_code: null,
+    }));
+    apiMocks.zipRollups.mockResolvedValue({ state: 'IL', fips_5: null, snapshot_date: '2026-07-14', rollups });
+    await act(async () => {
+      root.render(<Providers><USChoroplethMap selection={{ state: 'IL', county: null, zip: null }} /></Providers>);
+    });
+    const list = await waitFor(() => document.querySelector('ul.zip-tiles'));
+    const tiles = [...list.querySelectorAll<HTMLElement>('button.zip-tile')];
+    expect(tiles).toHaveLength(24);
+    expect(new Set(tiles.map((tile) => Number(tile.getAttribute('data-map-class'))))).toEqual(new Set([1, 2, 3, 4]));
+    const breaks = [...document.querySelectorAll('.map-legend__break')].map((b) => Number(b.getAttribute('data-break')));
+    const legendClass = (count: number) => 1 + breaks.filter((b) => count >= b).length;
+    for (const tile of tiles) {
+      const count = rollups.find((r) => r.zip === tile.getAttribute('data-map-unit'))?.addressable_borrowers ?? 0;
+      expect(Number(tile.getAttribute('data-map-class')), tile.getAttribute('data-map-unit') ?? '').toBe(legendClass(count));
+    }
+    expect(document.querySelector('.map-legend__scale')?.textContent).toContain('quartiles over the 24 densest of 120 ZIPs');
+  });
 });
 
 describe('claimDrillFocus (a11y-04: a drill never drops focus to <body>)', () => {

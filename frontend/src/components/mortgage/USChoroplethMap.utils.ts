@@ -1,5 +1,5 @@
 import type { Feature, FeatureCollection, Geometry } from 'geojson';
-import type { CountyRollup } from '../../types';
+import type { CountyRollup, ZipRollup } from '../../types';
 
 // Shared shape consumed by the state-level map renderers. The payload is
 // built from us-atlas state TopoJSON, keeping IDs in the existing lowercase
@@ -342,4 +342,21 @@ export function featureBBox(f: Feature): [number, number, number, number] {
     f.geometry.coordinates.forEach((poly) => poly.forEach(visit));
   }
   return [minX, minY, maxX, maxY];
+}
+
+/** Densest-N ZIP tiles rendered per state. The grid stays readable, but
+ *  the remainder MUST be disclosed (the ZIP rung's reconcile note). */
+export const ZIP_TILE_CAP = 24;
+
+/**
+ * The ZIPs the tile grid shows: the ZIP_TILE_CAP densest, largest first
+ * (Pareto, densest top-left). The ZIP fill scale is built over exactly these,
+ * so the colour tells the visible tiles apart: over all of a state's ZIPs
+ * every visible tile of a long-tailed state (Illinois: the 24 densest of 212)
+ * sat in the top quartile and painted one class.
+ */
+export function densestZips(byZip: Record<string, ZipRollup>): ZipRollup[] {
+  return Object.values(byZip)
+    .sort((a, b) => (b.addressable_borrowers ?? 0) - (a.addressable_borrowers ?? 0))
+    .slice(0, ZIP_TILE_CAP);
 }

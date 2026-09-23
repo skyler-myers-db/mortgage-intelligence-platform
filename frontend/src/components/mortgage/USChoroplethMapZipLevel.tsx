@@ -18,11 +18,7 @@ import { safeSegmentName } from '../../lib/segmentMetadata';
 import type { StateRollup, ZipRollup } from '../../types';
 import { claimDrillFocus, moveRovingFocus, showCardOnFocus, zipAriaLabel } from './USChoroplethMap.a11y';
 import { classify, type ChoroplethScale } from './USChoroplethMap.scale';
-import type { HoverState } from './USChoroplethMap.utils';
-
-/** Densest-N ZIP tiles rendered per state. The grid stays readable, but
- *  the remainder MUST be disclosed — see the reconcile note below. */
-export const ZIP_TILE_CAP = 24;
+import { densestZips, type HoverState } from './USChoroplethMap.utils';
 
 interface USChoroplethMapZipLevelProps {
   /** Display name for the drilled state, used in copy and aria labels. */
@@ -64,11 +60,8 @@ export function USChoroplethMapZipLevel({
   onOpenStateQueue,
 }: USChoroplethMapZipLevelProps) {
   const zipsFromApi = Object.values(byZip);
-  // Sorted descending by count so densest ZIPs land top-left (Pareto).
-  const sorted = [...zipsFromApi].sort(
-    (a, b) => (b.addressable_borrowers ?? 0) - (a.addressable_borrowers ?? 0),
-  );
-  const visible = sorted.slice(0, ZIP_TILE_CAP);
+  // The densest ZIP_TILE_CAP, largest first (Pareto): the set the fill scale is built over.
+  const visible = densestZips(byZip);
   const [activeZip, setActiveZip] = useState<string | null>(null);
   const tabStopZip =
     (activeZip && visible.some((rollup) => rollup.zip === activeZip) ? activeZip : null)
@@ -128,7 +121,7 @@ export function USChoroplethMapZipLevel({
   );
   const stateTotal = stateFacts?.addressable ?? null;
   const unassigned = stateFacts?.zip_unassigned_count ?? null;
-  const hiddenZipCount = sorted.length - visible.length;
+  const hiddenZipCount = zipsFromApi.length - visible.length;
   return (
     <>
     <ul
@@ -222,7 +215,7 @@ export function USChoroplethMapZipLevel({
       <div className="zip-tiles__reconcile text-2" role="note">
         {hiddenZipCount > 0 && (
           <span>
-            Showing the {visible.length} densest of {sorted.length.toLocaleString()} ZIPs
+            Showing the {visible.length} densest of {zipsFromApi.length.toLocaleString()} ZIPs
             {' — '}
             {visibleSum.toLocaleString()}
             {stateTotal !== null ? ` of ${stateTotal.toLocaleString()}` : ''} borrowers in view.
