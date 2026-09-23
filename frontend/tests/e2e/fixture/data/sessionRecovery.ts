@@ -24,6 +24,18 @@ export const EVERY_API_PATH_BUT_HEALTH = /^\/api\/(?!health(?:\/|$))/;
  */
 export const PROXY_SESSION_EXPIRED: DegradeOptions = { status: 401, body: {} };
 
+/**
+ * The proxy's answer to an unauthenticated PAGE request (`/`, `/assets/*`),
+ * captured 2026-09-23: a 302 to the workspace's OIDC authorize URL. The host
+ * is a placeholder; the production CSP blocks it, so following the redirect
+ * would be a hygiene violation.
+ */
+export const PROXY_SIGN_IN_REDIRECT: DegradeOptions = {
+  status: 302,
+  headers: { Location: 'https://workspace.invalid/oidc/oauth2/v2.0/authorize?client_id=fixture' },
+  body: {},
+};
+
 export interface HeldFixture {
   /** Requests RECEIVED (the mock's call log only records answered calls). */
   readonly received: number;

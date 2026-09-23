@@ -18,7 +18,13 @@
 import AxeBuilder from '@axe-core/playwright';
 import type { Locator, Page, Route } from '@playwright/test';
 import { PRIMARY_BORROWER } from './data/borrowers';
-import { EVERY_API_PATH_BUT_HEALTH, PROXY_SESSION_EXPIRED, holdDefaultFixture } from './data/sessionRecovery';
+import {
+  EVERY_API_PATH,
+  EVERY_API_PATH_BUT_HEALTH,
+  PROXY_SESSION_EXPIRED,
+  PROXY_SIGN_IN_REDIRECT,
+  holdDefaultFixture,
+} from './data/sessionRecovery';
 import { WAREHOUSE_WARMING_UP, type ApiCall } from './mockApi';
 import { FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
@@ -26,6 +32,8 @@ import { expect, test } from './test';
 const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'];
 /** Longer than three healthy health-poll intervals (8 s) and a full warming-retry budget. */
 const QUIET_WINDOW_MS = 30_000;
+/** HealthProvider's healthy cadence (8 s): one poll is due within this window. */
+const HEALTHY_POLL_MS = 8_000;
 /** Matches `.skeleton::after`'s computed animation name while it sweeps. */
 const SWEEP = 'skeleton-sweep';
 
@@ -100,6 +108,52 @@ test.describe('an ended session (the proxy answers 401 {})', () => {
       expect(axe.violations.map((violation) => `${violation.id}: ${violation.nodes.map((node) => node.target.join(' ')).join(', ')}`)).toEqual([]);
     });
   }
+
+  test('an idle page learns from its own health poll: 401 {} on EVERY /api path opens the dialog with no click', async ({ app, page, mockApi }) => {
+    test.slow();
+    await app.gotoRoute('/lead-queue');
+    const before = mockApi.calls.length;
+    app.degrade(EVERY_API_PATH, PROXY_SESSION_EXPIRED);
+
+    // Nobody touches the page: the shell's eight-second health poll is what
+    // meets the ended session (api.health's probe mapping records it).
+    await page.clock.runFor(HEALTHY_POLL_MS);
+    const dialog = sessionDialog(page);
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole('button', { name: 'Reload' })).toBeFocused();
+    await expect(dialog.locator('[data-session-unrecorded]')).toHaveCount(0);
+    await expect(page.locator('.degraded-banner')).toHaveCount(0);
+
+    await expect.poll(() => mockApi.inflight === 0 && mockApi.idleMs >= 300).toBe(true);
+    const atOpen = mockApi.calls.length;
+    expect(mockApi.calls.slice(before).map(key), 'only the poll met the 401').toEqual(['GET /api/health']);
+    await page.clock.runFor(QUIET_WINDOW_MS);
+    expect(mockApi.calls.length, 'the poll stops for good once the session ended').toBe(atOpen);
+  });
+
+  test('a sign-in REDIRECT on every /api path is confirmed by ONE probe and never followed cross-origin', async ({ app, page, mockApi }) => {
+    test.slow();
+    await app.gotoRoute('/lead-queue');
+    const before = mockApi.calls.length;
+    // The proxy's answer to an unauthenticated page request (captured
+    // 2026-09-23): a 302 to the workspace's OIDC authorize URL. Following it
+    // would be a cross-origin request the production CSP blocks, which the
+    // hygiene gate reports as a violation, so a green run proves it was not.
+    app.degrade(EVERY_API_PATH, PROXY_SIGN_IN_REDIRECT);
+
+    await page.clock.runFor(HEALTHY_POLL_MS);
+    await expect(sessionDialog(page)).toBeVisible();
+    await expect.poll(() => mockApi.inflight === 0 && mockApi.idleMs >= 300).toBe(true);
+    // The poll's own request came back as an opaque redirect (it could be a
+    // trailing-slash 307), so ONE manual-redirect probe decided it.
+    expect(mockApi.calls.slice(before).map((call) => `${key(call)} ${call.status}`)).toEqual([
+      'GET /api/health 302',
+      'GET /api/health 302',
+    ]);
+    const atOpen = mockApi.calls.length;
+    await page.clock.runFor(QUIET_WINDOW_MS);
+    expect(mockApi.calls.length).toBe(atOpen);
+  });
 
   test('an approval in flight when the session ends says it was NOT recorded, and the row never reads Approved', async ({ app, page }) => {
     await app.gotoRoute('/lead-queue');
