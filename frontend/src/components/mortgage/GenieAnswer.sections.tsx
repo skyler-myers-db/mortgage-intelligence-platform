@@ -79,13 +79,19 @@ export function GenieRowsVisual({
         <GenieMapChart rows={rows} x={plan.viz?.x ?? chart?.labelCol} y={plan.viz?.y ?? chart?.valueCol} />
       )}
       {plan.kind === 'line' && chart && (
-        <GenieLineChart data={chart.rows} labelCol={chart.labelCol} valueCol={chart.valueCol} />
+        <GenieLineChart
+          data={chart.rows}
+          labelCol={chart.labelCol}
+          valueCol={chart.valueCol}
+          tableRowCount={rows.length}
+        />
       )}
       {(plan.kind === 'bar' || plan.kind === 'funnel' || (!['strategy_board', 'borrower_list', 'map', 'line'].includes(plan.kind) && chart)) && chart && (
         <GenieBarChart
           data={chart.rows}
           labelCol={chart.labelCol}
           valueCol={chart.valueCol}
+          tableRowCount={rows.length}
         />
       )}
       {/* A single METRIC row is a set of headline facts, not a table —

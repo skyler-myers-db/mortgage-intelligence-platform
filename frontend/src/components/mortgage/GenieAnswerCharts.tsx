@@ -12,6 +12,11 @@ import {
   normalizeState,
   type ChartRow,
 } from './GenieAnswer.logic';
+import { loadUsaStateMap } from './USStateMapData';
+import type { UsaSvgMap } from './USChoroplethMap.utils';
+import { offerDisplayLabel } from '../../lib/offerLanguage';
+import { safeSegmentName } from '../../lib/segmentMetadata';
+import { borrower360Path } from '../../lib/genieCellLinks';
 
 /** Bars a bar chart draws before it truncates. */
 export const MAX_BAR_POINTS = 12;
@@ -19,19 +24,37 @@ export const MAX_BAR_POINTS = 12;
 export const MAX_LINE_POINTS = 24;
 
 /**
- * Honest truncation caption (audit 2026-09-21 `genie-06`). The old caption
+ * Honest chart caption (audit 2026-09-21 `genie-06`). The old caption
  * promised "full N rows in the table below" while the table shows at most
- * MAX_TABLE_ROWS, so it names both real caps.
+ * MAX_TABLE_ROWS. It names both real caps, and it counts the two row sets
+ * separately because they differ: the chart drops every row whose measure is
+ * null or not numeric, the table keeps them. The chart takes its rows in SQL
+ * order, so it shows the FIRST rows, not the "top" ones.
+ *
+ * `shown` bars/points out of `charted` chartable rows; `tableRows` is the row
+ * count of the answer's table. Null when the chart shows every table row.
  */
-export function chartTruncationCaption(shown: number, total: number, unit: 'rows' | 'points'): string {
-  const tableRows = Math.min(MAX_TABLE_ROWS, total);
-  return `Chart shows the top ${shown} of ${total} ${unit}; the table below shows ${tableRows} of ${total} rows.`;
+export function chartTruncationCaption(
+  shown: number,
+  charted: number,
+  tableRows: number,
+  unit: 'rows' | 'points',
+): string | null {
+  const uncharted = Math.max(0, tableRows - charted);
+  if (shown >= charted && uncharted === 0) return null;
+  const chart =
+    shown < charted
+      ? `Chart shows the first ${shown} of ${charted} charted ${unit}`
+      : `Chart shows all ${charted} charted ${unit}`;
+  const skipped =
+    uncharted > 0 ? ` (${uncharted} row${uncharted === 1 ? ' has' : 's have'} no value to chart)` : '';
+  const table = `the table below shows ${Math.min(MAX_TABLE_ROWS, tableRows)} of ${tableRows} rows`;
+  return `${chart}${skipped}; ${table}.`;
 }
-import { loadUsaStateMap } from './USStateMapData';
-import type { UsaSvgMap } from './USChoroplethMap.utils';
-import { offerDisplayLabel } from '../../lib/offerLanguage';
-import { safeSegmentName } from '../../lib/segmentMetadata';
-import { borrower360Path } from '../../lib/genieCellLinks';
+
+function ChartCaption({ text }: { text: string | null }) {
+  return text ? <div className="genie-chart__more">{text}</div> : null;
+}
 
 export function strategySegmentLabel(value: unknown): string | null {
   if (value === null || value === undefined || value === '') return null;
@@ -50,17 +73,20 @@ function strategyOfferLabel(row: Record<string, unknown>): string | null {
  * a 100KB+ chart lib. Each bar is sized relative to the max value;
  * negative values are clamped to 0 (real Genie data is counts /
  * scores / dollars -- all >= 0). Truncates to 12 bars to stay
- * readable in the Ask Genie surface; the underlying table still
- * renders below for the full data.
+ * readable in the Ask Genie surface; the capped table renders below,
+ * and the caption states both caps.
  */
 export function GenieBarChart({
   data,
   labelCol,
   valueCol,
+  tableRowCount,
 }: {
   data: ChartRow[];
   labelCol: string;
   valueCol: string;
+  /** Rows of the answer table below: the chart's own `data` can be shorter. */
+  tableRowCount: number;
 }) {
   const MAX_BARS = MAX_BAR_POINTS;
   const bars = data.slice(0, MAX_BARS);
@@ -132,14 +158,23 @@ export function GenieBarChart({
           );
         })}
       </svg>
-      {data.length > MAX_BARS && (
-        <div className="genie-chart__more">{chartTruncationCaption(MAX_BARS, data.length, 'rows')}</div>
-      )}
+      <ChartCaption text={chartTruncationCaption(bars.length, data.length, tableRowCount, 'rows')} />
     </div>
   );
 }
 
-export function GenieLineChart({ data, labelCol, valueCol }: { data: ChartRow[]; labelCol: string; valueCol: string }) {
+export function GenieLineChart({
+  data,
+  labelCol,
+  valueCol,
+  tableRowCount,
+}: {
+  data: ChartRow[];
+  labelCol: string;
+  valueCol: string;
+  /** Rows of the answer table below: the chart's own `data` can be shorter. */
+  tableRowCount: number;
+}) {
   const points = data.slice(0, MAX_LINE_POINTS);
   const maxV = Math.max(1, ...points.map((p) => p.value));
   const minV = Math.min(0, ...points.map((p) => p.value));
@@ -168,9 +203,7 @@ export function GenieLineChart({ data, labelCol, valueCol }: { data: ChartRow[];
         {points[0] && <text x="0" y={height + 24} className="genie-line__axis">{points[0].label}</text>}
         {points[points.length - 1] && <text x={width} y={height + 24} textAnchor="end" className="genie-line__axis">{points[points.length - 1].label}</text>}
       </svg>
-      {data.length > MAX_LINE_POINTS && (
-        <div className="genie-chart__more">{chartTruncationCaption(MAX_LINE_POINTS, data.length, 'points')}</div>
-      )}
+      <ChartCaption text={chartTruncationCaption(points.length, data.length, tableRowCount, 'points')} />
     </div>
   );
 }
