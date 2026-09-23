@@ -167,6 +167,11 @@ describe('DecisionReceipt', () => {
     expect(field('recorded')).toMatch(/2026/);
     // One EvidenceChip per cited Unity Catalog asset, plus the bound evidence ids.
     expect(card.querySelectorAll('[data-testid="decision-receipt-evidence"] .evidence-chip')).toHaveLength(3);
+    // The asset chips are labelled for what they are: the recorded offer
+    // branch's assets (derived server-side), not a list the write stored.
+    expect(card.querySelector('[data-testid="decision-receipt-evidence-note"]')?.textContent?.trim()).toBe(
+      'Unity Catalog assets of the recorded offer branch',
+    );
     expect(card.textContent).toContain('evidence ev-1 · ev-2');
     expect(card.querySelector('[data-testid="decision-receipt-score"]')?.textContent).toContain('91');
     const link = card.querySelector<HTMLAnchorElement>('[data-testid="decision-receipt-explorer-link"]')!;

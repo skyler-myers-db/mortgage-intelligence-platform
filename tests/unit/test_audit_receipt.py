@@ -317,6 +317,30 @@ def test_lifecycle_carries_the_audit_event_id_of_the_latest_decision() -> None:
     assert response.json()["audit_event_id"] == approved["audit_event_id"]
 
 
+def test_decision_writes_store_no_asset_list_so_the_receipt_derives_it(
+    audit_store: InMemoryAuditStore,
+) -> None:
+    """The receipt UI labels its asset chips as the recorded offer branch's.
+
+    That label is true only while no decision write stores an
+    ``evidence_assets`` list and the receipt derives it from the stored
+    offer code; if a writer starts storing one, this fails and the label
+    (DecisionReceipt ``evidenceAssetsNote``) must be revisited.
+    """
+    approved = _approve(ALICE_WRITE)
+    rejected = _reject(ALICE_WRITE)
+
+    for decision in (approved, rejected):
+        (row,) = audit_store.list(limit=10, event_id=decision["audit_event_id"])
+        assert "evidence_assets" not in (row.payload_json or {})
+        receipt = _receipt(decision["audit_event_id"], ALICE_READ).json()
+        stored_inputs = (row.payload_json or {}).get("decision_inputs") or {}
+        assert receipt["evidence_assets"] == decision_evidence_assets(
+            (row.payload_json or {}).get("offer_code"),
+            has_heloc_propensity_trigger=stored_inputs.get("has_heloc_propensity_trigger") is True,
+        )
+
+
 @pytest.mark.parametrize("has_heloc_propensity_trigger", [False, True])
 @pytest.mark.parametrize("offer_code", sorted(set(NBO_PRODUCT_LABELS) | {"nurture", "recapture"}))
 def test_receipt_evidence_assets_match_the_orchestrator_registry(

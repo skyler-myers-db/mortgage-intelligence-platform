@@ -29,6 +29,12 @@ export const DECISION_RECEIPT_COPY = {
   unavailableNotFoundRecord:
     'The decision record points at this audit id, but the ledger read-back did not find a decision row for it.',
   evidence: 'Evidence cited',
+  /**
+   * The chips are the Unity Catalog assets of the offer branch the row
+   * recorded (derived server-side from its stored offer code and decision
+   * inputs), not a list the decision write stored.
+   */
+  evidenceAssetsNote: 'Unity Catalog assets of the recorded offer branch',
   noEvidenceAssets: 'No governed assets recorded for this offer branch.',
   scoreAtDecision: 'Score at decision',
   scoreNote: 'from the lead payload',

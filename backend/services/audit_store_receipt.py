@@ -61,6 +61,12 @@ def decision_evidence_assets(
     branch (``_sources_for`` in the offers router); a unit test pins the two
     lists equal so the receipt never tells a different lineage story than
     the recommendation the approver saw.
+
+    This is the receipt's asset list for every decision row written today:
+    the outreach approve / reject writes store ``offer_code`` (approve also
+    ``decision_inputs``) but no ``evidence_assets`` key, so the list is
+    derived from those stored values, not read from a stored list. The UI
+    labels it as the recorded offer branch's assets accordingly.
     """
 
     code = (offer_code or "").strip().lower()
@@ -122,6 +128,8 @@ def build_decision_receipt(event: AuditEvent) -> DecisionReceipt | None:
         if offer_code is not None
         else None
     )
+    # A stored asset list wins if a writer ever records one; no decision
+    # write does today, so this derives from the stored offer branch.
     evidence_assets = _stored_asset_paths(metadata.get("evidence_assets")) or (
         decision_evidence_assets(
             offer_code,

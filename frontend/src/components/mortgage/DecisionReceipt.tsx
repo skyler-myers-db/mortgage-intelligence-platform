@@ -368,6 +368,9 @@ export function DecisionReceipt({
           </dl>
           <div className="decision-receipt__section" style={staggerIndex(evidenceIndex)}>
             <div className="eyebrow mb-2">{DECISION_RECEIPT_COPY.evidence}</div>
+            <p className="muted fs-11 flush mb-2" data-testid="decision-receipt-evidence-note">
+              {DECISION_RECEIPT_COPY.evidenceAssetsNote}
+            </p>
             <div className="chip-row" data-testid="decision-receipt-evidence">
               {receipt.evidence_assets.map((asset) => {
                 const source = descriptorFor(asset);
