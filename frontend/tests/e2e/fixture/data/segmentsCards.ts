@@ -55,3 +55,43 @@ export function registerBigCountSegments(mockApi: MockApi): void {
   });
   mockApi.register('GET', '/api/segments', () => json<SegmentSummary[]>(rows));
 }
+
+/**
+ * Twelve cards, gated and connected in the same grid rows (review round 2 of
+ * visual-04). The backend gates a segment whose Cotality source is not
+ * connected or not licensed (databricks_segment_gates.py) and names that
+ * source, so these use its real source names, the longest included. A
+ * gated card's meta row used to carry the state chip, the source name and
+ * the evidence chip, which wrapped to three lines and stretched its whole
+ * grid row, connected neighbours included, past 260px.
+ */
+function overlay(code: SegmentSummary['code'], base: SegmentSummary): SegmentSummary {
+  return { ...base, code, name: code, color: `var(--seg-${base.code})` };
+}
+
+function gate(row: SegmentSummary, status: 'not_connected' | 'not_licensed', sourceName: string): SegmentSummary {
+  return { ...row, source_status: status, source_name: sourceName };
+}
+
+export const GATED_SEGMENTS: readonly SegmentSummary[] = (() => {
+  const [itm, listed, permit, investor, equity, retention] = SEGMENTS;
+  return [
+    itm,
+    gate(listed, 'not_connected', 'MLS Listings'),
+    gate(permit, 'not_licensed', 'Cotality HELOC Propensity'),
+    investor,
+    equity,
+    retention,
+    gate(overlay('second_lien_itm', itm), 'not_connected', 'Voluntary Lien'),
+    overlay('heloc_draw_to_payback', equity),
+    gate(overlay('home_equity_history', equity), 'not_licensed', 'AVM'),
+    overlay('refi_propensity', itm),
+    gate(overlay('itm_on_related_property', investor), 'not_connected', 'Owner Link'),
+    gate(overlay('payoff_loss_leads', retention), 'not_connected', 'MMA Mortgage Analytics'),
+  ];
+})();
+
+export function registerGatedSegments(mockApi: MockApi): void {
+  mockApi.register('GET', '/api/segments', () => json<SegmentSummary[]>([...GATED_SEGMENTS]));
+}
+

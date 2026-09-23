@@ -45,7 +45,11 @@ import './SegmentCard.css';
  * card renders an explicit gated panel — count suppressed (never fabricated),
  * a `.chip--warning` state chip, and no selection affordance. Connected
  * zero-count segments remain selectable so users can verify the exact
- * filter result.
+ * filter result. The state chip sits where `avg` sits on a connected card
+ * and the missing source's name in the otherwise empty reconcile row, so
+ * the meta row holds only the evidence chip: a gated meta row carrying all
+ * three wrapped to three lines and stretched its whole grid row, connected
+ * neighbours included (302px, review round 2).
  *
  * Row grid (audit 2026-09-21 visual-04): the card is a CSS subgrid spanning
  * six rows of `.seg-grid` (header, count, reconcile, sub, meta, facets), so
@@ -169,12 +173,16 @@ export function SegmentCard({ segment, selected, updating, onClick }: SegmentCar
         ) : (
           <div className="seg-card__count num">{segment.count.toLocaleString()}</div>
         )}
+        {gated && <span className="chip chip--warning seg-card__gate">{gateLabel}</span>}
         {!gated && !hasNoBorrowers && <span className="seg-card__avg">avg {segment.avg_score}</span>}
       </div>
       {/* Always rendered, even empty, so every card keeps the same rows. A
           zero-count card has no gap to reconcile, so the slot says why the
           count is zero instead of wrapping the meta row. */}
       <div className="seg-card__reconcile-slot">
+        {gated && segment.source_name && (
+          <div className="seg-card__source">{segment.source_name}</div>
+        )}
         {!gated && showsReconcile && (
           <div className="seg-card__reconcile" role="note">
             <span className="seg-card__reconcile-value num">
@@ -191,12 +199,7 @@ export function SegmentCard({ segment, selected, updating, onClick }: SegmentCar
       </div>
       <div className="seg-card__sub">{displayDescription}</div>
       <div className="seg-card__meta">
-        {gated ? (
-          <>
-            <span className="chip chip--warning">{gateLabel}</span>
-            {segment.source_name && <span>{segment.source_name}</span>}
-          </>
-        ) : hasNoBorrowers ? null : deltaIsFirstSnapshot ? (
+        {gated || hasNoBorrowers ? null : deltaIsFirstSnapshot ? (
           // One line beside the evidence chip and Ask Genie at the 1440
           // target: the compact token is seen, the sentence is read.
           <span className="seg-card__delta-pending">

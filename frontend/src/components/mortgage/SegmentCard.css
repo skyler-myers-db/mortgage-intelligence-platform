@@ -81,6 +81,25 @@
    evidence chip and the Ask Genie entry stay on its line at 1440. */
 .seg-card__delta-pending { white-space: nowrap; }
 
+/* Gated card: the state chip takes `avg`'s place beside the suppressed
+   count, and the reconcile row (no contactable gap to reconcile) names the
+   missing source on one line, so the meta row holds only the evidence chip.
+   A meta row carrying all three wrapped to three lines and stretched its
+   whole grid row, connected neighbours included. */
+.seg-card__gate {
+  align-self: center;
+  margin-inline-start: auto;
+}
+.seg-card__source {
+  margin-block-start: var(--sp-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-11);
+  line-height: var(--lh-snug);
+  color: var(--text-3);
+}
+
 /* S1.6 facets: one evidence trigger per facet (loan product, origination
    channel), side by side. Each is an `.evidence-chip` holding a one-line
    legend (largest share) over a 4px stacked share bar of the whole mix. */

@@ -6,7 +6,13 @@
 import AxeBuilder from '@axe-core/playwright';
 import type { Locator, Page } from '@playwright/test';
 import { PRIMARY_BORROWER } from './data/borrowers';
-import { BIG_SEGMENT_COUNTS, registerBigCountSegments, registerVariedSegments } from './data/segmentsCards';
+import {
+  BIG_SEGMENT_COUNTS,
+  GATED_SEGMENTS,
+  registerBigCountSegments,
+  registerGatedSegments,
+  registerVariedSegments,
+} from './data/segmentsCards';
 import { FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
 
@@ -167,6 +173,66 @@ for (const theme of FIXTURE_THEMES) {
           expect(count.avgRight ?? Number.POSITIVE_INFINITY, `avg beside "${count.text}" ends inside its card`).toBeLessThanOrEqual(count.cardContentRight + 0.5);
         }
         expectRowsAligned(await cardGeometry(page));
+      });
+    }
+
+    // Gated segments (review round 2): a gated card's meta row used to wrap
+    // the state chip, the source name and the evidence chip to three lines,
+    // and the shared row stretched its connected neighbours with it (302px
+    // at 1440). Each of the three now takes one line of a row it shares.
+    for (const width of [1440, 1356] as const) {
+      test(`gated cards put the state chip beside the count, the source on one line and the evidence chip alone in the meta row, rows aligned, at ${width}px`, async ({ app, mockApi, page }) => {
+        registerGatedSegments(mockApi);
+        await page.setViewportSize({ width, height: 900 });
+        await app.gotoRoute(ROUTE);
+        const cards = await cardGeometry(page);
+        expect(cards).toHaveLength(GATED_SEGMENTS.length);
+        const gatedRows = GATED_SEGMENTS.filter((row) => row.source_status !== 'connected');
+        await expect(page.locator('.seg-grid .seg-card--gated')).toHaveCount(gatedRows.length);
+        const gridRows = new Map<number, CardGeometry[]>();
+        for (const card of cards) {
+          // The 260px target is the 1440 design width's (at 1356 a connected
+          // card's own meta row wraps its Ask Genie entry, gated or not).
+          if (width === 1440) expect(card.height, `height of "${card.code}"`).toBeLessThanOrEqual(MAX_CARD_HEIGHT);
+          const key = Math.round(card.top);
+          gridRows.set(key, [...(gridRows.get(key) ?? []), card]);
+        }
+        expect(gridRows.size, 'twelve cards fill two six-card grid rows').toBe(2);
+        for (const row of gridRows.values()) expectRowsAligned(row);
+
+        const gated = await page.locator('.seg-grid .seg-card--gated').evaluateAll((elements) =>
+          elements.map((card) => {
+            const middle = (element: Element | null) => {
+              const box = element?.getBoundingClientRect();
+              return box ? box.top + box.height / 2 : Number.NaN;
+            };
+            const source = card.querySelector<HTMLElement>('.seg-card__source');
+            const chip = card.querySelector('.seg-card__meta .evidence-chip');
+            return {
+              title: card.querySelector('.seg-card__title')?.textContent ?? '',
+              state: card.querySelector('.seg-card__count-row .seg-card__gate')?.textContent ?? null,
+              stateOffset: Math.abs(middle(card.querySelector('.seg-card__gate')) - middle(card.querySelector('.seg-card__count'))),
+              metaItems: card.querySelector('.seg-card__meta')?.childElementCount ?? Number.NaN,
+              metaHeight: card.querySelector('.seg-card__meta')?.getBoundingClientRect().height ?? Number.NaN,
+              chipHeight: chip?.getBoundingClientRect().height ?? Number.NaN,
+              source: source?.textContent ?? null,
+              sourceHeight: source?.getBoundingClientRect().height ?? Number.NaN,
+              sourceLineHeight: source ? parseFloat(getComputedStyle(source).lineHeight) : Number.NaN,
+              sourceFits: source ? source.scrollWidth <= source.clientWidth : false,
+            };
+          }),
+        );
+        expect(gated.map((card) => card.state)).toEqual(
+          gatedRows.map((row) => (row.source_status === 'not_licensed' ? 'not licensed' : 'not connected')),
+        );
+        expect(gated.map((card) => card.source)).toEqual(gatedRows.map((row) => row.source_name));
+        for (const card of gated) {
+          expect(card.stateOffset, `state chip of "${card.title}" sits on the count's line`).toBeLessThanOrEqual(2);
+          expect(card.sourceHeight, `source of "${card.title}" is one line`).toBeLessThanOrEqual(card.sourceLineHeight + 0.5);
+          expect(card.sourceFits, `source of "${card.title}" is not truncated`).toBe(true);
+          expect(card.metaItems, `meta row of "${card.title}" holds only the evidence chip`).toBe(1);
+          expect(card.metaHeight, `meta row of "${card.title}" is one line`).toBeLessThanOrEqual(card.chipHeight + 0.5);
+        }
       });
     }
 

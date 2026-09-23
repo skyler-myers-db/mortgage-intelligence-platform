@@ -350,6 +350,13 @@ describe('SegmentCard', () => {
     // at all — stronger than aria-disabled on a non-widget, and it keeps the
     // card from advertising a click that would do nothing.
     expect(container.querySelector('.seg-card__select')).toBeNull();
+    // One line per row (review round 2): the state chip beside the count,
+    // the source in the reconcile row, the evidence chip alone in the meta.
+    expect(container.querySelector('.seg-card__count-row .seg-card__gate')?.textContent).toBe('not connected');
+    expect(container.querySelector('.seg-card__reconcile-slot .seg-card__source')?.textContent).toBe('Building Permits');
+    const meta = container.querySelector('.seg-card__meta');
+    expect(meta?.children).toHaveLength(1);
+    expect(meta?.querySelector('.evidence-chip')).not.toBeNull();
   });
 
   it('labels a permission-denied source as not licensed', () => {
