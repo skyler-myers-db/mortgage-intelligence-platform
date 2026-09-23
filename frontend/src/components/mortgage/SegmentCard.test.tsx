@@ -164,6 +164,19 @@ describe('SegmentCard', () => {
     expect(facetShares(undefined)).toEqual([]);
   });
 
+  it('labels an unmapped snake_case facet code in sentence case, and leaves other spellings alone', () => {
+    const shares = facetShares([
+      { value: 'home_equity_line', count: 3 },
+      { value: 'USDA', count: 2 },
+      { value: 'loan_officer', count: 1 },
+    ]);
+    expect(shares.map((share) => [share.label, share.legendLabel])).toEqual([
+      ['Home equity line', 'Home equity line'],
+      ['USDA', 'USDA'],
+      ['Loan officer', 'LO'],
+    ]);
+  });
+
   it('hides the facet block when both mixes are empty or absent', () => {
     render({ code: 'itm', count: 12 });
     expect(container.querySelector('.seg-card__facets')).toBeNull();

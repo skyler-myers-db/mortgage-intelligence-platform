@@ -67,6 +67,19 @@ export interface FacetShare {
   pctLabel: string;
 }
 
+const SNAKE_CASE_CODE_RE = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/;
+
+/**
+ * A code the maps above do not know yet (a new LOS channel, say) reads as
+ * sentence case, like the mapped labels: `home_equity` -> `Home equity`.
+ * Anything that is not a snake_case code is shown as the source spelled it.
+ */
+function fallbackLabel(value: string): string {
+  if (!SNAKE_CASE_CODE_RE.test(value)) return value;
+  const words = value.replace(/_/g, ' ');
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
 function pctLabel(pct: number): string {
   if (pct > 0 && pct < 1) return '<1%';
   return `${Math.round(pct)}%`;
@@ -81,10 +94,11 @@ export function facetShares(mix: readonly DimensionFacetCount[] | undefined): Fa
     .sort((a, b) => b.count - a.count)
     .map((row) => {
       const pct = (row.count / total) * 100;
+      const label = VALUE_LABELS[row.value] ?? fallbackLabel(row.value);
       return {
         value: row.value,
-        label: VALUE_LABELS[row.value] ?? row.value,
-        legendLabel: LEGEND_LABELS[row.value] ?? VALUE_LABELS[row.value] ?? row.value,
+        label,
+        legendLabel: LEGEND_LABELS[row.value] ?? label,
         count: row.count,
         pct,
         pctLabel: pctLabel(pct),
