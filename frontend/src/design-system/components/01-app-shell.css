@@ -108,13 +108,15 @@
   min-width: 0;
   display: grid;
   /* Symmetric side tracks keep the search on the topbar's centre line. The
-     centre track is capped at 32rem (not 44rem) because the actions cluster
-     — tenant pill + status pill + three icon buttons — measures ~376px at
+     centre track is capped at 30rem (not 44rem) because the actions cluster
+     — tenant pill + status pill + four icon buttons — measures ~394px at
      max-content: a 44rem search left only 296px per side track, so the
      end-justified actions box overflowed its track LEFTWARD and the opaque
      tenant pill covered the ⌘K badge by 26px at 1440x900 (2026-08-07 audit
-     M1, reproduced on all ten routes). 32rem leaves 392px per side. */
-  grid-template-columns: minmax(0, 1fr) minmax(0, 32rem) minmax(0, 1fr);
+     M1, reproduced on all ten routes). 32rem left 392px per side until the
+     identity menu (audit shell-06) added the fourth button and ellipsized the
+     tenant name by 3px; 30rem leaves 408px per side. */
+  grid-template-columns: minmax(0, 1fr) minmax(0, 30rem) minmax(0, 1fr);
   align-items: center;
   gap: var(--sp-4);
   padding: 0 var(--sp-5);
@@ -161,7 +163,7 @@
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  inline-size: min(32rem, 100%);
+  inline-size: min(30rem, 100%);
   min-inline-size: 0;
   padding: var(--sp-1) var(--sp-2);
   border: 1px solid var(--line-1);
@@ -279,12 +281,13 @@
   font-family: var(--font-mono);
   font-size: var(--fs-12);
 }
-/* Below 88rem (1408px) the two side tracks can no longer both hold the
-   actions cluster at max-content, so the third track sizes to its content
+/* Below 89rem (1424px) the two side tracks can no longer both hold the
+   actions cluster at max-content (it needs a 1412px viewport since the
+   identity menu joined it), so the third track sizes to its content
    instead: the search gives up exact centering rather than being overlapped.
    Above it (the contracted 1440x900 demo viewport included) the symmetric,
    perfectly centered layout above applies. */
-@media (max-width: 88rem) {
+@media (max-width: 89rem) {
   .topbar {
     grid-template-columns: minmax(0, 0.9fr) minmax(22rem, 1.1fr) auto;
   }

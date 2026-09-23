@@ -4,6 +4,7 @@ import { useApp } from '../AppContext';
 import { Icon } from '../Icon';
 import { useListboxNavigation } from '../ui/useListboxNavigation';
 import { useHealth } from '../HealthProvider';
+import { IdentityMenu } from './IdentityMenu';
 import { useFootprint } from '../FootprintProvider';
 import { api, type HealthPayload } from '../../lib/api';
 import {
@@ -486,6 +487,7 @@ export function Topbar() {
       >
         <Icon name="tweak" size={15} />
       </button>
+      <IdentityMenu />
       </div>
     </header>
   );

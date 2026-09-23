@@ -1,0 +1,13 @@
+/* ============================================================
+   SHELL WAYFINDING (wave 1c, audit 2026-09-21 shell-04 / shell-06)
+   Initial-stylesheet rules only: the identity popup's styles ship with
+   its lazy chunk (components/layout/IdentityMenuPanel.css).
+   ============================================================ */
+/* Identity menu anchor: ADDITIVE to the prototype topbar, which has no
+   account control (design_files/Module 0 Prototype.html:1206-1243). The
+   trigger itself is the prototype `.topbar__icon-btn`. */
+.identity-menu {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+}

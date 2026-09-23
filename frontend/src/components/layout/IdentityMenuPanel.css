@@ -1,0 +1,63 @@
+/* ============================================================
+   IDENTITY MENU POPUP (audit 2026-09-21 shell-06). Ships with the lazy
+   IdentityMenuPanel chunk, not the initial stylesheet. ADDITIVE to the
+   prototype topbar, which has no account control (design_files/Module 0
+   Prototype.html:1206-1243): the popup reuses the `.filter-menu` /
+   `.filter-menu__item` dropdown primitives and adds only its header.
+   ============================================================ */
+.identity-menu .identity-menu__panel {
+  left: auto;
+  inset-inline-end: 0;
+  inset-block-start: calc(100% + var(--sp-2));
+  display: grid;
+  gap: var(--sp-1);
+  inline-size: max-content;
+  min-inline-size: calc(var(--sp-16) * 4);
+  max-inline-size: calc(var(--sp-16) * 5);
+  max-height: none;
+  padding: var(--sp-2);
+  cursor: default;
+}
+.identity-menu__who {
+  display: grid;
+  gap: var(--sp-1);
+  padding: var(--sp-2) var(--sp-3) var(--sp-3);
+  border-bottom: 1px solid var(--line-1);
+  min-inline-size: 0;
+}
+.identity-menu__name {
+  color: var(--text-1);
+  font-size: var(--fs-13);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.identity-menu__email {
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  overflow-wrap: anywhere;
+}
+.identity-menu__roles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  margin-block-start: var(--sp-1);
+}
+.identity-menu__list,
+.identity-menu__group {
+  display: grid;
+  gap: var(--sp-1);
+}
+.identity-menu__group-label {
+  padding: var(--sp-2) var(--sp-3) 0;
+  color: var(--text-3);
+  font-size: var(--fs-11);
+  font-weight: 500;
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+}
+.identity-menu__sep {
+  border-top: 1px solid var(--line-1);
+  margin-block: var(--sp-1);
+}
+.identity-menu .filter-menu__item { text-decoration: none; }
