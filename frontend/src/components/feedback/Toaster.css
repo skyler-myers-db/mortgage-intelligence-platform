@@ -1,0 +1,57 @@
+/* ============================================================
+   TOAST REGION (2026-09-21 audit states-07, slice 1)
+   ============================================================
+   DECLARED EXTENSION. The prototype (design_files/index.html) defines no
+   transient-feedback pattern; the `.toast` block is built only from
+   existing tokens at `.surface` weight. Shipped with the lazy Toaster
+   chunk (like DecisionReceipt.css), so the initial stylesheet does not
+   carry it.
+
+   The region is a manual popover (top layer). These rules also reset the
+   UA popover box, and where the Popover API is missing they place the same
+   element as a fixed region on --z-toast. Bottom-centre keeps it clear of
+   the Console rail and the docked Genie panel, which both anchor right. */
+.toast-region {
+  position: fixed;
+  inset: auto 0 var(--sp-6);
+  margin: 0 auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-1);
+  overflow: visible;
+  inline-size: min(var(--toast-w), calc(100vw - 2 * var(--sp-6)));
+  display: grid;
+  gap: var(--sp-2);
+  pointer-events: none;
+  z-index: var(--z-toast);
+}
+.toast-region__list { display: grid; gap: var(--sp-2); }
+.toast {
+  pointer-events: auto;
+  display: flex; align-items: flex-start; gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-3) var(--sp-3) var(--sp-4);
+  border-radius: var(--r-lg);
+  background: var(--bg-2);
+  border: 1px solid var(--status-success-line);
+  box-shadow: var(--shadow-lg);
+  transition: opacity var(--dur-base) var(--ease), translate var(--dur-base) var(--ease);
+}
+/* Entry only: a dismissed toast leaves at once. */
+@starting-style {
+  .toast { opacity: 0; translate: 0 var(--sp-2); }
+}
+.toast--error { border-color: var(--status-danger-line-strong); }
+.toast__ico { flex: none; margin-top: var(--sp-1); color: var(--status-success-ink); }
+.toast--error .toast__ico { color: var(--status-danger-ink); }
+.toast__body { flex: 1; min-width: 0; display: grid; gap: var(--sp-1); }
+.toast__title { font-size: var(--fs-13); font-weight: 600; display: flex; align-items: center; gap: var(--sp-2); }
+.toast__detail { font-size: var(--fs-12); color: var(--text-2); overflow-wrap: anywhere; }
+.toast__link { font-size: var(--fs-12); color: var(--accent-ink); justify-self: start; }
+
+@media (prefers-reduced-motion: reduce) {
+  .toast { transition: none; }
+}
+@media print {
+  .toast-region { display: none; }
+}
