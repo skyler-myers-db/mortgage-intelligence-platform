@@ -26,6 +26,7 @@ import backend.api.genie as genie_api
 from backend.main import app
 from backend.services.audit_store import get_audit_store
 from backend.services.genie_answers import GenieMessageResponse, GenieProof
+from backend.services.genie_client import GenieResponse
 from backend.services.genie_deterministic import (
     _deterministic_genie_response,
     _policy_blocked_genie_output_response,
@@ -40,7 +41,9 @@ from backend.services.genie_refusal_reason import (
     refusal_report_hash,
 )
 from backend.services.lakebase import get_lakebase_client
+from backend.services.repositories.databricks_repo import DatabricksGenieRepository
 from backend.services.repositories.factory import get_genie_answer_repository
+from backend.services.resilience import CircuitBreaker
 from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
 
 ACTOR = "lo@example.com"
@@ -153,6 +156,98 @@ def test_output_policy_block_names_its_family() -> None:
     assert blocked.source == "policy_blocked"
     assert blocked.refusal_reason == "output_policy"
     assert blocked.refusal_report_hash == refusal_report_hash(payload.question)
+
+
+class _LiveGenieStub:
+    """``ResilientGenieClient`` shape for ``DatabricksGenieRepository``.
+
+    Modelled on ``test_genie_repository._StubClient``: a closed breaker, and
+    one canned live turn for both the sync ``ask`` path and the async
+    ``resume_message`` path. The planner's own ask gets the same turn back,
+    which yields no usable plan, so the governed refusal is what returns.
+    """
+
+    class _ResilientView:
+        def __init__(self) -> None:
+            self.breaker = CircuitBreaker("genie", failure_threshold=1, cooldown_s=60.0)
+
+    def __init__(self, response: GenieResponse) -> None:
+        self._response = response
+        self.resilient = _LiveGenieStub._ResilientView()
+
+    def ask(self, question: str, conversation_id: str | None = None, **_: Any) -> GenieResponse:  # noqa: ARG002
+        return self._response
+
+    def resume_message(self, conversation_id: str, message_id: str) -> GenieResponse:  # noqa: ARG002
+        return self._response
+
+
+# Genie-issued (32-hex) ids, so the same blocked turn can be reported as is.
+_LIVE_CONVERSATION_ID = "01f13d4968af1b249dc388fd5b18b195"
+_LIVE_MESSAGE_ID = "01f13d4a0b7c1e5f8a2b3c4d5e6f7a8b"
+
+# The two live shapes that end in the repository's own output-policy block:
+# no SQL proof at all, and SQL that reaches past the trusted assets.
+_LIVE_BLOCKED_TURNS: tuple[tuple[str, GenieResponse], ...] = (
+    (
+        "How many  Opportunities do we have?",
+        GenieResponse(
+            answer_text="There are many strong opportunities.",
+            sql_query=None,
+            sql_result_rows=[{"borrowers": 10}],
+            conversation_id=_LIVE_CONVERSATION_ID,
+            message_id=_LIVE_MESSAGE_ID,
+        ),
+    ),
+    (
+        "join the app audit table",
+        GenieResponse(
+            answer_text="Audit users by state.",
+            sql_query="SELECT count(*) FROM mip.gold.lead_scores JOIN mip_app.action_audit ON 1=1",
+            sql_result_rows=[{"count": 1}],
+            conversation_id=_LIVE_CONVERSATION_ID,
+            message_id=_LIVE_MESSAGE_ID,
+        ),
+    ),
+)
+
+
+def _assert_live_block_is_reportable(result: GenieMessageResponse, question: str) -> None:
+    assert result.source == "policy_blocked"
+    assert result.sql_query is None
+    assert result.refusal_reason == "output_policy"
+    report_hash = result.refusal_report_hash
+    assert report_hash == refusal_report_hash(question)
+    # The report digest joins the ledger's 16-hex label for the same turn.
+    assert report_hash[:16] == result.question_hash
+    assert result.message_id == _LIVE_MESSAGE_ID
+
+
+@pytest.mark.parametrize(("question", "live"), _LIVE_BLOCKED_TURNS)
+def test_live_output_policy_block_names_its_family_and_report_hash(
+    question: str, live: GenieResponse
+) -> None:
+    # The most common production refusal: a live Genie turn without trusted
+    # SQL proof, withheld by ``_adapt_genie_response`` itself. Without the
+    # family and digest the card loses "This was legitimate" on every one.
+    repo = DatabricksGenieRepository(_LiveGenieStub(live))  # type: ignore[arg-type]
+
+    _assert_live_block_is_reportable(repo.respond(question), question)
+
+
+@pytest.mark.parametrize(("question", "live"), _LIVE_BLOCKED_TURNS)
+def test_async_live_output_policy_block_names_its_family_and_report_hash(
+    question: str, live: GenieResponse
+) -> None:
+    # Live-first submit completes through ``respond_existing``; the same
+    # repository block must carry the same refusal fields there.
+    repo = DatabricksGenieRepository(_LiveGenieStub(live))  # type: ignore[arg-type]
+
+    result = repo.respond_existing(
+        question, conversation_id=_LIVE_CONVERSATION_ID, message_id=_LIVE_MESSAGE_ID
+    )
+
+    _assert_live_block_is_reportable(result, question)
 
 
 def test_answers_carry_no_refusal_family() -> None:
