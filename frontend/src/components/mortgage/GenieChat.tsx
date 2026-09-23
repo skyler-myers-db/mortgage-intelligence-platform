@@ -267,6 +267,16 @@ export function GenieChat() {
     });
   }, []);
 
+  /** Focus the composer as it is (a draft stays untouched), caret at its end. */
+  const focusComposer = useCallback(() => {
+    queueMicrotask(() => {
+      const el = inputRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(el.value.length, el.value.length);
+    });
+  }, []);
+
   // `openGenie({ prompt })` prefill (genie-04): consumed while the panel is
   // open -- on open for a request made while it was closed or not yet
   // mounted, and at once for one made while it is already open. A prefill
@@ -397,7 +407,10 @@ export function GenieChat() {
    * question goes back to the composer unless the user is drafting another
    * one there (a draft is never overwritten; the note's Edit reloads the
    * stopped question), and a "Stopped" note keeps the transcript honest. New
-   * thread and History unlock because nothing is in flight any more.
+   * thread and History unlock because nothing is in flight any more. Focus
+   * always lands in the composer: the Stop button unmounts under the user,
+   * and focus left on <body> would also switch off "Escape closes Genie",
+   * which keys off focus inside the panel.
    */
   const stopTurn = () => {
     if (!askInFlightRef.current) return;
@@ -418,6 +431,7 @@ export function GenieChat() {
       );
     }
     if (restore) loadComposer(question);
+    else focusComposer();
     setAnnouncement(
       restore
         ? 'Stopped. The question is back in the composer.'

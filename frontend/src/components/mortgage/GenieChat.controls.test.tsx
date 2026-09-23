@@ -416,6 +416,42 @@ describe('floating Genie conversational controls', () => {
     expect(input().value).toBe('How many HELOC candidates are there?');
   });
 
+  it('Stop with a draft kept leaves focus in the composer (never on <body>), so Escape still closes Genie', async () => {
+    render();
+    await startLiveTurn('How many HELOC candidates are there?');
+    act(() => setInputValue(input(), 'A follow-up draft'));
+    const stop = stopButton();
+    act(() => stop.focus());
+    expect(document.activeElement).toBe(stop);
+
+    await click(stop);
+    await flush();
+
+    // The Stop button unmounted under the user. Focus lands in the composer,
+    // draft untouched, caret at its end.
+    expect(container.querySelector('button[aria-label="Stop this Genie turn"]')).toBeNull();
+    expect(document.activeElement).toBe(input());
+    expect(input().value).toBe('A follow-up draft');
+    expect(input().selectionStart).toBe('A follow-up draft'.length);
+    // Escape-to-close keys off focus inside the panel; it still works.
+    mocks.setGenieOpen.mockClear();
+    act(() => {
+      input().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    });
+    expect(mocks.setGenieOpen).toHaveBeenCalledWith(false);
+  });
+
+  it('Stop with an empty composer restores the question AND focuses the composer', async () => {
+    render();
+    await startLiveTurn('Which states lead?');
+    const stop = stopButton();
+    act(() => stop.focus());
+    await click(stop);
+    await flush();
+    expect(document.activeElement).toBe(input());
+    expect(input().value).toBe('Which states lead?');
+  });
+
   it('after Stop the next question is asked and lands normally (no stuck in-flight latch)', async () => {
     render();
     await startLiveTurn('Which states lead?');
