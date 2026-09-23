@@ -109,6 +109,10 @@ describe('RateWindowPanel', () => {
     expect(container.querySelector('[data-testid="rate-window-asof"]')?.textContent).toContain("Today's book (as of");
     // The image has an accessible description carrying the same sentence.
     expect(container.querySelector('.rate-window__panels')?.getAttribute('aria-label')).toContain('88 bps below');
+    // The edge month labels are anchored inside the plot.
+    const xTicks = container.querySelectorAll('.rate-window__panel--itm .analytics-chart__tick--x');
+    expect(xTicks[0].classList.contains('rate-window__xtick--start')).toBe(true);
+    expect(xTicks[xTicks.length - 1].classList.contains('rate-window__xtick--end')).toBe(true);
   });
 
   it('offers a table alternative listing the same weeks', () => {

@@ -149,8 +149,12 @@ function RateWindowCharts({ model }: { model: RateWindowModel }) {
                 <polyline points={marketPoints} className="rate-window__market" clipPath={`url(#${clipId})`} vectorEffect="non-scaling-stroke" />
               </svg>
               {model.threshold && thresholdY !== null && (
+                // textContent always equals model.threshold.label; a narrow
+                // plot hides the detail span and keeps name + rate.
                 <span className="rate-window__ref-label" style={tickStyle(thresholdY)} data-testid="rate-window-threshold">
-                  {model.threshold.label}
+                  Refi screen
+                  <span className="rate-window__ref-detail">: {model.threshold.minSpreadBps} bps below the book median</span>
+                  {` (${formatRatePct(model.threshold.ratePct)})`}
                 </span>
               )}
               <span
@@ -194,7 +198,11 @@ function RateWindowCharts({ model }: { model: RateWindowModel }) {
               </svg>
               <div className="analytics-chart__x-ticks" aria-hidden="true">
                 {model.xTicks.map((tick) => (
-                  <span key={tick.label + tick.x} className="analytics-chart__tick analytics-chart__tick--x" style={tickStyle(tick.x)}>
+                  <span
+                    key={tick.label + tick.x}
+                    className={`analytics-chart__tick analytics-chart__tick--x rate-window__xtick rate-window__xtick--${tick.anchor}${tick.minor ? ' rate-window__xtick--minor' : ''}`}
+                    style={tickStyle(tick.x)}
+                  >
                     {tick.label}
                   </span>
                 ))}

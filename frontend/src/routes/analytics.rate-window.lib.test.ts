@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import type { RateWindowResponse } from '../types';
 import {
   buildRateWindowModel,
+  buildXTicks,
   formatMonthYear,
   itmY,
   niceTicks,
@@ -91,8 +92,8 @@ describe('buildRateWindowModel', () => {
     expect(model.itm.max).toBeGreaterThanOrEqual(1956);
     // Shared x-axis: first and last week pinned to the edges, oldest first.
     expect(model.points.map((p) => p.x)).toEqual([0, 50, 100]);
-    expect(model.xTicks[0]).toEqual({ x: 0, label: 'Mar 2026' });
-    expect(model.xTicks[model.xTicks.length - 1].label).toBe('Apr 2026');
+    expect(model.xTicks[0]).toEqual({ x: 0, label: 'Mar 2026', anchor: 'start', minor: false });
+    expect(model.xTicks[model.xTicks.length - 1]).toMatchObject({ x: 100, label: 'Apr 2026', anchor: 'end', minor: false });
   });
 
   it('maps values top-down inside each panel with the baseline at the bottom', () => {
@@ -124,6 +125,32 @@ describe('buildRateWindowModel', () => {
     expect(model.spreadSentence).toContain('empty');
     expect(model.itm.max).toBeGreaterThan(0);
     expect(buildRateWindowModel(response({ weeks: [] }))).toBeNull();
+  });
+});
+
+describe('buildXTicks', () => {
+  const points = (n: number) =>
+    Array.from({ length: n }, (_, idx) => ({
+      week: new Date(Date.UTC(2025, 1, 24 + idx * 7)).toISOString().slice(0, 10),
+      x: n === 1 ? 50 : (idx / (n - 1)) * 100,
+      marketPct: 6.5,
+      medianPct: 7.1,
+      p25Pct: 6.55,
+      p75Pct: 7.62,
+      itmCount: 0,
+      isLatest: idx === n - 1,
+    }));
+
+  it('anchors the edge labels inside the plot and keeps first, central and last on a narrow plot', () => {
+    const ticks = buildXTicks(points(60));
+    expect(ticks).toHaveLength(6);
+    expect(ticks.map((t) => t.anchor)).toEqual(['start', 'middle', 'middle', 'middle', 'middle', 'end']);
+    // Six ticks at 0, 20.3, 40.7, 61.0, 81.4 and 100: 40.7 is the closest to the centre.
+    expect(ticks.map((t) => t.minor)).toEqual([false, true, false, true, true, false]);
+  });
+
+  it('centres a lone week and never marks it minor', () => {
+    expect(buildXTicks(points(1))).toEqual([{ x: 50, label: 'Feb 2025', anchor: 'middle', minor: false }]);
   });
 });
 

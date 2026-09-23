@@ -36,6 +36,23 @@
 .rate-window__panel--itm .analytics-chart {
   --analytics-chart-h: calc(var(--sp-16) + var(--sp-16));
 }
+/* Each plot is a size container so the axis and the reference label adapt
+   to the width the plot actually has (Console open, phone), not the
+   viewport. The canvas is already position: relative, so the containment
+   changes no containing block. */
+.rate-window .analytics-chart__canvas {
+  container: rate-window-plot / inline-size;
+}
+/* The shared axis anchors its edge labels inside the plot. The chart chrome
+   centres every x-tick on its position (translateX(-50%)), which clipped the
+   last month past the surface edge at 1440 and pushed the first into the
+   y-tick gutter, onto the in-the-money panel's "0". */
+.rate-window .rate-window__xtick--start {
+  transform: none;
+}
+.rate-window .rate-window__xtick--end {
+  transform: translateX(-100%);
+}
 .rate-window__svg {
   overflow: visible;
 }
@@ -131,6 +148,22 @@
 .rate-window__swatch--threshold { background: var(--status-warning-ink); }
 .rate-window__asof {
   margin-top: var(--sp-3);
+}
+/* A narrow plot (phone, Console open on a small laptop) cannot fit six
+   month labels or the full reference label: keep the first, central and
+   last month, and name the screen by its rate alone (the detail stays in the
+   accessible description and the legend). */
+@container rate-window-plot (max-width: 31rem) {
+  .rate-window .rate-window__xtick--minor {
+    display: none;
+  }
+  .rate-window .rate-window__ref-detail {
+    display: none;
+  }
+  .rate-window .rate-window__ref-label {
+    max-inline-size: 50%;
+    white-space: normal;
+  }
 }
 @media (prefers-reduced-motion: no-preference) {
   .rate-window__market,

@@ -85,6 +85,25 @@ export interface RateWindowThresholdLine {
   label: string;
 }
 
+/**
+ * Where an x-tick label sits against its position. The chart chrome centres
+ * every label on its tick; the shared axis anchors the first and last inside
+ * the plot so the edge months neither clip at the surface edge nor spill into
+ * the y-tick gutter (dataviz-08 review, 1440x900).
+ */
+export type RateWindowTickAnchor = 'start' | 'middle' | 'end';
+
+export interface RateWindowXTick {
+  x: number;
+  label: string;
+  anchor: RateWindowTickAnchor;
+  /**
+   * A narrow plot keeps only the first, the most central and the last label;
+   * minor ticks are dropped there so the month labels never overlap.
+   */
+  minor: boolean;
+}
+
 export interface RateWindowModel {
   points: RateWindowPoint[];
   current: RateWindowPoint;
@@ -100,7 +119,7 @@ export interface RateWindowModel {
   threshold: RateWindowThresholdLine | null;
   rate: { min: number; max: number; ticks: number[] };
   itm: { max: number; ticks: number[] };
-  xTicks: Array<{ x: number; label: string }>;
+  xTicks: RateWindowXTick[];
 }
 
 /** Vertical position (0..100, top-down) inside the rate panel, with a small inset so edge strokes stay visible. */
@@ -114,6 +133,29 @@ export function rateY(model: Pick<RateWindowModel, 'rate'>, value: number): numb
 export function itmY(model: Pick<RateWindowModel, 'itm'>, value: number): number {
   const ratio = model.itm.max <= 0 ? 0 : value / model.itm.max;
   return 100 - Math.max(0, Math.min(1, ratio)) * 92;
+}
+
+/** Shared-axis ticks: edge labels anchored inside the plot, minor ticks marked for narrow plots. */
+export function buildXTicks(points: readonly RateWindowPoint[]): RateWindowXTick[] {
+  const picked = categoricalTickIndexes(points.length, 6).map((idx) => points[idx]);
+  const last = picked.length - 1;
+  let central = -1;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  picked.forEach((point, idx) => {
+    if (idx === 0 || idx === last) return;
+    const distance = Math.abs(point.x - 50);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      central = idx;
+    }
+  });
+  const spansAxis = points.length > 1;
+  return picked.map((point, idx) => ({
+    x: point.x,
+    label: formatMonthYear(point.week),
+    anchor: spansAxis && idx === 0 ? 'start' : spansAxis && idx === last ? 'end' : 'middle',
+    minor: idx !== 0 && idx !== last && idx !== central,
+  }));
 }
 
 export function buildRateWindowModel(response: RateWindowResponse): RateWindowModel | null {
@@ -175,6 +217,6 @@ export function buildRateWindowModel(response: RateWindowResponse): RateWindowMo
     threshold,
     rate: { min: rateTicks[0], max: rateTicks[rateTicks.length - 1], ticks: rateTicks },
     itm: { max: itmTicks[itmTicks.length - 1], ticks: itmTicks },
-    xTicks: categoricalTickIndexes(n, 6).map((idx) => ({ x: points[idx].x, label: formatMonthYear(points[idx].week) })),
+    xTicks: buildXTicks(points),
   };
 }

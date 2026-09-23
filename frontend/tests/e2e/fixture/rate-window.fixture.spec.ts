@@ -3,12 +3,71 @@
  * Analytics Executive tab, rendered against the synthetic 60-week series in
  * data/rateWindow.ts. Pins the rendered layer: two stacked panels on one
  * x-axis, the spread sentence for the fixture's numbers, the labelled refi
- * screen line, the evidence chip's drawer destination, the warming-up
+ * screen line, the mark colours against their legend, the axis geometry at
+ * 1440 / 1280 / 390, the evidence chip's drawer destination, the warming-up
  * degraded state and the table alternative.
  */
+import type { Page } from '@playwright/test';
 import { RATE_WINDOW_EXPECTED, RATE_WINDOW_WEEK_COUNT } from './data/rateWindow';
 import { WAREHOUSE_WARMING_UP } from './mockApi';
 import { expect, test } from './test';
+
+interface Box {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+interface AxisGeometry {
+  panel: Box;
+  canvases: Box[];
+  xTicks: Box[];
+  yTicks: Box[];
+  threshold: Box | null;
+  current: Box | null;
+}
+
+/** Rendered boxes of the rate window's axis furniture; only displayed x-ticks count. */
+async function axisGeometry(page: Page): Promise<AxisGeometry> {
+  return page.getByTestId('rate-window').evaluate((panel) => {
+    const box = (el: Element): Box => {
+      const r = el.getBoundingClientRect();
+      return { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
+    };
+    const shown = (el: Element) => getComputedStyle(el).display !== 'none';
+    const one = (selector: string) => {
+      const el = panel.querySelector(selector);
+      return el ? box(el) : null;
+    };
+    return {
+      panel: box(panel),
+      canvases: [...panel.querySelectorAll('.rate-window__panel .analytics-chart__canvas')].map(box),
+      xTicks: [...panel.querySelectorAll('.rate-window__panel--itm .analytics-chart__tick--x')].filter(shown).map(box),
+      yTicks: [...panel.querySelectorAll('.rate-window__panel--itm .analytics-chart__tick--y')].map(box),
+      threshold: one('[data-testid="rate-window-threshold"]'),
+      current: one('[data-testid="rate-window-current"]'),
+    };
+  });
+}
+
+const intersects = (a: Box, b: Box) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+const inside = (inner: Box, outer: Box) =>
+  inner.left >= outer.left && inner.right <= outer.right && inner.top >= outer.top && inner.bottom <= outer.bottom;
+const fmt = (b: Box) => `[${b.left.toFixed(1)}..${b.right.toFixed(1)} x ${b.top.toFixed(1)}..${b.bottom.toFixed(1)}]`;
+
+function expectAxisInsidePanel(geometry: AxisGeometry, label: string): void {
+  expect(geometry.xTicks.length, `${label}: the shared axis shows month labels`).toBeGreaterThan(1);
+  geometry.xTicks.forEach((tick, idx) => {
+    expect(inside(tick, geometry.panel), `${label}: x-tick ${idx} ${fmt(tick)} inside panel ${fmt(geometry.panel)}`).toBe(true);
+    geometry.yTicks.forEach((yTick, yIdx) => {
+      expect(intersects(tick, yTick), `${label}: x-tick ${idx} ${fmt(tick)} clear of y-tick ${yIdx} ${fmt(yTick)}`).toBe(false);
+    });
+    geometry.xTicks.slice(idx + 1).forEach((other, offset) => {
+      expect(intersects(tick, other), `${label}: x-ticks ${idx} and ${idx + offset + 1} do not overlap`).toBe(false);
+    });
+  });
+}
 
 test.describe('analytics executive: why-now rate window', () => {
   test('draws two stacked panels on one axis, states the spread in words and labels the refi screen', async ({ app, page }) => {
@@ -62,6 +121,43 @@ test.describe('analytics executive: why-now rate window', () => {
     expect(colours.median, 'median stroke matches its legend swatch').toBe(colours.medianSwatch);
     expect(colours.median, 'median and market are distinct encodings').not.toBe(colours.market);
     expect(colours.market, 'market stroke matches its legend swatch').toBe(colours.marketSwatch);
+  });
+
+  for (const width of [1440, 1280]) {
+    test(`at ${width}px the shared axis keeps every month label inside the panel and off the y-ticks`, async ({ app, page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await app.setTheme('dark');
+      await app.gotoRoute('/analytics');
+      await expect(page.getByTestId('rate-window').locator('.rate-window__panel svg')).toHaveCount(2);
+
+      const geometry = await axisGeometry(page);
+      expectAxisInsidePanel(geometry, `${width}px`);
+      // One x-axis: both plot canvases start and end at the same x.
+      expect(geometry.canvases).toHaveLength(2);
+      const [rates, itm] = geometry.canvases;
+      expect(Math.abs(rates.left - itm.left), 'plot canvases share a left edge').toBeLessThan(0.5);
+      expect(Math.abs(rates.right - itm.right), 'plot canvases share a right edge').toBeLessThan(0.5);
+    });
+  }
+
+  test('at phone width the axis thins to readable months and the reference label stays clear of the print', async ({ app, page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await app.setTheme('light');
+    await app.gotoRoute('/analytics');
+    await expect(page.getByTestId('rate-window').locator('.rate-window__panel svg')).toHaveCount(2);
+
+    const geometry = await axisGeometry(page);
+    expectAxisInsidePanel(geometry, '390px');
+    expect(geometry.threshold, 'threshold label rendered').not.toBeNull();
+    expect(geometry.current, 'current print rendered').not.toBeNull();
+    if (!geometry.threshold || !geometry.current) return;
+    expect(inside(geometry.threshold, geometry.panel), `threshold label ${fmt(geometry.threshold)} inside panel`).toBe(true);
+    expect(
+      intersects(geometry.threshold, geometry.current),
+      `threshold label ${fmt(geometry.threshold)} clear of the current print ${fmt(geometry.current)}`,
+    ).toBe(false);
+    // The detail is hidden on a narrow plot, never lost: the text and the image description keep it.
+    await expect(page.getByTestId('rate-window-threshold')).toHaveText(RATE_WINDOW_EXPECTED.thresholdLabel);
   });
 
   test('the evidence chip opens the drawer on the rate-window destination citing both source tables', async ({ app, page }) => {
