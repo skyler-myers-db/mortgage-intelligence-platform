@@ -1,5 +1,8 @@
 import type { Feature, FeatureCollection, Geometry } from 'geojson';
 import type { CountyRollup, ZipRollup } from '../../types';
+import { labelAnchor } from './USChoroplethMap.labels';
+
+export { labelAnchor } from './USChoroplethMap.labels';
 
 // Shared shape consumed by the state-level map renderers. The payload is
 // built from us-atlas state TopoJSON, keeping IDs in the existing lowercase
@@ -8,7 +11,7 @@ export interface UsaSvgMapLocation {
   name: string;
   id: string;
   path: string;
-  /** Where the state's label sits (area centroid of its largest polygon), in viewBox units. */
+  /** Where the state's label sits (see USChoroplethMap.labels), in viewBox units. */
   labelAt?: [number, number];
 }
 export interface UsaSvgMap { label: string; viewBox: string; locations: UsaSvgMapLocation[] }
@@ -83,38 +86,6 @@ export function buildUsaStateMapPayload(fc: FeatureCollection, pad = 0): UsaSvgM
     viewBox: `${vx.toFixed(1)} ${vy.toFixed(1)} ${vw.toFixed(1)} ${vh.toFixed(1)}`,
     locations,
   };
-}
-
-/**
- * Area centroid of the largest polygon's outer ring (shoelace formula), so a
- * state label lands on the mainland rather than between islands. Null for a
- * degenerate or non-polygon geometry.
- */
-export function labelAnchor(geom: Geometry): [number, number] | null {
-  const rings = geom.type === 'Polygon'
-    ? [geom.coordinates[0]]
-    : geom.type === 'MultiPolygon'
-      ? geom.coordinates.map((poly) => poly[0])
-      : [];
-  let best: { area: number; x: number; y: number } | null = null;
-  for (const ring of rings) {
-    if (!ring || ring.length < 3) continue;
-    let twiceArea = 0;
-    let cx = 0;
-    let cy = 0;
-    for (let i = 0; i < ring.length; i += 1) {
-      const [x0, y0] = ring[i];
-      const [x1, y1] = ring[(i + 1) % ring.length];
-      const cross = x0 * y1 - x1 * y0;
-      twiceArea += cross;
-      cx += (x0 + x1) * cross;
-      cy += (y0 + y1) * cross;
-    }
-    if (twiceArea === 0) continue;
-    const area = Math.abs(twiceArea / 2);
-    if (!best || area > best.area) best = { area, x: cx / (3 * twiceArea), y: cy / (3 * twiceArea) };
-  }
-  return best ? [Number(best.x.toFixed(1)), Number(best.y.toFixed(1))] : null;
 }
 
 export interface StateFacts {
