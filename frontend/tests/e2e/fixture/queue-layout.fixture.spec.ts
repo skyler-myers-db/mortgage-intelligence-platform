@@ -41,6 +41,10 @@ async function rowHeight(row: Locator): Promise<number> {
   return row.evaluate((el) => el.getBoundingClientRect().height);
 }
 
+async function bottomOf(target: Locator): Promise<number> {
+  return target.evaluate((el) => el.getBoundingClientRect().bottom);
+}
+
 /** Six non-core filters: more hero chips than one line of the hero's action slot holds. */
 const SIX_FILTERS = '/lead-queue?owner_link=Portfolio+investor+%285%2B%29&purchase_intent=HELOC+intent'
   + '&recency=Untouched+30d&outreach_status=sent&aged_days=14&zip=60601';
@@ -215,6 +219,35 @@ test.describe('column presets', () => {
       await expectReachable(flags.locator('.chip', { hasText: 'Owner unresolved' }), `the Owner unresolved chip (${view} view)`);
     });
   }
+});
+
+test.describe('the table scroller fills to the fold from its own top edge', () => {
+  test('its surface footer ends on the fold at 1440x1100, again after More filters opens, and the 480px floor holds at 1440x900', async ({ app, page }) => {
+    await page.setViewportSize({ width: 1440, height: 1100 });
+    await app.gotoRoute('/lead-queue');
+    const wrap = page.locator('.tbl-wrap');
+    const footer = page.locator('.surface:has(> .tbl-wrap) > .surface__ft');
+    const onTheFold = async (what: string) => {
+      const fold = page.viewportSize()?.height ?? 0;
+      await expect.poll(() => bottomOf(footer), `${what}: the footer is not below the fold`).toBeLessThanOrEqual(fold + 0.5);
+      expect(await bottomOf(footer), `${what}: the footer sits on the fold, the scroller fills the space`).toBeGreaterThanOrEqual(fold - 4);
+    };
+    await onTheFold('1440x1100');
+
+    // Content above the table grows: the scroller shrinks to keep its footer on the fold.
+    const before = await wrap.evaluate((el) => el.getBoundingClientRect().height);
+    await page.getByTestId('lead-queue-more-filters').click();
+    await expect(page.getByRole('group', { name: 'More queue filters' })).toBeVisible();
+    await onTheFold('More filters open');
+    expect(await wrap.evaluate((el) => el.getBoundingClientRect().height)).toBeLessThan(before);
+
+    // 900 tall leaves less than 480px under the table top: the floor wins,
+    // and the scroller (with its horizontal scrollbar) still ends above the fold.
+    await page.getByTestId('lead-queue-more-filters').click();
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await expect.poll(() => wrap.evaluate((el) => el.getBoundingClientRect().height), 'the 480px floor').toBe(480);
+    expect(await bottomOf(wrap), 'the scroller ends above the fold at 1440x900').toBeLessThanOrEqual(900);
+  });
 });
 
 test.describe('the collapsed filter wall', () => {

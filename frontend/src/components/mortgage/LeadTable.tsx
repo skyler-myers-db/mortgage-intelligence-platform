@@ -34,6 +34,7 @@ import { LeadDispositionPanel, LeadRejectPanel } from './LeadTableDecisionPanels
 import { useLeadApprovalActions, type CampaignBindingState } from './useLeadApprovalActions';
 import { useLeadSalesActions } from './useLeadSalesActions';
 import { useLeadTableHotkeys } from './useLeadTableHotkeys';
+import { useLeadTableFillHeight } from './useLeadTableFillHeight';
 import { approverGateReason } from './approverGate';
 import type { LeadTableProps, SortDir, SortKey } from './LeadTable.types';
 import './LeadTable.css';
@@ -122,6 +123,7 @@ export function LeadTable({
           : 'invalid';
   const campaignBindingBlocked = hasCampaignBindingRequest && campaignBinding === null;
   const tableWrapRef = useRef<HTMLDivElement | null>(null);
+  useLeadTableFillHeight(tableWrapRef, fillHeight);
   const columns = leadTableColumns(view);
   const columnCount = leadTableColumnCount(view);
   const [expanded, setExpanded] = useState<string | null>(null);

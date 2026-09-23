@@ -19,13 +19,17 @@
 
 /* Declared prototype deviation: the prototype fixes the table scroller at
    maxHeight 480 (design_files/Module 0 Prototype.html:2009) and the app used
-   a fixed 520px. The Lead Queue's scroller now fills the viewport below the
-   shell chrome (topbar, route nav, the table surface header and footer) and
-   is floored at the prototype's 480px, so a 900px-tall screen shows the
-   ranked list instead of five rows in a box. */
+   a fixed 520px. The Lead Queue's scroller now fills from its own top edge
+   to the fold of `<main>`, leaving room for the surface footer
+   (useLeadTableFillHeight measures it into --lead-table-fill-block), and is
+   floored at the prototype's 480px. The viewport calc is only the value
+   before the first measurement. */
 .tbl-wrap.tbl-wrap--fill {
   max-height: none;
-  max-block-size: max(480px, calc(100dvh - var(--shell-topbar-h, var(--sp-12)) - var(--sp-16) * 3));
+  max-block-size: max(
+    480px,
+    var(--lead-table-fill-block, calc(100dvh - var(--shell-topbar-h, var(--sp-12)) - var(--sp-16) * 3))
+  );
 }
 
 /* One line per cell: a primary value, then `+n`. Chips shrink with an
