@@ -18,11 +18,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
+from backend.api.leads_export import EXPORT_DIGEST_MISMATCH_DETAIL
 from backend.config.settings import settings
 from backend.main import app
 from backend.services.audit_event_types import is_server_owned_audit_event_type
@@ -36,6 +39,9 @@ from backend.services.lead_export_receipt import (
 from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
 
 client = TestClient(app)
+
+ROOT = Path(__file__).resolve().parents[2]
+LEAD_EXPORT_CLIENT = ROOT / "frontend" / "src" / "lib" / "apiClients" / "leadExport.ts"
 
 ACTOR = "approver@summit-mortgage.example"
 ACTOR_HEADERS = {"X-Forwarded-Email": ACTOR, "X-Forwarded-Groups": ""}
@@ -122,6 +128,15 @@ def test_receipt_rejects_borrower_id_digest_mismatch_with_422(
     assert response.status_code == 422
     assert response.json()["detail"] == "export declaration does not match the borrower id list"
     assert audit_store.list(limit=10) == []
+
+
+def test_browser_keys_its_mismatch_copy_on_the_same_constant_detail() -> None:
+    # The browser says "the audit receipt did not match the file" only for
+    # this detail; any other 422 gets different copy (useLeadCsvExport.ts).
+    source = LEAD_EXPORT_CLIENT.read_text(encoding="utf-8")
+    match = re.search(r"export const LEAD_EXPORT_DIGEST_MISMATCH_DETAIL = '([^']+)';", source)
+    assert match is not None, "LEAD_EXPORT_DIGEST_MISMATCH_DETAIL not found"
+    assert match.group(1) == EXPORT_DIGEST_MISMATCH_DETAIL
 
 
 def test_receipt_rejects_row_count_that_disagrees_with_the_ids(

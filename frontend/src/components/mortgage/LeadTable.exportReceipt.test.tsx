@@ -249,6 +249,25 @@ describe('LeadTable audited export', () => {
     expect(container.querySelector('[data-testid="lead-export-notice"]')).toBeNull();
   });
 
+  it('tells a refused request apart from a receipt that did not match the file', async () => {
+    // A 422 from the schema or the audit store's metadata policy is not the
+    // digest check: the copy must not claim the file and receipt disagreed.
+    mocks.receipt.impl = async () => {
+      throw new FakeApiError('audit metadata value is not allowed', 422);
+    };
+    mount(ROWS);
+
+    await clickExport();
+    await vi.waitFor(() => {
+      expect(container.querySelector('[data-testid="lead-export-error"]')).not.toBeNull();
+    });
+
+    expect(blobs).toHaveLength(0);
+    expect(container.querySelector('[data-testid="lead-export-error"]')?.textContent).toBe(
+      'Export refused: the audit ledger would not record this export. Nothing was downloaded.',
+    );
+  });
+
   it('ignores a second click while the first receipt is in flight', async () => {
     let resolveReceipt: (receipt: LeadExportReceipt) => void = () => undefined;
     mocks.receipt.impl = (declaration) =>

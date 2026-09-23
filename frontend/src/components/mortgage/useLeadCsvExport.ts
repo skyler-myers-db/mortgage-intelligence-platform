@@ -15,7 +15,11 @@
  */
 import { useRef, useState } from 'react';
 import { api, ApiError, isAbortError } from '../../lib/api';
-import { buildLeadExportDeclaration, type LeadExportReceipt } from '../../lib/apiClients/leadExport';
+import {
+  buildLeadExportDeclaration,
+  LEAD_EXPORT_DIGEST_MISMATCH_DETAIL,
+  type LeadExportReceipt,
+} from '../../lib/apiClients/leadExport';
 import {
   buildLeadCsv,
   describeLeadCsvExport,
@@ -43,7 +47,11 @@ const EXPORT_NOT_DOWNLOADED = 'Nothing was downloaded.';
 export function describeLeadExportFailure(error: unknown): string {
   if (error instanceof ApiError) {
     if (error.status === 422) {
-      return `Export refused: the audit receipt did not match the file. ${EXPORT_NOT_DOWNLOADED}`;
+      // Only the server's digest check means the receipt and the file
+      // disagreed; a schema or metadata-policy 422 refused the request itself.
+      return error.message === LEAD_EXPORT_DIGEST_MISMATCH_DETAIL
+        ? `Export refused: the audit receipt did not match the file. ${EXPORT_NOT_DOWNLOADED}`
+        : `Export refused: the audit ledger would not record this export. ${EXPORT_NOT_DOWNLOADED}`;
     }
     if (error.status === 401 || error.status === 403) {
       return `Export not recorded: your session has no audit identity. ${EXPORT_NOT_DOWNLOADED}`;

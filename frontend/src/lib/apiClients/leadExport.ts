@@ -41,6 +41,15 @@ export interface LeadExportReceipt {
   recorded_at: string;
 }
 
+/**
+ * The constant 422 detail the server returns when the declaration does not
+ * describe the ids it sends (`EXPORT_DIGEST_MISMATCH_DETAIL` in
+ * backend/api/leads_export.py; tests/unit/test_leads_export_receipt.py pins
+ * the parity). Any other 422 is the schema or the audit store's metadata
+ * policy refusing the request, which is a different failure.
+ */
+export const LEAD_EXPORT_DIGEST_MISMATCH_DETAIL = 'export declaration does not match the borrower id list';
+
 const FILTER_KEY_RE = /^[a-z][a-z0-9_]{0,63}$/;
 
 /** Hex SHA-256 of a UTF-8 string through WebCrypto; throws where it is unavailable. */
