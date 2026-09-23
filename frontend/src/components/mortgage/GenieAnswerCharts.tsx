@@ -8,9 +8,25 @@ import {
   humanizeKey,
   isIdentifierColumn,
   level,
+  MAX_TABLE_ROWS,
   normalizeState,
   type ChartRow,
 } from './GenieAnswer.logic';
+
+/** Bars a bar chart draws before it truncates. */
+export const MAX_BAR_POINTS = 12;
+/** Points a line chart draws before it truncates. */
+export const MAX_LINE_POINTS = 24;
+
+/**
+ * Honest truncation caption (audit 2026-09-21 `genie-06`). The old caption
+ * promised "full N rows in the table below" while the table shows at most
+ * MAX_TABLE_ROWS, so it names both real caps.
+ */
+export function chartTruncationCaption(shown: number, total: number, unit: 'rows' | 'points'): string {
+  const tableRows = Math.min(MAX_TABLE_ROWS, total);
+  return `Chart shows the top ${shown} of ${total} ${unit}; the table below shows ${tableRows} of ${total} rows.`;
+}
 import { loadUsaStateMap } from './USStateMapData';
 import type { UsaSvgMap } from './USChoroplethMap.utils';
 import { offerDisplayLabel } from '../../lib/offerLanguage';
@@ -46,7 +62,7 @@ export function GenieBarChart({
   labelCol: string;
   valueCol: string;
 }) {
-  const MAX_BARS = 12;
+  const MAX_BARS = MAX_BAR_POINTS;
   const bars = data.slice(0, MAX_BARS);
   const maxV = Math.max(1, ...bars.map((b) => b.value));
   const rowH = 22;
@@ -117,16 +133,14 @@ export function GenieBarChart({
         })}
       </svg>
       {data.length > MAX_BARS && (
-        <div className="genie-chart__more">
-          chart shows top {MAX_BARS}; full {data.length} rows in the table below
-        </div>
+        <div className="genie-chart__more">{chartTruncationCaption(MAX_BARS, data.length, 'rows')}</div>
       )}
     </div>
   );
 }
 
 export function GenieLineChart({ data, labelCol, valueCol }: { data: ChartRow[]; labelCol: string; valueCol: string }) {
-  const points = data.slice(0, 24);
+  const points = data.slice(0, MAX_LINE_POINTS);
   const maxV = Math.max(1, ...points.map((p) => p.value));
   const minV = Math.min(0, ...points.map((p) => p.value));
   const width = 520;
@@ -154,6 +168,9 @@ export function GenieLineChart({ data, labelCol, valueCol }: { data: ChartRow[];
         {points[0] && <text x="0" y={height + 24} className="genie-line__axis">{points[0].label}</text>}
         {points[points.length - 1] && <text x={width} y={height + 24} textAnchor="end" className="genie-line__axis">{points[points.length - 1].label}</text>}
       </svg>
+      {data.length > MAX_LINE_POINTS && (
+        <div className="genie-chart__more">{chartTruncationCaption(MAX_LINE_POINTS, data.length, 'points')}</div>
+      )}
     </div>
   );
 }
