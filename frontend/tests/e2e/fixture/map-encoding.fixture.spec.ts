@@ -132,6 +132,29 @@ async function keyboardDrill(page: Page, stateId: string): Promise<void> {
   await page.keyboard.press('Enter');
 }
 
+/** Fraction of a state's fill (sampled on a 40 x 40 grid) that the legend box covers. */
+async function legendCoverage(page: Page, stateId: string): Promise<number> {
+  return page.evaluate((id) => {
+    const legend = document.querySelector('.map-legend')?.getBoundingClientRect();
+    const shape = document.querySelector<SVGPathElement>(`path[data-map-unit="${id}"]`);
+    const ctm = shape?.getScreenCTM();
+    if (!legend || !shape || !ctm) throw new Error(`legend or ${id} not laid out`);
+    const box = shape.getBBox();
+    let inside = 0;
+    let covered = 0;
+    for (let i = 0; i < 40; i += 1) {
+      for (let j = 0; j < 40; j += 1) {
+        const point = new DOMPoint(box.x + (box.width * (i + 0.5)) / 40, box.y + (box.height * (j + 0.5)) / 40);
+        if (!shape.isPointInFill(point)) continue;
+        inside += 1;
+        const screen = point.matrixTransform(ctm);
+        if (screen.x >= legend.left && screen.x <= legend.right && screen.y >= legend.top && screen.y <= legend.bottom) covered += 1;
+      }
+    }
+    return inside === 0 ? 1 : covered / inside;
+  }, stateId);
+}
+
 /** Focus is on exactly one element inside the map, not lost to <body>. */
 async function expectFocusInMap(page: Page): Promise<void> {
   await expect(page.locator('.map-wrap :focus')).toHaveCount(1);
@@ -299,6 +322,10 @@ test.describe('keyboard, screen reader and table access (a11y-04)', () => {
       await expect(focused).toHaveAttribute('data-map-unit', 'az');
       await expect(focused).toHaveAttribute('aria-label', /^Arizona: 9,040 marketable borrowers, average opportunity score 78/);
       await expect(page.locator('.map-tip .map-tip__name')).toHaveText('Arizona');
+      // The keyboard hint the focus reveals wraps inside the legend instead of
+      // widening it over the first tab stop (it covered ~45% of Arizona).
+      await expect(page.locator('.map-legend__hint')).toBeVisible();
+      expect(await legendCoverage(page, 'az')).toBe(0);
 
       await page.keyboard.press('ArrowRight');
       await expect(page.locator('path[data-map-unit]:focus')).toHaveAttribute('data-map-unit', 'ar');
@@ -317,6 +344,22 @@ test.describe('keyboard, screen reader and table access (a11y-04)', () => {
 
       const focusedMap = await new AxeBuilder({ page }).include('.map-wrap').include('.map-tip').withTags(WCAG_TAGS).analyze();
       expect(focusedMap.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`)).toEqual([]);
+
+      // Escape hides the card and stops there, so the same keypress never also
+      // reaches a window listener (an open menu's); with no card it does.
+      await page.evaluate(() => {
+        const probe = window as Window & { mapEscapes?: number };
+        probe.mapEscapes = 0;
+        window.addEventListener('keydown', (event) => {
+          if (event.key === 'Escape') probe.mapEscapes = (probe.mapEscapes ?? 0) + 1;
+        });
+      });
+      const windowEscapes = () => page.evaluate(() => (window as Window & { mapEscapes?: number }).mapEscapes);
+      await page.keyboard.press('Escape');
+      await expect(page.locator('.map-tip')).toHaveCount(0);
+      expect(await windowEscapes()).toBe(0);
+      await page.keyboard.press('Escape');
+      expect(await windowEscapes()).toBe(1);
 
       // One more Tab leaves the map (51 states were 51 Tab stops).
       await page.keyboard.press('Tab');
@@ -378,6 +421,12 @@ test.describe('keyboard, screen reader and table access (a11y-04)', () => {
       await expect(page.getByTestId('map-table-total')).toHaveText((stateByCode('TX')?.addressable ?? 0).toLocaleString('en-US'));
       await expect(page.getByRole('table', { name: /^Marketable borrowers by ZIP in Texas/ })).toBeFocused();
       await expectFocusInMap(page);
+      // The ZIP rows scroll inside the map; the total row stays in view.
+      const scroller = page.getByTestId('map-table');
+      expect(await scroller.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
+      const [scrollBox, totalBox] = await Promise.all([scroller.boundingBox(), page.getByTestId('map-table-total').boundingBox()]);
+      if (!scrollBox || !totalBox) throw new Error('ZIP table not laid out');
+      expect(totalBox.y + totalBox.height).toBeLessThanOrEqual(scrollBox.y + scrollBox.height + 1);
       await page.getByRole('button', { name: 'View as map' }).click();
       await expect(page.getByRole('list', { name: 'ZIPs in Texas' })).toBeVisible();
     });

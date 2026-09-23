@@ -136,13 +136,8 @@ export function USChoroplethMapZipLevel({
       className="zip-tiles"
       role="list"
       aria-label={`ZIPs in ${drillStateName}`}
-      onKeyDown={(event) => {
-        if (event.key === 'Escape') {
-          setHover(null);
-          return;
-        }
-        moveRovingFocus(event);
-      }}
+      // Escape (hide the card) is handled once, by the map's .map-levels.
+      onKeyDown={moveRovingFocus}
     >
       {visible.map((rollup, tileIndex) => {
         const count = rollup.addressable_borrowers ?? null;

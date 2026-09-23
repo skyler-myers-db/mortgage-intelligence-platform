@@ -433,7 +433,19 @@ export function USChoroplethMap({
           replays. `.map-levels` occupies `.map-wrap`'s flex:1 slot and its
           child stage fills it. Not busy while a rollup is warming up or
           failed: aria-busy would silence the WarmingUpBlock's live region. */}
-      <div className="map-levels" key={level} aria-busy={mapBusy}>
+      <div
+        className="map-levels"
+        key={level}
+        aria-busy={mapBusy}
+        // Escape hides an open card and stops there, so the same keypress
+        // never also closes a menu that listens on window; with no card it
+        // passes through.
+        onKeyDown={(event) => {
+          if (event.key !== 'Escape' || hover === null) return;
+          setHover(null);
+          event.stopPropagation();
+        }}
+      >
         <div className="map-status" role="status" aria-live="polite">
           {mapStatus}
         </div>

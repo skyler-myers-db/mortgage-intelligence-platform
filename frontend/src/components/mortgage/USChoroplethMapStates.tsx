@@ -131,13 +131,8 @@ export function USChoroplethMapStates({
       className="map-svg-stage"
       role="group"
       aria-label="States: use the arrow keys to move between states"
-      onKeyDown={(event) => {
-        if (event.key === 'Escape') {
-          setHover(null);
-          return;
-        }
-        moveRovingFocus(event);
-      }}
+      // Escape (hide the card) is handled once, by the map's .map-levels.
+      onKeyDown={moveRovingFocus}
     >
       {views.map((view) => {
         const { location, rollup, cls } = view;
