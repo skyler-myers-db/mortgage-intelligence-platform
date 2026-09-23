@@ -45,6 +45,7 @@ from backend.services.genie_prompt_guardrails import (
     scope_bypass_prompt_match,
     source_gap_prompt_match,
 )
+from backend.services.genie_sales_ops import _sales_ops_question_kind
 
 ROOT = Path(__file__).resolve().parents[2]
 TEMPLATES_PATH = ROOT / "frontend" / "src" / "lib" / "genieContextTemplates.json"
@@ -168,3 +169,49 @@ def test_each_excluded_segment_is_still_refused() -> None:
     for code in _string_map("segmentsWithoutTemplates"):
         prompt = template.replace("{segment}", registry[code].lower())
         assert _intercepted(prompt) != [], f"{code} is answerable now; remove it from the exclusions"
+
+
+def _reachable_prompts() -> dict[str, str]:
+    """Every prompt the panel can prefill without the user typing a word."""
+
+    starters = _string_map("starters")
+    route_starters = _templates()["routeStarters"]
+    assert isinstance(route_starters, dict)
+    prompts: dict[str, str] = {}
+    for route, keys in route_starters.items():
+        assert isinstance(keys, list), route
+        for key in keys:
+            prompts[f"routeStarters[{route}].{key}"] = starters[str(key)]
+    for key, prompt in _string_map("kpiPrompts").items():
+        prompts[f"kpiPrompts.{key}"] = prompt
+    phrases = _segment_phrases()
+    for code, phrase in phrases.items():
+        prompts[f"segmentTemplate.{code}"] = _template("segmentTemplate").replace("{segment}", phrase)
+    for state in _state_names():
+        prompts[f"stateTemplate.{state}"] = _template("stateTemplate").replace("{state}", state)
+        lead = _template("leadTemplate").replace("{state}", state)
+        for code, phrase in phrases.items():
+            prompts[f"leadTemplate.{state}.{code}"] = lead.replace("{segment}", phrase)
+    return prompts
+
+
+def test_the_sales_ops_classifier_bites_on_a_gated_question() -> None:
+    """Non-vacuity: the classifier below does route a Sales Ops question."""
+
+    assert _sales_ops_question_kind("Show approved leads that have not been touched in 7 days.") == "aging"
+
+
+def test_no_prefilled_prompt_is_a_role_gated_sales_ops_question() -> None:
+    """A prefill that 403s for most actors is a dead end the product handed them.
+
+    Sales Ops questions route to an adapter that requires an active sales
+    manager or admin; there is no client-side role signal for that today, so
+    no route starter, KPI prompt or template rendering may be one of them.
+    """
+
+    gated = {
+        where: kind
+        for where, prompt in _reachable_prompts().items()
+        if (kind := _sales_ops_question_kind(prompt)) is not None
+    }
+    assert gated == {}
