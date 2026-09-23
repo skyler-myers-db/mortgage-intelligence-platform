@@ -279,7 +279,15 @@ export default function Home() {
             USChoroplethMap's design-contract note). Lead Queue remains the
             source-of-truth index for borrower selection. */}
         <div className="layoutA-grid home-geo">
-          <USChoroplethMap drillBehavior="filter" selection={mapSelection} onSelectionChange={setMapSelection} />
+          {/* 520 like Segments: beside the approval queue the map is ~760px
+              wide, its legend is a strip under the stage, and 420 left the
+              US about 250px tall. */}
+          <USChoroplethMap
+            drillBehavior="filter"
+            height={520}
+            selection={mapSelection}
+            onSelectionChange={setMapSelection}
+          />
           <div className="home-side">
             {/* States BOTH numbers — contactable of whole-book — because its
                 button opens the contactable-only queue (flow-v1). */}

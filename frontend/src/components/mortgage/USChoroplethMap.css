@@ -174,3 +174,45 @@
   width: max-content;
   margin: 0 var(--sp-3) var(--sp-3);
 }
+
+/* A narrow map (Home pairs it with the approval queue in the prototype's
+   1.4fr / 1fr .layoutA-grid, and any map shrinks with the Console open)
+   fills its stage with the SVG, so the overlay legend (count, breaks,
+   caption, keyboard hint) covered California, Nevada and Arizona, the
+   states' first tab stop. Below 1100px of map width the legend joins the
+   flow as a strip under the stage, as it already does for the ZIP grid and
+   the table. The keyboard hint's row is reserved and faded in (opacity, not
+   clipping), so focusing the map never reflows the stage, and the hint stays
+   in the accessibility tree exactly as before. Declared extension of the
+   prototype's overlay legend (Module 0 Prototype.html:882-891). */
+.map-wrap { container: map-wrap / inline-size; }
+@container map-wrap (max-width: 1100px) {
+  .map-wrap:has(.map-legend) .map-legend {
+    position: static;
+    width: auto;
+    margin: 0 var(--sp-3) var(--sp-3);
+    display: grid;
+    grid-template-columns: auto auto minmax(0, 1fr);
+    column-gap: var(--sp-4);
+    row-gap: var(--sp-1);
+    align-items: center;
+  }
+  .map-legend > * { grid-column: 1 / -1; }
+  .map-legend > .map-legend__header { grid-column: 1; grid-row: 1 / span 2; }
+  .map-legend > .map-legend__bar { grid-column: 2; grid-row: 1; margin: 0; }
+  .map-legend > .map-legend__range { grid-column: 2; grid-row: 2; }
+  .map-legend > .map-legend__caption:not(.map-legend__caption--degraded) {
+    grid-column: 3;
+    grid-row: 1 / span 2;
+  }
+  .map-legend__hint {
+    clip: auto;
+    clip-path: none;
+    overflow: visible;
+    white-space: normal;
+    width: auto;
+    height: auto;
+    opacity: 0;
+  }
+  .map-wrap:focus-within .map-legend__hint { opacity: 1; }
+}

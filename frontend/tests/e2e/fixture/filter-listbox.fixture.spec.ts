@@ -83,10 +83,13 @@ for (const theme of FIXTURE_THEMES) {
     test('a filter opened near the bottom edge of the viewport opens upward and stays in view', async ({ app, page }) => {
       await app.setTheme(theme);
       await app.gotoRoute('/lead-queue');
-      const trigger = stateFilter(page);
+      // APPROVAL, a short menu in the core pill row: since the wave-1b queue
+      // layout moved that row up to y~258, the 280px state menu no longer fits
+      // ABOVE its trigger either, so it cannot prove the flip.
+      const trigger = page.locator('button[aria-haspopup="listbox"][aria-label^="APPROVAL:"]').first();
 
       // Control at 1440x900: there is room below, so the menu opens downward.
-      const menu = await app.openFilterMenu('STATE');
+      const menu = await app.openFilterMenu('APPROVAL');
       const roomy = { trigger: await trigger.boundingBox(), menu: await menu.boundingBox() };
       if (!roomy.trigger || !roomy.menu) throw new Error('filter not laid out');
       expect(roomy.menu.y).toBeGreaterThanOrEqual(roomy.trigger.y + roomy.trigger.height);
@@ -107,7 +110,7 @@ for (const theme of FIXTURE_THEMES) {
 
       await trigger.focus();
       await page.keyboard.press('ArrowDown');
-      const flipped = page.getByRole('listbox', { name: 'STATE' });
+      const flipped = page.getByRole('listbox', { name: 'APPROVAL' });
       await expect(flipped).toBeVisible();
       await expect(flipped).toHaveClass(/filter-menu--up/);
       const box = await flipped.boundingBox();
