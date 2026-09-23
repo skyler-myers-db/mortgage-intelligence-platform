@@ -107,7 +107,12 @@ export function PropertyLookupPanel({ onNavigate, compact }: PropertyLookupPanel
   }
 
   return (
-    <section className="surface property-lookup" aria-busy={lookup.status === 'loading'}>
+    <section
+      // `--compact` lets the header wrap its audit chip and stacks the field
+      // grid so the panel fits the Console's ~266px track (09-console-and-layout.css).
+      className={`surface property-lookup${compact ? ' property-lookup--compact' : ''}`}
+      aria-busy={lookup.status === 'loading'}
+    >
       <div className="surface__hdr">
         <Icon name="search" size={14} className="icon-accent" />
         <div>
