@@ -3558,13 +3558,15 @@ CREATE TABLE IF NOT EXISTS mip_app.genie_refusal_reports (
                          'instruction_override', 'outreach_instruction', 'scope_bypass',
                          'out_of_scope', 'output_policy', 'unknown'
                      )),
+    -- Genie-issued ids only (32 hex, or a UUID): the one client-chosen
+    -- string on the row, so no free-form token fits.
     conversation_id  TEXT CHECK (
                          conversation_id IS NULL
-                         OR conversation_id ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+                         OR conversation_id ~* '^([0-9a-f]{32}|[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12})$'
                      ),
     message_id       TEXT CHECK (
                          message_id IS NULL
-                         OR message_id ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+                         OR message_id ~* '^([0-9a-f]{32}|[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12})$'
                      ),
     audit_event_id   UUID REFERENCES mip_app.action_audit(audit_id),
     reported_at      TIMESTAMPTZ NOT NULL DEFAULT now(),

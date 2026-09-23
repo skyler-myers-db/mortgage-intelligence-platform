@@ -310,7 +310,37 @@ def test_report_rejects_an_unknown_family_and_malformed_ids() -> None:
     )
     assert bad_id.status_code == 422
     assert "john" not in bad_id.text
+    # The ids are the only client-chosen strings on the row and in the audit
+    # metadata: a hyphen-joined prompt fits a loose "opaque token" shape, so
+    # only the shape Genie issues (32 hex or a UUID) is accepted.
+    for field, crafted in (
+        ("conversation_id", "target-hispanic-neighborhoods"),
+        ("message_id", "elderly-borrowers-in-ohio"),
+        ("conversation_id", "conv-1"),
+    ):
+        response = client.post(REPORT_PATH, json=_body(**{field: crafted}), headers=ACTOR_HEADERS)
+        assert response.status_code == 422, crafted
+        assert crafted not in response.text
     assert lakebase.reports == {}
+
+
+def test_report_accepts_the_id_shapes_genie_issues() -> None:
+    lakebase = _FakeLakebase()
+    _install(lakebase)
+
+    response = client.post(
+        REPORT_PATH,
+        json=_body(
+            conversation_id="01F13D4968AF1B249DC388FD5B18B195",
+            message_id="3f2b8c1e-9d4a-4f6b-8e2c-1a7d5b9c0e4f",
+        ),
+        headers=ACTOR_HEADERS,
+    )
+
+    assert response.status_code == 200, response.text
+    report = next(iter(lakebase.reports.values()))
+    assert report["conversation_id"] == "01F13D4968AF1B249DC388FD5B18B195"
+    assert report["message_id"] == "3f2b8c1e-9d4a-4f6b-8e2c-1a7d5b9c0e4f"
 
 
 def test_report_requires_json_and_surfaces_lakebase_outage_safely() -> None:

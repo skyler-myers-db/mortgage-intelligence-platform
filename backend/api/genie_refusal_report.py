@@ -3,10 +3,10 @@
 ``POST /api/genie/refusal-report`` records that a lender believes a governed
 refusal was a false positive. The body carries the coarse ``refusal_reason``
 and the ``refusal_report_hash`` from the refused turn, never the question:
-the schema has no text field, the hash is shape-validated, and the ids are
-opaque tokens. The route shares the ``/genie`` prefix so the backpressure
-classifier gives it the same "genie" budget as ``/api/genie/feedback``
-(audit 2026-09-21 ``genie-05``).
+the schema has no text field, the hash is shape-validated, and the ids must
+have the shape Genie issues (32 hex, or a UUID). The route shares the
+``/genie`` prefix so the backpressure classifier gives it the same "genie"
+budget as ``/api/genie/feedback`` (audit 2026-09-21 ``genie-05``).
 """
 
 from __future__ import annotations
@@ -31,7 +31,15 @@ router = APIRouter(prefix="/genie", tags=["genie"])
 
 LakebaseDep = Annotated[LakebaseClient, Depends(get_lakebase_client)]
 
-_OPAQUE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+# Genie issues 32-hex conversation and message ids; a UUID is accepted for
+# forward compatibility. Nothing else fits: these ids are the only
+# client-chosen strings that reach the report row and the audit metadata, so
+# a free-form token (hyphen-joined prompt words, say) must be refused, not
+# stored. lakebase/schema.sql carries the same CHECK.
+_GENIE_ID_RE = re.compile(
+    r"^(?:[0-9a-f]{32}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$",
+    re.IGNORECASE,
+)
 
 
 class GenieRefusalReportRequest(BaseModel):
@@ -56,16 +64,16 @@ class GenieRefusalReportResponse(BaseModel):
     audit_event_id: str | None = None
 
 
-def _validated_opaque_id(value: str | None, *, field_name: str) -> str | None:
+def _validated_genie_id(value: str | None, *, field_name: str) -> str | None:
     if value is None:
         return None
     stripped = value.strip()
     if not stripped:
         return None
-    if _OPAQUE_ID_RE.fullmatch(stripped) is None:
+    if _GENIE_ID_RE.fullmatch(stripped) is None:
         raise HTTPException(
             status_code=422,
-            detail=f"{field_name} must be an opaque Genie identifier",
+            detail=f"{field_name} must be a Genie-issued identifier",
         )
     return stripped
 
@@ -94,8 +102,8 @@ def genie_refusal_report(
             status_code=422,
             detail="question_hash must be the 64-hex refusal_report_hash of the refused turn",
         )
-    conversation_id = _validated_opaque_id(payload.conversation_id, field_name="conversation_id")
-    message_id = _validated_opaque_id(payload.message_id, field_name="message_id")
+    conversation_id = _validated_genie_id(payload.conversation_id, field_name="conversation_id")
+    message_id = _validated_genie_id(payload.message_id, field_name="message_id")
     try:
         record = record_genie_refusal_report(
             lakebase,

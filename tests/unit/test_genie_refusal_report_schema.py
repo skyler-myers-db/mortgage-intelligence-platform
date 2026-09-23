@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from backend.api import genie_refusal_report as genie_refusal_report_api
 from backend.services.genie_refusal_reason import GENIE_REFUSAL_REASONS
 from jobs import lakebase_migrate
 
@@ -56,3 +57,17 @@ def test_refusal_report_table_is_reachable_by_the_app_role() -> None:
         "INSERT",
         "UPDATE",
     )
+
+
+def test_refusal_report_id_checks_match_the_route_shape() -> None:
+    # The table CHECKs and the route validator admit the same Genie-issued id
+    # shape, so neither layer accepts a free-form token the other refuses.
+    ddl = _report_table_ddl()
+    sql_patterns = re.findall(r"(conversation_id|message_id) ~\* '\^(.*?)\$'", ddl)
+    assert [column for column, _ in sql_patterns] == ["conversation_id", "message_id"]
+    route_pattern = genie_refusal_report_api._GENIE_ID_RE.pattern
+    assert route_pattern.startswith("^") and route_pattern.endswith("$")
+    route_body = route_pattern[1:-1].replace("(?:", "(")
+    for _, sql_body in sql_patterns:
+        assert sql_body == route_body
+    assert genie_refusal_report_api._GENIE_ID_RE.flags & re.IGNORECASE
