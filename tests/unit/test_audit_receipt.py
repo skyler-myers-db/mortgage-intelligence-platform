@@ -180,9 +180,15 @@ def test_admin_reads_any_receipt_and_sees_the_stored_approver() -> None:
     assert response.json()["approver"] == ALICE
 
 
+# A fixed, well-formed UUID no write ever issued: a ``uuid4()`` here would
+# give every pytest-xdist worker a different test id and abort collection
+# under CI's ``-n auto``.
+_UNKNOWN_AUDIT_EVENT_ID = "00000000-0000-4000-8000-000000000000"
+
+
 @pytest.mark.parametrize(
     "audit_event_id",
-    [str(uuid4()), "evt-000000000000", "not%20an%20id", "alice@summit.example"],
+    [_UNKNOWN_AUDIT_EVENT_ID, "evt-000000000000", "not%20an%20id", "alice@summit.example"],
 )
 def test_unknown_or_malformed_ids_are_404(audit_event_id: str) -> None:
     response = _receipt(audit_event_id, CAROL_ADMIN)
