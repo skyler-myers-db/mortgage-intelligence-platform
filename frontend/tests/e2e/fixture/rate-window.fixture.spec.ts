@@ -3,7 +3,8 @@
  * Analytics Executive tab, rendered against the synthetic 60-week series in
  * data/rateWindow.ts. Pins the rendered layer: two stacked panels on one
  * x-axis, the spread sentence for the fixture's numbers, the labelled spread
- * screen line, the mark colours against their legend, the axis geometry at
+ * screen line, the mark colours against their legend, the spread screen's
+ * contrast in both themes, the axis geometry at
  * 1440 / 1280 / 390, the parallel request, the evidence chip's drawer
  * destination, the warming-up degraded state and the table alternative.
  */
@@ -52,6 +53,92 @@ async function axisGeometry(page: Page): Promise<AxisGeometry> {
     };
   });
 }
+
+type Rgb = [number, number, number];
+
+interface ScreenInk {
+  surface: Rgb;
+  bandOverSurface: Rgb;
+  label: Rgb;
+  line: Rgb;
+  swatch: Rgb;
+  market: Rgb;
+  median: Rgb;
+}
+
+/**
+ * The painted colours around the spread screen, resolved to 8-bit sRGB by a
+ * canvas so computed color-mix()/oklab() values compare like hex ones. The
+ * surface is the first painted background at or above the panel (it must be
+ * opaque); every mark is composited over it, and the book band is too,
+ * because the reference label can sit on the band.
+ */
+async function screenInk(page: Page): Promise<ScreenInk> {
+  return page.getByTestId('rate-window').evaluate((root) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 1;
+    canvas.height = 1;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) throw new Error('2d canvas unavailable');
+    const paint = (layers: string[]): [number, number, number, number] => {
+      ctx.clearRect(0, 0, 1, 1);
+      for (const css of layers) {
+        ctx.fillStyle = 'rgb(1, 2, 3)';
+        const sentinel = ctx.fillStyle;
+        ctx.fillStyle = css;
+        if (ctx.fillStyle === sentinel) throw new Error(`canvas could not parse the colour ${css}`);
+        ctx.fillRect(0, 0, 1, 1);
+      }
+      const [r, g, b, a] = ctx.getImageData(0, 0, 1, 1).data;
+      return [r, g, b, a];
+    };
+    let surface: string | null = null;
+    for (let el: Element | null = root; el && surface === null; el = el.parentElement) {
+      const background = getComputedStyle(el).backgroundColor;
+      const alpha = paint([background])[3];
+      if (alpha === 0) continue;
+      if (alpha < 255) throw new Error(`the first painted background behind the rate window is translucent: ${background}`);
+      surface = background;
+    }
+    if (surface === null) throw new Error('no painted background behind the rate window');
+    const base = surface;
+    const style = (selector: string) => {
+      const el = root.querySelector(selector);
+      if (!el) throw new Error(`missing ${selector}`);
+      return getComputedStyle(el);
+    };
+    const over = (...layers: string[]): [number, number, number] => {
+      const [r, g, b] = paint([base, ...layers]);
+      return [r, g, b];
+    };
+    return {
+      surface: over(),
+      bandOverSurface: over(style('polygon.rate-window__band').fill),
+      label: over(style('[data-testid="rate-window-threshold"]').color),
+      line: over(style('line.rate-window__threshold').stroke),
+      swatch: over(style('.rate-window__swatch--threshold').backgroundColor),
+      market: over(style('polyline.rate-window__market').stroke),
+      median: over(style('polyline.rate-window__median').stroke),
+    };
+  });
+}
+
+/** WCAG 2.x contrast ratio between two opaque sRGB colours. */
+function contrastRatio(a: Rgb, b: Rgb): number {
+  const luminance = (rgb: Rgb) => {
+    const [r, g, bl] = rgb.map((channel) => {
+      const s = channel / 255;
+      return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * bl;
+  };
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+/** Largest per-channel difference: a coarse "reads as a different colour" floor. */
+const channelGap = (a: Rgb, b: Rgb) => Math.max(...a.map((channel, idx) => Math.abs(channel - b[idx])));
+const fmtRgb = (c: Rgb) => `rgb(${c.join(', ')})`;
 
 const intersects = (a: Box, b: Box) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
 const inside = (inner: Box, outer: Box) =>
@@ -124,6 +211,31 @@ test.describe('analytics executive: why-now rate window', () => {
     expect(colours.median, 'median and market are distinct encodings').not.toBe(colours.market);
     expect(colours.market, 'market stroke matches its legend swatch').toBe(colours.marketSwatch);
   });
+
+  // dataviz-06: the labelled threshold is the deliverable, so it must be
+  // readable in both themes. --status-warning-ink alone measured 1.44:1 on the
+  // light theme's white panel.
+  for (const theme of ['light', 'dark'] as const) {
+    test(`${theme} theme: the spread screen's label and line clear WCAG contrast and stay distinct from the market and median`, async ({ app, page }) => {
+      await app.setTheme(theme);
+      await app.gotoRoute('/analytics');
+      await expect(page.getByTestId('rate-window-threshold')).toBeVisible();
+
+      const ink = await screenInk(page);
+      const labelOnPanel = contrastRatio(ink.label, ink.surface);
+      const labelOnBand = contrastRatio(ink.label, ink.bandOverSurface);
+      const lineOnPanel = contrastRatio(ink.line, ink.surface);
+      expect(labelOnPanel, `label ${fmtRgb(ink.label)} on panel ${fmtRgb(ink.surface)}: ${labelOnPanel.toFixed(2)}:1 (WCAG 1.4.3)`).toBeGreaterThanOrEqual(4.5);
+      expect(labelOnBand, `label ${fmtRgb(ink.label)} over the book band ${fmtRgb(ink.bandOverSurface)}: ${labelOnBand.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5);
+      expect(lineOnPanel, `line ${fmtRgb(ink.line)} on panel ${fmtRgb(ink.surface)}: ${lineOnPanel.toFixed(2)}:1 (WCAG 1.4.11)`).toBeGreaterThanOrEqual(3);
+
+      // One encoding: the label, the line and the legend swatch are one colour.
+      expect(ink.label, 'label and line share the spread-screen ink').toEqual(ink.line);
+      expect(ink.swatch, 'legend swatch names the line colour').toEqual(ink.line);
+      expect(channelGap(ink.line, ink.market), `spread screen ${fmtRgb(ink.line)} vs market ${fmtRgb(ink.market)}`).toBeGreaterThanOrEqual(48);
+      expect(channelGap(ink.line, ink.median), `spread screen ${fmtRgb(ink.line)} vs median ${fmtRgb(ink.median)}`).toBeGreaterThanOrEqual(48);
+    });
+  }
 
   for (const width of [1440, 1280]) {
     test(`at ${width}px the shared axis keeps every month label inside the panel and off the y-ticks`, async ({ app, page }) => {

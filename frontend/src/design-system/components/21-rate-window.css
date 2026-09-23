@@ -6,6 +6,20 @@
    with the analytics chart chrome (.analytics-chart__*) and tokens.
    Two stacked panels share one x-axis; never a dual axis.
    ============================================================ */
+/* The spread-screen ink (line, label, legend swatch). --status-warning-ink
+   (#FCD34D) is defined once, for the dark surfaces, and measured 1.44:1 as
+   label text and as the line on the light theme's white panel (WCAG 1.4.3
+   needs 4.5:1, 1.4.11 needs 3:1). The light theme darkens the warning hue
+   toward --text-1 rather than borrowing the navy the warning chips use
+   (02-chips-kpi-segments.css), which would read as the market line
+   (--accent) or the median (--text-3). At 45% it measures about 6.8:1 on
+   white and still clears 4.5:1 over the book band the label can sit on. */
+.rate-window {
+  --rate-window-screen-ink: var(--status-warning-ink);
+}
+[data-theme="light"] .rate-window {
+  --rate-window-screen-ink: color-mix(in oklab, var(--signal-warning) 45%, var(--text-1));
+}
 .rate-window__actions {
   display: flex;
   align-items: center;
@@ -76,7 +90,7 @@
   stroke-width: 2.4;
 }
 .rate-window__threshold {
-  stroke: var(--status-warning-ink);
+  stroke: var(--rate-window-screen-ink);
   stroke-width: 1.5;
   stroke-dasharray: 6 4;
 }
@@ -102,7 +116,7 @@
   inset-inline-start: var(--sp-2);
   inset-block-start: var(--tick-pos);
   transform: translateY(calc(-100% - var(--sp-1)));
-  color: var(--status-warning-ink);
+  color: var(--rate-window-screen-ink);
 }
 .rate-window__current {
   inset-inline-end: 0;
@@ -145,7 +159,7 @@
 }
 .rate-window__swatch--median { background: var(--text-3); }
 .rate-window__swatch--band { block-size: var(--sp-2); background: var(--accent-soft); }
-.rate-window__swatch--threshold { background: var(--status-warning-ink); }
+.rate-window__swatch--threshold { background: var(--rate-window-screen-ink); }
 .rate-window__asof {
   margin-top: var(--sp-3);
 }
