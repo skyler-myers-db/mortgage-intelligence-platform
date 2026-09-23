@@ -1,8 +1,13 @@
 import { clearGenieConversationState } from './genieConversation';
 import { GENIE_CONVERSATION_TURNS_KEY, clearGenieTurns } from './genieConversationStore';
+import { SINGLE_KEY_SHORTCUTS_STORAGE_KEY, clearSingleKeyShortcutsPreference } from './keymapPreference';
 import { clearPinnedInsights } from './pinnedInsights';
 
-export const ACTOR_SCOPED_LOCAL_STORAGE_KEYS = ['mip.lastBorrowerId'] as const;
+export const ACTOR_SCOPED_LOCAL_STORAGE_KEYS = [
+  'mip.lastBorrowerId',
+  // The Console "Single-key shortcuts" choice (WCAG 2.1.4) is per actor.
+  SINGLE_KEY_SHORTCUTS_STORAGE_KEY,
+] as const;
 export const ACTOR_SCOPED_SESSION_STORAGE_KEYS = [
   'mip.bulkApprove.lastCancelled',
   // Genie transcript. Actor-scoped: one operator's questions and answers must
@@ -34,4 +39,6 @@ export function clearActorScopedBrowserState(): void {
   // Personal pinned insights (Buyer-Wow #9) are actor-scoped — clear them on
   // an actor change so one operator's pins never bleed into another session.
   clearPinnedInsights();
+  // Drop the cached single-key choice too, so mounted shortcuts re-read it.
+  clearSingleKeyShortcutsPreference();
 }
