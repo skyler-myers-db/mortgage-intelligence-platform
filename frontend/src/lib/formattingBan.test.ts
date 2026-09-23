@@ -44,12 +44,18 @@ function isFormattingConfig(value: unknown): value is FormattingConfig {
 let config: FormattingConfig;
 let eslint: ESLint;
 
+// Loading eslint.config.js pulls in the typescript-eslint and react-hooks
+// plugins, and every calculateConfigForFile resolves the whole flat config:
+// on a loaded CI box either one alone can pass the 10 s hook / 5 s test
+// defaults, which are sized for unit code, not for a linter.
+const ESLINT_BUDGET_MS = 60_000;
+
 beforeAll(async () => {
   const loaded: unknown = await import(/* @vite-ignore */ CONFIG_URL.href);
   if (!isFormattingConfig(loaded)) throw new Error('eslint.config.js no longer exports the formatting ban');
   config = loaded;
   eslint = new ESLint({ cwd: FRONTEND });
-});
+}, ESLINT_BUDGET_MS);
 
 /** The effective severity of no-restricted-syntax for a file under the real config. */
 async function banSeverity(file: string): Promise<number> {
@@ -85,7 +91,7 @@ function banViolations(code: string, filename = 'probe.tsx'): string[] {
   return messages.filter((message) => message.ruleId === 'no-restricted-syntax').map((message) => message.message);
 }
 
-describe('formatting ban wiring', () => {
+describe('formatting ban wiring', { timeout: ESLINT_BUDGET_MS }, () => {
   it('is an error for ordinary route and component source', async () => {
     expect(await banSeverity('src/routes/home.tsx')).toBe(2);
     expect(await banSeverity('src/routes/analytics.sections.tsx')).toBe(2);
@@ -109,7 +115,7 @@ describe('formatting ban wiring', () => {
   });
 });
 
-describe('formatting ban selectors', () => {
+describe('formatting ban selectors', { timeout: ESLINT_BUDGET_MS }, () => {
   it('catches every banned shape', () => {
     const cases: Array<[string, string]> = [
       ['const a = n.toLocaleString();', 'bare toLocaleString'],
@@ -139,7 +145,7 @@ describe('formatting ban selectors', () => {
   });
 });
 
-describe('FORMATTING_ALLOWLIST ratchet', () => {
+describe('FORMATTING_ALLOWLIST ratchet', { timeout: ESLINT_BUDGET_MS }, () => {
   it('lists only files that exist', () => {
     for (const file of Object.keys(config.FORMATTING_ALLOWLIST)) {
       expect(existsSync(`${FRONTEND}${file}`), `${file} no longer exists: remove its entry`).toBe(true);
