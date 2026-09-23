@@ -13,6 +13,7 @@ import { LeadRowWorkflowPanel } from './LeadRowWorkflowPanel';
 import { LEAD_TABLE_COLUMNS, type LeadTableColumnKey, type LeadTableView } from './LeadTable.columns';
 import { LeadTableOverflowChip } from './LeadTableOverflowChip';
 import {
+  LeadAssignmentCell,
   LeadRelationshipCell,
   LeadStatusCell,
   LeadWorkflowFieldCell,
@@ -149,14 +150,12 @@ export function LeadTableRow({
       </td>
     ),
     relationship: () => <LeadRelationshipCell lead={lead} onExpand={expand} />,
-    assignment: () => (
-      <LeadWorkflowFieldCell lead={lead} keys={['assignment']} noun={['assignment detail', 'assignment details']} empty="Unassigned" onExpand={expand} />
-    ),
+    assignment: () => <LeadAssignmentCell lead={lead} onExpand={expand} />,
     outreach: () => (
-      <LeadWorkflowFieldCell lead={lead} keys={['outreach', 'aging']} noun={['outreach detail', 'outreach details']} empty="No outreach" onExpand={expand} />
+      <LeadWorkflowFieldCell lead={lead} keys={['outreach', 'aging']} noun={['outreach detail', 'outreach details']} title="Outreach" empty="No outreach" onExpand={expand} />
     ),
     lastTouch: () => (
-      <LeadWorkflowFieldCell lead={lead} keys={['last_touch']} noun={['contact detail', 'contact details']} empty="No contact logged" onExpand={expand} />
+      <LeadWorkflowFieldCell lead={lead} keys={['last_touch']} noun={['contact detail', 'contact details']} title="Last touch" empty="No contact logged" onExpand={expand} />
     ),
     segments: () => (
       <td>

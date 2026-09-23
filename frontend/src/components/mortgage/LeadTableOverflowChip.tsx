@@ -13,6 +13,8 @@ export interface LeadOverflowItem {
   field: string;
   /** Value text ("Sent", "HELOC Intent"). */
   value: string;
+  /** The table the value is read from ("mip_app.call_dispositions"). */
+  source?: string;
 }
 
 /**
@@ -41,9 +43,14 @@ export function LeadTableOverflowChip({
   onActivate: () => void;
 }) {
   const summary = items.map((item) => item.value).join(' · ');
+  const itemSources = [...new Set(items.flatMap((item) => (item.source ? [item.source] : [])))];
   const cardSource: DrawerSource = {
     ...source,
-    signals: [{ label: `${items.length} more`, source: source.assetPath ?? source.title, value: summary }],
+    signals: [{
+      label: `${items.length} more`,
+      source: itemSources.length > 0 ? itemSources.join(', ') : source.assetPath ?? source.title,
+      value: summary,
+    }],
   };
   const { anchorRef, anchorHandlers, hoverCard } = useEvidenceHoverCard(items.length > 0 ? cardSource : undefined, {
     cta: OVERFLOW_HOVER_CTA,

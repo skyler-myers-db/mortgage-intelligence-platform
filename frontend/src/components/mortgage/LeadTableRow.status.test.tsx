@@ -14,7 +14,7 @@ import { act, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LeadSummary } from '../../types';
 import { LeadTableRow } from './LeadTableRow';
-import { leadComplianceFlags, leadWorkflowStates } from './LeadTable.status';
+import { leadAssignmentEntries, leadComplianceFlags, leadWorkflowStates } from './LeadTable.status';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -70,6 +70,10 @@ const quietLead: LeadSummary = {
   approval_status: 'pending',
   outreach_status: 'none',
 };
+
+function pick<K extends keyof LeadSummary>(lead: LeadSummary, keys: readonly K[]): Pick<LeadSummary, K> {
+  return Object.fromEntries(keys.map((key) => [key, lead[key]])) as Pick<LeadSummary, K>;
+}
 
 const busyLead: LeadSummary = {
   ...quietLead,
@@ -143,8 +147,47 @@ describe('LeadTableRow one-line cells', () => {
     expect(chips).toEqual(['Callback Scheduled', '+4']);
     expect(status().querySelector('.chip')?.classList.contains('chip--success')).toBe(true);
     expect(status().querySelector('.lead-table__more')?.getAttribute('aria-label')).toBe(
-      '4 more statuses: Outreach: Sent, Assigned to: Summit LO 01, Relationship: Current, Aging: 12d aging',
+      '4 more statuses: Outreach: Sent, Assigned to: Summit LO 01 (Assigned), Relationship: Current, Aging: 12d aging',
     );
+  });
+
+  it('names the lifecycle stage in the row: spoken with the assignee chip, listed by +n, and the Sales ops +n', () => {
+    const assignedOnly = { ...quietLead, ...pick(busyLead, ['assigned_to_email', 'assigned_to_label', 'assignment_status', 'assignment_id']) };
+    renderRow({ ...assignedOnly, assignment_status: 'contact_drafted' });
+    expect([...status().querySelectorAll('.chip__label')].map((el) => el.textContent)).toEqual(['Summit LO 01']);
+    // The chip stays one name wide; screen readers hear the stage with it.
+    expect(status().textContent).toBe('Summit LO 01, Contact drafted');
+    expect(status().querySelector('.sr-only')?.textContent).toBe(', Contact drafted');
+
+    renderRow({ ...assignedOnly, assignment_status: 'contact_drafted' }, { view: 'sales-ops' });
+    const cell = document.querySelector(`[data-testid="lead-assignment-${ID}"]`) as HTMLElement;
+    expect([...cell.querySelectorAll('.chip__label')].map((el) => el.textContent)).toEqual(['Summit LO 01', '+1']);
+    expect(cell.querySelector('.lead-table__more')?.getAttribute('aria-label')).toBe(
+      '1 more assignment detail: Stage: Contact drafted',
+    );
+    // The stage is the +n here, so it is not spoken twice.
+    expect(cell.querySelector('.sr-only')).toBeNull();
+
+    renderRow({ ...quietLead }, { view: 'sales-ops' });
+    const empty = document.querySelector(`[data-testid="lead-assignment-${ID}"]`) as HTMLElement;
+    expect(empty.textContent).toBe('—Unassigned');
+    expect(empty.querySelector('.chip')).toBeNull();
+  });
+
+  it('traces every workflow state to the table it is read from', () => {
+    expect(Object.fromEntries(leadWorkflowStates({ ...busyLead, owner_count: 3 }).map((entry) => [entry.key, entry.source]))).toEqual({
+      last_touch: 'mip_app.call_dispositions',
+      outreach: 'mip.gold.borrower_lifecycle_state',
+      assignment: 'mip_app.lead_assignments',
+      relationship: 'mip.gold.borrower_360',
+      aging: 'mip.gold.borrower_lifecycle_state',
+      multi_owner: 'mip.gold.borrower_360',
+    });
+    expect(leadAssignmentEntries(busyLead).map((entry) => [entry.key, entry.label, entry.qualifier])).toEqual([
+      ['assignment', 'Summit LO 01', undefined],
+      ['assignment_stage', 'Assigned', undefined],
+    ]);
+    expect(leadAssignmentEntries(quietLead)).toEqual([]);
   });
 
   it('keeps DNC in-row and out of +n even when the row has workflow state', () => {

@@ -38,14 +38,22 @@ export const QUEUE_LAYOUT_LEADS: readonly LeadSummary[] = LEADS.map((lead, index
   return lead;
 });
 
-/** Answer GET /api/leads with the layout population (any filter: layout specs do not filter). */
-export function registerQueueLayoutLeads(mockApi: MockApi): void {
-  mockApi.register<LeadSummary[]>('GET', '/api/leads', () =>
-    json<LeadSummary[]>([...QUEUE_LAYOUT_LEADS], {
+/**
+ * Answer GET /api/leads with the layout population (any filter: layout specs
+ * do not filter). `leads` is read on every request, so a test can change a
+ * row (an assignment advancing its lifecycle stage) and reload.
+ */
+export function registerQueueLayoutLeads(
+  mockApi: MockApi,
+  leads: () => readonly LeadSummary[] = () => QUEUE_LAYOUT_LEADS,
+): void {
+  mockApi.register<LeadSummary[]>('GET', '/api/leads', () => {
+    const rows = [...leads()];
+    return json<LeadSummary[]>(rows, {
       headers: {
         'X-Total-Matching': String(TOTALS.contactable),
-        'X-Returned-Rows': String(QUEUE_LAYOUT_LEADS.length),
+        'X-Returned-Rows': String(rows.length),
       },
-    }),
-  );
+    });
+  });
 }

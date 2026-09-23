@@ -22,15 +22,29 @@ export type LeadChipVariant = 'success' | 'warning' | 'neutral' | 'danger';
  * renders an em dash, never "Other / Unassigned / None / Untouched" chips.
  */
 export interface LeadStatusEntry {
-  key: 'last_touch' | 'outreach' | 'assignment' | 'relationship' | 'aging' | 'multi_owner';
+  key: 'last_touch' | 'outreach' | 'assignment' | 'assignment_stage' | 'relationship' | 'aging' | 'multi_owner';
   /** Field name used in the hover card and accessible names ("Outreach"). */
   field: string;
   /** Chip text ("Sent"). */
   label: string;
+  /**
+   * A fact the chip text leaves out for width: the assignment's lifecycle
+   * stage ("Contact drafted"). Screen readers hear it with the chip, and a
+   * `+n` that folds the entry lists it with the label.
+   */
+  qualifier?: string;
   variant: LeadChipVariant;
   /** Full sentence for `title` and screen readers. */
   detail: string;
+  /** The table or view the value is read from, for the `+n` hover card. */
+  source: string;
 }
+
+/** Where each workflow value comes from (the `/api/leads` read and its Lakebase overlay). */
+const BORROWER_360 = 'mip.gold.borrower_360';
+const LIFECYCLE_STATE = 'mip.gold.borrower_lifecycle_state';
+const LEAD_ASSIGNMENTS = 'mip_app.lead_assignments';
+const CALL_DISPOSITIONS = 'mip_app.call_dispositions';
 
 /**
  * Priority is lifecycle recency: the latest human contact outcome, then what
@@ -47,6 +61,7 @@ export function leadWorkflowStates(lead: LeadSummary): LeadStatusEntry[] {
       label,
       variant: dispositionVariant(lead.latest_disposition_outcome),
       detail: `Last touch: ${label}`,
+      source: CALL_DISPOSITIONS,
     });
   }
   if (lead.outreach_status && lead.outreach_status !== 'none') {
@@ -57,6 +72,7 @@ export function leadWorkflowStates(lead: LeadSummary): LeadStatusEntry[] {
       label,
       variant: outreachVariant(lead.outreach_status),
       detail: `Outreach: ${label}`,
+      source: LIFECYCLE_STATE,
     });
   }
   if (lead.assigned_to_email) {
@@ -66,8 +82,10 @@ export function leadWorkflowStates(lead: LeadSummary): LeadStatusEntry[] {
       key: 'assignment',
       field: 'Assigned to',
       label: who,
+      qualifier: stage || undefined,
       variant: stage ? assignmentStatusVariant(lead.assignment_status) : 'success',
       detail: stage ? `Assigned to ${who} · ${stage}` : `Assigned to ${who}`,
+      source: LEAD_ASSIGNMENTS,
     });
   }
   const relationship = relationshipLabel(lead);
@@ -78,6 +96,7 @@ export function leadWorkflowStates(lead: LeadSummary): LeadStatusEntry[] {
       label: relationship,
       variant: relationshipVariant(lead),
       detail: `Relationship: ${relationship}`,
+      source: BORROWER_360,
     });
   }
   if (typeof lead.aging_days === 'number' && lead.aging_days > 7) {
@@ -87,6 +106,7 @@ export function leadWorkflowStates(lead: LeadSummary): LeadStatusEntry[] {
       label: `${lead.aging_days}d aging`,
       variant: 'warning',
       detail: `Aging: ${lead.aging_days} days`,
+      source: LIFECYCLE_STATE,
     });
   }
   if (typeof lead.owner_count === 'number' && lead.owner_count > 1) {
@@ -96,9 +116,34 @@ export function leadWorkflowStates(lead: LeadSummary): LeadStatusEntry[] {
       label: `Multi-owner (${lead.owner_count})`,
       variant: 'neutral',
       detail: `Multi-owner (${lead.owner_count})`,
+      source: BORROWER_360,
     });
   }
   return states;
+}
+
+/**
+ * The Sales ops Assigned-to cell (audit tables-05): the assignee is the one
+ * primary chip and the lifecycle stage is its `+n`, so the stage the old
+ * stacked column showed is still named in the row (hover card and
+ * accessible name) without a second chip on the line.
+ */
+export function leadAssignmentEntries(lead: LeadSummary): LeadStatusEntry[] {
+  const assignment = leadWorkflowStates(lead).find((entry) => entry.key === 'assignment');
+  if (!assignment) return [];
+  const { qualifier: stage, ...assignee } = assignment;
+  if (!stage) return [assignee];
+  return [
+    assignee,
+    {
+      key: 'assignment_stage',
+      field: 'Stage',
+      label: stage,
+      variant: assignment.variant,
+      detail: `Assignment stage: ${stage}`,
+      source: LEAD_ASSIGNMENTS,
+    },
+  ];
 }
 
 /**

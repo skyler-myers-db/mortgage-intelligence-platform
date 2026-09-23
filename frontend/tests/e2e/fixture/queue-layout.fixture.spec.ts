@@ -12,7 +12,8 @@
 import AxeBuilder from '@axe-core/playwright';
 import type { Locator, Page } from '@playwright/test';
 import { PRIMARY_BORROWER } from './data/borrowers';
-import { DNC_LEAD, UNRESOLVED_OWNER_LEAD, registerQueueLayoutLeads } from './data/queueLayout';
+import type { LeadSummary } from '../../../src/types';
+import { DNC_LEAD, QUEUE_LAYOUT_LEADS, UNRESOLVED_OWNER_LEAD, registerQueueLayoutLeads } from './data/queueLayout';
 import { FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
 
@@ -148,6 +149,42 @@ test.describe('one-line rows and the merged Status cell', () => {
     const panel = await app.openConsole();
     await panel.getByRole('button', { name: 'Compact' }).click();
     await expect.poll(() => rowHeight(row), 'compact row at --row-h').toBe(36);
+  });
+});
+
+test.describe('the assignment lifecycle stage is named in the row', () => {
+  // The same locators as the live regression (loan_officer_assignment.spec.ts):
+  // the Sales ops Assigned-to cell's +n names the stage, and the expanded
+  // row's workflow strip shows the stage chip. Proven here on the rendered
+  // DOM so the live spec cannot drift from the markup.
+  test('Sales ops names the stage on the Assigned-to +n and the workflow strip shows it; both follow an advance', async ({ app, page, mockApi }) => {
+    let stage: NonNullable<LeadSummary['assignment_status']> = 'assigned';
+    registerQueueLayoutLeads(mockApi, () => QUEUE_LAYOUT_LEADS.map((lead) => (
+      lead.borrower_id === DNC_LEAD.borrower_id ? { ...lead, assignment_status: stage } : lead
+    )));
+    const id = DNC_LEAD.borrower_id;
+    for (const [status, label] of [['assigned', 'Assigned'], ['contact_drafted', 'Contact drafted']] as const) {
+      stage = status;
+      await app.gotoRoute(`/lead-queue?view=sales-ops&borrower_ids=${encodeURIComponent(id)}`);
+      const row = page.locator('tr', { has: page.getByTestId(`lead-select-${id}`) });
+      await expect(row).toBeVisible();
+      const assignment = row.getByTestId(`lead-assignment-${id}`);
+      await expect(assignment.locator('.chip__label').first()).toHaveText('Summit LO 01');
+      const more = assignment.getByRole('button', { name: new RegExp(`Stage: ${label}$`) });
+      await expectReachable(more, `the Assigned-to +n naming ${label}`);
+      await expect(more).toHaveText('+1');
+
+      await page.getByRole('button', { name: `Toggle preview for lead ${id}` }).click();
+      const workflow = page.getByTestId(`lead-workflow-${id}`);
+      await expect(workflow).toBeVisible();
+      await expect(workflow.locator('.chip__label', { hasText: new RegExp(`^${label}$`) })).toBeVisible();
+    }
+
+    // Default view: the assignment folds behind the newer call outcome, and
+    // its +n still speaks the stage with the assignee.
+    await app.gotoRoute('/lead-queue');
+    const spoken = (await page.getByTestId(`lead-status-${id}`).locator('.lead-table__more').getAttribute('aria-label')) ?? '';
+    expect(spoken).toContain('Assigned to: Summit LO 01 (Contact drafted)');
   });
 });
 
