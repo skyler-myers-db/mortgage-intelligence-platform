@@ -32,6 +32,11 @@ from backend.services.genie_deterministic import (
 from backend.services.genie_message_policy import GenieMessageRequest
 from backend.services.genie_refusal_reason import refusal_report_hash
 from backend.services.lakebase import LakebaseError, get_lakebase_client
+from backend.services.repositories.databricks_genie_direct import (
+    _guide_response,
+    _trusted_sql_response,
+)
+from backend.services.repositories.databricks_genie_direct_responses import _data_gap_response
 from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
 
 client = TestClient(app)
@@ -260,6 +265,28 @@ def test_report_audit_joins_the_refused_prompt_ledger_row(
     assert metadata["refusal_reason"] == refusal_row.payload_json["refusal_reason"]
 
 
+def _assert_block_is_reported_and_joins(
+    response: GenieMessageResponse, payload: GenieMessageRequest
+) -> None:
+    ledger = InMemoryAuditStore()
+    blocked = _block_unsafe_genie_output(ledger, actor=ACTOR, payload=payload, response=response)
+    assert blocked.source == "policy_blocked"
+    # The block keeps the blocked turn's own id; that is what the card sends.
+    assert blocked.message_id == response.message_id
+    blocked_row = _single_ledger_row(ledger, "genie.response_blocked")
+
+    report_row = _report_from_refusal(_FakeLakebase(), blocked)
+
+    metadata = json.loads(report_row["metadata"])
+    assert metadata["question_hash"] == blocked_row.payload_json["question_hash"]
+    assert metadata["message_id"] == blocked_row.payload_json["message_id"]
+    assert report_row["entity_id"] == blocked_row.entity_id
+
+
+# Every id shape the server issues on a blockable turn must be reportable:
+# a Genie id, and the app's synthetic sales-ops / trusted-sql / guide /
+# data-gap message ids (the three hex-suffixed ones here also carry a
+# ten-digit run, so they join through the ledger's geniehash fallback).
 @pytest.mark.parametrize(
     "message_id",
     [
@@ -267,10 +294,15 @@ def test_report_audit_joins_the_refused_prompt_ledger_row(
         # A Genie id with a ten-digit run is not a public-safe audit id; the
         # ledger falls back to the question-seeded geniehash.
         _PHONE_SHAPED_GENIE_ID,
+        # Fresh like genie_sales_ops issues it; a fixed test id keeps xdist
+        # collection identical across workers.
+        pytest.param(f"sales-ops-{uuid4()}", id="sales-ops-uuid4"),
+        "trusted-sql-0123456789abcdef",
+        "guide-0123456789abcdef",
+        "data-gap-0123456789abcdef",
     ],
 )
 def test_report_audit_joins_the_response_blocked_ledger_row(message_id: str) -> None:
-    ledger = InMemoryAuditStore()
     payload = GenieMessageRequest(question="How many  In-The-Money borrowers are in Ohio?")
     live = GenieMessageResponse(
         conversation_id="01f13d4968af1b249dc388fd5b18b195",
@@ -281,15 +313,36 @@ def test_report_audit_joins_the_response_blocked_ledger_row(message_id: str) -> 
         trusted_assets=[],
         proof=GenieProof(),
     )
-    blocked = _block_unsafe_genie_output(ledger, actor=ACTOR, payload=payload, response=live)
-    assert blocked.source == "policy_blocked"
-    blocked_row = _single_ledger_row(ledger, "genie.response_blocked")
 
-    report_row = _report_from_refusal(_FakeLakebase(), blocked)
+    _assert_block_is_reported_and_joins(live, payload)
 
-    metadata = json.loads(report_row["metadata"])
-    assert metadata["question_hash"] == blocked_row.payload_json["question_hash"]
-    assert report_row["entity_id"] == blocked_row.entity_id
+
+def test_blocks_of_answers_built_by_the_real_constructors_are_reportable() -> None:
+    # Drift guard: if a constructor's synthetic id shape changes, the literal
+    # cases above keep passing while real blocks of that answer fail to report.
+    payload = GenieMessageRequest(question="What questions can I ask? Give me examples.")
+    guide = _guide_response(payload.question)
+    assert guide is not None
+    synthetic_turns = [
+        _trusted_sql_response(
+            question=payload.question,
+            sql_query="SELECT COUNT(*) AS borrowers FROM mip.gold.borrower_360",
+            trusted_assets=["mip.gold.borrower_360"],
+            rows=[],
+            answer="Unsafe generated text.",
+        ),
+        guide,
+        _data_gap_response(
+            question=payload.question,
+            answer="Unsafe generated text.",
+            trusted_assets=[],
+            known_data_gaps=[],
+        ),
+    ]
+    prefixes = [str(turn.message_id).rsplit("-", 1)[0] for turn in synthetic_turns]
+    assert prefixes == ["trusted-sql", "guide", "data-gap"]
+    for turn in synthetic_turns:
+        _assert_block_is_reported_and_joins(turn, payload)
 
 
 def test_replay_for_the_same_actor_hash_and_family_is_a_duplicate_without_a_second_audit() -> None:
@@ -374,11 +427,17 @@ def test_report_rejects_an_unknown_family_and_malformed_ids() -> None:
     assert "john" not in bad_id.text
     # The ids are the only client-chosen strings on the row and in the audit
     # metadata: a hyphen-joined prompt fits a loose "opaque token" shape, so
-    # only the shape Genie issues (32 hex or a UUID) is accepted.
+    # only the closed grammar of server-issued ids is accepted. A synthetic
+    # prefix does not open a free-form tail.
     for field, crafted in (
         ("conversation_id", "target-hispanic-neighborhoods"),
         ("message_id", "elderly-borrowers-in-ohio"),
         ("conversation_id", "conv-1"),
+        ("message_id", "guide-target-hispanic-neighborhoods"),
+        ("message_id", "sales-ops-elderly-borrowers-in-ohio"),
+        ("message_id", "trusted-sql-0123456789abcdef-elderly"),
+        ("message_id", "data-gap-0123456789abcde"),
+        ("conversation_id", "refused-0123456789abcdef"),
     ):
         response = client.post(REPORT_PATH, json=_body(**{field: crafted}), headers=ACTOR_HEADERS)
         assert response.status_code == 422, crafted

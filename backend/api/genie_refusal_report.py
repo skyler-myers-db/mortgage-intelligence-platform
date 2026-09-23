@@ -4,7 +4,8 @@
 refusal was a false positive. The body carries the coarse ``refusal_reason``
 and the ``refusal_report_hash`` from the refused turn, never the question:
 the schema has no text field, the hash is shape-validated, and the ids must
-have the shape Genie issues (32 hex, or a UUID). The route shares the
+have a shape the server issues (a Genie id, or one of the app's own synthetic
+message ids). The route shares the
 ``/genie`` prefix so the backpressure classifier gives it the same "genie"
 budget as ``/api/genie/feedback`` (audit 2026-09-21 ``genie-05``).
 """
@@ -31,13 +32,21 @@ router = APIRouter(prefix="/genie", tags=["genie"])
 
 LakebaseDep = Annotated[LakebaseClient, Depends(get_lakebase_client)]
 
-# Genie issues 32-hex conversation and message ids; a UUID is accepted for
-# forward compatibility. Nothing else fits: these ids are the only
-# client-chosen strings that reach the report row and the audit metadata, so
-# a free-form token (hyphen-joined prompt words, say) must be refused, not
-# stored. lakebase/schema.sql carries the same CHECK.
+# A closed grammar of the ids the server itself issues on a turn the card can
+# report. Genie issues 32-hex conversation and message ids (a UUID is accepted
+# for forward compatibility). A policy block keeps the blocked turn's own
+# message id, and the app's non-live answers carry synthetic ones:
+# ``sales-ops-<UUID>`` (genie_sales_ops) and ``trusted-sql-``, ``guide-`` or
+# ``data-gap-`` followed by the 16-hex question hash (databricks_genie_direct*).
+# Nothing else fits: these ids are the only client-chosen strings that reach
+# the report row and the audit metadata, so a free-form token (hyphen-joined
+# prompt words, say) must be refused, not stored. lakebase/schema.sql carries
+# the same CHECK.
 _GENIE_ID_RE = re.compile(
-    r"^(?:[0-9a-f]{32}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$",
+    r"^(?:[0-9a-f]{32}"
+    r"|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}"
+    r"|sales-ops-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}"
+    r"|(?:trusted-sql|guide|data-gap)-[0-9a-f]{16})$",
     re.IGNORECASE,
 )
 
@@ -73,7 +82,7 @@ def _validated_genie_id(value: str | None, *, field_name: str) -> str | None:
     if _GENIE_ID_RE.fullmatch(stripped) is None:
         raise HTTPException(
             status_code=422,
-            detail=f"{field_name} must be a Genie-issued identifier",
+            detail=f"{field_name} must be a server-issued Genie identifier",
         )
     return stripped
 

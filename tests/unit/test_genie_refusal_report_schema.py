@@ -60,7 +60,7 @@ def test_refusal_report_table_is_reachable_by_the_app_role() -> None:
 
 
 def test_refusal_report_id_checks_match_the_route_shape() -> None:
-    # The table CHECKs and the route validator admit the same Genie-issued id
+    # The table CHECKs and the route validator admit the same server-issued id
     # shape, so neither layer accepts a free-form token the other refuses.
     ddl = _report_table_ddl()
     sql_patterns = re.findall(r"(conversation_id|message_id) ~\* '\^(.*?)\$'", ddl)
