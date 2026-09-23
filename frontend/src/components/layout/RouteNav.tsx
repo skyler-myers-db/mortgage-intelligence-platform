@@ -1,9 +1,17 @@
 import { useQuery } from '@tanstack/react-query';
 import { NavLink } from 'react-router';
-import { Icon, type IconName } from '../Icon';
+import { Icon } from '../Icon';
 import { useApp } from '../AppContext';
 import { api } from '../../lib/api';
 import { preloadRouteForPath } from '../../lib/routePreloaders';
+import {
+  NAV_ROUTE_IDS,
+  ROUTES,
+  borrowerPath,
+  offerPath,
+  type AppPath,
+  type NavRouteId,
+} from '../../lib/routeMeta';
 import type { SessionResponse } from '../../types';
 
 /**
@@ -15,22 +23,16 @@ import type { SessionResponse } from '../../types';
  * reads as part of the same design system.
  */
 
-interface NavItem {
-  to: string;
-  label: string;
-  icon: IconName;
+/**
+ * Where a nav chip points. Labels and icons come from the route registry
+ * (lib/routeMeta, audit shell-08); only the two detail destinations are
+ * resolved here, to the last borrower the actor opened.
+ */
+function navTargetFor(id: NavRouteId, lastBorrowerId: string | null): AppPath {
+  if (id === 'borrowerIndex' && lastBorrowerId) return borrowerPath(lastBorrowerId);
+  if (id === 'offerIndex' && lastBorrowerId) return offerPath(lastBorrowerId);
+  return ROUTES[id].pattern;
 }
-
-const BASE_ITEMS: NavItem[] = [
-  { to: '/',                      label: 'Home',            icon: 'home' },
-  { to: '/analytics',             label: 'Analytics',       icon: 'flow' },
-  { to: '/portfolio-builder',     label: 'Portfolio',       icon: 'target' },
-  { to: '/segment-intelligence',  label: 'Segments',        icon: 'layers' },
-  { to: '/lead-queue',            label: 'Leads',           icon: 'user' },
-  { to: '/ask-genie',             label: 'Ask Genie',       icon: 'sparkle' },
-  { to: '/glossary',              label: 'Glossary',        icon: 'info' },
-  { to: '/admin-config',          label: 'Admin',           icon: 'settings' },
-];
 
 /**
  * Navigation observes the server-authoritative session query directly. TanStack
@@ -50,41 +52,24 @@ export function useAdminNavigationAccess(): boolean {
 export function RouteNav() {
   const { lastBorrowerId } = useApp();
   const canAccessAdmin = useAdminNavigationAccess();
-  const detailItems: NavItem[] = [
-    {
-      to: lastBorrowerId ? `/borrower-360/${lastBorrowerId}` : '/borrower-360',
-      label: 'Borrower 360',
-      icon: 'doc',
-    },
-    {
-      to: lastBorrowerId ? `/offer-orchestrator/${lastBorrowerId}` : '/offer-orchestrator',
-      label: 'Offer',
-      icon: 'bolt',
-    },
-  ];
-  const baseItems = canAccessAdmin
-    ? BASE_ITEMS
-    : BASE_ITEMS.filter((item) => item.to !== '/admin-config');
-  const items = [
-    ...baseItems.slice(0, 5),
-    ...detailItems,
-    ...baseItems.slice(5),
-  ];
+  const items = NAV_ROUTE_IDS
+    .filter((id) => canAccessAdmin || id !== 'admin')
+    .map((id) => ({ id, to: navTargetFor(id, lastBorrowerId), route: ROUTES[id] }));
   return (
     <nav aria-label="Main navigation" className="route-nav">
       {items.map((i) => {
         const end = i.to === '/';
         return (
           <NavLink
-            key={i.to}
+            key={i.id}
             to={i.to}
             end={end}
             onMouseEnter={() => preloadRouteForPath(i.to)}
             onFocus={() => preloadRouteForPath(i.to)}
             className={({ isActive }) => `filter ${isActive ? 'is-active' : ''}`}
           >
-            <Icon name={i.icon} size={12} />
-            <span className="filter__value">{i.label}</span>
+            <Icon name={i.route.icon} size={12} />
+            <span className="filter__value">{i.route.navLabel}</span>
           </NavLink>
         );
       })}

@@ -1,5 +1,6 @@
 import { lazyWithPreload, preloadBestEffort } from './lazyPreload';
 import { createIdlePreloader } from './prefetch';
+import { ROUTE_IDS, ROUTES, indexPathOf, type IndexPath, type RouteChunk, type RouteId } from './routeMeta';
 
 // Audit bundle-07: the Home hero map needs the state geometry chunk, which the
 // map used to request only from a mount effect, a fourth sequential fetch
@@ -29,19 +30,42 @@ export const OfferOrchestratorRoute = lazyWithPreload(() => import('../routes/of
 export const AskGenieRoute = lazyWithPreload(() => import('../routes/ask-genie'));
 export const AdminConfigRoute = lazyWithPreload(() => import('../routes/admin-config'));
 
-export const routePreloaders = {
-  '/': HomeRoute.preload,
-  '/analytics': AnalyticsRoute.preload,
-  '/data-estate/assets': AssetRoute.preload,
-  '/portfolio-builder': PortfolioBuilderRoute.preload,
-  '/segment-intelligence': SegmentIntelligenceRoute.preload,
-  '/lead-queue': LeadQueueRoute.preload,
-  '/borrower-360': Borrower360Route.preload,
-  '/glossary': GlossaryRoute.preload,
-  '/offer-orchestrator': OfferOrchestratorRoute.preload,
-  '/ask-genie': AskGenieRoute.preload,
-  '/admin-config': AdminConfigRoute.preload,
-} as const;
+/**
+ * The lazy module behind each route chunk. `satisfies` makes a chunk the
+ * registry names but nothing renders a compile error.
+ */
+export const ROUTE_CHUNKS = {
+  home: HomeRoute,
+  analytics: AnalyticsRoute,
+  asset: AssetRoute,
+  portfolio: PortfolioBuilderRoute,
+  segments: SegmentIntelligenceRoute,
+  leads: LeadQueueRoute,
+  borrower: Borrower360Route,
+  glossary: GlossaryRoute,
+  offer: OfferOrchestratorRoute,
+  askGenie: AskGenieRoute,
+  admin: AdminConfigRoute,
+} as const satisfies Record<RouteChunk, { preload: () => Promise<unknown> }>;
+
+type ChunkedRouteId = {
+  [Id in RouteId]: (typeof ROUTES)[Id] extends { chunk: RouteChunk } ? Id : never;
+}[RouteId];
+
+/** `/borrower-360` for `/borrower-360/:id`: the key a nav link preloads by. */
+export type PreloadPath = IndexPath<(typeof ROUTES)[ChunkedRouteId]['pattern']>;
+
+/**
+ * Route chunk preloaders keyed by index path, derived from the route registry
+ * (audit shell-08): a route added to `ROUTES` is preloadable by its nav link
+ * without a second hand-kept table.
+ */
+export const routePreloaders = Object.fromEntries(
+  ROUTE_IDS.flatMap((id) => {
+    const route: { pattern: string; chunk?: RouteChunk } = ROUTES[id];
+    return route.chunk ? [[indexPathOf(route.pattern), ROUTE_CHUNKS[route.chunk].preload]] : [];
+  }),
+) as Record<PreloadPath, () => Promise<unknown>>;
 
 export const preloadLikelyNextRoutes = createIdlePreloader(async () => {
   await Promise.all([
@@ -54,7 +78,7 @@ export const preloadLikelyNextRoutes = createIdlePreloader(async () => {
 
 export function preloadRouteForPath(path: string): void {
   const cleanPath = path.split(/[?#]/, 1)[0] || '/';
-  const key = (Object.keys(routePreloaders) as Array<keyof typeof routePreloaders>)
+  const key = (Object.keys(routePreloaders) as PreloadPath[])
     .find((candidate) => cleanPath === candidate || (candidate !== '/' && cleanPath.startsWith(`${candidate}/`)));
   if (key) preloadBestEffort(routePreloaders[key]);
 }
