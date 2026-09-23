@@ -131,7 +131,9 @@ export function GenieRefusalCard({
     <div
       className="genie-answer__refusal"
       role="group"
-      aria-label="What Genie can answer instead"
+      // The group holds the rewordings AND Edit question, the glossary link
+      // and the report control, so it is named for all of them.
+      aria-label="Refusal options"
       data-testid="genie-refusal-card"
       data-refusal-reason={reason}
     >

@@ -14,8 +14,9 @@
  *
  * Rendered-layer proofs the unit tests cannot give: the report button's
  * accessible name (WCAG 2.5.3), text contrast of the card's small text in
- * both themes (WCAG 1.4.3, computed against the composited background), and
- * the deep-dive route's own "Edit question" wiring.
+ * both themes (WCAG 1.4.3, computed against the composited background), the
+ * visible focus ring on the report confirmation after a keyboard report
+ * (WCAG 2.4.7), and the deep-dive route's own "Edit question" wiring.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -140,6 +141,8 @@ test.describe('Genie refusal card', () => {
       const dialog = page.getByRole('dialog', { name: 'Genie chat' });
       const composer = dialog.getByRole('textbox', { name: 'Ask Genie' });
       await expect(card).toHaveAttribute('data-refusal-reason', reason);
+      // Named for everything it holds, not only the rewordings.
+      await expect(card).toHaveAccessibleName('Refusal options');
       await expect(card).toContainText(SENTENCE_FRAGMENT[reason]);
       await expect(card.getByTestId('genie-refusal-chip')).toHaveCount(chips[reason].length);
       expect(await card.getByTestId('genie-refusal-chip').locator('.filter__value').allTextContents()).toEqual(
@@ -208,6 +211,44 @@ test.describe('Genie refusal card', () => {
         // Soft, so one run reports every element under AA, not only the first.
         expect.soft(sample.ratio, measured).toBeGreaterThanOrEqual(AA_NORMAL_TEXT);
       }
+    });
+  }
+
+  for (const theme of ['light', 'dark'] as const satisfies readonly FixtureTheme[]) {
+    test(`${theme} theme: a keyboard report lands focus on a ringed, AA-contrast confirmation`, async ({ app, page, mockApi }) => {
+      const reason: GenieRefusalReason = 'output_policy';
+      const question = REFUSED_QUESTIONS[reason];
+      mockApi.register('POST', SUBMIT_PATH, () => json<GenieSubmitResult>(refusedSubmit(reason, question)));
+      mockApi.register('POST', REPORT_PATH, () => json<GenieRefusalReportResult>(REFUSAL_REPORT_ACCEPTED));
+
+      await app.setTheme(theme);
+      await app.gotoRoute('/glossary');
+      await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+      const card = await askInPanel(page, app, question);
+      // Keyboard activation: the confirmation takes focus programmatically,
+      // and only a keyboard-led focus matches :focus-visible.
+      await card.getByRole('button', { name: REPORT_BUTTON_NAME }).focus();
+      await page.keyboard.press('Enter');
+      const confirmation = card.locator('.genie-answer__refusal-reported');
+      await expect(confirmation).toHaveText('Reported for review');
+      await expect(confirmation).toBeFocused();
+
+      const ring = await confirmation.evaluate((element) => {
+        const style = getComputedStyle(element);
+        return {
+          focusVisible: element.matches(':focus-visible'),
+          outlineStyle: style.outlineStyle,
+          outlineWidth: Number.parseFloat(style.outlineWidth),
+        };
+      });
+      expect(ring.focusVisible).toBe(true);
+      expect(ring.outlineStyle, 'the focused confirmation needs a visible ring').not.toBe('none');
+      expect(ring.outlineWidth).toBeGreaterThan(0);
+
+      const sample = await textContrast(confirmation);
+      const measured = `.genie-answer__refusal-reported in ${theme}: ${sample.text} on ${sample.background} = ${sample.ratio.toFixed(2)}:1`;
+      test.info().annotations.push({ type: 'contrast', description: measured });
+      expect(sample.ratio, measured).toBeGreaterThanOrEqual(AA_NORMAL_TEXT);
     });
   }
 

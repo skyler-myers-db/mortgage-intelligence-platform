@@ -74,6 +74,14 @@
   font-size: var(--fs-11);
   color: var(--text-3);
 }
+/* Focus moves here when the report succeeds (tabIndex -1). A keyboard user
+   sees where it went; the ring follows .topbar__search-kbd:focus-visible
+   (01-app-shell.css). A pointer click does not match :focus-visible. */
+.genie-answer__refusal-reported:focus-visible {
+  outline: calc(var(--sp-1) / 2) solid var(--accent);
+  outline-offset: calc(var(--sp-1) / 2);
+  border-radius: var(--r-sm);
+}
 .genie-answer__refusal-error {
   margin: 0;
   font-size: var(--fs-11);
