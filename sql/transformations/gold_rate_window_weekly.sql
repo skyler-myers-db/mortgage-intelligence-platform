@@ -117,6 +117,10 @@ book_cells AS (
 ),
 weeks AS (
   -- Every observed week, NOT just is_latest: the chart is the history.
+  -- A week without a print is dropped, never charted: the silver DDL says
+  -- NOT NULL, but a CTAS does not enforce it, and a NULL rate would reach
+  -- fn_rate_spread as "no signal" (0 bps, nobody in the money) and the app
+  -- as a dip to 0%.
   SELECT
     series_id,
     observation_week,
@@ -125,6 +129,8 @@ weeks AS (
     is_latest
   FROM mip.silver.market_rates_weekly
   WHERE series_id = 'MORTGAGE30US'
+    AND rate_pct IS NOT NULL
+    AND rate_fraction IS NOT NULL
 ),
 itm_by_week AS (
   SELECT

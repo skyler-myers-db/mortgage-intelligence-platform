@@ -139,6 +139,19 @@ def test_projection_keeps_empty_book_columns_null_and_counts_non_negative() -> N
     assert result.thresholds.min_equity_pct is None
 
 
+def test_a_week_without_a_print_is_skipped_not_drawn_at_zero() -> None:
+    client = _FakeSqlClient()
+    rows = _rows()
+    rows.insert(1, {**rows[0], "observation_week": "2026-04-09", "market_rate_pct": None, "itm_count": "0"})
+    client.rows = rows
+    repo = DatabricksRateWindowRepository(client)
+
+    result = repo.rate_window()
+
+    assert [w.week for w in result.weeks] == ["2026-04-06", "2026-04-13"]
+    assert all(w.market_rate_pct > 0 for w in result.weeks)
+
+
 def test_empty_series_is_an_empty_response_not_an_error() -> None:
     client = _FakeSqlClient()
     repo = DatabricksRateWindowRepository(client)

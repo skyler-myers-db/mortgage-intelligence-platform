@@ -150,12 +150,16 @@ class DatabricksRateWindowRepository:
         weeks: list[RateWindowWeek] = []
         for row in rows:
             week = _date_text(row.get("observation_week"))
-            if not week:
+            market_rate_pct = _float_or_none(row.get("market_rate_pct"))
+            # A week without a print is skipped, never coerced to 0.0: the
+            # chart would draw a dip to 0% the market never printed. The CTAS
+            # already drops NULL prints; this guards a table built before it.
+            if not week or market_rate_pct is None:
                 continue
             weeks.append(
                 RateWindowWeek(
                     week=week,
-                    market_rate_pct=_float_or_none(row.get("market_rate_pct")) or 0.0,
+                    market_rate_pct=market_rate_pct,
                     book_median_pct=_float_or_none(row.get("book_median_rate_pct")),
                     book_p25_pct=_float_or_none(row.get("book_p25_rate_pct")),
                     book_p75_pct=_float_or_none(row.get("book_p75_rate_pct")),

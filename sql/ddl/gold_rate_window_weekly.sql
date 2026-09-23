@@ -43,7 +43,10 @@
 --            runs a percentile over the multi-million-row book per request;
 --            it reads this table.
 --
--- Data contract reference: docs/data-contract-module0.md §3 (rate window).
+-- Contract:  pinned by tests/unit/test_rate_window_sql_contract.py; the
+--            header of sql/transformations/gold_rate_window_weekly.sql
+--            states the grain, the book gates and the reused in-the-money
+--            rule.
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS mip.gold.rate_window_weekly (

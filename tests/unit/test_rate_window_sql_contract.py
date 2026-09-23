@@ -75,6 +75,26 @@ def test_series_is_the_whole_fred_history_not_the_latest_row() -> None:
     assert re.search(r"\bw\.is_latest\b", body)
 
 
+def test_weeks_without_a_print_are_dropped_not_charted_as_zero() -> None:
+    body = _body()
+    weeks = re.search(r"\bweeks\s+AS\s*\((.*?)\n\),", body, re.DOTALL)
+    assert weeks, "could not locate the weeks CTE"
+    cte = weeks.group(1)
+    # A CTAS does not enforce silver's NOT NULL; a NULL print would read as a
+    # 0 bps spread (nobody in the money) and as a dip to 0% on the chart.
+    assert re.search(r"\brate_pct\s+IS\s+NOT\s+NULL\b", cte, re.IGNORECASE)
+    assert re.search(r"\brate_fraction\s+IS\s+NOT\s+NULL\b", cte, re.IGNORECASE)
+
+
+def test_ddl_cites_only_contracts_that_exist() -> None:
+    ddl = DDL.read_text(encoding="utf-8")
+    cited_paths = re.findall(r"\b((?:docs|sql|tests)/[\w./-]+\.(?:md|sql|py))\b", ddl)
+    assert cited_paths, "the DDL header names the contract that pins it"
+    for cited in cited_paths:
+        assert (REPO_ROOT / cited).exists(), f"{DDL.name} cites {cited}, which does not exist"
+    assert "data-contract-module0.md §3 (rate window)" not in ddl
+
+
 def test_book_is_fixed_rate_active_liens_behind_the_borrower_360_gates() -> None:
     body = _body()
     assert "mip.gold.borrower_360" in body
