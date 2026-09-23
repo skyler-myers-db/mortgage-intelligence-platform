@@ -25,7 +25,7 @@ import type { HealthPayload } from '../../../src/lib/apiTypes';
 import type { AppDriver } from './app';
 import { HEALTH_OK } from './data/shell';
 import { json } from './mockApi';
-import { asComputedRgb, contrastRatio, parseRgb, renderedColors, tokenValue } from './renderedColor';
+import { asComputedRgb, contrastRatio, parseRgb, renderedColors, settleTransitions, tokenValue } from './renderedColor';
 import { expect, test } from './test';
 
 const AA_TEXT = 4.5;
@@ -187,6 +187,9 @@ for (const input of TEXT_INPUTS) {
 
     await page.keyboard.press('Tab');
     await field.focus();
+    // The ring transitions in from the unfocused outline (3px `medium`)
+    // under the harness's reduced-motion reset: read it settled.
+    await settleTransitions(field);
     const ring = await field.evaluate((el) => {
       const style = getComputedStyle(el);
       return {
@@ -219,6 +222,7 @@ test('light: the activation-funnel Sankey node strokes the shared focus ring at 
 
   await page.keyboard.press('Tab');
   await node.focus();
+  await settleTransitions(node.locator('.funnel-sankey__bar'));
   const ring = await node.evaluate((el) => {
     const bar = el.querySelector('.funnel-sankey__bar');
     if (!bar) throw new Error('.funnel-sankey__node has no .funnel-sankey__bar');

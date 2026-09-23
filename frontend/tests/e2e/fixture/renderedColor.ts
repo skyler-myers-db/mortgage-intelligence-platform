@@ -74,6 +74,29 @@ export async function renderedColors(target: Locator): Promise<RenderedColors> {
   });
 }
 
+/**
+ * Wait until every CSS transition running on one element has finished, so a
+ * computed read sees the settled state change, not its start value.
+ *
+ * The harness runs under `prefers-reduced-motion: reduce`, and the app's
+ * global reduced-motion reset (01-app-shell.css: `*, *::before, *::after
+ * { transition-duration: 0.01ms !important }`) turns every element's initial
+ * `transition: all 0s` into `all 0.01ms`. So ANY computed change, such as a
+ * focus ring's outline-width / -color / -offset arriving on focus(), starts
+ * a CSSTransition from the old value (outline-width `medium`, i.e. 3px).
+ * The transition only advances on the next frame, which a loaded runner can
+ * delay past a read made in the same task as focus(). getAnimations()
+ * flushes pending style first, so a transition the state change just
+ * started is in the list. A cancelled transition rejects `finished`; that
+ * is settled too.
+ */
+export async function settleTransitions(target: Locator): Promise<void> {
+  await target.evaluate(async (el) => {
+    const transitions = el.getAnimations().filter((animation) => animation instanceof CSSTransition);
+    await Promise.all(transitions.map((transition) => transition.finished.catch(() => undefined)));
+  });
+}
+
 /** One custom property as the element computes it (inherits theme and accent). */
 export async function tokenValue(target: Locator, name: string): Promise<string> {
   return target.evaluate((el, prop) => getComputedStyle(el).getPropertyValue(prop).trim(), name);

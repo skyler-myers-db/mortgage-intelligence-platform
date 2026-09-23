@@ -32,6 +32,7 @@ import {
   parseRgb,
   relativeLuminance,
   renderedColors,
+  settleTransitions,
 } from './renderedColor';
 import { expect, test, type FixtureTheme } from './test';
 
@@ -117,15 +118,10 @@ async function themeColorAndPageBackground(page: Page): Promise<{ meta: string; 
  */
 async function expectTokenRing(page: Page, target: Locator, label: string): Promise<void> {
   await target.focus();
-  // .rail__item transitions `all`, so its outline animates in from the
-  // unfocused values (width `medium`, i.e. 3px). Read in the same task as
-  // focus() it is 3px even under the harness's reduced-motion 0.01ms
-  // transition, which only advances on the next frame, and a loaded runner
-  // can delay that frame past this read: wait for the settled ring.
-  await target.evaluate(async (el) => {
-    const transitions = el.getAnimations().filter((animation) => animation instanceof CSSTransition);
-    await Promise.all(transitions.map((transition) => transition.finished.catch(() => undefined)));
-  });
+  // The global reduced-motion reset gives every element an `all 0.01ms`
+  // transition, so the ring animates in from the unfocused outline (width
+  // `medium`, i.e. 3px): read it only once it has settled.
+  await settleTransitions(target);
   const ring = await target.evaluate((el) => {
     const style = getComputedStyle(el);
     return {
