@@ -15,7 +15,8 @@
  *    `audit: <uuid>` mono and `.burst` are gone; the stagger finishes under
  *    1.2 s and is instant under reduced motion; print clones the receipt only.
  *  - Lead Queue: the same pessimistic sequence in the expanded row after a
- *    row approve, with the lead payload's score line.
+ *    row approve, with the lead payload's score line; the reveal plays once
+ *    per decision (a collapse + re-expand shows the receipt finished).
  *  - Reject renders a rejected receipt with its reason code.
  *  - A refused read-back (403) renders the neutral "Recorded; receipt
  *    unavailable" state with the audit id still shown; a 404 does not claim
@@ -223,7 +224,11 @@ test.describe('decision receipt', () => {
     await expect(receipt).toBeVisible();
     await expectLedgerRow(receipt);
     await expect(receipt).toHaveClass(/decision-receipt--compact/);
+    await expect(receipt).toHaveClass(/decision-receipt--reveal/);
     await expect(receipt.getByTestId('decision-receipt-score')).toContainText(String(PRIMARY_BORROWER.opportunity_score));
+    await expect(expanded.getByTestId('decision-receipt-announcement')).toHaveText(
+      `Decision receipt recorded: Approved, audit event ${APPROVE_AUDIT_ID}`,
+    );
     await expect(receipt.getByTestId('decision-receipt-explorer-link')).toHaveAttribute('href', EXPLORER_HREF);
 
     // The expanded cell spans every nowrap column, so the table is wider than
@@ -251,6 +256,20 @@ test.describe('decision receipt', () => {
     expect(fit.cardLeft, 'the receipt starts inside the visible width').toBeGreaterThanOrEqual(fit.portLeft - 1);
     expect(fit.cardRight, 'the receipt ends inside the visible width').toBeLessThanOrEqual(fit.portRight + 1);
     expect(fit.linkRight, 'the explorer link is visible without scrolling').toBeLessThanOrEqual(fit.portRight + 1);
+
+    // motion-06: the reveal plays once per decision. Collapse and re-expand
+    // the row: the receipt comes back finished, from the same read-back.
+    const rowToggle = page.locator(`tr:has([data-testid="lead-approval-cell-${BORROWER_ID}"]) [aria-expanded]`).first();
+    await rowToggle.click();
+    await expect(rowToggle).toHaveAttribute('aria-expanded', 'false');
+    await expect(expanded).toHaveCount(0);
+    await rowToggle.click();
+    await expect(rowToggle).toHaveAttribute('aria-expanded', 'true');
+    const again = expanded.getByTestId('decision-receipt');
+    await expect(again).toBeVisible();
+    await expectLedgerRow(again);
+    await expect(again, 'the re-expanded receipt does not replay the reveal').not.toHaveClass(/decision-receipt--reveal/);
+    expect(receiptCalls(mockApi), 'the re-expanded receipt reuses the read-back').toBe(1);
   });
 
   test('reject reads back a rejected receipt with its reason code', async ({ app, page, mockApi }) => {

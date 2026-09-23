@@ -38,12 +38,18 @@ import { copyAuditId, printReceipt } from './DecisionReceipt.actions';
 export interface LeadDecisionReceipt {
   auditEventId: string | null;
   decision: 'approved' | 'rejected';
+  /** The one-shot reveal already played for this decision (motion-06). */
+  revealed?: boolean;
+  /** Records that the reveal played, so a collapse + re-expand shows the receipt finished. */
+  markRevealed?: () => void;
 }
 
 export interface DecisionReceiptProps {
   auditEventId: string;
   /** Plays the one-shot stagger reveal for a decision made in this view. */
   reveal?: boolean;
+  /** Called once the revealed receipt has rendered from the read-back. */
+  onRevealed?: () => void;
   /** Two-column ledger for the queue's expanded row. */
   compact?: boolean;
   /** The lead payload's score line, when the caller has it. */
@@ -120,6 +126,21 @@ function unavailableState(error: unknown): UnavailableState {
   return 'error';
 }
 
+/**
+ * One polite live region per receipt. The section beside it changes content
+ * and role between the pending, unavailable and read-back states, so the
+ * announcement lives outside it in one node that stays mounted and is
+ * updated in place: a screen reader hears the decision once the ledger
+ * confirms it (flow-03).
+ */
+function ReceiptAnnouncement({ message }: { message: string }) {
+  return (
+    <span className="sr-only" role="status" aria-live="polite" aria-atomic="true" data-testid="decision-receipt-announcement">
+      {message}
+    </span>
+  );
+}
+
 function staggerIndex(index: number): CSSProperties {
   return { '--receipt-i': index } as CSSProperties;
 }
@@ -127,6 +148,7 @@ function staggerIndex(index: number): CSSProperties {
 export function DecisionReceipt({
   auditEventId,
   reveal = false,
+  onRevealed,
   compact = false,
   score = null,
   className = '',
@@ -142,6 +164,18 @@ export function DecisionReceipt({
     staleTime: Infinity,
     retry: false,
   });
+
+  // motion-06: the reveal is one-shot. It is latched per audit id at first
+  // render, so a parent that records "revealed" (onRevealed) while the
+  // stagger plays cannot cut it short; the next mount (a collapsed and
+  // re-expanded queue row) gets reveal=false and renders the receipt finished.
+  const [revealLatch, setRevealLatch] = useState({ auditEventId, reveal });
+  if (revealLatch.auditEventId !== auditEventId) setRevealLatch({ auditEventId, reveal });
+  const playReveal = revealLatch.auditEventId === auditEventId ? revealLatch.reveal : reveal;
+  const readBack = Boolean(query.data);
+  useEffect(() => {
+    if (playReveal && readBack) onRevealed?.();
+  }, [playReveal, readBack, onRevealed]);
 
   useEffect(() => {
     if (copyState === 'idle') return;
@@ -163,24 +197,25 @@ export function DecisionReceipt({
 
   if (query.isPending) {
     return (
-      <section
-        className={`${blockClass} decision-receipt--pending`}
-        role="status"
-        aria-busy="true"
-        aria-live="polite"
-        data-testid="decision-receipt-pending"
-      >
-        <div className="surface__hdr">
-          <Icon name="audit" size={14} className="icon-accent" />
-          <div className="h-4">{DECISION_RECEIPT_COPY.recording}</div>
-          <span className="decision-receipt__hdr-note">{DECISION_RECEIPT_COPY.recordingNote}</span>
-        </div>
-        <div className="surface__body decision-receipt__skeleton">
-          <Skeleton width="42%" />
-          <Skeleton width="68%" />
-          <Skeleton width="55%" />
-        </div>
-      </section>
+      <>
+        <ReceiptAnnouncement message={DECISION_RECEIPT_COPY.recordingNote} />
+        <section
+          className={`${blockClass} decision-receipt--pending`}
+          aria-busy="true"
+          data-testid="decision-receipt-pending"
+        >
+          <div className="surface__hdr">
+            <Icon name="audit" size={14} className="icon-accent" />
+            <div className="h-4">{DECISION_RECEIPT_COPY.recording}</div>
+            <span className="decision-receipt__hdr-note">{DECISION_RECEIPT_COPY.recordingNote}</span>
+          </div>
+          <div className="surface__body decision-receipt__skeleton">
+            <Skeleton width="42%" />
+            <Skeleton width="68%" />
+            <Skeleton width="55%" />
+          </div>
+        </section>
+      </>
     );
   }
 
@@ -197,39 +232,40 @@ export function DecisionReceipt({
       : notFound
         ? DECISION_RECEIPT_COPY.unavailableNotFound
         : `${DECISION_RECEIPT_COPY.unavailableError} ${message}`;
+    const title = notFound ? DECISION_RECEIPT_COPY.notFoundTitle : DECISION_RECEIPT_COPY.unavailableTitle;
     return (
-      <section
-        className={`${blockClass} decision-receipt--unavailable`}
-        role="status"
-        aria-labelledby={titleId}
-        data-testid="decision-receipt-unavailable"
-        data-receipt-state={state}
-      >
-        <div className="surface__hdr">
-          {notFound ? (
-            <Chip variant="warning" icon="audit">{DECISION_RECEIPT_COPY.unconfirmed}</Chip>
-          ) : (
-            <Chip variant="neutral" icon="shield">{DECISION_RECEIPT_COPY.recorded}</Chip>
-          )}
-          <div className="h-4" id={titleId}>
-            {notFound ? DECISION_RECEIPT_COPY.notFoundTitle : DECISION_RECEIPT_COPY.unavailableTitle}
-          </div>
-        </div>
-        <div className="surface__body">
-          <p className="muted fs-12 flush">{explanation}</p>
-          <div className="decision-receipt__ids" data-testid="decision-receipt-audit-id">
-            audit event {auditEventId}
-          </div>
-        </div>
-        <div className="surface__ft">
-          <div className="decision-receipt__actions">
-            <Button size="sm" icon="doc" onClick={() => void onCopy()}>{copyLabel}</Button>
-            {state !== 'forbidden' && (
-              <Button size="sm" onClick={() => void query.refetch()}>{DECISION_RECEIPT_COPY.retry}</Button>
+      <>
+        <ReceiptAnnouncement message={`${title}, audit event ${auditEventId}`} />
+        <section
+          className={`${blockClass} decision-receipt--unavailable`}
+          aria-labelledby={titleId}
+          data-testid="decision-receipt-unavailable"
+          data-receipt-state={state}
+        >
+          <div className="surface__hdr">
+            {notFound ? (
+              <Chip variant="warning" icon="audit">{DECISION_RECEIPT_COPY.unconfirmed}</Chip>
+            ) : (
+              <Chip variant="neutral" icon="shield">{DECISION_RECEIPT_COPY.recorded}</Chip>
             )}
+            <div className="h-4" id={titleId}>{title}</div>
           </div>
-        </div>
-      </section>
+          <div className="surface__body">
+            <p className="muted fs-12 flush">{explanation}</p>
+            <div className="decision-receipt__ids" data-testid="decision-receipt-audit-id">
+              audit event {auditEventId}
+            </div>
+          </div>
+          <div className="surface__ft">
+            <div className="decision-receipt__actions">
+              <Button size="sm" icon="doc" onClick={() => void onCopy()}>{copyLabel}</Button>
+              {state !== 'forbidden' && (
+                <Button size="sm" onClick={() => void query.refetch()}>{DECISION_RECEIPT_COPY.retry}</Button>
+              )}
+            </div>
+          </div>
+        </section>
+      </>
     );
   }
 
@@ -240,84 +276,89 @@ export function DecisionReceipt({
   const scoreIndex = evidenceIndex + 1;
   const footerIndex = scoreIndex + (score ? 1 : 0);
 
+  const announcement = `${playReveal ? DECISION_RECEIPT_COPY.announceRecorded : DECISION_RECEIPT_COPY.title}: ${chip.label}, audit event ${receipt.audit_event_id}`;
+
   return (
-    <section
-      ref={cardRef}
-      className={`${blockClass} decision-receipt--${receipt.decision}${reveal ? ' decision-receipt--reveal' : ''}`}
-      aria-labelledby={titleId}
-      data-testid="decision-receipt"
-      data-audit-event-id={receipt.audit_event_id}
-    >
-      <div className="surface__hdr">
-        <Icon name="audit" size={14} className="icon-accent" />
-        <div className="h-4" id={titleId}>{DECISION_RECEIPT_COPY.title}</div>
-        <Chip variant={chip.variant} icon={chip.icon}>{chip.label}</Chip>
-        <span className="decision-receipt__hdr-note">{DECISION_RECEIPT_COPY.readBackNote}</span>
-      </div>
-      <div className="surface__body">
-        <dl className="decision-receipt__grid">
-          {rows.map((row, index) => (
-            <div key={row.key} className="decision-receipt__row" style={staggerIndex(index)}>
-              <dt className="field__label">{row.label}</dt>
-              <dd
-                className={`field__value${row.mono ? ' decision-receipt__value--mono' : ''}`}
-                title={row.title}
-                data-receipt-field={row.key}
-              >
-                {row.value}
-              </dd>
+    <>
+      <ReceiptAnnouncement message={announcement} />
+      <section
+        ref={cardRef}
+        className={`${blockClass} decision-receipt--${receipt.decision}${playReveal ? ' decision-receipt--reveal' : ''}`}
+        aria-labelledby={titleId}
+        data-testid="decision-receipt"
+        data-audit-event-id={receipt.audit_event_id}
+      >
+        <div className="surface__hdr">
+          <Icon name="audit" size={14} className="icon-accent" />
+          <div className="h-4" id={titleId}>{DECISION_RECEIPT_COPY.title}</div>
+          <Chip variant={chip.variant} icon={chip.icon}>{chip.label}</Chip>
+          <span className="decision-receipt__hdr-note">{DECISION_RECEIPT_COPY.readBackNote}</span>
+        </div>
+        <div className="surface__body">
+          <dl className="decision-receipt__grid">
+            {rows.map((row, index) => (
+              <div key={row.key} className="decision-receipt__row" style={staggerIndex(index)}>
+                <dt className="field__label">{row.label}</dt>
+                <dd
+                  className={`field__value${row.mono ? ' decision-receipt__value--mono' : ''}`}
+                  title={row.title}
+                  data-receipt-field={row.key}
+                >
+                  {row.value}
+                </dd>
+              </div>
+            ))}
+          </dl>
+          <div className="decision-receipt__section" style={staggerIndex(evidenceIndex)}>
+            <div className="eyebrow mb-2">{DECISION_RECEIPT_COPY.evidence}</div>
+            <div className="chip-row" data-testid="decision-receipt-evidence">
+              {receipt.evidence_assets.map((asset) => {
+                const source = descriptorFor(asset);
+                return (
+                  <EvidenceChip key={asset} source={source}>{source.title}</EvidenceChip>
+                );
+              })}
+              {receipt.evidence_assets.length === 0 && (
+                <span className="muted fs-12">{DECISION_RECEIPT_COPY.noEvidenceAssets}</span>
+              )}
             </div>
-          ))}
-        </dl>
-        <div className="decision-receipt__section" style={staggerIndex(evidenceIndex)}>
-          <div className="eyebrow mb-2">{DECISION_RECEIPT_COPY.evidence}</div>
-          <div className="chip-row" data-testid="decision-receipt-evidence">
-            {receipt.evidence_assets.map((asset) => {
-              const source = descriptorFor(asset);
-              return (
-                <EvidenceChip key={asset} source={source}>{source.title}</EvidenceChip>
-              );
-            })}
-            {receipt.evidence_assets.length === 0 && (
-              <span className="muted fs-12">{DECISION_RECEIPT_COPY.noEvidenceAssets}</span>
+            {receipt.evidence_ids.length > 0 && (
+              <div className="decision-receipt__ids">
+                evidence {receipt.evidence_ids.join(' · ')}
+              </div>
             )}
           </div>
-          {receipt.evidence_ids.length > 0 && (
-            <div className="decision-receipt__ids">
-              evidence {receipt.evidence_ids.join(' · ')}
+          {score && (
+            <div className="decision-receipt__section" style={staggerIndex(scoreIndex)}>
+              <div className="eyebrow mb-2">{DECISION_RECEIPT_COPY.scoreAtDecision}</div>
+              <div className="decision-receipt__score" data-testid="decision-receipt-score">
+                <ScoreBadge value={score.opportunityScore} />
+                <ConfidenceMeter value={score.confidence} compact />
+                <span className="muted fs-11">{DECISION_RECEIPT_COPY.scoreNote}</span>
+              </div>
             </div>
           )}
         </div>
-        {score && (
-          <div className="decision-receipt__section" style={staggerIndex(scoreIndex)}>
-            <div className="eyebrow mb-2">{DECISION_RECEIPT_COPY.scoreAtDecision}</div>
-            <div className="decision-receipt__score" data-testid="decision-receipt-score">
-              <ScoreBadge value={score.opportunityScore} />
-              <ConfidenceMeter value={score.confidence} compact />
-              <span className="muted fs-11">{DECISION_RECEIPT_COPY.scoreNote}</span>
-            </div>
+        <div className="surface__ft" style={staggerIndex(footerIndex)}>
+          <div className="decision-receipt__actions">
+            <Button size="sm" icon="doc" onClick={() => void onCopy()} aria-label={`${DECISION_RECEIPT_COPY.copy} ${receipt.audit_event_id}`}>
+              {copyLabel}
+            </Button>
+            <Button size="sm" icon="export" onClick={() => printReceipt(cardRef.current)}>
+              {DECISION_RECEIPT_COPY.print}
+            </Button>
+            {canAccessAdmin && (
+              <Link
+                className="btn btn--sm decision-receipt__explorer"
+                to={auditExplorerHref(receipt.audit_event_id)}
+                data-testid="decision-receipt-explorer-link"
+              >
+                {DECISION_RECEIPT_COPY.openExplorer}
+              </Link>
+            )}
           </div>
-        )}
-      </div>
-      <div className="surface__ft" style={staggerIndex(footerIndex)}>
-        <div className="decision-receipt__actions">
-          <Button size="sm" icon="doc" onClick={() => void onCopy()} aria-label={`${DECISION_RECEIPT_COPY.copy} ${receipt.audit_event_id}`}>
-            {copyLabel}
-          </Button>
-          <Button size="sm" icon="export" onClick={() => printReceipt(cardRef.current)}>
-            {DECISION_RECEIPT_COPY.print}
-          </Button>
-          {canAccessAdmin && (
-            <Link
-              className="btn btn--sm decision-receipt__explorer"
-              to={auditExplorerHref(receipt.audit_event_id)}
-              data-testid="decision-receipt-explorer-link"
-            >
-              {DECISION_RECEIPT_COPY.openExplorer}
-            </Link>
-          )}
         </div>
-      </div>
-    </section>
+      </section>
+    </>
   );
 }

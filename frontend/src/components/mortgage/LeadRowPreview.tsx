@@ -22,6 +22,8 @@ import { dispositionLabel, outreachLabel } from './LeadTable.logic';
  * @param decisionReceipt The audit row a row approve / reject in this
  *   session wrote. The expanded row reads it back as a Decision receipt
  *   (wow-stage-3); nothing about the receipt is taken from the POST body.
+ *   The reveal plays once per decision: after it has played, a collapse +
+ *   re-expand renders the receipt finished (motion-06).
  */
 export function RowPreview({
   lead,
@@ -56,7 +58,8 @@ export function RowPreview({
         <div className="tbl__expand-inner tbl__expand-inner--receipt">
           <DecisionReceipt
             auditEventId={decisionReceipt.auditEventId}
-            reveal
+            reveal={!decisionReceipt.revealed}
+            onRevealed={decisionReceipt.markRevealed}
             compact
             score={{ opportunityScore: lead.opportunity_score, confidence: lead.confidence }}
           />

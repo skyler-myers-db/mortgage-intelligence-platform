@@ -9,6 +9,7 @@ import { REJECT_REASONS } from './LeadTable.constants';
 
 export const DECISION_RECEIPT_COPY = {
   title: 'Decision receipt',
+  announceRecorded: 'Decision receipt recorded',
   recording: 'Recording decision…',
   recordingNote: 'Reading the ledger row back',
   readBackNote: 'Read back from the Lakebase audit ledger',

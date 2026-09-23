@@ -109,4 +109,31 @@ describe('RowPreview decision receipt slot', () => {
       }),
     );
   });
+
+  it('hands the receipt the decision\'s markRevealed and shows it finished once the reveal has played', () => {
+    const markRevealed = vi.fn();
+    act(() => {
+      root.render(
+        <RowPreview
+          lead={lead}
+          approval="approved"
+          decisionReceipt={{ auditEventId: 'audit-row-1', decision: 'approved', revealed: false, markRevealed }}
+        />,
+      );
+    });
+    expect(receiptMock.render).toHaveBeenLastCalledWith(
+      expect.objectContaining({ reveal: true, onRevealed: markRevealed }),
+    );
+
+    act(() => {
+      root.render(
+        <RowPreview
+          lead={lead}
+          approval="approved"
+          decisionReceipt={{ auditEventId: 'audit-row-1', decision: 'approved', revealed: true, markRevealed }}
+        />,
+      );
+    });
+    expect(receiptMock.render).toHaveBeenLastCalledWith(expect.objectContaining({ reveal: false }));
+  });
 });

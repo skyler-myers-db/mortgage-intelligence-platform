@@ -122,6 +122,7 @@ describe('DecisionReceipt', () => {
   }
 
   const receipt = () => container.querySelector<HTMLElement>('[data-testid="decision-receipt"]');
+  const announcement = () => container.querySelector<HTMLElement>('[data-testid="decision-receipt-announcement"]');
   const field = (key: string) => container.querySelector<HTMLElement>(`[data-receipt-field="${key}"]`)?.textContent;
 
   it('renders the recording skeleton until the ledger read-back resolves, then only ledger values', async () => {
@@ -136,10 +137,18 @@ describe('DecisionReceipt', () => {
     expect(skeleton.textContent).toContain('Recording decision…');
     expect(receipt()).toBeNull();
     expect(container.textContent).not.toContain(AUDIT_ID);
+    // One polite live region, outside the section that swaps states.
+    const live = announcement()!;
+    expect(live.getAttribute('aria-live')).toBe('polite');
+    expect(live.textContent).toBe('Reading the ledger row back');
 
     await act(async () => pending.resolve(LEDGER));
     await settle();
     const card = receipt()!;
+    // The same live node now announces the confirmed decision.
+    expect(announcement()).toBe(live);
+    expect(live.textContent).toBe(`Decision receipt recorded: Approved, audit event ${AUDIT_ID}`);
+    expect(container.querySelectorAll('[aria-live]')).toHaveLength(1);
     expect(container.querySelector('[data-testid="decision-receipt-pending"]')).toBeNull();
     expect(card.dataset.auditEventId).toBe(AUDIT_ID);
     expect(card.classList.contains('decision-receipt--approved')).toBe(true);
@@ -165,6 +174,35 @@ describe('DecisionReceipt', () => {
     expect(link.getAttribute('href')).toContain(`audit_event_id=${AUDIT_ID}`);
   });
 
+  it('plays the reveal once: onRevealed fires after the read-back and a parent flip does not cut it short', async () => {
+    const pending = deferred<DecisionReceiptPayload>();
+    apiMocks.auditReceipt.mockReturnValue(pending.promise);
+    const onRevealed = vi.fn();
+    mount({ reveal: true, onRevealed });
+    await settle();
+    expect(onRevealed).not.toHaveBeenCalled();
+
+    await act(async () => pending.resolve(LEDGER));
+    await settle();
+    expect(onRevealed).toHaveBeenCalledTimes(1);
+    expect(receipt()!.classList.contains('decision-receipt--reveal')).toBe(true);
+
+    // The parent records "revealed" and re-renders with reveal=false: this
+    // mount keeps its reveal (no class flip mid-stagger).
+    mount({ reveal: false, onRevealed });
+    await settle();
+    expect(receipt()!.classList.contains('decision-receipt--reveal')).toBe(true);
+
+    // A fresh mount (collapse + re-expand) renders the receipt finished.
+    act(() => root.unmount());
+    root = createRoot(container);
+    mount({ reveal: false, onRevealed });
+    await settle();
+    expect(receipt()!.classList.contains('decision-receipt--reveal')).toBe(false);
+    expect(announcement()!.textContent).toBe(`Decision receipt: Approved, audit event ${AUDIT_ID}`);
+    expect(onRevealed).toHaveBeenCalledTimes(1);
+  });
+
   it('renders the finished receipt without the reveal for a durable decision and hides the explorer link from non-admins', async () => {
     appMocks.canAccessAdmin = false;
     apiMocks.auditReceipt.mockResolvedValue({ ...LEDGER, decision: 'rejected', rationale_code: 'do_not_call' });
@@ -187,6 +225,7 @@ describe('DecisionReceipt', () => {
     expect(receipt()).toBeNull();
     const unavailable = container.querySelector<HTMLElement>('[data-testid="decision-receipt-unavailable"]')!;
     expect(unavailable.dataset.receiptState).toBe('forbidden');
+    expect(announcement()!.textContent).toBe(`Recorded; receipt unavailable, audit event ${AUDIT_ID}`);
     expect(unavailable.textContent).toContain('Recorded; receipt unavailable');
     expect(unavailable.querySelector('[data-testid="decision-receipt-audit-id"]')?.textContent).toContain(AUDIT_ID);
     expect([...unavailable.querySelectorAll('button')].map((button) => button.textContent?.trim())).toEqual(['Copy audit id']);
@@ -202,6 +241,7 @@ describe('DecisionReceipt', () => {
     expect(receipt()).toBeNull();
     const unavailable = container.querySelector<HTMLElement>('[data-testid="decision-receipt-unavailable"]')!;
     expect(unavailable.dataset.receiptState).toBe('not-found');
+    expect(announcement()!.textContent).toBe(`Ledger row not found, audit event ${AUDIT_ID}`);
     expect(unavailable.textContent).toContain(
       'The write returned this audit id, but the ledger read-back did not find a decision row for it.',
     );

@@ -120,9 +120,16 @@ export function useLeadApprovalActions({
   // wow-stage-3: the audit row each row decision wrote, keyed by borrower.
   // The expanded row reads it back as a Decision receipt; the id comes from
   // the POST response and nothing else about the receipt is kept here.
+  // motion-06: the receipt's reveal plays once per decision; markRevealed
+  // flips `revealed` so a collapse + re-expand renders it finished.
   const [decisionReceipts, setDecisionReceipts] = useState<Record<string, LeadDecisionReceipt>>({});
   const recordDecision = (borrowerId: string, receipt: LeadDecisionReceipt) => {
-    setDecisionReceipts((cur) => ({ ...cur, [borrowerId]: receipt }));
+    const markRevealed = () => setDecisionReceipts((cur) => {
+      const current = cur[borrowerId];
+      if (!current || current.auditEventId !== receipt.auditEventId || current.revealed) return cur;
+      return { ...cur, [borrowerId]: { ...current, revealed: true } };
+    });
+    setDecisionReceipts((cur) => ({ ...cur, [borrowerId]: { ...receipt, revealed: false, markRevealed } }));
   };
 
   /**
