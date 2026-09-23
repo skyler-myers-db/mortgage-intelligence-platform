@@ -13,12 +13,22 @@
    toward --text-1 rather than borrowing the navy the warning chips use
    (02-chips-kpi-segments.css), which would read as the market line
    (--accent) or the median (--text-3). At 45% it measures about 6.8:1 on
-   white and still clears 4.5:1 over the book band the label can sit on. */
+   white and still clears 4.5:1 over the book band the label can sit on.
+   The data ink (market line, in-the-money line, current print) and the band
+   fill follow the accent. The default `bright` accent overrides the light
+   theme's navy --accent with #66C5FF (1.91:1 on white, audit visual-08 /
+   dataviz-09), so the light theme draws them from --accent-ink, the
+   existing per-accent light-safe precedent (tokens.css), and gives the book
+   band a fill that reads on white instead of the 1.07:1 --accent-soft. */
 .rate-window {
   --rate-window-screen-ink: var(--status-warning-ink);
+  --rate-window-data-ink: var(--accent);
+  --rate-window-band-fill: var(--accent-soft);
 }
 [data-theme="light"] .rate-window {
   --rate-window-screen-ink: color-mix(in oklab, var(--signal-warning) 45%, var(--text-1));
+  --rate-window-data-ink: var(--accent-ink);
+  --rate-window-band-fill: color-mix(in oklab, var(--accent-ink) 16%, transparent);
 }
 .rate-window__actions {
   display: flex;
@@ -71,7 +81,7 @@
   overflow: visible;
 }
 .rate-window__band {
-  fill: var(--accent-soft);
+  fill: var(--rate-window-band-fill);
   stroke: none;
 }
 /* `.analytics-line-chart polyline` (10-native-analytics.css, specificity
@@ -86,7 +96,7 @@
 }
 .rate-window .rate-window__market {
   fill: none;
-  stroke: var(--accent);
+  stroke: var(--rate-window-data-ink);
   stroke-width: 2.4;
 }
 .rate-window__threshold {
@@ -99,7 +109,7 @@
 }
 .rate-window .rate-window__itm-line {
   fill: none;
-  stroke: var(--accent);
+  stroke: var(--rate-window-data-ink);
   stroke-width: 2;
 }
 .rate-window__ref-label,
@@ -134,7 +144,7 @@
   inline-size: var(--sp-2);
   block-size: var(--sp-2);
   border-radius: var(--r-pill);
-  background: var(--accent);
+  background: var(--rate-window-data-ink);
   box-shadow: 0 0 0 var(--sp-1) var(--accent-soft);
   transform: translate(-50%, -50%);
 }
@@ -155,10 +165,10 @@
   inline-size: var(--sp-4);
   block-size: var(--sp-1);
   border-radius: var(--r-pill);
-  background: var(--accent);
+  background: var(--rate-window-data-ink);
 }
 .rate-window__swatch--median { background: var(--text-3); }
-.rate-window__swatch--band { block-size: var(--sp-2); background: var(--accent-soft); }
+.rate-window__swatch--band { block-size: var(--sp-2); background: var(--rate-window-band-fill); }
 .rate-window__swatch--threshold { background: var(--rate-window-screen-ink); }
 .rate-window__asof {
   margin-top: var(--sp-3);
