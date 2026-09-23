@@ -240,6 +240,9 @@
      for WCAG AA on the light theme's tinted surfaces — same rationale as
      the dark-theme --text-3 note above (2026-06-11 audit P2-15). */
   --text-3: #34536B;
+  /* DEFERRED (2026-09-21 audit a11y-01 sub-item): --text-4 is the disabled
+   * ink, but some metadata uses it and reads 2.3-2.9:1 in either theme.
+   * Moving those sites to --text-3 is a follow-up, not done here. */
   --text-4: #96ADBF;
 
   --chip-bg:   rgba(2,80,128,0.06);
