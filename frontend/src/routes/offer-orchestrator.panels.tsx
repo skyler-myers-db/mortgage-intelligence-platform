@@ -18,7 +18,7 @@ import {
   type RejectReasonCode,
 } from './offer-orchestrator.constants';
 import { humanizeThresholdKey, shortSourceLabel } from './offer-orchestrator.helpers';
-import { OutreachReviewCopy } from './offer-orchestrator.review-copy';
+import { CertifiedCopyPreview } from './offer-orchestrator.preview';
 
 export function OfferOrchestratorEmptyState() {
   return (
@@ -493,11 +493,14 @@ function DraftOutreachPanel({
             </div>
           </div>
         )}
-        <OutreachReviewCopy
+        <CertifiedCopyPreview
           channel={draftChannel}
           subject={draftSubject}
           body={draftText}
           current={draftLoaded && !draftSavePending}
+          borrowerId={borrowerId}
+          disclosureVersion={draftDisclosureVersion}
+          disclosureState={draftDisclosureState}
         />
         <p className="muted fs-12 mt-2">
           Review the exact audited copy before approval. To change the message, regenerate a new
@@ -619,11 +622,6 @@ function DraftOutreachPanel({
             </Link>
           ) : (
             <Chip variant="neutral">LO call follow-up within 5 days</Chip>
-          )}
-          {draftDisclosureVersion && (
-            <Chip variant="success" icon="shield">
-              Disclosure {draftDisclosureVersion} · {draftDisclosureState ?? 'state fallback'}
-            </Chip>
           )}
           <Button
             variant={draftIsSaved ? 'ghost' : 'default'}

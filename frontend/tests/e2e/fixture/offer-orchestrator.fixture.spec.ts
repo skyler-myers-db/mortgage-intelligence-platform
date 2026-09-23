@@ -12,13 +12,24 @@
  * Console, not the Genie launcher); scrolling keeps the bar docked; at the end
  * of the page it rests above the footer; focus from below the view stops
  * above it; the reject rationale opens inside it, focused.
+ *
+ * critic-02 (part 2): the certified copy is framed the way the borrower
+ * receives it. Pinned here in both themes: the email frame's From / To (the
+ * masked id as a synthetic contact) / Subject header, a long subject that
+ * wraps inside the frame, a body whose rendered text is exactly the audited
+ * copy, the disclosure, and the SMS bubble with its carrier segment count
+ * (GSM-7 and UCS-2); axe finds nothing in either frame.
  */
+import AxeBuilder from '@axe-core/playwright';
 import type { Locator, Page } from '@playwright/test';
 import { PRIMARY_BORROWER } from './data/borrowers';
+import { EMAIL_BODY, GSM_SMS_BODY, LONG_SUBJECT, UCS2_SMS_BODY, registerDraftCopy } from './data/offerOrchestrator';
+import { LENDER_NAME } from './data/reference';
 import { FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
 
 const ROUTE = `/offer-orchestrator/${PRIMARY_BORROWER.borrower_id}`;
+const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'];
 
 interface Box {
   left: number;
@@ -242,5 +253,98 @@ test.describe('decision bar (visual-v1)', () => {
       return own - content;
     });
     expect(slack, 'empty space inside the Primary offer card (px)').toBeLessThanOrEqual(2);
+  });
+});
+
+/** dt label -> dd text of the frame header, in document order. */
+async function frameHeader(frame: Locator): Promise<Array<[string, string]>> {
+  return frame.locator('dl > div').evaluateAll((rows) =>
+    rows.map((row): [string, string] => [row.querySelector('dt')?.textContent ?? '', row.querySelector('dd')?.textContent ?? '']),
+  );
+}
+
+async function axeViolations(page: Page, selector: string): Promise<string[]> {
+  const results = await new AxeBuilder({ page }).include(selector).withTags(WCAG_TAGS).analyze();
+  return results.violations.map((violation) => `${violation.id}: ${violation.nodes.map((node) => node.target.join(' ')).join(', ')}`);
+}
+
+test.describe('certified copy preview (critic-02)', () => {
+  for (const theme of FIXTURE_THEMES) {
+    test(`${theme}: the email frame shows From, the synthetic To, a wrapping subject and exactly the audited body`, async ({ app, mockApi, page }) => {
+      const served = registerDraftCopy(mockApi, { subject: LONG_SUBJECT, emailBody: EMAIL_BODY });
+      await app.setTheme(theme);
+      await app.gotoRoute(ROUTE);
+      const frame = page.getByRole('article', { name: 'Certified email preview' });
+      await expect(frame).toBeVisible();
+      expect(await frameHeader(frame)).toEqual([
+        ['From', LENDER_NAME],
+        ['To', `${PRIMARY_BORROWER.borrower_id}Synthetic contact`],
+        ['Subject', LONG_SUBJECT],
+      ]);
+
+      // The subject wraps inside the frame: every character is painted, on
+      // more than one line, with nothing scrolled or cut off.
+      const subject = frame.getByTestId('outreach-subject');
+      await expect(subject).toHaveAttribute('aria-label', 'Outreach subject — review only');
+      const subjectMetrics = await subject.evaluate((node) => ({
+        scrollWidth: node.scrollWidth,
+        clientWidth: node.clientWidth,
+        lines: Math.round(node.getBoundingClientRect().height / Number.parseFloat(getComputedStyle(node).lineHeight)),
+      }));
+      expect(subjectMetrics.scrollWidth).toBeLessThanOrEqual(subjectMetrics.clientWidth);
+      expect(subjectMetrics.lines, 'the long subject wraps').toBeGreaterThan(1);
+      expect((await boxOf(subject)).right).toBeLessThanOrEqual((await boxOf(frame)).right);
+
+      // The painted body is the audited copy, character for character: its
+      // paragraphs render as blocks, so innerText restores the blank lines,
+      // and the sign-off's single line break paints as a break.
+      const audited = served.email?.body ?? '';
+      expect(audited, 'precondition: the served draft is the lane body').toBe(EMAIL_BODY);
+      expect(audited.split('\n\n').length, 'precondition: the draft has several paragraphs').toBeGreaterThan(1);
+      expect(audited.split('\n\n').some((paragraph) => paragraph.includes('\n')), 'precondition: a line break inside a paragraph').toBe(true);
+      const body = frame.getByTestId('outreach-draft');
+      await expect(body).toHaveAttribute('aria-label', 'Outreach draft — review only');
+      await expect(body.locator('p')).toHaveCount(audited.split('\n\n').length);
+      expect(await body.innerText()).toBe(audited);
+      const frameOverflow = await frame.evaluate((node) => node.scrollWidth - node.clientWidth);
+      expect(frameOverflow, 'nothing in the frame overflows sideways').toBeLessThanOrEqual(0);
+
+      await expect(frame.locator('footer')).toHaveText(/Disclosure fixture-2026-07 · IL/);
+      await expect(page.getByText('Governed outreach · exact audited copy')).toBeVisible();
+      await expect(frame.locator('input, textarea, [contenteditable="true"]')).toHaveCount(0);
+      expect(await axeViolations(page, '[data-testid="certified-copy"]')).toEqual([]);
+    });
+
+    test(`${theme}: SMS renders as a bubble with its carrier segment count`, async ({ app, mockApi, page }) => {
+      registerDraftCopy(mockApi, { smsBody: GSM_SMS_BODY });
+      await app.setTheme(theme);
+      await app.gotoRoute(ROUTE);
+      await page.getByRole('button', { name: 'SMS', exact: true }).click();
+      const frame = page.getByRole('article', { name: 'Certified SMS preview' });
+      await expect(frame).toBeVisible();
+      await expect(frame.getByTestId('outreach-draft')).toHaveText(GSM_SMS_BODY);
+      expect((await frameHeader(frame)).map(([term]) => term)).toEqual(['From', 'To']);
+      await expect(frame.getByTestId('outreach-subject')).toHaveCount(0);
+
+      const bubble = frame.getByTestId('outreach-draft');
+      expect(await bubble.innerText()).toBe(GSM_SMS_BODY);
+      // Outbound: the bubble sits at the thread's end, as the phone shows it.
+      const thread = await boxOf(frame.locator('.certified-copy__thread'));
+      const bubbleBox = await boxOf(bubble);
+      expect(thread.right - bubbleBox.right).toBeLessThan(bubbleBox.left - thread.left);
+      await expect(frame.getByTestId('sms-segments')).toHaveText(`1 segment · ${GSM_SMS_BODY.length} of 160 characters · GSM-7`);
+      expect(await axeViolations(page, '[data-testid="certified-copy"]')).toEqual([]);
+    });
+  }
+
+  test('one non-GSM character switches the SMS count to UCS-2 segments', async ({ app, mockApi, page }) => {
+    registerDraftCopy(mockApi, { smsBody: UCS2_SMS_BODY });
+    await app.gotoRoute(ROUTE);
+    await page.getByRole('button', { name: 'SMS', exact: true }).click();
+    const frame = page.getByRole('article', { name: 'Certified SMS preview' });
+    await expect(frame.getByTestId('outreach-draft')).toHaveText(UCS2_SMS_BODY);
+    await expect(frame.getByTestId('sms-segments')).toHaveText(
+      `2 segments · ${UCS2_SMS_BODY.length} characters at 67 per segment · UCS-2 (non-GSM characters)`,
+    );
   });
 });
