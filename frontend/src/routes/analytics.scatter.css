@@ -85,7 +85,7 @@
   border: 0;
   border-radius: var(--r-sm);
   background: transparent;
-  color: var(--accent);
+  color: var(--accent-ink);
   font: 600 var(--fs-12) var(--font-sans);
   text-align: center;
   cursor: pointer;
@@ -200,7 +200,7 @@
   border: 1px solid var(--line-3);
   border-radius: var(--r-pill);
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-ink);
   font-weight: 700;
 }
 .analytics-scatter-legend__scope {

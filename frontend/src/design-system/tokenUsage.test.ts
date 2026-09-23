@@ -186,6 +186,40 @@ describe('warning copy and glyphs use the ink token (a11y-01)', () => {
   });
 });
 
+describe('accent text and glyphs use the ink token (a11y-01)', () => {
+  // `--accent` is a fill hue: #66C5FF on white is 1.9:1 in light + bright,
+  // and navy #025080 on the dark surfaces is under 3:1 in dark + navy.
+  // `--accent-ink` is the AA-tuned accent for text and icon glyphs in every
+  // theme x accent (it equals `--accent` in the dark default pairs).
+  const sheets = [{ file: 'design-system/components.css (partials)', css: components }, ...featureStylesheets()];
+
+  it('never paints text or a glyph with the accent fill hue', () => {
+    const offenders = sheets.flatMap(({ file, css }) =>
+      rules(css)
+        .filter((rule) => /(?<![-\w])color:\s*var\(--accent\)/.test(rule.block))
+        .map((rule) => `${file}: ${rule.selector}`),
+    );
+    expect(offenders, 'use var(--accent-ink) for text and icon glyphs').toEqual([]);
+  });
+
+  it('consumes --accent-ink at the sites that painted the fill hue', () => {
+    const consumers = sheets.flatMap(({ css }) =>
+      rules(css)
+        .filter((rule) => /(?<![-\w])color:\s*var\(--accent-ink\)/.test(rule.block))
+        .map((rule) => rule.selector),
+    );
+    expect(consumers).toEqual(
+      expect.arrayContaining([
+        '.not-found__icon',
+        '.growth-agent-card__icon',
+        '.glossary-term:hover,.glossary-term:focus-visible',
+        '.analytics-scatter__cluster-more',
+        '.analytics-scatter-legend__cluster-count',
+      ]),
+    );
+  });
+});
+
 describe('text inputs keep the shared focus ring (a11y-01)', () => {
   // These rules outrank the global `:focus-visible` (tokens.css), so an
   // `outline: none` in them removed the ring and left only the prototype's

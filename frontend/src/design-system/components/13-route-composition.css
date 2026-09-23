@@ -355,7 +355,7 @@
   height: var(--sp-10);
   border-radius: var(--r-md);
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-ink);
 }
 .not-found__copy {
   min-width: 0;

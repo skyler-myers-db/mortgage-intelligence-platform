@@ -18,7 +18,11 @@
  *     composer, property lookup `.form-input`, admin audit
  *     `.admin-filter-input`) show the shared `--focus-ring-*` ring at 3:1;
  *  e. the Analytics activation-funnel Sankey node, whose SVG focus ring is a
- *     stroke, strokes the ring colour at 3:1 (it stroked `--accent`, 1.9:1).
+ *     stroke, strokes the ring colour at 3:1 (it stroked `--accent`, 1.9:1);
+ *  f. in every theme x accent, the text and glyph rules that painted the
+ *     `--accent` fill hue (not-found tile, growth-agent card icon, glossary
+ *     term hover, scatter cluster overflow and legend count) paint
+ *     `--accent-ink` at AA.
  */
 import type { Locator, Page } from '@playwright/test';
 import type { HealthPayload } from '../../../src/lib/apiTypes';
@@ -26,11 +30,12 @@ import type { AppDriver } from './app';
 import { HEALTH_OK } from './data/shell';
 import { json } from './mockApi';
 import { asComputedRgb, contrastRatio, parseRgb, renderedColors, settleTransitions, tokenValue } from './renderedColor';
-import { expect, test } from './test';
+import { expect, test, type FixtureTheme } from './test';
 
 const AA_TEXT = 4.5;
 const AA_UI = 3;
 const ACCENTS = ['bright', 'teal', 'navy', 'red'] as const;
+const THEMES: readonly FixtureTheme[] = ['dark', 'light'];
 
 /**
  * Every partial rule that paints warning copy or an amber glyph (the list
@@ -151,6 +156,70 @@ for (const accent of ACCENTS) {
     expect(ratio, `${painted.color} on rgb(${painted.bg.join(', ')}) = ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(AA_TEXT);
     expect(painted.color, 'paints --accent-ink').toBe(await asComputedRgb(page, await tokenValue(active, '--accent-ink')));
   });
+}
+
+/**
+ * Text and glyph rules that painted the `--accent` FILL hue (#66C5FF on
+ * white is 1.9:1 in light + bright; navy on the dark surfaces is under 3:1
+ * in dark + navy), as probe class lists with the WCAG floor each needs. The
+ * not-found tile, the growth-agent card and a scatter cluster overflow have
+ * no state one fixture route reaches, so these are probes; the two scatter
+ * rules live in the route-scoped analytics.scatter.css, so the probes sit
+ * in the mounted Analytics scatter panel.
+ */
+const ACCENT_INK_CONSUMERS: ReadonlyArray<{ className: string; min: number }> = [
+  { className: 'not-found__icon', min: AA_UI },
+  { className: 'growth-agent-card__icon', min: AA_UI },
+  { className: 'analytics-scatter__cluster-more', min: AA_TEXT },
+  { className: 'analytics-scatter-legend__cluster-count', min: AA_TEXT },
+];
+
+for (const theme of THEMES) {
+  for (const accent of ACCENTS) {
+    test(`${theme} + ${accent}: accent text and glyphs paint --accent-ink, not the fill hue`, async ({ app, page }) => {
+      await app.setTheme(theme);
+      await seedAccent(page, accent);
+      await app.gotoRoute('/analytics?view=economics');
+      await expect(page.locator('html')).toHaveAttribute('data-accent', accent);
+      const panel = page.locator('.analytics-chart-panel--scatter');
+      await expect(panel.locator('.analytics-scatter-legend__band').first()).toBeVisible();
+      const ink = await asComputedRgb(page, await tokenValue(panel, '--accent-ink'));
+
+      await panel.evaluate((host, cases) => {
+        for (const { className } of cases) {
+          const probe = document.createElement('span');
+          probe.className = className;
+          probe.dataset.accentInkProbe = className;
+          probe.textContent = 'Accent';
+          host.appendChild(probe);
+        }
+        const term = document.createElement('span');
+        term.className = 'glossary-term';
+        term.dataset.accentInkProbe = 'glossary-term';
+        term.textContent = 'Glossary term';
+        host.appendChild(term);
+      }, ACCENT_INK_CONSUMERS);
+
+      for (const { className, min } of ACCENT_INK_CONSUMERS) {
+        const probe = panel.locator(`[data-accent-ink-probe="${className}"]`);
+        const painted = await renderedColors(probe);
+        expect(painted.color, `.${className} paints --accent-ink`).toBe(ink);
+        const ratio = contrastRatio(painted.fg, painted.bg);
+        expect(ratio, `.${className}: ${painted.color} on rgb(${painted.bg.join(', ')}) = ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(min);
+      }
+
+      // .glossary-term inherits its colour at rest and takes the accent on
+      // hover / focus-visible; the colour change transitions under the
+      // harness's reduced-motion reset, so read it settled.
+      const term = panel.locator('[data-accent-ink-probe="glossary-term"]');
+      await term.hover();
+      await settleTransitions(term);
+      const hovered = await renderedColors(term);
+      expect(hovered.color, '.glossary-term:hover paints --accent-ink').toBe(ink);
+      const termRatio = contrastRatio(hovered.fg, hovered.bg);
+      expect(termRatio, `.glossary-term:hover: ${hovered.color} = ${termRatio.toFixed(2)}:1`).toBeGreaterThanOrEqual(AA_TEXT);
+    });
+  }
 }
 
 interface TextInputCase {
