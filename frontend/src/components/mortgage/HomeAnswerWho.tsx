@@ -24,10 +24,11 @@ import type { EconomicsAnalyticsResponse } from '../../types';
  * rate spread, then borrower id (databricks_analytics.py). The Lead Queue
  * breaks ties at the top score differently (`rank_overall` is a DENSE_RANK
  * on score, then CLIP), so the copy says "ranked by opportunity score", not
- * "the queue's top five". It is an audit-free aggregate read. `GET /api/leads` would give the same rows but
- * writes a VIEW_LEADS audit row per call, and Home must never audit on
- * render (TopLeadsQuickPick, which does read /api/leads, stays on the
- * Borrower 360 / Offer empty states where a click-through is the intent).
+ * "the queue's top five". It is an audit-free aggregate read. Home does not
+ * read `GET /api/leads` instead: that read writes a VIEW_LEADS audit row per
+ * call, and Home must never audit on render (TopLeadsQuickPick, which does
+ * read /api/leads, stays on the Borrower 360 / Offer empty states where a
+ * click-through is the intent).
  *
  * The rows carry no segment codes, so each row's chip is its recommended
  * offer, not a segment.
@@ -92,12 +93,13 @@ export function HomeAnswerWho() {
         {rows.map((row) => {
           const band = scoreBand(row.opportunity_score);
           const offer = offerDisplayLabel(null, row.recommended_offer);
+          const place = borrowerPlace(row);
           return (
             <li key={row.borrower_id}>
               <Link className="home-answer__who-row" to={borrowerQueueHref(row.borrower_id)}>
                 <span className="home-answer__rank num" aria-hidden="true">{row.rank_overall}</span>
                 <span className="home-answer__who-id">{row.borrower_id}</span>
-                <span className="home-answer__who-place">{borrowerPlace(row)}</span>
+                <span className="home-answer__who-place" title={place}>{place}</span>
                 <span className="chip chip--neutral" title={offer}>
                   <span className="chip__label">{offer}</span>
                 </span>

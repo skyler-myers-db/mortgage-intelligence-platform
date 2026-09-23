@@ -17,6 +17,8 @@
  *  - the geography map starts above the fold, paired with a side panel, and
  *    the live responsive matrix's pairing contract (tests/e2e/homeGeography.ts)
  *    holds at 1150px and at every one of its eight anchors;
+ *  - a narrow WHO column (a 1366 laptop, the Console open) shows every id and
+ *    city whole, and whatever still truncates keeps its text in a tooltip;
  *  - KPI values are at least the size of the page title;
  *  - no two cards touch: every measured gap is at least --gap-grid;
  *  - exactly one primary button above the fold, into the ranked queue;
@@ -28,7 +30,9 @@
  * 1440 fails "KPI values are at least the size of the page title"; removing
  * the Home grid gap fails "no two cards touch"; drawing every offer as a
  * legend row fails "the tallest answer band"; putting "Monitor for later"
- * back in the bar fails "WHAT TO OFFER reconciles".
+ * back in the bar fails "WHAT TO OFFER reconciles"; dropping the WHO
+ * column's narrow layout fails "a narrow WHO column keeps every id and city
+ * whole".
  */
 import type { Locator, Page } from '@playwright/test';
 import { BORROWERS } from './data/borrowers';
@@ -46,6 +50,8 @@ import { FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
 
 const FOLD = 900;
+/** HomeAnswerBand.css: below this WHO list width the place moves under the id. */
+const WHO_ONE_LINE_MIN = 480;
 const LEAD_LIST_READ = /^\/api(?:\/v\d+)?\/leads(?:\/|$)/;
 const BORROWER_READ = /^\/api(?:\/v\d+)?\/borrowers\//;
 
@@ -225,6 +231,49 @@ for (const theme of FIXTURE_THEMES) {
       expect(sideBox!.x).toBeGreaterThan(mapBox!.x + mapBox!.width);
       expect(Math.abs(sideBox!.y - mapBox!.y)).toBeLessThanOrEqual(1);
       await expect(side.getByRole('region', { name: 'Approval queue' })).toBeVisible();
+    });
+
+    test('a narrow WHO column keeps every id and city whole: a 1366 laptop, the Console open', async ({ app, page }) => {
+      const who = page.locator('.home-answer__who');
+      const rows = page.locator('.home-answer__who-row');
+      for (const narrow of [
+        { label: '1366x900', width: 1366, console: false },
+        { label: '1440x900 with the Console open', width: 1440, console: true },
+        { label: '1536x900 with the Console open', width: 1536, console: true },
+      ]) {
+        await page.setViewportSize({ width: narrow.width, height: FOLD });
+        if (narrow.console) await app.openConsole();
+        // Let the shell's finite transitions end, then check the column really
+        // is narrow: a sample taken while the Console slides in proves nothing.
+        await page.evaluate(() =>
+          Promise.all(
+            document
+              .getAnimations()
+              .filter((animation) => animation.effect?.getComputedTiming().endTime !== Infinity)
+              .map((animation) => animation.finished.catch(() => undefined)),
+          ),
+        );
+        await expect
+          .poll(() => who.evaluate((el) => el.getBoundingClientRect().width), { message: `${narrow.label}: WHO list width` })
+          .toBeLessThan(WHO_ONE_LINE_MIN);
+        await expect(rows).toHaveCount(5);
+        const cut = await rows.evaluateAll((nodes) =>
+          nodes.flatMap((row) =>
+            Array.from(row.querySelectorAll<HTMLElement>('.home-answer__who-id, .home-answer__who-place'))
+              .filter((part) => part.clientWidth === 0 || part.scrollWidth > part.clientWidth + 0.5)
+              .map((part) => `${part.textContent}: ${part.clientWidth}/${part.scrollWidth}px`),
+          ),
+        );
+        expect(cut, `${narrow.label}: ids and places shown whole`).toEqual([]);
+      }
+      // Whatever still truncates (a long city at a wide column, the offer chip
+      // here) keeps its full text in a tooltip.
+      for (const row of await rows.all()) {
+        const place = row.locator('.home-answer__who-place');
+        await expect(place).toHaveAttribute('title', (await place.textContent()) ?? '');
+        const chip = row.locator('.chip');
+        await expect(chip).toHaveAttribute('title', (await chip.locator('.chip__label').textContent()) ?? '');
+      }
     });
 
     test('KPI values are at least the size of the page title', async ({ page }) => {

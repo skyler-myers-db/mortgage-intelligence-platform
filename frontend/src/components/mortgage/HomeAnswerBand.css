@@ -136,6 +136,10 @@
   display: grid;
   gap: var(--sp-1);
 }
+/* The WHO list is the query container for its rows' layout (below). */
+.home-answer__who {
+  container: home-who / inline-size;
+}
 .home-answer__who-row {
   display: grid;
   grid-template-columns: auto max-content minmax(0, 1fr) minmax(0, max-content) auto;
@@ -170,6 +174,30 @@
 .home-answer__who-place {
   font-size: var(--fs-11);
   color: var(--text-3);
+}
+/* A narrow WHO column (a 1366 laptop, or the Console open) cannot hold id,
+   place, offer and score on one line: the place used to take the squeeze
+   and collapse to an ellipsis or to nothing. Below 480px the place moves
+   under the id in a track as wide as the longer of the two, so neither is
+   cut, and the offer chip gives way instead (it carries its full label in
+   `title`). 480px: the column is 491px at 1440x900, so the design target
+   keeps its one-line rows and the answer band's height. */
+@container home-who (max-width: 480px) {
+  .home-answer__who-row {
+    grid-template-columns: auto minmax(max-content, 1fr) minmax(0, max-content) auto;
+    grid-template-areas:
+      "rank id chip score"
+      "rank place chip score";
+    row-gap: 0;
+  }
+  .home-answer__who-row > .home-answer__rank { grid-area: rank; }
+  .home-answer__who-row > .home-answer__who-id { grid-area: id; }
+  .home-answer__who-row > .home-answer__who-place { grid-area: place; }
+  /* The two lines share the one-line row's height as far as they can. */
+  .home-answer__who-row > .home-answer__who-id,
+  .home-answer__who-row > .home-answer__who-place { line-height: var(--lh-snug); }
+  .home-answer__who-row > .chip { grid-area: chip; }
+  .home-answer__who-row > .score { grid-area: score; }
 }
 
 /* ---------- WHY NOW ---------- */
