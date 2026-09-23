@@ -131,6 +131,45 @@ describe('CommandPalette Ask Genie row', () => {
     expect(openRequests).toEqual([1]);
   });
 
+  it('a user who arrowed onto the Genie row stays on it when borrower rows land above it', async () => {
+    let resolveSearch: (rows: unknown[]) => void = () => undefined;
+    borrowerSearch.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveSearch = resolve;
+        }),
+    );
+    pressMetaK();
+    setQuery('refi');
+    // Pages first, the Genie row last; ArrowUp wraps onto it while the
+    // borrower search is still in flight.
+    act(() => {
+      input().dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true }));
+    });
+    const selected = () => container.querySelector('[role="option"][aria-selected="true"]');
+    expect(selected()?.textContent).toContain('Ask Genie: refi');
+    // Wait for the debounced search to be issued (it stays pending).
+    const startedAt = Date.now();
+    while (borrowerSearch.mock.calls.length === 0) {
+      if (Date.now() - startedAt > 5_000) throw new Error('borrower search never issued');
+      await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
+    }
+    expect(selected()?.textContent).toContain('Ask Genie: refi');
+
+    await act(async () => {
+      resolveSearch([{ borrower_id: 'B-1EEEN00S99GXC', city: 'Chicago', state: 'IL', zip: '60611' }]);
+    });
+    expect(container.querySelector('[role="group"][aria-label="Borrowers"]')).not.toBeNull();
+    // The selection followed the row, not the index the borrower now holds.
+    expect(selected()?.textContent).toContain('Ask Genie: refi');
+    expect(input().getAttribute('aria-activedescendant')).toBe(selected()?.id);
+    act(() => {
+      input().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    });
+    expect(navigate).not.toHaveBeenCalled();
+    expect(consumeGeniePrefill()).toBe('refi');
+  });
+
   it('the Genie row comes after the borrower rows, as the fallback', async () => {
     borrowerSearch.mockResolvedValue([
       { borrower_id: 'B-1EEEN00S99GXC', city: 'Chicago', state: 'IL', zip: '60611' },

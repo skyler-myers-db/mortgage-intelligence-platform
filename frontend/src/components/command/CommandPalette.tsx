@@ -67,6 +67,10 @@ export function CommandPalette() {
   const [borrowers, setBorrowers] = useState<LeadSummary[]>([]);
   const [searchStatus, setSearchStatus] = useState<'idle' | 'loading' | 'empty' | 'error'>('idle');
   const [activeIndex, setActiveIndex] = useState(0);
+  // True once the user moves onto the "Ask Genie" fallback (arrows or
+  // pointer). Borrower rows land after the debounce ABOVE that row, so the
+  // same index would then point at a borrower; the selection follows the row.
+  const onGenieRowRef = useRef(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -77,6 +81,7 @@ export function CommandPalette() {
     setBorrowers([]);
     setSearchStatus('idle');
     setActiveIndex(0);
+    onGenieRowRef.current = false;
   }, []);
   const close = useCallback(() => {
     setOpen(false);
@@ -159,10 +164,23 @@ export function CommandPalette() {
     [actions, borrowers, genieQuery],
   );
 
-  // Clamp the active index whenever the result set shrinks.
+  // Clamp the active index whenever the result set shrinks; keep a user who
+  // chose the Genie row on it when borrower rows are inserted above it.
   useEffect(() => {
-    setActiveIndex((i) => (items.length === 0 ? 0 : Math.min(i, items.length - 1)));
-  }, [items.length]);
+    const genieIndex = onGenieRowRef.current ? items.findIndex((item) => item.kind === 'genie') : -1;
+    setActiveIndex((i) => {
+      if (items.length === 0) return 0;
+      return genieIndex >= 0 ? genieIndex : Math.min(i, items.length - 1);
+    });
+  }, [items]);
+
+  const moveTo = useCallback(
+    (index: number) => {
+      onGenieRowRef.current = items[index]?.kind === 'genie';
+      setActiveIndex(index);
+    },
+    [items],
+  );
 
   const runItem = useCallback(
     (item: FlatItem) => {
@@ -195,10 +213,10 @@ export function CommandPalette() {
     (e: ReactKeyboardEvent<HTMLInputElement>) => {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
-        setActiveIndex((i) => (items.length === 0 ? 0 : (i + 1) % items.length));
+        moveTo(items.length === 0 ? 0 : (activeIndex + 1) % items.length);
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
-        setActiveIndex((i) => (items.length === 0 ? 0 : (i - 1 + items.length) % items.length));
+        moveTo(items.length === 0 ? 0 : (activeIndex - 1 + items.length) % items.length);
       } else if (e.key === 'Enter') {
         e.preventDefault();
         const item = items[activeIndex];
@@ -211,7 +229,7 @@ export function CommandPalette() {
       }
       // Esc is handled by the focus trap.
     },
-    [items, activeIndex, runItem, searchStatus, borrowers.length],
+    [items, activeIndex, moveTo, runItem, searchStatus, borrowers.length],
   );
 
   // Keep the active row scrolled into view as arrows move it.
@@ -261,6 +279,7 @@ export function CommandPalette() {
             onChange={(e) => {
               setQuery(e.target.value);
               setActiveIndex(0);
+              onGenieRowRef.current = false;
             }}
             onKeyDown={onInputKeyDown}
           />
@@ -292,7 +311,7 @@ export function CommandPalette() {
                     label={item.action.label}
                     hint={item.action.hint}
                     onActivate={() => runItem(item)}
-                    onHover={() => setActiveIndex(i)}
+                    onHover={() => moveTo(i)}
                   />
                 );
               })}
@@ -316,7 +335,7 @@ export function CommandPalette() {
                     hint={`${item.lead.city}, ${item.lead.state} · ${item.lead.zip}`}
                     mono
                     onActivate={() => runItem(item)}
-                    onHover={() => setActiveIndex(i)}
+                    onHover={() => moveTo(i)}
                   />
                 );
               })}
@@ -348,7 +367,7 @@ export function CommandPalette() {
                     label={`Ask Genie: ${item.prompt}`}
                     hint="Opens Genie with this question; you press Ask"
                     onActivate={() => runItem(item)}
-                    onHover={() => setActiveIndex(i)}
+                    onHover={() => moveTo(i)}
                   />
                 );
               })}
