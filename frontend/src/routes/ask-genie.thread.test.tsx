@@ -4,7 +4,8 @@
  * Ask Genie thread view. The route used to show ONE answer — a second
  * question erased the first, so the deep-dive surface had no conversation
  * even though the floating panel kept one. Both now read the shared
- * transcript store, newest turn first.
+ * transcript store, oldest turn first with the composer docked under the
+ * thread (the floating panel's order, audit 2026-09-21 `visual-07`).
  */
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -195,7 +196,7 @@ describe('Ask Genie thread view', () => {
     await waitUntil(() => container.textContent?.includes(question) ?? false);
   }
 
-  it('keeps both turns and shows the latest one first', async () => {
+  it('keeps both turns, oldest first, with the composer docked under the thread', async () => {
     genie
       .mockResolvedValueOnce(answer('First governed answer.', 'msg-1'))
       .mockResolvedValueOnce(answer('Second governed answer.', 'msg-2'));
@@ -210,9 +211,21 @@ describe('Ask Genie thread view', () => {
 
     // The first turn survives the second ask …
     expect(container.textContent).toContain('First governed answer.');
-    // … and the newest exchange sits at the top of the thread.
-    expect(userBubbles()).toEqual(['Which ZIPs lead', 'Which states lead']);
-    expect(container.textContent).toContain('Earlier in this thread');
+    // … and the thread reads oldest first, so the newest answer sits
+    // directly above the composer.
+    expect(userBubbles()).toEqual(['Which states lead', 'Which ZIPs lead']);
+    expect(container.textContent).not.toContain('Earlier in this thread');
+    const thread = container.querySelector('.genie-thread');
+    const composer = questionInput().closest('form');
+    expect(composer?.classList.contains('genie-composer')).toBe(true);
+    // The composer is the card footer right after the body that holds the
+    // thread (structure, not document-position APIs: happy-dom misorders a
+    // node React inserts after its later sibling).
+    const body = composer?.previousElementSibling;
+    expect(body?.classList.contains('surface__body')).toBe(true);
+    expect(thread && body?.contains(thread)).toBe(true);
+    const answers = Array.from(container.querySelectorAll('.genie-thread > .surface--inset')).map((el) => el.textContent ?? '');
+    expect(answers[answers.length - 1]).toContain('Second governed answer.');
     expect(getGenieTurns().map((turn) => turn.question)).toEqual([
       'Which states lead',
       'Which ZIPs lead',

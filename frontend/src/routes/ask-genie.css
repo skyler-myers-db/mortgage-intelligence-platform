@@ -55,3 +55,64 @@
 .growth-agent-run--pending .typing-dots {
   flex: none;
 }
+
+/* Docked composer (visual-07). The route used to put the question box first
+   and the answers under it, the reverse of the floating panel; now the thread
+   reads down to the suggestions and the composer is the conversation card's
+   footer (the prototype's `.surface__ft`, design_files/index.html:368),
+   sticky at the bottom of `.main`, the app's scroller, so it stays in view
+   however long the thread gets. `.genie-composer` extends the app's existing
+   `.genie-composer__samples` block. The card is a flex column so the footer
+   sits at its bottom when the Trusted sources column is the taller one. */
+.surface:has(> .genie-composer) {
+  display: flex;
+  flex-direction: column;
+}
+.surface:has(> .genie-composer) > .surface__body {
+  flex: 1 1 auto;
+}
+.genie-composer {
+  position: sticky;
+  bottom: 0;
+  z-index: var(--z-raised-2);
+  align-items: flex-end;
+  gap: var(--sp-3);
+  background: var(--bg-2);
+  border-end-start-radius: var(--r-lg);
+  border-end-end-radius: var(--r-lg);
+}
+/* Grows with the question (field-sizing is Baseline since June 2026) from
+   two lines to eight, then scrolls; `rows={2}` is the fallback size where
+   field-sizing is unsupported, and there the user can still resize. */
+.genie-composer .genie-composer__input {
+  flex: 1 1 auto;
+  min-inline-size: 0;
+  min-height: calc(2lh + var(--sp-8));
+  max-height: 8lh;
+  field-sizing: content;
+  resize: none;
+}
+@supports not (field-sizing: content) {
+  .genie-composer .genie-composer__input { resize: vertical; }
+}
+.genie-composer .btn { flex: none; }
+/* A new exchange is scrolled to its question; clear the sticky route nav. */
+.genie-thread > .genie__msg--user {
+  scroll-margin-block: var(--sp-16) var(--sp-4);
+}
+.surface__body > .genie-thread ~ *,
+.surface__body > .surface--inset + .genie-composer__samples {
+  margin-top: var(--sp-4);
+}
+/* Below 720px the Genie launcher (`.genie__fab`, 06-genie-chat.css) is shown,
+   fixed 52px wide at the inline end (right: var(--sp-4)). The composer keeps
+   its controls clear of it with an inline-end inset and puts Ask on its own
+   row. */
+@media (max-width: 720px) {
+  .genie-composer {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    padding-inline-end: calc(var(--sp-12) + var(--sp-2));
+  }
+  .genie-composer .genie-composer__input { flex-basis: 100%; }
+}
