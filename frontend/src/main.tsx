@@ -1,8 +1,8 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter } from "react-router";
-import App from "./app";
+import { RouterProvider } from "react-router/dom";
+import { createAppRouter } from "./appRouter";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { rootErrorOptions } from "./lib/clientErrorLog";
 import { hasRenderBlockedChunkLoad } from "./lib/lazyPreload";
@@ -13,6 +13,11 @@ import "./design-system/components.css";
 import "./design-system/print.css";
 
 const queryClient = createMipQueryClient();
+
+// A data router with one catch-all route around the unchanged <Routes> tree
+// in app.tsx, so the unsaved-changes guard can use useBlocker (audit
+// states-05). See appRouter.tsx: no loaders, actions or route objects.
+const router = createAppRouter();
 
 // A tab left open across a deploy asks for chunks the new build retired.
 // Reload once (guarded) when a render is blocked on such a chunk; see
@@ -26,9 +31,7 @@ ReactDOM.createRoot(document.getElementById("root")!, rootErrorOptions()).render
   <React.StrictMode>
     <ErrorBoundary boundary="root" variant="page">
       <QueryClientProvider client={queryClient}>
-        <BrowserRouter>
-          <App />
-        </BrowserRouter>
+        <RouterProvider router={router} />
       </QueryClientProvider>
     </ErrorBoundary>
   </React.StrictMode>
