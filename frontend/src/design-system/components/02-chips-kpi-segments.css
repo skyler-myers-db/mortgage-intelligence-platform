@@ -333,8 +333,8 @@
    ============================================================ */
 .seg-card {
   position: relative;
-  display: flex;
-  flex-direction: column;
+  /* A subgrid of .seg-grid (rows in SegmentCard.css, audit visual-04). */
+  display: grid;
   background: var(--bg-2);
   border: 1px solid var(--line-1);
   border-radius: var(--r-lg);
@@ -348,7 +348,6 @@
   overflow: hidden;
   text-align: left;
   width: 100%;
-  min-block-size: 184px;
   color: inherit;
   font-family: inherit;
 }
@@ -478,7 +477,8 @@
 .seg-card__reconcile {
   margin-top: var(--sp-1);
   font-size: var(--fs-11);
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
   color: var(--text-3);
   line-height: var(--lh-snug);
   overflow-wrap: anywhere;
@@ -510,7 +510,10 @@
 .seg-card__meta {
   display: flex;
   row-gap: var(--sp-1);
-  column-gap: var(--sp-3);
+  /* sp-2, not the prototype's sp-3 (design_files/index.html:529): the app
+     adds the evidence chip and the Ask Genie entry to this row, and at the
+     1440 design target they only fit on one line with the tighter gap. */
+  column-gap: var(--sp-2);
   margin-top: var(--sp-3);
   font-size: var(--fs-11); color: var(--text-3);
   font-family: var(--font-mono);
@@ -561,42 +564,7 @@
   overflow-wrap: anywhere;
 }
 
-/* S1.6 — borrower-dimension facet rows (loan product + origination channel).
- * Sits under the meta row; one row per dimension: a small caps label followed
- * by evidence chips that open the EvidenceDrawer without toggling selection.
- *
- * `margin-top: auto` pins the breakdown to the bottom edge of the card (the
- * card is a column flex container) so the card's slack collects in the middle
- * instead of pushing chips toward the geometric centre. That matters because
- * the centre is where an untargeted click — a user's, or Playwright's default
- * click point — lands: it should hit the selection overlay, not a chip. */
-.seg-card__facets {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-2);
-  margin-top: auto;
-  padding-top: var(--sp-3);
-}
-.seg-card__facet-row {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--sp-1);
-  min-inline-size: 0;
-}
-.seg-card__facet-label {
-  font-family: var(--font-mono);
-  font-size: var(--fs-11);
-  letter-spacing: var(--tracking-caps);
-  text-transform: uppercase;
-  color: var(--text-3);
-  margin-inline-end: var(--sp-1);
-}
-/* Layout wrapper only. The hover and focus treatments live on the
-   `.evidence-chip` button inside it — the wrapper is a <span> with no border
-   and no tabindex, so styling its own :hover/:focus-visible painted nothing. */
-.seg-card__facet-chip {
-  display: inline-flex;
-  min-inline-size: 0;
-}
+/* S1.6 facet share bars (loan product + origination channel) live in
+   components/mortgage/SegmentCard.css with the rest of the card's row grid:
+   the card renders only inside the lazy Segments route. */
 

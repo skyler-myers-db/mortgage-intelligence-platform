@@ -516,7 +516,8 @@ describe('layout containment contracts', () => {
   it('lets segment cards wrap content instead of clipping labels or pending copy', () => {
     const css = designCss();
 
-    expect(css).toMatch(/\.seg-card\s*\{[^}]*min-block-size:\s*184px;/s);
+    // The card is a grid so it can adopt .seg-grid rows as a subgrid (visual-04).
+    expect(css).toMatch(/\.seg-card\s*\{[^}]*display:\s*grid;/s);
     expect(css).toMatch(/\.seg-card__hdr\s*\{[^}]*min-inline-size:\s*0;/s);
     expect(css).toMatch(/\.seg-card__title\s*\{[^}]*overflow-wrap:\s*anywhere;/s);
     expect(css).toMatch(/\.seg-card__count\s*\{[^}]*overflow-wrap:\s*anywhere;/s);

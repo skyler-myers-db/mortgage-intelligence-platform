@@ -8,7 +8,8 @@ import { normalizeSegmentCode, SEGMENT_DEFINITIONS } from '../../lib/segmentMeta
 import type { SegmentSummary } from '../../types';
 
 import { DRAWER_SOURCES } from '../../lib/drawerSources';
-import { SegmentCard } from './SegmentCard';
+import { SegmentCard, SegmentCardSkeleton } from './SegmentCard';
+import { facetShares } from './SegmentFacetBar';
 
 // EvidenceChip (the S1.3 per-segment evidence affordance) reads setDrawer +
 // showEvidence from the app context; mock it so the card renders standalone.
@@ -95,6 +96,23 @@ describe('SegmentCard', () => {
     expect(container.textContent).toContain('no borrowers in current view');
     expect(container.textContent).not.toContain('+42%');
     expect(container.textContent).not.toContain('avg 0');
+    // The reason sits in the reconcile slot (empty for a zero count), so it
+    // never wraps the meta row beside the evidence chip and Ask Genie.
+    expect(container.querySelector('.seg-card__reconcile-slot .seg-card__reconcile--empty')?.textContent?.trim()).toBe(
+      'no borrowers in current view',
+    );
+    expect(container.querySelector('.seg-card__meta')?.textContent).not.toContain('no borrowers');
+  });
+
+  it('shows a compact pending-delta token on a first snapshot and speaks the sentence', () => {
+    render({ code: 'itm', count: 12, delta: '+0%', avg_score: 70 });
+    const meta = container.querySelector('.seg-card__meta');
+    const pending = meta?.querySelector('.seg-card__delta-pending');
+    expect(pending?.querySelector('[aria-hidden="true"]')?.textContent).toBe('Δ —');
+    expect(pending?.querySelector('.sr-only')?.textContent).toBe('first snapshot · deltas pending');
+    // No "+0%" claim of a flat count, and no visible run-on sentence.
+    expect(meta?.textContent).not.toContain('+0%');
+    expect(container.querySelector('.seg-card__reconcile--empty')).toBeNull();
   });
 
   it('prefers canonical presentation copy over stale backend labels', () => {
@@ -126,16 +144,64 @@ describe('SegmentCard', () => {
         { value: 'branch', count: 90 },
       ],
     });
-    // Product row: top-3 only, exact counts, short labels.
-    expect(container.textContent).toContain('FHA 1,240');
-    expect(container.textContent).toContain('Conv 980');
-    expect(container.textContent).toContain('Jumbo 210');
-    expect(container.textContent).not.toContain('VA 40');
-    // Channel row: top-2 only, display labels.
-    expect(container.textContent).toContain('Loan officer 1,500');
-    expect(container.textContent).toContain('Digital 620');
-    expect(container.textContent).not.toContain('Branch 90');
+    // visual-04: ONE evidence trigger per facet, a stacked share bar of the
+    // whole mix (VA included) with the largest share as the legend.
+    const product = container.querySelector('.seg-card__facet-chip--product');
+    const channel = container.querySelector('.seg-card__facet-chip--channel');
+    expect(product?.querySelectorAll('.evidence-chip')).toHaveLength(1);
+    expect(channel?.querySelectorAll('.evidence-chip')).toHaveLength(1);
+    expect(product?.querySelectorAll('.seg-card__facet-share')).toHaveLength(4);
+    expect(channel?.querySelectorAll('.seg-card__facet-share')).toHaveLength(3);
+    expect(product?.querySelector('.seg-card__facet-legend')?.textContent).toBe('FHA 50%');
+    expect(channel?.querySelector('.seg-card__facet-legend')?.textContent).toBe('LO 68%');
+    // WCAG 2.5.3 Label in Name: the visible legend is NOT hidden, so it is
+    // the start of the trigger's name; a visually hidden continuation that
+    // follows it names the facet and its top three values. Only the bar is
+    // presentational.
+    for (const [facet, summary] of [
+      [product, ' (Loan product mix: FHA 50%, Conventional 40%, Jumbo 9%)'],
+      [channel, ' (Origination channel mix: Loan officer 68%, Digital 28%, Branch 4%)'],
+    ] as const) {
+      const legend = facet?.querySelector('.seg-card__facet-legend');
+      const continuation = facet?.querySelector('.sr-only');
+      expect(legend?.hasAttribute('aria-hidden')).toBe(false);
+      expect(legend?.closest('[aria-hidden]')).toBeNull();
+      expect(continuation?.textContent).toBe(summary);
+      expect(continuation?.closest('[aria-hidden]')).toBeNull();
+      expect(
+        continuation && legend ? legend.compareDocumentPosition(continuation) & Node.DOCUMENT_POSITION_FOLLOWING : 0,
+        'the hidden summary follows the visible legend',
+      ).not.toBe(0);
+      expect(facet?.querySelector('.seg-card__facet-bar')?.getAttribute('aria-hidden')).toBe('true');
+    }
     expect(container.querySelector('.seg-card__facets')).not.toBeNull();
+  });
+
+  it('computes facet shares from the whole mix, largest first, skipping empty values', () => {
+    const shares = facetShares([
+      { value: 'digital', count: 1 },
+      { value: 'loan_officer', count: 299 },
+      { value: 'branch', count: 0 },
+    ]);
+    expect(shares.map((share) => [share.value, share.pctLabel])).toEqual([
+      ['loan_officer', '100%'],
+      ['digital', '<1%'],
+    ]);
+    expect(facetShares([])).toEqual([]);
+    expect(facetShares(undefined)).toEqual([]);
+  });
+
+  it('labels an unmapped snake_case facet code in sentence case, and leaves other spellings alone', () => {
+    const shares = facetShares([
+      { value: 'home_equity_line', count: 3 },
+      { value: 'USDA', count: 2 },
+      { value: 'loan_officer', count: 1 },
+    ]);
+    expect(shares.map((share) => [share.label, share.legendLabel])).toEqual([
+      ['Home equity line', 'Home equity line'],
+      ['USDA', 'USDA'],
+      ['Loan officer', 'LO'],
+    ]);
   });
 
   it('hides the facet block when both mixes are empty or absent', () => {
@@ -284,6 +350,13 @@ describe('SegmentCard', () => {
     // at all — stronger than aria-disabled on a non-widget, and it keeps the
     // card from advertising a click that would do nothing.
     expect(container.querySelector('.seg-card__select')).toBeNull();
+    // One line per row (review round 2): the state chip beside the count,
+    // the source in the reconcile row, the evidence chip alone in the meta.
+    expect(container.querySelector('.seg-card__count-row .seg-card__gate')?.textContent).toBe('not connected');
+    expect(container.querySelector('.seg-card__reconcile-slot .seg-card__source')?.textContent).toBe('Building Permits');
+    const meta = container.querySelector('.seg-card__meta');
+    expect(meta?.children).toHaveLength(1);
+    expect(meta?.querySelector('.evidence-chip')).not.toBeNull();
   });
 
   it('labels a permission-denied source as not licensed', () => {
@@ -314,8 +387,10 @@ describe('SegmentCard', () => {
     expect(note?.textContent).toContain('contactable');
     // The relationship is what makes the two numbers legible together —
     // the smaller one must never be presented as if it stood alone.
-    expect(note?.textContent?.replace(/\s+/g, ' ')).toBe(
-      '3,217 contactable of 74,335 addressable',
+    // "N contactable of M": the app-wide idiom (Home's approval banner cites
+    // this card for it).
+    expect(note?.textContent?.replace(/\s+/g, ' ').trim()).toBe(
+      '3,217 contactable of 74,335',
     );
     // Same disclosure for a screen reader, on the control that navigates.
     const select = container.querySelector<HTMLButtonElement>('.seg-card__select');
@@ -372,6 +447,21 @@ describe('SegmentCard', () => {
       source_name: 'MLS Listings',
     });
     expect(container.querySelector('.seg-card__reconcile')).toBeNull();
+  });
+
+  it('renders a loading card on the same six subgrid rows as a loaded card', () => {
+    act(() => root.render(<SegmentCardSkeleton />));
+    const card = container.querySelector('.seg-card--skeleton');
+    expect(card?.getAttribute('aria-hidden')).toBe('true');
+    expect(Array.from(card?.children ?? [], (row) => row.classList[0])).toEqual([
+      'seg-card__hdr',
+      'seg-card__count-row',
+      'seg-card__reconcile-slot',
+      'seg-card__sub-stack',
+      'seg-card__meta',
+      'seg-card__facets',
+    ]);
+    expect(card?.querySelectorAll('.seg-card__facets .seg-card__facet-skeleton')).toHaveLength(2);
   });
 
   it('opens the evidence drawer from the segment evidence chip', () => {
