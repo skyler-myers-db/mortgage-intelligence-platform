@@ -5,6 +5,8 @@
  * resolves the real tokens.css cascade for all eight pairs, mixes each
  * `color-mix(in oklab, ...)` step the way the CSS engine does, and pins:
  *  - adjacent steps (0..4) at least 0.06 OKLab L apart, monotone;
+ *  - the top step stands >= 3:1 off the empty base (step 0), so no pair is
+ *    the pale wash responsive-05 measured at 1.6:1;
  *  - the text ink of every step (ZIP tile codes, state labels) >= 4.5:1.
  */
 import { describe, expect, it } from 'vitest';
@@ -78,7 +80,7 @@ describe('geography ramp tokens (dataviz-02 / responsive-05)', () => {
 
   for (const theme of THEMES) {
     for (const accent of ACCENTS) {
-      it(`${theme} + ${accent}: equal-looking steps stay >= 0.06 OKLab L apart and every step's ink reads 4.5:1`, () => {
+      it(`${theme} + ${accent}: steps stay >= 0.06 OKLab L apart, the top step is >= 3:1 off the base, every step's ink reads 4.5:1`, () => {
         const cascade = new TokenCascade(css, { theme, accent });
         const steps = [0, 1, 2, 3, 4].map((n) => stepColor(cascade.resolve(`--map-ramp-${n}`)));
         const lightness = steps.map((c) => toOklab(c)[0]);
@@ -88,6 +90,7 @@ describe('geography ramp tokens (dataviz-02 / responsive-05)', () => {
           expect(Math.abs(delta), `step ${n - 1} -> ${n}: ${lightness.map((l) => l.toFixed(3)).join(' ')}`).toBeGreaterThanOrEqual(0.06);
           expect(Math.sign(delta)).toBe(direction);
         }
+        expect(contrast(steps[4], steps[0]), 'top step against the empty base').toBeGreaterThanOrEqual(3);
         for (let n = 0; n < steps.length; n += 1) {
           const ink = parseColor(cascade.resolve(`--map-ramp-ink-${n}`));
           if (!ink) throw new Error(`--map-ramp-ink-${n} is not a colour`);
