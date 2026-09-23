@@ -29,16 +29,19 @@ export const COMMAND_ACTIONS: readonly CommandAction[] = [
   // --- Navigate (the eight product-flow routes + analytics/glossary/admin) ---
   { id: 'nav-home', label: 'Home', hint: '/', icon: 'home', group: 'Navigate',
     keywords: ['overview', 'dashboard', 'start', 'map', 'geography'], target: { kind: 'route', to: '/' } },
+  // Mortgage synonyms (audit 2026-09-21 `shell-07`): "refi" used to match
+  // nothing. The domain words a lender types are keywords BEFORE any fuzzy
+  // scoring, so they resolve to the page that owns the concept.
   { id: 'nav-portfolio', label: 'Portfolio Builder', hint: '/portfolio-builder', icon: 'target', group: 'Navigate',
-    keywords: ['build', 'population', 'filters', 'campaign', 'roi', 'economics'], target: { kind: 'route', to: '/portfolio-builder' } },
+    keywords: ['build', 'population', 'filters', 'campaign', 'roi', 'economics', 'in the money', 'heloc'], target: { kind: 'route', to: '/portfolio-builder' } },
   { id: 'nav-segments', label: 'Segment Intelligence', hint: '/segment-intelligence', icon: 'layers', group: 'Navigate',
-    keywords: ['segments', 'in the money', 'investor', 'heloc', 'equity', 'cohort'], target: { kind: 'route', to: '/segment-intelligence' } },
+    keywords: ['segments', 'in the money', 'itm', 'investor', 'heloc', 'equity', 'cohort', 'refi', 'refinance', 'cash-out', 'cash out', 'recapture', 'retention', 'listed', 'listed for sale'], target: { kind: 'route', to: '/segment-intelligence' } },
   { id: 'nav-leads', label: 'Lead Queue', hint: '/lead-queue', icon: 'flow', group: 'Navigate',
-    keywords: ['ranked', 'borrowers', 'approve', 'reject', 'queue', 'outreach'], target: { kind: 'route', to: '/lead-queue' } },
+    keywords: ['ranked', 'borrowers', 'approve', 'reject', 'queue', 'outreach', 'refi', 'in the money', 'heloc'], target: { kind: 'route', to: '/lead-queue' } },
   { id: 'nav-borrower', label: 'Borrower 360', hint: '/borrower-360', icon: 'user', group: 'Navigate',
     keywords: ['dossier', 'profile', 'evidence', 'proof'], target: { kind: 'route', to: '/borrower-360' } },
   { id: 'nav-offer', label: 'Offer Orchestrator', hint: '/offer-orchestrator', icon: 'send', group: 'Navigate',
-    keywords: ['offer', 'next best', 'nbo', 'draft', 'outreach'], target: { kind: 'route', to: '/offer-orchestrator' } },
+    keywords: ['offer', 'next best', 'nbo', 'draft', 'outreach', 'refi', 'refinance', 'cash-out', 'cash out', 'heloc', 'recapture', 'retention'], target: { kind: 'route', to: '/offer-orchestrator' } },
   { id: 'nav-analytics', label: 'Analytics', hint: '/analytics', icon: 'audit', group: 'Navigate',
     keywords: ['executive', 'geography', 'economics', 'signals', 'funnel', 'charts'], target: { kind: 'route', to: '/analytics' } },
   { id: 'nav-genie', label: 'Ask Genie', hint: '/ask-genie', icon: 'sparkle', group: 'Navigate',
