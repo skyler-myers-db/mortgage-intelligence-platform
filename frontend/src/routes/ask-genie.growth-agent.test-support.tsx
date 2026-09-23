@@ -3,9 +3,9 @@
  */
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act } from 'react';
+import { act, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, useLocation } from 'react-router';
 import { afterEach, beforeEach, vi } from 'vitest';
 import type {
   GenieStartResult,
@@ -303,7 +303,24 @@ export function registerGrowthAgentRoutePanelHooks() {
   });
 }
 
-export function mount() {
+/** The router location the route last rendered with (`pathname + search`). */
+export let currentLocation = '';
+
+function LocationProbe() {
+  const location = useLocation();
+  const href = `${location.pathname}${location.search}`;
+  useEffect(() => {
+    currentLocation = href;
+  }, [href]);
+  return null;
+}
+
+/**
+ * Mount the route. The Growth Agent suites start on the Workflows tab (where
+ * the agent lives since audit 2026-09-21 `visual-07`); pass another path to
+ * start elsewhere.
+ */
+export function mount(path = '/ask-genie?tab=workflows') {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -313,8 +330,9 @@ export function mount() {
   act(() => {
     root.render(
       <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={['/ask-genie']}>
+        <MemoryRouter initialEntries={[path]}>
           <AskGenie />
+          <LocationProbe />
         </MemoryRouter>
       </QueryClientProvider>,
     );
@@ -339,8 +357,26 @@ export function stateInput() {
   return input;
 }
 
+/** The tab panel that is showing (inactive panels stay mounted but `hidden`). */
+export function activePanel(): HTMLElement {
+  const panels = Array.from(container.querySelectorAll<HTMLElement>('[role="tabpanel"]'));
+  const shown = panels.filter((panel) => !panel.hidden);
+  if (shown.length !== 1) throw new Error(`expected one visible tab panel, found ${shown.length}`);
+  return shown[0];
+}
+
+/** Select a page tab by its visible label. */
+export function openTab(label: string) {
+  const tab = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
+    .find((candidate) => candidate.textContent === label);
+  if (!tab) throw new Error(`tab not rendered: ${label}`);
+  act(() => tab.click());
+}
+
+/** A button the user can reach: one inside a hidden tab panel does not count. */
 export function button(name: RegExp) {
-  const candidates = Array.from(container.querySelectorAll<HTMLButtonElement>('button'));
+  const candidates = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+    .filter((candidate) => !candidate.closest('[hidden]'));
   const match = candidates.find((candidate) => name.test(candidate.textContent ?? ''));
   if (!match) throw new Error(`button not rendered: ${name}`);
   return match;

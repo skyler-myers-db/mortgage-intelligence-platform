@@ -1,0 +1,137 @@
+/* /ask-genie route styles (audit 2026-09-21 visual-07 / genie-09).
+   Route-level on purpose: imported by routes/ask-genie.tsx so it ships in the
+   route's lazy CSS chunk, not the initial stylesheet (same pattern as
+   glossary.css and analytics.scatter.css). */
+
+/* Page tabs: the prototype's `.layout-tabs` tablist (design_files/Module 0
+   Prototype.html:958-960), placed in the hero's right slot as the prototype
+   does at :2148-2152. Tokenized; the one departure is the selected tab's ink:
+   --accent-ink instead of the prototype's --accent, which is 1.75:1 in light
+   + bright (the evidence drawer tab took the same fix, audit a11y-01). The
+   ring is the global :focus-visible one. */
+.layout-tabs {
+  display: flex;
+  gap: var(--sp-1);
+  padding: var(--sp-1);
+  background: var(--bg-2);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+}
+.layout-tabs button {
+  min-block-size: calc(var(--sp-6) + var(--sp-1));
+  padding: var(--sp-1) var(--sp-3);
+  background: transparent;
+  border: 0;
+  border-radius: var(--r-sm);
+  color: var(--text-2);
+  font-family: var(--font-sans);
+  font-size: var(--fs-12);
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.layout-tabs button:hover { color: var(--text-1); }
+.layout-tabs button:active { translate: 0 var(--pressed-shift); }
+.layout-tabs button.is-active {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+/* Growth Agent run slot (genie-09): the run's progress and result sit under
+   the controls, above the workflow cards. The cards keep their gap whether or
+   not a run card is showing (the controls' bottom margin collapses into it). */
+.growth-agent__controls ~ .growth-agent__cards {
+  margin-block-start: var(--sp-4);
+}
+/* The slot scrolls itself into view when a run starts from a card below;
+   clear the sticky route nav, as glossary.css does for deep links. */
+.growth-agent-run {
+  scroll-margin-block: var(--sp-16) var(--sp-4);
+}
+.growth-agent-run--pending .growth-agent-run__head {
+  align-items: flex-start;
+}
+.growth-agent-run--pending .typing-dots {
+  flex: none;
+}
+
+/* Docked composer (visual-07). The route used to put the question box first
+   and the answers under it, the reverse of the floating panel; now the thread
+   reads down to the suggestions and the composer is the conversation card's
+   footer (the prototype's `.surface__ft`, design_files/index.html:368),
+   sticky at the bottom of `.main`, the app's scroller, so it stays in view
+   however long the thread gets. `.genie-composer` extends the app's existing
+   `.genie-composer__samples` block. The card is a flex column so the footer
+   sits at its bottom when the Trusted sources column is the taller one. */
+.surface:has(> .genie-composer) {
+  display: flex;
+  flex-direction: column;
+}
+.surface:has(> .genie-composer) > .surface__body {
+  flex: 1 1 auto;
+}
+.genie-composer {
+  position: sticky;
+  bottom: 0;
+  z-index: var(--z-raised-2);
+  align-items: flex-end;
+  gap: var(--sp-3);
+  background: var(--bg-2);
+  border-end-start-radius: var(--r-lg);
+  border-end-end-radius: var(--r-lg);
+}
+/* Focus Not Obscured (WCAG 2.2 SC 2.4.11, technique C43). While the Ask tab
+   shows, `.main` has a sticky bar at each end: the route nav at the top and
+   the opaque docked composer at the bottom. A control that takes focus from
+   outside the view (the answer's feedback buttons and the suggestions below
+   it; a table row above it on Shift+Tab) would be scrolled only to the
+   scroller's edge, entirely behind a bar. `.main` keeps each bar's block
+   size, plus room for the focus ring, as scroll-padding at that end, so
+   focus scrolling stops between the bars. Sizes are measured by
+   useComposerScrollClearance (ask-genie.composer-clearance.ts); the
+   fallbacks cover the nav and a two-line composer before the first
+   measurement. */
+.main:has(section[role="tabpanel"]:not([hidden]) .genie-composer) {
+  scroll-padding-block-start: calc(
+    var(--genie-route-nav-block-size, var(--sp-16))
+    + var(--focus-ring-width) + var(--focus-ring-offset)
+  );
+  scroll-padding-block-end: calc(
+    var(--genie-composer-block-size, calc(var(--sp-16) * 2 + var(--sp-8)))
+    + var(--focus-ring-width) + var(--focus-ring-offset)
+  );
+}
+/* Grows with the question (field-sizing is Baseline since June 2026) from
+   two lines to eight, then scrolls; `rows={2}` is the fallback size where
+   field-sizing is unsupported, and there the user can still resize. */
+.genie-composer .genie-composer__input {
+  flex: 1 1 auto;
+  min-inline-size: 0;
+  min-height: calc(2lh + var(--sp-8));
+  max-height: 8lh;
+  field-sizing: content;
+  resize: none;
+}
+@supports not (field-sizing: content) {
+  .genie-composer .genie-composer__input { resize: vertical; }
+}
+.genie-composer .btn { flex: none; }
+/* The suggestions keep their gap under the thread or the empty state; the
+   status, warming and error callouts between them carry their own mt-*. */
+.surface__body > .genie-thread ~ .genie-composer__samples,
+.surface__body > .surface--inset + .genie-composer__samples {
+  margin-top: var(--sp-4);
+}
+/* Below 720px the Genie launcher (`.genie__fab`, 06-genie-chat.css) is shown,
+   fixed 52px wide at the inline end (right: var(--sp-4)). The composer keeps
+   its controls clear of it with an inline-end inset and puts Ask on its own
+   row. */
+@media (max-width: 720px) {
+  .genie-composer {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    padding-inline-end: calc(var(--sp-12) + var(--sp-2));
+  }
+  .genie-composer .genie-composer__input { flex-basis: 100%; }
+}

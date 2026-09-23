@@ -9,6 +9,7 @@ import { GenieHistoryMenu } from '../components/mortgage/GenieHistoryMenu';
 import { GenieProgress } from '../components/mortgage/GenieProgress';
 import { GenieTurnActions } from '../components/mortgage/GenieTurnActions';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
+import { friendlyAssetLabel } from '../lib/assetLabels';
 import { drawerForAsset } from '../lib/drawerSources';
 import {
   getGenieTurns,
@@ -17,6 +18,9 @@ import {
   subscribeGenieTurns,
   type GenieTurn,
 } from '../lib/genieConversationStore';
+import { useComposerScrollClearance } from './ask-genie.composer-clearance';
+import { renderSourceAssetChip } from './ask-genie.growth-agent.helpers';
+import { useRevealLatestExchange, useRevealLatestOnArrival } from './ask-genie.thread-scroll';
 
 /**
  * AskGenieAnswerPanel — the composer + conversation surface extracted from
@@ -29,10 +33,14 @@ import {
  * (`lib/genieConversationStore`), so a thread started in the bubble continues
  * here and vice versa.
  *
- * Ordering is LATEST FIRST: the composer stays at the top of the page and the
- * newest exchange sits directly under it, with older turns below an "Earlier
- * in this thread" divider — no scrolling to find the answer you just asked
- * for.
+ * Ordering is the floating panel's (audit 2026-09-21 `visual-07`): the thread
+ * reads oldest-first, the suggestions sit under it, and the composer is docked
+ * at the bottom of the surface (`position: sticky; bottom: 0`, routes/
+ * ask-genie.css), so it stays in view however long the thread gets and a new
+ * answer lands directly above it. When the new exchange starts off screen,
+ * useRevealLatestExchange scrolls its question into view. The route used to
+ * put the composer first with the latest answer under it, the reverse of the
+ * floating panel.
  *
  * The source-chip classification depends only on `payload`, so it lives here
  * rather than in the parent — it moved wholesale with the surface it
@@ -106,7 +114,22 @@ export interface AskGenieAnswerPanelProps {
   /** Refusal card "Edit question": restore the refused prompt to the composer. */
   onEditQuestion?: (question: string) => void;
   actionStatus: string | null;
+  /** Governed sources Genie reads (from `/api/genie/start`); the empty state
+   *  cites them as evidence chips, so every source is one click from its proof. */
+  sourceAssets?: readonly string[];
 }
+
+/** How many source chips the empty state shows. */
+const EMPTY_STATE_SOURCE_CHIPS = 3;
+
+/**
+ * Composer placeholder, in the reviewed segment vocabulary. Short enough to
+ * fit the composer's two empty lines on a phone: `field-sizing: content`
+ * sizes an empty box to its placeholder, and a longer one grew the docked
+ * composer over the empty state. The empty state above it already names what
+ * Genie answers about.
+ */
+export const COMPOSER_PLACEHOLDER = 'Ask about your book, e.g. prime refi candidates by state';
 
 function GenieThreadTurn({
   turn,
@@ -134,14 +157,18 @@ function GenieThreadTurn({
                 {chip.label}
               </Chip>
             ) : drawerForSource ? (
-              // Specific UC asset → open the matching drawer entry.
-              <EvidenceChip source={drawerForSource}>{chip.label}</EvidenceChip>
+              // Specific UC asset → open the matching drawer entry. Plain
+              // label on the chip, the governed path in its tooltip (flow-10;
+              // same as the workflow cards' source chips).
+              <EvidenceChip source={drawerForSource} title={chip.label}>
+                {friendlyAssetLabel(chip.label)}
+              </EvidenceChip>
             ) : (
               // Generic / unknown source → inert chip so a click doesn't open
               // the wrong drawer. (Prior code defaulted to NBO and was
               // misleading.)
               <Chip variant="neutral" title={`Source: ${chip.label}`}>
-                {chip.label}
+                {friendlyAssetLabel(chip.label)}
               </Chip>
             )}
           </div>
@@ -183,6 +210,7 @@ export function AskGenieAnswerPanel({
   onAction,
   onEditQuestion,
   actionStatus,
+  sourceAssets = [],
 }: AskGenieAnswerPanelProps) {
   const composerSampleQuestions = sampleQuestions.slice(0, 4);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -223,10 +251,25 @@ export function AskGenieAnswerPanel({
     onSettled?.(submittedQuestion);
   }, [payload, submittedQuestion, onSettled]);
 
-  const latest = thread[thread.length - 1] ?? null;
-  const earlier = thread.slice(0, -1).reverse();
   const turnKey = (turn: GenieTurn, index: number) =>
     `${turn.response.message_id ?? turn.response.question_hash ?? 'turn'}-${index}`;
+
+  // The exchange that starts at the end of the thread: the question in
+  // flight, else the latest settled turn's question. When it changes and is
+  // off screen, it is scrolled into view (the composer is docked below it).
+  const showInFlight = inFlight && Boolean(submittedQuestion);
+  const latestIndex = thread.length - 1;
+  const latestAnchorRef = useRef<HTMLDivElement>(null);
+  const dockRef = useRef<HTMLFormElement>(null);
+  useRevealLatestExchange(
+    latestAnchorRef,
+    dockRef,
+    showInFlight ? `pending-${thread.length}` : `settled-${thread.length}`,
+  );
+  // Arriving by a link with a thread already stored opens on its latest turn.
+  useRevealLatestOnArrival(latestAnchorRef, dockRef);
+  // Focus scrolling stops above the docked composer (WCAG 2.2 SC 2.4.11).
+  useComposerScrollClearance(dockRef);
 
   // Conversational controls (audit 2026-09-21 `genie-03`, client-only slice):
   // ArrowUp in an empty composer recalls the last question; Edit reloads a
@@ -242,14 +285,17 @@ export function AskGenieAnswerPanel({
     onQuestionChange(text);
     questionRef.current?.focus();
   };
+  const canAsk = !loading && warmingUp === null && question.trim().length > 0;
   const reaskDisabledReason = inFlight ? 'Genie is still answering. This unlocks when the answer lands.' : null;
-  const questionBubble = (turn: GenieTurn) => {
+  const questionBubble = (turn: GenieTurn, anchor: boolean) => {
     const source = turn.response.source ?? '';
     // Refusals and data gaps would only repeat themselves: Edit only.
     const reask = source === 'degraded' ? 'retry' : BLOCKED_SOURCES.has(source) ? null : 'regenerate';
     return (
       <>
-        <div className="genie__msg genie__msg--user">{turn.question}</div>
+        <div ref={anchor ? latestAnchorRef : undefined} className="genie__msg genie__msg--user">
+          {turn.question}
+        </div>
         <GenieTurnActions
           placement="question"
           question={turn.question}
@@ -268,93 +314,76 @@ export function AskGenieAnswerPanel({
       <div className="surface__hdr surface__hdr--split">
         <div className="surface__hdr-main">
           <Icon name="sparkle" size={14} className="icon-accent" />
-          <div className="h-4">Ask a question</div>
+          <h2 className="h-4">Conversation</h2>
         </div>
-        <GenieHistoryMenu
-          open={historyOpen}
-          onToggle={setHistoryOpen}
-          onLoad={(conversationId, turns) => {
-            setHistoryOpen(false);
-            onLoadSession(conversationId, turns);
-          }}
-          disabled={inFlight}
-        />
-      </div>
-      <div className="surface__body">
-        <textarea
-          ref={questionRef}
-          aria-label="Ask Genie — question"
-          value={question}
-          onChange={(e) => {
-            onQuestionChange(e.target.value);
-          }}
-          onKeyDown={(e) => {
-            // ArrowUp in an EMPTY composer recalls the last question
-            // (genie-03). A non-empty draft keeps the caret movement.
-            if (e.key === 'ArrowUp' && question.length === 0 && lastQuestion) {
-              e.preventDefault();
-              onQuestionChange(lastQuestion);
-              return;
-            }
-            // 2026-05-04 (FIX Δ1): standard chat keymap — Enter
-            // submits, Shift+Enter inserts a newline. Match how
-            // Slack / GitHub PRs behave so the keyboard-first user
-            // doesn't have to mouse over to the Ask Genie button.
-            // The submit-disabled guard mirrors the button's
-            // `disabled` prop so a stray Enter during a warming-up
-            // request can't double-fire.
-            if (
-              e.key === 'Enter' &&
-              !e.shiftKey &&
-              !e.metaKey &&
-              !e.ctrlKey &&
-              !e.altKey
-            ) {
-              e.preventDefault();
-              if (!loading && warmingUp === null && question.trim().length > 0) {
-                onAsk(question);
-              }
-            }
-          }}
-          className="route-textarea route-textarea--genie"
-        />
-        {composerSampleQuestions.length > 0 && (
-          <div
-            className="genie-composer__samples"
-            role="group"
-            aria-label="Suggested Genie questions"
-          >
-            {composerSampleQuestions.map((q) => (
-              <button
-                key={q}
-                type="button"
-                className="filter filter--question"
-                onClick={() => onAsk(q)}
-              >
-                <Icon name="sparkle" size={11} />
-                <span className="filter__text">{q}</span>
-              </button>
-            ))}
-          </div>
-        )}
-        <div className="section-actions">
-          <Button
-            variant="primary"
-            icon="send"
-            onClick={() => onAsk(question)}
-            disabled={loading || warmingUp !== null || question.trim().length === 0}
-          >
-            {loading || warmingUp !== null ? 'Asking…' : 'Ask Genie'}
-          </Button>
-          <Button
-            variant="ghost"
-            icon="chat"
-            onClick={onNewThread}
-            disabled={loading || warmingUp !== null}
-          >
+        <div className="chip-row">
+          <GenieHistoryMenu
+            open={historyOpen}
+            onToggle={setHistoryOpen}
+            onLoad={(conversationId, turns) => {
+              setHistoryOpen(false);
+              onLoadSession(conversationId, turns);
+            }}
+            disabled={inFlight}
+          />
+          <Button variant="ghost" size="sm" icon="chat" onClick={onNewThread} disabled={inFlight}>
             New thread
           </Button>
         </div>
+      </div>
+      <div className="surface__body">
+        {thread.length === 0 && !inFlight && !errorMsg && (
+          <div className="surface surface--inset">
+            <div className="surface__body genie-empty">
+              <div className="genie-empty__icon">
+                <Icon name="sparkle" size={16} />
+              </div>
+              <div>
+                <div className="genie-empty__title">Ask about your book — coverage, segments, borrowers, market shifts.</div>
+                <p className="genie-empty__copy">
+                  Each answer shows the figures it used, where they came from and how fresh they are. Any follow-up
+                  action still needs your approval.
+                </p>
+                {sourceAssets.length > 0 && (
+                  <div className="chip-row mt-2" role="group" aria-label="Sources Genie answers from">
+                    <span className="muted fs-11">Answers come from:</span>
+                    {sourceAssets.slice(0, EMPTY_STATE_SOURCE_CHIPS).map((asset) => renderSourceAssetChip(asset))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+        {(thread.length > 0 || inFlight) && (
+          <div className="genie-thread">
+            {/* Fragment, not a wrapper div: the user bubble aligns itself to
+                the right edge of `.genie-thread`, so every bubble and card
+                must stay a DIRECT flex child of it. */}
+            {thread.map((turn, index) => (
+              <Fragment key={turnKey(turn, index)}>
+                {turn.question && questionBubble(turn, !showInFlight && index === latestIndex)}
+                <GenieThreadTurn
+                  turn={turn}
+                  onFollowUp={onFollowUp}
+                  onAction={onAction}
+                  onEditQuestion={onEditQuestion}
+                />
+              </Fragment>
+            ))}
+            {showInFlight && (
+              <>
+                <div ref={latestAnchorRef} className="genie__msg genie__msg--user">{submittedQuestion}</div>
+                {loading && !warmingUp && (
+                  <div className="surface surface--inset">
+                    <div className="surface__body">
+                      <GenieProgress progress={liveProgress} startedAt={askStartedAt} />
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
         {warmingUp && (
           <div className="mt-4">
             <WarmingUpBlock state={warmingUp} title="Asking Genie" compact />
@@ -382,67 +411,80 @@ export function AskGenieAnswerPanel({
         {actionStatus && (
           <div className="status-callout status-callout--info mt-3">{actionStatus}</div>
         )}
-        {thread.length === 0 && !inFlight && !errorMsg && (
-          <div className="surface surface--inset mt-4">
-            <div className="surface__body genie-empty">
-              <div className="genie-empty__icon">
-                <Icon name="sparkle" size={16} />
-              </div>
-              <div>
-                <div className="genie-empty__title">Ask about your book — coverage, segments, borrowers, market shifts.</div>
-                <p className="genie-empty__copy">
-                  Trusted SQL, source assets, freshness, and approval-safe actions appear with each answer.
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
-        {(thread.length > 0 || inFlight) && (
-          <div className="genie-thread mt-4">
-            {inFlight && submittedQuestion && (
-              <>
-                <div className="genie__msg genie__msg--user">{submittedQuestion}</div>
-                {loading && !warmingUp && (
-                  <div className="surface surface--inset">
-                    <div className="surface__body">
-                      <GenieProgress progress={liveProgress} startedAt={askStartedAt} />
-                    </div>
-                  </div>
-                )}
-              </>
-            )}
-            {latest && (
-              <>
-                {latest.question && questionBubble(latest)}
-                <GenieThreadTurn
-                  key={turnKey(latest, thread.length - 1)}
-                  turn={latest}
-                  onFollowUp={onFollowUp}
-                  onAction={onAction}
-                  onEditQuestion={onEditQuestion}
-                />
-              </>
-            )}
-            {earlier.length > 0 && (
-              <div className="eyebrow">Earlier in this thread</div>
-            )}
-            {/* Fragment, not a wrapper div: the user bubble aligns itself to
-                the right edge of `.genie-thread`, so every bubble and card
-                must stay a DIRECT flex child of it. */}
-            {earlier.map((turn, i) => (
-              <Fragment key={turnKey(turn, earlier.length - 1 - i)}>
-                {turn.question && questionBubble(turn)}
-                <GenieThreadTurn
-                  turn={turn}
-                  onFollowUp={onFollowUp}
-                  onAction={onAction}
-                  onEditQuestion={onEditQuestion}
-                />
-              </Fragment>
+        {composerSampleQuestions.length > 0 && (
+          <div
+            className="genie-composer__samples"
+            role="group"
+            aria-label="Suggested Genie questions"
+          >
+            {composerSampleQuestions.map((q) => (
+              <button
+                key={q}
+                type="button"
+                className="filter filter--question"
+                onClick={() => onAsk(q)}
+              >
+                <Icon name="sparkle" size={11} />
+                <span className="filter__text">{q}</span>
+              </button>
             ))}
           </div>
         )}
       </div>
+      {/* The docked composer (visual-07): the prototype's card footer,
+          sticky at the bottom of the route's scroller. */}
+      <form
+        ref={dockRef}
+        className="surface__ft genie-composer"
+        aria-label="Ask Genie composer"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (canAsk) onAsk(question);
+        }}
+      >
+        <textarea
+          ref={questionRef}
+          aria-label="Ask Genie — question"
+          placeholder={COMPOSER_PLACEHOLDER}
+          rows={2}
+          value={question}
+          onChange={(e) => {
+            onQuestionChange(e.target.value);
+          }}
+          onKeyDown={(e) => {
+            // ArrowUp in an EMPTY composer recalls the last question
+            // (genie-03). A non-empty draft keeps the caret movement.
+            if (e.key === 'ArrowUp' && question.length === 0 && lastQuestion) {
+              e.preventDefault();
+              onQuestionChange(lastQuestion);
+              return;
+            }
+            // 2026-05-04 (FIX Δ1): standard chat keymap — Enter
+            // submits, Shift+Enter inserts a newline. Match how
+            // Slack / GitHub PRs behave so the keyboard-first user
+            // doesn't have to mouse over to the Ask Genie button.
+            // The submit-disabled guard mirrors the button's
+            // `disabled` prop so a stray Enter during a warming-up
+            // request can't double-fire.
+            if (
+              e.key === 'Enter' &&
+              !e.shiftKey &&
+              !e.metaKey &&
+              !e.ctrlKey &&
+              !e.altKey
+            ) {
+              e.preventDefault();
+              if (canAsk) {
+                onAsk(question);
+              }
+            }
+          }}
+          className="route-textarea route-textarea--genie genie-composer__input"
+        />
+        <Button variant="primary" icon="send" type="submit" disabled={!canAsk}>
+          {loading || warmingUp !== null ? 'Asking…' : 'Ask Genie'}
+        </Button>
+      </form>
     </div>
   );
 }

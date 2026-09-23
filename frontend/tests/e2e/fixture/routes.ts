@@ -29,7 +29,8 @@ export const FIXTURE_ROUTES: readonly FixtureRoute[] = [
   { name: 'borrower-360-detail', path: `/borrower-360/${PRIMARY_BORROWER.borrower_id}`, populated: PRIMARY_BORROWER.clip },
   { name: 'offer-orchestrator-index', path: '/offer-orchestrator' },
   { name: 'offer-orchestrator-detail', path: `/offer-orchestrator/${PRIMARY_BORROWER.borrower_id}`, populated: 'NMLS #000000' },
-  { name: 'ask-genie', path: '/ask-genie', populated: 'Daily refi brief' },
+  // A /api/genie/start sample question: the Ask tab, not the hidden Workflows tab.
+  { name: 'ask-genie', path: '/ask-genie', populated: 'Which states have the most prime refi candidates' },
   // Analytics abbreviates today (89.55K); accept the full figure too.
   { name: 'analytics-executive', path: '/analytics', populated: /89[.,]55/ },
   { name: 'analytics-geography', path: '/analytics?view=geography' },
