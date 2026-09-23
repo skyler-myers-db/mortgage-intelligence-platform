@@ -16,7 +16,9 @@
  *     every accent (it painted `--accent`, 1.75:1 in light + bright);
  *  d. the three text inputs whose rules switched the outline off (Genie
  *     composer, property lookup `.form-input`, admin audit
- *     `.admin-filter-input`) show the shared `--focus-ring-*` ring at 3:1.
+ *     `.admin-filter-input`) show the shared `--focus-ring-*` ring at 3:1;
+ *  e. the Analytics activation-funnel Sankey node, whose SVG focus ring is a
+ *     stroke, strokes the ring colour at 3:1 (it stroked `--accent`, 1.9:1).
  */
 import type { Locator, Page } from '@playwright/test';
 import type { HealthPayload } from '../../../src/lib/apiTypes';
@@ -205,3 +207,33 @@ for (const input of TEXT_INPUTS) {
     expect(ratio, `${ring.outlineColor} on rgb(${surface.bg.join(', ')})`).toBeGreaterThanOrEqual(AA_UI);
   });
 }
+
+test('light: the activation-funnel Sankey node strokes the shared focus ring at 3:1', async ({ app, page }) => {
+  // `outline` is unreliable on SVG <g>, so the node's ring is its bar's
+  // stroke; the global :focus-visible ring never reaches it. The Sankey is
+  // the Executive view's "Activation funnel" panel.
+  await app.setTheme('light');
+  await app.gotoRoute('/analytics');
+  const node = page.locator('#main-content .funnel-sankey__node').first();
+  await expect(node).toBeVisible();
+
+  await page.keyboard.press('Tab');
+  await node.focus();
+  const ring = await node.evaluate((el) => {
+    const bar = el.querySelector('.funnel-sankey__bar');
+    if (!bar) throw new Error('.funnel-sankey__node has no .funnel-sankey__bar');
+    const style = getComputedStyle(bar);
+    return {
+      matchesFocusVisible: el.matches(':focus-visible'),
+      stroke: style.stroke,
+      strokeWidth: style.strokeWidth,
+      token: style.getPropertyValue('--focus-ring-color').trim(),
+    };
+  });
+  expect(ring.matchesFocusVisible).toBe(true);
+  expect(ring.strokeWidth).toBe('2px');
+  expect(ring.stroke, 'strokes the resolved --focus-ring-color').toBe(await asComputedRgb(page, ring.token));
+  const surface = await renderedColors(page.locator('#main-content svg.funnel-sankey').first());
+  const ratio = contrastRatio(parseRgb(ring.stroke), surface.bg);
+  expect(ratio, `${ring.stroke} on rgb(${surface.bg.join(', ')}) = ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(AA_UI);
+});

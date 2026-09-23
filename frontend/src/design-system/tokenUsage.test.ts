@@ -77,6 +77,26 @@ function rules(css: string): Array<{ selector: string; block: string }> {
   }));
 }
 
+describe('SVG focus strokes use the ring colour (css-v1)', () => {
+  // `outline` is unreliable on SVG <g>, so the funnel Sankey nodes draw
+  // their focus ring as a stroke; it painted --accent (1.9:1 on white in
+  // light + bright). The map region pairs its token outline with a --text-1
+  // edge, which is a second cue, not the ring.
+  it('paints every :focus-visible stroke with --focus-ring-color or a text token', () => {
+    const strokes = rules(components)
+      .filter((rule) => rule.selector.includes(':focus-visible'))
+      .flatMap((rule) =>
+        [...rule.block.matchAll(/(?<![-\w])stroke:\s*([^;]+);/g)].map((m) => ({ selector: rule.selector, value: m[1].trim() })),
+      );
+    expect(strokes.map((s) => s.selector)).toContain('.funnel-sankey__node:focus-visible .funnel-sankey__bar');
+    for (const stroke of strokes) {
+      expect(stroke.value, stroke.selector).toMatch(/^var\(--(?:focus-ring-color|text-[1-2])\)$/);
+    }
+    const sankey = strokes.find((s) => s.selector === '.funnel-sankey__node:focus-visible .funnel-sankey__bar');
+    expect(sankey?.value).toBe('var(--focus-ring-color)');
+  });
+});
+
 describe('warning copy and glyphs use the ink token (a11y-01)', () => {
   it('never paints text or a glyph with the amber fill hue', () => {
     // `color:` only: background, border, box-shadow and color-mix() tints keep

@@ -158,8 +158,11 @@
 .funnel-sankey__node:focus-visible .funnel-sankey__label {
   fill: var(--accent-ink);
 }
+/* The SVG node's focus ring (outline is unreliable on <g>) is the shared
+   ring colour, not --accent (1.9:1 on white in light + bright;
+   2026-09-21 audit css-v1). */
 .funnel-sankey__node:focus-visible .funnel-sankey__bar {
-  stroke: var(--accent);
+  stroke: var(--focus-ring-color);
   stroke-width: 2;
 }
 /* One-time draw on first appearance: ribbons fade in left-to-right. Gated
