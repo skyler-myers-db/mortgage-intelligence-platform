@@ -20,7 +20,9 @@
  *  - Reject renders a rejected receipt with its reason code.
  *  - A refused read-back (403) renders the neutral "Recorded; receipt
  *    unavailable" state with the audit id still shown; a 404 does not claim
- *    the row is recorded and keeps "Retry read-back".
+ *    the row is recorded and keeps "Retry read-back". Either way the page
+ *    still states the decision: a durable rejection another approver opens
+ *    keeps its "Rejected" chip when the receipt read is refused.
  *  - A failed write keeps the existing failure surface and reads nothing back.
  *  - Borrower 360 offers "Latest decision" when the lifecycle row carries an
  *    audit id, and the audit explorer honours `?audit_event_id=`; Clear (or
@@ -46,6 +48,7 @@ import {
   REJECT_AUDIT_ID,
   RequestGate,
   approveResult,
+  decidedLifecycle,
   ledgerReceipt,
   rejectResult,
 } from './data/decisionReceipt';
@@ -303,6 +306,8 @@ test.describe('decision receipt', () => {
     const unavailable = page.getByTestId('decision-receipt-unavailable');
     await expect(unavailable).toBeVisible();
     await expect(unavailable).toContainText('Recorded; receipt unavailable');
+    // The approve POST resolved: the outcome it wrote stays on the card.
+    await expect(unavailable.getByTestId('decision-receipt-outcome').locator('.chip--success')).toHaveText(APPROVED_CHIP);
     await expect(unavailable.getByTestId('decision-receipt-audit-id')).toContainText(APPROVE_AUDIT_ID);
     await expect(unavailable.getByRole('button', { name: 'Copy audit id' })).toBeVisible();
     await expect(unavailable.getByRole('button', { name: 'Retry read-back' })).toHaveCount(0);
@@ -323,9 +328,32 @@ test.describe('decision receipt', () => {
     await expect(unavailable).toContainText('Ledger row not found');
     await expect(unavailable).not.toContainText('is in the audit ledger');
     await expect(unavailable).not.toContainText('Recorded');
+    await expect(unavailable).toContainText('The write returned this audit id');
+    await expect(unavailable.getByTestId('decision-receipt-outcome')).toHaveText(APPROVED_CHIP);
     await expect(unavailable.getByTestId('decision-receipt-audit-id')).toContainText(APPROVE_AUDIT_ID);
     await expect(unavailable.getByRole('button', { name: 'Retry read-back' })).toBeVisible();
     await expect(page.getByTestId('decision-receipt')).toHaveCount(0);
+  });
+
+  test('a durable rejection whose receipt read-back is refused (403) still says Rejected', async ({ app, page, mockApi }) => {
+    mockApi.register('GET', '/api/borrowers/:id/lifecycle', ({ params }) =>
+      json<BorrowerLifecycle>(decidedLifecycle(params.id, 'rejected', REJECT_AUDIT_ID, SNAPSHOT_AT)),
+    );
+    app.degrade('/api/audit/receipt/:id', { method: 'GET', status: 403, body: { detail: 'forbidden' } });
+    await app.gotoRoute(`/offer-orchestrator/${BORROWER_ID}`);
+
+    const unavailable = page.getByTestId('decision-receipt-unavailable');
+    await expect(unavailable).toBeVisible();
+    await expect(unavailable).toHaveAttribute('data-receipt-state', 'forbidden');
+    // The decision itself stays on the page: nothing else here says Rejected
+    // (the review panel is hidden and the hero button reads "Approve").
+    await expect(unavailable.getByTestId('decision-receipt-outcome').locator('.chip--danger')).toHaveText(/^\s*Rejected\s*$/);
+    await expect(page.getByTestId('hero-approve')).toHaveText('Approve');
+    await expect(unavailable).toContainText('Recorded; receipt unavailable');
+    await expect(unavailable.getByTestId('decision-receipt-audit-id')).toContainText(REJECT_AUDIT_ID);
+    await expect(unavailable).not.toContainText('The write returned');
+    await expect(page.getByTestId('decision-receipt')).toHaveCount(0);
+    await expect(page.getByTestId('decision-receipt-pending')).toHaveCount(0);
   });
 
   test('a failed approve write keeps the failure surface and reads nothing back', async ({ app, page, mockApi }) => {

@@ -7,7 +7,10 @@
  * decision made in this view shows "Recording decision…" until the row is
  * confirmed. A durable decision from an earlier session renders the finished
  * receipt without the reveal; a durable approval whose lifecycle row carries
- * no audit id keeps the plain approved chip.
+ * no audit id keeps the plain approved chip. The receipt is handed the
+ * outcome this page already knows (effectiveApproval: the resolved POST or
+ * the durable lifecycle row), so a read-back this viewer may not make (403:
+ * another approver's row) or that fails still says Approved / Rejected.
  */
 import { ActivationLoopPanel } from '../components/activation/ActivationLoopPanel';
 import { DecisionReceipt } from '../components/mortgage/DecisionReceipt';
@@ -66,7 +69,14 @@ export function OfferDecisionOutcome({
       {effectiveApproval === 'approved' && (
         <>
           {auditId ? (
-            <DecisionReceipt auditEventId={auditId} reveal={justDecided} score={scoreAtDecision} className="mt-grid" />
+            <DecisionReceipt
+              auditEventId={auditId}
+              decision="approved"
+              decidedHere={justDecided}
+              reveal={justDecided}
+              score={scoreAtDecision}
+              className="mt-grid"
+            />
           ) : (
             <div className="surface mt-grid">
               <div className="surface__body surface__body--inline">
@@ -86,7 +96,14 @@ export function OfferDecisionOutcome({
       )}
       {effectiveApproval === 'rejected' && (
         auditId ? (
-          <DecisionReceipt auditEventId={auditId} reveal={justDecided} score={scoreAtDecision} className="mt-grid" />
+          <DecisionReceipt
+            auditEventId={auditId}
+            decision="rejected"
+            decidedHere={justDecided}
+            reveal={justDecided}
+            score={scoreAtDecision}
+            className="mt-grid"
+          />
         ) : (
           <div className="surface mt-grid">
             <div className="surface__body surface__body--inline">

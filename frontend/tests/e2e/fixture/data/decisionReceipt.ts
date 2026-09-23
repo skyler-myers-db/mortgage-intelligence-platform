@@ -10,7 +10,7 @@
  * (approver, copy hash, correlation id): a receipt that shows them was read
  * back from the row, not assembled from the POST.
  */
-import type { Borrower360 } from '../../../../src/types';
+import type { Borrower360, BorrowerLifecycle } from '../../../../src/types';
 import type { ApproveResult, DecisionOutcome, DecisionReceipt, RejectResult } from '../../../../src/lib/apiTypes';
 import { json, type FixtureReply } from '../mockApi';
 
@@ -71,6 +71,29 @@ export function ledgerReceipt(
     created_at: '2026-07-14T15:00:04Z',
     evidence_ids: borrower.evidence_ids,
     evidence_assets: [...LEDGER_EVIDENCE_ASSETS],
+  };
+}
+
+/**
+ * The durable lifecycle row of a borrower decided in an earlier session:
+ * its approval status plus the audit id of the row that decision wrote.
+ */
+export function decidedLifecycle(
+  borrowerId: string,
+  approvalStatus: 'approved' | 'rejected',
+  auditEventId: string,
+  syncedAt: string,
+): BorrowerLifecycle {
+  return {
+    borrower_id: borrowerId,
+    approval_status: approvalStatus,
+    outreach_status: approvalStatus === 'approved' ? 'queued' : 'none',
+    approval_id: approvalStatus === 'approved' ? 'apr-fixture-0001' : 'apr-fixture-0002',
+    audit_event_id: auditEventId,
+    approved_at: approvalStatus === 'approved' ? '2026-07-14T15:00:04Z' : null,
+    synced_at: syncedAt,
+    assignment: null,
+    latest_disposition: null,
   };
 }
 

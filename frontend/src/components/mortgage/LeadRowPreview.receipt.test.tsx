@@ -103,10 +103,23 @@ describe('RowPreview decision receipt slot', () => {
     expect(receiptMock.render).toHaveBeenCalledWith(
       expect.objectContaining({
         auditEventId: 'audit-row-1',
+        decision: 'approved',
+        decidedHere: true,
         reveal: true,
         compact: true,
         score: { opportunityScore: 86, confidence: 88 },
       }),
+    );
+  });
+
+  it('hands the receipt the outcome the row decision resolved with, so an unreadable receipt still states it', () => {
+    act(() => {
+      root.render(
+        <RowPreview lead={lead} approval="rejected" decisionReceipt={{ auditEventId: 'audit-row-2', decision: 'rejected' }} />,
+      );
+    });
+    expect(receiptMock.render).toHaveBeenLastCalledWith(
+      expect.objectContaining({ auditEventId: 'audit-row-2', decision: 'rejected', decidedHere: true }),
     );
   });
 

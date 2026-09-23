@@ -41,12 +41,13 @@ const appMocks = vi.hoisted(() => ({
 }));
 
 vi.mock('../lib/api', () => {
+  // Same constructor shape as the real ApiError (message, { path, status }).
   class ApiError extends Error {
-    status: number;
+    status: number | null;
 
-    constructor(message: string, status = 500) {
+    constructor(message: string, opts: { path: string; status?: number | null } = { path: '' }) {
       super(message);
-      this.status = status;
+      this.status = opts.status ?? null;
     }
   }
   return {
@@ -89,6 +90,7 @@ vi.mock('../components/activation/ActivationLoopPanel', () => ({
   ),
 }));
 
+import { ApiError } from '../lib/api';
 import OfferOrchestrator from './offer-orchestrator';
 import { clearBorrowerCache } from './offer-orchestrator.cache';
 
@@ -668,6 +670,39 @@ describe('OfferOrchestrator route behavior', () => {
     expect(receipt.querySelector('[data-testid="decision-receipt-score"]')).toBeNull();
     expect(receipt.textContent).not.toContain('Score at decision');
     expect(apiMocks.approve).not.toHaveBeenCalled();
+  });
+
+  // Another approver (or an LO) opens a decided borrower: the receipt
+  // read-back is theirs to refuse (403) or may miss (404), but the page must
+  // still say what was decided. For a rejection nothing else on the page does:
+  // the review panel is hidden and the hero button reads "Approve".
+  it.each([
+    { durable: 'rejected' as const, status: 403, state: 'forbidden', label: 'Rejected' },
+    { durable: 'rejected' as const, status: 404, state: 'not-found', label: 'Rejected' },
+    { durable: 'approved' as const, status: 403, state: 'forbidden', label: 'Approved' },
+    { durable: 'approved' as const, status: 404, state: 'not-found', label: 'Approved' },
+  ])('still states a durable $durable decision when its receipt read-back returns $status', async ({ durable, status, state, label }) => {
+    apiMocks.borrowerLifecycle.mockResolvedValue({
+      ...LIFECYCLE,
+      approval_status: durable,
+      approval_id: `approval-${durable}`,
+      audit_event_id: 'audit-other-approver',
+    });
+    apiMocks.auditReceipt.mockRejectedValue(
+      new ApiError('receipt unavailable', { path: '/api/v1/audit/receipt/audit-other-approver', status }),
+    );
+    mount();
+
+    await waitUntil(() => container.querySelector('[data-testid="decision-receipt-unavailable"]') !== null);
+    const unavailable = container.querySelector<HTMLElement>('[data-testid="decision-receipt-unavailable"]')!;
+    expect(unavailable.dataset.receiptState).toBe(state);
+    expect(unavailable.querySelector('[data-testid="decision-receipt-outcome"]')?.textContent?.trim()).toBe(label);
+    expect(unavailable.querySelector('[data-testid="decision-receipt-audit-id"]')?.textContent).toContain('audit-other-approver');
+    // A passive read of an earlier decision never claims a write happened here.
+    expect(unavailable.textContent).not.toContain('The write returned');
+    expect(container.querySelector('[data-testid="decision-receipt"]')).toBeNull();
+    expect(apiMocks.approve).not.toHaveBeenCalled();
+    expect(apiMocks.reject).not.toHaveBeenCalled();
   });
 
   it.each([

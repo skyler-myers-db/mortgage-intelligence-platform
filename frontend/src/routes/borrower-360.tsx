@@ -12,6 +12,7 @@ import { ConfidenceMeter } from '../components/mortgage/ConfidenceMeter';
 import { BorrowerTruthFlags } from '../components/mortgage/BorrowerTruthFlags';
 import { BorrowerProofDrawer } from '../components/mortgage/BorrowerProofDrawer';
 import { DecisionReceipt } from '../components/mortgage/DecisionReceipt';
+import { decisionOutcomeForStatus } from '../components/mortgage/DecisionReceipt.copy';
 import { TopLeadsQuickPick } from '../components/mortgage/TopLeadsQuickPick';
 import { Button, Chip, EvidenceChip } from '../components/Primitives';
 import { GlossaryTerm } from '../components/GlossaryTerm';
@@ -328,7 +329,13 @@ export default function Borrower360() {
     >
       {latestDecisionAuditId && (
         <div id={latestDecisionRegionId} hidden={!latestDecisionOpen}>
-          {latestDecisionOpen && <DecisionReceipt auditEventId={latestDecisionAuditId} className="mb-grid" />}
+          {latestDecisionOpen && (
+            <DecisionReceipt
+              auditEventId={latestDecisionAuditId}
+              decision={decisionOutcomeForStatus(lifecycleQuery.data?.approval_status)}
+              className="mb-grid"
+            />
+          )}
         </div>
       )}
       <div className="layoutA-grid">

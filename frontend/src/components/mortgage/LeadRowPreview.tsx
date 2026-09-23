@@ -21,7 +21,9 @@ import { dispositionLabel, outreachLabel } from './LeadTable.logic';
  *   the (correctly no-op'ing) A/R hotkeys look broken on a terminal row.
  * @param decisionReceipt The audit row a row approve / reject in this
  *   session wrote. The expanded row reads it back as a Decision receipt
- *   (wow-stage-3); nothing about the receipt is taken from the POST body.
+ *   (wow-stage-3); nothing about the receipt is taken from the POST body
+ *   except the outcome it resolved with, which stays visible when the
+ *   read-back is refused or fails.
  *   The reveal plays once per decision: after it has played, a collapse +
  *   re-expand renders the receipt finished (motion-06).
  */
@@ -58,6 +60,8 @@ export function RowPreview({
         <div className="tbl__expand-inner tbl__expand-inner--receipt">
           <DecisionReceipt
             auditEventId={decisionReceipt.auditEventId}
+            decision={decisionReceipt.decision}
+            decidedHere
             reveal={!decisionReceipt.revealed}
             onRevealed={decisionReceipt.markRevealed}
             compact

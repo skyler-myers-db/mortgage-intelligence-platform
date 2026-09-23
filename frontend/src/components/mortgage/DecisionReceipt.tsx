@@ -12,6 +12,9 @@
  * receipt unavailable" state that still shows the audit id. A 404 (no
  * decision row for the id the write returned) is NOT shown as recorded: it
  * says the ledger did not confirm the row and keeps "Retry read-back".
+ * Whenever the read-back is unavailable, the outcome the caller already
+ * knows (the resolved POST or the durable lifecycle row) stays on the card,
+ * so the page never stops saying what was decided.
  *
  * BEM block `.decision-receipt` (frontend/src/design-system/components/
  * 19-decision-receipt.css), an extension of the prototype's `.surface`.
@@ -46,6 +49,19 @@ export interface LeadDecisionReceipt {
 
 export interface DecisionReceiptProps {
   auditEventId: string;
+  /**
+   * The outcome the caller already knows authoritatively: the resolved
+   * approve / reject POST, or the durable lifecycle row. Shown beside an
+   * unavailable read-back (403 / 404 / error), so the page always states
+   * the decision; a confirmed receipt shows the ledger row's own decision.
+   */
+  decision?: DecisionOutcome;
+  /**
+   * The audit id came from an approve / reject write made in this view, not
+   * from a durable decision record. Words the not-found state as a write
+   * the ledger did not confirm.
+   */
+  decidedHere?: boolean;
   /** Plays the one-shot stagger reveal for a decision made in this view. */
   reveal?: boolean;
   /** Called once the revealed receipt has rendered from the read-back. */
@@ -147,6 +163,8 @@ function staggerIndex(index: number): CSSProperties {
 
 export function DecisionReceipt({
   auditEventId,
+  decision,
+  decidedHere = false,
   reveal = false,
   onRevealed,
   compact = false,
@@ -230,12 +248,17 @@ export function DecisionReceipt({
     const explanation = state === 'forbidden'
       ? DECISION_RECEIPT_COPY.unavailableScoped
       : notFound
-        ? DECISION_RECEIPT_COPY.unavailableNotFound
+        ? (decidedHere ? DECISION_RECEIPT_COPY.unavailableNotFound : DECISION_RECEIPT_COPY.unavailableNotFoundRecord)
         : `${DECISION_RECEIPT_COPY.unavailableError} ${message}`;
     const title = notFound ? DECISION_RECEIPT_COPY.notFoundTitle : DECISION_RECEIPT_COPY.unavailableTitle;
+    // The caller's known outcome: without it an unreadable receipt would be
+    // the only decision surface and the page would no longer say it.
+    const outcome = decision ? decisionChip(decision) : null;
     return (
       <>
-        <ReceiptAnnouncement message={`${title}, audit event ${auditEventId}`} />
+        <ReceiptAnnouncement
+          message={`${outcome ? `${outcome.label}. ` : ''}${title}, audit event ${auditEventId}`}
+        />
         <section
           className={`${blockClass} decision-receipt--unavailable`}
           aria-labelledby={titleId}
@@ -243,6 +266,11 @@ export function DecisionReceipt({
           data-receipt-state={state}
         >
           <div className="surface__hdr">
+            {outcome && (
+              <span className="inline-flex" data-testid="decision-receipt-outcome">
+                <Chip variant={outcome.variant} icon={outcome.icon}>{outcome.label}</Chip>
+              </span>
+            )}
             {notFound ? (
               <Chip variant="warning" icon="audit">{DECISION_RECEIPT_COPY.unconfirmed}</Chip>
             ) : (

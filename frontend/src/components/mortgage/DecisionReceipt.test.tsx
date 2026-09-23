@@ -235,7 +235,7 @@ describe('DecisionReceipt', () => {
     apiMocks.auditReceipt
       .mockRejectedValueOnce(new ApiError('receipt not found', { path: RECEIPT_PATH, status: 404 }))
       .mockResolvedValue(LEDGER);
-    mount();
+    mount({ decidedHere: true });
     await settle();
 
     expect(receipt()).toBeNull();
@@ -256,6 +256,39 @@ describe('DecisionReceipt', () => {
     await act(async () => buttons[1].click());
     await settle();
     expect(receipt()).not.toBeNull();
+  });
+
+  it.each([
+    { status: 403, state: 'forbidden', decision: 'rejected' as const, label: 'Rejected' },
+    { status: 404, state: 'not-found', decision: 'approved' as const, label: 'Approved' },
+    { status: 503, state: 'error', decision: 'held' as const, label: 'Held' },
+  ])('keeps the caller-known outcome ($label) on the card when the read-back returns $status', async ({ status, state, decision, label }) => {
+    apiMocks.auditReceipt.mockRejectedValue(new ApiError('unavailable', { path: RECEIPT_PATH, status }));
+    mount({ decision, decidedHere: true });
+    await settle();
+
+    expect(receipt()).toBeNull();
+    const unavailable = container.querySelector<HTMLElement>('[data-testid="decision-receipt-unavailable"]')!;
+    expect(unavailable.dataset.receiptState).toBe(state);
+    const outcome = unavailable.querySelector<HTMLElement>('[data-testid="decision-receipt-outcome"]');
+    expect(outcome?.textContent?.trim()).toBe(label);
+    expect(outcome?.querySelector('.chip')?.classList.contains(decision === 'rejected' ? 'chip--danger' : decision === 'held' ? 'chip--warning' : 'chip--success')).toBe(true);
+    expect(announcement()!.textContent).toMatch(new RegExp(`^${label}\\. .+, audit event ${AUDIT_ID}$`));
+    expect(unavailable.querySelector('[data-testid="decision-receipt-audit-id"]')?.textContent).toContain(AUDIT_ID);
+  });
+
+  it('words a 404 on a durable decision against the decision record, not a write made here', async () => {
+    apiMocks.auditReceipt.mockRejectedValue(new ApiError('receipt not found', { path: RECEIPT_PATH, status: 404 }));
+    mount({ decision: 'rejected' });
+    await settle();
+
+    const unavailable = container.querySelector<HTMLElement>('[data-testid="decision-receipt-unavailable"]')!;
+    expect(unavailable.dataset.receiptState).toBe('not-found');
+    expect(unavailable.textContent).toContain(
+      'The decision record points at this audit id, but the ledger read-back did not find a decision row for it.',
+    );
+    expect(unavailable.textContent).not.toContain('The write returned');
+    expect(unavailable.querySelector('[data-testid="decision-receipt-outcome"]')?.textContent?.trim()).toBe('Rejected');
   });
 
   it('offers a retry for a non-scoped read-back failure', async () => {

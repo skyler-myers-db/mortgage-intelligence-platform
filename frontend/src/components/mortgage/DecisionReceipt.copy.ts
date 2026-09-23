@@ -22,6 +22,9 @@ export const DECISION_RECEIPT_COPY = {
   notFoundTitle: 'Ledger row not found',
   unavailableNotFound:
     'The write returned this audit id, but the ledger read-back did not find a decision row for it.',
+  /** 404 on a passive read: the id came from the decision record, not a write made here. */
+  unavailableNotFoundRecord:
+    'The decision record points at this audit id, but the ledger read-back did not find a decision row for it.',
   evidence: 'Evidence cited',
   noEvidenceAssets: 'No governed assets recorded for this offer branch.',
   scoreAtDecision: 'Score at decision',
@@ -33,6 +36,18 @@ export const DECISION_RECEIPT_COPY = {
   retry: 'Retry read-back',
   openExplorer: 'Open in audit explorer',
 } as const;
+
+/**
+ * The decision a durable lifecycle / approval status states, for a caller
+ * that passes the known outcome to the receipt (Borrower 360). `pending`
+ * has made no decision, so it maps to none.
+ */
+export function decisionOutcomeForStatus(status: string | null | undefined): DecisionOutcome | undefined {
+  if (status === 'approved') return 'approved';
+  if (status === 'rejected') return 'rejected';
+  if (status === 'hold') return 'held';
+  return undefined;
+}
 
 export function decisionChip(decision: DecisionOutcome): {
   variant: 'success' | 'danger' | 'warning';
