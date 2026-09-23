@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, type SyntheticEvent } from 'react';
+import { useId, useLayoutEffect, useRef, type SyntheticEvent } from 'react';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { Icon } from '../Icon';
 
@@ -8,10 +8,10 @@ import { Icon } from '../Icon';
  * states-05).
  *
  * A native modal `<dialog>` (top layer, inert page behind it, a real
- * `::backdrop`) with `useFocusTrap` on top for the shared Escape stack, Tab
- * wrap-around and focus return to the control that started the navigation.
- * Focus opens on Stay, the safe answer; Escape and the dialog's own cancel
- * also mean Stay.
+ * `::backdrop`) with `useFocusTrap` on top for the shared Escape stack and
+ * Tab wrap-around. Focus opens on Stay, the safe answer; Escape and the
+ * dialog's own cancel also mean Stay. Closing hands focus back to the
+ * control that started the navigation (WCAG 2.4.3; see the layout effect).
  *
  * The content is the prototype's `.approval` banner (design_files/index.html
  * `.approval`: icon, title, sub, actions) inside a `.unsaved-dialog` shell
@@ -34,13 +34,21 @@ export function UnsavedChangesDialog({ message, onStay, onLeave }: UnsavedChange
   const titleId = useId();
   const messageId = useId();
 
-  // Declared before the focus trap so the dialog is modal (and focusable)
-  // before the trap moves focus to Stay.
-  useEffect(() => {
+  // A layout effect, declared before the focus trap: the dialog is modal in
+  // the frame it mounts, before the trap moves focus to Stay. It is also
+  // what returns focus. showModal() moves focus into the dialog, so the
+  // trap's record of where to go back to is Stay itself, and a passive
+  // cleanup runs only after React has removed the dialog, when close() no
+  // longer restores focus: it fell to <body>. Here the invoker is read
+  // before showModal(), and close() runs while the dialog is connected.
+  useLayoutEffect(() => {
     const dialog = dialogRef.current;
-    if (dialog && !dialog.open) dialog.showModal();
+    if (!dialog) return undefined;
+    const invoker = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    if (!dialog.open) dialog.showModal();
     return () => {
-      if (dialog?.open) dialog.close();
+      if (dialog.open) dialog.close();
+      if (invoker?.isConnected && document.activeElement !== invoker) invoker.focus();
     };
   }, []);
 

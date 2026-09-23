@@ -112,7 +112,9 @@ describe('UnsavedChangesGuard', () => {
   it('stops a dirty page at "Leave without saving?"; Stay keeps the page and the text', async () => {
     renderDataRouter();
     type('Call after the rate drop');
-    await click(link('Other page'));
+    const other = link('Other page');
+    act(() => other.focus());
+    await click(other);
 
     const open = dialog();
     expect(open?.open).toBe(true);
@@ -125,6 +127,8 @@ describe('UnsavedChangesGuard', () => {
     expect(dialog()).toBeNull();
     expect(where()).toBe('/notes');
     expect(note()?.value).toBe('Call after the rate drop');
+    // Focus goes back to the link that started the navigation (WCAG 2.4.3).
+    expect(document.activeElement).toBe(other);
   });
 
   it('Leave completes the navigation the guard held', async () => {

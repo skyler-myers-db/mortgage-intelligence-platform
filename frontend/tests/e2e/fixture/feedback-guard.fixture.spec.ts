@@ -4,9 +4,11 @@
  *
  * states-05, the unsaved-changes guard under main.tsx's data router:
  *  - A dirty Portfolio Builder (a typed campaign budget) stops a rail click,
- *    a route-nav click, a Cmd-K jump and the Back button at "Leave without
- *    saving?". Focus opens on Stay; Stay (or Escape) keeps the page, its URL
- *    and the typed value; Leave completes the navigation.
+ *    a route-nav click, a Cmd-K jump, a link in the floating Genie panel and
+ *    the Back button at "Leave without saving?". Focus opens on Stay; Stay
+ *    (or Escape) keeps the page, its URL and the typed value and hands focus
+ *    back to the control that started the navigation; Leave completes it.
+ *    The dialog passes WCAG A/AA in both themes.
  *  - A query-string change on the same page (Run build) never asks.
  *  - Offer Orchestrator guards a typed rejection note.
  *  - A tab close raises the browser's own prompt only while dirty.
@@ -24,9 +26,10 @@
  */
 import AxeBuilder from '@axe-core/playwright';
 import type { Locator, Page } from '@playwright/test';
-import type { DecisionReceipt } from '../../../src/lib/apiTypes';
+import type { DecisionReceipt, GenieSubmitResult } from '../../../src/lib/apiTypes';
 import { PRIMARY_BORROWER } from './data/borrowers';
 import { ledgerReceipt } from './data/decisionReceipt';
+import { REFUSED_QUESTIONS, refusedSubmit } from './data/genieRefusal';
 import {
   ROUTED_APPROVE_AUDIT_ID,
   ROUTED_LOAN_OFFICER,
@@ -43,6 +46,7 @@ const DIALOG_NAME = 'Leave without saving?';
 const BUDGET = '25000';
 const SETUP_MESSAGE = 'Your campaign setup has not been saved with a build. Leaving discards it.';
 const OFFER_PATH = `/offer-orchestrator/${PRIMARY_BORROWER.borrower_id}`;
+const GENIE_SUBMIT_PATH = '/api/genie/message/submit';
 
 function leaveDialog(page: Page): Locator {
   return page.getByRole('dialog', { name: DIALOG_NAME });
@@ -106,6 +110,9 @@ test.describe('unsaved-changes guard (states-05)', () => {
     await expect(dialog).toHaveCount(0);
     await expect(page).toHaveURL(/\/portfolio-builder$/);
     await expect(budgetField(page)).toHaveValue(BUDGET);
+    // WCAG 2.4.3: closing the dialog hands focus back to the control that
+    // started the navigation, not to <body>.
+    await expect(railHome(page)).toBeFocused();
 
     await routeNavLink(page, 'Leads').click();
     dialog = await expectBlockedOnPortfolio(page);
@@ -115,6 +122,23 @@ test.describe('unsaved-changes guard (states-05)', () => {
     await expect(leaveDialog(page)).toHaveCount(0);
     await expect(page.locator('#main-content h1')).toBeVisible();
   });
+
+  for (const theme of FIXTURE_THEMES) {
+    test(`the dialog reads at AA in the ${theme} theme`, async ({ app, page }) => {
+      await app.setTheme(theme);
+      await dirtyPortfolio(app, page);
+      await railHome(page).click();
+      const dialog = await expectBlockedOnPortfolio(page);
+      expect(await axeViolations(page, 'dialog.unsaved-dialog'), `WCAG A/AA inside the dialog (${theme})`).toEqual([]);
+      for (const part of ['.approval__title', '.approval__sub']) {
+        const { fg, bg } = await renderedColors(dialog.locator(part));
+        expect(contrastRatio(fg, bg), `${part} contrast in ${theme}`).toBeGreaterThanOrEqual(4.5);
+      }
+      await page.keyboard.press('Escape');
+      await expect(dialog).toHaveCount(0);
+      await expect(railHome(page)).toBeFocused();
+    });
+  }
 
   test('Cmd-K and the Back button are guarded too; Escape means Stay', async ({ app, page }) => {
     await app.gotoRoute('/');
@@ -163,6 +187,28 @@ test.describe('unsaved-changes guard (states-05)', () => {
     await dialog.getByRole('button', { name: 'Stay' }).click();
     await expect(page.getByRole('textbox', { name: 'Rationale note' })).toHaveValue('Borrower asked for no contact this quarter.');
     await expect(page).toHaveURL(new RegExp(`${OFFER_PATH}$`));
+  });
+
+  test('a link inside the floating Genie panel is guarded, and Stay returns focus to it', async ({ app, mockApi, page }) => {
+    mockApi.register('POST', GENIE_SUBMIT_PATH, () =>
+      json<GenieSubmitResult>(refusedSubmit('out_of_scope', REFUSED_QUESTIONS.out_of_scope)),
+    );
+    await dirtyPortfolio(app, page);
+    const genie = await app.askGenie(REFUSED_QUESTIONS.out_of_scope);
+    const vocabulary = genie.getByTestId('genie-refusal-card').getByRole('link', { name: 'Reviewed vocabulary' });
+    await vocabulary.click();
+
+    let dialog = await expectBlockedOnPortfolio(page);
+    await dialog.getByRole('button', { name: 'Stay' }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(budgetField(page)).toHaveValue(BUDGET);
+    await expect(genie).toBeVisible();
+    await expect(vocabulary).toBeFocused();
+
+    await vocabulary.click();
+    dialog = await expectBlockedOnPortfolio(page);
+    await dialog.getByRole('button', { name: 'Leave' }).click();
+    await expect(page).toHaveURL(/\/glossary#reviewed-vocabulary$/);
   });
 
   test('closing the tab raises the browser prompt only while the page is dirty', async ({ app, page }) => {
