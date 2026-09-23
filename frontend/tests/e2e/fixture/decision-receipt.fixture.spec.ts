@@ -18,7 +18,8 @@
  *    row approve, with the lead payload's score line.
  *  - Reject renders a rejected receipt with its reason code.
  *  - A refused read-back (403) renders the neutral "Recorded; receipt
- *    unavailable" state with the audit id still shown.
+ *    unavailable" state with the audit id still shown; a 404 does not claim
+ *    the row is recorded and keeps "Retry read-back".
  *  - A failed write keeps the existing failure surface and reads nothing back.
  *  - Borrower 360 offers "Latest decision" when the lifecycle row carries an
  *    audit id, and the audit explorer honours `?audit_event_id=`; Clear (or
@@ -288,6 +289,24 @@ test.describe('decision receipt', () => {
     await expect(unavailable.getByRole('button', { name: 'Retry read-back' })).toHaveCount(0);
     await expect(page.getByTestId('decision-receipt')).toHaveCount(0);
     await expect(page.locator('#main-content [role="alert"]')).toHaveCount(0);
+  });
+
+  test('a read-back that finds no ledger row (404) is not shown as recorded and keeps the retry', async ({ app, page, mockApi }) => {
+    mockApi.register('POST', '/api/outreach/approve', () => approveResult(APPROVE_AUDIT_ID));
+    app.degrade('/api/audit/receipt/:id', { method: 'GET', status: 404, body: { detail: 'audit event not found' } });
+    await app.gotoRoute(`/offer-orchestrator/${BORROWER_ID}`);
+
+    await page.getByTestId('hero-approve').click();
+
+    const unavailable = page.getByTestId('decision-receipt-unavailable');
+    await expect(unavailable).toBeVisible();
+    await expect(unavailable).toHaveAttribute('data-receipt-state', 'not-found');
+    await expect(unavailable).toContainText('Ledger row not found');
+    await expect(unavailable).not.toContainText('is in the audit ledger');
+    await expect(unavailable).not.toContainText('Recorded');
+    await expect(unavailable.getByTestId('decision-receipt-audit-id')).toContainText(APPROVE_AUDIT_ID);
+    await expect(unavailable.getByRole('button', { name: 'Retry read-back' })).toBeVisible();
+    await expect(page.getByTestId('decision-receipt')).toHaveCount(0);
   });
 
   test('a failed approve write keeps the failure surface and reads nothing back', async ({ app, page, mockApi }) => {
