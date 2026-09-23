@@ -14,7 +14,9 @@
  *    live-shaped, nurture-dominant book: no "Monitor for later" segment, the
  *    note's total is the KPI's number, the printed percents make 100;
  *  - the hero's evidence claim is true: each evidence chip opens its source;
- *  - the geography map starts above the fold, paired with a side panel;
+ *  - the geography map starts above the fold, paired with a side panel, and
+ *    the live responsive matrix's pairing contract (tests/e2e/homeGeography.ts)
+ *    holds at 1150px and at every one of its eight anchors;
  *  - KPI values are at least the size of the page title;
  *  - no two cards touch: every measured gap is at least --gap-grid;
  *  - exactly one primary button above the fold, into the ranked queue;
@@ -39,12 +41,29 @@ import {
   homePreviewHandler,
 } from './data/homeAnswer';
 import { HOME_SUMMARY, PORTFOLIO_PREVIEW } from './data/portfolio';
+import { expectHomeGeographyPaired } from '../homeGeography';
 import { FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
 
 const FOLD = 900;
 const LEAD_LIST_READ = /^\/api(?:\/v\d+)?\/leads(?:\/|$)/;
 const BORROWER_READ = /^\/api(?:\/v\d+)?\/borrowers\//;
+
+/**
+ * responsive.spec.ts's narrow canary (1150x900) and its eight anchors: the
+ * live matrix asserts the geography pairing at each, credential-gated.
+ */
+const RESPONSIVE_VIEWPORTS = [
+  { width: 1150, height: 900 },
+  { width: 1280, height: 720 },
+  { width: 1366, height: 768 },
+  { width: 1440, height: 900 },
+  { width: 1600, height: 900 },
+  { width: 1920, height: 1080 },
+  { width: 2560, height: 1440 },
+  { width: 3440, height: 1440 },
+  { width: 3840, height: 2160 },
+] as const;
 
 /** The economics fixture ranks BORROWERS in order; Home lists the first five. */
 const TOP_FIVE = BORROWERS.slice(0, 5).map((borrower) => borrower.borrower_id);
@@ -267,6 +286,16 @@ for (const theme of FIXTURE_THEMES) {
     });
   });
 }
+
+test.describe('Home geography across the responsive anchors', () => {
+  test("the live matrix's pairing contract holds: map beside the side panel, the pair full-width", async ({ app, page }) => {
+    await app.gotoRoute('/');
+    for (const viewport of RESPONSIVE_VIEWPORTS) {
+      await page.setViewportSize(viewport);
+      await expectHomeGeographyPaired(page, 2, `${viewport.width}x${viewport.height}`);
+    }
+  });
+});
 
 test.describe('Home answer band links and reads', () => {
   test('every WHO row opens the Lead Queue narrowed to that borrower', async ({ app, page }) => {

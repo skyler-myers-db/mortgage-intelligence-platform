@@ -115,7 +115,7 @@ test.describe('Module 0 — golden path', () => {
     });
   });
 
-  test('home: hero + four KPIs + full-width geography without admin audit data', async ({ page }) => {
+  test('home: hero + four KPIs + geography beside the side panel without admin audit data', async ({ page }) => {
     await page.goto('/');
 
     await expect(page).toHaveTitle(/Mortgage Intelligence Platform/);
