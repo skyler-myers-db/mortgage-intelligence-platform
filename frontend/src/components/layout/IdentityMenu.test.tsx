@@ -12,7 +12,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, Route, Routes } from 'react-router';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SessionResponse } from '../../types';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -59,6 +59,12 @@ describe('IdentityMenu', () => {
     });
   }
 
+  // The popup waits for its on-demand stylesheet; load it once up front so a
+  // loaded runner does not turn that into a timing race.
+  beforeAll(async () => {
+    await import('./IdentityMenuPanel.css');
+  });
+
   beforeEach(() => {
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -78,16 +84,16 @@ describe('IdentityMenu', () => {
     act(() => {
       target.dispatchEvent(new KeyboardEvent('keydown', { key: name, bubbles: true, cancelable: true }));
     });
-  /** Open from the trigger with `name` and wait for the lazy popup to mount. */
+  /** Open from the trigger with `name` and wait for the popup to mount. */
   async function openWith(name: 'ArrowDown' | 'ArrowUp') {
     trigger().focus();
     key(trigger(), name);
-    for (let attempt = 0; attempt < 40 && !menu(); attempt += 1) {
+    await vi.waitFor(async () => {
       await act(async () => {
         await new Promise((resolve) => setTimeout(resolve, 5));
       });
-    }
-    expect(menu(), 'the lazy popup mounted').not.toBeNull();
+      expect(menu(), 'the popup mounted once its stylesheet loaded').not.toBeNull();
+    }, { timeout: 5000, interval: 10 });
   }
 
   it('names the signed-in actor on a collapsed menu button', async () => {
