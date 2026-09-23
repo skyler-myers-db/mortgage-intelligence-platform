@@ -325,7 +325,7 @@ export const mortgageGlossary = {
     category: 'governance',
     short: 'The mortgage, lien, equity, listing, segment, geography, trigger, and offer signals Genie may select, rank, and explain borrowers on.',
     appContext: 'Ask Genie and the growth co-pilot answer questions phrased in this vocabulary. A question that selects on protected-class attributes, proxies, personal identifiers, or an attribute outside the reviewed list is withheld; in Ask Genie the refusal card then offers a compliant rewording.',
-    proof: 'Every refusal names its family and the reviewed alternatives; the pre-Genie guard battery and the reviewed criterion list are pinned by unit tests.',
+    proof: 'In Ask Genie, every refusal names its family and offers guard-validated rewordings; the pre-Genie guard battery, the reviewed criterion list and those rewordings are pinned by unit tests.',
   },
   platformCapabilityStatus: {
     id: 'platform-capability-status',
