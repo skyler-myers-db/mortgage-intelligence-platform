@@ -32,8 +32,15 @@
 --                              min_equity_pct_applied)
 --            with the per-refresh thresholds carried on borrower_360. The
 --            book is first collapsed to (note_rate, equity_pct, thresholds)
---            cells with counts, so the weeks x cells evaluation is at most a
---            few million UDF calls per refresh instead of weeks x 5M rows.
+--            cells with counts, so the evaluation is weeks x cells instead
+--            of weeks x book rows. The bound is weeks (the series starts
+--            2021-01, so ~290 and growing one a week) x
+--            distinct(note_rate) x 101 (equity_pct is an INT 0..100) x the
+--            refresh's single threshold pair: at a 0.01% rate grain that is
+--            ~1,400 x 101 cells, i.e. tens of millions of evaluations per
+--            refresh, independent of the book's row count. Both primitives
+--            are SQL UDFs, which Databricks inlines into the plan, so each
+--            evaluation is scalar arithmetic, not a function call.
 --            Collapsing is lossless for the rule: both primitives read only
 --            those four inputs.
 --
