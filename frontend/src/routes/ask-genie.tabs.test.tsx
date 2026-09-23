@@ -27,7 +27,7 @@ import {
   runGrowthAgentWorkflow,
   waitUntil,
 } from './ask-genie.growth-agent.test-support';
-import { parseAskGenieTab } from './ask-genie.tabs';
+import { askGeniePanelId, parseAskGenieTab } from './ask-genie.tabs';
 
 const MONITOR: GrowthAgentMonitor = {
   monitor_id: '22222222-2222-4222-8222-222222222222',
@@ -202,12 +202,29 @@ describe('/ask-genie page tabs', () => {
   // columns (e.g. 'borrower_360.in_the_money',
   // backend/services/growth_agent_workflows.py) and the fixture harness's
   // read 'Governed SQL'. Plain lender wording for them is a backend copy
-  // follow-up; this lint neither fixes nor vouches for it.
-  it('keeps plumbing words out of the route copy (flow-10)', async () => {
-    growthAgent.mockResolvedValue({ ...HOME, workflows: [], monitors: [] });
-    for (const path of ['/ask-genie', '/ask-genie?tab=workflows', '/ask-genie?tab=monitors']) {
+  // follow-up; this lint neither fixes nor vouches for it. Emptying the
+  // monitors also leaves out a saved monitor's row, whose hard-coded
+  // ' · scheduler paused' status belongs to audit `flow-08` (a capability
+  // check replaces it there), so this lint does not vouch for that row either.
+  //
+  // One mount per case: the harness re-renders ONE root, and a MemoryRouter
+  // keeps the location it first mounted with, so a second mount() inside one
+  // test would read the first path's panel again. The location and the
+  // visible panel are asserted before the text is read, so a case can never
+  // quietly lint another tab.
+  it.each(['/ask-genie', '/ask-genie?tab=workflows', '/ask-genie?tab=monitors'])(
+    'keeps plumbing words out of the route copy on %s (flow-10)',
+    async (path) => {
+      growthAgent.mockResolvedValue({ ...HOME, workflows: [], monitors: [] });
       mount(path);
-      await waitUntil(() => tabs().length === 3);
+      await waitUntil(() => tabs().length === 3 && growthAgent.mock.calls.length > 0);
+      await waitUntil(() => !(container.textContent?.includes('Loading workflows…') ?? false));
+
+      expect(currentLocation).toBe(path);
+      const expectedTab = parseAskGenieTab(new URLSearchParams(path.split('?')[1] ?? '').get('tab'));
+      expect(activePanel().id).toBe(askGeniePanelId(expectedTab));
+      expect(selectedTab().getAttribute('aria-controls')).toBe(askGeniePanelId(expectedTab));
+
       const visible = [container.querySelector('.proto-hero')?.textContent ?? '', activePanel().textContent ?? ''].join(' ');
       for (const banned of [
         /Conversation API/i,
@@ -224,6 +241,6 @@ describe('/ask-genie page tabs', () => {
       ]) {
         expect(visible, `${path} shows ${banned}`).not.toMatch(banned);
       }
-    }
-  });
+    },
+  );
 });
