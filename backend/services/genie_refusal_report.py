@@ -17,7 +17,11 @@ from dataclasses import dataclass
 from typing import Any
 
 from backend.services.audit_lakebase_store import write_audit_event_in_transaction
-from backend.services.genie_audit import genie_audit_entity_id_from_parts
+from backend.services.genie_audit import (
+    audit_safe_letter_digest,
+    audit_safe_letters,
+    genie_audit_entity_id_from_parts,
+)
 from backend.services.genie_refusal_reason import GENIE_REFUSAL_AUDIT_CODES
 from backend.services.lakebase import LakebaseClient
 
@@ -53,6 +57,37 @@ def _execute_one(conn: Any, sql: str, params: dict[str, Any]) -> dict[str, Any] 
     return dict(row) if row is not None else None
 
 
+def refusal_ledger_entity_id(
+    *,
+    question_hash: str,
+    conversation_id: str | None,
+    message_id: str | None,
+) -> str:
+    """The ``entity_id`` the refused turn's own ledger row carries.
+
+    The ledger builds it with ``genie_audit_entity_id_from_parts``: the first
+    present id that is a public-safe audit identifier wins; a present id that
+    is not (a Genie id or 16-hex label with a phone-shaped digit run) falls
+    back to ``geniehash-`` + the letter digest SEEDED FROM THE QUESTION TEXT.
+    A hash-only report never has that text, but ``question_hash`` is
+    ``sha256(question)`` itself, so its letter image is the same fallback.
+    Without this, a few percent of refusals (any whose id carries a
+    ten-digit run) would not join their report on ``entity_id``.
+    """
+
+    label = question_hash[:16]
+    entity_id = genie_audit_entity_id_from_parts(
+        conversation_id=conversation_id,
+        message_id=message_id,
+        question_hash=label,
+    )
+    # With no question, ``from_parts`` seeds its fallback from the label;
+    # swap that for the ledger's question-seeded one.
+    if entity_id == f"geniehash-{audit_safe_letter_digest(label)}":
+        return f"geniehash-{audit_safe_letters(question_hash)}"
+    return entity_id
+
+
 def record_genie_refusal_report(
     lakebase: LakebaseClient,
     *,
@@ -84,8 +119,8 @@ def record_genie_refusal_report(
         # ``question_hash[:16]`` IS the ledger label of the refusal being
         # reported: the refused_prompt / response_blocked rows hash the same
         # question bytes (``refusal_report_hash``), so this row joins to its
-        # refusal on ``question_hash`` (and on ``entity_id`` whenever the
-        # ledger's entity id is that label or the conversation/message id).
+        # refusal on ``question_hash`` and on ``entity_id``
+        # (``refusal_ledger_entity_id``).
         # The report row holds the full digest. Only governed audit codes are
         # written under ``refusal_reason``; families without one (outreach,
         # output policy, unknown) are still fully recorded on the report row.
@@ -103,10 +138,10 @@ def record_genie_refusal_report(
             actor=actor,
             action="genie.refusal_reported",
             entity_type="genie_message",
-            entity_id=genie_audit_entity_id_from_parts(
+            entity_id=refusal_ledger_entity_id(
+                question_hash=question_hash,
                 conversation_id=conversation_id,
                 message_id=message_id,
-                question_hash=question_hash[:16],
             ),
             payload_json=payload_json,
             event_type="GENIE_REFUSAL_REPORT",

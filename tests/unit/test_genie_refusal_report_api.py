@@ -22,7 +22,9 @@ from fastapi.testclient import TestClient
 
 from backend.main import _backpressure_controller, app
 from backend.schemas.audit import AuditEvent
+from backend.schemas.common import contains_pii_marker
 from backend.services.genie_answers import GenieMessageResponse, GenieProof
+from backend.services.genie_audit import audit_safe_letter_digest, audit_safe_letters
 from backend.services.genie_deterministic import (
     _block_unsafe_genie_output,
     _deterministic_genie_response,
@@ -175,6 +177,54 @@ def _single_ledger_row(audit: InMemoryAuditStore, action: str) -> AuditEvent:
     return rows[0]
 
 
+# Ids whose ledger entity_id is NOT the id itself: each carries a
+# phone-shaped run, so the ledger's entity_id is the fallback seeded from the
+# question text, which a hash-only report must reproduce from the digest.
+_PHONE_SHAPED_LABEL_PROMPT = "Which ZYRPLAX borrowers ARE ELIGIBLE for A HELOC?"
+_PHONE_SHAPED_GENIE_ID = "01f13d4a0123456789abcdef5e6f7a8b"
+
+
+def test_phone_shaped_join_cases_really_hit_the_ledger_fallback() -> None:
+    # Non-vacuity for the join cases below: the real ledger rows for both
+    # inputs carry the question-seeded geniehash, not the id or the label.
+    payload = GenieMessageRequest(question=_PHONE_SHAPED_LABEL_PROMPT)
+    assert contains_pii_marker(refusal_report_hash(payload.question)[:16])
+    ledger = InMemoryAuditStore()
+    refused = _deterministic_genie_response(
+        payload,
+        actor=ACTOR,
+        audit=ledger,
+        background=BackgroundTasks(),
+        lakebase=MagicMock(),
+        borrower_repo=MagicMock(),
+    )
+    assert refused is not None and refused.source == "refused"
+    refusal_row = _single_ledger_row(ledger, "genie.refused_prompt")
+    assert refusal_row.entity_id == f"geniehash-{audit_safe_letter_digest(payload.question)}"
+
+    assert contains_pii_marker(_PHONE_SHAPED_GENIE_ID)
+    ledger = InMemoryAuditStore()
+    live = GenieMessageResponse(
+        conversation_id="01f13d4968af1b249dc388fd5b18b195",
+        message_id=_PHONE_SHAPED_GENIE_ID,
+        question=payload.question,
+        answer="Unsafe generated text.",
+        source="genie",
+        trusted_assets=[],
+        proof=GenieProof(),
+    )
+    _block_unsafe_genie_output(ledger, actor=ACTOR, payload=payload, response=live)
+    blocked_row = _single_ledger_row(ledger, "genie.response_blocked")
+    assert blocked_row.entity_id == f"geniehash-{audit_safe_letter_digest(payload.question)}"
+
+
+def test_letter_image_of_the_report_digest_is_the_question_seeded_digest() -> None:
+    for question in (QUESTION, _PHONE_SHAPED_LABEL_PROMPT):
+        assert audit_safe_letters(refusal_report_hash(question)) == audit_safe_letter_digest(
+            question
+        )
+
+
 @pytest.mark.parametrize(
     ("prompt", "conversation_id"),
     [
@@ -182,6 +232,9 @@ def _single_ledger_row(audit: InMemoryAuditStore, action: str) -> AuditEvent:
         # side only would split the join.
         ("Target  HISPANIC   neighborhoods with this Offer.", None),
         ("Which  ZYRPLAX borrowers are   eligible for a HELOC?", "01f13d4968af1b249dc388fd5b18b195"),
+        # Its 16-hex ledger label carries a ten-digit (phone-shaped) run, so
+        # the ledger's entity_id is the question-seeded geniehash fallback.
+        (_PHONE_SHAPED_LABEL_PROMPT, None),
     ],
 )
 def test_report_audit_joins_the_refused_prompt_ledger_row(
@@ -207,12 +260,21 @@ def test_report_audit_joins_the_refused_prompt_ledger_row(
     assert metadata["refusal_reason"] == refusal_row.payload_json["refusal_reason"]
 
 
-def test_report_audit_joins_the_response_blocked_ledger_row() -> None:
+@pytest.mark.parametrize(
+    "message_id",
+    [
+        "01f13d4a0b7c1e5f8a2b3c4d5e6f7a8b",
+        # A Genie id with a ten-digit run is not a public-safe audit id; the
+        # ledger falls back to the question-seeded geniehash.
+        _PHONE_SHAPED_GENIE_ID,
+    ],
+)
+def test_report_audit_joins_the_response_blocked_ledger_row(message_id: str) -> None:
     ledger = InMemoryAuditStore()
     payload = GenieMessageRequest(question="How many  In-The-Money borrowers are in Ohio?")
     live = GenieMessageResponse(
         conversation_id="01f13d4968af1b249dc388fd5b18b195",
-        message_id="01f13d4a0b7c1e5f8a2b3c4d5e6f7a8b",
+        message_id=message_id,
         question=payload.question,
         answer="Unsafe generated text.",
         source="genie",
