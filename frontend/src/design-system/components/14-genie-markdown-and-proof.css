@@ -242,7 +242,7 @@
   }
 }
 .genie-proof__gap {
-  color: var(--signal-warning);
+  color: var(--signal-warning-ink);
   font-size: var(--fs-12);
   margin-top: var(--sp-1);
 }

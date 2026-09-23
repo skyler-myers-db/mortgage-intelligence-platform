@@ -12,8 +12,6 @@
 .score--high    { background: var(--status-success-soft); color: var(--status-success-ink); border-color: var(--status-success-line); }
 .score--med     { background: var(--status-warning-soft); color: var(--status-warning-ink); border-color: var(--status-warning-line); }
 .score--low     { background: var(--chip-bg); color: var(--text-3); border-color: var(--line-1); }
-[data-theme="light"] .score--high { color: var(--signal-success); }
-[data-theme="light"] .score--med  { color: var(--entrada-navy); }
 .score__dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 
 /* ============================================================
@@ -349,7 +347,7 @@
 }
 .bulk-actions__toast { font-size: var(--fs-12); }
 .bulk-actions__toast--ok { color: var(--signal-success); }
-.bulk-actions__toast--warn { color: var(--signal-warning); }
+.bulk-actions__toast--warn { color: var(--signal-warning-ink); }
 .bulk-actions__toast--danger { color: var(--signal-danger); }
 .table-error,
 .table-success,

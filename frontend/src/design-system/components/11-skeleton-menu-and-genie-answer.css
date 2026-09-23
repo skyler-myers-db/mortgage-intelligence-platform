@@ -66,11 +66,15 @@
   transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
   white-space: nowrap;
 }
+/* DEFERRED (2026-09-21 audit a11y-01 sub-item, tracked with a11y-02's
+   listbox rework): .is-focused is the arrow-key option cursor and is drawn
+   only by this --bg-3 fill, 1.09-1.35:1 against the menu surface. It is not
+   the keyboard focus ring (:focus-visible below). */
 .filter-menu__item:hover,
 .filter-menu__item.is-focused { background: var(--bg-3); color: var(--text-1); }
 .filter-menu__item.is-selected { color: var(--accent-ink); }
 .filter-menu__item:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
   outline-offset: 1px;
 }
 

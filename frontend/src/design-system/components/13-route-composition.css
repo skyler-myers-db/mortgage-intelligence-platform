@@ -355,7 +355,7 @@
   height: var(--sp-10);
   border-radius: var(--r-md);
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-ink);
 }
 .not-found__copy {
   min-width: 0;
@@ -442,8 +442,9 @@
   font-size: var(--fs-13);
   padding: var(--sp-2) var(--sp-3);
   border-radius: var(--r-md);
-  outline: none;
 }
+/* Focus shows the global --focus-ring-* ring, not only this border swap
+   (2026-09-21 audit a11y-01; see .genie__input input). */
 .admin-filter-input:focus { border-color: var(--accent); }
 .admin-filter-actions {
   display: flex;
@@ -547,8 +548,9 @@
   font-size: var(--fs-13);
   padding: 6px 10px;
   border-radius: var(--r-md);
-  outline: none;
 }
+/* Focus shows the global --focus-ring-* ring, not only this border swap
+   (2026-09-21 audit a11y-01; see .genie__input input). */
 .form-input:focus { border-color: var(--accent); }
 .campaign-recommendation {
   display: grid;

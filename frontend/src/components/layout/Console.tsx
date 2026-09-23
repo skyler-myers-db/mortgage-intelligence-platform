@@ -1,10 +1,11 @@
 import { useEffect } from 'react';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { Link } from 'react-router';
-import { useApp, type Accent, type Density, type Theme } from '../AppContext';
+import { useApp, type Accent, type Density } from '../AppContext';
 import { Icon, type IconName } from '../Icon';
 import { Chip } from '../Primitives';
 import { PropertyLookupPanel } from '../mortgage/PropertyLookupPanel';
+import { ThemePreferenceControl } from './ThemePreferenceControl';
 import { api, type ActorAuditEventSummary } from '../../lib/api';
 import { offerDisplayLabel } from '../../lib/offerLanguage';
 import { formatTimeOfDay, formatTimestamp } from '../../lib/time';
@@ -74,7 +75,6 @@ export function recentActivityPresentation(event: ActorAuditEventSummary): {
 export function Console() {
   const {
     consoleOpen, setConsoleOpen,
-    theme, setTheme,
     accent, setAccent,
     density, setDensity,
     lender,
@@ -145,19 +145,7 @@ export function Console() {
       <div className="tweaks__body">
         <div className="tweak-row">
           <label>Theme</label>
-          <div className="segmented" role="group" aria-label="Theme">
-            {(['dark', 'light'] as Theme[]).map((t) => (
-              <button
-                key={t}
-                className={theme === t ? 'is-active' : ''}
-                onClick={() => setTheme(t)}
-                type="button"
-                aria-pressed={theme === t}
-              >
-                {t === 'dark' ? 'Dark' : 'Light'}
-              </button>
-            ))}
-          </div>
+          <ThemePreferenceControl />
         </div>
         <div className="tweak-row">
           <label>Accent</label>
