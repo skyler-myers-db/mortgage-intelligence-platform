@@ -154,16 +154,26 @@ describe('SegmentCard', () => {
     expect(channel?.querySelectorAll('.seg-card__facet-share')).toHaveLength(3);
     expect(product?.querySelector('.seg-card__facet-legend')?.textContent).toBe('FHA 50%');
     expect(channel?.querySelector('.seg-card__facet-legend')?.textContent).toBe('LO 68%');
-    // The accessible summary names the facet and its top three values.
-    expect(product?.querySelector('.sr-only')?.textContent).toBe(
-      'Loan product mix: FHA 50%, Conventional 40%, Jumbo 9%',
-    );
-    expect(channel?.querySelector('.sr-only')?.textContent).toBe(
-      'Origination channel mix: Loan officer 68%, Digital 28%, Branch 4%',
-    );
-    // Legend and bar are presentational; the summary is the name.
-    expect(product?.querySelector('.seg-card__facet-legend')?.getAttribute('aria-hidden')).toBe('true');
-    expect(product?.querySelector('.seg-card__facet-bar')?.getAttribute('aria-hidden')).toBe('true');
+    // WCAG 2.5.3 Label in Name: the visible legend is NOT hidden, so it is
+    // the start of the trigger's name; a visually hidden continuation that
+    // follows it names the facet and its top three values. Only the bar is
+    // presentational.
+    for (const [facet, summary] of [
+      [product, ' (Loan product mix: FHA 50%, Conventional 40%, Jumbo 9%)'],
+      [channel, ' (Origination channel mix: Loan officer 68%, Digital 28%, Branch 4%)'],
+    ] as const) {
+      const legend = facet?.querySelector('.seg-card__facet-legend');
+      const continuation = facet?.querySelector('.sr-only');
+      expect(legend?.hasAttribute('aria-hidden')).toBe(false);
+      expect(legend?.closest('[aria-hidden]')).toBeNull();
+      expect(continuation?.textContent).toBe(summary);
+      expect(continuation?.closest('[aria-hidden]')).toBeNull();
+      expect(
+        continuation && legend ? legend.compareDocumentPosition(continuation) & Node.DOCUMENT_POSITION_FOLLOWING : 0,
+        'the hidden summary follows the visible legend',
+      ).not.toBe(0);
+      expect(facet?.querySelector('.seg-card__facet-bar')?.getAttribute('aria-hidden')).toBe('true');
+    }
     expect(container.querySelector('.seg-card__facets')).not.toBeNull();
   });
 

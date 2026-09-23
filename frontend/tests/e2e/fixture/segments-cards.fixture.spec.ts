@@ -98,6 +98,10 @@ function facetTrigger(card: Locator, kind: 'product' | 'channel'): Locator {
   return card.locator(`.seg-card__facet-chip--${kind}`).getByRole('button');
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 for (const theme of FIXTURE_THEMES) {
   test.describe(`segment cards · ${theme}`, () => {
     test.beforeEach(async ({ app }) => {
@@ -178,16 +182,49 @@ for (const theme of FIXTURE_THEMES) {
 }
 
 test.describe('segment card facets keep one evidence trigger each', () => {
-  test('every card exposes exactly one product and one channel trigger, named for the facet and its top values', async ({ app, page }) => {
+  // WCAG 2.5.3 Label in Name (Level A): each trigger's accessible name starts
+  // with the legend a sighted user sees, so a speech-input user who says it
+  // reaches the trigger; a hidden continuation then names the facet and its
+  // top values. axe cannot see this (its label-content-name-mismatch rule
+  // only reads aria-label), so the name is asserted against the rendered
+  // legend text here.
+  test('every card exposes exactly one product and one channel trigger, named by its visible legend, then the facet and its top values', async ({ app, page }) => {
     await app.gotoRoute(ROUTE);
     const cards = page.locator('.seg-grid .seg-card');
     await expect(cards).toHaveCount(6);
+    const facets = [
+      { kind: 'product', legend: 'Conv 58%', summary: 'Loan product mix: Conventional 58%, FHA 24%, Jumbo 12%' },
+      { kind: 'channel', legend: 'LO 62%', summary: 'Origination channel mix: Loan officer 62%, Digital 25%, Unknown 13%' },
+    ] as const;
     for (let index = 0; index < 6; index += 1) {
       const card = cards.nth(index);
-      await expect(facetTrigger(card, 'product')).toHaveCount(1);
-      await expect(facetTrigger(card, 'channel')).toHaveCount(1);
-      await expect(facetTrigger(card, 'product')).toHaveAccessibleName(/^Loan product mix: Conventional 58%, FHA 24%, Jumbo 12%/);
-      await expect(facetTrigger(card, 'channel')).toHaveAccessibleName(/^Origination channel mix: Loan officer 62%, Digital 25%, Unknown 13%/);
+      for (const facet of facets) {
+        const trigger = facetTrigger(card, facet.kind);
+        await expect(trigger).toHaveCount(1);
+        const legend = trigger.locator('.seg-card__facet-legend');
+        await expect(legend).toBeVisible();
+        const visible = (await legend.innerText()).trim();
+        expect(visible, `${facet.kind} legend of card ${index}`).toBe(facet.legend);
+        await expect(trigger).toHaveAccessibleName(
+          new RegExp(`^${escapeRegExp(visible)} \\(${escapeRegExp(facet.summary)}\\)`),
+        );
+      }
+    }
+    // Chromium's own accessibility tree, which assistive tech reads, agrees
+    // with Playwright's name computation: all twelve triggers.
+    const cdp = await page.context().newCDPSession(page);
+    const { nodes } = (await cdp.send('Accessibility.getFullAXTree')) as {
+      nodes: Array<{ role?: { value?: unknown }; name?: { value?: unknown } }>;
+    };
+    const chromeNames = nodes
+      .filter((node) => node.role?.value === 'button')
+      .map((node) => String(node.name?.value ?? ''))
+      .filter((name) => / mix: /.test(name));
+    expect(chromeNames).toHaveLength(12);
+    for (const name of chromeNames) {
+      expect(name).toMatch(
+        new RegExp(`^(?:${facets.map((facet) => `${escapeRegExp(facet.legend)} \\(${escapeRegExp(facet.summary)}\\)`).join('|')})`),
+      );
     }
   });
 

@@ -13,9 +13,16 @@ import { DRAWER_SOURCES } from '../../lib/drawerSources';
  * chip per facet value, wrapped one chip per line and made the card about
  * 2.2x the prototype's height. The whole facet is now ONE `EvidenceChip`
  * (so evidence access survives: one keyboard-reachable trigger per facet
- * per card, opening the same drawer source the per-value chips opened). Its
- * accessible name comes from a visually hidden summary that names the facet
- * and its top values; the legend and bar are presentational.
+ * per card, opening the same drawer source the per-value chips opened).
+ *
+ * Accessible name (WCAG 2.5.3 Label in Name, Level A): the name STARTS with
+ * the visible legend (`Conv 58%`), so a speech-input user who says what they
+ * see reaches the trigger; a visually hidden continuation then names the
+ * facet and its top values, so the name reads `Conv 58% (Loan product mix:
+ * Conventional 58%, FHA 24%, Jumbo 12%)`. The continuation opens with a
+ * parenthesis, not a comma: the legend and the hidden span are separate
+ * boxes, so browsers put a space between them (`Conv 58% , Loan ...`), and
+ * a space before `(` is ordinary typography. Only the bar is presentational.
  */
 
 export type SegmentFacetKind = 'product' | 'channel';
@@ -123,7 +130,7 @@ export function SegmentFacetBar({ kind, mix }: SegmentFacetBarProps) {
   return (
     <span className={`seg-card__facet-chip seg-card__facet-chip--${kind}`}>
       <EvidenceChip source={FACET_SOURCES[kind]}>
-        <span className="seg-card__facet-legend" aria-hidden="true">
+        <span className="seg-card__facet-legend">
           {top.legendLabel} {top.pctLabel}
         </span>
         <span className="seg-card__facet-bar" aria-hidden="true">
@@ -135,7 +142,7 @@ export function SegmentFacetBar({ kind, mix }: SegmentFacetBarProps) {
             />
           ))}
         </span>
-        <span className="sr-only">{facetSummary(kind, shares)}</span>
+        <span className="sr-only">{` (${facetSummary(kind, shares)})`}</span>
       </EvidenceChip>
     </span>
   );
