@@ -8,7 +8,7 @@ import { normalizeSegmentCode, SEGMENT_DEFINITIONS } from '../../lib/segmentMeta
 import type { SegmentSummary } from '../../types';
 
 import { DRAWER_SOURCES } from '../../lib/drawerSources';
-import { SegmentCard } from './SegmentCard';
+import { SegmentCard, SegmentCardSkeleton } from './SegmentCard';
 import { facetShares } from './SegmentFacetBar';
 
 // EvidenceChip (the S1.3 per-segment evidence affordance) reads setDrawer +
@@ -447,6 +447,21 @@ describe('SegmentCard', () => {
       source_name: 'MLS Listings',
     });
     expect(container.querySelector('.seg-card__reconcile')).toBeNull();
+  });
+
+  it('renders a loading card on the same six subgrid rows as a loaded card', () => {
+    act(() => root.render(<SegmentCardSkeleton />));
+    const card = container.querySelector('.seg-card--skeleton');
+    expect(card?.getAttribute('aria-hidden')).toBe('true');
+    expect(Array.from(card?.children ?? [], (row) => row.classList[0])).toEqual([
+      'seg-card__hdr',
+      'seg-card__count-row',
+      'seg-card__reconcile-slot',
+      'seg-card__sub-stack',
+      'seg-card__meta',
+      'seg-card__facets',
+    ]);
+    expect(card?.querySelectorAll('.seg-card__facets .seg-card__facet-skeleton')).toHaveLength(2);
   });
 
   it('opens the evidence drawer from the segment evidence chip', () => {

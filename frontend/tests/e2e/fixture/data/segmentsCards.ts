@@ -95,3 +95,19 @@ export function registerGatedSegments(mockApi: MockApi): void {
   mockApi.register('GET', '/api/segments', () => json<SegmentSummary[]>([...GATED_SEGMENTS]));
 }
 
+/**
+ * Every registered segment code (the six cards plus the seven S1.3
+ * overlays: the loading grid renders one skeleton per code), connected and
+ * in the default Eligible-only view, where the addressable count is the
+ * contactable one, so no card renders a reconcile note.
+ */
+export const ALL_CODE_ELIGIBLE_SEGMENTS: readonly SegmentSummary[] = [
+  ...SEGMENTS,
+  overlay('second_lien_itm', SEGMENTS[0]),
+  overlay('heloc_draw_to_payback', SEGMENTS[4]),
+  overlay('home_equity_history', SEGMENTS[4]),
+  overlay('refi_propensity', SEGMENTS[0]),
+  overlay('itm_on_related_property', SEGMENTS[3]),
+  overlay('payoff_loss_leads', SEGMENTS[5]),
+  overlay('permit_activity', SEGMENTS[2]),
+].map((row) => ({ ...row, contactable: row.count }));

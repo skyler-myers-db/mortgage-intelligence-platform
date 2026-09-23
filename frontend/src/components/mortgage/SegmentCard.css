@@ -100,6 +100,32 @@
   color: var(--text-3);
 }
 
+/* Loading cards: each row at the height the loaded row takes (two title
+   lines, the count's line box, the sub's two clamped lines after its
+   6px lead, the evidence chip, the facet chips), so the grid keeps its
+   height when the data arrives. These override the 02 partial's
+   pre-subgrid skeleton spacing. */
+.seg-card--skeleton .seg-card__hdr { min-block-size: calc(2 * var(--lh-snug) * var(--fs-14)); }
+.seg-card--skeleton .seg-card__count-skeleton {
+  block-size: var(--fs-22);
+  margin-block: calc((var(--lh-tight) * var(--fs-28) - var(--fs-22)) / 2);
+}
+.seg-card--skeleton .seg-card__sub-stack {
+  display: grid;
+  align-content: space-evenly;
+  block-size: calc(2 * var(--lh-snug) * var(--fs-12));
+  margin-block-start: calc(1.5 * var(--sp-1));
+}
+.seg-card--skeleton .seg-card__sub-skeleton {
+  block-size: var(--fs-11);
+  margin-block-start: 0;
+}
+.seg-card--skeleton .seg-card__meta { flex-wrap: nowrap; }
+.seg-card--skeleton .seg-card__meta-skeleton:not(.seg-card__meta-skeleton--short) {
+  block-size: calc(var(--sp-6) + var(--sp-1));
+}
+.seg-card__facet-skeleton { block-size: var(--sp-6); }
+
 /* S1.6 facets: one evidence trigger per facet (loan product, origination
    channel), side by side. Each is an `.evidence-chip` holding a one-line
    legend (largest share) over a 4px stacked share bar of the whole mix. */

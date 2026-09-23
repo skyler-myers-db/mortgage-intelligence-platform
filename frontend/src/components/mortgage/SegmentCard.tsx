@@ -235,6 +235,13 @@ export function SegmentCard({ segment, selected, updating, onClick }: SegmentCar
   );
 }
 
+/**
+ * The loading card fills the same six subgrid rows as a loaded card, each at
+ * the loaded row's height (see SegmentCard.css), so the grid is as tall
+ * before the data arrives as after it and nothing below it moves. The
+ * reconcile row stays empty, as it is on every loaded card in the default
+ * Eligible-only view (addressable = contactable, so no note renders).
+ */
 export function SegmentCardSkeleton() {
   return (
     <div className="seg-card seg-card--skeleton" aria-hidden="true">
@@ -245,6 +252,7 @@ export function SegmentCardSkeleton() {
       <div className="seg-card__count-row">
         <div className="seg-card__count-skeleton skeleton" />
       </div>
+      <div className="seg-card__reconcile-slot" />
       <div className="seg-card__sub-stack">
         <div className="seg-card__sub-skeleton skeleton" />
         <div className="seg-card__sub-skeleton seg-card__sub-skeleton--short skeleton" />
@@ -252,6 +260,10 @@ export function SegmentCardSkeleton() {
       <div className="seg-card__meta">
         <span className="seg-card__meta-skeleton skeleton" />
         <span className="seg-card__meta-skeleton seg-card__meta-skeleton--short skeleton" />
+      </div>
+      <div className="seg-card__facets">
+        <span className="seg-card__facet-skeleton skeleton" />
+        <span className="seg-card__facet-skeleton skeleton" />
       </div>
     </div>
   );

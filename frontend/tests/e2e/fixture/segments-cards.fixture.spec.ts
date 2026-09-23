@@ -5,14 +5,17 @@
  */
 import AxeBuilder from '@axe-core/playwright';
 import type { Locator, Page } from '@playwright/test';
+import type { SegmentSummary } from '../../../src/types';
 import { PRIMARY_BORROWER } from './data/borrowers';
 import {
+  ALL_CODE_ELIGIBLE_SEGMENTS,
   BIG_SEGMENT_COUNTS,
   GATED_SEGMENTS,
   registerBigCountSegments,
   registerGatedSegments,
   registerVariedSegments,
 } from './data/segmentsCards';
+import { json } from './mockApi';
 import { FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
 
@@ -235,6 +238,36 @@ for (const theme of FIXTURE_THEMES) {
         }
       });
     }
+
+    test('loading cards hold the loaded grid height, so nothing below the grid moves when the data arrives', async ({ app, mockApi, page }) => {
+      let release = (): void => undefined;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      mockApi.register('GET', '/api/segments', async () => {
+        await held;
+        return json<SegmentSummary[]>([...ALL_CODE_ELIGIBLE_SEGMENTS]);
+      });
+      await page.goto(ROUTE, { waitUntil: 'domcontentloaded' });
+      const grid = page.locator('.seg-grid');
+      // One loading card per registered segment code, the payload's length.
+      await expect(grid.locator('.seg-card--skeleton')).toHaveCount(ALL_CODE_ELIGIBLE_SEGMENTS.length);
+      await page.evaluate(() => document.fonts.ready.then(() => undefined));
+      const heights = () => grid.locator('.seg-card').evaluateAll((cards) => cards.map((card) => card.getBoundingClientRect().height));
+      const gridHeight = () => grid.evaluate((element) => element.getBoundingClientRect().height);
+      const loadingCards = await heights();
+      const loadingGrid = await gridHeight();
+
+      release();
+      await expect(grid.locator('.seg-card--skeleton')).toHaveCount(0);
+      await app.settle();
+      const loadedCards = await heights();
+      expect(loadedCards).toHaveLength(ALL_CODE_ELIGIBLE_SEGMENTS.length);
+      for (const [index, height] of loadedCards.entries()) {
+        expect(Math.abs(height - loadingCards[index]), `card ${index}: loaded ${height}px vs loading ${loadingCards[index]}px`).toBeLessThanOrEqual(1);
+      }
+      expect(Math.abs((await gridHeight()) - loadingGrid), 'grid height across the load').toBeLessThanOrEqual(1);
+    });
 
     test('the segment cards, facet share bars included, pass axe WCAG A/AA', async ({ app, page }) => {
       await app.gotoRoute(ROUTE);
