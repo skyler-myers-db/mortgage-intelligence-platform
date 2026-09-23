@@ -76,11 +76,12 @@
 .kpi--askable .kpi__label {
   padding-inline-end: var(--sp-6);
 }
-/* Segment card: beside the evidence chip, above the stretched
-   `.seg-card__select` button like `.seg-card__evidence`. */
+/* Segment card: beside the evidence chip, on the same --z-raised-2 layer as
+   `.seg-card__evidence` / `.seg-card__facet-chip`, above the stretched
+   `.seg-card__select` button (--z-raised). */
 .seg-card__ask {
   position: relative;
-  z-index: 2;
+  z-index: var(--z-raised-2);
   display: inline-flex;
 }
 

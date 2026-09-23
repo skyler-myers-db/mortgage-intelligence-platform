@@ -97,6 +97,36 @@ test.describe('Genie page context (genie-04, shell-07)', () => {
     expect(genieCalls(mockApi), 'the guarded ask path was not called by the prefill').toEqual([]);
   });
 
+  test("a segment card's Ask Genie entry sits above the card's selection overlay and prefills without selecting", async ({ app, mockApi, page }) => {
+    await app.gotoRoute('/segment-intelligence');
+    const card = page.locator('.seg-card').filter({ has: page.locator('.seg-card__ask') }).first();
+    const entry = card.locator('.seg-card__ask').getByRole('button', { name: /^Ask Genie about this .+ segment$/ });
+    const select = card.locator('.seg-card__select');
+    await expect(entry).toBeVisible();
+    const pressedBefore = await select.getAttribute('aria-pressed');
+
+    // The card is covered by a stretched `.seg-card__select` (--z-raised); the
+    // entry must be the topmost element at its own centre (--z-raised-2), or
+    // every click on it would select the segment instead.
+    const topmost = await entry.evaluate((el) => {
+      const box = el.getBoundingClientRect();
+      const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+      return hit !== null && (hit === el || el.contains(hit));
+    });
+    expect(topmost, 'the Ask Genie entry is hit-tested above .seg-card__select').toBe(true);
+
+    const prompt = ((await entry.getAttribute('title')) ?? '').replace(/^Ask Genie: /, '');
+    expect(prompt).toMatch(/^Which states have the most borrowers in the .+ segment\?$/);
+    await entry.click();
+
+    const dialog = page.getByRole('dialog', { name: 'Genie chat' });
+    await expect(dialog.getByRole('textbox', { name: 'Ask Genie' })).toHaveValue(prompt);
+    await app.settle();
+    await expect(select).toHaveAttribute('aria-pressed', pressedBefore ?? 'false');
+    await expect(dialog.locator('.genie__msg--user')).toHaveCount(0);
+    expect(genieCalls(mockApi)).toEqual([]);
+  });
+
   test('the palette offers "Ask Genie: <text>" and prefills the panel without submitting', async ({ app, mockApi, page }) => {
     await app.gotoRoute('/');
     const palette = await app.openCommandPalette();
