@@ -118,11 +118,11 @@ describe('USChoroplethMap keyboard and screen-reader access (a11y-04)', () => {
   it('names every state with its count, average score and top segment', async () => {
     await renderMap();
     expect(path('il')?.getAttribute('aria-label')).toBe(
-      'Illinois, 21,480 marketable borrowers, average opportunity score 84, top segment Prime Refi Candidates',
+      'Illinois: 21,480 marketable borrowers, average opportunity score 84, top segment Prime Refi Candidates',
     );
     // No rollup: says so (in or outside the configured footprint), never a count.
     expect(path('in')?.getAttribute('aria-label')).toMatch(
-      /^Indiana, (no borrower rollup|outside the Cotality evaluation scope)$/,
+      /^Indiana: (no borrower rollup|outside the Cotality evaluation scope)$/,
     );
     // Aggregates only: nothing shaped like a masked borrower id.
     const names = [...document.querySelectorAll('path[data-map-unit]')].map((p) => p.getAttribute('aria-label'));
@@ -172,7 +172,7 @@ describe('USChoroplethMap keyboard and screen-reader access (a11y-04)', () => {
     expect(buttons.some((b) => b.hasAttribute('role'))).toBe(false);
     expect(buttons.map((b) => b.getAttribute('tabindex'))).toEqual(['0', '-1']);
     expect(buttons[0].getAttribute('aria-label')).toBe(
-      'ZIP 77002, 1,200 borrowers, average opportunity score 82, top segment Prime Refi Candidates',
+      'ZIP 77002: 1,200 borrowers, average opportunity score 82, top segment Prime Refi Candidates',
     );
   });
 });

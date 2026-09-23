@@ -37,8 +37,10 @@ function describeFacts(facts: UnitFacts, noun: string): string {
 export type StateLabelStatus = 'loading' | 'ready' | 'unavailable';
 
 /**
- * Accessible name of one state path. Starts with the state name and a comma,
- * so a test or a screen-reader user can still find "Illinois" first.
+ * Accessible name of one state path: the state name, a colon, then the facts
+ * (the Genie answer map's `Name: value` form). The colon keeps "Washington:"
+ * apart from "Washington, DC:" for a prefix match, and a screen-reader user
+ * still hears the name first.
  */
 export function stateAriaLabel(
   name: string,
@@ -46,16 +48,16 @@ export function stateAriaLabel(
   status: StateLabelStatus,
   inFootprint: boolean,
 ): string {
-  if (status === 'loading') return `${name}, loading borrower counts`;
-  if (status === 'unavailable') return `${name}, borrower counts unavailable`;
+  if (status === 'loading') return `${name}: loading borrower counts`;
+  if (status === 'unavailable') return `${name}: borrower counts unavailable`;
   if (!facts) {
-    return inFootprint ? `${name}, no borrower rollup` : `${name}, outside the Cotality evaluation scope`;
+    return inFootprint ? `${name}: no borrower rollup` : `${name}: outside the Cotality evaluation scope`;
   }
-  return `${name}, ${describeFacts(facts, 'marketable borrowers')}`;
+  return `${name}: ${describeFacts(facts, 'marketable borrowers')}`;
 }
 
 export function zipAriaLabel(zip: string, facts: UnitFacts): string {
-  return `ZIP ${zip}, ${describeFacts(facts, 'borrowers')}`;
+  return `ZIP ${zip}: ${describeFacts(facts, 'borrowers')}`;
 }
 
 /**

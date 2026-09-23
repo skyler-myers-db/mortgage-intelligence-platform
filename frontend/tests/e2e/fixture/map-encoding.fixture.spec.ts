@@ -221,7 +221,7 @@ test.describe('keyboard, screen reader and table access (a11y-04)', () => {
       await page.keyboard.press('Tab');
       const focused = page.locator('path[data-map-unit]:focus');
       await expect(focused).toHaveAttribute('data-map-unit', 'az');
-      await expect(focused).toHaveAttribute('aria-label', /^Arizona, 9,040 marketable borrowers, average opportunity score 78/);
+      await expect(focused).toHaveAttribute('aria-label', /^Arizona: 9,040 marketable borrowers, average opportunity score 78/);
       await expect(page.locator('.map-tip .map-tip__name')).toHaveText('Arizona');
 
       await page.keyboard.press('ArrowRight');
@@ -260,7 +260,7 @@ test.describe('keyboard, screen reader and table access (a11y-04)', () => {
       await expect(page).toHaveURL(/geo_state=AZ/);
       const firstZip = page.getByRole('list', { name: 'ZIPs in Arizona' }).getByRole('button').first();
       await expect(firstZip).toBeFocused();
-      await expect(firstZip).toHaveAccessibleName(/^ZIP \d{5}, [\d,]+ borrowers, average opportunity score \d+/);
+      await expect(firstZip).toHaveAccessibleName(/^ZIP \d{5}: [\d,]+ borrowers, average opportunity score \d+/);
       await expect(page.locator('.map-tip .map-tip__name')).toHaveText(/^ZIP \d{5}, Arizona$/);
       await page.keyboard.press('ArrowRight');
       await expect(page.getByRole('list', { name: 'ZIPs in Arizona' }).getByRole('button').nth(1)).toBeFocused();
