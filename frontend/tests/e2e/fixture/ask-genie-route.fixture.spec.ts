@@ -225,6 +225,109 @@ test.describe('docked composer (visual-07)', () => {
   });
 });
 
+/** What the focus walk records for one stop. */
+interface FocusStop {
+  name: string;
+  /** Focus is inside the docked composer (the forward walk's end). */
+  inComposer: boolean;
+  /** Focus is in the conversation card's header (the backward walk's end). */
+  inHeader: boolean;
+  /** The sticky bar the focused element lies entirely behind, if any. */
+  hiddenBy: 'composer' | 'route nav' | null;
+}
+
+async function focusStop(page: Page): Promise<FocusStop> {
+  return page.evaluate(() => {
+    const active = document.activeElement as HTMLElement | null;
+    const form = document.querySelector<HTMLElement>('form.genie-composer');
+    const nav = document.querySelector<HTMLElement>('.route-nav');
+    if (!active || !form) return { name: '(none)', inComposer: false, inHeader: false, hiddenBy: null };
+    const name = (active.getAttribute('aria-label') ?? active.textContent ?? active.tagName).trim().slice(0, 48);
+    const header = form.closest('.surface')?.querySelector(':scope > .surface__hdr');
+    const inComposer = form.contains(active);
+    const inHeader = Boolean(header?.contains(active));
+    const a = active.getBoundingClientRect();
+    const within = (bar: HTMLElement) => {
+      const b = bar.getBoundingClientRect();
+      return a.width > 0 && a.height > 0 && a.top >= b.top && a.bottom <= b.bottom && a.left >= b.left && a.right <= b.right;
+    };
+    let hiddenBy: 'composer' | 'route nav' | null = null;
+    if (!inComposer && within(form)) hiddenBy = 'composer';
+    else if (nav && !nav.contains(active) && within(nav)) hiddenBy = 'route nav';
+    return { name, inComposer, inHeader, hiddenBy };
+  });
+}
+
+/** Press `key` until `done(stop)`, recording every stop on the way. */
+async function walkFocus(page: Page, key: 'Tab' | 'Shift+Tab', done: (stop: FocusStop) => boolean) {
+  const visited: string[] = [];
+  const hidden: string[] = [];
+  for (let press = 0; press < 150; press += 1) {
+    await page.keyboard.press(key);
+    const stop = await focusStop(page);
+    if (done(stop)) return { reached: true, visited, hidden };
+    visited.push(stop.name);
+    if (stop.hiddenBy) hidden.push(`'${stop.name}' is obscured by the ${stop.hiddenBy}`);
+  }
+  return { reached: false, visited, hidden };
+}
+
+async function askDeepQuestion(page: Page) {
+  await composer(page).fill(GENIE_QUESTION);
+  await page.locator('form.genie-composer').getByRole('button', { name: 'Ask Genie', exact: true }).click();
+  await expect(page.locator('.genie-thread .genie-answer')).toHaveCount(1);
+  await expect(composer(page)).toHaveValue('');
+}
+
+test.describe('focus is never hidden behind a sticky bar (WCAG 2.2 SC 2.4.11)', () => {
+  test('tabbing down through an answer keeps every focus stop clear of the composer', async ({ app, mockApi, page }) => {
+    registerGenieTurn(mockApi, { answer: genieDeepAnswerFixture(), holdProgress: false });
+    await app.gotoRoute('/ask-genie');
+    await askDeepQuestion(page);
+
+    // From the top of the conversation, walk forward to the composer. The
+    // thread runs past the fold, so the stops below it start under the dock.
+    await page.locator('.main').evaluate((main) => {
+      main.scrollTop = 0;
+    });
+    const newThread = page.locator('#main-content .surface__hdr').getByRole('button', { name: 'New thread' });
+    await newThread.focus();
+    await expect(newThread).toBeFocused();
+
+    const walk = await walkFocus(page, 'Tab', (stop) => stop.inComposer);
+    expect(walk.reached, 'Tab reaches the composer').toBe(true);
+    // Non-vacuity: the walk went through the answer's own controls and the
+    // suggestions, which sit under the dock until focus brings them up.
+    expect(walk.visited, 'the walk crossed the answer feedback').toContain('Mark this answer helpful');
+    expect(walk.visited.some((name) => name.startsWith('Which states')), 'the walk crossed the suggestions').toBe(true);
+    expect(walk.hidden, 'focus stops entirely behind a sticky bar').toEqual([]);
+  });
+
+  test('Shift+Tab up through an answer keeps every focus stop clear of the route nav', async ({ app, mockApi, page }) => {
+    registerGenieTurn(mockApi, { answer: genieDeepAnswerFixture(), holdProgress: false });
+    await app.gotoRoute('/ask-genie');
+    await askDeepQuestion(page);
+
+    // From the end of the conversation, walk back up to its header. The
+    // thread's top starts above the view, under the sticky route nav.
+    const main = page.locator('.main');
+    await main.evaluate((node) => {
+      node.scrollTop = node.scrollHeight;
+    });
+    const startTop = await main.evaluate((node) => node.scrollTop);
+    await composer(page).focus();
+
+    const walk = await walkFocus(page, 'Shift+Tab', (stop) => stop.inHeader);
+    expect(walk.reached, 'Shift+Tab reaches the conversation header').toBe(true);
+    // Non-vacuity: the walk scrolled up through the answer to its question.
+    expect(walk.visited, 'the walk crossed the answer table').toContain('Genie answer table');
+    expect(walk.visited, 'the walk crossed the question').toContain('Edit question');
+    expect(await main.evaluate((node) => node.scrollTop), 'focus scrolled the thread up').toBeLessThan(startTop);
+    expect(walk.hidden, 'focus stops entirely behind a sticky bar').toEqual([]);
+  });
+});
+
+
 test.describe('Growth Agent runs report where they run (genie-09)', () => {
   test('a workflow run shows an in-progress card in view, then its result in the same slot', async ({ app, mockApi, page }) => {
     const run = registerHeldWorkflowRun(mockApi);

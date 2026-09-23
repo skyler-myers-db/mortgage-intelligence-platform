@@ -18,6 +18,7 @@ import {
   subscribeGenieTurns,
   type GenieTurn,
 } from '../lib/genieConversationStore';
+import { useComposerScrollClearance } from './ask-genie.composer-clearance';
 import { renderSourceAssetChip } from './ask-genie.growth-agent.helpers';
 import { useRevealLatestExchange } from './ask-genie.thread-scroll';
 
@@ -260,6 +261,8 @@ export function AskGenieAnswerPanel({
     dockRef,
     showInFlight ? `pending-${thread.length}` : `settled-${thread.length}`,
   );
+  // Focus scrolling stops above the docked composer (WCAG 2.2 SC 2.4.11).
+  useComposerScrollClearance(dockRef);
 
   // Conversational controls (audit 2026-09-21 `genie-03`, client-only slice):
   // ArrowUp in an empty composer recalls the last question; Edit reloads a

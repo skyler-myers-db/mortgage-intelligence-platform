@@ -81,6 +81,27 @@
   border-end-start-radius: var(--r-lg);
   border-end-end-radius: var(--r-lg);
 }
+/* Focus Not Obscured (WCAG 2.2 SC 2.4.11, technique C43). While the Ask tab
+   shows, `.main` has a sticky bar at each end: the route nav at the top and
+   the opaque docked composer at the bottom. A control that takes focus from
+   outside the view (the answer's feedback buttons and the suggestions below
+   it; a table row above it on Shift+Tab) would be scrolled only to the
+   scroller's edge, entirely behind a bar. `.main` keeps each bar's block
+   size, plus room for the focus ring, as scroll-padding at that end, so
+   focus scrolling stops between the bars. Sizes are measured by
+   useComposerScrollClearance (ask-genie.composer-clearance.ts); the
+   fallbacks cover the nav and a two-line composer before the first
+   measurement. */
+.main:has(section[role="tabpanel"]:not([hidden]) .genie-composer) {
+  scroll-padding-block-start: calc(
+    var(--genie-route-nav-block-size, var(--sp-16))
+    + var(--focus-ring-width) + var(--focus-ring-offset)
+  );
+  scroll-padding-block-end: calc(
+    var(--genie-composer-block-size, calc(var(--sp-16) * 2 + var(--sp-8)))
+    + var(--focus-ring-width) + var(--focus-ring-offset)
+  );
+}
 /* Grows with the question (field-sizing is Baseline since June 2026) from
    two lines to eight, then scrolls; `rows={2}` is the fallback size where
    field-sizing is unsupported, and there the user can still resize. */
@@ -96,10 +117,6 @@
   .genie-composer .genie-composer__input { resize: vertical; }
 }
 .genie-composer .btn { flex: none; }
-/* A new exchange is scrolled to its question; clear the sticky route nav. */
-.genie-thread > .genie__msg--user {
-  scroll-margin-block: var(--sp-16) var(--sp-4);
-}
 .surface__body > .genie-thread ~ *,
 .surface__body > .surface--inset + .genie-composer__samples {
   margin-top: var(--sp-4);
