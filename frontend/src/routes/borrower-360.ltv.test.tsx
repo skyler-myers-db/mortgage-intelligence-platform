@@ -8,6 +8,7 @@
  * rendered "LTV / Equity" field rather than a helper below it.
  */
 import { act } from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -31,7 +32,7 @@ vi.mock('../lib/api', () => {
   class ApiError extends Error {
     status = 500;
   }
-  return { api: { borrower: vi.fn() }, ApiError };
+  return { api: { borrower: vi.fn(), borrowerLifecycle: vi.fn() }, ApiError };
 });
 
 vi.mock('../components/AppContext', () => ({
@@ -72,6 +73,7 @@ vi.mock('../components/Primitives', async (orig) => {
 });
 
 import Borrower360 from './borrower-360';
+import { queryKeys } from '../lib/queryKeys';
 
 const BORROWER_ID = 'B-1ABCDEFGHIJK2';
 
@@ -126,13 +128,26 @@ describe('Borrower 360 LTV / Equity field', () => {
 
   function mount(b: Borrower360Type) {
     state.borrower = b;
+    // The route also reads the lifecycle row for its "Latest decision"
+    // receipt (wow-stage-3). That read is not under test here: seed a fresh
+    // lifecycle without an audit id so the route renders no toggle and
+    // fetches nothing.
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(queryKeys.borrowerLifecycle(BORROWER_ID), {
+      borrower_id: BORROWER_ID,
+      approval_status: 'pending',
+      outreach_status: 'none',
+      audit_event_id: null,
+    });
     act(() => {
       root.render(
-        <MemoryRouter initialEntries={[`/borrower-360/${BORROWER_ID}`]}>
-          <Routes>
-            <Route path="/borrower-360/:id" element={<Borrower360 />} />
-          </Routes>
-        </MemoryRouter>,
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={[`/borrower-360/${BORROWER_ID}`]}>
+            <Routes>
+              <Route path="/borrower-360/:id" element={<Borrower360 />} />
+            </Routes>
+          </MemoryRouter>
+        </QueryClientProvider>,
       );
     });
   }
