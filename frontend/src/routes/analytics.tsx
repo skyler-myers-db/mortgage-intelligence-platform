@@ -41,6 +41,7 @@ import {
   SegmentsView,
   SignalsView,
 } from './analytics.sections';
+import { useRateWindowQuery } from './analytics.rate-window';
 import { SalesOpsSection } from './analytics.sales-ops';
 import { ApprovalFunnelSection } from './analytics.approval-funnel';
 
@@ -179,6 +180,9 @@ export default function AnalyticsRoute() {
       staleTime: 60_000,
     },
   );
+  // Start the Executive tab's rate window beside the executive read, not after it renders.
+  useRateWindowQuery(tab === 'executive');
+  const executiveFiltersActive = Boolean(states.length || segmentCodes.length || lenderRelationship !== 'All' || targetLenderRef);
   const geography = useWarmingUpRetry<GeographyAnalyticsResponse>(
     (signal) => api.analyticsGeography(signal, baseFilters),
     ['analytics', 'geography', ...baseCriteria],
@@ -306,7 +310,7 @@ export default function AnalyticsRoute() {
 
       {tab === 'executive' && (
         <LoadState query={executive} title="Executive analytics">
-          {(data) => <ExecutiveView data={data} leadParams={leadParams} />}
+          {(data) => <ExecutiveView data={data} leadParams={leadParams} filtersActive={executiveFiltersActive} />}
         </LoadState>
       )}
       {tab === 'geography' && (

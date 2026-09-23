@@ -11916,6 +11916,215 @@
         "title": "RateSpreadBucket",
         "type": "object"
       },
+      "RateWindowProvenance": {
+        "description": "Evidence manifest for the series: every table it was read from.",
+        "properties": {
+          "book_as_of": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Refresh anchor of the book distribution; the same on every week.",
+            "title": "Book As Of"
+          },
+          "book_source": {
+            "description": "The book the note-rate band and itm_count were measured over.",
+            "title": "Book Source",
+            "type": "string"
+          },
+          "gold_source": {
+            "description": "The precomputed gold table the endpoint reads.",
+            "title": "Gold Source",
+            "type": "string"
+          },
+          "market_rate_source": {
+            "description": "Weekly market rate source (FRED MORTGAGE30US).",
+            "title": "Market Rate Source",
+            "type": "string"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "refreshed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refreshed At"
+          },
+          "rule_source": {
+            "description": "The UC functions that decide in the money.",
+            "title": "Rule Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "market_rate_source",
+          "book_source",
+          "gold_source",
+          "rule_source",
+          "note"
+        ],
+        "title": "RateWindowProvenance",
+        "type": "object"
+      },
+      "RateWindowResponse": {
+        "properties": {
+          "book_as_of": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Refresh anchor of the book distribution: today's book against the historical rate.",
+            "title": "Book As Of"
+          },
+          "book_lien_count": {
+            "description": "Active fixed-rate first liens in the current book (the same on every week).",
+            "minimum": 0.0,
+            "title": "Book Lien Count",
+            "type": "integer"
+          },
+          "provenance": {
+            "$ref": "#/components/schemas/RateWindowProvenance"
+          },
+          "series_id": {
+            "description": "FRED series code, MORTGAGE30US.",
+            "title": "Series Id",
+            "type": "string"
+          },
+          "thresholds": {
+            "$ref": "#/components/schemas/RateWindowThresholds"
+          },
+          "weeks": {
+            "items": {
+              "$ref": "#/components/schemas/RateWindowWeek"
+            },
+            "title": "Weeks",
+            "type": "array"
+          }
+        },
+        "required": [
+          "series_id",
+          "weeks",
+          "book_lien_count",
+          "thresholds",
+          "provenance"
+        ],
+        "title": "RateWindowResponse",
+        "type": "object"
+      },
+      "RateWindowThresholds": {
+        "description": "The governed in-the-money thresholds applied to every week.\n\nBoth are ``None`` only when the fixed-rate book is empty (there was no\nrow to carry them from); the UI then draws no reference line.",
+        "properties": {
+          "min_equity_pct": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Equity Pct"
+          },
+          "min_spread_bps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Spread Bps"
+          }
+        },
+        "title": "RateWindowThresholds",
+        "type": "object"
+      },
+      "RateWindowWeek": {
+        "description": "One FRED week measured against the current book.",
+        "properties": {
+          "book_median_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Median note rate of the current fixed-rate book, in percent. None when the book is empty.",
+            "title": "Book Median Pct"
+          },
+          "book_p25_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "25th-percentile note rate of the current fixed-rate book, in percent.",
+            "title": "Book P25 Pct"
+          },
+          "book_p75_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "75th-percentile note rate of the current fixed-rate book, in percent.",
+            "title": "Book P75 Pct"
+          },
+          "is_latest": {
+            "default": false,
+            "description": "True on the most recent week (the current market print).",
+            "title": "Is Latest",
+            "type": "boolean"
+          },
+          "itm_count": {
+            "description": "Liens in the money at this week's market rate: fn_in_the_money(fn_rate_spread(...)) summed over the current fixed-rate book with the governed thresholds.",
+            "minimum": 0.0,
+            "title": "Itm Count",
+            "type": "integer"
+          },
+          "market_rate_pct": {
+            "description": "FRED 30-year fixed rate for the week, in percent.",
+            "title": "Market Rate Pct",
+            "type": "number"
+          },
+          "week": {
+            "description": "Week-starting Monday, ISO date (YYYY-MM-DD).",
+            "title": "Week",
+            "type": "string"
+          }
+        },
+        "required": [
+          "week",
+          "market_rate_pct",
+          "itm_count"
+        ],
+        "title": "RateWindowWeek",
+        "type": "object"
+      },
       "RumAcceptedResponse": {
         "properties": {
           "accepted": {
@@ -15265,6 +15474,29 @@
           }
         },
         "summary": "Geography",
+        "tags": [
+          "analytics"
+        ]
+      }
+    },
+    "/api/analytics/rate-window": {
+      "get": {
+        "deprecated": true,
+        "description": "Weekly market rate against the current book, with in-the-money counts.\n\nThe book distribution is as-of the refresh anchor (``book_as_of``) and\napplied to every historical week; the provenance block says so and\nnames every table the series was read from.",
+        "operationId": "get_api_analytics_rate_window_rate_window",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RateWindowResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Rate Window",
         "tags": [
           "analytics"
         ]
@@ -22801,6 +23033,28 @@
           }
         },
         "summary": "Geography",
+        "tags": [
+          "analytics"
+        ]
+      }
+    },
+    "/api/v1/analytics/rate-window": {
+      "get": {
+        "description": "Weekly market rate against the current book, with in-the-money counts.\n\nThe book distribution is as-of the refresh anchor (``book_as_of``) and\napplied to every historical week; the provenance block says so and\nnames every table the series was read from.",
+        "operationId": "get_api_v1_analytics_rate_window_rate_window",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RateWindowResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Rate Window",
         "tags": [
           "analytics"
         ]

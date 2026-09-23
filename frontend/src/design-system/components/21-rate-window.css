@@ -1,0 +1,198 @@
+/* ============================================================
+   Rate window ("Why now") — 2026-09-21 audit dataviz-08 / dataviz-06.
+   `.rate-window` is an app-extension BEM block: the prototype
+   (design_files/index.html) has no time-series chart, so this
+   composes prototype primitives (.surface, .btn, .analytics-table)
+   with the analytics chart chrome (.analytics-chart__*) and tokens.
+   Two stacked panels share one x-axis; never a dual axis.
+   ============================================================ */
+/* The spread-screen ink (line, label, legend swatch). --status-warning-ink
+   (a pale amber) is defined once, for the dark surfaces, and measured 1.44:1 as
+   label text and as the line on the light theme's white panel (WCAG 1.4.3
+   needs 4.5:1, 1.4.11 needs 3:1). The light theme darkens the warning hue
+   toward --text-1 rather than borrowing the navy the warning chips use
+   (02-chips-kpi-segments.css), which would read as the market line
+   (--accent) or the median (--text-3). At 45% it measures 6.79:1 on white
+   and 5.19:1 over the book band the label can sit on.
+   The data ink (market line, in-the-money line, current print) and the band
+   fill follow the accent. The default `bright` accent overrides the light
+   theme's navy --accent with the bright blue (1.91:1 on white, audit visual-08 /
+   dataviz-09), so the light theme draws them from --accent-ink, the
+   existing per-accent light-safe precedent (tokens.css), and gives the book
+   band a fill that reads on white (1.31:1, the dark band's 1.35:1) instead
+   of the 1.09:1 --accent-soft. */
+.rate-window {
+  --rate-window-screen-ink: var(--status-warning-ink);
+  --rate-window-data-ink: var(--accent);
+  --rate-window-band-fill: var(--accent-soft);
+}
+[data-theme="light"] .rate-window {
+  --rate-window-screen-ink: color-mix(in oklab, var(--signal-warning) 45%, var(--text-1));
+  --rate-window-data-ink: var(--accent-ink);
+  --rate-window-band-fill: color-mix(in oklab, var(--accent-ink) 16%, transparent);
+}
+.rate-window__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+.rate-window__panels {
+  display: grid;
+  gap: var(--sp-4);
+}
+.rate-window__panel-title {
+  margin: 0 0 var(--sp-2);
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  font-weight: 600;
+}
+/* The chart chrome reserves a rotated y-axis label gutter and x-tick room;
+   the rates panel has neither (the axis is shared below), so reclaim both. */
+.rate-window__panel .analytics-chart {
+  padding-inline-start: 0;
+}
+.rate-window__panel--rates .analytics-chart {
+  --analytics-chart-h: calc(var(--sp-16) + var(--sp-16) + var(--sp-16));
+}
+.rate-window__panel--rates .analytics-chart__canvas {
+  padding-block-end: 0;
+}
+.rate-window__panel--itm .analytics-chart {
+  --analytics-chart-h: calc(var(--sp-16) + var(--sp-16));
+}
+/* Each plot is a size container so the axis and the reference label adapt
+   to the width the plot actually has (Console open, phone), not the
+   viewport. The canvas is already position: relative, so the containment
+   changes no containing block. */
+.rate-window .analytics-chart__canvas {
+  container: rate-window-plot / inline-size;
+}
+/* The shared axis anchors its edge labels inside the plot. The chart chrome
+   centres every x-tick on its position (translateX(-50%)), which clipped the
+   last month past the surface edge at 1440 and pushed the first into the
+   y-tick gutter, onto the in-the-money panel's "0". */
+.rate-window .rate-window__xtick--start {
+  transform: none;
+}
+.rate-window .rate-window__xtick--end {
+  transform: translateX(-100%);
+}
+.rate-window__svg {
+  overflow: visible;
+}
+.rate-window__band {
+  fill: var(--rate-window-band-fill);
+  stroke: none;
+}
+/* `.analytics-line-chart polyline` (10-native-analytics.css, specificity
+   0,1,1) paints every polyline in the accent at 2.4. The rate-window marks
+   are scoped under the block (0,2,0) so each keeps the encoding its legend
+   swatch names: the book median is --text-3, never the market's accent. */
+.rate-window .rate-window__median {
+  fill: none;
+  stroke: var(--text-3);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
+}
+.rate-window .rate-window__market {
+  fill: none;
+  stroke: var(--rate-window-data-ink);
+  stroke-width: 2.4;
+}
+.rate-window__threshold {
+  stroke: var(--rate-window-screen-ink);
+  stroke-width: 1.5;
+  stroke-dasharray: 6 4;
+}
+.rate-window__itm-area {
+  fill: var(--accent-soft);
+}
+.rate-window .rate-window__itm-line {
+  fill: none;
+  stroke: var(--rate-window-data-ink);
+  stroke-width: 2;
+}
+.rate-window__ref-label,
+.rate-window__current {
+  position: absolute;
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  font-weight: 600;
+  line-height: var(--lh-tight);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.rate-window__ref-label {
+  inset-inline-start: var(--sp-2);
+  inset-block-start: var(--tick-pos);
+  transform: translateY(calc(-100% - var(--sp-1)));
+  color: var(--rate-window-screen-ink);
+}
+/* A screen near the top of the rate domain (REF_LABEL_MIN_Y_PCT) would lift
+   its label out of the plot into the panel title: hang it below the line. */
+.rate-window .rate-window__ref-label--below {
+  transform: translateY(var(--sp-1));
+}
+.rate-window__current {
+  inset-inline-end: 0;
+  inset-block-start: var(--tick-pos);
+  transform: translateY(calc(-100% - var(--sp-2)));
+  padding: 0 var(--sp-1);
+  border-radius: var(--r-sm);
+  background: var(--bg-1);
+  color: var(--text-1);
+}
+.rate-window__current-dot {
+  position: absolute;
+  inset-inline-start: var(--dot-x);
+  inset-block-start: var(--dot-y);
+  inline-size: var(--sp-2);
+  block-size: var(--sp-2);
+  border-radius: var(--r-pill);
+  background: var(--rate-window-data-ink);
+  box-shadow: 0 0 0 var(--sp-1) var(--accent-soft);
+  transform: translate(-50%, -50%);
+}
+.rate-window__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  margin-top: var(--sp-2);
+  color: var(--text-2);
+  font-size: var(--fs-11);
+}
+.rate-window__legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+.rate-window__swatch {
+  inline-size: var(--sp-4);
+  block-size: var(--sp-1);
+  border-radius: var(--r-pill);
+  background: var(--rate-window-data-ink);
+}
+.rate-window__swatch--median { background: var(--text-3); }
+.rate-window__swatch--band { block-size: var(--sp-2); background: var(--rate-window-band-fill); }
+.rate-window__swatch--threshold { background: var(--rate-window-screen-ink); }
+.rate-window__asof {
+  margin-top: var(--sp-3);
+}
+/* A narrow plot (phone, Console open on a small laptop) cannot fit six
+   month labels or the full reference label: keep the first, central and
+   last month, and name the screen by its rate alone (the detail stays in the
+   accessible description and the legend). */
+@container rate-window-plot (max-width: 31rem) {
+  .rate-window .rate-window__xtick--minor {
+    display: none;
+  }
+  .rate-window .rate-window__ref-detail {
+    display: none;
+  }
+  .rate-window .rate-window__ref-label {
+    max-inline-size: 50%;
+    white-space: normal;
+  }
+}
+/* The chart is static: no mark animates, so reduced motion needs no override. */

@@ -221,6 +221,26 @@ async function installMockApi(
       });
       return;
     }
+    if (path === '/api/analytics/rate-window') {
+      // The Executive tab's why-now panel; unfiltered by design, so one empty series serves every filter.
+      await fulfillJson(route, {
+        series_id: 'MORTGAGE30US',
+        weeks: [],
+        book_lien_count: 0,
+        book_as_of: null,
+        thresholds: { min_spread_bps: null, min_equity_pct: null },
+        provenance: {
+          market_rate_source: 'mip.silver.market_rates_weekly',
+          book_source: 'mip.gold.borrower_360 + mip.silver.lien_current',
+          gold_source: 'mip.gold.rate_window_weekly',
+          rule_source: 'mip.gold.fn_rate_spread + mip.gold.fn_in_the_money',
+          book_as_of: null,
+          refreshed_at: null,
+          note: 'layout-stability mock',
+        },
+      });
+      return;
+    }
     if (path === '/api/analytics/executive') {
       const filtered = url.searchParams.get('states') === 'IL';
       await fulfillJson(route, filtered
@@ -562,7 +582,7 @@ test('Analytics retains executive anchors while a multi-select filter refresh is
     { name: 'analytics-tabs', locator: page.locator('.analytics-tabs') },
     { name: 'analytics-filters', locator: page.locator('.analytics-filters') },
     { name: 'analytics-kpis', locator: region.locator('.kpi-row').first() },
-    { name: 'activation-funnel', locator: region.locator('.analytics-section').first() },
+    { name: 'activation-funnel', locator: region.locator('.analytics-section', { hasText: 'Activation funnel' }).first() },
     { name: 'analytics-grid', locator: region.locator('.analytics-grid').first() },
   ];
   const before = await captureBoxes(page, anchors);

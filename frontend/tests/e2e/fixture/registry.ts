@@ -14,6 +14,7 @@ import { genieFixtures } from './data/genie';
 import { leadFixtures } from './data/leads';
 import { offerFixtures } from './data/offers';
 import { portfolioFixtures } from './data/portfolio';
+import { rateWindowFixtures } from './data/rateWindow';
 import { salesOpsFixtures } from './data/salesOps';
 import { segmentFixtures } from './data/segments';
 import { shellFixtures } from './data/shell';
@@ -26,6 +27,7 @@ export function defaultFixtures(): FixtureEntry[] {
     ...leadFixtures,
     ...offerFixtures,
     ...analyticsFixtures,
+    ...rateWindowFixtures,
     ...salesOpsFixtures,
     ...genieFixtures,
     ...adminFixtures,

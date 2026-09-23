@@ -23,6 +23,7 @@ from backend.services.repositories.protocols import (
     OfferRepository,
     OutreachRepository,
     PortfolioRepository,
+    RateWindowRepository,
     SegmentRepository,
 )
 
@@ -38,6 +39,7 @@ _OFFER_REPO: OfferRepository | None = None
 _OUTREACH_REPO: OutreachRepository | None = None
 _GENIE_REPO: GenieAnswerRepository | None = None
 _GEO_REPO: GeoRepository | None = None
+_RATE_WINDOW_REPO: RateWindowRepository | None = None
 _LOCK = Lock()
 
 
@@ -197,6 +199,28 @@ def get_geo_repository() -> GeoRepository:
         return _GEO_REPO
 
 
+def get_rate_window_repository() -> RateWindowRepository:
+    """Return the Databricks-backed "why now" rate-window repository.
+
+    Used by ``/api/analytics/rate-window`` to read the precomputed
+    ``mip.gold.rate_window_weekly`` series (weekly market rate against the
+    current fixed-rate book) through the same short-TTL, single-flight,
+    stale-if-error cache posture as the geography rollups.
+    """
+    global _RATE_WINDOW_REPO
+    if _RATE_WINDOW_REPO is not None:
+        return _RATE_WINDOW_REPO
+    from backend.services.databricks_sql import get_sql_client
+    from backend.services.repositories.databricks_rate_window import (
+        DatabricksRateWindowRepository,
+    )
+
+    with _LOCK:
+        if _RATE_WINDOW_REPO is None:
+            _RATE_WINDOW_REPO = DatabricksRateWindowRepository(get_sql_client())
+        return _RATE_WINDOW_REPO
+
+
 def get_genie_answer_repository() -> GenieAnswerRepository:
     """Return the live Genie repository backed by the real Mortgage
     Lead Intelligence space.
@@ -232,7 +256,7 @@ def _reset_singletons_for_tests() -> None:
     """
     global _PORTFOLIO_REPO, _ANALYTICS_REPO, _SEGMENT_REPO, _LEAD_REPO
     global _BORROWER_REPO
-    global _OFFER_REPO, _OUTREACH_REPO, _GENIE_REPO, _GEO_REPO
+    global _OFFER_REPO, _OUTREACH_REPO, _GENIE_REPO, _GEO_REPO, _RATE_WINDOW_REPO
     with _LOCK:
         _PORTFOLIO_REPO = None
         _ANALYTICS_REPO = None
@@ -243,3 +267,4 @@ def _reset_singletons_for_tests() -> None:
         _OUTREACH_REPO = None
         _GENIE_REPO = None
         _GEO_REPO = None
+        _RATE_WINDOW_REPO = None

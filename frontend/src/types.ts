@@ -726,6 +726,7 @@ export type {
   FunnelTotals,
   ScoreBucket,
 } from './types/executiveAnalytics';
+export type { RateWindowProvenance, RateWindowResponse, RateWindowThresholds, RateWindowWeek } from './types/rateWindow';
 
 export interface StateOpportunityRow {
   state: string;

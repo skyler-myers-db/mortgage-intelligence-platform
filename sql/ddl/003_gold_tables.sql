@@ -880,3 +880,37 @@ TBLPROPERTIES (
   'delta.autoOptimize.optimizeWrite' = 'true',
   'delta.autoOptimize.autoCompact'   = 'true'
 );
+
+-- -----------------------------------------------------------------------------
+-- 17. mip.gold.rate_window_weekly
+--     "Why now" rate window (2026-09-21 UI/UX audit, dataviz-08): one row per
+--     FRED MORTGAGE30US week with that week's market rate, the CURRENT
+--     fixed-rate book's note-rate band (p25 / median / p75), and the count in
+--     the money at that week's rate under the governed fn_rate_spread /
+--     fn_in_the_money rule. The book is as-of the refresh anchor (book_as_of).
+--     See sql/ddl/gold_rate_window_weekly.sql for column comments.
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS mip.gold.rate_window_weekly (
+  series_id               STRING    NOT NULL COMMENT 'FRED series code carried from silver.market_rates_weekly; MORTGAGE30US for Module 0.',
+  observation_week        DATE      NOT NULL COMMENT 'Week-starting Monday carried from silver.market_rates_weekly.observation_week. PK.',
+  market_rate_pct         DOUBLE    NOT NULL COMMENT 'FRED 30-year fixed rate for the week in percent (6.30 == 6.30%).',
+  market_rate_fraction    DOUBLE    NOT NULL COMMENT 'market_rate_pct / 100.0; the fractional form fn_rate_spread consumed for itm_count.',
+  is_latest               BOOLEAN   NOT NULL COMMENT 'TRUE on the most recent week per series, carried from silver.market_rates_weekly.is_latest; this is the current market print.',
+  book_median_rate_pct    DOUBLE             COMMENT 'Median note rate of the current fixed-rate book in percent (percentile_approx, accuracy 10000). NULL only when the book is empty.',
+  book_p25_rate_pct       DOUBLE             COMMENT '25th-percentile note rate of the current fixed-rate book in percent (percentile_approx, accuracy 10000). NULL only when the book is empty.',
+  book_p75_rate_pct       DOUBLE             COMMENT '75th-percentile note rate of the current fixed-rate book in percent (percentile_approx, accuracy 10000). NULL only when the book is empty.',
+  book_lien_count         BIGINT    NOT NULL COMMENT 'Active fixed-rate first liens in the current book: gold.borrower_360 rows with current_rate > 0 whose silver.lien_current.first_pos_rate_type is FIX and whose bounded rate is strictly inside the 1%..15% clamp. The same value on every week.',
+  itm_count               BIGINT    NOT NULL COMMENT 'Liens in the money at THIS week market rate: fn_in_the_money(fn_rate_spread(note_rate, market_rate_fraction), equity_pct, min_spread_bps_applied, min_equity_pct_applied) summed over the current fixed-rate book. Same primitives and thresholds as gold.lead_scores.in_the_money.',
+  min_spread_bps_applied  INT                COMMENT 'Rate-spread threshold (bps) applied to every week, carried from gold.borrower_360.min_spread_bps_applied. NULL only when the book is empty.',
+  min_equity_pct_applied  INT                COMMENT 'Equity threshold (pct) applied to every week, carried from gold.borrower_360.min_equity_pct_applied. NULL only when the book is empty.',
+  book_as_of              TIMESTAMP NOT NULL COMMENT 'Refresh anchor of the book distribution: every week is the CURRENT book measured against that week historical rate, not the book as it stood that week.',
+  refreshed_at            TIMESTAMP NOT NULL COMMENT 'Deterministic refresh anchor from mip.ref.refresh_run_state.'
+)
+USING DELTA
+CLUSTER BY (observation_week)
+COMMENT 'Why-now rate window: one row per FRED MORTGAGE30US week with that week market rate, the current fixed-rate book note-rate band (p25 / median / p75 via percentile_approx), and the count in the money at that week rate under the governed fn_rate_spread / fn_in_the_money rule. The book is as-of the refresh anchor (book_as_of) and applied to every week. Built by mip_refresh_scores via gold_rate_window_weekly.sql; read by /api/v1/analytics/rate-window.'
+TBLPROPERTIES (
+  'delta.enableChangeDataFeed' = 'false',
+  'delta.autoOptimize.optimizeWrite' = 'true',
+  'delta.autoOptimize.autoCompact'   = 'true'
+);
