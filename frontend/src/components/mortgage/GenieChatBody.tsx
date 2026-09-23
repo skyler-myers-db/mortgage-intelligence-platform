@@ -61,9 +61,6 @@ export interface GenieChatBodyProps {
   onStop: () => void;
 }
 
-const STOPPED_NOTE_TITLE =
-  'Stopped in this browser only. Genie may still finish this turn on the server; its reply is discarded and never shown.';
-
 function StoppedTurnNote({
   note,
   typing,
@@ -80,20 +77,26 @@ function StoppedTurnNote({
   return (
     <>
       <div className="genie__msg genie__msg--user">{note.question}</div>
+      {/* "Ask again", not "Regenerate": a stopped turn has no answer. */}
       <GenieTurnActions
         placement="question"
         question={note.question}
         onEdit={onEdit}
-        onRegenerate={onAsk}
+        onAskAgain={onAsk}
         disabled={typing}
         disabledReason={busyReason}
       />
       {/* Not a live region: the panel's one persistent announcer (a11y-06)
-          already said "Stopped" when it happened. */}
-      <div className="genie__msg genie__msg--ai genie__msg--stopped" title={STOPPED_NOTE_TITLE}>
+          already said "Stopped" when it happened. The server-side caveat is
+          visible text, not a tooltip, so keyboard, touch and screen-reader
+          users get it too. */}
+      <div className="genie__msg genie__msg--ai genie__msg--stopped">
         <div className="bubble">
           <Chip variant="neutral">Stopped</Chip>
-          <span>This answer was discarded before it arrived.</span>
+          <span>
+            Stopped before the answer arrived. Genie may still finish this turn on the server; that reply is
+            discarded and never shown.
+          </span>
         </div>
       </div>
     </>

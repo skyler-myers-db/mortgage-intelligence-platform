@@ -308,13 +308,18 @@ describe('floating Genie conversational controls', () => {
     expect(container.querySelector('.genie__msg--stopped')).not.toBeNull();
     expect(input().value).toBe('Which states lead?');
 
-    // Regenerate under the stopped question sends it as a NEW turn.
+    // The server-side caveat is visible text in the note, not a tooltip.
+    const note = container.querySelector('.genie__msg--stopped');
+    expect(note?.getAttribute('title')).toBeNull();
+    expect(note?.textContent).toContain('Genie may still finish this turn on the server');
+    // A stopped turn has no answer to regenerate: its re-ask is "Ask again".
+    expect(container.querySelector('.genie__msg-actions--user button[aria-label="Regenerate answer"]')).toBeNull();
     armInlineAnswer(answer({ answer: 'Texas leads.' }));
-    const regenerate = container.querySelector<HTMLButtonElement>(
-      '.genie__msg-actions--user button[aria-label="Regenerate answer"]',
+    const askAgain = container.querySelector<HTMLButtonElement>(
+      '.genie__msg-actions--user button[aria-label="Ask this question again"]',
     );
-    expect(regenerate).not.toBeNull();
-    await click(regenerate!);
+    expect(askAgain?.textContent).toBe('Ask again');
+    await click(askAgain!);
     await waitUntil(() => container.textContent?.includes('Texas leads.') ?? false);
     expect(mocks.genieSubmit.mock.calls.length).toBe(2);
     expect(mocks.genieSubmit.mock.calls[1][0]).toBe('Which states lead?');

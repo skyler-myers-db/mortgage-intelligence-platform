@@ -7,6 +7,8 @@
  *               thread cannot rewrite its history, so the earlier answer
  *               stays in the transcript; the tooltip says so.
  *   Retry       the same re-ask, offered on a failed (degraded) turn.
+ *   Ask again   the same re-ask, offered on a STOPPED turn: it has no answer
+ *               to regenerate.
  *
  * Every re-ask goes through the caller's ordinary ask path, so it is scanned
  * by the same server-side guards as a typed question. There is no rewrite
@@ -29,6 +31,8 @@ interface GenieTurnActionsProps {
   onRegenerate?: (question: string) => void;
   /** Re-ask a failed turn; renders a "Retry" button. */
   onRetry?: (question: string) => void;
+  /** Re-ask a stopped turn (no answer exists); renders an "Ask again" button. */
+  onAskAgain?: (question: string) => void;
   /** True while a turn is in flight: a second ask must not start. */
   disabled?: boolean;
   /** Why the re-ask controls are disabled, for the tooltip. */
@@ -42,12 +46,13 @@ export function GenieTurnActions({
   onEdit,
   onRegenerate,
   onRetry,
+  onAskAgain,
   disabled = false,
   disabledReason = null,
   placement,
 }: GenieTurnActionsProps) {
   if (!question.trim()) return null;
-  if (!onEdit && !onRegenerate && !onRetry) return null;
+  if (!onEdit && !onRegenerate && !onRetry && !onAskAgain) return null;
   return (
     <div
       className={`genie__msg-actions${placement === 'question' ? ' genie__msg-actions--user' : ''}`}
@@ -87,6 +92,18 @@ export function GenieTurnActions({
           aria-label="Regenerate answer"
         >
           Regenerate
+        </button>
+      )}
+      {onAskAgain && (
+        <button
+          type="button"
+          className="btn btn--ghost btn--sm"
+          onClick={() => onAskAgain(question)}
+          disabled={disabled}
+          title={disabled ? (disabledReason ?? undefined) : 'Ask this question again as a new Genie turn'}
+          aria-label="Ask this question again"
+        >
+          Ask again
         </button>
       )}
     </div>
