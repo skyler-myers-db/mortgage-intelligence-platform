@@ -1,7 +1,8 @@
 /**
- * The decision outcome of the Offer Orchestrator: the routing confirmation
- * chip, the Decision receipt for an approved / rejected borrower, the
- * activation loop for an approval, and the write-failure alert.
+ * The decision outcome of the Offer Orchestrator: the Decision receipt for an
+ * approved / rejected borrower, the activation loop for an approval, and the
+ * write-failure alert. Where an approval was routed (assignee, follow-up) is
+ * a shell toast now (offer-orchestrator.feedback, audit states-07).
  *
  * The receipt renders only from the ledger read-back (DecisionReceipt), so a
  * decision made in this view shows "Recording decision…" until the row is
@@ -28,7 +29,6 @@ export interface OfferDecisionOutcomeProps {
   justDecided: boolean;
   approvalId: string | null;
   approveError: string | null;
-  routingConfirm: { email: string | null; followUpAt: string | null } | null;
   /**
    * The borrower's score as loaded now. Shown on the receipt as "Score at
    * decision" only for a decision made in this view: a durable decision
@@ -46,26 +46,11 @@ export function OfferDecisionOutcome({
   justDecided,
   approvalId,
   approveError,
-  routingConfirm,
   score,
 }: OfferDecisionOutcomeProps) {
   const scoreAtDecision = justDecided ? score : null;
   return (
     <>
-      {routingConfirm && (routingConfirm.email || routingConfirm.followUpAt) && (
-        <div className="outreach-routing__confirm mt-grid" role="status" data-testid="routing-confirm">
-          <Chip variant="success">
-            {routingConfirm.email ? `Assigned to ${routingConfirm.email}` : 'Unassigned'}
-            {routingConfirm.followUpAt
-              ? ` · follow-up ${new Date(routingConfirm.followUpAt).toLocaleDateString(undefined, {
-                  month: 'short',
-                  day: 'numeric',
-                })}`
-              : ''}
-          </Chip>
-        </div>
-      )}
-
       {effectiveApproval === 'approved' && (
         <>
           {auditId ? (
