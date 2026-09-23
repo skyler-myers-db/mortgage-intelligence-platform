@@ -280,28 +280,53 @@ async function askDeepQuestion(page: Page) {
 }
 
 test.describe('focus is never hidden behind a sticky bar (WCAG 2.2 SC 2.4.11)', () => {
-  test('tabbing down through an answer keeps every focus stop clear of the composer', async ({ app, mockApi, page }) => {
-    registerGenieTurn(mockApi, { answer: genieDeepAnswerFixture(), holdProgress: false });
-    await app.gotoRoute('/ask-genie');
-    await askDeepQuestion(page);
+  // The composer grows with its draft (two lines to eight), so the clearance
+  // must follow its measured size, not a fixed one.
+  const drafts = [
+    { what: 'an empty composer', draft: '' },
+    {
+      what: 'an eight-line draft',
+      draft: Array.from({ length: 8 }, (_, line) => `Line ${line + 1} of a follow-up about prime refi candidates`).join('\n'),
+    },
+  ];
+  for (const { what, draft } of drafts) {
+    test(`tabbing down through an answer keeps every focus stop clear of the composer · ${what}`, async ({ app, mockApi, page }) => {
+      registerGenieTurn(mockApi, { answer: genieDeepAnswerFixture(), holdProgress: false });
+      await app.gotoRoute('/ask-genie');
+      await askDeepQuestion(page);
+      if (draft) {
+        // The stylesheet's pre-measurement fallback clearance (ask-genie.css).
+        const fallback = await page.evaluate(() => {
+          const root = getComputedStyle(document.documentElement);
+          const px = (name: string) => Number.parseFloat(root.getPropertyValue(name));
+          return px('--sp-16') * 2 + px('--sp-8') + px('--focus-ring-width') + px('--focus-ring-offset');
+        });
+        await composer(page).fill(draft);
+        // Non-vacuity: the draft grew the composer past what the fixed
+        // fallback would clear, so only the measured size keeps focus clear.
+        await expect
+          .poll(async () => (await mustBox(page.locator('form.genie-composer'), 'composer')).height)
+          .toBeGreaterThan(fallback);
+      }
 
-    // From the top of the conversation, walk forward to the composer. The
-    // thread runs past the fold, so the stops below it start under the dock.
-    await page.locator('.main').evaluate((main) => {
-      main.scrollTop = 0;
+      // From the top of the conversation, walk forward to the composer. The
+      // thread runs past the fold, so the stops below it start under the dock.
+      await page.locator('.main').evaluate((main) => {
+        main.scrollTop = 0;
+      });
+      const newThread = page.locator('#main-content .surface__hdr').getByRole('button', { name: 'New thread' });
+      await newThread.focus();
+      await expect(newThread).toBeFocused();
+
+      const walk = await walkFocus(page, 'Tab', (stop) => stop.inComposer);
+      expect(walk.reached, 'Tab reaches the composer').toBe(true);
+      // Non-vacuity: the walk went through the answer's own controls and the
+      // suggestions, which sit under the dock until focus brings them up.
+      expect(walk.visited, 'the walk crossed the answer feedback').toContain('Mark this answer helpful');
+      expect(walk.visited.some((name) => name.startsWith('Which states')), 'the walk crossed the suggestions').toBe(true);
+      expect(walk.hidden, 'focus stops entirely behind a sticky bar').toEqual([]);
     });
-    const newThread = page.locator('#main-content .surface__hdr').getByRole('button', { name: 'New thread' });
-    await newThread.focus();
-    await expect(newThread).toBeFocused();
-
-    const walk = await walkFocus(page, 'Tab', (stop) => stop.inComposer);
-    expect(walk.reached, 'Tab reaches the composer').toBe(true);
-    // Non-vacuity: the walk went through the answer's own controls and the
-    // suggestions, which sit under the dock until focus brings them up.
-    expect(walk.visited, 'the walk crossed the answer feedback').toContain('Mark this answer helpful');
-    expect(walk.visited.some((name) => name.startsWith('Which states')), 'the walk crossed the suggestions').toBe(true);
-    expect(walk.hidden, 'focus stops entirely behind a sticky bar').toEqual([]);
-  });
+  }
 
   test('Shift+Tab up through an answer keeps every focus stop clear of the route nav', async ({ app, mockApi, page }) => {
     registerGenieTurn(mockApi, { answer: genieDeepAnswerFixture(), holdProgress: false });
