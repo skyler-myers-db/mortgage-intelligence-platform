@@ -1,15 +1,17 @@
 /**
  * @vitest-environment happy-dom
  *
- * S4 acceptance (component grain): every number in the "since your last
- * login" summary opens the EvidenceDrawer citing the kpi_snapshots baseline
- * row AND the headline metric view; first-visit / no-baseline states render
- * honest welcome copy with no fake deltas; a Genie phrasing is labelled and
- * still renders every deterministic token as an evidence affordance.
+ * S4 acceptance (component grain), as the answer band's WHY NOW column
+ * (2026-09-21 audit flow-05): every server token renders verbatim as an
+ * evidence chip that opens the EvidenceDrawer citing the kpi_snapshots
+ * baseline row AND the headline metric view; each population deep-links to
+ * the Lead Queue filter with the same predicate; first-visit / no-baseline
+ * states render honest welcome copy with no fake deltas.
  */
 
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DrawerSource } from '../AppContext';
 import type { HomeSummary } from '../../types';
@@ -22,7 +24,7 @@ vi.mock('../AppContext', () => ({
   useApp: () => ({ lender: 'Summit Mortgage', setDrawer, showEvidence }),
 }));
 
-import { LastLoginSummary, segmentHeadline } from './LastLoginSummary';
+import { LastLoginSummary } from './LastLoginSummary';
 
 const DELTA_SUMMARY: HomeSummary = {
   status: 'delta',
@@ -115,7 +117,7 @@ const FIRST_VISIT_SUMMARY: HomeSummary = {
   deltas: null,
 };
 
-describe('LastLoginSummary', () => {
+describe('LastLoginSummary (the answer band WHY NOW column)', () => {
   let root: Root;
   let container: HTMLElement;
 
@@ -133,32 +135,32 @@ describe('LastLoginSummary', () => {
   });
 
   const render = (summary: HomeSummary | null, loading = false) =>
-    act(() => root.render(<LastLoginSummary summary={summary} loading={loading} />));
+    act(() =>
+      root.render(
+        <MemoryRouter>
+          <LastLoginSummary summary={summary} loading={loading} />
+        </MemoryRouter>,
+      ),
+    );
+  const chips = () => Array.from(container.querySelectorAll<HTMLButtonElement>('.home-answer__trigger .evidence-chip'));
+  const triggerLink = (index: number) =>
+    container.querySelectorAll('.home-answer__trigger')[index]?.querySelector('a')?.getAttribute('href') ?? null;
 
-  it('renders the delta sentence with one evidence button per number', () => {
+  it('lists one trigger per highlight, each token verbatim as its evidence chip', () => {
     render(DELTA_SUMMARY);
-    const narrative = container.querySelector('.login-summary__narrative');
-    expect(narrative?.textContent).toContain('Since your last login:');
-    const buttons = container.querySelectorAll<HTMLButtonElement>('.login-summary__num');
-    expect(buttons.length).toBe(3);
-    expect(Array.from(buttons).map((b) => b.textContent)).toEqual([
-      '+1.5%',
-      '+2,250',
-      '+4,120',
-    ]);
+    expect(container.querySelector('.login-summary')?.textContent).toContain('Since your last login');
+    expect(chips().map((chip) => chip.textContent)).toEqual(['+1.5%', '+2,250', '+4,120']);
   });
 
-  it('every number opens the drawer citing snapshot baseline + metric view', () => {
+  it('every token opens the drawer citing snapshot baseline + metric view', () => {
     render(DELTA_SUMMARY);
-    const buttons = Array.from(
-      container.querySelectorAll<HTMLButtonElement>('.login-summary__num'),
-    );
     const expectedFamilies = ['opportunity_score', 'in_the_money', 'next_best_offer'];
-    for (const [index, button] of buttons.entries()) {
+    for (const [index, chip] of chips().entries()) {
       setDrawer.mockClear();
-      act(() => button.click());
+      act(() => chip.click());
       expect(setDrawer).toHaveBeenCalledTimes(1);
       const source = setDrawer.mock.calls[0][0] as DrawerSource;
+      expect(source.title).toMatch(/^Since your last login — /);
       const baseline = (source.signals ?? []).find((signal) => signal.label === 'Baseline');
       expect(baseline?.source).toMatch(/^kpi_snapshots\./);
       expect(source.assetPath).toBe('mip.semantics.portfolio_headline_metric_view');
@@ -171,15 +173,51 @@ describe('LastLoginSummary', () => {
     }
   });
 
+  it('deep-links each population to the Lead Queue filter with the same predicate', () => {
+    render(DELTA_SUMMARY);
+    expect(triggerLink(0)).toBe('/lead-queue?funnel_stage=high_opportunity');
+    expect(triggerLink(1)).toBe('/lead-queue?segment=itm');
+    // offer_available includes "Monitor for later"; no queue filter is that
+    // population, so the trigger links nowhere rather than somewhere wrong.
+    expect(triggerLink(2)).toBeNull();
+    expect(container.textContent).toContain('borrowers with an offer decision');
+    // The counts are whole-book; the queue is the contactable subset (the
+    // ~23x addressable-vs-contactable gap), and the column says so.
+    expect(container.querySelector('.home-answer__note')?.textContent).toContain(
+      'each link opens the contactable subset in the Lead Queue',
+    );
+  });
+
+  it('reads a zero movement as "no change in", never as zero borrowers', () => {
+    const flat: HomeSummary = {
+      ...DELTA_SUMMARY,
+      highlights: [{ ...DELTA_SUMMARY.highlights[1], display: 'no change', value_token: 'no change', delta: 0 }],
+    };
+    render(flat);
+    expect(container.querySelector('.home-answer__trigger')?.textContent).toBe(
+      'no change in borrowers whose rate and equity pass the refinance screen',
+    );
+    expect(chips().map((chip) => chip.textContent)).toEqual(['no change']);
+  });
+
+  it('reads a percent token as a change in the population, never as a share of it', () => {
+    render(DELTA_SUMMARY);
+    const [pct, count] = Array.from(container.querySelectorAll('.home-answer__trigger')).map((el) => el.textContent);
+    // "+1.5% borrowers with ..." read as "1.5% of borrowers".
+    expect(pct).toBe('+1.5% in borrowers with an opportunity score of 75+');
+    expect(count).toBe('+2,250 borrowers whose rate and equity pass the refinance screen');
+  });
+
   it('first visit renders welcome copy, no delta language, no snapshot citation', () => {
     render(FIRST_VISIT_SUMMARY);
     expect(container.textContent).toContain('Welcome to your book');
     expect(container.textContent).toContain('First visit on record');
-    expect(container.textContent).not.toContain('Since your last login:');
-    const button = container.querySelector<HTMLButtonElement>('.login-summary__num');
-    expect(button).toBeTruthy();
-    act(() => button!.click());
+    expect(container.textContent).not.toContain('Since your last login');
+    expect(triggerLink(0)).toBe('/lead-queue');
+    act(() => chips()[0].click());
     const source = setDrawer.mock.calls[0][0] as DrawerSource;
+    // Titled by the band the chip sits in; the "Your book today" card is gone.
+    expect(source.title).toBe("Today's briefing — marketable borrowers");
     const signalLabels = (source.signals ?? []).map((signal) => signal.label);
     expect(signalLabels).not.toContain('Baseline');
     expect(source.assetPath).toBe('mip.semantics.portfolio_headline_metric_view');
@@ -187,105 +225,42 @@ describe('LastLoginSummary', () => {
   });
 
   it('no-baseline state is honest about the pending snapshot', () => {
-    const summary: HomeSummary = {
-      ...FIRST_VISIT_SUMMARY,
-      status: 'no_baseline',
-      previous_visit_at: '2026-07-09T14:30:00+00:00',
-      headline:
-        'Welcome back — your last-login baseline is still being captured, so deltas arrive after the next daily KPI snapshot. Today: 5,240,100 marketable borrowers, 88,210 high-opportunity, 402,330 offers available.',
-    };
-    render(summary);
+    render({ ...FIRST_VISIT_SUMMARY, status: 'no_baseline', previous_visit_at: '2026-07-09T14:30:00+00:00' });
     expect(container.textContent).toContain('Welcome back');
     expect(container.textContent).toContain('Deltas arrive after the next daily KPI snapshot');
-    expect(container.querySelectorAll('.login-summary__num').length).toBe(3);
+    expect(chips()).toHaveLength(3);
   });
 
-  it('labels a Genie phrasing and keeps every token interactive', () => {
-    const genie: HomeSummary = {
-      ...DELTA_SUMMARY,
-      phrasing_source: 'genie',
-      phrasing_fallback_reason: null,
-      headline:
-        'Your book strengthened overnight: high-opportunity up +1.5%, with +2,250 refi candidates and +4,120 offers available to work.',
-    };
-    render(genie);
-    expect(container.textContent).toContain('Genie-phrased · deterministic numbers');
-    const buttons = container.querySelectorAll<HTMLButtonElement>('.login-summary__num');
-    expect(buttons.length).toBe(3);
-    expect(container.querySelector('.login-summary__narrative')?.textContent).toContain(
-      'strengthened overnight',
-    );
-  });
-
-  it('does not label the deterministic phrasing as Genie', () => {
-    render(DELTA_SUMMARY);
-    expect(container.textContent).not.toContain('Genie-phrased');
-  });
-
-  it('never renders model output as HTML (defense-in-depth; backend also rejects markup)', () => {
+  it('never renders the model-phrased headline, so model output cannot reach the DOM', () => {
     const hostile: HomeSummary = {
       ...DELTA_SUMMARY,
       phrasing_source: 'genie',
-      headline:
-        '<img src=x onerror="window.__pwned=1"> up +1.5%, +2,250 refi candidates, +4,120 offers available.',
+      headline: '<img src=x onerror="window.__pwned=1"> strengthened overnight +1.5%, +2,250, +4,120.',
     };
     render(hostile);
     expect(container.querySelector('img[src="x"]')).toBeNull();
     expect((window as unknown as { __pwned?: number }).__pwned).toBeUndefined();
-    // The markup shows up as inert text, tokens stay interactive.
-    expect(container.querySelector('.login-summary__narrative')?.textContent).toContain('<img');
-    expect(container.querySelectorAll('.login-summary__num').length).toBe(3);
+    expect(container.textContent).not.toContain('strengthened overnight');
+    expect(chips()).toHaveLength(3);
   });
 
-  it('falls back to structured highlights when a token cannot be located', () => {
-    const mangled: HomeSummary = {
-      ...DELTA_SUMMARY,
-      headline: 'A sentence that lost its numbers somehow.',
-    };
-    render(mangled);
-    const buttons = container.querySelectorAll<HTMLButtonElement>('.login-summary__num');
-    expect(buttons.length).toBe(3);
-    expect(container.textContent).toContain('refi candidates');
-  });
-
-  it('renders static numbers when evidence chrome is toggled off', () => {
+  it('renders static tokens when evidence chrome is toggled off', () => {
     showEvidence = false;
     render(DELTA_SUMMARY);
-    expect(container.querySelectorAll('.login-summary__num').length).toBe(0);
-    expect(container.querySelectorAll('.login-summary__num-static').length).toBe(3);
+    expect(chips()).toHaveLength(0);
+    expect(
+      Array.from(container.querySelectorAll('.login-summary__num-static')).map((node) => node.textContent),
+    ).toEqual(['+1.5%', '+2,250', '+4,120']);
   });
 
-  it('renders nothing for null or malformed payloads and a skeleton while loading', () => {
+  it('says what it cannot show for null or malformed payloads, and is busy while loading', () => {
     render(null);
-    expect(container.querySelector('.login-summary')).toBeNull();
+    expect(container.querySelector('.home-answer__empty[role="status"]')).toBeTruthy();
+    expect(chips()).toHaveLength(0);
     render({ marketable_population: 12 } as unknown as HomeSummary);
-    expect(container.querySelector('.login-summary')).toBeNull();
+    expect(container.querySelector('.home-answer__empty[role="status"]')).toBeTruthy();
     render(null, true);
     expect(container.querySelector('.login-summary[aria-busy="true"]')).toBeTruthy();
-  });
-});
-
-describe('segmentHeadline', () => {
-  it('splits around every token exactly once, in sentence order', () => {
-    const segments = segmentHeadline(DELTA_SUMMARY.headline, DELTA_SUMMARY.highlights);
-    expect(segments).not.toBeNull();
-    const tokens = segments!
-      .filter((s): s is { highlight: (typeof DELTA_SUMMARY.highlights)[number] } => 'highlight' in s)
-      .map((s) => s.highlight.display);
-    expect(tokens).toEqual(['+1.5%', '+2,250', '+4,120']);
-  });
-
-  it('handles duplicate tokens by claiming distinct occurrences', () => {
-    const highlights = [
-      { ...DELTA_SUMMARY.highlights[1], display: '0', value_token: '0' },
-      { ...DELTA_SUMMARY.highlights[2], display: '0', value_token: '0' },
-    ];
-    const segments = segmentHeadline('No change: 0 refi candidates, 0 offers available.', highlights);
-    expect(segments).not.toBeNull();
-    expect(segments!.filter((s) => 'highlight' in s).length).toBe(2);
-  });
-
-  it('returns null when a token is missing', () => {
-    expect(segmentHeadline('no numbers here', DELTA_SUMMARY.highlights)).toBeNull();
+    expect(container.querySelector('.home-answer__empty')).toBeNull();
   });
 });

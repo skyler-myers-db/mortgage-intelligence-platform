@@ -321,6 +321,16 @@
   height: var(--fs-kpi-big);
   border-radius: var(--r-sm);
 }
+/* From the 1281px band up, the prototype's own --fs-36 (design_files/
+   index.html:460-462). The clamp on .kpi__value rendered 29.12px at 1440,
+   under the 30.08px page title: a headline number smaller than its
+   headline (2026-09-21 audit visual-06). Below 1281px the clamp keeps
+   scaling. The skeleton matches so the value does not shift the card
+   when it lands. */
+@media (min-width: 1281px) {
+  .kpi__value { font-size: var(--fs-36); }
+  .kpi__value-skeleton { height: var(--fs-36); }
+}
 .kpi__delta-skeleton {
   width: min(48%, 140px);
   height: var(--fs-14);

@@ -26,6 +26,7 @@
  * collects these specs via `playwright test --list` for a syntax check.
  */
 import { test, expect, type APIRequestContext, type Locator } from '@playwright/test';
+import { expectHomeGeographyPaired } from './homeGeography';
 
 const LIVE = process.env.E2E_LIVE === '1';
 
@@ -153,7 +154,7 @@ test.describe('Module 0 — theme / density / narrow canaries', () => {
       .toBe(initialDensity);
   });
 
-  test('narrow viewport (1150px): rail stays fixed and geography remains full-width', async ({ page }) => {
+  test('narrow viewport (1150px): rail stays fixed and geography paired with the side panel', async ({ page }) => {
     await page.setViewportSize({ width: 1150, height: 900 });
     await page.goto('/');
 
@@ -170,15 +171,10 @@ test.describe('Module 0 — theme / density / narrow canaries', () => {
     });
     expect(kpiCols, 'expected .kpi-row to render 2 columns at 1150px').toBe(2);
 
-    const map = page.locator('.map-wrap').first();
-    await expect(map).toBeVisible({ timeout: 30_000 });
-    const mapWidth = await map.evaluate((el) => el.getBoundingClientRect().width);
-    const contentWidth = await page.locator('.main__inner').first().evaluate(
-      (el) => el.getBoundingClientRect().width,
-    );
-    expect(mapWidth, 'Home geography should use the main content width').toBeGreaterThanOrEqual(
-      contentWidth * 0.95,
-    );
+    // Since the 2026-09-21 audit (visual-06) the map pairs with the side
+    // panel in `.layoutA-grid.home-geo` (1.2fr / 1fr in this band); the PAIR
+    // spans the content width, the map beside the side panel.
+    await expectHomeGeographyPaired(page, 2, '1150x900');
 
     // Rail is NOT responsive by design (until < 1024 viewport) — assert it stays
     // at 72px so we catch any regression that tries to hide it.
@@ -353,7 +349,7 @@ test.describe('Module 0 — responsive anchor matrix', () => {
   test.use({ baseURL: APP_URL, extraHTTPHeaders: AUTH_HEADERS });
 
   for (const anchor of ANCHORS) {
-    test(`[${anchor.label}] Home renders ${anchor.kpiCols}-col KPI row and full-width geography`, async ({ page }) => {
+    test(`[${anchor.label}] Home renders ${anchor.kpiCols}-col KPI row and geography paired with the side panel`, async ({ page }) => {
       await page.setViewportSize({ width: anchor.width, height: anchor.height });
       await page.goto('/');
 
@@ -368,15 +364,10 @@ test.describe('Module 0 — responsive anchor matrix', () => {
       });
       expect(kpiCols, `Home .kpi-row at ${anchor.label}`).toBe(anchor.kpiCols);
 
-      const map = page.locator('.map-wrap').first();
-      await expect(map).toBeVisible({ timeout: 30_000 });
-      const mapWidth = await map.evaluate((el) => el.getBoundingClientRect().width);
-      const innerWidth = await page.locator('.main__inner').first().evaluate(
-        (el) => el.getBoundingClientRect().width,
-      );
-      expect(mapWidth, `Home geography width at ${anchor.label}`).toBeGreaterThanOrEqual(
-        innerWidth * 0.95,
-      );
+      // The map pairs with the side panel in `.layoutA-grid.home-geo`
+      // (2026-09-21 audit visual-06): the pair spans the content width and,
+      // at 2 tracks, the side panel sits right of the map.
+      await expectHomeGeographyPaired(page, anchor.layoutACols, anchor.label);
 
       // Content cap: at ≥ 2001px viewport the .main__content wrapper
       // holds the text-dense content to 1920px. Home's wideMap opts

@@ -1,0 +1,32 @@
+/* ============================================================
+   HOME COMPOSITION (2026-09-21 audit visual-06)
+   One grid carries the whole Home stack, so the gap between any two
+   cards is always --gap-grid (the login summary used to sit flush on
+   the KPI row, 0px). The map pairs with a side panel in the
+   prototype's `.layoutA-grid` 1.4fr / 1fr, as Module 0 Prototype.html
+   pairs MapPanel with RightRail.
+
+   Route-scoped: imported by home.tsx, so it ships with the lazy Home
+   chunk instead of the initial stylesheet.
+   ============================================================ */
+
+.home-stack {
+  display: grid;
+  gap: var(--gap-grid);
+  min-inline-size: 0;
+}
+/* The grid gap owns vertical rhythm: children that carry their own
+   margins elsewhere (.status-callout, .section-actions) drop them here. */
+.main__inner .home-stack > *,
+.home-geo .home-side > * {
+  margin-block: 0;
+  min-inline-size: 0;
+}
+.home-geo {
+  align-items: start;
+}
+.home-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-grid);
+}

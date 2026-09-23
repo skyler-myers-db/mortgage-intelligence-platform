@@ -70,7 +70,7 @@ describe('Home data estate relocation', () => {
     expect(document.body.textContent).toContain('Approval queue');
   });
 
-  it('keeps geography full width and removes the admin-only activity log', () => {
+  it('pairs geography with the approval-queue side panel and removes the admin-only activity log', () => {
     act(() => {
       root.render(
         <MemoryRouter initialEntries={['/']}>
@@ -81,7 +81,12 @@ describe('Home data estate relocation', () => {
 
     const map = document.querySelector('[data-testid="us-choropleth-map"]');
     expect(map).toBeTruthy();
-    expect(map?.closest('.layoutA-grid')).toBeNull();
+    // 2026-09-21 audit visual-06: the prototype pairs the map with a side
+    // panel in `.layoutA-grid` (MapPanel + RightRail); on Home that panel is
+    // the approval queue.
+    const pairing = map?.closest('.layoutA-grid');
+    expect(pairing).toBeTruthy();
+    expect(pairing?.querySelector('[role="region"][aria-label="Approval queue"]')).toBeTruthy();
     expect(document.querySelector('[data-testid="agent-activity-log"]')).toBeNull();
     expect(document.body.textContent).not.toContain('Agent action audit log');
     expect(document.body.textContent).not.toContain('Roadmap');

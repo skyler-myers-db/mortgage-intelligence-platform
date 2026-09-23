@@ -113,13 +113,16 @@ export function ApprovalQueueBanner({ screenCount, approvedCount, inOutreachCoun
   }
 
   return (
-    <div role="region" aria-label="Approval queue" className="approval mt-grid">
+    <div role="region" aria-label="Approval queue" className="approval">
       <div className="approval__ico"><Icon name="shield" size={16} /></div>
       <div className="approval__body">
         <div className="approval__title">Approval queue</div>
         <div className="approval__sub">{body}</div>
       </div>
-      <Link to={APPROVAL_QUEUE_HREF} className="btn btn--sm btn--primary">
+      {/* Secondary: Home carries exactly one primary action, "Review today's
+          top leads" (2026-09-21 audit flow-05). Spacing comes from Home's
+          grid gap, so the banner no longer carries its own top margin. */}
+      <Link to={APPROVAL_QUEUE_HREF} className="btn btn--sm">
         Open review queue
         <Icon name="chevright" size={13} />
       </Link>

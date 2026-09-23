@@ -45,7 +45,7 @@ export function loginSummaryDrawerSource(
   return {
     title: hasBaseline
       ? `Since your last login — ${highlight.label}`
-      : `Your book today — ${highlight.label}`,
+      : `Today's briefing — ${highlight.label}`,
     short: `portfolio_headline_metric_view.${highlight.measure}`,
     assetKey: 'portfolio_headline_metric_view',
     assetPath: 'mip.semantics.portfolio_headline_metric_view',

@@ -99,8 +99,10 @@ const PINNED_SUMMARY: SummaryPayload = {
   baseline_source: 'mip_app.kpi_snapshots',
 };
 
+// The summary is Home's answer-band WHY NOW column (2026-09-21 audit
+// flow-05): each server token renders verbatim as an evidence chip.
 async function summaryNumbers(page: Page): Promise<string[]> {
-  const nums = page.locator('.login-summary__num');
+  const nums = page.locator('.login-summary .evidence-chip');
   return nums.allTextContents();
 }
 
@@ -278,7 +280,7 @@ test.describe('S4 home summary — pinned response cross-check', () => {
     await expect(summary).toBeVisible({ timeout: 60_000 });
 
     for (let i = 0; i < PINNED_SUMMARY.highlights.length; i += 1) {
-      await summary.locator('.login-summary__num').nth(i).click();
+      await summary.locator('.evidence-chip').nth(i).click();
       const drawer = page.locator('.drawer');
       await expect(drawer).toBeVisible();
       await expect(drawer).toContainText('mip_app.kpi_snapshots');
@@ -330,7 +332,7 @@ test.describe('S4 home summary — live API cross-check', () => {
     if (summaryPayload.status === 'delta') {
       await expect(summary).toContainText('Since your last login');
       // Evidence: a delta number cites the real snapshot row + metric view.
-      await summary.locator('.login-summary__num').first().click();
+      await summary.locator('.evidence-chip').first().click();
       const drawer = page.locator('.drawer');
       await expect(drawer).toBeVisible();
       await expect(drawer).toContainText('mip_app.kpi_snapshots');
