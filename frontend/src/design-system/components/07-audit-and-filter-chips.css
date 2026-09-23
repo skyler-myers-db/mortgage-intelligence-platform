@@ -129,6 +129,7 @@
   background: var(--accent-soft);
   color: var(--accent-ink);
 }
+.segment-mode-control .segmented button:active { translate: 0 var(--pressed-shift); }
 .segment-mode-control .segmented__meta {
   color: var(--text-3);
   font-family: var(--font-mono);
@@ -258,6 +259,7 @@
   font-family: var(--font-sans);
 }
 .filter:hover { border-color: var(--line-2); color: var(--text-1); }
+.filter:active { translate: 0 var(--pressed-shift); }
 .filter.is-active { border-color: var(--accent); color: var(--accent-ink); background: var(--accent-soft); }
 /* `white-space: nowrap` + `flex-shrink: 0`: the "ASK" prefix on a Genie
    follow-up chip (`.filter--question`) is a flex item inside a

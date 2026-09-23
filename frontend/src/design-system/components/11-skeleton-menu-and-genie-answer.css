@@ -31,7 +31,7 @@
   position: absolute;
   top: calc(100% + var(--sp-1));
   left: 0;
-  z-index: 20;
+  z-index: var(--z-menu);
   min-width: 180px;
   max-height: 280px;
   overflow-y: auto;
@@ -260,5 +260,5 @@
 /* Stacking context preserved for route-level z-index use. DataMesh
    (36 animated SVG circles) removed 2026-04-23 — see AppShell.tsx. */
 .main { isolation: isolate; }
-.main__inner { position: relative; z-index: 1; }
+.main__inner { position: relative; z-index: var(--z-raised); }
 

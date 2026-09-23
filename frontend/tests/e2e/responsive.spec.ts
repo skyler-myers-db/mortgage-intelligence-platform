@@ -62,8 +62,9 @@ type Anchor = {
 // viewport width minus the 72–96px rail. Numbers match the container-
 // query rules in components.css.
 const ANCHORS: Anchor[] = [
-  // viewport - 72px rail ≈ 1208 → medium band (961–1280)
-  { width: 1280, height: 720, label: '1280-smallest-laptop', kpiCols: 3, segCols: 3, layoutACols: 2 },
+  // viewport - 72px rail ≈ 1208 → medium band (961–1280). Home's four KPIs
+  // lay out 2x2 here (audit responsive-06); the band itself is 3-col.
+  { width: 1280, height: 720, label: '1280-smallest-laptop', kpiCols: 2, segCols: 3, layoutACols: 2 },
   // viewport - 72px rail ≈ 1294 → design band (1281–1680)
   { width: 1366, height: 768, label: '1366-common-laptop', kpiCols: 4, segCols: 6, layoutACols: 2 },
   // 1440 - 72px ≈ 1368 → design band — prototype target
@@ -160,13 +161,14 @@ test.describe('Module 0 — theme / density / narrow canaries', () => {
       page.getByRole('heading', { name: /Who should we contact/i }),
     ).toBeVisible({ timeout: 10_000 });
 
-    // 1150 viewport - 72px rail ≈ 1078 → medium band → 3-col KPI.
+    // 1150 viewport - 72px rail ≈ 1078 → medium band; Home's four KPIs lay
+    // out 2x2 there (audit responsive-06).
     const kpiCols = await page.locator('.kpi-row').first().evaluate((el) => {
       return getComputedStyle(el).gridTemplateColumns
         .split(' ')
         .filter((x) => x.trim().length > 0).length;
     });
-    expect(kpiCols, 'expected .kpi-row to render 3 columns at 1150px').toBe(3);
+    expect(kpiCols, 'expected .kpi-row to render 2 columns at 1150px').toBe(2);
 
     const map = page.locator('.map-wrap').first();
     await expect(map).toBeVisible({ timeout: 30_000 });

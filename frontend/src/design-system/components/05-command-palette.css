@@ -1,11 +1,13 @@
 /* ============================================================
    ⌘K COMMAND PALETTE (re-audit #4 Buyer-Wow #1)
-   Above every surface, rail, drawer, and the Genie FAB (z 900).
+   Top of the overlay scale: above every surface, the rail, the drawer
+   (--z-drawer), the Genie panel and FAB (--z-genie / --z-genie-fab) and
+   the map tooltip (--z-map-tip); see tokens.css "Layering".
    ============================================================ */
 .cmdk {
   position: fixed;
   inset: 0;
-  z-index: 1000;
+  z-index: var(--z-palette);
   display: flex;
   align-items: flex-start;
   justify-content: center;
@@ -82,6 +84,7 @@
   transition: background var(--dur-fast) var(--ease);
 }
 .cmdk__row.is-active { background: var(--accent-soft); color: var(--text-1); }
+.cmdk__row:active { translate: 0 var(--pressed-shift); }
 .cmdk__row-icon { color: var(--text-3); flex-shrink: 0; }
 .cmdk__row.is-active .cmdk__row-icon { color: var(--accent-ink); }
 .cmdk__row-label { font-size: var(--fs-13); font-weight: 500; }
@@ -133,6 +136,7 @@
   display: grid; place-items: center; cursor: pointer;
 }
 .drawer__close:hover { background: var(--bg-3); }
+.drawer__close:active { translate: 0 var(--pressed-shift); }
 .drawer__source-icon {
   display: grid;
   place-items: center;
@@ -182,6 +186,7 @@
   border-radius: var(--r-sm);
 }
 .drawer__tab:hover { color: var(--text-1); }
+.drawer__tab:active { translate: 0 var(--pressed-shift); }
 .drawer__tab.is-active { background: var(--accent-soft); color: var(--accent-ink); }
 .source-summary,
 .source-card {
@@ -349,6 +354,7 @@
 .proof-tabs{padding:var(--sp-3) var(--sp-5);border-bottom:1px solid var(--line-1);overflow-x:auto}
 .proof-tab{display:inline-flex;align-items:center;gap:var(--sp-2);min-block-size:var(--sp-8);padding:0 var(--sp-3);border:1px solid var(--line-1);border-radius:var(--r-md);background:var(--bg-2);color:var(--text-2);font-family:var(--font-mono);font-size:var(--fs-12);cursor:pointer}
 .proof-tab.is-active,.proof-tab:hover,.proof-tab:focus-visible{border-color:var(--accent);color:var(--accent-ink);background:var(--accent-soft)}
+.proof-tab:active{translate:0 var(--pressed-shift)}
 .proof-callout,.proof-formula,.proof-component,.proof-branch,.proof-evidence-row,.proof-sql-card{padding:var(--sp-3);border:1px solid var(--line-1);border-radius:var(--r-md);background:var(--bg-2)}
 .proof-callout{color:var(--text-2)}.proof-callout--warning{border-color:color-mix(in oklab,var(--signal-warning) 55%,var(--line-2));background:color-mix(in oklab,var(--signal-warning) 8%,var(--bg-2))}.proof-callout--subtle{background:color-mix(in oklab,var(--accent) 5%,transparent);font-size:var(--fs-12)}
 .proof-list{margin:var(--sp-2) 0 0;padding-inline-start:var(--sp-5);color:var(--text-2)}
@@ -361,7 +367,7 @@
 .proof-branch.is-selected{border-color:var(--signal-success);box-shadow:0 0 0 1px color-mix(in oklab,var(--signal-success) 35%,transparent)}.proof-branch.is-passed:not(.is-selected){border-color:var(--line-2)}
 .proof-sql-card__sql{margin:var(--sp-3) 0;padding:var(--sp-3);max-block-size:calc(var(--sp-16) + var(--sp-16));overflow:auto;border:1px solid var(--line-1);border-radius:var(--r-md);background:var(--bg-0);color:var(--text-2);font-family:var(--font-mono);font-size:var(--fs-11);line-height:var(--lh-body);white-space:pre-wrap}
 .glossary-term{position:relative;display:inline-flex;color:inherit;text-decoration:underline dotted;text-underline-offset:.18em;cursor:help}.glossary-term:hover,.glossary-term:focus-visible{color:var(--accent)}
-.glossary-term__tip{position:absolute;inset-inline-start:0;inset-block-end:calc(100% + var(--sp-2));inline-size:min(300px,80vw);padding:var(--sp-3);border:1px solid var(--line-2);border-radius:var(--r-md);background:var(--bg-1);box-shadow:var(--shadow-md);color:var(--text-2);font-size:var(--fs-12);line-height:var(--lh-snug);opacity:0;pointer-events:none;transform:translateY(var(--sp-1));transition:opacity var(--dur-fast) var(--ease),transform var(--dur-fast) var(--ease);z-index:45}
+.glossary-term__tip{position:absolute;inset-inline-start:0;inset-block-end:calc(100% + var(--sp-2));inline-size:min(300px,80vw);padding:var(--sp-3);border:1px solid var(--line-2);border-radius:var(--r-md);background:var(--bg-1);box-shadow:var(--shadow-md);color:var(--text-2);font-size:var(--fs-12);line-height:var(--lh-snug);opacity:0;pointer-events:none;transform:translateY(var(--sp-1));transition:opacity var(--dur-fast) var(--ease),transform var(--dur-fast) var(--ease);z-index:var(--z-tooltip)}
 .glossary-term:hover .glossary-term__tip,.glossary-term:focus-visible .glossary-term__tip{opacity:1;transform:translateY(0)}.glossary-term__tip-title,.glossary-term__tip-context{display:block}.glossary-term__tip-title{margin-bottom:var(--sp-1);color:var(--text-1);font-weight:700}.glossary-term__tip-context{margin-top:var(--sp-2);color:var(--text-3)}
 .glossary-layout{display:grid;grid-template-columns:minmax(220px,.28fr) minmax(0,1fr);gap:var(--gap-grid)}.glossary-index{align-self:start;position:sticky;top:var(--sp-4)}.glossary-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--sp-4)}
 .glossary-entry{padding-block:var(--sp-3);border-bottom:1px solid var(--line-1)}.glossary-entry:last-child{border-bottom:0}.glossary-entry__term{margin:0;color:var(--text-1);font-size:var(--fs-18);line-height:var(--lh-snug)}.glossary-entry__aliases{display:flex;flex-wrap:wrap;gap:var(--sp-2);margin-top:var(--sp-1);color:var(--text-3);font-size:var(--fs-11)}.glossary-entry__detail{margin-top:var(--sp-3)}.glossary-entry__detail>p{margin:var(--sp-1) 0 0;color:var(--text-2);font-size:var(--fs-13);line-height:var(--lh-body)}
@@ -416,6 +422,8 @@ a.lineage-node__chip:focus-visible {
   border-color: var(--accent);
   background: var(--accent-soft);
 }
+a.lineage-node__chip:active,
+.lineage-node--link:active { translate: 0 var(--pressed-shift); }
 .lineage-node--signal {
   display: grid;
   /* fit-content(50%): the value column only takes the width it needs and

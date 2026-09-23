@@ -221,7 +221,7 @@
   font-family: var(--font-mono);
   font-size: var(--fs-12);
   font-weight: 700;
-  z-index: 1;
+  z-index: var(--z-raised);
 }
 .analytics-chart__x-ticks {
   position: absolute;
@@ -304,7 +304,7 @@
   background: var(--bg-1);
   box-shadow: var(--shadow-md);
   white-space: nowrap;
-  z-index: 1;
+  z-index: var(--z-raised);
 }
 /* Past ~60% of the plot width the tip would overflow the surface; flip it to
    the left of the crosshair instead. */
@@ -378,7 +378,7 @@
   opacity: 1;
   transform: translate(-50%, -50%) scale(1.55);
   box-shadow: 0 0 0 2px var(--text-1), 0 0 0 var(--sp-1) var(--accent-soft);
-  z-index: 2;
+  z-index: var(--z-raised-2);
 }
 /* S7 zoom dots carry the canonical score-band classes (scoreBand ->
    .score--high/med/low). The chip variants of those classes use soft
@@ -412,7 +412,7 @@
 .analytics-scatter__bin:focus-visible {
   opacity: 1;
   box-shadow: 0 0 0 1px var(--text-1);
-  z-index: 2;
+  z-index: var(--z-raised-2);
 }
 .analytics-scatter-meta {
   margin: var(--sp-2) 0 0;

@@ -13,7 +13,7 @@
   background: radial-gradient(60% 60% at 50% 30%, color-mix(in oklab, var(--seg-color, var(--accent)) 35%, transparent), transparent 70%);
   opacity: 0;
   animation: seg-emanate var(--dur-emanate) var(--ease) 1;
-  z-index: 0;
+  z-index: var(--z-base);
 }
 @keyframes seg-emanate {
   0%   { opacity: 0.55; transform: scale(0.92); }
@@ -38,7 +38,7 @@
   border-radius: var(--r-pill);
   background: radial-gradient(closest-side, color-mix(in oklab, var(--signal-success) 60%, transparent), transparent 70%);
   opacity: 0;
-  z-index: -1;
+  z-index: var(--z-below);
   pointer-events: none;
   animation: approve-burst var(--dur-burst) var(--ease) 1;
 }
@@ -142,10 +142,19 @@
     width: auto;
     max-height: 50vh;
     border-radius: var(--r-lg) var(--r-lg) 0 0;
+    /* As a bottom sheet the Console spans the whole width, so the docked
+       Genie panel (whose inline height is the user's, up to 900px) cannot be
+       moved clear of it. The sheet drops below the Genie layer instead: the
+       panel stays whole and the sheet's left side stays reachable
+       (audit responsive-v1; degraded band only). */
+    z-index: var(--z-sheet);
   }
   [data-console="open"] .main {
     padding-right: var(--sp-6);
     padding-bottom: calc(50vh + var(--sp-6));
+  }
+  [data-console="open"] .genie:not(.is-undocked) {
+    right: var(--sp-4);
   }
 }
 
@@ -178,8 +187,8 @@
   [data-console="open"] .main {
     padding-right: 360px;
   }
-  .tweaks {
-    width: 340px;
+  :root {
+    --console-w: 340px;
   }
 }
 
@@ -199,7 +208,7 @@
     position: absolute;
     inset: 0;
     pointer-events: none;
-    z-index: 0;
+    z-index: var(--z-base);
     background:
       radial-gradient(1400px 900px at 0% 30%,
         color-mix(in oklab, var(--entrada-navy) 10%, transparent),
