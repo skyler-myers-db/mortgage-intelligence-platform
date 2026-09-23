@@ -15,7 +15,6 @@ import {
   defaultGeographyForOptions,
   parseFiltersFromUrl,
   parseStateCodesFromUrl,
-  formatUsdCompact,
 } from './portfolio-builder.logic';
 import { isPublicLenderRef } from '../lib/lenderFilters';
 
@@ -343,16 +342,5 @@ describe('groupSavedCampaigns', () => {
     ] as never);
     expect(rows).toHaveLength(3);
     expect(rows.every((row) => row.draftCount === 1)).toBe(true);
-  });
-});
-
-describe('projected economics formatting', () => {
-  it('formats compact USD across magnitudes (incl. trillions)', () => {
-    expect(formatUsdCompact(244_800)).toBe('$245K');
-    expect(formatUsdCompact(16_320_000)).toBe('$16.3M');
-    expect(formatUsdCompact(2_300_000_000)).toBe('$2.3B');
-    expect(formatUsdCompact(1_500_000_000_000)).toBe('$1.5T');
-    expect(formatUsdCompact(-1_680)).toBe('-$2K');
-    expect(formatUsdCompact(940)).toBe('$940');
   });
 });

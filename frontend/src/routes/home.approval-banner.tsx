@@ -5,6 +5,7 @@ import { api } from '../lib/api';
 import { queryKeys } from '../lib/queryKeys';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import type { PortfolioPreview } from '../types';
+import { formatCount } from '../lib/formatters';
 
 /**
  * Home's "Approval queue" banner — prototype `.approval` BEM, unchanged.
@@ -78,7 +79,7 @@ export function ApprovalQueueBanner({ screenCount, approvedCount, inOutreachCoun
   // Only when there is a gap to state — "3,217 contactable of 3,217" is a
   // tautology that reads as a bug (the SegmentCard lesson, 2026-08-11).
   const showsReconcile = contactable !== null && screenCount !== null && contactable < screenCount;
-  const lifecycle = `${approvedCount.toLocaleString()} approved and ${inOutreachCount.toLocaleString()} in outreach in ${APPROVAL_QUEUE_STATE_LABEL}.`;
+  const lifecycle = `${formatCount(approvedCount)} approved and ${formatCount(inOutreachCount)} in outreach in ${APPROVAL_QUEUE_STATE_LABEL}.`;
 
   let body: ReactNode;
   if (screenCount === null) {
@@ -86,16 +87,16 @@ export function ApprovalQueueBanner({ screenCount, approvedCount, inOutreachCoun
   } else if (showsReconcile) {
     body = (
       <>
-        <span className="num" data-testid="approval-queue-contactable">{contactable.toLocaleString()}</span>
+        <span className="num" data-testid="approval-queue-contactable">{formatCount(contactable)}</span>
         {' '}contactable of{' '}
-        <span className="num" data-testid="approval-queue-screen">{screenCount.toLocaleString()}</span>
+        <span className="num" data-testid="approval-queue-screen">{formatCount(screenCount)}</span>
         {' '}borrowers passing the refinance-economics screen. {lifecycle}
       </>
     );
   } else if (contactable !== null) {
     body = (
       <>
-        <span className="num" data-testid="approval-queue-screen">{screenCount.toLocaleString()}</span>
+        <span className="num" data-testid="approval-queue-screen">{formatCount(screenCount)}</span>
         {' '}borrowers pass the refinance-economics screen. {lifecycle}
       </>
     );
@@ -105,7 +106,7 @@ export function ApprovalQueueBanner({ screenCount, approvedCount, inOutreachCoun
     // the defect, so say what the queue is instead of implying its size.
     body = (
       <>
-        <span className="num" data-testid="approval-queue-screen">{screenCount.toLocaleString()}</span>
+        <span className="num" data-testid="approval-queue-screen">{formatCount(screenCount)}</span>
         {' '}borrowers pass the refinance-economics screen across the whole book; the review queue
         lists only the contactable subset. {lifecycle}
       </>

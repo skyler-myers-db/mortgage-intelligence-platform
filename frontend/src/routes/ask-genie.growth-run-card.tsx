@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { Button, Chip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
+import { formatNumber } from '../lib/formatters';
 import {
   DATABRICKS_AGENT_RESPONSES_LABEL,
   publicAgentResponsesText,
@@ -20,7 +21,7 @@ function publicToolName(value: string | null | undefined): string | null {
 }
 
 export function formatGrowthAgentCount(value: number | null | undefined): string {
-  return new Intl.NumberFormat('en-US').format(Math.max(0, Number(value ?? 0)));
+  return formatNumber(Math.max(0, Number(value ?? 0)));
 }
 
 function workflowOwnerLabel(agent: GrowthAgentRunResponse['specialist_agent']): string {

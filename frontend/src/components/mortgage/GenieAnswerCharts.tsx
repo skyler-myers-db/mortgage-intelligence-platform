@@ -5,6 +5,7 @@ import {
   coerceNumber,
   findMeasureColumn,
   formatCell,
+  formatGenieNumber,
   humanizeKey,
   isIdentifierColumn,
   level,
@@ -17,6 +18,7 @@ import type { UsaSvgMap } from './USChoroplethMap.utils';
 import { offerDisplayLabel } from '../../lib/offerLanguage';
 import { safeSegmentName } from '../../lib/segmentMetadata';
 import { borrower360Path } from '../../lib/genieCellLinks';
+import { fixedAttr } from '../../lib/fixedPrecision';
 
 /** Bars a bar chart draws before it truncates. */
 export const MAX_BAR_POINTS = 12;
@@ -150,9 +152,7 @@ export function GenieBarChart({
                 fontFamily="var(--font-mono)"
                 fontVariant="tabular-nums"
               >
-                {Number.isInteger(b.value)
-                  ? b.value.toLocaleString()
-                  : b.value.toFixed(2)}
+                {formatGenieNumber(b.value)}
               </text>
             </g>
           );
@@ -185,7 +185,7 @@ export function GenieLineChart({
     .map((p, i) => {
       const x = points.length === 1 ? width / 2 : (i / (points.length - 1)) * width;
       const y = height - ((p.value - minV) / span) * height;
-      return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`;
+      return `${i === 0 ? 'M' : 'L'}${fixedAttr(x, 1)},${fixedAttr(y, 1)}`;
     })
     .join(' ');
   return (
@@ -261,7 +261,7 @@ export function GenieMapChart({
               key={location.id}
               d={location.path}
               className={`genie-map__region lvl-${level(value, maxV)} ${value > 0 ? 'has-data' : ''}`}
-              aria-label={`${location.name}: ${value.toLocaleString()}`}
+              aria-label={`${location.name}: ${formatGenieNumber(value)}`}
             />
           );
         })}
@@ -273,7 +273,7 @@ export function GenieMapChart({
           .map(([state, value]) => (
             <span key={state} className="genie-map__legend-item">
               <span className={`genie-map__dot lvl-${level(value, maxV)}`} />
-              {state} {value.toLocaleString()}
+              {state} {formatGenieNumber(value)}
             </span>
           ))}
       </div>
@@ -302,7 +302,7 @@ export function GenieBorrowerList({ rows }: { rows: Array<Record<string, unknown
               <div className="genie-board__meta">
                 {[row.city, row.state, row.zip].filter(Boolean).join(', ') || 'Open borrower evidence'}
               </div>
-              {score !== null && <div className="genie-board__value">{score.toLocaleString()}</div>}
+              {score !== null && <div className="genie-board__value">{formatGenieNumber(score)}</div>}
             </Link>
           );
         })}

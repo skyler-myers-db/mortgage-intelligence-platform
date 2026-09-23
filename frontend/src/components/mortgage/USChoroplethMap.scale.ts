@@ -18,6 +18,8 @@
  * the ramp's base step, the legend's first swatch.
  */
 
+import { formatCompact } from '../../lib/formatters';
+
 export type MapClass = 1 | 2 | 3 | 4;
 export type MapScaleKind = 'sqrt' | 'quantile';
 
@@ -78,11 +80,9 @@ export function classify(scale: ChoroplethScale | null, count: number | null | u
   return 1;
 }
 
-const COMPACT = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 });
-
-/** Legend tick text for a break: `1.3K`, `620K`, `1.9M`, `53`. */
+/** Legend tick text for a break: `1.3K`, `620K`, `1.9M`, `53` (lib/formatters compact count). */
 export function formatBreak(value: number): string {
-  return COMPACT.format(value);
+  return formatCompact(value);
 }
 
 /** Inclusive integer range of each class, for the screen-reader legend and the table. */

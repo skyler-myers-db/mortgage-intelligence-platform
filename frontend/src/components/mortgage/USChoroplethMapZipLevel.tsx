@@ -19,6 +19,7 @@ import type { StateRollup, ZipRollup } from '../../types';
 import { claimDrillFocus, moveRovingFocus, showCardOnFocus, zipAriaLabel } from './USChoroplethMap.a11y';
 import { classify, type ChoroplethScale } from './USChoroplethMap.scale';
 import { densestZips, type HoverState } from './USChoroplethMap.utils';
+import { formatCount } from '../../lib/formatters';
 
 interface USChoroplethMapZipLevelProps {
   /** Display name for the drilled state, used in copy and aria labels. */
@@ -199,11 +200,11 @@ export function USChoroplethMapZipLevel({
             >
               <span className="zip-tile__code">{rollup.zip}</span>
               <span className="zip-tile__count">
-                {count !== null ? count.toLocaleString() : '—'}
+                {count !== null ? formatCount(count) : '—'}
               </span>
               {overlayActive && (
                 <span className="zip-tile__overlay">
-                  {unattended !== null ? unattended.toLocaleString() : '—'} unattended
+                  {unattended !== null ? formatCount(unattended) : '—'} unattended
                 </span>
               )}
             </button>
@@ -215,16 +216,16 @@ export function USChoroplethMapZipLevel({
       <div className="zip-tiles__reconcile text-2" role="note">
         {hiddenZipCount > 0 && (
           <span>
-            Showing the {visible.length} densest of {zipsFromApi.length.toLocaleString()} ZIPs
+            Showing the {visible.length} densest of {formatCount(zipsFromApi.length)} ZIPs
             {' — '}
-            {visibleSum.toLocaleString()}
-            {stateTotal !== null ? ` of ${stateTotal.toLocaleString()}` : ''} borrowers in view.
+            {formatCount(visibleSum)}
+            {stateTotal !== null ? ` of ${formatCount(stateTotal)}` : ''} borrowers in view.
           </span>
         )}
         {(unassigned ?? 0) > 0 && (
           <span>
             {' '}
-            {(unassigned ?? 0).toLocaleString()} borrowers in {drillStateName} carry no ZIP and
+            {formatCount(unassigned ?? 0)} borrowers in {drillStateName} carry no ZIP and
             appear in no tile.
           </span>
         )}
@@ -233,7 +234,7 @@ export function USChoroplethMapZipLevel({
           className="btn btn--ghost btn--sm"
           onClick={onOpenStateQueue}
         >
-          Open all {stateTotal !== null ? stateTotal.toLocaleString() : ''} in Lead Queue
+          Open all {stateTotal !== null ? formatCount(stateTotal) : ''} in Lead Queue
         </button>
       </div>
     )}

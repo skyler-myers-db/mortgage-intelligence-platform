@@ -31,6 +31,7 @@ import type {
 } from '../types';
 import { formatConversionPct } from './analytics.lib';
 import { DataTable, LoadState } from './analytics.charts';
+import { formatCount } from '../lib/formatters';
 
 /**
  * S6 approval-funnel tab — live counts only, spanning both data planes:
@@ -252,12 +253,12 @@ function PerLoanOfficerFunnel({ officers }: { officers: LoanOfficerFunnelRow[] }
                         {officer.display_name}
                         <div className="muted mono fs-11">{officer.email}</div>
                       </td>
-                      <td className="mono num">{officer.assigned.toLocaleString()}</td>
-                      <td className="mono num">{officer.contact_drafted.toLocaleString()}</td>
-                      <td className="mono num">{officer.approved.toLocaleString()}</td>
-                      <td className="mono num">{officer.actioned.toLocaleString()}</td>
-                      <td className="mono num">{officer.outcome_recorded.toLocaleString()}</td>
-                      <td className="mono num">{officer.total_active.toLocaleString()}</td>
+                      <td className="mono num">{formatCount(officer.assigned)}</td>
+                      <td className="mono num">{formatCount(officer.contact_drafted)}</td>
+                      <td className="mono num">{formatCount(officer.approved)}</td>
+                      <td className="mono num">{formatCount(officer.actioned)}</td>
+                      <td className="mono num">{formatCount(officer.outcome_recorded)}</td>
+                      <td className="mono num">{formatCount(officer.total_active)}</td>
                       <td>
                         <button
                           type="button"

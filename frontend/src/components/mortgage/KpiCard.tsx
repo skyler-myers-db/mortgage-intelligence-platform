@@ -6,6 +6,7 @@ import { Sparkline } from './Sparkline';
 import { useFirstAppearance } from '../../lib/useFirstAppearance';
 import { genieKpiPrompt } from '../../lib/genieContext';
 import { GenieAskAbout } from './GenieAskAbout';
+import { formatCount } from '../../lib/formatters';
 
 /**
  * KpiCard — prototype `.kpi` BEM: label / value / unit / delta / source.
@@ -13,7 +14,8 @@ import { GenieAskAbout } from './GenieAskAbout';
  * Value paths:
  *   - `value: string` — static pre-formatted (e.g. "$2.18")
  *   - `valueAnimated: number | null` — numeric; formatted via `format` (default
- *     is `.toLocaleString()` rounded to int). Renders the FINAL value directly
+ *     is lib/formatters `formatCount`: a whole en-US count, the same text the
+ *     same metric renders on every route). Renders the FINAL value directly
  *     — there is no number-rolling count-up (that ran on every route nav and
  *     read as a demo-ticker). Instead, the value gets a sleek ONE-TIME
  *     entrance on first appearance this session (a brief fade-up; the
@@ -37,7 +39,7 @@ interface KpiCardProps {
   value?: string;
   /** Numeric value; `null` renders an em-dash while loading/errored. */
   valueAnimated?: number | null;
-  /** Formatter for numeric values. Default: .toLocaleString() rounded to int. */
+  /** Formatter for numeric values. Default: `formatCount` (whole, en-US grouped). */
   format?: (n: number) => string;
   unit?: string;
   delta?: string;
@@ -53,7 +55,7 @@ interface KpiCardProps {
   trendNote?: string | null;
 }
 
-const defaultFormat = (n: number): string => Math.round(n).toLocaleString();
+const defaultFormat = (n: number): string => formatCount(n);
 
 export function KpiCard({
   label,

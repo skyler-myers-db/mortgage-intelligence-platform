@@ -2,7 +2,7 @@ import type {
   GenieAnswer as GenieAnswerShape,
   GenieVisualization,
 } from '../../types';
-import { currency } from '../../lib/formatters';
+import { currency, formatCount, formatFixed } from '../../lib/formatters';
 import { safeSegmentName } from '../../lib/segmentMetadata';
 
 export const MAX_TABLE_ROWS = 10;
@@ -414,6 +414,11 @@ export function humanizeKey(k: string): string {
   return k.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+/** A Genie numeric value: whole numbers grouped, fractions at two decimals. */
+export function formatGenieNumber(v: number): string {
+  return Number.isInteger(v) ? formatCount(v) : formatFixed(v, 2);
+}
+
 export function formatCell(column: string, v: unknown): string {
   if (v === null || v === undefined) return '—';
   if (/^segment_codes$/i.test(column)) return formatSegmentValue(v, true);
@@ -421,7 +426,7 @@ export function formatCell(column: string, v: unknown): string {
   if (isIdentifierColumn(column)) return formatIdentifier(column, v);
   if (typeof v === 'number') {
     if (isMoneyColumn(column)) return currency(v);
-    return Number.isInteger(v) ? v.toLocaleString() : v.toFixed(2);
+    return formatGenieNumber(v);
   }
   return String(v);
 }

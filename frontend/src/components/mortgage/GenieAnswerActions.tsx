@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { GenieActionSuggestion } from '../../types';
 import { safeSegmentName } from '../../lib/segmentMetadata';
 import { Icon } from '../Icon';
+import { formatCount } from '../../lib/formatters';
 
 function segmentPreviewLabel(value: unknown): string | null {
   return safeSegmentName(value);
@@ -35,7 +36,7 @@ export function actionPreview(action: GenieActionSuggestion): string[] {
   if (action.borrower_ids && action.borrower_ids.length > 0) {
     preview.push(`${action.borrower_ids.length} borrower${action.borrower_ids.length === 1 ? '' : 's'} bound by ID`);
   }
-  if (typeof criteria.row_count === 'number') preview.push(`${criteria.row_count.toLocaleString()} result row${criteria.row_count === 1 ? '' : 's'}`);
+  if (typeof criteria.row_count === 'number') preview.push(`${formatCount(criteria.row_count)} result row${criteria.row_count === 1 ? '' : 's'}`);
   return preview;
 }
 

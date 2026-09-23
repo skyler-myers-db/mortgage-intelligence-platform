@@ -17,6 +17,7 @@ import { useApp } from '../components/AppContext';
 import { useOptionalHealth } from '../components/HealthProvider';
 import { EntradaWordmark } from '../components/brand/Entrada';
 import { formatRefreshed } from '../lib/formatRefreshed';
+import { signedPct } from '../lib/formatters';
 import type { HomeSummary, KpiTrend, PortfolioPreview } from '../types';
 import { HIGH_OPPORTUNITY_KPI_LABEL } from '../lib/opportunityScore';
 import { ApprovalQueueBanner } from './home.approval-banner';
@@ -41,8 +42,7 @@ export function requestHomeSummary(signal?: AbortSignal) {
 function formatDelta(trend: KpiTrend | undefined): string | undefined {
   const pct = trend?.delta_pct;
   if (pct === null || pct === undefined) return undefined;
-  const sign = pct > 0 ? '+' : '';
-  return `${sign}${pct.toFixed(1)}% ${trend?.comparison_label ?? 'vs prior snapshot'}`;
+  return `${signedPct(pct)} ${trend?.comparison_label ?? 'vs prior snapshot'}`;
 }
 
 export function HomeDayZeroStatus({ canAccessAdmin }: { canAccessAdmin: boolean }) {

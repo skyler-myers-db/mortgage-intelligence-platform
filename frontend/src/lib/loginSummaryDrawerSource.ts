@@ -1,5 +1,6 @@
 import type { DrawerSource } from '../components/AppContext';
 import type { HomeSummaryHighlight } from '../types';
+import { formatCount } from './formatters';
 
 const HOME_SUMMARY_LINEAGE_FAMILY: Record<string, string> = {
   marketable_population: 'marketable_population',
@@ -22,7 +23,7 @@ export function loginSummaryDrawerSource(
     {
       label: 'Current',
       source: `portfolio_headline_metric_view.${highlight.measure}`,
-      value: highlight.current.toLocaleString(),
+      value: formatCount(highlight.current),
     },
   ];
   if (hasBaseline) {
@@ -30,14 +31,14 @@ export function loginSummaryDrawerSource(
       {
         label: 'Baseline',
         source: `kpi_snapshots.${highlight.measure}`,
-        value: (highlight.baseline as number).toLocaleString(),
+        value: formatCount(highlight.baseline as number),
       },
       {
         label: 'Since last login',
         source: 'current - baseline',
         value:
           highlight.delta_pct !== null
-            ? `${highlight.display} (${(highlight.delta as number).toLocaleString()})`
+            ? `${highlight.display} (${formatCount(highlight.delta as number)})`
             : highlight.display,
       },
     );

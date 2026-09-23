@@ -6,6 +6,7 @@ import { segmentName } from '../../lib/segmentMetadata';
 import { Button, Chip } from '../Primitives';
 import { Icon } from '../Icon';
 import { ScoreBadge } from './ScoreBadge';
+import { formatUsd, ratePct } from '../../lib/formatters';
 
 /**
  * PropertyLookupPanel — the visible app-UI consumer of the governed
@@ -37,18 +38,6 @@ type LookupState =
 
 function isZip5(value: string): boolean {
   return /^[0-9]{5}$/.test(value.trim());
-}
-
-function formatRate(rate: number): string {
-  return `${rate.toFixed(2)}%`;
-}
-
-function formatCurrency(amount: number): string {
-  return amount.toLocaleString('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    maximumFractionDigits: 0,
-  });
 }
 
 export interface PropertyLookupPanelProps {
@@ -289,11 +278,11 @@ function PropertyLookupResult({
                 )}
                 <div>
                   <div className="field__label">Current rate</div>
-                  <div className="field__value mono">{formatRate(loan.current_rate)}</div>
+                  <div className="field__value mono">{ratePct(loan.current_rate)}</div>
                 </div>
                 <div>
                   <div className="field__label">Lien balance</div>
-                  <div className="field__value mono">{formatCurrency(loan.current_lien_balance)}</div>
+                  <div className="field__value mono">{formatUsd(loan.current_lien_balance)}</div>
                 </div>
                 <div>
                   <div className="field__label">LTV</div>

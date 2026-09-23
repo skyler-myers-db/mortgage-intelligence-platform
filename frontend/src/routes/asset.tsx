@@ -8,12 +8,13 @@ import { Skeleton } from '../components/ui/Skeleton';
 import { api, ApiError } from '../lib/api';
 import { assetHrefForSource } from '../lib/drawerSources';
 import { queryKeys } from '../lib/queryKeys';
+import { formatCount } from '../lib/formatters';
 import { formatTimestamp } from '../lib/time';
 import type { AssetFreshness, AssetMetadataResponse } from '../types';
 
 function formatNumber(value: number | null | undefined): string {
   if (value === null || value === undefined) return 'Unavailable';
-  return value.toLocaleString();
+  return formatCount(value);
 }
 
 function freshnessCopy(freshness: AssetFreshness): string {

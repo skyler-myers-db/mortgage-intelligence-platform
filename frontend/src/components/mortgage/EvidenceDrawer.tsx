@@ -14,6 +14,7 @@ import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { useTabs } from '../ui/useTabs';
 import { queryKeys } from '../../lib/queryKeys';
 import { formatTimestamp } from '../../lib/time';
+import { formatCount } from '../../lib/formatters';
 import type {
   AssetFreshness,
   AssetLineageNode,
@@ -156,11 +157,10 @@ function compactFamilyNodes(nodes: LineageManifestNode[]): LineageManifestNode[]
   return [...new Map(nodes.map((node) => [node.fqn.toLowerCase(), node])).values()];
 }
 
+/** Row and file counts read exactly, as the asset detail page shows them (lib/formatters). */
 function formatNumber(value: number | null | undefined): string {
   if (value === null || value === undefined) return 'Unavailable';
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(2)}K`;
-  return value.toLocaleString();
+  return formatCount(value);
 }
 
 /**

@@ -21,6 +21,7 @@ import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import { queryKeys } from '../lib/queryKeys';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import type { DataEstateResponse } from '../types';
+import { formatCount, formatFixed, formatUsd } from '../lib/formatters';
 
 /**
  * Administration — operator-facing configuration for Module 0.
@@ -90,10 +91,10 @@ function formatThresholdValue(t: ThresholdRow): string {
     return `${Math.round(t.value)}%`;
   }
   if (unit === 'rate_fraction') {
-    return `${(t.value * 100).toFixed(3)}%`;
+    return `${formatFixed(t.value * 100, 3)}%`;
   }
   if (unit === 'usd') {
-    return `$${Math.round(t.value).toLocaleString('en-US')}`;
+    return formatUsd(t.value);
   }
   return `${t.value}`;
 }
@@ -432,7 +433,7 @@ export default function AdminConfig() {
                     <span
                       className="muted source-status-count"
                     >
-                      {s.rows.toLocaleString()} rows
+                      {formatCount(s.rows)} rows
                     </span>
                   )}
                 </div>

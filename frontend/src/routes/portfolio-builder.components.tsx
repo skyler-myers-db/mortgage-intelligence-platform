@@ -3,7 +3,7 @@ import { Icon } from '../components/Icon';
 import { MultiFilterSelect } from '../components/ui/MultiFilterSelect';
 import type { CampaignPerformanceFunnelResponse, PortfolioPreview } from '../types';
 import type { FootprintState } from './portfolio-builder.logic';
-import { formatUsdCompact } from './portfolio-builder.logic';
+import { formatCount, formatPercent, formatUsdCompact, pct, signedBpsLabel } from '../lib/formatters';
 
 /**
  * GEO picker for step one of the product flow. It used to be a private
@@ -220,12 +220,12 @@ export function RoiProjector({
         </div>
         <div className="roi-projector__headline mt-4">
           <div className="roi-projector__headline-figure num" data-testid="roi-gross">
-            {projection.projectedFundings === null ? '—' : Math.round(projection.projectedFundings).toLocaleString()}
+            {formatCount(projection.projectedFundings)}
           </div>
           <div className="roi-projector__headline-label">
             {scenarioMode === 'baseline' ? 'benchmark fundings' : 'manual scenario fundings'}
             <span className="muted">
-              {' '}from {preview.high_intent_leads.toLocaleString()} refinance-economics leads
+              {' '}from {formatCount(preview.high_intent_leads)} refinance-economics leads
             </span>
           </div>
         </div>
@@ -264,18 +264,18 @@ export function RoiProjector({
         </div>
 
         <div className="roi-projector__derived">
-          <RoiStat label="Average refi-economics balance" value={preview.avg_high_intent_lien_balance_usd == null ? '—' : formatUsdCompact(preview.avg_high_intent_lien_balance_usd)} />
-          <RoiStat label="Average modeled equity" value={preview.avg_equity_pct == null ? '—' : `${preview.avg_equity_pct.toFixed(1)}%`} />
-          <RoiStat label="Average rate spread" value={preview.avg_rate_spread_bps == null ? '—' : `${preview.avg_rate_spread_bps.toFixed(1)} bps`} />
-          <RoiStat label="Lead → reached" value={projection.rates == null ? 'Not qualified' : `${(projection.rates.reachRate * 100).toFixed(1)}%`} />
-          <RoiStat label="Reached → application start" value={projection.rates == null ? 'Not qualified' : `${(projection.rates.applicationRate * 100).toFixed(1)}%`} />
-          <RoiStat label="Application start → submitted" value={projection.rates == null ? 'Not qualified' : `${(projection.rates.submissionRate * 100).toFixed(1)}%`} />
-          <RoiStat label="Submitted → funded" value={projection.rates == null ? 'Not qualified' : `${(projection.rates.fundingRate * 100).toFixed(1)}%`} />
+          <RoiStat label="Average refi-economics balance" value={formatUsdCompact(preview.avg_high_intent_lien_balance_usd)} />
+          <RoiStat label="Average modeled equity" value={pct(preview.avg_equity_pct)} />
+          <RoiStat label="Average rate spread" value={preview.avg_rate_spread_bps == null ? '—' : signedBpsLabel(preview.avg_rate_spread_bps)} />
+          <RoiStat label="Lead → reached" value={projection.rates == null ? 'Not qualified' : formatPercent(projection.rates.reachRate)} />
+          <RoiStat label="Reached → application start" value={projection.rates == null ? 'Not qualified' : formatPercent(projection.rates.applicationRate)} />
+          <RoiStat label="Application start → submitted" value={projection.rates == null ? 'Not qualified' : formatPercent(projection.rates.submissionRate)} />
+          <RoiStat label="Submitted → funded" value={projection.rates == null ? 'Not qualified' : formatPercent(projection.rates.fundingRate)} />
           <RoiStat
             label="Observed distinct-borrower sample"
             value={observed.attempted == null || observed.contacted == null || observed.funded == null
               ? 'Unavailable'
-              : `${observed.attempted.toLocaleString()} attempted / ${observed.contacted.toLocaleString()} reached / ${observed.funded.toLocaleString()} funded`}
+              : `${formatCount(observed.attempted)} attempted / ${formatCount(observed.contacted)} reached / ${formatCount(observed.funded)} funded`}
           />
           <RoiStat
             label="Funding range (Wilson 95%)"
@@ -283,7 +283,7 @@ export function RoiProjector({
               ? 'Team benchmark only'
               : projection.fundingRange === null
                 ? 'Not qualified'
-                : `${Math.round(projection.fundingRange[0]).toLocaleString()}–${Math.round(projection.fundingRange[1]).toLocaleString()}`}
+                : `${formatCount(projection.fundingRange[0])}–${formatCount(projection.fundingRange[1])}`}
           />
           <RoiStat
             label="Projection qualification"
@@ -293,7 +293,7 @@ export function RoiProjector({
           />
           <RoiStat label="Activity source" value="Call dispositions" />
           <RoiStat label="Outcome source" value="Lead outcomes" />
-          <RoiStat label="Expected origination volume" value={projection.projectedVolume == null ? '—' : formatUsdCompact(projection.projectedVolume)} />
+          <RoiStat label="Expected origination volume" value={formatUsdCompact(projection.projectedVolume)} />
           <RoiStat label="Net revenue" value={netRevenue == null ? 'Add tenant economics' : formatUsdCompact(netRevenue)} emphasis />
         </div>
         {scenarioMode === 'baseline' && performanceStatus === 'loading' && (

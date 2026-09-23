@@ -1,5 +1,7 @@
 import type { CampaignSummary, KpiTrend, PortfolioPreview } from '../types';
 import { isPublicLenderRef, LENDER_RELATIONSHIP_OPTIONS } from '../lib/lenderFilters';
+import { roundTo } from '../lib/fixedPrecision';
+import { signedPct } from '../lib/formatters';
 
 export type FilterGroup = {
   label: string;
@@ -115,7 +117,7 @@ export function normalizeCampaignNumericValue(
   const value = Number.isFinite(parsed) ? parsed : bounds.fallback;
   if (value === null) return '';
   const bounded = Math.min(bounds.max, Math.max(bounds.min, value));
-  return String(Number(bounded.toFixed(2)));
+  return String(roundTo(bounded, 2));
 }
 
 export function buildDefaultCampaignSetup(
@@ -373,7 +375,7 @@ function nullableMoney(raw: string, max: number): number | null {
   if (raw.trim() === '') return null;
   const parsed = Number(raw);
   if (!Number.isFinite(parsed)) return null;
-  return Number(Math.min(max, Math.max(0, parsed)).toFixed(2));
+  return roundTo(Math.min(max, Math.max(0, parsed)), 2);
 }
 
 function configuredChannelCosts(setup: CampaignSetupState): Record<string, number> {
@@ -488,8 +490,7 @@ export function stateLabel(code: string, states: ReadonlyArray<FootprintState>):
 export function formatDelta(trend: KpiTrend | undefined): string | undefined {
   const pct = trend?.delta_pct;
   if (pct === null || pct === undefined) return undefined;
-  const sign = pct > 0 ? '+' : '';
-  return `${sign}${pct.toFixed(1)}% ${trend?.comparison_label ?? 'vs prior snapshot'}`;
+  return `${signedPct(pct)} ${trend?.comparison_label ?? 'vs prior snapshot'}`;
 }
 
 /**
@@ -527,30 +528,6 @@ export function isDayZero(preview: PortfolioPreview | null): boolean {
  * defaults. Pure and deterministic so the demo never surprises and the
  * math is unit-pinnable.
  */
-/**
- * Compact USD formatter for the projector headline ($2.3M, $940K, $1.2B, $1.5T).
- *
- * The unit is chosen AFTER rounding. Choosing it from the raw value rendered
- * 999,600 as "$1000K" — the thousands branch rounds up to a four-digit figure
- * that belongs to the next unit (2026-09-21 audit, responsive-04). Every
- * boundary rolls over the same way: $999.6 -> "$1K", 999,950,000 -> "$1.0B".
- */
-export function formatUsdCompact(n: number): string {
-  if (!Number.isFinite(n)) return '—';
-  const abs = Math.abs(n);
-  const dollars = Math.round(abs);
-  if (dollars === 0) return '$0'; // never "-$0"
-  const sign = n < 0 ? '-' : '';
-  if (dollars < 1_000) return `${sign}$${dollars}`;
-  const thousands = Math.round(abs / 1_000);
-  if (thousands < 1_000) return `${sign}$${thousands}K`;
-  for (const [divisor, suffix] of [[1_000_000, 'M'], [1_000_000_000, 'B']] as const) {
-    const scaled = (abs / divisor).toFixed(1);
-    if (Number(scaled) < 1_000) return `${sign}$${scaled}${suffix}`;
-  }
-  return `${sign}$${(abs / 1_000_000_000_000).toFixed(1)}T`;
-}
-
 export function dayZeroSafe(
   preview: PortfolioPreview | null,
   value: number | null | undefined,
