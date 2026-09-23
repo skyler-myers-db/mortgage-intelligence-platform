@@ -13,6 +13,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from backend.services.genie_refusal_reason import GenieRefusalReason
+
 
 class GenieDataFreshness(BaseModel):
     asset: str
@@ -168,6 +170,15 @@ class GenieMessageResponse(BaseModel):
     #: is surfaced -- intermediate stages (FILTERING_CONTEXT, EXECUTING_QUERY)
     #: are not faked. ``None`` on deterministic / degraded paths.
     genie_status: str | None = None
+    #: Coarse family of a withheld turn (``source`` ``refused`` or
+    #: ``policy_blocked``): one value per refusal sentence the answer already
+    #: shows, never the guard rule or matched term. ``None`` on answers.
+    refusal_reason: GenieRefusalReason | None = None
+    #: Full SHA-256 of the exact refused question bytes the audit ledger
+    #: hashes (its first 16 hex are the refusal's ``question_hash``), the only
+    #: token the false-positive report endpoint accepts. Refused prompt text
+    #: is never round-tripped. ``None`` on answers.
+    refusal_report_hash: str | None = None
 
 
 class GenieSubmitResponse(BaseModel):

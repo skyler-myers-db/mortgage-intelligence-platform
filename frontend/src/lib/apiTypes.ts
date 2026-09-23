@@ -13,6 +13,7 @@ import type {
   LeadAssignment,
   SegmentCode,
   GenieActionSuggestion,
+  GenieRefusalReason,
 } from '../types';
 
 export interface HealthPayload {
@@ -116,10 +117,22 @@ export interface GenieResult {
   } | null;
   reasoning_trace?: Array<{ kind: string; content: string }>;
   genie_status?: string | null;
+  /** Coarse family of a withheld turn; absent on answers (audit `genie-05`). */
+  refusal_reason?: GenieRefusalReason | null;
+  /** Full SHA-256 of the refused question (the audit ledger's exact bytes); the report's only key. */
+  refusal_report_hash?: string | null;
 }
 
 export interface GenieFeedbackResult {
   accepted: boolean;
+  audit_event_id?: string | null;
+}
+
+/** `/api/genie/refusal-report` body: hash-only "this was legitimate". */
+export interface GenieRefusalReportResult {
+  accepted: boolean;
+  duplicate: boolean;
+  report_id?: string | null;
   audit_event_id?: string | null;
 }
 

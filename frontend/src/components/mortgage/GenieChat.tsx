@@ -628,6 +628,10 @@ export function GenieChat() {
                     followUpDisabledReason={busyReason}
                     announce={false}
                     onAction={(action) => runAction(action, m.payload)}
+                    onEditQuestion={(q) => {
+                      setInput(q);
+                      inputRef.current?.focus();
+                    }}
                     dense
                   />
                 </div>

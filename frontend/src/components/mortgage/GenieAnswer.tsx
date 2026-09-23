@@ -13,6 +13,8 @@ import { MarkdownAnswer, stripQuestionRestatement } from './GenieAnswer.markdown
 import { normalizeGenieAnswerLanguage } from '../../lib/genieAnswerLanguage';
 import { GenieProofPanel } from './GenieAnswerProof';
 import { GenieAnswerFeedback } from './GenieAnswerFeedback';
+import { GenieRefusalCard } from './GenieRefusalCard';
+import { isWithheldGenieSource } from './genieRefusal';
 import {
   buildFallbackFollowUps,
   buildPinFromAnswer,
@@ -69,6 +71,10 @@ interface GenieAnswerProps {
    *  passes `false` because it owns one persistent announcer that also speaks
    *  while the panel is closed (audit 2026-09-21 `a11y-06`). */
   announce?: boolean;
+  /** Put a refused question back in the composer, unchanged, so the user can
+   *  reword it. Client-side only; the refusal card shows "Edit question" only
+   *  when both this and `question` are present (audit 2026-09-21 `genie-05`). */
+  onEditQuestion?: (question: string) => void;
 }
 
 export function GenieAnswer({
@@ -80,6 +86,7 @@ export function GenieAnswer({
   withChart = false,
   followUpDisabledReason = null,
   announce = true,
+  onEditQuestion,
 }: GenieAnswerProps) {
   const { answer, metric_value, table_rows, follow_up_questions, actions } = payload;
   const { setDrawer } = useApp();
@@ -145,9 +152,14 @@ export function GenieAnswer({
   // Explicit backend follow_up_questions are deliberately STILL honored on any
   // source: where the backend attaches them (e.g. warm-start `degraded`,
   // outreach `refused`) they are generic governed sample questions, not
-  // refusal-referential pivots. Do not "tighten" this to drop them.
-  const effectiveFollowUps =
-    follow_up_questions && follow_up_questions.length > 0
+  // refusal-referential pivots. Do not "tighten" this to drop them. The one
+  // exception is a withheld turn: <GenieRefusalCard> already offers the
+  // family's guard-validated rewordings as its own "Ask" row, so a second row
+  // of backend samples would only duplicate it (audit 2026-09-21 `genie-05`).
+  const withheld = isWithheldGenieSource(payload.source);
+  const effectiveFollowUps = withheld
+    ? []
+    : follow_up_questions && follow_up_questions.length > 0
       ? follow_up_questions
       : isTrustedGenieSource(payload.source)
         ? buildFallbackFollowUps(payload)
@@ -257,6 +269,19 @@ export function GenieAnswer({
         />
       ) : (
         cleanedAnswer && <MarkdownAnswer text={cleanedAnswer} workspaceHost={workspaceHost} />
+      )}
+      {/* A withheld turn is not a dead end: the card names the family in
+          lender language, offers guard-validated rewordings, restores the
+          original question, links the reviewed vocabulary and files a
+          hash-only false-positive report (audit 2026-09-21 `genie-05`). */}
+      {withheld && (
+        <GenieRefusalCard
+          payload={payload}
+          question={question}
+          onFollowUp={onFollowUp ? (q) => onFollowUp(q, liveConversationId || null) : undefined}
+          onEditQuestion={onEditQuestion}
+          followUpDisabledReason={followUpDisabledReason}
+        />
       )}
       {/* The backend exposes bounded, public process summaries for live Genie
           turns through the existing reasoning_trace wire field. Render them

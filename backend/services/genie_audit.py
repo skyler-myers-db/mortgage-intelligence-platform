@@ -17,9 +17,19 @@ def audit_safe_letter_digest(seed: str) -> str:
     refusal record so both surfaces build ids the same way.
     """
 
-    digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:24]
+    return audit_safe_letters(hashlib.sha256(seed.encode("utf-8")).hexdigest())
+
+
+def audit_safe_letters(sha256_hex: str) -> str:
+    """Letter image of a SHA-256 hex digest: ``audit_safe_letter_digest``'s body.
+
+    A caller that holds only ``sha256(seed)`` (a hash-only refusal report
+    holds the full digest of the refused question) reproduces exactly the
+    id ``audit_safe_letter_digest(seed)`` built, without the seed.
+    """
+
     table = str.maketrans("0123456789abcdef", "abcdefghijklmnop")
-    return digest.translate(table)
+    return sha256_hex[:24].translate(table)
 
 
 def _public_safe_entity_id(candidate: str | None, *, seed: str) -> str | None:

@@ -21,6 +21,7 @@ from backend.services.genie_message_policy import (
     _without_allowed_literals,
     governed_row_literals,
 )
+from backend.services.genie_refusal_reason import refusal_report_hash
 from backend.services.repositories.databricks_genie_actions import (
     _borrower_ids_from_rows,  # noqa: F401 - compatibility re-export
     _portfolio_criteria_from_sql,  # noqa: F401 - compatibility re-export
@@ -674,6 +675,8 @@ def _adapt_genie_response(
             row_count=0,
             proof=proof,
             table_rows=[],
+            refusal_reason="output_policy",
+            refusal_report_hash=refusal_report_hash(question),
         )
     if result.sql_query and trusted_sql and not rows and sql_client is not None:
         rows = _redact_genie_rows(_execute_trusted_genie_sql(sql_client, result.sql_query))
