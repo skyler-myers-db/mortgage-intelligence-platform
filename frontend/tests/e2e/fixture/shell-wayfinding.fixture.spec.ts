@@ -1,11 +1,10 @@
 /**
  * Rendered-layer proofs for the wave-1c lane "shell-wayfinding" (audit
- * 2026-09-21 shell-04, shell-06, shell-08, motion-01): the topbar identity
- * menu, linked breadcrumbs with the queue context, the Borrower 360 pager and
- * J/K keys, and the Console exit motion. Every assertion reads the built app's
- * DOM, geometry or computed style at 1440x900.
+ * 2026-09-21 shell-04, shell-06, shell-08): the topbar identity menu and the
+ * linked breadcrumbs with the queue context. Every assertion reads the built
+ * app's DOM, geometry or computed style at 1440x900.
  */
-import type { Locator } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
 import { expect, test, type FixtureTheme } from './test';
 import { SIGNED_IN_APPROVER, sessionReply } from './data/shellWayfinding';
 
@@ -105,5 +104,75 @@ test.describe('identity menu (shell-06)', () => {
     await trigger.click();
     await page.getByRole('menuitem', { name: 'Glossary' }).click();
     await expect(page).toHaveURL(/\/glossary$/);
+  });
+});
+
+/** The masked ids of the ranked rows, in the order the queue shows them. */
+async function queueIds(page: Page): Promise<string[]> {
+  const rows = page.locator('table.tbl tbody tr:not(.tbl__expand)');
+  await expect(rows.first()).toBeVisible();
+  const texts = await rows.allInnerTexts();
+  return texts.map((text) => /B-[0-9A-Z]{13}/.exec(text)?.[0]).filter((id): id is string => Boolean(id));
+}
+
+async function openDossierFromQueue(page: Page, rowIndex: number): Promise<void> {
+  const toggle = page.locator('table.tbl tbody [aria-expanded]').nth(rowIndex);
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await page.locator('tr.tbl__expand').getByRole('link', { name: 'Open Borrower 360' }).click();
+}
+
+test.describe('queue-to-dossier wayfinding (shell-04)', () => {
+  for (const theme of THEMES) {
+    test(`${theme}: linked crumbs name the queue and the borrower, and fit the topbar`, async ({ app, page }) => {
+      await app.setTheme(theme);
+      await app.gotoRoute('/lead-queue?state=IL');
+      const ids = await queueIds(page);
+      expect(ids.length).toBe(3);
+      await openDossierFromQueue(page, 1);
+      await expect(page).toHaveURL(new RegExp(`/borrower-360/${ids[1]}$`));
+      await app.settle();
+
+      const crumbs = page.getByRole('banner').getByRole('navigation', { name: 'Breadcrumb' });
+      const queueLink = crumbs.getByRole('link', { name: 'Lead Queue · IL' });
+      await expect(queueLink).toHaveAttribute('href', '/lead-queue?state=IL');
+      const current = crumbs.locator('[aria-current="page"]');
+      await expect(current).toHaveText(ids[1]);
+      // The trail fits the left track: whole labels, clear of the search.
+      const search = await boxOf(page.getByRole('banner').getByRole('search'));
+      expect((await boxOf(crumbs)).right).toBeLessThanOrEqual(search.left);
+      for (const crumb of [queueLink, current]) {
+        const clipped = await crumb.evaluate((el) => el.scrollWidth > el.clientWidth);
+        expect(clipped, `${await crumb.textContent()} is not ellipsized`).toBe(false);
+      }
+      // The crumb returns to the exact filtered queue.
+      await queueLink.click();
+      await expect(page).toHaveURL(/\/lead-queue\?state=IL$/);
+      await expect(page.locator('[aria-label^="STATE:"]').first()).toHaveAttribute('aria-label', /^STATE: IL\b/);
+      expect(await queueIds(page)).toEqual(ids);
+    });
+  }
+
+  test('a dossier opened by URL keeps its queue crumb through the session fallback; Offer and asset crumbs link to real indexes', async ({ app, page }) => {
+    await app.gotoRoute('/lead-queue?state=IL');
+    const ids = await queueIds(page);
+    // A fresh document with no history state: the stored queue lists it.
+    await app.gotoRoute(`/borrower-360/${ids[2]}`);
+    const crumbs = page.getByRole('navigation', { name: 'Breadcrumb' });
+    await expect(crumbs.getByRole('link', { name: 'Lead Queue · IL' })).toHaveAttribute('href', '/lead-queue?state=IL');
+
+    await page.getByRole('link', { name: 'Build outreach draft' }).click();
+    await expect(page).toHaveURL(new RegExp(`/offer-orchestrator/${ids[2]}$`));
+    await app.settle();
+    await expect(crumbs.getByRole('listitem')).toHaveText([/Lead Queue · IL/, new RegExp(ids[2]), /Offer Orchestrator/]);
+    await expect(crumbs.locator('[aria-current="page"]')).toHaveText('Offer Orchestrator');
+    await crumbs.getByRole('link', { name: ids[2] }).click();
+    await expect(page).toHaveURL(new RegExp(`/borrower-360/${ids[2]}$`));
+    await expect(crumbs.locator('[aria-current="page"]')).toHaveText(ids[2]);
+
+    await app.gotoRoute('/data-estate/assets/borrower_360');
+    const assetCrumbs = page.getByRole('navigation', { name: 'Breadcrumb' });
+    await expect(assetCrumbs.getByRole('link', { name: 'Data estate' })).toHaveAttribute('href', '/admin-config');
+    await expect(assetCrumbs.locator('[aria-current="page"]')).toHaveText('Governed asset');
   });
 });

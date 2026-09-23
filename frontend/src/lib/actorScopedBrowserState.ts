@@ -1,6 +1,7 @@
 import { clearGenieConversationState } from './genieConversation';
 import { GENIE_CONVERSATION_TURNS_KEY, clearGenieTurns } from './genieConversationStore';
 import { clearPinnedInsights } from './pinnedInsights';
+import { QUEUE_CONTEXT_STORAGE_KEY, clearQueueContext } from './queueContext';
 
 export const ACTOR_SCOPED_LOCAL_STORAGE_KEYS = ['mip.lastBorrowerId'] as const;
 export const ACTOR_SCOPED_SESSION_STORAGE_KEYS = [
@@ -9,6 +10,9 @@ export const ACTOR_SCOPED_SESSION_STORAGE_KEYS = [
   // never survive into another operator's session on a shared booth machine.
   // Imported rather than duplicated so the key cannot drift from the store.
   GENIE_CONVERSATION_TURNS_KEY,
+  // Lead Queue context behind the dossier breadcrumbs and pager (masked ids
+  // only). Clearing it also invalidates the copies history entries carry.
+  QUEUE_CONTEXT_STORAGE_KEY,
 ] as const;
 
 export function clearActorScopedBrowserState(): void {
@@ -34,4 +38,5 @@ export function clearActorScopedBrowserState(): void {
   // Personal pinned insights (Buyer-Wow #9) are actor-scoped — clear them on
   // an actor change so one operator's pins never bleed into another session.
   clearPinnedInsights();
+  clearQueueContext();
 }
