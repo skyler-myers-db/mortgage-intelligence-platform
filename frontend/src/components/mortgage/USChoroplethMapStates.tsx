@@ -16,7 +16,7 @@ import { useMemo, useState, type Dispatch, type SetStateAction } from 'react';
 import type { GeoAssignmentOverlayUnit } from '../../lib/api';
 import { safeSegmentName } from '../../lib/segmentMetadata';
 import type { StateRollup } from '../../types';
-import { focusAnchor, moveRovingFocus, stateAriaLabel } from './USChoroplethMap.a11y';
+import { moveRovingFocus, showCardOnFocus, stateAriaLabel } from './USChoroplethMap.a11y';
 import { classify, type ChoroplethScale, type MapClass } from './USChoroplethMap.scale';
 import type { HoverState, UsaSvgMap, UsaSvgMapLocation } from './USChoroplethMap.utils';
 
@@ -179,8 +179,7 @@ export function USChoroplethMapStates({
             onMouseLeave={() => setHover(null)}
             onFocus={(event) => {
               setActiveId(location.id);
-              const anchor = focusAnchor(event.currentTarget);
-              setHover(hoverFor(view, anchor.x, anchor.y));
+              showCardOnFocus(event.currentTarget, (anchor) => setHover(hoverFor(view, anchor.x, anchor.y)));
             }}
             onBlur={() => setHover(null)}
             onClick={() => activate(false)}

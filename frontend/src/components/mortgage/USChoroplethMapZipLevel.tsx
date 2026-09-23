@@ -16,7 +16,7 @@ import { useEffect, useRef, useState, type CSSProperties, type Dispatch, type Se
 import type { GeoAssignmentOverlayUnit } from '../../lib/api';
 import { safeSegmentName } from '../../lib/segmentMetadata';
 import type { StateRollup, ZipRollup } from '../../types';
-import { focusAnchor, moveRovingFocus, zipAriaLabel } from './USChoroplethMap.a11y';
+import { moveRovingFocus, showCardOnFocus, zipAriaLabel } from './USChoroplethMap.a11y';
 import { classify, type ChoroplethScale } from './USChoroplethMap.scale';
 import type { HoverState } from './USChoroplethMap.utils';
 
@@ -196,8 +196,7 @@ export function USChoroplethMapZipLevel({
               onMouseLeave={() => setHover(null)}
               onFocus={(e) => {
                 setActiveZip(rollup.zip);
-                const anchor = focusAnchor(e.currentTarget);
-                setHover(hover(anchor.x, anchor.y));
+                showCardOnFocus(e.currentTarget, (anchor) => setHover(hover(anchor.x, anchor.y)));
               }}
               onBlur={() => setHover(null)}
               onClick={() => onSelectZip(rollup.zip)}

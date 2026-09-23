@@ -258,7 +258,7 @@ describe('USChoroplethMap encoding, resilience and URL control (dataviz-02 / dat
     await waitFor(() => path('tx'));
     expect(document.querySelector('ul.zip-tiles')).toBeNull();
     await act(async () => path('tx')?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
-    expect(changes.at(-1)).toEqual({ state: 'TX', county: null, zip: null });
+    expect(changes[changes.length - 1]).toEqual({ state: 'TX', county: null, zip: null });
   });
 
   it('views the same numbers as a sortable table whose total equals the legend', async () => {

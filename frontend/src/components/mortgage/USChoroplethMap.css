@@ -143,6 +143,8 @@
   text-underline-offset: 0.2em;
   cursor: pointer;
 }
+/* The arrow-key / drill hint describes the map, not the table. */
+.map-wrap[data-map-view="table"] .map-legend__hint { display: none; }
 /* Like the ZIP grid, the table fills the stage: the legend joins the flow
    below it instead of covering the last rows. */
 .map-wrap:has(.map-table) .map-legend {

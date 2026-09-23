@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useLayoutEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 import type { GeoAssignmentOverlayUnit } from '../../lib/api';
 import { buildCampaignPrefillSearch, makeCampaignPrefill } from '../../lib/campaignPrefill';
@@ -191,8 +191,10 @@ export function USChoroplethMap({
   }, [segmentFilter]);
 
   // Clear the floating map-tip whenever the drill, the view or the facts
-  // under it change: the element that would fire mouseLeave may be gone.
-  useEffect(() => {
+  // under it change: the element that would fire mouseLeave may be gone. A
+  // layout effect, so it runs before a keyboard drill's autofocus (a passive
+  // effect in the ZIP rung) opens the card on the first tile.
+  useLayoutEffect(() => {
     setHover(null);
   }, [level, current.state, current.zip, view, stateFacts, overlayActive]);
 

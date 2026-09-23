@@ -87,3 +87,15 @@ export function focusAnchor(element: Element): { x: number; y: number } {
   const box = element.getBoundingClientRect();
   return { x: box.left + box.width / 2, y: box.top };
 }
+
+/**
+ * Open the card for a focused unit now, and re-anchor it on the next frame:
+ * the focus event fires before the browser scrolls the unit into view, so
+ * the first measurement can be off by the scroll distance.
+ */
+export function showCardOnFocus(element: Element, show: (anchor: { x: number; y: number }) => void): void {
+  show(focusAnchor(element));
+  window.requestAnimationFrame(() => {
+    if (element.ownerDocument.activeElement === element) show(focusAnchor(element));
+  });
+}
