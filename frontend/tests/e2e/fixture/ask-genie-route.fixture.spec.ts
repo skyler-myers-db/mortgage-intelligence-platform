@@ -288,6 +288,80 @@ test.describe('docked composer (visual-07)', () => {
   });
 });
 
+test.describe('arriving with a thread already stored (visual-07)', () => {
+  /** Where an element sits against the band between the route nav and the docked composer. */
+  const band = (page: Page, locator: ReturnType<Page['locator']>) =>
+    locator.evaluate((node) => {
+      const nav = document.querySelector<HTMLElement>('.route-nav')!.getBoundingClientRect();
+      const dock = document.querySelector<HTMLElement>('form.genie-composer')!.getBoundingClientRect();
+      const box = node.getBoundingClientRect();
+      return { clearsNav: box.top >= nav.bottom - 1, clearsComposer: box.bottom <= dock.top + 1 };
+    });
+  const scrollTop = (page: Page) => page.locator('.main').evaluate((main) => main.scrollTop);
+
+  test('a link opens on the latest exchange, and Back keeps the offset the reader left', async ({ app, mockApi, page }) => {
+    registerGenieTurn(mockApi, { answer: genieDeepAnswerFixture(), holdProgress: false });
+    await app.gotoRoute('/ask-genie');
+    const ask = page.locator('form.genie-composer').getByRole('button', { name: 'Ask Genie', exact: true });
+    const followUp = 'How many of them are current customers?';
+    for (const [count, question] of [[1, GENIE_QUESTION], [2, followUp]] as const) {
+      await composer(page).fill(question);
+      await ask.click();
+      await expect(page.locator('.genie-thread .genie-answer')).toHaveCount(count);
+    }
+
+    const h1 = page.locator('#main-content h1');
+    const nav = page.getByRole('navigation', { name: 'Main navigation' });
+    const bubbles = page.locator('.genie-thread > .genie__msg--user');
+    await nav.getByRole('link', { name: 'Glossary' }).click();
+    await expect(h1).toHaveText('Mortgage intelligence glossary');
+    // Arrive by a link (a PUSH), as from the nav or the floating panel.
+    await nav.getByRole('link', { name: 'Ask Genie' }).click();
+    await expect(h1).toHaveText('Ask Genie');
+    await expect(bubbles).toHaveText([GENIE_QUESTION, followUp]);
+    await expect.poll(() => band(page, bubbles.last()), { message: 'the latest question opens between the bars' }).toEqual({
+      clearsNav: true,
+      clearsComposer: true,
+    });
+    // Non-vacuity: the thread opened scrolled; the oldest turn is above the view.
+    expect(await scrollTop(page), 'the route opened scrolled to the latest turn').toBeGreaterThan(0);
+    await expect(bubbles.first()).not.toBeInViewport();
+
+    // Back / Forward (POP) belong to the shell's scroll restoration: leave
+    // at the top, come Back, and the top is where the route reopens.
+    await page.locator('.main').evaluate((main) => {
+      main.scrollTop = 0;
+    });
+    await expect(bubbles.first()).toBeInViewport();
+    await nav.getByRole('link', { name: 'Glossary' }).click();
+    await expect(h1).toHaveText('Mortgage intelligence glossary');
+    await page.goBack();
+    await expect(h1).toHaveText('Ask Genie');
+    await expect(bubbles).toHaveCount(2);
+    await expect(bubbles.first()).toBeInViewport();
+    expect(await scrollTop(page), 'Back restored the offset the reader left').toBe(0);
+    await expect(bubbles.last()).not.toBeInViewport();
+  });
+
+  test('a one-turn thread opens with the page head in view', async ({ app, mockApi, page }) => {
+    registerGenieTurn(mockApi, { answer: genieDeepAnswerFixture(), holdProgress: false });
+    await app.gotoRoute('/ask-genie');
+    await askDeepQuestion(page);
+    const h1 = page.locator('#main-content h1');
+    const nav = page.getByRole('navigation', { name: 'Main navigation' });
+    await nav.getByRole('link', { name: 'Glossary' }).click();
+    await expect(h1).toHaveText('Mortgage intelligence glossary');
+    await nav.getByRole('link', { name: 'Ask Genie' }).click();
+    await expect(h1).toHaveText('Ask Genie');
+    const bubble = page.locator('.genie-thread > .genie__msg--user');
+    await expect(bubble).toHaveCount(1);
+    // The latest question is already in view, so nothing moves.
+    expect(await band(page, bubble)).toEqual({ clearsNav: true, clearsComposer: true });
+    expect(await scrollTop(page)).toBe(0);
+    await expect(tab(page, 'Ask')).toBeInViewport();
+  });
+});
+
 /** What the focus walk records for one stop. */
 interface FocusStop {
   name: string;

@@ -20,7 +20,7 @@ import {
 } from '../lib/genieConversationStore';
 import { useComposerScrollClearance } from './ask-genie.composer-clearance';
 import { renderSourceAssetChip } from './ask-genie.growth-agent.helpers';
-import { useRevealLatestExchange } from './ask-genie.thread-scroll';
+import { useRevealLatestExchange, useRevealLatestOnArrival } from './ask-genie.thread-scroll';
 
 /**
  * AskGenieAnswerPanel — the composer + conversation surface extracted from
@@ -266,6 +266,8 @@ export function AskGenieAnswerPanel({
     dockRef,
     showInFlight ? `pending-${thread.length}` : `settled-${thread.length}`,
   );
+  // Arriving by a link with a thread already stored opens on its latest turn.
+  useRevealLatestOnArrival(latestAnchorRef, dockRef);
   // Focus scrolling stops above the docked composer (WCAG 2.2 SC 2.4.11).
   useComposerScrollClearance(dockRef);
 
