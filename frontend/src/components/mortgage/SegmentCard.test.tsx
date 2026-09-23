@@ -9,6 +9,7 @@ import type { SegmentSummary } from '../../types';
 
 import { DRAWER_SOURCES } from '../../lib/drawerSources';
 import { SegmentCard } from './SegmentCard';
+import { facetShares } from './SegmentFacetBar';
 
 // EvidenceChip (the S1.3 per-segment evidence affordance) reads setDrawer +
 // showEvidence from the app context; mock it so the card renders standalone.
@@ -126,16 +127,41 @@ describe('SegmentCard', () => {
         { value: 'branch', count: 90 },
       ],
     });
-    // Product row: top-3 only, exact counts, short labels.
-    expect(container.textContent).toContain('FHA 1,240');
-    expect(container.textContent).toContain('Conv 980');
-    expect(container.textContent).toContain('Jumbo 210');
-    expect(container.textContent).not.toContain('VA 40');
-    // Channel row: top-2 only, display labels.
-    expect(container.textContent).toContain('Loan officer 1,500');
-    expect(container.textContent).toContain('Digital 620');
-    expect(container.textContent).not.toContain('Branch 90');
+    // visual-04: ONE evidence trigger per facet, a stacked share bar of the
+    // whole mix (VA included) with the largest share as the legend.
+    const product = container.querySelector('.seg-card__facet-chip--product');
+    const channel = container.querySelector('.seg-card__facet-chip--channel');
+    expect(product?.querySelectorAll('.evidence-chip')).toHaveLength(1);
+    expect(channel?.querySelectorAll('.evidence-chip')).toHaveLength(1);
+    expect(product?.querySelectorAll('.seg-card__facet-share')).toHaveLength(4);
+    expect(channel?.querySelectorAll('.seg-card__facet-share')).toHaveLength(3);
+    expect(product?.querySelector('.seg-card__facet-legend')?.textContent).toBe('FHA 50%');
+    expect(channel?.querySelector('.seg-card__facet-legend')?.textContent).toBe('LO 68%');
+    // The accessible summary names the facet and its top three values.
+    expect(product?.querySelector('.sr-only')?.textContent).toBe(
+      'Loan product mix: FHA 50%, Conventional 40%, Jumbo 9%',
+    );
+    expect(channel?.querySelector('.sr-only')?.textContent).toBe(
+      'Origination channel mix: Loan officer 68%, Digital 28%, Branch 4%',
+    );
+    // Legend and bar are presentational; the summary is the name.
+    expect(product?.querySelector('.seg-card__facet-legend')?.getAttribute('aria-hidden')).toBe('true');
+    expect(product?.querySelector('.seg-card__facet-bar')?.getAttribute('aria-hidden')).toBe('true');
     expect(container.querySelector('.seg-card__facets')).not.toBeNull();
+  });
+
+  it('computes facet shares from the whole mix, largest first, skipping empty values', () => {
+    const shares = facetShares([
+      { value: 'digital', count: 1 },
+      { value: 'loan_officer', count: 299 },
+      { value: 'branch', count: 0 },
+    ]);
+    expect(shares.map((share) => [share.value, share.pctLabel])).toEqual([
+      ['loan_officer', '100%'],
+      ['digital', '<1%'],
+    ]);
+    expect(facetShares([])).toEqual([]);
+    expect(facetShares(undefined)).toEqual([]);
   });
 
   it('hides the facet block when both mixes are empty or absent', () => {
@@ -315,7 +341,7 @@ describe('SegmentCard', () => {
     // The relationship is what makes the two numbers legible together —
     // the smaller one must never be presented as if it stood alone.
     expect(note?.textContent?.replace(/\s+/g, ' ')).toBe(
-      '3,217 contactable of 74,335 addressable',
+      '3,217 of 74,335 contactable',
     );
     // Same disclosure for a screen reader, on the control that navigates.
     const select = container.querySelector<HTMLButtonElement>('.seg-card__select');

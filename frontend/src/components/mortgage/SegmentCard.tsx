@@ -1,25 +1,13 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import type { DimensionFacetCount, SegmentSummary } from '../../types';
+import type { SegmentSummary } from '../../types';
 import { Icon } from '../Icon';
 import { EvidenceChip } from '../Primitives';
 import { segmentEvidenceSource } from '../../lib/drawerSources';
 import { segmentByCode, segmentIcon } from '../../lib/segmentMetadata';
-import { DRAWER_SOURCES } from '../../lib/drawerSources';
 import { genieSegmentPrompt } from '../../lib/genieContext';
 import { GenieAskAbout } from './GenieAskAbout';
-
-const FACET_LABELS: Record<string, string> = {
-  conventional: 'Conv',
-  jumbo: 'Jumbo',
-  fha: 'FHA',
-  va: 'VA',
-  other: 'Other',
-  unknown: 'Unknown',
-  loan_officer: 'Loan officer',
-  digital: 'Digital',
-  branch: 'Branch',
-  call_center: 'Call center',
-};
+import { facetShares, SegmentFacetBar } from './SegmentFacetBar';
+import './SegmentCard.css';
 
 /**
  * SegmentCard — prototype `.seg-card` BEM: badge + title + count + sub + meta row.
@@ -59,6 +47,18 @@ const FACET_LABELS: Record<string, string> = {
  * zero-count segments remain selectable so users can verify the exact
  * filter result.
  *
+ * Row grid (audit 2026-09-21 visual-04): the card is a CSS subgrid spanning
+ * six rows of `.seg-grid` (header, count, reconcile, sub, meta, facets), so
+ * every card in a grid row shares one set of row heights: a two-line title
+ * or a wrapped meta row moves the whole row, never one card. Each element is
+ * pinned to its row, the reconcile slot always renders, and the title
+ * reserves two lines, so row counts and offsets match across cards. To fit
+ * the prototype's proportions the description clamps to two lines (the full
+ * text stays in the DOM and on the select button's `title`), the reconcile
+ * note is one line, `avg` sits beside the count so the meta row keeps the
+ * evidence chip and the Ask Genie entry on one line, and each facet is one
+ * share bar (SegmentFacetBar).
+ *
  * Emanation: when `selected` flips false → true, we mount a single
  * `.seg-card__emanate` span with a fresh key. The CSS animation is one-shot
  * (animation-iteration-count: 1); bumping the key restarts the animation on
@@ -82,9 +82,9 @@ export function SegmentCard({ segment, selected, updating, onClick }: SegmentCar
   const prev = useRef<boolean | undefined>(selected);
   const [emanateKey, setEmanateKey] = useState<number>(selected ? 1 : 0);
 
-  const loanProductMix: DimensionFacetCount[] = (segment.loan_product_mix ?? []).slice(0, 3);
-  const originationChannelMix: DimensionFacetCount[] = (segment.origination_channel_mix ?? []).slice(0, 2);
-  const hasFacets = loanProductMix.length > 0 || originationChannelMix.length > 0;
+  const hasFacets =
+    facetShares(segment.loan_product_mix).length > 0 ||
+    facetShares(segment.origination_channel_mix).length > 0;
   const gated =
     segment.source_status === 'not_connected' || segment.source_status === 'not_licensed';
   const gateLabel = segment.source_status === 'not_licensed' ? 'not licensed' : 'not connected';
@@ -142,6 +142,7 @@ export function SegmentCard({ segment, selected, updating, onClick }: SegmentCar
           className="seg-card__select"
           onClick={activate}
           aria-pressed={selected ?? false}
+          title={displayDescription}
           aria-label={
             showsReconcile
               ? `Select ${displayName} segment — ${segment.count.toLocaleString()} borrowers, ${contactable.toLocaleString()} contactable`
@@ -156,21 +157,27 @@ export function SegmentCard({ segment, selected, updating, onClick }: SegmentCar
         <div className="seg-card__badge"><Icon name={icon} size={14} /></div>
         <div className="seg-card__title">{displayName}</div>
       </div>
-      {gated ? (
-        <div className="seg-card__count num seg-card__count--gated" aria-label={`Segment gated: source ${gateLabel}`}>
-          —
-        </div>
-      ) : (
-        <div className="seg-card__count num">{segment.count.toLocaleString()}</div>
-      )}
-      {!gated && showsReconcile && (
-        <div className="seg-card__reconcile" role="note">
-          <span className="seg-card__reconcile-value num">
-            {contactable.toLocaleString()}
-          </span>{' '}
-          contactable of {segment.count.toLocaleString()} addressable
-        </div>
-      )}
+      <div className="seg-card__count-row">
+        {gated ? (
+          <div className="seg-card__count num seg-card__count--gated" aria-label={`Segment gated: source ${gateLabel}`}>
+            —
+          </div>
+        ) : (
+          <div className="seg-card__count num">{segment.count.toLocaleString()}</div>
+        )}
+        {!gated && !hasNoBorrowers && <span className="seg-card__avg">avg {segment.avg_score}</span>}
+      </div>
+      {/* Always rendered, even empty, so every card keeps the same rows. */}
+      <div className="seg-card__reconcile-slot">
+        {!gated && showsReconcile && (
+          <div className="seg-card__reconcile" role="note">
+            <span className="seg-card__reconcile-value num">
+              {contactable.toLocaleString()}
+            </span>{' '}
+            of {segment.count.toLocaleString()} contactable
+          </div>
+        )}
+      </div>
       <div className="seg-card__sub">{displayDescription}</div>
       <div className="seg-card__meta">
         {gated ? (
@@ -187,7 +194,6 @@ export function SegmentCard({ segment, selected, updating, onClick }: SegmentCar
             {segment.delta.startsWith('-') ? '▼' : '▲'} {segment.delta}
           </span>
         )}
-        {!gated && !hasNoBorrowers && <span>avg {segment.avg_score}</span>}
         <span className="seg-card__evidence">
           <EvidenceChip source={evidenceSource} title={`Evidence for ${displayName}`}>
             evidence
@@ -204,36 +210,8 @@ export function SegmentCard({ segment, selected, updating, onClick }: SegmentCar
       </div>
       {!gated && hasFacets && (
         <div className="seg-card__facets">
-          {loanProductMix.length > 0 && (
-            <div className="seg-card__facet-row">
-              <span className="seg-card__facet-label">Product</span>
-              {loanProductMix.map((facet) => {
-                const label = FACET_LABELS[facet.value] ?? facet.value;
-                return (
-                  <span key={`product-${facet.value}`} className="seg-card__facet-chip">
-                    <EvidenceChip source={DRAWER_SOURCES.loanProductType}>
-                      {label} {facet.count.toLocaleString()}
-                    </EvidenceChip>
-                  </span>
-                );
-              })}
-            </div>
-          )}
-          {originationChannelMix.length > 0 && (
-            <div className="seg-card__facet-row">
-              <span className="seg-card__facet-label">Channel</span>
-              {originationChannelMix.map((facet) => {
-                const label = FACET_LABELS[facet.value] ?? facet.value;
-                return (
-                  <span key={`channel-${facet.value}`} className="seg-card__facet-chip">
-                    <EvidenceChip source={DRAWER_SOURCES.originationChannel}>
-                      {label} {facet.count.toLocaleString()}
-                    </EvidenceChip>
-                  </span>
-                );
-              })}
-            </div>
-          )}
+          <SegmentFacetBar kind="product" mix={segment.loan_product_mix} />
+          <SegmentFacetBar kind="channel" mix={segment.origination_channel_mix} />
         </div>
       )}
     </div>
@@ -247,9 +225,13 @@ export function SegmentCardSkeleton() {
         <div className="seg-card__badge seg-card__badge--skeleton skeleton" />
         <div className="seg-card__title-skeleton skeleton" />
       </div>
-      <div className="seg-card__count-skeleton skeleton" />
-      <div className="seg-card__sub-skeleton skeleton" />
-      <div className="seg-card__sub-skeleton seg-card__sub-skeleton--short skeleton" />
+      <div className="seg-card__count-row">
+        <div className="seg-card__count-skeleton skeleton" />
+      </div>
+      <div className="seg-card__sub-stack">
+        <div className="seg-card__sub-skeleton skeleton" />
+        <div className="seg-card__sub-skeleton seg-card__sub-skeleton--short skeleton" />
+      </div>
       <div className="seg-card__meta">
         <span className="seg-card__meta-skeleton skeleton" />
         <span className="seg-card__meta-skeleton seg-card__meta-skeleton--short skeleton" />
