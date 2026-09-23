@@ -346,7 +346,7 @@ export default function AskGenie() {
             <div className="surface">
               <div className="surface__hdr">
                 <Icon name="layers" size={14} className="icon-accent" />
-                <div className="h-4">Trusted sources</div>
+                <h2 className="h-4">Trusted sources</h2>
               </div>
               <div className="surface__body trusted-asset-list">
                 {trustedAssets.map((a) => (

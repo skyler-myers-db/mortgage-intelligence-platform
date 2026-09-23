@@ -36,6 +36,10 @@ test.describe('conversation first', () => {
     await expect(tab(page, 'Ask')).toHaveAttribute('aria-selected', 'true');
     await expect(tab(page, 'Workflows')).toHaveAttribute('aria-selected', 'false');
     await expect(composer(page)).toBeVisible();
+    // Each tab opens with h2 sections, as Workflows and Saved monitors do.
+    const main = page.locator('#main-content');
+    await expect(main.getByRole('heading', { name: 'Conversation', level: 2 })).toBeVisible();
+    await expect(main.getByRole('heading', { name: 'Trusted sources', level: 2 })).toBeVisible();
     // The Growth Agent no longer leads the page.
     await expect(agentPrompt(page)).toBeHidden();
     await expect(page.getByText('Mortgage growth co-pilot')).toBeHidden();
@@ -221,6 +225,31 @@ test.describe('docked composer (visual-07)', () => {
     expect(bubble.y).toBeGreaterThanOrEqual(nav.y + nav.height - 1);
     expect(bubble.y + bubble.height).toBeLessThanOrEqual(dock.y);
     await expect(composer(page)).toBeInViewport({ ratio: 1 });
+  });
+
+  test('on a phone the empty composer keeps to two lines and the empty state scrolls clear of it', async ({ app, page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await app.gotoRoute('/ask-genie');
+    const input = composer(page);
+    await expect(input).toHaveAttribute('placeholder', /prime refi candidates/);
+    // field-sizing sizes an empty box to its placeholder: the placeholder
+    // must fit the two-line minimum, not grow the docked composer.
+    const sizing = await input.evaluate((node) => ({
+      height: node.getBoundingClientRect().height,
+      minHeight: Number.parseFloat(getComputedStyle(node).minHeight),
+    }));
+    expect(sizing.height, 'empty composer height vs its two-line minimum').toBeLessThanOrEqual(sizing.minHeight + 1);
+    // The shell's route nav and the docked composer leave a band between
+    // them; the empty state fits it once scrolled there.
+    const title = page.locator('#ask-genie-panel-ask .genie-empty__title');
+    await title.evaluate((node) => node.scrollIntoView({ block: 'nearest' }));
+    const [titleBox, nav, dock] = await Promise.all([
+      mustBox(title, 'empty state title'),
+      mustBox(page.locator('.route-nav'), 'route nav'),
+      mustBox(page.locator('form.genie-composer'), 'composer'),
+    ]);
+    expect(titleBox.y, 'the empty state title clears the route nav').toBeGreaterThanOrEqual(nav.y + nav.height - 1);
+    expect(titleBox.y + titleBox.height, 'the empty state title clears the composer').toBeLessThanOrEqual(dock.y + 1);
   });
 
   test('the Genie launcher never covers the composer controls', async ({ app, page }) => {

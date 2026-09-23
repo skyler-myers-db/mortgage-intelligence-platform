@@ -122,9 +122,14 @@ export interface AskGenieAnswerPanelProps {
 /** How many source chips the empty state shows. */
 const EMPTY_STATE_SOURCE_CHIPS = 3;
 
-/** Composer placeholder, in the reviewed segment vocabulary. */
-export const COMPOSER_PLACEHOLDER =
-  'Ask about borrowers, segments, coverage or market shifts, e.g. which states have the most prime refi candidates?';
+/**
+ * Composer placeholder, in the reviewed segment vocabulary. Short enough to
+ * fit the composer's two empty lines on a phone: `field-sizing: content`
+ * sizes an empty box to its placeholder, and a longer one grew the docked
+ * composer over the empty state. The empty state above it already names what
+ * Genie answers about.
+ */
+export const COMPOSER_PLACEHOLDER = 'Ask about your book, e.g. prime refi candidates by state';
 
 function GenieThreadTurn({
   turn,
@@ -307,7 +312,7 @@ export function AskGenieAnswerPanel({
       <div className="surface__hdr surface__hdr--split">
         <div className="surface__hdr-main">
           <Icon name="sparkle" size={14} className="icon-accent" />
-          <div className="h-4">Conversation</div>
+          <h2 className="h-4">Conversation</h2>
         </div>
         <div className="chip-row">
           <GenieHistoryMenu
