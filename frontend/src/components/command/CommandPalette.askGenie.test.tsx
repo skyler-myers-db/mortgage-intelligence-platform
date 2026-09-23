@@ -72,6 +72,16 @@ describe('CommandPalette Ask Genie row', () => {
       input().dispatchEvent(new Event('input', { bubbles: true }));
     });
   }
+  /** Let the debounced borrower search resolve (real timers). */
+  async function settleSearch(timeoutMs = 5_000) {
+    const startedAt = Date.now();
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+    while (container.querySelector('.cmdk__status')?.textContent?.includes('Searching borrowers')) {
+      if (Date.now() - startedAt > timeoutMs) throw new Error('borrower search never settled');
+      await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
+    }
+    expect(borrowerSearch).toHaveBeenCalled();
+  }
   const genieRow = () =>
     Array.from(container.querySelectorAll<HTMLButtonElement>('[role="option"]')).find((el) =>
       el.textContent?.startsWith('Ask Genie:'),
@@ -105,16 +115,32 @@ describe('CommandPalette Ask Genie row', () => {
     expect(borrowerSearch.mock.calls.length, 'the borrower search is the only network call').toBeLessThanOrEqual(1);
   });
 
-  it('a word no page matches still offers the Genie row, so the palette never dead-ends', () => {
+  it('a word no page matches still offers the Genie row, so the palette never dead-ends', async () => {
     pressMetaK();
     setQuery('zyrplax');
     // The empty state still says no page matched; the Genie row is the way out.
     expect(container.querySelector('.cmdk__empty')?.textContent).toContain('No pages, actions, or borrowers');
     expect(genieRow()?.textContent).toContain('Ask Genie: zyrplax');
+    // Enter reaches the fallback once the borrower search has settled (it is
+    // held while a borrower row could still land above it).
+    await settleSearch();
     act(() => {
       input().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
     });
     expect(consumeGeniePrefill()).toBe('zyrplax');
     expect(openRequests).toEqual([1]);
+  });
+
+  it('the Genie row comes after the borrower rows, as the fallback', async () => {
+    borrowerSearch.mockResolvedValue([
+      { borrower_id: 'B-1EEEN00S99GXC', city: 'Chicago', state: 'IL', zip: '60611' },
+    ]);
+    pressMetaK();
+    setQuery('60611');
+    await settleSearch();
+    const groups = Array.from(container.querySelectorAll('[role="group"]')).map((g) => g.getAttribute('aria-label'));
+    expect(groups).toEqual(['Borrowers', 'Ask Genie']);
+    const options = Array.from(container.querySelectorAll('[role="option"]'));
+    expect(options[options.length - 1].textContent).toContain('Ask Genie: 60611');
   });
 });

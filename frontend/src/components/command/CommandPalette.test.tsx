@@ -9,6 +9,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { consumeGeniePrefill } from '../../lib/genieOpen';
 
 const navigate = vi.fn();
 vi.mock('react-router', () => ({ useNavigate: () => navigate }));
@@ -194,6 +195,7 @@ describe('CommandPalette borrower search (networked path)', () => {
     act(() => root.unmount());
     container.remove();
     vi.useRealTimers();
+    consumeGeniePrefill();
   });
 
   const input = () => container.querySelector<HTMLInputElement>('input[role="combobox"]')!;
@@ -241,6 +243,45 @@ describe('CommandPalette borrower search (networked path)', () => {
     keyOnInput('Enter');
     expect(navigate).toHaveBeenCalledWith('/borrower-360/B-1EEEN00S99GXC');
     expect(dialog()).toBeNull();
+  });
+
+  it('a borrower-only query + Enter at the FIRST row opens the dossier, never a Genie prefill', async () => {
+    // The "Ask Genie: <text>" row (shell-07) is the fallback. It must never sit
+    // above a borrower match: Enter with no ArrowDown opened the first
+    // borrower before that row existed, and still has to.
+    borrowerSearch.mockResolvedValue([lead('B-1EEEN00S99GXC')]);
+    pressMetaK();
+    setQuery('B-1EEEN00S99GXC');
+    // Before the search lands the Genie row is the only option. Enter is held
+    // there: the masked id must not reach Genie's composer.
+    expect(container.querySelectorAll('[role="option"]').length).toBe(1);
+    keyOnInput('Enter');
+    expect(consumeGeniePrefill()).toBeNull();
+    expect(dialog()).not.toBeNull();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(220);
+    });
+    const options = Array.from(container.querySelectorAll('[role="option"]')).map((o) => o.textContent ?? '');
+    expect(options[0]).toContain('B-1EEEN00S99GXC');
+    expect(options[options.length - 1]).toContain('Ask Genie: B-1EEEN00S99GXC');
+    expect(input().getAttribute('aria-activedescendant')).toBe('cmdk-option-0');
+    keyOnInput('Enter');
+    expect(navigate).toHaveBeenCalledWith('/borrower-360/B-1EEEN00S99GXC');
+    expect(consumeGeniePrefill()).toBeNull();
+    expect(dialog()).toBeNull();
+  });
+
+  it('a query no borrower matches still reaches the Genie fallback on Enter once the search settles', async () => {
+    borrowerSearch.mockResolvedValue([]);
+    pressMetaK();
+    setQuery('zyrplax');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(220);
+    });
+    keyOnInput('Enter');
+    expect(consumeGeniePrefill()).toBe('zyrplax');
+    expect(navigate).not.toHaveBeenCalled();
   });
 
   it('navigates to the dossier when a borrower row is CLICKED', async () => {

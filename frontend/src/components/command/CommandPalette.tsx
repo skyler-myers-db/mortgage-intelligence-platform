@@ -35,7 +35,11 @@ import {
  * query of two or more characters also offers a row that opens the floating
  * Genie panel with the text PREFILLED in its composer (`openGenie`). It never
  * submits and adds no endpoint: the user presses Ask, and the question takes
- * the same guarded ask path as any typed question.
+ * the same guarded ask path as any typed question. The row is the FALLBACK,
+ * not a match: it comes after the pages, actions AND borrowers, and Enter
+ * never lands on it while the borrower search is still in flight, so a
+ * masked borrower id or a ZIP still opens its dossier on Enter instead of
+ * being handed to Genie's composer.
  */
 
 type FlatItem =
@@ -148,8 +152,9 @@ export function CommandPalette() {
   const items: FlatItem[] = useMemo(
     () => [
       ...actions.map((action) => ({ kind: 'action' as const, action })),
-      ...(genieQuery.length >= MIN_GENIE_QUERY ? [{ kind: 'genie' as const, prompt: genieQuery }] : []),
       ...borrowers.map((lead) => ({ kind: 'borrower' as const, lead })),
+      // Last: Enter at the first row must reach a match before the fallback.
+      ...(genieQuery.length >= MIN_GENIE_QUERY ? [{ kind: 'genie' as const, prompt: genieQuery }] : []),
     ],
     [actions, borrowers, genieQuery],
   );
@@ -197,11 +202,16 @@ export function CommandPalette() {
       } else if (e.key === 'Enter') {
         e.preventDefault();
         const item = items[activeIndex];
-        if (item) runItem(item);
+        if (!item) return;
+        // The borrower rows have not landed yet, so the Genie fallback only
+        // SEEMS to be the first match. Hold Enter (a click still works):
+        // once the search settles, Enter opens the first borrower.
+        if (item.kind === 'genie' && searchStatus === 'loading' && borrowers.length === 0) return;
+        runItem(item);
       }
       // Esc is handled by the focus trap.
     },
-    [items, activeIndex, runItem],
+    [items, activeIndex, runItem, searchStatus, borrowers.length],
   );
 
   // Keep the active row scrolled into view as arrows move it.
@@ -289,29 +299,6 @@ export function CommandPalette() {
             </div>
           )}
 
-          {genieItems.length > 0 && (
-            <div className="cmdk__group" role="group" aria-label="Ask Genie">
-              <div className="cmdk__group-label">Ask Genie</div>
-              {genieItems.map((item) => {
-                runningIndex += 1;
-                const i = runningIndex;
-                return (
-                  <CommandRow
-                    key="ask-genie"
-                    index={i}
-                    optionId={optionId(i)}
-                    active={i === activeIndex}
-                    icon="sparkle"
-                    label={`Ask Genie: ${item.prompt}`}
-                    hint="Opens Genie with this question; you press Ask"
-                    onActivate={() => runItem(item)}
-                    onHover={() => setActiveIndex(i)}
-                  />
-                );
-              })}
-            </div>
-          )}
-
           {borrowerItems.length > 0 && (
             <div className="cmdk__group" role="group" aria-label="Borrowers">
               <div className="cmdk__group-label">Borrowers</div>
@@ -341,6 +328,31 @@ export function CommandPalette() {
           )}
           {query.trim().length >= 2 && searchStatus === 'error' && (
             <div className="cmdk__status cmdk__status--error" role="status">Borrower search is temporarily unavailable.</div>
+          )}
+
+          {/* The fallback, after every match (and the same order as `items`,
+              so the running index stays in step). */}
+          {genieItems.length > 0 && (
+            <div className="cmdk__group" role="group" aria-label="Ask Genie">
+              <div className="cmdk__group-label">Ask Genie</div>
+              {genieItems.map((item) => {
+                runningIndex += 1;
+                const i = runningIndex;
+                return (
+                  <CommandRow
+                    key="ask-genie"
+                    index={i}
+                    optionId={optionId(i)}
+                    active={i === activeIndex}
+                    icon="sparkle"
+                    label={`Ask Genie: ${item.prompt}`}
+                    hint="Opens Genie with this question; you press Ask"
+                    onActivate={() => runItem(item)}
+                    onHover={() => setActiveIndex(i)}
+                  />
+                );
+              })}
+            </div>
           )}
         </div>
 
