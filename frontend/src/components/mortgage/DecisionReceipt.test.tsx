@@ -324,6 +324,57 @@ describe('DecisionReceipt', () => {
     expect(receipt()).not.toBeNull();
   });
 
+  it('announces each copy once: the notice goes quiet with the label and a second copy announces again', async () => {
+    apiMocks.auditReceipt.mockResolvedValue(LEDGER);
+    const writeText = vi.fn().mockRejectedValueOnce(new Error('denied')).mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    mount({ decidedHere: true });
+    await settle();
+    const live = announcement()!;
+    expect(live.textContent).toBe(`Decision receipt: Approved, audit event ${AUDIT_ID}`);
+    const copyButton = () => receipt()!.querySelector<HTMLButtonElement>('.decision-receipt__actions button')!;
+
+    vi.useFakeTimers();
+    try {
+      await act(async () => copyButton().click());
+      expect(copyButton().textContent?.trim()).toBe('Copy unavailable');
+      expect(copyButton().getAttribute('aria-label')).toBe(`Copy unavailable ${AUDIT_ID}`);
+      expect(live.textContent).toBe('Audit id could not be copied');
+
+      await act(async () => {
+        vi.advanceTimersByTime(2_000);
+      });
+      expect(copyButton().textContent?.trim()).toBe('Copy audit id');
+      // Quiet, not reverted to the decision text (which would re-announce it).
+      expect(live.textContent).toBe('');
+
+      await act(async () => copyButton().click());
+      expect(live.textContent).toBe('Audit id copied');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('lets a retried read-back announce itself after the audit id was copied from the unavailable card', async () => {
+    apiMocks.auditReceipt
+      .mockRejectedValueOnce(new ApiError('lakebase unavailable', { path: RECEIPT_PATH, status: 503 }))
+      .mockResolvedValue(LEDGER);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText: vi.fn().mockResolvedValue(undefined) }, configurable: true });
+    mount({ decidedHere: true, decision: 'approved' });
+    await settle();
+    const unavailable = container.querySelector<HTMLElement>('[data-testid="decision-receipt-unavailable"]')!;
+    const byText = (text: string) => [...unavailable.querySelectorAll('button')].find((button) => button.textContent?.trim() === text)!;
+
+    await act(async () => byText('Copy audit id').click());
+    await settle();
+    expect(announcement()!.textContent).toBe('Audit id copied');
+
+    await act(async () => byText('Retry read-back').click());
+    await settle();
+    expect(receipt()).not.toBeNull();
+    expect(announcement()!.textContent).toBe(`Decision receipt: Approved, audit event ${AUDIT_ID}`);
+  });
+
   it('copies the audit id and prints the receipt only', async () => {
     apiMocks.auditReceipt.mockResolvedValue(LEDGER);
     const writeText = vi.fn().mockResolvedValue(undefined);
@@ -335,10 +386,16 @@ describe('DecisionReceipt', () => {
     const card = receipt()!;
     const buttons = () => [...card.querySelectorAll<HTMLButtonElement>('button')];
 
-    await act(async () => buttons().find((button) => button.textContent?.trim() === 'Copy audit id')!.click());
+    const copy = buttons().find((button) => button.textContent?.trim() === 'Copy audit id')!;
+    expect(copy.getAttribute('aria-label')).toBe(`Copy audit id ${AUDIT_ID}`);
+    await act(async () => copy.click());
     await settle();
     expect(writeText).toHaveBeenCalledWith(AUDIT_ID);
-    expect(buttons().some((button) => button.textContent?.trim() === 'Copied audit id')).toBe(true);
+    const copied = buttons().find((button) => button.textContent?.trim() === 'Copied audit id')!;
+    // WCAG 2.5.3 label-in-name: the accessible name follows the visible label.
+    expect(copied.getAttribute('aria-label')).toBe(`Copied audit id ${AUDIT_ID}`);
+    // The copy result is announced (this durable read announces nothing else).
+    expect(announcement()!.textContent).toBe('Audit id copied');
 
     act(() => buttons().find((button) => button.textContent?.trim() === 'Print receipt')!.click());
     expect(print).toHaveBeenCalledTimes(1);

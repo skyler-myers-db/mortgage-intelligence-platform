@@ -134,6 +134,9 @@ function receiptRows(receipt: DecisionReceiptPayload): ReceiptRow[] {
   return rows;
 }
 
+/** Which card the receipt is showing: the skeleton, an unavailable state, or the read-back. */
+type ReceiptPhase = 'pending' | 'unavailable' | 'read-back';
+
 /** Why the read-back did not return a receipt. */
 type UnavailableState = 'forbidden' | 'not-found' | 'error';
 
@@ -178,6 +181,10 @@ export function DecisionReceipt({
   const titleId = useId();
   const cardRef = useRef<HTMLElement | null>(null);
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
+  // The copy result is announced through the receipt's one live region.
+  // It is tied to the audit id and the card state it was made in, so a
+  // later state (a retried read-back that now succeeds) announces itself.
+  const [copyNotice, setCopyNotice] = useState<{ auditEventId: string; phase: ReceiptPhase; text: string } | null>(null);
 
   const query = useQuery({
     queryKey: queryKeys.auditReceipt(auditEventId),
@@ -200,12 +207,24 @@ export function DecisionReceipt({
 
   useEffect(() => {
     if (copyState === 'idle') return;
-    const timer = window.setTimeout(() => setCopyState('idle'), 2000);
+    const timer = window.setTimeout(() => {
+      setCopyState('idle');
+      // Quiet, not reverted: falling back to the decision text here would
+      // announce the decision again. The next copy announces afresh.
+      setCopyNotice((notice) => (notice ? { ...notice, text: '' } : notice));
+    }, 2000);
     return () => window.clearTimeout(timer);
   }, [copyState]);
 
+  const phase: ReceiptPhase = query.isPending ? 'pending' : query.data ? 'read-back' : 'unavailable';
   const onCopy = async () => {
-    setCopyState((await copyAuditId(auditEventId)) ? 'copied' : 'failed');
+    const copied = await copyAuditId(auditEventId);
+    setCopyState(copied ? 'copied' : 'failed');
+    setCopyNotice({
+      auditEventId,
+      phase,
+      text: copied ? DECISION_RECEIPT_COPY.copiedNotice : DECISION_RECEIPT_COPY.copyFailedNotice,
+    });
   };
   const copyLabel = copyState === 'copied'
     ? DECISION_RECEIPT_COPY.copied
@@ -215,7 +234,10 @@ export function DecisionReceipt({
   const blockClass = ['surface', 'decision-receipt', compact ? 'decision-receipt--compact' : '', className]
     .filter(Boolean)
     .join(' ');
-  const announce = (message: string) => (decidedHere ? message : '');
+  const announce = (message: string) => {
+    if (copyNotice && copyNotice.auditEventId === auditEventId && copyNotice.phase === phase) return copyNotice.text;
+    return decidedHere ? message : '';
+  };
 
   if (query.isPending) {
     // A passive read is not a write: it never says "Recording decision…".
@@ -376,7 +398,8 @@ export function DecisionReceipt({
         </div>
         <div className="surface__ft" style={staggerIndex(footerIndex)}>
           <div className="decision-receipt__actions">
-            <Button size="sm" icon="doc" onClick={() => void onCopy()} aria-label={`${DECISION_RECEIPT_COPY.copy} ${receipt.audit_event_id}`}>
+            {/* WCAG 2.5.3: the accessible name starts with the visible label in every copy state. */}
+            <Button size="sm" icon="doc" onClick={() => void onCopy()} aria-label={`${copyLabel} ${receipt.audit_event_id}`}>
               {copyLabel}
             </Button>
             <Button size="sm" icon="export" onClick={() => printReceipt(cardRef.current)}>

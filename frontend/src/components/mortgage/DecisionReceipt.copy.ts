@@ -35,6 +35,8 @@ export const DECISION_RECEIPT_COPY = {
   copy: 'Copy audit id',
   copied: 'Copied audit id',
   copyFailed: 'Copy unavailable',
+  copiedNotice: 'Audit id copied',
+  copyFailedNotice: 'Audit id could not be copied',
   print: 'Print receipt',
   retry: 'Retry read-back',
   openExplorer: 'Open in audit explorer',
