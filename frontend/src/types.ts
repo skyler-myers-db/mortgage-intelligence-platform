@@ -198,6 +198,8 @@ export interface BorrowerLifecycle {
   approval_status: ApprovalStatus;
   outreach_status: OutreachStatus;
   approval_id?: string | null;
+  /** Audit row the latest decision wrote; the Decision receipt reads it back. */
+  audit_event_id?: string | null;
   approved_at?: string | null;
   outreach_at?: string | null;
   synced_at?: string | null;

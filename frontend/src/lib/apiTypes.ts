@@ -200,6 +200,35 @@ export interface ActorAuditEventPage {
   next_cursor: string | null;
 }
 
+export type DecisionOutcome = 'approved' | 'rejected' | 'held';
+
+/**
+ * Decision receipt: the approver's read-back of the Lakebase audit row their
+ * approve / reject wrote (`GET /api/audit/receipt/{audit_event_id}`). Every
+ * field comes from the persisted row; the field set is a closed allowlist.
+ */
+export interface DecisionReceipt {
+  audit_event_id: string;
+  event_type: string;
+  decision: DecisionOutcome;
+  approval_id: string | null;
+  borrower_id: string | null;
+  offer_code: string | null;
+  offer_label: string | null;
+  campaign_id: string | null;
+  variant_name: string | null;
+  channel: string | null;
+  rationale_code: string | null;
+  copy_generation_id: string | null;
+  copy_hash: string | null;
+  approver: string;
+  request_id: string | null;
+  correlation_id: string | null;
+  created_at: string;
+  evidence_ids: string[];
+  evidence_assets: string[];
+}
+
 /**
  * Segment multi-select semantics forwarded to /api/leads and geo rollups.
  * `any` = de-duplicated OR, `all` = AND intersection. Segment Intelligence

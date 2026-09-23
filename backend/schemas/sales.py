@@ -352,6 +352,9 @@ class BorrowerLifecycleResponse(BaseModel):
     approval_status: Literal["pending", "approved", "rejected", "hold"] = "pending"
     outreach_status: OutreachStatus = "none"
     approval_id: str | None = None
+    # The audit row the latest decision (approve, reject or hold) wrote;
+    # the Decision receipt reads it back.
+    audit_event_id: str | None = None
     approved_at: datetime | None = None
     outreach_at: datetime | None = None
     synced_at: datetime | None = None

@@ -12,7 +12,6 @@ import { ConfidenceMeter } from '../components/mortgage/ConfidenceMeter';
 import { Button, Chip } from '../components/Primitives';
 import { useApp } from '../components/AppContext';
 import { approverGateReason } from '../components/mortgage/approverGate';
-import { ActivationLoopPanel } from '../components/activation/ActivationLoopPanel';
 import { invalidateOperationalQueries } from '../lib/queryKeys';
 import { offerDisplayLabel } from '../lib/offerLanguage';
 import { BORROWER_CACHE, clearBorrowerCache, readBorrowerCache } from './offer-orchestrator.cache';
@@ -25,6 +24,7 @@ import {
 } from './offer-orchestrator.panels';
 import { draftProofMatchesSnapshot, offerSnapshotMatches, resolveOfferApprovalStatus } from './offer-orchestrator.snapshot';
 import { OfferSnapshotReconciliation } from './offer-orchestrator.snapshot-status';
+import { OfferDecisionOutcome } from './offer-orchestrator.decision';
 import {
   OfferLoadErrorRoute,
   OfferOrchestratorEmptyRoute,
@@ -50,11 +50,12 @@ export default function OfferOrchestrator() {
   const [approveError, setApproveError] = useState<string | null>(null);
   const [auditId, setAuditId] = useState<string | null>(null);
   const [approvalId, setApprovalId] = useState<string | null>(null);
-  // The approval the user just made in THIS view (borrower + load
-  // generation). The success burst keys off this, never off durable
-  // approval_status, so a stale approval never celebrates again on load and
-  // a reload of the same borrower does not replay it (audit motion-06).
-  const [justApproved, setJustApproved] = useState<{ id: string; reloadToken: number } | null>(null);
+  // The decision the user just made in THIS view (borrower + load
+  // generation). The Decision receipt's one-shot reveal keys off this, never
+  // off durable approval_status, so a stale decision never celebrates again
+  // on load and a reload of the same borrower does not replay it (audit
+  // motion-06; the receipt replaced the .burst chip in wave 1).
+  const [justDecided, setJustDecided] = useState<{ id: string; reloadToken: number } | null>(null);
   const [lifecycle, setLifecycle] = useState<BorrowerLifecycle | null>(null);
   const [approving, setApproving] = useState<boolean>(false);
   const [reloadToken, setReloadToken] = useState<number>(0);
@@ -194,6 +195,11 @@ export default function OfferOrchestrator() {
         setLifecycle(loadedLifecycle);
         if (loadedLifecycle?.approval_id) {
           setApprovalId(loadedLifecycle.approval_id);
+        }
+        // A durable decision's audit row: the receipt reads it back without
+        // the reveal (justDecided stays null on load).
+        if (loadedLifecycle?.audit_event_id) {
+          setAuditId(loadedLifecycle.audit_event_id);
         }
         setWarmingUp(null);
         setLoadError(null);
@@ -513,7 +519,7 @@ export default function OfferOrchestrator() {
         setApproval(id, 'approved');
         setAuditId(res.audit_event_id ?? null);
         setApprovalId(res.approval_id ?? null);
-        setJustApproved({ id, reloadToken });
+        setJustDecided({ id, reloadToken });
         setRoutingConfirm({
           email: res.assigned_to_email ?? (assignedTo || null),
           followUpAt: res.follow_up_at ?? null,
@@ -565,6 +571,7 @@ export default function OfferOrchestrator() {
       if (res.rejected) {
         setApproval(id, 'rejected');
         setAuditId(res.audit_event_id ?? null);
+        setJustDecided({ id, reloadToken });
         clearBorrowerCache(id);
         void invalidateOperationalQueries(queryClient);
         setRejectReviewOpen(false);
@@ -800,64 +807,18 @@ export default function OfferOrchestrator() {
           </div>
         </>
       )}
-      {routingConfirm && (routingConfirm.email || routingConfirm.followUpAt) && (
-        <div className="outreach-routing__confirm mt-grid" role="status" data-testid="routing-confirm">
-          <Chip variant="success">
-            {routingConfirm.email ? `Assigned to ${routingConfirm.email}` : 'Unassigned'}
-            {routingConfirm.followUpAt
-              ? ` · follow-up ${new Date(routingConfirm.followUpAt).toLocaleDateString(undefined, {
-                  month: 'short',
-                  day: 'numeric',
-                })}`
-              : ''}
-          </Chip>
-        </div>
-      )}
-
-      {effectiveApproval === 'approved' && (
-        <>
-          <div className="surface mt-grid">
-            <div className="surface__body surface__body--inline">
-              <span
-                className={
-                  justApproved?.id === id && justApproved.reloadToken === reloadToken
-                    ? 'burst inline-flex'
-                    : 'inline-flex'
-                }
-              >
-                <Chip variant="success" icon="check">Approved · governed internal queue</Chip>
-              </span>
-              {auditId && <span className="mono muted fs-11">audit: {auditId}</span>}
-              {approvalId && <span className="mono muted fs-11">approval: {approvalId}</span>}
-            </div>
-          </div>
-          <ActivationLoopPanel
-            borrowerId={b?.borrower_id ?? id}
-            offerCode={rec?.offer_code ?? b?.recommended_offer_code ?? null}
-            channel={activeDraftChannel}
-            approvalId={approvalId}
-            approved
-          />
-        </>
-      )}
-      {effectiveApproval === 'rejected' && (
-        <div className="surface mt-grid">
-          <div className="surface__body surface__body--inline">
-            <Chip variant="danger" icon="cross">Rejected</Chip>
-            {auditId && <span className="mono muted fs-11">audit: {auditId}</span>}
-          </div>
-        </div>
-      )}
-      {approveError && (
-        <div
-          className="surface surface--danger mt-grid"
-          role="alert"
-        >
-          <div className="surface__body text-danger">
-            {approveError}
-          </div>
-        </div>
-      )}
+      <OfferDecisionOutcome
+        borrowerId={b?.borrower_id ?? id}
+        offerCode={rec?.offer_code ?? b?.recommended_offer_code ?? null}
+        channel={activeDraftChannel}
+        effectiveApproval={effectiveApproval}
+        auditId={auditId}
+        justDecided={justDecided?.id === id && justDecided.reloadToken === reloadToken}
+        approvalId={approvalId}
+        approveError={approveError}
+        routingConfirm={routingConfirm}
+        score={b ? { opportunityScore: b.opportunity_score, confidence: b.confidence } : null}
+      />
     </PageShell>
   );
 }

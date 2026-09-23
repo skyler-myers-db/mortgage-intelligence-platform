@@ -535,6 +535,7 @@ export function LeadTable({
                     salesBusy={sales.salesBusy}
                     salesTeamCount={salesTeam.length}
                     pendingApproval={Boolean(approval.pendingApproval[lead.borrower_id])}
+                    decisionReceipt={approval.decisionReceipts[lead.borrower_id] ?? null}
                     onToggleRow={(row, open) => {
                       setLastBorrowerId(row.borrower_id);
                       setExpanded(open ? null : row.borrower_id);
