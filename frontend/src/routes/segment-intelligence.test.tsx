@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   INITIAL_ACTIVE_SEGMENTS,
   activeSegmentsFromSearch,
+  chipFiltersFromSearch,
   formatSelectedSegmentLabel,
-  lenderFiltersFromSearch,
   segmentCardQuerySelection,
   segmentModeFromSearch,
   segmentSearchParamsForState,
@@ -15,17 +15,17 @@ describe('segment intelligence lender overlay URL state', () => {
   });
 
   it('hydrates public-safe lender overlay filters from the URL', () => {
-    const filters = lenderFiltersFromSearch(
+    const filters = chipFiltersFromSearch(
       new URLSearchParams({
         lender_relationship: 'Competitor customer',
         target_lender_ref: 'Competitor B',
         owner_link: 'Portfolio investor (5+)',
         purchase_intent: 'HELOC intent',
       }),
-      ['All', 'Competitor B'],
+      { targetLenderOptions: ['All', 'Competitor B'] },
     );
 
-    expect(filters).toEqual({
+    expect(filters).toMatchObject({
       lenderRelationship: 'Competitor customer',
       targetLenderRef: 'Competitor B',
       ownerLink: 'Portfolio investor (5+)',
@@ -34,17 +34,17 @@ describe('segment intelligence lender overlay URL state', () => {
   });
 
   it('rejects raw lender strings from URL state', () => {
-    const filters = lenderFiltersFromSearch(
+    const filters = chipFiltersFromSearch(
       new URLSearchParams({
         lender_relationship: 'Wholesale partner',
         target_lender_ref: 'Wells Fargo Bank',
         owner_link: 'Five-property owner',
         purchase_intent: 'Filed permit activity',
       }),
-      ['All', 'Competitor B'],
+      { targetLenderOptions: ['All', 'Competitor B'] },
     );
 
-    expect(filters).toEqual({
+    expect(filters).toMatchObject({
       lenderRelationship: 'All',
       targetLenderRef: 'All',
       ownerLink: 'All',

@@ -214,20 +214,6 @@ export function chipFiltersFromSearch(
   return out;
 }
 
-/** The four lender-overlay filters other routes deep-link with. */
-export function lenderFiltersFromSearch(
-  searchParams: URLSearchParams,
-  targetLenderOptions: readonly string[] = [],
-): Pick<ChipFilters, 'lenderRelationship' | 'targetLenderRef' | 'ownerLink' | 'purchase'> {
-  const all = chipFiltersFromSearch(searchParams, { targetLenderOptions });
-  return {
-    lenderRelationship: all.lenderRelationship,
-    targetLenderRef: all.targetLenderRef,
-    ownerLink: all.ownerLink,
-    purchase: all.purchase,
-  };
-}
-
 /**
  * Patch one chip filter into the URL: the default value removes the key,
  * anything else writes its URL value. Every other param is preserved.
