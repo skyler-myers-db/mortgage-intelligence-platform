@@ -20,6 +20,7 @@ import {
   currentLocation,
   growthAgent,
   mount,
+  navigate,
   openTab,
   registerGrowthAgentRoutePanelHooks,
   rerunGrowthAgentMonitor,
@@ -105,7 +106,7 @@ describe('/ask-genie page tabs', () => {
   });
 
   it('moves selection and focus with the arrow, Home and End keys', async () => {
-    mount('/ask-genie');
+    mount('/ask-genie?tab=workflows');
     await waitUntil(() => tabs().length === 3);
     const press = (key: string) =>
       act(() => {
@@ -115,11 +116,10 @@ describe('/ask-genie page tabs', () => {
       });
 
     act(() => selectedTab().focus());
-    press('ArrowRight');
-    expect(selectedTab().textContent).toBe('Workflows');
-    expect(document.activeElement).toBe(selectedTab());
     press('End');
     expect(selectedTab().textContent).toBe('Saved monitors');
+    expect(document.activeElement).toBe(selectedTab());
+    expect(currentLocation).toBe('/ask-genie?tab=monitors');
     press('ArrowRight');
     expect(selectedTab().textContent).toBe('Ask');
     press('ArrowLeft');
@@ -127,6 +127,13 @@ describe('/ask-genie page tabs', () => {
     press('Home');
     expect(selectedTab().textContent).toBe('Ask');
     expect(currentLocation).toBe('/ask-genie');
+    expect(navigate).not.toHaveBeenCalled();
+    // Arrowing back to the tab the pass began on returns to that history
+    // entry instead of writing another one. `useNavigate` is a spy in this
+    // harness; the real Back step is proven in ask-genie-route.fixture.spec.ts.
+    press('ArrowRight');
+    expect(navigate).toHaveBeenCalledTimes(1);
+    expect(navigate).toHaveBeenCalledWith(-1);
   });
 
   it('shows a run in progress on the Workflows tab, then its result in the same place', async () => {

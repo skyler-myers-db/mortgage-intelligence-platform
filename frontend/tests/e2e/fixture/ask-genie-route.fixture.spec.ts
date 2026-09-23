@@ -72,6 +72,40 @@ test.describe('conversation first', () => {
     await expect(page.getByText('No saved monitors yet.')).toBeVisible();
     await page.keyboard.press('Home');
     await expect(tab(page, 'Ask')).toBeFocused();
+    await expect(page).toHaveURL(/\/ask-genie$/);
+    await expect(composer(page)).toBeVisible();
+  });
+
+  test('one keyboard pass over the tabs is one Back step', async ({ app, page }) => {
+    const historyLength = () => page.evaluate(() => window.history.length);
+    // Wait for the selection to render, not just the URL: the router writes
+    // the URL at once and renders the new tab in a transition, and a key
+    // pressed before that render would move from the previous tab.
+    const expectSelected = async (name: string, url: RegExp) => {
+      await expect(page).toHaveURL(url);
+      await expect(tab(page, name)).toHaveAttribute('aria-selected', 'true');
+    };
+    await app.gotoRoute('/ask-genie');
+    const start = await historyLength();
+    await tab(page, 'Ask').focus();
+    await page.keyboard.press('ArrowRight');
+    await expectSelected('Workflows', /\?tab=workflows$/);
+    await page.keyboard.press('ArrowRight');
+    await expectSelected('Saved monitors', /\?tab=monitors$/);
+    expect(await historyLength(), 'the pass wrote one entry').toBe(start + 1);
+    await page.goBack();
+    await expectSelected('Ask', /\/ask-genie$/);
+
+    // A click is its own step; a keyboard pass after it undoes to it.
+    await tab(page, 'Workflows').click();
+    await expectSelected('Workflows', /\?tab=workflows$/);
+    await page.keyboard.press('ArrowRight');
+    await expectSelected('Saved monitors', /\?tab=monitors$/);
+    await page.keyboard.press('ArrowLeft');
+    await expectSelected('Workflows', /\?tab=workflows$/);
+    await expect(tab(page, 'Workflows')).toBeFocused();
+    await page.goBack();
+    await expectSelected('Ask', /\/ask-genie$/);
     await expect(composer(page)).toBeVisible();
   });
 });
