@@ -201,14 +201,44 @@ describe('AdminAuditExplorer', () => {
     expect(input('ACTOR')).toBe(actor);
   });
 
-  it('refuses an inverted day window without touching the URL', async () => {
+  it('refuses an inverted day window without touching the URL, on the date inputs', async () => {
     await render('/admin-config');
     type(input('SINCE'), '2026-07-14');
     type(input('UNTIL'), '2026-07-01');
     act(() => button(/^Apply filters$/).click());
 
-    expect(container.querySelector('[role="alert"]')?.textContent).toMatch(/on or before/);
+    const alert = container.querySelector('[role="alert"]');
+    expect(alert?.textContent).toMatch(/on or before/);
     expect(seen.location.search).toBe('');
+    for (const label of ['SINCE', 'UNTIL']) {
+      expect(input(label).getAttribute('aria-invalid')).toBe('true');
+      expect(input(label).getAttribute('aria-describedby')).toBe(alert?.id);
+    }
+    for (const label of ['ACTOR', 'CORRELATION ID', 'ENTITY ID', 'ACTION']) {
+      expect(input(label).getAttribute('aria-invalid')).toBe('false');
+      expect(input(label).hasAttribute('aria-describedby')).toBe(false);
+    }
+  });
+
+  it('marks only the actor input when the actor is refused, until it is edited', async () => {
+    await render('/admin-config');
+    type(input('ACTOR'), 'two people');
+    type(input('CORRELATION ID'), 'corr-1');
+    act(() => button(/^Apply filters$/).click());
+
+    const alert = container.querySelector('[role="alert"]');
+    expect(alert?.textContent).toMatch(/^Actor must be a single principal/);
+    expect(input('ACTOR').getAttribute('aria-invalid')).toBe('true');
+    expect(input('ACTOR').getAttribute('aria-describedby')).toBe(alert?.id);
+    expect(input('CORRELATION ID').getAttribute('aria-invalid')).toBe('false');
+    expect(seen.location.search).toBe('');
+
+    // Editing another field leaves the actor refusal standing; fixing the actor retires it.
+    type(input('CORRELATION ID'), 'corr-2');
+    expect(container.querySelector('[role="alert"]')).not.toBeNull();
+    type(input('ACTOR'), 'approver@summit-mortgage.example');
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect(input('ACTOR').getAttribute('aria-invalid')).toBe('false');
   });
 
   it('removes one filter from the URL when its chip is removed', async () => {

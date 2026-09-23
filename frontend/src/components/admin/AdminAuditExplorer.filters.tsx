@@ -9,6 +9,11 @@
  * The form edits a draft; Apply hands the whole set to the parent, which
  * writes it to the URL. A URL change made elsewhere (a deep link, Back, a
  * chip removal) replaces the draft with the new applied set.
+ *
+ * The form is `noValidate`: the date inputs keep `min`/`max` so the picker
+ * greys out an inverted window, but a refused draft is reported by the
+ * governed `role=alert` message below, not the browser's own bubble, and
+ * only the control(s) at fault carry `aria-invalid`.
  */
 import { useState, type FormEvent } from 'react';
 import { Chip } from '../Primitives';
@@ -26,6 +31,7 @@ import {
   hasActiveAuditFilters,
   normalizeAuditEntity,
   type AuditExplorerFilters,
+  type AuditFilterError,
 } from './AdminAuditExplorer.params';
 
 const ERROR_ID = 'audit-filter-error';
@@ -37,8 +43,7 @@ interface FilterFormProps {
 
 export function AuditExplorerFilterForm({ applied, onApply }: FilterFormProps) {
   const [draft, setDraft] = useState<AuditExplorerFilters>(applied);
-  const [entityError, setEntityError] = useState<string | null>(null);
-  const [formError, setFormError] = useState<string | null>(null);
+  const [error, setError] = useState<AuditFilterError | null>(null);
   // A new applied set from outside the form (a deep link, a chip removal,
   // Back) replaces the draft. Adjusted during render rather than by
   // remounting, so the control that submitted keeps keyboard focus.
@@ -47,13 +52,16 @@ export function AuditExplorerFilterForm({ applied, onApply }: FilterFormProps) {
   if (syncedKey !== appliedKey) {
     setSyncedKey(appliedKey);
     setDraft(applied);
-    setEntityError(null);
-    setFormError(null);
+    setError(null);
   }
   const edit = (key: keyof AuditExplorerFilters, value: string) => {
     setDraft((current) => ({ ...current, [key]: value }));
-    if (key === 'entity') setEntityError(null);
-    setFormError(null);
+    // Editing a control at fault retires its message; another field's stays.
+    setError((current) => (current?.fields.includes(key) ? null : current));
+  };
+  const fieldErrorProps = (key: keyof AuditExplorerFilters) => {
+    const invalid = error?.fields.includes(key) ?? false;
+    return { 'aria-invalid': invalid, 'aria-describedby': invalid ? ERROR_ID : undefined };
   };
   const draftDirty = hasActiveAuditFilters(draft);
 
@@ -61,7 +69,7 @@ export function AuditExplorerFilterForm({ applied, onApply }: FilterFormProps) {
     event.preventDefault();
     const entity = normalizeAuditEntity(draft.entity);
     if (entity.error) {
-      setEntityError(entity.error);
+      setError({ fields: ['entity'], message: entity.error });
       return;
     }
     const next: AuditExplorerFilters = {
@@ -76,27 +84,26 @@ export function AuditExplorerFilterForm({ applied, onApply }: FilterFormProps) {
       // asking a new question of the ledger.
       eventId: '',
     };
-    const error = auditFilterDraftError(next);
-    if (error) {
-      setFormError(error);
+    const refusal = auditFilterDraftError(next);
+    if (refusal) {
+      setError(refusal);
       return;
     }
+    setError(null);
     setDraft(next);
     onApply(next);
   };
 
   const clear = () => {
     setDraft(EMPTY_AUDIT_FILTERS);
-    setEntityError(null);
-    setFormError(null);
+    setError(null);
     onApply(EMPTY_AUDIT_FILTERS);
   };
 
-  const error = entityError ?? formError;
   const eventTypeValue = draft.eventType ? eventTypeCodeLabel(draft.eventType) : ALL_EVENT_TYPES_OPTION;
 
   return (
-    <form className="filter-row filter-row--audit" onSubmit={submit} aria-label="Audit filters">
+    <form className="filter-row filter-row--audit" onSubmit={submit} aria-label="Audit filters" noValidate>
       <label className="filter-row__group">
         <span className="field__label">ENTITY ID</span>
         <input
@@ -104,8 +111,7 @@ export function AuditExplorerFilterForm({ applied, onApply }: FilterFormProps) {
           value={draft.entity}
           onChange={(event) => edit('entity', event.target.value)}
           placeholder="B-... or approval UUID"
-          aria-invalid={Boolean(entityError)}
-          aria-describedby={entityError ? ERROR_ID : undefined}
+          {...fieldErrorProps('entity')}
         />
       </label>
       <label className="filter-row__group">
@@ -117,6 +123,7 @@ export function AuditExplorerFilterForm({ applied, onApply }: FilterFormProps) {
           placeholder="approver@lender.example"
           autoComplete="off"
           spellCheck={false}
+          {...fieldErrorProps('actor')}
         />
       </label>
       <div className="filter-row__group">
@@ -135,6 +142,7 @@ export function AuditExplorerFilterForm({ applied, onApply }: FilterFormProps) {
           onChange={(event) => edit('action', event.target.value)}
           placeholder="outreach.approve"
           spellCheck={false}
+          {...fieldErrorProps('action')}
         />
       </label>
       <label className="filter-row__group filter-row__group--date">
@@ -145,6 +153,7 @@ export function AuditExplorerFilterForm({ applied, onApply }: FilterFormProps) {
           value={draft.since}
           max={draft.until || undefined}
           onChange={(event) => edit('since', event.target.value)}
+          {...fieldErrorProps('since')}
         />
       </label>
       <label className="filter-row__group filter-row__group--date">
@@ -155,6 +164,7 @@ export function AuditExplorerFilterForm({ applied, onApply }: FilterFormProps) {
           value={draft.until}
           min={draft.since || undefined}
           onChange={(event) => edit('until', event.target.value)}
+          {...fieldErrorProps('until')}
         />
       </label>
       <label className="filter-row__group">
@@ -165,8 +175,7 @@ export function AuditExplorerFilterForm({ applied, onApply }: FilterFormProps) {
           onChange={(event) => edit('correlationId', event.target.value)}
           placeholder="request correlation id"
           spellCheck={false}
-          aria-invalid={Boolean(formError)}
-          aria-describedby={formError ? ERROR_ID : undefined}
+          {...fieldErrorProps('correlationId')}
         />
       </label>
       <div className="admin-filter-actions">
@@ -184,7 +193,7 @@ export function AuditExplorerFilterForm({ applied, onApply }: FilterFormProps) {
       </div>
       {error && (
         <span id={ERROR_ID} className="filter-row__hint filter-row__hint--full text-danger" role="alert">
-          {error}
+          {error.message}
         </span>
       )}
     </form>

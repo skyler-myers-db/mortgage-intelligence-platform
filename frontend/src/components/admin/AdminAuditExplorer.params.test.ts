@@ -139,9 +139,14 @@ describe('audit explorer API query', () => {
 
   it('refuses an inverted window and a malformed correlation id before applying', () => {
     expect(auditFilterDraftError({ ...EMPTY_AUDIT_FILTERS, since: '2026-07-14', until: '2026-07-01' }))
-      .toMatch(/on or before/);
+      .toEqual({ fields: ['since', 'until'], message: expect.stringMatching(/on or before/) });
     expect(auditFilterDraftError({ ...EMPTY_AUDIT_FILTERS, correlationId: 'has space' }))
-      .toMatch(/Correlation id/);
+      .toEqual({ fields: ['correlationId'], message: expect.stringMatching(/Correlation id/) });
     expect(auditFilterDraftError(FULL)).toBeNull();
+  });
+
+  it('names the field at fault for every refusal', () => {
+    expect(auditFilterDraftError({ ...EMPTY_AUDIT_FILTERS, actor: 'two people' })?.fields).toEqual(['actor']);
+    expect(auditFilterDraftError({ ...EMPTY_AUDIT_FILTERS, action: 'outreach approve' })?.fields).toEqual(['action']);
   });
 });

@@ -233,6 +233,38 @@ test.describe('audit explorer', () => {
     await expect(explorer.locator('table[aria-label="Audit events"] tbody tr[data-audit-event-id]')).toHaveCount(1);
   });
 
+  test('an inverted day window is refused by the governed alert, on the date inputs', async ({ app, page, mockApi }) => {
+    const requests: URLSearchParams[] = [];
+    mockApi.register('GET', '/api/audit/events/page', filteringAuditPage(requests));
+    await app.gotoRoute('/admin-config#audit');
+    const explorer = page.locator('#audit');
+    await expect(explorer.locator('table[aria-label="Audit events"] tbody tr[data-audit-event-id]'))
+      .toHaveCount(EXPLORER_ROWS.length);
+    const requestsBefore = requests.length;
+    const urlBefore = page.url();
+
+    const since = explorer.getByLabel('SINCE', { exact: true });
+    const until = explorer.getByLabel('UNTIL', { exact: true });
+    await since.fill('2026-07-14');
+    await until.fill('2026-07-01');
+    await explorer.getByRole('button', { name: 'Apply filters' }).click();
+
+    // Chromium's own constraint bubble would block the submit and say nothing
+    // governed; the form is noValidate, so the product's message is what shows.
+    const alert = explorer.getByRole('alert');
+    await expect(alert).toHaveText('The "since" day must be on or before the "until" day.');
+    await expect(alert).toBeVisible();
+    const alertId = await alert.getAttribute('id');
+    for (const field of [since, until]) {
+      await expect(field).toHaveAttribute('aria-invalid', 'true');
+      await expect(field).toHaveAttribute('aria-describedby', alertId ?? '');
+    }
+    await expect(explorer.getByLabel('CORRELATION ID', { exact: true })).toHaveAttribute('aria-invalid', 'false');
+    await expect(explorer.getByLabel('ACTOR', { exact: true })).toHaveAttribute('aria-invalid', 'false');
+    expect(page.url()).toBe(urlBefore);
+    expect(requests).toHaveLength(requestsBefore);
+  });
+
   test('a deep link opens its event; its correlation id opens the whole request', async ({ app, page, mockApi }) => {
     const requests: URLSearchParams[] = [];
     mockApi.register('GET', '/api/audit/events/page', filteringAuditPage(requests));

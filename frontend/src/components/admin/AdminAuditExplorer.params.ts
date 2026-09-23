@@ -181,19 +181,32 @@ export function auditEventPageQuery(filters: AuditExplorerFilters): AuditEventPa
   };
 }
 
+/** A drafted filter set the form refuses, and the controls at fault. */
+export interface AuditFilterError {
+  /** The fields to mark `aria-invalid` and point at the message. */
+  fields: ReadonlyArray<keyof AuditExplorerFilters>;
+  message: string;
+}
+
 /** Why a drafted filter set cannot be applied, or null when it can. */
-export function auditFilterDraftError(filters: AuditExplorerFilters): string | null {
+export function auditFilterDraftError(filters: AuditExplorerFilters): AuditFilterError | null {
   if (filters.since && filters.until && filters.since > filters.until) {
-    return 'The "since" day must be on or before the "until" day.';
+    return { fields: ['since', 'until'], message: 'The "since" day must be on or before the "until" day.' };
   }
   if (filters.actor && !ACTOR_RE.test(filters.actor)) {
-    return 'Actor must be a single principal, e.g. an email address, with no spaces.';
+    return {
+      fields: ['actor'],
+      message: 'Actor must be a single principal, e.g. an email address, with no spaces.',
+    };
   }
   if (filters.correlationId && !CORRELATION_RE.test(filters.correlationId)) {
-    return 'Correlation id may use letters, numbers and . _ - only (up to 128).';
+    return {
+      fields: ['correlationId'],
+      message: 'Correlation id may use letters, numbers and . _ - only (up to 128).',
+    };
   }
   if (filters.action && !ACTION_RE.test(filters.action)) {
-    return 'Action must look like outreach.approve (letters, numbers, . _ -).';
+    return { fields: ['action'], message: 'Action must look like outreach.approve (letters, numbers, . _ -).' };
   }
   return null;
 }
