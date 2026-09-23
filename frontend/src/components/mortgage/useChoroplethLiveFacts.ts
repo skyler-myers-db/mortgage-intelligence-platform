@@ -64,8 +64,13 @@ export interface UseChoroplethLiveFactsInput {
 
 function geoRead<T>(result: UseWarmingUpRetryResult<T>, enabled: boolean): GeoRead<T> {
   const data = enabled ? result.data : null;
-  const warmingUp = enabled ? result.warmingUp : null;
   const error = enabled && data === null ? result.error : null;
+  // Once the retry budget is spent, react-query keeps the last 503 as its
+  // `failureReason`, so the hook still reports a warming state ("attempt 6
+  // of 6") that nothing will ever retry. A final error ends the loop: the
+  // stage shows Retry instead. A manual or health-recovery refetch clears
+  // the error while no data exists, so a new loop reads as warming again.
+  const warmingUp = enabled && error === null ? result.warmingUp : null;
   return {
     data,
     warmingUp,

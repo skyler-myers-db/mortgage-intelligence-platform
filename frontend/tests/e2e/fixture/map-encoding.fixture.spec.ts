@@ -336,6 +336,39 @@ test.describe('resilience (dataviz-04)', () => {
     await expect(page.locator('.map-legend__value')).toHaveText(TOTALS.addressable.toLocaleString('en-US'));
     await expect(page.locator('.map-corner-chips')).toContainText('click a state to drill');
   });
+
+  test('a spent retry budget ends the warming line with Retry, and the health recovery repaints the map with no click', async ({ app, mockApi, page }) => {
+    // Six attempts at the 5 s warming cadence run out after ~25 s; the
+    // health recovery then needs a few 3 s polls and the 5 s up-debounce.
+    test.setTimeout(150_000);
+    const warehouseUp = coldWarehouseHealth(mockApi);
+    await app.setTheme('dark');
+    const recover = app.degrade('/api/geo/state-rollups', WAREHOUSE_WARMING_UP);
+    await app.gotoRoute('/');
+
+    const stage = page.locator('.map-wrap .map-stage');
+    await expect(stage).toContainText('Retrying automatically', { timeout: 20_000 });
+    // The loop ends: no "attempt 6 of 6 ... Retrying automatically" left on
+    // screen forever, but a failed read that offers Retry.
+    const retry = stage.getByRole('button', { name: 'Retry' });
+    await expect(retry).toBeVisible({ timeout: 90_000 });
+    await expect(stage).toContainText('State borrower rollups could not load.');
+    await expect(stage).not.toContainText('Retrying automatically');
+    await expect(page.locator('.map-status')).toHaveText('State borrower rollups could not load.');
+    await expect(page.locator('.map-legend__value')).toHaveText('—');
+    await expect(page.locator('.map-wrap')).not.toContainText(/Borrowers in selection\s*0\b/);
+    expect(stateRollupCalls(mockApi, 200)).toBe(0);
+
+    // The warehouse comes back. Nothing is clicked: the retry loop is over,
+    // so only the health poll's down -> up refetch can repaint the map.
+    recover();
+    warehouseUp();
+    await expect(page.locator('path.map-region.has-data').first()).toBeVisible({ timeout: 45_000 });
+    await waitForStateFills(page);
+    await expect(retry).toHaveCount(0);
+    await expect(page.locator('.map-legend__value')).toHaveText(TOTALS.addressable.toLocaleString('en-US'));
+    expect(stateRollupCalls(mockApi, 200)).toBeGreaterThan(0);
+  });
 });
 
 test.describe('controlled, deep-linkable drill (dataviz-04)', () => {
