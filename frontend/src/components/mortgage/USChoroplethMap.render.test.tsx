@@ -8,6 +8,8 @@ import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { USChoroplethMap } from './USChoroplethMap';
 import type { StateRollupResponse, ZipRollupResponse } from '../../types';
+import { genieStatePrompt } from '../../lib/genieContext';
+import { consumeGeniePrefill, subscribeGenieOpenRequests } from '../../lib/genieOpen';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -188,6 +190,39 @@ describe('USChoroplethMap state -> ZIP drill', () => {
     );
     expect(codes).toEqual(['60611', '60647']);
     expect(document.querySelector('.zip-tile__count')?.textContent).toBe('94');
+  });
+
+  it('offers "Ask Genie about this state" on the drilled state only, and it prefills the reviewed state prompt', async () => {
+    const opens: number[] = [];
+    const unsubscribe = subscribeGenieOpenRequests(() => opens.push(1));
+    try {
+      await act(async () => {
+        root.render(
+          <MemoryRouter>
+            <USChoroplethMap />
+          </MemoryRouter>,
+        );
+      });
+      await waitForSelector('path[aria-label="Illinois"]');
+      // The national view has no entry point: the hover tooltip is not
+      // interactive, so the drilled state is where it lives.
+      expect(document.querySelector('button[aria-label^="Ask Genie about this state"]')).toBeNull();
+
+      await drillIntoIllinois();
+      const entry = await waitForSelector<HTMLButtonElement>('button[aria-label="Ask Genie about this state: Illinois"]');
+      expect(entry).toBeTruthy();
+      await act(async () => entry?.click());
+
+      const prompt = consumeGeniePrefill();
+      expect(prompt).toBe(genieStatePrompt('IL'));
+      expect(prompt).toBe('Which 5 ZIP codes in Illinois have the most in-the-money borrowers?');
+      // Only the state reaches the template: no ZIP, no borrower id.
+      expect(prompt).not.toMatch(/\d{5}|B-[0-9A-Z]{13}/);
+      expect(opens).toEqual([1]);
+    } finally {
+      unsubscribe();
+      consumeGeniePrefill();
+    }
   });
 
   it('labels the drill by state, not by county', async () => {

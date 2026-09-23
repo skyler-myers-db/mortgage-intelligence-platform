@@ -5,6 +5,8 @@ import { EvidenceChip } from '../Primitives';
 import { segmentEvidenceSource } from '../../lib/drawerSources';
 import { segmentByCode, segmentIcon } from '../../lib/segmentMetadata';
 import { DRAWER_SOURCES } from '../../lib/drawerSources';
+import { genieSegmentPrompt } from '../../lib/genieContext';
+import { GenieAskAbout } from './GenieAskAbout';
 
 const FACET_LABELS: Record<string, string> = {
   conventional: 'Conv',
@@ -191,6 +193,14 @@ export function SegmentCard({ segment, selected, updating, onClick }: SegmentCar
             evidence
           </EvidenceChip>
         </span>
+        {/* "Ask Genie about this segment" (genie-04): keyed by the registered
+            segment code, so the prompt carries the registry's own name. A
+            gated segment has no rows to ask about. */}
+        {!gated && (
+          <span className="seg-card__ask">
+            <GenieAskAbout prompt={genieSegmentPrompt(segment.code)} subject={`${displayName} segment`} variant="icon" />
+          </span>
+        )}
       </div>
       {!gated && hasFacets && (
         <div className="seg-card__facets">

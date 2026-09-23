@@ -51,7 +51,20 @@ export function GenieRowsVisual({
   const chart = plan.chart;
   const visibleRows = rows.slice(0, MAX_TABLE_ROWS);
   const hiddenRows = Math.max(0, rows.length - MAX_TABLE_ROWS);
-  const columns = visibleRows[0] ? Object.keys(visibleRows[0]).slice(0, MAX_TABLE_COLS) : [];
+  const allColumns = visibleRows[0] ? Object.keys(visibleRows[0]) : [];
+  const columns = allColumns.slice(0, MAX_TABLE_COLS);
+  // Columns past the cap used to be dropped without a word (audit 2026-09-21
+  // `genie-06`). They are named below the table, in the same humanized form
+  // as the headers, so the reader knows what the answer holds that the
+  // compact table does not show.
+  const hiddenColumns = allColumns.slice(MAX_TABLE_COLS);
+  const hiddenColumnsNote =
+    hiddenColumns.length > 0 ? (
+      <div className="genie-answer__more genie-answer__hidden-columns">
+        {hiddenColumns.length} column{hiddenColumns.length === 1 ? '' : 's'} not shown:{' '}
+        {hiddenColumns.map(humanizeKey).join(', ')}
+      </div>
+    ) : null;
   return (
     <>
       {/* FIX Δ3: chart renders BEFORE the underlying table so the user
@@ -66,13 +79,19 @@ export function GenieRowsVisual({
         <GenieMapChart rows={rows} x={plan.viz?.x ?? chart?.labelCol} y={plan.viz?.y ?? chart?.valueCol} />
       )}
       {plan.kind === 'line' && chart && (
-        <GenieLineChart data={chart.rows} labelCol={chart.labelCol} valueCol={chart.valueCol} />
+        <GenieLineChart
+          data={chart.rows}
+          labelCol={chart.labelCol}
+          valueCol={chart.valueCol}
+          tableRowCount={rows.length}
+        />
       )}
       {(plan.kind === 'bar' || plan.kind === 'funnel' || (!['strategy_board', 'borrower_list', 'map', 'line'].includes(plan.kind) && chart)) && chart && (
         <GenieBarChart
           data={chart.rows}
           labelCol={chart.labelCol}
           valueCol={chart.valueCol}
+          tableRowCount={rows.length}
         />
       )}
       {/* A single METRIC row is a set of headline facts, not a table —
@@ -87,20 +106,23 @@ export function GenieRowsVisual({
       columns.every((c) => !isIdentifierColumn(c)) &&
       // Warehouse rows arrive as strings — coerce like the chart layer does.
       columns.some((c) => coerceNumber(visibleRows[0][c]) !== null) ? (
-        <dl className="genie-answer__stats" aria-label="Genie answer headline facts">
-          {columns.map((c) => {
-            const v = visibleRows[0][c];
-            const isNum = coerceNumber(v) !== null && !isIdentifierColumn(c);
-            return (
-              <div key={c} className="genie-answer__stat">
-                <dt className="genie-answer__stat-label">{humanizeKey(c)}</dt>
-                <dd className={`genie-answer__stat-value${isNum ? ' num' : ''}`}>
-                  {formatCell(c, v)}
-                </dd>
-              </div>
-            );
-          })}
-        </dl>
+        <>
+          <dl className="genie-answer__stats" aria-label="Genie answer headline facts">
+            {columns.map((c) => {
+              const v = visibleRows[0][c];
+              const isNum = coerceNumber(v) !== null && !isIdentifierColumn(c);
+              return (
+                <div key={c} className="genie-answer__stat">
+                  <dt className="genie-answer__stat-label">{humanizeKey(c)}</dt>
+                  <dd className={`genie-answer__stat-value${isNum ? ' num' : ''}`}>
+                    {formatCell(c, v)}
+                  </dd>
+                </div>
+              );
+            })}
+          </dl>
+          {hiddenColumnsNote}
+        </>
       ) : (
         visibleRows.length > 0 &&
         columns.length > 0 && (
@@ -152,6 +174,7 @@ export function GenieRowsVisual({
             {hiddenRows > 0 && (
               <div className="genie-answer__more">+{hiddenRows} more row{hiddenRows === 1 ? '' : 's'}</div>
             )}
+            {hiddenColumnsNote}
           </>
         )
       )}

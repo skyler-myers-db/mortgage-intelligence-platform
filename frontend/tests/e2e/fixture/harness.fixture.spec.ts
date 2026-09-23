@@ -144,7 +144,9 @@ test.describe('shell helpers', () => {
   });
 
   test('openGenie opens the floating panel with the fixture sample questions', async ({ app }) => {
-    await app.gotoRoute('/glossary');
+    // /ask-genie is the route whose floating panel shows the server's sample
+    // questions; every other route curates its own starters (genie-04).
+    await app.gotoRoute('/ask-genie');
     const dialog = await app.openGenie();
     await expect(dialog).toContainText('Which states have the most prime refi candidates?');
   });

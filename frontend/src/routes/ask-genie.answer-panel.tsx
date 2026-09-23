@@ -7,6 +7,7 @@ import { Icon } from '../components/Icon';
 import { GenieAnswer } from '../components/mortgage/GenieAnswer';
 import { GenieHistoryMenu } from '../components/mortgage/GenieHistoryMenu';
 import { GenieProgress } from '../components/mortgage/GenieProgress';
+import { GenieTurnActions } from '../components/mortgage/GenieTurnActions';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { drawerForAsset } from '../lib/drawerSources';
 import {
@@ -227,6 +228,41 @@ export function AskGenieAnswerPanel({
   const turnKey = (turn: GenieTurn, index: number) =>
     `${turn.response.message_id ?? turn.response.question_hash ?? 'turn'}-${index}`;
 
+  // Conversational controls (audit 2026-09-21 `genie-03`, client-only slice):
+  // ArrowUp in an empty composer recalls the last question; Edit reloads a
+  // sent question; Regenerate / Retry re-ask it as a NEW turn through the
+  // same `onAsk` path (and the same server-side guards). Stop needs the
+  // route's fetch lifecycle (routes/ask-genie.tsx) and lands with the shared
+  // turn hook; the floating panel has it today.
+  const lastQuestion =
+    submittedQuestion ??
+    [...thread].reverse().find((turn) => turn.question.trim().length > 0)?.question ??
+    null;
+  const editQuestion = (text: string) => {
+    onQuestionChange(text);
+    questionRef.current?.focus();
+  };
+  const reaskDisabledReason = inFlight ? 'Genie is still answering. This unlocks when the answer lands.' : null;
+  const questionBubble = (turn: GenieTurn) => {
+    const source = turn.response.source ?? '';
+    // Refusals and data gaps would only repeat themselves: Edit only.
+    const reask = source === 'degraded' ? 'retry' : BLOCKED_SOURCES.has(source) ? null : 'regenerate';
+    return (
+      <>
+        <div className="genie__msg genie__msg--user">{turn.question}</div>
+        <GenieTurnActions
+          placement="question"
+          question={turn.question}
+          onEdit={editQuestion}
+          onRetry={reask === 'retry' ? onAsk : undefined}
+          onRegenerate={reask === 'regenerate' ? onAsk : undefined}
+          disabled={inFlight}
+          disabledReason={reaskDisabledReason}
+        />
+      </>
+    );
+  };
+
   return (
     <div className="surface">
       <div className="surface__hdr surface__hdr--split">
@@ -253,6 +289,13 @@ export function AskGenieAnswerPanel({
             onQuestionChange(e.target.value);
           }}
           onKeyDown={(e) => {
+            // ArrowUp in an EMPTY composer recalls the last question
+            // (genie-03). A non-empty draft keeps the caret movement.
+            if (e.key === 'ArrowUp' && question.length === 0 && lastQuestion) {
+              e.preventDefault();
+              onQuestionChange(lastQuestion);
+              return;
+            }
             // 2026-05-04 (FIX Δ1): standard chat keymap — Enter
             // submits, Shift+Enter inserts a newline. Match how
             // Slack / GitHub PRs behave so the keyboard-first user
@@ -370,9 +413,7 @@ export function AskGenieAnswerPanel({
             )}
             {latest && (
               <>
-                {latest.question && (
-                  <div className="genie__msg genie__msg--user">{latest.question}</div>
-                )}
+                {latest.question && questionBubble(latest)}
                 <GenieThreadTurn
                   key={turnKey(latest, thread.length - 1)}
                   turn={latest}
@@ -390,9 +431,7 @@ export function AskGenieAnswerPanel({
                 must stay a DIRECT flex child of it. */}
             {earlier.map((turn, i) => (
               <Fragment key={turnKey(turn, earlier.length - 1 - i)}>
-                {turn.question && (
-                  <div className="genie__msg genie__msg--user">{turn.question}</div>
-                )}
+                {turn.question && questionBubble(turn)}
                 <GenieThreadTurn
                   turn={turn}
                   onFollowUp={onFollowUp}
