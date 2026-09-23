@@ -58,6 +58,12 @@ const REFUSAL_ANSWERS: Record<GenieRefusalReason, string> = {
   unknown: 'This question stopped before a live result.',
 };
 
+/** `load_sample_questions()[:2]` stand-ins (genie_deterministic outreach branch). */
+const OUTREACH_SAMPLE_FOLLOW_UPS = [
+  'Which states have the most prime refi candidates?',
+  'How many HELOC-intent borrowers have at least 40% equity?',
+];
+
 export function refusalReportHash(question: string): string {
   const validated = question.replace(/\s+/g, ' ').trim();
   return createHash('sha256').update(validated, 'utf8').digest('hex');
@@ -81,7 +87,9 @@ export function refusedTurn(reason: GenieRefusalReason, question: string): Genie
       conversation_id: null,
     },
     table_rows: [],
-    follow_up_questions: [],
+    // The backend's outreach branch attaches two generic sample questions;
+    // the card's own chips must be the only "Ask" row on a refusal.
+    follow_up_questions: reason === 'outreach_instruction' ? OUTREACH_SAMPLE_FOLLOW_UPS : [],
     // The `unknown` family is what an older backend produces: no wire family.
     refusal_reason: reason === 'unknown' ? null : reason,
     refusal_report_hash: refusalReportHash(question),

@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from backend.services import genie_prompt_guardrails
 from backend.services.genie_deterministic import _is_outreach_writer_request
 from backend.services.genie_message_policy import (
     GenieMessageRequest,
@@ -74,3 +75,28 @@ def test_every_chip_passes_the_real_prompt_guards(family: str, chip: str) -> Non
     intercepted = [name for name, matcher in _PROMPT_MATCHERS if matcher(chip)]
     assert intercepted == [], f"{family}: guard(s) {intercepted} intercepted chip {chip!r}"
     assert GenieMessageRequest(question=chip).question == chip
+
+
+class _NoCoverageFootprint:
+    """A lender whose refreshed coverage holds no state at all (worst case)."""
+
+    def state_codes(self) -> list[str]:
+        return []
+
+    def using_fallback(self) -> bool:
+        return True
+
+
+@pytest.mark.parametrize(("family", "chip"), _all_chips())
+def test_every_chip_is_answerable_under_any_coverage_footprint(
+    family: str, chip: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Coverage follows the current Cotality refresh, so a chip that named a
+    # state could be refused as out-of-footprint (or footprint-unknown) for
+    # some lender. With an EMPTY footprint any state mention or geography
+    # hint trips these matchers, so passing here means no footprint can.
+    monkeypatch.setattr(
+        genie_prompt_guardrails, "get_state_footprint_resolver", lambda: _NoCoverageFootprint()
+    )
+    assert genie_prompt_guardrails.outside_footprint_match(chip) is None, family
+    assert genie_prompt_guardrails.footprint_metadata_gap_match(chip) is None, family
