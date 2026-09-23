@@ -22,7 +22,7 @@ import { auditEventCode, auditEventLabel } from './AdminAuditExplorer.labels';
 export const AUDIT_TABLE_CONTEXT = 'mip_app.action_audit';
 
 export function formatAuditTimestamp(iso: string): string {
-  return formatTimestamp(iso, { withYear: false });
+  return formatTimestamp(iso, { withYear: 'auto' });
 }
 
 function auditEventDetailId(eventId: string): string {

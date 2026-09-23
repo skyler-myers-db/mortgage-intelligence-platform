@@ -10,7 +10,8 @@ import { KpiCard } from '../components/mortgage/KpiCard';
 import { friendlyAssetLabel } from '../lib/assetLabels';
 import { formatCompact, formatCount, formatFixed, formatUsdCompact, pct, signedBpsLabel } from '../lib/formatters';
 import { offerDisplayLabel } from '../lib/offerLanguage';
-import { formatTimestamp } from '../lib/time';
+import { formatDate, formatTimestamp } from '../lib/time';
+import { Timestamp } from '../components/ui/Timestamp';
 import type {
   EconomicsAnalyticsResponse,
   EvidenceBySignalRow,
@@ -71,7 +72,7 @@ export function ExecutiveProvenanceNote({
   return (
     <p className="analytics-panel-note">
       Stages 1&ndash;4 from <span className="mono">{provenance.population_source}</span>
-      {provenance.snapshot_date ? <> (snapshot {provenance.snapshot_date})</> : null}. Approved and
+      {provenance.snapshot_date ? <> (snapshot <Timestamp value={provenance.snapshot_date} format="date" />)</> : null}. Approved and
       Actioned from <span className="mono">{provenance.workflow_source}</span>, the gold mirror of
       Lakebase
       {provenance.lifecycle_synced_at ? <>, synced {formatTimestamp(provenance.lifecycle_synced_at)}</> : null}.
@@ -95,7 +96,7 @@ export function ExecutiveView({
   return (
     <>
       <div className="kpi-row">
-        <KpiCard label="Addressable Borrowers" value={formatCount(data.totals.addressable_borrowers)} delta={data.totals.snapshot_date ?? undefined} deltaDir="flat" />
+        <KpiCard label="Addressable Borrowers" value={formatCount(data.totals.addressable_borrowers)} delta={data.totals.snapshot_date ? `Snapshot ${formatDate(data.totals.snapshot_date)}` : undefined} deltaDir="flat" />
         <KpiCard label="Refi Economics" value={formatCount(data.totals.in_the_money_borrowers)} delta={`${formatCount(data.totals.high_opportunity_borrowers)} score ${HIGH_OPPORTUNITY_SCORE_LABEL}`} deltaDir="up" />
         <KpiCard label="Primary Offer Paths" value={formatCount(data.totals.offer_recommended_borrowers)} delta="Offer path assigned" deltaDir="up" />
         <KpiCard label="Approved Outreach" value={formatCount(data.totals.approved_borrowers)} delta={`${formatCount(data.totals.actioned_borrowers)} actioned`} deltaDir="flat" />

@@ -10,6 +10,7 @@
 import type { RateWindowResponse } from '../types';
 import { roundTo } from '../lib/fixedPrecision';
 import { ratePct } from '../lib/formatters';
+import { DATE_UNKNOWN, formatMonthYear as formatMonthYearLabel } from '../lib/time';
 import { categoricalTickIndexes } from './analytics.lib';
 
 export const RATE_WINDOW_TITLE = 'Why now: the market rate against the book';
@@ -72,10 +73,8 @@ export function formatRatePct(value: number): string {
 
 /** "Jan 2021" for a YYYY-MM-DD week label on the shared x-axis. */
 export function formatMonthYear(isoDate: string): string {
-  const [year, month, day] = isoDate.split('-').map((part) => Number(part));
-  if (!year || !month || !day) return isoDate;
-  return new Intl.DateTimeFormat('en-US', { month: 'short', year: 'numeric', timeZone: 'UTC' })
-    .format(new Date(Date.UTC(year, month - 1, day)));
+  const label = formatMonthYearLabel(isoDate);
+  return label === DATE_UNKNOWN ? isoDate : label;
 }
 
 export interface RateWindowPoint {

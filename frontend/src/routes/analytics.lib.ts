@@ -14,6 +14,7 @@ import type {
 import { HIGH_OPPORTUNITY_KPI_LABEL } from '../lib/opportunityScore';
 import { fixedAttr } from '../lib/fixedPrecision';
 import { formatCompact, formatCount, formatPercent } from '../lib/formatters';
+import { formatDate } from '../lib/time';
 
 export type AnalyticsTab = 'executive' | 'geography' | 'economics' | 'segments' | 'signals' | 'approval-funnel' | 'sales-ops';
 
@@ -201,14 +202,9 @@ export function formatAxisTick(value: number, compact = false): string {
   return compact ? formatCompact(rounded) : formatCount(rounded);
 }
 
+/** "Jul 14" for a YYYY-MM-DD axis label: lib/time, never shifted by the viewer zone. */
 export function formatShortDate(value: string): string {
-  const [year, month, day] = value.split('-').map((part) => Number(part));
-  if (!year || !month || !day) return value;
-  return new Intl.DateTimeFormat('en-US', {
-    month: 'short',
-    day: 'numeric',
-    timeZone: 'UTC',
-  }).format(new Date(Date.UTC(year, month - 1, day)));
+  return formatDate(value, { withYear: false });
 }
 
 function dateToUtc(value: string): number | null {

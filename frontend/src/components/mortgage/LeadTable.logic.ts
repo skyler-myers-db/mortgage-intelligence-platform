@@ -180,14 +180,6 @@ export function dispositionVariant(outcome?: string | null): 'success' | 'warnin
   return 'neutral';
 }
 
-export function formatDateTimeShort(value?: string | null): string {
-  if (!value) return '—';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
-}
+// The zone-aware lib/time form (responsive-07): the old copy here parsed a
+// naive UTC wire timestamp as viewer-local and printed no zone.
+export { formatDateTimeShort } from '../../lib/time';

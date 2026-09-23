@@ -241,7 +241,7 @@ export function BorrowerProofDrawer({ borrowerId, open, onClose }: BorrowerProof
                       <div className="proof-evidence-row__meta">
                         <span className="mono">{row.signal_type}</span>
                         <span className="mono num">{formatFixed(row.confidence, 3)} evidence confidence</span>
-                        <span className="mono">{formatTimestamp(row.timestamp, { withYear: false })}</span>
+                        <span className="mono">{formatTimestamp(row.timestamp, { withYear: 'auto' })}</span>
                       </div>
                     </div>
                   ))}
