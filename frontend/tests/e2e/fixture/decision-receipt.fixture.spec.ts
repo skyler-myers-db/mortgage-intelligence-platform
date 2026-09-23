@@ -197,9 +197,13 @@ test.describe('decision receipt', () => {
     expect(receiptCalls(mockApi), 'one read-back per decision').toBe(1);
   });
 
-  test('lead queue reads back the ledger row in the expanded row after a row approve', async ({ app, page, mockApi }) => {
+  // The Default preset fits the 1440 scrollport (queue-layout lane); the
+  // Sales ops preset keeps the table wider than it, so clicking Approve
+  // scrolls it right. The receipt must fit the visible width in both.
+  for (const view of ['default', 'sales-ops'] as const) {
+  test(`lead queue reads back the ledger row in the expanded row after a row approve (${view} view)`, async ({ app, page, mockApi }) => {
     const flow = registerHeldApproveFlow(mockApi);
-    await app.gotoRoute('/lead-queue');
+    await app.gotoRoute(view === 'sales-ops' ? '/lead-queue?view=sales-ops' : '/lead-queue');
     await app.expandFirstLeadRow();
     // The expanded row that belongs to this borrower: the sibling of the row
     // holding its approval cell (the cell outlives the Approve button).
@@ -255,7 +259,7 @@ test.describe('decision receipt', () => {
     });
     expect(fit, 'the receipt sits inside the lead table scrollport').not.toBeNull();
     if (!fit) return;
-    expect(fit.tableOverflows, 'precondition: the table is wider than its scrollport').toBe(true);
+    expect(fit.tableOverflows, 'precondition: only Sales ops is wider than its scrollport').toBe(view === 'sales-ops');
     expect(fit.cardLeft, 'the receipt starts inside the visible width').toBeGreaterThanOrEqual(fit.portLeft - 1);
     expect(fit.cardRight, 'the receipt ends inside the visible width').toBeLessThanOrEqual(fit.portRight + 1);
     expect(fit.linkRight, 'the explorer link is visible without scrolling').toBeLessThanOrEqual(fit.portRight + 1);
@@ -274,6 +278,7 @@ test.describe('decision receipt', () => {
     await expect(again, 'the re-expanded receipt does not replay the reveal').not.toHaveClass(/decision-receipt--reveal/);
     expect(receiptCalls(mockApi), 'the re-expanded receipt reuses the read-back').toBe(1);
   });
+  }
 
   test('reject reads back a rejected receipt with its reason code', async ({ app, page, mockApi }) => {
     mockApi.register('POST', '/api/outreach/reject', () => rejectResult(REJECT_AUDIT_ID));

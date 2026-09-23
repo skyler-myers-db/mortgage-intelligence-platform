@@ -32,8 +32,10 @@ function navLink(page: Page, name: string) {
 test.describe('the persistent .main scroller', () => {
   test('resets on a new route, restores on Back, and lands a #hash target under the nav', async ({ app, page }) => {
     await app.gotoRoute('/');
-    const scrolled = await scrollMainTo(page, 600);
-    expect(scrolled, 'Home is tall enough to scroll to 600').toBe(600);
+    // 400, not 600: the home-answer lane pulled the map above the fold and
+    // Home now scrolls about 570px at 1440x900.
+    const scrolled = await scrollMainTo(page, 400);
+    expect(scrolled, 'Home is tall enough to scroll to 400').toBe(400);
 
     await navLink(page, 'Analytics').click();
     await expect(page.locator('#main-content h1')).toHaveText('Analytics');
@@ -43,8 +45,8 @@ test.describe('the persistent .main scroller', () => {
     await page.goBack();
     await expect(page).toHaveURL(/\/$/);
     await app.settle();
-    await expect.poll(() => mainScrollTop(page), 'Back restores the saved offset').toBeGreaterThanOrEqual(598);
-    expect(await mainScrollTop(page)).toBeLessThanOrEqual(602);
+    await expect.poll(() => mainScrollTop(page), 'Back restores the saved offset').toBeGreaterThanOrEqual(398);
+    expect(await mainScrollTop(page)).toBeLessThanOrEqual(402);
 
     // A glossary term link is a client-side navigation with a #hash: the
     // entry scrolls under the sticky route nav and takes focus.

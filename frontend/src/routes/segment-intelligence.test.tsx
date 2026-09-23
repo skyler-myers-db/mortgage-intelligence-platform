@@ -2,12 +2,12 @@ import { describe, expect, it } from 'vitest';
 import {
   INITIAL_ACTIVE_SEGMENTS,
   activeSegmentsFromSearch,
+  chipFiltersFromSearch,
   formatSelectedSegmentLabel,
-  lenderFiltersFromSearch,
   segmentCardQuerySelection,
   segmentModeFromSearch,
   segmentSearchParamsForState,
-} from './segment-intelligence';
+} from './segment-intelligence.filters';
 
 describe('segment intelligence lender overlay URL state', () => {
   it('starts without a selected segment so cards render standalone counts', () => {
@@ -15,17 +15,17 @@ describe('segment intelligence lender overlay URL state', () => {
   });
 
   it('hydrates public-safe lender overlay filters from the URL', () => {
-    const filters = lenderFiltersFromSearch(
+    const filters = chipFiltersFromSearch(
       new URLSearchParams({
         lender_relationship: 'Competitor customer',
         target_lender_ref: 'Competitor B',
         owner_link: 'Portfolio investor (5+)',
         purchase_intent: 'HELOC intent',
       }),
-      ['All', 'Competitor B'],
+      { targetLenderOptions: ['All', 'Competitor B'] },
     );
 
-    expect(filters).toEqual({
+    expect(filters).toMatchObject({
       lenderRelationship: 'Competitor customer',
       targetLenderRef: 'Competitor B',
       ownerLink: 'Portfolio investor (5+)',
@@ -34,17 +34,17 @@ describe('segment intelligence lender overlay URL state', () => {
   });
 
   it('rejects raw lender strings from URL state', () => {
-    const filters = lenderFiltersFromSearch(
+    const filters = chipFiltersFromSearch(
       new URLSearchParams({
         lender_relationship: 'Wholesale partner',
         target_lender_ref: 'Wells Fargo Bank',
         owner_link: 'Five-property owner',
         purchase_intent: 'Filed permit activity',
       }),
-      ['All', 'Competitor B'],
+      { targetLenderOptions: ['All', 'Competitor B'] },
     );
 
-    expect(filters).toEqual({
+    expect(filters).toMatchObject({
       lenderRelationship: 'All',
       targetLenderRef: 'All',
       ownerLink: 'All',
@@ -79,6 +79,8 @@ describe('segment intelligence lender overlay URL state', () => {
       segment_mode: 'all',
     });
 
+    // A multi-card selection always carries its mode (the cross-route
+    // convention the Lead Queue shares).
     const any = segmentSearchParamsForState(base, ['itm', 'equity'], 'any');
     expect(any.get('owner_link')).toBe('Portfolio investor (5+)');
     expect(any.get('segment')).toBeNull();
@@ -90,10 +92,12 @@ describe('segment intelligence lender overlay URL state', () => {
     expect(single.get('segment_codes')).toBeNull();
     expect(single.get('segment_mode')).toBeNull();
 
+    // The URL is the only copy of the mode now, so a user who picks
+    // "All selected" before the cards keeps the choice.
     const emptyIntersection = segmentSearchParamsForState(single, [], 'all');
     expect(emptyIntersection.get('segment')).toBeNull();
     expect(emptyIntersection.get('segment_codes')).toBeNull();
-    expect(emptyIntersection.get('segment_mode')).toBeNull();
+    expect(emptyIntersection.get('segment_mode')).toBe('all');
   });
 
   it('uses selected-cohort segment counts only after cards are selected', () => {

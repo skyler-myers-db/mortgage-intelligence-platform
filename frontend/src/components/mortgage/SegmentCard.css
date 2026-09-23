@@ -1,0 +1,175 @@
+/* ============================================================
+   SEGMENT CARD ROW GRID + FACET SHARE BARS (audit 2026-09-21 visual-04)
+   Shipped with the lazy Segments route (imported by SegmentCard.tsx), so
+   none of it lands in the initial stylesheet. Prototype contract:
+   `.seg-card` at design_files/index.html:488-533 and the 12px `.seg-grid`
+   at design_files/Module 0 Prototype.html:956.
+   ============================================================ */
+
+/* Every card spans six rows of the grid and adopts them as a subgrid, so the
+   cards in one grid row share row heights (header, count, reconcile, sub,
+   meta, facets): a two-line title or a wrapped meta row moves the whole row,
+   never one card. A subgrid inherits the grid's row gap as a gutter between
+   its OWN rows too, so the grid has no row gap; each card carries the
+   prototype's 12px gutter below itself as a margin, and the grid's negative
+   end margin hands the last row's gutter back to the page flow. */
+.seg-grid {
+  row-gap: 0;
+  margin-block-end: calc(-1 * var(--sp-3));
+}
+.seg-card {
+  grid-row: span 6;
+  grid-template-rows: subgrid;
+  row-gap: 0;
+  margin-block-end: var(--sp-3);
+}
+/* Pinned rows: a card without a reconcile note or facets leaves that row
+   empty instead of pulling the rows below it up. */
+.seg-card__hdr { grid-row: 1; }
+.seg-card__count-row { grid-row: 2; align-self: start; }
+.seg-card__reconcile-slot { grid-row: 3; min-inline-size: 0; }
+.seg-card__sub,
+.seg-card__sub-stack { grid-row: 4; }
+.seg-card__meta { grid-row: 5; align-self: start; align-items: center; }
+.seg-card__facets { grid-row: 6; align-self: start; }
+
+/* Two title lines are always reserved, so a row of one-line titles is as
+   tall as a row with a wrapped one. */
+.seg-card__title { min-block-size: calc(2 * var(--lh-snug) * var(--fs-14)); }
+
+/* The prototype's sub is one short line; the registry's definitions run to
+   four at the design target. Clamp to two lines: the full definition stays
+   in the DOM for assistive tech and on the select button's `title`. */
+.seg-card__sub {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
+/* Count row: the prototype's count, plus the meta row's `avg` moved beside
+   it (the meta row now carries the evidence chip and the Ask Genie entry).
+   The headline count never shrinks or breaks: a six- to eight-digit count
+   (a national footprint) keeps its whole width on one line, and `avg` wraps
+   below it instead. The subgrid keeps the row aligned across the grid row
+   when one card's `avg` wraps. This overrides the 02 partial's
+   `overflow-wrap: anywhere` on `.seg-card__count`, which let a flex-shrunk
+   count break mid-number (`1,234,56` / `7`). */
+.seg-card__count-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  column-gap: var(--sp-2);
+  min-inline-size: 0;
+}
+.seg-card__count-row .seg-card__count {
+  flex: none;
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+.seg-card__avg {
+  flex: none;
+  margin-inline-start: auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  color: var(--text-3);
+}
+
+/* The meta row's first-snapshot status is one unbreakable token, so the
+   evidence chip and the Ask Genie entry stay on its line at 1440. */
+.seg-card__delta-pending { white-space: nowrap; }
+
+/* Gated card: the state chip takes `avg`'s place beside the suppressed
+   count, and the reconcile row (no contactable gap to reconcile) names the
+   missing source on one line, so the meta row holds only the evidence chip.
+   A meta row carrying all three wrapped to three lines and stretched its
+   whole grid row, connected neighbours included. */
+.seg-card__gate {
+  align-self: center;
+  margin-inline-start: auto;
+}
+.seg-card__source {
+  margin-block-start: var(--sp-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-11);
+  line-height: var(--lh-snug);
+  color: var(--text-3);
+}
+
+/* Loading cards: each row at the height the loaded row takes (two title
+   lines, the count's line box, the sub's two clamped lines after its
+   6px lead, the evidence chip, the facet chips), so the grid keeps its
+   height when the data arrives. These override the 02 partial's
+   pre-subgrid skeleton spacing. */
+.seg-card--skeleton .seg-card__hdr { min-block-size: calc(2 * var(--lh-snug) * var(--fs-14)); }
+.seg-card--skeleton .seg-card__count-skeleton {
+  block-size: var(--fs-22);
+  margin-block: calc((var(--lh-tight) * var(--fs-28) - var(--fs-22)) / 2);
+}
+.seg-card--skeleton .seg-card__sub-stack {
+  display: grid;
+  align-content: space-evenly;
+  block-size: calc(2 * var(--lh-snug) * var(--fs-12));
+  margin-block-start: calc(1.5 * var(--sp-1));
+}
+.seg-card--skeleton .seg-card__sub-skeleton {
+  block-size: var(--fs-11);
+  margin-block-start: 0;
+}
+.seg-card--skeleton .seg-card__meta { flex-wrap: nowrap; }
+.seg-card--skeleton .seg-card__meta-skeleton:not(.seg-card__meta-skeleton--short) {
+  block-size: calc(var(--sp-6) + var(--sp-1));
+}
+.seg-card__facet-skeleton { block-size: var(--sp-6); }
+
+/* S1.6 facets: one evidence trigger per facet (loan product, origination
+   channel), side by side. Each is an `.evidence-chip` holding a one-line
+   legend (largest share) over a 4px stacked share bar of the whole mix. */
+.seg-card__facets {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-1);
+  margin-block-start: var(--sp-2);
+}
+.seg-card__facet-chip {
+  display: flex;
+  min-inline-size: 0;
+}
+.seg-card__facet-chip .evidence-chip {
+  flex: 1;
+  gap: var(--sp-1);
+  min-block-size: var(--sp-6);
+  padding-block: 0;
+  padding-inline: var(--sp-1);
+  font-family: var(--font-sans);
+}
+.seg-card__facet-chip .evidence-chip__label {
+  display: grid;
+  flex: 1;
+  gap: var(--sp-1);
+  text-align: start;
+}
+.seg-card__facet-legend {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: var(--lh-tight);
+  font-variant-numeric: tabular-nums;
+}
+.seg-card__facet-bar {
+  display: flex;
+  block-size: var(--sp-1);
+  border-radius: var(--r-pill);
+  overflow: hidden;
+  background: var(--line-1);
+}
+.seg-card__facet-share { flex: 0 0 var(--facet-share); }
+.seg-card__facet-share + .seg-card__facet-share { border-inline-start: 1px solid var(--bg-2); }
+.seg-card__facet-share--1 { background: var(--seg-color, var(--accent)); }
+.seg-card__facet-share--2 { background: color-mix(in oklab, var(--seg-color, var(--accent)) 60%, var(--bg-2)); }
+.seg-card__facet-share--3 { background: color-mix(in oklab, var(--seg-color, var(--accent)) 32%, var(--bg-2)); }
+.seg-card__facet-share--4 { background: var(--line-2); }

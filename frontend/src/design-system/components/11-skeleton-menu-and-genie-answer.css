@@ -33,7 +33,8 @@
   left: 0;
   z-index: var(--z-menu);
   min-width: 180px;
-  max-height: 280px;
+  /* --filter-menu-space: the room useMenuPlacement measured on open. */
+  max-height: min(280px, var(--filter-menu-space, 280px));
   overflow-y: auto;
   background: var(--bg-1);
   border: 1px solid var(--line-2);
@@ -66,10 +67,11 @@
   transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
   white-space: nowrap;
 }
-/* DEFERRED (2026-09-21 audit a11y-01 sub-item, tracked with a11y-02's
-   listbox rework): .is-focused is the arrow-key option cursor and is drawn
-   only by this --bg-3 fill, 1.09-1.35:1 against the menu surface. It is not
-   the keyboard focus ring (:focus-visible below). */
+/* .is-focused is the active option (aria-activedescendant). This --bg-3
+   fill (1.09-1.35:1 against the menu surface) is the pointer highlight;
+   while the combobox or listbox that owns focus is keyboard-focused, the
+   active option also wears the shared focus ring (23-filter-listbox.css,
+   audit a11y-01 sub-item closed with a11y-02). */
 .filter-menu__item:hover,
 .filter-menu__item.is-focused { background: var(--bg-3); color: var(--text-1); }
 .filter-menu__item.is-selected { color: var(--accent-ink); }

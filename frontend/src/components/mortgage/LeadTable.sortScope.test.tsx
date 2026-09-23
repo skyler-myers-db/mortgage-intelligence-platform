@@ -151,6 +151,6 @@ describe('LeadTable sort-scope disclosure', () => {
     expect(reset()).toBeNull();
     expect(
       Array.from(container.querySelectorAll('th[aria-sort]')).map((th) => th.getAttribute('aria-sort')),
-    ).toEqual(Array(7).fill('none'));
+    ).toEqual(Array(5).fill('none'));
   });
 });

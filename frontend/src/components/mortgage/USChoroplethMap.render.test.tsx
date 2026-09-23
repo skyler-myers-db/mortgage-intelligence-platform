@@ -2,9 +2,11 @@
  * @vitest-environment happy-dom
  */
 
-import { act } from 'react';
+import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { createMipQueryClient } from '../../lib/queryClient';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { USChoroplethMap } from './USChoroplethMap';
 import type { StateRollupResponse, ZipRollupResponse } from '../../types';
@@ -27,7 +29,8 @@ const apiMocks = vi.hoisted(() => ({
   zipRollups: vi.fn(),
 }));
 
-vi.mock('../../lib/api', () => ({
+vi.mock('../../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/api')>()),
   api: apiMocks,
 }));
 
@@ -40,6 +43,15 @@ vi.mock('./USStateMapData', () => ({
     ],
   }),
 }));
+
+/** Router + a fresh query cache per render: the rollups are react-query reads. */
+function Providers({ children }: { children: ReactNode }) {
+  return (
+    <QueryClientProvider client={createMipQueryClient()}>
+      <MemoryRouter>{children}</MemoryRouter>
+    </QueryClientProvider>
+  );
+}
 
 async function settle(): Promise<void> {
   await act(async () => {
@@ -103,7 +115,7 @@ function stateRollupPayload(zipUnassigned = 0): StateRollupResponse {
 }
 
 async function drillIntoIllinois(): Promise<void> {
-  const illinois = await waitForSelector<SVGPathElement>('path[aria-label="Illinois"]');
+  const illinois = await waitForSelector<SVGPathElement>('path[data-map-unit="il"]');
   expect(illinois).toBeTruthy();
   for (let i = 0; i < 80 && !illinois?.classList.contains('has-data'); i += 1) {
     await settle();
@@ -136,13 +148,13 @@ describe('USChoroplethMap state -> ZIP drill', () => {
     apiMocks.stateRollups.mockReturnValueOnce(stateRollups.promise);
     await act(async () => {
       root.render(
-        <MemoryRouter>
+        <Providers>
           <USChoroplethMap />
-        </MemoryRouter>,
+        </Providers>,
       );
     });
 
-    const illinois = await waitForSelector<SVGPathElement>('path[aria-label="Illinois"]');
+    const illinois = await waitForSelector<SVGPathElement>('path[data-map-unit="il"]');
     const levels = document.querySelector('.map-levels');
     expect(illinois).toBeTruthy();
     expect(illinois?.classList.contains('is-loading')).toBe(true);
@@ -164,9 +176,9 @@ describe('USChoroplethMap state -> ZIP drill', () => {
   it('drills a state straight to its ZIP tiles, skipping any county level', async () => {
     await act(async () => {
       root.render(
-        <MemoryRouter>
+        <Providers>
           <USChoroplethMap segmentFilter={['itm', 'equity']} segmentFilterMode="any" />
-        </MemoryRouter>,
+        </Providers>,
       );
     });
     await drillIntoIllinois();
@@ -176,7 +188,7 @@ describe('USChoroplethMap state -> ZIP drill', () => {
     // The API is asked for ZIPs by STATE — never by a (dead) county FIPS.
     expect(apiMocks.zipRollups).toHaveBeenCalledWith(
       { state: 'IL' },
-      undefined,
+      expect.anything(),
       ['itm', 'equity'],
       'any',
       undefined,
@@ -198,12 +210,12 @@ describe('USChoroplethMap state -> ZIP drill', () => {
     try {
       await act(async () => {
         root.render(
-          <MemoryRouter>
+          <Providers>
             <USChoroplethMap />
-          </MemoryRouter>,
+          </Providers>,
         );
       });
-      await waitForSelector('path[aria-label="Illinois"]');
+      await waitForSelector('path[data-map-unit="il"]');
       // The national view has no entry point: the hover tooltip is not
       // interactive, so the drilled state is where it lives.
       expect(document.querySelector('button[aria-label^="Ask Genie about this state"]')).toBeNull();
@@ -228,9 +240,9 @@ describe('USChoroplethMap state -> ZIP drill', () => {
   it('labels the drill by state, not by county', async () => {
     await act(async () => {
       root.render(
-        <MemoryRouter>
+        <Providers>
           <USChoroplethMap />
-        </MemoryRouter>,
+        </Providers>,
       );
     });
     await drillIntoIllinois();
@@ -251,13 +263,13 @@ describe('USChoroplethMap state -> ZIP drill', () => {
   it('drills geography with keyboard Enter and returns to US via the breadcrumb', async () => {
     await act(async () => {
       root.render(
-        <MemoryRouter>
+        <Providers>
           <USChoroplethMap />
-        </MemoryRouter>,
+        </Providers>,
       );
     });
 
-    const illinois = await waitForSelector<SVGPathElement>('path[aria-label="Illinois"]');
+    const illinois = await waitForSelector<SVGPathElement>('path[data-map-unit="il"]');
     for (let i = 0; i < 80 && !illinois?.classList.contains('has-data'); i += 1) {
       await settle();
       await new Promise((resolve) => window.setTimeout(resolve, 5));
@@ -276,15 +288,15 @@ describe('USChoroplethMap state -> ZIP drill', () => {
     });
     await settle();
     expect(document.querySelector('.zip-tiles')).toBeNull();
-    expect(await waitForSelector('path[aria-label="Illinois"]')).toBeTruthy();
+    expect(await waitForSelector('path[data-map-unit="il"]')).toBeTruthy();
   });
 
   it('does not expose raw unknown segment filters in the map caption', async () => {
     await act(async () => {
       root.render(
-        <MemoryRouter>
+        <Providers>
           <USChoroplethMap segmentFilter={['permit', 'retention-risk']} segmentFilterMode="any" />
-        </MemoryRouter>,
+        </Providers>,
       );
     });
     await settle();
@@ -298,9 +310,9 @@ describe('USChoroplethMap state -> ZIP drill', () => {
     apiMocks.zipRollups.mockReturnValueOnce(zipRollups.promise);
     await act(async () => {
       root.render(
-        <MemoryRouter>
+        <Providers>
           <USChoroplethMap />
-        </MemoryRouter>,
+        </Providers>,
       );
     });
     await drillIntoIllinois();
@@ -326,9 +338,9 @@ describe('USChoroplethMap state -> ZIP drill', () => {
     apiMocks.stateRollups.mockResolvedValue(stateRollupPayload(1234));
     await act(async () => {
       root.render(
-        <MemoryRouter>
+        <Providers>
           <USChoroplethMap />
-        </MemoryRouter>,
+        </Providers>,
       );
     });
     await drillIntoIllinois();
@@ -342,9 +354,9 @@ describe('USChoroplethMap state -> ZIP drill', () => {
     apiMocks.stateRollups.mockResolvedValue(stateRollupPayload(0));
     await act(async () => {
       root.render(
-        <MemoryRouter>
+        <Providers>
           <USChoroplethMap />
-        </MemoryRouter>,
+        </Providers>,
       );
     });
     await drillIntoIllinois();
@@ -361,9 +373,9 @@ describe('USChoroplethMap state -> ZIP drill', () => {
     } satisfies ZipRollupResponse);
     await act(async () => {
       root.render(
-        <MemoryRouter>
+        <Providers>
           <USChoroplethMap />
-        </MemoryRouter>,
+        </Providers>,
       );
     });
     await drillIntoIllinois();
@@ -415,9 +427,9 @@ describe('USChoroplethMap ZIP drill reconciles against the state total', () => {
     apiMocks.zipRollups.mockResolvedValue(manyZips(30));
     act(() =>
       root.render(
-        <MemoryRouter>
+        <Providers>
           <USChoroplethMap />
-        </MemoryRouter>,
+        </Providers>,
       ),
     );
     await settle();
@@ -436,9 +448,9 @@ describe('USChoroplethMap ZIP drill reconciles against the state total', () => {
     apiMocks.zipRollups.mockResolvedValue(manyZips(3));
     act(() =>
       root.render(
-        <MemoryRouter>
+        <Providers>
           <USChoroplethMap />
-        </MemoryRouter>,
+        </Providers>,
       ),
     );
     await settle();
@@ -454,9 +466,9 @@ describe('USChoroplethMap ZIP drill reconciles against the state total', () => {
     apiMocks.zipRollups.mockResolvedValue(manyZips(3));
     act(() =>
       root.render(
-        <MemoryRouter>
+        <Providers>
           <USChoroplethMap />
-        </MemoryRouter>,
+        </Providers>,
       ),
     );
     await settle();

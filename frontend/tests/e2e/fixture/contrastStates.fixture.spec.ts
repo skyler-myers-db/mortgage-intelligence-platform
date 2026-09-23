@@ -76,7 +76,7 @@ test('light: the topbar search error paints the warning ink at AA', async ({ app
   await app.setTheme('light');
   await app.gotoRoute('/');
 
-  await page.getByRole('banner').getByRole('textbox', { name: 'Search borrowers' }).fill('B-');
+  await page.getByRole('banner').getByRole('combobox', { name: 'Search borrowers' }).fill('B-');
   const status = page.locator('.topbar__search-status--error');
   await expect(status).toBeVisible();
   await expectWarningInk(page, status, AA_TEXT);

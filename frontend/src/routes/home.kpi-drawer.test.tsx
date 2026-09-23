@@ -52,8 +52,8 @@ vi.mock('../components/mortgage/USChoroplethMap', () => ({
 vi.mock('../components/mortgage/PinnedInsights', () => ({
   PinnedInsights: () => <div data-testid="pinned-insights" />,
 }));
-vi.mock('../components/mortgage/PortfolioSummaryCard', () => ({
-  PortfolioSummaryCard: () => <div data-testid="portfolio-summary-card" />,
+vi.mock('../components/mortgage/HomeAnswerWho', () => ({
+  HomeAnswerWho: () => <div data-testid="home-answer-who" />,
 }));
 
 vi.mock('../lib/api', () => ({

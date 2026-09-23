@@ -1,0 +1,130 @@
+/* ============================================================
+   RANKED-BORROWER TABLE — one-line rows, merged Status, presets
+   (audit visual-01, tables-01, tables-04, tables-05, flow-01).
+   Shipped with the lazy LeadTable chunk so the shell stylesheet
+   stays inside its budget; the base `.tbl` rules, the column
+   widths and the Approval pin live in
+   design-system/components/03-score-and-table.css.
+   ============================================================ */
+
+/* Width below which each view scrolls horizontally behind the pinned
+   Approval column: the sum of the fixed column widths
+   (03-score-and-table.css) plus a 170px floor for Primary offer. Default =
+   the prototype's columns plus Status (design_files/Module 0
+   Prototype.html:2013-2023) and fits the 1,318px scrollport at 1440x900 with
+   the Console closed. Sales ops = Default - Status (150) + Relationship (148)
+   + Assigned to (124) + Outreach (112) + Last touch (120). */
+.lead-table__table--default { min-inline-size: 1278px; }
+.lead-table__table--sales-ops { min-inline-size: 1632px; }
+
+/* Declared prototype deviation: the prototype fixes the table scroller at
+   maxHeight 480 (design_files/Module 0 Prototype.html:2009) and the app used
+   a fixed 520px. The Lead Queue's scroller now fills from its own top edge
+   to the fold of `<main>`, leaving room for the surface footer
+   (useLeadTableFillHeight measures it into --lead-table-fill-block), and is
+   floored at the prototype's 480px. The viewport calc is only the value
+   before the first measurement. */
+.tbl-wrap.tbl-wrap--fill {
+  max-height: none;
+  max-block-size: max(
+    480px,
+    var(--lead-table-fill-block, calc(100dvh - var(--shell-topbar-h, var(--sp-12)) - var(--sp-16) * 3))
+  );
+}
+
+/* The VIEW preset pill keeps its label and value on one line when the
+   Console narrows the header ("Sales / ops" wrapped). */
+.lead-table__header-actions .filter { white-space: nowrap; }
+
+/* One line per cell: a primary value, then `+n`. Chips shrink with an
+   ellipsis; the `+n` and compliance flags never do. */
+.lead-table__line {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-inline-size: 0;
+  max-inline-size: 100%;
+}
+.lead-table__line > .chip {
+  flex: 0 1 auto;
+  min-inline-size: 0;
+}
+.lead-table__line > .lead-table__more,
+.lead-table__line > .evidence-chip {
+  flex: 0 0 auto;
+}
+/* A `<button>` wearing the prototype's `+n` chip: `.chip` / `.chip--compact`
+   already set its mono 10px type, weight and colour; only the UA button
+   line-height needs resetting. */
+.lead-table__more {
+  cursor: pointer;
+  line-height: inherit;
+}
+.lead-table__more:hover {
+  border-color: var(--line-2);
+  color: var(--text-1);
+}
+.lead-table__offer {
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lead-table__location { line-height: var(--lh-snug); }
+.lead-table__city {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Status cell: compliance flags first (always in full), then the primary
+   workflow chip + `+n`. The two groups wrap only when a row carries both a
+   compliance flag and a workflow state that do not fit one line. */
+.lead-table__status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1);
+  min-inline-size: 0;
+}
+.lead-table__status > .lead-table__line { flex: 1 1 0; }
+.lead-table__flags {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+}
+.lead-table__flag { flex-shrink: 0; }
+.lead-table__empty { color: var(--text-3); }
+
+/* Status header menu: the `.filter-menu` dropdown, portalled to <body> and
+   fixed under the header's end edge (LeadTableStatusSortMenu sets `top` /
+   `right` from the header's box), so the table's scrollport cannot clip it
+   on a short queue and it opens over Signal / Score, not under the pin. */
+.filter-menu.lead-table__status-menu {
+  position: fixed;
+  left: auto;
+  margin-block-start: var(--sp-1);
+}
+
+/* Expanded row: the workflow strip that took the row's timestamps,
+   lifecycle-advance control and Log button. Pinned to the scrollport's
+   start edge like the preview above it. */
+.lead-row-workflow {
+  position: sticky;
+  left: 0;
+  max-inline-size: calc(100cqw - 2 * var(--pad-card));
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.lead-row-workflow__fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3) var(--sp-6);
+}
+.lead-row-workflow__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-inline-size: 0;
+}

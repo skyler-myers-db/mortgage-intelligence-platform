@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import { useApp } from '../AppContext';
 import { Icon } from '../Icon';
+import { useListboxNavigation } from '../ui/useListboxNavigation';
 import { useHealth } from '../HealthProvider';
 import { useFootprint } from '../FootprintProvider';
 import { api, type HealthPayload } from '../../lib/api';
@@ -18,6 +19,8 @@ const IS_MAC =
   typeof navigator !== 'undefined' &&
   /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent || '');
 const CMDK_LABEL = IS_MAC ? '⌘K' : 'Ctrl K';
+/** Borrower rows the topbar search lists; the ⌘K palette is the deeper search. */
+const MAX_SEARCH_RESULTS = 5;
 
 /** Open the ⌘K command palette by re-dispatching its global hotkey, so the
  *  visible hint is actually functional (and stays in sync with the one listener
@@ -198,6 +201,7 @@ export function Topbar() {
   const [borrowerSearchStatus, setBorrowerSearchStatus] = useState<'idle' | 'loading' | 'empty' | 'error'>('idle');
   const [searchOpen, setSearchOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const searchFormRef = useRef<HTMLFormElement>(null);
   useEffect(() => {
     const t = setTimeout(() => setMountGraceOver(true), 3000);
     return () => clearTimeout(t);
@@ -225,6 +229,11 @@ export function Topbar() {
     }
     const ctrl = new AbortController();
     setBorrowerSearchStatus('loading');
+    // Results that land after focus left the search stay closed: an open
+    // popup nobody is in would still sit on the Escape stack.
+    const reopenIfFocused = () => {
+      if (document.activeElement === searchInputRef.current) setSearchOpen(true);
+    };
     const t = window.setTimeout(() => {
       api
         .borrowerSearch(q, ctrl.signal)
@@ -233,14 +242,14 @@ export function Topbar() {
           setBorrowerResults(rows);
           setBorrowerSearchTerm(q);
           setBorrowerSearchStatus(rows.length > 0 ? 'idle' : 'empty');
-          setSearchOpen(true);
+          reopenIfFocused();
         })
         .catch(() => {
           if (ctrl.signal.aborted) return;
           setBorrowerResults([]);
           setBorrowerSearchTerm(q);
           setBorrowerSearchStatus('error');
-          setSearchOpen(true);
+          reopenIfFocused();
         });
     }, 180);
     return () => {
@@ -257,6 +266,28 @@ export function Topbar() {
     setBorrowerSearchStatus('idle');
     navigate(`/borrower-360/${id}`);
   };
+
+  // APG editable combobox with a list popup (2026-09-21 audit shell-07 /
+  // a11y-02): the input keeps focus and carries aria-activedescendant;
+  // ArrowDown reaches the results, Enter opens the highlighted one (or
+  // submits the search when none is highlighted), Escape closes the results
+  // and a second Escape clears the query. Focus leaving the search closes it.
+  const searchResultsShown =
+    searchOpen && borrowerQuery.trim().length >= 2 && (borrowerResults.length > 0 || borrowerSearchStatus !== 'idle');
+  const visibleResults = borrowerResults.slice(0, MAX_SEARCH_RESULTS);
+  const searchListShown = searchResultsShown && visibleResults.length > 0;
+  const searchListbox = useListboxNavigation({
+    count: visibleResults.length,
+    open: searchResultsShown,
+    onOpenChange: setSearchOpen,
+    onCommit: (index) => {
+      const row = visibleResults[index];
+      if (row) openBorrower(row.borrower_id);
+    },
+    rootRef: searchFormRef,
+    returnFocusRef: searchInputRef,
+    editable: true,
+  });
 
   const submitBorrowerSearch = async () => {
     const q = borrowerQuery.trim();
@@ -301,6 +332,7 @@ export function Topbar() {
         <span className="cur">{crumb}</span>
       </div>
       <form
+        ref={searchFormRef}
         className="topbar__search"
         role="search"
         onSubmit={(e) => {
@@ -312,11 +344,26 @@ export function Topbar() {
         <input
           ref={searchInputRef}
           value={borrowerQuery}
-          onChange={(e) => setBorrowerQuery(e.target.value)}
+          onChange={(e) => {
+            setBorrowerQuery(e.target.value);
+            searchListbox.setActiveIndex(-1);
+          }}
           onFocus={() => setSearchOpen(true)}
-          onBlur={() => window.setTimeout(() => setSearchOpen(false), 120)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape' && !searchResultsShown && borrowerQuery) {
+              e.preventDefault();
+              setBorrowerQuery('');
+              return;
+            }
+            searchListbox.onKeyDown(e);
+          }}
           placeholder="Search borrower, ZIP, city, county, state"
           aria-label="Search borrowers"
+          role="combobox"
+          aria-autocomplete="list"
+          aria-expanded={searchListShown}
+          aria-controls={searchListShown ? searchListbox.listboxId : undefined}
+          aria-activedescendant={searchListShown ? searchListbox.activeDescendant : undefined}
         />
         <button
           type="button"
@@ -327,21 +374,35 @@ export function Topbar() {
         >
           {CMDK_LABEL}
         </button>
-        {searchOpen && borrowerQuery.trim().length >= 2 && (borrowerResults.length > 0 || borrowerSearchStatus !== 'idle') && (
-          <div className="topbar__search-results" role="listbox">
-            {borrowerResults.slice(0, 5).map((row) => (
-              <button
-                key={row.borrower_id}
-                type="button"
-                role="option"
-                className="topbar__search-result"
+        {searchResultsShown && (
+          <div className="topbar__search-results">
+            {searchListShown && (
+              <div
+                id={searchListbox.listboxId}
+                className="topbar__search-list"
+                role="listbox"
+                aria-label="Borrower matches"
+                // Keep focus in the input while the pointer picks a row.
                 onMouseDown={(e) => e.preventDefault()}
-                onClick={() => openBorrower(row.borrower_id)}
               >
-                <span className="mono">{row.borrower_id}</span>
-                <span>{row.city}, {row.state} · {row.zip}</span>
-              </button>
-            ))}
+                {visibleResults.map((row, index) => {
+                  const activeRow = index === searchListbox.activeIndex;
+                  return (
+                    <div
+                      key={row.borrower_id}
+                      id={searchListbox.optionId(index)}
+                      role="option"
+                      aria-selected={activeRow}
+                      className={`topbar__search-result${activeRow ? ' is-active' : ''}`}
+                      onClick={() => openBorrower(row.borrower_id)}
+                    >
+                      <span className="mono">{row.borrower_id}</span>
+                      <span>{row.city}, {row.state} · {row.zip}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
             {borrowerSearchStatus === 'loading' && (
               <div className="topbar__search-status" role="status">
                 Searching borrower, ZIP, city, county, and state...

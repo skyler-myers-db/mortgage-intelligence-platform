@@ -155,8 +155,20 @@ const budgets = {
   // window, and the RouteErrorBoundary retry. Initial JS is 421.07 / gzip
   // 130.17, inside its gate. Measured: total JS 1256.01 KiB / gzip 412.22
   // KiB across 56 chunks; ~5% headroom on both totals.
-  totalJsBytes: 1319 * KiB, // actual 1256.01
-  totalJsGzipBytes: 433 * KiB, // actual 412.22
+  // Re-baselined 2026-09-23 at the wave-1b integration. Each lane fit the old
+  // gate alone; together they add 63.9 KiB raw / 23.2 KiB gzip, almost all
+  // lazy (measured chunk by chunk against a main build): the geography map's
+  // table view, keyboard and screen-reader access, legend breaks and URL /
+  // query-cache state (+16.4 / +6.1; the shared map chunk is now named after
+  // useMapSelectionParams); the conversation-first /ask-genie tabs, docked
+  // composer and extracted Growth Agent workspace (+17.1 / +5.9); the Lead
+  // Queue column model, Status cell, overflow chips, workflow strip and view
+  // presets (+15.9 / +5.0); the Home answer band (+6.6 / +2.2); segment
+  // filters in the URL (+2.1 / +1.1); and the shared listbox + tabs in the
+  // initial chunk (+3.8 / +1.4, inside the initial gate). Measured: total JS
+  // 1319.94 KiB / gzip 435.39 KiB across 56 chunks; ~5% headroom.
+  totalJsBytes: 1386 * KiB, // actual 1319.94
+  totalJsGzipBytes: 458 * KiB, // actual 435.39
   maxLazyJsBytes: 104 * KiB, // actual 98.40 (was 160 -- tightened)
   maxLazyJsGzipBytes: 34 * KiB, // actual 32.06 (was 60 -- tightened)
   fontAssetCount: 14, // exact by policy

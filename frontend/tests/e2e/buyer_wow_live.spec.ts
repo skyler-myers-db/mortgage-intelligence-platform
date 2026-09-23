@@ -106,17 +106,21 @@ test.describe('Buyer-Wow live inspection @desktop', () => {
     await expect(queue.getByRole('link', { name: /review queue/i })).toBeVisible();
   });
 
-  test('Feature A: "Your book today" portfolio summary renders, grounded + verified', async ({ page }) => {
+  test('Feature A: the answer band answers who, why now and what offer from live data', async ({ page }) => {
     await page.goto('/', { waitUntil: 'domcontentloaded' });
-    const summary = page.getByRole('region', { name: 'Portfolio summary' });
-    await expect(summary).toBeVisible({ timeout: 30_000 });
-    await expect(summary.getByText('Your book today')).toBeVisible();
-    // Real narrative (a grouped count appears) + grounded claim chips + verdict.
-    await expect(summary.locator('.portfolio-summary__narrative')).not.toBeEmpty();
+    // "Your book today" and "Since your last login" merged into the answer
+    // band (2026-09-21 audit flow-05 / visual-06).
+    const band = page.getByRole('region', { name: "Today's briefing" });
+    await expect(band).toBeVisible({ timeout: 30_000 });
+    await expect(band.locator('.home-answer__briefing')).not.toBeEmpty();
+    // WHO: the governed ranking, each row into the queue narrowed to that borrower.
     await expect
-      .poll(() => summary.locator('.portfolio-summary__claim').count(), { timeout: 10_000 })
+      .poll(() => band.locator('.home-answer__who-row').count(), { timeout: 15_000 })
       .toBeGreaterThan(0);
-    await expect(summary.locator('.portfolio-summary__verdict--ok')).toBeVisible();
+    await expect(band.locator('.home-answer__who-row').first()).toHaveAttribute('href', /^\/lead-queue\?borrower_ids=B-/);
+    // WHY NOW: server tokens as evidence chips. WHAT TO OFFER: the offer mix.
+    await expect(band.locator('.home-answer__trigger .evidence-chip').first()).toBeVisible();
+    await expect(band.locator('.offer-mix__seg').first()).toBeVisible();
     // The topbar search advertises the command-palette hotkey (⌘K / Ctrl K).
     await expect(page.locator('.topbar__search-kbd')).toBeVisible();
   });
@@ -159,7 +163,7 @@ test.describe('Buyer-Wow live inspection @desktop', () => {
     // actually has Cotality coverage (out-of-footprint states are no-ops by
     // design) — discovered dynamically so the test follows the live coverage.
     const stateName = await firstInFootprintStateName(request);
-    const region = page.locator('.map-svg-stage').getByRole('button', { name: stateName, exact: true });
+    const region = page.locator(`.map-svg-stage path[aria-label^="${stateName}:"]`);
     await expect(region).toBeVisible({ timeout: 20_000 });
     const crumbsBefore = await page.locator('.map-crumbs button').count();
     await region.click();

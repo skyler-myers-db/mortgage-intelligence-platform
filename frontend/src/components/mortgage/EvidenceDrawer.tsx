@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import { useApp } from '../AppContext';
@@ -11,6 +11,7 @@ import {
 } from '../../lib/drawerSources';
 import { useExitRetained } from '../../hooks/useExitRetained';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
+import { useTabs } from '../ui/useTabs';
 import { queryKeys } from '../../lib/queryKeys';
 import { formatTimestamp } from '../../lib/time';
 import type {
@@ -33,6 +34,7 @@ import type {
  */
 
 type DrawerTab = 'overview' | 'lineage';
+const DRAWER_TABS: readonly DrawerTab[] = ['overview', 'lineage'];
 
 const LINEAGE_LAYER_LABELS: Record<LineageLayer, string> = {
   raw_share: 'Raw Cotality share',
@@ -221,9 +223,8 @@ export function EvidenceDrawer() {
   // (2026-09-21 audit css-03). The closing source stays rendered until the
   // panel's own exit transition ends.
   const d = useExitRetained(drawer, drawerRef);
-  const overviewTabRef = useRef<HTMLButtonElement | null>(null);
-  const lineageTabRef = useRef<HTMLButtonElement | null>(null);
   const [tab, setTab] = useState<DrawerTab>('overview');
+  const tabs = useTabs({ tabs: DRAWER_TABS, selected: tab, onSelect: setTab, idBase: 'drawer' });
   // Every drawer open starts on Overview — a lineage deep-dive on one
   // source must not leak into the next source's drawer. Keyed on the live
   // source and skipped on close, so the retained body does not flip tabs
@@ -286,24 +287,6 @@ export function EvidenceDrawer() {
       : null;
   const catalogExplorerUrl =
     destination.kind !== 'lakebase' ? metadata?.catalog_explorer_url ?? null : null;
-  const selectTabFromKeyboard = (event: KeyboardEvent<HTMLButtonElement>) => {
-    const tabs: DrawerTab[] = ['overview', 'lineage'];
-    const currentIndex = tabs.indexOf(tab);
-    let next: DrawerTab | null = null;
-    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
-      next = tabs[(currentIndex + 1) % tabs.length];
-    } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
-      next = tabs[(currentIndex - 1 + tabs.length) % tabs.length];
-    } else if (event.key === 'Home') {
-      next = 'overview';
-    } else if (event.key === 'End') {
-      next = 'lineage';
-    }
-    if (!next) return;
-    event.preventDefault();
-    setTab(next);
-    (next === 'overview' ? overviewTabRef : lineageTabRef).current?.focus();
-  };
   useFocusTrap({
     open,
     containerRef: drawerRef,
@@ -343,38 +326,11 @@ export function EvidenceDrawer() {
           </button>
         </div>
         {d && (
-          <div
-            className="drawer__tabs"
-            role="tablist"
-            aria-label="Evidence detail views"
-            aria-orientation="horizontal"
-          >
-            <button
-              ref={overviewTabRef}
-              role="tab"
-              id="drawer-tab-overview"
-              aria-selected={tab === 'overview'}
-              aria-controls="drawer-panel-overview"
-              tabIndex={tab === 'overview' ? 0 : -1}
-              className={`drawer__tab ${tab === 'overview' ? 'is-active' : ''}`}
-              onClick={() => setTab('overview')}
-              onKeyDown={selectTabFromKeyboard}
-              type="button"
-            >
+          <div className="drawer__tabs" {...tabs.tabListProps} aria-label="Evidence detail views">
+            <button {...tabs.tabProps('overview')} className={`drawer__tab ${tab === 'overview' ? 'is-active' : ''}`}>
               Overview
             </button>
-            <button
-              ref={lineageTabRef}
-              role="tab"
-              id="drawer-tab-lineage"
-              aria-selected={tab === 'lineage'}
-              aria-controls="drawer-panel-lineage"
-              tabIndex={tab === 'lineage' ? 0 : -1}
-              className={`drawer__tab ${tab === 'lineage' ? 'is-active' : ''}`}
-              onClick={() => setTab('lineage')}
-              onKeyDown={selectTabFromKeyboard}
-              type="button"
-            >
+            <button {...tabs.tabProps('lineage')} className={`drawer__tab ${tab === 'lineage' ? 'is-active' : ''}`}>
               Lineage
             </button>
           </div>
@@ -393,7 +349,7 @@ export function EvidenceDrawer() {
             </div>
           )}
           {d && tab === 'lineage' && (
-            <div role="tabpanel" id="drawer-panel-lineage" aria-labelledby="drawer-tab-lineage">
+            <div {...tabs.panelProps('lineage')}>
               {!d.lineageFamily && destination.kind === 'lakebase' ? (
                 <div className="source-card" role="status">
                   <div className="eyebrow mb-2">{destination.label}</div>
@@ -520,7 +476,7 @@ export function EvidenceDrawer() {
             </div>
           )}
           {d && tab === 'overview' ? (
-            <div role="tabpanel" id="drawer-panel-overview" aria-labelledby="drawer-tab-overview">
+            <div {...tabs.panelProps('overview')}>
               <div className="source-summary">
                 <div className="source-summary__top">
                   {/* Modifier keys off the VIEW state, not metadata.freshness:

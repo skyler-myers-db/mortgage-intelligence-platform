@@ -1,0 +1,77 @@
+/* ============================================================
+   LEAD QUEUE FILTER BAR (audit tables-06). Shipped with the lazy
+   lead-queue route chunk, not the shell stylesheet. Composes the
+   prototype's `.filter-row` / `.filter` pills
+   (design_files/index.html:822-838); the only additions are the
+   inline "More filters" panel and the removable-chip dismiss.
+   ============================================================ */
+
+/* The panel is a `.filter-row` (display: flex), which would override the
+   `hidden` attribute's UA display: none. */
+.lead-queue-filters__panel[hidden] { display: none; }
+.lead-queue-filters__panel {
+  margin-block-start: var(--sp-3);
+  padding-block-start: var(--sp-3);
+  border-block-start: 1px solid var(--line-1);
+}
+
+/* The pill wall is gone, so the narrow-container scroll cap written for 16
+   pills (10-native-analytics.css, `.filter-row--lead-queue`) must not
+   reserve thirteen rows of height for five pills. */
+@container main (max-width: 640px) {
+  .filter-row--lead-queue {
+    block-size: auto;
+    overflow-y: visible;
+  }
+}
+
+/* The hero's active-filter row wraps instead of scrolling. The shared
+   `.page-filter-chips` row (09-console-and-layout.css) is one nowrap line
+   justified to the end with overflow-x: auto, and overflow past a
+   flex-end start edge cannot be scrolled to: with three or more active
+   filters the first chips and their Remove buttons were clipped and
+   unreachable. Every chip and its Remove button stay on screen. */
+.page-filter-chips.page-filter-chips--lead-queue {
+  flex-wrap: wrap;
+  row-gap: var(--sp-1);
+  block-size: auto;
+  overflow: visible;
+}
+
+/* Removable hero chip: the `.filter` pill as a static label with a dismiss
+   button. It is not itself a control, so it keeps still when pressed. */
+.filter--removable {
+  flex-shrink: 0;
+  max-inline-size: min(100%, calc(var(--sp-16) * 5));
+  padding-inline-end: var(--sp-1);
+  cursor: default;
+}
+.filter--removable:active { translate: none; }
+.filter--removable .filter__value {
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.filter__remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  min-inline-size: var(--sp-6);
+  min-block-size: var(--sp-6);
+  padding: 0;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+.filter__remove:hover,
+.filter__remove:focus-visible {
+  opacity: 1;
+  background: var(--bg-3);
+}
+.filter__remove:active { translate: 0 var(--pressed-shift); }

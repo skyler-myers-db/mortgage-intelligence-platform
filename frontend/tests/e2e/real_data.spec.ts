@@ -539,7 +539,7 @@ async function discoverMapDrillTarget(
 
 async function drillStateToZips(page: Page, target: MapDrillTarget) {
   const map = page.locator('.map-wrap').first();
-  const state = map.getByRole('button', { name: new RegExp(`^${escapeRegExp(target.stateName)}$`) }).first();
+  const state = map.getByRole('button', { name: new RegExp(`^${escapeRegExp(target.stateName)}:`) }).first();
   const zipTiles = page.locator('.zip-tiles');
   let lastError: unknown;
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -777,7 +777,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     expect(url.searchParams.get('segment_mode')).toBe('all');
     expect(url.searchParams.get('segment_codes')).toContain('itm');
     expect(url.searchParams.get('segment_codes')).toContain('equity');
-    await expect(page.getByRole('button', { name: /SEGMENT:\s*2 segments selected \(all selected\)/i })).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByRole('combobox', { name: /SEGMENT:\s*2 segments selected \(all selected\)/i })).toBeVisible({ timeout: 20_000 });
   });
 
   test('segment map drill preserves segment filters through state ZIP and Lead Queue', async ({ page, request }) => {
@@ -1132,7 +1132,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
 
   test('Growth Agent actionable total matches the destination Lead Queue total', async ({ page }) => {
     test.setTimeout(120_000);
-    await gotoApp(page, '/ask-genie');
+    await gotoApp(page, '/ask-genie?tab=workflows');
 
     const workflowCard = page.locator('.growth-agent-card', {
       hasText: 'Daily Refi Opportunity Brief',
@@ -1570,8 +1570,8 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await page.getByRole('link', { name: /Next: (?:segment intelligence|segments)/i }).click();
     await segmentResponse;
     await expect(page).toHaveURL(/\/segment-intelligence\?/);
-    await expect(page.getByRole('button', { name: /OWNER LINK: Portfolio investor \(5\+\)/i })).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByRole('button', { name: /PURCHASE INTENT: HELOC intent/i })).toBeVisible();
+    await expect(page.getByRole('combobox', { name: /OWNER LINK: Portfolio investor \(5\+\)/i })).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByRole('combobox', { name: /PURCHASE INTENT: HELOC intent/i })).toBeVisible();
   });
 
   test('sales outcomes: live manual import writes Lakebase ledger and Lead Queue explains status', async ({ page, request }) => {
@@ -1698,7 +1698,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
         params.get('days') === '7'
       );
     });
-    await page.getByRole('button', { name: /^Window:/i }).click();
+    await page.getByRole('combobox', { name: /^Window:/i }).click();
     await page.getByRole('option', { name: 'Last 7 days', exact: true }).click();
     await signalResponse;
 
@@ -1923,7 +1923,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     // views. Only the standalone /ask-genie page has this; the floating
     // FAB from Home (covered in `genie FAB returns a non-empty answer`
     // above) does NOT.
-    await expect(page.getByText(/Trusted assets/i)).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText(/Trusted sources/i)).toBeVisible({ timeout: 5_000 });
     await expect(page.getByText(/gold\.lead_population/)).toBeVisible();
     await expect(page.getByText(/semantics\.lead_generation_metric_view/)).toBeVisible();
 
@@ -2031,7 +2031,9 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
       .locator('.surface', { hasText: /top state by listed borrower count/i })
       .first();
     await expect(answerSurface).toBeVisible({ timeout: 90_000 });
-    await expect(answerSurface).toContainText(/mip\.gold\.borrower_360/);
+    // flow-10 (2026-09-23): the source chip shows a plain label; the governed
+    // UC path lives in its title attribute.
+    await expect(answerSurface.locator('[title*="mip.gold.borrower_360"]').first()).toBeVisible();
     await expect(answerSurface).toContainText(/average listing days on market/i);
     await expect(answerSurface.locator('.genie-answer__table tbody tr').first()).toBeVisible({
       timeout: 10_000,

@@ -1,15 +1,14 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { api, type LeadsPageResult, type SegmentFilterMode } from '../lib/api';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
-import type { LeadSummary, SegmentCode, SegmentSummary } from '../types';
+import type { SegmentCode, SegmentSummary } from '../types';
 import { PageShell } from '../components/layout/PageShell';
 import { SegmentCard, SegmentCardSkeleton } from '../components/mortgage/SegmentCard';
 import { LeadTable } from '../components/mortgage/LeadTable';
-import {
-  USChoroplethMap,
-  type MapSelection,
-} from '../components/mortgage/USChoroplethMap';
+import { USChoroplethMap } from '../components/mortgage/USChoroplethMap';
+import { EMPTY_MAP_SELECTION, withMapSelection } from '../components/mortgage/USChoroplethMap.selection';
+import { useMapSelectionParams } from '../components/mortgage/useMapSelectionParams';
 import { Button, Chip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { FilterSelect } from '../components/ui/FilterSelect';
@@ -18,7 +17,33 @@ import { useFootprint } from '../components/FootprintProvider';
 import { queryKeys } from '../lib/queryKeys';
 import { leadsQuery } from '../lib/leadsQuery';
 import { useConfigOptionsQuery } from '../lib/configOptionsQuery';
-import { isPublicLenderRef, LENDER_RELATIONSHIP_OPTIONS } from '../lib/lenderFilters';
+import { LENDER_RELATIONSHIP_OPTIONS } from '../lib/lenderFilters';
+import {
+  activeSegmentsFromSearch,
+  applySecondaryLeadFilters,
+  CASHOUT_OPTIONS,
+  chipFiltersAreDefault,
+  chipFiltersFromSearch,
+  CONSENT_OPTIONS,
+  CONTACTABILITY_OPTIONS,
+  formatSelectedSegmentLabel,
+  INITIAL_ACTIVE_SEGMENTS,
+  LIEN_OPTIONS,
+  OCCUPANCY_OPTIONS,
+  OWNER_LINK_OPTIONS,
+  PURCHASE_OPTIONS,
+  RECENCY_OPTIONS,
+  searchParamsWithChipFilter,
+  searchParamsWithoutSegmentFilters,
+  secondaryPortfolioCriteria as buildSecondaryPortfolioCriteria,
+  SEGMENT_MODE_OPTIONS,
+  segmentCardQuerySelection,
+  segmentFilterSearchKey,
+  segmentModeFromSearch,
+  segmentSearchParamsForState,
+  VALID_SEGMENT_CODES,
+  type ChipFilterKey,
+} from './segment-intelligence.filters';
 
 /**
  * Segment Intelligence — prototype composition: segment cards across the top
@@ -26,191 +51,6 @@ import { isPublicLenderRef, LENDER_RELATIONSHIP_OPTIONS } from '../lib/lenderFil
  * preview on the right. This is the densest Module 0 screen and lines up 1:1
  * with the prototype's "segment-first" layout.
  */
-
-// Equity thresholds expressed as a minimum equity-to-AVM ratio. We don't
-// have AVM on LeadSummary (it's on Borrower360), so the predicate uses
-// equity_estimate as a lower bound proxy. Good enough for the UI filter.
-const EQUITY_FLOOR_USD: Record<string, number> = {
-  Any: 0,
-  'Equity ≥ 15%': 50_000,
-  'Equity ≥ 25%': 150_000,
-  'Equity ≥ 40%': 300_000,
-};
-
-// OCCUPANCY replaced "Homeowner / First-time buyer / Age 55+" (no
-// predicate available) with a real occupancy predicate against
-// `is_owner_occupied`. Options re-phrased to match the signal we actually
-// carry from gold.borrower_360.
-const OCCUPANCY_OPTIONS = ['All', 'Owner-occupied', 'Non-owner-occupied'] as const;
-// LIEN (secondary filter) operates on the open-lien state of the subject
-// property. Distinct from the portfolio-builder's primary lien-status
-// filter (which discriminates at the population level). Maps to
-// `current_lien_balance` + `second_pos_amount` from gold.borrower_360.
-const LIEN_OPTIONS = ['Any', 'Open 1st lien only', 'Open 2nd lien / HELOC', 'Free & clear'] as const;
-
-// OWNER LINK buckets use `related_property_count` from the Owner Link
-// bridge. Bucket thresholds match how LOs typically think about borrower
-// portfolios (single / small / large).
-const OWNER_LINK_OPTIONS = ['All', 'Single-property owner', 'Multi-property (2-4)', 'Portfolio investor (5+)'] as const;
-
-// PURCHASE / EQUITY-CREDIT INTENT: MLS listing is a live purchase trigger.
-// HELOC intent is a live Cotality propensity model signal; true filed
-// building-permit activity remains a separate pending source.
-const PURCHASE_OPTIONS = ['All', 'Listed for sale', 'HELOC intent', 'Both'] as const;
-const CONTACTABILITY_OPTIONS = ['Eligible only', 'Any', 'Suppressed only'] as const;
-const CONSENT_OPTIONS = ['Any', 'Opt-in', 'Opt-out', 'Unknown'] as const;
-const RECENCY_OPTIONS = ['Any', 'Untouched 30d', 'Untouched 60d', 'Untouched 90d'] as const;
-const SEGMENT_MODE_OPTIONS: Array<{
-  mode: SegmentFilterMode;
-  label: string;
-  description: string;
-}> = [
-  {
-    mode: 'any',
-    label: 'Any selected',
-    description: 'OR · de-duped',
-  },
-  {
-    mode: 'all',
-    label: 'All selected',
-    description: 'AND · intersection',
-  },
-];
-const VALID_SEGMENT_CODES: readonly SegmentCode[] = [
-  'itm',
-  'listed',
-  'permit',
-  'investor',
-  'equity',
-  'retention',
-  // S1.3 overlay segments — keep in registry order with the gold meta table.
-  'second_lien_itm',
-  'heloc_draw_to_payback',
-  'home_equity_history',
-  'refi_propensity',
-  'itm_on_related_property',
-  'payoff_loss_leads',
-  'permit_activity',
-];
-const VALID_SEGMENT_CODE_SET = new Set<string>(VALID_SEGMENT_CODES);
-
-interface ChipFilters {
-  location: string;
-  demographics: string;
-  lenderRelationship: string;
-  targetLenderRef: string;
-  lien: string;
-  ownerLink: string;
-  purchase: string;
-  cashout: string;
-  contactability: string;
-  consent: string;
-  recency: string;
-}
-
-const INITIAL_FILTERS: ChipFilters = {
-  location: 'All',
-  demographics: 'All',
-  lenderRelationship: 'All',
-  targetLenderRef: 'All',
-  lien: 'Any',
-  ownerLink: 'All',
-  purchase: 'All',
-  cashout: 'Any',
-  contactability: 'Eligible only',
-  consent: 'Any',
-  recency: 'Any',
-};
-
-export const INITIAL_ACTIVE_SEGMENTS: SegmentCode[] = [];
-
-export function activeSegmentsFromSearch(searchParams: URLSearchParams): SegmentCode[] {
-  const raw = [
-    searchParams.get('segment'),
-    searchParams.get('segments'),
-    searchParams.get('segment_codes'),
-  ]
-    .filter(Boolean)
-    .join(',');
-  const selected: SegmentCode[] = [];
-  for (const value of raw.split(',')) {
-    const code = value.trim().toLowerCase();
-    if (!VALID_SEGMENT_CODE_SET.has(code) || selected.includes(code as SegmentCode)) continue;
-    selected.push(code as SegmentCode);
-  }
-  return selected;
-}
-
-export function segmentModeFromSearch(searchParams: URLSearchParams): SegmentFilterMode {
-  return searchParams.get('segment_mode')?.toLowerCase() === 'all' ? 'all' : 'any';
-}
-
-export function segmentSearchParamsForState(
-  searchParams: URLSearchParams,
-  segments: SegmentCode[],
-  mode: SegmentFilterMode,
-): URLSearchParams {
-  const next = new URLSearchParams(searchParams);
-  next.delete('segment');
-  next.delete('segments');
-  next.delete('segment_codes');
-  if (segments.length === 1) {
-    next.set('segment', segments[0]);
-  } else if (segments.length > 1) {
-    next.set('segment_codes', segments.join(','));
-  }
-  if (segments.length > 1) {
-    next.set('segment_mode', mode);
-  } else {
-    next.delete('segment_mode');
-  }
-  return next;
-}
-
-export function formatSelectedSegmentLabel(
-  labels: string[],
-  segmentMode: SegmentFilterMode,
-): string {
-  if (labels.length <= 1) return labels.join('');
-  const conjunction = segmentMode === 'all' ? 'and' : 'or';
-  if (labels.length === 2) return `${labels[0]} ${conjunction} ${labels[1]}`;
-  return `${labels.slice(0, -1).join(', ')}, ${conjunction} ${labels[labels.length - 1]}`;
-}
-
-export function segmentCardQuerySelection(
-  segments: SegmentCode[],
-  mode: SegmentFilterMode,
-): { segmentCodes?: SegmentCode[]; segmentMode: SegmentFilterMode } {
-  return segments.length > 0
-    ? { segmentCodes: segments, segmentMode: mode }
-    : { segmentCodes: undefined, segmentMode: 'any' };
-}
-
-export function lenderFiltersFromSearch(
-  searchParams: URLSearchParams,
-  targetLenderOptions: readonly string[] = [],
-): Pick<ChipFilters, 'lenderRelationship' | 'targetLenderRef' | 'ownerLink' | 'purchase'> {
-  const relationship = searchParams.get('lender_relationship');
-  const lenderRelationship = LENDER_RELATIONSHIP_OPTIONS.includes(
-    relationship as (typeof LENDER_RELATIONSHIP_OPTIONS)[number],
-  )
-    ? relationship!
-    : 'All';
-  const target = searchParams.get('target_lender_ref');
-  const targetLenderRef = isPublicLenderRef(target, targetLenderOptions) ? target! : 'All';
-  const ownerLink = searchParams.get('owner_link');
-  const purchase = searchParams.get('purchase_intent');
-  return {
-    lenderRelationship,
-    targetLenderRef,
-    ownerLink: OWNER_LINK_OPTIONS.includes(ownerLink as (typeof OWNER_LINK_OPTIONS)[number])
-      ? ownerLink!
-      : 'All',
-    purchase: PURCHASE_OPTIONS.includes(purchase as (typeof PURCHASE_OPTIONS)[number])
-      ? purchase!
-      : 'All',
-  };
-}
 
 /**
  * Build the LOCATION-dropdown map for the current tenant footprint.
@@ -247,98 +87,59 @@ export default function SegmentIntelligence() {
     ),
     [footprint.ready, footprint.states, footprint.usingFallback],
   );
-  const [activeSegs, setActiveSegs] = useState<SegmentCode[]>(() => activeSegmentsFromSearch(searchParams));
-  const [segmentMode, setSegmentMode] = useState<SegmentFilterMode>(() => segmentModeFromSearch(searchParams));
-  const [chipFilters, setChipFilters] = useState<ChipFilters>(() => ({
-    ...INITIAL_FILTERS,
-    ...lenderFiltersFromSearch(searchParams, targetLenderOptions),
-  }));
-  useEffect(() => {
-    const next = lenderFiltersFromSearch(searchParams, targetLenderOptions);
-    setChipFilters((current) => (
-      current.lenderRelationship === next.lenderRelationship
-      && current.targetLenderRef === next.targetLenderRef
-      && current.ownerLink === next.ownerLink
-      && current.purchase === next.purchase
-        ? current
-        : { ...current, ...next }
-    ));
-  }, [searchParams, targetLenderOptions]);
-  useEffect(() => {
-    const nextSegments = activeSegmentsFromSearch(searchParams);
-    setActiveSegs((current) => (
-      current.join(',') === nextSegments.join(',') ? current : nextSegments
-    ));
-    const nextMode = segmentModeFromSearch(searchParams);
-    setSegmentMode((current) => (current === nextMode ? current : nextMode));
-  }, [searchParams]);
-  // Geography drill state emitted by USChoroplethMap. State is the 2-char
-  // USPS code; null = US level (no geography filter). ZIP is pushed down to
-  // /api/leads so the ranked table follows the same state → ZIP cohort the
-  // map counted. `county` is always null (the map has no county level) but
-  // stays wired through for a future licensed county dataset.
-  const [mapSelection, setMapSelection] = useState<MapSelection>({
-    state: null,
-    county: null,
-    zip: null,
-  });
-  const handleMapSelection = useCallback((sel: MapSelection) => {
-    setMapSelection(sel);
-  }, []);
-  const selectedLocationState = (locationToStates[chipFilters.location] ?? [])[0];
-  const secondaryPortfolioCriteria = useMemo(() => {
-    const criteria: Record<string, string> = {};
-    if (chipFilters.demographics !== 'All') {
-      criteria.occupancy = chipFilters.demographics;
-    }
-    if (chipFilters.lenderRelationship !== 'All') {
-      criteria.lender_relationship = chipFilters.lenderRelationship;
-    }
-    if (chipFilters.targetLenderRef !== 'All') {
-      criteria.target_lender_ref = chipFilters.targetLenderRef;
-    }
-    if (chipFilters.lien === 'Open 1st lien only') {
-      criteria.lien_status = 'Open 1st lien';
-    } else if (chipFilters.lien === 'Open 2nd lien / HELOC') {
-      criteria.lien_status = 'Open HELOC';
-    } else if (chipFilters.lien === 'Free & clear') {
-      criteria.lien_status = 'Free & clear';
-    }
-    if (chipFilters.ownerLink !== 'All') {
-      criteria.owner_link = chipFilters.ownerLink;
-    }
-    if (chipFilters.purchase !== 'All') {
-      criteria.purchase_intent = chipFilters.purchase;
-    }
-    if (chipFilters.cashout === 'Equity ≥ 15%') {
-      criteria.min_equity_pct_label = '≥ 15%';
-    } else if (chipFilters.cashout === 'Equity ≥ 25%') {
-      criteria.min_equity_pct_label = '≥ 25%';
-    } else if (chipFilters.cashout === 'Equity ≥ 40%') {
-      criteria.min_equity_pct_label = '≥ 40%';
-    }
-    if (chipFilters.contactability !== 'Any') {
-      criteria.marketing_eligibility = chipFilters.contactability;
-    }
-    if (chipFilters.consent !== 'Any') {
-      criteria.consent_status = chipFilters.consent;
-    }
-    if (chipFilters.recency !== 'Any') {
-      criteria.recency = chipFilters.recency;
-    }
-    return criteria;
-  }, [
-    chipFilters.cashout,
-    chipFilters.contactability,
-    chipFilters.consent,
-    chipFilters.demographics,
-    chipFilters.lenderRelationship,
-    chipFilters.lien,
-    chipFilters.ownerLink,
-    chipFilters.purchase,
-    chipFilters.recency,
-    chipFilters.targetLenderRef,
-  ]);
+  const locationCodes = useMemo(
+    () => (footprint.ready && !footprint.usingFallback
+      ? footprint.states.map((s) => s.state_code.toUpperCase())
+      : []),
+    [footprint.ready, footprint.states, footprint.usingFallback],
+  );
+  // flow-09: every filter below is DERIVED from the URL (no mirrored
+  // useState), so refresh, Back/Forward and a shared link restore the view.
+  // The memo key is the params this route's filters own, so a URL change
+  // made by another feature keeps these objects (and their fetches) stable.
+  const filterSearchKey = useMemo(() => segmentFilterSearchKey(searchParams), [searchParams]);
+  const activeSegs = useMemo<SegmentCode[]>(() => {
+    const parsed = activeSegmentsFromSearch(new URLSearchParams(filterSearchKey));
+    return parsed.length > 0 ? parsed : INITIAL_ACTIVE_SEGMENTS;
+  }, [filterSearchKey]);
+  const segmentMode = useMemo<SegmentFilterMode>(
+    () => segmentModeFromSearch(new URLSearchParams(filterSearchKey)),
+    [filterSearchKey],
+  );
+  const chipFilters = useMemo(
+    () => chipFiltersFromSearch(new URLSearchParams(filterSearchKey), { targetLenderOptions, locationCodes }),
+    [filterSearchKey, targetLenderOptions, locationCodes],
+  );
+  const setChipFilter = useCallback(
+    (key: ChipFilterKey, value: string) => {
+      setSearchParams((current) => searchParamsWithChipFilter(current, key, value));
+    },
+    [setSearchParams],
+  );
+  const stateNameByCode = useMemo(
+    () => new Map(Object.entries(locationToStates).map(([name, codes]) => [codes[0] ?? 'All', name])),
+    [locationToStates],
+  );
+  // While the footprint cannot vouch for a URL's state code (still loading,
+  // or on its fallback) the parser keeps the code the link asked for; list
+  // it under its code so the control's options include the value it shows
+  // and applies, as the Lead Queue's state control does.
+  const locationOptions = useMemo(
+    () => (chipFilters.location === 'All' || stateNameByCode.has(chipFilters.location)
+      ? locationToStates
+      : { ...locationToStates, [chipFilters.location]: [chipFilters.location] }),
+    [chipFilters.location, locationToStates, stateNameByCode],
+  );
+  // Geography drill, owned by the URL (`?geo_state=TX&zip=`, audit
+  // dataviz-04) so the map, this table, "Clear geography" and Back agree.
+  // ZIP is pushed down to /api/leads so the ranked table follows the same
+  // state → ZIP cohort the map counted. `county` is always null.
+  const [mapSelection, setMapSelection] = useMapSelectionParams();
+  const selectedLocationState = chipFilters.location === 'All' ? undefined : chipFilters.location;
+  const secondaryPortfolioCriteria = useMemo(
+    () => buildSecondaryPortfolioCriteria(chipFilters),
+    [chipFilters],
+  );
   const activeSegsKey = activeSegs.join(',');
   const hasSelectedSegments = activeSegs.length > 0;
 
@@ -444,56 +245,9 @@ export default function SegmentIntelligence() {
         ? `Couldn't load leads: ${leadsError.message}`
         : null;
 
-  const filtered = useMemo(() => {
-    let out = leads;
-    // Primary segment and geography filters are pushed down to /api/leads
-    // before LIMIT is applied. The predicates below are secondary fields
-    // carried on the ranked lead rows and still run locally.
-    // OCCUPANCY -> is_owner_occupied predicate.
-    if (chipFilters.demographics === 'Owner-occupied') {
-      out = out.filter((l) => l.is_owner_occupied === true);
-    } else if (chipFilters.demographics === 'Non-owner-occupied') {
-      out = out.filter((l) => l.is_owner_occupied === false);
-    }
-    // LIEN (secondary) -> current_lien_balance + second_pos_amount.
-    if (chipFilters.lien === 'Open 1st lien only') {
-      out = out.filter(
-        (l) =>
-          (l.current_lien_balance ?? 0) > 0 &&
-          (l.second_pos_amount == null || l.second_pos_amount === 0),
-      );
-    } else if (chipFilters.lien === 'Open 2nd lien / HELOC') {
-      out = out.filter((l) => (l.second_pos_amount ?? 0) > 0);
-    } else if (chipFilters.lien === 'Free & clear') {
-      out = out.filter((l) => (l.current_lien_balance ?? 0) === 0);
-    }
-    // OWNER LINK -> related_property_count buckets.
-    if (chipFilters.ownerLink === 'Single-property owner') {
-      out = out.filter((l) => (l.related_property_count ?? 1) <= 1);
-    } else if (chipFilters.ownerLink === 'Multi-property (2-4)') {
-      const c = (l: LeadSummary) => l.related_property_count ?? 1;
-      out = out.filter((l) => c(l) >= 2 && c(l) <= 4);
-    } else if (chipFilters.ownerLink === 'Portfolio investor (5+)') {
-      out = out.filter((l) => (l.related_property_count ?? 1) >= 5);
-    }
-    // PURCHASE INTENT -> listed_for_sale + Cotality HELOC propensity. True
-    // filed building permits remain a separate pending source and must not
-    // be inferred from the propensity model.
-    const hasHelocIntent = (l: LeadSummary) => l.has_heloc_propensity_trigger === true;
-    if (chipFilters.purchase === 'Listed for sale') {
-      out = out.filter((l) => l.listed_for_sale === true);
-    } else if (chipFilters.purchase === 'HELOC intent') {
-      out = out.filter((l) => hasHelocIntent(l));
-    } else if (chipFilters.purchase === 'Both') {
-      out = out.filter((l) => l.listed_for_sale === true && hasHelocIntent(l));
-    }
-    // Cash-out equity floor.
-    const floor = EQUITY_FLOOR_USD[chipFilters.cashout] ?? 0;
-    if (floor > 0) {
-      out = out.filter((l) => l.equity_estimate >= floor);
-    }
-    return out;
-  }, [leads, chipFilters]);
+  // Primary segment and geography filters are pushed down to /api/leads
+  // before LIMIT is applied; the secondary predicates run on the returned rows.
+  const filtered = useMemo(() => applySecondaryLeadFilters(leads, chipFilters), [leads, chipFilters]);
   const uniqueCohortTotal = totalMatching ?? filtered.length;
   const rankedScopeEyebrow = hasSelectedSegments
     ? 'Ranked borrowers · selected segment cohort'
@@ -512,42 +266,30 @@ export default function SegmentIntelligence() {
 
   const writeSegmentSearchParams = useCallback(
     (segments: SegmentCode[], mode: SegmentFilterMode) => {
-      setSearchParams(segmentSearchParamsForState(searchParams, segments, mode));
+      setSearchParams((current) => segmentSearchParamsForState(current, segments, mode));
     },
-    [searchParams, setSearchParams],
+    [setSearchParams],
   );
 
   const toggleSeg = (code: SegmentCode) => {
     const next = activeSegs.includes(code)
       ? activeSegs.filter((s) => s !== code)
       : [...activeSegs, code];
-    setActiveSegs(next);
     writeSegmentSearchParams(next, segmentMode);
   };
 
   const filtersDirty =
     activeSegs.length > 0 ||
     segmentMode !== 'any' ||
-    JSON.stringify(chipFilters) !== JSON.stringify(INITIAL_FILTERS) ||
+    !chipFiltersAreDefault(chipFilters) ||
     mapSelection.state !== null ||
     mapSelection.county !== null ||
     mapSelection.zip !== null;
 
   const clearAll = () => {
-    setActiveSegs([]);
-    setSegmentMode('any');
-    setChipFilters(INITIAL_FILTERS);
-    setMapSelection({ state: null, county: null, zip: null });
-    const next = new URLSearchParams(searchParams);
-    next.delete('lender_relationship');
-    next.delete('target_lender_ref');
-    next.delete('owner_link');
-    next.delete('purchase_intent');
-    next.delete('segment');
-    next.delete('segments');
-    next.delete('segment_codes');
-    next.delete('segment_mode');
-    setSearchParams(next);
+    // One URL write clears both the filters this route owns and the map
+    // drill (the map's params survive searchParamsWithoutSegmentFilters).
+    setSearchParams(withMapSelection(searchParamsWithoutSegmentFilters(searchParams), EMPTY_MAP_SELECTION));
   };
 
   const leadQueueHref = useMemo(() => {
@@ -691,10 +433,7 @@ export default function SegmentIntelligence() {
                 type="button"
                 className={segmentMode === option.mode ? 'is-active' : ''}
                 aria-pressed={segmentMode === option.mode}
-                onClick={() => {
-                  setSegmentMode(option.mode);
-                  writeSegmentSearchParams(activeSegs, option.mode);
-                }}
+                onClick={() => writeSegmentSearchParams(activeSegs, option.mode)}
               >
                 <span>{option.label}</span>
                 <span className="segmented__meta">{option.description}</span>
@@ -705,69 +444,69 @@ export default function SegmentIntelligence() {
         <div className="filter-row__controls">
           <FilterSelect
             label="LOCATION"
-            value={chipFilters.location}
-            options={Object.keys(locationToStates)}
-            onChange={(v) => setChipFilters((f) => ({ ...f, location: v }))}
+            value={stateNameByCode.get(chipFilters.location) ?? chipFilters.location}
+            options={Object.keys(locationOptions)}
+            onChange={(v) => setChipFilter('location', locationOptions[v]?.[0] ?? 'All')}
           />
           <FilterSelect
             label="OCCUPANCY"
             value={chipFilters.demographics}
             options={[...OCCUPANCY_OPTIONS]}
-            onChange={(v) => setChipFilters((f) => ({ ...f, demographics: v }))}
+            onChange={(v) => setChipFilter('demographics', v)}
           />
           <FilterSelect
             label="RELATIONSHIP"
             value={chipFilters.lenderRelationship}
             options={[...LENDER_RELATIONSHIP_OPTIONS]}
-            onChange={(v) => setChipFilters((f) => ({ ...f, lenderRelationship: v }))}
+            onChange={(v) => setChipFilter('lenderRelationship', v)}
           />
           <FilterSelect
             label="TARGET LIEN HOLDER"
             value={chipFilters.targetLenderRef}
             options={targetLenderOptions}
-            onChange={(v) => setChipFilters((f) => ({ ...f, targetLenderRef: v }))}
+            onChange={(v) => setChipFilter('targetLenderRef', v)}
           />
           <FilterSelect
             label="LIEN"
             value={chipFilters.lien}
             options={[...LIEN_OPTIONS]}
-            onChange={(v) => setChipFilters((f) => ({ ...f, lien: v }))}
+            onChange={(v) => setChipFilter('lien', v)}
           />
           <FilterSelect
             label="OWNER LINK"
             value={chipFilters.ownerLink}
             options={[...OWNER_LINK_OPTIONS]}
-            onChange={(v) => setChipFilters((f) => ({ ...f, ownerLink: v }))}
+            onChange={(v) => setChipFilter('ownerLink', v)}
           />
           <FilterSelect
             label="PURCHASE INTENT"
             value={chipFilters.purchase}
             options={[...PURCHASE_OPTIONS]}
-            onChange={(v) => setChipFilters((f) => ({ ...f, purchase: v }))}
+            onChange={(v) => setChipFilter('purchase', v)}
           />
           <FilterSelect
             label="CASH-OUT"
             value={chipFilters.cashout}
-            options={Object.keys(EQUITY_FLOOR_USD)}
-            onChange={(v) => setChipFilters((f) => ({ ...f, cashout: v }))}
+            options={CASHOUT_OPTIONS}
+            onChange={(v) => setChipFilter('cashout', v)}
           />
           <FilterSelect
             label="CONTACTABILITY"
             value={chipFilters.contactability}
             options={[...CONTACTABILITY_OPTIONS]}
-            onChange={(v) => setChipFilters((f) => ({ ...f, contactability: v }))}
+            onChange={(v) => setChipFilter('contactability', v)}
           />
           <FilterSelect
             label="CONSENT"
             value={chipFilters.consent}
             options={[...CONSENT_OPTIONS]}
-            onChange={(v) => setChipFilters((f) => ({ ...f, consent: v }))}
+            onChange={(v) => setChipFilter('consent', v)}
           />
           <FilterSelect
             label="RECENCY"
             value={chipFilters.recency}
             options={[...RECENCY_OPTIONS]}
-            onChange={(v) => setChipFilters((f) => ({ ...f, recency: v }))}
+            onChange={(v) => setChipFilter('recency', v)}
           />
         </div>
         <div
@@ -845,7 +584,10 @@ export default function SegmentIntelligence() {
                 size="sm"
                 variant="ghost"
                 icon="cross"
-                onClick={() => setMapSelection({ state: null, county: null, zip: null })}
+                onClick={() => setMapSelection(EMPTY_MAP_SELECTION)}
+                // The map's own exit control (USChoroplethMap.a11y MAP_DRILL_EXIT_ATTR):
+                // focus lands on the map's US crumb when this removes itself.
+                data-map-drill-exit=""
               >
                 Clear geography
               </Button>
@@ -872,7 +614,8 @@ export default function SegmentIntelligence() {
           segmentFilter={activeSegs}
           segmentFilterMode={segmentMode}
           portfolioCriteria={secondaryPortfolioCriteria}
-          onSelectionChange={handleMapSelection}
+          selection={mapSelection}
+          onSelectionChange={setMapSelection}
         />
       </div>
     </PageShell>

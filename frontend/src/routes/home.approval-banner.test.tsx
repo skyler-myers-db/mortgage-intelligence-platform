@@ -21,8 +21,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const apiMocks = vi.hoisted(() => ({
   portfolioPreview: vi.fn(),
   homeSummary: vi.fn(),
-  // The banner must NEVER reach for the lead list: GET /api/leads writes a
-  // VIEW_LEADS audit row per call.
+  // The answer band's WHO column reads the audit-free economics ranking.
+  analyticsEconomics: vi.fn(),
+  // Neither the banner nor the answer band may reach for the lead list:
+  // GET /api/leads writes a VIEW_LEADS audit row per call.
   leads: vi.fn(),
 }));
 
@@ -44,7 +46,6 @@ vi.mock('../components/AppContext', () => ({
 }));
 vi.mock('../components/mortgage/USChoroplethMap', () => ({ USChoroplethMap: () => null }));
 vi.mock('../components/mortgage/PinnedInsights', () => ({ PinnedInsights: () => null }));
-vi.mock('../components/mortgage/PortfolioSummaryCard', () => ({ PortfolioSummaryCard: () => null }));
 vi.mock('../components/mortgage/LastLoginSummary', () => ({ LastLoginSummary: () => null }));
 
 import Home from './home';
@@ -89,6 +90,7 @@ describe('Home approval-queue banner reconciles with the queue it opens', () => 
     root = createRoot(container);
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
     apiMocks.homeSummary.mockResolvedValue(null);
+    apiMocks.analyticsEconomics.mockResolvedValue({ top_borrowers: [] });
     apiMocks.portfolioPreview.mockImplementation((criteria: Criteria) =>
       Promise.resolve(
         previewPayload(criteria.marketing_eligibility === 'Eligible only' ? CONTACTABLE_SCREEN : WHOLE_BOOK_SCREEN),
@@ -152,6 +154,9 @@ describe('Home approval-queue banner reconciles with the queue it opens', () => 
   it('never reads the lead list to get its count (that read writes a VIEW_LEADS audit row)', async () => {
     await mountHome();
     expect(apiMocks.leads).not.toHaveBeenCalled();
+    // The answer band's WHO column is mounted for real here and takes its
+    // ranking from the audit-free economics read instead.
+    expect(apiMocks.analyticsEconomics).toHaveBeenCalled();
     const signal = new AbortController().signal;
     await requestHomeContactablePreview(signal);
     expect(apiMocks.portfolioPreview).toHaveBeenLastCalledWith({ marketing_eligibility: 'Eligible only' }, signal);

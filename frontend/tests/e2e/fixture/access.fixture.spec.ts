@@ -145,11 +145,13 @@ test.describe('Portfolio Builder state picker', () => {
     await expect(trigger).toHaveAttribute('aria-expanded', 'true');
     const listbox = page.getByRole('listbox', { name: 'GEO' });
     await expect(listbox).toBeVisible();
-    const activeBefore = await trigger.getAttribute('aria-activedescendant');
+    // a11y-02: the open listbox holds focus and carries aria-activedescendant.
+    await expect(listbox).toBeFocused();
+    const activeBefore = await listbox.getAttribute('aria-activedescendant');
     expect(activeBefore).toMatch(/-option-0$/);
 
     await page.keyboard.press('ArrowDown');
-    const activeAfter = await trigger.getAttribute('aria-activedescendant');
+    const activeAfter = await listbox.getAttribute('aria-activedescendant');
     expect(activeAfter).toMatch(/-option-1$/);
     const firstState = listbox.locator(`[role="option"][id="${activeAfter}"]`);
     await expect(firstState).toHaveText(STATES[0].name);

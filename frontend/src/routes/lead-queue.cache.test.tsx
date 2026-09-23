@@ -154,7 +154,8 @@ describe('LeadQueue cache identity', () => {
     expect(apiMocks.leadsPage).toHaveBeenCalledTimes(2);
     expect((apiMocks.leadsPage.mock.calls[1][2] as GeoArg).cities).toEqual(['SPRINGFIELD~IL']);
     expect(tableText()).toBe('B-SPRINGFIELD~IL');
-    expect(document.body.textContent).toContain('cities = SPRINGFIELD~IL');
+    // The active-filter chip the rows sit under names the same city.
+    expect(document.querySelector('[aria-label="Remove CITIES: SPRINGFIELD~IL filter"]')).toBeTruthy();
   });
 
   it('does not serve a city cohort to the bare national queue', async () => {

@@ -149,8 +149,8 @@ test('simultaneous outcome idempotency race produces one durable outcome without
 test('Movement filters survive Portfolio to Segment to Lead Queue browser flow', async ({ page }) => {
   await page.goto('/portfolio-builder?owner_link=Portfolio+investor+%285%2B%29&purchase_intent=HELOC+intent');
   await page.getByRole('link', { name: /Next: (?:segment intelligence|segments)/i }).click();
-  await expect(page.getByRole('button', { name: /OWNER LINK: Portfolio investor \(5\+\)/i })).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByRole('button', { name: /PURCHASE INTENT: HELOC intent/i })).toBeVisible();
+  await expect(page.getByRole('combobox', { name: /OWNER LINK: Portfolio investor \(5\+\)/i })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole('combobox', { name: /PURCHASE INTENT: HELOC intent/i })).toBeVisible();
 
   const leadsResponse = page.waitForResponse((response) => {
     if (response.status() !== 200) return false;
@@ -162,8 +162,8 @@ test('Movement filters survive Portfolio to Segment to Lead Queue browser flow',
   await page.getByRole('link', { name: /Deep-dive lead queue/i }).click();
   await leadsResponse;
   await expect(page).toHaveURL(/\/lead-queue\?/);
-  await expect(page.getByRole('button', { name: /OWNER LINK: Portfolio investor \(5\+\)/i })).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByRole('button', { name: /PURCHASE INTENT: HELOC intent/i })).toBeVisible();
+  await expect(page.getByRole('combobox', { name: /OWNER LINK: Portfolio investor \(5\+\)/i })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole('combobox', { name: /PURCHASE INTENT: HELOC intent/i })).toBeVisible();
   await expect(page.getByText('withdrawn', { exact: true })).toBeVisible({ timeout: 45_000 });
   await expect(page.getByText('not qualified', { exact: true })).toBeVisible();
 });

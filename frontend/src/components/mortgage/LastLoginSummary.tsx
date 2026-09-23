@@ -1,87 +1,28 @@
-import { useMemo } from 'react';
-import type { HomeSummary, HomeSummaryHighlight } from '../../types';
-import { Icon } from '../Icon';
+import { Link } from 'react-router';
+import type { HomeSummary } from '../../types';
+import { EvidenceChip } from '../Primitives';
 import { useApp } from '../AppContext';
+import { whyNowTriggers } from '../../lib/homeAnswer';
 import { loginSummaryDrawerSource } from '../../lib/loginSummaryDrawerSource';
 import { formatTimestamp } from '../../lib/time';
 
 /**
- * "Since your last login" — the S4 personalized home summary. Renders the
- * server-composed sentence with every number as a clickable evidence
- * affordance opening the EvidenceDrawer (baseline `mip_app.kpi_snapshots`
- * row + live `mip.semantics.portfolio_headline_metric_view` reading).
+ * WHY NOW — the S4 "since your last login" summary as the answer band's
+ * middle column (2026-09-21 audit flow-05 / visual-06). Each server
+ * highlight becomes one trigger: its exact server-minted token as an
+ * EvidenceChip (the drawer cites the `mip_app.kpi_snapshots` baseline row and
+ * the live `mip.semantics.portfolio_headline_metric_view` reading), then a
+ * plain-language population that deep-links to the Lead Queue filter with the
+ * same predicate.
  *
  * Honesty contract mirrored from the backend:
- * - the deterministic template is the source of truth; a `genie` phrasing
- *   is a validated rephrasing of the exact same tokens and is labelled;
+ * - the deterministic highlights are the source of truth; tokens render
+ *   verbatim and nothing is re-derived client-side. The optional Genie
+ *   phrasing of the sentence is no longer shown: the column lists the same
+ *   tokens as structured items instead of a rephrased sentence;
  * - first-visit / pre-backfill states render welcome copy with live
  *   numbers only — never fake deltas.
  */
-
-type Segment = { text: string } | { highlight: HomeSummaryHighlight };
-
-/** Split the sentence around each highlight's exact value token so the
- * numbers become interactive without re-deriving any of them client-side.
- * The backend guarantees each token appears exactly once (deterministic
- * template and validated Genie phrasing alike); `null` means a token
- * could not be located and the caller should fall back to the structured
- * per-highlight rendering. */
-export function segmentHeadline(
-  headline: string,
-  highlights: HomeSummaryHighlight[],
-): Segment[] | null {
-  const matches: Array<{ start: number; end: number; highlight: HomeSummaryHighlight }> = [];
-  for (const highlight of highlights) {
-    let from = 0;
-    let start = -1;
-    for (;;) {
-      start = headline.indexOf(highlight.value_token, from);
-      if (start === -1) break;
-      const end = start + highlight.value_token.length;
-      if (!matches.some((m) => start < m.end && end > m.start)) break;
-      from = start + 1;
-    }
-    if (start === -1) return null;
-    matches.push({ start, end: start + highlight.value_token.length, highlight });
-  }
-  matches.sort((a, b) => a.start - b.start);
-  const segments: Segment[] = [];
-  let cursor = 0;
-  for (const m of matches) {
-    if (m.start > cursor) segments.push({ text: headline.slice(cursor, m.start) });
-    segments.push({ highlight: m.highlight });
-    cursor = m.end;
-  }
-  if (cursor < headline.length) segments.push({ text: headline.slice(cursor) });
-  return segments;
-}
-
-function SummaryNumber({
-  highlight,
-  summary,
-}: {
-  highlight: HomeSummaryHighlight;
-  summary: HomeSummary;
-}) {
-  const { setDrawer, showEvidence } = useApp();
-  const source = loginSummaryDrawerSource(highlight, {
-    previousVisitAt: summary.previous_visit_at,
-  });
-  if (!showEvidence) {
-    return <strong className="login-summary__num-static">{highlight.display}</strong>;
-  }
-  return (
-    <button
-      type="button"
-      className="login-summary__num"
-      onClick={() => setDrawer(source)}
-      aria-label={`${highlight.display} ${highlight.label} — view source evidence`}
-    >
-      {highlight.display}
-      <Icon name="link" size={9} className="login-summary__num-ico" />
-    </button>
-  );
-}
 
 const TITLES: Record<HomeSummary['status'], string> = {
   delta: 'Since your last login',
@@ -89,7 +30,7 @@ const TITLES: Record<HomeSummary['status'], string> = {
   no_baseline: 'Welcome back',
 };
 
-function subtitleFor(summary: HomeSummary): string {
+export function loginSummarySubtitle(summary: HomeSummary): string {
   if (summary.status === 'delta') {
     const visit = summary.previous_visit_at
       ? formatTimestamp(summary.previous_visit_at, { withYear: false })
@@ -114,86 +55,62 @@ export function LastLoginSummary({
   summary: HomeSummary | null;
   loading?: boolean;
 }) {
-  const segments = useMemo(() => {
-    if (!summary?.headline || !Array.isArray(summary.highlights)) return null;
-    return segmentHeadline(summary.headline, summary.highlights);
-  }, [summary]);
-
-  if (loading) {
-    return (
-      <section
-        className="surface login-summary"
-        aria-busy="true"
-        aria-label="Last-login summary loading"
-      >
-        <div className="surface__hdr surface__hdr--split">
-          <div className="surface__hdr-main">
-            <div className="surface__icon"><Icon name="sparkle" size={14} /></div>
-            <div className="h-4">Since your last login</div>
-          </div>
-        </div>
-        <div className="surface__body">
-          <span className="skeleton login-summary__skeleton" aria-hidden="true" />
-        </div>
-      </section>
-    );
-  }
-
-  // Malformed / absent payloads render nothing: the KPI row above already
-  // owns the degraded-state story for this data plane.
-  if (!summary || !summary.status || !summary.headline) return null;
+  const { showEvidence } = useApp();
+  // Malformed / absent payloads list nothing: the KPI row owns the
+  // degraded-state story for this data plane, so the column says what it
+  // cannot show instead of stacking a second error callout.
+  const valid = Boolean(summary?.status && TITLES[summary.status] && Array.isArray(summary.highlights));
+  const triggers = valid ? whyNowTriggers(summary) : [];
 
   return (
-    <section className="surface login-summary" aria-label={TITLES[summary.status]}>
-      <div className="surface__hdr surface__hdr--split">
-        <div className="surface__hdr-main">
-          <div className="surface__icon"><Icon name="sparkle" size={14} /></div>
-          <div>
-            <div className="h-4">{TITLES[summary.status]}</div>
-            <div className="muted fs-12">{subtitleFor(summary)}</div>
-          </div>
-        </div>
-        {summary.phrasing_source === 'genie' && (
-          <span
-            className="chip chip--neutral"
-            title="Genie rephrased the sentence; every figure is the deterministic template's exact token."
-          >
-            Genie-phrased · deterministic numbers
-          </span>
-        )}
+    <section
+      className="home-answer__col home-answer__col--why login-summary"
+      aria-labelledby="home-answer-why"
+      aria-busy={loading || undefined}
+    >
+      <div className="home-answer__col-hdr">
+        <h3 className="h-4" id="home-answer-why">Why now</h3>
+        {valid && summary && <span className="home-answer__col-sub">{TITLES[summary.status]}</span>}
       </div>
-      <div className="surface__body">
-        {segments ? (
-          <p className="login-summary__narrative">
-            {segments.map((segment, idx) =>
-              'text' in segment ? (
-                <span key={idx}>{segment.text}</span>
+      {loading ? (
+        <ul className="home-answer__triggers" aria-hidden="true">
+          {[0, 1, 2].map((index) => (
+            <li key={index}><span className="skeleton home-answer__row-skeleton" /></li>
+          ))}
+        </ul>
+      ) : triggers.length === 0 ? (
+        <p className="home-answer__empty" role="status">
+          Changes since your last login are not available right now.
+        </p>
+      ) : (
+        <ul className="home-answer__triggers">
+          {triggers.map((trigger) => (
+            <li key={trigger.highlight.measure} className="home-answer__trigger">
+              {showEvidence ? (
+                <EvidenceChip
+                  source={loginSummaryDrawerSource(trigger.highlight, {
+                    previousVisitAt: summary?.previous_visit_at ?? null,
+                  })}
+                >
+                  {trigger.display}
+                </EvidenceChip>
               ) : (
-                <SummaryNumber
-                  key={segment.highlight.measure}
-                  highlight={segment.highlight}
-                  summary={summary}
-                />
-              ),
-            )}
-          </p>
-        ) : (
-          // Defensive fallback: a token could not be located in the
-          // sentence (should be impossible given the backend validator).
-          // Render the structured highlights so every number keeps its
-          // evidence affordance instead of trusting unparseable prose.
-          <p className="login-summary__narrative">
-            {summary.highlights.map((highlight, idx) => (
-              <span key={highlight.measure}>
-                {idx > 0 && ', '}
-                <SummaryNumber highlight={highlight} summary={summary} />
-                {' '}
-                {highlight.label}
+                <strong className="login-summary__num-static">{trigger.display}</strong>
+              )}{' '}
+              <span className="home-answer__trigger-text">
+                {trigger.joiner.trim() && `${trigger.joiner.trim()} `}
+                {trigger.href ? <Link to={trigger.href}>{trigger.noun}</Link> : trigger.noun}
               </span>
-            ))}
-          </p>
-        )}
-      </div>
+            </li>
+          ))}
+        </ul>
+      )}
+      {valid && summary && !loading && (
+        <p className="home-answer__note">
+          {loginSummarySubtitle(summary)} Whole book; each link opens the contactable
+          subset in the Lead Queue.
+        </p>
+      )}
     </section>
   );
 }

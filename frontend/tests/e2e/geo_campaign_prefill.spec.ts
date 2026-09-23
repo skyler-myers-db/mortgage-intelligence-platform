@@ -169,7 +169,7 @@ test.describe('S9 — geo overlay + campaign-from-geo prefill', () => {
     await page.goto(APP_URL + '/');
 
     // --- State level: map up, overlay on, national totals. ---
-    const illinois = page.locator('[aria-label="Illinois"]').first();
+    const illinois = page.locator('[aria-label^="Illinois:"]').first();
     await expect(illinois).toBeVisible({ timeout: 45_000 });
     await page.getByRole('button', { name: 'Unattended leads' }).click();
     await expect(page.getByText('Unattended leads in selection')).toBeVisible();
@@ -231,7 +231,7 @@ test.describe('S9 — geo overlay + campaign-from-geo prefill', () => {
       }),
     );
     await page.goto(APP_URL + '/');
-    await expect(page.locator('[aria-label="Illinois"]').first()).toBeVisible({ timeout: 45_000 });
+    await expect(page.locator('[aria-label^="Illinois:"]').first()).toBeVisible({ timeout: 45_000 });
     await page.getByRole('button', { name: 'Unattended leads' }).click();
     // Explicit degraded note; base borrower counts stay on the legend.
     await expect(page.locator('.map-legend')).toContainText('Coverage overlay unavailable', {
@@ -239,6 +239,6 @@ test.describe('S9 — geo overlay + campaign-from-geo prefill', () => {
     });
     await expect(page.getByText('Unattended leads in selection')).toBeVisible();
     // The map itself still renders regions (base coloring, not blanked).
-    await expect(page.locator('[aria-label="Illinois"]').first()).toBeVisible();
+    await expect(page.locator('[aria-label^="Illinois:"]').first()).toBeVisible();
   });
 });

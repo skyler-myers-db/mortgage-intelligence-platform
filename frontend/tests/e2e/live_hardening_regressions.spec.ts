@@ -209,7 +209,7 @@ async function clickSegment(page: Page, label: string): Promise<void> {
 }
 
 async function expectClearFiltersState(page: Page, disabled: boolean): Promise<void> {
-  const clear = page.getByRole('button', { name: /^Clear filters$/ }).first();
+  const clear = page.getByRole('button', { name: /^Clear (?:filters|all)$/ }).first();
   await expect(clear).toBeVisible({ timeout: 30_000 });
   if (disabled) {
     await expect(clear).toBeDisabled();
@@ -317,7 +317,7 @@ test('Clear filters is visible, disabled when clean, and clears active filters o
   await expectClearFiltersState(page, true);
   await gotoApp(page, '/lead-queue?states=IL&segment_codes=itm,equity&segment_mode=any');
   await expectClearFiltersState(page, false);
-  await page.getByRole('button', { name: /^Clear filters$/ }).first().click();
+  await page.getByRole('button', { name: /^Clear all$/ }).first().click();
   await expect(page).toHaveURL(/\/lead-queue$/);
   await expectClearFiltersState(page, true);
 
@@ -386,7 +386,7 @@ test('Segment Intelligence stacks selected segments into an any-match cohort and
   expect(url.searchParams.get('segment_mode')).toBe('all');
   expect(url.searchParams.get('segment_codes') ?? url.searchParams.get('segments')).toMatch(/itm/);
   expect(url.searchParams.get('segment_codes') ?? url.searchParams.get('segments')).toMatch(/listed/);
-  await expect(page.getByRole('button', { name: /SEGMENT:\s*2 segments selected \(all selected\)/i })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole('combobox', { name: /SEGMENT:\s*2 segments selected \(all selected\)/i })).toBeVisible({ timeout: 20_000 });
 });
 
 /**
@@ -510,7 +510,7 @@ test('state drilldown lands on ZIP tiles with live segment-filtered fills', asyn
   await clickSegment(page, 'Prime Refi Candidates');
   await clickSegment(page, 'Listed for Sale');
   await page.locator('path.map-region', { hasText: '' }).first().waitFor({ state: 'visible', timeout: 45_000 });
-  await page.locator(`path[aria-label="${selected!.stateName}"]`).click();
+  await page.locator(`path[aria-label^="${selected!.stateName}:"]`).click();
 
   const tiles = page.locator('.zip-tiles');
   await expect(tiles, `ZIP tiles for ${selected!.stateName}`).toBeVisible({ timeout: 45_000 });
@@ -539,7 +539,9 @@ test('Genie answers valid recommended and free-form questions without policy-blo
   await page.locator('textarea[aria-label="Ask Genie — question"]').fill(questions[0]);
   await page.getByRole('button', { name: /^Ask Genie$/i }).first().click();
   await expect(page.getByText(/Policy blocked|Genie reconnecting|Genie is warming up/i)).toHaveCount(0, { timeout: 60_000 });
-  await expect(page.getByText(/mip\.gold\.lead_population/i).first()).toBeVisible({ timeout: 60_000 });
+  // flow-10 (2026-09-23): source chips show a plain label and carry the
+  // governed UC path in their title attribute, so the pin reads the title.
+  await expect(page.locator('[title*="mip.gold.lead_population" i]').first()).toBeVisible({ timeout: 60_000 });
 });
 
 test('Genie state-breakdown action reconciles broad answer with eligible Lead Queue subset', async ({ request }) => {
@@ -592,9 +594,9 @@ test('Genie open-cohort action, Lead Queue URL, dropdowns, and rows agree', asyn
     await expect(page.getByText(new RegExp(`zip = ${zips[0]}`, 'i'))).toBeVisible();
   }
   if (segments.length > 1) {
-    await expect(page.getByRole('button', { name: /SEGMENT:\s*\d+ segments selected/i })).toBeVisible();
+    await expect(page.getByRole('combobox', { name: /SEGMENT:\s*\d+ segments selected/i })).toBeVisible();
   } else {
-    await expect(page.getByRole('button', { name: /SEGMENT:\s*Prime Refi Candidates/i })).toBeVisible();
+    await expect(page.getByRole('combobox', { name: /SEGMENT:\s*Prime Refi Candidates/i })).toBeVisible();
   }
 
   if (zips.length > 0) {

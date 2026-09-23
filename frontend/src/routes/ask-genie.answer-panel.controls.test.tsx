@@ -141,9 +141,9 @@ describe('AskGenieAnswerPanel composer controls', () => {
   it('Edit under a sent question reloads it into the composer and focuses it', () => {
     render('');
     const edits = container.querySelectorAll<HTMLButtonElement>('button[aria-label="Edit question"]');
-    // Latest turn first, then the earlier one: two questions, two Edit controls.
+    // Oldest turn first, the floating panel's order: two questions, two Edit controls.
     expect(edits.length).toBe(2);
-    act(() => edits[1].click());
+    act(() => edits[0].click());
     expect(onQuestionChange).toHaveBeenCalledWith('Which segments have the highest approval rate?');
     expect(document.activeElement).toBe(textarea());
     expect(onAsk).not.toHaveBeenCalled();
@@ -151,15 +151,28 @@ describe('AskGenieAnswerPanel composer controls', () => {
 
   it('Regenerate re-asks a sent question as a new turn, and is held while a turn is in flight', () => {
     render('');
-    const regenerate = container.querySelector<HTMLButtonElement>('button[aria-label="Regenerate answer"]')!;
+    // The latest turn is the last one in the thread, right above the composer.
+    const regenerates = container.querySelectorAll<HTMLButtonElement>('button[aria-label="Regenerate answer"]');
+    const regenerate = regenerates[regenerates.length - 1];
     expect(regenerate.title).toContain('cannot rewrite its history');
     act(() => regenerate.click());
     expect(onAsk).toHaveBeenCalledWith('What is the approval trend over the last 30 days?');
 
     render('', true);
-    const held = container.querySelector<HTMLButtonElement>('button[aria-label="Regenerate answer"]')!;
+    const helds = container.querySelectorAll<HTMLButtonElement>('button[aria-label="Regenerate answer"]');
+    const held = helds[helds.length - 1];
     expect(held.disabled).toBe(true);
     expect(held.title).toContain('still answering');
+  });
+
+  it('labels each answer source in plain words, the governed path in its tooltip (flow-10)', () => {
+    render('');
+    const chips = [...container.querySelectorAll<HTMLButtonElement>('.genie-thread .evidence-chip')];
+    expect(chips).toHaveLength(2);
+    for (const chip of chips) {
+      expect(chip.textContent).toBe('Borrower 360');
+      expect(chip.title).toBe('mip.gold.borrower_360');
+    }
   });
 
   it('a refused turn keeps Edit but offers no Regenerate or Retry', () => {
@@ -173,5 +186,89 @@ describe('AskGenieAnswerPanel composer controls', () => {
     expect(container.querySelectorAll('button[aria-label="Edit question"]').length).toBe(1);
     expect(container.querySelector('button[aria-label="Regenerate answer"]')).toBeNull();
     expect(container.querySelector('button[aria-label="Retry question"]')).toBeNull();
+  });
+});
+
+describe('AskGenieAnswerPanel docked composer (visual-07)', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+  const onAsk = vi.fn();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    installSessionStorage();
+    clearGenieTurns();
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  function render(question: string) {
+    act(() => {
+      root.render(
+        <MemoryRouter>
+          <AskGenieAnswerPanel
+            questionRef={createRef<HTMLTextAreaElement>()}
+            question={question}
+            onQuestionChange={() => undefined}
+            onAsk={onAsk}
+            onNewThread={() => undefined}
+            onLoadSession={() => undefined}
+            loading={false}
+            warmingUp={null}
+            errorMsg={null}
+            onRetry={() => undefined}
+            sampleQuestions={['Which states have the most prime refi candidates?']}
+            payload={null}
+            submittedQuestion={null}
+            onFollowUp={() => undefined}
+            onAction={() => undefined}
+            actionStatus={null}
+          />
+        </MemoryRouter>,
+      );
+    });
+  }
+
+  const composer = () => container.querySelector<HTMLFormElement>('form.genie-composer')!;
+  const ask = () =>
+    [...composer().querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === 'Ask Genie')!;
+
+  it('is the card footer, after the suggestions, with a real placeholder', () => {
+    render('');
+    const textarea = composer().querySelector('textarea')!;
+    expect(textarea.getAttribute('aria-label')).toBe('Ask Genie — question');
+    expect(textarea.placeholder).toMatch(/prime refi candidates/);
+    expect(textarea.getAttribute('rows')).toBe('2');
+    expect(composer().classList.contains('surface__ft')).toBe(true);
+    const samples = container.querySelector('[aria-label="Suggested Genie questions"]')!;
+    expect(samples.compareDocumentPosition(composer()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('keeps Ask primary, disabled until there is text, and submits through the form', () => {
+    render('');
+    expect(ask().classList.contains('btn--primary')).toBe(true);
+    expect(ask().type).toBe('submit');
+    expect(ask().disabled).toBe(true);
+
+    render('Which states lead?');
+    expect(ask().disabled).toBe(false);
+    act(() => {
+      composer().dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+    expect(onAsk).toHaveBeenCalledWith('Which states lead?');
+  });
+
+  it('never submits an empty question', () => {
+    render('   ');
+    act(() => {
+      composer().dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+    expect(onAsk).not.toHaveBeenCalled();
   });
 });

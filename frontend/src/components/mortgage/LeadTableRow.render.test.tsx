@@ -156,8 +156,15 @@ describe('LeadTableRow display fallbacks', () => {
       );
     });
 
-    expect(document.body.textContent).toContain('Multi-owner (3)');
-    expect(document.querySelector('.chip--neutral.chip--compact')).not.toBeNull();
+    // Audit tables-04: the one-line Status cell keeps one primary chip
+    // (outreach "Queued" here); the owner-count caveat folds into `+n`,
+    // whose accessible name spells it out.
+    const more = document.querySelector('.lead-table__more');
+    expect(more?.textContent).toBe('+1');
+    // One hidden value reads in the singular ("1 more status", not "statuses").
+    expect(more?.getAttribute('aria-label')).toBe('1 more status: Owners: Multi-owner (3)');
+    expect(more?.classList.contains('chip--neutral')).toBe(true);
+    expect(more?.classList.contains('chip--compact')).toBe(true);
   });
 
   it('renders the unresolved-owner warning chip when has_unresolved_owner is true', () => {
