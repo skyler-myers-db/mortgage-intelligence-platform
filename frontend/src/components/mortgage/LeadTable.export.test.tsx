@@ -134,9 +134,25 @@ describe('LeadTable CSV export', () => {
   let container: HTMLDivElement;
   let root: Root;
   let blobs: Blob[];
+  // An export still hashing when its test ends (a timeout under load) would
+  // download into the NEXT test's blobs. Every export hashes through
+  // crypto.subtle.digest first, so track those digests and drain them before
+  // the test is torn down (as LeadTable.exportReceipt.test.tsx does).
+  const pendingDigests = new Set<Promise<ArrayBuffer>>();
 
   beforeEach(() => {
     blobs = [];
+    const subtle = globalThis.crypto.subtle;
+    const digest = subtle.digest.bind(subtle);
+    vi.spyOn(subtle, 'digest').mockImplementation((algorithm, data) => {
+      const pending = digest(algorithm, data);
+      pendingDigests.add(pending);
+      const settled = () => {
+        pendingDigests.delete(pending);
+      };
+      pending.then(settled, settled);
+      return pending;
+    });
     // Capture the bytes handed to the download; never navigate.
     vi.spyOn(URL, 'createObjectURL').mockImplementation((blob: Blob | MediaSource) => {
       blobs.push(blob as Blob);
@@ -149,10 +165,15 @@ describe('LeadTable CSV export', () => {
     root = createRoot(container);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    vi.useRealTimers();
+    // Let a late export finish (post its receipt, download) inside this test.
+    await act(async () => {
+      await Promise.allSettled([...pendingDigests]);
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+    });
     act(() => root.unmount());
     container.remove();
-    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 

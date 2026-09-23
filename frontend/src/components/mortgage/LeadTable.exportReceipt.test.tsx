@@ -115,11 +115,27 @@ describe('LeadTable audited export', () => {
   let container: HTMLDivElement;
   let root: Root;
   let blobs: Blob[];
+  // An export still hashing when its test ends (a timeout under load) would
+  // post its receipt into the NEXT test's receiptCalls. Every export hashes
+  // through crypto.subtle.digest before it asks for a receipt, so track those
+  // digests and drain them before the test is torn down.
+  const pendingDigests = new Set<Promise<ArrayBuffer>>();
 
   beforeEach(() => {
     blobs = [];
     receiptCalls.length = 0;
     mocks.receipt.impl = async (declaration) => receiptFor(declaration);
+    const subtle = globalThis.crypto.subtle;
+    const digest = subtle.digest.bind(subtle);
+    vi.spyOn(subtle, 'digest').mockImplementation((algorithm, data) => {
+      const pending = digest(algorithm, data);
+      pendingDigests.add(pending);
+      const settled = () => {
+        pendingDigests.delete(pending);
+      };
+      pending.then(settled, settled);
+      return pending;
+    });
     vi.spyOn(URL, 'createObjectURL').mockImplementation((blob: Blob | MediaSource) => {
       blobs.push(blob as Blob);
       return 'blob:lead-export';
@@ -131,7 +147,12 @@ describe('LeadTable audited export', () => {
     root = createRoot(container);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    // Let a late export finish (post its receipt, download) inside this test.
+    await act(async () => {
+      await Promise.allSettled([...pendingDigests]);
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+    });
     act(() => root.unmount());
     container.remove();
     vi.restoreAllMocks();
