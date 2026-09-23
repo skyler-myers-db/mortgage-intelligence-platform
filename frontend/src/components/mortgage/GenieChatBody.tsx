@@ -95,7 +95,8 @@ function StoppedTurnNote({
           <Chip variant="neutral">Stopped</Chip>
           <span>
             Stopped before the answer arrived. Genie may still finish this turn on the server; that reply is
-            discarded and never shown.
+            discarded and never shown, but Genie may keep the question as context for the next turn in this
+            thread.
           </span>
         </div>
       </div>

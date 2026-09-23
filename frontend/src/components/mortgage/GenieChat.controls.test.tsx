@@ -317,6 +317,8 @@ describe('floating Genie conversational controls', () => {
     const note = container.querySelector('.genie__msg--stopped');
     expect(note?.getAttribute('title')).toBeNull();
     expect(note?.textContent).toContain('Genie may still finish this turn on the server');
+    // No server cancel exists, so the note does not promise the thread forgot it.
+    expect(note?.textContent).toContain('Genie may keep the question as context for the next turn in this thread');
     // A stopped turn has no answer to regenerate: its re-ask is "Ask again".
     expect(container.querySelector('.genie__msg-actions--user button[aria-label="Regenerate answer"]')).toBeNull();
     armInlineAnswer(answer({ answer: 'Texas leads.' }));
