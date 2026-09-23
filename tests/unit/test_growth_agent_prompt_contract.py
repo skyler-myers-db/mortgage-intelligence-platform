@@ -12,7 +12,7 @@ REPO = Path(__file__).resolve().parents[2]
     ("relative_path", "prompt", "workflow_id"),
     [
         (
-            "frontend/src/routes/ask-genie.tsx",
+            "frontend/src/routes/ask-genie.growth-agent-state.ts",
             "Find prime refinance and listed-for-sale opportunities across current coverage.",
             "custom_segment_watch",
         ),
