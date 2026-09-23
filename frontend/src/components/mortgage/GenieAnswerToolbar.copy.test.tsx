@@ -92,7 +92,8 @@ describe('GenieAnswerToolbar', () => {
     installClipboard(undefined);
   });
 
-  const render = (p: GenieAnswerShape) => act(() => root.render(<GenieAnswerToolbar payload={p} />));
+  const render = (p: GenieAnswerShape, announce?: boolean) =>
+    act(() => root.render(<GenieAnswerToolbar payload={p} announce={announce} />));
   const button = (name: string) => {
     const el = Array.from(container.querySelectorAll('button')).find((b) => b.textContent?.trim() === name);
     if (!el) throw new Error(`${name} button not rendered`);
@@ -113,6 +114,16 @@ describe('GenieAnswerToolbar', () => {
     // The confirmation is visible text, not a second live region: the
     // floating panel owns the one announcer (a11y-06).
     expect(container.querySelector('[role="status"], [aria-live]')).toBeNull();
+  });
+
+  it('on /ask-genie (announce) the confirmation is a polite status region too', async () => {
+    installClipboard(vi.fn().mockResolvedValue(undefined));
+    render(payload(), true);
+    await act(async () => button('Copy SQL').click());
+    await flush();
+    const region = container.querySelector('[role="status"]');
+    expect(region?.classList.contains('genie-answer__toolbar-status')).toBe(true);
+    expect(region?.textContent).toBe('SQL copied');
   });
 
   it('Copy answer writes the plain-text answer', async () => {
@@ -137,6 +148,30 @@ describe('GenieAnswerToolbar', () => {
     expect(field?.value).toBe(SQL);
     expect(field?.readOnly).toBe(true);
     expect(container.textContent).toContain('blocked clipboard access');
+    // "The text is selected above" holds without a click: the field has
+    // focus and its whole text is selected; the hint describes it.
+    expect(document.activeElement).toBe(field);
+    expect(field?.selectionStart).toBe(0);
+    expect(field?.selectionEnd).toBe(SQL.length);
+    const hintId = field?.getAttribute('aria-describedby');
+    expect(hintId && document.getElementById(hintId)?.textContent).toContain('copy it with your keyboard');
+  });
+
+  // An invariant, not a regression pin: the React Compiler memoizes an inline
+  // ref callback without reactive deps, so the old inline `select()` ref held
+  // it too. The stable ref + effect keeps it without relying on the compiler.
+  it('the fallback selects once on appearance, not on every render', async () => {
+    installClipboard(vi.fn().mockRejectedValue(new DOMException('denied', 'NotAllowedError')));
+    render(payload());
+    await act(async () => button('Copy SQL').click());
+    await flush();
+    const field = container.querySelector<HTMLTextAreaElement>('.genie-answer__copy-fallback textarea')!;
+    // The user narrows the selection by hand, then something re-renders the
+    // toolbar: their selection must survive.
+    act(() => field.setSelectionRange(0, 6));
+    render(payload());
+    expect(field.selectionStart).toBe(0);
+    expect(field.selectionEnd).toBe(6);
   });
 
   it('no clipboard API at all also falls back instead of failing silently', async () => {

@@ -298,7 +298,7 @@ export function GenieAnswer({
           only: a governed refusal or degraded caveat has no SQL, and its copy
           would be the guardrail's own text. */}
       {isTrustedGenieSource(payload.source) && !isGovernedActionResult && (
-        <GenieAnswerToolbar payload={payload} />
+        <GenieAnswerToolbar payload={payload} announce={announce} />
       )}
       {payload.proof && showProof && typeof document !== 'undefined' && createPortal(
         <>
