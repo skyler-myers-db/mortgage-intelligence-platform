@@ -3,11 +3,20 @@ import type { RejectReasonCode } from './LeadTable.types';
 
 /** Concurrency cap for the bulk-approve client-side loop. */
 export const BULK_APPROVE_CONCURRENCY = 3;
-export const LEAD_ROW_ESTIMATE_PX = 86;
-export const LEAD_EXPANDED_PREVIEW_ESTIMATE_PX = 360;
+/**
+ * One-line rows at the comfortable `--row-h` token (44px; 36px compact; the
+ * 1px row rule sits inside it, measured). The old 86px estimate described the
+ * stacked-chip rows. Compact rows are shorter; measureElement corrects the
+ * estimate on first paint, so the comfortable height is the safe default.
+ */
+export const LEAD_ROW_ESTIMATE_PX = 44;
+/**
+ * Borrower 360 preview plus the workflow strip that took the row's timestamps
+ * and actions: measured at 514px at 1440x900, so the estimate starts there.
+ */
+export const LEAD_EXPANDED_PREVIEW_ESTIMATE_PX = 520;
 export const LEAD_ROW_OVERSCAN = 12;
 export const LEAD_VIRTUALIZATION_THRESHOLD = 120;
-export const LEAD_TABLE_COL_COUNT = 15;
 
 export const REJECT_REASONS: { code: RejectReasonCode; label: string }[] = [
   { code: 'low_intent', label: 'Low intent' },

@@ -3,6 +3,7 @@ import { isPublicLenderRef, LENDER_RELATIONSHIP_OPTIONS } from '../lib/lenderFil
 import { SEGMENT_DEFINITIONS } from '../lib/segmentMetadata';
 import type { SegmentCode } from '../types';
 import { HIGH_OPPORTUNITY_KPI_LABEL } from '../lib/opportunityScore';
+import type { LeadTableView } from '../components/mortgage/LeadTable.columns';
 
 // S1.3: codes, labels, and filter options derive from SEGMENT_DEFINITIONS
 // (the canonical presentation registry) so a segment added there appears in
@@ -378,6 +379,29 @@ export function buildLeadQueueExportFilters(input: LeadQueueExportFiltersInput):
   }
   const rendered = params.toString();
   return rendered.length > 0 ? rendered : 'none';
+}
+
+/**
+ * Column preset of the ranked-borrower table (audit tables-05), persisted as
+ * `?view=sales-ops`. The Default view is the prototype's columns plus the
+ * merged Status cell and never appears in the URL. `view` is a display
+ * preference, not a filter: it is not sent to /api/leads, not exported, and
+ * survives Clear all.
+ */
+export const LEAD_TABLE_VIEW_PARAM = 'view';
+
+export function parseLeadTableView(raw: string | null): LeadTableView {
+  return raw?.trim().toLowerCase() === 'sales-ops' ? 'sales-ops' : 'default';
+}
+
+export function searchParamsWithLeadTableView(
+  searchParams: URLSearchParams,
+  view: LeadTableView,
+): URLSearchParams {
+  const next = new URLSearchParams(searchParams);
+  if (view === 'default') next.delete(LEAD_TABLE_VIEW_PARAM);
+  else next.set(LEAD_TABLE_VIEW_PARAM, view);
+  return next;
 }
 
 export interface LeadQueueLoadErrorState {

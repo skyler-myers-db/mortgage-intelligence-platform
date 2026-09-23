@@ -6,13 +6,21 @@
  * deployed app on real Unity Catalog + Lakebase data.
  *
  * Flow under test: assign a lead to a seeded loan officer via the S2
- * endpoint -> the Lead Queue row shows the assignee chip AND the
- * lifecycle status chip -> advancing the lifecycle updates the chip ->
- * an illegal transition is rejected with 409.
+ * endpoint -> the Lead Queue names the lifecycle stage -> advancing the
+ * lifecycle updates it -> an illegal transition is rejected with 409.
+ *
+ * Where the stage lives (audit tables-04, one-line rows): the Default
+ * view's merged Status cell may fold the assignment into `+n` behind a
+ * newer outreach or call state, so the spec reads the Sales ops view,
+ * whose Assigned-to cell shows the assignee chip with the stage as its
+ * `+n` ("1 more assignment detail: Stage: Assigned"), and then the
+ * expanded row's workflow strip, which carries the lifecycle stage chip
+ * and its advance control. The same locators are proven against the
+ * rendered fixture DOM in fixture/queue-layout.fixture.spec.ts.
  */
 
 import { randomUUID } from 'node:crypto';
-import { expect, test, type APIRequestContext } from '@playwright/test';
+import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 
 const LIVE = process.env.E2E_LIVE === '1';
 test.skip(!LIVE, 'Set E2E_LIVE=1 to run loan-officer assignment regressions against the deployed app.');
@@ -45,6 +53,32 @@ async function fetchLeadForAssignment(request: APIRequestContext): Promise<strin
   const rows = (await resp.json()) as Array<{ borrower_id?: string }>;
   expect(rows.length, 'need live leads to assign').toBeGreaterThan(0);
   return rows[0].borrower_id!;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Open the lead in the Sales ops view and assert its lifecycle stage in-row and in the workflow strip. */
+async function expectLifecycleStage(page: Page, borrowerId: string, stage: string): Promise<void> {
+  await page.goto(`/lead-queue?view=sales-ops&borrower_ids=${encodeURIComponent(borrowerId)}`, {
+    waitUntil: 'domcontentloaded',
+  });
+  const row = page.locator('tr', { has: page.getByTestId(`lead-select-${borrowerId}`) });
+  await expect(row).toBeVisible({ timeout: 30_000 });
+  const assignment = row.getByTestId(`lead-assignment-${borrowerId}`);
+  await expect(
+    assignment.getByRole('button', { name: new RegExp(`Stage: ${escapeRegExp(stage)}$`) }),
+    `the Assigned-to cell names the ${stage} stage`,
+  ).toBeVisible();
+
+  await page.getByRole('button', { name: `Toggle preview for lead ${borrowerId}` }).click();
+  const workflow = page.getByTestId(`lead-workflow-${borrowerId}`);
+  await expect(workflow).toBeVisible();
+  await expect(
+    workflow.locator('.chip__label', { hasText: new RegExp(`^${escapeRegExp(stage)}$`) }),
+    `the expanded row's workflow strip shows the ${stage} chip`,
+  ).toBeVisible();
 }
 
 test('seeded loan-officer roster exposes array coverage', async ({ request }) => {
@@ -80,13 +114,8 @@ test('assign a lead -> lifecycle chip appears in the Lead Queue and advances', a
   expect(body.assignment.status).toBe('assigned');
   expect(body.audit_event_id, 'assign must write an audit row').toBeTruthy();
 
-  // Chip appears on the assigned row in the Lead Queue.
-  await page.goto(`/lead-queue?borrower_ids=${encodeURIComponent(borrowerId)}`, {
-    waitUntil: 'domcontentloaded',
-  });
-  const row = page.locator('tr', { has: page.getByTestId(`lead-select-${borrowerId}`) });
-  await expect(row).toBeVisible({ timeout: 30_000 });
-  await expect(row.locator('.chip__label', { hasText: 'Assigned' }).first()).toBeVisible();
+  // The stage appears for the assigned lead in the Lead Queue.
+  await expectLifecycleStage(page, borrowerId, 'Assigned');
 
   // Illegal jump is rejected; the lifecycle is enforced server-side.
   const illegal = await request.patch(
@@ -108,9 +137,5 @@ test('assign a lead -> lifecycle chip appears in the Lead Queue and advances', a
   expect(advancedBody.assignment.status).toBe('contact_drafted');
   expect(advancedBody.audit_event_id, 'status transition must write an audit row').toBeTruthy();
 
-  await page.goto(`/lead-queue?borrower_ids=${encodeURIComponent(borrowerId)}`, {
-    waitUntil: 'domcontentloaded',
-  });
-  await expect(row).toBeVisible({ timeout: 30_000 });
-  await expect(row.locator('.chip__label', { hasText: 'Contact drafted' }).first()).toBeVisible();
+  await expectLifecycleStage(page, borrowerId, 'Contact drafted');
 });

@@ -209,7 +209,7 @@ async function clickSegment(page: Page, label: string): Promise<void> {
 }
 
 async function expectClearFiltersState(page: Page, disabled: boolean): Promise<void> {
-  const clear = page.getByRole('button', { name: /^Clear filters$/ }).first();
+  const clear = page.getByRole('button', { name: /^Clear (?:filters|all)$/ }).first();
   await expect(clear).toBeVisible({ timeout: 30_000 });
   if (disabled) {
     await expect(clear).toBeDisabled();
@@ -317,7 +317,7 @@ test('Clear filters is visible, disabled when clean, and clears active filters o
   await expectClearFiltersState(page, true);
   await gotoApp(page, '/lead-queue?states=IL&segment_codes=itm,equity&segment_mode=any');
   await expectClearFiltersState(page, false);
-  await page.getByRole('button', { name: /^Clear filters$/ }).first().click();
+  await page.getByRole('button', { name: /^Clear all$/ }).first().click();
   await expect(page).toHaveURL(/\/lead-queue$/);
   await expectClearFiltersState(page, true);
 

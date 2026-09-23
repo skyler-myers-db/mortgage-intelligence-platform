@@ -144,42 +144,69 @@
 .lead-table__borrower { font-size: var(--fs-12); color: var(--text-1); }
 .lead-table__clip { font-size: 10px; }
 .lead-table__zip { font-size: var(--fs-11); }
+/* Audit visual-01 / tables-01 / flow-01: a fixed layout that FILLS the
+   scrollport. Every column but Primary offer has a fixed width; the offer
+   column takes the remainder, and each view's `min-inline-size`
+   (LeadTable.css) is the width below which the table scrolls horizontally
+   behind the pinned Approval column instead of squeezing the offer. The old
+   `inline-size: max-content` let the header text widen columns past the
+   1,318px scrollport at 1440x900. */
 .lead-table__table {
   table-layout: fixed;
-  inline-size: max-content;
-  min-inline-size: 100%;
+  inline-size: 100%;
 }
 .lead-table__table th,
 .lead-table__table td {
   padding-left: var(--sp-2);
   padding-right: var(--sp-2);
-  vertical-align: top;
+  vertical-align: middle;
 }
 .lead-table__table .tbl-cell--select {
-  padding-left: var(--sp-3);
+  padding-left: var(--sp-2);
   padding-right: var(--sp-1);
 }
-.lead-table__col-select { width: 34px; }
-.lead-table__col-expand { width: 28px; }
-.lead-table__col-borrower { width: 132px; }
-.lead-table__col-location { width: 116px; }
-.lead-table__col-relationship { width: 96px; }
+.lead-table__col-select { width: 44px; }
+.lead-table__col-expand { width: 32px; }
+.lead-table__col-borrower { width: 128px; }
+.lead-table__col-location { width: 104px; }
+/* Sales ops: wide enough for the widest compliance flag ("Owner unresolved"
+   with its icon, ~129px) plus the cell padding; the flags wrap below it. */
+.lead-table__col-relationship { width: 148px; }
 .lead-table__col-assignment { width: 124px; }
-.lead-table__col-outreach { width: 98px; }
-.lead-table__col-disposition { width: 126px; }
-.lead-table__col-segments { width: 176px; }
-.lead-table__col-equity { width: 70px; }
-.lead-table__col-rate { width: 84px; }
-.lead-table__col-offer { width: 174px; }
-.lead-table__col-score { width: 64px; }
-.lead-table__col-confidence { width: 78px; }
-.lead-table__col-approval { width: 164px; }
+.lead-table__col-outreach { width: 112px; }
+.lead-table__col-disposition { width: 120px; }
+.lead-table__col-segments { width: 150px; }
+.lead-table__col-equity { width: 76px; }
+.lead-table__col-rate { width: 112px; }
+.lead-table__col-offer { width: auto; }
+.lead-table__col-score { width: 72px; }
+.lead-table__col-confidence { width: 84px; }
+.lead-table__col-status { width: 150px; }
+.lead-table__col-approval { width: 156px; }
+/* The Approval column is pinned to the scrollport's end edge: the safety net
+   when the table is wider than its scrollport (Console open, Sales ops view).
+   Opaque token background so scrolled cells never show through, and a
+   divider on its start edge. The pin was deleted in 74f8eda1 only because
+   route_performance's overlap canary used elementsFromPoint, which lists
+   occluded elements too; that canary now reads the topmost element. */
 .lead-table__approval-header,
 .lead-table__table .tbl-cell--approval {
-  background: var(--bg-1);
-}
-.lead-table__approval-header {
+  position: sticky;
+  inset-inline-end: 0;
+  z-index: var(--z-raised);
   background: var(--bg-2);
+  box-shadow: inset 1px 0 0 var(--line-2);
+}
+/* Header cells stay above the pinned body cells they scroll over. */
+.lead-table__table thead th { z-index: var(--z-raised-2); }
+.lead-table__table thead .lead-table__approval-header {
+  z-index: var(--z-raised-3);
+  background: var(--bg-2);
+}
+.lead-table__table tbody tr:hover > .tbl-cell--approval { background: var(--bg-3); }
+.lead-table__table tbody tr:active > .tbl-cell--approval { background: var(--bg-4); }
+.lead-table__table tbody tr.is-expanded > .tbl-cell--approval {
+  background: linear-gradient(var(--accent-soft), var(--accent-soft)) var(--bg-2);
 }
 .lead-table__borrower,
 .lead-table__zip {
@@ -194,12 +221,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.lead-table__segments {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: var(--sp-1);
-  align-items: start;
 }
 .lead-table__table .chip,
 .lead-table__table .evidence-chip {
@@ -246,13 +267,14 @@
   flex-direction: column;
   align-items: flex-start;
   max-inline-size: 100%;
-  gap: var(--sp-1);
+  gap: 0;
   padding: 0;
   border: 0;
   background: transparent;
   color: inherit;
   cursor: pointer;
   font: inherit;
+  line-height: var(--lh-snug);
   text-align: left;
 }
 .lead-table__borrower-btn:hover .lead-table__borrower {
@@ -262,9 +284,6 @@
   display: inline-flex;
   align-items: center;
   gap: var(--sp-1);
-}
-.lead-table__last-touch .btn {
-  align-self: flex-start;
 }
 .lead-table__reject {
   padding: var(--sp-1) var(--sp-2);

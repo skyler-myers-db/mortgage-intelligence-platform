@@ -6,9 +6,11 @@ import {
   LOAN_PRODUCT_FILTER_OPTIONS,
   ORIGINATION_CHANNEL_FILTER_OPTIONS,
   outreachFilterDisplayValue,
+  parseLeadTableView,
   parsePortfolioCriteria,
   parseSegmentCodes,
   portfolioFilterEntries,
+  searchParamsWithLeadTableView,
   segmentDisplayLabel,
   segmentFilterDisplayValue,
 } from './lead-queue.filters';
@@ -128,5 +130,23 @@ describe('S1.6 loan-product and origination-channel filters', () => {
     expect(parsePortfolioCriteria(new URLSearchParams({ origination_channel: 'all_channels' }), [])).toBeUndefined();
     // Unreviewed snake_case tokens are still rejected, not passed through.
     expect(parsePortfolioCriteria(new URLSearchParams({ origination_channel: 'carrier_pigeon' }), [])).toBeUndefined();
+  });
+});
+
+describe('lead table column preset param (audit tables-05)', () => {
+  it('parses only the reviewed preset and treats anything else as Default', () => {
+    expect(parseLeadTableView('sales-ops')).toBe('sales-ops');
+    expect(parseLeadTableView(' Sales-Ops ')).toBe('sales-ops');
+    expect(parseLeadTableView(null)).toBe('default');
+    expect(parseLeadTableView('default')).toBe('default');
+    expect(parseLeadTableView('everything')).toBe('default');
+  });
+
+  it('writes Sales ops into the URL, drops Default, and keeps every other param', () => {
+    const base = new URLSearchParams('state=IL&owner_link=Single-property+owner');
+    const salesOps = searchParamsWithLeadTableView(base, 'sales-ops');
+    expect(salesOps.toString()).toBe('state=IL&owner_link=Single-property+owner&view=sales-ops');
+    expect(searchParamsWithLeadTableView(salesOps, 'default').toString()).toBe('state=IL&owner_link=Single-property+owner');
+    expect(base.has('view')).toBe(false);
   });
 });

@@ -7,7 +7,10 @@
  * assertion; the claim was browser-probe only). This renders the real
  * LeadTable and pins:
  *
- * 1. every sortable header carries aria-sort (7 columns);
+ * 1. every sortable header carries aria-sort: 5 in the Default view (Equity,
+ *    Rate, Score, Signal and the merged Status column, whose menu keeps the
+ *    relationship / assignee / outreach keys), 7 in Sales ops (the four
+ *    numeric headers plus Relationship, Assigned to and Outreach);
  * 2. the idle state is "none" everywhere (default sort is rank, which
  *    is not one of the sortable headers);
  * 3. activating a header flips it to descending, then ascending, while
@@ -79,7 +82,7 @@ describe('LeadTable aria-sort columnheaders', () => {
     container.remove();
   });
 
-  function mount() {
+  function mount(view: 'default' | 'sales-ops' = 'default') {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
@@ -87,7 +90,7 @@ describe('LeadTable aria-sort columnheaders', () => {
       root.render(
         <QueryClientProvider client={queryClient}>
           <MemoryRouter>
-            <LeadTable leads={[lead('B-AAAAAAAAAAAA1', 90), lead('B-AAAAAAAAAAAA2', 70)]} />
+            <LeadTable leads={[lead('B-AAAAAAAAAAAA1', 90), lead('B-AAAAAAAAAAAA2', 70)]} view={view} />
           </MemoryRouter>
         </QueryClientProvider>,
       );
@@ -97,10 +100,55 @@ describe('LeadTable aria-sort columnheaders', () => {
   it('exposes aria-sort on every sortable header, idle state none', () => {
     mount();
     const headers = Array.from(container.querySelectorAll('th[aria-sort]'));
-    expect(headers).toHaveLength(7);
+    expect(headers).toHaveLength(5);
     expect(headers.map((th) => th.getAttribute('aria-sort'))).toEqual(
-      Array(7).fill('none'),
+      Array(5).fill('none'),
     );
+  });
+
+  it('keeps the three workflow sort keys on the Sales ops headers', () => {
+    mount('sales-ops');
+    const headers = Array.from(container.querySelectorAll('th[aria-sort]'));
+    expect(headers).toHaveLength(7);
+    expect(headers.map((th) => th.querySelector('button')?.getAttribute('aria-label'))).toEqual([
+      'Sort by Relationship',
+      'Sort by Assigned to',
+      'Sort by Outreach',
+      'Sort by Equity',
+      'Sort by Rate Δ (bps)',
+      'Sort by Score',
+      'Sort by Signal',
+    ]);
+    expect(container.querySelector('[data-testid="lead-status-sort"]')).toBeNull();
+  });
+
+  it('sorts by a workflow key from the Status header menu and reports it on that th', () => {
+    mount();
+    const trigger = container.querySelector<HTMLButtonElement>('[data-testid="lead-status-sort"]');
+    expect(trigger?.getAttribute('aria-haspopup')).toBe('menu');
+    act(() => trigger!.click());
+    // The menu is portalled to <body> (a short queue's scrollport clipped it)
+    // and named by the trigger's aria-controls.
+    const menu = document.getElementById(trigger!.getAttribute('aria-controls') ?? '');
+    expect(menu?.getAttribute('role')).toBe('menu');
+    expect(menu?.parentElement).toBe(document.body);
+    expect(container.contains(menu)).toBe(false);
+    const items = Array.from(menu!.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'));
+    expect(items.map((item) => item.textContent)).toEqual(['Relationship', 'Assigned to', 'Outreach']);
+    act(() => items[2].click());
+
+    const statusTh = trigger!.closest('th');
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+    expect(trigger!.hasAttribute('aria-controls')).toBe(false);
+    expect(statusTh?.getAttribute('aria-sort')).toBe('descending');
+    expect(trigger!.getAttribute('aria-label')).toBe('Status, sorted by Outreach. Sort options');
+    expect(container.querySelector('[data-testid="lead-sort-scope"]')?.textContent).toContain('sorted within the loaded 2');
+
+    act(() => trigger!.click());
+    const checked = document.querySelector('[role="menuitemradio"][aria-checked="true"]');
+    expect(checked?.textContent).toBe('Outreach');
+    act(() => (checked as HTMLButtonElement).click());
+    expect(statusTh?.getAttribute('aria-sort')).toBe('ascending');
   });
 
   it('activating Score flips its header through descending then ascending', () => {
@@ -121,7 +169,7 @@ describe('LeadTable aria-sort columnheaders', () => {
       (th) => th !== scoreTh(),
     );
     expect(others.map((th) => th.getAttribute('aria-sort'))).toEqual(
-      Array(6).fill('none'),
+      Array(4).fill('none'),
     );
   });
 
