@@ -7,6 +7,7 @@ import { Link, useSearchParams } from 'react-router';
 import { Icon } from '../components/Icon';
 import { PageShell } from '../components/layout/PageShell';
 import { FilterSelect } from '../components/ui/FilterSelect';
+import { useTabs } from '../components/ui/useTabs';
 import { useFootprint } from '../components/FootprintProvider';
 import { api, type AnalyticsQueryOptions } from '../lib/api';
 import { useConfigOptionsQuery } from '../lib/configOptionsQuery';
@@ -63,6 +64,8 @@ export {
 export { DailyEvidenceLineChart, LineChart } from './analytics.charts';
 export { EquitySpreadBinsView, EquitySpreadPointsView, EquitySpreadScatter } from './analytics.equity-scatter';
 
+const TAB_IDS: readonly AnalyticsTab[] = TABS.map((item) => item.id);
+
 export default function AnalyticsRoute() {
   const [searchParams, setSearchParams] = useSearchParams();
   // Tab selection is URL-addressable via `?view=`; unknown/absent -> executive.
@@ -73,6 +76,9 @@ export default function AnalyticsRoute() {
     else params.set('view', next);
     setSearchParams(params);
   };
+  // APG tabs (audit a11y-02): arrow keys, Home/End, roving tabindex, and a
+  // tabpanel the selected tab controls.
+  const tabs = useTabs({ tabs: TAB_IDS, selected: tab, onSelect: setTab, idBase: 'analytics' });
   const footprint = useFootprint();
   const configOptionsQuery = useConfigOptionsQuery();
   const targetLenderOptions = useMemo(() => {
@@ -231,21 +237,19 @@ export default function AnalyticsRoute() {
       lede="Command center for portfolio trends, geography, economics, segments, and evidence signals."
       heroRight={<Link className="btn btn--primary" to="/ask-genie"><Icon name="sparkle" size={14} /> Ask Genie</Link>}
     >
-      <div className="analytics-tabs" role="tablist" aria-label="Analytics views">
+      <div className="analytics-tabs" {...tabs.tabListProps} aria-label="Analytics views">
         {TABS.map((item) => (
           <button
             key={item.id}
-            type="button"
-            role="tab"
-            aria-selected={tab === item.id}
+            {...tabs.tabProps(item.id)}
             className={`filter analytics-tab ${tab === item.id ? 'is-active' : ''}`}
-            onClick={() => setTab(item.id)}
           >
             <Icon name={item.icon} size={12} />
             <span className="filter__value">{item.label}</span>
           </button>
         ))}
       </div>
+      <div {...tabs.panelProps(tab)}>
       {tab !== 'sales-ops' && tab !== 'approval-funnel' && (
       <div className="filter-row filter-row--spaced analytics-filters" aria-label="Analytics filters">
         <MultiFilterSelect
@@ -335,6 +339,7 @@ export default function AnalyticsRoute() {
       )}
       {tab === 'approval-funnel' && <ApprovalFunnelSection />}
       {tab === 'sales-ops' && <SalesOpsSection />}
+      </div>
     </PageShell>
   );
 }
