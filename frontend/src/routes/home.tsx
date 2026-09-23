@@ -2,6 +2,7 @@ import { Link } from 'react-router';
 import { PageShell } from '../components/layout/PageShell';
 import { KpiCard } from '../components/mortgage/KpiCard';
 import { USChoroplethMap } from '../components/mortgage/USChoroplethMap';
+import { useMapSelectionParams } from '../components/mortgage/useMapSelectionParams';
 import { PinnedInsights } from '../components/mortgage/PinnedInsights';
 import { HomeAnswerBand } from '../components/mortgage/HomeAnswerBand';
 import { Chip } from '../components/Primitives';
@@ -66,6 +67,7 @@ export default function Home() {
   // in flight we show skeletons rather than design-time numbers or em-dashes,
   // so normal loading is visually distinct from a genuinely unknown value.
   const { lender, canAccessAdmin } = useApp();
+  const [mapSelection, setMapSelection] = useMapSelectionParams();
   const healthCtx = useOptionalHealth();
   // True when the shared health poll has confirmed warehouse / lakebase is
   // down. While that's the case we keep the warming-up tile visible
@@ -277,7 +279,7 @@ export default function Home() {
             USChoroplethMap's design-contract note). Lead Queue remains the
             source-of-truth index for borrower selection. */}
         <div className="layoutA-grid home-geo">
-          <USChoroplethMap drillBehavior="filter" />
+          <USChoroplethMap drillBehavior="filter" selection={mapSelection} onSelectionChange={setMapSelection} />
           <div className="home-side">
             {/* States BOTH numbers — contactable of whole-book — because its
                 button opens the contactable-only queue (flow-v1). */}

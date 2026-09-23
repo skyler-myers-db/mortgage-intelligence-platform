@@ -539,7 +539,7 @@ async function discoverMapDrillTarget(
 
 async function drillStateToZips(page: Page, target: MapDrillTarget) {
   const map = page.locator('.map-wrap').first();
-  const state = map.getByRole('button', { name: new RegExp(`^${escapeRegExp(target.stateName)}$`) }).first();
+  const state = map.getByRole('button', { name: new RegExp(`^${escapeRegExp(target.stateName)}:`) }).first();
   const zipTiles = page.locator('.zip-tiles');
   let lastError: unknown;
   for (let attempt = 0; attempt < 3; attempt += 1) {

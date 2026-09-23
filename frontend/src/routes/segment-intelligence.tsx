@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { api, type LeadsPageResult, type SegmentFilterMode } from '../lib/api';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
@@ -6,10 +6,9 @@ import type { SegmentCode, SegmentSummary } from '../types';
 import { PageShell } from '../components/layout/PageShell';
 import { SegmentCard, SegmentCardSkeleton } from '../components/mortgage/SegmentCard';
 import { LeadTable } from '../components/mortgage/LeadTable';
-import {
-  USChoroplethMap,
-  type MapSelection,
-} from '../components/mortgage/USChoroplethMap';
+import { USChoroplethMap } from '../components/mortgage/USChoroplethMap';
+import { EMPTY_MAP_SELECTION, withMapSelection } from '../components/mortgage/USChoroplethMap.selection';
+import { useMapSelectionParams } from '../components/mortgage/useMapSelectionParams';
 import { Button, Chip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { FilterSelect } from '../components/ui/FilterSelect';
@@ -131,19 +130,11 @@ export default function SegmentIntelligence() {
       : { ...locationToStates, [chipFilters.location]: [chipFilters.location] }),
     [chipFilters.location, locationToStates, stateNameByCode],
   );
-  // Geography drill state emitted by USChoroplethMap. State is the 2-char
-  // USPS code; null = US level (no geography filter). ZIP is pushed down to
-  // /api/leads so the ranked table follows the same state → ZIP cohort the
-  // map counted. `county` is always null (the map has no county level) but
-  // stays wired through for a future licensed county dataset.
-  const [mapSelection, setMapSelection] = useState<MapSelection>({
-    state: null,
-    county: null,
-    zip: null,
-  });
-  const handleMapSelection = useCallback((sel: MapSelection) => {
-    setMapSelection(sel);
-  }, []);
+  // Geography drill, owned by the URL (`?geo_state=TX&zip=`, audit
+  // dataviz-04) so the map, this table, "Clear geography" and Back agree.
+  // ZIP is pushed down to /api/leads so the ranked table follows the same
+  // state → ZIP cohort the map counted. `county` is always null.
+  const [mapSelection, setMapSelection] = useMapSelectionParams();
   const selectedLocationState = chipFilters.location === 'All' ? undefined : chipFilters.location;
   const secondaryPortfolioCriteria = useMemo(
     () => buildSecondaryPortfolioCriteria(chipFilters),
@@ -296,8 +287,9 @@ export default function SegmentIntelligence() {
     mapSelection.zip !== null;
 
   const clearAll = () => {
-    setMapSelection({ state: null, county: null, zip: null });
-    setSearchParams(searchParamsWithoutSegmentFilters(searchParams));
+    // One URL write clears both the filters this route owns and the map
+    // drill (the map's params survive searchParamsWithoutSegmentFilters).
+    setSearchParams(withMapSelection(searchParamsWithoutSegmentFilters(searchParams), EMPTY_MAP_SELECTION));
   };
 
   const leadQueueHref = useMemo(() => {
@@ -592,7 +584,7 @@ export default function SegmentIntelligence() {
                 size="sm"
                 variant="ghost"
                 icon="cross"
-                onClick={() => setMapSelection({ state: null, county: null, zip: null })}
+                onClick={() => setMapSelection(EMPTY_MAP_SELECTION)}
               >
                 Clear geography
               </Button>
@@ -619,7 +611,8 @@ export default function SegmentIntelligence() {
           segmentFilter={activeSegs}
           segmentFilterMode={segmentMode}
           portfolioCriteria={secondaryPortfolioCriteria}
-          onSelectionChange={handleMapSelection}
+          selection={mapSelection}
+          onSelectionChange={setMapSelection}
         />
       </div>
     </PageShell>

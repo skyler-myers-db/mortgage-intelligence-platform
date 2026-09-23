@@ -1,10 +1,19 @@
 import type { Feature, FeatureCollection, Geometry } from 'geojson';
-import type { CountyRollup } from '../../types';
+import type { CountyRollup, ZipRollup } from '../../types';
+import { labelAnchor } from './USChoroplethMap.labels';
+
+export { labelAnchor } from './USChoroplethMap.labels';
 
 // Shared shape consumed by the state-level map renderers. The payload is
 // built from us-atlas state TopoJSON, keeping IDs in the existing lowercase
 // USPS format so rollup lookups and drill links do not change.
-export interface UsaSvgMapLocation { name: string; id: string; path: string }
+export interface UsaSvgMapLocation {
+  name: string;
+  id: string;
+  path: string;
+  /** Where the state's label sits (see USChoroplethMap.labels), in viewBox units. */
+  labelAt?: [number, number];
+}
 export interface UsaSvgMap { label: string; viewBox: string; locations: UsaSvgMapLocation[] }
 
 // USPS (lowercase) -> FIPS-2 map. Values are intrinsic per-state constants,
@@ -56,6 +65,7 @@ export function buildUsaStateMapPayload(fc: FeatureCollection, pad = 0): UsaSvgM
       id: code,
       name: stateDisplayName(rawName, code),
       path,
+      labelAt: labelAnchor(feature.geometry) ?? undefined,
     });
   }
 
@@ -78,38 +88,9 @@ export function buildUsaStateMapPayload(fc: FeatureCollection, pad = 0): UsaSvgM
   };
 }
 
-/** Fixed-threshold fallback used only when no distribution is available. */
-export function lvlFromCount(count: number | null | undefined): 1 | 2 | 3 | 4 {
-  if (count === null || count === undefined || count <= 0) return 1;
-  if (count >= 500) return 4;
-  if (count >= 250) return 3;
-  if (count >= 100) return 2;
-  return 1;
-}
-
-/** Build a quantile-based bucketer from the live count distribution. */
-export function buildQuantileBucketer(counts: number[]): (count: number | null | undefined) => 1 | 2 | 3 | 4 {
-  const nonZero = counts.filter((c) => c > 0).sort((a, b) => a - b);
-  if (nonZero.length < 4) {
-    return lvlFromCount;
-  }
-  const q = (p: number) => nonZero[Math.min(nonZero.length - 1, Math.floor(nonZero.length * p))];
-  const q25 = q(0.25);
-  const q50 = q(0.5);
-  const q75 = q(0.75);
-  return (count) => {
-    if (count === null || count === undefined || count <= 0) return 1;
-    if (count >= q75) return 4;
-    if (count >= q50) return 3;
-    if (count >= q25) return 2;
-    return 1;
-  };
-}
-
 export interface StateFacts {
   count: number;
   avgScore: number;
-  lvl: 1 | 2 | 3 | 4;
   topSegment?: string;
   /** See `HoverState.contactable`. Null when the rollup predates the field. */
   contactable?: number | null;
@@ -332,4 +313,21 @@ export function featureBBox(f: Feature): [number, number, number, number] {
     f.geometry.coordinates.forEach((poly) => poly.forEach(visit));
   }
   return [minX, minY, maxX, maxY];
+}
+
+/** Densest-N ZIP tiles rendered per state. The grid stays readable, but
+ *  the remainder MUST be disclosed (the ZIP rung's reconcile note). */
+export const ZIP_TILE_CAP = 24;
+
+/**
+ * The ZIPs the tile grid shows: the ZIP_TILE_CAP densest, largest first
+ * (Pareto, densest top-left). The ZIP fill scale is built over exactly these,
+ * so the colour tells the visible tiles apart: over all of a state's ZIPs
+ * every visible tile of a long-tailed state (Illinois: the 24 densest of 212)
+ * sat in the top quartile and painted one class.
+ */
+export function densestZips(byZip: Record<string, ZipRollup>): ZipRollup[] {
+  return Object.values(byZip)
+    .sort((a, b) => (b.addressable_borrowers ?? 0) - (a.addressable_borrowers ?? 0))
+    .slice(0, ZIP_TILE_CAP);
 }

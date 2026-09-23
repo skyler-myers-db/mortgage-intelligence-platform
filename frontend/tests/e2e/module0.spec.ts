@@ -131,7 +131,7 @@ test.describe('Module 0 — golden path', () => {
     // Slice 9: assert Illinois since it's the anchor metro for the county
     // drill (Chicago/Cook County). State topology ships aria-labels for every
     // state; picking IL aligns the test with the product narrative.
-    await expect(page.locator('[aria-label="Illinois"]').first()).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator('[aria-label^="Illinois:"]').first()).toBeVisible({ timeout: 5_000 });
     await expect(page.getByText('Agent action audit log', { exact: true })).toHaveCount(0);
 
     expect(consoleErrors, `unexpected console errors: ${consoleErrors.join(' | ')}`).toEqual([]);

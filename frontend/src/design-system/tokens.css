@@ -523,3 +523,43 @@ input[type="checkbox"] {
   --pressed-shift: 1px;
   --pressed-scale: 0.98;
 }
+
+/* ---------- Geography ramp ----------
+ * One four-step fill ramp for the state map, the ZIP tiles, the legend and
+ * the table swatches (2026-09-21 audit dataviz-02 / responsive-05). Step 0 is
+ * "no borrowers / no data" (the prototype's unfilled region); steps 1-4 mix
+ * the AA-tuned accent ink into it in OKLab at equal distances, so adjacent
+ * classes sit >= 0.076 OKLab L apart in every theme x accent (the prototype's
+ * 15/30/50/70% --accent mix measured 0.009-0.038, and 1.6:1 at the top of
+ * the light theme). The light theme runs the top step to 85% so white text
+ * on it clears AA with the red accent too.
+ *
+ * DECLARED ACCESSIBILITY DEVIATION from the prototype ramp,
+ * design_files/Module 0 Prototype.html:863-866 (.map-region.lvl-1..4) and
+ * :1864-1871 (legend bar), and design_files/index.html:863-866.
+ *
+ * --map-ramp-ink-N is the text colour on step N (ZIP tile codes and counts,
+ * state labels): >= 4.5:1 on its step in every theme x accent. The red
+ * accent's step 3 keeps the light ink because its ramp is darker.
+ */
+:root {
+  --map-ramp-hue: var(--accent-ink);
+  --map-ramp-0: var(--map-region-fill);
+  --map-ramp-1: color-mix(in oklab, var(--map-ramp-hue) 20%, var(--map-ramp-0));
+  --map-ramp-2: color-mix(in oklab, var(--map-ramp-hue) 40%, var(--map-ramp-0));
+  --map-ramp-3: color-mix(in oklab, var(--map-ramp-hue) 60%, var(--map-ramp-0));
+  --map-ramp-4: color-mix(in oklab, var(--map-ramp-hue) 80%, var(--map-ramp-0));
+  --map-ramp-ink-0: var(--text-1);
+  --map-ramp-ink-1: var(--text-1);
+  --map-ramp-ink-2: var(--text-1);
+  --map-ramp-ink-3: var(--bg-0);
+  --map-ramp-ink-4: var(--bg-0);
+}
+[data-theme="light"] {
+  --map-ramp-4: color-mix(in oklab, var(--map-ramp-hue) 85%, var(--map-ramp-0));
+  --map-ramp-ink-3: var(--text-1);
+  --map-ramp-ink-4: var(--bg-1);
+}
+[data-accent="red"] {
+  --map-ramp-ink-3: var(--text-1);
+}
