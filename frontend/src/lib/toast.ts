@@ -22,7 +22,12 @@
  * migration are slice 2.
  *
  * Toast text is shown to the signed-in person only; it is never telemetry.
+ * It is actor-scoped: a build name, a loan officer's address or an audit
+ * event id raised for one operator must not survive into the next one's
+ * session on a shared machine (a failure toast stays until dismissed), so
+ * the store registers with the shell's actor-change reset below.
  */
+import { registerActorScopedMemoryCache } from './actorScopedMemoryCaches';
 
 export type ToastTone = 'success' | 'error';
 
@@ -95,10 +100,13 @@ export function dismissToast(id: number): void {
   publish(toasts.filter((toast) => toast.id !== id));
 }
 
-/** Drop every toast (tests; a future actor change). */
+/** Drop every toast (an actor change; tests). */
 export function clearToasts(): void {
   if (toasts.length > 0) publish([]);
 }
+
+// AppShell calls clearActorScopedMemoryCaches when the signed-in actor changes.
+registerActorScopedMemoryCache(clearToasts);
 
 export function getToasts(): readonly Toast[] {
   return toasts;

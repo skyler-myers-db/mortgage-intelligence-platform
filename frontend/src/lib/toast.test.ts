@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { clearActorScopedMemoryCaches } from './actorScopedMemoryCaches';
 import { TOAST_LIMIT, clearToasts, dismissToast, getToasts, subscribeToasts, toast } from './toast';
 
 afterEach(() => clearToasts());
@@ -54,5 +55,14 @@ describe('toast store (audit states-07)', () => {
     unsubscribe();
     toast.success('After unsubscribe');
     expect(listener).toHaveBeenCalledTimes(2);
+  });
+
+  it('drops every toast when the signed-in actor changes', () => {
+    // AppShell's actor-change reset calls clearActorScopedMemoryCaches; one
+    // operator's build names, routing and audit ids never reach the next.
+    toast.error('Save failed', { detail: 'Summit IL refi cohort' });
+    toast.success('Approval routed', { detail: 'Assigned to lo.alpha@summit.example', auditEventId: 'evt-1' });
+    clearActorScopedMemoryCaches();
+    expect(getToasts()).toEqual([]);
   });
 });
