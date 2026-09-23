@@ -299,10 +299,16 @@ describe('AdminAuditExplorer', () => {
     expect(correlationLink?.getAttribute('href')).toBe('/admin-config?audit_correlation_id=corr-1#audit');
 
     act(() => eventLink?.click());
-    await settle();
+    // The narrowed page arrives through the query's own notify timer after the
+    // navigation, so wait on the rendered, refetched row (one row, not the
+    // two-row page it replaced) rather than on one timer tick.
+    await vi.waitFor(async () => {
+      await settle();
+      expect(container.querySelectorAll('table[aria-label="Audit events"] tbody tr[data-audit-event-id]')).toHaveLength(1);
+      expect(button(/^Collapse audit event evt-fixture-1$/).getAttribute('aria-expanded')).toBe('true');
+    });
     expect(seen.location.search).toBe('?audit_event_id=evt-fixture-1');
     expect(lastCall()).toMatchObject({ event_id: 'evt-fixture-1' });
-    expect(button(/^Collapse audit event evt-fixture-1$/).getAttribute('aria-expanded')).toBe('true');
   });
 
   it('links a masked borrower entity to Borrower 360 and leaves other entities as text', async () => {
