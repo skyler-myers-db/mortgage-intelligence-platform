@@ -9,12 +9,16 @@
  *
  * Time: the harness freezes `Date` and leaves timers running; `clock.runFor`
  * fast-forwards them deterministically (no wall-clock sleeps), which is how
- * "nothing retries" and "the second probe" are proven.
+ * "nothing retries" and "the second probe" are proven. The session tests
+ * leave the health probe answering, so their own click, not the shell's
+ * eight-second poll, is what meets the first 401 (under load the poll could
+ * otherwise open the blocking dialog before the click). The multi-phase tests
+ * (failure, then recovery) are marked slow: they chain two page states.
  */
 import AxeBuilder from '@axe-core/playwright';
 import type { Locator, Page, Route } from '@playwright/test';
 import { PRIMARY_BORROWER } from './data/borrowers';
-import { EVERY_API_PATH, PROXY_SESSION_EXPIRED, holdDefaultFixture } from './data/sessionRecovery';
+import { EVERY_API_PATH_BUT_HEALTH, PROXY_SESSION_EXPIRED, holdDefaultFixture } from './data/sessionRecovery';
 import { WAREHOUSE_WARMING_UP, type ApiCall } from './mockApi';
 import { FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
@@ -48,10 +52,11 @@ async function shimmer(skeleton: Locator): Promise<{ band: string; block: string
 test.describe('an ended session (the proxy answers 401 {})', () => {
   for (const theme of FIXTURE_THEMES) {
     test(`opens ONE blocking session dialog with focus on Reload, and no request retries (${theme})`, async ({ app, page, mockApi }) => {
+      test.slow();
       await app.setTheme(theme);
       await app.gotoRoute('/lead-queue');
       const before = mockApi.calls.length;
-      app.degrade(EVERY_API_PATH, PROXY_SESSION_EXPIRED);
+      app.degrade(EVERY_API_PATH_BUT_HEALTH, PROXY_SESSION_EXPIRED);
 
       // An uncached route: its reads are the first to meet the 401.
       await navLink(page, 'Analytics').click();
@@ -78,15 +83,17 @@ test.describe('an ended session (the proxy answers 401 {})', () => {
       ).toBe(true);
       await expect(page.locator('.degraded-banner')).toHaveCount(0);
 
-      // No retry storm: every 401'd request was sent once, and nothing (the
-      // health poll included) reaches the proxy after the dialog opened.
-      const expired = () => mockApi.calls.slice(before).filter((call) => call.status === 401);
-      const atOpen = expired().length;
-      expect(atOpen, 'the route really met the 401').toBeGreaterThan(0);
+      // No retry storm: every 401'd request was sent once, and once the
+      // requests already in flight have landed, nothing at all (the still
+      // healthy health poll included) reaches the proxy again.
+      await expect.poll(() => mockApi.inflight === 0 && mockApi.idleMs >= 300).toBe(true);
+      const expired = mockApi.calls.slice(before).filter((call) => call.status === 401);
+      expect(expired.length, 'the route really met the 401').toBeGreaterThan(0);
+      const atOpen = mockApi.calls.length;
       await page.clock.runFor(QUIET_WINDOW_MS);
-      expect(expired().length, 'no request after the session ended').toBe(atOpen);
+      expect(mockApi.calls.length, 'no request of any kind after the session ended').toBe(atOpen);
       const perRequest = new Map<string, number>();
-      for (const call of expired()) perRequest.set(key(call), (perRequest.get(key(call)) ?? 0) + 1);
+      for (const call of expired) perRequest.set(key(call), (perRequest.get(key(call)) ?? 0) + 1);
       expect([...perRequest.entries()].filter(([, count]) => count > 1), 'no request was retried').toEqual([]);
 
       const axe = await new AxeBuilder({ page }).include('dialog.session-dialog').withTags(WCAG_TAGS).analyze();
@@ -100,7 +107,7 @@ test.describe('an ended session (the proxy answers 401 {})', () => {
     const cell = page.getByTestId(`lead-approval-cell-${id}`);
     const approve = cell.getByRole('button', { name: `Approve ${id}` });
     await expect(approve).toBeVisible();
-    app.degrade(EVERY_API_PATH, PROXY_SESSION_EXPIRED);
+    app.degrade(EVERY_API_PATH_BUT_HEALTH, PROXY_SESSION_EXPIRED);
 
     await approve.click();
     const dialog = sessionDialog(page);
@@ -112,8 +119,9 @@ test.describe('an ended session (the proxy answers 401 {})', () => {
   });
 
   test('Reload keeps the page the user was on', async ({ app, page }) => {
+    test.slow();
     await app.gotoRoute('/analytics?view=geography');
-    app.degrade(EVERY_API_PATH, PROXY_SESSION_EXPIRED);
+    app.degrade(EVERY_API_PATH_BUT_HEALTH, PROXY_SESSION_EXPIRED);
     await page.getByRole('tab', { name: 'Economics' }).click();
     const dialog = sessionDialog(page);
     await expect(dialog).toBeVisible();
@@ -130,6 +138,7 @@ test.describe('an ended session (the proxy answers 401 {})', () => {
 
 test.describe('an unreachable app (every /api request aborted)', () => {
   test('shows "Connection lost" with Reload only after the SECOND failed probe, then recovers on its own', async ({ app, page, hygiene }) => {
+    test.slow();
     // The aborted requests are this test's own doing.
     hygiene.allow('request-failed', /\/api\/v1\/\S* failed: net::ERR_FAILED/);
     hygiene.allow('console.error', /Failed to load resource: net::ERR_FAILED \(http:\/\/[^)]+\/api\/v1\//);
@@ -171,6 +180,7 @@ test.describe('offline', () => {
   test.use({ contextOptions: { reducedMotion: 'no-preference' }, traceScreenshots: false });
 
   test('shows the offline banner, pauses queries and stops the skeleton shimmer, then resumes', async ({ app, page, mockApi, context }) => {
+    test.slow();
     await app.gotoRoute('/analytics');
     const skeleton = page.locator('[data-analytics-skeleton]');
 
@@ -265,6 +275,33 @@ test.describe('skeletons shaped like what they stand in for (states-10)', () => 
     // The old placeholder was three text lines in one card (~120px).
     expect(reserved.height).toBeGreaterThan(loaded.height * 0.6);
     expect(reserved.height).toBeLessThan(loaded.height * 1.4);
+  });
+
+  test('a route whose chunk is still loading shows the page-shaped fallback with its panel reserved', async ({ app, page }) => {
+    await app.gotoRoute('/');
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    // Hold the Glossary route chunk (it is not among the idle-preloaded routes).
+    await page.route(/\/assets\/glossary-[^/]+\.js$/, async (route) => {
+      await gate;
+      await route.continue();
+    });
+    await navLink(page, 'Glossary').click();
+
+    const fallback = page.locator('.route-transition > [data-route-fallback]');
+    await expect(fallback).toHaveCount(1);
+    // Visible once the show-delay has passed; the PageShell frame, not a card.
+    await expect(fallback).toBeVisible();
+    await expect(fallback).toHaveAttribute('aria-busy', 'true');
+    await expect(fallback.locator('.main__inner > .proto-hero .skeleton--title')).toBeVisible();
+    const reserved = await fallback.locator('.surface__body--reserve').evaluate((el) => el.getBoundingClientRect().height);
+    expect(reserved, 'the panel keeps its height reserved').toBeGreaterThanOrEqual(384);
+
+    release();
+    await expect(page.locator('#main-content h1')).toHaveText('Mortgage intelligence glossary');
+    await expect(fallback).toHaveCount(0);
   });
 
   test('Home keeps its KPI row mounted, in its loading state, through a warehouse warm-up', async ({ app, page }) => {

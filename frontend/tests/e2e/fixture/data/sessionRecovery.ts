@@ -10,6 +10,14 @@ import { defaultFixtures } from '../registry';
 export const EVERY_API_PATH = /^\/api(\/|$)/;
 
 /**
+ * Every API path except the health probe. With the probe left healthy the
+ * TEST decides when the session ends (its own click), not the shell's
+ * eight-second poll, which under load could open the blocking dialog before
+ * the click it is waiting to make.
+ */
+export const EVERY_API_PATH_BUT_HEALTH = /^\/api\/(?!health(?:\/|$))/;
+
+/**
  * The live Databricks Apps proxy's answer to `/api/*` with no session,
  * captured 2026-09-23: HTTP 401, `application/json`, body `{}` (the proxy's,
  * not FastAPI's).
