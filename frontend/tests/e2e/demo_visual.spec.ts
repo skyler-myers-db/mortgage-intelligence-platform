@@ -140,7 +140,7 @@ async function clickSvgRegion(page: Page, target: Locator, label: string) {
 async function drillToZipLayer(page: Page, target: MapDrillTarget, segmentCodes: string[] = []) {
   const map = page.locator('.map-wrap').first();
   await bringMapIntoViewport(page);
-  const state = map.getByRole('button', { name: new RegExp(`^${escapeRegExp(target.stateName)}$`) }).first();
+  const state = map.getByRole('button', { name: new RegExp(`^${escapeRegExp(target.stateName)}:`) }).first();
   const zipResponse = page
     .waitForResponse(filteredGeoResponse(segmentCodes, '/api/geo/zip-rollups'), { timeout: 45_000 })
     .catch((error: Error) => error);
@@ -343,6 +343,6 @@ test.describe('Module 0 demo visual baselines', () => {
     }
 
     await page.getByRole('button', { name: /^US$/ }).click();
-    await expect(page.locator(`[aria-label="${target.stateName}"]`).first()).toBeVisible();
+    await expect(page.locator(`[aria-label^="${target.stateName}:"]`).first()).toBeVisible();
   });
 });

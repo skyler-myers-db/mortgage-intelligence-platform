@@ -159,7 +159,7 @@ test.describe('Buyer-Wow live inspection @desktop', () => {
     // actually has Cotality coverage (out-of-footprint states are no-ops by
     // design) — discovered dynamically so the test follows the live coverage.
     const stateName = await firstInFootprintStateName(request);
-    const region = page.locator('.map-svg-stage').getByRole('button', { name: stateName, exact: true });
+    const region = page.locator(`.map-svg-stage path[aria-label^="${stateName}:"]`);
     await expect(region).toBeVisible({ timeout: 20_000 });
     const crumbsBefore = await page.locator('.map-crumbs button').count();
     await region.click();

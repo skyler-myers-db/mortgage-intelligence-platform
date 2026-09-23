@@ -510,7 +510,7 @@ test('state drilldown lands on ZIP tiles with live segment-filtered fills', asyn
   await clickSegment(page, 'Prime Refi Candidates');
   await clickSegment(page, 'Listed for Sale');
   await page.locator('path.map-region', { hasText: '' }).first().waitFor({ state: 'visible', timeout: 45_000 });
-  await page.locator(`path[aria-label="${selected!.stateName}"]`).click();
+  await page.locator(`path[aria-label^="${selected!.stateName}:"]`).click();
 
   const tiles = page.locator('.zip-tiles');
   await expect(tiles, `ZIP tiles for ${selected!.stateName}`).toBeVisible({ timeout: 45_000 });
