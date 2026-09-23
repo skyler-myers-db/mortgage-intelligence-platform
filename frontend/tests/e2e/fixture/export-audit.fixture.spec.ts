@@ -265,6 +265,34 @@ test.describe('audit explorer', () => {
     expect(requests).toHaveLength(requestsBefore);
   });
 
+  test('a day the URL cannot hold is refused on its own input, not silently dropped', async ({ app, page, mockApi }) => {
+    const requests: URLSearchParams[] = [];
+    mockApi.register('GET', '/api/audit/events/page', filteringAuditPage(requests));
+    await app.gotoRoute('/admin-config#audit');
+    const explorer = page.locator('#audit');
+    await expect(explorer.locator('table[aria-label="Audit events"] tbody tr[data-audit-event-id]'))
+      .toHaveCount(EXPLORER_ROWS.length);
+    const requestsBefore = requests.length;
+    const urlBefore = page.url();
+
+    // Chromium's date input holds a five-digit year; the URL parser keeps
+    // only YYYY-MM-DD, so applying it would drop the "until" bound unseen.
+    const since = explorer.getByLabel('SINCE', { exact: true });
+    const until = explorer.getByLabel('UNTIL', { exact: true });
+    await since.fill('2026-07-01');
+    await until.fill('20260-07-14');
+    await expect(until).toHaveValue('20260-07-14');
+    await explorer.getByRole('button', { name: 'Apply filters' }).click();
+
+    const alert = explorer.getByRole('alert');
+    await expect(alert).toHaveText('The "until" day must be a calendar day written YYYY-MM-DD.');
+    await expect(until).toHaveAttribute('aria-invalid', 'true');
+    await expect(until).toHaveAttribute('aria-describedby', (await alert.getAttribute('id')) ?? '');
+    await expect(since).toHaveAttribute('aria-invalid', 'false');
+    expect(page.url()).toBe(urlBefore);
+    expect(requests).toHaveLength(requestsBefore);
+  });
+
   test('removing a filter chip hands focus to the next chip, then to Apply', async ({ app, page, mockApi }) => {
     const requests: URLSearchParams[] = [];
     mockApi.register('GET', '/api/audit/events/page', filteringAuditPage(requests));

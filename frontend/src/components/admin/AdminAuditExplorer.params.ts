@@ -190,6 +190,13 @@ export interface AuditFilterError {
 
 /** Why a drafted filter set cannot be applied, or null when it can. */
 export function auditFilterDraftError(filters: AuditExplorerFilters): AuditFilterError | null {
+  // A date input can hold a day the URL parser drops (Chromium accepts a
+  // five-digit year); refuse it here rather than let Apply ignore the bound.
+  for (const key of ['since', 'until'] as const) {
+    if (filters[key] && !parseAuditDay(filters[key])) {
+      return { fields: [key], message: `The "${key}" day must be a calendar day written YYYY-MM-DD.` };
+    }
+  }
   if (filters.since && filters.until && filters.since > filters.until) {
     return { fields: ['since', 'until'], message: 'The "since" day must be on or before the "until" day.' };
   }

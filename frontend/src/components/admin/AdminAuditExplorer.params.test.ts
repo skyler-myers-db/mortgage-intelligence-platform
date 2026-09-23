@@ -149,4 +149,14 @@ describe('audit explorer API query', () => {
     expect(auditFilterDraftError({ ...EMPTY_AUDIT_FILTERS, actor: 'two people' })?.fields).toEqual(['actor']);
     expect(auditFilterDraftError({ ...EMPTY_AUDIT_FILTERS, action: 'outreach approve' })?.fields).toEqual(['action']);
   });
+
+  it('refuses a day the URL parser would drop, on that bound alone', () => {
+    // A date input accepts a five-digit year; parseAuditDay does not, so
+    // applying it would silently lose the bound.
+    expect(auditFilterDraftError({ ...EMPTY_AUDIT_FILTERS, since: '20260-07-01' }))
+      .toEqual({ fields: ['since'], message: expect.stringMatching(/"since" day must be a calendar day/) });
+    expect(auditFilterDraftError({ ...EMPTY_AUDIT_FILTERS, since: '2026-07-01', until: '20260-07-14' })?.fields)
+      .toEqual(['until']);
+    expect(auditFilterDraftError({ ...EMPTY_AUDIT_FILTERS, until: '2026-02-30' })?.fields).toEqual(['until']);
+  });
 });
