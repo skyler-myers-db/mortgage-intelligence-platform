@@ -21,7 +21,8 @@
  *    unavailable" state with the audit id still shown.
  *  - A failed write keeps the existing failure surface and reads nothing back.
  *  - Borrower 360 offers "Latest decision" when the lifecycle row carries an
- *    audit id, and the audit explorer honours `?audit_event_id=`.
+ *    audit id, and the audit explorer honours `?audit_event_id=`; Clear (or
+ *    the pinned chip's dismiss) drops that param and re-reads unpinned.
  *
  * Holds are test-controlled gates (RequestGate), never wall-clock delays, so
  * the in-flight assertions hold under any machine load.
@@ -83,6 +84,11 @@ function registerHeldApproveFlow(mockApi: MockApi): HeldApproveFlow {
 
 function receiptCalls(mockApi: MockApi): number {
   return mockApi.calls.filter((call) => call.path.includes('/audit/receipt/')).length;
+}
+
+/** The explorer's ledger page reads, in request order. */
+function explorerPageCalls(mockApi: MockApi): MockApi['calls'] {
+  return mockApi.calls.filter((call) => call.path.endsWith('/audit/events/page'));
 }
 
 /** The ledger-only values: present only when the receipt was read back from the row. */
@@ -351,4 +357,30 @@ test.describe('decision receipt', () => {
     );
     expect(pageCall, 'the explorer asked the ledger for that one row').toBeDefined();
   });
+
+  for (const control of ['Clear', 'the chip dismiss'] as const) {
+    test(`${control} in the audit explorer drops the receipt deep link`, async ({ app, page, mockApi }) => {
+      await app.gotoRoute(EXPLORER_HREF);
+      const explorer = page.locator('#audit');
+      const pinned = explorer.locator('.chip', { hasText: `audit event = ${APPROVE_AUDIT_ID}` });
+      await expect(pinned).toBeVisible();
+      const pinnedReads = explorerPageCalls(mockApi).length;
+      expect(pinnedReads, 'precondition: the pinned read happened').toBeGreaterThan(0);
+
+      const clear = explorer.getByRole('button', { name: 'Clear', exact: true });
+      await expect(clear).toBeEnabled();
+      if (control === 'Clear') await clear.click();
+      else await pinned.getByRole('button', { name: 'Remove audit event filter' }).click();
+
+      await expect(pinned).toHaveCount(0);
+      await expect(page, 'the deep-link param is gone from the URL').not.toHaveURL(/[?&]audit_event_id=/);
+      await expect(page, 'the page stays on the explorer').toHaveURL(/\/admin-config#audit$/);
+      await expect
+        .poll(() => explorerPageCalls(mockApi).length, 'the explorer re-read the ledger unpinned')
+        .toBeGreaterThan(pinnedReads);
+      const next = explorerPageCalls(mockApi)[pinnedReads];
+      expect(new URLSearchParams(next.search).has('event_id'), 'the next page read is not pinned').toBe(false);
+      await expect(clear, 'nothing is left to clear').toBeDisabled();
+    });
+  }
 });

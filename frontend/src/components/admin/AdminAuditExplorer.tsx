@@ -1,6 +1,6 @@
 import { Fragment, useState } from 'react';
 import type { FormEvent } from 'react';
-import { useSearchParams } from 'react-router';
+import { useLocation, useNavigate, useSearchParams } from 'react-router';
 import { Chip } from '../Primitives';
 import { Icon } from '../Icon';
 import { WarmingUpBlock } from '../ui/WarmingUpBlock';
@@ -53,6 +53,8 @@ export function AdminAuditExplorer() {
   // wow-stage-3: the Decision receipt deep-links here as
   // `?audit_event_id=<id>`; the explorer pins that one ledger row.
   const [searchParams] = useSearchParams();
+  const location = useLocation();
+  const navigate = useNavigate();
   const eventIdFilter = (searchParams.get('audit_event_id') ?? '').trim();
 
   const entityValue = entityFilter.trim();
@@ -137,7 +139,21 @@ export function AdminAuditExplorer() {
     setPageCursors([null]);
     setExpandedEventId(null);
   };
+  // The pinned row lives in the URL, so clearing it is a navigation: drop
+  // `audit_event_id` in place (replace, so Back does not re-pin it) and keep
+  // the `#audit` hash so the page stays on the explorer.
+  const clearEventIdFilter = () => {
+    if (!searchParams.has('audit_event_id')) return;
+    const next = new URLSearchParams(searchParams);
+    next.delete('audit_event_id');
+    const search = next.toString();
+    navigate(
+      { pathname: location.pathname, search: search ? `?${search}` : '', hash: location.hash },
+      { replace: true },
+    );
+  };
   const clearFilters = () => {
+    clearEventIdFilter();
     setEntityDraft('');
     setActionDraft('');
     setEventTypeDraft('');
@@ -280,7 +296,14 @@ export function AdminAuditExplorer() {
                 <Chip variant="neutral">event = {eventTypeFilter.trim()}</Chip>
               )}
               {eventIdFilter && (
-                <Chip variant="neutral" icon="audit">audit event = {eventIdFilter}</Chip>
+                <Chip
+                  variant="neutral"
+                  icon="audit"
+                  onRemove={clearEventIdFilter}
+                  removeLabel="Remove audit event filter"
+                >
+                  audit event = {eventIdFilter}
+                </Chip>
               )}
               <span className="muted fs-12">
                 Showing rows {firstShownRow}-{lastShownRow} that match the applied filters.
