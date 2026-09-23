@@ -1,10 +1,11 @@
 import { useEffect } from 'react';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { Link } from 'react-router';
-import { useApp, type Accent, type Density, type ThemePreference } from '../AppContext';
+import { useApp, type Accent, type Density } from '../AppContext';
 import { Icon, type IconName } from '../Icon';
 import { Chip } from '../Primitives';
 import { PropertyLookupPanel } from '../mortgage/PropertyLookupPanel';
+import { ThemePreferenceControl } from './ThemePreferenceControl';
 import { api, type ActorAuditEventSummary } from '../../lib/api';
 import { offerDisplayLabel } from '../../lib/offerLanguage';
 import { formatTimeOfDay, formatTimestamp } from '../../lib/time';
@@ -17,13 +18,6 @@ import { formatTimeOfDay, formatTimestamp } from '../../lib/time';
  */
 
 const ACCENT_SWATCHES: Accent[] = ['bright', 'teal', 'navy', 'red'];
-// Dark / Light are the prototype's two-state control (design_files/index.html:2);
-// System is the 2026-09-21 audit's additive OS-following option (css-02).
-const THEME_OPTIONS: ReadonlyArray<{ value: ThemePreference; label: string }> = [
-  { value: 'dark', label: 'Dark' },
-  { value: 'light', label: 'Light' },
-  { value: 'system', label: 'System' },
-];
 const RECENT_ACTIVITY_PAGE_SIZE = 8;
 
 const ACTIVITY_LABELS: Record<string, string> = {
@@ -81,7 +75,6 @@ export function recentActivityPresentation(event: ActorAuditEventSummary): {
 export function Console() {
   const {
     consoleOpen, setConsoleOpen,
-    themePreference, setThemePreference,
     accent, setAccent,
     density, setDensity,
     lender,
@@ -152,19 +145,7 @@ export function Console() {
       <div className="tweaks__body">
         <div className="tweak-row">
           <label>Theme</label>
-          <div className="segmented" role="group" aria-label="Theme">
-            {THEME_OPTIONS.map((option) => (
-              <button
-                key={option.value}
-                className={themePreference === option.value ? 'is-active' : ''}
-                onClick={() => setThemePreference(option.value)}
-                type="button"
-                aria-pressed={themePreference === option.value}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
+          <ThemePreferenceControl />
         </div>
         <div className="tweak-row">
           <label>Accent</label>

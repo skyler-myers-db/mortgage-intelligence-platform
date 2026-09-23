@@ -10,6 +10,8 @@
  *  c. <meta name="theme-color"> follows the theme;
  *  d. nothing stored + `prefers-color-scheme: light` boots light, and the
  *     Console's System option follows OS flips live, theme-color included;
+ *     the Administration appearance section marks and edits the same
+ *     preference (it used to mark the painted theme, so System read "Light");
  *  e. every theme x accent pair paints the shared token focus ring at 3:1,
  *     from the global :focus-visible rule and from a bespoke one, and passes
  *     axe color-contrast on / and /lead-queue;
@@ -248,6 +250,30 @@ test('with nothing stored the app follows the OS, and the Console System option 
 
   await page.emulateMedia({ colorScheme: 'light' });
   await expect(html).toHaveAttribute('data-theme', 'light');
+  expect(await page.evaluate(() => window.localStorage.getItem('mip.theme'))).toBe('system');
+});
+
+test('the Administration appearance section marks and edits the same preference as the Console', async ({ app, page }) => {
+  await page.emulateMedia({ colorScheme: 'light' });
+  await app.gotoRoute('/admin-config');
+  const html = page.locator('html');
+  await expect(html, 'nothing stored + OS light paints light').toHaveAttribute('data-theme', 'light');
+
+  const main = page.locator('#main-content');
+  await main.getByRole('button', { name: /Workspace appearance/ }).click();
+  const adminTheme = main.locator('.appearance-body').getByRole('group', { name: 'Theme' });
+  // The painted theme is Light, but what the user chose is System.
+  await expect(adminTheme.getByRole('button', { name: 'System' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(adminTheme.getByRole('button', { name: 'Light' })).toHaveAttribute('aria-pressed', 'false');
+
+  await adminTheme.getByRole('button', { name: 'Dark' }).click();
+  await expect(html).toHaveAttribute('data-theme', 'dark');
+  const consoleTheme = (await app.openConsole()).getByRole('group', { name: 'Theme' });
+  await expect(consoleTheme.getByRole('button', { name: 'Dark' }), 'the Console shows the same choice').toHaveAttribute('aria-pressed', 'true');
+
+  await adminTheme.getByRole('button', { name: 'System' }).click();
+  await expect(html, 'System follows the light OS again').toHaveAttribute('data-theme', 'light');
+  await expect(consoleTheme.getByRole('button', { name: 'System' })).toHaveAttribute('aria-pressed', 'true');
   expect(await page.evaluate(() => window.localStorage.getItem('mip.theme'))).toBe('system');
 });
 
