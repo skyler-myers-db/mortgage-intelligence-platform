@@ -93,8 +93,7 @@
      ≥ 2560 : 64px
    Console gutter ([data-console="open"] .main):
      < 1280 : Console becomes a bottom sheet (degraded gutter 0)
-     1280–2559 : 324px
-     ≥ 2560 : 360px
+     ≥ 1280 : --console-w + --sp-6 (300 + 24px; 340 + 24px at ≥ 2560)
 */
 
 /* --- Tiny viewport fallback (<1024): narrow rail, ensure things fit.
@@ -171,8 +170,8 @@
 }
 
 /* --- QHD and above: larger chrome to match the bigger pixel budget.
-       Rail grows to 96px, topbar gains 8px, Console reserves 360px
-       when docked open. */
+       Rail grows to 96px, topbar gains 8px, the Console widens to 340px
+       (its .main gutter follows --console-w). */
 @media (min-width: 2560px) {
   .app-shell {
     grid-template-columns: 96px 1fr;
@@ -183,9 +182,6 @@
   .rail__item {
     width: 72px;
     height: 72px;
-  }
-  [data-console="open"] .main {
-    padding-right: 360px;
   }
   :root {
     --console-w: 340px;

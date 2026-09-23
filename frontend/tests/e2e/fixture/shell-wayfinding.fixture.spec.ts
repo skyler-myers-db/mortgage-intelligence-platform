@@ -324,6 +324,34 @@ test.describe('Console motion (motion-01)', () => {
   });
 });
 
+test.describe('Console width (motion-01 follow-up)', () => {
+  test('the .main gutter and the panel both follow --console-w, at 1440 and at the 2560 width step', async ({ app, page }) => {
+    for (const viewport of [{ width: 1440, height: 900 }, { width: 2560, height: 1440 }]) {
+      await page.setViewportSize(viewport);
+      await app.gotoRoute('/');
+      const panel = await app.openConsole();
+      const measured = await page.evaluate(() => {
+        const root = getComputedStyle(document.documentElement);
+        const main = document.querySelector<HTMLElement>('main#main-content');
+        const aside = document.getElementById('workspace-console');
+        if (!main || !aside) throw new Error('shell landmarks missing');
+        return {
+          consoleW: parseFloat(root.getPropertyValue('--console-w')),
+          sp6: parseFloat(root.getPropertyValue('--sp-6')),
+          gutter: parseFloat(getComputedStyle(main).paddingRight),
+          panelWidth: aside.getBoundingClientRect().width,
+        };
+      });
+      expect(measured.consoleW).toBe(viewport.width >= 2560 ? 340 : 300);
+      expect(measured.panelWidth).toBeCloseTo(measured.consoleW, 0);
+      expect(measured.gutter, `${viewport.width}px gutter`).toBeCloseTo(measured.consoleW + measured.sp6, 0);
+      // Content in <main> ends left of the docked panel.
+      const mainBox = await boxOf(page.locator('main#main-content'));
+      expect(mainBox.right - measured.gutter).toBeLessThanOrEqual((await boxOf(panel)).left);
+    }
+  });
+});
+
 test.describe('Console motion under reduced motion (motion-01)', () => {
   test('closing hides the Console at once', async ({ app, page }) => {
     await app.gotoRoute('/');

@@ -452,10 +452,12 @@
   max-width: min(100%, 1920px);
   margin-inline: auto;
 }
-/* When the Console is docked open at top-right (fixed 300px card), reserve
-   a right gutter on .main so long rows do not slide under it. The Console is
-   position:fixed, so we can't rely on flow; an explicit gutter is the fix. */
-[data-console="open"] .main { padding-right: 324px; }
+/* When the Console is docked open at top-right (fixed --console-w card),
+   reserve a right gutter on .main so long rows do not slide under it. The
+   Console is position:fixed, so we can't rely on flow; an explicit gutter is
+   the fix. The gutter derives from --console-w (audit motion-01 follow-up:
+   the literal 324px / 360px drifted from the width at >= 2560px). */
+[data-console="open"] .main { padding-right: calc(var(--console-w) + var(--sp-6)); }
 @media (prefers-reduced-motion: reduce) {
   .main { transition: none; }
 }
