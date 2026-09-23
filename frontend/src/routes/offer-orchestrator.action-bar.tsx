@@ -1,6 +1,7 @@
 import { useEffect, useRef, type ReactNode, type RefObject } from 'react';
 import { ApprovalBanner } from '../components/mortgage/ApprovalBanner';
 import type { SalesTeamMember } from '../types';
+import { useGenieClearance } from './offer-orchestrator.genie-clearance';
 import './offer-orchestrator.action-bar.css';
 
 /** Read by offer-orchestrator.action-bar.css for `.main`'s scroll-padding-block-end. */
@@ -60,6 +61,8 @@ export interface OfferActionBarProps {
   approveError: string | null;
   /** The reject rationale form while it is open (Reject's first click opens it). */
   rejectReview?: ReactNode;
+  /** The floating Genie panel is open: the bar keeps its buttons clear of it. */
+  genieOpen?: boolean;
 }
 
 /**
@@ -100,9 +103,11 @@ export function OfferActionBar({
   actorEmail,
   approveError,
   rejectReview,
+  genieOpen = false,
 }: OfferActionBarProps) {
   const barRef = useRef<HTMLElement>(null);
   useActionBarScrollClearance(barRef);
+  useGenieClearance(barRef, genieOpen);
   return (
     <section
       ref={barRef}

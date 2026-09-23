@@ -9,12 +9,12 @@
  * the gate dock in one sticky bar at the bottom of `.main`, and the hero has
  * no Approve. Pinned here: without scrolling, Approve and the routing
  * selector are fully inside the viewport and covered by nothing (not the
- * Console, not the Genie launcher); scrolling keeps the bar docked; at the end
- * of the page it rests above the footer; focus from below the view stops
- * above it; the reject rationale opens inside it, focused. Under browser zoom
- * (200% and 150%) the bar is in flow, and the offer and every paragraph of the
- * certified copy can be read at some scroll position (WCAG 1.4.10); 1366x768
- * at 100% still docks.
+ * Console, not the Genie launcher, not the open Genie panel); scrolling keeps
+ * the bar docked; at the end of the page it rests above the footer; focus from
+ * below the view stops above it; the reject rationale opens inside it,
+ * focused. Under browser zoom (200% and 150%) the bar is in flow, and the
+ * offer and every paragraph of the certified copy can be read at some scroll
+ * position (WCAG 1.4.10); 1366x768 at 100% still docks.
  *
  * critic-02 (part 2): the certified copy is framed the way the borrower
  * receives it. Pinned here in both themes: the email frame's From / To (the
@@ -144,6 +144,42 @@ test.describe('decision bar (visual-v1)', () => {
     }
     expect(overlaps(await boxOf(bar), consoleBox), 'the bar runs under the Console').toBe(false);
   });
+
+  for (const theme of FIXTURE_THEMES) {
+    test(`${theme}: with the Genie panel open, Reject and Approve reflow clear of it`, async ({ app, page }) => {
+      await app.setTheme(theme);
+      await app.gotoRoute(ROUTE);
+      const { bar, approve, reject, routing } = decisionControls(page);
+      await expect(approve).toBeEnabled();
+      const barHeight = async () => { const box = await boxOf(bar); return box.bottom - box.top; };
+      const closedHeight = await barHeight();
+
+      // The docked panel sits over the bar's inline end, where the gate's
+      // buttons are. Measure it once its entry transform has settled.
+      const expectClearOfGenie = async (dialog: Locator, where: string) => {
+        await expect.poll(() => dialog.evaluate((node) => getComputedStyle(node).transform), { message: 'Genie entry settled' })
+          .toMatch(/^(none|matrix\(1, 0, 0, 1, 0, 0\))$/);
+        await expect.poll(() => isUncovered(approve), { message: `${where}: Approve is not under the Genie panel` }).toBe(true);
+        const panel = await boxOf(dialog);
+        expect(overlaps((await boxOf(bar)), panel), `precondition (${where}): the panel reaches over the bar`).toBe(true);
+        for (const [name, control] of [['Approve', approve], ['Reject', reject], ['routing selector', routing]] as const) {
+          await expectInsideViewport(page, control, `${name} (${where})`);
+          expect(overlaps(await boxOf(control), panel), `${name} overlaps the Genie panel (${where})`).toBe(false);
+        }
+      };
+
+      await expectClearOfGenie(await app.openGenie(), 'Console closed');
+      // Closing Genie gives the space back: the bar returns to its own height.
+      await page.getByRole('banner').getByRole('button', { name: 'Toggle Genie chat' }).click();
+      await expect(page.getByRole('dialog', { name: 'Genie chat' })).toBeHidden();
+      await expect.poll(barHeight, { message: 'bar height after Genie closes (px)' }).toBe(closedHeight);
+
+      // The docked panel moves left of an open Console; the bar follows it.
+      const consolePanel = await app.openConsole();
+      await expectClearOfGenie(await app.openGenie(), 'Console open');
+      expect(overlaps(await boxOf(approve), await boxOf(consolePanel)), 'Approve overlaps the Console').toBe(false);
+    });
+  }
 
   test('where the floating Genie launcher shows, Approve stays clear of it', async ({ app, page }) => {
     await page.setViewportSize({ width: 700, height: 900 });

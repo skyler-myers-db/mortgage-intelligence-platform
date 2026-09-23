@@ -93,3 +93,13 @@
     padding-inline-end: calc(var(--sp-12) + var(--sp-1) + var(--sp-4) * 2);
   }
 }
+
+/* While the docked Genie panel is open it covers the bar's inline end, where
+   Reject and Approve sit. The bar reserves the panel's measured reach
+   (offer-orchestrator.genie-clearance.ts) plus a gap, so its controls reflow
+   left of the panel. The attribute is set only while the panel is open,
+   docked and narrower than a sheet; it wins over the FAB padding above
+   (the FAB hides while the panel is open). */
+.offer-action-bar[data-genie-clearance] {
+  padding-inline-end: calc(var(--offer-action-bar-genie-clearance, 0px) + var(--sp-4));
+}

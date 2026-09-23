@@ -105,6 +105,7 @@ export default function OfferOrchestrator() {
     canApprove,
     actorEmail,
     sessionStatus,
+    genieOpen,
   } = useApp();
   // Audit flow-02: gate the approve controls on the session's can_approve.
   const approverGate = approverGateReason(canApprove, sessionStatus);
@@ -752,6 +753,7 @@ export default function OfferOrchestrator() {
           approverGate={approverGate}
           actorEmail={actorEmail}
           approveError={approveError}
+          genieOpen={genieOpen}
           rejectReview={rejectReviewOpen && (
             <RejectRationalePanel
               reasonCode={rejectReasonCode}
