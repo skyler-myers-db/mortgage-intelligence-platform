@@ -188,6 +188,28 @@ describe('Lead Queue filter bar', () => {
     expect(document.activeElement).toBe(byTestId('lead-queue-more-filters'));
   });
 
+  it('does not repeat a removable hero chip in the drilldown scope strip', async () => {
+    await mountAt(
+      '/lead-queue?state=IL&zip=60601&cities=CHICAGO~IL&borrower_ids=B-000000000001'
+      + '&zips=60601,60602&funnel_stage=approved',
+    );
+    const scope = document.querySelector('[role="group"][aria-label="Active analytics drilldown filters"]') as HTMLElement;
+    // The strip keeps the state and the full ZIP list the hero chip only counts.
+    expect([...scope.querySelectorAll('.lead-queue-scope__pill')].map((pill) => pill.textContent)).toEqual([
+      'State: IL',
+      'ZIPs: 60601, 60602',
+    ]);
+    expect(scope.querySelector('.lead-queue-scope__note')?.textContent).toContain('ranked by opportunity score');
+    const hero = byTestId('lead-queue-active-filters')!;
+    expect([...hero.querySelectorAll('button')].map((button) => button.getAttribute('aria-label'))).toEqual([
+      'Remove STAGE: Approved filter',
+      'Remove ZIP: 60601 filter',
+      'Remove ZIPS: 2 selected filter',
+      'Remove CITIES: CHICAGO~IL filter',
+      'Remove BORROWERS: 1 selected filter',
+    ]);
+  });
+
   it('Clear all drops every filter but keeps the column preset', async () => {
     await mountAt('/lead-queue?view=sales-ops&state=IL&owner_link=Portfolio+investor+%285%2B%29');
     const clearAll = byTestId<HTMLButtonElement>('lead-queue-clear-all')!;

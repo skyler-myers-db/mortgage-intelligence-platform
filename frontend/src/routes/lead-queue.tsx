@@ -31,7 +31,6 @@ import {
   APPROVAL_FILTER_OPTIONS,
   CONTACTABILITY_FILTER_OPTIONS,
   CONSENT_FILTER_OPTIONS,
-  FUNNEL_STAGE_LABELS,
   LEAD_TABLE_VIEW_PARAM,
   LOAN_PRODUCT_FILTER_OPTIONS,
   ORIGINATION_CHANNEL_FILTER_OPTIONS,
@@ -421,17 +420,14 @@ export default function LeadQueue() {
           >
             {scopeFiltersActive ? (
               <>
-              {funnelStage && (
-                <span className="lead-queue-scope__pill">Stage: {FUNNEL_STAGE_LABELS[funnelStage]}</span>
-              )}
+              {/* A value the hero already shows as a removable chip (stage,
+                  ZIP, county, cities, borrowers) is not repeated here; the
+                  strip keeps the states and the full ZIP / county lists the
+                  hero chips only count. */}
               {stateFilter && <span className="lead-queue-scope__pill">State: {stateFilter}</span>}
-              {zipFilter && <span className="lead-queue-scope__pill">ZIP: {zipFilter}</span>}
-              {countyFilter && <span className="lead-queue-scope__pill">County FIPS: {countyFilter}</span>}
               {countyFilters.length > 0 && <span className="lead-queue-scope__pill">Counties: {countyFilters.join(', ')}</span>}
               {stateFilters.length > 0 && <span className="lead-queue-scope__pill">States: {stateFilters.join(', ')}</span>}
               {zipFilters.length > 0 && <span className="lead-queue-scope__pill">ZIPs: {zipFilters.join(', ')}</span>}
-              {cityFilters.length > 0 && <span className="lead-queue-scope__pill">Cities: {cityFilters.join(', ')}</span>}
-              {borrowerIdFilters.length > 0 && <span className="lead-queue-scope__pill">Borrowers: {borrowerIdFilters.length}</span>}
               {/* 2026-08-07 audit C4: geo drill-ins show EVERY borrower the
                   map counted (no score floor — the map-tile promise), so the
                   old caption claiming a "scored, marketing-eligible subset"
