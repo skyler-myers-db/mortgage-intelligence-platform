@@ -52,8 +52,35 @@ export function readTokensCss(): string {
   return readFileSync(join(process.cwd(), ...TOKENS_CSS_PATH), 'utf8');
 }
 
+/** design-system/print.css, whose `@media print` remap the token print reset must restate. */
+export function readPrintCss(): string {
+  return readFileSync(join(process.cwd(), 'src', 'design-system', 'print.css'), 'utf8');
+}
+
 function stripComments(css: string): string {
   return css.replace(/\/\*[\s\S]*?\*\//g, '');
+}
+
+/**
+ * Inner text of every `@media <query> { ... }` block, for source contracts
+ * on what a print or other media override declares (the cascade above
+ * ignores at-rules). Feed the result to `topLevelRules`.
+ */
+export function mediaBlocks(css: string, query: string): string[] {
+  const text = stripComments(css);
+  const blocks: string[] = [];
+  for (const match of text.matchAll(new RegExp(`@media\\s+${query}\\s*\\{`, 'g'))) {
+    const start = (match.index ?? 0) + match[0].length;
+    let depth = 1;
+    let j = start;
+    while (j < text.length && depth > 0) {
+      if (text[j] === '{') depth += 1;
+      else if (text[j] === '}') depth -= 1;
+      j += 1;
+    }
+    blocks.push(text.slice(start, j - 1));
+  }
+  return blocks;
 }
 
 /** Top-level `selector { block }` pairs, skipping at-rules and statements. */

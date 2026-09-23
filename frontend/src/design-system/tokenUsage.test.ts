@@ -17,10 +17,13 @@
  *  - responsive-02: the light theme is carried by the tokens (light
  *    `--status-*-ink`, `--signal-*`), not by `[data-theme="light"]` rules in
  *    the partials that shadow them per selector (twelve were retired).
+ *  - css-01 (print): every property a `[data-theme][data-accent]` compound
+ *    sets is reset inside `@media print` to print.css's monochrome value,
+ *    because the (0,2,0) compounds outrank print.css's (0,1,0) remap.
  */
 import { describe, expect, it } from 'vitest';
 import { designCss } from '../test/designCss';
-import { TokenCascade, readTokensCss } from '../test/tokenCascade';
+import { TokenCascade, mediaBlocks, readPrintCss, readTokensCss, topLevelRules } from '../test/tokenCascade';
 
 const tokens = readTokensCss();
 const components = designCss();
@@ -65,6 +68,53 @@ describe('native control scheme (visual-03 / css-02)', () => {
     expect(tokens).toMatch(/:root,\s*\[data-theme="dark"\]\s*\{\s*color-scheme:\s*dark;\s*\}/);
     expect(tokens).toMatch(/\[data-theme="light"\]\s*\{\s*color-scheme:\s*light;\s*\}/);
     expect(tokens).toMatch(/@media print\s*\{[^}]*color-scheme:\s*light;/s);
+  });
+});
+
+/** Custom-property declarations of one rule block, by name. */
+function customProperties(block: string): Map<string, string> {
+  const found = new Map<string, string>();
+  for (const part of block.split(';').map((p) => p.trim())) {
+    if (!part.startsWith('--')) continue;
+    const colon = part.indexOf(':');
+    found.set(part.slice(0, colon).trim(), part.slice(colon + 1).trim());
+  }
+  return found;
+}
+
+describe('print keeps the accent family monochrome (css-01)', () => {
+  // print.css remaps the accent family at (0,1,0) and never sets
+  // --accent-ink; a (0,2,0) theme x accent compound outranks it, so dark +
+  // navy printed accent-ink #66C5FF on white paper (1.91:1) until the reset.
+  const COMPOUND = /^\[data-theme="[a-z]+"\]\[data-accent="[a-z]+"\]$/;
+  const compoundProperties = new Set(
+    topLevelRules(tokens)
+      .filter((rule) => COMPOUND.test(rule.selector))
+      .flatMap((rule) => [...customProperties(rule.block).keys()]),
+  );
+  const resets = mediaBlocks(tokens, 'print')
+    .flatMap((block) => topLevelRules(block))
+    .filter((rule) => rule.selector === '[data-theme][data-accent]');
+
+  it('resets every property a theme x accent compound sets, inside @media print', () => {
+    expect([...compoundProperties]).toEqual(expect.arrayContaining(['--accent', '--accent-ink', '--chip-text']));
+    expect(resets, 'one [data-theme][data-accent] block inside @media print').toHaveLength(1);
+    const reset = customProperties(resets[0].block);
+    expect([...compoundProperties].filter((name) => !reset.has(name)), 'set by a compound, not reset for print').toEqual([]);
+  });
+
+  it('resets them to the values print.css remaps them to', () => {
+    const printRemap = new Map(
+      mediaBlocks(readPrintCss(), 'print')
+        .flatMap((block) => topLevelRules(block))
+        .filter((rule) => rule.selector.includes(':root'))
+        .flatMap((rule) => [...customProperties(rule.block)]),
+    );
+    expect(printRemap.get('--accent')).toBe('CanvasText');
+    for (const [name, value] of customProperties(resets[0]?.block ?? '')) {
+      // print.css has no --accent-ink; it prints like --accent.
+      expect(value, name).toBe(printRemap.get(name) ?? printRemap.get('--accent'));
+    }
   });
 });
 

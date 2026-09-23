@@ -12,7 +12,10 @@
  *     Console's System option follows OS flips live, theme-color included;
  *  e. every theme x accent pair paints the shared token focus ring at 3:1,
  *     from the global :focus-visible rule and from a bespoke one, and passes
- *     axe color-contrast on / and /lead-queue.
+ *     axe color-contrast on / and /lead-queue;
+ *  f. every theme x accent pair prints the accent family monochrome, as
+ *     print.css asks (the (0,2,0) theme x accent compounds used to outrank
+ *     its remap: dark + navy printed accent-ink #66C5FF on white paper).
  *
  * States the axe loop never renders (warning copy, amber glyphs, the active
  * evidence-drawer tab, text-input focus) are proven in
@@ -33,6 +36,9 @@ import { expect, test, type FixtureTheme } from './test';
 const ACCENTS = ['bright', 'teal', 'navy', 'red'] as const;
 const THEMES: readonly FixtureTheme[] = ['dark', 'light'];
 const TRANSPARENT = 'rgba(0, 0, 0, 0)';
+/** CanvasText / Canvas under the light color-scheme tokens.css forces for print. */
+const PRINT_INK = 'rgb(0, 0, 0)';
+const PRINT_PAPER = 'rgb(255, 255, 255)';
 
 /**
  * The one pair that cannot reach AA without changing a prototype DARK value:
@@ -281,6 +287,34 @@ for (const theme of THEMES) {
         expect(remaining, `axe color-contrast on ${route}`).toEqual([]);
       }
       if (exception) expect(excepted, 'documented exception no longer observed: remove it').toBeGreaterThan(0);
+    });
+  }
+}
+
+for (const theme of THEMES) {
+  for (const accent of ACCENTS) {
+    test(`${theme} + ${accent}: print paints the accent family monochrome`, async ({ app, page }) => {
+      await app.setTheme(theme);
+      await seedStorage(page, 'mip.accent', accent);
+      await app.gotoRoute('/');
+      await expect(page.locator('html')).toHaveAttribute('data-accent', accent);
+      // Non-vacuity: on screen every pair's accent-ink is a hue, never the print ink.
+      const screenInk = await asComputedRgb(page, 'var(--accent-ink)');
+      expect(screenInk, 'screen accent-ink').not.toBe(PRINT_INK);
+
+      await page.emulateMedia({ media: 'print' });
+      const printed: Record<string, string> = {};
+      for (const token of ['--accent-ink', '--accent', '--chip-text', '--chip-bg']) {
+        printed[token] = await asComputedRgb(page, `var(${token})`);
+      }
+      // --accent-ink colours every accent text site that survives print
+      // (.text-accent, .proof-component__score, .audit__ico, .uc-asset-link).
+      expect(printed).toEqual({
+        '--accent-ink': PRINT_INK,
+        '--accent': PRINT_INK,
+        '--chip-text': PRINT_INK,
+        '--chip-bg': PRINT_PAPER,
+      });
     });
   }
 }

@@ -336,6 +336,27 @@
  * it while --accent itself stays verbatim. */
 [data-theme="dark"][data-accent="navy"]    { --accent-ink: #66C5FF; }
 [data-theme="dark"][data-accent="red"]     { --accent-ink: #FF5A47; }
+/* Print stays monochrome (print.css, "paper binders"). print.css remaps the
+ * accent family at (0,1,0), which the (0,2,0) compounds above outrank, and it
+ * never sets --accent-ink: without this reset dark + navy printed accent-ink
+ * text #66C5FF on white paper (1.91:1), dark + red #FF5A47 (3.09:1), and the
+ * light red / teal chips printed tinted (2026-09-21 audit css-01). Same
+ * specificity as the compounds and later in source, so every theme x accent
+ * pair prints what print.css asks for; --accent-ink joins it as CanvasText.
+ * tokenUsage.test.ts requires every property a compound sets to be reset
+ * here; theme.fixture.spec.ts proves the printed colours per pair. */
+@media print {
+  [data-theme][data-accent] {
+    --accent: CanvasText;
+    --accent-hover: CanvasText;
+    --accent-ink: CanvasText;
+    --accent-soft: Canvas;
+    --accent-contrast: Canvas;
+    --chip-bg: Canvas;
+    --chip-line: var(--line-2);
+    --chip-text: CanvasText;
+  }
+}
 
 /* ---------- Focus ring ----------
  * One ring for the whole product (2026-09-21 audit css-v1 / a11y-01). The
