@@ -10,6 +10,7 @@
 import type { Locator, Page } from '@playwright/test';
 import type { GenieLiveProgress, GenieResult, GenieSubmitResult } from '../../../src/lib/apiTypes';
 import type { AppDriver } from './app';
+import { PRIMARY_BORROWER } from './data/borrowers';
 import { json, type MockApi } from './mockApi';
 import { expect, test } from './test';
 
@@ -113,6 +114,28 @@ test.describe('Genie page context (genie-04, shell-07)', () => {
     expect(genieCalls(mockApi)).toEqual([]);
   });
 
+  test('the palette: a masked borrower id + Enter opens its dossier, never a Genie prefill', async ({ app, mockApi, page }) => {
+    await app.gotoRoute('/');
+    const palette = await app.openCommandPalette();
+    await palette.getByRole('combobox').fill(PRIMARY_BORROWER.borrower_id);
+    // Once the borrower search lands, the borrower is the first (active)
+    // option and the Genie row is the fallback after it. (Before it lands,
+    // Enter is held on the Genie row; CommandPalette.test.tsx pins that.)
+    await expect(palette.getByRole('group', { name: 'Borrowers' })).toContainText(PRIMARY_BORROWER.borrower_id);
+    const options = palette.getByRole('option');
+    await expect(options.first()).toHaveAttribute('aria-selected', 'true');
+    await expect(options.first()).not.toContainText('Ask Genie');
+    await expect(options.first()).toContainText(PRIMARY_BORROWER.borrower_id);
+    await expect(options.last()).toContainText(`Ask Genie: ${PRIMARY_BORROWER.borrower_id}`);
+    await page.keyboard.press('Enter');
+
+    await expect(page).toHaveURL(new RegExp(`/borrower-360/${PRIMARY_BORROWER.borrower_id}$`));
+    await expect(page.locator('#main-content')).toContainText(PRIMARY_BORROWER.clip);
+    // The Genie panel never mounted, so the id cannot sit in its composer.
+    await expect(page.getByRole('dialog', { name: 'Genie chat' })).toHaveCount(0);
+    expect(genieCalls(mockApi)).toEqual([]);
+  });
+
   test('the empty panel shows the starters curated for the route', async ({ app, page }) => {
     await app.gotoRoute('/lead-queue');
     const dialog = await app.openGenie();
@@ -151,6 +174,7 @@ test.describe('Genie conversational controls (genie-03)', () => {
     await expect(dialog.locator('.genie__msg--stopped')).toBeVisible();
     await expect(dialog.locator('.genie__msg--stopped')).toContainText('Stopped');
     await expect(composer).toHaveValue('How many borrowers are in the money?');
+    await expect(composer).toBeFocused();
     await expect(dialog.locator('.genie-progress')).toHaveCount(0);
     await expect(dialog.getByRole('button', { name: 'Start a new Genie thread' })).toBeEnabled();
     await expect(dialog.getByRole('button', { name: 'Genie conversation history' })).toBeEnabled();
@@ -164,6 +188,31 @@ test.describe('Genie conversational controls (genie-03)', () => {
     expect(progressPolls, 'no progress poll after Stop').toBe(pollsAtStop);
     expect(mockApi.calls.filter((call) => call.path === '/api/genie/message/complete')).toEqual([]);
     await expect(dialog.locator('.genie__msg--stopped')).toHaveCount(1);
+  });
+
+  test('Stop from the keyboard with a draft keeps the draft, focus stays in the composer, and Escape still closes Genie', async ({ app, mockApi, page }) => {
+    mockApi.register<GenieSubmitResult>('POST', '/api/genie/message/submit', () => json(LIVE_SUBMIT));
+    mockApi.register<GenieLiveProgress>('POST', '/api/genie/message/progress', () => json(IN_PROGRESS));
+
+    await app.gotoRoute('/');
+    const dialog = await app.openGenie();
+    const composer = dialog.getByRole('textbox', { name: 'Ask Genie' });
+    await composer.fill('How many borrowers are in the money?');
+    await dialog.getByRole('button', { name: 'Ask', exact: true }).click();
+    await expect(dialog.locator('.genie-progress')).toBeVisible();
+
+    await composer.fill('A follow-up draft');
+    const stop = dialog.getByRole('button', { name: 'Stop this Genie turn' });
+    await stop.focus();
+    await page.keyboard.press('Enter');
+
+    await expect(dialog.locator('.genie__msg--stopped')).toBeVisible();
+    // The Stop button is gone; focus did not fall to <body>.
+    await expect(stop).toHaveCount(0);
+    await expect(composer).toBeFocused();
+    await expect(composer).toHaveValue('A follow-up draft');
+    await page.keyboard.press('Escape');
+    await expect(dialog).toBeHidden();
   });
 
   test('Regenerate re-asks the same question as a second submit and keeps the first answer', async ({ app, mockApi, page }) => {
