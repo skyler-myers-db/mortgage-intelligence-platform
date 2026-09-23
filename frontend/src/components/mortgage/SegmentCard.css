@@ -49,16 +49,29 @@
 }
 
 /* Count row: the prototype's count, plus the meta row's `avg` moved beside
-   it (the meta row now carries the evidence chip and the Ask Genie entry). */
+   it (the meta row now carries the evidence chip and the Ask Genie entry).
+   The headline count never shrinks or breaks: a six- to eight-digit count
+   (a national footprint) keeps its whole width on one line, and `avg` wraps
+   below it instead. The subgrid keeps the row aligned across the grid row
+   when one card's `avg` wraps. This overrides the 02 partial's
+   `overflow-wrap: anywhere` on `.seg-card__count`, which let a flex-shrunk
+   count break mid-number (`1,234,56` / `7`). */
 .seg-card__count-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
-  gap: var(--sp-2);
+  column-gap: var(--sp-2);
   min-inline-size: 0;
+}
+.seg-card__count-row .seg-card__count {
+  flex: none;
+  white-space: nowrap;
+  overflow-wrap: normal;
 }
 .seg-card__avg {
   flex: none;
+  margin-inline-start: auto;
   font-family: var(--font-mono);
   font-size: var(--fs-11);
   color: var(--text-3);

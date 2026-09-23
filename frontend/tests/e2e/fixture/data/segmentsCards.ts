@@ -33,3 +33,20 @@ export const VARIED_SEGMENTS: readonly SegmentSummary[] = SEGMENTS.map(varied);
 export function registerVariedSegments(mockApi: MockApi): void {
   mockApi.register('GET', '/api/segments', () => json<SegmentSummary[]>([...VARIED_SEGMENTS]));
 }
+
+/**
+ * Six- to eight-digit headline counts (review round 1 of visual-04). A
+ * national footprint puts segment counts in the hundreds of thousands and
+ * beyond; the count must stay one unbroken line beside `avg`, never
+ * `1,234,56` / `7`. Each card keeps a contactable gap, so the reconcile note
+ * renders too.
+ */
+export const BIG_SEGMENT_COUNTS = [123_456, 1_234_567, 12_345_678, 100_000, 999_999, 12_345_678] as const;
+
+export function registerBigCountSegments(mockApi: MockApi): void {
+  const rows = SEGMENTS.map((row, index) => {
+    const count = BIG_SEGMENT_COUNTS[index % BIG_SEGMENT_COUNTS.length];
+    return { ...row, count, contactable: Math.round(count / 9) };
+  });
+  mockApi.register('GET', '/api/segments', () => json<SegmentSummary[]>(rows));
+}

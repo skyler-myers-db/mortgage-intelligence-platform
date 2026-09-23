@@ -57,7 +57,8 @@ import './SegmentCard.css';
  * text stays in the DOM and on the select button's `title`), the reconcile
  * note is one line, `avg` sits beside the count so the meta row keeps the
  * evidence chip and the Ask Genie entry on one line, and each facet is one
- * share bar (SegmentFacetBar).
+ * share bar (SegmentFacetBar). The headline count never wraps: when a six- to
+ * eight-digit count leaves no room, `avg` wraps below it.
  *
  * Emanation: when `selected` flips false → true, we mount a single
  * `.seg-card__emanate` span with a fresh key. The CSS animation is one-shot

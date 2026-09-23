@@ -6,7 +6,7 @@
 import AxeBuilder from '@axe-core/playwright';
 import type { Locator, Page } from '@playwright/test';
 import { PRIMARY_BORROWER } from './data/borrowers';
-import { registerVariedSegments } from './data/segmentsCards';
+import { BIG_SEGMENT_COUNTS, registerBigCountSegments, registerVariedSegments } from './data/segmentsCards';
 import { FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
 
@@ -60,6 +60,36 @@ function expectRowsAligned(cards: CardGeometry[]): void {
   }
 }
 
+interface CountGeometry {
+  text: string;
+  height: number;
+  lineHeight: number;
+  right: number;
+  /** Right edge of the card's content box: the count must not run past it. */
+  cardContentRight: number;
+}
+
+async function countGeometry(page: Page): Promise<CountGeometry[]> {
+  return page.locator('.seg-grid .seg-card__count').evaluateAll((counts) =>
+    counts.map((count) => {
+      const box = count.getBoundingClientRect();
+      const card = count.closest('.seg-card');
+      const cardBox = card?.getBoundingClientRect();
+      const cardStyle = card ? getComputedStyle(card) : null;
+      const cardContentRight = cardBox && cardStyle
+        ? cardBox.right - parseFloat(cardStyle.paddingRight) - parseFloat(cardStyle.borderRightWidth)
+        : Number.NaN;
+      return {
+        text: count.textContent ?? '',
+        height: box.height,
+        lineHeight: parseFloat(getComputedStyle(count).lineHeight),
+        right: box.right,
+        cardContentRight,
+      };
+    }),
+  );
+}
+
 function facetTrigger(card: Locator, kind: 'product' | 'channel'): Locator {
   return card.locator(`.seg-card__facet-chip--${kind}`).getByRole('button');
 }
@@ -93,6 +123,29 @@ for (const theme of FIXTURE_THEMES) {
       await expect(page.locator('.seg-card__facet-chip')).toHaveCount(11);
       expectRowsAligned(cards);
     });
+
+    // A national footprint puts headline counts at six to eight digits. The
+    // count must stay one unbroken line (never `1,234,56` / `7`) and inside
+    // its card, with `avg` giving way instead. 1356 is the narrowest card of
+    // the six-column band.
+    for (const width of [1440, 1356] as const) {
+      test(`six- to eight-digit counts stay on one line inside the card at ${width}px, rows aligned`, async ({ app, mockApi, page }) => {
+        registerBigCountSegments(mockApi);
+        await page.setViewportSize({ width, height: 900 });
+        await app.gotoRoute(ROUTE);
+        await expect(page.locator('.seg-grid .seg-card__count')).toHaveText(
+          BIG_SEGMENT_COUNTS.map((count) => count.toLocaleString('en-US')),
+        );
+        const counts = await countGeometry(page);
+        expect(counts).toHaveLength(6);
+        for (const count of counts) {
+          expect(count.lineHeight, `line-height of "${count.text}"`).toBeGreaterThan(0);
+          expect(Math.abs(count.height - count.lineHeight), `"${count.text}" renders on one line`).toBeLessThanOrEqual(0.5);
+          expect(count.right, `"${count.text}" ends inside its card`).toBeLessThanOrEqual(count.cardContentRight + 0.5);
+        }
+        expectRowsAligned(await cardGeometry(page));
+      });
+    }
 
     test('the segment cards, facet share bars included, pass axe WCAG A/AA', async ({ app, page }) => {
       await app.gotoRoute(ROUTE);
