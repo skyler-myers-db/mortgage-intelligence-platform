@@ -82,7 +82,7 @@ export type { MapSelection } from './USChoroplethMap.selection';
 
 interface USChoroplethMapProps {
   height?: number;
-  /** Optional segment-code filter. Non-matching states dim. */
+  /** Optional segment-code filter. The rollups re-read with it, so the fill shows the filtered counts. */
   segmentFilter?: string[];
   /** any = overlap; all = borrower must carry every selected segment. */
   segmentFilterMode?: 'any' | 'all';
@@ -369,7 +369,6 @@ export function USChoroplethMap({
           scale={scale}
           overlayByUnit={overlayActive ? overlayByUnit : null}
           footprintStates={footprintStates}
-          activeSegNames={activeSegNames}
           selectedId={drillBehavior === 'navigate' ? null : drillStateId}
           setHover={setHover}
           onActivate={activateState}

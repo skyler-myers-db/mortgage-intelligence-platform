@@ -11,6 +11,13 @@
  *    segment (aggregates only, never borrower data);
  *  - the hover card also opens on keyboard focus, anchored to the state's
  *    box, and Escape dismisses it.
+ *
+ * Every populated state paints its class's ramp step at full opacity, on
+ * every route (audit dataviz-02). Under a segment filter the rollups are
+ * re-read with `segment_codes`, so the class already encodes the filtered
+ * count; the old "dim a state whose top segment is outside the filter"
+ * cue (opacity 0.3) painted colours the legend never showed and hid states
+ * that hold many borrowers of the selected segment.
  */
 import { useMemo, useState, type Dispatch, type SetStateAction } from 'react';
 import type { GeoAssignmentOverlayUnit } from '../../lib/api';
@@ -29,7 +36,6 @@ interface USChoroplethMapStatesProps {
   /** Overlay units keyed by lowercase USPS code when the overlay colours the map; else null. */
   overlayByUnit: Record<string, GeoAssignmentOverlayUnit> | null;
   footprintStates: Record<string, string>;
-  activeSegNames: Set<string> | null;
   /** Lowercase id of the selected state, if any. */
   selectedId: string | null;
   setHover: Dispatch<SetStateAction<HoverState | null>>;
@@ -55,7 +61,6 @@ export function USChoroplethMapStates({
   scale,
   overlayByUnit,
   footprintStates,
-  activeSegNames,
   selectedId,
   setHover,
   onActivate,
@@ -137,7 +142,6 @@ export function USChoroplethMapStates({
       {views.map((view) => {
         const { location, rollup, cls } = view;
         const hasFill = !loading && cls !== null;
-        const dim = activeSegNames !== null && view.topSegment !== undefined && !activeSegNames.has(view.topSegment);
         const classes = [
           'map-region',
           loading ? 'is-loading' : '',
@@ -145,7 +149,6 @@ export function USChoroplethMapStates({
           !loading && !hasFill ? 'is-empty' : '',
           hasFill ? `lvl-${cls}` : '',
           selectedId === location.id ? 'is-selected' : '',
-          dim ? 'is-dimmed' : '',
         ]
           .filter(Boolean)
           .join(' ');

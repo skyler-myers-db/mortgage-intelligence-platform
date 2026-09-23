@@ -4,7 +4,9 @@
  *
  *  - Encoding: the painted fills, the ZIP tiles and the legend swatches are
  *    the same five ramp steps, and adjacent steps differ by >= 0.06 OKLab L
- *    in both themes (computed from the browser's own computed colours).
+ *    in both themes (computed from the browser's own computed colours). A
+ *    segment filter on Segment Intelligence repaints nothing: every state
+ *    still paints its class's swatch at full opacity.
  *  - Resilience: a warming warehouse shows the WarmingUpBlock inside the map
  *    stage and an em dash, never "0", and the map recovers on its own.
  *  - URL: a drill is `?geo_state=TX`, Back restores the national view, a
@@ -41,8 +43,12 @@ function oklabL([r, g, b]: Rgb): number {
 interface MapPaint {
   /** Legend swatches lvl-0..4 as 8-bit sRGB. */
   swatches: Rgb[];
-  /** Every painted state path: its class and its computed fill. */
-  states: Array<{ id: string; cls: number; fill: Rgb }>;
+  /**
+   * Every state path: its class, its computed fill, and what else changes the
+   * colour it is painted in: `alpha` (fill-opacity times the opacity of the
+   * path and of every ancestor up to `.map-wrap`) and its `filter`.
+   */
+  states: Array<{ id: string; cls: number; fill: Rgb; alpha: number; filter: string }>;
   /** Every ZIP tile: its class, its computed background and text colour. */
   zips: Array<{ zip: string; cls: number; background: Rgb; ink: Rgb }>;
 }
@@ -51,10 +57,21 @@ interface MapPaint {
  * Read what the browser computed for the swatches, the state fills and the
  * ZIP tiles, normalised to sRGB through a 1x1 canvas (a color-mix() in oklab
  * computes to an oklab() value; the canvas paints whatever CSS colour the
- * engine resolved). Fails on a colour the canvas does not accept.
+ * engine resolved). Fails on a colour the canvas does not accept. Waits for
+ * the map's finite animations and transitions (the level fade, the tiles'
+ * entrance, a fill transition) to finish first, so it samples the resting
+ * paint.
  */
 async function readMapPaint(page: Page): Promise<MapPaint> {
-  return page.evaluate(() => {
+  return page.evaluate(async () => {
+    const wrap = document.querySelector('.map-wrap');
+    if (!wrap) throw new Error('.map-wrap missing');
+    await Promise.all(
+      wrap
+        .getAnimations({ subtree: true })
+        .filter((animation) => animation.effect?.getComputedTiming().iterations !== Infinity)
+        .map((animation) => animation.finished.catch(() => undefined)),
+    );
     const canvas = document.createElement('canvas');
     canvas.width = 1;
     canvas.height = 1;
@@ -77,10 +94,19 @@ async function readMapPaint(page: Page): Promise<MapPaint> {
       if (!el) throw new Error(`legend swatch lvl-${cls} missing`);
       return toRgb(getComputedStyle(el).backgroundColor);
     });
+    const alphaOf = (el: Element): number => {
+      let alpha = Number(getComputedStyle(el).fillOpacity);
+      for (let node: Element | null = el; node; node = node === wrap ? null : node.parentElement) {
+        alpha *= Number(getComputedStyle(node).opacity);
+      }
+      return alpha;
+    };
     const states = [...document.querySelectorAll<SVGPathElement>('path.map-region[data-map-unit]')].map((el) => ({
       id: el.getAttribute('data-map-unit') ?? '',
       cls: Number(el.getAttribute('data-map-class')),
       fill: toRgb(getComputedStyle(el).fill),
+      alpha: alphaOf(el),
+      filter: getComputedStyle(el).filter,
     }));
     const zips = [...document.querySelectorAll<HTMLElement>('button.zip-tile[data-map-unit]')].map((el) => ({
       zip: el.getAttribute('data-map-unit') ?? '',
@@ -132,6 +158,7 @@ test.describe('ramp and legend encoding (dataviz-02 / responsive-05)', () => {
         const state = national.states.find((s) => s.id === id);
         expect(state?.cls, `${id} (${MAP_ALL_CLASSES_COUNTS[id.toUpperCase()]})`).toBe(cls);
         expect(state?.fill, `${id} fill equals legend lvl-${cls}`).toEqual(national.swatches[cls]);
+        expect(state?.alpha, `${id} paints at full opacity`).toBe(1);
       }
       const empty = national.states.find((s) => s.id === 'ny');
       expect(empty?.cls).toBe(0);
@@ -147,6 +174,34 @@ test.describe('ramp and legend encoding (dataviz-02 / responsive-05)', () => {
       for (const tile of drilled.zips) {
         expect(tile.background, `ZIP ${tile.zip} equals legend lvl-${tile.cls}`).toEqual(drilled.swatches[tile.cls]);
         expect(contrastRatio(tile.ink, tile.background), `ZIP ${tile.zip} code on lvl-${tile.cls}`).toBeGreaterThanOrEqual(4.5);
+      }
+    });
+  }
+});
+
+test.describe('segment filter keeps the legend encoding (dataviz-02)', () => {
+  for (const theme of THEMES) {
+    test(`${theme}: with a segment selected, every state paints its legend swatch at full opacity`, async ({ app, page }) => {
+      await app.setTheme(theme);
+      await app.gotoRoute('/segment-intelligence?segment=itm');
+      await waitForStateFills(page);
+      await expect(page.locator('.map-legend__caption')).toContainText('opportunity within');
+
+      const paint = await readMapPaint(page);
+      // Non-vacuous: populated states whose top segment is not the selected
+      // one are on the map (the removed dim cue faded exactly these), and
+      // unpopulated states paint the base step.
+      const otherTop = STATES.filter((s) => s.topSegment !== 'itm').map((s) => s.code.toLowerCase());
+      expect(otherTop.length).toBeGreaterThan(0);
+      for (const id of otherTop) {
+        expect(paint.states.find((s) => s.id === id)?.cls, `${id} is populated`).toBeGreaterThan(0);
+      }
+      expect(paint.states.some((s) => s.cls === 0)).toBe(true);
+      for (const state of paint.states) {
+        expect(
+          { fill: state.fill, alpha: state.alpha, filter: state.filter },
+          `${theme} ${state.id} paints legend lvl-${state.cls}`,
+        ).toEqual({ fill: paint.swatches[state.cls], alpha: 1, filter: 'none' });
       }
     });
   }

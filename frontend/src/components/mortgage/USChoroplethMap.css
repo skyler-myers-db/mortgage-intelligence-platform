@@ -13,9 +13,6 @@
    buttons), .map-stage--status (warming-up / unavailable stage).
    ============================================================ */
 
-/* Segment filter: a state whose top segment is outside the filter recedes. */
-.map-region.is-dimmed { opacity: 0.3; }
-
 /* USPS labels on populated states. Sized in SVG user units (the Albers
    viewBox is ~975 wide, drawn at ~0.5-0.7x in the hero map), so the token
    lands at roughly 10-12px on screen. The halo is the state's own step, so a
