@@ -1,16 +1,24 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useRef, useState } from 'react';
 import { Icon } from '../Icon';
-import { pushEscapeLayer } from '../../lib/escapeStack';
+import { useListboxNavigation } from './useListboxNavigation';
+import { useMenuPlacement } from './useMenuPlacement';
 
 /**
  * FilterSelect — presenter-friendly replacement for the old cycle-on-click
  * filter chip. Matches the prototype's `.filter` / `.filter__label` /
  * `.filter__value` BEM; the menu uses a `.filter-menu` class (defined in
- * components.css) positioned absolutely below the trigger.
+ * components.css) anchored below the trigger, or above it
+ * (`.filter-menu--up`) when it would not fit below the viewport edge.
  *
- * Keyboard: ArrowUp/Down navigate, Enter selects, Esc closes. Outside-click
- * closes. "Active" = value differs from the first option — mirrors the
- * existing behavior so the accent highlight still means "non-default".
+ * ARIA pattern: the APG select-only combobox (2026-09-21 audit a11y-02 /
+ * tables-06). The trigger keeps DOM focus and is `role="combobox"`, so it is
+ * the element that carries `aria-activedescendant`; every option has an id,
+ * so arrowing through them is announced. Keyboard (useListboxNavigation):
+ * ArrowUp/Down, Home/End, typeahead on the option labels, Enter/Space select,
+ * Escape closes (topmost Escape layer) and keeps focus on the trigger, Tab
+ * and focus leaving the filter close. Outside-click closes. "Active" = value
+ * differs from the first option, so the accent highlight still means
+ * "non-default".
  */
 
 interface FilterSelectProps {
@@ -22,59 +30,31 @@ interface FilterSelectProps {
 
 export function FilterSelect({ label, value, options, onChange }: FilterSelectProps) {
   const [open, setOpen] = useState(false);
-  const [focusIdx, setFocusIdx] = useState<number>(() => Math.max(0, options.indexOf(value)));
   const rootRef = useRef<HTMLDivElement>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLUListElement>(null);
+  const selectedIndex = Math.max(0, options.indexOf(value));
+  const listbox = useListboxNavigation({
+    count: options.length,
+    open,
+    onOpenChange: setOpen,
+    onCommit: (index) => {
+      const next = options[index];
+      if (next !== undefined) onChange(next);
+    },
+    rootRef,
+    returnFocusRef: btnRef,
+    labels: options,
+    initialIndex: selectedIndex,
+  });
+  const placement = useMenuPlacement(open, btnRef, menuRef);
 
   const active = value !== options[0];
 
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      if (!rootRef.current) return;
-      if (!rootRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    // Shared topmost-layer Escape stack (audit 2026-09-21 runtime-v2): an open
-    // menu is the top layer, so Escape closes the menu and nothing beneath it.
-    const popEscapeLayer = pushEscapeLayer(() => {
-      setOpen(false);
-      btnRef.current?.focus();
-    });
-    window.addEventListener('mousedown', onDown);
-    return () => {
-      window.removeEventListener('mousedown', onDown);
-      popEscapeLayer();
-    };
-  }, [open]);
-
-  useEffect(() => {
-    if (open) setFocusIdx(Math.max(0, options.indexOf(value)));
-  }, [open, options, value]);
-
-  const onKeyDown = (e: KeyboardEvent<HTMLButtonElement>) => {
-    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-      e.preventDefault();
-      if (!open) {
-        setOpen(true);
-        return;
-      }
-      setFocusIdx((i) => {
-        const n = options.length;
-        return e.key === 'ArrowDown' ? (i + 1) % n : (i - 1 + n) % n;
-      });
-    } else if (e.key === 'Enter') {
-      if (open) {
-        e.preventDefault();
-        onChange(options[focusIdx]);
-        setOpen(false);
-      }
-    }
-  };
-
-  const pick = (opt: string) => {
-    onChange(opt);
-    setOpen(false);
-    btnRef.current?.focus();
+  const pick = (index: number) => {
+    const next = options[index];
+    if (next !== undefined) onChange(next);
+    listbox.close(true);
   };
 
   return (
@@ -82,11 +62,14 @@ export function FilterSelect({ label, value, options, onChange }: FilterSelectPr
       <button
         ref={btnRef}
         type="button"
+        role="combobox"
         className={`filter ${active ? 'is-active' : ''}`}
-        onClick={() => setOpen((o) => !o)}
-        onKeyDown={onKeyDown}
+        onClick={() => (open ? listbox.close() : listbox.openAt(selectedIndex))}
+        onKeyDown={listbox.onKeyDown}
         aria-haspopup="listbox"
         aria-expanded={open}
+        aria-controls={open ? listbox.listboxId : undefined}
+        aria-activedescendant={listbox.activeDescendant}
         aria-label={`${label}: ${value}`}
       >
         <span className="filter__label">{label}</span>
@@ -94,18 +77,27 @@ export function FilterSelect({ label, value, options, onChange }: FilterSelectPr
         <Icon name="chevdown" size={11} />
       </button>
       {open && (
-        <ul className="filter-menu" role="listbox" aria-label={label}>
+        <ul
+          ref={menuRef}
+          id={listbox.listboxId}
+          className={`filter-menu${placement === 'above' ? ' filter-menu--up' : ''}`}
+          role="listbox"
+          aria-label={label}
+          // Keep DOM focus on the combobox while the pointer picks an option.
+          onMouseDown={(event) => event.preventDefault()}
+        >
           {options.map((opt, i) => {
             const selected = opt === value;
-            const focused = i === focusIdx;
+            const focused = i === listbox.activeIndex;
             return (
               <li
                 key={opt}
+                id={listbox.optionId(i)}
                 role="option"
                 aria-selected={selected}
                 className={`filter-menu__item${selected ? ' is-selected' : ''}${focused ? ' is-focused' : ''}`}
-                onMouseEnter={() => setFocusIdx(i)}
-                onClick={() => pick(opt)}
+                onMouseEnter={() => listbox.setActiveIndex(i)}
+                onClick={() => pick(i)}
               >
                 {opt}
                 {selected && <Icon name="check" size={11} />}

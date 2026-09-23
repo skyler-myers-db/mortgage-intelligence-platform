@@ -1,0 +1,36 @@
+/* ============================================================
+   ONE LISTBOX (audit 2026-09-21 a11y-02 / stack-05 / tables-06 /
+   shell-07, lane filter-listbox). App extensions of the prototype's
+   `.filter` pill (design_files/index.html:826), which is a
+   cycle-on-click chip with no popup; `.filter-menu` and the topbar
+   search results are app blocks already (11-skeleton-menu-and-
+   genie-answer.css, 01-app-shell.css). No new block here.
+   ============================================================ */
+
+/* Viewport-edge flip. useMenuPlacement measures the open menu once
+   and sets this modifier when it would not fit below the trigger
+   and there is more room above. */
+.filter-menu--up {
+  top: auto;
+  bottom: calc(100% + var(--sp-1));
+}
+@media (prefers-reduced-motion: no-preference) {
+  .filter-menu--up { animation-name: filter-menu-up-in; }
+}
+@keyframes filter-menu-up-in {
+  from { opacity: 0; transform: translateY(var(--sp-1)); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* The active option is the keyboard focus indicator of an
+   aria-activedescendant listbox: DOM focus stays on the combobox
+   trigger (FilterSelect) or on the listbox itself
+   (MultiFilterSelect), so the option can never match :focus-visible.
+   While that focus owner is keyboard-focused, the active option wears
+   the shared ring (the --bg-3 fill alone is 1.09-1.35:1 against the
+   menu, below WCAG 1.4.11). Pointer hover keeps the fill only. */
+.filter:focus-visible + .filter-menu .filter-menu__item.is-focused,
+.filter-menu:focus-visible .filter-menu__item.is-focused {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: calc(-1 * var(--focus-ring-width));
+}
