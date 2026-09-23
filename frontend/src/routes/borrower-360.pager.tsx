@@ -1,3 +1,4 @@
+import { useRef } from 'react';
 import { useNavigate } from 'react-router';
 import { Icon } from '../components/Icon';
 import type { QueueContext } from '../lib/queueContext';
@@ -22,6 +23,7 @@ import './borrower-360.pager.css';
  */
 export function BorrowerQueuePager({ borrowerId, queue }: { borrowerId: string; queue: QueueContext | null }) {
   const navigate = useNavigate();
+  const navRef = useRef<HTMLElement | null>(null);
   const position = queue ? queuePosition(queue, borrowerId) : null;
   const go = (id: string | null) => {
     if (!id || !queue) return null;
@@ -29,11 +31,12 @@ export function BorrowerQueuePager({ borrowerId, queue }: { borrowerId: string; 
   };
   const previous = go(position?.previous ?? null);
   const next = go(position?.next ?? null);
-  usePagerHotkeys({ previous, next });
+  // J / K are live only while focus is inside the dossier's <main>.
+  usePagerHotkeys({ previous, next }, navRef);
 
   if (!queue || !position) return null;
   return (
-    <nav className="queue-pager" aria-label="Lead queue position">
+    <nav ref={navRef} className="queue-pager" aria-label="Lead queue position">
       <span className="queue-pager__position">
         <span className="mono num">{position.position.toLocaleString('en-US')}</span>
         {' of '}

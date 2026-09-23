@@ -192,12 +192,27 @@ test.describe('queue-to-dossier wayfinding (shell-04)', () => {
     await expect(pager).toContainText('1 of 3 in IL');
     expect([...new Set(dossierReads(mockApi.calls))]).toEqual([ids[1], ids[2], ids[0]]);
 
-    // Scoped like the queue cursor: J typed into the topbar search is text.
+    // Scoped like the queue's row shortcuts: the keys are live only while
+    // focus is inside the dossier's <main> (WCAG 2.1.4). J on a topbar
+    // control, which is no text field, does not page. The pager navigates
+    // inside the keydown (history.pushState is synchronous), so the URL read
+    // straight after the key is final, not a race; the same key from the page
+    // heading then moves exactly one borrower.
+    await page.getByRole('banner').getByRole('button', { name: 'Toggle console' }).focus();
+    await page.keyboard.press('j');
+    expect(page.url(), 'J on a topbar control stays put').toMatch(new RegExp(`/borrower-360/${ids[0]}$`));
+    await page.locator('main#main-content h1').focus();
+    await page.keyboard.press('j');
+    await expect(page).toHaveURL(new RegExp(`/borrower-360/${ids[1]}$`));
+    await app.settle();
+    await expect(pager).toContainText('2 of 3 in IL');
+
+    // J typed into the topbar search is text.
     const searchBox = page.getByRole('combobox', { name: 'Search borrowers' });
     await searchBox.focus();
     await page.keyboard.press('j');
     await expect(searchBox).toHaveValue('j');
-    await expect(page).toHaveURL(new RegExp(`/borrower-360/${ids[0]}$`));
+    await expect(page).toHaveURL(new RegExp(`/borrower-360/${ids[1]}$`));
     // The crumb still returns to the exact filtered queue after paging.
     await expect(page.getByRole('navigation', { name: 'Breadcrumb' }).getByRole('link', { name: 'Lead Queue · IL' }))
       .toHaveAttribute('href', '/lead-queue?state=IL');

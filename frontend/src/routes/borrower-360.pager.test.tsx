@@ -2,10 +2,11 @@
  * @vitest-environment happy-dom
  *
  * Borrower 360 queue pager (audit 2026-09-21 shell-04): "3 of 23" with
- * Previous / Next and J / K, scoped like the queue's row shortcuts (never in
- * an editable field, never with an overlay open, never on auto-repeat).
- * Rendered through the real router; the fixture spec proves it on the built
- * dossier.
+ * Previous / Next and J / K, scoped like the queue's row shortcuts: only while
+ * focus is inside the dossier's <main>, never in an editable field, never
+ * with an overlay open, never on auto-repeat. Rendered through the real
+ * router inside a shell-shaped page (a topbar control outside <main>); the
+ * fixture spec proves it on the built dossier.
  */
 
 import { act } from 'react';
@@ -25,9 +26,15 @@ function Dossier({ queue }: { queue: QueueContext | null }) {
   const location = useLocation();
   return (
     <>
-      <output id="where">{`${location.pathname}|${JSON.stringify(location.state)}`}</output>
-      <input aria-label="notes" />
-      {id && <BorrowerQueuePager borrowerId={id} queue={queue} />}
+      <header>
+        <button type="button">Toggle console</button>
+      </header>
+      <main tabIndex={-1}>
+        <h1 tabIndex={-1}>Borrower 360</h1>
+        <output id="where">{`${location.pathname}|${JSON.stringify(location.state)}`}</output>
+        <input aria-label="notes" />
+        {id && <BorrowerQueuePager borrowerId={id} queue={queue} />}
+      </main>
     </>
   );
 }
@@ -64,7 +71,14 @@ describe('BorrowerQueuePager', () => {
   const pager = () => container.querySelector('nav[aria-label="Lead queue position"]');
   const button = (name: string) =>
     Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((b) => b.textContent?.trim() === name)!;
-  const press = (key: string, init: KeyboardEventInit = {}, target: Element = document.body) =>
+  /** Focus the page heading, where a route change leaves focus (useRouteAnnouncer). */
+  const focusDossier = () => {
+    const heading = container.querySelector<HTMLElement>('main h1')!;
+    act(() => heading.focus());
+    return heading;
+  };
+  /** Keydown on the focused element, as a real keystroke would target it. */
+  const press = (key: string, init: KeyboardEventInit = {}, target: Element = document.activeElement ?? document.body) =>
     act(() => {
       target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...init }));
     });
@@ -79,6 +93,7 @@ describe('BorrowerQueuePager', () => {
 
   it('J opens the next borrower and K the previous one, carrying the queue', async () => {
     await renderAt(IDS[1]);
+    focusDossier();
     press('j');
     expect(where().split('|')[0]).toBe(`/borrower-360/${IDS[2]}`);
     expect(JSON.parse(where().split('|')[1]).queue.ids).toEqual(IDS);
@@ -95,12 +110,34 @@ describe('BorrowerQueuePager', () => {
     expect(where().split('|')[0]).toBe(`/borrower-360/${IDS[1]}`);
   });
 
+  it('keys are live only while focus is inside the dossier: not from the topbar, not on an unfocused page', async () => {
+    await renderAt(IDS[1]);
+    // A non-editable control outside <main> (the topbar's Console toggle).
+    const topbarButton = button('Toggle console');
+    act(() => topbarButton.focus());
+    press('j', {}, topbarButton);
+    expect(where().split('|')[0]).toBe(`/borrower-360/${IDS[1]}`);
+    // Nothing focused: the keystroke targets <body>.
+    act(() => topbarButton.blur());
+    expect(document.activeElement).toBe(document.body);
+    press('j', {}, document.body);
+    expect(where().split('|')[0]).toBe(`/borrower-360/${IDS[1]}`);
+    // A keystroke whose target is in the dossier while focus sits outside it.
+    const heading = container.querySelector('main h1')!;
+    act(() => topbarButton.focus());
+    press('j', {}, heading);
+    expect(where().split('|')[0]).toBe(`/borrower-360/${IDS[1]}`);
+    // Non-vacuity: the same key from inside the dossier pages.
+    press('j', {}, focusDossier());
+    expect(where().split('|')[0]).toBe(`/borrower-360/${IDS[2]}`);
+  });
+
   it('ignores J / K typed into a field, with a modifier, on auto-repeat or with an overlay open', async () => {
     await renderAt(IDS[1]);
     const input = container.querySelector('input')!;
     act(() => input.focus());
     press('j', {}, input);
-    act(() => input.blur());
+    focusDossier();
     press('j', { ctrlKey: true });
     press('j', { shiftKey: true });
     press('j', { repeat: true });
@@ -119,6 +156,7 @@ describe('BorrowerQueuePager', () => {
   it('renders nothing and binds no keys without a queue that lists the borrower', async () => {
     await renderAt('B-9999999999999');
     expect(pager()).toBeNull();
+    focusDossier();
     press('j');
     expect(where().split('|')[0]).toBe('/borrower-360/B-9999999999999');
     await renderAt(IDS[0], null);
