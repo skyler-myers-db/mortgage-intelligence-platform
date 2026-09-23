@@ -231,7 +231,3 @@
   --scatter-score-med: var(--status-warning-ink);
   --scatter-score-low: var(--text-3);
 }
-[data-theme="light"] .analytics-chart-panel--scatter {
-  --scatter-score-high: var(--signal-success);
-  --scatter-score-med: var(--entrada-navy);
-}

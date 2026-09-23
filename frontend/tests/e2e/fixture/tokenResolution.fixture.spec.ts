@@ -7,7 +7,7 @@
  * shorthand at computed-value time; a per-selector override shadows a
  * token) fails here even when the source-level gates pass.
  */
-import { asComputedRgb, contrastRatio, parseRgb, tokenValue } from './renderedColor';
+import { asComputedRgb, contrastRatio, parseRgb, renderedColors, tokenValue } from './renderedColor';
 import { expect, test, type FixtureTheme } from './test';
 
 const THEMES: readonly FixtureTheme[] = ['dark', 'light'];
@@ -82,6 +82,25 @@ test('light: the medium score band paints the token ink, not a per-selector over
   expect(ink.toUpperCase()).toBe('#B45309');
   expect(await badge.evaluate((el) => getComputedStyle(el).color)).toBe(await asComputedRgb(page, ink));
 });
+
+for (const theme of THEMES) {
+  test(`${theme}: the Analytics scatter medium band paints the Lead Queue's token ink (responsive-02)`, async ({ app, page }) => {
+    // analytics.scatter.css remapped --scatter-score-med to navy in the
+    // light theme only, so once the Lead Queue's .score--med took the token
+    // ink (#B45309) the same band was amber in the queue and navy here.
+    await app.setTheme(theme);
+    await app.gotoRoute('/analytics?view=economics');
+    const panel = page.locator('.analytics-chart-panel--scatter');
+    const band = panel.locator('.analytics-scatter-legend__band.score--med');
+    await expect(band).toBeVisible();
+    const ink = await asComputedRgb(page, await tokenValue(page.locator('html'), '--status-warning-ink'));
+    expect(await asComputedRgb(page, await tokenValue(panel, '--scatter-score-med')), 'the panel band token').toBe(ink);
+    const painted = await renderedColors(band);
+    expect(painted.color, 'legend band text').toBe(ink);
+    const ratio = contrastRatio(painted.fg, painted.bg);
+    expect(ratio, `${painted.color} on rgb(${painted.bg.join(', ')}) = ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5);
+  });
+}
 
 for (const theme of THEMES) {
   test(`${theme}: every status-coloured text site paints its token ink at AA (responsive-02)`, async ({ app, page }) => {

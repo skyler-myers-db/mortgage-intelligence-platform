@@ -16,13 +16,16 @@
  *    three text inputs no longer switch the shared focus ring off.
  *  - responsive-02: the light theme is carried by the tokens (light
  *    `--status-*-ink`, `--signal-*`), not by `[data-theme="light"]` rules in
- *    the partials that shadow them per selector (twelve were retired).
+ *    the partials or the route stylesheets that shadow them per selector or
+ *    through a local custom property (twelve plus the Analytics scatter's
+ *    `--scatter-score-*` remap were retired).
  *  - css-01 (print): every property a `[data-theme][data-accent]` compound
  *    sets is reset inside `@media print` to print.css's monochrome value,
  *    because the (0,2,0) compounds outrank print.css's (0,1,0) remap.
  */
 import { describe, expect, it } from 'vitest';
 import { designCss } from '../test/designCss';
+import { featureStylesheets } from '../test/featureCss';
 import { TokenCascade, mediaBlocks, readPrintCss, readTokensCss, topLevelRules } from '../test/tokenCascade';
 
 const tokens = readTokensCss();
@@ -202,20 +205,38 @@ describe('text inputs keep the shared focus ring (a11y-01)', () => {
 });
 
 describe('light theme is carried by tokens, not per-selector overrides (responsive-02)', () => {
+  // The partials plus every stylesheet outside design-system/ (the route
+  // sheets), each rule tagged with its file so a failure names it.
+  const sheets = [
+    { file: 'design-system/components.css (partials)', css: components },
+    ...featureStylesheets(),
+  ];
+  const lightRules = () =>
+    sheets.flatMap(({ file, css }) =>
+      rules(css)
+        .filter((rule) => /\[data-theme="light"\]/.test(rule.selector))
+        .map((rule) => ({ ...rule, where: `${file}: ${rule.selector}` })),
+    );
+
+  it('reads the route stylesheets too', () => {
+    expect(sheets.map((sheet) => sheet.file)).toContain('src/routes/analytics.scatter.css');
+  });
+
   it('has no [data-theme="light"] rule that repaints a status or brand hue', () => {
     // These shadowed the token-level light inks (e.g. .chip--warning navy
     // where tokens.css and the prototype, design_files/index.html:416, say
-    // #B45309). A light-only rule may still remap to --text-* / --accent-ink.
-    const offenders = rules(components)
-      .filter((rule) => /\[data-theme="light"\]/.test(rule.selector))
-      .filter((rule) => /(?<![-\w])color:\s*var\(--(?:signal-|status-|entrada-)/.test(rule.block))
-      .map((rule) => rule.selector);
+    // #B45309), directly or through a local custom property (the Analytics
+    // scatter set --scatter-score-med to navy, so its medium band disagreed
+    // with the Lead Queue's). A light-only rule may still remap to --text-* /
+    // --accent-ink, or tint a non-text stroke.
+    const offenders = lightRules()
+      .filter((rule) => /(?:(?<![-\w])color|--[\w-]+)\s*:\s*var\(--(?:signal-|status-|entrada-)/.test(rule.block))
+      .map((rule) => rule.where);
     expect(offenders, 'move the light value into tokens.css instead').toEqual([]);
   });
 
   it('keeps the remaining light-only colour remaps on the text and accent-ink tokens', () => {
-    const remaining = rules(components)
-      .filter((rule) => /\[data-theme="light"\]/.test(rule.selector))
+    const remaining = lightRules()
       .flatMap((rule) => [...rule.block.matchAll(/(?<![-\w])color:\s*([^;]+);/g)].map((m) => m[1].trim()));
     expect(remaining.length).toBeGreaterThan(0);
     for (const value of remaining) expect(value).toMatch(/^var\(--(?:text-[1-4]|accent-ink)\)$/);
