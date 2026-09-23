@@ -175,7 +175,8 @@ test.describe('warm-up', () => {
     await expect(page.getByTestId('warming-up-block')).toBeVisible();
     await expect(page.getByTestId('warming-up-attempt')).toContainText(/attempt \d+ of \d+/);
     await expect(page.locator('#main-content')).not.toContainText('Showing 0');
-    await expect(page.locator('table.tbl')).toHaveCount(0);
+    // The ranked table, not the skeleton's aria-hidden copy of its markup.
+    await expect(page.locator('table.tbl:not([aria-hidden="true"])')).toHaveCount(0);
   });
 });
 
