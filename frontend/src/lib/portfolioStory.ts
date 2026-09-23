@@ -2,7 +2,10 @@ import type { PortfolioPreview } from '../types';
 import { HIGH_OPPORTUNITY_KPI_LABEL } from './opportunityScore';
 
 /**
- * "Your book today" — a current-state portfolio summary for Home. A plain-
+ * The briefing line of Home's answer band (components/mortgage/
+ * HomeAnswerBand.tsx; it was the "Your book today" card until the
+ * 2026-09-21 audit merged that card and "Since your last login" into one
+ * band, visual-06). A plain-
  * English orientation of the lender's book RIGHT NOW (scale, refinance
  * economics, high-opportunity count, offer paths), NOT a day-over-day delta (the
  * morning-briefing delta card was removed because the snapshot data carries no

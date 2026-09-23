@@ -3,8 +3,9 @@
  *
  * S4 acceptance (route grain): Home fetches /api/home/summary alongside the
  * portfolio preview and renders the personalized "since your last login"
- * sentence whose numbers open the EvidenceDrawer citing the snapshot
- * baseline + headline metric view.
+ * changes as the answer band's WHY NOW column (2026-09-21 audit flow-05),
+ * whose tokens open the EvidenceDrawer citing the snapshot baseline +
+ * headline metric view.
  */
 
 import { act } from 'react';
@@ -108,8 +109,8 @@ vi.mock('../components/mortgage/USChoroplethMap', () => ({
 vi.mock('../components/mortgage/PinnedInsights', () => ({
   PinnedInsights: () => <div data-testid="pinned-insights" />,
 }));
-vi.mock('../components/mortgage/PortfolioSummaryCard', () => ({
-  PortfolioSummaryCard: () => <div data-testid="portfolio-summary-card" />,
+vi.mock('../components/mortgage/HomeAnswerWho', () => ({
+  HomeAnswerWho: () => <div data-testid="home-answer-who" />,
 }));
 
 vi.mock('../lib/api', () => ({
@@ -141,20 +142,20 @@ describe('Home renders the personalized last-login summary', () => {
     container.remove();
   });
 
-  it('shows the delta sentence above the KPI row', () => {
-    const summary = container.querySelector('.login-summary');
+  it('shows the last-login changes inside the answer band, below the full-width KPI row', () => {
+    const summary = container.querySelector('.home-answer .login-summary');
     expect(summary).toBeTruthy();
     expect(summary?.textContent).toContain('Since your last login');
     const kpiRow = container.querySelector('.kpi-row');
     expect(kpiRow).toBeTruthy();
     expect(
-      summary!.compareDocumentPosition(kpiRow!) & Node.DOCUMENT_POSITION_FOLLOWING,
+      kpiRow!.compareDocumentPosition(summary!) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
   });
 
   it('renders each API number verbatim as an evidence affordance', () => {
     const buttons = Array.from(
-      container.querySelectorAll<HTMLButtonElement>('.login-summary__num'),
+      container.querySelectorAll<HTMLButtonElement>('.login-summary .evidence-chip'),
     );
     expect(buttons.map((b) => b.textContent)).toEqual(
       SUMMARY.highlights.map((h) => h.display),
@@ -162,7 +163,7 @@ describe('Home renders the personalized last-login summary', () => {
   });
 
   it('opens the drawer with snapshot + metric-view lineage from the summary', () => {
-    const button = container.querySelector<HTMLButtonElement>('.login-summary__num');
+    const button = container.querySelector<HTMLButtonElement>('.login-summary .evidence-chip');
     expect(button).toBeTruthy();
     act(() => button!.click());
     expect(setDrawer).toHaveBeenCalledTimes(1);

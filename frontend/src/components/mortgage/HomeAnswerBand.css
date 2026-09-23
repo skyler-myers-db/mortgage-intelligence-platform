@@ -1,0 +1,250 @@
+/* ============================================================
+   HOME ANSWER BAND (2026-09-21 audit flow-05 / visual-06)
+   WHO / WHY NOW / WHAT TO OFFER under one briefing line.
+
+   New BEM blocks `.home-answer` and `.offer-mix`: the prototype
+   (design_files/Module 0 Prototype.html) has no answer band. The
+   parts reuse prototype primitives — `.surface`, `.chip`, `.score`,
+   `.evidence-chip` — and prototype tokens only.
+
+   Imported by HomeAnswerBand.tsx, so it ships with the lazy Home
+   chunk instead of the initial stylesheet (wave-1 budget rule).
+   ============================================================ */
+
+.home-answer__hdr {
+  align-items: flex-start;
+}
+/* Title and briefing share one row: the briefing is the band's lede, so
+   it sits beside the title instead of adding a line of height above the
+   three answers. */
+.home-answer__intro {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: var(--sp-6);
+  row-gap: var(--sp-1);
+  min-inline-size: 0;
+}
+.home-answer__intro .h-4 {
+  flex: 0 0 auto;
+}
+/* The merged briefing: one readable measure, balanced rag where the
+   engine supports it (text-wrap: pretty degrades silently elsewhere). */
+.home-answer__briefing {
+  margin: 0;
+  max-inline-size: 72ch;
+  font-size: var(--fs-14);
+  line-height: var(--lh-body);
+  color: var(--text-2);
+  text-wrap: pretty;
+}
+.home-answer__briefing-skeleton {
+  display: block;
+  block-size: var(--sp-5);
+  inline-size: 60ch;
+  max-inline-size: 100%;
+  border-radius: var(--r-sm);
+}
+
+.home-answer__grid {
+  display: grid;
+  /* WHO carries the widest rows (id, place, offer, score on one line). */
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr) minmax(0, 1fr);
+}
+.home-answer__col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  min-inline-size: 0;
+  padding: var(--sp-4) var(--pad-card);
+}
+.home-answer__col + .home-answer__col {
+  border-inline-start: 1px solid var(--line-1);
+}
+.home-answer__col-hdr {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  min-block-size: var(--sp-6);
+}
+.home-answer__col-hdr .h-4 { margin: 0; }
+.home-answer__col-sub {
+  font-size: var(--fs-11);
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.home-answer__note {
+  margin: auto 0 0;
+  font-size: var(--fs-11);
+  line-height: var(--lh-snug);
+  color: var(--text-3);
+  text-wrap: pretty;
+}
+.home-answer__empty {
+  margin: 0;
+  font-size: var(--fs-13);
+  line-height: var(--lh-snug);
+  color: var(--text-2);
+}
+.home-answer__row-skeleton {
+  display: block;
+  block-size: var(--sp-8);
+  border-radius: var(--r-md);
+}
+
+/* Links read as links on every theme: accent ink plus an underline, so
+   they never rely on color alone inside running text. */
+.home-answer__trigger-text a,
+.home-answer__empty a,
+.offer-mix__label[href] {
+  color: var(--accent-ink);
+  text-decoration: underline;
+  text-decoration-thickness: from-font;
+  text-underline-offset: var(--sp-1);
+}
+
+/* ---------- WHO ---------- */
+.home-answer__who,
+.home-answer__triggers {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--sp-1);
+}
+.home-answer__who-row {
+  display: grid;
+  grid-template-columns: auto max-content minmax(0, 1fr) minmax(0, max-content) auto;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--r-md);
+  color: var(--text-1);
+  text-decoration: none;
+  transition: background-color var(--dur-fast) var(--ease);
+}
+.home-answer__who-row:hover {
+  background: var(--bg-3);
+}
+.home-answer__rank {
+  min-inline-size: 2ch;
+  text-align: end;
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  color: var(--text-3);
+}
+.home-answer__who-id,
+.home-answer__who-place {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.home-answer__who-id {
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+}
+.home-answer__who-place {
+  font-size: var(--fs-11);
+  color: var(--text-3);
+}
+
+/* ---------- WHY NOW ---------- */
+.home-answer__trigger {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  font-size: var(--fs-13);
+  line-height: var(--lh-snug);
+  color: var(--text-2);
+}
+.home-answer__trigger > .evidence-chip {
+  flex: 0 0 auto;
+}
+
+/* ---------- WHAT TO OFFER ---------- */
+.offer-mix {
+  display: flex;
+  block-size: var(--sp-3);
+  overflow: hidden;
+  border-radius: var(--r-pill);
+  background: var(--bg-3);
+}
+.offer-mix__seg {
+  display: block;
+  flex: 0 0 auto;
+  block-size: 100%;
+}
+/* A hairline of the card surface between segments, drawn inside the
+   segment so the widths stay the exact shares. */
+.offer-mix__seg + .offer-mix__seg {
+  box-shadow: inset 1px 0 0 var(--bg-2);
+}
+.offer-mix__skeleton {
+  display: block;
+  block-size: var(--sp-3);
+  border-radius: var(--r-pill);
+}
+.offer-mix__legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--sp-1);
+}
+.offer-mix__item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-12);
+}
+.offer-mix__swatch {
+  inline-size: var(--sp-2);
+  block-size: var(--sp-2);
+  border-radius: var(--r-sm);
+}
+.offer-mix__label {
+  min-inline-size: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-2);
+}
+/* WCAG 2.5.8: stacked legend links are at least 24px tall. */
+.offer-mix__label[href] {
+  display: block;
+  line-height: var(--sp-6);
+}
+.offer-mix__pct {
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  color: var(--text-3);
+}
+/* Offer hues reuse the segment palette the offer grows out of. */
+.offer-mix__seg[data-offer="refi"],
+.offer-mix__swatch[data-offer="refi"] { background: var(--seg-itm); }
+.offer-mix__seg[data-offer="refi_plus_heloc"],
+.offer-mix__swatch[data-offer="refi_plus_heloc"] { background: var(--seg-related-itm); }
+.offer-mix__seg[data-offer="heloc"],
+.offer-mix__swatch[data-offer="heloc"] { background: var(--seg-permit); }
+.offer-mix__seg[data-offer="cash_out"],
+.offer-mix__swatch[data-offer="cash_out"] { background: var(--seg-equity); }
+.offer-mix__seg[data-offer="purchase"],
+.offer-mix__swatch[data-offer="purchase"] { background: var(--seg-listed); }
+.offer-mix__seg[data-offer="investor"],
+.offer-mix__swatch[data-offer="investor"] { background: var(--seg-investor); }
+.offer-mix__seg[data-offer="retention"],
+.offer-mix__swatch[data-offer="retention"] { background: var(--seg-retention); }
+.offer-mix__seg[data-offer="nurture"],
+.offer-mix__swatch[data-offer="nurture"] { background: var(--text-3); }
+
+/* Narrow containers (Console open on a laptop, tablets): stack the three
+   answers; the divider moves to the top edge. */
+@container main (max-width: 960px) {
+  .home-answer__grid { grid-template-columns: minmax(0, 1fr); }
+  .home-answer__col + .home-answer__col {
+    border-inline-start: 0;
+    border-block-start: 1px solid var(--line-1);
+  }
+}
