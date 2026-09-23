@@ -16,9 +16,11 @@
  * Opening travels as a window event that `GenieDock` turns into
  * `setGenieOpen(true)`; the prefill waits in this module until the mounted
  * panel consumes it -- when it opens, or at once when it is already open.
- * An actor-boundary reset (`GENIE_CONVERSATION_RESET_EVENT`) drops a prefill
- * nobody consumed, e.g. when the panel chunk failed to load, so one actor's
- * question can never surface in the next actor's composer.
+ * A conversation reset (`GENIE_CONVERSATION_RESET_EVENT`: an actor boundary,
+ * or New thread) drops a prefill nobody consumed, e.g. one queued while the
+ * panel was closed or its chunk failed to load, so one actor's question can
+ * never surface in the next actor's composer. An open panel consumes a
+ * prefill at once, so New thread never races a visible one.
  */
 
 import { GENIE_CONVERSATION_RESET_EVENT } from './genieConversation';
