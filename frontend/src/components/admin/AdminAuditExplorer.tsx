@@ -152,6 +152,13 @@ export function AdminAuditExplorer() {
       { replace: true },
     );
   };
+  // The pinned chip's dismiss drops the pin the way Clear does: back to the
+  // first page with nothing expanded, keeping the other applied filters.
+  const dismissEventIdFilter = () => {
+    clearEventIdFilter();
+    setPageCursors([null]);
+    setExpandedEventId(null);
+  };
   const clearFilters = () => {
     clearEventIdFilter();
     setEntityDraft('');
@@ -299,7 +306,7 @@ export function AdminAuditExplorer() {
                 <Chip
                   variant="neutral"
                   icon="audit"
-                  onRemove={clearEventIdFilter}
+                  onRemove={dismissEventIdFilter}
                   removeLabel="Remove audit event filter"
                 >
                   audit event = {eventIdFilter}
