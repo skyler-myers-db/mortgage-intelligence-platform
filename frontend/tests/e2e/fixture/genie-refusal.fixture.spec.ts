@@ -226,7 +226,10 @@ test.describe('Genie refusal card', () => {
       await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
       const card = await askInPanel(page, app, question);
       // Keyboard activation: the confirmation takes focus programmatically,
-      // and only a keyboard-led focus matches :focus-visible.
+      // and only a keyboard-led focus matches :focus-visible. The ring is the
+      // global :focus-visible rule (tokens.css); this pins that nothing on
+      // the card suppresses it. After a pointer click the outline is none,
+      // by design of :focus-visible.
       await card.getByRole('button', { name: REPORT_BUTTON_NAME }).focus();
       await page.keyboard.press('Enter');
       const confirmation = card.locator('.genie-answer__refusal-reported');
