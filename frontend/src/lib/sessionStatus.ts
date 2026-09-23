@@ -29,18 +29,22 @@ const ACTIVE: SessionStatusSnapshot = { expired: false, unrecorded: null };
 let snapshot: SessionStatusSnapshot = ACTIVE;
 const listeners = new Set<() => void>();
 
-const READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+const UPDATE_METHODS = new Set(['PUT', 'PATCH', 'DELETE']);
 
 /**
- * Classify a write by its endpoint. The outreach draft is the first half of
- * an approval (LeadTable drafts, then approves that exact copy), so a draft
- * that failed on expiry is reported as an unrecorded approval.
+ * Classify a failed request by what the user was recording. The outreach
+ * draft is the first half of an approval (LeadTable drafts, then approves that
+ * exact copy), so a draft that failed on expiry is an unrecorded approval.
+ * Other POSTs are NOT assumed to be writes: several reads go out as POST
+ * (portfolio preview, offer recommendation, Genie questions), and telling a
+ * user a change was lost when they only viewed a page would be false.
+ * PUT / PATCH / DELETE always record something.
  */
 export function unrecordedWriteFor(method: string, path: string): UnrecordedWrite | null {
-  if (READ_METHODS.has(method.toUpperCase())) return null;
-  if (/\/outreach\/(approve|draft)(?:[/?]|$)/.test(path)) return 'approval';
-  if (/\/outreach\/reject(?:[/?]|$)/.test(path)) return 'rejection';
-  return 'change';
+  const verb = method.toUpperCase();
+  if (verb === 'POST' && /\/outreach\/(approve|draft)(?:[/?]|$)/.test(path)) return 'approval';
+  if (verb === 'POST' && /\/outreach\/reject(?:[/?]|$)/.test(path)) return 'rejection';
+  return UPDATE_METHODS.has(verb) ? 'change' : null;
 }
 
 const PRECEDENCE: Record<UnrecordedWrite, number> = { change: 1, rejection: 2, approval: 3 };

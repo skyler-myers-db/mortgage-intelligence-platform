@@ -114,6 +114,14 @@ describe('401 on /api', () => {
     expect(getSessionStatus().unrecorded).toBe('approval');
   });
 
+  it('never claims a change was lost for a read that goes out as POST, but does for PUT/PATCH/DELETE', async () => {
+    stubFetch(() => json(401, {}));
+    await failure(api.portfolioPreview({ marketing_eligibility: 'Any' }));
+    expect(getSessionStatus(), 'a portfolio preview is a read').toEqual({ expired: true, unrecorded: null });
+    await failure(api.deleteWorkspaceLead('B-0000000000001'));
+    expect(getSessionStatus().unrecorded).toBe('change');
+  });
+
   it('stops sending requests once the session ended: no retry storm', async () => {
     const calls = stubFetch(() => json(401, {}));
     await failure(api.campaigns());
