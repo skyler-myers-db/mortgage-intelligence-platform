@@ -2,7 +2,7 @@
    DECISION RECEIPT — the approver's read-back of the Lakebase audit
    row their approve / reject wrote. New BEM block: the prototype
    (design_files/index.html) defines no receipt, so this composes the
-   prototype's .surface (:355), .chip (:405) and .evidence-chip with
+   prototype's .surface (:355), .chip (:403) and .evidence-chip with
    the .field__label / .field__value pair and the token vocabulary
    only. Nothing renders until the read-back confirms the row; the
    one-shot stagger below plays on the finished receipt.
@@ -64,7 +64,6 @@
   display: grid;
   gap: var(--sp-2);
 }
-.decision-receipt__copied { color: var(--text-3); font-size: var(--fs-11); }
 
 /* The queue's expanded row hosts the receipt above the preview grid. The
    expanded cell spans all 15 nowrap columns, so like .tbl__expand-inner--lead
