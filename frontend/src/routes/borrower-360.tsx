@@ -556,14 +556,9 @@ export default function Borrower360() {
                     </EvidenceChip>
                   );
                 })}
-                <Button
-                  size="sm"
-                  icon="audit"
-                  onClick={() => setProofOpen(true)}
-                  aria-label={`Show proof for borrower ${b.borrower_id}`}
-                >
-                  Show proof
-                </Button>
+                {/* flow-09: no second "Show proof" here. The row's evidence
+                    chips open each source; the proof drawer has ONE entry,
+                    "Show math" on the Primary offer card below. */}
               </div>
             </div>
           </div>

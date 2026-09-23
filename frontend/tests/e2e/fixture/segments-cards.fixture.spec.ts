@@ -5,6 +5,7 @@
  */
 import AxeBuilder from '@axe-core/playwright';
 import type { Locator, Page } from '@playwright/test';
+import { PRIMARY_BORROWER } from './data/borrowers';
 import { registerVariedSegments } from './data/segmentsCards';
 import { FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
@@ -255,5 +256,18 @@ test.describe('Segments filters live in the URL (flow-09)', () => {
     await expect(filterTrigger(page, 'CONSENT')).toHaveAttribute('aria-label', 'CONSENT: Any');
     await expect(cardSelect(page, 'Prime Refi Candidates')).toHaveAttribute('aria-pressed', 'false');
     await expect(page.getByRole('button', { name: 'Clear filters' })).toBeDisabled();
+  });
+});
+
+test.describe('Borrower 360 proof drawer (flow-09)', () => {
+  test('the dossier has one control that opens the proof drawer, not two', async ({ app, page }) => {
+    const borrowerId = PRIMARY_BORROWER.borrower_id;
+    await app.gotoRoute(`/borrower-360/${borrowerId}`);
+    const proofControls = page.locator('#main-content').getByRole('button', { name: /proof|math/i });
+    await expect(proofControls).toHaveCount(1);
+    await expect(proofControls).toHaveAccessibleName(`Show scoring math for borrower ${borrowerId}`);
+    await proofControls.click();
+    await expect(page.locator('aside.proof-drawer')).toHaveClass(/is-open/);
+    await expect(page.getByRole('dialog', { name: `Proof for borrower ${borrowerId}` })).toBeVisible();
   });
 });
