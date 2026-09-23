@@ -35,6 +35,7 @@ from backend.schemas.analytics import (
     SegmentAnalyticsResponse,
     SignalAnalyticsResponse,
 )
+from backend.schemas.analytics_rate_window import RateWindowResponse
 from backend.schemas.common import EvidenceEvent
 from backend.schemas.funnel import FunnelPopulation
 from backend.schemas.geo import (
@@ -434,4 +435,20 @@ class GenieAnswerRepository(Protocol):
     ) -> GenieMessageResponse:
         """Complete an already-submitted live Genie message into a governed
         answer (async lifecycle). Same return contract as :meth:`respond`."""
+        ...
+
+
+@runtime_checkable
+class RateWindowRepository(Protocol):
+    """"Why now" rate window read model.
+
+    Backing: ``mip.gold.rate_window_weekly`` -- the weekly FRED MORTGAGE30US
+    print against the current fixed-rate book's note-rate band plus the
+    in-the-money count per week, precomputed by the gold refresh job with
+    the canonical ``fn_rate_spread`` / ``fn_in_the_money`` primitives. The
+    read is one statement over a sub-300-row table; a per-request
+    percentile over the book is a contract violation.
+    """
+
+    def rate_window(self) -> RateWindowResponse:
         ...

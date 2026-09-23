@@ -10,6 +10,7 @@
  */
 import { PRIMARY_BORROWER } from './data/borrowers';
 import { PRIMARY_ASSET_KEY } from './data/dataEstate';
+import { TOTALS } from './data/reference';
 
 export interface FixtureRoute {
   /** Stable slug for test titles and, later, screenshot names. */
@@ -20,7 +21,8 @@ export interface FixtureRoute {
 
 export const FIXTURE_ROUTES: readonly FixtureRoute[] = [
   { name: 'home', path: '/', populated: '89,553' },
-  { name: 'portfolio-builder', path: '/portfolio-builder', populated: '89,553' },
+  // Portfolio Builder previews under its default 'Eligible only' contactability.
+  { name: 'portfolio-builder', path: '/portfolio-builder', populated: TOTALS.contactable.toLocaleString('en-US') },
   { name: 'segment-intelligence', path: '/segment-intelligence', populated: '12,840' },
   { name: 'lead-queue', path: '/lead-queue', populated: PRIMARY_BORROWER.borrower_id },
   { name: 'borrower-360-index', path: '/borrower-360' },

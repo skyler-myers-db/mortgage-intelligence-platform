@@ -128,6 +128,35 @@ describe('ErrorBoundary', () => {
     expect(container.querySelector('[data-testid="recovered"]')?.textContent).toBe('recovered');
   });
 
+  it('"Try again" runs onRetry before the children re-render', async () => {
+    let shouldThrow = true;
+    const onRetry = vi.fn(() => {
+      shouldThrow = false;
+    });
+    function Flaky() {
+      if (shouldThrow) throw new Error('first render fails');
+      return <div data-testid="recovered">recovered</div>;
+    }
+    await act(async () => {
+      root.render(
+        <ErrorBoundary boundary="route" onRetry={onRetry}>
+          <Flaky />
+        </ErrorBoundary>,
+      );
+    });
+    expect(onRetry).not.toHaveBeenCalled();
+
+    await act(async () => {
+      Array.from(container.querySelectorAll('button'))
+        .find((b) => b.textContent === 'Try again')
+        ?.click();
+    });
+
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('[data-testid="error-surface"]')).toBeNull();
+    expect(container.querySelector('[data-testid="recovered"]')?.textContent).toBe('recovered');
+  });
+
   it('clears a caught error when resetKey changes (navigating away from a broken route)', async () => {
     const tree = (pathname: string, child: ReactNode) => (
       <ErrorBoundary boundary="route" resetKey={pathname}>

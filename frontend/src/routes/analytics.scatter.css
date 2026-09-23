@@ -85,7 +85,7 @@
   border: 0;
   border-radius: var(--r-sm);
   background: transparent;
-  color: var(--accent);
+  color: var(--accent-ink);
   font: 600 var(--fs-12) var(--font-sans);
   text-align: center;
   cursor: pointer;
@@ -200,7 +200,7 @@
   border: 1px solid var(--line-3);
   border-radius: var(--r-pill);
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-ink);
   font-weight: 700;
 }
 .analytics-scatter-legend__scope {
@@ -230,8 +230,4 @@
   --scatter-score-high: var(--status-success-ink);
   --scatter-score-med: var(--status-warning-ink);
   --scatter-score-low: var(--text-3);
-}
-[data-theme="light"] .analytics-chart-panel--scatter {
-  --scatter-score-high: var(--signal-success);
-  --scatter-score-med: var(--entrada-navy);
 }

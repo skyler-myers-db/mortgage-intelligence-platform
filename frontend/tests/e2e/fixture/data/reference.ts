@@ -53,6 +53,17 @@ export const TOTALS = {
   offersRecommended: 6250,
   approved: 432,
   actioned: 318,
+  /**
+   * The same headline measures under the Lead Queue's default contactability
+   * (`marketing_eligibility: 'Eligible only'`): the preview applies the
+   * eligibility predicate to one statement, so every count shrinks to the
+   * contactable subset. `contactableInTheMoney` is what the `itm` segment
+   * card and the `/lead-queue?segment=itm` footer report, so Home's
+   * "N contactable of M" banner reconciles with the queue it links to.
+   */
+  contactableInTheMoney: 1286,
+  contactableHighOpportunity: 418,
+  contactableOffersRecommended: 2610,
 } as const;
 
 export function stateByCode(code: string | null | undefined): FixtureState | undefined {

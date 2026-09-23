@@ -31,6 +31,13 @@
   --signal-warning: #F59E0B;
   --signal-danger:  #F87171;
   --signal-info:    #66C5FF;
+  /* Text-safe warning. The amber hue above is a FILL (status dots, signal
+     bars, freshness legend, color-mix tints) and stays prototype amber in
+     both themes; on the light theme it reads 2.15:1 as text (2026-09-21
+     audit a11y-01), so every `color:` site in the partials (warning copy
+     and the amber icon glyphs) takes this token instead; tokenUsage.test.ts
+     forbids `color: var(--signal-warning)`. Dark: the hue itself clears AA. */
+  --signal-warning-ink: var(--signal-warning);
 
   /* ---------- Segment palette (chips, map fills) ---------- */
   --seg-itm:        #5CE1E6;  /* Prime Refi Candidates — teal */
@@ -107,6 +114,11 @@
   --dur-base: 200ms;
   --dur-slow: 360ms;
   --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  /* Alias consumed by the Cmd-K keycap, login-summary numbers and claim
+     chips. It was referenced but never defined, which made those
+     transitions invalid at computed-value time and snap (2026-09-21 audit
+     motion-04). Same curve as --ease; do not rename either. */
+  --ease-standard: var(--ease);
 
   /* ---------- Ambient / fx durations ---------- */
   --dur-ambient-1: 42s;
@@ -150,6 +162,18 @@
     radial-gradient(600px 400px at 80% 70%, rgba(92,225,230,0.10), transparent 60%),
     var(--bg-2);
   --map-region-fill: var(--bg-3);
+}
+
+/* ---------- Native control scheme ----------
+ * Tells the UA which scheme native checkboxes, selects, pickers, spinners,
+ * autofill and scrollbars should paint in. Without it every native control
+ * rendered light inside the dark theme (2026-09-21 audit visual-03 /
+ * css-02 / responsive-03). Print forces light because print.css remaps the
+ * surfaces to Canvas / CanvasText, which follow color-scheme. */
+:root, [data-theme="dark"] { color-scheme: dark; }
+[data-theme="light"] { color-scheme: light; }
+@media print {
+  :root, [data-theme="dark"], [data-theme="light"] { color-scheme: light; }
 }
 
 /* ============================================================
@@ -216,6 +240,9 @@
      for WCAG AA on the light theme's tinted surfaces — same rationale as
      the dark-theme --text-3 note above (2026-06-11 audit P2-15). */
   --text-3: #34536B;
+  /* DEFERRED (2026-09-21 audit a11y-01 sub-item): --text-4 is the disabled
+   * ink, but some metadata uses it and reads 2.3-2.9:1 in either theme.
+   * Moving those sites to --text-3 is a follow-up, not done here. */
   --text-4: #96ADBF;
 
   --chip-bg:   rgba(2,80,128,0.06);
@@ -223,11 +250,24 @@
   --chip-text: #025080;
 
   /* Darker danger so .kpi__delta.down clears 4.5:1 AA against the
-   * white surface (--bg-1 = #FFFFFF). #DC2626 reads at ~4.83:1. */
-  --signal-danger: #DC2626;
+   * white surface (--bg-1 = #FFFFFF) AND the tinted page (--bg-0 =
+   * #F4F7FA). #DC2626 read 4.83:1 on white but 4.49:1 on the page;
+   * #D42222 reads 5.2:1 / 4.8:1 (2026-09-21 audit, tokenContrast.test.ts). */
+  --signal-danger: #D42222;
   /* Darker success so .kpi__delta.up, .chip--success, and segment meta
    * clear AA against light success fills and white surfaces. */
   --signal-success: #045D46;
+  /* Warning text (a11y-01). Prototype precedent: design_files/index.html:416
+   * paints light-theme .chip--warning #B45309; the same amber-800 ink is
+   * promoted to token level so every warning text site inherits it. */
+  --signal-warning-ink: #B45309;
+  /* Status inks (responsive-02). The :root values are dark-tuned tints
+   * (#6EE7B7 / #FCD34D / #FCA5A5 read 1.3-1.5:1 on white), and the light
+   * theme used to patch them per selector. Token-level light values so a
+   * new component cannot re-break the light theme. */
+  --status-success-ink: #045D46;
+  --status-warning-ink: #B45309;
+  --status-danger-ink:  #B91C1C;
 
   --accent:        #025080;
   --accent-hover:  #013354;
@@ -277,6 +317,67 @@
 [data-theme="light"][data-accent="bright"] { --accent-ink: #014E80; }
 [data-theme="light"][data-accent="teal"]   { --accent-ink: #045D62; }
 [data-theme="light"][data-accent="red"]    { --accent-ink: #B42318; }
+/* 2026-09-21 audit css-01 / responsive-02: the [data-accent] blocks above
+ * outrank [data-theme="light"] by source order, so the light theme rendered
+ * the dark-tuned chip tints (teal chip text #BEF4F6 on white = 1.15:1, red
+ * #FFB4A8 = 1.48:1) and the red CTA kept white-on-#FF3621 (3.62:1). These
+ * compound blocks win on specificity. DELIBERATE light-theme departure from
+ * design_files/index.html:164-170 (the red/teal accent blocks), which the
+ * prototype only ever rendered on dark surfaces; dark values stay verbatim. */
+[data-theme="light"][data-accent="red"] {
+  --accent: #C8281A; --accent-hover: #B42318;
+  --chip-bg: rgba(200,40,26,0.08); --chip-line: rgba(200,40,26,0.32); --chip-text: #B42318;
+}
+[data-theme="light"][data-accent="teal"] {
+  --chip-bg: rgba(4,93,98,0.08); --chip-line: rgba(4,93,98,0.32); --chip-text: #045D62;
+}
+/* Dark + navy: the navy accent is #025080 on #04101F..#0C2340 (1.85-2.24:1),
+ * so accent-coloured text falls back to the brand bright blue, mirroring how
+ * light + bright falls back to navy above. Dark + red: brand red #FF3621
+ * reads 4.36:1 on the raised card (--bg-2); the prototype's own red hover
+ * shade (#FF5A47, design_files/index.html:165) clears 5.1:1, so ink takes
+ * it while --accent itself stays verbatim. */
+[data-theme="dark"][data-accent="navy"]    { --accent-ink: #66C5FF; }
+[data-theme="dark"][data-accent="red"]     { --accent-ink: #FF5A47; }
+/* Print stays monochrome (print.css, "paper binders"). print.css remaps the
+ * accent family at (0,1,0), which the (0,2,0) compounds above outrank, and it
+ * never sets --accent-ink: without this reset dark + navy printed accent-ink
+ * text #66C5FF on white paper (1.91:1), dark + red #FF5A47 (3.09:1), and the
+ * light red / teal chips printed tinted (2026-09-21 audit css-01). Same
+ * specificity as the compounds and later in source, so every theme x accent
+ * pair prints what print.css asks for; --accent-ink joins it as CanvasText.
+ * tokenUsage.test.ts requires every property a compound sets to be reset
+ * here; theme.fixture.spec.ts proves the printed colours per pair. */
+@media print {
+  [data-theme][data-accent] {
+    --accent: CanvasText;
+    --accent-hover: CanvasText;
+    --accent-ink: CanvasText;
+    --accent-soft: Canvas;
+    --accent-contrast: Canvas;
+    --chip-bg: Canvas;
+    --chip-line: var(--line-2);
+    --chip-text: CanvasText;
+  }
+}
+
+/* ---------- Focus ring ----------
+ * One ring for the whole product (2026-09-21 audit css-v1 / a11y-01). The
+ * prototype ring is `2px solid var(--accent)` (design_files/index.html:211);
+ * because [data-accent] always overrides the light theme's --accent, that
+ * read 1.91:1 on white with the default accent. The ring now follows
+ * --accent-ink, which is AA-tuned per theme x accent. Where the ring differs
+ * from the prototype: every light pair (the ink, not --accent); dark + navy
+ * and dark + red, whose ink is #66C5FF / #FF5A47 (see above), not the
+ * accent; and .rail__brand, whose ring was always --entrada-bright and now
+ * follows the accent in every dark pair. Otherwise dark + bright and dark +
+ * teal paint the prototype ring unchanged. Bespoke rings in the partials
+ * consume these tokens. */
+:root {
+  --focus-ring-color: var(--accent-ink);
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 2px;
+}
 
 /* ---------- Density ----------
  * Comfortable is the default (carried on :root).
@@ -347,8 +448,8 @@ input[type="checkbox"] {
 
 /* ---------- Focus ---------- */
 :focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
   border-radius: var(--r-sm);
 }
 

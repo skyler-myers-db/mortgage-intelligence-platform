@@ -583,7 +583,7 @@ export function EvidenceDrawer() {
                       </p>
                     )}
                   </div>
-                  <div className="source-stat-grid" aria-label="Governed asset metadata">
+                  <div className="source-stat-grid" role="group" aria-label="Governed asset metadata">
                     {metadataStatRows(metadata).map(([label, value]) => (
                       <div key={label} className="source-stat">
                         <span>{label}</span>
@@ -634,6 +634,7 @@ export function EvidenceDrawer() {
               ) : (
                 <div
                   className="chip-row governed-assets__list"
+                  role="group"
                   aria-label={`${lineageFamily.title} governed assets`}
                 >
                   {compactNodes.map((node) => (

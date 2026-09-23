@@ -147,7 +147,10 @@ describe('floating Genie conversation continuity', () => {
   function mount() {
     act(() => {
       root.render(
-        <MemoryRouter>
+        // `/ask-genie` is the one route whose empty state keeps the SERVER
+        // starters (`START.sample_questions`); every other route shows the
+        // curated per-route set (audit 2026-09-21 `genie-04`, phase 1).
+        <MemoryRouter initialEntries={['/ask-genie']}>
           <GenieChat />
         </MemoryRouter>,
       );

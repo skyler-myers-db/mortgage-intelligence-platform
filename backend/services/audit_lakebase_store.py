@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from datetime import datetime
 from typing import Any
 
@@ -290,12 +291,24 @@ class LakebaseAuditStore:
         correlation_id: str | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
+        event_id: str | None = None,
     ) -> list[AuditEvent]:
+        if event_id is not None:
+            # ``audit_id`` is a UUID primary key. A caller-supplied id that is
+            # not a UUID can never match a row, so answer "no rows" without a
+            # round trip instead of letting Postgres raise on the cast.
+            try:
+                uuid.UUID(event_id)
+            except ValueError:
+                return []
         clauses: list[str] = [
             "pg_visible_in_snapshot("
             "mip_app.action_audit.xmin::text::xid8, snapshot_anchor.snapshot)"
         ]
         params: dict[str, Any] = {"limit": limit, "offset": offset}
+        if event_id is not None:
+            clauses.append("audit_id = %(event_id)s::uuid")
+            params["event_id"] = event_id
         snapshot_expression = "pg_current_snapshot()"
         if snapshot_token is not None:
             snapshot_expression = "%(snapshot_token)s::pg_snapshot"

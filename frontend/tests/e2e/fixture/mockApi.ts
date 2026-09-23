@@ -191,11 +191,18 @@ export class MockApi {
   /**
    * Opt one endpoint into an explicit degraded state. `endpointPattern` is a
    * registry-style pattern (`/api/leads`, `/api/borrowers/:id`) or a RegExp
-   * tested against the version-normalized path.
+   * tested against the version-normalized path. Returns a function that
+   * lifts the degraded state again (a dependency recovering), after which the
+   * registered fixture answers as before.
    */
-  degrade(endpointPattern: string | RegExp, options: DegradeOptions): void {
+  degrade(endpointPattern: string | RegExp, options: DegradeOptions): () => void {
     const regex = typeof endpointPattern === 'string' ? compilePattern(endpointPattern).regex : endpointPattern;
-    this.degradeRules.push({ matches: (path) => regex.test(path), options });
+    const rule: DegradeRule = { matches: (path) => regex.test(path), options };
+    this.degradeRules.push(rule);
+    return () => {
+      const index = this.degradeRules.indexOf(rule);
+      if (index !== -1) this.degradeRules.splice(index, 1);
+    };
   }
 
   registeredKeys(): string[] {

@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react';
 import type { ReactElement, ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useLocation } from 'react-router';
-import { useApp, type Accent, type Density, type Theme } from '../components/AppContext';
+import { useApp, type Accent, type Density } from '../components/AppContext';
 import { PageShell } from '../components/layout/PageShell';
+import { ThemePreferenceControl } from '../components/layout/ThemePreferenceControl';
 import { Chip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { EntradaWordmark } from '../components/brand/Entrada';
@@ -128,7 +129,6 @@ function dataEstateFallback(lender: string): DataEstateResponse {
 export default function AdminConfig() {
   const location = useLocation();
   const {
-    theme, setTheme,
     accent, setAccent,
     density, setDensity,
     lender,
@@ -488,18 +488,7 @@ export default function AdminConfig() {
           <div className="surface__body appearance-body">
             <Row label="Theme">
               <div className="tweak-row tweak-row--theme">
-                <div className="segmented">
-                  {(['dark', 'light'] as Theme[]).map((t) => (
-                    <button
-                      key={t}
-                      type="button"
-                      className={theme === t ? 'is-active' : ''}
-                      onClick={() => setTheme(t)}
-                    >
-                      {t === 'dark' ? 'Dark' : 'Light'}
-                    </button>
-                  ))}
-                </div>
+                <ThemePreferenceControl />
               </div>
             </Row>
             <Row label="Accent">

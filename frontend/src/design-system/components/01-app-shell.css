@@ -98,8 +98,8 @@
   height: auto;
   min-inline-size: var(--sp-6);
   min-block-size: var(--sp-6);
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
 }
 
 /* Top bar */
@@ -202,13 +202,13 @@
 }
 .topbar__search-kbd:hover { color: var(--text-1); border-color: var(--accent); }
 .topbar__search-kbd:focus-visible {
-  outline: calc(var(--sp-1) / 2) solid var(--accent);
-  outline-offset: calc(var(--sp-1) / 2);
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
 }
 
 .topbar__search input:focus-visible {
-  outline: calc(var(--sp-1) / 2) solid var(--accent);
-  outline-offset: calc(var(--sp-1) / 2);
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
   border-radius: var(--r-sm);
 }
 .topbar__actions {
@@ -253,7 +253,7 @@
   color: var(--text-3);
   font-size: var(--fs-12);
 }
-.topbar__search-status--error { color: var(--signal-warning); }
+.topbar__search-status--error { color: var(--signal-warning-ink); }
 .topbar__pill {
   display: inline-flex; align-items: center; gap: var(--sp-2);
   padding: 5px 10px; border-radius: var(--r-pill);
@@ -373,8 +373,8 @@
   background: color-mix(in oklab, var(--entrada-navy) 10%, transparent);
 }
 .rail__brand:focus-visible {
-  outline: 2px solid var(--entrada-bright);
-  outline-offset: 2px;
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
 }
 .rail__item {
   width: 56px; height: 56px; margin: 0 auto;

@@ -4,6 +4,8 @@ import { EvidenceChip } from '../Primitives';
 import type { DrawerSource } from '../AppContext';
 import { Sparkline } from './Sparkline';
 import { useFirstAppearance } from '../../lib/useFirstAppearance';
+import { genieKpiPrompt } from '../../lib/genieContext';
+import { GenieAskAbout } from './GenieAskAbout';
 
 /**
  * KpiCard — prototype `.kpi` BEM: label / value / unit / delta / source.
@@ -22,6 +24,11 @@ import { useFirstAppearance } from '../../lib/useFirstAppearance';
  *
  * `trend` renders a micro-sparkline in the top-right corner using the
  * prototype's `.kpi__spark` slot; color direction honors `deltaDir`.
+ *
+ * "Ask Genie about this KPI" (audit `genie-04`): a compact sparkle button in
+ * the top-right corner when the label has a reviewed template. The label is
+ * only a lookup key into that closed set, never interpolated; an unknown
+ * label (or a loading card) renders no entry point.
  */
 
 interface KpiCardProps {
@@ -82,6 +89,7 @@ export function KpiCard({
 
   const sparkNode =
     spark ?? (trend && trend.length >= 2 ? <Sparkline points={trend} direction={deltaDir} drawIn={animateEntrance} /> : null);
+  const askPrompt = genieKpiPrompt(label);
 
   if (loading) {
     return (
@@ -100,8 +108,13 @@ export function KpiCard({
   }
 
   return (
-    <div className="kpi">
+    <div className={askPrompt ? 'kpi kpi--askable' : 'kpi'}>
       <div className="kpi__label">{label}</div>
+      {askPrompt && (
+        <div className="kpi__ask">
+          <GenieAskAbout prompt={askPrompt} subject={`KPI: ${label}`} variant="icon" />
+        </div>
+      )}
       <div className={`kpi__value num${animateEntrance ? ' kpi__value--enter' : ''}`}>
         {display}
         {unit && <span className="kpi__unit">{unit}</span>}

@@ -198,6 +198,8 @@ export interface BorrowerLifecycle {
   approval_status: ApprovalStatus;
   outreach_status: OutreachStatus;
   approval_id?: string | null;
+  /** Audit row the latest decision wrote; the Decision receipt reads it back. */
+  audit_event_id?: string | null;
   approved_at?: string | null;
   outreach_at?: string | null;
   synced_at?: string | null;
@@ -726,6 +728,7 @@ export type {
   FunnelTotals,
   ScoreBucket,
 } from './types/executiveAnalytics';
+export type { RateWindowProvenance, RateWindowResponse, RateWindowThresholds, RateWindowWeek } from './types/rateWindow';
 
 export interface StateOpportunityRow {
   state: string;

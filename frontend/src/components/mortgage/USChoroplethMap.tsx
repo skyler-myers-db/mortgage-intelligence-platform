@@ -20,6 +20,8 @@ import { USChoroplethMapTooltip } from './USChoroplethMapTooltip';
 import { USChoroplethMapZipLevel } from './USChoroplethMapZipLevel';
 import { useChoroplethLiveFacts } from './useChoroplethLiveFacts';
 import { safeSegmentName } from '../../lib/segmentMetadata';
+import { genieStatePrompt } from '../../lib/genieContext';
+import { GenieAskAbout } from './GenieAskAbout';
 
 // State + ZIP hover numbers come from /api/geo/state-rollups and
 // /api/geo/zip-rollups (backed by mip.gold.funnel_snapshot_daily and
@@ -607,6 +609,13 @@ export function USChoroplethMap({
               <Icon name="send" size={12} />
               Start campaign
             </button>
+          )}
+          {/* "Ask Genie about this state" (genie-04) on the drilled state:
+              the USPS code is the only thing that reaches the template. The
+              hover tooltip is not interactive, so the drilled view is where
+              the entry point lives. */}
+          {level === 'zip' && drillStateUC !== '' && (
+            <GenieAskAbout prompt={genieStatePrompt(drillStateUC)} subject={`state: ${drillStateName}`} />
           )}
         </div>
       </div>

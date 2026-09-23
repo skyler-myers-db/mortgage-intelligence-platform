@@ -3,28 +3,30 @@ import {
   useEffect,
   useRef,
   useState,
+  type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
-import { useNavigate } from 'react-router';
+import { useLocation, useNavigate } from 'react-router';
 import { useApp } from '../AppContext';
 import { ApiError, api, isAbortError, type GenieLiveProgress } from '../../lib/api';
 import { GenieLiveError, askGenieLive } from '../../lib/genieAsk';
 import type { GenieActionSuggestion, GenieAnswer as GenieAnswerShape } from '../../types';
 import { Icon } from '../Icon';
-import { Button, Chip, EvidenceChip } from '../Primitives';
-import { GenieAnswer, GOVERNED_ACTION_SOURCE } from './GenieAnswer';
-import { GenieProgress, genieProgressLabel } from './GenieProgress';
-import { drawerForAsset } from '../../lib/drawerSources';
+import { Button } from '../Primitives';
+import { GOVERNED_ACTION_SOURCE } from './GenieAnswer';
+import { genieProgressLabel } from './GenieProgress';
 import {
   GENIE_CONVERSATION_RESET_EVENT,
   clearGenieConversationState,
   readGenieConversationId,
   writeGenieConversationId,
 } from '../../lib/genieConversation';
-import { NON_PERSISTABLE_SOURCES } from '../../lib/pinnedInsights';
+import { genieStartersForRoute } from '../../lib/genieContext';
+import { consumeGeniePrefill, subscribeGeniePrefill } from '../../lib/genieOpen';
 import {
   appendGenieTurn,
   clearGenieTurns,
+  getGenieTurns,
   setGenieTurns,
   type GenieTurn,
 } from '../../lib/genieConversationStore';
@@ -40,6 +42,15 @@ import { useGeniePanelDismissal } from './useGeniePanelDismissal';
 import { useGenieTranscript } from './useGenieTranscript';
 import { useGenieTranscriptScroll } from './useGenieTranscriptScroll';
 import { GenieHistoryMenu } from './GenieHistoryMenu';
+import { GenieChatBody, type StoppedTurn } from './GenieChatBody';
+import { shouldPersistConversation, sourceAssetsFor } from './GenieChat.helpers';
+
+export {
+  shouldPersistConversation,
+  shouldRenderGenieSourceAssets,
+  sourceAssetsFor,
+  warningLabelForSource,
+} from './GenieChat.helpers';
 
 /**
  * Floating Genie chat panel — `.genie` BEM from the prototype. Fixed
@@ -55,6 +66,18 @@ import { GenieHistoryMenu } from './GenieHistoryMenu';
  * badge until the panel is opened again. The actor-boundary reset still
  * aborts the turn and clears everything.
  *
+ * Conversational controls (audit 2026-09-21 `genie-03`, client-only slice):
+ * Stop abandons the client turn, bumps the generation so a late reply is
+ * ignored, gives the question back to the composer and leaves a "Stopped"
+ * note in the transcript; Retry / Regenerate re-ask as a NEW turn (a Genie
+ * thread cannot rewrite its history); Edit reloads a sent question; ArrowUp
+ * in an empty composer recalls the last question. There is no server-side
+ * cancel: Genie may still finish a stopped turn, and its reply is discarded.
+ *
+ * Page context (`genie-04`, phase 1): the empty state shows the starters
+ * curated for the current route, and `openGenie({ prompt })` from any surface
+ * PREFILLS the composer (lib/genieOpen) -- it never submits.
+ *
  * The AI message shape now holds the full GenieAnswer payload so
  * metric_value / table_rows / follow_up_questions all render in the bubble
  * via the shared <GenieAnswer> subcomponent.
@@ -62,41 +85,15 @@ import { GenieHistoryMenu } from './GenieHistoryMenu';
 
 const COMPOSER_BUSY_HINT_ID = 'genie-composer-busy';
 const ASKING_REASON =
-  'Genie is still answering. Keep drafting: Ask unlocks when this answer lands. Closing the panel does not stop it.';
+  'Genie is still answering. Keep drafting: Ask unlocks when this answer lands, or press Stop. Closing the panel does not stop it.';
 const ACTION_REASON = 'A governed action is running. Ask unlocks when it finishes.';
-
-export function sourceAssetsFor(payload: GenieAnswerShape): string[] {
-  const seen = new Set<string>();
-  const assets = [
-    ...(payload.proof?.source_assets ?? []),
-    ...(payload.trusted_assets ?? []),
-  ];
-  for (const raw of assets) {
-    const asset = typeof raw === 'string' ? raw.trim() : '';
-    if (asset) seen.add(asset);
-  }
-  return Array.from(seen).slice(0, 4);
-}
-
-export function shouldPersistConversation(payload: GenieAnswerShape): boolean {
-  return Boolean(payload.conversation_id && !NON_PERSISTABLE_SOURCES.has(String(payload.source ?? '')));
-}
-
-export function warningLabelForSource(source: string | undefined): string | null {
-  if (source === 'degraded') return 'Genie reconnecting';
-  if (source === 'policy_blocked' || source === 'refused') return 'Governed refusal';
-  if (source === 'data_gap') return 'Pending source feed';
-  if (source === 'out_of_footprint') return 'Outside footprint';
-  return null;
-}
-
-export function shouldRenderGenieSourceAssets(payload: GenieAnswerShape): boolean {
-  return warningLabelForSource(payload.source) === null && sourceAssetsFor(payload).length > 0;
-}
+/** Stopped-turn notes kept in the panel (they are not transcript turns). */
+const MAX_STOPPED_TURNS = 20;
 
 export function GenieChat() {
   const { genieOpen, setGenieOpen, lender, refreshWorkspace } = useApp();
   const navigate = useNavigate();
+  const { pathname } = useLocation();
   // Settled transcript, mirrored from the shared tab-scoped store (the
   // `/ask-genie` route appends to the same list). The question of the turn in
   // flight is NOT in it: it lives in `pendingQuestion` until the turn settles.
@@ -117,9 +114,11 @@ export function GenieChat() {
   // steps, generated SQL) driven by the submit → progress → complete flow.
   const [liveProgress, setLiveProgress] = useState<GenieLiveProgress | null>(null);
   const [askStartedAt, setAskStartedAt] = useState<number | null>(null);
+  // Turns the user stopped, kept in transcript order (see GenieChatBody).
+  const [stoppedTurns, setStoppedTurns] = useState<StoppedTurn[]>([]);
   // Abort + generation control for the in-flight live turn (QA M3): a
-  // conversation reset or New thread must stop the poll loop, and a turn
-  // that resolves AFTER a reset must not re-persist the previous actor's
+  // conversation reset, New thread or Stop must stop the poll loop, and a
+  // turn that resolves AFTER that must not re-persist the previous actor's
   // conversation id or append an orphan bubble to the cleared thread.
   const askAbortRef = useRef<AbortController | null>(null);
   const askGenerationRef = useRef(0);
@@ -127,6 +126,8 @@ export function GenieChat() {
   // both read `asking === false` from their render's closure. Also read by
   // the open effect below, which must not re-run when a turn starts/settles.
   const askInFlightRef = useRef(false);
+  // The most recently sent question (ArrowUp recall); read in handlers only.
+  const lastQuestionRef = useRef<string | null>(null);
   // The reset listener below is bound once, before the scroll hook exists.
   const cancelAnchorRef = useRef<() => void>(() => undefined);
   const genieOpenRef = useRef(genieOpen);
@@ -180,11 +181,12 @@ export function GenieChat() {
       askAbortRef.current?.abort();
       askAbortRef.current = null;
       askInFlightRef.current = false;
+      lastQuestionRef.current = null;
       setConversationId(null);
       // An actor-boundary reset / 403 invalidates the transcript too: the
       // conversation is not resumable and the prior actor's questions must
       // not linger in this tab — including the in-flight question, the
-      // unseen-answer badge and the last spoken announcement.
+      // stopped notes, the unseen-answer badge and the last announcement.
       clearGenieTurns();
       setPendingQuestion(null);
       setInput('');
@@ -193,6 +195,7 @@ export function GenieChat() {
       setHistoryOpen(false);
       setLiveProgress(null);
       setAskStartedAt(null);
+      setStoppedTurns([]);
       setUnseenAnswer(false);
       setAnnouncement('');
       cancelAnchorRef.current();
@@ -253,6 +256,48 @@ export function GenieChat() {
     if (!askInFlightRef.current) setConversationId(readGenieConversationId());
   }, [genieOpen]);
 
+  /** Put `text` in the composer and move the caret to its end. */
+  const loadComposer = useCallback((text: string) => {
+    setInput(text);
+    queueMicrotask(() => {
+      const el = inputRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(text.length, text.length);
+    });
+  }, []);
+
+  /** Focus the composer as it is (a draft stays untouched), caret at its end. */
+  const focusComposer = useCallback(() => {
+    queueMicrotask(() => {
+      const el = inputRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(el.value.length, el.value.length);
+    });
+  }, []);
+
+  // `openGenie({ prompt })` prefill (genie-04): consumed while the panel is
+  // open -- on open for a request made while it was closed or not yet
+  // mounted, and at once for one made while it is already open. A prefill
+  // replaces the draft (the user just asked for it) and is NEVER sent: only
+  // the user's own Ask submits it. Replacing a draft is said out loud, so it
+  // never disappears silently.
+  useEffect(() => {
+    if (!genieOpen) return undefined;
+    const apply = () => {
+      const prompt = consumeGeniePrefill();
+      if (prompt === null) return;
+      const draft = inputRef.current?.value.trim() ?? '';
+      loadComposer(prompt);
+      if (draft !== '' && draft !== prompt.trim()) {
+        setAnnouncement('Your Genie draft was replaced by the question you opened. Nothing was sent.');
+      }
+    };
+    apply();
+    return subscribeGeniePrefill(apply);
+  }, [genieOpen, loadComposer]);
+
   // Launcher status for the topbar toggle and the FAB. Only meaningful while
   // the panel is closed; an open panel shows its own progress.
   const launcherStatus: GenieTurnStatus = genieOpen
@@ -296,6 +341,7 @@ export function GenieChat() {
     // keypress or a stale chip gets through anyway. The draft is left intact.
     if (askInFlightRef.current || actionRunning) return;
     askInFlightRef.current = true;
+    lastQuestionRef.current = trimmed;
     const activeConversationId = followUpConversationId ?? conversationId;
     if (!activeConversationId) {
       setConversationId(null);
@@ -317,8 +363,8 @@ export function GenieChat() {
           if (isCurrent()) setLiveProgress(p);
         },
       })) as GenieAnswerShape;
-      // A reset/new-thread while in flight invalidates this turn: never
-      // re-persist its conversation id or append to the cleared thread.
+      // A reset / new thread / Stop while in flight invalidates this turn:
+      // never re-persist its conversation id or append it to the thread.
       if (!isCurrent()) return;
       const returnedConversationId = res.conversation_id ?? null;
       if (returnedConversationId && shouldPersistConversation(res)) {
@@ -346,8 +392,8 @@ export function GenieChat() {
         'Genie could not complete this question.',
       );
     } finally {
-      // A superseded turn (reset / teardown) already had its state cleared by
-      // whoever invalidated it, in-flight latch included.
+      // A superseded turn (reset / teardown / Stop) already had its state
+      // cleared by whoever invalidated it, in-flight latch included.
       if (isCurrent()) {
         askInFlightRef.current = false;
         askAbortRef.current = null;
@@ -359,11 +405,52 @@ export function GenieChat() {
     }
   };
 
+  /**
+   * Stop the in-flight live turn (genie-03, client-only). The generation bump
+   * is what makes a reply that still arrives -- the server keeps working;
+   * there is no cancel endpoint yet -- land nowhere: not in the transcript,
+   * not in the persisted conversation id. The abort ends the poll loop. The
+   * question goes back to the composer unless the user is drafting another
+   * one there (a draft is never overwritten; the note's Edit reloads the
+   * stopped question), and a "Stopped" note keeps the transcript honest. New
+   * thread and History unlock because nothing is in flight any more. Focus
+   * always lands in the composer: the Stop button unmounts under the user,
+   * and focus left on <body> would also switch off "Escape closes Genie",
+   * which keys off focus inside the panel.
+   */
+  const stopTurn = () => {
+    if (!askInFlightRef.current) return;
+    askGenerationRef.current += 1;
+    askAbortRef.current?.abort();
+    askAbortRef.current = null;
+    askInFlightRef.current = false;
+    const question = pendingQuestion ?? '';
+    setAsking(false);
+    setPendingQuestion(null);
+    setLiveProgress(null);
+    setAskStartedAt(null);
+    cancelAnchor();
+    const restore = question !== '' && input.trim() === '';
+    if (question) {
+      setStoppedTurns((prev) =>
+        [...prev, { atTurnIndex: getGenieTurns().length, question }].slice(-MAX_STOPPED_TURNS),
+      );
+    }
+    if (restore) loadComposer(question);
+    else focusComposer();
+    setAnnouncement(
+      restore
+        ? 'Stopped. The question is back in the composer.'
+        : 'Stopped. Your draft was kept; Edit reloads the stopped question.',
+    );
+  };
+
   const newConversation = () => {
     if (typing) return;
     suppressBootstrapConversationRef.current = true;
     setConversationId(null);
     clearGenieTurns();
+    setStoppedTurns([]);
     setInput('');
     setHistoryOpen(false);
     clearGenieConversationState({ notify: true });
@@ -381,7 +468,11 @@ export function GenieChat() {
     askGenerationRef.current += 1;
     askAbortRef.current?.abort();
     suppressBootstrapConversationRef.current = true;
+    // ArrowUp recalls from the restored thread (its last question), not from
+    // the one it replaced.
+    lastQuestionRef.current = null;
     setGenieTurns(turns);
+    setStoppedTurns([]);
     cancelAnchor();
     setConversationId(conversationIdToLoad);
     writeGenieConversationId(conversationIdToLoad);
@@ -430,8 +521,23 @@ export function GenieChat() {
     }
   };
 
+  /** ArrowUp in an EMPTY composer recalls the last question (genie-03). */
+  const onComposerKeyDown = (e: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (e.key !== 'ArrowUp' || input !== '') return;
+    const lastFromTranscript = [...msgs].reverse().find((m) => m.who === 'user');
+    const last =
+      lastQuestionRef.current ??
+      (lastFromTranscript && lastFromTranscript.who === 'user' ? lastFromTranscript.text : null);
+    if (!last) return;
+    e.preventDefault();
+    loadComposer(last);
+  };
+
   const busyReason = asking ? ASKING_REASON : actionRunning ? ACTION_REASON : null;
-  const lastAnswerIndex = msgs.reduce((last, m, i) => (m.who === 'ai' ? i : last), -1);
+  // Per-route starters replace the identical global set (genie-04); the
+  // server's list stays the fallback for routes without curated ones.
+  const routeStarters = genieStartersForRoute(pathname);
+  const starters = routeStarters.length > 0 ? routeStarters : sampleQuestions;
   // While a turn runs the announcer carries stage CHANGES only (the same
   // label the progress card shows); once it settles, the landing message.
   const announcerText = asking ? genieProgressLabel(liveProgress) : announcement;
@@ -605,122 +711,24 @@ export function GenieChat() {
             <Icon name="close" size={14} />
           </button>
         </div>
-        <div className="genie__body" ref={bodyRef}>
-          {msgs.map((m, i) =>
-            m.who === 'user' ? (
-              <div key={i} className="genie__msg genie__msg--user">{m.text}</div>
-            ) : (
-              <div
-                key={i}
-                ref={i === lastAnswerIndex ? lastAnswerRef : undefined}
-                className="genie__msg genie__msg--ai"
-              >
-                <div className="bubble">
-                  <GenieAnswer
-                    payload={m.payload}
-                    question={(() => {
-                      const prev = msgs[i - 1];
-                      return prev && prev.who === 'user' ? prev.text : undefined;
-                    })()}
-                    onFollowUp={(q, followUpConversationId) =>
-                      void ask(q, followUpConversationId, Date.now())
-                    }
-                    followUpDisabledReason={busyReason}
-                    announce={false}
-                    onAction={(action) => runAction(action, m.payload)}
-                    dense
-                  />
-                </div>
-                {/* Source chip row. The backend emits "genie" (live)
-                    or governed refusal/degraded source values. Warning
-                    chips never pretend to be data-bearing answers. */}
-                {warningLabelForSource(m.payload.source) && (
-                  <div className="sources">
-                    <Chip
-                      variant="warning"
-                      icon="info"
-                      title={
-                        m.payload.source === 'degraded'
-                          ? 'The Genie answer path is temporarily unavailable. Live answers will resume after health recovers.'
-                          : 'This answer intentionally stopped before displaying a live result.'
-                      }
-                    >
-                      {warningLabelForSource(m.payload.source)}
-                    </Chip>
-                  </div>
-                )}
-                {shouldRenderGenieSourceAssets(m.payload) && (
-                  <div className="sources">
-                    {(m.sources && m.sources.length > 0 ? m.sources : sourceAssetsFor(m.payload)).map((s, j) => {
-                      const drawer = drawerForAsset(s);
-                      if (drawer === null) {
-                        // Source string doesn't map to a specific drawer
-                        // entry — render an inert neutral chip so the
-                        // user can read the source label without being
-                        // misled into the wrong drawer (the prior
-                        // "default to NBO" routing was confusing per
-                        // 2026-05-04 user feedback).
-                        return (
-                          <Chip key={j} variant="neutral" title={`Source: ${s}`}>
-                            {s}
-                          </Chip>
-                        );
-                      }
-                      return (
-                        <EvidenceChip key={j} source={drawer} title={`Source: ${s}`}>
-                          {s}
-                        </EvidenceChip>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            )
-          )}
-          {pendingQuestion && (
-            <div className="genie__msg genie__msg--user">{pendingQuestion}</div>
-          )}
-          {typing && (
-            <div className="genie__msg genie__msg--ai">
-              <div className="bubble">
-                <GenieProgress
-                  dense
-                  progress={liveProgress}
-                  startedAt={askStartedAt}
-                  announce={false}
-                  paused={!genieOpen}
-                />
-              </div>
-            </div>
-          )}
-          {msgs.length === 0 && !typing && (
-            <div className="genie-chat__samples">
-              <div className="surface surface--inset">
-                <div className="surface__body genie-empty">
-                  <div className="genie-empty__icon">
-                    <Icon name="sparkle" size={16} />
-                  </div>
-                  <div>
-                    <div className="genie-empty__title">Ask about your book — coverage, segments, borrowers, market shifts.</div>
-                    <p className="genie-empty__copy">
-                      Data-bearing answers appear only after Genie returns trusted SQL, source assets, and proof.
-                    </p>
-                  </div>
-                </div>
-              </div>
-              {sampleQuestions.map((s) => (
-                <button
-                  key={s}
-                  className="filter genie-chat__sample"
-                  onClick={() => void ask(s, undefined, Date.now())}
-                  type="button"
-                >
-                  <Icon name="sparkle" size={11} /> {s}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+        <GenieChatBody
+          open={genieOpen}
+          bodyRef={bodyRef}
+          lastAnswerRef={lastAnswerRef}
+          messages={msgs}
+          stoppedTurns={stoppedTurns}
+          pendingQuestion={pendingQuestion}
+          asking={asking}
+          typing={typing}
+          liveProgress={liveProgress}
+          askStartedAt={askStartedAt}
+          busyReason={busyReason}
+          starters={starters}
+          onAsk={(q, followUpConversationId) => void ask(q, followUpConversationId, Date.now())}
+          onAction={runAction}
+          onEdit={loadComposer}
+          onStop={stopTurn}
+        />
         <form
           className="genie__input"
           onSubmit={(e) => {
@@ -734,6 +742,7 @@ export function GenieChat() {
             ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
+            onKeyDown={onComposerKeyDown}
             placeholder="Ask about borrowers, segments, triggers…"
             aria-label="Ask Genie"
             aria-describedby={busyReason ? COMPOSER_BUSY_HINT_ID : undefined}

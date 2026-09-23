@@ -10,6 +10,7 @@ import { useNavigate } from 'react-router';
 import { useApp } from '../AppContext';
 import { Icon, type IconName } from '../Icon';
 import { api } from '../../lib/api';
+import { openGenie } from '../../lib/genieOpen';
 import type { LeadSummary } from '../../types';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import {
@@ -29,14 +30,27 @@ import {
  *
  * Open with ⌘K (mac) / Ctrl+K. The existing "/" topbar-search shortcut is
  * untouched; this is the heavier cross-surface launcher.
+ *
+ * "Ask Genie: <typed text>" (audit 2026-09-21 `shell-07` / `genie-04`): any
+ * query of two or more characters also offers a row that opens the floating
+ * Genie panel with the text PREFILLED in its composer (`openGenie`). It never
+ * submits and adds no endpoint: the user presses Ask, and the question takes
+ * the same guarded ask path as any typed question. The row is the FALLBACK,
+ * not a match: it comes after the pages, actions AND borrowers, and Enter
+ * never lands on it while the borrower search is still in flight, so a
+ * masked borrower id or a ZIP still opens its dossier on Enter instead of
+ * being handed to Genie's composer.
  */
 
 type FlatItem =
   | { kind: 'action'; action: CommandAction }
+  | { kind: 'genie'; prompt: string }
   | { kind: 'borrower'; lead: LeadSummary };
 
 const DEBOUNCE_MS = 160;
 const MAX_BORROWERS = 6;
+/** Typed text this long or longer also offers "Ask Genie: <text>". */
+const MIN_GENIE_QUERY = 2;
 
 export function CommandPalette() {
   const navigate = useNavigate();
@@ -53,6 +67,10 @@ export function CommandPalette() {
   const [borrowers, setBorrowers] = useState<LeadSummary[]>([]);
   const [searchStatus, setSearchStatus] = useState<'idle' | 'loading' | 'empty' | 'error'>('idle');
   const [activeIndex, setActiveIndex] = useState(0);
+  // True once the user moves onto the "Ask Genie" fallback (arrows or
+  // pointer). Borrower rows land after the debounce ABOVE that row, so the
+  // same index would then point at a borrower; the selection follows the row.
+  const onGenieRowRef = useRef(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -63,6 +81,7 @@ export function CommandPalette() {
     setBorrowers([]);
     setSearchStatus('idle');
     setActiveIndex(0);
+    onGenieRowRef.current = false;
   }, []);
   const close = useCallback(() => {
     setOpen(false);
@@ -134,24 +153,45 @@ export function CommandPalette() {
     () => filterCommandActions(query, commandActionsForAccess(canAccessAdmin)),
     [canAccessAdmin, query],
   );
+  const genieQuery = query.trim();
   const items: FlatItem[] = useMemo(
     () => [
       ...actions.map((action) => ({ kind: 'action' as const, action })),
       ...borrowers.map((lead) => ({ kind: 'borrower' as const, lead })),
+      // Last: Enter at the first row must reach a match before the fallback.
+      ...(genieQuery.length >= MIN_GENIE_QUERY ? [{ kind: 'genie' as const, prompt: genieQuery }] : []),
     ],
-    [actions, borrowers],
+    [actions, borrowers, genieQuery],
   );
 
-  // Clamp the active index whenever the result set shrinks.
+  // Clamp the active index whenever the result set shrinks; keep a user who
+  // chose the Genie row on it when borrower rows are inserted above it.
   useEffect(() => {
-    setActiveIndex((i) => (items.length === 0 ? 0 : Math.min(i, items.length - 1)));
-  }, [items.length]);
+    const genieIndex = onGenieRowRef.current ? items.findIndex((item) => item.kind === 'genie') : -1;
+    setActiveIndex((i) => {
+      if (items.length === 0) return 0;
+      return genieIndex >= 0 ? genieIndex : Math.min(i, items.length - 1);
+    });
+  }, [items]);
+
+  const moveTo = useCallback(
+    (index: number) => {
+      onGenieRowRef.current = items[index]?.kind === 'genie';
+      setActiveIndex(index);
+    },
+    [items],
+  );
 
   const runItem = useCallback(
     (item: FlatItem) => {
       if (item.kind === 'borrower') {
         close();
         navigate(`/borrower-360/${item.lead.borrower_id}`);
+        return;
+      }
+      if (item.kind === 'genie') {
+        close();
+        openGenie({ prompt: item.prompt });
         return;
       }
       const { target } = item.action;
@@ -173,18 +213,23 @@ export function CommandPalette() {
     (e: ReactKeyboardEvent<HTMLInputElement>) => {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
-        setActiveIndex((i) => (items.length === 0 ? 0 : (i + 1) % items.length));
+        moveTo(items.length === 0 ? 0 : (activeIndex + 1) % items.length);
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
-        setActiveIndex((i) => (items.length === 0 ? 0 : (i - 1 + items.length) % items.length));
+        moveTo(items.length === 0 ? 0 : (activeIndex - 1 + items.length) % items.length);
       } else if (e.key === 'Enter') {
         e.preventDefault();
         const item = items[activeIndex];
-        if (item) runItem(item);
+        if (!item) return;
+        // The borrower rows have not landed yet, so the Genie fallback only
+        // SEEMS to be the first match. Hold Enter (a click still works):
+        // once the search settles, Enter opens the first borrower.
+        if (item.kind === 'genie' && searchStatus === 'loading' && borrowers.length === 0) return;
+        runItem(item);
       }
       // Esc is handled by the focus trap.
     },
-    [items, activeIndex, runItem],
+    [items, activeIndex, moveTo, runItem, searchStatus, borrowers.length],
   );
 
   // Keep the active row scrolled into view as arrows move it.
@@ -199,6 +244,7 @@ export function CommandPalette() {
   const optionId = (i: number) => `cmdk-option-${i}`;
   let runningIndex = -1;
   const actionItems = items.filter((it) => it.kind === 'action') as Extract<FlatItem, { kind: 'action' }>[];
+  const genieItems = items.filter((it) => it.kind === 'genie') as Extract<FlatItem, { kind: 'genie' }>[];
   const borrowerItems = items.filter((it) => it.kind === 'borrower') as Extract<FlatItem, { kind: 'borrower' }>[];
 
   return (
@@ -233,6 +279,7 @@ export function CommandPalette() {
             onChange={(e) => {
               setQuery(e.target.value);
               setActiveIndex(0);
+              onGenieRowRef.current = false;
             }}
             onKeyDown={onInputKeyDown}
           />
@@ -240,7 +287,9 @@ export function CommandPalette() {
         </div>
 
         <div className="cmdk__list" id="cmdk-listbox" role="listbox" ref={listRef}>
-          {items.length === 0 && (
+          {/* The Genie row is a way out, not a match: the empty state still
+              says so when no page, action or borrower matched. */}
+          {actionItems.length === 0 && borrowerItems.length === 0 && (
             <div className="cmdk__empty" role="status">
               No pages, actions, or borrowers match “{query.trim()}”.
             </div>
@@ -262,7 +311,7 @@ export function CommandPalette() {
                     label={item.action.label}
                     hint={item.action.hint}
                     onActivate={() => runItem(item)}
-                    onHover={() => setActiveIndex(i)}
+                    onHover={() => moveTo(i)}
                   />
                 );
               })}
@@ -286,7 +335,7 @@ export function CommandPalette() {
                     hint={`${item.lead.city}, ${item.lead.state} · ${item.lead.zip}`}
                     mono
                     onActivate={() => runItem(item)}
-                    onHover={() => setActiveIndex(i)}
+                    onHover={() => moveTo(i)}
                   />
                 );
               })}
@@ -298,6 +347,31 @@ export function CommandPalette() {
           )}
           {query.trim().length >= 2 && searchStatus === 'error' && (
             <div className="cmdk__status cmdk__status--error" role="status">Borrower search is temporarily unavailable.</div>
+          )}
+
+          {/* The fallback, after every match (and the same order as `items`,
+              so the running index stays in step). */}
+          {genieItems.length > 0 && (
+            <div className="cmdk__group" role="group" aria-label="Ask Genie">
+              <div className="cmdk__group-label">Ask Genie</div>
+              {genieItems.map((item) => {
+                runningIndex += 1;
+                const i = runningIndex;
+                return (
+                  <CommandRow
+                    key="ask-genie"
+                    index={i}
+                    optionId={optionId(i)}
+                    active={i === activeIndex}
+                    icon="sparkle"
+                    label={`Ask Genie: ${item.prompt}`}
+                    hint="Opens Genie with this question; you press Ask"
+                    onActivate={() => runItem(item)}
+                    onHover={() => moveTo(i)}
+                  />
+                );
+              })}
+            </div>
           )}
         </div>
 

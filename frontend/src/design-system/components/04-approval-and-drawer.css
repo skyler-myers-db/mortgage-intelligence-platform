@@ -137,8 +137,6 @@
 }
 .borrower-story__verdict--ok { color: var(--status-success-ink); }
 .borrower-story__verdict--warn { color: var(--status-warning-ink); }
-[data-theme="light"] .borrower-story__verdict--ok { color: var(--signal-success); }
-[data-theme="light"] .borrower-story__verdict--warn { color: var(--entrada-navy); }
 
 /* "Since your last login" personalized summary (Home, S4). The narrative
    sentence carries inline evidence numbers: each figure is a button that
@@ -181,7 +179,7 @@
 .login-summary__num:focus-visible {
   /* 2px/1px: focus-ring hairlines below the 4px token scale; intentional
      raw px, matching .portfolio-summary__claim:focus-visible. */
-  outline: 2px solid var(--accent-ink);
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
   outline-offset: 1px;
 }
 .login-summary__num-ico { opacity: 0.6; }
@@ -234,7 +232,7 @@
 }
 .portfolio-summary__claim:hover { filter: brightness(1.06); }
 .portfolio-summary__claim:focus-visible {
-  outline: 2px solid var(--accent-ink);
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
   outline-offset: 1px;
 }
 .portfolio-summary__claim--unverified {
@@ -251,8 +249,6 @@
 }
 .portfolio-summary__verdict--ok { color: var(--status-success-ink); }
 .portfolio-summary__verdict--warn { color: var(--status-warning-ink); }
-[data-theme="light"] .portfolio-summary__verdict--ok { color: var(--signal-success); }
-[data-theme="light"] .portfolio-summary__verdict--warn { color: var(--entrada-navy); }
 
 /* Outreach routing (Feature C): loan-officer assignment + follow-up reminder
    captured at approval time. */
@@ -286,8 +282,8 @@
   font-size: var(--fs-13);
 }
 .outreach-routing__select:focus-visible {
-  outline: calc(var(--sp-1) / 2) solid var(--accent);
-  outline-offset: calc(var(--sp-1) / 2);
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
 }
 .outreach-routing__confirm { display: flex; }
 
@@ -415,7 +411,7 @@
 }
 .approval__ico {
   width: 32px; height: 32px; border-radius: 8px;
-  background: var(--status-warning-soft-strong); color: var(--signal-warning);
+  background: var(--status-warning-soft-strong); color: var(--signal-warning-ink);
   display: grid; place-items: center; font-size: 16px;
   flex: 0 0 auto;
 }
@@ -444,7 +440,7 @@
 }
 .degraded-banner__ico {
   width: 32px; height: 32px; border-radius: 8px;
-  background: var(--status-warning-soft-strong); color: var(--signal-warning);
+  background: var(--status-warning-soft-strong); color: var(--signal-warning-ink);
   display: grid; place-items: center; font-size: 16px;
   flex: 0 0 auto;
 }

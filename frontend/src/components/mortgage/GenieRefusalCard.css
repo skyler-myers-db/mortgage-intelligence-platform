@@ -1,0 +1,91 @@
+/* ============================================================
+   GENIE REFUSAL CARD — helpful, compliant refusals
+   ------------------------------------------------------------
+   Audit 2026-09-21 (genie-05).
+
+   DOCUMENTED BEM EXTENSION of the prototype's `.genie-answer` block
+   (design_files/index.html defines the answer bubble, `.filter--question`
+   chips and `.btn--ghost`; it has no refusal state). A withheld turn now
+   carries, under its refusal sentence, one card:
+
+     .genie-answer__refusal            the card (inset, warning-toned rule)
+     .genie-answer__refusal-hdr/-title family label
+     .genie-answer__refusal-sentence   what Genie answers instead
+     .genie-answer__refusal-chips      2-3 guard-validated rephrase chips,
+                                       reusing `.filter--question` verbatim
+     .genie-answer__refusal-actions    Edit question / Reviewed vocabulary /
+                                       This was legitimate (`.btn--ghost`)
+     .genie-answer__refusal-reported   hash-only report confirmation
+     .genie-answer__refusal-error      report failure line
+
+   Tokens only; no new colors. The warning-soft surface matches the
+   existing "Governed refusal" chip tone so the card reads as part of the
+   same disclosure, not as a second answer.
+   ============================================================ */
+.genie-answer__refusal {
+  margin-top: var(--sp-3);
+  padding: var(--sp-3);
+  border: 1px solid var(--status-warning-line);
+  border-left-width: calc(var(--sp-1) / 2);
+  border-radius: var(--r-md);
+  background: var(--status-warning-soft);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.genie-answer__refusal-hdr {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.genie-answer__refusal-title {
+  font-size: var(--fs-11);
+  font-family: var(--font-mono);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: var(--status-warning-ink);
+}
+.genie-answer__refusal-sentence {
+  margin: 0;
+  font-size: var(--fs-13);
+  line-height: var(--lh-body);
+  color: var(--text-1);
+}
+.genie-answer__refusal-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+.genie-answer__refusal-chips .filter[disabled] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.genie-answer__refusal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-1);
+}
+.genie-answer__refusal-reported {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: var(--fs-11);
+  color: var(--text-3);
+}
+.genie-answer__refusal-error {
+  margin: 0;
+  font-size: var(--fs-11);
+  color: var(--signal-danger);
+}
+
+/* Light theme (WCAG 1.4.3). The title needs no override: it paints
+   --status-warning-ink, which carries an AA light value in tokens.css
+   (the prototype's warning ink), and per-selector light repaints of
+   status or brand hues are forbidden (tokenUsage.test.ts, responsive-02).
+   The light --signal-danger measures just under AA at 11px on the warm card
+   composite, so the report-failure line uses primary text ink there;
+   role="alert" and its wording carry the failure, not the hue.
+   genie-refusal.fixture.spec.ts measures both themes. */
+[data-theme="light"] .genie-answer__refusal-error { color: var(--text-1); }

@@ -1,4 +1,5 @@
-import { useEffect, useState, type CSSProperties, type ReactElement, type ReactNode } from 'react';
+import { useEffect, useId, useState, type CSSProperties, type ReactElement, type ReactNode } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { Link, Navigate, useParams } from 'react-router';
 import { api, ApiError } from '../lib/api';
 import type { Borrower360 as Borrower360Type } from '../types';
@@ -10,6 +11,8 @@ import { ScoreBadge } from '../components/mortgage/ScoreBadge';
 import { ConfidenceMeter } from '../components/mortgage/ConfidenceMeter';
 import { BorrowerTruthFlags } from '../components/mortgage/BorrowerTruthFlags';
 import { BorrowerProofDrawer } from '../components/mortgage/BorrowerProofDrawer';
+import { DecisionReceipt } from '../components/mortgage/DecisionReceipt';
+import { decisionOutcomeForStatus } from '../components/mortgage/DecisionReceipt.copy';
 import { TopLeadsQuickPick } from '../components/mortgage/TopLeadsQuickPick';
 import { Button, Chip, EvidenceChip } from '../components/Primitives';
 import { GlossaryTerm } from '../components/GlossaryTerm';
@@ -87,6 +90,22 @@ export default function Borrower360() {
     [id],
     { enabled: Boolean(id), queryKey: queryKeys.borrower(id) },
   );
+  // wow-stage-3: the lifecycle row carries the audit id of the latest
+  // decision; when it does, the hero offers the Decision receipt read back
+  // from that row. A 403 (actor outside the sales team) simply hides it.
+  const lifecycleQuery = useQuery({
+    queryKey: queryKeys.borrowerLifecycle(id),
+    queryFn: ({ signal }) => api.borrowerLifecycle(id!, signal),
+    enabled: Boolean(id),
+    staleTime: 30_000,
+    retry: false,
+  });
+  const latestDecisionAuditId = lifecycleQuery.data?.audit_event_id ?? null;
+  // Open state is keyed to the audit id, so moving to another borrower (or a
+  // newer decision) closes the receipt instead of reading a different row.
+  const [openDecisionAuditId, setOpenDecisionAuditId] = useState<string | null>(null);
+  const latestDecisionOpen = latestDecisionAuditId !== null && openDecisionAuditId === latestDecisionAuditId;
+  const latestDecisionRegionId = useId();
 
   // Borrower 360 is a per-borrower detail page; without an id in the URL
   // there is no borrower to show. Render a proper empty-state landing
@@ -292,9 +311,33 @@ export default function Borrower360() {
           <Chip variant={outreachVariant(b.outreach_status)}>
             Outreach {titleCaseStatus(b.outreach_status)}
           </Chip>
+          {latestDecisionAuditId && (
+            <Button
+              variant="ghost"
+              size="sm"
+              icon="audit"
+              aria-expanded={latestDecisionOpen}
+              aria-controls={latestDecisionRegionId}
+              onClick={() => setOpenDecisionAuditId(latestDecisionOpen ? null : latestDecisionAuditId)}
+              data-testid="latest-decision-toggle"
+            >
+              Latest decision
+            </Button>
+          )}
         </>
       }
     >
+      {latestDecisionAuditId && (
+        <div id={latestDecisionRegionId} hidden={!latestDecisionOpen}>
+          {latestDecisionOpen && (
+            <DecisionReceipt
+              auditEventId={latestDecisionAuditId}
+              decision={decisionOutcomeForStatus(lifecycleQuery.data?.approval_status)}
+              className="mb-grid"
+            />
+          )}
+        </div>
+      )}
       <div className="layoutA-grid">
         {/* Left column — Borrower dossier + trigger timeline stacked */}
         <div className="stack-grid">

@@ -1,0 +1,46 @@
+{
+  "protected_class": [
+    "Which segments have the most in-the-money borrowers right now?",
+    "Rank states by cash-out refinance opportunity and average equity.",
+    "How many borrowers could save at least 75 basis points by refinancing?"
+  ],
+  "unreviewed_criterion": [
+    "Which borrowers have the highest lead score in the HELOC segment?",
+    "Show the top 10 borrowers by rate spread across the current coverage.",
+    "Break down the Investor / Multi-Property segment by state and average current rate."
+  ],
+  "pii_request": [
+    "Show masked borrower IDs with score, segment, and offer for the top refi candidates.",
+    "How many borrowers in the retention segment have a competitor lien filed in the last 30 days?",
+    "Which ZIP codes have the most in-the-money refi candidates?"
+  ],
+  "instruction_override": [
+    "What is the average rate spread across the in-the-money cohort?",
+    "Which states have the most prime refi candidates?"
+  ],
+  "outreach_instruction": [
+    "How many borrowers cleared the rate-spread threshold this week?",
+    "Explain why the top HELOC candidates qualify and which offer fits each.",
+    "Which segments should our next campaign draw from, and why?"
+  ],
+  "scope_bypass": [
+    "Compare mean lead score by MSA for our top five markets.",
+    "How many borrowers are in the money by state?",
+    "Which offer should we use first for in-the-money borrowers?"
+  ],
+  "out_of_scope": [
+    "Where should we spend our next 10,000 outreach touches this week, and why?",
+    "Which state has the most cash-out opportunity right now?",
+    "How many borrowers are currently in the money and what is the average rate spread?"
+  ],
+  "output_policy": [
+    "How many borrowers are currently in the money?",
+    "Which segments drive the most refinance opportunity by state?",
+    "Show the top borrowers across all segments and explain why each is a good candidate."
+  ],
+  "unknown": [
+    "Which states have the most prime refi candidates?",
+    "How many HELOC-intent borrowers have at least 40% equity?",
+    "Which borrowers on our retention list have a competitor lien filed in the last 30 days?"
+  ]
+}

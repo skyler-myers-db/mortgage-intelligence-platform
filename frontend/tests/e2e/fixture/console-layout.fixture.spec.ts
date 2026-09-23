@@ -116,6 +116,9 @@ test.describe('Console rail fits its own panel', () => {
     for (const route of ['/', '/lead-queue']) {
       test(`${route} at ${viewport.width}x${viewport.height}: every Console control stays inside the 300px panel`, async ({ app, page }) => {
         await page.setViewportSize(viewport);
+        // Start dark: with nothing stored the app follows the OS, and
+        // Playwright emulates a light OS, so clicking Light would prove nothing.
+        await app.setTheme('dark');
         await app.gotoRoute(route);
         const panel = await app.openConsole();
 
@@ -135,6 +138,7 @@ test.describe('Console rail fits its own panel', () => {
         const compact = panel.getByRole('button', { name: 'Compact' });
         await expect(light).toBeVisible();
         await expect(compact).toBeVisible();
+        await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
         await light.click();
         await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
         await compact.click();

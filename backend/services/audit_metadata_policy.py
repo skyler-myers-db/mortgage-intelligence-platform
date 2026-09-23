@@ -187,6 +187,15 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         # Emitted by /leads when the request carried a city cohort.
         GENIE_CITY_FILTER_KEY,
         "limit",
+        # LEAD_EXPORT receipt (backend/api/leads_export.py): what the CSV a
+        # browser downloaded held, without the file. Every value is a hash,
+        # a count or a closed token; the filters themselves are only
+        # fingerprinted.
+        "export_scope",
+        "exported_row_count",
+        "csv_sha256",
+        "borrower_ids_sha256",
+        "filter_fingerprint",
         "approval_status",
         "outreach_status",
         "assigned_to_email",

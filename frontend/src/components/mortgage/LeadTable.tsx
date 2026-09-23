@@ -1,18 +1,15 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { useSearchParams } from 'react-router';
+import { Link, useSearchParams } from 'react-router';
 import { Icon } from '../Icon';
 import { Button } from '../Primitives';
 import { useApp } from '../AppContext';
 import { api } from '../../lib/api';
+import { auditEventHref } from '../../lib/auditLinks';
 import { queryKeys } from '../../lib/queryKeys';
-import {
-  buildLeadCsv,
-  describeLeadCsvExport,
-  downloadLeadCsv,
-  planLeadCsvExport,
-} from './LeadTable.csv';
+import { planLeadCsvExport } from './LeadTable.csv';
+import { useLeadCsvExport } from './useLeadCsvExport';
 import {
   LEAD_EXPANDED_PREVIEW_ESTIMATE_PX,
   LEAD_ROW_ESTIMATE_PX,
@@ -124,10 +121,9 @@ export function LeadTable({
   // Shared error surface: both the approval path and the sales-ops path
   // report into the single `.table-error` alert this shell renders.
   const [approvalError, setApprovalError] = useState<string | null>(null);
-  const [exportNotice, setExportNotice] = useState<string | null>(null);
   const {
     approvals, setApproval, setLastBorrowerId, openConsoleRecentActivity,
-    canApprove, actorEmail, sessionStatus,
+    canApprove, canAccessAdmin, actorEmail, sessionStatus,
   } = useApp();
   // Audit flow-02 / shell-06: non-approvers keep a VISIBLE but disabled gate.
   const approverGate = approverGateReason(canApprove, sessionStatus);
@@ -257,38 +253,31 @@ export function LeadTable({
   }
 
   /**
-   * Export as CSV. Client-side only: the bytes come from the real /api/leads
-   * payload the parent route already narrowed. We do NOT invent a server-side
-   * export endpoint or synthesize fields the payload doesn't carry — so PII
-   * stays suppressed by construction.
+   * Export as CSV. The bytes are built client-side from the real /api/leads
+   * payload the parent route already narrowed; there is no server-streamed
+   * export (an owner decision, audit tables-08 step 2) and no synthesized
+   * field — so PII stays suppressed by construction.
    *
    * Audit tables-08 (2026-09-21): the export used to serialise the raw
    * `leads` prop — ignoring the selection AND the sort — and its label
    * counted pre-gate rows, so it could announce "500 leads" and write zero.
    * It now writes the selection when one exists, otherwise the rows in their
-   * on-screen order, and every count is the post-eligibility count.
+   * on-screen order, and every count is the post-eligibility count. Wave 1a:
+   * the download waits for a LEAD_EXPORT ledger row (useLeadCsvExport) and
+   * the audit id is shown next to the button.
    */
   const csvExport = planLeadCsvExport(sortedLeads, approval.selectedIds);
   const csvExportCount = csvExport.rows.length;
   const csvExportNoun = csvExport.scope === 'selected_rows'
     ? 'selected'
     : csvExportCount === 1 ? 'lead' : 'leads';
+  const { state: exportState, exportCsv: runExport } = useLeadCsvExport();
+  const exporting = exportState.status === 'pending';
   function exportCsv() {
     if (csvExportCount === 0) return;
     const rowOrder = sortKey === 'rank' ? 'rank' : `${sortKey} ${sortDir}`;
-    downloadLeadCsv(buildLeadCsv(csvExport.rows, approvals, {
-      ...exportContext,
-      scope: csvExport.scope,
-      rowOrder,
-    }));
-    setExportNotice(describeLeadCsvExport(csvExport, rowOrder));
+    void runExport({ plan: csvExport, approvals, exportContext, rowOrder });
   }
-
-  useEffect(() => {
-    if (!exportNotice) return;
-    const t = window.setTimeout(() => setExportNotice(null), 8000);
-    return () => window.clearTimeout(t);
-  }, [exportNotice]);
 
   function toggleSort(key: SortKey) {
     if (key === 'rank') {
@@ -365,18 +354,40 @@ export function LeadTable({
           </div>
         </div>
         <div className="lead-table__header-actions">
+          {exportState.status === 'done' && (
+            <span className="muted fs-12" data-testid="lead-export-receipt">
+              Exported {exportState.rowCount.toLocaleString()} {exportState.rowCount === 1 ? 'row' : 'rows'}
+              {' · audit '}
+              {canAccessAdmin ? (
+                <Link className="mono" to={auditEventHref(exportState.receipt.audit_event_id)}>
+                  {exportState.receipt.audit_event_id}
+                </Link>
+              ) : (
+                <span className="mono">{exportState.receipt.audit_event_id}</span>
+              )}
+            </span>
+          )}
           <Button
             size="sm"
-            icon="export"
+            icon={exporting ? undefined : 'export'}
             onClick={exportCsv}
+            // Pending is aria-disabled, never native `disabled`: a focused
+            // button that turns disabled drops keyboard focus to <body>.
+            // useLeadCsvExport's in-flight guard ignores a second click.
             disabled={csvExportCount === 0}
+            aria-disabled={exporting || undefined}
+            aria-busy={exporting || undefined}
             data-testid="lead-export"
-            aria-label={`Export ${csvExportCount.toLocaleString()} ${csvExportNoun} as CSV`}
+            aria-label={exporting
+              ? 'Recording the export in the audit ledger'
+              : `Export ${csvExportCount.toLocaleString()} ${csvExportNoun} as CSV`}
             title={csvExportCount === 0 && csvExport.excluded > 0
               ? 'Every row in scope is excluded by the marketing-eligibility gate'
               : undefined}
           >
-            Export {csvExportCount.toLocaleString()} {csvExportNoun}
+            {exporting
+              ? 'Recording export…'
+              : `Export ${csvExportCount.toLocaleString()} ${csvExportNoun}`}
           </Button>
         </div>
       </div>
@@ -421,9 +432,14 @@ export function LeadTable({
           onSubmit={() => void sales.submitDisposition()}
         />
       )}
-      {exportNotice && (
+      {exportState.status === 'done' && exportState.notice && (
         <div role="status" aria-live="polite" className="table-success" data-testid="lead-export-notice">
-          {exportNotice}
+          {exportState.notice}
+        </div>
+      )}
+      {exportState.status === 'error' && (
+        <div role="alert" className="table-error" data-testid="lead-export-error">
+          {exportState.message}
         </div>
       )}
       {sales.salesToast && (
@@ -535,6 +551,7 @@ export function LeadTable({
                     salesBusy={sales.salesBusy}
                     salesTeamCount={salesTeam.length}
                     pendingApproval={Boolean(approval.pendingApproval[lead.borrower_id])}
+                    decisionReceipt={approval.decisionReceipts[lead.borrower_id] ?? null}
                     onToggleRow={(row, open) => {
                       setLastBorrowerId(row.borrower_id);
                       setExpanded(open ? null : row.borrower_id);

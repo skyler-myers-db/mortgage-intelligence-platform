@@ -155,8 +155,11 @@
   font-size: 10px;
   color: var(--text-3);
 }
-.map-legend__caption--degraded { color: var(--status-danger-ink); }
-[data-theme="light"] .map-legend__caption--degraded { color: var(--signal-danger); }
+/* Compound selector: the base .map-legend__caption rule below sets --text-3
+   at equal specificity and later in source, so the bare modifier never
+   painted (a light-only override used to mask it; 2026-09-21 audit
+   responsive-02). */
+.map-legend__caption.map-legend__caption--degraded { color: var(--status-danger-ink); }
 /* Secondary line on a ZIP tile while the overlay is active.
    font-size 10px: matches .zip-tile__count's hairline scale (no token
    below --fs-11; see the .map-legend__overlay-facts note). */
@@ -226,8 +229,8 @@
    inconsistent across Chromium/WebKit/Firefox; opt into the accent ring
    explicitly. Hole-finder round 2 #7, 2026-04-23. */
 .map-region:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
   stroke: var(--text-1);
   stroke-width: 1;
 }

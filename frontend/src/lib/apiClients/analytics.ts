@@ -14,6 +14,7 @@ import type {
   ExecutiveAnalyticsResponse,
   GeographyAnalyticsResponse,
   HomeSummary,
+  RateWindowResponse,
   SegmentAnalyticsResponse,
   SignalAnalyticsResponse,
 } from '../../types';
@@ -74,6 +75,12 @@ export const analyticsApi = {
 
   analyticsSignals: (signal?: AbortSignal, opts: AnalyticsQueryOptions = {}) =>
     getJson<SignalAnalyticsResponse>(analyticsPath('signals', opts), signal),
+
+  // "Why now" rate window (dataviz-08): the precomputed weekly series from
+  // mip.gold.rate_window_weekly. Unfiltered by design -- the book band is
+  // measured once per refresh over the whole fixed-rate book.
+  analyticsRateWindow: (signal?: AbortSignal) =>
+    getJson<RateWindowResponse>('/api/analytics/rate-window', signal),
 
   homeSummary: (signal?: AbortSignal) =>
     getJson<HomeSummary>('/api/home/summary', signal),

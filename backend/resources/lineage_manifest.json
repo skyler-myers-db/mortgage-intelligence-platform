@@ -384,6 +384,16 @@
           "object": "evidence_events",
           "label": "Gold evidence events",
           "note": "Append-only borrower-safe evidence stream citing this signal."
+        },
+        {
+          "id": "gold_rate_window_weekly",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "rate_window_weekly",
+          "label": "Gold weekly rate window",
+          "note": "Weekly FRED print against the current fixed-rate book's note-rate band, with the in-the-money count per week from the same fn_rate_spread / fn_in_the_money rule; the book is as-of the refresh anchor."
         }
       ]
     },

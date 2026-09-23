@@ -390,6 +390,18 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
         ),
     ),
     _descriptor(
+        "gold",
+        "rate_window_weekly",
+        title="Gold Rate Window Weekly",
+        description=(
+            "Why-now rate window: one row per FRED MORTGAGE30US week with that "
+            "week's market rate, the current fixed-rate book's note-rate band "
+            "(p25 / median / p75) and the count in the money at that week's rate "
+            "under the governed fn_rate_spread / fn_in_the_money rule. The book "
+            "is as-of the refresh anchor (book_as_of), not a portfolio history."
+        ),
+    ),
+    _descriptor(
         "semantics",
         "portfolio_headline_metric_view",
         title="Portfolio Headline Metric View",

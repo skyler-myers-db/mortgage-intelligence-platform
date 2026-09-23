@@ -45,6 +45,7 @@ _APP_ROLE_TABLE_PRIVILEGES: dict[str, tuple[str, ...]] = {
     "kpi_snapshots": ("SELECT",),
     "user_visits": ("SELECT", "INSERT"),
     "genie_feedback_requests": ("SELECT", "INSERT", "UPDATE"),
+    "genie_refusal_reports": ("SELECT", "INSERT", "UPDATE"),
 }
 
 _APP_ROLE_SEQUENCE_PRIVILEGES: dict[str, tuple[str, ...]] = {

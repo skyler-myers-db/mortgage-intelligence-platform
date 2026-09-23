@@ -3023,6 +3023,17 @@
               }
             ]
           },
+          "audit_event_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audit Event Id"
+          },
           "borrower_id": {
             "title": "Borrower Id",
             "type": "string"
@@ -4439,6 +4450,191 @@
           "lanes"
         ],
         "title": "DataEstateResponse",
+        "type": "object"
+      },
+      "DecisionReceipt": {
+        "description": "Public-safe projection of one decision row in ``mip_app.action_audit``.",
+        "properties": {
+          "approval_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approval Id"
+          },
+          "approver": {
+            "title": "Approver",
+            "type": "string"
+          },
+          "audit_event_id": {
+            "title": "Audit Event Id",
+            "type": "string"
+          },
+          "borrower_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Borrower Id"
+          },
+          "campaign_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campaign Id"
+          },
+          "channel": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Channel"
+          },
+          "copy_generation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Copy Generation Id"
+          },
+          "copy_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Copy Hash"
+          },
+          "correlation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Correlation Id"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "decision": {
+            "enum": [
+              "approved",
+              "rejected",
+              "held"
+            ],
+            "title": "Decision",
+            "type": "string"
+          },
+          "event_type": {
+            "title": "Event Type",
+            "type": "string"
+          },
+          "evidence_assets": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Evidence Assets",
+            "type": "array"
+          },
+          "evidence_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Evidence Ids",
+            "type": "array"
+          },
+          "offer_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Offer Code"
+          },
+          "offer_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Offer Label"
+          },
+          "rationale_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rationale Code"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "variant_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Variant Name"
+          }
+        },
+        "required": [
+          "audit_event_id",
+          "event_type",
+          "decision",
+          "approver",
+          "created_at"
+        ],
+        "title": "DecisionReceipt",
         "type": "object"
       },
       "DimensionFacetCount": {
@@ -6039,6 +6235,39 @@
             "title": "Reasoning Trace",
             "type": "array"
           },
+          "refusal_reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "protected_class",
+                  "unreviewed_criterion",
+                  "pii_request",
+                  "instruction_override",
+                  "outreach_instruction",
+                  "scope_bypass",
+                  "out_of_scope",
+                  "output_policy",
+                  "unknown"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refusal Reason"
+          },
+          "refusal_report_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refusal Report Hash"
+          },
           "row_count": {
             "anyOf": [
               {
@@ -6382,6 +6611,102 @@
           "content"
         ],
         "title": "GenieReasoningStep",
+        "type": "object"
+      },
+      "GenieRefusalReportRequest": {
+        "description": "Hash-only report body. There is deliberately no field for prompt text.",
+        "properties": {
+          "conversation_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversation Id"
+          },
+          "message_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message Id"
+          },
+          "question_hash": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Question Hash",
+            "type": "string"
+          },
+          "refusal_reason": {
+            "enum": [
+              "protected_class",
+              "unreviewed_criterion",
+              "pii_request",
+              "instruction_override",
+              "outreach_instruction",
+              "scope_bypass",
+              "out_of_scope",
+              "output_policy",
+              "unknown"
+            ],
+            "title": "Refusal Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "question_hash",
+          "refusal_reason"
+        ],
+        "title": "GenieRefusalReportRequest",
+        "type": "object"
+      },
+      "GenieRefusalReportResponse": {
+        "properties": {
+          "accepted": {
+            "title": "Accepted",
+            "type": "boolean"
+          },
+          "audit_event_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audit Event Id"
+          },
+          "duplicate": {
+            "title": "Duplicate",
+            "type": "boolean"
+          },
+          "report_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Id"
+          }
+        },
+        "required": [
+          "accepted",
+          "duplicate"
+        ],
+        "title": "GenieRefusalReportResponse",
         "type": "object"
       },
       "GenieSessionDetailResponse": {
@@ -8627,6 +8952,121 @@
           "assigned_at"
         ],
         "title": "LeadAssignment",
+        "type": "object"
+      },
+      "LeadExportReceipt": {
+        "description": "The ledger entry the download waits for.",
+        "properties": {
+          "actor": {
+            "title": "Actor",
+            "type": "string"
+          },
+          "audit_event_id": {
+            "title": "Audit Event Id",
+            "type": "string"
+          },
+          "borrower_ids_sha256": {
+            "title": "Borrower Ids Sha256",
+            "type": "string"
+          },
+          "csv_sha256": {
+            "title": "Csv Sha256",
+            "type": "string"
+          },
+          "event_type": {
+            "const": "LEAD_EXPORT",
+            "default": "LEAD_EXPORT",
+            "title": "Event Type",
+            "type": "string"
+          },
+          "filter_fingerprint": {
+            "title": "Filter Fingerprint",
+            "type": "string"
+          },
+          "recorded_at": {
+            "title": "Recorded At",
+            "type": "string"
+          },
+          "row_count": {
+            "title": "Row Count",
+            "type": "integer"
+          },
+          "scope": {
+            "enum": [
+              "selected",
+              "loaded"
+            ],
+            "title": "Scope",
+            "type": "string"
+          }
+        },
+        "required": [
+          "audit_event_id",
+          "actor",
+          "scope",
+          "row_count",
+          "csv_sha256",
+          "borrower_ids_sha256",
+          "filter_fingerprint",
+          "recorded_at"
+        ],
+        "title": "LeadExportReceipt",
+        "type": "object"
+      },
+      "LeadExportReceiptRequest": {
+        "description": "What the client declares about the file it is about to download.",
+        "properties": {
+          "borrower_ids": {
+            "description": "Masked borrower ids in the order the file holds them.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 5000,
+            "minItems": 1,
+            "title": "Borrower Ids",
+            "type": "array"
+          },
+          "borrower_ids_sha256": {
+            "description": "SHA-256 (hex) of the compact JSON array of borrower_ids, computed client-side; the server recomputes it from borrower_ids and refuses the receipt on a mismatch.",
+            "title": "Borrower Ids Sha256",
+            "type": "string"
+          },
+          "csv_sha256": {
+            "description": "SHA-256 (hex) of the exact CSV bytes handed to the download.",
+            "title": "Csv Sha256",
+            "type": "string"
+          },
+          "filters": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "The Lead Queue query parameters the exported rows were read with (the same string the CSV's `# filters=` metadata line carries). Only their fingerprint is written to the ledger.",
+            "title": "Filters",
+            "type": "object"
+          },
+          "row_count": {
+            "maximum": 5000.0,
+            "minimum": 1.0,
+            "title": "Row Count",
+            "type": "integer"
+          },
+          "scope": {
+            "enum": [
+              "selected",
+              "loaded"
+            ],
+            "title": "Scope",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope",
+          "row_count",
+          "csv_sha256",
+          "borrower_ids",
+          "borrower_ids_sha256"
+        ],
+        "title": "LeadExportReceiptRequest",
         "type": "object"
       },
       "LeadOutcome": {
@@ -11785,6 +12225,215 @@
           "borrower_count"
         ],
         "title": "RateSpreadBucket",
+        "type": "object"
+      },
+      "RateWindowProvenance": {
+        "description": "Evidence manifest for the series: every table it was read from.",
+        "properties": {
+          "book_as_of": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Refresh anchor of the book distribution; the same on every week.",
+            "title": "Book As Of"
+          },
+          "book_source": {
+            "description": "The book the note-rate band and itm_count were measured over.",
+            "title": "Book Source",
+            "type": "string"
+          },
+          "gold_source": {
+            "description": "The precomputed gold table the endpoint reads.",
+            "title": "Gold Source",
+            "type": "string"
+          },
+          "market_rate_source": {
+            "description": "Weekly market rate source (FRED MORTGAGE30US).",
+            "title": "Market Rate Source",
+            "type": "string"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "refreshed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refreshed At"
+          },
+          "rule_source": {
+            "description": "The UC functions that decide in the money.",
+            "title": "Rule Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "market_rate_source",
+          "book_source",
+          "gold_source",
+          "rule_source",
+          "note"
+        ],
+        "title": "RateWindowProvenance",
+        "type": "object"
+      },
+      "RateWindowResponse": {
+        "properties": {
+          "book_as_of": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Refresh anchor of the book distribution: today's book against the historical rate.",
+            "title": "Book As Of"
+          },
+          "book_lien_count": {
+            "description": "Active fixed-rate first liens in the current book (the same on every week).",
+            "minimum": 0.0,
+            "title": "Book Lien Count",
+            "type": "integer"
+          },
+          "provenance": {
+            "$ref": "#/components/schemas/RateWindowProvenance"
+          },
+          "series_id": {
+            "description": "FRED series code, MORTGAGE30US.",
+            "title": "Series Id",
+            "type": "string"
+          },
+          "thresholds": {
+            "$ref": "#/components/schemas/RateWindowThresholds"
+          },
+          "weeks": {
+            "items": {
+              "$ref": "#/components/schemas/RateWindowWeek"
+            },
+            "title": "Weeks",
+            "type": "array"
+          }
+        },
+        "required": [
+          "series_id",
+          "weeks",
+          "book_lien_count",
+          "thresholds",
+          "provenance"
+        ],
+        "title": "RateWindowResponse",
+        "type": "object"
+      },
+      "RateWindowThresholds": {
+        "description": "The governed in-the-money thresholds applied to every week.\n\nBoth are ``None`` only when the fixed-rate book is empty (there was no\nrow to carry them from); the UI then draws no reference line.",
+        "properties": {
+          "min_equity_pct": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Equity Pct"
+          },
+          "min_spread_bps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Spread Bps"
+          }
+        },
+        "title": "RateWindowThresholds",
+        "type": "object"
+      },
+      "RateWindowWeek": {
+        "description": "One FRED week measured against the current book.",
+        "properties": {
+          "book_median_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Median note rate of the current fixed-rate book, in percent. None when the book is empty.",
+            "title": "Book Median Pct"
+          },
+          "book_p25_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "25th-percentile note rate of the current fixed-rate book, in percent.",
+            "title": "Book P25 Pct"
+          },
+          "book_p75_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "75th-percentile note rate of the current fixed-rate book, in percent.",
+            "title": "Book P75 Pct"
+          },
+          "is_latest": {
+            "default": false,
+            "description": "True on the most recent week (the current market print).",
+            "title": "Is Latest",
+            "type": "boolean"
+          },
+          "itm_count": {
+            "description": "Liens in the money at this week's market rate: fn_in_the_money(fn_rate_spread(...)) summed over the current fixed-rate book with the governed thresholds.",
+            "minimum": 0.0,
+            "title": "Itm Count",
+            "type": "integer"
+          },
+          "market_rate_pct": {
+            "description": "FRED 30-year fixed rate for the week, in percent.",
+            "title": "Market Rate Pct",
+            "type": "number"
+          },
+          "week": {
+            "description": "Week-starting Monday, ISO date (YYYY-MM-DD).",
+            "title": "Week",
+            "type": "string"
+          }
+        },
+        "required": [
+          "week",
+          "market_rate_pct",
+          "itm_count"
+        ],
+        "title": "RateWindowWeek",
         "type": "object"
       },
       "RumAcceptedResponse": {
@@ -15141,6 +15790,29 @@
         ]
       }
     },
+    "/api/analytics/rate-window": {
+      "get": {
+        "deprecated": true,
+        "description": "Weekly market rate against the current book, with in-the-money counts.\n\nThe book distribution is as-of the refresh anchor (``book_as_of``) and\napplied to every historical week; the provenance block says so and\nnames every table the series was read from.",
+        "operationId": "get_api_analytics_rate_window_rate_window",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RateWindowResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Rate Window",
+        "tags": [
+          "analytics"
+        ]
+      }
+    },
     "/api/analytics/segments": {
       "get": {
         "deprecated": true,
@@ -15749,6 +16421,23 @@
               ],
               "title": "Until"
             }
+          },
+          {
+            "in": "query",
+            "name": "event_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Event Id"
+            }
           }
         ],
         "responses": {
@@ -15970,6 +16659,23 @@
               ],
               "title": "Until"
             }
+          },
+          {
+            "in": "query",
+            "name": "event_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Event Id"
+            }
           }
         ],
         "responses": {
@@ -16059,6 +16765,50 @@
           }
         },
         "summary": "List My Events",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
+    "/api/audit/receipt/{audit_event_id}": {
+      "get": {
+        "deprecated": true,
+        "description": "Return the receipt for one decision row the caller may see.",
+        "operationId": "get_api_audit_receipt_audit_event_id_read_decision_receipt",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "audit_event_id",
+            "required": true,
+            "schema": {
+              "title": "Audit Event Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read Decision Receipt",
         "tags": [
           "audit"
         ]
@@ -16976,6 +17726,59 @@
           }
         },
         "summary": "Genie Message Submit",
+        "tags": [
+          "genie"
+        ]
+      }
+    },
+    "/api/genie/refusal-report": {
+      "post": {
+        "deprecated": true,
+        "description": "Record a hash-only false-positive report for a governed refusal.\n\nThe actor comes from the edge identity header. The report row and its\n``GENIE_REFUSAL_REPORT`` audit event commit together\n(``record_genie_refusal_report``); a replay for the same actor, hash and\nfamily is acknowledged as a duplicate without a second row.",
+        "operationId": "post_api_genie_refusal_report_genie_refusal_report",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenieRefusalReportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenieRefusalReportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Genie Refusal Report",
         "tags": [
           "genie"
         ]
@@ -19296,6 +20099,59 @@
           }
         },
         "summary": "List Leads",
+        "tags": [
+          "leads"
+        ]
+      }
+    },
+    "/api/leads/export-receipt": {
+      "post": {
+        "deprecated": true,
+        "description": "Write the ``LEAD_EXPORT`` ledger row a CSV download must wait for.\n\nThe request correlation id is recorded by the audit store itself; no\nbody or header value is copied into the row's identifier columns.",
+        "operationId": "post_api_leads_export_receipt_create_lead_export_receipt",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LeadExportReceiptRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeadExportReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Lead Export Receipt",
         "tags": [
           "leads"
         ]
@@ -22624,6 +23480,28 @@
         ]
       }
     },
+    "/api/v1/analytics/rate-window": {
+      "get": {
+        "description": "Weekly market rate against the current book, with in-the-money counts.\n\nThe book distribution is as-of the refresh anchor (``book_as_of``) and\napplied to every historical week; the provenance block says so and\nnames every table the series was read from.",
+        "operationId": "get_api_v1_analytics_rate_window_rate_window",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RateWindowResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Rate Window",
+        "tags": [
+          "analytics"
+        ]
+      }
+    },
     "/api/v1/analytics/segments": {
       "get": {
         "operationId": "get_api_v1_analytics_segments_segments",
@@ -23228,6 +24106,23 @@
               ],
               "title": "Until"
             }
+          },
+          {
+            "in": "query",
+            "name": "event_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Event Id"
+            }
           }
         ],
         "responses": {
@@ -23448,6 +24343,23 @@
               ],
               "title": "Until"
             }
+          },
+          {
+            "in": "query",
+            "name": "event_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Event Id"
+            }
           }
         ],
         "responses": {
@@ -23536,6 +24448,49 @@
           }
         },
         "summary": "List My Events",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
+    "/api/v1/audit/receipt/{audit_event_id}": {
+      "get": {
+        "description": "Return the receipt for one decision row the caller may see.",
+        "operationId": "get_api_v1_audit_receipt_audit_event_id_read_decision_receipt",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "audit_event_id",
+            "required": true,
+            "schema": {
+              "title": "Audit Event Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read Decision Receipt",
         "tags": [
           "audit"
         ]
@@ -24435,6 +25390,58 @@
           }
         },
         "summary": "Genie Message Submit",
+        "tags": [
+          "genie"
+        ]
+      }
+    },
+    "/api/v1/genie/refusal-report": {
+      "post": {
+        "description": "Record a hash-only false-positive report for a governed refusal.\n\nThe actor comes from the edge identity header. The report row and its\n``GENIE_REFUSAL_REPORT`` audit event commit together\n(``record_genie_refusal_report``); a replay for the same actor, hash and\nfamily is acknowledged as a duplicate without a second row.",
+        "operationId": "post_api_v1_genie_refusal_report_genie_refusal_report",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenieRefusalReportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenieRefusalReportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Genie Refusal Report",
         "tags": [
           "genie"
         ]
@@ -26735,6 +27742,58 @@
           }
         },
         "summary": "List Leads",
+        "tags": [
+          "leads"
+        ]
+      }
+    },
+    "/api/v1/leads/export-receipt": {
+      "post": {
+        "description": "Write the ``LEAD_EXPORT`` ledger row a CSV download must wait for.\n\nThe request correlation id is recorded by the audit store itself; no\nbody or header value is copied into the row's identifier columns.",
+        "operationId": "post_api_v1_leads_export_receipt_create_lead_export_receipt",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LeadExportReceiptRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeadExportReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Lead Export Receipt",
         "tags": [
           "leads"
         ]

@@ -441,6 +441,24 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
     for field, value in _metadata_values_for(metadata, {"activation_status"}):
         if value is not None and str(value) not in _ACTIVATION_STATUSES:
             raise AuditMetadataValueViolation(field, "must be a governed activation outbox status")
+    # LEAD_EXPORT receipt: a closed scope token, a bounded count and three
+    # full-width SHA-256 digests. Nothing free-form can ride on these keys.
+    for field, value in _metadata_values_for(metadata, {"export_scope"}):
+        if value is not None and str(value) not in {"selected", "loaded"}:
+            raise AuditMetadataValueViolation(field, "must be a governed lead export scope")
+    for field, value in _metadata_values_for(metadata, {"exported_row_count"}):
+        if value is None:
+            continue
+        try:
+            validate_row_count(value)
+        except ValueError as exc:
+            raise AuditMetadataValueViolation(field, str(exc)) from exc
+    for field, value in _metadata_values_for(
+        metadata,
+        {"csv_sha256", "borrower_ids_sha256", "filter_fingerprint"},
+    ):
+        if value is not None and re.fullmatch(r"[0-9a-f]{64}", str(value)) is None:
+            raise AuditMetadataValueViolation(field, "must be a SHA-256 hex digest")
     for field, value in _metadata_values_for(metadata, {"workflow_id"}):
         if value is not None and str(value) not in _GROWTH_AGENT_WORKFLOWS:
             raise AuditMetadataValueViolation(field, "must be a governed growth-agent workflow id")
