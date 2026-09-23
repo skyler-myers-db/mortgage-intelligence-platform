@@ -160,6 +160,7 @@ describe('LastLoginSummary (the answer band WHY NOW column)', () => {
       act(() => chip.click());
       expect(setDrawer).toHaveBeenCalledTimes(1);
       const source = setDrawer.mock.calls[0][0] as DrawerSource;
+      expect(source.title).toMatch(/^Since your last login — /);
       const baseline = (source.signals ?? []).find((signal) => signal.label === 'Baseline');
       expect(baseline?.source).toMatch(/^kpi_snapshots\./);
       expect(source.assetPath).toBe('mip.semantics.portfolio_headline_metric_view');
@@ -215,6 +216,8 @@ describe('LastLoginSummary (the answer band WHY NOW column)', () => {
     expect(triggerLink(0)).toBe('/lead-queue');
     act(() => chips()[0].click());
     const source = setDrawer.mock.calls[0][0] as DrawerSource;
+    // Titled by the band the chip sits in; the "Your book today" card is gone.
+    expect(source.title).toBe("Today's briefing — marketable borrowers");
     const signalLabels = (source.signals ?? []).map((signal) => signal.label);
     expect(signalLabels).not.toContain('Baseline');
     expect(source.assetPath).toBe('mip.semantics.portfolio_headline_metric_view');
