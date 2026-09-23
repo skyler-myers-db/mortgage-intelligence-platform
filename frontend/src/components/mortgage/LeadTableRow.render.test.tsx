@@ -161,7 +161,8 @@ describe('LeadTableRow display fallbacks', () => {
     // whose accessible name spells it out.
     const more = document.querySelector('.lead-table__more');
     expect(more?.textContent).toBe('+1');
-    expect(more?.getAttribute('aria-label')).toBe('1 more statuses: Owners: Multi-owner (3)');
+    // One hidden value reads in the singular ("1 more status", not "statuses").
+    expect(more?.getAttribute('aria-label')).toBe('1 more status: Owners: Multi-owner (3)');
     expect(more?.classList.contains('chip--neutral')).toBe(true);
     expect(more?.classList.contains('chip--compact')).toBe(true);
   });

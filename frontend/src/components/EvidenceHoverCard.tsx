@@ -36,7 +36,12 @@ export interface EvidenceHoverApi {
   hoverCard: ReactNode;
 }
 
-export function useEvidenceHoverCard(source?: DrawerSource): EvidenceHoverApi {
+export interface EvidenceHoverOptions {
+  /** Call-to-action line; defaults to the evidence-drawer CTA of an EvidenceChip. */
+  cta?: string;
+}
+
+export function useEvidenceHoverCard(source?: DrawerSource, options: EvidenceHoverOptions = {}): EvidenceHoverApi {
   const anchorElRef = useRef<HTMLElement | null>(null);
   const timerRef = useRef<number | null>(null);
   const [coords, setCoords] = useState<HoverCoords | null>(null);
@@ -131,7 +136,7 @@ export function useEvidenceHoverCard(source?: DrawerSource): EvidenceHoverApi {
                 <span className="evidence-hovercard__signal-value mono">{signal.value}</span>
               </div>
             )}
-            <div className="evidence-hovercard__cta">Click to open full evidence →</div>
+            <div className="evidence-hovercard__cta">{options.cta ?? 'Click to open full evidence →'}</div>
           </div>,
           document.body,
         )

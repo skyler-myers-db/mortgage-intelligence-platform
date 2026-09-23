@@ -111,6 +111,14 @@ test.describe('one-line rows and the merged Status cell', () => {
     expect(spoken).toMatch(/^3 more statuses: /);
     expect(spoken).toContain('Assigned to: Summit LO 01');
     expect(spoken).not.toContain('DNC');
+    // Its hover card says what activating it does: it expands the row, it
+    // opens no evidence drawer.
+    await more.hover();
+    const card = page.locator('.evidence-hovercard');
+    await expect(card).toBeVisible();
+    await expect(card.locator('.evidence-hovercard__cta')).toHaveText('Click to expand the row →');
+    await page.mouse.move(0, 0);
+    await expect(card).toHaveCount(0);
     // DNC plus workflow state still fits one row at the density token.
     expect(await rowHeight(page.locator(ROWS).nth(2))).toBe(44);
 

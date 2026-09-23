@@ -150,13 +150,13 @@ export function LeadTableRow({
     ),
     relationship: () => <LeadRelationshipCell lead={lead} onExpand={expand} />,
     assignment: () => (
-      <LeadWorkflowFieldCell lead={lead} keys={['assignment']} noun="assignment details" empty="Unassigned" onExpand={expand} />
+      <LeadWorkflowFieldCell lead={lead} keys={['assignment']} noun={['assignment detail', 'assignment details']} empty="Unassigned" onExpand={expand} />
     ),
     outreach: () => (
-      <LeadWorkflowFieldCell lead={lead} keys={['outreach', 'aging']} noun="outreach details" empty="No outreach" onExpand={expand} />
+      <LeadWorkflowFieldCell lead={lead} keys={['outreach', 'aging']} noun={['outreach detail', 'outreach details']} empty="No outreach" onExpand={expand} />
     ),
     lastTouch: () => (
-      <LeadWorkflowFieldCell lead={lead} keys={['last_touch']} noun="contact details" empty="No contact logged" onExpand={expand} />
+      <LeadWorkflowFieldCell lead={lead} keys={['last_touch']} noun={['contact detail', 'contact details']} empty="No contact logged" onExpand={expand} />
     ),
     segments: () => (
       <td>
@@ -172,7 +172,7 @@ export function LeadTableRow({
           )}
           <LeadTableOverflowChip
             items={moreSegments.map((code) => ({ field: 'Segment', value: safeSegmentName(code) ?? 'Unknown segment' }))}
-            noun="segments"
+            noun={['segment', 'segments']}
             source={SEGMENT_SOURCE}
             onActivate={expand}
           />

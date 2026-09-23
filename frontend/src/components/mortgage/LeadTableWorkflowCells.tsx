@@ -16,7 +16,7 @@
  */
 import type { LeadSummary } from '../../types';
 import { Chip } from '../Primitives';
-import { LeadTableOverflowChip, type LeadOverflowItem } from './LeadTableOverflowChip';
+import { LeadTableOverflowChip, type LeadOverflowItem, type LeadOverflowNoun } from './LeadTableOverflowChip';
 import { leadComplianceFlags, leadWorkflowStates, type LeadStatusEntry } from './LeadTable.status';
 
 const WORKFLOW_SOURCE = { title: 'Workflow status', assetPath: 'mip_app.lead_assignments' } as const;
@@ -70,7 +70,7 @@ function PrimaryWithOverflow({
   onExpand,
 }: {
   entries: readonly LeadStatusEntry[];
-  noun: string;
+  noun: LeadOverflowNoun;
   onExpand: () => void;
 }) {
   const [primary, ...rest] = entries;
@@ -91,7 +91,7 @@ export function LeadStatusCell({ lead, onExpand }: { lead: LeadSummary; onExpand
     <td className="lead-table__status-cell" data-testid={`lead-status-${lead.borrower_id}`}>
       <div className="lead-table__status">
         <LeadComplianceChips lead={lead} />
-        <PrimaryWithOverflow entries={states} noun="statuses" onExpand={onExpand} />
+        <PrimaryWithOverflow entries={states} noun={['status', 'statuses']} onExpand={onExpand} />
         {states.length === 0 && !hasFlags && <LeadEmptyCell spoken="No workflow activity" />}
       </div>
     </td>
@@ -110,7 +110,7 @@ export function LeadRelationshipCell({ lead, onExpand }: { lead: LeadSummary; on
     <td>
       <div className="lead-table__status">
         <LeadComplianceChips lead={lead} />
-        <PrimaryWithOverflow entries={entries} noun="owner details" onExpand={onExpand} />
+        <PrimaryWithOverflow entries={entries} noun={['owner detail', 'owner details']} onExpand={onExpand} />
         {entries.length === 0 && !hasFlags && <LeadEmptyCell spoken="No first-party relationship" />}
       </div>
     </td>
@@ -127,7 +127,7 @@ export function LeadWorkflowFieldCell({
 }: {
   lead: LeadSummary;
   keys: ReadonlyArray<LeadStatusEntry['key']>;
-  noun: string;
+  noun: LeadOverflowNoun;
   empty: string;
   onExpand: () => void;
 }) {
