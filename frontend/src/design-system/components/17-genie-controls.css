@@ -1,49 +1,18 @@
 /* ============================================================
-   GENIE CONVERSATIONAL CONTROLS, PAGE-CONTEXT ENTRY POINTS AND
-   ANSWER TOOLBAR (audit 2026-09-21 wave 1: genie-03, genie-04, genie-06)
+   GENIE PAGE-CONTEXT ENTRY POINTS (audit 2026-09-21 wave 1: genie-04)
 
-   Every rule here is an additive BEM extension of a prototype block. The
-   prototype (design_files/index.html) has no Stop, Edit or Regenerate on
-   its chat bubbles (lines 741-760), no assistant affordance on `.kpi` or
-   `.seg-card`, and no toolbar under a Genie answer. Shapes reuse the
-   existing `.btn .btn--ghost .btn--sm` and `.chip` vocabulary; only
-   placement is new. Tokens only: no literal colors or pixel values.
+   Every rule here is an additive BEM extension of a prototype block: the
+   prototype (design_files/index.html) has no assistant affordance on
+   `.kpi` or `.seg-card`. Shapes reuse the existing `.btn .btn--ghost
+   .btn--sm` vocabulary; only placement is new. Tokens only: no literal
+   colors or pixel values.
+
+   The lane's chat and answer rules (genie-03 turn controls, genie-06
+   answer toolbar) render only once the lazy Genie chunk has loaded, so
+   they ship in lazy stylesheets beside their components
+   (components/mortgage/GenieTurnActions.css, GenieAnswerToolbar.css) and
+   stay out of the initial CSS budget.
    ============================================================ */
-
-/* Turn controls under the progress bubble (Stop). */
-.genie__turn-controls {
-  display: flex;
-  gap: var(--sp-2);
-  margin-top: var(--sp-2);
-}
-
-/* Per-bubble actions: Edit under a question; Regenerate / Retry under an
-   answer. The question row hugs the right edge like the bubble above it
-   (`.genie__body` and `.genie-thread` are flex columns). */
-.genie__msg-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--sp-1);
-}
-.genie__msg-actions--user {
-  align-self: flex-end;
-  max-width: 92%;
-  /* Tuck the row under its bubble instead of a full column gap away. */
-  margin-top: calc(var(--sp-2) * -1);
-}
-.genie__msg--ai .genie__msg-actions {
-  margin-top: var(--sp-2);
-}
-
-/* A stopped turn: the question stays in the transcript and the answer slot
-   says the reply was discarded. */
-.genie__msg--stopped .bubble {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--sp-2);
-  color: var(--text-3);
-}
 
 /* "Ask Genie about this" entry point (genie-04): a ghost button tinted with
    the accent ink so it reads as a Genie affordance, not a generic action.
@@ -83,43 +52,4 @@
   position: relative;
   z-index: var(--z-raised-2);
   display: inline-flex;
-}
-
-/* Answer toolbar (genie-06): Copy SQL / Copy answer under the data. A
-   documented BEM extension of `.genie-answer`; the prototype's Genie bubble
-   (design_files/index.html:741-760) has no toolbar. */
-.genie-answer__toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--sp-2);
-  margin-top: var(--sp-3);
-}
-.genie-answer__toolbar-status {
-  color: var(--text-3);
-  font-family: var(--font-mono);
-  font-size: var(--fs-11);
-}
-/* Denied clipboard: the text is shown selected so it can still be copied. */
-.genie-answer__copy-fallback {
-  inline-size: 100%;
-}
-.genie-answer__copy-fallback textarea {
-  box-sizing: border-box;
-  inline-size: 100%;
-  min-block-size: calc(var(--sp-16) * 2);
-  padding: var(--sp-2);
-  background: var(--bg-1);
-  border: 1px solid var(--line-1);
-  border-radius: var(--r-md);
-  color: var(--text-1);
-  font-family: var(--font-mono);
-  font-size: var(--fs-11);
-  line-height: var(--lh-body);
-  resize: vertical;
-}
-.genie-answer__copy-fallback-hint {
-  margin: var(--sp-1) 0 0;
-  color: var(--text-3);
-  font-size: var(--fs-11);
 }

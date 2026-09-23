@@ -16,8 +16,11 @@
  *
  * `.genie__msg-actions` is a documented BEM extension of the prototype's
  * `.genie__msg` (design_files/index.html:741-760 has no controls on a
- * bubble). The buttons reuse `.btn .btn--ghost .btn--sm`.
+ * bubble). The buttons reuse `.btn .btn--ghost .btn--sm`. Their rules (and
+ * the Stop row / Stopped note GenieChatBody renders) live in the lazy
+ * GenieTurnActions.css, out of the initial stylesheet.
  */
+import './GenieTurnActions.css';
 
 export const REGENERATE_TITLE =
   'Ask this question again as a new Genie turn. A Genie thread cannot rewrite its history, so the earlier answer stays.';

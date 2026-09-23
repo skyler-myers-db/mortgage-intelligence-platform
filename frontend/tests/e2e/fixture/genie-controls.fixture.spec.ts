@@ -198,11 +198,14 @@ test.describe('Genie conversational controls (genie-03)', () => {
     await expect(dialog.locator('.genie-progress')).toBeVisible();
     await expect(dialog.getByRole('button', { name: 'Start a new Genie thread' })).toBeDisabled();
     await expect.poll(() => progressPolls).toBeGreaterThan(0);
+    // The turn-control rules ship in a lazy stylesheet with the Genie chunk.
+    await expect(dialog.locator('.genie__turn-controls')).toHaveCSS('display', 'flex');
 
     await dialog.getByRole('button', { name: 'Stop this Genie turn' }).click();
 
     await expect(dialog.locator('.genie__msg--stopped')).toBeVisible();
     await expect(dialog.locator('.genie__msg--stopped')).toContainText('Stopped');
+    await expect(dialog.locator('.genie__msg--stopped .bubble')).toHaveCSS('display', 'flex');
     await expect(composer).toHaveValue('How many borrowers are in the money?');
     await expect(composer).toBeFocused();
     await expect(dialog.locator('.genie-progress')).toHaveCount(0);
@@ -268,11 +271,30 @@ test.describe('Genie conversational controls (genie-03)', () => {
 
     const regenerate = dialog.getByRole('button', { name: 'Regenerate answer' });
     await expect(regenerate).toHaveAttribute('title', /cannot rewrite its history/);
+    const questionActions = dialog.locator('.genie__msg-actions--user').first();
+    await expect(questionActions).toHaveCSS('display', 'flex');
+    await expect(questionActions).toHaveCSS('align-self', 'flex-end');
     await regenerate.click();
     await expect(dialog).toContainText('Second answer: 3,081 borrowers.');
     await expect(dialog).toContainText('First answer: 3,080 borrowers.');
     expect(questions).toEqual(['How many borrowers are in the money?', 'How many borrowers are in the money?']);
     await expect(page.locator('.genie__msg--user', { hasText: 'How many borrowers are in the money?' })).toHaveCount(2);
+  });
+});
+
+test.describe('Genie lazy control styles', () => {
+  test('/ask-genie loads the turn-action and answer-toolbar stylesheets with its own chunk', async ({ app, mockApi, page }) => {
+    mockApi.register<GenieSubmitResult>('POST', '/api/genie/message/submit', () => json(completedSubmit(answer())));
+    await app.gotoRoute('/ask-genie');
+    const main = page.locator('#main-content');
+    await main.getByRole('textbox', { name: 'Ask Genie — question' }).fill('How many borrowers are in the money?');
+    await main.getByRole('button', { name: 'Ask Genie', exact: true }).click();
+
+    const questionActions = main.locator('.genie__msg-actions--user').first();
+    await expect(questionActions.getByRole('button', { name: 'Regenerate answer' })).toBeVisible();
+    await expect(questionActions).toHaveCSS('display', 'flex');
+    await expect(questionActions).toHaveCSS('align-self', 'flex-end');
+    await expect(main.locator('.genie-answer__toolbar').first()).toHaveCSS('display', 'flex');
   });
 });
 
@@ -297,6 +319,7 @@ test.describe('Genie answer data honesty (genie-06)', () => {
   test('Copy SQL writes the governed SQL to the clipboard and confirms', async ({ app, context, mockApi, page }) => {
     await context.grantPermissions(['clipboard-read', 'clipboard-write']);
     const dialog = await askInline(app, mockApi, page, answer());
+    await expect(dialog.locator('.genie-answer__toolbar')).toHaveCSS('display', 'flex');
     await dialog.getByRole('button', { name: 'Copy SQL' }).click();
     await expect(dialog.locator('.genie-answer__toolbar-status')).toHaveText('SQL copied');
     const clipboard = await page.evaluate(() => navigator.clipboard.readText());

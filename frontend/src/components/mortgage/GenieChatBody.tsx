@@ -13,6 +13,7 @@ import {
 } from './GenieChat.helpers';
 import { GenieProgress } from './GenieProgress';
 import { GenieTurnActions } from './GenieTurnActions';
+import './GenieTurnActions.css';
 
 /**
  * Transcript body of the floating Genie panel: settled bubbles, the pending

@@ -4,6 +4,7 @@ import { Icon } from '../Icon';
 import { normalizeGenieAnswerLanguage } from '../../lib/genieAnswerLanguage';
 import { formatCell, humanizeKey } from './GenieAnswer.logic';
 import { stripQuestionRestatement } from './GenieAnswer.markdown';
+import './GenieAnswerToolbar.css';
 
 /* ------------------------------------------------------------------------
  * Answer toolbar: Copy SQL / Copy answer (audit 2026-09-21 `genie-06`).
