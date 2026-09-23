@@ -26,6 +26,11 @@ export interface OfferDecisionOutcomeProps {
   approvalId: string | null;
   approveError: string | null;
   routingConfirm: { email: string | null; followUpAt: string | null } | null;
+  /**
+   * The borrower's score as loaded now. Shown on the receipt as "Score at
+   * decision" only for a decision made in this view: a durable decision
+   * from an earlier session would otherwise show today's score under that label.
+   */
   score: { opportunityScore: number; confidence: number } | null;
 }
 
@@ -41,6 +46,7 @@ export function OfferDecisionOutcome({
   routingConfirm,
   score,
 }: OfferDecisionOutcomeProps) {
+  const scoreAtDecision = justDecided ? score : null;
   return (
     <>
       {routingConfirm && (routingConfirm.email || routingConfirm.followUpAt) && (
@@ -60,7 +66,7 @@ export function OfferDecisionOutcome({
       {effectiveApproval === 'approved' && (
         <>
           {auditId ? (
-            <DecisionReceipt auditEventId={auditId} reveal={justDecided} score={score} className="mt-grid" />
+            <DecisionReceipt auditEventId={auditId} reveal={justDecided} score={scoreAtDecision} className="mt-grid" />
           ) : (
             <div className="surface mt-grid">
               <div className="surface__body surface__body--inline">
@@ -80,7 +86,7 @@ export function OfferDecisionOutcome({
       )}
       {effectiveApproval === 'rejected' && (
         auditId ? (
-          <DecisionReceipt auditEventId={auditId} reveal={justDecided} score={score} className="mt-grid" />
+          <DecisionReceipt auditEventId={auditId} reveal={justDecided} score={scoreAtDecision} className="mt-grid" />
         ) : (
           <div className="surface mt-grid">
             <div className="surface__body surface__body--inline">

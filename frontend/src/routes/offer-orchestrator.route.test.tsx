@@ -383,6 +383,8 @@ describe('OfferOrchestrator route behavior', () => {
     expect(receipt.textContent).toContain('corr-ledger-0001');
     expect(receipt.textContent).toContain('approval-1');
     expect(receipt.querySelectorAll('.evidence-chip')).toHaveLength(2);
+    // Decided in this view: the score line is the score the approver decided on.
+    expect(receipt.querySelector('[data-testid="decision-receipt-score"]')?.textContent).toContain('91');
     expect(container.textContent).not.toContain('audit: audit-1');
     expect(container.querySelector('.burst')).toBeNull();
   }, 12_000);
@@ -662,6 +664,9 @@ describe('OfferOrchestrator route behavior', () => {
     const receipt = container.querySelector<HTMLElement>('[data-testid="decision-receipt"]')!;
     expect(receipt.dataset.auditEventId).toBe('audit-persisted');
     expect(receipt.classList.contains('decision-receipt--reveal')).toBe(false);
+    // Today's score is not the score at an earlier session's decision.
+    expect(receipt.querySelector('[data-testid="decision-receipt-score"]')).toBeNull();
+    expect(receipt.textContent).not.toContain('Score at decision');
     expect(apiMocks.approve).not.toHaveBeenCalled();
   });
 
