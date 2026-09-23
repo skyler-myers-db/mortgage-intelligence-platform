@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { Icon } from '../Icon';
 import { useOptionalHealth } from '../HealthProvider';
+import type { ConnectionStatus } from '../connectionState';
+import { SessionExpiredDialog } from '../layout/SessionExpiredDialog';
 import { apiPath } from '../../lib/apiPaths';
 
 /**
@@ -25,6 +27,15 @@ import { apiPath } from '../../lib/apiPaths';
  * the `.approval` surface's token vocabulary (amber warning). The
  * `--info` modifier and `__actions` element are used by <VersionNotice>,
  * which shares this slot at the top of `<main>`.
+ *
+ * Connection states (audit 2026-09-21 `states-02`, `shell-v1`). The provider's
+ * `connection` outranks dependency health, because a dependency cannot be
+ * judged through a connection that is not there:
+ *   - `session_expired` → the blocking SessionExpiredDialog (rendered here so
+ *     the shell's one failure slot owns every real-data failure); no banner.
+ *   - `offline`         → "You are offline" (no Reload: it would fail too).
+ *   - `unreachable`     → "Connection lost" + Reload, after two failed probes.
+ *   - otherwise         → the dependency banner below, or nothing.
  */
 
 export interface HealthPayload {
@@ -48,6 +59,8 @@ interface DegradedBannerProps {
   pollIntervalDegradedMs?: number;
   /** Injected fetcher, for tests. Defaults to the canonical health endpoint. */
   fetchHealth?: () => Promise<HealthPayload>;
+  /** "Connection lost" Reload action. Defaults to `location.reload()` (keeps the URL). */
+  onReload?: () => void;
 }
 
 async function defaultFetchHealth(): Promise<HealthPayload> {
@@ -161,6 +174,7 @@ export function DegradedBanner({
   pollIntervalOkMs = 8000,
   pollIntervalDegradedMs = 3000,
   fetchHealth,
+  onReload = reloadPage,
 }: DegradedBannerProps = {}) {
   // When a caller injects a fetcher, run the legacy standalone loop so
   // existing unit tests keep exercising the banner. When mounted inside
@@ -176,7 +190,72 @@ export function DegradedBanner({
   });
   const providerHealth = (providerCtx?.health as HealthPayload | null) ?? null;
   const health = isStandalone ? standaloneHealth : providerHealth;
+  const connection: ConnectionStatus = isStandalone ? 'online' : providerCtx?.connection ?? 'online';
 
+  return (
+    <>
+      <SessionExpiredDialog />
+      {connection === 'offline' || connection === 'unreachable' ? (
+        <ConnectionBanner
+          connection={connection}
+          pollIntervalDegradedMs={pollIntervalDegradedMs}
+          onReload={onReload}
+        />
+      ) : connection === 'online' ? (
+        <DependencyBanner health={health} pollIntervalDegradedMs={pollIntervalDegradedMs} />
+      ) : null}
+    </>
+  );
+}
+
+function reloadPage(): void {
+  window.location.reload();
+}
+
+function ConnectionBanner({
+  connection,
+  pollIntervalDegradedMs,
+  onReload,
+}: {
+  connection: 'offline' | 'unreachable';
+  pollIntervalDegradedMs: number;
+  onReload: () => void;
+}) {
+  const offline = connection === 'offline';
+  return (
+    <div className="degraded-banner" role="status" aria-live="polite" data-connection={connection}>
+      <div className="degraded-banner__ico" aria-hidden="true">
+        <Icon name="bolt" size={16} />
+      </div>
+      <div className="degraded-banner__body">
+        <div className="degraded-banner__title">
+          <span className="degraded-banner__dot" aria-hidden="true" />
+          {offline ? 'You are offline' : 'Connection lost'}
+        </div>
+        <div className="degraded-banner__sub">
+          {offline
+            ? 'Anything that needs data waits here and loads when your connection returns.'
+            : `The app did not answer the last two checks. Checking again every ${Math.round(pollIntervalDegradedMs / 1000)} seconds; panels reload on their own once it answers.`}
+        </div>
+      </div>
+      {!offline && (
+        <div className="degraded-banner__actions">
+          <button type="button" className="btn btn--ghost btn--sm" onClick={onReload}>
+            Reload
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DependencyBanner({
+  health,
+  pollIntervalDegradedMs,
+}: {
+  health: HealthPayload | null;
+  pollIntervalDegradedMs: number;
+}) {
   const downDep = degradedDependency(health);
   if (!downDep) return null;
 
