@@ -130,7 +130,10 @@ for (const theme of FIXTURE_THEMES) {
         await app.setTheme(theme);
         await app.gotoRoute(route.path);
         await enterState(app, page, state);
-        await page.evaluate(() => document.fonts.ready.then(() => undefined));
+        // Scan the overlay once the reads it started have landed (the drawer
+        // loads governed asset metadata after it opens), so every run scans
+        // the same DOM rather than whichever half-loaded state won the race.
+        await app.settle();
 
         const results = await new AxeBuilder({ page }).withTags(WCAG_TAGS).analyze();
         const found = new Map(results.violations.map((violation) => [violation.id, violation]));
