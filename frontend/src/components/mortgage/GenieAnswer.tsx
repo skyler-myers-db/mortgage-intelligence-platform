@@ -8,6 +8,7 @@ import { Icon } from '../Icon';
 import { useApp } from '../AppContext';
 import { useWorkspaceHost } from '../HealthProvider';
 import { GenieActions } from './GenieAnswerActions';
+import { GenieAnswerToolbar } from './GenieAnswerToolbar';
 import { GenieAnswerSections, GenieRowsVisual } from './GenieAnswer.sections';
 import { MarkdownAnswer, stripQuestionRestatement } from './GenieAnswer.markdown';
 import { normalizeGenieAnswerLanguage } from '../../lib/genieAnswerLanguage';
@@ -292,6 +293,12 @@ export function GenieAnswer({
           would otherwise repeat the last sub-query's rows. */}
       {!hasSections && (
         <GenieRowsVisual rows={rows} plan={plan} cellCohort={cellCohort} />
+      )}
+      {/* Copy SQL / Copy answer (genie-06) under the data, on genuine answers
+          only: a governed refusal or degraded caveat has no SQL, and its copy
+          would be the guardrail's own text. */}
+      {isTrustedGenieSource(payload.source) && !isGovernedActionResult && (
+        <GenieAnswerToolbar payload={payload} />
       )}
       {payload.proof && showProof && typeof document !== 'undefined' && createPortal(
         <>

@@ -83,3 +83,42 @@
   z-index: 2;
   display: inline-flex;
 }
+
+/* Answer toolbar (genie-06): Copy SQL / Copy answer under the data. A
+   documented BEM extension of `.genie-answer`; the prototype's Genie bubble
+   (design_files/index.html:741-760) has no toolbar. */
+.genie-answer__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+.genie-answer__toolbar-status {
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+}
+/* Denied clipboard: the text is shown selected so it can still be copied. */
+.genie-answer__copy-fallback {
+  inline-size: 100%;
+}
+.genie-answer__copy-fallback textarea {
+  box-sizing: border-box;
+  inline-size: 100%;
+  min-block-size: calc(var(--sp-16) * 2);
+  padding: var(--sp-2);
+  background: var(--bg-1);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+  color: var(--text-1);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  line-height: var(--lh-body);
+  resize: vertical;
+}
+.genie-answer__copy-fallback-hint {
+  margin: var(--sp-1) 0 0;
+  color: var(--text-3);
+  font-size: var(--fs-11);
+}
