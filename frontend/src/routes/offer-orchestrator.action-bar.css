@@ -5,7 +5,8 @@
 
    The loan-officer routing and the `.approval` gate dock at the bottom of
    `.main`, the app's scroller, with `position: sticky`, so at 1440x900 both
-   are on screen without scrolling and stay there while the page scrolls.
+   are on screen without scrolling and stay there while the page scrolls
+   (in a viewport at least 40rem tall: see the media query below).
    Sticky, not fixed: the bar keeps its place in flow, so at the end of the
    page it rests above the footer and hides nothing for good, and it stays
    inside `.main`'s content box, which already clears the docked Console
@@ -18,9 +19,6 @@
    prototype has no action bar. The `.approval` rules themselves
    (04-approval-and-drawer.css) are untouched. Tokens only. */
 .offer-action-bar {
-  position: sticky;
-  inset-block-end: 0;
-  z-index: var(--z-sticky);
   display: flex;
   flex-direction: column;
   gap: var(--sp-3);
@@ -49,17 +47,42 @@
   .offer-action-bar__row > .outreach-routing { align-content: center; }
 }
 
-/* Focus Not Obscured (WCAG 2.2 SC 2.4.11, technique C43): `.main` keeps the
-   bar's block size, plus room for the focus ring, as scroll-padding at its
-   end, so a control that takes focus from below the view stops above the bar
-   instead of behind it. The size is measured by the bar itself
-   (offer-orchestrator.action-bar.tsx); the fallback covers the side-by-side
-   bar before the first measurement. */
-.main:has(.offer-action-bar) {
-  scroll-padding-block-end: calc(
-    var(--offer-action-bar-block-size, calc(var(--sp-16) * 2))
-    + var(--focus-ring-width) + var(--focus-ring-offset)
-  );
+/* Docked only when the viewport has the height for it (40rem = 640 CSS px,
+   in rem so the query tracks browser zoom). At 1440x900 or 1366x768 the bar
+   docks; at 200% zoom (1440x900 is then 720x450) the docked bar plus the
+   sticky `.route-nav` covered the whole `.main` scrollport, so the offer and
+   the copy being certified could not be read at any scroll position (WCAG
+   1.4.4 / 1.4.10). Below the query the bar is in flow at the end of the page,
+   as the gate was before it docked, and takes no scroll-padding. */
+@media (min-height: 40rem) {
+  .offer-action-bar {
+    position: sticky;
+    inset-block-end: 0;
+    z-index: var(--z-sticky);
+  }
+
+  /* Focus Not Obscured (WCAG 2.2 SC 2.4.11, technique C43): `.main` keeps
+     the docked bar's block size, plus room for the focus ring, as
+     scroll-padding at its end, so a control that takes focus from below the
+     view stops above the bar instead of behind it. The size is measured by
+     the bar itself (offer-orchestrator.action-bar.tsx); the fallback covers
+     the side-by-side bar before the first measurement. */
+  .main:has(.offer-action-bar) {
+    scroll-padding-block-end: calc(
+      var(--offer-action-bar-block-size, calc(var(--sp-16) * 2))
+      + var(--focus-ring-width) + var(--focus-ring-offset)
+    );
+  }
+}
+
+/* Below 1280px an open Console is a bottom sheet over half the viewport and
+   `.main` pads its end by the sheet's height (12-motion-and-viewport.css).
+   Docked above the sheet, under the sticky route nav, the bar left the page
+   no room at all (1024x768: 304px above the sheet, 97px nav + 224px bar).
+   While the sheet is open the bar stays in flow, as under browser zoom. */
+@media (max-width: 1279px) {
+  [data-console="open"] .offer-action-bar { position: static; }
+  [data-console="open"] .main:has(.offer-action-bar) { scroll-padding-block-end: auto; }
 }
 
 /* Below 721px the floating Genie launcher (`.genie__fab`, 52px at the

@@ -71,7 +71,10 @@ export interface OfferActionBarProps {
  * the routing controls were ever on screen.
  *
  * The bar is in flow (sticky, not fixed), so at the end of the page it sits
- * above the footer and nothing is permanently hidden behind it. The reject
+ * above the footer and nothing is permanently hidden behind it. It docks only
+ * in a viewport at least 40rem tall: under browser zoom (1440x900 at 200% is
+ * 720x450) a docked bar and the sticky route nav would cover the whole
+ * scroller, so there it stays in flow at the end of the page. The reject
  * rationale and a failed write render inside the bar, next to the Reject /
  * Approve buttons that open them, instead of at the top of the page where a
  * reviewer scrolled down to the bar would never see them.

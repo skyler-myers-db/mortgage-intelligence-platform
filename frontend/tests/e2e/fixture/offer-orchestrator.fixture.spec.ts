@@ -11,7 +11,10 @@
  * selector are fully inside the viewport and covered by nothing (not the
  * Console, not the Genie launcher); scrolling keeps the bar docked; at the end
  * of the page it rests above the footer; focus from below the view stops
- * above it; the reject rationale opens inside it, focused.
+ * above it; the reject rationale opens inside it, focused. Under browser zoom
+ * (200% and 150%) the bar is in flow, and the offer and every paragraph of the
+ * certified copy can be read at some scroll position (WCAG 1.4.10); 1366x768
+ * at 100% still docks.
  *
  * critic-02 (part 2): the certified copy is framed the way the borrower
  * receives it. Pinned here in both themes: the email frame's From / To (the
@@ -253,6 +256,150 @@ test.describe('decision bar (visual-v1)', () => {
       return own - content;
     });
     expect(slack, 'empty space inside the Primary offer card (px)').toBeLessThanOrEqual(2);
+  });
+});
+
+interface Readability {
+  /** Scroll positions at which some part of the element is painted and uncovered. */
+  positions: number;
+  /** Bands of the element's height never uncovered at any scroll position. */
+  unseenBands: number;
+  bands: number;
+}
+
+/**
+ * Step `.main` from the top to the end, 16px at a time, and hit-test each
+ * element down its centre line in 8px bands with `elementFromPoint`: a band
+ * counts as readable when, at some scroll position, it is inside the
+ * scrollport and the topmost thing painted there is the element itself (not
+ * the sticky route nav, not the decision bar). Loss of content (WCAG 1.4.10)
+ * is a band that is never readable.
+ */
+async function readabilityWhileScrolling(page: Page, targets: Locator[]): Promise<Readability[]> {
+  const handles = await Promise.all(targets.map(async (target) => {
+    const handle = await target.elementHandle();
+    if (!handle) throw new Error('target is not attached');
+    return handle;
+  }));
+  return page.evaluate((elements) => {
+    const main = document.querySelector<HTMLElement>('.main');
+    if (!main) throw new Error('no .main scroller');
+    const STEP = 16;
+    const BAND = 8;
+    const max = main.scrollHeight - main.clientHeight;
+    const offsets = elements.map((element) => {
+      const height = element.getBoundingClientRect().height;
+      const list: number[] = [];
+      for (let offset = BAND / 2; offset < height; offset += BAND) list.push(offset);
+      return list;
+    });
+    const seen = elements.map(() => new Set<number>());
+    const positions = elements.map(() => 0);
+    for (let top = 0; ; top = Math.min(top + STEP, max)) {
+      main.scrollTo({ top, behavior: 'instant' });
+      const view = main.getBoundingClientRect();
+      const viewTop = view.top + main.clientTop;
+      const viewBottom = viewTop + main.clientHeight;
+      elements.forEach((element, index) => {
+        const rect = element.getBoundingClientRect();
+        const x = rect.left + rect.width / 2;
+        let readableHere = false;
+        offsets[index].forEach((offset, band) => {
+          const y = rect.top + offset;
+          if (y < viewTop || y >= viewBottom) return;
+          const hit = document.elementFromPoint(x, y);
+          if (hit && (hit === element || element.contains(hit))) {
+            seen[index].add(band);
+            readableHere = true;
+          }
+        });
+        if (readableHere) positions[index] += 1;
+      });
+      if (top >= max) break;
+    }
+    main.scrollTo({ top: 0, behavior: 'instant' });
+    return elements.map((_, index) => ({
+      positions: positions[index],
+      unseenBands: offsets[index].length - seen[index].size,
+      bands: offsets[index].length,
+    }));
+  }, handles);
+}
+
+/**
+ * The Primary offer card and every paragraph of the certified copy can each
+ * be read, band by band, at some scroll position of `.main`; and at the end
+ * of the page Approve is in view and uncovered, so the gate stays reachable.
+ */
+async function expectOfferAndCopyReadable(page: Page): Promise<void> {
+  const { approve } = decisionControls(page);
+  const paragraphs = page.locator('[data-testid="outreach-draft"] p');
+  await expect(paragraphs.first()).toBeVisible();
+  const paragraphCount = await paragraphs.count();
+  expect(paragraphCount, 'precondition: the certified copy has several paragraphs').toBeGreaterThan(1);
+  const primaryOffer = page.locator('.layoutA-grid .surface', { has: page.getByText('Primary offer', { exact: true }) }).first();
+  await expect(primaryOffer).toBeVisible();
+
+  const targets = [primaryOffer, ...Array.from({ length: paragraphCount }, (_, index) => paragraphs.nth(index))];
+  const names = ['Primary offer', ...Array.from({ length: paragraphCount }, (_, index) => `copy paragraph ${index + 1}`)];
+  const report = await readabilityWhileScrolling(page, targets);
+  report.forEach((result, index) => {
+    expect(result.bands, `precondition: ${names[index]} has height`).toBeGreaterThan(0);
+    expect(result.positions, `${names[index]} is readable at some scroll position`).toBeGreaterThanOrEqual(1);
+    expect(result.unseenBands, `${names[index]}: 8px bands never readable at any scroll position`).toBe(0);
+  });
+
+  await page.locator('.main').evaluate((main) => { main.scrollTo({ top: main.scrollHeight, behavior: 'instant' }); });
+  await expectInsideViewport(page, approve, 'Approve at the end of the page');
+}
+
+/**
+ * Browser zoom shrinks the CSS viewport: 1440x900 at 200% renders as 720x450,
+ * 1280x720 at 150% as 853x480. There the docked bar (about 300px tall once
+ * stacked) and the sticky route nav covered the whole `.main` scrollport, so
+ * the Primary offer and the certified copy were readable at no scroll
+ * position (WCAG 1.4.4 / 1.4.10). The bar docks only in a viewport at least
+ * 40rem tall; below that it is in flow at the end of the page, as the gate
+ * was before it docked. The same holds while the Console is a bottom sheet
+ * over half the viewport (below 1280px wide).
+ */
+test.describe('decision bar in a short viewport (visual-v1, WCAG 1.4.10)', () => {
+  const ZOOMED = [
+    { label: '1440x900 at 200% zoom', width: 720, height: 450 },
+    { label: '1280x720 at 150% zoom', width: 853, height: 480 },
+  ] as const;
+
+  for (const { label, width, height } of ZOOMED) {
+    test(`${label} (${width}x${height}): the offer and every paragraph of the certified copy can be read`, async ({ app, page }) => {
+      await page.setViewportSize({ width, height });
+      await app.gotoRoute(ROUTE);
+      await expect(decisionControls(page).approve).toBeEnabled();
+      await expectOfferAndCopyReadable(page);
+    });
+  }
+
+  test('1024x768 with the Console open as a bottom sheet: the offer and the copy can be read', async ({ app, page }) => {
+    await page.setViewportSize({ width: 1024, height: 768 });
+    await app.gotoRoute(ROUTE);
+    await expect(decisionControls(page).approve).toBeEnabled();
+    const sheet = await app.openConsole();
+    const sheetBox = await boxOf(sheet);
+    expect(sheetBox.top, 'precondition: below 1280px the Console is a bottom sheet').toBeGreaterThan(0);
+    expect(sheetBox.right - sheetBox.left, 'precondition: the sheet spans the width').toBeGreaterThan(900);
+    await expectOfferAndCopyReadable(page);
+  });
+
+  test('1366x768 at 100% keeps the bar docked: Approve on screen without scrolling', async ({ app, page }) => {
+    await page.setViewportSize({ width: 1366, height: 768 });
+    await app.gotoRoute(ROUTE);
+    const { bar, approve, routing } = decisionControls(page);
+    await expect(approve).toBeEnabled();
+    const { top, max, bottom } = await mainScroll(page);
+    expect(top, 'precondition: the page has not scrolled').toBe(0);
+    expect(max, 'precondition: the page is taller than the viewport').toBeGreaterThan(0);
+    await expectInsideViewport(page, approve, 'Approve');
+    await expectInsideViewport(page, routing, 'routing selector');
+    expect(Math.abs((await boxOf(bar)).bottom - bottom), 'docked to the bottom of .main').toBeLessThanOrEqual(1);
   });
 });
 
