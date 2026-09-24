@@ -21,6 +21,7 @@ from backend.api import telemetry as telemetry_mod
 from backend.main import app
 from backend.schemas.telemetry import (
     CLIENT_ERROR_BOUNDARIES,
+    CLIENT_ERROR_KINDS,
     CLIENT_ERROR_NAMES,
     CLIENT_ERROR_SOURCES,
     RUM_API_ROUTE_SEGMENTS,
@@ -29,6 +30,7 @@ from backend.schemas.telemetry import (
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUM_BRIDGE_TS = REPO_ROOT / "frontend" / "src" / "lib" / "rumBridge.ts"
 RUM_API_ROUTE_TS = REPO_ROOT / "frontend" / "src" / "lib" / "rumApiRoute.ts"
+CHUNK_LOAD_ERROR_TS = REPO_ROOT / "frontend" / "src" / "lib" / "chunkLoadError.ts"
 
 RUM_PATH = "/api/telemetry/rum"
 
@@ -242,6 +244,23 @@ def test_client_error_vocabularies_match_rum_bridge(name: str, server: frozenset
     """Parity pin (named in the rumBridge.ts header): a name, source or
     boundary the client can send is exactly one the server accepts."""
     assert _ts_const_array(RUM_BRIDGE_TS, name) == set(server)
+
+
+def test_client_error_kinds_match_chunk_load_error() -> None:
+    """Parity pin: the client's `ClientErrorKind` union (lib/chunkLoadError.ts,
+    what classifyClientError returns and every report carries as error_kind)
+    is exactly the server's CLIENT_ERROR_KINDS. A new kind on one side only
+    would either never be sent or 422 its whole RUM batch."""
+    source = CHUNK_LOAD_ERROR_TS.read_text(encoding="utf-8")
+    match = re.search(r"export type ClientErrorKind = (?P<union>[^;]+);", source)
+    assert match, "chunkLoadError.ts must declare `export type ClientErrorKind = '...' | '...';`"
+    union = match.group("union")
+    kinds = re.findall(r"'([^']*)'", union)
+    assert re.fullmatch(r"\s*'[^']*'(\s*\|\s*'[^']*')*\s*", union), (
+        f"ClientErrorKind must stay a union of string literals, got: {union.strip()}"
+    )
+    assert len(kinds) == len(set(kinds)), "ClientErrorKind has duplicate members"
+    assert set(kinds) == set(CLIENT_ERROR_KINDS)
 
 
 def test_api_route_segments_match_rum_api_route() -> None:

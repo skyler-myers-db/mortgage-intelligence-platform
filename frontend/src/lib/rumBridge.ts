@@ -17,7 +17,8 @@ import type { ClientErrorKind } from './chunkLoadError';
  * Parity pin: tests/unit/test_rum_client_error.py parses the three `as const`
  * arrays below and asserts set equality with CLIENT_ERROR_NAMES,
  * CLIENT_ERROR_SOURCES and CLIENT_ERROR_BOUNDARIES in
- * backend/schemas/telemetry.py. Change both sides together.
+ * backend/schemas/telemetry.py, and the ClientErrorKind union
+ * (lib/chunkLoadError) against CLIENT_ERROR_KINDS. Change both sides together.
  */
 
 export const CLIENT_ERROR_NAMES = [
