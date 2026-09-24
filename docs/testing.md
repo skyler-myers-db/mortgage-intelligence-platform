@@ -77,7 +77,7 @@ import { expect, test } from './test';   // never '@playwright/test' directly
 
 test('lead queue shows the ranked borrowers', async ({ app, page }) => {
   await app.setTheme('light');          // app's own mip.theme key + prefers-color-scheme
-  await app.gotoRoute('/lead-queue');   // waits for h1, no aria-busy in <main>, API quiet, fonts
+  await app.gotoRoute('/lead-queue');   // waits for the URL's route to be painted (data-route-path), h1, no aria-busy in <main>, API quiet, fonts
   await expect(page.locator('table.tbl tbody tr').first()).toBeVisible();
 });
 ```
