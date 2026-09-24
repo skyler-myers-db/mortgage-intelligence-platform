@@ -52,6 +52,48 @@ function chunkModulesManifest(): Plugin {
   };
 }
 
+/** Geist + Geist Mono, one variable woff2 each (src/design-system/tokens.css). */
+const WEBFONT_FILES = 2;
+
+/**
+ * Preloads the two webfonts from the built index.html (audit bundle-05).
+ * Without it a font is requested only after the stylesheet is parsed and
+ * text is laid out, so every cold load painted the fallback first. The
+ * hashed file names exist only in the bundle, so the links are injected here
+ * (build only) and index.html's source stays unchanged; no inline script, and
+ * CSP `font-src 'self'` already covers the fetch. `crossorigin` is required:
+ * fonts are fetched in CORS mode, and a preload without it is not reused
+ * (the font would be fetched twice). Throws unless exactly two woff2 files
+ * were emitted, so an unresolved url() in tokens.css (which Vite only warns
+ * about) or a stray format fails the build.
+ */
+function preloadWebfonts(): Plugin {
+  let base = "/";
+  return {
+    name: "mip:preload-webfonts",
+    apply: "build",
+    configResolved(config) {
+      base = config.base;
+    },
+    transformIndexHtml: {
+      order: "post",
+      handler(_html, ctx) {
+        const fonts = Object.values(ctx.bundle ?? {})
+          .map((output) => output.fileName)
+          .filter((fileName) => /\.(?:woff2?|ttf|otf)$/.test(fileName));
+        if (fonts.length !== WEBFONT_FILES || !fonts.every((fileName) => fileName.endsWith(".woff2"))) {
+          throw new Error(`expected exactly ${WEBFONT_FILES} woff2 webfonts in the bundle, found: ${fonts.join(", ") || "none"}`);
+        }
+        return fonts.sort().map((fileName) => ({
+          tag: "link",
+          attrs: { rel: "preload", as: "font", type: "font/woff2", href: `${base}${fileName}`, crossorigin: "" },
+          injectTo: "head" as const,
+        }));
+      },
+    },
+  };
+}
+
 export default defineConfig({
   plugins: [
     react(),
@@ -59,6 +101,7 @@ export default defineConfig({
       presets: [reactCompilerPreset()],
     }),
     chunkModulesManifest(),
+    preloadWebfonts(),
   ],
   build: {
     // The chunk graph tools/check_frontend_budgets.mjs measures (initial and

@@ -10,10 +10,20 @@
  *  - bundle-03: vendor chunks. A cold load fetches exactly one vendor-react
  *    and one vendor-data chunk, both announced as modulepreload in the served
  *    HTML, and moving on to the Lead Queue fetches no vendor chunk again.
+ *  - bundle-05 / css-v2: variable Geist. In both themes the served HTML
+ *    preloads exactly the two woff2 files the page fetches, each once (the
+ *    preload is reused, so it carries crossorigin); no .woff is requested;
+ *    both faces load with the 100-900 range and render 600 < 650 < 700 < 800
+ *    as four distinct widths; the metric-matched fallbacks load and set a
+ *    sample within 3% (sans) / 1.5% (mono) of the webfont's width.
+ *    Home screenshots in both themes are ATTACHED (not baselined) for a
+ *    manual 400/500/600/700 read against design_files/module_0_prototype_1.png;
+ *    the VRT baselines belong to the safety-net lane.
  *
  * The CSP hygiene gate stays on for every test here.
  */
 import type { Page, Response } from '@playwright/test';
+import { FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
 
 const NATURAL_LOADS = ['/', '/lead-queue'] as const;
@@ -85,5 +95,121 @@ test.describe('vendor chunks (bundle-03)', () => {
       true,
     );
     expect(afterNavigation.filter((pathname) => ANY_VENDOR_CHUNK.test(pathname))).toEqual([]);
+  });
+});
+
+const FONT_FILE = /\.(?:woff2?|ttf|otf)$/;
+const WEIGHT_LADDER = [600, 650, 700, 800] as const;
+const METRIC_SAMPLE = 'Who should we contact, why now, and with what offer? Summit Mortgage 2026';
+
+interface FaceState {
+  family: string;
+  weight: string;
+  status: string;
+}
+
+/** document.fonts after asking for both faces (the mono face may not be on screen yet). */
+async function loadedFaces(page: Page, families: readonly string[]): Promise<FaceState[]> {
+  return page.evaluate(async (names) => {
+    await Promise.all(names.map((name) => document.fonts.load(`16px '${name}'`)));
+    return [...document.fonts].map((face) => ({
+      family: face.family.replace(/["']/g, ''),
+      weight: face.weight,
+      status: face.status,
+    }));
+  }, families);
+}
+
+/** Rendered width of `text` in `family` at each weight (40px, off-screen probe spans). */
+async function probeWidths(page: Page, family: string, text: string, weights: readonly number[]): Promise<number[]> {
+  return page.evaluate(
+    ({ family: name, text: sample, weights: ladder }) => {
+      const widths = ladder.map((weight) => {
+        const probe = document.createElement('span');
+        probe.textContent = sample;
+        probe.style.cssText = `position:absolute;left:-10000px;top:0;white-space:nowrap;font-size:40px;font-family:'${name}';font-weight:${weight}`;
+        document.body.append(probe);
+        const width = probe.getBoundingClientRect().width;
+        probe.remove();
+        return width;
+      });
+      return widths;
+    },
+    { family, text, weights: [...weights] },
+  );
+}
+
+test.describe('variable Geist webfonts (bundle-05 / css-v2)', () => {
+  for (const theme of FIXTURE_THEMES) {
+    test(`${theme}: two preloaded woff2 files, each fetched once, render the whole weight axis`, async ({ app, page }, testInfo) => {
+      const traffic = recordTraffic(page);
+      await app.setTheme(theme);
+      await app.gotoRoute('/');
+
+      const preloads = await page.locator('link[rel="preload"][as="font"]').evaluateAll((links) =>
+        links.map((link) => ({
+          path: new URL((link as HTMLLinkElement).href).pathname,
+          type: link.getAttribute('type'),
+          crossorigin: link.getAttribute('crossorigin'),
+        })),
+      );
+      // Every check here is soft, so a regression reports all of its
+      // consequences: a dropped crossorigin also shows the second fetch of
+      // each font (a no-CORS preload is not reused), and static faces also
+      // show the weights they snap.
+      expect.soft(preloads, 'exactly two font preloads').toHaveLength(2);
+      for (const preload of preloads) {
+        expect.soft(preload.path).toMatch(/^\/assets\/geist(?:-mono)?-latin-wght-normal-[\w-]+\.woff2$/);
+        expect.soft(preload.type).toBe('font/woff2');
+        expect.soft(preload.crossorigin, `${preload.path} preload is CORS-mode, like the font fetch`).not.toBeNull();
+      }
+
+      const faces = await loadedFaces(page, ['Geist', 'Geist Mono']);
+      for (const family of ['Geist', 'Geist Mono']) {
+        const face = faces.find((candidate) => candidate.family === family);
+        expect.soft(face, `${family} is a document font`).toBeDefined();
+        expect.soft(face?.status, `${family} loaded`).toBe('loaded');
+        expect.soft(face?.weight, `${family} is variable`).toBe('100 900');
+      }
+
+      const fontRequests = traffic.requests.filter((pathname) => FONT_FILE.test(pathname));
+      expect.soft(fontRequests.filter((pathname) => pathname.endsWith('.woff')), 'no legacy .woff').toEqual([]);
+      expect.soft([...fontRequests].sort(), 'each preloaded font is fetched once and nothing else').toEqual(
+        preloads.map((preload) => preload.path).sort(),
+      );
+
+      const widths = await probeWidths(page, 'Geist', 'Mortgage Intelligence Platform 0123456789', WEIGHT_LADDER);
+      for (let index = 1; index < widths.length; index += 1) {
+        expect.soft(
+          widths[index],
+          `Geist ${WEIGHT_LADDER[index]} renders wider than ${WEIGHT_LADDER[index - 1]} (${widths.join(' / ')})`,
+        ).toBeGreaterThan(widths[index - 1]);
+      }
+
+      const bodyFont = await page.evaluate(() => getComputedStyle(document.body).fontFamily);
+      expect.soft(bodyFont).toMatch(/^"?Geist"?, "Geist Fallback", /);
+
+      await testInfo.attach(`home-${theme}.png`, { body: await page.screenshot(), contentType: 'image/png' });
+    });
+  }
+
+  test('the metric-matched fallbacks load and track the webfont widths', async ({ app, page }) => {
+    await app.gotoRoute('/');
+    const faces = await loadedFaces(page, ['Geist', 'Geist Mono', 'Geist Fallback', 'Geist Mono Fallback']);
+    for (const family of ['Geist Fallback', 'Geist Mono Fallback']) {
+      expect(faces.find((face) => face.family === family)?.status, `${family} found its local face`).toBe('loaded');
+    }
+    const cases = [
+      { webfont: 'Geist', fallback: 'Geist Fallback', tolerance: 0.03 },
+      { webfont: 'Geist Mono', fallback: 'Geist Mono Fallback', tolerance: 0.015 },
+    ];
+    for (const { webfont, fallback, tolerance } of cases) {
+      const [webfontWidth] = await probeWidths(page, webfont, METRIC_SAMPLE, [400]);
+      const [fallbackWidth] = await probeWidths(page, fallback, METRIC_SAMPLE, [400]);
+      const drift = Math.abs(fallbackWidth / webfontWidth - 1);
+      expect(drift, `${fallback} sets the sample at ${fallbackWidth}px vs ${webfont} ${webfontWidth}px`).toBeLessThan(
+        tolerance,
+      );
+    }
   });
 });

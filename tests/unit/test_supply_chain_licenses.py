@@ -74,6 +74,9 @@ def test_third_party_license_notice_covers_weak_copyleft_and_map_data() -> None:
         "us-atlas",
         "ISC",
         "topojson-client",
+        "@fontsource-variable/geist",
+        "@fontsource-variable/geist-mono",
+        "OFL-1.1",
     ):
         assert required in notice
 

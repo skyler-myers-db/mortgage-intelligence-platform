@@ -179,7 +179,7 @@ const budgets = {
   // banners + shaped skeleton sweep, 32-feedback toast region + guard
   // dialog; each must style a surface that can appear before any lazy chunk).
   // Measured: 158.85 / gzip 27.20; ~5% headroom.
-  initialCssBytes: 167 * KiB, // actual 158.81 (2026-09-24, manifest CSS closure)
+  initialCssBytes: 167 * KiB, // actual 158.27 (2026-09-24, manifest CSS closure; 158.81 before the variable fonts; ratcheted, same whole KiB)
   // Re-baselined 2026-09-08 for the Genie thread view + deep-research
   // sections slice. The 25 KiB gzip gate had drifted to 4 bytes above the
   // measured artifact (25,596 B) — the next CSS line from anyone would have
@@ -194,7 +194,7 @@ const budgets = {
   // ship with their lazy chunks instead, and the dead `.admin-filter-input`
   // rules were removed, before this bump. Measured: CSS 155.76 / gzip 26.55;
   // ~5% headroom per policy.
-  initialCssGzipBytes: 29 * KiB, // actual 27.19 (2026-09-24)
+  initialCssGzipBytes: 29 * KiB, // actual 27.24 (2026-09-24)
   // Re-baselined 2026-07-10 for the UX declutter slice (batches 1-2). total JS
   // was red on main (990.51 > 990.00); restored ~5% headroom over the measured
   // actual per this file's policy. Batch 2 (asset-label helper, top-leads
@@ -267,8 +267,14 @@ const budgets = {
   // ship as their own lazy chunks. ~5% headroom per policy.
   maxLazyJsBytes: 111 * KiB, // actual 109.32 (LeadTable, 2026-09-24)
   maxLazyJsGzipBytes: 36 * KiB, // actual 34.71 (LeadTable, 2026-09-24)
-  fontAssetCount: 14, // exact by policy, both ways
-  fontBytes: 227 * KiB, // actual 215.42 (2026-09-24: 7 static woff2 + their 7 never-requested woff twins)
+  // Re-baselined 2026-09-24 for audit bundle-05 / css-v2 (lane
+  // w2-build-currency): the seven static @fontsource faces (7 woff2 + their
+  // 7 never-requested woff twins, 215.42 KiB) became one variable woff2 each
+  // for Geist and Geist Mono (@fontsource-variable 5.3.0, latin wght:
+  // 29,400 + 23,128 B), preloaded by vite.config.ts. Ratcheted down to the
+  // measured actual + ~5%.
+  fontAssetCount: 2, // exact by policy, both ways
+  fontBytes: 54 * KiB, // actual 51.30
   // Brotli q11, the primary dimension (audit bundle-08; see the header). First
   // baselined 2026-09-24 by lane w2-build-currency on its own dependency batch
   // (React 19.3 is +7.22 br of the initial number, Router 8.4 +0.66; see
@@ -280,7 +286,7 @@ const budgets = {
   // 82.73 + vendor-data 8.85, 21.5% of total JS br) that a deploy changing
   // only app code no longer makes a returning browser re-download.
   initialJsBrBytes: 150 * KiB, // actual 143.96 (5 chunks; 142.81 before the vendor split)
-  initialCssBrBytes: 24 * KiB, // actual 22.82
+  initialCssBrBytes: 24 * KiB, // actual 22.88 (22.82 with the static @fontsource CSS)
   totalJsBrBytes: 445 * KiB, // actual 425.50 (67 chunks; 423.50 before the vendor split)
   maxLazyJsBrBytes: 32 * KiB, // actual 30.07 (LeadTable)
   // What a navigation to each route fetches beyond the initial closure: the
