@@ -1,13 +1,8 @@
-/* ============================================================
-   CONTRAST MODES (audit css-06 / a11y-10 / responsive-v3). Additive;
-   the prototype has none. System colours only. Rings follow the
-   forced-colors --focus-ring-color token (tokens.css). Forcing replaces the
-   cascade's winner, not its losers, so each system colour must still win on
-   specificity: a doubled class (.switch.switch) lifts a rule to the
-   component rule it overrides, and it wins as the later rule.
-   ============================================================ */
+/* CONTRAST MODES (audit css-06 / a11y-10 / responsive-v3); additive, the
+   prototype has none. System colours only. Forcing keeps the cascade's
+   winner: a doubled class (.switch.switch) or !important must win it. */
 @media (forced-colors: active) {
-  /* State painted by a fill alone vanished when fills were forced. */
+  /* Fill-only states vanished once fills were forced. */
   .segmented.segmented button.is-active,
   .switch.switch.on,
   .filter.is-active,
@@ -22,6 +17,11 @@
     color: HighlightText;
     border-color: Highlight;
   }
+  /* A child's own ink was forced to LinkText or ButtonText, or kept on an
+     svg: 1.2-2.3:1 on Highlight. */
+  :is(.segmented button, .filter, .rail__item, .topbar__icon-btn, .drawer__tab, .proof-tab, .cmdk__row, .topbar__search-result).is-active *,
+  .switch.on *,
+  .filter-menu__item:is(.is-focused, .is-selected) * { color: HighlightText !important; }
   .tweak-row .sw.is-active,
   .zip-tile.is-selected { border-color: Highlight; }
   .segmented,

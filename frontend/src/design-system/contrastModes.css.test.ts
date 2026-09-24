@@ -27,6 +27,22 @@ const sheets = [{ file: 'design-system/components.css (partials)', css: designCs
 
 const normalize = (selector: string) => selector.trim().replace(/\s+/g, ' ');
 
+/** The selectors of a selector list, split only at commas outside every parenthesis. */
+function selectorList(list: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let from = 0;
+  for (let i = 0; i < list.length; i += 1) {
+    if (list[i] === '(') depth += 1;
+    else if (list[i] === ')') depth -= 1;
+    else if (list[i] === ',' && depth === 0) {
+      parts.push(list.slice(from, i).trim());
+      from = i + 1;
+    }
+  }
+  return [...parts, list.slice(from).trim()];
+}
+
 /** `{ selector, property, value }` for every declaration inside one kind of media block. */
 function mediaDeclarations(query: string) {
   return sheets.flatMap(({ file, css }) =>
@@ -93,7 +109,7 @@ const SYSTEM_COLORS = new Set([
 ]);
 const COLOR_PROPERTY =
   /^(?:color|fill|stroke|box-shadow|background(?:-color)?|outline(?:-color)?|border(?:-(?:top|right|bottom|left|block|inline)(?:-(?:start|end))?)?(?:-color)?)$/;
-const NON_COLOR_TOKEN = /^(?:none|solid|dashed|dotted|double|0|-?\d*\.?\d+(?:px|rem|em)|var\(--focus-ring-width\))$/;
+const NON_COLOR_TOKEN = /^(?:none|solid|dashed|dotted|double|0|-?\d*\.?\d+(?:px|rem|em)|var\(--focus-ring-width\)|!important)$/;
 
 /** Non-text data marks allowed to opt out of forcing (brief item 8b, plus the switch knob). */
 const DATA_MARKS = [
@@ -149,12 +165,36 @@ describe('forced-colors: active (css-06 / a11y-10 / responsive-v3)', () => {
         '.topbar__search-result.is-active',
       ]),
     );
-    const rule = declarations.filter((d) => d.selector.includes('.drawer__tab.is-active'));
+    const rule = declarations.filter((d) => selectorList(d.selector).includes('.drawer__tab.is-active'));
     expect(Object.fromEntries(rule.map((d) => [d.property, d.value]))).toEqual({
       'background-color': 'Highlight',
       color: 'HighlightText',
       'border-color': 'Highlight',
     });
+  });
+
+  // Chromium forces a descendant's OWN ink to its element's system colour
+  // (LinkText inside the route-nav link, ButtonText or CanvasText elsewhere)
+  // and leaves an svg's authored ink as it is (preserve-parent-color), so a
+  // label or glyph that sets its own colour sat on the Highlight fill at
+  // 1.2-2.3:1. Every Highlight state therefore inks its whole subtree in
+  // HighlightText, !important so no theme or state rule can outrank it.
+  it('inks every descendant of every Highlight state in HighlightText, over any author rule', () => {
+    const unDoubled = (selector: string) => selector.replace(/(\.[\w-]+)\1(?![\w-])/g, '$1');
+    const states = declarations
+      .filter((d) => d.property === 'background-color' && d.value === 'Highlight')
+      .flatMap((d) => d.selector.split(/,(?![^(]*\))/).map((part) => unDoubled(part.trim())));
+    const subtree = declarations.filter((d) => d.property === 'color' && d.value === 'HighlightText !important');
+    expect(subtree.map((d) => d.selector)).toHaveLength(1);
+    // `:is(A, B).is-active *` covers `A.is-active` and `B.is-active`.
+    const covered = selectorList(subtree[0]?.selector ?? '').flatMap((selector) => {
+      const subject = selector.replace(/ \*$/, '');
+      if (subject === selector) return [`not a subtree selector: ${selector}`];
+      const grouped = /^:is\((.*)\)([^()]*)$/.exec(subject);
+      return grouped ? selectorList(grouped[1]).map((part) => part + grouped[2]) : [subject];
+    });
+    expect(states.length).toBeGreaterThanOrEqual(10);
+    expect(new Set(covered)).toEqual(new Set(states));
   });
 
   it('keeps the score band as a border style, since score chips carry text', () => {

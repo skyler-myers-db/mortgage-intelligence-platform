@@ -32,6 +32,90 @@ async function painted(target: Locator): Promise<string> {
   return `bg rgb(${colors.bg.join(', ')}) / fg rgb(${colors.fg.join(', ')})`;
 }
 
+interface Ink {
+  what: string;
+  kind: 'text' | 'glyph';
+  ratio: number;
+}
+
+/**
+ * Every visible label and svg glyph inside one element (the element too),
+ * with the contrast of its PAINTED ink against the fill composited behind
+ * it: its own background, then each ancestor's, out to the first opaque
+ * layer. A label is an element with its own non-blank text; a glyph is an
+ * svg shape, inked by its stroke, or by its fill when it has no stroke.
+ * Waits out every transition in the subtree first (the reduced-motion reset
+ * gives each element a 0.01ms `all` transition).
+ */
+async function subtreeInks(target: Locator): Promise<Ink[]> {
+  return target.evaluate(async (root) => {
+    await Promise.all(
+      root
+        .getAnimations({ subtree: true })
+        .filter((animation) => animation instanceof CSSTransition)
+        .map((transition) => transition.finished.catch(() => undefined)),
+    );
+    type Rgba = [number, number, number, number];
+    type Rgb = [number, number, number];
+    const parse = (value: string): Rgba => {
+      const match = /^rgba?\(([^)]+)\)$/.exec(value.trim());
+      if (!match) throw new Error(`unparseable colour: ${value}`);
+      const [r, g, b, a = '1'] = match[1].split(/[\s,/]+/).filter(Boolean);
+      return [Number(r), Number(g), Number(b), Number(a)];
+    };
+    const over = (top: Rgba, under: Rgb): Rgb => [0, 1, 2].map((i) => top[i] * top[3] + under[i] * (1 - top[3])) as Rgb;
+    const backdrop = (el: Element): Rgb => {
+      const layers: Rgba[] = [];
+      for (let node: Element | null = el; node; node = node.parentElement) {
+        const layer = parse(getComputedStyle(node).backgroundColor);
+        if (layer[3] > 0) layers.push(layer);
+        if (layer[3] >= 1) break;
+      }
+      const base = layers.pop();
+      if (!base || base[3] < 1) throw new Error(`no opaque fill behind ${el.tagName}`);
+      return layers.reduceRight<Rgb>((under, layer) => over(layer, under), [base[0], base[1], base[2]]);
+    };
+    const WEIGHTS = [0.2126, 0.7152, 0.0722];
+    const luminance = (rgb: Rgb) =>
+      rgb.reduce((sum, v, i) => {
+        const c = v / 255;
+        return sum + WEIGHTS[i] * (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+      }, 0);
+    const ratio = (a: Rgb, b: Rgb) => {
+      const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+      return (hi + 0.05) / (lo + 0.05);
+    };
+    const inks: Array<{ what: string; kind: 'text' | 'glyph'; ratio: number }> = [];
+    for (const el of [root, ...root.querySelectorAll('*')]) {
+      const box = el.getBoundingClientRect();
+      const style = getComputedStyle(el);
+      if (box.width <= 1 || box.height <= 1 || style.visibility !== 'visible') continue;
+      const glyph = el instanceof SVGGeometryElement;
+      const text = [...el.childNodes].some((node) => node.nodeType === Node.TEXT_NODE && Boolean(node.textContent?.trim()));
+      if (!glyph && !text) continue;
+      const ink = glyph ? (style.stroke !== 'none' ? style.stroke : style.fill) : style.color;
+      const fill = backdrop(el);
+      const tag = el.tagName.toLowerCase();
+      // A glyph is named by its nearest classed ancestor (the icon's svg or its host).
+      const owner = el.closest('[class]:not([class=""])')?.getAttribute('class') ?? '';
+      inks.push({
+        what: glyph ? `${owner} ${tag}` : `${el.getAttribute('class') || tag} "${el.textContent?.trim()}"`,
+        kind: glyph ? 'glyph' : 'text',
+        ratio: ratio(over(parse(ink), fill), fill),
+      });
+    }
+    return inks;
+  });
+}
+
+/** Text clears 4.5:1 and a glyph 3:1 (WCAG 1.4.3 / 1.4.11) on the forced fill behind it. */
+function expectLegible(state: string, inks: readonly Ink[]): void {
+  for (const ink of inks) {
+    const floor = ink.kind === 'text' ? 4.5 : 3;
+    expect(ink.ratio, `${state}: ${ink.kind} ${ink.what} at ${ink.ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(floor);
+  }
+}
+
 test.describe('forced colors (css-06 / a11y-10 / responsive-v3)', () => {
   for (const theme of THEMES) {
     test.describe(theme, () => {
@@ -99,6 +183,48 @@ test.describe('forced colors (css-06 / a11y-10 / responsive-v3)', () => {
         expect([first.knob, second.knob].sort()).toEqual(
           [await asComputedRgb(page, 'CanvasText'), await asComputedRgb(page, 'HighlightText')].sort(),
         );
+      });
+
+      // Chromium forces a child's OWN ink to its element's system colour
+      // (LinkText inside the route-nav link) and keeps an svg's authored ink,
+      // so before the subtree rule in 33-contrast-modes.css the current page's
+      // route-nav label and the palette row's hint and icon sat on the
+      // Highlight fill at 1.2-2.3:1. The container's own colour never showed it.
+      test('every label and glyph inside a Highlight state stays legible on the fill', async ({ app, page }) => {
+        // State applied by URL: the State pill goes active, and an Owner Link
+        // hero chip (with its remove glyph) and the More filters toggle join it.
+        await app.gotoRoute(`/lead-queue?state=IL&owner_link=${encodeURIComponent('Portfolio investor (5+)')}`);
+        const nav = page.getByRole('navigation', { name: 'Main navigation' });
+        const current = await subtreeInks(nav.locator('.filter.is-active'));
+        expect(current.map((ink) => ink.what)).toContain('filter__value "Leads"');
+        expect(current.some((ink) => ink.kind === 'glyph'), 'the route glyph is measured').toBe(true);
+        expectLegible('current-page route-nav link', current);
+
+        const applied: Record<string, Locator> = {
+          'STATE pill': page.getByRole('combobox', { name: 'STATE: IL' }),
+          'More filters toggle': page.getByTestId('lead-queue-more-filters'),
+          'OWNER LINK hero chip': page.getByTestId('lead-queue-active-filters').locator('.filter.is-active'),
+        };
+        for (const [name, chip] of Object.entries(applied)) {
+          await expect(chip, name).toHaveClass(/\bis-active\b/);
+          const inks = await subtreeInks(chip);
+          expect(inks.some((ink) => ink.kind === 'text'), `${name} labels are measured`).toBe(true);
+          expect(inks.some((ink) => ink.kind === 'glyph'), `${name} glyph is measured`).toBe(true);
+          expectLegible(name, inks);
+        }
+        // Every other applied-filter chip on the page (the drilldown's State chip).
+        for (const chip of await page.locator('#main-content .filter.is-active:not(.route-nav .filter)').all()) {
+          expectLegible('applied filter chip', await subtreeInks(chip));
+        }
+
+        const palette = await app.openCommandPalette();
+        await page.keyboard.press('ArrowDown');
+        const row = palette.locator('.cmdk__row.is-active');
+        await expect(row).toHaveCount(1);
+        const rowInks = await subtreeInks(row);
+        const kinds = rowInks.map((ink) => `${ink.kind}:${ink.what.split(' ')[0]}`);
+        expect(kinds).toEqual(expect.arrayContaining(['text:cmdk__row-label', 'text:cmdk__row-hint', 'glyph:cmdk__row-icon']));
+        expectLegible('active palette row', rowInks);
       });
 
       test('map steps keep distinct fills edged in CanvasText, and a focused Sankey node strokes Highlight', async ({ app, mockApi, page }) => {
