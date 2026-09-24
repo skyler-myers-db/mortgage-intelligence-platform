@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { parseGenieMarkdownBlocks, tokenizeGenieInline } from '../../lib/genieAnswerText';
 import { SOURCE_LINE_RE, catalogExplorerUrl } from '../../lib/ucAssetLinks';
 
 /** Phrases Genie commonly uses to restate the question before answering. */
@@ -100,102 +101,88 @@ export function isSourceFootnote(text: string): boolean {
   return SOURCE_FOOTNOTE_RE.test(text.trim());
 }
 
-/** Tiny markdown renderer for Genie answers: bold, inline code, bullets. */
+/**
+ * Inline markup of one block (audit 2026-09-21 `stack-02`/`genie-07`): bold,
+ * inline code, guarded italics, and links/images as their plain text. The
+ * grammar is lib/genieAnswerText's, shared with the plain-text flatten; the
+ * only anchors this renderer ever emits are the reviewed "Source:" links.
+ */
 function renderInlineMd(text: string, workspaceHost?: string | null): ReactNode[] {
-  const out: ReactNode[] = [];
-  const re = /(\*\*([^*]+?)\*\*|`([^`]+?)`)/g;
-  let last = 0;
-  let match: RegExpExecArray | null;
-  let key = 0;
-  while ((match = re.exec(text)) !== null) {
-    if (match.index > last) {
-      out.push(<span key={key++}>{renderSourceLinks(text.slice(last, match.index), workspaceHost)}</span>);
-    }
-    if (match[2] != null) {
-      out.push(<strong key={key++}>{match[2]}</strong>);
-    } else if (match[3] != null) {
-      out.push(
-        <code
-          key={key++}
-          className="inline-code"
-        >
-          {match[3]}
-        </code>,
+  return tokenizeGenieInline(text).map((token, key) => {
+    if (token.kind === 'strong') return <strong key={key}>{token.text}</strong>;
+    if (token.kind === 'em') return <em key={key}>{token.text}</em>;
+    if (token.kind === 'code') {
+      return (
+        <code key={key} className="inline-code">
+          {token.text}
+        </code>
       );
     }
-    last = match.index + match[0].length;
-  }
-  if (last < text.length) {
-    out.push(<span key={key++}>{renderSourceLinks(text.slice(last), workspaceHost)}</span>);
-  }
-  return out;
+    // A link keeps its words only: an LLM-authored URL never becomes an
+    // anchor and an image URL is never fetched.
+    if (token.kind === 'link') return <span key={key}>{token.text}</span>;
+    return <span key={key}>{renderSourceLinks(token.text, workspaceHost)}</span>;
+  });
+}
+
+/** Verbatim narrative text: a prose pipe table (labelled) or a fenced block. */
+function NarrativePre({ lines, narrative }: { lines: string[]; narrative: boolean }) {
+  return (
+    <figure className="genie-md-pre">
+      {narrative && <figcaption className="genie-md-pre__label">As written in Genie&apos;s narrative</figcaption>}
+      {/* Focusable so a keyboard can scroll a wide table sideways inside it
+          (axe scrollable-region-focusable). */}
+      <pre tabIndex={0}>{lines.join('\n')}</pre>
+    </figure>
+  );
 }
 
 export function MarkdownAnswer({
   text,
   workspaceHost,
+  headingLevel = 3,
 }: {
   text: string;
   /** Workspace origin for Catalog Explorer deep links. Threaded in from
    *  `useWorkspaceHost()` by the caller so this renderer stays pure and
    *  testable. Omitted/null ⇒ "Source: …" stays plain text. */
   workspaceHost?: string | null;
+  /** Level of the headings this text carries: 3 in a single-turn answer, 4
+   *  inside a deep-research section, whose own title is the h3 (genie-08). */
+  headingLevel?: 3 | 4;
 }) {
-  const lines = text.split(/\r?\n/);
-  type Block = { type: 'p'; text: string } | { type: 'ul'; items: string[] };
-  const blocks: Block[] = [];
-  for (const raw of lines) {
-    const line = raw.trimEnd();
-    const bullet = /^\s*([-*•])\s+(.*)$/.exec(line);
-    if (bullet) {
-      const item = bullet[2];
-      const last = blocks[blocks.length - 1];
-      if (last && last.type === 'ul') {
-        last.items.push(item);
-      } else {
-        blocks.push({ type: 'ul', items: [item] });
-      }
-    } else if (line.trim() === '') {
-      const last = blocks[blocks.length - 1];
-      if (last && last.type === 'p') blocks.push({ type: 'p', text: '' });
-    } else {
-      const last = blocks[blocks.length - 1];
-      if (last && last.type === 'p' && last.text === '') {
-        last.text = line;
-      } else if (last && last.type === 'p') {
-        last.text = `${last.text} ${line.trim()}`;
-      } else {
-        blocks.push({ type: 'p', text: line });
-      }
-    }
-  }
+  const Heading = headingLevel === 4 ? 'h4' : 'h3';
   return (
     <>
-      {blocks
-        .filter((b) => (b.type === 'p' ? b.text.length > 0 : b.items.length > 0))
-        .map((b, i) =>
-          b.type === 'p' ? (
-            <p
-              key={i}
-              className={`genie-md-p ${i === 0 ? 'genie-md-p--first' : ''} ${
-                isSectionHeading(b.text) ? 'genie-md-p--heading' : ''
-              } ${isSourceFootnote(b.text) ? 'genie-md-p--source' : ''}`
-                .replace(/\s+/g, ' ')
-                .trim()}
-            >
+      {parseGenieMarkdownBlocks(text).map((b, i) => {
+        const first = i === 0 ? ' genie-md-p--first' : '';
+        if (b.type === 'h' || (b.type === 'p' && isSectionHeading(b.text))) {
+          return (
+            <Heading key={i} className={`genie-md-p${first} genie-md-p--heading`}>
+              {renderInlineMd(b.text, workspaceHost)}
+            </Heading>
+          );
+        }
+        if (b.type === 'p') {
+          return (
+            <p key={i} className={`genie-md-p${first}${isSourceFootnote(b.text) ? ' genie-md-p--source' : ''}`}>
               {renderInlineMd(b.text, workspaceHost)}
             </p>
-          ) : (
-            <ul
-              key={i}
-              className="genie-md-list"
-            >
-              {b.items.map((it, j) => (
-                <li key={j}>{renderInlineMd(it, workspaceHost)}</li>
-              ))}
-            </ul>
-          ),
-        )}
+          );
+        }
+        if (b.type === 'pre') return <NarrativePre key={i} lines={b.lines} narrative={b.narrative} />;
+        const items = b.items.map((it, j) => <li key={j}>{renderInlineMd(it, workspaceHost)}</li>);
+        return b.type === 'ol' ? (
+          // `start` keeps the numbering of a list an interleaved bullet split.
+          <ol key={i} className="genie-md-list genie-md-list--ordered" start={b.start !== 1 ? b.start : undefined}>
+            {items}
+          </ol>
+        ) : (
+          <ul key={i} className="genie-md-list">
+            {items}
+          </ul>
+        );
+      })}
     </>
   );
 }

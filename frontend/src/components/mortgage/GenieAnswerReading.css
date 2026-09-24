@@ -1,0 +1,43 @@
+/* ============================================================
+   GENIE ANSWER READING (audit 2026-09-21 wave 3: stack-02, genie-07,
+   genie-08, motion-v2, genie-06 slice 2)
+
+   Lazy stylesheet: imported by GenieAnswer.tsx and GenieChatBody.tsx, so it
+   loads with the Genie answer chunk, never in the initial CSS (the
+   GenieAnswerToolbar.css precedent). Tokens only: no literal colors or
+   pixel values.
+   ============================================================ */
+
+/* Real headings (genie-08): an h3/h4 carrying the paragraph classes renders
+   exactly like the <p> it replaced once the UA bold is reset; a bold-only
+   title stays bold through its own <strong>. Size and margins already come
+   from .genie-md-p / .genie-md-p--heading (14-genie-markdown-and-proof.css). */
+:is(h3, h4).genie-md-p { font-weight: inherit; }
+
+/* Verbatim narrative text (stack-02 / genie-07): a prose pipe table or a
+   fenced block, shown as written and scrolled sideways inside itself. A
+   documented BEM extension, `.genie-md-pre`: the prototype's Genie bubble
+   (design_files/index.html:741-760) has no preformatted block. A pipe table
+   is never styled as a <table>: LLM-written numbers must not read as
+   governed rows. */
+.genie-md-pre { margin: var(--sp-2) 0 0; }
+.genie-md-pre__label {
+  margin-bottom: var(--sp-1);
+  color: var(--text-3);
+  font-size: var(--fs-11);
+}
+.genie-md-pre pre {
+  box-sizing: border-box;
+  max-inline-size: 100%;
+  margin: 0;
+  overflow-x: auto;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--bg-1);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+  color: var(--text-1);
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  line-height: var(--lh-body);
+  white-space: pre;
+}

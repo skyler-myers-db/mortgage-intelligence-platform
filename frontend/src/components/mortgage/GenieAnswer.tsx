@@ -22,6 +22,7 @@ import { humanizeKey, pickPlan } from './GenieAnswer.logic';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { answerCohortFromActions } from '../../lib/genieCellLinks';
 import { GOVERNED_ACTION_SOURCE } from '../../lib/genieTurnOutcome';
+import './GenieAnswerReading.css';
 
 export { stripQuestionRestatement } from './GenieAnswer.markdown';
 export { inferChartFromRows } from './GenieAnswer.logic';
