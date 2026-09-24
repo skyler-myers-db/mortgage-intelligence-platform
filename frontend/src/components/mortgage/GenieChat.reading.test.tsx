@@ -266,6 +266,31 @@ describe('floating Genie panel respects the reader (genie-08)', () => {
     expect(jump()).toBeNull();
   });
 
+  it('collapses earlier turns the panel never saw land; the latest and its chips stay', () => {
+    appendGenieTurn('First question?', answer({ answer: 'First **answer**.', message_id: 'msg-1' }));
+    appendGenieTurn('Second question?', answer({ answer: 'Second answer.', message_id: 'msg-2' }));
+    appendGenieTurn('Third question?', answer({ answer: 'Third answer.', message_id: 'msg-3' }));
+    act(() => {
+      root.render(
+        <MemoryRouter>
+          <GenieChat />
+        </MemoryRouter>,
+      );
+    });
+    const bubbles = Array.from(container.querySelectorAll<HTMLElement>('.genie__msg--ai'));
+    expect(bubbles.map((b) => (b.querySelector('.genie-answer') ? 'full' : 'collapsed'))).toEqual([
+      'collapsed',
+      'collapsed',
+      'full',
+    ]);
+    expect(bubbles[0].querySelector('.genie-collapse__digest')?.textContent).toBe('First answer.');
+    // Questions and the evidence chips are unchanged.
+    expect(container.querySelectorAll('.genie__msg--user')).toHaveLength(3);
+    expect(bubbles.map((b) => b.querySelector('.sources') !== null)).toEqual([true, true, true]);
+    act(() => bubbles[1].querySelector<HTMLButtonElement>('button.genie-collapse__toggle')!.click());
+    expect(bubbles[1].querySelector('.genie-answer')).not.toBeNull();
+  });
+
   it('sending again from the panel follows the transcript once more', async () => {
     const body = renderWithEarlierTurn();
     const first = await ask('How many borrowers pass the screen?');

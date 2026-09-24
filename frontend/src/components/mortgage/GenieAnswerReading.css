@@ -90,6 +90,24 @@
   white-space: pre;
 }
 
+/* A collapsed earlier turn (genie-08): its digest under a disclosure toggle,
+   the full answer unmounted. `.genie-collapse` is a documented new block;
+   the prototype (design_files/index.html:741-760) shows every turn in full. */
+.genie-collapse {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.genie-collapse__toggle { align-self: flex-start; }
+.genie-collapse__toggle svg { transition: transform var(--dur-fast) var(--ease); }
+.genie-collapse:not(.is-expanded) .genie-collapse__toggle svg { transform: rotate(-90deg); }
+.genie-collapse__digest {
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--fs-13);
+  line-height: var(--lh-body);
+}
+
 /* "New answer" (genie-08): an answer landed while the reader was reading an
    earlier turn, so nothing scrolled. A documented BEM extension of `.genie`
    (design_files/index.html:741-760 has no such control), sticky at the
@@ -116,5 +134,6 @@
 
 /* Reduced motion: every transition and animation in this sheet stops. */
 @media (prefers-reduced-motion: reduce) {
-  .genie-answer__section-toggle svg { transition: none; }
+  .genie-answer__section-toggle svg,
+  .genie-collapse__toggle svg { transition: none; }
 }

@@ -11,9 +11,11 @@ import {
   sourceAssetsFor,
   warningLabelForSource,
 } from './GenieChat.helpers';
+import { GenieCollapsedTurn } from './GenieCollapsedTurn';
 import { GenieProgress } from './GenieProgress';
 import { GenieTurnActions } from './GenieTurnActions';
 import { GENIE_RESUMING_LABEL, GenieStopRow, GenieTurnNote } from './GenieTurnNote';
+import { useGenieTurnCollapse } from './useGenieTurnCollapse';
 import './GenieTurnActions.css';
 import './GenieAnswerReading.css';
 
@@ -87,6 +89,8 @@ export function GenieChatBody({
   onJumpToNewAnswer,
 }: GenieChatBodyProps) {
   const lastAnswerIndex = msgs.reduce((last, m, i) => (m.who === 'ai' ? i : last), -1);
+  // Earlier turns this panel never saw land render as their digest (genie-08).
+  const collapse = useGenieTurnCollapse(msgs.flatMap((m) => (m.who === 'ai' ? [m.payload] : [])));
   const reask = (question: string) => onAsk(question, undefined);
   const turnNote = (note: GenieTurnNoteShape, key: string) => (
     <GenieTurnNote
@@ -124,6 +128,19 @@ export function GenieChatBody({
     const prev = msgs[i - 1];
     const question = prev && prev.who === 'user' ? prev.text : undefined;
     const reaskKind = question ? answerReask(m.payload) : null;
+    const presentation = collapse.presentation(m.payload);
+    const fullAnswer = (
+      <GenieAnswer
+        payload={m.payload}
+        question={question}
+        onFollowUp={(q, followUpConversationId) => onAsk(q, followUpConversationId)}
+        followUpDisabledReason={busyReason}
+        onAction={(action) => onAction(action, m.payload)}
+        onEditQuestion={onEdit}
+        onAnnounce={onAnnounce}
+        dense
+      />
+    );
     transcript.push(
       <div
         key={i}
@@ -133,16 +150,17 @@ export function GenieChatBody({
         tabIndex={i === lastAnswerIndex ? -1 : undefined}
       >
         <div className="bubble">
-          <GenieAnswer
-            payload={m.payload}
-            question={question}
-            onFollowUp={(q, followUpConversationId) => onAsk(q, followUpConversationId)}
-            followUpDisabledReason={busyReason}
-            onAction={(action) => onAction(action, m.payload)}
-            onEditQuestion={onEdit}
-            onAnnounce={onAnnounce}
-            dense
-          />
+          {presentation === 'full' ? (
+            fullAnswer
+          ) : (
+            <GenieCollapsedTurn
+              payload={m.payload}
+              expanded={presentation === 'expanded'}
+              onToggle={() => collapse.toggle(m.payload)}
+            >
+              {fullAnswer}
+            </GenieCollapsedTurn>
+          )}
         </div>
         {/* Source chip row. The backend emits "genie" (live)
             or governed refusal/degraded source values. Warning
