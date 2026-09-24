@@ -161,9 +161,15 @@ test.describe('an ended session (the proxy answers 401 {})', () => {
     const cell = page.getByTestId(`lead-approval-cell-${id}`);
     const approve = cell.getByRole('button', { name: `Approve ${id}` });
     await expect(approve).toBeVisible();
+    // Approve opens the review first (flow-03, wave 1c): the draft is read
+    // while the session is live, and the session ends before Confirm sends
+    // the approval itself.
+    await approve.click();
+    const review = page.getByTestId('lead-approve-review');
+    await expect(review.getByTestId('lead-approve-review-subject')).not.toBeEmpty();
     app.degrade(EVERY_API_PATH_BUT_HEALTH, PROXY_SESSION_EXPIRED);
 
-    await approve.click();
+    await review.getByTestId('lead-approve-review-confirm').click();
     const dialog = sessionDialog(page);
     await expect(dialog).toBeVisible();
     await expect(dialog.locator('[data-session-unrecorded="approval"]')).toHaveText(
@@ -300,31 +306,54 @@ test.describe('offline', () => {
 });
 
 test.describe('a change attempted offline', () => {
-  test('an Approve click while offline says it was not recorded and to reconnect, never that it "will load"', async ({ app, page, context, hygiene }) => {
-    // The draft request this click makes cannot leave the browser: that
+  test('an approval confirmed while offline says it was not recorded and to reconnect, never that it "will load"', async ({ app, page, context, hygiene }) => {
+    // The approve request Confirm makes cannot leave the browser: that
     // failure is this test's own doing, and nothing else may fail.
-    hygiene.allow('request-failed', /^POST \S+\/api\/v1\/outreach\/draft\S* failed: net::ERR_INTERNET_DISCONNECTED$/);
-    hygiene.allow('console.error', /Failed to load resource: net::ERR_INTERNET_DISCONNECTED \(http:\/\/[^)]+\/api\/v1\/outreach\/draft[^)]*\)/);
+    hygiene.allow('request-failed', /^POST \S+\/api\/v1\/outreach\/approve\S* failed: net::ERR_INTERNET_DISCONNECTED$/);
+    hygiene.allow('console.error', /Failed to load resource: net::ERR_INTERNET_DISCONNECTED \(http:\/\/[^)]+\/api\/v1\/outreach\/approve[^)]*\)/);
     await app.gotoRoute('/lead-queue');
     const id = PRIMARY_BORROWER.borrower_id;
     const cell = page.getByTestId(`lead-approval-cell-${id}`);
     const approve = cell.getByRole('button', { name: `Approve ${id}` });
     await expect(approve).toBeVisible();
+    // Approve opens the review first (flow-03, wave 1c): the review and its
+    // draft load while online; the network drops before Confirm.
+    await approve.click();
+    const review = page.getByTestId('lead-approve-review');
+    await expect(review.getByTestId('lead-approve-review-subject')).not.toBeEmpty();
 
     await context.setOffline(true);
     // The mock API answers through page.route, which offline emulation does
-    // not reach, so the draft fails the way a real offline fetch does.
-    await page.route('**/api/v1/outreach/draft**', (route) => route.abort('internetdisconnected'));
+    // not reach, so the approve fails the way a real offline fetch does.
+    await page.route('**/api/v1/outreach/approve**', (route) => route.abort('internetdisconnected'));
     await expect(page.locator('.degraded-banner[data-connection="offline"]')).toContainText(
       'Approvals and other changes are not recorded while you are offline.',
     );
-    await approve.click();
+    await review.getByTestId('lead-approve-review-confirm').click();
     // A write that failed offline is never replayed on reconnect, so its
     // error must not borrow a read's "this will load" promise.
     const error = page.locator('.table-error[role="alert"]');
     await expect(error).toHaveText(`Couldn't approve ${id}: You are offline. Reconnect, then try again.`);
     await expect(cell).not.toContainText('Approved');
     await expect(sessionDialog(page)).toHaveCount(0);
+  });
+
+  test('an Approve while offline, before the review has ever loaded, says to reconnect rather than reload', async ({ app, page, context, hygiene }) => {
+    // The review's code chunk cannot load offline: this test's own doing.
+    hygiene.allow('request-failed', /LeadApproveReview-[\w-]+\.(js|css) failed: net::ERR_INTERNET_DISCONNECTED$/);
+    hygiene.allow('console.error', /ERR_INTERNET_DISCONNECTED|Failed to fetch dynamically imported module|Unable to preload CSS/);
+    hygiene.allow('pageerror', /Failed to fetch dynamically imported module|Unable to preload CSS/);
+    await app.gotoRoute('/lead-queue');
+    const id = PRIMARY_BORROWER.borrower_id;
+    const approve = page.getByTestId(`lead-approval-cell-${id}`).getByRole('button', { name: `Approve ${id}` });
+    await expect(approve).toBeVisible();
+
+    await context.setOffline(true);
+    await approve.click();
+    await expect(page.locator('[data-testid="lead-approve-review-loading"][role="alert"]')).toHaveText(
+      'You are offline, so the approval review could not open. Nothing was drafted or approved. Reconnect, then approve again.',
+    );
+    expect(page.url(), 'no reload was attempted while offline').toContain('/lead-queue');
   });
 });
 

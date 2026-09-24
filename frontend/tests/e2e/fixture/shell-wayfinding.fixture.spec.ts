@@ -167,7 +167,7 @@ test.describe('identity menu (shell-06)', () => {
     });
   }
 
-  test('Keyboard shortcuts dispatches the overlay event; Glossary navigates', async ({ app, page }) => {
+  test('Keyboard shortcuts opens the ? sheet through its event; Glossary navigates', async ({ app, page }) => {
     await app.gotoRoute('/');
     await page.evaluate(() => {
       (window as unknown as { __shortcutEvents: number }).__shortcutEvents = 0;
@@ -179,6 +179,11 @@ test.describe('identity menu (shell-06)', () => {
     await trigger.click();
     await page.getByRole('menuitem', { name: 'Keyboard shortcuts' }).click();
     await expect.poll(() => page.evaluate(() => (window as unknown as { __shortcutEvents: number }).__shortcutEvents)).toBe(1);
+    // Integrated with the queue lane's ShortcutOverlay, the event opens the sheet.
+    const sheet = page.getByRole('dialog', { name: 'Keyboard shortcuts' });
+    await expect(sheet).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(sheet).toHaveCount(0);
     await trigger.click();
     await page.getByRole('menuitem', { name: 'Glossary' }).click();
     await expect(page).toHaveURL(/\/glossary$/);

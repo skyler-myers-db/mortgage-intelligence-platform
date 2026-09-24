@@ -506,7 +506,9 @@ test.describe('toast region (states-07 slice 1)', () => {
     );
     await app.gotoRoute(OFFER_PATH);
     await page.getByLabel('Assign to loan officer').selectOption(ROUTED_LOAN_OFFICER.email);
-    await page.getByTestId('hero-approve').click();
+    // The Offer Orchestrator lane retired the hero Approve: the decision bar's
+    // gate is the only Approve on the page.
+    await page.getByRole('button', { name: 'Approve outreach' }).click();
 
     const toast = toastRegion(page).locator('[role="status"] .toast');
     await expect(toast).toHaveCount(1);

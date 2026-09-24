@@ -6,6 +6,7 @@ import { Icon } from '../Icon';
 import { Button } from '../Primitives';
 import { useApp } from '../AppContext';
 import { api } from '../../lib/api';
+import { useIsOnline } from '../../lib/connectivity';
 import { auditEventHref } from '../../lib/auditLinks';
 import { queryKeys } from '../../lib/queryKeys';
 import { planLeadCsvExport } from './LeadTable.csv';
@@ -268,6 +269,9 @@ export function LeadTable({
   // cache or that draft would sit unseen with no Cancel. LeadTable is
   // 'use no memo', so this read is fresh on every render.
   const reviewModule = reviewChunk.module ?? REVIEW_CHUNK.current();
+  // Offline, a chunk that could not load is not a stale deploy: reloading
+  // would fail too, so the failure copy says to reconnect instead.
+  const online = useIsOnline();
   const ReviewInline = reviewModule?.LeadApproveReviewInline;
   const ReviewDialog = reviewModule?.LeadApproveReviewDialog;
   // The result line follows an approve made through the review, so it ships
@@ -606,7 +610,9 @@ export function LeadTable({
       {reviewProps && ReviewDialog && openReview?.mode === 'dialog' && <ReviewDialog {...reviewProps} />}
       {flow.reviewLoadFailed ? (
         <div role="alert" className="table-error" data-testid="lead-approve-review-loading">
-          The approval review could not load, so no draft was generated and nothing was approved. Reload the page, then approve again.
+          {online
+            ? 'The approval review could not load, so no draft was generated and nothing was approved. Reload the page, then approve again.'
+            : 'You are offline, so the approval review could not open. Nothing was drafted or approved. Reconnect, then approve again.'}
         </div>
       ) : reviewOpeningFor && (
         <div role="status" className="table-neutral" data-testid="lead-approve-review-loading">
