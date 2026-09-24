@@ -20,6 +20,9 @@
  *    panel closes (no approve after the reject); Cmd-K never mounts the
  *    palette under the review dialog; the Cmd-K verb's review hands focus
  *    back to the table; "Skip table" lands on a visible, ringed target.
+ *  - Review round 2: an evidence chip in the review dialog opens the drawer
+ *    WITH focus in it (Enter there approves nothing; Escape returns to the
+ *    inline review).
  *
  * Holds are RequestGates, never wall-clock waits, so the in-flight
  * assertions hold under any machine load.
@@ -75,6 +78,21 @@ function scrollRegion(page: Page): Locator {
 
 function cursorRow(page: Page): Locator {
   return page.locator('table.tbl tr.is-cursor');
+}
+
+function focusInOpenDrawer(page: Page): Promise<boolean> {
+  return page.evaluate(() => document.querySelector('aside.drawer.is-open')?.contains(document.activeElement) ?? false);
+}
+
+/** Let `count` animation frames commit (focus handoffs run on frames). */
+function frames(page: Page, count: number): Promise<void> {
+  return page.evaluate((remaining) => new Promise<void>((resolve) => {
+    const step = (left: number) => {
+      if (left <= 0) resolve();
+      else requestAnimationFrame(() => step(left - 1));
+    };
+    step(remaining);
+  }), count);
 }
 
 /** The cursor row's box sits inside the scrollport, below the sticky header. */
@@ -287,6 +305,56 @@ test.describe('approve review', () => {
     expect(held.approvals, 'no approve after the reject').toEqual([]);
     expect(echo.calls).toEqual([target.borrower_id]);
   });
+
+  for (const how of ['keyboard', 'pointer'] as const) {
+    test(`an evidence chip in the review dialog (${how}) opens the drawer holding focus: Enter there approves nothing, Escape returns into the inline review`, async ({ app, mockApi, page }) => {
+      const echo = registerDraftEcho(mockApi);
+      const held = registerHeldDecision(mockApi);
+      await app.gotoRoute('/lead-queue');
+      await installApproveFetchProbe(page);
+      const target = LEADS[0];
+
+      await scrollRegion(page).focus();
+      await page.keyboard.press('j');
+      await page.keyboard.press('a');
+      const dialog = page.locator('dialog.lead-approve-dialog');
+      await expect(dialog.getByTestId('lead-approve-review-confirm')).toBeFocused();
+      const chip = dialog.locator('.evidence-chip').first();
+      if (how === 'keyboard') {
+        await chip.focus();
+        await page.keyboard.press('Enter');
+      } else {
+        await chip.click();
+      }
+
+      const drawer = app.evidenceDrawer();
+      await expect(drawer).toHaveClass(/is-open/);
+      await expect(dialog).toHaveCount(0);
+      const inline = page.locator('table.tbl tr.tbl__expand').getByTestId('lead-approve-review');
+      await expect(inline, 'the same review moved into its row').toHaveAttribute('data-review-phase', 'ready');
+      await expect.poll(() => focusInOpenDrawer(page), 'focus is inside the open drawer').toBe(true);
+      // Nothing behind the drawer takes focus back once the handoff settles.
+      await frames(page, 4);
+      expect(await focusInOpenDrawer(page), 'still inside the drawer').toBe(true);
+
+      // An Enter meant for the drawer (on its selected tab, which keeps it
+      // open) certifies nothing: no approve POST leaves the browser.
+      await page.keyboard.press('Tab');
+      expect(await focusInOpenDrawer(page)).toBe(true);
+      await page.keyboard.press('Enter');
+      await expect(drawer).toHaveClass(/is-open/);
+      expect(await approvePostsSent(page), 'no approve POST under the drawer').toBe(0);
+      expect(held.approvals).toEqual([]);
+
+      await page.keyboard.press('Escape');
+      await expect(drawer).not.toHaveClass(/is-open/);
+      await expect(inline.locator('.evidence-chip').first(), 'focus returns to the chip in the inline review').toBeFocused();
+      await expect(inline).toHaveAttribute('data-review-phase', 'ready');
+      expect(await approvePostsSent(page)).toBe(0);
+      expect(held.approvals).toEqual([]);
+      expect(echo.calls, 'the move drafted nothing new').toEqual([target.borrower_id]);
+    });
+  }
 
   for (const theme of ['dark', 'light'] as const satisfies readonly FixtureTheme[]) {
     test(`the review dialog and the ? sheet pass axe (${theme})`, async ({ app, mockApi, page }) => {

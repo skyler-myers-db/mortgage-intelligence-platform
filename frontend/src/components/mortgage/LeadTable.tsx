@@ -4,7 +4,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { Link, useSearchParams } from 'react-router';
 import { Icon } from '../Icon';
 import { Button } from '../Primitives';
-import { useApp, type DrawerSource } from '../AppContext';
+import { useApp } from '../AppContext';
 import { api } from '../../lib/api';
 import { auditEventHref } from '../../lib/auditLinks';
 import { queryKeys } from '../../lib/queryKeys';
@@ -244,6 +244,7 @@ export function LeadTable({
     tableWrapRef,
     virtualized: shouldVirtualize,
     scrollToIndex: (index) => rowVirtualizer.scrollToIndex(index, { align: 'auto' }),
+    openEvidence: setDrawer,
   });
   const { review } = flow;
   const openReview = review.review;
@@ -265,15 +266,11 @@ export function LeadTable({
     onRetryDraft: review.retryDraft,
     confirmRef: flow.confirmRef,
     shouldTakeFocus: flow.shouldConfirmTakeFocus,
+    claimDraftLanding: review.claimDraftLanding,
     // The dialog sits in the top layer, above the evidence drawer: opening
-    // a source moves the SAME review (same draft) into its expanded row.
-    onInspectEvidence: openReview.mode === 'dialog'
-      ? (source: DrawerSource) => {
-          review.moveInline();
-          setExpanded(openReview.borrowerId);
-          setDrawer(source);
-        }
-      : undefined,
+    // a source moves the SAME review (same draft) into its expanded row,
+    // then opens the drawer with focus handed to it (useLeadTableKeyboardFlow).
+    onInspectEvidence: openReview.mode === 'dialog' ? flow.inspectEvidenceFromDialog : undefined,
   };
   const skipTargetId = `${useId()}-end`;
 

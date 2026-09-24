@@ -7,7 +7,7 @@ import { Icon } from '../Icon';
 import { Button, Chip, EvidenceChip } from '../Primitives';
 import { Skeleton } from '../ui/Skeleton';
 import { leadApproveReviewId } from './LeadApproveReview.ids';
-import type { LeadApproveReviewState } from './useLeadApproveReview';
+import type { LeadApproveReviewPhase, LeadApproveReviewState } from './useLeadApproveReview';
 import './LeadApproveReview.css';
 
 // The approval result line renders only after an approve made through this
@@ -39,14 +39,24 @@ export interface LeadApproveReviewProps {
   onConfirm: () => void;
   onCancel: () => void;
   onRetryDraft: () => void;
-  /** Opening an evidence source from the review (the dialog moves inline first). */
-  onInspectEvidence?: (source: DrawerSource) => void;
+  /**
+   * Opening an evidence source from the review (the dialog moves inline
+   * first). `chipIndex` names the chip, so its inline twin can hold focus.
+   */
+  onInspectEvidence?: (source: DrawerSource, chipIndex: number) => void;
   confirmRef?: RefObject<HTMLButtonElement | null>;
   /**
    * Asked when the draft lands: may Confirm take focus (so Enter approves)?
    * False when the reader has moved on. Default: yes.
    */
   shouldTakeFocus?: (borrowerId: string) => boolean;
+  /**
+   * Asked when a mounted review shows a ready draft: is this the draft
+   * landing? True once per landed draft (useLeadApproveReview), so a review
+   * first rendered after its draft landed still counts, and one that moved
+   * or remounted does not. Default: the drafting -> ready transition only.
+   */
+  claimDraftLanding?: (borrowerId: string) => boolean;
 }
 
 export function LeadApproveReview({
@@ -58,18 +68,31 @@ export function LeadApproveReview({
   onInspectEvidence,
   confirmRef,
   shouldTakeFocus,
+  claimDraftLanding,
 }: LeadApproveReviewProps) {
   const titleId = useId();
   const { borrowerId, phase, draft, error } = review;
   const localConfirmRef = useRef<HTMLButtonElement>(null);
   const buttonRef = confirmRef ?? localConfirmRef;
   const shouldTakeFocusRef = useRef(shouldTakeFocus);
+  const claimDraftLandingRef = useRef(claimDraftLanding);
   useEffect(() => {
     shouldTakeFocusRef.current = shouldTakeFocus;
-  }, [shouldTakeFocus]);
+    claimDraftLandingRef.current = claimDraftLanding;
+  }, [shouldTakeFocus, claimDraftLanding]);
   // The draft landed: Confirm takes focus, so Enter approves this copy.
+  // Once per landed draft, never on a mount that merely shows a draft that
+  // already landed: the dialog review moving into its row (to open an
+  // evidence source, so the drawer is about to own focus) or an inline
+  // review remounting as its row scrolls back into the virtual window.
+  const previousPhaseRef = useRef<LeadApproveReviewPhase | null>(null);
   useEffect(() => {
+    const previous = previousPhaseRef.current;
+    previousPhaseRef.current = phase;
     if (phase !== 'ready') return;
+    const claim = claimDraftLandingRef.current;
+    const landed = claim ? claim(borrowerId) : previous === 'drafting';
+    if (!landed) return;
     if (shouldTakeFocusRef.current && !shouldTakeFocusRef.current(borrowerId)) return;
     buttonRef.current?.focus();
   }, [phase, borrowerId, buttonRef]);
@@ -143,13 +166,13 @@ export function LeadApproveReview({
               <Chip variant="success" icon="shield">
                 Disclosure {draft.disclosure_version} · {draft.disclosure_state || 'state fallback'}
               </Chip>
-              {draft.evidence_assets.map((asset) => {
+              {draft.evidence_assets.map((asset, chipIndex) => {
                 const source = descriptorFor(asset);
                 return (
                   <EvidenceChip
                     key={asset}
                     source={source}
-                    onClick={onInspectEvidence ? () => onInspectEvidence(source) : undefined}
+                    onClick={onInspectEvidence ? () => onInspectEvidence(source, chipIndex) : undefined}
                   >
                     {source.title}
                   </EvidenceChip>

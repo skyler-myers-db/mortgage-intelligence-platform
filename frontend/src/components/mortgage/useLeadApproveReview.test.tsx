@@ -164,4 +164,31 @@ describe('useLeadApproveReview eligibility re-check', () => {
       'Not approved yet: another decision for this borrower is still being recorded. Wait for it to finish, then check the row.',
     );
   });
+
+  it('claims each landed draft once: a moved or remounted review never re-claims it (review round 2)', async () => {
+    draftForApproval.mockResolvedValue(DRAFT);
+    act(() => {
+      hook!.open(BORROWER, 'dialog');
+    });
+    expect(hook!.claimDraftLanding(BORROWER), 'nothing landed while drafting').toBe(false);
+    await settle();
+    expect(hook!.review?.phase).toBe('ready');
+    expect(hook!.claimDraftLanding('B-SOMEONEELSE1'), 'another row never claims it').toBe(false);
+    expect(hook!.claimDraftLanding(BORROWER), 'the first review showing it').toBe(true);
+    expect(hook!.claimDraftLanding(BORROWER), 'claimed already').toBe(false);
+    act(() => {
+      hook!.moveInline();
+    });
+    expect(hook!.claimDraftLanding(BORROWER), 'the review moved into its row').toBe(false);
+
+    // A new explicit intent is a new landing.
+    act(() => {
+      hook!.cancel();
+    });
+    act(() => {
+      hook!.open(BORROWER, 'inline');
+    });
+    await settle();
+    expect(hook!.claimDraftLanding(BORROWER)).toBe(true);
+  });
 });

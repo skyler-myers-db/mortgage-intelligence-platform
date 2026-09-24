@@ -14,6 +14,7 @@
  */
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import type { LeadSummary } from '../../types';
+import type { DrawerSource } from '../AppContext';
 import type { OutreachDraftResult } from '../../lib/apiTypes';
 import { publishCommandSelection, type CommandVerb } from '../command/commandSelection';
 import { isLeadApprovalEligible, isLeadSelectableForSalesOps, isTerminalApproval } from './LeadTable.logic';
@@ -42,6 +43,8 @@ export interface UseLeadTableKeyboardFlowInput {
   tableWrapRef: RefObject<HTMLDivElement | null>;
   virtualized: boolean;
   scrollToIndex: (index: number) => void;
+  /** Open the evidence drawer (AppContext `setDrawer`). */
+  openEvidence: (source: DrawerSource) => void;
 }
 
 /** Focus an element once it is rendered (a virtualized row may need a frame or two). */
@@ -54,6 +57,40 @@ function focusWhenRendered(id: string, attempts = 12) {
       return;
     }
     if (attempts > 0) focusWhenRendered(id, attempts - 1);
+  });
+}
+
+/**
+ * Another modal layer owns the keyboard (the evidence drawer, the palette,
+ * the shortcut sheet, a modal `<dialog>` other than this review's own): a
+ * control behind it must never take focus.
+ */
+function anotherModalLayerOpen(borrowerId: string): boolean {
+  const reviewForm = document.getElementById(leadApproveReviewId(borrowerId));
+  for (const layer of document.querySelectorAll('[aria-modal="true"], dialog[open]')) {
+    if (layer.closest('[aria-hidden="true"]') !== null) continue;
+    if (reviewForm !== null && layer.contains(reviewForm)) continue;
+    return true;
+  }
+  return false;
+}
+
+/** Once the review is rendered in its row (not the dialog), hand over its evidence chip. */
+function whenInlineReviewChip(
+  borrowerId: string,
+  chipIndex: number,
+  then: (chip: HTMLElement | null) => void,
+  attempts = 12,
+) {
+  requestAnimationFrame(() => {
+    const form = document.getElementById(leadApproveReviewId(borrowerId));
+    const inline = form !== null && form.closest('dialog') === null ? form : null;
+    const chip = inline?.querySelectorAll<HTMLElement>('.evidence-chip')[chipIndex] ?? null;
+    if (chip !== null || attempts <= 0) {
+      then(chip);
+      return;
+    }
+    whenInlineReviewChip(borrowerId, chipIndex, then, attempts - 1);
   });
 }
 
@@ -71,6 +108,7 @@ export function useLeadTableKeyboardFlow({
   tableWrapRef,
   virtualized,
   scrollToIndex,
+  openEvidence,
 }: UseLeadTableKeyboardFlowInput) {
   'use no memo';
 
@@ -211,6 +249,28 @@ export function useLeadTableKeyboardFlow({
     if (rejected) cursor.advanceAfter(rejected);
   }
 
+  /**
+   * An evidence chip in the review DIALOG. The dialog sits in the top layer,
+   * above the evidence drawer, so the SAME review (same draft) moves into
+   * its expanded row first. The drawer opens only once that inline review
+   * is rendered and the clicked chip's inline twin holds focus: the drawer's
+   * trap then records the twin to return to, and the unmounting dialog's
+   * trap (which restores the table) has already run, so nothing behind the
+   * drawer takes focus after the drawer does (flow-03 review round 2).
+   */
+  function inspectEvidenceFromDialog(source: DrawerSource, chipIndex: number) {
+    if (!current || current.mode !== 'dialog') return;
+    const borrowerId = current.borrowerId;
+    review.moveInline();
+    setExpanded(borrowerId);
+    cursor.setCursorId(borrowerId);
+    cursor.revealRow(borrowerId);
+    whenInlineReviewChip(borrowerId, chipIndex, (chip) => {
+      chip?.focus();
+      openEvidence(source);
+    });
+  }
+
   const targetId = cursor.cursorId ?? expanded;
   useLeadTableHotkeys({
     approverActive: approverGate === null,
@@ -242,9 +302,13 @@ export function useLeadTableKeyboardFlow({
   /**
    * Draft ready: may Confirm take focus (so Enter approves)? Not when the
    * reader has moved on: the cursor left the row, or focus sits outside the
-   * table, the review and its dialog. The review asks when its draft lands.
+   * table, the review and its dialog, or another modal layer is open. The
+   * review asks when its draft lands.
    */
   function shouldConfirmTakeFocus(borrowerId: string): boolean {
+    // Never from behind an open modal layer: one Enter meant for the drawer
+    // must not certify the approval (flow-03 review round 2).
+    if (anotherModalLayerOpen(borrowerId)) return false;
     const active = document.activeElement;
     const inTable = active !== null && tableWrapRef.current?.contains(active) === true;
     const inDialog = active instanceof HTMLDialogElement || active?.closest('dialog') != null;
@@ -289,6 +353,7 @@ export function useLeadTableKeyboardFlow({
     viewReceipt,
     bulkApproveFromToolbar,
     submitReject,
+    inspectEvidenceFromDialog,
     eligibleSelectedIds,
   };
 }

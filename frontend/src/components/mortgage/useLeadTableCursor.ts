@@ -106,6 +106,12 @@ export function useLeadTableCursor({
     moveTo(sortedLeads[next].borrower_id);
   }
 
+  /** Scroll one row into view (through the virtualizer if needed); no announcement. */
+  function revealRow(borrowerId: string) {
+    const index = sortedLeads.findIndex((lead) => lead.borrower_id === borrowerId);
+    if (index >= 0) reveal(borrowerId, index);
+  }
+
   /** After an approve / reject write RETURNED ok: the next pending row. */
   function advanceAfter(decidedId: string) {
     setAdvanceFrom(decidedId);
@@ -133,6 +139,7 @@ export function useLeadTableCursor({
     setCursorId,
     move,
     moveTo,
+    revealRow,
     advanceAfter,
   };
 }

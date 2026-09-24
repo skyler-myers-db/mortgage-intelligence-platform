@@ -73,6 +73,12 @@ export function useLeadApproveReview({
   // Synchronous mirror: two A presses in one frame must not both draft.
   const reviewRef = useRef<LeadApproveReviewState | null>(null);
   const draftAbortRef = useRef<AbortController | null>(null);
+  // A draft that landed and has not yet been shown on a mounted review:
+  // its Confirm may take focus ONCE (claimDraftLanding), wherever the
+  // review first renders it: the dialog, the expanded row, or a review
+  // whose lazy chunk arrived after the draft. A review that moves into its
+  // row or remounts as its row scrolls back into view never re-claims it.
+  const unclaimedLandingRef = useRef<string | null>(null);
 
   const setReview = (next: LeadApproveReviewState | null) => {
     reviewRef.current = next;
@@ -83,11 +89,13 @@ export function useLeadApproveReview({
     draftAbortRef.current?.abort();
     const ctrl = new AbortController();
     draftAbortRef.current = ctrl;
+    unclaimedLandingRef.current = null;
     setReview({ borrowerId, mode, phase: 'drafting', draft: null, error: null });
     draftForApproval(borrowerId, ctrl.signal)
       .then((draft) => {
         const current = reviewRef.current;
         if (ctrl.signal.aborted || current?.borrowerId !== borrowerId) return;
+        unclaimedLandingRef.current = borrowerId;
         setReview({ ...current, phase: 'ready', draft, error: null });
       })
       .catch((err: unknown) => {
@@ -174,6 +182,18 @@ export function useLeadApproveReview({
     return true;
   }
 
+  /**
+   * The mounted review asks, once its draft is on screen: is this the draft
+   * landing (so Confirm may take focus)? True once per landed draft.
+   */
+  function claimDraftLanding(borrowerId: string): boolean {
+    const current = reviewRef.current;
+    if (current?.borrowerId !== borrowerId || current.phase !== 'ready') return false;
+    if (unclaimedLandingRef.current !== borrowerId) return false;
+    unclaimedLandingRef.current = null;
+    return true;
+  }
+
   /** A dialog review moves into its row (e.g. to open an evidence source). */
   function moveInline() {
     const current = reviewRef.current;
@@ -182,5 +202,5 @@ export function useLeadApproveReview({
 
   useEffect(() => () => draftAbortRef.current?.abort(), []);
 
-  return { review, open, retryDraft, confirm, cancel, moveInline };
+  return { review, open, retryDraft, confirm, cancel, moveInline, claimDraftLanding };
 }
