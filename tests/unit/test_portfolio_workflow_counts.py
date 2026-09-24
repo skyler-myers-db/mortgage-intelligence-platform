@@ -27,6 +27,17 @@ class _NoRefreshExecutor(Executor):
         raise AssertionError("no background refresh expected inside the soft TTL")
 
 
+class _ParkedRefreshExecutor(Executor):
+    """Accepts background refreshes and never runs them (a slow warehouse)."""
+
+    def __init__(self) -> None:
+        self.parked: list[Any] = []
+
+    def submit(self, fn: Any, /, *args: Any, **kwargs: Any) -> Future[Any]:
+        self.parked.append(fn)
+        return Future()
+
+
 class _Warehouse:
     """Answers the preview, trend, day-zero and lifecycle-mirror statements."""
 
@@ -34,6 +45,7 @@ class _Warehouse:
         self.approved = 7
         self.in_outreach = 2
         self.fail_counts = False
+        self.segment_approval_rate = 1.0
         self.statements: list[str] = []
 
     def count(self, marker: str) -> int:
@@ -55,6 +67,17 @@ class _Warehouse:
                     "in_outreach_count": 1,
                 }
             ]
+        if SEGMENT_OVERVIEW_SQL in sql:
+            return [
+                {
+                    "segment_code": "itm",
+                    "name": "Prime Refi Candidates",
+                    "borrower_count": 100,
+                    "mean_opportunity_score": 61,
+                    "approval_rate": self.segment_approval_rate,
+                    "outreach_rate": 0.5,
+                }
+            ]
         return []
 
     def execute_one(self, sql: str, params: Any = None) -> dict[str, Any]:
@@ -70,6 +93,7 @@ class _Warehouse:
 
 PREVIEW_SQL = "preview_population"
 COUNTS_SQL = "borrower_lifecycle_state"
+SEGMENT_OVERVIEW_SQL = "segment_dim"
 
 
 @pytest.fixture
@@ -167,3 +191,37 @@ def test_the_executive_funnel_key_moves_with_the_workflow_generation(warehouse: 
     analytics.executive()
 
     assert len(warehouse.statements) > runs_before, "Approved / Actioned re-read the mirror"
+
+
+@pytest.mark.parametrize(
+    "elapsed_s",
+    [0.0, 301.0],
+    ids=["inside-soft-ttl", "soft-expired-stale-window"],
+)
+def test_the_segment_overview_key_moves_with_the_workflow_generation(
+    warehouse: _Warehouse, elapsed_s: float
+) -> None:
+    """Segment approval_rate / outreach_rate read the lifecycle mirror.
+
+    Past the 300 s soft TTL a generation-less key would serve the old rate
+    stale for up to the 24 h hard cap after an approval write; the plain
+    ``TTLCache`` it replaced recomputed there.
+    """
+    clock = [0.0]
+    analytics = DatabricksAnalyticsRepository(
+        warehouse,  # type: ignore[arg-type]
+        cache=GoldAggregateCache(now=lambda: clock[0], executor=_ParkedRefreshExecutor()),
+        cache_ttl_s=300.0,
+    )
+    analytics.segments()
+    primed = analytics.segments()
+    assert primed.overview[0].approval_rate == 1.0
+    assert warehouse.count(SEGMENT_OVERVIEW_SQL) == 1
+
+    clock[0] = elapsed_s
+    warehouse.segment_approval_rate = 2.0
+    clear_sales_state_cache()  # an approval write
+    after = analytics.segments()
+
+    assert warehouse.count(SEGMENT_OVERVIEW_SQL) == 2, "the overview re-read the mirror"
+    assert after.overview[0].approval_rate == 2.0

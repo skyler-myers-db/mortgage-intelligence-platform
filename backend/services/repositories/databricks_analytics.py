@@ -812,7 +812,10 @@ class DatabricksAnalyticsRepository:
                 ],
             )
 
-        return self._cached(f"analytics.segments:{_filter_key(analytics_filters)}", build)
+        # approval_rate / outreach_rate read the lifecycle mirror (delivery-06).
+        return self._cached(
+            f"analytics.segments:{workflow_generation()}:{_filter_key(analytics_filters)}", build
+        )
 
     def signals(self, filters: AnalyticsFilters | None = None) -> SignalAnalyticsResponse:
         analytics_filters = _filters(filters)
