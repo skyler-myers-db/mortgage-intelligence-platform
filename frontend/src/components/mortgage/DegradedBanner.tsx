@@ -203,7 +203,7 @@ export function DegradedBanner({
     banner = (
       <Banner
         title="You are offline"
-        sub="Data loads on its own when your connection returns. Approvals and other changes are not recorded while you are offline."
+        sub="Panels waiting for a connection load when it returns. Approvals and other changes are not recorded while you are offline."
         data={{ 'data-connection': 'offline' }}
       />
     );
@@ -211,7 +211,7 @@ export function DegradedBanner({
     banner = (
       <Banner
         title="Connection lost"
-        sub={`The app did not answer the last two checks. Checking again every ${seconds} seconds; panels reload on their own once it answers.`}
+        sub={`The app did not answer the last two checks. Checking again every ${seconds} seconds; once it answers, panels reload or let you try again.`}
         data={{ 'data-connection': 'unreachable' }}
         onReload={onReload}
       />

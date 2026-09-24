@@ -89,6 +89,7 @@ describe('HealthProvider connection', () => {
   }
 
   const banner = () => container.querySelector<HTMLElement>('.degraded-banner');
+  const sub = () => banner()?.querySelector('.degraded-banner__sub')?.textContent;
   const connection = () => container.querySelector('[data-testid="connection"]')?.textContent;
 
   it('shows "Connection lost" with Reload only after the SECOND unreachable probe, probing at the fast cadence', async () => {
@@ -103,6 +104,11 @@ describe('HealthProvider connection', () => {
     expect(banner()?.dataset.connection).toBe('unreachable');
     expect(banner()?.textContent).toContain('Connection lost');
     expect(banner()?.querySelector('button')?.textContent).toBe('Reload');
+    // Not every panel reloads by itself (the Offer page loads through its own
+    // effects and offers Retry / Regenerate), so the copy promises no more.
+    expect(sub()).toBe(
+      'The app did not answer the last two checks. Checking again every 3 seconds; once it answers, panels reload or let you try again.',
+    );
   });
 
   it('clears "Connection lost" and refetches only the mounted queries that could not reach the server', async () => {
@@ -146,6 +152,11 @@ describe('HealthProvider connection', () => {
     expect(connection()).toBe('offline');
     expect(banner()?.dataset.connection).toBe('offline');
     expect(banner()?.textContent).toContain('You are offline');
+    // Only a PAUSED read resumes on its own; a request that already failed
+    // offline (the Offer page's effects, an Approve click) does not.
+    expect(sub()).toBe(
+      'Panels waiting for a connection load when it returns. Approvals and other changes are not recorded while you are offline.',
+    );
     expect(banner()?.querySelector('button'), 'reloading offline would fail too').toBeNull();
     expect(document.documentElement.dataset.connection).toBe('offline');
 

@@ -65,5 +65,10 @@ describe('RouteFallback', () => {
     });
     expect(fallback()?.getAttribute('aria-busy')).toBe('false');
     expect(fallback()?.textContent).toContain('Waiting for a connection');
+    // A route chunk that was never preloaded cannot load offline: import()
+    // rejects and the route error boundary takes over, with no reload on
+    // reconnect. So the fallback asks for the connection and promises nothing.
+    expect(fallback()?.textContent).toContain('Reconnect to load this page.');
+    expect(fallback()?.textContent).not.toMatch(/as soon as|on its own/i);
   });
 });

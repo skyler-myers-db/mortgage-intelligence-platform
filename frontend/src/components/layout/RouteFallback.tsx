@@ -55,7 +55,7 @@ export function RouteFallback() {
             {online ? (
               <span className="sr-only">Loading this page</span>
             ) : (
-              <span className="muted fs-12">This page loads as soon as you are back online.</span>
+              <span className="muted fs-12">Reconnect to load this page.</span>
             )}
           </div>
         </div>
