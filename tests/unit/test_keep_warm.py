@@ -216,6 +216,7 @@ def live_lifespan(monkeypatch: pytest.MonkeyPatch) -> list[float]:
     for name in (
         "check_trust_boundary_at_startup",
         "_warm_warehouse",
+        "prime_warehouse_state_client",
         "_warm_lakebase",
         "_warm_hot_lead_cache",
         "warm_governed_place_dimension",
@@ -223,6 +224,21 @@ def live_lifespan(monkeypatch: pytest.MonkeyPatch) -> list[float]:
         monkeypatch.setattr(main_module, name, lambda: None)
     monkeypatch.setattr(main_module, "_lead_cache_rewarm_loop", fake_loop)
     return started
+
+
+def test_the_live_lifespan_fixture_never_builds_a_real_state_client(
+    monkeypatch: pytest.MonkeyPatch, live_lifespan: list[float]
+) -> None:
+    # A shell exporting DATABRICKS_WAREHOUSE_ID must not make these tests
+    # build a real WorkspaceClient (it reads ~/.databrickscfg and may call the host).
+    builds: list[bool] = []
+    monkeypatch.setattr(settings, "databricks_warehouse_id", "wh-exported-in-shell")
+    monkeypatch.setattr(health_probes, "_warehouse_state_client", lambda: builds.append(True))
+
+    with TestClient(app):
+        pass
+
+    assert builds == []
 
 
 def test_a_positive_interval_under_off_warns_and_starts_no_loop(
