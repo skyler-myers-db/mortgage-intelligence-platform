@@ -346,6 +346,9 @@ export default function LeadQueue() {
       funnelStage,
     }),
     refreshedAt: leadsData?.dataRefreshedAt ?? null,
+    // The export's 4 s bound signal is deliberately not threaded into this
+    // read: GET /api/admin/rules writes no audit row, and a read that
+    // outlives the bound still fills the cache for the next export.
     resolveRulesVersion: canAccessAdmin
       ? () => queryClient
         .fetchQuery({
