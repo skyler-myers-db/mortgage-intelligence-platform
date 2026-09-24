@@ -20,9 +20,14 @@ import { fixture, json, type FixtureEntry } from '../mockApi';
 import { LEADS } from './borrowers';
 import { SNAPSHOT_AT, SNAPSHOT_DATE, TOTALS } from './reference';
 
-const OFFICERS: LoanOfficerFunnelRow[] = [
-  { loan_officer_id: 'lo-alpha', display_name: 'Loan Officer A', email: 'lo.alpha@summit.example', assigned: 18, contact_drafted: 12, approved: 9, actioned: 6, outcome_recorded: 3, total_active: 48 },
-  { loan_officer_id: 'lo-bravo', display_name: 'Loan Officer B', email: 'lo.bravo@summit.example', assigned: 14, contact_drafted: 9, approved: 7, actioned: 4, outcome_recorded: 2, total_active: 36 },
+/**
+ * Loan officers are role labels. Their ids are UUIDs, as LoanOfficer's
+ * governed-id validator requires (backend/schemas/common.py
+ * validate_public_opaque_id); no spec reads them.
+ */
+export const OFFICERS: LoanOfficerFunnelRow[] = [
+  { loan_officer_id: '3f1c2a9e-5b7d-4e8f-9a1b-2c3d4e5f6a71', display_name: 'Loan Officer A', email: 'lo.alpha@summit.example', assigned: 18, contact_drafted: 12, approved: 9, actioned: 6, outcome_recorded: 3, total_active: 48 },
+  { loan_officer_id: '4a2d3b0f-6c8e-4f9a-8b2c-3d4e5f6a7b82', display_name: 'Loan Officer B', email: 'lo.bravo@summit.example', assigned: 14, contact_drafted: 9, approved: 7, actioned: 4, outcome_recorded: 2, total_active: 36 },
 ];
 
 const LOAN_OFFICERS: LoanOfficer[] = OFFICERS.map((officer, index) => ({

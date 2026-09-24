@@ -78,6 +78,32 @@ export const MAX_HOME_SUMMARY: HomeSummary = {
     { measure: 'refi_economics_screen', label: 'refi candidates', display: '+22,250', value_token: '+22,250', current: REFI_SCREEN, baseline: 52_525, delta: 22_250, delta_pct: 42.4 },
     { measure: 'offers_available', label: 'offers available', display: '+111,190', value_token: '+111,190', current: LIVE_OFFER_PATHS + LIVE_MONITOR_COUNT, baseline: 4_631_199, delta: 111_190, delta_pct: 2.4 },
   ],
+  // The live-shaped book's HeadlineKpis, consistent with the highlights above
+  // (backend HeadlineKpis requires every count; deltas = current - baseline).
+  current: {
+    marketable_population: ADDRESSABLE,
+    refi_economics_screen: REFI_SCREEN,
+    high_opportunity: TOP_TIER,
+    offers_available: LIVE_OFFER_PATHS + LIVE_MONITOR_COUNT,
+    offers_recommended: LIVE_OFFER_PATHS,
+    avg_opportunity_score: 81,
+  },
+  baseline: {
+    marketable_population: ADDRESSABLE,
+    refi_economics_screen: 52_525,
+    high_opportunity: 34_588,
+    offers_available: 4_631_199,
+    offers_recommended: LIVE_OFFER_PATHS,
+    avg_opportunity_score: 81,
+  },
+  deltas: {
+    marketable_population: 0,
+    refi_economics_screen: 22_250,
+    high_opportunity: 4_324,
+    offers_available: 111_190,
+    offers_recommended: 0,
+    avg_opportunity_score: 0,
+  },
 };
 
 /**

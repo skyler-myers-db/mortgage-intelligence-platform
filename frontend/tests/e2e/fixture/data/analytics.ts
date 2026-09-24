@@ -34,6 +34,18 @@ export const SCORE_BUCKETS: ReadonlyArray<readonly [number, number]> = [
   [30, 3133], [40, 9200], [50, 18800], [60, 27620], [70, 27300], [80, 2480], [90, 1020],
 ];
 
+/**
+ * The canonical display band (backend scoring.score_band, mip.gold.fn_score_band,
+ * src/lib/opportunityScore.ts scoreBand: high >= 85, med >= 65, else low).
+ * EquitySpreadPoint rejects any other band for a score. Repeated here because
+ * the fixture may only `import type` from src.
+ */
+function canonicalScoreBand(opportunityScore: number): 'high' | 'med' | 'low' {
+  if (opportunityScore >= 85) return 'high';
+  if (opportunityScore >= 65) return 'med';
+  return 'low';
+}
+
 const EQUITY_BINS: EquitySpreadBin[] = [10, 20, 30, 40, 50, 60, 70].flatMap((equity, row) =>
   [0, 50, 100, 150, 200].map((spread, column) => ({
     equity_bin_pct: equity,
@@ -138,7 +150,7 @@ export const analyticsFixtures: FixtureEntry[] = [
       rate_spread_bps: borrower.rate_spread_bps,
       opportunity_score: borrower.opportunity_score,
       coordinate_total: 1,
-      score_band: borrower.opportunity_score >= 80 ? ('high' as const) : ('med' as const),
+      score_band: canonicalScoreBand(borrower.opportunity_score),
       in_the_money: borrower.why_panel.in_the_money,
     }));
     return json<EquitySpreadPointsResponse>({
