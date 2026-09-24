@@ -136,8 +136,11 @@ const budgets = {
   //     +0.66 br.
   //   - Vite 8.3.0 (rolldown 1.0.3 -> 1.2.10 output): -3.35 raw.
   // Measured: 536.47 / 166.58 (br 142.81); ~5% headroom per policy.
+  // Gzip re-baselined the same day for the lane's bundle-03 vendor split
+  // (five initial chunks compress separately: +0.84 gzip), which left it
+  // 4.3%; raw kept 4.8% (+0.27). Measured: 536.74 / 167.41.
   initialJsBytes: 564 * KiB, // actual 536.74 (index + rolldown-runtime + vendor-react + vendor-data + apiPaths)
-  initialJsGzipBytes: 175 * KiB, // actual 167.41
+  initialJsGzipBytes: 176 * KiB, // actual 167.41
   // Bumped 2026-06-11 for the re-audit #4 Buyer-Wow tranche: ⌘K command
   // palette (.cmdk*), portal evidence hover-card (.evidence-hovercard*),
   // sleek one-time KPI entrance (.kpi__value--enter / .spark__line--draw),
@@ -184,7 +187,7 @@ const budgets = {
   // banners + shaped skeleton sweep, 32-feedback toast region + guard
   // dialog; each must style a surface that can appear before any lazy chunk).
   // Measured: 158.85 / gzip 27.20; ~5% headroom.
-  initialCssBytes: 167 * KiB, // actual 158.27 (2026-09-24, manifest CSS closure; 158.81 before the variable fonts; ratcheted, same whole KiB)
+  initialCssBytes: 167 * KiB, // actual 158.56 (2026-09-24, manifest CSS closure; 158.81 before the variable fonts; ratcheted, same whole KiB)
   // Re-baselined 2026-09-08 for the Genie thread view + deep-research
   // sections slice. The 25 KiB gzip gate had drifted to 4 bytes above the
   // measured artifact (25,596 B) — the next CSS line from anyone would have
@@ -199,7 +202,7 @@ const budgets = {
   // ship with their lazy chunks instead, and the dead `.admin-filter-input`
   // rules were removed, before this bump. Measured: CSS 155.76 / gzip 26.55;
   // ~5% headroom per policy.
-  initialCssGzipBytes: 29 * KiB, // actual 27.24 (2026-09-24)
+  initialCssGzipBytes: 29 * KiB, // actual 27.25 (2026-09-24)
   // Re-baselined 2026-07-10 for the UX declutter slice (batches 1-2). total JS
   // was red on main (990.51 > 990.00); restored ~5% headroom over the measured
   // actual per this file's policy. Batch 2 (asset-label helper, top-leads
@@ -260,8 +263,12 @@ const budgets = {
   // +27.82 raw / +8.20 gzip to total JS, all of it in the initial closure
   // (see initialJsBytes), which left 3.0% / 3.2% headroom. Measured: 1485.04
   // / gzip 491.08 across 64 chunks; ~5% headroom.
+  // Gzip re-baselined the same day for the lane's bundle-03 vendor split
+  // (+1.78 gzip: 64 -> 67 chunks, and lazy chunks import two more
+  // specifiers), which left it 4.47%; raw kept 4.65% (+2.40). Measured:
+  // 1487.44 / 492.91.
   totalJsBytes: 1560 * KiB, // actual 1487.44 (67 chunks)
-  totalJsGzipBytes: 516 * KiB, // actual 492.93
+  totalJsGzipBytes: 518 * KiB, // actual 492.91
   // Re-baselined 2026-09-23 for wave 1c (lane queue-keyboard-review): the
   // shared LeadTable chunk (Lead Queue + Segment Intelligence) grew from
   // 92.96 / 29.59 to 105.51 / 33.56 with the keyboard triage that must be
@@ -271,7 +278,7 @@ const budgets = {
   // (7.8 KiB), the bulk gate's review (3.4 KiB) and the `?` sheet already
   // ship as their own lazy chunks. ~5% headroom per policy.
   maxLazyJsBytes: 111 * KiB, // actual 109.32 (LeadTable, 2026-09-24)
-  maxLazyJsGzipBytes: 36 * KiB, // actual 34.71 (LeadTable, 2026-09-24)
+  maxLazyJsGzipBytes: 36 * KiB, // actual 34.72 (LeadTable, 2026-09-24)
   // Re-baselined 2026-09-24 for audit bundle-05 / css-v2 (lane
   // w2-build-currency): the seven static @fontsource faces (7 woff2 + their
   // 7 never-requested woff twins, 215.42 KiB) became one variable woff2 each
@@ -284,16 +291,19 @@ const budgets = {
   // baselined 2026-09-24 by lane w2-build-currency on its own dependency batch
   // (React 19.3 is +7.22 br of the initial number, Router 8.4 +0.66; see
   // initialJsBytes). ~5% headroom, rounded up to a whole KiB.
-  // The bundle-03 vendor split (same lane, same day) moved no gate: it costs
-  // +0.27 raw / +0.84 gzip / +1.15 br on the initial closure and +2.40 /
-  // +1.78 / +2.00 on total JS (five initial chunks compress separately; lazy
-  // chunks import two more specifiers), and buys 91.58 KiB br (vendor-react
-  // 82.73 + vendor-data 8.85, 21.5% of total JS br) that a deploy changing
-  // only app code no longer makes a returning browser re-download.
-  initialJsBrBytes: 150 * KiB, // actual 143.98 (5 chunks; 142.81 before the vendor split)
-  initialCssBrBytes: 24 * KiB, // actual 22.88 (22.82 with the static @fontsource CSS)
-  totalJsBrBytes: 445 * KiB, // actual 425.56 (67 chunks; 423.50 before the vendor split)
-  maxLazyJsBrBytes: 32 * KiB, // actual 30.08 (LeadTable)
+  // The bundle-03 vendor split (same lane, same day) costs +0.27 raw / +0.84
+  // gzip / +1.15 br on the initial closure and +2.40 / +1.78 / +2.00 on
+  // total JS (five initial chunks compress separately; lazy chunks import two
+  // more specifiers), and buys 91.58 KiB br (vendor-react 82.73 + vendor-data
+  // 8.85, 21.5% of total JS br) that a deploy changing only app code no
+  // longer makes a returning browser re-download. That left initial JS br at
+  // 4.0% and total JS br at 4.4% headroom, so both were re-baselined to ~5%
+  // (review of the lane, 2026-09-24; every gate the lane left under 4.5% was
+  // restored, initial CSS br keeps 4.6%).
+  initialJsBrBytes: 152 * KiB, // actual 144.00 (5 chunks; 142.81 before the vendor split)
+  initialCssBrBytes: 24 * KiB, // actual 22.89 (22.82 with the static @fontsource CSS)
+  totalJsBrBytes: 447 * KiB, // actual 425.56 (67 chunks; 423.50 before the vendor split)
+  maxLazyJsBrBytes: 32 * KiB, // actual 30.07 (LeadTable)
   // What a navigation to each route fetches beyond the initial closure: the
   // route chunk plus its static imports, JS + CSS, brotli q11. Keyed by the
   // manifest's source path; every route module must have an entry and every
