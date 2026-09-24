@@ -155,6 +155,18 @@ describe('GenieDock', () => {
       expect(surface()?.getAttribute('data-error-boundary')).toBe('genie');
     });
 
+    it('puts focus on the frame\'s Close and lets Escape close the panel while focus is inside', async () => {
+      const { FlakyChat } = flakyChat();
+      render(true, FlakyChat);
+      const close = container.querySelector<HTMLButtonElement>('button[aria-label="Close Genie"]');
+      await vi.waitFor(() => expect(document.activeElement).toBe(close));
+
+      act(() => {
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+      });
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
     it('Try again re-mounts the chat once', () => {
       const { state, FlakyChat } = flakyChat();
       render(true, FlakyChat);

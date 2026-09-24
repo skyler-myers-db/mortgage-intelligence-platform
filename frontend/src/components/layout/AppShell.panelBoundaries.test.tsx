@@ -185,7 +185,12 @@ describe('AppShell panel boundaries', () => {
     expect(container.querySelector('.drawer-scrim.is-open')).not.toBeNull();
     expect(container.querySelector('[data-testid="drawer-probe"]')).toBeNull();
 
-    await update(() => frame?.querySelector<HTMLButtonElement>('button[aria-label="Close drawer"]')?.click());
+    // Modal like the drawer it stands in for: focus starts on Close and Escape closes.
+    const close = frame?.querySelector<HTMLButtonElement>('button[aria-label="Close drawer"]');
+    await vi.waitFor(() => expect(document.activeElement).toBe(close));
+    await update(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    });
     expect(app.drawer).toBeNull();
     expect(surfaces()).toHaveLength(0);
     expect(container.querySelector('[data-testid="drawer-probe"]')).not.toBeNull();
