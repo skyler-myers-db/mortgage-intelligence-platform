@@ -394,8 +394,8 @@ Attach that file to the governance record. The log contains:
   Stop the SQL warehouse, then confirm.
 [drill/<target>] health attempt 1: status=ok warehouse=up breaker=closed
 [drill/<target>] PASS: stopped warehouse reads as available on demand (status=ok warehouse=up); a stop is not an outage
-[drill/<target>] GET /api/leads?limit=5 -> HTTP 200 after 4s
-[drill/<target>] PASS: a data read resumed the stopped warehouse (/api/leads?limit=5 -> HTTP 200, rows=5)
+[drill/<target>] GET /api/v1/leads?limit=5 -> HTTP 200 after 4s
+[drill/<target>] PASS: a data read resumed the stopped warehouse (/api/v1/leads?limit=5 -> HTTP 200, rows=5)
 [drill/<target>] OPERATOR CONFIRMATION REQUIRED
   Restart the warehouse, then confirm.
 [drill/<target>] RECOVERED: warehouse=up, status=ok after 14s
