@@ -30,6 +30,7 @@ import {
 import { clearGenieTurns } from '../lib/genieConversationStore';
 import { __resetGenieTurnStoreForTests, startGenieTurn } from '../lib/genieInFlightTurn';
 import { __resetGenieAnnouncerForTests } from '../components/mortgage/useGenieAnnouncer';
+import { observeStrongly } from '../components/mortgage/genieAnnouncer.test-support';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -84,10 +85,20 @@ describe('/ask-genie announcer', () => {
       return panel === null || panel.id === 'ask-genie-panel-ask';
     });
 
-  function observe(el: HTMLElement): MutationObserver {
-    const observer = new MutationObserver(() => undefined);
-    observer.observe(el, { childList: true, subtree: true, characterData: true });
-    return observer;
+  /** Every mutation of `el`'s subtree. The callback KEEPS what it is handed:
+   *  with a no-op callback, records delivered during an async advance are
+   *  gone before takeRecords() runs, and "no mutation" can never fail. */
+  function observe(el: HTMLElement) {
+    const records: MutationRecord[] = [];
+    const observer = new MutationObserver((batch) => {
+      records.push(...batch);
+    });
+    observeStrongly(observer, el);
+    const drain = (): MutationRecord[] => {
+      records.push(...observer.takeRecords());
+      return records.splice(0);
+    };
+    return { drain, disconnect: () => observer.disconnect() };
   }
 
   async function askOnRoute() {
@@ -125,13 +136,13 @@ describe('/ask-genie announcer', () => {
 
     // Five seconds of the same stage: polls keep arriving, the ticker keeps
     // moving, and the region does not change once.
-    const observer = observe(region());
+    const watch = observe(region());
     const polls = genieProgress.mock.calls.length;
     const ticker = container.querySelector('.genie-progress__elapsed')?.textContent;
     await advance(5_000);
     expect(genieProgress.mock.calls.length).toBeGreaterThanOrEqual(polls + 3);
     expect(container.querySelector('.genie-progress__elapsed')?.textContent).not.toBe(ticker);
-    expect(observer.takeRecords()).toHaveLength(0);
+    expect(watch.drain()).toHaveLength(0);
 
     genieProgress.mockResolvedValue(progress(true));
     await until(() => genieComplete.mock.calls.length === 1);
@@ -144,10 +155,10 @@ describe('/ask-genie announcer', () => {
     await until(() => container.querySelector('.genie-thread .genie-answer') !== null);
     sample();
     expect(routeRegions()).toEqual([region()]);
-    observer.takeRecords();
+    watch.drain();
     await advance(5_000);
-    expect(observer.takeRecords()).toHaveLength(0);
-    observer.disconnect();
+    expect(watch.drain()).toHaveLength(0);
+    watch.disconnect();
 
     expect(spoken).toEqual([
       '',
@@ -172,13 +183,17 @@ describe('/ask-genie announcer', () => {
     });
     mount(root);
     await until(() => container.querySelector('textarea') !== null);
-    const observer = observe(region());
+    const watch = observe(region());
     await askOnRoute();
     await until(() => container.querySelector('.genie-thread .genie-answer') !== null);
     expect(region().textContent).toBe('Genie did not answer this question. The reason is shown in the thread.');
     expect(container.textContent).not.toContain('Answer ready');
     expect(routeRegions()).toEqual([region()]);
-    observer.disconnect();
+    // Not even for a moment on the way there.
+    const inserted = watch.drain().flatMap((record) => [...record.addedNodes].map((node) => node.textContent ?? ''));
+    expect(inserted).toContain('Genie did not answer this question. The reason is shown in the thread.');
+    expect(inserted).not.toContain('Answer ready');
+    watch.disconnect();
   });
 
   it('speaks a landed turn while the Workflows tab shows (the region sits outside the hidden Ask panel)', async () => {

@@ -38,6 +38,7 @@ import {
   startGenieTurn,
 } from '../../lib/genieInFlightTurn';
 import { GenieAnnouncerRegion } from './GenieAnnouncerRegion';
+import { observeStrongly } from './genieAnnouncer.test-support';
 import { __resetGenieAnnouncerForTests, isGenieRouteAskVisible } from './useGenieAnnouncer';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -164,7 +165,7 @@ describe('useGenieAnnouncer', () => {
       }
     };
     const observer = new MutationObserver(collect);
-    observer.observe(container, { childList: true, characterData: true, subtree: true });
+    observeStrongly(observer, container);
     return {
       inserted,
       stop: () => {
@@ -177,7 +178,7 @@ describe('useGenieAnnouncer', () => {
   function recordChanges(el: HTMLElement): { texts: string[]; observer: MutationObserver } {
     const texts: string[] = [];
     const observer = new MutationObserver(() => texts.push(el.textContent ?? ''));
-    observer.observe(el, { childList: true, characterData: true, subtree: true });
+    observeStrongly(observer, el);
     return { texts, observer };
   }
 

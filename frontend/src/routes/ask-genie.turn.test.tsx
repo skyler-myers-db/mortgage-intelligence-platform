@@ -37,6 +37,7 @@ import { GENIE_IN_FLIGHT_TURN_KEY } from '../lib/genieConversation';
 import { clearGenieTurns, getGenieTurns, setGenieTurns } from '../lib/genieConversationStore';
 import { __resetGenieTurnStoreForTests, __setGenieTurnLockForTests } from '../lib/genieInFlightTurn';
 import { __resetGenieAnnouncerForTests } from '../components/mortgage/useGenieAnnouncer';
+import { observeStrongly } from '../components/mortgage/genieAnnouncer.test-support';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -290,7 +291,7 @@ describe('/ask-genie on the in-flight turn store', () => {
       }
       seen.push(container.textContent ?? '');
     });
-    observer.observe(container, { childList: true, subtree: true, characterData: true, characterDataOldValue: true });
+    observeStrongly(observer, container, { childList: true, subtree: true, characterData: true, characterDataOldValue: true });
     mount(root);
     await waitUntil(() => genieProgress.mock.calls.length === 1);
     await flush();
