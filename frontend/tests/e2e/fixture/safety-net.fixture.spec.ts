@@ -216,7 +216,7 @@ test.describe('(c) surface overflow', () => {
     });
     const problems = await surfaceOverflowProblems(page, key);
     expect(problems).toHaveLength(1);
-    expect(problems[0]).toMatch(/^aside\.surface\.glossary-index .*scrolls sideways \(scrollWidth \d+ > clientWidth \d+\)$/);
+    expect(problems[0]).toMatch(/^aside\.surface\.glossary-index .*scrolls sideways \(scrollWidth \d+ > clientWidth \d+\)(; widest \S+ \+\d+\.\dpx .*)?$/);
     await expect(expectNoSurfaceOverflow(page, key)).rejects.toThrow(/surface overflow on glossary/);
     // The same overflow, recorded against its surface, is covered.
     expect(await surfaceOverflowProblems(page, key, {

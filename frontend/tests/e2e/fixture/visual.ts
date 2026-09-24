@@ -220,6 +220,8 @@ interface MeasuredOverflow {
   scrollWidth: number;
   clientWidth: number;
   covered: boolean;
+  /** The descendant reaching farthest past the surface's padding box, so a CI failure names its cause. */
+  widest: string | null;
 }
 
 /** Every `.surface` that scrolls sideways, and whether it matches `coveredBy`. */
@@ -232,12 +234,25 @@ export async function measureSurfaceOverflow(page: Page, coveredBy: string | nul
     };
     return [...document.querySelectorAll('.surface')]
       .filter((element) => element.scrollWidth > element.clientWidth)
-      .map((element) => ({
-        surface: describe(element),
-        scrollWidth: element.scrollWidth,
-        clientWidth: element.clientWidth,
-        covered: covered !== null && element.matches(covered),
-      }));
+      .map((element) => {
+        const box = element.getBoundingClientRect();
+        const edge = box.right - parseFloat(getComputedStyle(element).borderRightWidth || '0');
+        let widest: { node: Element; over: number } | null = null;
+        for (const node of element.querySelectorAll('*')) {
+          const over = node.getBoundingClientRect().right - edge;
+          if (over > 0.5 && (!widest || over > widest.over)) widest = { node, over };
+        }
+        const text = widest?.node.textContent?.trim().replace(/\s+/g, ' ').slice(0, 48);
+        return {
+          surface: describe(element),
+          scrollWidth: element.scrollWidth,
+          clientWidth: element.clientWidth,
+          covered: covered !== null && element.matches(covered),
+          widest: widest
+            ? `${widest.node.tagName.toLowerCase()}.${[...widest.node.classList].join('.')} +${widest.over.toFixed(1)}px (white-space ${getComputedStyle(widest.node).whiteSpace})${text ? ` "${text}"` : ''}`
+            : null,
+        };
+      });
   }, coveredBy);
 }
 
@@ -252,7 +267,7 @@ export async function surfaceOverflowProblems(
   const found = await measureSurfaceOverflow(page, entry?.nodes ?? null);
   const problems = found
     .filter((overflow) => !overflow.covered)
-    .map((overflow) => `${overflow.surface} scrolls sideways (scrollWidth ${overflow.scrollWidth} > clientWidth ${overflow.clientWidth})`);
+    .map((overflow) => `${overflow.surface} scrolls sideways (scrollWidth ${overflow.scrollWidth} > clientWidth ${overflow.clientWidth})${overflow.widest ? `; widest ${overflow.widest}` : ''}`);
   if (entry && !found.some((overflow) => overflow.covered)) {
     problems.push(`${entryKey} (${entry.finding}, recorded ${entry.recorded}) no longer overflows in ${key.theme}: retire it`);
   }
