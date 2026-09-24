@@ -132,7 +132,7 @@ const budgets = {
   //   - Vite 8.3.0 (rolldown 1.0.3 -> 1.2.10 output): -3.35 raw.
   // Measured: 536.47 / 166.58 (br 142.81); ~5% headroom per policy.
   initialJsBytes: 564 * KiB, // actual 536.74 (index + rolldown-runtime + vendor-react + vendor-data + apiPaths)
-  initialJsGzipBytes: 175 * KiB, // actual 167.42
+  initialJsGzipBytes: 175 * KiB, // actual 167.41
   // Bumped 2026-06-11 for the re-audit #4 Buyer-Wow tranche: ⌘K command
   // palette (.cmdk*), portal evidence hover-card (.evidence-hovercard*),
   // sleek one-time KPI entrance (.kpi__value--enter / .spark__line--draw),
@@ -256,7 +256,7 @@ const budgets = {
   // (see initialJsBytes), which left 3.0% / 3.2% headroom. Measured: 1485.04
   // / gzip 491.08 across 64 chunks; ~5% headroom.
   totalJsBytes: 1560 * KiB, // actual 1487.44 (67 chunks)
-  totalJsGzipBytes: 516 * KiB, // actual 492.86
+  totalJsGzipBytes: 516 * KiB, // actual 492.93
   // Re-baselined 2026-09-23 for wave 1c (lane queue-keyboard-review): the
   // shared LeadTable chunk (Lead Queue + Segment Intelligence) grew from
   // 92.96 / 29.59 to 105.51 / 33.56 with the keyboard triage that must be
@@ -285,29 +285,31 @@ const budgets = {
   // chunks import two more specifiers), and buys 91.58 KiB br (vendor-react
   // 82.73 + vendor-data 8.85, 21.5% of total JS br) that a deploy changing
   // only app code no longer makes a returning browser re-download.
-  initialJsBrBytes: 150 * KiB, // actual 143.96 (5 chunks; 142.81 before the vendor split)
+  initialJsBrBytes: 150 * KiB, // actual 143.98 (5 chunks; 142.81 before the vendor split)
   initialCssBrBytes: 24 * KiB, // actual 22.88 (22.82 with the static @fontsource CSS)
-  totalJsBrBytes: 445 * KiB, // actual 425.50 (67 chunks; 423.50 before the vendor split)
-  maxLazyJsBrBytes: 32 * KiB, // actual 30.07 (LeadTable)
+  totalJsBrBytes: 445 * KiB, // actual 425.56 (67 chunks; 423.50 before the vendor split)
+  maxLazyJsBrBytes: 32 * KiB, // actual 30.08 (LeadTable)
   // What a navigation to each route fetches beyond the initial closure: the
   // route chunk plus its static imports, JS + CSS, brotli q11. Keyed by the
   // manifest's source path; every route module must have an entry and every
   // entry a route module (a route added in a later wave goes through the
-  // integrator). Baselined 2026-09-24 at measured + ~5%, whole KiB.
+  // integrator). Baselined 2026-09-24 at measured + ~5%, whole KiB, on
+  // the dependency batch; the actuals below are the lane's final tree
+  // (vendor split + variable fonts), each within 0.3 KiB of the baseline.
   routes: {
-    'src/routes/admin-config.access-denied.tsx': 5 * KiB, // actual 4.47
-    'src/routes/admin-config.tsx': 35 * KiB, // actual 32.61
-    'src/routes/analytics.tsx': 44 * KiB, // actual 41.33
-    'src/routes/ask-genie.tsx': 53 * KiB, // actual 49.90
-    'src/routes/asset.tsx': 8 * KiB, // actual 7.00
-    'src/routes/borrower-360.tsx': 38 * KiB, // actual 35.39
-    'src/routes/glossary.tsx': 9 * KiB, // actual 8.38
-    'src/routes/home.tsx': 43 * KiB, // actual 40.16
-    'src/routes/lead-queue.tsx': 67 * KiB, // actual 62.86
-    'src/routes/not-found.tsx': 4 * KiB, // actual 3.40
-    'src/routes/offer-orchestrator.tsx': 36 * KiB, // actual 33.71
-    'src/routes/portfolio-builder.tsx': 34 * KiB, // actual 31.59
-    'src/routes/segment-intelligence.tsx': 84 * KiB, // actual 79.07
+    'src/routes/admin-config.access-denied.tsx': 5 * KiB, // actual 4.53
+    'src/routes/admin-config.tsx': 35 * KiB, // actual 32.79
+    'src/routes/analytics.tsx': 44 * KiB, // actual 41.60
+    'src/routes/ask-genie.tsx': 53 * KiB, // actual 50.03
+    'src/routes/asset.tsx': 8 * KiB, // actual 7.08
+    'src/routes/borrower-360.tsx': 38 * KiB, // actual 35.62
+    'src/routes/glossary.tsx': 9 * KiB, // actual 8.42
+    'src/routes/home.tsx': 43 * KiB, // actual 40.42
+    'src/routes/lead-queue.tsx': 67 * KiB, // actual 63.11
+    'src/routes/not-found.tsx': 4 * KiB, // actual 3.44
+    'src/routes/offer-orchestrator.tsx': 36 * KiB, // actual 33.96
+    'src/routes/portfolio-builder.tsx': 34 * KiB, // actual 31.76
+    'src/routes/segment-intelligence.tsx': 84 * KiB, // actual 79.37
   },
 };
 
