@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 
 import type { GenieLiveProgress } from '../../lib/api';
 import { Icon } from '../Icon';
+import { ElapsedTicker } from '../ui/ElapsedTicker';
 
 const INDETERMINATE_LABEL = 'Waiting for Genie response';
 
@@ -91,28 +92,6 @@ function dedupeTrace(trace: Array<{ kind: string; content: string }>): string[] 
   return out;
 }
 
-function ElapsedTicker({ startedAt, paused }: { startedAt: number; paused: boolean }) {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    // A hidden card (the floating panel closed mid-turn) has nothing to show
-    // a clock to, so no interval drives state updates behind it. Resuming
-    // reads the real clock first: it kept running while the interval did not.
-    if (paused) return undefined;
-    setNow(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
-    return () => window.clearInterval(timer);
-  }, [paused]);
-  const seconds = Math.max(0, Math.round((now - startedAt) / 1000));
-  // aria-hidden and OUTSIDE every live region (audit 2026-09-21 `genie-v1` /
-  // `a11y-06`): a once-a-second text change inside `role="status"` re-queued
-  // the whole progress card to screen readers for the full 20-200 s turn.
-  return (
-    <span className="genie-progress__elapsed mono" aria-hidden="true">
-      {seconds}s
-    </span>
-  );
-}
-
 /**
  * The progress card mounts NO live region (audit 2026-09-21 `a11y-06`): each
  * Genie surface owns one persistent announcer (useGenieAnnouncer) that speaks
@@ -179,7 +158,12 @@ export function GenieProgress({
       <div className="genie-progress__head">
         <Icon name="sparkle" size={12} className="icon-accent" />
         <span className="genie-progress__label">{label}</span>
-        {startedAt != null ? <ElapsedTicker startedAt={startedAt} paused={paused} /> : null}
+        {/* aria-hidden and OUTSIDE every live region (audit 2026-09-21 genie-v1 /
+            a11y-06): a once-a-second text change inside role="status"
+            re-queued the whole card to screen readers for the full turn. */}
+        {startedAt != null ? (
+          <ElapsedTicker startedAt={startedAt} paused={paused} className="genie-progress__elapsed mono" />
+        ) : null}
       </div>
 
       <ol className="genie-progress__stages" aria-label="Genie lifecycle stages">
