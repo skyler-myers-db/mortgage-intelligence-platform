@@ -51,6 +51,13 @@ from decimal import ROUND_HALF_EVEN, Decimal
 
 _INT32_MIN = -2_147_483_648
 _INT32_MAX = 2_147_483_647
+
+# Basis points per unit of a fractional rate (0.0001 == 1 bp). The one
+# scale factor fn_rate_spread applies; the Python mirrors below use it.
+RATE_SPREAD_BPS_PER_UNIT = 10000.0
+# The widest par move a rate scenario explores, either way: the Rate
+# Lever's +/-100 bps grid and the proof margins' break-even search share it.
+RATE_SCENARIO_MAX_SHIFT_BPS = 100
 _STANDARD_MORTGAGE_TERM_MONTHS = 360
 _MAX_AMORTIZATION_RATE = 10.0
 _MIN_BOUNDED_MORTGAGE_RATE = 0.01
@@ -321,7 +328,30 @@ def rate_spread_bps(
     """
     if current_rate is None or market_rate is None:
         return 0
-    return max(_INT32_MIN, min(_INT32_MAX, round((current_rate - market_rate) * 10000)))
+    return max(
+        _INT32_MIN,
+        min(_INT32_MAX, round((current_rate - market_rate) * RATE_SPREAD_BPS_PER_UNIT)),
+    )
+
+
+def rate_spread_bps_at_par_shift(
+    current_rate: float | None,
+    market_rate: float | None,
+    shift_bps: int,
+) -> int:
+    """Return the spread ``rate_spread_bps`` would give if par moved ``shift_bps``.
+
+    A scenario is only a different market rate: ``market_rate + shift_bps /
+    RATE_SPREAD_BPS_PER_UNIT`` through the same ``fn_rate_spread`` mirror, so
+    its rounding and ``None`` rule are the live ones (a ``None`` side still
+    returns 0). ``shift_bps`` is positive when par rises. Callers keep it
+    within ``RATE_SCENARIO_MAX_SHIFT_BPS``; the helper does not clamp.
+    Shared by the proof margins (break-even search) and the Rate Lever
+    (scenario grid) so both read one arithmetic.
+    """
+    if market_rate is None:
+        return rate_spread_bps(current_rate, None)
+    return rate_spread_bps(current_rate, market_rate + shift_bps / RATE_SPREAD_BPS_PER_UNIT)
 
 
 def estimated_upb(
