@@ -96,8 +96,12 @@ def clear_sales_state_cache() -> None:
     # schemas + lakebase only, but keeping it out of module scope avoids
     # ever creating an import cycle with future funnel reads of sales state.
     from backend.services.approval_funnel import clear_approval_funnel_cache
+    from backend.services.gold_cache import bump_workflow_generation
 
     clear_approval_funnel_cache()
+    # delivery-06: the Home workflow counts and the executive funnel's
+    # Approved / Actioned stages re-read the lifecycle mirror under a new key.
+    bump_workflow_generation()
 
 
 def _sales_state_ttl_s() -> float:

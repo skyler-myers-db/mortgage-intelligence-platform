@@ -41,7 +41,7 @@ from backend.schemas.kpi_deltas import (
     KpiSnapshot,
 )
 from backend.services.databricks_sql_helpers import qualify
-from backend.services.resilience import TTLCache
+from backend.services.gold_cache import AggregateCache, GoldAggregateCache
 from backend.services.visit_tracking import DEFAULT_VISIT_DEDUPE_WINDOW_S
 
 log = logging.getLogger(__name__)
@@ -131,14 +131,15 @@ class KpiDeltaService:
         lakebase_client: Any | None = None,
         sql_client: Any | None = None,
         *,
-        cache: TTLCache | None = None,
+        cache: AggregateCache | None = None,
         cache_ttl_s: float = 30.0,
         current_session_grace_s: float = DEFAULT_VISIT_DEDUPE_WINDOW_S,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._lakebase_client = lakebase_client
         self._sql_client = sql_client
-        self._cache = cache if cache is not None else TTLCache()
+        # delivery-06: stale-while-revalidate past the 30 s soft TTL.
+        self._cache: AggregateCache = cache if cache is not None else GoldAggregateCache()
         self._cache_ttl_s = cache_ttl_s
         self._current_session_grace_s = current_session_grace_s
         self._now = now

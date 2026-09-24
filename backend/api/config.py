@@ -7,11 +7,15 @@ from backend.schemas._validators_tenant import normalize_public_lender_ref
 from backend.schemas.config import ConfigFootprintResponse, ConfigOptionsResponse
 from backend.services.databricks_sql_helpers import qualify
 from backend.services.geography_scope import GeographyScope, load_geography_scope
-from backend.services.resilience import TTLCache
+from backend.services.gold_cache import AggregateCache, GoldAggregateCache
 from backend.services.state_footprint import get_state_footprint_resolver
 
 router = APIRouter(prefix="/config", tags=["config"])
-_CONFIG_CACHE = TTLCache()
+# Audit delivery-06: stale-while-revalidate past the 300 s soft TTL. An
+# _UncacheableConfig raised inline still returns the degraded payload uncached;
+# raised in a background refresh, it evicts the entry (stale_if_error=False),
+# so the next caller rebuilds inline and sees the degraded payload.
+_CONFIG_CACHE: AggregateCache = GoldAggregateCache()
 
 
 class _UncacheableConfig(RuntimeError):

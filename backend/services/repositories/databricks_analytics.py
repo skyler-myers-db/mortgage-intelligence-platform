@@ -42,13 +42,13 @@ from backend.schemas.funnel import FunnelPopulation
 from backend.services.databricks_sql import DatabricksSqlClient
 from backend.services.databricks_sql_helpers import qualify
 from backend.services.eligibility import eligible_sql_predicate
+from backend.services.gold_cache import AggregateCache, GoldAggregateCache, workflow_generation
 from backend.services.repositories.databricks_economics_scatter import (
     economics_points as build_economics_points,
 )
 from backend.services.repositories.databricks_economics_scatter import (
     equity_spread_overview,
 )
-from backend.services.resilience import TTLCache
 from backend.services.scoring import HIGH_OPPORTUNITY_THRESHOLD, source_display_label
 from backend.services.segment_predicates import compose_segment_predicate
 
@@ -149,11 +149,11 @@ class DatabricksAnalyticsRepository:
         self,
         client: DatabricksSqlClient,
         *,
-        cache: TTLCache | None = None,
+        cache: AggregateCache | None = None,
         cache_ttl_s: float = 60.0,
     ) -> None:
         self._client = client
-        self._cache = cache if cache is not None else TTLCache()
+        self._cache: AggregateCache = cache if cache is not None else GoldAggregateCache()
         self._cache_ttl_s = cache_ttl_s
 
     @staticmethod
@@ -625,7 +625,11 @@ class DatabricksAnalyticsRepository:
                 ),
             )
 
-        return self._cached(f"analytics.executive:{_filter_key(analytics_filters)}", build)
+        # The Approved / Actioned stages read the lifecycle mirror, so the key
+        # carries the workflow generation (delivery-06).
+        return self._cached(
+            f"analytics.executive:{workflow_generation()}:{_filter_key(analytics_filters)}", build
+        )
 
     def funnel_population(self) -> FunnelPopulation:
         def build() -> FunnelPopulation:

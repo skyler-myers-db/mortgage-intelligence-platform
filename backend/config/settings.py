@@ -502,6 +502,11 @@ class Settings(BaseSettings):
     # `mip_cache_ttl_s` on dev laptops where snappier dev UX trumps
     # warehouse-query minimisation.
     mip_portfolio_preview_ttl_s: float = 120.0
+    # Hard cap for the gold stale-while-revalidate cache (audit delivery-06):
+    # past each site's soft TTL the last value is served while ONE background
+    # refresh runs; past this cap a caller recomputes inline. Gold refreshes
+    # about daily, so a day of last-good covers a warehouse outage window.
+    mip_gold_cache_max_stale_s: float = Field(default=86400.0, ge=60)
 
     # App-level load protection. These are process-local guards, not a
     # replacement for Databricks workspace quotas. They prevent one

@@ -236,6 +236,10 @@ def trigger_lifecycle_sync(*, reason: str = "approval") -> None:
             mirrored_rows=result.mirrored_rows,
             funnel_snapshot_rows=result.funnel_snapshot_rows,
         )
+        # delivery-06: the gold mirror just changed; re-read cached counts.
+        from backend.services.gold_cache import bump_workflow_generation
+
+        bump_workflow_generation()
     except Exception as exc:  # noqa: BLE001 -- approval is already durable
         emit(
             _log,
