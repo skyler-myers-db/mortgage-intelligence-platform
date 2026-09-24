@@ -6,6 +6,7 @@ import { compactCurrency, signedBpsLabel } from '../../lib/formatters';
 import { offerDisplayLabel, offerRationale, offerShortDescription } from '../../lib/offerLanguage';
 import { safeSegmentName, segmentColor } from '../../lib/segmentMetadata';
 import { genieLeadPrompt } from '../../lib/genieContext';
+import { useQueueLinkState } from '../../lib/queueContext';
 import { useApp } from '../AppContext';
 import { GenieAskAbout } from './GenieAskAbout';
 import { Button, EvidenceChip } from '../Primitives';
@@ -13,6 +14,14 @@ import { ConfidenceMeter } from './ConfidenceMeter';
 import { DecisionReceipt, type LeadDecisionReceipt } from './DecisionReceipt';
 import { ScoreBadge } from './ScoreBadge';
 import { dispositionLabel, outreachLabel } from './LeadTable.logic';
+
+/**
+ * id of the expanded row's receipt block: the queue's "View receipt" toast
+ * action opens the row and moves focus here (tabIndex -1).
+ */
+export function leadReceiptAnchorId(borrowerId: string): string {
+  return `lead-receipt-${borrowerId}`;
+}
 
 /**
  * @param approval Effective approval state — the in-session optimistic
@@ -39,6 +48,7 @@ export function RowPreview({
   decisionReceipt?: LeadDecisionReceipt | null;
 }) {
   const { setLastBorrowerId, saveLead, isLeadSaved } = useApp();
+  const queueLinkState = useQueueLinkState(); // shell-04: dossier crumbs + pager
   // Prefer the display-safe Cotality property ref projected by the
   // backend. Raw CLIP is masked server-side for public demo safety.
   const propertyRef = lead.clip && lead.clip.length > 0
@@ -60,7 +70,11 @@ export function RowPreview({
   return (
     <>
       {decisionReceipt?.auditEventId && (
-        <div className="tbl__expand-inner tbl__expand-inner--receipt">
+        <div
+          id={leadReceiptAnchorId(lead.borrower_id)}
+          className="tbl__expand-inner tbl__expand-inner--receipt"
+          tabIndex={-1}
+        >
           <DecisionReceipt
             auditEventId={decisionReceipt.auditEventId}
             decision={decisionReceipt.decision}
@@ -162,6 +176,7 @@ export function RowPreview({
             <Link
               className="btn btn--primary btn--sm"
               to={`/borrower-360/${lead.borrower_id}`}
+              state={queueLinkState}
               onClick={() => setLastBorrowerId(lead.borrower_id)}
             >
               Open Borrower 360
@@ -169,6 +184,7 @@ export function RowPreview({
             <Link
               className="btn btn--default btn--sm"
               to={`/offer-orchestrator/${lead.borrower_id}`}
+              state={queueLinkState}
               onClick={() => setLastBorrowerId(lead.borrower_id)}
             >
               Build offer

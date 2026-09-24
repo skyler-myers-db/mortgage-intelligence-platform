@@ -1,6 +1,13 @@
-import { useEffect, useRef, useState } from 'react';
+// Shell-initial and rendered only on failure: React Compiler memo caches
+// would roughly double these three small renderers in the initial chunk for
+// no measurable render saving (same call as analytics.charts.tsx).
+'use no memo';
+
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Icon } from '../Icon';
 import { useOptionalHealth } from '../HealthProvider';
+import type { ConnectionStatus } from '../connectionState';
+import { SessionExpiredDialog } from '../layout/SessionExpiredDialog';
 import { apiPath } from '../../lib/apiPaths';
 
 /**
@@ -25,6 +32,15 @@ import { apiPath } from '../../lib/apiPaths';
  * the `.approval` surface's token vocabulary (amber warning). The
  * `--info` modifier and `__actions` element are used by <VersionNotice>,
  * which shares this slot at the top of `<main>`.
+ *
+ * Connection states (audit 2026-09-21 `states-02`, `shell-v1`). The provider's
+ * `connection` outranks dependency health, because a dependency cannot be
+ * judged through a connection that is not there:
+ *   - `session_expired` → the blocking SessionExpiredDialog (rendered here so
+ *     the shell's one failure slot owns every real-data failure); no banner.
+ *   - `offline`         → "You are offline" (no Reload: it would fail too).
+ *   - `unreachable`     → "Connection lost" + Reload, after two failed probes.
+ *   - otherwise         → the dependency banner below, or nothing.
  */
 
 export interface HealthPayload {
@@ -48,6 +64,8 @@ interface DegradedBannerProps {
   pollIntervalDegradedMs?: number;
   /** Injected fetcher, for tests. Defaults to the canonical health endpoint. */
   fetchHealth?: () => Promise<HealthPayload>;
+  /** "Connection lost" Reload action. Defaults to `location.reload()` (keeps the URL). */
+  onReload?: () => void;
 }
 
 async function defaultFetchHealth(): Promise<HealthPayload> {
@@ -161,6 +179,7 @@ export function DegradedBanner({
   pollIntervalOkMs = 8000,
   pollIntervalDegradedMs = 3000,
   fetchHealth,
+  onReload = reloadPage,
 }: DegradedBannerProps = {}) {
   // When a caller injects a fetcher, run the legacy standalone loop so
   // existing unit tests keep exercising the banner. When mounted inside
@@ -176,24 +195,71 @@ export function DegradedBanner({
   });
   const providerHealth = (providerCtx?.health as HealthPayload | null) ?? null;
   const health = isStandalone ? standaloneHealth : providerHealth;
+  const connection: ConnectionStatus = isStandalone ? 'online' : providerCtx?.connection ?? 'online';
 
-  const downDep = degradedDependency(health);
-  if (!downDep) return null;
-
-  const title = `Reconnecting to ${friendlyDependencyName(downDep)}`;
-  // Truthful copy (audit 2026-09-21 `states-03`): it is the health CHECK that
-  // repeats every few seconds, not the page. When the check sees the
-  // dependency back, HealthProvider refetches the mounted panels that failed
-  // because of it (healthRecovery.ts), which is what makes "on their own" true.
-  const sub = `Checking the connection every ${Math.round(pollIntervalDegradedMs / 1000)} seconds. Panels that could not load will reload on their own once it is back.`;
+  const seconds = Math.round(pollIntervalDegradedMs / 1000);
+  let banner: ReactNode = null;
+  if (connection === 'offline') {
+    banner = (
+      <Banner
+        title="You are offline"
+        sub="Panels waiting for a connection load when it returns. Approvals and other changes are not recorded while you are offline."
+        data={{ 'data-connection': 'offline' }}
+      />
+    );
+  } else if (connection === 'unreachable') {
+    banner = (
+      <Banner
+        title="Connection lost"
+        sub={`The app did not answer the last two checks. Checking again every ${seconds} seconds; once it answers, panels reload or let you try again.`}
+        data={{ 'data-connection': 'unreachable' }}
+        onReload={onReload}
+      />
+    );
+  } else if (connection === 'online') {
+    const downDep = degradedDependency(health);
+    // Truthful copy (audit 2026-09-21 `states-03`): it is the health CHECK
+    // that repeats every few seconds, not the page. When the check sees the
+    // dependency back, HealthProvider refetches the mounted panels that
+    // failed because of it (healthRecovery.ts), which is what makes "on
+    // their own" true.
+    if (downDep) {
+      banner = (
+        <Banner
+          title={`Reconnecting to ${friendlyDependencyName(downDep)}`}
+          sub={`Checking the connection every ${seconds} seconds. Panels that could not load will reload on their own once it is back.`}
+          data={{ 'data-degraded-dependency': downDep }}
+        />
+      );
+    }
+  }
 
   return (
-    <div
-      className="degraded-banner"
-      role="status"
-      aria-live="polite"
-      data-degraded-dependency={downDep}
-    >
+    <>
+      <SessionExpiredDialog />
+      {banner}
+    </>
+  );
+}
+
+function reloadPage(): void {
+  window.location.reload();
+}
+
+/** The `.degraded-banner` anatomy every state shares (amber family). */
+function Banner({
+  title,
+  sub,
+  data,
+  onReload,
+}: {
+  title: string;
+  sub: string;
+  data: Record<`data-${string}`, string>;
+  onReload?: () => void;
+}) {
+  return (
+    <div className="degraded-banner" role="status" aria-live="polite" {...data}>
       <div className="degraded-banner__ico" aria-hidden="true">
         <Icon name="bolt" size={16} />
       </div>
@@ -204,6 +270,13 @@ export function DegradedBanner({
         </div>
         <div className="degraded-banner__sub">{sub}</div>
       </div>
+      {onReload && (
+        <div className="degraded-banner__actions">
+          <button type="button" className="btn btn--ghost btn--sm" onClick={onReload}>
+            Reload
+          </button>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
-import { useLocation, useNavigate } from 'react-router';
+import { useNavigate } from 'react-router';
 import { useApp } from '../AppContext';
 import { Icon } from '../Icon';
 import { useListboxNavigation } from '../ui/useListboxNavigation';
 import { useHealth } from '../HealthProvider';
+import { Breadcrumbs } from './Breadcrumbs';
+import { IdentityMenu } from './IdentityMenu';
 import { useFootprint } from '../FootprintProvider';
 import { api, type HealthPayload } from '../../lib/api';
+import { hasOpenModal, registerKeyBinding } from '../../lib/keymap';
 import {
   GENIE_LAUNCHER_STATUS_ID,
   genieLauncherStateClass,
@@ -138,8 +141,10 @@ function SystemStatusPill({ health }: { health: HealthPayload | null }) {
 
 /**
  * Topbar — breadcrumbs, tenant pill, environment pill, warehouse-status pill,
- * theme toggle, Genie toggle, Console toggle. Matches the prototype's BEM
- * (`topbar__crumbs`, `topbar__pill`, `topbar__icon-btn`).
+ * theme toggle, Genie toggle, Console toggle, identity menu. Matches the
+ * prototype's BEM (`topbar__crumbs`, `topbar__pill`, `topbar__icon-btn`).
+ * The breadcrumb trail is derived from the route registry and the Lead Queue
+ * context (Breadcrumbs.tsx, audit shell-04 / shell-08).
  *
  * Topbar reads the shared `HealthProvider` snapshot (round-2 hole-finder
  * #21, 2026-04-23) instead of running its own `/api/health` poll. Cadence
@@ -147,39 +152,12 @@ function SystemStatusPill({ health }: { health: HealthPayload | null }) {
  * from the DegradedBanner.
  */
 
-const ROUTE_CRUMBS: Record<string, string> = {
-  '/':                       'Home',
-  '/analytics':              'Analytics',
-  '/data-estate/assets':      'Data Estate',
-  '/portfolio-builder':      'Portfolio Builder',
-  '/segment-intelligence':   'Segment Intelligence',
-  '/lead-queue':             'Lead Queue',
-  '/borrower-360':           'Borrower 360',
-  '/offer-orchestrator':     'Offer Orchestrator',
-  '/ask-genie':              'Ask Genie',
-  '/glossary':               'Glossary',
-  '/admin-config':           'Admin',
-};
-
-function matchesRoutePrefix(path: string, prefix: string): boolean {
-  return path === prefix || path.startsWith(`${prefix}/`);
-}
-
-export function currentCrumb(path: string): string {
-  if (matchesRoutePrefix(path, '/data-estate/assets')) return 'Data Estate';
-  if (matchesRoutePrefix(path, '/borrower-360')) return 'Borrower 360';
-  if (matchesRoutePrefix(path, '/offer-orchestrator')) return 'Offer Orchestrator';
-  return ROUTE_CRUMBS[path] ?? 'Not Found';
-}
-
 export function Topbar() {
   const { lender, theme, setTheme, genieOpen, setGenieOpen, consoleOpen, setConsoleOpen } = useApp();
   // A Genie turn keeps running behind the closed panel; this toggle is the
   // only desktop launcher, so it carries the running ring / answer-ready badge.
   const genieTurn = useGenieTurnStatus();
-  const { pathname } = useLocation();
   const navigate = useNavigate();
-  const crumb = currentCrumb(pathname);
   const { health } = useHealth();
   // Surface the footprint fallback as a muted chip so operators are not
   // silently pinned to generic geography metadata when /api/config/footprint
@@ -207,17 +185,18 @@ export function Topbar() {
     return () => clearTimeout(t);
   }, []);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
-      const target = e.target as HTMLElement | null;
-      if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
-      e.preventDefault();
-      searchInputRef.current?.focus();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  // `/` focuses the borrower search: a global single-key binding in the
+  // shared keymap (audit wow-power-4), so typing in a field never triggers
+  // it, the Console's single-key switch turns it off, and the `?` sheet
+  // lists it. Not over a modal layer, where the search sits behind a scrim.
+  useEffect(() => registerKeyBinding({
+    id: 'topbar-search',
+    scope: 'global',
+    keys: ['/'],
+    description: 'Search borrowers, ZIPs and cities',
+    when: () => !hasOpenModal(),
+    run: () => searchInputRef.current?.focus(),
+  }), []);
 
   useEffect(() => {
     const q = borrowerQuery.trim();
@@ -326,11 +305,7 @@ export function Topbar() {
 
   return (
     <header className="topbar" role="banner">
-      <div className="topbar__crumbs">
-        <span>Mortgage Intelligence Platform</span>
-        <span className="sep">/</span>
-        <span className="cur">{crumb}</span>
-      </div>
+      <Breadcrumbs />
       <form
         ref={searchFormRef}
         className="topbar__search"
@@ -486,6 +461,7 @@ export function Topbar() {
       >
         <Icon name="tweak" size={15} />
       </button>
+      <IdentityMenu />
       </div>
     </header>
   );

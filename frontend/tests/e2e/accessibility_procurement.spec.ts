@@ -204,7 +204,7 @@ test.describe('procurement accessibility canaries', () => {
 
   test('Lead Queue virtualization keeps DOM bounded while exposing row metadata @a11y', async ({ page }) => {
     await page.goto('/lead-queue');
-    const table = page.locator('.lead-table__table').first();
+    const table = page.locator('.lead-table__table:not([aria-hidden="true"])').first();
     await expect(table).toBeVisible({ timeout: 30_000 });
     const totalRows = parseAriaRowCount(await table.getAttribute('aria-rowcount'));
     if (totalRows <= 1) {
@@ -230,7 +230,7 @@ test.describe('procurement accessibility canaries', () => {
 
   test('Lead Queue rows are keyboard-expandable with stable virtual row metadata @a11y', async ({ page }) => {
     await page.goto('/lead-queue');
-    const table = page.locator('.lead-table__table').first();
+    const table = page.locator('.lead-table__table:not([aria-hidden="true"])').first();
     await expect(table).toBeVisible({ timeout: 30_000 });
     const totalRows = parseAriaRowCount(await table.getAttribute('aria-rowcount'));
     if (totalRows <= 1) {

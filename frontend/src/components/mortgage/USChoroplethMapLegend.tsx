@@ -16,6 +16,7 @@ import type { GeoAssignmentOverlayResponse } from '../../lib/api';
 import { DRAWER_SOURCES } from '../../lib/drawerSources';
 import { EvidenceChip } from '../Primitives';
 import { classRanges, formatBreak, type ChoroplethScale } from './USChoroplethMap.scale';
+import { formatCount } from '../../lib/formatters';
 
 interface USChoroplethMapLegendProps {
   overlayOn: boolean;
@@ -61,10 +62,10 @@ export function USChoroplethMapLegend({
           <span className="map-legend__value">
             {overlayOn
               ? overlayData
-                ? overlayData.total_unattended.toLocaleString()
+                ? formatCount(overlayData.total_unattended)
                 : '—'
               : totalCount !== null
-                ? totalCount.toLocaleString()
+                ? formatCount(totalCount)
                 : '—'}
           </span>
         </span>
@@ -74,8 +75,8 @@ export function USChoroplethMapLegend({
         // evidence affordance tracing them to Lakebase + Unity Catalog.
         <div className="map-legend__overlay-facts">
           <span>
-            {overlayData.total_leads.toLocaleString()} leads ·{' '}
-            {overlayData.total_assigned.toLocaleString()} assigned
+            {formatCount(overlayData.total_leads)} leads ·{' '}
+            {formatCount(overlayData.total_assigned)} assigned
           </span>
           <EvidenceChip source={DRAWER_SOURCES.assignmentOverlay}>
             {DRAWER_SOURCES.assignmentOverlay.short}

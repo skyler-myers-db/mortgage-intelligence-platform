@@ -1,4 +1,6 @@
 import type { IconName } from '../Icon';
+import { PALETTE_ROUTE_IDS, ROUTES, type PaletteRouteId } from '../../lib/routeMeta';
+import type { CommandSelectionContext, CommandVerb } from './commandSelection';
 
 /**
  * Command palette action registry + pure filter/rank (re-audit #4 follow-up,
@@ -11,7 +13,11 @@ import type { IconName } from '../Icon';
 
 export type CommandTarget =
   | { kind: 'route'; to: string }
-  | { kind: 'command'; command: 'toggle-theme' | 'toggle-console' | 'open-genie' };
+  | { kind: 'command'; command: 'toggle-theme' | 'toggle-console' | 'open-genie' }
+  // A verb on the page's current selection (audit wow-power-4). The palette
+  // resolves it through the selection context the page published, which
+  // calls the page's own guarded handler (never a parallel approval path).
+  | { kind: 'verb'; verb: CommandVerb };
 
 export interface CommandAction {
   id: string;
@@ -19,37 +25,63 @@ export interface CommandAction {
   /** Right-aligned secondary text (route path or verb). */
   hint: string;
   icon: IconName;
-  group: 'Navigate' | 'Workspace';
+  group: 'Navigate' | 'Workspace' | 'Selection';
   /** Extra search terms beyond the label. */
   keywords: string[];
   target: CommandTarget;
 }
 
+/**
+ * Command id and extra search terms per palette route. Label, hint, icon and
+ * destination come from the route registry (lib/routeMeta, audit shell-08),
+ * so the palette and the nav chips can no longer disagree about a route.
+ *
+ * Mortgage synonyms (audit 2026-09-21 `shell-07`): "refi" used to match
+ * nothing. The domain words a lender types are keywords BEFORE any fuzzy
+ * scoring, so they resolve to the page that owns the concept.
+ */
+const ROUTE_ACTION_TERMS = {
+  home: { id: 'nav-home', keywords: ['overview', 'dashboard', 'start', 'map', 'geography'] },
+  portfolio: {
+    id: 'nav-portfolio',
+    keywords: ['build', 'population', 'filters', 'campaign', 'roi', 'economics', 'in the money', 'heloc'],
+  },
+  segments: {
+    id: 'nav-segments',
+    keywords: ['segments', 'in the money', 'itm', 'investor', 'heloc', 'equity', 'cohort', 'refi', 'refinance', 'cash-out', 'cash out', 'recapture', 'retention', 'listed', 'listed for sale'],
+  },
+  leads: {
+    id: 'nav-leads',
+    keywords: ['ranked', 'borrowers', 'approve', 'reject', 'queue', 'outreach', 'refi', 'in the money', 'heloc'],
+  },
+  borrowerIndex: { id: 'nav-borrower', keywords: ['dossier', 'profile', 'evidence', 'proof'] },
+  offerIndex: {
+    id: 'nav-offer',
+    keywords: ['offer', 'next best', 'nbo', 'draft', 'outreach', 'refi', 'refinance', 'cash-out', 'cash out', 'heloc', 'recapture', 'retention'],
+  },
+  analytics: { id: 'nav-analytics', keywords: ['executive', 'geography', 'economics', 'signals', 'funnel', 'charts'] },
+  askGenie: { id: 'nav-genie', keywords: ['ai', 'question', 'chat', 'natural language', 'sql'] },
+  glossary: { id: 'nav-glossary', keywords: ['terms', 'definitions', 'clip', 'owner link', 'help'] },
+  admin: { id: 'nav-admin', keywords: ['config', 'audit log', 'offer rules', 'governance'] },
+} as const satisfies Record<PaletteRouteId, { id: string; keywords: readonly string[] }>;
+
+function routeAction(routeId: PaletteRouteId): CommandAction {
+  const route = ROUTES[routeId];
+  const terms = ROUTE_ACTION_TERMS[routeId];
+  return {
+    id: terms.id,
+    label: route.name,
+    hint: route.pattern,
+    icon: route.icon,
+    group: 'Navigate',
+    keywords: [...terms.keywords],
+    target: { kind: 'route', to: route.pattern },
+  };
+}
+
 export const COMMAND_ACTIONS: readonly CommandAction[] = [
   // --- Navigate (the eight product-flow routes + analytics/glossary/admin) ---
-  { id: 'nav-home', label: 'Home', hint: '/', icon: 'home', group: 'Navigate',
-    keywords: ['overview', 'dashboard', 'start', 'map', 'geography'], target: { kind: 'route', to: '/' } },
-  // Mortgage synonyms (audit 2026-09-21 `shell-07`): "refi" used to match
-  // nothing. The domain words a lender types are keywords BEFORE any fuzzy
-  // scoring, so they resolve to the page that owns the concept.
-  { id: 'nav-portfolio', label: 'Portfolio Builder', hint: '/portfolio-builder', icon: 'target', group: 'Navigate',
-    keywords: ['build', 'population', 'filters', 'campaign', 'roi', 'economics', 'in the money', 'heloc'], target: { kind: 'route', to: '/portfolio-builder' } },
-  { id: 'nav-segments', label: 'Segment Intelligence', hint: '/segment-intelligence', icon: 'layers', group: 'Navigate',
-    keywords: ['segments', 'in the money', 'itm', 'investor', 'heloc', 'equity', 'cohort', 'refi', 'refinance', 'cash-out', 'cash out', 'recapture', 'retention', 'listed', 'listed for sale'], target: { kind: 'route', to: '/segment-intelligence' } },
-  { id: 'nav-leads', label: 'Lead Queue', hint: '/lead-queue', icon: 'flow', group: 'Navigate',
-    keywords: ['ranked', 'borrowers', 'approve', 'reject', 'queue', 'outreach', 'refi', 'in the money', 'heloc'], target: { kind: 'route', to: '/lead-queue' } },
-  { id: 'nav-borrower', label: 'Borrower 360', hint: '/borrower-360', icon: 'user', group: 'Navigate',
-    keywords: ['dossier', 'profile', 'evidence', 'proof'], target: { kind: 'route', to: '/borrower-360' } },
-  { id: 'nav-offer', label: 'Offer Orchestrator', hint: '/offer-orchestrator', icon: 'send', group: 'Navigate',
-    keywords: ['offer', 'next best', 'nbo', 'draft', 'outreach', 'refi', 'refinance', 'cash-out', 'cash out', 'heloc', 'recapture', 'retention'], target: { kind: 'route', to: '/offer-orchestrator' } },
-  { id: 'nav-analytics', label: 'Analytics', hint: '/analytics', icon: 'audit', group: 'Navigate',
-    keywords: ['executive', 'geography', 'economics', 'signals', 'funnel', 'charts'], target: { kind: 'route', to: '/analytics' } },
-  { id: 'nav-genie', label: 'Ask Genie', hint: '/ask-genie', icon: 'sparkle', group: 'Navigate',
-    keywords: ['ai', 'question', 'chat', 'natural language', 'sql'], target: { kind: 'route', to: '/ask-genie' } },
-  { id: 'nav-glossary', label: 'Glossary', hint: '/glossary', icon: 'doc', group: 'Navigate',
-    keywords: ['terms', 'definitions', 'clip', 'owner link', 'help'], target: { kind: 'route', to: '/glossary' } },
-  { id: 'nav-admin', label: 'Admin', hint: '/admin-config', icon: 'settings', group: 'Navigate',
-    keywords: ['config', 'audit log', 'offer rules', 'governance'], target: { kind: 'route', to: '/admin-config' } },
+  ...PALETTE_ROUTE_IDS.map(routeAction),
   // --- Workspace commands ---
   { id: 'cmd-genie', label: 'Open Genie panel', hint: 'Floating assistant', icon: 'sparkle', group: 'Workspace',
     keywords: ['ai', 'assistant', 'chat'], target: { kind: 'command', command: 'open-genie' } },
@@ -58,6 +90,40 @@ export const COMMAND_ACTIONS: readonly CommandAction[] = [
   { id: 'cmd-console', label: 'Toggle Console', hint: 'Theme · accent · density', icon: 'tweak', group: 'Workspace',
     keywords: ['settings', 'density', 'accent', 'tenant'], target: { kind: 'command', command: 'toggle-console' } },
 ];
+
+/**
+ * Verbs on the published selection. "Approve N selected…" opens the page's
+ * bulk rationale gate (or the single-row review for one row); it is hidden
+ * whenever the approver gate, a campaign binding or an in-flight run would
+ * refuse it. The ellipsis says a review step follows: no verb submits.
+ */
+export function commandVerbActions(selection: CommandSelectionContext | null): CommandAction[] {
+  if (!selection || selection.selectedCount === 0) return [];
+  const verbs: CommandAction[] = [];
+  if (selection.canApprove && selection.approveCount > 0) {
+    verbs.push({
+      id: 'verb-approve-selected',
+      label: `Approve ${selection.approveCount.toLocaleString()} selected…`,
+      hint: selection.approveCount === 1 ? 'Opens the approval review' : 'Opens the approval rationale gate',
+      icon: 'check',
+      group: 'Selection',
+      keywords: ['approve', 'bulk', 'selected', 'selection', 'rationale'],
+      target: { kind: 'verb', verb: 'approve-selected' },
+    });
+  }
+  if (selection.canAssign) {
+    verbs.push({
+      id: 'verb-assign-selected',
+      label: `Assign ${selection.selectedCount.toLocaleString()} selected…`,
+      hint: 'Choose a loan officer',
+      icon: 'user',
+      group: 'Selection',
+      keywords: ['assign', 'distribute', 'loan officer', 'lo', 'selected', 'selection'],
+      target: { kind: 'verb', verb: 'assign-selected' },
+    });
+  }
+  return verbs;
+}
 
 export function commandActionsForAccess(
   canAccessAdmin: boolean,

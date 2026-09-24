@@ -21,14 +21,22 @@
  * write an audit row — from a filter button, the evidence drawer or Genie
  * chrome. Pins 4-8 below: A/R act only while focus is inside the `.tbl-wrap`
  * region and no dialog, drawer, listbox or menu is open.
+ *
+ * Wave 1c (audit flow-03 / states-06): A no longer approves blind. It opens
+ * the approve review, which drafts on that intent and shows the copy;
+ * Confirm approves that exact draft. "Opened the review" (one draft call, no
+ * approve) is therefore what an in-scope A proves here; the review itself is
+ * pinned in LeadTable.approveReview.test.tsx.
  */
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, type ComponentProps } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LeadSummary } from '../../types';
+import { commandVerbActions } from '../command/commandActions';
+import { currentCommandSelection } from '../command/commandSelection';
 
 const draftOutreach = vi.fn();
 const approve = vi.fn();
@@ -44,6 +52,9 @@ const DRAFT = {
   subject: 'Your governed mortgage review',
   body: 'draft',
   status: 'draft',
+  disclosure_version: 'fixture-2026-07',
+  disclosure_state: 'IL',
+  evidence_assets: ['mip.gold.borrower_360'],
 };
 
 let approvalsFixture: Record<string, 'approved' | 'rejected'> = {};
@@ -81,6 +92,13 @@ vi.mock('../../lib/api', () => ({
 }));
 
 import { LeadTable } from './LeadTable';
+
+// The review and the bulk review are lazy chunks: transform them once up
+// front so the in-test dynamic import resolves in a few microtasks.
+beforeAll(async () => {
+  await import('./LeadApproveReview');
+  await import('./LeadBulkApproveReview');
+}, 60_000);
 
 function lead(borrowerId: string): LeadSummary {
   return {
@@ -138,6 +156,7 @@ describe('LeadTable A/R hotkeys from row-internal focus', () => {
   function mount(
     initialEntry = '/lead-queue',
     growthAgentVerification: ComponentProps<typeof LeadTable>['growthAgentVerification'] = null,
+    leads: LeadSummary[] = [lead('B-AAAAAAAAAAAA1')],
   ) {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
@@ -147,7 +166,7 @@ describe('LeadTable A/R hotkeys from row-internal focus', () => {
         <QueryClientProvider client={queryClient}>
           <MemoryRouter initialEntries={[initialEntry]}>
             <LeadTable
-              leads={[lead('B-AAAAAAAAAAAA1')]}
+              leads={leads}
               growthAgentVerification={growthAgentVerification}
             />
           </MemoryRouter>
@@ -180,42 +199,49 @@ describe('LeadTable A/R hotkeys from row-internal focus', () => {
     });
   }
 
-  it("approves the expanded pending row when 'a' bubbles from the borrower button", async () => {
+  /** The review is its own lazy chunk: wait until it renders in `phase`. */
+  async function waitForReview(phase = 'ready') {
+    await vi.waitFor(async () => {
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(document.querySelector(`[data-testid="lead-approve-review"][data-review-phase="${phase}"]`)).not.toBeNull();
+      // The first dynamic import of the chunk is transformed on demand.
+    }, { timeout: 15_000 });
+  }
+
+  /** The review's Confirm button, in the row or in the dialog. */
+  function confirmButton(): HTMLButtonElement {
+    const button = document.querySelector<HTMLButtonElement>('[data-testid="lead-approve-review-confirm"]');
+    if (!button) throw new Error('approve review confirm not rendered');
+    return button;
+  }
+
+  /** React-visible typing into a controlled input. */
+  function typeInto(input: HTMLInputElement, value: string) {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    act(() => {
+      setter?.call(input, value);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  }
+
+  it("'a' from the borrower button opens the review, and only Confirm approves that exact draft", async () => {
     mount();
     const btn = expandViaBorrowerButton();
     expect(container.querySelector('.tbl__expand')).not.toBeNull();
 
     pressKey(btn, 'a');
-    await flush();
+    await waitForReview();
 
-    expect(draftOutreach).toHaveBeenCalledWith('B-AAAAAAAAAAAA1', 'email', undefined);
-    expect(approve).toHaveBeenCalledWith(
-      'B-AAAAAAAAAAAA1',
-      expect.objectContaining({
-        draft_subject: DRAFT.subject,
-        draft_body: DRAFT.body,
-        draft_generation_id: DRAFT.generation_id,
-        draft_response_hash: DRAFT.response_hash,
-        draft_source_refreshed_at: DRAFT.source_refreshed_at,
-      }),
-      undefined,
-    );
-  });
+    // The draft is generated on this explicit intent, and nothing is approved.
+    expect(draftOutreach).toHaveBeenCalledTimes(1);
+    expect(draftOutreach).toHaveBeenCalledWith('B-AAAAAAAAAAAA1', 'email', expect.any(AbortSignal));
+    expect(approve).not.toHaveBeenCalled();
+    const review = container.querySelector('.tbl__expand [data-testid="lead-approve-review"]');
+    expect(review?.textContent).toContain(DRAFT.subject);
 
-  it('forwards the governed email subject through the bulk approval API contract', async () => {
-    mount();
-    const checkbox = container.querySelector<HTMLInputElement>(
-      '[data-testid="lead-select-B-AAAAAAAAAAAA1"]',
-    );
-    if (!checkbox) throw new Error('lead checkbox not rendered');
-    act(() => checkbox.click());
-
-    const bulkApprove = container.querySelector<HTMLButtonElement>(
-      '[data-testid="lead-bulk-approve"]',
-    );
-    if (!bulkApprove) throw new Error('bulk approve button not rendered');
-    act(() => bulkApprove.click());
-    await flush();
+    act(() => confirmButton().click());
     await flush();
 
     expect(approve).toHaveBeenCalledWith(
@@ -227,6 +253,47 @@ describe('LeadTable A/R hotkeys from row-internal focus', () => {
         draft_generation_id: DRAFT.generation_id,
         draft_response_hash: DRAFT.response_hash,
         draft_source_refreshed_at: DRAFT.source_refreshed_at,
+      }),
+      undefined,
+    );
+    expect(draftOutreach).toHaveBeenCalledTimes(1);
+  });
+
+  it('forwards the governed email subject through the rationale-gated bulk approval API contract', async () => {
+    mount('/lead-queue', null, [lead('B-AAAAAAAAAAAA1'), lead('B-AAAAAAAAAAAA2')]);
+    for (const id of ['B-AAAAAAAAAAAA1', 'B-AAAAAAAAAAAA2']) {
+      const checkbox = container.querySelector<HTMLInputElement>(`[data-testid="lead-select-${id}"]`);
+      if (!checkbox) throw new Error('lead checkbox not rendered');
+      act(() => checkbox.click());
+    }
+
+    const bulkApprove = container.querySelector<HTMLButtonElement>(
+      '[data-testid="lead-bulk-approve"]',
+    );
+    if (!bulkApprove) throw new Error('bulk approve button not rendered');
+    // The first click opens the required rationale gate: nothing drafts.
+    act(() => bulkApprove.click());
+    await flush();
+    expect(draftOutreach).not.toHaveBeenCalled();
+    const rationale = container.querySelector<HTMLInputElement>('.bulk-actions__rationale input');
+    if (!rationale) throw new Error('bulk rationale gate not rendered');
+    typeInto(rationale, 'Q3 retention sweep');
+
+    act(() => bulkApprove.click());
+    await flush();
+    await flush();
+
+    expect(approve).toHaveBeenCalledTimes(2);
+    expect(approve).toHaveBeenCalledWith(
+      'B-AAAAAAAAAAAA1',
+      expect.objectContaining({
+        channel: 'email',
+        draft_subject: DRAFT.subject,
+        draft_body: DRAFT.body,
+        draft_generation_id: DRAFT.generation_id,
+        draft_response_hash: DRAFT.response_hash,
+        draft_source_refreshed_at: DRAFT.source_refreshed_at,
+        bulk_rationale: 'Q3 retention sweep',
       }),
       expect.any(AbortSignal),
     );
@@ -252,9 +319,10 @@ describe('LeadTable A/R hotkeys from row-internal focus', () => {
       '[data-testid="lead-bulk-approve"]',
     );
     if (!bulkApprove) throw new Error('bulk approve button not rendered');
+    // One selected row: "Approve 1 eligible" opens that row's review (a
+    // dialog, the row is collapsed), never a blind approve.
     act(() => bulkApprove.click());
-    await flush();
-    await flush();
+    await waitForReview();
 
     expect(draftOutreach).toHaveBeenCalledWith(
       'B-AAAAAAAAAAAA1',
@@ -262,10 +330,14 @@ describe('LeadTable A/R hotkeys from row-internal focus', () => {
       expect.any(AbortSignal),
       { campaign_id: campaignId, variant_name: 'B' },
     );
+    expect(approve).not.toHaveBeenCalled();
+    expect(document.querySelector('dialog.lead-approve-dialog [data-testid="lead-approve-review"]')).not.toBeNull();
+    act(() => confirmButton().click());
+    await flush();
     expect(approve).toHaveBeenCalledWith(
       'B-AAAAAAAAAAAA1',
       expect.objectContaining({ campaign_id: campaignId, variant_name: 'B' }),
-      expect.any(AbortSignal),
+      undefined,
     );
     expect(container.querySelector('[data-testid="campaign-operational-provenance"]')?.textContent)
       .toContain('variant B');
@@ -435,7 +507,7 @@ describe('LeadTable A/R hotkeys from row-internal focus', () => {
       expect(approve).not.toHaveBeenCalled();
     });
 
-    it('still approves with the always-mounted drawer and Genie panel CLOSED', async () => {
+    it('still opens the review with the always-mounted drawer and Genie panel CLOSED', async () => {
       mount();
       const btn = expandViaBorrowerButton();
       addToBody('<aside class="drawer" role="dialog" aria-modal="true" aria-hidden="true"></aside>');
@@ -444,13 +516,16 @@ describe('LeadTable A/R hotkeys from row-internal focus', () => {
       );
 
       pressKey(btn, 'a');
-      await flush();
+      await waitForReview();
 
       expect(draftOutreach).toHaveBeenCalledTimes(1);
+      expect(container.querySelector('[data-testid="lead-approve-review"]')).not.toBeNull();
+      act(() => confirmButton().click());
+      await flush();
       expect(approve).toHaveBeenCalledTimes(1);
     });
 
-    it('still approves when focus is on the table scroll region itself (click-row-then-A)', async () => {
+    it('still opens the review when focus is on the table scroll region itself (click-row-then-A)', async () => {
       mount();
       expandViaBorrowerButton();
       const region = container.querySelector<HTMLDivElement>('.tbl-wrap');
@@ -459,10 +534,11 @@ describe('LeadTable A/R hotkeys from row-internal focus', () => {
       expect(document.activeElement).toBe(region);
 
       pressKey(region, 'a');
-      await flush();
+      await waitForReview();
 
       expect(draftOutreach).toHaveBeenCalledTimes(1);
-      expect(approve).toHaveBeenCalledTimes(1);
+      expect(container.querySelector('[data-testid="lead-approve-review"]')).not.toBeNull();
+      expect(approve).not.toHaveBeenCalled();
     });
 
     it("still opens the reject panel when 'r' is pressed with focus in the table", () => {
@@ -475,7 +551,7 @@ describe('LeadTable A/R hotkeys from row-internal focus', () => {
       expect(container.querySelector('.decision-panel')).not.toBeNull();
     });
 
-    it('advertises A / R only on the expanded row and Shift+A on bulk approve', () => {
+    it('advertises A / R only on the cursor row and Shift+A on bulk approve', () => {
       mount();
       const approveBtn = () => container.querySelector('[data-testid="lead-approve-B-AAAAAAAAAAAA1"]');
       const rejectBtn = () => container.querySelector('[data-testid="lead-reject-B-AAAAAAAAAAAA1"]');
@@ -546,6 +622,20 @@ describe('LeadTable A/R hotkeys from row-internal focus', () => {
       expect(draftOutreach).not.toHaveBeenCalled();
       expect(approve).not.toHaveBeenCalled();
       expect(container.querySelector('.decision-panel')).toBeNull();
+    });
+
+    it('publishes the selection to Cmd-K with no approve verb for a non-approver (wow-power-4)', () => {
+      sessionFixture = { canApprove: false, actorEmail: null, sessionStatus: 'ready' };
+      mount();
+      const checkbox = container.querySelector<HTMLInputElement>(
+        '[data-testid="lead-select-B-AAAAAAAAAAAA1"]',
+      );
+      if (!checkbox) throw new Error('lead checkbox not rendered');
+      act(() => checkbox.click());
+
+      const published = currentCommandSelection();
+      expect(published).toEqual(expect.objectContaining({ selectedCount: 1, approveCount: 1, canApprove: false }));
+      expect(commandVerbActions(published).map((action) => action.id)).not.toContain('verb-approve-selected');
     });
 
     it('disables bulk approve with the reason for a non-approver and never drafts on click', async () => {

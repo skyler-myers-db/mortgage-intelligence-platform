@@ -235,8 +235,10 @@ describe('FunnelSankey (render + a11y)', () => {
     const links = [...container.querySelectorAll('[role="link"]')];
     const labels = links.map((l) => l.getAttribute('aria-label') ?? '');
     for (const label of labels) expect(label).not.toMatch(/from previous stage/);
-    expect(labels[0]).toBe('Addressable: 5.16M borrowers. Open in lead queue.');
-    expect(labels[1]).toBe('Refi economics: 117.19K borrowers, 2.3% of addressable. Open in lead queue.');
+    // The accessible name reads the exact count; only the drawn node label
+    // is compact (2026-09-21 audit responsive-04: lib/formatters).
+    expect(labels[0]).toBe('Addressable: 5,156,184 borrowers. Open in lead queue.');
+    expect(labels[1]).toBe('Refi economics: 117,189 borrowers, 2.3% of addressable. Open in lead queue.');
     // 3,990 / 117,189 = 3.4% was the published "conversion"; the honest
     // figure is 3,990 / 5,156,184 = 0.1% of addressable.
     expect(labels[2]).toContain('0.1% of addressable');

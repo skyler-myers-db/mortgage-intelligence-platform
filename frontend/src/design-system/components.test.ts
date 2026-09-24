@@ -7,6 +7,7 @@ import { join } from 'node:path';
 // @ts-expect-error CSS lint helper is an ESM Node script used by lint/tests only.
 import { findCssLiteralViolations } from '../../../tools/lint_css_literals.mjs';
 import { designCss } from '../test/designCss';
+import { featureStylesheets } from '../test/featureCss';
 
 declare const process: { cwd(): string };
 
@@ -25,10 +26,10 @@ describe('layout containment contracts', () => {
 
     expect(css).toMatch(/\.topbar\s*\{[^}]*display:\s*grid;/s);
     expect(css).toMatch(
-      /\.topbar\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\) minmax\(0,\s*32rem\) minmax\(0,\s*1fr\);/s,
+      /\.topbar\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\) minmax\(0,\s*30rem\) minmax\(0,\s*1fr\);/s,
     );
     expect(css).toMatch(/\.topbar__search\s*\{[^}]*grid-column:\s*2;/s);
-    expect(css).toMatch(/\.topbar__search\s*\{[^}]*inline-size:\s*min\(32rem,\s*100%\);/s);
+    expect(css).toMatch(/\.topbar__search\s*\{[^}]*inline-size:\s*min\(30rem,\s*100%\);/s);
     expect(css).toContain('.topbar__actions');
     expect(css).toContain('.topbar__search-results');
     expect(css).toContain('.topbar__search-status');
@@ -40,7 +41,9 @@ describe('layout containment contracts', () => {
    * max-content) overflowed its 296px grid track and the opaque tenant pill
    * covered the search box's ⌘K badge by 26px at 1440x900, on every route.
    * Measured after the fix: tracks 392/512/392, search centred with 0px
-   * overlap, tenant pill back to one line.
+   * overlap, tenant pill back to one line. The identity menu (audit
+   * shell-06) added a fourth icon button: tracks are now 408/480/408 and
+   * shell-wayfinding.fixture.spec.ts checks the tenant name stays whole.
    */
   it('keeps the topbar actions cluster inside its own grid track', () => {
     const css = designCss();
@@ -53,7 +56,7 @@ describe('layout containment contracts', () => {
     // Below the breakpoint the third track is content-sized instead, so the
     // cluster still can't be overlapped when the side tracks get tight.
     expect(css).toMatch(
-      /@media \(max-width:\s*88rem\)\s*\{[\s\S]*?\.topbar\s*\{[^}]*grid-template-columns:[^;]*auto;/s,
+      /@media \(max-width:\s*89rem\)\s*\{[\s\S]*?\.topbar\s*\{[^}]*grid-template-columns:[^;]*auto;/s,
     );
   });
 
@@ -260,8 +263,12 @@ describe('layout containment contracts', () => {
   it('renders skeleton placeholders for slow lead and data-estate loads', () => {
     const css = designCss();
 
-    expect(css).toContain('.lead-queue-skeleton__row');
-    expect(css).toMatch(/\.lead-queue-skeleton__row\s*\{[^}]*grid-template-columns:/s);
+    // The Lead Queue skeleton renders the real `.tbl.lead-table__table`
+    // (audit states-10), so the shell CSS carries no private grid for it;
+    // its cell shapes ship with the lazy route stylesheet.
+    expect(css).not.toContain('.lead-queue-skeleton__row');
+    const leadQueueSkeleton = featureStylesheets().find((sheet) => sheet.file === 'src/routes/lead-queue.skeleton.css');
+    expect(leadQueueSkeleton?.css).toContain('.lead-queue-skeleton__bar');
     expect(css).toContain('.data-estate__lane-skeleton-main');
     expect(css).toContain('.data-estate__asset--skeleton');
   });
@@ -387,6 +394,10 @@ describe('layout containment contracts', () => {
     expect(scale['drawer-scrim']).toBeGreaterThan(scale.genie);
     expect(scale.console).toBeGreaterThan(scale.drawer);
     expect(scale.palette).toBeGreaterThan(scale['map-tip']);
+    // The open identity popup's topbar lift (shell-06) clears the Console and
+    // the Genie panel but stays under the skip link and the palette.
+    expect(scale['topbar-menu']).toBeGreaterThan(scale.console);
+    expect(scale['topbar-menu']).toBeLessThan(scale['skip-link']);
   });
 
   /**

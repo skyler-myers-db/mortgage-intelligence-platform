@@ -1,9 +1,10 @@
 import { useEffect, useId, useState, type CSSProperties, type ReactElement, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Link, Navigate, useParams } from 'react-router';
+import { Link, Navigate, useLocation, useParams } from 'react-router';
 import { api, ApiError } from '../lib/api';
 import type { Borrower360 as Borrower360Type } from '../types';
 import { currency, rangeLabel, ratePct, ratePctFromFraction, signedBpsLabel } from '../lib/formatters';
+import { formatDateTimeShort } from '../lib/time';
 import { PageShell } from '../components/layout/PageShell';
 import { TriggerTimeline } from '../components/mortgage/TriggerTimeline';
 import { BorrowerStoryCard } from '../components/mortgage/BorrowerStoryCard';
@@ -28,6 +29,8 @@ import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import { queryKeys } from '../lib/queryKeys';
 import { useApp } from '../components/AppContext';
 import { LtvEquityValue } from './borrower-360.ltv-field';
+import { BorrowerQueuePager } from './borrower-360.pager';
+import { useQueueContext } from '../lib/queueContext';
 
 /**
  * Borrower 360 — per-borrower dossier composed in `.surface` blocks.
@@ -56,21 +59,15 @@ function outreachVariant(status?: string | null): 'success' | 'warning' | 'neutr
   return 'neutral';
 }
 
-function formatDateTimeShort(value?: string | null): string {
-  if (!value) return '—';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
-}
-
 export default function Borrower360() {
   const { id } = useParams();
   const { lastBorrowerId, setLastBorrowerId, saveLead, isLeadSaved } = useApp();
+  // Audit shell-04: the Lead Queue this dossier was opened from (Link state,
+  // else the published queue that lists it). Feeds the pager and the offer
+  // link; it never reads a neighbouring borrower.
+  const location = useLocation();
+  const queue = useQueueContext(location.state, id ?? null);
+  const pager = id ? <BorrowerQueuePager borrowerId={id} queue={queue} /> : null;
   const [proofOpen, setProofOpen] = useState(false);
 
   useEffect(() => {
@@ -160,6 +157,7 @@ export default function Borrower360() {
         title={`Loading ${id}…`}
         lede="Databricks SQL warehouses auto-suspend when idle. It takes ~30 seconds to warm up. Retrying automatically…"
       >
+        {pager}
         <WarmingUpBlock state={warmingUp} title={`Loading borrower ${id}`} />
       </PageShell>
     );
@@ -176,6 +174,7 @@ export default function Borrower360() {
         title={notFound ? `Borrower ${id} not found` : `Couldn't load ${id}`}
         lede={errorLede}
       >
+        {pager}
         <div className="surface">
           <div className="surface__body surface__body--inline">
             <Chip variant={notFound ? 'warning' : 'danger'} icon={notFound ? 'search' : 'cross'}>
@@ -202,6 +201,7 @@ export default function Borrower360() {
         title={<Skeleton width={280} height={30} rounded="md" />}
         lede={`Loading borrower ${id}…`}
       >
+        {pager}
         <div className="layoutA-grid">
           <div className="stack-grid">
             <div className="surface">
@@ -327,6 +327,7 @@ export default function Borrower360() {
         </>
       }
     >
+      {pager}
       {latestDecisionAuditId && (
         <div id={latestDecisionRegionId} hidden={!latestDecisionOpen}>
           {latestDecisionOpen && (
@@ -579,6 +580,7 @@ export default function Borrower360() {
                 <Link
                   className="btn btn--primary"
                   to={`/offer-orchestrator/${b.borrower_id}`}
+                  state={queue ? { queue } : undefined}
                   onClick={() => setLastBorrowerId(b.borrower_id)}
                 >
                   Build outreach draft

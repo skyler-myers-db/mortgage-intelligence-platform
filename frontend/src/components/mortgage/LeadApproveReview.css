@@ -1,0 +1,89 @@
+/* ============================================================
+   APPROVE REVIEW (audit flow-03, states-06) — shipped with its own lazy
+   LeadApproveReview chunk. The prototype `.approval` banner
+   (design_files/index.html:634-651) is one row: icon, title + sub,
+   actions. `--review` is a declared departure: the body stacks the full
+   subject and message under the title, so the icon and the actions
+   top-align and the actions wrap under the copy on a narrow row.
+   ============================================================ */
+.approval--review {
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+.approval--review .approval__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  flex: 1 1 24rem;
+}
+.approval--review .approval__actions {
+  flex-wrap: wrap;
+  align-self: flex-end;
+}
+.approval__copy {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  margin-top: var(--sp-1);
+}
+.approval__note {
+  margin: 0;
+  font-size: var(--fs-12);
+  color: var(--text-2);
+}
+.approval__fields {
+  display: grid;
+  gap: var(--sp-3);
+  margin: 0;
+}
+.approval__fields dd { margin: 0; }
+.approval__field-value {
+  margin-top: var(--sp-1);
+  color: var(--text-1);
+  font-size: var(--fs-13);
+  line-height: var(--lh-body);
+  overflow-wrap: anywhere;
+}
+/* The whole message, wrapped, never clipped: the approver certifies every
+   character (the critic-02 lesson from Offer Orchestrator). */
+.approval__message {
+  white-space: pre-wrap;
+  padding: var(--sp-3);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+  background: var(--bg-1);
+}
+
+/* Inline: the first block of the expanded row, pinned to the scrollport's
+   start edge like the Decision receipt and the preview beside it. */
+.tbl__expand-inner--review {
+  position: sticky;
+  left: 0;
+  max-inline-size: calc(100cqw - 2 * var(--pad-card));
+  padding-block-end: 0;
+  border-bottom: 0;
+}
+
+/* Dialog: a collapsed row's review, in the top layer. */
+.lead-approve-dialog {
+  inline-size: min(44rem, calc(100vw - 2 * var(--sp-4)));
+  max-block-size: calc(100dvh - 2 * var(--sp-8));
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-lg);
+  background: var(--bg-2);
+  color: var(--text-1);
+  box-shadow: var(--shadow-lg);
+  overflow: auto;
+}
+.lead-approve-dialog::backdrop { background: var(--surface-scrim); }
+.lead-approve-dialog > .approval--review { border-radius: var(--r-lg); }
+
+/* The approval result line (LeadTableDecisionToast, shipped in this chunk):
+   message, View receipt and Dismiss on one row. */
+.lead-table__decision-toast {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}

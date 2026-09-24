@@ -34,6 +34,7 @@ import {
   type AnalyticsTab,
 } from './analytics.lib';
 import { LoadState } from './analytics.charts';
+import { ANALYTICS_SKELETONS } from './analytics.skeleton';
 import {
   EconomicsView,
   ExecutiveView,
@@ -313,27 +314,27 @@ export default function AnalyticsRoute() {
       )}
 
       {tab === 'executive' && (
-        <LoadState query={executive} title="Executive analytics">
+        <LoadState query={executive} title="Executive analytics" skeleton={ANALYTICS_SKELETONS.executive}>
           {(data) => <ExecutiveView data={data} leadParams={leadParams} filtersActive={executiveFiltersActive} />}
         </LoadState>
       )}
       {tab === 'geography' && (
-        <LoadState query={geography} title="Geography analytics">
+        <LoadState query={geography} title="Geography analytics" skeleton={ANALYTICS_SKELETONS.geography}>
           {(data) => <GeographyView data={data} leadParams={leadParams} />}
         </LoadState>
       )}
       {tab === 'economics' && (
-        <LoadState query={economics} title="Economics analytics">
+        <LoadState query={economics} title="Economics analytics" skeleton={ANALYTICS_SKELETONS.economics}>
           {(data) => <EconomicsView data={data} filters={baseFilters} filterCriteria={baseCriteria} />}
         </LoadState>
       )}
       {tab === 'segments' && (
-        <LoadState query={segments} title="Segment analytics">
+        <LoadState query={segments} title="Segment analytics" skeleton={ANALYTICS_SKELETONS.segments}>
           {(data) => <SegmentsView data={data} leadParams={leadParams} />}
         </LoadState>
       )}
       {tab === 'signals' && (
-        <LoadState query={signals} title="Signal analytics">
+        <LoadState query={signals} title="Signal analytics" skeleton={ANALYTICS_SKELETONS.signals}>
           {(data) => <SignalsView data={data} filterParams={{ states, segmentCodes, days, ...leadParams }} />}
         </LoadState>
       )}

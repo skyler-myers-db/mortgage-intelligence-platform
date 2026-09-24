@@ -258,14 +258,14 @@ test.describe('preloaded route', () => {
     await page.evaluate(() => {
       const win = window as Window & { __fallbackMounts?: number };
       win.__fallbackMounts = 0;
-      const isFallback = (node: Element) =>
-        node.matches('.route-transition > .surface[aria-busy="true"][role="status"]');
+      // The page-shaped RouteFallback (components/layout/RouteFallback, states-10).
+      const isFallback = (node: Element) => node.matches('.route-transition > [data-route-fallback]');
       const observer = new MutationObserver((records) => {
         for (const record of records) {
           for (const added of record.addedNodes) {
             if (!(added instanceof Element)) continue;
             if (isFallback(added)) win.__fallbackMounts = (win.__fallbackMounts ?? 0) + 1;
-            for (const nested of added.querySelectorAll('.surface[aria-busy="true"][role="status"]')) {
+            for (const nested of added.querySelectorAll('[data-route-fallback]')) {
               if (isFallback(nested)) win.__fallbackMounts = (win.__fallbackMounts ?? 0) + 1;
             }
           }

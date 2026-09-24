@@ -47,7 +47,7 @@ const ROUTES: RouteProbe[] = [
     ready: /Ranked borrowers|Lead queue/i,
     deviceCanary: true,
     assertReady: async (page) => {
-      await expect(page.locator('.lead-table__table').first()).toBeVisible({ timeout: 30_000 });
+      await expect(page.locator('.lead-table__table:not([aria-hidden="true"])').first()).toBeVisible({ timeout: 30_000 });
     },
   },
   {

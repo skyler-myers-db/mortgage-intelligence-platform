@@ -2,9 +2,16 @@ import type { CSSProperties } from 'react';
 
 /**
  * Skeleton — token-driven placeholder rect. Shimmer uses the .skeleton CSS
- * class defined in components.css (linear-gradient slide keyed off
- * --dur-slow). prefers-reduced-motion switches to a static muted rect via
- * the CSS media query — no JS branching needed.
+ * class (design-system/components/11-skeleton-menu-and-genie-answer.css): a
+ * highlight band swept across by a transform on `::after`, so the compositor
+ * animates it without repainting (audit 2026-09-21 states-10).
+ * prefers-reduced-motion, and a browser that is offline (a paused query is
+ * waiting, not loading), switch to a static muted rect in CSS — no JS
+ * branching needed.
+ *
+ * Prefer a placeholder shaped like the content it stands in for (the Lead
+ * Queue and Analytics skeletons reuse the loaded view's own table / grid
+ * classes) over a stack of generic bars.
  *
  * Sized by width/height props; rounded corners default to --r-sm but can be
  * overridden for circular or square elements.

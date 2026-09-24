@@ -12,6 +12,7 @@
  * mostly small, at load time.
  */
 import type { Geometry, Position } from 'geojson';
+import { roundTo } from '../../lib/fixedPrecision';
 
 /** Clearance (viewBox units, about a two-letter label's half-width) below which the centroid is replaced. */
 export const LABEL_CLEARANCE = 12;
@@ -120,7 +121,7 @@ export function labelAnchor(geom: Geometry): [number, number] | null {
     const pole = poleOfInaccessibility(best.rings);
     if (pole.clearance > centroidClearance) at = [pole.x, pole.y];
   }
-  return [Number(at[0].toFixed(1)), Number(at[1].toFixed(1))];
+  return [roundTo(at[0], 1), roundTo(at[1], 1)];
 }
 
 /** Clearance of `at` inside the geometry's largest polygon (tests and diagnostics). */

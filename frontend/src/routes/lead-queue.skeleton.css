@@ -1,0 +1,39 @@
+/* ============================================================
+   LEAD QUEUE TABLE SKELETON (audit 2026-09-21 states-10)
+   ============================================================
+   Ships with the lazy Lead Queue chunk, not the shell stylesheet. The
+   table itself is the real `.tbl.lead-table__table` (column widths, cell
+   padding, `--row-h` rows and the Approval pin all come from
+   design-system/components/03-score-and-table.css); only the placeholder
+   shapes inside the cells live here, inside the `.skeleton` vocabulary. */
+/* A placeholder: no row hover, pressed state or pointer cursor. */
+.lead-queue-skeleton__table { pointer-events: none; }
+.lead-queue-skeleton__action {
+  inline-size: calc(var(--sp-16) * 2);
+  block-size: var(--sp-8);
+  border-radius: var(--r-md);
+}
+.lead-queue-skeleton__bar {
+  inline-size: 72%;
+  block-size: var(--fs-12);
+  border-radius: var(--r-sm);
+}
+.lead-queue-skeleton__bar--pill {
+  inline-size: 64%;
+  block-size: var(--fs-16);
+  border-radius: var(--r-pill);
+}
+.lead-queue-skeleton__bar--num {
+  inline-size: 56%;
+  margin-inline-start: auto;
+}
+.lead-queue-skeleton__box {
+  inline-size: var(--fs-14);
+  block-size: var(--fs-14);
+  border-radius: var(--r-sm);
+}
+.lead-queue-skeleton__button {
+  inline-size: calc(var(--sp-16) + var(--sp-4));
+  block-size: var(--sp-6);
+  border-radius: var(--r-md);
+}

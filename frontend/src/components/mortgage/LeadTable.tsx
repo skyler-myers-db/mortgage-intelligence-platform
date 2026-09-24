@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Link, useSearchParams } from 'react-router';
@@ -6,6 +6,7 @@ import { Icon } from '../Icon';
 import { Button } from '../Primitives';
 import { useApp } from '../AppContext';
 import { api } from '../../lib/api';
+import { useIsOnline } from '../../lib/connectivity';
 import { auditEventHref } from '../../lib/auditLinks';
 import { queryKeys } from '../../lib/queryKeys';
 import { planLeadCsvExport } from './LeadTable.csv';
@@ -18,7 +19,6 @@ import {
 } from './LeadTable.constants';
 import { leadTableColumnCount, leadTableColumns } from './LeadTable.columns';
 import {
-  isEditableTarget,
   isLeadApprovalEligible,
   isLeadSelectableForSalesOps,
   isTerminalApproval,
@@ -31,11 +31,17 @@ import { LeadTableViewControl } from './LeadTableViewControl';
 import { LeadTableBulkActions, LeadTableBulkToast } from './LeadTableBulkActions';
 import { LeadTableStatusChips } from './LeadTableStatusChips';
 import { LeadDispositionPanel, LeadRejectPanel } from './LeadTableDecisionPanels';
+import { LeadTableKeyboardHint, LeadTableShortcutsButton } from './LeadTableKeyboardHint';
+import { LEAD_TABLE_KEYS } from './LeadTable.keymap';
 import { useLeadApprovalActions, type CampaignBindingState } from './useLeadApprovalActions';
 import { useLeadSalesActions } from './useLeadSalesActions';
-import { useLeadTableHotkeys } from './useLeadTableHotkeys';
+import { useLeadTableKeyboardFlow } from './useLeadTableKeyboardFlow';
 import { useLeadTableFillHeight } from './useLeadTableFillHeight';
+import { lazyModule, useLazyModule } from './useLazyModule';
 import { approverGateReason } from './approverGate';
+import { ariaKeyShortcuts } from '../../lib/keymap';
+import { useSingleKeyShortcuts } from '../../lib/keymapPreference';
+import type { OutreachDraftResult } from '../../lib/apiTypes';
 import type { LeadTableProps, SortDir, SortKey } from './LeadTable.types';
 import './LeadTable.css';
 
@@ -50,6 +56,11 @@ export {
 export type { LeadExportContext } from './LeadTable.types';
 export type { LeadTableView } from './LeadTable.columns';
 
+// The approve review and the bulk gate's review are needed only on an
+// explicit Approve: their own chunks, not the shared LeadTable chunk.
+const REVIEW_CHUNK = lazyModule(() => import('./LeadApproveReview'));
+const BULK_REVIEW_CHUNK = lazyModule(() => import('./LeadBulkApproveReview'));
+
 /**
  * LeadTable — prototype `.surface` + `.tbl` BEM. Sticky thead, hover, row
  * expand into a mini borrower-detail preview. Approvals track per-row via
@@ -60,24 +71,26 @@ export type { LeadTableView } from './LeadTable.columns';
  * virtualization, the thead/tbody composition, and CSV export. The behavior
  * lives in focused siblings — `useLeadApprovalActions` (approve / reject /
  * bulk approve / selection), `useLeadSalesActions` (assignment, disposition,
- * optimistic row overrides), `useLeadTableHotkeys` (the single window
- * listener), plus `LeadTableRow`, `LeadTableStatusChips`,
- * `LeadTableBulkActions`, and `LeadTableDecisionPanels`.
+ * optimistic row overrides), `useLeadTableKeyboardFlow` (row cursor, approve
+ * review, keymap bindings, Cmd-K selection verbs), plus `LeadTableRow`,
+ * `LeadTableStatusChips`, `LeadTableBulkActions`, and
+ * `LeadTableDecisionPanels`.
  *
- * LO friction fix (2026-04-22): the Approval column is now an inline
- * control, not a read-only chip. Pending rows expose an "Approve" primary
- * button + a reject icon so loan officers can burn through the queue in
- * one click per lead instead of navigating to Offer Orchestrator. Once
- * approved/rejected, the column reverts to the chip shape. Keyboard
- * shortcuts (A / R) act on the expanded row.
+ * LO friction fix (2026-04-22): the Approval column is an inline control,
+ * not a read-only chip. Once approved/rejected, the column reverts to the
+ * chip shape. Wave 1c (audit flow-03 / states-06): the first Approve (or A
+ * on the cursor row) opens the approve review, which drafts on that intent
+ * and shows the subject, message, channel, disclosure and evidence; only
+ * Confirm approves that exact draft.
  *
  * Sales-ops bulk workflow (2026-04-22): a leftmost checkbox column selects
  * rows for bulk approval. When >= 1 row is selected, a sticky action bar
- * inside the table container offers "Approve N leads" / "Clear selection".
- * Bulk approve loops `api.approve()` per selected lead in chunks of 3 to
- * keep one audit row per approval (matching the single-row flow). Already
- * approved/rejected rows are skipped silently. Shift+A fires bulk-approve
- * when the table has focus; plain A still approves only the expanded row.
+ * inside the table container offers "Approve N eligible" / "Clear
+ * selection". Bulk approve loops `api.approve()` per selected lead in chunks
+ * of 3 to keep one audit row per approval (matching the single-row flow),
+ * behind a required shared rationale; the gate shows the count by offer and
+ * drafts samples only on "Preview 3 sample drafts". Shift+A and the Cmd-K
+ * verb open that same gate; one selected row opens its own review instead.
  */
 
 export function LeadTable({
@@ -122,6 +135,7 @@ export function LeadTable({
           ? 'validating'
           : 'invalid';
   const campaignBindingBlocked = hasCampaignBindingRequest && campaignBinding === null;
+  const campaignBindingKey = `${campaignId}\n${variantName}`;
   const tableWrapRef = useRef<HTMLDivElement | null>(null);
   useLeadTableFillHeight(tableWrapRef, fillHeight);
   const columns = leadTableColumns(view);
@@ -134,7 +148,7 @@ export function LeadTable({
   const [approvalError, setApprovalError] = useState<string | null>(null);
   const {
     approvals, setApproval, setLastBorrowerId, openConsoleRecentActivity,
-    canApprove, canAccessAdmin, actorEmail, sessionStatus,
+    canApprove, canAccessAdmin, actorEmail, sessionStatus, setDrawer,
   } = useApp();
   // Audit flow-02 / shell-06: non-approvers keep a VISIBLE but disabled gate.
   const approverGate = approverGateReason(canApprove, sessionStatus);
@@ -207,49 +221,82 @@ export function LeadTable({
   });
 
   /**
-   * Keyboard: A approves / R rejects the expanded row; Shift+A fires
-   * bulk-approve when >= 1 row is selected. The listener is window-level,
-   * but `useLeadTableHotkeys` only forwards keystrokes whose focus is inside
-   * the `.tbl-wrap` region with no dialog, drawer, listbox or menu open
-   * (audit tables-v2 / a11y-09, WCAG 2.1.4) — so A on a filter button, in
-   * the evidence drawer or on Genie chrome never approves a borrower.
+   * Keyboard triage (wave 1c): a row cursor (J / K / arrows), Enter, X and
+   * A / R on the cursor row, Shift+A for the selection, all registered in
+   * the shared keymap and live only while focus is inside the `.tbl-wrap`
+   * region with no dialog, drawer, listbox or menu open (audit tables-v2 /
+   * a11y-09, WCAG 2.1.4), and never while typing. A opens the approve
+   * review; nothing here approves without it.
    */
-  useLeadTableHotkeys((e: KeyboardEvent) => {
-    // R5-12 (2026-04-23): belt-and-suspenders check against both the
-    // event target AND document.activeElement. For window-level
-    // keydowns `e.target` is usually the focused element, but when
-    // nothing is focused it falls back to `document.body` — which
-    // would bypass an input check. Checking `activeElement` too
-    // means typing "a" in the Genie textarea can never trigger the
-    // approve hotkey.
-    if (isEditableTarget(e.target as Element | null)) return;
-    if (isEditableTarget(document.activeElement)) return;
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
-    // Non-approvers: A / R / Shift+A do nothing, before any draft call.
-    if (approverGate !== null) return;
-    const key = e.key.toLowerCase();
-    if (campaignBindingBlocked && (key === 'a' || key === 'r')) return;
-    // Shift+A: bulk approve. Takes precedence over single-row A when
-    // any row is selected.
-    if (key === 'a' && e.shiftKey) {
-      if (approval.selectedIds.size === 0 || approval.bulkApproving) return;
-      e.preventDefault();
-      void approval.bulkApprove();
-      return;
-    }
-    if (!expanded) return;
-    const expandedLead = leadsById.get(expanded);
-    const expandedStatus = approvals[expanded] ?? expandedLead?.approval_status;
-    if (key === 'a') {
-      if (!isLeadApprovalEligible(expandedStatus, approvals[expanded], expandedLead)) return;
-      e.preventDefault();
-      void approval.approveLead(expanded);
-    } else if (key === 'r') {
-      if (isTerminalApproval(expandedStatus)) return;
-      e.preventDefault();
-      approval.setPendingReject(expanded);
-    }
-  }, tableWrapRef);
+  const [singleKeysOn] = useSingleKeyShortcuts();
+  const assigneeRef = useRef<HTMLSelectElement | null>(null);
+  const sampleDraftsRef = useRef<ReadonlyMap<string, OutreachDraftResult>>(new Map());
+  const [samplesShown, setSamplesShown] = useState(false);
+  const flow = useLeadTableKeyboardFlow({
+    sortedLeads,
+    leadsById,
+    approvals,
+    expanded,
+    setExpanded,
+    approval,
+    approverGate,
+    campaignBindingBlocked,
+    canAssign: salesTeam.length > 0 && !sales.salesBusy,
+    assigneeRef,
+    tableWrapRef,
+    virtualized: shouldVirtualize,
+    scrollToIndex: (index) => rowVirtualizer.scrollToIndex(index, { align: 'auto' }),
+    openEvidence: setDrawer,
+    reviewChunk: {
+      isReady: () => REVIEW_CHUNK.current() !== null,
+      load: () => REVIEW_CHUNK.load().then(() => true, () => false),
+    },
+    campaignBindingKey,
+    onCampaignBindingChange: () => {
+      sampleDraftsRef.current = new Map();
+      setSamplesShown(false);
+    },
+  });
+  const { review } = flow;
+  const openReview = review.review;
+  // Load the review chunk once the reader engages with rows (the draft is
+  // requested only on Approve); the bulk review chunk once rows are selected.
+  const reviewChunk = useLazyModule(REVIEW_CHUNK, openReview !== null || flow.cursor.cursorId !== null || expanded !== null);
+  const bulkChunk = useLazyModule(BULK_REVIEW_CHUNK, approval.selectionCount > 1);
+  // The module cache is the truth: after one failed chunk load this hook's
+  // state stays failed, yet the next Approve re-imports the chunk and drafts
+  // (an audited DRAFT_OUTREACH write), so the review must render from the
+  // cache or that draft would sit unseen with no Cancel. LeadTable is
+  // 'use no memo', so this read is fresh on every render.
+  const reviewModule = reviewChunk.module ?? REVIEW_CHUNK.current();
+  // Offline, a chunk that could not load is not a stale deploy: reloading
+  // would fail too, so the failure copy says to reconnect instead.
+  const online = useIsOnline();
+  const ReviewInline = reviewModule?.LeadApproveReviewInline;
+  const ReviewDialog = reviewModule?.LeadApproveReviewDialog;
+  // The result line follows an approve made through the review, so it ships
+  // in the review's chunk (loaded by then), not in the table's.
+  const DecisionToast = reviewModule?.LeadTableDecisionToast;
+  const BulkReview = bulkChunk.module?.LeadBulkApproveReview;
+  const reviewProps = openReview && {
+    review: openReview,
+    actorEmail,
+    onConfirm: () => void review.confirm(),
+    onCancel: flow.cancelReview,
+    onRetryDraft: review.retryDraft,
+    confirmRef: flow.confirmRef,
+    shouldTakeFocus: flow.shouldConfirmTakeFocus,
+    claimDraftLanding: review.claimDraftLanding,
+    // The dialog sits in the top layer, above the evidence drawer: opening
+    // a source moves the SAME review (same draft) into its expanded row,
+    // then opens the drawer with focus handed to it (useLeadTableKeyboardFlow).
+    onInspectEvidence: openReview.mode === 'dialog' ? flow.inspectEvidenceFromDialog : undefined,
+  };
+  const skipTargetId = `${useId()}-end`;
+  // An Approve waiting on the review chunk (nothing drafted yet), or a
+  // review whose chunk is still rendering in.
+  const reviewOpeningFor = flow.reviewLoading
+    ?? (openReview && !reviewModule ? openReview.borrowerId : null);
 
   /** Assign / distribute the current selection. The selection set lives in
    *  the approval hook, so the shell hands both it and the clear callback to
@@ -323,15 +370,9 @@ export function LeadTable({
           <div>
             <div className="h-4">Ranked borrowers</div>
             <div className="muted fs-12">
-              {/*
-                Prototype-parity-audit P2 (2026-05-04): keyboard hints
-                were rendered as `.mono` spans, which read as inline code
-                rather than a keycap. Switching to `<kbd>` (styled in
-                design-system/components.css as a subtle keycap chip)
-                makes the affordance scannable — an LO scrolling the
-                queue can spot the shortcut without reading prose.
-              */}
-              Expand a row to preview. <kbd>A</kbd> approves, <kbd>R</kbd> rejects it while the table has focus and no panel or menu is open.
+              {/* Keycaps are `<kbd>` (prototype-parity P2); the header's
+                  "Keyboard shortcuts" button and `?` list every key. */}
+              <LeadTableKeyboardHint singleKeysOn={singleKeysOn} approverActive={approverGate === null} />
               {approverGate === null && actorEmail && (
                 <> Approving as <span className="mono" data-testid="lead-approving-as">{actorEmail}</span>.</>
               )}
@@ -339,6 +380,7 @@ export function LeadTable({
           </div>
         </div>
         <div className="lead-table__header-actions">
+          <LeadTableShortcutsButton singleKeysOn={singleKeysOn} />
           {onViewChange && <LeadTableViewControl view={view} onChange={onViewChange} />}
           {exportState.status === 'done' && (
             <span className="muted fs-12" data-testid="lead-export-receipt">
@@ -393,12 +435,9 @@ export function LeadTable({
           rationale={approval.rejectRationale}
           onReasonChange={approval.setRejectReasonCode}
           onRationaleChange={approval.setRejectRationale}
-          onCancel={() => {
-            approval.setPendingReject(null);
-            approval.setRejectRationale('');
-            approval.setRejectReasonCode('low_intent');
-          }}
-          onSubmit={() => void approval.submitReject()}
+          reasonRef={flow.rejectReasonRef}
+          onCancel={flow.cancelReject}
+          onSubmit={() => void flow.submitReject()}
         />
       )}
       {sales.pendingDisposition && (
@@ -433,12 +472,52 @@ export function LeadTable({
           {sales.salesToast}
         </div>
       )}
+      {flow.toast && DecisionToast && (
+        <DecisionToast
+          toast={flow.toast}
+          hasReceipt={Boolean(approval.decisionReceipts[flow.toast.borrowerId]?.auditEventId)}
+          rowListed={leadsById.has(flow.toast.borrowerId)}
+          onViewReceipt={() => flow.toast && flow.viewReceipt(flow.toast.borrowerId)}
+          onReviewRecentActivity={() => {
+            openConsoleRecentActivity();
+            flow.dismissToast();
+          }}
+          onDismiss={flow.dismissToast}
+        />
+      )}
+      {/* Keyboard users skip past the table's rows in one step (tables-03). */}
+      <a
+        href={`#${skipTargetId}`}
+        className="sr-skip-link lead-table__skip"
+        onClick={(event) => {
+          // Move focus without a fragment navigation: the target id is
+          // generated, so it never belongs in the URL or the history stack.
+          const target = document.getElementById(skipTargetId);
+          if (!target) return;
+          event.preventDefault();
+          target.focus();
+        }}
+      >
+        Skip table
+      </a>
+      <span className="sr-only" role="status" aria-live="polite" data-testid="lead-cursor-status">
+        {flow.cursor.announcement}
+      </span>
+      {/* The approval result is spoken from a live region that is always
+          mounted (a region inserted already filled can go unannounced); the
+          visible toast carries the "View receipt" action. */}
+      <span className="sr-only" role="status" aria-live="polite" data-testid="lead-decision-status">
+        {flow.toast ? `Approved ${flow.toast.borrowerId}.` : ''}
+      </span>
       <div
         ref={tableWrapRef}
         className={fillHeight ? 'tbl-wrap tbl-wrap--fill' : 'tbl-wrap'}
         role="region"
         tabIndex={0}
         aria-label="Ranked borrowers table scroll region"
+        aria-keyshortcuts={singleKeysOn
+          ? ariaKeyShortcuts([...LEAD_TABLE_KEYS.next, ...LEAD_TABLE_KEYS.previous, ...LEAD_TABLE_KEYS.toggle, ...LEAD_TABLE_KEYS.select])
+          : undefined}
       >
         <table
           className={`tbl lead-table__table lead-table__table--${view}`}
@@ -499,13 +578,19 @@ export function LeadTable({
                     salesTeamCount={salesTeam.length}
                     pendingApproval={Boolean(approval.pendingApproval[lead.borrower_id])}
                     decisionReceipt={approval.decisionReceipts[lead.borrower_id] ?? null}
+                    isCursor={flow.cursor.cursorId === lead.borrower_id}
+                    shortcutsLive={singleKeysOn}
+                    reviewSlot={reviewProps && ReviewInline && isOpen && openReview?.mode === 'inline'
+                      && openReview.borrowerId === lead.borrower_id
+                      ? <ReviewInline {...reviewProps} />
+                      : null}
                     onToggleRow={(row, open) => {
                       setLastBorrowerId(row.borrower_id);
-                      setExpanded(open ? null : row.borrower_id);
+                      flow.toggleRow(row, open);
                     }}
                     onToggleSelect={approval.toggleSelect}
-                    onApprove={(borrowerId) => void approval.approveLead(borrowerId)}
-                    onReject={approval.setPendingReject}
+                    onApprove={flow.openReview}
+                    onReject={flow.openReject}
                     onOpenDisposition={sales.openDisposition}
                     onAssignmentUpdate={sales.applyLeadUpdate}
                   />
@@ -521,6 +606,19 @@ export function LeadTable({
             )}
         </table>
       </div>
+      <span id={skipTargetId} className="sr-only lead-table__skip-target" tabIndex={-1}>End of ranked borrowers table</span>
+      {reviewProps && ReviewDialog && openReview?.mode === 'dialog' && <ReviewDialog {...reviewProps} />}
+      {flow.reviewLoadFailed ? (
+        <div role="alert" className="table-error" data-testid="lead-approve-review-loading">
+          {online
+            ? 'The approval review could not load, so no draft was generated and nothing was approved. Reload the page, then approve again.'
+            : 'You are offline, so the approval review could not open. Nothing was drafted or approved. Reconnect, then approve again.'}
+        </div>
+      ) : reviewOpeningFor && (
+        <div role="status" className="table-neutral" data-testid="lead-approve-review-loading">
+          Opening the review for {reviewOpeningFor}…
+        </div>
+      )}
       {approval.selectionCount > 0 && (
         <LeadTableBulkActions
           selectionCount={approval.selectionCount}
@@ -537,8 +635,25 @@ export function LeadTable({
           onSelectedAssigneeChange={sales.setSelectedAssignee}
           onAssign={assignSelected}
           onClearSelection={approval.clearSelection}
-          onBulkApprove={() => void approval.bulkApprove()}
+          onBulkApprove={() => flow.bulkApproveFromToolbar(sampleDraftsRef.current)}
           bulkApproveBtnRef={approval.bulkApproveBtnRef}
+          bulkRationaleRef={approval.bulkRationaleRef}
+          assigneeRef={assigneeRef}
+          shortcutsLive={singleKeysOn}
+          samplesShown={samplesShown}
+          gateReview={BulkReview ? (
+            <BulkReview
+              // Samples drafted under one campaign binding go with it.
+              key={campaignBindingKey}
+              leads={flow.eligibleSelectedIds().map((id) => leadsById.get(id)).filter((lead) => lead !== undefined)}
+              canStartApproval={approval.canStartApproval}
+              draftForApproval={approval.draftForApproval}
+              onSamplesChange={(drafts) => {
+                sampleDraftsRef.current = drafts;
+                setSamplesShown(drafts.size > 0);
+              }}
+            />
+          ) : null}
         />
       )}
       {approval.bulkToast && (

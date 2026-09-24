@@ -5,6 +5,7 @@ import { api } from '../../lib/api';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { queryKeys } from '../../lib/queryKeys';
 import { formatTimestamp } from '../../lib/time';
+import { formatFixed } from '../../lib/formatters';
 import { offerDisplayLabel } from '../../lib/offerLanguage';
 import type { BorrowerProof, ProofFormulaLine, ProofReproduceQuery } from '../../types';
 import { Button, Chip } from '../Primitives';
@@ -184,7 +185,7 @@ export function BorrowerProofDrawer({ borrowerId, open, onClose }: BorrowerProof
                         </div>
                         <div className="proof-component__meta">
                           <span>{formatWeight(component.weight)} weight</span>
-                          <span>{component.weighted_points.toFixed(2)} weighted points</span>
+                          <span>{formatFixed(component.weighted_points, 2)} weighted points</span>
                         </div>
                         {component.source_fields.length > 0 && (
                           <div className="proof-component__fields">
@@ -239,8 +240,8 @@ export function BorrowerProofDrawer({ borrowerId, open, onClose }: BorrowerProof
                       </div>
                       <div className="proof-evidence-row__meta">
                         <span className="mono">{row.signal_type}</span>
-                        <span className="mono num">{row.confidence.toFixed(3)} evidence confidence</span>
-                        <span className="mono">{formatTimestamp(row.timestamp, { withYear: false })}</span>
+                        <span className="mono num">{formatFixed(row.confidence, 3)} evidence confidence</span>
+                        <span className="mono">{formatTimestamp(row.timestamp, { withYear: 'auto' })}</span>
                       </div>
                     </div>
                   ))}

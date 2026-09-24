@@ -9,6 +9,8 @@ import {
   type OfferMixSlice,
 } from '../../lib/offerMix';
 import type { PortfolioPreview } from '../../types';
+import { formatCount } from '../../lib/formatters';
+import { fixedAttr } from '../../lib/fixedPrecision';
 
 /**
  * WHAT TO OFFER — the mix of primary offer paths in the addressable book as
@@ -66,7 +68,7 @@ export function OfferMixBar({
           {!preview
             ? 'The offer mix could not be loaded right now.'
             : mix.monitorCount > 0
-              ? `No borrower has a primary offer path in this snapshot; ${mix.monitorCount.toLocaleString()} are on Monitor for later.`
+              ? `No borrower has a primary offer path in this snapshot; ${formatCount(mix.monitorCount)} are on Monitor for later.`
               : 'This snapshot carries no recommended-offer mix.'}
         </p>
       ) : (
@@ -77,7 +79,7 @@ export function OfferMixBar({
                 key={slice.code}
                 className="offer-mix__seg"
                 data-offer={slice.code}
-                data-share={slice.share.toFixed(4)}
+                data-share={fixedAttr(slice.share, 4)}
                 style={{ inlineSize: `${slice.share}%` }}
               />
             ))}
@@ -107,9 +109,9 @@ export function OfferMixBar({
             </p>
           )}
           <p className="home-answer__note">
-            Share of the {offerPaths.toLocaleString()} borrowers with a primary offer path
+            Share of the {formatCount(offerPaths)} borrowers with a primary offer path
             {mix.monitorCount > 0
-              ? `; ${mix.monitorCount.toLocaleString()} more are on Monitor for later.`
+              ? `; ${formatCount(mix.monitorCount)} more are on Monitor for later.`
               : '.'}{' '}
             Links open the contactable subset.
           </p>

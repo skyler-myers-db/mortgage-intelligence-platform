@@ -2,6 +2,7 @@ import { Icon } from '../Icon';
 import { Chip } from '../Primitives';
 import type { CampaignGeoPrefill } from '../../lib/campaignPrefill';
 import { safeSegmentName } from '../../lib/segmentMetadata';
+import { formatCount } from '../../lib/formatters';
 
 /**
  * Draft-context surface for a geo → campaign handoff (S9).
@@ -79,9 +80,9 @@ export function CampaignPrefillBanner({
             // The overlay snapshot is segment-agnostic; the "(all segments)"
             // qualifier keeps these counts honest next to the segment chips.
             <Chip variant="neutral" icon="db">
-              {prefill.leadCount.toLocaleString()} leads
+              {formatCount(prefill.leadCount)} leads
               {prefill.unattendedCount !== null
-                ? ` · ${prefill.unattendedCount.toLocaleString()} unattended`
+                ? ` · ${formatCount(prefill.unattendedCount)} unattended`
                 : ''}{' '}
               at draft time (all segments)
             </Chip>

@@ -7,6 +7,7 @@ import { EvidenceChip } from '../components/Primitives';
 import { api } from '../lib/api';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
 import { queryKeys } from '../lib/queryKeys';
+import { fixedAttr } from '../lib/fixedPrecision';
 import { formatTimestamp } from '../lib/time';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import type { RateWindowResponse } from '../types';
@@ -120,20 +121,20 @@ function tickStyle(pos: number): CSSProperties {
 
 function RateWindowCharts({ model }: { model: RateWindowModel }) {
   const clipId = useId();
-  const marketPoints = model.points.map((p) => `${p.x.toFixed(2)},${rateY(model, p.marketPct).toFixed(2)}`).join(' ');
+  const marketPoints = model.points.map((p) => `${fixedAttr(p.x)},${fixedAttr(rateY(model, p.marketPct))}`).join(' ');
   const bandPoints = model.points.filter((p) => p.p25Pct !== null && p.p75Pct !== null);
   const band = bandPoints.length > 0
     ? [
-        ...bandPoints.map((p) => `${p.x.toFixed(2)},${rateY(model, p.p75Pct as number).toFixed(2)}`),
-        ...[...bandPoints].reverse().map((p) => `${p.x.toFixed(2)},${rateY(model, p.p25Pct as number).toFixed(2)}`),
+        ...bandPoints.map((p) => `${fixedAttr(p.x)},${fixedAttr(rateY(model, p.p75Pct as number))}`),
+        ...[...bandPoints].reverse().map((p) => `${fixedAttr(p.x)},${fixedAttr(rateY(model, p.p25Pct as number))}`),
       ].join(' ')
     : null;
   const medianPoints = model.points
     .filter((p) => p.medianPct !== null)
-    .map((p) => `${p.x.toFixed(2)},${rateY(model, p.medianPct as number).toFixed(2)}`)
+    .map((p) => `${fixedAttr(p.x)},${fixedAttr(rateY(model, p.medianPct as number))}`)
     .join(' ');
-  const itmLine = model.points.map((p) => `${p.x.toFixed(2)},${itmY(model, p.itmCount).toFixed(2)}`).join(' ');
-  const itmArea = `${model.points[0].x.toFixed(2)},100 ${itmLine} ${model.points[model.points.length - 1].x.toFixed(2)},100`;
+  const itmLine = model.points.map((p) => `${fixedAttr(p.x)},${fixedAttr(itmY(model, p.itmCount))}`).join(' ');
+  const itmArea = `${fixedAttr(model.points[0].x)},100 ${itmLine} ${fixedAttr(model.points[model.points.length - 1].x)},100`;
   const currentY = rateY(model, model.current.marketPct);
   const thresholdY = model.threshold ? rateY(model, model.threshold.ratePct) : null;
   const refLabelBelow = thresholdY !== null && thresholdY < REF_LABEL_MIN_Y_PCT;

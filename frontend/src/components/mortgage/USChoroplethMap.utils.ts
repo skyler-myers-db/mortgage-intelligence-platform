@@ -1,6 +1,7 @@
 import type { Feature, FeatureCollection, Geometry } from 'geojson';
 import type { CountyRollup, ZipRollup } from '../../types';
 import { labelAnchor } from './USChoroplethMap.labels';
+import { fixedAttr } from '../../lib/fixedPrecision';
 
 export { labelAnchor } from './USChoroplethMap.labels';
 
@@ -83,7 +84,7 @@ export function buildUsaStateMapPayload(fc: FeatureCollection, pad = 0): UsaSvgM
   const vh = maxY - minY + pad * 2;
   return {
     label: 'United States',
-    viewBox: `${vx.toFixed(1)} ${vy.toFixed(1)} ${vw.toFixed(1)} ${vh.toFixed(1)}`,
+    viewBox: `${fixedAttr(vx, 1)} ${fixedAttr(vy, 1)} ${fixedAttr(vw, 1)} ${fixedAttr(vh, 1)}`,
     locations,
   };
 }
@@ -262,7 +263,7 @@ export function buildCountiesPayload(
   return {
     state: stateId,
     features,
-    viewBox: `${vx.toFixed(1)} ${vy.toFixed(1)} ${vw.toFixed(1)} ${vh.toFixed(1)}`,
+    viewBox: `${fixedAttr(vx, 1)} ${fixedAttr(vy, 1)} ${fixedAttr(vw, 1)} ${fixedAttr(vh, 1)}`,
   };
 }
 
@@ -286,10 +287,10 @@ export function geometryToPath(geom: Geometry): string {
 function ringToPath(ring: number[][]): string {
   if (ring.length === 0) return '';
   const [x0, y0] = ring[0];
-  let d = `M${x0.toFixed(1)},${y0.toFixed(1)}`;
+  let d = `M${fixedAttr(x0, 1)},${fixedAttr(y0, 1)}`;
   for (let i = 1; i < ring.length; i += 1) {
     const [x, y] = ring[i];
-    d += `L${x.toFixed(1)},${y.toFixed(1)}`;
+    d += `L${fixedAttr(x, 1)},${fixedAttr(y, 1)}`;
   }
   return `${d}Z`;
 }

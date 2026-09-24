@@ -928,7 +928,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     // two geography keys the share can actually answer.
     expect(url.searchParams.get('county')).toBeNull();
     expect(url.searchParams.get('zip')).toMatch(/^\d{5}$/);
-    await expect(page.locator('table.tbl')).toBeVisible({ timeout: 45_000 });
+    await expect(page.locator('table.tbl:not([aria-hidden="true"])')).toBeVisible({ timeout: 45_000 });
   });
 
   test('ranked borrower -> evidence drawer shows >= 2 rows', async ({ page, request }) => {
@@ -1557,7 +1557,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await expect(page).toHaveURL(/min_equity_pct_label=/);
     await expect(page.getByText(/occupancy = Owner-occupied/i)).toBeVisible({ timeout: 30_000 });
     await expect(page.getByText(/equity = ≥ 15%/i)).toBeVisible();
-    await expect(page.locator('table.tbl')).toBeVisible({ timeout: 45_000 });
+    await expect(page.locator('table.tbl:not([aria-hidden="true"])')).toBeVisible({ timeout: 45_000 });
 
     await gotoApp(page, '/portfolio-builder?owner_link=Portfolio+investor+%285%2B%29&purchase_intent=HELOC+intent');
     const segmentResponse = page.waitForResponse((response) => {
@@ -1716,7 +1716,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await gotoApp(page, '/lead-queue');
 
     // Unique-to-route: the table has the prototype BEM `table.tbl`.
-    const table = page.locator('table.tbl');
+    const table = page.locator('table.tbl:not([aria-hidden="true"])');
     await expect(table).toBeVisible({ timeout: 30_000 });
 
     // Real data: wait for >=1 borrower row (cold UC can add 30-60 s).
@@ -1745,7 +1745,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     expect(target, 'need a lead carrying both AVM/equity and lien evidence').toBeTruthy();
 
     await gotoApp(page, '/lead-queue');
-    const table = page.locator('table.tbl');
+    const table = page.locator('table.tbl:not([aria-hidden="true"])');
     await expect(table).toBeVisible({ timeout: 30_000 });
 
     const targetRow = table.locator('tbody tr', { hasText: target!.borrower_id }).first();
@@ -1790,7 +1790,12 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
 
     const row = page.locator('table.tbl tbody tr', { hasText: borrowerId! }).first();
     await expect(row).toBeVisible({ timeout: 45_000 });
+    // Wave 1c (flow-03): Approve opens the review with the governed draft;
+    // Confirm approves exactly that copy.
     await approveButton.click();
+    const confirm = page.getByTestId('lead-approve-review-confirm');
+    await expect(page.getByTestId('lead-approve-review-subject')).not.toBeEmpty({ timeout: 45_000 });
+    await confirm.click();
 
     await expect
       .poll(

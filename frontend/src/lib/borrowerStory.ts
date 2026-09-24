@@ -1,5 +1,5 @@
 import type { Borrower360 } from '../types';
-import { compactCurrency } from './formatters';
+import { bpsLabel, compactCurrency, ratePct } from './formatters';
 import { offerDisplayLabel } from './offerLanguage';
 
 /**
@@ -89,14 +89,14 @@ export function buildBorrowerStory(b: Borrower360): BorrowerStory {
   // `register` runs exactly once per figure either way.
   const parts: Array<{ text: string; lead: string }> = [];
   if (typeof b.current_rate === 'number' && b.current_rate > 0) {
-    const clause = `carries a ${register(`${b.current_rate.toFixed(2)}%`, 'Current rate', 'current_rate', b.current_rate)} rate`;
+    const clause = `carries a ${register(ratePct(b.current_rate), 'Current rate', 'current_rate', b.current_rate)} rate`;
     parts.push({ text: clause, lead: clause });
   }
   // Only claim "above market" for a genuine positive spread — a zero or
   // negative spread (at/below market) is not an above-market trigger, and
   // "-120 bps above market" would be backwards prose.
   if (typeof b.rate_spread_bps === 'number' && b.rate_spread_bps > 0) {
-    const clause = `${register(`${b.rate_spread_bps} bps`, 'Rate spread', 'rate_spread_bps', b.rate_spread_bps)} above market`;
+    const clause = `${register(bpsLabel(b.rate_spread_bps), 'Rate spread', 'rate_spread_bps', b.rate_spread_bps)} above market`;
     parts.push({ text: clause, lead: `is ${clause}` });
   }
   const eq = equityPct(b);

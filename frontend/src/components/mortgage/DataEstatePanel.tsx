@@ -7,6 +7,7 @@ import { useApp } from '../AppContext';
 import { assetHrefForSource, descriptorFor, DRAWER_SOURCES } from '../../lib/drawerSources';
 import { formatTimestamp } from '../../lib/time';
 import { Skeleton } from '../ui/Skeleton';
+import { formatCount } from '../../lib/formatters';
 
 function statusLabel(status: DataEstateStatus): string {
   if (status === 'demo_synthetic') return 'demo synthetic';
@@ -37,7 +38,7 @@ function statusDot(status: DataEstateStatus): 'ok' | 'warn' | 'error' {
 
 function formatRows(rows: number | null | undefined): string | null {
   if (rows === null || rows === undefined) return null;
-  return `${rows.toLocaleString()} rows`;
+  return `${formatCount(rows)} rows`;
 }
 
 function laneStatusSummary(status: DataEstateStatus, assets: { status: DataEstateStatus }[]): string {

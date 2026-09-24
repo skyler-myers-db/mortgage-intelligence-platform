@@ -150,7 +150,8 @@ describe('LeadQueue never shows a zero count it did not measure', () => {
   }
 
   const text = () => document.body.textContent ?? '';
-  const table = () => document.querySelector('table.tbl');
+  // The ranked table, not the skeleton's aria-hidden copy of its markup (states-10).
+  const table = () => document.querySelector('table.tbl:not([aria-hidden="true"])');
   const skeleton = () => document.querySelector('.lead-queue-skeleton');
   const warmingBlock = () => document.querySelector('[data-testid="warming-up-block"]');
 

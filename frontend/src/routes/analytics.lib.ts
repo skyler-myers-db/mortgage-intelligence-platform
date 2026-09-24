@@ -12,6 +12,9 @@ import type {
   TopBorrowerAnalyticsRow,
 } from '../types';
 import { HIGH_OPPORTUNITY_KPI_LABEL } from '../lib/opportunityScore';
+import { fixedAttr } from '../lib/fixedPrecision';
+import { formatCompact, formatCount, formatPercent } from '../lib/formatters';
+import { formatDate } from '../lib/time';
 
 export type AnalyticsTab = 'executive' | 'geography' | 'economics' | 'segments' | 'signals' | 'approval-funnel' | 'sales-ops';
 
@@ -74,10 +77,6 @@ export const EVIDENCE_WINDOWS = [['Last 7 days', 7], ['Last 30 days', 30], ['Las
 export const EVIDENCE_WINDOW_OPTIONS = EVIDENCE_WINDOWS.map(([label]) => label);
 export const EVIDENCE_WINDOW_TO_DAYS = Object.fromEntries(EVIDENCE_WINDOWS) as Record<string, number>;
 
-export const COMPACT_FORMAT = new Intl.NumberFormat('en-US', {
-  notation: 'compact',
-  maximumFractionDigits: 2,
-});
 // DOM budget for zoom-mode scatter dots. The server caps the honest payload
 // at its own limit; this only bounds how many of those we absolutely-position
 // at once, and the meta copy says so whenever it bites.
@@ -97,24 +96,6 @@ export type DailyEvidenceTotal = {
   event_date: string;
   event_count: number;
 };
-
-export function fmt(n: number | null | undefined): string {
-  if (n === null || n === undefined) return '—';
-  return COMPACT_FORMAT.format(n);
-}
-
-/**
- * Compact USD. The sign belongs in front of the currency symbol: prefixing
- * "$" to an already-signed compact number rendered a negative equity total
- * as "$-4.41M" (2026-09-21 audit, responsive-04). The magnitude is formatted
- * unsigned and the sign re-attached, so every non-negative value renders
- * exactly as before; a value that rounds to zero carries no sign.
- */
-export function fmtCurrency(n: number | null | undefined): string {
-  if (n === null || n === undefined || !Number.isFinite(n)) return '—';
-  const magnitude = COMPACT_FORMAT.format(Math.abs(n));
-  return n < 0 && magnitude !== '0' ? `-$${magnitude}` : `$${magnitude}`;
-}
 
 export function borrowerDisplay(row: Pick<TopBorrowerAnalyticsRow, 'display_name' | 'borrower_id'>): string {
   return `${row.display_name} · ${row.borrower_id.slice(-4)}`;
@@ -218,17 +199,12 @@ export function makeTicks(min: number, max: number, count = 5): number[] {
 export function formatAxisTick(value: number, compact = false): string {
   if (!Number.isFinite(value)) return '';
   const rounded = Math.round(value);
-  return compact ? fmt(rounded) : rounded.toLocaleString();
+  return compact ? formatCompact(rounded) : formatCount(rounded);
 }
 
+/** "Jul 14" for a YYYY-MM-DD axis label: lib/time, never shifted by the viewer zone. */
 export function formatShortDate(value: string): string {
-  const [year, month, day] = value.split('-').map((part) => Number(part));
-  if (!year || !month || !day) return value;
-  return new Intl.DateTimeFormat('en-US', {
-    month: 'short',
-    day: 'numeric',
-    timeZone: 'UTC',
-  }).format(new Date(Date.UTC(year, month - 1, day)));
+  return formatDate(value, { withYear: false });
 }
 
 function dateToUtc(value: string): number | null {
@@ -547,10 +523,10 @@ export function buildFunnelSankeyModel(
     const cx = (x0 + x1) / 2; // control-point x for the smooth S-curve
     // Top edge x0→x1, then down b's left edge, bottom edge x1→x0, close.
     const path =
-      `M ${x0.toFixed(2)} ${a.yTop.toFixed(2)} ` +
-      `C ${cx.toFixed(2)} ${a.yTop.toFixed(2)}, ${cx.toFixed(2)} ${b.yTop.toFixed(2)}, ${x1.toFixed(2)} ${b.yTop.toFixed(2)} ` +
-      `L ${x1.toFixed(2)} ${b.yBottom.toFixed(2)} ` +
-      `C ${cx.toFixed(2)} ${b.yBottom.toFixed(2)}, ${cx.toFixed(2)} ${a.yBottom.toFixed(2)}, ${x0.toFixed(2)} ${a.yBottom.toFixed(2)} Z`;
+      `M ${fixedAttr(x0)} ${fixedAttr(a.yTop)} ` +
+      `C ${fixedAttr(cx)} ${fixedAttr(a.yTop)}, ${fixedAttr(cx)} ${fixedAttr(b.yTop)}, ${fixedAttr(x1)} ${fixedAttr(b.yTop)} ` +
+      `L ${fixedAttr(x1)} ${fixedAttr(b.yBottom)} ` +
+      `C ${fixedAttr(cx)} ${fixedAttr(b.yBottom)}, ${fixedAttr(cx)} ${fixedAttr(a.yBottom)}, ${fixedAttr(x0)} ${fixedAttr(a.yBottom)} Z`;
     ribbons.push({ path, fromOrder: a.stageOrder, toOrder: b.stageOrder });
   }
 
@@ -577,5 +553,5 @@ export function formatConversionPct(conversion: number | null): string | null {
   // fact a small number did. Floor it to "<0.1%" so a real (shrunk) stage is
   // never mislabelled as a flatline. A true zero stage still shows "0.0%".
   if (pct > 0 && pct < 0.05) return '<0.1%';
-  return pct >= 10 ? `${Math.round(pct)}%` : `${pct.toFixed(1)}%`;
+  return pct >= 10 ? `${Math.round(pct)}%` : formatPercent(conversion, 1);
 }

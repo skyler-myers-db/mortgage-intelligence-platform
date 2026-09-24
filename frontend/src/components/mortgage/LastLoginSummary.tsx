@@ -33,10 +33,10 @@ const TITLES: Record<HomeSummary['status'], string> = {
 export function loginSummarySubtitle(summary: HomeSummary): string {
   if (summary.status === 'delta') {
     const visit = summary.previous_visit_at
-      ? formatTimestamp(summary.previous_visit_at, { withYear: false })
+      ? formatTimestamp(summary.previous_visit_at, { withYear: 'auto' })
       : null;
     const snapshot = summary.baseline_snapshot_at
-      ? formatTimestamp(summary.baseline_snapshot_at, { withYear: false })
+      ? formatTimestamp(summary.baseline_snapshot_at, { withYear: 'auto' })
       : null;
     return `Live headline KPIs vs the ${snapshot ?? 'daily'} snapshot nearest your previous visit${
       visit ? ` (${visit})` : ''

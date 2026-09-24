@@ -124,7 +124,7 @@ test.describe('degrade()', () => {
     await page.goto('/lead-queue');
     await expect(page.locator('#main-content .warming-block').first()).toBeVisible();
     expect(mockApi.calls.some((call) => call.path === '/api/leads' && call.outcome === 'degraded' && call.status === 503)).toBe(true);
-    await expect(page.locator('table.tbl tbody tr')).toHaveCount(0);
+    await expect(page.locator('table.tbl:not([aria-hidden="true"]) tbody tr')).toHaveCount(0);
     expect(hygiene.violations(), 'a 503 the test asked for is not a hygiene failure').toEqual([]);
   });
 

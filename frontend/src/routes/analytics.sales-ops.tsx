@@ -15,6 +15,7 @@ import type {
   SalesStandupResponse,
   SalesTeamMember,
 } from '../types';
+import { formatCount } from '../lib/formatters';
 
 /**
  * Sales ops snapshot — relocated from the Lead Queue (2026-07-10) into its own
@@ -183,7 +184,7 @@ export function SalesOpsSection() {
           <div className="sales-ops-card" aria-busy={loading}>
             <div className="eyebrow">Stale approved</div>
             <CardValue state={cardState}>
-              {staleLeads.length >= 100 ? '100+' : staleLeads.length.toLocaleString()}
+              {staleLeads.length >= 100 ? '100+' : formatCount(staleLeads.length)}
             </CardValue>
             <div className="muted fs-12">
               Approved over 7 days ago with no LO disposition{staleLeads.length >= 100 ? '; showing first 100.' : '.'}
@@ -201,12 +202,12 @@ export function SalesOpsSection() {
           </div>
           <div className="sales-ops-card" aria-busy={loading}>
             <div className="eyebrow">Yesterday standup</div>
-            <CardValue state={cardState}>{(standup?.calls_logged ?? 0).toLocaleString()}</CardValue>
+            <CardValue state={cardState}>{formatCount(standup?.calls_logged ?? 0)}</CardValue>
             {loading ? (
               <span className="skeleton kpi__delta-skeleton" aria-hidden="true" />
             ) : (
               <div className="muted fs-12">
-                {(standup?.contacts_reached ?? 0).toLocaleString()} reached · {(standup?.callbacks_scheduled ?? 0).toLocaleString()} callbacks · {(standup?.applications_started ?? 0).toLocaleString()} apps.
+                {formatCount(standup?.contacts_reached ?? 0)} reached · {formatCount(standup?.callbacks_scheduled ?? 0)} callbacks · {formatCount(standup?.applications_started ?? 0)} apps.
               </div>
             )}
           </div>
@@ -243,7 +244,7 @@ export function SalesOpsSection() {
                 mistaken for the total. `total_outcomes` is SUM over every
                 outcome type in the window (sales_state.outcome_summary). */}
             <CardValue state={cardState}>
-              {outcomesError ? '--' : (outcomes?.total_outcomes ?? 0).toLocaleString()}
+              {outcomesError ? '--' : formatCount(outcomes?.total_outcomes ?? 0)}
             </CardValue>
             {loading ? (
               <span className="skeleton kpi__delta-skeleton" aria-hidden="true" />
@@ -251,7 +252,7 @@ export function SalesOpsSection() {
               <div className="muted fs-12">
                 {outcomesError
                   ? 'Customer-system outcome counts are unavailable.'
-                  : `Outcomes recorded this week: ${(outcomes?.closed_funded ?? 0).toLocaleString()} funded · ${(outcomes?.applications_submitted ?? 0).toLocaleString()} submitted · ${(outcomes?.lost_to_competitor ?? 0).toLocaleString()} lost elsewhere · ${(outcomes?.withdrawn ?? 0).toLocaleString()} withdrawn · ${(outcomes?.not_qualified ?? 0).toLocaleString()} not qualified.`}
+                  : `Outcomes recorded this week: ${formatCount(outcomes?.closed_funded ?? 0)} funded · ${formatCount(outcomes?.applications_submitted ?? 0)} submitted · ${formatCount(outcomes?.lost_to_competitor ?? 0)} lost elsewhere · ${formatCount(outcomes?.withdrawn ?? 0)} withdrawn · ${formatCount(outcomes?.not_qualified ?? 0)} not qualified.`}
               </div>
             )}
             <div className="muted fs-12 mt-1">

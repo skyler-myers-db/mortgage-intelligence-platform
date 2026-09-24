@@ -8,6 +8,7 @@ import { genieSegmentPrompt } from '../../lib/genieContext';
 import { GenieAskAbout } from './GenieAskAbout';
 import { facetShares, SegmentFacetBar } from './SegmentFacetBar';
 import './SegmentCard.css';
+import { formatCount } from '../../lib/formatters';
 
 /**
  * SegmentCard — prototype `.seg-card` BEM: badge + title + count + sub + meta row.
@@ -153,8 +154,8 @@ export function SegmentCard({ segment, selected, updating, onClick }: SegmentCar
           title={displayDescription}
           aria-label={
             showsReconcile
-              ? `Select ${displayName} segment — ${segment.count.toLocaleString()} borrowers, ${contactable.toLocaleString()} contactable`
-              : `Select ${displayName} segment — ${segment.count.toLocaleString()} borrowers`
+              ? `Select ${displayName} segment — ${formatCount(segment.count)} borrowers, ${formatCount(contactable)} contactable`
+              : `Select ${displayName} segment — ${formatCount(segment.count)} borrowers`
           }
         />
       )}
@@ -171,7 +172,7 @@ export function SegmentCard({ segment, selected, updating, onClick }: SegmentCar
             —
           </div>
         ) : (
-          <div className="seg-card__count num">{segment.count.toLocaleString()}</div>
+          <div className="seg-card__count num">{formatCount(segment.count)}</div>
         )}
         {gated && <span className="chip chip--warning seg-card__gate">{gateLabel}</span>}
         {!gated && !hasNoBorrowers && <span className="seg-card__avg">avg {segment.avg_score}</span>}
@@ -186,9 +187,9 @@ export function SegmentCard({ segment, selected, updating, onClick }: SegmentCar
         {!gated && showsReconcile && (
           <div className="seg-card__reconcile" role="note">
             <span className="seg-card__reconcile-value num">
-              {contactable.toLocaleString()}
+              {formatCount(contactable)}
             </span>{' '}
-            contactable of {segment.count.toLocaleString()}
+            contactable of {formatCount(segment.count)}
           </div>
         )}
         {!gated && hasNoBorrowers && (

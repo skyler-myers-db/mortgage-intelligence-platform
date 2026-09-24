@@ -285,8 +285,6 @@
   outline: var(--focus-ring-width) solid var(--focus-ring-color);
   outline-offset: var(--focus-ring-offset);
 }
-.outreach-routing__confirm { display: flex; }
-
 /* Borrower offer experience PROTOTYPE (auto-offer Module 1 mock). Unmistakably
    a mock: watermark + warning banner + legal disclaimer. */
 .offer-mock-scrim {

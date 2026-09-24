@@ -54,6 +54,14 @@ export function exitTransitionMs(element: HTMLElement): number {
   }, 0);
 }
 
+/** True while a CSS transition on the element itself (not a child) still runs. */
+export function hasRunningOwnTransition(element: HTMLElement): boolean {
+  if (typeof element.getAnimations !== 'function' || typeof CSSTransition === 'undefined') return false;
+  return element
+    .getAnimations()
+    .some((animation) => animation instanceof CSSTransition && animation.playState === 'running');
+}
+
 export function useExitRetained<TValue, TElement extends HTMLElement>(
   value: TValue | null,
   elementRef: RefObject<TElement | null>,
@@ -74,9 +82,13 @@ export function useExitRetained<TValue, TElement extends HTMLElement>(
 
     const release = () => setRetained(null);
     // Child transitions (button hovers, chips) bubble through the panel; only
-    // the panel's own transition ends the exit.
+    // the panel's own transition ends the exit. And only once none of its own
+    // transitions still runs: an ENTRY that finished (or was reversed) in the
+    // frame the panel closed dispatches its transitionend / transitioncancel
+    // after the close, while the exit is just starting (motion-01 Console
+    // follow-up; shell-wayfinding.fixture.spec.ts closes right after the entry).
     const onTransitionEnd = (event: Event) => {
-      if (event.target === element) release();
+      if (event.target === element && !hasRunningOwnTransition(element)) release();
     };
     element.addEventListener('transitionend', onTransitionEnd);
     element.addEventListener('transitioncancel', onTransitionEnd);

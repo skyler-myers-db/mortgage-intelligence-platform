@@ -16,11 +16,12 @@ import { DataEstatePanel, DataEstatePanelSkeleton } from '../components/mortgage
 import { PlatformCapabilitiesPanel } from '../components/admin/PlatformCapabilitiesPanel';
 import { AdminAuditExplorer } from '../components/admin/AdminAuditExplorer';
 import { api, type AuditEventRow } from '../lib/api';
-import { formatTimestamp, parseBackendTimestamp, TIMESTAMP_UNAVAILABLE } from '../lib/time';
+import { formatDate, formatTimestamp, parseBackendTimestamp, TIMESTAMP_UNAVAILABLE } from '../lib/time';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import { queryKeys } from '../lib/queryKeys';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import type { DataEstateResponse } from '../types';
+import { formatCount, formatFixed, formatUsd } from '../lib/formatters';
 
 /**
  * Administration — operator-facing configuration for Module 0.
@@ -90,10 +91,10 @@ function formatThresholdValue(t: ThresholdRow): string {
     return `${Math.round(t.value)}%`;
   }
   if (unit === 'rate_fraction') {
-    return `${(t.value * 100).toFixed(3)}%`;
+    return `${formatFixed(t.value * 100, 3)}%`;
   }
   if (unit === 'usd') {
-    return `$${Math.round(t.value).toLocaleString('en-US')}`;
+    return formatUsd(t.value);
   }
   return `${t.value}`;
 }
@@ -432,7 +433,7 @@ export default function AdminConfig() {
                     <span
                       className="muted source-status-count"
                     >
-                      {s.rows.toLocaleString()} rows
+                      {formatCount(s.rows)} rows
                     </span>
                   )}
                 </div>
@@ -632,30 +633,22 @@ function sourceStatusLabel(status: SourceStatus): string {
  * contradicting the "every clock time through lib/time" slice contract).
  */
 function formatAuditTimestamp(iso: string): string {
-  return formatTimestamp(iso, { withYear: false });
+  return formatTimestamp(iso, { withYear: 'auto' });
 }
 
 /**
  * Rules `rules_edited_at` comes back as the Databricks CAST(timestamp AS
  * STRING) form ("YYYY-MM-DD HH:MM:SS" in UTC). Date-only display (no
- * clock), so no zone suffix; parsing is delegated to lib/time, which
- * pins the naive wire shape to UTC instead of viewer-local.
+ * clock), so no zone suffix; lib/time pins the naive wire shape to UTC
+ * instead of viewer-local and adds the year once it is 11 months old.
  */
 function formatEditedAt(stamp: string | null): string {
   if (!stamp) return 'Never';
-  const parsed = parseBackendTimestamp(stamp);
-  if (!parsed) return TIMESTAMP_UNAVAILABLE;
-  return parsed.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  if (!parseBackendTimestamp(stamp)) return TIMESTAMP_UNAVAILABLE;
+  return formatDate(stamp);
 }
 
-/** Pretty-print a DESCRIBE DETAIL lastModified stamp (ISO-8601). */
+/** Pretty-print a DESCRIBE DETAIL lastModified stamp; null hands the row back to its note. */
 function formatSourceLastUpdated(iso: string | null): string | null {
-  if (!iso) return null;
-  try {
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return null;
-    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-  } catch {
-    return null;
-  }
+  return parseBackendTimestamp(iso) ? formatDate(iso) : null;
 }
