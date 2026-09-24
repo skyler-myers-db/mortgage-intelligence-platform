@@ -1,6 +1,9 @@
 /* ============================================================
-   IDENTITY MENU POPUP (audit 2026-09-21 shell-06). Ships with the lazy
-   IdentityMenuPanel chunk, not the initial stylesheet. ADDITIVE to the
+   IDENTITY MENU POPUP (audit 2026-09-21 shell-06). Only this stylesheet
+   is lazy: IdentityMenu imports it on demand as its own CSS chunk, kept
+   out of the initial stylesheet, while the IdentityMenuPanel component is
+   a static import in the initial JS. The open popup's topbar lift lives in
+   the initial 29-shell-wayfinding.css. ADDITIVE to the
    prototype topbar, which has no account control (design_files/Module 0
    Prototype.html:1206-1243): the popup reuses the `.filter-menu` /
    `.filter-menu__item` dropdown primitives and adds only its header.
