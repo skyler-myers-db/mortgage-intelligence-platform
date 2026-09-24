@@ -357,7 +357,9 @@
 .proof-tabs,.proof-status-row,.proof-component__meta,.proof-evidence-row__meta,.proof-component__fields{display:flex;flex-wrap:wrap;gap:var(--sp-2)}
 .proof-tabs{padding:var(--sp-3) var(--sp-5);border-bottom:1px solid var(--line-1);overflow-x:auto}
 .proof-tab{display:inline-flex;align-items:center;gap:var(--sp-2);min-block-size:var(--sp-8);padding:0 var(--sp-3);border:1px solid var(--line-1);border-radius:var(--r-md);background:var(--bg-2);color:var(--text-2);font-family:var(--font-mono);font-size:var(--fs-12);cursor:pointer}
-.proof-tab.is-active,.proof-tab:hover,.proof-tab:focus-visible{border-color:var(--accent);color:var(--accent-ink);background:var(--accent-soft)}
+.proof-tab.is-active{border-color:var(--accent);color:var(--accent-ink);background:var(--accent-soft)}
+/* Hover and focus take a lighter step than the selected tab, so neither can be mistaken for it (audit motion-09). Focus also keeps the global ring. */
+.proof-tab:hover:not(.is-active),.proof-tab:focus-visible:not(.is-active){border-color:var(--line-3);color:var(--text-1);background:var(--bg-3)}
 .proof-tab:active{translate:0 var(--pressed-shift)}
 .proof-callout,.proof-formula,.proof-component,.proof-branch,.proof-evidence-row,.proof-sql-card{padding:var(--sp-3);border:1px solid var(--line-1);border-radius:var(--r-md);background:var(--bg-2)}
 .proof-callout{color:var(--text-2)}.proof-callout--warning{border-color:color-mix(in oklab,var(--signal-warning) 55%,var(--line-2));background:color-mix(in oklab,var(--signal-warning) 8%,var(--bg-2))}.proof-callout--subtle{background:color-mix(in oklab,var(--accent) 5%,transparent);font-size:var(--fs-12)}

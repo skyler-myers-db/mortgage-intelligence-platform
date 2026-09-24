@@ -214,12 +214,10 @@
   padding: var(--pad-card);
   overflow: hidden;
   /* Explicit list, not the prototype's `all` (index.html:441-448; audit
-     motion-05): the theme / hover colours plus the current hover lift. */
+     motion-05): the theme and hover colours. */
   transition:
     background-color var(--dur-base) var(--ease),
-    border-color var(--dur-base) var(--ease),
-    box-shadow var(--dur-base) var(--ease),
-    transform var(--dur-base) var(--ease);
+    border-color var(--dur-base) var(--ease);
   /* Cap individual card width so a 4-card row on an ultra-wide monitor
      doesn't balloon each card to 600–800px of whitespace. With
      auto-fit + minmax on .kpi-row (below), cards stay compact and the
@@ -232,14 +230,10 @@
   background: linear-gradient(90deg, transparent, var(--chip-line), transparent);
   opacity: 0.6;
 }
-.kpi:hover {
-  border-color: var(--chip-line);
-  transform: translateY(-2px);
-  box-shadow: var(--kpi-glow);
-}
-@media (prefers-reduced-motion: reduce) {
-  .kpi:hover { transform: none; }
-}
+/* The prototype's border-only hover (index.html:455). A KPI card is not a
+   control (its evidence chip is), so it no longer lifts or glows as if the
+   whole card were clickable (audit motion-09). */
+.kpi:hover { border-color: var(--line-2); }
 .kpi__label {
   font-size: var(--fs-11); font-weight: 500; letter-spacing: var(--tracking-caps);
   text-transform: uppercase; color: var(--text-3); margin-bottom: var(--sp-3);

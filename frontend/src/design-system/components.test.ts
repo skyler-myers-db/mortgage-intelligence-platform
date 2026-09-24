@@ -330,7 +330,7 @@ describe('layout containment contracts', () => {
     expect(css).toMatch(/\.rail__item\.is-active\s*\{[^}]*color:\s*var\(--accent-ink\);/s);
     expect(css).toMatch(/\.topbar__icon-btn\.is-active\s*\{[^}]*color:\s*var\(--accent-ink\);/s);
     expect(css).toMatch(/\.filter\.is-active\s*\{[^}]*color:\s*var\(--accent-ink\);/s);
-    expect(css).toMatch(/\.proof-tab\.is-active,[^{]+\{[^}]*color:\s*var\(--accent-ink\);/s);
+    expect(css).toMatch(/\.proof-tab\.is-active\s*\{[^}]*color:\s*var\(--accent-ink\);/s);
     expect(css).toMatch(/\.filter-menu__item\.is-selected\s*\{[^}]*color:\s*var\(--accent-ink\);/s);
     expect(css).toMatch(/\.text-accent\s*\{[^}]*color:\s*var\(--accent-ink\);/s);
     expect(css).toMatch(/\.icon-accent\s*\{[^}]*color:\s*var\(--accent-ink\);/s);
@@ -652,7 +652,7 @@ describe('motion runs on named, compositor-friendly properties (motion-05)', () 
       expect(list, selector).toContain(property);
       expect(list.some((name) => /^(?:background-color|border-color|color)$/.test(name)), `${selector} names its colours`).toBe(true);
     }
-    expect(transitionOf('.kpi')).toEqual(expect.arrayContaining(['background-color', 'border-color']));
+    expect(transitionOf('.kpi')).toEqual(['background-color', 'border-color']);
     expect(transitionOf('.seg-card')).toContain('transform');
     expect(transitionOf('.chip__remove')).toContain('translate');
     expect(transitionOf('.tweak-row .switch')).toEqual(['background-color', 'border-color', 'scale']);
@@ -697,5 +697,44 @@ describe('motion runs on named, compositor-friendly properties (motion-05)', () 
     const css = designCss();
     expect(css).toMatch(/\.stable-refresh-region\s*\{[^}]*transition:\s*filter var\(--dur-base\) var\(--ease\);/s);
     expect(css).not.toMatch(/\.stable-refresh-region\.is-updating\s*\{[^}]*transition:/s);
+  });
+});
+
+/**
+ * 2026-09-21 audit motion-09: hover promised clicks that do nothing. The KPI
+ * card (a div; its evidence chip is the control) lifted 2px with a glow, the
+ * asset schema's static rows and the expanded detail rows inherited the
+ * prototype's row pointer and hover fill, and a hovered proof tab painted
+ * exactly like the selected one.
+ */
+describe('hover states promise only real clicks (motion-09)', () => {
+  it('restores the prototype border-only KPI hover', () => {
+    const kpiHover = cssRules(designCss()).filter((rule) => rule.selector === '.kpi:hover');
+    expect(kpiHover).toHaveLength(1);
+    expect(kpiHover[0].block.trim()).toBe('border-color: var(--line-2);');
+    // --kpi-glow stays for the command palette panel.
+    expect(designCss()).toMatch(/\.cmdk__panel\s*\{[^}]*var\(--kpi-glow\)/s);
+  });
+
+  it('keeps the prototype row pointer and opts static and expanded rows out of it', () => {
+    const css = designCss();
+    expect(css).toContain('.tbl tbody tr { cursor: pointer; transition: background var(--dur-fast) var(--ease); }');
+    expect(css).toMatch(/\.tbl--static tbody tr\s*\{\s*cursor:\s*default;\s*\}/);
+    expect(css).toMatch(/\.tbl--static tbody tr:hover,\s*\.tbl--static tbody tr:active\s*\{\s*background:\s*transparent;\s*\}/);
+    expect(css).toMatch(/\.tbl tbody tr\.tbl__expand\s*\{\s*cursor:\s*default;\s*\}/);
+    expect(css).toMatch(/\.tbl tbody tr\.tbl__expand:hover,\s*\.tbl tbody tr\.tbl__expand:active\s*\{\s*background:\s*var\(--bg-1\);\s*\}/);
+    // The opt-outs come after the defaults they override at equal specificity.
+    expect(css.indexOf('.tbl--static tbody tr:hover')).toBeGreaterThan(css.indexOf('.tbl tbody tr:hover'));
+    const asset = readFileSync(join(process.cwd(), 'src/routes/asset.tsx'), 'utf8');
+    expect(asset).toContain('className="tbl tbl--static asset-table"');
+  });
+
+  it('gives a hovered or focused proof tab a lighter step than the selected tab', () => {
+    const rules = cssRules(designCss());
+    const active = rules.find((rule) => rule.selector === '.proof-tab.is-active');
+    expect(active?.block).toMatch(/border-color:var\(--accent\);color:var\(--accent-ink\);background:var\(--accent-soft\)/);
+    const hover = rules.find((rule) => rule.selector.includes('.proof-tab:hover'));
+    expect(hover?.selector).toBe('.proof-tab:hover:not(.is-active),.proof-tab:focus-visible:not(.is-active)');
+    expect(hover?.block).toBe('border-color:var(--line-3);color:var(--text-1);background:var(--bg-3)');
   });
 });
