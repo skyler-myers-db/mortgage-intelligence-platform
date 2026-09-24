@@ -8,9 +8,10 @@
  *  - exactly two webfont faces, the prototype's 'Geist' and 'Geist Mono'
  *    (design_files/index.html:42-43), each one variable woff2 (100 900) with
  *    font-display: swap, and no static @fontsource import left behind;
- *  - both metric-matched fallback faces carry all four overrides, and the
- *    same unicode-range as their webfont, so a glyph Geist does not cover
- *    keeps the system face instead of a scaled Arial / Courier New;
+ *  - both metric-matched fallback families have a regular face and a real
+ *    local bold face (600 900), each with all four overrides, the same line
+ *    box, and the same unicode-range as their webfont, so a glyph Geist does
+ *    not cover keeps the system face instead of a scaled Arial / Courier New;
  *  - --font-sans / --font-mono try the webfont, then its fallback face.
  */
 import { describe, expect, it } from 'vitest';
@@ -69,30 +70,53 @@ describe('tokens.css webfont faces', () => {
   });
 });
 
+/** A fallback family's regular face (no weight descriptor) or its bold one (600 900). */
+function fallbackFace(family: string, weight: 'regular' | 'bold'): FontFace | undefined {
+  return fallbacks.find(
+    (candidate) =>
+      candidate.family === family &&
+      (weight === 'bold' ? candidate.descriptors['font-weight'] === '600 900' : !('font-weight' in candidate.descriptors)),
+  );
+}
+
 describe('tokens.css metric-matched fallback faces', () => {
   it.each([
-    ['Geist Fallback', /^local\('Arial'\), local\('Liberation Sans'\)$/],
-    ['Geist Mono Fallback', /^local\('Courier New'\), local\('Liberation Mono'\)$/],
-  ])('%s scales a local metric twin with all four overrides', (family, source) => {
-    const face = fallbacks.find((candidate) => candidate.family === family);
-    expect(face, `${family} is declared`).toBeDefined();
+    ['Geist Fallback', 'regular', /^local\('Arial'\), local\('Liberation Sans'\)$/],
+    ['Geist Fallback', 'bold', /^local\('Arial Bold'\), local\('Liberation Sans Bold'\)$/],
+    ['Geist Mono Fallback', 'regular', /^local\('Courier New'\), local\('Liberation Mono'\)$/],
+    ['Geist Mono Fallback', 'bold', /^local\('Courier New Bold'\), local\('Liberation Mono Bold'\)$/],
+  ] as const)('%s %s scales a local metric twin with all four overrides', (family, weight, source) => {
+    const face = fallbackFace(family, weight);
+    expect(face, `${family} ${weight} is declared`).toBeDefined();
     expect(face?.descriptors.src).toMatch(source);
     for (const override of ['size-adjust', 'ascent-override', 'descent-override', 'line-gap-override']) {
-      expect(face?.descriptors[override], `${family} ${override}`).toMatch(/^\d+(?:\.\d+)?%$/);
+      expect(face?.descriptors[override], `${family} ${weight} ${override}`).toMatch(/^\d+(?:\.\d+)?%$/);
     }
   });
 
   it.each([
     ['Geist Fallback', 'Geist'],
     ['Geist Mono Fallback', 'Geist Mono'],
-  ])('%s covers exactly the glyphs %s does', (family, webfont) => {
-    const range = fallbacks.find((candidate) => candidate.family === family)?.descriptors['unicode-range'];
-    expect(range, `${family} has a unicode-range`).toMatch(/^U\+0000-00FF,/);
-    expect(range).toBe(webfonts.find((candidate) => candidate.family === webfont)?.descriptors['unicode-range']);
+  ])('%s covers exactly the glyphs %s does, at every weight', (family, webfont) => {
+    const expected = webfonts.find((candidate) => candidate.family === webfont)?.descriptors['unicode-range'];
+    expect(expected).toMatch(/^U\+0000-00FF,/);
+    for (const weight of ['regular', 'bold'] as const) {
+      expect(fallbackFace(family, weight)?.descriptors['unicode-range'], `${family} ${weight}`).toBe(expected);
+    }
+  });
+
+  it.each([['Geist Fallback'], ['Geist Mono Fallback']])('%s bold keeps the regular face line box', (family) => {
+    // ascent/descent overrides are scaled by size-adjust, so the products
+    // (the used ascent and descent, in em) must match across the two faces.
+    const used = (face: FontFace | undefined, override: string) =>
+      (parseFloat(face?.descriptors[override] ?? 'NaN') * parseFloat(face?.descriptors['size-adjust'] ?? 'NaN')) / 1e4;
+    for (const override of ['ascent-override', 'descent-override']) {
+      expect(used(fallbackFace(family, 'bold'), override)).toBeCloseTo(used(fallbackFace(family, 'regular'), override), 3);
+    }
   });
 
   it('declares no other face', () => {
-    expect(faces).toHaveLength(4);
+    expect(faces).toHaveLength(6);
   });
 });
 

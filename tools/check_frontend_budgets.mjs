@@ -187,7 +187,7 @@ const budgets = {
   // banners + shaped skeleton sweep, 32-feedback toast region + guard
   // dialog; each must style a surface that can appear before any lazy chunk).
   // Measured: 158.85 / gzip 27.20; ~5% headroom.
-  initialCssBytes: 167 * KiB, // actual 158.56 (2026-09-24, manifest CSS closure; 158.81 before the variable fonts; ratcheted, same whole KiB)
+  initialCssBytes: 167 * KiB, // actual 159.25 (2026-09-24, manifest CSS closure; 158.81 before the variable fonts, 158.56 before the bold fallback faces)
   // Re-baselined 2026-09-08 for the Genie thread view + deep-research
   // sections slice. The 25 KiB gzip gate had drifted to 4 bytes above the
   // measured artifact (25,596 B) — the next CSS line from anyone would have
@@ -202,7 +202,7 @@ const budgets = {
   // ship with their lazy chunks instead, and the dead `.admin-filter-input`
   // rules were removed, before this bump. Measured: CSS 155.76 / gzip 26.55;
   // ~5% headroom per policy.
-  initialCssGzipBytes: 29 * KiB, // actual 27.25 (2026-09-24)
+  initialCssGzipBytes: 29 * KiB, // actual 27.30 (2026-09-24; 27.25 before the bold fallback faces)
   // Re-baselined 2026-07-10 for the UX declutter slice (batches 1-2). total JS
   // was red on main (990.51 > 990.00); restored ~5% headroom over the measured
   // actual per this file's policy. Batch 2 (asset-label helper, top-leads
@@ -300,9 +300,14 @@ const budgets = {
   // 4.0% and total JS br at 4.4% headroom, so both were re-baselined to ~5%
   // (review of the lane, 2026-09-24; every gate the lane left under 4.5% was
   // restored, initial CSS br keeps 4.6%).
-  initialJsBrBytes: 152 * KiB, // actual 144.00 (5 chunks; 142.81 before the vendor split)
-  initialCssBrBytes: 24 * KiB, // actual 22.89 (22.82 with the static @fontsource CSS)
-  totalJsBrBytes: 447 * KiB, // actual 425.56 (67 chunks; 423.50 before the vendor split)
+  // Initial CSS br re-baselined the same day (second review of the lane) for
+  // the bold metric-matched fallback faces in tokens.css (a real local Arial
+  // Bold / Courier New Bold face per family, so bold text during the font
+  // swap is not a synthesized bold): +0.69 raw / +0.05 gzip / +0.07 br, which
+  // left it 4.3%. Measured: 22.96 br; +~5% rounded up to a whole KiB.
+  initialJsBrBytes: 152 * KiB, // actual 143.92 (5 chunks; 142.81 before the vendor split)
+  initialCssBrBytes: 25 * KiB, // actual 22.96 (22.89 before the bold fallback faces; 22.82 with the static @fontsource CSS)
+  totalJsBrBytes: 447 * KiB, // actual 425.43 (67 chunks; 423.50 before the vendor split)
   maxLazyJsBrBytes: 32 * KiB, // actual 30.07 (LeadTable)
   // What a navigation to each route fetches beyond the initial closure: the
   // route chunk plus its static imports, JS + CSS, brotli q11. Keyed by the

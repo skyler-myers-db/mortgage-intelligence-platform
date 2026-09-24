@@ -14,8 +14,9 @@
  *    preloads exactly the two woff2 files the page fetches, each once (the
  *    preload is reused, so it carries crossorigin); no .woff is requested;
  *    both faces load with the 100-900 range and render 600 < 650 < 700 < 800
- *    as four distinct widths; the metric-matched fallbacks load and set a
- *    sample within 3% (sans) / 1.5% (mono) of the webfont's width, and a
+ *    as four distinct widths; the metric-matched fallbacks (a regular and a
+ *    real local bold face each) load and set a sample within 3% (sans) /
+ *    1.5% (mono) of the webfont's width at 400, 600 and 700, and a
  *    glyph outside the webfont's latin subset (→ ≥ Δ ▲ ▼) keeps the system
  *    face rather than the scaled fallback face.
  *    Home screenshots in both themes are ATTACHED (not baselined) for a
@@ -108,6 +109,8 @@ const FONT_FILE = /\.(?:woff2?|ttf|otf)$/;
 const OUT_OF_SUBSET = '→≥Δ▲▼';
 const WEIGHT_LADDER = [600, 650, 700, 800] as const;
 const METRIC_SAMPLE = 'Who should we contact, why now, and with what offer? Summit Mortgage 2026';
+/** Regular text, then the two bold weights the partials set most (600, 700). */
+const FALLBACK_WEIGHTS = [400, 600, 700] as const;
 
 interface FaceState {
   family: string;
@@ -115,16 +118,22 @@ interface FaceState {
   status: string;
 }
 
-/** document.fonts after asking for both faces (the mono face may not be on screen yet). */
-async function loadedFaces(page: Page, families: readonly string[]): Promise<FaceState[]> {
-  return page.evaluate(async (names) => {
-    await Promise.all(names.map((name) => document.fonts.load(`16px '${name}'`)));
-    return [...document.fonts].map((face) => ({
-      family: face.family.replace(/["']/g, ''),
-      weight: face.weight,
-      status: face.status,
-    }));
-  }, families);
+/**
+ * document.fonts after asking for each face at each weight (the mono face may
+ * not be on screen yet, and a family's bold face loads only for a bold ask).
+ */
+async function loadedFaces(page: Page, families: readonly string[], weights: readonly number[] = [400]): Promise<FaceState[]> {
+  return page.evaluate(
+    async ({ names, ladder }) => {
+      await Promise.all(names.flatMap((name) => ladder.map((weight) => document.fonts.load(`${weight} 16px '${name}'`))));
+      return [...document.fonts].map((face) => ({
+        family: face.family.replace(/["']/g, ''),
+        weight: face.weight,
+        status: face.status,
+      }));
+    },
+    { names: [...families], ladder: [...weights] },
+  );
 }
 
 /** Rendered width of `text` in `family` at each weight (40px, off-screen probe spans). */
@@ -253,23 +262,32 @@ test.describe('variable Geist webfonts (bundle-05 / css-v2)', () => {
     ).toBeLessThan(0.005);
   });
 
-  test('the metric-matched fallbacks load and track the webfont widths', async ({ app, page }) => {
+  test('the metric-matched fallbacks load and track the webfont widths, regular and bold', async ({ app, page }) => {
     await app.gotoRoute('/');
-    const faces = await loadedFaces(page, ['Geist', 'Geist Mono', 'Geist Fallback', 'Geist Mono Fallback']);
+    const faces = await loadedFaces(page, ['Geist', 'Geist Mono', 'Geist Fallback', 'Geist Mono Fallback'], [400, 700]);
     for (const family of ['Geist Fallback', 'Geist Mono Fallback']) {
-      expect(faces.find((face) => face.family === family)?.status, `${family} found its local face`).toBe('loaded');
+      // A regular face (no weight descriptor) and a real bold one for 600-900,
+      // so bold text during the swap is the local bold face, not a synthesized
+      // bold of the regular one.
+      const own = faces.filter((face) => face.family === family);
+      expect.soft(own.map((face) => face.weight).sort(), `${family} faces`).toEqual(['600 900', 'normal']);
+      for (const face of own) {
+        expect.soft(face.status, `${family} ${face.weight} found its local face`).toBe('loaded');
+      }
     }
     const cases = [
       { webfont: 'Geist', fallback: 'Geist Fallback', tolerance: 0.03 },
       { webfont: 'Geist Mono', fallback: 'Geist Mono Fallback', tolerance: 0.015 },
     ];
     for (const { webfont, fallback, tolerance } of cases) {
-      const [webfontWidth] = await probeWidths(page, webfont, METRIC_SAMPLE, [400]);
-      const [fallbackWidth] = await probeWidths(page, fallback, METRIC_SAMPLE, [400]);
-      const drift = Math.abs(fallbackWidth / webfontWidth - 1);
-      expect(drift, `${fallback} sets the sample at ${fallbackWidth}px vs ${webfont} ${webfontWidth}px`).toBeLessThan(
-        tolerance,
-      );
+      const webfontWidths = await probeWidths(page, webfont, METRIC_SAMPLE, FALLBACK_WEIGHTS);
+      const fallbackWidths = await probeWidths(page, fallback, METRIC_SAMPLE, FALLBACK_WEIGHTS);
+      FALLBACK_WEIGHTS.forEach((weight, index) => {
+        const drift = Math.abs(fallbackWidths[index] / webfontWidths[index] - 1);
+        expect
+          .soft(drift, `${fallback} ${weight} sets the sample at ${fallbackWidths[index]}px vs ${webfont} ${webfontWidths[index]}px`)
+          .toBeLessThan(tolerance);
+      });
     }
   });
 });
