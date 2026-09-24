@@ -397,7 +397,8 @@ the startup warm path (`warehouse_state_client_prime_failed` on failure, type
 only). A probe never waits on a build in flight, a failed build is retried at
 most once a minute, and until a client exists the probe uses `SELECT 1`. If
 the App service principal cannot read the warehouse, every probe logs
-`warehouse_state_read_failed` and falls back to `SELECT 1`; that restores the
+`warehouse_state_read_failed` (WARNING once per 5 minutes, DEBUG in between;
+a good read re-arms it) and falls back to `SELECT 1`; that restores the
 pre-2026-09 behaviour (including the accidental keep-warm), so check for that
 event after the first deploy.
 

@@ -43,6 +43,7 @@ class _Warehouses:
 @pytest.fixture(autouse=True)
 def _isolate(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setattr(settings, "databricks_warehouse_id", "wh-fixture")
+    monkeypatch.setattr(health_probes, "_read_failure_warned_at", None)
     resilience._reset_breakers_for_tests()
     health_probes._probe_cache.clear()
     yield
@@ -119,6 +120,38 @@ def test_the_state_read_failure_logs_the_exception_type_only(
     failures = [r for r in caplog.records if r.getMessage() == "warehouse_state_read_failed"]
     assert failures, "the fallback is announced"
     assert secret_text not in caplog.text
+
+
+def test_a_repeating_state_read_failure_warns_once_per_window_and_rearms_after_a_read(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # A missing warehouse permission fails every probe refresh (~2 s while a
+    # tab polls): one WARNING per window keeps the fallback visible without
+    # flooding the log, and a good read re-arms it.
+    failing = _Warehouses(error=PermissionError("no CAN_USE"))
+    _use_state(monkeypatch, failing)
+
+    def levels() -> list[str]:
+        return [r.levelname for r in caplog.records if r.getMessage() == "warehouse_state_read_failed"]
+
+    with caplog.at_level("DEBUG", logger=health_probes.log.name):
+        health_probes.probe_warehouse()
+        health_probes.probe_warehouse()
+        assert levels() == ["WARNING", "DEBUG"], "a repeat inside the window stays at DEBUG"
+
+        warned_at = health_probes._read_failure_warned_at
+        assert warned_at is not None
+        monkeypatch.setattr(
+            health_probes, "_read_failure_warned_at", warned_at - health_probes._READ_FAILURE_WARN_EVERY_S
+        )
+        health_probes.probe_warehouse()
+        assert levels()[-1] == "WARNING", "the window elapsed: warn again"
+
+        _use_state(monkeypatch, _Warehouses(state=State.RUNNING))
+        assert health_probes.probe_warehouse() == "up"
+        _use_state(monkeypatch, failing)
+        health_probes.probe_warehouse()
+        assert levels()[-1] == "WARNING", "a good read re-arms the warning"
 
 
 def _stub_other_dependencies(monkeypatch: pytest.MonkeyPatch, warehouse: object) -> None:

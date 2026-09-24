@@ -68,6 +68,13 @@ _CLIENT_RETRY_AFTER_S = 60.0
 _workspace_client: Any = None
 _client_failed_at: float | None = None
 _workspace_client_lock = Lock()
+# A state read the App cannot make (e.g. no CAN_USE on the warehouse) fails on
+# every probe refresh, about every 2 s while any tab polls. The first failure
+# logs at WARNING and repeats inside this window at DEBUG; a successful read
+# re-arms it, so a new failure after a recovery warns at once.
+_READ_FAILURE_WARN_EVERY_S = 300.0
+_read_failure_warned_at: float | None = None
+_read_failure_lock = Lock()
 
 
 class WarehouseStateClientUnavailable(RuntimeError):
@@ -124,6 +131,22 @@ def prime_warehouse_state_client() -> None:
         )
 
 
+def _read_failure_level(*, failed: bool) -> int:
+    """WARNING for the first state-read failure per window, DEBUG for repeats."""
+
+    global _read_failure_warned_at
+    with _read_failure_lock:
+        if not failed:
+            _read_failure_warned_at = None
+            return logging.DEBUG
+        now = time.monotonic()
+        last = _read_failure_warned_at
+        if last is not None and now - last < _READ_FAILURE_WARN_EVERY_S:
+            return logging.DEBUG
+        _read_failure_warned_at = now
+        return logging.WARNING
+
+
 def _read_warehouse_state() -> DependencyState | None:
     """Map the warehouse lifecycle state; None means "could not tell"."""
 
@@ -136,7 +159,7 @@ def _read_warehouse_state() -> DependencyState | None:
         emit(
             log,
             "warehouse_state_read_failed",
-            level=logging.WARNING,
+            level=_read_failure_level(failed=True),
             dependency="warehouse",
             reason="error",
             exc_type=type(exc).__name__,
@@ -149,11 +172,13 @@ def _read_warehouse_state() -> DependencyState | None:
         emit(
             log,
             "warehouse_state_read_failed",
-            level=logging.WARNING,
+            level=_read_failure_level(failed=True),
             dependency="warehouse",
             reason="unknown_state" if name else "no_state",
             exc_type=None,
         )
+    else:
+        _read_failure_level(failed=False)
     return mapped
 
 
