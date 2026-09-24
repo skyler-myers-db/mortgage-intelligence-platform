@@ -65,6 +65,13 @@ export const SET_STATE_IN_EFFECT_SCOPE = [
   "src/lib/mutations/*.ts",
 ];
 
+/** Fixture harness files may import TYPES from frontend/src, never runtime code. */
+const FIXTURE_SRC_TYPE_ONLY = {
+  group: ["**/src/**"],
+  allowTypeImports: true,
+  message: "Fixture harness files may only `import type` from frontend/src.",
+};
+
 export default [
   {
     ignores: ["dist", "node_modules", "*.config.*", "tsconfig.tsbuildinfo"],
@@ -155,11 +162,36 @@ export default [
       "@typescript-eslint/no-restricted-imports": [
         "error",
         {
+          patterns: [FIXTURE_SRC_TYPE_ONLY],
+        },
+      ],
+    },
+  },
+  // The fixture data the contract exporter loads on bare Node (audit
+  // quality-09 step 3, tools/export_e2e_fixtures.mjs): Node strips types but
+  // resolves every surviving import, so a type imported as a value would load
+  // frontend/src at runtime, and a bare package would need node_modules.
+  // node: builtins are fine. This block restates the src rule because a
+  // later block's options replace an earlier block's for the same rule.
+  {
+    files: [
+      "tests/e2e/fixture/data/**/*.ts",
+      "tests/e2e/fixture/registry.ts",
+      "tests/e2e/fixture/mockApi.ts",
+      "tests/e2e/fixture/contractSamples.ts",
+    ],
+    rules: {
+      "@typescript-eslint/consistent-type-imports": ["error", { prefer: "type-imports", fixStyle: "inline-type-imports" }],
+      "@typescript-eslint/no-restricted-imports": [
+        "error",
+        {
           patterns: [
+            FIXTURE_SRC_TYPE_ONLY,
             {
-              group: ["**/src/**"],
+              regex: "^(?![./]|node:)",
               allowTypeImports: true,
-              message: "Fixture harness files may only `import type` from frontend/src.",
+              message:
+                "Fixture data is loaded by the contract exporter on bare Node: import a package with `import type` only (node: builtins are fine).",
             },
           ],
         },

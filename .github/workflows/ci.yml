@@ -47,6 +47,12 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
+      - uses: actions/setup-node@v6
+        # For tests/unit/test_e2e_fixture_contract.py (audit quality-09): the
+        # e2e fixture exporter runs on bare Node (>= 22.18, type stripping),
+        # with no npm ci and no node_modules.
+        with:
+          node-version: ${{ env.NODE_VERSION }}
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -62,6 +68,10 @@ jobs:
         # explicitly through pytest fixtures; there is no runtime mock-mode
         # switch in production code. The coverage floor is set to the
         # current measured suite baseline and should only move upward.
+        # MIP_REQUIRE_FIXTURE_CONTRACT=1: the e2e fixture contract test FAILS
+        # (instead of skipping) if Node is missing or too old here.
+        env:
+          MIP_REQUIRE_FIXTURE_CONTRACT: '1'
         run: |
           pytest -q -n auto --dist=loadscope \
             --cov=backend \
