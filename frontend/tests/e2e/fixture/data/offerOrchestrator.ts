@@ -31,6 +31,12 @@ export const EMAIL_BODY = [
   `Thank you,\n${LENDER_NAME} · NMLS #000000 · Equal Housing Lender`,
 ].join('\n\n');
 
+/**
+ * The same email with three blank lines after the greeting: the body splits
+ * into an empty paragraph there, which must still paint as blank space.
+ */
+export const EMAIL_BODY_EXTRA_BLANK_LINES = EMAIL_BODY.replace('Hello,\n\n', 'Hello,\n\n\n\n');
+
 interface DraftCopy {
   subject?: string;
   emailBody?: string;

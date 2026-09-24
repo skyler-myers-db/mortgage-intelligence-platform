@@ -28,7 +28,14 @@
 import AxeBuilder from '@axe-core/playwright';
 import type { Locator, Page } from '@playwright/test';
 import { PRIMARY_BORROWER } from './data/borrowers';
-import { EMAIL_BODY, GSM_SMS_BODY, LONG_SUBJECT, UCS2_SMS_BODY, registerDraftCopy } from './data/offerOrchestrator';
+import {
+  EMAIL_BODY,
+  EMAIL_BODY_EXTRA_BLANK_LINES,
+  GSM_SMS_BODY,
+  LONG_SUBJECT,
+  UCS2_SMS_BODY,
+  registerDraftCopy,
+} from './data/offerOrchestrator';
 import { LENDER_NAME } from './data/reference';
 import { FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
@@ -579,6 +586,28 @@ test.describe('certified copy preview (critic-02)', () => {
       expect(await axeViolations(page, '[data-testid="certified-copy"]')).toEqual([]);
     });
   }
+
+  test('extra blank lines in the audited copy paint as extra space, not as one gap', async ({ app, mockApi, page }) => {
+    const served = registerDraftCopy(mockApi, { emailBody: EMAIL_BODY_EXTRA_BLANK_LINES });
+    await app.gotoRoute(ROUTE);
+    const body = page.getByRole('article', { name: 'Certified email preview' }).getByTestId('outreach-draft');
+    const paragraphs = body.locator('p');
+    await expect(paragraphs).toHaveCount(4);
+    expect(served.email?.body, 'precondition: the served draft carries the extra blank lines').toBe(EMAIL_BODY_EXTRA_BLANK_LINES);
+    // The DOM keeps the copy exactly: paragraphs joined by blank lines.
+    expect(await paragraphs.evaluateAll((nodes) => nodes.map((node) => node.textContent ?? '').join('\n\n'))).toBe(EMAIL_BODY_EXTRA_BLANK_LINES);
+    await expect(paragraphs.nth(1), 'precondition: an empty paragraph after the greeting').toHaveText('');
+
+    // Greeting -> offer spans the empty paragraph (three blank lines);
+    // offer -> sign-off is one blank line. The first gap must be wider by
+    // at least a line.
+    const [greeting, offer, signOff] = await Promise.all([0, 2, 3].map((index) => boxOf(paragraphs.nth(index))));
+    const lineHeight = await paragraphs.first().evaluate((node) => Number.parseFloat(getComputedStyle(node).lineHeight));
+    const extraGap = offer.top - greeting.bottom;
+    const oneGap = signOff.top - offer.bottom;
+    expect(oneGap, 'precondition: paragraphs are spaced').toBeGreaterThan(0);
+    expect(extraGap - oneGap, 'extra blank lines add at least a line of space (px)').toBeGreaterThanOrEqual(lineHeight - 1);
+  });
 
   test('one non-GSM character switches the SMS count to UCS-2 segments', async ({ app, mockApi, page }) => {
     registerDraftCopy(mockApi, { smsBody: UCS2_SMS_BODY });

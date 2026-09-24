@@ -68,6 +68,11 @@
   overflow-wrap: anywhere;
 }
 .certified-copy__para:last-child { margin-block-end: 0; }
+/* A run of four or more newlines leaves an empty paragraph between two
+   others. With no content its margins collapsed through it, so two or more
+   blank lines painted exactly like one. A line of height keeps each extra
+   blank line visible. Not while the copy is still empty (a lone `<p>`). */
+.certified-copy__para:empty:not(:only-child) { min-block-size: 1lh; }
 
 /* SMS: one outbound bubble, right-aligned as the borrower's phone shows it,
    with the carrier segment count under it. */
