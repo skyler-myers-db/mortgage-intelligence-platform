@@ -1,6 +1,6 @@
 import { apiPath } from './apiPaths';
 import { apiCallRoute, isApiCallSampled, serverTimingDetails } from './rumApiRoute';
-import { attachClientErrorSink, type QueuedClientError } from './rumBridge';
+import { attachClientErrorSink, getRumRouteSource, type QueuedClientError } from './rumBridge';
 
 export type RumMetric =
   | 'navigation_load'
@@ -291,10 +291,20 @@ function observeApiCalls(): void {
   }
 }
 
+/**
+ * route_change from the router's COMMITTED location (lib/rumBridge's route
+ * source, registered by main.tsx), never from window.history: a Back the
+ * unsaved-changes guard blocks moves the URL there and back again (two
+ * popstates) while the router's location never changes, which the old
+ * pushState / replaceState patch and popstate listener recorded as two
+ * phantom route changes. Without a registered source nothing is recorded.
+ */
 function observeRouteChanges(): void {
+  const source = getRumRouteSource();
+  if (!source) return;
   let route = currentRoute();
-  const reportRoute = () => {
-    const next = currentRoute();
+  source((pathname) => {
+    const next = sanitizeRumRoute(pathname);
     if (next === route) return;
     const previous = route;
     const start = performance.now();
@@ -311,18 +321,7 @@ function observeRouteChanges(): void {
         });
       });
     });
-  };
-  const pushState = history.pushState;
-  const replaceState = history.replaceState;
-  history.pushState = function patchedPushState(...args) {
-    pushState.apply(this, args);
-    reportRoute();
-  };
-  history.replaceState = function patchedReplaceState(...args) {
-    replaceState.apply(this, args);
-    reportRoute();
-  };
-  window.addEventListener('popstate', reportRoute);
+  });
 }
 
 /**

@@ -8,7 +8,12 @@
  * handed, which is the wire payload. PerformanceObserver is replaced by a
  * fake that lets a test deliver `resource` entries.
  */
+import { act, createElement, Fragment, type ReactNode } from 'react';
+import { createRoot } from 'react-dom/client';
+import { createBrowserRouter, Outlet, RouterProvider, useBlocker } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 type RumModule = typeof import('./rum');
 type ClientErrorLog = typeof import('./clientErrorLog');
@@ -275,5 +280,101 @@ describe('api_call events', () => {
     for (const body of bodies) {
       expect((JSON.parse(body) as { events: unknown[] }).events.length).toBeLessThanOrEqual(20);
     }
+  });
+});
+
+describe('route_change events', () => {
+  function routeChanges(): WireEvent[] {
+    return wireEvents().filter((event) => event.metric === 'route_change');
+  }
+
+  async function frames(count: number): Promise<void> {
+    for (let frame = 0; frame < count; frame += 1) {
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)));
+    }
+  }
+
+  /** Blocks every navigation that leaves /portfolio-builder, like a dirty page's guard. */
+  function Guard(): ReactNode {
+    const blocker = useBlocker(
+      ({ currentLocation, nextLocation }) =>
+        currentLocation.pathname === '/portfolio-builder' && nextLocation.pathname !== '/portfolio-builder',
+    );
+    return createElement('output', { 'data-testid': 'blocker' }, blocker.state);
+  }
+
+  it('leaves the browser\'s own history methods alone', async () => {
+    const nativePushState = window.history.pushState;
+    const nativeReplaceState = window.history.replaceState;
+    const { rum } = await freshRum();
+    rum.installRum();
+    expect(window.history.pushState).toBe(nativePushState);
+    expect(window.history.replaceState).toBe(nativeReplaceState);
+  });
+
+  it('records the committed navigation once, and nothing for a Back the blocker holds', async () => {
+    const { rum, log } = await freshRum();
+    const { setRumRouteSource } = await import('./rumBridge');
+    const router = createBrowserRouter([
+      { path: '*', element: createElement(Fragment, null, createElement(Guard), createElement(Outlet)) },
+    ]);
+    setRumRouteSource((listener) => router.subscribe((state) => listener(state.location.pathname)));
+    rum.installRum();
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => root.render(createElement(RouterProvider, { router })));
+    await act(async () => {
+      await router.navigate('/portfolio-builder');
+    });
+    await frames(3);
+    await flush(rum);
+    expect(routeChanges().map((event) => [event.details?.from_route, event.route])).toEqual([
+      ['/', '/portfolio-builder'],
+    ]);
+
+    // Back: the browser pops to /, the router reverts the URL (two popstates)
+    // and keeps its committed location on /portfolio-builder. A browser
+    // queues the traversal history.go() starts, so the URL really reads /
+    // while the first popstate is handled; happy-dom traverses synchronously
+    // inside go(), so queue it here the way a browser does.
+    const nativeGo = window.history.go.bind(window.history);
+    vi.spyOn(window.history, 'go').mockImplementation((delta?: number) => {
+      window.setTimeout(() => nativeGo(delta), 0);
+    });
+    const before = routeChanges().length;
+    await act(async () => {
+      window.history.back();
+      // The router's own blocker state (React renders it once act settles).
+      await vi.waitFor(() =>
+        expect([...router.state.blockers.values()].map((blocker) => blocker.state)).toContain('blocked'),
+      );
+      await vi.waitFor(() => expect(window.location.pathname).toBe('/portfolio-builder'));
+    });
+    expect(container.textContent).toBe('blocked');
+    await frames(3);
+    // A sentinel event makes this flush always carry a body, so "no
+    // route_change in it" is read from a batch that really was sent.
+    log.reportClientError('uncaught', new TypeError('sentinel'));
+    await flush(rum);
+    expect(wireEvents().some((event) => event.metric === 'client_error')).toBe(true);
+    expect(router.state.location.pathname).toBe('/portfolio-builder');
+    expect(routeChanges().length - before, 'a blocked Back records no route_change').toBe(0);
+
+    await act(async () => root.unmount());
+    container.remove();
+  });
+
+  it('records nothing when no route source is registered', async () => {
+    const { rum, log } = await freshRum();
+    rum.installRum();
+    window.history.pushState(null, '', '/lead-queue');
+    window.history.pushState(null, '', '/glossary');
+    await frames(3);
+    log.reportClientError('uncaught', new TypeError('x'));
+    await flush(rum);
+    expect(routeChanges()).toEqual([]);
+    expect(wireEvents().map((event) => event.metric)).toEqual(['client_error']);
   });
 });
