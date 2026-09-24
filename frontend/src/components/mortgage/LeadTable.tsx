@@ -245,6 +245,10 @@ export function LeadTable({
     virtualized: shouldVirtualize,
     scrollToIndex: (index) => rowVirtualizer.scrollToIndex(index, { align: 'auto' }),
     openEvidence: setDrawer,
+    reviewChunk: {
+      isReady: () => REVIEW_CHUNK.current() !== null,
+      load: () => REVIEW_CHUNK.load().then(() => true, () => false),
+    },
   });
   const { review } = flow;
   const openReview = review.review;
@@ -273,6 +277,10 @@ export function LeadTable({
     onInspectEvidence: openReview.mode === 'dialog' ? flow.inspectEvidenceFromDialog : undefined,
   };
   const skipTargetId = `${useId()}-end`;
+  // An Approve waiting on the review chunk (nothing drafted yet), or a
+  // review whose chunk is still rendering in.
+  const reviewOpeningFor = flow.reviewLoading
+    ?? (openReview && !reviewChunk.module ? openReview.borrowerId : null);
 
   /** Assign / distribute the current selection. The selection set lives in
    *  the approval hook, so the shell hands both it and the clear callback to
@@ -579,11 +587,13 @@ export function LeadTable({
       </div>
       <span id={skipTargetId} className="sr-only lead-table__skip-target" tabIndex={-1}>End of ranked borrowers table</span>
       {reviewProps && ReviewDialog && openReview?.mode === 'dialog' && <ReviewDialog {...reviewProps} />}
-      {openReview && !reviewChunk.module && (
-        <div role="status" className={reviewChunk.failed ? 'table-error' : 'table-neutral'} data-testid="lead-approve-review-loading">
-          {reviewChunk.failed
-            ? 'The approval review could not load, so nothing was approved. Reload the page, then approve again.'
-            : `Opening the review for ${openReview.borrowerId}…`}
+      {flow.reviewLoadFailed ? (
+        <div role="alert" className="table-error" data-testid="lead-approve-review-loading">
+          The approval review could not load, so no draft was generated and nothing was approved. Reload the page, then approve again.
+        </div>
+      ) : reviewOpeningFor && (
+        <div role="status" className="table-neutral" data-testid="lead-approve-review-loading">
+          Opening the review for {reviewOpeningFor}…
         </div>
       )}
       {approval.selectionCount > 0 && (

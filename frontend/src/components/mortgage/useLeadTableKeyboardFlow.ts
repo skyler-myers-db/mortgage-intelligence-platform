@@ -45,6 +45,8 @@ export interface UseLeadTableKeyboardFlowInput {
   scrollToIndex: (index: number) => void;
   /** Open the evidence drawer (AppContext `setDrawer`). */
   openEvidence: (source: DrawerSource) => void;
+  /** The approve review's lazy chunk: loaded now, or load it (resolves false on failure). */
+  reviewChunk: { isReady: () => boolean; load: () => Promise<boolean> };
 }
 
 /** Focus an element once it is rendered (a virtualized row may need a frame or two). */
@@ -109,6 +111,7 @@ export function useLeadTableKeyboardFlow({
   virtualized,
   scrollToIndex,
   openEvidence,
+  reviewChunk,
 }: UseLeadTableKeyboardFlowInput) {
   'use no memo';
 
@@ -136,6 +139,18 @@ export function useLeadTableKeyboardFlow({
   });
   const [toast, setToast] = useState<LeadDecisionToastState | null>(null);
   const [refocusTable, setRefocusTable] = useState(false);
+  // The review chunk being fetched for an Approve (no draft until it loads),
+  // and whether that fetch failed.
+  const [reviewLoading, setReviewLoading] = useState<string | null>(null);
+  const [reviewLoadFailed, setReviewLoadFailed] = useState(false);
+  const reviewLoadingRef = useRef<string | null>(null);
+  const liveRef = useRef(true);
+  useEffect(() => {
+    liveRef.current = true;
+    return () => {
+      liveRef.current = false;
+    };
+  }, []);
   const confirmRef = useRef<HTMLButtonElement | null>(null);
   const rejectReasonRef = useRef<HTMLSelectElement | null>(null);
   const review = useLeadApproveReview({
@@ -189,6 +204,10 @@ export function useLeadTableKeyboardFlow({
     if (approval.bulkApproving || approval.isBulkRunInFlight()) return;
     if (!canStillApprove(borrowerId)) return;
     cursor.setCursorId(borrowerId);
+    if (!reviewChunk.isReady()) {
+      loadReviewThenOpen(borrowerId);
+      return;
+    }
     // review.open runs the approver / campaign-binding gate before it drafts.
     const result = review.open(borrowerId, expanded === borrowerId ? 'inline' : 'dialog');
     if (result === 'already-open') {
@@ -196,6 +215,34 @@ export function useLeadTableKeyboardFlow({
       confirmRef.current?.focus();
     }
   }
+
+  /**
+   * The review ships as its own lazy chunk. A draft writes a DRAFT_OUTREACH
+   * audit row, so it is requested only once the review that shows it has
+   * loaded: a chunk that fails to load drafts nothing, leaves no review
+   * open without a Cancel, and says so. After the load, the Approve runs
+   * again with the latest state (every gate re-checked).
+   */
+  function loadReviewThenOpen(borrowerId: string) {
+    if (reviewLoadingRef.current !== null) return;
+    reviewLoadingRef.current = borrowerId;
+    setReviewLoading(borrowerId);
+    setReviewLoadFailed(false);
+    void reviewChunk.load().then((loaded) => {
+      reviewLoadingRef.current = null;
+      if (!liveRef.current) return;
+      setReviewLoading(null);
+      if (!loaded) {
+        setReviewLoadFailed(true);
+        return;
+      }
+      openReviewRef.current(borrowerId);
+    });
+  }
+  const openReviewRef = useRef<(borrowerId: string) => void>(() => undefined);
+  useEffect(() => {
+    openReviewRef.current = openReview;
+  });
 
   function cancelReview() {
     const mode = current?.mode;
@@ -383,6 +430,8 @@ export function useLeadTableKeyboardFlow({
     submitReject,
     cancelReject,
     inspectEvidenceFromDialog,
+    reviewLoading,
+    reviewLoadFailed,
     eligibleSelectedIds,
   };
 }

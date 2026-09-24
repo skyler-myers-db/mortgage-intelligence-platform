@@ -5,9 +5,11 @@
  * explicit Approve, so they ship as their own chunks instead of growing the
  * shared LeadTable chunk. The import is awaited here rather than rendered
  * through React.lazy: a stale chunk after a deploy must surface as a plain
- * "could not load" state the table controls (and the review cancels), not a
- * throw into the route error boundary. A loaded module is cached, so later
- * mounts render it synchronously.
+ * "could not load" state the table controls, not a throw into the route
+ * error boundary. A loaded module is cached, so later mounts render it
+ * synchronously. The table requests an approve review's draft (an audited
+ * DRAFT_OUTREACH write) only once this chunk has loaded, so a chunk that
+ * fails drafts nothing (useLeadTableKeyboardFlow).
  */
 import { useEffect, useState } from 'react';
 
