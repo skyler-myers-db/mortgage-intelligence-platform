@@ -37,6 +37,8 @@ export const API_ROUTE_SEGMENTS = [
 
 const KNOWN_SEGMENTS: ReadonlySet<string> = new Set(API_ROUTE_SEGMENTS);
 const MAX_SEGMENTS = 10;
+/** The server's `api_route` limit (backend/schemas/telemetry.py `_assert_api_route`). */
+const MAX_API_ROUTE_LENGTH = 160;
 const ID_SEGMENT = ':id';
 
 /**
@@ -53,7 +55,12 @@ const EXCLUDED_PREFIX = '/api/telemetry/';
 /**
  * `/api/v1/borrowers/B-0123456789ABC/proof?x=1#y` -> `/api/borrowers/:id/proof`.
  * Drops the query and hash, keeps at most ten segments, and returns null for
- * a path outside /api.
+ * a path outside /api or a template longer than the server's 160-character
+ * `api_route` limit: the server rejects an over-long value with a 422 for the
+ * WHOLE batch, which would drop a client_error queued beside it. Truncating
+ * instead would cut a segment and fail the server's vocabulary check the same
+ * way. No mounted route comes near the limit (ten of the longest literal
+ * segment would); this keeps one odd path from costing a batch.
  */
 export function templateApiPath(path: string): string | null {
   const pathOnly = path.split(/[?#]/, 1)[0] ?? '';
@@ -66,7 +73,8 @@ export function templateApiPath(path: string): string | null {
     .slice(0, MAX_SEGMENTS);
   if (segments.length === 0) return null;
   const templated = segments.map((segment) => (KNOWN_SEGMENTS.has(segment) ? segment : ID_SEGMENT));
-  return `/api/${templated.join('/')}`;
+  const template = `/api/${templated.join('/')}`;
+  return template.length <= MAX_API_ROUTE_LENGTH ? template : null;
 }
 
 /**

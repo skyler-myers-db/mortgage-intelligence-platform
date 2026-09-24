@@ -73,6 +73,18 @@ describe('apiCallRoute', () => {
     expect(apiCallRoute(`${ORIGIN}/api/v1/genie/message/submit`, ORIGIN)).toBe('/api/genie/message/submit');
     expect(apiCallRoute(`${ORIGIN}/api/v1/admin/settings`, ORIGIN)).toBe('/api/admin/settings');
   });
+
+  it('skips a template over the server\'s 160-character api_route limit instead of costing the batch a 422', () => {
+    // '/api' + six '/campaign-recommendation' (24 each) = 148 characters.
+    const long = Array.from({ length: 6 }, () => 'campaign-recommendation').join('/');
+    const atLimit = `/api/v1/${long}/assignments`; // + '/assignments' (12) = 160
+    const overLimit = `/api/v1/${long}/capabilities`; // + '/capabilities' (13) = 161
+    expect(apiCallRoute(`${ORIGIN}${atLimit}`, ORIGIN)).toBe(`/api/${long}/assignments`);
+    expect(apiCallRoute(`${ORIGIN}${atLimit}`, ORIGIN)).toHaveLength(160);
+    expect(apiCallRoute(`${ORIGIN}${overLimit}`, ORIGIN)).toBeNull();
+    // Ids count as ':id', so a long id never pushes a template over the limit.
+    expect(apiCallRoute(`${ORIGIN}/api/v1/campaigns/${'x'.repeat(400)}/outcomes`, ORIGIN)).toBe('/api/campaigns/:id/outcomes');
+  });
 });
 
 describe('serverTimingDetails', () => {
