@@ -8,8 +8,10 @@ import { Link } from 'react-router';
 import { GlossaryTerm } from '../components/GlossaryTerm';
 import { KpiCard } from '../components/mortgage/KpiCard';
 import { friendlyAssetLabel } from '../lib/assetLabels';
+import { formatCompact, formatCount, formatFixed, formatUsdCompact, pct, signedBpsLabel } from '../lib/formatters';
 import { offerDisplayLabel } from '../lib/offerLanguage';
-import { formatTimestamp } from '../lib/time';
+import { formatDate, formatTimestamp } from '../lib/time';
+import { Timestamp } from '../components/ui/Timestamp';
 import type {
   EconomicsAnalyticsResponse,
   EvidenceBySignalRow,
@@ -33,8 +35,6 @@ import {
   activationFunnelStages,
   borrowerDisplay,
   buildDailyEvidenceTotals,
-  fmt,
-  fmtCurrency,
   leadQueueHref,
   segmentIntelligenceHref,
   signalLabel,
@@ -72,7 +72,7 @@ export function ExecutiveProvenanceNote({
   return (
     <p className="analytics-panel-note">
       Stages 1&ndash;4 from <span className="mono">{provenance.population_source}</span>
-      {provenance.snapshot_date ? <> (snapshot {provenance.snapshot_date})</> : null}. Approved and
+      {provenance.snapshot_date ? <> (snapshot <Timestamp value={provenance.snapshot_date} format="date" />)</> : null}. Approved and
       Actioned from <span className="mono">{provenance.workflow_source}</span>, the gold mirror of
       Lakebase
       {provenance.lifecycle_synced_at ? <>, synced {formatTimestamp(provenance.lifecycle_synced_at)}</> : null}.
@@ -96,10 +96,10 @@ export function ExecutiveView({
   return (
     <>
       <div className="kpi-row">
-        <KpiCard label="Addressable Borrowers" value={fmt(data.totals.addressable_borrowers)} delta={data.totals.snapshot_date ?? undefined} deltaDir="flat" />
-        <KpiCard label="Refi Economics" value={fmt(data.totals.in_the_money_borrowers)} delta={`${fmt(data.totals.high_opportunity_borrowers)} score ${HIGH_OPPORTUNITY_SCORE_LABEL}`} deltaDir="up" />
-        <KpiCard label="Primary Offer Paths" value={fmt(data.totals.offer_recommended_borrowers)} delta="Offer path assigned" deltaDir="up" />
-        <KpiCard label="Approved Outreach" value={fmt(data.totals.approved_borrowers)} delta={`${fmt(data.totals.actioned_borrowers)} actioned`} deltaDir="flat" />
+        <KpiCard label="Addressable Borrowers" value={formatCount(data.totals.addressable_borrowers)} delta={data.totals.snapshot_date ? `Snapshot ${formatDate(data.totals.snapshot_date)}` : undefined} deltaDir="flat" />
+        <KpiCard label="Refi Economics" value={formatCount(data.totals.in_the_money_borrowers)} delta={`${formatCount(data.totals.high_opportunity_borrowers)} score ${HIGH_OPPORTUNITY_SCORE_LABEL}`} deltaDir="up" />
+        <KpiCard label="Primary Offer Paths" value={formatCount(data.totals.offer_recommended_borrowers)} delta="Offer path assigned" deltaDir="up" />
+        <KpiCard label="Approved Outreach" value={formatCount(data.totals.approved_borrowers)} delta={`${formatCount(data.totals.actioned_borrowers)} actioned`} deltaDir="flat" />
       </div>
       <RateWindowSection filtersActive={filtersActive} />
       <section className="surface analytics-section">
@@ -167,7 +167,7 @@ export function GeographyView({ data, leadParams }: { data: GeographyAnalyticsRe
               rows={data.state_opportunities}
               value={(row) => row.in_the_money_borrowers}
               label={(row) => row.state}
-              sublabel={(row) => `${fmt(row.borrower_count)} addressable · ${row.mean_opportunity_score} avg score`}
+              sublabel={(row) => `${formatCompact(row.borrower_count)} addressable · ${row.mean_opportunity_score} avg score`}
               href={(row) => leadQueueHref({ state: row.state, ...leadParams })}
             />
           </div>
@@ -179,7 +179,7 @@ export function GeographyView({ data, leadParams }: { data: GeographyAnalyticsRe
               rows={data.state_avm_values}
               value={(row) => row.total_avm_value_usd}
               label={(row) => row.state}
-              sublabel={(row) => `${fmtCurrency(row.total_equity_usd)} equity`}
+              sublabel={(row) => `${formatUsdCompact(row.total_equity_usd)} equity`}
               href={(row) => leadQueueHref({ state: row.state, ...leadParams })}
             />
           </div>
@@ -194,9 +194,9 @@ export function GeographyView({ data, leadParams }: { data: GeographyAnalyticsRe
             columns={[
               { key: 'zip', label: 'ZIP', render: (row) => <Link to={leadQueueHref({ state: row.state, zip: row.zip, ...leadParams })}>{row.zip}</Link> },
               { key: 'place', label: 'Market', render: (row) => `${row.city ?? 'Unknown'}, ${row.state}` },
-              { key: 'itm', label: 'Refi economics', render: (row) => fmt(row.in_the_money_borrowers) },
+              { key: 'itm', label: 'Refi economics', render: (row) => formatCount(row.in_the_money_borrowers) },
               { key: 'score', label: 'Avg opportunity score', render: (row) => row.mean_opportunity_score },
-              { key: 'spread', label: 'Avg rate spread', render: (row) => `${row.mean_rate_spread_bps} bps` },
+              { key: 'spread', label: 'Avg rate spread', render: (row) => signedBpsLabel(row.mean_rate_spread_bps) },
             ]}
           />
         </div>
@@ -255,7 +255,7 @@ export function EconomicsView({
               columns={[
                 { key: 'borrower', label: 'Borrower', render: (row) => <Link to={`/borrower-360/${row.borrower_id}`}>{borrowerDisplay(row)}</Link> },
                 { key: 'score', label: 'Score', render: (row) => row.opportunity_score },
-                { key: 'spread', label: 'Spread', render: (row) => `${row.rate_spread_bps} bps` },
+                { key: 'spread', label: 'Spread', render: (row) => signedBpsLabel(row.rate_spread_bps) },
                 { key: 'offer', label: 'Offer', render: (row) => offerDisplayLabel(null, row.recommended_offer) },
               ]}
             />
@@ -290,10 +290,10 @@ export function SegmentsView({ data, leadParams }: { data: SegmentAnalyticsRespo
             getKey={(row) => row.segment_code}
             columns={[
               { key: 'segment', label: 'Segment', render: (row) => <Link to={leadQueueHref({ segment: row.segment_code, ...leadParams })}>{row.name}</Link> },
-              { key: 'borrowers', label: 'Borrowers', render: (row) => fmt(row.borrower_count) },
+              { key: 'borrowers', label: 'Borrowers', render: (row) => formatCount(row.borrower_count) },
               { key: 'score', label: 'Avg Score', render: (row) => row.mean_opportunity_score },
-              { key: 'itm', label: 'Refi economics', render: (row) => fmt(row.in_the_money_borrowers) },
-              { key: 'approval', label: 'Approval', render: (row) => row.approval_rate === null || row.approval_rate === undefined ? '—' : `${row.approval_rate.toFixed(1)}%` },
+              { key: 'itm', label: 'Refi economics', render: (row) => formatCount(row.in_the_money_borrowers) },
+              { key: 'approval', label: 'Approval', render: (row) => pct(row.approval_rate) },
             ]}
           />
         </div>
@@ -352,7 +352,7 @@ function EvidenceExamplesTable({ rows }: { rows: SignalEvidenceExample[] }) {
         { key: 'borrower', label: 'Borrower', render: (row) => <Link to={`/borrower-360/${row.borrower_id}`}>{borrowerDisplay(row)}</Link> },
         { key: 'signal', label: 'Signal', render: (row) => signalLabel(row.signal_type) },
         { key: 'value', label: 'Value', render: (row) => row.signal_value },
-        { key: 'confidence', label: 'Evidence confidence', render: (row) => row.confidence.toFixed(3) },
+        { key: 'confidence', label: 'Evidence confidence', render: (row) => formatFixed(row.confidence, 3) },
         { key: 'source', label: 'Source', render: (row) => row.source_product },
       ]}
     />
@@ -409,7 +409,7 @@ export function SignalsView({
             rows={data.evidence_by_signal}
             value={(row) => row.event_count}
             label={(row) => signalLabel(row.signal_type)}
-            sublabel={(row) => `${row.source_product} · ${friendlyAssetLabel(row.source_label ?? row.source_table)} · ${row.mean_confidence === null || row.mean_confidence === undefined ? '—' : row.mean_confidence.toFixed(3)}`}
+            sublabel={(row) => `${row.source_product} · ${friendlyAssetLabel(row.source_label ?? row.source_table)} · ${formatFixed(row.mean_confidence, 3)}`}
             href={(row) => analyticsHref({
               states: filterParams.states.join(',') || null,
               segment_codes: filterParams.segmentCodes.join(',') || null,

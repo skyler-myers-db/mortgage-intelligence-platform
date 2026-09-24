@@ -31,6 +31,7 @@ import {
   type AuditExplorerFilters,
 } from './AdminAuditExplorer.params';
 import { AUDIT_TABLE_CONTEXT, AuditEventTableRow, formatAuditTimestamp } from './AdminAuditExplorer.row';
+import { formatCount } from '../../lib/formatters';
 
 interface AuditRollupRow {
   bucket_start: string;
@@ -239,7 +240,7 @@ export function AdminAuditExplorer() {
                     {auditEventLabel({ event_type: row.event_type, action: row.event_type })}
                   </span>
                   <span className="mono muted fs-11">{row.event_type}</span>
-                  <strong>{row.event_count.toLocaleString()}</strong>
+                  <strong>{formatCount(row.event_count)}</strong>
                   <span className="muted fs-11">{formatAuditTimestamp(row.bucket_start)}</span>
                 </div>
               ))}

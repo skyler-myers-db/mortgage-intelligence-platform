@@ -17,6 +17,8 @@ import { Icon } from '../components/Icon';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { type UseWarmingUpRetryResult } from '../lib/useWarmingUpRetry';
 import { useFirstAppearance } from '../lib/useFirstAppearance';
+import { fixedAttr } from '../lib/fixedPrecision';
+import { formatCompact, formatCount, formatNumber } from '../lib/formatters';
 import type {
   FunnelStage,
   RateSpreadBucket,
@@ -25,7 +27,6 @@ import type {
 import {
   buildFunnelSankeyModel,
   categoricalTickIndexes,
-  fmt,
   funnelStageDisplayLabel,
   formatAxisTick,
   formatConversionPct,
@@ -135,7 +136,7 @@ export function Bars<T>({
                 style={{ '--bar-pct': `${pct(rowValue, max)}%` } as CSSProperties}
               />
             </span>
-            <span className="analytics-bars__value num">{fmt(rowValue)}</span>
+            <span className="analytics-bars__value num">{formatCompact(rowValue)}</span>
             {sublabel && <span className="analytics-bars__sub">{sublabel(row)}</span>}
           </>
         );
@@ -261,7 +262,7 @@ export function FunnelSankey({
             className="funnel-sankey__node"
             role="link"
             tabIndex={0}
-            aria-label={`${stageLabel}: ${[`${fmt(node.count)} borrowers`, ...lines].join(', ')}. Open in lead queue.`}
+            aria-label={`${stageLabel}: ${[`${formatCount(node.count)} borrowers`, ...lines].join(', ')}. Open in lead queue.`}
             onClick={() => go(node)}
             onKeyDown={onKey(node)}
           >
@@ -279,7 +280,7 @@ export function FunnelSankey({
               y={node.yTop - 18 - Math.max(0, lines.length - 1) * 13}
               textAnchor="middle"
             >
-              {fmt(node.count)}
+              {formatCompact(node.count)}
             </text>
             {lines.map((line, idx) => (
               <text
@@ -361,7 +362,7 @@ export function LineChart({
       maxX,
       maxY,
       plotted,
-      points: plotted.map((p) => `${p.px.toFixed(2)},${p.py.toFixed(2)}`).join(' '),
+      points: plotted.map((p) => `${fixedAttr(p.px)},${fixedAttr(p.py)}`).join(' '),
       xTicks: makeTicks(minX, maxX),
       yTicks: makeTicks(0, maxY),
       plotY,
@@ -450,7 +451,7 @@ export function LineChart({
                     {formatAxisTick(hovered.xValue)}{xUnit ? ` ${xUnit}` : ''}
                   </span>
                   <span className="analytics-chart__tip-y">
-                    {hovered.yValue.toLocaleString()} {yLabel.toLowerCase()}
+                    {formatNumber(hovered.yValue)} {yLabel.toLowerCase()}
                   </span>
                 </span>
               </>
@@ -484,7 +485,7 @@ export function DailyEvidenceLineChart({ rows }: { rows: DailyEvidenceTotal[] })
     const points = rows.map((row, idx) => {
       const px = rows.length === 1 ? 50 : (idx / (rows.length - 1)) * 100;
       const py = plotY(row.event_count);
-      return `${px.toFixed(2)},${py.toFixed(2)}`;
+      return `${fixedAttr(px)},${fixedAttr(py)}`;
     }).join(' ');
     return {
       maxY,

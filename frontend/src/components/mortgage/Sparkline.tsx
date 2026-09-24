@@ -1,4 +1,5 @@
 import { useId } from 'react';
+import { fixedAttr } from '../../lib/fixedPrecision';
 
 /**
  * Sparkline — zero-dep inline SVG mini line chart. Sized for the `.kpi__spark`
@@ -47,12 +48,12 @@ export function Sparkline({ points, width = 64, height = 20, direction, drawIn =
     .map((p, i) => {
       const x = 1 + i * stepX;
       const y = 1 + innerH - ((p - min) / span) * innerH;
-      return `${i === 0 ? 'M' : 'L'}${x.toFixed(2)} ${y.toFixed(2)}`;
+      return `${i === 0 ? 'M' : 'L'}${fixedAttr(x)} ${fixedAttr(y)}`;
     })
     .join(' ');
 
   // Closed area path (down to baseline, back to start) for the soft fill.
-  const areaPath = `${path} L${(1 + (points.length - 1) * stepX).toFixed(2)} ${(height - 1).toFixed(2)} L1 ${(height - 1).toFixed(2)} Z`;
+  const areaPath = `${path} L${fixedAttr(1 + (points.length - 1) * stepX)} ${fixedAttr(height - 1)} L1 ${fixedAttr(height - 1)} Z`;
 
   const dir = direction ?? (points[points.length - 1] > points[0] ? 'up' : points[points.length - 1] < points[0] ? 'down' : 'flat');
   const stroke =

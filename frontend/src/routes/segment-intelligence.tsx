@@ -44,6 +44,7 @@ import {
   VALID_SEGMENT_CODES,
   type ChipFilterKey,
 } from './segment-intelligence.filters';
+import { formatCount } from '../lib/formatters';
 
 /**
  * Segment Intelligence — prototype composition: segment cards across the top
@@ -415,7 +416,7 @@ export default function SegmentIntelligence() {
             {totalMatching !== null && (
               <div className="segment-mode-control__total">
                 <span className="eyebrow">{hasSelectedSegments ? 'Selected cohort' : 'Ranked queue'}</span>
-                <span className="num">{uniqueCohortTotal.toLocaleString()}</span>
+                <span className="num">{formatCount(uniqueCohortTotal)}</span>
                 <span className="muted fs-12">unique ranked borrowers</span>
                 <span
                   className={`chip chip--neutral chip--compact stable-status-chip ${pageUpdating ? '' : 'is-idle'}`}
@@ -532,7 +533,7 @@ export default function SegmentIntelligence() {
                 {truncatedAt ? 'Top ' : ''}
                 {filtered.length} ranked borrowers
                 {totalMatching !== null && totalMatching !== filtered.length && (
-                  <> of {totalMatching.toLocaleString()} total matching filters</>
+                  <> of {formatCount(totalMatching)} total matching filters</>
                 )}
               </>
             )}{' '}

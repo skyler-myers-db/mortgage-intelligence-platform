@@ -1,6 +1,7 @@
 import type { DrawerSource } from '../components/AppContext';
 import type { SegmentSummary } from '../types';
 import { SEGMENT_GATE_COPY } from './segmentEvidenceSpecs';
+import { formatCount } from './formatters';
 
 export function segmentEvidenceSource(
   segment: Pick<
@@ -28,7 +29,7 @@ export function segmentEvidenceSource(
           },
         ]
       : [
-          { label: 'Members', source: `count['${segment.code}']`, value: segment.count.toLocaleString() },
+          { label: 'Members', source: `count['${segment.code}']`, value: formatCount(segment.count) },
           { label: 'Average score', source: 'avg_score', value: String(segment.avg_score) },
         ],
   };

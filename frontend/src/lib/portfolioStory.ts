@@ -1,5 +1,6 @@
 import type { PortfolioPreview } from '../types';
 import { HIGH_OPPORTUNITY_KPI_LABEL } from './opportunityScore';
+import { formatCount, formatFixed } from './formatters';
 
 /**
  * The briefing line of Home's answer band (components/mortgage/
@@ -55,7 +56,7 @@ const EMPTY: PortfolioStory = {
 };
 
 function intToken(n: number): string {
-  return Math.round(n).toLocaleString();
+  return formatCount(n);
 }
 
 /**
@@ -91,7 +92,7 @@ export function buildPortfolioStory(preview: PortfolioPreview | null | undefined
   // cards don't show. Grounded in marketable + refi-economics count, verified against the
   // computed ratio.
   const pct = (highIntent / marketable) * 100;
-  const pctToken = `${pct.toFixed(pct < 10 ? 1 : 0)}%`;
+  const pctToken = `${formatFixed(pct, pct < 10 ? 1 : 0)}%`;
 
   // "Addressable", not "marketable": Home loads the preview with
   // `marketing_eligibility: 'Any'` (routes/home.tsx), so this count is the

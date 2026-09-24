@@ -29,6 +29,7 @@ import type {
   EquitySpreadPointsResponse,
   EquitySpreadViewport,
 } from '../types';
+import { formatCompact } from '../lib/formatters';
 import { LoadState } from './analytics.charts';
 import './analytics.scatter.css';
 import {
@@ -36,7 +37,6 @@ import {
   binCellRect,
   binDensityAlpha,
   binZoomViewport,
-  fmt,
   formatAxisTick,
   makeTicks,
   overviewScatterLayout,
@@ -294,8 +294,8 @@ export function EquitySpreadBinsView({
                   '--bin-alpha': binDensityAlpha(bin.borrower_count, maxCount),
                 } as CSSProperties}
                 onClick={() => onZoom(binZoomViewport(bin, overview))}
-                aria-label={`${fmt(bin.borrower_count)} borrowers near ${bin.equity_bin_pct}% equity and ${bin.spread_bin_bps} bps spread, mean score ${bin.mean_opportunity_score}. Zoom in to load real borrowers.`}
-                title={`${fmt(bin.borrower_count)} borrowers · mean score ${bin.mean_opportunity_score} · ${fmt(bin.in_the_money_borrowers)} in the money`}
+                aria-label={`${formatCompact(bin.borrower_count)} borrowers near ${bin.equity_bin_pct}% equity and ${bin.spread_bin_bps} bps spread, mean score ${bin.mean_opportunity_score}. Zoom in to load real borrowers.`}
+                title={`${formatCompact(bin.borrower_count)} borrowers · mean score ${bin.mean_opportunity_score} · ${formatCompact(bin.in_the_money_borrowers)} in the money`}
                 data-scatter-marker
                 data-scatter-key={markerKey}
                 tabIndex={markerKey === resolvedActiveMarkerKey ? 0 : -1}
@@ -307,7 +307,7 @@ export function EquitySpreadBinsView({
       }
       meta={
         <p className="analytics-scatter-meta muted fs-12" data-testid="scatter-meta">
-          {fmt(overview.total_borrowers)} borrowers, binned server-side. Select a cell to load the real
+          {formatCompact(overview.total_borrowers)} borrowers, binned server-side. Select a cell to load the real
           borrowers inside it.
         </p>
       }
@@ -335,11 +335,11 @@ export function EquitySpreadPointsView({ payload }: { payload: EquitySpreadPoint
     : coordinateGroups[0]?.key ?? null;
   const meta = (
     <p className="analytics-scatter-meta muted fs-12" data-testid="scatter-meta">
-      Plotting {fmt(plotted.length)} of {fmt(payload.showing)} returned borrowers
-      {' '}({fmt(payload.total_matching)} total matching this window)
-      {payload.truncated ? ` (server cap ${fmt(payload.point_cap)})` : ''}
+      Plotting {formatCompact(plotted.length)} of {formatCompact(payload.showing)} returned borrowers
+      {' '}({formatCompact(payload.total_matching)} total matching this window)
+      {payload.truncated ? ` (server cap ${formatCompact(payload.point_cap)})` : ''}
       {plotted.length < payload.points.length
-        ? `; the plotted points are the top ${fmt(plotted.length)} by opportunity score across ${fmt(coordinateGroups.length)} coordinate markers`
+        ? `; the plotted points are the top ${formatCompact(plotted.length)} by opportunity score across ${formatCompact(coordinateGroups.length)} coordinate markers`
         : ''}
       . Single points open Borrower 360; numbered clusters show the exact coordinate population and the ranked borrower links returned under the server cap.
     </p>

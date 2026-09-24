@@ -4,6 +4,7 @@ import { Link, Navigate, useLocation, useParams } from 'react-router';
 import { api, ApiError } from '../lib/api';
 import type { Borrower360 as Borrower360Type } from '../types';
 import { currency, rangeLabel, ratePct, ratePctFromFraction, signedBpsLabel } from '../lib/formatters';
+import { formatDateTimeShort } from '../lib/time';
 import { PageShell } from '../components/layout/PageShell';
 import { TriggerTimeline } from '../components/mortgage/TriggerTimeline';
 import { BorrowerStoryCard } from '../components/mortgage/BorrowerStoryCard';
@@ -56,18 +57,6 @@ function outreachVariant(status?: string | null): 'success' | 'warning' | 'neutr
   if (status === 'sent' || status === 'replied' || status === 'actioned') return 'success';
   if (status === 'queued' || status === 'bounced') return 'warning';
   return 'neutral';
-}
-
-function formatDateTimeShort(value?: string | null): string {
-  if (!value) return '—';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
 }
 
 export default function Borrower360() {

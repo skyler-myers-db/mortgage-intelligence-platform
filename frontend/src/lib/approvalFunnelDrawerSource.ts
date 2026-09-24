@@ -2,6 +2,7 @@ import type { DrawerSource } from '../components/AppContext';
 import { DRAWER_SOURCES, enrichAsset } from './drawerSources';
 import { HIGH_OPPORTUNITY_KPI_LABEL } from './opportunityScore';
 import { ADDRESSABLE_POPULATION_KPI_LABEL } from './populationLabels';
+import { formatCount } from './formatters';
 
 /**
  * Display copy for a funnel stage. The two UC stages carry pinned frontend
@@ -26,7 +27,7 @@ export function approvalFunnelStageDrawer(stage: {
   const liveCount = {
     label: `${displayLabel} (live)`,
     source: stage.source,
-    value: stage.borrower_count.toLocaleString(),
+    value: formatCount(stage.borrower_count),
   };
   if (stage.stage === 'population' || stage.stage === 'high_opportunity') {
     const base = DRAWER_SOURCES.portfolioHeadlineView;

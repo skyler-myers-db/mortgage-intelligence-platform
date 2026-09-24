@@ -12,6 +12,7 @@ import { Chip } from '../Primitives';
 import { genieStatePrompt } from '../../lib/genieContext';
 import { GenieAskAbout } from './GenieAskAbout';
 import { claimDrillFocus, drillExitOriginatedInMap } from './USChoroplethMap.a11y';
+import { formatCount } from '../../lib/formatters';
 
 export type MapView = 'map' | 'table';
 
@@ -112,7 +113,7 @@ export function USChoroplethMapHeader({
         <Chip variant="neutral" icon="pin">
           {!drilled
             ? coverageZipCount
-              ? `${coverageZipCount.toLocaleString()} ZIPs${drillHint ? ' · click a state to drill' : ''}`
+              ? `${formatCount(coverageZipCount)} ZIPs${drillHint ? ' · click a state to drill' : ''}`
               : 'Loading coverage…'
             : `ZIPs in ${drillStateName || 'state'}`}
         </Chip>
@@ -121,7 +122,7 @@ export function USChoroplethMapHeader({
             usable ZIP for these borrowers. Say it where the gap appears. */}
         {drilled && zipUnassigned > 0 && (
           <Chip variant="neutral" icon="db">
-            {zipUnassigned.toLocaleString()} borrowers without ZIP assignment
+            {formatCount(zipUnassigned)} borrowers without ZIP assignment
           </Chip>
         )}
         {/* S9 overlay toggle — two .filter-style buttons in the prototype's

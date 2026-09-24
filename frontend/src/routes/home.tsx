@@ -16,7 +16,9 @@ import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { useApp } from '../components/AppContext';
 import { useOptionalHealth } from '../components/HealthProvider';
 import { EntradaWordmark } from '../components/brand/Entrada';
-import { formatRefreshed } from '../lib/formatRefreshed';
+import { signedPct } from '../lib/formatters';
+import { parseBackendTimestamp } from '../lib/time';
+import { Timestamp } from '../components/ui/Timestamp';
 import type { HomeSummary, KpiTrend, PortfolioPreview } from '../types';
 import { HIGH_OPPORTUNITY_KPI_LABEL } from '../lib/opportunityScore';
 import { ApprovalQueueBanner } from './home.approval-banner';
@@ -41,8 +43,7 @@ export function requestHomeSummary(signal?: AbortSignal) {
 function formatDelta(trend: KpiTrend | undefined): string | undefined {
   const pct = trend?.delta_pct;
   if (pct === null || pct === undefined) return undefined;
-  const sign = pct > 0 ? '+' : '';
-  return `${sign}${pct.toFixed(1)}% ${trend?.comparison_label ?? 'vs prior snapshot'}`;
+  return `${signedPct(pct)} ${trend?.comparison_label ?? 'vs prior snapshot'}`;
 }
 
 export function HomeDayZeroStatus({ canAccessAdmin }: { canAccessAdmin: boolean }) {
@@ -136,18 +137,15 @@ export default function Home() {
       wideMap
       heroRight={
         <>
-          {(() => {
-            // R5-19: render viewer-local display text + ISO-UTC title so
-            // two operators in different timezones can disambiguate the
-            // same screenshot on hover.
-            const refreshed = formatRefreshed(preview?.data_refreshed_at);
-            if (!refreshed) return null;
-            return (
-              <Chip variant="neutral" icon="db" title={refreshed.iso}>
-                {refreshed.display}
-              </Chip>
-            );
-          })()}
+          {/* Freshness reads as relative age ("Refreshed 3 hours ago"); the
+              <time> carries the instant and an absolute-UTC title, so two
+              operators in different timezones can still disambiguate a
+              screenshot on hover (R5-19; 2026-09-21 audit responsive-07). */}
+          {parseBackendTimestamp(preview?.data_refreshed_at) && (
+            <Chip variant="neutral" icon="db">
+              Refreshed <Timestamp value={preview?.data_refreshed_at} />
+            </Chip>
+          )}
           {/* Exactly one primary action on Home (2026-09-21 audit flow-05):
               the ranked queue the answer band previews. Building a portfolio
               comes after reviewing leads, so it moved to the side panel's

@@ -8,6 +8,9 @@
  * (the fixture spec checks the same sentence against the same numbers).
  */
 import type { RateWindowResponse } from '../types';
+import { roundTo } from '../lib/fixedPrecision';
+import { ratePct } from '../lib/formatters';
+import { DATE_UNKNOWN, formatMonthYear as formatMonthYearLabel } from '../lib/time';
 import { categoricalTickIndexes } from './analytics.lib';
 
 export const RATE_WINDOW_TITLE = 'Why now: the market rate against the book';
@@ -38,7 +41,7 @@ export function niceTicks(min: number, max: number, count = 5): number[] {
   const start = Math.floor(lo / step + 1e-9) * step;
   const end = Math.ceil(hi / step - 1e-9) * step;
   const steps = Math.round((end - start) / step);
-  return Array.from({ length: steps + 1 }, (_, idx) => Number((start + idx * step).toFixed(decimals)));
+  return Array.from({ length: steps + 1 }, (_, idx) => roundTo(start + idx * step, decimals));
 }
 
 /**
@@ -49,7 +52,7 @@ export function niceTicks(min: number, max: number, count = 5): number[] {
  * value is snapped to 1e-6 bps before the tie test.
  */
 export function spreadBps(medianPct: number, marketPct: number): number {
-  const raw = Number(((medianPct - marketPct) * 100).toFixed(6));
+  const raw = roundTo((medianPct - marketPct) * 100, 6);
   const floor = Math.floor(raw);
   if (raw - floor === 0.5) return floor % 2 === 0 ? floor : floor + 1;
   return Math.round(raw);
@@ -63,16 +66,15 @@ export function spreadSentence(bps: number): string {
     : `The 30-year is ${magnitude} bps above the book's median note rate.`;
 }
 
+/** The product's one rate precision (lib/formatters `ratePct`): "6.22%". */
 export function formatRatePct(value: number): string {
-  return `${value.toFixed(2)}%`;
+  return ratePct(value);
 }
 
 /** "Jan 2021" for a YYYY-MM-DD week label on the shared x-axis. */
 export function formatMonthYear(isoDate: string): string {
-  const [year, month, day] = isoDate.split('-').map((part) => Number(part));
-  if (!year || !month || !day) return isoDate;
-  return new Intl.DateTimeFormat('en-US', { month: 'short', year: 'numeric', timeZone: 'UTC' })
-    .format(new Date(Date.UTC(year, month - 1, day)));
+  const label = formatMonthYearLabel(isoDate);
+  return label === DATE_UNKNOWN ? isoDate : label;
 }
 
 export interface RateWindowPoint {

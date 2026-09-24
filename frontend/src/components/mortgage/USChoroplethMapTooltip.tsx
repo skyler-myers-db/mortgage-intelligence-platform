@@ -1,5 +1,6 @@
 import { createPortal } from 'react-dom';
 import type { HoverState } from './USChoroplethMap.utils';
+import { formatCount } from '../../lib/formatters';
 
 /**
  * Floating map hover card. BEM block: `map-tip`.
@@ -41,7 +42,7 @@ export function USChoroplethMapTooltip({ hover, activeSegNames }: USChoroplethMa
         <div className="map-tip__kpi">
           <div className="map-tip__kpi-label">Marketable borrowers</div>
           <div className="map-tip__kpi-value">
-            {hover.count !== null ? hover.count.toLocaleString() : '—'}
+            {hover.count !== null ? formatCount(hover.count) : '—'}
           </div>
         </div>
         <div className="map-tip__kpi">
@@ -71,7 +72,7 @@ export function USChoroplethMapTooltip({ hover, activeSegNames }: USChoroplethMa
         <div className="map-tip__row map-tip__row--compact map-tip__row--muted">
           <span>Contactable</span>
           <span className="v num map-tip__value--small">
-            {hover.contactable.toLocaleString()} of {hover.count.toLocaleString()}
+            {formatCount(hover.contactable)} of {formatCount(hover.count)}
           </span>
         </div>
       )}
@@ -91,7 +92,7 @@ export function USChoroplethMapTooltip({ hover, activeSegNames }: USChoroplethMa
         <div className="map-tip__row map-tip__row--compact map-tip__row--muted">
           <span>ZIP coverage</span>
           <span className="v map-tip__value--small">
-            {hover.zipUnassigned.toLocaleString()} borrowers without ZIP assignment
+            {formatCount(hover.zipUnassigned)} borrowers without ZIP assignment
           </span>
         </div>
       )}
@@ -100,26 +101,26 @@ export function USChoroplethMapTooltip({ hover, activeSegNames }: USChoroplethMa
           <div className="map-tip__row map-tip__row--compact">
             <span>Leads</span>
             <span className="v num map-tip__value--small">
-              {hover.overlay.leadCount !== null ? hover.overlay.leadCount.toLocaleString() : '—'}
+              {hover.overlay.leadCount !== null ? formatCount(hover.overlay.leadCount) : '—'}
             </span>
           </div>
           <div className="map-tip__row map-tip__row--compact">
             <span>Assigned</span>
             <span className="v num map-tip__value--small">
-              {hover.overlay.assignedCount !== null ? hover.overlay.assignedCount.toLocaleString() : '—'}
+              {hover.overlay.assignedCount !== null ? formatCount(hover.overlay.assignedCount) : '—'}
             </span>
           </div>
           <div className="map-tip__row map-tip__row--compact">
             <span>Unattended</span>
             <span className="v num map-tip__value--small">
-              {hover.overlay.unattendedCount !== null ? hover.overlay.unattendedCount.toLocaleString() : '—'}
+              {hover.overlay.unattendedCount !== null ? formatCount(hover.overlay.unattendedCount) : '—'}
             </span>
           </div>
           <div className="map-tip__row map-tip__row--compact">
             <span>LO coverage</span>
             <span className="v num map-tip__value--small">
               {hover.overlay.coveringOfficerCount !== null
-                ? hover.overlay.coveringOfficerCount.toLocaleString()
+                ? formatCount(hover.overlay.coveringOfficerCount)
                 : '—'}
             </span>
           </div>
