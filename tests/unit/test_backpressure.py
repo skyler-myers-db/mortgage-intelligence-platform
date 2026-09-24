@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 from backend.config.settings import settings
 from backend.main import _backpressure_controller, app
 from backend.services import health_probes
-from backend.services.backpressure import BackpressureController
+from backend.services.backpressure import BackpressureController, DependencySlot
 
 
 def test_backpressure_controller_rate_limits_by_actor_and_scope() -> None:
@@ -171,3 +171,63 @@ def test_backpressure_middleware_is_opt_in_under_pytest(monkeypatch) -> None:
 
     assert client.get("/api/health", headers=headers).status_code == 200
     assert client.get("/api/health", headers=headers).status_code == 200
+
+
+# --- 2026-09-21 audit genie-01: the completion job's poll and slot ---------
+
+
+@pytest.mark.parametrize("path", ["/api/genie/message/status", "/api/v1/genie/message/status"])
+def test_the_completion_job_poll_is_a_lakebase_read_outside_the_genie_budget(path: str) -> None:
+    budget = BackpressureController().classify("POST", path)
+
+    assert budget is not None
+    assert (budget.scope, budget.dependency) == ("genie-job", "lakebase")
+    assert budget.requests_per_minute == settings.mip_rate_limit_default_per_minute
+
+
+def test_forty_completion_job_polls_a_minute_never_429() -> None:
+    now = {"t": 0.0}
+    controller = BackpressureController(now=lambda: now["t"])
+    budget = controller.classify("POST", "/api/v1/genie/message/status")
+    assert budget is not None
+
+    for poll in range(40):
+        now["t"] = poll * 1.5
+        assert controller.check_rate("lo@example.com", budget) is None
+
+
+@pytest.mark.parametrize("path", ["/api/genie/export-receipt", "/api/v1/genie/export-receipt"])
+def test_the_genie_export_receipt_is_a_lakebase_mutation(path: str) -> None:
+    budget = BackpressureController().classify("POST", path)
+
+    assert budget is not None
+    assert (budget.scope, budget.dependency) == ("mutation", "lakebase")
+    assert budget.requests_per_minute == settings.mip_rate_limit_mutation_per_minute
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/api/v1/genie/message/complete", "/api/v1/genie/message/submit", "/api/v1/genie/actions"],
+)
+def test_genie_answer_path_calls_keep_the_genie_budget_and_slot(path: str) -> None:
+    budget = BackpressureController().classify("POST", path)
+
+    assert budget is not None
+    assert (budget.scope, budget.dependency) == ("genie", "genie")
+
+
+def test_an_adopted_slot_is_released_once_by_its_adopter_only() -> None:
+    controller = BackpressureController(genie_concurrency=1)
+    acquired, semaphore = controller.acquire_dependency("genie")
+    assert acquired is True and semaphore is not None
+    slot = DependencySlot(semaphore, "genie")
+
+    assert slot.adopt() is slot
+    assert slot.adopted is True
+    assert controller.acquire_dependency("genie")[0] is False
+    assert slot.release() is True
+    assert slot.release() is False  # a second release never over-frees
+    first, token = controller.acquire_dependency("genie")
+    second, _ = controller.acquire_dependency("genie")
+    assert (first, second) == (True, False)
+    token.release()
