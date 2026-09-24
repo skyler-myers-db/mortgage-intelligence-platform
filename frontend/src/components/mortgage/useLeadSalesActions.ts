@@ -12,6 +12,7 @@ import type { QueryClient } from '@tanstack/react-query';
 import type { CallDisposition, LeadSummary, SalesTeamMember } from '../../types';
 import { api } from '../../lib/api';
 import { invalidateOperationalQueries } from '../../lib/queryKeys';
+import { distributionStrategy } from '../../lib/mutations/sales';
 import { dispositionLabel } from './LeadTable.logic';
 
 /** One assignment row as returned by `assignLead` / `distributeLeads`. */
@@ -139,7 +140,7 @@ export function useLeadSalesActions({
             assigned_count: 1,
             assignments: [(await api.assignLead(borrowerIds[0], loEmails[0])).assignment],
           }
-        : await api.distributeLeads(borrowerIds, loEmails, mode === 'round-robin' ? 'round_robin' : 'score_balanced');
+        : await api.distributeLeads(borrowerIds, loEmails, distributionStrategy(loEmails));
       applyAssignmentOverrides(result.assignments);
       void invalidateOperationalQueries(queryClient);
       setSalesToast(`${result.assigned_count} ${result.assigned_count === 1 ? 'lead' : 'leads'} assigned`);
