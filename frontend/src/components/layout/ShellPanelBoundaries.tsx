@@ -8,6 +8,7 @@ import { useCallback, useRef, type ReactNode } from 'react';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { useApp } from '../AppContext';
 import { ErrorBoundary } from '../ErrorBoundary';
+import { useUnobservedQueryReset } from '../ErrorBoundaryRoute';
 import { Icon } from '../Icon';
 import { useGeniePanelDismissal } from '../mortgage/useGeniePanelDismissal';
 
@@ -25,6 +26,18 @@ import { useGeniePanelDismissal } from '../mortgage/useGeniePanelDismissal';
  * hides the panel; it never clears the error. Try again is always the user's
  * click and only re-renders the panel's children.
  *
+ * A panel that threw on a malformed payload would re-throw on the same cached
+ * query when it re-mounts (the evidence drawer reads the lineage manifest
+ * with `staleTime: Infinity`; any cached query hands its data to the first
+ * render before a refetch starts). So the Console's and the drawer's Try
+ * again, and the drawer frame's Close, first drop every cached query no
+ * mounted component observes (`useUnobservedQueryReset`, the route
+ * boundary's reset): the crashed panel is unmounted, so its queries are among
+ * them. Removing a query never fetches it; the panel reads again only when
+ * the user's Try again or next open re-mounts it. The Genie chat reads no
+ * query (its transcript lives in lib/genieConversationStore), so its Try
+ * again only re-mounts it.
+ *
  * This module is in the initial chunk on purpose: it must render when the
  * panel's lazy chunk (Console, GenieChat) is the thing that failed.
  */
@@ -35,11 +48,13 @@ interface BoundaryProps {
 
 /** The Console rail. Keeps `#workspace-console` so the skip link and the exit animation still find it. */
 export function ConsoleBoundary({ children }: BoundaryProps) {
+  const resetUnobservedQueries = useUnobservedQueryReset();
   return (
     <ErrorBoundary
       boundary="console"
       variant="panel"
       routeLabel="The Console"
+      onRetry={resetUnobservedQueries}
       frame={(surface) => <ConsoleFrame>{surface}</ConsoleFrame>}
     >
       {children}
@@ -77,16 +92,19 @@ function ConsoleFrame({ children }: BoundaryProps) {
 }
 
 /**
- * The evidence drawer. Closing it resets the boundary (resetKey), so the
- * next open renders the drawer afresh instead of the old surface.
+ * The evidence drawer. Closing it resets the boundary (resetKey) after the
+ * frame's Close has dropped the unobserved cached queries, so the next open
+ * renders the drawer afresh and re-reads its payload instead of re-throwing.
  */
 export function DrawerBoundary({ children }: BoundaryProps) {
   const { drawer } = useApp();
+  const resetUnobservedQueries = useUnobservedQueryReset();
   return (
     <ErrorBoundary
       boundary="drawer"
       variant="panel"
       routeLabel="The evidence drawer"
+      onRetry={resetUnobservedQueries}
       resetKey={drawer ? 'open' : 'closed'}
       frame={(surface) => <DrawerFrame>{surface}</DrawerFrame>}
     >
@@ -100,7 +118,14 @@ function DrawerFrame({ children }: BoundaryProps) {
   const open = drawer !== null;
   const drawerRef = useRef<HTMLElement | null>(null);
   const closeRef = useRef<HTMLButtonElement | null>(null);
-  const close = useCallback(() => setDrawer(null), [setDrawer]);
+  const resetUnobservedQueries = useUnobservedQueryReset();
+  // This frame renders only in the error state, so every close (Close,
+  // Escape, the scrim) drops the crashed drawer's cached payload before the
+  // resetKey re-mounts it closed; its next open reads again.
+  const close = useCallback(() => {
+    resetUnobservedQueries();
+    setDrawer(null);
+  }, [resetUnobservedQueries, setDrawer]);
   // Modal like the drawer it stands in for: focus starts on Close, Escape
   // closes, and focus returns to the chip that opened it.
   useFocusTrap({ open, containerRef: drawerRef, initialFocusRef: closeRef, onClose: close });

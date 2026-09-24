@@ -18,33 +18,86 @@ import { AppShell } from './AppShell';
  * GenieDock, the three ShellPanelBoundaries) is the shipped shell. Before the
  * panel boundaries, any of these throws unmounted the whole shell, and the
  * Genie chat with its in-flight turn.
+ *
+ * The Console and drawer probes can also crash the way a real panel does: on
+ * a malformed payload read through a `staleTime: Infinity` query (the real
+ * drawer's lineage manifest read), which stays cached after the crash. The
+ * first read answers `{families: null}`, every later read a valid payload.
  */
+
+/** The probes' payload: `families` is a required array, so `null` is a payload the contract cannot produce. */
+interface ProbePayload {
+  families: string[];
+}
 
 const probes = vi.hoisted(() => ({
   consoleThrows: false,
   drawerThrows: false,
   genieMounts: 0,
   genieUnmounts: 0,
-}));
-
-vi.mock('./Console', () => ({
-  Console: function ConsoleProbe(): ReactNode {
-    if (probes.consoleThrows) throw new RangeError('Console crashed on borrower B-0TESTBORROWER');
-    return (
-      <aside id="workspace-console" className="tweaks is-open" role="complementary" aria-label="Workspace console">
-        <div data-testid="console-probe" />
-      </aside>
-    );
+  /** Read the probe payload query (enabled while the panel is open). */
+  consoleReadsPayload: false,
+  drawerReadsPayload: false,
+  consoleFetches: 0,
+  drawerFetches: 0,
+  /** First read malformed, later reads valid: what a transient bad payload looks like. */
+  payload(fetchNumber: number): unknown {
+    return fetchNumber === 1 ? { families: null } : { families: ['lead_scoring'] };
   },
 }));
 
+vi.mock('./Console', async () => {
+  const { useApp: useAppContext } = await import('../AppContext');
+  const { useQuery } = await import('@tanstack/react-query');
+  return {
+    Console: function ConsoleProbe(): ReactNode {
+      const { consoleOpen } = useAppContext();
+      const payload = useQuery({
+        queryKey: ['panel-probe', 'console'],
+        queryFn: async () => {
+          probes.consoleFetches += 1;
+          return probes.payload(probes.consoleFetches) as ProbePayload;
+        },
+        enabled: probes.consoleReadsPayload && consoleOpen,
+        staleTime: Infinity,
+        retry: false,
+      });
+      if (probes.consoleThrows) throw new RangeError('Console crashed on borrower B-0TESTBORROWER');
+      return (
+        <aside id="workspace-console" className="tweaks is-open" role="complementary" aria-label="Workspace console">
+          <div data-testid="console-probe" data-families={payload.data?.families.length ?? ''} />
+        </aside>
+      );
+    },
+  };
+});
+
 vi.mock('../mortgage/EvidenceDrawer', async () => {
   const { useApp: useAppContext } = await import('../AppContext');
+  const { useQuery } = await import('@tanstack/react-query');
   return {
     EvidenceDrawer: function EvidenceDrawerProbe(): ReactNode {
       const { drawer } = useAppContext();
+      // Like the real drawer's lineage manifest read: always mounted,
+      // enabled only while open, never stale.
+      const payload = useQuery({
+        queryKey: ['panel-probe', 'drawer'],
+        queryFn: async () => {
+          probes.drawerFetches += 1;
+          return probes.payload(probes.drawerFetches) as ProbePayload;
+        },
+        enabled: probes.drawerReadsPayload && drawer !== null,
+        staleTime: Infinity,
+        retry: false,
+      });
       if (drawer && probes.drawerThrows) throw new TypeError("Cannot read properties of null (reading 'find')");
-      return <aside className={`drawer ${drawer ? 'is-open' : ''}`} data-testid="drawer-probe" />;
+      return (
+        <aside
+          className={`drawer ${drawer ? 'is-open' : ''}`}
+          data-testid="drawer-probe"
+          data-families={payload.data?.families.length ?? ''}
+        />
+      );
     },
   };
 });
@@ -81,6 +134,10 @@ describe('AppShell panel boundaries', () => {
     probes.drawerThrows = false;
     probes.genieMounts = 0;
     probes.genieUnmounts = 0;
+    probes.consoleReadsPayload = false;
+    probes.drawerReadsPayload = false;
+    probes.consoleFetches = 0;
+    probes.drawerFetches = 0;
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     vi.stubGlobal('fetch', vi.fn(async () => new Response('{"detail":"not found"}', { status: 404 })));
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -199,5 +256,69 @@ describe('AppShell panel boundaries', () => {
     await update(() => app.setDrawer({ title: 'Lineage manifest', lineageFamily: 'lead_scoring' }));
     expect(surfaces()).toHaveLength(0);
     expect(container.querySelector('[data-testid="drawer-probe"]')?.classList.contains('is-open')).toBe(true);
+  });
+
+  const LINEAGE_SOURCE = { title: 'Lineage manifest', lineageFamily: 'lead_scoring' } as const;
+  const drawerProbe = () => container.querySelector<HTMLElement>('[data-testid="drawer-probe"]');
+  const consoleProbe = () => container.querySelector<HTMLElement>('[data-testid="console-probe"]');
+
+  async function clickTryAgain(): Promise<void> {
+    const [surface] = surfaces();
+    const button = Array.from(surface?.querySelectorAll('button') ?? []).find((b) => b.textContent === 'Try again');
+    expect(button, 'the render surface offers Try again').toBeDefined();
+    await update(() => button?.click());
+  }
+
+  async function crashTheDrawerOnItsPayload(): Promise<void> {
+    probes.drawerReadsPayload = true;
+    await mount();
+    await update(() => app.setDrawer(LINEAGE_SOURCE));
+    await vi.waitFor(() => expect(surfaces()).toHaveLength(1));
+    expect(surfaces()[0].getAttribute('data-error-boundary')).toBe('drawer');
+    expect(probes.drawerFetches).toBe(1);
+  }
+
+  describe('recovery from a payload crash (a staleTime: Infinity query that stays cached)', () => {
+    it("the drawer's Try again re-reads the payload and renders the healthy drawer", async () => {
+      await crashTheDrawerOnItsPayload();
+
+      await clickTryAgain();
+      await vi.waitFor(() => expect(drawerProbe()?.dataset.families).toBe('1'));
+      expect(surfaces()).toHaveLength(0);
+      expect(drawerProbe()?.classList.contains('is-open')).toBe(true);
+      expect(probes.drawerFetches).toBe(2);
+    });
+
+    it("closing the crashed drawer's frame lets the next open re-read the payload", async () => {
+      await crashTheDrawerOnItsPayload();
+
+      const frame = container.querySelector('aside.drawer.is-open[role="dialog"]');
+      await update(() => frame?.querySelector<HTMLButtonElement>('button[aria-label="Close drawer"]')?.click());
+      expect(app.drawer).toBeNull();
+      expect(surfaces()).toHaveLength(0);
+      // Removing the cached payload never fetches: nothing is read until the next open.
+      expect(probes.drawerFetches).toBe(1);
+
+      await update(() => app.setDrawer(LINEAGE_SOURCE));
+      await vi.waitFor(() => expect(drawerProbe()?.dataset.families).toBe('1'));
+      expect(surfaces()).toHaveLength(0);
+      expect(drawerProbe()?.classList.contains('is-open')).toBe(true);
+      expect(probes.drawerFetches).toBe(2);
+    });
+
+    it("the Console's Try again re-reads the payload and renders the healthy Console", async () => {
+      probes.consoleReadsPayload = true;
+      await mount();
+      await update(() => app.setConsoleOpen(true));
+      await vi.waitFor(() => expect(surfaces()).toHaveLength(1));
+      expect(surfaces()[0].getAttribute('data-error-boundary')).toBe('console');
+      expect(probes.consoleFetches).toBe(1);
+
+      await clickTryAgain();
+      await vi.waitFor(() => expect(consoleProbe()?.dataset.families).toBe('1'));
+      expect(surfaces()).toHaveLength(0);
+      expect(container.querySelectorAll('aside#workspace-console')).toHaveLength(1);
+      expect(probes.consoleFetches).toBe(2);
+    });
   });
 });
