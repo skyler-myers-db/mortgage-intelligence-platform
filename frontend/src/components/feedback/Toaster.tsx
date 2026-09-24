@@ -205,7 +205,24 @@ export function Toaster() {
     const next = event.relatedTarget;
     if (!(next instanceof Node) || !event.currentTarget.contains(next)) setFocusWithin(false);
   };
+  // Hover is tracked with React's pointer enter/leave, but a card removed from
+  // under a resting pointer sends the region no pointerleave, so it would stay
+  // paused and every later toast would never auto-dismiss (wave 1c review).
+  // While hovered, re-derive it from where the pointer actually is.
+  useEffect(() => {
+    if (!hovered) return undefined;
+    const onPointerOver = (event: PointerEvent) => {
+      const region = regionRef.current;
+      setHovered(Boolean(region && event.target instanceof Node && region.contains(event.target)));
+    };
+    document.addEventListener('pointerover', onPointerOver, true);
+    return () => document.removeEventListener('pointerover', onPointerOver, true);
+  }, [hovered]);
+
   const dismiss = useCallback((id: number, clickDetail = 0) => {
+    // A pointer dismiss removes the card under the pointer: stop pausing now;
+    // if another toast sits under it, the next pointer move pauses again.
+    if (clickDetail > 0) setHovered(false);
     const region = regionRef.current;
     const card = region?.querySelector<HTMLElement>(`[data-toast-id="${id}"]`) ?? null;
     const active = document.activeElement;
@@ -241,7 +258,10 @@ export function Toaster() {
     const shown = new URLSearchParams(search).get(AUDIT_EVENT_ID_PARAM);
     if (!shown) return;
     for (const item of getToasts()) {
-      if (item.auditEventId === shown) dismiss(item.id);
+      if (item.auditEventId !== shown) continue;
+      // Its link was likely clicked with the mouse, which rests over the card.
+      setHovered(false);
+      dismiss(item.id);
     }
   }, [dismiss, pathname, search]);
 

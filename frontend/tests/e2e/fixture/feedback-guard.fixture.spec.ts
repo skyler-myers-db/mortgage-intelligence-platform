@@ -412,6 +412,57 @@ test.describe('toast region (states-07 slice 1)', () => {
     await expect(share).toBeFocused();
   });
 
+  // Wave 1c review (blocking): a card removed from under a resting pointer sends
+  // the region no pointerleave, so the hover pause stuck and every later
+  // confirmation stayed on screen for good.
+  test('a toast closed with the mouse does not leave later confirmations paused', async ({ app, page }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: { writeText: () => Promise.resolve() },
+      });
+    });
+    await app.gotoRoute('/portfolio-builder');
+    await expect(toastRegion(page)).toHaveCount(1);
+    const share = page.getByTestId('portfolio-copy-link');
+    await share.click();
+    const toast = toastRegion(page).locator('.toast');
+    await expect(toast).toContainText('Build link copied');
+    await toast.hover();
+    await expect(toastRegion(page)).toHaveAttribute('data-paused', 'true');
+    await toast.getByRole('button', { name: 'Dismiss notification' }).click();
+    await expect(toast).toHaveCount(0);
+    await page.mouse.move(200, 300, { steps: 5 });
+    await expect(toastRegion(page)).not.toHaveAttribute('data-paused');
+
+    // A later confirmation raised from the keyboard, with focus kept outside
+    // the region, goes on its own 8 s timer.
+    await share.focus();
+    await page.keyboard.press('Enter');
+    await expect(toast).toHaveCount(1);
+    await share.focus();
+    await expect(toast).toHaveCount(0, { timeout: 12_000 });
+  });
+
+  test('opening a toast\'s audit event with the mouse does not leave the region paused', async ({ app, mockApi, page }) => {
+    mockApi.register('POST', '/api/portfolio/create', () => portfolioCreated('Summit IL refi cohort'));
+    await app.gotoRoute('/portfolio-builder');
+    await expect(toastRegion(page)).toHaveCount(1);
+    await page.getByTestId('portfolio-save-build').click();
+    await page.getByTestId('portfolio-save-name').fill('Summit IL refi cohort');
+    await page.getByTestId('portfolio-save-confirm').click();
+    const toast = toastRegion(page).locator('.toast');
+    await expect(toast).toContainText('Build saved');
+    await toast.hover();
+    await expect(toastRegion(page)).toHaveAttribute('data-paused', 'true');
+    await toast.getByRole('link', { name: 'View audit event' }).click();
+    await expect(page).toHaveURL(new RegExp(`/admin-config\\?audit_event_id=${SAVE_AUDIT_ID}#audit$`));
+    await expect(toast).toHaveCount(0);
+    await page.mouse.move(200, 300, { steps: 5 });
+    await expect(toastRegion(page)).not.toHaveAttribute('data-paused');
+    await app.settle();
+  });
+
   test('closing a toast with the mouse hands focus back without scrolling the page', async ({ app, page }) => {
     await page.addInitScript(() => {
       Object.defineProperty(navigator, 'clipboard', {
