@@ -7,6 +7,7 @@ import {
 import {
   GENIE_CONVERSATION_RESET_EVENT,
   GENIE_CONVERSATION_STORAGE_KEY,
+  GENIE_IN_FLIGHT_TURN_KEY,
 } from './genieConversation';
 
 function storageStub() {
@@ -64,5 +65,15 @@ describe('actor-scoped browser state', () => {
     }
     expect(window.localStorage.getItem(GENIE_CONVERSATION_STORAGE_KEY)).toBeNull();
     expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears the in-flight Genie turn record, so a reload after an actor change resumes nothing', () => {
+    // The key is declared in the initial closure (genieConversation.ts), so
+    // this cleanup never has to import the lazy turn store.
+    expect(ACTOR_SCOPED_SESSION_STORAGE_KEYS).toContain(GENIE_IN_FLIGHT_TURN_KEY);
+    expect(GENIE_IN_FLIGHT_TURN_KEY).toBe('mip.genie.inFlightTurn');
+    window.sessionStorage.setItem(GENIE_IN_FLIGHT_TURN_KEY, '{"v":1,"phase":"polling"}');
+    clearActorScopedBrowserState();
+    expect(window.sessionStorage.getItem(GENIE_IN_FLIGHT_TURN_KEY)).toBeNull();
   });
 });

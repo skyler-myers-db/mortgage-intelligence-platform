@@ -1,5 +1,9 @@
 export const GENIE_CONVERSATION_STORAGE_KEY = 'mip.genie.conversationId';
 export const GENIE_CONVERSATION_RESET_EVENT = 'mip:genie-conversation-reset';
+/** sessionStorage key of the in-flight Genie turn record (lib/genieInFlightTurn).
+ *  Declared here, in the initial closure, so the actor-scoped cleanup can clear
+ *  it without importing the lazy store. */
+export const GENIE_IN_FLIGHT_TURN_KEY = 'mip.genie.inFlightTurn';
 
 export function readGenieConversationId(): string | null {
   if (typeof window === 'undefined') return null;
