@@ -147,6 +147,53 @@ test.describe('Console rail fits its own panel', () => {
     }
   }
 
+  // Below 1280px the Console is a full-width bottom sheet (max-height 50vh,
+  // 12-motion-and-viewport.css), and below 720px the Genie FAB shows, on a
+  // layer above the sheet. Geometry only, so one theme (audit responsive-01).
+  test('/ at 390x844: the Console bottom sheet keeps Light and Compact inside it, on screen, on top and working', async ({ app, page }) => {
+    const viewport = { width: 390, height: 844 };
+    await page.setViewportSize(viewport);
+    await app.setTheme('dark');
+    await app.gotoRoute('/');
+    // The topbar's Console toggle is hidden at phone width; the command
+    // palette's "Toggle Console" action is the way in.
+    const palette = await app.openCommandPalette();
+    await palette.getByRole('option', { name: /Toggle Console/ }).click();
+    const panel = page.getByRole('complementary', { name: 'Workspace console' });
+    await expect(panel.locator('.tweaks__body'), 'Console body must replace its Suspense fallback').toBeVisible();
+    await expect(palette).toBeHidden();
+
+    const overflow = await bodyOverflow(panel);
+    expect(overflow.scrollWidth, 'the sheet body must not scroll horizontally').toBeLessThanOrEqual(overflow.clientWidth);
+
+    const controls: Array<[string, string, string]> = [
+      ['Light', 'data-theme', 'light'],
+      ['Compact', 'data-density', 'compact'],
+    ];
+    for (const [name, attribute, value] of controls) {
+      const control = panel.getByRole('button', { name, exact: true });
+      await control.scrollIntoViewIfNeeded();
+      const sheet = await boxOf(panel);
+      const box = await boxOf(control);
+      expect(box.left, `${name} starts inside the sheet`).toBeGreaterThanOrEqual(sheet.left);
+      expect(box.right, `${name} ends inside the sheet`).toBeLessThanOrEqual(sheet.right);
+      expect(box.top, `${name} top inside the sheet`).toBeGreaterThanOrEqual(sheet.top);
+      expect(box.bottom, `${name} bottom inside the sheet`).toBeLessThanOrEqual(sheet.bottom);
+      expect(box.left, `${name} is on screen`).toBeGreaterThanOrEqual(0);
+      expect(box.right, `${name} is on screen`).toBeLessThanOrEqual(viewport.width);
+      expect(box.top, `${name} is on screen`).toBeGreaterThanOrEqual(0);
+      expect(box.bottom, `${name} is on screen`).toBeLessThanOrEqual(viewport.height);
+      const onTop = await control.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+        return hit !== null && element.contains(hit);
+      });
+      expect(onTop, `${name} is the topmost element at its centre (not under the Genie FAB)`).toBe(true);
+      await control.click();
+      await expect(page.locator('html')).toHaveAttribute(attribute, value);
+    }
+  });
+
   test('the Console labels stop restyling the embedded property-lookup form', async ({ app }) => {
     await app.gotoRoute('/');
     const panel = await app.openConsole();
