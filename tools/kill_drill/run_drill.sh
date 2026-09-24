@@ -47,8 +47,9 @@
 #     `tools/kill_drill/evidence/drill_<target>_<timestamp>.log`.
 #
 # Exit codes:
-#   0 -- drill ran end-to-end and the expected degraded signals appeared.
-#   1 -- the backend did NOT degrade (resilience regression -- real bug).
+#   0 -- drill ran end-to-end and the expected signals appeared (degraded
+#        for a failure; health ok + a resumed read for a warehouse stop).
+#   1 -- the expected signals did not appear (regression -- real bug).
 #   2 -- prerequisite missing (curl / jq / env).
 #   3 -- operator aborted.
 # ---------------------------------------------------------------------------
@@ -740,7 +741,11 @@ EOF
   local stop_rc=0
   real_infra_logged stop warehouse "$whid" --timeout "$REAL_INFRA_RECOVERY_TIMEOUT" || stop_rc=$?
   if (( stop_rc != 0 )); then
-    log "WARNING: real_infra stop warehouse returned non-zero; probing anyway, then forcing recovery."
+    # RUNNING and STOPPED both read "up" and a running warehouse answers the
+    # read too, so gates run against a warehouse that never stopped prove nothing.
+    log "FAIL: real_infra stop warehouse returned ${stop_rc}; the warehouse may never have stopped. Forcing recovery."
+    real_infra_logged start warehouse "$whid" --timeout "$REAL_INFRA_RECOVERY_TIMEOUT" || true
+    return 1
   fi
 
   log "A stop is not an outage: expecting health ok, then a read that resumes it..."

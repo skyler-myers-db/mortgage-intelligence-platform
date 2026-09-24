@@ -78,6 +78,37 @@ def test_warehouse_real_still_restarts_the_warehouse_when_the_health_gate_fails(
     assert 'real_infra_logged start warehouse "$whid"' in failure_branch
 
 
+@needs_shell_tools
+def test_warehouse_real_restarts_and_fails_when_the_stop_itself_failed(tmp_path: Path) -> None:
+    # RUNNING and STOPPED both read "up", and a running warehouse answers the
+    # resume read too, so gates run after a failed stop would pass against a
+    # warehouse that never stopped. The drill restarts it and fails instead.
+    calls = tmp_path / "calls.log"
+    healthy = '{"status": "ok", "dependencies": {"warehouse": "up"}}'
+    script = "\n".join(
+        [
+            "set -euo pipefail",
+            "TARGET=warehouse-real",
+            f'LOG="{tmp_path / "drill.log"}"',
+            "TS=test APP_URL=http://127.0.0.1:9 REAL_INFRA_RECOVERY_TIMEOUT=5 DATABRICKS_WAREHOUSE_ID=wh-drill",
+            f'CALLS="{calls}"',
+            _drill_function("log"),
+            f"probe_health() {{ echo '{healthy}'; }}",
+            'real_infra_logged() { echo "real_infra $1 $2" >> "$CALLS"; [[ "$1" == stop ]] && return 7; return 0; }',
+            'assert_stopped_warehouse_health() { echo "health gate" >> "$CALLS"; }',
+            'assert_stopped_warehouse_read_resumes() { echo "read gate" >> "$CALLS"; }',
+            _drill_function("drill_warehouse_real"),
+            "rc=0; drill_warehouse_real || rc=$?; exit $rc",
+        ]
+    )
+
+    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=60)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "FAIL: real_infra stop warehouse returned 7" in result.stdout
+    assert calls.read_text().splitlines() == ["real_infra stop warehouse", "real_infra start warehouse"]
+
+
 def test_the_degraded_warehouse_path_is_still_proved_by_warehouse_sim() -> None:
     body = _drill_function("drill_warehouse_sim")
 

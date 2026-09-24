@@ -338,8 +338,10 @@ Every real-infra invocation has to clear all of these gates:
    SDK call, stating the expected user-visible impact window.
 3. **Idempotent stop** — a warehouse already STOPPED / a Lakebase
    already `stopped=true` skips the stop API call (no double-stop).
-4. **Guaranteed restart** — on every failure path (an unexpected health
-   signal, a failed data-endpoint probe, operator interrupt), the recovery
+4. **Guaranteed restart** — on every failure path (a failed warehouse
+   stop, which fails the drill because a warehouse that never stopped
+   passes both stop gates, an unexpected health signal, a failed
+   data-endpoint probe, operator interrupt), the recovery
    `start` call runs before the drill exits. If that restart fails the
    operator gets a loud alert and a non-zero exit.
 5. **Never on cron** — the `kill-drill-real-infra` job is
