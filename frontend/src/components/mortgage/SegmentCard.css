@@ -95,6 +95,14 @@
 /* The meta row's first-snapshot status is one unbreakable token, so the
    evidence chip and the Ask Genie entry stay on its line at 1440. */
 .seg-card__delta-pending { white-space: nowrap; }
+/* The arrow sits half a step from its number instead of a monospace space
+   (a whole 7px character on Linux), which buys the meta row its slack. */
+.seg-card__delta {
+  display: inline-flex;
+  align-items: baseline;
+  gap: calc(var(--sp-1) / 2);
+  white-space: nowrap;
+}
 
 /* Gated card: the state chip takes `avg`'s place beside the suppressed
    count, and the reconcile row (no contactable gap to reconcile) names the

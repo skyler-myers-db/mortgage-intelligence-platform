@@ -539,6 +539,48 @@ test.describe('Segments filters live in the URL (flow-09)', () => {
   });
 });
 
+/**
+ * Linux Chromium rounds each Geist Mono advance to a whole pixel (6.6 -> 7px
+ * at fs-11) and draws the delta arrow from a wider fallback face, so a meta
+ * row that fits macOS by a few pixels wraps there and makes the card 28px
+ * taller (wave-2 fixture job: 281px against the 260 cap). The spec widens the
+ * mono text past Linux's rounding (+0.5px per glyph; the evidence chip sets
+ * its own letter-spacing, so it is named) and the delta by 4px for the arrow,
+ * then asks every row for one line with a margin left over.
+ */
+const LINUX_TEXT_EMULATION = `
+  .seg-card__meta, .seg-card__meta .evidence-chip { letter-spacing: 0.5px; }
+  .seg-card__meta > .up, .seg-card__meta > .down { padding-inline-start: 4px; }
+`;
+/** Spare width each meta row keeps under the emulation, for renderers wider still. */
+const META_ROW_MARGIN = 4;
+
+test('each meta row keeps one line, with a margin, when its text renders at Linux widths', async ({ app, page }) => {
+  await app.gotoRoute(ROUTE);
+  await page.addStyleTag({ content: LINUX_TEXT_EMULATION });
+  const rows = await page.locator('.seg-grid .seg-card__meta').evaluateAll((metas) =>
+    metas.map((meta) => {
+      const children = [...meta.children].map((child) => child.getBoundingClientRect());
+      const gap = parseFloat(getComputedStyle(meta).columnGap);
+      const needed = children.reduce((sum, box) => sum + box.width, 0) + gap * (children.length - 1);
+      return {
+        text: meta.textContent ?? '',
+        children: children.length,
+        spare: meta.clientWidth - needed,
+        oneLine: children.every((box) => Math.abs(box.top + box.height / 2 - (children[0].top + children[0].height / 2)) <= 1),
+      };
+    }),
+  );
+  expect(rows).toHaveLength(6);
+  for (const row of rows) {
+    expect(row.children, `"${row.text}" carries a delta, the evidence chip and Ask Genie`).toBe(3);
+    expect(row.oneLine, `"${row.text}" stays on one line`).toBe(true);
+    expect(row.spare, `"${row.text}" keeps ${META_ROW_MARGIN}px spare`).toBeGreaterThanOrEqual(META_ROW_MARGIN);
+  }
+  const heights = await page.locator('.seg-grid .seg-card').evaluateAll((cards) => cards.map((card) => card.getBoundingClientRect().height));
+  for (const height of heights) expect(height).toBeLessThanOrEqual(MAX_CARD_HEIGHT);
+});
+
 test.describe('Borrower 360 proof drawer (flow-09)', () => {
   test('the dossier has one control that opens the proof drawer, not two', async ({ app, page }) => {
     const borrowerId = PRIMARY_BORROWER.borrower_id;

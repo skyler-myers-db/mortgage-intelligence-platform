@@ -208,8 +208,10 @@ export function SegmentCard({ segment, selected, updating, onClick }: SegmentCar
             <span className="sr-only">first snapshot · deltas pending</span>
           </span>
         ) : (
-          <span className={segment.delta.startsWith('-') ? 'down' : 'up'}>
-            {segment.delta.startsWith('-') ? '▼' : '▲'} {segment.delta}
+          // The sign already says the direction, so the arrow is decoration.
+          <span className={`seg-card__delta ${segment.delta.startsWith('-') ? 'down' : 'up'}`}>
+            <span aria-hidden="true">{segment.delta.startsWith('-') ? '▼' : '▲'}</span>
+            {segment.delta}
           </span>
         )}
         <span className="seg-card__evidence">

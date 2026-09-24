@@ -527,10 +527,15 @@
 .seg-card__meta {
   display: flex;
   row-gap: var(--sp-1);
-  /* sp-2, not the prototype's sp-3 (design_files/index.html:529): the app
-     adds the evidence chip and the Ask Genie entry to this row, and at the
-     1440 design target they only fit on one line with the tighter gap. */
-  column-gap: var(--sp-2);
+  /* sp-1, not the prototype's sp-3 (design_files/index.html:529): the app
+     adds the evidence chip and the Ask Genie entry to this row, and it must
+     stay one line at the 1440 design target on every renderer. The chip's
+     margin-left: auto spends the spare width, so the gap is only the
+     minimum. With sp-2 the row fit macOS by 4px and wrapped on Linux, whose
+     Chromium rounds each Geist Mono advance to a whole pixel (6.6 -> 7px at
+     fs-11) and draws the delta arrow from a wider fallback face: +28px on
+     three of six cards (wave-2 fixture job). */
+  column-gap: var(--sp-1);
   margin-top: var(--sp-3);
   font-size: var(--fs-11); color: var(--text-3);
   font-family: var(--font-mono);
