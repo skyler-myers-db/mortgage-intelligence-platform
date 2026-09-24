@@ -99,6 +99,14 @@ jobs:
           else
             npm --prefix frontend install --no-audit --no-fund
           fi
+      - name: React Compiler coverage gate
+        # Audit runtime-03. A React Compiler bailout (a CompileError such as
+        # try/finally, a skip, or a 'use no memo' pragma) ships a component
+        # unmemoized with no build or lint signal. This fails on a bailout in
+        # a file tools/react_compiler_allowlist.json does not list, on a count
+        # above its entry, and on a stale entry (lower it with --ratchet).
+        # About 10 s; runs the same compiler options as the production build.
+        run: node tools/react_compiler_coverage.mjs --check tools/react_compiler_allowlist.json
       - run: npm --prefix frontend run lint
       - run: npm --prefix frontend run test
       - run: npm --prefix frontend run build
