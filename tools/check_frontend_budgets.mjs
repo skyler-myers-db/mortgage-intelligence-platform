@@ -277,8 +277,14 @@ const budgets = {
   // Cmd-K selection publisher and the lazy-module loader. The approve review
   // (7.8 KiB), the bulk gate's review (3.4 KiB) and the `?` sheet already
   // ship as their own lazy chunks. ~5% headroom per policy.
-  maxLazyJsBytes: 111 * KiB, // actual 109.32 (LeadTable, 2026-09-24)
-  maxLazyJsGzipBytes: 36 * KiB, // actual 34.72 (LeadTable, 2026-09-24)
+  // Re-baselined 2026-09-24 at the wave-2 integration: the LeadTable chunk
+  // grew 109.32 -> 119.36 raw / 34.72 -> 38.37 gzip / 30.07 -> 33.08 br, the
+  // w2-queue-query-layer lane moving the queue's governed writes onto
+  // TanStack mutations (lib/mutations, useMutation / useMutationState /
+  // MutationObserver, which stay lazy: see LAZY_ONLY_VENDOR_MODULES), the
+  // decision-on-the-wire guard and the export provenance read. ~5% headroom.
+  maxLazyJsBytes: 126 * KiB, // actual 119.36 (LeadTable, wave-2 integration)
+  maxLazyJsGzipBytes: 41 * KiB, // actual 38.37 (LeadTable, wave-2 integration)
   // Re-baselined 2026-09-24 for audit bundle-05 / css-v2 (lane
   // w2-build-currency): the seven static @fontsource faces (7 woff2 + their
   // 7 never-requested woff twins, 215.42 KiB) became one variable woff2 each
@@ -308,7 +314,7 @@ const budgets = {
   initialJsBrBytes: 152 * KiB, // actual 143.92 (5 chunks; 142.81 before the vendor split)
   initialCssBrBytes: 25 * KiB, // actual 22.96 (22.89 before the bold fallback faces; 22.82 with the static @fontsource CSS)
   totalJsBrBytes: 447 * KiB, // actual 425.43 (67 chunks; 423.50 before the vendor split)
-  maxLazyJsBrBytes: 32 * KiB, // actual 30.07 (LeadTable)
+  maxLazyJsBrBytes: 35 * KiB, // actual 33.08 (LeadTable, wave-2 integration)
   // What a navigation to each route fetches beyond the initial closure: the
   // route chunk plus its static imports, JS + CSS, brotli q11. Keyed by the
   // manifest's source path; every route module must have an entry and every
@@ -320,7 +326,9 @@ const budgets = {
     'src/routes/admin-config.access-denied.tsx': 5 * KiB, // actual 4.53
     'src/routes/admin-config.tsx': 35 * KiB, // actual 32.79
     'src/routes/analytics.tsx': 44 * KiB, // actual 41.60
-    'src/routes/ask-genie.tsx': 53 * KiB, // actual 50.03
+    // wave-2 integration: 50.03 -> 53.12, the w2-genie-turn lane's in-flight
+    // turn store, route Stop and single announcer. ~5% headroom.
+    'src/routes/ask-genie.tsx': 56 * KiB, // actual 53.12
     'src/routes/asset.tsx': 8 * KiB, // actual 7.08
     'src/routes/borrower-360.tsx': 38 * KiB, // actual 35.62
     'src/routes/glossary.tsx': 9 * KiB, // actual 8.42
@@ -432,6 +440,11 @@ export const LAZY_ONLY_VENDOR_MODULES = [
   // The lazy Console's infinite audit feed.
   'node_modules/@tanstack/query-core/build/modern/infiniteQueryObserver.js',
   'node_modules/@tanstack/react-query/build/modern/useInfiniteQuery.js',
+  // The Lead Queue's governed writes on TanStack mutations (wave 2
+  // w2-queue-query-layer: lib/mutations, useMutation); lazy with LeadTable.
+  'node_modules/@tanstack/query-core/build/modern/mutationObserver.js',
+  'node_modules/@tanstack/react-query/build/modern/useMutation.js',
+  'node_modules/@tanstack/react-query/build/modern/useMutationState.js',
   // LeadTable's row virtualizer.
   'node_modules/@tanstack/react-virtual/',
   'node_modules/@tanstack/virtual-core/',
