@@ -13,7 +13,7 @@ export { initialClosure, routeClosures, staleManifestProblems };
 const repoRoot = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 const distDir = path.join(repoRoot, 'frontend', 'dist');
 const assetsDir = path.join(distDir, 'assets');
-const manifestPath = path.join(repoRoot, 'frontend', 'build-meta', 'build-manifest.json');
+const buildMetaDir = path.join(repoRoot, 'frontend', 'build-meta');
 
 const KiB = 1024;
 // ---------------------------------------------------------------------------
@@ -50,6 +50,11 @@ const KiB = 1024;
 //   - brotli at quality 11 (what tools/precompress_assets.mjs ships and the
 //     backend serves) is the PRIMARY dimension; raw and gzip-9 gates stay.
 //   - the manifest must describe the dist beside it: a stale one fails.
+//   - vendor chunks (audit bundle-03, vite.config.ts codeSplitting groups):
+//     exactly vendor-react and vendor-data, each inside the initial closure,
+//     importing only vendor chunks or the runtime helper, and holding only
+//     modules the entry imports statically (build-meta/build-modules.json,
+//     written by the vite.config.ts chunk-modules plugin).
 // Build-time precompressed .br/.gz siblings are never measured as assets;
 // only .js/.css/font files are.
 //
@@ -126,8 +131,8 @@ const budgets = {
   //     +0.66 br.
   //   - Vite 8.3.0 (rolldown 1.0.3 -> 1.2.10 output): -3.35 raw.
   // Measured: 536.47 / 166.58 (br 142.81); ~5% headroom per policy.
-  initialJsBytes: 564 * KiB, // actual 536.47 (index + Icon: the manifest closure)
-  initialJsGzipBytes: 175 * KiB, // actual 166.58
+  initialJsBytes: 564 * KiB, // actual 536.74 (index + rolldown-runtime + vendor-react + vendor-data + apiPaths)
+  initialJsGzipBytes: 175 * KiB, // actual 167.42
   // Bumped 2026-06-11 for the re-audit #4 Buyer-Wow tranche: ⌘K command
   // palette (.cmdk*), portal evidence hover-card (.evidence-hovercard*),
   // sleek one-time KPI entrance (.kpi__value--enter / .spark__line--draw),
@@ -250,8 +255,8 @@ const budgets = {
   // +27.82 raw / +8.20 gzip to total JS, all of it in the initial closure
   // (see initialJsBytes), which left 3.0% / 3.2% headroom. Measured: 1485.04
   // / gzip 491.08 across 64 chunks; ~5% headroom.
-  totalJsBytes: 1560 * KiB, // actual 1485.04
-  totalJsGzipBytes: 516 * KiB, // actual 491.08
+  totalJsBytes: 1560 * KiB, // actual 1487.44 (67 chunks)
+  totalJsGzipBytes: 516 * KiB, // actual 492.86
   // Re-baselined 2026-09-23 for wave 1c (lane queue-keyboard-review): the
   // shared LeadTable chunk (Lead Queue + Segment Intelligence) grew from
   // 92.96 / 29.59 to 105.51 / 33.56 with the keyboard triage that must be
@@ -260,18 +265,24 @@ const budgets = {
   // Cmd-K selection publisher and the lazy-module loader. The approve review
   // (7.8 KiB), the bulk gate's review (3.4 KiB) and the `?` sheet already
   // ship as their own lazy chunks. ~5% headroom per policy.
-  maxLazyJsBytes: 111 * KiB, // actual 109.11 (LeadTable, 2026-09-24)
-  maxLazyJsGzipBytes: 36 * KiB, // actual 34.69 (LeadTable, 2026-09-24)
+  maxLazyJsBytes: 111 * KiB, // actual 109.32 (LeadTable, 2026-09-24)
+  maxLazyJsGzipBytes: 36 * KiB, // actual 34.71 (LeadTable, 2026-09-24)
   fontAssetCount: 14, // exact by policy, both ways
   fontBytes: 227 * KiB, // actual 215.42 (2026-09-24: 7 static woff2 + their 7 never-requested woff twins)
   // Brotli q11, the primary dimension (audit bundle-08; see the header). First
   // baselined 2026-09-24 by lane w2-build-currency on its own dependency batch
   // (React 19.3 is +7.22 br of the initial number, Router 8.4 +0.66; see
   // initialJsBytes). ~5% headroom, rounded up to a whole KiB.
-  initialJsBrBytes: 150 * KiB, // actual 142.81 (index + Icon)
+  // The bundle-03 vendor split (same lane, same day) moved no gate: it costs
+  // +0.27 raw / +0.84 gzip / +1.15 br on the initial closure and +2.40 /
+  // +1.78 / +2.00 on total JS (five initial chunks compress separately; lazy
+  // chunks import two more specifiers), and buys 91.58 KiB br (vendor-react
+  // 82.73 + vendor-data 8.85, 21.5% of total JS br) that a deploy changing
+  // only app code no longer makes a returning browser re-download.
+  initialJsBrBytes: 150 * KiB, // actual 143.96 (5 chunks; 142.81 before the vendor split)
   initialCssBrBytes: 24 * KiB, // actual 22.82
-  totalJsBrBytes: 445 * KiB, // actual 423.50 (64 chunks)
-  maxLazyJsBrBytes: 32 * KiB, // actual 30.01 (LeadTable)
+  totalJsBrBytes: 445 * KiB, // actual 425.50 (67 chunks; 423.50 before the vendor split)
+  maxLazyJsBrBytes: 32 * KiB, // actual 30.07 (LeadTable)
   // What a navigation to each route fetches beyond the initial closure: the
   // route chunk plus its static imports, JS + CSS, brotli q11. Keyed by the
   // manifest's source path; every route module must have an entry and every
@@ -356,12 +367,62 @@ export function largestPerDimension(chunks) {
   return largest;
 }
 
-function readManifest() {
+/**
+ * The vendor chunks vite.config.ts declares (audit bundle-03). Exactly these
+ * must be emitted: a missing one means the codeSplitting groups were dropped
+ * and every app edit re-hashes the framework code again.
+ */
+export const EXPECTED_VENDOR_CHUNKS = ['vendor-react', 'vendor-data'];
+
+/** The bundler's runtime-helper chunk (CommonJS interop): the one non-vendor chunk a vendor chunk may import. */
+const RUNTIME_HELPER_CHUNK = 'rolldown-runtime';
+
+/**
+ * Vendor chunks exist to be cached across app deploys, so each must:
+ *  - be one of the expected groups, and every expected group must exist;
+ *  - sit inside the initial closure (a vendor group that escaped it would be
+ *    a lazy chunk named "vendor");
+ *  - import only other vendor chunks or the runtime-helper chunk, never an
+ *    app chunk (which would re-hash with app edits and can form a cycle);
+ *  - hold only modules the entry reaches through static imports, when
+ *    `chunkModules` (build-modules.json) is given: a lazy-only module in a
+ *    vendor chunk would join every first paint.
+ */
+export function vendorChunkProblems(manifest, initial, chunkModules = null) {
+  const problems = [];
+  const vendorKeys = Object.keys(manifest).filter((key) => (manifest[key].name ?? '').startsWith('vendor-'));
+  const names = vendorKeys.map((key) => manifest[key].name);
+  for (const expected of EXPECTED_VENDOR_CHUNKS) {
+    if (!names.includes(expected)) problems.push(`vendor chunk ${expected} is missing (vite.config.ts codeSplitting groups)`);
+  }
+  const initialKeys = new Set(initial.keys);
+  const reached = chunkModules ? new Set(chunkModules.entryStaticModules) : null;
+  for (const key of vendorKeys) {
+    const chunk = manifest[key];
+    if (!EXPECTED_VENDOR_CHUNKS.includes(chunk.name)) problems.push(`unexpected vendor chunk ${chunk.file}`);
+    if (!initialKeys.has(key)) problems.push(`vendor group escaped the closure: ${chunk.file} is not in the initial closure`);
+    for (const imported of chunk.imports ?? []) {
+      const target = manifest[imported];
+      if (!vendorKeys.includes(imported) && target?.name !== RUNTIME_HELPER_CHUNK) {
+        problems.push(`vendor chunk ${chunk.file} imports app chunk ${target?.file ?? imported}`);
+      }
+    }
+    if (reached) {
+      for (const id of chunkModules.chunks[chunk.file] ?? []) {
+        if (!reached.has(id)) problems.push(`vendor chunk ${chunk.file} holds ${id}, which the entry does not import statically`);
+      }
+    }
+  }
+  return problems;
+}
+
+function readBuildMeta(file) {
+  const abs = path.join(buildMetaDir, file);
   try {
-    return JSON.parse(readFileSync(manifestPath, 'utf8'));
+    return JSON.parse(readFileSync(abs, 'utf8'));
   } catch (err) {
-    console.error(`Frontend budget check requires ${manifestPath}.`);
-    console.error('Run `npm --prefix frontend run build` (tools/postbuild_artifacts.mjs moves the manifest there).');
+    console.error(`Frontend budget check requires ${abs}.`);
+    console.error('Run `npm --prefix frontend run build` (tools/postbuild_artifacts.mjs moves it there).');
     console.error(err instanceof Error ? err.message : String(err));
     process.exit(1);
   }
@@ -376,7 +437,8 @@ function main() {
     console.error(err instanceof Error ? err.message : String(err));
     process.exit(1);
   }
-  const manifest = readManifest();
+  const manifest = readBuildMeta('build-manifest.json');
+  const chunkModules = readBuildMeta('build-modules.json');
 
   const overages = [];
   const failIf = (condition, message) => {
@@ -423,6 +485,7 @@ function main() {
   for (const route of routes) {
     if (route.key in budgets.routes) gate(`route ${route.key} closure br`, route.brBytes, budgets.routes[route.key]);
   }
+  overages.push(...vendorChunkProblems(manifest, initial, chunkModules));
   failIf(initialJs.files.length === 0, 'the build manifest names no initial JS');
   failIf(initialCss.files.length === 0, 'the build manifest names no initial CSS');
   const fontProblem = fontCountProblem(fonts.length, budgets.fontAssetCount);
@@ -431,7 +494,8 @@ function main() {
 
   const triple = (s) => `br ${bytes(s.brBytes)} / raw ${bytes(s.bytes)} / gzip ${bytes(s.gzipBytes)}`;
   console.log('Frontend budget report (manifest closure; brotli q11 primary)');
-  console.log(`  initial JS: ${triple(initialJs)} [${initialJs.files.join(' + ')}]`);
+  console.log(`  initial JS: ${triple(initialJs)} (${initialJs.files.length} chunks)`);
+  for (const file of initialJs.files) console.log(`    ${file}: ${triple(sizeOf(file))}`);
   console.log(`  initial CSS: ${triple(initialCss)} [${initialCss.files.join(' + ')}]`);
   console.log(`  total JS: ${triple(totalJs)} across ${js.length} chunks`);
   const lazyFiles = new Set([lazy.brBytes.file, lazy.bytes.file, lazy.gzipBytes.file]);

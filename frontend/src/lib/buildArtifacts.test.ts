@@ -22,6 +22,7 @@ import * as postbuildTool from '../../../tools/postbuild_artifacts.mjs';
 
 interface ManifestChunk {
   file: string;
+  name?: string;
   src?: string;
   isEntry?: boolean;
   isDynamicEntry?: boolean;
@@ -33,6 +34,7 @@ type Manifest = Record<string, ManifestChunk>;
 interface Closure { entry: string; keys: string[]; js: string[]; css: string[] }
 interface RouteClosure { js: string[]; css: string[] }
 interface ScratchDirs { distDir: string; metaDir: string; mapsDir: string }
+interface ChunkModules { chunks: Record<string, string[]>; entryStaticModules: string[] }
 
 const tools = {
   initialClosure: budgetTool.initialClosure as (manifest: Manifest) => Closure,
@@ -40,6 +42,11 @@ const tools = {
   staleManifestProblems: budgetTool.staleManifestProblems as (manifest: Manifest, dist: string[]) => string[],
   fontCountProblem: budgetTool.fontCountProblem as (actual: number, expected: number) => string | null,
   routeBudgetProblems: budgetTool.routeBudgetProblems as (keys: string[], budgets: Record<string, number>) => string[],
+  vendorChunkProblems: budgetTool.vendorChunkProblems as (
+    manifest: Manifest,
+    initial: Closure,
+    chunkModules?: ChunkModules | null,
+  ) => string[],
   relocate: postbuildTool.relocateBuildArtifacts as (dirs: ScratchDirs) => { manifest: string; maps: string[] },
   postbuildInitialClosure: postbuildTool.initialClosure as (manifest: Manifest) => Closure,
 };
@@ -128,6 +135,96 @@ describe('route closures', () => {
   });
 });
 
+/**
+ * The shape vite.config.ts's codeSplitting groups produce: the entry
+ * statically imports the runtime helper and both vendor chunks; vendor-data
+ * imports vendor-react; a route imports the entry and the vendor chunks.
+ */
+function vendorManifest(): Manifest {
+  return {
+    'index.html': {
+      file: 'assets/index-A.js',
+      src: 'index.html',
+      isEntry: true,
+      imports: ['_rolldown-runtime-R.js', '_vendor-react-V.js', '_vendor-data-W.js'],
+      dynamicImports: ['src/routes/lead.tsx'],
+      css: ['assets/index-A.css'],
+    },
+    '_rolldown-runtime-R.js': { file: 'assets/rolldown-runtime-R.js', name: 'rolldown-runtime' },
+    '_vendor-react-V.js': { file: 'assets/vendor-react-V.js', name: 'vendor-react', imports: ['_rolldown-runtime-R.js'] },
+    '_vendor-data-W.js': {
+      file: 'assets/vendor-data-W.js',
+      name: 'vendor-data',
+      imports: ['_rolldown-runtime-R.js', '_vendor-react-V.js'],
+    },
+    'src/routes/lead.tsx': {
+      file: 'assets/lead-C.js',
+      src: 'src/routes/lead.tsx',
+      isDynamicEntry: true,
+      imports: ['index.html', '_vendor-react-V.js', '_table-D.js'],
+    },
+    '_table-D.js': { file: 'assets/table-D.js', name: 'table' },
+  };
+}
+
+const VENDOR_MODULES: ChunkModules = {
+  chunks: {
+    'assets/vendor-react-V.js': ['node_modules/react/index.js', 'node_modules/react-dom/client.js'],
+    'assets/vendor-data-W.js': ['node_modules/@tanstack/query-core/build/modern/queryClient.js'],
+  },
+  entryStaticModules: [
+    'index.html',
+    'node_modules/@tanstack/query-core/build/modern/queryClient.js',
+    'node_modules/react-dom/client.js',
+    'node_modules/react/index.js',
+  ],
+};
+
+describe('vendor chunks (bundle-03)', () => {
+  it('pass when both groups sit in the initial closure and import only vendor or runtime chunks', () => {
+    const manifest = vendorManifest();
+    expect(tools.vendorChunkProblems(manifest, tools.initialClosure(manifest), VENDOR_MODULES)).toEqual([]);
+  });
+
+  it('fail when a vendor group escaped the initial closure', () => {
+    const manifest = vendorManifest();
+    manifest['index.html'].imports = ['_rolldown-runtime-R.js', '_vendor-react-V.js'];
+    manifest['src/routes/lead.tsx'].imports?.push('_vendor-data-W.js');
+    expect(tools.vendorChunkProblems(manifest, tools.initialClosure(manifest))).toEqual([
+      'vendor group escaped the closure: assets/vendor-data-W.js is not in the initial closure',
+    ]);
+  });
+
+  it('fail when a vendor chunk imports an app chunk', () => {
+    const manifest = vendorManifest();
+    manifest['_vendor-react-V.js'].imports = ['_rolldown-runtime-R.js', '_table-D.js'];
+    expect(tools.vendorChunkProblems(manifest, tools.initialClosure(manifest))).toEqual([
+      'vendor chunk assets/vendor-react-V.js imports app chunk assets/table-D.js',
+    ]);
+  });
+
+  it('fail when a vendor chunk holds a module the entry does not import statically', () => {
+    const manifest = vendorManifest();
+    const lazyOnly = 'node_modules/@tanstack/query-core/build/modern/infiniteQueryObserver.js';
+    const modules: ChunkModules = {
+      ...VENDOR_MODULES,
+      chunks: { ...VENDOR_MODULES.chunks, 'assets/vendor-data-W.js': [...VENDOR_MODULES.chunks['assets/vendor-data-W.js'], lazyOnly] },
+    };
+    expect(tools.vendorChunkProblems(manifest, tools.initialClosure(manifest), modules)).toEqual([
+      `vendor chunk assets/vendor-data-W.js holds ${lazyOnly}, which the entry does not import statically`,
+    ]);
+  });
+
+  it('fail when an expected group is missing or an unexpected one appears', () => {
+    const manifest = vendorManifest();
+    manifest['_vendor-data-W.js'].name = 'vendor-virtual';
+    expect(tools.vendorChunkProblems(manifest, tools.initialClosure(manifest))).toEqual([
+      'vendor chunk vendor-data is missing (vite.config.ts codeSplitting groups)',
+      'unexpected vendor chunk assets/vendor-data-W.js',
+    ]);
+  });
+});
+
 describe('stale-manifest detection', () => {
   it('passes a manifest that names exactly the dist chunks, ignoring precompressed siblings', () => {
     const withSiblings = [...DIST_FILES, 'assets/index-A.js.br', 'assets/index-A.js.gz', 'assets/geist.woff2'];
@@ -182,10 +279,11 @@ describe('relocateBuildArtifacts', () => {
     writeFileSync(path.join(distDir, 'assets', 'index-A.js.map'), '{"version":3}');
     writeFileSync(path.join(distDir, 'theme-boot.js.map'), '{"version":3}');
     writeFileSync(path.join(distDir, 'build-manifest.json'), JSON.stringify(syntheticManifest()));
+    writeFileSync(path.join(distDir, 'build-modules.json'), JSON.stringify(VENDOR_MODULES));
     return { distDir, metaDir, mapsDir };
   }
 
-  it('moves the manifest out of dist into a freshly emptied build-meta', () => {
+  it('moves the manifest and the chunk-modules map out of dist into a freshly emptied build-meta', () => {
     const dirs = scratchTree();
     mkdirSync(dirs.metaDir, { recursive: true });
     writeFileSync(path.join(dirs.metaDir, 'stale-from-last-build.json'), '{}');
@@ -193,8 +291,9 @@ describe('relocateBuildArtifacts', () => {
     const result = tools.relocate(dirs);
 
     expect(result.manifest).toBe(path.join(dirs.metaDir, 'build-manifest.json'));
-    expect(readdirSync(dirs.metaDir)).toEqual(['build-manifest.json']);
+    expect(readdirSync(dirs.metaDir).sort()).toEqual(['build-manifest.json', 'build-modules.json']);
     expect(existsSync(path.join(dirs.distDir, 'build-manifest.json'))).toBe(false);
+    expect(existsSync(path.join(dirs.distDir, 'build-modules.json'))).toBe(false);
     expect(readdirSync(dirs.distDir).sort()).toEqual(['assets', 'index.html']);
   });
 
@@ -220,7 +319,7 @@ describe('relocateBuildArtifacts', () => {
   it('fails when the build emitted no manifest', () => {
     const dirs = scratchTree();
     rmSync(path.join(dirs.distDir, 'build-manifest.json'));
-    expect(() => tools.relocate(dirs)).toThrow(/build-manifest\.json is missing/);
+    expect(() => tools.relocate(dirs)).toThrow(/build-manifest\.json missing from/);
   });
 
   it('fails when a .vite/ metadata directory is left in dist', () => {

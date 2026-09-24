@@ -9,7 +9,9 @@
 // frontend/dist/**. So:
 //
 //   - build-manifest.json (vite.config.ts `build.manifest`), the chunk graph
-//     tools/check_frontend_budgets.mjs measures, moves to frontend/build-meta/.
+//     tools/check_frontend_budgets.mjs measures, and build-modules.json (the
+//     vite.config.ts chunk-modules plugin: which modules each chunk holds),
+//     move to frontend/build-meta/.
 //   - every *.map (vite.config.ts `build.sourcemap: 'hidden'`) moves to
 //     frontend/sourcemaps/, keeping its dist-relative path. That directory is
 //     the CI artifact for decoding production stack traces; it is never
@@ -34,6 +36,9 @@ import { fileURLToPath } from 'node:url';
 export { initialClosure } from './build_manifest.mjs';
 
 export const MANIFEST_FILE = 'build-manifest.json';
+export const CHUNK_MODULES_FILE = 'build-modules.json';
+/** Build metadata `vite build` must emit into dist and this step moves out. */
+export const META_FILES = [MANIFEST_FILE, CHUNK_MODULES_FILE];
 
 /** A source-map comment at the start of a line (`//# ...` or legacy `//@ ...`). */
 export const SOURCE_MAP_COMMENT = /^\/\/[#@]\s*sourceMappingURL=/m;
@@ -69,7 +74,7 @@ function walkFiles(dir, prefix = '') {
 export function distLeftovers(distDir) {
   const problems = [];
   for (const entry of readdirSync(distDir, { withFileTypes: true })) {
-    if (entry.name === MANIFEST_FILE) problems.push(`dist still contains ${MANIFEST_FILE}`);
+    if (META_FILES.includes(entry.name)) problems.push(`dist still contains ${entry.name}`);
     if (entry.name === '.vite') problems.push('dist still contains a .vite/ metadata directory');
   }
   for (const file of walkFiles(distDir)) {
@@ -82,20 +87,21 @@ export function distLeftovers(distDir) {
 }
 
 /**
- * Move the build manifest into a freshly emptied `metaDir` and every source
- * map into a freshly emptied `mapsDir` (same relative path), then verify dist
- * is clean. Throws with every problem found; returns what moved.
+ * Move the build metadata files into a freshly emptied `metaDir` and every
+ * source map into a freshly emptied `mapsDir` (same relative path), then
+ * verify dist is clean. Throws with every problem found; returns what moved.
  */
 export function relocateBuildArtifacts({ distDir, metaDir, mapsDir }) {
-  const manifestSource = path.join(distDir, MANIFEST_FILE);
-  if (!existsSync(manifestSource)) {
+  const missing = META_FILES.filter((name) => !existsSync(path.join(distDir, name)));
+  if (missing.length > 0) {
     throw new Error(
-      `postbuild: ${manifestSource} is missing; vite.config.ts must set build.manifest to '${MANIFEST_FILE}'.`,
+      `postbuild: ${missing.join(', ')} missing from ${distDir}; vite.config.ts must set ` +
+        `build.manifest to '${MANIFEST_FILE}' and keep the chunk-modules plugin that writes '${CHUNK_MODULES_FILE}'.`,
     );
   }
   resetDir(metaDir);
+  for (const name of META_FILES) renameSync(path.join(distDir, name), path.join(metaDir, name));
   const manifest = path.join(metaDir, MANIFEST_FILE);
-  renameSync(manifestSource, manifest);
 
   resetDir(mapsDir);
   const maps = walkFiles(distDir).filter((file) => file.endsWith('.map'));
@@ -109,14 +115,14 @@ export function relocateBuildArtifacts({ distDir, metaDir, mapsDir }) {
   if (problems.length > 0) {
     throw new Error(`postbuild: dist is not deployable:\n  - ${problems.join('\n  - ')}`);
   }
-  return { manifest, maps };
+  return { manifest, chunkModules: path.join(metaDir, CHUNK_MODULES_FILE), maps };
 }
 
 function main() {
   try {
     const result = relocateBuildArtifacts(DEFAULT_DIRS);
     console.log(
-      `postbuild: manifest -> ${path.relative(repoRoot, result.manifest)}; ` +
+      `postbuild: ${META_FILES.join(' + ')} -> ${path.relative(repoRoot, DEFAULT_DIRS.metaDir)}/; ` +
         `${result.maps.length} source maps -> ${path.relative(repoRoot, DEFAULT_DIRS.mapsDir)}/`,
     );
   } catch (err) {
