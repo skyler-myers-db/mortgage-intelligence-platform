@@ -45,8 +45,12 @@ type RouteName = (typeof ROUTES)[number]['name'];
  *   lead-queue  LCP 3488 / 2144 / 2228 ms (median 2228), TBT 629 / 736 / 777 (736)
  * PROVISIONAL: the shared host's 1-minute load average was ~45 during that
  * run (no quiet window came), which inflates timings, so these ceilings are
- * looser than a quiet-machine median would give. Re-measure on the
- * single-worker CI runner and ratchet down, never up.
+ * looser than a quiet-machine median would give. They were not measured on
+ * the reference runner either: a GitHub ubuntu runner under the same 4x CPU
+ * throttle can be slower than this M-series host, so the first
+ * single-worker CI run (w2-safety-net's step) calibrates them once, in
+ * either direction, from its own median x 1.2. After that, ratchet down,
+ * never up.
  */
 const CEILINGS: Readonly<Record<RouteName, { lcpMs: number; tbtMs: number }>> = {
   home: { lcpMs: 2_100, tbtMs: 400 },
