@@ -55,7 +55,8 @@ import {
 import { GENIE_POINTER_RESIZE_HANDLES, useGenieWindow } from './useGenieWindow';
 import { useGeniePanelDismissal } from './useGeniePanelDismissal';
 import { useGenieTranscriptScroll } from './useGenieTranscriptScroll';
-import { isGenieRouteAskVisible, useGenieAnnouncer } from './useGenieAnnouncer';
+import { GenieAnnouncerRegion } from './GenieAnnouncerRegion';
+import { isGenieRouteAskVisible } from './useGenieAnnouncer';
 import { GenieHistoryMenu } from './GenieHistoryMenu';
 import { GenieChatBody } from './GenieChatBody';
 import { genieActionConfirmation, runGenieActionRequest, sourceAssetsFor } from './GenieChat.helpers';
@@ -435,7 +436,6 @@ export function GenieChat() {
   // server's list stays the fallback for routes without curated ones.
   const routeStarters = genieStartersForRoute(pathname);
   const starters = routeStarters.length > 0 ? routeStarters : sampleQuestions;
-  const announcerText = useGenieAnnouncer('panel', genieOpen);
 
   return (
     <>
@@ -447,9 +447,7 @@ export function GenieChat() {
       <span id={GENIE_LAUNCHER_STATUS_ID} className="sr-only">
         {genieLauncherStatusText(launcherStatus, unseen ?? 'answered')}
       </span>
-      <div className="sr-only" role="status" aria-live="polite" data-genie-announcer="panel">
-        {announcerText}
-      </div>
+      <GenieAnnouncerRegion surface="panel" visible={genieOpen} />
       <button
         ref={fabRef}
         className={[

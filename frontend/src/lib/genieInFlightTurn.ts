@@ -103,11 +103,24 @@ export interface GenieTurnNote {
   readonly atTurnIndex: number;
 }
 
+/** The in-flight turn when an announcement was made during it (a copy
+ *  result, say): the announcer says it until that turn's stage moves on. */
+export interface GenieAnnouncedDuringTurn {
+  readonly generation: number;
+  readonly progress: GenieLiveProgress | null;
+}
+
 export interface GenieTurnSnapshot {
   readonly inFlight: GenieInFlightTurn | null;
   readonly notes: readonly GenieTurnNote[];
-  /** What a surface announcer says while no turn is in flight. */
+  /** What a surface announcer says (see `announcedDuringTurn` for a turn). */
   readonly announcement: string;
+  /** Bumped every time an announcement is made, a repeat of the same text
+   *  included, and never reset: each announcement is said once, and a surface
+   *  that takes the floor never replays one said before (useGenieAnnouncer). */
+  readonly announcementSeq: number;
+  /** Set when the announcement was made while a turn was in flight. */
+  readonly announcedDuringTurn: GenieAnnouncedDuringTurn | null;
 }
 
 export interface GenieTurnSettledEvent {
@@ -147,10 +160,19 @@ interface ActiveTurn {
 /** Stopped / interrupted notes kept in memory (they are not transcript turns). */
 const MAX_NOTES = 20;
 
-const EMPTY_SNAPSHOT: GenieTurnSnapshot = { inFlight: null, notes: [], announcement: '' };
+const EMPTY_SNAPSHOT: GenieTurnSnapshot = {
+  inFlight: null,
+  notes: [],
+  announcement: '',
+  announcementSeq: 0,
+  announcedDuringTurn: null,
+};
 
 let snapshot: GenieTurnSnapshot = EMPTY_SNAPSHOT;
 let generation = 0;
+/** Monotonic for the page's life (test resets included), so an announcer's
+ *  "already said" mark can never exceed the store's newest announcement. */
+let announcementSeq = 0;
 let active: ActiveTurn | null = null;
 let controller: AbortController | null = null;
 let completeRequestedFor = -1;
@@ -170,6 +192,26 @@ function update(next: Partial<GenieTurnSnapshot>): void {
   for (const listener of listeners) listener();
 }
 
+/** A new announcement: always a new sequence number, even for the same text,
+ *  so a second "SQL copied" is said again. `during` is the turn still in
+ *  flight after it, if any. */
+function announcing(
+  text: string,
+  during: GenieInFlightTurn | null = null,
+): Pick<GenieTurnSnapshot, 'announcement' | 'announcementSeq' | 'announcedDuringTurn'> {
+  announcementSeq += 1;
+  return {
+    announcement: text,
+    announcementSeq,
+    announcedDuringTurn: during ? { generation: during.generation, progress: during.progress } : null,
+  };
+}
+
+/** Nothing in flight, no notes, nothing to say; the sequence carries on. */
+function clearedSnapshot(): GenieTurnSnapshot {
+  return { ...EMPTY_SNAPSHOT, announcementSeq };
+}
+
 function patchTurn(gen: number, patch: Partial<GenieInFlightTurn>): void {
   const current = snapshot.inFlight;
   if (!current || current.generation !== gen) return;
@@ -184,7 +226,8 @@ function withNote(kind: GenieTurnNote['kind'], reason: string, question: string)
 /** An interrupted turn: no in-flight turn, a note in the transcript, and the
  *  note's reason said by the surface announcer. */
 function interrupt(reason: string, question: string): void {
-  update({ inFlight: null, notes: withNote('interrupted', reason, question), announcement: reason });
+  const notes = withNote('interrupted', reason, question);
+  update({ inFlight: null, notes, ...announcing(reason) });
 }
 
 function isCurrent(gen: number): boolean {
@@ -333,7 +376,7 @@ function landExchange(
   const outcome = genieTurnOutcome(response);
   notifySettled({ surface, question, response, outcome, persistedConversationId });
   appendGenieTurn(question, response);
-  update({ inFlight: null, announcement: genieOutcomeAnnouncement(outcome) });
+  update({ inFlight: null, ...announcing(genieOutcomeAnnouncement(outcome)) });
 }
 
 function settleTurn(gen: number, response: GenieAnswerShape): void {
@@ -478,6 +521,7 @@ export function startGenieTurn({ question, conversationId, surface, startedAt }:
       revealed: true,
     },
     announcement: '',
+    announcedDuringTurn: null,
   });
   runFreshTurn(gen, trimmed, conversationId, ctrl.signal).catch((err: unknown) => failTurn(gen, err));
   return true;
@@ -538,6 +582,7 @@ export function resumeGenieTurnFromSession(): void {
       revealed: false,
     },
     announcement: '',
+    announcedDuringTurn: null,
   });
   holdLock(gen, ids.messageId)
     .then((outcome) => {
@@ -557,10 +602,11 @@ export function clearGenieTurnNotes(): void {
   update({ notes: [] });
 }
 
-/** Say `text` through the surface announcer (Stop, prefill, action, copy). */
+/** Say `text` through the surface announcer (Stop, prefill, action, copy).
+ *  Said again when it repeats; said mid-turn until the stage moves on. */
 export function announceGenie(text: string): void {
-  if (snapshot.announcement === text) return;
-  update({ announcement: text });
+  if (!text) return;
+  update(announcing(text, snapshot.inFlight));
 }
 
 export function getGenieTurnSnapshot(): GenieTurnSnapshot {
@@ -596,8 +642,8 @@ function onConversationReset(): void {
   generation += 1;
   controller?.abort();
   finishActive();
-  if (snapshot === EMPTY_SNAPSHOT) return;
-  snapshot = EMPTY_SNAPSHOT;
+  if (!snapshot.inFlight && snapshot.notes.length === 0 && snapshot.announcement === '') return;
+  snapshot = clearedSnapshot();
   for (const listener of listeners) listener();
 }
 
@@ -635,6 +681,6 @@ export function __resetGenieTurnStoreForTests(): void {
   pageHidden = false;
   deferredFailure = null;
   requestLock = browserGenieTurnLock;
-  snapshot = EMPTY_SNAPSHOT;
+  snapshot = clearedSnapshot();
   for (const listener of listeners) listener();
 }

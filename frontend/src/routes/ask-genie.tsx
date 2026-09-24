@@ -10,7 +10,7 @@ import { useApp } from '../components/AppContext';
 import { PageShell } from '../components/layout/PageShell';
 import { Icon } from '../components/Icon';
 import { genieActionConfirmation, runGenieActionRequest } from '../components/mortgage/GenieChat.helpers';
-import { useGenieAnnouncer } from '../components/mortgage/useGenieAnnouncer';
+import { GenieAnnouncerRegion } from '../components/mortgage/GenieAnnouncerRegion';
 import { descriptorFor } from '../lib/drawerSources';
 import {
   GENIE_CONVERSATION_RESET_EVENT,
@@ -85,7 +85,6 @@ export default function AskGenie() {
   const [activeAssetPath, setActiveAssetPath] = useState<string | null>(null);
   const [conversationId, setConversationId] = useState<string | null>(() => readGenieConversationId());
   const growthAgent = useGrowthAgentWorkspace();
-  const announcerText = useGenieAnnouncer('route', tab === 'ask');
 
   const genieStartQuery = useQuery({
     queryKey: queryKeys.genieStart(),
@@ -231,9 +230,7 @@ export default function AskGenie() {
       lede="Ask about your book in plain language: coverage, segments, borrowers and market shifts. Answers drawn from your data show the figures behind them and where they came from, and any follow-up action still needs your approval."
       heroRight={<AskGenieTabs tab={tab} onSelect={selectTab} />}
     >
-      <div className="sr-only" role="status" aria-live="polite" data-genie-announcer="route">
-        {announcerText}
-      </div>
+      <GenieAnnouncerRegion surface="route" visible={tab === 'ask'} />
       <section
         role="tabpanel"
         id={askGeniePanelId('ask')}

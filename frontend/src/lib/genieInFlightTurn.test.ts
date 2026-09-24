@@ -35,6 +35,7 @@ import { clearGenieTurns, getGenieTurns, subscribeGenieTurns } from './genieConv
 import {
   __resetGenieTurnStoreForTests,
   __setGenieTurnLockForTests,
+  announceGenie,
   getGenieTurnSnapshot,
   resumeGenieTurnFromSession,
   startGenieTurn,
@@ -343,7 +344,7 @@ describe('reload resume', () => {
     expect(reset).toHaveBeenCalledTimes(1);
     expect(getGenieTurns()).toEqual([]);
     expect(questions.every((question) => question === '')).toBe(true);
-    expect(getGenieTurnSnapshot()).toEqual({ inFlight: null, notes: [], announcement: '' });
+    expect(getGenieTurnSnapshot()).toMatchObject({ inFlight: null, notes: [], announcement: '', announcedDuringTurn: null });
     expect(storedRecord()).toBeNull();
   });
 });
@@ -419,7 +420,7 @@ describe('the identity boundary and Stop', () => {
     expect(signal.aborted).toBe(true);
     expect(storedRecord()).toBeNull();
     expect(lockRelease).toHaveBeenCalledTimes(1);
-    expect(getGenieTurnSnapshot()).toEqual({ inFlight: null, notes: [], announcement: '' });
+    expect(getGenieTurnSnapshot()).toMatchObject({ inFlight: null, notes: [], announcement: '', announcedDuringTurn: null });
 
     finish(answer({ conversation_id: 'conv-previous-actor' }));
     await advance(10_000);
@@ -498,3 +499,39 @@ describe('settling', () => {
     expect(getGenieTurnSnapshot().announcement).toBe(spoken);
   });
 });
+
+describe('announcements', () => {
+  it('numbers every announcement, a repeat included, and a reset never rewinds the count', () => {
+    const before = getGenieTurnSnapshot().announcementSeq;
+    announceGenie('SQL copied');
+    announceGenie('SQL copied');
+    expect(getGenieTurnSnapshot()).toMatchObject({ announcement: 'SQL copied', announcementSeq: before + 2 });
+    window.dispatchEvent(new Event(GENIE_CONVERSATION_RESET_EVENT));
+    expect(getGenieTurnSnapshot()).toMatchObject({ announcement: '', announcementSeq: before + 2 });
+    __resetGenieTurnStoreForTests();
+    expect(getGenieTurnSnapshot().announcementSeq).toBe(before + 2);
+  });
+
+  it('ties a mid-turn announcement to the turn and its stage; a landing one to none', async () => {
+    mocks.genieSubmit.mockResolvedValue(LIVE_SUBMIT);
+    mocks.genieProgress.mockResolvedValue(progress(false));
+    let finish: (value: GenieAnswer) => void = () => undefined;
+    mocks.genieComplete.mockImplementation(() => new Promise<GenieAnswer>((resolve) => {
+      finish = resolve;
+    }));
+    start();
+    await advance();
+    const inFlight = getGenieTurnSnapshot().inFlight!;
+    announceGenie('SQL copied');
+    expect(getGenieTurnSnapshot().announcedDuringTurn).toEqual({
+      generation: inFlight.generation,
+      progress: inFlight.progress,
+    });
+    mocks.genieProgress.mockResolvedValue(progress(true));
+    await advance(10_000);
+    finish(answer());
+    await advance();
+    expect(getGenieTurnSnapshot()).toMatchObject({ inFlight: null, announcement: 'Answer ready', announcedDuringTurn: null });
+  });
+});
+
