@@ -111,8 +111,12 @@ def role_labels_for(*, identity: str | None, admin: bool, approver: bool) -> lis
     return labels
 
 
+# Async on purpose (audit delivery-09): the handler only reads forwarded
+# headers and settings, with no I/O, so it never needs one of the worker
+# threads a cold-cache burst can exhaust. (A comment, not a docstring: a
+# docstring would become the OpenAPI operation description.)
 @router.get("", response_model=SessionResponse)
-def get_session(request: Request) -> SessionResponse:
+async def get_session(request: Request) -> SessionResponse:
     identity = _forwarded_actor(request)
     admin = can_access_admin(request)
     approver = can_access_approver(request)

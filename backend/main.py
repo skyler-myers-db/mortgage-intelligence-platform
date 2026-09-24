@@ -79,6 +79,7 @@ from backend.services.observability import (
 from backend.services.security_headers import SecurityHeadersMiddleware
 from backend.services.server_timing import ServerTimingMiddleware
 from backend.services.static_assets import select_asset_variant
+from backend.services.thread_limits import configure_default_thread_limiter
 from backend.services.visit_tracking import VisitTrackingMiddleware
 from backend.version import API_VERSION, api_version
 
@@ -305,6 +306,7 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     * Warm the governed place dimension so the Genie output policy never pays
       its resolve inline on an Ask Genie turn.
     """
+    configure_default_thread_limiter(settings.mip_anyio_thread_tokens)  # delivery-09
     rewarm_task: asyncio.Task[None] | None = None
     # Databricks Apps deployment invariant: log the treatment-runtime marker
     # state at boot. The write gate itself is enforced per-request in

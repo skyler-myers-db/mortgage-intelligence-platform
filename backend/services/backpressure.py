@@ -54,6 +54,13 @@ class BackpressureController:
     """Token-bucket rate limiter + non-blocking dependency semaphores."""
 
     _BORROWER_ID_RE = re.compile(r"/api/borrowers/[^/]+$")
+    # POSTs that only READ the warehouse (audit delivery-09): budgeted as
+    # warehouse reads, not as Lakebase mutations. Verified per route: the
+    # preview handler calls repo.preview only (no audit row, no Lakebase
+    # write). Deliberately NOT here: POST /api/offers/recommend writes a
+    # RECOMMEND_OFFER audit row, and POST /api/portfolio/campaign-
+    # recommendation reads Lakebase through the sales-state funnel.
+    _READ_ONLY_POSTS = frozenset({"/api/portfolio/preview"})
 
     def __init__(
         self,
@@ -108,6 +115,8 @@ class BackpressureController:
             )
         if path.startswith("/api/genie"):
             return RouteBudget("genie", settings.mip_rate_limit_genie_per_minute, "genie")
+        if method.upper() == "POST" and path in self._READ_ONLY_POSTS:
+            return RouteBudget("warehouse-read", settings.mip_rate_limit_expensive_per_minute, "warehouse")
         if method.upper() in {"POST", "PUT", "PATCH", "DELETE"}:
             dependency = "lakebase"
             if path.startswith("/api/genie"):

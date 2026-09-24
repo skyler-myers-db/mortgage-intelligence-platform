@@ -534,6 +534,10 @@ class Settings(BaseSettings):
     mip_rate_limit_telemetry_per_minute: int = 1200
     mip_warehouse_concurrency_limit: int = 24
     mip_lakebase_concurrency_limit: int = 16
+    # anyio's default worker-thread limiter (40 out of the box) must sit above
+    # the 24 + 16 + 6 dependency slots, with headroom for health, session and
+    # static files (audit delivery-09; backend.services.thread_limits).
+    mip_anyio_thread_tokens: int = Field(default=100, ge=40, le=400)
     # Six concurrent Genie turns covers demo-panel usage without letting
     # LLM calls swamp the warehouse/Lakebase lanes. Customer targets can
     # raise this with MIP_GENIE_CONCURRENCY_LIMIT after quota review.

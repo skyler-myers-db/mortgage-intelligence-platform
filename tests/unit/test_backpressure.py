@@ -1,3 +1,4 @@
+import pytest
 from fastapi.testclient import TestClient
 
 from backend.config.settings import settings
@@ -77,6 +78,42 @@ def test_backpressure_classifies_analytics_as_warehouse_read() -> None:
     assert budget is not None
     assert budget.scope == "warehouse-read"
     assert budget.dependency == "warehouse"
+
+
+@pytest.mark.parametrize("path", ["/api/portfolio/preview", "/api/v1/portfolio/preview"])
+def test_read_only_portfolio_preview_post_is_a_warehouse_read(path: str) -> None:
+    """delivery-09: the preview POST only reads the warehouse, so it must not
+    draw one of the 16 Lakebase mutation slots."""
+    budget = BackpressureController().classify("POST", path)
+
+    assert budget is not None
+    assert (budget.scope, budget.dependency) == ("warehouse-read", "warehouse")
+    assert budget.requests_per_minute == settings.mip_rate_limit_expensive_per_minute
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        # Writes a RECOMMEND_OFFER audit row (offers.py).
+        "/api/v1/offers/recommend",
+        # Reads Lakebase through sales_state.campaign_performance_funnel.
+        "/api/v1/portfolio/campaign-recommendation",
+        # A real portfolio write stays a mutation.
+        "/api/v1/portfolio",
+    ],
+)
+def test_other_posts_stay_lakebase_mutations(path: str) -> None:
+    budget = BackpressureController().classify("POST", path)
+
+    assert budget is not None
+    assert (budget.scope, budget.dependency) == ("mutation", "lakebase")
+
+
+def test_only_post_is_allow_listed_for_the_preview_path() -> None:
+    budget = BackpressureController().classify("DELETE", "/api/v1/portfolio/preview")
+
+    assert budget is not None
+    assert budget.scope == "mutation"
 
 
 def test_backpressure_classifies_admin_health_as_health() -> None:
