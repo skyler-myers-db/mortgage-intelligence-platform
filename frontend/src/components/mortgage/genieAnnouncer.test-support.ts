@@ -24,6 +24,12 @@ class StrongRef<T extends object> {
 
 const EVERY_TEXT_CHANGE: MutationObserverInit = { childList: true, characterData: true, subtree: true };
 
+/** The app's tsconfig targets ES2020, whose lib has no WeakRef, so the global
+ *  is reached through this narrow view instead of `globalThis.WeakRef`. */
+interface WeakRefHost {
+  WeakRef: unknown;
+}
+
 /** `observer.observe(target, options)` with the callback held strongly. The
  *  global WeakRef is swapped only for the synchronous observe() call. */
 export function observeStrongly(
@@ -31,11 +37,12 @@ export function observeStrongly(
   target: Node,
   options: MutationObserverInit = EVERY_TEXT_CHANGE,
 ): void {
-  const weakRef = globalThis.WeakRef;
-  globalThis.WeakRef = StrongRef as unknown as WeakRefConstructor;
+  const host = globalThis as unknown as WeakRefHost;
+  const weakRef = host.WeakRef;
+  host.WeakRef = StrongRef;
   try {
     observer.observe(target, options);
   } finally {
-    globalThis.WeakRef = weakRef;
+    host.WeakRef = weakRef;
   }
 }
