@@ -378,6 +378,19 @@ The Slice-13 follow-up adds (additive, non-breaking):
 
 Any client reading the first seven keys keeps working unchanged.
 
+The 2026-09-21 audit (`delivery-01`) adds one dependency value, additively:
+`dependencies.warehouse` may be `resuming` while the serverless warehouse is
+`STARTING` from auto-stop. The probe reads the warehouse lifecycle state
+(`GET /api/2.0/sql/warehouses/{id}`) instead of running `SELECT 1`;
+`STOPPED`/`STOPPING` read as `up` (available on demand), `DELETING`/`DELETED`
+as `down`, and an unreadable state falls back to `SELECT 1`, which never
+reports `resuming`. `status` is `ok` when every dependency is `up` or
+`resuming`, and an open or half-open breaker still forces `down`. Consumers
+treat any value other than `down` as "not an outage"; readiness checks that
+need the warehouse answering (`tools/wait_app_ready.py`,
+`scripts/smoke_live.sh`) keep waiting for `up`. The wire type stays
+`dict[str, str]`.
+
 ## 6. Server-Timing (per-request attribution)
 
 Every `/api/*` HTTP response carries one `Server-Timing` header

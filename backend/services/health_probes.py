@@ -4,7 +4,8 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Callable
-from typing import Any
+from threading import Lock
+from typing import Any, Literal
 
 from backend.config.settings import settings
 from backend.services.observability import emit
@@ -37,7 +38,99 @@ def _emit_probe_warning(event: str, *, dependency: str, exc: BaseException | Non
     )
 
 
-def probe_warehouse() -> bool:
+DependencyState = Literal["up", "down", "resuming"]
+DEPENDENCY_STATES: frozenset[str] = frozenset({"up", "down", "resuming"})
+
+# Warehouse lifecycle -> dependency state (audit delivery-01 / delivery-v1).
+# STOPPED / STOPPING read as "up" on purpose: a serverless warehouse is
+# available on demand, and with keep-warm off by default STOPPED is the steady
+# idle state; calling it "resuming" would show a perpetual "Waking warehouse"
+# on idle tabs and make tools/wait_app_ready.py (which waits for "up") hang
+# after every deploy. STARTING is the positive resume signal.
+_WAREHOUSE_STATE_MAP: dict[str, DependencyState] = {
+    "RUNNING": "up",
+    "STARTING": "resuming",
+    "STOPPED": "up",
+    "STOPPING": "up",
+    "DELETING": "down",
+    "DELETED": "down",
+}
+# Inside the health request budget (mip_health_cold_wait_budget_s, 3 s), so a
+# slow state read fails over to SELECT 1 instead of timing health out.
+_WAREHOUSE_STATE_HTTP_TIMEOUT_S = 2.0
+_workspace_client: Any = None
+_workspace_client_lock = Lock()
+
+
+def _warehouse_state_client() -> Any:
+    """Build the SDK client once, lazily and under a lock (bounded timeouts)."""
+
+    global _workspace_client
+    with _workspace_client_lock:
+        if _workspace_client is None:
+            from databricks.sdk import WorkspaceClient
+            from databricks.sdk.core import Config
+
+            _workspace_client = WorkspaceClient(
+                config=Config(
+                    http_timeout_seconds=_WAREHOUSE_STATE_HTTP_TIMEOUT_S,
+                    retry_timeout_seconds=int(_WAREHOUSE_STATE_HTTP_TIMEOUT_S),
+                )
+            )
+        return _workspace_client
+
+
+def _read_warehouse_state() -> DependencyState | None:
+    """Map the warehouse lifecycle state; None means "could not tell"."""
+
+    warehouse_id = (settings.databricks_warehouse_id or "").strip()
+    if not warehouse_id:
+        return None
+    try:
+        warehouse = _warehouse_state_client().warehouses.get(id=warehouse_id)
+    except Exception as exc:  # noqa: BLE001 -- the SELECT 1 fallback decides
+        emit(
+            log,
+            "warehouse_state_read_failed",
+            level=logging.WARNING,
+            dependency="warehouse",
+            reason="error",
+            exc_type=type(exc).__name__,
+        )
+        return None
+    raw = getattr(warehouse, "state", None)
+    name = str(getattr(raw, "value", raw) or "").upper()
+    mapped = _WAREHOUSE_STATE_MAP.get(name)
+    if mapped is None:
+        emit(
+            log,
+            "warehouse_state_read_failed",
+            level=logging.WARNING,
+            dependency="warehouse",
+            reason="unknown_state" if name else "no_state",
+            exc_type=None,
+        )
+    return mapped
+
+
+def probe_warehouse() -> DependencyState:
+    """Return the warehouse dependency state: ``up`` | ``down`` | ``resuming``.
+
+    Reads the warehouse lifecycle state (``GET /api/2.0/sql/warehouses/{id}``)
+    instead of running SQL, so a routine serverless resume reads as
+    ``resuming`` rather than an outage, and the health poll no longer keeps
+    the warehouse awake by accident (keep-warm is an explicit policy now; see
+    ``backend.services.keep_warm``). When the state cannot be read, falls back
+    to today's ``SELECT 1`` probe, which never yields ``resuming``.
+    """
+
+    state = _read_warehouse_state()
+    if state is not None:
+        return state
+    return "up" if _probe_warehouse_select_one() else "down"
+
+
+def _probe_warehouse_select_one() -> bool:
     """Return True when ``SELECT 1`` against the warehouse succeeds.
 
     The shared health cache owns the caller deadline and single-flight work;
@@ -143,7 +236,19 @@ def cached_probe(name: str, probe: Callable[[], Any]) -> bool:
     )
 
 
+def _dependency_state(result: Any) -> DependencyState:
+    """Normalise a probe result: bools (and test doubles) or a state string."""
+
+    if isinstance(result, str) and result in DEPENDENCY_STATES:
+        return result  # type: ignore[return-value]
+    if result is True:
+        return "up"
+    return "down"
+
+
 def probe_snapshot() -> tuple[str, dict[str, str]]:
+    """``status`` is ``ok`` iff every dependency is ``up`` or ``resuming``."""
+
     results = _probe_cache.get_or_refresh_many(
         {
             "warehouse": probe_warehouse,
@@ -152,13 +257,8 @@ def probe_snapshot() -> tuple[str, dict[str, str]]:
         },
         wait_timeout_s=settings.mip_health_cold_wait_budget_s,
     )
-    warehouse_up = bool(results["warehouse"])
-    lakebase_up = bool(results["lakebase"])
-    genie_up = bool(results["genie"])
-    status = "ok" if (warehouse_up and lakebase_up and genie_up) else "degraded"
-    deps = {
-        "warehouse": "up" if warehouse_up else "down",
-        "lakebase": "up" if lakebase_up else "down",
-        "genie": "up" if genie_up else "down",
+    deps: dict[str, str] = {
+        name: _dependency_state(results[name]) for name in ("warehouse", "lakebase", "genie")
     }
+    status = "ok" if all(state != "down" for state in deps.values()) else "degraded"
     return status, deps

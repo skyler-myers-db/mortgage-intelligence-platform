@@ -540,6 +540,7 @@
             "additionalProperties": {
               "type": "string"
             },
+            "description": "Per-dependency state (warehouse, lakebase, genie): up | down | resuming. 'resuming' (warehouse only) means the serverless warehouse is starting from auto-stop; consumers treat any value other than 'down' as not an outage.",
             "title": "Dependencies",
             "type": "object"
           },
@@ -8425,6 +8426,7 @@
             "additionalProperties": {
               "type": "string"
             },
+            "description": "Per-dependency state (warehouse, lakebase, genie): up | down | resuming. 'resuming' (warehouse only) means the serverless warehouse is starting from auto-stop; consumers treat any value other than 'down' as not an outage.",
             "title": "Dependencies",
             "type": "object"
           },

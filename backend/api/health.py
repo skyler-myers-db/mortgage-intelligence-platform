@@ -8,7 +8,7 @@ Slice-6/7 contract (returned body):
       "app_env":           "<env>",
       "warehouse_id":      "<id>",
       "dependencies": {
-        "warehouse":       "up" | "down",
+        "warehouse":       "up" | "down" | "resuming",
         "lakebase":        "up" | "down",
         "genie":           "up" | "down"
       },
@@ -24,11 +24,18 @@ balancer doesn't yank the container. Degraded state is carried in the
 body, which the frontend reads to show the banner.
 
 Authenticated dependency probes are lightweight pings sharing one
-configurable request deadline. Warehouse / Lakebase probes issue ``SELECT
-1``; Lakebase also enforces bounded connect, TCP transport, and server-side
-statement deadlines, while Genie hits ``GET /spaces/{id}``. Failures do not raise;
-they flip the dependency status to ``down`` and bump the breaker's failure
-counter.
+configurable request deadline. The warehouse probe reads the warehouse
+lifecycle state (``GET /api/2.0/sql/warehouses/{id}``, audit delivery-01):
+``STARTING`` reports ``resuming``, which is NOT an outage (``status`` stays
+``ok`` while every other dependency is up), ``STOPPED`` reads as ``up``
+(available on demand), and an unreadable state falls back to ``SELECT 1``.
+The probe therefore no longer keeps the warehouse awake by accident; keep-warm
+is the explicit ``MIP_WAREHOUSE_KEEP_WARM`` policy. Lakebase issues ``SELECT
+1`` with bounded connect, TCP transport, and server-side statement deadlines,
+while Genie hits ``GET /spaces/{id}``. Failures do not raise; they flip the
+dependency status to ``down`` and bump the breaker's failure counter. An open
+or half-open breaker still forces ``down`` (so ``resuming`` only surfaces
+while the breaker is closed).
 Anonymous load-balancer/liveness requests intentionally do not run those
 probes, so external monitoring cannot keep billable dependencies warm.
 The frontend's degraded banner auto-retries until ``status == "ok"``.
