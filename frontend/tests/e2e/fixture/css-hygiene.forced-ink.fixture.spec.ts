@@ -12,8 +12,8 @@
  * screenshot, so the verdict is what the user sees.
  */
 import type { Locator, Page } from '@playwright/test';
-import { SAMPLE_SCALE, describeInk, paintedInks, paintedSystemFill, sameColor, type PaintedInk } from './paintedInk';
-import { settleTransitions, type Rgb } from './renderedColor';
+import { SAMPLE_SCALE, describeInk, insetRingBand, paintedInks, paintedSystemFill, sameColor, type PaintedInk } from './paintedInk';
+import { contrastRatio, settleTransitions, tokenValue, type Rgb } from './renderedColor';
 import { expect, test, type FixtureTheme } from './test';
 
 const THEMES: readonly FixtureTheme[] = ['dark', 'light'];
@@ -113,6 +113,17 @@ test.describe('forced colors paints every Highlight state legibly (responsive-v3
         await expect(selected).toHaveCount(1);
         await expectReadable(page, 'filter-menu cursor row', cursor, { ...both, glyph: false });
         await expectReadable(page, 'filter-menu selected row', selected, { ...both, glyph: false });
+        // Both rows share the fill, so the cursor's inset ring is what tells
+        // them apart: it must stand off the fill (WCAG 1.4.11), where a
+        // Highlight ring on the Highlight fill was 1:1.
+        const ringWidth = Number.parseFloat(await tokenValue(cursor, '--focus-ring-width'));
+        const ring = await insetRingBand(page, cursor, ringWidth);
+        const plain = await insetRingBand(page, selected, ringWidth);
+        const ringRatio = contrastRatio(ring.ring, ring.inside);
+        const described = `cursor ring rgb(${ring.ring.join(', ')}) on fill rgb(${ring.inside.join(', ')}) at ${ringRatio.toFixed(2)}:1`;
+        expect.soft(sameColor(ring.inside, fill), `${described}: the cursor row keeps the Highlight fill`).toBe(true);
+        expect.soft(ringRatio, described).toBeGreaterThanOrEqual(3);
+        expect.soft(sameColor(plain.ring, plain.inside), 'the selected row wears no ring').toBe(true);
         await page.keyboard.press('Escape');
         await expect(menu).toHaveCount(0);
 

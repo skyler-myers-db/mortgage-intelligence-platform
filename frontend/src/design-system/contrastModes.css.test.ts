@@ -216,6 +216,11 @@ describe('forced-colors: active (css-06 / a11y-10 / responsive-v3)', () => {
     ]);
   });
 
+  it('rings the listbox cursor in HighlightText, since its inset ring sits on the shared fill', () => {
+    const cursor = declarations.filter((d) => d.selector === '.filter-menu__item.is-focused');
+    expect(cursor.map((d) => [d.property, d.value])).toEqual([['--focus-ring-color', 'HighlightText']]);
+  });
+
   it('keeps the score band as a border style, since score chips carry text', () => {
     const style = (selector: string) => declarations.find((d) => d.selector === selector && d.property === 'border-style')?.value;
     expect([style('.score--high'), style('.score--med'), style('.score--low')]).toEqual(['solid', 'dashed', 'dotted']);

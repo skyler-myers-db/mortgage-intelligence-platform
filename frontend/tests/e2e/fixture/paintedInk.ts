@@ -188,6 +188,46 @@ export async function paintedInks(page: Page, target: Locator, fill: Rgb | null 
 }
 
 /**
+ * The painted colours of an element's inset-ring band (its first `band` CSS
+ * px from the inline-start edge) and of its fill just inside that band, each
+ * the dominant colour over the middle half of the element's height, so
+ * rounded corners and the text backplate stay out of both reads.
+ */
+export async function insetRingBand(page: Page, target: Locator, band: number): Promise<{ ring: Rgb; inside: Rgb }> {
+  await target.scrollIntoViewIfNeeded();
+  const box = await target.boundingBox();
+  if (!box) throw new Error('insetRingBand: target is not rendered');
+  const clip = { x: Math.ceil(box.x), y: Math.ceil(box.y + box.height / 4), width: 2 * band + 1, height: Math.floor(box.height / 2) };
+  const png = await page.screenshot({ animations: 'disabled', caret: 'hide', scale: 'device', clip });
+  return page.evaluate(
+    async ({ base64, cssWidth, band: ringWidth }) => {
+      const image = new Image();
+      image.src = `data:image/png;base64,${base64}`;
+      await image.decode();
+      const canvas = document.createElement('canvas');
+      [canvas.width, canvas.height] = [image.width, image.height];
+      const context = canvas.getContext('2d', { willReadFrequently: true });
+      if (!context) throw new Error('2d canvas unavailable');
+      context.drawImage(image, 0, 0);
+      const scale = image.width / cssWidth;
+      const dominant = (fromCss: number, toCss: number): [number, number, number] => {
+        const left = Math.round(fromCss * scale);
+        const { data } = context.getImageData(left, 0, Math.max(1, Math.round(toCss * scale) - left), image.height);
+        const counts = new Map<number, number>();
+        for (let i = 0; i < data.length; i += 4) {
+          const key = (data[i] << 16) | (data[i + 1] << 8) | data[i + 2];
+          counts.set(key, (counts.get(key) ?? 0) + 1);
+        }
+        const key = [...counts].sort((a, b) => b[1] - a[1])[0][0];
+        return [(key >> 16) & 255, (key >> 8) & 255, key & 255];
+      };
+      return { ring: dominant(0, ringWidth), inside: dominant(ringWidth + 1, 2 * ringWidth + 1) };
+    },
+    { base64: png.toString('base64'), cssWidth: clip.width, band },
+  );
+}
+
+/**
  * The colour a system-colour fill paints over the forced Canvas behind it.
  * Chromium's forced palettes give Highlight an alpha (0.8), so the painted
  * fill is the composite, not the keyword's rgb.

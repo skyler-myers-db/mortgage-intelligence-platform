@@ -20,6 +20,8 @@
   /* An svg has no backplate. */
   :is(.segmented button, .filter, .rail__item, .topbar__icon-btn, .drawer__tab, .proof-tab, .cmdk__row, .topbar__search-result).is-active svg,
   .filter-menu__item:is(.is-focused, .is-selected) svg { color: HighlightText !important; }
+  /* The cursor's inset ring. */
+  .filter-menu__item.is-focused { --focus-ring-color: HighlightText; }
   .tweak-row .sw.is-active,
   .zip-tile.is-selected { border-color: Highlight; }
   .segmented,
