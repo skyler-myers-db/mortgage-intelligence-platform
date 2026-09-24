@@ -1,12 +1,19 @@
 #!/usr/bin/env node
-import { gzipSync } from 'node:zlib';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { brotliCompressSync, constants as zlibConstants, gzipSync } from 'node:zlib';
+import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
+import { fileURLToPath } from 'node:url';
+import { initialClosure, routeClosures, staleManifestProblems } from './build_manifest.mjs';
 
-const repoRoot = path.resolve(import.meta.dirname, '..');
+// The manifest maths, re-exported so a test (or another tool) can import the
+// budget gate's exact definitions from one place.
+export { initialClosure, routeClosures, staleManifestProblems };
+
+const repoRoot = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 const distDir = path.join(repoRoot, 'frontend', 'dist');
 const assetsDir = path.join(distDir, 'assets');
+const manifestPath = path.join(repoRoot, 'frontend', 'build-meta', 'build-manifest.json');
 
 const KiB = 1024;
 // ---------------------------------------------------------------------------
@@ -24,17 +31,31 @@ const KiB = 1024;
 //      of headroom, which then tripped on a 0.4 KiB accessibility fix.)
 //   2. When a slice SHRINKS the bundle, ratchet the gate DOWN to the new
 //      actual + ~5% in the same commit so the win is locked in.
-//   3. fontAssetCount stays exact — a 15th font file is always a mistake
-//      (the Geist/Geist Mono subset list is fixed).
+//   3. fontAssetCount stays exact, both ways: an extra font file is always a
+//      mistake, and a build that emits fewer fonts than expected lost a face.
 //
-// Actuals at re-baseline (2026-06-10, post analytics decomposition + a11y
-// polish + precompression slice): initial JS 256.60 / gzip 79.03; initial
-// CSS 101.22 / gzip 18.13; total JS 832.42 / gzip 274.22 across 36 chunks;
-// largest lazy chunk (shared mortgage components + drawerSources) 98.40 /
-// gzip 32.06; fonts 14 files / 215.42 KiB. Build-time precompressed .br/.gz
-// siblings are excluded by the .endsWith() filters below — they are strictly
-// smaller duplicates served via content negotiation (see
-// tools/precompress_assets.mjs + backend/services/static_assets.py).
+// Method (2026-09-24, audit bundle-08). Everything is measured through the
+// bundler's own chunk graph, frontend/build-meta/build-manifest.json (written
+// by `vite build`, moved out of dist by tools/postbuild_artifacts.mjs; see
+// tools/build_manifest.mjs):
+//   - initial JS: the index.html entry plus its transitive static `imports`
+//     (never `dynamicImports`); initial CSS: the union of the `css` those
+//     chunks need.
+//   - routes: per route module (a dynamic entry under src/routes/), the route
+//     chunk plus its static imports minus the initial closure, JS + CSS. A
+//     route module with no entry in `budgets.routes`, or an entry with no
+//     route module, fails: a new route goes through the budget owner.
+//   - lazy: every JS chunk outside the initial closure; the largest one per
+//     dimension is gated.
+//   - brotli at quality 11 (what tools/precompress_assets.mjs ships and the
+//     backend serves) is the PRIMARY dimension; raw and gzip-9 gates stay.
+//   - the manifest must describe the dist beside it: a stale one fails.
+// Build-time precompressed .br/.gz siblings are never measured as assets;
+// only .js/.css/font files are.
+//
+// Actuals at the bundle-08 re-baseline (2026-09-24, wave-2 lane
+// w2-build-currency, measured on the dependency batch of the same lane):
+// see each gate's comment below.
 // ---------------------------------------------------------------------------
 const budgets = {
   // Bumped 2026-06-15 for the frontend security patch:
@@ -105,7 +126,7 @@ const budgets = {
   //     +0.66 br.
   //   - Vite 8.3.0 (rolldown 1.0.3 -> 1.2.10 output): -3.35 raw.
   // Measured: 536.47 / 166.58 (br 142.81); ~5% headroom per policy.
-  initialJsBytes: 564 * KiB, // actual 536.47 (index + its static chunk)
+  initialJsBytes: 564 * KiB, // actual 536.47 (index + Icon: the manifest closure)
   initialJsGzipBytes: 175 * KiB, // actual 166.58
   // Bumped 2026-06-11 for the re-audit #4 Buyer-Wow tranche: ⌘K command
   // palette (.cmdk*), portal evidence hover-card (.evidence-hovercard*),
@@ -153,7 +174,7 @@ const budgets = {
   // banners + shaped skeleton sweep, 32-feedback toast region + guard
   // dialog; each must style a surface that can appear before any lazy chunk).
   // Measured: 158.85 / gzip 27.20; ~5% headroom.
-  initialCssBytes: 167 * KiB, // actual 158.85
+  initialCssBytes: 167 * KiB, // actual 158.81 (2026-09-24, manifest CSS closure)
   // Re-baselined 2026-09-08 for the Genie thread view + deep-research
   // sections slice. The 25 KiB gzip gate had drifted to 4 bytes above the
   // measured artifact (25,596 B) — the next CSS line from anyone would have
@@ -168,7 +189,7 @@ const budgets = {
   // ship with their lazy chunks instead, and the dead `.admin-filter-input`
   // rules were removed, before this bump. Measured: CSS 155.76 / gzip 26.55;
   // ~5% headroom per policy.
-  initialCssGzipBytes: 29 * KiB, // actual 27.20
+  initialCssGzipBytes: 29 * KiB, // actual 27.19 (2026-09-24)
   // Re-baselined 2026-07-10 for the UX declutter slice (batches 1-2). total JS
   // was red on main (990.51 > 990.00); restored ~5% headroom over the measured
   // actual per this file's policy. Batch 2 (asset-label helper, top-leads
@@ -224,8 +245,13 @@ const budgets = {
   // review and bulk review, the ? sheet, the Borrower 360 pager, the Offer
   // Orchestrator decision bar and certified-copy preview, the identity popup
   // and the toast/guard styles. ~5% headroom.
-  totalJsBytes: 1530 * KiB, // actual 1457.07
-  totalJsGzipBytes: 507 * KiB, // actual 482.78
+  // Re-baselined 2026-09-24 by lane w2-build-currency (audit bundle-08, on
+  // its stack-10 dependency batch): React 19.3 + Router 8.4 + Vite 8.3 add
+  // +27.82 raw / +8.20 gzip to total JS, all of it in the initial closure
+  // (see initialJsBytes), which left 3.0% / 3.2% headroom. Measured: 1485.04
+  // / gzip 491.08 across 64 chunks; ~5% headroom.
+  totalJsBytes: 1560 * KiB, // actual 1485.04
+  totalJsGzipBytes: 516 * KiB, // actual 491.08
   // Re-baselined 2026-09-23 for wave 1c (lane queue-keyboard-review): the
   // shared LeadTable chunk (Lead Queue + Segment Intelligence) grew from
   // 92.96 / 29.59 to 105.51 / 33.56 with the keyboard triage that must be
@@ -234,10 +260,38 @@ const budgets = {
   // Cmd-K selection publisher and the lazy-module loader. The approve review
   // (7.8 KiB), the bulk gate's review (3.4 KiB) and the `?` sheet already
   // ship as their own lazy chunks. ~5% headroom per policy.
-  maxLazyJsBytes: 111 * KiB, // actual 105.51 (LeadTable)
-  maxLazyJsGzipBytes: 36 * KiB, // actual 33.56 (LeadTable)
-  fontAssetCount: 14, // exact by policy
-  fontBytes: 227 * KiB, // actual 215.42 (was 230 -- tightened)
+  maxLazyJsBytes: 111 * KiB, // actual 109.11 (LeadTable, 2026-09-24)
+  maxLazyJsGzipBytes: 36 * KiB, // actual 34.69 (LeadTable, 2026-09-24)
+  fontAssetCount: 14, // exact by policy, both ways
+  fontBytes: 227 * KiB, // actual 215.42 (2026-09-24: 7 static woff2 + their 7 never-requested woff twins)
+  // Brotli q11, the primary dimension (audit bundle-08; see the header). First
+  // baselined 2026-09-24 by lane w2-build-currency on its own dependency batch
+  // (React 19.3 is +7.22 br of the initial number, Router 8.4 +0.66; see
+  // initialJsBytes). ~5% headroom, rounded up to a whole KiB.
+  initialJsBrBytes: 150 * KiB, // actual 142.81 (index + Icon)
+  initialCssBrBytes: 24 * KiB, // actual 22.82
+  totalJsBrBytes: 445 * KiB, // actual 423.50 (64 chunks)
+  maxLazyJsBrBytes: 32 * KiB, // actual 30.01 (LeadTable)
+  // What a navigation to each route fetches beyond the initial closure: the
+  // route chunk plus its static imports, JS + CSS, brotli q11. Keyed by the
+  // manifest's source path; every route module must have an entry and every
+  // entry a route module (a route added in a later wave goes through the
+  // integrator). Baselined 2026-09-24 at measured + ~5%, whole KiB.
+  routes: {
+    'src/routes/admin-config.access-denied.tsx': 5 * KiB, // actual 4.47
+    'src/routes/admin-config.tsx': 35 * KiB, // actual 32.61
+    'src/routes/analytics.tsx': 44 * KiB, // actual 41.33
+    'src/routes/ask-genie.tsx': 53 * KiB, // actual 49.90
+    'src/routes/asset.tsx': 8 * KiB, // actual 7.00
+    'src/routes/borrower-360.tsx': 38 * KiB, // actual 35.39
+    'src/routes/glossary.tsx': 9 * KiB, // actual 8.38
+    'src/routes/home.tsx': 43 * KiB, // actual 40.16
+    'src/routes/lead-queue.tsx': 67 * KiB, // actual 62.86
+    'src/routes/not-found.tsx': 4 * KiB, // actual 3.40
+    'src/routes/offer-orchestrator.tsx': 36 * KiB, // actual 33.71
+    'src/routes/portfolio-builder.tsx': 34 * KiB, // actual 31.59
+    'src/routes/segment-intelligence.tsx': 84 * KiB, // actual 79.07
+  },
 };
 
 function bytes(n) {
@@ -247,46 +301,70 @@ function bytes(n) {
   return `${(n / KiB).toFixed(2)} KiB`;
 }
 
-function assetInfo(file) {
-  const abs = path.join(assetsDir, file);
-  const raw = readFileSync(abs);
+/** Raw, gzip level 9 and brotli quality 11 sizes of one buffer. */
+export function measureBuffer(raw) {
   return {
-    file,
-    bytes: statSync(abs).size,
+    bytes: raw.length,
     gzipBytes: gzipSync(raw, { level: 9 }).length,
+    brBytes: brotliCompressSync(raw, {
+      params: {
+        [zlibConstants.BROTLI_PARAM_QUALITY]: 11,
+        [zlibConstants.BROTLI_PARAM_SIZE_HINT]: raw.length,
+      },
+    }).length,
   };
 }
 
-// A static `import ... from"./x.js"` / `export ... from"./x.js"` / bare
-// `import"./x.js"` in a built chunk. `import("./x.js")` (a lazy load) has a
-// parenthesis after `import`, so it never matches.
-const STATIC_CHUNK_IMPORT = /(?:\bfrom\s*|\bimport\s*)["']\.\/([\w.-]+\.js)["']/g;
-
-/**
- * The entry chunk plus every chunk it imports statically, transitively: the
- * JS every first paint loads before the app runs. The bundler can move
- * modules the entry needs (React and its own CommonJS interop helpers) out
- * of index-*.js into a sibling chunk the entry imports (it does since the
- * lazy `?` shortcut sheet landed, wave 1c); measuring index-*.js alone would
- * then undercount the initial payload and read as a false shrink.
- */
-function initialChunkClosure(entryFile) {
-  const seen = new Set([entryFile]);
-  const queue = [entryFile];
-  while (queue.length > 0) {
-    const text = readFileSync(path.join(assetsDir, queue.shift()), 'utf8');
-    for (const match of text.matchAll(STATIC_CHUNK_IMPORT)) {
-      if (!seen.has(match[1])) {
-        seen.add(match[1]);
-        queue.push(match[1]);
-      }
-    }
+/** Sum of the sizes of `files` under a `sizeOf(file)` lookup. */
+export function sumSizes(files, sizeOf) {
+  const total = { files: [...files], bytes: 0, gzipBytes: 0, brBytes: 0 };
+  for (const file of files) {
+    const size = sizeOf(file);
+    total.bytes += size.bytes;
+    total.gzipBytes += size.gzipBytes;
+    total.brBytes += size.brBytes;
   }
-  return [...seen];
+  return total;
 }
 
-function failIf(overages, condition, message) {
-  if (condition) overages.push(message);
+/** Exact, both ways: null when the count matches, the problem otherwise. */
+export function fontCountProblem(actual, expected) {
+  return actual === expected ? null : `font asset count is ${actual}, expected exactly ${expected}`;
+}
+
+/** Every route module needs a budget entry and every entry needs a route module. */
+export function routeBudgetProblems(routeKeys, budgetRoutes) {
+  const problems = [];
+  for (const key of routeKeys) {
+    if (!(key in budgetRoutes)) problems.push(`route module ${key} has no entry in budgets.routes`);
+  }
+  for (const key of Object.keys(budgetRoutes)) {
+    if (!routeKeys.includes(key)) problems.push(`budgets.routes names ${key}, which is not a route module in the build manifest`);
+  }
+  return problems;
+}
+
+/** The largest lazy chunk, per dimension (a chunk can be largest raw but not largest br). */
+export function largestPerDimension(chunks) {
+  const none = { file: 'none', value: 0 };
+  const largest = { bytes: none, gzipBytes: none, brBytes: none };
+  for (const chunk of chunks) {
+    for (const dimension of Object.keys(largest)) {
+      if (chunk[dimension] > largest[dimension].value) largest[dimension] = { file: chunk.file, value: chunk[dimension] };
+    }
+  }
+  return largest;
+}
+
+function readManifest() {
+  try {
+    return JSON.parse(readFileSync(manifestPath, 'utf8'));
+  } catch (err) {
+    console.error(`Frontend budget check requires ${manifestPath}.`);
+    console.error('Run `npm --prefix frontend run build` (tools/postbuild_artifacts.mjs moves the manifest there).');
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  }
 }
 
 function main() {
@@ -298,94 +376,75 @@ function main() {
     console.error(err instanceof Error ? err.message : String(err));
     process.exit(1);
   }
-
-  const js = files.filter((f) => f.endsWith('.js')).map(assetInfo);
-  const css = files.filter((f) => f.endsWith('.css')).map(assetInfo);
-  const fonts = files.filter((f) => /\.(woff2?|ttf|otf)$/.test(f)).map(assetInfo);
-  const entryJs = js.find((a) => /^index-[\w-]+\.js$/.test(a.file));
-  const initialFiles = entryJs ? initialChunkClosure(entryJs.file) : [];
-  const initialChunks = js.filter((a) => initialFiles.includes(a.file));
-  const initialJs = entryJs && {
-    file: [entryJs, ...initialChunks.filter((a) => a !== entryJs)].map((a) => a.file).join(' + '),
-    bytes: initialChunks.reduce((sum, a) => sum + a.bytes, 0),
-    gzipBytes: initialChunks.reduce((sum, a) => sum + a.gzipBytes, 0),
-  };
-  const initialCss = css.find((a) => /^index-[\w-]+\.css$/.test(a.file));
-  const lazyJs = js.filter((a) => !initialFiles.includes(a.file));
-  const totalJsBytes = js.reduce((sum, a) => sum + a.bytes, 0);
-  const totalJsGzipBytes = js.reduce((sum, a) => sum + a.gzipBytes, 0);
-  const fontBytes = fonts.reduce((sum, a) => sum + a.bytes, 0);
-  const largestLazy = lazyJs.reduce((max, a) => (a.bytes > max.bytes ? a : max), {
-    file: 'none',
-    bytes: 0,
-    gzipBytes: 0,
-  });
+  const manifest = readManifest();
 
   const overages = [];
-  failIf(overages, !initialJs, 'missing initial index-*.js asset');
-  failIf(overages, !initialCss, 'missing initial index-*.css asset');
+  const failIf = (condition, message) => {
+    if (condition) overages.push(message);
+  };
+  const distChunks = files.filter((f) => /\.(?:js|css)$/.test(f)).map((f) => `assets/${f}`);
+  overages.push(...staleManifestProblems(manifest, distChunks));
 
-  if (initialJs) {
-    failIf(
-      overages,
-      initialJs.bytes > budgets.initialJsBytes,
-      `initial JS ${initialJs.file} is ${bytes(initialJs.bytes)} > ${bytes(budgets.initialJsBytes)}`,
-    );
-    failIf(
-      overages,
-      initialJs.gzipBytes > budgets.initialJsGzipBytes,
-      `initial JS gzip ${initialJs.file} is ${bytes(initialJs.gzipBytes)} > ${bytes(budgets.initialJsGzipBytes)}`,
-    );
+  const sizes = new Map();
+  const sizeOf = (file) => {
+    if (!sizes.has(file)) sizes.set(file, { file, ...measureBuffer(readFileSync(path.join(distDir, file))) });
+    return sizes.get(file);
+  };
+  const present = new Set(distChunks);
+  const measurable = (list) => list.filter((file) => present.has(file));
+
+  const initial = initialClosure(manifest);
+  const initialJs = sumSizes(measurable(initial.js), sizeOf);
+  const initialCss = sumSizes(measurable(initial.css), sizeOf);
+  const js = distChunks.filter((f) => f.endsWith('.js'));
+  const totalJs = sumSizes(js, sizeOf);
+  const lazy = largestPerDimension(js.filter((f) => !initial.js.includes(f)).map(sizeOf));
+  const routes = Object.entries(routeClosures(manifest, initial)).map(([key, closure]) => ({
+    key,
+    ...sumSizes(measurable([...closure.js, ...closure.css]), sizeOf),
+  }));
+  const fonts = files.filter((f) => /\.(woff2?|ttf|otf)$/.test(f));
+  const fontBytes = fonts.reduce((sum, f) => sum + readFileSync(path.join(assetsDir, f)).length, 0);
+
+  const gate = (label, actual, budget) => failIf(actual > budget, `${label} is ${bytes(actual)} > ${bytes(budget)}`);
+  gate('initial JS br', initialJs.brBytes, budgets.initialJsBrBytes);
+  gate('initial JS', initialJs.bytes, budgets.initialJsBytes);
+  gate('initial JS gzip', initialJs.gzipBytes, budgets.initialJsGzipBytes);
+  gate('initial CSS br', initialCss.brBytes, budgets.initialCssBrBytes);
+  gate('initial CSS', initialCss.bytes, budgets.initialCssBytes);
+  gate('initial CSS gzip', initialCss.gzipBytes, budgets.initialCssGzipBytes);
+  gate('total JS br', totalJs.brBytes, budgets.totalJsBrBytes);
+  gate('total JS', totalJs.bytes, budgets.totalJsBytes);
+  gate('total JS gzip', totalJs.gzipBytes, budgets.totalJsGzipBytes);
+  gate(`largest lazy JS br (${lazy.brBytes.file})`, lazy.brBytes.value, budgets.maxLazyJsBrBytes);
+  gate(`largest lazy JS (${lazy.bytes.file})`, lazy.bytes.value, budgets.maxLazyJsBytes);
+  gate(`largest lazy JS gzip (${lazy.gzipBytes.file})`, lazy.gzipBytes.value, budgets.maxLazyJsGzipBytes);
+  overages.push(...routeBudgetProblems(routes.map((r) => r.key), budgets.routes));
+  for (const route of routes) {
+    if (route.key in budgets.routes) gate(`route ${route.key} closure br`, route.brBytes, budgets.routes[route.key]);
   }
-  if (initialCss) {
-    failIf(
-      overages,
-      initialCss.bytes > budgets.initialCssBytes,
-      `initial CSS ${initialCss.file} is ${bytes(initialCss.bytes)} > ${bytes(budgets.initialCssBytes)}`,
-    );
-    failIf(
-      overages,
-      initialCss.gzipBytes > budgets.initialCssGzipBytes,
-      `initial CSS gzip ${initialCss.file} is ${bytes(initialCss.gzipBytes)} > ${bytes(budgets.initialCssGzipBytes)}`,
-    );
+  failIf(initialJs.files.length === 0, 'the build manifest names no initial JS');
+  failIf(initialCss.files.length === 0, 'the build manifest names no initial CSS');
+  const fontProblem = fontCountProblem(fonts.length, budgets.fontAssetCount);
+  failIf(fontProblem !== null, fontProblem);
+  gate('font assets total', fontBytes, budgets.fontBytes);
+
+  const triple = (s) => `br ${bytes(s.brBytes)} / raw ${bytes(s.bytes)} / gzip ${bytes(s.gzipBytes)}`;
+  console.log('Frontend budget report (manifest closure; brotli q11 primary)');
+  console.log(`  initial JS: ${triple(initialJs)} [${initialJs.files.join(' + ')}]`);
+  console.log(`  initial CSS: ${triple(initialCss)} [${initialCss.files.join(' + ')}]`);
+  console.log(`  total JS: ${triple(totalJs)} across ${js.length} chunks`);
+  const lazyFiles = new Set([lazy.brBytes.file, lazy.bytes.file, lazy.gzipBytes.file]);
+  const lazyAt = (dimension) => (lazyFiles.size === 1 ? '' : ` (${lazy[dimension].file})`);
+  console.log(
+    `  largest lazy JS${lazyFiles.size === 1 ? ` ${lazy.brBytes.file}` : ''}: ` +
+      `br ${bytes(lazy.brBytes.value)}${lazyAt('brBytes')} / raw ${bytes(lazy.bytes.value)}${lazyAt('bytes')} / ` +
+      `gzip ${bytes(lazy.gzipBytes.value)}${lazyAt('gzipBytes')}`,
+  );
+  console.log('  route closures (beyond the initial closure):');
+  for (const route of routes) {
+    console.log(`    ${route.key}: ${triple(route)} (${route.files.length} files)`);
   }
-
-  failIf(
-    overages,
-    totalJsBytes > budgets.totalJsBytes,
-    `total JS is ${bytes(totalJsBytes)} > ${bytes(budgets.totalJsBytes)}`,
-  );
-  failIf(
-    overages,
-    totalJsGzipBytes > budgets.totalJsGzipBytes,
-    `total JS gzip is ${bytes(totalJsGzipBytes)} > ${bytes(budgets.totalJsGzipBytes)}`,
-  );
-  failIf(
-    overages,
-    largestLazy.bytes > budgets.maxLazyJsBytes,
-    `largest lazy JS ${largestLazy.file} is ${bytes(largestLazy.bytes)} > ${bytes(budgets.maxLazyJsBytes)}`,
-  );
-  failIf(
-    overages,
-    largestLazy.gzipBytes > budgets.maxLazyJsGzipBytes,
-    `largest lazy JS gzip ${largestLazy.file} is ${bytes(largestLazy.gzipBytes)} > ${bytes(budgets.maxLazyJsGzipBytes)}`,
-  );
-  failIf(
-    overages,
-    fonts.length > budgets.fontAssetCount,
-    `font asset count is ${fonts.length} > ${budgets.fontAssetCount}`,
-  );
-  failIf(
-    overages,
-    fontBytes > budgets.fontBytes,
-    `font assets total ${bytes(fontBytes)} > ${bytes(budgets.fontBytes)}`,
-  );
-
-  console.log('Frontend budget report');
-  console.log(`  initial JS: ${initialJs ? `${initialJs.file} ${bytes(initialJs.bytes)} / gzip ${bytes(initialJs.gzipBytes)}` : 'missing'}`);
-  console.log(`  initial CSS: ${initialCss ? `${initialCss.file} ${bytes(initialCss.bytes)} / gzip ${bytes(initialCss.gzipBytes)}` : 'missing'}`);
-  console.log(`  total JS: ${bytes(totalJsBytes)} / gzip ${bytes(totalJsGzipBytes)} across ${js.length} chunks`);
-  console.log(`  largest lazy JS: ${largestLazy.file} ${bytes(largestLazy.bytes)} / gzip ${bytes(largestLazy.gzipBytes)}`);
   console.log(`  fonts: ${fonts.length} files, ${bytes(fontBytes)}`);
 
   if (overages.length > 0) {
@@ -396,4 +455,6 @@ function main() {
   console.log('Frontend budget check passed.');
 }
 
-main();
+if (process.argv[1] && path.resolve(process.argv[1]) === path.join(repoRoot, 'tools', 'check_frontend_budgets.mjs')) {
+  main();
+}

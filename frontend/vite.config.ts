@@ -10,6 +10,14 @@ export default defineConfig({
       presets: [reactCompilerPreset()],
     }),
   ],
+  build: {
+    // The chunk graph tools/check_frontend_budgets.mjs measures (initial and
+    // per-route closures). A non-dot name, so it is never mistaken for Vite's
+    // default `.vite/manifest.json`; tools/postbuild_artifacts.mjs moves it
+    // out of dist into frontend/build-meta/ before anything is served or
+    // uploaded, because the SPA fallback would serve any real file in dist.
+    manifest: 'build-manifest.json',
+  },
   server: {
     port: 5173,
     proxy: {
