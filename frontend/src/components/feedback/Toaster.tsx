@@ -39,7 +39,8 @@ import './Toaster.css';
  *     never on the click itself: the unsaved-changes guard can still hold
  *     that navigation, and Stay must find the toast and its link where they
  *     were.
- *   - Removing the toast that holds focus hands focus on first (WCAG 2.4.3):
+ *   - Removing the toast that holds focus (a dismiss, or the cap evicting
+ *     it) hands focus on first (WCAG 2.4.3):
  *     to the next toast's dismiss button, else back to the control focus
  *     came from before it entered the region, else to the page heading.
  *     A keyboard dismissal may scroll that control back into view; a mouse
@@ -74,7 +75,12 @@ function focusAwayFrom(
   origin: HTMLElement | null,
   pointer: boolean,
 ): void {
-  const cards = [...region.querySelectorAll<HTMLElement>('.toast')];
+  // Only a toast the store still holds can take focus: a burst can evict
+  // more than one card in the frame before React re-renders the region.
+  const live = new Set(getToasts().map((item) => String(item.id)));
+  const cards = [...region.querySelectorAll<HTMLElement>('.toast')].filter(
+    (item) => item === card || live.has(item.dataset.toastId ?? ''),
+  );
   const index = cards.indexOf(card);
   const neighbour = index === -1 ? undefined : cards[index + 1] ?? cards[index - 1];
   const main = document.getElementById('main-content');
@@ -212,6 +218,21 @@ export function Toaster() {
     if (!region || !now || card?.contains(now) || !region.contains(now)) setFocusWithin(false);
     dismissToast(id);
   }, []);
+
+  // The store can also remove the toast that holds focus with no dismiss:
+  // the cap evicts it for a newer one, or an actor change clears them all.
+  // A store listener runs at publish, while that card is still in the DOM
+  // (React re-renders the region after), so focus is handed on the same way.
+  useEffect(() => subscribeToasts(() => {
+    const region = regionRef.current;
+    const active = document.activeElement;
+    if (!region || !active || !region.contains(active)) return;
+    const card = active.closest<HTMLElement>('.toast');
+    if (!card || getToasts().some((item) => String(item.id) === card.dataset.toastId)) return;
+    focusAwayFrom(region, card, originRef.current, false);
+    // Focus nothing could take falls to <body> with no blur: stop pausing.
+    if (card.contains(document.activeElement)) setFocusWithin(false);
+  }), []);
 
   // A toast whose audit event the explorer now shows has done its job. It is
   // dismissed here, after the navigation committed, not in the link's click.

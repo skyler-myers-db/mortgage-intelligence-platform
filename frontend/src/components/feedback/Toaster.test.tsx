@@ -227,6 +227,92 @@ describe('Toaster', () => {
     }
   });
 
+  it('hands focus on when the cap evicts the toast that holds it', () => {
+    act(() => {
+      toast.success('Build link copied');
+    });
+    const focused = container.querySelector<HTMLButtonElement>('button[aria-label="Dismiss notification"]');
+    act(() => focused?.focus());
+    expect(document.activeElement).toBe(focused);
+
+    // Three failures, each raised by its own event: the third evicts the
+    // oldest confirmation, the focused one.
+    for (const title of ['Copy failed', 'Save failed', 'Export failed']) {
+      act(() => {
+        toast.error(title);
+      });
+    }
+    expect(cards().map((card) => card.textContent)).toEqual([
+      expect.stringContaining('Copy failed'),
+      expect.stringContaining('Save failed'),
+      expect.stringContaining('Export failed'),
+    ]);
+    const saveFailed = cards()[1].querySelector('button[aria-label="Dismiss notification"]');
+    expect(document.activeElement).toBe(saveFailed);
+  });
+
+  it('never hands focus to a toast the same burst also evicted', () => {
+    const share = document.createElement('button');
+    share.textContent = 'Share this build';
+    document.body.appendChild(share);
+    try {
+      act(() => {
+        toast.success('Build link copied');
+        toast.success('Build saved');
+      });
+      act(() => share.focus());
+      act(() => container.querySelector<HTMLButtonElement>('button[aria-label="Dismiss notification"]')?.focus());
+
+      // One synchronous burst, before React re-renders the region: the
+      // second failure evicts the focused toast (focus moves to its
+      // neighbour), the third evicts that neighbour too.
+      act(() => {
+        toast.error('Copy failed');
+        toast.error('Save failed');
+        toast.error('Export failed');
+      });
+      expect(cards()).toHaveLength(3);
+      expect(document.activeElement).toBe(share);
+    } finally {
+      share.remove();
+    }
+  });
+
+  it('hands focus to the heading when an actor change clears the focused toast, and stops pausing', () => {
+    const closeButton = () => container.querySelector<HTMLButtonElement>('button[aria-label="Dismiss notification"]');
+    const main = document.createElement('main');
+    main.id = 'main-content';
+    main.tabIndex = -1;
+    main.innerHTML = '<h1 tabindex="-1">Lead Queue</h1>';
+    document.body.appendChild(main);
+    try {
+      act(() => {
+        toast.error('Copy failed');
+      });
+      act(() => closeButton()?.focus());
+      act(() => clearToasts());
+      expect(document.activeElement).toBe(main.querySelector('h1'));
+    } finally {
+      main.remove();
+    }
+
+    // Nothing left to take focus: it falls to <body>, and the region must
+    // not stay paused, or the next confirmation would never time out.
+    act(() => {
+      toast.error('Copy failed');
+    });
+    act(() => closeButton()?.focus());
+    act(() => clearToasts());
+    act(() => {
+      toast.success('Build saved');
+    });
+    expect(region()?.hasAttribute('data-paused')).toBe(false);
+    act(() => {
+      vi.advanceTimersByTime(SUCCESS_TOAST_MS);
+    });
+    expect(cards()).toHaveLength(0);
+  });
+
   it('keeps a failure until it is dismissed', () => {
     act(() => {
       toast.error('Copy failed');
