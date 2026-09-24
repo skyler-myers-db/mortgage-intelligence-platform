@@ -120,3 +120,13 @@
 .offer-action-bar[data-genie-clearance] {
   padding-inline-end: calc(var(--offer-action-bar-genie-clearance, 0px) + var(--sp-4));
 }
+
+/* Reduced transparency (audit responsive-v3): an opaque bar, no frosted
+   blur, the same treatment 33-contrast-modes.css gives the topbar. Here, not
+   there, because this lazy sheet loads after the shell CSS and wins ties. */
+@media (prefers-reduced-transparency: reduce) {
+  .offer-action-bar {
+    background: var(--bg-1);
+    backdrop-filter: none;
+  }
+}

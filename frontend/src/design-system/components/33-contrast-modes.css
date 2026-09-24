@@ -1,0 +1,73 @@
+/* ============================================================
+   CONTRAST MODES (audit css-06 / a11y-10 / responsive-v3). Additive;
+   the prototype has none. System colours only. Rings follow the
+   forced-colors --focus-ring-color token (tokens.css).
+   ============================================================ */
+@media (forced-colors: active) {
+  /* State painted by a fill alone vanished when fills were forced. */
+  .segmented button.is-active,
+  :is(.tweak-row, .admin-row, .campaign-setup__toggle) .switch.on,
+  .filter.is-active,
+  .rail__item.is-active,
+  .topbar__icon-btn.is-active,
+  .drawer__tab.is-active,
+  .proof-tab.is-active,
+  .cmdk__row.is-active,
+  .filter-menu__item:is(.is-focused, .is-selected),
+  .topbar__search-result.is-active {
+    background-color: Highlight;
+    color: HighlightText;
+    border-color: Highlight;
+  }
+  .seg-card.is-selected,
+  .tweak-row .sw.is-active,
+  .zip-tile.is-selected { border-color: Highlight; }
+  .segmented,
+  .switch { border-color: CanvasText; }
+  :is(.tweak-row, .admin-row, .campaign-setup__toggle) .switch::after {
+    forced-color-adjust: none;
+    background-color: CanvasText;
+  }
+  :is(.tweak-row, .admin-row, .campaign-setup__toggle) .switch.on::after { background-color: HighlightText; }
+
+  /* Non-text data marks keep their encoding, edged in CanvasText. */
+  .conf__bar {
+    forced-color-adjust: none;
+    background-color: Canvas;
+    border: 1px solid CanvasText;
+  }
+  :is(.conf, .conf--high, .conf--med, .conf--low) .conf__bar.on { background-color: CanvasText; }
+  .map-region:is(.is-empty, .lvl-1, .lvl-2, .lvl-3, .lvl-4) {
+    forced-color-adjust: none;
+    stroke: CanvasText;
+  }
+  .map-legend__bar span,
+  .zip-tile {
+    forced-color-adjust: none;
+    border: 1px solid CanvasText;
+  }
+  .map-label { forced-color-adjust: none; }
+  .topbar__pill .dot:is(.dot, .amber, .danger) {
+    forced-color-adjust: none;
+    background-color: CanvasText;
+    box-shadow: none;
+  }
+
+  /* Score chips carry text, so they are forced; the band becomes the edge. */
+  .score--high { border-style: solid; border-width: var(--focus-ring-width); }
+  .score--med { border-style: dashed; }
+  .score--low { border-style: dotted; }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .topbar,
+  .route-nav,
+  .map-legend {
+    background: var(--bg-1);
+    backdrop-filter: none;
+  }
+  .cmdk,
+  .drawer-scrim,
+  .offer-mock-scrim,
+  .session-dialog::backdrop { backdrop-filter: none; }
+}

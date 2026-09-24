@@ -178,3 +178,17 @@
 .seg-card__facet-share--2 { background: color-mix(in oklab, var(--seg-color, var(--accent)) 60%, var(--bg-2)); }
 .seg-card__facet-share--3 { background: color-mix(in oklab, var(--seg-color, var(--accent)) 32%, var(--bg-2)); }
 .seg-card__facet-share--4 { background: var(--line-2); }
+/* Forced colors (audit a11y-10 / responsive-v3): the share bar is a
+   non-text data mark, so it keeps its segment-hue shares (the chip's text
+   around it is still forced) on a Canvas track edged in CanvasText. It lives
+   here, not in 33-contrast-modes.css, because this lazy sheet loads after
+   the shell CSS and would win the tie. */
+@media (forced-colors: active) {
+  .seg-card__facet-bar {
+    forced-color-adjust: none;
+    background-color: Canvas;
+    outline: 1px solid CanvasText;
+  }
+  .seg-card__facet-share + .seg-card__facet-share { border-inline-start-color: CanvasText; }
+  .seg-card__facet-share--4 { background-color: Canvas; }
+}

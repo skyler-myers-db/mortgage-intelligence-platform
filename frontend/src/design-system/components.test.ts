@@ -553,6 +553,19 @@ describe('layout containment contracts', () => {
   });
 });
 
+describe('contrast-mode partial order (css-06 / a11y-10 / responsive-v3)', () => {
+  // 33 overrides partials 01-32 at equal specificity, so it must come after
+  // all of them. Later partials (34+, other lanes) may follow it.
+  it('imports 33-contrast-modes.css after every partial it overrides', () => {
+    const entry = readFileSync(join(process.cwd(), 'src/design-system/components.css'), 'utf8');
+    const imports = [...entry.matchAll(/@import\s+["']\.\/components\/(\d+)-[\w-]+\.css["'];/g)].map((match) => Number(match[1]));
+    const at = imports.indexOf(33);
+    expect(at, '33-contrast-modes.css is imported').toBeGreaterThan(0);
+    expect(imports.slice(at + 1).filter((n) => n <= 32), 'no 01-32 partial after 33').toEqual([]);
+    expect(entry).toMatch(/@import "\.\/components\/32-feedback\.css";\n@import "\.\/components\/33-contrast-modes\.css";/);
+  });
+});
+
 /** `selector { declarations }` of the innermost rule blocks, comments stripped. */
 function cssRules(css: string): Array<{ selector: string; block: string }> {
   const text = css.replace(/\/\*[\s\S]*?\*\//g, '');

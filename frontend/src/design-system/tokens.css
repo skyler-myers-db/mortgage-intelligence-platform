@@ -605,3 +605,34 @@ input[type="checkbox"] {
   --stagger-step: 16ms;      /* ZIP tile settle-in */
   --stagger-step-lg: 70ms;   /* funnel Sankey ribbons */
 }
+
+/* ---------- Contrast modes (css-06 / a11y-10 / responsive-v3) ----------
+ * Forced colors (Windows High Contrast): every ring reads --focus-ring-color,
+ * so one token paints them all in the system Highlight (the component side
+ * is components/33-contrast-modes.css).
+ * prefers-contrast: more raises the tertiary / disabled inks and the hairline
+ * rules per theme, and thickens the ring: --text-3 >= 7:1 and --text-4
+ * >= 4.5:1 on --bg-0..3, --line-2 / --line-3 >= 3:1 on --bg-1 / --bg-2 (the
+ * inks reuse the next step of each theme's own ramp, --text-2 / --text-3).
+ * Additive: the default light and dark values above stay prototype-verbatim.
+ */
+@media (forced-colors: active) {
+  :root { --focus-ring-color: Highlight; }
+}
+@media (prefers-contrast: more) {
+  :root, [data-theme="dark"] {
+    --text-3: #BACBD8;
+    --text-4: #93AABD;
+    --line-1: rgba(178,189,194,0.30);
+    --line-2: rgba(178,189,194,0.60);
+    --line-3: rgba(102,197,255,0.60);
+  }
+  [data-theme="light"] {
+    --text-3: #254A66;
+    --text-4: #34536B;
+    --line-1: rgba(2,80,128,0.30);
+    --line-2: rgba(2,80,128,0.60);
+    --line-3: rgba(2,80,128,0.72);
+  }
+  :root { --focus-ring-width: 3px; }
+}
