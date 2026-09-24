@@ -10,10 +10,12 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GenieLiveProgress } from '../../lib/api';
+import type { GenieTurnProgress } from '../../types/genieJobs';
 import {
   GENIE_DEEP_WAIT_LABEL,
   GENIE_VERIFY_WAIT_LABEL,
   GenieProgress,
+  genieJobPartsLabel,
   genieProgressLabel,
   genieStatusLabel,
 } from './GenieProgress';
@@ -285,5 +287,56 @@ describe('GenieProgress: live region discipline (genie-v1 / a11y-06)', () => {
     };
     expect(genieProgressLabel(grown)).toBe(genieProgressLabel(LIVE_EXECUTING));
     expect(genieProgressLabel(LIVE_TERMINAL)).toBe(GENIE_VERIFY_WAIT_LABEL);
+  });
+});
+
+describe('GenieProgress: the completion job speaks with the server stage (genie-01)', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+  beforeEach(() => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  const RESEARCHING: GenieTurnProgress = {
+    ...LIVE_TERMINAL,
+    deep: true,
+    job: { stage: 'researching', stage_label: 'Running governed sub-analyses', parts_done: 3, parts_planned: 7 },
+  };
+
+  it('labels the wait with the job stage, and the announcer text never carries the count', () => {
+    expect(genieProgressLabel(RESEARCHING)).toBe('Running governed sub-analyses');
+    expect(genieProgressLabel({ ...RESEARCHING, job: { ...RESEARCHING.job!, parts_done: 4 } })).toBe(
+      'Running governed sub-analyses',
+    );
+    expect(genieJobPartsLabel(RESEARCHING)).toBe('3 of 7 sub-analyses finished');
+  });
+
+  it('shows "k of n sub-analyses finished" inside the label span, on the last rail dot', () => {
+    act(() => root.render(<GenieProgress progress={RESEARCHING} startedAt={Date.now()} />));
+
+    const label = container.querySelector('.genie-progress__label')!;
+    expect(label.textContent).toBe('Running governed sub-analyses · 3 of 7 sub-analyses finished');
+    const stages = Array.from(container.querySelectorAll('.genie-progress__stage'));
+    expect(stages).toHaveLength(4);
+    expect(stages[3].className).toContain('is-active');
+    expect(stages[3].textContent).toContain('Deep research');
+    expect(container.textContent).not.toContain('Answer ready');
+  });
+
+  it('shows no count outside the sweep', () => {
+    const verifying: GenieTurnProgress = {
+      ...LIVE_TERMINAL,
+      job: { stage: 'verifying', stage_label: 'Verifying the answer against its rows', parts_done: null, parts_planned: null },
+    };
+    act(() => root.render(<GenieProgress progress={verifying} />));
+
+    expect(container.querySelector('.genie-progress__label')!.textContent).toBe('Verifying the answer against its rows');
+    expect(genieJobPartsLabel(verifying)).toBeNull();
   });
 });
