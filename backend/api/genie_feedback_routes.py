@@ -4,6 +4,10 @@ Split out of ``backend/api/genie.py`` (2026-07-07) to keep that module under
 the file-size gate. Behavior is unchanged and pinned by
 ``tests/unit/test_genie_feedback_api.py``; the route path stays
 ``POST /api/genie/feedback`` because both routers share the ``/genie`` prefix.
+
+``POST /api/genie/export-receipt`` (audit 2026-09-21 genie-06) lives here too:
+the ``GENIE_ANSWER_EXPORT`` ledger row a Genie CSV download waits for, pinned
+by ``tests/unit/test_genie_answer_export_receipt.py``.
 """
 
 from __future__ import annotations
@@ -14,8 +18,21 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from backend.schemas.common import validate_public_opaque_id
-from backend.services.audit_store import resolve_actor
+from backend.schemas.genie_export import GenieAnswerExportReceipt, GenieAnswerExportReceiptRequest
+from backend.services.audit_store import (
+    AuditMetadataValueViolation,
+    AuditMetadataViolation,
+    AuditPIIError,
+    AuditStore,
+    get_audit_store,
+    resolve_actor,
+)
 from backend.services.error_sanitizer import safe_dependency_detail
+from backend.services.genie_answer_export_receipt import (
+    GenieExportCountMismatch,
+    GenieExportNotFound,
+    write_genie_answer_export_receipt,
+)
 from backend.services.genie_client import ResilientGenieClient, get_genie_client
 from backend.services.genie_feedback import (
     GenieFeedbackConflictError,
@@ -26,11 +43,18 @@ from backend.services.genie_feedback import (
 from backend.services.genie_session_guard import assert_genie_message_owned
 from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
+from backend.services.rbac import AuthenticatedActorDep
 
 router = APIRouter(prefix="/genie", tags=["genie"])
 
 LakebaseDep = Annotated[LakebaseClient, Depends(get_lakebase_client)]
 GenieClientDep = Annotated[ResilientGenieClient, Depends(get_genie_client)]
+StoreDep = Annotated[AuditStore, Depends(get_audit_store)]
+
+#: Constant details: a refusal never says which part of the declaration failed.
+GENIE_EXPORT_NOT_FOUND_DETAIL = "Genie answer not found"
+GENIE_EXPORT_COUNT_MISMATCH_DETAIL = "export declaration does not match the Genie answer"
+GENIE_EXPORT_REFUSED_DETAIL = "the audit ledger refused this export declaration"
 
 
 class GenieFeedbackRequest(BaseModel):
@@ -137,3 +161,36 @@ def genie_feedback(
             detail=safe_dependency_detail("lakebase"),
         ) from exc
     return GenieFeedbackResponse(accepted=True, audit_event_id=audit_event_id)
+
+
+@router.post(
+    "/export-receipt",
+    response_model=GenieAnswerExportReceipt,
+    responses=JSON_CONTENT_TYPE_RESPONSE,
+)
+def create_genie_answer_export_receipt(
+    payload: GenieAnswerExportReceiptRequest,
+    store: StoreDep,
+    lakebase: LakebaseDep,
+    _: Annotated[None, Depends(require_json_content_type)],
+    actor: AuthenticatedActorDep,
+) -> GenieAnswerExportReceipt:
+    """Write the ``GENIE_ANSWER_EXPORT`` ledger row a Genie CSV download waits for.
+
+    Audit 2026-09-21 genie-06: the answer must be a trusted message of the
+    caller's own conversation (404 and no write otherwise), the declared row
+    counts must describe it (422 and no write otherwise), and then exactly one
+    audit row is written. The path uses only existing route segments
+    (``genie``, ``export-receipt``).
+    """
+
+    try:
+        return write_genie_answer_export_receipt(store, lakebase, actor=actor, payload=payload)
+    except GenieExportNotFound as exc:
+        raise HTTPException(status_code=404, detail=GENIE_EXPORT_NOT_FOUND_DETAIL) from exc
+    except GenieExportCountMismatch as exc:
+        raise HTTPException(status_code=422, detail=GENIE_EXPORT_COUNT_MISMATCH_DETAIL) from exc
+    except (AuditPIIError, AuditMetadataViolation, AuditMetadataValueViolation) as exc:
+        raise HTTPException(status_code=422, detail=GENIE_EXPORT_REFUSED_DETAIL) from exc
+    except LakebaseError as exc:
+        raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc

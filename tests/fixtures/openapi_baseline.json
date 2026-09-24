@@ -5883,6 +5883,124 @@
         "title": "GenieActionSuggestion",
         "type": "object"
       },
+      "GenieAnswerExportReceipt": {
+        "description": "The ledger entry the download waits for.",
+        "properties": {
+          "actor": {
+            "title": "Actor",
+            "type": "string"
+          },
+          "audit_event_id": {
+            "title": "Audit Event Id",
+            "type": "string"
+          },
+          "columns_sha256": {
+            "title": "Columns Sha256",
+            "type": "string"
+          },
+          "csv_sha256": {
+            "title": "Csv Sha256",
+            "type": "string"
+          },
+          "event_type": {
+            "const": "GENIE_ANSWER_EXPORT",
+            "default": "GENIE_ANSWER_EXPORT",
+            "title": "Event Type",
+            "type": "string"
+          },
+          "recorded_at": {
+            "title": "Recorded At",
+            "type": "string"
+          },
+          "row_count": {
+            "title": "Row Count",
+            "type": "integer"
+          },
+          "scope": {
+            "enum": [
+              "answer",
+              "section"
+            ],
+            "title": "Scope",
+            "type": "string"
+          }
+        },
+        "required": [
+          "audit_event_id",
+          "actor",
+          "scope",
+          "row_count",
+          "csv_sha256",
+          "columns_sha256",
+          "recorded_at"
+        ],
+        "title": "GenieAnswerExportReceipt",
+        "type": "object"
+      },
+      "GenieAnswerExportReceiptRequest": {
+        "additionalProperties": false,
+        "description": "What the browser declares about the file it is about to download.",
+        "properties": {
+          "answer_row_count": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The row count the answer (scope 'answer') or section (scope 'section') reports; above row_count only for a History replay that kept fewer rows.",
+            "title": "Answer Row Count"
+          },
+          "columns_sha256": {
+            "description": "SHA-256 (hex) of the compact JSON array of the file's column keys.",
+            "title": "Columns Sha256",
+            "type": "string"
+          },
+          "conversation_id": {
+            "pattern": "^[A-Za-z0-9-]{1,128}$",
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "csv_sha256": {
+            "description": "SHA-256 (hex) of the exact CSV text handed to the download.",
+            "title": "Csv Sha256",
+            "type": "string"
+          },
+          "message_id": {
+            "pattern": "^[A-Za-z0-9-]{1,128}$",
+            "title": "Message Id",
+            "type": "string"
+          },
+          "row_count": {
+            "description": "Rows the file holds: the rows the answer (or section) carries.",
+            "maximum": 5000.0,
+            "minimum": 1.0,
+            "title": "Row Count",
+            "type": "integer"
+          },
+          "scope": {
+            "enum": [
+              "answer",
+              "section"
+            ],
+            "title": "Scope",
+            "type": "string"
+          }
+        },
+        "required": [
+          "conversation_id",
+          "message_id",
+          "scope",
+          "row_count",
+          "csv_sha256",
+          "columns_sha256"
+        ],
+        "title": "GenieAnswerExportReceiptRequest",
+        "type": "object"
+      },
       "GenieAnswerSection": {
         "description": "One planned sub-analysis of a deep-research sweep, with its own data.\n\nThe sweep used to fold every section into one markdown ``answer`` and\nship only the largest section's rows, so a seven-part research answer\nrendered as one chart and one table. Each section now carries its own\nverified rows and chart plan so the reader gets a visual per finding.\n``title`` is Genie-authored (planner-supplied) and, like every other\nfield here, is scanned by the visible-text guard before it renders.",
         "properties": {
@@ -17499,6 +17617,59 @@
         ]
       }
     },
+    "/api/genie/export-receipt": {
+      "post": {
+        "deprecated": true,
+        "description": "Write the ``GENIE_ANSWER_EXPORT`` ledger row a Genie CSV download waits for.\n\nAudit 2026-09-21 genie-06: the answer must be a trusted message of the\ncaller's own conversation (404 and no write otherwise), the declared row\ncounts must describe it (422 and no write otherwise), and then exactly one\naudit row is written. The path uses only existing route segments\n(``genie``, ``export-receipt``).",
+        "operationId": "post_api_genie_export_receipt_create_genie_answer_export_receipt",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenieAnswerExportReceiptRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenieAnswerExportReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Genie Answer Export Receipt",
+        "tags": [
+          "genie"
+        ]
+      }
+    },
     "/api/genie/feedback": {
       "post": {
         "deprecated": true,
@@ -25163,6 +25334,58 @@
           }
         },
         "summary": "Genie Action",
+        "tags": [
+          "genie"
+        ]
+      }
+    },
+    "/api/v1/genie/export-receipt": {
+      "post": {
+        "description": "Write the ``GENIE_ANSWER_EXPORT`` ledger row a Genie CSV download waits for.\n\nAudit 2026-09-21 genie-06: the answer must be a trusted message of the\ncaller's own conversation (404 and no write otherwise), the declared row\ncounts must describe it (422 and no write otherwise), and then exactly one\naudit row is written. The path uses only existing route segments\n(``genie``, ``export-receipt``).",
+        "operationId": "post_api_v1_genie_export_receipt_create_genie_answer_export_receipt",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenieAnswerExportReceiptRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenieAnswerExportReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Genie Answer Export Receipt",
         "tags": [
           "genie"
         ]
