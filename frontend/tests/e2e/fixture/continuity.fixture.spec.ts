@@ -156,14 +156,14 @@ test.describe('recovery refetch', () => {
     await app.gotoRoute('/lead-queue');
     const banner = page.locator('.degraded-banner').first();
     await expect(banner).toContainText(/Reconnecting/);
-    await expect(page.locator('table.tbl')).toHaveCount(0);
+    await expect(page.locator('table.tbl:not([aria-hidden="true"])')).toHaveCount(0);
     const failedReads = mockApi.calls.filter((call) => call.path === '/api/leads' && call.status === 503).length;
     expect(failedReads).toBeGreaterThan(0);
 
     // The warehouse comes back. Nothing is clicked from here on.
     restoreLeads();
     warehouse = 'up';
-    await expect(page.locator('table.tbl tbody tr').first(), 'the queue refetched on the down → up edge').toBeVisible({
+    await expect(page.locator('table.tbl:not([aria-hidden="true"]) tbody tr').first(), 'the queue refetched on the down → up edge').toBeVisible({
       timeout: 30_000,
     });
     await expect(page.locator('.degraded-banner:not(.degraded-banner--info)')).toHaveCount(0);

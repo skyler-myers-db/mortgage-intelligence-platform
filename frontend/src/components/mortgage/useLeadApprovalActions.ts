@@ -11,6 +11,8 @@ import { useEffect, useRef, useState, type RefObject } from 'react';
 import type { QueryClient } from '@tanstack/react-query';
 import type { LeadSummary } from '../../types';
 import { api, ApiError, isAbortError } from '../../lib/api';
+import { clientFailureReason } from '../../lib/apiTransport';
+import { markUnrecordedWrite } from '../../lib/sessionStatus';
 import { invalidateOperationalQueries } from '../../lib/queryKeys';
 import { BULK_APPROVE_CONCURRENCY } from './LeadTable.constants';
 import {
@@ -219,6 +221,9 @@ export function useLeadApprovalActions({
       return 'backend';
     } catch (err: unknown) {
       if (isAbortError(err)) return 'aborted';
+      // The session ended mid-click (on the draft step or the approve POST):
+      // the session dialog must say this approval was NOT recorded.
+      if (clientFailureReason(err) === 'session_expired') markUnrecordedWrite('approval');
       const isNetwork = err instanceof ApiError && err.status === null;
       setApprovalError(
         err instanceof Error

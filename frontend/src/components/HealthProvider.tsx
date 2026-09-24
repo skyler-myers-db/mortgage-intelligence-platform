@@ -7,10 +7,18 @@ import {
   useState,
   type PropsWithChildren,
 } from 'react';
-import { QueryClientContext } from '@tanstack/react-query';
+import { QueryClientContext, onlineManager } from '@tanstack/react-query';
 import { api, isAbortError, type HealthPayload } from '../lib/api';
+import { subscribeNetworkFailures } from '../lib/apiFailure';
+import { isSessionExpired, subscribeSessionStatus } from '../lib/sessionStatus';
 import { normalizeWorkspaceHost } from '../lib/ucAssetLinks';
 import { recoveredDependencies, refetchRecoveredQueries } from './healthRecovery';
+import {
+  INITIAL_CONNECTION,
+  nextConnection,
+  refetchUnreachableQueries,
+  type ConnectionStatus,
+} from './connectionState';
 
 /**
  * HealthProvider — one `/api/health` poll, shared via context.
@@ -34,7 +42,16 @@ import { recoveredDependencies, refetchRecoveredQueries } from './healthRecovery
  *     `updateAvailable` so the shell can offer a reload before a stale tab
  *     asks for a chunk that no longer exists. Bare deploys report no sha and
  *     are ignored.
+ *   - Connection (`states-02`, `shell-v1`): `connection` says whether the
+ *     session ended, the browser is offline, or two probes in a row could not
+ *     reach the app (see `connectionState.ts`). Probing stops once the session
+ *     ended (only a reload recovers), waits for the network while offline,
+ *     runs at the fast cadence after one unreachable probe, and runs at once
+ *     when a request elsewhere could not reach the server.
  */
+
+/** A request that could not reach the server triggers a probe, at most this often. */
+const NUDGE_MIN_GAP_MS = 1_000;
 
 interface HealthContextValue {
   /** Latest payload, or null before the first response resolves. */
@@ -47,6 +64,8 @@ interface HealthContextValue {
   degraded: boolean;
   /** True once a poll reports a different build than the one this tab loaded. */
   updateAvailable: boolean;
+  /** Session / network reachability, independent of dependency health. */
+  connection: ConnectionStatus;
 }
 
 const HealthContext = createContext<HealthContextValue | null>(null);
@@ -204,6 +223,7 @@ export function HealthProvider({
   const [probeMs, setProbeMs] = useState<number | null>(null);
   const [fetchedAt, setFetchedAt] = useState<string | null>(null);
   const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [connection, setConnection] = useState<ConnectionStatus>(INITIAL_CONNECTION.status);
   // Optional on purpose: isolated mounts (unit tests, stories) have no
   // QueryClientProvider, and `useQueryClient()` would throw there.
   const queryClient = useContext(QueryClientContext);
@@ -218,15 +238,38 @@ export function HealthProvider({
   // sees the latest pendingUpSince across re-renders without React
   // batching it out of order.
   const debounceRef = useRef<Record<string, DebounceState>>({});
+  // Consecutive unreachable probes + the derived connection status.
+  const connectionRef = useRef(INITIAL_CONNECTION);
 
   useEffect(() => {
     const ctrl = new AbortController();
     let timer: ReturnType<typeof setTimeout> | null = null;
     let cancelled = false;
     let inFlight = false;
+    let lastProbeEndedAt = Number.NEGATIVE_INFINITY;
 
     const isHidden = () =>
       typeof document !== 'undefined' && document.visibilityState === 'hidden';
+    // Nothing to learn from a probe once the session ended (only a reload
+    // recovers) or while the browser has no network.
+    const mayProbe = () => !cancelled && !isHidden() && !isSessionExpired() && onlineManager.isOnline();
+
+    const observeConnection = (probeReachable: boolean | null) => {
+      const prior = connectionRef.current;
+      const next = nextConnection(prior, {
+        sessionExpired: isSessionExpired(),
+        online: onlineManager.isOnline(),
+        probeReachable,
+      });
+      connectionRef.current = next;
+      setConnection(next.status);
+      // A reachable probe after one or more failed ones: reload the reads
+      // that could not reach the server in between, whether the banner showed
+      // (two failures) or it was a one-probe blip.
+      if (prior.failedProbes > 0 && next.status === 'online' && probeReachable && queryClient) {
+        refetchUnreachableQueries(queryClient);
+      }
+    };
 
     const clearTimer = () => {
       if (timer !== null) {
@@ -237,8 +280,9 @@ export function HealthProvider({
 
     const scheduleNext = () => {
       clearTimer();
-      if (cancelled || isHidden()) return;
-      const delay = pollFastRef.current ? pollIntervalDegradedMs : pollIntervalOkMs;
+      if (!mayProbe()) return;
+      const fast = pollFastRef.current || connectionRef.current.failedProbes > 0;
+      const delay = fast ? pollIntervalDegradedMs : pollIntervalOkMs;
       timer = setTimeout(() => {
         void tick();
       }, delay);
@@ -246,11 +290,17 @@ export function HealthProvider({
 
     const tick = async () => {
       if (cancelled || isHidden() || inFlight) return;
+      if (!mayProbe()) {
+        clearTimer();
+        observeConnection(null);
+        return;
+      }
       inFlight = true;
       const t0 = performance.now();
       try {
         const rawPayload = await fetchHealth(ctrl.signal);
         if (cancelled) return;
+        observeConnection(rawPayload.status !== 'unreachable');
         const elapsed = Math.round(performance.now() - t0);
         const { payload, next } = applyDownUpDebounce(
           rawPayload,
@@ -302,6 +352,7 @@ export function HealthProvider({
         pollFastRef.current = true;
       } finally {
         inFlight = false;
+        lastProbeEndedAt = performance.now();
       }
       scheduleNext();
     };
@@ -317,15 +368,46 @@ export function HealthProvider({
     if (typeof document !== 'undefined') {
       document.addEventListener('visibilitychange', onVisibilityChange);
     }
+    // Offline -> online clears the offline state and probes at once;
+    // online -> offline stops the loop until the network returns.
+    const unsubscribeOnline = onlineManager.subscribe((online) => {
+      observeConnection(null);
+      if (online) void tick();
+      else clearTimer();
+    });
+    const unsubscribeSession = subscribeSessionStatus(() => {
+      observeConnection(null);
+      if (isSessionExpired()) clearTimer();
+    });
+    const unsubscribeFailures = subscribeNetworkFailures(() => {
+      if (inFlight || performance.now() - lastProbeEndedAt < NUDGE_MIN_GAP_MS) return;
+      void tick();
+    });
     return () => {
       cancelled = true;
       ctrl.abort();
       clearTimer();
+      unsubscribeOnline();
+      unsubscribeSession();
+      unsubscribeFailures();
       if (typeof document !== 'undefined') {
         document.removeEventListener('visibilitychange', onVisibilityChange);
       }
     };
   }, [fetchHealth, pollIntervalDegradedMs, pollIntervalOkMs, debounceUpMs, queryClient]);
+
+  // Paused queries render their skeletons without the shimmer while the
+  // browser is offline (the offline banner explains the wait); the rule keys
+  // off this attribute in design-system/components/11-skeleton-*.css.
+  useEffect(() => {
+    if (typeof document === 'undefined') return undefined;
+    const root = document.documentElement;
+    if (connection === 'offline') root.dataset.connection = 'offline';
+    else delete root.dataset.connection;
+    return () => {
+      delete root.dataset.connection;
+    };
+  }, [connection]);
 
   const value = useMemo<HealthContextValue>(
     () => ({
@@ -334,8 +416,9 @@ export function HealthProvider({
       fetchedAt,
       degraded: computeDegraded(health),
       updateAvailable,
+      connection,
     }),
-    [health, probeMs, fetchedAt, updateAvailable],
+    [health, probeMs, fetchedAt, updateAvailable, connection],
   );
 
   return <HealthContext.Provider value={value}>{children}</HealthContext.Provider>;

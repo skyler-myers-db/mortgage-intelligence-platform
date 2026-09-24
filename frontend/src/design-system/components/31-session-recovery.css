@@ -1,0 +1,74 @@
+/* ============================================================
+   SESSION RECOVERY — the blocking "Your session ended" dialog
+   (audit 2026-09-21 states-02 / critic-v2 / shell-v1).
+   ============================================================
+   Declared prototype extension: the prototype defines no modal. The
+   dialog composes two prototype patterns: the `.approval` banner's
+   icon + title + sub + actions anatomy and amber attention family
+   (design_files/index.html:634-651), shown as a native modal <dialog>
+   over the `.drawer-scrim` backdrop (design_files/index.html:656-664,
+   here as `::backdrop` on --surface-scrim).
+
+   Shell stylesheet on purpose: after the session ends the proxy answers
+   every lazy chunk and stylesheet with a sign-in redirect, so this
+   surface cannot load lazily. The offline / "Connection lost" banners
+   reuse `.degraded-banner` (04-approval-and-drawer.css) unchanged.
+*/
+.session-dialog {
+  inline-size: min(calc(100vw - 2 * var(--sp-4)), calc(var(--sp-16) * 7));
+  margin: auto;
+  padding: var(--sp-5);
+  border: 1px solid var(--status-warning-line);
+  border-radius: var(--r-lg);
+  background: var(--bg-1);
+  color: var(--text-1);
+  box-shadow: var(--shadow-lg);
+}
+/* `display` only while open: a bare `display` would override the UA
+   `dialog:not([open]) { display: none }`. */
+.session-dialog[open] {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--sp-4);
+  align-items: start;
+}
+.session-dialog::backdrop {
+  background: var(--surface-scrim);
+  backdrop-filter: blur(2px);
+}
+.session-dialog__ico {
+  width: var(--sp-8); height: var(--sp-8); border-radius: var(--r-lg);
+  background: var(--status-warning-soft-strong); color: var(--signal-warning-ink);
+  display: grid; place-items: center;
+}
+.session-dialog__body { min-width: 0; }
+.session-dialog__title {
+  margin: 0;
+  font-size: var(--fs-16);
+  font-weight: 600;
+  line-height: var(--lh-snug);
+}
+.session-dialog__sub {
+  margin: var(--sp-1) 0 0;
+  font-size: var(--fs-13);
+  line-height: var(--lh-body);
+  color: var(--text-2);
+}
+/* A write the session ended under was NOT recorded: say so in the danger
+   family, never let it read like a success. */
+.session-dialog__warn {
+  margin: var(--sp-3) 0 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-md);
+  background: var(--status-danger-soft-subtle);
+  color: var(--status-danger-ink);
+  font-size: var(--fs-13);
+  font-weight: 500;
+  line-height: var(--lh-snug);
+}
+.session-dialog__actions {
+  grid-column: 2;
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+}

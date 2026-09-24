@@ -1,0 +1,19 @@
+/* ============================================================
+   ANALYTICS DASHBOARD SKELETON (audit 2026-09-21 states-10)
+   ============================================================
+   Ships with the lazy Analytics chunk. The layout is the loaded views'
+   own grid classes (.kpi-row, .layoutA-grid.analytics-grid); only the
+   reserved chart block and the KPI label line live here, inside the
+   `.skeleton` vocabulary. The chart block reserves about what a loaded
+   chart panel's body takes at 1440x900. */
+.analytics-skeleton__chart {
+  display: block;
+  margin: 0;
+  block-size: calc(var(--sp-16) * 4);
+  border-radius: var(--r-md);
+}
+.analytics-skeleton__label {
+  inline-size: 48%;
+  block-size: var(--fs-11);
+  border-radius: var(--r-sm);
+}

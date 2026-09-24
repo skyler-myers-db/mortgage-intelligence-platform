@@ -238,20 +238,6 @@
   padding: 0;
   border: 0;
 }
-.lead-queue-skeleton__table {
-  display: grid;
-  gap: var(--sp-2);
-}
-.lead-queue-skeleton__row {
-  display: grid;
-  grid-template-columns: 28px 132px 116px 96px 124px 98px 126px minmax(150px, 1fr) 84px;
-  gap: var(--sp-3);
-  align-items: center;
-  min-width: 920px;
-  padding: var(--sp-2) 0;
-  border-bottom: 1px solid var(--line-1);
-}
-.lead-queue-skeleton__row:last-child { border-bottom: 0; }
 .chip-stack {
   display: flex;
   flex-direction: column;

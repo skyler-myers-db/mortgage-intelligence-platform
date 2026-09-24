@@ -110,6 +110,10 @@ export default function Home() {
 
   const queued = preview?.high_intent_leads ?? null;
   const kpisLoading = preview === null && !previewError && !previewWarming;
+  // The KPI row stays mounted in its loading state through a warm-up (audit
+  // states-10): unmounting it collapsed the four cards and the answer band
+  // jumped up, then down again when the numbers landed.
+  const kpiRowLoading = kpisLoading || (preview === null && Boolean(previewWarming));
 
   // Day-0 detection (R5-20): trust the server-authoritative
   // ``day_zero`` flag on PortfolioPreview, which keys off
@@ -209,7 +213,7 @@ export default function Home() {
             {preview.trend_note}
           </div>
         )}
-        {!isDayZero && !previewWarming && (
+        {!isDayZero && (
           <div className="kpi-row">
             {/* "Addressable", not "marketable": HOME_PORTFOLIO_PREVIEW_CRITERIA
                 asks for `marketing_eligibility: 'Any'`, so this KPI counts the
@@ -223,7 +227,7 @@ export default function Home() {
               delta={formatDelta(preview?.trends?.marketable_population)}
               deltaDir={preview?.trends?.marketable_population?.direction}
               trendNote={preview?.trends?.marketable_population?.note}
-              loading={kpisLoading}
+              loading={kpiRowLoading}
               source={DRAWER_SOURCES.population}
             />
             <KpiCard
@@ -233,7 +237,7 @@ export default function Home() {
               delta={formatDelta(preview?.trends?.high_intent_leads)}
               deltaDir={preview?.trends?.high_intent_leads?.direction}
               trendNote={preview?.trends?.high_intent_leads?.note}
-              loading={kpisLoading}
+              loading={kpiRowLoading}
               source={DRAWER_SOURCES.itm}
             />
             <KpiCard
@@ -243,7 +247,7 @@ export default function Home() {
               delta={formatDelta(preview?.trends?.top_tier_opportunities)}
               deltaDir={preview?.trends?.top_tier_opportunities?.direction}
               trendNote={preview?.trends?.top_tier_opportunities?.note}
-              loading={kpisLoading}
+              loading={kpiRowLoading}
               source={DRAWER_SOURCES.leadScore}
             />
             <KpiCard
@@ -253,7 +257,7 @@ export default function Home() {
               delta={formatDelta(preview?.trends?.offers_recommended)}
               deltaDir={preview?.trends?.offers_recommended?.direction}
               trendNote={preview?.trends?.offers_recommended?.note}
-              loading={kpisLoading}
+              loading={kpiRowLoading}
               source={DRAWER_SOURCES.nbo}
             />
           </div>

@@ -33,19 +33,6 @@
   font-size: var(--fs-12);
   line-height: var(--lh-snug);
 }
-.analytics-state {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-2);
-}
-.analytics-state__line {
-  height: var(--fs-14);
-  width: min(42%, calc(var(--sp-16) + var(--sp-16) + var(--sp-16) + var(--sp-16) + var(--sp-16)));
-  border-radius: var(--r-sm);
-}
-.analytics-state__line--wide {
-  width: min(72%, calc(var(--sp-16) + var(--sp-16) + var(--sp-16) + var(--sp-16) + var(--sp-16) + var(--sp-16) + var(--sp-16) + var(--sp-16) + var(--sp-8)));
-}
 .analytics-empty {
   color: var(--text-3);
   font-size: var(--fs-13);

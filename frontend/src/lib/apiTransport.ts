@@ -15,6 +15,16 @@ import type {
   GeoQueryCriteria,
 } from './apiTypes';
 import { apiPath } from './apiPaths';
+import {
+  CLIENT_FAILURE_MESSAGES,
+  isNetworkFailure,
+  networkFailureReason,
+  probeSession,
+  reportNetworkFailure,
+  type ClientFailureReason,
+  type SessionProbeVerdict,
+} from './apiFailure';
+import { isSessionExpired, markSessionExpired } from './sessionStatus';
 
 export function appendPortfolioCriteria(params: URLSearchParams, criteria?: GeoQueryCriteria | null) {
   if (!criteria) return;
@@ -67,13 +77,18 @@ export function analyticsPath(
  *   - "rate_limited"      — request budget exhausted; Retry-After is the
  *                           source of truth when present.
  *   - "dependency_saturated" — concurrency guard is full for a dependency.
+ *
+ * The client adds its own reasons (`ClientFailureReason`, see apiFailure.ts):
+ * "session_expired", "offline", "unreachable" and "unreadable_response".
+ * None of them is ever retried.
  */
 export type ApiErrorReason =
   | 'warming_up'
   | 'breaker_open'
   | 'retries_exhausted'
   | 'rate_limited'
-  | 'dependency_saturated';
+  | 'dependency_saturated'
+  | ClientFailureReason;
 
 export interface ApiValidationIssue {
   field: string;
@@ -163,6 +178,19 @@ export function isAbortError(err: unknown): boolean {
   if (err instanceof ApiError) return err.aborted;
   if (err instanceof Error && err.name === 'AbortError') return true;
   return false;
+}
+
+const CLIENT_FAILURE_REASONS: ReadonlySet<string> = new Set<ClientFailureReason>([
+  'session_expired',
+  'offline',
+  'unreachable',
+  'unreadable_response',
+]);
+
+/** The client-assigned reason of an ApiError (apiFailure.ts), or null. */
+export function clientFailureReason(err: unknown): ClientFailureReason | null {
+  if (!(err instanceof ApiError) || err.aborted || typeof err.reason !== 'string') return null;
+  return CLIENT_FAILURE_REASONS.has(err.reason) ? (err.reason as ClientFailureReason) : null;
 }
 
 /**
@@ -446,16 +474,39 @@ export async function _parseHttpErrorBody(res: Response): Promise<{
   return { message: null, validationIssues: [] };
 }
 
+/**
+ * One request, redirects NOT followed (audit 2026-09-21 `states-02`). An
+ * expired Databricks Apps session can surface as a redirect to the
+ * workspace's sign-in page; following it goes cross-origin and fails as an
+ * unexplained TypeError. An opaque redirect is ambiguous (FastAPI's
+ * trailing-slash 307s look the same), so one health probe decides: an ended
+ * session throws `session_expired`; anything else re-issues the request with
+ * redirects followed, exactly as the browser would have done. A 307 is issued
+ * before any handler runs, so the re-issue never repeats a write.
+ */
+async function _fetchOnce(
+  path: string,
+  method: string,
+  init: RequestInit | undefined,
+  signal: AbortSignal | undefined,
+): Promise<Response> {
+  const res = await fetch(path, { ...init, signal, redirect: 'manual' });
+  if (res.type !== 'opaqueredirect') return res;
+  if ((await probeSession(signal)) === 'expired') throw _sessionExpiredError(path, method);
+  return fetch(path, { ...init, signal, redirect: 'follow' });
+}
+
 async function _fetchWithRetry(
   path: string,
   init?: RequestInit,
   attempts = 3,
   signal?: AbortSignal,
 ): Promise<Response> {
+  const method = (init?.method ?? 'GET').toUpperCase();
   let lastRes: Response | null = null;
   for (let i = 0; i < attempts; i++) {
     if (signal?.aborted) throw _abortError();
-    const res = await fetch(path, { ...init, signal });
+    const res = await _fetchOnce(path, method, init, signal);
     if (res.ok) return res;
     const parsed = await _parseRetryableBody(res);
     if (!parsed.retryable) return res;
@@ -470,7 +521,20 @@ async function _fetchWithRetry(
   return lastRes as Response;
 }
 
-async function _throwFromResponse(res: Response, path: string): Promise<never> {
+function _clientFailure(path: string, reason: ClientFailureReason, status: number | null = null): ApiError {
+  return new ApiError(CLIENT_FAILURE_MESSAGES[reason], { path, status, retryable: false, reason });
+}
+
+/** Record the ended session (the dialog reads it) and build the error. */
+function _sessionExpiredError(path: string, method: string, status: number | null = null): ApiError {
+  markSessionExpired({ method, path });
+  return _clientFailure(path, 'session_expired', status);
+}
+
+async function _throwFromResponse(res: Response, path: string, method: string): Promise<never> {
+  // The proxy's 401 carries an empty `{}` body and the backend's says only
+  // "authenticated identity required": neither is copy for a buyer.
+  if (res.status === 401) throw _sessionExpiredError(path, method, 401);
   const parsed = await _parseRetryableBody(res);
   const parsedBody = await _parseHttpErrorBody(res);
   const msg = parsed.detail ?? parsedBody.message ?? `${res.status} ${res.statusText}`;
@@ -486,6 +550,8 @@ async function _throwFromResponse(res: Response, path: string): Promise<never> {
 }
 
 function _wrapFetchError(err: unknown, path: string): ApiError {
+  // Already classified (session expiry confirmed by the redirect probe).
+  if (err instanceof ApiError) return err;
   // A caller-triggered abort surfaces as a DOMException with name ===
   // 'AbortError'. Preserve that signal so consumers can short-circuit
   // without spamming the user with a red error banner.
@@ -497,32 +563,75 @@ function _wrapFetchError(err: unknown, path: string): ApiError {
       aborted: true,
     });
   }
+  // fetch() rejects with a TypeError when the request never got an answer.
+  if (isNetworkFailure(err)) {
+    const reason = networkFailureReason();
+    if (reason === 'unreachable') reportNetworkFailure();
+    return _clientFailure(path, reason);
+  }
   const message = err instanceof Error ? err.message : 'network error';
   return new ApiError(message, { path, status: null, retryable: false });
 }
 
-export async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
+/**
+ * Parse a 2xx body. A body that is not JSON is ambiguous: the proxy can serve
+ * its HTML sign-in page with a 200. One health probe decides between an
+ * ended session and a genuinely unreadable response; either way the caller
+ * gets a classified ApiError, never a raw SyntaxError.
+ */
+async function _readJson<T>(res: Response, path: string, method: string, signal?: AbortSignal): Promise<T> {
+  try {
+    return (await res.json()) as T;
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') throw _wrapFetchError(err, path);
+    if (isNetworkFailure(err)) throw _clientFailure(path, networkFailureReason(), res.status);
+    let verdict: SessionProbeVerdict;
+    try {
+      verdict = await probeSession(signal);
+    } catch (probeErr) {
+      throw _wrapFetchError(probeErr, path);
+    }
+    if (verdict === 'expired') throw _sessionExpiredError(path, method, res.status);
+    throw _clientFailure(path, 'unreadable_response', res.status);
+  }
+}
+
+/** The shared request path of every typed helper below. */
+async function _requestJson<T>(
+  path: string,
+  init: RequestInit | undefined,
+  signal: AbortSignal | undefined,
+): Promise<{ data: T; headers: Headers }> {
   const requestPath = apiPath(path);
+  const method = (init?.method ?? 'GET').toUpperCase();
+  // After the session ended every request would 401 again: fail fast, and
+  // let a write attempted anyway reach the dialog's "not recorded" line.
+  if (isSessionExpired()) throw _sessionExpiredError(requestPath, method);
   let res: Response;
   try {
-    res = await _fetchWithRetry(requestPath, undefined, 3, signal);
+    res = await _fetchWithRetry(requestPath, init, 3, signal);
   } catch (err) {
     throw _wrapFetchError(err, requestPath);
   }
-  if (!res.ok) await _throwFromResponse(res, requestPath);
-  return (await res.json()) as T;
+  if (!res.ok) await _throwFromResponse(res, requestPath, method);
+  const data = await _readJson<T>(res, requestPath, method, signal);
+  return { data, headers: res.headers };
+}
+
+function _jsonBody(method: string, body: unknown, extraHeaders?: Record<string, string>): RequestInit {
+  return {
+    method,
+    headers: { 'Content-Type': 'application/json', ...extraHeaders },
+    body: JSON.stringify(body ?? {}),
+  };
+}
+
+export async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
+  return (await _requestJson<T>(path, undefined, signal)).data;
 }
 
 export async function getJsonWithHeaders<T>(path: string, signal?: AbortSignal): Promise<{ data: T; headers: Headers }> {
-  const requestPath = apiPath(path);
-  let res: Response;
-  try {
-    res = await _fetchWithRetry(requestPath, undefined, 3, signal);
-  } catch (err) {
-    throw _wrapFetchError(err, requestPath);
-  }
-  if (!res.ok) await _throwFromResponse(res, requestPath);
-  return { data: (await res.json()) as T, headers: res.headers };
+  return _requestJson<T>(path, undefined, signal);
 }
 
 export async function postJson<T, B>(
@@ -531,81 +640,17 @@ export async function postJson<T, B>(
   signal?: AbortSignal,
   extraHeaders?: Record<string, string>,
 ): Promise<T> {
-  const requestPath = apiPath(path);
-  let res: Response;
-  try {
-    res = await _fetchWithRetry(
-      requestPath,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...extraHeaders },
-        body: JSON.stringify(body ?? {}),
-      },
-      3,
-      signal,
-    );
-  } catch (err) {
-    throw _wrapFetchError(err, requestPath);
-  }
-  if (!res.ok) await _throwFromResponse(res, requestPath);
-  return (await res.json()) as T;
+  return (await _requestJson<T>(path, _jsonBody('POST', body, extraHeaders), signal)).data;
 }
 
 export async function putJson<T, B>(path: string, body: B, signal?: AbortSignal): Promise<T> {
-  const requestPath = apiPath(path);
-  let res: Response;
-  try {
-    res = await _fetchWithRetry(
-      requestPath,
-      {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body ?? {}),
-      },
-      3,
-      signal,
-    );
-  } catch (err) {
-    throw _wrapFetchError(err, requestPath);
-  }
-  if (!res.ok) await _throwFromResponse(res, requestPath);
-  return (await res.json()) as T;
+  return (await _requestJson<T>(path, _jsonBody('PUT', body), signal)).data;
 }
 
 export async function patchJson<T, B>(path: string, body: B, signal?: AbortSignal): Promise<T> {
-  const requestPath = apiPath(path);
-  let res: Response;
-  try {
-    res = await _fetchWithRetry(
-      requestPath,
-      {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body ?? {}),
-      },
-      3,
-      signal,
-    );
-  } catch (err) {
-    throw _wrapFetchError(err, requestPath);
-  }
-  if (!res.ok) await _throwFromResponse(res, requestPath);
-  return (await res.json()) as T;
+  return (await _requestJson<T>(path, _jsonBody('PATCH', body), signal)).data;
 }
 
 export async function deleteJson<T>(path: string, signal?: AbortSignal): Promise<T> {
-  const requestPath = apiPath(path);
-  let res: Response;
-  try {
-    res = await _fetchWithRetry(
-      requestPath,
-      { method: 'DELETE' },
-      3,
-      signal,
-    );
-  } catch (err) {
-    throw _wrapFetchError(err, requestPath);
-  }
-  if (!res.ok) await _throwFromResponse(res, requestPath);
-  return (await res.json()) as T;
+  return (await _requestJson<T>(path, { method: 'DELETE' }, signal)).data;
 }

@@ -3,26 +3,51 @@
    ============================================================ */
 .skeleton {
   display: block;
+  position: relative;
+  overflow: hidden;
   background-color: var(--bg-3);
+}
+/* The shimmer is a highlight band swept across by `transform` on a
+   pseudo-element (audit 2026-09-21 states-10): the compositor moves it, so
+   nothing repaints per frame. The old rule animated `background-position`,
+   which repainted every skeleton on every frame. */
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
   background-image: linear-gradient(
     90deg,
     transparent 0%,
     color-mix(in oklab, var(--line-2) 55%, transparent) 50%,
     transparent 100%
   );
-  background-size: 220% 100%;
-  background-repeat: no-repeat;
-  background-position: 120% 0;
-  animation: skeleton-shimmer 1.4s ease-in-out infinite;
-  will-change: background-position;
+  transform: translateX(-100%);
+  animation: skeleton-sweep 1.4s ease-in-out infinite;
 }
-@keyframes skeleton-shimmer {
-  0%   { background-position: 120% 0; }
-  100% { background-position: -120% 0; }
+@keyframes skeleton-sweep {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(100%); }
 }
+/* No sweep under reduced motion, and none while the browser is offline: a
+   query paused for the network is waiting, not loading, and the offline
+   banner says so (HealthProvider sets data-connection on <html>). */
 @media (prefers-reduced-motion: reduce) {
-  .skeleton { animation: none; background-image: none; }
+  .skeleton::after { animation: none; display: none; }
 }
+:root[data-connection="offline"] .skeleton::after { animation: none; display: none; }
+/* The page-shaped route fallback (components/layout/RouteFallback): the
+   PageShell hero's eyebrow, title and lede lines, a panel heading, and the
+   panel's reserved height, so the real page lands without a jump. */
+.skeleton--eyebrow { inline-size: calc(var(--sp-16) * 2); block-size: var(--fs-11); border-radius: var(--r-sm); }
+.skeleton--title {
+  inline-size: min(100%, calc(var(--sp-16) * 9));
+  block-size: var(--fs-hero);
+  margin-block: var(--sp-2) var(--sp-1);
+  border-radius: var(--r-sm);
+}
+.skeleton--lede { inline-size: min(100%, calc(var(--sp-16) * 7)); block-size: var(--fs-14); border-radius: var(--r-sm); }
+.skeleton--heading { inline-size: calc(var(--sp-16) * 3); block-size: var(--fs-16); border-radius: var(--r-sm); }
+.surface__body--reserve { min-block-size: calc(var(--sp-16) * 6); }
 
 /* ============================================================
    FILTER MENU (portal-free anchored dropdown for FilterSelect)
