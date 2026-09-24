@@ -109,7 +109,6 @@ describe('LeadTableRow one-line cells', () => {
           bulkApproving={false}
           salesBusy={false}
           salesTeamCount={2}
-          pendingApproval={false}
           onToggleRow={onToggleRow}
           onToggleSelect={vi.fn()}
           onApprove={vi.fn()}

@@ -576,7 +576,7 @@ export function LeadTable({
                     bulkApproving={approval.bulkApproving}
                     salesBusy={sales.salesBusy}
                     salesTeamCount={salesTeam.length}
-                    pendingApproval={Boolean(approval.pendingApproval[lead.borrower_id])}
+                    pendingDecision={approval.pendingDecisions.get(lead.borrower_id) ?? null}
                     decisionReceipt={approval.decisionReceipts[lead.borrower_id] ?? null}
                     isCursor={flow.cursor.cursorId === lead.borrower_id}
                     shortcutsLive={singleKeysOn}

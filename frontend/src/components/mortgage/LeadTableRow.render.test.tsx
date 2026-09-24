@@ -88,7 +88,6 @@ describe('LeadTableRow display fallbacks', () => {
           bulkApproving={false}
           salesBusy={false}
           salesTeamCount={1}
-          pendingApproval={false}
           onToggleRow={noop}
           onToggleSelect={noop}
           onApprove={noop}
@@ -116,7 +115,6 @@ describe('LeadTableRow display fallbacks', () => {
           bulkApproving={false}
           salesBusy={false}
           salesTeamCount={1}
-          pendingApproval={false}
           onToggleRow={noop}
           onToggleSelect={noop}
           onApprove={noop}
@@ -146,7 +144,6 @@ describe('LeadTableRow display fallbacks', () => {
           bulkApproving={false}
           salesBusy={false}
           salesTeamCount={1}
-          pendingApproval={false}
           onToggleRow={noop}
           onToggleSelect={noop}
           onApprove={noop}
@@ -188,7 +185,6 @@ describe('LeadTableRow display fallbacks', () => {
           bulkApproving={false}
           salesBusy={false}
           salesTeamCount={1}
-          pendingApproval={false}
           onToggleRow={noop}
           onToggleSelect={noop}
           onApprove={noop}
@@ -215,7 +211,6 @@ describe('LeadTableRow display fallbacks', () => {
           bulkApproving={false}
           salesBusy={false}
           salesTeamCount={1}
-          pendingApproval={false}
           onToggleRow={noop}
           onToggleSelect={noop}
           onApprove={noop}
@@ -248,7 +243,6 @@ describe('LeadTableRow display fallbacks', () => {
           bulkApproving={false}
           salesBusy={false}
           salesTeamCount={1}
-          pendingApproval={false}
           onToggleRow={noop}
           onToggleSelect={noop}
           onApprove={noop}
@@ -286,7 +280,6 @@ describe('LeadTableRow numeric rendering', () => {
           bulkApproving={false}
           salesBusy={false}
           salesTeamCount={1}
-          pendingApproval={false}
           onToggleRow={noop}
           onToggleSelect={noop}
           onApprove={noop}
@@ -359,5 +352,83 @@ describe('LeadTableRow numeric rendering', () => {
     const cell = document.querySelector('.lead-table__clip');
     expect(cell?.getAttribute('title')).toBeNull();
     expect(cell?.textContent).toBe('Property ref unavailable');
+  });
+});
+
+/**
+ * The decision on the wire, per decision (audit stack-09 / tables-05). The
+ * row used to take one boolean, so a REJECT in flight labelled the Approve
+ * button "Approving…". The pending decision now comes from the
+ * MutationCache: only an approve reads "Approving…", a reject marks the
+ * Reject button busy, and either one disables both.
+ */
+describe('LeadTableRow pending decision', () => {
+  let root: Root;
+
+  const renderRow = (pendingDecision: 'approve' | 'reject' | null) => {
+    act(() => {
+      root.render(
+        <LeadTableRow
+          lead={lead}
+          virtualIndex={0}
+          isOpen={false}
+          approval={undefined}
+          isSelected={false}
+          isSelectable
+          isApprovalEligible
+          bulkApproving={false}
+          salesBusy={false}
+          salesTeamCount={1}
+          pendingDecision={pendingDecision}
+          onToggleRow={noop}
+          onToggleSelect={noop}
+          onApprove={noop}
+          onReject={noop}
+          onOpenDisposition={noop}
+          onAssignmentUpdate={noop}
+        />,
+      );
+    });
+  };
+  const approveButton = () => document.querySelector(`[data-testid="lead-approve-${lead.borrower_id}"]`) as HTMLButtonElement;
+  const rejectButton = () => document.querySelector(`[data-testid="lead-reject-${lead.borrower_id}"]`) as HTMLButtonElement;
+
+  beforeEach(() => {
+    document.body.innerHTML = '<table><tbody id="root"></tbody></table>';
+    root = createRoot(document.getElementById('root') as HTMLElement);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    document.body.innerHTML = '';
+  });
+
+  it('reads Approving… only while an approve is on the wire', () => {
+    renderRow('approve');
+
+    expect(approveButton().textContent).toBe('Approving…');
+    expect(approveButton().disabled).toBe(true);
+    expect(rejectButton().disabled).toBe(true);
+    expect(rejectButton().getAttribute('aria-busy')).toBeNull();
+    expect(rejectButton().getAttribute('aria-label')).toBe(`Reject ${lead.borrower_id}`);
+  });
+
+  it('marks the Reject button busy, not the Approve label, while a reject is on the wire', () => {
+    renderRow('reject');
+
+    expect(approveButton().textContent).toBe('Approve');
+    expect(approveButton().disabled).toBe(true);
+    expect(rejectButton().disabled).toBe(true);
+    expect(rejectButton().getAttribute('aria-busy')).toBe('true');
+    expect(rejectButton().getAttribute('aria-label')).toBe(`Rejecting ${lead.borrower_id}`);
+  });
+
+  it('enables both controls when nothing is on the wire', () => {
+    renderRow(null);
+
+    expect(approveButton().textContent).toBe('Approve');
+    expect(approveButton().disabled).toBe(false);
+    expect(rejectButton().disabled).toBe(false);
+    expect(rejectButton().getAttribute('aria-busy')).toBeNull();
   });
 });
