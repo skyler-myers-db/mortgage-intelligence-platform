@@ -30,7 +30,7 @@ import { LeadTableViewControl } from './LeadTableViewControl';
 import { LeadTableBulkActions, LeadTableBulkToast } from './LeadTableBulkActions';
 import { LeadTableStatusChips } from './LeadTableStatusChips';
 import { LeadDispositionPanel, LeadRejectPanel } from './LeadTableDecisionPanels';
-import { LeadTableKeyboardHint } from './LeadTableKeyboardHint';
+import { LeadTableKeyboardHint, LeadTableShortcutsButton } from './LeadTableKeyboardHint';
 import { LEAD_TABLE_KEYS } from './LeadTable.keymap';
 import { useLeadApprovalActions, type CampaignBindingState } from './useLeadApprovalActions';
 import { useLeadSalesActions } from './useLeadSalesActions';
@@ -349,7 +349,8 @@ export function LeadTable({
           <div>
             <div className="h-4">Ranked borrowers</div>
             <div className="muted fs-12">
-              {/* Keycaps are `<kbd>` (prototype-parity P2); the `?` sheet lists every key. */}
+              {/* Keycaps are `<kbd>` (prototype-parity P2); the header's
+                  "Keyboard shortcuts" button and `?` list every key. */}
               <LeadTableKeyboardHint singleKeysOn={singleKeysOn} approverActive={approverGate === null} />
               {approverGate === null && actorEmail && (
                 <> Approving as <span className="mono" data-testid="lead-approving-as">{actorEmail}</span>.</>
@@ -358,6 +359,7 @@ export function LeadTable({
           </div>
         </div>
         <div className="lead-table__header-actions">
+          <LeadTableShortcutsButton singleKeysOn={singleKeysOn} />
           {onViewChange && <LeadTableViewControl view={view} onChange={onViewChange} />}
           {exportState.status === 'done' && (
             <span className="muted fs-12" data-testid="lead-export-receipt">

@@ -336,6 +336,25 @@ test.describe('shortcut sheet and the single-key switch', () => {
   });
 });
 
+test.describe('keyboard hint', () => {
+  test('stays one header line at 1440x900, so the 480px scroller still ends above the fold', async ({ app, page }) => {
+    await app.gotoRoute('/lead-queue');
+    const subtitle = page.locator('.surface:has(> .tbl-wrap) > .surface__hdr .muted.fs-12');
+    await expect(subtitle.locator('kbd')).toHaveText(['J', 'K', 'Enter', 'A', 'R']);
+    await expect(page.getByTestId('lead-shortcuts-open')).toBeVisible();
+    const box = await subtitle.evaluate((element) => {
+      const style = getComputedStyle(element);
+      const declared = Number.parseFloat(style.lineHeight);
+      // `normal` parses to NaN: fall back to a generous single line.
+      const lineHeight = Number.isFinite(declared) ? declared : Number.parseFloat(style.fontSize) * 1.6;
+      return { height: element.getBoundingClientRect().height, lineHeight };
+    });
+    expect(box.height, 'the hint wraps to a second line').toBeLessThan(box.lineHeight * 1.5);
+    const bottom = await scrollRegion(page).evaluate((element) => element.getBoundingClientRect().bottom);
+    expect(bottom, 'the table scroller ends above the fold').toBeLessThanOrEqual(900);
+  });
+});
+
 test.describe('skip table', () => {
   test('the Skip table link shows in place on focus and moves focus past the rows without touching the URL', async ({ app, page }) => {
     await app.gotoRoute('/lead-queue');
