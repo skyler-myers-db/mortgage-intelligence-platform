@@ -337,11 +337,6 @@
   min-height: calc(var(--sp-12) + var(--sp-16));
   max-height: 10lh;
 }
-.route-textarea--outreach {
-  min-height: 180px;
-  font-size: var(--fs-13);
-  line-height: 1.6;
-}
 .not-found__body {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
