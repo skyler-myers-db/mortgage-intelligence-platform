@@ -25,6 +25,7 @@ import { useFootprint } from '../components/FootprintProvider';
 import { useUnsavedGuard } from '../hooks/useUnsavedGuard';
 import { queryKeys } from '../lib/queryKeys';
 import { toast } from '../lib/toast';
+import { copyLink } from '../lib/copyLink';
 import { formatCount } from '../lib/formatters';
 import { formatDateTimeShort } from '../lib/time';
 import { RoiProjector, StateMultiSelect } from './portfolio-builder.components';
@@ -302,12 +303,12 @@ export default function PortfolioBuilder() {
    */
   const onCopyLink = useCallback(async () => {
     if (buildDirty) return;
-    try {
-      await navigator.clipboard.writeText(window.location.href);
-      toast.success('Build link copied', { detail: 'Anyone with access opens this exact build.' });
-    } catch {
-      toast.error('Copy failed', { detail: 'The browser blocked clipboard access. Copy the address bar instead.' });
-    }
+    await copyLink(window.location.href, {
+      success: 'Build link copied',
+      successDetail: 'Anyone with access opens this exact build.',
+      failure: 'Copy failed',
+      failureDetail: 'The browser blocked clipboard access. Copy the address bar instead.',
+    });
   }, [buildDirty]);
 
   const saveRequestRef = useRef<{ fingerprint: string; requestId: string } | null>(null);

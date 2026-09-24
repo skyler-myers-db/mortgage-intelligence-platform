@@ -343,6 +343,12 @@ export interface LeadQueueExportFiltersInput {
 }
 
 export function buildLeadQueueExportFilters(input: LeadQueueExportFiltersInput): string {
+  const rendered = leadQueueFilterParams(input).toString();
+  return rendered.length > 0 ? rendered : 'none';
+}
+
+/** The allowlisted, sanitized filter grammar, as URL params (export and share). */
+function leadQueueFilterParams(input: LeadQueueExportFiltersInput): URLSearchParams {
   const params = new URLSearchParams();
   if (input.segment) params.set('segment', input.segment);
   if (input.segmentCodes?.length) {
@@ -379,8 +385,88 @@ export function buildLeadQueueExportFilters(input: LeadQueueExportFiltersInput):
   if (input.cohortId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.cohortId)) {
     params.set('cohort_id', input.cohortId);
   }
+  return params;
+}
+
+/**
+ * The six URL params a Growth Agent handoff carries its cohort proof in.
+ * They bind the rows to one agent run for THIS session: a shared link never
+ * carries them (the recipient's queue is re-verified on its own).
+ */
+export const GROWTH_AGENT_PROOF_PARAMS = [
+  'growth_agent_run_id',
+  'actionable_total',
+  'actionable_cohort_fingerprint',
+  'actionable_snapshot_id',
+  'tool_result_hash',
+  'growth_handoff',
+] as const;
+
+/**
+ * `?assigned_to=me`: the "Assigned to me" preset (audit tables-09). Resolved
+ * to the signed-in actor's email at request time, so the URL, the history
+ * and a copied link never hold an email the preset wrote.
+ */
+export const ASSIGNED_TO_ME = 'me';
+
+export function isAssignedToMe(value: string | null | undefined): boolean {
+  return value?.trim().toLowerCase() === ASSIGNED_TO_ME;
+}
+
+/** Every param the queue reads; anything else in a URL is unrecognized. */
+const KNOWN_QUEUE_PARAMS: readonly string[] = [
+  'segment', 'segment_codes', 'segment_mode', 'state', 'zip', 'states', 'zips', 'cities',
+  'borrower_ids', 'county', 'counties', 'approval_status', 'outreach_status', 'assigned_to',
+  'aged_days', 'funnel_stage', 'cohort_id', ...PORTFOLIO_FILTER_KEYS,
+  'sort', 'dir', 'row', 'view', 'campaign_id', 'variant_name', ...GROWTH_AGENT_PROOF_PARAMS,
+];
+
+export interface LeadQueueShare {
+  /** `?...` or '' — the query string a copied link carries. */
+  search: string;
+  /** What the link leaves out, in plain words (for the toast). */
+  omitted: string[];
+}
+
+/**
+ * The query a "Copy link" carries (audit tables-09): the allowlisted,
+ * sanitized filter grammar (the export's own), the segment mode, the sort
+ * and direction, the column preset, the campaign binding, and `assigned_to`
+ * only when it is `me`. Left out: the open row (a place, not a view), an
+ * `assigned_to` that holds an email, the Growth Agent proof and unknown
+ * params. `filters.assignedTo` is the RAW URL value, never the resolved one.
+ */
+export function leadQueueShareParams(
+  raw: URLSearchParams,
+  filters: LeadQueueExportFiltersInput,
+): LeadQueueShare {
+  const params = leadQueueFilterParams({
+    ...filters,
+    assignedTo: isAssignedToMe(filters.assignedTo) ? ASSIGNED_TO_ME : undefined,
+  });
+  const { sort } = parseLeadTablePlace(raw);
+  if (sort) {
+    params.set('sort', sort.key);
+    params.set('dir', sort.dir);
+  }
+  const view = parseLeadTableView(raw.get(LEAD_TABLE_VIEW_PARAM));
+  if (view !== 'default') params.set(LEAD_TABLE_VIEW_PARAM, view);
+  for (const key of ['campaign_id', 'variant_name'] as const) {
+    const value = raw.get(key)?.trim();
+    if (value) params.set(key, value);
+  }
+  const omitted = new Set<string>();
+  let unknown = 0;
+  for (const key of new Set(raw.keys())) {
+    if (params.has(key)) continue;
+    if (key === 'row') omitted.add('the open row');
+    else if (key === 'assigned_to' && raw.get(key)?.trim()) omitted.add('the assignee email');
+    else if ((GROWTH_AGENT_PROOF_PARAMS as readonly string[]).includes(key)) omitted.add('the Growth Agent proof');
+    else if (!KNOWN_QUEUE_PARAMS.includes(key)) unknown += 1;
+  }
+  if (unknown > 0) omitted.add(unknown === 1 ? '1 unrecognized parameter' : `${unknown} unrecognized parameters`);
   const rendered = params.toString();
-  return rendered.length > 0 ? rendered : 'none';
+  return { search: rendered ? `?${rendered}` : '', omitted: [...omitted] };
 }
 
 /**

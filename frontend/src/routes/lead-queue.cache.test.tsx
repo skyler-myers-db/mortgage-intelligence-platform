@@ -30,10 +30,18 @@ const apiMocks = vi.hoisted(() => ({
   leadsPage: vi.fn(),
 }));
 
-const appState = vi.hoisted(() => ({ canAccessAdmin: false }));
+const appState = vi.hoisted(() => ({
+  canAccessAdmin: false,
+  actorEmail: null as string | null,
+  sessionStatus: 'ready' as 'loading' | 'ready' | 'error',
+}));
 
 vi.mock('../components/AppContext', () => ({
-  useApp: () => ({ canAccessAdmin: appState.canAccessAdmin }),
+  useApp: () => ({
+    canAccessAdmin: appState.canAccessAdmin,
+    actorEmail: appState.actorEmail,
+    sessionStatus: appState.sessionStatus,
+  }),
 }));
 
 vi.mock('../lib/configOptionsQuery', () => {
@@ -138,6 +146,8 @@ describe('LeadQueue cache identity', () => {
     document.body.innerHTML = '';
     vi.clearAllMocks();
     appState.canAccessAdmin = false;
+    appState.actorEmail = null;
+    appState.sessionStatus = 'ready';
   });
 
   // Audit delivery-08: every visit used to POST a whole-book
@@ -284,5 +294,53 @@ describe('LeadQueue cache identity', () => {
     await mountAt('/lead-queue?row=B-ZZZZZZZZZZZZZ');
     expect(tablePlace.current?.expandedId).toBeNull();
     expect(apiMocks.leadsPage).toHaveBeenCalledTimes(1);
+  });
+  // Audit tables-09 (critic fix 23): "Assigned to me" is `assigned_to=me` in
+  // the URL, resolved to the signed-in email at request time only.
+  it('sends the signed-in email for assigned_to=me while the URL keeps "me"', async () => {
+    appState.actorEmail = 'lo.one@summit.example';
+    await mountAt('/lead-queue?assigned_to=me');
+
+    expect(apiMocks.leadsPage).toHaveBeenCalledTimes(1);
+    expect((apiMocks.leadsPage.mock.calls[0][3] as { assignedTo?: string }).assignedTo).toBe('lo.one@summit.example');
+    expect(currentSearch).toBe('?assigned_to=me');
+    // The hero chip reads "Me", never the email.
+    expect(document.querySelector('[aria-label="Remove ASSIGNED: Me filter"]')).toBeTruthy();
+  });
+
+  it('holds the leads read while the session is loading', async () => {
+    appState.sessionStatus = 'loading';
+    await mountAt('/lead-queue?assigned_to=me');
+
+    expect(apiMocks.leadsPage).not.toHaveBeenCalled();
+    expect(document.querySelector('[data-testid="lead-queue-me-unresolved"]')).toBeNull();
+  });
+
+  it('reads nothing and says so when a ready session has no email', async () => {
+    await mountAt('/lead-queue?assigned_to=me');
+
+    expect(apiMocks.leadsPage).not.toHaveBeenCalled();
+    const callout = document.querySelector('[data-testid="lead-queue-me-unresolved"]');
+    expect(callout?.textContent).toContain('needs your signed-in email');
+    expect(callout?.querySelector('button')?.textContent).toBe('Clear filters');
+  });
+  it('Copy link writes this path plus the share params: no row, no email, no proof', async () => {
+    appState.actorEmail = 'lo.one@summit.example';
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+    vi.stubGlobal('navigator', { ...window.navigator, clipboard: { writeText } });
+    try {
+      await mountAt(
+        '/lead-queue?state=IL&sort=equity&dir=desc&row=B-P5YP9ESW32R7Z&assigned_to=lo.one%40summit.example'
+        + '&growth_agent_run_id=11111111-1111-4111-8111-111111111111',
+      );
+      await act(async () => {
+        document.querySelector<HTMLButtonElement>('[data-testid="lead-queue-copy-link"]')?.click();
+      });
+      await settle();
+
+      expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/lead-queue?state=IL&sort=equity&dir=desc`);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

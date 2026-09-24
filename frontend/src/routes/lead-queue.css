@@ -81,3 +81,23 @@
 @media (forced-colors: active) {
   .filter.is-active .filter__remove:is(:hover, :focus-visible) svg { color: ButtonText !important; }
 }
+
+/* ============================================================
+   QUEUE PRESETS + COPY LINK (audit tables-09 phase 1). A `.filter-row`
+   of `.filter` pills above the filter bar (design_files/index.html:
+   822-838). BEM extension: `.lead-queue-views` (the row) and
+   `.lead-queue-views__copy` (its Copy link button). The pills are
+   <Link> anchors and tokens.css sets only `a { color: inherit }`, so
+   they would render with the browser's underline (the visual-05 defect;
+   the route-nav reset in 01-app-shell.css never covered this row). The
+   chip's own border / colour step carries hover and the global ring
+   carries focus, so neither state relies on the underline.
+   ============================================================ */
+.lead-queue-views {
+  align-items: center;
+  margin-block-end: var(--sp-3);
+}
+.lead-queue-views .filter,
+.lead-queue-views .filter:hover,
+.lead-queue-views .filter:focus-visible { text-decoration: none; }
+.lead-queue-views__copy { margin-inline-start: auto; }

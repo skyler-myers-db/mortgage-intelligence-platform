@@ -78,7 +78,8 @@ export function leadQueueActiveFilterChips(input: LeadQueueActiveFilterInput): L
     if (label) push(key, label, value);
   }
   if (input.outreachStatus !== 'any') push('outreach_status', 'OUTREACH', titleCase(input.outreachStatus));
-  if (input.assignedTo) push('assigned_to', 'ASSIGNED', input.assignedTo);
+  // `me` (the "Assigned to me" preset) reads "Me", never the resolved email.
+  if (input.assignedTo) push('assigned_to', 'ASSIGNED', input.assignedTo.toLowerCase() === 'me' ? 'Me' : input.assignedTo);
   if (input.agedDays) push('aged_days', 'AGING', `Aged >${input.agedDays}d`);
   if (input.funnelStage) push('funnel_stage', 'STAGE', FUNNEL_STAGE_LABELS[input.funnelStage]);
   if (input.zipFilter) push('zip', 'ZIP', input.zipFilter);

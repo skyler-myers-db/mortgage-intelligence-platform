@@ -6,6 +6,7 @@ import {
   LOAN_PRODUCT_FILTER_OPTIONS,
   ORIGINATION_CHANNEL_FILTER_OPTIONS,
   outreachFilterDisplayValue,
+  leadQueueShareParams,
   parseLeadTablePlace,
   parseLeadTableView,
   parsePortfolioCriteria,
@@ -195,5 +196,55 @@ describe('lead table place params (audit shell-03 / runtime-08 / tables-09)', ()
     expect(hasLeadQueueFilters(new URLSearchParams(`sort=equity&state=IL`))).toBe(true);
     const cleared = searchParamsCleared(new URLSearchParams(`state=IL&sort=equity&dir=asc&row=${ROW}&view=sales-ops&approval_status=pending`));
     expect(cleared.toString()).toBe(`sort=equity&dir=asc&row=${ROW}&view=sales-ops`);
+  });
+});
+
+describe('Copy link share params (audit tables-09)', () => {
+  it('keeps the sanitized filters, segment mode, sort, dir, view, campaign binding and assigned_to=me', () => {
+    const raw = new URLSearchParams(
+      'segment_codes=itm,equity&segment_mode=all&state=IL&approval_status=pending&assigned_to=me'
+      + '&sort=equity&dir=asc&view=sales-ops&campaign_id=cmp-1&variant_name=Variant+A',
+    );
+    const share = leadQueueShareParams(raw, {
+      segmentCodes: ['itm', 'equity'],
+      segmentMode: 'all',
+      stateFilter: 'IL',
+      approvalStatus: 'pending',
+      assignedTo: 'me',
+    });
+    const params = new URLSearchParams(share.search);
+    expect(Object.fromEntries(params)).toEqual({
+      segment_codes: 'itm,equity',
+      segment_mode: 'all',
+      state: 'IL',
+      approval_status: 'pending',
+      assigned_to: 'me',
+      sort: 'equity',
+      dir: 'asc',
+      view: 'sales-ops',
+      campaign_id: 'cmp-1',
+      variant_name: 'Variant A',
+    });
+    expect(share.omitted).toEqual([]);
+  });
+
+  it('drops the open row, an assignee email, the Growth Agent proof and unknown keys, and names them', () => {
+    const raw = new URLSearchParams(
+      `state=IL&row=${ROW}&assigned_to=lo.one%40summit.example&growth_agent_run_id=11111111-1111-4111-8111-111111111111`
+      + '&tool_result_hash=abc&utm_source=mail&debug=1',
+    );
+    const share = leadQueueShareParams(raw, { stateFilter: 'IL', assignedTo: 'lo.one@summit.example' });
+    expect(share.search).toBe('?state=IL');
+    expect(share.search).not.toContain('@');
+    expect(share.omitted).toEqual([
+      'the open row',
+      'the assignee email',
+      'the Growth Agent proof',
+      '2 unrecognized parameters',
+    ]);
+  });
+
+  it('is an empty query for the bare queue', () => {
+    expect(leadQueueShareParams(new URLSearchParams(), {})).toEqual({ search: '', omitted: [] });
   });
 });
