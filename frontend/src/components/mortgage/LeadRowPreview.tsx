@@ -16,6 +16,14 @@ import { ScoreBadge } from './ScoreBadge';
 import { dispositionLabel, outreachLabel } from './LeadTable.logic';
 
 /**
+ * id of the expanded row's receipt block: the queue's "View receipt" toast
+ * action opens the row and moves focus here (tabIndex -1).
+ */
+export function leadReceiptAnchorId(borrowerId: string): string {
+  return `lead-receipt-${borrowerId}`;
+}
+
+/**
  * @param approval Effective approval state — the in-session optimistic
  *   override merged with the server projection (the same value the row's
  *   status chip renders). Re-audit #3 (2026-06-12): the preview read only
@@ -62,7 +70,11 @@ export function RowPreview({
   return (
     <>
       {decisionReceipt?.auditEventId && (
-        <div className="tbl__expand-inner tbl__expand-inner--receipt">
+        <div
+          id={leadReceiptAnchorId(lead.borrower_id)}
+          className="tbl__expand-inner tbl__expand-inner--receipt"
+          tabIndex={-1}
+        >
           <DecisionReceipt
             auditEventId={decisionReceipt.auditEventId}
             decision={decisionReceipt.decision}

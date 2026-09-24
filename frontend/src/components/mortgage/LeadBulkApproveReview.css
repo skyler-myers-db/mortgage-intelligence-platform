@@ -1,0 +1,56 @@
+/* ============================================================
+   BULK APPROVE GATE REVIEW (audit states-06) — shipped with its own lazy
+   LeadBulkApproveReview chunk. New elements of the app's `.bulk-actions` toolbar
+   (03-score-and-table.css): the count-by-offer strip, the explicit
+   sample-draft control and the sampled drafts. While the gate is open
+   the toolbar wraps so the review takes a full line under the controls,
+   and it stops being sticky once samples are shown, so a tall review
+   never covers the table rows it is about.
+   ============================================================ */
+.bulk-actions--gate { flex-wrap: wrap; }
+.bulk-actions--samples { position: static; }
+.bulk-actions__review {
+  flex: 1 0 100%;
+  order: 3;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.bulk-actions__offers,
+.bulk-actions__sampler {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.bulk-actions__samples {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: var(--sp-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.bulk-actions__sample {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-inline-size: 0;
+  padding: var(--sp-3);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+  background: var(--bg-2);
+}
+.bulk-actions__sample-subject {
+  color: var(--text-1);
+  font-size: var(--fs-13);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.bulk-actions__sample-body {
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  line-height: var(--lh-body);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

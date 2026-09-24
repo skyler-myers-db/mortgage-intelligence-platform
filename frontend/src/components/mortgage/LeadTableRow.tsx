@@ -41,6 +41,12 @@ interface LeadTableRowProps {
   pendingApproval: boolean;
   /** The audit row this row's decision wrote; the expanded preview reads it back. */
   decisionReceipt?: LeadDecisionReceipt | null;
+  /** The keyboard cursor is on this row (audit tables-03): A / R / X / Enter act here. */
+  isCursor?: boolean;
+  /** Single-key shortcuts are on, so this row may advertise them. */
+  shortcutsLive?: boolean;
+  /** The approve review, when it is open inline for this (expanded) row. */
+  reviewSlot?: ReactNode;
   onToggleRow: (lead: LeadSummary, isOpen: boolean) => void;
   onToggleSelect: (borrowerId: string) => void;
   onApprove: (borrowerId: string) => void;
@@ -78,6 +84,9 @@ export function LeadTableRow({
   salesTeamCount,
   pendingApproval,
   decisionReceipt = null,
+  isCursor = false,
+  shortcutsLive = true,
+  reviewSlot = null,
   onToggleRow,
   onToggleSelect,
   onApprove,
@@ -92,6 +101,9 @@ export function LeadTableRow({
   };
   const resolvedAriaRowIndex = ariaRowIndex ?? virtualIndex + 2;
   const gated = approverGate !== null;
+  // A / R / X act on the CURSOR row (audit tables-03), so only that row
+  // advertises them, never for a gated actor or with single keys off.
+  const rowKeys = isCursor && shortcutsLive;
   const decisionDescribedBy = describedBy(
     gated && APPROVER_ROLE_STATUS_ID,
     approvalActionsDisabled && 'campaign-binding-status',
@@ -110,6 +122,7 @@ export function LeadTableRow({
           disabled={!isSelectable || bulkApproving}
           onChange={() => onToggleSelect(lead.borrower_id)}
           onClick={stop}
+          aria-keyshortcuts={rowKeys ? 'X' : undefined}
           data-testid={`lead-select-${lead.borrower_id}`}
         />
       </td>
@@ -230,9 +243,7 @@ export function LeadTableRow({
                 onApprove(lead.borrower_id);
               }}
               aria-label={`Approve ${lead.borrower_id}`}
-              // A / R are bound to the EXPANDED row only, so only that row
-              // advertises them (audit a11y-09); never for a gated actor.
-              aria-keyshortcuts={isOpen && !gated ? 'A' : undefined}
+              aria-keyshortcuts={rowKeys && !gated ? 'A' : undefined}
               data-testid={`lead-approve-${lead.borrower_id}`}
             >
               {pendingApproval ? 'Approving…' : 'Approve'}
@@ -241,7 +252,7 @@ export function LeadTableRow({
               type="button"
               className="btn btn--sm lead-table__reject"
               aria-label={`Reject ${lead.borrower_id}`}
-              aria-keyshortcuts={isOpen && !gated ? 'R' : undefined}
+              aria-keyshortcuts={rowKeys && !gated ? 'R' : undefined}
               title={approverGate ?? 'Reject'}
               disabled={gated || approvalActionsDisabled || pendingApproval}
               aria-describedby={decisionDescribedBy}
@@ -262,8 +273,10 @@ export function LeadTableRow({
   return (
     <Fragment>
       <tr
-        className={isOpen ? 'is-expanded' : ''}
+        className={[isOpen ? 'is-expanded' : '', isCursor ? 'is-cursor' : ''].filter(Boolean).join(' ')}
         aria-rowindex={resolvedAriaRowIndex}
+        aria-current={isCursor ? 'true' : undefined}
+        data-borrower-row={lead.borrower_id}
         onClick={toggleRow}
       >
         {columns.map((column) => <Fragment key={column.key}>{cells[column.key]()}</Fragment>)}
@@ -271,6 +284,7 @@ export function LeadTableRow({
       {isOpen && (
         <tr className="tbl__expand" aria-rowindex={resolvedAriaRowIndex + 1}>
           <td colSpan={columns.length}>
+            {reviewSlot}
             <RowPreview lead={lead} approval={approval} decisionReceipt={decisionReceipt} />
             <LeadRowWorkflowPanel
               lead={lead}

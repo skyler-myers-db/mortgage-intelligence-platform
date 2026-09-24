@@ -1,5 +1,6 @@
 import type { IconName } from '../Icon';
 import { PALETTE_ROUTE_IDS, ROUTES, type PaletteRouteId } from '../../lib/routeMeta';
+import type { CommandSelectionContext, CommandVerb } from './commandSelection';
 
 /**
  * Command palette action registry + pure filter/rank (re-audit #4 follow-up,
@@ -12,7 +13,11 @@ import { PALETTE_ROUTE_IDS, ROUTES, type PaletteRouteId } from '../../lib/routeM
 
 export type CommandTarget =
   | { kind: 'route'; to: string }
-  | { kind: 'command'; command: 'toggle-theme' | 'toggle-console' | 'open-genie' };
+  | { kind: 'command'; command: 'toggle-theme' | 'toggle-console' | 'open-genie' }
+  // A verb on the page's current selection (audit wow-power-4). The palette
+  // resolves it through the selection context the page published, which
+  // calls the page's own guarded handler (never a parallel approval path).
+  | { kind: 'verb'; verb: CommandVerb };
 
 export interface CommandAction {
   id: string;
@@ -20,7 +25,7 @@ export interface CommandAction {
   /** Right-aligned secondary text (route path or verb). */
   hint: string;
   icon: IconName;
-  group: 'Navigate' | 'Workspace';
+  group: 'Navigate' | 'Workspace' | 'Selection';
   /** Extra search terms beyond the label. */
   keywords: string[];
   target: CommandTarget;
@@ -85,6 +90,40 @@ export const COMMAND_ACTIONS: readonly CommandAction[] = [
   { id: 'cmd-console', label: 'Toggle Console', hint: 'Theme · accent · density', icon: 'tweak', group: 'Workspace',
     keywords: ['settings', 'density', 'accent', 'tenant'], target: { kind: 'command', command: 'toggle-console' } },
 ];
+
+/**
+ * Verbs on the published selection. "Approve N selected…" opens the page's
+ * bulk rationale gate (or the single-row review for one row); it is hidden
+ * whenever the approver gate, a campaign binding or an in-flight run would
+ * refuse it. The ellipsis says a review step follows: no verb submits.
+ */
+export function commandVerbActions(selection: CommandSelectionContext | null): CommandAction[] {
+  if (!selection || selection.selectedCount === 0) return [];
+  const verbs: CommandAction[] = [];
+  if (selection.canApprove && selection.approveCount > 0) {
+    verbs.push({
+      id: 'verb-approve-selected',
+      label: `Approve ${selection.approveCount.toLocaleString()} selected…`,
+      hint: selection.approveCount === 1 ? 'Opens the approval review' : 'Opens the approval rationale gate',
+      icon: 'check',
+      group: 'Selection',
+      keywords: ['approve', 'bulk', 'selected', 'selection', 'rationale'],
+      target: { kind: 'verb', verb: 'approve-selected' },
+    });
+  }
+  if (selection.canAssign) {
+    verbs.push({
+      id: 'verb-assign-selected',
+      label: `Assign ${selection.selectedCount.toLocaleString()} selected…`,
+      hint: 'Choose a loan officer',
+      icon: 'user',
+      group: 'Selection',
+      keywords: ['assign', 'distribute', 'loan officer', 'lo', 'selected', 'selection'],
+      target: { kind: 'verb', verb: 'assign-selected' },
+    });
+  }
+  return verbs;
+}
 
 export function commandActionsForAccess(
   canAccessAdmin: boolean,

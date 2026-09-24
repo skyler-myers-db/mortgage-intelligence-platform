@@ -59,23 +59,22 @@ const budgets = {
   // panel is closed plus the shared Escape stack; session-keyed Reveal and
   // the hashed wordmark. The raw gate had 0.4% headroom left and gzip had
   // none. Measured: initial JS 415.31 / gzip 128.25; restore ~5% headroom.
-  // Re-baselined 2026-09-23 for the wave-1c feedback-guard lane (audit
-  // states-05, states-07). The unsaved-changes guard needs useBlocker, which
-  // only a data router provides, so main.tsx mounts createBrowserRouter
-  // with one catch-all route around the unchanged <Routes> tree. React
-  // Router's data-router runtime is the whole cost and cannot be lazy (it is
-  // the router): measured against base 726106a1 (424.88 / gzip 131.57) and
-  // a same-tree <BrowserRouter> build (430.38 / 133.42), it adds +53.16 /
-  // +16.13 KiB. The react-router/dom RouterProvider wrapper is 0.09 KiB of
-  // that (measured) and is kept for flushSync. The guard's store, blocker
-  // host and dialog plus the toast store and lazy-Toaster host add +5.50 /
-  // +1.85 and stay initial on purpose (the dialog must render in the frame
-  // a navigation is blocked); the Toaster and its CSS are their own lazy
-  // chunk, out of this number and the CSS gate.
-  // Measured at the lane head: initial JS 483.54 / gzip 149.55; ~5% headroom
-  // per policy.
-  initialJsBytes: 508 * KiB, // actual 483.54
-  initialJsGzipBytes: 157 * KiB, // actual 149.55
+  // Re-measured 2026-09-23 for wave 1c (lane queue-keyboard-review). Initial
+  // JS is now the entry chunk PLUS the chunks it imports statically
+  // (initialChunkClosure below). Lazy-loading the `?` shortcut sheet made the
+  // bundler move React, jsx-runtime and its CommonJS interop helpers (and
+  // Icon with them) out of index-*.js into a sibling chunk the entry imports,
+  // so index-*.js alone read 417.11 / 129.06, a false 7.8 KiB "shrink" while
+  // every first paint still loads that chunk. Measured the same way the base
+  // (main 726106a1, no split) is 424.88 / 131.57; this lane adds 7.15 raw /
+  // 2.60 gzip of shell code that has to be live before any route renders:
+  // the keymap registry (one dispatcher, scopes, the WCAG 2.1.4 single-key
+  // switch and its per-actor storage), the `?` sheet host and the Cmd-K
+  // selection verbs; the sheet itself and both approve reviews stay lazy.
+  // That left 0.9% raw and 0.6% gzip headroom (under the ~0.5 KiB Linux
+  // zlib variance), so restore ~5% per policy. Measured: 432.03 / 134.17.
+  initialJsBytes: 454 * KiB /* WAVE1C-INTEGRATION: re-measure */, // actual 432.03 (index + its static chunk)
+  initialJsGzipBytes: 141 * KiB, // actual 134.17
   // Bumped 2026-06-11 for the re-audit #4 Buyer-Wow tranche: ⌘K command
   // palette (.cmdk*), portal evidence hover-card (.evidence-hovercard*),
   // sleek one-time KPI entrance (.kpi__value--enter / .spark__line--draw),
@@ -184,8 +183,16 @@ const budgets = {
   // 1319.94 KiB / gzip 435.39 KiB across 56 chunks; ~5% headroom.
   totalJsBytes: 1386 * KiB, // actual 1319.94
   totalJsGzipBytes: 458 * KiB, // actual 435.39
-  maxLazyJsBytes: 104 * KiB, // actual 98.40 (was 160 -- tightened)
-  maxLazyJsGzipBytes: 34 * KiB, // actual 32.06 (was 60 -- tightened)
+  // Re-baselined 2026-09-23 for wave 1c (lane queue-keyboard-review): the
+  // shared LeadTable chunk (Lead Queue + Segment Intelligence) grew from
+  // 92.96 / 29.59 to 105.51 / 33.56 with the keyboard triage that must be
+  // live when the table mounts: the row cursor and its virtualizer walk,
+  // the focus-scoped keymap bindings, the approve-review state machine, the
+  // Cmd-K selection publisher and the lazy-module loader. The approve review
+  // (7.8 KiB), the bulk gate's review (3.4 KiB) and the `?` sheet already
+  // ship as their own lazy chunks. ~5% headroom per policy.
+  maxLazyJsBytes: 111 * KiB, // actual 105.51 (LeadTable)
+  maxLazyJsGzipBytes: 36 * KiB, // actual 33.56 (LeadTable)
   fontAssetCount: 14, // exact by policy
   fontBytes: 227 * KiB, // actual 215.42 (was 230 -- tightened)
 };
@@ -207,6 +214,34 @@ function assetInfo(file) {
   };
 }
 
+// A static `import ... from"./x.js"` / `export ... from"./x.js"` / bare
+// `import"./x.js"` in a built chunk. `import("./x.js")` (a lazy load) has a
+// parenthesis after `import`, so it never matches.
+const STATIC_CHUNK_IMPORT = /(?:\bfrom\s*|\bimport\s*)["']\.\/([\w.-]+\.js)["']/g;
+
+/**
+ * The entry chunk plus every chunk it imports statically, transitively: the
+ * JS every first paint loads before the app runs. The bundler can move
+ * modules the entry needs (React and its own CommonJS interop helpers) out
+ * of index-*.js into a sibling chunk the entry imports (it does since the
+ * lazy `?` shortcut sheet landed, wave 1c); measuring index-*.js alone would
+ * then undercount the initial payload and read as a false shrink.
+ */
+function initialChunkClosure(entryFile) {
+  const seen = new Set([entryFile]);
+  const queue = [entryFile];
+  while (queue.length > 0) {
+    const text = readFileSync(path.join(assetsDir, queue.shift()), 'utf8');
+    for (const match of text.matchAll(STATIC_CHUNK_IMPORT)) {
+      if (!seen.has(match[1])) {
+        seen.add(match[1]);
+        queue.push(match[1]);
+      }
+    }
+  }
+  return [...seen];
+}
+
 function failIf(overages, condition, message) {
   if (condition) overages.push(message);
 }
@@ -224,9 +259,16 @@ function main() {
   const js = files.filter((f) => f.endsWith('.js')).map(assetInfo);
   const css = files.filter((f) => f.endsWith('.css')).map(assetInfo);
   const fonts = files.filter((f) => /\.(woff2?|ttf|otf)$/.test(f)).map(assetInfo);
-  const initialJs = js.find((a) => /^index-[\w-]+\.js$/.test(a.file));
+  const entryJs = js.find((a) => /^index-[\w-]+\.js$/.test(a.file));
+  const initialFiles = entryJs ? initialChunkClosure(entryJs.file) : [];
+  const initialChunks = js.filter((a) => initialFiles.includes(a.file));
+  const initialJs = entryJs && {
+    file: [entryJs, ...initialChunks.filter((a) => a !== entryJs)].map((a) => a.file).join(' + '),
+    bytes: initialChunks.reduce((sum, a) => sum + a.bytes, 0),
+    gzipBytes: initialChunks.reduce((sum, a) => sum + a.gzipBytes, 0),
+  };
   const initialCss = css.find((a) => /^index-[\w-]+\.css$/.test(a.file));
-  const lazyJs = js.filter((a) => a !== initialJs);
+  const lazyJs = js.filter((a) => !initialFiles.includes(a.file));
   const totalJsBytes = js.reduce((sum, a) => sum + a.bytes, 0);
   const totalJsGzipBytes = js.reduce((sum, a) => sum + a.gzipBytes, 0);
   const fontBytes = fonts.reduce((sum, a) => sum + a.bytes, 0);

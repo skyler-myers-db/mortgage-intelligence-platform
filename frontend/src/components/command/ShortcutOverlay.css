@@ -1,0 +1,42 @@
+/* ============================================================
+   `?` KEYBOARD-SHORTCUT SHEET (audit wow-power-4)
+   Shipped with the lazy ShortcutOverlay chunk. An extension of the
+   command palette's `.cmdk` block (itself an app extension: the
+   prototype has no palette). New here: the `--sheet` panel, a heading
+   in the header row, and static (non-interactive) rows whose keycaps
+   are the global `kbd` style.
+   ============================================================ */
+.cmdk__panel--sheet { inline-size: min(36rem, 100%); }
+.cmdk__title {
+  flex: 1;
+  margin: 0;
+  color: var(--text-1);
+  font-size: var(--fs-14);
+  font-weight: 600;
+}
+.cmdk__rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.cmdk__row--static {
+  cursor: default;
+  justify-content: space-between;
+}
+.cmdk__keys {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-1);
+  flex-shrink: 0;
+}
+.cmdk__keys-or,
+.cmdk__keys-off {
+  font-size: var(--fs-11);
+  color: var(--text-3);
+}
+.cmdk__keys-off {
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+}

@@ -8,6 +8,7 @@ import { Breadcrumbs } from './Breadcrumbs';
 import { IdentityMenu } from './IdentityMenu';
 import { useFootprint } from '../FootprintProvider';
 import { api, type HealthPayload } from '../../lib/api';
+import { hasOpenModal, registerKeyBinding } from '../../lib/keymap';
 import {
   GENIE_LAUNCHER_STATUS_ID,
   genieLauncherStateClass,
@@ -184,17 +185,18 @@ export function Topbar() {
     return () => clearTimeout(t);
   }, []);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
-      const target = e.target as HTMLElement | null;
-      if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
-      e.preventDefault();
-      searchInputRef.current?.focus();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  // `/` focuses the borrower search: a global single-key binding in the
+  // shared keymap (audit wow-power-4), so typing in a field never triggers
+  // it, the Console's single-key switch turns it off, and the `?` sheet
+  // lists it. Not over a modal layer, where the search sits behind a scrim.
+  useEffect(() => registerKeyBinding({
+    id: 'topbar-search',
+    scope: 'global',
+    keys: ['/'],
+    description: 'Search borrowers, ZIPs and cities',
+    when: () => !hasOpenModal(),
+    run: () => searchInputRef.current?.focus(),
+  }), []);
 
   useEffect(() => {
     const q = borrowerQuery.trim();

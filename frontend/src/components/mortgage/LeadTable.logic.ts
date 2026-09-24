@@ -1,4 +1,5 @@
 import type { CampaignSummary, LeadSummary } from '../../types';
+import { isEditableElement } from '../../lib/keymap';
 import type { SortKey } from './LeadTable.types';
 
 export interface CampaignBinding {
@@ -19,15 +20,11 @@ export function verifiedCampaignBinding(
 }
 
 /**
- * Return true when `el` is an editable element that the window-level
- * hotkey handler must skip over. Exported for unit tests.
+ * Return true when `el` is an editable element the table shortcuts must
+ * skip over. One definition with the keymap registry (lib/keymap.ts).
+ * Exported for unit tests.
  */
-export function isEditableTarget(el: Element | null | undefined): boolean {
-  if (!el) return false;
-  const tag = (el as HTMLElement).tagName;
-  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
-  return (el as HTMLElement).isContentEditable === true;
-}
+export const isEditableTarget: (el: Element | null | undefined) => boolean = isEditableElement;
 
 /**
  * Chunk a list into groups of `size`. Used by the bulk-approve loop to

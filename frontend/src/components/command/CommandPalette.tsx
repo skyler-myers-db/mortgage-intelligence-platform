@@ -11,13 +11,17 @@ import { useApp } from '../AppContext';
 import { Icon, type IconName } from '../Icon';
 import { api } from '../../lib/api';
 import { openGenie } from '../../lib/genieOpen';
+import { hasOpenModalDialog, registerKeyBinding } from '../../lib/keymap';
 import type { LeadSummary } from '../../types';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import {
   commandActionsForAccess,
+  commandVerbActions,
   filterCommandActions,
   type CommandAction,
 } from './commandActions';
+import { currentCommandSelection, useCommandSelection } from './commandSelection';
+import { ShortcutOverlayHost } from './ShortcutOverlayHost';
 
 /**
  * ⌘K command palette (re-audit #4 Buyer-Wow #1). Reuses the wired
@@ -52,7 +56,20 @@ const MAX_BORROWERS = 6;
 /** Typed text this long or longer also offers "Ask Genie: <text>". */
 const MIN_GENIE_QUERY = 2;
 
+/**
+ * The shell's keyboard launchers: the ⌘K palette and the `?` shortcut sheet
+ * host (the sheet itself is a lazy chunk). One mount point in AppShell.
+ */
 export function CommandPalette() {
+  return (
+    <>
+      <ShortcutOverlayHost />
+      <CommandPaletteSurface />
+    </>
+  );
+}
+
+function CommandPaletteSurface() {
   const navigate = useNavigate();
   const {
     theme,
@@ -102,18 +119,24 @@ export function CommandPalette() {
     openRef.current = open;
   }, [open]);
 
-  // Global ⌘K / Ctrl+K toggle, with symmetric teardown on both edges.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
-        e.preventDefault();
-        if (openRef.current) close();
-        else openPalette();
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [close, openPalette]);
+  // Global ⌘K / Ctrl+K toggle, with symmetric teardown on both edges. A
+  // modifier chord in the shared keymap registry (audit wow-power-4): it
+  // works while typing and stays on when single-key shortcuts are off.
+  useEffect(() => registerKeyBinding({
+    id: 'command-palette',
+    scope: 'global',
+    keys: ['Mod+K'],
+    description: 'Open or close the command palette',
+    allowInEditable: true,
+    // Never open UNDER a native modal dialog (the approve review): the
+    // palette would mount inert and unseen, keep no focus, and swallow the
+    // next Escape meant for the review. Closing an open palette still works.
+    when: () => openRef.current || !hasOpenModalDialog(),
+    run: () => {
+      if (openRef.current) close();
+      else openPalette();
+    },
+  }), [close, openPalette]);
 
   useFocusTrap({ open, containerRef, initialFocusRef: inputRef, onClose: close });
 
@@ -153,15 +176,23 @@ export function CommandPalette() {
     () => filterCommandActions(query, commandActionsForAccess(canAccessAdmin)),
     [canAccessAdmin, query],
   );
+  // Verbs on the page's published selection come first ("Approve 12
+  // selected…"); they exist only while a page has a selection.
+  const selection = useCommandSelection();
+  const verbs = useMemo(
+    () => filterCommandActions(query, commandVerbActions(selection)),
+    [selection, query],
+  );
   const genieQuery = query.trim();
   const items: FlatItem[] = useMemo(
     () => [
+      ...verbs.map((action) => ({ kind: 'action' as const, action })),
       ...actions.map((action) => ({ kind: 'action' as const, action })),
       ...borrowers.map((lead) => ({ kind: 'borrower' as const, lead })),
       // Last: Enter at the first row must reach a match before the fallback.
       ...(genieQuery.length >= MIN_GENIE_QUERY ? [{ kind: 'genie' as const, prompt: genieQuery }] : []),
     ],
-    [actions, borrowers, genieQuery],
+    [verbs, actions, borrowers, genieQuery],
   );
 
   // Clamp the active index whenever the result set shrinks; keep a user who
@@ -198,6 +229,12 @@ export function CommandPalette() {
       if (target.kind === 'route') {
         close();
         navigate(target.to);
+        return;
+      }
+      if (target.kind === 'verb') {
+        // The page's own guarded handler, read fresh at run time.
+        close();
+        currentCommandSelection()?.run(target.verb);
         return;
       }
       // Workspace commands keep the palette's close semantics consistent.
@@ -243,7 +280,9 @@ export function CommandPalette() {
 
   const optionId = (i: number) => `cmdk-option-${i}`;
   let runningIndex = -1;
-  const actionItems = items.filter((it) => it.kind === 'action') as Extract<FlatItem, { kind: 'action' }>[];
+  const allActionItems = items.filter((it) => it.kind === 'action') as Extract<FlatItem, { kind: 'action' }>[];
+  const verbItems = allActionItems.filter((it) => it.action.target.kind === 'verb');
+  const actionItems = allActionItems.filter((it) => it.action.target.kind !== 'verb');
   const genieItems = items.filter((it) => it.kind === 'genie') as Extract<FlatItem, { kind: 'genie' }>[];
   const borrowerItems = items.filter((it) => it.kind === 'borrower') as Extract<FlatItem, { kind: 'borrower' }>[];
 
@@ -289,9 +328,32 @@ export function CommandPalette() {
         <div className="cmdk__list" id="cmdk-listbox" role="listbox" ref={listRef}>
           {/* The Genie row is a way out, not a match: the empty state still
               says so when no page, action or borrower matched. */}
-          {actionItems.length === 0 && borrowerItems.length === 0 && (
+          {allActionItems.length === 0 && borrowerItems.length === 0 && (
             <div className="cmdk__empty" role="status">
               No pages, actions, or borrowers match “{query.trim()}”.
+            </div>
+          )}
+
+          {verbItems.length > 0 && (
+            <div className="cmdk__group" role="group" aria-label="Selected borrowers">
+              <div className="cmdk__group-label">Selected borrowers</div>
+              {verbItems.map((item) => {
+                runningIndex += 1;
+                const i = runningIndex;
+                return (
+                  <CommandRow
+                    key={item.action.id}
+                    index={i}
+                    optionId={optionId(i)}
+                    active={i === activeIndex}
+                    icon={item.action.icon}
+                    label={item.action.label}
+                    hint={item.action.hint}
+                    onActivate={() => runItem(item)}
+                    onHover={() => moveTo(i)}
+                  />
+                );
+              })}
             </div>
           )}
 

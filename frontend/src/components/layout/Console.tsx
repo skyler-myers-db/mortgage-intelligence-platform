@@ -7,6 +7,7 @@ import { Chip } from '../Primitives';
 import { PropertyLookupPanel } from '../mortgage/PropertyLookupPanel';
 import { ThemePreferenceControl } from './ThemePreferenceControl';
 import { api, type ActorAuditEventSummary } from '../../lib/api';
+import { useSingleKeyShortcuts } from '../../lib/keymapPreference';
 import { offerDisplayLabel } from '../../lib/offerLanguage';
 import { formatTimeOfDay, formatTimestamp } from '../../lib/time';
 
@@ -89,6 +90,7 @@ export function Console() {
     recentActivityFocusRequest,
     acknowledgeRecentActivityFocus,
   } = useApp();
+  const [singleKeyShortcuts, setSingleKeyShortcuts] = useSingleKeyShortcuts();
   const activityQuery = useInfiniteQuery({
     queryKey: ['audit', 'my-events', RECENT_ACTIVITY_PAGE_SIZE],
     queryFn: ({ signal, pageParam }) => (
@@ -349,6 +351,25 @@ export function Console() {
               aria-label="Toggle signal strength meters"
               type="button"
             />
+          </div>
+        </div>
+        {/* WCAG 2.1.4: every shortcut without Ctrl / Cmd / Alt can be switched
+            off per actor (lib/keymapPreference); ⌘K stays on. */}
+        <div className="tweak-row">
+          <div className="row">
+            <label id="console-single-key-label">Single-key shortcuts</label>
+            <button
+              className={`switch ${singleKeyShortcuts ? 'on' : ''}`}
+              onClick={() => setSingleKeyShortcuts(!singleKeyShortcuts)}
+              aria-pressed={singleKeyShortcuts}
+              aria-labelledby="console-single-key-label"
+              aria-describedby="console-single-key-note"
+              type="button"
+              data-testid="console-single-key-shortcuts"
+            />
+          </div>
+          <div id="console-single-key-note" className="muted fs-12">
+            J, K, A, R, X, / and ? on their own, and the table's arrow keys and Enter. ⌘K / Ctrl+K always works.
           </div>
         </div>
         <div className="tweak-row">
