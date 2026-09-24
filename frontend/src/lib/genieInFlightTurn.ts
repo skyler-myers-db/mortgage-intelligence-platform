@@ -181,6 +181,12 @@ function withNote(kind: GenieTurnNote['kind'], reason: string, question: string)
   return [...snapshot.notes, note].slice(-MAX_NOTES);
 }
 
+/** An interrupted turn: no in-flight turn, a note in the transcript, and the
+ *  note's reason said by the surface announcer. */
+function interrupt(reason: string, question: string): void {
+  update({ inFlight: null, notes: withNote('interrupted', reason, question), announcement: reason });
+}
+
 function isCurrent(gen: number): boolean {
   return generation === gen && active?.generation === gen;
 }
@@ -370,11 +376,7 @@ function failTurn(gen: number, err: unknown): void {
     return;
   }
   if (inFlight.resumed && !inFlight.revealed) {
-    update({
-      inFlight: null,
-      notes: withNote('interrupted', GENIE_RESUME_FAILED_REASON, ''),
-      announcement: genieOutcomeAnnouncement('failed'),
-    });
+    interrupt(GENIE_RESUME_FAILED_REASON, '');
     return;
   }
   // A 403 on a fresh turn: clear the conversation (the reset listeners run
@@ -515,7 +517,7 @@ export function resumeGenieTurnFromSession(): void {
   const fresh = Date.now() - record.startedAt < MAX_LIVE_WAIT_MS;
   if (record.phase !== 'polling' || !ids || !fresh) {
     removeRecord();
-    update({ notes: withNote('interrupted', interruptedReason(record.phase === 'completing' ? 'completing' : 'reload'), record.question) });
+    interrupt(interruptedReason(record.phase === 'completing' ? 'completing' : 'reload'), record.question);
     return;
   }
   const gen = ++generation;
@@ -542,10 +544,7 @@ export function resumeGenieTurnFromSession(): void {
       if (!isCurrent(gen)) return undefined;
       if (outcome.kind !== 'held') {
         finishActive();
-        update({
-          inFlight: null,
-          notes: withNote('interrupted', interruptedReason(outcome.kind === 'busy' ? 'other-tab' : 'reload'), record.question),
-        });
+        interrupt(interruptedReason(outcome.kind === 'busy' ? 'other-tab' : 'reload'), record.question);
         return undefined;
       }
       return pollAndComplete(gen, ids, record.question, record.startedAt + MAX_LIVE_WAIT_MS, record.deep, ctrl.signal);

@@ -289,6 +289,8 @@ describe('reload resume', () => {
     expect(getGenieTurnSnapshot().notes).toEqual([
       { kind: 'interrupted', reason, question: QUESTION, atTurnIndex: 0 },
     ]);
+    // Said through the surface announcer too, not only shown.
+    expect(getGenieTurnSnapshot().announcement).toBe(reason);
   });
 
   it('never resumes a turn another tab holds the lock for', async () => {
@@ -302,6 +304,7 @@ describe('reload resume', () => {
     expect(getGenieTurnSnapshot().notes.map((note) => note.reason)).toEqual([
       'This question is being answered in another tab.',
     ]);
+    expect(getGenieTurnSnapshot().announcement).toBe('This question is being answered in another tab.');
     expect(storedRecord()).toBeNull();
   });
 
