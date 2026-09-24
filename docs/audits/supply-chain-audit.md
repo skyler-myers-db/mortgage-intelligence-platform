@@ -11,9 +11,25 @@ this remediation pass.
 
 - Browser-shipped production dependencies have no known commercial-use license
   blockers.
-- Frontend `npm audit` reports zero known vulnerabilities.
-- Backend `pip-audit -r requirements.txt --strict` reports zero known
-  vulnerabilities after the runtime dependency bump.
+- Frontend `npm audit`, 2026-09-24, after the wave-2 minor dependency batch
+  (vitest 4.1.11, React 19.3.0, React Router 8.4.0, Vite 8.3.0,
+  @vitejs/plugin-react 6.1.1, @axe-core/playwright 4.13.0,
+  typescript-eslint 8.70.1): 0 advisories at any level (0 low, 0 moderate,
+  0 high, 0 critical) across 232 packages. Before the batch it reported 2
+  moderate dev-only advisories (vitest and @vitest/mocker,
+  GHSA-82fw-gwwq-j7x9, fixed in vitest 4.1.11). This is a dated result, not
+  a standing claim. The CI gate is `npm --prefix frontend audit
+  --audit-level=high` (the `npm audit` step of the `security-scan` job in
+  `.github/workflows/ci.yml`): a high or critical advisory fails CI;
+  moderate and low advisories in dev-only tooling are tolerated and reviewed
+  at the next dependency batch.
+- Backend `pip-audit`, 2026-09-24, over the `uv.lock` pins
+  (`pip-audit -r uv.lock --no-deps --disable-pip --strict`): no known
+  vulnerabilities. CI runs `pip-audit -r requirements.txt --strict
+  --ignore-vuln GHSA-h7x2-h6g9-p789` and carries that one ignore: the MLflow
+  tracking-server SSRF has no patched release and is unreachable here (see
+  the 2026-09-08 addendum below and the proof at the ci.yml call site). Its
+  review date is 2026-10-08.
 - The prior restricted commercial-use map-data dependency was removed from
   `frontend/package.json`, `frontend/package-lock.json`, and production source.
 - State map rendering now uses `us-atlas@3.0.1` (`ISC`) plus the existing
@@ -39,13 +55,51 @@ this remediation pass.
 Run after any dependency change:
 
 ```bash
-npm --prefix frontend audit --audit-level=moderate
+npm --prefix frontend audit --audit-level=high      # the CI gate
+npm --prefix frontend audit --audit-level=moderate  # advisory local read; not a gate
 npm --prefix frontend run test -- USChoroplethMap
 npm --prefix frontend run build
-./.venv/bin/pip-audit -r requirements.txt --strict
+./.venv/bin/pip-audit -r requirements.txt --strict --ignore-vuln GHSA-h7x2-h6g9-p789
 ./.venv/bin/python -m pytest -q tests/unit/test_supply_chain_licenses.py
 ./.venv/bin/python -m pytest -q tests/unit/test_error_sanitizer.py tests/unit/test_health_endpoint.py
 ```
+
+`tests/unit/test_supply_chain_licenses.py` pins this section to CI: the
+`--audit-level` named as the gate here must be the one ci.yml runs, and every
+advisory ci.yml ignores must be named in this document.
+
+## Dependency upgrade checklist
+
+Frontend dependencies move in batches of exact pins (`npm install
+<pkg>@<version> --save-exact` for the named packages only, never `npm
+update`), and `npm --prefix frontend ci` must run clean on the result. Before
+a batch lands, check each of these:
+
+- **react-router `UNSAFE_DataRouterContext`.** `UnsavedChangesGuard` reads
+  this unstable export to detect a data router. It is pinned by
+  `frontend/src/lib/dependencyContracts.test.ts`, together with
+  `createBrowserRouter`, `useBlocker` and `react-router/dom`'s
+  `RouterProvider`. A red test there means the guard needs a new detection
+  path before the bump can land.
+- **React Compiler compatibility.** A React, compiler or
+  `@vitejs/plugin-react` bump can change what the compiler memoizes, and a
+  bailout is silent. Run the whole vitest suite (`npm --prefix frontend run
+  test`), not a subset, and `node tools/react_compiler_coverage.mjs
+  --only-issues`, and compare the summary with the previous batch.
+- **Playwright is held to the VRT container image.** `@playwright/test`
+  stays at the version of the pinned visual-regression image
+  (`mcr.microsoft.com/playwright:v1.59.1-noble`). A Playwright bump moves the
+  image and regenerates the baselines in the same change.
+- **typescript-eslint gates TypeScript 7.** typescript-eslint 8.70.1 peers
+  `typescript >=4.8.4 <6.1.0`. TypeScript 7 waits until a typescript-eslint
+  release admits it; check the peer range with `npm view
+  @typescript-eslint/parser peerDependencies`.
+- **An axe-core minor can add rules.** Run
+  `tests/e2e/fixture/axe.fixture.spec.ts` on the new version. New rule ids
+  that fire are fixed in the lane that owns the surface, or the bump is held;
+  they are never added to the `KNOWN_VIOLATIONS` ratchet.
+- **Update signal.** Dependency-update signal pending owner decision #7; no
+  bot branch (existing contract, see `docs/modernization-todo.md`).
 
 Additional manual checks:
 
