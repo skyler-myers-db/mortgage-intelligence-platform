@@ -514,4 +514,4 @@ def test_payload_keep_warm_policies_are_the_runtime_literal() -> None:
     from tools.databricks.app_deploy_payload import KEEP_WARM_POLICIES
 
     annotation = Settings.model_fields["mip_warehouse_keep_warm"].annotation
-    assert KEEP_WARM_POLICIES == get_args(annotation)
+    assert get_args(annotation) == KEEP_WARM_POLICIES
