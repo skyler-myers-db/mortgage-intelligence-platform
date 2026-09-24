@@ -73,6 +73,27 @@ export function describeLeadExportFailure(error: unknown): string {
   return `Export not recorded. ${EXPORT_NOT_DOWNLOADED}`;
 }
 
+/** How long an export waits for the offer-rules version before stamping 'unknown'. */
+export const RULES_VERSION_TIMEOUT_MS = 4000;
+
+/**
+ * The offer-rules version for this export, or null (stamped 'unknown').
+ * Never throws and never blocks past RULES_VERSION_TIMEOUT_MS: the download
+ * and its LEAD_EXPORT receipt proceed either way.
+ */
+export function resolveExportRulesVersion(context: LeadExportContext | undefined): Promise<string | null> {
+  const resolve = context?.resolveRulesVersion;
+  if (!resolve) return Promise.resolve(context?.rulesVersion ?? null);
+  const signal = AbortSignal.timeout(RULES_VERSION_TIMEOUT_MS);
+  const timedOut = new Promise<null>((settle) => {
+    signal.addEventListener('abort', () => settle(null), { once: true });
+  });
+  const resolved = new Promise<string | null>((settle) => {
+    settle(resolve(signal));
+  }).catch(() => null);
+  return Promise.race([resolved, timedOut]);
+}
+
 export function useLeadCsvExport() {
   const [state, setState] = useState<LeadCsvExportState>({ status: 'idle' });
   // One receipt per click: a second click while the first is in flight would
@@ -90,11 +111,18 @@ export function useLeadCsvExport() {
 
   async function exportCsv({ plan, approvals, exportContext, rowOrder }: LeadCsvExportRequest): Promise<void> {
     if (inflight.current || plan.rows.length === 0) return;
+    // Placeholder rows belong to the previous filters: never declare them
+    // under the new ones.
+    if (exportContext?.exportBlockedReason) return;
     inflight.current = true;
     setState({ status: 'pending', rowCount: plan.rows.length });
     try {
+      // Stamped before the bytes are built and hashed: the receipt's digest
+      // covers the rules_version line the file carries.
+      const rulesVersion = await resolveExportRulesVersion(exportContext);
       const csv = buildLeadCsv(plan.rows, approvals, {
         ...exportContext,
+        rulesVersion,
         scope: plan.scope,
         rowOrder,
       });

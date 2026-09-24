@@ -80,7 +80,10 @@ _LEAD_POPULATION_SELECT_FROM_LP: str = (
     "lp.refi_propensity_score, lp.refi_propensity_run_date, lp.has_refi_propensity_trigger, "
     "lp.loan_product_type, lp.origination_channel, "
     "lp.marketing_eligible, lp.consent_status, lp.suppression_reason, lp.last_touch_at, "
-    "lp.eligible_recontact_at, lp.dnc, lp.eligibility_source"
+    "lp.eligible_recontact_at, lp.dnc, lp.eligibility_source, "
+    # Provenance for the X-Data-Refreshed-At header on /api/leads (audit
+    # delivery-08). Last on purpose; LeadSummary never serializes it.
+    "lp.refreshed_at"
 )
 
 _LEAD_POPULATION_SELECT_FROM_B360: str = (
@@ -103,7 +106,9 @@ _LEAD_POPULATION_SELECT_FROM_B360: str = (
     "b.refi_propensity_score, b.refi_propensity_run_date, b.has_refi_propensity_trigger, "
     "b.loan_product_type, b.origination_channel, "
     "b.marketing_eligible, b.consent_status, b.suppression_reason, b.last_touch_at, "
-    "b.eligible_recontact_at, b.dnc, b.eligibility_source"
+    "b.eligible_recontact_at, b.dnc, b.eligibility_source, "
+    # Provenance for X-Data-Refreshed-At (see the lead_population twin above).
+    "b.refreshed_at"
 )
 
 _EVIDENCE_COLUMNS: str = (

@@ -27,7 +27,6 @@ interface BanEntry {
 interface FormattingConfig {
   FORMATTING_BAN: BanEntry[];
   FORMATTING_ALLOWLIST: Record<string, string>;
-  WAVE_1C_LANE_OWNED: string[];
 }
 
 function isFormattingConfig(value: unknown): value is FormattingConfig {
@@ -36,12 +35,12 @@ function isFormattingConfig(value: unknown): value is FormattingConfig {
   return (
     Array.isArray(record.FORMATTING_BAN) &&
     typeof record.FORMATTING_ALLOWLIST === 'object' &&
-    record.FORMATTING_ALLOWLIST !== null &&
-    Array.isArray(record.WAVE_1C_LANE_OWNED)
+    record.FORMATTING_ALLOWLIST !== null
   );
 }
 
 let config: FormattingConfig;
+let loadedConfig: Record<string, unknown>;
 let eslint: ESLint;
 
 // Loading eslint.config.js pulls in the typescript-eslint and react-hooks
@@ -54,6 +53,7 @@ beforeAll(async () => {
   const loaded: unknown = await import(/* @vite-ignore */ CONFIG_URL.href);
   if (!isFormattingConfig(loaded)) throw new Error('eslint.config.js no longer exports the formatting ban');
   config = loaded;
+  loadedConfig = loaded as unknown as Record<string, unknown>;
   eslint = new ESLint({ cwd: FRONTEND });
 }, ESLINT_BUDGET_MS);
 
@@ -106,6 +106,31 @@ describe('formatting ban wiring', { timeout: ESLINT_BUDGET_MS }, () => {
     expect(await banSeverity('src/lib/time.ts')).toBe(0);
     expect(await banSeverity('src/lib/fixedPrecision.ts')).toBe(0);
     expect(await banSeverity('src/lib/formatters.test.ts')).toBe(0);
+  });
+
+  // Wave 2 retired the wave-1c lane-owned exemption block: the files its
+  // globs covered are gated again (the seven this lane migrated among them),
+  // and nothing may bring a blanket exemption back.
+  it('gates every file the retired wave-1c exemption block used to cover', async () => {
+    expect(loadedConfig.WAVE_1C_LANE_OWNED).toBeUndefined();
+    for (const file of [
+      'src/components/mortgage/LeadTable.tsx',
+      'src/components/mortgage/LeadTable.csv.ts',
+      'src/components/mortgage/LeadTableStatusChips.tsx',
+      'src/components/mortgage/EvidenceDrawer.tsx',
+      'src/routes/portfolio-builder.tsx',
+      'src/routes/portfolio-builder.governance.tsx',
+      'src/routes/offer-orchestrator.feedback.ts',
+      'src/components/mortgage/useLeadApprovalActions.ts',
+      'src/components/command/CommandPalette.tsx',
+      'src/components/layout/Topbar.tsx',
+      'src/lib/api.ts',
+      'src/lib/apiClients/leads.ts',
+      'src/routes/borrower-360.tsx',
+      'src/main.tsx',
+    ]) {
+      expect(await banSeverity(file), file).toBe(2);
+    }
   });
 
   it('turns the ban off for every allowlisted file', async () => {

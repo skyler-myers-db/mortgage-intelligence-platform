@@ -224,6 +224,10 @@ export function useLeadTableKeyboardFlow({
     // Never start a review (or its draft) while a bulk run is on the wire.
     if (approval.bulkApproving || approval.isBulkRunInFlight()) return;
     if (!canStillApprove(borrowerId)) return;
+    // A decision for this row is on the wire (a reject, or an approve a
+    // remounted table left in the MutationCache): a NEW review would draft
+    // again. The review already open for it stays (it settles by itself).
+    if (current?.borrowerId !== borrowerId && approval.isDecisionInFlight(borrowerId)) return;
     cursor.setCursorId(borrowerId);
     if (!reviewChunk.isReady()) {
       loadReviewThenOpen(borrowerId);

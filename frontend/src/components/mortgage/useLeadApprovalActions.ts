@@ -4,17 +4,31 @@
  * selection set feeding the bulk toolbar, the chunked bulk-approve loop with
  * its synchronous in-flight latches, the bulk toast lifecycle, and the
  * post-bulk focus restore. Extracted from LeadTable.tsx (file-size gate,
- * plan item 2); state ownership and effect order are unchanged.
+ * plan item 2).
+ *
+ * The writes run on the governed outreach mutations (lib/mutations/outreach,
+ * audit stack-09 / tables-05): pessimistic (a row reads Approved only after
+ * the POST returned approved=true), networkMode 'always', one request_id per
+ * intent, and the pending state read from the MutationCache so a table that
+ * remounted mid-write still knows the row is on the wire.
  */
 
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import type { QueryClient } from '@tanstack/react-query';
 import type { LeadSummary } from '../../types';
-import { api, ApiError, isAbortError } from '../../lib/api';
 import { clientFailureReason } from '../../lib/apiTransport';
 import { markUnrecordedWrite } from '../../lib/sessionStatus';
 import type { OutreachDraftResult } from '../../lib/apiTypes';
 import { invalidateOperationalQueries } from '../../lib/queryKeys';
+import {
+  decisionFailure,
+  draftForApproval as draftGovernedCopy,
+  isDecisionPending,
+  useApproveLead,
+  usePendingDecisions,
+  useRejectLead,
+} from '../../lib/mutations/outreach';
+import { intentFingerprint, useIntentRequestIds } from '../../lib/mutations/requestIds';
 import { BULK_APPROVE_CONCURRENCY } from './LeadTable.constants';
 import {
   _newBulkId,
@@ -27,6 +41,7 @@ import {
 import type { RejectReasonCode } from './LeadTable.types';
 import type { LeadDecisionReceipt } from './DecisionReceipt';
 import { APPROVER_ROLE_REQUIRED } from './approverGate';
+import { clearCancelledBulk, readCancelledBulk, stashCancelledBulk } from './bulkApproveStash';
 
 /** Verification state of a `?campaign_id=&variant_name=` URL binding. */
 export type CampaignBindingState = 'absent' | 'invalid' | 'verified' | 'validating';
@@ -37,6 +52,8 @@ export interface BulkToast {
   network: number;
   aborted: number;
 }
+
+export type LeadDecisionOutcome = 'ok' | 'network' | 'backend' | 'aborted' | 'duplicate';
 
 export interface UseLeadApprovalActionsInput {
   displayLeads: LeadSummary[];
@@ -73,8 +90,6 @@ export function useLeadApprovalActions({
   tableWrapRef,
   setApprovalError,
 }: UseLeadApprovalActionsInput) {
-  'use no memo';
-
   // A11y: the bulk-approve button is the launch point for the bulk flow.
   // After the action settles we restore focus deterministically — to this
   // button when it survives (partial outcome keeps the toolbar mounted) or
@@ -89,7 +104,11 @@ export function useLeadApprovalActions({
   const [rejectRationale, setRejectRationale] = useState('');
   const [bulkRationaleOpen, setBulkRationaleOpen] = useState(false);
   const [bulkRationale, setBulkRationale] = useState('');
-  const [pendingApproval, setPendingApproval] = useState<Record<string, boolean>>({});
+  const approveMutation = useApproveLead(queryClient);
+  const rejectMutation = useRejectLead(queryClient);
+  // Which rows have an approve or reject on the wire, and which decision.
+  const pendingDecisions = usePendingDecisions(queryClient);
+  const requestIds = useIntentRequestIds();
   // Bulk-approve state. `selectedIds` is a Set so toggling is O(1); we
   // copy-on-write when updating to keep React's reference check happy.
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
@@ -129,8 +148,13 @@ export function useLeadApprovalActions({
   // those per-row ids after unmount, so the honest operator guidance is
   // still to review their actor-scoped recent activity instead of blindly
   // retrying. R5-21
-  // (2026-04-23).
-  const [bulkToast, setBulkToast] = useState<BulkToast | null>(null);
+  // (2026-04-23). A run the last unmount cut short is flashed once on this
+  // mount (read in the initializer, so StrictMode's double render is safe;
+  // the effect below only removes the key).
+  const [bulkToast, setBulkToast] = useState<BulkToast | null>(() => {
+    const cancelled = readCancelledBulk();
+    return cancelled ? { ok: cancelled.ok, fail: 0, network: 0, aborted: cancelled.aborted } : null;
+  });
   // wow-stage-3: the audit row each row decision wrote, keyed by borrower.
   // The expanded row reads it back as a Decision receipt; the id comes from
   // the POST response and nothing else about the receipt is kept here.
@@ -147,12 +171,12 @@ export function useLeadApprovalActions({
   };
 
   /**
-   * The approver-role and campaign-binding gate every approval passes,
+   * The approver-role and campaign-binding gate every decision passes,
    * checked BEFORE any draft call: `/outreach/draft` writes a
    * DRAFT_OUTREACH audit row and is not approver-gated. The approve
    * review (flow-03) runs it before it drafts anything.
    */
-  function canStartApproval(): boolean {
+  function passesDecisionGate(noun: 'approval' | 'rejection'): boolean {
     if (!canApprove) {
       setApprovalError(`${APPROVER_ROLE_REQUIRED}.`);
       return false;
@@ -160,37 +184,32 @@ export function useLeadApprovalActions({
     if (campaignBindingBlocked) {
       setApprovalError(
         campaignBindingState === 'validating'
-          ? 'Campaign binding is still being validated. Wait before approval.'
-          : 'Campaign binding is invalid. Reopen the saved campaign before approval.',
+          ? `Campaign binding is still being validated. Wait before ${noun}.`
+          : `Campaign binding is invalid. Reopen the saved campaign before ${noun}.`,
       );
       return false;
     }
     return true;
   }
 
+  function canStartApproval(): boolean {
+    return passesDecisionGate('approval');
+  }
+
+  /** The governed draft an approval certifies, under this table's campaign binding. */
+  function draftForApproval(borrowerId: string, signal?: AbortSignal): Promise<OutreachDraftResult> {
+    return draftGovernedCopy(borrowerId, campaignBinding, signal);
+  }
+
   /**
-   * Generate the governed email draft an approval certifies. Called only on
-   * explicit intent (the review's Approve / A, a bulk run, or "Preview 3
-   * sample drafts"): each call writes a DRAFT_OUTREACH audit row, so never
-   * on row expand, hover, cursor movement or prefetch.
+   * R5-04 synchronous latch: a decision for this row is on the wire, from
+   * this mount (the ref flips before any await) or from one that unmounted
+   * mid-write (the MutationCache outlives the table). The table also reads
+   * it before it opens a NEW review: that review would draft, and a draft
+   * writes a DRAFT_OUTREACH audit row.
    */
-  async function draftForApproval(borrowerId: string, signal?: AbortSignal): Promise<OutreachDraftResult> {
-    const draft = campaignBinding
-      ? await api.draftOutreach(borrowerId, 'email', signal, campaignBinding)
-      : await api.draftOutreach(borrowerId, 'email', signal);
-    if (
-      campaignBinding
-      && (
-        draft.campaign_id !== campaignBinding.campaign_id
-        || draft.variant_name !== campaignBinding.variant_name
-      )
-    ) {
-      throw new Error('Campaign variant proof is stale. Reopen the saved campaign before approval.');
-    }
-    if (!draft.subject?.trim()) {
-      throw new Error('Governed email draft returned without a subject. Regenerate before approval.');
-    }
-    return draft;
+  function decisionInFlight(borrowerId: string): boolean {
+    return rowInFlightRef.current[borrowerId] === true || isDecisionPending(queryClient, borrowerId);
   }
 
   /**
@@ -203,13 +222,17 @@ export function useLeadApprovalActions({
    * `reviewedDraft` is the exact draft the approver was shown (the approve
    * review, or a bulk sample): its generation id and hash are what the
    * approval binds, and no second draft is generated. Without it (a bulk
-   * run's unsampled rows) the draft is generated here.
+   * run's unsampled rows) the draft is generated in the mutation.
+   *
+   * One request_id per intent: (borrower, reviewed draft) for a single
+   * approve, so "Confirm again" after a 500 or a timeout replays the same
+   * request and a new draft is a new one; (bulk id, borrower) for a bulk row.
    *
    * Returns a tagged outcome so bulk-approve can distinguish a network
    * drop ("request never reached the audit table") from a backend
    * rejection ("server said no"). Hole-finder finding #2, 2026-04-23.
    */
-  async function approveLead(
+  function approveLead(
     borrowerId: string,
     signal?: AbortSignal,
     extras: {
@@ -219,67 +242,60 @@ export function useLeadApprovalActions({
       suppressInvalidation?: boolean;
     } = {},
     reviewedDraft: OutreachDraftResult | null = null,
-  ): Promise<'ok' | 'network' | 'backend' | 'aborted' | 'duplicate'> {
-    // R5-04: synchronous latch check. setState is async, so a rapid
-    // second click could slip in before `pendingApproval[id]` flips
-    // to true and produce a second audit row. The ref flips
-    // immediately.
-    if (rowInFlightRef.current[borrowerId]) return 'duplicate';
-    if (!canStartApproval()) return 'backend';
+  ): Promise<LeadDecisionOutcome> {
+    if (decisionInFlight(borrowerId)) return Promise.resolve('duplicate');
+    if (!canStartApproval()) return Promise.resolve('backend');
     rowInFlightRef.current[borrowerId] = true;
     setApprovalError(null);
-    setPendingApproval((p) => ({ ...p, [borrowerId]: true }));
-    try {
-      const lead = leadsById.get(borrowerId);
-      const draft = reviewedDraft ?? await draftForApproval(borrowerId, signal);
-      const draftSubject = draft.subject?.trim() ?? '';
-      const res = await api.approve(
-        borrowerId,
-        {
-          evidence_ids: lead?.evidence_ids ?? [],
-          offer_code: draft.offer_code ?? lead?.recommended_offer_code ?? null,
-          draft_subject: draftSubject,
-          draft_body: draft.body,
-          draft_generation_id: draft.generation_id,
-          draft_response_hash: draft.response_hash,
-          draft_source_refreshed_at: draft.source_refreshed_at,
-          channel: 'email',
-          rationale: extras.rationale ?? null,
-          bulk_id: extras.bulk_id ?? null,
-          bulk_rationale: extras.bulk_rationale ?? null,
-          campaign_id: campaignBinding?.campaign_id ?? null,
-          variant_name: campaignBinding?.variant_name ?? null,
-        },
-        signal,
-      );
-      if (res.approved) {
+    const lead = leadsById.get(borrowerId);
+    const intent = extras.bulk_id
+      ? intentFingerprint('approve-bulk', extras.bulk_id, borrowerId)
+      : intentFingerprint('approve', borrowerId, reviewedDraft?.generation_id);
+    const outcome = approveMutation.mutateAsync({
+      decision: 'approve',
+      borrowerId,
+      requestId: requestIds.idFor(intent),
+      reviewedDraft,
+      campaignBinding,
+      evidenceIds: lead?.evidence_ids ?? [],
+      offerCode: lead?.recommended_offer_code ?? null,
+      rationale: extras.rationale ?? null,
+      bulkId: extras.bulk_id ?? null,
+      bulkRationale: extras.bulk_rationale ?? null,
+      signal,
+      suppressInvalidation: extras.suppressInvalidation,
+    }).then(
+      (res): LeadDecisionOutcome => {
+        if (!res.approved) {
+          setApprovalError(`Approve failed for ${borrowerId}: endpoint returned approved=false.`);
+          return 'backend';
+        }
+        requestIds.settle(intent);
         decidedRef.current.add(borrowerId);
         setApproval(borrowerId, 'approved');
         recordDecision(borrowerId, { auditEventId: res.audit_event_id ?? null, decision: 'approved' });
-        if (!extras.suppressInvalidation) void invalidateOperationalQueries(queryClient);
         return 'ok';
-      }
-      setApprovalError(`Approve failed for ${borrowerId}: endpoint returned approved=false.`);
-      return 'backend';
-    } catch (err: unknown) {
-      if (isAbortError(err)) return 'aborted';
-      // The session ended mid-click (on the draft step or the approve POST):
-      // the session dialog must say this approval was NOT recorded.
-      if (clientFailureReason(err) === 'session_expired') markUnrecordedWrite('approval');
-      const isNetwork = err instanceof ApiError && err.status === null;
-      setApprovalError(
-        err instanceof Error
-          ? `Couldn't approve ${borrowerId}: ${err.message}`
-          : `Couldn't approve ${borrowerId}.`,
-      );
-      return isNetwork ? 'network' : 'backend';
-    } finally {
+      },
+      (err: unknown): LeadDecisionOutcome => {
+        const failure = decisionFailure(err);
+        if (failure === 'aborted') return 'aborted';
+        // The session ended mid-click (on the draft step or the approve POST):
+        // the session dialog must say this approval was NOT recorded.
+        if (clientFailureReason(err) === 'session_expired') markUnrecordedWrite('approval');
+        setApprovalError(
+          err instanceof Error
+            ? `Couldn't approve ${borrowerId}: ${err.message}`
+            : `Couldn't approve ${borrowerId}.`,
+        );
+        return failure;
+      },
+    );
+    // Released before the caller sees the outcome (this reaction is first).
+    const release = () => {
       rowInFlightRef.current[borrowerId] = false;
-      setPendingApproval((p) => {
-        const { [borrowerId]: _discard, ...rest } = p;
-        return rest;
-      });
-    }
+    };
+    void outcome.then(release, release);
+    return outcome;
   }
 
   /**
@@ -291,67 +307,56 @@ export function useLeadApprovalActions({
    * lifecycle-sync debounce the approve path uses.
    *
    * On failure we surface the error but do NOT flip the local state,
-   * so the user can retry. Matches the approve flow's error posture.
+   * so the user can retry (with the same request_id while the reason and
+   * rationale are unchanged). Matches the approve flow's error posture.
    */
-  async function rejectLead(
+  function rejectLead(
     borrowerId: string,
     reasonCode: RejectReasonCode,
     rationale: string | null = null,
   ): Promise<boolean> {
-    // R5-04: synchronous latch — see approveLead above.
-    if (rowInFlightRef.current[borrowerId]) return false;
-    if (!canApprove) {
-      setApprovalError(`${APPROVER_ROLE_REQUIRED}.`);
-      return false;
-    }
-    if (campaignBindingBlocked) {
-      setApprovalError(
-        campaignBindingState === 'validating'
-          ? 'Campaign binding is still being validated. Wait before rejection.'
-          : 'Campaign binding is invalid. Reopen the saved campaign before rejection.',
-      );
-      return false;
-    }
+    if (decisionInFlight(borrowerId)) return Promise.resolve(false);
+    if (!passesDecisionGate('rejection')) return Promise.resolve(false);
     rowInFlightRef.current[borrowerId] = true;
     setApprovalError(null);
-    setPendingApproval((p) => ({ ...p, [borrowerId]: true }));
-    try {
-      const lead = leadsById.get(borrowerId);
-      const res = await api.reject(
-        borrowerId,
-        {
-          evidence_ids: lead?.evidence_ids ?? [],
-          offer_code: lead?.recommended_offer_code ?? null,
-          rationale_code: reasonCode,
-          rationale,
-          campaign_id: campaignBinding?.campaign_id ?? null,
-          variant_name: campaignBinding?.variant_name ?? null,
-        },
-      );
-      if (res.rejected) {
+    const lead = leadsById.get(borrowerId);
+    const intent = intentFingerprint('reject', borrowerId, reasonCode, rationale);
+    const rejected = rejectMutation.mutateAsync({
+      decision: 'reject',
+      borrowerId,
+      requestId: requestIds.idFor(intent),
+      rationaleCode: reasonCode,
+      rationale,
+      campaignBinding,
+      evidenceIds: lead?.evidence_ids ?? [],
+      offerCode: lead?.recommended_offer_code ?? null,
+    }).then(
+      (res) => {
+        if (!res.rejected) {
+          setApprovalError(`Reject failed for ${borrowerId}: endpoint returned rejected=false.`);
+          return false;
+        }
+        requestIds.settle(intent);
         decidedRef.current.add(borrowerId);
         setApproval(borrowerId, 'rejected');
         recordDecision(borrowerId, { auditEventId: res.audit_event_id ?? null, decision: 'rejected' });
-        void invalidateOperationalQueries(queryClient);
         return true;
-      }
-      setApprovalError(`Reject failed for ${borrowerId}: endpoint returned rejected=false.`);
-      return false;
-    } catch (err: unknown) {
-      if (isAbortError(err)) return false;
-      setApprovalError(
-        err instanceof Error
-          ? `Couldn't reject ${borrowerId}: ${err.message}`
-          : `Couldn't reject ${borrowerId}.`,
-      );
-      return false;
-    } finally {
+      },
+      (err: unknown) => {
+        if (decisionFailure(err) === 'aborted') return false;
+        setApprovalError(
+          err instanceof Error
+            ? `Couldn't reject ${borrowerId}: ${err.message}`
+            : `Couldn't reject ${borrowerId}.`,
+        );
+        return false;
+      },
+    );
+    const release = () => {
       rowInFlightRef.current[borrowerId] = false;
-      setPendingApproval((p) => {
-        const { [borrowerId]: _discard, ...rest } = p;
-        return rest;
-      });
-    }
+    };
+    void rejected.then(release, release);
+    return rejected;
   }
 
   /** Resolves with the rejected borrower id once the write returned, else null. */
@@ -442,24 +447,14 @@ export function useLeadApprovalActions({
    *   what was shown is what the audit rows certify, and no second draft
    *   is generated for them.
    */
-  async function bulkApprove(sampleDrafts: ReadonlyMap<string, OutreachDraftResult> = new Map()) {
+  async function bulkApprove(sampleDrafts?: ReadonlyMap<string, OutreachDraftResult>) {
     // R5-04: synchronous latch. React setState is async, so two rapid
     // clicks can both read `bulkApproving=false` before either commit
     // schedules — producing two parallel loops with the same selection
     // and two audit rows per borrower. Flip the ref before any await.
     if (bulkInFlightRef.current || bulkApproving) return;
-    if (!canApprove) {
-      setApprovalError(`${APPROVER_ROLE_REQUIRED}.`);
-      return;
-    }
-    if (campaignBindingBlocked) {
-      setApprovalError(
-        campaignBindingState === 'validating'
-          ? 'Campaign binding is still being validated. Wait before approval.'
-          : 'Campaign binding is invalid. Reopen the saved campaign before approval.',
-      );
-      return;
-    }
+    if (!passesDecisionGate('approval')) return;
+    const drafts = sampleDrafts ?? new Map<string, OutreachDraftResult>();
     bulkInFlightRef.current = true;
     // Snapshot which ids to run: skip already-decided rows silently.
     const eligibleForApproval = new Set(approvalEligibleIds);
@@ -504,7 +499,7 @@ export function useLeadApprovalActions({
         bulk_id: bulkId,
         bulk_rationale: sharedRationale || null,
         suppressInvalidation: true,
-      }, sampleDrafts.get(id) ?? null)));
+      }, drafts.get(id) ?? null)));
       results.forEach((outcome, i) => {
         if (outcome === 'ok') {
           ok += 1;
@@ -522,20 +517,7 @@ export function useLeadApprovalActions({
       // Stash the partial result so the next mount can flash it. We
       // accept that the user may never come back to this page; the
       // alternative (loud toast on unmount) wouldn't render anyway.
-      try {
-        sessionStorage.setItem(
-          'mip.bulkApprove.lastCancelled',
-          // `bulkApprove` only ever runs from a click / Shift+A, never during
-          // render, so the wall-clock read is safe here; the mount-restore
-          // effect below compares it to drop stale snapshots. Unchanged from
-          // the pre-split component — where it was masked from this rule by
-          // the useVirtualizer (`react-hooks/incompatible-library`) bailout.
-          // eslint-disable-next-line react-hooks/purity
-          JSON.stringify({ ok, aborted, ts: Date.now() }),
-        );
-      } catch {
-        // private mode or quota — ignore
-      }
+      stashCancelledBulk(ok, aborted);
       bulkRunIdsRef.current = new Set();
       bulkInFlightRef.current = false;
       return;
@@ -572,28 +554,11 @@ export function useLeadApprovalActions({
     });
   }
 
-  // On mount: if the previous mount left a partial bulk-approve snapshot
-  // in sessionStorage (user navigated away mid-loop), flash a compact
-  // toast so the operator knows how many landed.
+  // The bulkToast initializer read any partial run the previous mount left
+  // (R5-21: aborted ids are audit-ambiguous, so the toast offers Recent
+  // activity, never a retry). This mount has shown it: drop the key.
   useEffect(() => {
-    try {
-      const raw = sessionStorage.getItem('mip.bulkApprove.lastCancelled');
-      if (!raw) return;
-      sessionStorage.removeItem('mip.bulkApprove.lastCancelled');
-      const parsed = JSON.parse(raw) as { ok?: number; aborted?: number; ts?: number };
-      // Drop stale messages (older than 10 minutes) — they're probably
-      // from a much-earlier session.
-      if (parsed?.ts && Date.now() - parsed.ts > 10 * 60 * 1000) return;
-      const ok = parsed.ok ?? 0;
-      const aborted = parsed.aborted ?? 0;
-      if (ok + aborted === 0) return;
-      // R5-21: route unmounted mid-loop. Aborted ids are in ambiguous
-      // state (server may have committed). Surface an actor-scoped recovery
-      // action rather than mixing them into the retryable `fail` count.
-      setBulkToast({ ok, fail: 0, network: 0, aborted });
-    } catch {
-      // malformed payload — ignore
-    }
+    clearCancelledBulk();
   }, []);
 
   // Abort the bulk-approve loop on unmount so the remaining POSTs
@@ -641,7 +606,7 @@ export function useLeadApprovalActions({
     setRejectReasonCode,
     rejectRationale,
     setRejectRationale,
-    pendingApproval,
+    pendingDecisions,
     selectedIds,
     selectionCount,
     toggleSelect,
@@ -655,6 +620,7 @@ export function useLeadApprovalActions({
     openBulkRationale,
     bulkApproving,
     isDecisionLocked,
+    isDecisionInFlight: decisionInFlight,
     isBulkRunInFlight,
     bulkApproveBtnRef,
     bulkRationaleRef,

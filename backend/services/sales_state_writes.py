@@ -213,8 +213,17 @@ class _SalesStateWrites(_SalesStateCore):
             if existing := _matches_existing(existing_rows):
                 return existing, ""
             raise PermissionError("request_id already belongs to a different distribution")
-        # Score balancing happens before this store in the caller by ordering
-        # borrower_ids. The durable state write stays deterministic.
+        # Allocation is plain round-robin in REQUEST order for every strategy:
+        # borrower_ids[i] goes to lo_emails[i % len(lo_emails)], exactly as
+        # expected_by_borrower above. Nothing score-orders borrower_ids first
+        # (backend/api/sales.py passes them straight through), and the
+        # roster's capacity_per_day and region are not read here. The literal
+        # 'score_balanced' stays in AssignmentStrategy only so historical
+        # rows and their audit payloads still validate; the Lead Queue sends
+        # 'manual' (one loan officer) or 'round_robin' (two or more), so the
+        # strategy an audit row records is the allocation that ran (audit
+        # wow-power-5 step 1). A score- or capacity-aware fill is future
+        # work (step 2), not something this store does.
         with self._client.transaction() as conn, conn.cursor() as cur:
             if request_id:
                 cur.execute(

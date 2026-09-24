@@ -30,8 +30,10 @@ const apiMocks = vi.hoisted(() => ({
   leadsPage: vi.fn(),
 }));
 
+const appState = vi.hoisted(() => ({ canAccessAdmin: false }));
+
 vi.mock('../components/AppContext', () => ({
-  useApp: () => ({ canAccessAdmin: false }),
+  useApp: () => ({ canAccessAdmin: appState.canAccessAdmin }),
 }));
 
 vi.mock('../lib/configOptionsQuery', () => {
@@ -119,6 +121,25 @@ describe('LeadQueue cache identity', () => {
     queryClient.clear();
     document.body.innerHTML = '';
     vi.clearAllMocks();
+    appState.canAccessAdmin = false;
+  });
+
+  // Audit delivery-08: every visit used to POST a whole-book
+  // /api/portfolio/preview and (for an admin) GET /api/admin/rules only to
+  // stamp a CSV export that might never happen. The rows now carry their
+  // refresh time in X-Data-Refreshed-At and the rules version is read on the
+  // Export click, so mounting the queue reads neither, for any actor.
+  it.each([
+    ['a loan officer', false],
+    ['an admin', true],
+  ])('makes no export-only read on mount for %s', async (_actor, admin) => {
+    appState.canAccessAdmin = admin;
+    await mountAt('/lead-queue');
+    await go('/lead-queue?state=IL');
+
+    expect(apiMocks.leadsPage).toHaveBeenCalledTimes(2);
+    expect(apiMocks.portfolioPreview).not.toHaveBeenCalled();
+    expect(apiMocks.adminRules).not.toHaveBeenCalled();
   });
 
   async function mountAt(url: string) {

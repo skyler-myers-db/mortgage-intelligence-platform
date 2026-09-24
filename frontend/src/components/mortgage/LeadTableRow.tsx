@@ -38,7 +38,12 @@ interface LeadTableRowProps {
   bulkApproving: boolean;
   salesBusy: boolean;
   salesTeamCount: number;
-  pendingApproval: boolean;
+  /**
+   * The approve or reject on the wire for this row, from the MutationCache
+   * (audit stack-09). Either one disables both buttons; only an approve
+   * reads "Approving…".
+   */
+  pendingDecision?: 'approve' | 'reject' | null;
   /** The audit row this row's decision wrote; the expanded preview reads it back. */
   decisionReceipt?: LeadDecisionReceipt | null;
   /** The keyboard cursor is on this row (audit tables-03): A / R / X / Enter act here. */
@@ -82,7 +87,7 @@ export function LeadTableRow({
   bulkApproving,
   salesBusy,
   salesTeamCount,
-  pendingApproval,
+  pendingDecision = null,
   decisionReceipt = null,
   isCursor = false,
   shortcutsLive = true,
@@ -110,6 +115,7 @@ export function LeadTableRow({
   );
   const columns = LEAD_TABLE_COLUMNS[view];
   const offerLabel = offerDisplayLabel(lead.recommended_offer_code, lead.recommended_offer);
+  const decisionPending = pendingDecision !== null;
   const [primarySegment, ...moreSegments] = lead.segment_codes;
 
   const cells: Record<LeadTableColumnKey, () => ReactNode> = {
@@ -235,7 +241,7 @@ export function LeadTableRow({
               variant="primary"
               size="sm"
               icon="check"
-              disabled={gated || approvalActionsDisabled || pendingApproval}
+              disabled={gated || approvalActionsDisabled || decisionPending}
               aria-describedby={decisionDescribedBy}
               title={approverGate ?? undefined}
               onClick={(e) => {
@@ -246,15 +252,16 @@ export function LeadTableRow({
               aria-keyshortcuts={rowKeys && !gated ? 'A' : undefined}
               data-testid={`lead-approve-${lead.borrower_id}`}
             >
-              {pendingApproval ? 'Approving…' : 'Approve'}
+              {pendingDecision === 'approve' ? 'Approving…' : 'Approve'}
             </Button>
             <button
               type="button"
               className="btn btn--sm lead-table__reject"
-              aria-label={`Reject ${lead.borrower_id}`}
+              aria-label={pendingDecision === 'reject' ? `Rejecting ${lead.borrower_id}` : `Reject ${lead.borrower_id}`}
+              aria-busy={pendingDecision === 'reject' || undefined}
               aria-keyshortcuts={rowKeys && !gated ? 'R' : undefined}
               title={approverGate ?? 'Reject'}
-              disabled={gated || approvalActionsDisabled || pendingApproval}
+              disabled={gated || approvalActionsDisabled || decisionPending}
               aria-describedby={decisionDescribedBy}
               onClick={(e) => {
                 e.stopPropagation();

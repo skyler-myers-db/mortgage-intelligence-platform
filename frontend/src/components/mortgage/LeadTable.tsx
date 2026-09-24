@@ -8,7 +8,9 @@ import { useApp } from '../AppContext';
 import { api } from '../../lib/api';
 import { useIsOnline } from '../../lib/connectivity';
 import { auditEventHref } from '../../lib/auditLinks';
+import { formatCount } from '../../lib/formatters';
 import { queryKeys } from '../../lib/queryKeys';
+import { preloadRouteForPath } from '../../lib/routePreloaders';
 import { planLeadCsvExport } from './LeadTable.csv';
 import { useLeadCsvExport } from './useLeadCsvExport';
 import {
@@ -153,8 +155,11 @@ export function LeadTable({
   // Audit flow-02 / shell-06: non-approvers keep a VISIBLE but disabled gate.
   const approverGate = approverGateReason(canApprove, sessionStatus);
 
+  // Row expand (click or keys) warms route CODE only: no audited read, no draft (delivery-08).
   useEffect(() => {
-    if (expanded) setLastBorrowerId(expanded);
+    if (!expanded) return;
+    setLastBorrowerId(expanded);
+    ['/borrower-360', '/offer-orchestrator'].forEach((route) => preloadRouteForPath(`${route}/${expanded}`));
   }, [expanded, setLastBorrowerId]);
 
   const sales = useLeadSalesActions({
@@ -329,8 +334,9 @@ export function LeadTable({
     : csvExportCount === 1 ? 'lead' : 'leads';
   const { state: exportState, exportCsv: runExport } = useLeadCsvExport();
   const exporting = exportState.status === 'pending';
+  const exportBlockedReason = exportContext?.exportBlockedReason ?? null;
   function exportCsv() {
-    if (csvExportCount === 0) return;
+    if (csvExportCount === 0 || exportBlockedReason) return;
     const rowOrder = sortKey === 'rank' ? 'rank' : `${sortKey} ${sortDir}`;
     void runExport({ plan: csvExport, approvals, exportContext, rowOrder });
   }
@@ -384,7 +390,7 @@ export function LeadTable({
           {onViewChange && <LeadTableViewControl view={view} onChange={onViewChange} />}
           {exportState.status === 'done' && (
             <span className="muted fs-12" data-testid="lead-export-receipt">
-              Exported {exportState.rowCount.toLocaleString()} {exportState.rowCount === 1 ? 'row' : 'rows'}
+              Exported {formatCount(exportState.rowCount)} {exportState.rowCount === 1 ? 'row' : 'rows'}
               {' · audit '}
               {canAccessAdmin ? (
                 <Link className="mono" to={auditEventHref(exportState.receipt.audit_event_id)}>
@@ -399,23 +405,23 @@ export function LeadTable({
             size="sm"
             icon={exporting ? undefined : 'export'}
             onClick={exportCsv}
-            // Pending is aria-disabled, never native `disabled`: a focused
-            // button that turns disabled drops keyboard focus to <body>.
-            // useLeadCsvExport's in-flight guard ignores a second click.
+            // Pending and blocked are aria-disabled, never native `disabled`:
+            // a focused button that turns disabled drops keyboard focus to
+            // <body>. useLeadCsvExport ignores the click in both states.
             disabled={csvExportCount === 0}
-            aria-disabled={exporting || undefined}
+            aria-disabled={exporting || exportBlockedReason !== null || undefined}
             aria-busy={exporting || undefined}
             data-testid="lead-export"
             aria-label={exporting
               ? 'Recording the export in the audit ledger'
-              : `Export ${csvExportCount.toLocaleString()} ${csvExportNoun} as CSV`}
-            title={csvExportCount === 0 && csvExport.excluded > 0
+              : `Export ${formatCount(csvExportCount)} ${csvExportNoun} as CSV`}
+            title={exportBlockedReason ?? (csvExportCount === 0 && csvExport.excluded > 0
               ? 'Every row in scope is excluded by the marketing-eligibility gate'
-              : undefined}
+              : undefined)}
           >
             {exporting
               ? 'Recording export…'
-              : `Export ${csvExportCount.toLocaleString()} ${csvExportNoun}`}
+              : `Export ${formatCount(csvExportCount)} ${csvExportNoun}`}
           </Button>
         </div>
       </div>
@@ -465,11 +471,6 @@ export function LeadTable({
       {exportState.status === 'error' && (
         <div role="alert" className="table-error" data-testid="lead-export-error">
           {exportState.message}
-        </div>
-      )}
-      {sales.salesToast && (
-        <div role="status" aria-live="polite" className="table-success">
-          {sales.salesToast}
         </div>
       )}
       {flow.toast && DecisionToast && (
@@ -576,7 +577,7 @@ export function LeadTable({
                     bulkApproving={approval.bulkApproving}
                     salesBusy={sales.salesBusy}
                     salesTeamCount={salesTeam.length}
-                    pendingApproval={Boolean(approval.pendingApproval[lead.borrower_id])}
+                    pendingDecision={approval.pendingDecisions.get(lead.borrower_id) ?? null}
                     decisionReceipt={approval.decisionReceipts[lead.borrower_id] ?? null}
                     isCursor={flow.cursor.cursorId === lead.borrower_id}
                     shortcutsLive={singleKeysOn}
@@ -674,14 +675,10 @@ export function LeadTable({
         </div>
       )}
       <div className="surface__ft">
-        Showing {leads.length.toLocaleString()} ranked borrower{leads.length === 1 ? '' : 's'}
-        {totalMatching !== null && (
-          <>
-            {' '}of {totalMatching.toLocaleString()} total matching filters
-          </>
-        )}
+        Showing {formatCount(leads.length)} ranked borrower{leads.length === 1 ? '' : 's'}
+        {totalMatching !== null && <>{' '}of {formatCount(totalMatching)} total matching filters</>}
         {truncatedAt !== null && totalMatching !== null && totalMatching > leads.length && (
-          <span className="muted"> · capped at {truncatedAt.toLocaleString()}</span>
+          <span className="muted"> · capped at {formatCount(truncatedAt)}</span>
         )}
         {/* Audit tables-02: sorting reorders only the rows already loaded
             (the server returns the top-ranked window) and nothing said so;
@@ -689,9 +686,9 @@ export function LeadTable({
         {sortKey !== 'rank' && (
           <>
             <span data-testid="lead-sort-scope">
-              · sorted within the loaded {sortedLeads.length.toLocaleString()}
+              · sorted within the loaded {formatCount(sortedLeads.length)}
               {totalMatching !== null && totalMatching > sortedLeads.length
-                ? `, not across all ${totalMatching.toLocaleString()} matching`
+                ? `, not across all ${formatCount(totalMatching)} matching`
                 : ''}
             </span>
             <button

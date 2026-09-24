@@ -126,6 +126,54 @@ describe('CommandPalette', () => {
     expect(dialog()).toBeNull();
   });
 
+  /**
+   * Follow-up #5: ⌘K checked only for an open native `<dialog>`, so it
+   * opened the palette over the aria-modal layers too (the session dialog,
+   * the evidence drawer, the ? sheet) and fought their focus traps.
+   */
+  describe('never opens over a modal layer', () => {
+    function withLayer(markup: string, run: () => void) {
+      const host = document.createElement('div');
+      host.innerHTML = markup;
+      document.body.appendChild(host);
+      try {
+        run();
+      } finally {
+        host.remove();
+      }
+    }
+
+    it('stays closed under an open native dialog', () => {
+      withLayer('<dialog open><form>Leave without saving?</form></dialog>', () => {
+        pressMetaK();
+        expect(dialog()).toBeNull();
+      });
+    });
+
+    it('stays closed under an aria-modal layer', () => {
+      withLayer('<div role="dialog" aria-modal="true" aria-label="Your session ended"></div>', () => {
+        pressMetaK();
+        expect(dialog()).toBeNull();
+      });
+    });
+
+    it('ignores a closed aria-modal drawer that is still rendered but hidden', () => {
+      withLayer('<aside class="drawer" role="dialog" aria-modal="true" aria-hidden="true"></aside>', () => {
+        pressMetaK();
+        expect(dialog()).not.toBeNull();
+      });
+    });
+
+    it('still closes an open palette when a modal layer appears', () => {
+      pressMetaK();
+      expect(dialog()).not.toBeNull();
+      withLayer('<div role="dialog" aria-modal="true" aria-label="Keyboard shortcuts"></div>', () => {
+        pressMetaK();
+        expect(dialog()).toBeNull();
+      });
+    });
+  });
+
   it('closes on Escape', () => {
     pressMetaK();
     expect(dialog()).not.toBeNull();

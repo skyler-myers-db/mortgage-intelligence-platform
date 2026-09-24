@@ -32,6 +32,15 @@ import {
   patchJson,
 } from '../apiTransport';
 
+/**
+ * The strategies the queue SENDS (audit wow-power-5 step 1). The store
+ * allocates round-robin in request order for every strategy, so 'manual'
+ * (one loan officer) and 'round_robin' (two or more) are the honest labels;
+ * 'score_balanced' stays only in the read-side union (types/loanOfficer) so
+ * historical assignment rows still type-check.
+ */
+export type SalesSendStrategy = 'manual' | 'round_robin';
+
 export const salesApi = {
   salesTeam: (signal?: AbortSignal) =>
     getJson<SalesTeamMember[]>('/api/sales/team', signal),
@@ -107,15 +116,17 @@ export const salesApi = {
       signal,
     ),
 
+  /** `requestId`: one id per intent, so a retry of the same assignment replays. */
   assignLead: (
     borrowerId: string,
     assignedToEmail: string,
-    strategy: 'manual' | 'round_robin' | 'score_balanced' = 'manual',
+    strategy: SalesSendStrategy = 'manual',
     signal?: AbortSignal,
+    requestId: string = _newRequestId(),
   ) =>
     postJson<AssignmentResponse, {
       assigned_to_email: string;
-      strategy: 'manual' | 'round_robin' | 'score_balanced';
+      strategy: SalesSendStrategy;
       expires_in_hours: number;
       request_id: string;
     }>(
@@ -124,7 +135,7 @@ export const salesApi = {
         assigned_to_email: assignedToEmail,
         strategy,
         expires_in_hours: 24,
-        request_id: _newRequestId(),
+        request_id: requestId,
       },
       signal,
     ),
@@ -132,8 +143,9 @@ export const salesApi = {
   distributeLeads: (
     borrowerIds: string[],
     loEmails: string[],
-    strategy: 'round_robin' | 'score_balanced' = 'round_robin',
+    strategy: SalesSendStrategy = 'round_robin',
     signal?: AbortSignal,
+    requestId: string = _newRequestId(),
   ) =>
     postJson<{
       assigned_count: number;
@@ -144,7 +156,7 @@ export const salesApi = {
     }, {
       borrower_ids: string[];
       lo_emails: string[];
-      strategy: 'round_robin' | 'score_balanced';
+      strategy: SalesSendStrategy;
       expires_in_hours: number;
       request_id: string;
     }>(
@@ -154,7 +166,7 @@ export const salesApi = {
         lo_emails: loEmails,
         strategy,
         expires_in_hours: 24,
-        request_id: _newRequestId(),
+        request_id: requestId,
       },
       signal,
     ),
@@ -168,6 +180,7 @@ export const salesApi = {
       notes?: string | null;
     },
     signal?: AbortSignal,
+    requestId: string = _newRequestId(),
   ) =>
     postJson<DispositionResponse, {
       lo_email: string;
@@ -179,7 +192,7 @@ export const salesApi = {
       `/api/leads/${encodeURIComponent(borrowerId)}/disposition`,
       {
         ...payload,
-        request_id: _newRequestId(),
+        request_id: requestId,
       },
       signal,
     ),

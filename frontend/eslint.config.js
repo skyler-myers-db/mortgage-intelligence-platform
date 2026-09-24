@@ -43,58 +43,25 @@ export const FORMATTING_BAN = [
   },
 ];
 
-// Files outside any other lane that still carry a banned call, each with why.
+// Files that still carry a banned call, each with why.
 // SHRINK-ONLY: src/lib/formattingBan.test.ts fails when an entry no longer
 // reproduces a violation, so a file that is migrated leaves this list in the
-// same change. Never add an entry: migrate the call site.
+// same change. Never add an entry: migrate the call site. (The wave-1c
+// lane-owned exemption block was retired in wave 2: every file it covered
+// was migrated except the one below, which violated on the wave-1c merge.)
 export const FORMATTING_ALLOWLIST = {
-  "src/components/mortgage/EvidenceDrawer.tsx":
-    "lineage event_count label; the wave-1c formatters lane was scoped to this file's formatNumber only",
+  "src/components/command/commandActions.ts":
+    "Cmd-K selection verb labels (approveCount / selectedCount); violated on the wave-1c merge and belongs to the wave-4 palette lane",
 };
 
-// Files other wave-1c lanes own while this ban lands (each lane migrates its
-// own call sites). Globs, so a file a lane creates in parallel does not break
-// the merged lint. Retire at wave-1c integration: rerun the ban without this
-// block and move whatever still reproduces into FORMATTING_ALLOWLIST.
-export const WAVE_1C_LANE_OWNED = [
-  // queue-keyboard-review
-  "src/components/mortgage/LeadTable*.{ts,tsx}",
-  "src/components/mortgage/LeadRowPreview*.{ts,tsx}",
-  "src/components/mortgage/useLeadTableHotkeys*.{ts,tsx}",
-  "src/components/mortgage/useLeadApprovalActions*.{ts,tsx}",
-  "src/lib/keymap*.{ts,tsx}",
-  "src/**/ShortcutOverlay*.{ts,tsx}",
-  "src/components/command/CommandPalette*.{ts,tsx}",
-  "src/components/command/commandActions*.{ts,tsx}",
-  // shell-wayfinding
-  "src/components/layout/Topbar*.{ts,tsx}",
-  "src/components/layout/RouteNav*.{ts,tsx}",
-  "src/app.tsx",
-  "src/lib/routeMeta*.{ts,tsx}",
-  "src/lib/routePreloaders*.{ts,tsx}",
-  "src/routes/borrower-360*.{ts,tsx}",
-  "src/**/IdentityMenu*.{ts,tsx}",
-  // offer-orchestrator
-  "src/routes/offer-orchestrator*.{ts,tsx}",
-  // session-recovery
-  "src/lib/api.ts",
-  "src/lib/apiTransport.ts",
-  "src/lib/apiClients/**/*.{ts,tsx}",
-  "src/lib/queryClient*.{ts,tsx}",
-  "src/components/HealthProvider*.{ts,tsx}",
-  "src/components/mortgage/DegradedBanner*.{ts,tsx}",
-  "src/components/ui/Skeleton*.{ts,tsx}",
-  // feedback-guard
-  "src/main.tsx",
-  "src/**/useUnsavedGuard*.{ts,tsx}",
-  "src/**/Toaster*.{ts,tsx}",
-  "src/routes/portfolio-builder*.{ts,tsx}",
-];
-// The formatters lane migrated these two portfolio-builder files, so the
-// feedback-guard glob above must not re-open them.
-const WAVE_1C_FORMATTERS_OWNED = [
-  "src/routes/portfolio-builder.logic.ts",
-  "src/routes/portfolio-builder.components.tsx",
+// Files where react-hooks/set-state-in-effect is already an error (see the
+// block after the main config). Grow it as files leave effect-driven state.
+export const SET_STATE_IN_EFFECT_SCOPE = [
+  "src/components/mortgage/useLeadApprovalActions.ts",
+  "src/components/mortgage/useLeadSalesActions.ts",
+  "src/components/mortgage/ApprovalBanner.tsx",
+  "src/routes/lead-queue.tsx",
+  "src/lib/mutations/*.ts",
 ];
 
 export default [
@@ -155,6 +122,18 @@ export default [
         { object: "window", property: "alert", message: "window.alert blocks the renderer. Use a status callout." },
         { object: "window", property: "confirm", message: "window.confirm blocks the renderer. Use an in-page confirm affordance." },
       ],
+    },
+  },
+  // The files the query-layer migration has converted (wave 2, audit
+  // stack-09): their writes run on useMutation and their reads on useQuery,
+  // so a synchronous setState in an effect body is a regression here. The
+  // repo-wide flip (and the TODO above) stays with the wave-4 lint lane.
+  // src/lib/setStateInEffectScope.test.ts pins exactly this scope.
+  {
+    files: SET_STATE_IN_EFFECT_SCOPE,
+    ignores: ["src/**/*.test.{ts,tsx}"],
+    rules: {
+      "react-hooks/set-state-in-effect": "error",
     },
   },
   // Credential-free e2e fixture harness. Linted at the same bar as src, and
@@ -233,8 +212,7 @@ export default [
     },
   },
   {
-    files: [...Object.keys(FORMATTING_ALLOWLIST), ...WAVE_1C_LANE_OWNED],
-    ignores: WAVE_1C_FORMATTERS_OWNED,
+    files: Object.keys(FORMATTING_ALLOWLIST),
     rules: {
       "no-restricted-syntax": "off",
     },

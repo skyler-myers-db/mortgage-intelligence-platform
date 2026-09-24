@@ -104,7 +104,7 @@ function ObservedLineageAsset({ node }: { node: AssetLineageNode }) {
       )}
       {node.event_count !== null && node.event_count !== undefined && (
         <div className="lineage-node__meta">
-          {node.event_count.toLocaleString()} observed event(s)
+          {formatCount(node.event_count)} observed event(s)
         </div>
       )}
     </>
