@@ -13,6 +13,11 @@
  *    row, so only the lock checked BEFORE the draft keeps the trail to one.
  *    The remounted table's own refs are empty; only the MutationCache knows.
  *  - Same mount: A on a row whose reject is still on the wire drafts nothing.
+ *  - The lock refuses a NEW review only. A review already open when its
+ *    row's reject goes on the wire stays open (its draft is on record, and
+ *    the reject may still fail): Confirm there says why it approves nothing,
+ *    and the review closes once the reject returns. This is the wave-1c
+ *    contract queue-keyboard.fixture.spec.ts pins in the browser.
  *
  * The harness follows LeadTable.approveReviewGuards.test.tsx (a stateful
  * approvals store; only the network client is mocked).
@@ -334,5 +339,41 @@ describe('LeadTable: a decision on the wire locks its row\'s review, across a re
     await flush();
     expect(store.get()[IDS[0]]).toBe('rejected');
     expect(approve).not.toHaveBeenCalled();
+  });
+
+  it('a review already open when its row\'s reject goes on the wire stays open, approves nothing, and closes on the reject', async () => {
+    const held = hold(reject, (borrowerId) => ({ rejected: true, audit_event_id: `audit-reject-${borrowerId}` }));
+    mount();
+    region().focus();
+    press('j');
+    press('Enter');
+    press('a');
+    await waitForReview(IDS[0]);
+
+    act(() => rejectButton(IDS[0])!.click());
+    await act(async () => {
+      container.querySelector<HTMLFormElement>('.decision-panel')!.requestSubmit();
+    });
+    await flush();
+    expect(reject).toHaveBeenCalledTimes(1);
+    expect(review(), 'the open review outlives the reject on the wire').not.toBeNull();
+
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('[data-testid="lead-approve-review-confirm"]')!.click();
+    });
+    await flush();
+    expect(review()?.querySelector('[role="alert"]')?.textContent).toBe(
+      'Not approved yet: another decision for this borrower is still being recorded. Wait for it to finish, then check the row.',
+    );
+    expect(approve).not.toHaveBeenCalled();
+
+    await act(async () => {
+      held.releaseAll();
+    });
+    await flush();
+    expect(store.get()[IDS[0]]).toBe('rejected');
+    expect(review(), 'the review closed once its row was rejected').toBeNull();
+    expect(approve).not.toHaveBeenCalled();
+    expect(draftedIds()).toEqual([IDS[0]]);
   });
 });

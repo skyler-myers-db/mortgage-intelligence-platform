@@ -204,7 +204,9 @@ export function useLeadApprovalActions({
   /**
    * R5-04 synchronous latch: a decision for this row is on the wire, from
    * this mount (the ref flips before any await) or from one that unmounted
-   * mid-write (the MutationCache outlives the table).
+   * mid-write (the MutationCache outlives the table). The table also reads
+   * it before it opens a NEW review: that review would draft, and a draft
+   * writes a DRAFT_OUTREACH audit row.
    */
   function decisionInFlight(borrowerId: string): boolean {
     return rowInFlightRef.current[borrowerId] === true || isDecisionPending(queryClient, borrowerId);
@@ -577,16 +579,11 @@ export function useLeadApprovalActions({
 
   /**
    * A row that must not be approved from an open review, read synchronously:
-   * its approve / reject write already returned ok in this mount, it is in
-   * the bulk run on the wire, or an approve / reject for it is still on the
-   * wire in the MutationCache (from this mount or one that unmounted
-   * mid-write). The review checks this before it drafts and on Confirm, so a
-   * remounted table writes no second DRAFT_OUTREACH row for it.
+   * its approve / reject write already returned ok in this mount, or it is
+   * in the bulk run on the wire. The review re-checks this on Confirm.
    */
   function isDecisionLocked(borrowerId: string): boolean {
-    return decidedRef.current.has(borrowerId)
-      || bulkRunIdsRef.current.has(borrowerId)
-      || isDecisionPending(queryClient, borrowerId);
+    return decidedRef.current.has(borrowerId) || bulkRunIdsRef.current.has(borrowerId);
   }
 
   /** A bulk run is on the wire (the synchronous latch, not the render state). */
@@ -623,6 +620,7 @@ export function useLeadApprovalActions({
     openBulkRationale,
     bulkApproving,
     isDecisionLocked,
+    isDecisionInFlight: decisionInFlight,
     isBulkRunInFlight,
     bulkApproveBtnRef,
     bulkRationaleRef,
