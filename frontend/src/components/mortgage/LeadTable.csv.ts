@@ -1,5 +1,6 @@
 import type { LeadSummary } from '../../types';
 import type { LeadExportContext } from './LeadTable.types';
+import { formatCount } from '../../lib/formatters';
 import { offerDisplayLabel } from '../../lib/offerLanguage';
 import { safeSegmentName } from '../../lib/segmentMetadata';
 // The formula-injection gate lives in lib/csv.ts, shared with the audit
@@ -59,11 +60,11 @@ export function planLeadCsvExport(
 /** The confirmation line: the real row count, scope, order and exclusions. */
 export function describeLeadCsvExport(plan: LeadCsvExportPlan, rowOrder: string): string {
   const count = plan.rows.length;
-  const what = `${count.toLocaleString()} ${plan.scope === 'selected_rows' ? 'selected ' : ''}`
+  const what = `${formatCount(count)} ${plan.scope === 'selected_rows' ? 'selected ' : ''}`
     + `lead${count === 1 ? '' : 's'}`;
   const order = rowOrder === 'rank' ? 'in rank order' : `sorted by ${rowOrder}`;
   const excluded = plan.excluded > 0
-    ? ` ${plan.excluded.toLocaleString()} excluded by the marketing-eligibility gate.`
+    ? ` ${formatCount(plan.excluded)} excluded by the marketing-eligibility gate.`
     : '';
   return `Exported ${what} ${order}.${excluded}`;
 }

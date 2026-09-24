@@ -8,6 +8,7 @@ import { useApp } from '../AppContext';
 import { api } from '../../lib/api';
 import { useIsOnline } from '../../lib/connectivity';
 import { auditEventHref } from '../../lib/auditLinks';
+import { formatCount } from '../../lib/formatters';
 import { queryKeys } from '../../lib/queryKeys';
 import { preloadRouteForPath } from '../../lib/routePreloaders';
 import { planLeadCsvExport } from './LeadTable.csv';
@@ -389,7 +390,7 @@ export function LeadTable({
           {onViewChange && <LeadTableViewControl view={view} onChange={onViewChange} />}
           {exportState.status === 'done' && (
             <span className="muted fs-12" data-testid="lead-export-receipt">
-              Exported {exportState.rowCount.toLocaleString()} {exportState.rowCount === 1 ? 'row' : 'rows'}
+              Exported {formatCount(exportState.rowCount)} {exportState.rowCount === 1 ? 'row' : 'rows'}
               {' · audit '}
               {canAccessAdmin ? (
                 <Link className="mono" to={auditEventHref(exportState.receipt.audit_event_id)}>
@@ -413,14 +414,14 @@ export function LeadTable({
             data-testid="lead-export"
             aria-label={exporting
               ? 'Recording the export in the audit ledger'
-              : `Export ${csvExportCount.toLocaleString()} ${csvExportNoun} as CSV`}
+              : `Export ${formatCount(csvExportCount)} ${csvExportNoun} as CSV`}
             title={exportBlockedReason ?? (csvExportCount === 0 && csvExport.excluded > 0
               ? 'Every row in scope is excluded by the marketing-eligibility gate'
               : undefined)}
           >
             {exporting
               ? 'Recording export…'
-              : `Export ${csvExportCount.toLocaleString()} ${csvExportNoun}`}
+              : `Export ${formatCount(csvExportCount)} ${csvExportNoun}`}
           </Button>
         </div>
       </div>
@@ -674,14 +675,10 @@ export function LeadTable({
         </div>
       )}
       <div className="surface__ft">
-        Showing {leads.length.toLocaleString()} ranked borrower{leads.length === 1 ? '' : 's'}
-        {totalMatching !== null && (
-          <>
-            {' '}of {totalMatching.toLocaleString()} total matching filters
-          </>
-        )}
+        Showing {formatCount(leads.length)} ranked borrower{leads.length === 1 ? '' : 's'}
+        {totalMatching !== null && <>{' '}of {formatCount(totalMatching)} total matching filters</>}
         {truncatedAt !== null && totalMatching !== null && totalMatching > leads.length && (
-          <span className="muted"> · capped at {truncatedAt.toLocaleString()}</span>
+          <span className="muted"> · capped at {formatCount(truncatedAt)}</span>
         )}
         {/* Audit tables-02: sorting reorders only the rows already loaded
             (the server returns the top-ranked window) and nothing said so;
@@ -689,9 +686,9 @@ export function LeadTable({
         {sortKey !== 'rank' && (
           <>
             <span data-testid="lead-sort-scope">
-              · sorted within the loaded {sortedLeads.length.toLocaleString()}
+              · sorted within the loaded {formatCount(sortedLeads.length)}
               {totalMatching !== null && totalMatching > sortedLeads.length
-                ? `, not across all ${totalMatching.toLocaleString()} matching`
+                ? `, not across all ${formatCount(totalMatching)} matching`
                 : ''}
             </span>
             <button

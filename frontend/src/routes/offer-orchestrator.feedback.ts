@@ -1,4 +1,4 @@
-import { parseBackendTimestamp } from '../lib/time';
+import { formatDate, parseBackendTimestamp } from '../lib/time';
 import { toast } from '../lib/toast';
 
 /**
@@ -18,8 +18,6 @@ export function offerUnsavedMessage(draftEdited: boolean, rejectionNoteTyped: bo
   return null;
 }
 
-const FOLLOW_UP_DATE = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' });
-
 /**
  * Say where an approval was routed (loan officer, follow-up reminder) as a
  * toast linked to the approval's audit row. It replaces the in-page routing
@@ -34,6 +32,6 @@ export function announceApprovalRouting(
   if (!assignedEmail && !followUpAt) return;
   const followUp = parseBackendTimestamp(followUpAt);
   const parts = [assignedEmail ? `Assigned to ${assignedEmail}` : 'Unassigned'];
-  if (followUp) parts.push(`follow-up ${FOLLOW_UP_DATE.format(followUp)}`);
+  if (followUp) parts.push(`follow-up ${formatDate(followUp, { withYear: false })}`);
   toast.success('Approval routed', { detail: parts.join(' · '), auditEventId });
 }
