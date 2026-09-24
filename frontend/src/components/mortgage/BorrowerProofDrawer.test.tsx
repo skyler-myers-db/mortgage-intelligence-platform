@@ -8,7 +8,8 @@ import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BorrowerProofDrawer } from './BorrowerProofDrawer';
-import type { BorrowerProof } from '../../types';
+import { invalidateOperationalQueries } from '../../lib/queryKeys';
+import type { BorrowerProof, ProofScoreComponentKey } from '../../types';
 
 const apiMocks = vi.hoisted(() => ({
   borrowerProof: vi.fn(),
@@ -182,12 +183,12 @@ describe('BorrowerProofDrawer', () => {
     document.body.innerHTML = '';
   });
 
-  async function render(open: boolean): Promise<void> {
+  async function render(open: boolean, focusComponent: ProofScoreComponentKey | null = null): Promise<void> {
     await act(async () => {
       root.render(
         <QueryClientProvider client={queryClient}>
           <MemoryRouter>
-            <BorrowerProofDrawer borrowerId="B-TEST" open={open} onClose={onClose} />
+            <BorrowerProofDrawer borrowerId="B-TEST" open={open} onClose={onClose} focusComponent={focusComponent} />
           </MemoryRouter>
         </QueryClientProvider>,
       );
@@ -297,5 +298,47 @@ describe('BorrowerProofDrawer', () => {
     expect(document.body.textContent).toContain('Proof has gaps');
     expect(document.body.textContent).toContain('Recomputed primary offer');
     expect(document.body.textContent).not.toContain('source_table');
+  });
+  // critic fix 16 (iii): the drawer used its own useQuery with staleTime
+  // 60_000, so a re-open after an approve (which invalidates
+  // ['mip', 'borrower', ...]) or after a minute wrote a second
+  // VIEW_BORROWER_PROOF row. Re-opening over a cached proof now reads nothing.
+  it('re-opening after an approve invalidated the borrower reads the cached proof, not the endpoint', async () => {
+    await render(true);
+    expect(apiMocks.borrowerProof).toHaveBeenCalledTimes(1);
+    await render(false);
+    await act(async () => {
+      await invalidateOperationalQueries(queryClient);
+    });
+    await render(true);
+    await settle();
+    expect(apiMocks.borrowerProof).toHaveBeenCalledTimes(1);
+    expect(document.body.textContent).toContain('Governed proof ready');
+  });
+
+  it('a segment-opened drawer selects the Math tab and focuses that component card', async () => {
+    await render(true);
+    await act(async () => {
+      buttonByText('Evidence').click();
+    });
+    expect(document.querySelector('.proof-tab.is-active')?.textContent).toContain('Evidence');
+    await render(false);
+
+    await render(true, 'economic_incentive');
+    await settle();
+
+    expect(document.querySelector('.proof-tab.is-active')?.textContent).toContain('Math');
+    const card = document.querySelector('[data-component-key="economic_incentive"]');
+    expect(card?.classList.contains('proof-component--focused')).toBe(true);
+    expect(card?.getAttribute('tabindex')).toBe('-1');
+    expect(document.activeElement).toBe(card);
+    expect(apiMocks.borrowerProof).toHaveBeenCalledTimes(1);
+  });
+
+  it('"Show math" (no component) keeps focusing the close button with no focused card', async () => {
+    await render(true);
+    await settle();
+    expect(document.activeElement?.getAttribute('aria-label')).toBe('Close proof drawer');
+    expect(document.querySelector('.proof-component--focused')).toBeNull();
   });
 });
