@@ -169,3 +169,22 @@
   position: static;
   margin: var(--sp-2) var(--pad-card);
 }
+/* Its target: visually hidden until "Skip table" lands focus on it, then
+   shown in place under the rows with the focus ring, so a sighted keyboard
+   user sees where focus went (an sr-only target showed nothing). */
+.lead-table__skip-target:focus,
+.lead-table__skip-target:focus-visible {
+  position: static;
+  display: block;
+  width: auto;
+  height: auto;
+  margin: var(--sp-2) var(--pad-card);
+  clip: auto;
+  clip-path: none;
+  overflow: visible;
+  white-space: normal;
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}

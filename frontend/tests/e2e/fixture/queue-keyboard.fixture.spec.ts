@@ -356,23 +356,50 @@ test.describe('keyboard hint', () => {
 });
 
 test.describe('skip table', () => {
-  test('the Skip table link shows in place on focus and moves focus past the rows without touching the URL', async ({ app, page }) => {
-    await app.gotoRoute('/lead-queue');
-    const before = page.url();
-    const skip = page.getByRole('link', { name: 'Skip table' });
-    await skip.focus();
-    await expect(skip).toBeVisible();
-    const box = await skip.boundingBox();
-    const regionBox = await scrollRegion(page).boundingBox();
-    expect(box && regionBox && box.y + box.height <= regionBox.y + 1, 'shown in place, above the table').toBe(true);
-    await page.keyboard.press('Enter');
-    const end = page.getByText('End of ranked borrowers table');
-    await expect(end).toBeFocused();
-    const order = await end.evaluate((element) => {
-      const region = document.querySelector('.tbl-wrap');
-      return region ? region.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING : 0;
+  for (const theme of ['dark', 'light'] as const satisfies readonly FixtureTheme[]) {
+    test(`Skip table shows in place on focus and lands on a visible, ringed target past the rows, URL untouched (${theme})`, async ({ app, page }) => {
+      await app.setTheme(theme);
+      await app.gotoRoute('/lead-queue');
+      const before = page.url();
+      const skip = page.getByRole('link', { name: 'Skip table' });
+      await skip.focus();
+      await expect(skip).toBeVisible();
+      const box = await skip.boundingBox();
+      const regionBox = await scrollRegion(page).boundingBox();
+      expect(box && regionBox && box.y + box.height <= regionBox.y + 1, 'shown in place, above the table').toBe(true);
+      await page.keyboard.press('Enter');
+      const end = page.getByText('End of ranked borrowers table');
+      await expect(end).toBeFocused();
+      const order = await end.evaluate((element) => {
+        const region = document.querySelector('.tbl-wrap');
+        return region ? region.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING : 0;
+      });
+      expect(order, 'focus landed after the table').toBeTruthy();
+      // A sighted keyboard user sees where focus landed: the target is shown
+      // in place with the focus-ring token, not a clipped 1px sr-only box.
+      const landed = await end.evaluate((element) => {
+        const probe = document.createElement('span');
+        probe.style.color = 'var(--focus-ring-color)';
+        document.body.appendChild(probe);
+        const ring = getComputedStyle(probe).color;
+        probe.remove();
+        const style = getComputedStyle(element);
+        const box = element.getBoundingClientRect();
+        return {
+          ring,
+          outlineColor: style.outlineColor,
+          outlineStyle: style.outlineStyle,
+          outlineWidth: Number.parseFloat(style.outlineWidth),
+          width: box.width,
+          height: box.height,
+        };
+      });
+      expect(landed.width, 'the target is shown, not clipped').toBeGreaterThan(1);
+      expect(landed.height, 'the target is shown, not clipped').toBeGreaterThan(1);
+      expect(landed.outlineStyle).toBe('solid');
+      expect(landed.outlineWidth).toBeGreaterThan(0);
+      expect(landed.outlineColor).toBe(landed.ring);
+      expect(page.url()).toBe(before);
     });
-    expect(order, 'focus landed after the table').toBeTruthy();
-    expect(page.url()).toBe(before);
-  });
+  }
 });

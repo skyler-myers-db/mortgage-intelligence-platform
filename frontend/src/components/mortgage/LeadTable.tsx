@@ -583,7 +583,7 @@ export function LeadTable({
             )}
         </table>
       </div>
-      <span id={skipTargetId} className="sr-only" tabIndex={-1}>End of ranked borrowers table</span>
+      <span id={skipTargetId} className="sr-only lead-table__skip-target" tabIndex={-1}>End of ranked borrowers table</span>
       {reviewProps && ReviewDialog && openReview?.mode === 'dialog' && <ReviewDialog {...reviewProps} />}
       {openReview && !reviewChunk.module && (
         <div role="status" className={reviewChunk.failed ? 'table-error' : 'table-neutral'} data-testid="lead-approve-review-loading">
