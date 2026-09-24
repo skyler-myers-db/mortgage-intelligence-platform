@@ -402,6 +402,11 @@ const COMPLETED_GENIE_PROGRESS: GenieLiveProgress = {
 function showJob(gen: number, job: GenieCompletionJobStatus, reveal: boolean): void {
   const inFlight = snapshot.inFlight;
   if (!isCurrent(gen) || !inFlight) return;
+  if (job.terminal) {
+    // The answer (or the failure) lands next: never flash a terminal stage.
+    if (reveal && active) patchTurn(gen, { question: active.question, revealed: true });
+    return;
+  }
   const base = inFlight.progress ?? COMPLETED_GENIE_PROGRESS;
   const progress: GenieTurnProgress = {
     ...base,
