@@ -20,6 +20,33 @@ import { Icon, ThumbsDown, ThumbsUp } from '../Icon';
 
 type Vote = 'up' | 'down';
 
+type FeedbackOutcome = { ok: true } | { ok: false; message: string };
+
+/**
+ * POST one vote. Never rejects: a failure becomes its fixed user-facing
+ * line. Outside the component so the submit handler needs no try statement
+ * (audit 2026-09-21 `runtime-03`: a try/finally stops the React Compiler).
+ */
+function recordGenieFeedback(body: Parameters<typeof api.genieFeedback>[0]): Promise<FeedbackOutcome> {
+  return api.genieFeedback(body).then(
+    (): FeedbackOutcome => ({ ok: true }),
+    (err: unknown): FeedbackOutcome => {
+      // A policy rejection can still return 422 for a stale client payload.
+      // Surface only the fixed backend detail.
+      if (err instanceof ApiError && err.status === 422) {
+        return { ok: false, message: err.message || 'Feedback could not be recorded.' };
+      }
+      if (err instanceof ApiError && err.status === 409) {
+        return {
+          ok: false,
+          message: 'Feedback is still being processed or could not be reconciled. Retry to safely confirm the same vote.',
+        };
+      }
+      return { ok: false, message: 'Feedback could not be recorded. Please try again.' };
+    },
+  );
+}
+
 interface GenieAnswerFeedbackProps {
   conversationId?: string | null;
   messageId?: string | null;
@@ -52,7 +79,7 @@ export function GenieAnswerFeedback({
   // nothing to record, so render nothing rather than a dead control.
   if (!conversationId || !messageId) return null;
 
-  const submit = async (helpful: boolean) => {
+  const submit = (helpful: boolean) => {
     if (inFlightRef.current || recorded) return;
     inFlightRef.current = true;
     setPending(helpful ? 'up' : 'down');
@@ -61,31 +88,19 @@ export function GenieAnswerFeedback({
     const submittedIdentity = identity;
     const requestId = requestIdsRef.current[vote] ?? crypto.randomUUID();
     requestIdsRef.current[vote] = requestId;
-    try {
-      await api.genieFeedback({
-        conversation_id: conversationId,
-        message_id: messageId,
-        helpful,
-        request_id: requestId,
-      });
-      if (identityRef.current === submittedIdentity) setRecorded(true);
-    } catch (err) {
+    void recordGenieFeedback({
+      conversation_id: conversationId,
+      message_id: messageId,
+      helpful,
+      request_id: requestId,
+    }).then((outcome) => {
+      // A vote for an answer the control no longer shows changes nothing.
       if (identityRef.current !== submittedIdentity) return;
-      // A policy rejection can still return 422 for a stale client payload.
-      // Surface only the fixed backend detail.
-      if (err instanceof ApiError && err.status === 422) {
-        setError(err.message || 'Feedback could not be recorded.');
-      } else if (err instanceof ApiError && err.status === 409) {
-        setError('Feedback is still being processed or could not be reconciled. Retry to safely confirm the same vote.');
-      } else {
-        setError('Feedback could not be recorded. Please try again.');
-      }
-    } finally {
-      if (identityRef.current === submittedIdentity) {
-        inFlightRef.current = false;
-        setPending(null);
-      }
-    }
+      if (outcome.ok) setRecorded(true);
+      else setError(outcome.message);
+      inFlightRef.current = false;
+      setPending(null);
+    });
   };
 
   if (recorded) {

@@ -45,6 +45,26 @@ interface GenieRefusalCardProps {
 
 const GLOSSARY_HREF = glossaryAnchor('reviewedVocabulary');
 
+type ReportOutcome = { ok: true } | { ok: false; message: string };
+
+/**
+ * File the hash-only report. Never rejects: a failure becomes its fixed
+ * line. Outside the component so the report handler needs no try statement
+ * (audit 2026-09-21 `runtime-03`: a try/finally stops the React Compiler).
+ */
+function fileRefusalReport(body: Parameters<typeof api.genieRefusalReport>[0]): Promise<ReportOutcome> {
+  return api.genieRefusalReport(body).then(
+    (): ReportOutcome => ({ ok: true }),
+    (err: unknown): ReportOutcome => ({
+      ok: false,
+      message:
+        err instanceof ApiError && err.status === 422
+          ? 'This refusal could not be reported from this answer.'
+          : 'The report could not be recorded. Please try again.',
+    }),
+  );
+}
+
 function GlossaryLink() {
   const inRouter = useInRouterContext();
   const body = (
@@ -99,33 +119,25 @@ export function GenieRefusalCard({
     if (reported) reportedRef.current?.focus();
   }, [reported]);
 
-  const report = async () => {
+  const report = () => {
     if (!reportHash || inFlightRef.current || reported) return;
     inFlightRef.current = true;
     setReporting(true);
     setReportError(null);
     const submitted = identity;
-    try {
-      await api.genieRefusalReport({
-        question_hash: reportHash,
-        refusal_reason: reason,
-        conversation_id: payload.conversation_id ?? null,
-        message_id: payload.message_id ?? null,
-      });
-      if (identityRef.current === submitted) setReported(true);
-    } catch (err) {
+    void fileRefusalReport({
+      question_hash: reportHash,
+      refusal_reason: reason,
+      conversation_id: payload.conversation_id ?? null,
+      message_id: payload.message_id ?? null,
+    }).then((outcome) => {
+      // A report for a card that now shows another refusal changes nothing.
       if (identityRef.current !== submitted) return;
-      setReportError(
-        err instanceof ApiError && err.status === 422
-          ? 'This refusal could not be reported from this answer.'
-          : 'The report could not be recorded. Please try again.',
-      );
-    } finally {
-      if (identityRef.current === submitted) {
-        inFlightRef.current = false;
-        setReporting(false);
-      }
-    }
+      if (outcome.ok) setReported(true);
+      else setReportError(outcome.message);
+      inFlightRef.current = false;
+      setReporting(false);
+    });
   };
 
   return (

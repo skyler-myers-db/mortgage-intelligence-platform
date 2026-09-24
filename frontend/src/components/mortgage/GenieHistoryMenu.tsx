@@ -6,6 +6,23 @@ import type { GenieTurn } from '../../lib/genieConversationStore';
 import { Icon } from '../Icon';
 
 /**
+ * One past session as turns, or null when it could not be read. Never
+ * rejects. Outside the component so the load handler needs no try statement
+ * (audit 2026-09-21 `runtime-03`: a try/finally stops the React Compiler).
+ */
+function readGenieSessionTurns(
+  conversationId: string,
+): Promise<{ conversationId: string; turns: GenieTurn[] } | null> {
+  return api.genieSession(conversationId).then(
+    (detail) => ({
+      conversationId: detail?.conversation_id ?? conversationId,
+      turns: (Array.isArray(detail?.turns) ? detail.turns : []) as GenieTurn[],
+    }),
+    () => null,
+  );
+}
+
+/**
  * Past-conversation picker for the floating Genie panel header.
  *
  * Reads `GET /api/genie/sessions` on open (not on mount) so the panel's first
@@ -56,20 +73,20 @@ export function GenieHistoryMenu({
     return () => controller.abort();
   }, [open]);
 
-  const load = async (conversationId: string) => {
+  const load = (conversationId: string) => {
     if (loadLatchRef.current || disabled) return;
     loadLatchRef.current = true;
     setLoadingId(conversationId);
-    try {
-      const detail = await api.genieSession(conversationId);
-      const turns = Array.isArray(detail?.turns) ? detail.turns : [];
-      onLoad(detail?.conversation_id ?? conversationId, turns as GenieTurn[]);
-    } catch {
-      setStatus('error');
-    } finally {
-      loadLatchRef.current = false;
-      setLoadingId(null);
-    }
+    void readGenieSessionTurns(conversationId)
+      .then((session) => {
+        if (session) onLoad(session.conversationId, session.turns);
+        else setStatus('error');
+      })
+      .catch(() => setStatus('error'))
+      .finally(() => {
+        loadLatchRef.current = false;
+        setLoadingId(null);
+      });
   };
 
   return (
