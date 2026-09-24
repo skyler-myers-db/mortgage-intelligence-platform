@@ -1,14 +1,31 @@
 import { useSyncExternalStore } from 'react';
 import type { GenieAnswer as GenieAnswerShape } from '../types';
-import { ApiError, api, isAbortError, isWarmingUpError, type GenieLiveProgress } from './api';
-import { GenieLiveError, MAX_LIVE_WAIT_MS, pollGenieTurn, submitGenieTurn, type GenieTurnIds } from './genieAsk';
+import type { GenieCompletionJobStatus, GenieTurnProgress } from '../types/genieJobs';
+import { ApiError, isAbortError, isWarmingUpError, type GenieLiveProgress } from './api';
+import {
+  GenieLiveError,
+  JOB_RESUME_WINDOW_MS,
+  MAX_LIVE_WAIT_MS,
+  pollGenieJob,
+  pollGenieTurn,
+  requestGenieCompletion,
+  settledGenieJob,
+  submitGenieTurn,
+  type GenieTurnIds,
+} from './genieAsk';
 import {
   GENIE_CONVERSATION_RESET_EVENT,
   clearGenieConversationState,
   writeGenieConversationId,
 } from './genieConversation';
-import { appendGenieTurn, getGenieTurns } from './genieConversationStore';
-import { readRecord, removeRecord, writeRecord, type PersistedTurnRecord } from './genieInFlightRecord';
+import { appendGenieTurn, clearGenieTurns, getGenieTurns } from './genieConversationStore';
+import {
+  LEGACY_RECORD,
+  readRecord,
+  removeRecord,
+  writeRecord,
+  type PersistedTurnRecord,
+} from './genieInFlightRecord';
 import {
   GENIE_RESUME_FAILED_REASON,
   GENIE_STOPPED_REASON,
@@ -59,16 +76,28 @@ export type { GenieTurnLockOutcome, GenieTurnLockRequester } from './genieTurnLo
  * would create a second Genie message. A failure lands as a degraded turn,
  * and Retry / Ask again / Regenerate start a NEW turn only on the user's click.
  *
- * Reload resume (sessionStorage only, best effort, never logged): the record
- * carries a phase. Only a 'polling' record with its ids, younger than
- * MAX_LIVE_WAIT_MS, whose Web Lock this tab can take, resumes; its question
- * stays hidden until the first progress poll returns 200. 'submitting' and
- * 'completing' records never resume (a second complete would double-audit):
- * they, and every other case, become an 'interrupted' note with no request.
+ * Completion (audit 2026-09-21 `genie-01`): when submit says the server
+ * runs completion jobs, the one complete call asks for a job (202) and the
+ * store polls the job's status, showing the server's own stages; the job id
+ * is written to the record the moment the 202 arrives.
+ *
+ * Reload resume (sessionStorage only, best effort, never logged; whose Web
+ * Lock this tab can take):
+ *   - 'polling', with ids, younger than MAX_LIVE_WAIT_MS: polls on, then
+ *     completes (as a job when the record says so);
+ *   - 'completing' of a JOB turn, younger than JOB_RESUME_WINDOW_MS: with its
+ *     job id it only polls the job's status; without one (reloaded while the
+ *     complete was held) it sends exactly one more complete, which joins the
+ *     server's one job for the turn, then polls. Never a second audit;
+ *   - a resumed question stays hidden until the first 200;
+ *   - 'submitting', a legacy (non-job) 'completing', a stale record and a v:1
+ *     record from before jobs become an 'interrupted' note with no request.
+ * The submit is never re-POSTed.
  *
  * Fail-closed identity boundary: a GENIE_CONVERSATION_RESET_EVENT listener,
  * added when this module loads, aborts the turn, removes the record, releases
- * the lock and clears everything, whether or not a surface is mounted.
+ * the lock and clears everything, the shared transcript included, whether or
+ * not a surface is mounted.
  */
 
 export type GenieTurnSurface = 'panel' | 'route';
@@ -85,7 +114,8 @@ export interface GenieInFlightTurn {
   readonly phase: GenieTurnPhase;
   readonly startedAt: number;
   readonly deep: boolean;
-  readonly progress: GenieLiveProgress | null;
+  /** Genie's own progress, plus the completion job's stage once there is one. */
+  readonly progress: GenieTurnProgress | null;
   /** Resumed from the sessionStorage record after a reload. */
   readonly resumed: boolean;
   /** False while a resumed turn waits for its first progress poll to return
@@ -107,7 +137,7 @@ export interface GenieTurnNote {
  *  result, say): the announcer says it until that turn's stage moves on. */
 export interface GenieAnnouncedDuringTurn {
   readonly generation: number;
-  readonly progress: GenieLiveProgress | null;
+  readonly progress: GenieTurnProgress | null;
 }
 
 export interface GenieTurnSnapshot {
@@ -330,9 +360,10 @@ function failTurn(gen: number, err: unknown): void {
   if (!isCurrent(gen) || !turn || !inFlight || isAbortError(err)) return;
   const status = err instanceof ApiError ? err.status : null;
   finishActive();
-  if (inFlight.resumed && (status === 400 || status === 403)) {
-    // The token is bound to the actor: after a reload a 403 can mean a
-    // different actor. Fail closed, silently: no question, no transcript.
+  if (inFlight.resumed && (status === 400 || status === 403 || status === 404)) {
+    // The token (and the job) are bound to the actor: after a reload a 403 or
+    // a 404 can mean a different actor. Fail closed, silently: no question, no
+    // transcript.
     update({ inFlight: null });
     clearGenieConversationState({ notify: true });
     return;
@@ -354,18 +385,95 @@ function failTurn(gen: number, err: unknown): void {
 
 // ------------------------------------------------------------------- the turn
 
+/** Genie's own turn as it last looked; a resumed job synthesizes it. */
+const COMPLETED_GENIE_PROGRESS: GenieLiveProgress = {
+  status: 'COMPLETED',
+  stage: 'complete',
+  stage_label: 'Verifying the answer against its rows',
+  terminal: true,
+  failed: false,
+  reasoning_trace: [],
+  sql_preview: null,
+  error_hint: null,
+};
+
+/** Show the job's stage on the rail, keeping Genie's own last progress. A
+ *  status poll's 200 (never the 202) reveals a resumed turn's question. */
+function showJob(gen: number, job: GenieCompletionJobStatus, reveal: boolean): void {
+  const inFlight = snapshot.inFlight;
+  if (!isCurrent(gen) || !inFlight) return;
+  const base = inFlight.progress ?? COMPLETED_GENIE_PROGRESS;
+  const progress: GenieTurnProgress = {
+    ...base,
+    deep: inFlight.deep,
+    job: {
+      stage: job.stage,
+      stage_label: job.stage_label,
+      parts_done: job.parts_done,
+      parts_planned: job.parts_planned,
+    },
+  };
+  patchTurn(gen, reveal && active ? { progress, question: active.question, revealed: true } : { progress });
+}
+
+/** Poll the named job to its answer and land it. */
+async function followJob(
+  gen: number,
+  ids: GenieTurnIds,
+  question: string,
+  jobId: string,
+  startedAt: number,
+  signal: AbortSignal,
+): Promise<void> {
+  const response = await pollGenieJob(ids, question, jobId, {
+    signal,
+    deadline: startedAt + JOB_RESUME_WINDOW_MS,
+    onJob: (job) => showJob(gen, job, true),
+  });
+  settleTurn(gen, response as GenieAnswerShape);
+}
+
+/** The ONE complete request of a generation (plus its single timeout
+ *  re-send inside requestGenieCompletion), then the job it names. */
+async function completeTurn(
+  gen: number,
+  ids: GenieTurnIds,
+  question: string,
+  asyncComplete: boolean,
+  startedAt: number,
+  signal: AbortSignal,
+): Promise<void> {
+  const completion = await requestGenieCompletion(ids, question, { asyncComplete, signal });
+  if (!isCurrent(gen)) return;
+  if (completion.kind === 'answer') {
+    settleTurn(gen, completion.response as GenieAnswerShape);
+    return;
+  }
+  const { job } = completion;
+  // Written synchronously when the 202 arrives, before the first status
+  // poll: a reload from here on only polls this job.
+  recordPhase(gen, { jobId: job.job_id });
+  showJob(gen, job, false);
+  const answer = settledGenieJob(job);
+  if (answer) {
+    settleTurn(gen, answer as GenieAnswerShape);
+    return;
+  }
+  await followJob(gen, ids, question, job.job_id, startedAt, signal);
+}
+
 async function pollAndComplete(
   gen: number,
   ids: GenieTurnIds,
   question: string,
+  record: Pick<PersistedTurnRecord, 'startedAt' | 'deep' | 'asyncComplete'>,
   deadline: number,
-  deep: boolean,
   signal: AbortSignal,
 ): Promise<void> {
   await pollGenieTurn(ids, {
     signal,
     deadline,
-    deep,
+    deep: record.deep,
     onProgress: (progress) => {
       if (!isCurrent(gen)) return;
       patchTurn(gen, { progress, question, revealed: true });
@@ -374,11 +482,20 @@ async function pollAndComplete(
   if (!isCurrent(gen) || completeRequestedFor === gen) return;
   completeRequestedFor = gen;
   // Written synchronously BEFORE the single complete call: a reload from here
-  // on must never complete this turn a second time.
+  // on never completes a legacy turn again, and only rejoins a job turn.
   recordPhase(gen, { phase: 'completing' });
   patchTurn(gen, { phase: 'completing' });
-  const response = await api.genieComplete(ids.conversationId, ids.messageId, ids.progressToken, question, signal);
-  settleTurn(gen, response as GenieAnswerShape);
+  await completeTurn(gen, ids, question, record.asyncComplete, record.startedAt, signal);
+}
+
+/** A reloaded job turn: status polls only, or one complete that rejoins. */
+async function resumeJob(gen: number, ids: GenieTurnIds, record: PersistedTurnRecord, signal: AbortSignal): Promise<void> {
+  completeRequestedFor = gen;
+  if (record.jobId) {
+    await followJob(gen, ids, record.question, record.jobId, record.startedAt, signal);
+    return;
+  }
+  await completeTurn(gen, ids, record.question, true, record.startedAt, signal);
 }
 
 async function runFreshTurn(
@@ -398,12 +515,14 @@ async function runFreshTurn(
     messageId: submitted.messageId,
     progressToken: submitted.progressToken,
   };
-  recordPhase(gen, { phase: 'polling', deep: submitted.deep, ids });
+  recordPhase(gen, { phase: 'polling', deep: submitted.deep, ids, asyncComplete: submitted.completionJobs });
   patchTurn(gen, { phase: 'polling', deep: submitted.deep });
   // Held from the moment the ids exist, so a duplicated tab (which copies
   // sessionStorage) cannot resume this turn while this tab runs it.
   void holdLock(gen, ids.messageId);
-  await pollAndComplete(gen, ids, question, Date.now() + MAX_LIVE_WAIT_MS, submitted.deep, signal);
+  const record = active?.record;
+  if (!record) return;
+  await pollAndComplete(gen, ids, question, record, Date.now() + MAX_LIVE_WAIT_MS, signal);
 }
 
 /** Start a turn. False, and nothing is sent, while a turn is in flight. */
@@ -416,13 +535,14 @@ export function startGenieTurn({ question, conversationId, surface, startedAt }:
   const ctrl = new AbortController();
   controller = ctrl;
   const record: PersistedTurnRecord = {
-    v: 1,
+    v: 2,
     question: trimmed,
     conversationId,
     surface,
     startedAt,
     deep: false,
     phase: 'submitting',
+    asyncComplete: false,
   };
   active = { generation: gen, question: trimmed, record };
   writeRecord(record);
@@ -476,13 +596,22 @@ export function resumeGenieTurnFromSession(): void {
   if (snapshot.inFlight) return;
   const record = readRecord();
   if (!record) return;
-  const ids = record.ids;
-  const fresh = Date.now() - record.startedAt < MAX_LIVE_WAIT_MS;
-  if (record.phase !== 'polling' || !ids || !fresh) {
+  if (record === LEGACY_RECORD) {
+    // Written before completion jobs existed: never resumed, and its question
+    // is not shown (no server check backs it).
     removeRecord();
-    // Known residual (#3, w3-genie-jobs): this note, like the other-tab note
-    // below and the transcript key, shows the persisted question with no
-    // server check, so it survives a reload across an actor change.
+    interrupt(interruptedReason('reload'), '');
+    return;
+  }
+  const ids = record.ids;
+  const age = Date.now() - record.startedAt;
+  const polling = record.phase === 'polling' && age < MAX_LIVE_WAIT_MS;
+  const jobCompleting = record.phase === 'completing' && record.asyncComplete && age < JOB_RESUME_WINDOW_MS;
+  if (!ids || !(polling || jobCompleting)) {
+    removeRecord();
+    // Known residual (#3, wave 4): this note, like the other-tab note below
+    // and the transcript key, shows the persisted question with no server
+    // check, so it survives a reload across an actor change.
     interrupt(interruptedReason(record.phase === 'completing' ? 'completing' : 'reload'), record.question);
     return;
   }
@@ -496,7 +625,7 @@ export function resumeGenieTurnFromSession(): void {
       surface: record.surface,
       question: '',
       conversationId: record.conversationId,
-      phase: 'polling',
+      phase: record.phase,
       startedAt: record.startedAt,
       deep: record.deep,
       progress: null,
@@ -514,7 +643,8 @@ export function resumeGenieTurnFromSession(): void {
         interrupt(interruptedReason(outcome.kind === 'busy' ? 'other-tab' : 'reload'), record.question);
         return undefined;
       }
-      return pollAndComplete(gen, ids, record.question, record.startedAt + MAX_LIVE_WAIT_MS, record.deep, ctrl.signal);
+      if (jobCompleting) return resumeJob(gen, ids, record, ctrl.signal);
+      return pollAndComplete(gen, ids, record.question, record, record.startedAt + MAX_LIVE_WAIT_MS, ctrl.signal);
     })
     .catch((err: unknown) => failTurn(gen, err));
 }
@@ -564,6 +694,9 @@ function onConversationReset(): void {
   generation += 1;
   controller?.abort();
   finishActive();
+  // The transcript too, with no surface mounted to do it (w2-genie-turn
+  // review #0): a reset must never leave the previous actor's answers.
+  clearGenieTurns();
   if (!snapshot.inFlight && snapshot.notes.length === 0 && snapshot.announcement === '') return;
   snapshot = clearedSnapshot();
   for (const listener of listeners) listener();
