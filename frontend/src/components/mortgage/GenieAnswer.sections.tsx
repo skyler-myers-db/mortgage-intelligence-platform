@@ -26,7 +26,13 @@ import {
   type GenieVisualizationPlan,
 } from './GenieAnswer.logic';
 import { genieCellHref, type GenieAnswerCohort } from '../../lib/genieCellLinks';
-import { GenieAnswerRowsActions, heldRowsNote, type GenieRowsExtent } from './GenieAnswerRowsActions';
+import {
+  GenieAnswerRowsActions,
+  GenieRowsCsvDownload,
+  heldRowsNote,
+  type GenieRowsExtent,
+} from './GenieAnswerRowsActions';
+import type { GenieAnswerExportBase, GenieRowsExportTarget } from './GenieAnswer.export';
 
 // Every row and column, loaded only when the reader asks for it (genie-06).
 const GenieAnswerAllRows = lazy(() => import('./GenieAnswerAllRows'));
@@ -52,6 +58,8 @@ export function GenieRowsVisual({
   cellCohort,
   reportedRowCount = null,
   dense = false,
+  exportTarget = null,
+  onAnnounce,
 }: {
   rows: Array<Record<string, unknown>>;
   plan: GenieVisualizationPlan;
@@ -63,6 +71,10 @@ export function GenieRowsVisual({
   reportedRowCount?: number | null;
   /** The floating panel: the all-rows region is shorter. */
   dense?: boolean;
+  /** Set on a trusted, live answer: offers the audited CSV download. */
+  exportTarget?: GenieRowsExportTarget | null;
+  /** The surface's one announcer (a11y-06). */
+  onAnnounce?: (text: string) => void;
 }) {
   const [showAll, setShowAll] = useState(false);
   const chart = plan.chart;
@@ -213,7 +225,17 @@ export function GenieRowsVisual({
       )}
       {/* The inert "+N more rows" became the control that shows them. */}
       {rows.length > 0 && (
-        <GenieAnswerRowsActions extent={extent} expanded={showAll} onToggle={() => setShowAll((open) => !open)} />
+        <GenieAnswerRowsActions extent={extent} expanded={showAll} onToggle={() => setShowAll((open) => !open)}>
+          {exportTarget && (
+            <GenieRowsCsvDownload
+              rows={rows}
+              columns={everyColumn}
+              target={exportTarget}
+              reportedRowCount={reportedRowCount}
+              onAnnounce={onAnnounce}
+            />
+          )}
+        </GenieAnswerRowsActions>
       )}
     </>
   );
@@ -229,10 +251,14 @@ export function GenieSectionVisual({
   section,
   cellCohort,
   dense = false,
+  exportTarget = null,
+  onAnnounce,
 }: {
   section: GenieAnswerSection;
   cellCohort?: GenieAnswerCohort;
   dense?: boolean;
+  exportTarget?: GenieRowsExportTarget | null;
+  onAnnounce?: (text: string) => void;
 }) {
   const rows = Array.isArray(section.table_rows) ? section.table_rows : [];
   if (rows.length === 0) return null;
@@ -249,6 +275,8 @@ export function GenieSectionVisual({
       cellCohort={cellCohort}
       reportedRowCount={section.row_count ?? null}
       dense={dense}
+      exportTarget={exportTarget}
+      onAnnounce={onAnnounce}
     />
   );
 }
@@ -273,6 +301,8 @@ export function GenieAnswerSections({
   workspaceHost,
   cellCohort,
   dense = false,
+  exportBase = null,
+  onAnnounce,
 }: {
   summary?: string | null;
   sections: GenieAnswerSection[];
@@ -280,6 +310,9 @@ export function GenieAnswerSections({
   cellCohort?: GenieAnswerCohort;
   /** The floating panel. */
   dense?: boolean;
+  /** Set on a trusted, live answer: each section offers the audited CSV. */
+  exportBase?: GenieAnswerExportBase | null;
+  onAnnounce?: (text: string) => void;
 }) {
   const summaryText = (summary ?? '').trim();
   const collapsible = sections.length >= GENIE_OUTLINE_MIN_SECTIONS;
@@ -339,7 +372,13 @@ export function GenieAnswerSections({
             {(section.answer ?? '').trim() && (
               <MarkdownAnswer text={section.answer} workspaceHost={workspaceHost} headingLevel={4} />
             )}
-            <GenieSectionVisual section={section} cellCohort={cellCohort} dense={dense} />
+            <GenieSectionVisual
+              section={section}
+              cellCohort={cellCohort}
+              dense={dense}
+              exportTarget={exportBase ? { ...exportBase, scope: 'section', sectionIndex: i + 1 } : null}
+              onAnnounce={onAnnounce}
+            />
           </>
         );
         return (

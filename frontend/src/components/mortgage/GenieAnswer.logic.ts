@@ -426,10 +426,18 @@ export function formatGenieNumber(v: number): string {
   return Number.isInteger(v) ? formatCount(v) : formatFixed(v, 2);
 }
 
+const SEGMENT_LIST_COLUMN_RE = /^segment_codes$/i;
+const SEGMENT_COLUMN_RE = /^(segment|segment_code|top_segment)$/i;
+
+/** A column of segment codes, shown (and exported) as reviewed segment names. */
+export function isSegmentColumn(column: string): boolean {
+  return SEGMENT_LIST_COLUMN_RE.test(column) || SEGMENT_COLUMN_RE.test(column);
+}
+
 export function formatCell(column: string, v: unknown): string {
   if (v === null || v === undefined) return '—';
-  if (/^segment_codes$/i.test(column)) return formatSegmentValue(v, true);
-  if (/^(segment|segment_code|top_segment)$/i.test(column)) return formatSegmentValue(v, false);
+  if (SEGMENT_LIST_COLUMN_RE.test(column)) return formatSegmentValue(v, true);
+  if (SEGMENT_COLUMN_RE.test(column)) return formatSegmentValue(v, false);
   if (isIdentifierColumn(column)) return formatIdentifier(column, v);
   if (typeof v === 'number') {
     if (isMoneyColumn(column)) return currency(v);

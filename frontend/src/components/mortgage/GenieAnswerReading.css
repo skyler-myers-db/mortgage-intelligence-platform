@@ -110,6 +110,13 @@
   color: var(--text-3);
   font-size: var(--fs-11);
 }
+/* The download outcome or its size limit: visible text, never a live region
+   (the surface's one announcer speaks it). */
+.genie-answer__rows-status {
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+}
 .genie-answer__all-rows {
   box-sizing: border-box;
   max-inline-size: 100%;

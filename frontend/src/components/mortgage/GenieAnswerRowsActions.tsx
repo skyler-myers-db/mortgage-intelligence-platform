@@ -1,12 +1,19 @@
-import type { ReactNode } from 'react';
+import { useId, useRef, useState, type ReactNode } from 'react';
 import { formatCount } from '../../lib/formatters';
+import { Icon } from '../Icon';
+import {
+  exportGenieAnswerCsv,
+  GENIE_EXPORT_MAX_ROWS,
+  type GenieRowsExportTarget,
+} from './GenieAnswer.export';
 
 /**
  * The actions under every Genie rows block (audit 2026-09-21 `genie-06`,
  * slice 2): "Show all" replaces the capped compact table in place with every
- * row and column the answer holds. `.genie-answer__rows-actions` is a
- * documented BEM extension of `.genie-answer` (the prototype's Genie bubble,
- * design_files/index.html:741-760, has no row controls).
+ * row and column the answer holds, and "Download CSV" hands over those rows
+ * once the audit ledger has recorded the export. `.genie-answer__rows-actions`
+ * is a documented BEM extension of `.genie-answer` (the prototype's Genie
+ * bubble, design_files/index.html:741-760, has no row controls).
  */
 
 export interface GenieRowsExtent {
@@ -79,5 +86,71 @@ export function GenieAnswerRowsActions({
       )}
       {children}
     </div>
+  );
+}
+
+/**
+ * "Download CSV" for one rows block. Offered only on a trusted answer with a
+ * live conversation and message id (the caller decides and passes `target`).
+ * One click is one ledger attempt: a ref latch and the disabled "Recording
+ * export…" state hold a second POST. The file downloads only after the
+ * receipt answers; the outcome is shown here and spoken through the
+ * surface's one announcer. Never prefetched, never fired on hover.
+ */
+export function GenieRowsCsvDownload({
+  rows,
+  columns,
+  target,
+  reportedRowCount,
+  onAnnounce,
+}: {
+  rows: ReadonlyArray<Record<string, unknown>>;
+  columns: readonly string[];
+  target: GenieRowsExportTarget;
+  reportedRowCount: number | null;
+  onAnnounce?: (text: string) => void;
+}) {
+  const latchRef = useRef(false);
+  const [recording, setRecording] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+  const reasonId = useId();
+  const tooMany = rows.length > GENIE_EXPORT_MAX_ROWS;
+  const download = () => {
+    if (latchRef.current || tooMany) return;
+    latchRef.current = true;
+    setRecording(true);
+    setStatus(null);
+    void exportGenieAnswerCsv({ rows, columns, target, reportedRowCount }).then((outcome) => {
+      latchRef.current = false;
+      setRecording(false);
+      setStatus(outcome.message);
+      onAnnounce?.(outcome.message);
+    });
+  };
+  return (
+    <>
+      <button
+        type="button"
+        className="btn btn--ghost btn--sm genie-answer__download"
+        onClick={download}
+        disabled={recording || tooMany}
+        aria-describedby={tooMany ? reasonId : undefined}
+      >
+        <Icon name="export" size={12} />
+        {recording ? 'Recording export…' : 'Download CSV'}
+      </button>
+      {tooMany && (
+        <span id={reasonId} className="genie-answer__rows-status">
+          Download holds at most {formatCount(GENIE_EXPORT_MAX_ROWS)} rows; this answer has {formatCount(rows.length)}.
+        </span>
+      )}
+      {/* Visible outcome only, not a live region: the surface's one announcer
+          speaks it (a11y-06). */}
+      {status && (
+        <span className="genie-answer__rows-status" data-export-status="">
+          {status}
+        </span>
+      )}
+    </>
   );
 }
