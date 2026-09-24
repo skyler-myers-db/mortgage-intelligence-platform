@@ -201,6 +201,25 @@ class LeadSummary(BaseModel):
     latest_disposition_at: datetime | None = None
     latest_callback_at: datetime | None = None
     aging_days: int | None = None
+    # The gold row's refresh time, carried only so GET /api/leads can stamp
+    # X-Data-Refreshed-At (audit delivery-08: the Lead Queue's CSV provenance
+    # without a mount-time portfolio read). exclude=True keeps it out of
+    # every JSON body and out of the public response schema.
+    row_refreshed_at: datetime | None = Field(default=None, exclude=True)
+
+    @field_validator("row_refreshed_at", mode="before")
+    @classmethod
+    def _row_refreshed_at_never_fails_the_row(cls, value: object) -> object:
+        # Provenance only: a malformed warehouse value is dropped, never a
+        # reason to 500 the whole list.
+        if value is None or isinstance(value, datetime):
+            return value
+        if isinstance(value, str):
+            try:
+                return datetime.fromisoformat(value)
+            except ValueError:
+                return None
+        return None
 
     @field_validator("display_name")
     @classmethod
