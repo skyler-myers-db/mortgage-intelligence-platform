@@ -53,9 +53,13 @@ class SessionResponse(BaseModel):
         description=(
             "Display labels for the capability tiers this session holds, most "
             "privileged first: 'Administrator' (can_access_admin), 'Approver' "
-            "(can_approve), else 'Workspace user' for any forwarded identity. "
-            "Empty when no identity was forwarded. Labels only: the "
-            "can_* booleans stay the authorization contract."
+            "(can_approve), else 'Workspace user' for a forwarded identity "
+            "that holds neither tier. Empty only when the session holds "
+            "neither tier and no identity was forwarded: a tier admitted by "
+            "group membership alone (the local and test group-compat "
+            "admission included) carries its label while actor_email is "
+            "null. Labels only: the can_* booleans stay the authorization "
+            "contract."
         ),
     )
 
