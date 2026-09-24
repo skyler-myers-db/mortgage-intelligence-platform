@@ -60,6 +60,7 @@ export const SET_STATE_IN_EFFECT_SCOPE = [
   "src/components/mortgage/useLeadApprovalActions.ts",
   "src/components/mortgage/useLeadSalesActions.ts",
   "src/components/mortgage/ApprovalBanner.tsx",
+  "src/components/mortgage/GenieHistoryMenu.tsx",
   "src/routes/lead-queue.tsx",
   "src/lib/mutations/*.ts",
 ];

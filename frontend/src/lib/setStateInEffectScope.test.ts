@@ -27,6 +27,7 @@ const CONVERTED = [
   'src/components/mortgage/useLeadApprovalActions.ts',
   'src/components/mortgage/useLeadSalesActions.ts',
   'src/components/mortgage/ApprovalBanner.tsx',
+  'src/components/mortgage/GenieHistoryMenu.tsx',
   'src/routes/lead-queue.tsx',
   'src/lib/mutations/outreach.ts',
   'src/lib/mutations/sales.ts',

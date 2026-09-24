@@ -20,6 +20,17 @@ import { fixture, json, type FixtureEntry } from '../mockApi';
 
 export const GENIE_CONVERSATION_ID = 'fixture-conversation-0001';
 
+/**
+ * Two past conversations for a spec that opens the History menu (the default
+ * registry lists none). The second has never recorded activity, so its
+ * `last_activity_at` is null exactly as backend GenieSessionSummary serializes
+ * it: the menu must render "1 turn" with no timestamp.
+ */
+export const GENIE_HISTORY_SESSIONS: GenieSessionSummary[] = [
+  { conversation_id: 'fixture-conversation-0002', title: 'Equity sweep by state', last_activity_at: '2026-09-20T15:04:00Z', turn_count: 3 },
+  { conversation_id: 'fixture-conversation-0003', title: 'Quiet thread', last_activity_at: null, turn_count: 1 },
+];
+
 const TRUSTED_ASSETS = [
   'mip.gold.borrower_360',
   'mip.gold.evidence_events',
