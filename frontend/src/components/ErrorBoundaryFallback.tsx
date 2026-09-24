@@ -1,4 +1,5 @@
 import type { ClientErrorKind } from '../lib/chunkLoadError';
+import type { ClientErrorBoundary } from '../lib/rumBridge';
 import { resolveRouteMeta } from '../lib/routeMeta';
 import { Icon } from './Icon';
 
@@ -27,7 +28,7 @@ export type ErrorSurfaceVariant = 'route' | 'page' | 'panel';
 
 interface ErrorSurfaceProps {
   kind: ClientErrorKind;
-  boundary: string;
+  boundary: ClientErrorBoundary;
   variant: ErrorSurfaceVariant;
   /** The failed area's product name: a route name, or a panel label for `panel`. */
   routeLabel: string | null;

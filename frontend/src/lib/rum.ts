@@ -260,7 +260,9 @@ function sessionStorageOrNull(): Storage | null {
  * fields, on the page route. Sampled per tab session and capped per document;
  * the server rejects a whole batch over one out-of-range number, so a call
  * longer than the schema's 600 s is skipped and an oversized transfer is left
- * out rather than clamped.
+ * out rather than clamped. `transferSize` is the encoded (compressed) size on
+ * the wire, so the cap binds rarely: the default 500-row GET /api/leads page
+ * is about 45 KB gzipped (628 KB decoded).
  */
 function observeApiCalls(): void {
   if (!('PerformanceObserver' in window)) return;

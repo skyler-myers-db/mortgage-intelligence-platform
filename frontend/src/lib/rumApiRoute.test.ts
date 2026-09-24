@@ -6,7 +6,6 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import {
-  RUM_API_SAMPLE_KEY,
   apiCallRoute,
   isApiCallSampled,
   serverTimingDetails,
@@ -14,6 +13,8 @@ import {
 } from './rumApiRoute';
 
 const ORIGIN = 'https://mip.example';
+/** The per-tab sampling key (rumApiRoute.ts; the fixture harness seeds the same literal). */
+const RUM_API_SAMPLE_KEY = 'mip.rumApiSample';
 
 function timing(name: string, duration = 0, description = '') {
   return { name, duration, description };

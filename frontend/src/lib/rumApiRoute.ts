@@ -138,7 +138,7 @@ export function serverTimingDetails(entries: readonly TimingEntry[]): ServerTimi
   return details;
 }
 
-export const RUM_API_SAMPLE_KEY = 'mip.rumApiSample';
+const RUM_API_SAMPLE_KEY = 'mip.rumApiSample';
 /** One tab session in ten reports its API calls. */
 const API_SAMPLE_RATE = 0.1;
 
