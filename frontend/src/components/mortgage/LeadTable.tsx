@@ -480,6 +480,12 @@ export function LeadTable({
       <span className="sr-only" role="status" aria-live="polite" data-testid="lead-cursor-status">
         {flow.cursor.announcement}
       </span>
+      {/* The approval result is spoken from a live region that is always
+          mounted (a region inserted already filled can go unannounced); the
+          visible toast carries the "View receipt" action. */}
+      <span className="sr-only" role="status" aria-live="polite" data-testid="lead-decision-status">
+        {flow.toast ? `Approved ${flow.toast.borrowerId}.` : ''}
+      </span>
       <div
         ref={tableWrapRef}
         className={fillHeight ? 'tbl-wrap tbl-wrap--fill' : 'tbl-wrap'}

@@ -243,7 +243,11 @@ describe('LeadTable approve review', () => {
       draft_generation_id: `gen-${IDS[0]}`,
       draft_response_hash: `hash-${IDS[0]}`,
     }), undefined);
-    // In flight: the review says so, nothing claims "approved" yet.
+    // In flight: the review says so, nothing claims "approved" yet. The
+    // result's live region is already mounted, and empty.
+    const decisionStatus = () => container.querySelector('[data-testid="lead-decision-status"]');
+    expect(decisionStatus()?.getAttribute('role')).toBe('status');
+    expect(decisionStatus()?.textContent).toBe('');
     expect(confirm().textContent).toBe('Approving…');
     expect(confirm().getAttribute('aria-disabled')).toBe('true');
     expect(container.querySelector('[data-testid="lead-decision-toast"]')).toBeNull();
@@ -261,6 +265,10 @@ describe('LeadTable approve review', () => {
     expect(setApproval).toHaveBeenCalledWith(IDS[0], 'approved');
     expect(review()).toBeNull();
     expect(container.querySelector('[data-testid="lead-decision-toast"]')?.textContent).toContain(`Approved ${IDS[0]}`);
+    // Spoken once, from the region that was already mounted: the visible
+    // toast is not a second live region.
+    expect(decisionStatus()?.textContent).toBe(`Approved ${IDS[0]}.`);
+    expect(container.querySelector('[data-testid="lead-decision-toast"] [role="status"]')).toBeNull();
     expect(container.querySelector('[data-testid="lead-decision-view-receipt"]')).not.toBeNull();
     expect(cursorId()).toBe(IDS[1]);
     expect(draftOutreach).toHaveBeenCalledTimes(1);
