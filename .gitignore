@@ -21,8 +21,11 @@ frontend/node_modules/
 frontend/dist/
 # Build metadata tools/postbuild_artifacts.mjs moves OUT of frontend/dist so
 # it is never served or deployed: the Vite build manifest the budget gate
-# reads. Ignored so neither the bundle sync nor git-archive packaging ships it.
+# reads, and the hidden source maps (a CI artifact for decoding production
+# stack traces). Ignored so neither the bundle sync nor git-archive packaging
+# ships them.
 frontend/build-meta/
+frontend/sourcemaps/
 coverage/
 .coverage
 coverage.xml

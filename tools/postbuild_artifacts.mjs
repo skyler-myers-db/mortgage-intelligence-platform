@@ -1,26 +1,32 @@
 #!/usr/bin/env node
 // ---------------------------------------------------------------------------
-// Post-build artifact relocation (audit bundle-08, 2026-09-24).
+// Post-build artifact relocation (audit bundle-08 + stack-01, 2026-09-24).
 //
 // `vite build` writes build metadata into frontend/dist that must never be
-// served or deployed:
+// served or deployed. backend/main.py's `_spa_fallback` serves ANY real file
+// under dist (its `candidate.is_file()` branch), the `/assets` route serves
+// any file under dist/assets, and databricks.yml uploads all of
+// frontend/dist/**. So:
 //
 //   - build-manifest.json (vite.config.ts `build.manifest`), the chunk graph
-//     tools/check_frontend_budgets.mjs measures. backend/main.py's
-//     `_spa_fallback` serves ANY real file under dist (its `candidate.is_file()`
-//     branch), so a manifest left in dist would be public at
-//     /build-manifest.json, and databricks.yml uploads all of frontend/dist/**.
+//     tools/check_frontend_budgets.mjs measures, moves to frontend/build-meta/.
+//   - every *.map (vite.config.ts `build.sourcemap: 'hidden'`) moves to
+//     frontend/sourcemaps/, keeping its dist-relative path. That directory is
+//     the CI artifact for decoding production stack traces; it is never
+//     served.
 //
-// This step empties and recreates frontend/build-meta/ and moves the manifest
-// there, then fails the build if a leftover remains in dist (the manifest, or
-// a `.vite/` metadata dir from a default-named manifest). build-meta/ is
-// git-ignored, so the bundle sync (which uploads git-tracked files plus
-// frontend/dist/**) and scripts/package_source.sh (git archive) never ship it.
+// Each destination is emptied and recreated first, so it only ever holds
+// this build's files. Then the build FAILS if dist still contains a .map,
+// the manifest, a `.vite/` metadata dir, or a JS file carrying a
+// `//# sourceMappingURL=` comment (a non-hidden sourcemap setting would make
+// every browser request the map). Both destinations are git-ignored, so the
+// bundle sync (git-tracked files plus frontend/dist/**) and
+// scripts/package_source.sh (git archive) never ship them.
 //
 // Wired into `npm --prefix frontend run build` between `vite build` and
 // tools/precompress_assets.mjs. Node built-ins only.
 // ---------------------------------------------------------------------------
-import { existsSync, mkdirSync, readdirSync, renameSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -29,11 +35,15 @@ export { initialClosure } from './build_manifest.mjs';
 
 export const MANIFEST_FILE = 'build-manifest.json';
 
+/** A source-map comment at the start of a line (`//# ...` or legacy `//@ ...`). */
+export const SOURCE_MAP_COMMENT = /^\/\/[#@]\s*sourceMappingURL=/m;
+
 const repoRoot = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 
 export const DEFAULT_DIRS = {
   distDir: path.join(repoRoot, 'frontend', 'dist'),
   metaDir: path.join(repoRoot, 'frontend', 'build-meta'),
+  mapsDir: path.join(repoRoot, 'frontend', 'sourcemaps'),
 };
 
 function resetDir(dir) {
@@ -41,26 +51,42 @@ function resetDir(dir) {
   mkdirSync(dir, { recursive: true });
 }
 
+/** Every file under `dir`, as a `/`-separated path relative to it. */
+function walkFiles(dir, prefix = '') {
+  const files = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) files.push(...walkFiles(path.join(dir, entry.name), relative));
+    else files.push(relative);
+  }
+  return files;
+}
+
 /**
- * Build metadata still inside dist after relocation: each entry is one reason
- * the dist must not be deployed. Pure over the directory listing.
+ * Build metadata still inside dist: each entry is one reason the dist must
+ * not be deployed.
  */
 export function distLeftovers(distDir) {
   const problems = [];
-  const top = readdirSync(distDir, { withFileTypes: true });
-  for (const entry of top) {
+  for (const entry of readdirSync(distDir, { withFileTypes: true })) {
     if (entry.name === MANIFEST_FILE) problems.push(`dist still contains ${MANIFEST_FILE}`);
     if (entry.name === '.vite') problems.push('dist still contains a .vite/ metadata directory');
+  }
+  for (const file of walkFiles(distDir)) {
+    if (file.endsWith('.map')) problems.push(`dist still contains a source map: ${file}`);
+    if (file.endsWith('.js') && SOURCE_MAP_COMMENT.test(readFileSync(path.join(distDir, file), 'utf8'))) {
+      problems.push(`dist JS carries a sourceMappingURL comment: ${file} (vite.config.ts build.sourcemap must be 'hidden')`);
+    }
   }
   return problems;
 }
 
 /**
- * Move the build manifest out of `distDir` into a freshly emptied `metaDir`,
- * then verify dist is clean. Throws with every problem found; returns the
- * relocated paths.
+ * Move the build manifest into a freshly emptied `metaDir` and every source
+ * map into a freshly emptied `mapsDir` (same relative path), then verify dist
+ * is clean. Throws with every problem found; returns what moved.
  */
-export function relocateBuildArtifacts({ distDir, metaDir }) {
+export function relocateBuildArtifacts({ distDir, metaDir, mapsDir }) {
   const manifestSource = path.join(distDir, MANIFEST_FILE);
   if (!existsSync(manifestSource)) {
     throw new Error(
@@ -71,17 +97,28 @@ export function relocateBuildArtifacts({ distDir, metaDir }) {
   const manifest = path.join(metaDir, MANIFEST_FILE);
   renameSync(manifestSource, manifest);
 
+  resetDir(mapsDir);
+  const maps = walkFiles(distDir).filter((file) => file.endsWith('.map'));
+  for (const file of maps) {
+    const target = path.join(mapsDir, file);
+    mkdirSync(path.dirname(target), { recursive: true });
+    renameSync(path.join(distDir, file), target);
+  }
+
   const problems = distLeftovers(distDir);
   if (problems.length > 0) {
     throw new Error(`postbuild: dist is not deployable:\n  - ${problems.join('\n  - ')}`);
   }
-  return { manifest };
+  return { manifest, maps };
 }
 
 function main() {
   try {
     const result = relocateBuildArtifacts(DEFAULT_DIRS);
-    console.log(`postbuild: manifest -> ${path.relative(repoRoot, result.manifest)}`);
+    console.log(
+      `postbuild: manifest -> ${path.relative(repoRoot, result.manifest)}; ` +
+        `${result.maps.length} source maps -> ${path.relative(repoRoot, DEFAULT_DIRS.mapsDir)}/`,
+    );
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
     process.exit(1);

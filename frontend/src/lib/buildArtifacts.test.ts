@@ -32,6 +32,7 @@ interface ManifestChunk {
 type Manifest = Record<string, ManifestChunk>;
 interface Closure { entry: string; keys: string[]; js: string[]; css: string[] }
 interface RouteClosure { js: string[]; css: string[] }
+interface ScratchDirs { distDir: string; metaDir: string; mapsDir: string }
 
 const tools = {
   initialClosure: budgetTool.initialClosure as (manifest: Manifest) => Closure,
@@ -39,7 +40,7 @@ const tools = {
   staleManifestProblems: budgetTool.staleManifestProblems as (manifest: Manifest, dist: string[]) => string[],
   fontCountProblem: budgetTool.fontCountProblem as (actual: number, expected: number) => string | null,
   routeBudgetProblems: budgetTool.routeBudgetProblems as (keys: string[], budgets: Record<string, number>) => string[],
-  relocate: postbuildTool.relocateBuildArtifacts as (dirs: { distDir: string; metaDir: string }) => { manifest: string },
+  relocate: postbuildTool.relocateBuildArtifacts as (dirs: ScratchDirs) => { manifest: string; maps: string[] },
   postbuildInitialClosure: postbuildTool.initialClosure as (manifest: Manifest) => Closure,
 };
 
@@ -168,15 +169,20 @@ describe('relocateBuildArtifacts', () => {
     scratch = null;
   });
 
-  function scratchTree(): { distDir: string; metaDir: string } {
+  function scratchTree(): ScratchDirs {
     scratch = mkdtempSync(path.join(tmpdir(), 'mip-postbuild-'));
     const distDir = path.join(scratch, 'dist');
     const metaDir = path.join(scratch, 'build-meta');
+    const mapsDir = path.join(scratch, 'sourcemaps');
     mkdirSync(path.join(distDir, 'assets'), { recursive: true });
     writeFileSync(path.join(distDir, 'index.html'), '<!doctype html>');
-    writeFileSync(path.join(distDir, 'assets', 'index-A.js'), 'export {};\n');
+    // A string that merely mentions the comment mid-line is not a source-map
+    // comment; the check is line-anchored.
+    writeFileSync(path.join(distDir, 'assets', 'index-A.js'), 'const s="//# sourceMappingURL=x";export{s};\n');
+    writeFileSync(path.join(distDir, 'assets', 'index-A.js.map'), '{"version":3}');
+    writeFileSync(path.join(distDir, 'theme-boot.js.map'), '{"version":3}');
     writeFileSync(path.join(distDir, 'build-manifest.json'), JSON.stringify(syntheticManifest()));
-    return { distDir, metaDir };
+    return { distDir, metaDir, mapsDir };
   }
 
   it('moves the manifest out of dist into a freshly emptied build-meta', () => {
@@ -190,6 +196,25 @@ describe('relocateBuildArtifacts', () => {
     expect(readdirSync(dirs.metaDir)).toEqual(['build-manifest.json']);
     expect(existsSync(path.join(dirs.distDir, 'build-manifest.json'))).toBe(false);
     expect(readdirSync(dirs.distDir).sort()).toEqual(['assets', 'index.html']);
+  });
+
+  it('moves every source map into a freshly emptied sourcemaps dir, keeping its dist path', () => {
+    const dirs = scratchTree();
+    mkdirSync(path.join(dirs.mapsDir, 'assets'), { recursive: true });
+    writeFileSync(path.join(dirs.mapsDir, 'assets', 'old-Z.js.map'), '{}');
+
+    const result = tools.relocate(dirs);
+
+    expect(result.maps.sort()).toEqual(['assets/index-A.js.map', 'theme-boot.js.map']);
+    expect(readdirSync(dirs.mapsDir).sort()).toEqual(['assets', 'theme-boot.js.map']);
+    expect(readdirSync(path.join(dirs.mapsDir, 'assets'))).toEqual(['index-A.js.map']);
+    expect(readdirSync(path.join(dirs.distDir, 'assets'))).toEqual(['index-A.js']);
+  });
+
+  it('fails when a dist JS file carries a sourceMappingURL comment', () => {
+    const dirs = scratchTree();
+    writeFileSync(path.join(dirs.distDir, 'assets', 'lead-C.js'), 'export {};\n//# sourceMappingURL=lead-C.js.map\n');
+    expect(() => tools.relocate(dirs)).toThrow(/sourceMappingURL comment: assets\/lead-C\.js/);
   });
 
   it('fails when the build emitted no manifest', () => {

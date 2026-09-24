@@ -17,6 +17,13 @@ export default defineConfig({
     // out of dist into frontend/build-meta/ before anything is served or
     // uploaded, because the SPA fallback would serve any real file in dist.
     manifest: 'build-manifest.json',
+    // Source maps for production debugging (audit stack-01), emitted WITHOUT
+    // the `//# sourceMappingURL=` comment so no browser ever asks for one.
+    // tools/postbuild_artifacts.mjs moves every .map out of dist into
+    // frontend/sourcemaps/ (the CI artifact) and fails the build if a map or
+    // a sourceMappingURL comment is left in dist, because the SPA fallback
+    // would serve a map from dist and the bundle would deploy it.
+    sourcemap: 'hidden',
   },
   server: {
     port: 5173,
