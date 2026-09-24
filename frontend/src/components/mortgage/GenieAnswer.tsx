@@ -16,12 +16,8 @@ import { GenieProofPanel } from './GenieAnswerProof';
 import { GenieAnswerFeedback } from './GenieAnswerFeedback';
 import { GenieRefusalCard } from './GenieRefusalCard';
 import { isWithheldGenieSource } from './genieRefusal';
-import {
-  buildFallbackFollowUps,
-  buildPinFromAnswer,
-  isTrustedGenieSource,
-  usePinnedInsights,
-} from '../../lib/pinnedInsights';
+import { isTrustedGenieSource, usePinnedInsights } from '../../lib/pinnedInsights';
+import { buildFallbackFollowUps, buildPinFromAnswer } from '../../lib/genieAnswerText';
 import { humanizeKey, pickPlan } from './GenieAnswer.logic';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { answerCohortFromActions } from '../../lib/genieCellLinks';
