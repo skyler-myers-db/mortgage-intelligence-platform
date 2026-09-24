@@ -20,6 +20,8 @@ export type SmsEncoding = 'GSM-7' | 'UCS-2';
 
 export interface SmsSegmentCount {
   encoding: SmsEncoding;
+  /** Characters as written (Unicode code points): what the approver reads. */
+  characters: number;
   /** Billed units: GSM-7 septets (extension characters count 2) or UTF-16 code units. */
   units: number;
   /** Messages the carrier sends; 0 for empty text. */
@@ -77,15 +79,27 @@ export function smsSegments(text: string): SmsSegmentCount {
   const units = costs.reduce((sum, cost) => sum + cost, 0);
   const { single, part } = LIMITS[encoding];
   const segments = packedSegments(costs, units, single, part);
-  return { encoding, units, segments, perSegment: segments > 1 ? part : single };
+  return { encoding, characters: characters.length, units, segments, perSegment: segments > 1 ? part : single };
 }
 
-/** The approver-facing line under the SMS bubble. */
-export function describeSmsSegments({ encoding, units, segments, perSegment }: SmsSegmentCount): string {
+/** What the limits count once a character costs two: GSM-7 septets, UCS-2 code units. */
+const UNIT_NAME: Record<SmsEncoding, string> = { 'GSM-7': 'septets', 'UCS-2': 'units' };
+
+/**
+ * The approver-facing line under the SMS bubble. The limits count units, not
+ * characters: while every character costs one unit the line says
+ * "characters"; once one costs two (a GSM-7 extension character such as `€`,
+ * or an emoji's surrogate pair) it reports the character count and names the
+ * unit the limit counts, so `€€€` reads "3 characters, counted as 6 of 160
+ * septets", never "6 of 160 characters".
+ */
+export function describeSmsSegments({ encoding, characters, units, segments, perSegment }: SmsSegmentCount): string {
   const count = `${segments} segment${segments === 1 ? '' : 's'}`;
-  const size = segments > 1
-    ? `${units} characters at ${perSegment} per segment`
-    : `${units} of ${perSegment} characters`;
+  const unit = UNIT_NAME[encoding];
+  const countedAs = segments > 1 ? `${units} ${unit} at ${perSegment} per segment` : `${units} of ${perSegment} ${unit}`;
+  const size = units === characters
+    ? (segments > 1 ? `${units} characters at ${perSegment} per segment` : `${units} of ${perSegment} characters`)
+    : `${characters} character${characters === 1 ? '' : 's'}, counted as ${countedAs}`;
   const scheme = encoding === 'UCS-2' ? 'UCS-2 (non-GSM characters)' : 'GSM-7';
   return `${count} · ${size} · ${scheme}`;
 }
