@@ -30,6 +30,9 @@ vi.mock('../AppContext', () => ({
 }));
 vi.mock('../HealthProvider', () => ({ useHealth: () => ({ health: null }) }));
 vi.mock('../FootprintProvider', () => ({ useFootprint: () => ({ usingFallback: false }) }));
+// The identity menu reads /api/session through TanStack Query; it is not what
+// this test is about (as in Topbar.search.test.tsx).
+vi.mock('./IdentityMenu', () => ({ IdentityMenu: () => null }));
 
 import { Topbar } from './Topbar';
 
