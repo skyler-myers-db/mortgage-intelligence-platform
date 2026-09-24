@@ -95,8 +95,18 @@ const budgets = {
   //     +5.70 / +1.70.
   //   - formatters: cached Intl formatters + <Timestamp>: +4.08 / +1.33.
   // ~5% headroom per policy.
-  initialJsBytes: 534 * KiB, // actual 508.65 (index + its static chunk)
-  initialJsGzipBytes: 167 * KiB, // actual 158.40
+  // Re-baselined 2026-09-24 for the wave-2 minor dependency batch (lane
+  // w2-build-currency, audit stack-10). No app code changed; each delta was
+  // measured by building the batch with one package held back:
+  //   - React 19.3.0 (react + react-dom; react-dom-client.production.js
+  //     grows 536 -> 625 KB unminified): +28.59 / +8.40 gzip / +7.22 br.
+  //     Wave 3 needs 19.3, and react-dom cannot be lazy.
+  //   - React Router 8.4.0 (adds @remix-run/route-pattern): +2.58 / +0.83 /
+  //     +0.66 br.
+  //   - Vite 8.3.0 (rolldown 1.0.3 -> 1.2.10 output): -3.35 raw.
+  // Measured: 536.47 / 166.58 (br 142.81); ~5% headroom per policy.
+  initialJsBytes: 564 * KiB, // actual 536.47 (index + its static chunk)
+  initialJsGzipBytes: 175 * KiB, // actual 166.58
   // Bumped 2026-06-11 for the re-audit #4 Buyer-Wow tranche: ⌘K command
   // palette (.cmdk*), portal evidence hover-card (.evidence-hovercard*),
   // sleek one-time KPI entrance (.kpi__value--enter / .spark__line--draw),

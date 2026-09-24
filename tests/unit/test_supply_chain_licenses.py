@@ -1,10 +1,17 @@
 import json
+import re
 from pathlib import Path
 
 from tests.fixtures.deploy_script import deploy_entrypoint_text
 
 ROOT = Path(__file__).resolve().parents[2]
 FRONTEND = ROOT / "frontend"
+CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+SUPPLY_CHAIN_AUDIT = ROOT / "docs" / "audits" / "supply-chain-audit.md"
+
+# `npm --prefix frontend audit --audit-level=<level>`, possibly wrapped across
+# lines in the doc's prose.
+_NPM_AUDIT_LEVEL = re.compile(r"npm\s+--prefix\s+frontend\s+audit\s+--audit-level=(\w+)")
 
 
 def _package_lock() -> dict:
@@ -115,3 +122,51 @@ def test_python_requirements_use_real_transitive_lockfile() -> None:
     assert deploy.index("import boto3, mlflow") < deploy.index(
         "DEPLOY_INVENTORY_PRINCIPAL="
     )
+
+
+def _npm_audit_gate_levels(text: str) -> set[str]:
+    """Every `--audit-level` the text runs as a gate.
+
+    A command whose line says "not a gate" is an advisory read (the doc keeps
+    `--audit-level=moderate` as a local read) and is left out.
+    """
+    levels: set[str] = set()
+    for match in _NPM_AUDIT_LEVEL.finditer(text):
+        line_end = text.find("\n", match.end())
+        rest_of_line = text[match.end() : line_end if line_end != -1 else len(text)]
+        if "not a gate" not in rest_of_line:
+            levels.add(match.group(1))
+    return levels
+
+
+def test_supply_chain_audit_doc_names_the_ci_npm_audit_threshold() -> None:
+    ci = CI_WORKFLOW.read_text(encoding="utf-8")
+    doc = SUPPLY_CHAIN_AUDIT.read_text(encoding="utf-8")
+
+    ci_levels = _npm_audit_gate_levels(ci)
+    assert ci_levels == {"high"}, f"ci.yml npm audit gate levels changed: {ci_levels}"
+    assert _npm_audit_gate_levels(doc) == ci_levels, (
+        "docs/audits/supply-chain-audit.md must name the npm audit threshold ci.yml "
+        "runs as its gate (mark any other level 'not a gate')"
+    )
+
+
+def test_supply_chain_audit_doc_carries_no_unconditional_zero_claim() -> None:
+    doc = SUPPLY_CHAIN_AUDIT.read_text(encoding="utf-8")
+
+    assert re.search(r"reports\s+zero\s+known\s+vulnerabilities", doc) is None
+    # The replacement is a dated result for each ecosystem.
+    assert re.search(r"Frontend `npm audit`, \d{4}-\d{2}-\d{2}", doc)
+    assert re.search(r"Backend `pip-audit`, \d{4}-\d{2}-\d{2}", doc)
+
+
+def test_every_ci_audit_ignore_is_named_in_the_supply_chain_audit_doc() -> None:
+    ci = CI_WORKFLOW.read_text(encoding="utf-8")
+    doc = SUPPLY_CHAIN_AUDIT.read_text(encoding="utf-8")
+
+    ignored = re.findall(r"--ignore-vuln\s+([A-Za-z0-9-]+)", ci)
+    assert ignored, "expected ci.yml's pip-audit step to carry its reviewed ignore"
+    for advisory in ignored:
+        assert advisory in doc, f"{advisory} is ignored in ci.yml but not named in the doc"
+    for review_date in re.findall(r"Review date: (\d{4}-\d{2}-\d{2})", ci):
+        assert review_date in doc, f"ci.yml review date {review_date} is not in the doc"
