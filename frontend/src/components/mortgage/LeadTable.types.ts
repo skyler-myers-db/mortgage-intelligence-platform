@@ -40,6 +40,20 @@ export interface LeadTableProps {
   onViewChange?: (view: LeadTableView) => void;
   /** Size the scroller to the viewport (floored at 480px) instead of the fixed 520px cap. */
   fillHeight?: boolean;
+  /**
+   * Controlled sort (audit shell-03): pass both to keep the sort outside the
+   * table (the Lead Queue keeps it in the URL). `null` is rank order.
+   * Without them the table keeps its own sort state (Segment Intelligence).
+   */
+  sort?: LeadTableSort | null;
+  onSortChange?: (next: LeadTableSort | null) => void;
+  /**
+   * Controlled expanded row: pass both to own it outside the table. Every
+   * expand path (row click, Enter, View receipt, an evidence chip in the
+   * review dialog) goes through `onExpandedChange`.
+   */
+  expandedId?: string | null;
+  onExpandedChange?: (borrowerId: string | null) => void;
 }
 
 export type RejectReasonCode =
@@ -62,3 +76,11 @@ export type SortKey =
   | 'confidence';
 
 export type SortDir = 'asc' | 'desc';
+
+/** A column sort; rank order (the server's) is the absence of one. */
+export type LeadTableSortKey = Exclude<SortKey, 'rank'>;
+
+export interface LeadTableSort {
+  key: LeadTableSortKey;
+  dir: SortDir;
+}

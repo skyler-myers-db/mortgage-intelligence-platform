@@ -44,7 +44,7 @@ import { approverGateReason } from './approverGate';
 import { ariaKeyShortcuts } from '../../lib/keymap';
 import { useSingleKeyShortcuts } from '../../lib/keymapPreference';
 import type { OutreachDraftResult } from '../../lib/apiTypes';
-import type { LeadTableProps, SortDir, SortKey } from './LeadTable.types';
+import type { LeadTableProps, LeadTableSort, SortDir, SortKey } from './LeadTable.types';
 import './LeadTable.css';
 
 export { buildLeadCsv } from './LeadTable.csv';
@@ -105,6 +105,10 @@ export function LeadTable({
   view = 'default',
   onViewChange,
   fillHeight = false,
+  sort: controlledSort,
+  onSortChange,
+  expandedId: controlledExpanded,
+  onExpandedChange,
 }: LeadTableProps) {
   'use no memo';
 
@@ -142,9 +146,16 @@ export function LeadTable({
   useLeadTableFillHeight(tableWrapRef, fillHeight);
   const columns = leadTableColumns(view);
   const columnCount = leadTableColumnCount(view);
-  const [expanded, setExpanded] = useState<string | null>(null);
-  const [sortKey, setSortKey] = useState<SortKey>('rank');
-  const [sortDir, setSortDir] = useState<SortDir>('desc');
+  // Sort and expanded row: owned by the parent when it passes the change
+  // handler (the Lead Queue keeps both in the URL, audit shell-03), else here.
+  const [ownExpanded, setOwnExpanded] = useState<string | null>(null);
+  const [ownSort, setOwnSort] = useState<LeadTableSort | null>(null);
+  const expanded = onExpandedChange ? controlledExpanded ?? null : ownExpanded;
+  const setExpanded = onExpandedChange ?? setOwnExpanded;
+  const activeSort = onSortChange ? controlledSort ?? null : ownSort;
+  const setSort = onSortChange ?? setOwnSort;
+  const sortKey: SortKey = activeSort?.key ?? 'rank';
+  const sortDir: SortDir = activeSort?.dir ?? 'desc';
   // Shared error surface: both the approval path and the sales-ops path
   // report into the single `.table-error` alert this shell renders.
   const [approvalError, setApprovalError] = useState<string | null>(null);
@@ -243,6 +254,8 @@ export function LeadTable({
     approvals,
     expanded,
     setExpanded,
+    // A restored row (the Lead Queue's `?row=`) starts as the cursor row.
+    initialCursorId: expanded,
     approval,
     approverGate,
     campaignBindingBlocked,
@@ -343,18 +356,10 @@ export function LeadTable({
 
   function toggleSort(key: SortKey) {
     if (key === 'rank') {
-      setSortKey('rank');
-      setSortDir('desc');
+      setSort(null);
       return;
     }
-    setSortKey((current) => {
-      if (current === key) {
-        setSortDir((dir) => (dir === 'desc' ? 'asc' : 'desc'));
-        return current;
-      }
-      setSortDir('desc');
-      return key;
-    });
+    setSort({ key, dir: activeSort?.key === key && sortDir === 'desc' ? 'asc' : 'desc' });
   }
 
   return (

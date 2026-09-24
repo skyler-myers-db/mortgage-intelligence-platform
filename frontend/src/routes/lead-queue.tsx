@@ -52,9 +52,11 @@ import {
   parseFunnelStage,
   parsePortfolioCriteria,
   parseSegmentCodes,
+  parseLeadTablePlace,
   parseLeadTableView,
   parseTargetLenderRef,
   searchParamsAfterSegmentRemoval,
+  searchParamsWithLeadTablePlace,
   searchParamsWithLeadTableView,
   segmentFilterChips,
   segmentFilterDisplayValue,
@@ -98,7 +100,8 @@ const EXPORT_WAITS_FOR_ROWS = 'Export waits for the rows of the current filters'
 export default function LeadQueue() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { search: queueSearch } = useLocation();
-  // `?view=` is a column preset, not a filter: it never enables Clear all.
+  // `?view=` (column preset) and the table place (`?sort=`, `?dir=`, `?row=`)
+  // are display state, not filters: they never enable Clear all.
   const filtersActive = hasLeadQueueFilters(searchParams);
   const footprint = useFootprint();
   const { canAccessAdmin } = useApp();
@@ -316,6 +319,18 @@ export default function LeadQueue() {
   const visibleLeads = useMemo(() => {
     return leadsData?.leads ?? [];
   }, [leadsData]);
+
+  // The reader's place (audit shell-03 / runtime-08): sort and expanded row
+  // live in the URL, never in the leads request. `?row=` counts only when it
+  // names a row of the SETTLED list (placeholder rows belong to the previous
+  // filters); otherwise it is ignored here and the next place write drops it.
+  // Restoring it re-opens the in-memory preview only: no borrower, proof or
+  // draft request.
+  const place = parseLeadTablePlace(searchParams);
+  const settledRowIds = leadsData && !leadsPlaceholderData
+    ? new Set(visibleLeads.map((lead) => lead.borrower_id))
+    : null;
+  const expandedRow = place.row !== null && settledRowIds?.has(place.row) ? place.row : null;
 
   const countyLoading = Boolean(countyFilter) && countyZipsQuery.isPending;
   // Export provenance (audit delivery-08): the rows' own refresh time from
@@ -675,6 +690,17 @@ export default function LeadQueue() {
             view={tableView}
             onViewChange={(next) => setSearchParams(searchParamsWithLeadTableView(searchParams, next))}
             fillHeight
+            // A sort (and Reset to rank) is a new history entry; expand and
+            // collapse replace the current one, so Back leaves the queue.
+            sort={place.sort}
+            onSortChange={(next) => setSearchParams(
+              searchParamsWithLeadTablePlace(searchParams, { sort: next, row: expandedRow }),
+            )}
+            expandedId={expandedRow}
+            onExpandedChange={(borrowerId) => setSearchParams(
+              searchParamsWithLeadTablePlace(searchParams, { row: borrowerId }),
+              { replace: true },
+            )}
           />
         </div>
       )}

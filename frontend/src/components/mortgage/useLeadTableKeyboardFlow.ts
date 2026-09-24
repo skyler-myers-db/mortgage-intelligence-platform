@@ -13,6 +13,7 @@
  * handlers; this hook only decides WHICH row and WHEN.
  */
 import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useNavigationType } from 'react-router';
 import type { LeadSummary } from '../../types';
 import type { DrawerSource } from '../AppContext';
 import type { OutreachDraftResult } from '../../lib/apiTypes';
@@ -34,6 +35,8 @@ export interface UseLeadTableKeyboardFlowInput {
   approvals: Record<string, 'approved' | 'rejected'>;
   expanded: string | null;
   setExpanded: (borrowerId: string | null) => void;
+  /** The cursor row at mount (a row restored from the URL); read once. */
+  initialCursorId?: string | null;
   approval: ApprovalActions;
   approverGate: string | null;
   campaignBindingBlocked: boolean;
@@ -106,6 +109,7 @@ export function useLeadTableKeyboardFlow({
   approvals,
   expanded,
   setExpanded,
+  initialCursorId = null,
   approval,
   approverGate,
   campaignBindingBlocked,
@@ -142,6 +146,7 @@ export function useLeadTableKeyboardFlow({
     scrollToIndex,
     statusOf: (lead) => effectiveStatus(lead) ?? 'pending',
     isPending,
+    initialCursorId,
   });
   const [toast, setToast] = useState<LeadDecisionToastState | null>(null);
   const [refocusTable, setRefocusTable] = useState(false);
@@ -215,6 +220,30 @@ export function useLeadTableKeyboardFlow({
     onCampaignBindingChange();
   });
 
+  // Every expand and collapse this flow makes goes through setExpandedRow, so
+  // a change it did not make is told apart: Back / Forward moving `?row=`
+  // (audit shell-03). A history move away from the row of an open INLINE
+  // review abandons that review exactly as collapsing the row does; never
+  // while its approval is on the wire (`cancel` refuses then).
+  const navigationType = useNavigationType();
+  const requestedExpandedRef = useRef(expanded);
+  const seenExpandedRef = useRef(expanded);
+  function setExpandedRow(borrowerId: string | null) {
+    requestedExpandedRef.current = borrowerId;
+    setExpanded(borrowerId);
+  }
+  useEffect(() => {
+    const previous = seenExpandedRef.current;
+    if (previous === expanded) return;
+    seenExpandedRef.current = expanded;
+    const ours = requestedExpandedRef.current === expanded;
+    requestedExpandedRef.current = expanded;
+    if (ours || navigationType !== 'POP') return;
+    if (!current || current.mode !== 'inline' || current.borrowerId !== previous) return;
+    const hadFocus = isInsideLeadApproveReview(document.activeElement, current.borrowerId);
+    if (review.cancel() && hadFocus) tableWrapRef.current?.focus({ preventScroll: true });
+  });
+
   function eligibleSelectedIds(): string[] {
     return approval.approvalEligibleIds.filter((id) => approval.selectedIds.has(id));
   }
@@ -283,11 +312,11 @@ export function useLeadTableKeyboardFlow({
       if (!review.cancel()) return;
     }
     cursor.setCursorId(lead.borrower_id);
-    setExpanded(isOpen ? null : lead.borrower_id);
+    setExpandedRow(isOpen ? null : lead.borrower_id);
   }
 
   function viewReceipt(borrowerId: string) {
-    setExpanded(borrowerId);
+    setExpandedRow(borrowerId);
     cursor.moveTo(borrowerId);
     focusWhenRendered(leadReceiptAnchorId(borrowerId));
   }
@@ -360,7 +389,7 @@ export function useLeadTableKeyboardFlow({
     if (!current || current.mode !== 'dialog') return;
     const borrowerId = current.borrowerId;
     review.moveInline();
-    setExpanded(borrowerId);
+    setExpandedRow(borrowerId);
     cursor.setCursorId(borrowerId);
     cursor.revealRow(borrowerId);
     whenInlineReviewChip(borrowerId, chipIndex, (chip) => {

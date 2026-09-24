@@ -15,7 +15,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { MemoryRouter, useNavigate } from 'react-router';
+import { MemoryRouter, useLocation, useNavigate } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -50,10 +50,21 @@ vi.mock('../components/mortgage/PropertyLookupPanel', () => ({
   PropertyLookupPanel: () => null,
 }));
 
+interface PlaceProps {
+  sort?: { key: string; dir: string } | null;
+  onSortChange?: (next: { key: 'equity'; dir: 'desc' } | null) => void;
+  expandedId?: string | null;
+  onExpandedChange?: (id: string | null) => void;
+}
+
+/** The place props the route last handed the (stubbed) LeadTable. */
+const tablePlace = vi.hoisted(() => ({ current: null as PlaceProps | null }));
+
 vi.mock('../components/mortgage/LeadTable', () => ({
-  LeadTable: ({ leads }: { leads: Array<{ borrower_id: string }> }) => (
-    <div data-testid="lead-table">{leads.map((lead) => lead.borrower_id).join(',')}</div>
-  ),
+  LeadTable: ({ leads, ...place }: { leads: Array<{ borrower_id: string }> } & PlaceProps) => {
+    tablePlace.current = place;
+    return <div data-testid="lead-table">{leads.map((lead) => lead.borrower_id).join(',')}</div>;
+  },
 }));
 
 vi.mock('../lib/api', () => ({
@@ -66,12 +77,17 @@ vi.mock('../lib/api', () => ({
 import LeadQueue from './lead-queue';
 
 let navigateTo: (url: string) => void = () => {};
+let currentSearch = '';
 
 function NavProbe() {
   const navigate = useNavigate();
+  const { search } = useLocation();
   useEffect(() => {
     navigateTo = (url: string) => void navigate(url);
   }, [navigate]);
+  useEffect(() => {
+    currentSearch = search;
+  }, [search]);
   return null;
 }
 
@@ -235,5 +251,38 @@ describe('LeadQueue cache identity', () => {
 
     expect(apiMocks.leadsPage).toHaveBeenCalledTimes(2);
     expect(tableText()).toBe('B-CHICAGO~IL');
+  });
+  // Audit shell-03 / runtime-08: the table place (sort, expanded row) rides
+  // in the URL but is not a filter. A sort (push) and an expand (replace)
+  // must reuse the leads cache entry: one GET /api/leads, no refetch, and the
+  // place never reaches the request.
+  it('reuses the leads cache entry when the sort or the expanded row changes', async () => {
+    const row = 'B-P5YP9ESW32R7Z';
+    apiMocks.leadsPage.mockImplementation(() => Promise.resolve({
+      ...rowsFor(undefined),
+      leads: [{ borrower_id: row }, { borrower_id: 'B-AAAAAAAAAAAA2' }],
+    }));
+    await mountAt('/lead-queue?state=IL');
+    expect(apiMocks.leadsPage).toHaveBeenCalledTimes(1);
+
+    await act(async () => tablePlace.current?.onSortChange?.({ key: 'equity', dir: 'desc' }));
+    await settle();
+    expect(currentSearch).toBe('?state=IL&sort=equity&dir=desc');
+    expect(tablePlace.current?.sort).toEqual({ key: 'equity', dir: 'desc' });
+
+    await act(async () => tablePlace.current?.onExpandedChange?.(row));
+    await settle();
+    expect(currentSearch).toBe(`?state=IL&sort=equity&dir=desc&row=${row}`);
+    expect(tablePlace.current?.expandedId).toBe(row);
+
+    expect(apiMocks.leadsPage).toHaveBeenCalledTimes(1);
+    const request = JSON.stringify(apiMocks.leadsPage.mock.calls[0].filter((arg: unknown) => !(arg instanceof AbortSignal)));
+    expect(request).not.toMatch(/equity|sort|B-P5YP9ESW32R7Z/);
+  });
+
+  it('ignores a ?row= that names no loaded row, with no extra read', async () => {
+    await mountAt('/lead-queue?row=B-ZZZZZZZZZZZZZ');
+    expect(tablePlace.current?.expandedId).toBeNull();
+    expect(apiMocks.leadsPage).toHaveBeenCalledTimes(1);
   });
 });

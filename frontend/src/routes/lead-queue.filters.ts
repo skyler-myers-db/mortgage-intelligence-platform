@@ -4,6 +4,8 @@ import { SEGMENT_DEFINITIONS } from '../lib/segmentMetadata';
 import type { SegmentCode } from '../types';
 import { HIGH_OPPORTUNITY_KPI_LABEL } from '../lib/opportunityScore';
 import type { LeadTableView } from '../components/mortgage/LeadTable.columns';
+import type { LeadTableSort, LeadTableSortKey, SortDir } from '../components/mortgage/LeadTable.types';
+import { QUEUE_MASKED_ID_RE } from '../lib/queueContext';
 
 // S1.3: codes, labels, and filter options derive from SEGMENT_DEFINITIONS
 // (the canonical presentation registry) so a segment added there appears in
@@ -401,6 +403,79 @@ export function searchParamsWithLeadTableView(
   const next = new URLSearchParams(searchParams);
   if (view === 'default') next.delete(LEAD_TABLE_VIEW_PARAM);
   else next.set(LEAD_TABLE_VIEW_PARAM, view);
+  return next;
+}
+
+/**
+ * The reader's PLACE in the ranked table (audit shell-03, runtime-08,
+ * tables-09 phase 1): the client-side sort and the expanded borrower, kept in
+ * the URL so Back from a dossier, a reload and "Return to results" land where
+ * the reader left. Like `?view=`, these are NOT filters: they never reach
+ * `/api/leads`, the leads query key, the Growth Agent proof key or the export
+ * filter string (the export states its own `rowOrder`), and they never enable
+ * Clear all.
+ *
+ *   sort  a sortable column key; rank order is the absence of `sort` and is
+ *         never written. An unknown value is dropped.
+ *   dir   `asc` or `desc` (default `desc`); ignored without `sort`.
+ *   row   the expanded borrower's masked id (`B-` + 13); anything else is
+ *         dropped. Restoring it only re-opens the in-memory preview: no
+ *         borrower, proof or draft request.
+ */
+export const LEAD_TABLE_PLACE_PARAMS = ['sort', 'dir', 'row'] as const;
+
+const LEAD_TABLE_SORT_KEYS: ReadonlySet<LeadTableSortKey> = new Set<LeadTableSortKey>([
+  'relationship',
+  'assignment',
+  'outreach',
+  'equity',
+  'rate',
+  'score',
+  'confidence',
+]);
+
+export interface LeadTablePlace {
+  sort: LeadTableSort | null;
+  row: string | null;
+}
+
+function isLeadTableSortKey(value: string): value is LeadTableSortKey {
+  return LEAD_TABLE_SORT_KEYS.has(value as LeadTableSortKey);
+}
+
+export function parseLeadTablePlace(searchParams: URLSearchParams): LeadTablePlace {
+  const rawSort = searchParams.get('sort')?.trim().toLowerCase() ?? '';
+  const dir: SortDir = searchParams.get('dir')?.trim().toLowerCase() === 'asc' ? 'asc' : 'desc';
+  const rawRow = searchParams.get('row')?.trim() ?? '';
+  return {
+    sort: isLeadTableSortKey(rawSort) ? { key: rawSort, dir } : null,
+    row: QUEUE_MASKED_ID_RE.test(rawRow) ? rawRow : null,
+  };
+}
+
+/**
+ * Write the table place into a copy of `searchParams`; every other param is
+ * kept. A patch names only what it changes: `sort: null` returns to rank
+ * order (drops `sort` and `dir`), `row: null` collapses.
+ */
+export function searchParamsWithLeadTablePlace(
+  searchParams: URLSearchParams,
+  patch: Partial<LeadTablePlace>,
+): URLSearchParams {
+  const next = new URLSearchParams(searchParams);
+  if (patch.sort !== undefined) {
+    if (patch.sort === null) {
+      next.delete('sort');
+      next.delete('dir');
+    } else {
+      next.set('sort', patch.sort.key);
+      next.set('dir', patch.sort.dir);
+    }
+  }
+  if (patch.row !== undefined) {
+    if (patch.row !== null && QUEUE_MASKED_ID_RE.test(patch.row)) next.set('row', patch.row);
+    else next.delete('row');
+  }
   return next;
 }
 

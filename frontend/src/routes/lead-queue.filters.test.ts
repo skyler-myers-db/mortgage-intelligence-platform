@@ -6,14 +6,17 @@ import {
   LOAN_PRODUCT_FILTER_OPTIONS,
   ORIGINATION_CHANNEL_FILTER_OPTIONS,
   outreachFilterDisplayValue,
+  parseLeadTablePlace,
   parseLeadTableView,
   parsePortfolioCriteria,
   parseSegmentCodes,
   portfolioFilterEntries,
+  searchParamsWithLeadTablePlace,
   searchParamsWithLeadTableView,
   segmentDisplayLabel,
   segmentFilterDisplayValue,
 } from './lead-queue.filters';
+import { hasLeadQueueFilters, searchParamsCleared } from './lead-queue.activeFilters';
 
 describe('lead queue effective workflow filters', () => {
   it('shows Approved when the approved funnel stage is driving the filter', () => {
@@ -148,5 +151,49 @@ describe('lead table column preset param (audit tables-05)', () => {
     expect(salesOps.toString()).toBe('state=IL&owner_link=Single-property+owner&view=sales-ops');
     expect(searchParamsWithLeadTableView(salesOps, 'default').toString()).toBe('state=IL&owner_link=Single-property+owner');
     expect(base.has('view')).toBe(false);
+  });
+});
+
+const ROW = 'B-P5YP9ESW32R7Z';
+
+describe('lead table place params (audit shell-03 / runtime-08 / tables-09)', () => {
+  it('parses a column sort with its direction and a masked expanded row', () => {
+    expect(parseLeadTablePlace(new URLSearchParams(`sort=equity&dir=asc&row=${ROW}`))).toEqual({
+      sort: { key: 'equity', dir: 'asc' },
+      row: ROW,
+    });
+    // Direction defaults to descending and is case-insensitive.
+    expect(parseLeadTablePlace(new URLSearchParams('sort=Rate')).sort).toEqual({ key: 'rate', dir: 'desc' });
+    expect(parseLeadTablePlace(new URLSearchParams('sort=score&dir=ASC')).sort).toEqual({ key: 'score', dir: 'asc' });
+  });
+
+  it('drops rank, unknown sort keys, a direction without a sort and anything but a masked id', () => {
+    expect(parseLeadTablePlace(new URLSearchParams('sort=rank&dir=asc'))).toEqual({ sort: null, row: null });
+    expect(parseLeadTablePlace(new URLSearchParams('sort=owner_name'))).toEqual({ sort: null, row: null });
+    expect(parseLeadTablePlace(new URLSearchParams('dir=asc'))).toEqual({ sort: null, row: null });
+    for (const row of ['B-123', 'b-p5yp9esw32r7z', 'lo@summit.example', `${ROW}X`, '../borrowers/B-P5YP9ESW32R7Z']) {
+      expect(parseLeadTablePlace(new URLSearchParams({ row })).row, row).toBeNull();
+    }
+  });
+
+  it('writes sort and dir together, returns to rank by deleting both, and keeps every other param', () => {
+    const base = new URLSearchParams('state=IL&view=sales-ops');
+    const sorted = searchParamsWithLeadTablePlace(base, { sort: { key: 'equity', dir: 'desc' } });
+    expect(sorted.toString()).toBe('state=IL&view=sales-ops&sort=equity&dir=desc');
+    const expanded = searchParamsWithLeadTablePlace(sorted, { row: ROW });
+    expect(expanded.toString()).toBe(`state=IL&view=sales-ops&sort=equity&dir=desc&row=${ROW}`);
+    expect(searchParamsWithLeadTablePlace(expanded, { sort: null }).toString()).toBe(`state=IL&view=sales-ops&row=${ROW}`);
+    expect(searchParamsWithLeadTablePlace(expanded, { row: null }).toString()).toBe('state=IL&view=sales-ops&sort=equity&dir=desc');
+    // Never a non-masked row.
+    expect(searchParamsWithLeadTablePlace(base, { row: 'B-123' }).has('row')).toBe(false);
+    expect(base.toString()).toBe('state=IL&view=sales-ops');
+  });
+
+  it('is not a filter: Clear all stays off for place-only URLs and keeps the place', () => {
+    const placeOnly = new URLSearchParams(`view=sales-ops&sort=equity&dir=asc&row=${ROW}`);
+    expect(hasLeadQueueFilters(placeOnly)).toBe(false);
+    expect(hasLeadQueueFilters(new URLSearchParams(`sort=equity&state=IL`))).toBe(true);
+    const cleared = searchParamsCleared(new URLSearchParams(`state=IL&sort=equity&dir=asc&row=${ROW}&view=sales-ops&approval_status=pending`));
+    expect(cleared.toString()).toBe(`sort=equity&dir=asc&row=${ROW}&view=sales-ops`);
   });
 });
