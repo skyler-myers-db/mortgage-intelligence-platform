@@ -496,11 +496,37 @@ async function _fetchOnce(
   return fetch(path, { ...init, signal, redirect: 'follow' });
 }
 
+/**
+ * Which transient failures a request may be re-sent after.
+ *
+ *   - 'default'       every retryable 503 / 429 (idempotent calls).
+ *   - 'rejected-only' only a 429 the backpressure middleware returned BEFORE
+ *                     the handler ran (reason rate_limited or
+ *                     dependency_saturated). Never a 503: a 503 can come from
+ *                     a handler that already acted, and a request without an
+ *                     Idempotency-Key (the Genie submit, which creates a
+ *                     Genie message) must not act twice.
+ */
+export type RetryPolicy = 'default' | 'rejected-only';
+
+export interface RequestOptions {
+  retry?: RetryPolicy;
+}
+
+const REJECTED_BEFORE_HANDLER: ReadonlySet<string> = new Set(['rate_limited', 'dependency_saturated']);
+
+function _mayResend(res: Response, parsed: Retryable503Parsed, retry: RetryPolicy): boolean {
+  if (!parsed.retryable) return false;
+  if (retry === 'default') return true;
+  return res.status === 429 && typeof parsed.reason === 'string' && REJECTED_BEFORE_HANDLER.has(parsed.reason);
+}
+
 async function _fetchWithRetry(
   path: string,
   init?: RequestInit,
   attempts = 3,
   signal?: AbortSignal,
+  retry: RetryPolicy = 'default',
 ): Promise<Response> {
   const method = (init?.method ?? 'GET').toUpperCase();
   let lastRes: Response | null = null;
@@ -509,7 +535,7 @@ async function _fetchWithRetry(
     const res = await _fetchOnce(path, method, init, signal);
     if (res.ok) return res;
     const parsed = await _parseRetryableBody(res);
-    if (!parsed.retryable) return res;
+    if (!_mayResend(res, parsed, retry)) return res;
     lastRes = res;
     if (i === attempts - 1) break;
     const delay = parsed.retryAfterMs ?? Math.min(2000, 200 * 2 ** i);
@@ -601,6 +627,7 @@ async function _requestJson<T>(
   path: string,
   init: RequestInit | undefined,
   signal: AbortSignal | undefined,
+  retry: RetryPolicy = 'default',
 ): Promise<{ data: T; headers: Headers }> {
   const requestPath = apiPath(path);
   const method = (init?.method ?? 'GET').toUpperCase();
@@ -609,7 +636,7 @@ async function _requestJson<T>(
   if (isSessionExpired()) throw _sessionExpiredError(requestPath, method);
   let res: Response;
   try {
-    res = await _fetchWithRetry(requestPath, init, 3, signal);
+    res = await _fetchWithRetry(requestPath, init, 3, signal, retry);
   } catch (err) {
     throw _wrapFetchError(err, requestPath);
   }
@@ -639,8 +666,9 @@ export async function postJson<T, B>(
   body: B,
   signal?: AbortSignal,
   extraHeaders?: Record<string, string>,
+  options?: RequestOptions,
 ): Promise<T> {
-  return (await _requestJson<T>(path, _jsonBody('POST', body, extraHeaders), signal)).data;
+  return (await _requestJson<T>(path, _jsonBody('POST', body, extraHeaders), signal, options?.retry)).data;
 }
 
 export async function putJson<T, B>(path: string, body: B, signal?: AbortSignal): Promise<T> {
