@@ -1,7 +1,7 @@
 import { Fragment, type ReactNode, type RefObject } from 'react';
-import type { GenieLiveProgress } from '../../lib/api';
 import { drawerForAsset } from '../../lib/drawerSources';
 import type { GenieChatMessage } from '../../lib/genieConversationStore';
+import type { GenieInFlightTurn, GenieTurnNote as GenieTurnNoteShape } from '../../lib/genieInFlightTurn';
 import type { GenieActionSuggestion, GenieAnswer as GenieAnswerShape } from '../../types';
 import { Icon } from '../Icon';
 import { Chip, EvidenceChip } from '../Primitives';
@@ -13,6 +13,7 @@ import {
 } from './GenieChat.helpers';
 import { GenieProgress } from './GenieProgress';
 import { GenieTurnActions } from './GenieTurnActions';
+import { GENIE_RESUMING_LABEL, GenieStopRow, GenieTurnNote } from './GenieTurnNote';
 import './GenieTurnActions.css';
 
 /**
@@ -22,35 +23,25 @@ import './GenieTurnActions.css';
  * controls (audit 2026-09-21 `genie-03`) have room to land; the bubble markup
  * and class names are unchanged. The controls add per-bubble actions (Edit
  * under a question; Retry under a failed answer, Regenerate under an answered
- * one), Stop under the progress card, and the stopped-turn note.
+ * one), Stop under the progress card, and the stopped / interrupted notes
+ * (GenieTurnNote).
  *
- * A STOPPED turn is panel-local: the user asked, pressed Stop, and the reply
- * is discarded. It is not a Genie answer, so it is never written to the
- * shared transcript store (where it would render as an answer on
- * `/ask-genie`, be pinnable, and survive a reload it does not deserve). It is
- * remembered here at the turn index it happened, so it stays in order when
- * later turns land under it.
+ * The pending turn and the notes come from the in-flight turn store
+ * (`runtime-01`), whichever surface started the turn: a turn asked on
+ * `/ask-genie` shows here too. A note is placed at the turn index it happened,
+ * so it stays in order when later turns land under it.
  */
-
-export interface StoppedTurn {
-  /** Number of settled turns that existed when the turn was stopped. */
-  atTurnIndex: number;
-  question: string;
-}
 
 export interface GenieChatBodyProps {
   open: boolean;
   bodyRef: RefObject<HTMLDivElement | null>;
   lastAnswerRef: RefObject<HTMLDivElement | null>;
   messages: GenieChatMessage[];
-  stoppedTurns: readonly StoppedTurn[];
-  pendingQuestion: string | null;
-  /** A live ask is in flight (the only kind of turn Stop applies to). */
-  asking: boolean;
+  notes: readonly GenieTurnNoteShape[];
+  /** The tab's in-flight Genie turn (the only kind of turn Stop applies to). */
+  inFlight: GenieInFlightTurn | null;
   /** An ask OR a governed action is in flight. */
   typing: boolean;
-  liveProgress: GenieLiveProgress | null;
-  askStartedAt: number | null;
   busyReason: string | null;
   /** Starter prompts for the empty state. */
   starters: string[];
@@ -60,49 +51,8 @@ export interface GenieChatBodyProps {
   /** Load a question into the composer (Edit). Never sends. */
   onEdit: (question: string) => void;
   onStop: () => void;
-}
-
-function StoppedTurnNote({
-  note,
-  typing,
-  busyReason,
-  onEdit,
-  onAsk,
-}: {
-  note: StoppedTurn;
-  typing: boolean;
-  busyReason: string | null;
-  onEdit: (question: string) => void;
-  onAsk: (question: string) => void;
-}) {
-  return (
-    <>
-      <div className="genie__msg genie__msg--user">{note.question}</div>
-      {/* "Ask again", not "Regenerate": a stopped turn has no answer. */}
-      <GenieTurnActions
-        placement="question"
-        question={note.question}
-        onEdit={onEdit}
-        onAskAgain={onAsk}
-        disabled={typing}
-        disabledReason={busyReason}
-      />
-      {/* Not a live region: the panel's one persistent announcer (a11y-06)
-          already said "Stopped" when it happened. The server-side caveat is
-          visible text, not a tooltip, so keyboard, touch and screen-reader
-          users get it too. */}
-      <div className="genie__msg genie__msg--ai genie__msg--stopped">
-        <div className="bubble">
-          <Chip variant="neutral">Stopped</Chip>
-          <span>
-            Stopped before the answer arrived. Genie may still finish this turn on the server; that reply is
-            discarded and never shown, but Genie may keep the question as context for the next turn in this
-            thread.
-          </span>
-        </div>
-      </div>
-    </>
-  );
+  /** Speak a copy confirmation through the panel's one announcer. */
+  onAnnounce: (text: string) => void;
 }
 
 /** Retry for a failed turn, Regenerate for an answered one; nothing else. */
@@ -118,29 +68,27 @@ export function GenieChatBody({
   bodyRef,
   lastAnswerRef,
   messages: msgs,
-  stoppedTurns,
-  pendingQuestion,
-  asking,
+  notes,
+  inFlight,
   typing,
-  liveProgress,
-  askStartedAt,
   busyReason,
   starters,
   onAsk,
   onAction,
   onEdit,
   onStop,
+  onAnnounce,
 }: GenieChatBodyProps) {
   const lastAnswerIndex = msgs.reduce((last, m, i) => (m.who === 'ai' ? i : last), -1);
   const reask = (question: string) => onAsk(question, undefined);
-  const stoppedNote = (note: StoppedTurn, key: string) => (
-    <StoppedTurnNote
+  const turnNote = (note: GenieTurnNoteShape, key: string) => (
+    <GenieTurnNote
       key={key}
       note={note}
-      typing={typing}
-      busyReason={busyReason}
+      disabled={typing}
+      disabledReason={busyReason}
       onEdit={onEdit}
-      onAsk={reask}
+      onAskAgain={reask}
     />
   );
 
@@ -149,11 +97,11 @@ export function GenieChatBody({
   let turnIndex = 0;
   msgs.forEach((m, i) => {
     // A turn starts at its question, or at an answer with no question (a
-    // governed action result); stopped notes are placed at turn starts.
+    // governed action result); notes are placed at turn starts.
     const startsTurn = m.who === 'user' || i === 0 || msgs[i - 1].who !== 'user';
     if (startsTurn) {
-      stoppedTurns.forEach((note, n) => {
-        if (note.atTurnIndex === turnIndex) transcript.push(stoppedNote(note, `stopped-${n}`));
+      notes.forEach((note, n) => {
+        if (note.atTurnIndex === turnIndex) transcript.push(turnNote(note, `note-${n}`));
       });
     }
     if (m.who === 'user') {
@@ -181,9 +129,9 @@ export function GenieChatBody({
             question={question}
             onFollowUp={(q, followUpConversationId) => onAsk(q, followUpConversationId)}
             followUpDisabledReason={busyReason}
-            announce={false}
             onAction={(action) => onAction(action, m.payload)}
             onEditQuestion={onEdit}
+            onAnnounce={onAnnounce}
             dense
           />
         </div>
@@ -247,46 +195,35 @@ export function GenieChatBody({
   });
   // Notes after the last settled turn (and any whose index outlived an
   // evicted turn) close the transcript.
-  stoppedTurns.forEach((note, n) => {
-    if (note.atTurnIndex >= turnIndex) transcript.push(stoppedNote(note, `stopped-${n}`));
+  notes.forEach((note, n) => {
+    if (note.atTurnIndex >= turnIndex) transcript.push(turnNote(note, `note-${n}`));
   });
 
   return (
     <div className="genie__body" ref={bodyRef}>
       {transcript}
-      {pendingQuestion && (
-        <div className="genie__msg genie__msg--user">{pendingQuestion}</div>
+      {inFlight?.revealed && (
+        <div className="genie__msg genie__msg--user">{inFlight.question}</div>
       )}
       {typing && (
         <div className="genie__msg genie__msg--ai">
           <div className="bubble">
+            {/* A resumed turn keeps its question hidden until the first
+                progress poll proves it is still this actor's turn. */}
+            {inFlight && !inFlight.revealed && <p className="muted fs-11">{GENIE_RESUMING_LABEL}</p>}
             <GenieProgress
               dense
-              progress={liveProgress}
-              startedAt={askStartedAt}
-              announce={false}
+              progress={inFlight?.progress ?? null}
+              startedAt={inFlight?.startedAt ?? null}
               paused={!open}
             />
             {/* Stop (genie-03, client-only): abandons the client turn and
                 gives the question back. Governed actions are not stoppable. */}
-            {asking && (
-              <div className="genie__turn-controls">
-                <button
-                  type="button"
-                  className="btn btn--ghost btn--sm"
-                  onClick={onStop}
-                  aria-label="Stop this Genie turn"
-                  title="Stop waiting for this answer. Genie may still finish it on the server; the reply is discarded."
-                >
-                  <Icon name="cross" size={12} />
-                  Stop
-                </button>
-              </div>
-            )}
+            {inFlight && <GenieStopRow onStop={onStop} />}
           </div>
         </div>
       )}
-      {msgs.length === 0 && stoppedTurns.length === 0 && !typing && (
+      {msgs.length === 0 && notes.length === 0 && !typing && (
         <div className="genie-chat__samples">
           <div className="surface surface--inset">
             <div className="surface__body genie-empty">

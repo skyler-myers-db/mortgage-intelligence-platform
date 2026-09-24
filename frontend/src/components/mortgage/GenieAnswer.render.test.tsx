@@ -57,20 +57,35 @@ describe('GenieAnswer render surfaces', () => {
     container.remove();
   });
 
-  it('announces the metric and narrative without wrapping interactive answer controls', () => {
+  it('mounts no live region of its own: the surface announcer says "Answer ready" (a11y-06)', () => {
     act(() => root.render(
       <GenieAnswer payload={payload()} question="Q" onFollowUp={() => {}} />,
     ));
 
-    const status = container.querySelector<HTMLElement>('[role="status"]');
-    expect(status).not.toBeNull();
-    expect(status?.classList.contains('sr-only')).toBe(true);
-    expect(status?.getAttribute('aria-live')).toBe('polite');
-    expect(status?.getAttribute('aria-atomic')).toBe('true');
-    expect(status?.textContent).toContain('Genie answer ready.');
-    expect(status?.textContent).toContain('5.25 years');
-    expect(status?.textContent).toContain('The average loan age is 5.25 years.');
-    expect(status?.querySelector('button')).toBeNull();
+    // A region mounted already populated is unreliably spoken, and it would
+    // be a second speaker next to the surface's persistent announcer.
+    expect(container.querySelector('[role="status"], [aria-live]')).toBeNull();
+    expect(container.textContent).not.toContain('Genie answer ready.');
+    // The answer itself is on screen.
+    expect(container.textContent).toContain('5.25 years');
+    expect(container.textContent).toContain('The average loan age is 5.25 years.');
+  });
+
+  it('hands a copy confirmation to the surface announcer through onAnnounce', async () => {
+    const onAnnounce = vi.fn();
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: vi.fn().mockResolvedValue(undefined) },
+    });
+    act(() => root.render(
+      <GenieAnswer payload={payload()} question="Q" onFollowUp={() => {}} onAnnounce={onAnnounce} />,
+    ));
+    const copy = Array.from(container.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Copy answer');
+    await act(async () => copy?.click());
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+    expect(onAnnounce).toHaveBeenCalledWith('Answer copied');
+    expect(container.querySelector('[role="status"], [aria-live]')).toBeNull();
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined });
   });
 
   it.each(['Break this down by state', 'Which ZIPs lead'])(

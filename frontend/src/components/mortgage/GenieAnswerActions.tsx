@@ -40,6 +40,22 @@ export function actionPreview(action: GenieActionSuggestion): string[] {
   return preview;
 }
 
+/**
+ * The confirmed action as a promise that settles when the action has: a
+ * handler that returns nothing resolves at once, and a synchronous throw
+ * becomes a rejection, exactly as `await` in an async handler did. Outside
+ * the component so the confirm handler needs no try statement (audit
+ * 2026-09-21 `runtime-03`: a try/finally stops the React Compiler).
+ */
+function runConfirmedAction(
+  onAction: (action: GenieActionSuggestion) => void | Promise<void>,
+  action: GenieActionSuggestion,
+): Promise<void> {
+  return new Promise<void>((resolve) => {
+    resolve(onAction(action));
+  });
+}
+
 export function GenieActions({
   actions,
   onAction,
@@ -77,14 +93,11 @@ export function GenieActions({
                   className="btn btn--primary btn--sm"
                   disabled={Boolean(pendingActionId)}
                   aria-label={`Confirm ${action.label}`}
-                  onClick={async () => {
+                  onClick={() => {
                     setPendingActionId(action.id);
                     setConfirmActionId(null);
-                    try {
-                      await onAction(action);
-                    } finally {
-                      setPendingActionId(null);
-                    }
+                    // Pessimistic: "Recording…" holds until the action settles.
+                    void runConfirmedAction(onAction, action).finally(() => setPendingActionId(null));
                   }}
                 >
                   {pending ? 'Recording…' : 'Confirm'}

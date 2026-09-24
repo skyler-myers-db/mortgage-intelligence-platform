@@ -7,6 +7,8 @@ import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../../lib/api';
+import { __resetGenieTurnStoreForTests } from '../../lib/genieInFlightTurn';
+import { __resetGenieAnnouncerForTests } from './useGenieAnnouncer';
 import type { GenieAnswer, GenieStartResult } from '../../types';
 
 const mocks = vi.hoisted(() => ({
@@ -142,6 +144,9 @@ describe('floating Genie conversation continuity', () => {
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
+    // The turn lives in a module-level store that outlives the panel.
+    __resetGenieTurnStoreForTests();
+    __resetGenieAnnouncerForTests();
   });
 
   function mount() {

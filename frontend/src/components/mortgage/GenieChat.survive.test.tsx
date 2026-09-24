@@ -20,7 +20,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GenieLiveProgress, GenieSubmitResult } from '../../lib/api';
 import { GENIE_CONVERSATION_RESET_EVENT } from '../../lib/genieConversation';
 import { clearGenieTurns } from '../../lib/genieConversationStore';
+import { __resetGenieTurnStoreForTests } from '../../lib/genieInFlightTurn';
 import { getGenieTurnStatus } from '../../lib/genieTurnStatus';
+import { __resetGenieAnnouncerForTests } from './useGenieAnnouncer';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import type { GenieAnswer, GenieStartResult } from '../../types';
 
@@ -198,6 +200,9 @@ describe('floating Genie survivability', () => {
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
+    // The turn lives in a module-level store that outlives the panel.
+    __resetGenieTurnStoreForTests();
+    __resetGenieAnnouncerForTests();
     clearGenieTurns();
   });
 
@@ -344,6 +349,39 @@ describe('floating Genie survivability', () => {
     expect(scrollIntoView).toHaveBeenCalledTimes(1);
     expect(scrollIntoView.mock.calls[0][0]).toBe(answers[answers.length - 1]);
     expect(scrollIntoView.mock.calls[0][1]).toEqual({ block: 'start', behavior: 'auto' });
+  });
+
+  it('a remount mid-turn (a boundary recovering the panel) shows the same pending turn and lands it once', async () => {
+    render();
+    const turn = await startLiveTurn('How many borrowers are in the money?');
+
+    // The whole panel unmounts (an error boundary resetting it, or the shell
+    // re-rendering it): the store owns the turn, so nothing is aborted.
+    act(() => root.unmount());
+    expect(turn.signal.aborted).toBe(false);
+    root = createRoot(container);
+    render();
+
+    expect(container.querySelector('.genie__msg--user')?.textContent).toBe('How many borrowers are in the money?');
+    expect(container.querySelector('.genie-progress')).not.toBeNull();
+    expect(askButton().disabled).toBe(true);
+    expect(container.querySelector('button[aria-label="Stop this Genie turn"]')).not.toBeNull();
+
+    await act(async () => {
+      turn.progress.resolve(TERMINAL);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await waitUntil(() => mocks.genieComplete.mock.calls.length === 1);
+    await act(async () => {
+      turn.complete.resolve(answer());
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await waitUntil(() => container.textContent?.includes('124,946 borrowers') ?? false);
+    expect(mocks.genieSubmit).toHaveBeenCalledTimes(1);
+    expect(mocks.genieComplete).toHaveBeenCalledTimes(1);
+    expect(container.querySelectorAll('.genie__msg--ai .genie-answer')).toHaveLength(1);
+    expect(container.querySelectorAll('.genie__msg--user')).toHaveLength(1);
+    expect(announcer().textContent).toBe('Answer ready');
   });
 
   it('still aborts the turn and clears everything on an actor-boundary reset (fail-closed)', async () => {
@@ -524,6 +562,53 @@ describe('floating Genie survivability', () => {
   it('falls back to the FAB only when there is no topbar toggle', async () => {
     topbarToggle = false;
     expect(await closeAfterOpenerLeft()).toBe(fab());
+  });
+
+  it('badges a governed action that failed while the panel was closed as a result, not an answer', async () => {
+    render();
+    mocks.genieSubmit.mockResolvedValueOnce({
+      completed: true,
+      response: answer({
+        actions: [{
+          id: 'save-1',
+          label: 'Save reviewed cohort',
+          action_type: 'save_borrowers',
+          description: 'Create the reviewed Lead Queue handoff.',
+        }],
+      }),
+    });
+    act(() => setInputValue(input(), 'Find the reviewed cohort'));
+    await act(async () => {
+      askButton().click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await waitUntil(() => container.textContent?.includes('Save reviewed cohort') ?? false);
+    const result = deferred<{ ok: boolean; action_type: string; message: string }>();
+    mocks.genieAction.mockReturnValueOnce(result.promise);
+    const click = async (label: string) => {
+      const button = container.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
+      if (!button) throw new Error(`button not rendered: ${label}`);
+      await act(async () => {
+        button.click();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    };
+    await click('Run Save reviewed cohort');
+    await click('Confirm Save reviewed cohort');
+    await waitUntil(() => mocks.genieAction.mock.calls.length === 1);
+
+    // The user closes the panel while the action runs; it then fails.
+    setOpen(false);
+    await act(async () => {
+      result.resolve({ ok: false, action_type: 'save_borrowers', message: 'the reviewed cohort is empty' });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await waitUntil(() => container.textContent?.includes('Action failed: the reviewed cohort is empty') ?? false);
+
+    expect(fab().classList.contains('is-genie-ready')).toBe(true);
+    expect(document.getElementById('genie-launcher-status')?.textContent).toBe(
+      'Genie finished your question. Open Genie to see the result.',
+    );
   });
 
   it('announces through one persistent region outside the panel, never from inside it (a11y-06)', async () => {

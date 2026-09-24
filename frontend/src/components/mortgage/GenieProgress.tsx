@@ -45,9 +45,9 @@ function awaitingCompletion(progress: GenieLiveProgress | null | undefined): boo
   return Boolean(progress?.terminal && !progress.failed);
 }
 
-/** The one line that names what is happening right now. Shared with the
- * floating panel's persistent screen-reader announcer so both say the same
- * thing. */
+/** The one line that names what is happening right now. Shared with each
+ * surface's persistent screen-reader announcer (useGenieAnnouncer) so the
+ * card and the announcer say the same thing. */
 export function genieProgressLabel(
   progress: GenieLiveProgress | null | undefined,
   status?: string | null,
@@ -114,29 +114,17 @@ function ElapsedTicker({ startedAt, paused }: { startedAt: number; paused: boole
 }
 
 /**
- * Stage-change announcer. Mounts EMPTY and is filled by an effect, because a
- * live region inserted already populated is unreliably spoken; after that the
- * text node only changes when the stage label changes, so a ticking clock or
- * a growing trace never re-announces anything.
+ * The progress card mounts NO live region (audit 2026-09-21 `a11y-06`): each
+ * Genie surface owns one persistent announcer (useGenieAnnouncer) that speaks
+ * the stage label from `genieProgressLabel`, only when it changes. A region
+ * inside this card would be a second speaker, and one mounted with the card
+ * is unreliably spoken.
  */
-function StageAnnouncer({ label }: { label: string }) {
-  const [announced, setAnnounced] = useState('');
-  useEffect(() => {
-    setAnnounced(label);
-  }, [label]);
-  return (
-    <div className="sr-only" role="status" aria-live="polite" data-genie-announcer="progress">
-      {announced}
-    </div>
-  );
-}
-
 export function GenieProgress({
   dense = false,
   status = null,
   progress = null,
   startedAt = null,
-  announce = true,
   paused = false,
 }: {
   dense?: boolean;
@@ -146,10 +134,6 @@ export function GenieProgress({
   progress?: GenieLiveProgress | null;
   /** Epoch ms when the ask started; renders the elapsed ticker when set. */
   startedAt?: number | null;
-  /** Announce stage CHANGES to screen readers from inside this card. The
-   * floating panel passes `false`: its own persistent announcer lives outside
-   * the panel so it still speaks while the panel is closed. */
-  announce?: boolean;
   /** Stop the elapsed clock's interval while the card is not visible (the
    * floating panel closed mid-turn). The turn itself is untouched; the clock
    * catches up when the card is shown again. */
@@ -190,9 +174,8 @@ export function GenieProgress({
   return (
     // No role="status" on the card: status regions are implicitly atomic, so
     // the ticker, the trace and the SQL preview were all re-read on every
-    // change. Only <StageAnnouncer> is live.
+    // change. The surface's own announcer speaks the stage label.
     <div className={`genie-progress ${dense ? 'genie-progress--dense' : ''}`}>
-      {announce ? <StageAnnouncer label={label} /> : null}
       <div className="genie-progress__head">
         <Icon name="sparkle" size={12} className="icon-accent" />
         <span className="genie-progress__label">{label}</span>

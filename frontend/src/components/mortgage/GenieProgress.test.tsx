@@ -211,20 +211,13 @@ describe('GenieProgress: live region discipline (genie-v1 / a11y-06)', () => {
   const liveRegions = () =>
     Array.from(container.querySelectorAll<HTMLElement>('[role="status"], [aria-live]'));
 
-  function observe(regions: HTMLElement[]): MutationObserver {
-    const observer = new MutationObserver(() => undefined);
-    for (const region of regions) {
-      observer.observe(region, { childList: true, characterData: true, subtree: true });
-    }
-    return observer;
-  }
-
-  it('keeps the ticker, the trace and the SQL out of every live region', () => {
+  it('mounts no live region: the ticker, the trace, the SQL and the stages are never spoken from here', () => {
     act(() => root.render(<GenieProgress progress={LIVE_EXECUTING} startedAt={Date.now()} />));
 
-    const regions = liveRegions();
-    expect(regions).toHaveLength(1);
-    // The card itself is not a (implicitly atomic) status region any more.
+    // Each surface's ONE announcer (useGenieAnnouncer) speaks the stage label;
+    // a region in the card would be a second speaker (a11y-06).
+    expect(liveRegions()).toHaveLength(0);
+    // The card itself is not a (implicitly atomic) status region either.
     expect(container.querySelector('.genie-progress')!.getAttribute('role')).toBeNull();
     const ticker = container.querySelector('.genie-progress__elapsed')!;
     expect(ticker.getAttribute('aria-hidden')).toBe('true');
@@ -236,13 +229,13 @@ describe('GenieProgress: live region discipline (genie-v1 / a11y-06)', () => {
     ]) {
       expect(container.querySelector(selector)!.closest('[role="status"], [aria-live]')).toBeNull();
     }
-    expect(regions[0].textContent).toBe('Running the governed query');
+    // The label the announcer shares is on screen.
+    expect(container.querySelector('.genie-progress__label')!.textContent).toBe(genieProgressLabel(LIVE_EXECUTING));
   });
 
-  it('does not mutate the live region while the clock ticks', () => {
+  it('the clock ticks with no live region anywhere in the card', () => {
     const startedAt = Date.now();
     act(() => root.render(<GenieProgress progress={LIVE_EXECUTING} startedAt={startedAt} />));
-    const observer = observe(liveRegions());
     const ticker = container.querySelector('.genie-progress__elapsed')!;
     const before = ticker.textContent;
 
@@ -250,11 +243,10 @@ describe('GenieProgress: live region discipline (genie-v1 / a11y-06)', () => {
       vi.advanceTimersByTime(5_000);
     });
 
-    // The clock really moved, so a quiet region is not a frozen component.
+    // The clock really moved, and it still sits in no live region.
     expect(ticker.textContent).not.toBe(before);
     expect(ticker.textContent).toBe('5s');
-    expect(observer.takeRecords()).toHaveLength(0);
-    observer.disconnect();
+    expect(liveRegions()).toHaveLength(0);
   });
 
   it('stops the clock while paused (card hidden) and catches up on resume', () => {
@@ -280,39 +272,18 @@ describe('GenieProgress: live region discipline (genie-v1 / a11y-06)', () => {
     expect(ticker().textContent).toBe('6s');
   });
 
-  it('announces a stage CHANGE exactly once, and nothing for trace or SQL growth', () => {
-    const startedAt = Date.now();
-    act(() => root.render(<GenieProgress progress={LIVE_EXECUTING} startedAt={startedAt} />));
-    const region = liveRegions()[0];
-    const observer = observe([region]);
-
-    act(() =>
-      root.render(
-        <GenieProgress
-          startedAt={startedAt}
-          progress={{
-            ...LIVE_EXECUTING,
-            reasoning_trace: [
-              ...LIVE_EXECUTING.reasoning_trace,
-              { kind: 'execute', content: 'Executed the governed query.' },
-            ],
-            sql_preview: 'SELECT state, COUNT(*) FROM mip.gold.borrower_360 GROUP BY state',
-          }}
-        />,
-      ),
-    );
-    expect(observer.takeRecords()).toHaveLength(0);
-
-    act(() => root.render(<GenieProgress startedAt={startedAt} progress={LIVE_TERMINAL} />));
-    expect(region.textContent).toBe(GENIE_VERIFY_WAIT_LABEL);
-    expect(observer.takeRecords().length).toBeGreaterThan(0);
-    observer.disconnect();
-  });
-
-  it('renders no live region at all when the surface owns the announcer', () => {
-    act(() =>
-      root.render(<GenieProgress progress={LIVE_EXECUTING} startedAt={Date.now()} announce={false} />),
-    );
-    expect(liveRegions()).toHaveLength(0);
+  it('keeps the shared label stable while only the trace and SQL grow, and changes it with the stage', () => {
+    // The announcer re-speaks only when this label string changes
+    // (useGenieAnnouncer.test.tsx pins the region side).
+    const grown: GenieLiveProgress = {
+      ...LIVE_EXECUTING,
+      reasoning_trace: [
+        ...LIVE_EXECUTING.reasoning_trace,
+        { kind: 'execute', content: 'Executed the governed query.' },
+      ],
+      sql_preview: 'SELECT state, COUNT(*) FROM mip.gold.borrower_360 GROUP BY state',
+    };
+    expect(genieProgressLabel(grown)).toBe(genieProgressLabel(LIVE_EXECUTING));
+    expect(genieProgressLabel(LIVE_TERMINAL)).toBe(GENIE_VERIFY_WAIT_LABEL);
   });
 });
