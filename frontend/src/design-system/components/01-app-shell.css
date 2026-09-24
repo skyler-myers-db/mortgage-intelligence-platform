@@ -442,6 +442,10 @@
   grid-area: main;
   min-width: 0;
   overflow-y: auto;
+  /* Reserve the classic scrollbar's lane even while a route is too short to
+     scroll, so content does not shift sideways when a skeleton resolves into
+     a scrolling page (Windows classic scrollbars; audit css-09). */
+  scrollbar-gutter: stable;
   position: relative;
   transition: padding-right var(--dur-base) var(--ease);
   /* Establish an inline-size container so .kpi-row, .seg-grid and

@@ -56,9 +56,13 @@
   border-radius: var(--r-sm);
   padding: 1px var(--sp-1);
 }
+/* Overlay scrollers contain their own overscroll (audit css-09): wheel and
+   touch scrolling at the end of the list no longer chain into the page
+   behind the palette, drawer, Genie panel, filter menu or Console. */
 .cmdk__list {
   flex: 1;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: var(--sp-2);
 }
 .cmdk__group + .cmdk__group { margin-block-start: var(--sp-2); }
@@ -128,7 +132,7 @@
   padding: var(--sp-4) var(--sp-5); border-bottom: 1px solid var(--line-1);
   display: flex; align-items: center; gap: var(--sp-3);
 }
-.drawer__body { flex: 1; overflow-y: auto; padding: var(--sp-5); }
+.drawer__body { flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: var(--sp-5); }
 .drawer__close {
   margin-left: auto;
   width: 28px; height: 28px; border-radius: 6px;

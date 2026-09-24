@@ -61,7 +61,7 @@
      the segmented controls behind an inner horizontal scroll
      (2026-09-21 audit visual-02 / shell-02 / responsive-01). */
   grid-template-columns: minmax(0, 1fr);
-  flex: 1; overflow: auto;
+  flex: 1; overflow: auto; overscroll-behavior: contain;
 }
 /* Direct labels only (own row, or the label/switch `.row`): the descendant
    form of this rule also restyled the field labels of the PropertyLookupPanel
@@ -346,8 +346,8 @@
   margin-bottom: 24px; gap: 24px;
   flex-wrap: wrap;
 }
-.proto-hero h1 { font-size: var(--fs-hero); font-weight: 600; letter-spacing: -0.02em; margin: 0 0 4px; line-height: var(--lh-tight); }
-.proto-hero .lede { color: var(--text-2); font-size: 14px; max-width: 640px; margin: 0; }
+.proto-hero h1 { font-size: var(--fs-hero); font-weight: 600; letter-spacing: -0.02em; margin: 0 0 4px; line-height: var(--lh-tight); text-wrap: balance; }
+.proto-hero .lede { color: var(--text-2); font-size: 14px; max-width: 640px; margin: 0; text-wrap: pretty; }
 .proto-hero__actions {
   display: flex;
   gap: var(--sp-2);

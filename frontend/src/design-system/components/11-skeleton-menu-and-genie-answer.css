@@ -60,6 +60,7 @@
   min-width: 180px;
   /* --filter-menu-space: the room useMenuPlacement measured on open. */
   max-height: min(280px, var(--filter-menu-space, 280px));
+  overscroll-behavior: contain;
   overflow-y: auto;
   background: var(--bg-1);
   border: 1px solid var(--line-2);

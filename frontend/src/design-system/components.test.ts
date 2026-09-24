@@ -673,6 +673,26 @@ describe('motion runs on named, compositor-friendly properties (motion-05)', () 
     }
   });
 
+  it('reserves the main scrollbar lane and contains every overlay scroller (css-09)', () => {
+    const css = designCss();
+    expect(css).toMatch(/\.main\s*\{[^}]*scrollbar-gutter:\s*stable;/s);
+    for (const scroller of ['.drawer__body', '.cmdk__list', '.genie__body', '.filter-menu', '.tweaks__body']) {
+      const own = cssRules(css).filter((rule) => rule.selector === scroller).map((rule) => rule.block).join(';');
+      expect(own, scroller).toMatch(/overscroll-behavior:\s*contain;/);
+      expect(own, `${scroller} is a scroller`).toMatch(/overflow(?:-y)?:\s*auto;/);
+    }
+  });
+
+  it('balances the hero title and segment titles and prettifies the lede (css-09)', () => {
+    const css = designCss();
+    expect(css).toMatch(/\.proto-hero h1\s*\{[^}]*text-wrap:\s*balance;/s);
+    expect(css).toMatch(/\.proto-hero \.lede\s*\{[^}]*text-wrap:\s*pretty;/s);
+    // Beside the two-line reservation in the lazy sheet, so the subgrid row
+    // height cannot move.
+    const segmentCss = readFileSync(join(process.cwd(), 'src/components/mortgage/SegmentCard.css'), 'utf8');
+    expect(segmentCss).toMatch(/\.seg-card__title\s*\{[^}]*min-block-size:\s*calc\(2 \* var\(--lh-snug\) \* var\(--fs-14\)\);[^}]*text-wrap:\s*balance;/s);
+  });
+
   it('eases the refresh desaturation back out from the base rule', () => {
     const css = designCss();
     expect(css).toMatch(/\.stable-refresh-region\s*\{[^}]*transition:\s*filter var\(--dur-base\) var\(--ease\);/s);

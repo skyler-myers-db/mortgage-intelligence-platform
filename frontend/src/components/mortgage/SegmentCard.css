@@ -34,8 +34,13 @@
 .seg-card__facets { grid-row: 6; align-self: start; }
 
 /* Two title lines are always reserved, so a row of one-line titles is as
-   tall as a row with a wrapped one. */
-.seg-card__title { min-block-size: calc(2 * var(--lh-snug) * var(--fs-14)); }
+   tall as a row with a wrapped one. A title that does wrap is balanced
+   across its two lines instead of leaving one word on the second (audit
+   css-09); balancing never adds a line, so the reserved height holds. */
+.seg-card__title {
+  min-block-size: calc(2 * var(--lh-snug) * var(--fs-14));
+  text-wrap: balance;
+}
 
 /* The prototype's sub is one short line; the registry's definitions run to
    four at the design target. Clamp to two lines: the full definition stays
