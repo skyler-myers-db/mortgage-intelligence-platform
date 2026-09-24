@@ -17,7 +17,16 @@
  *      version read on the click (exactly once), or 'unknown' when that read
  *      fails, and still downloads with its receipt;
  *  (f) while placeholder rows of the previous filters are on screen, Export
- *      waits, so the LEAD_EXPORT declaration pairs filters with their rows.
+ *      waits, so the LEAD_EXPORT declaration pairs filters with their rows;
+ *  (g) a queue left and re-entered while an approve is still on the wire
+ *      (a new LeadTable, the same QueryClient) drafts nothing for that row:
+ *      A opens no review, so no second DRAFT_OUTREACH row, and one approve.
+ *
+ * Axe runs on '.tbl-wrap' during the pending approve in (a), and on '.toast'
+ * in (c), on the sales toast. The brief asked for '.toast' during (a)'s
+ * pending state too, but a pending approve raises no shell toast: the
+ * approval's DecisionToast stays in-table (a declared departure) and shows
+ * only once the approve has returned.
  *
  * Every write is registered per test so the test owns its timing.
  */
@@ -32,6 +41,7 @@ import { APPROVE_AUDIT_ID, RequestGate, approveResult, ledgerReceipt } from './d
 import { EXPORT_RECEIPT_ID, leadExportReceiptFor } from './data/exportAudit';
 import { leadFixtures } from './data/leads';
 import { SALES_TEAM } from './data/portfolio';
+import { registerDraftEcho, registerHeldDecision, reviewSubject } from './data/queueKeyboard';
 import { json, type FixtureReply, type FixtureRequest, type MockApi } from './mockApi';
 import { FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
@@ -343,5 +353,77 @@ test.describe('(f) placeholder rows never export under the new filters', () => {
     expect(receipts).toHaveLength(1);
     expect(receipts[0].filters).toEqual({ state: 'TX' });
     expect([...receipts[0].borrower_ids].sort()).toEqual([...texasIds].sort());
+  });
+});
+
+test.describe('(g) a re-entered queue never re-drafts a borrower whose approve is on the wire', () => {
+  function navLink(page: Page, name: string): Locator {
+    return page.getByRole('navigation', { name: 'Main navigation' }).getByRole('link', { name });
+  }
+
+  function scrollRegion(page: Page): Locator {
+    return page.getByRole('region', { name: 'Ranked borrowers table scroll region' });
+  }
+
+  /** The next on-screen row after `afterId` that can still be approved, and the J presses that reach it. */
+  async function nextApprovableRow(page: Page, afterId: string): Promise<{ id: string; steps: number }> {
+    const rows = await page.locator('table.tbl tbody tr[data-borrower-row]').evaluateAll((elements) =>
+      elements.map((element) => ({
+        id: element.getAttribute('data-borrower-row') ?? '',
+        approvable: element.querySelector('button[aria-label^="Approve "]:not([disabled])') !== null,
+      })));
+    const start = rows.findIndex((row) => row.id === afterId);
+    const offset = rows.slice(start + 1).findIndex((row) => row.approvable);
+    if (start < 0 || offset < 0) throw new Error(`no approvable row after ${afterId}`);
+    return { id: rows[start + 1 + offset].id, steps: offset + 1 };
+  }
+
+  test('approve held, away to Analytics and back: A on that row drafts nothing; one approve lands', async ({ app, mockApi, page }) => {
+    const echo = registerDraftEcho(mockApi);
+    const held = registerHeldDecision(mockApi);
+    await app.gotoRoute('/lead-queue');
+    const dialog = page.locator('dialog.lead-approve-dialog');
+    const cursorRow = page.locator('table.tbl tr.is-cursor');
+
+    // The inline review (a dialog review is modal until its approve returns).
+    const review = await openReview(app, page);
+    await review.getByTestId('lead-approve-review-confirm').click();
+    await expect.poll(() => held.approveGate.received, 'the approve POST is on the wire').toBe(true);
+    expect(echo.calls).toEqual([ID]);
+
+    // Leave and re-enter inside the SPA: a new LeadTable on the same
+    // QueryClient. app.settle() would wait on the held POST, so wait on the
+    // page itself.
+    await navLink(page, 'Analytics').click();
+    await expect(page.locator('#main-content h1')).toHaveText('Analytics');
+    await navLink(page, 'Leads').click();
+    await expect(page).toHaveURL(/\/lead-queue$/);
+    const approve = approvalCell(page, ID).getByRole('button', { name: `Approve ${ID}` });
+    await expect(approve, 'the re-entered row reads its pending approve from the MutationCache').toHaveText('Approving…');
+    await expect(approve).toBeDisabled();
+    await expect(approvalCell(page, ID).locator('.chip--success')).toHaveCount(0);
+
+    await scrollRegion(page).focus();
+    await page.keyboard.press('j');
+    await expect(cursorRow).toHaveAttribute('data-borrower-row', ID);
+    await page.keyboard.press('a');
+
+    // Control: A on the next approvable row still opens its review, so A
+    // is live on this table and the press above was refused, not lost.
+    const next = await nextApprovableRow(page, ID);
+    for (let step = 0; step < next.steps; step += 1) await page.keyboard.press('j');
+    // A review opened (and drafted) for the held row would be a modal that
+    // takes these J presses, and the cursor would stay on it.
+    await expect(cursorRow, 'A on the held row opened no review').toHaveAttribute('data-borrower-row', next.id);
+    await page.keyboard.press('a');
+    await expect(dialog.getByTestId('lead-approve-review-subject')).toHaveText(reviewSubject(next.id));
+    expect(echo.calls, 'no second DRAFT_OUTREACH row for the row on the wire').toEqual([ID, next.id]);
+
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+    held.approveGate.release();
+    await expect(approvalCell(page, ID).locator('.chip--success')).toHaveText(/Approved/);
+    expect(held.approvals.map((body) => body.borrower_id), 'one approve POST, for the held row').toEqual([ID]);
+    expect(callsTo(mockApi, 'POST', /^\/api\/outreach\/approve$/)).toBe(1);
   });
 });
