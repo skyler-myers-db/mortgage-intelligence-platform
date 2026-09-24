@@ -3,6 +3,7 @@
  */
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ElapsedTicker } from './ElapsedTicker';
 
@@ -54,6 +55,18 @@ describe('ElapsedTicker', () => {
     act(() => root.render(<ElapsedTicker startedAt={startedAt} paused={false} />));
     expect(ticker().textContent).toBe('7s');
     expect(vi.getTimerCount()).toBe(1);
+  });
+
+  it('paints the true elapsed time on its first frame, before any effect runs', () => {
+    // A remount mid-wait (the Genie card reopened, the pill re-rendered on a
+    // later poll) must not flash "0s" for a frame before the effect catches up.
+    const startedAt = Date.now() - 4_000;
+    const firstFrame = document.createElement('div');
+    firstFrame.innerHTML = renderToStaticMarkup(<ElapsedTicker startedAt={startedAt} paused={false} />);
+    expect(firstFrame.textContent, 'the pre-effect markup').toBe('4s');
+
+    act(() => root.render(<ElapsedTicker startedAt={startedAt} paused />));
+    expect(ticker().textContent, 'a paused mount shows the real elapsed time').toBe('4s');
   });
 
   it('takes a class name and an injected clock', () => {

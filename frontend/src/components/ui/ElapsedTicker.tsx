@@ -11,8 +11,9 @@ import { useEffect, useState } from 'react';
  * text change inside a live region or an accessible name would be re-spoken
  * every second, so the ticker must sit outside any aria text. While `paused`
  * no interval runs; resuming reads the clock first, because it kept running.
- * The effect sets the first value as it mounts, so the shell pays for one
- * state value and one interval, nothing per render.
+ * The first value is read in the state initialiser, so a remount mid-wait
+ * paints the real elapsed time instead of flashing "0s" for a frame; the
+ * shell pays for one state value and one interval, nothing per render.
  */
 export interface ElapsedTickerProps {
   /** Epoch ms the elapsed time counts from. */
@@ -24,11 +25,13 @@ export interface ElapsedTickerProps {
   now?: () => number;
 }
 
+const elapsedSeconds = (now: () => number, startedAt: number) => Math.max(0, Math.round((now() - startedAt) / 1000));
+
 export function ElapsedTicker({ startedAt, paused, className = 'mono', now = Date.now }: ElapsedTickerProps) {
-  const [seconds, setSeconds] = useState(0);
+  const [seconds, setSeconds] = useState(() => elapsedSeconds(now, startedAt));
   useEffect(() => {
     if (paused) return undefined;
-    const tick = () => setSeconds(Math.max(0, Math.round((now() - startedAt) / 1000)));
+    const tick = () => setSeconds(elapsedSeconds(now, startedAt));
     tick();
     const timer = window.setInterval(tick, 1_000);
     return () => window.clearInterval(timer);
