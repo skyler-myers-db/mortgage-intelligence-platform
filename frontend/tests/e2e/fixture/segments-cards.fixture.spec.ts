@@ -65,10 +65,28 @@ async function openAtCardWidth(app: AppDriver, page: Page, width: CardWidth): Pr
   });
   const narrowest = SIX_COLUMN_MIN_CONTAINER + chrome;
   await page.setViewportSize({ width: narrowest - 1, height: 900 });
+  await layoutTracksViewport(page, chrome);
   expect(await segGridColumns(page), `one pixel under ${narrowest}px leaves the six-column band`).toBeLessThan(6);
   await page.setViewportSize({ width: narrowest, height: 900 });
+  await layoutTracksViewport(page, chrome);
   expect(await segGridColumns(page), `${narrowest}px is inside the six-column band`).toBe(6);
   return narrowest;
+}
+
+/**
+ * Wait until layout has caught up with the viewport: right after
+ * setViewportSize, Chromium can report the new innerWidth while .main still
+ * has the previous width, so a column count read at once belongs to the old
+ * layout (it failed 6 in 20 under load; wave-2 css-hygiene review).
+ */
+async function layoutTracksViewport(page: Page, chrome: number): Promise<void> {
+  await expect
+    .poll(() => page.locator('.main').evaluate((main, chromeWidth) => {
+      const style = getComputedStyle(main);
+      const content = main.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+      return Math.abs(window.innerWidth - chromeWidth - content);
+    }, chrome), { message: '.main content box tracks the new viewport width' })
+    .toBeLessThanOrEqual(0.5);
 }
 
 interface CardGeometry {
