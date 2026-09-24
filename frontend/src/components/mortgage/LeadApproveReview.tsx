@@ -20,10 +20,14 @@ export { LeadTableDecisionToast } from './LeadTableDecisionToast';
  * `.approval` human-in-the-loop gate (design_files/index.html `.approval`).
  *
  * Declared departure: the prototype `.approval` is a one-line banner
- * (icon, title, sub, actions on one row). The review needs the full subject
- * and message on screen, so the `--review` modifier stacks the body under
- * the title and top-aligns the icon (LeadApproveReview.css); every element
- * keeps the prototype's `.approval__*` names.
+ * (design_files/index.html lines 634-651: icon, title, sub, actions on one
+ * row). The review needs the full subject and message on screen, so the
+ * `--review` modifier stacks the body under the title and top-aligns the
+ * icon (LeadApproveReview.css). The prototype's `.approval__ico`, `__body`,
+ * `__title`, `__sub` and `__actions` keep their names; the review adds five
+ * elements the banner has no slot for: `.approval__copy` (the draft block),
+ * `__fields` and `__field-value` (channel, subject, message), `__message`
+ * (the message body, line breaks kept) and `__note` (the drafting notice).
  *
  * It states the channel explicitly ("Email": the queue always drafts
  * email), the disclosure version and state, and the evidence sources the
