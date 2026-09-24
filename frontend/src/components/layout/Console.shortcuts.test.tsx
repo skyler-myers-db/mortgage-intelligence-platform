@@ -95,6 +95,10 @@ describe('Console single-key shortcuts switch', () => {
       expect(toggle().getAttribute('aria-pressed')).toBe('true');
       expect(toggle().getAttribute('aria-labelledby')).toBe('console-single-key-label');
       expect(container.querySelector('#console-single-key-label')?.textContent).toBe('Single-key shortcuts');
+      // The switch also turns off the table's arrows and Enter (all are
+      // non-modifier bindings), and the note says so.
+      expect(container.querySelector('#console-single-key-note')?.textContent)
+        .toBe("J, K, A, R, X, / and ? on their own, and the table's arrow keys and Enter. ⌘K / Ctrl+K always works.");
 
       act(() => toggle().click());
 

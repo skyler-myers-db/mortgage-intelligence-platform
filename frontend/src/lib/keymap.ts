@@ -198,7 +198,9 @@ export function isEditableElement(el: Element | null | undefined): boolean {
  * (evidence drawer, borrower proof drawer, command palette, the floating
  * Genie panel, the shortcut sheet), listboxes (filter menus, topbar search
  * results) and menus. The always-mounted drawers and the Genie panel toggle
- * `aria-hidden`, so a closed one never matches.
+ * `aria-hidden`, so a closed one never matches; nor does one that is not
+ * rendered (`display: none`, `hidden`), so an always-mounted listbox kept
+ * hidden cannot switch the table keys off.
  */
 const OPEN_OVERLAY_SELECTOR = [
   '[role="dialog"]',
@@ -210,7 +212,10 @@ const OPEN_OVERLAY_SELECTOR = [
 
 export function hasOpenOverlay(doc: Document = document): boolean {
   for (const el of doc.querySelectorAll(OPEN_OVERLAY_SELECTOR)) {
-    if (el.closest('[aria-hidden="true"]') === null) return true;
+    if (el.closest('[aria-hidden="true"]') !== null) continue;
+    // Not rendered at all (DOM test environments lack checkVisibility: count it).
+    if (typeof el.checkVisibility === 'function' && !el.checkVisibility()) continue;
+    return true;
   }
   return false;
 }

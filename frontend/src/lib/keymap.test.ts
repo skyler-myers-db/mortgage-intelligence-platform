@@ -222,6 +222,16 @@ describe('overlay state', () => {
     document.body.innerHTML += '<div role="dialog" aria-modal="true"></div>';
     expect(hasOpenModal(document)).toBe(true);
   });
+
+  it('never counts an overlay that is not rendered, such as an always-mounted hidden listbox', () => {
+    document.body.innerHTML = '<ul role="listbox" hidden></ul>';
+    const listbox = document.querySelector('ul') as HTMLElement;
+    // What a browser answers for `hidden` / `display: none`.
+    listbox.checkVisibility = () => false;
+    expect(hasOpenOverlay(document)).toBe(false);
+    listbox.checkVisibility = () => true;
+    expect(hasOpenOverlay(document)).toBe(true);
+  });
 });
 
 describe('single-key preference', () => {

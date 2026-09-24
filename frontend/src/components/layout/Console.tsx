@@ -368,7 +368,7 @@ export function Console() {
             />
           </div>
           <div id="console-single-key-note" className="muted fs-12">
-            J, K, A, R, X, / and ? on their own. ⌘K / Ctrl+K always works.
+            J, K, A, R, X, / and ? on their own, and the table's arrow keys and Enter. ⌘K / Ctrl+K always works.
           </div>
         </div>
         <div className="tweak-row">
