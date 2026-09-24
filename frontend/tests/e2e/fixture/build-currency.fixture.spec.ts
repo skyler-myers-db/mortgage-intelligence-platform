@@ -15,7 +15,9 @@
  *    preload is reused, so it carries crossorigin); no .woff is requested;
  *    both faces load with the 100-900 range and render 600 < 650 < 700 < 800
  *    as four distinct widths; the metric-matched fallbacks load and set a
- *    sample within 3% (sans) / 1.5% (mono) of the webfont's width.
+ *    sample within 3% (sans) / 1.5% (mono) of the webfont's width, and a
+ *    glyph outside the webfont's latin subset (→ ≥ Δ ▲ ▼) keeps the system
+ *    face rather than the scaled fallback face.
  *    Home screenshots in both themes are ATTACHED (not baselined) for a
  *    manual 400/500/600/700 read against design_files/module_0_prototype_1.png;
  *    the VRT baselines belong to the safety-net lane.
@@ -99,6 +101,11 @@ test.describe('vendor chunks (bundle-03)', () => {
 });
 
 const FONT_FILE = /\.(?:woff2?|ttf|otf)$/;
+/**
+ * Glyphs the UI prints that Geist's latin subset does not carry (U+2192,
+ * U+2265, U+0394, U+25B2, U+25BC). No space: the subset does carry that.
+ */
+const OUT_OF_SUBSET = '→≥Δ▲▼';
 const WEIGHT_LADDER = [600, 650, 700, 800] as const;
 const METRIC_SAMPLE = 'Who should we contact, why now, and with what offer? Summit Mortgage 2026';
 
@@ -192,6 +199,59 @@ test.describe('variable Geist webfonts (bundle-05 / css-v2)', () => {
       await testInfo.attach(`home-${theme}.png`, { body: await page.screenshot(), contentType: 'image/png' });
     });
   }
+
+  test('a glyph outside the webfont subset keeps the system face, not the scaled fallback face', async ({ app, page }) => {
+    await app.gotoRoute('/');
+    const widths = await page.evaluate(async (sample) => {
+      const stack = getComputedStyle(document.documentElement).getPropertyValue('--font-sans').trim();
+      const system = stack.split(',').slice(2).join(',').trim();
+      const measure = (family: string) => {
+        const probe = document.createElement('span');
+        probe.textContent = sample;
+        probe.style.cssText = 'position:absolute;left:-10000px;top:0;white-space:nowrap;font-size:40px';
+        probe.style.fontFamily = family;
+        document.body.append(probe);
+        const width = probe.getBoundingClientRect().width;
+        probe.remove();
+        return width;
+      };
+      // Control: the served 'Geist Fallback' face (same local source, same
+      // size-adjust) WITHOUT its unicode-range. It must capture the glyphs,
+      // or this environment could not tell a ranged face from an unranged one.
+      const rule = [...document.styleSheets]
+        .flatMap((sheet) => [...sheet.cssRules])
+        .find(
+          (candidate): candidate is CSSFontFaceRule =>
+            candidate instanceof CSSFontFaceRule &&
+            candidate.style.getPropertyValue('font-family').replace(/["']/g, '') === 'Geist Fallback',
+        );
+      if (!rule) throw new Error("the served stylesheet has no 'Geist Fallback' face");
+      // size-adjust is a FontFace descriptor Chromium supports and the DOM
+      // lib does not type yet.
+      const descriptors: FontFaceDescriptors & { sizeAdjust: string } = {
+        sizeAdjust: rule.style.getPropertyValue('size-adjust'),
+      };
+      const unranged = new FontFace('Unranged Geist Fallback', rule.style.getPropertyValue('src'), descriptors);
+      document.fonts.add(unranged);
+      await unranged.load();
+      const result = {
+        stack: measure(stack),
+        system: measure(system),
+        unranged: measure(`'Unranged Geist Fallback', ${system}`),
+      };
+      document.fonts.delete(unranged);
+      return result;
+    }, OUT_OF_SUBSET);
+
+    expect(
+      Math.abs(widths.unranged / widths.system - 1),
+      `control: an unranged fallback face sets ${OUT_OF_SUBSET} at ${widths.unranged}px vs the system stack ${widths.system}px`,
+    ).toBeGreaterThan(0.02);
+    expect(
+      Math.abs(widths.stack / widths.system - 1),
+      `--font-sans sets ${OUT_OF_SUBSET} at ${widths.stack}px vs the system stack ${widths.system}px`,
+    ).toBeLessThan(0.005);
+  });
 
   test('the metric-matched fallbacks load and track the webfont widths', async ({ app, page }) => {
     await app.gotoRoute('/');

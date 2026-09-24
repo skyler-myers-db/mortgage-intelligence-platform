@@ -8,7 +8,9 @@
  *  - exactly two webfont faces, the prototype's 'Geist' and 'Geist Mono'
  *    (design_files/index.html:42-43), each one variable woff2 (100 900) with
  *    font-display: swap, and no static @fontsource import left behind;
- *  - both metric-matched fallback faces carry all four overrides;
+ *  - both metric-matched fallback faces carry all four overrides, and the
+ *    same unicode-range as their webfont, so a glyph Geist does not cover
+ *    keeps the system face instead of a scaled Arial / Courier New;
  *  - --font-sans / --font-mono try the webfont, then its fallback face.
  */
 import { describe, expect, it } from 'vitest';
@@ -78,6 +80,15 @@ describe('tokens.css metric-matched fallback faces', () => {
     for (const override of ['size-adjust', 'ascent-override', 'descent-override', 'line-gap-override']) {
       expect(face?.descriptors[override], `${family} ${override}`).toMatch(/^\d+(?:\.\d+)?%$/);
     }
+  });
+
+  it.each([
+    ['Geist Fallback', 'Geist'],
+    ['Geist Mono Fallback', 'Geist Mono'],
+  ])('%s covers exactly the glyphs %s does', (family, webfont) => {
+    const range = fallbacks.find((candidate) => candidate.family === family)?.descriptors['unicode-range'];
+    expect(range, `${family} has a unicode-range`).toMatch(/^U\+0000-00FF,/);
+    expect(range).toBe(webfonts.find((candidate) => candidate.family === webfont)?.descriptors['unicode-range']);
   });
 
   it('declares no other face', () => {
