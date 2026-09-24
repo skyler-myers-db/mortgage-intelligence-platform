@@ -69,10 +69,6 @@ interface GenieAnswerProps {
    *  a second ask that silently aborted the running one (audit 2026-09-21
    *  `genie-v2`). */
   followUpDisabledReason?: string | null;
-  /** Mount the answer's own screen-reader status region. The floating panel
-   *  passes `false` because it owns one persistent announcer that also speaks
-   *  while the panel is closed (audit 2026-09-21 `a11y-06`). */
-  announce?: boolean;
   /** Put a refused question back in the composer, unchanged, so the user can
    *  reword it. Client-side only; the refusal card shows "Edit question" only
    *  when both this and `question` are present (audit 2026-09-21 `genie-05`). */
@@ -90,7 +86,6 @@ export function GenieAnswer({
   dense = false,
   withChart = false,
   followUpDisabledReason = null,
-  announce = true,
   onEditQuestion,
   onAnnounce,
 }: GenieAnswerProps) {
@@ -217,13 +212,6 @@ export function GenieAnswer({
     onClose: () => setShowProof(false),
   });
 
-  const liveAnswerAnnouncement = [
-    'Genie answer ready.',
-    metric_value !== null && metric_value !== undefined && metric_value !== ''
-      ? String(metric_value)
-      : '',
-    narrative,
-  ].filter(Boolean).join(' ');
   const sourceDisclosure = isGovernedActionResult
     ? {
         ariaLabel: 'Answer source: Governed action result',
@@ -239,12 +227,11 @@ export function GenieAnswer({
       : null;
 
   return (
+    // No live region here (audit 2026-09-21 `a11y-06`): a region mounted
+    // already populated is unreliably spoken, and each Genie surface owns ONE
+    // persistent announcer that says "Answer ready" once the turn store has
+    // landed a renderable answer.
     <div className="genie-answer">
-      {announce && (
-        <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
-          {liveAnswerAnnouncement}
-        </div>
-      )}
       {sourceDisclosure && (
         <div
           className="genie-answer__api-source"

@@ -1,23 +1,27 @@
-import { Fragment, useEffect, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
+import { Fragment, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from 'react';
 import type { GenieActionSuggestion, GenieAnswer as GenieAnswerShape } from '../types';
-import type { GenieLiveProgress } from '../lib/api';
-import type { WarmingUpState } from '../lib/useWarmingUpRetry';
 import { Button, Chip, EvidenceChip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { GenieAnswer } from '../components/mortgage/GenieAnswer';
 import { GenieHistoryMenu } from '../components/mortgage/GenieHistoryMenu';
 import { GenieProgress } from '../components/mortgage/GenieProgress';
 import { GenieTurnActions } from '../components/mortgage/GenieTurnActions';
-import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
+import { GENIE_RESUMING_LABEL, GenieStopRow, GenieTurnNote } from '../components/mortgage/GenieTurnNote';
 import { friendlyAssetLabel } from '../lib/assetLabels';
 import { drawerForAsset } from '../lib/drawerSources';
 import {
   getGenieTurns,
   getGenieTurnsServerSnapshot,
-  setGenieTurns,
   subscribeGenieTurns,
   type GenieTurn,
 } from '../lib/genieConversationStore';
+import {
+  GENIE_BUSY_REASON,
+  announceGenie,
+  stopGenieTurn,
+  useGenieTurn,
+  type GenieTurnNote as GenieTurnNoteShape,
+} from '../lib/genieInFlightTurn';
 import { useComposerScrollClearance } from './ask-genie.composer-clearance';
 import { renderSourceAssetChip } from './ask-genie.growth-agent.helpers';
 import { useRevealLatestExchange, useRevealLatestOnArrival } from './ask-genie.thread-scroll';
@@ -27,24 +31,25 @@ import { useRevealLatestExchange, useRevealLatestOnArrival } from './ask-genie.t
  * `ask-genie.tsx` (props in, callbacks out; mirrors the
  * ask-genie.compose-plan-card / ask-genie.growth-run-card precedent).
  *
- * The route used to show ONE answer: asking a second question erased the
- * first, so the deep-dive view had no conversation even though the floating
- * panel kept one. Both surfaces now read the same tab-scoped transcript store
- * (`lib/genieConversationStore`), so a thread started in the bubble continues
- * here and vice versa.
+ * Both Genie surfaces read the same tab-scoped stores: the settled transcript
+ * (`lib/genieConversationStore`) and, since wave 2 (`runtime-01`), the ONE
+ * in-flight turn (`lib/genieInFlightTurn`). So a turn asked in the floating
+ * panel shows here as pending, a turn asked here keeps running when the user
+ * leaves the page, and coming back shows the same pending turn, or its answer
+ * once the store has landed it. While a turn from EITHER surface is in
+ * flight, everything that would start a second one is held with one reason
+ * (`genie-v2`), and Stop (`genie-03`, `states-08`) stops waiting for it.
  *
  * Ordering is the floating panel's (audit 2026-09-21 `visual-07`): the thread
  * reads oldest-first, the suggestions sit under it, and the composer is docked
  * at the bottom of the surface (`position: sticky; bottom: 0`, routes/
  * ask-genie.css), so it stays in view however long the thread gets and a new
  * answer lands directly above it. When the new exchange starts off screen,
- * useRevealLatestExchange scrolls its question into view. The route used to
- * put the composer first with the latest answer under it, the reverse of the
- * floating panel.
+ * useRevealLatestExchange scrolls its question into view.
  *
- * The source-chip classification depends only on `payload`, so it lives here
- * rather than in the parent — it moved wholesale with the surface it
- * annotates, and is now computed per turn.
+ * Failures arrive as degraded turns (with Retry) from the store; this panel
+ * renders no error block and no live region of its own: the route's one
+ * announcer sits outside every tabpanel (ask-genie.tsx).
  */
 
 interface SourceChip {
@@ -88,29 +93,17 @@ export interface AskGenieAnswerPanelProps {
   question: string;
   /** Called on textarea change with the raw value (parent clears active asset). */
   onQuestionChange: (value: string) => void;
-  /** Commit the current question to the warming-up fetch. */
+  /** Start a turn with this question (the store refuses while one runs). */
   onAsk: (question: string) => void;
-  /** Start a fresh Genie thread. */
+  /** Start a new Genie thread. */
   onNewThread: () => void;
   /** Adopt a past conversation from the History menu (id + restored turns). */
   onLoadSession: (conversationId: string, turns: GenieTurn[]) => void;
-  /** A turn settled and was appended to the thread; the parent clears the
-   *  composer so it never keeps the question that was just answered. */
-  onSettled?: (question: string) => void;
-  loading: boolean;
-  warmingUp: WarmingUpState | null;
-  errorMsg: string | null;
-  onRetry: () => void;
   /** Full sample-question list; the composer shows the first four. */
   sampleQuestions: string[];
-  payload: GenieAnswerShape | null;
-  /** Live lifecycle telemetry for the in-flight turn (null when idle). */
-  liveProgress?: GenieLiveProgress | null;
-  /** Epoch ms when the current ask started; drives the elapsed ticker. */
-  askStartedAt?: number | null;
-  submittedQuestion: string | null;
   onFollowUp: (question: string, conversationId: string | null) => void;
-  onAction: (action: GenieActionSuggestion) => void;
+  /** A governed action, bound to the answer it was offered on. */
+  onAction: (action: GenieActionSuggestion, payload: GenieAnswerShape) => void | Promise<void>;
   /** Refusal card "Edit question": restore the refused prompt to the composer. */
   onEditQuestion?: (question: string) => void;
   actionStatus: string | null;
@@ -121,6 +114,9 @@ export interface AskGenieAnswerPanelProps {
 
 /** How many source chips the empty state shows. */
 const EMPTY_STATE_SOURCE_CHIPS = 3;
+
+/** id of the busy reason the composer points `aria-describedby` at. */
+const BUSY_HINT_ID = 'ask-genie-busy';
 
 /**
  * Composer placeholder, in the reviewed segment vocabulary. Short enough to
@@ -136,11 +132,13 @@ function GenieThreadTurn({
   onFollowUp,
   onAction,
   onEditQuestion,
+  followUpDisabledReason,
 }: {
   turn: GenieTurn;
   onFollowUp: (question: string, conversationId: string | null) => void;
-  onAction: (action: GenieActionSuggestion) => void;
+  onAction: (action: GenieActionSuggestion, payload: GenieAnswerShape) => void | Promise<void>;
   onEditQuestion?: (question: string) => void;
+  followUpDisabledReason: string | null;
 }) {
   const chip = sourceChipFor(turn.response);
   const drawerForSource = chip ? drawerForAsset(chip.label) : null;
@@ -175,13 +173,16 @@ function GenieThreadTurn({
         )}
         {/* withChart=true: opt this deep-dive view in to the auto-detected
             chart for top-N / per-state-style table_rows payloads. The floating
-            bubble does NOT pass this prop, so its compact form is unchanged. */}
+            bubble does NOT pass this prop, so its compact form is unchanged.
+            An action is bound to THIS turn's answer, never the latest one. */}
         <GenieAnswer
           payload={turn.response}
           question={turn.question || undefined}
           onFollowUp={onFollowUp}
-          onAction={onAction}
+          followUpDisabledReason={followUpDisabledReason}
+          onAction={(action) => onAction(action, turn.response)}
           onEditQuestion={onEditQuestion}
+          onAnnounce={announceGenie}
           withChart
         />
       </div>
@@ -196,16 +197,7 @@ export function AskGenieAnswerPanel({
   onAsk,
   onNewThread,
   onLoadSession,
-  onSettled,
-  loading,
-  warmingUp,
-  errorMsg,
-  onRetry,
   sampleQuestions,
-  payload,
-  liveProgress = null,
-  askStartedAt = null,
-  submittedQuestion,
   onFollowUp,
   onAction,
   onEditQuestion,
@@ -214,79 +206,69 @@ export function AskGenieAnswerPanel({
 }: AskGenieAnswerPanelProps) {
   const composerSampleQuestions = sampleQuestions.slice(0, 4);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const storedTurns = useSyncExternalStore(
-    subscribeGenieTurns,
-    getGenieTurns,
-    getGenieTurnsServerSnapshot,
-  );
-  const inFlight = loading || warmingUp !== null;
-
-  // A settled payload joins the thread on the SAME render it arrives, so the
-  // answer never disappears for a frame between "progress done" and "turn
-  // stored". The effect below only persists what is already being shown.
-  //
-  // `submittedQuestion === null` means no question is outstanding (New
-  // thread, a restored session, an actor-boundary reset). The cached answer
-  // of the question that WAS outstanding must not be re-adopted then — it
-  // belongs to a thread the user just left.
-  const answered = submittedQuestion !== null ? payload : null;
-  // Anywhere in the thread, not just at the end: the floating panel writes to
-  // the same store, so this route's settled turn can already have another
-  // surface's turn stacked on top of it.
-  const isStored = storedTurns.some((turn) => turn.response === answered);
-  const pendingTurn: GenieTurn | null =
-    answered && !isStored ? { question: submittedQuestion ?? '', response: answered } : null;
-  const thread = pendingTurn ? [...storedTurns, pendingTurn] : storedTurns;
-
-  // Append-once latch. StrictMode re-runs effects with the same closure, and
-  // the payload object is stable across re-renders, so identity is the guard.
-  const appendedRef = useRef<GenieAnswerShape | null>(null);
-  useEffect(() => {
-    if (submittedQuestion === null || !payload || appendedRef.current === payload) return;
-    appendedRef.current = payload;
-    const stored = getGenieTurns();
-    if (stored.some((turn) => turn.response === payload)) return;
-    // setGenieTurns enforces MAX_STORED_TURNS (oldest-first eviction).
-    setGenieTurns([...stored, { question: submittedQuestion, response: payload }]);
-    onSettled?.(submittedQuestion);
-  }, [payload, submittedQuestion, onSettled]);
+  const thread = useSyncExternalStore(subscribeGenieTurns, getGenieTurns, getGenieTurnsServerSnapshot);
+  const { inFlight, notes } = useGenieTurn();
+  const busyReason = inFlight ? GENIE_BUSY_REASON : null;
 
   const turnKey = (turn: GenieTurn, index: number) =>
     `${turn.response.message_id ?? turn.response.question_hash ?? 'turn'}-${index}`;
 
   // The exchange that starts at the end of the thread: the question in
-  // flight, else the latest settled turn's question. When it changes and is
-  // off screen, it is scrolled into view (the composer is docked below it).
-  const showInFlight = inFlight && Boolean(submittedQuestion);
+  // flight, else the latest settled turn's question. The key grows when a
+  // question is SENT and holds when it lands or is stopped (turns + notes +
+  // in flight), so an answer or a Stop never scrolls the reader away.
   const latestIndex = thread.length - 1;
   const latestAnchorRef = useRef<HTMLDivElement>(null);
   const dockRef = useRef<HTMLFormElement>(null);
-  useRevealLatestExchange(
-    latestAnchorRef,
-    dockRef,
-    showInFlight ? `pending-${thread.length}` : `settled-${thread.length}`,
-  );
+  useRevealLatestExchange(latestAnchorRef, dockRef, `exchange-${thread.length + notes.length + (inFlight ? 1 : 0)}`);
   // Arriving by a link with a thread already stored opens on its latest turn.
   useRevealLatestOnArrival(latestAnchorRef, dockRef);
   // Focus scrolling stops above the docked composer (WCAG 2.2 SC 2.4.11).
   useComposerScrollClearance(dockRef);
 
-  // Conversational controls (audit 2026-09-21 `genie-03`, client-only slice):
-  // ArrowUp in an empty composer recalls the last question; Edit reloads a
-  // sent question; Regenerate / Retry re-ask it as a NEW turn through the
-  // same `onAsk` path (and the same server-side guards). Stop needs the
-  // route's fetch lifecycle (routes/ask-genie.tsx) and lands with the shared
-  // turn hook; the floating panel has it today.
+  // Conversational controls (audit 2026-09-21 `genie-03`): ArrowUp in an
+  // empty composer recalls the last question; Edit reloads a sent question;
+  // Regenerate / Retry re-ask it as a NEW turn through the same `onAsk` path
+  // (and the same server-side guards); Stop stops waiting for the turn.
+  const pendingQuestion = inFlight?.revealed ? inFlight.question : null;
   const lastQuestion =
-    submittedQuestion ??
+    pendingQuestion ??
     [...thread].reverse().find((turn) => turn.question.trim().length > 0)?.question ??
     null;
+  const focusComposer = () => {
+    queueMicrotask(() => {
+      const el = questionRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(el.value.length, el.value.length);
+    });
+  };
   const editQuestion = (text: string) => {
     onQuestionChange(text);
     questionRef.current?.focus();
   };
-  const canAsk = !loading && warmingUp === null && question.trim().length > 0;
-  const reaskDisabledReason = inFlight ? 'Genie is still answering. This unlocks when the answer lands.' : null;
+  /**
+   * Stop waiting for the turn (client-only: Genie may still finish it on the
+   * server; its reply is discarded). The question comes back to the composer
+   * unless the user typed a different draft there, and focus lands in the
+   * composer because the Stop button unmounts under the user.
+   */
+  const stopTurn = () => {
+    if (!inFlight) return;
+    const stopped = stopGenieTurn() ?? '';
+    const draft = question.trim();
+    const restore = stopped !== '' && (draft === '' || draft === stopped.trim());
+    if (restore) onQuestionChange(stopped);
+    focusComposer();
+    announceGenie(
+      restore
+        ? 'Stopped. The question is back in the composer.'
+        : stopped
+          ? 'Stopped. Your draft was kept; Edit reloads the stopped question.'
+          : 'Stopped.',
+    );
+  };
+  const canAsk = !inFlight && question.trim().length > 0;
   const questionBubble = (turn: GenieTurn, anchor: boolean) => {
     const source = turn.response.source ?? '';
     // Refusals and data gaps would only repeat themselves: Edit only.
@@ -302,12 +284,47 @@ export function AskGenieAnswerPanel({
           onEdit={editQuestion}
           onRetry={reask === 'retry' ? onAsk : undefined}
           onRegenerate={reask === 'regenerate' ? onAsk : undefined}
-          disabled={inFlight}
-          disabledReason={reaskDisabledReason}
+          disabled={inFlight !== null}
+          disabledReason={busyReason}
         />
       </>
     );
   };
+  const turnNote = (note: GenieTurnNoteShape, key: string) => (
+    <GenieTurnNote
+      key={key}
+      note={note}
+      disabled={inFlight !== null}
+      disabledReason={busyReason}
+      onEdit={editQuestion}
+      onAskAgain={onAsk}
+    />
+  );
+
+  // Notes sit where they happened: before the turn that settled after them,
+  // and the rest after the last settled turn.
+  const threadNodes: ReactNode[] = [];
+  thread.forEach((turn, index) => {
+    notes.forEach((note, n) => {
+      if (note.atTurnIndex === index) threadNodes.push(turnNote(note, `note-${n}`));
+    });
+    threadNodes.push(
+      <Fragment key={turnKey(turn, index)}>
+        {turn.question && questionBubble(turn, !inFlight && index === latestIndex)}
+        <GenieThreadTurn
+          turn={turn}
+          onFollowUp={onFollowUp}
+          onAction={onAction}
+          onEditQuestion={onEditQuestion}
+          followUpDisabledReason={busyReason}
+        />
+      </Fragment>,
+    );
+  });
+  notes.forEach((note, n) => {
+    if (note.atTurnIndex >= thread.length) threadNodes.push(turnNote(note, `note-${n}`));
+  });
+  const hasThread = thread.length > 0 || notes.length > 0 || inFlight !== null;
 
   return (
     <div className="surface">
@@ -324,15 +341,22 @@ export function AskGenieAnswerPanel({
               setHistoryOpen(false);
               onLoadSession(conversationId, turns);
             }}
-            disabled={inFlight}
+            disabled={inFlight !== null}
           />
-          <Button variant="ghost" size="sm" icon="chat" onClick={onNewThread} disabled={inFlight}>
+          <Button
+            variant="ghost"
+            size="sm"
+            icon="chat"
+            onClick={onNewThread}
+            disabled={inFlight !== null}
+            title={busyReason ?? undefined}
+          >
             New thread
           </Button>
         </div>
       </div>
       <div className="surface__body">
-        {thread.length === 0 && !inFlight && !errorMsg && (
+        {!hasThread && (
           <div className="surface surface--inset">
             <div className="surface__body genie-empty">
               <div className="genie-empty__icon">
@@ -354,58 +378,29 @@ export function AskGenieAnswerPanel({
             </div>
           </div>
         )}
-        {(thread.length > 0 || inFlight) && (
+        {hasThread && (
           <div className="genie-thread">
-            {/* Fragment, not a wrapper div: the user bubble aligns itself to
+            {/* Fragments, not wrapper divs: the user bubble aligns itself to
                 the right edge of `.genie-thread`, so every bubble and card
                 must stay a DIRECT flex child of it. */}
-            {thread.map((turn, index) => (
-              <Fragment key={turnKey(turn, index)}>
-                {turn.question && questionBubble(turn, !showInFlight && index === latestIndex)}
-                <GenieThreadTurn
-                  turn={turn}
-                  onFollowUp={onFollowUp}
-                  onAction={onAction}
-                  onEditQuestion={onEditQuestion}
-                />
-              </Fragment>
-            ))}
-            {showInFlight && (
+            {threadNodes}
+            {inFlight && (
               <>
-                <div ref={latestAnchorRef} className="genie__msg genie__msg--user">{submittedQuestion}</div>
-                {loading && !warmingUp && (
-                  <div className="surface surface--inset">
-                    <div className="surface__body">
-                      <GenieProgress progress={liveProgress} startedAt={askStartedAt} />
-                    </div>
-                  </div>
+                {/* A resumed turn keeps its question hidden until the first
+                    progress poll proves it is still this actor's turn. */}
+                {inFlight.revealed ? (
+                  <div ref={latestAnchorRef} className="genie__msg genie__msg--user">{inFlight.question}</div>
+                ) : (
+                  <div ref={latestAnchorRef} className="muted fs-11">{GENIE_RESUMING_LABEL}</div>
                 )}
+                <div className="surface surface--inset">
+                  <div className="surface__body">
+                    <GenieProgress progress={inFlight.progress} startedAt={inFlight.startedAt} />
+                    <GenieStopRow onStop={stopTurn} />
+                  </div>
+                </div>
               </>
             )}
-          </div>
-        )}
-        {warmingUp && (
-          <div className="mt-4">
-            <WarmingUpBlock state={warmingUp} title="Asking Genie" compact />
-          </div>
-        )}
-        {errorMsg && !warmingUp && (
-          <div
-            className="surface surface--inset surface--danger mt-4"
-            role="alert"
-          >
-            <div className="surface__body status-callout--danger">
-              <span>{errorMsg}</span>
-              <button
-                type="button"
-                className="btn btn--ghost btn--sm"
-                onClick={onRetry}
-                disabled={loading}
-                aria-label="Retry Genie question"
-              >
-                Retry
-              </button>
-            </div>
           </div>
         )}
         {actionStatus && (
@@ -423,12 +418,19 @@ export function AskGenieAnswerPanel({
                 type="button"
                 className="filter filter--question"
                 onClick={() => onAsk(q)}
+                disabled={inFlight !== null}
+                title={busyReason ?? undefined}
               >
                 <Icon name="sparkle" size={11} />
                 <span className="filter__text">{q}</span>
               </button>
             ))}
           </div>
+        )}
+        {busyReason && (
+          <p id={BUSY_HINT_ID} className="muted fs-11 mt-3">
+            {busyReason}
+          </p>
         )}
       </div>
       {/* The docked composer (visual-07): the prototype's card footer,
@@ -445,6 +447,7 @@ export function AskGenieAnswerPanel({
         <textarea
           ref={questionRef}
           aria-label="Ask Genie — question"
+          aria-describedby={busyReason ? BUSY_HINT_ID : undefined}
           placeholder={COMPOSER_PLACEHOLDER}
           rows={2}
           value={question}
@@ -463,9 +466,8 @@ export function AskGenieAnswerPanel({
             // submits, Shift+Enter inserts a newline. Match how
             // Slack / GitHub PRs behave so the keyboard-first user
             // doesn't have to mouse over to the Ask Genie button.
-            // The submit-disabled guard mirrors the button's
-            // `disabled` prop so a stray Enter during a warming-up
-            // request can't double-fire.
+            // The submit guard mirrors the button's `disabled` prop, so
+            // Enter never starts a second turn while one is in flight.
             if (
               e.key === 'Enter' &&
               !e.shiftKey &&
@@ -481,8 +483,14 @@ export function AskGenieAnswerPanel({
           }}
           className="route-textarea route-textarea--genie genie-composer__input"
         />
-        <Button variant="primary" icon="send" type="submit" disabled={!canAsk}>
-          {loading || warmingUp !== null ? 'Asking…' : 'Ask Genie'}
+        <Button
+          variant="primary"
+          icon="send"
+          type="submit"
+          disabled={!canAsk}
+          title={busyReason ?? undefined}
+        >
+          {inFlight ? 'Asking…' : 'Ask Genie'}
         </Button>
       </form>
     </div>

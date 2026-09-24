@@ -1,9 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router';
-import { ApiError, api, type GenieLiveProgress } from '../lib/api';
-import { GenieLiveError, askGenieLive } from '../lib/genieAsk';
-import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
+import { api } from '../lib/api';
 import type {
   GenieActionSuggestion,
   GenieAnswer as GenieAnswerShape,
@@ -11,6 +9,8 @@ import type {
 import { useApp } from '../components/AppContext';
 import { PageShell } from '../components/layout/PageShell';
 import { Icon } from '../components/Icon';
+import { genieActionConfirmation, runGenieActionRequest } from '../components/mortgage/GenieChat.helpers';
+import { useGenieAnnouncer } from '../components/mortgage/useGenieAnnouncer';
 import { descriptorFor } from '../lib/drawerSources';
 import {
   GENIE_CONVERSATION_RESET_EVENT,
@@ -23,6 +23,14 @@ import {
   setGenieTurns,
   type GenieTurn,
 } from '../lib/genieConversationStore';
+import {
+  announceGenie,
+  clearGenieTurnNotes,
+  getGenieTurnSnapshot,
+  resumeGenieTurnFromSession,
+  startGenieTurn,
+  subscribeGenieTurnSettled,
+} from '../lib/genieInFlightTurn';
 import { queryKeys } from '../lib/queryKeys';
 import { AskGenieAnswerPanel } from './ask-genie.answer-panel';
 import { GrowthAgentMonitorsPanel } from './ask-genie.growth-agent-monitors';
@@ -48,18 +56,6 @@ export {
   trustedAssetsForCatalog,
 } from './ask-genie.growth-agent.helpers';
 
-const NON_PERSISTABLE_SOURCES = new Set([
-  'degraded',
-  'policy_blocked',
-  'refused',
-  'data_gap',
-  'out_of_footprint',
-]);
-
-function shouldPersistConversation(payload: GenieAnswerShape): boolean {
-  return Boolean(payload.conversation_id && !NON_PERSISTABLE_SOURCES.has(String(payload.source ?? '')));
-}
-
 /**
  * `/ask-genie` — conversation first (audit 2026-09-21 `visual-07`, `genie-09`,
  * `flow-10`). The page is titled what the nav calls it and opens on the Ask
@@ -67,9 +63,16 @@ function shouldPersistConversation(payload: GenieAnswerShape): boolean {
  * Growth Agent's workflows and saved monitors are the Workflows and Saved
  * monitors tabs, selected by `?tab=` so they deep-link and Back works.
  *
- * Inactive panels stay mounted and `hidden`: the Ask panel owns the effect
- * that appends a settled answer to the shared thread store, so a turn that
- * lands while the user is on another tab still reaches the floating panel.
+ * The turn is the tab's, not the route's (wave 2 `runtime-01`): asking starts
+ * it in lib/genieInFlightTurn, which settles it into the shared thread whether
+ * or not this route is still mounted. Leaving the page does not stop it;
+ * coming back shows the same pending turn, or its answer. A reload resumes a
+ * turn that was still polling (the first Genie surface to mount asks).
+ *
+ * The route's ONE screen-reader announcer (`a11y-06`) is a direct child of the
+ * page, outside every tabpanel: a hidden tabpanel is not spoken, and a turn
+ * can land while the Workflows tab shows. It speaks only while the floating
+ * panel is closed (useGenieAnnouncer picks one speaker).
  */
 export default function AskGenie() {
   const navigate = useNavigate();
@@ -82,6 +85,7 @@ export default function AskGenie() {
   const [activeAssetPath, setActiveAssetPath] = useState<string | null>(null);
   const [conversationId, setConversationId] = useState<string | null>(() => readGenieConversationId());
   const growthAgent = useGrowthAgentWorkspace();
+  const announcerText = useGenieAnnouncer('route', tab === 'ask');
 
   const genieStartQuery = useQuery({
     queryKey: queryKeys.genieStart(),
@@ -104,88 +108,34 @@ export default function AskGenie() {
   }, [genieStartQuery.data]);
   const trustedAssets = trustedAssetsForCatalog(genieStartQuery.data?.trusted_assets);
   const [actionStatus, setActionStatus] = useState<string | null>(null);
-  // `submittedQuestion` drives the warming-up-wrapped fetch. Typing in
-  // the textarea updates `question`; clicking Ask commits the current
-  // value into `submittedQuestion`, which triggers the hook. Pairing
-  // with `submitToken` lets the same question be re-asked without
-  // the hook no-op'ing on unchanged deps.
-  const [submittedQuestion, setSubmittedQuestion] = useState<string | null>(null);
-  const [submittedConversationId, setSubmittedConversationId] = useState<string | null>(null);
-  const [submitToken, setSubmitToken] = useState<number>(0);
-  // Live lifecycle telemetry for the in-flight turn (stage rail, public
-  // process steps, generated SQL) from the submit → progress → complete flow.
-  const [liveProgress, setLiveProgress] = useState<GenieLiveProgress | null>(null);
-  const [askStartedAt, setAskStartedAt] = useState<number | null>(null);
-  // Generation counter: an aborted ask settles AFTER its replacement has
-  // already started, and its cleanup must not clobber the new turn's
-  // ticker/rail state (QA M2 — sample-question chips can re-ask mid-flight).
-  const askGenerationRef = useRef(0);
 
-  const {
-    data: payload,
-    warmingUp,
-    error,
-    manualRetry,
-  } = useWarmingUpRetry<GenieAnswerShape>(
-    (signal) => {
-      const generation = ++askGenerationRef.current;
-      setAskStartedAt(Date.now());
-      setLiveProgress(null);
-      return (
-        askGenieLive(submittedQuestion ?? '', submittedConversationId, {
-          signal,
-          onProgress: (p) => {
-            if (askGenerationRef.current === generation) setLiveProgress(p);
-          },
-        }) as Promise<GenieAnswerShape>
-      ).finally(() => {
-        if (askGenerationRef.current === generation) {
-          setLiveProgress(null);
-          setAskStartedAt(null);
-        }
-      });
-    },
-    [submittedQuestion, submittedConversationId, submitToken],
-    {
-      enabled: submittedQuestion !== null && submittedQuestion.length > 0,
-      queryKey: queryKeys.genieAnswer([
-        submittedQuestion ?? '',
-        submittedConversationId ?? '',
-        submitToken,
-      ]),
-      staleTime: Infinity,
-      refetchOnWindowFocus: false,
-    },
+  // A reload may have interrupted a turn: resume it, once per page.
+  useEffect(() => {
+    resumeGenieTurnFromSession();
+  }, []);
+
+  // A turn settled, from either surface: follow the conversation the store
+  // persisted. A turn asked HERE also clears the composer, but only while it
+  // still holds the question that was answered (a new draft is kept).
+  useEffect(
+    () =>
+      subscribeGenieTurnSettled((event) => {
+        if (event.persistedConversationId) setConversationId(event.persistedConversationId);
+        if (event.surface !== 'route') return;
+        setQuestion((current) => (current.trim() === event.question.trim() ? '' : current));
+      }),
+    [],
   );
 
-  const loading = submittedQuestion !== null && payload === null && warmingUp === null && error === null;
-  const errorMsg = error
-    ? error instanceof GenieLiveError
-      ? error.message
-      : error instanceof Error
-        ? `Couldn't reach Genie: ${error.message}`
-        : "Couldn't reach Genie."
-    : null;
-
   useEffect(() => {
-    if (!(error instanceof ApiError) || error.status !== 403) return;
-    setConversationId(null);
-    setSubmittedConversationId(null);
-    clearGenieTurns();
-    clearGenieConversationState({ notify: true });
-  }, [error]);
-
-  useEffect(() => {
+    // The turn store aborts the turn itself on this event; this clears what
+    // the route holds. The prior actor's questions must not linger.
     const onActorBoundaryReset = () => {
       suppressBootstrapConversationRef.current = true;
       setConversationId(null);
-      setSubmittedConversationId(null);
-      setSubmittedQuestion(null);
       setQuestion('');
       setActiveAssetPath(null);
       setActionStatus(null);
-      // An actor-boundary reset invalidates the transcript too: the prior
-      // actor's questions must not linger in this tab. Mirrors GenieChat.
       clearGenieTurns();
     };
     window.addEventListener(GENIE_CONVERSATION_RESET_EVENT, onActorBoundaryReset);
@@ -194,14 +144,21 @@ export default function AskGenie() {
     };
   }, []);
 
-  function ask(q: string, followUpConversationId?: string | null) {
+  /**
+   * Start a turn. `startedAt` is read (`Date.now()`) at the event site: the
+   * React Compiler cannot prove a component-scope function runs only from
+   * event handlers. The store refuses a second turn while one runs (either
+   * surface's); the composer keeps the asked question until it lands.
+   */
+  function ask(q: string, followUpConversationId: string | null | undefined, startedAt: number) {
     const trimmed = q.trim();
+    if (!trimmed) return;
     const activeConversationId = followUpConversationId ?? conversationId;
+    if (!startGenieTurn({ question: trimmed, conversationId: activeConversationId, surface: 'route', startedAt })) {
+      return;
+    }
     setQuestion(q);
     setConversationId(activeConversationId);
-    setSubmittedConversationId(activeConversationId);
-    setSubmittedQuestion(trimmed);
-    setSubmitToken((n) => n + 1);
     setActiveAssetPath(null);
     setActionStatus(null);
     if (!activeConversationId) {
@@ -210,13 +167,13 @@ export default function AskGenie() {
   }
 
   function newConversation() {
+    if (getGenieTurnSnapshot().inFlight) return;
     suppressBootstrapConversationRef.current = true;
     setConversationId(null);
-    setSubmittedConversationId(null);
-    setSubmittedQuestion(null);
     setActiveAssetPath(null);
     setQuestion('');
     clearGenieTurns();
+    clearGenieTurnNotes();
     // Order matters: the reset event this dispatches is handled synchronously
     // by this route's own listener, which clears `actionStatus`. Setting the
     // confirmation BEFORE the dispatch left it permanently invisible.
@@ -232,23 +189,15 @@ export default function AskGenie() {
    * opening an orphan one. Mirrors GenieChat.loadSession.
    */
   function loadSession(conversationIdToLoad: string, turns: GenieTurn[]) {
+    if (getGenieTurnSnapshot().inFlight) return;
     suppressBootstrapConversationRef.current = true;
     setGenieTurns(turns);
+    clearGenieTurnNotes();
     setConversationId(conversationIdToLoad);
-    // Drop the in-memory answer so the settled turn of the PREVIOUS thread
-    // cannot re-append itself onto the restored one.
-    setSubmittedConversationId(null);
-    setSubmittedQuestion(null);
     setQuestion('');
     setActiveAssetPath(null);
     setActionStatus(null);
     writeGenieConversationId(conversationIdToLoad);
-  }
-
-  /** A turn settled: the composer must not keep the question it answered.
-   *  Left alone when the user has already typed the next one. */
-  function clearAnsweredQuestion(asked: string) {
-    setQuestion((current) => (current.trim() === asked.trim() ? '' : current));
   }
 
   function scopeToTrustedAsset(asset: { label: string; path: string }) {
@@ -259,40 +208,18 @@ export default function AskGenie() {
     questionRef.current?.focus();
   }
 
-  useEffect(() => {
-    if (!payload?.conversation_id || !shouldPersistConversation(payload)) return;
-    const nextConversationId = payload.conversation_id;
-    setConversationId(nextConversationId);
-    writeGenieConversationId(nextConversationId);
-  }, [payload]);
-
-  async function runAction(action: GenieActionSuggestion) {
+  /** A governed action, bound to the turn it was offered on (never the
+   *  latest answer). Pessimistic: the status says what the server recorded. */
+  function runAction(action: GenieActionSuggestion, payload: GenieAnswerShape) {
     setActionStatus(`Running ${action.label.toLowerCase()}...`);
-    try {
-      const result = await api.genieAction({
-        ...action,
-        conversation_id: payload?.conversation_id ?? conversationId,
-        message_id: payload?.message_id ?? null,
-        question_hash: payload?.question_hash ?? null,
-      });
-      if (!result.ok) {
-        setActionStatus(`Action failed: ${result.message}`);
-        return;
-      }
-      setActionStatus(
-        result.audit_event_id
-          ? `${result.message} Audit event ${result.audit_event_id}.`
-          : result.message,
-      );
+    return runGenieActionRequest(action, payload, conversationId).then((outcome) => {
+      const message = outcome.kind === 'ok' ? genieActionConfirmation(outcome.result) : outcome.message;
+      setActionStatus(message);
+      announceGenie(message);
+      if (outcome.kind !== 'ok') return;
       if (action.action_type === 'save_borrowers') refreshWorkspace();
-      if (result.route) navigate(result.route);
-    } catch (err) {
-      setActionStatus(
-        err instanceof Error
-          ? `Action failed: ${err.message}`
-          : 'Action failed.',
-      );
-    }
+      if (outcome.result.route) navigate(outcome.result.route);
+    });
   }
 
   const openRoute = (route: string) => navigate(route);
@@ -304,6 +231,9 @@ export default function AskGenie() {
       lede="Ask about your book in plain language: coverage, segments, borrowers and market shifts. Answers drawn from your data show the figures behind them and where they came from, and any follow-up action still needs your approval."
       heroRight={<AskGenieTabs tab={tab} onSelect={selectTab} />}
     >
+      <div className="sr-only" role="status" aria-live="polite" data-genie-announcer="route">
+        {announcerText}
+      </div>
       <section
         role="tabpanel"
         id={askGeniePanelId('ask')}
@@ -318,20 +248,11 @@ export default function AskGenie() {
               setQuestion(value);
               setActiveAssetPath(null);
             }}
-            onAsk={ask}
+            onAsk={(q) => ask(q, undefined, Date.now())}
             onNewThread={newConversation}
             onLoadSession={loadSession}
-            onSettled={clearAnsweredQuestion}
-            loading={loading}
-            warmingUp={warmingUp}
-            errorMsg={errorMsg}
-            onRetry={manualRetry}
             sampleQuestions={sampleQuestions}
-            payload={payload}
-            liveProgress={liveProgress}
-            askStartedAt={askStartedAt}
-            submittedQuestion={submittedQuestion}
-            onFollowUp={ask}
+            onFollowUp={(q, followUpConversationId) => ask(q, followUpConversationId, Date.now())}
             onAction={runAction}
             onEditQuestion={(q) => {
               setQuestion(q);

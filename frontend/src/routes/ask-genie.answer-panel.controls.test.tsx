@@ -26,10 +26,13 @@ vi.mock('../lib/api', async () => {
     api: {
       genieFeedback: vi.fn().mockResolvedValue({ accepted: true }),
       genieSessions: vi.fn().mockResolvedValue([]),
+      // A turn held in flight for the busy-rule cases; it never settles.
+      genieSubmit: vi.fn(() => new Promise(() => undefined)),
     },
   };
 });
 
+import { __resetGenieTurnStoreForTests, getGenieTurnSnapshot, startGenieTurn } from '../lib/genieInFlightTurn';
 import { AskGenieAnswerPanel } from './ask-genie.answer-panel';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -83,11 +86,16 @@ describe('AskGenieAnswerPanel composer controls', () => {
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
+    __resetGenieTurnStoreForTests();
     clearGenieTurns();
   });
 
   function render(question: string, inFlight = false) {
     act(() => {
+      // The in-flight turn is the tab's, read from the store (runtime-01).
+      if (inFlight && !getGenieTurnSnapshot().inFlight) {
+        startGenieTurn({ question: 'A question in flight', conversationId: null, surface: 'route', startedAt: 0 });
+      }
       root.render(
         <MemoryRouter>
           <AskGenieAnswerPanel
@@ -97,13 +105,7 @@ describe('AskGenieAnswerPanel composer controls', () => {
             onAsk={onAsk}
             onNewThread={() => undefined}
             onLoadSession={() => undefined}
-            loading={inFlight}
-            warmingUp={null}
-            errorMsg={null}
-            onRetry={() => undefined}
             sampleQuestions={[]}
-            payload={null}
-            submittedQuestion={inFlight ? 'A question in flight' : null}
             onFollowUp={() => undefined}
             onAction={() => undefined}
             actionStatus={null}
@@ -206,6 +208,7 @@ describe('AskGenieAnswerPanel docked composer (visual-07)', () => {
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
+    __resetGenieTurnStoreForTests();
   });
 
   function render(question: string) {
@@ -219,13 +222,7 @@ describe('AskGenieAnswerPanel docked composer (visual-07)', () => {
             onAsk={onAsk}
             onNewThread={() => undefined}
             onLoadSession={() => undefined}
-            loading={false}
-            warmingUp={null}
-            errorMsg={null}
-            onRetry={() => undefined}
             sampleQuestions={['Which states have the most prime refi candidates?']}
-            payload={null}
-            submittedQuestion={null}
             onFollowUp={() => undefined}
             onAction={() => undefined}
             actionStatus={null}

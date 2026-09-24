@@ -129,7 +129,6 @@ export function GenieChatBody({
             question={question}
             onFollowUp={(q, followUpConversationId) => onAsk(q, followUpConversationId)}
             followUpDisabledReason={busyReason}
-            announce={false}
             onAction={(action) => onAction(action, m.payload)}
             onEditQuestion={onEdit}
             onAnnounce={onAnnounce}
@@ -216,7 +215,6 @@ export function GenieChatBody({
               dense
               progress={inFlight?.progress ?? null}
               startedAt={inFlight?.startedAt ?? null}
-              announce={false}
               paused={!open}
             />
             {/* Stop (genie-03, client-only): abandons the client turn and

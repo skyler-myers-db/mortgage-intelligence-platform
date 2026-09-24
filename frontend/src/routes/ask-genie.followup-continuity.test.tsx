@@ -62,6 +62,7 @@ vi.mock('react-router', async () => {
 });
 
 import { clearGenieTurns } from '../lib/genieConversationStore';
+import { __resetGenieTurnStoreForTests } from '../lib/genieInFlightTurn';
 import AskGenie from './ask-genie';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -136,6 +137,8 @@ describe('Ask Genie conversation continuity', () => {
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
+    // The turn lives in a module-level store that outlives the route.
+    __resetGenieTurnStoreForTests();
   });
 
   function mount() {
