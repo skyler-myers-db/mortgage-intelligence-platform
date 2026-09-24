@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from collections.abc import Callable
 from threading import Lock
 from typing import Any, Literal
@@ -56,28 +57,71 @@ _WAREHOUSE_STATE_MAP: dict[str, DependencyState] = {
     "DELETED": "down",
 }
 # Inside the health request budget (mip_health_cold_wait_budget_s, 3 s), so a
-# slow state read fails over to SELECT 1 instead of timing health out.
+# slow state read fails over to SELECT 1 instead of timing health out. The
+# bound covers the state READ only: building the client resolves host
+# metadata with the SDK's own default timeouts, which is why the build runs in
+# the lifespan warm path (prime_warehouse_state_client), a probe never waits
+# on a build in flight, and a failed build is retried at most once per
+# _CLIENT_RETRY_AFTER_S. Until a client exists the probe uses SELECT 1.
 _WAREHOUSE_STATE_HTTP_TIMEOUT_S = 2.0
+_CLIENT_RETRY_AFTER_S = 60.0
 _workspace_client: Any = None
+_client_failed_at: float | None = None
 _workspace_client_lock = Lock()
 
 
-def _warehouse_state_client() -> Any:
-    """Build the SDK client once, lazily and under a lock (bounded timeouts)."""
+class WarehouseStateClientUnavailable(RuntimeError):
+    """No state-read client yet: a build is in flight or recently failed."""
 
-    global _workspace_client
-    with _workspace_client_lock:
+
+def _warehouse_state_client() -> Any:
+    """Return the SDK client, building it once; never wait on another build."""
+
+    global _workspace_client, _client_failed_at
+    client = _workspace_client
+    if client is not None:
+        return client
+    if not _workspace_client_lock.acquire(blocking=False):
+        raise WarehouseStateClientUnavailable("build_in_flight")
+    try:
         if _workspace_client is None:
+            failed_at = _client_failed_at
+            if failed_at is not None and time.monotonic() - failed_at < _CLIENT_RETRY_AFTER_S:
+                raise WarehouseStateClientUnavailable("build_failed_recently")
             from databricks.sdk import WorkspaceClient
             from databricks.sdk.core import Config
 
-            _workspace_client = WorkspaceClient(
-                config=Config(
-                    http_timeout_seconds=_WAREHOUSE_STATE_HTTP_TIMEOUT_S,
-                    retry_timeout_seconds=int(_WAREHOUSE_STATE_HTTP_TIMEOUT_S),
+            try:
+                _workspace_client = WorkspaceClient(
+                    config=Config(
+                        http_timeout_seconds=_WAREHOUSE_STATE_HTTP_TIMEOUT_S,
+                        retry_timeout_seconds=int(_WAREHOUSE_STATE_HTTP_TIMEOUT_S),
+                    )
                 )
-            )
+            except Exception:
+                _client_failed_at = time.monotonic()
+                raise
+            _client_failed_at = None
         return _workspace_client
+    finally:
+        _workspace_client_lock.release()
+
+
+def prime_warehouse_state_client() -> None:
+    """Build the state-read client at startup; log-and-continue like the warms."""
+
+    if not (settings.databricks_warehouse_id or "").strip():
+        return
+    try:
+        _warehouse_state_client()
+    except Exception as exc:  # noqa: BLE001 -- the probe falls back to SELECT 1
+        emit(
+            log,
+            "warehouse_state_client_prime_failed",
+            level=logging.WARNING,
+            dependency="warehouse",
+            exc_type=type(exc).__name__,
+        )
 
 
 def _read_warehouse_state() -> DependencyState | None:

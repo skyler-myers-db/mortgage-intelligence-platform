@@ -67,6 +67,7 @@ from backend.services.campaign_treatment_runtime import (
     campaign_treatment_runtime_enabled,
 )
 from backend.services.genie_place_dimension import warm_governed_place_dimension
+from backend.services.health_probes import prime_warehouse_state_client
 from backend.services.keep_warm import log_startup_policy as _keep_warm_policy
 from backend.services.observability import (
     configure_logging,
@@ -337,6 +338,7 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
         # structured log line and decide whether to flip the flag.
         check_trust_boundary_at_startup()
         _warm_warehouse()
+        prime_warehouse_state_client()  # delivery-01: build off the health path
         _warm_lakebase()
         _warm_hot_lead_cache()
         warm_governed_place_dimension()
