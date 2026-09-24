@@ -22,7 +22,9 @@ import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { parseCampaignPrefill } from '../lib/campaignPrefill';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
 import { useFootprint } from '../components/FootprintProvider';
+import { useUnsavedGuard } from '../hooks/useUnsavedGuard';
 import { queryKeys } from '../lib/queryKeys';
+import { toast } from '../lib/toast';
 import { RoiProjector, StateMultiSelect } from './portfolio-builder.components';
 import { CampaignSetupPanel } from './portfolio-builder.campaign-setup';
 import { CampaignBuildGuard, SavedCampaignsPanel } from './portfolio-builder.governance';
@@ -46,6 +48,7 @@ import {
   parseStateCodesFromUrl,
   type CampaignSetupState,
 } from './portfolio-builder.logic';
+import { campaignSetupsEqual, portfolioUnsavedMessage } from './portfolio-builder.unsaved';
 import { HIGH_OPPORTUNITY_KPI_LABEL } from '../lib/opportunityScore';
 import { populationKpiLabel } from '../lib/populationLabels';
 
@@ -122,8 +125,9 @@ export default function PortfolioBuilder() {
   const [committedStateCodes, setCommittedStateCodes] = useState<string[]>(() =>
     parseStateCodesFromUrl(searchParams, footprint.states),
   );
-  const [copyHint, setCopyHint] = useState<'idle' | 'copied' | 'failed'>('idle');
-  const [saveHint, setSaveHint] = useState<'idle' | 'saved' | 'failed'>('idle');
+  // Success feedback is a shell toast (audit states-07); a failed save keeps
+  // its inline alert in the naming form until the next attempt.
+  const [saveFailed, setSaveFailed] = useState(false);
   // Inline naming form for "Save build". Re-audit #3 P1 (2026-06-12): the
   // previous native prompt() dialog is SYNCHRONOUS — it blocks the renderer
   // main thread (a hard freeze under any CDP/Playwright session, and an
@@ -134,6 +138,8 @@ export default function PortfolioBuilder() {
   const [saveName, setSaveName] = useState('');
   const [saveValidationError, setSaveValidationError] = useState<string | null>(null);
   const [campaignSetup, setCampaignSetup] = useState<CampaignSetupState>(DEFAULT_CAMPAIGN_SETUP);
+  // The setup last persisted with a build: the unsaved-changes baseline.
+  const [savedCampaignSetup, setSavedCampaignSetup] = useState<CampaignSetupState>(DEFAULT_CAMPAIGN_SETUP);
   const campaignBuildConfig = useMemo(() => {
     const config = buildCampaignConfig(campaignSetup);
     return {
@@ -263,6 +269,13 @@ export default function PortfolioBuilder() {
       JSON.stringify({ filters: committedFilters, stateCodes: committedStateCodes }),
     [committedFilters, committedStateCodes, filters, stateCodes],
   );
+  // Audit states-05: filters not yet run and a setup not yet saved survive a
+  // route leave or tab close only through the operator's choice.
+  const unsavedMessage = portfolioUnsavedMessage(
+    buildDirty,
+    !campaignSetupsEqual(campaignSetup, savedCampaignSetup),
+  );
+  useUnsavedGuard(unsavedMessage !== null, unsavedMessage ?? undefined);
 
   /**
    * Commit the current filter state: push to URL, then refetch. The
@@ -289,9 +302,9 @@ export default function PortfolioBuilder() {
     if (buildDirty) return;
     try {
       await navigator.clipboard.writeText(window.location.href);
-      setCopyHint('copied');
+      toast.success('Build link copied', { detail: 'Anyone with access opens this exact build.' });
     } catch {
-      setCopyHint('failed');
+      toast.error('Copy failed', { detail: 'The browser blocked clipboard access. Copy the address bar instead.' });
     }
   }, [buildDirty]);
 
@@ -301,6 +314,7 @@ export default function PortfolioBuilder() {
     saveRequestRef.current = null;
     setSaveName(`Portfolio build ${new Date().toLocaleString()}`);
     setSaveValidationError(null);
+    setSaveFailed(false);
     setSavePanelOpen(true);
   }, [buildDirty, buildInFlight, preview?.campaign_build_eligible]);
 
@@ -312,16 +326,17 @@ export default function PortfolioBuilder() {
       setSaveValidationError(
         `This build is not eligible for the governed ${campaignBuildLimit.toLocaleString()}-contact campaign limit. Refine the filters and run it again.`,
       );
-      setSaveHint('failed');
+      setSaveFailed(true);
       return;
     }
     const copyError = campaignCopyValidationError(campaignSetup);
     if (copyError) {
       setSaveValidationError(copyError);
-      setSaveHint('failed');
+      setSaveFailed(true);
       return;
     }
     setSaveValidationError(null);
+    setSaveFailed(false);
     // Re-audit #4 (2026-06-12): the panel used to close BEFORE the await,
     // so a failed save silently discarded the operator's typed name. Keep
     // the panel (and the name) until the save actually succeeds; on failure
@@ -338,17 +353,18 @@ export default function PortfolioBuilder() {
           requestId: crypto.randomUUID(),
         };
       }
-      await api.portfolioCreate(
+      const created = await api.portfolioCreate(
         name,
         criteria,
         { ...campaignConfig, request_id: saveRequestRef.current.requestId },
       );
       await refetchCampaigns();
       saveRequestRef.current = null;
+      setSavedCampaignSetup(campaignSetup);
       setSavePanelOpen(false);
-      setSaveHint('saved');
+      toast.success('Build saved', { detail: name, auditEventId: created?.audit_event_id ?? null });
     } catch {
-      setSaveHint('failed');
+      setSaveFailed(true);
     } finally {
       setSaving(false);
     }
@@ -363,18 +379,6 @@ export default function PortfolioBuilder() {
     saveName,
     saving,
   ]);
-
-  useEffect(() => {
-    if (copyHint === 'idle') return;
-    const t = window.setTimeout(() => setCopyHint('idle'), 1800);
-    return () => window.clearTimeout(t);
-  }, [copyHint]);
-
-  useEffect(() => {
-    if (saveHint === 'idle') return;
-    const t = window.setTimeout(() => setSaveHint('idle'), 2200);
-    return () => window.clearTimeout(t);
-  }, [saveHint]);
 
   // When the URL changes (browser back/forward), reconcile local state
   // and refetch so the KPI grid reflects the navigation. We only
@@ -476,13 +480,7 @@ export default function PortfolioBuilder() {
               aria-label="Copy shareable URL for the current build"
               data-testid="portfolio-copy-link"
             >
-              {copyHint === 'copied'
-                ? 'Link copied'
-                : copyHint === 'failed'
-                ? 'Copy failed'
-                : buildDirty
-                ? 'Run before sharing'
-                : 'Share this build'}
+              {buildDirty ? 'Run before sharing' : 'Share this build'}
             </Button>
             <Button
               variant="ghost"
@@ -494,11 +492,7 @@ export default function PortfolioBuilder() {
               aria-expanded={savePanelOpen}
               data-testid="portfolio-save-build"
             >
-              {saveHint === 'saved'
-                ? 'Build saved'
-                : saveHint === 'failed'
-                ? 'Save failed'
-                : buildDirty
+              {buildDirty
                 ? 'Run before saving'
                 : buildInFlight
                 ? 'Build running…'
@@ -557,7 +551,7 @@ export default function PortfolioBuilder() {
               >
                 Cancel
               </Button>
-              {saveHint === 'failed' && (
+              {saveFailed && (
                 <span className="save-build-form__error" role="alert">
                   {saveValidationError ?? 'Save failed — your name is kept; try again.'}
                 </span>

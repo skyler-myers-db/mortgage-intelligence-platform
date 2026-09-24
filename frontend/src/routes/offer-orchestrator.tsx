@@ -11,6 +11,7 @@ import { ScoreBadge } from '../components/mortgage/ScoreBadge';
 import { ConfidenceMeter } from '../components/mortgage/ConfidenceMeter';
 import { Button, Chip } from '../components/Primitives';
 import { useApp } from '../components/AppContext';
+import { useUnsavedGuard } from '../hooks/useUnsavedGuard';
 import { approverGateReason } from '../components/mortgage/approverGate';
 import { invalidateOperationalQueries } from '../lib/queryKeys';
 import { offerDisplayLabel } from '../lib/offerLanguage';
@@ -25,6 +26,7 @@ import {
 import { draftProofMatchesSnapshot, offerSnapshotMatches, resolveOfferApprovalStatus } from './offer-orchestrator.snapshot';
 import { OfferSnapshotReconciliation } from './offer-orchestrator.snapshot-status';
 import { OfferDecisionOutcome } from './offer-orchestrator.decision';
+import { announceApprovalRouting, offerUnsavedMessage } from './offer-orchestrator.feedback';
 import {
   OfferLoadErrorRoute,
   OfferOrchestratorEmptyRoute,
@@ -87,7 +89,6 @@ export default function OfferOrchestrator() {
   const salesTeam = useOfferSalesTeam();
   const [assignedTo, setAssignedTo] = useState<string>('');
   const [followUpDays, setFollowUpDays] = useState<number>(0); // 0 = no reminder
-  const [routingConfirm, setRoutingConfirm] = useState<{ email: string | null; followUpAt: string | null } | null>(null);
   const [borrowerPreviewOpen, setBorrowerPreviewOpen] = useState(false);
   const allowedDraftChannels = campaignBinding
     ? SAVED_CAMPAIGN_OUTREACH_CHANNELS
@@ -370,6 +371,14 @@ export default function OfferOrchestrator() {
     reloadToken,
   ]);
 
+  const draftDirty = draftLoaded && (
+    draftBody !== draftBaselineBody
+    || (activeDraftChannel !== 'sms' && draftSubject !== draftBaselineSubject)
+  );
+  // Audit states-05: unsaved typed work asks before a route leave or tab close.
+  const unsavedMessage = offerUnsavedMessage(draftDirty, rejectReviewOpen && rejectRationale.trim().length > 0);
+  useUnsavedGuard(unsavedMessage !== null, unsavedMessage ?? undefined);
+
   if (!id && lastBorrowerId) {
     return <Navigate to={`/offer-orchestrator/${lastBorrowerId}`} replace />;
   }
@@ -395,10 +404,6 @@ export default function OfferOrchestrator() {
       && draftProofFresh
       && subjectReady
       && draftText.trim().length > 0,
-  );
-  const draftDirty = draftLoaded && (
-    draftBody !== draftBaselineBody
-    || (activeDraftChannel !== 'sms' && draftSubject !== draftBaselineSubject)
   );
   const savedDraft = savedDraftKey ? savedDrafts[savedDraftKey] : undefined;
   const draftIsSaved = Boolean(
@@ -520,10 +525,11 @@ export default function OfferOrchestrator() {
         setAuditId(res.audit_event_id ?? null);
         setApprovalId(res.approval_id ?? null);
         setJustDecided({ id, reloadToken });
-        setRoutingConfirm({
-          email: res.assigned_to_email ?? (assignedTo || null),
-          followUpAt: res.follow_up_at ?? null,
-        });
+        announceApprovalRouting(
+          res.assigned_to_email ?? (assignedTo || null),
+          res.follow_up_at ?? null,
+          res.audit_event_id ?? null,
+        );
         clearBorrowerCache(id);
         void invalidateOperationalQueries(queryClient);
       } else {
@@ -816,7 +822,6 @@ export default function OfferOrchestrator() {
         justDecided={justDecided?.id === id && justDecided.reloadToken === reloadToken}
         approvalId={approvalId}
         approveError={approveError}
-        routingConfirm={routingConfirm}
         score={b ? { opportunityScore: b.opportunity_score, confidence: b.confidence } : null}
       />
     </PageShell>

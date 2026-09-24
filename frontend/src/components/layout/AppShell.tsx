@@ -10,6 +10,8 @@ import { EvidenceDrawer } from '../mortgage/EvidenceDrawer';
 import { DegradedBanner } from '../mortgage/DegradedBanner';
 import { VersionNotice } from '../mortgage/VersionNotice';
 import { GenieDock } from './GenieDock';
+import { ShellToaster } from '../feedback/ShellToaster';
+import { UnsavedChangesGuard } from '../feedback/UnsavedChangesGuard';
 import { lazyWithPreload, preloadBestEffort } from '../../lib/lazyPreload';
 import { createIdlePreloader } from '../../lib/prefetch';
 import { clearActorScopedBrowserState } from '../../lib/actorScopedBrowserState';
@@ -228,6 +230,10 @@ function AppShellInner({ children }: PropsWithChildren) {
       {/* Mounted on first open and never unmounted: closing only hides the
           panel, so an in-flight Genie turn survives (see GenieDock). */}
       <GenieDock open={genieOpen} onOpen={openGenie} onWarm={warmGenie} Chat={LazyGenieChat} />
+      {/* Shell feedback (audit states-05 / states-07): the toast region and
+          the "Leave without saving?" guard for pages with unsaved work. */}
+      <ShellToaster />
+      <UnsavedChangesGuard />
     </div>
   );
 }

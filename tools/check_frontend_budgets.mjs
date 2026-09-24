@@ -59,8 +59,23 @@ const budgets = {
   // panel is closed plus the shared Escape stack; session-keyed Reveal and
   // the hashed wordmark. The raw gate had 0.4% headroom left and gzip had
   // none. Measured: initial JS 415.31 / gzip 128.25; restore ~5% headroom.
-  initialJsBytes: 436 * KiB, // actual 415.31
-  initialJsGzipBytes: 135 * KiB, // actual 128.25
+  // Re-baselined 2026-09-23 for the wave-1c feedback-guard lane (audit
+  // states-05, states-07). The unsaved-changes guard needs useBlocker, which
+  // only a data router provides, so main.tsx mounts createBrowserRouter
+  // with one catch-all route around the unchanged <Routes> tree. React
+  // Router's data-router runtime is the whole cost and cannot be lazy (it is
+  // the router): measured against base 726106a1 (424.88 / gzip 131.57) and
+  // a same-tree <BrowserRouter> build (430.38 / 133.42), it adds +53.16 /
+  // +16.13 KiB. The react-router/dom RouterProvider wrapper is 0.09 KiB of
+  // that (measured) and is kept for flushSync. The guard's store, blocker
+  // host and dialog plus the toast store and lazy-Toaster host add +5.50 /
+  // +1.85 and stay initial on purpose (the dialog must render in the frame
+  // a navigation is blocked); the Toaster and its CSS are their own lazy
+  // chunk, out of this number and the CSS gate.
+  // Measured at the lane head: initial JS 483.54 / gzip 149.55; ~5% headroom
+  // per policy.
+  initialJsBytes: 508 * KiB, // actual 483.54
+  initialJsGzipBytes: 157 * KiB, // actual 149.55
   // Bumped 2026-06-11 for the re-audit #4 Buyer-Wow tranche: ⌘K command
   // palette (.cmdk*), portal evidence hover-card (.evidence-hovercard*),
   // sleek one-time KPI entrance (.kpi__value--enter / .spark__line--draw),

@@ -26,6 +26,7 @@ import { readFileSync } from 'node:fs';
 // @ts-expect-error see node:fs note above.
 import { join } from 'node:path';
 import type { PortfolioPreview } from '../types';
+import { clearToasts, getToasts } from '../lib/toast';
 
 // Vitest executes on Node, but the app tsconfig (correctly) carries no Node
 // globals — declare the one we use.
@@ -152,6 +153,7 @@ describe('PortfolioBuilder save-build flow', () => {
       evidence: [],
       warnings: [],
     });
+    clearToasts();
     promptSpy = vi.fn();
     // If ANY code path reaches for the native blocking dialog again, fail
     // loudly instead of freezing a renderer at the booth.
@@ -355,7 +357,7 @@ describe('PortfolioBuilder save-build flow', () => {
 
   it('opens an in-page naming form instead of window.prompt and saves with the typed name', async () => {
     portfolioPreview.mockResolvedValue(PREVIEW);
-    portfolioCreate.mockResolvedValue({ campaign_id: 'c-1' });
+    portfolioCreate.mockResolvedValue({ campaign_id: 'c-1', audit_event_id: 'audit-save-0001' });
     mount();
     await waitUntil(() => !saveButton().disabled);
 
@@ -390,11 +392,20 @@ describe('PortfolioBuilder save-build flow', () => {
     expect(portfolioCreate.mock.calls[0][0]).toBe('Booth build — Summit IL refi');
     expect(portfolioCreate.mock.calls[0][2].message_variants).toEqual([]);
     expect(promptSpy).not.toHaveBeenCalled();
-    // The panel closes and the hint flips to saved.
+    // The panel closes and the confirmation is ONE shell toast linked to the
+    // save's audit row (audit states-07); the button keeps its own label.
     expect(
       container.querySelector('[data-testid="portfolio-save-name"]'),
     ).toBeNull();
-    expect(saveButton().textContent).toContain('Build saved');
+    expect(saveButton().textContent).toContain('Save build');
+    expect(getToasts()).toEqual([
+      expect.objectContaining({
+        tone: 'success',
+        title: 'Build saved',
+        detail: 'Booth build — Summit IL refi',
+        auditEventId: 'audit-save-0001',
+      }),
+    ]);
   });
 
   it('does not persist DOM-tampered copy from the read-only campaign fields', async () => {
@@ -491,7 +502,12 @@ describe('PortfolioBuilder save-build flow', () => {
     await waitUntil(() => portfolioCreate.mock.calls.length === 2);
     await waitUntil(() => container.querySelector('[data-testid="portfolio-save-name"]') === null);
     expect(portfolioCreate.mock.calls[1][2].request_id).toBe(firstRequestId);
-    expect(saveButton().textContent).toContain('Build saved');
+    expect(saveButton().textContent).toContain('Save build');
+    // The failed attempt raised no toast (its alert is inline, beside the
+    // kept name); the retry raised exactly one confirmation.
+    expect(getToasts().map((toast) => [toast.tone, toast.title, toast.detail])).toEqual([
+      ['success', 'Build saved', 'Distinct Illinois refinance cohort'],
+    ]);
   });
 
   it('launches a saved Supervisor campaign with its selected variant and provenance', async () => {
