@@ -28,6 +28,12 @@ from backend.services.proof_policy import (
     hash_sql,
     validate_borrower_proof_sql,
 )
+from backend.services.repositories.databricks_borrower_proof_margins import (
+    _float_value,
+    _int_value,
+    _offer_inputs,
+    build_proof_margins,
+)
 from backend.services.repositories.databricks_shared import (
     _coerce_bool,
     _redact_evidence_list,
@@ -113,26 +119,6 @@ _RELATIONSHIP_FAIR_LENDING_NOTE = (
 _INVESTOR_FAIR_LENDING_NOTE = (
     "Audit note: ownership posture supports routing; it is not used for credit eligibility."
 )
-
-
-def _int_value(row: dict[str, Any], key: str, default: int = 0) -> int:
-    value = row.get(key)
-    if value is None:
-        return default
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _float_value(row: dict[str, Any], key: str, default: float = 0.0) -> float:
-    value = row.get(key)
-    if value is None:
-        return default
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
 
 
 def _str_or_none(value: Any) -> str | None:
@@ -242,20 +228,8 @@ def _offer_branches(row: dict[str, Any], selected_code: str) -> list[ProofOfferB
 
 
 def _recomputed_offer_code(row: dict[str, Any]) -> str:
-    return next_best_offer(
-        _int_value(row, "rate_spread_bps"),
-        _int_value(row, "equity_pct"),
-        _coerce_bool(row.get("has_permit")) or _coerce_bool(row.get("has_heloc_propensity_trigger")),
-        _coerce_bool(row.get("listed_for_sale")),
-        _coerce_bool(row.get("is_investor")),
-        _coerce_bool(row.get("is_current_customer")),
-        _coerce_bool(row.get("is_competitor_lien")),
-        _int_value(row, "min_spread_bps_applied", 75),
-        _int_value(row, "min_equity_pct_applied", 15),
-        _int_value(row, "heloc_equity_min_applied", 35),
-        _int_value(row, "cashout_equity_min_applied", 25),
-        _int_value(row, "retention_min_spread_applied", 50),
-    )
+    # The same coerced inputs the margins perturb (databricks_borrower_proof_margins).
+    return next_best_offer(**_offer_inputs(row)._asdict())
 
 
 def _proof_evidence_rows(raw: Any) -> list[ProofEvidenceEvent]:
@@ -480,4 +454,6 @@ def _build_borrower_proof(row: dict[str, Any]) -> BorrowerProof:
         evidence_rows=_proof_evidence_rows(row.get("evidence_events") or []),
         source_assets=borrower_proof_assets(),
         reproduce=_proof_sql_templates(),
+        # Built after trusted / known_data_gaps are final: margins never add a gap.
+        margins=build_proof_margins(row, dossier_offer=selected_code),
     )

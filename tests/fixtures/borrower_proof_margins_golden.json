@@ -1,0 +1,965 @@
+{
+  "_generated_by": "PYTHONPATH=. python tests/unit/test_borrower_proof_margins.py --regen",
+  "cases": [
+    {
+      "id": "clears_refi_plus_heloc",
+      "note": "Clears the screen; the par flip lands at +13 (87.5 -> 74.5 bps rounds to 74).",
+      "row": {
+        "current_rate": 5.75,
+        "market_rate_fraction": 0.04875,
+        "rate_spread_bps": 88,
+        "equity_pct": 46,
+        "has_permit": false,
+        "has_heloc_propensity_trigger": false,
+        "listed_for_sale": false,
+        "is_investor": false,
+        "is_current_customer": false,
+        "is_competitor_lien": false,
+        "min_spread_bps_applied": 75,
+        "min_equity_pct_applied": 15,
+        "heloc_equity_min_applied": 35,
+        "cashout_equity_min_applied": 25,
+        "retention_min_spread_applied": 50,
+        "recommended_offer_code": "refi_plus_heloc"
+      },
+      "margins": [
+        {
+          "key": "spread_screen",
+          "label": "Refi screen",
+          "value_text": "Clears the refi screen by 13 bps",
+          "threshold": "spread 88 bps · screen 75 bps",
+          "direction": "clears",
+          "source": "mip.gold.fn_in_the_money"
+        },
+        {
+          "key": "par_break_even",
+          "label": "Par break-even",
+          "value_text": "Drops below the refi screen if 30-year par rises 13 bps to 5.01%",
+          "threshold": "par 4.88%",
+          "direction": "flips",
+          "source": "mip.gold.fn_rate_spread"
+        },
+        {
+          "key": "equity_floor",
+          "label": "Equity threshold",
+          "value_text": "Clears the home-equity threshold by 11 pts",
+          "threshold": "equity 46% · threshold 35%",
+          "direction": "clears",
+          "source": "mip.gold.fn_next_best_offer"
+        },
+        {
+          "key": "offer_flip_equity",
+          "label": "Offer change by equity",
+          "value_text": "Becomes Refinance review at 34% equity",
+          "threshold": "equity 46%",
+          "direction": "flips",
+          "source": "mip.gold.fn_next_best_offer"
+        },
+        {
+          "key": "offer_flip_par",
+          "label": "Offer change by par",
+          "value_text": "Becomes Cash-out refinance review if par rises 13 bps to 5.01%",
+          "threshold": "par 4.88%",
+          "direction": "flips",
+          "source": "mip.gold.fn_next_best_offer"
+        }
+      ]
+    },
+    {
+      "id": "short_heloc",
+      "note": "Below the screen: the break-even is a par fall.",
+      "row": {
+        "current_rate": 5.25,
+        "market_rate_fraction": 0.04875,
+        "rate_spread_bps": 37,
+        "equity_pct": 48,
+        "has_permit": true,
+        "has_heloc_propensity_trigger": false,
+        "listed_for_sale": false,
+        "is_investor": false,
+        "is_current_customer": false,
+        "is_competitor_lien": false,
+        "min_spread_bps_applied": 75,
+        "min_equity_pct_applied": 15,
+        "heloc_equity_min_applied": 35,
+        "cashout_equity_min_applied": 25,
+        "retention_min_spread_applied": 50,
+        "recommended_offer_code": "heloc"
+      },
+      "margins": [
+        {
+          "key": "spread_screen",
+          "label": "Refi screen",
+          "value_text": "38 bps below the refi screen",
+          "threshold": "spread 37 bps · screen 75 bps",
+          "direction": "short",
+          "source": "mip.gold.fn_in_the_money"
+        },
+        {
+          "key": "par_break_even",
+          "label": "Par break-even",
+          "value_text": "Clears the refi screen if 30-year par falls 38 bps to 4.50%",
+          "threshold": "par 4.88%",
+          "direction": "flips",
+          "source": "mip.gold.fn_rate_spread"
+        },
+        {
+          "key": "equity_floor",
+          "label": "Equity threshold",
+          "value_text": "Clears the home-equity threshold by 13 pts",
+          "threshold": "equity 48% · threshold 35%",
+          "direction": "clears",
+          "source": "mip.gold.fn_next_best_offer"
+        },
+        {
+          "key": "offer_flip_equity",
+          "label": "Offer change by equity",
+          "value_text": "Becomes Cash-out refinance review at 34% equity",
+          "threshold": "equity 48%",
+          "direction": "flips",
+          "source": "mip.gold.fn_next_best_offer"
+        },
+        {
+          "key": "offer_flip_par",
+          "label": "Offer change by par",
+          "value_text": "Becomes Refinance + home-equity review if par falls 38 bps to 4.50%",
+          "threshold": "par 4.88%",
+          "direction": "flips",
+          "source": "mip.gold.fn_next_best_offer"
+        }
+      ]
+    },
+    {
+      "id": "half_bps_odd_min_spread",
+      "note": "Odd minimum at an exact .5 bps boundary: half-even flips at +17, half-up would say +18.",
+      "row": {
+        "current_rate": 5.75,
+        "market_rate_fraction": 0.04875,
+        "rate_spread_bps": 88,
+        "equity_pct": 46,
+        "has_permit": false,
+        "has_heloc_propensity_trigger": false,
+        "listed_for_sale": false,
+        "is_investor": false,
+        "is_current_customer": false,
+        "is_competitor_lien": false,
+        "min_spread_bps_applied": 71,
+        "min_equity_pct_applied": 15,
+        "heloc_equity_min_applied": 35,
+        "cashout_equity_min_applied": 25,
+        "retention_min_spread_applied": 50,
+        "recommended_offer_code": "refi_plus_heloc"
+      },
+      "margins": [
+        {
+          "key": "spread_screen",
+          "label": "Refi screen",
+          "value_text": "Clears the refi screen by 17 bps",
+          "threshold": "spread 88 bps · screen 71 bps",
+          "direction": "clears",
+          "source": "mip.gold.fn_in_the_money"
+        },
+        {
+          "key": "par_break_even",
+          "label": "Par break-even",
+          "value_text": "Drops below the refi screen if 30-year par rises 17 bps to 5.04%",
+          "threshold": "par 4.88%",
+          "direction": "flips",
+          "source": "mip.gold.fn_rate_spread"
+        },
+        {
+          "key": "equity_floor",
+          "label": "Equity threshold",
+          "value_text": "Clears the home-equity threshold by 11 pts",
+          "threshold": "equity 46% · threshold 35%",
+          "direction": "clears",
+          "source": "mip.gold.fn_next_best_offer"
+        },
+        {
+          "key": "offer_flip_equity",
+          "label": "Offer change by equity",
+          "value_text": "Becomes Refinance review at 34% equity",
+          "threshold": "equity 46%",
+          "direction": "flips",
+          "source": "mip.gold.fn_next_best_offer"
+        },
+        {
+          "key": "offer_flip_par",
+          "label": "Offer change by par",
+          "value_text": "Becomes Cash-out refinance review if par rises 17 bps to 5.04%",
+          "threshold": "par 4.88%",
+          "direction": "flips",
+          "source": "mip.gold.fn_next_best_offer"
+        }
+      ]
+    },
+    {
+      "id": "half_bps_even_min_spread",
+      "note": "Even minimum at the same boundaries: half-even and half-up agree.",
+      "row": {
+        "current_rate": 5.75,
+        "market_rate_fraction": 0.04875,
+        "rate_spread_bps": 88,
+        "equity_pct": 46,
+        "has_permit": false,
+        "has_heloc_propensity_trigger": false,
+        "listed_for_sale": false,
+        "is_investor": false,
+        "is_current_customer": false,
+        "is_competitor_lien": false,
+        "min_spread_bps_applied": 72,
+        "min_equity_pct_applied": 15,
+        "heloc_equity_min_applied": 35,
+        "cashout_equity_min_applied": 25,
+        "retention_min_spread_applied": 50,
+        "recommended_offer_code": "refi_plus_heloc"
+      },
+      "margins": [
+        {
+          "key": "spread_screen",
+          "label": "Refi screen",
+          "value_text": "Clears the refi screen by 16 bps",
+          "threshold": "spread 88 bps · screen 72 bps",
+          "direction": "clears",
+          "source": "mip.gold.fn_in_the_money"
+        },
+        {
+          "key": "par_break_even",
+          "label": "Par break-even",
+          "value_text": "Drops below the refi screen if 30-year par rises 17 bps to 5.04%",
+          "threshold": "par 4.88%",
+          "direction": "flips",
+          "source": "mip.gold.fn_rate_spread"
+        },
+        {
+          "key": "equity_floor",
+          "label": "Equity threshold",
+          "value_text": "Clears the home-equity threshold by 11 pts",
+          "threshold": "equity 46% · threshold 35%",
+          "direction": "clears",
+          "source": "mip.gold.fn_next_best_offer"
+        },
+        {
+          "key": "offer_flip_equity",
+          "label": "Offer change by equity",
+          "value_text": "Becomes Refinance review at 34% equity",
+          "threshold": "equity 46%",
+          "direction": "flips",
+          "source": "mip.gold.fn_next_best_offer"
+        },
+        {
+          "key": "offer_flip_par",
+          "label": "Offer change by par",
+          "value_text": "Becomes Cash-out refinance review if par rises 17 bps to 5.04%",
+          "threshold": "par 4.88%",
+          "direction": "flips",
+          "source": "mip.gold.fn_next_best_offer"
+        }
+      ]
+    },
+    {
+      "id": "half_bps_short_odd_min_spread",
+      "note": "Short of an odd minimum: half-even clears at -9, half-up would say -8.",
+      "row": {
+        "current_rate": 5.5,
+        "market_rate_fraction": 0.04875,
+        "rate_spread_bps": 62,
+        "equity_pct": 30,
+        "has_permit": false,
+        "has_heloc_propensity_trigger": false,
+        "listed_for_sale": false,
+        "is_investor": false,
+        "is_current_customer": false,
+        "is_competitor_lien": false,
+        "min_spread_bps_applied": 71,
+        "min_equity_pct_applied": 15,
+        "heloc_equity_min_applied": 35,
+        "cashout_equity_min_applied": 25,
+        "retention_min_spread_applied": 50,
+        "recommended_offer_code": "cash_out"
+      },
+      "margins": [
+        {
+          "key": "spread_screen",
+          "label": "Refi screen",
+          "value_text": "9 bps below the refi screen",
+          "threshold": "spread 62 bps · screen 71 bps",
+          "direction": "short",
+          "source": "mip.gold.fn_in_the_money"
+        },
+        {
+          "key": "par_break_even",
+          "label": "Par break-even",
+          "value_text": "Clears the refi screen if 30-year par falls 9 bps to 4.79%",
+          "threshold": "par 4.88%",
+          "direction": "flips",
+          "source": "mip.gold.fn_rate_spread"
+        },
+        {
+          "key": "equity_floor",
+          "label": "Equity threshold",
+          "value_text": "Clears the cash-out threshold by 5 pts",
+          "threshold": "equity 30% · threshold 25%",
+          "direction": "clears",
+          "source": "mip.gold.fn_next_best_offer"
+        },
+        {
+          "key": "offer_flip_equity",
+          "label": "Offer change by equity",
+          "value_text": "Becomes Monitor for later at 24% equity",
+          "threshold": "equity 30%",
+          "direction": "flips",
+          "source": "mip.gold.fn_next_best_offer"
+        },
+        {
+          "key": "offer_flip_par",
+          "label": "Offer change by par",
+          "value_text": "Becomes Refinance review if par falls 9 bps to 4.79%",
+          "threshold": "par 4.88%",
+          "direction": "flips",
+          "source": "mip.gold.fn_next_best_offer"
+        }
+      ]
+    },
+    {
+      "id": "eighth_coupon_live_par",
+      "note": "An eighth-point coupon against a two-decimal FRED par; current_rate carries its DOUBLE tail.",
+      "row": {
+        "current_rate": 6.375,
+        "market_rate_fraction": 0.0626,
+        "rate_spread_bps": 11,
+        "equity_pct": 20,
+        "has_permit": false,
+        "has_heloc_propensity_trigger": false,
+        "listed_for_sale": false,
+        "is_investor": false,
+        "is_current_customer": false,
+        "is_competitor_lien": false,
+        "min_spread_bps_applied": 11,
+        "min_equity_pct_applied": 15,
+        "heloc_equity_min_applied": 35,
+        "cashout_equity_min_applied": 25,
+        "retention_min_spread_applied": 50,
+        "recommended_offer_code": "refi"
+      },
+      "margins": [
+        {
+          "key": "spread_screen",
+          "label": "Refi screen",
+          "value_text": "Meets the refi screen exactly",
+          "threshold": "spread 11 bps · screen 11 bps",
+          "direction": "clears",
+          "source": "mip.gold.fn_in_the_money"
+        },
+        {
+          "key": "par_break_even",
+          "label": "Par break-even",
+          "value_text": "Drops below the refi screen if 30-year par rises 1 bp to 6.27%",
+          "threshold": "par 6.26%",
+          "direction": "flips",
+          "source": "mip.gold.fn_rate_spread"
+        },
+        {
+          "key": "equity_floor",
+          "label": "Equity threshold",
+          "value_text": "Clears the refi equity threshold by 5 pts",
+          "threshold": "equity 20% · threshold 15%",
+          "direction": "clears",
+          "source": "mip.gold.fn_next_best_offer"
+        },
+        {
+          "key": "offer_flip_equity",
+          "label": "Offer change by equity",
+          "value_text": "Becomes Monitor for later at 14% equity · Becomes Refinance + home-equity review at 35% equity",
+          "threshold": "equity 20%",
+          "direction": "flips",
+          "source": "mip.gold.fn_next_best_offer"
+        },
+        {
+          "key": "offer_flip_par",
+          "label": "Offer change by par",
+          "value_text": "Becomes Monitor for later if par rises 1 bp to 6.27%",
+          "threshold": "par 6.26%",
+          "direction": "flips",
+          "source": "mip.gold.fn_next_best_offer"
+        }
+      ]
+    },
+    {
+      "id": "holds_wide_spread",
+      "note": "No flip inside the +/-100 bps grid: both par margins hold.",
+      "row": {
+        "current_rate": 6.75,
+        "market_rate_fraction": 0.04875,
+        "rate_spread_bps": 188,
+        "equity_pct": 39,
+        "has_permit": false,
+        "has_heloc_propensity_trigger": false,
+        "listed_for_sale": false,
+        "is_investor": false,
+        "is_current_customer": false,
+        "is_competitor_lien": false,
+        "min_spread_bps_applied": 75,
+        "min_equity_pct_applied": 15,
+        "heloc_equity_min_applied": 35,
+        "cashout_equity_min_applied": 25,
+        "retention_min_spread_applied": 50,
+        "recommended_offer_code": "refi_plus_heloc"
+      },
+      "margins": [
+        {
+          "key": "spread_screen",
+          "label": "Refi screen",
+          "value_text": "Clears the refi screen by 113 bps",
+          "threshold": "spread 188 bps · screen 75 bps",
+          "direction": "clears",
+          "source": "mip.gold.fn_in_the_money"
+        },
+        {
+          "key": "par_break_even",
+          "label": "Par break-even",
+          "value_text": "Holds for any par move within ±100 bps",
+          "threshold": "par 4.88%",
+          "direction": "holds",
+          "source": "mip.gold.fn_rate_spread"
+        },
+        {
+          "key": "equity_floor",
+          "label": "Equity threshold",
+          "value_text": "Clears the home-equity threshold by 4 pts",
+          "threshold": "equity 39% · threshold 35%",
+          "direction": "clears",
+          "source": "mip.gold.fn_next_best_offer"
+        },
+        {
+          "key": "offer_flip_equity",
+          "label": "Offer change by equity",
+          "value_text": "Becomes Refinance review at 34% equity",
+          "threshold": "equity 39%",
+          "direction": "flips",
+          "source": "mip.gold.fn_next_best_offer"
+        },
+        {
+          "key": "offer_flip_par",
+          "label": "Offer change by par",
+          "value_text": "No par move within ±100 bps changes this offer",
+          "threshold": "par 4.88%",
+          "direction": "holds",
+          "source": "mip.gold.fn_next_best_offer"
+        }
+      ]
+    },
+    {
+      "id": "purchase_listing_holds",
+      "note": "The listing selects the offer: the searches find no flip and say why.",
+      "row": {
+        "current_rate": 6.5,
+        "market_rate_fraction": 0.04875,
+        "rate_spread_bps": 162,
+        "equity_pct": 56,
+        "has_permit": false,
+        "has_heloc_propensity_trigger": false,
+        "listed_for_sale": true,
+        "is_investor": false,
+        "is_current_customer": true,
+        "is_competitor_lien": false,
+        "min_spread_bps_applied": 75,
+        "min_equity_pct_applied": 15,
+        "heloc_equity_min_applied": 35,
+        "cashout_equity_min_applied": 25,
+        "retention_min_spread_applied": 50,
+        "recommended_offer_code": "purchase"
+      },
+      "margins": [
+        {
+          "key": "spread_screen",
+          "label": "Refi screen",
+          "value_text": "Clears the refi screen by 87 bps",
+          "threshold": "spread 162 bps · screen 75 bps",
+          "direction": "clears",
+          "source": "mip.gold.fn_in_the_money"
+        },
+        {
+          "key": "par_break_even",
+          "label": "Par break-even",
+          "value_text": "Drops below the refi screen if 30-year par rises 88 bps to 5.76%",
+          "threshold": "par 4.88%",
+          "direction": "flips",
+          "source": "mip.gold.fn_rate_spread"
+        },
+        {
+          "key": "equity_floor",
+          "label": "Equity threshold",
+          "value_text": "Clears the refi equity threshold by 41 pts",
+          "threshold": "equity 56% · threshold 15%",
+          "direction": "clears",
+          "source": "mip.gold.fn_next_best_offer"
+        },
+        {
+          "key": "offer_flip_equity",
+          "label": "Offer change by equity",
+          "value_text": "The listing signal selects this offer; no rate or equity change alters it",
+          "threshold": "equity 56%",
+          "direction": "holds",
+          "source": "mip.gold.fn_next_best_offer"
+        },
+        {
+          "key": "offer_flip_par",
+          "label": "Offer change by par",
+          "value_text": "The listing signal selects this offer; no rate or equity change alters it",
+          "threshold": "par 4.88%",
+          "direction": "holds",
+          "source": "mip.gold.fn_next_best_offer"
+        }
+      ]
+    },
+    {
+      "id": "gated_paid_off_lien",
+      "note": "No active lien: current_rate 0 fails the rate gate; par margins are unavailable.",
+      "row": {
+        "current_rate": 0.0,
+        "market_rate_fraction": 0.04875,
+        "rate_spread_bps": 0,
+        "equity_pct": 100,
+        "has_permit": false,
+        "has_heloc_propensity_trigger": false,
+        "listed_for_sale": false,
+        "is_investor": false,
+        "is_current_customer": false,
+        "is_competitor_lien": false,
+        "min_spread_bps_applied": 75,
+        "min_equity_pct_applied": 15,
+        "heloc_equity_min_applied": 35,
+        "cashout_equity_min_applied": 25,
+        "retention_min_spread_applied": 50,
+        "recommended_offer_code": "cash_out"
+      },
+      "margins": [
+        {
+          "key": "spread_screen",
+          "label": "Refi screen",
+          "value_text": "75 bps below the refi screen",
+          "threshold": "spread 0 bps · screen 75 bps",
+          "direction": "short",
+          "source": "mip.gold.fn_in_the_money"
+        },
+        {
+          "key": "par_break_even",
+          "label": "Par break-even",
+          "value_text": "Not computed for this row",
+          "threshold": "no in-range current lien rate on this row",
+          "direction": "unavailable",
+          "source": "mip.gold.fn_rate_spread"
+        },
+        {
+          "key": "equity_floor",
+          "label": "Equity threshold",
+          "value_text": "Clears the cash-out threshold by 75 pts",
+          "threshold": "equity 100% · threshold 25%",
+          "direction": "clears",
+          "source": "mip.gold.fn_next_best_offer"
+        },
+        {
+          "key": "offer_flip_equity",
+          "label": "Offer change by equity",
+          "value_text": "Becomes Monitor for later at 24% equity",
+          "threshold": "equity 100%",
+          "direction": "flips",
+          "source": "mip.gold.fn_next_best_offer"
+        },
+        {
+          "key": "offer_flip_par",
+          "label": "Offer change by par",
+          "value_text": "Not computed for this row",
+          "threshold": "no in-range current lien rate on this row",
+          "direction": "unavailable",
+          "source": "mip.gold.fn_next_best_offer"
+        }
+      ]
+    },
+    {
+      "id": "gated_at_rate_floor",
+      "note": "A rate clamped at the 1% bound is not in range.",
+      "row": {
+        "current_rate": 1.0,
+        "market_rate_fraction": 0.04875,
+        "rate_spread_bps": 0,
+        "equity_pct": 40,
+        "has_permit": false,
+        "has_heloc_propensity_trigger": false,
+        "listed_for_sale": false,
+        "is_investor": false,
+        "is_current_customer": false,
+        "is_competitor_lien": false,
+        "min_spread_bps_applied": 75,
+        "min_equity_pct_applied": 15,
+        "heloc_equity_min_applied": 35,
+        "cashout_equity_min_applied": 25,
+        "retention_min_spread_applied": 50,
+        "recommended_offer_code": "cash_out"
+      },
+      "margins": [
+        {
+          "key": "spread_screen",
+          "label": "Refi screen",
+          "value_text": "75 bps below the refi screen",
+          "threshold": "spread 0 bps · screen 75 bps",
+          "direction": "short",
+          "source": "mip.gold.fn_in_the_money"
+        },
+        {
+          "key": "par_break_even",
+          "label": "Par break-even",
+          "value_text": "Not computed for this row",
+          "threshold": "no in-range current lien rate on this row",
+          "direction": "unavailable",
+          "source": "mip.gold.fn_rate_spread"
+        },
+        {
+          "key": "equity_floor",
+          "label": "Equity threshold",
+          "value_text": "Clears the cash-out threshold by 15 pts",
+          "threshold": "equity 40% · threshold 25%",
+          "direction": "clears",
+          "source": "mip.gold.fn_next_best_offer"
+        },
+        {
+          "key": "offer_flip_equity",
+          "label": "Offer change by equity",
+          "value_text": "Becomes Monitor for later at 24% equity",
+          "threshold": "equity 40%",
+          "direction": "flips",
+          "source": "mip.gold.fn_next_best_offer"
+        },
+        {
+          "key": "offer_flip_par",
+          "label": "Offer change by par",
+          "value_text": "Not computed for this row",
+          "threshold": "no in-range current lien rate on this row",
+          "direction": "unavailable",
+          "source": "mip.gold.fn_next_best_offer"
+        }
+      ]
+    },
+    {
+      "id": "gated_at_rate_cap",
+      "note": "A rate clamped at the 15% bound is not in range.",
+      "row": {
+        "current_rate": 15.0,
+        "market_rate_fraction": 0.04875,
+        "rate_spread_bps": 0,
+        "equity_pct": 40,
+        "has_permit": false,
+        "has_heloc_propensity_trigger": false,
+        "listed_for_sale": false,
+        "is_investor": false,
+        "is_current_customer": false,
+        "is_competitor_lien": false,
+        "min_spread_bps_applied": 75,
+        "min_equity_pct_applied": 15,
+        "heloc_equity_min_applied": 35,
+        "cashout_equity_min_applied": 25,
+        "retention_min_spread_applied": 50,
+        "recommended_offer_code": "cash_out"
+      },
+      "margins": [
+        {
+          "key": "spread_screen",
+          "label": "Refi screen",
+          "value_text": "75 bps below the refi screen",
+          "threshold": "spread 0 bps · screen 75 bps",
+          "direction": "short",
+          "source": "mip.gold.fn_in_the_money"
+        },
+        {
+          "key": "par_break_even",
+          "label": "Par break-even",
+          "value_text": "Not computed for this row",
+          "threshold": "no in-range current lien rate on this row",
+          "direction": "unavailable",
+          "source": "mip.gold.fn_rate_spread"
+        },
+        {
+          "key": "equity_floor",
+          "label": "Equity threshold",
+          "value_text": "Clears the cash-out threshold by 15 pts",
+          "threshold": "equity 40% · threshold 25%",
+          "direction": "clears",
+          "source": "mip.gold.fn_next_best_offer"
+        },
+        {
+          "key": "offer_flip_equity",
+          "label": "Offer change by equity",
+          "value_text": "Becomes Monitor for later at 24% equity",
+          "threshold": "equity 40%",
+          "direction": "flips",
+          "source": "mip.gold.fn_next_best_offer"
+        },
+        {
+          "key": "offer_flip_par",
+          "label": "Offer change by par",
+          "value_text": "Not computed for this row",
+          "threshold": "no in-range current lien rate on this row",
+          "direction": "unavailable",
+          "source": "mip.gold.fn_next_best_offer"
+        }
+      ]
+    },
+    {
+      "id": "spread_drift",
+      "note": "The note rate reproduces 88 bps, the row says 90: par margins fail closed.",
+      "row": {
+        "current_rate": 5.75,
+        "market_rate_fraction": 0.04875,
+        "rate_spread_bps": 90,
+        "equity_pct": 46,
+        "has_permit": false,
+        "has_heloc_propensity_trigger": false,
+        "listed_for_sale": false,
+        "is_investor": false,
+        "is_current_customer": false,
+        "is_competitor_lien": false,
+        "min_spread_bps_applied": 75,
+        "min_equity_pct_applied": 15,
+        "heloc_equity_min_applied": 35,
+        "cashout_equity_min_applied": 25,
+        "retention_min_spread_applied": 50,
+        "recommended_offer_code": "refi_plus_heloc"
+      },
+      "margins": [
+        {
+          "key": "spread_screen",
+          "label": "Refi screen",
+          "value_text": "Clears the refi screen by 15 bps",
+          "threshold": "spread 90 bps · screen 75 bps",
+          "direction": "clears",
+          "source": "mip.gold.fn_in_the_money"
+        },
+        {
+          "key": "par_break_even",
+          "label": "Par break-even",
+          "value_text": "Not computed for this row",
+          "threshold": "recomputed spread differs from the materialized spread",
+          "direction": "unavailable",
+          "source": "mip.gold.fn_rate_spread"
+        },
+        {
+          "key": "equity_floor",
+          "label": "Equity threshold",
+          "value_text": "Clears the home-equity threshold by 11 pts",
+          "threshold": "equity 46% · threshold 35%",
+          "direction": "clears",
+          "source": "mip.gold.fn_next_best_offer"
+        },
+        {
+          "key": "offer_flip_equity",
+          "label": "Offer change by equity",
+          "value_text": "Becomes Refinance review at 34% equity",
+          "threshold": "equity 46%",
+          "direction": "flips",
+          "source": "mip.gold.fn_next_best_offer"
+        },
+        {
+          "key": "offer_flip_par",
+          "label": "Offer change by par",
+          "value_text": "Not computed for this row",
+          "threshold": "recomputed spread differs from the materialized spread",
+          "direction": "unavailable",
+          "source": "mip.gold.fn_next_best_offer"
+        }
+      ]
+    },
+    {
+      "id": "no_par_rate",
+      "note": "No par on the row.",
+      "row": {
+        "current_rate": 5.75,
+        "market_rate_fraction": 0.0,
+        "rate_spread_bps": 88,
+        "equity_pct": 46,
+        "has_permit": false,
+        "has_heloc_propensity_trigger": false,
+        "listed_for_sale": false,
+        "is_investor": false,
+        "is_current_customer": false,
+        "is_competitor_lien": false,
+        "min_spread_bps_applied": 75,
+        "min_equity_pct_applied": 15,
+        "heloc_equity_min_applied": 35,
+        "cashout_equity_min_applied": 25,
+        "retention_min_spread_applied": 50,
+        "recommended_offer_code": "refi_plus_heloc"
+      },
+      "margins": [
+        {
+          "key": "spread_screen",
+          "label": "Refi screen",
+          "value_text": "Clears the refi screen by 13 bps",
+          "threshold": "spread 88 bps · screen 75 bps",
+          "direction": "clears",
+          "source": "mip.gold.fn_in_the_money"
+        },
+        {
+          "key": "par_break_even",
+          "label": "Par break-even",
+          "value_text": "Not computed for this row",
+          "threshold": "no par rate on this row",
+          "direction": "unavailable",
+          "source": "mip.gold.fn_rate_spread"
+        },
+        {
+          "key": "equity_floor",
+          "label": "Equity threshold",
+          "value_text": "Clears the home-equity threshold by 11 pts",
+          "threshold": "equity 46% · threshold 35%",
+          "direction": "clears",
+          "source": "mip.gold.fn_next_best_offer"
+        },
+        {
+          "key": "offer_flip_equity",
+          "label": "Offer change by equity",
+          "value_text": "Becomes Refinance review at 34% equity",
+          "threshold": "equity 46%",
+          "direction": "flips",
+          "source": "mip.gold.fn_next_best_offer"
+        },
+        {
+          "key": "offer_flip_par",
+          "label": "Offer change by par",
+          "value_text": "Not computed for this row",
+          "threshold": "no par rate on this row",
+          "direction": "unavailable",
+          "source": "mip.gold.fn_next_best_offer"
+        }
+      ]
+    },
+    {
+      "id": "offer_drift",
+      "note": "The recomputed offer (refi_plus_heloc) differs from the dossier's: both flips are unavailable.",
+      "row": {
+        "current_rate": 5.75,
+        "market_rate_fraction": 0.04875,
+        "rate_spread_bps": 88,
+        "equity_pct": 46,
+        "has_permit": false,
+        "has_heloc_propensity_trigger": false,
+        "listed_for_sale": false,
+        "is_investor": false,
+        "is_current_customer": false,
+        "is_competitor_lien": false,
+        "min_spread_bps_applied": 75,
+        "min_equity_pct_applied": 15,
+        "heloc_equity_min_applied": 35,
+        "cashout_equity_min_applied": 25,
+        "retention_min_spread_applied": 50,
+        "recommended_offer_code": "refi"
+      },
+      "margins": [
+        {
+          "key": "spread_screen",
+          "label": "Refi screen",
+          "value_text": "Clears the refi screen by 13 bps",
+          "threshold": "spread 88 bps · screen 75 bps",
+          "direction": "clears",
+          "source": "mip.gold.fn_in_the_money"
+        },
+        {
+          "key": "par_break_even",
+          "label": "Par break-even",
+          "value_text": "Drops below the refi screen if 30-year par rises 13 bps to 5.01%",
+          "threshold": "par 4.88%",
+          "direction": "flips",
+          "source": "mip.gold.fn_rate_spread"
+        },
+        {
+          "key": "equity_floor",
+          "label": "Equity threshold",
+          "value_text": "Clears the refi equity threshold by 31 pts",
+          "threshold": "equity 46% · threshold 15%",
+          "direction": "clears",
+          "source": "mip.gold.fn_next_best_offer"
+        },
+        {
+          "key": "offer_flip_equity",
+          "label": "Offer change by equity",
+          "value_text": "Not computed for this row",
+          "threshold": "recomputed offer differs from the dossier offer",
+          "direction": "unavailable",
+          "source": "mip.gold.fn_next_best_offer"
+        },
+        {
+          "key": "offer_flip_par",
+          "label": "Offer change by par",
+          "value_text": "Not computed for this row",
+          "threshold": "recomputed offer differs from the dossier offer",
+          "direction": "unavailable",
+          "source": "mip.gold.fn_next_best_offer"
+        }
+      ]
+    },
+    {
+      "id": "equity_short_investor",
+      "note": "Equity under the refi equity threshold.",
+      "row": {
+        "current_rate": 5.375,
+        "market_rate_fraction": 0.04875,
+        "rate_spread_bps": 50,
+        "equity_pct": 10,
+        "has_permit": false,
+        "has_heloc_propensity_trigger": false,
+        "listed_for_sale": false,
+        "is_investor": true,
+        "is_current_customer": false,
+        "is_competitor_lien": false,
+        "min_spread_bps_applied": 75,
+        "min_equity_pct_applied": 15,
+        "heloc_equity_min_applied": 35,
+        "cashout_equity_min_applied": 25,
+        "retention_min_spread_applied": 50,
+        "recommended_offer_code": "investor"
+      },
+      "margins": [
+        {
+          "key": "spread_screen",
+          "label": "Refi screen",
+          "value_text": "25 bps below the refi screen",
+          "threshold": "spread 50 bps · screen 75 bps",
+          "direction": "short",
+          "source": "mip.gold.fn_in_the_money"
+        },
+        {
+          "key": "par_break_even",
+          "label": "Par break-even",
+          "value_text": "Clears the refi screen if 30-year par falls 25 bps to 4.62%",
+          "threshold": "par 4.88%",
+          "direction": "flips",
+          "source": "mip.gold.fn_rate_spread"
+        },
+        {
+          "key": "equity_floor",
+          "label": "Equity threshold",
+          "value_text": "5 pts below the refi equity threshold",
+          "threshold": "equity 10% · threshold 15%",
+          "direction": "short",
+          "source": "mip.gold.fn_next_best_offer"
+        },
+        {
+          "key": "offer_flip_equity",
+          "label": "Offer change by equity",
+          "value_text": "Becomes Cash-out refinance review at 25% equity",
+          "threshold": "equity 10%",
+          "direction": "flips",
+          "source": "mip.gold.fn_next_best_offer"
+        },
+        {
+          "key": "offer_flip_par",
+          "label": "Offer change by par",
+          "value_text": "No par move within ±100 bps changes this offer",
+          "threshold": "par 4.88%",
+          "direction": "holds",
+          "source": "mip.gold.fn_next_best_offer"
+        }
+      ]
+    }
+  ]
+}

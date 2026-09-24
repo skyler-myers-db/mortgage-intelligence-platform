@@ -3128,6 +3128,14 @@
           "ltv_formula": {
             "$ref": "#/components/schemas/ProofFormulaLine"
           },
+          "margins": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ProofMargin"
+            },
+            "title": "Margins",
+            "type": "array"
+          },
           "offer_branches": {
             "items": {
               "$ref": "#/components/schemas/ProofOfferBranch"
@@ -11860,6 +11868,65 @@
           "result"
         ],
         "title": "ProofFormulaLine",
+        "type": "object"
+      },
+      "ProofMargin": {
+        "description": "One deterministic 'what would change this?' margin (wow-ai-1 phase 1).\n\nRecomputed from the thresholds and inputs already on the dossier row\nthrough the reviewed scoring mirrors: never a model output, never a\nknown data gap, and never a change to ``trusted``. ``source`` is one of\nthe governed proof assets.",
+        "properties": {
+          "direction": {
+            "enum": [
+              "clears",
+              "short",
+              "flips",
+              "holds",
+              "unavailable"
+            ],
+            "title": "Direction",
+            "type": "string"
+          },
+          "key": {
+            "enum": [
+              "spread_screen",
+              "par_break_even",
+              "equity_floor",
+              "offer_flip_equity",
+              "offer_flip_par"
+            ],
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "threshold": {
+            "title": "Threshold",
+            "type": "string"
+          },
+          "value_text": {
+            "title": "Value Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "value_text",
+          "threshold",
+          "direction"
+        ],
+        "title": "ProofMargin",
         "type": "object"
       },
       "ProofOfferBranch": {

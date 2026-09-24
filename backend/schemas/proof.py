@@ -40,6 +40,34 @@ class ProofScoreComponent(BaseModel):
     fair_lending_note: str | None = None
 
 
+ProofMarginKey = Literal[
+    "spread_screen",
+    "par_break_even",
+    "equity_floor",
+    "offer_flip_equity",
+    "offer_flip_par",
+]
+
+ProofMarginDirection = Literal["clears", "short", "flips", "holds", "unavailable"]
+
+
+class ProofMargin(BaseModel):
+    """One deterministic 'what would change this?' margin (wow-ai-1 phase 1).
+
+    Recomputed from the thresholds and inputs already on the dossier row
+    through the reviewed scoring mirrors: never a model output, never a
+    known data gap, and never a change to ``trusted``. ``source`` is one of
+    the governed proof assets.
+    """
+
+    key: ProofMarginKey
+    label: str
+    value_text: str
+    threshold: str
+    direction: ProofMarginDirection
+    source: str | None = None
+
+
 class ProofOfferBranch(BaseModel):
     code: str
     label: str
@@ -88,3 +116,4 @@ class BorrowerProof(BaseModel):
     evidence_rows: list[ProofEvidenceEvent]
     source_assets: list[str]
     reproduce: list[ProofReproduceQuery]
+    margins: list[ProofMargin] = []

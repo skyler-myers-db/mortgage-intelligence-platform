@@ -11,6 +11,15 @@ golden-fixture JSON that the SQL side validates against the same inputs:
 - ``rate_spread_bps``    -> ``sql/uc_functions/fn_rate_spread.sql``
                             + ``tests/fixtures/rate_spread_golden.json``
                             (case_05 pins round-half-to-even at 162.5).
+- ``rate_spread_bps_at_par_shift``
+                         -> the same ``fn_rate_spread`` against
+                            ``market + shift_bps / RATE_SPREAD_BPS_PER_UNIT``;
+                            a composition, not a new UC function. The proof
+                            margins' break-even search and the Rate Lever's
+                            +/-``RATE_SCENARIO_MAX_SHIFT_BPS`` grid both read
+                            it (tests/unit/test_rate_spread.py and
+                            ``tests/fixtures/borrower_proof_margins_golden.json``
+                            pin the half-bps boundaries).
 - ``estimated_upb``      -> ``sql/uc_functions/fn_estimated_upb.sql``
                             + ``tests/fixtures/estimated_upb_golden.json``
                             (case_04 pins unknown-rate fallback; case_06
