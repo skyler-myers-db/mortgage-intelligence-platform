@@ -8,13 +8,19 @@ import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 const CHUNK_MODULES_FILE = "build-modules.json";
 
 /**
- * Records which modules each emitted chunk holds, and every module the entry
- * reaches through STATIC imports alone, as `build-modules.json` (audit
- * bundle-03). The manifest names chunks, not modules, so this is what lets
- * tools/check_frontend_budgets.mjs prove a vendor chunk holds only modules the
- * first paint needs anyway: a lazy-only module (for example a query observer
- * only the lazy Console uses) pulled into a vendor chunk would make every
- * first paint download it. Ids are relative to the frontend root.
+ * Records which modules each emitted chunk renders, and every module the
+ * entry reaches through STATIC import edges, as `build-modules.json` (audit
+ * bundle-03). The manifest names chunks, not modules, so this is what
+ * tools/check_frontend_budgets.mjs reads to prove no vendor chunk holds a
+ * module on its LAZY_ONLY_VENDOR_MODULES list (a lazy-only module, such as
+ * the infinite query observer only the lazy Console uses, pulled into a
+ * vendor chunk would make every first paint download it), and that the list
+ * still matches what the lazy chunks render. The static reach
+ * (`entryStaticModules`) over-approximates what the first paint needs: it
+ * follows barrel re-exports that tree-shaking later drops (the @tanstack
+ * index.js files re-export every hook), so it names useInfiniteQuery.js too
+ * and is only a backstop for packages the entry never imports. Ids are
+ * relative to the frontend root.
  */
 function chunkModulesManifest(): Plugin {
   let root = "";
@@ -109,38 +115,40 @@ export default defineConfig({
     // default `.vite/manifest.json`; tools/postbuild_artifacts.mjs moves it
     // out of dist into frontend/build-meta/ before anything is served or
     // uploaded, because the SPA fallback would serve any real file in dist.
-    manifest: 'build-manifest.json',
+    manifest: "build-manifest.json",
     // Source maps for production debugging (audit stack-01), emitted WITHOUT
     // the `//# sourceMappingURL=` comment so no browser ever asks for one.
     // tools/postbuild_artifacts.mjs moves every .map out of dist into
     // frontend/sourcemaps/ (the CI artifact) and fails the build if a map or
     // a sourceMappingURL comment is left in dist, because the SPA fallback
     // would serve a map from dist and the bundle would deploy it.
-    sourcemap: 'hidden',
+    sourcemap: "hidden",
     rolldownOptions: {
       output: {
         // Vendor chunks (audit bundle-03): the framework code that changes
         // only with a lockfile bump gets its own long-cached chunk, so an app
-        // edit no longer re-hashes it. Exactly two groups, both limited to
-        // modules the entry reaches statically (`$initial`): a lazy-only
-        // module (useInfiniteQuery / infiniteQueryObserver, used only by the
-        // lazy Console; @tanstack/react-virtual, used only by LeadTable)
-        // stays in its lazy chunk instead of joining every first paint.
-        // tools/check_frontend_budgets.mjs fails if a vendor chunk leaves the
-        // initial closure, imports an app chunk, or holds a module the entry
-        // does not reach statically. Separator-agnostic tests.
+        // edit no longer re-hashes it. Exactly two groups, both limited by
+        // `$initial` to modules the initial chunks need: a lazy-only module
+        // (useInfiniteQuery / infiniteQueryObserver, used only by the lazy
+        // Console) stays in its lazy chunk instead of joining every first
+        // paint. tools/check_frontend_budgets.mjs fails if a vendor chunk
+        // leaves the initial closure, imports an app chunk, or holds a module
+        // on its LAZY_ONLY_VENDOR_MODULES list (what a groups-free build
+        // renders only in lazy chunks, kept exact against each build);
+        // dropping `$initial` from vendor-data fails it on those two modules.
+        // Separator-agnostic tests.
         codeSplitting: {
           groups: [
             {
-              name: 'vendor-react',
+              name: "vendor-react",
               test: /[\\/]node_modules[\\/](?:react|react-dom|scheduler|react-router)[\\/]/,
-              tags: ['$initial'],
+              tags: ["$initial"],
               priority: 20,
             },
             {
-              name: 'vendor-data',
+              name: "vendor-data",
               test: /[\\/]node_modules[\\/]@tanstack[\\/](?:react-query|query-core)[\\/]/,
-              tags: ['$initial'],
+              tags: ["$initial"],
               priority: 10,
             },
           ],

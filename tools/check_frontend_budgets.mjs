@@ -52,9 +52,13 @@ const KiB = 1024;
 //   - the manifest must describe the dist beside it: a stale one fails.
 //   - vendor chunks (audit bundle-03, vite.config.ts codeSplitting groups):
 //     exactly vendor-react and vendor-data, each inside the initial closure,
-//     importing only vendor chunks or the runtime helper, and holding only
-//     modules the entry imports statically (build-meta/build-modules.json,
-//     written by the vite.config.ts chunk-modules plugin).
+//     importing only vendor chunks or the runtime helper, and holding no
+//     module on the LAZY_ONLY_VENDOR_MODULES list below (the node_modules
+//     modules only lazy chunks render), read from each chunk's rendered
+//     modules in build-meta/build-modules.json (written by the vite.config.ts
+//     chunk-modules plugin). The list is kept exact against the build: every
+//     entry must still match a rendered module, and every module of a vendor
+//     package rendered only in a lazy chunk must be on it.
 // Build-time precompressed .br/.gz siblings are never measured as assets;
 // only .js/.css/font files are.
 //
@@ -86,8 +90,9 @@ const budgets = {
   // the hashed wordmark. The raw gate had 0.4% headroom left and gzip had
   // none. Measured: initial JS 415.31 / gzip 128.25; restore ~5% headroom.
   // Re-measured 2026-09-23 for wave 1c (lane queue-keyboard-review). Initial
-  // JS is now the entry chunk PLUS the chunks it imports statically
-  // (initialChunkClosure below). Lazy-loading the `?` shortcut sheet made the
+  // JS is now the entry chunk PLUS the chunks it imports statically (then a
+  // regex walk over the emitted JS, since replaced by the manifest closure
+  // in tools/build_manifest.mjs). Lazy-loading the `?` shortcut sheet made the
   // bundler move React, jsx-runtime and its CommonJS interop helpers (and
   // Icon with them) out of index-*.js into a sibling chunk the entry imports,
   // so index-*.js alone read 417.11 / 129.06, a false 7.8 KiB "shrink" while
@@ -386,17 +391,112 @@ export const EXPECTED_VENDOR_CHUNKS = ['vendor-react', 'vendor-data'];
 const RUNTIME_HELPER_CHUNK = 'rolldown-runtime';
 
 /**
+ * node_modules modules that a build WITHOUT the vendor groups renders only
+ * outside the initial closure (verified 2026-09-24 on the wave-2 dependency
+ * batch by diffing a groups-free build's chunk modules): what the first paint
+ * does not need. A vendor chunk is part of every first paint, so it must
+ * never hold one; `tags: ['$initial']` on each vite.config.ts group is what
+ * keeps them out, and this list is what proves it. An entry ending in `/`
+ * names a whole package directory; any other entry is one module id
+ * (frontend-root relative, as build-modules.json records it).
+ *
+ * The entry's static-import reach (build-modules.json `entryStaticModules`)
+ * cannot stand in for this list: it follows the @tanstack barrel re-exports
+ * (index.js re-exports every hook), so it names useInfiniteQuery.js even
+ * though tree-shaking renders it only in the lazy Console chunk.
+ *
+ * Kept exact against the build (lazyOnlyVendorProblems): an entry that
+ * matches no rendered module fails (a renamed or dropped module would blind
+ * the check), and so does a module of a vendor package that only a lazy
+ * chunk renders but the list omits (a hook a lazy route starts using).
+ * Update it deliberately, at a dependency batch or when such a failure names
+ * a module; if the first paint starts to need a listed module, remove it.
+ */
+export const LAZY_ONLY_VENDOR_MODULES = [
+  // The lazy Console's infinite audit feed.
+  'node_modules/@tanstack/query-core/build/modern/infiniteQueryObserver.js',
+  'node_modules/@tanstack/react-query/build/modern/useInfiniteQuery.js',
+  // LeadTable's row virtualizer.
+  'node_modules/@tanstack/react-virtual/',
+  'node_modules/@tanstack/virtual-core/',
+  // The geography map's topology.
+  'node_modules/topojson-client/',
+  'node_modules/us-atlas/',
+];
+
+/** The npm package a node_modules module id belongs to (`@scope/name` or `name`), or null. */
+export function packageOfModule(id) {
+  const marker = 'node_modules/';
+  const at = id.lastIndexOf(marker);
+  if (at === -1) return null;
+  const [first, second] = id.slice(at + marker.length).split('/');
+  return first.startsWith('@') ? `${first}/${second}` : first;
+}
+
+function lazyOnlyEntryMatches(entry, id) {
+  return entry.endsWith('/') ? id.startsWith(entry) : id === entry;
+}
+
+/**
+ * The lazy-only guard over the rendered modules of each chunk
+ * (`chunkModules.chunks`, keyed by dist file):
+ *  - a vendor chunk holding a listed module fails;
+ *  - a listed entry that matches no rendered module anywhere fails (stale);
+ *  - a module of a vendor package (one with any module in a vendor chunk)
+ *    rendered in a chunk outside the initial closure must be listed, so the
+ *    list stays complete as lazy routes start using more of a vendor package.
+ */
+export function lazyOnlyVendorProblems(manifest, initial, chunkModules, lazyOnly = LAZY_ONLY_VENDOR_MODULES) {
+  const problems = [];
+  const vendorFiles = new Set(
+    Object.values(manifest)
+      .filter((chunk) => (chunk.name ?? '').startsWith('vendor-'))
+      .map((chunk) => chunk.file),
+  );
+  const listed = (id) => lazyOnly.some((entry) => lazyOnlyEntryMatches(entry, id));
+  const rendered = Object.entries(chunkModules.chunks);
+  const vendorPackages = new Set();
+  for (const [file, ids] of rendered) {
+    if (!vendorFiles.has(file)) continue;
+    for (const id of ids) {
+      const pkg = packageOfModule(id);
+      if (pkg) vendorPackages.add(pkg);
+      if (listed(id)) problems.push(`vendor chunk ${file} holds lazy-only ${id} (LAZY_ONLY_VENDOR_MODULES)`);
+    }
+  }
+  for (const entry of lazyOnly) {
+    if (!rendered.some(([, ids]) => ids.some((id) => lazyOnlyEntryMatches(entry, id)))) {
+      problems.push(`LAZY_ONLY_VENDOR_MODULES entry ${entry} matches no module in the build: update the list`);
+    }
+  }
+  const initialFiles = new Set(initial.js);
+  for (const [file, ids] of rendered) {
+    if (initialFiles.has(file) || vendorFiles.has(file)) continue;
+    for (const id of ids) {
+      const pkg = packageOfModule(id);
+      if (pkg && vendorPackages.has(pkg) && !listed(id)) {
+        problems.push(`${id} (vendor package ${pkg}) is rendered only in lazy chunk ${file}: add it to LAZY_ONLY_VENDOR_MODULES`);
+      }
+    }
+  }
+  return problems;
+}
+
+/**
  * Vendor chunks exist to be cached across app deploys, so each must:
  *  - be one of the expected groups, and every expected group must exist;
  *  - sit inside the initial closure (a vendor group that escaped it would be
  *    a lazy chunk named "vendor");
  *  - import only other vendor chunks or the runtime-helper chunk, never an
  *    app chunk (which would re-hash with app edits and can form a cycle);
- *  - hold only modules the entry reaches through static imports, when
- *    `chunkModules` (build-modules.json) is given: a lazy-only module in a
- *    vendor chunk would join every first paint.
+ *  - when `chunkModules` (build-modules.json) is given, hold no lazy-only
+ *    module (lazyOnlyVendorProblems above), and no module the entry cannot
+ *    reach through static imports at all. That second check is only a
+ *    backstop: the static reach follows barrel re-exports, so it catches a
+ *    group that swallows a package the entry never imports (react-virtual)
+ *    but not a lazy-only hook of a package it does (useInfiniteQuery).
  */
-export function vendorChunkProblems(manifest, initial, chunkModules = null) {
+export function vendorChunkProblems(manifest, initial, chunkModules = null, lazyOnly = LAZY_ONLY_VENDOR_MODULES) {
   const problems = [];
   const vendorKeys = Object.keys(manifest).filter((key) => (manifest[key].name ?? '').startsWith('vendor-'));
   const names = vendorKeys.map((key) => manifest[key].name);
@@ -421,6 +521,7 @@ export function vendorChunkProblems(manifest, initial, chunkModules = null) {
       }
     }
   }
+  if (chunkModules) problems.push(...lazyOnlyVendorProblems(manifest, initial, chunkModules, lazyOnly));
   return problems;
 }
 
@@ -517,6 +618,12 @@ function main() {
   for (const route of routes) {
     console.log(`    ${route.key}: ${triple(route)} (${route.files.length} files)`);
   }
+  const vendorModules = Object.values(manifest)
+    .filter((chunk) => (chunk.name ?? '').startsWith('vendor-'))
+    .map((chunk) => `${chunk.name} ${(chunkModules.chunks[chunk.file] ?? []).length}`);
+  console.log(
+    `  vendor chunk modules: ${vendorModules.join(', ')} (lazy-only list: ${LAZY_ONLY_VENDOR_MODULES.length} entries)`,
+  );
   console.log(`  fonts: ${fonts.length} files, ${bytes(fontBytes)}`);
 
   if (overages.length > 0) {

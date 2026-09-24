@@ -73,8 +73,8 @@ def test_build_script_relocates_metadata_before_precompressing() -> None:
 def test_vite_emits_hidden_source_maps_and_the_named_manifest() -> None:
     config = (FRONTEND / "vite.config.ts").read_text(encoding="utf-8")
 
-    assert re.search(r"^\s*sourcemap:\s*'hidden',", config, re.MULTILINE)
-    assert re.search(r"^\s*manifest:\s*'build-manifest\.json',", config, re.MULTILINE)
+    assert re.search(r"""^\s*sourcemap:\s*(["'])hidden\1,""", config, re.MULTILINE)
+    assert re.search(r"""^\s*manifest:\s*(["'])build-manifest\.json\1,""", config, re.MULTILINE)
 
 
 def _built_entry_chunk() -> Path:

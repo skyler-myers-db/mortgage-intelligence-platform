@@ -47,6 +47,8 @@ const tools = {
     initial: Closure,
     chunkModules?: ChunkModules | null,
   ) => string[],
+  lazyOnlyVendorModules: budgetTool.LAZY_ONLY_VENDOR_MODULES as string[],
+  packageOfModule: budgetTool.packageOfModule as (id: string) => string | null,
   relocate: postbuildTool.relocateBuildArtifacts as (dirs: ScratchDirs) => { manifest: string; maps: string[] },
   postbuildInitialClosure: postbuildTool.initialClosure as (manifest: Manifest) => Closure,
 };
@@ -138,7 +140,8 @@ describe('route closures', () => {
 /**
  * The shape vite.config.ts's codeSplitting groups produce: the entry
  * statically imports the runtime helper and both vendor chunks; vendor-data
- * imports vendor-react; a route imports the entry and the vendor chunks.
+ * imports vendor-react; the lazy Console and a lazy route import the entry
+ * and the vendor chunks.
  */
 function vendorManifest(): Manifest {
   return {
@@ -147,7 +150,7 @@ function vendorManifest(): Manifest {
       src: 'index.html',
       isEntry: true,
       imports: ['_rolldown-runtime-R.js', '_vendor-react-V.js', '_vendor-data-W.js'],
-      dynamicImports: ['src/routes/lead.tsx'],
+      dynamicImports: ['src/routes/lead.tsx', 'src/components/layout/Console.tsx'],
       css: ['assets/index-A.css'],
     },
     '_rolldown-runtime-R.js': { file: 'assets/rolldown-runtime-R.js', name: 'rolldown-runtime' },
@@ -157,33 +160,120 @@ function vendorManifest(): Manifest {
       name: 'vendor-data',
       imports: ['_rolldown-runtime-R.js', '_vendor-react-V.js'],
     },
+    'src/components/layout/Console.tsx': {
+      file: 'assets/Console-K.js',
+      src: 'src/components/layout/Console.tsx',
+      isDynamicEntry: true,
+      imports: ['index.html', '_vendor-react-V.js', '_vendor-data-W.js'],
+    },
     'src/routes/lead.tsx': {
       file: 'assets/lead-C.js',
       src: 'src/routes/lead.tsx',
       isDynamicEntry: true,
-      imports: ['index.html', '_vendor-react-V.js', '_table-D.js'],
+      imports: ['index.html', '_vendor-react-V.js', '_table-D.js', '_map-M.js'],
     },
     '_table-D.js': { file: 'assets/table-D.js', name: 'table' },
+    '_map-M.js': { file: 'assets/map-M.js', name: 'map' },
   };
 }
 
-const VENDOR_MODULES: ChunkModules = {
-  chunks: {
-    'assets/vendor-react-V.js': ['node_modules/react/index.js', 'node_modules/react-dom/client.js'],
-    'assets/vendor-data-W.js': ['node_modules/@tanstack/query-core/build/modern/queryClient.js'],
-  },
-  entryStaticModules: [
-    'index.html',
-    'node_modules/@tanstack/query-core/build/modern/queryClient.js',
-    'node_modules/react-dom/client.js',
-    'node_modules/react/index.js',
-  ],
-};
+const QUERY_CORE = 'node_modules/@tanstack/query-core/build/modern/';
+const REACT_QUERY = 'node_modules/@tanstack/react-query/build/modern/';
+const LAZY_OBSERVER = `${QUERY_CORE}infiniteQueryObserver.js`;
+const LAZY_HOOK = `${REACT_QUERY}useInfiniteQuery.js`;
+const VIRTUAL_CORE = 'node_modules/@tanstack/virtual-core/dist/esm/index.js';
+const VENDOR_DATA = [`${QUERY_CORE}queryClient.js`, `${QUERY_CORE}queryObserver.js`, `${REACT_QUERY}useQuery.js`];
+
+/**
+ * build-modules.json as the real build writes it: each chunk's rendered
+ * modules, and the entry's static reach. That reach follows the @tanstack
+ * index.js barrels, so it names the lazy-only infinite-query modules even
+ * though tree-shaking renders them only in the lazy Console chunk; it cannot
+ * tell a lazy-only hook from one the first paint needs.
+ */
+function vendorModules(chunks: Record<string, string[]> = {}): ChunkModules {
+  return {
+    chunks: {
+      'assets/index-A.js': ['index.html', 'src/main.tsx'],
+      'assets/rolldown-runtime-R.js': ['rolldown/runtime.js'],
+      'assets/vendor-react-V.js': ['node_modules/react/index.js', 'node_modules/react-dom/client.js', 'vite/preload-helper.js'],
+      'assets/vendor-data-W.js': [...VENDOR_DATA],
+      'assets/Console-K.js': ['src/components/layout/Console.tsx', LAZY_OBSERVER, LAZY_HOOK],
+      'assets/lead-C.js': ['src/routes/lead.tsx'],
+      'assets/table-D.js': ['src/components/LeadTable.tsx', 'node_modules/@tanstack/react-virtual/dist/esm/index.js', VIRTUAL_CORE],
+      'assets/map-M.js': ['src/components/USStateMapData.ts', 'node_modules/topojson-client/src/feature.js', 'node_modules/us-atlas/states-albers-10m.json'],
+      ...chunks,
+    },
+    entryStaticModules: [
+      'index.html', 'src/main.tsx', 'vite/preload-helper.js', 'node_modules/react/index.js', 'node_modules/react-dom/client.js',
+      `${QUERY_CORE}index.js`, ...VENDOR_DATA, LAZY_OBSERVER, `${REACT_QUERY}index.js`, LAZY_HOOK,
+    ],
+  };
+}
 
 describe('vendor chunks (bundle-03)', () => {
-  it('pass when both groups sit in the initial closure and import only vendor or runtime chunks', () => {
+  it('pass when both groups sit in the initial closure, import only vendor or runtime chunks and hold no lazy-only module', () => {
     const manifest = vendorManifest();
-    expect(tools.vendorChunkProblems(manifest, tools.initialClosure(manifest), VENDOR_MODULES)).toEqual([]);
+    expect(tools.vendorChunkProblems(manifest, tools.initialClosure(manifest), vendorModules())).toEqual([]);
+  });
+
+  it('list the lazy-only @tanstack modules the integrator correction names', () => {
+    expect(tools.lazyOnlyVendorModules).toEqual(expect.arrayContaining([LAZY_OBSERVER, LAZY_HOOK]));
+  });
+
+  it('fail when a vendor chunk holds a lazy-only module the entry reaches only through a barrel re-export', () => {
+    // What dropping `tags: ['$initial']` from the vendor-data group does to
+    // the real build: the Console's infinite-query modules join vendor-data.
+    const manifest = vendorManifest();
+    const modules = vendorModules({
+      'assets/vendor-data-W.js': [...VENDOR_DATA, LAZY_OBSERVER, LAZY_HOOK],
+      'assets/Console-K.js': ['src/components/layout/Console.tsx'],
+    });
+    expect(modules.entryStaticModules).toEqual(expect.arrayContaining([LAZY_OBSERVER, LAZY_HOOK]));
+    expect(tools.vendorChunkProblems(manifest, tools.initialClosure(manifest), modules)).toEqual([
+      `vendor chunk assets/vendor-data-W.js holds lazy-only ${LAZY_OBSERVER} (LAZY_ONLY_VENDOR_MODULES)`,
+      `vendor chunk assets/vendor-data-W.js holds lazy-only ${LAZY_HOOK} (LAZY_ONLY_VENDOR_MODULES)`,
+    ]);
+  });
+
+  it('fail when a vendor chunk swallows a package the entry never imports', () => {
+    const manifest = vendorManifest();
+    const modules = vendorModules({
+      'assets/vendor-data-W.js': [...VENDOR_DATA, VIRTUAL_CORE],
+      'assets/table-D.js': ['src/components/LeadTable.tsx', 'node_modules/@tanstack/react-virtual/dist/esm/index.js'],
+    });
+    expect(tools.vendorChunkProblems(manifest, tools.initialClosure(manifest), modules)).toEqual([
+      `vendor chunk assets/vendor-data-W.js holds ${VIRTUAL_CORE}, which the entry does not import statically`,
+      `vendor chunk assets/vendor-data-W.js holds lazy-only ${VIRTUAL_CORE} (LAZY_ONLY_VENDOR_MODULES)`,
+    ]);
+  });
+
+  it('fail when a lazy-only entry matches no rendered module, as when a dependency batch renames it', () => {
+    const manifest = vendorManifest();
+    const renamed = `${REACT_QUERY}useInfiniteQuery.mjs`;
+    const modules = vendorModules({ 'assets/Console-K.js': ['src/components/layout/Console.tsx', LAZY_OBSERVER, renamed] });
+    expect(tools.vendorChunkProblems(manifest, tools.initialClosure(manifest), modules)).toEqual([
+      `LAZY_ONLY_VENDOR_MODULES entry ${LAZY_HOOK} matches no module in the build: update the list`,
+      `${renamed} (vendor package @tanstack/react-query) is rendered only in lazy chunk assets/Console-K.js: add it to LAZY_ONLY_VENDOR_MODULES`,
+    ]);
+  });
+
+  it('fail when a lazy chunk renders a module of a vendor package the list omits', () => {
+    const manifest = vendorManifest();
+    const lazyMutation = `${REACT_QUERY}useMutation.js`;
+    const modules = vendorModules({
+      'assets/Console-K.js': ['src/components/layout/Console.tsx', LAZY_OBSERVER, LAZY_HOOK, lazyMutation],
+    });
+    expect(tools.vendorChunkProblems(manifest, tools.initialClosure(manifest), modules)).toEqual([
+      `${lazyMutation} (vendor package @tanstack/react-query) is rendered only in lazy chunk assets/Console-K.js: add it to LAZY_ONLY_VENDOR_MODULES`,
+    ]);
+  });
+
+  it('name the package a module id belongs to', () => {
+    expect(tools.packageOfModule(LAZY_HOOK)).toBe('@tanstack/react-query');
+    expect(tools.packageOfModule('node_modules/react-dom/client.js')).toBe('react-dom');
+    expect(tools.packageOfModule('node_modules/a/node_modules/b/index.js')).toBe('b');
+    expect(tools.packageOfModule('src/main.tsx')).toBeNull();
   });
 
   it('fail when a vendor group escaped the initial closure', () => {
@@ -200,18 +290,6 @@ describe('vendor chunks (bundle-03)', () => {
     manifest['_vendor-react-V.js'].imports = ['_rolldown-runtime-R.js', '_table-D.js'];
     expect(tools.vendorChunkProblems(manifest, tools.initialClosure(manifest))).toEqual([
       'vendor chunk assets/vendor-react-V.js imports app chunk assets/table-D.js',
-    ]);
-  });
-
-  it('fail when a vendor chunk holds a module the entry does not import statically', () => {
-    const manifest = vendorManifest();
-    const lazyOnly = 'node_modules/@tanstack/query-core/build/modern/infiniteQueryObserver.js';
-    const modules: ChunkModules = {
-      ...VENDOR_MODULES,
-      chunks: { ...VENDOR_MODULES.chunks, 'assets/vendor-data-W.js': [...VENDOR_MODULES.chunks['assets/vendor-data-W.js'], lazyOnly] },
-    };
-    expect(tools.vendorChunkProblems(manifest, tools.initialClosure(manifest), modules)).toEqual([
-      `vendor chunk assets/vendor-data-W.js holds ${lazyOnly}, which the entry does not import statically`,
     ]);
   });
 
@@ -279,7 +357,7 @@ describe('relocateBuildArtifacts', () => {
     writeFileSync(path.join(distDir, 'assets', 'index-A.js.map'), '{"version":3}');
     writeFileSync(path.join(distDir, 'theme-boot.js.map'), '{"version":3}');
     writeFileSync(path.join(distDir, 'build-manifest.json'), JSON.stringify(syntheticManifest()));
-    writeFileSync(path.join(distDir, 'build-modules.json'), JSON.stringify(VENDOR_MODULES));
+    writeFileSync(path.join(distDir, 'build-modules.json'), JSON.stringify(vendorModules()));
     return { distDir, metaDir, mapsDir };
   }
 
