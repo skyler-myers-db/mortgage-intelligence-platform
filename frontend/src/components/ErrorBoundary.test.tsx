@@ -6,6 +6,7 @@ import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { rootErrorOptions } from '../lib/clientErrorLog';
+import { ROUTE_IDS, ROUTES, type RouteDefinition } from '../lib/routeMeta';
 import { designCss } from '../test/designCss';
 import { ErrorBoundary } from './ErrorBoundary';
 import { routeLabelForPath } from './ErrorBoundaryFallback';
@@ -258,9 +259,23 @@ describe('routeLabelForPath', () => {
     expect(routeLabelForPath('/')).toBe('Home');
     expect(routeLabelForPath('/lead-queue?state=TX')).toBe('Lead Queue');
     expect(routeLabelForPath('/borrower-360/B-0TESTBORROWER')).toBe('Borrower 360');
-    expect(routeLabelForPath('/offer-orchestrator/B-0TESTBORROWER#approval')).toBe('Offer & Outreach');
+    expect(routeLabelForPath('/offer-orchestrator/B-0TESTBORROWER#approval')).toBe('Offer Orchestrator');
     expect(routeLabelForPath('/data-estate/assets/lead_population')).toBe('Governed asset');
     expect(routeLabelForPath('/lead-queue-typo')).toBeNull();
     expect(routeLabelForPath('/nope')).toBeNull();
+  });
+
+  // Audit shell-08: this was a sixth hand-kept route-name table and had
+  // drifted ("Segments", "Offer & Outreach", "Administration"); every served
+  // route now reads its name from the registry.
+  it('names every served route exactly as the route registry does', () => {
+    for (const id of ROUTE_IDS) {
+      const route: RouteDefinition = ROUTES[id];
+      if (!route.chunk) continue;
+      const concrete = route.pattern.replace(/:[A-Za-z]+/g, 'B-0123456789ABC');
+      expect(routeLabelForPath(concrete), concrete).toBe(route.name);
+    }
+    expect(routeLabelForPath('/segment-intelligence')).toBe('Segment Intelligence');
+    expect(routeLabelForPath('/admin-config')).toBe('Admin');
   });
 });
