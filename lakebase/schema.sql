@@ -3608,9 +3608,15 @@ CREATE TABLE IF NOT EXISTS mip_app.genie_completion_jobs (
     actor_email      TEXT NOT NULL,
     -- Opaque server-issued ids, token-verified before any write. Deliberately
     -- broader than the 32-hex Genie grammar: a wrong guess here would 503
-    -- every live turn.
-    conversation_id  TEXT NOT NULL CHECK (conversation_id ~ '^[A-Za-z0-9_-]{1,256}$'),
-    message_id       TEXT NOT NULL CHECK (message_id ~ '^[A-Za-z0-9_-]{1,256}$'),
+    -- every live turn. The 256 bound is length(), never a regex repetition
+    -- count: PostgreSQL caps those at 255, and a larger one fails at the
+    -- first INSERT (not at CREATE TABLE).
+    conversation_id  TEXT NOT NULL CHECK (
+                         conversation_id ~ '^[A-Za-z0-9_-]+$' AND length(conversation_id) <= 256
+                     ),
+    message_id       TEXT NOT NULL CHECK (
+                         message_id ~ '^[A-Za-z0-9_-]+$' AND length(message_id) <= 256
+                     ),
     question_hash    TEXT NOT NULL CHECK (question_hash ~ '^[0-9a-f]{64}$'),
     status           TEXT NOT NULL CHECK (status IN (
                          'queued', 'running', 'succeeded', 'failed', 'expired'
@@ -3620,8 +3626,8 @@ CREATE TABLE IF NOT EXISTS mip_app.genie_completion_jobs (
                          'rewriting', 'planning', 'researching', 'synthesizing', 'finalizing',
                          'done', 'failed', 'expired'
                      )),
-    parts_done       SMALLINT CHECK (parts_done IS NULL OR parts_done >= 0),
-    parts_planned    SMALLINT CHECK (parts_planned IS NULL OR parts_planned >= 0),
+    parts_done       SMALLINT CHECK (parts_done IS NULL OR parts_done >= 0::smallint),
+    parts_planned    SMALLINT CHECK (parts_planned IS NULL OR parts_planned >= 0::smallint),
     failure_kind     TEXT CHECK (failure_kind IS NULL OR failure_kind IN (
                          'dependency_down', 'upstream_error', 'internal'
                      )),

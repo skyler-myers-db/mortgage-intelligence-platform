@@ -46,12 +46,15 @@ def test_one_job_per_actor_turn_with_a_lease_and_an_expiry() -> None:
                    "updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()",
                    "finished_at      TIMESTAMPTZ,"):
         assert column in ddl, column
-    assert "parts_done       SMALLINT CHECK (parts_done IS NULL OR parts_done >= 0)" in ddl
-    assert "parts_planned    SMALLINT CHECK (parts_planned IS NULL OR parts_planned >= 0)" in ddl
+    assert "parts_done       SMALLINT CHECK (parts_done IS NULL OR parts_done >= 0::smallint)" in ddl
+    assert "parts_planned    SMALLINT CHECK (parts_planned IS NULL OR parts_planned >= 0::smallint)" in ddl
     assert "pg_column_size(result_json) <= 8388608" in ddl
     # The ids are opaque and broad on purpose; the binding digest is exact.
-    assert "conversation_id ~ '^[A-Za-z0-9_-]{1,256}$'" in ddl
-    assert "message_id ~ '^[A-Za-z0-9_-]{1,256}$'" in ddl
+    # No regex repetition bound above 255: PostgreSQL rejects it at INSERT.
+    assert "conversation_id ~ '^[A-Za-z0-9_-]+$' AND length(conversation_id) <= 256" in ddl
+    assert "message_id ~ '^[A-Za-z0-9_-]+$' AND length(message_id) <= 256" in ddl
+    for low, high in re.findall(r"\{(\d+),(\d+)\}", ddl):
+        assert int(high) <= 255, (low, high)
     assert "question_hash ~ '^[0-9a-f]{64}$'" in ddl
     assert re.search(
         r"CREATE INDEX IF NOT EXISTS idx_genie_completion_jobs_live_lease\s+"
