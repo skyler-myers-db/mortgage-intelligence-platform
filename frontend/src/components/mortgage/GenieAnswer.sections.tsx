@@ -1,4 +1,7 @@
+import { useId, useRef, useState } from 'react';
 import { Link } from 'react-router';
+import { Icon } from '../Icon';
+import { prefersReducedMotion } from './useGenieTranscriptScroll';
 import type {
   GenieAnswer as GenieAnswerShape,
   GenieAnswerSection,
@@ -206,6 +209,20 @@ export function GenieSectionVisual({
   return <GenieRowsVisual rows={rows} plan={plan} cellCohort={cellCohort} />;
 }
 
+/** Sections from which a long sweep gets an outline and collapsible bodies. */
+export const GENIE_OUTLINE_MIN_SECTIONS = 4;
+
+/**
+ * Deep-research body (audit 2026-09-21 `genie-08`). The Summary and every
+ * section title are REAL h3 headings (the same classes the old <p> carried,
+ * so the pixels match), and the prose inside a section heads at h4.
+ *
+ * A sweep of four or more sections also gets an outline and collapsible
+ * bodies. The APG accordion pattern is used rather than <details>: a heading
+ * inside <summary> loses its heading semantics in Firefox (its children are
+ * presentational). Every section starts open; the open/closed state is
+ * presentation only and is never written to any store.
+ */
 export function GenieAnswerSections({
   summary,
   sections,
@@ -218,35 +235,98 @@ export function GenieAnswerSections({
   cellCohort?: GenieAnswerCohort;
 }) {
   const summaryText = (summary ?? '').trim();
+  const collapsible = sections.length >= GENIE_OUTLINE_MIN_SECTIONS;
+  const idBase = useId();
+  const [closed, setClosed] = useState<ReadonlySet<number>>(() => new Set());
+  const toggleRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const titleOf = (section: GenieAnswerSection) => section.title || section.question;
+  const setOpen = (index: number, open: boolean) =>
+    setClosed((current) => {
+      const next = new Set(current);
+      if (open) next.delete(index);
+      else next.add(index);
+      return next;
+    });
+  // An outline entry opens its section, brings its heading to the top of the
+  // scroller and puts focus on its toggle.
+  const jumpTo = (index: number) => {
+    setOpen(index, true);
+    const toggle = toggleRefs.current[index];
+    if (!toggle) return;
+    toggle.parentElement?.scrollIntoView({
+      block: 'start',
+      behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+    });
+    toggle.focus({ preventScroll: true });
+  };
   return (
     <div className="genie-answer__sections">
       {summaryText && (
         <>
-          <p className="genie-md-p genie-md-p--heading genie-md-p--first">Summary</p>
-          <MarkdownAnswer text={summaryText} workspaceHost={workspaceHost} />
+          <h3 className="genie-md-p genie-md-p--heading genie-md-p--first">Summary</h3>
+          <MarkdownAnswer text={summaryText} workspaceHost={workspaceHost} headingLevel={4} />
         </>
       )}
-      {sections.map((section, i) => (
-        <section
-          className="genie-answer__section"
-          key={`${section.title || 'section'}-${i}`}
-        >
-          {/* A section whose narrative failed verification still renders its
-              prose here — the reason is disclosed in the proof drawer's
-              known data gaps, not duplicated as an inline notice. */}
-          <p
-            className={`genie-md-p genie-md-p--heading${
-              !summaryText && i === 0 ? ' genie-md-p--first' : ''
-            }`}
-          >
-            {section.title || section.question}
-          </p>
-          {(section.answer ?? '').trim() && (
-            <MarkdownAnswer text={section.answer} workspaceHost={workspaceHost} />
-          )}
-          <GenieSectionVisual section={section} cellCohort={cellCohort} />
-        </section>
-      ))}
+      {collapsible && (
+        <nav className="genie-answer__outline" aria-label="Sections in this answer">
+          <ol>
+            {sections.map((section, i) => (
+              <li key={`${section.title || 'section'}-${i}`}>
+                <button type="button" className="genie-answer__outline-link" onClick={() => jumpTo(i)}>
+                  {titleOf(section)}
+                </button>
+              </li>
+            ))}
+          </ol>
+        </nav>
+      )}
+      {sections.map((section, i) => {
+        const headingClass = `genie-md-p genie-md-p--heading${!summaryText && i === 0 ? ' genie-md-p--first' : ''}`;
+        const bodyId = `${idBase}-section-${i}`;
+        const open = !closed.has(i);
+        // A section whose narrative failed verification still renders its
+        // prose here — the reason is disclosed in the proof drawer's known
+        // data gaps, not duplicated as an inline notice.
+        const body = (
+          <>
+            {(section.answer ?? '').trim() && (
+              <MarkdownAnswer text={section.answer} workspaceHost={workspaceHost} headingLevel={4} />
+            )}
+            <GenieSectionVisual section={section} cellCohort={cellCohort} />
+          </>
+        );
+        return (
+          <section className="genie-answer__section" key={`${section.title || 'section'}-${i}`}>
+            {collapsible ? (
+              <>
+                <h3 className={headingClass}>
+                  <button
+                    ref={(element) => {
+                      toggleRefs.current[i] = element;
+                    }}
+                    type="button"
+                    className="genie-answer__section-toggle"
+                    aria-expanded={open}
+                    aria-controls={bodyId}
+                    onClick={() => setOpen(i, !open)}
+                  >
+                    <span>{titleOf(section)}</span>
+                    <Icon name="chevdown" size={12} />
+                  </button>
+                </h3>
+                <div id={bodyId} className="genie-answer__section-body" hidden={!open}>
+                  {body}
+                </div>
+              </>
+            ) : (
+              <>
+                <h3 className={headingClass}>{titleOf(section)}</h3>
+                {body}
+              </>
+            )}
+          </section>
+        );
+      })}
     </div>
   );
 }
