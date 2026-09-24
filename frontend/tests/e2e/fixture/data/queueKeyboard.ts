@@ -15,6 +15,9 @@
  *     backend, so specs assert it is only ever called on explicit intent.
  *   - `registerHeldDecision`: the approve POST held on a RequestGate and the
  *     ledger read-back the Decision receipt makes after it.
+ *   - `registerHeldReject`: the reject POST held on a RequestGate, the
+ *     approve POST answered at once and recorded (a spec asserts it never
+ *     arrives), and the rejected ledger read-back.
  *
  * Synthetic only: masked ids in the production shape, no names or contacts.
  */
@@ -22,7 +25,7 @@ import type { LeadSummary } from '../../../../src/types';
 import type { DecisionReceipt, OutreachDraftResult } from '../../../../src/lib/apiTypes';
 import { json, type FixtureRequest, type MockApi } from '../mockApi';
 import { LEADS, PRIMARY_BORROWER, maskedBorrowerId } from './borrowers';
-import { RequestGate, approveResult, ledgerReceipt } from './decisionReceipt';
+import { REJECT_AUDIT_ID, RequestGate, approveResult, ledgerReceipt, rejectResult } from './decisionReceipt';
 import { outreachDraftFor } from './offers';
 import { TOTALS } from './reference';
 
@@ -104,6 +107,28 @@ export function registerHeldDecision(mockApi: MockApi): HeldDecision {
   });
   mockApi.register<DecisionReceipt>('GET', '/api/audit/receipt/:id', ({ params }) =>
     json<DecisionReceipt>(ledgerReceipt(params.id, PRIMARY_BORROWER, 'approved')),
+  );
+  return held;
+}
+
+export interface HeldReject {
+  rejectGate: RequestGate;
+  /** Approve POST bodies, in arrival order (a stale review must add none). */
+  readonly approvals: Array<{ borrower_id?: string }>;
+}
+
+export function registerHeldReject(mockApi: MockApi): HeldReject {
+  const held: HeldReject = { rejectGate: new RequestGate(), approvals: [] };
+  mockApi.register('POST', '/api/outreach/approve', (request) => {
+    held.approvals.push(request.body as HeldReject['approvals'][number]);
+    return approveResult(REVIEW_AUDIT_ID);
+  });
+  mockApi.register('POST', '/api/outreach/reject', async () => {
+    await held.rejectGate.hold();
+    return rejectResult(REJECT_AUDIT_ID);
+  });
+  mockApi.register<DecisionReceipt>('GET', '/api/audit/receipt/:id', ({ params }) =>
+    json<DecisionReceipt>(ledgerReceipt(params.id, PRIMARY_BORROWER, 'rejected')),
   );
   return held;
 }

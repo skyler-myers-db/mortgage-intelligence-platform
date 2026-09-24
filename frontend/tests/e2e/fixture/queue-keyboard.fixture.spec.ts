@@ -16,6 +16,10 @@
  *  - Bulk keeps its rationale gate, shows count by offer and drafts samples
  *    only on "Preview 3 sample drafts"; the Cmd-K verb opens that same gate.
  *  - `?` lists the page's shortcuts; the Console switch turns single keys off.
+ *  - Review round 1: a review whose row is rejected through its own Reject
+ *    panel closes (no approve after the reject); Cmd-K never mounts the
+ *    palette under the review dialog; the Cmd-K verb's review hands focus
+ *    back to the table; "Skip table" lands on a visible, ringed target.
  *
  * Holds are RequestGates, never wall-clock waits, so the in-flight
  * assertions hold under any machine load.
@@ -29,6 +33,7 @@ import {
   VIRTUAL_QUEUE,
   registerDraftEcho,
   registerHeldDecision,
+  registerHeldReject,
   registerVirtualQueue,
   reviewSubject,
 } from './data/queueKeyboard';
@@ -39,6 +44,29 @@ const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'];
 
 function draftRequests(mockApi: MockApi): number {
   return mockApi.calls.filter((call) => call.method === 'POST' && call.path.endsWith('/outreach/draft')).length;
+}
+
+/**
+ * Count the approve POSTs the page itself issues, read in-page: the client
+ * calls fetch synchronously from the Confirm handler, so a read after a key
+ * press has returned sees any POST that press started (the mock's own log
+ * only sees it once the request reaches the route handler).
+ */
+async function installApproveFetchProbe(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const probe = window as Window & { __mipApprovePosts?: number };
+    probe.__mipApprovePosts = 0;
+    const original = window.fetch.bind(window);
+    window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url.endsWith('/outreach/approve')) probe.__mipApprovePosts = (probe.__mipApprovePosts ?? 0) + 1;
+      return original(input, init);
+    };
+  });
+}
+
+function approvePostsSent(page: Page): Promise<number> {
+  return page.evaluate(() => (window as Window & { __mipApprovePosts?: number }).__mipApprovePosts ?? -1);
 }
 
 function scrollRegion(page: Page): Locator {
@@ -142,6 +170,7 @@ test.describe('approve review', () => {
     const held = registerHeldDecision(mockApi);
     registerVirtualQueue(mockApi);
     await app.gotoRoute('/lead-queue');
+    await installApproveFetchProbe(page);
     const reviewed = VIRTUAL_QUEUE[2];
     const next = VIRTUAL_QUEUE[3];
 
@@ -170,8 +199,11 @@ test.describe('approve review', () => {
     await expect(page.getByTestId('lead-decision-toast')).toHaveCount(0);
     await expect(page.getByTestId('lead-decision-view-receipt')).toHaveCount(0);
     await expect(page.getByTestId(`lead-approval-cell-${reviewed.borrower_id}`).locator('.chip--success')).toHaveCount(0);
-    // Enter again while the write is in flight is not a second POST.
+    // Enter again while the write is in flight is not a second POST: the
+    // in-page probe is read after the press's handlers ran.
+    expect(await approvePostsSent(page)).toBe(1);
     await page.keyboard.press('Enter');
+    expect(await approvePostsSent(page), 'no second approve POST was started').toBe(1);
     expect(held.approvals).toHaveLength(1);
     expect(held.approvals[0]).toEqual(expect.objectContaining({
       borrower_id: reviewed.borrower_id,
@@ -208,11 +240,52 @@ test.describe('approve review', () => {
     const dialog = page.locator('dialog.lead-approve-dialog');
     await expect(dialog.getByTestId('lead-approve-review-confirm')).toBeFocused();
 
+    // Cmd-K under the modal review mounts no inert, unseen palette (a DOM
+    // query, not a role query: inert content leaves the accessibility tree),
+    // so the next Escape still belongs to the review.
+    await page.keyboard.press('Control+k');
+    await expect(page.locator('[role="dialog"][aria-label="Command palette"]')).toHaveCount(0);
+    await expect(dialog.getByTestId('lead-approve-review-confirm')).toBeFocused();
+
     await page.keyboard.press('Escape');
     await expect(dialog).toHaveCount(0);
     await expect(scrollRegion(page), 'focus returns to the table').toBeFocused();
     expect(held.approveGate.received).toBe(false);
     expect(echo.calls).toEqual([LEADS[0].borrower_id]);
+  });
+
+  test('a review left open on a row rejected through its own Reject panel closes: no approve after the reject', async ({ app, mockApi, page }) => {
+    const echo = registerDraftEcho(mockApi);
+    const held = registerHeldReject(mockApi);
+    await app.gotoRoute('/lead-queue');
+    const target = LEADS[0];
+    expect(target.approval_status, 'precondition: the first row is pending').toBe('pending');
+
+    await scrollRegion(page).focus();
+    await page.keyboard.press('j');
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('a');
+    const review = page.locator('table.tbl tr.tbl__expand').getByTestId('lead-approve-review');
+    const confirm = review.getByTestId('lead-approve-review-confirm');
+    await expect(confirm).toBeFocused();
+
+    await page.getByTestId(`lead-reject-${target.borrower_id}`).click();
+    await page.locator('.decision-panel').getByRole('button', { name: 'Confirm reject' }).click();
+    await expect.poll(() => held.rejectGate.received, 'the reject POST left the browser').toBe(true);
+
+    // The reject is on the wire: Confirm on the still-open review is not a
+    // second decision, and says why.
+    await confirm.click();
+    await expect(review.getByRole('alert')).toHaveText(
+      'Not approved yet: another decision for this borrower is still being recorded. Wait for it to finish, then check the row.',
+    );
+
+    held.rejectGate.release();
+    await expect(review, 'the review closed once its row was rejected').toHaveCount(0);
+    await expect(page.getByTestId(`lead-approval-cell-${target.borrower_id}`)).toContainText('Rejected');
+    await expect(page.getByTestId('lead-approve-review-confirm')).toHaveCount(0);
+    expect(held.approvals, 'no approve after the reject').toEqual([]);
+    expect(echo.calls).toEqual([target.borrower_id]);
   });
 
   for (const theme of ['dark', 'light'] as const satisfies readonly FixtureTheme[]) {
@@ -269,6 +342,33 @@ test.describe('bulk gate and Cmd-K verbs', () => {
     await expect(review.locator('[data-testid="lead-bulk-samples"] li').first()).toContainText(reviewSubject(pending[0].borrower_id));
     expect(echo.calls).toEqual(pending.slice(0, 3).map((lead) => lead.borrower_id));
     expect(held.approveGate.received, 'nothing approves without the rationale and the button').toBe(false);
+  });
+
+  test('the Cmd-K approve verb on one selected row opens its review; Cancel hands focus back to the table', async ({ app, mockApi, page }) => {
+    const echo = registerDraftEcho(mockApi);
+    const held = registerHeldDecision(mockApi);
+    await app.gotoRoute('/lead-queue');
+    const [target] = LEADS.filter((lead) => lead.approval_status === 'pending');
+    await page.getByTestId(`lead-select-${target.borrower_id}`).check();
+
+    // Cmd-K from inside the table, as a keyboard user would.
+    await scrollRegion(page).focus();
+    await page.keyboard.press('Control+k');
+    const palette = page.getByRole('dialog', { name: 'Command palette' });
+    await palette.getByRole('option', { name: /^Approve 1 selected…/ }).click();
+    await expect(palette).toHaveCount(0);
+
+    const dialog = page.locator('dialog.lead-approve-dialog');
+    await expect(dialog.getByTestId('lead-approve-review-confirm')).toBeFocused();
+    expect(echo.calls, 'one draft, on the explicit verb').toEqual([target.borrower_id]);
+
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(
+      () => page.evaluate(() => document.querySelector('.tbl-wrap')?.contains(document.activeElement) ?? false),
+      'focus is back in the table, not on the page body',
+    ).toBe(true);
+    expect(held.approveGate.received).toBe(false);
   });
 });
 
