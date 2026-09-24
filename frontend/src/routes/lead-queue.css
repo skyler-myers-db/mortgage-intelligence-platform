@@ -75,3 +75,9 @@
   background: var(--bg-3);
 }
 .filter__remove:active { translate: 0 var(--pressed-shift); }
+/* Forced colors: 33-contrast-modes.css inks the chip's glyphs HighlightText
+   on its Highlight fill, but this hover / focus fill is forced to
+   ButtonFace, where that cross vanished. */
+@media (forced-colors: active) {
+  .filter.is-active .filter__remove:is(:hover, :focus-visible) svg { color: ButtonText !important; }
+}

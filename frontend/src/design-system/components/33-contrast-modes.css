@@ -2,7 +2,8 @@
    prototype has none. System colours only. Forcing keeps the cascade's
    winner: a doubled class (.switch.switch) or !important must win it. */
 @media (forced-colors: active) {
-  /* Fill-only states vanished once fills were forced. */
+  /* Fill-only states vanished once forced. Text keeps its forced ink on
+     Chromium's Canvas backplate; HighlightText vanished there. */
   .segmented.segmented button.is-active,
   .switch.switch.on,
   .filter.is-active,
@@ -14,14 +15,11 @@
   .filter-menu__item:is(.is-focused, .is-selected),
   .topbar__search-result.is-active {
     background-color: Highlight;
-    color: HighlightText;
     border-color: Highlight;
   }
-  /* A child's own ink was forced to LinkText or ButtonText, or kept on an
-     svg: 1.2-2.3:1 on Highlight. */
-  :is(.segmented button, .filter, .rail__item, .topbar__icon-btn, .drawer__tab, .proof-tab, .cmdk__row, .topbar__search-result).is-active *,
-  .switch.on *,
-  .filter-menu__item:is(.is-focused, .is-selected) * { color: HighlightText !important; }
+  /* An svg has no backplate. */
+  :is(.segmented button, .filter, .rail__item, .topbar__icon-btn, .drawer__tab, .proof-tab, .cmdk__row, .topbar__search-result).is-active svg,
+  .filter-menu__item:is(.is-focused, .is-selected) svg { color: HighlightText !important; }
   .tweak-row .sw.is-active,
   .zip-tile.is-selected { border-color: Highlight; }
   .segmented,
