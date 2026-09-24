@@ -97,6 +97,16 @@ const WAVE_1C_FORMATTERS_OWNED = [
   "src/routes/portfolio-builder.components.tsx",
 ];
 
+// Files where react-hooks/set-state-in-effect is already an error (see the
+// block after the main config). Grow it as files leave effect-driven state.
+export const SET_STATE_IN_EFFECT_SCOPE = [
+  "src/components/mortgage/useLeadApprovalActions.ts",
+  "src/components/mortgage/useLeadSalesActions.ts",
+  "src/components/mortgage/ApprovalBanner.tsx",
+  "src/routes/lead-queue.tsx",
+  "src/lib/mutations/*.ts",
+];
+
 export default [
   {
     ignores: ["dist", "node_modules", "*.config.*", "tsconfig.tsbuildinfo"],
@@ -155,6 +165,18 @@ export default [
         { object: "window", property: "alert", message: "window.alert blocks the renderer. Use a status callout." },
         { object: "window", property: "confirm", message: "window.confirm blocks the renderer. Use an in-page confirm affordance." },
       ],
+    },
+  },
+  // The files the query-layer migration has converted (wave 2, audit
+  // stack-09): their writes run on useMutation and their reads on useQuery,
+  // so a synchronous setState in an effect body is a regression here. The
+  // repo-wide flip (and the TODO above) stays with the wave-4 lint lane.
+  // src/lib/setStateInEffectScope.test.ts pins exactly this scope.
+  {
+    files: SET_STATE_IN_EFFECT_SCOPE,
+    ignores: ["src/**/*.test.{ts,tsx}"],
+    rules: {
+      "react-hooks/set-state-in-effect": "error",
     },
   },
   // Credential-free e2e fixture harness. Linted at the same bar as src, and
