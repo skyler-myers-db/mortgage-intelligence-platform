@@ -289,7 +289,7 @@
   font-family: var(--font-mono);
   font-size: var(--fs-11);
   font-weight: 500;
-  box-shadow: var(--shadow-1);
+  box-shadow: var(--shadow-sm);
   pointer-events: none;
 }
 .stable-refresh-region--table.is-updating::before {

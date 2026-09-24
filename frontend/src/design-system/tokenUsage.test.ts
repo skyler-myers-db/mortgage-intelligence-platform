@@ -23,13 +23,43 @@
  *    sets is reset inside `@media print` to print.css's monochrome value,
  *    because the (0,2,0) compounds outrank print.css's (0,1,0) remap.
  */
+// @ts-expect-error Frontend app types intentionally exclude Node globals; this
+// test reads the app's TSX sources under Vitest only.
+import { readFileSync, readdirSync } from 'node:fs';
+// @ts-expect-error see node:fs note above.
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { designCss } from '../test/designCss';
 import { featureStylesheets } from '../test/featureCss';
 import { TokenCascade, mediaBlocks, readPrintCss, readTokensCss, topLevelRules } from '../test/tokenCascade';
 
+declare const process: { cwd(): string };
+
 const tokens = readTokensCss();
 const components = designCss();
+
+function stripCssComments(css: string): string {
+  return css.replace(/\/\*[\s\S]*?\*\//g, '');
+}
+
+/**
+ * Custom properties a non-test .ts/.tsx under src sets: a quoted `'--x'`
+ * (an inline `style` key) or `setProperty('--x', ...)`. Test files, the
+ * test helpers and the Storybook/test fixtures are not the app.
+ */
+function tsxCustomPropertySetters(): Set<string> {
+  const src = join(process.cwd(), 'src');
+  const files = (readdirSync(src, { recursive: true }) as string[])
+    .map((entry) => entry.split('\\').join('/'))
+    .filter((entry) => /\.tsx?$/.test(entry) && !/\.test\.tsx?$/.test(entry))
+    .filter((entry) => !entry.startsWith('test/') && !entry.startsWith('mocks/'));
+  const found = new Set<string>();
+  for (const file of files) {
+    const text = readFileSync(join(src, file), 'utf8') as string;
+    for (const match of text.matchAll(/['"`](--[\w-]+)['"`]/g)) found.add(match[1]);
+  }
+  return found;
+}
 
 describe('focus ring is one system (css-v1 / a11y-01)', () => {
   it('routes the global :focus-visible ring through the focus-ring tokens', () => {
@@ -56,13 +86,70 @@ describe('motion tokens resolve (motion-04)', () => {
     expect(cascade.resolve('--ease-standard')).toBe(cascade.resolve('--ease'));
   });
 
-  it('resolves every duration and easing token the partials reference', () => {
-    const cascade = new TokenCascade(tokens, { theme: 'dark', accent: 'bright' });
-    const referenced = new Set<string>();
-    for (const match of components.matchAll(/var\((--(?:dur|ease)(?:-[a-z0-9]+)*)\)/g)) referenced.add(match[1]);
-    expect(referenced.has('--ease-standard'), 'the partials still reference the alias').toBe(true);
-    const unresolved = [...referenced].filter((name) => cascade.raw(name) === undefined);
-    expect(unresolved, 'referenced in a partial but never defined in tokens.css').toEqual([]);
+  it('still references the alias from a partial', () => {
+    expect(components).toMatch(/var\(--ease-standard\)/);
+  });
+});
+
+/**
+ * css-04 / motion-04: an undefined custom property voids its declaration at
+ * computed-value time, silently (`var(--stroke)` dropped the ZIP reconcile
+ * divider, `var(--shadow-1)` the refresh pill's shadow, and the
+ * `--ease-standard` transitions snapped). Every `var(--x)` in the component
+ * partials and the feature sheets must name a property some stylesheet
+ * under src declares, or one the app sets from TSX (listed below, each
+ * checked against a real setter so a stale entry fails too).
+ */
+describe('every referenced custom property resolves (css-04 / motion-04)', () => {
+  /** Set on an element's inline style from TSX, and only there. */
+  const TSX_SET = [
+    '--bin-alpha', '--bin-h', '--bin-w', '--bin-x', '--bin-y',
+    '--dot-x', '--dot-y', '--facet-share', '--hover-x', '--hover-y', '--tick-pos',
+  ];
+  /** Read with a fallback on purpose: TSX sets them on some elements only. */
+  const TSX_SET_WITH_FALLBACK = [
+    '--bar-pct', '--chip-hue', '--filter-menu-space', '--genie-composer-block-size',
+    '--genie-route-nav-block-size', '--lead-table-fill-block', '--offer-action-bar-block-size',
+    '--offer-action-bar-genie-clearance', '--receipt-i', '--seg-color', '--tile-i',
+  ];
+  const consumers = [{ file: 'design-system/components.css (partials)', css: components }, ...featureStylesheets()];
+  const declared = new Set(
+    [tokens, readPrintCss(), components, ...featureStylesheets().map((sheet) => sheet.css)].flatMap((css) =>
+      [...stripCssComments(css).matchAll(/(--[\w-]+)\s*:/g)].map((match) => match[1]),
+    ),
+  );
+  const references = consumers.flatMap(({ file, css }) =>
+    [...stripCssComments(css).matchAll(/var\(\s*(--[\w-]+)\s*([,)])/g)].map((match) => ({
+      file,
+      name: match[1],
+      fallback: match[2] === ',',
+    })),
+  );
+
+  it('declares every fallback-free var() somewhere, or sets it from TSX', () => {
+    const missing = references
+      .filter((ref) => !ref.fallback && !declared.has(ref.name) && !TSX_SET.includes(ref.name))
+      .map((ref) => `${ref.file}: ${ref.name}`);
+    expect(references.length).toBeGreaterThan(1000);
+    expect([...new Set(missing)], 'referenced but never declared: the declaration is void').toEqual([]);
+  });
+
+  it('never leans on a fallback for a property nothing declares or sets', () => {
+    // `var(--surface-2, var(--bg-1))` always painted the fallback: --surface-2
+    // exists nowhere, so the first argument was dead code.
+    const known = new Set([...TSX_SET, ...TSX_SET_WITH_FALLBACK]);
+    const dead = references
+      .filter((ref) => ref.fallback && !declared.has(ref.name) && !known.has(ref.name))
+      .map((ref) => `${ref.file}: ${ref.name}`);
+    expect([...new Set(dead)], 'use the fallback directly or declare the property').toEqual([]);
+  });
+
+  it('lists only properties a non-test source file really sets', () => {
+    const setters = tsxCustomPropertySetters();
+    const stale = [...TSX_SET, ...TSX_SET_WITH_FALLBACK].filter((name) => !setters.has(name));
+    expect(stale, 'no .ts/.tsx under src sets these any more: drop them from the list').toEqual([]);
+    const unused = [...TSX_SET, ...TSX_SET_WITH_FALLBACK].filter((name) => !references.some((ref) => ref.name === name));
+    expect(unused, 'no stylesheet reads these any more').toEqual([]);
   });
 });
 

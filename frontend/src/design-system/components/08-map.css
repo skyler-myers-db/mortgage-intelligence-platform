@@ -240,7 +240,7 @@
 }
 .map-tip {
   position: absolute; pointer-events: none;
-  background: var(--surface-2, var(--bg-1));
+  background: var(--bg-1);
   border: 1px solid var(--line-2);
   border-radius: var(--r-md);
   padding: var(--sp-3) var(--sp-3);
@@ -415,7 +415,7 @@
   align-items: center;
   gap: var(--sp-2);
   padding: var(--sp-2) var(--sp-3);
-  border-top: 1px solid var(--stroke);
+  border-top: 1px solid var(--line-1);
   color: var(--text-2);
 }
 
