@@ -305,6 +305,29 @@ describe('LeadTable approve review guards', () => {
       expect(approve).not.toHaveBeenCalled();
     });
 
+    it('an approved row cannot be reviewed (or drafted) again before its approval reaches the approvals state', async () => {
+      store.reset(true);
+      mount();
+      await openInlineReviewOnFirstRow();
+      await act(async () => {
+        confirmButton()!.click();
+      });
+      await flush();
+      await flush();
+      expect(approve).toHaveBeenCalledTimes(1);
+      expect(review()).toBeNull();
+      // Frozen: the row still renders as pending, with its Approve button.
+      const approveAgain = container.querySelector<HTMLButtonElement>(`[data-testid="lead-approve-${IDS[0]}"]`);
+      expect(approveAgain, 'precondition: the render has not seen the approval').not.toBeNull();
+
+      act(() => approveAgain!.click());
+      await flush();
+
+      expect(review()).toBeNull();
+      expect(draftOutreach, 'no second DRAFT_OUTREACH row').toHaveBeenCalledTimes(1);
+      expect(approve).toHaveBeenCalledTimes(1);
+    });
+
     it('closes when a bulk run takes its row, drafts nothing new while the run is on the wire, and approves the row once', async () => {
       const held = holdApprovals();
       mount();
