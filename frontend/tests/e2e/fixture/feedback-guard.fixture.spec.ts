@@ -21,6 +21,8 @@
  *    centre, painted above the page, AA text in both themes; the Save button
  *    keeps its own label.
  *  - A failed copy is a role=alert toast; repeats coalesce into one count.
+ *    Dismissing a toast from the keyboard hands focus back to the control
+ *    focus came from, not to <body>.
  *  - An approval routed to a loan officer is a toast linked to its audit
  *    row; the old in-page routing chip is gone.
  *  - Entry uses @starting-style; reduced motion drops the transition.
@@ -352,6 +354,30 @@ test.describe('toast region (states-07 slice 1)', () => {
     const { fg, bg } = await renderedColors(failure.locator('.toast__ico'));
     expect(contrastRatio(fg, bg)).toBeGreaterThanOrEqual(3);
     expect(await axeViolations(page, 'section.toast-region'), 'WCAG A/AA with a failure toast').toEqual([]);
+  });
+
+  test('dismissing a toast from the keyboard hands focus back to where it came from', async ({ app, page }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: { writeText: () => Promise.reject(new DOMException('Denied (fixture)', 'NotAllowedError')) },
+      });
+    });
+    await app.gotoRoute('/portfolio-builder');
+    await expect(toastRegion(page)).toHaveCount(1);
+    const share = page.getByTestId('portfolio-copy-link');
+    await share.focus();
+    await page.keyboard.press('Enter');
+
+    const failure = toastRegion(page).locator('.toast--error');
+    await expect(failure).toContainText('Copy failed');
+    const dismiss = failure.getByRole('button', { name: 'Dismiss notification' });
+    await dismiss.focus();
+    await expect(dismiss).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(failure).toHaveCount(0);
+    // WCAG 2.4.3: focus goes back to Share, not to <body>.
+    await expect(share).toBeFocused();
   });
 
   test('an approval routed to a loan officer is announced with its audit link', async ({ app, mockApi, page }) => {

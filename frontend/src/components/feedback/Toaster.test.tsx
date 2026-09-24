@@ -151,6 +151,48 @@ describe('Toaster', () => {
     expect(cards()).toHaveLength(0);
   });
 
+  it('moves focus off a toast before removing it: next toast, then where focus came from, then the heading', () => {
+    const main = document.createElement('main');
+    main.id = 'main-content';
+    main.tabIndex = -1;
+    main.innerHTML = '<h1 tabindex="-1">Portfolio Builder</h1>';
+    const share = document.createElement('button');
+    share.textContent = 'Share this build';
+    main.appendChild(share);
+    document.body.appendChild(main);
+    try {
+      act(() => {
+        toast.error('Copy failed');
+        toast.error('Save failed');
+      });
+      const closes = () => [...container.querySelectorAll<HTMLButtonElement>('button[aria-label="Dismiss notification"]')];
+      act(() => share.focus());
+      act(() => closes()[0].focus());
+      expect(document.activeElement).toBe(closes()[0]);
+
+      // Two toasts: the next one's dismiss button takes focus.
+      act(() => closes()[0].click());
+      expect(cards().map((card) => card.textContent)).toEqual([expect.stringContaining('Save failed')]);
+      expect(document.activeElement).toBe(closes()[0]);
+
+      // The last toast: focus goes back to where it came from.
+      act(() => closes()[0].click());
+      expect(cards()).toHaveLength(0);
+      expect(document.activeElement).toBe(share);
+
+      // Where focus came from is gone: the page heading takes it.
+      act(() => {
+        toast.error('Copy failed');
+      });
+      act(() => closes()[0].focus());
+      act(() => share.remove());
+      act(() => closes()[0].click());
+      expect(document.activeElement).toBe(main.querySelector('h1'));
+    } finally {
+      main.remove();
+    }
+  });
+
   it('keeps a failure until it is dismissed', () => {
     act(() => {
       toast.error('Copy failed');
