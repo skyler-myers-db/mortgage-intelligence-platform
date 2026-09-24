@@ -7,9 +7,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * Boot wiring of main.tsx, asserted on the real `#root` it renders into:
- * the root ErrorBoundary, the createRoot error callbacks and the
- * `vite:preloadError` listener. Only `./app` is replaced, so the test can
- * make the whole shell throw.
+ * the root ErrorBoundary, the createRoot error callbacks, the
+ * `vite:preloadError` listener, the window `error` / `unhandledrejection`
+ * listeners and the router source RUM reads route changes from. Only `./app`
+ * is replaced, so the test can make the whole shell throw.
  */
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -73,5 +74,45 @@ describe('main.tsx boot', () => {
     expect(root.querySelector('[data-testid="shell-ok"]')?.textContent).toBe('workspace');
     // Importing main.tsx transforms the whole boot graph; on a loaded CI box
     // that alone can pass the 5 s default.
+  }, 60_000);
+
+  it('installs the error listeners and the router source; a borrower-bearing ErrorEvent leaves one message-free report and no request', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const addEventListener = vi.spyOn(window, 'addEventListener');
+    const fetchSpy = vi.fn();
+    const beacon = vi.fn(() => true);
+    vi.stubGlobal('fetch', fetchSpy);
+    Object.defineProperty(navigator, 'sendBeacon', { configurable: true, value: beacon });
+    shell.render = () => <div data-testid="shell-ok">workspace</div>;
+    document.body.innerHTML = '<div id="root"></div>';
+
+    vi.resetModules();
+    await act(async () => {
+      await import('./main');
+    });
+    // The same module instance main.tsx registered with (no reset in between).
+    const bridge = await import('./lib/rumBridge');
+
+    const events = addEventListener.mock.calls.map((call) => call[0]);
+    expect(events).toContain('error');
+    expect(events).toContain('unhandledrejection');
+    const source = bridge.getRumRouteSource();
+    expect(source, 'main.tsx registered the data router as the RUM route source').not.toBeNull();
+    const unsubscribe = source?.(() => undefined);
+    expect(typeof unsubscribe).toBe('function');
+    unsubscribe?.();
+
+    const message = 'Cannot read score of borrower B-0TESTBORROWER at /borrower-360/B-0TESTBORROWER?x=1';
+    window.dispatchEvent(new ErrorEvent('error', { error: new Error(message), message }));
+
+    const sent: unknown[] = [];
+    bridge.attachClientErrorSink((report) => sent.push(report));
+    expect(sent).toEqual([
+      { source: 'window', kind: 'render', errorName: 'Error', boundary: null, route: '/' },
+    ]);
+    expect(JSON.stringify(sent)).not.toContain('B-0TESTBORROWER');
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(beacon).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
   }, 60_000);
 });

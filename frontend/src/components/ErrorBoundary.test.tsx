@@ -249,6 +249,7 @@ describe('ErrorBoundary', () => {
       kind: 'render',
       errorName: 'RangeError',
       boundary: 'route',
+      route: '/',
     });
     expect(JSON.stringify(reports[0][1])).not.toContain('B-0TESTBORROWER');
   });

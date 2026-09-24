@@ -10,6 +10,8 @@ Server-Timing fields. The sink stays log-only and off by default.
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -17,7 +19,15 @@ from fastapi.testclient import TestClient
 
 from backend.api import telemetry as telemetry_mod
 from backend.main import app
-from backend.schemas.telemetry import RUM_API_ROUTE_SEGMENTS
+from backend.schemas.telemetry import (
+    CLIENT_ERROR_BOUNDARIES,
+    CLIENT_ERROR_NAMES,
+    CLIENT_ERROR_SOURCES,
+    RUM_API_ROUTE_SEGMENTS,
+)
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+RUM_BRIDGE_TS = REPO_ROOT / "frontend" / "src" / "lib" / "rumBridge.ts"
 
 RUM_PATH = "/api/telemetry/rum"
 
@@ -205,3 +215,29 @@ def test_every_mounted_api_segment_is_in_the_rum_vocabulary() -> None:
         f"(backend/schemas/telemetry.py) and API_ROUTE_SEGMENTS "
         f"(frontend/src/lib/rumApiRoute.ts): {missing}"
     )
+
+
+def _ts_const_array(path: Path, name: str) -> set[str]:
+    """The string literals of `export const <name> = [...] as const;` in a TS file."""
+    source = path.read_text(encoding="utf-8")
+    match = re.search(
+        rf"export const {name} = \[(?P<body>.*?)\] as const;", source, flags=re.DOTALL
+    )
+    assert match, f"{path.name} must declare `export const {name} = [...] as const;`"
+    values = re.findall(r"'([^']*)'", match.group("body"))
+    assert len(values) == len(set(values)), f"{name} in {path.name} has duplicates"
+    return set(values)
+
+
+@pytest.mark.parametrize(
+    ("name", "server"),
+    [
+        ("CLIENT_ERROR_NAMES", CLIENT_ERROR_NAMES),
+        ("CLIENT_ERROR_SOURCES", CLIENT_ERROR_SOURCES),
+        ("CLIENT_ERROR_BOUNDARIES", CLIENT_ERROR_BOUNDARIES),
+    ],
+)
+def test_client_error_vocabularies_match_rum_bridge(name: str, server: frozenset[str]) -> None:
+    """Parity pin (named in the rumBridge.ts header): a name, source or
+    boundary the client can send is exactly one the server accepts."""
+    assert _ts_const_array(RUM_BRIDGE_TS, name) == set(server)
