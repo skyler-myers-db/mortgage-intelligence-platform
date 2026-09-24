@@ -561,6 +561,9 @@ export function resumeGenieTurnFromSession(): void {
   const fresh = Date.now() - record.startedAt < MAX_LIVE_WAIT_MS;
   if (record.phase !== 'polling' || !ids || !fresh) {
     removeRecord();
+    // Known residual (#3, w3-genie-jobs): this note, like the other-tab note
+    // below and the transcript key, shows the persisted question with no
+    // server check, so it survives a reload across an actor change.
     interrupt(interruptedReason(record.phase === 'completing' ? 'completing' : 'reload'), record.question);
     return;
   }
