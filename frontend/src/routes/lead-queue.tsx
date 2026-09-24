@@ -690,6 +690,7 @@ export default function LeadQueue() {
             view={tableView}
             onViewChange={(next) => setSearchParams(searchParamsWithLeadTableView(searchParams, next))}
             fillHeight
+            restoreScroll
             // A sort (and Reset to rank) is a new history entry; expand and
             // collapse replace the current one, so Back leaves the queue.
             sort={place.sort}

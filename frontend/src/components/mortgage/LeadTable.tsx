@@ -39,6 +39,7 @@ import { useLeadApprovalActions, type CampaignBindingState } from './useLeadAppr
 import { useLeadSalesActions } from './useLeadSalesActions';
 import { useLeadTableKeyboardFlow } from './useLeadTableKeyboardFlow';
 import { useLeadTableFillHeight } from './useLeadTableFillHeight';
+import { useLeadTableInitialOffset, useLeadTableScroll } from './useLeadTableScroll';
 import { lazyModule, useLazyModule } from './useLazyModule';
 import { approverGateReason } from './approverGate';
 import { ariaKeyShortcuts } from '../../lib/keymap';
@@ -109,6 +110,7 @@ export function LeadTable({
   onSortChange,
   expandedId: controlledExpanded,
   onExpandedChange,
+  restoreScroll = false,
 }: LeadTableProps) {
   'use no memo';
 
@@ -196,6 +198,8 @@ export function LeadTable({
     : -1;
   const hasExpandedRow = expandedRowIndex >= 0;
   const shouldVirtualize = sortedLeads.length > LEAD_VIRTUALIZATION_THRESHOLD;
+  // Back to this entry: the virtualizer starts at the saved offset (runtime-08).
+  const initialTableOffset = useLeadTableInitialOffset(restoreScroll);
   // TanStack Virtual returns imperative instance methods tied to the scroll
   // element. The hook stays local to this table and its methods are not passed
   // into memoized children, so React Compiler's library advisory is expected.
@@ -209,6 +213,12 @@ export function LeadTable({
     getItemKey: (index) => sortedLeads[index]?.borrower_id ?? index,
     getScrollElement: () => tableWrapRef.current,
     overscan: LEAD_ROW_OVERSCAN,
+    initialOffset: initialTableOffset,
+  });
+  useLeadTableScroll({
+    enabled: restoreScroll,
+    tableWrapRef,
+    virtualizer: shouldVirtualize ? rowVirtualizer : null,
   });
   const virtualItems = shouldVirtualize ? rowVirtualizer.getVirtualItems() : [];
   const visibleRows = shouldVirtualize

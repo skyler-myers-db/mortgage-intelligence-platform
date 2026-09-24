@@ -54,6 +54,12 @@ export interface LeadTableProps {
    */
   expandedId?: string | null;
   onExpandedChange?: (borrowerId: string | null) => void;
+  /**
+   * Keep the table scroller's offset per history entry (audit runtime-08):
+   * Back restores it, a new entry starts at the top. Opt-in: only the Lead
+   * Queue passes it.
+   */
+  restoreScroll?: boolean;
 }
 
 export type RejectReasonCode =
