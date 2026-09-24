@@ -141,6 +141,55 @@ describe('HealthProvider connection', () => {
     expect(admin.mock.calls.length, 'a 403 is not an outage and is not re-fired').toBe(adminCalls);
   });
 
+  it('reloads a read that could not reach the server after a ONE-probe blip too (no banner, no Retry click)', async () => {
+    const unreachable = new ApiError(CLIENT_FAILURE_MESSAGES.unreachable, { path: '/api/v1/leads', reason: 'unreachable' });
+    const forbidden = new ApiError('forbidden', { path: '/api/v1/admin', status: 403 });
+    const leads = vi.fn(async () => {
+      throw unreachable;
+    });
+    const admin = vi.fn(async () => {
+      throw forbidden;
+    });
+    function Reads() {
+      useQuery({ queryKey: ['leads'], queryFn: leads });
+      useQuery({ queryKey: ['admin'], queryFn: admin });
+      return null;
+    }
+    let reachable = false;
+    const fetchHealth = vi.fn(async () => (reachable ? OK : UNREACHABLE));
+    await mount(fetchHealth, <Reads />);
+    expect(fetchHealth).toHaveBeenCalledTimes(1);
+    expect(connection(), 'one failed probe is a blip').toBe('online');
+    expect(banner()).toBeNull();
+    const leadCalls = leads.mock.calls.length;
+    const adminCalls = admin.mock.calls.length;
+
+    reachable = true;
+    await advance(3000);
+    expect(fetchHealth).toHaveBeenCalledTimes(2);
+    expect(leads.mock.calls.length, 'the unreachable read is refetched once the app answers').toBe(leadCalls + 1);
+    expect(admin.mock.calls.length, 'a 403 is not an outage and is not re-fired').toBe(adminCalls);
+  });
+
+  it('never re-fires a read that fails while every probe reaches the app: no refetch loop', async () => {
+    const leads = vi.fn(async () => {
+      throw new ApiError(CLIENT_FAILURE_MESSAGES.unreachable, { path: '/api/v1/leads', reason: 'unreachable' });
+    });
+    function Reads() {
+      useQuery({ queryKey: ['leads'], queryFn: leads });
+      return null;
+    }
+    const fetchHealth = vi.fn(async () => OK);
+    await mount(fetchHealth, <Reads />);
+    await act(async () => {
+      reportNetworkFailure();
+    });
+    // One healthy poll at a time (each tick awaits its probe before scheduling the next).
+    for (let i = 0; i < 6; i += 1) await advance(8000);
+    expect(fetchHealth.mock.calls.length, 'the poll kept running').toBeGreaterThanOrEqual(6);
+    expect(leads, 'only the mount fetched it').toHaveBeenCalledTimes(1);
+  });
+
   it('stops probing and shows the offline banner while the browser has no network, then probes on return', async () => {
     const fetchHealth = vi.fn(async () => OK);
     await mount(fetchHealth);

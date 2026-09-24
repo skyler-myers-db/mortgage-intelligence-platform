@@ -52,11 +52,15 @@ export function nextConnection(prior: ConnectionTracker, seen: ConnectionObserva
 }
 
 /**
- * On the unreachable -> online edge, refetch the MOUNTED queries whose last
- * attempt never reached the server. Same narrowing as healthRecovery.ts:
- * `type: 'active'` only, because many reads write VIEW_* audit rows and an
- * unmounted audited read must never be re-fired for a page nobody is on.
- * Offline -> online needs nothing here: TanStack resumes paused queries itself.
+ * When a reachable probe follows one or more failed probes (the "Connection
+ * lost" banner, or a one-probe blip that never showed it), refetch the
+ * MOUNTED queries whose last attempt never reached the server. Same narrowing
+ * as healthRecovery.ts: `type: 'active'` only, because many reads write VIEW_*
+ * audit rows and an unmounted audited read must never be re-fired for a page
+ * nobody is on. It needs a failed probe first: a read that fails while every
+ * probe reaches the app is a path-specific failure, and refetching it on each
+ * probe would be a retry loop. Offline -> online needs nothing here: TanStack
+ * resumes paused queries itself.
  */
 export function refetchUnreachableQueries(queryClient: QueryClient): void {
   void queryClient.refetchQueries({

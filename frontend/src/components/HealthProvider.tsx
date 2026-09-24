@@ -263,7 +263,10 @@ export function HealthProvider({
       });
       connectionRef.current = next;
       setConnection(next.status);
-      if (prior.status === 'unreachable' && next.status === 'online' && probeReachable && queryClient) {
+      // A reachable probe after one or more failed ones: reload the reads
+      // that could not reach the server in between, whether the banner showed
+      // (two failures) or it was a one-probe blip.
+      if (prior.failedProbes > 0 && next.status === 'online' && probeReachable && queryClient) {
         refetchUnreachableQueries(queryClient);
       }
     };
