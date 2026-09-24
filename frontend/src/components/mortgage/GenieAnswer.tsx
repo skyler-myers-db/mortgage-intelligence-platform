@@ -426,6 +426,7 @@ export function GenieAnswer({
         <GenieAnswerFeedback
           conversationId={liveConversationId}
           messageId={liveMessageId}
+          onAnnounce={onAnnounce}
         />
       )}
     </div>

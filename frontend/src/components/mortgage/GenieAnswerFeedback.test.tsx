@@ -15,7 +15,7 @@ vi.mock('../../lib/api', async () => {
   return { ...actual, api: { genieFeedback } };
 });
 
-import { GenieAnswerFeedback } from './GenieAnswerFeedback';
+import { GenieAnswerFeedback, __resetGenieFeedbackMemoryForTests } from './GenieAnswerFeedback';
 import { ApiError } from '../../lib/api';
 
 function upBtn(container: HTMLElement) {
@@ -31,6 +31,7 @@ describe('GenieAnswerFeedback', () => {
 
   beforeEach(() => {
     genieFeedback.mockReset();
+    __resetGenieFeedbackMemoryForTests();
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -79,6 +80,79 @@ describe('GenieAnswerFeedback', () => {
     expect(upBtn(container)).toBeNull();
     expect(container.querySelector('.genie-feedback--done')).not.toBeNull();
     expect(container.textContent).toContain('Feedback recorded');
+  });
+
+  /**
+   * w2-genie-turn residual 6: the done label mounted already populated as its
+   * own role=status, which is unreliably spoken, and the pressed button
+   * unmounted under keyboard focus. It now speaks through the surface's one
+   * announcer, takes focus when a vote button had it, and a recorded vote is
+   * never offered again after a collapse/expand remount (genie-08).
+   */
+  it('speaks the done state through the surface announcer, not a live region of its own', async () => {
+    genieFeedback.mockResolvedValue({ accepted: true, audit_event_id: 'evt-1' });
+    const onAnnounce = vi.fn();
+    await act(async () => {
+      root.render(<GenieAnswerFeedback conversationId="c1" messageId="m1" onAnnounce={onAnnounce} />);
+    });
+    await act(async () => {
+      upBtn(container)!.click();
+      await Promise.resolve();
+    });
+    expect(onAnnounce).toHaveBeenCalledWith('Feedback recorded');
+    expect(container.querySelector('[role="status"], [aria-live]')).toBeNull();
+  });
+
+  it('moves focus to the done label when the vote was made from a focused button', async () => {
+    genieFeedback.mockResolvedValue({ accepted: true, audit_event_id: 'evt-1' });
+    await act(async () => {
+      root.render(<GenieAnswerFeedback conversationId="c1" messageId="m1" />);
+    });
+    upBtn(container)!.focus();
+    await act(async () => {
+      upBtn(container)!.click();
+      await Promise.resolve();
+    });
+    const done = container.querySelector<HTMLElement>('.genie-feedback__done-label');
+    expect(done?.getAttribute('tabindex')).toBe('-1');
+    expect(document.activeElement).toBe(done);
+  });
+
+  it('does not steal focus when the vote button did not have it', async () => {
+    genieFeedback.mockResolvedValue({ accepted: true, audit_event_id: 'evt-1' });
+    const elsewhere = document.createElement('button');
+    document.body.appendChild(elsewhere);
+    try {
+      await act(async () => {
+        root.render(<GenieAnswerFeedback conversationId="c1" messageId="m1" />);
+      });
+      elsewhere.focus();
+      await act(async () => {
+        upBtn(container)!.click();
+        await Promise.resolve();
+      });
+      expect(document.activeElement).toBe(elsewhere);
+    } finally {
+      elsewhere.remove();
+    }
+  });
+
+  it('never offers the vote again after the answer remounts (collapse and expand)', async () => {
+    genieFeedback.mockResolvedValue({ accepted: true, audit_event_id: 'evt-1' });
+    await act(async () => {
+      root.render(<GenieAnswerFeedback conversationId="c1" messageId="m1" />);
+    });
+    await act(async () => {
+      upBtn(container)!.click();
+      await Promise.resolve();
+    });
+    act(() => root.render(<></>));
+    await act(async () => {
+      root.render(<GenieAnswerFeedback conversationId="c1" messageId="m1" />);
+    });
+    expect(upBtn(container)).toBeNull();
+    expect(container.querySelector('.genie-feedback--done')).not.toBeNull();
+    expect(genieFeedback).toHaveBeenCalledTimes(1);
   });
 
   it('always omits the comment field', async () => {
