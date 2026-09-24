@@ -1,3 +1,9 @@
+// Shell-initial and its frames render only on failure: React Compiler memo
+// caches would roughly double these small renderers in the initial chunk for
+// no measurable render saving (same call as DegradedBanner.tsx and
+// RouteFallback.tsx).
+'use no memo';
+
 import { useCallback, useRef, type ReactNode } from 'react';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { useApp } from '../AppContext';
