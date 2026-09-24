@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import type { LeadSummary } from '../../types';
 import type { OutreachDraftResult } from '../../lib/apiTypes';
 import { isAbortError } from '../../lib/api';
+import { formatCount } from '../../lib/formatters';
 import { offerDisplayLabel } from '../../lib/offerLanguage';
 import { Button, Chip } from '../Primitives';
 import './LeadBulkApproveReview.css';
@@ -115,7 +116,7 @@ export function LeadBulkApproveReview({
         <span className="field__label">By offer</span>
         {offerCounts(leads).map(({ label, count }) => (
           <Chip key={label} variant="neutral">
-            {label} <span className="mono num">{count.toLocaleString()}</span>
+            {label} <span className="mono num">{formatCount(count)}</span>
           </Chip>
         ))}
       </div>

@@ -262,11 +262,17 @@ export function LeadTable({
   // requested only on Approve); the bulk review chunk once rows are selected.
   const reviewChunk = useLazyModule(REVIEW_CHUNK, openReview !== null || flow.cursor.cursorId !== null || expanded !== null);
   const bulkChunk = useLazyModule(BULK_REVIEW_CHUNK, approval.selectionCount > 1);
-  const ReviewInline = reviewChunk.module?.LeadApproveReviewInline;
-  const ReviewDialog = reviewChunk.module?.LeadApproveReviewDialog;
+  // The module cache is the truth: after one failed chunk load this hook's
+  // state stays failed, yet the next Approve re-imports the chunk and drafts
+  // (an audited DRAFT_OUTREACH write), so the review must render from the
+  // cache or that draft would sit unseen with no Cancel. LeadTable is
+  // 'use no memo', so this read is fresh on every render.
+  const reviewModule = reviewChunk.module ?? REVIEW_CHUNK.current();
+  const ReviewInline = reviewModule?.LeadApproveReviewInline;
+  const ReviewDialog = reviewModule?.LeadApproveReviewDialog;
   // The result line follows an approve made through the review, so it ships
   // in the review's chunk (loaded by then), not in the table's.
-  const DecisionToast = reviewChunk.module?.LeadTableDecisionToast;
+  const DecisionToast = reviewModule?.LeadTableDecisionToast;
   const BulkReview = bulkChunk.module?.LeadBulkApproveReview;
   const reviewProps = openReview && {
     review: openReview,
@@ -286,7 +292,7 @@ export function LeadTable({
   // An Approve waiting on the review chunk (nothing drafted yet), or a
   // review whose chunk is still rendering in.
   const reviewOpeningFor = flow.reviewLoading
-    ?? (openReview && !reviewChunk.module ? openReview.borrowerId : null);
+    ?? (openReview && !reviewModule ? openReview.borrowerId : null);
 
   /** Assign / distribute the current selection. The selection set lives in
    *  the approval hook, so the shell hands both it and the clear callback to
