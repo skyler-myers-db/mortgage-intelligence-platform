@@ -96,14 +96,6 @@ async function expectInsideViewport(page: Page, control: Locator, name: string):
   expect(await isUncovered(control), `${name} is not covered by another layer`).toBe(true);
 }
 
-/** The Genie launchers: the topbar toggle at every width, and the FAB where it is displayed. */
-async function genieLauncherBoxes(page: Page): Promise<Box[]> {
-  const boxes = [await boxOf(page.getByRole('banner').getByRole('button', { name: 'Toggle Genie chat' }))];
-  const fab = page.locator('.genie__fab');
-  if (await fab.isVisible()) boxes.push(await boxOf(fab));
-  return boxes;
-}
-
 test.describe('decision bar (visual-v1)', () => {
   for (const theme of FIXTURE_THEMES) {
     test(`${theme}: Approve and the routing selector are on screen at 1440x900 without scrolling`, async ({ app, page }) => {
@@ -114,14 +106,14 @@ test.describe('decision bar (visual-v1)', () => {
       await expect(bar.locator('.approval')).toHaveCount(1);
       expect((await mainScroll(page)).top, 'precondition: the page has not scrolled').toBe(0);
       expect((await mainScroll(page)).max, 'precondition: the page is taller than the viewport').toBeGreaterThan(0);
+      // At 1440 the floating launcher (`.genie__fab`) is not displayed (the
+      // topbar toggle is the desktop entry), so no launcher can sit over the
+      // bar; the FAB overlap is proven at 700px below, the open panel in the
+      // Genie test.
+      await expect(page.locator('.genie__fab'), 'precondition: no floating Genie launcher at 1440').toBeHidden();
 
-      const launchers = await genieLauncherBoxes(page);
       for (const [name, control] of [['Approve', approve], ['Reject', reject], ['routing selector', routing], ['follow-up selector', followUp]] as const) {
         await expectInsideViewport(page, control, name);
-        const box = await boxOf(control);
-        for (const launcher of launchers) {
-          expect(overlaps(box, launcher), `${name} overlaps a Genie launcher`).toBe(false);
-        }
       }
       // Docked: the bar ends on `.main`'s bottom edge while the page is above its end.
       expect(Math.abs((await boxOf(bar)).bottom - (await mainScroll(page)).bottom)).toBeLessThanOrEqual(1);
@@ -132,18 +124,21 @@ test.describe('decision bar (visual-v1)', () => {
     });
   }
 
-  test('with the Console open the bar stays clear of it and in view', async ({ app, page }) => {
-    await app.gotoRoute(ROUTE);
-    const panel = await app.openConsole();
-    const consoleBox = await boxOf(panel);
-    const { bar, approve, routing } = decisionControls(page);
-    await expect(approve).toBeEnabled();
-    for (const [name, control] of [['Approve', approve], ['routing selector', routing]] as const) {
-      await expectInsideViewport(page, control, name);
-      expect(overlaps(await boxOf(control), consoleBox), `${name} overlaps the Console`).toBe(false);
-    }
-    expect(overlaps(await boxOf(bar), consoleBox), 'the bar runs under the Console').toBe(false);
-  });
+  for (const theme of FIXTURE_THEMES) {
+    test(`${theme}: with the Console open the bar stays clear of it and in view`, async ({ app, page }) => {
+      await app.setTheme(theme);
+      await app.gotoRoute(ROUTE);
+      const panel = await app.openConsole();
+      const consoleBox = await boxOf(panel);
+      const { bar, approve, routing } = decisionControls(page);
+      await expect(approve).toBeEnabled();
+      for (const [name, control] of [['Approve', approve], ['routing selector', routing]] as const) {
+        await expectInsideViewport(page, control, name);
+        expect(overlaps(await boxOf(control), consoleBox), `${name} overlaps the Console`).toBe(false);
+      }
+      expect(overlaps(await boxOf(bar), consoleBox), 'the bar runs under the Console').toBe(false);
+    });
+  }
 
   for (const theme of FIXTURE_THEMES) {
     test(`${theme}: with the Genie panel open, Reject and Approve reflow clear of it`, async ({ app, page }) => {
@@ -186,8 +181,11 @@ test.describe('decision bar (visual-v1)', () => {
     await app.gotoRoute(ROUTE);
     const fab = page.locator('.genie__fab');
     await expect(fab, 'precondition: the FAB is displayed below 721px').toBeVisible();
-    const { approve, routing } = decisionControls(page);
+    const { bar, approve, routing } = decisionControls(page);
     await expect(approve).toBeEnabled();
+    // Non-vacuous: the FAB sits over the docked bar's box, so only the bar's
+    // inline-end clearance keeps the controls out from under it.
+    expect(overlaps(await boxOf(bar), await boxOf(fab)), 'precondition: the FAB is over the docked bar').toBe(true);
     for (const [name, control] of [['Approve', approve], ['routing selector', routing]] as const) {
       await expectInsideViewport(page, control, name);
       expect(overlaps(await boxOf(control), await boxOf(fab)), `${name} overlaps the Genie FAB`).toBe(false);
