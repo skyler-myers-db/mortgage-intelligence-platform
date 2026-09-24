@@ -184,6 +184,10 @@ const LAZY_OBSERVER = `${QUERY_CORE}infiniteQueryObserver.js`;
 const LAZY_HOOK = `${REACT_QUERY}useInfiniteQuery.js`;
 const VIRTUAL_CORE = 'node_modules/@tanstack/virtual-core/dist/esm/index.js';
 const VENDOR_DATA = [`${QUERY_CORE}queryClient.js`, `${QUERY_CORE}queryObserver.js`, `${REACT_QUERY}useQuery.js`];
+/** The Lead Queue's governed writes (wave 2): rendered only in the lazy LeadTable chunk, as in the real build. */
+const LAZY_MUTATIONS = [`${QUERY_CORE}mutationObserver.js`, `${REACT_QUERY}useMutation.js`, `${REACT_QUERY}useMutationState.js`];
+/** A @tanstack module this app never uses, so it is on no list: the 'omitted from the list' example. */
+const UNLISTED_LAZY = `${REACT_QUERY}useSuspenseQuery.js`;
 
 /**
  * build-modules.json as the real build writes it: each chunk's rendered
@@ -201,7 +205,7 @@ function vendorModules(chunks: Record<string, string[]> = {}): ChunkModules {
       'assets/vendor-data-W.js': [...VENDOR_DATA],
       'assets/Console-K.js': ['src/components/layout/Console.tsx', LAZY_OBSERVER, LAZY_HOOK],
       'assets/lead-C.js': ['src/routes/lead.tsx'],
-      'assets/table-D.js': ['src/components/LeadTable.tsx', 'node_modules/@tanstack/react-virtual/dist/esm/index.js', VIRTUAL_CORE],
+      'assets/table-D.js': ['src/components/LeadTable.tsx', 'node_modules/@tanstack/react-virtual/dist/esm/index.js', VIRTUAL_CORE, ...LAZY_MUTATIONS],
       'assets/map-M.js': ['src/components/USStateMapData.ts', 'node_modules/topojson-client/src/feature.js', 'node_modules/us-atlas/states-albers-10m.json'],
       ...chunks,
     },
@@ -241,7 +245,7 @@ describe('vendor chunks (bundle-03)', () => {
     const manifest = vendorManifest();
     const modules = vendorModules({
       'assets/vendor-data-W.js': [...VENDOR_DATA, VIRTUAL_CORE],
-      'assets/table-D.js': ['src/components/LeadTable.tsx', 'node_modules/@tanstack/react-virtual/dist/esm/index.js'],
+      'assets/table-D.js': ['src/components/LeadTable.tsx', 'node_modules/@tanstack/react-virtual/dist/esm/index.js', ...LAZY_MUTATIONS],
     });
     expect(tools.vendorChunkProblems(manifest, tools.initialClosure(manifest), modules)).toEqual([
       `vendor chunk assets/vendor-data-W.js holds ${VIRTUAL_CORE}, which the entry does not import statically`,
@@ -261,7 +265,7 @@ describe('vendor chunks (bundle-03)', () => {
 
   it('fail when a lazy chunk renders a module of a vendor package the list omits', () => {
     const manifest = vendorManifest();
-    const lazyMutation = `${REACT_QUERY}useMutation.js`;
+    const lazyMutation = UNLISTED_LAZY;
     const modules = vendorModules({
       'assets/Console-K.js': ['src/components/layout/Console.tsx', LAZY_OBSERVER, LAZY_HOOK, lazyMutation],
     });
@@ -356,7 +360,7 @@ describe('vendor chunks through a symlinked node_modules (bundle-03)', () => {
     const manifest = vendorManifest();
     const modules = symlinkedModules(vendorModules({
       'assets/vendor-data-W.js': [...VENDOR_DATA, VIRTUAL_CORE],
-      'assets/table-D.js': ['src/components/LeadTable.tsx', 'node_modules/@tanstack/react-virtual/dist/esm/index.js'],
+      'assets/table-D.js': ['src/components/LeadTable.tsx', 'node_modules/@tanstack/react-virtual/dist/esm/index.js', ...LAZY_MUTATIONS],
     }));
     expect(tools.vendorChunkProblems(manifest, tools.initialClosure(manifest), modules)).toEqual([
       `vendor chunk assets/vendor-data-W.js holds ${VIRTUAL_CORE}, which the entry does not import statically`,
@@ -366,7 +370,7 @@ describe('vendor chunks through a symlinked node_modules (bundle-03)', () => {
 
   it('fail, naming the keyed id, when a lazy chunk renders an unlisted module of a vendor package', () => {
     const manifest = vendorManifest();
-    const lazyMutation = `${REACT_QUERY}useMutation.js`;
+    const lazyMutation = UNLISTED_LAZY;
     const modules = symlinkedModules(vendorModules({
       'assets/Console-K.js': ['src/components/layout/Console.tsx', LAZY_OBSERVER, LAZY_HOOK, lazyMutation],
     }));
