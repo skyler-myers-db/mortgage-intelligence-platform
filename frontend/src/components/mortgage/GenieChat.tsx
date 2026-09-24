@@ -387,12 +387,13 @@ export function GenieChat() {
     setInput('');
   };
 
-  /** A governed action's result bubble: appended, anchored, spoken, badged. */
+  /** A governed action's result bubble: appended, anchored, spoken, badged
+   *  (a failed action badges as a result to see, never as an answer). */
   const landActionBubble = (payload: GenieAnswerShape, spoken: string) => {
     appendGenieTurn('', payload);
     anchorNextAnswer();
     announceGenie(spoken);
-    if (!genieOpenRef.current) setUnseen('answered');
+    if (!genieOpenRef.current) setUnseen(payload.source === 'degraded' ? 'failed' : 'answered');
   };
 
   const runAction = (action: GenieActionSuggestion, payload: GenieAnswerShape) => {

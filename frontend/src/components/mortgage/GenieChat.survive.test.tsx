@@ -564,6 +564,53 @@ describe('floating Genie survivability', () => {
     expect(await closeAfterOpenerLeft()).toBe(fab());
   });
 
+  it('badges a governed action that failed while the panel was closed as a result, not an answer', async () => {
+    render();
+    mocks.genieSubmit.mockResolvedValueOnce({
+      completed: true,
+      response: answer({
+        actions: [{
+          id: 'save-1',
+          label: 'Save reviewed cohort',
+          action_type: 'save_borrowers',
+          description: 'Create the reviewed Lead Queue handoff.',
+        }],
+      }),
+    });
+    act(() => setInputValue(input(), 'Find the reviewed cohort'));
+    await act(async () => {
+      askButton().click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await waitUntil(() => container.textContent?.includes('Save reviewed cohort') ?? false);
+    const result = deferred<{ ok: boolean; action_type: string; message: string }>();
+    mocks.genieAction.mockReturnValueOnce(result.promise);
+    const click = async (label: string) => {
+      const button = container.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
+      if (!button) throw new Error(`button not rendered: ${label}`);
+      await act(async () => {
+        button.click();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    };
+    await click('Run Save reviewed cohort');
+    await click('Confirm Save reviewed cohort');
+    await waitUntil(() => mocks.genieAction.mock.calls.length === 1);
+
+    // The user closes the panel while the action runs; it then fails.
+    setOpen(false);
+    await act(async () => {
+      result.resolve({ ok: false, action_type: 'save_borrowers', message: 'the reviewed cohort is empty' });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await waitUntil(() => container.textContent?.includes('Action failed: the reviewed cohort is empty') ?? false);
+
+    expect(fab().classList.contains('is-genie-ready')).toBe(true);
+    expect(document.getElementById('genie-launcher-status')?.textContent).toBe(
+      'Genie finished your question. Open Genie to see the result.',
+    );
+  });
+
   it('announces through one persistent region outside the panel, never from inside it (a11y-06)', async () => {
     render();
     const turn = await startLiveTurn('How many borrowers are in the money?');
