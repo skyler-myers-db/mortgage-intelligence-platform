@@ -460,7 +460,12 @@ export function LeadTable({
         <DecisionToast
           toast={flow.toast}
           hasReceipt={Boolean(approval.decisionReceipts[flow.toast.borrowerId]?.auditEventId)}
+          rowListed={leadsById.has(flow.toast.borrowerId)}
           onViewReceipt={() => flow.toast && flow.viewReceipt(flow.toast.borrowerId)}
+          onReviewRecentActivity={() => {
+            openConsoleRecentActivity();
+            flow.dismissToast();
+          }}
           onDismiss={flow.dismissToast}
         />
       )}

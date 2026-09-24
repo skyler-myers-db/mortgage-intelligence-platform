@@ -34,11 +34,13 @@ import { currentCommandSelection } from '../command/commandSelection';
 const draftOutreach = vi.fn();
 const approve = vi.fn();
 const setApproval = vi.fn();
+const openConsoleRecentActivity = vi.fn();
 
 vi.mock('../AppContext', () => ({
   useApp: () => ({
     approvals: {},
     setApproval,
+    openConsoleRecentActivity,
     setLastBorrowerId: vi.fn(),
     saveLead: vi.fn(),
     isLeadSaved: () => false,
@@ -130,6 +132,7 @@ function holdApprove() {
 describe('LeadTable approve review', () => {
   let container: HTMLDivElement;
   let root: Root;
+  let renderLeads: (leads: LeadSummary[]) => void;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -149,15 +152,18 @@ describe('LeadTable approve review', () => {
       lead(IDS[2]),
       lead(IDS[3], ['purchase', 'Next-home purchase loan']),
     ];
-    act(() => {
-      root.render(
-        <QueryClientProvider client={queryClient}>
-          <MemoryRouter initialEntries={['/lead-queue']}>
-            <LeadTable leads={leads} />
-          </MemoryRouter>
-        </QueryClientProvider>,
-      );
-    });
+    renderLeads = (rows) => {
+      act(() => {
+        root.render(
+          <QueryClientProvider client={queryClient}>
+            <MemoryRouter initialEntries={['/lead-queue']}>
+              <LeadTable leads={rows} />
+            </MemoryRouter>
+          </QueryClientProvider>,
+        );
+      });
+    };
+    renderLeads(leads);
   });
 
   afterEach(() => {
@@ -272,6 +278,28 @@ describe('LeadTable approve review', () => {
     expect(container.querySelector('[data-testid="lead-decision-view-receipt"]')).not.toBeNull();
     expect(cursorId()).toBe(IDS[1]);
     expect(draftOutreach).toHaveBeenCalledTimes(1);
+  });
+
+  it('an approved row that left the filtered list gets no dead "View receipt": the line points to Recent activity', async () => {
+    region().focus();
+    press('j');
+    press('a');
+    await waitForReview();
+    act(() => confirm().click());
+    await flush();
+    await flush();
+    expect(container.querySelector('[data-testid="lead-decision-view-receipt"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="lead-decision-row-left"]')).toBeNull();
+
+    // A pending-only queue refetches without the approved row.
+    renderLeads([lead(IDS[1], ['heloc', 'HELOC']), lead(IDS[2])]);
+    expect(container.querySelector('[data-testid="lead-decision-toast"]')?.textContent).toContain(`Approved ${IDS[0]}`);
+    expect(container.querySelector('[data-testid="lead-decision-view-receipt"]')).toBeNull();
+    expect(container.querySelector('[data-testid="lead-decision-row-left"]')?.textContent)
+      .toBe('It left this filtered list; its audit event is in Recent activity.');
+    act(() => container.querySelector<HTMLButtonElement>('[data-testid="lead-decision-recent-activity"]')!.click());
+    expect(openConsoleRecentActivity).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('[data-testid="lead-decision-toast"]')).toBeNull();
   });
 
   it('Cancel abandons the review: no approval, the draft already written stays the only one', async () => {
