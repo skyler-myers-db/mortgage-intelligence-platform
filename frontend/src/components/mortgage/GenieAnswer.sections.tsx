@@ -1,4 +1,4 @@
-import { useId, useRef, useState } from 'react';
+import { lazy, Suspense, useId, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { Icon } from '../Icon';
 import { prefersReducedMotion } from './useGenieTranscriptScroll';
@@ -22,9 +22,14 @@ import {
   MAX_TABLE_COLS,
   MAX_TABLE_ROWS,
   pickPlan,
+  unionColumns,
   type GenieVisualizationPlan,
 } from './GenieAnswer.logic';
 import { genieCellHref, type GenieAnswerCohort } from '../../lib/genieCellLinks';
+import { GenieAnswerRowsActions, heldRowsNote, type GenieRowsExtent } from './GenieAnswerRowsActions';
+
+// Every row and column, loaded only when the reader asks for it (genie-06).
+const GenieAnswerAllRows = lazy(() => import('./GenieAnswerAllRows'));
 
 /**
  * Deep-research presentation for a Genie answer.
@@ -37,20 +42,29 @@ import { genieCellHref, type GenieAnswerCohort } from '../../lib/genieCellLinks'
  *
  * `GenieRowsVisual` is the rows→visual block lifted out of GenieAnswer so the
  * top-level answer and every section render through one implementation
- * (chart plan, single-row stat strip, capped table, "+N more rows").
+ * (chart plan, single-row stat strip, capped table, and the row actions:
+ * "Show all" rows and columns in place, genie-06 slice 2).
  */
 
 export function GenieRowsVisual({
   rows,
   plan,
   cellCohort,
+  reportedRowCount = null,
+  dense = false,
 }: {
   rows: Array<Record<string, unknown>>;
   plan: GenieVisualizationPlan;
   /** The answer's own filters, so a row link opens the population the row
    *  reports rather than every borrower in that geography. */
   cellCohort?: GenieAnswerCohort;
+  /** The row count the answer (or section) reports: above rows.length only
+   *  for a History replay that kept fewer rows than the query returned. */
+  reportedRowCount?: number | null;
+  /** The floating panel: the all-rows region is shorter. */
+  dense?: boolean;
 }) {
+  const [showAll, setShowAll] = useState(false);
   const chart = plan.chart;
   const visibleRows = rows.slice(0, MAX_TABLE_ROWS);
   const hiddenRows = Math.max(0, rows.length - MAX_TABLE_ROWS);
@@ -61,6 +75,14 @@ export function GenieRowsVisual({
   // as the headers, so the reader knows what the answer holds that the
   // compact table does not show.
   const hiddenColumns = allColumns.slice(MAX_TABLE_COLS);
+  const everyColumn = unionColumns(rows);
+  const extent: GenieRowsExtent = {
+    held: rows.length,
+    reported: reportedRowCount,
+    hiddenRows,
+    columns: everyColumn.length,
+    hiddenColumns: everyColumn.length - columns.length,
+  };
   const hiddenColumnsNote =
     hiddenColumns.length > 0 ? (
       <div className="genie-answer__more genie-answer__hidden-columns">
@@ -102,8 +124,19 @@ export function GenieRowsVisual({
           "count + avg spread + refreshed at" read at a glance. A single
           RECORD row (identifier columns, e.g. a borrower id) keeps the
           table: masked ids as KPI headlines misread, and borrower_list
-          plans already render their own list above (QA M6). */}
-      {visibleRows.length === 1 &&
+          plans already render their own list above (QA M6).
+          "Show all" replaces either compact form in place (genie-06). */}
+      {showAll ? (
+        <Suspense fallback={<div className="genie-answer__more">Loading every row…</div>}>
+          <GenieAnswerAllRows
+            rows={rows}
+            columns={everyColumn}
+            cellCohort={cellCohort}
+            dense={dense}
+            heldNote={heldRowsNote(extent)}
+          />
+        </Suspense>
+      ) : visibleRows.length === 1 &&
       columns.length > 0 &&
       plan.kind === 'none' &&
       columns.every((c) => !isIdentifierColumn(c)) &&
@@ -174,12 +207,13 @@ export function GenieRowsVisual({
                 </tbody>
               </table>
             </div>
-            {hiddenRows > 0 && (
-              <div className="genie-answer__more">+{hiddenRows} more row{hiddenRows === 1 ? '' : 's'}</div>
-            )}
             {hiddenColumnsNote}
           </>
         )
+      )}
+      {/* The inert "+N more rows" became the control that shows them. */}
+      {rows.length > 0 && (
+        <GenieAnswerRowsActions extent={extent} expanded={showAll} onToggle={() => setShowAll((open) => !open)} />
       )}
     </>
   );
@@ -194,9 +228,11 @@ export function GenieRowsVisual({
 export function GenieSectionVisual({
   section,
   cellCohort,
+  dense = false,
 }: {
   section: GenieAnswerSection;
   cellCohort?: GenieAnswerCohort;
+  dense?: boolean;
 }) {
   const rows = Array.isArray(section.table_rows) ? section.table_rows : [];
   if (rows.length === 0) return null;
@@ -206,7 +242,15 @@ export function GenieSectionVisual({
     rows,
     chartColumns,
   );
-  return <GenieRowsVisual rows={rows} plan={plan} cellCohort={cellCohort} />;
+  return (
+    <GenieRowsVisual
+      rows={rows}
+      plan={plan}
+      cellCohort={cellCohort}
+      reportedRowCount={section.row_count ?? null}
+      dense={dense}
+    />
+  );
 }
 
 /** Sections from which a long sweep gets an outline and collapsible bodies. */
@@ -228,11 +272,14 @@ export function GenieAnswerSections({
   sections,
   workspaceHost,
   cellCohort,
+  dense = false,
 }: {
   summary?: string | null;
   sections: GenieAnswerSection[];
   workspaceHost?: string | null;
   cellCohort?: GenieAnswerCohort;
+  /** The floating panel. */
+  dense?: boolean;
 }) {
   const summaryText = (summary ?? '').trim();
   const collapsible = sections.length >= GENIE_OUTLINE_MIN_SECTIONS;
@@ -292,7 +339,7 @@ export function GenieAnswerSections({
             {(section.answer ?? '').trim() && (
               <MarkdownAnswer text={section.answer} workspaceHost={workspaceHost} headingLevel={4} />
             )}
-            <GenieSectionVisual section={section} cellCohort={cellCohort} />
+            <GenieSectionVisual section={section} cellCohort={cellCohort} dense={dense} />
           </>
         );
         return (

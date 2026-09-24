@@ -256,6 +256,7 @@ export function GenieAnswer({
           sections={sections}
           workspaceHost={workspaceHost}
           cellCohort={cellCohort}
+          dense={dense}
         />
       ) : (
         cleanedAnswer && <MarkdownAnswer text={cleanedAnswer} workspaceHost={workspaceHost} />
@@ -306,7 +307,13 @@ export function GenieAnswer({
           renders one visual PER section instead (above), so this block
           would otherwise repeat the last sub-query's rows. */}
       {!hasSections && (
-        <GenieRowsVisual rows={rows} plan={plan} cellCohort={cellCohort} />
+        <GenieRowsVisual
+          rows={rows}
+          plan={plan}
+          cellCohort={cellCohort}
+          reportedRowCount={payload.row_count ?? null}
+          dense={dense}
+        />
       )}
       {/* Copy SQL / Copy answer (genie-06) under the data, on genuine answers
           only: a governed refusal or degraded caveat has no SQL, and its copy

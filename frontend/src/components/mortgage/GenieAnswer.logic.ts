@@ -103,6 +103,13 @@ const HUMANIZED_KEY_LABELS: Record<string, string> = {
   segment_codes: 'Cohorts',
 };
 
+/** Every column the rows hold, in first-seen order (row 0's keys first). */
+export function unionColumns(rows: ReadonlyArray<Record<string, unknown>>): string[] {
+  const seen = new Set<string>();
+  for (const row of rows) for (const column of Object.keys(row)) seen.add(column);
+  return [...seen];
+}
+
 export function isIdentifierColumn(column: string): boolean {
   return IDENTIFIER_COLUMN_PATTERNS.some((pattern) => pattern.test(column));
 }

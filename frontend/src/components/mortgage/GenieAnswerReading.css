@@ -90,6 +90,49 @@
   white-space: pre;
 }
 
+/* Row actions and every row (genie-06 slice 2): "Show all" and the audited
+   CSV download under every rows block, and the all-rows region that replaces
+   the capped table in place. `.genie-answer__rows-actions`, `__show-all`,
+   `__rows-note` and `__all-rows(--dense)` are documented BEM extensions of
+   `.genie-answer`; the prototype's bubble (design_files/index.html:741-760)
+   has no row controls. The region scrolls inside the answer, so the panel
+   keeps its size; its cells stay on one line, which keeps every windowed row
+   the same height. */
+.genie-answer__rows-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}
+.genie-answer__rows-note {
+  margin: var(--sp-3) 0 0;
+  color: var(--text-3);
+  font-size: var(--fs-11);
+}
+.genie-answer__all-rows {
+  box-sizing: border-box;
+  max-inline-size: 100%;
+  max-block-size: calc(var(--sp-16) * 6);
+  margin-top: var(--sp-3);
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: var(--bg-1);
+}
+.genie-answer__all-rows--dense { max-block-size: calc(var(--sp-16) * 4); }
+.genie-answer__all-rows th,
+.genie-answer__all-rows td { white-space: nowrap; }
+.genie-answer__all-rows thead th {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: var(--z-raised);
+  background: var(--bg-1);
+}
+.genie-answer__all-rows-spacer td {
+  padding: 0;
+  border: 0;
+}
+
 /* A collapsed earlier turn (genie-08): its digest under a disclosure toggle,
    the full answer unmounted. `.genie-collapse` is a documented new block;
    the prototype (design_files/index.html:741-760) shows every turn in full. */
