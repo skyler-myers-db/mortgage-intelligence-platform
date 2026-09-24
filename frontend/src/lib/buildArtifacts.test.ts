@@ -49,6 +49,7 @@ const tools = {
   ) => string[],
   lazyOnlyVendorModules: budgetTool.LAZY_ONLY_VENDOR_MODULES as string[],
   packageOfModule: budgetTool.packageOfModule as (id: string) => string | null,
+  moduleKey: budgetTool.moduleKey as (id: string) => string,
   relocate: postbuildTool.relocateBuildArtifacts as (dirs: ScratchDirs) => { manifest: string; maps: string[] },
   postbuildInitialClosure: postbuildTool.initialClosure as (manifest: Manifest) => Closure,
 };
@@ -299,6 +300,78 @@ describe('vendor chunks (bundle-03)', () => {
     expect(tools.vendorChunkProblems(manifest, tools.initialClosure(manifest))).toEqual([
       'vendor chunk vendor-data is missing (vite.config.ts codeSplitting groups)',
       'unexpected vendor chunk assets/vendor-data-W.js',
+    ]);
+  });
+});
+
+/**
+ * A worktree whose frontend/node_modules is a symlink to another tree (the
+ * documented lane setup): the build resolves the symlink, so every
+ * node_modules id is recorded relative to the OTHER tree. The guard has to
+ * read that build exactly as it reads a real-directory install.
+ */
+const OTHER_TREE = '../../other-worktree/frontend/';
+const throughSymlink = (id: string) => (id.startsWith('node_modules/') ? `${OTHER_TREE}${id}` : id);
+
+function symlinkedModules(modules: ChunkModules): ChunkModules {
+  return {
+    chunks: Object.fromEntries(Object.entries(modules.chunks).map(([file, ids]) => [file, ids.map(throughSymlink)])),
+    entryStaticModules: modules.entryStaticModules.map(throughSymlink),
+  };
+}
+
+describe('vendor chunks through a symlinked node_modules (bundle-03)', () => {
+  it('key a module id from its last node_modules/ segment and leave app ids alone', () => {
+    expect(tools.moduleKey(`${OTHER_TREE}${LAZY_OBSERVER}`)).toBe(LAZY_OBSERVER);
+    expect(tools.moduleKey(`/abs/other/frontend/${LAZY_HOOK}`)).toBe(LAZY_HOOK);
+    expect(tools.moduleKey('../../x/node_modules/a/node_modules/b/index.js')).toBe('node_modules/b/index.js');
+    expect(tools.moduleKey(LAZY_HOOK)).toBe(LAZY_HOOK);
+    expect(tools.moduleKey('src/components/layout/Console.tsx')).toBe('src/components/layout/Console.tsx');
+    expect(tools.moduleKey('rolldown/runtime.js')).toBe('rolldown/runtime.js');
+  });
+
+  it('pass the clean layout: every lazy-only entry still matches, and nothing is reported unlisted', () => {
+    const manifest = vendorManifest();
+    const modules = symlinkedModules(vendorModules());
+    expect(modules.chunks['assets/Console-K.js']).toContain(`${OTHER_TREE}${LAZY_OBSERVER}`);
+    expect(tools.vendorChunkProblems(manifest, tools.initialClosure(manifest), modules)).toEqual([]);
+  });
+
+  it('fail, naming the keyed ids, when vendor-data holds the lazy-only infinite-query pair', () => {
+    // Dropping `tags: ['$initial']` from the vendor-data group, built in a
+    // worktree whose node_modules is a symlink.
+    const manifest = vendorManifest();
+    const modules = symlinkedModules(vendorModules({
+      'assets/vendor-data-W.js': [...VENDOR_DATA, LAZY_OBSERVER, LAZY_HOOK],
+      'assets/Console-K.js': ['src/components/layout/Console.tsx'],
+    }));
+    expect(modules.chunks['assets/vendor-data-W.js']).toContain(`${OTHER_TREE}${LAZY_HOOK}`);
+    expect(tools.vendorChunkProblems(manifest, tools.initialClosure(manifest), modules)).toEqual([
+      `vendor chunk assets/vendor-data-W.js holds lazy-only ${LAZY_OBSERVER} (LAZY_ONLY_VENDOR_MODULES)`,
+      `vendor chunk assets/vendor-data-W.js holds lazy-only ${LAZY_HOOK} (LAZY_ONLY_VENDOR_MODULES)`,
+    ]);
+  });
+
+  it('fail, naming the keyed id, when a vendor chunk swallows a package the entry never imports', () => {
+    const manifest = vendorManifest();
+    const modules = symlinkedModules(vendorModules({
+      'assets/vendor-data-W.js': [...VENDOR_DATA, VIRTUAL_CORE],
+      'assets/table-D.js': ['src/components/LeadTable.tsx', 'node_modules/@tanstack/react-virtual/dist/esm/index.js'],
+    }));
+    expect(tools.vendorChunkProblems(manifest, tools.initialClosure(manifest), modules)).toEqual([
+      `vendor chunk assets/vendor-data-W.js holds ${VIRTUAL_CORE}, which the entry does not import statically`,
+      `vendor chunk assets/vendor-data-W.js holds lazy-only ${VIRTUAL_CORE} (LAZY_ONLY_VENDOR_MODULES)`,
+    ]);
+  });
+
+  it('fail, naming the keyed id, when a lazy chunk renders an unlisted module of a vendor package', () => {
+    const manifest = vendorManifest();
+    const lazyMutation = `${REACT_QUERY}useMutation.js`;
+    const modules = symlinkedModules(vendorModules({
+      'assets/Console-K.js': ['src/components/layout/Console.tsx', LAZY_OBSERVER, LAZY_HOOK, lazyMutation],
+    }));
+    expect(tools.vendorChunkProblems(manifest, tools.initialClosure(manifest), modules)).toEqual([
+      `${lazyMutation} (vendor package @tanstack/react-query) is rendered only in lazy chunk assets/Console-K.js: add it to LAZY_ONLY_VENDOR_MODULES`,
     ]);
   });
 });

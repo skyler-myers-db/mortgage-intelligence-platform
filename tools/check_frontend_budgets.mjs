@@ -407,8 +407,9 @@ const RUNTIME_HELPER_CHUNK = 'rolldown-runtime';
  * does not need. A vendor chunk is part of every first paint, so it must
  * never hold one; `tags: ['$initial']` on each vite.config.ts group is what
  * keeps them out, and this list is what proves it. An entry ending in `/`
- * names a whole package directory; any other entry is one module id
- * (frontend-root relative, as build-modules.json records it).
+ * names a whole package directory; any other entry is one module id, both
+ * written from `node_modules/` on (moduleKey below), whether the install is
+ * a real directory or a symlink to another tree.
  *
  * The entry's static-import reach (build-modules.json `entryStaticModules`)
  * cannot stand in for this list: it follows the @tanstack barrel re-exports
@@ -434,13 +435,37 @@ export const LAZY_ONLY_VENDOR_MODULES = [
   'node_modules/us-atlas/',
 ];
 
+const NODE_MODULES = 'node_modules/';
+
 /** The npm package a node_modules module id belongs to (`@scope/name` or `name`), or null. */
 export function packageOfModule(id) {
-  const marker = 'node_modules/';
-  const at = id.lastIndexOf(marker);
+  const at = id.lastIndexOf(NODE_MODULES);
   if (at === -1) return null;
-  const [first, second] = id.slice(at + marker.length).split('/');
+  const [first, second] = id.slice(at + NODE_MODULES.length).split('/');
   return first.startsWith('@') ? `${first}/${second}` : first;
+}
+
+/**
+ * A module id keyed by where the module sits inside node_modules, not by
+ * where node_modules physically lives: from the id's last `node_modules/`
+ * segment on (the rule packageOfModule uses), any other id unchanged. The
+ * build resolves symlinks before vite.config.ts makes ids frontend-root
+ * relative, so a worktree whose frontend/node_modules is a symlink to another
+ * tree records `../../<other-tree>/frontend/node_modules/...`; every module-id
+ * comparison below goes through this key so the guard reads the same in
+ * either install.
+ */
+export function moduleKey(id) {
+  const at = id.lastIndexOf(NODE_MODULES);
+  return at === -1 ? id : id.slice(at);
+}
+
+/** build-modules.json with every module id replaced by its moduleKey. */
+function keyedChunkModules(chunkModules) {
+  return {
+    chunks: Object.fromEntries(Object.entries(chunkModules.chunks).map(([file, ids]) => [file, ids.map(moduleKey)])),
+    entryStaticModules: chunkModules.entryStaticModules.map(moduleKey),
+  };
 }
 
 function lazyOnlyEntryMatches(entry, id) {
@@ -455,6 +480,7 @@ function lazyOnlyEntryMatches(entry, id) {
  *  - a module of a vendor package (one with any module in a vendor chunk)
  *    rendered in a chunk outside the initial closure must be listed, so the
  *    list stays complete as lazy routes start using more of a vendor package.
+ * Module ids are compared, and named in problems, by their moduleKey.
  */
 export function lazyOnlyVendorProblems(manifest, initial, chunkModules, lazyOnly = LAZY_ONLY_VENDOR_MODULES) {
   const problems = [];
@@ -464,7 +490,7 @@ export function lazyOnlyVendorProblems(manifest, initial, chunkModules, lazyOnly
       .map((chunk) => chunk.file),
   );
   const listed = (id) => lazyOnly.some((entry) => lazyOnlyEntryMatches(entry, id));
-  const rendered = Object.entries(chunkModules.chunks);
+  const rendered = Object.entries(keyedChunkModules(chunkModules).chunks);
   const vendorPackages = new Set();
   for (const [file, ids] of rendered) {
     if (!vendorFiles.has(file)) continue;
@@ -505,6 +531,7 @@ export function lazyOnlyVendorProblems(manifest, initial, chunkModules, lazyOnly
  *    backstop: the static reach follows barrel re-exports, so it catches a
  *    group that swallows a package the entry never imports (react-virtual)
  *    but not a lazy-only hook of a package it does (useInfiniteQuery).
+ * Module ids are compared, and named in problems, by their moduleKey.
  */
 export function vendorChunkProblems(manifest, initial, chunkModules = null, lazyOnly = LAZY_ONLY_VENDOR_MODULES) {
   const problems = [];
@@ -514,7 +541,8 @@ export function vendorChunkProblems(manifest, initial, chunkModules = null, lazy
     if (!names.includes(expected)) problems.push(`vendor chunk ${expected} is missing (vite.config.ts codeSplitting groups)`);
   }
   const initialKeys = new Set(initial.keys);
-  const reached = chunkModules ? new Set(chunkModules.entryStaticModules) : null;
+  const keyed = chunkModules ? keyedChunkModules(chunkModules) : null;
+  const reached = keyed ? new Set(keyed.entryStaticModules) : null;
   for (const key of vendorKeys) {
     const chunk = manifest[key];
     if (!EXPECTED_VENDOR_CHUNKS.includes(chunk.name)) problems.push(`unexpected vendor chunk ${chunk.file}`);
@@ -526,7 +554,7 @@ export function vendorChunkProblems(manifest, initial, chunkModules = null, lazy
       }
     }
     if (reached) {
-      for (const id of chunkModules.chunks[chunk.file] ?? []) {
+      for (const id of keyed.chunks[chunk.file] ?? []) {
         if (!reached.has(id)) problems.push(`vendor chunk ${chunk.file} holds ${id}, which the entry does not import statically`);
       }
     }
