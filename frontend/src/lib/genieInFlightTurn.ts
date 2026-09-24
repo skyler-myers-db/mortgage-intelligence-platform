@@ -158,6 +158,8 @@ let resumeChecked = false;
 let requestLock: GenieTurnLockRequester = browserGenieTurnLock;
 let lockOwner: number | null = null;
 let lockRelease: (() => void) | null = null;
+let pageHidden = false;
+let deferredFailure: (() => void) | null = null;
 const listeners = new Set<() => void>();
 const settledListeners = new Set<(event: GenieTurnSettledEvent) => void>();
 
@@ -346,6 +348,15 @@ function failureAnswer(err: unknown): string {
 }
 
 function failTurn(gen: number, err: unknown): void {
+  // A reload or navigation cancels the page's requests, and they fail as
+  // network errors while the page is going away. That is not the turn
+  // failing: keep the record so the next page resumes the turn or notes the
+  // interruption. Should the page come back from the back/forward cache
+  // instead, the failure is handled then.
+  if (pageHidden) {
+    deferredFailure = () => failTurn(gen, err);
+    return;
+  }
   const turn = active;
   const inFlight = snapshot.inFlight;
   if (!isCurrent(gen) || !turn || !inFlight || isAbortError(err)) return;
@@ -591,8 +602,21 @@ function onConversationReset(): void {
   for (const listener of listeners) listener();
 }
 
+function onPageHide(): void {
+  pageHidden = true;
+}
+
+function onPageShow(): void {
+  pageHidden = false;
+  const failure = deferredFailure;
+  deferredFailure = null;
+  failure?.();
+}
+
 if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
   window.addEventListener(GENIE_CONVERSATION_RESET_EVENT, onConversationReset);
+  window.addEventListener('pagehide', onPageHide);
+  window.addEventListener('pageshow', onPageShow);
 }
 
 // ------------------------------------------------------------------- tests
@@ -609,6 +633,8 @@ export function __resetGenieTurnStoreForTests(): void {
   lockOwner = null;
   completeRequestedFor = -1;
   resumeChecked = false;
+  pageHidden = false;
+  deferredFailure = null;
   requestLock = browserGenieTurnLock;
   snapshot = EMPTY_SNAPSHOT;
   for (const listener of listeners) listener();

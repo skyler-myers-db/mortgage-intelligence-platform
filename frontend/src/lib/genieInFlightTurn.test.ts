@@ -345,6 +345,57 @@ describe('reload resume', () => {
   });
 });
 
+describe('a reload cancelling the requests', () => {
+  async function startCompleting(): Promise<{ fail: (err: unknown) => void }> {
+    let fail: (err: unknown) => void = () => undefined;
+    mocks.genieSubmit.mockResolvedValue(LIVE_SUBMIT);
+    mocks.genieProgress.mockResolvedValue(progress(true));
+    mocks.genieComplete.mockImplementation(
+      () => new Promise<GenieAnswer>((_, reject) => {
+        fail = reject;
+      }),
+    );
+    start();
+    await advance();
+    expect(storedRecord()?.phase).toBe('completing');
+    return { fail: (err) => fail(err) };
+  }
+
+  it('is not the turn failing: the record stays and the next page notes the interruption', async () => {
+    const { fail } = await startCompleting();
+    window.dispatchEvent(new Event('pagehide'));
+    // What the browser does to the page's fetches while it unloads.
+    fail(new ApiError('The app could not be reached.', { path: '/api/genie/message/complete', reason: 'unreachable' }));
+    await advance(10_000);
+    expect(getGenieTurns()).toEqual([]);
+    const record = window.sessionStorage.getItem(GENIE_IN_FLIGHT_TURN_KEY);
+    expect(JSON.parse(record ?? '{}')).toMatchObject({ phase: 'completing', question: QUESTION });
+
+    // The next page: a fresh store over the same sessionStorage.
+    __resetGenieTurnStoreForTests();
+    window.sessionStorage.setItem(GENIE_IN_FLIGHT_TURN_KEY, record ?? '');
+    resumeGenieTurnFromSession();
+    await advance(10_000);
+    expect(mocks.genieComplete).toHaveBeenCalledTimes(1);
+    expect(getGenieTurnSnapshot().notes.map((note) => note.reason)).toEqual([
+      'Interrupted by a reload while the answer was being verified. It may still be recorded: check History, or Ask again.',
+    ]);
+  });
+
+  it('a page restored from the back/forward cache handles the held failure then', async () => {
+    const { fail } = await startCompleting();
+    window.dispatchEvent(new Event('pagehide'));
+    fail(new Error('network down'));
+    await advance();
+    expect(getGenieTurnSnapshot().inFlight).not.toBeNull();
+    window.dispatchEvent(new Event('pageshow'));
+    await advance();
+    expect(getGenieTurnSnapshot().inFlight).toBeNull();
+    expect(getGenieTurns()[0].response).toMatchObject({ source: 'degraded', answer: 'Genie session reset: network down' });
+    expect(storedRecord()).toBeNull();
+  });
+});
+
 describe('the identity boundary and Stop', () => {
   it('the reset event aborts, removes the key, releases the lock, and a late reply lands nowhere', async () => {
     let finish: (value: GenieAnswer) => void = () => undefined;
