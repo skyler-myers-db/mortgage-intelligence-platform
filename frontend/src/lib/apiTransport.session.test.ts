@@ -3,7 +3,7 @@ import { api, ApiError } from './api';
 import { CLIENT_FAILURE_MESSAGES, subscribeNetworkFailures } from './apiFailure';
 import { clientFailureReason } from './apiTransport';
 import { createMipQueryClient } from './queryClient';
-import { _resetSessionStatusForTests, getSessionStatus } from './sessionStatus';
+import { _resetSessionStatusForTests, getSessionStatus, markUnrecordedWrite } from './sessionStatus';
 
 /**
  * Failure classification in the shared fetch core (audit 2026-09-21
@@ -112,6 +112,17 @@ describe('401 on /api', () => {
     expect(getSessionStatus().unrecorded).toBe('rejection');
     await failure(api.approve('B-0000000000001', { offer_code: 'refi' }));
     expect(getSessionStatus().unrecorded).toBe('approval');
+  });
+
+  it('never calls an outreach DRAFT an approval: the Offer page loads one on open, before any click', async () => {
+    const calls = stubFetch(() => json(401, {}));
+    // The Offer page's load effect: the draft meets the ended session.
+    await failure(api.draftOutreach('B-0000000000001', 'email'));
+    expect(getSessionStatus(), 'opening a page records nothing').toEqual({ expired: true, unrecorded: null });
+    // And a draft (re)load after expiry, which fails fast without the network.
+    await failure(api.draftOutreach('B-0000000000001', 'sms'));
+    expect(calls).toHaveLength(1);
+    expect(getSessionStatus()).toEqual({ expired: true, unrecorded: null });
   });
 
   it('never claims a change was lost for a read that goes out as POST, but does for PUT/PATCH/DELETE', async () => {
@@ -230,12 +241,47 @@ describe('health probe mapping', () => {
   });
 });
 
+describe('a user action whose failing request is not itself the write', () => {
+  it('says so only once the session ended, never before', () => {
+    markUnrecordedWrite('approval');
+    expect(getSessionStatus(), 'a mark before expiry would surface in a later, unrelated dialog').toEqual({
+      expired: false,
+      unrecorded: null,
+    });
+  });
+
+  it('upgrades the "not recorded" line after expiry with the same precedence, never downgrading it', async () => {
+    stubFetch(() => json(401, {}));
+    await failure(api.draftOutreach('B-0000000000001', 'email'));
+    const seen: Array<string | null> = [];
+    markUnrecordedWrite('change');
+    seen.push(getSessionStatus().unrecorded);
+    markUnrecordedWrite('approval');
+    seen.push(getSessionStatus().unrecorded);
+    markUnrecordedWrite('rejection');
+    seen.push(getSessionStatus().unrecorded);
+    await failure(api.deleteWorkspaceLead('B-0000000000001'));
+    seen.push(getSessionStatus().unrecorded);
+    expect(seen).toEqual(['change', 'approval', 'approval', 'approval']);
+    expect(getSessionStatus().expired).toBe(true);
+  });
+});
+
 describe('the QueryClient retry predicate', () => {
-  it('never retries a client-classified failure', () => {
-    const retry = createMipQueryClient().getDefaultOptions().queries?.retry as (count: number, error: Error) => boolean;
+  const retry = () =>
+    createMipQueryClient().getDefaultOptions().queries?.retry as (count: number, error: Error) => boolean;
+  /** A 503 the warming-up path WOULD retry, so only the client-reason clause can refuse it. */
+  const transient = (reason: string | null) =>
+    new ApiError('Warehouse warming up', { path: '/api/v1/leads', status: 503, retryable: true, reason });
+
+  it('retries a warming-up 503 (the control: the shape below is retryable on its own)', () => {
+    expect(retry()(0, transient('warming_up'))).toBe(true);
+  });
+
+  it('never retries a client-classified failure, even in a shape the warming-up path would retry', () => {
     for (const reason of ['session_expired', 'offline', 'unreachable', 'unreadable_response'] as const) {
-      const err = new ApiError(CLIENT_FAILURE_MESSAGES[reason], { path: '/api/v1/leads', reason });
-      expect(retry(0, err), reason).toBe(false);
+      expect(retry()(0, transient(reason)), reason).toBe(false);
+      expect(retry()(0, new ApiError(CLIENT_FAILURE_MESSAGES[reason], { path: '/api/v1/leads', reason })), reason).toBe(false);
     }
   });
 });

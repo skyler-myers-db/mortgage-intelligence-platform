@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { _resetSessionStatusForTests, markSessionExpired } from '../../lib/sessionStatus';
+import { _resetSessionStatusForTests, markSessionExpired, markUnrecordedWrite } from '../../lib/sessionStatus';
 import { SessionExpiredDialog } from './SessionExpiredDialog';
 
 /**
@@ -82,6 +82,26 @@ describe('SessionExpiredDialog', () => {
     const warn = dialog()?.querySelector('[data-session-unrecorded]');
     expect(warn?.getAttribute('data-session-unrecorded')).toBe('approval');
     expect(warn?.textContent).toBe('Your approval was not recorded. Approve it again after you sign in.');
+  });
+
+  it('says nothing was lost when only an outreach draft met the ended session (the Offer page loads one on open)', async () => {
+    await render();
+    await act(async () => {
+      markSessionExpired({ method: 'POST', path: '/api/v1/outreach/draft' });
+    });
+    expect(dialog()?.open).toBe(true);
+    expect(dialog()?.querySelector('[data-session-unrecorded]')).toBeNull();
+  });
+
+  it('says an Approve click that failed on its draft step was not recorded', async () => {
+    await render();
+    await act(async () => {
+      markSessionExpired({ method: 'POST', path: '/api/v1/outreach/draft' });
+      markUnrecordedWrite('approval');
+    });
+    expect(dialog()?.querySelector('[data-session-unrecorded]')?.textContent).toBe(
+      'Your approval was not recorded. Approve it again after you sign in.',
+    );
   });
 
   it('cannot be dismissed: Escape is cancelled and a forced close re-opens it', async () => {

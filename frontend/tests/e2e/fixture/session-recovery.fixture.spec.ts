@@ -172,6 +172,32 @@ test.describe('an ended session (the proxy answers 401 {})', () => {
     await expect(cell).not.toContainText('Approved');
   });
 
+  test('opening an Offer page after the session ended says NOTHING was lost: its automatic draft load is not an approval', async ({ app, page, mockApi }) => {
+    test.slow();
+    await app.gotoRoute('/lead-queue');
+    const before = mockApi.calls.length;
+    app.degrade(EVERY_API_PATH_BUT_HEALTH, PROXY_SESSION_EXPIRED);
+
+    // Client-side, the way an in-app link gets there, so it is the same
+    // document (and session store) that meets the ended session. The Offer
+    // page loads its outreach draft on open, with no click.
+    await page.evaluate((path) => {
+      window.history.pushState(null, '', path);
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    }, `/offer-orchestrator/${PRIMARY_BORROWER.borrower_id}`);
+
+    const dialog = sessionDialog(page);
+    await expect(dialog).toBeVisible();
+    // Non-vacuity: the automatic draft POST really went out and met the 401.
+    await expect
+      .poll(() => mockApi.calls.slice(before).some((call) => call.method === 'POST' && call.path === '/api/outreach/draft' && call.status === 401))
+      .toBe(true);
+    await expect.poll(() => mockApi.inflight === 0 && mockApi.idleMs >= 300).toBe(true);
+    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    await expect(dialog.locator('[data-session-unrecorded]'), 'the user approved nothing').toHaveCount(0);
+    await expect(dialog).not.toContainText('not recorded');
+  });
+
   test('Reload keeps the page the user was on', async ({ app, page }) => {
     test.slow();
     await app.gotoRoute('/analytics?view=geography');
