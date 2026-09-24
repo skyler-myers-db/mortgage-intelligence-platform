@@ -5,6 +5,8 @@
  *
  *   A. a render throw in the evidence drawer stays inside an open drawer
  *      frame (both themes): Genie, the route and the rail stay mounted;
+ *      Close returns focus to the chip, the next open re-reads the payload,
+ *      and once the payload is fixed Try again renders the real drawer;
  *   B. a Genie chat chunk that will not load offers Reload inside the Genie
  *      frame; C. the same for the Console, inside #workspace-console;
  *   D. an in-app navigation to an unloaded route holds the painted page
@@ -76,9 +78,10 @@ async function borderAgainstToken(surface: Locator): Promise<{ rendered: string;
 
 test.describe('A. evidence drawer render throw', () => {
   for (const theme of FIXTURE_THEMES) {
-    test(`stays inside the open drawer frame; Genie, the route and the rail stay mounted (${theme})`, async ({ app, hygiene, mockApi, page }) => {
+    test(`stays inside the open drawer frame; Genie, the route and the rail stay mounted; a fixed payload recovers (${theme})`, async ({ app, hygiene, mockApi, page }) => {
       allowNamedErrorLines(hygiene);
-      crashTheEvidenceDrawer(mockApi);
+      const healManifest = crashTheEvidenceDrawer(mockApi);
+      const manifestReads = () => mockApi.calls.filter((call) => call.path === '/api/lineage/manifest').length;
       await app.setTheme(theme);
       await app.gotoRoute('/');
 
@@ -87,7 +90,8 @@ test.describe('A. evidence drawer render throw', () => {
       // The first KPI chip on Home is the population source (lineageFamily
       // 'marketable_population', lib/drawerSourceRegistry.ts): opening it
       // reads the lineage manifest, whose unproducible payload throws.
-      const drawer = await app.openEvidenceDrawer();
+      const chip = page.locator('.kpi .kpi__source .evidence-chip').first();
+      const drawer = await app.openEvidenceDrawer(chip);
       const surface = drawer.locator('[data-error-boundary="drawer"][data-error-kind="render"]');
       await expect(surface).toBeVisible();
       await expect(drawer).toHaveClass(/is-open/);
@@ -106,9 +110,28 @@ test.describe('A. evidence drawer render throw', () => {
       expect(border.rendered, `border is --status-danger-line-strong (${theme})`).toBe(border.token);
       expect(await axeViolations(page, '.drawer'), `WCAG A/AA inside the drawer frame (${theme})`).toEqual([]);
 
+      // Close hides the frame and returns focus to the chip that opened it.
       await drawer.getByRole('button', { name: 'Close drawer' }).click();
       await expect(app.evidenceDrawer()).not.toHaveClass(/is-open/);
       await expect(page.locator('[data-error-boundary="drawer"]')).toHaveCount(0);
+      await expect(chip).toBeFocused();
+      expect(manifestReads()).toBe(1);
+
+      // The next open reads the manifest again instead of re-throwing on the
+      // cached payload (still malformed here, so it crashes again).
+      await app.openEvidenceDrawer(chip);
+      await expect(surface).toBeVisible();
+      await expect.poll(manifestReads, { message: 'the reopened drawer re-read the manifest' }).toBe(2);
+
+      // The payload is fixed: Try again re-reads it and renders the real drawer.
+      healManifest();
+      await surface.getByRole('button', { name: 'Try again' }).click();
+      await expect(drawer.getByRole('tablist', { name: 'Evidence detail views' })).toBeVisible();
+      await expect(page.locator('[data-error-boundary]')).toHaveCount(0);
+      expect(manifestReads(), 'Try again re-read the manifest').toBe(3);
+
+      await drawer.getByRole('button', { name: 'Close drawer' }).click();
+      await expect(app.evidenceDrawer()).not.toHaveClass(/is-open/);
       await navLink(page, 'Glossary').click();
       await expect(page).toHaveURL(/\/glossary$/);
       await expect(page.locator('#main-content h1')).toHaveText(GLOSSARY_H1);

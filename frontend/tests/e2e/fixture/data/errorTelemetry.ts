@@ -7,7 +7,8 @@
 import type { Page, Route } from '@playwright/test';
 import type { ConfigOptions } from '../../../../src/types';
 import type { LineageManifestResponse } from '../../../../src/types/lineage';
-import { json, type MockApi } from '../mockApi';
+import { json, type FixtureEntry, type MockApi } from '../mockApi';
+import { dataEstateFixtures } from './dataEstate';
 import { CONFIG_OPTIONS } from './shell';
 
 /**
@@ -20,12 +21,27 @@ import { CONFIG_OPTIONS } from './shell';
  * boundary must contain. If that line ever gains a null-guard, replace this
  * hook with another drawer-only render throw; do not delete cases A and E.
  * The lineage manifest read is not audited.
+ *
+ * Returns `heal`, which puts the registry's own manifest fixture
+ * (data/dataEstate.ts) back, so a test can prove the drawer recovers once
+ * the payload is fixed.
  */
-export function crashTheEvidenceDrawer(mockApi: MockApi): void {
+export function crashTheEvidenceDrawer(mockApi: MockApi): () => void {
+  const healthy = registeredManifestFixture();
   const unproducible = { schema_version: 1, manifest_path: 'fixture', families: null };
   mockApi.register<LineageManifestResponse>('GET', '/api/lineage/manifest', () =>
     json(unproducible as unknown as LineageManifestResponse),
   );
+  return () => mockApi.register('GET', healthy.pattern, healthy.handler);
+}
+
+/** The default-registry fixture for GET /api/lineage/manifest: the healthy payload. */
+function registeredManifestFixture(): FixtureEntry {
+  const entry = dataEstateFixtures.find(
+    (candidate) => candidate.method === 'GET' && candidate.pattern === '/api/lineage/manifest',
+  );
+  if (!entry) throw new Error('data/dataEstate.ts no longer registers GET /api/lineage/manifest');
+  return entry;
 }
 
 /** The Server-Timing header w2-warehouse-delivery emits (its grammar, faked here). */
