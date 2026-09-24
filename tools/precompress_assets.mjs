@@ -26,7 +26,9 @@ const assetsDir = path.join(repoRoot, 'frontend', 'dist', 'assets');
 
 // Text-like assets that compress meaningfully. Keep this list conservative:
 // a suffix here means "serve the .br/.gz sibling when the client accepts it".
-const COMPRESSIBLE = /\.(js|css|svg|json|map|txt)$/;
+// No `map`: source maps are never served (tools/postbuild_artifacts.mjs
+// keeps build metadata out of dist before this step runs).
+const COMPRESSIBLE = /\.(js|css|svg|json|txt)$/;
 const MIN_BYTES = 1024; // mirrors GZipMiddleware minimum_size
 
 function compressOne(absPath) {

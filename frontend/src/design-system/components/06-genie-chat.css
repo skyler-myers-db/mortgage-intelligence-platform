@@ -70,7 +70,12 @@
   color: var(--text-1);
   border-color: var(--line-2);
   opacity: 1;
-  outline: none;
+}
+/* The keyboard handle keeps the global ring (its outline was reset, so a
+   Tab stop on it was invisible; audit css-06), drawn inside its own box so
+   the panel's clipped corner does not cut it off. */
+.genie__resize:focus-visible {
+  outline-offset: calc(-1 * var(--focus-ring-width));
 }
 .genie__resize:active {
   background: var(--accent-soft);
@@ -189,7 +194,7 @@
   color: var(--text-1); font-weight: 600;
 }
 .genie-history__meta { color: var(--text-3); font-family: var(--font-mono); font-size: var(--fs-11); }
-.genie__body { flex: 1; overflow-y: auto; padding: var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-3); }
+.genie__body { flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-3); }
 .genie__msg { max-width: 92%; }
 .genie__msg--user {
   align-self: flex-end;
@@ -576,7 +581,7 @@
 }
 .growth-agent-step__meta {
   margin-top: var(--sp-1);
-  color: var(--text-4);
+  color: var(--text-3);
   font-family: var(--font-mono);
   font-size: var(--fs-11);
 }
@@ -639,9 +644,9 @@
 }
 
 .typing-dots { display: inline-flex; gap: 3px; padding: 6px 0; }
-.typing-dots span { width: 6px; height: 6px; border-radius: 50%; background: var(--text-3); animation: tdot 1.2s infinite; }
-.typing-dots span:nth-child(2) { animation-delay: 0.15s; }
-.typing-dots span:nth-child(3) { animation-delay: 0.3s; }
+.typing-dots span { width: 6px; height: 6px; border-radius: 50%; background: var(--text-3); animation: tdot var(--dur-pulse) infinite; }
+.typing-dots span:nth-child(2) { animation-delay: calc(var(--dur-pulse) / 8); }
+.typing-dots span:nth-child(3) { animation-delay: calc(var(--dur-pulse) / 4); }
 @keyframes tdot { 0%, 60%, 100% { opacity: 0.3; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-3px); } }
 
 .genie-progress {
@@ -721,7 +726,7 @@
 .genie-progress__stage.is-active .genie-progress__stage-dot {
   border-color: var(--accent);
   box-shadow: 0 0 8px var(--accent-soft);
-  animation: genie-progress-pulse 1.2s ease-in-out infinite;
+  animation: genie-progress-pulse var(--dur-pulse) var(--ease-in-out) infinite;
 }
 @keyframes genie-progress-pulse {
   0%, 100% { transform: scale(1); opacity: 1; }

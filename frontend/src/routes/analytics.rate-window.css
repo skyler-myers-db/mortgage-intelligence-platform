@@ -195,4 +195,16 @@
     white-space: normal;
   }
 }
+/* Narrower still, the central month cannot fit between the edge months
+   either: keep only the first and last. Three labels need about 4.5 label
+   widths (a --fs-12 "Mmm YYYY" is about 3.6rem), because the central tick
+   can sit a third of the way along a short window (buildXTicks). A 390px
+   phone's plot is about 12.6rem once a classic scrollbar's lane is reserved
+   (.main scrollbar-gutter: stable, audit css-09), where the first and
+   central months overlapped. */
+@container rate-window-plot (max-width: 17rem) {
+  .rate-window .rate-window__xtick--middle {
+    display: none;
+  }
+}
 /* The chart is static: no mark animates, so reduced motion needs no override. */

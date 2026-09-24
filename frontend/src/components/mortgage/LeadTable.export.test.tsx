@@ -26,7 +26,8 @@ import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LeadTable } from './LeadTable';
 import { describeLeadCsvExport, planLeadCsvExport } from './LeadTable.csv';
-import { LEAD_EXPORT_NOTICE_MS } from './useLeadCsvExport';
+import { LEAD_EXPORT_NOTICE_MS, RULES_VERSION_TIMEOUT_MS } from './useLeadCsvExport';
+import type { LeadExportContext } from './LeadTable.types';
 import type { LeadSummary } from '../../types';
 
 vi.mock('../AppContext', () => ({
@@ -177,13 +178,13 @@ describe('LeadTable CSV export', () => {
     vi.restoreAllMocks();
   });
 
-  function mount(leads: LeadSummary[]) {
+  function mount(leads: LeadSummary[], context: LeadExportContext = {}) {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     act(() => {
       root.render(
         <QueryClientProvider client={queryClient}>
           <MemoryRouter>
-            <LeadTable leads={leads} exportContext={{ generatedAt: '2026-09-21T00:00:00.000Z' }} />
+            <LeadTable leads={leads} exportContext={{ generatedAt: '2026-09-21T00:00:00.000Z', ...context }} />
           </MemoryRouter>
         </QueryClientProvider>,
       );
@@ -252,14 +253,27 @@ describe('LeadTable CSV export', () => {
     // Only timeouts are faked: hashing, the receipt and React's scheduler run as usual.
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     mount(MIXED);
-    await exportedCsv();
+    // The whole export settles inside one act scope, so the commit that shows
+    // the strip AND the effect that arms its 8 s timer have both run when act
+    // returns. Outside act, React may flush that effect in a later scheduler
+    // task than the commit: a check that saw the strip could then advance the
+    // clock before any timer existed (always so on a cold first render).
+    await act(async () => {
+      exportButton().click();
+      await vi.waitFor(() => expect(blobs).toHaveLength(1));
+    });
     const notice = () => container.querySelector('[data-testid="lead-export-notice"]');
     const receiptLine = () => container.querySelector('[data-testid="lead-export-receipt"]');
-    await vi.waitFor(() => expect(notice()).not.toBeNull());
+    expect(notice()).not.toBeNull();
     expect(receiptLine()?.textContent).toBe('Exported 2 rows · audit evt-receipt-0001');
 
     act(() => {
-      vi.advanceTimersByTime(LEAD_EXPORT_NOTICE_MS);
+      vi.advanceTimersByTime(LEAD_EXPORT_NOTICE_MS - 1);
+    });
+    expect(notice(), 'the strip stays until 8 s have passed').not.toBeNull();
+
+    act(() => {
+      vi.advanceTimersByTime(1);
     });
 
     expect(notice()).toBeNull();
@@ -296,6 +310,92 @@ describe('LeadTable CSV export', () => {
       expect(container.querySelector('[data-testid="lead-export-notice"]')?.textContent).toBe(
         'Exported 1 selected lead in rank order.',
       );
+    });
+  });
+
+  /**
+   * Export provenance with no mount-time reads (audit delivery-08). The
+   * refresh time rides on /api/leads (X-Data-Refreshed-At); the rules
+   * version is resolved on the click, BEFORE the bytes are built and hashed,
+   * bounded to 4 s, and any failure stamps 'unknown' without blocking.
+   */
+  describe('provenance stamps', () => {
+    it('stamps the refresh time and the rules version resolved on the click', async () => {
+      const resolveRulesVersion = vi.fn(async () => 'rules.itm_2026_09');
+      mount(MIXED, { refreshedAt: '2026-09-21T07:30:00Z', resolveRulesVersion });
+      expect(resolveRulesVersion).not.toHaveBeenCalled();
+
+      const csv = await exportedCsv();
+
+      expect(resolveRulesVersion).toHaveBeenCalledTimes(1);
+      expect(csv).toContain('# refreshed_at=2026-09-21T07:30:00Z');
+      expect(csv).toContain('# rules_version=rules.itm_2026_09');
+    });
+
+    it('waits for the rules version before it hashes anything', async () => {
+      let answer: (version: string) => void = () => undefined;
+      const pending = new Promise<string>((resolve) => {
+        answer = resolve;
+      });
+      mount(MIXED, { resolveRulesVersion: () => pending });
+      await act(async () => {
+        exportButton().click();
+      });
+      expect(globalThis.crypto.subtle.digest).not.toHaveBeenCalled();
+
+      await act(async () => {
+        answer('rules.late');
+      });
+      await vi.waitFor(() => expect(blobs).toHaveLength(1));
+      expect(await blobs[0].text()).toContain('# rules_version=rules.late');
+    });
+
+    it('stamps unknown and still downloads when the rules read fails', async () => {
+      mount(MIXED, { resolveRulesVersion: () => Promise.reject(new Error('503')) });
+
+      const csv = await exportedCsv();
+
+      expect(csv).toContain('# rules_version=unknown');
+      await vi.waitFor(() => {
+        expect(container.querySelector('[data-testid="lead-export-receipt"]')?.textContent).toContain('evt-receipt-0001');
+      });
+    });
+
+    it('stamps unknown when the rules read outlives its 4 s bound', async () => {
+      const bound = new AbortController();
+      const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(bound.signal);
+      mount(MIXED, { resolveRulesVersion: () => new Promise<string>(() => undefined) });
+      await act(async () => {
+        exportButton().click();
+      });
+      expect(timeout).toHaveBeenCalledWith(RULES_VERSION_TIMEOUT_MS);
+      expect(blobs).toHaveLength(0);
+
+      await act(async () => {
+        bound.abort();
+      });
+      await vi.waitFor(() => expect(blobs).toHaveLength(1));
+      expect(await blobs[0].text()).toContain('# rules_version=unknown');
+    });
+
+    it('refuses to export while the rows on screen belong to the previous filters', async () => {
+      const resolveRulesVersion = vi.fn(async () => 'rules.itm_2026_09');
+      const reason = 'Export waits for the rows of the current filters';
+      mount(MIXED, { exportBlockedReason: reason, resolveRulesVersion });
+
+      expect(exportButton().disabled).toBe(false);
+      expect(exportButton().getAttribute('aria-disabled')).toBe('true');
+      expect(exportButton().getAttribute('title')).toBe(reason);
+      await act(async () => {
+        exportButton().click();
+      });
+      await act(async () => {
+        await new Promise((resolve) => window.setTimeout(resolve, 0));
+      });
+
+      expect(resolveRulesVersion).not.toHaveBeenCalled();
+      expect(blobs).toHaveLength(0);
+      expect(container.querySelector('[data-testid="lead-export-receipt"]')).toBeNull();
     });
   });
 });

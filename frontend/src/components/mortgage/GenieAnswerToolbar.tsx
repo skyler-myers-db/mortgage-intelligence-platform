@@ -93,16 +93,21 @@ type CopyStatus =
 
 const COPIED_STATUS_MS = 2_500;
 
+/** The copy confirmation, as shown and as spoken. */
+function statusText(status: CopyStatus): string {
+  if (status.kind === 'copied') return `${status.target === 'SQL' ? 'SQL' : 'Answer'} copied`;
+  if (status.kind === 'blocked') return 'Clipboard blocked';
+  return '';
+}
+
 export function GenieAnswerToolbar({
   payload,
-  announce = false,
+  onStatus,
 }: {
   payload: GenieAnswerShape;
-  /** Speak the copy confirmation through a polite status region. Off in the
-   *  floating panel, which owns exactly one persistent announcer outside its
-   *  dialog (audit `a11y-06`); on for `/ask-genie`, where every answer
-   *  already carries its own status region. */
-  announce?: boolean;
+  /** Hand the copy confirmation to the surface's ONE persistent announcer
+   *  (audit `a11y-06`): the toolbar never mounts a live region of its own. */
+  onStatus?: (text: string) => void;
 }) {
   const [status, setStatus] = useState<CopyStatus>({ kind: 'idle' });
   const sql = answerSql(payload);
@@ -127,7 +132,9 @@ export function GenieAnswerToolbar({
 
   const copy = async (target: CopyTarget, text: string) => {
     const ok = await copyTextToClipboard(text);
-    setStatus(ok ? { kind: 'copied', target } : { kind: 'blocked', target, text });
+    const next: CopyStatus = ok ? { kind: 'copied', target } : { kind: 'blocked', target, text };
+    setStatus(next);
+    onStatus?.(statusText(next));
   };
 
   return (
@@ -152,16 +159,11 @@ export function GenieAnswerToolbar({
         <Icon name="doc" size={12} />
         Copy answer
       </button>
-      {/* In the floating panel this is visible confirmation only, NOT a live
-          region: the panel owns exactly one persistent announcer outside its
-          dialog (audit `a11y-06`), and an answer must not mount a second. */}
-      <span
-        className="genie-answer__toolbar-status"
-        data-copy-status={status.kind}
-        role={announce ? 'status' : undefined}
-      >
-        {status.kind === 'copied' ? `${status.target === 'SQL' ? 'SQL' : 'Answer'} copied` : ''}
-        {status.kind === 'blocked' ? 'Clipboard blocked' : ''}
+      {/* Visible confirmation only, NOT a live region: each Genie surface
+          owns exactly one persistent announcer (audit `a11y-06`), which
+          speaks it through `onStatus`. An answer must not mount a second. */}
+      <span className="genie-answer__toolbar-status" data-copy-status={status.kind}>
+        {statusText(status)}
       </span>
       {status.kind === 'blocked' && (
         <div className="genie-answer__copy-fallback">

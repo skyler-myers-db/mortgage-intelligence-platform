@@ -37,15 +37,17 @@
   border-block-end: 1px solid var(--line-1);
   color: var(--text-3);
 }
+/* No outline reset (audit css-06): the palette input keeps the global
+   :focus-visible ring, the only focus cue a borderless field has, and the
+   one forced-colors mode repaints. */
 .cmdk__input {
   flex: 1;
   border: none;
   background: transparent;
   color: var(--text-1);
   font-size: var(--fs-16);
-  outline: none;
 }
-.cmdk__input::placeholder { color: var(--text-4); }
+.cmdk__input::placeholder { color: var(--text-3); }
 .cmdk__hint,
 .cmdk__footer kbd {
   font-family: var(--font-mono);
@@ -56,9 +58,13 @@
   border-radius: var(--r-sm);
   padding: 1px var(--sp-1);
 }
+/* Overlay scrollers contain their own overscroll (audit css-09): wheel and
+   touch scrolling at the end of the list no longer chain into the page
+   behind the palette, drawer, Genie panel, filter menu or Console. */
 .cmdk__list {
   flex: 1;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: var(--sp-2);
 }
 .cmdk__group + .cmdk__group { margin-block-start: var(--sp-2); }
@@ -84,6 +90,16 @@
   transition: background var(--dur-fast) var(--ease);
 }
 .cmdk__row.is-active { background: var(--accent-soft); color: var(--text-1); }
+/* The active row is the listbox cursor (aria-activedescendant) while focus
+   stays in the input. Its --accent-soft fill alone is 1.1-1.4:1 against the
+   panel, so while the input is keyboard-focused the cursor also wears the
+   shared ring, inset so the list's overflow never clips it (audit a11y-01;
+   the filter menu and topbar search got the same ring in
+   23-filter-listbox.css). */
+.cmdk__panel:has(.cmdk__input:focus-visible) .cmdk__row.is-active {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: calc(-1 * var(--focus-ring-width));
+}
 .cmdk__row:active { translate: 0 var(--pressed-shift); }
 .cmdk__row-icon { color: var(--text-3); flex-shrink: 0; }
 .cmdk__row.is-active .cmdk__row-icon { color: var(--accent-ink); }
@@ -128,7 +144,7 @@
   padding: var(--sp-4) var(--sp-5); border-bottom: 1px solid var(--line-1);
   display: flex; align-items: center; gap: var(--sp-3);
 }
-.drawer__body { flex: 1; overflow-y: auto; padding: var(--sp-5); }
+.drawer__body { flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: var(--sp-5); }
 .drawer__close {
   margin-left: auto;
   width: 28px; height: 28px; border-radius: 6px;
@@ -236,7 +252,7 @@
    warns — neither may wear the unavailable/no-timestamp look. */
 .source-freshness--loading::before {
   background: var(--accent);
-  animation: freshness-pulse 1.2s ease-in-out infinite;
+  animation: freshness-pulse var(--dur-pulse) var(--ease-in-out) infinite;
 }
 .source-freshness--error::before { background: var(--signal-warning); }
 @keyframes freshness-pulse {
@@ -353,7 +369,9 @@
 .proof-tabs,.proof-status-row,.proof-component__meta,.proof-evidence-row__meta,.proof-component__fields{display:flex;flex-wrap:wrap;gap:var(--sp-2)}
 .proof-tabs{padding:var(--sp-3) var(--sp-5);border-bottom:1px solid var(--line-1);overflow-x:auto}
 .proof-tab{display:inline-flex;align-items:center;gap:var(--sp-2);min-block-size:var(--sp-8);padding:0 var(--sp-3);border:1px solid var(--line-1);border-radius:var(--r-md);background:var(--bg-2);color:var(--text-2);font-family:var(--font-mono);font-size:var(--fs-12);cursor:pointer}
-.proof-tab.is-active,.proof-tab:hover,.proof-tab:focus-visible{border-color:var(--accent);color:var(--accent-ink);background:var(--accent-soft)}
+/* Hover and focus take a lighter step than the selected tab, so neither can be mistaken for it (audit motion-09); the selected rule comes after at equal specificity, so hovering the selected tab keeps it selected. Focus also keeps the global ring. */
+.proof-tab:hover,.proof-tab:focus-visible{border-color:var(--line-3);color:var(--text-1);background:var(--bg-3)}
+.proof-tab.is-active{border-color:var(--accent);color:var(--accent-ink);background:var(--accent-soft)}
 .proof-tab:active{translate:0 var(--pressed-shift)}
 .proof-callout,.proof-formula,.proof-component,.proof-branch,.proof-evidence-row,.proof-sql-card{padding:var(--sp-3);border:1px solid var(--line-1);border-radius:var(--r-md);background:var(--bg-2)}
 .proof-callout{color:var(--text-2)}.proof-callout--warning{border-color:color-mix(in oklab,var(--signal-warning) 55%,var(--line-2));background:color-mix(in oklab,var(--signal-warning) 8%,var(--bg-2))}.proof-callout--subtle{background:color-mix(in oklab,var(--accent) 5%,transparent);font-size:var(--fs-12)}
@@ -367,8 +385,14 @@
 .proof-branch.is-selected{border-color:var(--signal-success);box-shadow:0 0 0 1px color-mix(in oklab,var(--signal-success) 35%,transparent)}.proof-branch.is-passed:not(.is-selected){border-color:var(--line-2)}
 .proof-sql-card__sql{margin:var(--sp-3) 0;padding:var(--sp-3);max-block-size:calc(var(--sp-16) + var(--sp-16));overflow:auto;border:1px solid var(--line-1);border-radius:var(--r-md);background:var(--bg-0);color:var(--text-2);font-family:var(--font-mono);font-size:var(--fs-11);line-height:var(--lh-body);white-space:pre-wrap}
 .glossary-term{position:relative;display:inline-flex;color:inherit;text-decoration:underline dotted;text-underline-offset:.18em;cursor:help}.glossary-term:hover,.glossary-term:focus-visible{color:var(--accent-ink)}
-.glossary-term__tip{position:absolute;inset-inline-start:0;inset-block-end:calc(100% + var(--sp-2));inline-size:min(300px,80vw);padding:var(--sp-3);border:1px solid var(--line-2);border-radius:var(--r-md);background:var(--bg-1);box-shadow:var(--shadow-md);color:var(--text-2);font-size:var(--fs-12);line-height:var(--lh-snug);opacity:0;pointer-events:none;transform:translateY(var(--sp-1));transition:opacity var(--dur-fast) var(--ease),transform var(--dur-fast) var(--ease);z-index:var(--z-tooltip)}
-.glossary-term:hover .glossary-term__tip,.glossary-term:focus-visible .glossary-term__tip{opacity:1;transform:translateY(0)}.glossary-term__tip-title,.glossary-term__tip-context{display:block}.glossary-term__tip-title{margin-bottom:var(--sp-1);color:var(--text-1);font-weight:700}.glossary-term__tip-context{margin-top:var(--sp-2);color:var(--text-3)}
+/* A hidden tip is out of layout (display: none), not merely transparent: at
+   opacity 0 its min(300px, 80vw) box still counted toward its card's
+   scrollable overflow, so a term near a card's right edge made the card
+   scroll sideways (wave-2 visual gate, slug layout-w2-glossary-tip). The
+   fade-in is kept with @starting-style and a discrete display transition. */
+.glossary-term__tip{position:absolute;inset-inline-start:0;inset-block-end:calc(100% + var(--sp-2));inline-size:min(300px,80vw);padding:var(--sp-3);border:1px solid var(--line-2);border-radius:var(--r-md);background:var(--bg-1);box-shadow:var(--shadow-md);color:var(--text-2);font-size:var(--fs-12);line-height:var(--lh-snug);display:none;opacity:0;pointer-events:none;transform:translateY(var(--sp-1));transition:opacity var(--dur-fast) var(--ease),transform var(--dur-fast) var(--ease),display var(--dur-fast) var(--ease) allow-discrete;z-index:var(--z-tooltip)}
+.glossary-term:hover .glossary-term__tip,.glossary-term:focus-visible .glossary-term__tip{display:block;opacity:1;transform:translateY(0)}
+@starting-style{.glossary-term:hover .glossary-term__tip,.glossary-term:focus-visible .glossary-term__tip{opacity:0;transform:translateY(var(--sp-1))}}.glossary-term__tip-title,.glossary-term__tip-context{display:block}.glossary-term__tip-title{margin-bottom:var(--sp-1);color:var(--text-1);font-weight:700}.glossary-term__tip-context{margin-top:var(--sp-2);color:var(--text-3)}
 .glossary-layout{display:grid;grid-template-columns:minmax(220px,.28fr) minmax(0,1fr);gap:var(--gap-grid)}.glossary-index{align-self:start;position:sticky;top:var(--sp-4)}.glossary-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--sp-4)}
 .glossary-entry{padding-block:var(--sp-3);border-bottom:1px solid var(--line-1)}.glossary-entry:last-child{border-bottom:0}.glossary-entry__term{margin:0;color:var(--text-1);font-size:var(--fs-18);line-height:var(--lh-snug)}.glossary-entry__aliases{display:flex;flex-wrap:wrap;gap:var(--sp-2);margin-top:var(--sp-1);color:var(--text-3);font-size:var(--fs-11)}.glossary-entry__detail{margin-top:var(--sp-3)}.glossary-entry__detail>p{margin:var(--sp-1) 0 0;color:var(--text-2);font-size:var(--fs-13);line-height:var(--lh-body)}
 @media(max-width:900px){.proof-formula-grid,.glossary-layout,.glossary-grid{grid-template-columns:1fr}.glossary-index{position:static}}

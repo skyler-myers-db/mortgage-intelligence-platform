@@ -18,8 +18,20 @@ import type {
   SegmentAnalyticsResponse,
   SignalAnalyticsResponse,
 } from '../../types';
-import type { HealthPayload, AnalyticsQueryOptions } from '../apiTypes';
+import type { HealthHint, HealthPayload, AnalyticsQueryOptions } from '../apiTypes';
 import { analyticsPath, isAbortError, getJson } from '../apiTransport';
+
+/**
+ * `/api/health`, plus `?idle_s=<int>` when the shell passes an activity hint:
+ * a whole number of seconds clamped to 0..86400 (one day, at most five
+ * digits); a non-finite value reads as 0.
+ */
+export function healthPath(hint?: HealthHint): string {
+  const idleS = hint?.idleS;
+  return idleS === undefined
+    ? '/api/health'
+    : `/api/health?idle_s=${Math.min(86_400, Math.max(0, Math.floor(idleS))) || 0}`;
+}
 
 export const analyticsApi = {
   /**
@@ -27,11 +39,11 @@ export const analyticsApi = {
    * object instead of throwing — callers render dependency state as
    * `unknown`, never as synthesized "up". A caller-triggered abort
    * re-throws so `HealthProvider` can cancel in-flight polls on
-   * unmount.
+   * unmount. The optional hint adds only an integer `idle_s` (keep-warm).
    */
-  health: async (signal?: AbortSignal): Promise<HealthPayload> => {
+  health: async (signal?: AbortSignal, hint?: HealthHint): Promise<HealthPayload> => {
     try {
-      return await getJson<HealthPayload>('/api/health', signal);
+      return await getJson<HealthPayload>(healthPath(hint), signal);
     } catch (err) {
       if (isAbortError(err)) throw err;
       return { status: 'unreachable', mode: 'unknown', dependencies: {} };

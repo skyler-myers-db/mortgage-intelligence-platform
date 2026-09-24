@@ -215,3 +215,14 @@ def test_no_forwarded_identity_means_no_name_and_no_roles(
 
     assert body["actor_display_name"] is None
     assert body["role_labels"] == []
+
+
+def test_session_handler_is_async_and_needs_no_worker_thread() -> None:
+    """delivery-09: the handler only reads forwarded headers and settings, so
+    it runs on the event loop and a cold-cache burst holding every worker
+    thread cannot stall the shell's identity call behind it."""
+    import inspect
+
+    from backend.api import session
+
+    assert inspect.iscoroutinefunction(session.get_session)

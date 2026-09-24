@@ -24,6 +24,12 @@ import {
   postJson,
 } from '../apiTransport';
 
+const DATA_REFRESHED_AT_RE = /^[0-9TZ:.+-]+$/;
+
+function dataRefreshedAtHeader(value: string | null): string | null {
+  return value && DATA_REFRESHED_AT_RE.test(value) ? value : null;
+}
+
 export const leadsPageApi = {
   leadsPage: (
     segment?: string,
@@ -83,6 +89,10 @@ export const leadsPageApi = {
       rankedMatching: headers.get('X-Ranked-Matching') ? Number(headers.get('X-Ranked-Matching')) : null,
       returnedRows: headers.get('X-Returned-Rows') ? Number(headers.get('X-Returned-Rows')) : null,
       truncatedAt: headers.get('X-Truncated-At') ? Number(headers.get('X-Truncated-At')) : null,
+      // The newest gold refresh time of these rows (ISO-8601 UTC): the CSV
+      // export's `refreshed_at` stamp, with no mount-time read (audit
+      // delivery-08). Anything but timestamp characters is refused.
+      dataRefreshedAt: dataRefreshedAtHeader(headers.get('X-Data-Refreshed-At')),
       growthAgentVerification: growthAgentProof
         ? await _verifyGrowthAgentCohort(headers, growthAgentProof)
         : null,

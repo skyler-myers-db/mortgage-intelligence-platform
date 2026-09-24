@@ -31,6 +31,7 @@ from backend.schemas.portfolio import PortfolioCriteria
 from backend.services.county_names import county_name_for_fips
 from backend.services.databricks_sql import DatabricksSqlClient
 from backend.services.geography_scope import GeographyScope, load_geography_scope
+from backend.services.gold_cache import AggregateCache, GoldAggregateCache
 from backend.services.observability import emit
 from backend.services.repositories import databricks_geo_sql as geo_sql
 from backend.services.repositories.databricks_portfolio import DatabricksPortfolioRepository
@@ -229,18 +230,20 @@ class DatabricksGeoRepository:
     Short-TTL cached (60s default) per-method so a presenter clicking
     between segment-intelligence and home pays one warehouse round-trip
     per minute, not per navigation. The data refreshes daily upstream
-    so 60s is a non-issue for correctness.
+    so 60s is a non-issue for correctness. Audit delivery-06: past the
+    60 s soft TTL the default gold cache serves the last frame while one
+    background refresh runs, so nobody pays the round trip inline.
     """
 
     def __init__(
         self,
         client: DatabricksSqlClient,
         *,
-        cache: TTLCache | None = None,
+        cache: AggregateCache | None = None,
         cache_ttl_s: float = 60.0,
     ) -> None:
         self._client = client
-        self._cache = cache if cache is not None else TTLCache()
+        self._cache: AggregateCache = cache if cache is not None else GoldAggregateCache()
         self._cache_ttl_s = cache_ttl_s
 
     # SQL text lives in `databricks_geo_sql`; these aliases keep the

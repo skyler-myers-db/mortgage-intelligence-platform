@@ -11,6 +11,7 @@ import { Link } from 'react-router';
 import { Icon } from '../Icon';
 import { Chip } from '../Primitives';
 import type { GrowthAgentCohortVerification } from '../../lib/api';
+import { formatCount } from '../../lib/formatters';
 import type { CampaignBinding } from './LeadTable.logic';
 import type { CampaignBindingState } from './useLeadApprovalActions';
 import { APPROVER_ROLE_STATUS_ID } from './approverGate';
@@ -55,7 +56,7 @@ export function LeadTableStatusChips({
       {growthAgentVerification && (
         <div className="table-success chip-row" role="status" data-testid="growth-agent-cohort-proof">
           <Chip variant="success" icon="shield">Verified Growth Agent cohort</Chip>
-          <span className="num">{growthAgentVerification.total.toLocaleString()} borrowers</span>
+          <span className="num">{formatCount(growthAgentVerification.total)} borrowers</span>
           <span className="mono" title={growthAgentVerification.cohortFingerprint}>
             proof {growthAgentVerification.cohortFingerprint.slice(0, 12)}
           </span>

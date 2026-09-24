@@ -15,7 +15,6 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse
 from fastapi.routing import APIRoute
-from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request as StarletteRequest
@@ -68,6 +67,8 @@ from backend.services.campaign_treatment_runtime import (
     campaign_treatment_runtime_enabled,
 )
 from backend.services.genie_place_dimension import warm_governed_place_dimension
+from backend.services.health_probes import prime_warehouse_state_client
+from backend.services.keep_warm import log_startup_policy as _keep_warm_policy
 from backend.services.observability import (
     configure_logging,
     emit,
@@ -77,7 +78,9 @@ from backend.services.observability import (
     set_correlation_id,
 )
 from backend.services.security_headers import SecurityHeadersMiddleware
+from backend.services.server_timing import ServerTimingMiddleware
 from backend.services.static_assets import select_asset_variant
+from backend.services.thread_limits import configure_default_thread_limiter
 from backend.services.visit_tracking import VisitTrackingMiddleware
 from backend.version import API_VERSION, api_version
 
@@ -297,12 +300,14 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
     2026-06-11 audit P1-6:
     * Warm the default `/api/leads` page (slowest hot-path query) once at
-      startup. When ``MIP_LEADS_WARM_INTERVAL_S`` is positive, keep it warm
-      with a refresh-ahead loop for demo/performance-critical sessions; the
-      deployed app default sets this to 0 so idle workspaces can auto-stop.
+      startup. The refresh-ahead loop runs only under the ``scheduled``
+      keep-warm policy (``backend.services.keep_warm``, the single resolver;
+      ``MIP_LEADS_WARM_INTERVAL_S`` is its cadence). The deployed default is
+      ``off`` so idle workspaces can auto-stop.
     * Warm the governed place dimension so the Genie output policy never pays
       its resolve inline on an Ask Genie turn.
     """
+    configure_default_thread_limiter(settings.mip_anyio_thread_tokens)  # delivery-09
     rewarm_task: asyncio.Task[None] | None = None
     # Databricks Apps deployment invariant: log the treatment-runtime marker
     # state at boot. The write gate itself is enforced per-request in
@@ -333,20 +338,13 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
         # structured log line and decide whether to flip the flag.
         check_trust_boundary_at_startup()
         _warm_warehouse()
+        prime_warehouse_state_client()  # delivery-01: build off the health path
         _warm_lakebase()
         _warm_hot_lead_cache()
         warm_governed_place_dimension()
-        if settings.mip_leads_warm_interval_s > 0:
+        if _keep_warm_policy() == "scheduled":
             rewarm_task = asyncio.create_task(
                 _lead_cache_rewarm_loop(settings.mip_leads_warm_interval_s)
-            )
-        else:
-            emit(
-                log,
-                "lead_cache_rewarm_disabled",
-                dependency="warehouse",
-                outcome="skipped",
-                interval_s=settings.mip_leads_warm_interval_s,
             )
     try:
         yield
@@ -484,6 +482,8 @@ app.add_middleware(BackpressureMiddleware, controller=_backpressure_controller)
 # (last add_middleware call = outermost) and its structured log lines carry
 # the request's correlation id.
 app.add_middleware(VisitTrackingMiddleware)
+# delivery-v3: just inside CorrelationId, so a backpressure 429 carries total.
+app.add_middleware(ServerTimingMiddleware)
 app.add_middleware(CorrelationIdMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 # compresslevel=6 (not the library default 9): dynamic JSON responses sit on
@@ -799,11 +799,6 @@ if _FRONTEND_DIST.is_dir() and (_FRONTEND_DIST / "index.html").is_file():
             media_type=variant.media_type,
             headers=headers,
         )
-
-    # Brand artwork (Entrada wordmark PNG + future brand assets).
-    _BRAND_DIR = _FRONTEND_DIST / "brand"
-    if _BRAND_DIR.is_dir():
-        app.mount("/brand", StaticFiles(directory=_BRAND_DIR), name="brand")
 
     # Catch-all: first look for a real file at `dist/<full_path>`. If it
     # exists, serve it verbatim (static assets dropped into `public/` —

@@ -300,7 +300,9 @@
    the workspace is alive without being attention-grabbing. */
 .topbar__pill .dot.is-heartbeat {
   animation: topbar-heartbeat var(--dur-heartbeat) var(--ease) infinite;
-  will-change: box-shadow, transform;
+  /* transform only: a box-shadow layer hint promotes nothing (it is a paint
+     property) and only costs memory (audit motion-05). */
+  will-change: transform;
 }
 @keyframes topbar-heartbeat {
   0%   { box-shadow: 0 0 0 0 color-mix(in oklab, var(--signal-success) 55%, transparent), 0 0 8px var(--signal-success); transform: scale(1); }
@@ -314,7 +316,8 @@
   width: 34px; height: 34px; border-radius: var(--r-md);
   display: grid; place-items: center;
   background: transparent; border: 1px solid var(--line-1); color: var(--text-2);
-  cursor: pointer; transition: all var(--dur-fast) var(--ease);
+  cursor: pointer;
+  /* Transition: the shared control list under BUTTONS (audit motion-05). */
 }
 .topbar__icon-btn:hover { background: var(--bg-3); color: var(--text-1); border-color: var(--line-2); }
 .topbar__icon-btn.is-active { background: var(--accent-soft); color: var(--accent-ink); border-color: var(--chip-line); }
@@ -331,9 +334,19 @@
   background: color-mix(in oklab, var(--bg-1) 72%, transparent);
   backdrop-filter: blur(8px);
   flex-wrap: wrap;
-  position: sticky;
-  top: 0;
-  z-index: var(--z-sticky);
+}
+/* Docked only with the vertical room for it: the Offer decision bar's
+   breakpoint (routes/offer-orchestrator.action-bar.css). In rem, so it tracks
+   browser zoom: at 400% (1440x900 is then 360x225) the wrapped, sticky nav
+   covered the whole .main scrollport, so no heading or content could be
+   scrolled into view (WCAG 1.4.10 Reflow; wave-1c follow-up #14). Below it
+   the nav is in flow and scrolls away with the page. */
+@media (min-height: 40rem) {
+  .route-nav {
+    position: sticky;
+    top: 0;
+    z-index: var(--z-sticky);
+  }
 }
 /* The route nav is an app-added element (the prototype has a rail plus
    `.segmented`, design_files/index.html:926-935) that RouteNav.tsx builds
@@ -392,7 +405,7 @@
   border: 1px solid transparent;
   color: var(--text-3);
   cursor: pointer;
-  transition: all var(--dur-fast) var(--ease);
+  /* Transition: the shared control list under BUTTONS (audit motion-05). */
   background: transparent;
   position: relative;
   text-decoration: none;
@@ -426,8 +439,11 @@
   grid-area: main;
   min-width: 0;
   overflow-y: auto;
+  /* Reserve the classic scrollbar's lane even while a route is too short to
+     scroll, so content does not shift sideways when a skeleton resolves into
+     a scrolling page (Windows classic scrollbars; audit css-09). */
+  scrollbar-gutter: stable;
   position: relative;
-  transition: padding-right var(--dur-base) var(--ease);
   /* Establish an inline-size container so .kpi-row, .seg-grid and
      .layoutA-grid can reflow based on their actual available width
      (Console open vs. closed at a constant viewport, for example)
@@ -456,11 +472,13 @@
    reserve a right gutter on .main so long rows do not slide under it. The
    Console is position:fixed, so we can't rely on flow; an explicit gutter is
    the fix. The gutter derives from --console-w (audit motion-01 follow-up:
-   the literal 324px / 360px drifted from the width at >= 2560px). */
+   the literal 324px / 360px drifted from the width at >= 2560px).
+   The gutter SNAPS: it is not transitioned (audit motion-05). At 1440x900
+   .main is 1368px and the open gutter takes its content box to 1044px, so
+   a tween crossed the `@container main` 1280px band mid-animation and
+   re-laid the page out every frame. The prototype's .main has no
+   transition (index.html:330-334); the Console keeps its own fade. */
 [data-console="open"] .main { padding-right: calc(var(--console-w) + var(--sp-6)); }
-@media (prefers-reduced-motion: reduce) {
-  .main { transition: none; }
-}
 
 /* ============================================================
    TYPOGRAPHY
@@ -525,9 +543,32 @@
   font-family: var(--font-sans); font-size: var(--fs-13); font-weight: 500;
   letter-spacing: var(--tracking-body);
   border: 1px solid var(--line-2); background: transparent; color: var(--text-1);
-  cursor: pointer; transition: all var(--dur-fast) var(--ease);
+  cursor: pointer;
   white-space: nowrap;
   text-decoration: none;
+}
+/* One explicit transition list for the five pointer controls whose
+   prototype rules each said `transition: all var(--dur-fast) var(--ease)`
+   (DEPARTURE from design_files/index.html:272-276 .topbar__icon-btn,
+   :303-311 .rail__item, :378-384 .btn, :422-432 .evidence-chip and :826-832
+   .filter; audit motion-05). It names the union of what they change on
+   hover, is-active, disabled or a theme switch (fill, edge, ink, the primary
+   button's halo) at the old duration, plus the pressed nudge / settle
+   (translate / scale) at --dur-instant. `all` also tweened focus outlines
+   and layout. Declared once, after the shared theme list above, so these
+   five read it and the initial stylesheet stays small. */
+.btn,
+.topbar__icon-btn,
+.rail__item,
+.evidence-chip,
+.filter {
+  transition:
+    background-color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease),
+    translate var(--dur-instant) var(--ease),
+    scale var(--dur-instant) var(--ease);
 }
 .btn:hover { background: var(--bg-3); border-color: var(--line-3); }
 .btn--primary {

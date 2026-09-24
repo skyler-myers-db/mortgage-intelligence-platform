@@ -41,6 +41,15 @@ describe('genieTurnStatus', () => {
     expect(genieLauncherStatusText('running')).toContain('still working');
     expect(genieLauncherStatusText('ready')).toContain('answer ready');
   });
+
+  it('says "answer ready" only for an answered turn: a withheld or failed one was only finished', () => {
+    expect(genieLauncherStatusText('ready', 'answered')).toBe('Genie answer ready. Open Genie to read it.');
+    for (const outcome of ['withheld', 'failed'] as const) {
+      expect(genieLauncherStatusText('ready', outcome)).toBe('Genie finished your question. Open Genie to see the result.');
+      expect(genieLauncherStatusText('running', outcome)).toBe('Genie is still working on your question.');
+      expect(genieLauncherStatusText('idle', outcome)).toBe('');
+    }
+  });
 });
 
 /**

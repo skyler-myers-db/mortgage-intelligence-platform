@@ -4,13 +4,19 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider } from "react-router/dom";
 import { createAppRouter } from "./appRouter";
 import { ErrorBoundary } from "./components/ErrorBoundary";
-import { rootErrorOptions } from "./lib/clientErrorLog";
+import { installClientErrorListeners, rootErrorOptions } from "./lib/clientErrorLog";
 import { hasRenderBlockedChunkLoad } from "./lib/lazyPreload";
 import { createMipQueryClient } from "./lib/queryClient";
+import { setRumRouteSource } from "./lib/rumBridge";
 import { installStaleChunkRecovery } from "./lib/staleChunkRecovery";
 import "./design-system/tokens.css";
 import "./design-system/components.css";
 import "./design-system/print.css";
+
+// Errors React never sees (event handlers, timers, unawaited promises) go
+// through the same message-free report as the boundaries' catches. Installed
+// first, before the router and createRoot, so a boot-time throw is recorded.
+installClientErrorListeners();
 
 const queryClient = createMipQueryClient();
 
@@ -18,6 +24,11 @@ const queryClient = createMipQueryClient();
 // in app.tsx, so the unsaved-changes guard can use useBlocker (audit
 // states-05). See appRouter.tsx: no loaders, actions or route objects.
 const router = createAppRouter();
+
+// RUM (lib/rum, lazy and off by default) reports a route_change only when the
+// router COMMITS a new location: a Back the unsaved-changes guard blocks
+// never changes router.state.location, so it records nothing.
+setRumRouteSource((listener) => router.subscribe((state) => listener(state.location.pathname)));
 
 // A tab left open across a deploy asks for chunks the new build retired.
 // Reload once (guarded) when a render is blocked on such a chunk; see

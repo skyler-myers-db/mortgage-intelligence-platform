@@ -26,6 +26,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GenieLiveProgress, GenieSubmitResult } from '../../lib/api';
 import { clearGenieConversationState } from '../../lib/genieConversation';
 import { clearGenieTurns, getGenieTurns } from '../../lib/genieConversationStore';
+import { __resetGenieTurnStoreForTests } from '../../lib/genieInFlightTurn';
+import { __resetGenieAnnouncerForTests } from './useGenieAnnouncer';
 import { genieStartersForRoute } from '../../lib/genieContext';
 import { consumeGeniePrefill, openGenie } from '../../lib/genieOpen';
 import type { GenieAnswer, GenieStartResult } from '../../types';
@@ -188,6 +190,9 @@ describe('floating Genie conversational controls', () => {
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
+    // The turn lives in a module-level store that outlives the panel.
+    __resetGenieTurnStoreForTests();
+    __resetGenieAnnouncerForTests();
     clearGenieTurns();
     consumeGeniePrefill();
   });

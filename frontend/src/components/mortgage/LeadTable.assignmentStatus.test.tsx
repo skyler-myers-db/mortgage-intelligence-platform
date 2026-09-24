@@ -92,7 +92,6 @@ function renderRow(root: Root, lead: LeadSummary, isOpen = true) {
         bulkApproving={false}
         salesBusy={false}
         salesTeamCount={1}
-        pendingApproval={false}
         onToggleRow={noop}
         onToggleSelect={noop}
         onApprove={noop}

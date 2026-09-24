@@ -16,9 +16,21 @@
 // frontend/node_modules, so the report always describes the installed
 // compiler.
 //
-// READ-ONLY: nothing is written unless `--json <path>` is passed. It is a
-// REPORT in this wave, not a gate: the exit code is 0 unless the tool itself
-// cannot run (missing dependency, unparseable source file).
+// Two modes.
+//
+// REPORT (the default; read-only, nothing is written unless `--json <path>`
+// is passed): the exit code is 0 unless the tool itself cannot run (missing
+// dependency, unparseable source file).
+//
+// GATE (`--check <allowlist>`, run by the frontend-tests CI job): scans every
+// .tsx and .ts file under frontend/src and exits 1 on a bailout in a file the
+// allowlist does not list, on a count above its entry, or on a stale entry.
+// A bailout is a CompileError, CompileSkip, PipelineError or opt-out pragma;
+// a file that emits no memo cache because its compiled body needs no slots is
+// clean. `--ratchet <allowlist>` lowers entries to the measured counts (never
+// raises one) and refuses while anything is unlisted or grown. The rules and
+// the list's format live in tools/react_compiler_allowlist.mjs. Never loosen
+// the allowlist to make the gate pass.
 //
 // Usage (from the repo root):
 //   node tools/react_compiler_coverage.mjs                 # table + JSON summary
@@ -26,12 +38,25 @@
 //   node tools/react_compiler_coverage.mjs --file frontend/src/components/mortgage/USChoroplethMap.tsx
 //   node tools/react_compiler_coverage.mjs --include-ts    # also custom hooks in .ts
 //   node tools/react_compiler_coverage.mjs --json /tmp/coverage.json
+//   node tools/react_compiler_coverage.mjs --check tools/react_compiler_allowlist.json
+//   node tools/react_compiler_coverage.mjs --ratchet tools/react_compiler_allowlist.json
+//   node tools/react_compiler_coverage.mjs --write-allowlist <new path>   # bootstrap only
 // ---------------------------------------------------------------------------
-import { globSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, globSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import {
+  bootstrapAllowlist,
+  evaluateAllowlist,
+  formatVerdict,
+  ratchetAllowlist,
+  serializeAllowlist,
+  validateAllowlist,
+} from './react_compiler_allowlist.mjs';
+
+export { evaluateAllowlist };
 
 const repoRoot = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 const frontendDir = path.join(repoRoot, 'frontend');
@@ -70,10 +95,21 @@ function loadToolchain() {
 }
 
 function parseArgs(argv) {
-  const args = { files: [], json: null, onlyIssues: false, includeTs: false };
+  const args = {
+    files: [], json: null, onlyIssues: false, includeTs: false, check: null, ratchet: null, writeAllowlist: null,
+  };
+  const value = (i, flag) => {
+    const next = argv[i + 1];
+    if (!next || next.startsWith('--')) throw new Error(`${flag} needs a path`);
+    return next;
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
-    if (arg === '--file') {
+    if (arg === '--check' || arg === '--ratchet' || arg === '--write-allowlist') {
+      const key = { '--check': 'check', '--ratchet': 'ratchet', '--write-allowlist': 'writeAllowlist' }[arg];
+      args[key] = value(i, arg);
+      i += 1;
+    } else if (arg === '--file') {
       args.files.push(argv[i + 1]);
       i += 1;
     } else if (arg === '--json') {
@@ -292,13 +328,91 @@ function printReport(report) {
   }
 }
 
+function readAllowlist(allowlistPath) {
+  const allowlist = JSON.parse(readFileSync(allowlistPath, 'utf8'));
+  const problems = validateAllowlist(allowlist);
+  if (problems.length > 0) {
+    throw new Error(`${allowlistPath} is malformed:\n  ${problems.join('\n  ')}`);
+  }
+  return allowlist;
+}
+
+/** Every file the gate scans (.tsx and .ts), analyzed. */
+function scanGateScope() {
+  return discoverFiles(true).map((file) => analyzeFile(file));
+}
+
+function today() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+// The gate modes return a process exit code.
+function runGate(args) {
+  const { compilerVersion } = loadToolchain();
+  if (args.writeAllowlist) {
+    const target = path.resolve(args.writeAllowlist);
+    if (existsSync(target)) {
+      console.error(`${args.writeAllowlist} already exists: --write-allowlist only bootstraps a new list (use --ratchet to lower one)`);
+      return 1;
+    }
+    const allowlist = bootstrapAllowlist(scanGateScope(), compilerVersion, today());
+    writeFileSync(target, serializeAllowlist(allowlist));
+    console.log(`Wrote ${Object.keys(allowlist.files).length} entries to ${args.writeAllowlist}`);
+    return 0;
+  }
+  const allowlistPath = path.resolve(args.check ?? args.ratchet);
+  const allowlist = readAllowlist(allowlistPath);
+  if (allowlist.compilerVersion !== compilerVersion) {
+    console.warn(
+      `WARNING: the allowlist was recorded with babel-plugin-react-compiler ${allowlist.compilerVersion};`
+        + ` the installed compiler is ${compilerVersion}. Counts are compared anyway.`,
+    );
+  }
+  const reports = scanGateScope();
+  const verdict = evaluateAllowlist(reports, allowlist);
+  const blocking = verdict.unlisted.length + verdict.grown.length;
+  if (args.ratchet) {
+    if (blocking > 0) {
+      console.error(formatVerdict({ ...verdict, stale: [] }).join('\n'));
+      console.error(`\nrefusing to ratchet: ${blocking} file(s) unlisted or above their entry; ${args.ratchet} is unchanged`);
+      return 1;
+    }
+    const next = ratchetAllowlist(reports, allowlist, compilerVersion);
+    writeFileSync(allowlistPath, serializeAllowlist(next));
+    for (const line of formatVerdict(verdict)) console.log(line.replace('run --ratchet', 'ratcheted'));
+    console.log(`Ratcheted ${args.ratchet}: ${Object.keys(allowlist.files).length} -> ${Object.keys(next.files).length} entries`);
+    return 0;
+  }
+  const lines = formatVerdict(verdict);
+  const listed = Object.keys(allowlist.files).length;
+  if (lines.length > 0) {
+    console.error(lines.join('\n'));
+    console.error(
+      `\nReact Compiler coverage gate FAILED (${reports.length} files scanned, ${listed} allowlisted):`
+        + ` ${verdict.unlisted.length} unlisted, ${verdict.grown.length} grown, ${verdict.stale.length} stale.`
+        + ' Fix a new bailout in code (see tools/react_compiler_allowlist.mjs); lower an improved entry with --ratchet.',
+    );
+    return 1;
+  }
+  console.log(`React Compiler coverage gate OK: ${reports.length} files scanned, ${listed} allowlisted, no new or grown bailout.`);
+  return 0;
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     console.log(
       'Usage: node tools/react_compiler_coverage.mjs'
-        + ' [--file <repo-relative path>]... [--only-issues] [--include-ts] [--json <path>]',
+        + ' [--file <repo-relative path>]... [--only-issues] [--include-ts] [--json <path>]'
+        + '\n       node tools/react_compiler_coverage.mjs --check <allowlist> | --ratchet <allowlist> | --write-allowlist <new path>',
     );
+    return;
+  }
+  if ([args.check, args.ratchet, args.writeAllowlist].filter(Boolean).length > 1) {
+    throw new Error('--check, --ratchet and --write-allowlist are exclusive');
+  }
+  if (args.check || args.ratchet || args.writeAllowlist) {
+    process.exitCode = runGate(args);
     return;
   }
   const { compilerVersion } = loadToolchain();

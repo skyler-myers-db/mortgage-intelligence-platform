@@ -10,6 +10,8 @@ already masked before API egress.
 from __future__ import annotations
 
 import logging
+import re
+from datetime import UTC
 from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response
@@ -150,6 +152,27 @@ def _safe_audit_write(store: AuditStore, **kwargs: object) -> None:
             exc_type=type(exc).__name__,
             outcome="error",
         )
+
+
+# Characters an ISO-8601 UTC timestamp may carry. Anything else (a CR or LF
+# above all) never reaches a response header.
+_DATA_REFRESHED_AT_SAFE = re.compile(r"[0-9TZ:.+-]+")
+
+
+def _data_refreshed_at_header(leads: list[LeadSummary]) -> str | None:
+    """The newest gold refresh time among the returned rows, as ISO-8601 UTC.
+
+    Audit delivery-08: the Lead Queue stamped its CSV export with a
+    ``refreshed_at`` it fetched through a whole-book portfolio preview on
+    every mount. The rows already carry it, so the list response states it
+    with no extra statement. None when no row has a value.
+    """
+    stamps = [lead.row_refreshed_at for lead in leads if lead.row_refreshed_at is not None]
+    if not stamps:
+        return None
+    latest = max(stamp if stamp.tzinfo else stamp.replace(tzinfo=UTC) for stamp in stamps)
+    value = latest.astimezone(UTC).isoformat().replace("+00:00", "Z")
+    return value if _DATA_REFRESHED_AT_SAFE.fullmatch(value) else None
 
 
 @router.get("/leads", response_model=list[LeadSummary])
@@ -494,6 +517,9 @@ def list_leads(
         raise HTTPException(status_code=503, detail="Lakebase temporarily unavailable") from exc
     response.headers["X-Total-Matching"] = str(total_matching)
     response.headers["X-Returned-Rows"] = str(len(leads))
+    data_refreshed_at = _data_refreshed_at_header(leads)
+    if data_refreshed_at is not None:
+        response.headers["X-Data-Refreshed-At"] = data_refreshed_at
     if cohort_id and cohort_stated_count is not None:
         # What the Genie answer said, next to what this queue actually matched.
         # The queue replays only the reviewed geography/segment subset, so an

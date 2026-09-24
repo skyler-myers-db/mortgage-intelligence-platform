@@ -42,9 +42,11 @@ _APP_RESOURCE_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,127}$")
 
 SAFE_RUNTIME_DEFAULTS = {
     # Databricks Apps deployment env_vars are a full replacement for app.yaml.
-    # Keep this idle-cost control in the deployment payload even when the
-    # operator does not export it, otherwise the runtime falls back to code.
+    # Keep these idle-cost controls in the deployment payload even when the
+    # operator does not export them (empty values are silently dropped, so
+    # the default must be explicit), otherwise the runtime falls back to code.
     "MIP_LEADS_WARM_INTERVAL_S": "0",
+    "MIP_WAREHOUSE_KEEP_WARM": "off",
 }
 
 NON_SECRET_OPERATOR_VARS = (
@@ -65,8 +67,12 @@ NON_SECRET_OPERATOR_VARS = (
     "MIP_EXPOSE_OPENAPI",
     "MIP_CACHE_TTL_S",
     "MIP_LEADS_WARM_INTERVAL_S",
+    "MIP_WAREHOUSE_KEEP_WARM",
+    "MIP_WAREHOUSE_KEEP_WARM_ACTIVITY_WINDOW_MIN",
+    "MIP_ANYIO_THREAD_TOKENS",
     "MIP_SALES_STATE_CACHE_TTL_S",
     "MIP_PORTFOLIO_PREVIEW_TTL_S",
+    "MIP_GOLD_CACHE_MAX_STALE_S",
     "MIP_BACKPRESSURE_ENABLED",
     "MIP_RATE_LIMIT_DEFAULT_PER_MINUTE",
     "MIP_RATE_LIMIT_EXPENSIVE_PER_MINUTE",
@@ -207,6 +213,26 @@ def _previous_secret_grace_configured(dotenv: dict[str, str]) -> tuple[bool, str
     return previous is not None, previous_kid
 
 
+def _validated_keep_warm(dotenv: dict[str, str]) -> None:
+    """Refuse a lead rewarm interval that the keep-warm policy would ignore."""
+
+    raw_interval = _env_value("MIP_LEADS_WARM_INTERVAL_S", dotenv) or "0"
+    try:
+        interval = float(raw_interval)
+    except ValueError as exc:
+        raise ValueError("MIP_LEADS_WARM_INTERVAL_S must be a number of seconds") from exc
+    policy = (
+        _env_value("MIP_WAREHOUSE_KEEP_WARM", dotenv)
+        or SAFE_RUNTIME_DEFAULTS["MIP_WAREHOUSE_KEEP_WARM"]
+    )
+    if interval > 0 and policy != "scheduled":
+        raise ValueError(
+            "MIP_LEADS_WARM_INTERVAL_S > 0 only takes effect with "
+            "MIP_WAREHOUSE_KEEP_WARM=scheduled; set both, or leave the interval at 0 "
+            f"(the configured keep-warm policy is {policy!r})"
+        )
+
+
 def build_payload(
     *,
     source_code_path: str,
@@ -237,6 +263,7 @@ def build_payload(
         "MIP_TENANT_ID": tenant_id,
     }
     previous_secret_enabled, previous_secret_kid = _previous_secret_grace_configured(dotenv)
+    _validated_keep_warm(dotenv)
     if bool(otel_endpoint.strip()) != bool(otel_header_resource.strip()):
         raise ValueError(
             "MIP_OTEL_ENDPOINT and its App secret resource must be configured together"

@@ -182,7 +182,7 @@ export default function AssetRoute() {
               </div>
             </div>
             <div className="surface__body asset-table-wrap">
-              <table className="tbl asset-table">
+              <table className="tbl tbl--static asset-table">
                 <thead>
                   <tr>
                     <th>Column</th>

@@ -377,3 +377,127 @@ The Slice-13 follow-up adds (additive, non-breaking):
 - `log_export` — `"stdout-only"` or `"otlp"`
 
 Any client reading the first seven keys keeps working unchanged.
+
+The 2026-09-21 audit (`delivery-01`) adds one dependency value, additively:
+`dependencies.warehouse` may be `resuming` while the serverless warehouse is
+`STARTING` from auto-stop. The probe reads the warehouse lifecycle state
+(`GET /api/2.0/sql/warehouses/{id}`) instead of running `SELECT 1`;
+`STOPPED`/`STOPPING` read as `up` (available on demand), `DELETING`/`DELETED`
+as `down`, and an unreadable state falls back to `SELECT 1`, which never
+reports `resuming`. `status` is `ok` when every dependency is `up` or
+`resuming`, and an open or half-open breaker still forces `down`. Consumers
+treat any value other than `down` as "not an outage"; readiness checks that
+need the warehouse answering (`tools/wait_app_ready.py`,
+`scripts/smoke_live.sh`) keep waiting for `up`. The wire type stays
+`dict[str, str]`.
+
+The state read has a 2 s HTTP timeout, but building its SDK client resolves
+host metadata with the SDK's default timeouts, so the client is built once in
+the startup warm path (`warehouse_state_client_prime_failed` on failure, type
+only). A probe never waits on a build in flight, a failed build is retried at
+most once a minute, and until a client exists the probe uses `SELECT 1`. If
+the App service principal cannot read the warehouse, every probe logs
+`warehouse_state_read_failed` (WARNING once per 5 minutes, DEBUG in between;
+a good read re-arms it) and falls back to `SELECT 1`; that restores the
+pre-2026-09 behaviour (including the accidental keep-warm), so check for that
+event after the first deploy.
+
+## 6. Server-Timing (per-request attribution)
+
+Every `/api/*` HTTP response carries one `Server-Timing` header
+(2026-09-21 audit `delivery-v3`, server half), emitted by
+`backend/services/server_timing.py`'s pure-ASGI middleware, which sits just
+inside `CorrelationIdMiddleware` so a backpressure 429 still carries it:
+
+```
+Server-Timing: cache;desc=hit|miss|stale, warehouse;dur=<ms>, lakebase;dur=<ms>, total;dur=<ms>
+```
+
+- `cache` — the worst outcome any aggregate cache saw for the request
+  (`miss` > `stale` > `hit`): `TTLCache.get_or_set` (hit / double-check hit,
+  a `stale_if_error` serve, a leader or a follower after waiting) and the gold
+  stale-while-revalidate cache.
+- `warehouse` / `lakebase` — the summed statement durations the request itself
+  ran (`DatabricksSqlClient.execute`, Lakebase statement end / error hooks).
+- `total` — middleware entry to response start. Always present.
+- An entry that was not observed is omitted; `dur` has one decimal.
+- Only these four names, and only enum or numeric values: never an id, a
+  path, a statement hash or an error message. Non-`/api` paths (the SPA shell,
+  `/assets`) carry no header.
+
+Work that runs outside the request (gold-cache background refreshes, the health
+probe executor, keep-warm pings) records nothing: the collector lives in a
+ContextVar set once by the middleware, and executor threads start with an empty
+context. The browser reads the header through
+`PerformanceResourceTiming.serverTiming` (same origin, so no
+`Timing-Allow-Origin` is needed). The client half is w2-error-telemetry's:
+once it lands, `frontend/src/lib/rum.ts` forwards these entries with a
+route-templated path only; until then the header is read in the browser's
+network panel.
+
+## 7. Warehouse keep-warm: cost vs cold start
+
+The SQL warehouse is serverless (`2X-Small`, `auto_stop_mins: 10` in
+`databricks.yml`). Until the 2026-09-21 audit (`delivery-v1`) the health
+poll's `SELECT 1` kept it awake by accident: any visible tab queried it every
+8 s, so it never auto-stopped and only the very first visitor ever paid a cold
+start. Health now reads the warehouse lifecycle state instead (§5), so keeping
+the warehouse warm is an explicit, configured trade-off with one resolver,
+`backend/services/keep_warm.py`:
+
+| `MIP_WAREHOUSE_KEEP_WARM` | What runs | Cost | Cold starts |
+| --- | --- | --- | --- |
+| `off` (default in `app.yaml` and the deploy payload) | Nothing | Warehouse stops 10 min after the last query | The next visitor waits for a serverless resume, typically 2–6 s, shown as a calm amber "Waking Ns" pill (accessible name "Waking warehouse"), not an outage |
+| `activity` | An authenticated `GET /api/v1/health` from a tab with user input in the last `MIP_WAREHOUSE_KEEP_WARM_ACTIVITY_WINDOW_MIN` minutes (default 15) submits at most one `SELECT 1 AS keep_warm` per 240 s, process-wide, fire-and-forget | Runs while someone is actively working, stops 10 min after they stop | Only after a quiet spell |
+| `scheduled` | The lead-page refresh-ahead loop every `MIP_LEADS_WARM_INTERVAL_S` seconds (must be > 0; `scheduled` with 0 resolves to `off` and logs an ERROR) | Never stops while the App runs | None |
+
+Precedence: the policy value alone decides what runs. A positive
+`MIP_LEADS_WARM_INTERVAL_S` under `off` or `activity` is ignored with one
+startup WARNING (`warehouse_keep_warm_interval_ignored`) and never starts a
+second keep-warm; `tools/databricks/app_deploy_payload.py` refuses such a
+payload outright. Startup logs `warehouse_keep_warm_policy` once. The browser
+sends only an integer `idle_s` hint (seconds since the last pointer, key,
+wheel or touch input) on its health poll, which runs only while the tab is
+visible; the anonymous load-balancer branch and `/api/v1/admin/health` never
+ping. A failed ping logs `warehouse_keep_warm_ping_failed` with the exception
+type only.
+
+Assumption, not live-verified: any statement resets the warehouse idle timer
+(standard Databricks SQL behaviour). The 240 s ping interval is pinned well
+inside the 10-minute auto-stop by `tests/unit/test_keep_warm.py`.
+
+## 8. Gold aggregate cache (stale-while-revalidate)
+
+Hot gold aggregates (the portfolio preview and day-zero probe, the geography
+rollups, the analytics tabs, the config options and footprint, the headline
+KPIs) sit behind `backend/services/gold_cache.py` (2026-09-21 audit
+`delivery-06`). Past each site's soft TTL the last value is served at once and
+one background refresh runs on the two-worker `mip-gold-swr` pool; only a
+value older than `MIP_GOLD_CACHE_MAX_STALE_S` (default 86400) is recomputed
+inline. A served-stale payload keeps its own `data_refreshed_at` /
+`snapshot_date`. DEBUG events `gold_cache_hit` / `gold_cache_stale` /
+`gold_cache_miss` and the WARNING `gold_cache_refresh_failed` carry the cache
+key and exception type only; the per-request outcome is the `cache` entry of
+`Server-Timing` (§6).
+
+Values that read the Lakebase lifecycle mirror (`gold.borrower_lifecycle_state`:
+the preview's approved / in-outreach counts, the executive funnel's Approved /
+Actioned stages, the segment approval and outreach rates) never ride the
+long-lived value: their keys carry a workflow generation that moves on every
+approve, reject, assignment and outcome write (`clear_sales_state_cache`) and
+when a warehouse-mode lifecycle sync completes. A sync that runs as the
+Databricks job (`MIP_LIFECYCLE_SYNC_MODE=job`, or the retry job submitted after
+a warehouse-mode failure) finishes outside the App and moves no generation, so
+there those values trail the mirror by at most one soft TTL (default 120 s preview,
+300 s analytics) plus one stale serve. Each move also sweeps the older
+generations of those keys out of every live gold cache (`workflow_key`), so
+a burst of approval writes leaves no dead entries to push live previews out of
+the bounded LRU.
+
+During a sustained warehouse outage, sites built with `stale_if_error` keep
+serving their last good value (up to the `MIP_GOLD_CACHE_MAX_STALE_S` hard
+cap), and every later stale read schedules one more background refresh per key
+(at most one in flight per key on the two-worker pool; the open circuit breaker
+makes each attempt fail fast). A repeated `gold_cache_refresh_failed` WARNING
+for the same key during an outage is that retry, not a new problem; it stops
+once the warehouse is back.

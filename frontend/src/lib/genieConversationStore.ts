@@ -10,10 +10,11 @@ import type { GenieAnswer as GenieAnswerShape } from '../types';
  *
  * Since the 2026-09-21 audit (`runtime-01` / `genie-02`) the floating panel
  * stays mounted while closed, so it no longer re-hydrates on every open. It
- * mirrors this store instead (`useGenieTranscript`) and writes through
+ * reads this store with `useSyncExternalStore`, and every write goes through
  * `appendGenieTurn`, which appends to the CURRENT list rather than replacing
- * it with a private copy — a turn the route settled while a panel turn was
- * in flight is never overwritten.
+ * it with a private copy. Since wave 2 the in-flight turn store
+ * (`lib/genieInFlightTurn.ts`) appends every settled question-and-answer
+ * exchange; the panel appends only governed-action results.
  *
  * Scope decisions:
  *   - `sessionStorage`, not `localStorage`: a transcript is tab-scoped
@@ -23,10 +24,10 @@ import type { GenieAnswer as GenieAnswerShape } from '../types';
  *     is the rendered transcript.
  *   - Capped at MAX_STORED_TURNS so a long booth session cannot grow the
  *     quota unbounded; the OLDEST turns are dropped first.
- *   - Writes happen on turn completion only: the panel keeps the in-flight
- *     question in its own `pendingQuestion` state and appends the turn once
- *     the answer lands, so a reload mid-answer restores the last settled
- *     state rather than a half-rendered bubble.
+ *   - Writes happen on turn completion only: the in-flight turn store keeps
+ *     the pending question and appends the turn once the answer lands, so a
+ *     reload mid-answer restores the last settled state rather than a
+ *     half-rendered bubble.
  *   - The persisted shape is deliberately `{question, response}[]` — the
  *     same shape `GET /api/genie/sessions/{id}` returns — so loading a past
  *     session and restoring local state go through one code path.

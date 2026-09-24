@@ -99,9 +99,30 @@ jobs:
           else
             npm --prefix frontend install --no-audit --no-fund
           fi
+      - name: React Compiler coverage gate
+        # Audit runtime-03. A React Compiler bailout (a CompileError such as
+        # try/finally, a skip, or a 'use no memo' pragma) ships a component
+        # unmemoized with no build or lint signal. This fails on a bailout in
+        # a file tools/react_compiler_allowlist.json does not list, on a count
+        # above its entry, and on a stale entry (lower it with --ratchet).
+        # About 10 s; runs the same compiler options as the production build.
+        run: node tools/react_compiler_coverage.mjs --check tools/react_compiler_allowlist.json
       - run: npm --prefix frontend run lint
       - run: npm --prefix frontend run test
       - run: npm --prefix frontend run build
+      - name: Upload source maps (CI artifact only)
+        # Audit stack-01. The build's hidden source maps are moved OUT of
+        # frontend/dist by a post-build step (w2-build-currency), so the
+        # App's asset route can never serve them; they are kept here, keyed
+        # by commit, to symbolicate a client error report. Never write them
+        # into dist or the App source. `ignore` until that post-build step
+        # is on the tree; the integrator then flips this to `error`.
+        uses: actions/upload-artifact@v7
+        with:
+          name: frontend-sourcemaps-${{ github.sha }}
+          path: frontend/sourcemaps/**
+          if-no-files-found: ignore
+          retention-days: 30
       - run: npm --prefix frontend run budget
 
   bundle-syntax-check:
@@ -331,6 +352,16 @@ jobs:
         env:
           E2E_FIXTURE_WORKERS: '4'
         run: npm --prefix frontend run e2e:fixture:ci
+      - name: Run the perf budget (single worker)
+        # perf-budget.fixture.spec.ts measures timing, so it runs alone on one
+        # worker and only here (MIP_PERF=1; playwright.config.ts ignores it in
+        # every other run). Its artifacts go to test-results/perf and
+        # playwright-report/perf, which the upload below already covers. The
+        # guard drops once w2-build-currency's spec is on the tree.
+        if: hashFiles('frontend/tests/e2e/fixture/perf-budget.fixture.spec.ts') != ''
+        env:
+          MIP_PERF: '1'
+        run: npm --prefix frontend run e2e:fixture:ci -- perf-budget --workers=1
       - name: Upload Playwright report
         # Safe to publish: every borrower, id and draft in this suite is
         # synthetic fixture data. (The live suite in nightly.yml does NOT
@@ -342,6 +373,56 @@ jobs:
           path: |
             frontend/playwright-report
             frontend/test-results
+          if-no-files-found: ignore
+          retention-days: 7
+
+  e2e-visual:
+    # Pixel gate (audit visual-10, quality-02, responsive-v2):
+    # tests/e2e/fixture/visual.fixture.spec.ts compares ~96 toHaveScreenshot
+    # baselines of the production build against the fixture API. Baselines
+    # are amd64-Linux renders, so the job runs INSIDE the pinned Playwright
+    # image (the same literal as the @playwright/test pin in
+    # frontend/package.json); the spec refuses any other host, and only this
+    # job and tools/update_visual_baselines.sh set MIP_VRT=1. Browsers come
+    # from the image: no `playwright install`. No secrets; every PNG is
+    # synthetic fixture data. A lane that changes pixels on purpose
+    # regenerates with tools/update_visual_baselines.sh (docs/testing.md).
+    name: e2e (visual regression, pinned container)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    container:
+      image: mcr.microsoft.com/playwright:v1.59.1-noble
+      options: --ipc=host
+    env:
+      MIP_VRT: '1'
+      MIP_VRT_IMAGE: mcr.microsoft.com/playwright:v1.59.1-noble
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend deps
+        run: npm --prefix frontend ci
+      - name: Build production frontend
+        run: npm --prefix frontend run build
+      - name: Run the visual regression
+        # --retries=0: a pixel diff that passes on a retry is nondeterminism,
+        # and the zero-pixel budget exists to surface it, not absorb it.
+        env:
+          E2E_FIXTURE_WORKERS: '2'
+        run: npm --prefix frontend run e2e:fixture:ci -- visual.fixture --retries=0
+      - name: Upload the visual diff report
+        # The HTML report shows expected / actual / diff per capture; with no
+        # committed baseline it holds the actual PNGs to review and commit.
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-visual-report
+          path: |
+            frontend/playwright-report/vrt
+            frontend/test-results/vrt
           if-no-files-found: ignore
           retention-days: 7
 

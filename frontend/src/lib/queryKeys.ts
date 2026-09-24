@@ -21,6 +21,9 @@ export const queryKeys = {
     ['mip', 'offer', 'recommendation', borrowerId ?? ''] as const,
   outreachDraft: (borrowerId: string | null | undefined, channel: string) =>
     ['mip', 'outreach', 'draft', borrowerId ?? '', channel] as const,
+  /** A county's ZIP rollups for one cohort (the Lead Queue's county scope chip). */
+  geoCountyZipRollups: (countyFips: string, cohort: readonly unknown[]) =>
+    ['mip', 'geo', 'county-zip-rollups', countyFips, ...cohort] as const,
   salesTeam: () => ['mip', 'sales', 'team'] as const,
   salesOps: () => ['mip', 'sales', 'ops-snapshot'] as const,
   portfolioPreview: (criteria: readonly unknown[]) => ['mip', 'portfolio', 'preview', ...criteria] as const,
@@ -40,7 +43,6 @@ export const queryKeys = {
   auditReceipt: (auditEventId: string | null | undefined) =>
     ['mip', 'audit', 'receipt', auditEventId ?? ''] as const,
   genieStart: () => ['mip', 'genie', 'start'] as const,
-  genieAnswer: (criteria: readonly unknown[]) => ['mip', 'genie', 'answer', ...criteria] as const,
   growthAgent: () => ['mip', 'growth-agent'] as const,
   growthAgentCapabilities: () => ['mip', 'growth-agent', 'capabilities'] as const,
 };

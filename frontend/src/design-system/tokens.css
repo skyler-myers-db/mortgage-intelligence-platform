@@ -3,13 +3,105 @@
    Design Tokens — prototype port plus app accessibility extensions
    ============================================================ */
 
-@import '@fontsource/geist/latin-400.css';
-@import '@fontsource/geist/latin-500.css';
-@import '@fontsource/geist/latin-600.css';
-@import '@fontsource/geist/latin-700.css';
-@import '@fontsource/geist-mono/latin-400.css';
-@import '@fontsource/geist-mono/latin-500.css';
-@import '@fontsource/geist-mono/latin-600.css';
+/* ---------- Webfonts (2026-09-21 audit bundle-05 / css-v2) ----------
+ * Geist and Geist Mono ship as ONE variable woff2 each (wght 100-900): the
+ * latin subset of @fontsource-variable/geist and geist-mono 5.3.0 (OFL-1.1).
+ * Any weight the CSS asks for (650, 800) renders as asked instead of snapping
+ * to a static file. The faces are written here rather than imported from the
+ * package CSS so the family names stay the prototype's ('Geist',
+ * 'Geist Mono'; design_files/index.html:42-43), only woff2 ships, and
+ * vite.config.ts's font-preload plugin finds exactly these two files.
+ * unicode-range is copied verbatim from the package's own wght.css latin face.
+ */
+@font-face {
+  font-family: 'Geist';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('@fontsource-variable/geist/files/geist-latin-wght-normal.woff2') format('woff2');
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
+
+@font-face {
+  font-family: 'Geist Mono';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('@fontsource-variable/geist-mono/files/geist-mono-latin-wght-normal.woff2') format('woff2');
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
+
+/* Metric-matched fallbacks: while the webfonts load (font-display: swap),
+ * text paints in a local face scaled to Geist's metrics, so the swap does not
+ * reflow the page. Liberation Sans / Mono are metric twins of Arial / Courier
+ * New (Linux CI). Computed once from the font tables:
+ *   Geist 5.3.0 (wght default 400): unitsPerEm 1000, hhea ascender 1005,
+ *     descender -295, lineGap 0; English-letter-frequency-weighted average
+ *     advance (a-z + space) 465.42 = 0.46542 em.
+ *   Arial: unitsPerEm 2048, same weighted average advance 903.45 = 0.44114 em.
+ *   size-adjust = 0.46542 / 0.44114 = 105.50%; ascent-override =
+ *     1.005 / 1.0550 = 95.26%; descent-override = 0.295 / 1.0550 = 27.96%.
+ *   Geist Mono 5.3.0: unitsPerEm 1000, same hhea; every advance 600 = 0.6 em.
+ *   Courier New: unitsPerEm 2048, advance 1229 = 0.60010 em.
+ *   size-adjust = 0.6 / 0.6001 = 99.98%; ascent-override = 1.005 / 0.9998 =
+ *     100.52%; descent-override = 0.295 / 0.9998 = 29.50%.
+ * Bold (600-900) gets a real local bold face, not a bold synthesized from the
+ * regular one (which set the e2e sample 4.6% narrower than Geist 700). Same
+ * weighted average, per-glyph advances at each wght instance:
+ *   Geist wght 600 0.48594 em, 650 0.49106 em, 700 0.49619 em; Arial Bold
+ *     0.47693 em. Matched at 650, the middle of the 600-700 range the partials
+ *     set bold text in, so 600 and 700 each land ~1% off:
+ *   size-adjust = 0.49106 / 0.47693 = 102.96%; ascent-override = 1.005 /
+ *     1.0296 = 97.61%; descent-override = 0.295 / 1.0296 = 28.65% (the same
+ *     line box as the regular face).
+ *   Geist Mono keeps 0.6 em at every weight and Courier New Bold keeps 1229
+ *     units, so the mono bold face repeats the regular overrides.
+ * Each fallback carries its webfont's latin unicode-range, so it only stands
+ * in for glyphs Geist will replace; a glyph outside it (the → ≥ Δ ▲ ▼ the UI
+ * prints) skips both faces and keeps the system face, instead of rendering
+ * in Arial scaled 105.5% or in Courier New.
+ */
+@font-face {
+  font-family: 'Geist Fallback';
+  src: local('Arial'), local('Liberation Sans');
+  size-adjust: 105.5%;
+  ascent-override: 95.26%;
+  descent-override: 27.96%;
+  line-gap-override: 0%;
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
+
+@font-face {
+  font-family: 'Geist Fallback';
+  font-weight: 600 900;
+  src: local('Arial Bold'), local('Liberation Sans Bold');
+  size-adjust: 102.96%;
+  ascent-override: 97.61%;
+  descent-override: 28.65%;
+  line-gap-override: 0%;
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
+
+@font-face {
+  font-family: 'Geist Mono Fallback';
+  src: local('Courier New'), local('Liberation Mono');
+  size-adjust: 99.98%;
+  ascent-override: 100.52%;
+  descent-override: 29.5%;
+  line-gap-override: 0%;
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
+
+@font-face {
+  font-family: 'Geist Mono Fallback';
+  font-weight: 600 900;
+  src: local('Courier New Bold'), local('Liberation Mono Bold');
+  size-adjust: 99.98%;
+  ascent-override: 100.52%;
+  descent-override: 29.5%;
+  line-gap-override: 0%;
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
 
 :root {
   /* ---------- Brand (Entrada AI) ---------- */
@@ -57,8 +149,8 @@
   --seg-permit-activity:  #C4B5FD;  /* Permit Activity (gated) — light violet */
 
   /* ---------- Typography ---------- */
-  --font-sans: 'Geist', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --font-mono: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  --font-sans: 'Geist', 'Geist Fallback', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'Geist Mono', 'Geist Mono Fallback', ui-monospace, 'SF Mono', Menlo, monospace;
 
   --fs-11: 11px;
   --fs-12: 12px;
@@ -585,4 +677,54 @@ input[type="checkbox"] {
  */
 :root {
   --z-topbar-menu: 55;
+}
+
+/* ---------- Motion scale (motion-04) ----------
+ * The loop, shimmer, stagger and in-out literals the partials repeated
+ * (2026-09-21 audit motion-04), on tokens so a timing change is one edit and
+ * tokenUsage.test.ts can forbid numeric durations and bare easing keywords in
+ * component CSS. The values are the literals they replace, so nothing runs
+ * faster or slower. --ease-in-out is the ease-in-out keyword's own curve.
+ * --ease (enter) and --ease-exit (leave) carry the out / in roles; there is no
+ * separate --ease-out / --ease-in until a consumer needs one.
+ */
+:root {
+  --dur-instant: 80ms;       /* sparkline draw delay; half of it leads the Sankey stagger */
+  --dur-pulse: 1.2s;         /* loading, typing and progress pulses */
+  --dur-shimmer: 1.4s;       /* skeleton sweep */
+  --dur-pulse-slow: 1.6s;    /* degraded-banner dot */
+  --ease-in-out: cubic-bezier(0.42, 0, 0.58, 1);
+  --stagger-step: 16ms;      /* ZIP tile settle-in */
+  --stagger-step-lg: 70ms;   /* funnel Sankey ribbons */
+}
+
+/* ---------- Contrast modes (css-06 / a11y-10 / responsive-v3) ----------
+ * Forced colors (Windows High Contrast): every ring reads --focus-ring-color,
+ * so one token paints them all in the system Highlight (the component side
+ * is components/33-contrast-modes.css).
+ * prefers-contrast: more raises the tertiary / disabled inks and the hairline
+ * rules per theme, and thickens the ring: --text-3 >= 7:1 and --text-4
+ * >= 4.5:1 on --bg-0..3, --line-2 / --line-3 >= 3:1 on --bg-1 / --bg-2 (the
+ * inks reuse the next step of each theme's own ramp, --text-2 / --text-3).
+ * Additive: the default light and dark values above stay prototype-verbatim.
+ */
+@media (forced-colors: active) {
+  :root { --focus-ring-color: Highlight; }
+}
+@media (prefers-contrast: more) {
+  :root, [data-theme="dark"] {
+    --text-3: #BACBD8;
+    --text-4: #93AABD;
+    --line-1: rgba(178,189,194,0.30);
+    --line-2: rgba(178,189,194,0.60);
+    --line-3: rgba(102,197,255,0.60);
+  }
+  [data-theme="light"] {
+    --text-3: #254A66;
+    --text-4: #34536B;
+    --line-1: rgba(2,80,128,0.30);
+    --line-2: rgba(2,80,128,0.60);
+    --line-3: rgba(2,80,128,0.72);
+  }
+  :root { --focus-ring-width: 3px; }
 }

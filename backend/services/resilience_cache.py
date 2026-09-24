@@ -26,6 +26,7 @@ from threading import Event, Lock
 from typing import Any
 
 from backend.services.observability import emit
+from backend.services.server_timing import record_cache
 
 log = logging.getLogger(__name__)
 
@@ -103,6 +104,7 @@ class TTLCache:
     ) -> Any:
         cached = self.get(key)
         if cached is not None:
+            record_cache("hit")
             return cached
 
         leader = False
@@ -113,6 +115,7 @@ class TTLCache:
                 self._entries.move_to_end(key)
                 if self._now() < expires_at:
                     self._emit_cache_event("ttl_cache_hit", key, reason="double_check")
+                    record_cache("hit")
                     return value
             event = self._inflight.get(key)
             if event is None:
@@ -125,11 +128,13 @@ class TTLCache:
             if event.wait(timeout=wait_timeout_s):
                 cached = self.get(key)
                 if cached is not None:
+                    record_cache("miss")
                     return cached
                 if stale_if_error:
                     stale = self.get_stale(key)
                     if stale is not None:
                         self._emit_cache_event("ttl_cache_stale_hit", key, reason="leader_failed")
+                        record_cache("stale")
                         return stale
             # The leader timed out or failed without a stale value.
             # Compute rather than returning a false empty state.
@@ -142,10 +147,13 @@ class TTLCache:
                 stale = self.get_stale(key)
                 if stale is not None:
                     self._emit_cache_event("ttl_cache_stale_hit", key, reason="factory_error")
+                    record_cache("stale")
                     return stale
+            record_cache("miss")
             raise
         else:
             self.set(key, value, ttl_s)
+            record_cache("miss")
             return value
         finally:
             if leader:

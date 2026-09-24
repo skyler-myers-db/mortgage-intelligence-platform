@@ -16,11 +16,32 @@ import type {
   GenieRefusalReason,
 } from '../types';
 
+/**
+ * One dependency's state on the health body (audit delivery-01). `resuming`
+ * is the serverless warehouse starting from auto-stop (its lifecycle state is
+ * STARTING): not an outage. Only `down` is an outage.
+ */
+export type DependencyState = 'up' | 'down' | 'resuming';
+
+/**
+ * What the shell tells `/api/health` about the tab (audit delivery-v1):
+ * whole seconds since the last pointer, key, wheel or touch input. It feeds
+ * the server's `activity` keep-warm policy and carries nothing else.
+ */
+export interface HealthHint {
+  idleS?: number;
+}
+
 export interface HealthPayload {
   status: string;
   mode: string;
   warehouse_id?: string | null;
   app_env?: string;
+  /**
+   * `warehouse` / `lakebase` / `genie` -> a `DependencyState`. Plain strings
+   * on purpose, like the backend's `dict[str, str]`: an unknown value must
+   * never break the shell, so compare against `DependencyState` values.
+   */
   dependencies?: Record<string, string>;
   circuit_breakers?: Record<string, string>;
   actor_cache_key?: string | null;

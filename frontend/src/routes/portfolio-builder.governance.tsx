@@ -5,7 +5,8 @@ import { Icon } from '../components/Icon';
 import { Button } from '../components/Primitives';
 import { api } from '../lib/api';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
-import { parseBackendTimestamp } from '../lib/time';
+import { formatCount } from '../lib/formatters';
+import { formatDate, parseBackendTimestamp } from '../lib/time';
 import type { CampaignSummary, PortfolioPreview } from '../types';
 import {
   campaignCriteriaSummary,
@@ -25,9 +26,7 @@ type CampaignArchiveFeedback = {
 
 function formatSavedCampaignDate(iso: string | null): string | null {
   const parsed = parseBackendTimestamp(iso);
-  return parsed
-    ? parsed.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
-    : null;
+  return parsed ? formatDate(parsed, { withYear: false }) : null;
 }
 
 export function CampaignBuildGuard({ preview }: { preview: PortfolioPreview }) {
@@ -55,20 +54,20 @@ export function CampaignBuildGuard({ preview }: { preview: PortfolioPreview }) {
         <div className="approval__sub">
           {eligible ? (
             <>
-              Server treatment preflight: {contactCount?.toLocaleString() ?? 'verified'} of{' '}
-              {limit.toLocaleString()} maximum saved treatment contacts after suppression,
+              Server treatment preflight: {typeof contactCount === 'number' ? formatCount(contactCount) : 'verified'} of{' '}
+              {formatCount(limit)} maximum saved treatment contacts after suppression,
               frequency-cap, and household-primary selection.
             </>
           ) : overLimit ? (
             <>
-              This treatment preflight contains {contactCount.toLocaleString()} contacts,
-              above the governed {limit.toLocaleString()}-contact treatment limit. Narrow
+              This treatment preflight contains {formatCount(contactCount)} contacts,
+              above the governed {formatCount(limit)}-contact treatment limit. Narrow
               geography, relationship, product, equity, or other filters, then run the build again.
             </>
           ) : (
             <>
               The server did not verify campaign-build eligibility for the governed{' '}
-              {limit.toLocaleString()}-contact limit. Run the build again before saving.
+              {formatCount(limit)}-contact limit. Run the build again before saving.
             </>
           )}
         </div>
@@ -165,7 +164,7 @@ export function SavedCampaignsPanel({
         ) : (
           <div className="saved-workspace">
             <div className="saved-workspace__summary">
-              <span>{campaigns.length.toLocaleString()} saved</span>
+              <span>{formatCount(campaigns.length)} saved</span>
               <span>eligible-only policy required before approval</span>
             </div>
             {groupSavedCampaigns(campaigns).slice(0, 8).map((row) => {
@@ -206,7 +205,7 @@ export function SavedCampaignsPanel({
                         {householdEnabled && (
                           <>
                             <span className="chip chip--warning">
-                              {suppressedCount.toLocaleString()} co-owner
+                              {formatCount(suppressedCount)} co-owner
                               {suppressedCount === 1 ? '' : 's'} suppressed
                             </span>
                             <button

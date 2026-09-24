@@ -126,7 +126,8 @@ test.describe('an ended session (the proxy answers 401 {})', () => {
 
     await expect.poll(() => mockApi.inflight === 0 && mockApi.idleMs >= 300).toBe(true);
     const atOpen = mockApi.calls.length;
-    expect(mockApi.calls.slice(before).map(key), 'only the poll met the 401').toEqual(['GET /api/health']);
+    // The poll carries the keep-warm idle hint (delivery-v1); Date is frozen here, so it reads 0.
+    expect(mockApi.calls.slice(before).map(key), 'only the poll met the 401').toEqual(['GET /api/health?idle_s=0']);
     await page.clock.runFor(QUIET_WINDOW_MS);
     expect(mockApi.calls.length, 'the poll stops for good once the session ended').toBe(atOpen);
   });
@@ -147,7 +148,7 @@ test.describe('an ended session (the proxy answers 401 {})', () => {
     // The poll's own request came back as an opaque redirect (it could be a
     // trailing-slash 307), so ONE manual-redirect probe decided it.
     expect(mockApi.calls.slice(before).map((call) => `${key(call)} ${call.status}`)).toEqual([
-      'GET /api/health 302',
+      'GET /api/health?idle_s=0 302',
       'GET /api/health 302',
     ]);
     const atOpen = mockApi.calls.length;
@@ -415,18 +416,20 @@ test.describe('skeletons shaped like what they stand in for (states-10)', () => 
     expect(reserved.height).toBeLessThan(loaded.height * 1.4);
   });
 
-  test('a route whose chunk is still loading shows the page-shaped fallback with its panel reserved', async ({ app, page }) => {
-    await app.gotoRoute('/');
+  test('a route whose chunk is still loading shows the page-shaped fallback with its panel reserved', async ({ page }) => {
     let release: () => void = () => undefined;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    // Hold the Glossary route chunk (it is not among the idle-preloaded routes).
+    // Hold the Glossary route chunk on a COLD load: the first render of a
+    // route still shows the fallback. (An in-app navigation to an unloaded
+    // chunk now holds the painted page instead, wave 2 shell-05; that is
+    // error-telemetry.fixture.spec.ts case D.)
     await page.route(/\/assets\/glossary-[^/]+\.js$/, async (route) => {
       await gate;
       await route.continue();
     });
-    await navLink(page, 'Glossary').click();
+    await page.goto('/glossary', { waitUntil: 'domcontentloaded' });
 
     const fallback = page.locator('.route-transition > [data-route-fallback]');
     await expect(fallback).toHaveCount(1);

@@ -1,5 +1,6 @@
 import { Component, type ReactNode } from 'react';
 import { classifyClientError } from '../lib/chunkLoadError';
+import type { ClientErrorBoundary } from '../lib/rumBridge';
 import { ErrorSurface, type ErrorSurfaceVariant } from './ErrorBoundaryFallback';
 
 /**
@@ -7,9 +8,13 @@ import { ErrorSurface, type ErrorSurfaceVariant } from './ErrorBoundaryFallback'
  * unmounting the React root to a white page (2026-09-21 audit: stack-01,
  * shell-01, states-01, quality-01, bundle-01).
  *
- * Two are mounted: `boundary="root"` around the whole provider tree in
- * main.tsx, and `boundary="route"` around the route Suspense in app.tsx so a
- * broken route leaves the rail, topbar, Console and Genie usable.
+ * Five are mounted: `boundary="root"` around the whole provider tree in
+ * main.tsx, `boundary="route"` around the route Suspense in app.tsx so a
+ * broken route leaves the rail, topbar, Console and Genie usable, and the
+ * three panel boundaries in layout/ShellPanelBoundaries (`console`, `drawer`,
+ * `genie`) so a broken panel leaves the route and the other panels mounted.
+ * A panel boundary passes `frame`, which renders the surface inside the
+ * healthy panel's own frame element (its header and Close stay usable).
  *
  * Recovery differs by failure kind:
  *   - chunk  : Reload only. React.lazy caches the rejected import, so
@@ -27,8 +32,8 @@ import { ErrorSurface, type ErrorSurfaceVariant } from './ErrorBoundaryFallback'
  */
 
 interface ErrorBoundaryProps {
-  /** Stable id for the client error log, e.g. `root` or `route`. */
-  boundary: string;
+  /** Stable id for the client error log; one of the closed telemetry set. */
+  boundary: ClientErrorBoundary;
   /** A change clears a caught error. The route boundary passes the pathname. */
   resetKey?: string;
   /** Product name of the failed area, shown in the copy. Never a raw path. */
@@ -39,6 +44,8 @@ interface ErrorBoundaryProps {
   onReload?: () => void;
   /** Runs on Try again, before the boundary clears and re-renders its children. */
   onRetry?: () => void;
+  /** Wraps the recovery surface, e.g. in a panel's own frame. Default: none. */
+  frame?: (surface: ReactNode) => ReactNode;
   children: ReactNode;
 }
 
@@ -79,7 +86,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
   render() {
     if (!this.state.hasError) return this.props.children;
-    return (
+    const surface = (
       <ErrorSurface
         kind={classifyClientError(this.state.error)}
         boundary={this.props.boundary}
@@ -89,5 +96,6 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
         onReload={this.reload}
       />
     );
+    return this.props.frame ? this.props.frame(surface) : surface;
   }
 }

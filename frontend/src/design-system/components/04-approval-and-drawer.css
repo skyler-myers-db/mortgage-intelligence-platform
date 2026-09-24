@@ -450,7 +450,7 @@
   width: 6px; height: 6px; border-radius: 50%;
   background: var(--signal-warning); box-shadow: 0 0 8px var(--signal-warning);
   margin-right: var(--sp-2);
-  animation: mip-degraded-pulse 1.6s ease-in-out infinite;
+  animation: mip-degraded-pulse var(--dur-pulse-slow) var(--ease-in-out) infinite;
 }
 @keyframes mip-degraded-pulse {
   0%, 100% { opacity: 1; }

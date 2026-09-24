@@ -71,7 +71,16 @@ describe('isRecoverableQueryError', () => {
 });
 
 describe('recoveredDependencies', () => {
-  const state = (filtered: 'up' | 'down' | 'unknown') => ({ filtered });
+  const state = (filtered: 'up' | 'down' | 'resuming' | 'unknown') => ({ filtered });
+
+  it('counts a finished resume (resuming → up) as a recovery', () => {
+    expect(
+      recoveredDependencies({ warehouse: state('resuming') }, { warehouse: state('up') }, undefined, undefined),
+    ).toEqual(['warehouse']);
+    expect(
+      recoveredDependencies({ warehouse: state('up') }, { warehouse: state('resuming') }, undefined, undefined),
+    ).toEqual([]);
+  });
 
   it('reports only the down → up edge', () => {
     expect(
@@ -224,6 +233,38 @@ describe('HealthProvider refetches failed panels when their dependency recovers'
     expect(leads).toHaveBeenCalledTimes(1);
     await advance(6000); // window elapsed: the banner clears and panels reload
     await advance(50);
+    expect(leads).toHaveBeenCalledTimes(2);
+    expect(panelText('leads')).toBe('leads loaded');
+  });
+
+  it('re-fires a warehouse 503 when a resume finishes (resuming → up), with no debounce', async () => {
+    let warehouse: 'resuming' | 'up' = 'resuming';
+    const fetchHealth = vi.fn(async (): Promise<HealthPayload> => ({
+      status: 'ok',
+      mode: 'live',
+      dependencies: { warehouse, lakebase: 'up', genie: 'up' },
+    }));
+    const leads = vi.fn(async () => {
+      if (warehouse !== 'up') throw dependencyDown('warehouse');
+      return 'leads loaded';
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <HealthProvider pollIntervalDegradedMs={3000} debounceUpMs={5000} fetchHealth={fetchHealth}>
+            <Panel name="leads" queryFn={leads} />
+          </HealthProvider>
+        </QueryClientProvider>,
+      );
+    });
+    await advance(0);
+    expect(panelText('leads')).toBe('error');
+
+    warehouse = 'up';
+    await advance(3000); // resuming polls at the fast cadence
+    await advance(50);
+
     expect(leads).toHaveBeenCalledTimes(2);
     expect(panelText('leads')).toBe('leads loaded');
   });

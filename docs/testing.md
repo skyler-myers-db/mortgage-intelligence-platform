@@ -63,6 +63,9 @@ npm --prefix frontend run e2e:fixture:ci                     # CI posture: forbi
 | `E2E_FIXTURE_PORT` | `4273` | Port for `vite preview` (`--strictPort`, never reused). Give each parallel agent or job its own port; a busy port fails the run instead of attaching to someone else's build. |
 | `E2E_FIXTURE_WORKERS` | `4` | Playwright workers. Lower it on a loaded machine. |
 | `E2E_FIXTURE_NESTED=1` | unset | Internal to `runner.fixture.spec.ts`, which spawns a nested run that collects only `fixture/nested/*.nested.ts` (tests that fail on purpose) and starts no web server. Never set it by hand. |
+| `MIP_VRT=1` | unset | Collects `visual.fixture.spec.ts` (every other fixture run ignores it) and writes artifacts to `test-results/vrt` and `playwright-report/vrt`. Only the `e2e-visual` CI job and `tools/update_visual_baselines.sh` set it; see "Visual regression". |
+| `MIP_VRT_IMAGE` | unset | The Playwright image the run is inside. The VRT refuses to capture unless it is `mcr.microsoft.com/playwright:v<installed @playwright/test>-noble` on linux/x64. |
+| `MIP_PERF=1` | unset | Collects `perf-budget.fixture.spec.ts` (w2-build-currency) and writes to `test-results/perf` and `playwright-report/perf`. Only the single-worker "Run the perf budget" step of the `e2e-fixture` CI job sets it. |
 
 Fixture pages run at 1440x900, `prefers-reduced-motion: reduce`, locale `en-US`, timezone `America/New_York`, with `Date` frozen at `2026-07-14T15:00:00Z` (`test.use({ fixtureNow: null })` restores the real clock). Rebuild after changing anything under `frontend/src`; the harness never rebuilds for you.
 
@@ -77,7 +80,7 @@ import { expect, test } from './test';   // never '@playwright/test' directly
 
 test('lead queue shows the ranked borrowers', async ({ app, page }) => {
   await app.setTheme('light');          // app's own mip.theme key + prefers-color-scheme
-  await app.gotoRoute('/lead-queue');   // waits for h1, no aria-busy in <main>, API quiet, fonts
+  await app.gotoRoute('/lead-queue');   // waits for the URL's route to be painted (data-route-path), h1, no aria-busy in <main>, API quiet, fonts
   await expect(page.locator('table.tbl tbody tr').first()).toBeVisible();
 });
 ```
@@ -134,6 +137,58 @@ app.degrade(/^\/api\/analytics\//, { status: 500, body: { detail: 'boom' } });
 
 The browser's "Failed to load resource" line for a degraded call is allowed automatically; anything else the degraded UI logs still fails the test.
 
-### Out of scope for now
+### Visual regression (pixel baselines)
 
-Pixel baselines (`toHaveScreenshot`) need Linux baselines from a pinned container and arrive in a later wave. Fixtures are typed against the frontend's hand-written types, not yet validated against the backend's OpenAPI baseline; that follows the type-codegen work, because the two are known to have drifted.
+`fixture/visual.fixture.spec.ts` compares `toHaveScreenshot` baselines of the production build against the fixture API: every route in both themes, the nine `product: true` routes of `routes.ts` with the Console open, the shell states (evidence drawer, command palette, Genie panel, degraded, expanded row, empty queue), the second `.main` page of Home, Borrower 360 and the Offer detail, compact density, 1280x720, and teal / navy / red specimens of a KPI and the map legend. About 96 PNGs live in `fixture/visual.fixture.spec.ts-snapshots/`.
+
+Baselines are **amd64-Linux renders from the pinned Playwright image** (`mcr.microsoft.com/playwright:v<@playwright/test pin>-noble`). The spec runs only with `MIP_VRT=1`, and every test fails before capturing unless `MIP_VRT_IMAGE` names that image and the host is linux/x64, so a macOS or arm64 run can never write or compare a baseline. The defaults are strict: `animations: 'disabled'`, `caret: 'hide'`, `scale: 'css'`, `threshold: 0.2` and `maxDiffPixels: 0` (a ratio such as 0.002 is about 2,600 px at 1440x900, enough to hide a changed word). Nothing is masked by default: the clock is frozen, motion is reduced, fonts are self-hosted and there is no canvas. A region is masked only when a double run proves it unstable, with a comment naming the cause; today that is the map legend caption (a `backdrop-filter` layer whose caption lands 0.016px past a pixel boundary). The `e2e-visual` CI job runs the spec inside the image with `--retries=0`; on failure it uploads the HTML diff report (expected / actual / diff per capture).
+
+Regenerate or compare with the script; never by hand and never outside the container:
+
+```bash
+bash tools/update_visual_baselines.sh           # regenerate every baseline
+bash tools/update_visual_baselines.sh --check   # compare only; exit 1 on a diff
+```
+
+It runs `docker run --platform linux/amd64` on the image of the exact `@playwright/test` pin (on Apple Silicon, `colima start --arch x86_64` or `--vm-type vz --vz-rosetta`; emulation is 3-5x slower). It never bind-mounts the repo: the working tree (tracked plus untracked, non-ignored files, uncommitted edits included) is streamed in with `tar`, and only an empty temporary directory is mounted for the results, so a container `npm ci` can never touch your `node_modules`. Update mode empties the snapshots directory first, so orphans disappear, then prints the short status of that directory; on a failure the diff report lands in `frontend/playwright-report/vrt`.
+
+The flow for a change that moves pixels on purpose: run the script, review every changed PNG (the report or an image diff), run it again to confirm the result is deterministic (the snapshots directory stays unchanged), and commit the PNGs with the change that caused them. **A PNG merge conflict is resolved only by regenerating on the merged tree**, never by picking a side.
+
+### axe gate
+
+`fixture/axe.ts` is the one axe helper, shared by the PR matrix (`axe.fixture.spec.ts`) and the live scan (`tests/e2e/accessibility.spec.ts`):
+
+```ts
+await expectAxeClean(page, { key: { route: 'home', state: 'default' }, theme, accent, known: KNOWN_VIOLATIONS });
+```
+
+One analyze runs the WCAG 2.0/2.1/2.2 A and AA tags plus `best-practice`. A rule with any WCAG tag gates at every impact, minor included; a best-practice-only rule is advisory: it is attached as `axe-best-practice.json` with one annotation and never fails. Nothing is excluded and no rule is disabled. The matrix scans the default state of every `routes.ts` route in both themes, the evidence drawer, command palette and Genie panel on the five core routes, the filter menu and an expanded row on Lead Queue, the degraded Home, and the teal / navy / red accents (`app.setAccent`) on Home, Lead Queue and Borrower 360.
+
+`KNOWN_VIOLATIONS` is a ratchet keyed `route|state|rule`: each entry names the finding that owns the fix, the date, the themes and accents it reproduces in (accents default to `['bright']`) and a selector every violating node must match. An entry that stops reproducing fails as stale, so a fix retires its entry in the same change, and a key that names no scanned state fails the spec at load. Record a new violation only node-pinned and under a register id (or a new slug named in the commit); never add an exclusion. The live spec uses the same helper with an empty `LIVE_KNOWN_VIOLATIONS`, so it takes the same tags and fails on moderate and minor findings too.
+
+### Surface overflow and audited reads
+
+`fixture/visual.ts` also holds two guards the VRT and axe specs apply to every state they enter:
+
+- `expectNoSurfaceOverflow(page, { route, state, theme })`: no `.surface` may have `scrollWidth > clientWidth`. Declared inner scrollers such as `.tbl-wrap` are `overflow: auto` children and do not trip it. Pre-existing overflow sits in the dated, finding-pinned, node-pinned `KNOWN_SURFACE_OVERFLOW` ratchet; stale entries fail. `smoke.fixture.spec.ts` runs it on every route and theme, so it gates every PR, not only the VRT.
+- The audited-read guard (`markNaturalLoad` / `expectNoAuditedReadSince`): reads that write an audit row (`GET /api/v1/leads`, `GET /api/v1/borrowers/:id`, `GET /api/v1/borrowers/:id/proof`, `POST /api/v1/outreach/draft`, `POST /api/v1/offers/recommend`, `POST /api/v1/lookup/property-loan`) may happen only in a route's natural load (the Offer Orchestrator detail route loads recommend and draft by design). No state a spec enters afterwards (a drawer, a scroll, the Console) may call one.
+
+`safety-net.fixture.spec.ts` proves these helpers, the accent and density seeding, and the VRT host guard.
+
+### Perf budget
+
+`perf-budget.fixture.spec.ts` measures timing, so it runs only in its own single-worker step of the `e2e-fixture` job (`MIP_PERF=1`, `--workers=1`) and is ignored by every other run.
+
+### React Compiler coverage gate
+
+The production build compiles components with React Compiler 1.0, which silently ships a function unmemoized when it bails out (try/finally, a `throw` inside try/catch, a value block inside try/catch, a `'use no memo'` pragma). The `frontend-tests` CI job runs:
+
+```bash
+node tools/react_compiler_coverage.mjs --check tools/react_compiler_allowlist.json
+```
+
+It scans every `.tsx` and `.ts` file under `frontend/src` with the build's compiler options and fails on a bailout in a file the allowlist does not list, on a count above its entry, or on a stale entry (the file is gone, or it improved). Each entry records the counts, the owning finding, an owner and a date. When you fix a bailout, lower its entry in the same change with `--ratchet`, which only ever lowers counts and refuses while anything is unlisted or grown. **Never loosen the allowlist to go green**: fix a new bailout in code (hoist the value block, move the try/finally into a helper). A manual addition needs a finding id and a reviewer sign-off in the commit body. `--write-allowlist <path>` exists only to bootstrap a new list and refuses to overwrite one.
+
+### Contract validation
+
+Fixtures are typed against the frontend's hand-written types, not yet validated against the backend's OpenAPI baseline; that follows the type-codegen work, because the two are known to have drifted.

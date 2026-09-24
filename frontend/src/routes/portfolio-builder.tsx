@@ -25,6 +25,8 @@ import { useFootprint } from '../components/FootprintProvider';
 import { useUnsavedGuard } from '../hooks/useUnsavedGuard';
 import { queryKeys } from '../lib/queryKeys';
 import { toast } from '../lib/toast';
+import { formatCount } from '../lib/formatters';
+import { formatDateTimeShort } from '../lib/time';
 import { RoiProjector, StateMultiSelect } from './portfolio-builder.components';
 import { CampaignSetupPanel } from './portfolio-builder.campaign-setup';
 import { CampaignBuildGuard, SavedCampaignsPanel } from './portfolio-builder.governance';
@@ -312,7 +314,7 @@ export default function PortfolioBuilder() {
   const onOpenSavePanel = useCallback(() => {
     if (buildDirty || buildInFlight || preview?.campaign_build_eligible !== true) return;
     saveRequestRef.current = null;
-    setSaveName(`Portfolio build ${new Date().toLocaleString()}`);
+    setSaveName(`Portfolio build ${formatDateTimeShort(new Date())}`);
     setSaveValidationError(null);
     setSaveFailed(false);
     setSavePanelOpen(true);
@@ -324,7 +326,7 @@ export default function PortfolioBuilder() {
     if (!name || saving || buildInFlight) return;
     if (preview?.campaign_build_eligible !== true) {
       setSaveValidationError(
-        `This build is not eligible for the governed ${campaignBuildLimit.toLocaleString()}-contact campaign limit. Refine the filters and run it again.`,
+        `This build is not eligible for the governed ${formatCount(campaignBuildLimit)}-contact campaign limit. Refine the filters and run it again.`,
       );
       setSaveFailed(true);
       return;
@@ -734,7 +736,7 @@ export default function PortfolioBuilder() {
         <div className="lead-cta">
           <div className="lead-cta__body">
             <div className="lead-cta__title">
-              {preview.high_intent_leads.toLocaleString()} borrower
+              {formatCount(preview.high_intent_leads)} borrower
               {preview.high_intent_leads === 1 ? '' : 's'} pass the refinance-economics screen for the current filters.
             </div>
             <div className="lead-cta__sub">

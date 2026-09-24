@@ -18,7 +18,16 @@ class HealthResponse(BaseModel):
     git_sha: str | None = None
     deployment_lease_id: str | None = None
     agent_gateway_binding_sha256: str | None = None
-    dependencies: dict[str, str] = Field(default_factory=dict)
+    # A plain dict on the wire on purpose: a Literal value type would turn any
+    # stray probe value into a 500 on /health (audit delivery-01).
+    dependencies: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Per-dependency state (warehouse, lakebase, genie): up | down | resuming. "
+            "'resuming' (warehouse only) means the serverless warehouse is starting "
+            "from auto-stop; consumers treat any value other than 'down' as not an outage."
+        ),
+    )
     circuit_breakers: dict[str, str] = Field(default_factory=dict)
     actor_cache_key: str | None = None
     # Validated workspace origin for Catalog Explorer deep links from cited

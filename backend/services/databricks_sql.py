@@ -36,6 +36,7 @@ from threading import Lock
 from typing import Any
 
 from backend.services.observability import emit
+from backend.services.server_timing import record_dependency
 
 _log = logging.getLogger("mip.databricks_sql")
 _MAX_STATEMENT_WAIT_TIMEOUT_S = 50
@@ -140,13 +141,15 @@ class DatabricksSqlClient:
         try:
             resp = self._post(f"{self._host}/api/2.0/sql/statements/", body)
         except Exception as exc:
+            duration_ms = round((time.monotonic() - start) * 1000.0, 2)
+            record_dependency("warehouse", duration_ms)
             emit(
                 _log,
                 "warehouse_query_error",
                 level=logging.WARNING,
                 dependency="warehouse",
                 statement_hash=stmt_hash,
-                duration_ms=round((time.monotonic() - start) * 1000.0, 2),
+                duration_ms=duration_ms,
                 outcome="error",
                 exc_type=type(exc).__name__,
                 exc_msg=str(exc)[:500],
@@ -158,13 +161,15 @@ class DatabricksSqlClient:
         statement_id = resp.get("statement_id")
         if state != "SUCCEEDED":
             err_msg = (status.get("error") or {}).get("message", "no error message returned")
+            duration_ms = round((time.monotonic() - start) * 1000.0, 2)
+            record_dependency("warehouse", duration_ms)
             emit(
                 _log,
                 "warehouse_query_error",
                 level=logging.WARNING,
                 dependency="warehouse",
                 statement_hash=stmt_hash,
-                duration_ms=round((time.monotonic() - start) * 1000.0, 2),
+                duration_ms=duration_ms,
                 outcome="error",
                 state=state,
                 statement_id=statement_id,
@@ -192,12 +197,14 @@ class DatabricksSqlClient:
                     for i in range(len(column_names))
                 }
             )
+        duration_ms = round((time.monotonic() - start) * 1000.0, 2)
+        record_dependency("warehouse", duration_ms)
         emit(
             _log,
             "warehouse_query_end",
             dependency="warehouse",
             statement_hash=stmt_hash,
-            duration_ms=round((time.monotonic() - start) * 1000.0, 2),
+            duration_ms=duration_ms,
             outcome="ok",
             rows_returned=len(rows),
         )

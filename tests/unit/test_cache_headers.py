@@ -134,3 +134,28 @@ def test_spa_shell_and_non_api_paths_are_not_given_the_api_default() -> None:
     response = TestClient(app).get("/lead-queue")
 
     assert response.headers.get("cache-control") != "private, no-store"
+
+
+# ---------------------------------------------------------------------------
+# bundle-v1 remainder: the dormant /brand StaticFiles mount is gone.
+# ---------------------------------------------------------------------------
+
+_MAIN_SOURCE = Path(__file__).resolve().parents[2] / "backend" / "main.py"
+
+
+def test_no_brand_route_or_mount_is_registered() -> None:
+    """The wordmark ships as a hashed Vite asset (bfb2bdf6); nothing serves
+    or references an unhashed, uncached ``/brand`` path any more."""
+    paths = [getattr(route, "path", None) for route in app.routes]
+
+    assert not any(isinstance(path, str) and path.startswith("/brand") for path in paths)
+
+
+def test_main_source_carries_no_brand_mount() -> None:
+    """Source pin: the mount was conditional on ``frontend/dist/brand``, and
+    CI's backend job runs before the frontend build, so the route check above
+    alone would pass even with the mount restored."""
+    source = _MAIN_SOURCE.read_text(encoding="utf-8")
+
+    assert '"/brand"' not in source
+    assert "StaticFiles(" not in source

@@ -15,6 +15,7 @@ RumMetricName = Literal[
     "inp",
     "long_task",
     "api_call",
+    "client_error",
 ]
 RumRating = Literal["good", "needs_improvement", "poor", "info"]
 RumDetailKey = Literal[
@@ -26,6 +27,15 @@ RumDetailKey = Literal[
     "attempt",
     "retryable",
     "dependency",
+    "error_name",
+    "error_kind",
+    "error_source",
+    "boundary",
+    "api_route",
+    "cache",
+    "warehouse_ms",
+    "lakebase_ms",
+    "total_ms",
 ]
 RumDetailValue = str | int | float | bool | None
 
@@ -52,8 +62,88 @@ _NUMERIC_DETAIL_KEYS = frozenset({
     "ttfb_ms",
     "transfer_size",
     "duration_ms",
+    "warehouse_ms",
+    "lakebase_ms",
+    "total_ms",
 })
 _DEPENDENCIES = frozenset({"warehouse", "lakebase", "genie"})
+
+# ---------------------------------------------------------------------------
+# Closed vocabularies for `client_error` and `api_call` (2026-09-21 UI/UX audit
+# stack-01, shell-01, states-01, quality-01, delivery-v3).
+#
+# A client error never carries its message, stack, component stack or a URL:
+# each of those can hold a borrower id, a query string or free text. It
+# carries only these four closed values. `api_call` carries a templated API
+# path whose every segment is a literal route segment of this app or `:id`.
+#
+# Parity pin: frontend/src/lib/rumBridge.ts (the three client-error sets) and
+# frontend/src/lib/rumApiRoute.ts (the API segments) declare the same lists;
+# tests/unit/test_rum_client_error.py asserts set equality, and a drift pin
+# there fails when a new /api route adds a literal segment missing below.
+# ---------------------------------------------------------------------------
+CLIENT_ERROR_NAMES = frozenset({
+    "Error",
+    "TypeError",
+    "RangeError",
+    "ReferenceError",
+    "SyntaxError",
+    "EvalError",
+    "URIError",
+    "AggregateError",
+    "ChunkLoadError",
+    "ApiError",
+    "GenieLiveError",
+    "NotFoundError",
+    "InvalidStateError",
+    "QuotaExceededError",
+    "SecurityError",
+    "Other",
+})
+CLIENT_ERROR_KINDS = frozenset({"chunk", "render"})
+CLIENT_ERROR_SOURCES = frozenset({
+    "uncaught",
+    "caught",
+    "recoverable",
+    "preload",
+    "window",
+    "rejection",
+})
+CLIENT_ERROR_BOUNDARIES = frozenset({"root", "route", "console", "genie", "drawer"})
+RUM_CACHE_STATES = frozenset({"hit", "miss", "stale"})
+# Every literal path segment of the /api routes mounted in the app, without
+# the `v1` version prefix and the `{param}` segments; sorted.
+RUM_API_ROUTE_SEGMENTS = frozenset({
+    "actions", "activation", "admin", "agent", "aging", "analytics", "approve",
+    "assets", "assign", "assignment", "assignment-overlay", "assignments", "audit",
+    "borrowers", "campaign-performance", "campaign-recommendation", "campaigns",
+    "capabilities", "complete", "compose", "config", "conversion", "county-rollups",
+    "create", "custom", "data-estate", "destinations", "disposition", "distribute",
+    "draft", "drafts", "economics", "event", "events", "evidence", "executive",
+    "export-receipt", "feedback", "footprint", "force-degraded", "funnel", "genie",
+    "geo", "geography", "growth-agent", "health", "home", "leads", "lifecycle",
+    "lineage", "loan-officers", "lookup", "manifest", "message", "metadata",
+    "monitors", "my-events", "notification-drafts", "offers", "operations", "options",
+    "outbox", "outcome", "outcomes", "outreach", "page", "points", "portfolio",
+    "preview", "progress", "proof", "property-loan", "rate-window", "receipt",
+    "recommend", "refusal-report", "reject", "rollups", "rules", "rum", "run",
+    "run-due", "run-due-all", "sales", "search", "segments", "session", "sessions",
+    "settings", "signals", "sources", "stage", "standup", "start", "state-rollups",
+    "status", "submit", "summary", "team", "telemetry", "workflows", "workspace",
+    "zip-rollups",
+})
+RUM_API_ROUTE_ID_SEGMENT = ":id"
+
+_CLIENT_ERROR_DETAIL_KEYS = frozenset({"error_name", "error_kind", "error_source", "boundary"})
+_CLIENT_ERROR_REQUIRED_KEYS = frozenset({"error_name", "error_kind", "error_source"})
+_API_CALL_DETAIL_KEYS = frozenset({
+    "api_route",
+    "cache",
+    "warehouse_ms",
+    "lakebase_ms",
+    "total_ms",
+})
+_API_ROUTE_RE = re.compile(r"^/api(/[^/?#\s]+){1,10}$")
 
 
 def _assert_public_value(value: Any) -> None:
@@ -148,7 +238,59 @@ class RumEvent(BaseModel):
                 if any(ch.isspace() for ch in value):
                     raise ValueError("from_route must not contain whitespace")
                 continue
+            if key == "cache":
+                if value not in RUM_CACHE_STATES:
+                    raise ValueError("cache must be hit, miss or stale")
+                continue
+            if key == "api_route":
+                _assert_api_route(value)
+                continue
+        _assert_metric_detail_scope(self)
         return self
+
+
+def _assert_api_route(value: RumDetailValue) -> None:
+    if not isinstance(value, str):
+        raise ValueError("api_route must be a templated API path")
+    if len(value) > 160:
+        raise ValueError("api_route must be at most 160 characters")
+    if not _API_ROUTE_RE.fullmatch(value):
+        raise ValueError("api_route must be a templated /api path without a query")
+    for segment in value.split("/")[2:]:
+        if segment != RUM_API_ROUTE_ID_SEGMENT and segment not in RUM_API_ROUTE_SEGMENTS:
+            raise ValueError("api_route segments must be known API route segments or :id")
+
+
+def _assert_client_error(event: RumEvent) -> None:
+    if event.value != 1:
+        raise ValueError("client_error value must be 1")
+    if event.rating != "info":
+        raise ValueError("client_error rating must be info")
+    keys = set(event.details)
+    if not keys <= _CLIENT_ERROR_DETAIL_KEYS:
+        raise ValueError("client_error details may only carry the closed error keys")
+    if not keys >= _CLIENT_ERROR_REQUIRED_KEYS:
+        raise ValueError("client_error requires error_name, error_kind and error_source")
+    if event.details["error_name"] not in CLIENT_ERROR_NAMES:
+        raise ValueError("error_name must be a known error name")
+    if event.details["error_kind"] not in CLIENT_ERROR_KINDS:
+        raise ValueError("error_kind must be chunk or render")
+    if event.details["error_source"] not in CLIENT_ERROR_SOURCES:
+        raise ValueError("error_source must be a known error source")
+    boundary = event.details.get("boundary")
+    if boundary is not None and boundary not in CLIENT_ERROR_BOUNDARIES:
+        raise ValueError("boundary must be a known error boundary")
+
+
+def _assert_metric_detail_scope(event: RumEvent) -> None:
+    """Error keys belong to client_error only; the delivery keys to api_call only."""
+    keys = set(event.details)
+    if event.metric == "client_error":
+        _assert_client_error(event)
+    elif keys & _CLIENT_ERROR_DETAIL_KEYS:
+        raise ValueError("error keys are only allowed on client_error")
+    if event.metric != "api_call" and keys & _API_CALL_DETAIL_KEYS:
+        raise ValueError("api_route, cache and timing keys are only allowed on api_call")
 
 
 class RumBatch(BaseModel):

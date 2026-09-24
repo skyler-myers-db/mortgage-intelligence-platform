@@ -51,13 +51,20 @@ A PASS for any target requires **every** item below:
 5. Recovery: after the dependency is restored, `/api/health` returns
    to `status: "ok"` within ~30 s (the circuit-breaker cool-down).
 
+**Exception — a warehouse stop is not an outage** (audit delivery-01). The
+`warehouse` and `warehouse-real` targets stop a serverless warehouse, which
+is available on demand: they PASS when `/api/health` stays `status: "ok"`
+with `dependencies.warehouse` `up` or `resuming` and `/api/leads?limit=5`
+returns 200 because the read resumes it. Criteria 1–4 apply to the
+degraded warehouse path through `warehouse-sim`.
+
 ## Fail criteria
 
 A FAIL on any target blocks release. Canonical fail modes:
 
 | Symptom | Root cause (typical) | Action |
 |---|---|---|
-| `/api/health` stays `ok` after warehouse stop | Health probe isn't exercising the real SQL path | Fix the probe in `backend/api/health.py` |
+| `/api/health` reports `degraded` / `warehouse: down` after a clean warehouse stop, or `/api/leads` never resumes it | The state probe no longer reads `STOPPED` as available on demand (a stop is not an outage, delivery-01; the degraded path is `warehouse-sim`'s) | Fix `backend/services/health_probes.py` |
 | `/api/leads` returns 200 with populated rows during outage | A repository silently falls back to a fixture / mock | Remove the fallback; route must raise `DependencyDownError` |
 | Banner never renders despite degraded health | `DegradedBanner` poll loop broken, or CSS hidden | Fix `frontend/src/components/mortgage/DegradedBanner.tsx` |
 | Breaker never opens | Failure counter or threshold misconfigured | Tune `get_breaker()` call at the repository layer |

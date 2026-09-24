@@ -3,7 +3,7 @@ import { Link, useSearchParams } from 'react-router';
 import { PageShell } from '../components/layout/PageShell';
 import { TopLeadsQuickPick } from '../components/mortgage/TopLeadsQuickPick';
 import { Chip } from '../components/Primitives';
-import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
+import { WAREHOUSE_WARMING_BODY, WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import type { WarmingUpState } from '../lib/useWarmingUpRetry';
 import {
   OfferOrchestratorEmptyHero,
@@ -59,7 +59,7 @@ export function OfferWarmingRoute({
     <PageShell
       eyebrow={warmingUp.label}
       title={`Loading ${borrowerId}…`}
-      lede="Databricks SQL warehouses auto-suspend when idle. It takes ~30 seconds to warm up. Retrying automatically…"
+      lede={WAREHOUSE_WARMING_BODY}
     >
       <WarmingUpBlock state={warmingUp} title={`Loading offer for ${borrowerId}`} />
     </PageShell>

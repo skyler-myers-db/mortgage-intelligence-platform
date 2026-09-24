@@ -1,4 +1,4 @@
-import { clearGenieConversationState } from './genieConversation';
+import { GENIE_IN_FLIGHT_TURN_KEY, clearGenieConversationState } from './genieConversation';
 import { GENIE_CONVERSATION_TURNS_KEY, clearGenieTurns } from './genieConversationStore';
 import { SINGLE_KEY_SHORTCUTS_STORAGE_KEY, clearSingleKeyShortcutsPreference } from './keymapPreference';
 import { clearPinnedInsights } from './pinnedInsights';
@@ -15,6 +15,9 @@ export const ACTOR_SCOPED_SESSION_STORAGE_KEYS = [
   // never survive into another operator's session on a shared booth machine.
   // Imported rather than duplicated so the key cannot drift from the store.
   GENIE_CONVERSATION_TURNS_KEY,
+  // The in-flight Genie turn (question, conversation id, progress token): a
+  // reload after an actor change must never resume the previous actor's turn.
+  GENIE_IN_FLIGHT_TURN_KEY,
   // Lead Queue context behind the dossier breadcrumbs and pager (masked ids
   // only). Clearing it also invalidates the copies history entries carry.
   QUEUE_CONTEXT_STORAGE_KEY,

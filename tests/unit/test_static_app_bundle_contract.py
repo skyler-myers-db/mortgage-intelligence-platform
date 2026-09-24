@@ -15,6 +15,10 @@ def test_bundle_uploads_prebuilt_frontend_without_root_npm_wrapper() -> None:
 
     assert "frontend/dist/**" in sync["include"]
     assert {"/package.json", "/package-lock.json"} <= set(sync["exclude"])
+    # Visual-regression baselines (frontend/tests/**/*-snapshots/*.png) and
+    # the rest of the Playwright tree never ride the App upload.
+    assert "frontend/tests/**" in sync["exclude"]
+    assert not any(pattern.startswith("frontend/tests") for pattern in sync["include"])
     assert "build" not in app
     assert app["command"] == ["python", "-m", "backend.runtime"]
     assert deploy.index("run npm --prefix frontend run build") < deploy.index(

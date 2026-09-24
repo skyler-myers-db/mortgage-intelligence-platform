@@ -50,6 +50,7 @@ from psycopg.rows import dict_row
 
 from backend.config.settings import settings
 from backend.services.observability import emit
+from backend.services.server_timing import record_dependency
 
 log = logging.getLogger(__name__)
 
@@ -74,6 +75,7 @@ def _emit_end(op: str, stmt_hash: str, start: float, *,
         "duration_ms": round((time.monotonic() - start) * 1000.0, 2),
         "outcome": "ok",
     }
+    record_dependency("lakebase", kwargs["duration_ms"])
     if rows_returned is not None:
         kwargs["rows_returned"] = rows_returned
     emit(log, "lakebase_query_end", **kwargs)
@@ -91,6 +93,7 @@ def _emit_err(op: str, stmt_hash: str, start: float, exc: BaseException,
         "exc_type": type(exc).__name__,
         "exc_msg": str(exc)[:500],
     }
+    record_dependency("lakebase", kwargs["duration_ms"])
     if attempt is not None:
         kwargs["attempt"] = attempt
     emit(log, "lakebase_query_error", **kwargs)

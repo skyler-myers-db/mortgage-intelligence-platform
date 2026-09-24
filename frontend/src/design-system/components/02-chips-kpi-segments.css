@@ -32,7 +32,10 @@
   border: none; border-radius: var(--r-pill);
   background: transparent; color: inherit;
   cursor: pointer; opacity: 0.65;
-  transition: opacity var(--dur-fast) ease, background var(--dur-fast) ease;
+  transition:
+    opacity var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease),
+    translate var(--dur-instant) var(--ease);
 }
 .chip__remove:hover,
 .chip__remove:focus-visible { opacity: 1; background: var(--bg-3); }
@@ -74,7 +77,7 @@
   font-family: var(--font-mono);
   font-size: var(--fs-11); font-weight: 500;
   cursor: pointer;
-  transition: all var(--dur-fast) var(--ease);
+  /* Transition: the shared control list in 01-app-shell.css (motion-05). */
   letter-spacing: 0;
   min-inline-size: 0;
   min-block-size: calc(var(--sp-6) + var(--sp-1));
@@ -204,7 +207,11 @@
   border-radius: var(--r-lg);
   padding: var(--pad-card);
   overflow: hidden;
-  transition: all var(--dur-base) var(--ease);
+  /* Explicit list, not the prototype's `all` (index.html:441-448; audit
+     motion-05): the theme and hover colours. */
+  transition:
+    background-color var(--dur-base) var(--ease),
+    border-color var(--dur-base) var(--ease);
   /* Cap individual card width so a 4-card row on an ultra-wide monitor
      doesn't balloon each card to 600–800px of whitespace. With
      auto-fit + minmax on .kpi-row (below), cards stay compact and the
@@ -217,14 +224,10 @@
   background: linear-gradient(90deg, transparent, var(--chip-line), transparent);
   opacity: 0.6;
 }
-.kpi:hover {
-  border-color: var(--chip-line);
-  transform: translateY(-2px);
-  box-shadow: var(--kpi-glow);
-}
-@media (prefers-reduced-motion: reduce) {
-  .kpi:hover { transform: none; }
-}
+/* The prototype's border-only hover (index.html:455). A KPI card is not a
+   control (its evidence chip is), so it no longer lifts or glows as if the
+   whole card were clickable (audit motion-09). */
+.kpi:hover { border-color: var(--line-2); }
 .kpi__label {
   font-size: var(--fs-11); font-weight: 500; letter-spacing: var(--tracking-caps);
   text-transform: uppercase; color: var(--text-3); margin-bottom: var(--sp-3);
@@ -264,7 +267,7 @@
      nor stalls. */
   stroke-dasharray: 1;
   stroke-dashoffset: 1;
-  animation: spark-draw var(--dur-draw) var(--ease-draw) 80ms forwards;
+  animation: spark-draw var(--dur-draw) var(--ease-draw) var(--dur-instant) forwards;
 }
 @keyframes spark-draw {
   to { stroke-dashoffset: 0; }
@@ -273,7 +276,7 @@
    over the same window (opacity only: compositor-friendly). */
 .spark__area--fade {
   opacity: 0;
-  animation: spark-area-fade var(--dur-draw) var(--ease-draw) 80ms forwards;
+  animation: spark-area-fade var(--dur-draw) var(--ease-draw) var(--dur-instant) forwards;
 }
 @keyframes spark-area-fade {
   to { opacity: 1; }
@@ -354,7 +357,8 @@
      button) and to the chips, so the cursor never promises a click that
      does nothing — e.g. on a gated card, which has no select button. */
   cursor: default;
-  transition: all var(--dur-base) var(--ease);
+  /* The card's transition list ships with the lazy SegmentCard.css (audit
+     motion-05); the prototype's `all` (index.html:488-495) is gone. */
   overflow: hidden;
   text-align: left;
   width: 100%;
@@ -427,7 +431,10 @@
 .seg-card--gated:hover { transform: none; border-color: var(--line-2); }
 .seg-card--gated::before { opacity: 0.35; }
 .seg-card--gated::after { opacity: 0.12; }
-.seg-card__count--gated { color: var(--text-4); }
+/* Compound selector: the base .seg-card__count rule below sets --text-1 at
+   equal specificity and later in source, so the bare modifier never painted
+   (found at the rendered layer, audit a11y-01). */
+.seg-card__count.seg-card__count--gated { color: var(--text-3); }
 /* Evidence chip slot in the meta row; pushes to the row end. */
 .seg-card__evidence { margin-left: auto; display: inline-flex; }
 .seg-card--skeleton {
@@ -520,10 +527,15 @@
 .seg-card__meta {
   display: flex;
   row-gap: var(--sp-1);
-  /* sp-2, not the prototype's sp-3 (design_files/index.html:529): the app
-     adds the evidence chip and the Ask Genie entry to this row, and at the
-     1440 design target they only fit on one line with the tighter gap. */
-  column-gap: var(--sp-2);
+  /* sp-1, not the prototype's sp-3 (design_files/index.html:529): the app
+     adds the evidence chip and the Ask Genie entry to this row, and it must
+     stay one line at the 1440 design target on every renderer. The chip's
+     margin-left: auto spends the spare width, so the gap is only the
+     minimum. With sp-2 the row fit macOS by 4px and wrapped on Linux, whose
+     Chromium rounds each Geist Mono advance to a whole pixel (6.6 -> 7px at
+     fs-11) and draws the delta arrow from a wider fallback face: +28px on
+     three of six cards (wave-2 fixture job). */
+  column-gap: var(--sp-1);
   margin-top: var(--sp-3);
   font-size: var(--fs-11); color: var(--text-3);
   font-family: var(--font-mono);

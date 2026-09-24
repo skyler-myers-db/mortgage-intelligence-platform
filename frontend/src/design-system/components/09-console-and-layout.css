@@ -61,7 +61,7 @@
      the segmented controls behind an inner horizontal scroll
      (2026-09-21 audit visual-02 / shell-02 / responsive-01). */
   grid-template-columns: minmax(0, 1fr);
-  flex: 1; overflow: auto;
+  flex: 1; overflow: auto; overscroll-behavior: contain;
 }
 /* Direct labels only (own row, or the label/switch `.row`): the descendant
    form of this rule also restyled the field labels of the PropertyLookupPanel
@@ -71,7 +71,10 @@
 .tweak-row .swatches { display: flex; gap: 6px; }
 .tweak-row .sw {
   width: 24px; height: 24px; border-radius: 6px; cursor: pointer;
-  border: 2px solid transparent; transition: all var(--dur-fast) var(--ease);
+  border: 2px solid transparent;
+  /* Explicit list, not the prototype's `all` (index.html:916-918; audit
+     motion-05). */
+  transition: border-color var(--dur-fast) var(--ease), scale var(--dur-instant) var(--ease);
 }
 .tweak-row .sw--bright { background: var(--entrada-bright); }
 .tweak-row .sw--teal { background: var(--entrada-teal); }
@@ -79,10 +82,12 @@
 .tweak-row .sw--red { background: var(--entrada-red); }
 .tweak-row .sw.is-active { border-color: var(--text-1); }
 .tweak-row .sw:active { scale: var(--pressed-scale); }
+/* No outline reset (DEPARTURE from index.html:921, audit css-06): these
+   fields keep the global :focus-visible ring. */
 .tweak-row select, .tweak-row input[type="text"] {
   width: 100%; background: var(--bg-2); border: 1px solid var(--line-1);
   color: var(--text-1); font-family: var(--font-sans); font-size: var(--fs-13);
-  padding: 6px 10px; border-radius: var(--r-md); outline: none;
+  padding: 6px 10px; border-radius: var(--r-md);
 }
 .tweak-row .segmented {
   display: flex; background: var(--bg-2); border: 1px solid var(--line-1);
@@ -97,12 +102,24 @@
 .tweak-row .segmented button:active { translate: 0 var(--pressed-shift); }
 .tweak-row .row { display: flex; align-items: center; justify-content: space-between; }
 .tweak-row .row label { margin: 0; }
-.tweak-row .switch {
+/* The Console switch, also the Admin Config Appearance switches, which
+   render the same `button.switch` directly in an `.admin-row` and were
+   unstyled (empty, stateless buttons) until they shared these rules
+   (audit css-06 re-verification). */
+.tweak-row .switch,
+.admin-row > .switch {
   position: relative; width: var(--sp-10); height: var(--sp-6); border-radius: 999px;
   background: var(--bg-3); border: 1px solid var(--line-1); cursor: pointer;
-  transition: background var(--dur-fast) var(--ease);
+  transition:
+    background-color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease),
+    scale var(--dur-instant) var(--ease);
 }
-.tweak-row .switch::after {
+/* The knob moves by `translate` on the compositor, never by `left`, which
+   re-laid it out every frame. DEPARTURE from the prototype's `all` + `left`
+   knob (index.html:942-950; audit motion-05): the same 16px travel. */
+.tweak-row .switch::after,
+.admin-row > .switch::after {
   content: '';
   position: absolute;
   top: calc(var(--sp-1) / 2);
@@ -111,14 +128,17 @@
   height: var(--sp-5);
   border-radius: 50%;
   background: var(--text-3);
-  transition: all var(--dur-fast) var(--ease);
+  transition: translate var(--dur-fast) var(--ease), background-color var(--dur-fast) var(--ease);
 }
-.tweak-row .switch.on { background: var(--accent-soft); border-color: var(--accent); }
-.tweak-row .switch.on::after {
-  left: calc(var(--sp-10) - var(--sp-5) - (var(--sp-1) / 2));
+.tweak-row .switch.on,
+.admin-row > .switch.on { background: var(--accent-soft); border-color: var(--accent); }
+.tweak-row .switch.on::after,
+.admin-row > .switch.on::after {
+  translate: calc(var(--sp-10) - var(--sp-5) - var(--sp-1)) 0;
   background: var(--accent);
 }
-.tweak-row .switch:active { scale: var(--pressed-scale); }
+.tweak-row .switch:active,
+.admin-row > .switch:active { scale: var(--pressed-scale); }
 /* PropertyLookupPanel in its compact (Console) form. The ~266px track holds
    neither the header's nowrap "Every lookup audited" chip beside the title
    nor two side-by-side inputs, so the header wraps the chip onto its own
@@ -266,11 +286,14 @@
   gap: var(--sp-2);
   min-block-size: calc(var(--sp-10) + var(--sp-2));
 }
+/* The filter transition lives on the base rule so the desaturation eases
+   back out when .is-updating drops, instead of snapping off (audit
+   motion-05). */
 .stable-refresh-region {
   position: relative;
+  transition: filter var(--dur-base) var(--ease);
 }
 .stable-refresh-region.is-updating {
-  transition: filter var(--dur-base) var(--ease);
   filter: saturate(0.9);
 }
 .stable-refresh-status {
@@ -289,7 +312,7 @@
   font-family: var(--font-mono);
   font-size: var(--fs-11);
   font-weight: 500;
-  box-shadow: var(--shadow-1);
+  box-shadow: var(--shadow-sm);
   pointer-events: none;
 }
 .stable-refresh-region--table.is-updating::before {
@@ -334,8 +357,8 @@
   margin-bottom: 24px; gap: 24px;
   flex-wrap: wrap;
 }
-.proto-hero h1 { font-size: var(--fs-hero); font-weight: 600; letter-spacing: -0.02em; margin: 0 0 4px; line-height: var(--lh-tight); }
-.proto-hero .lede { color: var(--text-2); font-size: 14px; max-width: 640px; margin: 0; }
+.proto-hero h1 { font-size: var(--fs-hero); font-weight: 600; letter-spacing: -0.02em; margin: 0 0 4px; line-height: var(--lh-tight); text-wrap: balance; }
+.proto-hero .lede { color: var(--text-2); font-size: 14px; max-width: 640px; margin: 0; text-wrap: pretty; }
 .proto-hero__actions {
   display: flex;
   gap: var(--sp-2);

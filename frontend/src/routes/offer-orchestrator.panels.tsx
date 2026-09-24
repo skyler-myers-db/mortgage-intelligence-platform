@@ -508,7 +508,7 @@ function DraftOutreachPanel({
         </p>
         {draftGeneratorLabel && (
           <div className="offer-message-intelligence mt-3" data-testid="offer-message-intelligence">
-            <div className="split-row">
+            <div className="split-row split-row--wrap">
               <Chip
                 variant={!draftDirty && draftProofFresh && draftGenerationMode === 'supervisor' ? 'success' : 'neutral'}
                 icon={!draftDirty && draftProofFresh && draftGenerationMode === 'supervisor' ? 'sparkle' : 'doc'}

@@ -13,6 +13,15 @@
    to the same gutter as `.main__inner`.
    `--page` is the root boundary: no AppShell exists around it, so it
    centres itself in the viewport.
+   `--panel` (wave 2, audit states-01) is the same declared `.error-surface`
+   block rendered INSIDE a healthy panel frame: the Console `.tweaks__body`,
+   the evidence `.drawer__body` and the `.genie__body`. The frame supplies
+   the gutter, so it has no margin; the icon and copy share the first row
+   and the actions take their own, so it fits the 300px Console with no
+   horizontal overflow. It is an extension of the block above, not a new
+   prototype deviation. The Genie error frame reuses the chat's
+   `.genie__hdr`, but it cannot be dragged, so the header's grab cursor
+   (06-genie-chat.css) is reset while the frame holds the surface.
 */
 .error-surface {
   margin: var(--sp-6);
@@ -59,3 +68,12 @@
   margin: 0 auto;
   transform: translateY(-50%);
 }
+
+.error-surface--panel { margin: 0; }
+.error-surface--panel .error-surface__body { align-items: flex-start; }
+.error-surface--panel .error-surface__copy { flex-basis: 0; }
+.error-surface--panel .error-surface__actions {
+  flex: 1 1 100%;
+  flex-wrap: wrap;
+}
+.genie:has(> .genie__body > .error-surface) > .genie__hdr { cursor: default; }

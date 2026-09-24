@@ -10,16 +10,22 @@ import { useSyncExternalStore } from 'react';
  * fact: is a turn running behind the closed panel, or did an answer land that
  * the user has not opened yet?
  *
- * This is a status SIGNAL, not the in-flight turn itself: the promise, the
- * progress payload and the abort controller stay owned by GenieChat. A
- * module-level in-flight store that survives leaving `/ask-genie` is a later
- * wave and is intentionally not started here.
+ * This is a status SIGNAL, not the in-flight turn itself: the turn (its
+ * promise, progress, persisted record and abort controller) lives in the lazy
+ * in-flight turn store (lib/genieInFlightTurn.ts, wave 2 `runtime-01`), which
+ * this initial-chunk module deliberately does not import. The panel drives
+ * this signal from the store, because the launchers' `aria-describedby`
+ * target lives in GenieChat; a route turn started before the panel's first
+ * mount therefore shows no ring (declared gap).
  *
  *   idle    — nothing to tell the user (no turn, or the panel is open)
  *   running — a turn is in flight while the panel is closed
- *   ready   — an answer landed while the panel was closed and is still unseen
+ *   ready   — a turn landed while the panel was closed and is still unseen
  */
 export type GenieTurnStatus = 'idle' | 'running' | 'ready';
+
+/** How the unseen turn ended (mirrors the store's GenieTurnOutcome). */
+export type GenieLauncherOutcome = 'answered' | 'withheld' | 'failed';
 
 /** id of the sr-only description the launchers point `aria-describedby` at. */
 export const GENIE_LAUNCHER_STATUS_ID = 'genie-launcher-status';
@@ -55,9 +61,18 @@ export function genieLauncherStateClass(current: GenieTurnStatus): string {
   return '';
 }
 
-/** Screen-reader description for the launcher in the given state. */
-export function genieLauncherStatusText(current: GenieTurnStatus): string {
+/** Screen-reader description for the launcher in the given state. "Answer
+ *  ready" only for an answered turn: a withheld or failed turn has no answer
+ *  to read, only a result to see. */
+export function genieLauncherStatusText(
+  current: GenieTurnStatus,
+  outcome: GenieLauncherOutcome = 'answered',
+): string {
   if (current === 'running') return 'Genie is still working on your question.';
-  if (current === 'ready') return 'Genie answer ready. Open Genie to read it.';
+  if (current === 'ready') {
+    return outcome === 'answered'
+      ? 'Genie answer ready. Open Genie to read it.'
+      : 'Genie finished your question. Open Genie to see the result.';
+  }
   return '';
 }

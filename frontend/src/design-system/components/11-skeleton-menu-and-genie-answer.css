@@ -22,7 +22,7 @@
     transparent 100%
   );
   transform: translateX(-100%);
-  animation: skeleton-sweep 1.4s ease-in-out infinite;
+  animation: skeleton-sweep var(--dur-shimmer) var(--ease-in-out) infinite;
 }
 @keyframes skeleton-sweep {
   from { transform: translateX(-100%); }
@@ -60,6 +60,7 @@
   min-width: 180px;
   /* --filter-menu-space: the room useMenuPlacement measured on open. */
   max-height: min(280px, var(--filter-menu-space, 280px));
+  overscroll-behavior: contain;
   overflow-y: auto;
   background: var(--bg-1);
   border: 1px solid var(--line-2);

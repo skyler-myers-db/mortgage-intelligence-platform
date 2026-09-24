@@ -7,6 +7,9 @@
 # upstream dependency fails, the backend emits a visible degraded state
 # (health payload shape + HTTP 503 on data endpoints with
 # `retryable: true`) and NEVER silently falls back to fake data.
+# A stopped SQL warehouse is not a failure (audit delivery-01): the warehouse
+# and warehouse-real targets prove health stays ok and the next read resumes
+# it; warehouse-sim proves the degraded path (lib_warehouse_on_demand.sh).
 #
 # The drill has eight targets:
 #
@@ -44,8 +47,9 @@
 #     `tools/kill_drill/evidence/drill_<target>_<timestamp>.log`.
 #
 # Exit codes:
-#   0 -- drill ran end-to-end and the expected degraded signals appeared.
-#   1 -- the backend did NOT degrade (resilience regression -- real bug).
+#   0 -- drill ran end-to-end and the expected signals appeared (degraded
+#        for a failure; health ok + a resumed read for a warehouse stop).
+#   1 -- the expected signals did not appear (regression -- real bug).
 #   2 -- prerequisite missing (curl / jq / env).
 #   3 -- operator aborted.
 # ---------------------------------------------------------------------------
@@ -312,6 +316,9 @@ assert_data_endpoint_degraded() {
   esac
 }
 
+# shellcheck source=tools/kill_drill/lib_warehouse_on_demand.sh
+. "$REPO_ROOT/tools/kill_drill/lib_warehouse_on_demand.sh"
+
 start_drill_backend() {
   log "starting private drill backend on $DRILL_APP_URL (env below)"
 
@@ -465,15 +472,9 @@ Confirm via the Databricks UI or:
 EOF
   ack "Stop the SQL warehouse, then confirm."
 
-  log "Probing /api/health for degraded signal..."
-  if ! assert_degraded_health "$APP_URL" warehouse 30; then
-    return 1
-  fi
-
-  log "Probing data endpoints (should return 503 or degraded)..."
-  assert_data_endpoint_degraded "$APP_URL" "/api/leads?limit=5" || return 1
-  assert_data_endpoint_degraded "$APP_URL" "/api/portfolio/kpis" || \
-    assert_data_endpoint_degraded "$APP_URL" "/api/portfolio/preview" || return 1
+  log "A stop is not an outage: expecting health ok, then a read that resumes it..."
+  assert_stopped_warehouse_health "$APP_URL" 30 || return 1
+  assert_stopped_warehouse_read_resumes "$APP_URL" || return 1
 
   cat <<EOF | tee -a "$LOG"
 
@@ -722,11 +723,10 @@ drill_warehouse_real() {
 REAL-INFRA DRILL NOTICE
   This will stop the live SQL warehouse backing Module 0. Downstream
   effects during the drill window:
-    - /api/leads, /api/portfolio/*, /api/segments return 503.
-    - /ask-genie answers lose their SQL-backed context.
-    - Every user currently interacting with the app sees the degraded
-      banner until the warehouse reaches RUNNING again.
-  Expected user-visible impact: 30-90 seconds during stop + probe.
+    - A stopped warehouse is available on demand, not an outage:
+      /api/health stays ok and the next read resumes it, so users see
+      the calm "Waking warehouse" pill, not the degraded banner.
+  Expected user-visible impact: one resume's latency on the next read.
   Estimated recovery time to RUNNING state: 60-180 seconds (serverless
   warmup). The drill will abort with exit 1 if recovery does not
   complete within ${REAL_INFRA_RECOVERY_TIMEOUT}s.
@@ -741,20 +741,22 @@ EOF
   local stop_rc=0
   real_infra_logged stop warehouse "$whid" --timeout "$REAL_INFRA_RECOVERY_TIMEOUT" || stop_rc=$?
   if (( stop_rc != 0 )); then
-    log "WARNING: real_infra stop warehouse returned non-zero; probing anyway, then forcing recovery."
+    # RUNNING and STOPPED both read "up" and a running warehouse answers the
+    # read too, so gates run against a warehouse that never stopped prove nothing.
+    log "FAIL: real_infra stop warehouse returned ${stop_rc}; the warehouse may never have stopped. Forcing recovery."
+    real_infra_logged start warehouse "$whid" --timeout "$REAL_INFRA_RECOVERY_TIMEOUT" || true
+    return 1
   fi
 
-  log "Probing /api/health for degraded signal..."
-  if ! assert_degraded_health "$APP_URL" warehouse 30; then
-    log "FAIL: warehouse stopped but backend never reported degraded state"
+  log "A stop is not an outage: expecting health ok, then a read that resumes it..."
+  if ! assert_stopped_warehouse_health "$APP_URL" 30; then
     # Try to restart anyway so we don't leave real infra down.
     real_infra_logged start warehouse "$whid" --timeout "$REAL_INFRA_RECOVERY_TIMEOUT" || true
     return 1
   fi
 
-  log "Probing data endpoints (expect 503 or empty/degraded 200)..."
   local data_ok=0
-  assert_data_endpoint_degraded "$APP_URL" "/api/leads?limit=5" && data_ok=1
+  assert_stopped_warehouse_read_resumes "$APP_URL" && data_ok=1
 
   log "Restarting warehouse $whid via SDK..."
   if ! real_infra_logged start warehouse "$whid" --timeout "$REAL_INFRA_RECOVERY_TIMEOUT"; then
@@ -779,10 +781,10 @@ EOF
   done
 
   if (( data_ok == 1 )); then
-    log "PASS: warehouse-real drill observed degraded + recovered cleanly"
+    log "PASS: warehouse-real drill: the stop was not an outage, a read resumed it, and it recovered cleanly"
     return 0
   fi
-  log "PARTIAL: warehouse recovered but data endpoint probe did not confirm degraded"
+  log "FAIL: warehouse recovered but a data read never resumed the stopped warehouse"
   return 1
 }
 

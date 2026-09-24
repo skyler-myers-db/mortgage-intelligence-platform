@@ -193,11 +193,10 @@ describe('useRouteAnnouncer', () => {
     await act(async () => {
       revealLazyPage();
     });
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0)); // MutationObserver delivery
-    });
-
-    expect(document.activeElement).toBe(heading());
+    // The hook focuses the heading from a MutationObserver callback, whose
+    // delivery one setTimeout(0) does not guarantee under full-suite load
+    // (wave-1c follow-up #17): wait for the focus itself.
+    await vi.waitFor(() => expect(document.activeElement).toBe(heading()));
   });
 
   it('falls back to <main> when no heading ever renders', async () => {

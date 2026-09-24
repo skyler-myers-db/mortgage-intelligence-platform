@@ -39,6 +39,16 @@
   justify-content: space-between;
   gap: var(--sp-3);
 }
+/* Wraps when its two ends do not fit: the action moves under the label
+   instead of squeezing it. Opt-in, because a wrapping row puts a long
+   left block's right-hand partner on its own line (proof SQL hash,
+   glossary chips). Found by the wave-2 visual gate on the Offer detail
+   with the Console docked: the Linux renderer put "Reviewed outreach
+   template" + Regenerate 17px past its 438px card. */
+.split-row--wrap {
+  flex-wrap: wrap;
+  row-gap: var(--sp-2);
+}
 .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-4); }
 .field__label { color: var(--text-3); font-size: var(--fs-11); }
 .field__value { color: var(--text-1); font-size: var(--fs-13); }
@@ -625,8 +635,14 @@
   color: var(--text-3);
   font-size: var(--fs-11);
 }
+/* minmax(0, 1fr): an implicit auto track cannot shrink below its content's
+   min-content width, so the label chip (nowrap) plus Regenerate blew the
+   card out as soon as their sum passed its width (the wave-2 visual gate:
+   +17px on the Offer detail with the Console docked, in the pinned Linux
+   image). Now the track fits the card and the chip ellipsizes. */
 .offer-message-intelligence {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--sp-3);
   padding: var(--sp-3);
   border: 1px solid var(--line-1);
@@ -692,14 +708,15 @@
   height: var(--sp-5);
   border-radius: var(--r-pill);
   background: var(--text-3);
-  transition: left var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+  /* translate, not left: the knob slides on the compositor (audit motion-05). */
+  transition: translate var(--dur-fast) var(--ease), background-color var(--dur-fast) var(--ease);
 }
 .campaign-setup__toggle .switch.on {
   background: var(--accent-soft);
   border-color: var(--accent);
 }
 .campaign-setup__toggle .switch.on::after {
-  left: calc(var(--sp-10) - var(--sp-5) - (var(--sp-1) / 2));
+  translate: calc(var(--sp-10) - var(--sp-5) - var(--sp-1)) 0;
   background: var(--accent);
 }
 .campaign-setup__textarea {

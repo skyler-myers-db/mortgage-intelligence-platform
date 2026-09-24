@@ -75,15 +75,23 @@ export function ApprovalBanner({
   const gated = approverGate !== null;
   const gateId = useId();
 
-  const guard = (fn?: () => void | Promise<void>) => async () => {
-    if (!fn) return;
-    if (gated || inFlightRef.current || busy) return;
+  // No try statement (audit runtime-03): React Compiler 1.0 bails out of the
+  // whole component on a try/finally. The Promise executor runs `fn` now and
+  // turns a synchronous throw into a rejection, so the latch is released on
+  // every outcome and a failure still rejects, exactly as before.
+  const guard = (fn?: () => void | Promise<void>) => (): Promise<void> => {
+    if (!fn) return Promise.resolve();
+    if (gated || inFlightRef.current || busy) return Promise.resolve();
     inFlightRef.current = true;
-    try {
-      await fn();
-    } finally {
+    const release = () => {
       inFlightRef.current = false;
-    }
+    };
+    return new Promise<void>((resolve) => {
+      resolve(fn());
+    }).then(release, (error: unknown) => {
+      release();
+      throw error;
+    });
   };
 
   const buttonsDisabled = Boolean(disabled) || busy || gated;

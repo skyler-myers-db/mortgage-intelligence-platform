@@ -1,16 +1,29 @@
 /**
  * App driver for fixture specs: navigation that waits for the route to
- * settle, theme selection through the app's own storage key, and the shell
+ * settle, theme / accent / density selection through the app's own storage
+ * keys, and the shell
  * interactions later lanes assert against (Console, Genie, command palette,
  * expanded lead row).
  *
  * Selectors are the accessible names and prototype BEM classes the app
- * already ships; nothing here adds a test-only hook to `frontend/src`.
+ * already ships. The one exception is settle()'s read of the committed-route
+ * marker `data-route-path` (app.tsx RouteTransition): during a held
+ * navigation nothing accessible says which route is painted.
  */
 import { expect, type Locator, type Page } from '@playwright/test';
 import type { DegradeOptions, MockApi } from './mockApi';
 
 export type FixtureTheme = 'dark' | 'light';
+
+/**
+ * The accents and densities the app accepts. They mirror ACCENTS and
+ * DENSITIES in frontend/public/theme-boot.js (safety-net.fixture.spec.ts
+ * reads that file and fails when they drift).
+ */
+export const FIXTURE_ACCENTS = ['bright', 'teal', 'navy', 'red'] as const;
+export type FixtureAccent = (typeof FIXTURE_ACCENTS)[number];
+export const FIXTURE_DENSITIES = ['comfortable', 'compact'] as const;
+export type FixtureDensity = (typeof FIXTURE_DENSITIES)[number];
 
 /** Surfaces the app renders when something is wrong. Healthy routes show none. */
 export const ERROR_SURFACE_SELECTOR = [
@@ -20,13 +33,22 @@ export const ERROR_SURFACE_SELECTOR = [
   '[role="alert"]',
 ].join(', ');
 
-const THEME_STORAGE_KEY = 'mip.theme';
-const THEME_SEED_MARKER = 'mip.fixture.themeSeed';
+/** The app's own storage key per preference, and this driver's once-per-tab seed marker. */
+const SEEDS = {
+  theme: { key: 'mip.theme', marker: 'mip.fixture.themeSeed' },
+  accent: { key: 'mip.accent', marker: 'mip.fixture.accentSeed' },
+  density: { key: 'mip.density', marker: 'mip.fixture.densitySeed' },
+} as const;
 const QUIET_WINDOW_MS = 300;
 
 interface SettleState {
   heading: boolean;
   busy: number;
+  /** `data-route-path` of the painted route wrapper (null when none), and the URL's pathname. */
+  paintedPath: string | null;
+  urlPath: string;
+  /** The painted route is the URL's route, or the route error surface stands in for it. */
+  painted: boolean;
 }
 
 export class AppDriver {
@@ -43,17 +65,40 @@ export class AppDriver {
    */
   async setTheme(theme: FixtureTheme): Promise<void> {
     await this.page.emulateMedia({ colorScheme: theme });
+    await this.seed('theme', theme);
+  }
+
+  /**
+   * Select the accent (`mip.accent`) the way setTheme selects the theme:
+   * theme-boot.js applies it before the first paint. Call before `gotoRoute`.
+   */
+  async setAccent(accent: FixtureAccent): Promise<void> {
+    await this.seed('accent', accent);
+  }
+
+  /** Select the density (`mip.density`); same contract as setAccent. */
+  async setDensity(density: FixtureDensity): Promise<void> {
+    await this.seed('density', density);
+  }
+
+  /**
+   * Seed one stored preference once per value per tab: a sessionStorage
+   * marker remembers the seeded value, so a preference the test later
+   * changes through the UI survives a reload instead of being re-seeded.
+   */
+  private async seed(preference: keyof typeof SEEDS, value: string): Promise<void> {
+    const { key, marker } = SEEDS[preference];
     await this.page.addInitScript(
-      ([key, value, marker]) => {
+      ([storageKey, storedValue, seedMarker]) => {
         try {
-          if (window.sessionStorage.getItem(marker) === value) return;
-          window.localStorage.setItem(key, value);
-          window.sessionStorage.setItem(marker, value);
+          if (window.sessionStorage.getItem(seedMarker) === storedValue) return;
+          window.localStorage.setItem(storageKey, storedValue);
+          window.sessionStorage.setItem(seedMarker, storedValue);
         } catch {
           // Storage is unavailable on about:blank; the next document seeds it.
         }
       },
-      [THEME_STORAGE_KEY, theme, THEME_SEED_MARKER] as const,
+      [key, value, marker] as const,
     );
   }
 
@@ -64,26 +109,44 @@ export class AppDriver {
   }
 
   /**
-   * Settled means: an `<h1>` is rendered in `<main>`, no `aria-busy` region
-   * remains inside it, the mock API has no request in flight and has been
-   * quiet for a short window, and webfonts are ready. Polls instead of
-   * sleeping so it is as fast as the machine allows and still holds under load.
+   * Settled means: the route painted in `<main>` is the URL's route, an `<h1>`
+   * is rendered there, no `aria-busy` region remains inside it, the mock API
+   * has no request in flight and has been quiet for a short window, and
+   * webfonts are ready. Polls instead of sleeping so it is as fast as the
+   * machine allows and still holds under load.
+   *
+   * "The URL's route": an in-app navigation to a route whose chunk is still
+   * loading holds the previous page (app.tsx RouteTransition, shell-05), so
+   * the URL moves first while the old route stays painted with its h1 and no
+   * aria-busy, and a chunk request is not API traffic. The painted route is
+   * read from the app's committed-route marker, `data-route-path` on the
+   * keyed `.route-transition` wrapper, and compared with `location.pathname`
+   * through the URL parser so both are encoded alike. A route error surface
+   * (`[data-error-boundary="route"]`, which resets on pathname) counts as the
+   * URL's route.
    */
   async settle(timeoutMs = 30_000): Promise<void> {
     const deadline = Date.now() + timeoutMs;
-    let state: SettleState = { heading: false, busy: -1 };
+    const unread: SettleState = { heading: false, busy: -1, paintedPath: null, urlPath: '', painted: false };
+    let state: SettleState = unread;
     while (Date.now() < deadline) {
       state = await this.page
         .evaluate(() => {
           const main = document.querySelector('#main-content');
+          const paintedPath = main?.querySelector('.route-transition[data-route-path]')?.getAttribute('data-route-path') ?? null;
+          const urlPath = window.location.pathname;
+          const routeError = Boolean(main?.querySelector('[data-error-boundary="route"]'));
           return {
             heading: Boolean(main?.querySelector('h1')),
             busy: main ? main.querySelectorAll('[aria-busy="true"]').length : -1,
+            paintedPath,
+            urlPath,
+            painted: routeError || (paintedPath !== null && new URL(paintedPath, window.location.origin).pathname === urlPath),
           };
         })
-        .catch(() => ({ heading: false, busy: -1 }));
+        .catch(() => unread);
       const quiet = this.mockApi.inflight === 0 && this.mockApi.idleMs >= QUIET_WINDOW_MS;
-      if (state.heading && state.busy === 0 && quiet) {
+      if (state.painted && state.heading && state.busy === 0 && quiet) {
         await this.page.evaluate(() => document.fonts.ready.then(() => undefined));
         return;
       }
@@ -91,6 +154,7 @@ export class AppDriver {
     }
     throw new Error(
       `Route did not settle within ${timeoutMs} ms at ${this.page.url()}: ` +
+        `route painted in <main>=${state.paintedPath ?? 'none'} (URL path ${state.urlPath}), ` +
         `h1 rendered=${state.heading}, aria-busy regions in <main>=${state.busy}, ` +
         `API requests in flight=${this.mockApi.inflight}.`,
     );

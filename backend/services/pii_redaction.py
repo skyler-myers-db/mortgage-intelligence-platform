@@ -622,6 +622,9 @@ def redact_lead_row(row: dict[str, Any]) -> dict[str, Any]:
         ),
         "eligibility_source": _eligibility_source(row.get("eligibility_source")),
         "current_lender_ref": _public_lender_ref(row.get("current_lender_ref")),
+        # Gold refresh time of this row: only the X-Data-Refreshed-At header
+        # on /api/leads reads it (LeadSummary excludes it from every body).
+        "row_refreshed_at": row.get("refreshed_at"),
     }
     _enforce_no_forbidden_keys(output)
     return output
