@@ -76,7 +76,8 @@ function overlaps(a: Box, b: Box): boolean {
  * The status pill fits the actions cluster's side track at 1440x900: the
  * dot keeps its 6x6 box, nothing inside the pill is clipped, the pill ends
  * before the next icon button starts, the icon buttons keep their full box,
- * and the elastic tenant pill stays clear of the search's ⌘K badge.
+ * and the elastic tenant pill ellipsizes inside its own box, clear of the
+ * search's ⌘K badge.
  */
 async function expectPillFits(page: Page): Promise<void> {
   await page.evaluate(() => document.fonts.ready.then(() => undefined));
@@ -92,7 +93,10 @@ async function expectPillFits(page: Page): Promise<void> {
     const box = await boxOf(button);
     expect(box.right - box.left, 'an icon button was squeezed').toBe(34);
   }
-  const tenant = await boxOf(page.locator('.topbar__pill:has(> .topbar__pill-tenant)'));
+  const tenantPill = page.locator('.topbar__pill:has(> .topbar__pill-tenant)');
+  const tenantClipped = await tenantPill.evaluate((el) => el.scrollWidth - el.clientWidth);
+  expect(tenantClipped, 'the tenant pill ellipsizes its name, never clips its own box').toBeLessThanOrEqual(0);
+  const tenant = await boxOf(tenantPill);
   const kbd = await boxOf(page.locator('.topbar__search-kbd'));
   expect(overlaps(tenant, kbd), 'the tenant pill covers the search\'s ⌘K badge').toBe(false);
 }
