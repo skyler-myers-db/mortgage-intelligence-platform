@@ -1,4 +1,5 @@
 import type { ClientErrorKind } from '../lib/chunkLoadError';
+import type { ClientErrorBoundary } from '../lib/rumBridge';
 import { resolveRouteMeta } from '../lib/routeMeta';
 import { Icon } from './Icon';
 
@@ -15,14 +16,21 @@ import { Icon } from './Icon';
  * carry borrower ids and query strings. The raw error goes to the local
  * console through lib/clientErrorLog. It also takes no router / context
  * dependency, because the root boundary renders it outside every provider.
+ *
+ * Variants: `page` (root boundary, no shell), `route` (inside <main>) and
+ * `panel` (the Console, Genie and evidence-drawer boundaries in
+ * layout/ShellPanelBoundaries, rendered INSIDE the panel's own frame). A
+ * panel surface names the panel, not a route, so it has no `Route ·` meta
+ * line, and its title is an `h2`: the page behind it keeps its one `h1`.
  */
 
-export type ErrorSurfaceVariant = 'route' | 'page';
+export type ErrorSurfaceVariant = 'route' | 'page' | 'panel';
 
 interface ErrorSurfaceProps {
   kind: ClientErrorKind;
-  boundary: string;
+  boundary: ClientErrorBoundary;
   variant: ErrorSurfaceVariant;
+  /** The failed area's product name: a route name, or a panel label for `panel`. */
   routeLabel: string | null;
   onRetry: () => void;
   onReload: () => void;
@@ -61,6 +69,12 @@ function copyFor(
       sub: 'The workspace could not be displayed. Try again, or reload the page if it keeps happening.',
     };
   }
+  if (variant === 'panel') {
+    return {
+      title: `${where} hit an unexpected error`,
+      sub: 'The page behind it is still available. Try again, or reload the page if it keeps happening.',
+    };
+  }
   return {
     title: `${where} hit an unexpected error`,
     sub: 'The rest of the workspace is still available. Try again, or reload the page if it keeps happening.',
@@ -76,6 +90,7 @@ export function ErrorSurface({
   onReload,
 }: ErrorSurfaceProps) {
   const { title, sub } = copyFor(kind, variant, routeLabel);
+  const panel = variant === 'panel';
   return (
     <section
       className={`surface error-surface error-surface--${variant}`}
@@ -89,9 +104,9 @@ export function ErrorSurface({
           <Icon name={kind === 'chunk' ? 'bolt' : 'info'} size={16} />
         </div>
         <div className="error-surface__copy">
-          <h1 className="h-3">{title}</h1>
+          {panel ? <h2 className="h-4">{title}</h2> : <h1 className="h-3">{title}</h1>}
           <p className="body error-surface__sub">{sub}</p>
-          {routeLabel && (
+          {routeLabel && !panel && (
             <p className="mono muted error-surface__meta">Route · {routeLabel}</p>
           )}
         </div>

@@ -44,8 +44,11 @@ import { routeLabelForPath } from './ErrorBoundaryFallback';
  * route's audited read (a VIEW_* audit row), which is the user's explicit
  * retry, and a dropped cache of another route is read again only when the
  * user navigates there. No read happens passively.
+ *
+ * Shared with the Console and evidence-drawer panel boundaries
+ * (layout/ShellPanelBoundaries), whose Try again has the same problem.
  */
-function useUnobservedQueryReset(): () => void {
+export function useUnobservedQueryReset(): () => void {
   const queryClient = useQueryClient();
   return useCallback(() => {
     // Zero observers, not `type: 'inactive'`: a query held only by a disabled

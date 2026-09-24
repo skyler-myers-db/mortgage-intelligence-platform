@@ -2,10 +2,10 @@
  * @vitest-environment happy-dom
  */
 
-import { act } from 'react';
+import { act, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, useNavigate, type NavigateFunction } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './app';
 
@@ -39,9 +39,25 @@ vi.mock('./components/layout/RouteNav', async () => {
   };
 });
 
+/** Route chunks a test resolves or rejects by hand (the route hold, shell-05). */
+const chunks = vi.hoisted(() => {
+  function gate() {
+    let resolve: () => void = () => undefined;
+    let reject: (error: unknown) => void = () => undefined;
+    const promise = new Promise<void>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+  return { portfolio: gate(), segments: gate(), genie: gate() };
+});
+
 vi.mock('./lib/routePreloaders', async () => {
   const { lazy } = await import('react');
   const Ok = (label: string) => () => <div data-testid="route-ok">{label}</div>;
+  const held = (chunk: { promise: Promise<void> }, label: string) =>
+    lazy(() => chunk.promise.then(() => ({ default: Ok(label) })));
   const Throwing = () => {
     throw new Error('Cannot read score of borrower B-0TESTBORROWER');
   };
@@ -56,12 +72,12 @@ vi.mock('./lib/routePreloaders', async () => {
     LeadQueueRoute: Throwing,
     GlossaryRoute: Ok('glossary'),
     AssetRoute: Ok('asset'),
-    PortfolioBuilderRoute: Ok('portfolio'),
-    SegmentIntelligenceRoute: Ok('segments'),
+    PortfolioBuilderRoute: held(chunks.portfolio, 'portfolio'),
+    SegmentIntelligenceRoute: held(chunks.segments, 'segments'),
     Borrower360Route: Ok('borrower'),
     NotFoundRoute: Ok('not-found'),
     OfferOrchestratorRoute: Ok('offer'),
-    AskGenieRoute: Ok('genie'),
+    AskGenieRoute: held(chunks.genie, 'genie'),
     AdminConfigRoute: Ok('admin'),
     preloadLikelyNextRoutes: () => () => undefined,
   };
@@ -84,11 +100,21 @@ describe('App route error boundary', () => {
     vi.restoreAllMocks();
   });
 
+  let navigate: NavigateFunction = () => undefined;
+  function NavigateProbe() {
+    const routerNavigate = useNavigate();
+    useEffect(() => {
+      navigate = routerNavigate;
+    }, [routerNavigate]);
+    return null;
+  }
+
   async function renderAt(path: string) {
     await act(async () => {
       root.render(
         <QueryClientProvider client={new QueryClient()}>
           <MemoryRouter initialEntries={[path]}>
+            <NavigateProbe />
             <App />
           </MemoryRouter>
         </QueryClientProvider>,
@@ -141,5 +167,104 @@ describe('App route error boundary', () => {
 
     expect(surface()).toBeNull();
     expect(container.querySelector('[data-testid="route-ok"]')?.textContent).toBe('glossary');
+  });
+
+  describe('route hold (shell-05)', () => {
+    const fallbacks = () => container.querySelectorAll('[data-route-fallback]');
+    /** The committed-route marker(s) on the painted `.route-transition` wrapper. */
+    const paintedRoutePaths = () => Array.from(
+      container.querySelectorAll('.route-transition[data-route-path]'),
+      (node) => node.getAttribute('data-route-path'),
+    );
+
+    /** Counts every [data-route-fallback] insertion from now on, however briefly it mounts. */
+    function countFallbackMounts(): () => number {
+      let mounts = 0;
+      const count = (records: MutationRecord[]) => {
+        for (const record of records) {
+          for (const node of record.addedNodes) {
+            if (!(node instanceof Element)) continue;
+            if (node.matches('[data-route-fallback]')) mounts += 1;
+            mounts += node.querySelectorAll('[data-route-fallback]').length;
+          }
+        }
+      };
+      const observer = new MutationObserver(count);
+      observer.observe(container, { childList: true, subtree: true });
+      return () => {
+        count(observer.takeRecords());
+        return mounts;
+      };
+    }
+
+    async function flushChunk(): Promise<void> {
+      await act(async () => {
+        await new Promise((resolve) => window.setTimeout(resolve, 0));
+      });
+    }
+
+    it('keeps the painted route while the next route\'s chunk loads; no fallback mounts until it resolves', async () => {
+      await renderAt('/');
+      expect(container.querySelector('[data-testid="route-ok"]')?.textContent).toBe('home');
+      const mounts = countFallbackMounts();
+
+      await act(async () => {
+        void navigate('/portfolio-builder');
+      });
+      await flushChunk();
+      // Held: the previous route is still the painted DOM, and nothing fell back.
+      expect(container.querySelector('[data-testid="route-ok"]')?.textContent).toBe('home');
+      expect(fallbacks()).toHaveLength(0);
+      expect(mounts()).toBe(0);
+      // The committed-route marker still names the painted route, not the URL's.
+      expect(paintedRoutePaths()).toEqual(['/']);
+
+      await act(async () => {
+        chunks.portfolio.resolve();
+        await chunks.portfolio.promise;
+      });
+      await flushChunk();
+      expect(container.querySelector('[data-testid="route-ok"]')?.textContent).toBe('portfolio');
+      expect(container.querySelector('.route-transition > [data-testid="route-ok"]')).not.toBeNull();
+      expect(mounts()).toBe(0);
+      expect(paintedRoutePaths()).toEqual(['/portfolio-builder']);
+    });
+
+    it('shows the page-shaped fallback on the first render of a route whose chunk is pending', async () => {
+      await renderAt('/ask-genie');
+      expect(container.querySelector('.route-transition > [data-route-fallback]')).not.toBeNull();
+      expect(container.querySelector('[data-testid="route-ok"]')).toBeNull();
+      // The fallback wrapper names no route: nothing of /ask-genie is painted yet.
+      expect(paintedRoutePaths()).toEqual([]);
+
+      await act(async () => {
+        chunks.genie.resolve();
+        await chunks.genie.promise;
+      });
+      await flushChunk();
+      expect(fallbacks()).toHaveLength(0);
+      expect(container.querySelector('[data-testid="route-ok"]')?.textContent).toBe('genie');
+    });
+
+    it('a chunk that rejects during a held navigation reaches the route boundary, which offers Reload', async () => {
+      await renderAt('/');
+      await act(async () => {
+        void navigate('/segment-intelligence');
+      });
+      await flushChunk();
+      expect(container.querySelector('[data-testid="route-ok"]')?.textContent).toBe('home');
+
+      await act(async () => {
+        chunks.segments.reject(
+          new TypeError('Failed to fetch dynamically imported module: /assets/segment-intelligence-0ld.js'),
+        );
+        await chunks.segments.promise.catch(() => undefined);
+      });
+      await flushChunk();
+      expect(surface()?.getAttribute('data-error-boundary')).toBe('route');
+      expect(surface()?.getAttribute('data-error-kind')).toBe('chunk');
+      expect(buttonLabels()).toEqual(['Reload']);
+      expect(container.innerHTML).not.toContain('segment-intelligence-0ld');
+    });
   });
 });

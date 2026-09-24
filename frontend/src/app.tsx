@@ -77,34 +77,60 @@ const ROUTE_ELEMENTS = {
 } satisfies Record<RouteId, ReactElement>;
 
 /**
- * RouteTransition — re-keys its child on every `pathname` change so the
- * CSS `.route-transition` animation replays for each route. Scope is only
+ * RouteTransition — re-keys the route content on every `pathname` change so
+ * the CSS `.route-transition` animation replays for each route. Scope is only
  * the inner `<main>` content; AppShell, Topbar, Rail, Console, and the
  * floating Genie panel don't animate.
+ *
+ * Nesting (audit 2026-09-21 shell-05, the cheap part): RouteErrorBoundary >
+ * Suspense > keyed div > Routes. The Suspense sits ABOVE the key, so it is
+ * the same, already-revealed boundary on every navigation. The data router
+ * navigates inside startTransition (react-router 8.3 RouterProvider
+ * setState), and React keeps a revealed boundary's content during a
+ * transition instead of falling back: a navigation to a route whose chunk is
+ * still loading holds the painted page until the chunk arrives, rather than
+ * flashing the RouteFallback. The first render of a route still shows the
+ * fallback, wrapped in its own `.route-transition` so the page-shaped layout
+ * (and the `.route-transition > [data-route-fallback]` selectors) are
+ * unchanged. A chunk that rejects during a held navigation still reaches the
+ * route boundary, which offers Reload. No loaders, no useNavigation, no route
+ * objects (owner decision #9).
+ *
+ * Because of that hold, the URL can name a route that is not yet on screen
+ * (history has already moved; the old route is still painted). The keyed
+ * div's `data-route-path` is the committed-route marker: the pathname of the
+ * route actually painted, so a reader that must know what is on screen (the
+ * fixture harness's settle, tests/e2e/fixture/app.ts) compares it with the
+ * URL instead of trusting the URL. The fallback wrapper carries none.
  *
  * The route ErrorBoundary wraps the Suspense (a boundary inside PageShell
  * could not catch a failed lazy chunk or a route-level throw) and resets on
  * pathname, so a broken route leaves the shell usable and navigating away
- * clears it even if the `key` re-mount is ever dropped. Its Try again first
- * discards every cached query no mounted component observes, the failed
- * route's among them (components/ErrorBoundaryRoute), so the re-mounted route
- * re-reads its data.
+ * clears it. Its Try again first discards every cached query no mounted
+ * component observes, the failed route's among them
+ * (components/ErrorBoundaryRoute), so the re-mounted route re-reads its data.
  */
 function RouteTransition() {
   const { pathname } = useLocation();
   return (
-    <div key={pathname} className="route-transition">
-      <RouteErrorBoundary pathname={pathname}>
-        <Suspense fallback={<RouteFallback />}>
+    <RouteErrorBoundary pathname={pathname}>
+      <Suspense
+        fallback={(
+          <div className="route-transition">
+            <RouteFallback />
+          </div>
+        )}
+      >
+        <div key={pathname} className="route-transition" data-route-path={pathname}>
           <Routes>
             {ROUTE_IDS.map((id) => (
               <Route key={id} path={ROUTES[id].pattern} element={ROUTE_ELEMENTS[id]} />
             ))}
             <Route path="*" element={<NotFoundRoute />} />
           </Routes>
-        </Suspense>
-      </RouteErrorBoundary>
-    </div>
+        </div>
+      </Suspense>
+    </RouteErrorBoundary>
   );
 }
 

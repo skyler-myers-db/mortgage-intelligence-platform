@@ -8,7 +8,7 @@
  * and navigation is not blocked. The rendered-layer proof in the production
  * build is tests/e2e/fixture/feedback-guard.fixture.spec.ts.
  */
-import { act, useState } from 'react';
+import { act, useEffect, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import {
   Link,
@@ -25,8 +25,14 @@ import { useUnsavedGuard } from '../../hooks/useUnsavedGuard';
 import { UNSAVED_DIALOG_TITLE } from './UnsavedChangesDialog';
 import { UnsavedChangesGuard } from './UnsavedChangesGuard';
 
+/** Clears the note from outside the page, the way a save finishing behind the dialog does. */
+let finishSave: () => void = () => undefined;
+
 function NotePage() {
   const [note, setNote] = useState('');
+  useEffect(() => {
+    finishSave = () => setNote('');
+  }, []);
   useUnsavedGuard(note.length > 0, 'Your note has not been saved.');
   return (
     <>
@@ -156,6 +162,24 @@ describe('UnsavedChangesGuard', () => {
     expect(dialog()).toBeNull();
     expect(where()).toBe('/final');
     expect(document.querySelector('h1')?.textContent).toBe('Final page');
+  });
+
+  it('lets the held navigation through when the page turns clean while the dialog is open (follow-up #7)', async () => {
+    renderDataRouter();
+    type('Call after the rate drop');
+    await click(link('Other page'));
+    expect(dialog()?.open).toBe(true);
+    expect(where()).toBe('/notes');
+
+    // The save the person started finishes behind the dialog: nothing is at
+    // stake any more, so the navigation they asked for proceeds instead of
+    // being dropped with the unmounting blocker.
+    act(() => finishSave());
+    await settle();
+
+    expect(dialog()).toBeNull();
+    expect(where()).toBe('/other');
+    expect(document.querySelector('h1')?.textContent).toBe('Other page');
   });
 
   it('never asks for a clean page, or for a search change on the same page', async () => {

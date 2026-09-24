@@ -5,7 +5,9 @@
  * expanded lead row).
  *
  * Selectors are the accessible names and prototype BEM classes the app
- * already ships; nothing here adds a test-only hook to `frontend/src`.
+ * already ships. The one exception is settle()'s read of the committed-route
+ * marker `data-route-path` (app.tsx RouteTransition): during a held
+ * navigation nothing accessible says which route is painted.
  */
 import { expect, type Locator, type Page } from '@playwright/test';
 import type { DegradeOptions, MockApi } from './mockApi';
@@ -27,6 +29,11 @@ const QUIET_WINDOW_MS = 300;
 interface SettleState {
   heading: boolean;
   busy: number;
+  /** `data-route-path` of the painted route wrapper (null when none), and the URL's pathname. */
+  paintedPath: string | null;
+  urlPath: string;
+  /** The painted route is the URL's route, or the route error surface stands in for it. */
+  painted: boolean;
 }
 
 export class AppDriver {
@@ -64,26 +71,44 @@ export class AppDriver {
   }
 
   /**
-   * Settled means: an `<h1>` is rendered in `<main>`, no `aria-busy` region
-   * remains inside it, the mock API has no request in flight and has been
-   * quiet for a short window, and webfonts are ready. Polls instead of
-   * sleeping so it is as fast as the machine allows and still holds under load.
+   * Settled means: the route painted in `<main>` is the URL's route, an `<h1>`
+   * is rendered there, no `aria-busy` region remains inside it, the mock API
+   * has no request in flight and has been quiet for a short window, and
+   * webfonts are ready. Polls instead of sleeping so it is as fast as the
+   * machine allows and still holds under load.
+   *
+   * "The URL's route": an in-app navigation to a route whose chunk is still
+   * loading holds the previous page (app.tsx RouteTransition, shell-05), so
+   * the URL moves first while the old route stays painted with its h1 and no
+   * aria-busy, and a chunk request is not API traffic. The painted route is
+   * read from the app's committed-route marker, `data-route-path` on the
+   * keyed `.route-transition` wrapper, and compared with `location.pathname`
+   * through the URL parser so both are encoded alike. A route error surface
+   * (`[data-error-boundary="route"]`, which resets on pathname) counts as the
+   * URL's route.
    */
   async settle(timeoutMs = 30_000): Promise<void> {
     const deadline = Date.now() + timeoutMs;
-    let state: SettleState = { heading: false, busy: -1 };
+    const unread: SettleState = { heading: false, busy: -1, paintedPath: null, urlPath: '', painted: false };
+    let state: SettleState = unread;
     while (Date.now() < deadline) {
       state = await this.page
         .evaluate(() => {
           const main = document.querySelector('#main-content');
+          const paintedPath = main?.querySelector('.route-transition[data-route-path]')?.getAttribute('data-route-path') ?? null;
+          const urlPath = window.location.pathname;
+          const routeError = Boolean(main?.querySelector('[data-error-boundary="route"]'));
           return {
             heading: Boolean(main?.querySelector('h1')),
             busy: main ? main.querySelectorAll('[aria-busy="true"]').length : -1,
+            paintedPath,
+            urlPath,
+            painted: routeError || (paintedPath !== null && new URL(paintedPath, window.location.origin).pathname === urlPath),
           };
         })
-        .catch(() => ({ heading: false, busy: -1 }));
+        .catch(() => unread);
       const quiet = this.mockApi.inflight === 0 && this.mockApi.idleMs >= QUIET_WINDOW_MS;
-      if (state.heading && state.busy === 0 && quiet) {
+      if (state.painted && state.heading && state.busy === 0 && quiet) {
         await this.page.evaluate(() => document.fonts.ready.then(() => undefined));
         return;
       }
@@ -91,6 +116,7 @@ export class AppDriver {
     }
     throw new Error(
       `Route did not settle within ${timeoutMs} ms at ${this.page.url()}: ` +
+        `route painted in <main>=${state.paintedPath ?? 'none'} (URL path ${state.urlPath}), ` +
         `h1 rendered=${state.heading}, aria-busy regions in <main>=${state.busy}, ` +
         `API requests in flight=${this.mockApi.inflight}.`,
     );

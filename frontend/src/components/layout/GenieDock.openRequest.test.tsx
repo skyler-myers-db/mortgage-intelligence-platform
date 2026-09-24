@@ -22,10 +22,12 @@ describe('GenieDock open requests', () => {
   let container: HTMLDivElement;
   let root: Root;
   const onOpen = vi.fn();
+  const onClose = vi.fn();
   const onWarm = vi.fn();
 
   beforeEach(() => {
     onOpen.mockReset();
+    onClose.mockReset();
     onWarm.mockReset();
     consumeGeniePrefill();
     container = document.createElement('div');
@@ -40,14 +42,14 @@ describe('GenieDock open requests', () => {
   });
 
   it('opens the panel on openGenie and leaves the prefill queued for the chat', () => {
-    act(() => root.render(<GenieDock open={false} onOpen={onOpen} onWarm={onWarm} Chat={ChatProbe} />));
+    act(() => root.render(<GenieDock open={false} onOpen={onOpen} onClose={onClose} onWarm={onWarm} Chat={ChatProbe} />));
     act(() => openGenie({ prompt: 'Compare mean lead score by current coverage state.' }));
     expect(onOpen).toHaveBeenCalledTimes(1);
     expect(consumeGeniePrefill()).toBe('Compare mean lead score by current coverage state.');
   });
 
   it('stops listening once unmounted', () => {
-    act(() => root.render(<GenieDock open={false} onOpen={onOpen} onWarm={onWarm} Chat={ChatProbe} />));
+    act(() => root.render(<GenieDock open={false} onOpen={onOpen} onClose={onClose} onWarm={onWarm} Chat={ChatProbe} />));
     act(() => root.unmount());
     root = createRoot(container);
     act(() => openGenie({ prompt: 'anything' }));

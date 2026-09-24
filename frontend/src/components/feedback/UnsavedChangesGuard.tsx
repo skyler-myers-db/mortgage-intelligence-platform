@@ -1,5 +1,10 @@
-import { useCallback, useContext } from 'react';
-import { UNSAFE_DataRouterContext, useBlocker, type BlockerFunction } from 'react-router';
+import { useCallback, useContext, useEffect } from 'react';
+import {
+  UNSAFE_DataRouterContext,
+  UNSAFE_DataRouterStateContext,
+  useBlocker,
+  type BlockerFunction,
+} from 'react-router';
 import { unsavedWorkMessage, useUnsavedWorkMessage } from '../../hooks/useUnsavedGuard';
 import { UnsavedChangesDialog } from './UnsavedChangesDialog';
 
@@ -18,12 +23,19 @@ import { UnsavedChangesDialog } from './UnsavedChangesDialog';
  *
  * The blocker is mounted only while some page is dirty, so a clean app pays
  * nothing on navigation and React Router's one-blocker-per-router rule holds
- * however many pages are dirty.
+ * however many pages are dirty. It also stays mounted while it HOLDS a
+ * navigation (the router's own blocker state, read from its state context
+ * like the router above): a page that turns clean while "Leave without
+ * saving?" is open (a save finishing behind the dialog) used to unmount the
+ * blocker mid-block, which silently dropped the navigation. Now nothing is
+ * at stake any more, so the held navigation proceeds (wave-1c follow-up #7).
  */
 export function UnsavedChangesGuard() {
   const message = useUnsavedWorkMessage();
   const dataRouter = useContext(UNSAFE_DataRouterContext);
-  if (!dataRouter || message === null) return null;
+  const routerState = useContext(UNSAFE_DataRouterStateContext);
+  const holding = [...(routerState?.blockers.values() ?? [])].some((blocker) => blocker.state === 'blocked');
+  if (!dataRouter || (message === null && !holding)) return null;
   return <NavigationBlocker message={message} />;
 }
 
@@ -49,10 +61,15 @@ export function UnsavedChangesGuard() {
 export const leavesThePage: BlockerFunction = ({ currentLocation, nextLocation }) =>
   unsavedWorkMessage() !== null && currentLocation.pathname !== nextLocation.pathname;
 
-function NavigationBlocker({ message }: { message: string }) {
+function NavigationBlocker({ message }: { message: string | null }) {
   const blocker = useBlocker(leavesThePage);
+  const blocked = blocker.state === 'blocked';
   const stay = useCallback(() => blocker.reset?.(), [blocker]);
   const leave = useCallback(() => blocker.proceed?.(), [blocker]);
-  if (blocker.state !== 'blocked') return null;
+  // The page turned clean while the navigation was held: let it through.
+  useEffect(() => {
+    if (blocked && message === null) blocker.proceed?.();
+  }, [blocked, blocker, message]);
+  if (!blocked || message === null) return null;
   return <UnsavedChangesDialog message={message} onStay={stay} onLeave={leave} />;
 }

@@ -58,11 +58,13 @@ export function useGeniePanelDismissal({
     // or a launcher). When the opener has left the document — a command
     // palette item, the shell's pre-mount launcher — prefer the topbar
     // toggle, which exists at every width; the panel's own FAB is the last
-    // resort because it is hidden on desktop.
+    // resort because it is hidden on desktop. <body> is no opener: nothing
+    // was focused (the Genie error frame opens with <body> focused when the
+    // chat crashed with focus inside it), so it takes the same fallback.
     const opener = openerRef.current;
     if (!opener) return undefined;
     openerRef.current = null;
-    const target = document.contains(opener)
+    const target = opener !== document.body && document.contains(opener)
       ? opener
       : (document.querySelector<HTMLElement>(TOPBAR_TOGGLE_SELECTOR) ?? fabRef.current);
     target?.focus();

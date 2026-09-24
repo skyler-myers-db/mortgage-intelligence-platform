@@ -10,6 +10,7 @@ import { EvidenceDrawer } from '../mortgage/EvidenceDrawer';
 import { DegradedBanner } from '../mortgage/DegradedBanner';
 import { VersionNotice } from '../mortgage/VersionNotice';
 import { GenieDock } from './GenieDock';
+import { ConsoleBoundary, DrawerBoundary } from './ShellPanelBoundaries';
 import { ShellToaster } from '../feedback/ShellToaster';
 import { UnsavedChangesGuard } from '../feedback/UnsavedChangesGuard';
 import { lazyWithPreload, preloadBestEffort } from '../../lib/lazyPreload';
@@ -172,6 +173,10 @@ function AppShellInner({ children }: PropsWithChildren) {
     setGenieOpen(true);
   }, [setGenieOpen]);
 
+  const closeGenie = useCallback(() => {
+    setGenieOpen(false);
+  }, [setGenieOpen]);
+
   const warmGenie = useCallback(() => {
     preloadBestEffort(LazyGenieChat.preload);
   }, []);
@@ -212,35 +217,48 @@ function AppShellInner({ children }: PropsWithChildren) {
         <VersionNotice />
         {children}
       </main>
-      <EvidenceDrawer />
-      <Suspense
-        fallback={(
-          <aside
-            id="workspace-console"
-            className={`tweaks ${consoleOpen ? 'is-open' : ''}`}
-            role="complementary"
-            aria-label="Workspace console"
-            aria-hidden={!consoleOpen}
-            tabIndex={consoleOpen ? -1 : undefined}
-          />
-        )}
-      >
-        {consoleMounted ? (
-          <LazyConsole />
-        ) : (
-          <aside
-            id="workspace-console"
-            className="tweaks"
-            role="complementary"
-            aria-label="Workspace console"
-            aria-hidden="true"
-            tabIndex={-1}
-          />
-        )}
-      </Suspense>
+      {/* Panel boundaries (audit states-01): a throw in the drawer, the
+          Console or the Genie chat stays inside that panel's frame instead of
+          reaching the root; see ShellPanelBoundaries. */}
+      <DrawerBoundary>
+        <EvidenceDrawer />
+      </DrawerBoundary>
+      <ConsoleBoundary>
+        <Suspense
+          fallback={(
+            <aside
+              id="workspace-console"
+              className={`tweaks ${consoleOpen ? 'is-open' : ''}`}
+              role="complementary"
+              aria-label="Workspace console"
+              aria-hidden={!consoleOpen}
+              tabIndex={consoleOpen ? -1 : undefined}
+            />
+          )}
+        >
+          {consoleMounted ? (
+            <LazyConsole />
+          ) : (
+            <aside
+              id="workspace-console"
+              className="tweaks"
+              role="complementary"
+              aria-label="Workspace console"
+              aria-hidden="true"
+              tabIndex={-1}
+            />
+          )}
+        </Suspense>
+      </ConsoleBoundary>
       {/* Mounted on first open and never unmounted: closing only hides the
           panel, so an in-flight Genie turn survives (see GenieDock). */}
-      <GenieDock open={genieOpen} onOpen={openGenie} onWarm={warmGenie} Chat={LazyGenieChat} />
+      <GenieDock
+        open={genieOpen}
+        onOpen={openGenie}
+        onClose={closeGenie}
+        onWarm={warmGenie}
+        Chat={LazyGenieChat}
+      />
       {/* Shell feedback (audit states-05 / states-07): the toast region and
           the "Leave without saving?" guard for pages with unsaved work. */}
       <ShellToaster />

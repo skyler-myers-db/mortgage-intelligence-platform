@@ -415,18 +415,20 @@ test.describe('skeletons shaped like what they stand in for (states-10)', () => 
     expect(reserved.height).toBeLessThan(loaded.height * 1.4);
   });
 
-  test('a route whose chunk is still loading shows the page-shaped fallback with its panel reserved', async ({ app, page }) => {
-    await app.gotoRoute('/');
+  test('a route whose chunk is still loading shows the page-shaped fallback with its panel reserved', async ({ page }) => {
     let release: () => void = () => undefined;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    // Hold the Glossary route chunk (it is not among the idle-preloaded routes).
+    // Hold the Glossary route chunk on a COLD load: the first render of a
+    // route still shows the fallback. (An in-app navigation to an unloaded
+    // chunk now holds the painted page instead, wave 2 shell-05; that is
+    // error-telemetry.fixture.spec.ts case D.)
     await page.route(/\/assets\/glossary-[^/]+\.js$/, async (route) => {
       await gate;
       await route.continue();
     });
-    await navLink(page, 'Glossary').click();
+    await page.goto('/glossary', { waitUntil: 'domcontentloaded' });
 
     const fallback = page.locator('.route-transition > [data-route-fallback]');
     await expect(fallback).toHaveCount(1);
