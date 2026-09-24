@@ -16,6 +16,7 @@ import os
 import re
 from collections.abc import Callable
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import AliasChoices, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
@@ -466,6 +467,14 @@ class Settings(BaseSettings):
     # `mip_cache_ttl_s` when enabled. Deployed Apps set this to 0 for idle
     # cost control; operators can temporarily enable it for staffed demos.
     mip_leads_warm_interval_s: float = 0.0
+    # One keep-warm policy (audit delivery-v1; backend.services.keep_warm is
+    # the single reader). "off": nothing keeps the warehouse awake, so it
+    # auto-stops. "activity": an authenticated health poll from a tab with
+    # user input in the last N minutes pings at most once per 240 s.
+    # "scheduled": the lead-page refresh-ahead loop at MIP_LEADS_WARM_INTERVAL_S,
+    # which is otherwise ignored (with a startup warning).
+    mip_warehouse_keep_warm: Literal["off", "activity", "scheduled"] = "off"
+    mip_warehouse_keep_warm_activity_window_min: int = Field(default=15, ge=1, le=240)
     # Shorter TTL for Lakebase sales workflow read-through state (assignment,
     # disposition, approval rollups). Mutating sales-state paths clear this
     # process-local cache immediately; the TTL covers out-of-band updates.

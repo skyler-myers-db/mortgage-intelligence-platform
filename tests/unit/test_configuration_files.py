@@ -32,6 +32,17 @@ def test_app_yaml_disables_idle_lead_rewarm_by_default():
     ), "app.yaml must disable periodic lead-cache rewarm by default"
 
 
+def test_app_yaml_pins_warehouse_keep_warm_off_by_default():
+    """One keep-warm policy (audit delivery-v1): the deployed default is off,
+    so an idle warehouse auto-stops; the lead interval is scheduled-only."""
+    content = (REPO / "app.yaml").read_text(encoding="utf-8")
+    assert re.search(
+        r"(?ms)- name: MIP_WAREHOUSE_KEEP_WARM\s+value: \"off\"",
+        content,
+    ), "app.yaml must pin MIP_WAREHOUSE_KEEP_WARM to off"
+    assert "Cadence of the \"scheduled\" keep-warm policy only" in content
+
+
 def test_bundle_sql_warehouse_uses_minimal_idle_timeout():
     """The bundle-managed SQL warehouse should auto-stop quickly when idle."""
     content = (REPO / "databricks.yml").read_text(encoding="utf-8")

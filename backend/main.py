@@ -67,6 +67,7 @@ from backend.services.campaign_treatment_runtime import (
     campaign_treatment_runtime_enabled,
 )
 from backend.services.genie_place_dimension import warm_governed_place_dimension
+from backend.services.keep_warm import log_startup_policy as _keep_warm_policy
 from backend.services.observability import (
     configure_logging,
     emit,
@@ -297,9 +298,10 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
     2026-06-11 audit P1-6:
     * Warm the default `/api/leads` page (slowest hot-path query) once at
-      startup. When ``MIP_LEADS_WARM_INTERVAL_S`` is positive, keep it warm
-      with a refresh-ahead loop for demo/performance-critical sessions; the
-      deployed app default sets this to 0 so idle workspaces can auto-stop.
+      startup. The refresh-ahead loop runs only under the ``scheduled``
+      keep-warm policy (``backend.services.keep_warm``, the single resolver;
+      ``MIP_LEADS_WARM_INTERVAL_S`` is its cadence). The deployed default is
+      ``off`` so idle workspaces can auto-stop.
     * Warm the governed place dimension so the Genie output policy never pays
       its resolve inline on an Ask Genie turn.
     """
@@ -336,17 +338,9 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
         _warm_lakebase()
         _warm_hot_lead_cache()
         warm_governed_place_dimension()
-        if settings.mip_leads_warm_interval_s > 0:
+        if _keep_warm_policy() == "scheduled":
             rewarm_task = asyncio.create_task(
                 _lead_cache_rewarm_loop(settings.mip_leads_warm_interval_s)
-            )
-        else:
-            emit(
-                log,
-                "lead_cache_rewarm_disabled",
-                dependency="warehouse",
-                outcome="skipped",
-                interval_s=settings.mip_leads_warm_interval_s,
             )
     try:
         yield

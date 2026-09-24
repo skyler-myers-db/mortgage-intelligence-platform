@@ -66,6 +66,7 @@ from backend.services.forced_degraded import (
     forced_degraded_snapshot_from_cookie,
 )
 from backend.services.health_probes import breaker_states, probe_snapshot
+from backend.services.keep_warm import note_activity, parse_idle_hint
 from backend.services.observability import (
     get_otel_handler,
     recent_breaker_state_changes,
@@ -335,6 +336,9 @@ def health(request: Request) -> dict[str, Any]:
         anonymous_status, _ = _apply_treatment_runtime_degraded("ok")
         return {"status": anonymous_status, "mode": "live"}
 
+    # Keep-warm activity hint (delivery-v1): authenticated branch only, read
+    # leniently so /health can never 422; the ping itself is fire-and-forget.
+    note_activity(parse_idle_hint(request.query_params.get("idle_s")))
     status, deps = probe_snapshot()
     breakers = breaker_states()
     status, deps = _apply_breaker_degraded(status, deps, breakers)

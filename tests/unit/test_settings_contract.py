@@ -66,6 +66,8 @@ def _sample_for_field(field_name: str) -> tuple[str, Any]:
         return "sentinel_tenant", "sentinel_tenant"
     if field_name == "mip_gold_cache_max_stale_s":
         return "600.5", 600.5  # bounded ge=60
+    if field_name == "mip_warehouse_keep_warm":
+        return "activity", "activity"  # off | activity | scheduled
     annotation = Settings.model_fields[field_name].annotation
     if _annotation_contains(annotation, bool):
         return "false", False

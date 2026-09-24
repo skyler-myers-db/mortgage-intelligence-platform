@@ -306,12 +306,43 @@ def test_payload_includes_explicit_admin_operator_vars(monkeypatch) -> None:
 
 
 def test_payload_allows_operator_to_enable_lead_rewarm(monkeypatch) -> None:
+    monkeypatch.setenv("MIP_WAREHOUSE_KEEP_WARM", "scheduled")
     monkeypatch.setenv("MIP_LEADS_WARM_INTERVAL_S", "120")
 
     payload = build_payload(source_code_path="/Workspace/app/files", target="dev")
     env = _env_map(payload)
 
     assert env["MIP_LEADS_WARM_INTERVAL_S"]["value"] == "120"
+    assert env["MIP_WAREHOUSE_KEEP_WARM"]["value"] == "scheduled"
+
+
+def test_payload_pins_keep_warm_off_explicitly(monkeypatch) -> None:
+    """Deployment env_vars replace app.yaml and empty values are dropped, so
+    the idle-cost default must be an explicit value (audit delivery-v1)."""
+    env = _env_map(build_payload(source_code_path="/Workspace/app/files", target="dev"))
+
+    assert env["MIP_WAREHOUSE_KEEP_WARM"]["value"] == "off"
+    assert "MIP_WAREHOUSE_KEEP_WARM_ACTIVITY_WINDOW_MIN" not in env
+
+
+def test_payload_carries_an_operator_activity_policy(monkeypatch) -> None:
+    monkeypatch.setenv("MIP_WAREHOUSE_KEEP_WARM", "activity")
+    monkeypatch.setenv("MIP_WAREHOUSE_KEEP_WARM_ACTIVITY_WINDOW_MIN", "30")
+
+    env = _env_map(build_payload(source_code_path="/Workspace/app/files", target="dev"))
+
+    assert env["MIP_WAREHOUSE_KEEP_WARM"]["value"] == "activity"
+    assert env["MIP_WAREHOUSE_KEEP_WARM_ACTIVITY_WINDOW_MIN"]["value"] == "30"
+
+
+@pytest.mark.parametrize("policy", [None, "off", "activity"])
+def test_payload_refuses_a_rewarm_interval_the_policy_would_ignore(monkeypatch, policy) -> None:
+    if policy is not None:
+        monkeypatch.setenv("MIP_WAREHOUSE_KEEP_WARM", policy)
+    monkeypatch.setenv("MIP_LEADS_WARM_INTERVAL_S", "120")
+
+    with pytest.raises(ValueError, match="MIP_WAREHOUSE_KEEP_WARM=scheduled"):
+        build_payload(source_code_path="/Workspace/app/files", target="dev")
 
 
 def test_payload_binds_cotality_mask_secret_without_serializing_value(monkeypatch) -> None:

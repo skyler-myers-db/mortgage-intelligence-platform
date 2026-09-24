@@ -421,3 +421,34 @@ context. The browser reads the header through
 `PerformanceResourceTiming.serverTiming` (same origin, so no
 `Timing-Allow-Origin` is needed); `frontend/src/lib/rum.ts` forwards it with a
 route-templated path only.
+
+## 7. Warehouse keep-warm: cost vs cold start
+
+The SQL warehouse is serverless (`2X-Small`, `auto_stop_mins: 10` in
+`databricks.yml`). Until the 2026-09-21 audit (`delivery-v1`) the health
+poll's `SELECT 1` kept it awake by accident: any visible tab queried it every
+8 s, so it never auto-stopped and only the very first visitor ever paid a cold
+start. Health now reads the warehouse lifecycle state instead (§5), so keeping
+the warehouse warm is an explicit, configured trade-off with one resolver,
+`backend/services/keep_warm.py`:
+
+| `MIP_WAREHOUSE_KEEP_WARM` | What runs | Cost | Cold starts |
+| --- | --- | --- | --- |
+| `off` (default in `app.yaml` and the deploy payload) | Nothing | Warehouse stops 10 min after the last query | The next visitor waits for a serverless resume, typically 2–6 s, shown as a calm "Waking warehouse" pill, not an outage |
+| `activity` | An authenticated `GET /api/v1/health` from a tab with user input in the last `MIP_WAREHOUSE_KEEP_WARM_ACTIVITY_WINDOW_MIN` minutes (default 15) submits at most one `SELECT 1 AS keep_warm` per 240 s, process-wide, fire-and-forget | Runs while someone is actively working, stops 10 min after they stop | Only after a quiet spell |
+| `scheduled` | The lead-page refresh-ahead loop every `MIP_LEADS_WARM_INTERVAL_S` seconds (must be > 0; `scheduled` with 0 resolves to `off` and logs an ERROR) | Never stops while the App runs | None |
+
+Precedence: the policy value alone decides what runs. A positive
+`MIP_LEADS_WARM_INTERVAL_S` under `off` or `activity` is ignored with one
+startup WARNING (`warehouse_keep_warm_interval_ignored`) and never starts a
+second keep-warm; `tools/databricks/app_deploy_payload.py` refuses such a
+payload outright. Startup logs `warehouse_keep_warm_policy` once. The browser
+sends only an integer `idle_s` hint (seconds since the last pointer, key,
+wheel or touch input) on its health poll, which runs only while the tab is
+visible; the anonymous load-balancer branch and `/api/v1/admin/health` never
+ping. A failed ping logs `warehouse_keep_warm_ping_failed` with the exception
+type only.
+
+Assumption, not live-verified: any statement resets the warehouse idle timer
+(standard Databricks SQL behaviour). The 240 s ping interval is pinned well
+inside the 10-minute auto-stop by `tests/unit/test_keep_warm.py`.
