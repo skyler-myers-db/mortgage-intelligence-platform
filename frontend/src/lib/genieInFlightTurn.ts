@@ -4,11 +4,11 @@ import { ApiError, api, isAbortError, isWarmingUpError, type GenieLiveProgress }
 import { GenieLiveError, MAX_LIVE_WAIT_MS, pollGenieTurn, submitGenieTurn, type GenieTurnIds } from './genieAsk';
 import {
   GENIE_CONVERSATION_RESET_EVENT,
-  GENIE_IN_FLIGHT_TURN_KEY,
   clearGenieConversationState,
   writeGenieConversationId,
 } from './genieConversation';
 import { appendGenieTurn, getGenieTurns } from './genieConversationStore';
+import { readRecord, removeRecord, writeRecord, type PersistedTurnRecord } from './genieInFlightRecord';
 import {
   GENIE_RESUME_FAILED_REASON,
   GENIE_STOPPED_REASON,
@@ -140,17 +140,6 @@ export interface StartGenieTurnInput {
   startedAt: number;
 }
 
-interface PersistedTurnRecord {
-  v: 1;
-  question: string;
-  conversationId: string | null;
-  surface: GenieTurnSurface;
-  startedAt: number;
-  deep: boolean;
-  phase: GenieTurnPhase;
-  ids?: GenieTurnIds;
-}
-
 interface ActiveTurn {
   generation: number;
   question: string;
@@ -235,76 +224,6 @@ function isCurrent(gen: number): boolean {
 }
 
 // ------------------------------------------------------ sessionStorage record
-
-function isSurface(value: unknown): value is GenieTurnSurface {
-  return value === 'panel' || value === 'route';
-}
-
-function isPhase(value: unknown): value is GenieTurnPhase {
-  return value === 'submitting' || value === 'polling' || value === 'completing';
-}
-
-function parseIds(value: unknown): GenieTurnIds | undefined {
-  if (!value || typeof value !== 'object') return undefined;
-  const ids = value as Partial<GenieTurnIds>;
-  if (typeof ids.conversationId !== 'string' || !ids.conversationId) return undefined;
-  if (typeof ids.messageId !== 'string' || !ids.messageId) return undefined;
-  if (typeof ids.progressToken !== 'string' || !ids.progressToken) return undefined;
-  return { conversationId: ids.conversationId, messageId: ids.messageId, progressToken: ids.progressToken };
-}
-
-function parseRecord(raw: string): PersistedTurnRecord | null {
-  const value: unknown = JSON.parse(raw);
-  if (!value || typeof value !== 'object') return null;
-  const record = value as Partial<PersistedTurnRecord>;
-  if (record.v !== 1 || typeof record.question !== 'string' || !record.question.trim()) return null;
-  if (!isSurface(record.surface) || !isPhase(record.phase)) return null;
-  if (typeof record.startedAt !== 'number' || !Number.isFinite(record.startedAt)) return null;
-  const conversationId = typeof record.conversationId === 'string' ? record.conversationId : null;
-  return {
-    v: 1,
-    question: record.question,
-    conversationId,
-    surface: record.surface,
-    startedAt: record.startedAt,
-    deep: record.deep === true,
-    phase: record.phase,
-    ids: parseIds(record.ids),
-  };
-}
-
-/** The persisted record, or null. A malformed record is removed. */
-function readRecord(): PersistedTurnRecord | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    const raw = window.sessionStorage.getItem(GENIE_IN_FLIGHT_TURN_KEY);
-    if (!raw) return null;
-    const record = parseRecord(raw);
-    if (!record) window.sessionStorage.removeItem(GENIE_IN_FLIGHT_TURN_KEY);
-    return record;
-  } catch {
-    return null;
-  }
-}
-
-/** Best effort: storage full or blocked means the turn runs in memory only. */
-function writeRecord(record: PersistedTurnRecord): void {
-  if (typeof window === 'undefined') return;
-  try {
-    window.sessionStorage.setItem(GENIE_IN_FLIGHT_TURN_KEY, JSON.stringify(record));
-  } catch {
-    // Quota exceeded / privacy mode: only the reload resume is lost.
-  }
-}
-
-function removeRecord(): void {
-  if (typeof window === 'undefined') return;
-  try {
-    window.sessionStorage.removeItem(GENIE_IN_FLIGHT_TURN_KEY);
-  } catch {
-    // Storage unavailable: there is nothing to remove.
-  }
-}
 
 function recordPhase(gen: number, patch: Partial<PersistedTurnRecord>): void {
   if (!isCurrent(gen) || !active) return;
