@@ -429,8 +429,10 @@ probe executor, keep-warm pings) records nothing: the collector lives in a
 ContextVar set once by the middleware, and executor threads start with an empty
 context. The browser reads the header through
 `PerformanceResourceTiming.serverTiming` (same origin, so no
-`Timing-Allow-Origin` is needed); `frontend/src/lib/rum.ts` forwards it with a
-route-templated path only.
+`Timing-Allow-Origin` is needed). The client half is w2-error-telemetry's:
+once it lands, `frontend/src/lib/rum.ts` forwards these entries with a
+route-templated path only; until then the header is read in the browser's
+network panel.
 
 ## 7. Warehouse keep-warm: cost vs cold start
 
@@ -490,3 +492,11 @@ there those values trail the mirror by at most one soft TTL (default 120 s previ
 generations of those keys out of every live gold cache (`workflow_key`), so
 a burst of approval writes leaves no dead entries to push live previews out of
 the bounded LRU.
+
+During a sustained warehouse outage, sites built with `stale_if_error` keep
+serving their last good value (up to the `MIP_GOLD_CACHE_MAX_STALE_S` hard
+cap), and every later stale read schedules one more background refresh per key
+(at most one in flight per key on the two-worker pool; the open circuit breaker
+makes each attempt fail fast). A repeated `gold_cache_refresh_failed` WARNING
+for the same key during an outage is that retry, not a new problem; it stops
+once the warehouse is back.
