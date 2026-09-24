@@ -486,4 +486,7 @@ when a warehouse-mode lifecycle sync completes. A sync that runs as the
 Databricks job (`MIP_LIFECYCLE_SYNC_MODE=job`, or the retry job submitted after
 a warehouse-mode failure) finishes outside the App and moves no generation, so
 there those values trail the mirror by at most one soft TTL (default 120 s preview,
-300 s analytics) plus one stale serve.
+300 s analytics) plus one stale serve. Each move also sweeps the older
+generations of those keys out of every live gold cache (`workflow_key`), so
+a burst of approval writes leaves no dead entries to push live previews out of
+the bounded LRU.

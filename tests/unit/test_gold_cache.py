@@ -22,6 +22,7 @@ from backend.services.gold_cache import (
     bump_workflow_generation,
     get_or_set_capped,
     workflow_generation,
+    workflow_key,
 )
 from backend.services.resilience_cache import TTLCache
 
@@ -352,6 +353,44 @@ def test_workflow_generation_moves_forward() -> None:
 
     assert bump_workflow_generation() == before + 1
     assert workflow_generation() == before + 1
+
+
+def test_a_bump_sweeps_older_workflow_generations_and_no_other_key(
+    clock: _Clock, deferred: _DeferredExecutor
+) -> None:
+    """A dead generation is never read again; left in place it would evict live keys."""
+    cache = GoldAggregateCache(max_entries=3, now=clock, executor=deferred)
+    economics, lookalike, counts = _Factory("economics"), _Factory("lookalike"), _Factory(1, 2, 3)
+    cache.get_or_set("sweep.test.preview", economics, ttl_s=60)
+    # Shares the family's text but not its ``family:`` prefix: never swept.
+    cache.get_or_set("sweep.test.counts.other:0", lookalike, ttl_s=60)
+
+    for expected in (1, 2, 3):
+        assert cache.get_or_set(workflow_key("sweep.test.counts"), counts, ttl_s=60) == expected
+        bump_workflow_generation()  # an approval write
+
+    assert cache.get_or_set("sweep.test.preview", economics, ttl_s=60) == "economics"
+    assert cache.get_or_set("sweep.test.counts.other:0", lookalike, ttl_s=60) == "lookalike"
+    assert (economics.calls, lookalike.calls, counts.calls) == (1, 1, 3)
+
+
+def test_a_bump_disowns_the_background_refresh_of_a_swept_generation(
+    clock: _Clock, deferred: _DeferredExecutor
+) -> None:
+    cache = GoldAggregateCache(max_entries=2, now=clock, executor=deferred)
+    economics, counts = _Factory("economics"), _Factory("old", "late", "new")
+    cache.get_or_set("sweep.refresh.preview", economics, ttl_s=60)
+    old_key = workflow_key("sweep.refresh.counts")
+    cache.get_or_set(old_key, counts, ttl_s=60)
+    clock.now += 61
+    assert cache.get_or_set(old_key, counts, ttl_s=60) == "old"  # stale; refresh queued
+
+    bump_workflow_generation()
+    deferred.run_all()  # the late refresh of the swept key stores nothing
+    assert cache.get_or_set(workflow_key("sweep.refresh.counts"), counts, ttl_s=60) == "new"
+
+    assert cache.get_or_set("sweep.refresh.preview", economics, ttl_s=60) == "economics"
+    assert economics.calls == 1, "the live preview key was never evicted by a dead generation"
 
 
 @pytest.fixture

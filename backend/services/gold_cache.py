@@ -38,6 +38,7 @@ import atexit
 import contextlib
 import logging
 import time
+import weakref
 from collections import OrderedDict
 from collections.abc import Callable
 from concurrent.futures import Executor, ThreadPoolExecutor
@@ -81,6 +82,11 @@ class AggregateCache(Protocol):
 
 _WORKFLOW_GENERATION = 0
 _WORKFLOW_GENERATION_LOCK = Lock()
+# Key families built by ``workflow_key`` (guarded by the generation lock).
+_WORKFLOW_FAMILIES: set[str] = set()
+# Every live GoldAggregateCache, so a bump can sweep the dead generations.
+_LIVE_CACHES: weakref.WeakSet[GoldAggregateCache] = weakref.WeakSet()
+_LIVE_CACHES_LOCK = Lock()
 
 
 def workflow_generation() -> int:
@@ -88,12 +94,33 @@ def workflow_generation() -> int:
         return _WORKFLOW_GENERATION
 
 
+def workflow_key(family: str, *parts: str) -> str:
+    """``{family}:{generation}[:{part}...]`` for a value that reads the mirror.
+
+    A bump moves every such key forward AND drops the older generations of
+    each family from every live gold cache: a dead generation is never read
+    again, and left in place it would age through the LRU pushing out live
+    preview keys (one orphan per approval write).
+    """
+    with _WORKFLOW_GENERATION_LOCK:
+        _WORKFLOW_FAMILIES.add(family)
+        generation = _WORKFLOW_GENERATION
+    return ":".join((family, str(generation), *parts))
+
+
 def bump_workflow_generation() -> int:
     """Move every workflow-count key forward; returns the new generation."""
     global _WORKFLOW_GENERATION
     with _WORKFLOW_GENERATION_LOCK:
         _WORKFLOW_GENERATION += 1
-        return _WORKFLOW_GENERATION
+        generation = _WORKFLOW_GENERATION
+        families = tuple(_WORKFLOW_FAMILIES)
+    if families:
+        with _LIVE_CACHES_LOCK:
+            caches = list(_LIVE_CACHES)
+        for cache in caches:
+            cache.drop_workflow_generations(families, keep=generation)
+    return generation
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +182,8 @@ class GoldAggregateCache:
         self._now = now
         self._max_entries = max_entries
         self._executor_override = executor
+        with _LIVE_CACHES_LOCK:
+            _LIVE_CACHES.add(self)
 
     def _executor(self) -> Executor:
         return self._executor_override or _get_gold_swr_executor()
@@ -340,6 +369,28 @@ class GoldAggregateCache:
         while len(self._entries) > self._max_entries:
             self._entries.popitem(last=False)
 
+    def drop_workflow_generations(self, families: tuple[str, ...], *, keep: int) -> int:
+        """Drop every ``workflow_key`` entry of ``families`` not at ``keep``.
+
+        A background refresh of a dropped key is disowned (it stores nothing).
+        An inline leader still in flight may store one old-generation entry;
+        the next bump sweeps it, since every generation but ``keep`` goes.
+        """
+        prefixes = tuple(f"{family}:" for family in families)
+        current = str(keep)
+
+        def dead(key: str) -> bool:
+            prefix = next((p for p in prefixes if key.startswith(p)), None)
+            return prefix is not None and key[len(prefix):].partition(":")[0] != current
+
+        with self._lock:
+            doomed = [key for key in self._entries if dead(key)]
+            for key in doomed:
+                del self._entries[key]
+            for key in [key for key in self._refreshing if dead(key)]:
+                del self._refreshing[key]
+        return len(doomed)
+
     def invalidate(self, key: str) -> None:
         with self._lock:
             self._entries.pop(key, None)
@@ -395,4 +446,5 @@ __all__ = [
     "bump_workflow_generation",
     "get_or_set_capped",
     "workflow_generation",
+    "workflow_key",
 ]

@@ -153,6 +153,29 @@ def test_a_completed_lifecycle_sync_rereads_the_counts(
     assert warehouse.count(PREVIEW_SQL) == 1
 
 
+def test_approval_writes_leave_no_dead_count_keys_to_evict_other_previews(warehouse: _Warehouse) -> None:
+    """Each bump sweeps the older counts generation out of the gold cache.
+
+    Left in place, one orphaned ``portfolio.workflow_counts:N`` per approval
+    write would age through the bounded LRU and push out previews nobody has
+    re-read since (the reviewer's 256-entry concern, at a bound of 4 here).
+    """
+    cache = GoldAggregateCache(max_entries=4, now=lambda: 0.0, executor=_NoRefreshExecutor())
+    repo = DatabricksPortfolioRepository(warehouse, cache=cache, cache_ttl_s=120.0)  # type: ignore[arg-type]
+    filtered = PortfolioPreviewRequest(criteria=PortfolioCriteria(min_equity_pct=25))
+    repo.preview(None)
+    repo.preview(filtered)  # a preview nobody re-reads while the writes land
+    assert warehouse.count(PREVIEW_SQL) == 2
+
+    for approved in (8, 9, 10):
+        warehouse.approved = approved
+        clear_sales_state_cache()  # an approval write
+        assert repo.preview(None).approved_count == approved
+
+    repo.preview(filtered)
+    assert warehouse.count(PREVIEW_SQL) == 2, "the filtered preview is still served from cache"
+
+
 def test_a_failed_counts_read_keeps_the_snapshot_counts_and_is_not_cached(
     repo: DatabricksPortfolioRepository, warehouse: _Warehouse
 ) -> None:

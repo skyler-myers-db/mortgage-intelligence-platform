@@ -22,7 +22,7 @@ from backend.services.gold_cache import (
     AggregateCache,
     GoldAggregateCache,
     get_or_set_capped,
-    workflow_generation,
+    workflow_key,
 )
 from backend.services.observability import emit
 from backend.services.repositories.databricks_portfolio_campaign_mappers import (
@@ -437,7 +437,7 @@ class DatabricksPortfolioRepository(_PortfolioCampaignPersistence):
         try:
             return dict(
                 self._cache.get_or_set(
-                    f"{self._WORKFLOW_COUNTS_CACHE_KEY}:{workflow_generation()}",
+                    workflow_key(self._WORKFLOW_COUNTS_CACHE_KEY),
                     self._query_live_workflow_counts,
                     ttl_s=self._cache_ttl_s,
                     stale_if_error=False,

@@ -42,7 +42,7 @@ from backend.schemas.funnel import FunnelPopulation
 from backend.services.databricks_sql import DatabricksSqlClient
 from backend.services.databricks_sql_helpers import qualify
 from backend.services.eligibility import eligible_sql_predicate
-from backend.services.gold_cache import AggregateCache, GoldAggregateCache, workflow_generation
+from backend.services.gold_cache import AggregateCache, GoldAggregateCache, workflow_key
 from backend.services.repositories.databricks_economics_scatter import (
     economics_points as build_economics_points,
 )
@@ -628,7 +628,7 @@ class DatabricksAnalyticsRepository:
         # The Approved / Actioned stages read the lifecycle mirror, so the key
         # carries the workflow generation (delivery-06).
         return self._cached(
-            f"analytics.executive:{workflow_generation()}:{_filter_key(analytics_filters)}", build
+            workflow_key("analytics.executive", _filter_key(analytics_filters)), build
         )
 
     def funnel_population(self) -> FunnelPopulation:
@@ -814,7 +814,7 @@ class DatabricksAnalyticsRepository:
 
         # approval_rate / outreach_rate read the lifecycle mirror (delivery-06).
         return self._cached(
-            f"analytics.segments:{workflow_generation()}:{_filter_key(analytics_filters)}", build
+            workflow_key("analytics.segments", _filter_key(analytics_filters)), build
         )
 
     def signals(self, filters: AnalyticsFilters | None = None) -> SignalAnalyticsResponse:
