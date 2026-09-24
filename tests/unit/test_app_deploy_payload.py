@@ -496,3 +496,22 @@ def test_payload_binds_salesforce_secrets_only_for_complete_idempotent_connector
     incomplete = _env_map(build_payload(source_code_path="/Workspace/app/files", target="prod"))
     assert "SALESFORCE_CLIENT_SECRET" not in incomplete
     assert "SALESFORCE_PASSWORD" not in incomplete
+
+
+@pytest.mark.parametrize("policy", ["activty", "OFF", "on", "Scheduled"])
+def test_payload_refuses_an_unknown_keep_warm_policy(monkeypatch, policy) -> None:
+    """A typo must fail the payload, not the settings Literal at App boot."""
+    monkeypatch.setenv("MIP_WAREHOUSE_KEEP_WARM", policy)
+
+    with pytest.raises(ValueError, match="MIP_WAREHOUSE_KEEP_WARM must be one of"):
+        build_payload(source_code_path="/Workspace/app/files", target="dev")
+
+
+def test_payload_keep_warm_policies_are_the_runtime_literal() -> None:
+    from typing import get_args
+
+    from backend.config.settings import Settings
+    from tools.databricks.app_deploy_payload import KEEP_WARM_POLICIES
+
+    annotation = Settings.model_fields["mip_warehouse_keep_warm"].annotation
+    assert KEEP_WARM_POLICIES == get_args(annotation)

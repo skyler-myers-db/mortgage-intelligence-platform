@@ -213,8 +213,17 @@ def _previous_secret_grace_configured(dotenv: dict[str, str]) -> tuple[bool, str
     return previous is not None, previous_kid
 
 
+# The runtime's Literal (backend.config.settings.mip_warehouse_keep_warm);
+# test_app_deploy_payload pins the two equal.
+KEEP_WARM_POLICIES = ("off", "activity", "scheduled")
+
+
 def _validated_keep_warm(dotenv: dict[str, str]) -> None:
-    """Refuse a lead rewarm interval that the keep-warm policy would ignore."""
+    """Refuse an unknown keep-warm policy, and a lead rewarm interval it would ignore.
+
+    A typo such as ``activty`` would otherwise ride the payload and only fail
+    the settings Literal when the App boots.
+    """
 
     raw_interval = _env_value("MIP_LEADS_WARM_INTERVAL_S", dotenv) or "0"
     try:
@@ -225,6 +234,10 @@ def _validated_keep_warm(dotenv: dict[str, str]) -> None:
         _env_value("MIP_WAREHOUSE_KEEP_WARM", dotenv)
         or SAFE_RUNTIME_DEFAULTS["MIP_WAREHOUSE_KEEP_WARM"]
     )
+    if policy not in KEEP_WARM_POLICIES:
+        raise ValueError(
+            f"MIP_WAREHOUSE_KEEP_WARM must be one of {', '.join(KEEP_WARM_POLICIES)} (got {policy!r})"
+        )
     if interval > 0 and policy != "scheduled":
         raise ValueError(
             "MIP_LEADS_WARM_INTERVAL_S > 0 only takes effect with "
