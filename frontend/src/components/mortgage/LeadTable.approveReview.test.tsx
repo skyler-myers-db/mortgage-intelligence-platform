@@ -298,6 +298,32 @@ describe('LeadTable approve review', () => {
     expect(approve).not.toHaveBeenCalled();
   });
 
+  it('a review left open on a row that collapsed comes back as the dialog with the same draft', async () => {
+    region().focus();
+    press('j');
+    press('Enter');
+    press('a');
+    await waitForReview();
+    // Expanding the next row collapses the reviewed one: its inline review
+    // is out of sight but still holds the one draft generated for it.
+    press('j');
+    press('Enter');
+    expect(container.querySelector('tr.is-expanded')?.getAttribute('data-borrower-row')).toBe(IDS[1]);
+    expect(review()).toBeNull();
+
+    // Approve on the reviewed row again: the SAME review, now as the dialog,
+    // never a silent no-op and never a second draft.
+    act(() => approveButton(IDS[0]).click());
+    await waitForReview();
+    const dialog = document.querySelector('dialog.lead-approve-dialog');
+    expect(dialog?.hasAttribute('open')).toBe(true);
+    expect(dialog?.querySelector('[data-testid="lead-approve-review-subject"]')?.textContent)
+      .toBe(draftFor(IDS[0]).subject);
+    expect(draftOutreach).toHaveBeenCalledTimes(1);
+    expect(approve).not.toHaveBeenCalled();
+    // Two waits on the lazy review, each up to 15 s on a loaded machine.
+  }, 40_000);
+
   describe('bulk gate', () => {
     function select(ids: readonly string[]) {
       for (const id of ids) {

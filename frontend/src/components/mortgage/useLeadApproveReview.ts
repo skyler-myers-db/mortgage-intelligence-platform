@@ -92,7 +92,13 @@ export function useLeadApproveReview({
   /** Open the review for one row. Drafts on this explicit intent only. */
   function open(borrowerId: string, mode: LeadApproveReviewMode): OpenReviewResult {
     const current = reviewRef.current;
-    if (current?.borrowerId === borrowerId) return 'already-open';
+    if (current?.borrowerId === borrowerId) {
+      // The same review, asked for where the row is NOW: an inline review
+      // whose row collapsed (another row was expanded) would otherwise stay
+      // out of sight, so Approve / A did nothing. Same draft, no new one.
+      if (current.mode !== mode) setReview({ ...current, mode });
+      return 'already-open';
+    }
     // Never abandon a review whose approval is on the wire.
     if (current?.phase === 'submitting') return 'busy';
     if (!canStartApproval()) return 'blocked';
