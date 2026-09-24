@@ -16,6 +16,7 @@ import { GenieProgress } from './GenieProgress';
 import { GenieTurnActions } from './GenieTurnActions';
 import { GENIE_RESUMING_LABEL, GenieStopRow, GenieTurnNote } from './GenieTurnNote';
 import { useGenieTurnCollapse } from './useGenieTurnCollapse';
+import type { GenieMessageEntrance } from './useGenieMessageEntrance';
 import './GenieTurnActions.css';
 import './GenieAnswerReading.css';
 
@@ -60,6 +61,8 @@ export interface GenieChatBodyProps {
   newAnswer: boolean;
   /** Bring that answer's start into view and focus it. */
   onJumpToNewAnswer: () => void;
+  /** Which new bubbles play their one-shot entrance (motion-v2). */
+  entrance: GenieMessageEntrance;
 }
 
 /** Retry for a failed turn, Regenerate for an answered one; nothing else. */
@@ -87,6 +90,7 @@ export function GenieChatBody({
   onAnnounce,
   newAnswer,
   onJumpToNewAnswer,
+  entrance,
 }: GenieChatBodyProps) {
   const lastAnswerIndex = msgs.reduce((last, m, i) => (m.who === 'ai' ? i : last), -1);
   // Earlier turns this panel never saw land render as their digest (genie-08).
@@ -100,6 +104,8 @@ export function GenieChatBody({
       disabledReason={busyReason}
       onEdit={onEdit}
       onAskAgain={reask}
+      entering={entrance.entering(note)}
+      onEntered={entrance.onEntered(note)}
     />
   );
 
@@ -145,7 +151,8 @@ export function GenieChatBody({
       <div
         key={i}
         ref={i === lastAnswerIndex ? lastAnswerRef : undefined}
-        className="genie__msg genie__msg--ai"
+        className={`genie__msg genie__msg--ai${entrance.entering(m.payload) ? ' genie__msg--entering' : ''}`}
+        onAnimationEnd={entrance.onEntered(m.payload)}
         // "New answer" moves focus here (genie-08); never a Tab stop.
         tabIndex={i === lastAnswerIndex ? -1 : undefined}
       >
@@ -230,7 +237,12 @@ export function GenieChatBody({
     <div className="genie__body" ref={bodyRef}>
       {transcript}
       {inFlight?.revealed && (
-        <div className="genie__msg genie__msg--user">{inFlight.question}</div>
+        <div
+          className={`genie__msg genie__msg--user${entrance.userEntering(inFlight.generation) ? ' genie__msg--entering' : ''}`}
+          onAnimationEnd={entrance.onEntered(inFlight.generation)}
+        >
+          {inFlight.question}
+        </div>
       )}
       {typing && (
         <div className="genie__msg genie__msg--ai">

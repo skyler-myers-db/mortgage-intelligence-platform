@@ -1,3 +1,4 @@
+import type { AnimationEventHandler } from 'react';
 import type { GenieTurnNote as GenieTurnNoteShape } from '../../lib/genieInFlightTurn';
 import { Icon } from '../Icon';
 import { Chip } from '../Primitives';
@@ -32,6 +33,8 @@ export function GenieTurnNote({
   disabledReason,
   onEdit,
   onAskAgain,
+  entering = false,
+  onEntered,
 }: {
   note: GenieTurnNoteShape;
   /** A turn is in flight: Ask again is held. */
@@ -39,6 +42,10 @@ export function GenieTurnNote({
   disabledReason: string | null;
   onEdit: (question: string) => void;
   onAskAgain: (question: string) => void;
+  /** A Stopped note that just happened plays the one-shot message entrance
+   *  (audit 2026-09-21 `motion-v2`; useGenieMessageEntrance decides). */
+  entering?: boolean;
+  onEntered?: AnimationEventHandler<HTMLElement>;
 }) {
   return (
     <>
@@ -52,7 +59,10 @@ export function GenieTurnNote({
         disabled={disabled}
         disabledReason={disabledReason}
       />
-      <div className="genie__msg genie__msg--ai genie__msg--stopped">
+      <div
+        className={`genie__msg genie__msg--ai genie__msg--stopped${entering ? ' genie__msg--entering' : ''}`}
+        onAnimationEnd={onEntered}
+      >
         <div className="bubble">
           <Chip variant="neutral">{note.kind === 'stopped' ? 'Stopped' : 'Interrupted'}</Chip>
           <span>{note.reason}</span>

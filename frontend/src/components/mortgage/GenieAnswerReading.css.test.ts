@@ -39,6 +39,25 @@ describe('GenieAnswerReading.css (audit 2026-09-21 wave 3, lazy)', () => {
     expect(rule(':is(h3, h4).genie-md-p')).toMatch(/font-weight:\s*inherit;/);
   });
 
+  it('enters a new message once with the base duration and ease, never under reduced motion (motion-v2)', () => {
+    const css = declarations();
+    expect(css).toMatch(/@keyframes genie-msg-in\s*\{/);
+    expect(rule('.genie__msg--entering,\n.genie-thread__answer--entering')).toMatch(
+      /animation:\s*genie-msg-in var\(--dur-base\) var\(--ease\) both;/,
+    );
+    const reduced = /@media \(prefers-reduced-motion: reduce\)\s*\{([\s\S]*?)\n\}/.exec(css);
+    expect(reduced).not.toBeNull();
+    expect(reduced![1]).toMatch(/\.genie__msg--entering,\s*\.genie-thread__answer--entering\s*\{\s*animation:\s*none;/);
+    // No overflow-anchor rule: auto is the default and Safari lacks it.
+    expect(css).not.toContain('overflow-anchor');
+  });
+
+  it('keeps the New answer jump inside the transcript scroller (genie-08)', () => {
+    const jump = rule('.genie__jump');
+    expect(jump).toMatch(/position:\s*sticky;/);
+    expect(jump).toMatch(/inset-block-end:\s*0;/);
+  });
+
   it('scrolls a narrative table sideways inside its own box (stack-02)', () => {
     const pre = rule('.genie-md-pre pre');
     expect(pre).toMatch(/overflow-x:\s*auto;/);

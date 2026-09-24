@@ -1,4 +1,12 @@
-import { Fragment, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from 'react';
+import {
+  Fragment,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type AnimationEventHandler,
+  type ReactNode,
+  type RefObject,
+} from 'react';
 import type { GenieActionSuggestion, GenieAnswer as GenieAnswerShape } from '../types';
 import { Button, Chip, EvidenceChip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
@@ -9,6 +17,8 @@ import { GenieProgress } from '../components/mortgage/GenieProgress';
 import { GenieTurnActions } from '../components/mortgage/GenieTurnActions';
 import { GENIE_RESUMING_LABEL, GenieStopRow, GenieTurnNote } from '../components/mortgage/GenieTurnNote';
 import { useGenieTurnCollapse, type GenieTurnPresentation } from '../components/mortgage/useGenieTurnCollapse';
+import { useGenieMessageEntrance } from '../components/mortgage/useGenieMessageEntrance';
+import { isGenieRouteAskVisible } from '../components/mortgage/useGenieAnnouncer';
 import { friendlyAssetLabel } from '../lib/assetLabels';
 import { drawerForAsset } from '../lib/drawerSources';
 import {
@@ -137,6 +147,8 @@ function GenieThreadTurn({
   followUpDisabledReason,
   presentation,
   onToggleCollapse,
+  entering,
+  onEntered,
 }: {
   turn: GenieTurn;
   onFollowUp: (question: string, conversationId: string | null) => void;
@@ -146,6 +158,9 @@ function GenieThreadTurn({
   /** An earlier turn this route never saw land shows its digest (genie-08). */
   presentation: GenieTurnPresentation;
   onToggleCollapse: () => void;
+  /** A just-landed answer plays the one-shot entrance (motion-v2). */
+  entering: boolean;
+  onEntered: AnimationEventHandler<HTMLElement>;
 }) {
   const chip = sourceChipFor(turn.response);
   const drawerForSource = chip ? drawerForAsset(chip.label) : null;
@@ -162,7 +177,10 @@ function GenieThreadTurn({
     />
   );
   return (
-    <div className="surface surface--inset">
+    <div
+      className={`surface surface--inset genie-thread__answer${entering ? ' genie-thread__answer--entering' : ''}`}
+      onAnimationEnd={onEntered}
+    >
       <div className="surface__body">
         {chip && (
           <div className="chip-row mb-3">
@@ -229,6 +247,8 @@ export function AskGenieAnswerPanel({
   const thread = useSyncExternalStore(subscribeGenieTurns, getGenieTurns, getGenieTurnsServerSnapshot);
   const { inFlight, notes } = useGenieTurn();
   const collapse = useGenieTurnCollapse(thread.map((turn) => turn.response));
+  // New messages enter once, and only while the Ask tab is shown (motion-v2).
+  const entrance = useGenieMessageEntrance({ isVisible: isGenieRouteAskVisible, inFlight, notes });
   const busyReason = inFlight ? GENIE_BUSY_REASON : null;
 
   const turnKey = (turn: GenieTurn, index: number) =>
@@ -319,6 +339,8 @@ export function AskGenieAnswerPanel({
       disabledReason={busyReason}
       onEdit={editQuestion}
       onAskAgain={onAsk}
+      entering={entrance.entering(note)}
+      onEntered={entrance.onEntered(note)}
     />
   );
 
@@ -340,6 +362,8 @@ export function AskGenieAnswerPanel({
           followUpDisabledReason={busyReason}
           presentation={collapse.presentation(turn.response)}
           onToggleCollapse={() => collapse.toggle(turn.response)}
+          entering={entrance.entering(turn.response)}
+          onEntered={entrance.onEntered(turn.response)}
         />
       </Fragment>,
     );
@@ -412,7 +436,13 @@ export function AskGenieAnswerPanel({
                 {/* A resumed turn keeps its question hidden until the first
                     progress poll proves it is still this actor's turn. */}
                 {inFlight.revealed ? (
-                  <div ref={latestAnchorRef} className="genie__msg genie__msg--user">{inFlight.question}</div>
+                  <div
+                    ref={latestAnchorRef}
+                    className={`genie__msg genie__msg--user${entrance.userEntering(inFlight.generation) ? ' genie__msg--entering' : ''}`}
+                    onAnimationEnd={entrance.onEntered(inFlight.generation)}
+                  >
+                    {inFlight.question}
+                  </div>
                 ) : (
                   <div ref={latestAnchorRef} className="muted fs-11">{GENIE_RESUMING_LABEL}</div>
                 )}

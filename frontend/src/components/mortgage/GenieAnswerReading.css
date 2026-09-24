@@ -132,8 +132,33 @@
 }
 .genie__jump:hover { background: var(--bg-4); }
 
+/* Message entrance (motion-v2): one fade and a --sp-1 rise for a message
+   that just arrived -- a landed answer (the panel bubble, the route's answer
+   card), the question just sent, a Stopped note. Never a restored or
+   hydrated transcript: useGenieMessageEntrance only marks what it saw land,
+   and drops the class on animationend so a reopened panel never replays it.
+   `.genie__msg--entering` and `.genie-thread__answer(--entering)` are
+   additive to the prototype (design_files/index.html:741-760 has no
+   message motion). No overflow-anchor rule: auto is the default. */
+@keyframes genie-msg-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--sp-1));
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.genie__msg--entering,
+.genie-thread__answer--entering {
+  animation: genie-msg-in var(--dur-base) var(--ease) both;
+}
+
 /* Reduced motion: every transition and animation in this sheet stops. */
 @media (prefers-reduced-motion: reduce) {
   .genie-answer__section-toggle svg,
   .genie-collapse__toggle svg { transition: none; }
+  .genie__msg--entering,
+  .genie-thread__answer--entering { animation: none; }
 }

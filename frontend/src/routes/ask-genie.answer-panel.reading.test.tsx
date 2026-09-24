@@ -5,7 +5,9 @@
  * thread of three or more turns this route never saw land renders its
  * earlier turns as their digest (question bubble and source chip unchanged),
  * the full answer unmounted until the reader opens it. A turn that became
- * earlier because a new answer landed stays as the reader saw it.
+ * earlier because a new answer landed stays as the reader saw it. A new
+ * answer card and the question just sent play the one-shot entrance
+ * (`motion-v2`) only while the Ask tab is shown.
  */
 import { act, createRef } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -18,6 +20,7 @@ vi.mock('../components/AppContext', () => ({
   useApp: () => ({ setDrawer: vi.fn(), showEvidence: true, showConfidence: true }),
 }));
 vi.mock('../components/HealthProvider', () => ({ useWorkspaceHost: () => null }));
+const genieSubmit = vi.hoisted(() => vi.fn());
 vi.mock('../lib/api', async () => {
   const actual = await vi.importActual<typeof import('../lib/api')>('../lib/api');
   return {
@@ -25,11 +28,14 @@ vi.mock('../lib/api', async () => {
     api: {
       genieFeedback: vi.fn().mockResolvedValue({ accepted: true }),
       genieSessions: vi.fn().mockResolvedValue([]),
+      genieSubmit,
     },
   };
 });
 
-import { __resetGenieTurnStoreForTests } from '../lib/genieInFlightTurn';
+import { __resetGenieTurnStoreForTests, startGenieTurn } from '../lib/genieInFlightTurn';
+import { GenieAnnouncerRegion } from '../components/mortgage/GenieAnnouncerRegion';
+import { __resetGenieAnnouncerForTests } from '../components/mortgage/useGenieAnnouncer';
 import { AskGenieAnswerPanel } from './ask-genie.answer-panel';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -80,13 +86,16 @@ describe('AskGenieAnswerPanel reading (genie-08)', () => {
     act(() => root.unmount());
     container.remove();
     __resetGenieTurnStoreForTests();
+    __resetGenieAnnouncerForTests();
     clearGenieTurns();
   });
 
-  function render() {
+  /** `askTabShown` registers the route surface the way ask-genie.tsx does. */
+  function render(askTabShown = true) {
     act(() =>
       root.render(
         <MemoryRouter>
+          <GenieAnnouncerRegion surface="route" visible={askTabShown} />
           <AskGenieAnswerPanel
             questionRef={questionRef}
             question=""
@@ -151,5 +160,79 @@ describe('AskGenieAnswerPanel reading (genie-08)', () => {
     render();
     expect(thread().querySelector('.genie-collapse')).toBeNull();
     expect(thread().querySelectorAll('.genie-answer')).toHaveLength(2);
+  });
+
+  /** Ask on the route; the submit answers at once with `payload`. */
+  async function askAndLand(payload: GenieAnswer) {
+    let settle: (value: unknown) => void = () => undefined;
+    genieSubmit.mockReturnValueOnce(
+      new Promise((resolve) => {
+        settle = resolve;
+      }),
+    );
+    act(() => {
+      startGenieTurn({ question: 'And the top offer?', conversationId: 'conv-1', surface: 'route', startedAt: Date.now() });
+    });
+    const pendingEntering = Array.from(thread().querySelectorAll('.genie__msg--user')).some((el) =>
+      el.classList.contains('genie__msg--entering'),
+    );
+    await act(async () => {
+      settle({
+        completed: true,
+        conversation_id: 'conv-1',
+        message_id: payload.message_id,
+        progress_token: null,
+        question_hash: null,
+        response: payload,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    return { pendingEntering };
+  }
+
+  it('a just-landed answer card and the question just sent enter once (motion-v2)', async () => {
+    setGenieTurns([{ question: 'Which states lead?', response: answer('Illinois leads.', 'm1') }]);
+    render(true);
+    const { pendingEntering } = await askAndLand(answer('Rate-and-term refinance.', 'm2'));
+    expect(pendingEntering).toBe(true);
+    const cards = answerCards();
+    expect(cards).toHaveLength(2);
+    expect(cards.map((card) => card.classList.contains('genie-thread__answer--entering'))).toEqual([false, true]);
+    const event = new Event('animationend', { bubbles: true });
+    Object.defineProperty(event, 'animationName', { value: 'genie-msg-in' });
+    act(() => {
+      cards[1].dispatchEvent(event);
+    });
+    expect(thread().querySelector('.genie-thread__answer--entering')).toBeNull();
+  });
+
+  it('a question already in flight when the route mounts (coming back mid-turn) does not enter again', () => {
+    // The Ask tab is registered as shown BEFORE the thread mounts, so only
+    // the mount guard can keep the bubble still.
+    act(() =>
+      root.render(
+        <MemoryRouter>
+          <GenieAnnouncerRegion surface="route" visible />
+        </MemoryRouter>,
+      ),
+    );
+    genieSubmit.mockReturnValueOnce(new Promise(() => undefined));
+    act(() => {
+      startGenieTurn({ question: 'Still running?', conversationId: null, surface: 'panel', startedAt: Date.now() });
+    });
+    render(true);
+    const pending = Array.from(thread().querySelectorAll('.genie__msg--user'));
+    expect(pending.map((el) => el.textContent)).toEqual(['Still running?']);
+    expect(pending[0].classList.contains('genie__msg--entering')).toBe(false);
+  });
+
+  it('nothing enters while the Ask tab is hidden, and a stored thread never enters', async () => {
+    setGenieTurns([{ question: 'Which states lead?', response: answer('Illinois leads.', 'm1') }]);
+    render(false);
+    expect(thread().querySelector('.genie-thread__answer--entering')).toBeNull();
+    const { pendingEntering } = await askAndLand(answer('Rate-and-term refinance.', 'm2'));
+    expect(pendingEntering).toBe(false);
+    expect(answerCards()).toHaveLength(2);
+    expect(thread().querySelector('.genie-thread__answer--entering, .genie__msg--entering')).toBeNull();
   });
 });

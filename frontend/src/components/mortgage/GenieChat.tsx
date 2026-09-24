@@ -55,6 +55,7 @@ import {
 import { GENIE_POINTER_RESIZE_HANDLES, useGenieWindow } from './useGenieWindow';
 import { useGeniePanelDismissal } from './useGeniePanelDismissal';
 import { useGenieTranscriptScroll } from './useGenieTranscriptScroll';
+import { useGenieMessageEntrance } from './useGenieMessageEntrance';
 import { GenieAnnouncerRegion } from './GenieAnnouncerRegion';
 import { isGenieRouteAskVisible } from './useGenieAnnouncer';
 import { GenieHistoryMenu } from './GenieHistoryMenu';
@@ -226,6 +227,8 @@ export function GenieChat() {
   useEffect(() => {
     cancelAnchorRef.current = cancelAnchor;
   }, [cancelAnchor]);
+  // New messages enter once, and only while the panel is open (motion-v2).
+  const entrance = useGenieMessageEntrance({ isVisible: () => genieOpen, inFlight, notes });
 
   // A turn settled (either surface's, even with this panel closed): scroll to
   // its answer, follow its conversation, and badge the launcher unless the
@@ -393,6 +396,7 @@ export function GenieChat() {
    *  (a failed action badges as a result to see, never as an answer). */
   const landActionBubble = (payload: GenieAnswerShape, spoken: string) => {
     appendGenieTurn('', payload);
+    if (genieOpenRef.current) entrance.mark(payload);
     anchorNextAnswer();
     announceGenie(spoken);
     if (!genieOpenRef.current) setUnseen(payload.source === 'degraded' ? 'failed' : 'answered');
@@ -625,6 +629,7 @@ export function GenieChat() {
           onAnnounce={announceGenie}
           newAnswer={newAnswer}
           onJumpToNewAnswer={jumpToNewAnswer}
+          entrance={entrance}
         />
         <form
           className="genie__input"

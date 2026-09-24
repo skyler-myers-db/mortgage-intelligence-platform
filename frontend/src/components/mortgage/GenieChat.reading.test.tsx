@@ -291,6 +291,73 @@ describe('floating Genie panel respects the reader (genie-08)', () => {
     expect(bubbles[1].querySelector('.genie-answer')).not.toBeNull();
   });
 
+  function animationEnd(element: Element, animationName = 'genie-msg-in') {
+    const event = new Event('animationend', { bubbles: true });
+    Object.defineProperty(event, 'animationName', { value: animationName });
+    act(() => {
+      element.dispatchEvent(event);
+    });
+  }
+
+  it('a landed answer and the question just sent enter once; animationend drops the class (motion-v2)', async () => {
+    renderWithEarlierTurn();
+    const turn = await ask('How many borrowers pass the screen?');
+    const pending = Array.from(container.querySelectorAll('.genie__msg--user')).pop()!;
+    expect(pending.classList.contains('genie__msg--entering')).toBe(true);
+    // The restored earlier turn never enters.
+    expect(container.querySelectorAll('.genie__msg--ai.genie__msg--entering')).toHaveLength(0);
+
+    await turn.land(answer());
+
+    const entering = container.querySelectorAll('.genie__msg--entering');
+    expect(entering).toHaveLength(1);
+    expect(entering[0]).toBe(latestAnswer());
+    // A chart or chip animating inside the bubble does not end its entrance.
+    animationEnd(latestAnswer().querySelector('.bubble')!);
+    expect(latestAnswer().classList.contains('genie__msg--entering')).toBe(true);
+    animationEnd(latestAnswer());
+    expect(container.querySelectorAll('.genie__msg--entering')).toHaveLength(0);
+  });
+
+  it('a restored or hydrated transcript never enters', () => {
+    appendGenieTurn('Q1?', answer({ message_id: 'm1' }));
+    appendGenieTurn('Q2?', answer({ message_id: 'm2' }));
+    act(() => {
+      root.render(
+        <MemoryRouter>
+          <GenieChat />
+        </MemoryRouter>,
+      );
+    });
+    expect(container.querySelectorAll('.genie__msg--ai')).toHaveLength(2);
+    expect(container.querySelectorAll('.genie__msg--entering')).toHaveLength(0);
+  });
+
+  it('nothing enters under prefers-reduced-motion', async () => {
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: (query: string) => ({
+        matches: query.includes('prefers-reduced-motion'),
+        media: query,
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+      }),
+    });
+    renderWithEarlierTurn();
+    const turn = await ask('How many borrowers pass the screen?');
+    await turn.land(answer());
+    expect(container.querySelectorAll('.genie__msg--entering')).toHaveLength(0);
+  });
+
+  it('the entrance class goes away on its own when animationend never comes', async () => {
+    renderWithEarlierTurn();
+    const turn = await ask('How many borrowers pass the screen?');
+    await turn.land(answer());
+    expect(latestAnswer().classList.contains('genie__msg--entering')).toBe(true);
+    await waitUntil(() => container.querySelectorAll('.genie__msg--entering').length === 0, 2_000);
+  });
+
   it('sending again from the panel follows the transcript once more', async () => {
     const body = renderWithEarlierTurn();
     const first = await ask('How many borrowers pass the screen?');
