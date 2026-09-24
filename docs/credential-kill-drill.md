@@ -5,6 +5,16 @@ can fail and the app will show a visible degraded state — never fake
 data. This is the governance evidence behind the "no silent mock
 fallback" posture documented in `CLAUDE.md` and `backend/services/resilience.py`.
 
+**A stopped SQL warehouse is not a failure** (audit delivery-01). A
+serverless warehouse is available on demand: `/api/v1/health` reads its
+lifecycle state, so `STOPPED` / `STOPPING` report `warehouse: "up"` and
+`STARTING` reports `warehouse: "resuming"`, both with `status: "ok"`, and the
+next data read resumes it. The `warehouse` and `warehouse-real` drills
+therefore prove that a stop is *not* an outage. The degraded warehouse
+contract (`degraded`, `down`, an open breaker, 503 on data reads) is proved
+by `warehouse-sim`, whose bogus warehouse id fails both the state read and
+its `SELECT 1` fallback.
+
 **Audience.** The operator running the drill, the governance reviewer
 signing off on the evidence log, and the on-call engineer who needs a
 canonical recovery procedure.
@@ -77,6 +87,12 @@ Every target follows the same five beats:
 5. **Recovery.** Restore the dependency, wait for `/api/v1/health` to
    close the breaker and flip back to `ok`.
 
+The two warehouse **stop** drills (`warehouse`, `warehouse-real`) replace
+beats 3 and 4: `/api/v1/health` must stay `status: ok` with
+`dependencies.warehouse` `up` or `resuming`, and `/api/v1/leads?limit=5`
+must return HTTP 200 because the read resumes the warehouse
+(`tools/kill_drill/lib_warehouse_on_demand.sh`).
+
 All four drills write to `tools/kill_drill/evidence/drill_<target>_<timestamp>.log`.
 That file is the governance artifact — attach it to the release review.
 
@@ -106,16 +122,19 @@ databricks warehouses get "$DATABRICKS_WAREHOUSE_ID" | jq .state
 
 Expect `STOPPED` or `STOPPING`. Type `done` in the drill prompt.
 
-**Expected signals**
+**Expected signals** — a stop is not an outage (delivery-01):
 
 | Signal | Expected value |
 |---|---|
-| `/api/v1/health` `status` | `degraded` (within ~20 s) |
-| `/api/v1/health` `dependencies.warehouse` | `down` |
-| `/api/v1/health` `circuit_breakers.warehouse` | `open` after 5 failures |
-| `/api/v1/leads?limit=5` | HTTP 503 with `retryable: true` |
-| `/api/v1/portfolio/kpis` / `/preview` | HTTP 503 |
-| UI (while drill is in flight) | `DegradedBanner` visible on every route, no borrower rows rendered |
+| `/api/v1/health` `status` | `ok` (no SQL runs; the probe reads the lifecycle state) |
+| `/api/v1/health` `dependencies.warehouse` | `up` while `STOPPED` / `STOPPING`, `resuming` while `STARTING` |
+| `/api/v1/health` `circuit_breakers.warehouse` | `closed` |
+| `/api/v1/leads?limit=5` | HTTP 200: the read resumes the warehouse (retried for up to `MIP_KILL_DRILL_RESUME_READ_SECONDS`, default 180 s, in case a slow cold start outlasts one statement's 30 s wait) |
+| UI (while drill is in flight) | No `DegradedBanner`; the topbar shows the calm "Waking warehouse" pill only while the warehouse is `STARTING` |
+
+`verify_degraded_ui.py` does not apply to a warehouse stop: nothing is
+degraded, so its degraded-health sanity check fails by design. To see the
+degraded warehouse UI, run it against `--target warehouse-sim` instead.
 
 **Recovery**
 
@@ -124,8 +143,9 @@ databricks warehouses start "$DATABRICKS_WAREHOUSE_ID"
 # expect state=RUNNING within ~30s
 ```
 
-Type `done` again. The breaker will close within 30 s of the next
-successful probe (half-open probe succeeds → CLOSED).
+Type `done` again. The data read above has usually resumed the warehouse
+already, so this confirms `RUNNING`; the drill then waits for
+`/api/v1/health` to read `status: ok`, `warehouse: up`.
 
 ---
 
@@ -223,12 +243,13 @@ merge.
 
 ## Drill E — warehouse-real (SDK-driven, opt-in)
 
-Stops the real SQL warehouse via `w.warehouses.stop(id)`, asserts the
-degraded contract on the already-running backend, then restarts via
-`w.warehouses.start_and_wait(id)` and waits for `/api/v1/health` to close
-the breaker. This is the strongest real-world evidence the degraded
-path works end-to-end — but it causes a 30–90 s user-visible outage
-during the drill window.
+Stops the real SQL warehouse via `w.warehouses.stop(id)`, asserts on the
+already-running backend that the stop is not an outage (health `ok`, a
+data read resumes it), then restarts via `w.warehouses.start_and_wait(id)`
+and waits for `/api/v1/health` to read `ok` / `up`. This is the real-world
+evidence that an idle auto-stop never reads as an outage; users see one
+resume's latency on the next read, not a degraded window. The degraded
+warehouse path is proved by `warehouse-sim`.
 
 ```bash
 # Local dry-run (operator already has DATABRICKS_WAREHOUSE_ID set):
@@ -245,16 +266,20 @@ from taking production down.
 | Signal                                               | Expected value |
 | ---------------------------------------------------- | -------------- |
 | Pre-probe `/api/v1/health`                              | `status: "ok"` |
-| During drill `/api/v1/health`                           | `status: "degraded"`, `dependencies.warehouse: "down"` |
-| During drill `/api/v1/leads?limit=5`                    | HTTP 503 with `retryable: true` |
+| During drill `/api/v1/health`                           | `status: "ok"`, `dependencies.warehouse: "up"` (`STOPPED`) or `"resuming"` (`STARTING`) |
+| During drill `/api/v1/leads?limit=5`                    | HTTP 200: the read resumes the warehouse |
 | After SDK `start_and_wait(...)` returns              | warehouse state `RUNNING` |
 | Post-probe `/api/v1/health` (within 60 s)               | `status: "ok"`, `dependencies.warehouse: "up"` |
 | Evidence log                                         | `tools/kill_drill/evidence/drill_warehouse-real_<ts>.log` |
 
 **Failure modes that exit 1 (real regression)**
 
-- Warehouse stopped but `/api/v1/health` never reported degraded → the
-  resilience contract is broken.
+- Warehouse stopped and `/api/v1/health` reported an outage (`degraded`,
+  `warehouse: "down"`, or an open breaker) → the state probe no longer
+  treats a stop as available on demand (delivery-01 regression). The
+  drill still restarts the warehouse before it exits.
+- Warehouse stopped and `/api/v1/leads?limit=5` never returned 200 within
+  the resume window → a data read no longer resumes the warehouse.
 - Warehouse restart timed out (default 300 s) → **real infra may still
   be stopped**. The operator must investigate immediately; the script
   logs the last known state.
@@ -313,8 +338,8 @@ Every real-infra invocation has to clear all of these gates:
    SDK call, stating the expected user-visible impact window.
 3. **Idempotent stop** — a warehouse already STOPPED / a Lakebase
    already `stopped=true` skips the stop API call (no double-stop).
-4. **Guaranteed restart** — on every failure path (degraded signal
-   missing, data endpoint 200, operator interrupt), the recovery
+4. **Guaranteed restart** — on every failure path (an unexpected health
+   signal, a failed data-endpoint probe, operator interrupt), the recovery
    `start` call runs before the drill exits. If that restart fails the
    operator gets a loud alert and a non-zero exit.
 5. **Never on cron** — the `kill-drill-real-infra` job is
@@ -326,7 +351,10 @@ Every real-infra invocation has to clear all of these gates:
 ## Verifying the UI during a drill
 
 While one of the drills above is in flight (between "induce failure"
-and "recovery"), run the verifier in another terminal:
+and "recovery"), run the verifier in another terminal. It does not apply
+to the `warehouse` / `warehouse-real` stop drills: a stopped warehouse is
+not degraded, so point it at `warehouse-sim` to see the degraded warehouse
+UI.
 
 ```bash
 ./tools/kill_drill/verify_degraded_ui.py \
@@ -364,9 +392,10 @@ Attach that file to the governance record. The log contains:
   <raw /api/v1/health body>
 [drill/<target>] OPERATOR CONFIRMATION REQUIRED
   Stop the SQL warehouse, then confirm.
-[drill/<target>] health attempt 1: status=degraded warehouse=down breaker=open
-[drill/<target>] GET /api/v1/leads?limit=5 -> HTTP 503
-[drill/<target>] PASS: /api/v1/leads?limit=5 returned 503 with retryable=true
+[drill/<target>] health attempt 1: status=ok warehouse=up breaker=closed
+[drill/<target>] PASS: stopped warehouse reads as available on demand (status=ok warehouse=up); a stop is not an outage
+[drill/<target>] GET /api/leads?limit=5 -> HTTP 200 after 4s
+[drill/<target>] PASS: a data read resumed the stopped warehouse (/api/leads?limit=5 -> HTTP 200, rows=5)
 [drill/<target>] OPERATOR CONFIRMATION REQUIRED
   Restart the warehouse, then confirm.
 [drill/<target>] RECOVERED: warehouse=up, status=ok after 14s
@@ -392,7 +421,9 @@ Verifier run against each drill:
 ## What a FAIL means
 
 A drill FAIL (exit code 1) means **resilience is broken and the app
-is serving fake data during a dependency outage.** Do not merge. Do
+is serving fake data during a dependency outage.** For the two warehouse
+stop drills it means an idle stop read as an outage, or a read no longer
+resumes the warehouse. Do not merge. Do
 not ship. Open an incident using the post-mortem template in
 `docs/runbook.md` and:
 
@@ -409,4 +440,4 @@ The drill is the final gate. If it's red, the posture is a lie.
 ---
 
 *Owner: governance-security-reviewer + principal-architect.
-Last revised: 2026-04-21.*
+Last revised: 2026-09-24 (warehouse stop is not an outage, delivery-01).*

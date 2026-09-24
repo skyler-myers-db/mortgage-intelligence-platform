@@ -639,7 +639,9 @@ returns fake data.
 **How to run (summary):**
 
 ```bash
-# Warehouse: operator stops the SQL warehouse; script observes degraded
+# Warehouse: operator stops the SQL warehouse; a stop is not an outage, so
+# the script checks health stays ok and a read resumes it (delivery-01).
+# The degraded warehouse path is proved by --target warehouse-sim.
 ./tools/kill_drill/run_drill.sh --target warehouse
 
 # Lakebase: operator stops the database instance (or rotates password)
@@ -651,7 +653,7 @@ returns fake data.
 # Token: simulated -- script unsets DATABRICKS_TOKEN in a subshell
 ./tools/kill_drill/run_drill.sh --target token
 
-# While any drill is in flight, verify the UI in another terminal:
+# While a degrading drill is in flight (not a warehouse stop), verify the UI:
 ./tools/kill_drill/verify_degraded_ui.py
 ```
 
