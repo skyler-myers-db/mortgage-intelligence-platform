@@ -1,10 +1,13 @@
 import { Suspense, useEffect, useState, type ComponentType } from 'react';
 import { subscribeGenieOpenRequests } from '../../lib/genieOpen';
 import { Icon } from '../Icon';
+import { GenieBoundary } from './ShellPanelBoundaries';
 
 interface GenieDockProps {
   open: boolean;
   onOpen: () => void;
+  /** Hides the panel; the error frame's Close uses it (the chat has its own). */
+  onClose: () => void;
   /** Warm the lazy chat chunk on launcher hover/focus. */
   onWarm: () => void;
   /** The lazy floating-chat component (owned by AppShell with its preloader). */
@@ -32,8 +35,14 @@ interface GenieDockProps {
  * Open requests (audit `genie-04`): `openGenie({ prompt })` from any surface
  * reaches the shell here as a window event and opens the panel; the queued
  * prefill is consumed by the chat once it is open. Nothing is submitted.
+ *
+ * Crash containment (audit `states-01`): the chat sits inside GenieBoundary,
+ * which is always rendered, so the tree never changes shape and the chat
+ * re-mounts only on the surface's Try again. A throw or a failed chunk shows
+ * the recovery surface inside a Genie frame whose Close hides the panel like
+ * the chat's own; the dock (and its open-request subscription) stays mounted.
  */
-export function GenieDock({ open, onOpen, onWarm, Chat }: GenieDockProps) {
+export function GenieDock({ open, onOpen, onClose, onWarm, Chat }: GenieDockProps) {
   const [everOpened, setEverOpened] = useState(open);
   // Latch during render (the documented "adjust state when a prop changes"
   // pattern) so the chat mounts in the same commit the panel first opens.
@@ -54,7 +63,9 @@ export function GenieDock({ open, onOpen, onWarm, Chat }: GenieDockProps) {
           <Icon name="sparkle" size={22} />
         </button>
       )}
-      <Suspense fallback={null}>{everOpened ? <Chat /> : null}</Suspense>
+      <GenieBoundary open={open} onOpen={onOpen} onClose={onClose}>
+        <Suspense fallback={null}>{everOpened ? <Chat /> : null}</Suspense>
+      </GenieBoundary>
     </>
   );
 }

@@ -210,12 +210,70 @@ describe('ErrorBoundary', () => {
     expect(surface?.textContent).toContain('The workspace hit an unexpected error');
   });
 
+  it('renders the panel variant inside its frame: an h2 naming the panel, no Route meta line', async () => {
+    await act(async () => {
+      root.render(
+        <main>
+          <h1>Lead Queue</h1>
+          <ErrorBoundary
+            boundary="console"
+            variant="panel"
+            routeLabel="The Console"
+            frame={(surface) => <aside data-testid="panel-frame">{surface}</aside>}
+          >
+            <Thrower error={new Error(BORROWER_BEARING_MESSAGE)} />
+          </ErrorBoundary>
+        </main>,
+      );
+    });
+
+    const surface = container.querySelector('[data-testid="panel-frame"] > [data-testid="error-surface"]');
+    expect(surface?.className).toContain('error-surface--panel');
+    expect(surface?.getAttribute('data-error-boundary')).toBe('console');
+    expect(surface?.querySelector('h2.h-4')?.textContent).toBe('The Console hit an unexpected error');
+    expect(surface?.textContent).toContain(
+      'The page behind it is still available. Try again, or reload the page if it keeps happening.',
+    );
+    expect(container.querySelectorAll('h1')).toHaveLength(1);
+    expect(surface?.textContent).not.toContain('Route ·');
+    expect(buttons(container)).toEqual(['Try again', 'Reload']);
+    expect(container.innerHTML).not.toContain('B-0TESTBORROWER');
+  });
+
+  it('renders the panel chunk copy with Reload only', async () => {
+    const reload = vi.fn();
+    await act(async () => {
+      root.render(
+        <ErrorBoundary boundary="drawer" variant="panel" routeLabel="The evidence drawer" onReload={reload}>
+          <Thrower error={new TypeError('Failed to fetch dynamically imported module: /assets/drawer-0ld.js')} />
+        </ErrorBoundary>,
+      );
+    });
+
+    const surface = container.querySelector('[data-testid="error-surface"]');
+    expect(surface?.getAttribute('data-error-kind')).toBe('chunk');
+    expect(surface?.querySelector('h2.h-4')?.textContent).toBe('A new version is available');
+    expect(surface?.textContent).toContain(
+      'The evidence drawer could not finish loading, usually because the app was updated while this tab was open. Reload to pick up the latest version.',
+    );
+    expect(buttons(container)).toEqual(['Reload']);
+    await act(async () => {
+      container.querySelector('button')?.click();
+    });
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
   it('only emits error-surface classes that the design system defines', async () => {
     await act(async () => {
       root.render(
-        <ErrorBoundary boundary="root" variant="page" routeLabel="Lead Queue">
-          <Thrower error={new Error('boom')} />
-        </ErrorBoundary>,
+        <>
+          <ErrorBoundary boundary="root" variant="page" routeLabel="Lead Queue">
+            <Thrower error={new Error('boom')} />
+          </ErrorBoundary>
+          <ErrorBoundary boundary="genie" variant="panel" routeLabel="Genie">
+            <Thrower error={new Error('boom')} />
+          </ErrorBoundary>
+        </>,
       );
     });
 
