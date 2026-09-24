@@ -11,7 +11,7 @@
 import { act, createElement, Fragment, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createBrowserRouter, Outlet, RouterProvider, useBlocker } from 'react-router';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -90,9 +90,18 @@ async function freshRum(): Promise<{ rum: RumModule; log: ClientErrorLog }> {
 async function flush(rum: RumModule): Promise<WireEvent[]> {
   const before = bodies.length;
   rum.flushRum();
-  await vi.waitFor(() => expect(bodies.length).toBeGreaterThan(before));
+  await vi.waitFor(() => expect(bodies.length).toBeGreaterThan(before), { timeout: 10_000 });
   return wireEvents();
 }
+
+// Every test re-imports lib/rum on fresh modules. Under full-suite load the
+// first transform of that graph alone can pass the 5 s default (main.test.tsx
+// makes the same call), so transform it once up front and give tests room.
+vi.setConfig({ testTimeout: 30_000 });
+beforeAll(async () => {
+  await import('./clientErrorLog');
+  await import('./rum');
+}, 60_000);
 
 beforeEach(() => {
   bodies.length = 0;
