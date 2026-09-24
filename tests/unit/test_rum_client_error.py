@@ -28,6 +28,7 @@ from backend.schemas.telemetry import (
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUM_BRIDGE_TS = REPO_ROOT / "frontend" / "src" / "lib" / "rumBridge.ts"
+RUM_API_ROUTE_TS = REPO_ROOT / "frontend" / "src" / "lib" / "rumApiRoute.ts"
 
 RUM_PATH = "/api/telemetry/rum"
 
@@ -241,3 +242,9 @@ def test_client_error_vocabularies_match_rum_bridge(name: str, server: frozenset
     """Parity pin (named in the rumBridge.ts header): a name, source or
     boundary the client can send is exactly one the server accepts."""
     assert _ts_const_array(RUM_BRIDGE_TS, name) == set(server)
+
+
+def test_api_route_segments_match_rum_api_route() -> None:
+    """Parity pin (named in the rumApiRoute.ts header): the client keeps a
+    segment exactly when the server accepts it; any other becomes `:id`."""
+    assert _ts_const_array(RUM_API_ROUTE_TS, "API_ROUTE_SEGMENTS") == set(RUM_API_ROUTE_SEGMENTS)

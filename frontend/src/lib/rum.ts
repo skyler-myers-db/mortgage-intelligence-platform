@@ -1,4 +1,5 @@
 import { apiPath } from './apiPaths';
+import { apiCallRoute, isApiCallSampled, serverTimingDetails } from './rumApiRoute';
 import { attachClientErrorSink, type QueuedClientError } from './rumBridge';
 
 export type RumMetric =
@@ -240,6 +241,56 @@ function observeLongTasks(): void {
   }
 }
 
+/** A tab reports at most this many api_call events per document. */
+const MAX_API_CALLS_PER_DOCUMENT = 100;
+const MAX_RUM_NUMBER = 600_000;
+const API_INITIATORS: ReadonlySet<string> = new Set(['fetch', 'xmlhttprequest']);
+
+function sessionStorageOrNull(): Storage | null {
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * api_call (audit delivery-v3): same-origin fetch / XHR resource timings under
+ * /api, as a templated `api_route` (lib/rumApiRoute) plus the Server-Timing
+ * fields, on the page route. Sampled per tab session and capped per document;
+ * the server rejects a whole batch over one out-of-range number, so a call
+ * longer than the schema's 600 s is skipped and an oversized transfer is left
+ * out rather than clamped.
+ */
+function observeApiCalls(): void {
+  if (!('PerformanceObserver' in window)) return;
+  if (!isApiCallSampled(sessionStorageOrNull, Math.random)) return;
+  let reported = 0;
+  try {
+    const observer = new PerformanceObserver((list) => {
+      for (const entry of list.getEntries() as PerformanceResourceTiming[]) {
+        if (reported >= MAX_API_CALLS_PER_DOCUMENT) {
+          observer.disconnect();
+          return;
+        }
+        if (!API_INITIATORS.has(entry.initiatorType)) continue;
+        const apiRoute = apiCallRoute(entry.name, window.location.origin);
+        const value = Math.round(entry.duration);
+        if (apiRoute === null || !(value >= 0 && value <= MAX_RUM_NUMBER)) continue;
+        const details: Record<string, string | number> = { api_route: apiRoute };
+        const transferSize = entry.transferSize || 0;
+        if (transferSize <= MAX_RUM_NUMBER) details.transfer_size = transferSize;
+        Object.assign(details, serverTimingDetails(entry.serverTiming ?? []));
+        reported += 1;
+        enqueueRumEvent({ metric: 'api_call', value, rating: 'info', route: currentRoute(), details });
+      }
+    });
+    observer.observe({ type: 'resource', buffered: true });
+  } catch {
+    // Unsupported browser, no-op.
+  }
+}
+
 function observeRouteChanges(): void {
   let route = currentRoute();
   const reportRoute = () => {
@@ -299,6 +350,7 @@ export function installRum(): void {
   observeCls();
   observeInp();
   observeLongTasks();
+  observeApiCalls();
   observeRouteChanges();
   window.addEventListener('pagehide', flushRum);
 }
