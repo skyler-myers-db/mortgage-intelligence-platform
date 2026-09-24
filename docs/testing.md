@@ -189,6 +189,28 @@ node tools/react_compiler_coverage.mjs --check tools/react_compiler_allowlist.js
 
 It scans every `.tsx` and `.ts` file under `frontend/src` with the build's compiler options and fails on a bailout in a file the allowlist does not list, on a count above its entry, or on a stale entry (the file is gone, or it improved). Each entry records the counts, the owning finding, an owner and a date. When you fix a bailout, lower its entry in the same change with `--ratchet`, which only ever lowers counts and refuses while anything is unlisted or grown. **Never loosen the allowlist to go green**: fix a new bailout in code (hoist the value block, move the try/finally into a helper). A manual addition needs a finding id and a reviewer sign-off in the commit body. `--write-allowlist <path>` exists only to bootstrap a new list and refuses to overwrite one.
 
-### Contract validation
+### Fixture contract (every body against the backend's response model)
 
-Fixtures are typed against the frontend's hand-written types, not yet validated against the backend's OpenAPI baseline; that follows the type-codegen work, because the two are known to have drifted.
+`tsc` checks a fixture payload only against the frontend's hand-written types, which can drift from the backend. `tests/unit/test_e2e_fixture_contract.py` closes that gap: every body the harness can serve is validated against the real FastAPI response model of the route the app would call, so a fixture UI cannot pass while the wire contract has moved.
+
+1. `tools/export_e2e_fixtures.mjs --out <file>` exports the bodies as deterministic JSON records `{source, method, pattern, path, query, status, body}`. It runs on bare Node >= 22.18 (type stripping plus a `module.registerHooks` resolve hook for the extensionless relative imports), with no `npm ci` and no `node_modules`. It collects, in order: every `defaultFixtures()` entry, called with `PARAM_SAMPLES` for its `:params`, `BODY_SAMPLES` for its request body and once more per `QUERY_SAMPLES` query string (all in `fixture/contractSamples.ts`); then `contractSamples()` from `contractSamples.ts`; then `contractSamples()` from every `fixture/data/*.ts` module that exports one. An unknown `:param` (add it to `PARAM_SAMPLES`), a handler that throws or a malformed sample exits 1 and names its source.
+2. The test resolves each sample the way Starlette dispatches it: the path is version-normalized to `/api/v1`, and the first canonical `APIRoute` in `backend.main.app.routes` whose `matches()` is `Match.FULL` owns it (so `/borrowers/search` beats `/borrowers/{id}`). A 2xx body must pass `TypeAdapter(model).validate_json(...)`, which runs the model validators (score-band canon, governed ids, name-shaped text, vocabularies). The model is `route.responses[status]["model"]` for a declared non-default 2xx (a 202 job receipt), otherwise the route's `response_model` at its declared `status_code` (200 when unset); a 2xx with neither fails. Non-2xx samples are counted and skipped.
+3. Every body must stay synthetic: each `*borrower_id` / `borrower_ids` string matches `^B-[0-9A-Z]{13}$`, every email-shaped string ends in `.example`, and any `lender_name` is `Summit Mortgage`.
+4. Every `defaultFixtures()` key must yield at least one validated 2xx sample, and in-memory non-vacuity cases prove each rejection (missing required field, unknown path, wrong method, undeclared 2xx, unmasked id, wrong model for a declared 202, a route with no response model).
+
+**A lane that adds a per-spec payload module exports `contractSamples()`** from it (the `ContractSample` type is in `contractSamples.ts`; `path`, `query` and `status` default to the pattern with `PARAM_SAMPLES` substituted, `''` and 200), so its bodies are validated without editing `contractSamples.ts`. The scenario builders specs register per test (decision receipts, Genie turns and refusals, degraded health, layout populations) are covered there today.
+
+The exporter loads `fixture/data/**`, `registry.ts`, `mockApi.ts` and `contractSamples.ts` on bare Node, so ESLint holds those files to `consistent-type-imports` and forbids a runtime import of a bare package there (`import type` and `node:` builtins are fine); `src/lib/fixtureImportRules.test.ts` pins that against the real config.
+
+Fix drift in the fixture, never in the model: a failing body gets a value the backend's own validators accept, preferring one that keeps the rendered text. `KNOWN_DRIFT` in the test is empty and shrink-only (a dated entry naming the finding and owner lane, allowed only when every valid value would change text a spec owned by another lane asserts; an entry that stops reproducing fails).
+
+Where Node is missing or older than 22.18 the module **skips**, unless `MIP_REQUIRE_FIXTURE_CONTRACT=1`, which makes it **fail**. CI's `backend-tests` job installs Node and sets the flag on its pytest step, so the contract runs in the normal parallel suite.
+
+```bash
+node tools/export_e2e_fixtures.mjs --out /tmp/e2e-fixtures.json          # inspect what is exported
+MIP_REQUIRE_FIXTURE_CONTRACT=1 pytest -q tests/unit/test_e2e_fixture_contract.py
+```
+
+`tests/unit/test_frontend_build_artifacts.py` has the same kind of switch: its served-layer and build-meta checks skip where `frontend/dist` is not built, and `MIP_REQUIRE_FRONTEND_DIST=1` (set by the `e2e-fixture` job right after its build) turns those skips into failures.
+
+Generated OpenAPI types (`gen:api`, a codegen drift gate and a wire-assignability ratchet for the hand types) are not on the tree yet: the planned generator failed the `npm audit --audit-level=high` gate, so the hand-written types in `frontend/src/types*` remain the TypeScript-side contract and this test is the backend-side one.
