@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect } from 'react';
+import { lazy, Suspense, useEffect, type ReactElement } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Navigate, Route, Routes, useLocation } from 'react-router';
 import { RouteErrorBoundary } from './components/ErrorBoundaryRoute';
@@ -21,6 +21,7 @@ import {
   preloadLikelyNextRoutes,
 } from './lib/routePreloaders';
 import { api } from './lib/api';
+import { ROUTE_IDS, ROUTES, type RouteId } from './lib/routeMeta';
 import type { SessionResponse } from './types';
 
 // Lazy: the denied page must not cost the initial bundle anything.
@@ -49,6 +50,33 @@ export function AdminRouteGate() {
 }
 
 /**
+ * What each registered route renders (audit shell-08). The PATHS live in
+ * lib/routeMeta's `ROUTES`; `satisfies Record<RouteId, ...>` makes a route
+ * registered there with no element here a type error, so the router, the nav,
+ * the command palette, the breadcrumbs and the preloaders cannot drift.
+ * Legacy outreach drafting lives inside /offer-orchestrator; its old links
+ * redirect to the registered destination so a visitor never lands on a blank
+ * shell.
+ */
+const ROUTE_ELEMENTS = {
+  home: <HomeRoute />,
+  analytics: <AnalyticsRoute />,
+  asset: <AssetRoute />,
+  portfolio: <PortfolioBuilderRoute />,
+  segments: <SegmentIntelligenceRoute />,
+  leads: <LeadQueueRoute />,
+  borrowerIndex: <Borrower360Route />,
+  borrower: <Borrower360Route />,
+  glossary: <GlossaryRoute />,
+  offerIndex: <OfferOrchestratorRoute />,
+  offer: <OfferOrchestratorRoute />,
+  askGenie: <AskGenieRoute />,
+  admin: <AdminRouteGate />,
+  legacyOutreach: <Navigate to={ROUTES.legacyOutreach.redirectTo} replace />,
+  legacyOutreachDetail: <Navigate to={ROUTES.legacyOutreachDetail.redirectTo} replace />,
+} satisfies Record<RouteId, ReactElement>;
+
+/**
  * RouteTransition — re-keys its child on every `pathname` change so the
  * CSS `.route-transition` animation replays for each route. Scope is only
  * the inner `<main>` content; AppShell, Topbar, Rail, Console, and the
@@ -69,24 +97,9 @@ function RouteTransition() {
       <RouteErrorBoundary pathname={pathname}>
         <Suspense fallback={<RouteFallback />}>
           <Routes>
-            <Route path="/" element={<HomeRoute />} />
-            <Route path="/analytics" element={<AnalyticsRoute />} />
-            <Route path="/data-estate/assets/:assetKey" element={<AssetRoute />} />
-            <Route path="/portfolio-builder" element={<PortfolioBuilderRoute />} />
-            <Route path="/segment-intelligence" element={<SegmentIntelligenceRoute />} />
-            <Route path="/lead-queue" element={<LeadQueueRoute />} />
-            <Route path="/borrower-360" element={<Borrower360Route />} />
-            <Route path="/borrower-360/:id" element={<Borrower360Route />} />
-            <Route path="/glossary" element={<GlossaryRoute />} />
-            <Route path="/offer-orchestrator" element={<OfferOrchestratorRoute />} />
-            <Route path="/offer-orchestrator/:id" element={<OfferOrchestratorRoute />} />
-            <Route path="/ask-genie" element={<AskGenieRoute />} />
-            <Route path="/admin-config" element={<AdminRouteGate />} />
-            {/* Outreach drafting lives inside /offer-orchestrator; any
-                legacy /outreach-composer link redirects to the lead queue
-                so a visitor never lands on a blank shell. */}
-            <Route path="/outreach-composer" element={<Navigate to="/lead-queue" replace />} />
-            <Route path="/outreach-composer/:id" element={<Navigate to="/lead-queue" replace />} />
+            {ROUTE_IDS.map((id) => (
+              <Route key={id} path={ROUTES[id].pattern} element={ROUTE_ELEMENTS[id]} />
+            ))}
             <Route path="*" element={<NotFoundRoute />} />
           </Routes>
         </Suspense>

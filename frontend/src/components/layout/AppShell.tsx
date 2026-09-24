@@ -1,4 +1,4 @@
-import { Suspense, useCallback, useEffect, useRef, type PropsWithChildren } from 'react';
+import { Suspense, useCallback, useEffect, useLayoutEffect, useRef, type PropsWithChildren } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { AppProvider, useApp } from '../AppContext';
 import { HealthProvider, useHealth } from '../HealthProvider';
@@ -16,6 +16,7 @@ import { lazyWithPreload, preloadBestEffort } from '../../lib/lazyPreload';
 import { createIdlePreloader } from '../../lib/prefetch';
 import { clearActorScopedBrowserState } from '../../lib/actorScopedBrowserState';
 import { clearActorScopedMemoryCaches } from '../../lib/actorScopedMemoryCaches';
+import { useExitRetained } from '../../hooks/useExitRetained';
 import { useMainScroll } from '../../hooks/useMainScroll';
 import { useRouteAnnouncer } from '../../hooks/useRouteAnnouncer';
 
@@ -132,6 +133,16 @@ function AppShellInner({ children }: PropsWithChildren) {
   const routeAnnouncerRef = useRef<HTMLDivElement | null>(null);
   useMainScroll(mainRef);
   useRouteAnnouncer(mainRef, routeAnnouncerRef);
+  // motion-01: keep the ONE Console <aside> mounted while it plays its exit
+  // (09-console-and-layout.css), then swap in the empty placeholder. Swapping
+  // on the closing commit replaced the node and cut the exit to 0ms. The lazy
+  // Console owns the element, so a layout effect (it runs before the passive
+  // effect that times the exit) points the ref at the landmark each commit.
+  const consoleElementRef = useRef<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    consoleElementRef.current = document.getElementById('workspace-console');
+  });
+  const consoleMounted = useExitRetained(consoleOpen ? true : null, consoleElementRef) === true;
 
   useEffect(() => {
     const cancelConsole = preloadConsole();
@@ -214,7 +225,7 @@ function AppShellInner({ children }: PropsWithChildren) {
           />
         )}
       >
-        {consoleOpen ? (
+        {consoleMounted ? (
           <LazyConsole />
         ) : (
           <aside

@@ -6,6 +6,7 @@ import { compactCurrency, signedBpsLabel } from '../../lib/formatters';
 import { offerDisplayLabel, offerRationale, offerShortDescription } from '../../lib/offerLanguage';
 import { safeSegmentName, segmentColor } from '../../lib/segmentMetadata';
 import { genieLeadPrompt } from '../../lib/genieContext';
+import { useQueueLinkState } from '../../lib/queueContext';
 import { useApp } from '../AppContext';
 import { GenieAskAbout } from './GenieAskAbout';
 import { Button, EvidenceChip } from '../Primitives';
@@ -39,6 +40,7 @@ export function RowPreview({
   decisionReceipt?: LeadDecisionReceipt | null;
 }) {
   const { setLastBorrowerId, saveLead, isLeadSaved } = useApp();
+  const queueLinkState = useQueueLinkState(); // shell-04: dossier crumbs + pager
   // Prefer the display-safe Cotality property ref projected by the
   // backend. Raw CLIP is masked server-side for public demo safety.
   const propertyRef = lead.clip && lead.clip.length > 0
@@ -162,6 +164,7 @@ export function RowPreview({
             <Link
               className="btn btn--primary btn--sm"
               to={`/borrower-360/${lead.borrower_id}`}
+              state={queueLinkState}
               onClick={() => setLastBorrowerId(lead.borrower_id)}
             >
               Open Borrower 360
@@ -169,6 +172,7 @@ export function RowPreview({
             <Link
               className="btn btn--default btn--sm"
               to={`/offer-orchestrator/${lead.borrower_id}`}
+              state={queueLinkState}
               onClick={() => setLastBorrowerId(lead.borrower_id)}
             >
               Build offer

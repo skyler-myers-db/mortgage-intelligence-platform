@@ -20,13 +20,20 @@ vi.mock('./api', () => ({
 }));
 
 import { RouteNav } from '../components/layout/RouteNav';
+import { Icon } from '../components/Icon';
 import { COMMAND_ACTIONS } from '../components/command/commandActions';
+import { routePreloaders } from './routePreloaders';
 import { MASKED_BORROWER_ID_RE as GENIE_MASKED_BORROWER_ID_RE } from './genieCellLinks';
 import {
   MASKED_BORROWER_ID_RE,
+  NAV_ROUTE_IDS,
   NOT_FOUND_ROUTE_META,
+  PALETTE_ROUTE_IDS,
+  ROUTES,
+  ROUTE_IDS,
   ROUTE_META,
   documentTitleFor,
+  indexPathOf,
   resolveRouteMeta,
   routePageLabel,
 } from './routeMeta';
@@ -90,18 +97,40 @@ describe('documentTitleFor / routePageLabel', () => {
 });
 
 describe('route tables stay pinned to routeMeta', () => {
-  it('names every <Route path> declared in app.tsx', () => {
+  it('app.tsx serves exactly the registry: no hand-written route path, one element per route id', () => {
     // Resolved from the Vitest root (the `frontend` package), like src/test/designCss.ts.
     const appSource: string = readFileSync(join(process.cwd(), 'src', 'app.tsx'), 'utf8');
-    const declared = [...appSource.matchAll(/<Route\s+path="([^"]+)"/g)]
-      .map((match) => match[1])
-      .filter((path) => path !== '*');
-    expect(declared.length).toBeGreaterThanOrEqual(13);
+    // The only literal path left is the catch-all; every other <Route> is
+    // generated from ROUTE_IDS with its pattern read from ROUTES.
+    const literalPaths = [...appSource.matchAll(/<Route\s[^>]*path="([^"]+)"/g)].map((match) => match[1]);
+    expect(literalPaths).toEqual(['*']);
+    expect(appSource).toMatch(/ROUTE_IDS\.map\(\(id\) => \(\s*<Route key=\{id\} path=\{ROUTES\[id\]\.pattern\} element=\{ROUTE_ELEMENTS\[id\]\} \/>/);
+    const elementTable = appSource.match(/const ROUTE_ELEMENTS = \{([\s\S]*?)\} satisfies Record<RouteId, ReactElement>;/);
+    expect(elementTable, 'app.tsx keeps one typed element table').not.toBeNull();
+    const elementIds = [...(elementTable?.[1] ?? '').matchAll(/^\s{2}(\w+):/gm)].map((match) => match[1]);
+    expect(elementIds).toEqual(ROUTE_IDS);
+    expect(ROUTE_IDS.length).toBeGreaterThanOrEqual(13);
+  });
 
-    const named = new Set(ROUTE_META.map((meta) => meta.pattern));
-    expect(declared.filter((path) => !named.has(path))).toEqual([]);
-    // ...and routeMeta names nothing the router does not serve.
-    expect([...named].filter((pattern) => !declared.includes(pattern))).toEqual([]);
+  it('every registered pattern is unique and every redirect lands on a served route', () => {
+    const patterns = ROUTE_META.map((meta) => meta.pattern);
+    expect(new Set(patterns).size).toBe(patterns.length);
+    for (const meta of ROUTE_META) {
+      if (!meta.redirectTo) {
+        expect(meta.chunk, `${meta.pattern} renders a route module`).toBeDefined();
+        continue;
+      }
+      const destination = resolveRouteMeta(meta.redirectTo);
+      expect(destination.chunk, `${meta.pattern} redirects to a served route`).toBeDefined();
+      expect(meta.name, 'a redirect is named after its destination').toBe(destination.name);
+    }
+  });
+
+  it('every route module is preloadable by its index path', () => {
+    const served = ROUTE_META.filter((meta) => meta.chunk).map((meta) => indexPathOf(meta.pattern));
+    expect(Object.keys(routePreloaders).sort()).toEqual([...new Set(served)].sort());
+    expect(indexPathOf('/borrower-360/:id')).toBe('/borrower-360');
+    expect(indexPathOf('/data-estate/assets/:assetKey')).toBe('/data-estate/assets');
   });
 
   it('command palette route labels are the routeMeta page names', () => {
@@ -112,6 +141,7 @@ describe('route tables stay pinned to routeMeta', () => {
     for (const { label, to } of routeActions) {
       expect({ to, label }).toEqual({ to, label: resolveRouteMeta(to).name });
     }
+    expect(routeActions.map((action) => action.to)).toEqual(PALETTE_ROUTE_IDS.map((id) => ROUTES[id].pattern));
   });
 
   it('route-nav chip labels are the routeMeta nav labels', () => {
@@ -133,8 +163,48 @@ describe('route tables stay pinned to routeMeta', () => {
     const chips = [...html.matchAll(/<a[^>]*href="([^"]+)"[^>]*>.*?<span class="filter__value">([^<]+)<\/span><\/a>/g)]
       .map((match) => ({ to: match[1], label: match[2] }));
     expect(chips.length).toBe(10);
+    expect(chips.length).toBe(NAV_ROUTE_IDS.length);
     for (const { to, label } of chips) {
       expect({ to, label }).toEqual({ to, label: resolveRouteMeta(to).navLabel });
     }
+  });
+
+  /**
+   * Audit shell-08 icon drift: `flow` was Analytics in the nav but Lead Queue
+   * in the palette, and `user` / `doc` swapped between Leads, Borrower 360 and
+   * Glossary. Each route now has ONE icon: the one the nav chip draws is the
+   * one the palette row names.
+   */
+  it('a route shows the same icon in the nav chip and the command palette', () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    queryClient.setQueryData<SessionResponse>(['session', 'access'], {
+      can_access_admin: true,
+      can_approve: true,
+      actor_email: null,
+    });
+    const html = renderToStaticMarkup(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/']}>
+          <RouteNav />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    const chipIcons = new Map(
+      [...html.matchAll(/<a[^>]*href="([^"]+)"[^>]*>(<svg[\s\S]*?<\/svg>)<span class="filter__value">/g)]
+        .map((match) => [match[1], match[2]] as const),
+    );
+    const paletteRoutes = COMMAND_ACTIONS.flatMap((action) =>
+      action.target.kind === 'route' ? [{ to: action.target.to, icon: action.icon }] : [],
+    );
+    expect(paletteRoutes.length).toBe(10);
+    for (const { to, icon } of paletteRoutes) {
+      const drawn = chipIcons.get(to);
+      expect(drawn, `the nav has a chip for ${to}`).toBeDefined();
+      expect(drawn, `${to} draws the palette's "${icon}" icon`).toBe(renderToStaticMarkup(<Icon name={icon} size={12} />));
+    }
+    const icons = paletteRoutes.map((route) => route.icon);
+    expect(new Set(icons).size, 'no two destinations share an icon').toBe(icons.length);
   });
 });

@@ -574,3 +574,15 @@ input[type="checkbox"] {
   --dialog-w: 480px;
   --z-toast: 1100;
 }
+
+/* ---------- Topbar popup layer (wave 1c, audit 2026-09-21 shell-06) ----------
+ * The topbar is a stacking context at --z-topbar, under the docked Console
+ * (--z-console) and the floating Genie panel (--z-genie), and the identity
+ * menu's popup drops into the top-right corner where both sit. While that
+ * popup is open the topbar rises to this layer (29-shell-wayfinding.css), so
+ * the popup paints over them; it stays under the skip link, the command
+ * palette and modals.
+ */
+:root {
+  --z-topbar-menu: 55;
+}

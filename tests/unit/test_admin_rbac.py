@@ -99,10 +99,12 @@ def test_session_returns_only_admin_capability_from_same_group_rule(
     assert admitted.status_code == 200
     assert admitted.json() == {
         "can_access_admin": True, "can_approve": True, "actor_email": None,
+        "actor_display_name": None, "role_labels": ["Administrator", "Approver"],
     }
     assert denied.status_code == 200
     assert denied.json() == {
         "can_access_admin": False, "can_approve": False, "actor_email": None,
+        "actor_display_name": None, "role_labels": [],
     }
     assert compat.status_code == 200
     assert compat.json() == admitted.json()
@@ -125,6 +127,8 @@ def test_session_and_admin_gate_share_email_allowlist_rule(
         "can_access_admin": True,
         "can_approve": True,
         "actor_email": "operator@example.com",
+        "actor_display_name": "operator",
+        "role_labels": ["Administrator", "Approver"],
     }
     assert admin.status_code == 200, admin.text
 
@@ -255,6 +259,7 @@ def test_admin_respects_trust_forwarded_headers_flag(
     )
     assert session_denied.json() == {
         "can_access_admin": False, "can_approve": False, "actor_email": None,
+        "actor_display_name": None, "role_labels": [],
     }
 
     # Trust re-enabled -- same header admits again.
@@ -268,6 +273,7 @@ def test_admin_respects_trust_forwarded_headers_flag(
     )
     assert session_admitted.json() == {
         "can_access_admin": True, "can_approve": True, "actor_email": None,
+        "actor_display_name": None, "role_labels": ["Administrator", "Approver"],
     }
 
 

@@ -1,0 +1,24 @@
+/* ============================================================
+   QUEUE PAGER (audit 2026-09-21 shell-04). Ships with the lazy
+   Borrower 360 route chunk. New BEM block: the prototype is a single
+   screen with no dossier route (design_files/Module 0 Prototype.html
+   composes queue + preview side by side), so stepping through the
+   queue from a dossier is additive; it composes the prototype `.btn`
+   (design_files/index.html) with the token vocabulary only.
+   ============================================================ */
+.queue-pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  margin-block-end: var(--sp-4);
+  color: var(--text-2);
+  font-size: var(--fs-12);
+}
+.queue-pager__position {
+  margin-inline-end: var(--sp-1);
+  color: var(--text-1);
+}
+.queue-pager__scope { color: var(--text-3); }
+.queue-pager__prev-icon { transform: scaleX(-1); }

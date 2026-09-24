@@ -1,4 +1,5 @@
 import type { ClientErrorKind } from '../lib/chunkLoadError';
+import { resolveRouteMeta } from '../lib/routeMeta';
 import { Icon } from './Icon';
 
 /**
@@ -27,30 +28,19 @@ interface ErrorSurfaceProps {
   onReload: () => void;
 }
 
-const ROUTE_LABELS: ReadonlyArray<readonly [prefix: string, label: string]> = [
-  ['/analytics', 'Analytics'],
-  ['/data-estate/assets', 'Governed asset'],
-  ['/portfolio-builder', 'Portfolio Builder'],
-  ['/segment-intelligence', 'Segments'],
-  ['/lead-queue', 'Lead Queue'],
-  ['/borrower-360', 'Borrower 360'],
-  ['/glossary', 'Glossary'],
-  ['/offer-orchestrator', 'Offer & Outreach'],
-  ['/ask-genie', 'Ask Genie'],
-  ['/admin-config', 'Administration'],
-];
-
 /**
- * Product name for a pathname. Returns the route NAME, never the path: a
- * `/borrower-360/B-...` pathname carries a borrower id.
+ * Product name for a pathname, read from the route registry (lib/routeMeta,
+ * audit 2026-09-21 `shell-08`) so the error surface names a page exactly as
+ * its tab title, route announcer and command palette do. Returns the route NAME,
+ * never the path: a `/borrower-360/B-...` pathname carries a borrower id.
+ * Null for a path the app does not serve. The registry is a pure module (no
+ * router context), so the root boundary can still call this outside every
+ * provider.
  */
 export function routeLabelForPath(pathname: string): string | null {
   const clean = pathname.split(/[?#]/, 1)[0] || '/';
-  if (clean === '/') return 'Home';
-  const match = ROUTE_LABELS.find(
-    ([prefix]) => clean === prefix || clean.startsWith(`${prefix}/`),
-  );
-  return match ? match[1] : null;
+  const meta = resolveRouteMeta(clean);
+  return meta.id === 'notFound' ? null : meta.name;
 }
 
 function copyFor(

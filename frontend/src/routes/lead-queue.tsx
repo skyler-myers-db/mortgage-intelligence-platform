@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useSearchParams } from 'react-router';
+import { useLocation, useSearchParams } from 'react-router';
 import { api, type LeadsPageResult } from '../lib/api';
 import { leadsQuery, type LeadsRequest } from '../lib/leadsQuery';
 import { useConfigOptionsQuery } from '../lib/configOptionsQuery';
@@ -15,6 +15,7 @@ import { FilterSelect } from '../components/ui/FilterSelect';
 import { useFootprint } from '../components/FootprintProvider';
 import { useApp } from '../components/AppContext';
 import { queryKeys } from '../lib/queryKeys';
+import { queueFilterLabel, usePublishQueueContext } from '../lib/queueContextPublish';
 import { LENDER_RELATIONSHIP_OPTIONS } from '../lib/lenderFilters';
 import { CITY_STATE_PAIR_RE } from '../lib/cityStateFilter';
 import { LeadQueueTableSkeleton } from './lead-queue.skeleton';
@@ -85,6 +86,7 @@ interface AdminRulesSummary {
 
 export default function LeadQueue() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const { search: queueSearch } = useLocation();
   // `?view=` is a column preset, not a filter: it never enables Clear all.
   const filtersActive = hasLeadQueueFilters(searchParams);
   const footprint = useFootprint();
@@ -384,6 +386,18 @@ export default function LeadQueue() {
     funnelStage,
   });
   const moreActiveCount = moreFiltersActiveCount(activeFilterChips);
+  // Audit shell-04: publish this exact queue (URL search, filter summary,
+  // ranked masked ids) for the dossier breadcrumbs and pager. Settled rows
+  // only: placeholder rows still belong to the previous filters.
+  usePublishQueueContext(leadsData && !leadsPlaceholderData ? {
+    search: queueSearch,
+    label: queueFilterLabel([
+      stateFilterDisplay !== 'All states' && stateFilterDisplay,
+      segmentFilter !== 'All segments' && segmentFilter,
+      activeFilterChips.length > 0 && `+${activeFilterChips.length} ${activeFilterChips.length === 1 ? 'filter' : 'filters'}`,
+    ]),
+    ids: visibleLeads.map((lead) => lead.borrower_id),
+  } : null);
   const clearAllFilters = () => setSearchParams(searchParamsCleared(searchParams));
   const scopeFiltersActive = Boolean(
     funnelStage
