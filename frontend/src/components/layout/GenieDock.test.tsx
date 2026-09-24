@@ -9,7 +9,7 @@
  * shows the recovery surface inside the Genie frame, never at the root.
  */
 
-import { act, lazy, useEffect, type ComponentType } from 'react';
+import { act, lazy, useEffect, useReducer, type ComponentType } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GenieDock } from './GenieDock';
@@ -165,6 +165,42 @@ describe('GenieDock', () => {
         window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
       });
       expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it('closing the frame of a chat that crashed with focus inside sends focus to the topbar Genie toggle, not <body>', async () => {
+      // The crash removes the focused element, so the frame opens with <body>
+      // focused and must not record <body> as the element to return focus to.
+      const topbarToggle = document.createElement('button');
+      topbarToggle.setAttribute('aria-label', 'Toggle Genie chat');
+      document.body.appendChild(topbarToggle);
+      const chat = { crashing: false, rerender: () => undefined as void };
+      function FocusedChat() {
+        const [, bump] = useReducer((n: number) => n + 1, 0);
+        useEffect(() => {
+          chat.rerender = bump;
+        }, []);
+        if (chat.crashing) throw new TypeError('Genie chat crashed');
+        return <input data-testid="genie-chat-input" aria-label="Ask Genie" />;
+      }
+      try {
+        render(true, FocusedChat);
+        const input = container.querySelector<HTMLInputElement>('[data-testid="genie-chat-input"]');
+        act(() => input?.focus());
+        expect(document.activeElement).toBe(input);
+
+        chat.crashing = true;
+        act(() => chat.rerender());
+        expect(surface()?.getAttribute('data-error-boundary')).toBe('genie');
+        const close = container.querySelector<HTMLButtonElement>('button[aria-label="Close Genie"]');
+        await vi.waitFor(() => expect(document.activeElement).toBe(close));
+
+        act(() => close?.click());
+        expect(onClose).toHaveBeenCalledTimes(1);
+        render(false, FocusedChat);
+        expect(document.activeElement).toBe(topbarToggle);
+      } finally {
+        topbarToggle.remove();
+      }
     });
 
     it('Try again re-mounts the chat once', () => {
