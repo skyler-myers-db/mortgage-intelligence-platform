@@ -158,6 +158,8 @@ test.describe('B/C. a panel chunk that will not load', () => {
     await expect(surface).toBeVisible();
     await expect(surface.getByRole('button')).toHaveText(['Reload']);
     await expect(surface.getByRole('heading', { level: 2 })).toHaveText('A new version is available');
+    // The frame reuses the chat's header but cannot be dragged: no grab cursor.
+    await expect(panel.locator('.genie__hdr')).toHaveCSS('cursor', 'default');
     expect(await horizontalOverflow(surface)).toBeLessThanOrEqual(0);
     expect(await axeViolations(page, '.genie'), 'WCAG A/AA inside the Genie frame').toEqual([]);
     await expect(page.locator('#main-content h1')).toHaveText(HOME_H1);

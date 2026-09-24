@@ -19,7 +19,9 @@
    the gutter, so it has no margin; the icon and copy share the first row
    and the actions take their own, so it fits the 300px Console with no
    horizontal overflow. It is an extension of the block above, not a new
-   prototype deviation.
+   prototype deviation. The Genie error frame reuses the chat's
+   `.genie__hdr`, but it cannot be dragged, so the header's grab cursor
+   (06-genie-chat.css) is reset while the frame holds the surface.
 */
 .error-surface {
   margin: var(--sp-6);
@@ -74,3 +76,4 @@
   flex: 1 1 100%;
   flex-wrap: wrap;
 }
+.genie:has(> .genie__body > .error-surface) > .genie__hdr { cursor: default; }
