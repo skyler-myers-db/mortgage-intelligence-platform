@@ -137,6 +137,7 @@ export function useLeadTableKeyboardFlow({
   const [toast, setToast] = useState<LeadDecisionToastState | null>(null);
   const [refocusTable, setRefocusTable] = useState(false);
   const confirmRef = useRef<HTMLButtonElement | null>(null);
+  const rejectReasonRef = useRef<HTMLSelectElement | null>(null);
   const review = useLeadApproveReview({
     canStartApproval: approval.canStartApproval,
     draftForApproval: approval.draftForApproval,
@@ -244,9 +245,34 @@ export function useLeadTableKeyboardFlow({
     approval.openBulkRationale();
   }
 
+  /**
+   * R on the cursor row (and the row's Reject button): the reject panel
+   * opens above the table, so focus moves to its Reason field; otherwise a
+   * keyboard user is left in the table, a Shift+Tab walk away from it.
+   */
+  function openReject(borrowerId: string) {
+    approval.setPendingReject(borrowerId);
+    requestAnimationFrame(() => rejectReasonRef.current?.focus());
+  }
+
+  /**
+   * The reject write RETURNED ok: advance the cursor and keep the keyboard
+   * in the table. The panel unmounts with focus inside it, which would drop
+   * focus to <body> and leave the next J / K with nothing to act on.
+   */
   async function submitReject() {
     const rejected = await approval.submitReject();
-    if (rejected) cursor.advanceAfter(rejected);
+    if (!rejected) return;
+    cursor.advanceAfter(rejected);
+    setRefocusTable(true);
+  }
+
+  /** Cancel on the reject panel: nothing recorded; focus back in the table. */
+  function cancelReject() {
+    approval.setPendingReject(null);
+    approval.setRejectRationale('');
+    approval.setRejectReasonCode('low_intent');
+    setRefocusTable(true);
   }
 
   /**
@@ -294,7 +320,7 @@ export function useLeadTableKeyboardFlow({
       if (!targetId || campaignBindingBlocked) return;
       const lead = leadsById.get(targetId);
       if (isTerminalApproval(approvals[targetId] ?? lead?.approval_status)) return;
-      approval.setPendingReject(targetId);
+      openReject(targetId);
     },
     openBulkGate,
   }, tableWrapRef);
@@ -352,7 +378,10 @@ export function useLeadTableKeyboardFlow({
     toggleRow,
     viewReceipt,
     bulkApproveFromToolbar,
+    rejectReasonRef,
+    openReject,
     submitReject,
+    cancelReject,
     inspectEvidenceFromDialog,
     eligibleSelectedIds,
   };

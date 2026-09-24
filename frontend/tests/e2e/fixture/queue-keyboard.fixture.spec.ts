@@ -22,7 +22,8 @@
  *    back to the table; "Skip table" lands on a visible, ringed target.
  *  - Review round 2: an evidence chip in the review dialog opens the drawer
  *    WITH focus in it (Enter there approves nothing; Escape returns to the
- *    inline review).
+ *    inline review); R moves focus into the reject panel, and a returned
+ *    reject or Cancel hands it back to the table so J keeps working.
  *
  * Holds are RequestGates, never wall-clock waits, so the in-flight
  * assertions hold under any machine load.
@@ -377,6 +378,52 @@ test.describe('approve review', () => {
       expect(sheetScan.violations.map((violation) => violation.id)).toEqual([]);
     });
   }
+});
+
+test.describe('keyboard reject', () => {
+  test('R moves focus into the reject panel; a returned reject or Cancel hands it back to the table and J keeps moving the cursor', async ({ app, mockApi, page }) => {
+    registerDraftEcho(mockApi);
+    const held = registerHeldReject(mockApi);
+    await app.gotoRoute('/lead-queue');
+    const [rejected, approvedRow, next, after] = LEADS;
+    // Every fixture lead is marketing-eligible; LEADS[1] is already approved,
+    // so the next pending row after LEADS[0] is LEADS[2].
+    expect([rejected.approval_status, approvedRow.approval_status, next.approval_status]).toEqual(['pending', 'approved', 'pending']);
+    const panel = page.locator('.decision-panel');
+    const reason = panel.getByRole('combobox', { name: 'Reason' });
+
+    await scrollRegion(page).focus();
+    await page.keyboard.press('j');
+    await expect(cursorRow(page)).toHaveAttribute('data-borrower-row', rejected.borrower_id);
+
+    // Cancel by keyboard: Reason -> Rationale note -> Cancel.
+    await page.keyboard.press('r');
+    await expect(reason, 'R puts focus on the panel, not in the table').toBeFocused();
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('Tab');
+    await expect(panel.getByRole('button', { name: 'Cancel' })).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(panel).toHaveCount(0);
+    await expect(scrollRegion(page), 'Cancel hands focus back to the table').toBeFocused();
+    expect(held.rejectGate.received).toBe(false);
+
+    // Confirm reject by keyboard: Reason -> Rationale note -> Cancel -> Confirm reject.
+    await page.keyboard.press('r');
+    await expect(reason).toBeFocused();
+    for (let step = 0; step < 3; step += 1) await page.keyboard.press('Tab');
+    await expect(panel.getByRole('button', { name: 'Confirm reject' })).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect.poll(() => held.rejectGate.received, 'the reject POST left the browser').toBe(true);
+    held.rejectGate.release();
+    await expect(panel).toHaveCount(0);
+    await expect(page.getByTestId(`lead-approval-cell-${rejected.borrower_id}`)).toContainText('Rejected');
+    await expect(cursorRow(page), 'the cursor advanced to the next pending row').toHaveAttribute('data-borrower-row', next.borrower_id);
+    await expect(scrollRegion(page), 'the table region holds focus, not <body>').toBeFocused();
+
+    await page.keyboard.press('j');
+    await expect(cursorRow(page), 'J acts from the advanced cursor').toHaveAttribute('data-borrower-row', after.borrower_id);
+    expect(held.approvals).toEqual([]);
+  });
 });
 
 test.describe('bulk gate and Cmd-K verbs', () => {

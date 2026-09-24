@@ -411,11 +411,8 @@ export function LeadTable({
           rationale={approval.rejectRationale}
           onReasonChange={approval.setRejectReasonCode}
           onRationaleChange={approval.setRejectRationale}
-          onCancel={() => {
-            approval.setPendingReject(null);
-            approval.setRejectRationale('');
-            approval.setRejectReasonCode('low_intent');
-          }}
+          reasonRef={flow.rejectReasonRef}
+          onCancel={flow.cancelReject}
           onSubmit={() => void flow.submitReject()}
         />
       )}
@@ -564,7 +561,7 @@ export function LeadTable({
                     }}
                     onToggleSelect={approval.toggleSelect}
                     onApprove={flow.openReview}
-                    onReject={approval.setPendingReject}
+                    onReject={flow.openReject}
                     onOpenDisposition={sales.openDisposition}
                     onAssignmentUpdate={sales.applyLeadUpdate}
                   />

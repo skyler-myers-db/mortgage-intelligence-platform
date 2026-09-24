@@ -1,3 +1,4 @@
+import type { RefObject } from 'react';
 import type { CallDisposition, SalesTeamMember } from '../../types';
 import { Button } from '../Primitives';
 import { DISPOSITION_OPTIONS, REJECT_REASONS } from './LeadTable.constants';
@@ -11,6 +12,7 @@ export function LeadRejectPanel({
   onRationaleChange,
   onCancel,
   onSubmit,
+  reasonRef,
 }: {
   borrowerId: string;
   reasonCode: RejectReasonCode;
@@ -19,6 +21,8 @@ export function LeadRejectPanel({
   onRationaleChange: (value: string) => void;
   onCancel: () => void;
   onSubmit: () => void;
+  /** The Reason field, which takes focus when the panel opens (tables-03). */
+  reasonRef?: RefObject<HTMLSelectElement | null>;
 }) {
   return (
     <form
@@ -37,6 +41,7 @@ export function LeadRejectPanel({
       <label className="decision-panel__field">
         <span className="field__label">Reason</span>
         <select
+          ref={reasonRef}
           value={reasonCode}
           onChange={(e) => onReasonChange(e.target.value as RejectReasonCode)}
         >
