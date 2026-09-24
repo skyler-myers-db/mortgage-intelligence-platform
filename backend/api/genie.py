@@ -15,6 +15,7 @@ import logging
 from typing import Annotated, Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from backend.api import genie_guardrails as prompt_guardrails
 from backend.config.settings import settings
@@ -23,6 +24,7 @@ from backend.services.audit_store import (
     get_audit_store,
     resolve_actor,
 )
+from backend.services.backpressure import adopt_request_slot
 from backend.services.error_sanitizer import safe_dependency_detail
 from backend.services.genie_actions import (
     handle_genie_action,
@@ -31,6 +33,7 @@ from backend.services.genie_actions import (
 from backend.services.genie_answers import (
     GenieActionRequest,
     GenieActionResponse,
+    GenieCompletionJobStatus,
     GenieMessageResponse,
     GenieProgressResponse,
     GenieSessionDetailResponse,
@@ -44,6 +47,22 @@ from backend.services.genie_client import (
     GenieClientError,
     ResilientGenieClient,
     get_genie_client,
+)
+from backend.services.genie_completion_delivery import job_status
+from backend.services.genie_completion_jobs import (
+    completion_jobs_available,
+    create_or_join,
+    job_turn_ids_eligible,
+    read_for_actor,
+)
+from backend.services.genie_completion_runner import (
+    GenieCompleteAsyncRequest,
+    GenieCompletionJobStatusRequest,
+    GovernedTurn,
+    await_joined_job,
+    complete_governed_turn,
+    run_completion_job,
+    run_inline_job,
 )
 from backend.services.genie_deterministic import (
     _block_unsafe_genie_output,
@@ -71,10 +90,7 @@ from backend.services.genie_progress import (
     mint_genie_progress_token,
     verify_genie_progress_token,
 )
-from backend.services.genie_session_guard import (
-    GENIE_MESSAGE_OWNERSHIP_SQL,
-    assert_genie_conversation_owned,
-)
+from backend.services.genie_session_guard import assert_genie_conversation_owned
 from backend.services.genie_trusted_assets import trusted_assets
 from backend.services.genie_turn_record import (  # noqa: F401 - compatibility re-exports
     _GENIE_MESSAGE_INSERT_SQL,
@@ -84,7 +100,7 @@ from backend.services.genie_turn_record import (  # noqa: F401 - compatibility r
 )
 from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
-from backend.services.observability import emit
+from backend.services.observability import get_correlation_id
 from backend.services.rbac import resolve_workflow_actor
 from backend.services.repositories import BorrowerRepository, GenieAnswerRepository
 from backend.services.repositories.factory import (
@@ -465,6 +481,10 @@ def genie_message_submit(
         # Known now, from the question alone: lets the UI label the long
         # completion wait as deep research instead of "Answer ready".
         deep=genie_turn_is_deep(payload.question),
+        completion_jobs=(
+            job_turn_ids_eligible(conversation_id, message_id)
+            and completion_jobs_available(lakebase)
+        ),
     )
 
 
@@ -510,28 +530,15 @@ def genie_message_progress(
     return build_genie_progress(message)
 
 
-@router.post(
-    "/message/complete",
-    response_model=GenieMessageResponse,
-    responses=JSON_CONTENT_TYPE_RESPONSE,
-)
-def genie_message_complete(
+def _verified_turn(
     payload: GenieCompleteRequest,
     request: Request,
-    repo: RepoDep,
-    audit: AuditDep,
-    lakebase: LakebaseDep,
-    _: Annotated[None, Depends(require_json_content_type)],
-) -> GenieMessageResponse:
-    """Async lifecycle step 3: governed completion of the submitted turn.
+) -> tuple[str, str | None, dict[str, Any]]:
+    """Actor, live-campaign marker and token claims for a submitted turn.
 
     The token proves the same actor's submit created this exact message and
     the hash check pins ``question`` to the prompt that passed the guard
-    battery there, so the output-policy check, audit write, action-token
-    issuance, and session recording below stay byte-identical in meaning to
-    the synchronous endpoint's live tail. No conversation-ownership lookup
-    here: for a fresh conversation the Lakebase row intentionally does not
-    exist until this very call finalizes — the token is the authorization.
+    battery there.
     """
     actor = resolve_actor(request)
     try:
@@ -551,90 +558,112 @@ def genie_message_complete(
             status_code=400,
             detail="question does not match the submitted Genie turn",
         )
-    guard_payload = GenieMessageRequest(
+    return actor, live_campaign_run_marker, claims
+
+
+@router.post(
+    "/message/complete",
+    response_model=GenieMessageResponse,
+    responses={**JSON_CONTENT_TYPE_RESPONSE, 202: {"model": GenieCompletionJobStatus}},
+)
+def genie_message_complete(
+    payload: GenieCompleteAsyncRequest,
+    request: Request,
+    repo: RepoDep,
+    audit: AuditDep,
+    lakebase: LakebaseDep,
+    _: Annotated[None, Depends(require_json_content_type)],
+) -> GenieMessageResponse | JSONResponse:
+    """Async lifecycle step 3: governed completion of the submitted turn.
+
+    One job per (actor, conversation, message) makes the output-policy
+    check, the RUN_GENIE audit write, action-token issuance and session
+    recording single-shot: a reloaded or retried complete joins the job.
+    ``respond_async`` answers 202 with the job's status (the browser polls
+    ``/message/status``); older tabs get today's 200 answer. Without the job
+    table (App ahead of its migration) the tail runs inline with no job. No
+    conversation-ownership lookup here: for a fresh conversation the Lakebase
+    row intentionally does not exist until this very call finalizes — the
+    token is the authorization.
+    """
+    actor, live_campaign_run_marker, claims = _verified_turn(payload, request)
+    turn = GovernedTurn(
+        actor=actor,
         question=payload.question,
         conversation_id=payload.conversation_id,
+        message_id=payload.message_id,
+        live_campaign_run_marker=live_campaign_run_marker,
+        repo=repo,
+        audit=audit,
+        lakebase=lakebase,
     )
-    try:
-        result = repo.respond_existing(
-            payload.question,
-            conversation_id=payload.conversation_id,
-            message_id=payload.message_id,
-        )
-    except GenieClientError as exc:
-        raise DependencyDownError(
-            "genie",
-            reason="genie client returned an unrecoverable response",
-            last_error=exc,
-            kind=DependencyDownError.KIND_RETRIES_EXHAUSTED,
-        ) from exc
-    if _genie_response_has_unsafe_visible_text(result):  # type: ignore[arg-type]
-        blocked = _block_unsafe_genie_output(
-            audit,
-            actor=actor,
-            payload=guard_payload,
-            response=result,  # type: ignore[arg-type]
-        )
-        return _finalize_genie_response(
-            lakebase,
-            actor=actor,
-            response=blocked,
-            live_campaign_run_marker=live_campaign_run_marker,
-        )
-    # Replay hygiene (2026-07-31 adversarial review): the stateless token
-    # verifies for its full TTL, so a re-sent complete would otherwise write
-    # a duplicate genie.run_query row for one turn and inflate RUN_GENIE
-    # counts against one message id. The durable genie_messages row from the
-    # first completion is the replay marker; repeats re-serve the governed
-    # answer without a second audit row.
-    already_recorded = False
-    if result.message_id:
-        try:
-            already_recorded = (
-                lakebase.fetchone(
-                    GENIE_MESSAGE_OWNERSHIP_SQL,
-                    {
-                        "actor_email": actor,
-                        "conversation_id": payload.conversation_id,
-                        "message_id": result.message_id,
-                    },
-                )
-                is not None
-            )
-        except LakebaseError:
-            # Fail toward auditing: an unreadable ledger must never suppress
-            # the audit row for a turn that may not have one yet.
-            already_recorded = False
-    if already_recorded:
-        emit(
-            log,
-            "genie_complete_replayed",
-            dependency="lakebase",
-            outcome="deduplicated",
-            conversation_id=payload.conversation_id,
-            message_id=result.message_id,
-        )
-    else:
-        _required_audit_write(
-            audit,
-            actor=actor,
-            action="genie.run_query",
-            entity_type="genie_message",
-            entity_id=genie_audit_entity_id(result),
-            payload_json={
-                "conversation_id": result.conversation_id,
-                "message_id": result.message_id,
-                "question_hash": result.question_hash,
-                "row_count": result.row_count or 0,
-                "source_assets": result.trusted_assets,
-                "visualization_kind": result.visualization.kind if result.visualization else None,
-            },
-            event_type="RUN_GENIE",
-        )
-    return _finalize_genie_response(
+    if not (
+        job_turn_ids_eligible(payload.conversation_id, payload.message_id)
+        and completion_jobs_available(lakebase)
+    ):
+        return complete_governed_turn(turn)
+    enrollment = create_or_join(
         lakebase,
         actor=actor,
-        response=result,  # type: ignore[arg-type]
+        conversation_id=payload.conversation_id,
+        message_id=payload.message_id,
+        question_hash=str(claims.get("question_hash") or ""),
+        expires_at_epoch=int(claims.get("exp") or 0),
+    )
+    if payload.respond_async:
+        if enrollment.created:
+            run_completion_job(
+                turn,
+                enrollment.job,
+                slot=adopt_request_slot(request),
+                correlation_id=get_correlation_id(),
+            )
+        status = job_status(
+            enrollment.job,
+            question=payload.question,
+            actor=actor,
+            live_campaign_run_marker=live_campaign_run_marker,
+        )
+        return JSONResponse(status_code=202, content=status.model_dump(mode="json"))
+    if enrollment.created:
+        return run_inline_job(turn, enrollment.job)
+    return await_joined_job(turn, enrollment.job)
+
+
+@router.post(
+    "/message/status",
+    response_model=GenieCompletionJobStatus,
+    responses=JSON_CONTENT_TYPE_RESPONSE,
+)
+def genie_message_status(
+    payload: GenieCompletionJobStatusRequest,
+    request: Request,
+    lakebase: LakebaseDep,
+    _: Annotated[None, Depends(require_json_content_type)],
+) -> GenieCompletionJobStatus:
+    """Poll the caller's own completion job; the answer once it succeeded.
+
+    No Genie call. The stored answer is not re-scanned: it passed the output
+    guard before it was stored, the same posture as history replay. Its
+    question comes back from this hash-checked request and its actions are
+    re-signed for the caller, since the job row holds neither.
+    """
+    # AUDIT EXEMPT: read-only poll of the caller's own completion job; the
+    # job's completion wrote the turn's RUN_GENIE row exactly once.
+    actor, live_campaign_run_marker, _claims = _verified_turn(payload, request)
+    job = read_for_actor(
+        lakebase,
+        job_id=payload.job_id,
+        actor=actor,
+        conversation_id=payload.conversation_id,
+        message_id=payload.message_id,
+    )
+    if job is None:
+        raise HTTPException(status_code=404, detail="Genie completion job not found")
+    return job_status(
+        job,
+        question=payload.question,
+        actor=actor,
         live_campaign_run_marker=live_campaign_run_marker,
     )
 

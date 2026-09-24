@@ -39,6 +39,7 @@ from backend.services.genie_progress import (
 from backend.services.lakebase import get_lakebase_client
 from backend.services.repositories.factory import get_genie_answer_repository
 from backend.services.resilience import DependencyDownError
+from tests.fixtures.genie_job_lakebase import FakeJobLakebase
 
 ACTOR = "lo@example.com"
 HEADERS = {"X-Forwarded-Email": ACTOR}
@@ -109,26 +110,16 @@ class _FakeAudit:
         self.writes.append(kwargs)
 
 
-class _FakeLakebase:
-    def __init__(self) -> None:
-        self.executed: list[str] = []
-        #: When True, the message-ownership lookup reports the turn as
-        #: already recorded (replay-dedupe scenarios).
-        self.message_recorded = False
+class _FakeLakebase(FakeJobLakebase):
+    """The router's Lakebase double. It knows the completion-job table
+    (audit genie-01) but, by default, reports it as not provisioned, so every
+    pre-existing test here keeps exercising the inline governed tail it pins.
+    ``executed`` lists the session/message writes; ``message_recorded`` makes
+    the ownership lookup report the turn as already recorded (replay dedupe).
+    """
 
-    def fetchone(
-        self, sql: str, params: dict[str, Any] | None = None
-    ) -> dict[str, Any] | None:
-        if self.message_recorded and "genie_messages" in sql:
-            return {
-                "conversation_id": (params or {}).get("conversation_id"),
-                "message_id": (params or {}).get("message_id"),
-            }
-        return None
-
-    def execute(self, sql: str, params: dict[str, Any] | None = None) -> None:
-        _ = params
-        self.executed.append(sql)
+    def __init__(self, *, jobs_table: bool = False) -> None:
+        super().__init__(jobs_table=jobs_table)
 
 
 def _overrides(
@@ -621,3 +612,51 @@ def test_no_progress_stage_claims_the_answer_is_ready() -> None:
     assert completed.stage_label == "Verifying the answer against its rows"
     for _stage, label in _STAGE_BY_STATUS.values():
         assert "ready" not in label.lower(), label
+
+
+# --- 2026-09-21 audit genie-01: completion as a server-side job -------------
+
+
+def test_with_the_job_table_the_lifecycle_is_submit_poll_complete_202_then_status(
+    monkeypatch: Any,
+) -> None:
+    """Once the table is provisioned the whole async lifecycle runs through a
+    job: submit advertises it, complete answers 202, and the status poll
+    delivers the same governed answer with one RUN_GENIE row."""
+
+    from backend.services import genie_completion_runner
+
+    client, repo, audit = _FakeGenieClient(), _FakeRepo(), _FakeAudit()
+    lakebase = _FakeLakebase(jobs_table=True)
+    _overrides(monkeypatch, client=client, repo=repo, audit=audit, lakebase=lakebase)
+    http = TestClient(app)
+
+    submitted = http.post(
+        "/api/genie/message/submit", json={"question": QUESTION}, headers=HEADERS
+    ).json()
+    assert submitted["completion_jobs"] is True
+    ids = {
+        "conversation_id": submitted["conversation_id"],
+        "message_id": submitted["message_id"],
+        "progress_token": submitted["progress_token"],
+        "question": QUESTION,
+    }
+
+    accepted = http.post(
+        "/api/genie/message/complete", json={**ids, "respond_async": True}, headers=HEADERS
+    )
+    genie_completion_runner._reset_executor_for_tests()  # let the job finish
+    status = http.post(
+        "/api/genie/message/status",
+        json={**ids, "job_id": accepted.json()["job_id"]},
+        headers=HEADERS,
+    )
+
+    assert accepted.status_code == 202
+    assert accepted.json()["kind"] == "genie_completion_job"
+    assert status.status_code == 200
+    assert status.json()["status"] == "succeeded"
+    assert status.json()["response"]["answer"].startswith("There are 124,946")
+    assert status.json()["response"]["question"] == QUESTION
+    assert len(repo.existing_calls) == 1
+    assert sum(w["action"] == "genie.run_query" for w in audit.writes) == 1
