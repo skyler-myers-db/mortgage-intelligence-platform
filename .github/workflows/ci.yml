@@ -122,16 +122,16 @@ jobs:
       - run: npm --prefix frontend run build
       - name: Upload source maps (CI artifact only)
         # Audit stack-01. The build's hidden source maps are moved OUT of
-        # frontend/dist by a post-build step (w2-build-currency), so the
-        # App's asset route can never serve them; they are kept here, keyed
-        # by commit, to symbolicate a client error report. Never write them
-        # into dist or the App source. `ignore` until that post-build step
-        # is on the tree; the integrator then flips this to `error`.
+        # frontend/dist by tools/postbuild_artifacts.mjs, so the App's asset
+        # route can never serve them; they are kept here, keyed by commit, to
+        # symbolicate a client error report. Never write them into dist or
+        # the App source. `error`: a build that emits no maps is a regression
+        # of that post-build step, not an empty upload to shrug off.
         uses: actions/upload-artifact@v7
         with:
           name: frontend-sourcemaps-${{ github.sha }}
           path: frontend/sourcemaps/**
-          if-no-files-found: ignore
+          if-no-files-found: error
           retention-days: 30
       - run: npm --prefix frontend run budget
 
@@ -355,6 +355,22 @@ jobs:
           fi
       - name: Build production frontend
         run: npm --prefix frontend run build
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Built-dist artifact checks (served layer, build meta)
+        # tests/unit/test_frontend_build_artifacts.py skips its served-layer
+        # and build-meta checks where no dist exists (the backend job). Here
+        # the dist was just built, so MIP_REQUIRE_FRONTEND_DIST=1 turns a
+        # skip into a failure and the checks can never pass vacuously.
+        env:
+          MIP_REQUIRE_FRONTEND_DIST: '1'
+        run: pytest -q tests/unit/test_frontend_build_artifacts.py
       - name: Install Chromium
         working-directory: frontend
         run: npx playwright install --with-deps chromium
@@ -366,9 +382,7 @@ jobs:
         # perf-budget.fixture.spec.ts measures timing, so it runs alone on one
         # worker and only here (MIP_PERF=1; playwright.config.ts ignores it in
         # every other run). Its artifacts go to test-results/perf and
-        # playwright-report/perf, which the upload below already covers. The
-        # guard drops once w2-build-currency's spec is on the tree.
-        if: hashFiles('frontend/tests/e2e/fixture/perf-budget.fixture.spec.ts') != ''
+        # playwright-report/perf, which the upload below already covers.
         env:
           MIP_PERF: '1'
         run: npm --prefix frontend run e2e:fixture:ci -- perf-budget --workers=1
