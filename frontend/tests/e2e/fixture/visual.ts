@@ -17,6 +17,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { Locator, Page } from '@playwright/test';
 import { normalizeApiPath, type ApiCall, type MockApi } from './mockApi';
+import { FIXTURE_ROUTES } from './routes';
 import { expect } from './test';
 
 // ---------------------------------------------------------------------------
@@ -117,13 +118,20 @@ export async function parkPointerAndBlur(page: Page): Promise<void> {
 export interface CaptureOptions {
   /** Capture one element instead of the viewport. */
   element?: Locator;
+  /**
+   * Regions the double-run determinism check proved unstable. Mask nothing by
+   * default; every mask carries a comment at its call site naming the cause,
+   * and the caller asserts the masked element's content another way.
+   */
+  mask?: Locator[];
 }
 
 /** Soft screenshot assertion after the capture discipline, so one test reports every diff. */
 export async function capture(page: Page, name: string, options: CaptureOptions = {}): Promise<void> {
   await parkPointerAndBlur(page);
-  if (options.element) await expect.soft(options.element).toHaveScreenshot(name);
-  else await expect.soft(page).toHaveScreenshot(name);
+  const screenshot = options.mask ? { mask: options.mask } : {};
+  if (options.element) await expect.soft(options.element).toHaveScreenshot(name, screenshot);
+  else await expect.soft(page).toHaveScreenshot(name, screenshot);
 }
 
 /** Scroll `.main` (the app's scroll container) down by one viewport of itself and let two frames paint. */
@@ -158,10 +166,65 @@ export interface KnownSurfaceOverflow {
 /**
  * `${route}|${state}` → owner. A RATCHET like axe.ts KNOWN_VIOLATIONS: an
  * entry whose overflow no longer reproduces fails as stale, so a fix retires
- * it in the same change. Empty on 2026-09-24 (no `.surface` overflowed in
- * any scanned state).
+ * it in the same change. Recorded from the first full scan (wave 2).
  */
-export const KNOWN_SURFACE_OVERFLOW: Readonly<Record<string, KnownSurfaceOverflow>> = {};
+export const KNOWN_SURFACE_OVERFLOW: Readonly<Record<string, KnownSurfaceOverflow>> = {
+  // stack-06 (hand-rolled chart maths, no edge padding for axis labels): the
+  // last x tick of "Evidence Events Per Day" is centred on the chart's right
+  // edge (translateX(-50%)) and ends ~1.4px past the surface's padding box
+  // (scrollWidth 1319 > clientWidth 1318 at 1440x900).
+  'analytics-signals|default': {
+    finding: 'stack-06',
+    recorded: '2026-09-24',
+    themes: ['dark', 'light'],
+    nodes: 'section.surface:has(.analytics-chart__tick--x)',
+  },
+  // New slug layout-w2-glossary-tip (wave 3/4): a GlossaryTerm tip is laid
+  // out (at opacity 0) from its term's left edge at min(300px, 80vw) with no
+  // collision handling, so with the Console open the Borrower 360 dossier
+  // card (a 531px column) holds hidden tips that reach 43px past it
+  // (scrollWidth 574 > clientWidth 531) and spill out of the card when shown.
+  'borrower-360-detail|console': {
+    finding: 'layout-w2-glossary-tip',
+    recorded: '2026-09-24',
+    themes: ['dark', 'light'],
+    nodes: '.stack-grid > .surface:has(.glossary-term__tip)',
+  },
+};
+
+/** Every state a spec passes to expectNoSurfaceOverflow (visual.fixture.spec.ts, smoke). */
+export const OVERFLOW_STATES = [
+  'default',
+  'second-page',
+  'console',
+  'compact',
+  'evidence-drawer',
+  'command-palette',
+  'genie',
+  'degraded',
+  'expanded-row',
+  'empty',
+] as const;
+
+/** Ratchet keys that name no route or checked state would never be compared: problems, empty when valid. Pure. */
+export function surfaceOverflowKeyProblems(
+  known: Readonly<Record<string, KnownSurfaceOverflow>>,
+  routeNames: readonly string[],
+): string[] {
+  const states = new Set<string>(OVERFLOW_STATES);
+  return Object.keys(known)
+    .filter((key) => {
+      const [route, state, extra] = key.split('|');
+      return extra !== undefined || !routeNames.includes(route) || !states.has(state);
+    })
+    .map((key) => `KNOWN_SURFACE_OVERFLOW key "${key}" does not name a checked route|state`);
+}
+
+const overflowKeyProblems = surfaceOverflowKeyProblems(
+  KNOWN_SURFACE_OVERFLOW,
+  FIXTURE_ROUTES.map((route) => route.name),
+);
+if (overflowKeyProblems.length > 0) throw new Error(overflowKeyProblems.join('\n'));
 
 interface MeasuredOverflow {
   surface: string;

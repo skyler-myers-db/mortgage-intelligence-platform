@@ -376,6 +376,56 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  e2e-visual:
+    # Pixel gate (audit visual-10, quality-02, responsive-v2):
+    # tests/e2e/fixture/visual.fixture.spec.ts compares ~96 toHaveScreenshot
+    # baselines of the production build against the fixture API. Baselines
+    # are amd64-Linux renders, so the job runs INSIDE the pinned Playwright
+    # image (the same literal as the @playwright/test pin in
+    # frontend/package.json); the spec refuses any other host, and only this
+    # job and tools/update_visual_baselines.sh set MIP_VRT=1. Browsers come
+    # from the image: no `playwright install`. No secrets; every PNG is
+    # synthetic fixture data. A lane that changes pixels on purpose
+    # regenerates with tools/update_visual_baselines.sh (docs/testing.md).
+    name: e2e (visual regression, pinned container)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    container:
+      image: mcr.microsoft.com/playwright:v1.59.1-noble
+      options: --ipc=host
+    env:
+      MIP_VRT: '1'
+      MIP_VRT_IMAGE: mcr.microsoft.com/playwright:v1.59.1-noble
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend deps
+        run: npm --prefix frontend ci
+      - name: Build production frontend
+        run: npm --prefix frontend run build
+      - name: Run the visual regression
+        # --retries=0: a pixel diff that passes on a retry is nondeterminism,
+        # and the zero-pixel budget exists to surface it, not absorb it.
+        env:
+          E2E_FIXTURE_WORKERS: '2'
+        run: npm --prefix frontend run e2e:fixture:ci -- visual.fixture --retries=0
+      - name: Upload the visual diff report
+        # The HTML report shows expected / actual / diff per capture; with no
+        # committed baseline it holds the actual PNGs to review and commit.
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-visual-report
+          path: |
+            frontend/playwright-report/vrt
+            frontend/test-results/vrt
+          if-no-files-found: ignore
+          retention-days: 7
+
   security-scan:
     # SAST + secret-scan gate. This job is credential-free like the rest
     # of ci.yml: no repo secrets, runs identically on fork PRs and
