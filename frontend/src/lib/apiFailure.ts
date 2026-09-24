@@ -32,7 +32,10 @@ export type ClientFailureReason = 'session_expired' | 'offline' | 'unreachable' 
 
 export const CLIENT_FAILURE_MESSAGES: Readonly<Record<ClientFailureReason, string>> = {
   session_expired: 'Your session ended. Reload to sign in.',
-  offline: 'You are offline. This will load when your connection returns.',
+  // Method-neutral on purpose: a write that fails offline (an approval click)
+  // is never replayed on reconnect, so this must not promise that it "will
+  // load"; a paused read resumes by itself and says so where it waits.
+  offline: 'You are offline. Reconnect, then try again.',
   unreachable: 'The app could not be reached. Check your connection, then try again.',
   unreadable_response: 'The server sent a response the app could not read.',
 };

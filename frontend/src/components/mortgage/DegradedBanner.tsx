@@ -203,7 +203,7 @@ export function DegradedBanner({
     banner = (
       <Banner
         title="You are offline"
-        sub="Anything that needs data waits here and loads when your connection returns."
+        sub="Data loads on its own when your connection returns. Approvals and other changes are not recorded while you are offline."
         data={{ 'data-connection': 'offline' }}
       />
     );

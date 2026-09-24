@@ -273,6 +273,35 @@ test.describe('offline', () => {
   });
 });
 
+test.describe('a change attempted offline', () => {
+  test('an Approve click while offline says it was not recorded and to reconnect, never that it "will load"', async ({ app, page, context, hygiene }) => {
+    // The draft request this click makes cannot leave the browser: that
+    // failure is this test's own doing, and nothing else may fail.
+    hygiene.allow('request-failed', /^POST \S+\/api\/v1\/outreach\/draft\S* failed: net::ERR_INTERNET_DISCONNECTED$/);
+    hygiene.allow('console.error', /Failed to load resource: net::ERR_INTERNET_DISCONNECTED \(http:\/\/[^)]+\/api\/v1\/outreach\/draft[^)]*\)/);
+    await app.gotoRoute('/lead-queue');
+    const id = PRIMARY_BORROWER.borrower_id;
+    const cell = page.getByTestId(`lead-approval-cell-${id}`);
+    const approve = cell.getByRole('button', { name: `Approve ${id}` });
+    await expect(approve).toBeVisible();
+
+    await context.setOffline(true);
+    // The mock API answers through page.route, which offline emulation does
+    // not reach, so the draft fails the way a real offline fetch does.
+    await page.route('**/api/v1/outreach/draft**', (route) => route.abort('internetdisconnected'));
+    await expect(page.locator('.degraded-banner[data-connection="offline"]')).toContainText(
+      'Approvals and other changes are not recorded while you are offline.',
+    );
+    await approve.click();
+    // A write that failed offline is never replayed on reconnect, so its
+    // error must not borrow a read's "this will load" promise.
+    const error = page.locator('.table-error[role="alert"]');
+    await expect(error).toHaveText(`Couldn't approve ${id}: You are offline. Reconnect, then try again.`);
+    await expect(cell).not.toContainText('Approved');
+    await expect(sessionDialog(page)).toHaveCount(0);
+  });
+});
+
 test.describe('skeletons shaped like what they stand in for (states-10)', () => {
   for (const theme of FIXTURE_THEMES) {
     test(`the Lead Queue skeleton rows are within 2px of the rendered rows, column for column (${theme})`, async ({ app, page, mockApi }) => {
