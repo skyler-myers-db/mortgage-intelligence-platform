@@ -389,6 +389,10 @@ describe('layout containment contracts', () => {
     expect(scale['drawer-scrim']).toBeGreaterThan(scale.genie);
     expect(scale.console).toBeGreaterThan(scale.drawer);
     expect(scale.palette).toBeGreaterThan(scale['map-tip']);
+    // The open identity popup's topbar lift (shell-06) clears the Console and
+    // the Genie panel but stays under the skip link and the palette.
+    expect(scale['topbar-menu']).toBeGreaterThan(scale.console);
+    expect(scale['topbar-menu']).toBeLessThan(scale['skip-link']);
   });
 
   /**

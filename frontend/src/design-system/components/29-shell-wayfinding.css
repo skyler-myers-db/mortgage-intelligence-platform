@@ -12,6 +12,15 @@
   display: inline-flex;
   flex-shrink: 0;
 }
+/* The popup lives inside the topbar's stacking context (--z-topbar), which
+   the docked Console and the floating Genie panel paint over in the very
+   corner the popup drops into. Lift the whole topbar only while the popup is
+   mounted; at rest the shell keeps the prototype order. In this (initial)
+   stylesheet, not the lazy popup one, so a failed popup-stylesheet load
+   still opens an unobscured menu. */
+.topbar:has(.identity-menu__panel) {
+  z-index: var(--z-topbar-menu);
+}
 
 /* Breadcrumbs (audit shell-04): the prototype `.topbar__crumbs` row with
    `.sep` and `.cur` (Module 0 Prototype.html:1210-1219), rendered as a

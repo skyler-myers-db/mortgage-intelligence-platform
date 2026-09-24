@@ -90,6 +90,83 @@ test.describe('identity menu (shell-06)', () => {
     await expect(page.getByRole('menuitemradio', { name: 'Light' })).toHaveAttribute('aria-checked', 'true');
   });
 
+  /**
+   * The popup drops into the top-right corner, where the docked Console
+   * (--z-console) and the floating Genie panel (--z-genie) sit above the
+   * resting topbar layer. `toBeVisible` cannot see occlusion, so this hit
+   * tests the rendered page: every item's centre, and the panel's inset
+   * corners, must be the popup itself. Each layout first proves the popup
+   * really overlaps that overlay, so the hit test is never vacuous.
+   */
+  const OVERLAY_LAYOUTS = [
+    { name: 'Console and Genie open', withConsole: true, covered: 'Workspace console', click: 'Light' },
+    { name: 'Genie open in its default dock', withConsole: false, covered: 'Genie chat', click: 'Glossary' },
+  ] as const;
+  for (const layout of OVERLAY_LAYOUTS) {
+    test(`the open popup paints above the shell overlays (${layout.name})`, async ({ app, page }) => {
+      await app.setTheme('dark');
+      await app.gotoRoute('/lead-queue');
+      if (layout.withConsole) await app.openConsole();
+      await app.openGenie();
+      const topbar = page.getByRole('banner');
+      const trigger = topbar.getByRole('button', { name: /^Account menu/ });
+      await trigger.click();
+      const menu = page.getByRole('menu', { name: 'Account' });
+      await expect(menu).toBeVisible();
+      const panel = topbar.locator('.identity-menu__panel');
+      await expect(panel).toHaveCSS('display', 'grid');
+
+      const overlay = layout.withConsole
+        ? page.getByRole('complementary', { name: layout.covered })
+        : page.getByRole('dialog', { name: layout.covered });
+      expect(overlaps(await boxOf(panel), await boxOf(overlay)), `the popup lies over the ${layout.covered}`).toBe(true);
+
+      const items = menu.locator('[role^="menuitem"]');
+      await expect(items).toHaveCount(5);
+      for (const item of await items.all()) {
+        const onTop = await item.evaluate((el) => {
+          const r = el.getBoundingClientRect();
+          const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+          return hit !== null && el.contains(hit);
+        });
+        expect(onTop, `"${await item.innerText()}" is the topmost element at its centre`).toBe(true);
+      }
+      const cornersOnTop = await panel.evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        const inset = 8;
+        return [
+          [r.left + inset, r.top + inset],
+          [r.right - inset, r.top + inset],
+          [r.left + inset, r.bottom - inset],
+          [r.right - inset, r.bottom - inset],
+        ].map(([x, y]) => {
+          const hit = document.elementFromPoint(x, y);
+          return hit !== null && el.contains(hit);
+        });
+      });
+      expect(cornersOnTop, 'the popup is the topmost element at its inset corners').toEqual([true, true, true, true]);
+
+      // A real pointer click passes Playwright's own hit test.
+      await menu.getByRole(layout.click === 'Light' ? 'menuitemradio' : 'menuitem', { name: layout.click }).click({ timeout: 10_000 });
+      if (layout.click === 'Light') {
+        await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+      } else {
+        await expect(page).toHaveURL(/\/glossary$/);
+      }
+      // The lift lasts only while the popup is open: the resting topbar is
+      // back on its prototype layer, under the Console and the Genie panel.
+      await expect(menu).toBeHidden();
+      const layers = await page.evaluate(() => {
+        const bar = document.querySelector('.topbar');
+        return {
+          topbar: bar ? getComputedStyle(bar).zIndex : '',
+          token: getComputedStyle(document.documentElement).getPropertyValue('--z-topbar').trim(),
+        };
+      });
+      expect(layers.topbar).toBe(layers.token);
+    });
+  }
+
   test('Keyboard shortcuts dispatches the overlay event; Glossary navigates', async ({ app, page }) => {
     await app.gotoRoute('/');
     await page.evaluate(() => {
