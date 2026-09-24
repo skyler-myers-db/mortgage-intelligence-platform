@@ -1,6 +1,7 @@
 /**
  * App driver for fixture specs: navigation that waits for the route to
- * settle, theme selection through the app's own storage key, and the shell
+ * settle, theme / accent / density selection through the app's own storage
+ * keys, and the shell
  * interactions later lanes assert against (Console, Genie, command palette,
  * expanded lead row).
  *
@@ -12,6 +13,16 @@ import type { DegradeOptions, MockApi } from './mockApi';
 
 export type FixtureTheme = 'dark' | 'light';
 
+/**
+ * The accents and densities the app accepts. They mirror ACCENTS and
+ * DENSITIES in frontend/public/theme-boot.js (safety-net.fixture.spec.ts
+ * reads that file and fails when they drift).
+ */
+export const FIXTURE_ACCENTS = ['bright', 'teal', 'navy', 'red'] as const;
+export type FixtureAccent = (typeof FIXTURE_ACCENTS)[number];
+export const FIXTURE_DENSITIES = ['comfortable', 'compact'] as const;
+export type FixtureDensity = (typeof FIXTURE_DENSITIES)[number];
+
 /** Surfaces the app renders when something is wrong. Healthy routes show none. */
 export const ERROR_SURFACE_SELECTOR = [
   '.degraded-banner',
@@ -20,8 +31,12 @@ export const ERROR_SURFACE_SELECTOR = [
   '[role="alert"]',
 ].join(', ');
 
-const THEME_STORAGE_KEY = 'mip.theme';
-const THEME_SEED_MARKER = 'mip.fixture.themeSeed';
+/** The app's own storage key per preference, and this driver's once-per-tab seed marker. */
+const SEEDS = {
+  theme: { key: 'mip.theme', marker: 'mip.fixture.themeSeed' },
+  accent: { key: 'mip.accent', marker: 'mip.fixture.accentSeed' },
+  density: { key: 'mip.density', marker: 'mip.fixture.densitySeed' },
+} as const;
 const QUIET_WINDOW_MS = 300;
 
 interface SettleState {
@@ -43,17 +58,40 @@ export class AppDriver {
    */
   async setTheme(theme: FixtureTheme): Promise<void> {
     await this.page.emulateMedia({ colorScheme: theme });
+    await this.seed('theme', theme);
+  }
+
+  /**
+   * Select the accent (`mip.accent`) the way setTheme selects the theme:
+   * theme-boot.js applies it before the first paint. Call before `gotoRoute`.
+   */
+  async setAccent(accent: FixtureAccent): Promise<void> {
+    await this.seed('accent', accent);
+  }
+
+  /** Select the density (`mip.density`); same contract as setAccent. */
+  async setDensity(density: FixtureDensity): Promise<void> {
+    await this.seed('density', density);
+  }
+
+  /**
+   * Seed one stored preference once per value per tab: a sessionStorage
+   * marker remembers the seeded value, so a preference the test later
+   * changes through the UI survives a reload instead of being re-seeded.
+   */
+  private async seed(preference: keyof typeof SEEDS, value: string): Promise<void> {
+    const { key, marker } = SEEDS[preference];
     await this.page.addInitScript(
-      ([key, value, marker]) => {
+      ([storageKey, storedValue, seedMarker]) => {
         try {
-          if (window.sessionStorage.getItem(marker) === value) return;
-          window.localStorage.setItem(key, value);
-          window.sessionStorage.setItem(marker, value);
+          if (window.sessionStorage.getItem(seedMarker) === storedValue) return;
+          window.localStorage.setItem(storageKey, storedValue);
+          window.sessionStorage.setItem(seedMarker, storedValue);
         } catch {
           // Storage is unavailable on about:blank; the next document seeds it.
         }
       },
-      [THEME_STORAGE_KEY, theme, THEME_SEED_MARKER] as const,
+      [key, value, marker] as const,
     );
   }
 
