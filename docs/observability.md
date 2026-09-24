@@ -508,8 +508,8 @@ A live Genie turn's governed completion (verification, the output policy,
 the RUN_GENIE audit row, session recording and, for deep asks, the planned
 sweep) runs as a server-side job (2026-09-21 audit `genie-01`,
 `backend/services/genie_completion_runner.py`). The browser opts in with
-`respond_async` on `POST /api/genie/message/complete`, gets `202` with the
-job's status, and polls `POST /api/genie/message/status` about every 1.5 s.
+`respond_async` on `POST /api/v1/genie/message/complete`, gets `202` with the
+job's status, and polls `POST /api/v1/genie/message/status` about every 1.5 s.
 One `mip_app.genie_completion_jobs` row exists per (actor, conversation,
 message), so a reloaded or retried complete joins the job instead of running
 the tail, and the audit row, a second time.
