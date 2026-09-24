@@ -9,9 +9,12 @@ import { computeDegraded, useOptionalHealth } from '../HealthProvider';
  * is in a `503 retryable` loop driven by `useWarmingUpRetry`.
  *
  * Copy anchors (from product):
- *   - warming_up   → "Databricks SQL warehouses auto-suspend when idle.
- *                    It takes ~30 seconds to warm up. Retrying…"
+ *   - warming_up   → `WAREHOUSE_WARMING_BODY`: serverless-accurate, with no
+ *                    30 s or 60 s claim (audit delivery-01). A routine resume
+ *                    is 2–6 s and shows only as the calm topbar pill; this
+ *                    block appears when one is taking longer than that.
  *   - breaker_open → "Circuit breaker cooling down. Probing again in 30s."
+ *                    (the 30 s breaker cool-down is real)
  *
  * The attempt counter renders as "(attempt N of M)" so the operator
  * can see forward progress. Optional `title` slot lets per-page use
@@ -28,8 +31,13 @@ interface WarmingUpBlockProps {
   compact?: boolean;
 }
 
-const BODY_WARMING_UP =
-  'Databricks SQL warehouses auto-suspend when idle. It takes ~30 seconds to warm up. Retrying automatically…';
+/**
+ * The one warming-up sentence for every surface that waits on the warehouse
+ * (this block, and the Offer Orchestrator / Borrower 360 warming ledes).
+ */
+export const WAREHOUSE_WARMING_BODY =
+  'Databricks SQL warehouses auto-suspend when idle. A serverless resume usually takes 2–6 seconds; this one is taking longer. Retrying automatically…';
+const BODY_WARMING_UP = WAREHOUSE_WARMING_BODY;
 const BODY_BREAKER_OPEN =
   'The backend circuit breaker tripped after repeated failures. Pausing 30 seconds for the breaker to half-open, then probing again.';
 

@@ -3,7 +3,9 @@ import { useNavigate } from 'react-router';
 import { useApp } from '../AppContext';
 import { Icon } from '../Icon';
 import { useListboxNavigation } from '../ui/useListboxNavigation';
+import { ElapsedTicker } from '../ui/ElapsedTicker';
 import { useHealth } from '../HealthProvider';
+import type { ConnectionStatus } from '../connectionState';
 import { Breadcrumbs } from './Breadcrumbs';
 import { IdentityMenu } from './IdentityMenu';
 import { useFootprint } from '../FootprintProvider';
@@ -46,34 +48,69 @@ function openCommandPalette(): void {
  * per-dependency breakdown surface in the title tooltip on hover, so
  * the operator can drill in without burning persistent screen real
  * estate.
+ *
+ * Audit 2026-09-21: the shell's connection outranks the last payload
+ * (follow-up to states-02: an ended session used to leave "Live" behind the
+ * session dialog), and a warehouse `resuming` from auto-stop reads as a calm
+ * amber "Waking warehouse" with an elapsed timer, not red Degraded
+ * (delivery-01). The two extra parameters are optional so older callers keep
+ * their meaning.
  */
-export function systemStatusViewModel(health: HealthPayload | null): {
+export type SystemStatusLabel =
+  | 'Probing'
+  | 'Live'
+  | 'Degraded'
+  | 'Unreachable'
+  | 'Waking warehouse'
+  | 'Offline'
+  | 'Session ended';
+
+export interface SystemStatusView {
   dotClass: string;
-  label: 'Probing' | 'Live' | 'Degraded' | 'Unreachable';
+  label: SystemStatusLabel;
   tooltip: string;
   ariaLabel: string;
-} {
-  // Health states:
-  //   probing     → no payload yet; gray dot, tooltip "first probe in flight"
-  //   live        → status==="ok" + every tracked dep === "up"
-  //   degraded    → status==="degraded" OR any dep down OR any breaker open
+  /** Epoch ms the elapsed ticker counts from; set only for 'Waking warehouse'. */
+  resumingSince?: number | null;
+}
+
+const AMBER = 'dot amber';
+
+function statusView(
+  label: SystemStatusLabel,
+  dotClass: string,
+  tooltip: string,
+  resumingSince?: number | null,
+): SystemStatusView {
+  return { dotClass, label, tooltip, ariaLabel: `System status: ${label}.`, resumingSince };
+}
+
+export function systemStatusViewModel(
+  health: HealthPayload | null,
+  connection: ConnectionStatus = 'online',
+  resumingSince: number | null = null,
+): SystemStatusView {
+  // Precedence: session ended > offline > unreachable > probing > waking
+  // warehouse > live / degraded.
   //   unreachable → the /api/health probe itself failed (network, auth
   //                 expiry). The debounce deliberately preserves the last
   //                 known per-dependency states for missing deps, which used
   //                 to let a dead probe read as "Live" (2026-08-08 hands-on
   //                 audit: an expired session rendered a green pill). An
   //                 unreachable backend must never present as healthy.
+  if (connection === 'session_expired') {
+    return statusView('Session ended', AMBER, 'System status · session ended. Reload to sign in again.');
+  }
+  if (connection === 'offline') {
+    return statusView('Offline', AMBER, 'System status · offline. Panels load when the network returns.');
+  }
   const isProbing = !health;
-  if (!isProbing && health?.status === 'unreachable') {
-    return {
-      dotClass: 'dot amber',
-      label: 'Unreachable',
-      tooltip:
-        'System status · unreachable — the /api/health probe failed ' +
-        '(network or session). Showing last-known dependency states is ' +
-        'not proof of health; refresh to re-authenticate if this persists.',
-      ariaLabel: 'System status: Unreachable.',
-    };
+  if (connection === 'unreachable' || health?.status === 'unreachable') {
+    return statusView(
+      'Unreachable',
+      AMBER,
+      'System status · unreachable: the health check failed (network or session). Reload if this persists.',
+    );
   }
   const deps = health?.dependencies ?? {};
   const breakers = health?.circuit_breakers ?? {};
@@ -88,42 +125,38 @@ export function systemStatusViewModel(health: HealthPayload | null): {
   const anyBreakerOpen = Object.values(breakers).some(
     (s) => s === 'open' || s === 'half_open',
   );
-  const live =
-    !isProbing &&
-    health?.status !== 'degraded' &&
-    !anyBreakerOpen &&
-    (hasDependencyDetails ? allUp : health?.status === 'ok');
-
-  const dotClass = isProbing
-    ? 'dot amber'
-    : live
-      ? 'dot is-heartbeat'
-      : 'dot danger';
-  const label = isProbing ? 'Probing' : live ? 'Live' : 'Degraded';
-
   const dependencySummary = hasDependencyDetails
     ? depEntries.map(([name, state]) => `${name}=${state ?? 'not reported'}`).join(' · ')
     : 'dependency details not reported';
   const breakerSummary = Object.entries(breakers)
     .map(([k, v]) => `${k}=${v}`)
     .join(' / ');
-  const tooltip = isProbing
-    ? 'System status · probing — first /api/health probe still in flight.'
-    : `System status · ${live ? 'live' : 'degraded'}\n` +
-      dependencySummary +
-      (breakerSummary ? `\nbreakers ${breakerSummary}` : '');
+  const details = dependencySummary + (breakerSummary ? `\nbreakers ${breakerSummary}` : '');
 
-  return {
-    dotClass,
-    label,
-    tooltip,
-    ariaLabel: `System status: ${label}.`,
-  };
+  if (isProbing) {
+    return statusView('Probing', AMBER, 'System status · probing — first /api/health probe still in flight.');
+  }
+  // A routine serverless resume: every other dependency up, no breaker open
+  // or half-open, and the backend not declaring degraded.
+  const healthy = health.status !== 'degraded' && !anyBreakerOpen;
+  if (healthy && deps.warehouse === 'resuming' && deps.lakebase === 'up' && deps.genie === 'up') {
+    return statusView(
+      'Waking warehouse',
+      AMBER,
+      'System status · warehouse resuming from auto-stop, usually 2–6 s\n' + details,
+      resumingSince,
+    );
+  }
+
+  const live = healthy && (hasDependencyDetails ? allUp : health.status === 'ok');
+  return live
+    ? statusView('Live', 'dot is-heartbeat', 'System status · live\n' + details)
+    : statusView('Degraded', 'dot danger', 'System status · degraded\n' + details);
 }
 
-function SystemStatusPill({ health }: { health: HealthPayload | null }) {
-  const status = systemStatusViewModel(health);
-
+/** Takes the finished view (one prop keeps the compiled pill small; Topbar
+ *  itself is not memoized, so three props would re-render it just as often). */
+function SystemStatusPill({ status }: { status: SystemStatusView }) {
   return (
     <div
       className="topbar__pill"
@@ -135,6 +168,9 @@ function SystemStatusPill({ health }: { health: HealthPayload | null }) {
       <span className="topbar__pill-label">
         {status.label}
       </span>
+      {/* Outside the label and aria-hidden: a per-second change must never
+          be re-spoken (the pill's accessible name stays "Waking warehouse"). */}
+      {status.resumingSince != null && <ElapsedTicker startedAt={status.resumingSince} paused={false} />}
     </div>
   );
 }
@@ -158,7 +194,7 @@ export function Topbar() {
   // only desktop launcher, so it carries the running ring / answer-ready badge.
   const genieTurn = useGenieTurnStatus();
   const navigate = useNavigate();
-  const { health } = useHealth();
+  const { health, connection, warehouseResumingSince } = useHealth();
   // Surface the footprint fallback as a muted chip so operators are not
   // silently pinned to generic geography metadata when /api/config/footprint
   // failed on cold-start. This is separate from /api/health (which drives
@@ -420,7 +456,7 @@ export function Topbar() {
         the title tooltip on hover. The dot color carries the severity
         signal (green=live, amber=degraded, gray=probing).
       */}
-      <SystemStatusPill health={health} />
+      <SystemStatusPill status={systemStatusViewModel(health, connection, warehouseResumingSince)} />
       {footprintFallback && mountGraceOver && (
         <span
           className="chip chip--warning"

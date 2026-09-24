@@ -9,6 +9,7 @@ import {
 } from 'react';
 import { QueryClientContext, onlineManager } from '@tanstack/react-query';
 import { api, isAbortError, type HealthPayload } from '../lib/api';
+import type { HealthHint } from '../lib/apiTypes';
 import { subscribeNetworkFailures } from '../lib/apiFailure';
 import { isSessionExpired, subscribeSessionStatus } from '../lib/sessionStatus';
 import { normalizeWorkspaceHost } from '../lib/ucAssetLinks';
@@ -48,10 +49,21 @@ import {
  *     ended (only a reload recovers), waits for the network while offline,
  *     runs at the fast cadence after one unreachable probe, and runs at once
  *     when a request elsewhere could not reach the server.
+ *   - Resume (`delivery-01`): a warehouse `resuming` from auto-stop is not an
+ *     outage. It shows at once (no debounce), polls at the fast cadence, and
+ *     flips straight to `up` when the resume finishes (a finished resume is
+ *     not a flap); `warehouseResumingSince` times the calm topbar pill.
+ *   - Activity (`delivery-v1`): the poll tells the server how long the tab has
+ *     been idle (`idle_s`, whole seconds since the last pointer, key, wheel or
+ *     touch input; mount counts as input) for the `activity` keep-warm policy.
+ *     The listeners are passive and never update state.
  */
 
 /** A request that could not reach the server triggers a probe, at most this often. */
 const NUDGE_MIN_GAP_MS = 1_000;
+
+/** User input that counts as activity for the keep-warm hint. */
+const ACTIVITY_EVENTS = ['pointerdown', 'keydown', 'wheel', 'touchstart'] as const;
 
 interface HealthContextValue {
   /** Latest payload, or null before the first response resolves. */
@@ -66,6 +78,8 @@ interface HealthContextValue {
   updateAvailable: boolean;
   /** Session / network reachability, independent of dependency health. */
   connection: ConnectionStatus;
+  /** `Date.now()` when the warehouse entered `resuming`; null otherwise. */
+  warehouseResumingSince: number | null;
 }
 
 const HealthContext = createContext<HealthContextValue | null>(null);
@@ -98,12 +112,15 @@ export function computeDegraded(health: HealthPayload | null): boolean {
  * three-second timescale; polling it four times per page view is pure
  * round-trip cost. Deliberately NOT `computeDegraded`: the pill and the
  * banner keep reading that, so what the UI SAYS about health is unchanged —
- * only how often it asks (2026-08-07 audit M4).
+ * only how often it asks (2026-08-07 audit M4). A dependency `resuming`
+ * (delivery-01) is transient too: the fast cadence ends the calm pill within
+ * one short poll of the resume finishing.
  */
 export function shouldPollFast(health: HealthPayload | null): boolean {
   if (!health) return false;
   const deps = health.dependencies ?? {};
-  if (deps.warehouse === 'down' || deps.lakebase === 'down' || deps.genie === 'down') return true;
+  const transient = (state: string | undefined) => state === 'down' || state === 'resuming';
+  if (transient(deps.warehouse) || transient(deps.lakebase) || transient(deps.genie)) return true;
   return Object.values(health.circuit_breakers ?? {}).some((state) => state === 'open');
 }
 
@@ -127,9 +144,9 @@ interface HealthProviderProps {
    * Injected fetcher for tests. Defaults to `api.health()` which
    * already tolerates network failures (returns an "unreachable"
    * snapshot instead of throwing) and routes through the retry
-   * protocol.
+   * protocol. The second argument is the tab's activity hint.
    */
-  fetchHealth?: (signal?: AbortSignal) => Promise<HealthPayload>;
+  fetchHealth?: (signal?: AbortSignal, hint?: HealthHint) => Promise<HealthPayload>;
 }
 
 /** Per-dependency state we track for the debounce. `pendingUpSince` is
@@ -137,7 +154,7 @@ interface HealthProviderProps {
  *  "up" probe after a "down" — null when the dep is currently "up" or
  *  has never been "up". `filtered` is what we expose to consumers. */
 interface DebounceState {
-  filtered: 'up' | 'down' | 'unknown';
+  filtered: 'up' | 'down' | 'resuming' | 'unknown';
   pendingUpSince: number | null;
 }
 
@@ -153,6 +170,9 @@ const DEPS_TRACKED = ['warehouse', 'lakebase', 'genie'] as const;
  *    raw=up + filtered=down + no pending → start pending (filtered stays down)
  *    raw=up + filtered=down + pending elapsed ≥ debounceMs → flip to up, clear pending
  *    raw=up + filtered=down + pending not elapsed → stay down (still debouncing)
+ *    raw=resuming → filtered=resuming at once, clear pending (not an outage)
+ *    raw=up + filtered=resuming → flip to up at once (a finished resume is
+ *                                 not a flap; the debounce is for down → up)
  *    raw=unknown → keep prior filter (don't flap on missing data)
  *
  *  Returned payload is a shallow copy of `raw` with `dependencies`
@@ -174,8 +194,11 @@ export function applyDownUpDebounce(
     if (rawState === 'down') {
       next[dep] = { filtered: 'down', pendingUpSince: null };
       filteredDeps[dep] = 'down';
+    } else if (rawState === 'resuming') {
+      next[dep] = { filtered: 'resuming', pendingUpSince: null };
+      filteredDeps[dep] = 'resuming';
     } else if (rawState === 'up') {
-      if (priorState.filtered === 'up') {
+      if (priorState.filtered === 'up' || priorState.filtered === 'resuming') {
         next[dep] = { filtered: 'up', pendingUpSince: null };
         filteredDeps[dep] = 'up';
       } else if (debounceMs <= 0) {
@@ -224,6 +247,7 @@ export function HealthProvider({
   const [fetchedAt, setFetchedAt] = useState<string | null>(null);
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [connection, setConnection] = useState<ConnectionStatus>(INITIAL_CONNECTION.status);
+  const [warehouseResumingSince, setWarehouseResumingSince] = useState<number | null>(null);
   // Optional on purpose: isolated mounts (unit tests, stories) have no
   // QueryClientProvider, and `useQueryClient()` would throw there.
   const queryClient = useContext(QueryClientContext);
@@ -240,6 +264,22 @@ export function HealthProvider({
   const debounceRef = useRef<Record<string, DebounceState>>({});
   // Consecutive unreachable probes + the derived connection status.
   const connectionRef = useRef(INITIAL_CONNECTION);
+  // Epoch ms of the last user input (mount counts). A ref, never state:
+  // input must not re-render the shell.
+  const lastInputAtRef = useRef<number | null>(null);
+
+  // Declared before the poll so the mount stamp exists for its first probe.
+  useEffect(() => {
+    const noteInput = () => {
+      lastInputAtRef.current = Date.now();
+    };
+    noteInput();
+    const options = { capture: true, passive: true } as const;
+    for (const type of ACTIVITY_EVENTS) window.addEventListener(type, noteInput, options);
+    return () => {
+      for (const type of ACTIVITY_EVENTS) window.removeEventListener(type, noteInput, options);
+    };
+  }, []);
 
   useEffect(() => {
     const ctrl = new AbortController();
@@ -278,6 +318,19 @@ export function HealthProvider({
       }
     };
 
+    // Whole seconds since the last input: the only thing the probe tells the
+    // server about the tab (the `activity` keep-warm policy reads it).
+    const idleHint = (): HealthHint => {
+      const last = lastInputAtRef.current;
+      return { idleS: last === null ? 0 : Math.max(0, Math.floor((Date.now() - last) / 1000)) };
+    };
+
+    // The warehouse entering `resuming` stamps the pill's timer; leaving it clears it.
+    const trackResuming = (prior: Record<string, DebounceState>, next: Record<string, DebounceState>) => {
+      const is = next.warehouse?.filtered === 'resuming';
+      if (is !== (prior.warehouse?.filtered === 'resuming')) setWarehouseResumingSince(is ? Date.now() : null);
+    };
+
     const scheduleNext = () => {
       clearTimer();
       if (!mayProbe()) return;
@@ -298,7 +351,7 @@ export function HealthProvider({
       inFlight = true;
       const t0 = performance.now();
       try {
-        const rawPayload = await fetchHealth(ctrl.signal);
+        const rawPayload = await fetchHealth(ctrl.signal, idleHint());
         if (cancelled) return;
         observeConnection(rawPayload.status !== 'unreachable');
         const elapsed = Math.round(performance.now() - t0);
@@ -314,6 +367,7 @@ export function HealthProvider({
           breakersRef.current,
           payload.circuit_breakers,
         );
+        trackResuming(debounceRef.current, next);
         debounceRef.current = next;
         breakersRef.current = payload.circuit_breakers;
         const gitSha = (rawPayload.git_sha ?? '').trim();
@@ -345,6 +399,7 @@ export function HealthProvider({
           performance.now(),
           debounceUpMs,
         );
+        trackResuming(debounceRef.current, next);
         debounceRef.current = next;
         setHealth(payload);
         setProbeMs(null);
@@ -417,8 +472,9 @@ export function HealthProvider({
       degraded: computeDegraded(health),
       updateAvailable,
       connection,
+      warehouseResumingSince,
     }),
-    [health, probeMs, fetchedAt, updateAvailable, connection],
+    [health, probeMs, fetchedAt, updateAvailable, connection, warehouseResumingSince],
   );
 
   return <HealthContext.Provider value={value}>{children}</HealthContext.Provider>;

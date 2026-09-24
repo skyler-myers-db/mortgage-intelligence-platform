@@ -48,7 +48,9 @@ export interface HealthPayload {
   mode?: string;
   warehouse_id?: string | null;
   app_env?: string;
-  dependencies?: Record<string, 'up' | 'down'>;
+  /** `resuming` (a serverless warehouse waking from auto-stop) is not an
+   *  outage and never produces a banner; the topbar pill shows it calmly. */
+  dependencies?: Record<string, 'up' | 'down' | 'resuming'>;
   circuit_breakers?: Record<string, 'closed' | 'open' | 'half_open'>;
   forced_degraded?: {
     active: boolean;

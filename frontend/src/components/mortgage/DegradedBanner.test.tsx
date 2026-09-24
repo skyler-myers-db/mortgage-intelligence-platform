@@ -1,5 +1,12 @@
-import { describe, expect, it } from 'vitest';
-import { degradedDependency, shouldUseStandaloneHealth } from './DegradedBanner';
+// @vitest-environment happy-dom
+
+import { act } from 'react';
+import { createRoot } from 'react-dom/client';
+import { describe, expect, it, vi } from 'vitest';
+import { HealthProvider } from '../HealthProvider';
+import { DegradedBanner, degradedDependency, shouldUseStandaloneHealth } from './DegradedBanner';
+
+(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 /**
  * DegradedBanner dependency selection.
@@ -45,6 +52,42 @@ describe('degradedDependency', () => {
         circuit_breakers: { genie: 'open' },
       }),
     ).toBe('genie');
+  });
+});
+
+describe('a resuming warehouse (audit delivery-01)', () => {
+  it('is never the degraded dependency', () => {
+    expect(
+      degradedDependency({
+        status: 'ok',
+        dependencies: { warehouse: 'resuming', lakebase: 'up', genie: 'up' },
+        circuit_breakers: { warehouse: 'closed', lakebase: 'closed', genie: 'closed' },
+      }),
+    ).toBeNull();
+  });
+
+  it('renders no banner through the shared health poll', async () => {
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    const fetchHealth = vi.fn(async () => ({
+      status: 'ok',
+      mode: 'live',
+      dependencies: { warehouse: 'resuming', lakebase: 'up', genie: 'up' },
+      circuit_breakers: { warehouse: 'closed', lakebase: 'closed', genie: 'closed' },
+    }));
+    await act(async () => {
+      root.render(
+        <HealthProvider debounceUpMs={0} fetchHealth={fetchHealth}>
+          <DegradedBanner onReload={() => undefined} />
+        </HealthProvider>,
+      );
+    });
+
+    expect(fetchHealth).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('.degraded-banner')).toBeNull();
+    act(() => root.unmount());
+    container.remove();
   });
 });
 
