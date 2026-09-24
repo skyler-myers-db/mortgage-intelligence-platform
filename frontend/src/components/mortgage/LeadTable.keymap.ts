@@ -10,6 +10,7 @@ export const LEAD_TABLE_KEYS = {
   previous: ['k', 'ArrowUp'],
   toggle: ['Enter'],
   select: ['x'],
+  extendSelect: ['Shift+X'],
   approve: ['a'],
   reject: ['r'],
   bulkApprove: ['Shift+A'],
@@ -22,6 +23,8 @@ export interface LeadTableKeymapActions {
   /** Expand or collapse the cursor row; false when there is none. */
   toggleCursorRow: () => boolean;
   toggleSelectCursorRow: () => void;
+  /** Select from the selection anchor (the last plain toggle) to the cursor row. */
+  extendSelectionToCursor: () => void;
   reviewCursorRow: () => void;
   rejectCursorRow: () => void;
   openBulkGate: () => void;
@@ -52,6 +55,12 @@ export function leadTableHotkeys(actions: LeadTableKeymapActions): LeadTableHotk
       keys: LEAD_TABLE_KEYS.select,
       description: 'Select or clear the borrower',
       run: () => actions.toggleSelectCursorRow(),
+    },
+    {
+      id: 'extend-select',
+      keys: LEAD_TABLE_KEYS.extendSelect,
+      description: 'Select every borrower from the last one you selected to this one',
+      run: () => actions.extendSelectionToCursor(),
     },
   ];
   if (!actions.approverActive) return hotkeys;

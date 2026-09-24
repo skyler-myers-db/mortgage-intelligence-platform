@@ -42,6 +42,7 @@ import type { RejectReasonCode } from './LeadTable.types';
 import type { LeadDecisionReceipt } from './DecisionReceipt';
 import { APPROVER_ROLE_REQUIRED } from './approverGate';
 import { clearCancelledBulk, readCancelledBulk, stashCancelledBulk } from './bulkApproveStash';
+import { pruneTo, rangeIds } from './LeadTable.selection';
 
 /** Verification state of a `?campaign_id=&variant_name=` URL binding. */
 export type CampaignBindingState = 'absent' | 'invalid' | 'verified' | 'validating';
@@ -111,7 +112,10 @@ export function useLeadApprovalActions({
   const requestIds = useIntentRequestIds();
   // Bulk-approve state. `selectedIds` is a Set so toggling is O(1); we
   // copy-on-write when updating to keep React's reference check happy.
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [storedSelection, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const currentIds = new Set(displayLeads.map((lead) => lead.borrower_id));
+  // The last plain toggle: where a Shift range starts (audit tables-07).
+  const selectionAnchorRef = useRef<string | null>(null);
   const [bulkApproving, setBulkApproving] = useState<boolean>(false);
   // R5-04 (2026-04-23): synchronous in-flight latches. `setState` is
   // async so two rapid clicks can both read `bulkApproving=false` before
@@ -372,15 +376,37 @@ export function useLeadApprovalActions({
   }
 
   /**
-   * Toggle one row's selection. Called by the row checkbox onChange; the
-   * checkbox click is stopped from bubbling in the markup so the row
-   * still expands/collapses independently.
+   * Toggle one row's selection (the row checkbox, X). The checkbox click is
+   * stopped from bubbling in the markup so the row still expands/collapses
+   * independently. A plain toggle is the anchor a Shift range starts from.
+   * Every selection write also drops ids no longer on screen (pruneTo).
    */
   function toggleSelect(borrowerId: string) {
+    selectionAnchorRef.current = borrowerId;
     setSelectedIds((cur) => {
-      const next = new Set(cur);
+      const next = pruneTo(cur, currentIds);
       if (next.has(borrowerId)) next.delete(borrowerId);
       else next.add(borrowerId);
+      return next;
+    });
+  }
+
+  /**
+   * Shift-click on a row checkbox, Shift+X on the cursor row (audit
+   * tables-07): select every selectable row from the anchor (the last plain
+   * toggle) to `target`, in the on-screen order `orderedIds`. Without an
+   * anchor it is a plain toggle.
+   */
+  function selectRange(target: string, orderedIds: readonly string[]) {
+    const anchor = selectionAnchorRef.current;
+    if (anchor === null || !orderedIds.includes(anchor)) {
+      toggleSelect(target);
+      return;
+    }
+    const range = rangeIds(orderedIds, anchor, target, new Set(selectableIds));
+    setSelectedIds((cur) => {
+      const next = pruneTo(cur, currentIds);
+      for (const id of range) next.add(id);
       return next;
     });
   }
@@ -396,12 +422,20 @@ export function useLeadApprovalActions({
   const selectableIds = displayLeads
     .filter((l) => isLeadSelectableForSalesOps(l.approval_status, approvals[l.borrower_id], l))
     .map((l) => l.borrower_id);
+  // A row whose approve or reject is on the wire is not eligible: a sample
+  // or a bulk run must never draft (DRAFT_OUTREACH) or decide it again.
   const approvalEligibleIds = displayLeads
     .filter((l) => {
       const localStatus = approvals[l.borrower_id];
-      return isLeadApprovalEligible(l.approval_status, localStatus, l);
+      return isLeadApprovalEligible(l.approval_status, localStatus, l) && !pendingDecisions.has(l.borrower_id);
     })
     .map((l) => l.borrower_id);
+  // Audit tables-07: the selection a render may act on is the stored set
+  // intersected with the rows on screen, derived here (never pruned in an
+  // effect). Counts, the header checkbox, the Cmd-K verbs, the CSV scope,
+  // assign and a bulk run all read this, so a row a filter change took off
+  // screen can no longer be counted or acted on.
+  const selectedIds = pruneTo(storedSelection, currentIds);
 
   // Indeterminate state for the header checkbox: some (but not all)
   // eligible rows selected. We also reflect "all eligible selected" as
@@ -610,6 +644,7 @@ export function useLeadApprovalActions({
     selectedIds,
     selectionCount,
     toggleSelect,
+    selectRange,
     clearSelection,
     toggleSelectAll,
     selectableIds,

@@ -604,7 +604,9 @@ export function LeadTable({
                       setLastBorrowerId(row.borrower_id);
                       flow.toggleRow(row, open);
                     }}
-                    onToggleSelect={approval.toggleSelect}
+                    onToggleSelect={(borrowerId, range) => (range
+                      ? approval.selectRange(borrowerId, sortedLeads.map((row) => row.borrower_id))
+                      : approval.toggleSelect(borrowerId))}
                     onApprove={flow.openReview}
                     onReject={flow.openReject}
                     onOpenDisposition={sales.openDisposition}

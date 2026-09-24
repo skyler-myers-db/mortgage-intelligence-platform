@@ -295,7 +295,10 @@ describe('LeadTable: a decision on the wire locks its row\'s review, across a re
     remount();
     act(() => container.querySelector<HTMLInputElement>(`[data-testid="lead-select-${IDS[0]}"]`)!.click());
     const toolbarApprove = container.querySelector<HTMLButtonElement>('[data-testid="lead-bulk-approve"]')!;
-    expect(toolbarApprove.textContent, 'precondition: the row still counts as eligible').toBe('Approve 1 eligible');
+    // A row whose approve is on the wire is no longer approval-eligible
+    // (wave 3, W2 queue residual): the toolbar offers nothing to approve.
+    expect(toolbarApprove.textContent).toBe('Approve 0 eligible');
+    expect(toolbarApprove.disabled).toBe(true);
     act(() => toolbarApprove.click());
     await flush();
 

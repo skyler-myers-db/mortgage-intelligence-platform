@@ -414,6 +414,11 @@ export function useLeadTableKeyboardFlow({
       if (!isLeadSelectableForSalesOps(lead.approval_status, approvals[lead.borrower_id], lead)) return;
       approval.toggleSelect(lead.borrower_id);
     },
+    extendSelectionToCursor: () => {
+      const lead = targetId ? leadsById.get(targetId) : undefined;
+      if (!lead || approval.bulkApproving) return;
+      approval.selectRange(lead.borrower_id, sortedLeads.map((row) => row.borrower_id));
+    },
     reviewCursorRow: () => {
       if (targetId) openReview(targetId);
     },
