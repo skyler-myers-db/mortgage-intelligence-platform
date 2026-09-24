@@ -132,6 +132,24 @@ describe('CommandPalette selection verbs', () => {
     expect(verbGroup()).toBeNull();
   });
 
+  it('Cmd-K never mounts the palette under a native modal dialog (the approve review)', () => {
+    const palette = () => container.querySelector('[role="dialog"][aria-label="Command palette"]');
+    const dialog = document.createElement('dialog');
+    document.body.appendChild(dialog);
+    act(() => {
+      if (typeof dialog.showModal === 'function') dialog.showModal();
+      else dialog.setAttribute('open', '');
+    });
+    try {
+      openPalette();
+      expect(palette(), 'no inert, unseen palette under the modal').toBeNull();
+    } finally {
+      dialog.remove();
+    }
+    openPalette();
+    expect(palette(), 'the chord works again once the modal is gone').not.toBeNull();
+  });
+
   it('Cmd-K is a modifier chord: it opens with single-key shortcuts switched off', () => {
     setSingleKeyShortcutsEnabled(false);
     openPalette();

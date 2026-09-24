@@ -215,6 +215,20 @@ export function hasOpenOverlay(doc: Document = document): boolean {
   return false;
 }
 
+/**
+ * A native `<dialog>` is open. Every `<dialog>` this app opens is modal
+ * (`showModal()`, e.g. the approve review): everything behind it is inert,
+ * so a global chord must not mount a layer underneath it that nobody can
+ * see or reach. Any open `<dialog>` counts (not `:modal`, which DOM test
+ * environments do not match), which is the conservative side.
+ */
+export function hasOpenModalDialog(doc: Document = document): boolean {
+  for (const dialog of doc.querySelectorAll('dialog[open]')) {
+    if (dialog.closest('[aria-hidden="true"]') === null) return true;
+  }
+  return false;
+}
+
 /** A modal layer is open (drawer, palette, shortcut sheet, a native modal dialog). */
 export function hasOpenModal(doc: Document = document): boolean {
   for (const el of doc.querySelectorAll('[aria-modal="true"], dialog[open]')) {

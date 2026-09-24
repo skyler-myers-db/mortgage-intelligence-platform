@@ -11,7 +11,7 @@ import { useApp } from '../AppContext';
 import { Icon, type IconName } from '../Icon';
 import { api } from '../../lib/api';
 import { openGenie } from '../../lib/genieOpen';
-import { registerKeyBinding } from '../../lib/keymap';
+import { hasOpenModalDialog, registerKeyBinding } from '../../lib/keymap';
 import type { LeadSummary } from '../../types';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import {
@@ -128,6 +128,10 @@ function CommandPaletteSurface() {
     keys: ['Mod+K'],
     description: 'Open or close the command palette',
     allowInEditable: true,
+    // Never open UNDER a native modal dialog (the approve review): the
+    // palette would mount inert and unseen, keep no focus, and swallow the
+    // next Escape meant for the review. Closing an open palette still works.
+    when: () => openRef.current || !hasOpenModalDialog(),
     run: () => {
       if (openRef.current) close();
       else openPalette();
