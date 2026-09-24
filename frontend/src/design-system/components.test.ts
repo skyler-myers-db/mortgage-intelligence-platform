@@ -539,6 +539,13 @@ describe('layout containment contracts', () => {
     expect(css).toMatch(/\.route-nav \.filter,\s*\.route-nav \.filter:hover,\s*\.route-nav \.filter:focus-visible\s*\{\s*text-decoration:\s*none;/s);
   });
 
+  /** Wave-1c follow-up #14: at 400% zoom the sticky nav covered `.main`. */
+  it('docks the route nav only in a viewport at least 40rem tall', () => {
+    const css = designCss();
+    expect(css).not.toMatch(/\n\.route-nav\s*\{[^}]*position:\s*sticky/s);
+    expect(css).toMatch(/@media \(min-height: 40rem\)\s*\{\s*\.route-nav\s*\{\s*position:\s*sticky;\s*top:\s*0;\s*z-index:\s*var\(--z-sticky\);\s*\}\s*\}/s);
+  });
+
   it('lets segment cards wrap content instead of clipping labels or pending copy', () => {
     const css = designCss();
 

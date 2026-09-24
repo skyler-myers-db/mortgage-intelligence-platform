@@ -341,9 +341,19 @@
   background: color-mix(in oklab, var(--bg-1) 72%, transparent);
   backdrop-filter: blur(8px);
   flex-wrap: wrap;
-  position: sticky;
-  top: 0;
-  z-index: var(--z-sticky);
+}
+/* Docked only with the vertical room for it: the Offer decision bar's
+   breakpoint (routes/offer-orchestrator.action-bar.css). In rem, so it tracks
+   browser zoom: at 400% (1440x900 is then 360x225) the wrapped, sticky nav
+   covered the whole .main scrollport, so no heading or content could be
+   scrolled into view (WCAG 1.4.10 Reflow; wave-1c follow-up #14). Below it
+   the nav is in flow and scrolls away with the page. */
+@media (min-height: 40rem) {
+  .route-nav {
+    position: sticky;
+    top: 0;
+    z-index: var(--z-sticky);
+  }
 }
 /* The route nav is an app-added element (the prototype has a rail plus
    `.segmented`, design_files/index.html:926-935) that RouteNav.tsx builds
