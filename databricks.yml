@@ -76,6 +76,11 @@ sync:
   exclude:
     - /package.json
     - /package-lock.json
+    # Test-only tree: Playwright specs, typed fixtures and the committed
+    # visual-regression baselines (~100 PNGs under *-snapshots/). The App
+    # serves frontend/dist and never reads these, so they must not ride
+    # along in every deploy upload.
+    - frontend/tests/**
 
 targets:
   dev:

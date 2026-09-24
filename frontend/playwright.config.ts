@@ -20,6 +20,24 @@ const FIXTURE_SPEC = /.*\.fixture\.spec\.ts$/;
 // server. Nothing else sets this variable.
 const nestedFixtureRun = fixtureE2E && process.env.E2E_FIXTURE_NESTED === '1';
 const NESTED_SPEC = /.*\.nested\.ts$/;
+// Opt-in fixture specs. The pixel baselines of visual.fixture.spec.ts are
+// amd64-Linux renders from the pinned Playwright container, so the spec is
+// collected ONLY when MIP_VRT=1, which only the e2e-visual CI job and
+// tools/update_visual_baselines.sh set (the spec also refuses any other
+// host). The perf budget spec (w2-build-currency) measures timing and runs
+// only in its single-worker CI step (MIP_PERF=1). Every other fixture run,
+// local or CI, ignores both. Each opt-in mode writes its own artifacts
+// (test-results/<mode>, playwright-report/<mode>) so a later step never
+// wipes an earlier step's failure report.
+const vrtRun = fixtureE2E && process.env.MIP_VRT === '1';
+const perfRun = fixtureE2E && process.env.MIP_PERF === '1';
+const VRT_SPEC = /[\\/]visual\.fixture\.spec\.ts$/;
+const PERF_SPEC = /[\\/]perf-budget\.fixture\.spec\.ts$/;
+const fixtureIgnore = [...(vrtRun ? [] : [VRT_SPEC]), ...(perfRun ? [] : [PERF_SPEC])];
+const fixtureArtifacts = vrtRun ? 'vrt' : perfRun ? 'perf' : null;
+const outputDir = fixtureArtifacts ? `test-results/${fixtureArtifacts}` : 'test-results';
+const htmlReportDir = fixtureArtifacts ? `playwright-report/${fixtureArtifacts}` : 'playwright-report';
+const htmlReport = ['html', { open: 'never', outputFolder: htmlReportDir }] as const;
 
 /**
  * Playwright config for the Module 0 product golden path.
@@ -54,16 +72,39 @@ export default defineConfig({
   testMatch: nestedFixtureRun ? NESTED_SPEC : fixtureE2E ? FIXTURE_SPEC : /.*\.spec\.ts$/,
   // Fixture specs need the fixture web server and mock API, so every other
   // mode (local, live, browser matrix, `--list`) must never collect them.
-  testIgnore: fixtureE2E ? [] : FIXTURE_SPEC,
+  testIgnore: fixtureE2E ? fixtureIgnore : FIXTURE_SPEC,
+  outputDir,
   timeout: fixtureE2E ? 60_000 : liveE2E ? 90_000 : 30_000,
-  ...(fixtureE2E ? { expect: { timeout: 10_000 } } : {}),
+  ...(fixtureE2E
+    ? {
+        expect: {
+          timeout: 10_000,
+          // Pixel captures (visual.fixture.spec.ts). The container renders
+          // deterministically (frozen clock, reduced motion, self-hosted
+          // fonts), so the budget is ZERO differing pixels: a ratio as small
+          // as 0.002 is ~2,600 px at 1440x900, enough to hide a changed word.
+          // A capture the double run proves noisy gets its own
+          // maxDiffPixels (at most 100) with a comment naming the cause.
+          toHaveScreenshot: {
+            animations: 'disabled',
+            caret: 'hide',
+            scale: 'css',
+            threshold: 0.2,
+            maxDiffPixels: 0,
+          },
+        },
+      }
+    : {}),
   snapshotPathTemplate: '{testDir}/{testFilePath}-snapshots/{arg}{-projectName}{ext}',
   fullyParallel: fixtureE2E,
   workers: fixtureE2E ? fixtureWorkers : 1,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
+  // The VRT always writes its HTML report: it is where a pixel diff is
+  // reviewed (tools/update_visual_baselines.sh copies it out of the container).
   reporter: fixtureE2E && process.env.CI
-    ? [['list'], ['github'], ['html', { open: 'never', outputFolder: 'playwright-report' }]]
+    ? [['list'], ['github'], htmlReport]
+    : vrtRun ? [['list'], htmlReport]
     : process.env.CI ? [['list'], ['github']] : 'list',
   use: {
     baseURL: fixtureE2E ? `http://127.0.0.1:${fixturePort}` : 'http://localhost:5173',
