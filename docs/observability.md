@@ -377,3 +377,34 @@ The Slice-13 follow-up adds (additive, non-breaking):
 - `log_export` — `"stdout-only"` or `"otlp"`
 
 Any client reading the first seven keys keeps working unchanged.
+
+## 6. Server-Timing (per-request attribution)
+
+Every `/api/*` HTTP response carries one `Server-Timing` header
+(2026-09-21 audit `delivery-v3`, server half), emitted by
+`backend/services/server_timing.py`'s pure-ASGI middleware, which sits just
+inside `CorrelationIdMiddleware` so a backpressure 429 still carries it:
+
+```
+Server-Timing: cache;desc=hit|miss|stale, warehouse;dur=<ms>, lakebase;dur=<ms>, total;dur=<ms>
+```
+
+- `cache` — the worst outcome any aggregate cache saw for the request
+  (`miss` > `stale` > `hit`): `TTLCache.get_or_set` (hit / double-check hit,
+  a `stale_if_error` serve, a leader or a follower after waiting) and the gold
+  stale-while-revalidate cache.
+- `warehouse` / `lakebase` — the summed statement durations the request itself
+  ran (`DatabricksSqlClient.execute`, Lakebase statement end / error hooks).
+- `total` — middleware entry to response start. Always present.
+- An entry that was not observed is omitted; `dur` has one decimal.
+- Only these four names, and only enum or numeric values: never an id, a
+  path, a statement hash or an error message. Non-`/api` paths (the SPA shell,
+  `/assets`) carry no header.
+
+Work that runs outside the request (gold-cache background refreshes, the health
+probe executor, keep-warm pings) records nothing: the collector lives in a
+ContextVar set once by the middleware, and executor threads start with an empty
+context. The browser reads the header through
+`PerformanceResourceTiming.serverTiming` (same origin, so no
+`Timing-Allow-Origin` is needed); `frontend/src/lib/rum.ts` forwards it with a
+route-templated path only.

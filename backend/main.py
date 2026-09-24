@@ -76,6 +76,7 @@ from backend.services.observability import (
     set_correlation_id,
 )
 from backend.services.security_headers import SecurityHeadersMiddleware
+from backend.services.server_timing import ServerTimingMiddleware
 from backend.services.static_assets import select_asset_variant
 from backend.services.visit_tracking import VisitTrackingMiddleware
 from backend.version import API_VERSION, api_version
@@ -483,6 +484,8 @@ app.add_middleware(BackpressureMiddleware, controller=_backpressure_controller)
 # (last add_middleware call = outermost) and its structured log lines carry
 # the request's correlation id.
 app.add_middleware(VisitTrackingMiddleware)
+# delivery-v3: just inside CorrelationId, so a backpressure 429 carries total.
+app.add_middleware(ServerTimingMiddleware)
 app.add_middleware(CorrelationIdMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 # compresslevel=6 (not the library default 9): dynamic JSON responses sit on
