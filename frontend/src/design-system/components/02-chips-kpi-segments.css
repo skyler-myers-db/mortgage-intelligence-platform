@@ -32,7 +32,10 @@
   border: none; border-radius: var(--r-pill);
   background: transparent; color: inherit;
   cursor: pointer; opacity: 0.65;
-  transition: opacity var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+  transition:
+    opacity var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease),
+    translate var(--dur-instant) var(--ease);
 }
 .chip__remove:hover,
 .chip__remove:focus-visible { opacity: 1; background: var(--bg-3); }
@@ -74,7 +77,13 @@
   font-family: var(--font-mono);
   font-size: var(--fs-11); font-weight: 500;
   cursor: pointer;
-  transition: all var(--dur-fast) var(--ease);
+  /* Explicit list, not the prototype's `all` (index.html:422-432; audit
+     motion-05). */
+  transition:
+    background-color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease),
+    translate var(--dur-instant) var(--ease);
   letter-spacing: 0;
   min-inline-size: 0;
   min-block-size: calc(var(--sp-6) + var(--sp-1));
@@ -204,7 +213,13 @@
   border-radius: var(--r-lg);
   padding: var(--pad-card);
   overflow: hidden;
-  transition: all var(--dur-base) var(--ease);
+  /* Explicit list, not the prototype's `all` (index.html:441-448; audit
+     motion-05): the theme / hover colours plus the current hover lift. */
+  transition:
+    background-color var(--dur-base) var(--ease),
+    border-color var(--dur-base) var(--ease),
+    box-shadow var(--dur-base) var(--ease),
+    transform var(--dur-base) var(--ease);
   /* Cap individual card width so a 4-card row on an ultra-wide monitor
      doesn't balloon each card to 600–800px of whitespace. With
      auto-fit + minmax on .kpi-row (below), cards stay compact and the
@@ -354,7 +369,15 @@
      button) and to the chips, so the cursor never promises a click that
      does nothing — e.g. on a gated card, which has no select button. */
   cursor: default;
-  transition: all var(--dur-base) var(--ease);
+  /* Explicit list, not the prototype's `all` (index.html:488-495; audit
+     motion-05): the hover / selected / updating colours and shadows, the
+     hover lift (transform) and the pressed settle (scale). */
+  transition:
+    background-color var(--dur-base) var(--ease),
+    border-color var(--dur-base) var(--ease),
+    box-shadow var(--dur-base) var(--ease),
+    transform var(--dur-base) var(--ease),
+    scale var(--dur-instant) var(--ease);
   overflow: hidden;
   text-align: left;
   width: 100%;

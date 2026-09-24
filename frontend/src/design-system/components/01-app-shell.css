@@ -300,7 +300,9 @@
    the workspace is alive without being attention-grabbing. */
 .topbar__pill .dot.is-heartbeat {
   animation: topbar-heartbeat var(--dur-heartbeat) var(--ease) infinite;
-  will-change: box-shadow, transform;
+  /* transform only: a box-shadow layer hint promotes nothing (it is a paint
+     property) and only costs memory (audit motion-05). */
+  will-change: transform;
 }
 @keyframes topbar-heartbeat {
   0%   { box-shadow: 0 0 0 0 color-mix(in oklab, var(--signal-success) 55%, transparent), 0 0 8px var(--signal-success); transform: scale(1); }
@@ -314,7 +316,15 @@
   width: 34px; height: 34px; border-radius: var(--r-md);
   display: grid; place-items: center;
   background: transparent; border: 1px solid var(--line-1); color: var(--text-2);
-  cursor: pointer; transition: all var(--dur-fast) var(--ease);
+  cursor: pointer;
+  /* Explicit list, not the prototype's `all` (index.html:272-276; audit
+     motion-05): the colours its hover / active states change, plus the
+     pressed nudge. */
+  transition:
+    background-color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease),
+    translate var(--dur-instant) var(--ease);
 }
 .topbar__icon-btn:hover { background: var(--bg-3); color: var(--text-1); border-color: var(--line-2); }
 .topbar__icon-btn.is-active { background: var(--accent-soft); color: var(--accent-ink); border-color: var(--chip-line); }
@@ -392,7 +402,13 @@
   border: 1px solid transparent;
   color: var(--text-3);
   cursor: pointer;
-  transition: all var(--dur-fast) var(--ease);
+  /* Explicit list, not the prototype's `all` (index.html:303-311; audit
+     motion-05). */
+  transition:
+    background-color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease),
+    scale var(--dur-instant) var(--ease);
   background: transparent;
   position: relative;
   text-decoration: none;
@@ -525,7 +541,16 @@
   font-family: var(--font-sans); font-size: var(--fs-13); font-weight: 500;
   letter-spacing: var(--tracking-body);
   border: 1px solid var(--line-2); background: transparent; color: var(--text-1);
-  cursor: pointer; transition: all var(--dur-fast) var(--ease);
+  cursor: pointer;
+  /* Explicit list, not the prototype's `all` (index.html:378-384; audit
+     motion-05): hover / variant / disabled colours and the primary halo,
+     plus the pressed nudge. */
+  transition:
+    background-color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease),
+    translate var(--dur-instant) var(--ease);
   white-space: nowrap;
   text-decoration: none;
 }

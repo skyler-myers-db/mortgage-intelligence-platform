@@ -692,14 +692,15 @@
   height: var(--sp-5);
   border-radius: var(--r-pill);
   background: var(--text-3);
-  transition: left var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+  /* translate, not left: the knob slides on the compositor (audit motion-05). */
+  transition: translate var(--dur-fast) var(--ease), background-color var(--dur-fast) var(--ease);
 }
 .campaign-setup__toggle .switch.on {
   background: var(--accent-soft);
   border-color: var(--accent);
 }
 .campaign-setup__toggle .switch.on::after {
-  left: calc(var(--sp-10) - var(--sp-5) - (var(--sp-1) / 2));
+  translate: calc(var(--sp-10) - var(--sp-5) - var(--sp-1)) 0;
   background: var(--accent);
 }
 .campaign-setup__textarea {

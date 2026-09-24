@@ -255,7 +255,14 @@
   background: var(--bg-2); border: 1px solid var(--line-1);
   border-radius: var(--r-md);
   font-size: var(--fs-12); color: var(--text-2);
-  cursor: pointer; transition: all var(--dur-fast) var(--ease);
+  cursor: pointer;
+  /* Explicit list, not the prototype's `all` (index.html:826-832; audit
+     motion-05). */
+  transition:
+    background-color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease),
+    translate var(--dur-instant) var(--ease);
   font-family: var(--font-sans);
 }
 .filter:hover { border-color: var(--line-2); color: var(--text-1); }

@@ -552,3 +552,130 @@ describe('layout containment contracts', () => {
     expect(css).toMatch(/\.seg-card__meta-item\s*\{[^}]*overflow-wrap:\s*anywhere;/s);
   });
 });
+
+/** `selector { declarations }` of the innermost rule blocks, comments stripped. */
+function cssRules(css: string): Array<{ selector: string; block: string }> {
+  const text = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  return [...text.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((match) => ({
+    selector: match[1].trim().replace(/\s+/g, ' '),
+    block: match[2],
+  }));
+}
+
+type CssDeclaration = { where: string; selector: string; property: string; value: string };
+let declarationsCache: CssDeclaration[] | undefined;
+
+/** Every `property: value` of the partials and the feature sheets, tagged with its rule (read once). */
+function cssDeclarations(): CssDeclaration[] {
+  declarationsCache ??= readDeclarations();
+  return declarationsCache;
+}
+
+function readDeclarations(): CssDeclaration[] {
+  const sheets = [{ file: 'design-system/components.css (partials)', css: designCss() }, ...featureStylesheets()];
+  return sheets.flatMap(({ file, css }) =>
+    cssRules(css).flatMap(({ selector, block }) =>
+      block
+        .split(';')
+        .map((part) => part.trim())
+        .filter((part) => part.includes(':'))
+        .map((part) => {
+          const colon = part.indexOf(':');
+          const property = part.slice(0, colon).trim();
+          return { where: `${file}: ${selector}`, selector, property, value: part.slice(colon + 1).trim() };
+        }),
+    ),
+  );
+}
+
+/** Transitioned property names of one `transition` / `transition-property` value. */
+function transitionedProperties(value: string): string[] {
+  return value.split(/,(?![^(]*\))/).map((entry) => entry.trim().split(/\s+/)[0]);
+}
+
+/** The transitioned properties of one exact selector's single `transition`. */
+function transitionOf(selector: string): string[] {
+  const found = cssDeclarations().filter((d) => d.selector === selector && d.property === 'transition');
+  expect(found, `${selector} declares one transition`).toHaveLength(1);
+  return transitionedProperties(found[0].value);
+}
+
+const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * 2026-09-21 audit motion-05 / css-09: nine prototype-verbatim
+ * `transition: all` rules tweened every property that changed (focus
+ * outlines included), two switch knobs slid by `left`, the refresh
+ * desaturation only had a transition on its way in, and the heartbeat dot
+ * hinted a paint property to the compositor.
+ */
+describe('motion runs on named, compositor-friendly properties (motion-05)', () => {
+  const PAINT_HINT = /^(?:box-shadow|background[\w-]*|color|border[\w-]*|outline[\w-]*|filter)$/;
+  const LAYOUT = /^(?:left|top|right|bottom|inset[\w-]*|width|height|min-[\w-]+|max-[\w-]+|margin[\w-]*|inline-size|block-size)$/;
+
+  it('never transitions `all`', () => {
+    const offenders = cssDeclarations()
+      .filter((d) => d.property === 'transition' || d.property === 'transition-property')
+      .filter((d) => transitionedProperties(d.value).includes('all'))
+      .map((d) => d.where);
+    expect(offenders, 'name the properties that change').toEqual([]);
+  });
+
+  it('never hints a paint property with will-change', () => {
+    const offenders = cssDeclarations()
+      .filter((d) => d.property === 'will-change')
+      .filter((d) => d.value.split(',').some((name) => PAINT_HINT.test(name.trim())))
+      .map((d) => `${d.where}: ${d.value}`);
+    expect(offenders).toEqual([]);
+    expect(designCss()).toMatch(/\.topbar__pill \.dot\.is-heartbeat\s*\{[^}]*will-change:\s*transform;/s);
+  });
+
+  it('never transitions a layout box property', () => {
+    const offenders = cssDeclarations()
+      .filter((d) => d.property === 'transition' || d.property === 'transition-property')
+      .flatMap((d) => transitionedProperties(d.value).filter((name) => LAYOUT.test(name)).map((name) => `${d.where}: ${name}`));
+    expect(offenders).toEqual([]);
+  });
+
+  it('gives the nine former `transition: all` sites explicit lists with their pressed property', () => {
+    const pressed: Array<[string, string]> = [
+      ['.topbar__icon-btn', 'translate'],
+      ['.rail__item', 'scale'],
+      ['.btn', 'translate'],
+      ['.evidence-chip', 'translate'],
+      ['.seg-card', 'scale'],
+      ['.filter', 'translate'],
+      ['.tweak-row .sw', 'scale'],
+    ];
+    for (const [selector, property] of pressed) {
+      const list = transitionOf(selector);
+      expect(list, selector).toContain(property);
+      expect(list.some((name) => /^(?:background-color|border-color|color)$/.test(name)), `${selector} names its colours`).toBe(true);
+    }
+    expect(transitionOf('.kpi')).toEqual(expect.arrayContaining(['background-color', 'border-color']));
+    expect(transitionOf('.seg-card')).toContain('transform');
+    expect(transitionOf('.chip__remove')).toContain('translate');
+    expect(transitionOf('.tweak-row .switch')).toEqual(['background-color', 'border-color', 'scale']);
+  });
+
+  it('slides both switch knobs by translate, never left', () => {
+    const css = designCss();
+    for (const knob of ['.tweak-row .switch::after', '.campaign-setup__toggle .switch::after']) {
+      expect(transitionOf(knob), knob).toEqual(['translate', 'background-color']);
+      expect(css, `${knob} rests at the start`).toMatch(
+        new RegExp(`${escapeRegExp(knob)}\\s*\\{[^}]*left:\\s*calc\\(var\\(--sp-1\\) / 2\\);`, 's'),
+      );
+    }
+    for (const on of ['.tweak-row .switch.on::after', '.campaign-setup__toggle .switch.on::after']) {
+      const blocks = cssRules(css).filter((rule) => rule.selector === on).map((rule) => rule.block).join(';');
+      expect(blocks, on).toMatch(/translate:\s*calc\(var\(--sp-10\) - var\(--sp-5\) - var\(--sp-1\)\) 0;/);
+      expect(blocks, on).not.toMatch(/(?<![-\w])left:/);
+    }
+  });
+
+  it('eases the refresh desaturation back out from the base rule', () => {
+    const css = designCss();
+    expect(css).toMatch(/\.stable-refresh-region\s*\{[^}]*transition:\s*filter var\(--dur-base\) var\(--ease\);/s);
+    expect(css).not.toMatch(/\.stable-refresh-region\.is-updating\s*\{[^}]*transition:/s);
+  });
+});
