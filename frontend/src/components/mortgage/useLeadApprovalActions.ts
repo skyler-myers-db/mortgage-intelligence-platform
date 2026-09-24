@@ -577,11 +577,16 @@ export function useLeadApprovalActions({
 
   /**
    * A row that must not be approved from an open review, read synchronously:
-   * its approve / reject write already returned ok in this mount, or it is
-   * in the bulk run on the wire. The review re-checks this on Confirm.
+   * its approve / reject write already returned ok in this mount, it is in
+   * the bulk run on the wire, or an approve / reject for it is still on the
+   * wire in the MutationCache (from this mount or one that unmounted
+   * mid-write). The review checks this before it drafts and on Confirm, so a
+   * remounted table writes no second DRAFT_OUTREACH row for it.
    */
   function isDecisionLocked(borrowerId: string): boolean {
-    return decidedRef.current.has(borrowerId) || bulkRunIdsRef.current.has(borrowerId);
+    return decidedRef.current.has(borrowerId)
+      || bulkRunIdsRef.current.has(borrowerId)
+      || isDecisionPending(queryClient, borrowerId);
   }
 
   /** A bulk run is on the wire (the synchronous latch, not the render state). */
