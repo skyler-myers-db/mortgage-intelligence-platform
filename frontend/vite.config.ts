@@ -20,13 +20,19 @@ const CHUNK_MODULES_FILE = "build-modules.json";
  * follows barrel re-exports that tree-shaking later drops (the @tanstack
  * index.js files re-export every hook), so it names useInfiniteQuery.js too
  * and is only a backstop for packages the entry never imports. Ids are
- * relative to the frontend root.
+ * relative to the frontend root, and a node_modules id is keyed from its last
+ * `node_modules/` segment: the build resolves symlinks first, so a worktree
+ * whose frontend/node_modules is a symlink to another tree would otherwise
+ * record `../../<other-tree>/frontend/node_modules/...` (the budget tool keys
+ * ids the same way, so it reads either shape).
  */
 function chunkModulesManifest(): Plugin {
   let root = "";
   const relative = (id: string) => {
     const bare = id.replace(/^\0/, "").split("?")[0];
-    return path.isAbsolute(bare) ? path.relative(root, bare).split(path.sep).join("/") : bare;
+    const rel = path.isAbsolute(bare) ? path.relative(root, bare).split(path.sep).join("/") : bare;
+    const vendored = rel.lastIndexOf("node_modules/");
+    return vendored === -1 ? rel : rel.slice(vendored);
   };
   return {
     name: "mip:chunk-modules-manifest",

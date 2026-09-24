@@ -103,3 +103,26 @@ def test_entry_chunk_source_map_is_not_served() -> None:
     client = TestClient(app)
     assert client.get(f"/assets/{entry.name}").status_code == 200
     assert client.get(f"/assets/{entry.name}.map").status_code == 404
+
+
+def test_chunk_modules_key_node_modules_ids_by_package_path() -> None:
+    """``build-modules.json`` reads the same whatever ``frontend/node_modules`` is.
+
+    The build resolves symlinks before vite.config.ts makes module ids
+    frontend-root relative, so a worktree whose ``node_modules`` is a symlink
+    to another tree would record ``../../<other-tree>/frontend/node_modules/...``
+    (audit ``bundle-03``, review of the vendor lazy-only guard). The plugin
+    keys every such id from its last ``node_modules/`` segment instead.
+    """
+    _built_entry_chunk()
+    modules_file = FRONTEND / "build-meta" / "build-modules.json"
+    if not modules_file.is_file():
+        pytest.skip("frontend/build-meta is not built in this checkout")
+    modules = json.loads(modules_file.read_text(encoding="utf-8"))
+    ids = {module for chunk in modules["chunks"].values() for module in chunk}
+    ids.update(modules["entryStaticModules"])
+
+    vendored = sorted(module for module in ids if "node_modules/" in module)
+    assert vendored, "the build renders node_modules modules"
+    assert [module for module in vendored if not module.startswith("node_modules/")] == []
+    assert sorted(module for module in ids if module.startswith(("../", "/"))) == []
