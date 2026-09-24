@@ -7,8 +7,9 @@
  *    a route-nav click, a Cmd-K jump, a link in the floating Genie panel and
  *    the Back button at "Leave without saving?". Focus opens on Stay; Stay
  *    (or Escape) keeps the page, its URL and the typed value and hands focus
- *    back to the control that started the navigation; Leave completes it.
- *    The dialog passes WCAG A/AA in both themes.
+ *    back to the control that started the navigation; Leave completes it,
+ *    including a redirect the destination issues on mount (Cmd-K's bare
+ *    /offer-orchestrator). The dialog passes WCAG A/AA in both themes.
  *  - A query-string change on the same page (Run build) never asks.
  *  - Offer Orchestrator guards a typed rejection note.
  *  - A tab close raises the browser's own prompt only while dirty.
@@ -160,6 +161,30 @@ test.describe('unsaved-changes guard (states-05)', () => {
     await expectBlockedOnPortfolio(page);
     await leaveDialog(page).getByRole('button', { name: 'Leave' }).click();
     await expect(page).toHaveURL(/\/$/);
+  });
+
+  test('Leave lets the destination redirect on mount (Cmd-K to the bare Offer route)', async ({ app, page }) => {
+    // Visiting a borrower first remembers it, so the bare /offer-orchestrator
+    // (the palette's target) redirects there with <Navigate replace/>, and
+    // the Offer chunk is already loaded: the redirect runs in the same
+    // effect flush as the dirty page's unregister.
+    await app.gotoRoute(OFFER_PATH);
+    await routeNavLink(page, 'Portfolio').click();
+    await app.settle();
+    await expect(page).toHaveURL(/\/portfolio-builder$/);
+    await budgetField(page).fill(BUDGET);
+    await budgetField(page).blur();
+
+    const palette = await app.openCommandPalette();
+    await palette.getByRole('combobox').fill('Offer Orchestrator');
+    await palette.getByRole('option', { name: /Offer Orchestrator/ }).first().click();
+    const dialog = await expectBlockedOnPortfolio(page);
+    await dialog.getByRole('button', { name: 'Leave' }).click();
+
+    await expect(page).toHaveURL(new RegExp(`${OFFER_PATH}$`));
+    await app.settle();
+    await expect(leaveDialog(page)).toHaveCount(0);
+    await expect(page.locator('#main-content h1')).toHaveText('Review and approve outreach');
   });
 
   test('a query-string change on the same page never asks, and a clean page leaves freely', async ({ app, page }) => {

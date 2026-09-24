@@ -13,6 +13,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import {
   Link,
   MemoryRouter,
+  Navigate,
   Route,
   RouterProvider,
   Routes,
@@ -32,6 +33,7 @@ function NotePage() {
       <input aria-label="Note" value={note} onChange={(event) => setNote(event.target.value)} />
       <Link to="/other">Other page</Link>
       <Link to="/notes?tab=history">Same page, other tab</Link>
+      <Link to="/redirecting">Redirecting page</Link>
     </>
   );
 }
@@ -47,6 +49,8 @@ function Shell() {
       <Routes>
         <Route path="/notes" element={<NotePage />} />
         <Route path="/other" element={<h1>Other page</h1>} />
+        <Route path="/redirecting" element={<Navigate to="/final" replace />} />
+        <Route path="/final" element={<h1>Final page</h1>} />
       </Routes>
       <Where />
       <UnsavedChangesGuard />
@@ -139,6 +143,19 @@ describe('UnsavedChangesGuard', () => {
     expect(dialog()).toBeNull();
     expect(where()).toBe('/other');
     expect(document.querySelector('h1')?.textContent).toBe('Other page');
+  });
+
+  it('Leave lets the destination redirect on mount (a bare /offer-orchestrator)', async () => {
+    // The dirty page's unregister and the destination's <Navigate replace/>
+    // run in one passive-effect flush, while the blocker is still mounted.
+    renderDataRouter();
+    type('Call after the rate drop');
+    await click(link('Redirecting page'));
+    expect(dialog()?.open).toBe(true);
+    await click(button('Leave'));
+    expect(dialog()).toBeNull();
+    expect(where()).toBe('/final');
+    expect(document.querySelector('h1')?.textContent).toBe('Final page');
   });
 
   it('never asks for a clean page, or for a search change on the same page', async () => {
