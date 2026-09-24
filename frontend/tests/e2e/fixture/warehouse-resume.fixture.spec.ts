@@ -9,6 +9,10 @@
  *   - delivery-v1: every health poll carries only an integer idle hint.
  *   - wave-1c follow-up: an ended session never reads "Live".
  *
+ * Every non-Live pill also proves it fits the 1440 actions track: a whole
+ * 6x6 dot, no clipped content, clear of the next icon button, the icon
+ * buttons at full size, and the tenant pill clear of the search's ⌘K badge.
+ *
  * Only Home's natural load and the shell's own polls run: no proof drawer,
  * no draft, no Lead Queue. Tests that watch time move install Playwright's
  * clock (the harness otherwise freezes Date while timers run), so Date and
@@ -51,6 +55,48 @@ async function tickerSeconds(page: Page): Promise<number> {
   return Number(match[1]);
 }
 
+interface Box {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+async function boxOf(locator: Locator): Promise<Box> {
+  const box = await locator.boundingBox();
+  if (!box) throw new Error('element has no bounding box');
+  return { left: box.x, top: box.y, right: box.x + box.width, bottom: box.y + box.height };
+}
+
+function overlaps(a: Box, b: Box): boolean {
+  return a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+}
+
+/**
+ * The status pill fits the actions cluster's side track at 1440x900: the
+ * dot keeps its 6x6 box, nothing inside the pill is clipped, the pill ends
+ * before the next icon button starts, the icon buttons keep their full box,
+ * and the elastic tenant pill stays clear of the search's ⌘K badge.
+ */
+async function expectPillFits(page: Page): Promise<void> {
+  await page.evaluate(() => document.fonts.ready.then(() => undefined));
+  const status = pill(page);
+  const dot = await boxOf(status.locator('.dot'));
+  expect({ width: dot.right - dot.left, height: dot.bottom - dot.top }, 'the status dot keeps its 6x6 box').toEqual({ width: 6, height: 6 });
+  const clipped = await status.evaluate((el) => el.scrollWidth - el.clientWidth);
+  expect(clipped, 'nothing inside the pill overflows it').toBeLessThanOrEqual(0);
+  const pillBox = await boxOf(status);
+  const nextButton = await boxOf(page.locator('[data-testid="system-status-pill"] ~ .topbar__icon-btn').first());
+  expect(pillBox.right, 'the pill ends before the next icon button').toBeLessThanOrEqual(nextButton.left);
+  for (const button of await page.locator('.topbar__actions .topbar__icon-btn').all()) {
+    const box = await boxOf(button);
+    expect(box.right - box.left, 'an icon button was squeezed').toBe(34);
+  }
+  const tenant = await boxOf(page.locator('.topbar__pill:has(> .topbar__pill-tenant)'));
+  const kbd = await boxOf(page.locator('.topbar__search-kbd'));
+  expect(overlaps(tenant, kbd), 'the tenant pill covers the search\'s ⌘K badge').toBe(false);
+}
+
 /** Record whether a `.degraded-banner` is ever added from now on. */
 async function watchForBanner(page: Page): Promise<void> {
   await page.evaluate(() => {
@@ -89,6 +135,14 @@ test.describe('a warehouse resuming from auto-stop', () => {
       await expect.poll(() => tickerSeconds(page)).toBeGreaterThanOrEqual(Math.max(3, before + 3));
       await expect(page.locator('.degraded-banner')).toHaveCount(0);
 
+      // Two- and three-digit timers still fit the 1440 actions track.
+      await page.clock.runFor(9_000);
+      await expect.poll(() => tickerSeconds(page)).toBeGreaterThanOrEqual(12);
+      await expectPillFits(page);
+      await page.clock.runFor(90_000);
+      await expect.poll(() => tickerSeconds(page)).toBeGreaterThanOrEqual(100);
+      await expectPillFits(page);
+
       const axe = await new AxeBuilder({ page }).include('.topbar').withTags(WCAG_TAGS).analyze();
       expect(axe.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`)).toEqual([]);
     });
@@ -119,6 +173,7 @@ test.describe('a warehouse resuming from auto-stop', () => {
       await expect(pill(page).locator('.topbar__pill-label')).toHaveText('Degraded');
       expect(await dotColor(page)).toBe(await asComputedRgb(page, 'var(--signal-danger)'));
       await expect(page.locator('.degraded-banner[data-degraded-dependency="warehouse"]')).toBeVisible();
+      await expectPillFits(page);
     });
   }
 });
@@ -167,33 +222,39 @@ test.describe('the keep-warm idle hint', () => {
   });
 });
 
-test('an ended session never reads "Live": 401 {} on every /api path shows "Session ended"', async ({ app, page }) => {
-  await expectViewport(page);
-  await page.addInitScript(() => {
-    const seen: string[] = [];
-    (window as unknown as { __pillLabels: string[] }).__pillLabels = seen;
-    new MutationObserver(() => {
-      const label = document.querySelector('[data-testid="system-status-pill"] .topbar__pill-label')?.textContent;
-      if (label && seen[seen.length - 1] !== label) seen.push(label);
-    }).observe(document, { childList: true, subtree: true, characterData: true });
+for (const theme of FIXTURE_THEMES) {
+  test(`an ended session never reads "Live": 401 {} on every /api path shows "Session ended" (${theme})`, async ({ app, page }) => {
+    await expectViewport(page);
+    await page.addInitScript(() => {
+      const seen: string[] = [];
+      (window as unknown as { __pillLabels: string[] }).__pillLabels = seen;
+      new MutationObserver(() => {
+        const label = document.querySelector('[data-testid="system-status-pill"] .topbar__pill-label')?.textContent;
+        if (label && seen[seen.length - 1] !== label) seen.push(label);
+      }).observe(document, { childList: true, subtree: true, characterData: true });
+    });
+    app.degrade(EVERY_API_PATH, PROXY_SESSION_EXPIRED);
+    await app.setTheme(theme);
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+
+    await expect(pill(page).locator('.topbar__pill-label')).toHaveText('Session ended');
+    const labels = await page.evaluate(() => (window as unknown as { __pillLabels: string[] }).__pillLabels);
+    expect(labels, 'the pill never presented the dead session as healthy').not.toContain('Live');
+    await expectPillFits(page);
   });
-  app.degrade(EVERY_API_PATH, PROXY_SESSION_EXPIRED);
-  await page.goto('/', { waitUntil: 'domcontentloaded' });
 
-  await expect(pill(page).locator('.topbar__pill-label')).toHaveText('Session ended');
-  const labels = await page.evaluate(() => (window as unknown as { __pillLabels: string[] }).__pillLabels);
-  expect(labels, 'the pill never presented the dead session as healthy').not.toContain('Live');
-});
+  test(`an ended session met by a page read replaces the last healthy "Live" with "Session ended" (${theme})`, async ({ app, page }) => {
+    // The wave-1c defect exactly: the health probe had last answered healthy,
+    // a page read then met the 401, polling stopped, and "Live" stayed behind
+    // the session dialog because the pill read only the last health payload.
+    await expectViewport(page);
+    app.degrade(EVERY_API_PATH_BUT_HEALTH, PROXY_SESSION_EXPIRED);
+    await app.setTheme(theme);
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
 
-test('an ended session met by a page read replaces the last healthy "Live" with "Session ended"', async ({ app, page }) => {
-  // The wave-1c defect exactly: the health probe had last answered healthy,
-  // a page read then met the 401, polling stopped, and "Live" stayed behind
-  // the session dialog because the pill read only the last health payload.
-  await expectViewport(page);
-  app.degrade(EVERY_API_PATH_BUT_HEALTH, PROXY_SESSION_EXPIRED);
-  await page.goto('/', { waitUntil: 'domcontentloaded' });
-
-  await expect(page.getByRole('alertdialog', { name: 'Your session ended' })).toBeVisible();
-  await expect(pill(page).locator('.topbar__pill-label')).toHaveText('Session ended');
-  await expect(pill(page).locator('.dot')).toHaveClass('dot amber');
-});
+    await expect(page.getByRole('alertdialog', { name: 'Your session ended' })).toBeVisible();
+    await expect(pill(page).locator('.topbar__pill-label')).toHaveText('Session ended');
+    await expect(pill(page).locator('.dot')).toHaveClass('dot amber');
+    await expectPillFits(page);
+  });
+}

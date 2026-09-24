@@ -446,7 +446,7 @@ the warehouse warm is an explicit, configured trade-off with one resolver,
 
 | `MIP_WAREHOUSE_KEEP_WARM` | What runs | Cost | Cold starts |
 | --- | --- | --- | --- |
-| `off` (default in `app.yaml` and the deploy payload) | Nothing | Warehouse stops 10 min after the last query | The next visitor waits for a serverless resume, typically 2–6 s, shown as a calm "Waking warehouse" pill, not an outage |
+| `off` (default in `app.yaml` and the deploy payload) | Nothing | Warehouse stops 10 min after the last query | The next visitor waits for a serverless resume, typically 2–6 s, shown as a calm amber "Waking Ns" pill (accessible name "Waking warehouse"), not an outage |
 | `activity` | An authenticated `GET /api/v1/health` from a tab with user input in the last `MIP_WAREHOUSE_KEEP_WARM_ACTIVITY_WINDOW_MIN` minutes (default 15) submits at most one `SELECT 1 AS keep_warm` per 240 s, process-wide, fire-and-forget | Runs while someone is actively working, stops 10 min after they stop | Only after a quiet spell |
 | `scheduled` | The lead-page refresh-ahead loop every `MIP_LEADS_WARM_INTERVAL_S` seconds (must be > 0; `scheduled` with 0 resolves to `off` and logs an ERROR) | Never stops while the App runs | None |
 

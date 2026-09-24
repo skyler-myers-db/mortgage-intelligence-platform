@@ -1,0 +1,22 @@
+/* ============================================================
+   TOPBAR STATUS PILL FITS ITS TRACK (2026-09-21 audit delivery-01 and
+   the wave-1c session follow-up; lane w2-warehouse-delivery)
+   ============================================================
+   At the symmetric >=89rem topbar (01-app-shell.css `.topbar`) each side
+   track is ~408px and the actions cluster measures ~400px with "Live", so
+   any wider status ("Degraded", "Session ended", the resume timer) shrank
+   EVERY flex item in the cluster: the empty `.dot` collapsed to 0px, the
+   pill's text ran over the theme button and the icon buttons lost their
+   34px box. The status pill, its dot and the icon buttons now keep their
+   max-content box; the tenant pill stays the one elastic item (its label
+   already ellipsizes, `.topbar__pill-tenant`).
+   DECLARED EXTENSION of design_files/index.html:264-271 (`.topbar__pill`,
+   `.topbar__pill .dot`): the prototype's flat topbar row never runs short,
+   so it declares no flex sizing. No new class: `:has(> .dot)` is "a pill
+   that carries a status dot", as the prototype's own env and warehouse
+   pills do (Module 0 Prototype.html:1226-1233). */
+.topbar__pill .dot,
+.topbar__actions > .topbar__pill:has(> .dot),
+.topbar__actions > .topbar__icon-btn {
+  flex: none;
+}

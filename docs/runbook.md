@@ -42,7 +42,8 @@ The 2X-Small serverless warehouse auto-stops after 10 min idle, and a
 serverless resume typically takes 2–6 s. `/api/v1/health` reads the
 warehouse lifecycle state: while it is `STARTING` the body reports
 `"warehouse": "resuming"` with `status: "ok"`, and the app shows a calm
-"Waking warehouse" pill with an elapsed timer, not the red Degraded state.
+amber "Waking" pill with an elapsed timer (announced and titled "Waking
+warehouse"), not the red Degraded state.
 `STOPPED` reads as `up` (it starts on the next query). Only `"warehouse":
 "down"` (a deleted warehouse, a failed state read whose `SELECT 1`
 fallback also failed, or an open breaker) is an outage.

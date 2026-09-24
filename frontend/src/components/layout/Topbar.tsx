@@ -68,6 +68,9 @@ export type SystemStatusLabel =
 export interface SystemStatusView {
   dotClass: string;
   label: SystemStatusLabel;
+  /** The visible head of `label` when the whole label cannot fit the 1440
+   *  actions track; the rest stays in the pill's text, visually hidden. */
+  shortLabel?: string;
   tooltip: string;
   ariaLabel: string;
   /** Epoch ms the elapsed ticker counts from; set only for 'Waking warehouse'. */
@@ -140,12 +143,18 @@ export function systemStatusViewModel(
   // or half-open, and the backend not declaring degraded.
   const healthy = health.status !== 'degraded' && !anyBreakerOpen;
   if (healthy && deps.warehouse === 'resuming' && deps.lakebase === 'up' && deps.genie === 'up') {
-    return statusView(
-      'Waking warehouse',
-      AMBER,
-      'System status · warehouse resuming from auto-stop, usually 2–6 s\n' + details,
-      resumingSince,
-    );
+    // One visible word, like Live / Degraded: "Waking warehouse" plus its
+    // timer overflowed the 1440 actions track. The accessible name, the
+    // hidden rest of the label and the tooltip keep the full text.
+    return {
+      ...statusView(
+        'Waking warehouse',
+        AMBER,
+        'System status · warehouse resuming from auto-stop, usually 2–6 s\n' + details,
+        resumingSince,
+      ),
+      shortLabel: 'Waking',
+    };
   }
 
   const live = healthy && (hasDependencyDetails ? allUp : health.status === 'ok');
@@ -157,6 +166,7 @@ export function systemStatusViewModel(
 /** Takes the finished view (one prop keeps the compiled pill small; Topbar
  *  itself is not memoized, so three props would re-render it just as often). */
 function SystemStatusPill({ status }: { status: SystemStatusView }) {
+  const shown = status.shortLabel ?? status.label;
   return (
     <div
       className="topbar__pill"
@@ -166,7 +176,8 @@ function SystemStatusPill({ status }: { status: SystemStatusView }) {
     >
       <span className={status.dotClass} aria-hidden="true" />
       <span className="topbar__pill-label">
-        {status.label}
+        {shown}
+        {shown !== status.label && <span className="sr-only">{status.label.slice(shown.length)}</span>}
       </span>
       {/* Outside the label and aria-hidden: a per-second change must never
           be re-spoken (the pill's accessible name stays "Waking warehouse"). */}

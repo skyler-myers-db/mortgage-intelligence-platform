@@ -60,6 +60,7 @@ describe('systemStatusViewModel', () => {
     const view = systemStatusViewModel(payload('resuming'), 'online', 1_000);
 
     expect(view.label).toBe('Waking warehouse');
+    expect(view.shortLabel, 'one visible word fits the 1440 actions track').toBe('Waking');
     expect(view.dotClass).toBe('dot amber');
     expect(view.ariaLabel).toBe('System status: Waking warehouse.');
     expect(view.tooltip).toContain('2–6 s');
@@ -123,6 +124,10 @@ describe('the rendered topbar pill', () => {
     render();
 
     expect(pill().querySelector('.topbar__pill-label')?.textContent).toBe('Waking warehouse');
+    // "Waking" is what shows; the rest of the label stays in the text for
+    // assistive tech, visually hidden.
+    expect(pill().querySelector('.topbar__pill-label')?.firstChild?.textContent).toBe('Waking');
+    expect(pill().querySelector('.topbar__pill-label .sr-only')?.textContent).toBe(' warehouse');
     expect(pill().getAttribute('aria-label')).toBe('System status: Waking warehouse.');
     expect(pill().querySelector('.dot')?.className).toBe('dot amber');
     const ticker = pill().querySelector<HTMLElement>('.mono');
@@ -142,5 +147,6 @@ describe('the rendered topbar pill', () => {
 
     expect(pill().textContent).toBe('Session ended');
     expect(pill().querySelector('.mono')).toBeNull();
+    expect(pill().querySelector('.sr-only'), 'a label that fits shows whole').toBeNull();
   });
 });
