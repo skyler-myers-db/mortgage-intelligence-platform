@@ -246,7 +246,7 @@ test.describe('queue-to-dossier wayfinding (shell-04)', () => {
     await app.settle();
 
     const pager = page.getByRole('navigation', { name: 'Lead queue position' });
-    await expect(pager).toContainText('2 of 3 in IL');
+    await expect(pager).toContainText('2 of 3 ranked in IL');
     // Opening a dossier writes a VIEW_BORROWER audit row: only the one opened
     // was read, not the previous or next borrower.
     expect(dossierReads(mockApi.calls)).toEqual([ids[1]]);
@@ -254,7 +254,7 @@ test.describe('queue-to-dossier wayfinding (shell-04)', () => {
     await page.keyboard.press('j');
     await expect(page).toHaveURL(new RegExp(`/borrower-360/${ids[2]}$`));
     await app.settle();
-    await expect(pager).toContainText('3 of 3 in IL');
+    await expect(pager).toContainText('3 of 3 ranked in IL');
     await expect(pager.getByRole('button', { name: 'Next' })).toBeDisabled();
     expect(dossierReads(mockApi.calls)).toEqual([ids[1], ids[2]]);
     await page.keyboard.press('k');
@@ -266,7 +266,7 @@ test.describe('queue-to-dossier wayfinding (shell-04)', () => {
     await pager.getByRole('button', { name: 'Previous' }).click();
     await expect(page).toHaveURL(new RegExp(`/borrower-360/${ids[0]}$`));
     await app.settle();
-    await expect(pager).toContainText('1 of 3 in IL');
+    await expect(pager).toContainText('1 of 3 ranked in IL');
     expect([...new Set(dossierReads(mockApi.calls))]).toEqual([ids[1], ids[2], ids[0]]);
 
     // Scoped like the queue's row shortcuts: the keys are live only while
@@ -282,7 +282,7 @@ test.describe('queue-to-dossier wayfinding (shell-04)', () => {
     await page.keyboard.press('j');
     await expect(page).toHaveURL(new RegExp(`/borrower-360/${ids[1]}$`));
     await app.settle();
-    await expect(pager).toContainText('2 of 3 in IL');
+    await expect(pager).toContainText('2 of 3 ranked in IL');
 
     // J typed into the topbar search is text.
     const searchBox = page.getByRole('combobox', { name: 'Search borrowers' });
@@ -302,7 +302,7 @@ test.describe('queue-to-dossier wayfinding (shell-04)', () => {
     await app.gotoRoute(`/borrower-360/${ids[2]}`);
     const crumbs = page.getByRole('navigation', { name: 'Breadcrumb' });
     await expect(crumbs.getByRole('link', { name: 'Lead Queue · IL' })).toHaveAttribute('href', '/lead-queue?state=IL');
-    await expect(page.getByRole('navigation', { name: 'Lead queue position' })).toContainText('3 of 3 in IL');
+    await expect(page.getByRole('navigation', { name: 'Lead queue position' })).toContainText('3 of 3 ranked in IL');
 
     await page.getByRole('link', { name: 'Build outreach draft' }).click();
     await expect(page).toHaveURL(new RegExp(`/offer-orchestrator/${ids[2]}$`));

@@ -85,7 +85,7 @@ describe('BorrowerQueuePager', () => {
 
   it('shows the position in the queue and disables Previous at the top', async () => {
     await renderAt(IDS[0]);
-    expect(pager()?.textContent).toContain('1 of 3 in IL');
+    expect(pager()?.textContent).toContain('1 of 3 ranked in IL');
     expect(button('Previous').disabled).toBe(true);
     expect(button('Next').disabled).toBe(false);
     expect(button('Next').getAttribute('aria-keyshortcuts')).toBe('J');

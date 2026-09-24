@@ -13,6 +13,11 @@ import './borrower-360.pager.css';
  * step through the queue's ranked masked ids, carrying the same queue context
  * so the breadcrumbs keep pointing at the exact filtered queue.
  *
+ * The order is the queue's rank order and "of N" counts the ranked rows it
+ * loaded (its footer's "Showing N ranked borrowers"), so the pager says
+ * "ranked": a column sort on the queue reorders only its own table, and
+ * more borrowers may match than the queue loaded.
+ *
  * Opening a dossier writes a VIEW_BORROWER audit row, so nothing here
  * prefetches, preloads or hovers the neighbouring borrowers: a neighbour is
  * read only when the reviewer actually moves to it.
@@ -41,7 +46,7 @@ export function BorrowerQueuePager({ borrowerId, queue }: { borrowerId: string; 
         <span className="mono num">{position.position.toLocaleString('en-US')}</span>
         {' of '}
         <span className="mono num">{position.total.toLocaleString('en-US')}</span>
-        <span className="queue-pager__scope">{queue.label ? ` in ${queue.label}` : ' in the Lead Queue'}</span>
+        <span className="queue-pager__scope">{queue.label ? ` ranked in ${queue.label}` : ' ranked in the Lead Queue'}</span>
       </span>
       <button
         type="button"
