@@ -179,17 +179,6 @@ export const KNOWN_SURFACE_OVERFLOW: Readonly<Record<string, KnownSurfaceOverflo
     themes: ['dark', 'light'],
     nodes: 'section.surface:has(.analytics-chart__tick--x)',
   },
-  // New slug layout-w2-glossary-tip (wave 3/4): a GlossaryTerm tip is laid
-  // out (at opacity 0) from its term's left edge at min(300px, 80vw) with no
-  // collision handling, so with the Console open the Borrower 360 dossier
-  // card (a 531px column) holds hidden tips that reach 43px past it
-  // (scrollWidth 574 > clientWidth 531) and spill out of the card when shown.
-  'borrower-360-detail|console': {
-    finding: 'layout-w2-glossary-tip',
-    recorded: '2026-09-24',
-    themes: ['dark', 'light'],
-    nodes: '.stack-grid > .surface:has(.glossary-term__tip)',
-  },
 };
 
 /** Every state a spec passes to expectNoSurfaceOverflow (visual.fixture.spec.ts, smoke). */
