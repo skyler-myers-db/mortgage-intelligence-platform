@@ -9,6 +9,7 @@ import { api } from '../../lib/api';
 import { useIsOnline } from '../../lib/connectivity';
 import { auditEventHref } from '../../lib/auditLinks';
 import { queryKeys } from '../../lib/queryKeys';
+import { preloadRouteForPath } from '../../lib/routePreloaders';
 import { planLeadCsvExport } from './LeadTable.csv';
 import { useLeadCsvExport } from './useLeadCsvExport';
 import {
@@ -153,8 +154,11 @@ export function LeadTable({
   // Audit flow-02 / shell-06: non-approvers keep a VISIBLE but disabled gate.
   const approverGate = approverGateReason(canApprove, sessionStatus);
 
+  // Row expand (click or keys) warms route CODE only: no audited read, no draft (delivery-08).
   useEffect(() => {
-    if (expanded) setLastBorrowerId(expanded);
+    if (!expanded) return;
+    setLastBorrowerId(expanded);
+    ['/borrower-360', '/offer-orchestrator'].forEach((route) => preloadRouteForPath(`${route}/${expanded}`));
   }, [expanded, setLastBorrowerId]);
 
   const sales = useLeadSalesActions({
@@ -329,8 +333,9 @@ export function LeadTable({
     : csvExportCount === 1 ? 'lead' : 'leads';
   const { state: exportState, exportCsv: runExport } = useLeadCsvExport();
   const exporting = exportState.status === 'pending';
+  const exportBlockedReason = exportContext?.exportBlockedReason ?? null;
   function exportCsv() {
-    if (csvExportCount === 0) return;
+    if (csvExportCount === 0 || exportBlockedReason) return;
     const rowOrder = sortKey === 'rank' ? 'rank' : `${sortKey} ${sortDir}`;
     void runExport({ plan: csvExport, approvals, exportContext, rowOrder });
   }
@@ -399,19 +404,19 @@ export function LeadTable({
             size="sm"
             icon={exporting ? undefined : 'export'}
             onClick={exportCsv}
-            // Pending is aria-disabled, never native `disabled`: a focused
-            // button that turns disabled drops keyboard focus to <body>.
-            // useLeadCsvExport's in-flight guard ignores a second click.
+            // Pending and blocked are aria-disabled, never native `disabled`:
+            // a focused button that turns disabled drops keyboard focus to
+            // <body>. useLeadCsvExport ignores the click in both states.
             disabled={csvExportCount === 0}
-            aria-disabled={exporting || undefined}
+            aria-disabled={exporting || exportBlockedReason !== null || undefined}
             aria-busy={exporting || undefined}
             data-testid="lead-export"
             aria-label={exporting
               ? 'Recording the export in the audit ledger'
               : `Export ${csvExportCount.toLocaleString()} ${csvExportNoun} as CSV`}
-            title={csvExportCount === 0 && csvExport.excluded > 0
+            title={exportBlockedReason ?? (csvExportCount === 0 && csvExport.excluded > 0
               ? 'Every row in scope is excluded by the marketing-eligibility gate'
-              : undefined}
+              : undefined)}
           >
             {exporting
               ? 'Recording export…'

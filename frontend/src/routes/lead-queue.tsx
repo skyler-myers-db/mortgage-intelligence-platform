@@ -1,13 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMemo, useRef } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocation, useSearchParams } from 'react-router';
-import { api, type LeadsPageResult } from '../lib/api';
+import { api } from '../lib/api';
 import { leadsQuery, type LeadsRequest } from '../lib/leadsQuery';
 import { useConfigOptionsQuery } from '../lib/configOptionsQuery';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
-import type { PortfolioPreview, SalesTeamMember } from '../types';
+import type { SalesTeamMember } from '../types';
 import { PageShell } from '../components/layout/PageShell';
-import { LeadTable } from '../components/mortgage/LeadTable';
+import { LeadTable, type LeadExportContext } from '../components/mortgage/LeadTable';
 import { PropertyLookupPanel } from '../components/mortgage/PropertyLookupPanel';
 import { Chip } from '../components/Primitives';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
@@ -84,6 +84,17 @@ interface AdminRulesSummary {
   offer_rules_version?: string | null;
 }
 
+/** The ranked page with the headers the client reads, X-Data-Refreshed-At included. */
+type LeadsPage = Awaited<ReturnType<typeof api.leadsPage>>;
+
+/** The ZIPs a county rollup covers. Module-level, so the derived Set keeps its identity. */
+function selectCountyZips(payload: Awaited<ReturnType<typeof api.zipRollups>>): ReadonlySet<string> {
+  return new Set(payload.rollups.map((rollup) => rollup.zip));
+}
+
+const RULES_VERSION_STALE_MS = 5 * 60_000;
+const EXPORT_WAITS_FOR_ROWS = 'Export waits for the rows of the current filters';
+
 export default function LeadQueue() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { search: queueSearch } = useLocation();
@@ -91,6 +102,7 @@ export default function LeadQueue() {
   const filtersActive = hasLeadQueueFilters(searchParams);
   const footprint = useFootprint();
   const { canAccessAdmin } = useApp();
+  const queryClient = useQueryClient();
   const moreFiltersToggleRef = useRef<HTMLButtonElement | null>(null);
   const segment = parseSegmentCodes(searchParams.get('segment'))[0];
   const segmentCodes = useMemo(
@@ -257,7 +269,7 @@ export default function LeadQueue() {
     manualRetry,
     isFetching: leadsFetching,
     isPlaceholderData: leadsPlaceholderData,
-  } = useWarmingUpRetry<LeadsPageResult>(
+  } = useWarmingUpRetry<LeadsPage>(
     leadsPageQuery.fetcher,
     // Ignored while `queryKey` is passed (see useWarmingUpRetry); kept equal
     // to the key's inputs so the fallback key stays correct if that changes.
@@ -281,67 +293,36 @@ export default function LeadQueue() {
   const loadError = error ? formatLeadQueueLoadError(error) : null;
 
   // Resolve `?county=FFFFF` → set of ZIPs via /api/geo/zip-rollups for an
-  // honest scope chip only. The actual county predicate is now server-side
-  // in /api/leads, so a transient rollup failure must not broaden or empty
-  // the ranked borrower list.
-  const [countyZips, setCountyZips] = useState<Set<string> | null>(null);
-  const [exportRefreshedAt, setExportRefreshedAt] = useState<string | null>(null);
-  const [rulesVersion, setRulesVersion] = useState<string | null>(null);
-  useEffect(() => {
-    if (!countyFilter) {
-      setCountyZips(null);
-      return;
-    }
-    const ctrl = new AbortController();
-    let cancelled = false;
-    api
-      .zipRollups(
-        { countyFips: countyFilter },
-        ctrl.signal,
-        segmentCodes.length > 0 ? segmentCodes : segment ? [segment] : null,
-        segmentMode,
-        portfolioCriteria,
-      )
-      .then((payload) => {
-        if (cancelled) return;
-        setCountyZips(new Set(payload.rollups.map((r) => r.zip)));
-      })
-      .catch(() => {
-        if (!cancelled) setCountyZips(new Set());
-      });
-    return () => {
-      cancelled = true;
-      ctrl.abort();
-    };
-  }, [countyFilter, portfolioCriteria, segment, segmentCodes, segmentMode]);
-
-  useEffect(() => {
-    const ctrl = new AbortController();
-    api
-      .portfolioPreview({}, ctrl.signal)
-      .then((payload: PortfolioPreview) => setExportRefreshedAt(payload.data_refreshed_at ?? null))
-      .catch(() => setExportRefreshedAt(null));
-    // The offer-rules version stamped on an export comes from an admin-scoped
-    // endpoint. A loan officer's visit to this route used to fire it anyway
-    // and eat a 403, which the UI swallowed but the browser console did not
-    // (2026-08-07 audit H4). Ask only when the session says we may.
-    if (!canAccessAdmin) {
-      setRulesVersion(null);
-      return () => ctrl.abort();
-    }
-    api
-      .adminRules<AdminRulesSummary>(ctrl.signal)
-      .then((payload) => setRulesVersion(payload.offer_rules_version ?? null))
-      .catch(() => setRulesVersion(null));
-    return () => ctrl.abort();
-  }, [canAccessAdmin]);
+  // honest scope chip only. The actual county predicate is server-side in
+  // /api/leads, so a failed rollup must not broaden or empty the ranked
+  // list, and must not claim the county has no coverage either (runtime-06):
+  // it is a non-audited aggregate read on the query layer.
+  const countyCohort = segmentCodes.length > 0 ? segmentCodes : segment ? [segment] : null;
+  const countyZipsQuery = useQuery({
+    queryKey: queryKeys.geoCountyZipRollups(countyFilter ?? '', [countyCohort, segmentMode, portfolioCriteria]),
+    queryFn: ({ signal }) => api.zipRollups(
+      { countyFips: countyFilter ?? '' },
+      signal,
+      countyCohort,
+      segmentMode,
+      portfolioCriteria,
+    ),
+    enabled: Boolean(countyFilter),
+    select: selectCountyZips,
+  });
+  // Only a rollup that ANSWERED may claim the county has no ZIP coverage.
+  const countyZips = countyFilter && countyZipsQuery.isSuccess ? countyZipsQuery.data : null;
 
   const visibleLeads = useMemo(() => {
     return leadsData?.leads ?? [];
   }, [leadsData]);
 
-  const countyLoading = Boolean(countyFilter) && countyZips === null;
-  const exportContext = {
+  const countyLoading = Boolean(countyFilter) && countyZipsQuery.isPending;
+  // Export provenance (audit delivery-08): the rows' own refresh time from
+  // X-Data-Refreshed-At, and the rules version read on the Export click only,
+  // for an actor who may read admin rules (GET /api/admin/rules writes no
+  // audit row). Nothing export-only is fetched on mount.
+  const exportContext: LeadExportContext = {
     filters: buildLeadQueueExportFilters({
       segment,
       segmentCodes,
@@ -364,8 +345,18 @@ export default function LeadQueue() {
       cohortId,
       funnelStage,
     }),
-    refreshedAt: exportRefreshedAt,
-    rulesVersion,
+    refreshedAt: leadsData?.dataRefreshedAt ?? null,
+    resolveRulesVersion: canAccessAdmin
+      ? () => queryClient
+        .fetchQuery({
+          queryKey: queryKeys.adminRules(),
+          queryFn: ({ signal }) => api.adminRules<AdminRulesSummary>(signal),
+          staleTime: RULES_VERSION_STALE_MS,
+        })
+        .then((rules) => rules.offer_rules_version ?? null)
+      : undefined,
+    // Placeholder rows belong to the previous filters (keepPreviousData).
+    exportBlockedReason: leadsPlaceholderData ? EXPORT_WAITS_FOR_ROWS : null,
   };
   // Audit tables-06: the hero lists the active NON-core filters as removable
   // chips (their pills sit collapsed behind "More filters"); core filters

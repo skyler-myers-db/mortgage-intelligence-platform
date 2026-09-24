@@ -15,6 +15,7 @@ import {
   segmentFilterChips,
 } from './lead-queue.filters';
 import type { SegmentCode } from '../types';
+import type { LeadExportContext } from '../components/mortgage/LeadTable';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -29,6 +30,7 @@ const retryMocks = vi.hoisted(() => ({
     warmingUp: null,
     error: null,
     manualRetry: vi.fn(),
+    isPlaceholderData: false,
   },
 }));
 
@@ -36,7 +38,11 @@ const apiMocks = vi.hoisted(() => ({
   salesTeam: vi.fn(),
   portfolioPreview: vi.fn(),
   adminRules: vi.fn(),
+  zipRollups: vi.fn(),
 }));
+
+/** The props the route last handed the (stubbed) LeadTable. */
+const tableProps = vi.hoisted(() => ({ current: null as null | { exportContext?: LeadExportContext } }));
 
 const appMocks = vi.hoisted(() => ({ canAccessAdmin: true }));
 
@@ -71,7 +77,10 @@ vi.mock('../components/FootprintProvider', () => {
 });
 
 vi.mock('../components/mortgage/LeadTable', () => ({
-  LeadTable: () => <div data-testid="lead-table" />,
+  LeadTable: (props: { exportContext?: LeadExportContext }) => {
+    tableProps.current = props;
+    return <div data-testid="lead-table" />;
+  },
 }));
 
 vi.mock('../lib/api', () => ({
@@ -243,6 +252,8 @@ describe('LeadQueue filter state', () => {
     apiMocks.salesTeam.mockResolvedValue([]);
     apiMocks.portfolioPreview.mockResolvedValue({ data_refreshed_at: null });
     apiMocks.adminRules.mockResolvedValue({ offer_rules_version: null });
+    apiMocks.zipRollups.mockResolvedValue({ rollups: [] });
+    tableProps.current = null;
   });
 
   afterEach(() => {
@@ -250,45 +261,117 @@ describe('LeadQueue filter state', () => {
     queryClient.clear();
     document.body.innerHTML = '';
     vi.clearAllMocks();
+    appMocks.canAccessAdmin = true;
+    retryMocks.state.isPlaceholderData = false;
+  });
+
+  async function mountAt(url: string) {
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={[url]}>
+            <LeadQueue />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+    });
+    await settle();
+  }
+
+  /**
+   * Audit delivery-08: the export's provenance used to be fetched on EVERY
+   * mount (a whole-book /api/portfolio/preview plus, for an admin, the
+   * AdminDep-gated /api/admin/rules), only to stamp a CSV that might never
+   * be exported. The refresh time now rides on /api/leads and the rules
+   * version is read on the Export click, for an admin only (2026-08-07 audit
+   * H4: a loan officer must never hit the admin endpoint).
+   */
+  it('reads no export provenance on mount, for any actor', async () => {
+    appMocks.canAccessAdmin = false;
+    await mountAt('/lead-queue');
+    expect(apiMocks.portfolioPreview).not.toHaveBeenCalled();
+    expect(apiMocks.adminRules).not.toHaveBeenCalled();
+    expect(tableProps.current?.exportContext?.resolveRulesVersion).toBeUndefined();
+
+    appMocks.canAccessAdmin = true;
+    await mountAt('/lead-queue');
+    expect(apiMocks.portfolioPreview).not.toHaveBeenCalled();
+    expect(apiMocks.adminRules).not.toHaveBeenCalled();
+  });
+
+  it('resolves the rules version through the query cache only when the export asks, for an admin', async () => {
+    apiMocks.adminRules.mockResolvedValue({ offer_rules_version: 'rules.itm_2026_09' });
+    await mountAt('/lead-queue');
+    const resolve = tableProps.current?.exportContext?.resolveRulesVersion;
+    expect(resolve).toBeTypeOf('function');
+
+    let version: string | null = null;
+    await act(async () => {
+      version = await resolve!(new AbortController().signal);
+    });
+    expect(version).toBe('rules.itm_2026_09');
+    expect(apiMocks.adminRules).toHaveBeenCalledTimes(1);
+    // A second export inside the stale window reuses the cached rules.
+    await act(async () => {
+      await resolve!(new AbortController().signal);
+    });
+    expect(apiMocks.adminRules).toHaveBeenCalledTimes(1);
+  });
+
+  it('stamps the rows’ refresh time and blocks the export while placeholder rows are on screen', async () => {
+    retryMocks.state.data = {
+      leads: [],
+      totalMatching: 0,
+      returnedRows: 0,
+      truncatedAt: null,
+      dataRefreshedAt: '2026-09-21T07:30:00Z',
+    } as unknown as typeof retryMocks.state.data;
+    await mountAt('/lead-queue');
+    expect(tableProps.current?.exportContext?.refreshedAt).toBe('2026-09-21T07:30:00Z');
+    expect(tableProps.current?.exportContext?.exportBlockedReason).toBeNull();
+
+    retryMocks.state.isPlaceholderData = true;
+    await mountAt('/lead-queue?state=IL');
+    expect(tableProps.current?.exportContext?.exportBlockedReason)
+      .toBe('Export waits for the rows of the current filters');
+    retryMocks.state.data = { leads: [], totalMatching: 0, returnedRows: 0, truncatedAt: null };
   });
 
   /**
-   * 2026-08-07 audit H4: the export's rules-version stamp comes from the
-   * AdminDep-gated /api/admin/rules, and this route fired it for every actor.
-   * A loan officer's console filled with 403s on a core product route.
+   * Audit runtime-06 (county ZIP read on the query layer). A failed rollup
+   * read used to set an empty ZIP set, and the empty state then CLAIMED the
+   * county had no ZIP-level coverage. Only a rollup that answered may say so.
    */
-  it('does not call the admin-scoped rules endpoint for a non-admin actor', async () => {
-    appMocks.canAccessAdmin = false;
-    await act(async () => {
-      root.render(
-        <QueryClientProvider client={queryClient}>
-          <MemoryRouter initialEntries={['/lead-queue']}>
-            <LeadQueue />
-          </MemoryRouter>
-        </QueryClientProvider>,
-      );
-    });
-    await settle();
-
-    expect(apiMocks.adminRules).not.toHaveBeenCalled();
-    // The rest of the route still loads its own data.
-    expect(apiMocks.portfolioPreview).toHaveBeenCalled();
-    appMocks.canAccessAdmin = true;
+  it('says a county has no ZIP-level coverage only when its rollup answered empty', async () => {
+    apiMocks.zipRollups.mockResolvedValue({ rollups: [] });
+    await mountAt('/lead-queue?county=17031');
+    expect(apiMocks.zipRollups).toHaveBeenCalledWith(
+      { countyFips: '17031' }, expect.any(AbortSignal), null, 'any', undefined,
+    );
+    expect(document.body.textContent).toContain(
+      'No ZIP-level rollup for this county in the current Cotality data coverage.',
+    );
   });
 
-  it('reads the rules version for an admin actor', async () => {
-    await act(async () => {
-      root.render(
-        <QueryClientProvider client={queryClient}>
-          <MemoryRouter initialEntries={['/lead-queue']}>
-            <LeadQueue />
-          </MemoryRouter>
-        </QueryClientProvider>,
-      );
-    });
-    await settle();
+  it('says no leads match when the county rollup has ZIPs', async () => {
+    apiMocks.zipRollups.mockResolvedValue({ rollups: [{ zip: '60617' }, { zip: '60628' }] });
+    await mountAt('/lead-queue?county=17031');
+    expect(document.body.textContent).toContain('No leads match this filter.');
+    expect(document.body.textContent).not.toContain('No ZIP-level rollup');
+  });
 
-    expect(apiMocks.adminRules).toHaveBeenCalled();
+  it('never turns a failed county rollup into a coverage claim', async () => {
+    apiMocks.zipRollups.mockRejectedValue(new Error('warehouse query failed'));
+    await mountAt('/lead-queue?county=17031');
+    expect(apiMocks.zipRollups).toHaveBeenCalledTimes(1);
+    expect(document.body.textContent).not.toContain('Resolving county ZIPs');
+    expect(document.body.textContent).toContain('No leads match this filter.');
+    expect(document.body.textContent).not.toContain('No ZIP-level rollup');
+  });
+
+  it('does not read county rollups without a county filter', async () => {
+    await mountAt('/lead-queue?state=IL');
+    expect(apiMocks.zipRollups).not.toHaveBeenCalled();
   });
 
   it('shows Genie cohort multi-value route filters in dropdown controls', async () => {
