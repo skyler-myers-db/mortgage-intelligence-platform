@@ -45,7 +45,7 @@
   font-size: var(--fs-16);
   outline: none;
 }
-.cmdk__input::placeholder { color: var(--text-4); }
+.cmdk__input::placeholder { color: var(--text-3); }
 .cmdk__hint,
 .cmdk__footer kbd {
   font-family: var(--font-mono);
@@ -88,6 +88,16 @@
   transition: background var(--dur-fast) var(--ease);
 }
 .cmdk__row.is-active { background: var(--accent-soft); color: var(--text-1); }
+/* The active row is the listbox cursor (aria-activedescendant) while focus
+   stays in the input. Its --accent-soft fill alone is 1.1-1.4:1 against the
+   panel, so while the input is keyboard-focused the cursor also wears the
+   shared ring, inset so the list's overflow never clips it (audit a11y-01;
+   the filter menu and topbar search got the same ring in
+   23-filter-listbox.css). */
+.cmdk__panel:has(.cmdk__input:focus-visible) .cmdk__row.is-active {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: calc(-1 * var(--focus-ring-width));
+}
 .cmdk__row:active { translate: 0 var(--pressed-shift); }
 .cmdk__row-icon { color: var(--text-3); flex-shrink: 0; }
 .cmdk__row.is-active .cmdk__row-icon { color: var(--accent-ink); }

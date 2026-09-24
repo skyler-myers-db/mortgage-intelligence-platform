@@ -576,7 +576,7 @@
 }
 .growth-agent-step__meta {
   margin-top: var(--sp-1);
-  color: var(--text-4);
+  color: var(--text-3);
   font-family: var(--font-mono);
   font-size: var(--fs-11);
 }

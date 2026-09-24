@@ -389,6 +389,47 @@ describe('accent text and glyphs use the ink token (a11y-01)', () => {
   });
 });
 
+describe('--text-4 is decoration, never readable metadata (a11y-01)', () => {
+  // --text-4 is the disabled / decorative ink (2.3-2.9:1 on the surfaces in
+  // either theme). The Growth Agent step meta, the palette placeholder and a
+  // gated segment card's em-dash count painted it as if it were text-3.
+  const DECORATIVE = ['.topbar__crumbs .sep', '.lineage-arrow'];
+  const sheets = [{ file: 'design-system/components.css (partials)', css: components }, ...featureStylesheets()];
+  const textFour = () =>
+    sheets.flatMap(({ file, css }) =>
+      rules(css)
+        .filter((rule) => /(?<![-\w])color:\s*var\(--text-4\)/.test(rule.block))
+        .map((rule) => ({ file, selector: rule.selector })),
+    );
+
+  it('paints --text-4 text only on the aria-hidden crumb separator and the lineage arrow glyph', () => {
+    expect(textFour().map((site) => site.selector).sort()).toEqual([...DECORATIVE].sort());
+  });
+
+  it('never paints a placeholder with --text-4', () => {
+    expect(textFour().filter((site) => site.selector.includes('::placeholder'))).toEqual([]);
+    const placeholder = rules(components).find((rule) => rule.selector === '.cmdk__input::placeholder');
+    expect(placeholder?.block).toMatch(/color:\s*var\(--text-3\)/);
+  });
+
+  it('moves the three metadata sites to --text-3', () => {
+    for (const selector of ['.growth-agent-step__meta', '.seg-card__count--gated', '.cmdk__input::placeholder']) {
+      const own = rules(components).filter((rule) => rule.selector === selector);
+      expect(own.map((rule) => rule.block).join(';'), selector).toMatch(/(?<![-\w])color:\s*var\(--text-3\)/);
+    }
+  });
+});
+
+describe('the palette cursor wears the ring while the input is keyboard-focused (a11y-01)', () => {
+  it('rings the active command row inside the panel', () => {
+    const rule = rules(components).find(
+      (candidate) => candidate.selector === '.cmdk__panel:has(.cmdk__input:focus-visible) .cmdk__row.is-active',
+    );
+    expect(rule?.block).toMatch(/outline:\s*var\(--focus-ring-width\) solid var\(--focus-ring-color\);/);
+    expect(rule?.block).toMatch(/outline-offset:\s*calc\(-1 \* var\(--focus-ring-width\)\);/);
+  });
+});
+
 describe('text inputs keep the shared focus ring (a11y-01)', () => {
   // These rules outrank the global `:focus-visible` (tokens.css), so an
   // `outline: none` in them removed the ring and left only the prototype's

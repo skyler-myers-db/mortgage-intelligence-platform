@@ -444,7 +444,7 @@
 .seg-card--gated:hover { transform: none; border-color: var(--line-2); }
 .seg-card--gated::before { opacity: 0.35; }
 .seg-card--gated::after { opacity: 0.12; }
-.seg-card__count--gated { color: var(--text-4); }
+.seg-card__count--gated { color: var(--text-3); }
 /* Evidence chip slot in the meta row; pushes to the row end. */
 .seg-card__evidence { margin-left: auto; display: inline-flex; }
 .seg-card--skeleton {
