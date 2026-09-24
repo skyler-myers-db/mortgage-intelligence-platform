@@ -5,12 +5,7 @@
  * vocabulary (tests/unit/test_rum_client_error.py).
  */
 import { describe, expect, it, vi } from 'vitest';
-import {
-  apiCallRoute,
-  isApiCallSampled,
-  serverTimingDetails,
-  templateApiPath,
-} from './rumApiRoute';
+import { apiCallRoute, isApiCallSampled, serverTimingDetails } from './rumApiRoute';
 
 const ORIGIN = 'https://mip.example';
 /** The per-tab sampling key (rumApiRoute.ts; the fixture harness seeds the same literal). */
@@ -20,7 +15,13 @@ function timing(name: string, duration = 0, description = '') {
   return { name, duration, description };
 }
 
-describe('templateApiPath', () => {
+/** Route templating, exercised through the public entry point (the
+ *  templating helper is module-private: error-telemetry review #1). */
+function templateApiPath(path: string): string | null {
+  return apiCallRoute(`${ORIGIN}${path}`, ORIGIN);
+}
+
+describe('api_call route templating', () => {
   it('canonicalizes /api/v1 and keeps only known literal segments', () => {
     expect(templateApiPath('/api/v1/borrowers/B-0123456789ABC/proof')).toBe('/api/borrowers/:id/proof');
     expect(templateApiPath('/api/borrowers/B-0123456789ABC')).toBe('/api/borrowers/:id');
@@ -59,18 +60,21 @@ describe('apiCallRoute', () => {
     expect(apiCallRoute(`${ORIGIN}/assets/index-a1.js`, ORIGIN)).toBeNull();
   });
 
-  it('never reports the telemetry POST, the health probes or the Genie progress poll', () => {
+  it('never reports the telemetry POST, the health probes or the Genie progress and job polls', () => {
     for (const path of [
       '/api/v1/telemetry/rum',
       '/api/telemetry/rum',
       '/api/v1/health',
       '/api/v1/admin/health',
       '/api/v1/genie/message/progress',
+      '/api/v1/genie/message/status',
+      '/api/genie/message/status',
     ]) {
       expect(apiCallRoute(`${ORIGIN}${path}`, ORIGIN), path).toBeNull();
     }
     // Siblings of an excluded path still report.
     expect(apiCallRoute(`${ORIGIN}/api/v1/genie/message/submit`, ORIGIN)).toBe('/api/genie/message/submit');
+    expect(apiCallRoute(`${ORIGIN}/api/v1/genie/message/complete`, ORIGIN)).toBe('/api/genie/message/complete');
     expect(apiCallRoute(`${ORIGIN}/api/v1/admin/settings`, ORIGIN)).toBe('/api/admin/settings');
   });
 

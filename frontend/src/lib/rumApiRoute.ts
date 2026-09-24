@@ -49,6 +49,9 @@ const EXCLUDED_TEMPLATES: ReadonlySet<string> = new Set([
   '/api/health',
   '/api/admin/health',
   '/api/genie/message/progress',
+  // The completion-job poll (audit 2026-09-21 genie-01): ~40/min per turn,
+  // the same rationale as the progress poll. Its job id never reaches RUM.
+  '/api/genie/message/status',
 ]);
 const EXCLUDED_PREFIX = '/api/telemetry/';
 
@@ -62,7 +65,7 @@ const EXCLUDED_PREFIX = '/api/telemetry/';
  * way. No mounted route comes near the limit (ten of the longest literal
  * segment would); this keeps one odd path from costing a batch.
  */
-export function templateApiPath(path: string): string | null {
+function templateApiPath(path: string): string | null {
   const pathOnly = path.split(/[?#]/, 1)[0] ?? '';
   const canonical = pathOnly.replace(/^\/api\/v\d+(?=\/|$)/, '/api');
   if (!canonical.startsWith('/api/')) return null;
