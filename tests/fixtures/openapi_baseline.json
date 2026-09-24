@@ -12210,6 +12210,209 @@
         "title": "PropertyLoanLookupResponse",
         "type": "object"
       },
+      "RateSensitivityProvenance": {
+        "description": "Evidence manifest: every table and rule the grid was read or derived from.",
+        "properties": {
+          "book_as_of": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Refresh anchor of the book.",
+            "title": "Book As Of"
+          },
+          "book_source": {
+            "description": "The book the grid was measured over.",
+            "title": "Book Source",
+            "type": "string"
+          },
+          "contactable_source": {
+            "description": "Where the live contactable subset comes from.",
+            "title": "Contactable Source",
+            "type": "string"
+          },
+          "gold_source": {
+            "description": "The precomputed gold grid the endpoint reads.",
+            "title": "Gold Source",
+            "type": "string"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "refreshed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refreshed At"
+          },
+          "rule_source": {
+            "description": "The UC functions re-run at each scenario par rate.",
+            "title": "Rule Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "gold_source",
+          "book_source",
+          "rule_source",
+          "contactable_source",
+          "note"
+        ],
+        "title": "RateSensitivityProvenance",
+        "type": "object"
+      },
+      "RateSensitivityResponse": {
+        "properties": {
+          "base_market_rate_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The par rate this refresh scored with, in percent (step 0). None when not built.",
+            "title": "Base Market Rate Pct"
+          },
+          "built": {
+            "description": "False until the gold refresh has built mip.gold.rate_sensitivity_rollup.",
+            "title": "Built",
+            "type": "boolean"
+          },
+          "provenance": {
+            "$ref": "#/components/schemas/RateSensitivityProvenance"
+          },
+          "scenario_market_rate_pct": {
+            "description": "The par rate each step describes, in percent, aligned to steps_bps.",
+            "items": {
+              "type": "number"
+            },
+            "title": "Scenario Market Rate Pct",
+            "type": "array"
+          },
+          "states": {
+            "items": {
+              "$ref": "#/components/schemas/RateSensitivityState"
+            },
+            "title": "States",
+            "type": "array"
+          },
+          "steps_bps": {
+            "description": "The scenario grid in basis points of par move (positive = par rises); empty when not built.",
+            "items": {
+              "type": "integer"
+            },
+            "title": "Steps Bps",
+            "type": "array"
+          },
+          "thresholds": {
+            "$ref": "#/components/schemas/RateSensitivityThresholds"
+          }
+        },
+        "required": [
+          "built",
+          "steps_bps",
+          "scenario_market_rate_pct",
+          "thresholds",
+          "states",
+          "provenance"
+        ],
+        "title": "RateSensitivityResponse",
+        "type": "object"
+      },
+      "RateSensitivityState": {
+        "description": "One state's scenario row, aligned to ``RateSensitivityResponse.steps_bps``.",
+        "properties": {
+          "addressable": {
+            "description": "Addressable borrowers in the state (the same at every step).",
+            "minimum": 0.0,
+            "title": "Addressable",
+            "type": "integer"
+          },
+          "contactable_in_the_money": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The contact-eligible subset of in_the_money at each step (live aggregate, clamped to in_the_money). None when not reported.",
+            "title": "Contactable In The Money"
+          },
+          "in_the_money": {
+            "description": "Borrowers clearing the refi screen at each step, aligned to steps_bps; each <= addressable.",
+            "items": {
+              "type": "integer"
+            },
+            "title": "In The Money",
+            "type": "array"
+          },
+          "rate_movable": {
+            "description": "Addressable borrowers with a gated note rate (active lien, bounded rate strictly inside 1%..15%): the only ones a scenario can move. Never above addressable.",
+            "minimum": 0.0,
+            "title": "Rate Movable",
+            "type": "integer"
+          },
+          "state": {
+            "description": "2-char USPS state code (uppercase).",
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "addressable",
+          "rate_movable",
+          "in_the_money"
+        ],
+        "title": "RateSensitivityState",
+        "type": "object"
+      },
+      "RateSensitivityThresholds": {
+        "description": "The refresh's in-the-money thresholds the whole grid was evaluated with.",
+        "properties": {
+          "min_equity_pct": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Equity Pct"
+          },
+          "min_spread_bps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Spread Bps"
+          }
+        },
+        "title": "RateSensitivityThresholds",
+        "type": "object"
+      },
       "RateSpreadBucket": {
         "properties": {
           "borrower_count": {
@@ -18298,6 +18501,29 @@
           }
         },
         "summary": "County Rollups",
+        "tags": [
+          "geo"
+        ]
+      }
+    },
+    "/api/geo/rate-sensitivity": {
+      "get": {
+        "deprecated": true,
+        "description": "Per-state in-the-money counts across the par-rate scenario grid.\n\nA scenario, not a forecast: each step re-runs ``fn_rate_spread`` /\n``fn_in_the_money`` at the refresh's par rate plus the step. ``built`` is\nFalse until the gold refresh job has built the grid. A cold warehouse\nsurfaces as the resilience layer's 503 ``warming_up``; there is no\nfallback grid, and the route writes no audit row.",
+        "operationId": "get_api_geo_rate_sensitivity_rate_sensitivity",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RateSensitivityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Rate Sensitivity",
         "tags": [
           "geo"
         ]
@@ -25956,6 +26182,28 @@
           }
         },
         "summary": "County Rollups",
+        "tags": [
+          "geo"
+        ]
+      }
+    },
+    "/api/v1/geo/rate-sensitivity": {
+      "get": {
+        "description": "Per-state in-the-money counts across the par-rate scenario grid.\n\nA scenario, not a forecast: each step re-runs ``fn_rate_spread`` /\n``fn_in_the_money`` at the refresh's par rate plus the step. ``built`` is\nFalse until the gold refresh job has built the grid. A cold warehouse\nsurfaces as the resilience layer's 503 ``warming_up``; there is no\nfallback grid, and the route writes no audit row.",
+        "operationId": "get_api_v1_geo_rate_sensitivity_rate_sensitivity",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RateSensitivityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Rate Sensitivity",
         "tags": [
           "geo"
         ]

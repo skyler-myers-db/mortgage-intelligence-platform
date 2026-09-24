@@ -394,6 +394,16 @@
           "object": "rate_window_weekly",
           "label": "Gold weekly rate window",
           "note": "Weekly FRED print against the current fixed-rate book's note-rate band, with the in-the-money count per week from the same fn_rate_spread / fn_in_the_money rule; the book is as-of the refresh anchor."
+        },
+        {
+          "id": "gold_rate_sensitivity_rollup",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "rate_sensitivity_rollup",
+          "label": "Gold rate sensitivity rollup",
+          "note": "Rate Lever grid: per state and par-rate step, the borrowers in the money with fn_rate_spread / fn_in_the_money re-run at par plus the step. A scenario, not a forecast."
         }
       ]
     },

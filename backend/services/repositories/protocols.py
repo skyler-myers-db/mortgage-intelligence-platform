@@ -43,6 +43,7 @@ from backend.schemas.geo import (
     StateRollupResponse,
     ZipRollupResponse,
 )
+from backend.schemas.geo_rate_sensitivity import RateSensitivityResponse
 from backend.schemas.lead import Borrower360, LeadSummary, SegmentSummary
 from backend.schemas.portfolio import (
     CampaignListResponse,
@@ -451,4 +452,19 @@ class RateWindowRepository(Protocol):
     """
 
     def rate_window(self) -> RateWindowResponse:
+        ...
+
+
+@runtime_checkable
+class RateSensitivityRepository(Protocol):
+    """Rate Lever read model (audit wow-stage-1).
+
+    Backing: ``mip.gold.rate_sensitivity_rollup`` -- the (state, step_bps)
+    grid of addressable borrowers in the money at par + step, precomputed by
+    the gold refresh job -- LEFT JOINed in one statement to a live
+    contactable aggregate. The read is audit-neutral; a missing table is
+    ``built=False``, never a 503.
+    """
+
+    def rate_sensitivity(self) -> RateSensitivityResponse:
         ...

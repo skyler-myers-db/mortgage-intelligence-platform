@@ -72,6 +72,7 @@ ROUTE_TEST_MANIFEST: dict[tuple[str, str], str] = {
     ): "tests/unit/test_genie_history_api.py",
     ("GET", "/api/geo/assignment-overlay"): "tests/unit/test_geo_assignment_overlay.py",
     ("GET", "/api/geo/county-rollups"): "tests/unit/test_geo_state_rollups.py",
+    ("GET", "/api/geo/rate-sensitivity"): "tests/unit/test_geo_rate_sensitivity.py",
     ("GET", "/api/geo/state-rollups"): "tests/unit/test_geo_state_rollups.py",
     ("GET", "/api/geo/zip-rollups"): "tests/unit/test_geo_state_rollups.py",
     ("GET", "/api/growth-agent"): "tests/unit/test_growth_agent_api.py",

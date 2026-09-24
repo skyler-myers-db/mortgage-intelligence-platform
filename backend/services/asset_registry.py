@@ -402,6 +402,18 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
         ),
     ),
     _descriptor(
+        "gold",
+        "rate_sensitivity_rollup",
+        title="Gold Rate Sensitivity Rollup",
+        description=(
+            "Rate Lever scenario grid: per state and par-rate step (-100 to +100 "
+            "bps), the addressable borrowers that clear this refresh's refi screen "
+            "with fn_rate_spread / fn_in_the_money re-run at par plus the step. A "
+            "scenario, not a forecast; rebuilt by the gold refresh, not on a "
+            "schedule."
+        ),
+    ),
+    _descriptor(
         "semantics",
         "portfolio_headline_metric_view",
         title="Portfolio Headline Metric View",
