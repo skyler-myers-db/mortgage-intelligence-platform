@@ -4,6 +4,12 @@ import type { RejectReasonCode } from './LeadTable.types';
 /** Concurrency cap for the bulk-approve client-side loop. */
 export const BULK_APPROVE_CONCURRENCY = 3;
 /**
+ * The backend's mutation budget (settings.mip_rate_limit_mutation_per_minute;
+ * draft, approve and reject all draw on it). A bulk run's ETA never promises
+ * a faster pace than this: tests/unit/test_bulk_eta_budget_parity.py pins it.
+ */
+export const MUTATION_BUDGET_PER_MINUTE = 120;
+/**
  * One-line rows at the comfortable `--row-h` token (44px; 36px compact; the
  * 1px row rule sits inside it, measured). The old 86px estimate described the
  * stacked-chip rows. Compact rows are shorter; measureElement corrects the

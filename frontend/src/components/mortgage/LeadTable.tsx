@@ -290,7 +290,12 @@ export function LeadTable({
   // Load the review chunk once the reader engages with rows (the draft is
   // requested only on Approve); the bulk review chunk once rows are selected.
   const reviewChunk = useLazyModule(REVIEW_CHUNK, openReview !== null || flow.cursor.cursorId !== null || expanded !== null);
-  const bulkChunk = useLazyModule(BULK_REVIEW_CHUNK, approval.selectionCount > 1);
+  const bulkRun = approval.bulkRun;
+  // The bulk chunk also carries a run's progress and report (tables-07).
+  const bulkChunk = useLazyModule(
+    BULK_REVIEW_CHUNK,
+    approval.selectionCount > 1 || approval.bulkApproving || bulkRun.result !== null,
+  );
   // The module cache is the truth: after one failed chunk load this hook's
   // state stays failed, yet the next Approve re-imports the chunk and drafts
   // (an audited DRAFT_OUTREACH write), so the review must render from the
@@ -305,7 +310,10 @@ export function LeadTable({
   // The result line follows an approve made through the review, so it ships
   // in the review's chunk (loaded by then), not in the table's.
   const DecisionToast = reviewModule?.LeadTableDecisionToast;
-  const BulkReview = bulkChunk.module?.LeadBulkApproveReview;
+  const bulkModule = bulkChunk.module ?? BULK_REVIEW_CHUNK.current();
+  const BulkReview = bulkModule?.LeadBulkApproveReview;
+  const BulkRunProgress = bulkModule?.LeadBulkRunProgress;
+  const BulkRunResult = bulkModule?.LeadBulkRunResult;
   const reviewProps = openReview && {
     review: openReview,
     actorEmail,
@@ -525,6 +533,10 @@ export function LeadTable({
       <span className="sr-only" role="status" aria-live="polite" data-testid="lead-decision-status">
         {flow.toast ? `Approved ${flow.toast.borrowerId}.` : ''}
       </span>
+      {/* A bulk run's start, each quarter, a Stop and the result (tables-07). */}
+      <span className="sr-only" role="status" aria-live="polite" data-testid="lead-bulk-run-status">
+        {bulkRun.announcement}
+      </span>
       <div
         ref={tableWrapRef}
         className={fillHeight ? 'tbl-wrap tbl-wrap--fill' : 'tbl-wrap'}
@@ -637,7 +649,9 @@ export function LeadTable({
           Opening the review for {reviewOpeningFor}…
         </div>
       )}
-      {approval.selectionCount > 0 && (
+      {/* The toolbar stays while a run is on the wire, even when a filter
+          change took every selected row off screen. */}
+      {(approval.selectionCount > 0 || approval.bulkApproving) && (
         <LeadTableBulkActions
           selectionCount={approval.selectionCount}
           selectedApprovalEligibleCount={approval.selectedApprovalEligibleCount}
@@ -659,6 +673,10 @@ export function LeadTable({
           assigneeRef={assigneeRef}
           shortcutsLive={singleKeysOn}
           samplesShown={samplesShown}
+          runKind={bulkRun.progress?.kind ?? null}
+          runStatus={bulkRun.progress && BulkRunProgress
+            ? <BulkRunProgress progress={bulkRun.progress} onStop={bulkRun.requestStop} />
+            : null}
           gateReview={BulkReview ? (
             <BulkReview
               // Samples drafted under one campaign binding go with it.
@@ -673,6 +691,9 @@ export function LeadTable({
             />
           ) : null}
         />
+      )}
+      {bulkRun.result && BulkRunResult && (
+        <BulkRunResult result={bulkRun.result} onDismiss={bulkRun.dismissResult} />
       )}
       {approval.bulkToast && (
         <LeadTableBulkToast
