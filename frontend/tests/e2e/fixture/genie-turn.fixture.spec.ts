@@ -268,6 +268,81 @@ test.describe('one announcer per surface', () => {
     // Seen on the route's Ask tab: the launcher is not badged for it.
     await expect(app.genieToggle()).not.toHaveClass(/is-genie-ready/);
   });
+
+  test('(h) "Answer ready" is said once: the panel opening and closing and a round trip off /ask-genie never replay it', async ({ app, page, mockApi }) => {
+    const turn = registerGenieTurn(mockApi);
+    await app.gotoRoute('/ask-genie');
+    // Log every text inserted into ANY Genie region (as `surface:text`), from
+    // a body-level observer so regions that mount later (the panel on first
+    // open, the route on return) are covered. A region that mounts already
+    // holding text is logged as `surface:mounted:text`.
+    await page.evaluate(() => {
+      const win = window as Window & { __genieSpoken?: string[] };
+      const spoken: string[] = [];
+      win.__genieSpoken = spoken;
+      const surfaceOf = (node: Node | null) =>
+        (node instanceof Element ? node : node?.parentElement)
+          ?.closest('[data-genie-announcer]')
+          ?.getAttribute('data-genie-announcer');
+      new MutationObserver((records) => {
+        for (const record of records) {
+          if (record.type === 'characterData') {
+            const surface = surfaceOf(record.target);
+            if (surface && record.target.textContent) spoken.push(`${surface}:${record.target.textContent}`);
+            continue;
+          }
+          record.addedNodes.forEach((node) => {
+            if (!node.textContent) return;
+            if (node.nodeType === Node.TEXT_NODE) {
+              const surface = surfaceOf(record.target);
+              if (surface) spoken.push(`${surface}:${node.textContent}`);
+              return;
+            }
+            if (!(node instanceof Element)) return;
+            for (const region of [node, ...node.querySelectorAll('[data-genie-announcer]')]) {
+              const surface = region.getAttribute('data-genie-announcer');
+              if (surface && region.textContent) spoken.push(`${surface}:mounted:${region.textContent}`);
+            }
+          });
+        }
+      }).observe(document.body, { childList: true, subtree: true, characterData: true });
+    });
+    const answerReadySaid = () =>
+      page.evaluate(() =>
+        ((window as Window & { __genieSpoken?: string[] }).__genieSpoken ?? []).filter((text) =>
+          text.endsWith(':Answer ready'),
+        ),
+      );
+
+    await askOnRoute(page);
+    turn.finishGenieTurn();
+    await expect(thread(page).locator('.genie-answer')).toHaveCount(1);
+    await expect(routeRegion(page)).toHaveText('Answer ready');
+    expect(await answerReadySaid(), 'the route said it when the answer landed').toEqual(['route:Answer ready']);
+
+    // The panel opens over /ask-genie (it mounts now) and shows the same answer.
+    const dialog = await app.openGenie();
+    await expect(dialog.locator('.genie-answer')).toHaveCount(1);
+    await expect(panelRegion(page)).toHaveText('');
+    await dialog.getByRole('button', { name: 'Close Genie' }).click();
+    await expect(app.geniePanel()).not.toHaveClass(/is-open/);
+    await expect(routeRegion(page)).toHaveText('');
+
+    // Leave /ask-genie with the panel mounted, then come back.
+    await nav(page, /^Leads/).click();
+    await expect(page).toHaveURL(/\/lead-queue$/);
+    await app.settle();
+    await expect(panelRegion(page)).toHaveText('');
+    await nav(page, /^Ask Genie/).click();
+    await expect(page).toHaveURL(/\/ask-genie$/);
+    await app.settle();
+    await expect(thread(page).locator('.genie-answer')).toHaveCount(1);
+    await page.clock.runFor(PROGRESS_POLL_MS * 2);
+    await expect(routeRegion(page)).toHaveText('');
+    expect(await answerReadySaid(), '"Answer ready" was said once, and never replayed').toEqual(['route:Answer ready']);
+    expect(turn.submits).toBe(1);
+    expect(turn.completes).toBe(1);
+  });
 });
 
 test.describe('axe', () => {
