@@ -12505,7 +12505,16 @@
                 "duration_ms",
                 "attempt",
                 "retryable",
-                "dependency"
+                "dependency",
+                "error_name",
+                "error_kind",
+                "error_source",
+                "boundary",
+                "api_route",
+                "cache",
+                "warehouse_ms",
+                "lakebase_ms",
+                "total_ms"
               ]
             },
             "title": "Details",
@@ -12519,7 +12528,8 @@
               "cls",
               "inp",
               "long_task",
-              "api_call"
+              "api_call",
+              "client_error"
             ],
             "title": "Metric",
             "type": "string"
