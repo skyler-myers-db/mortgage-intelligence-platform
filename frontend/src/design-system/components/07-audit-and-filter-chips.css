@@ -255,7 +255,8 @@
   background: var(--bg-2); border: 1px solid var(--line-1);
   border-radius: var(--r-md);
   font-size: var(--fs-12); color: var(--text-2);
-  cursor: pointer; transition: all var(--dur-fast) var(--ease);
+  cursor: pointer;
+  /* Transition: the shared control list in 01-app-shell.css (motion-05). */
   font-family: var(--font-sans);
 }
 .filter:hover { border-color: var(--line-2); color: var(--text-1); }

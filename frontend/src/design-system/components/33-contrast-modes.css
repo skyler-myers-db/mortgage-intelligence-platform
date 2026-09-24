@@ -1,0 +1,76 @@
+/* CONTRAST MODES (audit css-06 / a11y-10 / responsive-v3); additive, the
+   prototype has none. System colours only. Forcing keeps the cascade's
+   winner: a doubled class (.switch.switch) or !important must win it. */
+@media (forced-colors: active) {
+  /* Fill-only states vanished once forced. Text keeps its forced ink on
+     Chromium's Canvas backplate; HighlightText vanished there. */
+  .segmented.segmented button.is-active,
+  .switch.switch.on,
+  .filter.is-active,
+  .rail__item.is-active,
+  .topbar__icon-btn.is-active,
+  .drawer__tab.is-active,
+  .proof-tab.is-active,
+  .cmdk__row.is-active,
+  .filter-menu__item:is(.is-focused, .is-selected),
+  .topbar__search-result.is-active {
+    background-color: Highlight;
+    border-color: Highlight;
+  }
+  /* An svg has no backplate. */
+  :is(.segmented button, .filter, .rail__item, .topbar__icon-btn, .drawer__tab, .proof-tab, .cmdk__row, .topbar__search-result).is-active svg,
+  .filter-menu__item:is(.is-focused, .is-selected) svg { color: HighlightText !important; }
+  /* The cursor's inset ring. */
+  .filter-menu__item.is-focused { --focus-ring-color: HighlightText; }
+  .tweak-row .sw.is-active,
+  .zip-tile.is-selected { border-color: Highlight; }
+  .segmented,
+  .switch { border-color: CanvasText; }
+  .switch.switch::after {
+    forced-color-adjust: none;
+    background-color: CanvasText;
+  }
+  .switch.switch.on::after { background-color: HighlightText; }
+
+  /* Non-text data marks keep their encoding, edged in CanvasText. */
+  .conf__bar {
+    forced-color-adjust: none;
+    background-color: Canvas;
+    border: 1px solid CanvasText;
+  }
+  .conf__bar.conf__bar.on { background-color: CanvasText; }
+  .map-region.map-region {
+    forced-color-adjust: none;
+    stroke: CanvasText;
+  }
+  .map-legend__bar span,
+  .zip-tile {
+    forced-color-adjust: none;
+    border: 1px solid CanvasText;
+  }
+  .map-label { forced-color-adjust: none; }
+  .topbar__pill .dot.dot {
+    forced-color-adjust: none;
+    background-color: CanvasText;
+    box-shadow: none;
+    animation: none;
+  }
+
+  /* Score chips carry text, so they are forced; the band becomes the edge. */
+  .score--high { border-style: solid; border-width: var(--focus-ring-width); }
+  .score--med { border-style: dashed; }
+  .score--low { border-style: dotted; }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .topbar,
+  .route-nav,
+  .map-legend {
+    background: var(--bg-1);
+    backdrop-filter: none;
+  }
+  .cmdk,
+  .drawer-scrim,
+  .offer-mock-scrim,
+  .session-dialog::backdrop { backdrop-filter: none; }
+}

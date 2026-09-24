@@ -23,13 +23,43 @@
  *    sets is reset inside `@media print` to print.css's monochrome value,
  *    because the (0,2,0) compounds outrank print.css's (0,1,0) remap.
  */
+// @ts-expect-error Frontend app types intentionally exclude Node globals; this
+// test reads the app's TSX sources under Vitest only.
+import { readFileSync, readdirSync } from 'node:fs';
+// @ts-expect-error see node:fs note above.
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { designCss } from '../test/designCss';
 import { featureStylesheets } from '../test/featureCss';
 import { TokenCascade, mediaBlocks, readPrintCss, readTokensCss, topLevelRules } from '../test/tokenCascade';
 
+declare const process: { cwd(): string };
+
 const tokens = readTokensCss();
 const components = designCss();
+
+function stripCssComments(css: string): string {
+  return css.replace(/\/\*[\s\S]*?\*\//g, '');
+}
+
+/**
+ * Custom properties a non-test .ts/.tsx under src sets: a quoted `'--x'`
+ * (an inline `style` key) or `setProperty('--x', ...)`. Test files, the
+ * test helpers and the Storybook/test fixtures are not the app.
+ */
+function tsxCustomPropertySetters(): Set<string> {
+  const src = join(process.cwd(), 'src');
+  const files = (readdirSync(src, { recursive: true }) as string[])
+    .map((entry) => entry.split('\\').join('/'))
+    .filter((entry) => /\.tsx?$/.test(entry) && !/\.test\.tsx?$/.test(entry))
+    .filter((entry) => !entry.startsWith('test/') && !entry.startsWith('mocks/'));
+  const found = new Set<string>();
+  for (const file of files) {
+    const text = readFileSync(join(src, file), 'utf8') as string;
+    for (const match of text.matchAll(/['"`](--[\w-]+)['"`]/g)) found.add(match[1]);
+  }
+  return found;
+}
 
 describe('focus ring is one system (css-v1 / a11y-01)', () => {
   it('routes the global :focus-visible ring through the focus-ring tokens', () => {
@@ -56,13 +86,152 @@ describe('motion tokens resolve (motion-04)', () => {
     expect(cascade.resolve('--ease-standard')).toBe(cascade.resolve('--ease'));
   });
 
-  it('resolves every duration and easing token the partials reference', () => {
+  it('still references the alias from a partial', () => {
+    expect(components).toMatch(/var\(--ease-standard\)/);
+  });
+});
+
+/**
+ * css-04 / motion-04: an undefined custom property voids its declaration at
+ * computed-value time, silently (`var(--stroke)` dropped the ZIP reconcile
+ * divider, `var(--shadow-1)` the refresh pill's shadow, and the
+ * `--ease-standard` transitions snapped). Every `var(--x)` in the component
+ * partials and the feature sheets must name a property some stylesheet
+ * under src declares, or one the app sets from TSX (listed below, each
+ * checked against a real setter so a stale entry fails too).
+ */
+describe('every referenced custom property resolves (css-04 / motion-04)', () => {
+  /** Set on an element's inline style from TSX, and only there. */
+  const TSX_SET = [
+    '--bin-alpha', '--bin-h', '--bin-w', '--bin-x', '--bin-y',
+    '--dot-x', '--dot-y', '--facet-share', '--hover-x', '--hover-y', '--tick-pos',
+  ];
+  /** Read with a fallback on purpose: TSX sets them on some elements only. */
+  const TSX_SET_WITH_FALLBACK = [
+    '--bar-pct', '--chip-hue', '--filter-menu-space', '--genie-composer-block-size',
+    '--genie-route-nav-block-size', '--lead-table-fill-block', '--offer-action-bar-block-size',
+    '--offer-action-bar-genie-clearance', '--receipt-i', '--seg-color', '--tile-i', '--ribbon-i',
+  ];
+  const consumers = [{ file: 'design-system/components.css (partials)', css: components }, ...featureStylesheets()];
+  const declared = new Set(
+    [tokens, readPrintCss(), components, ...featureStylesheets().map((sheet) => sheet.css)].flatMap((css) =>
+      [...stripCssComments(css).matchAll(/(--[\w-]+)\s*:/g)].map((match) => match[1]),
+    ),
+  );
+  const references = consumers.flatMap(({ file, css }) =>
+    [...stripCssComments(css).matchAll(/var\(\s*(--[\w-]+)\s*([,)])/g)].map((match) => ({
+      file,
+      name: match[1],
+      fallback: match[2] === ',',
+    })),
+  );
+
+  it('declares every fallback-free var() somewhere, or sets it from TSX', () => {
+    const missing = references
+      .filter((ref) => !ref.fallback && !declared.has(ref.name) && !TSX_SET.includes(ref.name))
+      .map((ref) => `${ref.file}: ${ref.name}`);
+    expect(references.length).toBeGreaterThan(1000);
+    expect([...new Set(missing)], 'referenced but never declared: the declaration is void').toEqual([]);
+  });
+
+  it('never leans on a fallback for a property nothing declares or sets', () => {
+    // `var(--surface-2, var(--bg-1))` always painted the fallback: --surface-2
+    // exists nowhere, so the first argument was dead code.
+    const known = new Set([...TSX_SET, ...TSX_SET_WITH_FALLBACK]);
+    const dead = references
+      .filter((ref) => ref.fallback && !declared.has(ref.name) && !known.has(ref.name))
+      .map((ref) => `${ref.file}: ${ref.name}`);
+    expect([...new Set(dead)], 'use the fallback directly or declare the property').toEqual([]);
+  });
+
+  it('lists only properties a non-test source file really sets', () => {
+    const setters = tsxCustomPropertySetters();
+    const stale = [...TSX_SET, ...TSX_SET_WITH_FALLBACK].filter((name) => !setters.has(name));
+    expect(stale, 'no .ts/.tsx under src sets these any more: drop them from the list').toEqual([]);
+    const unused = [...TSX_SET, ...TSX_SET_WITH_FALLBACK].filter((name) => !references.some((ref) => ref.name === name));
+    expect(unused, 'no stylesheet reads these any more').toEqual([]);
+  });
+});
+
+/**
+ * motion-04: component CSS times and eases motion through the --dur-* /
+ * --ease-* / --stagger-* tokens only (1.2s pulses, a 1.4s shimmer, a 16ms
+ * stagger, bare `ease` / `ease-in-out` and five hand-written Sankey delays
+ * used to bypass them). Two exemptions: the global reduced-motion reset
+ * (01-app-shell.css: `0.01ms` / `0s !important`), and a discrete
+ * `visibility` transition entry, which may hold `0s` and `linear` (the
+ * drawer / Genie exit contract: `visibility 0s linear var(--dur-exit)`).
+ */
+describe('motion timings come from tokens (motion-04)', () => {
+  const MOTION_PROPERTY = /^(?:transition|animation)(?:-[a-z-]+)?$/;
+  const TIME_LITERAL = /(?<![\w.-])\d*\.?\d+m?s(?![\w-])/;
+  const EASING_LITERAL =
+    /(?<![\w-])(?:ease(?:-in-out|-in|-out)?|linear|step-start|step-end)(?![\w(-])|(?<![\w-])(?:cubic-bezier|steps|linear)\(/;
+  const REDUCED_MOTION_RESET = '*, *::before, *::after';
+
+  /** Top-level comma split (commas inside var() / calc() stay in their entry). */
+  function entries(value: string): string[] {
+    const out: string[] = [];
+    let depth = 0;
+    let start = 0;
+    for (let i = 0; i < value.length; i += 1) {
+      if (value[i] === '(') depth += 1;
+      else if (value[i] === ')') depth -= 1;
+      else if (value[i] === ',' && depth === 0) {
+        out.push(value.slice(start, i).trim());
+        start = i + 1;
+      }
+    }
+    out.push(value.slice(start).trim());
+    return out;
+  }
+
+  function literalMotion(css: string): string[] {
+    const offenders: string[] = [];
+    for (const rule of rules(css)) {
+      if (rule.selector === REDUCED_MOTION_RESET) continue;
+      for (const part of rule.block.split(';')) {
+        const colon = part.indexOf(':');
+        if (colon === -1) continue;
+        const property = part.slice(0, colon).trim();
+        if (!MOTION_PROPERTY.test(property)) continue;
+        for (const entry of entries(part.slice(colon + 1).trim())) {
+          const checked = /^visibility\s/.test(entry)
+            ? entry.replace(/(?<![\w.-])0m?s(?![\w-])/g, '').replace(/(?<![\w-])linear(?![\w(-])/g, '')
+            : entry;
+          if (TIME_LITERAL.test(checked) || EASING_LITERAL.test(checked)) offenders.push(`${rule.selector} { ${property}: ${entry} }`);
+        }
+      }
+    }
+    return offenders;
+  }
+
+  it('finds a literal duration, delay or easing keyword where one is written', () => {
+    expect(literalMotion('.kpi { transition: border-color 200ms var(--ease); }')).toHaveLength(1);
+    expect(literalMotion('.x { animation: spin var(--dur-pulse) ease-in-out infinite; }')).toHaveLength(1);
+    expect(literalMotion('.x { animation-delay: calc(var(--tile-i) * 16ms); }')).toHaveLength(1);
+    expect(literalMotion('.x { transition: opacity var(--dur-fast) linear; }')).toHaveLength(1);
+    expect(literalMotion('.x { transition: visibility 200ms linear 0s; }')).toHaveLength(1);
+    expect(literalMotion('.x { transition: opacity var(--dur-fast) var(--ease-in-out), visibility 0s linear var(--dur-exit); }')).toEqual([]);
+  });
+
+  it('writes no numeric duration or delay and no bare easing keyword in component CSS', () => {
+    const sheets = [{ file: 'design-system/components.css (partials)', css: components }, ...featureStylesheets()];
+    const offenders = sheets.flatMap(({ file, css }) => literalMotion(css).map((where) => `${file}: ${where}`));
+    expect(offenders, 'use a --dur-* / --ease-* / --stagger-* token (tokens.css)').toEqual([]);
+  });
+
+  it('keeps the literal-free values the motion scale replaced', () => {
     const cascade = new TokenCascade(tokens, { theme: 'dark', accent: 'bright' });
-    const referenced = new Set<string>();
-    for (const match of components.matchAll(/var\((--(?:dur|ease)(?:-[a-z0-9]+)*)\)/g)) referenced.add(match[1]);
-    expect(referenced.has('--ease-standard'), 'the partials still reference the alias').toBe(true);
-    const unresolved = [...referenced].filter((name) => cascade.raw(name) === undefined);
-    expect(unresolved, 'referenced in a partial but never defined in tokens.css').toEqual([]);
+    expect(cascade.raw('--dur-instant')).toBe('80ms');
+    expect(cascade.raw('--dur-pulse')).toBe('1.2s');
+    expect(cascade.raw('--dur-shimmer')).toBe('1.4s');
+    expect(cascade.raw('--dur-pulse-slow')).toBe('1.6s');
+    expect(cascade.raw('--ease-in-out')).toBe('cubic-bezier(0.42, 0, 0.58, 1)');
+    expect(cascade.raw('--stagger-step')).toBe('16ms');
+    expect(cascade.raw('--stagger-step-lg')).toBe('70ms');
+    // --ease / --ease-exit carry the out / in roles; no unconsumed aliases.
+    for (const name of ['--ease-out', '--ease-in', '--ease-spring']) expect(cascade.raw(name), name).toBeUndefined();
   });
 });
 
@@ -220,14 +389,66 @@ describe('accent text and glyphs use the ink token (a11y-01)', () => {
   });
 });
 
+describe('--text-4 is decoration, never readable metadata (a11y-01)', () => {
+  // --text-4 is the disabled / decorative ink (2.3-2.9:1 on the surfaces in
+  // either theme). The Growth Agent step meta, the palette placeholder and a
+  // gated segment card's em-dash count painted it as if it were text-3.
+  const DECORATIVE = ['.topbar__crumbs .sep', '.lineage-arrow'];
+  const sheets = [{ file: 'design-system/components.css (partials)', css: components }, ...featureStylesheets()];
+  const textFour = () =>
+    sheets.flatMap(({ file, css }) =>
+      rules(css)
+        .filter((rule) => /(?<![-\w])color:\s*var\(--text-4\)/.test(rule.block))
+        .map((rule) => ({ file, selector: rule.selector })),
+    );
+
+  it('paints --text-4 text only on the aria-hidden crumb separator and the lineage arrow glyph', () => {
+    expect(textFour().map((site) => site.selector).sort()).toEqual([...DECORATIVE].sort());
+  });
+
+  it('never paints a placeholder with --text-4', () => {
+    expect(textFour().filter((site) => site.selector.includes('::placeholder'))).toEqual([]);
+    const placeholder = rules(components).find((rule) => rule.selector === '.cmdk__input::placeholder');
+    expect(placeholder?.block).toMatch(/color:\s*var\(--text-3\)/);
+  });
+
+  it('moves the three metadata sites to --text-3', () => {
+    // The gated count is a compound selector: the bare modifier lost to the
+    // later .seg-card__count base rule and never painted.
+    for (const selector of ['.growth-agent-step__meta', '.seg-card__count.seg-card__count--gated', '.cmdk__input::placeholder']) {
+      const own = rules(components).filter((rule) => rule.selector === selector);
+      expect(own.map((rule) => rule.block).join(';'), selector).toMatch(/(?<![-\w])color:\s*var\(--text-3\)/);
+    }
+  });
+});
+
+describe('the palette cursor wears the ring while the input is keyboard-focused (a11y-01)', () => {
+  it('rings the active command row inside the panel', () => {
+    const rule = rules(components).find(
+      (candidate) => candidate.selector === '.cmdk__panel:has(.cmdk__input:focus-visible) .cmdk__row.is-active',
+    );
+    expect(rule?.block).toMatch(/outline:\s*var\(--focus-ring-width\) solid var\(--focus-ring-color\);/);
+    expect(rule?.block).toMatch(/outline-offset:\s*calc\(-1 \* var\(--focus-ring-width\)\);/);
+  });
+});
+
 describe('text inputs keep the shared focus ring (a11y-01)', () => {
   // These rules outrank the global `:focus-visible` (tokens.css), so an
   // `outline: none` in them removed the ring and left only the prototype's
   // 1px `--accent` border swap (design_files/index.html:770-772), 1.9:1 in
   // light + bright and invisible under forced colours.
   // `.admin-filter-input` retired with the audit explorer rewrite, whose
-  // filters are `.form-input` fields.
-  const TEXT_INPUTS = ['.genie__input input', '.form-input'];
+  // filters are `.form-input` fields. css-06 adds the palette input, the
+  // Console's (prototype-verbatim, index.html:921) select / text rule, and
+  // the Genie panel's keyboard resize handle.
+  const TEXT_INPUTS = [
+    '.genie__input input',
+    '.form-input',
+    '.cmdk__input',
+    '.tweak-row input[type="text"]',
+    '.tweak-row select',
+    '.genie__resize:focus-visible',
+  ];
 
   it('never switches the outline off on a text-entry control', () => {
     const all = rules(components);
@@ -237,6 +458,28 @@ describe('text inputs keep the shared focus ring (a11y-01)', () => {
       const off = own.filter((rule) => /(?<![-\w])outline:\s*(?:none|0)(?![\w.%])/.test(rule.block));
       expect(off.map((rule) => rule.selector), `${selector} must keep the global focus ring`).toEqual([]);
     }
+  });
+
+  it('insets the resize handle ring so the panel corner does not clip it (css-06)', () => {
+    const own = rules(components).filter((rule) => rule.selector === '.genie__resize:focus-visible');
+    expect(own.map((rule) => rule.block).join(';')).toMatch(/outline-offset:\s*calc\(-1 \* var\(--focus-ring-width\)\);/);
+  });
+});
+
+describe('the Admin Config switches share the Console switch (css-06)', () => {
+  // admin-config.tsx renders `button.switch` straight inside `.admin-row`;
+  // only `.tweak-row .switch` and `.campaign-setup__toggle .switch` were
+  // styled, so "Show evidence chips" / "Show signal meters" were empty,
+  // stateless buttons.
+  it('names .admin-row > .switch beside every .tweak-row .switch rule', () => {
+    const switchRules = rules(components).filter((rule) => /\.tweak-row \.switch(?![\w-])/.test(rule.selector));
+    expect(switchRules.map((rule) => rule.selector)).toEqual([
+      '.tweak-row .switch, .admin-row > .switch',
+      '.tweak-row .switch::after, .admin-row > .switch::after',
+      '.tweak-row .switch.on, .admin-row > .switch.on',
+      '.tweak-row .switch.on::after, .admin-row > .switch.on::after',
+      '.tweak-row .switch:active, .admin-row > .switch:active',
+    ]);
   });
 });
 

@@ -33,7 +33,7 @@
   border-radius: inherit;
   border: calc(var(--sp-1) / 2) solid var(--accent);
   pointer-events: none;
-  animation: genie-launcher-ring var(--dur-heartbeat) ease-in-out infinite;
+  animation: genie-launcher-ring var(--dur-heartbeat) var(--ease-in-out) infinite;
 }
 @keyframes genie-launcher-ring {
   0%, 100% { opacity: 0.3; }

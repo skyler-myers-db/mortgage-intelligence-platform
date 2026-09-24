@@ -6,6 +6,7 @@
 import AxeBuilder from '@axe-core/playwright';
 import type { Locator, Page } from '@playwright/test';
 import type { SegmentSummary } from '../../../src/types';
+import type { AppDriver } from './app';
 import { PRIMARY_BORROWER } from './data/borrowers';
 import {
   ALL_CODE_ELIGIBLE_SEGMENTS,
@@ -31,6 +32,44 @@ const CARD_ROWS = [
 ] as const;
 /** Prototype card is ~195px (module_0_prototype_2.png); the app-added rows fit in 260. */
 const MAX_CARD_HEIGHT = 260;
+/** `.seg-grid` lays six columns from a 1281px `main` container (10-native-analytics.css). */
+const SIX_COLUMN_MIN_CONTAINER = 1281;
+/** The design width, and the narrowest viewport still in the six-column band. */
+const CARD_WIDTHS = [1440, 'narrowest'] as const;
+type CardWidth = (typeof CARD_WIDTHS)[number];
+
+function widthLabel(width: CardWidth): string {
+  return width === 1440 ? '1440px' : 'the narrowest six-column width';
+}
+
+async function segGridColumns(page: Page): Promise<number> {
+  return page.locator('.seg-grid').evaluate((grid) => getComputedStyle(grid).gridTemplateColumns.split(' ').length);
+}
+
+/**
+ * Open the route at one of the card widths. The narrowest six-column
+ * viewport is MEASURED, not assumed: everything in the viewport outside
+ * `.main`'s content box (the rail, and the scrollbar lane `.main` reserves
+ * with `scrollbar-gutter: stable`, audit css-09) is read at 1440 and added to
+ * the band's floor. A literal 1356 fell out of the band, into three columns,
+ * once the reserved lane took 11px of the container. The band edge is
+ * checked both ways: six columns there, fewer one pixel narrower.
+ */
+async function openAtCardWidth(app: AppDriver, page: Page, width: CardWidth): Promise<number> {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await app.gotoRoute(ROUTE);
+  if (width === 1440) return 1440;
+  const chrome = await page.locator('.main').evaluate((main) => {
+    const style = getComputedStyle(main);
+    return window.innerWidth - (main.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight));
+  });
+  const narrowest = SIX_COLUMN_MIN_CONTAINER + chrome;
+  await page.setViewportSize({ width: narrowest - 1, height: 900 });
+  expect(await segGridColumns(page), `one pixel under ${narrowest}px leaves the six-column band`).toBeLessThan(6);
+  await page.setViewportSize({ width: narrowest, height: 900 });
+  expect(await segGridColumns(page), `${narrowest}px is inside the six-column band`).toBe(6);
+  return narrowest;
+}
 
 interface CardGeometry {
   code: string;
@@ -155,13 +194,12 @@ for (const theme of FIXTURE_THEMES) {
 
     // A national footprint puts headline counts at six to eight digits. The
     // count must stay one unbroken line (never `1,234,56` / `7`) and inside
-    // its card, with `avg` giving way instead. 1356 is the narrowest card of
+    // its card, with `avg` giving way instead, down to the narrowest card of
     // the six-column band.
-    for (const width of [1440, 1356] as const) {
-      test(`six- to eight-digit counts stay on one line inside the card at ${width}px, rows aligned`, async ({ app, mockApi, page }) => {
+    for (const width of CARD_WIDTHS) {
+      test(`six- to eight-digit counts stay on one line inside the card at ${widthLabel(width)}, rows aligned`, async ({ app, mockApi, page }) => {
         registerBigCountSegments(mockApi);
-        await page.setViewportSize({ width, height: 900 });
-        await app.gotoRoute(ROUTE);
+        await openAtCardWidth(app, page, width);
         await expect(page.locator('.seg-grid .seg-card__count')).toHaveText(
           BIG_SEGMENT_COUNTS.map((count) => count.toLocaleString('en-US')),
         );
@@ -183,19 +221,19 @@ for (const theme of FIXTURE_THEMES) {
     // the state chip, the source name and the evidence chip to three lines,
     // and the shared row stretched its connected neighbours with it (302px
     // at 1440). Each of the three now takes one line of a row it shares.
-    for (const width of [1440, 1356] as const) {
-      test(`gated cards put the state chip beside the count, the source on one line and the evidence chip alone in the meta row, rows aligned, at ${width}px`, async ({ app, mockApi, page }) => {
+    for (const width of CARD_WIDTHS) {
+      test(`gated cards put the state chip beside the count, the source on one line and the evidence chip alone in the meta row, rows aligned, at ${widthLabel(width)}`, async ({ app, mockApi, page }) => {
         registerGatedSegments(mockApi);
-        await page.setViewportSize({ width, height: 900 });
-        await app.gotoRoute(ROUTE);
+        await openAtCardWidth(app, page, width);
         const cards = await cardGeometry(page);
         expect(cards).toHaveLength(GATED_SEGMENTS.length);
         const gatedRows = GATED_SEGMENTS.filter((row) => row.source_status !== 'connected');
         await expect(page.locator('.seg-grid .seg-card--gated')).toHaveCount(gatedRows.length);
         const gridRows = new Map<number, CardGeometry[]>();
         for (const card of cards) {
-          // The 260px target is the 1440 design width's (at 1356 a connected
-          // card's own meta row wraps its Ask Genie entry, gated or not).
+          // The 260px target is the 1440 design width's (at the narrowest
+          // six-column width a connected card's own meta row wraps its Ask
+          // Genie entry, gated or not).
           if (width === 1440) expect(card.height, `height of "${card.code}"`).toBeLessThanOrEqual(MAX_CARD_HEIGHT);
           const key = Math.round(card.top);
           gridRows.set(key, [...(gridRows.get(key) ?? []), card]);

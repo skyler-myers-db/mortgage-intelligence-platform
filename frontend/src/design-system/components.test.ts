@@ -208,6 +208,21 @@ describe('layout containment contracts', () => {
     expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.funnel-sankey--enter \.funnel-sankey__ribbon\s*\{[^}]*opacity:\s*1;/s);
   });
 
+  /**
+   * 2026-09-21 audit motion-04: five hand-written nth-of-type delays
+   * (40/110/180/250/320ms) staggered the ribbons, so a 7th stage snapped in
+   * at 0ms. One rule on the ribbon's own index keeps those five exactly
+   * (40 + 70*i) and staggers any further ribbon.
+   */
+  it('staggers every Sankey ribbon from its index, not a list of nth-of-type delays', () => {
+    const css = designCss();
+    expect(css).toMatch(
+      /\.funnel-sankey--enter \.funnel-sankey__ribbon\s*\{[^}]*animation-delay:\s*calc\(var\(--dur-instant\) \/ 2 \+ var\(--ribbon-i, 0\) \* var\(--stagger-step-lg\)\);/s,
+    );
+    expect(css).not.toMatch(/\.funnel-sankey__ribbon:nth-of-type/);
+    expect(tokensCss()).toMatch(/--dur-instant:\s*80ms;[\s\S]*--stagger-step-lg:\s*70ms;/);
+  });
+
   it('animates map level transitions without collapsing the hero map flex layout (Buyer-Wow #4)', () => {
     const css = designCss();
     // The keyed wrapper MUST be flex-transparent: it takes .map-wrap's flex:1
@@ -315,7 +330,7 @@ describe('layout containment contracts', () => {
     expect(css).toMatch(/\.rail__item\.is-active\s*\{[^}]*color:\s*var\(--accent-ink\);/s);
     expect(css).toMatch(/\.topbar__icon-btn\.is-active\s*\{[^}]*color:\s*var\(--accent-ink\);/s);
     expect(css).toMatch(/\.filter\.is-active\s*\{[^}]*color:\s*var\(--accent-ink\);/s);
-    expect(css).toMatch(/\.proof-tab\.is-active,[^{]+\{[^}]*color:\s*var\(--accent-ink\);/s);
+    expect(css).toMatch(/\.proof-tab\.is-active\s*\{[^}]*color:\s*var\(--accent-ink\);/s);
     expect(css).toMatch(/\.filter-menu__item\.is-selected\s*\{[^}]*color:\s*var\(--accent-ink\);/s);
     expect(css).toMatch(/\.text-accent\s*\{[^}]*color:\s*var\(--accent-ink\);/s);
     expect(css).toMatch(/\.icon-accent\s*\{[^}]*color:\s*var\(--accent-ink\);/s);
@@ -524,6 +539,13 @@ describe('layout containment contracts', () => {
     expect(css).toMatch(/\.route-nav \.filter,\s*\.route-nav \.filter:hover,\s*\.route-nav \.filter:focus-visible\s*\{\s*text-decoration:\s*none;/s);
   });
 
+  /** Wave-1c follow-up #14: at 400% zoom the sticky nav covered `.main`. */
+  it('docks the route nav only in a viewport at least 40rem tall', () => {
+    const css = designCss();
+    expect(css).not.toMatch(/\n\.route-nav\s*\{[^}]*position:\s*sticky/s);
+    expect(css).toMatch(/@media \(min-height: 40rem\)\s*\{\s*\.route-nav\s*\{\s*position:\s*sticky;\s*top:\s*0;\s*z-index:\s*var\(--z-sticky\);\s*\}\s*\}/s);
+  });
+
   it('lets segment cards wrap content instead of clipping labels or pending copy', () => {
     const css = designCss();
 
@@ -535,5 +557,230 @@ describe('layout containment contracts', () => {
     expect(css).toMatch(/\.seg-card__sub\s*\{[^}]*overflow-wrap:\s*anywhere;/s);
     expect(css).toMatch(/\.seg-card__meta\s*\{[^}]*flex-wrap:\s*wrap;/s);
     expect(css).toMatch(/\.seg-card__meta-item\s*\{[^}]*overflow-wrap:\s*anywhere;/s);
+  });
+});
+
+describe('contrast-mode partial order (css-06 / a11y-10 / responsive-v3)', () => {
+  // 33 overrides partials 01-32 at equal specificity, so it must come after
+  // all of them. Later partials (34+, other lanes) may follow it.
+  it('imports 33-contrast-modes.css after every partial it overrides', () => {
+    const entry = readFileSync(join(process.cwd(), 'src/design-system/components.css'), 'utf8');
+    const imports = [...entry.matchAll(/@import\s+["']\.\/components\/(\d+)-[\w-]+\.css["'];/g)].map((match) => Number(match[1]));
+    const at = imports.indexOf(33);
+    expect(at, '33-contrast-modes.css is imported').toBeGreaterThan(0);
+    expect(imports.slice(at + 1).filter((n) => n <= 32), 'no 01-32 partial after 33').toEqual([]);
+    expect(entry).toMatch(/@import "\.\/components\/32-feedback\.css";\n@import "\.\/components\/33-contrast-modes\.css";/);
+  });
+});
+
+/** `selector { declarations }` of the innermost rule blocks, comments stripped. */
+function cssRules(css: string): Array<{ selector: string; block: string }> {
+  const text = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  return [...text.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((match) => ({
+    selector: match[1].trim().replace(/\s+/g, ' '),
+    block: match[2],
+  }));
+}
+
+type CssDeclaration = { where: string; selector: string; property: string; value: string };
+let declarationsCache: CssDeclaration[] | undefined;
+
+/** Every `property: value` of the partials and the feature sheets, tagged with its rule (read once). */
+function cssDeclarations(): CssDeclaration[] {
+  declarationsCache ??= readDeclarations();
+  return declarationsCache;
+}
+
+function readDeclarations(): CssDeclaration[] {
+  const sheets = [{ file: 'design-system/components.css (partials)', css: designCss() }, ...featureStylesheets()];
+  return sheets.flatMap(({ file, css }) =>
+    cssRules(css).flatMap(({ selector, block }) =>
+      block
+        .split(';')
+        .map((part) => part.trim())
+        .filter((part) => part.includes(':'))
+        .map((part) => {
+          const colon = part.indexOf(':');
+          const property = part.slice(0, colon).trim();
+          return { where: `${file}: ${selector}`, selector, property, value: part.slice(colon + 1).trim() };
+        }),
+    ),
+  );
+}
+
+/** Transitioned property names of one `transition` / `transition-property` value. */
+function transitionedProperties(value: string): string[] {
+  return value.split(/,(?![^(]*\))/).map((entry) => entry.trim().split(/\s+/)[0]);
+}
+
+/** Whether a rule's selector list names this exact selector. */
+const selectsExactly = (list: string, selector: string) => list.split(',').map((part) => part.trim()).includes(selector);
+
+/**
+ * The transitioned properties that win for this selector: the last
+ * `transition` (in cascade order: partials, then the lazy feature sheets)
+ * whose selector list names it, skipping the reduced-motion `none` resets.
+ * Every caller's rules are single-class or equal-specificity lists, so source
+ * order decides, as it does in the browser.
+ */
+function transitionOf(selector: string): string[] {
+  const found = cssDeclarations().filter(
+    (d) => d.property === 'transition' && d.value !== 'none' && selectsExactly(d.selector, selector),
+  );
+  expect(found.length, `${selector} has a transition`).toBeGreaterThan(0);
+  return transitionedProperties(found[found.length - 1].value);
+}
+
+/**
+ * 2026-09-21 audit motion-05 / css-09: nine prototype-verbatim
+ * `transition: all` rules tweened every property that changed (focus
+ * outlines included), two switch knobs slid by `left`, the refresh
+ * desaturation only had a transition on its way in, and the heartbeat dot
+ * hinted a paint property to the compositor.
+ */
+describe('motion runs on named, compositor-friendly properties (motion-05)', () => {
+  const PAINT_HINT = /^(?:box-shadow|background[\w-]*|color|border[\w-]*|outline[\w-]*|filter)$/;
+  const LAYOUT = /^(?:left|top|right|bottom|inset[\w-]*|width|height|min-[\w-]+|max-[\w-]+|margin[\w-]*|padding[\w-]*|inline-size|block-size)$/;
+
+  it('never transitions `all`', () => {
+    const offenders = cssDeclarations()
+      .filter((d) => d.property === 'transition' || d.property === 'transition-property')
+      .filter((d) => transitionedProperties(d.value).includes('all'))
+      .map((d) => d.where);
+    expect(offenders, 'name the properties that change').toEqual([]);
+  });
+
+  it('never hints a paint property with will-change', () => {
+    const offenders = cssDeclarations()
+      .filter((d) => d.property === 'will-change')
+      .filter((d) => d.value.split(',').some((name) => PAINT_HINT.test(name.trim())))
+      .map((d) => `${d.where}: ${d.value}`);
+    expect(offenders).toEqual([]);
+    expect(designCss()).toMatch(/\.topbar__pill \.dot\.is-heartbeat\s*\{[^}]*will-change:\s*transform;/s);
+  });
+
+  it('never transitions a layout box property', () => {
+    const offenders = cssDeclarations()
+      .filter((d) => d.property === 'transition' || d.property === 'transition-property')
+      .flatMap((d) => transitionedProperties(d.value).filter((name) => LAYOUT.test(name)).map((name) => `${d.where}: ${name}`));
+    expect(offenders).toEqual([]);
+  });
+
+  it('gives the nine former `transition: all` sites explicit lists with their pressed property', () => {
+    const pressed: Array<[string, string]> = [
+      ['.topbar__icon-btn', 'translate'],
+      ['.rail__item', 'scale'],
+      ['.btn', 'translate'],
+      ['.evidence-chip', 'translate'],
+      ['.seg-card', 'scale'],
+      ['.filter', 'translate'],
+      ['.tweak-row .sw', 'scale'],
+    ];
+    for (const [selector, property] of pressed) {
+      const list = transitionOf(selector);
+      expect(list, selector).toContain(property);
+      expect(list.some((name) => /^(?:background-color|border-color|color)$/.test(name)), `${selector} names its colours`).toBe(true);
+    }
+    expect(transitionOf('.kpi')).toEqual(['background-color', 'border-color']);
+    expect(transitionOf('.seg-card')).toContain('transform');
+    // The five `all var(--dur-fast)` controls share one list (01-app-shell.css).
+    for (const control of ['.btn', '.topbar__icon-btn', '.rail__item', '.evidence-chip', '.filter']) {
+      expect(transitionOf(control), control).toEqual(['background-color', 'border-color', 'color', 'box-shadow', 'translate', 'scale']);
+    }
+    expect(transitionOf('.chip__remove')).toContain('translate');
+    expect(transitionOf('.tweak-row .switch')).toEqual(['background-color', 'border-color', 'scale']);
+  });
+
+  it('slides both switch knobs by translate, never left', () => {
+    const css = designCss();
+    for (const knob of ['.tweak-row .switch::after', '.admin-row > .switch::after', '.campaign-setup__toggle .switch::after']) {
+      expect(transitionOf(knob), knob).toEqual(['translate', 'background-color']);
+      const blocks = cssRules(css).filter((rule) => selectsExactly(rule.selector, knob)).map((rule) => rule.block).join(';');
+      expect(blocks, `${knob} rests at the start`).toMatch(/(?<![-\w])left:\s*calc\(var\(--sp-1\) \/ 2\);/);
+    }
+    for (const on of ['.tweak-row .switch.on::after', '.admin-row > .switch.on::after', '.campaign-setup__toggle .switch.on::after']) {
+      const blocks = cssRules(css).filter((rule) => selectsExactly(rule.selector, on)).map((rule) => rule.block).join(';');
+      expect(blocks, on).toMatch(/translate:\s*calc\(var\(--sp-10\) - var\(--sp-5\) - var\(--sp-1\)\) 0;/);
+      expect(blocks, on).not.toMatch(/(?<![-\w])left:/);
+    }
+  });
+
+  it('snaps the Console gutter: .main tweens only the shared theme colours', () => {
+    const own = cssRules(designCss()).filter((rule) => rule.selector === '.main');
+    expect(own.map((rule) => rule.block).join(';')).not.toMatch(/transition/);
+    // So .main keeps the shared theme list (01-app-shell.css) and nothing
+    // else (the other match is the reduced-motion `transition: none`).
+    const shared = cssDeclarations().filter(
+      (d) => d.property === 'transition' && d.value !== 'none' && selectsExactly(d.selector, '.main'),
+    );
+    expect(shared.map((d) => transitionedProperties(d.value))).toEqual([['background-color', 'border-color', 'color', 'box-shadow']]);
+    expect(designCss()).toMatch(/\[data-console="open"\] \.main\s*\{\s*padding-right:\s*calc\(var\(--console-w\) \+ var\(--sp-6\)\);\s*\}/);
+  });
+
+  it('reserves the main scrollbar lane and contains every overlay scroller (css-09)', () => {
+    const css = designCss();
+    expect(css).toMatch(/\.main\s*\{[^}]*scrollbar-gutter:\s*stable;/s);
+    for (const scroller of ['.drawer__body', '.cmdk__list', '.genie__body', '.filter-menu', '.tweaks__body']) {
+      const own = cssRules(css).filter((rule) => rule.selector === scroller).map((rule) => rule.block).join(';');
+      expect(own, scroller).toMatch(/overscroll-behavior:\s*contain;/);
+      expect(own, `${scroller} is a scroller`).toMatch(/overflow(?:-y)?:\s*auto;/);
+    }
+  });
+
+  it('balances the hero title and segment titles and prettifies the lede (css-09)', () => {
+    const css = designCss();
+    expect(css).toMatch(/\.proto-hero h1\s*\{[^}]*text-wrap:\s*balance;/s);
+    expect(css).toMatch(/\.proto-hero \.lede\s*\{[^}]*text-wrap:\s*pretty;/s);
+    // Beside the two-line reservation in the lazy sheet, so the subgrid row
+    // height cannot move.
+    const segmentCss = readFileSync(join(process.cwd(), 'src/components/mortgage/SegmentCard.css'), 'utf8');
+    expect(segmentCss).toMatch(/\.seg-card__title\s*\{[^}]*min-block-size:\s*calc\(2 \* var\(--lh-snug\) \* var\(--fs-14\)\);[^}]*text-wrap:\s*balance;/s);
+  });
+
+  it('eases the refresh desaturation back out from the base rule', () => {
+    const css = designCss();
+    expect(css).toMatch(/\.stable-refresh-region\s*\{[^}]*transition:\s*filter var\(--dur-base\) var\(--ease\);/s);
+    expect(css).not.toMatch(/\.stable-refresh-region\.is-updating\s*\{[^}]*transition:/s);
+  });
+});
+
+/**
+ * 2026-09-21 audit motion-09: hover promised clicks that do nothing. The KPI
+ * card (a div; its evidence chip is the control) lifted 2px with a glow, the
+ * asset schema's static rows and the expanded detail rows inherited the
+ * prototype's row pointer and hover fill, and a hovered proof tab painted
+ * exactly like the selected one.
+ */
+describe('hover states promise only real clicks (motion-09)', () => {
+  it('restores the prototype border-only KPI hover', () => {
+    const kpiHover = cssRules(designCss()).filter((rule) => rule.selector === '.kpi:hover');
+    expect(kpiHover).toHaveLength(1);
+    expect(kpiHover[0].block.trim()).toBe('border-color: var(--line-2);');
+    // --kpi-glow stays for the command palette panel.
+    expect(designCss()).toMatch(/\.cmdk__panel\s*\{[^}]*var\(--kpi-glow\)/s);
+  });
+
+  it('keeps the prototype row pointer and opts static and expanded rows out of it', () => {
+    const css = designCss();
+    expect(css).toContain('.tbl tbody tr { cursor: pointer; transition: background var(--dur-fast) var(--ease); }');
+    expect(css).toMatch(/\.tbl tbody tr\.tbl__expand,\s*\.tbl--static tbody tr\s*\{\s*cursor:\s*default;\s*\}/);
+    expect(css).toMatch(/\.tbl--static tbody tr:hover,\s*\.tbl--static tbody tr:active\s*\{\s*background:\s*transparent;\s*\}/);
+    expect(css).toMatch(/\.tbl tbody tr\.tbl__expand:hover,\s*\.tbl tbody tr\.tbl__expand:active\s*\{\s*background:\s*var\(--bg-1\);\s*\}/);
+    // The opt-outs come after the defaults they override at equal specificity.
+    expect(css.indexOf('.tbl--static tbody tr:hover')).toBeGreaterThan(css.indexOf('.tbl tbody tr:hover'));
+    const asset = readFileSync(join(process.cwd(), 'src/routes/asset.tsx'), 'utf8');
+    expect(asset).toContain('className="tbl tbl--static asset-table"');
+  });
+
+  it('gives a hovered or focused proof tab a lighter step than the selected tab', () => {
+    const rules = cssRules(designCss());
+    const activeAt = rules.findIndex((rule) => rule.selector === '.proof-tab.is-active');
+    expect(rules[activeAt]?.block).toBe('border-color:var(--accent);color:var(--accent-ink);background:var(--accent-soft)');
+    const hoverAt = rules.findIndex((rule) => rule.selector.includes('.proof-tab:hover'));
+    expect(rules[hoverAt]?.selector).toBe('.proof-tab:hover,.proof-tab:focus-visible');
+    expect(rules[hoverAt]?.block).toBe('border-color:var(--line-3);color:var(--text-1);background:var(--bg-3)');
+    // Equal specificity: the selected rule comes later, so a hovered or
+    // focused selected tab still paints as selected.
+    expect(activeAt).toBeGreaterThan(hoverAt);
   });
 });

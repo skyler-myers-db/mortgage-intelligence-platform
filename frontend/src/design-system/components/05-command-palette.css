@@ -37,15 +37,17 @@
   border-block-end: 1px solid var(--line-1);
   color: var(--text-3);
 }
+/* No outline reset (audit css-06): the palette input keeps the global
+   :focus-visible ring, the only focus cue a borderless field has, and the
+   one forced-colors mode repaints. */
 .cmdk__input {
   flex: 1;
   border: none;
   background: transparent;
   color: var(--text-1);
   font-size: var(--fs-16);
-  outline: none;
 }
-.cmdk__input::placeholder { color: var(--text-4); }
+.cmdk__input::placeholder { color: var(--text-3); }
 .cmdk__hint,
 .cmdk__footer kbd {
   font-family: var(--font-mono);
@@ -56,9 +58,13 @@
   border-radius: var(--r-sm);
   padding: 1px var(--sp-1);
 }
+/* Overlay scrollers contain their own overscroll (audit css-09): wheel and
+   touch scrolling at the end of the list no longer chain into the page
+   behind the palette, drawer, Genie panel, filter menu or Console. */
 .cmdk__list {
   flex: 1;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: var(--sp-2);
 }
 .cmdk__group + .cmdk__group { margin-block-start: var(--sp-2); }
@@ -84,6 +90,16 @@
   transition: background var(--dur-fast) var(--ease);
 }
 .cmdk__row.is-active { background: var(--accent-soft); color: var(--text-1); }
+/* The active row is the listbox cursor (aria-activedescendant) while focus
+   stays in the input. Its --accent-soft fill alone is 1.1-1.4:1 against the
+   panel, so while the input is keyboard-focused the cursor also wears the
+   shared ring, inset so the list's overflow never clips it (audit a11y-01;
+   the filter menu and topbar search got the same ring in
+   23-filter-listbox.css). */
+.cmdk__panel:has(.cmdk__input:focus-visible) .cmdk__row.is-active {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: calc(-1 * var(--focus-ring-width));
+}
 .cmdk__row:active { translate: 0 var(--pressed-shift); }
 .cmdk__row-icon { color: var(--text-3); flex-shrink: 0; }
 .cmdk__row.is-active .cmdk__row-icon { color: var(--accent-ink); }
@@ -128,7 +144,7 @@
   padding: var(--sp-4) var(--sp-5); border-bottom: 1px solid var(--line-1);
   display: flex; align-items: center; gap: var(--sp-3);
 }
-.drawer__body { flex: 1; overflow-y: auto; padding: var(--sp-5); }
+.drawer__body { flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: var(--sp-5); }
 .drawer__close {
   margin-left: auto;
   width: 28px; height: 28px; border-radius: 6px;
@@ -236,7 +252,7 @@
    warns — neither may wear the unavailable/no-timestamp look. */
 .source-freshness--loading::before {
   background: var(--accent);
-  animation: freshness-pulse 1.2s ease-in-out infinite;
+  animation: freshness-pulse var(--dur-pulse) var(--ease-in-out) infinite;
 }
 .source-freshness--error::before { background: var(--signal-warning); }
 @keyframes freshness-pulse {
@@ -353,7 +369,9 @@
 .proof-tabs,.proof-status-row,.proof-component__meta,.proof-evidence-row__meta,.proof-component__fields{display:flex;flex-wrap:wrap;gap:var(--sp-2)}
 .proof-tabs{padding:var(--sp-3) var(--sp-5);border-bottom:1px solid var(--line-1);overflow-x:auto}
 .proof-tab{display:inline-flex;align-items:center;gap:var(--sp-2);min-block-size:var(--sp-8);padding:0 var(--sp-3);border:1px solid var(--line-1);border-radius:var(--r-md);background:var(--bg-2);color:var(--text-2);font-family:var(--font-mono);font-size:var(--fs-12);cursor:pointer}
-.proof-tab.is-active,.proof-tab:hover,.proof-tab:focus-visible{border-color:var(--accent);color:var(--accent-ink);background:var(--accent-soft)}
+/* Hover and focus take a lighter step than the selected tab, so neither can be mistaken for it (audit motion-09); the selected rule comes after at equal specificity, so hovering the selected tab keeps it selected. Focus also keeps the global ring. */
+.proof-tab:hover,.proof-tab:focus-visible{border-color:var(--line-3);color:var(--text-1);background:var(--bg-3)}
+.proof-tab.is-active{border-color:var(--accent);color:var(--accent-ink);background:var(--accent-soft)}
 .proof-tab:active{translate:0 var(--pressed-shift)}
 .proof-callout,.proof-formula,.proof-component,.proof-branch,.proof-evidence-row,.proof-sql-card{padding:var(--sp-3);border:1px solid var(--line-1);border-radius:var(--r-md);background:var(--bg-2)}
 .proof-callout{color:var(--text-2)}.proof-callout--warning{border-color:color-mix(in oklab,var(--signal-warning) 55%,var(--line-2));background:color-mix(in oklab,var(--signal-warning) 8%,var(--bg-2))}.proof-callout--subtle{background:color-mix(in oklab,var(--accent) 5%,transparent);font-size:var(--fs-12)}
