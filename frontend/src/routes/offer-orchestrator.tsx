@@ -5,7 +5,6 @@ import { api, ApiError, isAbortError, isWarmingUpError, dependencyLabel } from '
 import type { WarmingUpState } from '../lib/useWarmingUpRetry';
 import type { Borrower360 as Borrower360Type, BorrowerLifecycle, OfferRecommendation } from '../types';
 import { PageShell } from '../components/layout/PageShell';
-import { ApprovalBanner } from '../components/mortgage/ApprovalBanner';
 import { BorrowerOfferPreviewMock } from '../components/mortgage/BorrowerOfferPreviewMock';
 import { ScoreBadge } from '../components/mortgage/ScoreBadge';
 import { ConfidenceMeter } from '../components/mortgage/ConfidenceMeter';
@@ -18,11 +17,8 @@ import { offerDisplayLabel } from '../lib/offerLanguage';
 import { BORROWER_CACHE, clearBorrowerCache, readBorrowerCache } from './offer-orchestrator.cache';
 import { DEFAULT_REJECT_REASON, type OutreachChannel, type RejectReasonCode } from './offer-orchestrator.constants';
 import { useOfferSalesTeam } from './offer-orchestrator.sales-team';
-import {
-  OfferDetailsRows,
-  OfferReviewGrid,
-  RejectRationalePanel,
-} from './offer-orchestrator.panels';
+import { OfferReviewGrid, RejectRationalePanel } from './offer-orchestrator.panels';
+import { OfferActionBar } from './offer-orchestrator.action-bar';
 import { draftProofMatchesSnapshot, offerSnapshotMatches, resolveOfferApprovalStatus } from './offer-orchestrator.snapshot';
 import { OfferSnapshotReconciliation } from './offer-orchestrator.snapshot-status';
 import { OfferDecisionOutcome } from './offer-orchestrator.decision';
@@ -110,6 +106,7 @@ export default function OfferOrchestrator() {
     canApprove,
     actorEmail,
     sessionStatus,
+    genieOpen,
   } = useApp();
   // Audit flow-02: gate the approve controls on the session's can_approve.
   const approverGate = approverGateReason(canApprove, sessionStatus);
@@ -396,6 +393,9 @@ export default function OfferOrchestrator() {
     lifecycle?.approval_status,
     b?.approval_status,
   );
+  // The docked decision bar (routing + the approval gate) shows until the
+  // borrower is decided; the decision outcome then takes its place.
+  const decisionPending = effectiveApproval !== 'approved' && effectiveApproval !== 'rejected';
   const draftText = draftLoaded ? draftBody : '';
   const subjectReady = activeDraftChannel === 'sms' || draftSubject.trim().length > 0;
   const draftProofFresh = draftProofMatchesSnapshot(b, rec, draftProof?.sourceRefreshedAt);
@@ -626,25 +626,10 @@ export default function OfferOrchestrator() {
           <>
             <ScoreBadge value={b.opportunity_score} />
             <ConfidenceMeter value={b.confidence} />
-            {/* LO friction fix (2026-04-22): surface Approve in the hero so
-                it is visible on 1366x768 laptops without scrolling. The
-                row-detail Approve button further down is preserved. */}
-            <Button
-              variant="primary"
-              size="sm"
-              icon="check"
-              onClick={() => void onApprove()}
-              disabled={approverGate !== null || snapshotReconciling || !rec || !draftReady || effectiveApproval === 'approved'}
-              title={approverGate ?? undefined}
-              aria-label={
-                effectiveApproval === 'approved'
-                  ? `Borrower ${b.borrower_id} already approved`
-                  : `Approve borrower ${b.borrower_id}`
-              }
-              data-testid="hero-approve"
-            >
-              {effectiveApproval === 'approved' ? 'Approved' : 'Approve'}
-            </Button>
+            {/* No Approve here: the hero shortcut (2026-04-22) let a reviewer
+                approve before the loan-officer routing was on screen. The
+                docked decision bar keeps routing and Approve together and in
+                view at 1440x900 (2026-09-21 audit visual-v1). */}
             {/* Auto-offer Module 1 prototype: show the borrower-facing offer
                 experience (the "click yes" vision). Clearly a mock. */}
             <Button
@@ -690,20 +675,6 @@ export default function OfferOrchestrator() {
       )}
       {borrowerPreviewOpen && b && (
         <BorrowerOfferPreviewMock borrower={b} onClose={() => setBorrowerPreviewOpen(false)} />
-      )}
-      {rejectReviewOpen && (
-        <RejectRationalePanel
-          reasonCode={rejectReasonCode}
-          rationale={rejectRationale}
-          onReasonChange={setRejectReasonCode}
-          onRationaleChange={setRejectRationale}
-          onCancel={() => {
-            setRejectReviewOpen(false);
-            setRejectRationale('');
-            setRejectReasonCode(DEFAULT_REJECT_REASON);
-          }}
-          onSubmit={() => void onReject()}
-        />
       )}
       <OfferReviewGrid
         borrower={b}
@@ -760,59 +731,6 @@ export default function OfferOrchestrator() {
         canAccessAdmin={canAccessAdmin}
       />
 
-      <OfferDetailsRows recommendation={rec} />
-
-      {effectiveApproval !== 'approved' && effectiveApproval !== 'rejected' && (
-        <>
-          <div className="outreach-routing mt-grid" data-testid="outreach-routing">
-            <div className="outreach-routing__field">
-              <label htmlFor="lo-assign" className="outreach-routing__label">Assign to loan officer</label>
-              <select
-                id="lo-assign"
-                className="outreach-routing__select"
-                value={assignedTo}
-                onChange={(e) => setAssignedTo(e.target.value)}
-                disabled={approving}
-              >
-                <option value="">Unassigned</option>
-                {salesTeam.map((m) => (
-                  <option key={m.email} value={m.email}>
-                    {m.display_label}
-                    {m.region ? ` · ${m.region}` : ''}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="outreach-routing__field">
-              <label htmlFor="lo-followup" className="outreach-routing__label">Follow-up reminder</label>
-              <select
-                id="lo-followup"
-                className="outreach-routing__select"
-                value={followUpDays}
-                onChange={(e) => setFollowUpDays(Number(e.target.value))}
-                disabled={approving}
-              >
-                <option value={0}>None</option>
-                <option value={3}>In 3 days</option>
-                <option value={5}>In 5 days</option>
-                <option value={7}>In 7 days</option>
-                <option value={14}>In 14 days</option>
-              </select>
-            </div>
-          </div>
-          <div className="mt-grid">
-            <ApprovalBanner
-              text={`${b ? `Borrower ${b.borrower_id}` : 'Borrower'} pending review. Approve writes an audit event and places the decision in the governed internal queue.`}
-              onApprove={() => void onApprove()}
-              onReject={() => void onReject()}
-              approveDisabled={snapshotReconciling || !draftReady}
-              isSubmitting={approving || snapshotReconciling}
-              approverGate={approverGate}
-              actorEmail={actorEmail}
-            />
-          </div>
-        </>
-      )}
       <OfferDecisionOutcome
         borrowerId={b?.borrower_id ?? id}
         offerCode={rec?.offer_code ?? b?.recommended_offer_code ?? null}
@@ -821,9 +739,42 @@ export default function OfferOrchestrator() {
         auditId={auditId}
         justDecided={justDecided?.id === id && justDecided.reloadToken === reloadToken}
         approvalId={approvalId}
-        approveError={approveError}
+        approveError={decisionPending ? null : approveError}
         score={b ? { opportunityScore: b.opportunity_score, confidence: b.confidence } : null}
       />
+      {decisionPending && (
+        <OfferActionBar
+          borrowerId={b?.borrower_id ?? null}
+          salesTeam={salesTeam}
+          assignedTo={assignedTo}
+          onAssignedToChange={setAssignedTo}
+          followUpDays={followUpDays}
+          onFollowUpDaysChange={setFollowUpDays}
+          approving={approving}
+          onApprove={() => void onApprove()}
+          onReject={() => void onReject()}
+          approveDisabled={snapshotReconciling || !draftReady}
+          isSubmitting={approving || snapshotReconciling}
+          approverGate={approverGate}
+          actorEmail={actorEmail}
+          approveError={approveError}
+          genieOpen={genieOpen}
+          rejectReview={rejectReviewOpen && (
+            <RejectRationalePanel
+              reasonCode={rejectReasonCode}
+              rationale={rejectRationale}
+              onReasonChange={setRejectReasonCode}
+              onRationaleChange={setRejectRationale}
+              onCancel={() => {
+                setRejectReviewOpen(false);
+                setRejectRationale('');
+                setRejectReasonCode(DEFAULT_REJECT_REASON);
+              }}
+              onSubmit={() => void onReject()}
+            />
+          )}
+        />
+      )}
     </PageShell>
   );
 }

@@ -1,0 +1,113 @@
+/* Certified-copy preview on the offer approval screen (2026-09-21 audit
+   critic-02): the audited copy framed the way the borrower receives it.
+   Route-local (imported by offer-orchestrator.preview.tsx) so it ships in the
+   route's lazy CSS chunk, not the initial stylesheet.
+
+   The approver certifies this text, so nothing in the frame clips, scrolls or
+   resizes: the subject and every paragraph wrap and grow with the copy
+   (white-space: pre-wrap keeps the audited spacing and line breaks).
+
+   DECLARED DEPARTURE: `.certified-copy` is a new app block; the prototype has
+   no outreach preview (design_files/Module 0 Prototype.html shows no draft
+   surface). Its parts reuse prototype vocabulary: the header is a `.surface`
+   well, the SMS bubble takes the prototype's outbound chat bubble
+   (`.genie__msg--user`, design_files/index.html:742) and the To line the
+   prototype `.chip`. Tokens only. */
+.certified-copy {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-lg);
+  background: var(--bg-2);
+}
+.certified-copy__meta {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: baseline;
+  gap: var(--sp-2) var(--sp-4);
+  margin: 0;
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--bg-3);
+  border-block-end: 1px solid var(--line-1);
+  border-start-start-radius: var(--r-lg);
+  border-start-end-radius: var(--r-lg);
+}
+/* Each dt/dd pair keeps its own wrapper (valid `dl` content) and lays out on
+   the header's two tracks. */
+.certified-copy__field { display: contents; }
+.certified-copy__term {
+  color: var(--text-3);
+  font-size: var(--fs-12);
+}
+.certified-copy__value {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: 0;
+  min-inline-size: 0;
+  color: var(--text-1);
+  font-size: var(--fs-13);
+}
+.certified-copy__subject {
+  min-inline-size: 0;
+  font-size: var(--fs-14);
+  font-weight: 600;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.certified-copy__body {
+  padding: var(--sp-4);
+  color: var(--text-1);
+  font-size: var(--fs-13);
+  line-height: var(--lh-body);
+}
+.certified-copy__para {
+  margin: 0 0 var(--sp-3);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.certified-copy__para:last-child { margin-block-end: 0; }
+/* A run of four or more newlines leaves an empty paragraph between two
+   others. With no content its margins collapsed through it, so two or more
+   blank lines painted exactly like one. A line of height keeps each extra
+   blank line visible. Not while the copy is still empty (a lone `<p>`). */
+.certified-copy__para:empty:not(:only-child) { min-block-size: 1lh; }
+
+/* SMS: one outbound bubble, right-aligned as the borrower's phone shows it,
+   with the carrier segment count under it. */
+.certified-copy__thread {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--sp-2);
+  padding: var(--sp-4);
+}
+.certified-copy__bubble {
+  max-inline-size: min(100%, 24rem);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--chip-line);
+  border-radius: var(--r-xl) var(--r-xl) var(--r-sm) var(--r-xl);
+  background: var(--accent-soft);
+  color: var(--text-1);
+  font-size: var(--fs-13);
+  line-height: var(--lh-body);
+}
+.certified-copy__segments {
+  margin: 0;
+  text-align: end;
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+}
+
+.certified-copy__footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-4);
+  border-block-start: 1px solid var(--line-1);
+}
+
+/* Not the copy that would be approved (loading, failed, saving). */
+.certified-copy [aria-disabled="true"] { color: var(--text-3); }
