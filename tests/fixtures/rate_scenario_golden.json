@@ -1,0 +1,384 @@
+{
+  "_about": "Golden cases for backend/services/rate_scenario.scenario_in_the_money and the SCENARIO_ITM_SQL fragment (Rate Lever, audit wow-stage-1). Each step is a different market rate: fn_in_the_money(fn_rate_spread(note, market + step / 10000), equity, min_spread, min_equity). Cases come from a search of eighth-point coupons (0.05875 .. 0.06875) against FRED-like prints (0.0612, 0.0630, 0.0655) across the grid, with Python float arithmetic. raw_spread_bps is (note - (market + step / 10000)) * 10000 as a Python float; bin_shift_spread_bps is the WRONG method (rate_spread_bps(note, market) - step), kept so the tests can prove it disagrees. A null note is the gated no-signal case (0 bps at every step). tests/unit/test_rate_scenario.py recomputes every case; the nightly tests/integration/test_rate_sensitivity_parity.py runs them through the UC functions.",
+  "grid_bps": [
+    -100,
+    -75,
+    -50,
+    -25,
+    0,
+    25,
+    50,
+    75,
+    100
+  ],
+  "cases": [
+    {
+      "id": "eighth_coupon_down100_flips_itm",
+      "note_rate_fraction": 0.05875,
+      "market_rate_fraction": 0.0612,
+      "step_bps": -100,
+      "equity_pct": 30,
+      "min_spread_bps": 76,
+      "min_equity_pct": 15,
+      "raw_spread_bps": 75.50000000000001,
+      "expected_spread_bps": 76,
+      "bin_shift_spread_bps": 75,
+      "expected_in_the_money": true,
+      "tags": [
+        "bin_shift_disagrees",
+        "bin_shift_flips_verdict",
+        "half_bps_boundary"
+      ]
+    },
+    {
+      "id": "exact_half_even_down75_flips_itm",
+      "note_rate_fraction": 0.06375,
+      "market_rate_fraction": 0.063,
+      "step_bps": -75,
+      "equity_pct": 40,
+      "min_spread_bps": 83,
+      "min_equity_pct": 15,
+      "raw_spread_bps": 82.5,
+      "expected_spread_bps": 82,
+      "bin_shift_spread_bps": 83,
+      "expected_in_the_money": false,
+      "tags": [
+        "bin_shift_disagrees",
+        "bin_shift_flips_verdict",
+        "half_bps_boundary"
+      ]
+    },
+    {
+      "id": "exact_half_even_down50",
+      "note_rate_fraction": 0.06375,
+      "market_rate_fraction": 0.063,
+      "step_bps": -50,
+      "equity_pct": 40,
+      "min_spread_bps": 58,
+      "min_equity_pct": 15,
+      "raw_spread_bps": 57.49999999999998,
+      "expected_spread_bps": 57,
+      "bin_shift_spread_bps": 58,
+      "expected_in_the_money": false,
+      "tags": [
+        "bin_shift_disagrees",
+        "bin_shift_flips_verdict",
+        "half_bps_boundary"
+      ]
+    },
+    {
+      "id": "noisy_half_down25_rounds_up",
+      "note_rate_fraction": 0.05875,
+      "market_rate_fraction": 0.0612,
+      "step_bps": -25,
+      "equity_pct": 20,
+      "min_spread_bps": 1,
+      "min_equity_pct": 15,
+      "raw_spread_bps": 0.5000000000000143,
+      "expected_spread_bps": 1,
+      "bin_shift_spread_bps": 0,
+      "expected_in_the_money": true,
+      "tags": [
+        "bin_shift_disagrees",
+        "bin_shift_flips_verdict",
+        "half_bps_boundary"
+      ]
+    },
+    {
+      "id": "noisy_half_below_down75",
+      "note_rate_fraction": 0.05875,
+      "market_rate_fraction": 0.0612,
+      "step_bps": -75,
+      "equity_pct": 20,
+      "min_spread_bps": 50,
+      "min_equity_pct": 15,
+      "raw_spread_bps": 50.499999999999986,
+      "expected_spread_bps": 50,
+      "bin_shift_spread_bps": 50,
+      "expected_in_the_money": true,
+      "tags": [
+        "half_bps_boundary"
+      ]
+    },
+    {
+      "id": "noisy_half_below_down50_bin_high",
+      "note_rate_fraction": 0.06125,
+      "market_rate_fraction": 0.0612,
+      "step_bps": -50,
+      "equity_pct": 20,
+      "min_spread_bps": 51,
+      "min_equity_pct": 15,
+      "raw_spread_bps": 50.499999999999986,
+      "expected_spread_bps": 50,
+      "bin_shift_spread_bps": 51,
+      "expected_in_the_money": false,
+      "tags": [
+        "bin_shift_disagrees",
+        "bin_shift_flips_verdict",
+        "half_bps_boundary"
+      ]
+    },
+    {
+      "id": "noisy_half_up_down25",
+      "note_rate_fraction": 0.06125,
+      "market_rate_fraction": 0.063,
+      "step_bps": -25,
+      "equity_pct": 25,
+      "min_spread_bps": 8,
+      "min_equity_pct": 15,
+      "raw_spread_bps": 7.500000000000007,
+      "expected_spread_bps": 8,
+      "bin_shift_spread_bps": 7,
+      "expected_in_the_money": true,
+      "tags": [
+        "bin_shift_disagrees",
+        "bin_shift_flips_verdict",
+        "half_bps_boundary"
+      ]
+    },
+    {
+      "id": "exact_half_up100_negative",
+      "note_rate_fraction": 0.05875,
+      "market_rate_fraction": 0.063,
+      "step_bps": 100,
+      "equity_pct": 25,
+      "min_spread_bps": -142,
+      "min_equity_pct": 15,
+      "raw_spread_bps": -142.5,
+      "expected_spread_bps": -142,
+      "bin_shift_spread_bps": -143,
+      "expected_in_the_money": true,
+      "tags": [
+        "bin_shift_disagrees",
+        "bin_shift_flips_verdict",
+        "half_bps_boundary"
+      ]
+    },
+    {
+      "id": "noisy_half_up100_negative",
+      "note_rate_fraction": 0.06125,
+      "market_rate_fraction": 0.063,
+      "step_bps": 100,
+      "equity_pct": 25,
+      "min_spread_bps": -117,
+      "min_equity_pct": 15,
+      "raw_spread_bps": -117.49999999999997,
+      "expected_spread_bps": -117,
+      "bin_shift_spread_bps": -118,
+      "expected_in_the_money": true,
+      "tags": [
+        "bin_shift_disagrees",
+        "bin_shift_flips_verdict",
+        "half_bps_boundary"
+      ]
+    },
+    {
+      "id": "step0_matches_scored_spread",
+      "note_rate_fraction": 0.06375,
+      "market_rate_fraction": 0.0612,
+      "step_bps": 0,
+      "equity_pct": 30,
+      "min_spread_bps": 26,
+      "min_equity_pct": 15,
+      "raw_spread_bps": 25.500000000000036,
+      "expected_spread_bps": 26,
+      "bin_shift_spread_bps": 26,
+      "expected_in_the_money": true,
+      "tags": [
+        "half_bps_boundary"
+      ]
+    },
+    {
+      "id": "spread_equals_threshold",
+      "note_rate_fraction": 0.06875,
+      "market_rate_fraction": 0.0612,
+      "step_bps": 0,
+      "equity_pct": 20,
+      "min_spread_bps": 76,
+      "min_equity_pct": 15,
+      "raw_spread_bps": 75.50000000000009,
+      "expected_spread_bps": 76,
+      "bin_shift_spread_bps": 76,
+      "expected_in_the_money": true,
+      "tags": [
+        "half_bps_boundary",
+        "threshold_equality"
+      ]
+    },
+    {
+      "id": "spread_one_bps_below_threshold",
+      "note_rate_fraction": 0.06875,
+      "market_rate_fraction": 0.0612,
+      "step_bps": 0,
+      "equity_pct": 20,
+      "min_spread_bps": 77,
+      "min_equity_pct": 15,
+      "raw_spread_bps": 75.50000000000009,
+      "expected_spread_bps": 76,
+      "bin_shift_spread_bps": 76,
+      "expected_in_the_money": false,
+      "tags": [
+        "half_bps_boundary",
+        "threshold_equality"
+      ]
+    },
+    {
+      "id": "equity_equals_threshold",
+      "note_rate_fraction": 0.06875,
+      "market_rate_fraction": 0.0612,
+      "step_bps": -25,
+      "equity_pct": 15,
+      "min_spread_bps": 75,
+      "min_equity_pct": 15,
+      "raw_spread_bps": 100.5000000000001,
+      "expected_spread_bps": 101,
+      "bin_shift_spread_bps": 101,
+      "expected_in_the_money": true,
+      "tags": [
+        "half_bps_boundary",
+        "threshold_equality"
+      ]
+    },
+    {
+      "id": "equity_one_below_threshold",
+      "note_rate_fraction": 0.06875,
+      "market_rate_fraction": 0.0612,
+      "step_bps": -25,
+      "equity_pct": 14,
+      "min_spread_bps": 75,
+      "min_equity_pct": 15,
+      "raw_spread_bps": 100.5000000000001,
+      "expected_spread_bps": 101,
+      "bin_shift_spread_bps": 101,
+      "expected_in_the_money": false,
+      "tags": [
+        "half_bps_boundary",
+        "threshold_equality"
+      ]
+    },
+    {
+      "id": "rise_clears_nobody",
+      "note_rate_fraction": 0.065,
+      "market_rate_fraction": 0.0655,
+      "step_bps": 100,
+      "equity_pct": 60,
+      "min_spread_bps": 75,
+      "min_equity_pct": 15,
+      "raw_spread_bps": -104.99999999999996,
+      "expected_spread_bps": -105,
+      "bin_shift_spread_bps": -105,
+      "expected_in_the_money": false,
+      "tags": []
+    },
+    {
+      "id": "fall_clears",
+      "note_rate_fraction": 0.0675,
+      "market_rate_fraction": 0.063,
+      "step_bps": -100,
+      "equity_pct": 60,
+      "min_spread_bps": 75,
+      "min_equity_pct": 15,
+      "raw_spread_bps": 145.00000000000006,
+      "expected_spread_bps": 145,
+      "bin_shift_spread_bps": 145,
+      "expected_in_the_money": true,
+      "tags": []
+    },
+    {
+      "id": "null_note_step_-100",
+      "note_rate_fraction": null,
+      "market_rate_fraction": 0.063,
+      "step_bps": -100,
+      "equity_pct": 50,
+      "min_spread_bps": 75,
+      "min_equity_pct": 15,
+      "raw_spread_bps": null,
+      "expected_spread_bps": 0,
+      "bin_shift_spread_bps": null,
+      "expected_in_the_money": false,
+      "tags": [
+        "null_note"
+      ]
+    },
+    {
+      "id": "null_note_step_0",
+      "note_rate_fraction": null,
+      "market_rate_fraction": 0.063,
+      "step_bps": 0,
+      "equity_pct": 50,
+      "min_spread_bps": 75,
+      "min_equity_pct": 15,
+      "raw_spread_bps": null,
+      "expected_spread_bps": 0,
+      "bin_shift_spread_bps": null,
+      "expected_in_the_money": false,
+      "tags": [
+        "null_note"
+      ]
+    },
+    {
+      "id": "null_note_step_100",
+      "note_rate_fraction": null,
+      "market_rate_fraction": 0.063,
+      "step_bps": 100,
+      "equity_pct": 50,
+      "min_spread_bps": 75,
+      "min_equity_pct": 15,
+      "raw_spread_bps": null,
+      "expected_spread_bps": 0,
+      "bin_shift_spread_bps": null,
+      "expected_in_the_money": false,
+      "tags": [
+        "null_note"
+      ]
+    },
+    {
+      "id": "null_note_zero_screen_step_-100",
+      "note_rate_fraction": null,
+      "market_rate_fraction": 0.063,
+      "step_bps": -100,
+      "equity_pct": 50,
+      "min_spread_bps": 0,
+      "min_equity_pct": 15,
+      "raw_spread_bps": null,
+      "expected_spread_bps": 0,
+      "bin_shift_spread_bps": null,
+      "expected_in_the_money": true,
+      "tags": [
+        "null_note"
+      ]
+    },
+    {
+      "id": "null_note_zero_screen_step_0",
+      "note_rate_fraction": null,
+      "market_rate_fraction": 0.063,
+      "step_bps": 0,
+      "equity_pct": 50,
+      "min_spread_bps": 0,
+      "min_equity_pct": 15,
+      "raw_spread_bps": null,
+      "expected_spread_bps": 0,
+      "bin_shift_spread_bps": null,
+      "expected_in_the_money": true,
+      "tags": [
+        "null_note"
+      ]
+    },
+    {
+      "id": "null_note_zero_screen_step_100",
+      "note_rate_fraction": null,
+      "market_rate_fraction": 0.063,
+      "step_bps": 100,
+      "equity_pct": 50,
+      "min_spread_bps": 0,
+      "min_equity_pct": 15,
+      "raw_spread_bps": null,
+      "expected_spread_bps": 0,
+      "bin_shift_spread_bps": null,
+      "expected_in_the_money": true,
+      "tags": [
+        "null_note"
+      ]
+    }
+  ]
+}
