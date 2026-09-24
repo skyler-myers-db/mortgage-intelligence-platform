@@ -1,13 +1,14 @@
 /* ============================================================
    CONTRAST MODES (audit css-06 / a11y-10 / responsive-v3). Additive;
    the prototype has none. System colours only. Rings follow the
-   forced-colors --focus-ring-color token (tokens.css). A doubled class
-   (.switch.switch) only lifts a rule to the specificity of the component
-   rule it overrides, so it wins as the later rule.
+   forced-colors --focus-ring-color token (tokens.css). Forcing replaces the
+   cascade's winner, not its losers, so each system colour must still win on
+   specificity: a doubled class (.switch.switch) lifts a rule to the
+   component rule it overrides, and it wins as the later rule.
    ============================================================ */
 @media (forced-colors: active) {
   /* State painted by a fill alone vanished when fills were forced. */
-  .segmented button.is-active,
+  .segmented.segmented button.is-active,
   .switch.switch.on,
   .filter.is-active,
   .rail__item.is-active,

@@ -137,7 +137,7 @@ describe('forced-colors: active (css-06 / a11y-10 / responsive-v3)', () => {
       .flatMap((d) => d.selector.split(/,(?![^(]*\))/).map((part) => part.trim()));
     expect(highlighted).toEqual(
       expect.arrayContaining([
-        '.segmented button.is-active',
+        '.segmented.segmented button.is-active',
         '.switch.switch.on',
         '.filter.is-active',
         '.rail__item.is-active',
