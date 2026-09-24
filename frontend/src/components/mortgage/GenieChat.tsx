@@ -213,8 +213,9 @@ export function GenieChat() {
   useGeniePanelDismissal({ open: genieOpen, panelRef, inputRef, fabRef, onClose: closePanel });
 
   // A settled answer is scrolled to its START; everything else sticks to the
-  // bottom (audit `motion-v2`).
-  const { anchorNextAnswer, cancelAnchor } = useGenieTranscriptScroll({
+  // bottom (audit `motion-v2`), but only while the reader follows the
+  // transcript: reading an earlier turn is never interrupted (`genie-08`).
+  const { anchorNextAnswer, cancelAnchor, markSent, newAnswer, jumpToNewAnswer } = useGenieTranscriptScroll({
     open: genieOpen,
     bodyRef,
     lastAnswerRef,
@@ -322,6 +323,7 @@ export function GenieChat() {
       return;
     }
     lastQuestionRef.current = trimmed;
+    markSent();
     if (!activeConversationId) {
       setConversationId(null);
       clearGenieConversationState();
@@ -397,6 +399,7 @@ export function GenieChat() {
   };
 
   const runAction = (action: GenieActionSuggestion, payload: GenieAnswerShape) => {
+    markSent();
     setActionRunning(true);
     return runGenieActionRequest(action, payload, conversationId)
       .then((outcome) => {
@@ -620,6 +623,8 @@ export function GenieChat() {
           onEdit={loadComposer}
           onStop={stopTurn}
           onAnnounce={announceGenie}
+          newAnswer={newAnswer}
+          onJumpToNewAnswer={jumpToNewAnswer}
         />
         <form
           className="genie__input"

@@ -90,6 +90,30 @@
   white-space: pre;
 }
 
+/* "New answer" (genie-08): an answer landed while the reader was reading an
+   earlier turn, so nothing scrolled. A documented BEM extension of `.genie`
+   (design_files/index.html:741-760 has no such control), sticky at the
+   bottom of the `.genie__body` scroller. */
+.genie__jump {
+  position: sticky;
+  inset-block-end: 0;
+  z-index: var(--z-raised);
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-3);
+  background: var(--bg-3);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-pill);
+  box-shadow: var(--shadow-sm);
+  color: var(--text-1);
+  font: inherit;
+  font-size: var(--fs-12);
+  cursor: pointer;
+}
+.genie__jump:hover { background: var(--bg-4); }
+
 /* Reduced motion: every transition and animation in this sheet stops. */
 @media (prefers-reduced-motion: reduce) {
   .genie-answer__section-toggle svg { transition: none; }

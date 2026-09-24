@@ -15,6 +15,7 @@ import { GenieProgress } from './GenieProgress';
 import { GenieTurnActions } from './GenieTurnActions';
 import { GENIE_RESUMING_LABEL, GenieStopRow, GenieTurnNote } from './GenieTurnNote';
 import './GenieTurnActions.css';
+import './GenieAnswerReading.css';
 
 /**
  * Transcript body of the floating Genie panel: settled bubbles, the pending
@@ -53,6 +54,10 @@ export interface GenieChatBodyProps {
   onStop: () => void;
   /** Speak a copy confirmation through the panel's one announcer. */
   onAnnounce: (text: string) => void;
+  /** An answer landed while the reader was reading further up (genie-08). */
+  newAnswer: boolean;
+  /** Bring that answer's start into view and focus it. */
+  onJumpToNewAnswer: () => void;
 }
 
 /** Retry for a failed turn, Regenerate for an answered one; nothing else. */
@@ -78,6 +83,8 @@ export function GenieChatBody({
   onEdit,
   onStop,
   onAnnounce,
+  newAnswer,
+  onJumpToNewAnswer,
 }: GenieChatBodyProps) {
   const lastAnswerIndex = msgs.reduce((last, m, i) => (m.who === 'ai' ? i : last), -1);
   const reask = (question: string) => onAsk(question, undefined);
@@ -122,6 +129,8 @@ export function GenieChatBody({
         key={i}
         ref={i === lastAnswerIndex ? lastAnswerRef : undefined}
         className="genie__msg genie__msg--ai"
+        // "New answer" moves focus here (genie-08); never a Tab stop.
+        tabIndex={i === lastAnswerIndex ? -1 : undefined}
       >
         <div className="bubble">
           <GenieAnswer
@@ -249,6 +258,16 @@ export function GenieChatBody({
             </button>
           ))}
         </div>
+      )}
+      {/* Reading an earlier turn when an answer lands (genie-08): nothing
+          scrolls; this offers the jump instead. `.genie__jump` is a
+          documented BEM extension of `.genie`, sticky at the bottom of the
+          transcript (GenieAnswerReading.css). */}
+      {newAnswer && (
+        <button type="button" className="genie__jump" onClick={onJumpToNewAnswer}>
+          New answer
+          <Icon name="down" size={12} />
+        </button>
       )}
     </div>
   );
