@@ -640,7 +640,7 @@ function transitionOf(selector: string): string[] {
  */
 describe('motion runs on named, compositor-friendly properties (motion-05)', () => {
   const PAINT_HINT = /^(?:box-shadow|background[\w-]*|color|border[\w-]*|outline[\w-]*|filter)$/;
-  const LAYOUT = /^(?:left|top|right|bottom|inset[\w-]*|width|height|min-[\w-]+|max-[\w-]+|margin[\w-]*|inline-size|block-size)$/;
+  const LAYOUT = /^(?:left|top|right|bottom|inset[\w-]*|width|height|min-[\w-]+|max-[\w-]+|margin[\w-]*|padding[\w-]*|inline-size|block-size)$/;
 
   it('never transitions `all`', () => {
     const offenders = cssDeclarations()
@@ -703,6 +703,18 @@ describe('motion runs on named, compositor-friendly properties (motion-05)', () 
       expect(blocks, on).toMatch(/translate:\s*calc\(var\(--sp-10\) - var\(--sp-5\) - var\(--sp-1\)\) 0;/);
       expect(blocks, on).not.toMatch(/(?<![-\w])left:/);
     }
+  });
+
+  it('snaps the Console gutter: .main tweens only the shared theme colours', () => {
+    const own = cssRules(designCss()).filter((rule) => rule.selector === '.main');
+    expect(own.map((rule) => rule.block).join(';')).not.toMatch(/transition/);
+    // So .main keeps the shared theme list (01-app-shell.css) and nothing
+    // else (the other match is the reduced-motion `transition: none`).
+    const shared = cssDeclarations().filter(
+      (d) => d.property === 'transition' && d.value !== 'none' && selectsExactly(d.selector, '.main'),
+    );
+    expect(shared.map((d) => transitionedProperties(d.value))).toEqual([['background-color', 'border-color', 'color', 'box-shadow']]);
+    expect(designCss()).toMatch(/\[data-console="open"\] \.main\s*\{\s*padding-right:\s*calc\(var\(--console-w\) \+ var\(--sp-6\)\);\s*\}/);
   });
 
   it('reserves the main scrollbar lane and contains every overlay scroller (css-09)', () => {

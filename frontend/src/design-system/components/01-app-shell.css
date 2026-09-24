@@ -444,7 +444,6 @@
      a scrolling page (Windows classic scrollbars; audit css-09). */
   scrollbar-gutter: stable;
   position: relative;
-  transition: padding-right var(--dur-base) var(--ease);
   /* Establish an inline-size container so .kpi-row, .seg-grid and
      .layoutA-grid can reflow based on their actual available width
      (Console open vs. closed at a constant viewport, for example)
@@ -473,11 +472,13 @@
    reserve a right gutter on .main so long rows do not slide under it. The
    Console is position:fixed, so we can't rely on flow; an explicit gutter is
    the fix. The gutter derives from --console-w (audit motion-01 follow-up:
-   the literal 324px / 360px drifted from the width at >= 2560px). */
+   the literal 324px / 360px drifted from the width at >= 2560px).
+   The gutter SNAPS: it is not transitioned (audit motion-05). At 1440x900
+   .main is 1368px and the open gutter takes its content box to 1044px, so
+   a tween crossed the `@container main` 1280px band mid-animation and
+   re-laid the page out every frame. The prototype's .main has no
+   transition (index.html:330-334); the Console keeps its own fade. */
 [data-console="open"] .main { padding-right: calc(var(--console-w) + var(--sp-6)); }
-@media (prefers-reduced-motion: reduce) {
-  .main { transition: none; }
-}
 
 /* ============================================================
    TYPOGRAPHY
