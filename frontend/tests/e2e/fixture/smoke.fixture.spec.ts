@@ -8,6 +8,7 @@
 import { ERROR_SURFACE_SELECTOR } from './app';
 import { FIXTURE_ROUTES, FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
+import { expectNoSurfaceOverflow } from './visual';
 
 for (const theme of FIXTURE_THEMES) {
   for (const route of FIXTURE_ROUTES) {
@@ -32,6 +33,9 @@ for (const theme of FIXTURE_THEMES) {
         clientWidth: document.documentElement.clientWidth,
       }));
       expect(overflow.scrollWidth, 'the document must not scroll horizontally').toBeLessThanOrEqual(overflow.clientWidth);
+      // No `.surface` scrolls sideways either (beyond visual.ts's dated
+      // KNOWN_SURFACE_OVERFLOW ratchet); runs on every host, unlike the VRT.
+      await expectNoSurfaceOverflow(page, { route: route.name, state: 'default', theme });
 
       expect(hygiene.active, 'the hygiene fixture is attached').toBe(true);
       expect(hygiene.documentsWithCsp, 'the production CSP was served with the document').toBeGreaterThan(0);

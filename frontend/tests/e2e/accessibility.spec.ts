@@ -1,10 +1,14 @@
 /**
  * Module 0 — accessibility smoke test.
  *
- * Runs axe-core against every public route in BOTH dark and light themes.
- * Asserts zero `serious` or `critical` violations; `moderate` / `minor`
- * are reported as informational smoke output. The stricter procurement
- * gate lives in `accessibility_procurement.spec.ts`.
+ * Runs axe-core against every public route in BOTH dark and light themes
+ * through the shared gate in `fixture/axe.ts` (the same helper the PR
+ * fixture matrix uses): WCAG 2.0/2.1/2.2 A and AA tags, every impact fails
+ * (moderate and minor included), best-practice rules are attached as an
+ * advisory report, and LIVE_KNOWN_VIOLATIONS below is the dated ratchet
+ * (empty; the next operator live run records what it finds). Nothing is
+ * excluded. The stricter procurement gate lives in
+ * `accessibility_procurement.spec.ts`.
  *
  * Why both themes: a prior audit (2026-04-22) found 5 light-theme-only
  * contrast blockers that dark-only runs would never catch. The
@@ -26,7 +30,7 @@
  * OAuth-flow flakiness.
  */
 import { test, expect, type APIRequestContext } from '@playwright/test';
-import AxeBuilder from '@axe-core/playwright';
+import { expectAxeClean, type AxeTheme, type KnownViolations } from './fixture/axe';
 
 const LIVE = process.env.E2E_LIVE === '1';
 test.skip(!LIVE, 'Set E2E_LIVE=1 to run accessibility smoke against the live app.');
@@ -90,52 +94,22 @@ async function setTheme(page: import('@playwright/test').Page, theme: Theme) {
   }, theme);
 }
 
-async function runAxeAndAssertClean(page: import('@playwright/test').Page, label: string) {
-  const results = await new AxeBuilder({ page })
-    .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'])
-    // Canvas decorative background layer — documented waiver in the
-    // original Home-only spec. Applies to every route since DataMesh
-    // lives in the AppShell.
-    .exclude('canvas')
-    .analyze();
+/**
+ * `${route}|default|${ruleId}` → owner, for the live scan (same shape as
+ * fixture/axe.ts KNOWN_VIOLATIONS). Empty: record an entry only with a
+ * finding id, the date and a node selector from a real live run.
+ */
+const LIVE_KNOWN_VIOLATIONS: KnownViolations = {};
 
-  const serious = results.violations.filter(
-    (v) => v.impact === 'serious' || v.impact === 'critical',
-  );
-  const moderate = results.violations.filter((v) => v.impact === 'moderate');
-  const minor = results.violations.filter((v) => v.impact === 'minor');
-  if (moderate.length || minor.length) {
-    // eslint-disable-next-line no-console
-    console.log(
-      `[a11y smoke] ${label}: ${moderate.length} moderate + ${minor.length} minor.\n` +
-        [...moderate, ...minor]
-          .map(
-            (v) =>
-              `  - [${v.impact}] ${v.id}: ${v.help} (${v.nodes.length} node${v.nodes.length === 1 ? '' : 's'})`,
-          )
-          .join('\n'),
-    );
-  }
-
-  expect(
-    serious,
-    `${label}: axe-core found ${serious.length} serious/critical violation(s):\n` +
-      serious
-        .map(
-          (v) =>
-            `  - [${v.impact}] ${v.id}: ${v.help}\n    nodes: ${v.nodes
-              .map((n) => n.target.join(' '))
-              .join(', ')}\n    help: ${v.helpUrl}`,
-        )
-        .join('\n'),
-  ).toEqual([]);
+async function runAxeAndAssertClean(page: import('@playwright/test').Page, route: string, theme: AxeTheme) {
+  await expectAxeClean(page, { key: { route, state: 'default' }, theme, known: LIVE_KNOWN_VIOLATIONS });
 }
 
 test.describe('Module 0 — accessibility (nightly)', () => {
   for (const theme of THEMES) {
     test.describe(`theme=${theme}`, () => {
       for (const route of ROUTES) {
-        test(`${route.path} has zero serious/critical axe violations (${theme})`, async ({ page }) => {
+        test(`${route.path} has no WCAG A/AA axe violation (${theme})`, async ({ page }) => {
           // Seed the theme in localStorage BEFORE the first paint so
           // AppContext boots into the right palette and no flash occurs.
           await page.addInitScript((t) => {
@@ -154,11 +128,11 @@ test.describe('Module 0 — accessibility (nightly)', () => {
               page.getByText(route.readySelector).first(),
             ).toBeVisible({ timeout: 20_000 });
           }
-          await runAxeAndAssertClean(page, `${route.path} [${theme}]`);
+          await runAxeAndAssertClean(page, route.path, theme);
         });
       }
 
-      test(`borrower-360 (deep-linked real id) has zero serious/critical violations (${theme})`, async ({ page, request }) => {
+      test(`borrower-360 (deep-linked real id) has no WCAG A/AA axe violation (${theme})`, async ({ page, request }) => {
         const id = await fetchFirstLeadId(request);
         await page.addInitScript((t) => {
           try {
@@ -170,10 +144,10 @@ test.describe('Module 0 — accessibility (nightly)', () => {
         await page.goto(`/borrower-360/${id}`);
         await setTheme(page, theme);
         await expect(page.getByText(/Borrower dossier|Refi economics check/i).first()).toBeVisible({ timeout: 20_000 });
-        await runAxeAndAssertClean(page, `/borrower-360/:id [${theme}]`);
+        await runAxeAndAssertClean(page, '/borrower-360/:id', theme);
       });
 
-      test(`offer-orchestrator (deep-linked real id) has zero serious/critical violations (${theme})`, async ({ page, request }) => {
+      test(`offer-orchestrator (deep-linked real id) has no WCAG A/AA axe violation (${theme})`, async ({ page, request }) => {
         const id = await fetchFirstLeadId(request);
         await page.addInitScript((t) => {
           try {
@@ -185,10 +159,10 @@ test.describe('Module 0 — accessibility (nightly)', () => {
         await page.goto(`/offer-orchestrator/${id}`);
         await setTheme(page, theme);
         await expect(page.getByText(/Draft outreach|Recommended offer/i).first()).toBeVisible({ timeout: 30_000 });
-        await runAxeAndAssertClean(page, `/offer-orchestrator/:id [${theme}]`);
+        await runAxeAndAssertClean(page, '/offer-orchestrator/:id', theme);
       });
 
-      test(`admin-config uses the admin session and has zero serious/critical violations (${theme})`, async ({ page }) => {
+      test(`admin-config uses the admin session and has no WCAG A/AA axe violation (${theme})`, async ({ page }) => {
         test.skip(!ADMIN_BEARER, 'Requires MIP_ADMIN_BEARER_TOKEN for Admin accessibility coverage.');
         await page.setExtraHTTPHeaders({ Authorization: `Bearer ${ADMIN_BEARER}` });
         await page.addInitScript((t) => {
@@ -199,7 +173,7 @@ test.describe('Module 0 — accessibility (nightly)', () => {
         await expect(
           page.getByRole('heading', { name: 'Rules, data sources, and audit' }),
         ).toBeVisible({ timeout: 30_000 });
-        await runAxeAndAssertClean(page, `/admin-config [${theme}]`);
+        await runAxeAndAssertClean(page, '/admin-config', theme);
       });
     });
   }
