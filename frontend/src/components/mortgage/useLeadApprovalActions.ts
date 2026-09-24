@@ -100,6 +100,14 @@ export function useLeadApprovalActions({
   // handler; the existing React state still drives the disabled UI.
   const bulkInFlightRef = useRef<boolean>(false);
   const rowInFlightRef = useRef<Record<string, boolean>>({});
+  // Wave 1c (flow-03): an approve review can stay open while its row is
+  // decided another way (the row's Reject panel, a bulk run). These two
+  // synchronous mirrors let the review refuse to approve such a row even
+  // from a handler of the render BEFORE the decision's state committed:
+  // `decidedRef` holds rows whose approve / reject write returned ok in this
+  // mount, `bulkRunIdsRef` the rows of the bulk run on the wire.
+  const decidedRef = useRef<Set<string>>(new Set());
+  const bulkRunIdsRef = useRef<ReadonlySet<string>>(new Set());
   // Tracks the bulk-approve loop's AbortController so unmount can
   // cancel the remaining in-flight POSTs. Round-2 hole-finder #10/#11,
   // 2026-04-23.
@@ -243,6 +251,7 @@ export function useLeadApprovalActions({
         signal,
       );
       if (res.approved) {
+        decidedRef.current.add(borrowerId);
         setApproval(borrowerId, 'approved');
         recordDecision(borrowerId, { auditEventId: res.audit_event_id ?? null, decision: 'approved' });
         if (!extras.suppressInvalidation) void invalidateOperationalQueries(queryClient);
@@ -315,6 +324,7 @@ export function useLeadApprovalActions({
         },
       );
       if (res.rejected) {
+        decidedRef.current.add(borrowerId);
         setApproval(borrowerId, 'rejected');
         recordDecision(borrowerId, { auditEventId: res.audit_event_id ?? null, decision: 'rejected' });
         void invalidateOperationalQueries(queryClient);
@@ -460,6 +470,7 @@ export function useLeadApprovalActions({
       bulkInFlightRef.current = false;
       return;
     }
+    bulkRunIdsRef.current = new Set(ids);
     // One controller for the whole bulk loop; unmount aborts every
     // still-inflight POST. sessionStorage stashes the partial result so
     // the next mount can flash "N landed, rest aborted" — otherwise
@@ -520,6 +531,7 @@ export function useLeadApprovalActions({
       } catch {
         // private mode or quota — ignore
       }
+      bulkRunIdsRef.current = new Set();
       bulkInFlightRef.current = false;
       return;
     }
@@ -537,6 +549,7 @@ export function useLeadApprovalActions({
     setBulkApproving(false);
     setBulkToast({ ok, fail, network, aborted });
     bulkAbortRef.current = null;
+    bulkRunIdsRef.current = new Set();
     bulkInFlightRef.current = false;
     // A11y: restore keyboard focus once React commits the cleared/retained
     // selection. `failedIds` is exactly what drives the next selection, so
@@ -594,6 +607,20 @@ export function useLeadApprovalActions({
     return () => window.clearTimeout(t);
   }, [bulkToast]);
 
+  /**
+   * A row that must not be approved from an open review, read synchronously:
+   * its approve / reject write already returned ok in this mount, or it is
+   * in the bulk run on the wire. The review re-checks this on Confirm.
+   */
+  function isDecisionLocked(borrowerId: string): boolean {
+    return decidedRef.current.has(borrowerId) || bulkRunIdsRef.current.has(borrowerId);
+  }
+
+  /** A bulk run is on the wire (the synchronous latch, not the render state). */
+  function isBulkRunInFlight(): boolean {
+    return bulkInFlightRef.current;
+  }
+
   const selectionCount = selectedIds.size;
   const selectedApprovalEligibleCount = approvalEligibleIds.filter((id) => selectedIds.has(id)).length;
 
@@ -622,6 +649,8 @@ export function useLeadApprovalActions({
     bulkApprove,
     openBulkRationale,
     bulkApproving,
+    isDecisionLocked,
+    isBulkRunInFlight,
     bulkApproveBtnRef,
     bulkRationaleRef,
     bulkRationale,

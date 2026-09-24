@@ -17,6 +17,12 @@
  *     truthful: a draft was generated and shown, and nothing was approved.
  *   - Approve stays pessimistic: `onApproved` runs only after the approve
  *     write returned ok; until then the review reads "Approving…".
+ *   - A review never outlives its row's eligibility: Confirm and "Generate
+ *     draft again" re-check `isEligible` and close the review instead of
+ *     approving (or drafting for) a row that was decided another way while
+ *     it was open, e.g. rejected through the row's Reject panel or taken by
+ *     a bulk run. The table also closes such a review as soon as it sees
+ *     the decision (useLeadTableKeyboardFlow).
  */
 import { useEffect, useRef, useState } from 'react';
 import { isAbortError } from '../../lib/api';
@@ -42,6 +48,12 @@ export interface UseLeadApproveReviewInput {
   canStartApproval: ApprovalActions['canStartApproval'];
   draftForApproval: ApprovalActions['draftForApproval'];
   approveLead: ApprovalActions['approveLead'];
+  /**
+   * The row may still be approved: pending, marketing-eligible, no decision
+   * recorded in this session and not in a bulk run on the wire. Read at
+   * Confirm time, so it must reflect the latest decisions synchronously.
+   */
+  isEligible: (borrowerId: string) => boolean;
   /** The approve write returned ok for this borrower. */
   onApproved: (borrowerId: string) => void;
 }
@@ -52,6 +64,7 @@ export function useLeadApproveReview({
   canStartApproval,
   draftForApproval,
   approveLead,
+  isEligible,
   onApproved,
 }: UseLeadApproveReviewInput) {
   'use no memo';
@@ -110,6 +123,12 @@ export function useLeadApproveReview({
   function retryDraft() {
     const current = reviewRef.current;
     if (!current || current.phase !== 'error') return;
+    // Decided while the review was open: a new draft would write a
+    // DRAFT_OUTREACH row for a borrower nobody can approve any more.
+    if (!isEligible(current.borrowerId)) {
+      cancel();
+      return;
+    }
     if (!canStartApproval()) return;
     startDraft(current.borrowerId, current.mode);
   }
@@ -118,6 +137,13 @@ export function useLeadApproveReview({
   async function confirm(): Promise<void> {
     const current = reviewRef.current;
     if (!current || current.phase !== 'ready' || !current.draft) return;
+    // The row was decided another way while this review was open (its
+    // Reject panel, a bulk run): approving now would record a second,
+    // contradicting decision. Close the review; nothing is approved.
+    if (!isEligible(current.borrowerId)) {
+      cancel();
+      return;
+    }
     const submitting: LeadApproveReviewState = { ...current, phase: 'submitting', error: null };
     setReview(submitting);
     const outcome = await approveLead(current.borrowerId, undefined, {}, current.draft);
@@ -130,7 +156,10 @@ export function useLeadApproveReview({
     setReview({
       ...submitting,
       phase: 'ready',
-      error: 'Not approved: nothing was recorded for this borrower. Confirm again or cancel.',
+      // The DRAFT_OUTREACH row the review wrote stays on record either way.
+      error: outcome === 'duplicate'
+        ? 'Not approved yet: another decision for this borrower is still being recorded. Wait for it to finish, then check the row.'
+        : 'Not approved. The generated draft stays on record; confirm again or cancel.',
     });
   }
 

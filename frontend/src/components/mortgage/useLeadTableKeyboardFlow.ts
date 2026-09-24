@@ -78,6 +78,16 @@ export function useLeadTableKeyboardFlow({
   const isPending = (lead: LeadSummary) => isLeadApprovalEligible(
     lead.approval_status, approvals[lead.borrower_id], lead,
   );
+  /**
+   * May this row still be approved from a review? Eligible on this render's
+   * approvals AND not locked by a decision the render has not seen yet (a
+   * reject or approve that just returned, a bulk run on the wire).
+   */
+  const canStillApprove = (borrowerId: string) => {
+    const lead = leadsById.get(borrowerId);
+    return isLeadApprovalEligible(lead?.approval_status, approvals[borrowerId], lead)
+      && !approval.isDecisionLocked(borrowerId);
+  };
   const cursor = useLeadTableCursor({
     sortedLeads,
     tableWrapRef,
@@ -93,6 +103,7 @@ export function useLeadTableKeyboardFlow({
     canStartApproval: approval.canStartApproval,
     draftForApproval: approval.draftForApproval,
     approveLead: approval.approveLead,
+    isEligible: canStillApprove,
     onApproved: (borrowerId) => {
       setToast({ borrowerId });
       cursor.advanceAfter(borrowerId);
@@ -115,14 +126,29 @@ export function useLeadTableKeyboardFlow({
   }, [refocusTable, tableWrapRef]);
   const current = review.review;
 
+  // flow-03: a review whose row was decided another way while it was open
+  // (the row's Reject panel, a bulk run that includes it, a decision from
+  // elsewhere in the app) closes as soon as this table sees it, so there is
+  // no Confirm left to approve a rejected or already-approved borrower.
+  // Runs after every commit (a cheap lookup); an approval on the wire is
+  // left alone (`cancel` refuses it) and settles through `confirm`.
+  useEffect(() => {
+    if (!current || current.phase === 'submitting' || canStillApprove(current.borrowerId)) return;
+    const hadFocus = isInsideLeadApproveReview(document.activeElement, current.borrowerId);
+    if (review.cancel() && hadFocus && current.mode === 'inline') {
+      tableWrapRef.current?.focus({ preventScroll: true });
+    }
+  });
+
   function eligibleSelectedIds(): string[] {
     return approval.approvalEligibleIds.filter((id) => approval.selectedIds.has(id));
   }
 
   /** The first Approve (click or A): open the review; never approve here. */
   function openReview(borrowerId: string) {
-    const lead = leadsById.get(borrowerId);
-    if (!isLeadApprovalEligible(lead?.approval_status, approvals[borrowerId], lead)) return;
+    // Never start a review (or its draft) while a bulk run is on the wire.
+    if (approval.bulkApproving || approval.isBulkRunInFlight()) return;
+    if (!canStillApprove(borrowerId)) return;
     cursor.setCursorId(borrowerId);
     // review.open runs the approver / campaign-binding gate before it drafts.
     const result = review.open(borrowerId, expanded === borrowerId ? 'inline' : 'dialog');
@@ -167,9 +193,12 @@ export function useLeadTableKeyboardFlow({
 
   /** Shift+A and the Cmd-K verb: open the SAME gate; never submit. */
   function openBulkGate() {
-    if (approval.bulkApproving) return;
+    if (approval.bulkApproving || approval.isBulkRunInFlight()) return;
     const ids = eligibleSelectedIds();
     if (ids.length === 0) return;
+    // A gate that cannot approve is not opened: the approver / campaign
+    // binding check says why in the table's alert instead (states-06).
+    if (!approval.canStartApproval()) return;
     if (ids.length === 1) {
       openReview(ids[0]);
       return;
