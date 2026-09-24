@@ -47,6 +47,10 @@ export interface UseLeadTableKeyboardFlowInput {
   openEvidence: (source: DrawerSource) => void;
   /** The approve review's lazy chunk: loaded now, or load it (resolves false on failure). */
   reviewChunk: { isReady: () => boolean; load: () => Promise<boolean> };
+  /** The requested campaign binding's identity (campaign id + variant from the URL). */
+  campaignBindingKey: string;
+  /** The binding identity changed: drop anything drafted under the old one. */
+  onCampaignBindingChange: () => void;
 }
 
 /** Focus an element once it is rendered (a virtualized row may need a frame or two). */
@@ -112,6 +116,8 @@ export function useLeadTableKeyboardFlow({
   scrollToIndex,
   openEvidence,
   reviewChunk,
+  campaignBindingKey,
+  onCampaignBindingChange,
 }: UseLeadTableKeyboardFlowInput) {
   'use no memo';
 
@@ -192,6 +198,21 @@ export function useLeadTableKeyboardFlow({
     if (review.cancel() && hadFocus && current.mode === 'inline') {
       tableWrapRef.current?.focus({ preventScroll: true });
     }
+  });
+
+  // A draft generated under one campaign binding cannot be approved under
+  // another: the server refuses the mismatch, which reads as a confusing
+  // per-row failure. When the binding identity changes, close the review
+  // (unless its approval is on the wire) and drop the bulk gate's samples.
+  const bindingKeyRef = useRef(campaignBindingKey);
+  useEffect(() => {
+    if (bindingKeyRef.current === campaignBindingKey) return;
+    bindingKeyRef.current = campaignBindingKey;
+    const hadFocus = current !== null && isInsideLeadApproveReview(document.activeElement, current.borrowerId);
+    if (review.cancel() && hadFocus && current?.mode === 'inline') {
+      tableWrapRef.current?.focus({ preventScroll: true });
+    }
+    onCampaignBindingChange();
   });
 
   function eligibleSelectedIds(): string[] {

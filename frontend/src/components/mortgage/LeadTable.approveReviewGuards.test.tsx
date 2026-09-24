@@ -430,5 +430,31 @@ describe('LeadTable approve review guards', () => {
       expect(container.querySelector('[data-testid="lead-bulk-samples"]')).toBeNull();
       expect(tableAlert()).toBe('Campaign binding is still being validated. Wait before approval.');
     });
+
+    it('a new campaign binding closes the open review and drops the gate\'s sampled drafts (review round 2)', async () => {
+      const router = mount();
+      await openInlineReviewOnFirstRow();
+      select(IDS);
+      act(() => bulkApproveButton().click());
+      await vi.waitFor(async () => {
+        await flush();
+        expect(container.querySelector('[data-testid="lead-bulk-review"]')).not.toBeNull();
+      }, { timeout: 15_000 });
+      act(() => container.querySelector<HTMLButtonElement>('[data-testid="lead-bulk-preview-samples"]')!.click());
+      await flush();
+      await flush();
+      expect(container.querySelectorAll('[data-testid="lead-bulk-samples"] li'), 'precondition: samples shown').toHaveLength(3);
+      expect(review(), 'precondition: the review is open').not.toBeNull();
+
+      // Drafted with no binding; the reader follows a saved-campaign link.
+      campaign.mockReturnValue(new Promise(() => {}));
+      await act(async () => {
+        await router.navigate(`/lead-queue?campaign_id=${CAMPAIGN}&variant_name=A`);
+      });
+      await flush();
+      expect(review(), 'the review drafted under the old binding closed').toBeNull();
+      expect(container.querySelector('[data-testid="lead-bulk-samples"]'), 'its samples are gone').toBeNull();
+      expect(approve).not.toHaveBeenCalled();
+    });
   });
 });

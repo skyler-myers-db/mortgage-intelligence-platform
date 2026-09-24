@@ -134,6 +134,7 @@ export function LeadTable({
           ? 'validating'
           : 'invalid';
   const campaignBindingBlocked = hasCampaignBindingRequest && campaignBinding === null;
+  const campaignBindingKey = `${campaignId}\n${variantName}`;
   const tableWrapRef = useRef<HTMLDivElement | null>(null);
   useLeadTableFillHeight(tableWrapRef, fillHeight);
   const columns = leadTableColumns(view);
@@ -248,6 +249,11 @@ export function LeadTable({
     reviewChunk: {
       isReady: () => REVIEW_CHUNK.current() !== null,
       load: () => REVIEW_CHUNK.load().then(() => true, () => false),
+    },
+    campaignBindingKey,
+    onCampaignBindingChange: () => {
+      sampleDraftsRef.current = new Map();
+      setSamplesShown(false);
     },
   });
   const { review } = flow;
@@ -625,6 +631,8 @@ export function LeadTable({
           samplesShown={samplesShown}
           gateReview={BulkReview ? (
             <BulkReview
+              // Samples drafted under one campaign binding go with it.
+              key={campaignBindingKey}
               leads={flow.eligibleSelectedIds().map((id) => leadsById.get(id)).filter((lead) => lead !== undefined)}
               canStartApproval={approval.canStartApproval}
               draftForApproval={approval.draftForApproval}
