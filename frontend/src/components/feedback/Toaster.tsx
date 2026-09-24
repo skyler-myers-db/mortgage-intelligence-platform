@@ -42,6 +42,9 @@ import './Toaster.css';
  *   - Removing the toast that holds focus hands focus on first (WCAG 2.4.3):
  *     to the next toast's dismiss button, else back to the control focus
  *     came from before it entered the region, else to the page heading.
+ *     A keyboard dismissal may scroll that control back into view; a mouse
+ *     dismissal never scrolls the page (the person is looking at the toast,
+ *     not at the control, which may be far off-screen by now).
  *   - Success toasts dismiss after `SUCCESS_TOAST_MS`; the timer pauses while
  *     the pointer is over the region or focus is inside it (WCAG 2.2.1).
  *     Failures stay until dismissed.
@@ -58,15 +61,26 @@ function supportsPopover(element: HTMLElement): boolean {
  * to <body>): the next toast's dismiss button (the previous toast's for the
  * last one), else `origin`, the element focus came from when it entered the
  * region, else the page `<h1>`, else `<main>`. The first that takes focus wins.
+ *
+ * `pointer` is a mouse (or touch) dismissal: every hand-off then keeps the
+ * page where it is. Focusing `origin` without `preventScroll` scrolled a
+ * control the person had long scrolled past (Share this build) back into
+ * view, a page jump on every mouse close. A keyboard dismissal keeps the
+ * scroll, so the control that now holds focus is on screen (WCAG 2.4.11).
  */
-function focusAwayFrom(region: HTMLElement, card: HTMLElement, origin: HTMLElement | null): void {
+function focusAwayFrom(
+  region: HTMLElement,
+  card: HTMLElement,
+  origin: HTMLElement | null,
+  pointer: boolean,
+): void {
   const cards = [...region.querySelectorAll<HTMLElement>('.toast')];
   const index = cards.indexOf(card);
   const neighbour = index === -1 ? undefined : cards[index + 1] ?? cards[index - 1];
   const main = document.getElementById('main-content');
   const candidates: Array<[HTMLElement | null | undefined, boolean]> = [
-    [neighbour?.querySelector<HTMLElement>('.toast__close'), false],
-    [origin?.isConnected && !region.contains(origin) ? origin : null, false],
+    [neighbour?.querySelector<HTMLElement>('.toast__close'), pointer],
+    [origin?.isConnected && !region.contains(origin) ? origin : null, pointer],
     // The heading and <main> are last resorts: take focus without scrolling the page.
     [main?.querySelector<HTMLElement>('h1[tabindex]'), true],
     [main, true],
@@ -102,7 +116,8 @@ interface ToastCardProps {
   toast: Toast;
   paused: boolean;
   canOpenAudit: boolean;
-  onDismiss: (id: number) => void;
+  /** `clickDetail` is the click's `detail`: 0 for Enter / Space, 1+ for a pointer. */
+  onDismiss: (id: number, clickDetail: number) => void;
 }
 
 function ToastCard({ toast, paused, canOpenAudit, onDismiss }: ToastCardProps) {
@@ -142,7 +157,7 @@ function ToastCard({ toast, paused, canOpenAudit, onDismiss }: ToastCardProps) {
         type="button"
         className="btn btn--ghost btn--sm toast__close"
         aria-label="Dismiss notification"
-        onClick={() => onDismiss(toast.id)}
+        onClick={(event) => onDismiss(toast.id, event.detail)}
       >
         <Icon name="close" size={14} />
       </button>
@@ -184,11 +199,13 @@ export function Toaster() {
     const next = event.relatedTarget;
     if (!(next instanceof Node) || !event.currentTarget.contains(next)) setFocusWithin(false);
   };
-  const dismiss = useCallback((id: number) => {
+  const dismiss = useCallback((id: number, clickDetail = 0) => {
     const region = regionRef.current;
     const card = region?.querySelector<HTMLElement>(`[data-toast-id="${id}"]`) ?? null;
     const active = document.activeElement;
-    if (region && card && active && card.contains(active)) focusAwayFrom(region, card, originRef.current);
+    if (region && card && active && card.contains(active)) {
+      focusAwayFrom(region, card, originRef.current, clickDetail > 0);
+    }
     // A removed element fires no blur: unless focus now sits on another
     // toast, stop pausing, or every later toast would stay paused.
     const now = document.activeElement;

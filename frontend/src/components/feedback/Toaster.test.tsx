@@ -193,6 +193,40 @@ describe('Toaster', () => {
     }
   });
 
+  it('hands focus back without scrolling on a mouse close, and with it on a keyboard close', () => {
+    const share = document.createElement('button');
+    share.textContent = 'Share this build';
+    document.body.appendChild(share);
+    const focusShare = vi.spyOn(share, 'focus');
+    const close = () => container.querySelector<HTMLButtonElement>('button[aria-label="Dismiss notification"]');
+    try {
+      // Enter / Space on the dismiss button is a click with detail 0.
+      act(() => {
+        toast.success('Build link copied');
+      });
+      act(() => share.focus());
+      act(() => close()?.focus());
+      act(() => close()?.click());
+      expect(cards()).toHaveLength(0);
+      expect(document.activeElement).toBe(share);
+      expect(focusShare).toHaveBeenLastCalledWith({ preventScroll: false });
+
+      // A mouse click carries its click count in detail: keep the page still.
+      act(() => {
+        toast.success('Build link copied');
+      });
+      act(() => close()?.focus());
+      act(() => {
+        close()?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+      });
+      expect(cards()).toHaveLength(0);
+      expect(document.activeElement).toBe(share);
+      expect(focusShare).toHaveBeenLastCalledWith({ preventScroll: true });
+    } finally {
+      share.remove();
+    }
+  });
+
   it('keeps a failure until it is dismissed', () => {
     act(() => {
       toast.error('Copy failed');

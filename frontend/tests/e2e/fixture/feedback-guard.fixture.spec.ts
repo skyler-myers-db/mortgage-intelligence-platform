@@ -23,7 +23,8 @@
  *    the toast; it goes once the explorer shows the row.
  *  - A failed copy is a role=alert toast; repeats coalesce into one count.
  *    Dismissing a toast from the keyboard hands focus back to the control
- *    focus came from, not to <body>.
+ *    focus came from, not to <body>; closing one with the mouse does the
+ *    same without scrolling the page back to that control.
  *  - An approval routed to a loan officer is a toast linked to its audit
  *    row; the old in-page routing chip is gone.
  *  - Entry uses @starting-style; reduced motion drops the transition.
@@ -408,6 +409,42 @@ test.describe('toast region (states-07 slice 1)', () => {
     await page.keyboard.press('Enter');
     await expect(failure).toHaveCount(0);
     // WCAG 2.4.3: focus goes back to Share, not to <body>.
+    await expect(share).toBeFocused();
+  });
+
+  test('closing a toast with the mouse hands focus back without scrolling the page', async ({ app, page }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: { writeText: () => Promise.resolve() },
+      });
+    });
+    await app.gotoRoute('/portfolio-builder');
+    await expect(toastRegion(page)).toHaveCount(1);
+    const share = page.getByTestId('portfolio-copy-link');
+    await share.click();
+    await expect(share).toBeFocused();
+
+    const toast = toastRegion(page).locator('.toast');
+    await expect(toast).toContainText('Build link copied');
+    // The pointer rests on the toast, pausing its timer, while the page is
+    // scrolled far past Share.
+    await toast.hover();
+    await expect(toastRegion(page)).toHaveAttribute('data-paused', 'true');
+    const main = page.locator('#main-content');
+    await main.evaluate((node) => node.scrollTo({ top: node.scrollHeight, behavior: 'instant' }));
+    await expect.poll(() => main.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
+    const scrolled = await main.evaluate((node) => node.scrollTop);
+    expect(await share.evaluate((node) => node.getBoundingClientRect().bottom), 'Share is scrolled off-screen').toBeLessThan(0);
+
+    await toast.getByRole('button', { name: 'Dismiss notification' }).click();
+    await expect(toast).toHaveCount(0);
+    // Let a scroll that focus() might have started land before reading it.
+    await page.evaluate(() => new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    }));
+    expect(Math.abs((await main.evaluate((node) => node.scrollTop)) - scrolled), 'the page stays where it was').toBeLessThanOrEqual(2);
+    expect(await page.evaluate(() => document.activeElement !== document.body), 'focus is not dropped to <body>').toBe(true);
     await expect(share).toBeFocused();
   });
 
