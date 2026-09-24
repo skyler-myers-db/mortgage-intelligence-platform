@@ -7,8 +7,8 @@ import {
   useSyncExternalStore,
   type FocusEvent,
 } from 'react';
-import { Link } from 'react-router';
-import { auditEventHref } from '../../lib/auditLinks';
+import { Link, useLocation } from 'react-router';
+import { AUDIT_EVENT_ID_PARAM, AUDIT_EXPLORER_PATH, auditEventHref } from '../../lib/auditLinks';
 import { dismissToast, getToasts, subscribeToasts, type Toast } from '../../lib/toast';
 import { useApp } from '../AppContext';
 import { Icon } from '../Icon';
@@ -35,7 +35,10 @@ import './Toaster.css';
  *     alert is announced, and the shell never holds an empty alert region.
  *   - A toast with an `auditEventId` links to that ledger row; an actor who
  *     cannot open the admin audit explorer sees the id as text instead
- *     (lib/auditLinks).
+ *     (lib/auditLinks). The toast goes once the explorer is showing its row,
+ *     never on the click itself: the unsaved-changes guard can still hold
+ *     that navigation, and Stay must find the toast and its link where they
+ *     were.
  *   - Removing the toast that holds focus hands focus on first (WCAG 2.4.3):
  *     to the next toast's dismiss button, else back to the control focus
  *     came from before it entered the region, else to the page heading.
@@ -125,11 +128,7 @@ function ToastCard({ toast, paused, canOpenAudit, onDismiss }: ToastCardProps) {
         {toast.detail && <div className="toast__detail">{toast.detail}</div>}
         {toast.auditEventId && (
           canOpenAudit ? (
-            <Link
-              className="toast__link"
-              to={auditEventHref(toast.auditEventId)}
-              onClick={() => onDismiss(toast.id)}
-            >
+            <Link className="toast__link" to={auditEventHref(toast.auditEventId)}>
               View audit event
             </Link>
           ) : (
@@ -159,6 +158,7 @@ export function Toaster() {
   const originRef = useRef<HTMLElement | null>(null);
   const [hovered, setHovered] = useState(false);
   const [focusWithin, setFocusWithin] = useState(false);
+  const { pathname, search } = useLocation();
 
   // Promote the region to the top layer once; it stays open (and empty) for
   // the life of the shell, so the polite live region is always present.
@@ -195,6 +195,17 @@ export function Toaster() {
     if (!region || !now || card?.contains(now) || !region.contains(now)) setFocusWithin(false);
     dismissToast(id);
   }, []);
+
+  // A toast whose audit event the explorer now shows has done its job. It is
+  // dismissed here, after the navigation committed, not in the link's click.
+  useEffect(() => {
+    if (pathname !== AUDIT_EXPLORER_PATH) return;
+    const shown = new URLSearchParams(search).get(AUDIT_EVENT_ID_PARAM);
+    if (!shown) return;
+    for (const item of getToasts()) {
+      if (item.auditEventId === shown) dismiss(item.id);
+    }
+  }, [dismiss, pathname, search]);
 
   const paused = hovered || focusWithin;
   const failures = toasts.filter((toast) => toast.tone === 'error');

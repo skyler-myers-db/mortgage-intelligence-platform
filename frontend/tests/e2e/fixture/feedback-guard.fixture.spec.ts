@@ -19,7 +19,8 @@
  *    status list, and no empty alert region on a healthy page.
  *  - A portfolio save shows ONE toast with its audit-event link, bottom-
  *    centre, painted above the page, AA text in both themes; the Save button
- *    keeps its own label.
+ *    keeps its own label. When the guard holds its audit link, Stay keeps
+ *    the toast; it goes once the explorer shows the row.
  *  - A failed copy is a role=alert toast; repeats coalesce into one count.
  *    Dismissing a toast from the keyboard hands focus back to the control
  *    focus came from, not to <body>.
@@ -332,6 +333,36 @@ test.describe('toast region (states-07 slice 1)', () => {
       await expect(toast).toHaveCount(0);
     });
   }
+
+  test('a guarded audit link keeps its toast through Stay; the toast goes once the explorer shows the row', async ({ app, mockApi, page }) => {
+    mockApi.register('POST', '/api/portfolio/create', () => portfolioCreated('Summit IL refi cohort'));
+    await app.gotoRoute('/portfolio-builder');
+    await expect(toastRegion(page)).toHaveCount(1);
+    await page.getByTestId('portfolio-save-build').click();
+    await page.getByTestId('portfolio-save-name').fill('Summit IL refi cohort');
+    await page.getByTestId('portfolio-save-confirm').click();
+    const toast = toastRegion(page).locator('.toast');
+    await expect(toast).toContainText('Build saved');
+    // The pointer rests on the toast (pausing its timer) while the budget is
+    // typed without the mouse, so the page is dirty after the save.
+    await toast.hover();
+    await budgetField(page).fill(BUDGET);
+    await budgetField(page).blur();
+
+    const link = toast.getByRole('link', { name: 'View audit event' });
+    await link.click();
+    const dialog = await expectBlockedOnPortfolio(page);
+    await dialog.getByRole('button', { name: 'Stay' }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(link).toBeFocused();
+    await expect(toast).toHaveCount(1);
+
+    await link.click();
+    await leaveDialog(page).getByRole('button', { name: 'Leave' }).click();
+    await expect(page).toHaveURL(new RegExp(`/admin-config\\?audit_event_id=${SAVE_AUDIT_ID}#audit$`));
+    await expect(toastRegion(page).locator('.toast')).toHaveCount(0);
+    await app.settle();
+  });
 
   test('a failed copy is an alert toast, and repeats coalesce into one count', async ({ app, page }) => {
     await page.addInitScript(() => {
