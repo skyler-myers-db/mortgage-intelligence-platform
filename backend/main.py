@@ -15,7 +15,6 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse
 from fastapi.routing import APIRoute
-from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request as StarletteRequest
@@ -799,11 +798,6 @@ if _FRONTEND_DIST.is_dir() and (_FRONTEND_DIST / "index.html").is_file():
             media_type=variant.media_type,
             headers=headers,
         )
-
-    # Brand artwork (Entrada wordmark PNG + future brand assets).
-    _BRAND_DIR = _FRONTEND_DIST / "brand"
-    if _BRAND_DIR.is_dir():
-        app.mount("/brand", StaticFiles(directory=_BRAND_DIR), name="brand")
 
     # Catch-all: first look for a real file at `dist/<full_path>`. If it
     # exists, serve it verbatim (static assets dropped into `public/` —
