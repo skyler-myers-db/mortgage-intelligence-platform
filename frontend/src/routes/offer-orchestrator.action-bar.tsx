@@ -4,7 +4,7 @@ import type { SalesTeamMember } from '../types';
 import { useGenieClearance } from './offer-orchestrator.genie-clearance';
 import './offer-orchestrator.action-bar.css';
 
-/** Read by offer-orchestrator.action-bar.css for `.main`'s scroll-padding-block-end. */
+/** Set on `.main`; offer-orchestrator.action-bar.css reads it for the scroll-margin-block-end of everything outside the bar. */
 export const ACTION_BAR_BLOCK_SIZE_PROPERTY = '--offer-action-bar-block-size';
 
 const FOLLOW_UP_OPTIONS: ReadonlyArray<{ days: number; label: string }> = [
@@ -17,12 +17,13 @@ const FOLLOW_UP_OPTIONS: ReadonlyArray<{ days: number; label: string }> = [
 
 /**
  * Keep keyboard focus clear of the docked bar (WCAG 2.2 SC 2.4.11 Focus Not
- * Obscured, technique C43), as ask-genie.composer-clearance.ts does for the
- * Ask Genie composer. `.main`, the app's scroller, gets the bar's measured
- * block size as scroll-padding at its end (offer-orchestrator.action-bar.css),
- * so a control that takes focus from below the view stops above the bar
- * instead of behind it. Re-measured when the bar resizes (the reject
- * rationale or a write error opens inside it); removed on unmount.
+ * Obscured), as ask-genie.composer-clearance.ts does for the Ask Genie
+ * composer. `.main`, the app's scroller, carries the bar's measured block
+ * size; everything in it outside the bar takes that size as scroll-margin at
+ * its end (offer-orchestrator.action-bar.css), so a control that takes focus
+ * from below the view stops above the bar instead of behind it, while focus
+ * inside the bar scrolls nothing. Re-measured when the bar resizes (the
+ * reject rationale or a write error opens inside it); removed on unmount.
  */
 function useActionBarScrollClearance(barRef: RefObject<HTMLElement | null>): void {
   useEffect(() => {

@@ -47,13 +47,16 @@
   .offer-action-bar__row > .outreach-routing { align-content: center; }
 }
 
-/* Docked only when the viewport has the height for it (40rem = 640 CSS px,
-   in rem so the query tracks browser zoom). At 1440x900 or 1366x768 the bar
-   docks; at 200% zoom (1440x900 is then 720x450) the docked bar plus the
-   sticky `.route-nav` covered the whole `.main` scrollport, so the offer and
-   the copy being certified could not be read at any scroll position (WCAG
-   1.4.4 / 1.4.10). Below the query the bar is in flow at the end of the page,
-   as the gate was before it docked, and takes no scroll-padding. */
+/* Docked only when the viewport has the height for it (40rem: 640 CSS px at
+   the default 16px font size). Browser zoom shrinks the CSS viewport, so the
+   query tracks zoom in px or rem alike; rem also tracks the user's default
+   font-size setting, so a reader with larger default text gets the in-flow
+   bar sooner. At 1440x900 or 1366x768 the bar docks; at 200% zoom (1440x900
+   is then 720x450) the docked bar plus the sticky `.route-nav` covered the
+   whole `.main` scrollport, so the offer and the copy being certified could
+   not be read at any scroll position (WCAG 1.4.4 / 1.4.10). Below the query
+   the bar is in flow at the end of the page, as the gate was before it
+   docked, and reserves no scroll clearance. */
 @media (min-height: 40rem) {
   .offer-action-bar {
     position: sticky;
@@ -61,14 +64,26 @@
     z-index: var(--z-sticky);
   }
 
-  /* Focus Not Obscured (WCAG 2.2 SC 2.4.11, technique C43): `.main` keeps
-     the docked bar's block size, plus room for the focus ring, as
-     scroll-padding at its end, so a control that takes focus from below the
-     view stops above the bar instead of behind it. The size is measured by
-     the bar itself (offer-orchestrator.action-bar.tsx); the fallback covers
-     the side-by-side bar before the first measurement. */
-  .main:has(.offer-action-bar) {
-    scroll-padding-block-end: calc(
+  /* Focus Not Obscured (WCAG 2.2 SC 2.4.11): everything in `.main` outside
+     the bar keeps the docked bar's block size, plus room for the focus ring,
+     as scroll-margin at its end, so a control that takes focus from below
+     the view stops above the bar instead of behind it. The size is measured
+     by the bar itself (offer-orchestrator.action-bar.tsx); the fallback
+     covers the side-by-side bar before the first measurement.
+
+     Scroll-margin on what is outside the bar, not scroll-padding on `.main`
+     (technique C43): scroll-padding also shrank the view for the bar's own
+     controls, which sit inside that padding by construction, so focusing
+     one (a click on the routing select, Reject opening its rationale,
+     Cancel handing focus back) scrolled `.main` to near its end chasing a
+     sticky box that cannot move. A negative scroll-margin on the bar's
+     controls stops that in Chromium for selects and buttons, but not for a
+     textarea (its caret reveal ignores scroll-margin) nor in WebKit, which
+     still jumped; this form scrolls nothing in either engine. The route's
+     only text field (the reject rationale) is inside the bar, so no caret
+     reveal needs the clearance. */
+  .main:has(.offer-action-bar) :not(.offer-action-bar, .offer-action-bar *) {
+    scroll-margin-block-end: calc(
       var(--offer-action-bar-block-size, calc(var(--sp-16) * 2))
       + var(--focus-ring-width) + var(--focus-ring-offset)
     );
@@ -82,7 +97,9 @@
    While the sheet is open the bar stays in flow, as under browser zoom. */
 @media (max-width: 1279px) {
   [data-console="open"] .offer-action-bar { position: static; }
-  [data-console="open"] .main:has(.offer-action-bar) { scroll-padding-block-end: auto; }
+  [data-console="open"] .main:has(.offer-action-bar) :not(.offer-action-bar, .offer-action-bar *) {
+    scroll-margin-block-end: 0;
+  }
 }
 
 /* Below 721px the floating Genie launcher (`.genie__fab`, 52px at the

@@ -11,8 +11,10 @@
  * selector are fully inside the viewport and covered by nothing (not the
  * Console, not the Genie launcher, not the open Genie panel); scrolling keeps
  * the bar docked; at the end of the page it rests above the footer; focus from
- * below the view stops above it; the reject rationale opens inside it, focused,
- * and Cancel returns focus to Reject. Under browser zoom (200% and 150%) the
+ * below the view stops above it, while focus inside it (a click on the routing
+ * select, Reject opening its rationale, Cancel handing focus back) scrolls
+ * nothing; the reject rationale opens inside it, focused, and Cancel returns
+ * focus to Reject. Under browser zoom (200% and 150%) the
  * bar is in flow, and the offer and every paragraph of the certified copy can
  * be read at some scroll position (WCAG 1.4.10); 1366x768 at 100% still docks.
  *
@@ -192,47 +194,49 @@ test.describe('decision bar (visual-v1)', () => {
     }
   });
 
-  test('scrolling keeps the bar docked, and at the end it rests above the footer', async ({ app, page }) => {
-    await app.gotoRoute(ROUTE);
-    const { bar, approve } = decisionControls(page);
-    await expect(approve).toBeEnabled();
-    const { max } = await mainScroll(page);
-    expect(max, 'precondition: the page scrolls').toBeGreaterThan(100);
+  for (const theme of FIXTURE_THEMES) {
+    test(`${theme}: scrolling keeps the bar docked, and at the end it rests above the footer`, async ({ app, page }) => {
+      await app.setTheme(theme);
+      await app.gotoRoute(ROUTE);
+      const { bar, approve } = decisionControls(page);
+      await expect(approve).toBeEnabled();
+      const { max } = await mainScroll(page);
+      expect(max, 'precondition: the page scrolls').toBeGreaterThan(100);
 
-    await page.locator('.main').evaluate((main, to) => { main.scrollTop = to; }, Math.round(max / 2));
-    const middle = await mainScroll(page);
-    expect(middle.top).toBeGreaterThan(0);
-    expect(Math.abs((await boxOf(bar)).bottom - middle.bottom), 'docked to the bottom of .main mid-scroll').toBeLessThanOrEqual(1);
-    await expectInsideViewport(page, approve, 'Approve mid-scroll');
+      await page.locator('.main').evaluate((main, to) => { main.scrollTop = to; }, Math.round(max / 2));
+      const middle = await mainScroll(page);
+      expect(middle.top).toBeGreaterThan(0);
+      expect(Math.abs((await boxOf(bar)).bottom - middle.bottom), 'docked to the bottom of .main mid-scroll').toBeLessThanOrEqual(1);
+      await expectInsideViewport(page, approve, 'Approve mid-scroll');
 
-    await page.locator('.main').evaluate((main) => { main.scrollTop = main.scrollHeight; });
-    const footer = page.locator('.page-footer');
-    await expect(footer).toBeInViewport();
-    expect((await boxOf(bar)).bottom, 'the bar sits in flow above the footer').toBeLessThanOrEqual((await boxOf(footer)).top);
-    await expectInsideViewport(page, approve, 'Approve at the end');
-  });
+      await page.locator('.main').evaluate((main) => { main.scrollTop = main.scrollHeight; });
+      const footer = page.locator('.page-footer');
+      await expect(footer).toBeInViewport();
+      expect((await boxOf(bar)).bottom, 'the bar sits in flow above the footer').toBeLessThanOrEqual((await boxOf(footer)).top);
+      await expectInsideViewport(page, approve, 'Approve at the end');
+    });
+  }
 
   test('focus that arrives from below the view stops above the bar (WCAG 2.4.11)', async ({ app, page }) => {
     await app.gotoRoute(ROUTE);
     const { bar, approve, reject } = decisionControls(page);
     await expect(approve).toBeEnabled();
-    // How far `.main`'s scroll-padding falls short of the bar, in px (0 when
-    // it clears it): what focus scrolling to the nearest edge uses.
-    const shortfall = () => page.evaluate(() => {
-      const main = document.querySelector<HTMLElement>('.main');
-      const dock = document.querySelector<HTMLElement>('.offer-action-bar');
-      if (!main || !dock) return -1;
-      // `auto` (no clearance) reads as 0.
-      const padding = Number.parseFloat(getComputedStyle(main).scrollPaddingBlockEnd) || 0;
-      return Math.max(0, dock.offsetHeight - padding);
-    });
-    await expect.poll(shortfall, { message: 'scroll-padding short of the bar (px)' }).toBe(0);
-
-    // The page's last control above the bar (the draft panel's Save draft)
-    // starts behind it. Scrolled to the nearest edge, as focus navigation
-    // does in Firefox and WebKit, it stops above the bar; Chromium's own
-    // Shift+Tab (which centres) clears it too.
+    // The page's last control above the bar (the draft panel's Save draft).
     const saveDraft = page.getByRole('button', { name: `Save outreach draft for ${PRIMARY_BORROWER.borrower_id}` });
+    // How far the scroll-margin at the end of a control outside the bar
+    // falls short of the bar, in px (0 when it clears it): what focus
+    // scrolling to the nearest edge uses.
+    const shortfall = () => saveDraft.evaluate((node) => {
+      const dock = document.querySelector<HTMLElement>('.offer-action-bar');
+      if (!dock) return -1;
+      const margin = Number.parseFloat(getComputedStyle(node).scrollMarginBlockEnd) || 0;
+      return Math.max(0, dock.offsetHeight - margin);
+    });
+    await expect.poll(shortfall, { message: 'scroll-margin short of the bar (px)' }).toBe(0);
+
+    // Save draft starts behind the bar. Scrolled to the nearest edge, as
+    // focus navigation does in Firefox and WebKit, it stops above the bar;
+    // Chromium's own Shift+Tab clears it too.
     expect((await boxOf(saveDraft)).bottom, 'precondition: Save draft starts below the bar top').toBeGreaterThan((await boxOf(bar)).top);
     await saveDraft.evaluate((node) => node.scrollIntoView({ block: 'nearest' }));
     expect((await boxOf(saveDraft)).bottom, 'nearest-edge scrolling clears the bar').toBeLessThanOrEqual((await boxOf(bar)).top);
@@ -250,8 +254,62 @@ test.describe('decision bar (visual-v1)', () => {
     });
     await reject.click();
     await expect.poll(async () => (await boxOf(bar)).bottom - (await boxOf(bar)).top).toBeGreaterThan(fallback);
-    await expect.poll(shortfall, { message: 'scroll-padding short of the grown bar (px)' }).toBe(0);
+    await expect.poll(shortfall, { message: 'scroll-margin short of the grown bar (px)' }).toBe(0);
   });
+
+  for (const theme of FIXTURE_THEMES) {
+    test(`${theme}: focus inside the docked bar never scrolls the page`, async ({ app, page }) => {
+      await app.setTheme(theme);
+      await app.gotoRoute(ROUTE);
+      const { bar, approve, reject, routing, followUp } = decisionControls(page);
+      await expect(approve).toBeEnabled();
+      const start = await mainScroll(page);
+      expect(start.top, 'precondition: the page has not scrolled').toBe(0);
+      // Non-vacuous: a focus scroll chasing the sticky bar has room to move
+      // `.main` a long way (it used to land 425-596px down).
+      expect(start.max, 'precondition: the page can scroll well past the bar').toBeGreaterThan(300);
+
+      // Read after the frame that follows the focus change, so a scroll the
+      // focus started has landed.
+      const scrollTopAfter = async (step: string) => {
+        await page.evaluate(() => new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        }));
+        const { top } = await mainScroll(page);
+        expect(top, `${step}: .main scrollTop (px)`).toBeLessThanOrEqual(1);
+        await expectInsideViewport(page, approve, `Approve after ${step}`);
+      };
+
+      // Pointer: the routing select opens its list and takes focus.
+      await routing.click();
+      await expect(routing).toBeFocused();
+      await page.keyboard.press('Escape');
+      await scrollTopAfter('clicking the routing select');
+
+      // Keyboard and programmatic focus on the bar's controls.
+      await page.keyboard.press('Tab');
+      await expect(followUp).toBeFocused();
+      await scrollTopAfter('tabbing to the follow-up select');
+      await routing.focus();
+      await scrollTopAfter('focusing the routing select from script');
+
+      // Reject opens its rationale in the bar and focuses the reason select.
+      await reject.click();
+      const form = bar.getByRole('form', { name: 'Reject rationale' });
+      await expect(form.getByRole('combobox', { name: /^Reason/ })).toBeFocused();
+      await scrollTopAfter('Reject opening its rationale');
+      // A text field reveals its caret on focus, a scroll path of its own.
+      await page.keyboard.press('Tab');
+      await expect(form.getByRole('textbox', { name: 'Rationale note' })).toBeFocused();
+      await scrollTopAfter('tabbing to the rationale note');
+
+      // Cancel closes the form and hands focus back to Reject.
+      await form.getByRole('button', { name: 'Cancel' }).click();
+      await expect(form).toHaveCount(0);
+      await expect(reject).toBeFocused();
+      await scrollTopAfter('Cancel returning focus to Reject');
+    });
+  }
 
   test('Reject opens its rationale inside the bar, focused, and Cancel closes it back onto Reject', async ({ app, page }) => {
     await app.gotoRoute(ROUTE);

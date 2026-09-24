@@ -152,7 +152,7 @@ describe('OfferActionBar', () => {
     outside.remove();
   });
 
-  it('reserves its measured height as scroll-padding on .main and releases it on unmount', () => {
+  it('publishes its measured height on .main for the scroll clearance and releases it on unmount', () => {
     vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(132);
     act(() => root.render(<OfferActionBar {...props()} />));
     expect(main.style.getPropertyValue(ACTION_BAR_BLOCK_SIZE_PROPERTY)).toBe('132px');
