@@ -391,6 +391,16 @@ need the warehouse answering (`tools/wait_app_ready.py`,
 `scripts/smoke_live.sh`) keep waiting for `up`. The wire type stays
 `dict[str, str]`.
 
+The state read has a 2 s HTTP timeout, but building its SDK client resolves
+host metadata with the SDK's default timeouts, so the client is built once in
+the startup warm path (`warehouse_state_client_prime_failed` on failure, type
+only). A probe never waits on a build in flight, a failed build is retried at
+most once a minute, and until a client exists the probe uses `SELECT 1`. If
+the App service principal cannot read the warehouse, every probe logs
+`warehouse_state_read_failed` and falls back to `SELECT 1`; that restores the
+pre-2026-09 behaviour (including the accidental keep-warm), so check for that
+event after the first deploy.
+
 ## 6. Server-Timing (per-request attribution)
 
 Every `/api/*` HTTP response carries one `Server-Timing` header
@@ -452,3 +462,28 @@ type only.
 Assumption, not live-verified: any statement resets the warehouse idle timer
 (standard Databricks SQL behaviour). The 240 s ping interval is pinned well
 inside the 10-minute auto-stop by `tests/unit/test_keep_warm.py`.
+
+## 8. Gold aggregate cache (stale-while-revalidate)
+
+Hot gold aggregates (the portfolio preview and day-zero probe, the geography
+rollups, the analytics tabs, the config options and footprint, the headline
+KPIs) sit behind `backend/services/gold_cache.py` (2026-09-21 audit
+`delivery-06`). Past each site's soft TTL the last value is served at once and
+one background refresh runs on the two-worker `mip-gold-swr` pool; only a
+value older than `MIP_GOLD_CACHE_MAX_STALE_S` (default 86400) is recomputed
+inline. A served-stale payload keeps its own `data_refreshed_at` /
+`snapshot_date`. DEBUG events `gold_cache_hit` / `gold_cache_stale` /
+`gold_cache_miss` and the WARNING `gold_cache_refresh_failed` carry the cache
+key and exception type only; the per-request outcome is the `cache` entry of
+`Server-Timing` (§6).
+
+Values that read the Lakebase lifecycle mirror (`gold.borrower_lifecycle_state`:
+the preview's approved / in-outreach counts, the executive funnel's Approved /
+Actioned stages, the segment approval and outreach rates) never ride the
+long-lived value: their keys carry a workflow generation that moves on every
+approve, reject, assignment and outcome write (`clear_sales_state_cache`) and
+when a warehouse-mode lifecycle sync completes. A sync that runs as the
+Databricks job (`MIP_LIFECYCLE_SYNC_MODE=job`, or the retry job submitted after
+a warehouse-mode failure) finishes outside the App and moves no generation, so
+there those values trail the mirror by at most one soft TTL (default 120 s preview,
+300 s analytics) plus one stale serve.
