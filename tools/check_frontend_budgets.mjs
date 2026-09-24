@@ -73,8 +73,30 @@ const budgets = {
   // selection verbs; the sheet itself and both approve reviews stay lazy.
   // That left 0.9% raw and 0.6% gzip headroom (under the ~0.5 KiB Linux
   // zlib variance), so restore ~5% per policy. Measured: 432.03 / 134.17.
-  initialJsBytes: 454 * KiB /* WAVE1C-INTEGRATION: re-measure */, // actual 432.03 (index + its static chunk)
-  initialJsGzipBytes: 141 * KiB, // actual 134.17
+  // Re-baselined 2026-09-24 at the wave-1c integration (all six lanes
+  // merged; measured as index + its static chunk closure, see above). Base
+  // main 726106a1: 424.88 / 131.57. Measured: 508.65 / 158.40 (+83.77 /
+  // +26.83). Per lane, from each lane's own base-vs-head measurement (the
+  // sum reproduces the total within 0.3 KiB):
+  //   - feedback-guard: React Router's data-router engine behind the
+  //     catch-all createBrowserRouter that useBlocker needs for the
+  //     unsaved-changes guard (states-05): +53.16 / +16.13, measured against
+  //     the same tree under <BrowserRouter>; react-router is sideEffects:false
+  //     and react-router/dom adds only flushSync, so nothing else rides along.
+  //     It cannot be lazy (the router mounts first). The same engine is what
+  //     route loaders need to end the chunk-then-data waterfall (delivery-03).
+  //     Plus the guard dialog host and the toast region: +5.50 / +1.85.
+  //   - shell-wayfinding: typed route registry, breadcrumbs, identity menu
+  //     trigger: +7.86 / +3.17.
+  //   - queue-keyboard-review: keymap registry, WCAG 2.1.4 single-key
+  //     switch, ? sheet host, Cmd-K verbs: +7.15 / +2.60.
+  //   - session-recovery: the session dialog and connection banners, which
+  //     must be in the entry because no lazy chunk loads after expiry:
+  //     +5.70 / +1.70.
+  //   - formatters: cached Intl formatters + <Timestamp>: +4.08 / +1.33.
+  // ~5% headroom per policy.
+  initialJsBytes: 534 * KiB, // actual 508.65 (index + its static chunk)
+  initialJsGzipBytes: 167 * KiB, // actual 158.40
   // Bumped 2026-06-11 for the re-audit #4 Buyer-Wow tranche: ⌘K command
   // palette (.cmdk*), portal evidence hover-card (.evidence-hovercard*),
   // sleek one-time KPI entrance (.kpi__value--enter / .spark__line--draw),
@@ -116,7 +138,12 @@ const budgets = {
   // tokens plus print reveal rule (+0.29 KiB). Measured after the merge:
   // CSS 150.57 / gzip 25.48; ~5% headroom per policy (the gzip gate keeps
   // 4% and is unchanged).
-  initialCssBytes: 158 * KiB, // actual 150.57
+  // Re-baselined 2026-09-24 at the wave-1c integration: +2.05 KiB of shell
+  // CSS (29-shell-wayfinding breadcrumbs/identity trigger, 31-session-recovery
+  // banners + shaped skeleton sweep, 32-feedback toast region + guard
+  // dialog; each must style a surface that can appear before any lazy chunk).
+  // Measured: 158.85 / gzip 27.20; ~5% headroom.
+  initialCssBytes: 167 * KiB, // actual 158.85
   // Re-baselined 2026-09-08 for the Genie thread view + deep-research
   // sections slice. The 25 KiB gzip gate had drifted to 4 bytes above the
   // measured artifact (25,596 B) — the next CSS line from anyone would have
@@ -131,7 +158,7 @@ const budgets = {
   // ship with their lazy chunks instead, and the dead `.admin-filter-input`
   // rules were removed, before this bump. Measured: CSS 155.76 / gzip 26.55;
   // ~5% headroom per policy.
-  initialCssGzipBytes: 28 * KiB, // actual 26.55
+  initialCssGzipBytes: 29 * KiB, // actual 27.20
   // Re-baselined 2026-07-10 for the UX declutter slice (batches 1-2). total JS
   // was red on main (990.51 > 990.00); restored ~5% headroom over the measured
   // actual per this file's policy. Batch 2 (asset-label helper, top-leads
@@ -181,8 +208,14 @@ const budgets = {
   // filters in the URL (+2.1 / +1.1); and the shared listbox + tabs in the
   // initial chunk (+3.8 / +1.4, inside the initial gate). Measured: total JS
   // 1319.94 KiB / gzip 435.39 KiB across 56 chunks; ~5% headroom.
-  totalJsBytes: 1386 * KiB, // actual 1319.94
-  totalJsGzipBytes: 458 * KiB, // actual 435.39
+  // Re-baselined 2026-09-24 at the wave-1c integration: +137.1 KiB raw /
+  // +47.4 gzip over 726106a1 (1319.95 / 435.39 -> 1457.07 / 482.78, 56 -> 64
+  // chunks): the +83.8 initial growth above, plus lazy chunks for the approve
+  // review and bulk review, the ? sheet, the Borrower 360 pager, the Offer
+  // Orchestrator decision bar and certified-copy preview, the identity popup
+  // and the toast/guard styles. ~5% headroom.
+  totalJsBytes: 1530 * KiB, // actual 1457.07
+  totalJsGzipBytes: 507 * KiB, // actual 482.78
   // Re-baselined 2026-09-23 for wave 1c (lane queue-keyboard-review): the
   // shared LeadTable chunk (Lead Queue + Segment Intelligence) grew from
   // 92.96 / 29.59 to 105.51 / 33.56 with the keyboard triage that must be
