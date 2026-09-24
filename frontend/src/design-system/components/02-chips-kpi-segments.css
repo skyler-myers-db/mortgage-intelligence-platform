@@ -431,7 +431,10 @@
 .seg-card--gated:hover { transform: none; border-color: var(--line-2); }
 .seg-card--gated::before { opacity: 0.35; }
 .seg-card--gated::after { opacity: 0.12; }
-.seg-card__count--gated { color: var(--text-3); }
+/* Compound selector: the base .seg-card__count rule below sets --text-1 at
+   equal specificity and later in source, so the bare modifier never painted
+   (found at the rendered layer, audit a11y-01). */
+.seg-card__count.seg-card__count--gated { color: var(--text-3); }
 /* Evidence chip slot in the meta row; pushes to the row end. */
 .seg-card__evidence { margin-left: auto; display: inline-flex; }
 .seg-card--skeleton {

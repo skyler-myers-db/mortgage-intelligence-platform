@@ -413,7 +413,9 @@ describe('--text-4 is decoration, never readable metadata (a11y-01)', () => {
   });
 
   it('moves the three metadata sites to --text-3', () => {
-    for (const selector of ['.growth-agent-step__meta', '.seg-card__count--gated', '.cmdk__input::placeholder']) {
+    // The gated count is a compound selector: the bare modifier lost to the
+    // later .seg-card__count base rule and never painted.
+    for (const selector of ['.growth-agent-step__meta', '.seg-card__count.seg-card__count--gated', '.cmdk__input::placeholder']) {
       const own = rules(components).filter((rule) => rule.selector === selector);
       expect(own.map((rule) => rule.block).join(';'), selector).toMatch(/(?<![-\w])color:\s*var\(--text-3\)/);
     }
