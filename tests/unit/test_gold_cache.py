@@ -6,6 +6,7 @@ real dedicated ``mip-gold-swr`` pool against the real health-probe pool.
 """
 from __future__ import annotations
 
+import sys
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -260,6 +261,56 @@ def test_cold_single_flight_runs_one_inline_query_for_concurrent_callers(clock: 
 
     assert results == ["v1", "v1"]
     assert calls["n"] == 1
+
+
+def test_a_follower_of_a_failed_leader_serves_the_retained_entry_without_requerying(clock: _Clock) -> None:
+    cache = GoldAggregateCache(now=clock, executor=_DeferredExecutor())
+    cache.get_or_set("k", lambda: "v1", ttl_s=60, hard_ttl_s=60)
+    clock.now += 61  # hard-expired: the next reads compute inline
+    started, release = threading.Event(), threading.Event()
+    calls = {"n": 0}
+
+    def failing() -> str:
+        calls["n"] += 1
+        started.set()
+        release.wait(5)
+        raise RuntimeError("warehouse flap")
+
+    results: list[str] = []
+
+    def read() -> None:
+        results.append(cache.get_or_set("k", failing, ttl_s=60, hard_ttl_s=60, stale_if_error=True))
+
+    leader = threading.Thread(target=read)
+    leader.start()
+    assert started.wait(5)
+    follower = threading.Thread(target=read)
+    follower.start()
+    assert _eventually(lambda: _inside(follower, "_follow")), "the follower is waiting on the leader"
+    release.set()
+    leader.join(5)
+    follower.join(5)
+
+    assert results == ["v1", "v1"]
+    assert calls["n"] == 1, "the follower did not re-run the failed read"
+
+
+def _inside(thread: threading.Thread, function: str) -> bool:
+    frame = sys._current_frames().get(thread.ident or -1)
+    while frame is not None:
+        if frame.f_code.co_name == function:
+            return True
+        frame = frame.f_back
+    return False
+
+
+def _eventually(check: Callable[[], bool], timeout_s: float = 5.0) -> bool:
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if check():
+            return True
+        time.sleep(0.005)
+    return False
 
 
 def test_clear_discards_a_late_background_refresh(clock: _Clock, deferred: _DeferredExecutor) -> None:

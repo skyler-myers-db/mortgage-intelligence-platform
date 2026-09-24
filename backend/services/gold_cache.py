@@ -259,6 +259,11 @@ class GoldAggregateCache:
                 self._emit("gold_cache_miss", key, reason="singleflight_follower")
                 _record_cache("miss")
                 return value
+            # The leader failed: like TTLCache, a stale_if_error follower
+            # serves the retained entry instead of re-running the failed read.
+            stale = self._stale_after_error(key, stale_if_error)
+            if stale is not _NOTHING:
+                return stale
         # The leader timed out or failed: compute rather than return empty.
         try:
             value = factory()
