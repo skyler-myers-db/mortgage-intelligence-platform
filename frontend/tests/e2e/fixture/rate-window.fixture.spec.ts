@@ -300,6 +300,27 @@ test.describe('analytics executive: why-now rate window', () => {
     await expect(page.getByTestId('rate-window-threshold')).toHaveText(RATE_WINDOW_EXPECTED.thresholdLabel);
   });
 
+  // A seven-week window puts its central month a third of the way along the
+  // axis, the worst case for three labels. Sweep the plot through the 17rem
+  // band edge (edge months only below it) and the 31rem one (all months
+  // above it): no width may overlap two month labels.
+  test('a seven-week window keeps its month labels apart at every width from phone to tablet', async ({ app, page, mockApi }) => {
+    const weeks = RATE_WINDOW.weeks.slice(-7);
+    mockApi.register('GET', '/api/analytics/rate-window', () => json<RateWindowResponse>({ ...RATE_WINDOW, weeks }));
+    await page.setViewportSize({ width: 390, height: 844 });
+    await app.setTheme('dark');
+    await app.gotoRoute('/analytics');
+    await expect(page.getByTestId('rate-window').locator('.rate-window__panel svg')).toHaveCount(2);
+    const labelCounts = new Set<number>();
+    for (let width = 360; width <= 768; width += 12) {
+      await page.setViewportSize({ width, height: 844 });
+      const geometry = await axisGeometry(page);
+      labelCounts.add(geometry.xTicks.length);
+      expectAxisInsidePanel(geometry, `${width}px`);
+    }
+    expect([...labelCounts].sort(), 'the sweep crossed both narrow bands').toEqual(expect.arrayContaining([2, 3]));
+  });
+
   for (const width of [1440, 390]) {
     test(`at ${width}px a spread screen near the top of the rate domain hangs its label inside the plot`, async ({ app, page, mockApi }) => {
       mockApi.register('GET', '/api/analytics/rate-window', () => json<RateWindowResponse>(RATE_WINDOW_SCREEN_NEAR_TOP));
