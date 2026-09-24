@@ -253,14 +253,27 @@ describe('LeadTable CSV export', () => {
     // Only timeouts are faked: hashing, the receipt and React's scheduler run as usual.
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     mount(MIXED);
-    await exportedCsv();
+    // The whole export settles inside one act scope, so the commit that shows
+    // the strip AND the effect that arms its 8 s timer have both run when act
+    // returns. Outside act, React may flush that effect in a later scheduler
+    // task than the commit: a check that saw the strip could then advance the
+    // clock before any timer existed (always so on a cold first render).
+    await act(async () => {
+      exportButton().click();
+      await vi.waitFor(() => expect(blobs).toHaveLength(1));
+    });
     const notice = () => container.querySelector('[data-testid="lead-export-notice"]');
     const receiptLine = () => container.querySelector('[data-testid="lead-export-receipt"]');
-    await vi.waitFor(() => expect(notice()).not.toBeNull());
+    expect(notice()).not.toBeNull();
     expect(receiptLine()?.textContent).toBe('Exported 2 rows · audit evt-receipt-0001');
 
     act(() => {
-      vi.advanceTimersByTime(LEAD_EXPORT_NOTICE_MS);
+      vi.advanceTimersByTime(LEAD_EXPORT_NOTICE_MS - 1);
+    });
+    expect(notice(), 'the strip stays until 8 s have passed').not.toBeNull();
+
+    act(() => {
+      vi.advanceTimersByTime(1);
     });
 
     expect(notice()).toBeNull();
