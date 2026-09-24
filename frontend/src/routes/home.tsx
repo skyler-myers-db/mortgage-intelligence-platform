@@ -71,13 +71,13 @@ export default function Home() {
   const [mapSelection, setMapSelection] = useMapSelectionParams();
   const healthCtx = useOptionalHealth();
   // True when the shared health poll has confirmed warehouse / lakebase is
-  // down. While that's the case we keep the warming-up tile visible
-  // instead of falling into a contradictory red error: the system-wide
-  // DegradedBanner already explains the situation, and the per-tile
-  // retry budget (30s) is shorter than a typical serverless-warehouse
-  // cold start (30-60s). User feedback 2026-04-25: showing both a
-  // "reconnecting" banner AND a "couldn't load" red tile makes the app
-  // look broken when it is correctly warming up.
+  // down: a real outage (a routine serverless resume reports `resuming`, not
+  // `down`, and never reaches this). While that's the case we keep a calm
+  // callout instead of falling into a contradictory red error: the
+  // system-wide DegradedBanner already explains the situation, and an outage
+  // can outlast the per-tile retry budget (30 s). User feedback 2026-04-25:
+  // showing both a "reconnecting" banner AND a "couldn't load" red tile makes
+  // the app look broken.
   const warehouseDown =
     healthCtx?.health?.dependencies?.warehouse === 'down' ||
     healthCtx?.health?.dependencies?.lakebase === 'down';
@@ -182,9 +182,10 @@ export default function Home() {
             aria-live="polite"
             className="status-callout"
           >
-            Portfolio KPIs are waiting on the analytics warehouse. The page
-            will fetch them automatically once the warehouse finishes
-            warming up — typically 30–60 seconds after first request.
+            {/* A true outage, so no duration is promised (delivery-01). */}
+            Portfolio KPIs are waiting on the analytics warehouse, which is
+            not answering right now. They load on their own as soon as it is
+            back.
           </div>
         )}
         {previewError && !previewWarming && !warehouseDown && (
@@ -263,11 +264,13 @@ export default function Home() {
 
         {/* The answer band (flow-05): WHO / WHY NOW / WHAT TO OFFER under one
             briefing line. It merges the old "Since your last login" and
-            "Your book today" cards (visual-06). Gated like the KPI row. */}
-        {!isDayZero && !previewWarming && (
+            "Your book today" cards (visual-06). Gated like the KPI row: it
+            stays mounted, in its loading state, through a warm-up, so the
+            hero never collapses and pops back in (delivery-01). */}
+        {!isDayZero && (
           <HomeAnswerBand
             preview={preview ?? null}
-            previewLoading={kpisLoading}
+            previewLoading={kpiRowLoading}
             summary={summary ?? null}
             summaryLoading={summaryLoading || Boolean(summaryWarming)}
           />

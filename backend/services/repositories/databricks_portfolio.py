@@ -18,6 +18,12 @@ from backend.schemas.portfolio import (
 )
 from backend.services.databricks_sql import DatabricksSqlClient
 from backend.services.databricks_sql_helpers import qualify
+from backend.services.gold_cache import (
+    AggregateCache,
+    GoldAggregateCache,
+    get_or_set_capped,
+    workflow_key,
+)
 from backend.services.observability import emit
 from backend.services.repositories.databricks_portfolio_campaign_mappers import (
     _NORMALIZED_CAMPAIGN_VARIANTS_SQL,
@@ -47,7 +53,6 @@ from backend.services.repositories.databricks_portfolio_predicates import (
     json_value,
     preview_cache_key,
 )
-from backend.services.resilience import TTLCache
 
 log = logging.getLogger(__name__)
 
@@ -93,17 +98,23 @@ class DatabricksPortfolioRepository(_PortfolioCampaignPersistence):
     aggregates change slowly; a 30s stale read during a user click-
     through is invisible and saves two or three warehouse round trips
     per route transition.
+
+    Audit delivery-06: the default cache is the gold stale-while-revalidate
+    cache (``backend.services.gold_cache``); the soft TTL stays
+    ``cache_ttl_s``. The lifecycle-mirror workflow counts never ride that
+    long-lived value: they are overlaid per request from their own entry,
+    keyed by the workflow generation every approval write moves forward.
     """
 
     def __init__(
         self,
         client: DatabricksSqlClient,
         *,
-        cache: TTLCache | None = None,
+        cache: AggregateCache | None = None,
         cache_ttl_s: float = 30.0,
     ) -> None:
         self._client = client
-        self._cache = cache if cache is not None else TTLCache()
+        self._cache: AggregateCache = cache if cache is not None else GoldAggregateCache()
         self._cache_ttl_s = cache_ttl_s
 
     # S1: headline KPIs aggregate over the named semantic view
@@ -311,6 +322,7 @@ class DatabricksPortfolioRepository(_PortfolioCampaignPersistence):
 
     _PREVIEW_CACHE_KEY = "portfolio.preview.all"
     _DAY_ZERO_CACHE_KEY = "portfolio.day_zero"
+    _WORKFLOW_COUNTS_CACHE_KEY = "portfolio.workflow_counts"
 
     # Authoritative "this workspace has never had a gold refresh" signal
     # (R5-20). Unfiltered population count on mip.gold.lead_population,
@@ -404,17 +416,33 @@ class DatabricksPortfolioRepository(_PortfolioCampaignPersistence):
             trends[key] = self._build_trend(points)
         return trends, latest, "live", None
 
+    def _query_live_workflow_counts(self) -> dict[str, int]:
+        row = self._client.execute_one(self._LIVE_WORKFLOW_COUNTS_SQL) or {}
+        return {
+            "approved_count": int(row.get("approved_count") or 0),
+            "in_outreach_count": int(row.get("in_outreach_count") or 0),
+        }
+
     def _load_live_workflow_counts(self) -> dict[str, int]:
         """Return current approval/outreach counts from the lifecycle mirror.
 
         The daily funnel snapshot is still the trend source, but workflow
         state can change after the scoring refresh. Reading the live mirror
         keeps Home and Analytics consistent with Borrower 360 chips and Lead
-        Queue drilldowns.
+        Queue drilldowns. The entry is keyed by the workflow generation, so
+        an approval write or a lifecycle-sync completion re-reads it at once;
+        a failed read is never cached (``stale_if_error=False``).
         """
 
         try:
-            row = self._client.execute_one(self._LIVE_WORKFLOW_COUNTS_SQL) or {}
+            return dict(
+                self._cache.get_or_set(
+                    workflow_key(self._WORKFLOW_COUNTS_CACHE_KEY),
+                    self._query_live_workflow_counts,
+                    ttl_s=self._cache_ttl_s,
+                    stale_if_error=False,
+                )
+            )
         except Exception as exc:  # noqa: BLE001 -- fall back to snapshot counts
             emit(
                 log,
@@ -426,10 +454,23 @@ class DatabricksPortfolioRepository(_PortfolioCampaignPersistence):
                 exc_msg=str(exc)[:500],
             )
             return {}
-        return {
-            "approved_count": int(row.get("approved_count") or 0),
-            "in_outreach_count": int(row.get("in_outreach_count") or 0),
+
+    def _with_live_workflow_counts(self, preview: PortfolioPreview) -> PortfolioPreview:
+        """Overlay the live mirror counts on an unfiltered preview.
+
+        Only fields the snapshot populated are overlaid (a missing snapshot
+        row keeps them ``None``, as before); a failed read keeps the snapshot
+        counts exactly. The cached preview object itself is never mutated.
+        """
+        if preview.approved_count is None and preview.in_outreach_count is None:
+            return preview
+        counts = self._load_live_workflow_counts()
+        update = {
+            field: counts[field]
+            for field in ("approved_count", "in_outreach_count")
+            if field in counts and getattr(preview, field) is not None
         }
+        return preview.model_copy(update=update) if update else preview
 
     @staticmethod
     def _coerce_datetime(value: Any) -> datetime | None:
@@ -494,21 +535,22 @@ class DatabricksPortfolioRepository(_PortfolioCampaignPersistence):
         in the business of quietly rendering zeros for unknown
         failure modes.
 
-        R6-17: skip the cache get/set when ``_cache_ttl_s`` is 0.
-        ``TTLCache.set`` already short-circuits on ttl<=0 but the ``get``
-        acquires a lock for no benefit; bypassing both keeps the
-        tests-with-caching-disabled path allocation-free.
+        R6-17: skip the cache entirely when ``_cache_ttl_s`` is 0, so the
+        tests-with-caching-disabled path stays allocation-free. Otherwise
+        ``get_or_set`` (delivery-06) gives the probe single-flight and the
+        gold cache's stale-while-revalidate window.
         """
         if self._cache_ttl_s <= 0:
-            row = self._client.execute_one(self._DAY_ZERO_SQL) or {}
-            return bool(row.get("day_zero"))
-        cached = self._cache.get(self._DAY_ZERO_CACHE_KEY)
-        if cached is not None:
-            return bool(cached)
+            return self._query_day_zero()
+        return bool(
+            self._cache.get_or_set(
+                self._DAY_ZERO_CACHE_KEY, self._query_day_zero, ttl_s=self._cache_ttl_s
+            )
+        )
+
+    def _query_day_zero(self) -> bool:
         row = self._client.execute_one(self._DAY_ZERO_SQL) or {}
-        day_zero = bool(row.get("day_zero"))
-        self._cache.set(self._DAY_ZERO_CACHE_KEY, day_zero, self._cache_ttl_s)
-        return day_zero
+        return bool(row.get("day_zero"))
 
     def preview(self, request: PortfolioPreviewRequest | None) -> PortfolioPreview:
         criteria = request.criteria if request is not None else None
@@ -563,7 +605,6 @@ class DatabricksPortfolioRepository(_PortfolioCampaignPersistence):
             trends, latest, trend_status, trend_note = self._load_funnel(
                 include_trends=not bool(where_clause),
             )
-            workflow_counts = self._load_live_workflow_counts() if not where_clause else {}
             offer_mix = [
                 PortfolioOfferMixRow.model_validate(
                     {
@@ -632,13 +673,16 @@ class DatabricksPortfolioRepository(_PortfolioCampaignPersistence):
                     else None
                 ),
                 offer_mix=offer_mix,
+                # Snapshot counts only: the long-lived cached value never
+                # carries lifecycle-mirror counts (delivery-06); preview()
+                # overlays the live ones per request below.
                 approved_count=(
-                    workflow_counts.get("approved_count", int(latest["approved_count"]))
+                    int(latest["approved_count"])
                     if not where_clause and latest.get("approved_count") is not None
                     else None
                 ),
                 in_outreach_count=(
-                    workflow_counts.get("in_outreach_count", int(latest["in_outreach_count"]))
+                    int(latest["in_outreach_count"])
                     if not where_clause and latest.get("in_outreach_count") is not None
                     else None
                 ),
@@ -653,13 +697,19 @@ class DatabricksPortfolioRepository(_PortfolioCampaignPersistence):
             )
 
         if caching_enabled:
-            return self._cache.get_or_set(
+            # A governed build step (campaign_build_config) gets no stale
+            # window: its hard cap equals the soft TTL.
+            preview = get_or_set_capped(
+                self._cache,
                 cache_key,
                 build,
                 ttl_s=self._cache_ttl_s,
                 stale_if_error=True,
+                hard_ttl_s=self._cache_ttl_s if campaign_build_config is not None else None,
             )
-        return build()
+        else:
+            preview = build()
+        return preview if where_clause else self._with_live_workflow_counts(preview)
 
     def _load_household_dedup_summary(
         self,

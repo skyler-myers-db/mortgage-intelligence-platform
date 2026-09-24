@@ -8,10 +8,12 @@ import type { HealthPayload } from '../lib/apiTypes';
  *
  * Audit 2026-09-21 (`states-03`): the DegradedBanner promised "Live data will
  * resume automatically", but the only recovery refetch in the app was a
- * Home-only effect. A warehouse cold start (30–60 s) outlasts the per-query
- * retry budget (6 × 5 s), so on every other route panels turned red under a
- * "Reconnecting" banner and STAYED red after recovery until someone clicked
- * Retry.
+ * Home-only effect. A warehouse that is slow to come back (a serverless resume
+ * is usually 2–6 s, an outage or a stuck resume much longer) can outlast the
+ * per-query retry budget (6 × 5 s), so on every other route panels turned red
+ * under a "Reconnecting" banner and STAYED red after recovery until someone
+ * clicked Retry. A finished resume (`resuming` → `up`, audit delivery-01) is
+ * a recovery too: reads that met the warehouse's 503 while it woke refetch.
  *
  * The refetch is deliberately narrow:
  *   - `type: 'active'` — only queries a mounted component is observing.
@@ -27,13 +29,14 @@ const DEPENDENCIES = ['warehouse', 'lakebase', 'genie'] as const;
 
 /** Per-dependency filtered state, as tracked by HealthProvider's debounce. */
 export interface FilteredDependencyState {
-  filtered: 'up' | 'down' | 'unknown';
+  filtered: 'up' | 'down' | 'resuming' | 'unknown';
 }
 
 /**
- * Dependencies that crossed down → up (after the provider's debounce) or whose
- * circuit breaker went open → closed between two consecutive health snapshots.
- * A `half_open` breaker is still probing and does not count as recovered.
+ * Dependencies that crossed down → up (after the provider's debounce) or
+ * resuming → up, or whose circuit breaker went open → closed, between two
+ * consecutive health snapshots. A `half_open` breaker is still probing and
+ * does not count as recovered.
  */
 export function recoveredDependencies(
   priorDeps: Readonly<Record<string, FilteredDependencyState | undefined>>,
@@ -43,7 +46,8 @@ export function recoveredDependencies(
 ): string[] {
   const recovered = new Set<string>();
   for (const dep of DEPENDENCIES) {
-    if (priorDeps[dep]?.filtered === 'down' && nextDeps[dep]?.filtered === 'up') recovered.add(dep);
+    const prior = priorDeps[dep]?.filtered;
+    if ((prior === 'down' || prior === 'resuming') && nextDeps[dep]?.filtered === 'up') recovered.add(dep);
   }
   for (const [name, state] of Object.entries(priorBreakers ?? {})) {
     if (state === 'open' && nextBreakers?.[name] === 'closed') recovered.add(name);

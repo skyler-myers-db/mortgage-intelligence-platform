@@ -126,7 +126,8 @@ test.describe('an ended session (the proxy answers 401 {})', () => {
 
     await expect.poll(() => mockApi.inflight === 0 && mockApi.idleMs >= 300).toBe(true);
     const atOpen = mockApi.calls.length;
-    expect(mockApi.calls.slice(before).map(key), 'only the poll met the 401').toEqual(['GET /api/health']);
+    // The poll carries the keep-warm idle hint (delivery-v1); Date is frozen here, so it reads 0.
+    expect(mockApi.calls.slice(before).map(key), 'only the poll met the 401').toEqual(['GET /api/health?idle_s=0']);
     await page.clock.runFor(QUIET_WINDOW_MS);
     expect(mockApi.calls.length, 'the poll stops for good once the session ended').toBe(atOpen);
   });
@@ -147,7 +148,7 @@ test.describe('an ended session (the proxy answers 401 {})', () => {
     // The poll's own request came back as an opaque redirect (it could be a
     // trailing-slash 307), so ONE manual-redirect probe decided it.
     expect(mockApi.calls.slice(before).map((call) => `${key(call)} ${call.status}`)).toEqual([
-      'GET /api/health 302',
+      'GET /api/health?idle_s=0 302',
       'GET /api/health 302',
     ]);
     const atOpen = mockApi.calls.length;

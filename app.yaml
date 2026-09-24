@@ -105,10 +105,19 @@ env:
   - name: MIP_CAMPAIGN_TREATMENT_RUNTIME_ENABLED
     value: "0"
 
-  # Cost-control default: the backend still warms the hot lead queue once
-  # at startup, but the deployed app must not keep re-querying the warehouse
-  # every few minutes while no one is using it. Operators can override this
-  # to a positive value before a staffed walkthrough block.
+  # One warehouse keep-warm policy (backend/services/keep_warm.py is the
+  # single reader): off | activity | scheduled. "off" lets an idle warehouse
+  # auto-stop (the next visitor sees a 2-6 s "Waking warehouse" resume).
+  # "activity" pings at most once per 240 s while an authenticated tab has
+  # recent user input. "scheduled" runs the lead-page refresh-ahead loop at
+  # MIP_LEADS_WARM_INTERVAL_S. Precedence: this value alone decides what
+  # runs; a positive interval under off/activity is ignored with a warning.
+  - name: MIP_WAREHOUSE_KEEP_WARM
+    value: "off"
+
+  # Cadence of the "scheduled" keep-warm policy only. The backend still warms
+  # the hot lead queue once at startup; with the default policy "off" nothing
+  # re-queries the warehouse while no one is using it.
   - name: MIP_LEADS_WARM_INTERVAL_S
     value: "0"
 

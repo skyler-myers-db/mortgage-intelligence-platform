@@ -19,7 +19,7 @@ import { Button, Chip, EvidenceChip } from '../components/Primitives';
 import { GlossaryTerm } from '../components/GlossaryTerm';
 import { Icon } from '../components/Icon';
 import { Skeleton } from '../components/ui/Skeleton';
-import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
+import { WAREHOUSE_WARMING_BODY, WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { Reveal } from '../components/fx/Reveal';
 import { metroLoanTypeLabel } from '../lib/dossierCodes';
 import { descriptorFor, descriptorForEvidence } from '../lib/drawerSources';
@@ -155,7 +155,7 @@ export default function Borrower360() {
       <PageShell
         eyebrow={warmingUp.label}
         title={`Loading ${id}…`}
-        lede="Databricks SQL warehouses auto-suspend when idle. It takes ~30 seconds to warm up. Retrying automatically…"
+        lede={WAREHOUSE_WARMING_BODY}
       >
         {pager}
         <WarmingUpBlock state={warmingUp} title={`Loading borrower ${id}`} />

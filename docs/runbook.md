@@ -36,18 +36,30 @@ a clean workspace).
 If any step on the checklist fails, the three highest-likelihood
 cold-start problems — and their one-line recovery commands — are:
 
-### 1.1 Warehouse cold / `warehouse: down` in `/api/v1/health`
+### 1.1 Warehouse resuming / `warehouse: down` in `/api/v1/health`
 
-The 2X-Small serverless warehouse auto-stops after 10 min idle. First
-query after a cold window is 30–60 s. This idle stop is intentional:
-deployed Apps disable the periodic lead-cache rewarm loop by default
-(`MIP_LEADS_WARM_INTERVAL_S=0`) so a quiet workspace can actually reach
-auto-stop. Only set a positive rewarm interval for a staffed walkthrough
-block where warm-route latency matters more than idle cost.
+The 2X-Small serverless warehouse auto-stops after 10 min idle, and a
+serverless resume typically takes 2–6 s. `/api/v1/health` reads the
+warehouse lifecycle state: while it is `STARTING` the body reports
+`"warehouse": "resuming"` with `status: "ok"`, and the app shows a calm
+amber "Waking" pill with an elapsed timer (announced and titled "Waking
+warehouse"), not the red Degraded state.
+`STOPPED` reads as `up` (it starts on the next query). Only `"warehouse":
+"down"` (a deleted warehouse, a failed state read whose `SELECT 1`
+fallback also failed, or an open breaker) is an outage.
+
+This idle stop is intentional. What keeps the warehouse warm is one policy,
+`MIP_WAREHOUSE_KEEP_WARM` (`docs/observability.md` §7): `off` (the deployed
+default) lets it stop; `activity` pings at most once per 240 s while someone
+is actively using the app; `scheduled` runs the lead-page refresh-ahead loop
+at `MIP_LEADS_WARM_INTERVAL_S`, which is ignored under the other two
+policies. For a staffed walkthrough block where warm-route latency matters
+more than idle cost, set `MIP_WAREHOUSE_KEEP_WARM=activity` (or `scheduled`
+with a positive interval) in `.env.local` before `./scripts/deploy.sh -t dev`.
 
 ```bash
 databricks warehouses start "$DATABRICKS_WAREHOUSE_ID"
-# Expect: RUNNING within ~30 s.
+# Expect: RUNNING within seconds (serverless).
 databricks sql-warehouses get "$DATABRICKS_WAREHOUSE_ID" | jq .state
 ```
 
@@ -628,7 +640,9 @@ returns fake data.
 **How to run (summary):**
 
 ```bash
-# Warehouse: operator stops the SQL warehouse; script observes degraded
+# Warehouse: operator stops the SQL warehouse; a stop is not an outage, so
+# the script checks health stays ok and a read resumes it (delivery-01).
+# The degraded warehouse path is proved by --target warehouse-sim.
 ./tools/kill_drill/run_drill.sh --target warehouse
 
 # Lakebase: operator stops the database instance (or rotates password)
@@ -640,7 +654,7 @@ returns fake data.
 # Token: simulated -- script unsets DATABRICKS_TOKEN in a subshell
 ./tools/kill_drill/run_drill.sh --target token
 
-# While any drill is in flight, verify the UI in another terminal:
+# While a degrading drill is in flight (not a warehouse stop), verify the UI:
 ./tools/kill_drill/verify_degraded_ui.py
 ```
 
